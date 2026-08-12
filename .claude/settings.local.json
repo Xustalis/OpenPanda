@@ -6,7 +6,15 @@
       "Bash(sqlite3 data/panda.db \"PRAGMA journal_mode;\")",
       "Bash(make build-linux-arm64 *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(make build *)",
+      "Bash(./bin/panda --config config.example.yaml --card config/capabilities.macbook.yaml)",
+      "Bash(sqlite3 data/panda.db \"SELECT id, name, status, last_seen, scheduler_tier FROM employee_cache;\")",
+      "Bash(sqlite3 data/panda.db \"SELECT native_json FROM employee_cache;\")",
+      "Bash(kill %1)",
+      "Bash(rm -rf data bin /tmp/panda.log && git add -A && git status --short)"
     ]
   }
 }
