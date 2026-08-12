@@ -61,25 +61,65 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	}
 }
 
-// routeDelegated executes the task via the commander. It is a stub until
-// Sprint 0.5 wires the executor; for now it accepts and marks done so the
-// protocol loop is testable end to end.
+// routeDelegated executes the task via the commander. It matches the task's
+// required abilities against this node's capability card and runs the result.
 func (c *Core) routeDelegated(ctx context.Context, taskID string, p bus.TaskDelegatePayload, chain []string) (bus.TaskResultPayload, error) {
-	// TODO(Sprint 0.5): commander capability match → exec native/agent.
-	// Phase 0 protocol verification: accept, mark done.
+	// Record the task in the local store before execution so the queue
+	// reflects it even if the process dies mid-run.
 	if err := c.store.Queue(ctx, taskID, c.nodeID); err != nil {
 		return bus.TaskResultPayload{}, fmt.Errorf("queue: %w", err)
 	}
+
+	if c.router == nil {
+		// No capability card loaded: nothing to execute.
+		return bus.TaskResultPayload{}, fmt.Errorf("no commander configured")
+	}
+
+	required := p.Requires
+	if len(required) == 0 {
+		required = []string{p.ContextType}
+	}
+
+	plan, err := c.router.Route(required)
+	if err != nil {
+		return bus.TaskResultPayload{}, fmt.Errorf("route: %w", err)
+	}
+
 	if err := c.store.Dispatch(ctx, taskID, c.nodeID, c.nodeID); err != nil {
 		return bus.TaskResultPayload{}, fmt.Errorf("dispatch: %w", err)
 	}
 	if err := c.store.Accept(ctx, taskID, c.nodeID); err != nil {
 		return bus.TaskResultPayload{}, fmt.Errorf("accept: %w", err)
 	}
-	if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{"ok": true, "note": "protocol stub"}); err != nil {
+
+	res := c.router.Execute(ctx, plan, p.Intent, "")
+	if res.NeedManual {
+		// Manual tasks: notify and mark done; the human completes offline.
+		if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{
+			"manual": true, "notify": res.Stdout,
+		}); err != nil {
+			return bus.TaskResultPayload{}, fmt.Errorf("complete manual: %w", err)
+		}
+		return bus.TaskResultPayload{TaskID: taskID, OK: true, ExitCode: 0, Stdout: res.Stdout}, nil
+	}
+
+	if !res.OK {
+		if err := c.store.Fail(ctx, taskID, c.nodeID, res.Stderr); err != nil {
+			return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
+		}
+		return bus.TaskResultPayload{
+			TaskID: taskID, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
+		}, nil
+	}
+
+	if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{
+		"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout,
+	}); err != nil {
 		return bus.TaskResultPayload{}, fmt.Errorf("complete: %w", err)
 	}
-	return bus.TaskResultPayload{TaskID: taskID, OK: true, ExitCode: 0}, nil
+	return bus.TaskResultPayload{
+		TaskID: taskID, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
+	}, nil
 }
 
 // handleAccept processes task_accept from the executor.

@@ -44,7 +44,7 @@ func TestTwoNodeProtocol(t *testing.T) {
 		TaskID:   "task-proto-1",
 		Title:    "say hello",
 		Intent:   "print hello from worker",
-		Requires: []string{"native:sys:info"},
+		Requires: []string{"sys:info"},
 		Chain:    []string{"entry"},
 	})
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/xenith/panda/internal/bus"
+	"github.com/xenith/panda/internal/commander"
 	"github.com/xenith/panda/internal/ledger"
 	"github.com/xenith/panda/internal/util"
 )
@@ -30,6 +31,7 @@ type Core struct {
 	logger *slog.Logger
 	store  *TaskStore
 	node   *Node
+	router *commander.Router
 
 	mu      sync.RWMutex
 	peers   map[string]*Peer
@@ -43,7 +45,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Core{
+	c := &Core{
 		db:      db,
 		nodeID:  nodeID,
 		card:    card,
@@ -54,6 +56,12 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		peers:   make(map[string]*Peer),
 		greeted: make(map[string]bool),
 	}
+	// The commander needs at least one native ability to route; a zero card
+	// yields a router that declines everything.
+	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 {
+		c.router = commander.NewRouter(card, commander.NewExecutor())
+	}
+	return c
 }
 
 // Register upserts this node in the local ledger.
