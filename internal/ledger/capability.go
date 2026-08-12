@@ -56,21 +56,6 @@ type Capacity struct {
 	CurrentTasks  int `yaml:"current_tasks"`
 }
 
-// Row is the employee_cache row representation (JSON-encoded fields).
-type Row struct {
-	ID            string
-	Name          string
-	Department    string
-	Chip          string
-	NativeJSON    string
-	AgentsJSON    string
-	ManualJSON    string
-	CapacityJSON  string
-	Status        string
-	LastSeen      int64
-	SchedulerTier int
-}
-
 // Register inserts (or upserts) this node's card into the local capability
 // directory. In Phase 0 each node is its own directory; a remote employee
 // table arrives in a later phase.

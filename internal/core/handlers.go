@@ -102,6 +102,14 @@ func (c *Core) routeDelegated(ctx context.Context, taskID string, p bus.TaskDele
 		return bus.TaskResultPayload{}, fmt.Errorf("accept: %w", err)
 	}
 
+	// Capture the current attempt id so the result carries it; the delegator
+	// uses it to reject stale results after a transfer/retry.
+	task, err := c.store.Get(ctx, taskID)
+	if err != nil {
+		return bus.TaskResultPayload{}, fmt.Errorf("load task: %w", err)
+	}
+	attemptID := task.AttemptID
+
 	res := c.router.Execute(ctx, plan, p.Intent, "")
 	if res.NeedManual {
 		// Manual tasks: notify and mark done; the human completes offline.
@@ -113,7 +121,7 @@ func (c *Core) routeDelegated(ctx context.Context, taskID string, p bus.TaskDele
 			}
 			return bus.TaskResultPayload{}, fmt.Errorf("complete manual: %w", err)
 		}
-		return bus.TaskResultPayload{TaskID: taskID, OK: true, ExitCode: 0, Stdout: res.Stdout}, nil
+		return bus.TaskResultPayload{TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: 0, Stdout: res.Stdout}, nil
 	}
 
 	if !res.OK {
@@ -124,7 +132,7 @@ func (c *Core) routeDelegated(ctx context.Context, taskID string, p bus.TaskDele
 			return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
 		}
 		return bus.TaskResultPayload{
-			TaskID: taskID, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
+			TaskID: taskID, AttemptID: attemptID, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
 		}, nil
 	}
 
@@ -137,33 +145,33 @@ func (c *Core) routeDelegated(ctx context.Context, taskID string, p bus.TaskDele
 		return bus.TaskResultPayload{}, fmt.Errorf("complete: %w", err)
 	}
 	return bus.TaskResultPayload{
-		TaskID: taskID, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
+		TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 	}, nil
 }
 
-// handleAccept processes task_accept from the executor.
+// handleAccept processes task_accept from the executor. The parent updates its
+// local view of the task from dispatched to running so the queue reflects the
+// executor's acceptance.
 func (c *Core) handleAccept(ctx context.Context, env bus.Envelope) {
 	var p bus.TaskAcceptPayload
 	if err := env.PayloadInto(&p); err != nil {
 		c.logger.Warn("bad task_accept", "err", err)
 		return
 	}
-	// The parent transitions dispatched -> running locally; lease moves to
-	// the executor (env.From). Only the current owner may call Accept on the
-	// parent side, and here we're acting as the parent, so this call records
-	// the executor's acceptance.
 	t, err := c.store.Get(ctx, p.TaskID)
 	if err != nil {
-		c.logger.Warn("accept for unknown task", "task", p.TaskID)
+		c.logger.Debug("accept for unknown task", "task", p.TaskID)
 		return
 	}
 	if t.State != StateDispatched {
 		c.logger.Debug("accept ignored (not dispatched)", "task", p.TaskID, "state", t.State)
 		return
 	}
-	// The executor already moved its own copy to running; the parent updates
-	// its view so the queue shows running.
-	_ = t
+	// The executor claims the lease; the parent records the new state and
+	// owner so a later cancel/transfer routes correctly.
+	if err := c.store.Accept(ctx, p.TaskID, env.From); err != nil {
+		c.logger.Debug("accept apply failed", "task", p.TaskID, "err", err)
+	}
 }
 
 // handleDecline processes task_decline from an executor.
@@ -191,9 +199,9 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 	t, err := c.store.Get(ctx, p.TaskID)
 	if errors.Is(err, sql.ErrNoRows) {
 		// The delegator may not have a local row if it delegated without
-		// creating one (Phase 0 entry flow). Reconstruct a minimal row so
-		// the queue reflects the outcome.
-		if _, err := c.store.CreateWithID(ctx, p.TaskID, "", "", p.TaskID, c.nodeID, []string{c.nodeID, env.From}); err != nil {
+		// creating one (Phase 0 entry flow). Reconstruct a minimal row,
+		// adopting the executor's attempt so the result is not flagged stale.
+		if _, err := c.store.CreateFromRemote(ctx, p.TaskID, p.TaskID, c.nodeID, p.AttemptID, []string{c.nodeID, env.From}); err != nil {
 			c.logger.Warn("create task from result", "task", p.TaskID, "err", err)
 			return
 		}

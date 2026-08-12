@@ -205,11 +205,15 @@ func (s *TaskStore) Accept(ctx context.Context, taskID, owner string) error {
 }
 
 // Decline rejects a dispatched task, moving it back to queued and releasing
-// the lease so the parent can route elsewhere.
+// the lease so the parent can route elsewhere. Only a dispatched task may be
+// declined; this prevents overriding a task that already started running.
 func (s *TaskStore) Decline(ctx context.Context, taskID, parent string, reason string) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
+	}
+	if cur.State != StateDispatched {
+		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateDispatched)
 	}
 	if err := s.apply(ctx, taskID, StateQueued, parent, cur.AttemptID, EvDecline,
 		map[string]any{"reason": reason, "by": cur.OwnerNode}, nil); err != nil {
@@ -289,6 +293,27 @@ func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason st
 	}
 	s.logger.Debug("remote failure recorded", "task", taskID, "from", cur.State)
 	return nil
+}
+
+// CreateFromRemote inserts a task owned by this delegator, adopting the
+// executor's attempt_id so a follow-up result (with the same attempt) is not
+// mistaken for a stale write. Used when a delegator hears a result for a task
+// it never persisted locally.
+func (s *TaskStore) CreateFromRemote(ctx context.Context, taskID, title, owner string, attemptID string, chain []string) (Task, error) {
+	t, err := s.CreateWithID(ctx, taskID, "", "", title, owner, chain)
+	if err != nil {
+		return Task{}, err
+	}
+	if attemptID == "" {
+		return t, nil
+	}
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE tasks SET attempt_id=? WHERE task_id=?`, attemptID, taskID)
+	if err != nil {
+		return Task{}, fmt.Errorf("adopt attempt: %w", err)
+	}
+	t.AttemptID = attemptID
+	return t, nil
 }
 
 // SetLease stamps lease_expires_at = now + durationMS for a task. The

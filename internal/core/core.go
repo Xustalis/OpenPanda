@@ -37,8 +37,6 @@ type Core struct {
 	mu      sync.RWMutex
 	peers   map[string]*Peer
 	greeted map[string]bool // node ids we have replied hello to
-
-	onResult func(ctx context.Context, taskID string, result bus.TaskResultPayload)
 }
 
 // NewCore constructs a Core. The card may be zero for a minimal node.
@@ -122,10 +120,17 @@ func (c *Core) Listen(ctx context.Context, addr string) error {
 	return srv.Listen(ctx)
 }
 
-// handleInbound runs the read loop for a server-side connection. The first
-// message must be hello, which supplies the peer's node id.
+// handleInbound runs the read loop for a connection (server- or client-
+// side). It also starts the transport ping loop so idle connections stay
+// alive and dead peers are detected by pong timeout.
 func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
-	defer conn.Close()
+	defer func() {
+		// Remove any peer entry that used this conn so sendTo rejects it and
+		// the reconnect loop can re-dial.
+		c.removePeerForConn(conn)
+		conn.Close()
+	}()
+	go conn.StartPingLoop(ctx, 30*time.Second)
 	for {
 		var env bus.Envelope
 		if err := conn.ReadJSON(&env); err != nil {
@@ -137,6 +142,18 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 			c.ensurePeer(env.From, conn)
 		}
 		c.dispatch(ctx, env)
+	}
+}
+
+// removePeerForConn deletes any peer whose conn matches the given one.
+func (c *Core) removePeerForConn(conn *bus.Conn) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, p := range c.peers {
+		if p.conn == conn {
+			delete(c.peers, id)
+			c.logger.Info("peer disconnected", "peer", id)
+		}
 	}
 }
 

@@ -19,6 +19,13 @@ const (
 	// dead. The application-level heartbeat (ledger) has a slower cadence;
 	// this only guards the TCP/WS layer.
 	pongWait = 60 * time.Second
+
+	// pingPeriod is how often we send a ping; must be < pongWait so a
+	// healthy peer's pongs keep refreshing our read deadline.
+	pingPeriod = 30 * time.Second
+
+	// writeWait bounds how long a write (data or ping) may block.
+	writeWait = 10 * time.Second
 )
 
 // Conn wraps one websocket.Conn with a send mutex (one writer goroutine).
@@ -33,7 +40,34 @@ func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
 	ws.SetPongHandler(func(string) error {
 		return ws.SetReadDeadline(time.Now().Add(pongWait))
 	})
+	// Initial deadline so a peer that never responds is detected promptly.
+	_ = ws.SetReadDeadline(time.Now().Add(pongWait))
 	return &Conn{ws: ws, logger: logger}
+}
+
+// StartPingLoop sends a ping every pingPeriod and refreshes the read
+// deadline, keeping the connection alive and letting the peer's pong reset
+// our deadline. It returns when ctx is done. Runs on the single-writer
+// mutex so it cannot race data messages.
+func (c *Conn) StartPingLoop(ctx context.Context, pingPeriod time.Duration) {
+	t := time.NewTicker(pingPeriod)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.mu.Lock()
+			// Refreshing the write deadline protects against a wedged peer.
+			_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+				c.mu.Unlock()
+				c.logger.Debug("ping failed", "err", err)
+				return
+			}
+			c.mu.Unlock()
+		}
+	}
 }
 
 // Send marshals v to JSON and writes it to the peer.
