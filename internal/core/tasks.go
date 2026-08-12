@@ -86,13 +86,15 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	var t Task
 	var chainJSON string
 	var intent, spec, result sql.NullString
+	var lease sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
 		SELECT task_id, parent_id, project, title, state, owner_node, attempt_id,
-		       state_version, chain_json, intent, spec_json, result_json, created_at, updated_at
+		       state_version, chain_json, intent, spec_json, result_json,
+		       lease_expires_at, created_at, updated_at
 		FROM tasks WHERE task_id = ?`, taskID).
 		Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State, &t.OwnerNode,
 			&t.AttemptID, &t.StateVersion, &chainJSON, &intent, &spec,
-			&result, &t.CreatedAt, &t.UpdatedAt)
+			&result, &lease, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return Task{}, err
 	}
@@ -100,6 +102,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	t.Intent = intent.String
 	t.SpecJSON = spec.String
 	t.ResultJSON = result.String
+	t.LeaseExpires = lease.Int64
 	return t, nil
 }
 
@@ -288,6 +291,102 @@ func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason st
 	return nil
 }
 
+// SetLease stamps lease_expires_at = now + durationMS for a task. The
+// timeout monitor fails tasks whose lease expires while still active. A
+// non-positive duration is a no-op.
+func (s *TaskStore) SetLease(ctx context.Context, taskID string, durationMS int64) error {
+	if durationMS <= 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET lease_expires_at=?, updated_at=? WHERE task_id=?`,
+		s.now()+durationMS/1000, s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("set lease: %w", err)
+	}
+	return nil
+}
+
+// ExpireTasks fails any active task whose lease has expired. Returns the
+// number of tasks failed. Called periodically by the monitor.
+func (s *TaskStore) ExpireTasks(ctx context.Context) (int, error) {
+	now := s.now()
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT task_id FROM tasks
+		 WHERE lease_expires_at > 0 AND lease_expires_at < ?
+		   AND state IN ('dispatched','waiting_context','running','review')`, now)
+	if err != nil {
+		return 0, fmt.Errorf("scan leases: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		// The monitor acts on behalf of the lease holder regardless of the
+		// stored owner (a crashed process may no longer hold it).
+		if err := s.ForceFail(ctx, id, "lease expired"); err != nil {
+			s.logger.Warn("expire task", "task", id, "err", err)
+			continue
+		}
+		s.logger.Info("task failed by timeout", "task", id)
+	}
+	return len(ids), nil
+}
+
+// ForceFail fails an active task regardless of owner. Used by the timeout
+// monitor and restart recovery when the owner may be gone.
+func (s *TaskStore) ForceFail(ctx context.Context, taskID, reason string) error {
+	cur, err := s.Get(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if Terminal(cur.State) {
+		return nil
+	}
+	return s.apply(ctx, taskID, StateFailed, cur.OwnerNode, cur.AttemptID, EvResult,
+		map[string]any{"failed": reason}, map[string]any{"failed": reason})
+}
+
+// Recover normalizes tasks left in an active state by a previous process
+// instance. Running/waiting_context/review become failed (execution was
+// interrupted); dispatched returns to queued for re-dispatch. Returns the
+// number of tasks touched.
+func (s *TaskStore) Recover(ctx context.Context) (int, error) {
+	now := s.now()
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?,
+			lease_expires_at=NULL, result_json='{"recovered":"interrupted"}'
+		WHERE state IN ('running','waiting_context','review')`,
+		StateFailed, now)
+	if err != nil {
+		return 0, fmt.Errorf("recover active tasks: %w", err)
+	}
+	failed, _ := res.RowsAffected()
+
+	res, err = s.db.ExecContext(ctx, `
+		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?,
+			lease_expires_at=NULL
+		WHERE state IN ('dispatched','submitted')`,
+		StateQueued, now)
+	if err != nil {
+		return int(failed), fmt.Errorf("recover dispatched tasks: %w", err)
+	}
+	requeued, _ := res.RowsAffected()
+
+	s.logger.Info("task recovery", "failed", failed, "requeued", requeued)
+	return int(failed + requeued), nil
+}
+
 // Cancel marks a task cancelled if it is still active. Cancellation is the
 // one transition the parent may force regardless of lease ownership, to
 // support cascade from a cancelled parent.
@@ -336,7 +435,8 @@ func (s *TaskStore) CancelCascade(ctx context.Context, taskID string) (int, erro
 func (s *TaskStore) Children(ctx context.Context, parentID string) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT task_id, parent_id, project, title, state, owner_node, attempt_id,
-		        state_version, chain_json, intent, spec_json, result_json, created_at, updated_at
+		        state_version, chain_json, intent, spec_json, result_json,
+		        lease_expires_at, created_at, updated_at
 		 FROM tasks WHERE parent_id = ?`, parentID)
 	if err != nil {
 		return nil, err
@@ -348,7 +448,8 @@ func (s *TaskStore) Children(ctx context.Context, parentID string) ([]Task, erro
 // ListByState returns tasks filtered by state ("" = all), newest first.
 func (s *TaskStore) ListByState(ctx context.Context, state string) ([]Task, error) {
 	q := `SELECT task_id, parent_id, project, title, state, owner_node, attempt_id,
-	        state_version, chain_json, intent, spec_json, result_json, created_at, updated_at
+	        state_version, chain_json, intent, spec_json, result_json,
+	        lease_expires_at, created_at, updated_at
 	      FROM tasks`
 	var args []any
 	if state != "" {
@@ -420,15 +521,17 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var t Task
 		var chainJSON string
 		var intent, spec, result sql.NullString
+		var lease sql.NullInt64
 		if err := rows.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State,
 			&t.OwnerNode, &t.AttemptID, &t.StateVersion, &chainJSON, &intent,
-			&spec, &result, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			&spec, &result, &lease, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
 		t.Intent = intent.String
 		t.SpecJSON = spec.String
 		t.ResultJSON = result.String
+		t.LeaseExpires = lease.Int64
 		out = append(out, t)
 	}
 	return out, rows.Err()

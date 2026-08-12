@@ -26,7 +26,8 @@
       "Bash(python3 -c \"import websockets; print\\(websockets.__version__\\)\")",
       "Bash(gofmt -l internal/ cmd/ adapters/)",
       "Bash(gofmt -w internal/commander/context.go internal/commander/native.go)",
-      "Bash(python3 -m py_compile adapters/claude_code.py)"
+      "Bash(python3 -m py_compile adapters/claude_code.py)",
+      "Bash(gofmt -w internal/core/e2e_test.go)"
     ]
   }
 }

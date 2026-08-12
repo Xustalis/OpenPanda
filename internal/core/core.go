@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"sync"
+	"time"
 
 	"github.com/xenith/panda/internal/bus"
 	"github.com/xenith/panda/internal/commander"
@@ -69,6 +70,31 @@ func (c *Core) Register(ctx context.Context) error { return c.node.Register(ctx)
 
 // RunHeartbeat starts the heartbeat ticker.
 func (c *Core) RunHeartbeat(ctx context.Context) { go c.node.RunHeartbeat(ctx) }
+
+// Recover normalizes tasks left active by a previous process instance.
+func (c *Core) Recover(ctx context.Context) (int, error) { return c.store.Recover(ctx) }
+
+// RunMonitor scans for expired leases and fails them. It returns when ctx
+// is done.
+func (c *Core) RunMonitor(ctx context.Context) {
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			n, err := c.store.ExpireTasks(ctx)
+			if err != nil {
+				c.logger.Warn("expire tasks", "err", err)
+				continue
+			}
+			if n > 0 {
+				c.logger.Info("monitor expired tasks", "count", n)
+			}
+		}
+	}
+}
 
 // TaskStore exposes the store for CLI/queue views.
 func (c *Core) TaskStore() *TaskStore { return c.store }

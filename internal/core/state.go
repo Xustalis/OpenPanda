@@ -10,6 +10,9 @@ var (
 	ErrIllegal = errors.New("illegal state transition")
 	// ErrConflict reports a state/owner/version mismatch (stale write).
 	ErrConflict = errors.New("state conflict")
+	// ErrCancelled reports that execution finished after the task was
+	// cancelled; callers should not report a result for a cancelled task.
+	ErrCancelled = errors.New("task cancelled")
 )
 
 // Task states. These strings are part of the wire protocol across nodes,
@@ -57,6 +60,7 @@ type Task struct {
 	Intent       string
 	SpecJSON     string
 	ResultJSON   string
+	LeaseExpires int64
 	CreatedAt    int64
 	UpdatedAt    int64
 }

@@ -43,22 +43,32 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		c.logger.Error("create task from delegate", "err", err)
 		return
 	}
-	_ = t
+	if p.TimeoutMS > 0 {
+		if err := c.store.SetLease(ctx, t.TaskID, p.TimeoutMS); err != nil {
+			c.logger.Warn("set lease", "task", t.TaskID, "err", err)
+		}
+	}
 
-	// Route: Phase 0 commander decides native vs agent. If no capability
-	// matches, decline with a reason. On success, the result is sent back
-	// to the delegator (env.From).
-	result, err := c.routeDelegated(ctx, t.TaskID, p, chain)
-	if err != nil {
-		c.logger.Warn("route delegated task", "err", err, "task", t.TaskID)
-		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
-			TaskID: t.TaskID, Reason: err.Error(),
-		})
-		return
-	}
-	if err := c.reply(ctx, env, bus.MsgTaskResult, result); err != nil {
-		c.logger.Warn("send task_result", "err", err, "task", t.TaskID)
-	}
+	// Execute asynchronously so the message loop stays responsive to
+	// task_cancel while a long native/agent command runs. The result (or a
+	// decline) is reported back via the env captured here.
+	go func(ctx context.Context, env bus.Envelope, taskID string, p bus.TaskDelegatePayload, chain []string) {
+		result, err := c.routeDelegated(ctx, taskID, p, chain)
+		if err != nil {
+			if errors.Is(err, ErrCancelled) {
+				c.logger.Info("task cancelled during execution", "task", taskID)
+				return
+			}
+			c.logger.Warn("route delegated task", "err", err, "task", taskID)
+			c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
+				TaskID: taskID, Reason: err.Error(),
+			})
+			return
+		}
+		if err := c.reply(ctx, env, bus.MsgTaskResult, result); err != nil {
+			c.logger.Warn("send task_result", "err", err, "task", taskID)
+		}
+	}(ctx, env, t.TaskID, p, chain)
 }
 
 // routeDelegated executes the task via the commander. It matches the task's
@@ -98,6 +108,9 @@ func (c *Core) routeDelegated(ctx context.Context, taskID string, p bus.TaskDele
 		if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{
 			"manual": true, "notify": res.Stdout,
 		}); err != nil {
+			if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+				return bus.TaskResultPayload{}, ErrCancelled
+			}
 			return bus.TaskResultPayload{}, fmt.Errorf("complete manual: %w", err)
 		}
 		return bus.TaskResultPayload{TaskID: taskID, OK: true, ExitCode: 0, Stdout: res.Stdout}, nil
@@ -105,6 +118,9 @@ func (c *Core) routeDelegated(ctx context.Context, taskID string, p bus.TaskDele
 
 	if !res.OK {
 		if err := c.store.Fail(ctx, taskID, c.nodeID, res.Stderr); err != nil {
+			if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+				return bus.TaskResultPayload{}, ErrCancelled
+			}
 			return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
 		}
 		return bus.TaskResultPayload{
@@ -115,6 +131,9 @@ func (c *Core) routeDelegated(ctx context.Context, taskID string, p bus.TaskDele
 	if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{
 		"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout,
 	}); err != nil {
+		if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+			return bus.TaskResultPayload{}, ErrCancelled
+		}
 		return bus.TaskResultPayload{}, fmt.Errorf("complete: %w", err)
 	}
 	return bus.TaskResultPayload{
