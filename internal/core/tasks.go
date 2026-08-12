@@ -32,11 +32,25 @@ func NewTaskStore(db *sql.DB, logger *slog.Logger) *TaskStore {
 	return &TaskStore{db: db, logger: logger, now: storage.Now}
 }
 
-// Create inserts a new task in submitted state and records the submit event.
+// Create inserts a new task in submitted state with a fresh UUIDv7 id.
 func (s *TaskStore) Create(ctx context.Context, parentID, project, title, owner string, chain []string) (Task, error) {
 	taskID, err := util.UUIDv7()
 	if err != nil {
 		return Task{}, fmt.Errorf("uuid: %w", err)
+	}
+	return s.CreateWithID(ctx, taskID, parentID, project, title, owner, chain)
+}
+
+// CreateWithID inserts a task with an explicit id. The id is the cross-node
+// idempotency key, so delegated tasks keep the delegator's id. Returns
+// ErrConflict if the id already exists.
+func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project, title, owner string, chain []string) (Task, error) {
+	if taskID == "" {
+		var err error
+		taskID, err = util.UUIDv7()
+		if err != nil {
+			return Task{}, fmt.Errorf("uuid: %w", err)
+		}
 	}
 	attemptID, err := util.UUIDv7()
 	if err != nil {
@@ -107,7 +121,7 @@ func (s *TaskStore) transition(ctx context.Context, taskID, from, to, owner, eve
 	if !CanTransition(from, to) {
 		return fmt.Errorf("%w: %s -> %s", ErrIllegal, from, to)
 	}
-	if err := s.apply(ctx, taskID, to, owner, cur.AttemptID, event, data); err != nil {
+	if err := s.apply(ctx, taskID, to, owner, cur.AttemptID, event, data, nil); err != nil {
 		return err
 	}
 	s.logger.Debug("task transition", "task", taskID, "from", from, "to", to, "owner", owner)
@@ -115,14 +129,21 @@ func (s *TaskStore) transition(ctx context.Context, taskID, from, to, owner, eve
 }
 
 // apply writes the new state + event. attemptID is carried through unchanged
-// unless a caller explicitly rotates it (retry/transfer).
-func (s *TaskStore) apply(ctx context.Context, taskID, to, owner, attemptID, event string, data any) error {
+// unless a caller explicitly rotates it (retry/transfer). result, if non-nil,
+// is stored into result_json.
+func (s *TaskStore) apply(ctx context.Context, taskID, to, owner, attemptID, event string, data any, result any) error {
 	now := s.now()
 	dataJSON, _ := json.Marshal(data)
+	var resultJSON any
+	if result != nil {
+		b, _ := json.Marshal(result)
+		resultJSON = string(b)
+	}
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, owner_node=?, attempt_id=?, state_version=state_version+1, updated_at=?
+		UPDATE tasks SET state=?, owner_node=?, attempt_id=?, state_version=state_version+1,
+			result_json=COALESCE(?, result_json), updated_at=?
 		WHERE task_id=?`,
-		to, owner, attemptID, now, taskID)
+		to, owner, attemptID, resultJSON, now, taskID)
 	if err != nil {
 		return fmt.Errorf("update task state: %w", err)
 	}
@@ -188,7 +209,7 @@ func (s *TaskStore) Decline(ctx context.Context, taskID, parent string, reason s
 		return err
 	}
 	if err := s.apply(ctx, taskID, StateQueued, parent, cur.AttemptID, EvDecline,
-		map[string]any{"reason": reason, "by": cur.OwnerNode}); err != nil {
+		map[string]any{"reason": reason, "by": cur.OwnerNode}, nil); err != nil {
 		return err
 	}
 	return nil
@@ -202,7 +223,33 @@ func (s *TaskStore) SetWaitingContext(ctx context.Context, taskID, owner string)
 
 // Complete transitions running -> done and stores the result.
 func (s *TaskStore) Complete(ctx context.Context, taskID, owner string, result any) error {
-	return s.transition(ctx, taskID, StateRunning, StateDone, owner, EvResult, result)
+	cur, err := s.Get(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if cur.State != StateRunning {
+		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateRunning)
+	}
+	return s.apply(ctx, taskID, StateDone, owner, cur.AttemptID, EvResult, result, result)
+}
+
+// CompleteFromRemote records a remote executor's final result on the
+// delegator's copy. The delegator may be in submitted/queued/dispatched/
+// running; any non-terminal state is accepted, and the owner is moved to
+// the delegator (who holds the parent-side lease).
+func (s *TaskStore) CompleteFromRemote(ctx context.Context, taskID, owner string, result any) error {
+	cur, err := s.Get(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if Terminal(cur.State) {
+		return nil // already closed; keep first result
+	}
+	if err := s.apply(ctx, taskID, StateDone, owner, cur.AttemptID, EvResult, result, result); err != nil {
+		return err
+	}
+	s.logger.Debug("remote completion recorded", "task", taskID, "from", cur.State)
+	return nil
 }
 
 // Fail transitions a task to failed. Allowed from running/dispatched/
@@ -221,6 +268,24 @@ func (s *TaskStore) Fail(ctx context.Context, taskID, owner, reason string) erro
 	}
 	return s.transition(ctx, taskID, from, StateFailed, owner, EvResult,
 		map[string]any{"failed": reason})
+}
+
+// FailFromRemote records a remote executor's failure on the delegator's copy.
+// Mirrors CompleteFromRemote: any non-terminal state is accepted.
+func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason string) error {
+	cur, err := s.Get(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if Terminal(cur.State) {
+		return nil
+	}
+	if err := s.apply(ctx, taskID, StateFailed, owner, cur.AttemptID, EvResult,
+		map[string]any{"failed": reason}, map[string]any{"failed": reason}); err != nil {
+		return err
+	}
+	s.logger.Debug("remote failure recorded", "task", taskID, "from", cur.State)
+	return nil
 }
 
 // Cancel marks a task cancelled if it is still active. Cancellation is the

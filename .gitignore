@@ -22,6 +22,7 @@ data/
 var/
 context/
 *.sock
+testdata/run/
 
 # Python
 __pycache__/

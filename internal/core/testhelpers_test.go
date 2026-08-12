@@ -3,6 +3,7 @@ package core
 import (
 	"database/sql"
 	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/xenith/panda/internal/storage"
@@ -11,6 +12,11 @@ import (
 // testLogger returns a silent logger for tests.
 func testLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
+}
+
+// verboseTestLogger returns a logger that writes to the test's log output.
+func verboseTestLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stdout, nil))
 }
 
 // openTestDB returns an in-memory SQLite DB with the Phase 0 schema applied.

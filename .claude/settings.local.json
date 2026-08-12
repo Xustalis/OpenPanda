@@ -17,7 +17,10 @@
       "Bash(rm -rf data bin /tmp/panda.log && git add -A && git status --short)",
       "Bash(go test *)",
       "Bash(gofmt -l internal/ cmd/)",
-      "Bash(gofmt -w internal/core/state.go internal/core/tasks_test.go internal/ledger/capability.go)"
+      "Bash(gofmt -w internal/core/state.go internal/core/tasks_test.go internal/ledger/capability.go)",
+      "Bash(go get *)",
+      "Bash(gofmt -w internal/bus/payloads.go internal/bus/ws.go internal/core/core.go internal/core/protocol_test.go)",
+      "Bash(kill 55477 57975)"
     ]
   }
 }
