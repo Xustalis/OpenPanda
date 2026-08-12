@@ -15,13 +15,13 @@ import (
 
 // Card is the parsed form of capabilities.yaml for this node.
 type Card struct {
-	Device        string             `yaml:"device"`
-	ResourceClass string             `yaml:"resource_class"`
-	Chip          string             `yaml:"chip"`
-	Native        []NativeAbility    `yaml:"native"`
-	Agents        map[string]Agent   `yaml:"agents"`
-	Manual        []ManualAbility    `yaml:"manual"`
-	Capacity      Capacity           `yaml:"capacity"`
+	Device        string           `yaml:"device"`
+	ResourceClass string           `yaml:"resource_class"`
+	Chip          string           `yaml:"chip"`
+	Native        []NativeAbility  `yaml:"native"`
+	Agents        map[string]Agent `yaml:"agents"`
+	Manual        []ManualAbility  `yaml:"manual"`
+	Capacity      Capacity         `yaml:"capacity"`
 }
 
 // NativeAbility is a deterministic command this node can run.
@@ -50,24 +50,24 @@ type ManualAbility struct {
 
 // Capacity describes current resource availability.
 type Capacity struct {
-	CPUCores         int `yaml:"cpu_cores"`
-	RAMGB            int `yaml:"ram_gb"`
-	MaxConcurrent    int `yaml:"max_concurrent_tasks"`
-	CurrentTasks     int `yaml:"current_tasks"`
+	CPUCores      int `yaml:"cpu_cores"`
+	RAMGB         int `yaml:"ram_gb"`
+	MaxConcurrent int `yaml:"max_concurrent_tasks"`
+	CurrentTasks  int `yaml:"current_tasks"`
 }
 
 // Row is the employee_cache row representation (JSON-encoded fields).
 type Row struct {
-	ID           string
-	Name         string
-	Department   string
-	Chip         string
-	NativeJSON   string
-	AgentsJSON   string
-	ManualJSON   string
-	CapacityJSON string
-	Status       string
-	LastSeen     int64
+	ID            string
+	Name          string
+	Department    string
+	Chip          string
+	NativeJSON    string
+	AgentsJSON    string
+	ManualJSON    string
+	CapacityJSON  string
+	Status        string
+	LastSeen      int64
 	SchedulerTier int
 }
 
@@ -138,15 +138,15 @@ func MarkOffline(db *sql.DB, id string) error {
 
 // Node is a single employee_cache row, decoded.
 type Node struct {
-	ID         string
-	Name       string
-	Chip       string
-	Status     string
-	LastSeen   int64
-	Native     []NativeAbility
-	Agents     map[string]Agent
-	Manual     []ManualAbility
-	Capacity   Capacity
+	ID       string
+	Name     string
+	Chip     string
+	Status   string
+	LastSeen int64
+	Native   []NativeAbility
+	Agents   map[string]Agent
+	Manual   []ManualAbility
+	Capacity Capacity
 }
 
 // Query returns nodes matching filters. Empty status or name matches all.

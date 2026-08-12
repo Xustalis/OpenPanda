@@ -2,10 +2,16 @@ package core
 
 import (
 	"database/sql"
+	"log/slog"
 	"testing"
 
 	"github.com/xenith/panda/internal/storage"
 )
+
+// testLogger returns a silent logger for tests.
+func testLogger() *slog.Logger {
+	return slog.New(slog.DiscardHandler)
+}
 
 // openTestDB returns an in-memory SQLite DB with the Phase 0 schema applied.
 // The driver is registered via storage.Open.

@@ -14,7 +14,10 @@
       "Bash(sqlite3 data/panda.db \"SELECT id, name, status, last_seen, scheduler_tier FROM employee_cache;\")",
       "Bash(sqlite3 data/panda.db \"SELECT native_json FROM employee_cache;\")",
       "Bash(kill %1)",
-      "Bash(rm -rf data bin /tmp/panda.log && git add -A && git status --short)"
+      "Bash(rm -rf data bin /tmp/panda.log && git add -A && git status --short)",
+      "Bash(go test *)",
+      "Bash(gofmt -l internal/ cmd/)",
+      "Bash(gofmt -w internal/core/state.go internal/core/tasks_test.go internal/ledger/capability.go)"
     ]
   }
 }
