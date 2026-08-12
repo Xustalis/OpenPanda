@@ -1,0 +1,43 @@
+# Go
+panda
+panda-*
+!PANDA-*.md
+*.exe
+*.test
+*.out
+dist/
+bin/
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# Config (contains local node credentials / peers)
+config.yaml
+capabilities.yaml
+
+# Runtime data
+data/
+var/
+context/
+*.sock
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log
+logs/
