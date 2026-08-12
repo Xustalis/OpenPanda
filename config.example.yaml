@@ -1,0 +1,17 @@
+# PANDA node configuration
+# Copy to /etc/panda/config.yaml on each node, or run with --config.
+node:
+  name: "macbook-m1"
+  resource_class: "Standard"  # Micro | Standard | Full
+
+network:
+  listen_addr: ":7836"           # WebSocket listener
+  peers:                         # manual peers
+    - "orangepi3b.tailnet-name.ts.net:7836"
+
+storage:
+  db_path: "./data/panda.db"
+  context_path: "./data/context"
+
+log:
+  level: "info"                  # debug | info | warn | error

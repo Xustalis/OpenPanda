@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod *)",
+      "Bash(sqlite3 data/panda.db \".tables\")",
+      "Bash(sqlite3 data/panda.db \"PRAGMA journal_mode;\")",
+      "Bash(make build-linux-arm64 *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}
