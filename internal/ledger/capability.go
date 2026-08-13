@@ -206,6 +206,9 @@ type Node struct {
 // declared native/manual id or an agent capability, with a normalized fallback
 // (see AbilityMatches).
 func (n Node) Matches(required []string) bool {
+	// Pre-normalize the declared ids once; otherwise each required id would
+	// re-normalize the whole declared set (O(R×A) allocations instead of O(A)).
+	native, agentCaps, manual := n.normalizedAbilities()
 	for _, req := range required {
 		if name, ok := strings.CutPrefix(req, "agent:"); ok {
 			if _, exists := n.Agents[name]; exists {
@@ -213,22 +216,39 @@ func (n Node) Matches(required []string) bool {
 			}
 			continue
 		}
-		for _, ab := range n.Native {
-			if AbilityMatches(ab.ID, req) {
-				return true
-			}
+		r := normalizeAbility(req)
+		if matchNormalized(native, r) || matchNormalized(agentCaps, r) || matchNormalized(manual, r) {
+			return true
 		}
-		for _, ag := range n.Agents {
-			for _, cap := range ag.Capabilities {
-				if AbilityMatches(cap, req) {
-					return true
-				}
-			}
+	}
+	return false
+}
+
+// normalizedAbilities returns the declared native/agent/manual ability ids,
+// normalized once so Matches does not re-normalize them per required id.
+func (n Node) normalizedAbilities() (native, agentCaps, manual []string) {
+	native = make([]string, 0, len(n.Native))
+	for _, ab := range n.Native {
+		native = append(native, normalizeAbility(ab.ID))
+	}
+	for _, ag := range n.Agents {
+		for _, cap := range ag.Capabilities {
+			agentCaps = append(agentCaps, normalizeAbility(cap))
 		}
-		for _, ab := range n.Manual {
-			if AbilityMatches(ab.ID, req) {
-				return true
-			}
+	}
+	manual = make([]string, 0, len(n.Manual))
+	for _, ab := range n.Manual {
+		manual = append(manual, normalizeAbility(ab.ID))
+	}
+	return native, agentCaps, manual
+}
+
+// matchNormalized reports whether any normalized declared id matches the
+// normalized required id r.
+func matchNormalized(ids []string, r string) bool {
+	for _, d := range ids {
+		if abilityMatchesNormalized(d, r) {
+			return true
 		}
 	}
 	return false
@@ -263,21 +283,29 @@ func AbilityMatches(declared, required string) bool {
 	if declared == required {
 		return true
 	}
-	d, r := normalizeAbility(declared), normalizeAbility(required)
-	if d == "" || r == "" {
-		return false
-	}
+	return abilityMatchesNormalized(normalizeAbility(declared), normalizeAbility(required))
+}
+
+// abilityMatchesNormalized compares two already-normalized ability ids. Exact
+// equality wins; otherwise a containment check bridges ids the model emitted
+// with a different separator or category prefix (e.g. required "code:lint"
+// against declared "lint"). The fallback is guarded so a degenerate fragment
+// (shorter side under 3 chars) never fans out to unrelated abilities.
+func abilityMatchesNormalized(d, r string) bool {
 	if d == r {
 		return true
 	}
-	short := d
+	if d == "" || r == "" {
+		return false
+	}
+	short, long := d, r
 	if len(r) < len(short) {
-		short = r
+		short, long = r, d
 	}
 	if len(short) < 3 {
 		return false
 	}
-	return strings.Contains(d, r) || strings.Contains(r, d)
+	return strings.Contains(long, short)
 }
 
 // Query returns nodes matching filters. Empty status or name matches all.
