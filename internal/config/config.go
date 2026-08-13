@@ -14,6 +14,7 @@ type Config struct {
 	Network NetworkConfig `yaml:"network"`
 	Storage StorageConfig `yaml:"storage"`
 	Log     LogConfig     `yaml:"log"`
+	Model   ModelConfig   `yaml:"model"`
 }
 
 // NodeConfig identifies this node.
@@ -39,6 +40,15 @@ type LogConfig struct {
 	Level string `yaml:"level"` // debug | info | warn | error
 }
 
+// ModelConfig selects the LLM provider for the entry model and the agent
+// adapters. DeepSeek exposes an Anthropic-compatible Messages API, so base_url
+// defaults there; any /v1/messages-compatible endpoint works.
+type ModelConfig struct {
+	BaseURL string `yaml:"base_url"` // e.g. https://api.deepseek.com/anthropic
+	APIKey  string `yaml:"api_key"`  // secret; prefer env PANDA_MODEL_API_KEY
+	Model   string `yaml:"model"`    // e.g. deepseek-chat | deepseek-reasoner
+}
+
 // Default returns a Config with safe local-development defaults.
 func Default() *Config {
 	return &Config{
@@ -55,6 +65,10 @@ func Default() *Config {
 		},
 		Log: LogConfig{
 			Level: "info",
+		},
+		Model: ModelConfig{
+			BaseURL: "https://api.deepseek.com/anthropic",
+			Model:   "deepseek-chat",
 		},
 	}
 }
@@ -98,5 +112,14 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("PANDA_DB_PATH"); v != "" {
 		c.Storage.DBPath = v
+	}
+	if v := os.Getenv("PANDA_MODEL_BASE_URL"); v != "" {
+		c.Model.BaseURL = v
+	}
+	if v := os.Getenv("PANDA_MODEL_API_KEY"); v != "" {
+		c.Model.APIKey = v
+	}
+	if v := os.Getenv("PANDA_MODEL"); v != "" {
+		c.Model.Model = v
 	}
 }

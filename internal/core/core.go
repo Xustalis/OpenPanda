@@ -12,6 +12,7 @@ import (
 
 	"github.com/xenith/panda/internal/bus"
 	"github.com/xenith/panda/internal/commander"
+	"github.com/xenith/panda/internal/config"
 	"github.com/xenith/panda/internal/ledger"
 	"github.com/xenith/panda/internal/util"
 )
@@ -39,8 +40,9 @@ type Core struct {
 	greeted map[string]bool // node ids we have replied hello to
 }
 
-// NewCore constructs a Core. The card may be zero for a minimal node.
-func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog.Logger) *Core {
+// NewCore constructs a Core. The card may be zero for a minimal node. The
+// model config is forwarded to the commander for agent adapter subprocesses.
+func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog.Logger, model config.ModelConfig) *Core {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -58,7 +60,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 	// The commander needs at least one native ability to route; a zero card
 	// yields a router that declines everything.
 	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 {
-		c.router = commander.NewRouter(card, commander.NewExecutor())
+		c.router = commander.NewRouter(card, commander.NewExecutor(), model)
 	}
 	return c
 }

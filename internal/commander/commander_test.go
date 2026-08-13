@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/xenith/panda/internal/config"
 	"github.com/xenith/panda/internal/ledger"
 )
 
@@ -30,7 +31,7 @@ func testCard() ledger.Card {
 }
 
 func TestRouteNative(t *testing.T) {
-	r := NewRouter(testCard(), NewExecutor())
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
 	plan, err := r.Route([]string{"sys:info"})
 	if err != nil {
 		t.Fatalf("route: %v", err)
@@ -41,7 +42,7 @@ func TestRouteNative(t *testing.T) {
 }
 
 func TestRouteAgent(t *testing.T) {
-	r := NewRouter(testCard(), NewExecutor())
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
 	plan, err := r.Route([]string{"code:modify"})
 	if err != nil {
 		t.Fatalf("route: %v", err)
@@ -52,7 +53,7 @@ func TestRouteAgent(t *testing.T) {
 }
 
 func TestRouteManual(t *testing.T) {
-	r := NewRouter(testCard(), NewExecutor())
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
 	plan, err := r.Route([]string{"design:figma"})
 	if err != nil {
 		t.Fatalf("route: %v", err)
@@ -63,7 +64,7 @@ func TestRouteManual(t *testing.T) {
 }
 
 func TestRouteNoMatch(t *testing.T) {
-	r := NewRouter(testCard(), NewExecutor())
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
 	if _, err := r.Route([]string{"gpu:train"}); err == nil {
 		t.Fatalf("expected error for unmatched ability")
 	}
@@ -73,7 +74,7 @@ func TestNativePriorityOverAgent(t *testing.T) {
 	card := testCard()
 	// Add an agent that also claims sys:info — native must win.
 	card.Agents["x"] = ledger.Agent{Adapter: "x.py", Capabilities: []string{"sys:info"}}
-	r := NewRouter(card, NewExecutor())
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{})
 	plan, _ := r.Route([]string{"sys:info"})
 	if plan.Kind != "native" {
 		t.Fatalf("native priority violated: got %s", plan.Kind)
@@ -84,7 +85,7 @@ func TestExecuteNative(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uname not available on windows")
 	}
-	r := NewRouter(testCard(), NewExecutor())
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
 	plan, _ := r.Route([]string{"sys:info"})
 	res := r.Execute(context.Background(), plan, "", "")
 	if !res.OK {

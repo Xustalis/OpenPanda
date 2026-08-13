@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/xenith/panda/internal/config"
 	"github.com/xenith/panda/internal/ledger"
 )
 
@@ -13,13 +14,15 @@ import (
 type Router struct {
 	card     ledger.Card
 	executor *Executor
+	model    config.ModelConfig
 	// runAdapter is injectable for tests; production uses RunAgent.
 	runAdapter func(ctx context.Context, adapter string, prompt string, cwd string) AgentResult
 }
 
-// NewRouter builds a router from this node's capability card.
-func NewRouter(card ledger.Card, executor *Executor) *Router {
-	r := &Router{card: card, executor: executor}
+// NewRouter builds a router from this node's capability card. The model config
+// is injected into agent adapter subprocesses (base URL + key + model).
+func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig) *Router {
+	r := &Router{card: card, executor: executor, model: model}
 	r.runAdapter = r.runAdapterDefault
 	return r
 }
@@ -144,8 +147,9 @@ type AgentResult struct {
 	Cost     float64
 }
 
-// runAdapterDefault shells out to a Python adapter in adapters/.
+// runAdapterDefault shells out to a Python adapter in adapters/, injecting
+// the model config so the adapter can reach the configured provider.
 func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt string, cwd string) AgentResult {
 	// The Go core injects secrets via env; adapters read them from os.environ.
-	return runAdapterProcess(ctx, adapter, prompt, cwd)
+	return runAdapterProcess(ctx, adapter, prompt, cwd, r.model)
 }

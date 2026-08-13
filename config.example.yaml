@@ -15,3 +15,10 @@ storage:
 
 log:
   level: "info"                  # debug | info | warn | error
+
+# LLM provider for the entry model and agent adapters. DeepSeek exposes an
+# Anthropic-compatible Messages API; any /v1/messages-compatible endpoint works.
+model:
+  base_url: "https://api.deepseek.com/anthropic"
+  model: "deepseek-chat"          # deepseek-chat | deepseek-reasoner
+  # api_key: ""                   # secret; prefer env PANDA_MODEL_API_KEY

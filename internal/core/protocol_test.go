@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/xenith/panda/internal/bus"
+	"github.com/xenith/panda/internal/config"
 	"github.com/xenith/panda/internal/ledger"
 )
 
@@ -93,5 +94,5 @@ func newCore(t *testing.T, id, addr string) *Core {
 		Native:        []ledger.NativeAbility{{ID: "sys:info", Command: "uname"}},
 		Capacity:      ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
 	}
-	return NewCore(db, id, card, 5, verboseTestLogger())
+	return NewCore(db, id, card, 5, verboseTestLogger(), config.ModelConfig{})
 }

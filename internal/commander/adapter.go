@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+
+	"github.com/xenith/panda/internal/config"
 )
 
 // adapterDir is where adapter scripts live. Resolved relative to the working
@@ -20,10 +23,22 @@ type AdapterRequest struct {
 	CWD      string `json:"cwd,omitempty"`
 }
 
+// modelEnv injects the model provider config into the adapter process env so
+// adapters (e.g. the claude CLI) point at DeepSeek. Secrets are passed only
+// via env and never echoed to logs.
+func modelEnv(model config.ModelConfig) []string {
+	env := []string{
+		"ANTHROPIC_BASE_URL=" + model.BaseURL,
+		"ANTHROPIC_API_KEY=" + model.APIKey,
+		"ANTHROPIC_MODEL=" + model.Model,
+	}
+	return env
+}
+
 // runAdapterProcess spawns adapters/<name> with a JSON request on stdin and
-// reads a JSON result from stdout. The process env is inherited (secrets are
-// injected by the caller beforehand).
-func runAdapterProcess(ctx context.Context, name string, prompt string, cwd string) AgentResult {
+// reads a JSON result from stdout. The model config is injected via env so the
+// adapter reaches the configured provider.
+func runAdapterProcess(ctx context.Context, name string, prompt string, cwd string, model config.ModelConfig) AgentResult {
 	req := AdapterRequest{Prompt: prompt, TimeoutS: 600, CWD: cwd}
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
@@ -36,6 +51,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	cmd.Env = append(os.Environ(), modelEnv(model)...)
 
 	if err := cmd.Run(); err != nil {
 		code := 1

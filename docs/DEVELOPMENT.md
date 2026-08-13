@@ -23,13 +23,16 @@ make measure         # 实测稳态 RSS（多次采样，单次不可靠）
 
 ```
 cmd/panda/          守护进程入口（注册/心跳/监控/WS server/peer 重连）
+                    + 子命令：ask（统一入口模型）
 internal/
   core/             核心：节点生命周期(node.go) + 状态机(state.go/tasks.go)
                     + 消息路由(core.go) + 处理器(handlers.go)
+  entry/            统一入口模型（Phase 1）：prompt.go + model.go + router.go
+                    + spec.go 校验 + classify.go + fallback.go 降级
   bus/              WebSocket 传输 + 消息信封(msg.go/payloads.go/ws.go)
   commander/        三层能力执行：native(exec) / agent(adapter) / manual
   ledger/           能力目录（capabilities.yaml 解析 + employee_cache CRUD）
-  config/           YAML 配置加载
+  config/           YAML 配置加载（含 model 段）
   storage/          SQLite(WAL) 封装 + 迁移
   log/              slog JSON 日志
   util/             UUIDv7
@@ -82,7 +85,7 @@ go test ./... -cover           # 核心模块尽量 >60%
 | 决策 | 约束 | 来源 |
 |---|---|---|
 | Go 核心 + Python 胶水 | 核心锁死 Go；扩展 subprocess 模式 | 设计 §4 |
-| modernc sqlite（纯 Go）| **RSS ~13-20MB**（>8MB 目标）；换 CGO 驱动会破坏交叉编译 | phase0 §4 |
+| modernc sqlite（纯 Go）| **RSS ~13-20MB**（已接受，调整验收为 ≤30MB）；换 CGO 驱动会破坏交叉编译 | phase0 §4 |
 | WebSocket + JSON | 控制面可调试；数据面后续 MessagePack | 设计 §10.6 |
 | WS 心跳 | 应用级（ledger）+ 传输级（ping/pong 30s）| §5.1 |
 | 重连退避 | 1s→2s→…→30s 封顶 | main.go |
@@ -120,12 +123,14 @@ make build
 
 跨设备（Tailscale）未验证——本机无 Tailscale，需香橙派就绪后补。
 
-## 8. Phase 1 输入（下次会话从这里继续）
+## 8. Phase 1 进度（下次会话从这里继续）
 
-- **内存基线决策**：接受 13-20MB 调整标准？还是换 CGO 驱动？（推荐前者）
-- **Agent adapter 真实调用**：claude_code.py 协议已验证，需 API key + 真 Claude Code CLI 实测
-- **入口模型**：需要 Anthropic API key，设计 §7 的系统提示词已就绪
-- **CLI 面板**：`panda ask/queue/task/cancel/logs/status` 尚未实现
+- **内存基线决策**：✅ 已接受 13-20MB，验收标准调整为 ≤30MB（2026-08-13）
+- **Agent adapter 真实调用**：✅ claude_code.py 已走 DeepSeek 实测通过
+- **统一入口模型**：✅ `internal/entry` 完成（answer/tool_call/task 三分类 + 校验 + 降级），`panda ask` 可端到端调用 DeepSeek
+- **三层能力路由**：⏳ 入口模型 `task` 输出 → commander.Router 的接线尚未做（task JSON 还没写进任务管线 + 委派）
+- **CLI 面板**：`panda ask` 已可用；`queue/task/cancel/logs/status` 尚未实现
+- **第二个 adapter（OpenCode）**：未实现
 - **香橙派部署**：`bin/panda-linux-arm64` 静态二进制已就绪，待 Armbian 实测
 
 ## 9. 测试清单（当前状态）

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/xenith/panda/internal/config"
 )
 
 // fakeAdapter writes a known JSON result to stdout, so we can test the
@@ -25,7 +27,7 @@ func TestRunAdapterProcess(t *testing.T) {
 	adapterDir = dir // redirect the constant for this test
 	defer func() { adapterDir = oldDir }()
 
-	res := runAdapterProcess(context.Background(), "fake.py", "PANDA", "")
+	res := runAdapterProcess(context.Background(), "fake.py", "PANDA", "", config.ModelConfig{})
 	if !res.OK {
 		t.Fatalf("adapter failed: %+v", res)
 	}
@@ -39,8 +41,31 @@ func TestRunAdapterMissingBinary(t *testing.T) {
 	adapterDir = t.TempDir() // no adapters here
 	defer func() { adapterDir = oldDir }()
 
-	res := runAdapterProcess(context.Background(), "nope.py", "x", "")
+	res := runAdapterProcess(context.Background(), "nope.py", "x", "", config.ModelConfig{})
 	if res.OK {
 		t.Fatalf("expected failure for missing adapter")
+	}
+}
+
+func TestModelEnvInjectsProvider(t *testing.T) {
+	env := modelEnv(config.ModelConfig{
+		BaseURL: "https://api.deepseek.com/anthropic",
+		APIKey:  "sk-test",
+		Model:   "deepseek-chat",
+	})
+	want := map[string]string{
+		"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+		"ANTHROPIC_API_KEY":  "sk-test",
+		"ANTHROPIC_MODEL":    "deepseek-chat",
+	}
+	for _, kv := range env {
+		for k, v := range want {
+			if kv == k+"="+v {
+				delete(want, k)
+			}
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing env entries: %v", want)
 	}
 }

@@ -89,3 +89,54 @@ func TestEnvOverrides(t *testing.T) {
 		t.Fatalf("env override failed: %q", cfg.Node.Name)
 	}
 }
+
+func TestModelDefaults(t *testing.T) {
+	p := writeTemp(t, "node:\n  name: \"n\"\n")
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Model.BaseURL == "" || cfg.Model.Model == "" {
+		t.Fatalf("expected model defaults, got %+v", cfg.Model)
+	}
+}
+
+func TestModelParsesYAML(t *testing.T) {
+	p := writeTemp(t, `
+node:
+  name: "n"
+model:
+  base_url: "https://example.com/anthropic"
+  api_key: "sk-test"
+  model: "deepseek-reasoner"
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Model.BaseURL != "https://example.com/anthropic" ||
+		cfg.Model.APIKey != "sk-test" ||
+		cfg.Model.Model != "deepseek-reasoner" {
+		t.Fatalf("model = %+v", cfg.Model)
+	}
+}
+
+func TestModelEnvOverrides(t *testing.T) {
+	p := writeTemp(t, "node:\n  name: \"n\"\n")
+	os.Setenv("PANDA_MODEL_BASE_URL", "https://env.example.com")
+	os.Setenv("PANDA_MODEL_API_KEY", "sk-env")
+	os.Setenv("PANDA_MODEL", "deepseek-chat")
+	defer os.Unsetenv("PANDA_MODEL_BASE_URL")
+	defer os.Unsetenv("PANDA_MODEL_API_KEY")
+	defer os.Unsetenv("PANDA_MODEL")
+
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Model.BaseURL != "https://env.example.com" ||
+		cfg.Model.APIKey != "sk-env" ||
+		cfg.Model.Model != "deepseek-chat" {
+		t.Fatalf("model = %+v", cfg.Model)
+	}
+}
