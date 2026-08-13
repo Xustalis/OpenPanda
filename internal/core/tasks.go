@@ -87,14 +87,14 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	var chainJSON string
 	var intent, spec, result sql.NullString
 	var lease sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `
-		SELECT task_id, parent_id, project, title, state, owner_node, attempt_id,
-		       state_version, chain_json, intent, spec_json, result_json,
-		       lease_expires_at, created_at, updated_at
-		FROM tasks WHERE task_id = ?`, taskID).
+	var contextType, risk, resource sql.NullString
+	var complexity sql.NullFloat64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT `+taskColumns+` FROM tasks WHERE task_id = ?`, taskID).
 		Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State, &t.OwnerNode,
 			&t.AttemptID, &t.StateVersion, &chainJSON, &intent, &spec,
-			&result, &lease, &t.CreatedAt, &t.UpdatedAt)
+			&result, &contextType, &complexity, &risk, &resource, &lease,
+			&t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return Task{}, err
 	}
@@ -102,6 +102,10 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	t.Intent = intent.String
 	t.SpecJSON = spec.String
 	t.ResultJSON = result.String
+	t.ContextType = contextType.String
+	t.Complexity = complexity.Float64
+	t.Risk = risk.String
+	t.ResourceJSON = resource.String
 	t.LeaseExpires = lease.Int64
 	return t, nil
 }
@@ -332,6 +336,23 @@ func (s *TaskStore) SetLease(ctx context.Context, taskID string, durationMS int6
 	return nil
 }
 
+// SetDetail persists the entry-model-derived task metadata (design doc §6.1
+// tasks schema): context type, intent, spec, complexity, risk, and resource
+// profile. Called once after creation; the fields default to zero/empty until
+// then. A zero TaskDetail clears the fields.
+func (s *TaskStore) SetDetail(ctx context.Context, taskID string, d TaskDetail) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET context_type=?, intent=?, spec_json=?, complexity=?,
+			risk=?, resource_json=?, updated_at=?
+		WHERE task_id=?`,
+		d.ContextType, d.Intent, d.SpecJSON, d.Complexity, d.Risk, d.ResourceJSON,
+		s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("set detail: %w", err)
+	}
+	return nil
+}
+
 // ExpireTasks fails any active task whose lease has expired. Returns the
 // number of tasks failed. Called periodically by the monitor.
 func (s *TaskStore) ExpireTasks(ctx context.Context) (int, error) {
@@ -433,12 +454,21 @@ func (s *TaskStore) Cancel(ctx context.Context, taskID string) error {
 }
 
 // CancelCascade cancels taskID and every descendant. Descendants are found by
-// parent_id links; the walk recurses so multi-level trees behave.
+// parent_id links; the walk recurses so multi-level trees behave. The returned
+// count is the number of tasks actually transitioned to cancelled — already-
+// terminal tasks are skipped, not counted.
 func (s *TaskStore) CancelCascade(ctx context.Context, taskID string) (int, error) {
-	if err := s.Cancel(ctx, taskID); err != nil {
+	cur, err := s.Get(ctx, taskID)
+	if err != nil {
 		return 0, err
 	}
-	count := 1
+	count := 0
+	if !Terminal(cur.State) {
+		if err := s.Cancel(ctx, taskID); err != nil {
+			return 0, err
+		}
+		count = 1
+	}
 	children, err := s.Children(ctx, taskID)
 	if err != nil {
 		return count, err
@@ -459,10 +489,7 @@ func (s *TaskStore) CancelCascade(ctx context.Context, taskID string) (int, erro
 // Children lists direct children of taskID.
 func (s *TaskStore) Children(ctx context.Context, parentID string) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT task_id, parent_id, project, title, state, owner_node, attempt_id,
-		        state_version, chain_json, intent, spec_json, result_json,
-		        lease_expires_at, created_at, updated_at
-		 FROM tasks WHERE parent_id = ?`, parentID)
+		`SELECT `+taskColumns+` FROM tasks WHERE parent_id = ?`, parentID)
 	if err != nil {
 		return nil, err
 	}
@@ -472,10 +499,7 @@ func (s *TaskStore) Children(ctx context.Context, parentID string) ([]Task, erro
 
 // ListByState returns tasks filtered by state ("" = all), newest first.
 func (s *TaskStore) ListByState(ctx context.Context, state string) ([]Task, error) {
-	q := `SELECT task_id, parent_id, project, title, state, owner_node, attempt_id,
-	        state_version, chain_json, intent, spec_json, result_json,
-	        lease_expires_at, created_at, updated_at
-	      FROM tasks`
+	q := `SELECT ` + taskColumns + ` FROM tasks`
 	var args []any
 	if state != "" {
 		q += " WHERE state = ?"
@@ -520,18 +544,21 @@ type Event struct {
 }
 
 // RotateAttempt mints a new attempt_id for a retry/transfer. The caller must
-// first have moved the task to queued/dispatched so the old attempt's late
-// results are rejected by the state checks.
+// hold the lease (owner); the update is owner-guarded like every other
+// mutating method, so a stale node cannot rotate another owner's attempt.
 func (s *TaskStore) RotateAttempt(ctx context.Context, taskID, owner string) (string, error) {
 	aid, err := util.UUIDv7()
 	if err != nil {
 		return "", fmt.Errorf("uuid: %w", err)
 	}
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE tasks SET attempt_id=?, state_version=state_version+1, updated_at=? WHERE task_id=?`,
-		aid, s.now(), taskID)
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET attempt_id=?, state_version=state_version+1, updated_at=? WHERE task_id=? AND owner_node=?`,
+		aid, s.now(), taskID, owner)
 	if err != nil {
 		return "", fmt.Errorf("rotate attempt: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", fmt.Errorf("%w: task %s owner mismatch", ErrConflict, taskID)
 	}
 	return aid, nil
 }
@@ -540,6 +567,13 @@ func (s *TaskStore) RotateAttempt(ctx context.Context, taskID, owner string) (st
 // atomicity matters. The single-writer connection (storage.Open) serializes
 // writes already.
 
+// taskColumns is the shared SELECT list for task rows. Kept in one place so
+// Get/Children/ListByState/scanTasks stay in lock-step as the schema grows.
+const taskColumns = `task_id, parent_id, project, title, state, owner_node, attempt_id,
+	state_version, chain_json, intent, spec_json, result_json,
+	context_type, complexity, risk, resource_json,
+	lease_expires_at, created_at, updated_at`
+
 func scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task
 	for rows.Next() {
@@ -547,15 +581,22 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var chainJSON string
 		var intent, spec, result sql.NullString
 		var lease sql.NullInt64
+		var contextType, risk, resource sql.NullString
+		var complexity sql.NullFloat64
 		if err := rows.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State,
 			&t.OwnerNode, &t.AttemptID, &t.StateVersion, &chainJSON, &intent,
-			&spec, &result, &lease, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			&spec, &result, &contextType, &complexity, &risk, &resource, &lease,
+			&t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
 		t.Intent = intent.String
 		t.SpecJSON = spec.String
 		t.ResultJSON = result.String
+		t.ContextType = contextType.String
+		t.Complexity = complexity.Float64
+		t.Risk = risk.String
+		t.ResourceJSON = resource.String
 		t.LeaseExpires = lease.Int64
 		out = append(out, t)
 	}

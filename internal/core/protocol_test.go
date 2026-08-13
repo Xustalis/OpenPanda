@@ -85,6 +85,43 @@ func TestTwoNodeProtocol(t *testing.T) {
 	t.Fatalf("task did not reach done on entry within deadline")
 }
 
+// TestDelegatePersistsDetail verifies the entry-model detail carried on the
+// wire (context_type/intent/spec/complexity/risk) lands in the executor's
+// local store, so the queue shows it even before execution completes.
+func TestDelegatePersistsDetail(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-detail", "127.0.0.1:17866")
+	worker := newCore(t, "worker-detail", "127.0.0.1:17867")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17866", "127.0.0.1:17867")
+
+	env, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-detail", "m1", bus.TaskDelegatePayload{
+		TaskID: "detail-task", Title: "refactor", ContextType: "file",
+		Intent: "重构 Hero.vue", SpecJSON: `{"scope":"Hero.vue"}`,
+		Requires: []string{"sys:info"}, Complexity: 0.6, Risk: "high",
+		Chain: []string{"entry-detail"},
+	})
+	if err := entry.sendTo("worker-detail", env); err != nil {
+		t.Fatalf("delegate: %v", err)
+	}
+
+	// Wait for the worker to finish the task.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		tk, err := worker.store.Get(ctx, "detail-task")
+		if err == nil && Terminal(tk.State) {
+			if tk.ContextType != "file" || tk.Intent != "重构 Hero.vue" ||
+				tk.Complexity != 0.6 || tk.Risk != "high" || tk.SpecJSON != `{"scope":"Hero.vue"}` {
+				t.Fatalf("worker detail mismatch: %+v", tk)
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("worker did not persist detail within deadline")
+}
+
 func newCore(t *testing.T, id, addr string) *Core {
 	t.Helper()
 	db := openTestDB(t)

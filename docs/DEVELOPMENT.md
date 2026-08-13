@@ -1,7 +1,7 @@
 # PANDA · 开发工作手册
 
-> 面向持续开发者的实操文档。区别于 [phase0-report.md](./phase0-report.md)（阶段验收记录）和设计文档（架构权威）。
-> 更新日期：2026-08-13 · 适用阶段：Phase 0 完成，准备 Phase 1
+> 面向持续开发者的实操文档。区别于 [phase0-report.md](./phase0-report.md)、[phase1-report.md](./phase1-report.md)（阶段验收记录）和设计文档（架构权威）。
+> 更新日期：2026-08-13 · 适用阶段：Phase 1 完成，准备 Phase 2
 
 ---
 
@@ -23,10 +23,11 @@ make measure         # 实测稳态 RSS（多次采样，单次不可靠）
 
 ```
 cmd/panda/          守护进程入口（注册/心跳/监控/WS server/peer 重连）
-                    + 子命令：ask（统一入口模型）
+                    + 子命令：ask（统一入口模型）+ status/queue/task/cancel/logs（面板）
 internal/
   core/             核心：节点生命周期(node.go) + 状态机(state.go/tasks.go)
                     + 消息路由(core.go) + 处理器(handlers.go)
+                    + 本地执行管线(submit.go：SubmitLocal + TaskDetail + SetDetail)
   entry/            统一入口模型（Phase 1）：prompt.go + model.go + router.go
                     + spec.go 校验 + classify.go + fallback.go 降级
   bus/              WebSocket 传输 + 消息信封(msg.go/payloads.go/ws.go)
@@ -36,7 +37,7 @@ internal/
   storage/          SQLite(WAL) 封装 + 迁移
   log/              slog JSON 日志
   util/             UUIDv7
-adapters/           Agent 适配器（claude_code.py，~90 行）
+adapters/           Agent 适配器（claude_code.py + opencode.py）
 config/             示例能力卡（macbook / orangepi3b）
 testdata/           双节点 loopback 测试配置
 docs/               阶段报告 + 本手册
@@ -79,6 +80,7 @@ go test ./... -cover           # 核心模块尽量 >60%
 - **无死代码**：未使用的导出符号（类型/字段/函数）一律删除
 - **并发安全**：`bus.Conn` 单写者锁；Core 的 peers map 用 RWMutex
 - **异步执行**：任务执行在独立 goroutine，消息循环永不阻塞（否则 cancel 会滞后）
+- **gitignore 陷阱**：`.gitignore` 里裸 `panda` 会误匹配 `cmd/panda/` 源码目录——编译产物必须锚定为 `/panda`（实际二进制在 `bin/`，已被 `bin/` 忽略）。新增目录名与二进制同名时务必检查 `git check-ignore`。
 
 ## 5. 已知决策与约束
 
@@ -128,9 +130,9 @@ make build
 - **内存基线决策**：✅ 已接受 13-20MB，验收标准调整为 ≤30MB（2026-08-13）
 - **Agent adapter 真实调用**：✅ claude_code.py 已走 DeepSeek 实测通过
 - **统一入口模型**：✅ `internal/entry` 完成（answer/tool_call/task 三分类 + 校验 + 降级），`panda ask` 可端到端调用 DeepSeek
-- **三层能力路由**：⏳ 入口模型 `task` 输出 → commander.Router 的接线尚未做（task JSON 还没写进任务管线 + 委派）
-- **CLI 面板**：`panda ask` 已可用；`queue/task/cancel/logs/status` 尚未实现
-- **第二个 adapter（OpenCode）**：未实现
+- **三层能力路由**：✅ 入口模型 `task` 输出 → `SubmitLocal` → 三层能力执行 → 持久化（本地闭环）
+- **CLI 面板**：✅ `panda ask` + `status`/`queue`/`task`/`cancel`/`logs` 全部可用
+- **第二个 adapter（OpenCode）**：✅ `adapters/opencode.py` + 卡片注册 + 路由测试
 - **香橙派部署**：`bin/panda-linux-arm64` 静态二进制已就绪，待 Armbian 实测
 
 ## 9. 测试清单（当前状态）
@@ -139,13 +141,14 @@ make build
 |---|---|---|
 | util | 95.7% | UUIDv7 格式/唯一/排序 |
 | log | 84.6% | JSON 输出、level 过滤 |
+| config | 85.2% | 加载/缺省/环境覆盖/坏文件 |
 | bus | 81.9% | 信封往返、WS server/client、ping 循环 |
-| config | 81.0% | 加载/缺省/环境覆盖/坏文件 |
 | storage | 75.0% | 迁移、幂等迁移、WAL |
-| ledger | 77.3% | 注册/心跳/下线/名称过滤 |
-| commander | 66.7% | 三层路由、native 执行、adapter 桥、上下文 hash |
-| core | 60.4% | 状态机、幂等、级联取消、超时、恢复、双节点协议 |
-| cmd/panda | 0% | main 入口（E2E 黑盒覆盖）|
+| ledger | 77.3% | 注册/心跳/下线/名称过滤/多 agent 卡片 |
+| commander | 67.5% | 三层路由、native 执行、adapter 桥、第二 agent、上下文 hash |
+| entry | 66.7% | 三分类、校验、降级、模型调用（httptest）|
+| core | 62.1% | 状态机、幂等、级联取消、超时、恢复、双节点协议、SubmitLocal、detail 落库 |
+| cmd/panda | 5.9% | toTaskInput 合成（面板为黑盒覆盖）|
 
 ---
 

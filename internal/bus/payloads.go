@@ -37,6 +37,7 @@ type TaskDelegatePayload struct {
 	TimeoutMS   int64    `json:"timeout_ms,omitempty"`
 	MaxRetries  int      `json:"max_retries,omitempty"`
 	Complexity  float64  `json:"complexity,omitempty"`
+	Risk        string   `json:"risk,omitempty"`
 	AttemptID   string   `json:"attempt_id,omitempty"`
 }
 

@@ -114,6 +114,62 @@ func TestCancelCascade(t *testing.T) {
 	}
 }
 
+// TestCancelCascadeSkipsTerminalRoot verifies the count reflects only tasks
+// actually transitioned: a done root with an active child cancels just the child.
+func TestCancelCascadeSkipsTerminalRoot(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	root := createTask(t, s, "", "root", "root")
+	child := createTask(t, s, root.TaskID, "child", "root")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	// Root is done (terminal); child is queued (active).
+	must(s.Queue(ctx, root.TaskID, "root"))
+	must(s.Dispatch(ctx, root.TaskID, "root", "win"))
+	must(s.Accept(ctx, root.TaskID, "win"))
+	must(s.Complete(ctx, root.TaskID, "win", nil))
+	must(s.Queue(ctx, child.TaskID, "root"))
+
+	count, err := s.CancelCascade(ctx, root.TaskID)
+	if err != nil {
+		t.Fatalf("cancel cascade: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("cancelled %d, want 1 (root already terminal)", count)
+	}
+	got, _ := s.Get(ctx, child.TaskID)
+	if got.State != StateCancelled {
+		t.Fatalf("child state = %s, want cancelled", got.State)
+	}
+}
+
+// TestRotateAttemptOwnerGuarded verifies a non-owner cannot rotate another
+// owner's attempt id.
+func TestRotateAttemptOwnerGuarded(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "t", "root")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	must(s.Queue(ctx, tk.TaskID, "root"))
+	must(s.Dispatch(ctx, tk.TaskID, "root", "win"))
+	must(s.Accept(ctx, tk.TaskID, "win"))
+
+	if _, err := s.RotateAttempt(ctx, tk.TaskID, "intruder"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict for non-owner rotation, got %v", err)
+	}
+}
+
 func TestAttemptRotationRejectsOldResult(t *testing.T) {
 	s := newTestStore(t)
 	tk := createTask(t, s, "", "t", "root")

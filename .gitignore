@@ -1,6 +1,8 @@
 # Go
-panda
-panda-*
+# Compiled binaries. Anchored to repo root so they don't also match the
+# cmd/panda/ source directory (a bare "panda" pattern would ignore that too).
+/panda
+/panda-*
 !PANDA-*.md
 *.exe
 *.test

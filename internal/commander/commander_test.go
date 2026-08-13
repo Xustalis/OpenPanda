@@ -22,6 +22,11 @@ func testCard() ledger.Card {
 				Capabilities: []string{"code:modify", "code:review"},
 				CostTier:     "medium_high",
 			},
+			"opencode": {
+				Adapter:      "opencode.py",
+				Capabilities: []string{"web:search", "web:fetch"},
+				CostTier:     "low_medium",
+			},
 		},
 		Manual: []ledger.ManualAbility{
 			{ID: "design:figma", Notify: "open figma"},
@@ -49,6 +54,17 @@ func TestRouteAgent(t *testing.T) {
 	}
 	if plan.Kind != "agent" || plan.Agent != "claude_code" {
 		t.Fatalf("plan = %+v, want agent claude_code", plan)
+	}
+}
+
+func TestRouteSecondAgent(t *testing.T) {
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
+	plan, err := r.Route([]string{"web:search"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if plan.Kind != "agent" || plan.Agent != "opencode" || plan.Adapter != "opencode.py" {
+		t.Fatalf("plan = %+v, want agent opencode", plan)
 	}
 }
 

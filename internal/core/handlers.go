@@ -43,6 +43,11 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		c.logger.Error("create task from delegate", "err", err)
 		return
 	}
+	// Persist the entry-model detail carried on the wire so the local queue
+	// shows intent/context/complexity/risk even before execution starts.
+	if err := c.store.SetDetail(ctx, t.TaskID, delegateDetail(p)); err != nil {
+		c.logger.Warn("set detail", "task", t.TaskID, "err", err)
+	}
 	if p.TimeoutMS > 0 {
 		if err := c.store.SetLease(ctx, t.TaskID, p.TimeoutMS); err != nil {
 			c.logger.Warn("set lease", "task", t.TaskID, "err", err)
@@ -52,8 +57,8 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	// Execute asynchronously so the message loop stays responsive to
 	// task_cancel while a long native/agent command runs. The result (or a
 	// decline) is reported back via the env captured here.
-	go func(ctx context.Context, env bus.Envelope, taskID string, p bus.TaskDelegatePayload, chain []string) {
-		result, err := c.routeDelegated(ctx, taskID, p, chain)
+	go func(ctx context.Context, env bus.Envelope, taskID string, p bus.TaskDelegatePayload) {
+		result, err := c.routeDelegated(ctx, taskID, p)
 		if err != nil {
 			if errors.Is(err, ErrCancelled) {
 				c.logger.Info("task cancelled during execution", "task", taskID)
@@ -68,12 +73,38 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		if err := c.reply(ctx, env, bus.MsgTaskResult, result); err != nil {
 			c.logger.Warn("send task_result", "err", err, "task", taskID)
 		}
-	}(ctx, env, t.TaskID, p, chain)
+	}(ctx, env, t.TaskID, p)
 }
 
-// routeDelegated executes the task via the commander. It matches the task's
-// required abilities against this node's capability card and runs the result.
-func (c *Core) routeDelegated(ctx context.Context, taskID string, p bus.TaskDelegatePayload, chain []string) (bus.TaskResultPayload, error) {
+// routeDelegated executes an inbound delegated task. It resolves the required
+// abilities from the payload, then funnels through the shared execute pipeline.
+func (c *Core) routeDelegated(ctx context.Context, taskID string, p bus.TaskDelegatePayload) (bus.TaskResultPayload, error) {
+	required := p.Requires
+	if len(required) == 0 {
+		required = []string{p.ContextType}
+	}
+	return c.execute(ctx, taskID, p.Intent, required)
+}
+
+// delegateDetail maps the wire payload's entry-model fields onto the persisted
+// TaskDetail. resource_json is not present on the Phase 1 wire format, so it is
+// left empty until a later phase adds it.
+func delegateDetail(p bus.TaskDelegatePayload) TaskDetail {
+	return TaskDetail{
+		ContextType: p.ContextType,
+		Intent:      p.Intent,
+		SpecJSON:    p.SpecJSON,
+		Complexity:  p.Complexity,
+		Risk:        p.Risk,
+	}
+}
+
+// execute runs the shared post-creation pipeline: queue → route → dispatch →
+// accept → execute → complete/fail. Both the WebSocket delegation path
+// (routeDelegated) and the local entry path (SubmitLocal) funnel through here
+// so there is exactly one execution implementation. The task must already be
+// persisted (with detail) by the caller.
+func (c *Core) execute(ctx context.Context, taskID, intent string, required []string) (bus.TaskResultPayload, error) {
 	// Record the task in the local store before execution so the queue
 	// reflects it even if the process dies mid-run.
 	if err := c.store.Queue(ctx, taskID, c.nodeID); err != nil {
@@ -83,11 +114,6 @@ func (c *Core) routeDelegated(ctx context.Context, taskID string, p bus.TaskDele
 	if c.router == nil {
 		// No capability card loaded: nothing to execute.
 		return bus.TaskResultPayload{}, fmt.Errorf("no commander configured")
-	}
-
-	required := p.Requires
-	if len(required) == 0 {
-		required = []string{p.ContextType}
 	}
 
 	plan, err := c.router.Route(required)
@@ -110,7 +136,7 @@ func (c *Core) routeDelegated(ctx context.Context, taskID string, p bus.TaskDele
 	}
 	attemptID := task.AttemptID
 
-	res := c.router.Execute(ctx, plan, p.Intent, "")
+	res := c.router.Execute(ctx, plan, intent, "")
 	if res.NeedManual {
 		// Manual tasks: notify and mark done; the human completes offline.
 		if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{
