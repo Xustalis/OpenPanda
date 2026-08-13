@@ -3,6 +3,7 @@ package commander
 import (
 	"context"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/xenith/panda/internal/config"
@@ -136,12 +137,48 @@ func TestExecuteNative(t *testing.T) {
 	}
 	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
 	plan, _ := r.Route([]string{"sys:info"})
-	res := r.Execute(context.Background(), plan, "", "")
+	res := r.Execute(context.Background(), plan, "", "", false)
 	if !res.OK {
 		t.Fatalf("native exec failed: %s", res.Stderr)
 	}
 	if res.Stdout == "" {
 		t.Fatalf("expected uname output")
+	}
+}
+
+func TestExecuteTier2RequiresAuth(t *testing.T) {
+	card := testCard()
+	card.Native = append(card.Native, ledger.NativeAbility{
+		ID: "danger:reboot", Command: "sudo", Args: []string{"reboot"}, Tier: 2,
+	})
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{})
+	plan, err := r.Route([]string{"danger:reboot"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if plan.Tier != 2 {
+		t.Fatalf("plan tier = %d, want 2", plan.Tier)
+	}
+	// Refused before execution, so the dangerous command never runs.
+	res := r.Execute(context.Background(), plan, "", "", false)
+	if res.OK {
+		t.Fatalf("tier-2 without auth must be refused")
+	}
+	if !strings.Contains(res.Stderr, "authorization") {
+		t.Fatalf("stderr should mention authorization, got %q", res.Stderr)
+	}
+}
+
+func TestRouteTierFromCommand(t *testing.T) {
+	card := testCard()
+	// A sudo command without an explicit tier is inferred as Tier 2.
+	card.Native = append(card.Native, ledger.NativeAbility{
+		ID: "danger:sudo", Command: "sudo", Args: []string{"echo", "hi"},
+	})
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{})
+	plan, _ := r.Route([]string{"danger:sudo"})
+	if plan.Tier != 2 {
+		t.Fatalf("inferred tier = %d, want 2", plan.Tier)
 	}
 }
 

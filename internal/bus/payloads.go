@@ -53,6 +53,7 @@ type TaskDelegatePayload struct {
 	Complexity   float64  `json:"complexity,omitempty"`
 	Risk         string   `json:"risk,omitempty"`
 	AttemptID    string   `json:"attempt_id,omitempty"`
+	Authorized   bool     `json:"authorized,omitempty"` // user consented to tier-2 commands
 }
 
 // TitleOrDefault returns the explicit title, falling back to the intent.

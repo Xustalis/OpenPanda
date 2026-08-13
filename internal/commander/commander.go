@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/xenith/panda/internal/config"
+	"github.com/xenith/panda/internal/defense"
 	"github.com/xenith/panda/internal/ledger"
 )
 
@@ -34,6 +35,7 @@ type Plan struct {
 	Ability string
 	Command string
 	Args    []string
+	Tier    int // native command tier (defense §16)
 	Agent   string
 	Adapter string
 	Notify  string
@@ -89,7 +91,11 @@ func (r *Router) MatchManual(required []string) (ledger.ManualAbility, bool) {
 // Priority: native > agent > manual (design doc §6.4).
 func (r *Router) Route(required []string) (Plan, error) {
 	if ab, ok := r.MatchNative(required); ok {
-		return Plan{Kind: "native", Ability: ab.ID, Command: ab.Command, Args: ab.Args}, nil
+		tier := ab.Tier
+		if tier == 0 {
+			tier = defense.TierFromCommand(ab.Command)
+		}
+		return Plan{Kind: "native", Ability: ab.ID, Command: ab.Command, Args: ab.Args, Tier: tier}, nil
 	}
 	if name, ag, ok := r.MatchAgent(required); ok {
 		return Plan{Kind: "agent", Ability: name, Agent: name, Adapter: ag.Adapter}, nil
@@ -100,10 +106,15 @@ func (r *Router) Route(required []string) (Plan, error) {
 	return Plan{}, fmt.Errorf("no capability matches required: %v", required)
 }
 
-// Execute runs the plan and returns a formatted result.
-func (r *Router) Execute(ctx context.Context, plan Plan, prompt string, cwd string) Result {
+// Execute runs the plan and returns a formatted result. authorized is the
+// user's explicit consent to run Tier-2 (irreversible) commands; a Tier-2
+// native command without it is refused before execution.
+func (r *Router) Execute(ctx context.Context, plan Plan, prompt string, cwd string, authorized bool) Result {
 	switch plan.Kind {
 	case "native":
+		if err := defense.Authorize(plan.Tier, authorized); err != nil {
+			return Result{OK: false, ExitCode: 1, Stderr: err.Error()}
+		}
 		return r.execNative(ctx, plan)
 	case "agent":
 		return r.execAgent(ctx, plan, prompt, cwd)

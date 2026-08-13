@@ -26,6 +26,7 @@ func runAsk(args []string) {
 	fs := flag.NewFlagSet("ask", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
 	cardPath := fs.String("card", "", "path to capabilities.yaml (required to execute tasks)")
+	authorize := fs.Bool("authorize", false, "authorize tier-2 (irreversible) commands")
 	fs.Parse(args)
 
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
@@ -37,7 +38,7 @@ func runAsk(args []string) {
 		}
 	}
 	if prompt == "" {
-		fmt.Fprintln(os.Stderr, "usage: panda ask [--config PATH] [--card PATH] \"<question>\"")
+		fmt.Fprintln(os.Stderr, "usage: panda ask [--config PATH] [--card PATH] [--authorize] \"<question>\"")
 		os.Exit(2)
 	}
 
@@ -106,7 +107,7 @@ func runAsk(args []string) {
 			fmt.Fprintln(os.Stderr, "panda: task output requires --card (capabilities.yaml)")
 			os.Exit(1)
 		}
-		runAskTask(sched, schedCtx, out.Task)
+		runAskTask(sched, schedCtx, out.Task, *authorize)
 	default:
 		fmt.Println(out.Answer)
 	}
@@ -116,8 +117,10 @@ func runAsk(args []string) {
 // core and prints the outcome. runAsk establishes the P2P connections before
 // classification so the entry model sees remote capabilities; here we only
 // route (locally or forward) and await the result.
-func runAskTask(c *core.Core, ctx context.Context, spec *entry.TaskSpec) {
-	task, result, err := c.Submit(ctx, toTaskInput(spec))
+func runAskTask(c *core.Core, ctx context.Context, spec *entry.TaskSpec, authorized bool) {
+	in := toTaskInput(spec)
+	in.Authorized = authorized
+	task, result, err := c.Submit(ctx, in)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "panda: task failed: %v\n", err)
 		os.Exit(1)

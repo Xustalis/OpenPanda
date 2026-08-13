@@ -116,7 +116,7 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 				c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: err.Error()})
 				return
 			}
-			c.pendingCtx.Store(taskID, &pendingContext{intent: p.Intent, required: required, ctxType: p.ContextType})
+			c.pendingCtx.Store(taskID, &pendingContext{intent: p.Intent, required: required, ctxType: p.ContextType, authorized: p.Authorized})
 			c.sendContextFetch(ctx, chain[0], taskID, hash, p.ContextType)
 			return
 		}
@@ -126,7 +126,7 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 	// task_cancel while a long native/agent command runs. The result (or a
 	// decline) is reported back via the env captured here.
 	go func() {
-		result, err := c.execute(ctx, taskID, p.Intent, required)
+		result, err := c.execute(ctx, taskID, p.Intent, required, p.Authorized)
 		if err != nil {
 			if errors.Is(err, ErrCancelled) {
 				c.logger.Info("task cancelled during execution", "task", taskID)
@@ -218,11 +218,11 @@ func delegateDetail(p bus.TaskDelegatePayload) TaskDetail {
 // the local entry path (SubmitLocal/Submit) funnel through here so there is
 // exactly one execution implementation. The task must already be persisted
 // (with detail) by the caller.
-func (c *Core) execute(ctx context.Context, taskID, intent string, required []string) (bus.TaskResultPayload, error) {
+func (c *Core) execute(ctx context.Context, taskID, intent string, required []string, authorized bool) (bus.TaskResultPayload, error) {
 	if err := c.prepare(ctx, taskID); err != nil {
 		return bus.TaskResultPayload{}, err
 	}
-	return c.run(ctx, taskID, intent, required)
+	return c.run(ctx, taskID, intent, required, authorized)
 }
 
 // prepare records a freshly-created task in the local queue and dispatches it
@@ -241,7 +241,7 @@ func (c *Core) prepare(ctx context.Context, taskID string) error {
 // records the outcome. The task may already be running (a context-fetch resume
 // moved it there), dispatched (the normal path), or waiting_context (resumed
 // here after the snapshot arrived).
-func (c *Core) run(ctx context.Context, taskID, intent string, required []string) (bus.TaskResultPayload, error) {
+func (c *Core) run(ctx context.Context, taskID, intent string, required []string, authorized bool) (bus.TaskResultPayload, error) {
 	if c.router == nil {
 		// No capability card loaded: nothing to execute.
 		return bus.TaskResultPayload{}, fmt.Errorf("no commander configured")
@@ -274,7 +274,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// uses it to reject stale results after a transfer/retry.
 	attemptID := task.AttemptID
 
-	res := c.router.Execute(ctx, plan, intent, "")
+	res := c.router.Execute(ctx, plan, intent, "", authorized)
 	if res.NeedManual {
 		// Manual tasks: notify and mark done; the human completes offline.
 		if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{

@@ -30,6 +30,7 @@ type NativeAbility struct {
 	ID          string   `yaml:"id"`
 	Command     string   `yaml:"command"`
 	Args        []string `yaml:"args"`
+	Tier        int      `yaml:"tier"` // 1=reversible (default) 2=irreversible (needs auth)
 	Description string   `yaml:"description"`
 }
 

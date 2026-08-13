@@ -26,6 +26,7 @@ type TaskInput struct {
 	Complexity   float64
 	Risk         string
 	ResourceJSON string
+	Authorized   bool // user consented to executing tier-2 (irreversible) commands
 }
 
 // detail folds the input into the persisted detail columns.
@@ -89,6 +90,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			Complexity:   in.Complexity,
 			Risk:         in.Risk,
 			AttemptID:    t.AttemptID,
+			Authorized:   in.Authorized,
 		}
 		// Register a waiter so the inbound task_result unblocks this call.
 		ch := make(chan bus.TaskResultPayload, 1)
@@ -136,7 +138,7 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 // runLocal executes a task on this node and returns the final row + result.
 // It is the shared local branch for both SubmitLocal and Submit's local route.
 func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.TaskResultPayload, error) {
-	result, err := c.execute(ctx, t.TaskID, in.Intent, in.Requires)
+	result, err := c.execute(ctx, t.TaskID, in.Intent, in.Requires, in.Authorized)
 	if err != nil && !errors.Is(err, ErrCancelled) {
 		// Route/dispatch/accept failures would otherwise leave the task stuck
 		// in a non-terminal state. Fail it so the queue reflects reality.
