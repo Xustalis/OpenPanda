@@ -19,43 +19,67 @@ func ParseOutput(raw string) (Output, error) {
 	// Strip markdown fences the model may wrap the JSON in.
 	raw = stripFences(raw)
 
+	// Fast path: the whole text is a structured directive.
+	if out, ok, err := decodeEnvelope(raw); err != nil {
+		return Output{}, err
+	} else if ok {
+		return out, nil
+	}
+
+	// The model sometimes prefixes a structured directive with a sentence of
+	// prose. Extract the first balanced JSON object and retry before giving up
+	// on it — the prose is discarded, the directive is authoritative.
+	if obj := extractJSONObject(raw); obj != "" && obj != raw {
+		if out, ok, err := decodeEnvelope(obj); err != nil {
+			return Output{}, err
+		} else if ok {
+			return out, nil
+		}
+	}
+
+	return Output{Kind: KindAnswer, Answer: raw}, nil
+}
+
+// decodeEnvelope unmarshals raw into the top-level envelope and resolves it to
+// an Output. The ok result is true only when raw is a valid tool_call/task
+// directive; a non-JSON payload or an answer/unknown kind returns ok=false with
+// a nil error. An error is returned only when raw is valid JSON but fails
+// validation (a model error that must surface, never degrade to an answer).
+func decodeEnvelope(raw string) (Output, bool, error) {
 	var envelope struct {
 		Kind Kind      `json:"kind"`
 		Tool *ToolCall `json:"tool"`
 		Task *TaskSpec `json:"task"`
 	}
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
-		// Not JSON: treat the whole text as a natural-language answer.
-		return Output{Kind: KindAnswer, Answer: raw}, nil
+		// Not JSON: let the caller decide whether to try extraction or fall
+		// back to a natural-language answer.
+		return Output{}, false, nil
 	}
 
 	switch envelope.Kind {
 	case KindToolCall:
 		if envelope.Tool == nil {
-			return Output{}, fmt.Errorf("entry: tool_call missing tool object")
+			return Output{}, false, fmt.Errorf("entry: tool_call missing tool object")
 		}
 		if err := ValidateToolCall(envelope.Tool); err != nil {
-			return Output{}, err
+			return Output{}, false, err
 		}
-		return Output{Kind: KindToolCall, Tool: envelope.Tool}, nil
+		return Output{Kind: KindToolCall, Tool: envelope.Tool}, true, nil
 
 	case KindTask:
 		if envelope.Task == nil {
-			return Output{}, fmt.Errorf("entry: task missing task object")
+			return Output{}, false, fmt.Errorf("entry: task missing task object")
 		}
 		if err := ValidateTaskSpec(envelope.Task); err != nil {
-			return Output{}, err
+			return Output{}, false, err
 		}
-		return Output{Kind: KindTask, Task: envelope.Task}, nil
-
-	case KindAnswer:
-		// KindAnswer JSON carries no payload; fall through to prose handling.
-		return Output{Kind: KindAnswer, Answer: raw}, nil
+		return Output{Kind: KindTask, Task: envelope.Task}, true, nil
 
 	default:
-		// Unknown or missing kind: not a structured directive, so treat as an
-		// answer rather than failing the user.
-		return Output{Kind: KindAnswer, Answer: raw}, nil
+		// KindAnswer and unknown kinds carry no payload; the caller falls back
+		// to prose handling.
+		return Output{}, false, nil
 	}
 }
 
@@ -74,4 +98,44 @@ func stripFences(s string) string {
 		rest = strings.TrimSpace(rest[:idx])
 	}
 	return rest
+}
+
+// extractJSONObject returns the first balanced JSON object in s — from the
+// first '{' to its matching '}' — or "" when none exists. It walks the bytes so
+// a brace inside a JSON string or a nested object does not terminate the scan
+// early.
+func extractJSONObject(s string) string {
+	start := strings.IndexByte(s, '{')
+	if start < 0 {
+		return ""
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return ""
 }

@@ -3,6 +3,7 @@ package commander
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/xenith/panda/internal/config"
 	"github.com/xenith/panda/internal/ledger"
@@ -38,11 +39,11 @@ type Plan struct {
 	Notify  string
 }
 
-// Match finds the first native ability whose id appears in required.
+// Match finds the first native ability whose id matches any of required.
 func (r *Router) MatchNative(required []string) (ledger.NativeAbility, bool) {
 	for _, req := range required {
 		for _, ab := range r.card.Native {
-			if ab.ID == req {
+			if ledger.AbilityMatches(ab.ID, req) {
 				return ab, true
 			}
 		}
@@ -50,12 +51,20 @@ func (r *Router) MatchNative(required []string) (ledger.NativeAbility, bool) {
 	return ledger.NativeAbility{}, false
 }
 
-// MatchAgent finds a configured agent that declares any of required.
+// MatchAgent finds a configured agent that satisfies any of required — either
+// by name ("agent:<name>", the form the device summary advertises) or by one
+// of its declared capabilities.
 func (r *Router) MatchAgent(required []string) (string, ledger.Agent, bool) {
 	for _, req := range required {
+		if name, ok := strings.CutPrefix(req, "agent:"); ok {
+			if ag, exists := r.card.Agents[name]; exists {
+				return name, ag, true
+			}
+			continue
+		}
 		for name, ag := range r.card.Agents {
 			for _, cap := range ag.Capabilities {
-				if cap == req {
+				if ledger.AbilityMatches(cap, req) {
 					return name, ag, true
 				}
 			}
@@ -64,11 +73,11 @@ func (r *Router) MatchAgent(required []string) (string, ledger.Agent, bool) {
 	return "", ledger.Agent{}, false
 }
 
-// MatchManual finds a manual ability whose id appears in required.
+// MatchManual finds a manual ability whose id matches any of required.
 func (r *Router) MatchManual(required []string) (ledger.ManualAbility, bool) {
 	for _, req := range required {
 		for _, ab := range r.card.Manual {
-			if ab.ID == req {
+			if ledger.AbilityMatches(ab.ID, req) {
 				return ab, true
 			}
 		}

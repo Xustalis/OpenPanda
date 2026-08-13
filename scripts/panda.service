@@ -1,0 +1,23 @@
+# PANDA 节点守护进程（香橙派 / 嵌入式节点）
+# 安装:  sudo install -m 644 panda.service /etc/systemd/system/panda.service
+# 启用:  sudo systemctl daemon-reload && sudo systemctl enable --now panda
+[Unit]
+Description=PANDA distributed task node daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 运行用户与工作目录（按设备实际调整）
+User=xenith
+Group=xenith
+WorkingDirectory=/home/xenith/panda
+# 以绝对路径启动；daemon 输出 JSON 日志到 stderr，由 journald 收集
+ExecStart=/home/xenith/panda/panda --config /home/xenith/panda/config.yaml --card /home/xenith/panda/capabilities.yaml
+# 崩溃自动重启，5s 退避（嵌入式节点资源有限，不设过激进的重试）
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"github.com/xenith/panda/internal/bus"
 	"github.com/xenith/panda/internal/commander"
 	"github.com/xenith/panda/internal/config"
+	"github.com/xenith/panda/internal/ctxstore"
 	"github.com/xenith/panda/internal/ledger"
 	"github.com/xenith/panda/internal/util"
 )
@@ -32,12 +34,22 @@ type Core struct {
 	tier   int
 	logger *slog.Logger
 	store  *TaskStore
+	ctx    *ctxstore.Store
 	node   *Node
 	router *commander.Router
 
 	mu      sync.RWMutex
 	peers   map[string]*Peer
 	greeted map[string]bool // node ids we have replied hello to
+
+	// waiters maps task_id -> result channel for synchronous Submit calls
+	// that forwarded a task and are blocked awaiting the outcome.
+	waiters sync.Map // string -> chan bus.TaskResultPayload
+
+	// pendingCtx maps task_id -> execution context awaiting a context_fetch
+	// response, so handleContextAck can resume the task once the snapshot
+	// arrives.
+	pendingCtx sync.Map // string -> *pendingContext
 }
 
 // NewCore constructs a Core. The card may be zero for a minimal node. The
@@ -53,6 +65,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		tier:    tier,
 		logger:  logger,
 		store:   NewTaskStore(db, logger),
+		ctx:     ctxstore.New(db, ctxstore.MaxEntriesForResourceClass(card.ResourceClass)),
 		node:    NewNode(db, nodeID, card, tier, logger),
 		peers:   make(map[string]*Peer),
 		greeted: make(map[string]bool),
@@ -147,42 +160,90 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 	}
 }
 
-// removePeerForConn deletes any peer whose conn matches the given one.
+// removePeerForConn deletes any peer whose conn matches the given one and
+// marks it offline in the local capability directory so routing stops
+// considering it.
 func (c *Core) removePeerForConn(conn *bus.Conn) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	var gone []string
 	for id, p := range c.peers {
 		if p.conn == conn {
 			delete(c.peers, id)
-			c.logger.Info("peer disconnected", "peer", id)
+			// Clear the hello-reply marker so a reconnect redoes the
+			// handshake; otherwise a reconnecting peer never receives our
+			// hello back and cannot register us on its side.
+			delete(c.greeted, id)
+			gone = append(gone, id)
+		}
+	}
+	c.mu.Unlock()
+	for _, id := range gone {
+		c.logger.Info("peer disconnected", "peer", id)
+		if err := ledger.MarkOffline(c.db, id); err != nil {
+			c.logger.Warn("mark peer offline", "peer", id, "err", err)
 		}
 	}
 }
 
-// DialPeer connects outbound to addr and registers the peer after hello.
+// DialPeer connects outbound to addr, sends hello, and starts reading in the
+// background. It returns once the connection is established (or fails); the
+// read loop keeps the connection alive. Short-lived schedulers (the ask CLI)
+// use this so they can dial every peer and then proceed to routing. A daemon
+// that must hold the connection and reconnect on drop should use MaintainPeer.
 func (c *Core) DialPeer(ctx context.Context, addr string) error {
+	conn, err := c.dial(ctx, addr)
+	if err != nil {
+		return err
+	}
+	go c.handleInbound(ctx, conn)
+	return nil
+}
+
+// MaintainPeer connects outbound to addr and blocks serving the connection
+// until it drops or ctx is done. It is the body of a daemon's reconnect loop:
+// dial, serve, and return on drop so the caller can back off and redial. A nil
+// return means the connection was established and later dropped; a non-nil
+// return means the dial (or hello) failed.
+func (c *Core) MaintainPeer(ctx context.Context, addr string) error {
+	conn, err := c.dial(ctx, addr)
+	if err != nil {
+		return err
+	}
+	c.handleInbound(ctx, conn)
+	return nil
+}
+
+// dial establishes a WS connection to addr and sends hello, advertising this
+// node's capability card. The caller owns the returned conn and must read it
+// (synchronously via handleInbound, or asynchronously via go handleInbound).
+func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 	u := normalizeWSURL(addr)
 	client := bus.NewClient(u, c.logger)
 	conn, err := client.Dial(ctx)
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", addr, err)
+		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
-	// Send hello to identify ourselves.
+	// Send hello to identify ourselves and advertise our capability card.
+	card, err := c.helloCard()
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
 	env, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, mustUUID(), bus.HelloPayload{
 		NodeID: c.nodeID,
 		Ver:    "0.1.0-dev",
+		Card:   card,
 	})
 	if err != nil {
 		conn.Close()
-		return err
+		return nil, err
 	}
 	if err := conn.Send(env); err != nil {
 		conn.Close()
-		return fmt.Errorf("send hello: %w", err)
+		return nil, fmt.Errorf("send hello: %w", err)
 	}
 	c.logger.Info("connected to peer", "peer", addr)
-	go c.handleInbound(ctx, conn)
-	return nil
+	return conn, nil
 }
 
 // ensurePeer registers conn under id if not already present.
@@ -211,6 +272,10 @@ func (c *Core) dispatch(ctx context.Context, env bus.Envelope) {
 		c.handleResult(ctx, env)
 	case bus.MsgTaskCancel:
 		c.handleCancel(ctx, env)
+	case bus.MsgContextFetch:
+		c.handleContextFetch(ctx, env)
+	case bus.MsgContextAck:
+		c.handleContextAck(ctx, env)
 	default:
 		c.logger.Warn("unhandled message type", "type", env.Type, "from", env.From)
 	}
@@ -223,6 +288,15 @@ func (c *Core) handleHello(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	c.ensurePeer(p.NodeID, c.connFor(env.From))
+	// Ingest the peer's advertised capability card so routing can consider it.
+	if len(p.Card) > 0 {
+		var sum ledger.CapabilitySummary
+		if err := json.Unmarshal(p.Card, &sum); err != nil {
+			c.logger.Warn("bad capability card in hello", "peer", p.NodeID, "err", err)
+		} else if err := ledger.UpsertRemote(c.db, p.NodeID, sum); err != nil {
+			c.logger.Warn("upsert remote card", "peer", p.NodeID, "err", err)
+		}
+	}
 	c.logger.Info("peer hello", "peer", p.NodeID, "ver", p.Ver)
 
 	// Reply with our own hello only once per peer, so the handshake
@@ -235,14 +309,15 @@ func (c *Core) handleHello(ctx context.Context, env bus.Envelope) {
 	c.greeted[p.NodeID] = true
 	c.mu.Unlock()
 
-	reply, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, mustUUID(), bus.HelloPayload{
-		NodeID: c.nodeID,
-		Ver:    "0.1.0-dev",
-	})
+	card, err := c.helloCard()
 	if err != nil {
 		return
 	}
-	if err := c.reply(ctx, env, bus.MsgHello, reply.Payload); err != nil {
+	if err := c.reply(ctx, env, bus.MsgHello, bus.HelloPayload{
+		NodeID: c.nodeID,
+		Ver:    "0.1.0-dev",
+		Card:   card,
+	}); err != nil {
 		c.logger.Debug("hello reply failed", "peer", env.From, "err", err)
 	}
 }
@@ -272,6 +347,49 @@ func mustUUID() string {
 		panic(err)
 	}
 	return id
+}
+
+// signalResult delivers an inbound task_result to any synchronous Submit
+// waiter for that task. A non-blocking send means a waiter that already gave
+// up (ctx done) simply drops the late result.
+func (c *Core) signalResult(taskID string, p bus.TaskResultPayload) {
+	if v, ok := c.waiters.Load(taskID); ok {
+		if ch, ok := v.(chan bus.TaskResultPayload); ok {
+			select {
+			case ch <- p:
+			default:
+			}
+		}
+	}
+}
+
+// summary reduces this node's capability card to the compact profile it
+// advertises over hello. Remote nodes need ability IDs and capacity to route,
+// not the executable commands themselves.
+func (c *Core) summary() ledger.CapabilitySummary {
+	s := ledger.CapabilitySummary{
+		Device:        c.card.Device,
+		ResourceClass: c.card.ResourceClass,
+		SchedulerTier: c.tier,
+		Chip:          c.card.Chip,
+		Capacity:      c.card.Capacity,
+	}
+	for _, n := range c.card.Native {
+		s.NativeIDs = append(s.NativeIDs, n.ID)
+	}
+	s.AgentCaps = make(map[string][]string, len(c.card.Agents))
+	for name, ag := range c.card.Agents {
+		s.AgentCaps[name] = ag.Capabilities
+	}
+	for _, m := range c.card.Manual {
+		s.ManualIDs = append(s.ManualIDs, m.ID)
+	}
+	return s
+}
+
+// helloCard marshals the capability summary for the hello payload.
+func (c *Core) helloCard() (json.RawMessage, error) {
+	return json.Marshal(c.summary())
 }
 
 func normalizeWSURL(addr string) string {

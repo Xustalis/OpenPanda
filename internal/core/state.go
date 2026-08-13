@@ -61,6 +61,7 @@ type Task struct {
 	SpecJSON     string
 	ResultJSON   string
 	ContextType  string
+	ContextHash  string
 	Complexity   float64
 	Risk         string
 	ResourceJSON string
@@ -72,11 +73,12 @@ type Task struct {
 // TaskDetail is the entry-model-derived task metadata (design doc §6.1 tasks
 // schema). It is written once, shortly after creation, by SetDetail; the
 // fields stay zero/empty for tasks that predate the entry model or arrived
-// via a Phase 0 payload without detail. context_hash and model_tier are
-// intentionally absent — they are Phase 2/3 features (context transfer and
-// model-tier selection) and will be added when those features land.
+// via a Phase 0 payload without detail. model_tier is intentionally absent —
+// it is a Phase 3 feature (model-tier selection) and will be added when that
+// lands.
 type TaskDetail struct {
 	ContextType  string
+	ContextHash  string
 	Intent       string
 	SpecJSON     string
 	Complexity   float64

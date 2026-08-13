@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/xenith/panda/internal/config"
 	"github.com/xenith/panda/internal/core"
@@ -57,6 +58,31 @@ func runAsk(args []string) {
 		fatal("migrate database", err)
 	}
 
+	// 提前建立到 peers 的 P2P 连接并交换能力卡，让入口模型在分类时就能
+	// 看到远程节点的能力（否则首次分类看不到远程能力，跨设备路由失败）。
+	// 只有提供能力卡（可能执行任务）时才连接；answer/tool_call 不产生副作用。
+	var sched *core.Core
+	var schedCtx context.Context
+	if *cardPath != "" {
+		card, err := ledger.LoadCard(*cardPath)
+		if err != nil {
+			fatal("load capabilities", err)
+		}
+		logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		sched = core.NewCore(db, core.NodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
+		ctx, cancel := context.WithCancel(context.Background())
+		schedCtx = ctx
+		defer cancel()
+		for _, peer := range cfg.Network.Peers {
+			if err := sched.DialPeer(ctx, peer); err != nil {
+				logger.Warn("peer dial failed", "peer", peer, "err", err)
+			}
+		}
+		if len(cfg.Network.Peers) > 0 {
+			waitForPeers(ctx, db, 2*time.Second)
+		}
+	}
+
 	var devices []ledger.Node
 	if devices, err = ledger.Query(db, "online", ""); err != nil {
 		devices = nil
@@ -76,29 +102,22 @@ func runAsk(args []string) {
 		b, _ := json.MarshalIndent(out.Tool, "", "  ")
 		fmt.Printf("tool_call: %s\n", string(b))
 	case entry.KindTask:
-		runAskTask(cfg, *cardPath, db, out.Task)
+		if sched == nil {
+			fmt.Fprintln(os.Stderr, "panda: task output requires --card (capabilities.yaml)")
+			os.Exit(1)
+		}
+		runAskTask(sched, schedCtx, out.Task)
 	default:
 		fmt.Println(out.Answer)
 	}
 }
 
-// runAskTask executes a classified task locally and prints the outcome.
-func runAskTask(cfg *config.Config, cardPath string, db *sql.DB, spec *entry.TaskSpec) {
-	if cardPath == "" {
-		fmt.Fprintln(os.Stderr, "panda: task output requires --card (capabilities.yaml)")
-		os.Exit(1)
-	}
-	card, err := ledger.LoadCard(cardPath)
-	if err != nil {
-		fatal("load capabilities", err)
-	}
-
-	// A quiet logger so the ask CLI stays clean; the daemon (runDaemon) uses
-	// structured JSON logging instead.
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	c := core.NewCore(db, core.NodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
-
-	task, result, err := c.SubmitLocal(context.Background(), toTaskInput(spec))
+// runAskTask executes a classified task on the already-connected scheduler
+// core and prints the outcome. runAsk establishes the P2P connections before
+// classification so the entry model sees remote capabilities; here we only
+// route (locally or forward) and await the result.
+func runAskTask(c *core.Core, ctx context.Context, spec *entry.TaskSpec) {
+	task, result, err := c.Submit(ctx, toTaskInput(spec))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "panda: task failed: %v\n", err)
 		os.Exit(1)
@@ -109,6 +128,23 @@ func runAskTask(cfg *config.Config, cardPath string, db *sql.DB, spec *entry.Tas
 	} else {
 		fmt.Fprintf(os.Stderr, "exit %d: %s\n", result.ExitCode, result.Stderr)
 		os.Exit(1)
+	}
+}
+
+// waitForPeers polls until at least one peer has registered online (via its
+// hello capability card) or the deadline passes. It lets a slow dial over a
+// real network settle before the routing decision runs.
+func waitForPeers(ctx context.Context, db *sql.DB, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if nodes, err := ledger.Query(db, "online", ""); err == nil && len(nodes) > 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 }
 

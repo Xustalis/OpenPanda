@@ -112,28 +112,27 @@ func runDaemon() {
 		go func(p string) {
 			backoff := 1 * time.Second
 			for {
-				if err := coreNode.DialPeer(ctx, p); err == nil {
-					// Connection established; if it later drops, DialPeer
-					// returns and we start backoff fresh.
-					backoff = 1 * time.Second
-					// Wait for ctx done; the read loop closing signals the
-					// peer is gone and we retry.
+				err := coreNode.MaintainPeer(ctx, p)
+				if err != nil {
+					// Dial or hello failed; back off exponentially so we do
+					// not hot-loop a permanently offline peer.
+					logger.Warn("peer dial failed", "peer", p, "err", err)
 					select {
 					case <-ctx.Done():
 						return
 					case <-time.After(backoff):
 					}
+					backoff = min(backoff*2, 30*time.Second)
 					continue
 				}
-				logger.Warn("peer dial failed", "peer", p, "err", err)
+				// The connection was established and later dropped; reset the
+				// backoff and reconnect promptly.
+				backoff = 1 * time.Second
 				select {
 				case <-ctx.Done():
 					return
 				case <-time.After(backoff):
 				}
-				// Exponential backoff, capped at 30s to avoid hot-looping a
-				// permanently offline peer.
-				backoff = min(backoff*2, 30*time.Second)
 			}
 		}(peer)
 	}

@@ -87,13 +87,13 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	var chainJSON string
 	var intent, spec, result sql.NullString
 	var lease sql.NullInt64
-	var contextType, risk, resource sql.NullString
+	var contextType, contextHash, risk, resource sql.NullString
 	var complexity sql.NullFloat64
 	err := s.db.QueryRowContext(ctx,
 		`SELECT `+taskColumns+` FROM tasks WHERE task_id = ?`, taskID).
 		Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State, &t.OwnerNode,
 			&t.AttemptID, &t.StateVersion, &chainJSON, &intent, &spec,
-			&result, &contextType, &complexity, &risk, &resource, &lease,
+			&result, &contextType, &contextHash, &complexity, &risk, &resource, &lease,
 			&t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return Task{}, err
@@ -103,6 +103,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	t.SpecJSON = spec.String
 	t.ResultJSON = result.String
 	t.ContextType = contextType.String
+	t.ContextHash = contextHash.String
 	t.Complexity = complexity.Float64
 	t.Risk = risk.String
 	t.ResourceJSON = resource.String
@@ -232,6 +233,13 @@ func (s *TaskStore) SetWaitingContext(ctx context.Context, taskID, owner string)
 		map[string]any{"waiting": "context"})
 }
 
+// Resume moves waiting_context -> running once the context snapshot has been
+// fetched and verified. Only the lease holder (executor) may resume.
+func (s *TaskStore) Resume(ctx context.Context, taskID, owner string) error {
+	return s.transition(ctx, taskID, StateWaitingCtx, StateRunning, owner, EvProgress,
+		map[string]any{"resumed": "context"})
+}
+
 // Complete transitions running -> done and stores the result.
 func (s *TaskStore) Complete(ctx context.Context, taskID, owner string, result any) error {
 	cur, err := s.Get(ctx, taskID)
@@ -320,6 +328,21 @@ func (s *TaskStore) CreateFromRemote(ctx context.Context, taskID, title, owner s
 	return t, nil
 }
 
+// AdoptAttempt stamps taskID with an attempt_id minted upstream. A delegated
+// task carries its attempt along the chain so every node's copy reports the
+// same attempt; downstream nodes adopt it instead of minting their own.
+func (s *TaskStore) AdoptAttempt(ctx context.Context, taskID, attemptID string) error {
+	if attemptID == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET attempt_id=? WHERE task_id=?`, attemptID, taskID)
+	if err != nil {
+		return fmt.Errorf("adopt attempt: %w", err)
+	}
+	return nil
+}
+
 // SetLease stamps lease_expires_at = now + durationMS for a task. The
 // timeout monitor fails tasks whose lease expires while still active. A
 // non-positive duration is a no-op.
@@ -342,10 +365,10 @@ func (s *TaskStore) SetLease(ctx context.Context, taskID string, durationMS int6
 // then. A zero TaskDetail clears the fields.
 func (s *TaskStore) SetDetail(ctx context.Context, taskID string, d TaskDetail) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET context_type=?, intent=?, spec_json=?, complexity=?,
+		UPDATE tasks SET context_type=?, context_hash=?, intent=?, spec_json=?, complexity=?,
 			risk=?, resource_json=?, updated_at=?
 		WHERE task_id=?`,
-		d.ContextType, d.Intent, d.SpecJSON, d.Complexity, d.Risk, d.ResourceJSON,
+		d.ContextType, d.ContextHash, d.Intent, d.SpecJSON, d.Complexity, d.Risk, d.ResourceJSON,
 		s.now(), taskID)
 	if err != nil {
 		return fmt.Errorf("set detail: %w", err)
@@ -571,7 +594,7 @@ func (s *TaskStore) RotateAttempt(ctx context.Context, taskID, owner string) (st
 // Get/Children/ListByState/scanTasks stay in lock-step as the schema grows.
 const taskColumns = `task_id, parent_id, project, title, state, owner_node, attempt_id,
 	state_version, chain_json, intent, spec_json, result_json,
-	context_type, complexity, risk, resource_json,
+	context_type, context_hash, complexity, risk, resource_json,
 	lease_expires_at, created_at, updated_at`
 
 func scanTasks(rows *sql.Rows) ([]Task, error) {
@@ -581,11 +604,11 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var chainJSON string
 		var intent, spec, result sql.NullString
 		var lease sql.NullInt64
-		var contextType, risk, resource sql.NullString
+		var contextType, contextHash, risk, resource sql.NullString
 		var complexity sql.NullFloat64
 		if err := rows.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State,
 			&t.OwnerNode, &t.AttemptID, &t.StateVersion, &chainJSON, &intent,
-			&spec, &result, &contextType, &complexity, &risk, &resource, &lease,
+			&spec, &result, &contextType, &contextHash, &complexity, &risk, &resource, &lease,
 			&t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -594,6 +617,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		t.SpecJSON = spec.String
 		t.ResultJSON = result.String
 		t.ContextType = contextType.String
+		t.ContextHash = contextHash.String
 		t.Complexity = complexity.Float64
 		t.Risk = risk.String
 		t.ResourceJSON = resource.String

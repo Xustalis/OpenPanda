@@ -86,6 +86,39 @@ func TestRouteNoMatch(t *testing.T) {
 	}
 }
 
+func TestRouteAgentByName(t *testing.T) {
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
+	plan, err := r.Route([]string{"agent:claude_code"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if plan.Kind != "agent" || plan.Agent != "claude_code" {
+		t.Fatalf("plan = %+v, want agent claude_code", plan)
+	}
+}
+
+func TestRouteNormalizedMatch(t *testing.T) {
+	// The model may emit "code:lint" for a card id "lint" — normalization
+	// bridges the category prefix.
+	card := testCard()
+	card.Native = append(card.Native, ledger.NativeAbility{ID: "lint", Command: "npx", Args: []string{"eslint"}})
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{})
+	plan, err := r.Route([]string{"code:lint"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if plan.Kind != "native" || plan.Ability != "lint" {
+		t.Fatalf("plan = %+v, want native lint", plan)
+	}
+}
+
+func TestRouteShortFragmentDoesNotFanOut(t *testing.T) {
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
+	if _, err := r.Route([]string{"io"}); err == nil {
+		t.Fatalf("expected no match for degenerate 2-char fragment")
+	}
+}
+
 func TestNativePriorityOverAgent(t *testing.T) {
 	card := testCard()
 	// Add an agent that also claims sys:info — native must win.

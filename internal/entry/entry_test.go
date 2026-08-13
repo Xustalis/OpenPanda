@@ -97,6 +97,53 @@ func TestParseOutputProseIsAnswer(t *testing.T) {
 	}
 }
 
+func TestParseOutputProseThenJSON(t *testing.T) {
+	// The model may prefix a structured directive with a sentence. The prose is
+	// discarded and the JSON object is authoritative.
+	raw := "这是一个需要运行文件操作的请求，应该路由为 task。\n\n```json\n" +
+		`{"kind":"task","task":{"title":"跑 ESLint","context_type":"file","requires":{"abilities":["lint"]}}}` +
+		"\n```"
+	out, err := ParseOutput(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if out.Kind != KindTask || out.Task == nil || out.Task.Title != "跑 ESLint" {
+		t.Fatalf("out = %+v", out)
+	}
+}
+
+func TestParseOutputJSONWithTrailingProse(t *testing.T) {
+	raw := `{"kind":"tool_call","tool":{"tool":"weather.get","arguments":{"location":"济南"}}} 以上是结果。`
+	out, err := ParseOutput(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if out.Kind != KindToolCall || out.Tool == nil || out.Tool.Tool != "weather.get" {
+		t.Fatalf("out = %+v", out)
+	}
+}
+
+func TestExtractJSONObject(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain", `{"a":1}`, `{"a":1}`},
+		{"prose prefix", `here: {"a":1}`, `{"a":1}`},
+		{"nested", `x {"a":{"b":[1,{"c":2}]}} y`, `{"a":{"b":[1,{"c":2}]}}`},
+		{"brace in string", `x {"a":"}"}`, `{"a":"}"}`},
+		{"escaped quote", `x {"a":"\""}`, `{"a":"\""}`},
+		{"no object", `no json here`, ""},
+		{"array only", `[1,2,3]`, ""},
+	}
+	for _, tc := range cases {
+		if got := extractJSONObject(tc.in); got != tc.want {
+			t.Fatalf("%s: extractJSONObject(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestParseOutputInvalidTaskFails(t *testing.T) {
 	// Missing title + abilities → validation error, not a silent answer.
 	raw := `{"kind":"task","task":{"context_type":"file"}}`

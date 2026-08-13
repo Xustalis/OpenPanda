@@ -1,0 +1,17 @@
+# 真实多机部署配置：香橙派 3B 执行节点（Micro）
+# 复制到 /home/xenith/panda/config.yaml
+node:
+  name: "orangepi3b"
+  resource_class: "Micro"
+
+network:
+  listen_addr: ":7836"
+  peers:
+    - "192.168.0.100:7836"   # MacBook（入口/调度节点）
+
+storage:
+  db_path: "/home/xenith/panda/data/panda.db"
+  context_path: "/home/xenith/panda/data/context"
+
+log:
+  level: "debug"

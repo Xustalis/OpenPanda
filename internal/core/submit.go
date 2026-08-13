@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/xenith/panda/internal/bus"
+	"github.com/xenith/panda/internal/scheduler"
 )
 
 // TaskInput is the local-entry form of a task: the structured task the entry
@@ -16,6 +17,9 @@ type TaskInput struct {
 	Title        string
 	Project      string
 	ContextType  string
+	ContextHash  string // pre-packed snapshot hash; empty means "pack if applicable"
+	ContextLevel string // pointer|summary|full; empty is derived by packContext
+	RepoPath     string // file-type repo root for auto-packing (MVP: CLI not yet wired)
 	Intent       string
 	SpecJSON     string
 	Requires     []string
@@ -46,14 +50,92 @@ func (in TaskInput) detail() TaskDetail {
 // always ends in a terminal state. ErrCancelled is not an error to the caller:
 // the task was cancelled mid-run and the result payload reflects that outcome.
 func (c *Core) SubmitLocal(ctx context.Context, in TaskInput) (Task, bus.TaskResultPayload, error) {
-	t, err := c.store.Create(ctx, "", in.Project, in.Title, c.nodeID, []string{c.nodeID})
+	t, _, _, err := c.createTask(ctx, in)
 	if err != nil {
 		return Task{}, bus.TaskResultPayload{}, fmt.Errorf("create task: %w", err)
 	}
-	if err := c.store.SetDetail(ctx, t.TaskID, in.detail()); err != nil {
-		return Task{}, bus.TaskResultPayload{}, fmt.Errorf("set detail: %w", err)
+	return c.runLocal(ctx, t, in)
+}
+
+// Submit creates a task from the entry model and routes it to the best node:
+// locally if this node matches, otherwise forwarded to a capable peer (P2P
+// per-edge delegation). It is the root-scheduler entry point used by the ask
+// CLI. A forwarded task blocks until the peer's result arrives (or ctx is
+// done); a local task returns immediately with the execution result.
+func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPayload, error) {
+	t, hash, level, err := c.createTask(ctx, in)
+	if err != nil {
+		return Task{}, bus.TaskResultPayload{}, fmt.Errorf("create task: %w", err)
 	}
 
+	chain := []string{c.nodeID}
+	decision := scheduler.Route(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), in.Requires)
+
+	switch decision.Action {
+	case scheduler.ActionLocal:
+		return c.runLocal(ctx, t, in)
+	case scheduler.ActionForward:
+		payload := bus.TaskDelegatePayload{
+			TaskID:       t.TaskID,
+			Project:      in.Project,
+			Title:        in.Title,
+			ContextType:  in.ContextType,
+			ContextHash:  hash,
+			ContextLevel: level,
+			Intent:       in.Intent,
+			SpecJSON:     in.SpecJSON,
+			Requires:     in.Requires,
+			Chain:        chain,
+			Complexity:   in.Complexity,
+			Risk:         in.Risk,
+			AttemptID:    t.AttemptID,
+		}
+		// Register a waiter so the inbound task_result unblocks this call.
+		ch := make(chan bus.TaskResultPayload, 1)
+		c.waiters.Store(t.TaskID, ch)
+		defer c.waiters.Delete(t.TaskID)
+
+		if err := c.forwardDelegated(ctx, t.TaskID, decision.Target, payload, chain); err != nil {
+			return t, bus.TaskResultPayload{}, fmt.Errorf("forward: %w", err)
+		}
+		select {
+		case res := <-ch:
+			final, err := c.store.Get(ctx, t.TaskID)
+			if err != nil {
+				return t, res, err
+			}
+			return final, res, nil
+		case <-ctx.Done():
+			return t, bus.TaskResultPayload{}, ctx.Err()
+		}
+	default:
+		return t, bus.TaskResultPayload{}, fmt.Errorf("no capability: %s", decision.Reason)
+	}
+}
+
+// createTask persists a new local-origin task with full entry-model detail and
+// packs its context snapshot. It returns the task plus the wire context fields
+// (hash + level) so Submit can carry them on a forwarded delegate.
+func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, string, error) {
+	t, err := c.store.Create(ctx, "", in.Project, in.Title, c.nodeID, []string{c.nodeID})
+	if err != nil {
+		return Task{}, "", "", err
+	}
+	hash, level, err := c.packContext(ctx, in)
+	if err != nil {
+		return Task{}, "", "", fmt.Errorf("pack context: %w", err)
+	}
+	d := in.detail()
+	d.ContextHash = hash
+	if err := c.store.SetDetail(ctx, t.TaskID, d); err != nil {
+		return Task{}, "", "", fmt.Errorf("set detail: %w", err)
+	}
+	return t, hash, level, nil
+}
+
+// runLocal executes a task on this node and returns the final row + result.
+// It is the shared local branch for both SubmitLocal and Submit's local route.
+func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.TaskResultPayload, error) {
 	result, err := c.execute(ctx, t.TaskID, in.Intent, in.Requires)
 	if err != nil && !errors.Is(err, ErrCancelled) {
 		// Route/dispatch/accept failures would otherwise leave the task stuck

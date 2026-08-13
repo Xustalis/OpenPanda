@@ -147,3 +147,114 @@ func TestLoadCardMissingFileErrors(t *testing.T) {
 		t.Fatalf("expected error for missing card")
 	}
 }
+
+func TestUpsertRemoteRoundTrip(t *testing.T) {
+	db := openLedgerDB(t)
+	sum := CapabilitySummary{
+		Device:        "windows",
+		ResourceClass: "Standard",
+		SchedulerTier: 5,
+		Chip:          "x86_64",
+		NativeIDs:     []string{"gpio:read"},
+		AgentCaps:     map[string][]string{"claude_code": {"code:modify"}},
+		ManualIDs:     []string{"design:figma"},
+		Capacity:      Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
+	}
+	if err := UpsertRemote(db, "windows", sum); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	nodes, err := Query(db, "online", "")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 online node, got %d", len(nodes))
+	}
+	n := nodes[0]
+	if n.ID != "windows" || n.SchedulerTier != 5 || n.Chip != "x86_64" {
+		t.Fatalf("node fields not round-tripped: %+v", n)
+	}
+	// Remote abilities are stored ID-only (no executable commands), but the
+	// IDs must survive for routing.
+	if len(n.Native) != 1 || n.Native[0].ID != "gpio:read" {
+		t.Fatalf("native ids not round-tripped: %+v", n.Native)
+	}
+	if cap, ok := n.Agents["claude_code"]; !ok || len(cap.Capabilities) != 1 || cap.Capabilities[0] != "code:modify" {
+		t.Fatalf("agent caps not round-tripped: %+v", n.Agents)
+	}
+	if len(n.Manual) != 1 || n.Manual[0].ID != "design:figma" {
+		t.Fatalf("manual ids not round-tripped: %+v", n.Manual)
+	}
+
+	// Upserting again must update in place, not duplicate.
+	sum2 := sum
+	sum2.Capacity = Capacity{CPUCores: 16, RAMGB: 32, MaxConcurrent: 5}
+	if err := UpsertRemote(db, "windows", sum2); err != nil {
+		t.Fatalf("upsert again: %v", err)
+	}
+	nodes, _ = Query(db, "online", "")
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node after re-upsert, got %d", len(nodes))
+	}
+}
+
+func TestNodeMatches(t *testing.T) {
+	n := Node{
+		Native: []NativeAbility{{ID: "gpio:read"}},
+		Agents: map[string]Agent{"claude_code": {Capabilities: []string{"code:modify"}}},
+		Manual: []ManualAbility{{ID: "design:figma"}},
+	}
+	for _, req := range []string{"gpio:read", "code:modify", "design:figma"} {
+		if !n.Matches([]string{req}) {
+			t.Fatalf("Matches(%q) = false, want true across all three layers", req)
+		}
+	}
+	if n.Matches([]string{"gpio:write", "unknown"}) {
+		t.Fatalf("Matches should be false for undeclared abilities")
+	}
+	if n.Matches([]string{}) {
+		t.Fatalf("Matches(empty) should be false")
+	}
+}
+
+func TestNodeMatchesNormalized(t *testing.T) {
+	n := Node{
+		Native: []NativeAbility{{ID: "lint"}},
+		Agents: map[string]Agent{"claude_code": {Capabilities: []string{"code:modify"}}},
+	}
+	// "code:lint" bridges to the card id "lint" via normalized containment.
+	if !n.Matches([]string{"code:lint"}) {
+		t.Fatalf("Matches(code:lint) should bridge to lint")
+	}
+	// "agent:claude_code" refers to the agent by name (as the device summary
+	// advertises it).
+	if !n.Matches([]string{"agent:claude_code"}) {
+		t.Fatalf("Matches(agent:claude_code) should match by name")
+	}
+	// A degenerate 2-char fragment must not fan out to unrelated abilities.
+	if n.Matches([]string{"li"}) {
+		t.Fatalf("Matches(li) should be false for a 2-char fragment")
+	}
+}
+
+func TestAbilityMatches(t *testing.T) {
+	cases := []struct {
+		declared, required string
+		want               bool
+	}{
+		{"lint", "lint", true},               // exact
+		{"lint", "code:lint", true},          // category prefix
+		{"build:macos", "build", true},       // suffix
+		{"build:macos", "BUILD_MACOS", true}, // case + separator fold
+		{"lint", "gpu:train", false},         // unrelated
+		{"io", "gpio:write", false},          // degenerate fragment guarded
+		{"", "lint", false},                  // empty declared
+		{"lint", "", false},                  // empty required
+	}
+	for _, tc := range cases {
+		if got := AbilityMatches(tc.declared, tc.required); got != tc.want {
+			t.Fatalf("AbilityMatches(%q, %q) = %v, want %v", tc.declared, tc.required, got, tc.want)
+		}
+	}
+}
