@@ -3,7 +3,6 @@
 # cmd/panda/ source directory (a bare "panda" pattern would ignore that too).
 /panda
 /panda-*
-!PANDA-*.md
 *.exe
 *.test
 *.out
@@ -44,6 +43,10 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Internal design & planning docs (kept out of the public repo)
+/PANDA-*.md
+/docs/
 
 # Local / personal tooling (unrelated to PANDA core)
 .workbuddy/
