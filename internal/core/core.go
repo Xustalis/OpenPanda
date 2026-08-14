@@ -57,6 +57,9 @@ type Core struct {
 	// breaker trips the circuit for a failing agent so the node stops routing
 	// work to it (design §14 Layer 1, P2-27).
 	breaker *defense.CircuitBreaker
+	// loop pauses a task that keeps failing instead of retrying it forever
+	// (design §14.2 signal C, P2-18).
+	loop *defense.LoopDetector
 	// auditLog records high-risk operations (Tier-2 exec/denial, circuit trips)
 	// for later review (P3-32).
 	auditLog *security.Audit
@@ -97,6 +100,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		peers:    make(map[string]*Peer),
 		greeted:  make(map[string]bool),
 		breaker:  defense.NewCircuitBreaker(0, 0),
+		loop:     defense.NewLoopDetector(2),
 		auditLog: security.NewAudit(db),
 		workDir:  ".",
 	}

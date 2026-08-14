@@ -48,10 +48,10 @@ func newCoreWithAgent(t *testing.T, id string) *Core {
 	return NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
 }
 
-// TestScopeDriftFailsAgent verifies that an agent that changes a file outside
-// its declared scope is intercepted and failed, not marked done (design §14.2
-// signal A).
-func TestScopeDriftFailsAgent(t *testing.T) {
+// TestScopeDriftPausesAgent verifies that an agent that changes a file outside
+// its declared scope is intercepted and paused into review for human analysis,
+// not marked done or retried (design §14.2 signal A).
+func TestScopeDriftPausesAgent(t *testing.T) {
 	ctx := context.Background()
 	c := newCoreWithAgent(t, "drift-node")
 	work := t.TempDir()
@@ -75,8 +75,8 @@ func TestScopeDriftFailsAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit local: %v", err)
 	}
-	if task.State != StateFailed {
-		t.Fatalf("state = %s, want failed (scope drift)", task.State)
+	if task.State != StateReview {
+		t.Fatalf("state = %s, want review (scope drift pauses for analysis)", task.State)
 	}
 	if !strings.Contains(result.Stderr, "scope drift") {
 		t.Fatalf("stderr = %q, want scope drift message", result.Stderr)

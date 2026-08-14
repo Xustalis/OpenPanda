@@ -112,7 +112,8 @@ func CanTransition(from, to string) bool {
 		return to == StateDone || to == StateQueued || to == StateFailed ||
 			to == StateCancelled
 	case StateFailed:
-		return to == StateQueued || to == StateCancelled || to == StateExpired
+		return to == StateQueued || to == StateCancelled || to == StateExpired ||
+			to == StateReview
 	default:
 		return false // terminal states have no outgoing edges
 	}

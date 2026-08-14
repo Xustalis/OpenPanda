@@ -6,7 +6,7 @@
 
 ## 1. 交付物概览
 
-本阶段落地权限分级（Tier）MVP 基线。防御链 Layer 1 的确定性信号已陆续补齐：熔断器（circuit，2026-08-14 落地，`internal/defense/circuit.go`）与范围漂移检测（scope_guard，2026-08-14 落地，`internal/defense/{scope,snapshot}.go`：agent 执行前后目录快照 + scope 越界拦截）。仍待实现：loopdetect / resource_guard（需重试循环）、合并门禁的测试构建检查（需校验命令字段）、Layer 2/3 上级决断与对抗性剖析（模型依赖，后续增强）。优先级评分/容量并行已撤回（`scheduler/priority.go`/`capacity.go` 死代码删除）。
+本阶段落地权限分级（Tier）MVP 基线。防御链 Layer 1 的确定性信号已全部补齐：熔断器（circuit，`internal/defense/circuit.go`）、范围漂移检测（scope_guard，`internal/defense/{scope,snapshot}.go`：agent 执行前后目录快照 + scope 越界拦截）、循环/收益递减检测（loopdetect，`internal/defense/loop.go` + core 重试循环：失败自动重试最多 2 次，超预算暂停进 review）。仍待实现：resource_guard（timeout/退出码已被 native executor 覆盖，资源超限需 cgroups，属部署层）、合并门禁的测试构建检查（需校验命令字段）、Layer 2/3 上级决断与对抗性剖析（模型依赖，后续增强）。优先级评分/容量并行已撤回（`scheduler/priority.go`/`capacity.go` 死代码删除）。
 
 | 交付物 | 产出 | 状态 |
 |---|---|---|

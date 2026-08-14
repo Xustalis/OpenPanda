@@ -333,9 +333,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	}
 
 	// Scope-drift intercept: a successful agent that touched files outside its
-	// declared scope has overstepped the task — fail it (with the drift recorded
-	// for review) rather than mark it done, so out-of-scope edits never pass as
-	// a completed task.
+	// declared scope has overstepped the task. Pause it for human analysis
+	// (design §14.2 "拦截 → 暂停 → 分析") rather than mark it done or fail it
+	// into the retry loop — a deterministic intercept will not improve on retry.
 	if plan.Kind == "agent" && !scope.Empty() && res.OK {
 		after, err := defense.SnapshotDir(c.workDir)
 		if err != nil {
@@ -343,11 +343,11 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		} else if drift := scope.Drift(after.Changed(before)); len(drift) > 0 {
 			msg := "scope drift: agent changed files outside declared scope: " + strings.Join(drift, ", ")
 			c.audit(ctx, taskID, "scope:drift", plan.Agent, "denied", msg)
-			if err := c.store.Fail(ctx, taskID, c.nodeID, msg); err != nil {
+			if err := c.store.Pause(ctx, taskID, c.nodeID, msg); err != nil {
 				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 					return bus.TaskResultPayload{}, ErrCancelled
 				}
-				return bus.TaskResultPayload{}, fmt.Errorf("fail on scope drift: %w", err)
+				return bus.TaskResultPayload{}, fmt.Errorf("pause on scope drift: %w", err)
 			}
 			c.logTask(task.Title, false)
 			trackTask(c, task.Project, required, task.Title, false)

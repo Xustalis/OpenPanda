@@ -137,20 +137,64 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 
 // runLocal executes a task on this node and returns the final row + result.
 // It is the shared local branch for both SubmitLocal and Submit's local route.
+// A failed task is retried (with a fresh attempt) up to the loop detector's
+// budget; past that it is paused into review for human analysis rather than
+// left in failed or retried forever (design §14.2 signal C, plan P2-18).
 func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.TaskResultPayload, error) {
 	result, err := c.execute(ctx, t.TaskID, in.Intent, in.Requires, in.Authorized)
 	if err != nil && !errors.Is(err, ErrCancelled) {
-		// Route/dispatch/accept failures would otherwise leave the task stuck
-		// in a non-terminal state. Fail it so the queue reflects reality.
-		if ferr := c.store.ForceFail(ctx, t.TaskID, err.Error()); ferr != nil {
-			c.logger.Warn("fail local task", "task", t.TaskID, "err", ferr)
-		}
+		c.failLocal(ctx, t.TaskID, err)
 		return t, result, err
 	}
 
-	final, err := c.store.Get(ctx, t.TaskID)
-	if err != nil {
-		return t, result, err
+	for {
+		final, err := c.store.Get(ctx, t.TaskID)
+		if err != nil {
+			return t, result, err
+		}
+		if final.State != StateFailed {
+			return final, result, nil
+		}
+		if !c.loop.Allow(t.TaskID) {
+			if rerr := c.store.Review(ctx, t.TaskID, c.nodeID, result.Stderr); rerr != nil {
+				c.logger.Warn("review task", "task", t.TaskID, "err", rerr)
+			}
+			// Re-fetch so the returned row reflects the review transition.
+			final, err = c.store.Get(ctx, t.TaskID)
+			if err != nil {
+				return t, result, err
+			}
+			return final, result, nil
+		}
+		if rerr := c.retryOnce(ctx, t.TaskID); rerr != nil {
+			c.logger.Warn("retry task", "task", t.TaskID, "err", rerr)
+			return final, result, rerr
+		}
+		c.logger.Info("retrying task", "task", t.TaskID)
+		result, err = c.run(ctx, t.TaskID, in.Intent, in.Requires, in.Authorized)
+		if err != nil && !errors.Is(err, ErrCancelled) {
+			c.failLocal(ctx, t.TaskID, err)
+			return t, result, err
+		}
 	}
-	return final, result, nil
+}
+
+// retryOnce rotates the attempt and returns a failed task to the queue,
+// dispatched back to this node, so run() can accept and re-execute it.
+func (c *Core) retryOnce(ctx context.Context, taskID string) error {
+	if _, err := c.store.RotateAttempt(ctx, taskID, c.nodeID); err != nil {
+		return fmt.Errorf("rotate attempt: %w", err)
+	}
+	if err := c.store.Requeue(ctx, taskID, c.nodeID); err != nil {
+		return fmt.Errorf("requeue: %w", err)
+	}
+	return c.store.Dispatch(ctx, taskID, c.nodeID, c.nodeID)
+}
+
+// failLocal force-fails a task left in a non-terminal state by a routing or
+// dispatch error, so the queue reflects reality.
+func (c *Core) failLocal(ctx context.Context, taskID string, err error) {
+	if ferr := c.store.ForceFail(ctx, taskID, err.Error()); ferr != nil {
+		c.logger.Warn("fail local task", "task", taskID, "err", ferr)
+	}
 }

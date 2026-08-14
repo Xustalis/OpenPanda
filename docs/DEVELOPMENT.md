@@ -33,7 +33,7 @@ internal/
   bus/              WebSocket 传输 + 消息信封(msg.go/payloads.go/ws.go)
   commander/        三层能力执行：native(exec) / agent(adapter) / manual
   scheduler/        委派路由决策（chain + route）
-  defense/          权限 Tier 门禁 + 熔断器（circuit）+ 范围漂移（scope 快照）
+  defense/          权限 Tier 门禁 + 熔断器（circuit）+ 范围漂移 + 循环检测
   security/         执行侧加固：沙箱 / 网络白名单 / 密钥脱敏 / 审计日志
   ledger/           能力目录（capabilities.yaml 解析 + employee_cache CRUD）
   ctxstore/         上下文快照 LRU

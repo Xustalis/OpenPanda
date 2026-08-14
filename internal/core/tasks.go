@@ -289,6 +289,31 @@ func (s *TaskStore) Fail(ctx context.Context, taskID, owner, reason string) erro
 		map[string]any{"failed": reason})
 }
 
+// Requeue transitions a failed task back to queued for a retry. It is the
+// retry loop's entry: after a failed attempt the task returns to the queue to
+// be re-dispatched. Only the owner may requeue.
+func (s *TaskStore) Requeue(ctx context.Context, taskID, owner string) error {
+	return s.transition(ctx, taskID, StateFailed, StateQueued, owner, EvRetry, nil)
+}
+
+// Review transitions a failed task to review, pausing a task that has spent its
+// retry budget for human analysis (design §14.2 "pause → analyze"). A reviewer
+// may later send it back to queued, mark it done, or fail it.
+func (s *TaskStore) Review(ctx context.Context, taskID, owner, reason string) error {
+	return s.transition(ctx, taskID, StateFailed, StateReview, owner, EvReview,
+		map[string]any{"reason": reason})
+}
+
+// Pause transitions a running task to review, pausing it for human analysis
+// after a deterministic intercept such as scope drift (design §14.2 "拦截 →
+// 暂停 → 分析"). It is the running-state counterpart of Review (which pauses a
+// failed task after its retry budget is spent) and never enters the retry loop,
+// because a deterministic intercept will not improve on retry.
+func (s *TaskStore) Pause(ctx context.Context, taskID, owner, reason string) error {
+	return s.transition(ctx, taskID, StateRunning, StateReview, owner, EvReview,
+		map[string]any{"reason": reason})
+}
+
 // FailFromRemote records a remote executor's failure on the delegator's copy.
 // Mirrors CompleteFromRemote: any non-terminal state is accepted.
 func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason string) error {
