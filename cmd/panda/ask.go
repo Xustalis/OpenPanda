@@ -86,6 +86,7 @@ func runAsk(args []string) {
 		// collides with a concurrently running daemon on the same node.
 		sched = core.NewCore(db, core.EphemeralNodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 		sched.SetMemoryStores(injector, daily, skillStore)
+		sched.SetWorkDir(cfg.Storage.WorkPath)
 		ctx, cancel := context.WithCancel(context.Background())
 		schedCtx = ctx
 		defer cancel()

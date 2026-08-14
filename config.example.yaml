@@ -15,6 +15,7 @@ storage:
   memory_path: "./memory"        # Hermes personal memory root (Phase 3)
   projects_path: "./projects"    # per-project memory root (Phase 3)
   skills_path: "./skills"        # procedural-memory root (Phase 3)
+  work_path: "."                 # agents execute here; scope drift measured here
 
 log:
   level: "info"                  # debug | info | warn | error

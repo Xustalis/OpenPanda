@@ -36,6 +36,7 @@ type StorageConfig struct {
 	MemoryPath   string `yaml:"memory_path"`   // Hermes personal memory root (memory/)
 	ProjectsPath string `yaml:"projects_path"` // per-project memory root (projects/)
 	SkillsPath   string `yaml:"skills_path"`   // procedural-memory root (skills/)
+	WorkPath     string `yaml:"work_path"`     // agents execute here; scope drift is measured against it
 }
 
 // LogConfig controls structured logging.
@@ -68,6 +69,7 @@ func Default() *Config {
 			MemoryPath:   "./memory",
 			ProjectsPath: "./projects",
 			SkillsPath:   "./skills",
+			WorkPath:     ".",
 		},
 		Log: LogConfig{
 			Level: "info",
@@ -127,6 +129,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("PANDA_SKILLS_PATH"); v != "" {
 		c.Storage.SkillsPath = v
+	}
+	if v := os.Getenv("PANDA_WORK_PATH"); v != "" {
+		c.Storage.WorkPath = v
 	}
 	if v := os.Getenv("PANDA_MODEL_BASE_URL"); v != "" {
 		c.Model.BaseURL = v

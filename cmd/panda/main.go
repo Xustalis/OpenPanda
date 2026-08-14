@@ -98,6 +98,7 @@ func runDaemon() {
 	}
 
 	coreNode := core.NewCore(db, core.NodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
+	coreNode.SetWorkDir(cfg.Storage.WorkPath)
 
 	// Attach the memory layer (design §17/§8): project-memory injection into
 	// agent execution context, daily logging that feeds the Dreaming engine, and

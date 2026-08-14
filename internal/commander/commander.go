@@ -29,6 +29,13 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig) *
 	return r
 }
 
+// SetAdapterRunner overrides the agent adapter invocation. It is a test seam:
+// suites that need to exercise agent execution without spawning a real LLM CLI
+// (e.g. scope-drift interception in core) inject a fake here.
+func (r *Router) SetAdapterRunner(fn func(ctx context.Context, adapter, prompt, cwd string) AgentResult) {
+	r.runAdapter = fn
+}
+
 // Plan describes how to execute a task on this node.
 type Plan struct {
 	Kind    string // native | agent | manual

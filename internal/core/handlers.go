@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -296,7 +297,21 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	attemptID := task.AttemptID
 
 	prompt, usedSkills := buildAgentPrompt(c, intent, task.Project, task.Title)
-	res := c.router.Execute(ctx, plan, prompt, "", authorized)
+
+	// Scope drift (design §14.2 signal A): for an agent task that declares a
+	// scope, snapshot the working directory before execution so changes outside
+	// the scope can be intercepted rather than silently committed. The agent
+	// runs inside c.workDir, which the sandbox also confines it to.
+	scope := defense.NewScope(taskScope(task.SpecJSON))
+	var before defense.Snapshot
+	if plan.Kind == "agent" && !scope.Empty() {
+		var err error
+		if before, err = defense.SnapshotDir(c.workDir); err != nil {
+			c.logger.Warn("snapshot workdir before agent", "task", taskID, "err", err)
+		}
+	}
+
+	res := c.router.Execute(ctx, plan, prompt, c.workDir, authorized)
 	if plan.Kind == "agent" {
 		if res.OK {
 			c.breaker.RecordSuccess(breakerKey)
@@ -316,6 +331,32 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 		c.audit(ctx, taskID, "native:tier2", plan.Command, result, "")
 	}
+
+	// Scope-drift intercept: a successful agent that touched files outside its
+	// declared scope has overstepped the task — fail it (with the drift recorded
+	// for review) rather than mark it done, so out-of-scope edits never pass as
+	// a completed task.
+	if plan.Kind == "agent" && !scope.Empty() && res.OK {
+		after, err := defense.SnapshotDir(c.workDir)
+		if err != nil {
+			c.logger.Warn("snapshot workdir after agent", "task", taskID, "err", err)
+		} else if drift := scope.Drift(after.Changed(before)); len(drift) > 0 {
+			msg := "scope drift: agent changed files outside declared scope: " + strings.Join(drift, ", ")
+			c.audit(ctx, taskID, "scope:drift", plan.Agent, "denied", msg)
+			if err := c.store.Fail(ctx, taskID, c.nodeID, msg); err != nil {
+				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+					return bus.TaskResultPayload{}, ErrCancelled
+				}
+				return bus.TaskResultPayload{}, fmt.Errorf("fail on scope drift: %w", err)
+			}
+			c.logTask(task.Title, false)
+			trackTask(c, task.Project, required, task.Title, false)
+			return bus.TaskResultPayload{
+				TaskID: taskID, AttemptID: attemptID, OK: false, ExitCode: 1, Stderr: msg,
+			}, nil
+		}
+	}
+
 	if res.NeedManual {
 		// Manual tasks: notify and mark done; the human completes offline.
 		if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{
@@ -358,6 +399,22 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	return bus.TaskResultPayload{
 		TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 	}, nil
+}
+
+// taskScope extracts the declared scope from a task's persisted spec JSON
+// (entry.TaskSpecDetail.Scope). A parse failure or absent field yields an
+// empty scope, which disables drift checking for that task.
+func taskScope(specJSON string) string {
+	if specJSON == "" {
+		return ""
+	}
+	var spec struct {
+		Scope string `json:"scope"`
+	}
+	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
+		return ""
+	}
+	return spec.Scope
 }
 
 // withProjectMemory prepends a project's own MEMORY.md to the agent intent so

@@ -60,6 +60,10 @@ type Core struct {
 	// auditLog records high-risk operations (Tier-2 exec/denial, circuit trips)
 	// for later review (P3-32).
 	auditLog *security.Audit
+	// workDir is the directory agents execute in and the root scope drift is
+	// measured against (design §14.2 signal A). Default "." (the daemon's
+	// working directory); a deploy can pin it to a project root.
+	workDir string
 
 	mu      sync.RWMutex
 	peers   map[string]*Peer
@@ -94,6 +98,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		greeted:  make(map[string]bool),
 		breaker:  defense.NewCircuitBreaker(0, 0),
 		auditLog: security.NewAudit(db),
+		workDir:  ".",
 	}
 	// The commander needs at least one native ability to route; a zero card
 	// yields a router that declines everything.
@@ -116,6 +121,15 @@ func (c *Core) SetMemoryStores(inj *memory.Injector, daily *memory.Daily, sk *sk
 	if sk != nil {
 		c.tracker = skills.NewTracker(sk)
 	}
+}
+
+// SetWorkDir pins the directory agents execute in and scope drift is measured
+// against. Empty resets to the default (the daemon's working directory).
+func (c *Core) SetWorkDir(dir string) {
+	if dir == "" {
+		dir = "."
+	}
+	c.workDir = dir
 }
 
 // Idle reports whether the node has no active (running, dispatched, or
