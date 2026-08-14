@@ -32,7 +32,14 @@ internal/
                     + spec.go 校验 + classify.go + fallback.go 降级
   bus/              WebSocket 传输 + 消息信封(msg.go/payloads.go/ws.go)
   commander/        三层能力执行：native(exec) / agent(adapter) / manual
+  scheduler/        委派路由决策（chain + route）
+  defense/          权限 Tier 门禁 + 熔断器（circuit）
+  security/         执行侧加固：沙箱 / 网络白名单 / 密钥脱敏 / 审计日志
   ledger/           能力目录（capabilities.yaml 解析 + employee_cache CRUD）
+  ctxstore/         上下文快照 LRU
+  memory/           双层记忆（USER/MEMORY 双文件 + 项目记忆 + 隔离墙）
+                    + memory 工具 + daily 日志 + Dreaming 引擎
+  skills/           程序性记忆（SKILL.md 自进化：触发/作用域/渐进加载/生命周期）
   config/           YAML 配置加载（含 model 段）
   storage/          SQLite(WAL) 封装 + 迁移
   log/              slog JSON 日志
@@ -125,8 +132,19 @@ make build
 
 跨设备（Tailscale）未验证——本机无 Tailscale，需香橙派就绪后补。
 
-## 8. Phase 1 进度（下次会话从这里继续）
+## 8. Phase 3 进度（下次会话从这里继续）
 
+Phase 3 = 记忆 + 语音 + 安全（[phase3-report.md](./phase3-report.md) 为记忆系统完成报告）。
+
+- **Sprint 3.1 双层记忆**：✅ `internal/memory`（USER.md/MEMORY.md 双文件 + 项目记忆 + 隔离墙 + daily 日志 + memory 工具执行器），已接入入口模型与 agent 上下文（FTS5 语义检索已撤回为死代码，留待会话记录功能）
+- **Sprint 3.2 Dreaming 引擎**：✅ Light/REM/Deep 六维评分 + provenance taint gate + 调度器（Idle + 每日 1 次）+ DREAMS.md
+- **Sprint 3.3 Skill 自进化**：✅ `internal/skills`（SKILL.md 格式 + 触发 + 作用域 + 渐进加载 + 生命周期 + 审批）
+- **记忆逻辑（对齐 Hermes/OpenClaw）**：✅ save/skip 治理规则入 system prompt、模型自主合并（memory 工具）、离线沉淀（Dreaming）
+- **Sprint 3.4 语音入口**：⬜（需 Porcupine key + 麦克风硬件）
+- **Sprint 3.5 PWA + 安全加固**：⚠️ 安全加固 MVP 已落地（`internal/security/` 沙箱/网络白名单/密钥脱敏/审计日志 + `defense/circuit.go` 熔断器，均接入执行路径）；PWA 仍 ⬜
+- **Sprint 3.6 集成与验证**：⬜
+
+Phase 1 遗留（已完成，存档）：
 - **内存基线决策**：✅ 已接受 13-20MB，验收标准调整为 ≤30MB（2026-08-13）
 - **Agent adapter 真实调用**：✅ claude_code.py 已走 DeepSeek 实测通过
 - **统一入口模型**：✅ `internal/entry` 完成（answer/tool_call/task 三分类 + 校验 + 降级），`panda ask` 可端到端调用 DeepSeek

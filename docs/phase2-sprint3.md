@@ -1,12 +1,12 @@
 # Phase 2 · Sprint 2.3/2.4 完成报告 · PANDA
 
-> 阶段：Phase 2 · 防御链 / 权限模型 / GPIO 权限 / 调度评分
+> 阶段：Phase 2 · 权限模型 / GPIO 权限 / 调度评分
 > 日期：2026-08-13
-> 状态：✅ 完成 · Phase 2 全部 Sprint 收尾
+> 状态：⚠️ 部分完成 · 权限分级（Tier）落地，防御链/合并门禁/熔断器未实现
 
 ## 1. 交付物概览
 
-本阶段补齐 Phase 2 的最后两块 MVP 基线（防御链 + 权限），并实现调度评分的后续增强基础（优先级评分 + 容量并行）。至此 Phase 2 的计划全部落地。
+本阶段落地权限分级（Tier）这一块 MVP 基线。防御链（scope_guard / loopdetect / resource_guard / escalation / postmortem）与合并门禁（merge_gate）仍未实现，退回 in_progress。熔断器（circuit）与优先级评分/容量并行在后续补上：优先级评分/容量并行已撤回（`scheduler/priority.go`/`capacity.go` 死代码删除），熔断器已于 2026-08-14 落地（`internal/defense/circuit.go`，接入 agent 执行路径）。
 
 | 交付物 | 产出 | 状态 |
 |---|---|---|
@@ -14,8 +14,8 @@
 | 能力卡 tier 声明 | `NativeAbility.Tier` 字段，commander 执行前判定 | ✅ |
 | 授权传递链路 | `TaskInput.Authorized` → wire payload → execute/run → Router.Execute；`ask --authorize` | ✅ |
 | GPIO 权限接入 | udev 规则（gpiochip 组可读）+ 能力卡去 sudo（`gpioinfo` tier 1）| ✅ |
-| 优先级评分 | `internal/scheduler/priority.go`：加权评分 + 防饥饿 | ✅ |
-| 容量并行 | `internal/scheduler/capacity.go`：容量账户 + TryAcquire/Release | ✅ |
+| 优先级评分 | ~~`internal/scheduler/priority.go`~~：加权评分 + 防饥饿 | ⚠️ 已撤回（死代码，2026-08-14 删除） |
+| 容量并行 | ~~`internal/scheduler/capacity.go`~~：容量账户 + TryAcquire/Release | ⚠️ 已撤回（死代码，2026-08-14 删除） |
 
 ## 2. 权限模型（设计 §16）
 
@@ -74,8 +74,8 @@
 
 新增：
 - `internal/defense/permission.go` + `permission_test.go`
-- `internal/scheduler/priority.go` + `priority_test.go`
-- `internal/scheduler/capacity.go` + `capacity_test.go`
+- ~~`internal/scheduler/priority.go` + `priority_test.go`~~（已撤回，2026-08-14 删除）
+- ~~`internal/scheduler/capacity.go` + `capacity_test.go`~~（已撤回，2026-08-14 删除）
 
 修改：
 - `internal/ledger/capability.go`：`NativeAbility.Tier`
@@ -95,4 +95,4 @@
 
 ---
 
-*Phase 2 完成 · 2026-08-13 · 下一步：Phase 3（记忆系统 / Skill 自进化 / 桌宠硬件）*
+*Phase 2 部分完成 · 2026-08-13 · 通信/委派/上下文核心落地；防御链 Layer1（除熔断器外）、合并门禁、GPIO 硬件扩展待补。下一步：Phase 3（记忆系统 / Skill 自进化）*
