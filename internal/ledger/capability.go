@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/xenith/panda/internal/storage"
@@ -195,6 +196,22 @@ type Node struct {
 	Agents        map[string]Agent
 	Manual        []ManualAbility
 	Capacity      Capacity
+}
+
+// Abilities returns this node's displayable ability list — native IDs plus an
+// "agent:<name>" entry per configured agent — sorted for deterministic output.
+// It is the single shared form used by the CLI status panel and the entry-model
+// device summary, so the two stay in lock-step as new ability kinds appear.
+func (n Node) Abilities() []string {
+	out := make([]string, 0, len(n.Native)+len(n.Agents))
+	for _, a := range n.Native {
+		out = append(out, a.ID)
+	}
+	for name := range n.Agents {
+		out = append(out, "agent:"+name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Matches reports whether this node declares any of required, across the

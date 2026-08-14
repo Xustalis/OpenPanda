@@ -238,6 +238,26 @@ func TestNodeMatchesNormalized(t *testing.T) {
 	}
 }
 
+func TestNodeAbilities(t *testing.T) {
+	n := Node{
+		Native: []NativeAbility{{ID: "z:native"}, {ID: "a:native"}},
+		Agents: map[string]Agent{
+			"opencode":    {},
+			"claude_code": {},
+		},
+	}
+	got := n.Abilities()
+	want := []string{"a:native", "agent:claude_code", "agent:opencode", "z:native"}
+	if len(got) != len(want) {
+		t.Fatalf("Abilities() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Abilities()[%d] = %q, want %q (sorted, deterministic)", i, got[i], want[i])
+		}
+	}
+}
+
 func TestAbilityMatches(t *testing.T) {
 	cases := []struct {
 		declared, required string

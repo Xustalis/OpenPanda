@@ -31,8 +31,11 @@ type NetworkConfig struct {
 
 // StorageConfig controls local persistence.
 type StorageConfig struct {
-	DBPath      string `yaml:"db_path"`
-	ContextPath string `yaml:"context_path"`
+	DBPath       string `yaml:"db_path"`
+	ContextPath  string `yaml:"context_path"`
+	MemoryPath   string `yaml:"memory_path"`   // Hermes personal memory root (memory/)
+	ProjectsPath string `yaml:"projects_path"` // per-project memory root (projects/)
+	SkillsPath   string `yaml:"skills_path"`   // procedural-memory root (skills/)
 }
 
 // LogConfig controls structured logging.
@@ -60,8 +63,11 @@ func Default() *Config {
 			ListenAddr: ":7836",
 		},
 		Storage: StorageConfig{
-			DBPath:      "./data/panda.db",
-			ContextPath: "./data/context",
+			DBPath:       "./data/panda.db",
+			ContextPath:  "./data/context",
+			MemoryPath:   "./memory",
+			ProjectsPath: "./projects",
+			SkillsPath:   "./skills",
 		},
 		Log: LogConfig{
 			Level: "info",
@@ -112,6 +118,15 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("PANDA_DB_PATH"); v != "" {
 		c.Storage.DBPath = v
+	}
+	if v := os.Getenv("PANDA_MEMORY_PATH"); v != "" {
+		c.Storage.MemoryPath = v
+	}
+	if v := os.Getenv("PANDA_PROJECTS_PATH"); v != "" {
+		c.Storage.ProjectsPath = v
+	}
+	if v := os.Getenv("PANDA_SKILLS_PATH"); v != "" {
+		c.Storage.SkillsPath = v
 	}
 	if v := os.Getenv("PANDA_MODEL_BASE_URL"); v != "" {
 		c.Model.BaseURL = v

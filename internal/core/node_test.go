@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +24,20 @@ func newTestNode(t *testing.T) *Node {
 	}
 	logger := slog.New(slog.DiscardHandler)
 	return NewNode(db, "test-node", card, 1, logger)
+}
+
+func TestEphemeralNodeIDUniqueAndPrefixed(t *testing.T) {
+	a := EphemeralNodeID("macbook")
+	b := EphemeralNodeID("macbook")
+	if a == b {
+		t.Fatalf("two ephemeral ids must differ, got %q twice", a)
+	}
+	if a == "macbook" || b == "macbook" {
+		t.Fatalf("ephemeral id must not equal the bare base name")
+	}
+	if !strings.HasPrefix(a, "macbook-") || !strings.HasPrefix(b, "macbook-") {
+		t.Fatalf("ephemeral id must be prefixed by base: %q %q", a, b)
+	}
 }
 
 func TestRegisterAndQuery(t *testing.T) {

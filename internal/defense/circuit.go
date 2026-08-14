@@ -1,0 +1,117 @@
+package defense
+
+import (
+	"sync"
+	"time"
+)
+
+// CircuitState is the lifecycle state of a single circuit.
+type CircuitState string
+
+const (
+	CircuitClosed   CircuitState = "closed"
+	CircuitOpen     CircuitState = "open"
+	CircuitHalfOpen CircuitState = "half_open"
+)
+
+// CircuitBreaker trips a circuit open after a run of failures and re-closes it
+// only after a cooldown and one successful trial (design doc §14 Layer 1, plan
+// P2-27). Keyed by a dependency such as "agent:claude", it stops routing work
+// to something that is failing repeatedly, instead of failing the whole task
+// loop one request at a time.
+//
+// The breaker is in-memory. Cooldowns are short by design, so a daemon restart
+// simply re-seats every circuit to closed — the safe default for an MVP.
+type CircuitBreaker struct {
+	mu        sync.Mutex
+	threshold int
+	cooldown  time.Duration
+	states    map[string]*circuitState
+}
+
+// circuitState tracks one key. failures counts consecutive failures since the
+// last success; openedAt is set when the circuit goes open (zero otherwise).
+type circuitState struct {
+	state    CircuitState
+	failures int
+	openedAt time.Time
+}
+
+// NewCircuitBreaker builds a breaker. A non-positive threshold defaults to 3
+// consecutive failures; a non-positive cooldown defaults to 30s.
+func NewCircuitBreaker(threshold int, cooldown time.Duration) *CircuitBreaker {
+	if threshold <= 0 {
+		threshold = 3
+	}
+	if cooldown <= 0 {
+		cooldown = 30 * time.Second
+	}
+	return &CircuitBreaker{threshold: threshold, cooldown: cooldown, states: make(map[string]*circuitState)}
+}
+
+// Allow reports whether key may run. It returns false while the circuit is
+// open. The first call after the cooldown elapses transitions to half-open and
+// permits exactly one trial; further calls stay blocked until that trial is
+// reported via RecordSuccess or RecordFailure.
+func (b *CircuitBreaker) Allow(key string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	st := b.states[key]
+	if st == nil || st.state == CircuitClosed {
+		return true
+	}
+	if st.state == CircuitOpen {
+		if time.Since(st.openedAt) >= b.cooldown {
+			st.state = CircuitHalfOpen
+			return true
+		}
+		return false
+	}
+	// Half-open: a trial is already in flight; admit no others until it resolves.
+	return false
+}
+
+// RecordSuccess closes the circuit for key and resets the failure count.
+func (b *CircuitBreaker) RecordSuccess(key string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	st := b.states[key]
+	if st == nil {
+		return
+	}
+	st.state = CircuitClosed
+	st.failures = 0
+	st.openedAt = time.Time{}
+}
+
+// RecordFailure counts a consecutive failure and opens the circuit once the
+// threshold is reached. A failure during half-open immediately re-opens it. It
+// reports whether the circuit transitioned to open (so callers can audit the
+// trip).
+func (b *CircuitBreaker) RecordFailure(key string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	st := b.states[key]
+	if st == nil {
+		st = &circuitState{state: CircuitClosed}
+		b.states[key] = st
+	}
+	st.failures++
+	if st.failures >= b.threshold {
+		st.state = CircuitOpen
+		st.openedAt = time.Now()
+		return true
+	}
+	return false
+}
+
+// State exposes the current state for diagnostics and tests. An unknown key
+// reports closed.
+func (b *CircuitBreaker) State(key string) CircuitState {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if st := b.states[key]; st != nil {
+		return st.state
+	}
+	return CircuitClosed
+}

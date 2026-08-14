@@ -15,6 +15,8 @@ import (
 	"github.com/xenith/panda/internal/core"
 	"github.com/xenith/panda/internal/entry"
 	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/panda/internal/memory"
+	"github.com/xenith/panda/internal/skills"
 	"github.com/xenith/panda/internal/storage"
 )
 
@@ -47,6 +49,16 @@ func runAsk(args []string) {
 		fatal("load config", err)
 	}
 
+	// The memory injector supplies Hermes memory to the entry model's system
+	// prompt and project memory to agent execution context (design §17.2); the
+	// tool executor carries out memory tool_calls the model emits.
+	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
+	projects := memory.NewProjects(cfg.Storage.ProjectsPath)
+	injector := memory.NewInjector(hermes, projects)
+	tools := memory.NewTool(hermes, projects)
+	daily := memory.NewDaily(hermes.WarmDir())
+	skillStore := skills.NewStore(cfg.Storage.SkillsPath)
+
 	// Open the DB for a device summary and, for task output, persistence. A
 	// missing DB is fine for answer/tool_call (empty devices), but a task
 	// cannot execute without one.
@@ -70,7 +82,10 @@ func runAsk(args []string) {
 			fatal("load capabilities", err)
 		}
 		logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-		sched = core.NewCore(db, core.NodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
+		// ask is a short-lived scheduler: use an ephemeral node id so it never
+		// collides with a concurrently running daemon on the same node.
+		sched = core.NewCore(db, core.EphemeralNodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
+		sched.SetMemoryStores(injector, daily, skillStore)
 		ctx, cancel := context.WithCancel(context.Background())
 		schedCtx = ctx
 		defer cancel()
@@ -89,28 +104,58 @@ func runAsk(args []string) {
 		devices = nil
 	}
 
-	client := entry.NewClient(cfg.Model)
-	out, err := entry.Classify(context.Background(), client, devices, "", prompt)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
-		os.Exit(1)
+	// Hermes memory for the conversation prompt; a load failure is non-fatal —
+	// classification proceeds without memory rather than blocking the ask.
+	conversationMemory, merr := injector.Conversation()
+	if merr != nil {
+		fmt.Fprintf(os.Stderr, "panda: load memory: %v\n", merr)
 	}
 
-	switch out.Kind {
-	case entry.KindAnswer:
-		fmt.Println(out.Answer)
-	case entry.KindToolCall:
-		b, _ := json.MarshalIndent(out.Tool, "", "  ")
-		fmt.Printf("tool_call: %s\n", string(b))
-	case entry.KindTask:
-		if sched == nil {
-			fmt.Fprintln(os.Stderr, "panda: task output requires --card (capabilities.yaml)")
+	client := entry.NewClient(cfg.Model)
+	ctx := context.Background()
+
+	// Multi-turn loop: a tool_call is executed and its result fed back so the
+	// model can, e.g., read memory then merge/retry (the Hermes consolidation
+	// workflow) before producing a final answer or task.
+	turns := []entry.Turn{{Role: "user", Content: prompt}}
+	const maxRounds = 6
+	for round := 0; round < maxRounds; round++ {
+		out, err := entry.ClassifyTurns(ctx, client, devices, conversationMemory, turns)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 			os.Exit(1)
 		}
-		runAskTask(sched, schedCtx, out.Task, *authorize)
-	default:
-		fmt.Println(out.Answer)
+
+		switch out.Kind {
+		case entry.KindAnswer:
+			fmt.Println(out.Answer)
+			return
+		case entry.KindTask:
+			if sched == nil {
+				fmt.Fprintln(os.Stderr, "panda: task output requires --card (capabilities.yaml)")
+				os.Exit(1)
+			}
+			runAskTask(sched, schedCtx, out.Task, *authorize)
+			return
+		case entry.KindToolCall:
+			result, terr := tools.Execute(out.Tool.Tool, out.Tool.Arguments)
+			if terr != nil {
+				// A tool failure (e.g. an over-limit memory add) is fed back so
+				// the model can consolidate and retry, not a hard exit.
+				result = "工具执行失败：" + terr.Error()
+			}
+			assistant, _ := json.Marshal(out.Tool)
+			turns = append(turns,
+				entry.Turn{Role: "assistant", Content: "tool_call: " + string(assistant)},
+				entry.Turn{Role: "user", Content: "工具结果：" + result},
+			)
+		default:
+			fmt.Println(out.Answer)
+			return
+		}
 	}
+	fmt.Fprintf(os.Stderr, "panda: 达到最大交互轮数（%d）仍未收敛\n", maxRounds)
+	os.Exit(1)
 }
 
 // runAskTask executes a classified task on the already-connected scheduler

@@ -15,7 +15,11 @@ import (
 	"github.com/xenith/panda/internal/commander"
 	"github.com/xenith/panda/internal/config"
 	"github.com/xenith/panda/internal/ctxstore"
+	"github.com/xenith/panda/internal/defense"
 	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/panda/internal/memory"
+	"github.com/xenith/panda/internal/security"
+	"github.com/xenith/panda/internal/skills"
 	"github.com/xenith/panda/internal/util"
 )
 
@@ -37,6 +41,25 @@ type Core struct {
 	ctx    *ctxstore.Store
 	node   *Node
 	router *commander.Router
+	// memory injects project memory into agent execution context (design §17.2
+	// isolation wall). Nil disables injection; tests and minimal nodes leave it
+	// nil and are unaffected.
+	memory *memory.Injector
+	// daily feeds the Dreaming engine with a line per completed task. Nil
+	// disables daily logging.
+	daily *memory.Daily
+	// skills supplies progressive skill loading into agent execution context
+	// (design §8.5). Nil disables skill injection.
+	skills *skills.Store
+	// tracker aggregates task history and generates skills when a task class
+	// clears the quality gate (design §8.2). Nil disables self-evolution.
+	tracker *skills.Tracker
+	// breaker trips the circuit for a failing agent so the node stops routing
+	// work to it (design §14 Layer 1, P2-27).
+	breaker *defense.CircuitBreaker
+	// auditLog records high-risk operations (Tier-2 exec/denial, circuit trips)
+	// for later review (P3-32).
+	auditLog *security.Audit
 
 	mu      sync.RWMutex
 	peers   map[string]*Peer
@@ -59,16 +82,18 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		logger = slog.Default()
 	}
 	c := &Core{
-		db:      db,
-		nodeID:  nodeID,
-		card:    card,
-		tier:    tier,
-		logger:  logger,
-		store:   NewTaskStore(db, logger),
-		ctx:     ctxstore.New(db, ctxstore.MaxEntriesForResourceClass(card.ResourceClass)),
-		node:    NewNode(db, nodeID, card, tier, logger),
-		peers:   make(map[string]*Peer),
-		greeted: make(map[string]bool),
+		db:       db,
+		nodeID:   nodeID,
+		card:     card,
+		tier:     tier,
+		logger:   logger,
+		store:    NewTaskStore(db, logger),
+		ctx:      ctxstore.New(db, ctxstore.MaxEntriesForResourceClass(card.ResourceClass)),
+		node:     NewNode(db, nodeID, card, tier, logger),
+		peers:    make(map[string]*Peer),
+		greeted:  make(map[string]bool),
+		breaker:  defense.NewCircuitBreaker(0, 0),
+		auditLog: security.NewAudit(db),
 	}
 	// The commander needs at least one native ability to route; a zero card
 	// yields a router that declines everything.
@@ -80,6 +105,29 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 
 // Register upserts this node in the local ledger.
 func (c *Core) Register(ctx context.Context) error { return c.node.Register(ctx) }
+
+// SetMemoryStores attaches the memory layer (design §17/§8): the injector for
+// project memory, the daily log writer feeding the Dreaming engine, and the
+// skill store for progressive loading. Any may be nil to disable its layer.
+func (c *Core) SetMemoryStores(inj *memory.Injector, daily *memory.Daily, sk *skills.Store) {
+	c.memory = inj
+	c.daily = daily
+	c.skills = sk
+	if sk != nil {
+		c.tracker = skills.NewTracker(sk)
+	}
+}
+
+// Idle reports whether the node has no active (running, dispatched, or
+// waiting-for-context) tasks. The Dreaming scheduler uses it to run
+// consolidation only when the node is free, so dreaming never competes with
+// real work.
+func (c *Core) Idle(ctx context.Context) bool {
+	running, _ := c.store.ListByState(ctx, StateRunning)
+	dispatched, _ := c.store.ListByState(ctx, StateDispatched)
+	waiting, _ := c.store.ListByState(ctx, StateWaitingCtx)
+	return len(running) == 0 && len(dispatched) == 0 && len(waiting) == 0
+}
 
 // RunHeartbeat starts the heartbeat ticker.
 func (c *Core) RunHeartbeat(ctx context.Context) { go c.node.RunHeartbeat(ctx) }
@@ -229,7 +277,12 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 		conn.Close()
 		return nil, err
 	}
-	env, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, mustUUID(), bus.HelloPayload{
+	msgID, err := newUUID()
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	env, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, bus.HelloPayload{
 		NodeID: c.nodeID,
 		Ver:    "0.1.0-dev",
 		Card:   card,
@@ -341,12 +394,11 @@ func (c *Core) sendTo(id string, env bus.Envelope) error {
 	return conn.Send(env)
 }
 
-func mustUUID() string {
-	id, err := util.UUIDv7()
-	if err != nil {
-		panic(err)
-	}
-	return id
+// newUUID mints a fresh message id. It returns an error rather than panicking
+// so a transient entropy/time failure degrades the affected message instead of
+// crashing the whole daemon (which would take the node permanently offline).
+func newUUID() (string, error) {
+	return util.UUIDv7()
 }
 
 // signalResult delivers an inbound task_result to any synchronous Submit

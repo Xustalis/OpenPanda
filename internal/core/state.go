@@ -103,7 +103,8 @@ func CanTransition(from, to string) bool {
 		return to == StateRunning || to == StateWaitingCtx ||
 			to == StateQueued || to == StateFailed || to == StateCancelled
 	case StateWaitingCtx:
-		return to == StateRunning || to == StateFailed || to == StateExpired
+		return to == StateRunning || to == StateFailed || to == StateExpired ||
+			to == StateCancelled
 	case StateRunning:
 		return to == StateReview || to == StateDone || to == StateFailed ||
 			to == StateCancelled || to == StateQueued

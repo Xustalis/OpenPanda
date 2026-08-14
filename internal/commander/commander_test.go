@@ -169,6 +169,32 @@ func TestExecuteTier2RequiresAuth(t *testing.T) {
 	}
 }
 
+func TestExecuteAgent(t *testing.T) {
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
+	plan, err := r.Route([]string{"code:modify"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if plan.Kind != "agent" {
+		t.Fatalf("plan = %s, want agent", plan.Kind)
+	}
+	// Inject a fake adapter so the test exercises the agent execution path
+	// (execAgent -> runAdapter) without invoking a real LLM CLI.
+	r.runAdapter = func(ctx context.Context, adapter, prompt, cwd string) AgentResult {
+		if adapter != "claude_code.py" {
+			t.Fatalf("adapter = %q, want claude_code.py", adapter)
+		}
+		return AgentResult{OK: true, Result: "refactored", ExitCode: 0, Tokens: 42, Cost: 0.01}
+	}
+	res := r.Execute(context.Background(), plan, "refactor this", "", false)
+	if !res.OK || res.Stdout != "refactored" {
+		t.Fatalf("agent exec = %+v, want ok refactored", res)
+	}
+	if res.Tokens != 42 {
+		t.Fatalf("tokens = %d, want 42", res.Tokens)
+	}
+}
+
 func TestRouteTierFromCommand(t *testing.T) {
 	card := testCard()
 	// A sudo command without an explicit tier is inferred as Tier 2.

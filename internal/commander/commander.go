@@ -93,7 +93,7 @@ func (r *Router) Route(required []string) (Plan, error) {
 	if ab, ok := r.MatchNative(required); ok {
 		tier := ab.Tier
 		if tier == 0 {
-			tier = defense.TierFromCommand(ab.Command)
+			tier = defense.TierFromCommand(ab.Command, ab.Args...)
 		}
 		return Plan{Kind: "native", Ability: ab.ID, Command: ab.Command, Args: ab.Args, Tier: tier}, nil
 	}

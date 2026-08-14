@@ -59,19 +59,16 @@ func Migrate(db *sql.DB) error {
 			last_access INTEGER,
 			access_count INTEGER DEFAULT 0
 		)`,
-		`CREATE TABLE IF NOT EXISTS task_dependencies (
-			task_id TEXT NOT NULL,
-			depends_on_task_id TEXT NOT NULL,
-			condition TEXT NOT NULL DEFAULT 'success',
-			PRIMARY KEY (task_id, depends_on_task_id)
+		`CREATE TABLE IF NOT EXISTS audit_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts INTEGER,
+			who TEXT,
+			what TEXT,
+			target TEXT,
+			result TEXT,
+			detail TEXT
 		)`,
-		`CREATE TABLE IF NOT EXISTS circuit_breakers (
-			id TEXT PRIMARY KEY,
-			failure_count INTEGER DEFAULT 0,
-			last_failure INTEGER,
-			state TEXT DEFAULT 'closed',
-			cooldown_until INTEGER
-		)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)`,
 	}
 
 	for _, stmt := range statements {

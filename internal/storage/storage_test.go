@@ -18,8 +18,7 @@ func TestOpenAndMigrate(t *testing.T) {
 
 	// All Phase 0 tables must exist.
 	tables := []string{
-		"employee_cache", "tasks", "task_events", "context",
-		"task_dependencies", "circuit_breakers",
+		"employee_cache", "tasks", "task_events", "context", "audit_log",
 	}
 	for _, name := range tables {
 		var got string

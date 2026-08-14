@@ -79,6 +79,48 @@ func TestOwnerEnforcement(t *testing.T) {
 	}
 }
 
+func TestCanTransitionCancelEdges(t *testing.T) {
+	for _, from := range []string{StateSubmitted, StateQueued, StateDispatched, StateWaitingCtx, StateRunning, StateReview, StateFailed} {
+		if !CanTransition(from, StateCancelled) {
+			t.Fatalf("%s -> cancelled must be legal", from)
+		}
+	}
+	for _, term := range []string{StateDone, StateCancelled, StateExpired} {
+		if CanTransition(term, StateCancelled) {
+			t.Fatalf("%s -> cancelled must be illegal (terminal)", term)
+		}
+	}
+}
+
+func TestCancelFromWaitingContext(t *testing.T) {
+	s := newTestStore(t)
+	tk := createTask(t, s, "", "pause", "root")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	must(s.Queue(context.Background(), tk.TaskID, "root"))
+	must(s.Dispatch(context.Background(), tk.TaskID, "root", "root"))
+	must(s.SetWaitingContext(context.Background(), tk.TaskID, "root"))
+
+	// A task parked waiting for context must still be cancellable (the state
+	// machine previously rejected waiting_context -> cancelled, so Cancel
+	// would have written an illegal state).
+	if err := s.Cancel(context.Background(), tk.TaskID); err != nil {
+		t.Fatalf("cancel from waiting_context: %v", err)
+	}
+	got, err := s.Get(context.Background(), tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != StateCancelled {
+		t.Fatalf("state = %s, want cancelled", got.State)
+	}
+}
+
 func TestCancelCascade(t *testing.T) {
 	s := newTestStore(t)
 	parent := createTask(t, s, "", "parent", "root")

@@ -70,13 +70,7 @@ func runStatus(args []string) {
 		if n.LastSeen == 0 {
 			seen = "never"
 		}
-		var abilities []string
-		for _, a := range n.Native {
-			abilities = append(abilities, a.ID)
-		}
-		for name := range n.Agents {
-			abilities = append(abilities, "agent:"+name)
-		}
+		abilities := n.Abilities()
 		fmt.Printf("%-16s status=%-8s chip=%-40s last_seen=%s\n", n.ID, n.Status, n.Chip, seen)
 		if len(abilities) > 0 {
 			fmt.Printf("  abilities: %s\n", strings.Join(abilities, ", "))

@@ -12,6 +12,9 @@ network:
 storage:
   db_path: "./data/panda.db"
   context_path: "./data/context"
+  memory_path: "./memory"        # Hermes personal memory root (Phase 3)
+  projects_path: "./projects"    # per-project memory root (Phase 3)
+  skills_path: "./skills"        # procedural-memory root (Phase 3)
 
 log:
   level: "info"                  # debug | info | warn | error

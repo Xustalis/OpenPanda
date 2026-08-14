@@ -82,16 +82,37 @@ type apiError struct {
 // ErrNoKey is returned when no API key is configured.
 var ErrNoKey = errors.New("entry: no model api_key configured")
 
+// Turn is one conversation turn for multi-turn classification.
+type Turn struct {
+	Role    string // "user" | "assistant"
+	Content string
+}
+
 // Complete runs one non-streaming call and returns the model's text. Text and
 // thinking blocks are concatenated; thinking is dropped only when a text block
 // is present (DeepSeek reasoner emits a thinking block alongside the answer).
 func (c *Client) Complete(ctx context.Context, system, user string) (string, error) {
+	return c.CompleteTurns(ctx, system, []Turn{{Role: "user", Content: user}})
+}
+
+// CompleteTurns runs one call with a conversation history, so a tool result can
+// be fed back for another round (the memory-merge loop). It mirrors Complete but
+// passes the full turn list as messages.
+func (c *Client) CompleteTurns(ctx context.Context, system string, turns []Turn) (string, error) {
 	if c.apiKey == "" {
 		return "", ErrNoKey
 	}
-	req := messagesRequest{Model: c.model, MaxTokens: 1024, System: system,
-		Messages: []message{{Role: "user", Content: user}}}
+	msgs := make([]message, len(turns))
+	for i, t := range turns {
+		msgs[i] = message{Role: t.Role, Content: t.Content}
+	}
+	req := messagesRequest{Model: c.model, MaxTokens: 1024, System: system, Messages: msgs}
+	return c.completeWithRetry(ctx, req)
+}
 
+// completeWithRetry runs req with the configured retry/backoff and returns the
+// extracted text.
+func (c *Client) completeWithRetry(ctx context.Context, req messagesRequest) (string, error) {
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 {

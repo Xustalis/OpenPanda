@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/xenith/panda/internal/core"
 	"github.com/xenith/panda/internal/ledger"
 	"github.com/xenith/panda/internal/log"
+	"github.com/xenith/panda/internal/memory"
+	"github.com/xenith/panda/internal/skills"
 	"github.com/xenith/panda/internal/storage"
 )
 
@@ -42,6 +45,9 @@ func main() {
 			return
 		case "logs":
 			runLogs(os.Args[2:])
+			return
+		case "skill":
+			runSkill(os.Args[2:])
 			return
 		case "version", "--version", "-v":
 			fmt.Printf("panda %s\n", version)
@@ -93,8 +99,31 @@ func runDaemon() {
 
 	coreNode := core.NewCore(db, core.NodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 
+	// Attach the memory layer (design §17/§8): project-memory injection into
+	// agent execution context, daily logging that feeds the Dreaming engine, and
+	// skill progressive loading. Load failures degrade to no injection and are
+	// logged by the core, not fatal here.
+	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
+	projects := memory.NewProjects(cfg.Storage.ProjectsPath)
+	coreNode.SetMemoryStores(
+		memory.NewInjector(hermes, projects),
+		memory.NewDaily(hermes.WarmDir()),
+		skills.NewStore(cfg.Storage.SkillsPath),
+	)
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Dreaming (design §17.3): consolidate the daily logs into long-term memory
+	// in the background — only while the node is idle, at most once per day.
+	dreamSched := memory.NewScheduler(
+		memory.NewDreamer(hermes),
+		memory.NewDreamDiary(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md")),
+		func() bool { return coreNode.Idle(ctx) },
+		5*time.Minute,
+	)
+	dreamSched.OnError = func(err error) { logger.Warn("dreaming sweep", "err", err) }
+	go dreamSched.Run(ctx)
 
 	if err := coreNode.Register(ctx); err != nil {
 		fatal("register node", err)

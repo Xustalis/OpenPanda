@@ -458,7 +458,10 @@ func (s *TaskStore) Recover(ctx context.Context) (int, error) {
 
 // Cancel marks a task cancelled if it is still active. Cancellation is the
 // one transition the parent may force regardless of lease ownership, to
-// support cascade from a cancelled parent.
+// support cascade from a cancelled parent — but it still must be a legal move
+// per the state machine, so a stale caller cannot force a task into a state
+// the table does not allow. Callers authorizing the *source* of the cancel do
+// so upstream (see Core.handleCancel).
 func (s *TaskStore) Cancel(ctx context.Context, taskID string) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
@@ -466,6 +469,9 @@ func (s *TaskStore) Cancel(ctx context.Context, taskID string) error {
 	}
 	if Terminal(cur.State) {
 		return nil // already done/cancelled/expired
+	}
+	if !CanTransition(cur.State, StateCancelled) {
+		return fmt.Errorf("%w: %s -> %s", ErrIllegal, cur.State, StateCancelled)
 	}
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=? WHERE task_id=?`,

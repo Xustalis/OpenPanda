@@ -12,11 +12,31 @@ import (
 	"time"
 
 	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/panda/internal/util"
 )
 
 // NodeID is this node's stable identifier. Phase 0 uses the configured name;
 // a generated UUID may be preferred once remote discovery exists.
 func NodeID(cfgName string) string { return cfgName }
+
+// EphemeralNodeID derives a short-lived identity from base for processes that
+// dial peers but are not the long-running daemon (e.g. `panda ask`). It appends
+// a random suffix so a concurrent daemon and ask session never share a node id
+// in the grid — a collision would cause ensurePeer to drop the second
+// connection and misroute replies.
+func EphemeralNodeID(base string) string {
+	suffix, err := util.UUIDv7()
+	if err != nil {
+		suffix = fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	// UUIDv7 is time-ordered: the leading bytes are the millisecond timestamp,
+	// which two IDs minted in the same tick would share. The trailing 8 hex
+	// chars are the random part, which is what actually distinguishes callers.
+	if len(suffix) > 8 {
+		suffix = suffix[len(suffix)-8:]
+	}
+	return base + "-" + suffix
+}
 
 // Node owns this process's ledger identity.
 type Node struct {

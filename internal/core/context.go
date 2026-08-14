@@ -62,7 +62,12 @@ func (c *Core) packContext(ctx context.Context, in TaskInput) (hash, level strin
 // snapshot. On a send failure the task is failed rather than left hanging in
 // waiting_context.
 func (c *Core) sendContextFetch(ctx context.Context, source, taskID, hash, ctxType string) {
-	env, err := bus.NewEnvelope(bus.MsgContextFetch, c.nodeID, mustUUID(), bus.ContextFetchPayload{
+	msgID, err := newUUID()
+	if err != nil {
+		c.failPendingContext(ctx, taskID, "mint message id: "+err.Error())
+		return
+	}
+	env, err := bus.NewEnvelope(bus.MsgContextFetch, c.nodeID, msgID, bus.ContextFetchPayload{
 		TaskID: taskID, Hash: hash, ContextType: ctxType,
 	})
 	if err != nil {

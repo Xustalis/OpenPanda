@@ -3,6 +3,7 @@ package entry
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -188,5 +189,38 @@ func TestBuildPromptIncludesDevices(t *testing.T) {
 	}
 	if !strings.Contains(p, "macbook-m1") || !strings.Contains(p, "build:macos") {
 		t.Fatalf("prompt missing device summary:\n%s", p)
+	}
+}
+
+func TestClassifyTurnsSendsHistory(t *testing.T) {
+	var gotMessages int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+		gotMessages = len(req.Messages)
+		w.Header().Set("content-type", "application/json")
+		resp := map[string]any{"content": []map[string]string{{"type": "text", "text": "plain answer"}}}
+		b, _ := json.Marshal(resp)
+		_, _ = w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+
+	turns := []Turn{
+		{Role: "user", Content: "记住我偏好暗色主题"},
+		{Role: "assistant", Content: "tool_call: {\"tool\":\"memory.add\"}"},
+		{Role: "user", Content: "工具结果：已记住"},
+	}
+	if _, err := ClassifyTurns(context.Background(), c, nil, "", turns); err != nil {
+		t.Fatalf("classify turns: %v", err)
+	}
+	if gotMessages != 3 {
+		t.Errorf("messages sent = %d, want 3", gotMessages)
 	}
 }
