@@ -35,6 +35,7 @@ internal/
   scheduler/        委派路由决策（chain + route）
   defense/          权限 Tier 门禁 + 熔断器（circuit）+ 范围漂移 + 循环检测
   security/         执行侧加固：沙箱 / 网络白名单 / 密钥脱敏 / 审计日志
+  panel/            PWA 控制台 HTTP API（队列 / 详情 / 审批）
   ledger/           能力目录（capabilities.yaml 解析 + employee_cache CRUD）
   ctxstore/         上下文快照 LRU
   memory/           双层记忆（USER/MEMORY 双文件 + 项目记忆 + 隔离墙）
@@ -45,6 +46,8 @@ internal/
   log/              slog JSON 日志
   util/             UUIDv7
 adapters/           Agent 适配器（claude_code.py + opencode.py）
+extensions/voice/   语音 sidecar（wake/stt/tts/vad，待硬件实测）
+web/pwa/            PWA 前端（manifest + sw + 队列/详情/审批面板）
 config/             示例能力卡（macbook / orangepi3b）
 testdata/           双节点 loopback 测试配置
 docs/               阶段报告 + 本手册
@@ -140,9 +143,9 @@ Phase 3 = 记忆 + 语音 + 安全（[phase3-report.md](./phase3-report.md) 为�
 - **Sprint 3.2 Dreaming 引擎**：✅ Light/REM/Deep 六维评分 + provenance taint gate + 调度器（Idle + 每日 1 次）+ DREAMS.md
 - **Sprint 3.3 Skill 自进化**：✅ `internal/skills`（SKILL.md 格式 + 触发 + 作用域 + 渐进加载 + 生命周期 + 审批）
 - **记忆逻辑（对齐 Hermes/OpenClaw）**：✅ save/skip 治理规则入 system prompt、模型自主合并（memory 工具）、离线沉淀（Dreaming）
-- **Sprint 3.4 语音入口**：⬜（需 Porcupine key + 麦克风硬件）
-- **Sprint 3.5 PWA + 安全加固**：⚠️ 安全加固 MVP 已落地（`internal/security/` 沙箱/网络白名单/密钥脱敏/审计日志 + `defense/circuit.go` 熔断器，均接入执行路径）；PWA 仍 ⬜
-- **Sprint 3.6 集成与验证**：⬜
+- **Sprint 3.4 语音入口**：⚠️ sidecar + 管线代码已落地（`extensions/voice/` + `internal/entry/voice_pipeline.go`），待 Porcupine key + 麦克风硬件实测
+- **Sprint 3.5 PWA + 安全加固**：✅ 安全加固 MVP（`internal/security/`）+ PWA 控制台（`internal/panel/` HTTP API + `web/pwa/`，审批流接通 review→done/failed）；Web Push 发送端（VAPID）仍待做
+- **Sprint 3.6 集成与验证**：⚠️ 记忆隔离 / Dreaming / Skill 生命周期测试已覆盖；语音 E2E（待硬件）与安全渗透（人工）未做
 
 Phase 1 遗留（已完成，存档）：
 - **内存基线决策**：✅ 已接受 13-20MB，验收标准调整为 ≤30MB（2026-08-13）

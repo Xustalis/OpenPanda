@@ -135,4 +135,4 @@ daemon ──Scheduler（Idle 检测 + 每日 1 次）──▶ Dreamer（Light�
 
 ---
 
-*Phase 3 记忆系统完成 · 2026-08-14 · 下一步：Sprint 3.4 语音入口 / Sprint 3.5 安全加固（沙箱 + 网络白名单 + 密钥隔离）*
+*Phase 3 记忆系统完成 · 2026-08-14 · 后续：Sprint 3.5 安全加固 + PWA 控制台已落地（`internal/security` + `internal/panel` + `web/pwa`），Sprint 3.4 语音入口代码已就绪待硬件实测*
