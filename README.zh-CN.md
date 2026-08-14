@@ -1,0 +1,258 @@
+# 🐼 PANDA
+
+**P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant
+
+> 任何设备，任何算力，一个指令。
+> 一个把「个人」放在第一位的任务编排助手——以 P2P 节点网络的方式，运行在你的异构设备之间。
+
+[English](README.md) · [简体中文](README.zh-CN.md) · [Deutsch](README.de.md)
+
+---
+
+## 这是什么
+
+PANDA 把你拥有的每一台设备——笔记本、单板电脑、桌面机——都变成个人任务网络里的一个**节点**。你只需要在任何一台设备上发出一次指令，PANDA 就会把任务委派给最适合执行的节点，回传结果，并把学到的经验记住，留待下次使用。
+
+它从设计之初就是**个人**系统：不依赖云端、记忆只留在你的设备上、每个节点之间通过你能掌控的直连 WebSocket 通信。
+
+## 核心特性
+
+- **异构节点网络**——每个节点通过能力卡（capability card）声明真实能力（CPU 等级、shell、Agent 适配器）；网络把任务路由给真正能干活的节点。为 MacBook ↔ 香橙派 3B 以及介于两者之间的各种设备而设计。
+- **统一入口模型**——一条指令进入，三种意图输出：`answer`（纯 LLM 回答）、`tool_call`（调用你的工具）、`task`（委派到节点执行）。自动意图分类，并带优雅降级。
+- **三层能力执行**——`native`（直接执行 shell 命令）、`agent`（基于适配器的 Agent，例如通过 Anthropic 兼容端点调用 Claude Code）、`manual`（进队列，等你人工审批/手动执行）。
+- **P2P 委派协议**——基于 WebSocket + JSON 的幂等 `task_id` 与每次执行唯一的 `attempt_id`，崩溃重试绝不会重复执行。
+- **自进化 Skill 系统**——程序性记忆以 `SKILL.md` 文件存在：每个 skill 声明适用时机、运行方式，并在每次使用后自我迭代。
+- **双层记忆**——按用户与按项目隔离的记忆（`USER.md` / `MEMORY.md` 风格），外加隔离墙；后台 **Dreaming** 引擎在节点空闲时把日常日志沉淀为长期记忆。
+- **语音入口**——可选的 sidecar 管线（唤醒词 → 语音识别 → LLM → 语音合成），硬件门控，为嵌入式麦克风准备。
+- **PWA 控制台**——任务队列、任务详情、人工审批的 Web 控制台，可安装为渐进式 Web 应用。
+- **防御与安全层**——权限 Tier、熔断器、范围漂移与死循环检测；执行侧加固：沙箱、网络白名单、密钥脱敏、审计日志。
+- **极致轻量**——稳态 RSS 约 **13–20 MB**，为资源受限的单板电脑而生。
+- **干净交叉编译**——每个平台一个静态二进制，无需 CGO（纯 Go SQLite，`modernc.org/sqlite`）。
+
+## 架构
+
+```
+                        ┌───────────────────────────┐
+                        │   你：CLI / PWA / 语音     │
+                        └─────────────┬─────────────┘
+                                      │
+                 ┌────────────────────▼────────────────────┐
+                 │            entry · panda ask             │
+                 │   分类：answer | tool_call | task        │
+                 └────────────────────┬────────────────────┘
+                                      │  通过 WebSocket + JSON 委派
+                       ┌──────────────┴───────────────┐
+                       │                              │
+          ┌────────────▼────────────┐     ┌────────────▼────────────┐
+          │         工作节点         │     │         工作节点         │
+          │   如 MacBook（Full）    │     │   如 香橙派（Micro）      │
+          └─────────────────────────┘     └─────────────────────────┘
+```
+
+每个节点内部：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ cmd/panda      守护进程 + CLI（ask / status / queue / task…） │
+├─────────────────────────────────────────────────────────────┤
+│ entry          统一入口模型（answer · tool_call · task）      │
+│ scheduler      委派与路由决策                                │
+│ commander      三层执行：native · agent · manual             │
+│ defense        权限 Tier · 熔断 · 范围漂移 · 循环检测         │
+│ security       沙箱 · 白名单 · 脱敏 · 审计                   │
+│ memory         USER/MEMORY 存储 + Dreaming 引擎              │
+│ skills         SKILL.md 程序性记忆                           │
+├─────────────────────────────────────────────────────────────┤
+│ bus            WebSocket 传输 + 消息信封                     │
+│ ledger         能力目录（能力卡、心跳）                      │
+│ storage        SQLite（WAL）+ 迁移                           │
+│ log / util     结构化 JSON 日志，UUIDv7                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## 快速开始
+
+### 前置条件
+
+| 工具 | 版本 |
+|---|---|
+| Go | 1.22+（已在 1.26.5 验证） |
+| Python | 3.10+（Agent 适配器 / 语音 sidecar） |
+| make | 任意较新版本 |
+
+### 构建
+
+```bash
+make build          # 本机二进制 → bin/panda（release，剥离符号）
+make test           # 运行完整测试套件
+make vet            # 静态分析
+```
+
+为你的实际设备交叉编译：
+
+```bash
+make build-linux-arm64   # → bin/panda-linux-arm64  （如香橙派）
+make build-linux-amd64   # → bin/panda-linux-amd64
+make build-darwin-arm64  # → bin/panda-darwin-arm64
+make build-windows-amd64 # → bin/panda-windows-amd64.exe
+```
+
+### 配置
+
+复制示例配置，为每个节点修改：
+
+```bash
+cp config.example.yaml /etc/panda/config.yaml   # 或留在本地，用 --config 指定
+```
+
+配置很精简，注释自解释。最核心的两处：
+
+```yaml
+network:
+  listen_addr: ":7836"        # WebSocket 监听地址
+  peers:                      # 网络中的其他节点
+    - "orangepi3b.tailnet.ts.net:7836"
+model:
+  base_url: "https://api.deepseek.com/anthropic"  # 任何兼容 /v1/messages 的端点
+  model: "deepseek-chat"
+  # api_key: ""               # 优先使用 PANDA_MODEL_API_KEY 环境变量
+```
+
+密钥（模型 API key）尽量从 `PANDA_MODEL_API_KEY` 环境变量读取，而非配置文件。
+
+### 运行守护进程
+
+```bash
+./bin/panda --config config.yaml --card config/capabilities.macbook.yaml
+```
+
+每个**能执行任务**的节点都应带上自己的能力卡启动。没有能力卡的节点仍参与心跳，但不会被委派任务。
+
+### 快速上手
+
+```bash
+# 问任何问题——入口模型自动决定是回答、调用工具、还是委派
+./bin/panda ask "总结一下最近一周的 git log"
+
+# 查看网络与队列
+./bin/panda status
+./bin/panda queue
+
+# 查看 / 取消某个任务
+./bin/panda task <task-id>
+./bin/panda cancel <task-id>
+./bin/panda logs <task-id>
+
+# 管理 skills
+./bin/panda skill
+```
+
+## CLI 参考
+
+| 命令 | 说明 |
+|---|---|
+| `panda`（无参数） | 运行守护进程：节点注册、心跳、WS 服务、peer 重连 |
+| `panda ask [--config PATH] [--card PATH] [--authorize] "<问题>"` | 统一入口：分类为 answer / tool_call / task 并执行 |
+| `panda status` | 节点与任务状态 |
+| `panda queue` | 列出任务队列 |
+| `panda task [--config PATH] <task-id>` | 任务详情 |
+| `panda cancel [--config PATH] <task-id>` | 取消任务（级联到执行节点） |
+| `panda logs [--config PATH] <task-id>` | 任务执行日志 |
+| `panda skill` | Skill 存储管理 |
+| `panda version` | 打印版本号 |
+
+## 配置参考
+
+| 段 | 键 | 含义 |
+|---|---|---|
+| `node` | `name` | 唯一节点 ID（全网使用） |
+| `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → 调度器层级 |
+| `network` | `listen_addr` | WebSocket 监听地址 |
+| `network` | `panel_addr` | PWA 面板 HTTP 地址（空 = 禁用） |
+| `network` | `peers` | 要拨号的手动 peer 地址 |
+| `storage` | `db_path` | SQLite 数据库路径 |
+| `storage` | `context_path` | 上下文快照存储 |
+| `storage` | `memory_path` | 个人记忆根目录（Phase 3） |
+| `storage` | `projects_path` | 项目记忆根目录（Phase 3） |
+| `storage` | `skills_path` | 程序性记忆根目录（Phase 3） |
+| `storage` | `work_path` | Agent 执行目录；范围漂移在此测量 |
+| `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
+| `model` | `base_url` | Anthropic 兼容 Messages API 基地址 |
+| `model` | `model` | 模型 id（如 `deepseek-chat`、`deepseek-reasoner`） |
+| `model` | `api_key` | 密钥——优先用 `PANDA_MODEL_API_KEY` |
+
+配置加载优先级：`--config` 参数 > 环境变量 > 默认 `/etc/panda/config.yaml`。
+
+## 目录结构
+
+```
+cmd/panda/            守护进程入口 + CLI 子命令
+internal/
+  core/               节点生命周期、状态机、消息路由、本地执行
+  entry/              统一入口模型（分类 · 校验 · 降级）
+  bus/                WebSocket 传输 + 消息信封
+  commander/          三层能力执行（native / agent / manual）
+  scheduler/          委派与路由决策
+  defense/            权限 Tier、熔断器、范围漂移与循环检测
+  security/           执行侧加固（沙箱、白名单、审计）
+  panel/              PWA 控制台 HTTP API
+  ledger/             能力目录（能力卡、心跳、员工缓存）
+  ctxstore/           上下文快照 LRU
+  memory/             双层记忆 + Dreaming 引擎
+  skills/             程序性记忆（SKILL.md 自进化）
+  config/             YAML 配置加载
+  storage/            SQLite（WAL）封装 + 迁移
+  log/                结构化 JSON 日志（slog）
+  util/               UUIDv7
+adapters/             Agent 适配器（claude_code.py、opencode.py）
+extensions/voice/     语音 sidecar（唤醒 / STT / TTS / VAD）
+web/pwa/              PWA 前端（manifest + service worker + 面板视图）
+config/               示例能力卡（macbook、orangepi3b）
+testdata/             多节点 loopback 测试配置
+```
+
+## 测试
+
+```bash
+make test        # 完整套件
+make vet         # go vet
+```
+
+核心协议不变量由真实双节点 WebSocket 测试覆盖（无需 Tailscale）：
+
+```bash
+go test ./internal/core/ -run 'TestTwoNodeProtocol|TestDelegateIdempotent|TestCancelPropagates' -v
+```
+
+## 部署
+
+PANDA 面向低功耗设备。上硬件前请先验证稳态内存——单次 `ps` 采样因 GC 噪声并不可靠，多采几次：
+
+```bash
+make build
+for i in 1 2 3 4 5; do
+  ./bin/panda --config testdata/mac-config.yaml >/dev/null 2>&1 &
+  PID=$!; sleep 3
+  ps -o rss= -p $PID | awk '{printf "%d MB\n", $1/1024}'
+  kill -TERM $PID; wait $PID 2>/dev/null
+done
+```
+
+## 技术栈
+
+| 层 | 选型 |
+|---|---|
+| 核心守护进程 | Go（modernc.org/sqlite —— 纯 Go，无 CGO） |
+| 胶水 / 适配器 | Python 3.10+ |
+| 传输 | WebSocket + JSON 信封 |
+| 状态 | WAL 模式的 SQLite |
+| 前端 | PWA（原生 Web 应用 + service worker） |
+| LLM 访问 | Anthropic 兼容 `/v1/messages` 端点（如 DeepSeek） |
+
+## 当前状态
+
+Phase 3（记忆 + 语音 + 安全）进行中。记忆层、Dreaming 引擎、Skill 系统、PWA 面板与执行侧加固已完成；语音入口代码完成，等待麦克风硬件实测。
+
+## 致谢
+
+灵感来自分布式多 Agent 调度理论（ATC-MARL）以及 Hermes 与 OpenClaw 的记忆模式。由 Xenith 构建。
