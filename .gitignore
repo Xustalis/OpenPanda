@@ -44,3 +44,9 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Local / personal tooling (unrelated to PANDA core)
+.workbuddy/
+check_emails.py
+fetch_emails.py
+.claude/settings.local.json
