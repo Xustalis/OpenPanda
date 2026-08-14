@@ -1,0 +1,9 @@
+{
+  "name": "PANDA 控制台",
+  "short_name": "PANDA",
+  "description": "PANDA 分布式助手控制台：任务队列、详情与人工审批",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#111827"
+}

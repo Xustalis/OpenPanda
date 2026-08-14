@@ -8,6 +8,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/xenith/panda/internal/ledger"
 	"github.com/xenith/panda/internal/log"
 	"github.com/xenith/panda/internal/memory"
+	"github.com/xenith/panda/internal/panel"
 	"github.com/xenith/panda/internal/skills"
 	"github.com/xenith/panda/internal/storage"
 )
@@ -175,6 +177,22 @@ func runDaemon() {
 		"listen", cfg.Network.ListenAddr,
 		"db", cfg.Storage.DBPath,
 	)
+
+	// PWA control panel (design §11 / P3-25): an HTTP server serving the static
+	// web app plus the task queue/approval API. Optional; empty panel_addr
+	// disables it.
+	if cfg.Network.PanelAddr != "" {
+		panelSrv := &http.Server{
+			Addr:    cfg.Network.PanelAddr,
+			Handler: panel.New(coreNode.TaskStore(), "web/pwa"),
+		}
+		go func() {
+			logger.Info("panel listening", "addr", cfg.Network.PanelAddr)
+			if err := panelSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Warn("panel server", "err", err)
+			}
+		}()
+	}
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- coreNode.Listen(ctx, cfg.Network.ListenAddr) }()

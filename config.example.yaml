@@ -6,6 +6,7 @@ node:
 
 network:
   listen_addr: ":7836"           # WebSocket listener
+  panel_addr: ":7840"            # HTTP PWA control panel (empty = disabled)
   peers:                         # manual peers
     - "orangepi3b.tailnet-name.ts.net:7836"
 

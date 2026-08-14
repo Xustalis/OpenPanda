@@ -314,6 +314,43 @@ func (s *TaskStore) Pause(ctx context.Context, taskID, owner, reason string) err
 		map[string]any{"reason": reason})
 }
 
+// Approve accepts a reviewed task, moving it review -> done. Approval is a
+// human override (design §14.2 Layer 4), so — like Cancel — it requires only
+// that the task be in review, not that the caller hold the lease.
+func (s *TaskStore) Approve(ctx context.Context, taskID string) error {
+	cur, err := s.Get(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if cur.State != StateReview {
+		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateReview)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=? WHERE task_id=?`,
+		StateDone, s.now(), taskID); err != nil {
+		return fmt.Errorf("approve task: %w", err)
+	}
+	return s.recordEvent(ctx, taskID, EvReview, map[string]any{"approved": true})
+}
+
+// Reject fails a reviewed task, moving it review -> failed. Like Approve, it is
+// a human override and does not require the lease.
+func (s *TaskStore) Reject(ctx context.Context, taskID, reason string) error {
+	cur, err := s.Get(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if cur.State != StateReview {
+		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateReview)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=? WHERE task_id=?`,
+		StateFailed, s.now(), taskID); err != nil {
+		return fmt.Errorf("reject task: %w", err)
+	}
+	return s.recordEvent(ctx, taskID, EvReview, map[string]any{"rejected": reason})
+}
+
 // FailFromRemote records a remote executor's failure on the delegator's copy.
 // Mirrors CompleteFromRemote: any non-terminal state is accepted.
 func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason string) error {

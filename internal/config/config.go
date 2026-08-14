@@ -26,6 +26,7 @@ type NodeConfig struct {
 // NetworkConfig controls the WebSocket listener and manual peers.
 type NetworkConfig struct {
 	ListenAddr string   `yaml:"listen_addr"` // e.g. ":7836"
+	PanelAddr  string   `yaml:"panel_addr"`  // HTTP panel/PWA listener, e.g. ":7840"
 	Peers      []string `yaml:"peers"`       // e.g. "orangepi3b.tailnet-name.ts.net:7836"
 }
 
@@ -62,6 +63,7 @@ func Default() *Config {
 		},
 		Network: NetworkConfig{
 			ListenAddr: ":7836",
+			PanelAddr:  ":7840",
 		},
 		Storage: StorageConfig{
 			DBPath:       "./data/panda.db",
@@ -117,6 +119,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("PANDA_LISTEN_ADDR"); v != "" {
 		c.Network.ListenAddr = v
+	}
+	if v := os.Getenv("PANDA_PANEL_ADDR"); v != "" {
+		c.Network.PanelAddr = v
 	}
 	if v := os.Getenv("PANDA_DB_PATH"); v != "" {
 		c.Storage.DBPath = v
