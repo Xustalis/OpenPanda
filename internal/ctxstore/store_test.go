@@ -3,6 +3,8 @@ package ctxstore
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/xenith/panda/internal/storage"
@@ -145,5 +147,41 @@ func TestPackHashDeterministic(t *testing.T) {
 	}
 	if Hash([]byte("x")) != Hash([]byte("x")) {
 		t.Fatalf("Hash must be deterministic")
+	}
+}
+
+// TestConcurrentPutsRespectCap hammers Put from multiple goroutines with the
+// store over capacity, verifying the transactional upsert+evict (P2-14) never
+// errors and never leaves the store above its cap.
+func TestConcurrentPutsRespectCap(t *testing.T) {
+	ctx := context.Background()
+	s := openStoreDB(t, 10)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 128)
+	for w := 0; w < 8; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < 16; i++ {
+				h := fmt.Sprintf("h-%d-%d", w, i)
+				if err := s.Put(ctx, h, "file", []byte("data"), nil); err != nil {
+					errs <- err
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent put: %v", err)
+	}
+
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM context`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count > 10 {
+		t.Fatalf("count = %d, want <= 10 after concurrent puts", count)
 	}
 }

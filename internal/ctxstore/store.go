@@ -52,11 +52,19 @@ func MaxEntriesForResourceClass(rc string) int {
 }
 
 // Put upserts a snapshot under its hash and evicts least-recently-accessed
-// entries once the store exceeds its cap.
+// entries once the store exceeds its cap. The upsert and the count→select→
+// delete eviction run in one transaction (P2-14): outside a tx, concurrent
+// Puts can each read an over-cap count and each evict — or a crash between
+// upsert and evict leaves the store over its cap indefinitely.
 func (s *Store) Put(ctx context.Context, hash, typ string, data []byte, refs []string) error {
 	refsJSON, _ := json.Marshal(refs)
 	now := storage.Now()
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO context (ctx_hash, ctx_type, data_blob, refs_json, created_at, last_access, access_count)
 		VALUES (?, ?, ?, ?, ?, ?, 0)
 		ON CONFLICT(ctx_hash) DO UPDATE SET
@@ -66,7 +74,10 @@ func (s *Store) Put(ctx context.Context, hash, typ string, data []byte, refs []s
 	if err != nil {
 		return fmt.Errorf("put context: %w", err)
 	}
-	return s.evict(ctx)
+	if err := s.evictTx(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Get returns a snapshot and bumps its access recency, so the LRU clock sees
@@ -105,34 +116,38 @@ func (s *Store) Contains(ctx context.Context, hash string) (bool, error) {
 	return true, nil
 }
 
-// evict deletes least-recently-accessed entries until count <= max. It is a
-// best-effort approximation of LRU (recency, then access count as tiebreak).
-func (s *Store) evict(ctx context.Context) error {
+// evictTx is evict inside Put's transaction (P2-14).
+func (s *Store) evictTx(ctx context.Context, tx *sql.Tx) error {
 	if s.max <= 0 {
 		return nil
 	}
 	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM context`).Scan(&count); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM context`).Scan(&count); err != nil {
 		return fmt.Errorf("count context: %w", err)
 	}
 	if count <= s.max {
 		return nil
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := tx.QueryContext(ctx, `
 		SELECT ctx_hash FROM context ORDER BY last_access ASC, access_count ASC LIMIT ?`,
 		count-s.max)
 	if err != nil {
 		return fmt.Errorf("select evict: %w", err)
 	}
-	defer rows.Close()
 	var hashes []string
 	for rows.Next() {
 		var h string
 		if err := rows.Scan(&h); err != nil {
+			rows.Close()
 			return err
 		}
 		hashes = append(hashes, h)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
 	if len(hashes) == 0 {
 		return nil
 	}
@@ -143,7 +158,7 @@ func (s *Store) evict(ctx context.Context) error {
 	for i, h := range hashes {
 		args[i] = h
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM context WHERE ctx_hash IN (`+ph+`)`, args...); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM context WHERE ctx_hash IN (`+ph+`)`, args...); err != nil {
 		return fmt.Errorf("evict: %w", err)
 	}
 	return nil

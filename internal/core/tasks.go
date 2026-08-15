@@ -80,18 +80,20 @@ func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project,
 		State: StateSubmitted, OwnerNode: owner, AttemptID: attemptID,
 		StateVersion: 0, Chain: chain, CreatedAt: now, UpdatedAt: now,
 	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO tasks (task_id, parent_id, project, title, state, owner_node,
-			attempt_id, state_version, chain_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.TaskID, t.ParentID, t.Project, t.Title, t.State, t.OwnerNode,
-		t.AttemptID, t.StateVersion, string(chainJSON), now, now)
+	err = s.withTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO tasks (task_id, parent_id, project, title, state, owner_node,
+				attempt_id, state_version, chain_json, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			t.TaskID, t.ParentID, t.Project, t.Title, t.State, t.OwnerNode,
+			t.AttemptID, t.StateVersion, string(chainJSON), now, now); err != nil {
+			return fmt.Errorf("insert task: %w", err)
+		}
+		return s.recordEventTx(ctx, tx, taskID, EvSubmit, map[string]any{
+			"parent": parentID, "owner": owner,
+		})
+	})
 	if err != nil {
-		return Task{}, fmt.Errorf("insert task: %w", err)
-	}
-	if err := s.recordEvent(ctx, taskID, EvSubmit, map[string]any{
-		"parent": parentID, "owner": owner,
-	}); err != nil {
 		return Task{}, err
 	}
 	return t, nil
@@ -180,6 +182,41 @@ func (s *TaskStore) notifyReview(t Task) {
 	go fn(t)
 }
 
+// withTx runs fn inside a single SQLite transaction, committing on success and
+// rolling back on any error (P2-1). State UPDATEs and their audit-event INSERTs
+// must commit or fail together: a crash between them would silently drop the
+// event and break the audit trail (and DispatchTarget/DeclinedBy, which read
+// authorization facts from task_events).
+func (s *TaskStore) withTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// recordEventTx is recordEvent inside an existing transaction.
+func (s *TaskStore) recordEventTx(ctx context.Context, tx *sql.Tx, taskID, typ string, data any) error {
+	var raw []byte
+	switch v := data.(type) {
+	case []byte:
+		raw = v
+	default:
+		raw, _ = json.Marshal(v)
+	}
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO task_events (task_id, ts, type, data_json) VALUES (?, ?, ?, ?)`,
+		taskID, s.now(), typ, string(raw))
+	if err != nil {
+		return fmt.Errorf("record event %s: %w", typ, err)
+	}
+	return nil
+}
+
 // applyCAS writes the new state + event atomically, succeeding only if the
 // stored (state, owner_node) still match what the caller read. This closes the
 // TOCTOU window between the Get-and-check and the UPDATE (P1-2): without the
@@ -193,18 +230,20 @@ func (s *TaskStore) applyCAS(ctx context.Context, taskID, from, to, owner, attem
 		b, _ := json.Marshal(result)
 		resultJSON = string(b)
 	}
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, owner_node=?, attempt_id=?, state_version=state_version+1,
-			result_json=COALESCE(?, result_json), updated_at=?
-		WHERE task_id=? AND state=? AND owner_node=?`,
-		to, owner, attemptID, resultJSON, now, taskID, from, owner)
-	if err != nil {
-		return fmt.Errorf("update task state: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("%w: task %s state=%s owner=%s", ErrConflict, taskID, from, owner)
-	}
-	return s.recordEvent(ctx, taskID, event, dataJSON)
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state=?, owner_node=?, attempt_id=?, state_version=state_version+1,
+				result_json=COALESCE(?, result_json), updated_at=?
+			WHERE task_id=? AND state=? AND owner_node=?`,
+			to, owner, attemptID, resultJSON, now, taskID, from, owner)
+		if err != nil {
+			return fmt.Errorf("update task state: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: task %s state=%s owner=%s", ErrConflict, taskID, from, owner)
+		}
+		return s.recordEventTx(ctx, tx, taskID, event, dataJSON)
+	})
 }
 
 // applyState writes the new state + event atomically, succeeding only if the
@@ -221,18 +260,20 @@ func (s *TaskStore) applyState(ctx context.Context, taskID, from, to, owner, att
 		b, _ := json.Marshal(result)
 		resultJSON = string(b)
 	}
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, owner_node=?, attempt_id=?, state_version=state_version+1,
-			result_json=COALESCE(?, result_json), updated_at=?
-		WHERE task_id=? AND state=?`,
-		to, owner, attemptID, resultJSON, now, taskID, from)
-	if err != nil {
-		return fmt.Errorf("update task state: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("%w: task %s state=%s", ErrConflict, taskID, from)
-	}
-	return s.recordEvent(ctx, taskID, event, dataJSON)
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state=?, owner_node=?, attempt_id=?, state_version=state_version+1,
+				result_json=COALESCE(?, result_json), updated_at=?
+			WHERE task_id=? AND state=?`,
+			to, owner, attemptID, resultJSON, now, taskID, from)
+		if err != nil {
+			return fmt.Errorf("update task state: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: task %s state=%s", ErrConflict, taskID, from)
+		}
+		return s.recordEventTx(ctx, tx, taskID, event, dataJSON)
+	})
 }
 
 // recordEvent appends to task_events. The data parameter is either a map or
@@ -333,17 +374,19 @@ func (s *TaskStore) Accept(ctx context.Context, taskID, owner string) error {
 	}
 	// Acceptance is the moment the lease transfers from the delegator to the
 	// executor. The state guard ensures a concurrent cancel/expire wins.
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, owner_node=?, state_version=state_version+1, updated_at=?
-		WHERE task_id=? AND state=?`,
-		StateRunning, owner, s.now(), taskID, StateDispatched)
-	if err != nil {
-		return fmt.Errorf("accept task: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("%w: task %s accepted concurrently", ErrConflict, taskID)
-	}
-	return s.recordEvent(ctx, taskID, EvAccept, map[string]any{"owner": owner})
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state=?, owner_node=?, state_version=state_version+1, updated_at=?
+			WHERE task_id=? AND state=?`,
+			StateRunning, owner, s.now(), taskID, StateDispatched)
+		if err != nil {
+			return fmt.Errorf("accept task: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: task %s accepted concurrently", ErrConflict, taskID)
+		}
+		return s.recordEventTx(ctx, tx, taskID, EvAccept, map[string]any{"owner": owner})
+	})
 }
 
 // Decline rejects a dispatched task, moving it back to queued and releasing
@@ -363,17 +406,19 @@ func (s *TaskStore) Decline(ctx context.Context, taskID, parent, reason, by stri
 	// Guarded UPDATE because the lease changes hands (executor -> parent): the
 	// state/owner guard ensures a concurrent accept/decline cannot both win.
 	dataJSON, _ := json.Marshal(map[string]any{"reason": reason, "by": by})
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, owner_node=?, state_version=state_version+1, updated_at=?
-		WHERE task_id=? AND state=? AND owner_node=?`,
-		StateQueued, parent, s.now(), taskID, StateDispatched, cur.OwnerNode)
-	if err != nil {
-		return fmt.Errorf("decline task: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("%w: task %s declined concurrently", ErrConflict, taskID)
-	}
-	return s.recordEvent(ctx, taskID, EvDecline, dataJSON)
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state=?, owner_node=?, state_version=state_version+1, updated_at=?
+			WHERE task_id=? AND state=? AND owner_node=?`,
+			StateQueued, parent, s.now(), taskID, StateDispatched, cur.OwnerNode)
+		if err != nil {
+			return fmt.Errorf("decline task: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: task %s declined concurrently", ErrConflict, taskID)
+		}
+		return s.recordEventTx(ctx, tx, taskID, EvDecline, dataJSON)
+	})
 }
 
 // SetWaitingContext moves dispatched -> waiting_context.
@@ -478,17 +523,19 @@ func (s *TaskStore) Approve(ctx context.Context, taskID string) error {
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateReview)
 	}
 	// Guarded UPDATE (P2-8): a concurrent reject/approve must not both win.
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
-		WHERE task_id=? AND state=?`,
-		StateDone, s.now(), taskID, StateReview)
-	if err != nil {
-		return fmt.Errorf("approve task: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("%w: task %s approved concurrently", ErrConflict, taskID)
-	}
-	return s.recordEvent(ctx, taskID, EvReview, map[string]any{"approved": true})
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
+			WHERE task_id=? AND state=?`,
+			StateDone, s.now(), taskID, StateReview)
+		if err != nil {
+			return fmt.Errorf("approve task: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: task %s approved concurrently", ErrConflict, taskID)
+		}
+		return s.recordEventTx(ctx, tx, taskID, EvReview, map[string]any{"approved": true})
+	})
 }
 
 // Reject fails a reviewed task, moving it review -> failed. Like Approve, it is
@@ -502,17 +549,19 @@ func (s *TaskStore) Reject(ctx context.Context, taskID, reason string) error {
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateReview)
 	}
 	// Guarded UPDATE (P2-8): a concurrent approve/reject must not both win.
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
-		WHERE task_id=? AND state=?`,
-		StateFailed, s.now(), taskID, StateReview)
-	if err != nil {
-		return fmt.Errorf("reject task: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("%w: task %s rejected concurrently", ErrConflict, taskID)
-	}
-	return s.recordEvent(ctx, taskID, EvReview, map[string]any{"rejected": reason})
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
+			WHERE task_id=? AND state=?`,
+			StateFailed, s.now(), taskID, StateReview)
+		if err != nil {
+			return fmt.Errorf("reject task: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: task %s rejected concurrently", ErrConflict, taskID)
+		}
+		return s.recordEventTx(ctx, tx, taskID, EvReview, map[string]any{"rejected": reason})
+	})
 }
 
 // FailFromRemote records a remote executor's failure on the delegator's copy.
@@ -759,17 +808,19 @@ func (s *TaskStore) Cancel(ctx context.Context, taskID string) error {
 	// Guarded UPDATE (P1-4): a concurrent Complete between the pre-check and
 	// this write must win — overwriting done back to cancelled would lose the
 	// recorded result.
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
-		WHERE task_id=? AND state=?`,
-		StateCancelled, s.now(), taskID, cur.State)
-	if err != nil {
-		return fmt.Errorf("cancel task: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("%w: task %s cancelled concurrently", ErrConflict, taskID)
-	}
-	return s.recordEvent(ctx, taskID, EvCancel, map[string]any{"from": cur.State})
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
+			WHERE task_id=? AND state=?`,
+			StateCancelled, s.now(), taskID, cur.State)
+		if err != nil {
+			return fmt.Errorf("cancel task: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: task %s cancelled concurrently", ErrConflict, taskID)
+		}
+		return s.recordEventTx(ctx, tx, taskID, EvCancel, map[string]any{"from": cur.State})
+	})
 }
 
 // CancelCascade cancels taskID and every descendant. Descendants are found by
