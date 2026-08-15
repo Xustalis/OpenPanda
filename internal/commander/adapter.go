@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/xenith/panda/internal/config"
 	"github.com/xenith/panda/internal/executil"
@@ -59,6 +60,17 @@ func modelEnv(model config.ModelConfig) []string {
 	return env
 }
 
+// adapterTimeoutS is the budget advertised to the adapter in its request.
+// adapterHardTimeout is the enforced wall-clock limit (P1-18): TimeoutS used
+// to be a polite JSON suggestion an adapter could ignore and run forever, so
+// the Go side wraps the spawn in a hard context deadline slightly past the
+// advertised budget. Combined with process-group cancellation (executil),
+// hitting the deadline kills the adapter and every CLI it spawned.
+// adapterHardTimeout is a var so tests can shrink it.
+const adapterTimeoutS = 600
+
+var adapterHardTimeout = (adapterTimeoutS + 30) * time.Second
+
 // runAdapterProcess spawns adapters/<name> with a JSON request on stdin and
 // reads a JSON result from stdout. The model config is injected via env so the
 // adapter reaches the configured provider; the subprocess is sandboxed to the
@@ -72,7 +84,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		}
 	}
 
-	req := AdapterRequest{Prompt: prompt, TimeoutS: 600, CWD: cwd}
+	req := AdapterRequest{Prompt: prompt, TimeoutS: adapterTimeoutS, CWD: cwd}
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
 		return AgentResult{OK: false, Result: "bad adapter request", ExitCode: 1}
@@ -82,6 +94,8 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	if err != nil {
 		return AgentResult{OK: false, Result: security.Redact(err.Error()), ExitCode: 1}
 	}
+	ctx, cancel := context.WithTimeout(ctx, adapterHardTimeout)
+	defer cancel()
 	cmd := executil.CommandContext(ctx, "python3", path)
 	cmd.Stdin = bytes.NewReader(reqJSON)
 	var stdout, stderr executil.Capture
@@ -90,6 +104,9 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	security.NewSandbox(cwd).Apply(cmd, modelEnv(model)...)
 
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return AgentResult{OK: false, Result: "adapter timed out (hard limit)", ExitCode: 124}
+		}
 		code := 1
 		if ee, ok := err.(*exec.ExitError); ok {
 			code = ee.ExitCode()

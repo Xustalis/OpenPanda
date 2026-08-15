@@ -130,3 +130,53 @@ func TestTierFromCommandNormalizesAndScripts(t *testing.T) {
 		}
 	}
 }
+
+// TestTierFromCommandBatch2 covers the three classifier bypasses from the
+// 2026-08-15 deep review: P1-12 (env -S), P1-13 (find/git/php/tar/make/ssh),
+// P1-14 (blacklist-only interpreter-code scanning).
+func TestTierFromCommandBatch2(t *testing.T) {
+	cases := []struct {
+		command string
+		args    []string
+		want    int
+	}{
+		// P1-12: env -S/--split-string carries a command line as its value;
+		// skipping it unwrapped to nothing and auto-passed.
+		{"env", []string{"-S", "rm -rf /"}, TierIrreversible},
+		{"env", []string{"--split-string", "rm -rf /"}, TierIrreversible},
+		{"env", []string{"--split-string=rm -rf /"}, TierIrreversible},
+		{"env", []string{"FOO=bar", "-S", "sudo apt purge x"}, TierIrreversible},
+		{"env", []string{"-S", "echo hello"}, TierReversible},
+
+		// P1-13: execution-capable flags/subcommands fail closed.
+		{"find", []string{"/tmp", "-name", "*.log"}, TierReversible},
+		{"find", []string{"/", "-name", "*.conf", "-exec", "cat", "{}", ";"}, TierIrreversible},
+		{"find", []string{"/tmp", "-delete"}, TierIrreversible},
+		{"git", []string{"status"}, TierReversible},
+		{"git", []string{"log", "--oneline"}, TierReversible},
+		{"git", []string{"push", "origin", "main"}, TierIrreversible},
+		{"git", []string{"commit", "-m", "x"}, TierIrreversible}, // runs hooks
+		{"git", []string{"-C", "/repo", "push"}, TierIrreversible},
+		{"git", []string{"reset", "--hard"}, TierIrreversible},
+		{"php", []string{"-r", "exec('rm -rf /');"}, TierIrreversible},
+		{"tar", []string{"-cf", "a.tar", "dir/"}, TierReversible},
+		{"tar", []string{"-cf", "a.tar", "--checkpoint-action=exec=sh x.sh", "dir/"}, TierIrreversible},
+		{"tar", []string{"--use-compress-program=evil", "-cf", "a.tar", "dir/"}, TierIrreversible},
+		{"make", []string{"all"}, TierIrreversible},
+		{"ssh", []string{"host", "uptime"}, TierIrreversible},
+
+		// P1-14: blacklist tokens miss destructive one-liners; only pure
+		// output stays Tier 1.
+		{"python3", []string{"-c", "os.remove('important')"}, TierIrreversible},
+		{"python3", []string{"-c", "import shutil"}, TierIrreversible},
+		{"python3", []string{"-c", "print(2 + 2)"}, TierReversible},
+		{"bash", []string{"-c", "echo hello world"}, TierReversible},
+		{"node", []string{"-e", "console.log(1)"}, TierReversible},
+		{"bash", []string{"-c", "echo $(whoami)"}, TierIrreversible}, // composition behind echo
+	}
+	for _, tc := range cases {
+		if got := TierFromCommand(tc.command, tc.args...); got != tc.want {
+			t.Fatalf("TierFromCommand(%q, %v)=%d, want %d", tc.command, tc.args, got, tc.want)
+		}
+	}
+}

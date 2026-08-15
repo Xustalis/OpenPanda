@@ -49,6 +49,15 @@ func TierFromCommand(command string, args ...string) int {
 	// cmd, timeout 5 cmd, busybox cmd, …). Classify the inner command, not the
 	// wrapper's name, so a destructive payload cannot hide behind the wrapper.
 	if passThroughVerbs[command] {
+		// env -S/--split-string is special (P1-12): its value is not a flag
+		// argument to skip but a command line to split and classify. Treating
+		// it as a skipped value let `env -S "rm -rf /"` unwrap to nothing and
+		// auto-pass as Tier 1.
+		if command == "env" {
+			if inner, innerArgs, ok := unwrapEnvSplitString(args); ok {
+				return TierFromCommand(inner, innerArgs...)
+			}
+		}
 		if inner, innerArgs := unwrapPassThrough(command, args); inner != "" {
 			return TierFromCommand(inner, innerArgs...)
 		}
@@ -65,6 +74,12 @@ func TierFromCommand(command string, args ...string) int {
 			return TierIrreversible
 		}
 	}
+	// Commands that are benign with plain arguments but run arbitrary code or
+	// destroy state when specific flags/subcommands appear (P1-13): fail
+	// closed to Tier 2 when the risky form is present.
+	if risk := commandArgRisks[command]; risk != nil && risk(args) {
+		return TierIrreversible
+	}
 	return TierReversible
 }
 
@@ -79,6 +94,9 @@ var destructiveVerbs = map[string]bool{
 	"shutdown": true, "reboot": true, "poweroff": true,
 	"systemctl": true, "mount": true, "umount": true,
 	"iptables": true, "nft": true,
+	// Remote execution and arbitrary-recipe execution (P1-13): ssh runs a
+	// command on another machine; make runs whatever the Makefile says.
+	"ssh": true, "make": true,
 }
 
 // interpreterCodeFlag maps an interpreter executable to the flag that means
@@ -89,6 +107,110 @@ var interpreterCodeFlag = map[string]string{
 	"bash": "-c", "sh": "-c", "zsh": "-c", "dash": "-c", "ksh": "-c", "fish": "-c",
 	"python": "-c", "python2": "-c", "python3": "-c",
 	"perl": "-e", "ruby": "-e", "node": "-e", "nodejs": "-e", "deno": "-e",
+	"php": "-r",
+}
+
+// commandArgRisks are per-command argument scanners (P1-13): the command is
+// Tier 1 with plain arguments but fails closed to Tier 2 when a flag or
+// subcommand that executes code or destroys state is present. These are
+// backstops; an explicit capability-card tier always wins.
+var commandArgRisks = map[string]func(args []string) bool{
+	// find -exec/-execdir/-ok/-okdir run a command per match; -delete removes
+	// every match.
+	"find": hasAnyArg("-exec", "-execdir", "-ok", "-okdir", "-delete"),
+	// tar --checkpoint-action=exec=CMD and --use-compress-program/-I run an
+	// external command mid-archive.
+	"tar": func(args []string) bool {
+		return hasAnyArgPrefix(args, "--checkpoint-action", "--use-compress-program") ||
+			hasAnyArg("-I")(args)
+	},
+	// git subcommands that run hooks (arbitrary code from .git/hooks) or push
+	// to / rewrite shared state.
+	"git": func(args []string) bool {
+		sub := firstPositional(args)
+		return gitRiskySubcommands[sub]
+	},
+}
+
+// gitRiskySubcommands run hooks or have irreversible/shared-state effects.
+var gitRiskySubcommands = map[string]bool{
+	"push": true, "commit": true, "merge": true, "rebase": true,
+	"reset": true, "clean": true, "filter-branch": true, "update-ref": true,
+}
+
+// hasAnyArg reports a scanner that is true when any argument equals one of the
+// given flags exactly.
+func hasAnyArg(flags ...string) func(args []string) bool {
+	return func(args []string) bool {
+		for _, a := range args {
+			for _, f := range flags {
+				if a == f {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
+
+// hasAnyArgPrefix reports whether any argument starts with one of the given
+// prefixes (matching both "--flag" and "--flag=value" forms).
+func hasAnyArgPrefix(args []string, prefixes ...string) bool {
+	for _, a := range args {
+		for _, p := range prefixes {
+			if a == p || strings.HasPrefix(a, p+"=") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// firstPositional returns the first argument that is not a flag (and not a
+// value of git's global value-flags like -C/-c), which for git is the
+// subcommand.
+func firstPositional(args []string) string {
+	valueFlags := map[string]bool{"-C": true, "-c": true, "--git-dir": true, "--work-tree": true, "--exec-path": true}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "" {
+			continue
+		}
+		if a[0] == '-' {
+			if valueFlags[a] && i+1 < len(args) {
+				i++ // skip the flag's value
+			}
+			continue
+		}
+		return a
+	}
+	return ""
+}
+
+// unwrapEnvSplitString handles `env -S "cmd args..."`: the flag's value is a
+// command line, so it is split on whitespace and the first word is returned as
+// the real command. ok is false when no -S flag with a value is present.
+func unwrapEnvSplitString(args []string) (string, []string, bool) {
+	for i, a := range args {
+		var v string
+		switch {
+		case a == "-S" || a == "--split-string":
+			if i+1 >= len(args) {
+				return "", nil, false
+			}
+			v = args[i+1]
+		case strings.HasPrefix(a, "--split-string="):
+			v = strings.TrimPrefix(a, "--split-string=")
+		default:
+			continue
+		}
+		fields := strings.Fields(v)
+		if len(fields) == 0 {
+			return "", nil, false
+		}
+		return fields[0], fields[1:], true
+	}
+	return "", nil, false
 }
 
 // shellEscapes are substrings that indicate code is spawning a subprocess or
@@ -222,10 +344,11 @@ func codeArg(flag string, args []string) string {
 }
 
 // codeEscalates reports whether interpreter code is destructive enough to
-// warrant Tier 2. It looks for destructive verbs as whole words, common
-// subprocess/shell-escape primitives, and shell composition (substitution,
-// chaining, pipelines). The check is deliberately conservative: when a wrapper
-// runs composed or unclassifiable code, it is assumed destructive.
+// warrant Tier 2. The model is whitelist-first (P1-14): only code recognized
+// as a pure-output statement stays Tier 1; anything else — including forms no
+// blacklist token matches, like os.remove('x') — fails closed to Tier 2. The
+// blacklist scans (destructive words, subprocess/shell escapes, shell
+// composition) are kept as a fast, explanatory path.
 func codeEscalates(code string) bool {
 	lower := strings.ToLower(code)
 	for _, tok := range strings.Fields(lower) {
@@ -240,6 +363,28 @@ func codeEscalates(code string) bool {
 	}
 	for _, c := range shellComposition {
 		if strings.Contains(lower, c) {
+			return true
+		}
+	}
+	return !isPureOutput(lower)
+}
+
+// pureOutputPrefixes are the statement openings considered provably benign:
+// printing a value cannot modify state. Anything else an interpreter runs is
+// treated as potentially destructive.
+var pureOutputPrefixes = []string{
+	"echo ", "print(", "print ", "printf(", "printf ",
+	"console.log(", "puts ", "say ",
+}
+
+// isPureOutput reports whether the (already lower-cased) code is a single
+// pure-output statement. The caller has already verified the code contains no
+// shell composition or escape tokens, so "echo $(rm -rf /)" never reaches
+// here as safe.
+func isPureOutput(lower string) bool {
+	trimmed := strings.TrimSpace(lower)
+	for _, p := range pureOutputPrefixes {
+		if strings.HasPrefix(trimmed, p) {
 			return true
 		}
 	}

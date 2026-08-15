@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/xenith/panda/internal/config"
 )
@@ -85,5 +86,44 @@ func TestAdapterPathRejectsTraversal(t *testing.T) {
 	}
 	if p == "" {
 		t.Fatal("empty path for valid adapter name")
+	}
+}
+
+// slowAdapter reads the request and then sleeps far past any test budget,
+// simulating an adapter that ignores the advertised timeout_s.
+const slowAdapter = `#!/usr/bin/env python3
+import json, sys, time
+req = json.loads(sys.stdin.read())
+time.sleep(3600)
+print(json.dumps({"ok": True, "result": "done", "exit_code": 0}))
+`
+
+// TestAdapterHardTimeout verifies P1-18: an adapter that ignores the timeout
+// advertised in its request is killed by the Go-side hard deadline instead of
+// running forever.
+func TestAdapterHardTimeout(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "slow.py"), []byte(slowAdapter), 0o755); err != nil {
+		t.Fatalf("write adapter: %v", err)
+	}
+	oldDir := adapterDir
+	adapterDir = dir
+	defer func() { adapterDir = oldDir }()
+	oldTimeout := adapterHardTimeout
+	adapterHardTimeout = 300 * time.Millisecond
+	defer func() { adapterHardTimeout = oldTimeout }()
+
+	start := time.Now()
+	res := runAdapterProcess(context.Background(), "slow.py", "x", "", config.ModelConfig{})
+	elapsed := time.Since(start)
+
+	if res.OK {
+		t.Fatalf("sleeping adapter reported success")
+	}
+	if res.ExitCode != 124 {
+		t.Fatalf("exit code = %d, want 124 (hard timeout)", res.ExitCode)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("hard timeout not enforced promptly: %v", elapsed)
 	}
 }
