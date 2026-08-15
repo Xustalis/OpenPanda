@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/xenith/panda/internal/util"
 )
 
 // Hermes manages the Hermes personal-assistant memory store rooted at a
@@ -82,7 +84,7 @@ func (h *Hermes) save(path string, m MemFile, defaultLimit int) error {
 	if err := os.MkdirAll(h.root, 0o755); err != nil {
 		return fmt.Errorf("memory: create memory dir: %w", err)
 	}
-	if err := os.WriteFile(path, m.Bytes(), 0o644); err != nil {
+	if err := util.WriteFileAtomic(path, m.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("memory: write %s: %w", filepath.Base(path), err)
 	}
 	return nil

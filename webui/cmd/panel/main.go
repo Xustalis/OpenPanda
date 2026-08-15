@@ -8,9 +8,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -42,6 +44,14 @@ func main() {
 
 	log.Setup(cfg.Log.Level, nil)
 	logger := log.From(context.Background())
+
+	// The panel speaks plain HTTP: a non-loopback bind exposes the Bearer
+	// token and task contents to anyone on the path (P1-24). Warn loudly;
+	// the fix is a TLS reverse proxy, not a wider bind.
+	if !isLoopbackAddr(cfg.Network.PanelAddr) {
+		logger.Warn("panel bound to a non-loopback address over plain HTTP — bearer token and task contents are sniffable; use 127.0.0.1 or a TLS reverse proxy",
+			"addr", cfg.Network.PanelAddr)
+	}
 
 	db, err := storage.Open(cfg.Storage.DBPath)
 	if err != nil {
@@ -102,4 +112,19 @@ func main() {
 func fatal(step string, err error) {
 	fmt.Fprintf(os.Stderr, "panda-webui: %s: %v\n", step, err)
 	os.Exit(1)
+}
+
+// isLoopbackAddr reports whether a listen address binds only to loopback
+// ("127.0.0.1:7840", "[::1]:7840", "localhost:7840"). A bare port (":7840")
+// binds every interface and is not loopback.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

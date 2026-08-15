@@ -11,7 +11,7 @@ network:
   # network must share the same value. Prefer env PANDA_SHARED_SECRET.
   shared_secret: ""              # e.g. openssl rand -hex 32; keep out of public repos
   # ── webui sidecar only (webui/cmd/panel); the kernel daemon never mounts it ──
-  panel_addr: ":7840"            # optional legacy PWA panel HTTP address (empty = disabled)
+  panel_addr: "127.0.0.1:7840"      # optional legacy PWA panel HTTP address; plain HTTP — keep loopback or put it behind a TLS reverse proxy (empty = disabled)
   # panel_token: ""              # Bearer token guarding /api/* (required to enable the panel; prefer env PANDA_PANEL_TOKEN)
   peers:                         # manual peers
     - "orangepi3b.tailnet-name.ts.net:7836"

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/xenith/panda/internal/util"
 )
 
 // dreamInterval is the minimum gap between Deep promotions (design §17.3:
@@ -106,7 +108,7 @@ func (s *Scheduler) markDeep(now time.Time) error {
 	if err := os.MkdirAll(s.dreamer.hermes.ColdDir(), 0o755); err != nil {
 		return fmt.Errorf("memory: create .dreams dir: %w", err)
 	}
-	if err := os.WriteFile(s.statePath(), []byte(strconv.FormatInt(now.Unix(), 10)), 0o644); err != nil {
+	if err := util.WriteFileAtomic(s.statePath(), []byte(strconv.FormatInt(now.Unix(), 10)), 0o644); err != nil {
 		return fmt.Errorf("memory: write last-deep: %w", err)
 	}
 	return nil

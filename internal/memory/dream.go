@@ -108,13 +108,26 @@ func (d *Dreamer) light() ([]*Candidate, error) {
 			if text == "" {
 				continue
 			}
+			// Lines carrying external input (task titles, user/wire text) are
+			// tagged by Daily.AppendExternal; taint their provenance so the
+			// Deep gate can never promote user-controlled text into MEMORY.md
+			// (P1-22). A candidate with any untrusted source is dropped
+			// wholesale by Sources.Trusted().
+			trusted := true
+			if rest, ok := strings.CutPrefix(text, ExternalMarker+" "); ok {
+				trusted = false
+				text = rest
+				if text == "" {
+					continue
+				}
+			}
 			c := byText[text]
 			if c == nil {
 				c = &Candidate{Text: text}
 				byText[text] = c
 			}
 			c.Count++
-			c.Sources = append(c.Sources, Source{Path: e.Name(), Line: i + 1, Trusted: true})
+			c.Sources = append(c.Sources, Source{Path: e.Name(), Line: i + 1, Trusted: trusted})
 			if !containsDay(c.Days, date) {
 				c.Days = append(c.Days, date)
 			}

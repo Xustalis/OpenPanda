@@ -543,6 +543,12 @@ func withSkills(c *Core, intent, project, query string) (string, []*skills.Skill
 // logTask appends one daily-log line recording a task outcome. The daily log is
 // the warm layer the Dreaming engine (design §17.3) consolidates from, so this
 // is the point where task history becomes candidate long-term memory.
+//
+// The title originates from user/entry-model text, so the line goes through
+// AppendExternal: its provenance is tainted and the Dreaming provenance gate
+// will never promote it into MEMORY.md (P1-22) — otherwise instruction-shaped
+// task text appearing 3 times in 3 days would be "consolidated" into the
+// long-term memory that every future system prompt injects.
 func (c *Core) logTask(title string, ok bool) {
 	if c.daily == nil {
 		return
@@ -551,7 +557,7 @@ func (c *Core) logTask(title string, ok bool) {
 	if !ok {
 		status = "失败"
 	}
-	if err := c.daily.Append(time.Now(), fmt.Sprintf("任务「%s」%s", title, status)); err != nil {
+	if err := c.daily.AppendExternal(time.Now(), fmt.Sprintf("任务「%s」%s", title, status)); err != nil {
 		c.logger.Warn("append daily log", "err", err)
 	}
 }

@@ -30,7 +30,7 @@ type NodeConfig struct {
 // by the kernel daemon.
 type NetworkConfig struct {
 	ListenAddr   string   `yaml:"listen_addr"`   // e.g. ":7836"
-	PanelAddr    string   `yaml:"panel_addr"`    // webui sidecar HTTP listener, e.g. ":7840"
+	PanelAddr    string   `yaml:"panel_addr"`    // webui sidecar HTTP listener; loopback by default (P1-24)
 	PanelToken   string   `yaml:"panel_token"`   // Bearer token guarding /api/* in the webui sidecar
 	SharedSecret string   `yaml:"shared_secret"` // HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it
 	Peers        []string `yaml:"peers"`         // e.g. "orangepi3b.tailnet-name.ts.net:7836"
@@ -81,7 +81,11 @@ func Default() *Config {
 		},
 		Network: NetworkConfig{
 			ListenAddr: ":7836",
-			PanelAddr:  ":7840",
+			// Loopback by default (P1-24): the panel speaks plain HTTP, so a
+			// wildcard bind would expose the Bearer token and task contents to
+			// the LAN. Set panel_addr explicitly to expose it (e.g. behind a
+			// TLS reverse proxy).
+			PanelAddr: "127.0.0.1:7840",
 		},
 		Storage: StorageConfig{
 			DBPath:       "./data/panda.db",

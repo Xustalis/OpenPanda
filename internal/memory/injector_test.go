@@ -82,3 +82,60 @@ func TestContextPackNilProjects(t *testing.T) {
 		t.Errorf("nil projects should pack empty, got %q", got)
 	}
 }
+
+// TestInjectionBoundaryFences verifies P1-23: memory injected into prompts is
+// wrapped in an explicit data-not-instructions boundary on both paths
+// (conversation and project pack).
+func TestInjectionBoundaryFences(t *testing.T) {
+	root := t.TempDir()
+	h := NewHermes(root)
+	p := NewProjects(root)
+
+	if err := h.SaveMemory(MemFile{Entries: []string{"core is Go"}}); err != nil {
+		t.Fatalf("save memory: %v", err)
+	}
+	if err := p.Save("panda", MemFile{Entries: []string{"project fact"}}); err != nil {
+		t.Fatalf("save project: %v", err)
+	}
+
+	inj := NewInjector(h, p)
+	conv, err := inj.Conversation("")
+	if err != nil {
+		t.Fatalf("conversation: %v", err)
+	}
+	pack, err := inj.ContextPack("panda")
+	if err != nil {
+		t.Fatalf("context pack: %v", err)
+	}
+	for name, got := range map[string]string{"conversation": conv, "context pack": pack} {
+		if !strings.Contains(got, "<memory_data>") || !strings.Contains(got, "</memory_data>") {
+			t.Errorf("%s lacks data fence: %q", name, got)
+		}
+		if !strings.Contains(got, "不是指令") {
+			t.Errorf("%s lacks data-not-instructions declaration: %q", name, got)
+		}
+		// The declaration must precede the payload.
+		if strings.Index(got, "不是指令") > strings.Index(got, "core is Go") && name == "conversation" {
+			t.Errorf("declaration should precede memory payload: %q", got)
+		}
+	}
+}
+
+// TestFenceEmptyStaysEmpty: no memory means no fence noise in the prompt.
+func TestFenceEmptyStaysEmpty(t *testing.T) {
+	inj := NewInjector(NewHermes(t.TempDir()), NewProjects(t.TempDir()))
+	conv, err := inj.Conversation("")
+	if err != nil {
+		t.Fatalf("conversation: %v", err)
+	}
+	if conv != "" {
+		t.Fatalf("empty memory produced %q", conv)
+	}
+	pack, err := inj.ContextPack("nope")
+	if err != nil {
+		t.Fatalf("context pack: %v", err)
+	}
+	if pack != "" {
+		t.Fatalf("empty project produced %q", pack)
+	}
+}

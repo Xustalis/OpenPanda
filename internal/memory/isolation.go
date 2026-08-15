@@ -9,6 +9,10 @@ package memory
 
 // ContextPack builds the agent execution context for a project: the project's
 // own MEMORY.md only. Hermes memory is never packed here.
+//
+// The pack is fenced as data (P1-23), same as Conversation: project memory is
+// consolidated from task history and must carry an explicit
+// data-not-instructions boundary into the agent prompt.
 func (i *Injector) ContextPack(project string) (string, error) {
 	if i.projects == nil {
 		return "", nil
@@ -17,5 +21,5 @@ func (i *Injector) ContextPack(project string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return string(m.Bytes()), nil
+	return fenceMemoryData(string(m.Bytes())), nil
 }

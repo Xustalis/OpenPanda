@@ -32,10 +32,40 @@ func (d *Daily) PathFor(date time.Time) string {
 	return filepath.Join(d.dir, date.Format(dailyLayout)+".md")
 }
 
+// ExternalMarker prefixes a daily-log line whose content derives from
+// external input (task titles, user text, wire payloads) rather than the
+// agent's own observations. The Dreaming engine's provenance gate (design
+// §17.3, OpenClaw taint model) treats such lines as untrusted and never
+// promotes them into MEMORY.md (P1-22).
+const ExternalMarker = "[ext]"
+
 // Append writes one timestamped line to the day's log, creating the file and
 // directory as needed. Append is safe for concurrent callers — the core's task
 // goroutines complete tasks in parallel, so appends are serialized here.
+//
+// The entry is sanitized to a single line: an embedded newline would inject
+// phantom log lines and corrupt the Dreaming statistics built on top (P2-16).
+// Use AppendExternal instead when the entry carries user- or wire-controlled
+// text, so the provenance gate can taint it.
 func (d *Daily) Append(now time.Time, entry string) error {
+	return d.append(now, entry, false)
+}
+
+// AppendExternal is Append for content derived from external input (task
+// titles, user instructions, wire payloads). The line is tagged with
+// ExternalMarker so light() marks its provenance untrusted and the Deep phase
+// can never consolidate it into long-term memory — closing the stored
+// prompt-injection channel where task text was "consolidated" into MEMORY.md
+// and from there into every future system prompt (P1-22).
+func (d *Daily) AppendExternal(now time.Time, entry string) error {
+	return d.append(now, entry, true)
+}
+
+func (d *Daily) append(now time.Time, entry string, external bool) error {
+	entry = sanitizeEntry(entry)
+	if external {
+		entry = ExternalMarker + " " + entry
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err := os.MkdirAll(d.dir, 0o755); err != nil {
@@ -50,6 +80,12 @@ func (d *Daily) Append(now time.Time, entry string) error {
 		return fmt.Errorf("memory: append daily log: %w", err)
 	}
 	return nil
+}
+
+// sanitizeEntry collapses newlines/tabs to spaces so one entry is always one
+// log line.
+func sanitizeEntry(entry string) string {
+	return strings.Join(strings.Fields(entry), " ")
 }
 
 // Prune enforces the retention windows at now: files older than deleteDays are

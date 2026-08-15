@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,7 +28,11 @@ import (
 var version = "0.0.1"
 
 func main() {
-	if len(os.Args) > 1 {
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Printf("panda %s\n", version)
+		return
+	}
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
 		switch os.Args[1] {
 		case "ask":
 			runAsk(os.Args[2:])
@@ -56,9 +61,15 @@ func main() {
 		case "skill":
 			runSkill(os.Args[2:])
 			return
-		case "version", "--version", "-v":
+		case "version":
 			fmt.Printf("panda %s\n", version)
 			return
+		default:
+			// A bare unknown word must not fall through to runDaemon (P1-25):
+			// "panda statsu" (a typo) would otherwise start a resident daemon.
+			fmt.Fprintf(os.Stderr, "panda: unknown subcommand %q\n", os.Args[1])
+			fmt.Fprintln(os.Stderr, "usage: panda [ask|status|queue|task|cancel|approve|reject|logs|skill|version] — or no subcommand to run the daemon")
+			os.Exit(2)
 		}
 	}
 	runDaemon()
@@ -79,7 +90,7 @@ func runDaemon() {
 	log.Setup(cfg.Log.Level, nil)
 	logger := log.From(context.Background())
 
-	if err := os.MkdirAll(dirOf(cfg.Storage.DBPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(cfg.Storage.DBPath), 0o755); err != nil {
 		fatal("create data dir", err)
 	}
 
@@ -236,15 +247,6 @@ func hostStatePaths(cfg *config.Config) []string {
 		cfg.Storage.SkillsPath,
 		filepath.Join(cfg.Storage.WorkPath, ".claude"), // the agent CLI's own project config
 	}
-}
-
-func dirOf(p string) string {
-	for i := len(p) - 1; i >= 0; i-- {
-		if p[i] == '/' {
-			return p[:i]
-		}
-	}
-	return "."
 }
 
 func fatal(step string, err error) {

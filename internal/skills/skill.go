@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/xenith/panda/internal/util"
 )
 
 // Scope is the visibility tier of a skill (design §8.3).
@@ -150,7 +152,7 @@ func (s *Store) Save(sk *Skill) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("skills: create skill dir: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := util.WriteFileAtomic(path, data, 0o644); err != nil {
 		return fmt.Errorf("skills: write %s: %w", sk.Name, err)
 	}
 	return nil
