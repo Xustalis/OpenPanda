@@ -148,6 +148,14 @@ func (s *TaskStore) transition(ctx context.Context, taskID, from, to, owner, eve
 	if err := s.applyCAS(ctx, taskID, from, to, owner, cur.AttemptID, event, data, nil); err != nil {
 		return err
 	}
+	if to == StateReview {
+		// A task paused for human review has no lease pressure: clear the
+		// deadline so a stale timestamp can never fire later (P1-8).
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE tasks SET lease_expires_at=NULL WHERE task_id=?`, taskID); err != nil {
+			s.logger.Warn("clear lease on review", "task", taskID, "err", err)
+		}
+	}
 	s.logger.Debug("task transition", "task", taskID, "from", from, "to", to, "owner", owner)
 	if to == StateReview {
 		cur.State = StateReview
@@ -255,8 +263,36 @@ func (s *TaskStore) Dispatch(ctx context.Context, taskID, owner, target string) 
 		map[string]any{"target": target})
 }
 
+// DispatchTarget returns the node this task was most recently dispatched to,
+// read from the task_events audit trail (Dispatch records the target on its
+// EvDelegate event). "" means the task was never dispatched. Wire handlers use
+// it to authenticate result/decline/accept senders before acceptance moves
+// the lease (P1-1/2/3).
+func (s *TaskStore) DispatchTarget(ctx context.Context, taskID string) (string, error) {
+	var data string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT data_json FROM task_events WHERE task_id=? AND type=? ORDER BY id DESC LIMIT 1`,
+		taskID, EvDelegate).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("dispatch target: %w", err)
+	}
+	var d struct {
+		Target string `json:"target"`
+	}
+	if err := json.Unmarshal([]byte(data), &d); err != nil {
+		return "", fmt.Errorf("parse delegate event: %w", err)
+	}
+	return d.Target, nil
+}
+
 // Accept transitions dispatched -> running and transfers the lease to the
-// executor (owner). The executor must be the node that took the task.
+// executor (owner). The UPDATE carries a state guard (P1-3): without it a
+// concurrent cancel/timeout between the pre-check and the write could be
+// overwritten, resurrecting a closed task. The wire handler additionally
+// authenticates the sender against the recorded dispatch target.
 func (s *TaskStore) Accept(ctx context.Context, taskID, owner string) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
@@ -265,13 +301,17 @@ func (s *TaskStore) Accept(ctx context.Context, taskID, owner string) error {
 	if cur.State != StateDispatched {
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateDispatched)
 	}
-	// Any node may accept a dispatched task; acceptance is the moment the
-	// lease transfers from the delegator to the executor.
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, owner_node=?, state_version=state_version+1, updated_at=? WHERE task_id=?`,
-		StateRunning, owner, s.now(), taskID)
+	// Acceptance is the moment the lease transfers from the delegator to the
+	// executor. The state guard ensures a concurrent cancel/expire wins.
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET state=?, owner_node=?, state_version=state_version+1, updated_at=?
+		WHERE task_id=? AND state=?`,
+		StateRunning, owner, s.now(), taskID, StateDispatched)
 	if err != nil {
 		return fmt.Errorf("accept task: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: task %s accepted concurrently", ErrConflict, taskID)
 	}
 	return s.recordEvent(ctx, taskID, EvAccept, map[string]any{"owner": owner})
 }
@@ -404,10 +444,16 @@ func (s *TaskStore) Approve(ctx context.Context, taskID string) error {
 	if cur.State != StateReview {
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateReview)
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=? WHERE task_id=?`,
-		StateDone, s.now(), taskID); err != nil {
+	// Guarded UPDATE (P2-8): a concurrent reject/approve must not both win.
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
+		WHERE task_id=? AND state=?`,
+		StateDone, s.now(), taskID, StateReview)
+	if err != nil {
 		return fmt.Errorf("approve task: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: task %s approved concurrently", ErrConflict, taskID)
 	}
 	return s.recordEvent(ctx, taskID, EvReview, map[string]any{"approved": true})
 }
@@ -422,10 +468,16 @@ func (s *TaskStore) Reject(ctx context.Context, taskID, reason string) error {
 	if cur.State != StateReview {
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateReview)
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=? WHERE task_id=?`,
-		StateFailed, s.now(), taskID); err != nil {
+	// Guarded UPDATE (P2-8): a concurrent approve/reject must not both win.
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
+		WHERE task_id=? AND state=?`,
+		StateFailed, s.now(), taskID, StateReview)
+	if err != nil {
 		return fmt.Errorf("reject task: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: task %s rejected concurrently", ErrConflict, taskID)
 	}
 	return s.recordEvent(ctx, taskID, EvReview, map[string]any{"rejected": reason})
 }
@@ -540,10 +592,14 @@ func (s *TaskStore) SetDetail(ctx context.Context, taskID string, d TaskDetail) 
 // periodically by the monitor.
 func (s *TaskStore) ExpireTasks(ctx context.Context) ([]string, error) {
 	now := s.now()
+	// review is deliberately absent: a task paused for human analysis has no
+	// deadline pressure, and the monitor must never kill it out from under the
+	// reviewer (P1-8). The lease is also cleared on entering review (see
+	// transition), so a stale timestamp here would be doubly wrong to act on.
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT task_id FROM tasks
 		 WHERE lease_expires_at > 0 AND lease_expires_at < ?
-		   AND state IN ('dispatched','waiting_context','running','review')`, now)
+		   AND state IN ('dispatched','waiting_context','running')`, now)
 	if err != nil {
 		return nil, fmt.Errorf("scan leases: %w", err)
 	}
@@ -647,11 +703,18 @@ func (s *TaskStore) Cancel(ctx context.Context, taskID string) error {
 	if !CanTransition(cur.State, StateCancelled) {
 		return fmt.Errorf("%w: %s -> %s", ErrIllegal, cur.State, StateCancelled)
 	}
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=? WHERE task_id=?`,
-		StateCancelled, s.now(), taskID)
+	// Guarded UPDATE (P1-4): a concurrent Complete between the pre-check and
+	// this write must win — overwriting done back to cancelled would lose the
+	// recorded result.
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
+		WHERE task_id=? AND state=?`,
+		StateCancelled, s.now(), taskID, cur.State)
 	if err != nil {
 		return fmt.Errorf("cancel task: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: task %s cancelled concurrently", ErrConflict, taskID)
 	}
 	return s.recordEvent(ctx, taskID, EvCancel, map[string]any{"from": cur.State})
 }

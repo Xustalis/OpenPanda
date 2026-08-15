@@ -13,11 +13,13 @@ import (
 
 // pendingContext is the execution context saved when a task pauses in
 // waiting_context to fetch its full snapshot. handleContextAck uses it to
-// resume execution.
+// resume execution. source is the node the fetch was sent to (chain[0]);
+// a context_ack from any other node is rejected (P1-11).
 type pendingContext struct {
 	intent   string
 	required []string
 	ctxType  string
+	source   string
 }
 
 // packContext builds and stores the full context snapshot for a local-origin
@@ -119,7 +121,7 @@ func (c *Core) handleContextAck(ctx context.Context, env bus.Envelope) {
 		c.logger.Warn("bad context_ack", "err", err)
 		return
 	}
-	v, ok := c.pendingCtx.LoadAndDelete(p.TaskID)
+	v, ok := c.pendingCtx.Load(p.TaskID)
 	if !ok {
 		c.logger.Debug("context_ack for unknown task", "task", p.TaskID)
 		return
@@ -129,6 +131,15 @@ func (c *Core) handleContextAck(ctx context.Context, env bus.Envelope) {
 		c.logger.Warn("bad pending context entry", "task", p.TaskID)
 		return
 	}
+	if pc.source != "" && env.From != pc.source {
+		// Only the node we actually asked may answer the fetch; otherwise any
+		// authenticated peer could reply OK:false and force-fail an arbitrary
+		// parked task, or inject attacker-controlled context data (P1-11).
+		c.logger.Warn("context_ack from non-source ignored", "task", p.TaskID,
+			"from", env.From, "source", pc.source)
+		return
+	}
+	c.pendingCtx.Delete(p.TaskID)
 	if !p.OK {
 		c.logger.Warn("context fetch declined", "task", p.TaskID)
 		_ = c.store.ForceFail(ctx, p.TaskID, "context unavailable")
@@ -160,6 +171,9 @@ func (c *Core) handleContextAck(ctx context.Context, env bus.Envelope) {
 					TaskID: p.TaskID, Reason: err.Error(),
 				})
 			}
+			// Same as the synchronous path: the local row must not linger in a
+			// pre-terminal state for Recover to resurrect as an orphan (P1-9).
+			c.terminalizeDeclined(ctx, p.TaskID, err.Error())
 			return
 		}
 		if t, gerr := c.store.Get(ctx, p.TaskID); gerr == nil {

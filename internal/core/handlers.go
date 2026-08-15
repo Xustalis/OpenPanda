@@ -135,7 +135,19 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 				c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: err.Error()})
 				return
 			}
-			c.pendingCtx.Store(taskID, &pendingContext{intent: p.Intent, required: required, ctxType: p.ContextType})
+			// A task parked in waiting_context must carry a lease (P1-6):
+			// without one the timeout monitor never scans it, and if the
+			// context_fetch answer never arrives the task — and its pendingCtx
+			// entry — would leak forever. Fall back to the default delegation
+			// deadline when the wire carried no explicit timeout.
+			timeoutMS := p.TimeoutMS
+			if timeoutMS <= 0 {
+				timeoutMS = defaultDelegateTimeout.Milliseconds()
+			}
+			if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
+				c.logger.Warn("lease waiting-context task", "task", taskID, "err", err)
+			}
+			c.pendingCtx.Store(taskID, &pendingContext{intent: p.Intent, required: required, ctxType: p.ContextType, source: chain[0]})
 			c.sendContextFetch(ctx, chain[0], taskID, hash, p.ContextType)
 			return
 		}
@@ -153,6 +165,10 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 			}
 			c.logger.Warn("route delegated task", "err", err, "task", taskID)
 			c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: err.Error()})
+			// The decline tells the parent to re-route, but the local row must
+			// not linger in submitted/queued: Recover would resurrect it on
+			// restart as an orphan nobody dispatches (P1-9).
+			c.terminalizeDeclined(ctx, taskID, err.Error())
 			return
 		}
 		if err := c.reply(ctx, env, bus.MsgTaskResult, result); err != nil {
@@ -598,12 +614,36 @@ func (c *Core) handleAccept(ctx context.Context, env bus.Envelope) {
 		c.logger.Debug("accept ignored (not dispatched)", "task", p.TaskID, "state", t.State)
 		return
 	}
+	if !c.isCurrentExecutor(ctx, t, env.From) {
+		// Only the recorded dispatch target may claim the lease; otherwise any
+		// authenticated peer could steal a dispatched task (P1-3).
+		c.logger.Warn("accept from non-target ignored", "task", p.TaskID,
+			"from", env.From, "owner", t.OwnerNode)
+		return
+	}
 	// The executor claims the lease; the parent records the new state and
 	// owner so a later cancel/transfer routes correctly.
 	if err := c.store.Accept(ctx, p.TaskID, env.From); err != nil {
 		c.logger.Debug("accept apply failed", "task", p.TaskID, "err", err)
 	}
 	c.relayToParent(ctx, bus.MsgTaskAccept, t.Chain, p)
+}
+
+// isCurrentExecutor reports whether from is the node expected to report on
+// this task: the recorded dispatch target (read from the EvDelegate audit
+// event), or — once acceptance has moved the lease — the stored owner. Wire
+// handlers use it as the post-authentication authorization check for
+// task_accept / task_decline / task_result (P1-1/2/3).
+func (c *Core) isCurrentExecutor(ctx context.Context, t Task, from string) bool {
+	if from == t.OwnerNode && t.OwnerNode != c.nodeID {
+		return true
+	}
+	target, err := c.store.DispatchTarget(ctx, t.TaskID)
+	if err != nil {
+		c.logger.Warn("dispatch target lookup", "task", t.TaskID, "err", err)
+		return false
+	}
+	return from == target
 }
 
 // handleDecline processes task_decline from an executor. The task returns to
@@ -615,14 +655,23 @@ func (c *Core) handleDecline(ctx context.Context, env bus.Envelope) {
 		c.logger.Warn("bad task_decline", "err", err)
 		return
 	}
+	t, err := c.store.Get(ctx, p.TaskID)
+	if err != nil {
+		c.logger.Debug("decline for unknown task", "task", p.TaskID)
+		return
+	}
+	if !c.isCurrentExecutor(ctx, t, env.From) {
+		// Only the current executor may decline; otherwise any authenticated
+		// peer could bounce someone else's dispatched task back to queued
+		// forever — a cheap DoS (P1-2).
+		c.logger.Warn("decline from non-executor ignored", "task", p.TaskID,
+			"from", env.From, "owner", t.OwnerNode)
+		return
+	}
 	c.logger.Info("task declined", "task", p.TaskID, "reason", p.Reason, "by", env.From)
 	// Parent returns the task to queued for re-routing elsewhere.
 	if err := c.store.Decline(ctx, p.TaskID, c.nodeID, p.Reason); err != nil {
 		c.logger.Debug("decline apply failed", "task", p.TaskID, "err", err)
-	}
-	t, err := c.store.Get(ctx, p.TaskID)
-	if err != nil {
-		return
 	}
 	c.relayToParent(ctx, bus.MsgTaskDecline, t.Chain, p)
 	// Unblock a synchronous Submit that forwarded this task: it sees a failed
@@ -653,6 +702,10 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 		// MVP reconstruction path (a node that never persisted the task is, in
 		// practice, the origin); a later phase should echo the original chain
 		// on the wire and use it here.
+		if p.AttemptID == "" {
+			c.logger.Warn("result with empty attempt rejected", "task", p.TaskID, "from", env.From)
+			return
+		}
 		if _, err := c.store.CreateFromRemote(ctx, p.TaskID, p.TaskID, c.nodeID, p.AttemptID, []string{c.nodeID, env.From}); err != nil {
 			c.logger.Warn("create task from result", "task", p.TaskID, "err", err)
 			return
@@ -661,8 +714,16 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 	} else if err != nil {
 		c.logger.Warn("load task for result", "task", p.TaskID, "err", err)
 		return
+	} else if !c.isCurrentExecutor(ctx, t, env.From) {
+		// Authorization after authentication (P1-1): only the node this task
+		// was dispatched to (or the current lease holder) may report its
+		// result. Without this, any authenticated peer could forge a
+		// task_result and terminate someone else's task with fake output.
+		c.logger.Warn("result from non-executor ignored", "task", p.TaskID,
+			"from", env.From, "owner", t.OwnerNode)
+		return
 	}
-	if p.AttemptID != "" && t.AttemptID != "" && t.AttemptID != p.AttemptID {
+	if p.AttemptID == "" || (t.AttemptID != "" && t.AttemptID != p.AttemptID) {
 		c.logger.Info("stale attempt result ignored", "task", p.TaskID,
 			"stored", t.AttemptID, "got", p.AttemptID)
 		return
