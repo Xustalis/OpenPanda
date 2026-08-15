@@ -116,7 +116,17 @@ func (c *Core) terminalizeDeclined(ctx context.Context, taskID, reason string) {
 // first (design doc §12.4). A pointer hit executes immediately (zero transfer);
 // a pointer miss parks the task in waiting_context and fetches the snapshot
 // from the source node; summary and inline-full need no fetch.
+//
+// Capacity-driven accept/decline (DCPS τ_adp mapping, design §2.4): a node
+// whose execution slots are full declines instead of silently queueing, so the
+// delegator learns immediately and can re-route to a peer with free capacity.
 func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID string, p bus.TaskDelegatePayload, required []string, chain []string) {
+	if !c.hasCapacity(ctx) {
+		c.logger.Info("declining delegated task: capacity full", "task", taskID)
+		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: "capacity full"})
+		c.terminalizeDeclined(ctx, taskID, "capacity full")
+		return
+	}
 	level := p.ContextLevel
 	hash := p.ContextHash
 
@@ -175,6 +185,25 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 			c.logger.Warn("send task_result", "err", err, "task", taskID)
 		}
 	}()
+}
+
+// hasCapacity reports whether this node can accept one more delegated task
+// (DCPS capacity-driven accept/decline, design §2.4): true unless the
+// capability card declares a MaxConcurrent limit and the active-task count has
+// reached it. A node with no declared limit always accepts (unknown capacity is
+// not a limit); a load-count failure fails closed (declining is recoverable —
+// the delegator re-routes — while over-committing a saturated node is not).
+func (c *Core) hasCapacity(ctx context.Context) bool {
+	maxConcurrent := c.card.Capacity.MaxConcurrent
+	if maxConcurrent <= 0 {
+		return true
+	}
+	active, err := c.store.CountActive(ctx, c.nodeID)
+	if err != nil {
+		c.logger.Warn("count active tasks", "err", err)
+		return false
+	}
+	return active < maxConcurrent
 }
 
 // delegateRequired resolves the abilities a delegated task needs, defaulting

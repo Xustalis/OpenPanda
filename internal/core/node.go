@@ -91,16 +91,40 @@ func (n *Node) RunHeartbeat(ctx context.Context) {
 }
 
 func (n *Node) beat(ctx context.Context) {
-	capJSON, err := json.Marshal(n.card.Capacity)
-	if err != nil {
-		n.logger.Warn("marshal capacity", "err", err)
-		return
-	}
-	if err := ledger.Heartbeat(n.db, n.id, "online", string(capJSON)); err != nil {
+	capJSON, _ := n.capacitySnapshot(ctx)
+	if err := ledger.Heartbeat(n.db, n.id, "online", capJSON); err != nil {
 		n.logger.Warn("heartbeat", "err", err)
 		return
 	}
-	n.logger.Debug("heartbeat", "node", n.id, "capacity", string(capJSON))
+	n.logger.Debug("heartbeat", "node", n.id, "capacity", capJSON)
+}
+
+// capacitySnapshot returns the live capacity JSON (with the real active-task
+// count, not the static card value) plus the derived 0-1 load. The DCPS
+// weighted score and the TMB freshness discount on peers are only as good as
+// the capacity data heartbeats actually carry (review §4.3 "容量数据空转").
+func (n *Node) capacitySnapshot(ctx context.Context) (string, float64) {
+	capacity := n.card.Capacity
+	var active int
+	if err := n.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tasks WHERE state IN ('running','waiting_context')`).Scan(&active); err != nil {
+		n.logger.Warn("count active tasks for heartbeat", "err", err)
+	} else {
+		capacity.CurrentTasks = active
+	}
+	capJSON, err := json.Marshal(capacity)
+	if err != nil {
+		n.logger.Warn("marshal capacity", "err", err)
+		return "", 0
+	}
+	load := 0.0
+	if capacity.MaxConcurrent > 0 {
+		load = float64(capacity.CurrentTasks) / float64(capacity.MaxConcurrent)
+		if load > 1 {
+			load = 1
+		}
+	}
+	return string(capJSON), load
 }
 
 // Shutdown marks the node offline. Idempotent.

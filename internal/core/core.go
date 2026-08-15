@@ -212,8 +212,76 @@ func (c *Core) Idle(ctx context.Context) bool {
 	return len(running) == 0 && len(dispatched) == 0 && len(waiting) == 0
 }
 
-// RunHeartbeat starts the heartbeat ticker.
-func (c *Core) RunHeartbeat(ctx context.Context) { go c.node.RunHeartbeat(ctx) }
+// RunHeartbeat starts the heartbeat loop: each tick updates the local ledger
+// (last_seen + live capacity) and broadcasts a wire heartbeat to every
+// connected peer, so a peer's TMB freshness weight and DCPS capacity signals
+// are fed by real traffic instead of going stale after the initial hello.
+func (c *Core) RunHeartbeat(ctx context.Context) {
+	t := time.NewTicker(c.node.hbTick)
+	defer t.Stop()
+	// Beat immediately so the directory is fresh on startup.
+	c.node.beat(ctx)
+	c.broadcastHeartbeat(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.node.beat(ctx)
+			c.broadcastHeartbeat(ctx)
+		}
+	}
+}
+
+// broadcastHeartbeat sends this node's live status/capacity to every connected
+// peer. Send failures are logged and skipped — a dead conn is reaped by the
+// read loop, and the next tick reaches the replacement.
+func (c *Core) broadcastHeartbeat(ctx context.Context) {
+	capJSON, load := c.node.capacitySnapshot(ctx)
+	c.mu.RLock()
+	conns := make(map[string]*bus.Conn, len(c.peers))
+	for id, p := range c.peers {
+		conns[id] = p.conn
+	}
+	c.mu.RUnlock()
+	for id, conn := range conns {
+		msgID, err := newUUID()
+		if err != nil {
+			c.logger.Warn("mint heartbeat id", "err", err)
+			return
+		}
+		env, err := bus.NewEnvelope(bus.MsgHeartbeat, c.nodeID, msgID, bus.HeartbeatPayload{
+			Status: "online", Load: load, Capacity: capJSON,
+		})
+		if err != nil {
+			c.logger.Warn("build heartbeat", "err", err)
+			return
+		}
+		env.To = id
+		if err := conn.Send(env); err != nil {
+			c.logger.Debug("heartbeat send", "peer", id, "err", err)
+		}
+	}
+}
+
+// handleHeartbeat refreshes the sender's directory row (last_seen + capacity).
+// This is the TMB "new message overwrites the slot" mapping: each heartbeat
+// upserts the sender's slot wholesale, and Route's freshness weight — not the
+// heartbeat cadence — decides how much the data is worth.
+func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
+	var p bus.HeartbeatPayload
+	if err := env.PayloadInto(&p); err != nil {
+		c.logger.Warn("bad heartbeat", "err", err)
+		return
+	}
+	status := p.Status
+	if status == "" {
+		status = "online"
+	}
+	if err := ledger.Heartbeat(c.db, env.From, status, p.Capacity); err != nil {
+		c.logger.Warn("apply heartbeat", "from", env.From, "err", err)
+	}
+}
 
 // Recover normalizes tasks left active by a previous process instance.
 func (c *Core) Recover(ctx context.Context) (int, error) { return c.store.Recover(ctx) }
@@ -441,6 +509,8 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 		c.handleContextFetch(ctx, env)
 	case bus.MsgContextAck:
 		c.handleContextAck(ctx, env)
+	case bus.MsgHeartbeat:
+		c.handleHeartbeat(ctx, env)
 	default:
 		c.logger.Warn("unhandled message type", "type", env.Type, "from", env.From)
 	}

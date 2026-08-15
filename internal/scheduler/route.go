@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"strings"
+	"time"
 
 	"github.com/xenith/panda/internal/ledger"
 )
@@ -28,22 +29,29 @@ type Decision struct {
 }
 
 // Route decides where a task with the given required abilities should run.
+// It is RouteAt evaluated at the current time; tests and callers that need a
+// deterministic freshness discount use RouteAt.
+func Route(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, preferred string) Decision {
+	return RouteAt(self, chain, employees, localMatch, required, preferred, time.Now().Unix())
+}
+
+// RouteAt decides where a task with the given required abilities should run,
+// scoring candidates as of now (Unix seconds).
 //
 // Local capability wins first — native > agent > manual, as judged by the
 // injected localMatch predicate (the core's commander router). Otherwise, a
 // user-named node (preferred) that is online, not already on the chain, and
-// matches the required abilities is honored over tier ranking: when the user
-// says "run it on the Orange Pi", the task goes there even if a higher-tier
-// peer also advertises the ability. Absent a preference, it picks the best
-// online matching peer — highest scheduler tier first, then lowest id as a
-// deterministic tiebreak (so a forwarded task never loops back through an
-// earlier hop). If no peer matches, it falls back to a sub-scheduler (tier >
-// 1) — a peer that can route the task further downstream even though it cannot
-// execute it itself. Only when neither exists does it decline.
-//
-// MVP scope: this is deterministic capability + tier matching, not full scored
-// ranking — capacity/load/cost weighting (design doc §6.3) is a later sprint.
-func Route(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, preferred string) Decision {
+// matches the required abilities is honored over scored ranking: when the user
+// says "run it on the Orange Pi", the task goes there even if a higher-scoring
+// peer also advertises the ability. Absent a preference, candidates are ranked
+// by the DCPS weighted score (design §6.3: resource_efficiency 0.4 +
+// scheduler_tier 0.2 + wait_time 0.1, with user_priority handled by the
+// preferred short-circuit) discounted by the TMB heartbeat-freshness weight
+// (exp decay, 30-minute half-life). If no peer matches, it falls back to a
+// sub-scheduler (tier > 1) — a peer that can route the task further downstream
+// even though it cannot execute it itself. Only when neither exists does it
+// decline.
+func RouteAt(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, preferred string, now int64) Decision {
 	if localMatch(required) {
 		return Decision{Action: ActionLocal}
 	}
@@ -68,7 +76,7 @@ func Route(self string, chain []string, employees []ledger.Node, localMatch func
 	}
 
 	// A named node is authoritative when it can take the task; otherwise fall
-	// through to normal ranking so the task still runs somewhere capable. Match
+	// through to scored ranking so the task still runs somewhere capable. Match
 	// on either the node id (the routing key) or its display name, since the
 	// entry model sees the latter in the device summary.
 	if preferred != "" {
@@ -79,32 +87,14 @@ func Route(self string, chain []string, employees []ledger.Node, localMatch func
 		}
 	}
 
-	if target := pickBest(matching); target != "" {
+	if target := pickBest(matching, now); target != "" {
 		return Decision{Action: ActionForward, Target: target}
 	}
-	if target := pickBest(subs); target != "" {
+	if target := pickBest(subs, now); target != "" {
 		return Decision{Action: ActionForward, Target: target}
 	}
 	return Decision{
 		Action: ActionDecline,
 		Reason: "no capability matches required: " + strings.Join(required, ","),
 	}
-}
-
-// pickBest returns the id of the best node from a non-empty slice: highest
-// scheduler tier first (Full over Standard over Micro), then lowest id for a
-// deterministic tiebreak. This is a first step toward the §6.3 scored ranking —
-// capacity, load, and cost are not yet tracked, but preferring a more capable
-// node beats an arbitrary lowest-id pick.
-func pickBest(nodes []ledger.Node) string {
-	if len(nodes) == 0 {
-		return ""
-	}
-	best := nodes[0]
-	for _, n := range nodes[1:] {
-		if n.SchedulerTier > best.SchedulerTier || (n.SchedulerTier == best.SchedulerTier && n.ID < best.ID) {
-			best = n
-		}
-	}
-	return best.ID
 }

@@ -587,6 +587,21 @@ func (s *TaskStore) SetDetail(ctx context.Context, taskID string, d TaskDetail) 
 	return nil
 }
 
+// CountActive returns the number of this node's tasks currently occupying an
+// execution slot (running or waiting_context). The capacity-driven
+// accept/decline check (DCPS τ_adp mapping, design §2.4) compares it against
+// the card's MaxConcurrent before accepting delegated work.
+func (s *TaskStore) CountActive(ctx context.Context, owner string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tasks WHERE owner_node=? AND state IN ('running','waiting_context')`,
+		owner).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count active tasks: %w", err)
+	}
+	return n, nil
+}
+
 // ExpireTasks fails any active task whose lease has expired. It returns the
 // task IDs actually failed, so the caller can clean up per-task state. Called
 // periodically by the monitor.
