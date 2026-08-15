@@ -477,15 +477,40 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 	return conn, nil
 }
 
-// ensurePeer registers conn under id if not already present.
-func (c *Core) ensurePeer(id string, conn *bus.Conn) {
+// ensurePeer registers conn under id. A repeated hello on the SAME conn is a
+// no-op; a hello on a NEW conn replaces the stale registration (P1-7): the
+// fresh, authenticated hello proves liveness, while the old conn may be a
+// half-dead socket whose read loop has not noticed yet. Without replacement a
+// reconnecting peer could never reclaim its identity — sends kept going to
+// the dead conn, and when the dead conn's read loop finally exited,
+// removePeerForConn would delete the identity even though the live
+// replacement conn was right there.
+//
+// The old conn is closed AFTER the swap and outside the mutex. Its read-loop
+// cleanup calls removePeerForConn(oldConn), which matches by conn identity —
+// the registry now holds the new conn, so the new registration survives.
+//
+// Returns true when a stale registration was replaced, so the hello handler
+// knows to reply on the new conn even if this peer was already greeted —
+// otherwise the reconnecting side never learns our identity on its new conn
+// and drops our first inbound message as "message before hello".
+func (c *Core) ensurePeer(id string, conn *bus.Conn) bool {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.peers[id]; ok {
-		return
+	old := c.peers[id]
+	if old != nil && old.conn == conn {
+		c.mu.Unlock()
+		return false
 	}
 	c.peers[id] = &Peer{id: id, conn: conn}
-	c.logger.Info("peer registered", "peer", id, "active", len(c.peers))
+	n := len(c.peers)
+	c.mu.Unlock()
+
+	if old != nil {
+		c.logger.Info("peer connection replaced", "peer", id)
+		old.conn.Close()
+	}
+	c.logger.Info("peer registered", "peer", id, "active", n)
+	return old != nil
 }
 
 // dispatch routes an envelope to its handler. conn is the connection the
@@ -536,7 +561,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		return
 	}
 	conn.SetPeerID(p.NodeID)
-	c.ensurePeer(p.NodeID, conn)
+	replaced := c.ensurePeer(p.NodeID, conn)
 	// Ingest the peer's advertised capability card so routing can consider it.
 	if len(p.Card) > 0 {
 		var sum ledger.CapabilitySummary
@@ -549,9 +574,12 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	c.logger.Info("peer hello", "peer", p.NodeID, "ver", p.Ver)
 
 	// Reply with our own hello only once per peer, so the handshake
-	// terminates instead of ping-ponging forever.
+	// terminates instead of ping-ponging forever. Exception: a hello that
+	// REPLACED a stale conn (P1-7) gets a fresh reply — the reconnecting peer
+	// must bind our identity to its new conn, or it will drop our first
+	// message as arriving before hello.
 	c.mu.Lock()
-	if c.greeted[p.NodeID] {
+	if c.greeted[p.NodeID] && !replaced {
 		c.mu.Unlock()
 		return
 	}
