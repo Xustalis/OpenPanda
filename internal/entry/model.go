@@ -226,7 +226,10 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return Response{}, fmt.Errorf("entry: read response: %w", err)
+		// A mid-body truncation (unexpected EOF / connection reset) is a
+		// transient transport failure like a failed Do: no complete response was
+		// received, so it is safe to retry.
+		return Response{}, &transientError{err: fmt.Errorf("read response: %w", err)}
 	}
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 		return Response{}, &retryableError{status: resp.StatusCode, body: string(body)}

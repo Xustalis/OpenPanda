@@ -132,7 +132,7 @@ func (r *Router) Execute(ctx context.Context, plan Plan, prompt string, cwd stri
 		if err := defense.Authorize(plan.Tier, authorized); err != nil {
 			return Result{OK: false, ExitCode: 1, Stderr: err.Error()}
 		}
-		return r.execNative(ctx, plan)
+		return r.execNative(ctx, plan, cwd)
 	case "agent":
 		return r.execAgent(ctx, plan, prompt, cwd)
 	case "manual":
@@ -142,8 +142,12 @@ func (r *Router) Execute(ctx context.Context, plan Plan, prompt string, cwd stri
 	}
 }
 
-func (r *Router) execNative(ctx context.Context, plan Plan) Result {
-	nr := r.executor.Run(ctx, plan.Command, plan.Args...)
+func (r *Router) execNative(ctx context.Context, plan Plan, cwd string) Result {
+	// A per-call executor copy so the sandboxed cwd is this task's, not a
+	// shared mutable field (native commands may run concurrently).
+	ex := *r.executor
+	ex.dir = cwd
+	nr := ex.Run(ctx, plan.Command, plan.Args...)
 	return Result{
 		OK:       nr.OK,
 		ExitCode: nr.ExitCode,

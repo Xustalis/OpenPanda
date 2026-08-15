@@ -69,3 +69,21 @@ func TestModelEnvInjectsProvider(t *testing.T) {
 		t.Fatalf("missing env entries: %v", want)
 	}
 }
+
+// TestAdapterPathRejectsTraversal verifies adapter names are flat filenames
+// (P2-5): anything path-like (.., separators, absolute) is a traversal attempt
+// and must be rejected before it reaches exec.CommandContext.
+func TestAdapterPathRejectsTraversal(t *testing.T) {
+	for _, name := range []string{"", ".", "..", "../evil.py", "a/b.py", `a\b.py`, "/etc/passwd"} {
+		if _, err := adapterPath(name); err == nil {
+			t.Fatalf("adapterPath(%q): expected error", name)
+		}
+	}
+	p, err := adapterPath("claude_code.py")
+	if err != nil {
+		t.Fatalf("valid adapter name rejected: %v", err)
+	}
+	if p == "" {
+		t.Fatal("empty path for valid adapter name")
+	}
+}

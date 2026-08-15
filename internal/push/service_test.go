@@ -69,7 +69,7 @@ func TestNotifyEndToEnd(t *testing.T) {
 		ttl   string
 		body  []byte
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received.authz = r.Header.Get("Authorization")
 		received.enc = r.Header.Get("Content-Encoding")
 		received.ttl = r.Header.Get("TTL")
@@ -79,6 +79,7 @@ func TestNotifyEndToEnd(t *testing.T) {
 	defer srv.Close()
 
 	svc, _ := newTestService(t)
+	svc.client = srv.Client() // trust the test server's self-signed cert
 	uaPriv, sub := testSubscription(t, srv.URL+"/push/1")
 	if err := svc.Subscribe(context.Background(), sub); err != nil {
 		t.Fatal(err)
@@ -113,12 +114,13 @@ func TestNotifyEndToEnd(t *testing.T) {
 }
 
 func TestSendRemovesGoneSubscription(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusGone)
 	}))
 	defer srv.Close()
 
 	svc, store := newTestService(t)
+	svc.client = srv.Client() // trust the test server's self-signed cert
 	_, sub := testSubscription(t, srv.URL+"/push/gone")
 	if err := svc.Subscribe(context.Background(), sub); err != nil {
 		t.Fatal(err)
@@ -147,6 +149,25 @@ func TestUnsubscribeRemoves(t *testing.T) {
 	subs, _ := store.All(context.Background())
 	if len(subs) != 0 {
 		t.Fatalf("subscription still present after unsubscribe")
+	}
+}
+
+// TestSubscribeRejectsNonHTTPS verifies the endpoint validator (P2-4): only
+// https endpoints with a host are accepted, so a leaked panel token cannot turn
+// the daemon into an SSRF proxy against http:// metadata endpoints or file://.
+func TestSubscribeRejectsNonHTTPS(t *testing.T) {
+	svc, _ := newTestService(t)
+	for _, ep := range []string{
+		"http://169.254.169.254/latest/meta-data",
+		"file:///etc/passwd",
+		"https://", // hostless
+	} {
+		sub := Subscription{Endpoint: ep}
+		sub.Keys.P256dh = "x"
+		sub.Keys.Auth = "y"
+		if err := svc.Subscribe(context.Background(), sub); err == nil {
+			t.Fatalf("endpoint %q: expected validation error", ep)
+		}
 	}
 }
 

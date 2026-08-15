@@ -90,7 +90,6 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			Complexity:   in.Complexity,
 			Risk:         in.Risk,
 			AttemptID:    t.AttemptID,
-			Authorized:   in.Authorized,
 		}
 		// Register a waiter so the inbound task_result unblocks this call.
 		ch := make(chan bus.TaskResultPayload, 1)
@@ -123,6 +122,11 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 	if err != nil {
 		return Task{}, "", "", err
 	}
+	// Persist the user's tier-2 consent as server-side state (design §16 / P0-1).
+	// execute/run read it from the DB, so the wire payload never needs to carry it.
+	if err := c.store.SetAuthorized(ctx, t.TaskID, in.Authorized); err != nil {
+		return Task{}, "", "", fmt.Errorf("set authorized: %w", err)
+	}
 	hash, level, err := c.packContext(ctx, in)
 	if err != nil {
 		return Task{}, "", "", fmt.Errorf("pack context: %w", err)
@@ -141,7 +145,7 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 // budget; past that it is paused into review for human analysis rather than
 // left in failed or retried forever (design §14.2 signal C, plan P2-18).
 func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.TaskResultPayload, error) {
-	result, err := c.execute(ctx, t.TaskID, in.Intent, in.Requires, in.Authorized)
+	result, err := c.execute(ctx, t.TaskID, in.Intent, in.Requires)
 	if err != nil && !errors.Is(err, ErrCancelled) {
 		c.failLocal(ctx, t.TaskID, err)
 		return t, result, err
@@ -179,7 +183,7 @@ func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.Ta
 		}
 		retries++
 		c.logger.Info("retrying task", "task", t.TaskID)
-		result, err = c.run(ctx, t.TaskID, in.Intent, in.Requires, in.Authorized)
+		result, err = c.run(ctx, t.TaskID, in.Intent, in.Requires)
 		if err != nil && !errors.Is(err, ErrCancelled) {
 			c.failLocal(ctx, t.TaskID, err)
 			return t, result, err

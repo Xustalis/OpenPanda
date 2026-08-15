@@ -22,10 +22,10 @@ var ErrNotAuthorized = errors.New("defense: tier-2 command requires authorizatio
 
 // Authorize decides whether a command at the given tier may run. Tier 1 always
 // passes; Tier 2 passes only when the caller supplies explicit authorization.
-// A zero/unknown tier is treated as Tier 1 (reversible) — the safe default is
-// to gate privilege escalation, not to reject everything.
+// A zero/unknown/negative tier is treated as Tier 2 (fail-closed): an
+// unclassified command must not run by omission.
 func Authorize(tier int, authorized bool) error {
-	if tier >= TierIrreversible && !authorized {
+	if tier != TierReversible && !authorized {
 		return ErrNotAuthorized
 	}
 	return nil
@@ -48,7 +48,7 @@ func TierFromCommand(command string, args ...string) int {
 	// cmd, timeout 5 cmd, busybox cmd, …). Classify the inner command, not the
 	// wrapper's name, so a destructive payload cannot hide behind the wrapper.
 	if passThroughVerbs[command] {
-		if inner, innerArgs := unwrapPassThrough(args); inner != "" {
+		if inner, innerArgs := unwrapPassThrough(command, args); inner != "" {
 			return TierFromCommand(inner, innerArgs...)
 		}
 		return TierReversible
@@ -91,9 +91,10 @@ var shellEscapes = []string{
 
 // shellComposition are substrings that let code run further commands beyond
 // what first-word classification can see: command substitution, command
-// chaining, and pipelines. When present, the code is treated as destructive —
-// the conservative default, since the full command graph is not visible.
-var shellComposition = []string{"$(", "`", ";", "&&", "||", "|"}
+// chaining, pipelines, redirection, backgrounding, and newline-separated
+// commands. When present, the code is treated as destructive — the conservative
+// default, since the full command graph is not visible.
+var shellComposition = []string{"$(", "`", ";", "&&", "||", "|", ">", "&", "\n"}
 
 // passThroughVerbs are commands that execute a later argument as the real
 // command rather than doing the work themselves. First-word matching on these
@@ -104,24 +105,51 @@ var passThroughVerbs = map[string]bool{
 	"busybox": true, "xargs": true, "command": true, "stdbuf": true,
 }
 
+// passThroughValueFlags lists, per pass-through wrapper, the flags that take a
+// separate argument. That argument belongs to the flag, not the wrapper, so it
+// must be skipped rather than classified as the real command — "timeout -s KILL
+// 5 rm" runs rm, not KILL.
+var passThroughValueFlags = map[string][]string{
+	"timeout": {"-s", "--signal", "-k", "--kill-after"},
+	"xargs":   {"-I", "--replace", "-E", "--eof", "-n", "--max-args", "-P", "--max-procs", "-L", "--max-lines", "-a", "--arg-file"},
+	"nice":    {"-n", "--adjustment"},
+	"env":     {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+	"stdbuf":  {"-i", "--input", "-o", "--output", "-e", "--error"},
+}
+
 // unwrapPassThrough returns the first argument that names a command (not a
-// flag, a KEY=VALUE assignment, or a bare number) together with the arguments
-// that follow it, so the caller can classify the real command. It returns
-// ("", nil) when args contains no command.
-func unwrapPassThrough(args []string) (string, []string) {
-	for i, a := range args {
-		if a == "" || a[0] == '-' {
+// flag, a flag's value, a KEY=VALUE assignment, or a bare number) together with
+// the arguments that follow it, so the caller can classify the real command. It
+// returns ("", nil) when args contains no command.
+func unwrapPassThrough(command string, args []string) (string, []string) {
+	valueFlags := passThroughValueFlags[command]
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "" {
 			continue
 		}
-		if strings.Contains(a, "=") {
+		if a[0] == '-' {
+			if takesValue(a, valueFlags) && i+1 < len(args) {
+				i++ // skip the flag's value argument
+			}
 			continue
 		}
-		if isNumeric(a) {
+		if strings.Contains(a, "=") || isNumeric(a) {
 			continue
 		}
 		return a, args[i+1:]
 	}
 	return "", nil
+}
+
+// takesValue reports whether a is one of the wrapper's value-taking flags.
+func takesValue(a string, valueFlags []string) bool {
+	for _, f := range valueFlags {
+		if a == f {
+			return true
+		}
+	}
+	return false
 }
 
 // isNumeric reports whether s is a run of ASCII digits (a bare duration like

@@ -113,6 +113,9 @@ func (s *Service) Subscribe(ctx context.Context, sub Subscription) error {
 	if sub.Endpoint == "" || sub.Keys.P256dh == "" || sub.Keys.Auth == "" {
 		return errors.New("invalid subscription: endpoint, p256dh and auth are required")
 	}
+	if err := validateEndpoint(sub.Endpoint); err != nil {
+		return err
+	}
 	// Validate the keys now so a malformed subscription fails at subscribe
 	// time rather than silently at send time.
 	if _, err := decodeKey(sub.Keys.P256dh, 65); err != nil {
@@ -221,4 +224,22 @@ func origin(endpoint string) string {
 		return ""
 	}
 	return u.Scheme + "://" + u.Host
+}
+
+// validateEndpoint rejects non-HTTPS or hostless push endpoints (P2-4). The
+// browser's push service is always https://; accepting an arbitrary scheme would
+// let a leaked panel token turn the daemon into an SSRF proxy (e.g. an
+// http://169.254.169.254/... metadata endpoint).
+func validateEndpoint(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("subscription endpoint: invalid URL")
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("subscription endpoint: scheme must be https")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("subscription endpoint: missing host")
+	}
+	return nil
 }

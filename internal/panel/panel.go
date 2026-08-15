@@ -119,7 +119,7 @@ func (h *handler) listTasks(w http.ResponseWriter, r *http.Request) {
 
 	tasks, err := h.store.ListByState(r.Context(), state)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, http.StatusInternalServerError, errors.New("list tasks failed"))
 		return
 	}
 	var filtered []core.Task
@@ -146,7 +146,7 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, errors.New("no such task"))
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, http.StatusInternalServerError, errors.New("load task failed"))
 		return
 	}
 	out := toTaskJSON(t)
@@ -162,7 +162,11 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := h.store.Approve(r.Context(), id); err != nil {
-		writeErr(w, http.StatusConflict, err)
+		if errors.Is(err, core.ErrConflict) || errors.Is(err, core.ErrIllegal) {
+			writeErr(w, http.StatusConflict, errors.New("task is not awaiting approval"))
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, errors.New("approve failed"))
 		return
 	}
 	writeJSON(w, map[string]string{"id": id, "status": "approved"})
@@ -172,7 +176,11 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 func (h *handler) rejectTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := h.store.Reject(r.Context(), id, r.URL.Query().Get("reason")); err != nil {
-		writeErr(w, http.StatusConflict, err)
+		if errors.Is(err, core.ErrConflict) || errors.Is(err, core.ErrIllegal) {
+			writeErr(w, http.StatusConflict, errors.New("task is not awaiting approval"))
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, errors.New("reject failed"))
 		return
 	}
 	writeJSON(w, map[string]string{"id": id, "status": "rejected"})

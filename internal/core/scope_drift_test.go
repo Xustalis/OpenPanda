@@ -45,7 +45,9 @@ func newCoreWithAgent(t *testing.T, id string) *Core {
 		},
 		Capacity: ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
 	}
-	return NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
+	c := NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
+	c.SetSharedSecret(testSharedSecret)
+	return c
 }
 
 // TestScopeDriftPausesAgent verifies that an agent that changes a file outside

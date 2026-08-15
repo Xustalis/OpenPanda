@@ -102,6 +102,7 @@ func runDaemon() {
 
 	coreNode := core.NewCore(db, core.NodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 	coreNode.SetWorkDir(cfg.Storage.WorkPath)
+	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
 
 	// Attach the memory layer (design §17/§8): project-memory injection into
 	// agent execution context, daily logging that feeds the Dreaming engine, and
@@ -224,7 +225,14 @@ func runDaemon() {
 	}
 
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- coreNode.Listen(ctx, cfg.Network.ListenAddr) }()
+	// Fail-closed transport auth (design §16 / P0-1): without a shared secret no
+	// peer can authenticate, so the WebSocket listener is not started at all —
+	// the node runs local-only rather than accepting unauthenticated peers.
+	if cfg.Network.SharedSecret == "" {
+		logger.Warn("websocket disabled: network.shared_secret is not set (refusing to accept unauthenticated peers)")
+	} else {
+		go func() { serveErr <- coreNode.Listen(ctx, cfg.Network.ListenAddr) }()
+	}
 
 	select {
 	case <-ctx.Done():

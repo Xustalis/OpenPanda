@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/xenith/panda/internal/config"
 	"github.com/xenith/panda/internal/security"
@@ -15,6 +17,16 @@ import (
 // directory; the install layout puts adapters/ next to the binary. It is a
 // var so tests can point it at a temp dir.
 var adapterDir = "adapters"
+
+// adapterPath joins an adapter name under adapterDir, rejecting any name that
+// could escape it via a path separator or a ".." element (P2-5). Adapter names
+// are flat filenames, so anything path-like is a traversal attempt.
+func adapterPath(name string) (string, error) {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return "", fmt.Errorf("invalid adapter name %q", name)
+	}
+	return filepath.Join(adapterDir, name), nil
+}
 
 // AdapterRequest is written to the adapter's stdin.
 type AdapterRequest struct {
@@ -53,7 +65,10 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		return AgentResult{OK: false, Result: "bad adapter request", ExitCode: 1}
 	}
 
-	path := adapterDir + "/" + name
+	path, err := adapterPath(name)
+	if err != nil {
+		return AgentResult{OK: false, Result: security.Redact(err.Error()), ExitCode: 1}
+	}
 	cmd := exec.CommandContext(ctx, "python3", path)
 	cmd.Stdin = bytes.NewReader(reqJSON)
 	var stdout, stderr bytes.Buffer

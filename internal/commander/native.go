@@ -5,9 +5,10 @@ package commander
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"time"
+
+	"github.com/xenith/panda/internal/security"
 )
 
 // NativeResult is the outcome of a deterministic command.
@@ -48,7 +49,11 @@ func (e *Executor) Run(ctx context.Context, command string, args ...string) Nati
 
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = e.dir
-	cmd.Env = append(os.Environ(), e.env...)
+	// Run under the same minimal, secret-free environment as adapter
+	// subprocesses (security.Sandbox), never the parent's full os.Environ(),
+	// so a native command cannot exfiltrate the model API key or other host
+	// secrets (P1-1).
+	cmd.Env = security.NewSandbox(e.dir).Env(e.env...)
 
 	var stdout, stderr []byte
 	cmd.Stdout = &outBuf{&stdout}

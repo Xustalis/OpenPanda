@@ -36,6 +36,7 @@ func Migrate(db *sql.DB) error {
 			complexity REAL,
 			risk TEXT,
 			resource_json TEXT,
+			authorized INTEGER NOT NULL DEFAULT 0,
 			model_tier INT,
 			created_at INTEGER,
 			updated_at INTEGER
@@ -82,5 +83,38 @@ func Migrate(db *sql.DB) error {
 			return fmt.Errorf("migrate: %w\nstmt: %s", err, stmt)
 		}
 	}
+	// Idempotent column additions for databases created before the column was
+	// introduced. CREATE TABLE IF NOT EXISTS does not alter an existing table,
+	// so a dev's data/panda.db from an earlier build must gain the column here.
+	if err := addColumnIfMissing(db, "tasks", "authorized", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
 	return nil
+}
+
+// addColumnIfMissing appends a column to a table if it is not already present,
+// using PRAGMA table_info so the ALTER is a no-op on a fresh database.
+func addColumnIfMissing(db *sql.DB, table, col, def string) error {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == col {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, col, def))
+	return err
 }

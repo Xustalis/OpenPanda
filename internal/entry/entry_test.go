@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/xenith/panda/internal/config"
 	"github.com/xenith/panda/internal/ledger"
@@ -317,5 +320,94 @@ func TestMessageBlocksMarshal(t *testing.T) {
 	s := string(b)
 	if !strings.Contains(s, "tool_result") || !strings.Contains(s, "toolu_1") {
 		t.Fatalf("marshal = %s", s)
+	}
+}
+
+// TestCompleteRetriesServerError verifies a retryable 5xx is retried up to the
+// budget and succeeds once the provider recovers (P1-3/P2-19 retry path).
+func TestCompleteRetriesServerError(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) <= 2 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		resp := map[string]any{"content": []map[string]string{{"type": "text", "text": "ok"}}}
+		b, _ := json.Marshal(resp)
+		_, _ = w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk", Model: "m"})
+	c.maxRetry = 2
+	c.retryBase = time.Millisecond
+
+	got, err := c.Complete(context.Background(), "sys", "hi")
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("calls = %d, want 3 (2 failures + success)", calls.Load())
+	}
+}
+
+// TestCompleteRetriesTransientTransport verifies a weak-network drop (the server
+// accepts then closes before responding) is treated as transient and retried
+// rather than silently dropped (P1-3).
+func TestCompleteRetriesTransientTransport(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	var accepts atomic.Int32
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepts.Add(1)
+			_ = conn.Close() // reset before any response: a weak-network drop
+		}
+	}()
+
+	c := NewClient(config.ModelConfig{BaseURL: "http://" + ln.Addr().String(), APIKey: "sk", Model: "m"})
+	c.maxRetry = 1
+	c.retryBase = time.Millisecond
+
+	if _, err := c.Complete(context.Background(), "sys", "hi"); err == nil {
+		t.Fatal("expected error after transport failures")
+	}
+	if got := accepts.Load(); got != 2 {
+		t.Fatalf("accepts = %d, want 2 (initial + 1 retry)", got)
+	}
+}
+
+// TestCompleteNoRetryClientError verifies a non-retryable 4xx is not retried:
+// the client error is definitive, so retrying would waste a call (P1-3).
+func TestCompleteNoRetryClientError(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","message":"bad"}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk", Model: "m"})
+	c.maxRetry = 2
+	c.retryBase = time.Millisecond
+
+	if _, err := c.Complete(context.Background(), "sys", "hi"); err == nil {
+		t.Fatal("expected error for 400")
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("calls = %d, want 1 (client error is not retried)", calls.Load())
 	}
 }

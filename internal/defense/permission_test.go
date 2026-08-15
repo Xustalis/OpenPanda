@@ -15,7 +15,7 @@ func TestAuthorize(t *testing.T) {
 		{"tier1 always allowed", TierReversible, false, false},
 		{"tier2 without auth rejected", TierIrreversible, false, true},
 		{"tier2 with auth allowed", TierIrreversible, true, false},
-		{"zero tier treated as reversible", 0, false, false},
+		{"zero tier fails closed", 0, false, true},
 		{"unknown high tier gated", 3, false, true},
 	}
 	for _, tc := range cases {

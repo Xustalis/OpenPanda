@@ -15,10 +15,9 @@ import (
 // waiting_context to fetch its full snapshot. handleContextAck uses it to
 // resume execution.
 type pendingContext struct {
-	intent     string
-	required   []string
-	ctxType    string
-	authorized bool
+	intent   string
+	required []string
+	ctxType  string
 }
 
 // packContext builds and stores the full context snapshot for a local-origin
@@ -149,7 +148,7 @@ func (c *Core) handleContextAck(ctx context.Context, env bus.Envelope) {
 	// the root scheduler is unblocked, exactly as the synchronous execute path
 	// reports back via reply().
 	go func() {
-		result, err := c.run(ctx, p.TaskID, pc.intent, pc.required, pc.authorized)
+		result, err := c.run(ctx, p.TaskID, pc.intent, pc.required)
 		if err != nil {
 			if errors.Is(err, ErrCancelled) {
 				c.logger.Info("task cancelled during execution", "task", p.TaskID)

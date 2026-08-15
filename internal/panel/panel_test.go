@@ -283,3 +283,25 @@ func TestStaticServedWithoutAuth(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (static assets are not gated)", rr.Code)
 	}
 }
+
+// TestApproveErrorDoesNotLeakInternals verifies the panel maps internal state
+// errors to a generic message (P2-15): the task id, internal state name, or
+// underlying store error text must never reach the HTTP client.
+func TestApproveErrorDoesNotLeakInternals(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	task, _ := store.Create(ctx, "", "proj", "internal-secret-detail", "node", []string{"node"})
+
+	h := New(store, t.TempDir(), nil, testToken)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks/"+task.TaskID+"/approve", nil))
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, leak := range []string{task.TaskID, "state=", "want review", "sqlite", "ErrConflict"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("error body leaked internal detail %q: %q", leak, body)
+		}
+	}
+}

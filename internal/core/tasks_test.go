@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -19,6 +20,59 @@ func createTask(t *testing.T, s *TaskStore, parent, title, owner string) Task {
 		t.Fatalf("create task: %v", err)
 	}
 	return tk
+}
+
+// TestConcurrentTransitionSingleWinner races two goroutines closing the same
+// running task. The state/owner CAS guard (P1-2) must let exactly one win; the
+// other loses with ErrConflict (or ErrIllegal if it observed the new state in a
+// pre-check). Run under -race this also exercises the SetOnReview lock (P2-6).
+func TestConcurrentTransitionSingleWinner(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "race", "node")
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(s.Queue(ctx, tk.TaskID, "node"))
+	must(s.Dispatch(ctx, tk.TaskID, "node", "node"))
+	must(s.Accept(ctx, tk.TaskID, "node"))
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		errs[0] = s.Complete(ctx, tk.TaskID, "node", map[string]any{"ok": true})
+	}()
+	go func() {
+		defer wg.Done()
+		errs[1] = s.Fail(ctx, tk.TaskID, "node", "boom")
+	}()
+	wg.Wait()
+
+	wins := 0
+	for _, err := range errs {
+		if err == nil {
+			wins++
+			continue
+		}
+		if !errors.Is(err, ErrConflict) && !errors.Is(err, ErrIllegal) {
+			t.Fatalf("unexpected transition error: %v", err)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("exactly one transition must win, got %d (errs=%v)", wins, errs)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != StateDone && got.State != StateFailed {
+		t.Fatalf("final state = %s, want done or failed", got.State)
+	}
 }
 
 func TestSetOnReviewFires(t *testing.T) {

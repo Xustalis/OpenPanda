@@ -13,11 +13,14 @@ func unixNow() int64 { return time.Now().Unix() }
 // HelloPayload is sent when a node connects to declare its identity. Card is
 // the node's capability summary (a compact JSON object); it is carried as raw
 // JSON so the transport stays decoupled from the ledger package that owns the
-// CapabilitySummary type.
+// CapabilitySummary type. Sig is the HMAC-SHA256 (hex) of NodeID under the
+// shared secret, proving the identity was minted by a node that holds the
+// secret (design §16 / P0-1).
 type HelloPayload struct {
 	NodeID string          `json:"node_id"`
 	Ver    string          `json:"ver"`
 	Card   json.RawMessage `json:"card,omitempty"`
+	Sig    string          `json:"sig"`
 }
 
 // HeartbeatPayload carries status + capacity.
@@ -53,7 +56,6 @@ type TaskDelegatePayload struct {
 	Complexity   float64  `json:"complexity,omitempty"`
 	Risk         string   `json:"risk,omitempty"`
 	AttemptID    string   `json:"attempt_id,omitempty"`
-	Authorized   bool     `json:"authorized,omitempty"` // user consented to tier-2 commands
 }
 
 // TitleOrDefault returns the explicit title, falling back to the intent.

@@ -46,7 +46,7 @@ func (t *Tracker) Record(project string, abilities []string, title string, succe
 		scope, key = ScopeProject, project
 	}
 	name := slug(class)
-	if !ShouldCreate(stats, t.exists(name)) {
+	if !ShouldCreate(stats, t.exists(scope, key, name)) {
 		return nil, nil
 	}
 
@@ -57,15 +57,17 @@ func (t *Tracker) Record(project string, abilities []string, title string, succe
 	return sk, nil
 }
 
-// exists reports whether a skill of this name already exists in any scope, so a
-// class is distilled once and then patched on discovery rather than duplicated.
-func (t *Tracker) exists(name string) bool {
+// exists reports whether a skill of this name already exists in the same scope
+// (and, for project/device scopes, the same key), so a class is distilled once
+// per scope rather than suppressed globally. A project skill never blocks the
+// same-named skill in another project (design §8.3).
+func (t *Tracker) exists(scope Scope, key, name string) bool {
 	index, err := t.store.Index()
 	if err != nil {
 		return false
 	}
 	for _, e := range index {
-		if e.Name == name {
+		if e.Name == name && e.Scope == scope && e.Key == key {
 			return true
 		}
 	}

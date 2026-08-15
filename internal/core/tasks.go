@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/xenith/panda/internal/storage"
 	"github.com/xenith/panda/internal/util"
@@ -25,7 +26,8 @@ type TaskStore struct {
 	// onReview, when set, is called whenever a task enters review (needs human
 	// analysis). It must not block: the daemon wires it to a fire-and-forget
 	// notification path.
-	onReview func(Task)
+	onReview   func(Task)
+	onReviewMu sync.RWMutex
 }
 
 // NewTaskStore wraps a DB. now may be nil (defaults to Unix time).
@@ -39,7 +41,11 @@ func NewTaskStore(db *sql.DB, logger *slog.Logger) *TaskStore {
 // SetOnReview installs the callback fired when a task transitions into review.
 // The callback is invoked on its own goroutine so a slow consumer (e.g. a push
 // send) never stalls the state machine.
-func (s *TaskStore) SetOnReview(fn func(Task)) { s.onReview = fn }
+func (s *TaskStore) SetOnReview(fn func(Task)) {
+	s.onReviewMu.Lock()
+	s.onReview = fn
+	s.onReviewMu.Unlock()
+}
 
 // Create inserts a new task in submitted state with a fresh UUIDv7 id.
 func (s *TaskStore) Create(ctx context.Context, parentID, project, title, owner string, chain []string) (Task, error) {
@@ -103,7 +109,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 		Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State, &t.OwnerNode,
 			&t.AttemptID, &t.StateVersion, &chainJSON, &intent, &spec,
 			&result, &contextType, &contextHash, &complexity, &risk, &resource, &lease,
-			&t.CreatedAt, &t.UpdatedAt)
+			&t.CreatedAt, &t.UpdatedAt, &t.Authorized)
 	if err != nil {
 		return Task{}, err
 	}
@@ -138,7 +144,7 @@ func (s *TaskStore) transition(ctx context.Context, taskID, from, to, owner, eve
 	if !CanTransition(from, to) {
 		return fmt.Errorf("%w: %s -> %s", ErrIllegal, from, to)
 	}
-	if err := s.apply(ctx, taskID, to, owner, cur.AttemptID, event, data, nil); err != nil {
+	if err := s.applyCAS(ctx, taskID, from, to, owner, cur.AttemptID, event, data, nil); err != nil {
 		return err
 	}
 	s.logger.Debug("task transition", "task", taskID, "from", from, "to", to, "owner", owner)
@@ -154,10 +160,13 @@ func (s *TaskStore) transition(ctx context.Context, taskID, from, to, owner, eve
 // snapshot (not a pointer) is passed so the callback owns its copy and the
 // goroutine is free to outlive the transition.
 func (s *TaskStore) notifyReview(t Task) {
-	if s.onReview == nil {
+	s.onReviewMu.RLock()
+	fn := s.onReview
+	s.onReviewMu.RUnlock()
+	if fn == nil {
 		return
 	}
-	go s.onReview(t)
+	go fn(t)
 }
 
 // apply writes the new state + event. attemptID is carried through unchanged
@@ -178,6 +187,33 @@ func (s *TaskStore) apply(ctx context.Context, taskID, to, owner, attemptID, eve
 		to, owner, attemptID, resultJSON, now, taskID)
 	if err != nil {
 		return fmt.Errorf("update task state: %w", err)
+	}
+	return s.recordEvent(ctx, taskID, event, dataJSON)
+}
+
+// applyCAS writes the new state + event atomically, succeeding only if the
+// stored (state, owner_node) still match what the caller read. This closes the
+// TOCTOU window between the Get-and-check and the UPDATE (P1-2): without the
+// state/owner guard, two concurrent transitions can both pass their pre-checks
+// and overwrite each other. Returns ErrConflict when the guard fails.
+func (s *TaskStore) applyCAS(ctx context.Context, taskID, from, to, owner, attemptID, event string, data, result any) error {
+	now := s.now()
+	dataJSON, _ := json.Marshal(data)
+	var resultJSON any
+	if result != nil {
+		b, _ := json.Marshal(result)
+		resultJSON = string(b)
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET state=?, owner_node=?, attempt_id=?, state_version=state_version+1,
+			result_json=COALESCE(?, result_json), updated_at=?
+		WHERE task_id=? AND state=? AND owner_node=?`,
+		to, owner, attemptID, resultJSON, now, taskID, from, owner)
+	if err != nil {
+		return fmt.Errorf("update task state: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: task %s state=%s owner=%s", ErrConflict, taskID, from, owner)
 	}
 	return s.recordEvent(ctx, taskID, event, dataJSON)
 }
@@ -244,11 +280,20 @@ func (s *TaskStore) Decline(ctx context.Context, taskID, parent string, reason s
 	if cur.State != StateDispatched {
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateDispatched)
 	}
-	if err := s.apply(ctx, taskID, StateQueued, parent, cur.AttemptID, EvDecline,
-		map[string]any{"reason": reason, "by": cur.OwnerNode}, nil); err != nil {
-		return err
+	// Guarded UPDATE because the lease changes hands (executor -> parent): the
+	// state/owner guard ensures a concurrent accept/decline cannot both win.
+	dataJSON, _ := json.Marshal(map[string]any{"reason": reason, "by": cur.OwnerNode})
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET state=?, owner_node=?, state_version=state_version+1, updated_at=?
+		WHERE task_id=? AND state=? AND owner_node=?`,
+		StateQueued, parent, s.now(), taskID, StateDispatched, cur.OwnerNode)
+	if err != nil {
+		return fmt.Errorf("decline task: %w", err)
 	}
-	return nil
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: task %s declined concurrently", ErrConflict, taskID)
+	}
+	return s.recordEvent(ctx, taskID, EvDecline, dataJSON)
 }
 
 // SetWaitingContext moves dispatched -> waiting_context.
@@ -273,7 +318,7 @@ func (s *TaskStore) Complete(ctx context.Context, taskID, owner string, result a
 	if cur.State != StateRunning {
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateRunning)
 	}
-	return s.apply(ctx, taskID, StateDone, owner, cur.AttemptID, EvResult, result, result)
+	return s.applyCAS(ctx, taskID, StateRunning, StateDone, owner, cur.AttemptID, EvResult, result, result)
 }
 
 // CompleteFromRemote records a remote executor's final result on the
@@ -441,6 +486,20 @@ func (s *TaskStore) SetLease(ctx context.Context, taskID string, durationMS int6
 		s.now()+durationMS/1000, s.now(), taskID)
 	if err != nil {
 		return fmt.Errorf("set lease: %w", err)
+	}
+	return nil
+}
+
+// SetAuthorized persists whether the task's tier-2 (irreversible) commands were
+// consented to by the user. It is server-side state (design §16 / P0-1): only
+// the local entry path sets it, and a delegated task cannot forge authorization
+// on the wire because the wire payload no longer carries it.
+func (s *TaskStore) SetAuthorized(ctx context.Context, taskID string, authorized bool) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET authorized=?, updated_at=? WHERE task_id=?`,
+		authorized, s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("set authorized: %w", err)
 	}
 	return nil
 }
@@ -687,7 +746,7 @@ func (s *TaskStore) RotateAttempt(ctx context.Context, taskID, owner string) (st
 const taskColumns = `task_id, parent_id, project, title, state, owner_node, attempt_id,
 	state_version, chain_json, intent, spec_json, result_json,
 	context_type, context_hash, complexity, risk, resource_json,
-	lease_expires_at, created_at, updated_at`
+	lease_expires_at, created_at, updated_at, authorized`
 
 func scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task
@@ -701,7 +760,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		if err := rows.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State,
 			&t.OwnerNode, &t.AttemptID, &t.StateVersion, &chainJSON, &intent,
 			&spec, &result, &contextType, &contextHash, &complexity, &risk, &resource, &lease,
-			&t.CreatedAt, &t.UpdatedAt); err != nil {
+			&t.CreatedAt, &t.UpdatedAt, &t.Authorized); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)

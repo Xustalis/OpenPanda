@@ -27,10 +27,11 @@ type NodeConfig struct {
 
 // NetworkConfig controls the WebSocket listener and manual peers.
 type NetworkConfig struct {
-	ListenAddr string   `yaml:"listen_addr"` // e.g. ":7836"
-	PanelAddr  string   `yaml:"panel_addr"`  // HTTP panel/PWA listener, e.g. ":7840"
-	PanelToken string   `yaml:"panel_token"` // Bearer token guarding /api/*; the panel refuses to start without it
-	Peers      []string `yaml:"peers"`       // e.g. "orangepi3b.tailnet-name.ts.net:7836"
+	ListenAddr   string   `yaml:"listen_addr"`   // e.g. ":7836"
+	PanelAddr    string   `yaml:"panel_addr"`    // HTTP panel/PWA listener, e.g. ":7840"
+	PanelToken   string   `yaml:"panel_token"`   // Bearer token guarding /api/*; the panel refuses to start without it
+	SharedSecret string   `yaml:"shared_secret"` // HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it
+	Peers        []string `yaml:"peers"`         // e.g. "orangepi3b.tailnet-name.ts.net:7836"
 }
 
 // StorageConfig controls local persistence.
@@ -145,6 +146,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("PANDA_PANEL_TOKEN"); v != "" {
 		c.Network.PanelToken = v
+	}
+	if v := os.Getenv("PANDA_SHARED_SECRET"); v != "" {
+		c.Network.SharedSecret = v
 	}
 	if v := os.Getenv("PANDA_DB_PATH"); v != "" {
 		c.Storage.DBPath = v

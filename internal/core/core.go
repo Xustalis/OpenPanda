@@ -72,6 +72,10 @@ type Core struct {
 	// working directory); a deploy can pin it to a project root.
 	workDir string
 
+	// sharedSecret authenticates inbound hello messages (design §16 / P0-1).
+	// Empty is fail-closed: no peer can authenticate until it is set.
+	sharedSecret string
+
 	mu      sync.RWMutex
 	peers   map[string]*Peer
 	greeted map[string]bool // node ids we have replied hello to
@@ -141,6 +145,14 @@ func (c *Core) SetWorkDir(dir string) {
 		dir = "."
 	}
 	c.workDir = dir
+}
+
+// SetSharedSecret sets the shared secret used to authenticate inbound hello
+// messages (design §16 / P0-1). An empty secret is fail-closed: no peer can
+// authenticate, so the WebSocket listener accepts no hello until a secret is
+// configured.
+func (c *Core) SetSharedSecret(secret string) {
+	c.sharedSecret = secret
 }
 
 // Idle reports whether the node has no active (running, dispatched, or
@@ -225,11 +237,20 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 			c.logger.Debug("inbound read closed", "err", err)
 			return
 		}
-		// Track peer by the from field of the first message.
-		if env.From != "" {
-			c.ensurePeer(env.From, conn)
+		// Identity binding (design §16 / P0-1): the hello handshake binds an
+		// authenticated node id to this conn. Before binding, only hello is
+		// accepted; after binding, every message must carry the bound id or the
+		// sender is spoofed and the conn is dropped.
+		if id := conn.PeerID(); id != "" {
+			if env.From != id {
+				c.logger.Warn("spoofed sender on connection", "bound", id, "from", env.From)
+				return
+			}
+		} else if env.Type != bus.MsgHello {
+			c.logger.Warn("message before hello", "type", env.Type, "from", env.From)
+			return
 		}
-		c.dispatch(ctx, env)
+		c.dispatch(ctx, conn, env)
 	}
 }
 
@@ -311,6 +332,7 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 		NodeID: c.nodeID,
 		Ver:    "0.1.0-dev",
 		Card:   card,
+		Sig:    bus.HelloSig(c.sharedSecret, c.nodeID),
 	})
 	if err != nil {
 		conn.Close()
@@ -335,11 +357,13 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) {
 	c.logger.Info("peer registered", "peer", id, "active", len(c.peers))
 }
 
-// dispatch routes an envelope to its handler.
-func (c *Core) dispatch(ctx context.Context, env bus.Envelope) {
+// dispatch routes an envelope to its handler. conn is the connection the
+// message arrived on, needed so the hello handler can bind the authenticated
+// peer identity to it.
+func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 	switch env.Type {
 	case bus.MsgHello:
-		c.handleHello(ctx, env)
+		c.handleHello(ctx, conn, env)
 	case bus.MsgTaskDelegate:
 		c.handleDelegate(ctx, env)
 	case bus.MsgTaskAccept:
@@ -359,13 +383,27 @@ func (c *Core) dispatch(ctx context.Context, env bus.Envelope) {
 	}
 }
 
-func (c *Core) handleHello(ctx context.Context, env bus.Envelope) {
+func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 	var p bus.HelloPayload
 	if err := env.PayloadInto(&p); err != nil {
 		c.logger.Warn("bad hello", "err", err)
 		return
 	}
-	c.ensurePeer(p.NodeID, c.connFor(env.From))
+	// Verify the transport signature before trusting the claimed identity
+	// (design §16 / P0-1). Fail closed: an unauthenticated hello registers
+	// nothing and receives no reply.
+	if !bus.VerifyHello(c.sharedSecret, p.NodeID, p.Sig) {
+		c.logger.Warn("rejected hello: bad signature", "peer", p.NodeID)
+		return
+	}
+	// The claimed identity must match the envelope's from field; both become the
+	// identity bound to this conn, so later messages may only carry this id.
+	if env.From != p.NodeID {
+		c.logger.Warn("rejected hello: from mismatch", "from", env.From, "peer", p.NodeID)
+		return
+	}
+	conn.SetPeerID(p.NodeID)
+	c.ensurePeer(p.NodeID, conn)
 	// Ingest the peer's advertised capability card so routing can consider it.
 	if len(p.Card) > 0 {
 		var sum ledger.CapabilitySummary
@@ -395,6 +433,7 @@ func (c *Core) handleHello(ctx context.Context, env bus.Envelope) {
 		NodeID: c.nodeID,
 		Ver:    "0.1.0-dev",
 		Card:   card,
+		Sig:    bus.HelloSig(c.sharedSecret, c.nodeID),
 	}); err != nil {
 		c.logger.Debug("hello reply failed", "peer", env.From, "err", err)
 	}

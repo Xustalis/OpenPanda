@@ -65,6 +65,10 @@ type Task struct {
 	Complexity   float64
 	Risk         string
 	ResourceJSON string
+	// Authorized records whether the user consented to executing tier-2
+	// (irreversible) commands. It is server-side state (design §16 / P0-1), not
+	// wire-carried, so a delegated task cannot forge authorization.
+	Authorized   bool
 	LeaseExpires int64
 	CreatedAt    int64
 	UpdatedAt    int64

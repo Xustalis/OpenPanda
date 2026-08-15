@@ -32,7 +32,24 @@ const (
 type Conn struct {
 	ws     *websocket.Conn
 	mu     sync.Mutex // serializes writes
+	idMu   sync.RWMutex
+	peerID string // authenticated node id, bound once at hello
 	logger *slog.Logger
+}
+
+// SetPeerID binds the authenticated node id to this connection (set once, at
+// hello). PeerID returns it, or "" before the handshake completes.
+func (c *Conn) SetPeerID(id string) {
+	c.idMu.Lock()
+	c.peerID = id
+	c.idMu.Unlock()
+}
+
+// PeerID returns the node id bound to this connection by the hello handshake.
+func (c *Conn) PeerID() string {
+	c.idMu.RLock()
+	defer c.idMu.RUnlock()
+	return c.peerID
 }
 
 func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
@@ -74,6 +91,9 @@ func (c *Conn) StartPingLoop(ctx context.Context, pingPeriod time.Duration) {
 func (c *Conn) Send(v any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Bound the write so a wedged peer cannot block this (and, via the write
+	// mutex, every other) writer forever.
+	_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
 	return c.ws.WriteJSON(v)
 }
 
@@ -106,8 +126,11 @@ func NewServer(addr string, logger *slog.Logger, onConn func(*Conn, string)) *Se
 		logger: logger,
 		onConn: onConn,
 		upgrader: websocket.Upgrader{
-			// Phase 0 runs over Tailscale/private LAN; dev-friendly check.
-			CheckOrigin: func(*http.Request) bool { return true },
+			// Node-to-node Go clients send no Origin header; a browser would.
+			// Reject any Origin so a cross-site page cannot open a WebSocket to
+			// this node's control channel (the PWA talks HTTP on the panel port,
+			// never here).
+			CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" },
 		},
 	}
 }

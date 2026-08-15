@@ -210,5 +210,7 @@ func newCoreWithNative(t *testing.T, id, addr string, native ledger.NativeAbilit
 		Native:        []ledger.NativeAbility{native},
 		Capacity:      ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
 	}
-	return NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
+	c := NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
+	c.SetSharedSecret(testSharedSecret)
+	return c
 }

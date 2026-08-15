@@ -83,3 +83,56 @@ func TestTrackerBelowSuccessRate(t *testing.T) {
 		}
 	}
 }
+
+// TestTrackerSameClassDifferentProjects verifies a project-scoped skill in one
+// project does not suppress the same-named skill in another (P1-4): dedup is
+// scoped by (scope, key), not global name.
+func TestTrackerSameClassDifferentProjects(t *testing.T) {
+	store := NewStore(t.TempDir())
+	tracker := NewTracker(store)
+	abilities := []string{"lint", "build"}
+
+	var skillA *Skill
+	for i := 0; i < 3; i++ {
+		sk, err := tracker.Record("proj-a", abilities, "build a", true)
+		if err != nil {
+			t.Fatalf("record A: %v", err)
+		}
+		if sk != nil {
+			skillA = sk
+		}
+	}
+	if skillA == nil {
+		t.Fatal("project A did not generate a skill")
+	}
+
+	var skillB *Skill
+	for i := 0; i < 3; i++ {
+		sk, err := tracker.Record("proj-b", abilities, "build b", true)
+		if err != nil {
+			t.Fatalf("record B: %v", err)
+		}
+		if sk != nil {
+			skillB = sk
+		}
+	}
+	if skillB == nil {
+		t.Fatal("project B did not generate its own skill")
+	}
+
+	if skillA.Name != skillB.Name {
+		t.Fatalf("same class must yield the same name, got %q vs %q", skillA.Name, skillB.Name)
+	}
+	if skillA.Scope != ScopeProject || skillB.Scope != ScopeProject {
+		t.Fatalf("scopes = %s/%s, want project", skillA.Scope, skillB.Scope)
+	}
+	if skillA.Project == skillB.Project {
+		t.Fatalf("projects must differ, both %q", skillA.Project)
+	}
+	if got, _ := store.Load(ScopeProject, "proj-a", skillA.Name); got == nil {
+		t.Error("skill A not persisted")
+	}
+	if got, _ := store.Load(ScopeProject, "proj-b", skillB.Name); got == nil {
+		t.Error("skill B not persisted")
+	}
+}

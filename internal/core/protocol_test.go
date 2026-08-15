@@ -131,5 +131,11 @@ func newCore(t *testing.T, id, addr string) *Core {
 		Native:        []ledger.NativeAbility{{ID: "sys:info", Command: "uname"}},
 		Capacity:      ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
 	}
-	return NewCore(db, id, card, 5, verboseTestLogger(), config.ModelConfig{})
+	c := NewCore(db, id, card, 5, verboseTestLogger(), config.ModelConfig{})
+	c.SetSharedSecret(testSharedSecret)
+	return c
 }
+
+// testSharedSecret is the shared HMAC secret used by every test core that
+// exchanges hellos, so the transport-auth handshake (P0-1) succeeds in tests.
+const testSharedSecret = "test-secret"
