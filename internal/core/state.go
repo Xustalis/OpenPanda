@@ -69,6 +69,10 @@ type Task struct {
 	// (irreversible) commands. It is server-side state (design §16 / P0-1), not
 	// wire-carried, so a delegated task cannot forge authorization.
 	Authorized   bool
+	// Requires is the capability set the task was routed with. Persisted so a
+	// decline can be re-routed to the next-best node without the original wire
+	// payload (P1-5).
+	Requires     []string
 	LeaseExpires int64
 	CreatedAt    int64
 	UpdatedAt    int64
@@ -88,6 +92,9 @@ type TaskDetail struct {
 	Complexity   float64
 	Risk         string
 	ResourceJSON string
+	// Requires carries the routing capability set so it survives past the
+	// original delegate payload (decline re-routing, P1-5).
+	Requires []string
 }
 
 // Terminal reports whether s has no valid outgoing transition.

@@ -40,6 +40,7 @@ func (in TaskInput) detail() TaskDetail {
 		Complexity:   in.Complexity,
 		Risk:         in.Risk,
 		ResourceJSON: in.ResourceJSON,
+		Requires:     in.Requires,
 	}
 }
 

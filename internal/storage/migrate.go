@@ -38,6 +38,7 @@ func Migrate(db *sql.DB) error {
 			risk TEXT,
 			resource_json TEXT,
 			authorized INTEGER NOT NULL DEFAULT 0,
+			requires_json TEXT,
 			model_tier INT,
 			created_at INTEGER,
 			updated_at INTEGER
@@ -88,6 +89,9 @@ func Migrate(db *sql.DB) error {
 	// introduced. CREATE TABLE IF NOT EXISTS does not alter an existing table,
 	// so a dev's data/panda.db from an earlier build must gain the column here.
 	if err := addColumnIfMissing(db, "tasks", "authorized", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	if err := addColumnIfMissing(db, "tasks", "requires_json", "TEXT"); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	if err := addColumnIfMissing(db, "employee_cache", "resource_profile_json", "TEXT"); err != nil {

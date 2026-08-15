@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -254,6 +255,13 @@ func (c *Core) forwardDelegated(ctx context.Context, taskID, target string, p bu
 	if err := c.store.Queue(ctx, taskID, c.nodeID); err != nil {
 		return fmt.Errorf("queue: %w", err)
 	}
+	return c.dispatchDelegated(ctx, taskID, target, p, chain)
+}
+
+// dispatchDelegated is forwardDelegated for a task already in queued state —
+// e.g. a declined task being re-routed (P1-5), where Decline already moved it
+// dispatched -> queued and a second queue transition would conflict.
+func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p bus.TaskDelegatePayload, chain []string) error {
 	if err := c.store.Dispatch(ctx, taskID, c.nodeID, target); err != nil {
 		return fmt.Errorf("dispatch: %w", err)
 	}
@@ -296,6 +304,7 @@ func delegateDetail(p bus.TaskDelegatePayload) TaskDetail {
 		SpecJSON:    p.SpecJSON,
 		Complexity:  p.Complexity,
 		Risk:        p.Risk,
+		Requires:    delegateRequired(p),
 	}
 }
 
@@ -705,8 +714,14 @@ func (c *Core) handleDecline(ctx context.Context, env bus.Envelope) {
 	}
 	c.logger.Info("task declined", "task", p.TaskID, "reason", p.Reason, "by", env.From)
 	// Parent returns the task to queued for re-routing elsewhere.
-	if err := c.store.Decline(ctx, p.TaskID, c.nodeID, p.Reason); err != nil {
+	if err := c.store.Decline(ctx, p.TaskID, c.nodeID, p.Reason, env.From); err != nil {
 		c.logger.Debug("decline apply failed", "task", p.TaskID, "err", err)
+	}
+	// P1-5: before giving up, try to re-route to the next-best node. A
+	// successful re-dispatch means the outcome arrives via the new executor, so
+	// the decline is neither relayed up nor signalled to a waiting Submit.
+	if c.rerouteDeclined(ctx, p.TaskID) {
+		return
 	}
 	c.relayToParent(ctx, bus.MsgTaskDecline, t.Chain, p)
 	// Unblock a synchronous Submit that forwarded this task: it sees a failed
@@ -714,6 +729,78 @@ func (c *Core) handleDecline(ctx context.Context, env bus.Envelope) {
 	c.signalResult(p.TaskID, bus.TaskResultPayload{
 		TaskID: p.TaskID, OK: false, ExitCode: 1, Stderr: "declined: " + p.Reason,
 	})
+}
+
+// rerouteDeclined attempts to dispatch a declined task to the next-best node
+// (P1-5, design §2.4 capacity-driven delegation). It returns true when the
+// task was handed to a new executor; false means no route exists and the
+// caller should propagate the decline upstream.
+//
+// Loop safety: every node that has ever declined the task (recorded on the
+// EvDecline audit events) is excluded from candidacy, in addition to the
+// delegation chain. Each re-route therefore strictly shrinks the candidate
+// set, so a task cannot bounce between two declining nodes forever. The
+// exclusion set is routing-local — the wire chain forwarded onward is left
+// untouched, keeping relayToParent's predecessor walk intact.
+func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
+	t, err := c.store.Get(ctx, taskID)
+	if err != nil {
+		c.logger.Warn("reroute: load task", "task", taskID, "err", err)
+		return false
+	}
+	// Only the node holding the (requeued) lease may re-route, and only a
+	// queued task is re-routable — anything else means a concurrent
+	// cancel/expire/accept already won.
+	if t.State != StateQueued || t.OwnerNode != c.nodeID {
+		return false
+	}
+	if len(t.Requires) == 0 {
+		// Tasks persisted before requires_json have no routing key; fall back
+		// to the previous propagate-the-decline behaviour.
+		return false
+	}
+
+	excluded, err := c.store.DeclinedBy(ctx, taskID)
+	if err != nil {
+		c.logger.Warn("reroute: declined-by", "task", taskID, "err", err)
+		return false
+	}
+	// Route's seen-set doubles as the exclusion list: chain nodes plus every
+	// past decliner. Suffixing the chain keeps the persisted/wire chain clean.
+	seenChain := append(slices.Clone(t.Chain), excluded...)
+
+	decision := scheduler.Route(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires, "")
+	if decision.Action != scheduler.ActionForward {
+		c.logger.Info("reroute: no alternate node", "task", taskID, "action", decision.Action)
+		return false
+	}
+
+	// Rebuild a minimal delegate payload from the persisted row. Context is
+	// carried by pointer: the new executor fetches the snapshot from the
+	// context source if it does not already hold it.
+	payload := bus.TaskDelegatePayload{
+		TaskID:      t.TaskID,
+		ParentID:    t.ParentID,
+		Project:     t.Project,
+		Title:       t.Title,
+		Intent:      t.Intent,
+		SpecJSON:    t.SpecJSON,
+		Requires:    t.Requires,
+		Complexity:  t.Complexity,
+		Risk:        t.Risk,
+		ContextType: t.ContextType,
+		ContextHash: t.ContextHash,
+		AttemptID:   t.AttemptID,
+	}
+	if t.ContextHash != "" {
+		payload.ContextLevel = "pointer"
+	}
+	if err := c.dispatchDelegated(ctx, taskID, decision.Target, payload, t.Chain); err != nil {
+		c.logger.Warn("reroute: forward failed", "task", taskID, "target", decision.Target, "err", err)
+		return false
+	}
+	c.logger.Info("rerouted declined task", "task", taskID, "to", decision.Target)
+	return true
 }
 
 // handleResult processes a task_result from an executor. Idempotency: a

@@ -103,18 +103,20 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	var chainJSON string
 	var intent, spec, result sql.NullString
 	var lease sql.NullInt64
-	var contextType, contextHash, risk, resource sql.NullString
+	var contextType, contextHash, risk, resource, requiresJSON sql.NullString
 	var complexity sql.NullFloat64
 	err := s.db.QueryRowContext(ctx,
 		`SELECT `+taskColumns+` FROM tasks WHERE task_id = ?`, taskID).
 		Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State, &t.OwnerNode,
 			&t.AttemptID, &t.StateVersion, &chainJSON, &intent, &spec,
-			&result, &contextType, &contextHash, &complexity, &risk, &resource, &lease,
+			&result, &contextType, &contextHash, &complexity, &risk, &resource,
+			&requiresJSON, &lease,
 			&t.CreatedAt, &t.UpdatedAt, &t.Authorized)
 	if err != nil {
 		return Task{}, err
 	}
 	_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
+	_ = json.Unmarshal([]byte(requiresJSON.String), &t.Requires)
 	t.Intent = intent.String
 	t.SpecJSON = spec.String
 	t.ResultJSON = result.String
@@ -288,6 +290,34 @@ func (s *TaskStore) DispatchTarget(ctx context.Context, taskID string) (string, 
 	return d.Target, nil
 }
 
+// DeclinedBy returns every node that has declined this task, read from the
+// task_events audit trail (Decline records the declining executor as "by").
+// The re-router (P1-5) excludes them so a task cannot bounce back to a node
+// that already refused it — that is what bounds the decline/re-route loop.
+func (s *TaskStore) DeclinedBy(ctx context.Context, taskID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT data_json FROM task_events WHERE task_id=? AND type=? ORDER BY id`,
+		taskID, EvDecline)
+	if err != nil {
+		return nil, fmt.Errorf("declined-by: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var data string
+		if err := rows.Scan(&data); err != nil {
+			return nil, err
+		}
+		var d struct {
+			By string `json:"by"`
+		}
+		if err := json.Unmarshal([]byte(data), &d); err == nil && d.By != "" {
+			out = append(out, d.By)
+		}
+	}
+	return out, rows.Err()
+}
+
 // Accept transitions dispatched -> running and transfers the lease to the
 // executor (owner). The UPDATE carries a state guard (P1-3): without it a
 // concurrent cancel/timeout between the pre-check and the write could be
@@ -319,7 +349,10 @@ func (s *TaskStore) Accept(ctx context.Context, taskID, owner string) error {
 // Decline rejects a dispatched task, moving it back to queued and releasing
 // the lease so the parent can route elsewhere. Only a dispatched task may be
 // declined; this prevents overriding a task that already started running.
-func (s *TaskStore) Decline(ctx context.Context, taskID, parent string, reason string) error {
+// by is the declining executor (the wire sender): while the task is
+// dispatched the stored owner is still the delegator, so the decliner must be
+// passed explicitly — the re-router (P1-5) excludes it from future candidacy.
+func (s *TaskStore) Decline(ctx context.Context, taskID, parent, reason, by string) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
@@ -329,7 +362,7 @@ func (s *TaskStore) Decline(ctx context.Context, taskID, parent string, reason s
 	}
 	// Guarded UPDATE because the lease changes hands (executor -> parent): the
 	// state/owner guard ensures a concurrent accept/decline cannot both win.
-	dataJSON, _ := json.Marshal(map[string]any{"reason": reason, "by": cur.OwnerNode})
+	dataJSON, _ := json.Marshal(map[string]any{"reason": reason, "by": by})
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE tasks SET state=?, owner_node=?, state_version=state_version+1, updated_at=?
 		WHERE task_id=? AND state=? AND owner_node=?`,
@@ -575,11 +608,16 @@ func (s *TaskStore) SetAuthorized(ctx context.Context, taskID string, authorized
 // profile. Called once after creation; the fields default to zero/empty until
 // then. A zero TaskDetail clears the fields.
 func (s *TaskStore) SetDetail(ctx context.Context, taskID string, d TaskDetail) error {
-	_, err := s.db.ExecContext(ctx, `
+	requiresJSON, err := json.Marshal(d.Requires)
+	if err != nil {
+		return fmt.Errorf("marshal requires: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
 		UPDATE tasks SET context_type=?, context_hash=?, intent=?, spec_json=?, complexity=?,
-			risk=?, resource_json=?, updated_at=?
+			risk=?, resource_json=?, requires_json=?, updated_at=?
 		WHERE task_id=?`,
 		d.ContextType, d.ContextHash, d.Intent, d.SpecJSON, d.Complexity, d.Risk, d.ResourceJSON,
+		string(requiresJSON),
 		s.now(), taskID)
 	if err != nil {
 		return fmt.Errorf("set detail: %w", err)
@@ -863,7 +901,7 @@ func (s *TaskStore) RotateAttempt(ctx context.Context, taskID, owner string) (st
 // Get/Children/ListByState/scanTasks stay in lock-step as the schema grows.
 const taskColumns = `task_id, parent_id, project, title, state, owner_node, attempt_id,
 	state_version, chain_json, intent, spec_json, result_json,
-	context_type, context_hash, complexity, risk, resource_json,
+	context_type, context_hash, complexity, risk, resource_json, requires_json,
 	lease_expires_at, created_at, updated_at, authorized`
 
 func scanTasks(rows *sql.Rows) ([]Task, error) {
@@ -873,15 +911,17 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var chainJSON string
 		var intent, spec, result sql.NullString
 		var lease sql.NullInt64
-		var contextType, contextHash, risk, resource sql.NullString
+		var contextType, contextHash, risk, resource, requiresJSON sql.NullString
 		var complexity sql.NullFloat64
 		if err := rows.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State,
 			&t.OwnerNode, &t.AttemptID, &t.StateVersion, &chainJSON, &intent,
-			&spec, &result, &contextType, &contextHash, &complexity, &risk, &resource, &lease,
+			&spec, &result, &contextType, &contextHash, &complexity, &risk, &resource,
+			&requiresJSON, &lease,
 			&t.CreatedAt, &t.UpdatedAt, &t.Authorized); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
+		_ = json.Unmarshal([]byte(requiresJSON.String), &t.Requires)
 		t.Intent = intent.String
 		t.SpecJSON = spec.String
 		t.ResultJSON = result.String
