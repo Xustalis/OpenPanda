@@ -44,6 +44,15 @@ func TierFromCommand(command string, args ...string) int {
 	if destructiveVerbs[command] {
 		return TierIrreversible
 	}
+	// Pass-through wrappers run a later argument as the real command (env VAR=x
+	// cmd, timeout 5 cmd, busybox cmd, …). Classify the inner command, not the
+	// wrapper's name, so a destructive payload cannot hide behind the wrapper.
+	if passThroughVerbs[command] {
+		if inner, innerArgs := unwrapPassThrough(args); inner != "" {
+			return TierFromCommand(inner, innerArgs...)
+		}
+		return TierReversible
+	}
 	if flag, ok := interpreterCodeFlag[command]; ok {
 		if code := codeArg(flag, args); code != "" && codeEscalates(code) {
 			return TierIrreversible
@@ -80,21 +89,80 @@ var shellEscapes = []string{
 	"child_process", "spawn(", "curl ", "wget ", "| sh", "| bash", "| sudo",
 }
 
-// codeArg returns the argument immediately following flag (e.g. the code
-// string after "-c"), or "" when flag is absent.
-func codeArg(flag string, args []string) string {
+// shellComposition are substrings that let code run further commands beyond
+// what first-word classification can see: command substitution, command
+// chaining, and pipelines. When present, the code is treated as destructive —
+// the conservative default, since the full command graph is not visible.
+var shellComposition = []string{"$(", "`", ";", "&&", "||", "|"}
+
+// passThroughVerbs are commands that execute a later argument as the real
+// command rather than doing the work themselves. First-word matching on these
+// would classify the wrapper (benign) instead of the payload (possibly
+// destructive), so the real command is located and classified instead.
+var passThroughVerbs = map[string]bool{
+	"env": true, "nohup": true, "timeout": true, "nice": true,
+	"busybox": true, "xargs": true, "command": true, "stdbuf": true,
+}
+
+// unwrapPassThrough returns the first argument that names a command (not a
+// flag, a KEY=VALUE assignment, or a bare number) together with the arguments
+// that follow it, so the caller can classify the real command. It returns
+// ("", nil) when args contains no command.
+func unwrapPassThrough(args []string) (string, []string) {
 	for i, a := range args {
-		if a == flag && i+1 < len(args) {
-			return args[i+1]
+		if a == "" || a[0] == '-' {
+			continue
+		}
+		if strings.Contains(a, "=") {
+			continue
+		}
+		if isNumeric(a) {
+			continue
+		}
+		return a, args[i+1:]
+	}
+	return "", nil
+}
+
+// isNumeric reports whether s is a run of ASCII digits (a bare duration like
+// "5" that timeout/nice take before the real command).
+func isNumeric(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// codeArg returns the argument immediately following flag (e.g. the code
+// string after "-c"), or "" when flag is absent. It also recognizes the flag
+// letter inside a combined short-flag cluster ("-ec" carries -c alongside -e),
+// which a bare first-word match would otherwise miss.
+func codeArg(flag string, args []string) string {
+	if len(flag) < 2 {
+		return ""
+	}
+	r := rune(flag[1])
+	for i, a := range args {
+		if a == flag || (len(a) > 2 && a[0] == '-' && a[1] != '-' && strings.ContainsRune(a[1:], r)) {
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+			return ""
 		}
 	}
 	return ""
 }
 
 // codeEscalates reports whether interpreter code is destructive enough to
-// warrant Tier 2. It looks for destructive verbs as whole words plus common
-// subprocess/shell-escape primitives. The check is deliberately conservative:
-// when a wrapper runs code we cannot classify, assume it may be destructive.
+// warrant Tier 2. It looks for destructive verbs as whole words, common
+// subprocess/shell-escape primitives, and shell composition (substitution,
+// chaining, pipelines). The check is deliberately conservative: when a wrapper
+// runs composed or unclassifiable code, it is assumed destructive.
 func codeEscalates(code string) bool {
 	lower := strings.ToLower(code)
 	for _, tok := range strings.Fields(lower) {
@@ -104,6 +172,11 @@ func codeEscalates(code string) bool {
 	}
 	for _, esc := range shellEscapes {
 		if strings.Contains(lower, esc) {
+			return true
+		}
+	}
+	for _, c := range shellComposition {
+		if strings.Contains(lower, c) {
 			return true
 		}
 	}

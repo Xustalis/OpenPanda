@@ -6,9 +6,32 @@
 > A personal task-orchestration assistant that runs across your heterogeneous
 > devices as a peer-to-peer network of nodes.
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [Deutsch](README.de.md)
+[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Go](https://img.shields.io/badge/Go-%E2%89%A51.22-blue)
+![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-blue)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
 ---
+
+## Table of contents
+
+- [What is PANDA?](#what-is-panda)
+- [Key features](#key-features)
+- [Architecture](#architecture)
+- [Getting started](#getting-started)
+- [Usage](#usage)
+- [CLI reference](#cli-reference)
+- [Configuration](#configuration)
+- [Documentation](#documentation)
+- [Testing](#testing)
+- [Deployment](#deployment)
+- [Tech stack](#tech-stack)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgements](#acknowledgements)
 
 ## What is PANDA?
 
@@ -38,7 +61,7 @@ WebSocket links you control.
 - **Self-evolving skills** — procedural memory in `SKILL.md` files: a skill
   declares when it applies, how it runs, and can be refined after each use.
 - **Two-layer memory** — per-user and per-project memory (`USER.md` /
-  `MEMORY.md` style), kept behind an isolation wall, plus a background
+  `MEMORY.md` style) kept behind an isolation wall, plus a background
   **Dreaming** engine that consolidates daily logs into long-term memory while
   the node is idle.
 - **Voice entry** — optional sidecar pipeline (wake word → STT → LLM → TTS),
@@ -100,7 +123,7 @@ Inside each node:
 
 | Tool | Version |
 |---|---|
-| Go | 1.22+ (tested on 1.26.5) |
+| Go | 1.22+ (module targets 1.26.5) |
 | Python | 3.10+ (agent adapters / voice sidecar) |
 | make | any recent version |
 
@@ -154,22 +177,32 @@ config file whenever possible.
 Each node that can *execute* work should be started with its capability card.
 A node without a card still participates in heartbeats, but it won't be routed work.
 
-### Quick tour
+## Usage
+
+Ask anything — the entry model decides whether to answer, call a tool, or delegate:
 
 ```bash
-# Ask anything — the entry model decides whether to answer, call a tool, or delegate
 ./bin/panda ask "summarize the git log for the last week"
+```
 
-# Inspect the network and queue
+Inspect the network and queue:
+
+```bash
 ./bin/panda status
 ./bin/panda queue
+```
 
-# Drill into / cancel a specific task
+Drill into or cancel a specific task:
+
+```bash
 ./bin/panda task <task-id>
 ./bin/panda cancel <task-id>
 ./bin/panda logs <task-id>
+```
 
-# Manage skills
+Manage skills:
+
+```bash
 ./bin/panda skill
 ```
 
@@ -187,7 +220,7 @@ A node without a card still participates in heartbeats, but it won't be routed w
 | `panda skill` | Skill store management |
 | `panda version` | Print version |
 
-## Configuration reference
+## Configuration
 
 | Section | Key | Meaning |
 |---|---|---|
@@ -198,9 +231,9 @@ A node without a card still participates in heartbeats, but it won't be routed w
 | `network` | `peers` | Manual peer addresses to dial |
 | `storage` | `db_path` | SQLite database path |
 | `storage` | `context_path` | Context snapshot store |
-| `storage` | `memory_path` | Personal memory root (Phase 3) |
-| `storage` | `projects_path` | Per-project memory root (Phase 3) |
-| `storage` | `skills_path` | Procedural-memory root (Phase 3) |
+| `storage` | `memory_path` | Personal memory root |
+| `storage` | `projects_path` | Per-project memory root |
+| `storage` | `skills_path` | Procedural-memory root |
 | `storage` | `work_path` | Where agents execute; scope drift is measured here |
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic-compatible Messages API base URL |
@@ -209,33 +242,18 @@ A node without a card still participates in heartbeats, but it won't be routed w
 
 Config load order: `--config` flag > environment > default `/etc/panda/config.yaml`.
 
-## Directory layout
+## Documentation
 
-```
-cmd/panda/            daemon entry + CLI subcommands
-internal/
-  core/               node lifecycle, state machine, message routing, local execution
-  entry/              unified entry model (classify · validate · fallback)
-  bus/                WebSocket transport + message envelope
-  commander/          3-tier capability execution (native / agent / manual)
-  scheduler/          delegation & routing decisions
-  defense/            permission tiers, circuit breaker, drift & loop detection
-  security/           execution-side hardening (sandbox, allow-lists, audit)
-  panel/              PWA control-panel HTTP API
-  ledger/             capability directory (cards, heartbeat, employee cache)
-  ctxstore/           context-snapshot LRU
-  memory/             two-layer memory + Dreaming engine
-  skills/             procedural memory (SKILL.md self-evolution)
-  config/             YAML config loading
-  storage/            SQLite (WAL) wrapper + migrations
-  log/                structured JSON logging (slog)
-  util/               UUIDv7
-adapters/             agent adapters (claude_code.py, opencode.py)
-extensions/voice/     voice sidecar (wake / STT / TTS / VAD)
-web/pwa/              PWA frontend (manifest + service worker + panel views)
-config/               example capability cards (macbook, orangepi3b)
-testdata/             multi-node loopback test configs
-```
+Full documentation lives in the [`docs/`](docs/) directory, which is split into
+public and internal parts:
+
+- [Documentation index](docs/README.md) — entry point for all documents.
+- [Development handbook](docs/guides/DEVELOPMENT.md) — quickstart, directory
+  map, engineering conventions, quality gates, and test inventory.
+- [Phase reports](docs/reports/) — progress reports for each phase and sprint.
+
+Internal planning, design, and audit documents are kept out of the public
+repository.
 
 ## Testing
 
@@ -277,11 +295,28 @@ done
 | Frontend | PWA (vanilla web app + service worker) |
 | LLM access | Anthropic-compatible `/v1/messages` endpoint (e.g. DeepSeek) |
 
-## Status
+## Roadmap
 
 Phase 3 (memory + voice + safety) is in progress. The memory layer, Dreaming
 engine, skills system, PWA panel, and execution hardening are implemented;
 voice entry is code-complete and waiting on microphone-hardware validation.
+
+## Contributing
+
+Contributions are welcome. To keep the codebase consistent, please follow the
+engineering gates before opening a pull request:
+
+- `make vet && make test` must pass.
+- `gofmt -l internal/ cmd/ adapters/` must be empty.
+- Keep core-module test coverage above ~60% where practical.
+
+See the [development handbook](docs/guides/DEVELOPMENT.md) for the full
+conventions: error wrapping (`%w` / `errors.Is`), complexity limits, no dead
+code, and concurrency rules.
+
+## License
+
+Released under the [MIT License](LICENSE).
 
 ## Acknowledgements
 

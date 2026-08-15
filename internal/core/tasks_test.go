@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func newTestStore(t *testing.T) *TaskStore {
@@ -18,6 +19,48 @@ func createTask(t *testing.T, s *TaskStore, parent, title, owner string) Task {
 		t.Fatalf("create task: %v", err)
 	}
 	return tk
+}
+
+func TestSetOnReviewFires(t *testing.T) {
+	s := newTestStore(t)
+	fired := make(chan Task, 2)
+	s.SetOnReview(func(tk Task) { fired <- tk })
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Pause path: running -> review (scope-drift style intercept).
+	tk := createTask(t, s, "", "pause case", "node")
+	must(s.Queue(context.Background(), tk.TaskID, "node"))
+	must(s.Dispatch(context.Background(), tk.TaskID, "node", "node"))
+	must(s.Accept(context.Background(), tk.TaskID, "node"))
+	must(s.Pause(context.Background(), tk.TaskID, "node", "scope drift"))
+
+	// Review path: failed -> review (retry budget spent).
+	tk2 := createTask(t, s, "", "review case", "node")
+	must(s.Queue(context.Background(), tk2.TaskID, "node"))
+	must(s.Dispatch(context.Background(), tk2.TaskID, "node", "node"))
+	must(s.Accept(context.Background(), tk2.TaskID, "node"))
+	must(s.Fail(context.Background(), tk2.TaskID, "node", "boom"))
+	must(s.Review(context.Background(), tk2.TaskID, "node", "retry spent"))
+
+	got := make(map[string]string)
+	deadline := time.After(5 * time.Second)
+	for len(got) < 2 {
+		select {
+		case fired := <-fired:
+			got[fired.TaskID] = fired.State
+		case <-deadline:
+			t.Fatalf("only %d review callbacks fired, want 2", len(got))
+		}
+	}
+	if got[tk.TaskID] != StateReview || got[tk2.TaskID] != StateReview {
+		t.Fatalf("callbacks = %v, want both in review", got)
+	}
 }
 
 func TestStateMachineHappyPath(t *testing.T) {

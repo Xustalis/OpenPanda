@@ -22,9 +22,11 @@ type Transcript struct {
 }
 
 // Listen blocks until the wake word fires (or durationS elapses), then captures
-// and transcribes the utterance. It drives wake.py then stt.py. This is the
-// voice entry into the unified entry model: the returned Text is fed to
-// Classify exactly like a typed `panda ask` prompt.
+// and transcribes the utterance. It drives wake.py then stt.py. VAD is
+// deliberately NOT in this chain yet: each sidecar opens its own microphone
+// stream, so a vad.py gate would consume the start of the utterance and leave
+// stt.py with silence. VAD belongs in a single-stream capture (wake + VAD + ASR
+// sharing one audio feed), which is a hardware-phase follow-up.
 func Listen(ctx context.Context, durationS float64) Transcript {
 	wake := runSidecar(ctx, "wake.py", map[string]any{"duration_s": durationS})
 	if !wake.ok {

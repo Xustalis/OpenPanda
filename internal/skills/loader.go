@@ -5,8 +5,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
-	"unicode"
+	"sort"
+
+	"github.com/xenith/panda/internal/util"
 )
 
 // IndexEntry is a lightweight skill reference for progressive loading (Hermes's
@@ -57,13 +58,14 @@ func (s *Store) Index() ([]IndexEntry, error) {
 	return out, nil
 }
 
-// Match returns index entries whose name/description contain any query token,
-// restricted to the given scope (and key for project/device scopes). Expired
-// skills never match. An empty query matches every skill in scope — callers
-// pass a real query or filter the result themselves.
+// Match returns index entries whose name/description overlap the query, ranked
+// by relevance and restricted to the given scope (and key for project/device
+// scopes). Expired and pending skills never match. An empty query matches every
+// skill in scope in index order. Scoring is lexical token overlap — whole-word
+// for Latin, single ideograph for CJK — enough to rank related skills without a
+// semantic index.
 func Match(index []IndexEntry, scope Scope, key, query string) []IndexEntry {
-	tokens := strings.Fields(strings.ToLower(query))
-	var out []IndexEntry
+	var candidates []IndexEntry
 	for _, e := range index {
 		if e.Scope != scope {
 			continue
@@ -74,11 +76,44 @@ func Match(index []IndexEntry, scope Scope, key, query string) []IndexEntry {
 		if e.Status == StatusExpired || e.Status == StatusPending {
 			continue // expired is pruned; pending awaits user approval before use
 		}
-		if len(tokens) == 0 || containsAny(e.Name+" "+e.Description, tokens) {
-			out = append(out, e)
+		candidates = append(candidates, e)
+	}
+	if query == "" {
+		return candidates
+	}
+	q := util.Tokenize(query)
+	type scored struct {
+		entry IndexEntry
+		score int
+	}
+	ranked := make([]scored, 0, len(candidates))
+	for _, e := range candidates {
+		if s := overlapTokens(q, util.Tokenize(e.Name+" "+e.Description)); s > 0 {
+			ranked = append(ranked, scored{e, s})
 		}
 	}
+	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+	out := make([]IndexEntry, 0, len(ranked))
+	for _, r := range ranked {
+		out = append(out, r.entry)
+	}
 	return out
+}
+
+// overlapTokens counts the query tokens present in the text tokens, skipping
+// function words (Latin and CJK) so a match on a common word like "the" or "的"
+// alone never drives ranking.
+func overlapTokens(query, text map[string]struct{}) int {
+	n := 0
+	for t := range text {
+		if util.IsStopword(t) {
+			continue
+		}
+		if _, ok := query[t]; ok {
+			n++
+		}
+	}
+	return n
 }
 
 // keyForScope returns the scoping key (project/device name) relevant to the
@@ -92,39 +127,4 @@ func (s *Skill) keyForScope() string {
 	default:
 		return ""
 	}
-}
-
-// containsAny reports whether text contains any of the lowercase tokens as a
-// whole word — word-boundary match, not substring, so "go" must not match
-// "cargo".
-func containsAny(text string, tokens []string) bool {
-	words := wordSet(text)
-	for _, t := range tokens {
-		if _, ok := words[t]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-// wordSet splits text into lowercase word tokens for boundary-accurate
-// matching.
-func wordSet(s string) map[string]struct{} {
-	out := make(map[string]struct{})
-	var cur strings.Builder
-	flush := func() {
-		if cur.Len() > 0 {
-			out[strings.ToLower(cur.String())] = struct{}{}
-			cur.Reset()
-		}
-	}
-	for _, r := range s {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			cur.WriteRune(r)
-		} else {
-			flush()
-		}
-	}
-	flush()
-	return out
 }

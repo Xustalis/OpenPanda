@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/xenith/panda/internal/storage"
 )
@@ -220,12 +221,12 @@ func (n Node) Abilities() []string {
 //
 // A required id of the form "agent:<name>" refers to a configured agent by
 // name (the form advertised in the device summary); any other id matches a
-// declared native/manual id or an agent capability, with a normalized fallback
-// (see AbilityMatches).
+// declared native/manual id or an agent capability, with token-subset matching
+// that bridges separator/category-prefix differences (see AbilityMatches).
 func (n Node) Matches(required []string) bool {
-	// Pre-normalize the declared ids once; otherwise each required id would
-	// re-normalize the whole declared set (O(R×A) allocations instead of O(A)).
-	native, agentCaps, manual := n.normalizedAbilities()
+	// Pre-tokenize the declared ids once; otherwise each required id would
+	// re-tokenize the whole declared set (O(R×A) allocations instead of O(A)).
+	native, agentCaps, manual := n.tokenizedAbilities()
 	for _, req := range required {
 		if name, ok := strings.CutPrefix(req, "agent:"); ok {
 			if _, exists := n.Agents[name]; exists {
@@ -233,96 +234,91 @@ func (n Node) Matches(required []string) bool {
 			}
 			continue
 		}
-		r := normalizeAbility(req)
-		if matchNormalized(native, r) || matchNormalized(agentCaps, r) || matchNormalized(manual, r) {
+		r := tokenizeAbility(req)
+		if matchTokens(native, r) || matchTokens(agentCaps, r) || matchTokens(manual, r) {
 			return true
 		}
 	}
 	return false
 }
 
-// normalizedAbilities returns the declared native/agent/manual ability ids,
-// normalized once so Matches does not re-normalize them per required id.
-func (n Node) normalizedAbilities() (native, agentCaps, manual []string) {
-	native = make([]string, 0, len(n.Native))
+// tokenizedAbilities returns the declared native/agent/manual ability ids as
+// case-folded token sets, computed once so Matches does not re-tokenize them
+// per required id.
+func (n Node) tokenizedAbilities() (native, agentCaps, manual [][]string) {
+	native = make([][]string, 0, len(n.Native))
 	for _, ab := range n.Native {
-		native = append(native, normalizeAbility(ab.ID))
+		native = append(native, tokenizeAbility(ab.ID))
 	}
 	for _, ag := range n.Agents {
 		for _, cap := range ag.Capabilities {
-			agentCaps = append(agentCaps, normalizeAbility(cap))
+			agentCaps = append(agentCaps, tokenizeAbility(cap))
 		}
 	}
-	manual = make([]string, 0, len(n.Manual))
+	manual = make([][]string, 0, len(n.Manual))
 	for _, ab := range n.Manual {
-		manual = append(manual, normalizeAbility(ab.ID))
+		manual = append(manual, tokenizeAbility(ab.ID))
 	}
 	return native, agentCaps, manual
 }
 
-// matchNormalized reports whether any normalized declared id matches the
-// normalized required id r.
-func matchNormalized(ids []string, r string) bool {
+// matchTokens reports whether any declared token set matches the required set.
+func matchTokens(ids [][]string, required []string) bool {
 	for _, d := range ids {
-		if abilityMatchesNormalized(d, r) {
+		if tokenSubset(d, required) {
 			return true
 		}
 	}
 	return false
 }
 
-// normalizeAbility folds an ability id to its lowercase alphanumeric form,
-// dropping the ":" / "-" / "_" / "." separators the model uses inconsistently
-// (e.g. "code:lint" vs "lint").
-func normalizeAbility(s string) string {
-	b := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c >= 'a' && c <= 'z':
-			b = append(b, c)
-		case c >= 'A' && c <= 'Z':
-			b = append(b, c-'A'+'a')
-		case c >= '0' && c <= '9':
-			b = append(b, c)
-		}
+// tokenizeAbility splits an ability id into case-folded alphanumeric tokens on
+// the separators the model uses inconsistently (":", "-", "_", ".", and any
+// other non-alphanumeric). "code:lint" → ["code","lint"], "glint" → ["glint"].
+func tokenizeAbility(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, strings.ToLower(f))
 	}
-	return string(b)
+	return out
 }
 
 // AbilityMatches reports whether a declared ability id satisfies a required id.
-// Exact equality wins; otherwise a normalized comparison (case- and
-// separator-insensitive, with containment) bridges ids the model emitted with a
-// different separator or a surrounding category prefix — e.g. required
-// "code:lint" against a card id "lint". The fallback is guarded so a degenerate
-// fragment (shorter side under 3 chars) never fans out to unrelated abilities.
+// Exact equality wins; otherwise a token-subset match bridges ids where one is a
+// category-prefixed form of the other — e.g. required "code:lint" against a card
+// id "lint". Tokens are compared whole, so a required "lint" never matches an
+// unrelated "glint", and "build" never matches "rebuild".
 func AbilityMatches(declared, required string) bool {
 	if declared == required {
 		return true
 	}
-	return abilityMatchesNormalized(normalizeAbility(declared), normalizeAbility(required))
+	return tokenSubset(tokenizeAbility(declared), tokenizeAbility(required))
 }
 
-// abilityMatchesNormalized compares two already-normalized ability ids. Exact
-// equality wins; otherwise a containment check bridges ids the model emitted
-// with a different separator or category prefix (e.g. required "code:lint"
-// against declared "lint"). The fallback is guarded so a degenerate fragment
-// (shorter side under 3 chars) never fans out to unrelated abilities.
-func abilityMatchesNormalized(d, r string) bool {
-	if d == r {
-		return true
-	}
-	if d == "" || r == "" {
+// tokenSubset reports whether the tokens of one id are all present in the other.
+// The shorter token list is treated as the subset; an empty list never matches,
+// so a blank or separator-only id cannot fan out to unrelated abilities.
+func tokenSubset(a, b []string) bool {
+	if len(a) == 0 || len(b) == 0 {
 		return false
 	}
-	short, long := d, r
-	if len(r) < len(short) {
-		short, long = r, d
+	sub, sup := a, b
+	if len(b) < len(a) {
+		sub, sup = b, a
 	}
-	if len(short) < 3 {
-		return false
+	set := make(map[string]struct{}, len(sup))
+	for _, t := range sup {
+		set[t] = struct{}{}
 	}
-	return strings.Contains(long, short)
+	for _, t := range sub {
+		if _, ok := set[t]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // Query returns nodes matching filters. Empty status or name matches all.

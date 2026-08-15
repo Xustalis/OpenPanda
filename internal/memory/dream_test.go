@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -60,6 +61,59 @@ func TestDreamFiltersWeakSignal(t *testing.T) {
 	mem, _ := hermes.LoadMemory()
 	if len(mem.Entries) != 0 {
 		t.Errorf("MEMORY.md should be empty, got %v", mem.Entries)
+	}
+}
+
+func TestDreamSkipsAlreadyPromotedCandidate(t *testing.T) {
+	hermes := NewHermes(t.TempDir())
+	d := NewDaily(hermes.WarmDir())
+
+	// A fact already in MEMORY.md that still recurs in the warm daily logs. An
+	// earlier bug aborted the whole sweep on this (duplicate add), so no *new*
+	// fact could ever be promoted again while a promoted fact stayed in the logs.
+	old := "user prefers dark mode"
+	if err := hermes.SaveMemory(MemFile{Entries: []string{old}}); err != nil {
+		t.Fatalf("save memory: %v", err)
+	}
+	newFact := "user uses a standing desk on Fridays"
+
+	for _, day := range []string{"2026-08-10", "2026-08-11", "2026-08-12"} {
+		ts, _ := time.Parse("2006-01-02", day)
+		if err := d.Append(ts, old); err != nil {
+			t.Fatalf("append old: %v", err)
+		}
+		if err := d.Append(ts, newFact); err != nil {
+			t.Fatalf("append new: %v", err)
+		}
+	}
+
+	dreamer := NewDreamer(hermes)
+	dreamer.now = func() time.Time { return time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC) }
+
+	report, err := dreamer.Dream()
+	if err != nil {
+		t.Fatalf("dream: %v", err)
+	}
+	for _, p := range report.Promoted {
+		if p == old {
+			t.Errorf("already-promoted fact re-promoted: %q", p)
+		}
+	}
+	found := false
+	for _, p := range report.Promoted {
+		if p == newFact {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("new fact not promoted (sweep aborted?): %v", report.Promoted)
+	}
+}
+
+func TestMemFileAddDuplicateIsSkippable(t *testing.T) {
+	m := MemFile{Entries: []string{"already here"}}
+	if err := m.Add("already here"); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("Add duplicate = %v, want ErrDuplicate", err)
 	}
 }
 

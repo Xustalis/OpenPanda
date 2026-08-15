@@ -22,6 +22,10 @@ type TaskStore struct {
 	db     *sql.DB
 	logger *slog.Logger
 	now    func() int64
+	// onReview, when set, is called whenever a task enters review (needs human
+	// analysis). It must not block: the daemon wires it to a fire-and-forget
+	// notification path.
+	onReview func(Task)
 }
 
 // NewTaskStore wraps a DB. now may be nil (defaults to Unix time).
@@ -31,6 +35,11 @@ func NewTaskStore(db *sql.DB, logger *slog.Logger) *TaskStore {
 	}
 	return &TaskStore{db: db, logger: logger, now: storage.Now}
 }
+
+// SetOnReview installs the callback fired when a task transitions into review.
+// The callback is invoked on its own goroutine so a slow consumer (e.g. a push
+// send) never stalls the state machine.
+func (s *TaskStore) SetOnReview(fn func(Task)) { s.onReview = fn }
 
 // Create inserts a new task in submitted state with a fresh UUIDv7 id.
 func (s *TaskStore) Create(ctx context.Context, parentID, project, title, owner string, chain []string) (Task, error) {
@@ -133,7 +142,22 @@ func (s *TaskStore) transition(ctx context.Context, taskID, from, to, owner, eve
 		return err
 	}
 	s.logger.Debug("task transition", "task", taskID, "from", from, "to", to, "owner", owner)
+	if to == StateReview {
+		cur.State = StateReview
+		cur.UpdatedAt = s.now()
+		s.notifyReview(cur)
+	}
 	return nil
+}
+
+// notifyReview fires the review hook without blocking the transition. A task
+// snapshot (not a pointer) is passed so the callback owns its copy and the
+// goroutine is free to outlive the transition.
+func (s *TaskStore) notifyReview(t Task) {
+	if s.onReview == nil {
+		return
+	}
+	go s.onReview(t)
 }
 
 // apply writes the new state + event. attemptID is carried through unchanged

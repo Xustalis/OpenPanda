@@ -5,9 +5,32 @@
 > 任何设备，任何算力，一个指令。
 > 一个把「个人」放在第一位的任务编排助手——以 P2P 节点网络的方式，运行在你的异构设备之间。
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [Deutsch](README.de.md)
+[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Go](https://img.shields.io/badge/Go-%E2%89%A51.22-blue)
+![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-blue)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
 ---
+
+## 目录
+
+- [这是什么](#这是什么)
+- [核心特性](#核心特性)
+- [架构](#架构)
+- [快速开始](#快速开始)
+- [使用示例](#使用示例)
+- [CLI 参考](#cli-参考)
+- [配置](#配置)
+- [文档](#文档)
+- [测试](#测试)
+- [部署](#部署)
+- [技术栈](#技术栈)
+- [路线图](#路线图)
+- [参与贡献](#参与贡献)
+- [许可](#许可)
+- [致谢](#致谢)
 
 ## 这是什么
 
@@ -76,7 +99,7 @@ PANDA 把你拥有的每一台设备——笔记本、单板电脑、桌面机�
 
 | 工具 | 版本 |
 |---|---|
-| Go | 1.22+（已在 1.26.5 验证） |
+| Go | 1.22+（module 目标 1.26.5） |
 | Python | 3.10+（Agent 适配器 / 语音 sidecar） |
 | make | 任意较新版本 |
 
@@ -128,22 +151,32 @@ model:
 
 每个**能执行任务**的节点都应带上自己的能力卡启动。没有能力卡的节点仍参与心跳，但不会被委派任务。
 
-### 快速上手
+## 使用示例
+
+问任何问题——入口模型自动决定是回答、调用工具、还是委派：
 
 ```bash
-# 问任何问题——入口模型自动决定是回答、调用工具、还是委派
 ./bin/panda ask "总结一下最近一周的 git log"
+```
 
-# 查看网络与队列
+查看网络与队列：
+
+```bash
 ./bin/panda status
 ./bin/panda queue
+```
 
-# 查看 / 取消某个任务
+查看 / 取消某个任务：
+
+```bash
 ./bin/panda task <task-id>
 ./bin/panda cancel <task-id>
 ./bin/panda logs <task-id>
+```
 
-# 管理 skills
+管理 skills：
+
+```bash
 ./bin/panda skill
 ```
 
@@ -161,7 +194,7 @@ model:
 | `panda skill` | Skill 存储管理 |
 | `panda version` | 打印版本号 |
 
-## 配置参考
+## 配置
 
 | 段 | 键 | 含义 |
 |---|---|---|
@@ -172,9 +205,9 @@ model:
 | `network` | `peers` | 要拨号的手动 peer 地址 |
 | `storage` | `db_path` | SQLite 数据库路径 |
 | `storage` | `context_path` | 上下文快照存储 |
-| `storage` | `memory_path` | 个人记忆根目录（Phase 3） |
-| `storage` | `projects_path` | 项目记忆根目录（Phase 3） |
-| `storage` | `skills_path` | 程序性记忆根目录（Phase 3） |
+| `storage` | `memory_path` | 个人记忆根目录 |
+| `storage` | `projects_path` | 项目记忆根目录 |
+| `storage` | `skills_path` | 程序性记忆根目录 |
 | `storage` | `work_path` | Agent 执行目录；范围漂移在此测量 |
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic 兼容 Messages API 基地址 |
@@ -183,33 +216,15 @@ model:
 
 配置加载优先级：`--config` 参数 > 环境变量 > 默认 `/etc/panda/config.yaml`。
 
-## 目录结构
+## 文档
 
-```
-cmd/panda/            守护进程入口 + CLI 子命令
-internal/
-  core/               节点生命周期、状态机、消息路由、本地执行
-  entry/              统一入口模型（分类 · 校验 · 降级）
-  bus/                WebSocket 传输 + 消息信封
-  commander/          三层能力执行（native / agent / manual）
-  scheduler/          委派与路由决策
-  defense/            权限 Tier、熔断器、范围漂移与循环检测
-  security/           执行侧加固（沙箱、白名单、审计）
-  panel/              PWA 控制台 HTTP API
-  ledger/             能力目录（能力卡、心跳、员工缓存）
-  ctxstore/           上下文快照 LRU
-  memory/             双层记忆 + Dreaming 引擎
-  skills/             程序性记忆（SKILL.md 自进化）
-  config/             YAML 配置加载
-  storage/            SQLite（WAL）封装 + 迁移
-  log/                结构化 JSON 日志（slog）
-  util/               UUIDv7
-adapters/             Agent 适配器（claude_code.py、opencode.py）
-extensions/voice/     语音 sidecar（唤醒 / STT / TTS / VAD）
-web/pwa/              PWA 前端（manifest + service worker + 面板视图）
-config/               示例能力卡（macbook、orangepi3b）
-testdata/             多节点 loopback 测试配置
-```
+完整文档位于 [`docs/`](docs/) 目录，按公开/内部分层：
+
+- [文档索引](docs/README.md) —— 所有文档的入口。
+- [开发工作手册](docs/guides/DEVELOPMENT.md) —— 快速开始、目录地图、工程规范、质量门槛、测试清单。
+- [阶段报告](docs/reports/) —— 各 Phase / Sprint 的进度报告。
+
+内部规划、设计与审查文档不随公开仓库推送。
 
 ## 测试
 
@@ -249,9 +264,23 @@ done
 | 前端 | PWA（原生 Web 应用 + service worker） |
 | LLM 访问 | Anthropic 兼容 `/v1/messages` 端点（如 DeepSeek） |
 
-## 当前状态
+## 路线图
 
 Phase 3（记忆 + 语音 + 安全）进行中。记忆层、Dreaming 引擎、Skill 系统、PWA 面板与执行侧加固已完成；语音入口代码完成，等待麦克风硬件实测。
+
+## 参与贡献
+
+欢迎贡献。为保证代码库一致，请在提交 PR 前通过以下工程门槛：
+
+- `make vet && make test` 必须通过。
+- `gofmt -l internal/ cmd/ adapters/` 必须无输出。
+- 核心模块测试覆盖尽量保持在 ~60% 以上。
+
+完整工程规范见[开发工作手册](docs/guides/DEVELOPMENT.md)：错误包装（`%w` / `errors.Is`）、复杂度限制、无死代码、并发规则等。
+
+## 许可
+
+本项目基于 [MIT 许可](LICENSE) 发布。
 
 ## 致谢
 

@@ -6,9 +6,32 @@
 > Ein persönlicher Task-Orchestrierungs-Assistent, der als Peer-to-Peer-Netzwerk
 > aus Nodes über deine heterogenen Geräte hinweg läuft.
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [Deutsch](README.de.md)
+[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Go](https://img.shields.io/badge/Go-%E2%89%A51.22-blue)
+![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-blue)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
 ---
+
+## Inhaltsverzeichnis
+
+- [Was ist PANDA?](#was-ist-panda)
+- [Hauptfunktionen](#hauptfunktionen)
+- [Architektur](#architektur)
+- [Schnellstart](#schnellstart)
+- [Verwendung](#verwendung)
+- [CLI-Referenz](#cli-referenz)
+- [Konfiguration](#konfiguration)
+- [Dokumentation](#dokumentation)
+- [Tests](#tests)
+- [Deployment](#deployment)
+- [Tech-Stack](#tech-stack)
+- [Roadmap](#roadmap)
+- [Mitwirken](#mitwirken)
+- [Lizenz](#lizenz)
+- [Danksagung](#danksagung)
 
 ## Was ist PANDA?
 
@@ -105,7 +128,7 @@ Im Inneren jedes Nodes:
 
 | Werkzeug | Version |
 |---|---|
-| Go | 1.22+ (getestet auf 1.26.5) |
+| Go | 1.22+ (Modul zielt auf 1.26.5) |
 | Python | 3.10+ (Agent-Adapter / Voice-Sidecar) |
 | make | beliebige neuere Version |
 
@@ -159,22 +182,32 @@ nicht aus der Config-Datei.
 Jeder Node, der Arbeit *ausführen* kann, sollte mit seiner Capability Card starten.
 Ein Node ohne Card nimmt weiterhin am Heartbeat teil, bekommt aber keine Tasks zugewiesen.
 
-### Kurztour
+## Verwendung
+
+Beliebige Frage — das Eingabemodell entscheidet: antworten, Tool oder delegieren:
 
 ```bash
-# Beliebige Frage — das Eingabemodell entscheidet: antworten, Tool oder delegieren
 ./bin/panda ask "fasse den git log der letzten Woche zusammen"
+```
 
-# Netzwerk und Warteschlange prüfen
+Netzwerk und Warteschlange prüfen:
+
+```bash
 ./bin/panda status
 ./bin/panda queue
+```
 
-# Task im Detail ansehen / abbrechen
+Task im Detail ansehen / abbrechen:
+
+```bash
 ./bin/panda task <task-id>
 ./bin/panda cancel <task-id>
 ./bin/panda logs <task-id>
+```
 
-# Skills verwalten
+Skills verwalten:
+
+```bash
 ./bin/panda skill
 ```
 
@@ -192,7 +225,7 @@ Ein Node ohne Card nimmt weiterhin am Heartbeat teil, bekommt aber keine Tasks z
 | `panda skill` | Skill-Store-Verwaltung |
 | `panda version` | Version anzeigen |
 
-## Konfigurations-Referenz
+## Konfiguration
 
 | Sektion | Schlüssel | Bedeutung |
 |---|---|---|
@@ -203,9 +236,9 @@ Ein Node ohne Card nimmt weiterhin am Heartbeat teil, bekommt aber keine Tasks z
 | `network` | `peers` | Manuelle Peer-Adressen zum Anwählen |
 | `storage` | `db_path` | SQLite-Datenbankpfad |
 | `storage` | `context_path` | Context-Snapshot-Speicher |
-| `storage` | `memory_path` | Persönliches Gedächtnis (Phase 3) |
-| `storage` | `projects_path` | Pro-Projekt-Gedächtnis (Phase 3) |
-| `storage` | `skills_path` | Prozedurales Gedächtnis (Phase 3) |
+| `storage` | `memory_path` | Persönliches Gedächtnis |
+| `storage` | `projects_path` | Pro-Projekt-Gedächtnis |
+| `storage` | `skills_path` | Prozedurales Gedächtnis |
 | `storage` | `work_path` | Ausführungsverzeichnis der Agents; Scope-Drift wird hier gemessen |
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic-kompatible Messages-API-Basis-URL |
@@ -214,33 +247,19 @@ Ein Node ohne Card nimmt weiterhin am Heartbeat teil, bekommt aber keine Tasks z
 
 Ladereihenfolge der Config: `--config`-Flag > Umgebungsvariable > Standard `/etc/panda/config.yaml`.
 
-## Verzeichnisstruktur
+## Dokumentation
 
-```
-cmd/panda/            Daemon-Einstieg + CLI-Subkommandos
-internal/
-  core/               Node-Lebenszyklus, State Machine, Message-Routing, lokale Ausführung
-  entry/              einheitliches Eingabemodell (klassifizieren · validieren · fallback)
-  bus/                WebSocket-Transport + Message-Envelope
-  commander/          3-Ebenen-Ausführung (native / agent / manual)
-  scheduler/          Delegations- & Routing-Entscheidungen
-  defense/            Berechtigungs-Tiers, Circuit Breaker, Drift- & Loop-Erkennung
-  security/           Ausführungshärtung (Sandbox, Allowlists, Audit)
-  panel/              HTTP-API des PWA-Panels
-  ledger/             Fähigkeitsverzeichnis (Cards, Heartbeat, Employee-Cache)
-  ctxstore/           Context-Snapshot-LRU
-  memory/             Zwei-Ebenen-Gedächtnis + Dreaming-Engine
-  skills/             prozedurales Gedächtnis (SKILL.md-Selbst-Evolution)
-  config/             YAML-Config-Laden
-  storage/            SQLite (WAL)-Wrapper + Migrationen
-  log/                strukturierte JSON-Logs (slog)
-  util/               UUIDv7
-adapters/             Agent-Adapter (claude_code.py, opencode.py)
-extensions/voice/     Voice-Sidecar (Wake / STT / TTS / VAD)
-web/pwa/              PWA-Frontend (Manifest + Service Worker + Panel-Views)
-config/               Beispiel-Capability-Cards (macbook, orangepi3b)
-testdata/             Multi-Node-Loopback-Testkonfigurationen
-```
+Die vollständige Dokumentation liegt im [`docs/`](docs/)-Verzeichnis, aufgeteilt
+in öffentliche und interne Teile:
+
+- [Dokumentationsindex](docs/README.md) — Einstiegspunkt für alle Dokumente.
+- [Entwicklungs-Handbuch](docs/guides/DEVELOPMENT.md) — Schnellstart,
+  Verzeichniskarte, Engineering-Konventionen, Qualitäts-Gates und Testinventar.
+- [Phasen-Berichte](docs/reports/) — Fortschrittsberichte für jede Phase und
+  jedes Sprint.
+
+Interne Planungs-, Design- und Audit-Dokumente bleiben aus dem öffentlichen
+Repository ausgeschlossen.
 
 ## Tests
 
@@ -283,12 +302,29 @@ done
 | Frontend | PWA (native Web-App + Service Worker) |
 | LLM-Zugriff | Anthropic-kompatibler `/v1/messages`-Endpoint (z. B. DeepSeek) |
 
-## Status
+## Roadmap
 
 Phase 3 (Gedächtnis + Sprache + Sicherheit) läuft. Die Gedächtnis-Schicht, die
 Dreaming-Engine, das Skill-System, das PWA-Panel und die Ausführungshärtung sind
 implementiert; die Spracheingabe ist code-komplett und wartet auf die Validierung
 mit Mikrofon-Hardware.
+
+## Mitwirken
+
+Beiträge sind willkommen. Damit die Codebasis konsistent bleibt, bitte vor einem
+Pull Request die Engineering-Gates beachten:
+
+- `make vet && make test` müssen bestehen.
+- `gofmt -l internal/ cmd/ adapters/` muss leer sein.
+- Testabdeckung der Kern-Module möglichst über ~60 % halten.
+
+Die vollständigen Konventionen stehen im
+[Entwicklungs-Handbuch](docs/guides/DEVELOPMENT.md): Error-Wrapping
+(`%w` / `errors.Is`), Komplexitäts-Limits, kein toter Code, Concurrency-Regeln.
+
+## Lizenz
+
+Veröffentlicht unter der [MIT-Lizenz](LICENSE).
 
 ## Danksagung
 

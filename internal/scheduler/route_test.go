@@ -118,3 +118,19 @@ func TestRoutePrefersMatchingOverSubScheduler(t *testing.T) {
 		t.Fatalf("decision = %+v, want forward to matching peer (z-match)", d)
 	}
 }
+
+func TestRoutePrefersHigherTier(t *testing.T) {
+	// Two online peers match; the higher scheduler tier wins even when it has a
+	// higher id, so a Full node is preferred over a Micro node for a task both
+	// can do.
+	employees := []ledger.Node{
+		{ID: "micro", Status: "online", SchedulerTier: 1, Native: []ledger.NativeAbility{{ID: "build"}}},
+		{ID: "full", Status: "online", SchedulerTier: 3, Native: []ledger.NativeAbility{{ID: "build"}}},
+	}
+	neverLocal := func([]string) bool { return false }
+
+	d := Route("self", []string{"self"}, employees, neverLocal, []string{"build"})
+	if d.Action != ActionForward || d.Target != "full" {
+		t.Fatalf("decision = %+v, want forward to full (higher tier)", d)
+	}
+}

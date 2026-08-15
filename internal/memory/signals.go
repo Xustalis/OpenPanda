@@ -4,10 +4,12 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/xenith/panda/internal/util"
 )
 
 // Deep-ranking weights, matching OpenClaw's six signals (design §17.3). The
-// order is fixed: relevance, frequency, query diversity, recency,
+// order is fixed: novelty, frequency, query diversity, recency,
 // consolidation, conceptual richness; the slice sums to 1.0.
 var dreamWeights = [6]float64{0.30, 0.24, 0.15, 0.15, 0.10, 0.06}
 
@@ -16,8 +18,8 @@ const recencyWindowDays = 30
 
 // scoreCandidate returns the weighted Deep score in [0,1] from the six raw
 // signals, each already normalized to [0,1].
-func scoreCandidate(relevance, frequency, queryDiversity, recency, consolidation, conceptual float64) float64 {
-	sig := [6]float64{relevance, frequency, queryDiversity, recency, consolidation, conceptual}
+func scoreCandidate(novelty, frequency, queryDiversity, recency, consolidation, conceptual float64) float64 {
+	sig := [6]float64{novelty, frequency, queryDiversity, recency, consolidation, conceptual}
 	var total float64
 	for i := range sig {
 		total += dreamWeights[i] * sig[i]
@@ -59,12 +61,14 @@ func consolidationSignal(firstSeen, lastSeen time.Time) float64 {
 	return clamp01(float64(span) / float64(7*24*time.Hour))
 }
 
-// relevanceSignal approximates retrieval quality as lexical overlap between a
-// candidate and the existing MEMORY entries: the fraction of the candidate's
-// words already present in memory. A cold start (empty memory) is not penalized
-// — there is nothing to compare against, so relevance is neutral rather than
-// zero, otherwise the very first memory could never be promoted.
-func relevanceSignal(candidate string, memory []string) float64 {
+// noveltySignal measures how much a candidate says that memory does not already
+// contain: the fraction of the candidate's words absent from the existing
+// MEMORY entries. A brand-new fact scores high (it adds information); a fact
+// that merely restates what is already memorized scores low. A cold start
+// (empty memory) is neutral — there is nothing to compare against, so novelty
+// is maximal rather than zero, otherwise the very first memory could never be
+// promoted.
+func noveltySignal(candidate string, memory []string) float64 {
 	if len(memory) == 0 {
 		return 1
 	}
@@ -79,7 +83,7 @@ func relevanceSignal(candidate string, memory []string) float64 {
 			overlap++
 		}
 	}
-	return float64(overlap) / float64(len(cand))
+	return 1 - float64(overlap)/float64(len(cand))
 }
 
 // conceptualSignal maps the density of "concept" tokens — words carrying a
@@ -129,11 +133,18 @@ func conceptTokens(s string) []string {
 }
 
 // isConceptToken reports whether a token looks like a technical concept rather
-// than common prose: it contains a digit or an uppercase letter.
+// than common prose: it contains a digit or an uppercase letter, or it is a CJK
+// content ideograph (an ideograph that is not a function word). The function
+// word list lives in util so the retrievers share it (util.IsCJKFunctionWord).
 func isConceptToken(w string) bool {
 	for _, r := range w {
 		if unicode.IsDigit(r) || unicode.IsUpper(r) {
 			return true
+		}
+	}
+	for _, r := range w {
+		if unicode.Is(unicode.Han, r) {
+			return !util.IsCJKFunctionWord(w)
 		}
 	}
 	return false
@@ -141,32 +152,10 @@ func isConceptToken(w string) bool {
 
 // tokenize splits text into lowercase word tokens. Latin runs of letters/digits
 // become one token; each CJK ideograph stands alone (so Chinese text compares
-// ideograph-by-ideograph). It is a lexical heuristic for the relevance and
+// ideograph-by-ideograph). It is a lexical heuristic for the novelty and
 // conceptual signals, not a linguistic tokenizer.
 func tokenize(s string) map[string]struct{} {
-	out := make(map[string]struct{})
-	var cur strings.Builder
-	flush := func() {
-		if cur.Len() > 0 {
-			out[strings.ToLower(cur.String())] = struct{}{}
-			cur.Reset()
-		}
-	}
-	for _, r := range s {
-		switch {
-		case unicode.IsLetter(r) || unicode.IsDigit(r):
-			if unicode.Is(unicode.Han, r) {
-				flush()
-				out[string(r)] = struct{}{}
-			} else {
-				cur.WriteRune(r)
-			}
-		default:
-			flush()
-		}
-	}
-	flush()
-	return out
+	return util.Tokenize(s)
 }
 
 func clamp01(x float64) float64 {

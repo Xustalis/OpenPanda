@@ -15,6 +15,7 @@ import (
 	"github.com/xenith/panda/internal/core"
 	"github.com/xenith/panda/internal/entry"
 	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/panda/internal/mcp"
 	"github.com/xenith/panda/internal/memory"
 	"github.com/xenith/panda/internal/skills"
 	"github.com/xenith/panda/internal/storage"
@@ -29,6 +30,7 @@ func runAsk(args []string) {
 	configPath := fs.String("config", "", "path to config.yaml")
 	cardPath := fs.String("card", "", "path to capabilities.yaml (required to execute tasks)")
 	authorize := fs.Bool("authorize", false, "authorize tier-2 (irreversible) commands")
+	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated), e.g. \"npx -y @modelcontextprotocol/server-filesystem /tmp\"")
 	fs.Parse(args)
 
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
@@ -55,7 +57,22 @@ func runAsk(args []string) {
 	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
 	projects := memory.NewProjects(cfg.Storage.ProjectsPath)
 	injector := memory.NewInjector(hermes, projects)
-	tools := memory.NewTool(hermes, projects)
+	registry := buildToolRegistry(hermes, projects)
+
+	// Optional MCP server: spawn it, import its tool surface into the registry,
+	// and tear it down when the ask ends. --mcp is a space-separated command (no
+	// quoting), matching the stdio servers PANDA targets (filesystem/git/fetch).
+	if *mcpCmd != "" {
+		parts := splitCommand(*mcpCmd)
+		mcpClient, err := mcp.NewStdioClient(context.Background(), parts[0], parts[1:]...)
+		if err != nil {
+			fatal("start mcp server", err)
+		}
+		defer mcpClient.Close()
+		if err := registerMCPTools(context.Background(), registry, mcpClient); err != nil {
+			fatal("register mcp tools", err)
+		}
+	}
 	daily := memory.NewDaily(hermes.WarmDir())
 	skillStore := skills.NewStore(cfg.Storage.SkillsPath)
 
@@ -105,9 +122,10 @@ func runAsk(args []string) {
 		devices = nil
 	}
 
-	// Hermes memory for the conversation prompt; a load failure is non-fatal —
-	// classification proceeds without memory rather than blocking the ask.
-	conversationMemory, merr := injector.Conversation()
+	// Hermes memory for the conversation prompt, retrieved by relevance to the
+	// user's prompt; a load failure is non-fatal — classification proceeds
+	// without memory rather than blocking the ask.
+	conversationMemory, merr := injector.Conversation(prompt)
 	if merr != nil {
 		fmt.Fprintf(os.Stderr, "panda: load memory: %v\n", merr)
 	}
@@ -121,7 +139,7 @@ func runAsk(args []string) {
 	turns := []entry.Turn{{Role: "user", Content: prompt}}
 	const maxRounds = 6
 	for round := 0; round < maxRounds; round++ {
-		out, err := entry.ClassifyTurns(ctx, client, devices, conversationMemory, turns)
+		out, err := entry.ClassifyTurnsWithTools(ctx, client, devices, conversationMemory, turns, registry)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 			os.Exit(1)
@@ -139,17 +157,8 @@ func runAsk(args []string) {
 			runAskTask(sched, schedCtx, out.Task, *authorize)
 			return
 		case entry.KindToolCall:
-			result, terr := tools.Execute(out.Tool.Tool, out.Tool.Arguments)
-			if terr != nil {
-				// A tool failure (e.g. an over-limit memory add) is fed back so
-				// the model can consolidate and retry, not a hard exit.
-				result = "工具执行失败：" + terr.Error()
-			}
-			assistant, _ := json.Marshal(out.Tool)
-			turns = append(turns,
-				entry.Turn{Role: "assistant", Content: "tool_call: " + string(assistant)},
-				entry.Turn{Role: "user", Content: "工具结果：" + result},
-			)
+			result := executeTool(ctx, registry, out.Tool)
+			turns = appendToolTurns(turns, out.Tool, result)
 		default:
 			fmt.Println(out.Answer)
 			return

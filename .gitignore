@@ -25,6 +25,9 @@ context/
 *.sock
 testdata/run/
 
+# Hermes personal memory (Dreaming runtime output)
+/memory/
+
 # Python
 __pycache__/
 *.pyc
@@ -44,9 +47,13 @@ Thumbs.db
 *.log
 logs/
 
-# Internal design & planning docs (kept out of the public repo)
+# Internal design & planning docs (kept out of the public repo).
+# Root design/plan docs and everything under docs/ except the index carry
+# private info (devices, IPs, local paths, usernames) and personal notes, so
+# only docs/README.md ships.
 /PANDA-*.md
-/docs/
+/docs/*
+!/docs/README.md
 
 # Local / personal tooling (unrelated to PANDA core)
 .workbuddy/

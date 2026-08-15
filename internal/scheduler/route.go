@@ -1,7 +1,6 @@
 package scheduler
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/xenith/panda/internal/ledger"
@@ -32,14 +31,15 @@ type Decision struct {
 //
 // Local capability wins first — native > agent > manual, as judged by the
 // injected localMatch predicate (the core's commander router). Otherwise it
-// picks the lowest-id online peer that matches and is not already on the chain
-// (so a forwarded task never loops back through an earlier hop). If no peer
-// matches, it falls back to a sub-scheduler (tier > 1) — a peer that can route
-// the task further downstream even though it cannot execute it itself. Only
-// when neither exists does it decline.
+// picks the best online peer that matches and is not already on the chain (so a
+// forwarded task never loops back through an earlier hop): highest scheduler
+// tier first, then lowest id as a deterministic tiebreak. If no peer matches,
+// it falls back to a sub-scheduler (tier > 1) — a peer that can route the task
+// further downstream even though it cannot execute it itself. Only when neither
+// exists does it decline.
 //
-// MVP scope: this is deterministic capability matching, not scored ranking —
-// priority scoring (design doc §6.3) is a later sprint.
+// MVP scope: this is deterministic capability + tier matching, not full scored
+// ranking — capacity/load/cost weighting (design doc §6.3) is a later sprint.
 func Route(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string) Decision {
 	if localMatch(required) {
 		return Decision{Action: ActionLocal}
@@ -64,10 +64,10 @@ func Route(self string, chain []string, employees []ledger.Node, localMatch func
 		}
 	}
 
-	if target := pickLowestID(matching); target != "" {
+	if target := pickBest(matching); target != "" {
 		return Decision{Action: ActionForward, Target: target}
 	}
-	if target := pickLowestID(subs); target != "" {
+	if target := pickBest(subs); target != "" {
 		return Decision{Action: ActionForward, Target: target}
 	}
 	return Decision{
@@ -76,12 +76,20 @@ func Route(self string, chain []string, employees []ledger.Node, localMatch func
 	}
 }
 
-// pickLowestID returns the lowest-id node from a non-empty slice, or "" if the
-// slice is empty. Deterministic ordering keeps routing reproducible in tests.
-func pickLowestID(nodes []ledger.Node) string {
+// pickBest returns the id of the best node from a non-empty slice: highest
+// scheduler tier first (Full over Standard over Micro), then lowest id for a
+// deterministic tiebreak. This is a first step toward the §6.3 scored ranking —
+// capacity, load, and cost are not yet tracked, but preferring a more capable
+// node beats an arbitrary lowest-id pick.
+func pickBest(nodes []ledger.Node) string {
 	if len(nodes) == 0 {
 		return ""
 	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
-	return nodes[0].ID
+	best := nodes[0]
+	for _, n := range nodes[1:] {
+		if n.SchedulerTier > best.SchedulerTier || (n.SchedulerTier == best.SchedulerTier && n.ID < best.ID) {
+			best = n
+		}
+	}
+	return best.ID
 }

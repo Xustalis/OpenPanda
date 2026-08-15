@@ -25,8 +25,11 @@ type Output struct {
 	Task   *TaskSpec // KindTask
 }
 
-// ToolCall is a validated tool invocation request.
+// ToolCall is a validated tool invocation request. ID carries the tool_use id
+// when the call came from native tool_use (so the loop can reply with a matching
+// tool_result); it is empty for the text-JSON fallback path.
 type ToolCall struct {
+	ID        string         `json:"id,omitempty"`
 	Tool      string         `json:"tool"`
 	Arguments map[string]any `json:"arguments"`
 }

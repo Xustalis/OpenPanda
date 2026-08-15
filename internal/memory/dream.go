@@ -160,7 +160,7 @@ func (d *Dreamer) deep(candidates []*Candidate) ([]string, error) {
 		}
 		first, last := dayRange(c.Days)
 		score := scoreCandidate(
-			relevanceSignal(c.Text, mem.Entries),
+			noveltySignal(c.Text, mem.Entries),
 			frequencySignal(c.Count),
 			queryDiversitySignal(len(c.Days)),
 			recencySignal(last, now),
@@ -175,8 +175,12 @@ func (d *Dreamer) deep(candidates []*Candidate) ([]string, error) {
 			continue // provenance taint gate: drop untrusted origins wholesale
 		}
 		if err := mem.Add(c.Text); err != nil {
-			if errors.Is(err, ErrOverLimit) {
-				continue // hot layer full; leave for the agent to consolidate
+			// A candidate already promoted into MEMORY.md (and still present in
+			// the warm daily logs) is not an error — skip it, don't abort the
+			// whole sweep. An over-limit add likewise leaves consolidation to
+			// the agent rather than failing the dream.
+			if errors.Is(err, ErrOverLimit) || errors.Is(err, ErrDuplicate) {
+				continue
 			}
 			return nil, err
 		}

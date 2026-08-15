@@ -54,16 +54,20 @@ func TestConsolidationSignal(t *testing.T) {
 	}
 }
 
-func TestRelevanceSignal(t *testing.T) {
-	if got := relevanceSignal("anything at all", nil); got != 1 {
-		t.Errorf("cold start relevance = %v, want 1", got)
+func TestNoveltySignal(t *testing.T) {
+	if got := noveltySignal("anything at all", nil); got != 1 {
+		t.Errorf("cold start novelty = %v, want 1", got)
 	}
 	memory := []string{"the core is written in Go", "deploy to Orange Pi"}
-	if got := relevanceSignal("the core is Go", memory); got != 1 {
-		t.Errorf("full-overlap relevance = %v, want 1", got)
+	if got := noveltySignal("the core is Go", memory); got != 0 {
+		t.Errorf("full-overlap novelty = %v, want 0 (restates known words)", got)
 	}
-	if got := relevanceSignal("unrelated topic here", memory); got != 0 {
-		t.Errorf("no-overlap relevance = %v, want 0", got)
+	if got := noveltySignal("unrelated topic here", memory); got != 1 {
+		t.Errorf("no-overlap novelty = %v, want 1", got)
+	}
+	// Partly novel: two of three words are new.
+	if got := noveltySignal("the new parser", memory); got <= 0.66 || got >= 0.67 {
+		t.Errorf("partial-overlap novelty = %v, want ~0.667", got)
 	}
 }
 
@@ -73,6 +77,13 @@ func TestConceptualSignal(t *testing.T) {
 	}
 	if got := conceptualSignal("a simple and clean design"); got != 0 {
 		t.Errorf("no-concept density = %v, want 0", got)
+	}
+	// CJK content ideographs carry concept signal; pure function words do not.
+	if got := conceptualSignal("部署到香橙派"); got <= 0 {
+		t.Errorf("CJK concept density = %v, want > 0", got)
+	}
+	if got := conceptualSignal("这是的了"); got != 0 {
+		t.Errorf("CJK function-word density = %v, want 0", got)
 	}
 }
 

@@ -124,6 +124,23 @@ func TestParseOutputJSONWithTrailingProse(t *testing.T) {
 	}
 }
 
+func TestParseOutputIllustrativeJSONIsAnswer(t *testing.T) {
+	// A long prose answer that embeds an illustrative JSON example is not a
+	// directive; it must fall back to answer rather than executing the JSON as a
+	// real task.
+	raw := "如果你想要发起一个任务，可以参考下面这个示例格式。" +
+		"任务里需要写清楚标题、上下文类型、所需能力和作用范围，缺少任何一项都会校验失败。" +
+		"这里的示例仅供参考，请根据你的实际需求调整字段：" +
+		`{"kind":"task","task":{"title":"示例任务","context_type":"file","requires":{"abilities":["lint"]}}}`
+	out, err := ParseOutput(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if out.Kind != KindAnswer {
+		t.Fatalf("illustrative JSON should fall back to answer, got %s", out.Kind)
+	}
+}
+
 func TestExtractJSONObject(t *testing.T) {
 	cases := []struct {
 		name string
@@ -222,5 +239,83 @@ func TestClassifyTurnsSendsHistory(t *testing.T) {
 	}
 	if gotMessages != 3 {
 		t.Errorf("messages sent = %d, want 3", gotMessages)
+	}
+}
+
+func TestClassifyToolUse(t *testing.T) {
+	// A native tool_use response must become a KindToolCall output with the
+	// tool_use id preserved so the caller can reply with a tool_result.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		resp := map[string]any{
+			"content": []map[string]any{
+				{"type": "tool_use", "id": "toolu_1", "name": "memory.add", "input": map[string]any{"target": "user", "entry": "偏好暗色主题"}},
+			},
+		}
+		b, _ := json.Marshal(resp)
+		_, _ = w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+
+	reg := NewRegistry()
+	reg.Register(Tool{Name: "memory.add", Description: "remember", Schema: map[string]any{"type": "object"},
+		Run: func(ctx context.Context, args map[string]any) (string, error) { return "ok", nil }})
+
+	out, err := ClassifyTurnsWithTools(context.Background(), c, nil, "", []Turn{{Role: "user", Content: "记住我偏好暗色主题"}}, reg)
+	if err != nil {
+		t.Fatalf("classify: %v", err)
+	}
+	if out.Kind != KindToolCall || out.Tool == nil || out.Tool.Tool != "memory.add" || out.Tool.ID != "toolu_1" {
+		t.Fatalf("out = %+v", out)
+	}
+	if out.Tool.Arguments["entry"] != "偏好暗色主题" {
+		t.Fatalf("args = %+v", out.Tool.Arguments)
+	}
+}
+
+func TestCompleteTurnsWithToolsSendsTools(t *testing.T) {
+	var gotTools int
+	var gotToolChoice string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Tools      []map[string]any `json:"tools"`
+			ToolChoice string           `json:"tool_choice"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+		gotTools = len(req.Tools)
+		gotToolChoice = req.ToolChoice
+		w.Header().Set("content-type", "application/json")
+		resp := map[string]any{"content": []map[string]string{{"type": "text", "text": "plain answer"}}}
+		b, _ := json.Marshal(resp)
+		_, _ = w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+
+	tools := []ToolSpec{{Name: "memory.add", Description: "remember", InputSchema: map[string]any{"type": "object"}}}
+	if _, err := c.CompleteTurnsWithTools(context.Background(), "sys", []Turn{{Role: "user", Content: "hi"}}, tools); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if gotTools != 1 {
+		t.Errorf("tools sent = %d, want 1", gotTools)
+	}
+	if gotToolChoice != "auto" {
+		t.Errorf("tool_choice = %q, want auto", gotToolChoice)
+	}
+}
+
+func TestMessageBlocksMarshal(t *testing.T) {
+	// A turn carrying structured blocks must marshal content as an array (not a
+	// string), which is what tool_use/tool_result require.
+	m := message{Role: "user", Content: []ContentBlock{{Type: "tool_result", ToolUseID: "toolu_1", Content: "ok"}}}
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, "tool_result") || !strings.Contains(s, "toolu_1") {
+		t.Fatalf("marshal = %s", s)
 	}
 }

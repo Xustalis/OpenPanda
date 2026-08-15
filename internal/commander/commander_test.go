@@ -69,6 +69,23 @@ func TestRouteSecondAgent(t *testing.T) {
 	}
 }
 
+func TestMatchAgentDeterministic(t *testing.T) {
+	card := testCard()
+	// Two agents declare the same capability; the sorted-first name must win on
+	// every call. Map iteration order is randomized in Go, so a first-match over
+	// the map would flip run-to-run.
+	card.Agents["aaa_code"] = ledger.Agent{Adapter: "aaa", Capabilities: []string{"code:lint"}}
+	card.Agents["zzz_code"] = ledger.Agent{Adapter: "zzz", Capabilities: []string{"code:lint"}}
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{})
+
+	for i := 0; i < 50; i++ {
+		name, _, ok := r.MatchAgent([]string{"code:lint"})
+		if !ok || name != "aaa_code" {
+			t.Fatalf("MatchAgent iteration %d = %q, want aaa_code (deterministic)", i, name)
+		}
+	}
+}
+
 func TestRouteManual(t *testing.T) {
 	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
 	plan, err := r.Route([]string{"design:figma"})

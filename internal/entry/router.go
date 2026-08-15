@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+// jsonLeadInMax is the longest prose lead-in tolerated before an embedded JSON
+// object is treated as a directive. A short lead-in ("任务如下：") is a real
+// directive; a JSON object buried deeper in prose is an illustrative example.
+const jsonLeadInMax = 100
+
 // ParseOutput turns raw model text into a validated Output. The model may emit
 // JSON for tool_call/task or plain prose for answer. Anything that is not a
 // valid tool_call/task JSON object falls back to KindAnswer (never a silent
@@ -27,13 +32,17 @@ func ParseOutput(raw string) (Output, error) {
 	}
 
 	// The model sometimes prefixes a structured directive with a sentence of
-	// prose. Extract the first balanced JSON object and retry before giving up
-	// on it — the prose is discarded, the directive is authoritative.
+	// prose. Extract the first balanced JSON object and retry — but only when the
+	// object starts near the beginning (a short lead-in); a JSON object buried in
+	// a long prose answer is an illustrative example, not a directive, and must
+	// fall back to answer.
 	if obj := extractJSONObject(raw); obj != "" && obj != raw {
-		if out, ok, err := decodeEnvelope(obj); err != nil {
-			return Output{}, err
-		} else if ok {
-			return out, nil
+		if lead := strings.TrimSpace(raw[:strings.IndexByte(raw, '{')]); len(lead) <= jsonLeadInMax {
+			if out, ok, err := decodeEnvelope(obj); err != nil {
+				return Output{}, err
+			} else if ok {
+				return out, nil
+			}
 		}
 	}
 

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/xenith/panda/internal/commander"
 )
@@ -13,6 +14,7 @@ func TestRetryThenReview(t *testing.T) {
 	ctx := context.Background()
 	c := newCoreWithAgent(t, "retry-node")
 	c.SetWorkDir(t.TempDir())
+	c.sleep = func(time.Duration) {} // no-op backoff in tests
 
 	attempts := 0
 	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
@@ -47,6 +49,7 @@ func TestRetryThenSuccess(t *testing.T) {
 	ctx := context.Background()
 	c := newCoreWithAgent(t, "retry-node-ok")
 	c.SetWorkDir(t.TempDir())
+	c.sleep = func(time.Duration) {} // no-op backoff in tests
 
 	attempts := 0
 	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {

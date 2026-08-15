@@ -19,5 +19,21 @@ Restart=on-failure
 RestartSec=5
 LimitNOFILE=4096
 
+# ── 执行侧沙箱（design §19 / P3-29）────────────────────────────
+# 这些指令对 daemon 及其派生的子进程（adapters 的 python3）同时生效，
+# 是本节点最重的一层"真隔离"：未经 root/容器即可限制文件与网络面。
+# 注意：ReadWritePaths 必须覆盖 daemon 写的一切路径（db/context/memory/
+# projects/skills/vapid 均在 WorkingDirectory 之下，故整目录可写即可）。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/xenith/panda
+# 网络族只保留 INET（API/WS）与 UNIX（本地 socket），阻断 raw/蓝牙等逃逸面
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# seccomp 白名单。@system-service 若导致 Python adapter 子进程失败，
+# 可临时改为 "~@privileged @default" 或移除本条，逐项放行所需 syscall。
+SystemCallFilter=@system-service
+
 [Install]
 WantedBy=multi-user.target

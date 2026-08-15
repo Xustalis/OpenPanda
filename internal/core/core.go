@@ -60,6 +60,10 @@ type Core struct {
 	// loop pauses a task that keeps failing instead of retrying it forever
 	// (design §14.2 signal C, P2-18).
 	loop *defense.LoopDetector
+	// sleep is the retry backoff sleeper, injectable for tests. retryBackoff is
+	// the base delay between task retries, doubling each retry.
+	sleep        func(time.Duration)
+	retryBackoff time.Duration
 	// auditLog records high-risk operations (Tier-2 exec/denial, circuit trips)
 	// for later review (P3-32).
 	auditLog *security.Audit
@@ -103,6 +107,9 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		loop:     defense.NewLoopDetector(2),
 		auditLog: security.NewAudit(db),
 		workDir:  ".",
+
+		sleep:        time.Sleep,
+		retryBackoff: time.Second,
 	}
 	// The commander needs at least one native ability to route; a zero card
 	// yields a router that declines everything.

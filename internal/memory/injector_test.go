@@ -21,7 +21,7 @@ func TestConversationInjectsHermesOnly(t *testing.T) {
 	}
 
 	inj := NewInjector(h, p)
-	got, err := inj.Conversation()
+	got, err := inj.Conversation("")
 	if err != nil {
 		t.Fatalf("conversation: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestConversationInjectsHermesOnly(t *testing.T) {
 
 func TestConversationNilHermes(t *testing.T) {
 	inj := NewInjector(nil, nil)
-	got, err := inj.Conversation()
+	got, err := inj.Conversation("")
 	if err != nil {
 		t.Fatalf("conversation: %v", err)
 	}

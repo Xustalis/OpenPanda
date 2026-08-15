@@ -2,13 +2,21 @@ package panel
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xenith/panda/internal/core"
+	"github.com/xenith/panda/internal/push"
 	"github.com/xenith/panda/internal/storage"
 )
 
@@ -23,6 +31,18 @@ func newTestStore(t *testing.T) *core.TaskStore {
 		t.Fatalf("migrate db: %v", err)
 	}
 	return core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+}
+
+// testToken is the Bearer credential the auth tests use. Production must set
+// network.panel_token; here a fixed value keeps assertions simple.
+const testToken = "test-token"
+
+// authedReq builds a request carrying the test token, so authenticated endpoint
+// tests exercise the real auth path rather than bypassing it.
+func authedReq(method, target string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	return req
 }
 
 // reviewTask drives a freshly-created task into review via the normal
@@ -54,9 +74,9 @@ func TestListTasks(t *testing.T) {
 	_, _ = store.Create(ctx, "", "proj", "task one", "node", []string{"node"})
 	_, _ = store.Create(ctx, "", "other", "task two", "node", []string{"node"})
 
-	h := New(store, t.TempDir())
+	h := New(store, t.TempDir(), nil, testToken)
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/tasks", nil))
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks", nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d", rr.Code)
 	}
@@ -75,9 +95,9 @@ func TestListTasksFilterByProject(t *testing.T) {
 	_, _ = store.Create(ctx, "", "proj", "task one", "node", []string{"node"})
 	_, _ = store.Create(ctx, "", "other", "task two", "node", []string{"node"})
 
-	h := New(store, t.TempDir())
+	h := New(store, t.TempDir(), nil, testToken)
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/tasks?project=proj", nil))
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks?project=proj", nil))
 	var tasks []taskJSON
 	if err := json.Unmarshal(rr.Body.Bytes(), &tasks); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -88,9 +108,9 @@ func TestListTasksFilterByProject(t *testing.T) {
 }
 
 func TestGetTaskNotFound(t *testing.T) {
-	h := New(newTestStore(t), t.TempDir())
+	h := New(newTestStore(t), t.TempDir(), nil, testToken)
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/tasks/nope", nil))
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks/nope", nil))
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rr.Code)
 	}
@@ -100,9 +120,9 @@ func TestApproveReview(t *testing.T) {
 	store := newTestStore(t)
 	task := reviewTask(t, store)
 
-	h := New(store, t.TempDir())
+	h := New(store, t.TempDir(), nil, testToken)
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/tasks/"+task.TaskID+"/approve", nil))
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks/"+task.TaskID+"/approve", nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
 	}
@@ -116,9 +136,9 @@ func TestRejectReview(t *testing.T) {
 	store := newTestStore(t)
 	task := reviewTask(t, store)
 
-	h := New(store, t.TempDir())
+	h := New(store, t.TempDir(), nil, testToken)
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/tasks/"+task.TaskID+"/reject?reason=nope", nil))
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks/"+task.TaskID+"/reject?reason=nope", nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
 	}
@@ -133,10 +153,133 @@ func TestApproveNonReviewConflicts(t *testing.T) {
 	ctx := context.Background()
 	task, _ := store.Create(ctx, "", "proj", "still submitted", "node", []string{"node"})
 
-	h := New(store, t.TempDir())
+	h := New(store, t.TempDir(), nil, testToken)
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/tasks/"+task.TaskID+"/approve", nil))
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks/"+task.TaskID+"/approve", nil))
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", rr.Code)
+	}
+}
+
+func newTestPushService(t *testing.T) *push.Service {
+	t.Helper()
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	keys, err := push.GenerateVAPIDKeys("mailto:test@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return push.NewService(keys, push.NewStore(db), slog.New(slog.DiscardHandler))
+}
+
+func TestPushKey(t *testing.T) {
+	h := New(newTestStore(t), t.TempDir(), newTestPushService(t), testToken)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/push/key", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	var m map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["key"] == "" {
+		t.Fatal("empty applicationServerKey")
+	}
+}
+
+// validSubJSON builds a well-formed subscription body with 65-byte p256dh and
+// 16-byte auth keys.
+func validSubJSON() string {
+	p256dh := make([]byte, 65)
+	p256dh[0] = 0x04
+	_, _ = rand.Read(p256dh[1:])
+	auth := make([]byte, 16)
+	_, _ = rand.Read(auth)
+	return fmt.Sprintf(`{"endpoint":"https://example.com/push/1","keys":{"p256dh":%q,"auth":%q}}`,
+		base64.RawURLEncoding.EncodeToString(p256dh),
+		base64.RawURLEncoding.EncodeToString(auth))
+}
+
+func TestPushSubscribeRejectsInvalid(t *testing.T) {
+	h := New(newTestStore(t), t.TempDir(), newTestPushService(t), testToken)
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPost, "/api/push/subscribe", nil)
+	req.Body = io.NopCloser(strings.NewReader(`{"endpoint":"https://example.com/push/1","keys":{"p256dh":"short","auth":"short"}}`))
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestPushSubscribeUnsubscribeRoundTrip(t *testing.T) {
+	h := New(newTestStore(t), t.TempDir(), newTestPushService(t), testToken)
+	// subscribe
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPost, "/api/push/subscribe", nil)
+	req.Body = io.NopCloser(strings.NewReader(validSubJSON()))
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("subscribe status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	// unsubscribe
+	rr = httptest.NewRecorder()
+	req = authedReq(http.MethodPost, "/api/push/unsubscribe", nil)
+	req.Body = io.NopCloser(strings.NewReader(`{"endpoint":"https://example.com/push/1"}`))
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unsubscribe status = %d, body %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAPIAuthRequired(t *testing.T) {
+	h := New(newTestStore(t), t.TempDir(), nil, testToken)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/tasks", nil)) // no header
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+}
+
+func TestAPIWrongToken(t *testing.T) {
+	h := New(newTestStore(t), t.TempDir(), nil, testToken)
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	req.Header.Set("Authorization", "Bearer wrong")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+}
+
+func TestEmptyTokenFailsClosed(t *testing.T) {
+	// A panel configured without a token must never serve /api/* — fail closed
+	// even if a client supplies a Bearer header.
+	h := New(newTestStore(t), t.TempDir(), nil, "")
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	req.Header.Set("Authorization", "Bearer anything")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (fail closed)", rr.Code)
+	}
+}
+
+func TestStaticServedWithoutAuth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := New(newTestStore(t), dir, nil, testToken)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil)) // no header
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (static assets are not gated)", rr.Code)
 	}
 }

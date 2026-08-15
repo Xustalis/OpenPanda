@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,6 +16,7 @@ type Config struct {
 	Storage StorageConfig `yaml:"storage"`
 	Log     LogConfig     `yaml:"log"`
 	Model   ModelConfig   `yaml:"model"`
+	Push    PushConfig    `yaml:"push"`
 }
 
 // NodeConfig identifies this node.
@@ -27,6 +29,7 @@ type NodeConfig struct {
 type NetworkConfig struct {
 	ListenAddr string   `yaml:"listen_addr"` // e.g. ":7836"
 	PanelAddr  string   `yaml:"panel_addr"`  // HTTP panel/PWA listener, e.g. ":7840"
+	PanelToken string   `yaml:"panel_token"` // Bearer token guarding /api/*; the panel refuses to start without it
 	Peers      []string `yaml:"peers"`       // e.g. "orangepi3b.tailnet-name.ts.net:7836"
 }
 
@@ -49,9 +52,20 @@ type LogConfig struct {
 // adapters. DeepSeek exposes an Anthropic-compatible Messages API, so base_url
 // defaults there; any /v1/messages-compatible endpoint works.
 type ModelConfig struct {
-	BaseURL string `yaml:"base_url"` // e.g. https://api.deepseek.com/anthropic
-	APIKey  string `yaml:"api_key"`  // secret; prefer env PANDA_MODEL_API_KEY
-	Model   string `yaml:"model"`    // e.g. deepseek-chat | deepseek-reasoner
+	BaseURL   string `yaml:"base_url"`   // e.g. https://api.deepseek.com/anthropic
+	APIKey    string `yaml:"api_key"`    // secret; prefer env PANDA_MODEL_API_KEY
+	Model     string `yaml:"model"`      // e.g. deepseek-chat | deepseek-reasoner
+	MaxTokens int    `yaml:"max_tokens"` // completion cap; 0 = provider/entry default
+}
+
+// PushConfig enables Web Push notifications (design P3-26). VAPID (RFC 8292)
+// needs a stable P-256 keypair and a mailto:/https: subject identifying the
+// sender; the key is persisted at vapid_key_path so browser subscriptions stay
+// valid across restarts.
+type PushConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	VAPIDSubject string `yaml:"vapid_subject"` // e.g. mailto:ops@example.com
+	VAPIDKeyPath string `yaml:"vapid_key_path"`
 }
 
 // Default returns a Config with safe local-development defaults.
@@ -77,8 +91,14 @@ func Default() *Config {
 			Level: "info",
 		},
 		Model: ModelConfig{
-			BaseURL: "https://api.deepseek.com/anthropic",
-			Model:   "deepseek-chat",
+			BaseURL:   "https://api.deepseek.com/anthropic",
+			Model:     "deepseek-chat",
+			MaxTokens: 4096,
+		},
+		Push: PushConfig{
+			Enabled:      false,
+			VAPIDSubject: "mailto:panda@localhost",
+			VAPIDKeyPath: "./data/vapid.pem",
 		},
 	}
 }
@@ -123,6 +143,9 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("PANDA_PANEL_ADDR"); v != "" {
 		c.Network.PanelAddr = v
 	}
+	if v := os.Getenv("PANDA_PANEL_TOKEN"); v != "" {
+		c.Network.PanelToken = v
+	}
 	if v := os.Getenv("PANDA_DB_PATH"); v != "" {
 		c.Storage.DBPath = v
 	}
@@ -146,5 +169,16 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("PANDA_MODEL"); v != "" {
 		c.Model.Model = v
+	}
+	if v := os.Getenv("PANDA_MODEL_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Model.MaxTokens = n
+		}
+	}
+	if v := os.Getenv("PANDA_PUSH_VAPID_SUBJECT"); v != "" {
+		c.Push.VAPIDSubject = v
+	}
+	if v := os.Getenv("PANDA_PUSH_VAPID_KEY_PATH"); v != "" {
+		c.Push.VAPIDKeyPath = v
 	}
 }

@@ -7,6 +7,7 @@ node:
 network:
   listen_addr: ":7836"           # WebSocket listener
   panel_addr: ":7840"            # HTTP PWA control panel (empty = disabled)
+  # panel_token: ""              # Bearer token guarding /api/* (required to enable the panel; prefer env PANDA_PANEL_TOKEN)
   peers:                         # manual peers
     - "orangepi3b.tailnet-name.ts.net:7836"
 
@@ -26,4 +27,13 @@ log:
 model:
   base_url: "https://api.deepseek.com/anthropic"
   model: "deepseek-chat"          # deepseek-chat | deepseek-reasoner
+  # max_tokens: 4096              # completion cap; default 4096
   # api_key: ""                   # secret; prefer env PANDA_MODEL_API_KEY
+
+# Web Push notifications (design P3-26): task entering review → phone push.
+# Requires HTTPS to work from a phone PWA; VAPID key is auto-generated and
+# persisted at vapid_key_path on first boot (keep it stable).
+push:
+  enabled: false                  # true to serve /api/push/* and send pushes
+  vapid_subject: "mailto:panda@localhost"
+  vapid_key_path: "./data/vapid.pem"

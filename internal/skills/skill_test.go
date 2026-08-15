@@ -131,6 +131,31 @@ func TestMatchWordBoundary(t *testing.T) {
 	}
 }
 
+func TestMatchCJKOverlap(t *testing.T) {
+	index := []IndexEntry{
+		{Name: "deploy-panda", Description: "部署到香橙派", Scope: ScopeGlobal, Status: StatusActive},
+		{Name: "git-workflow", Description: "Commit and PR workflow", Scope: ScopeGlobal, Status: StatusActive},
+	}
+	// Single-ideograph CJK overlap: "部署" matches the deploy skill even though
+	// its description is a longer Chinese phrase (the old whole-word matcher
+	// would treat "部署到香橙派" as one opaque token and miss it).
+	got := Match(index, ScopeGlobal, "", "部署")
+	if len(got) != 1 || got[0].Name != "deploy-panda" {
+		t.Errorf("CJK match = %v, want only deploy-panda", names(got))
+	}
+}
+
+func TestMatchRanksByRelevance(t *testing.T) {
+	index := []IndexEntry{
+		{Name: "git-workflow", Description: "Commit and PR workflow", Scope: ScopeGlobal, Status: StatusActive},
+		{Name: "deploy-panda", Description: "Deploy to Orange Pi", Scope: ScopeGlobal, Status: StatusActive},
+	}
+	got := Match(index, ScopeGlobal, "", "deploy")
+	if len(got) != 1 || got[0].Name != "deploy-panda" {
+		t.Errorf("ranked match = %v, want deploy-panda", names(got))
+	}
+}
+
 func TestScopeKeyRejectsTraversal(t *testing.T) {
 	store := NewStore(t.TempDir())
 	sk := &Skill{Name: "x", Description: "d", Scope: ScopeProject, Project: "../evil"}
@@ -139,6 +164,21 @@ func TestScopeKeyRejectsTraversal(t *testing.T) {
 	}
 	if _, err := store.Load(ScopeProject, "../evil", "x"); err == nil {
 		t.Errorf("traversal scope key should error on load")
+	}
+}
+
+func TestMatchIgnoresStopwords(t *testing.T) {
+	index := []IndexEntry{
+		{Name: "deploy-panda", Description: "Deploy to Orange Pi", Scope: ScopeGlobal, Status: StatusActive},
+	}
+	// A query made only of Latin stopwords must not match a skill whose only
+	// overlap is those stopwords.
+	if got := Match(index, ScopeGlobal, "", "the and to"); len(got) != 0 {
+		t.Errorf("stopword-only query matched: %v", names(got))
+	}
+	// The content token still matches once present.
+	if got := Match(index, ScopeGlobal, "", "deploy the app"); len(got) != 1 || got[0].Name != "deploy-panda" {
+		t.Errorf("content match = %v, want deploy-panda", names(got))
 	}
 }
 

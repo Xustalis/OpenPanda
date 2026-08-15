@@ -43,6 +43,10 @@ const entrySep = "§"
 // is the Hermes workflow: merge proactively above ~80% capacity.
 var ErrOverLimit = errors.New("memory: character limit exceeded")
 
+// ErrDuplicate reports an add of an entry that already exists verbatim. Callers
+// that consolidate a stream of candidates treat it as "skip", not "abort".
+var ErrDuplicate = errors.New("memory: duplicate entry")
+
 // MemFile is an in-memory MEMORY.md: an ordered list of entries separated on
 // disk by "§". The zero value is an empty file. Limit is the character cap; a
 // non-positive value means unlimited.
@@ -90,7 +94,7 @@ func (m *MemFile) Add(entry string) error {
 	}
 	for _, e := range m.Entries {
 		if e == entry {
-			return fmt.Errorf("memory: duplicate entry")
+			return ErrDuplicate
 		}
 	}
 	before := m.Chars()

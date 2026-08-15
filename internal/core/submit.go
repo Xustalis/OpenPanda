@@ -147,6 +147,7 @@ func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.Ta
 		return t, result, err
 	}
 
+	retries := 0
 	for {
 		final, err := c.store.Get(ctx, t.TaskID)
 		if err != nil {
@@ -166,10 +167,17 @@ func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.Ta
 			}
 			return final, result, nil
 		}
+		// Exponential backoff between retries so a deterministically-failing
+		// task does not hammer the agent/LLM in a tight loop. The loop detector
+		// still bounds the total retry count.
+		if c.sleep != nil {
+			c.sleep(c.retryBackoff << uint(retries))
+		}
 		if rerr := c.retryOnce(ctx, t.TaskID); rerr != nil {
 			c.logger.Warn("retry task", "task", t.TaskID, "err", rerr)
 			return final, result, rerr
 		}
+		retries++
 		c.logger.Info("retrying task", "task", t.TaskID)
 		result, err = c.run(ctx, t.TaskID, in.Intent, in.Requires, in.Authorized)
 		if err != nil && !errors.Is(err, ErrCancelled) {

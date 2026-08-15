@@ -3,6 +3,7 @@ package commander
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/xenith/panda/internal/config"
@@ -62,8 +63,16 @@ func (r *Router) MatchNative(required []string) (ledger.NativeAbility, bool) {
 
 // MatchAgent finds a configured agent that satisfies any of required — either
 // by name ("agent:<name>", the form the device summary advertises) or by one
-// of its declared capabilities.
+// of its declared capabilities. Capability matches iterate agent names in
+// sorted order so the choice is deterministic when several agents declare the
+// same capability.
 func (r *Router) MatchAgent(required []string) (string, ledger.Agent, bool) {
+	names := make([]string, 0, len(r.card.Agents))
+	for name := range r.card.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
 	for _, req := range required {
 		if name, ok := strings.CutPrefix(req, "agent:"); ok {
 			if ag, exists := r.card.Agents[name]; exists {
@@ -71,7 +80,8 @@ func (r *Router) MatchAgent(required []string) (string, ledger.Agent, bool) {
 			}
 			continue
 		}
-		for name, ag := range r.card.Agents {
+		for _, name := range names {
+			ag := r.card.Agents[name]
 			for _, cap := range ag.Capabilities {
 				if ledger.AbilityMatches(cap, req) {
 					return name, ag, true

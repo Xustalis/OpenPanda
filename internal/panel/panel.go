@@ -5,31 +5,68 @@
 package panel
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/xenith/panda/internal/core"
+	"github.com/xenith/panda/internal/push"
 )
 
 // New builds the panel HTTP handler. staticDir is the directory holding the PWA
-// static files (web/pwa); JSON endpoints are served under /api/.
-func New(store *core.TaskStore, staticDir string) http.Handler {
-	h := &handler{store: store}
+// static files (web/pwa); JSON endpoints are served under /api/. pushSvc, when
+// non-nil, additionally serves the Web Push subscription endpoints. token is the
+// Bearer credential guarding every /api/* route; the static files under / are
+// served unauthenticated (they carry no secrets, the API does). An empty token
+// fails closed: /api/* rejects every request until a token is configured.
+func New(store *core.TaskStore, staticDir string, pushSvc *push.Service, token string) http.Handler {
+	h := &handler{store: store, push: pushSvc}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/tasks", h.listTasks)
 	mux.HandleFunc("GET /api/tasks/{id}", h.getTask)
 	mux.HandleFunc("POST /api/tasks/{id}/approve", h.approveTask)
 	mux.HandleFunc("POST /api/tasks/{id}/reject", h.rejectTask)
+	if pushSvc != nil {
+		mux.HandleFunc("GET /api/push/key", h.pushKey)
+		mux.HandleFunc("POST /api/push/subscribe", h.pushSubscribe)
+		mux.HandleFunc("POST /api/push/unsubscribe", h.pushUnsubscribe)
+	}
 	mux.Handle("/", http.FileServer(http.Dir(staticDir)))
-	return mux
+	return authMiddleware(token, mux)
+}
+
+// authMiddleware guards /api/* with a constant-time Bearer comparison. An empty
+// token fails closed (every /api/* request is rejected) so the panel can never
+// run open by accident; the daemon additionally refuses to start the panel at
+// all when no token is configured (see cmd/panda). Static assets under / are
+// always served.
+func authMiddleware(token string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			// Hash both sides so the comparison is constant-time regardless of
+			// length — ConstantTimeCompare otherwise early-returns on a length
+			// mismatch, leaking the token length.
+			gotSum := sha256.Sum256([]byte(got))
+			wantSum := sha256.Sum256([]byte(token))
+			if token == "" || subtle.ConstantTimeCompare(gotSum[:], wantSum[:]) != 1 {
+				writeErr(w, http.StatusUnauthorized, errors.New("unauthorized"))
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type handler struct {
 	store *core.TaskStore
+	push  *push.Service
 }
 
 // taskJSON is the wire form of a task row, with stable snake_case names so the
@@ -139,6 +176,41 @@ func (h *handler) rejectTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"id": id, "status": "rejected"})
+}
+
+// pushKey serves the VAPID applicationServerKey the browser subscribes with.
+func (h *handler) pushKey(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]string{"key": h.push.PublicKey()})
+}
+
+// pushSubscribe stores a browser PushSubscription.
+func (h *handler) pushSubscribe(w http.ResponseWriter, r *http.Request) {
+	var sub push.Subscription
+	if err := json.NewDecoder(r.Body).Decode(&sub); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.push.Subscribe(r.Context(), sub); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "subscribed"})
+}
+
+// pushUnsubscribe removes a browser PushSubscription by endpoint.
+func (h *handler) pushUnsubscribe(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.push.Unsubscribe(r.Context(), req.Endpoint); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "unsubscribed"})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

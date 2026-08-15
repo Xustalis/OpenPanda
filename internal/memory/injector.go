@@ -18,11 +18,13 @@ func NewInjector(hermes *Hermes, projects *Projects) *Injector {
 }
 
 // Conversation returns the Hermes personal memory for the entry model's system
-// prompt: the user profile (USER.md) and the agent's world notes (MEMORY.md),
-// each already capped by its store, so no further truncation is needed. It
-// returns "" when there is no memory. The result is a frozen snapshot — a later
-// write does not change it.
-func (i *Injector) Conversation() (string, error) {
+// prompt: the full user profile (USER.md, always relevant) plus the world notes
+// (MEMORY.md) most relevant to query. An empty query returns the full MEMORY.md
+// (no relevance signal, so nothing is filtered); a non-empty query returns at
+// most conversationMemoryK matching entries, so a growing hot layer no longer
+// forces the whole file into every prompt. It returns "" when there is no
+// memory. The result is a frozen snapshot — a later write does not change it.
+func (i *Injector) Conversation(query string) (string, error) {
 	if i.hermes == nil {
 		return "", nil
 	}
@@ -34,7 +36,11 @@ func (i *Injector) Conversation() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return joinSnapshot(user, mem), nil
+	entries := mem.Entries
+	if query != "" {
+		entries = Retriever{}.Rank(query, mem.Entries, conversationMemoryK)
+	}
+	return joinSnapshot(user, MemFile{Entries: entries, Limit: mem.Limit}), nil
 }
 
 // joinSnapshot renders the two personal-memory layers as one prompt block,

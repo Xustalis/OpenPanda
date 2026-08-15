@@ -51,6 +51,8 @@
       </select>
       <input id="project" placeholder="项目名筛选" autocomplete="off">
     </div>
+    <button id="enable-push" hidden>🔔 开启通知</button>
+    <button id="set-token" title="设置面板访问令牌 (network.panel_token)">🔑 令牌</button>
   </header>
 
   <main>
@@ -93,11 +95,29 @@
       return `<span class="badge ${cls}">${esc(state)}</span>`;
     }
 
+    // Panel auth: every /api/* route requires the Bearer token set in
+    // network.panel_token. The token is kept in localStorage and attached to
+    // each request; a 401 re-prompts once so a fresh session can recover.
+    const TOKEN_KEY = 'panda_token';
+    const getToken = () => localStorage.getItem(TOKEN_KEY) || '';
+    function api(path, opts = {}) {
+      const headers = Object.assign({}, opts.headers);
+      if (getToken()) headers['Authorization'] = 'Bearer ' + getToken();
+      return fetch(path, Object.assign({}, opts, { headers })).then((res) => {
+        if (res.status !== 401) return res;
+        const t = prompt('令牌无效或未设置，请输入面板令牌 (network.panel_token)：');
+        if (!t) return res;
+        localStorage.setItem(TOKEN_KEY, t.trim());
+        headers['Authorization'] = 'Bearer ' + t.trim();
+        return fetch(path, Object.assign({}, opts, { headers }));
+      });
+    }
+
     async function loadQueue() {
       const params = new URLSearchParams();
       if ($('#state').value) params.set('state', $('#state').value);
       if ($('#project').value.trim()) params.set('project', $('#project').value.trim());
-      const res = await fetch('/api/tasks?' + params.toString());
+      const res = await api('/api/tasks?' + params.toString());
       const tasks = await res.json();
       const tbody = $('#queue tbody');
       tbody.innerHTML = '';
@@ -114,7 +134,7 @@
     }
 
     async function loadDetail(id) {
-      const res = await fetch('/api/tasks/' + encodeURIComponent(id));
+      const res = await api('/api/tasks/' + encodeURIComponent(id));
       if (!res.ok) return;
       const t = await res.json();
       $('#detail').hidden = false;
@@ -132,13 +152,13 @@
         const ok = document.createElement('button');
         ok.className = 'approve'; ok.textContent = '批准';
         ok.addEventListener('click', async () => {
-          await fetch(`/api/tasks/${encodeURIComponent(id)}/approve`, { method: 'POST' });
+          await api(`/api/tasks/${encodeURIComponent(id)}/approve`, { method: 'POST' });
           loadDetail(id); loadQueue();
         });
         const no = document.createElement('button');
         no.className = 'reject'; no.textContent = '拒绝';
         no.addEventListener('click', async () => {
-          await fetch(`/api/tasks/${encodeURIComponent(id)}/reject?reason=rejected-by-operator`, { method: 'POST' });
+          await api(`/api/tasks/${encodeURIComponent(id)}/reject?reason=rejected-by-operator`, { method: 'POST' });
           loadDetail(id); loadQueue();
         });
         actions.append(ok, no);
@@ -158,9 +178,55 @@
 
     $('#state').addEventListener('change', loadQueue);
     $('#project').addEventListener('input', () => { clearTimeout(loadQueue._t); loadQueue._t = setTimeout(loadQueue, 250); });
+    $('#set-token').addEventListener('click', () => {
+      const t = prompt('面板令牌 (network.panel_token)，留空清除：', getToken());
+      if (t === null) return;
+      if (t.trim()) localStorage.setItem(TOKEN_KEY, t.trim());
+      else localStorage.removeItem(TOKEN_KEY);
+      loadQueue();
+    });
 
     loadQueue();
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+
+    // Web Push subscription (P3-26). Gated behind an explicit click so the
+    // permission prompt is tied to a user gesture, which mobile browsers
+    // require. The button only appears when the browser supports push.
+    function urlBase64ToUint8Array(s) {
+      const pad = '='.repeat((4 - (s.length % 4)) % 4);
+      const b64 = (s + pad).replace(/-/g, '+').replace(/_/g, '/');
+      return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    }
+
+    async function enablePush() {
+      const btn = $('#enable-push');
+      btn.disabled = true;
+      try {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') { btn.textContent = '🔕 通知被拒绝'; return; }
+        const keyRes = await api('/api/push/key');
+        if (!keyRes.ok) { btn.textContent = '❌ 服务端未启用推送'; return; }
+        const { key } = await keyRes.json();
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(key)
+        });
+        await api('/api/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sub.toJSON())
+        });
+        btn.textContent = '✅ 已开启通知';
+      } catch (_) {
+        btn.textContent = '❌ 开启失败';
+      }
+    }
+
+    if ('serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window) {
+      $('#enable-push').hidden = false;
+      $('#enable-push').addEventListener('click', enablePush);
+    }
   </script>
 </body>
 </html>

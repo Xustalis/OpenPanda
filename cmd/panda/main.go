@@ -21,6 +21,7 @@ import (
 	"github.com/xenith/panda/internal/log"
 	"github.com/xenith/panda/internal/memory"
 	"github.com/xenith/panda/internal/panel"
+	"github.com/xenith/panda/internal/push"
 	"github.com/xenith/panda/internal/skills"
 	"github.com/xenith/panda/internal/storage"
 )
@@ -114,6 +115,29 @@ func runDaemon() {
 		skills.NewStore(cfg.Storage.SkillsPath),
 	)
 
+	// Web Push (design P3-26): when enabled, a task entering review fires a push
+	// to every subscribed device so the operator can approve/reject from a phone.
+	// Disabled by default; the endpoints and sender are only wired when on.
+	var pushSvc *push.Service
+	if cfg.Push.Enabled {
+		keys, err := push.LoadOrCreateVAPIDKeys(cfg.Push.VAPIDKeyPath, cfg.Push.VAPIDSubject)
+		if err != nil {
+			fatal("load vapid keys", err)
+		}
+		pushSvc = push.NewService(keys, push.NewStore(db), logger)
+		coreNode.TaskStore().SetOnReview(func(t core.Task) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := pushSvc.Notify(ctx, push.Notification{
+				Title: "PANDA · 任务需要审批",
+				Body:  t.Title,
+				ID:    t.TaskID,
+			}); err != nil {
+				logger.Warn("notify review", "task", t.TaskID, "err", err)
+			}
+		})
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -180,18 +204,23 @@ func runDaemon() {
 
 	// PWA control panel (design §11 / P3-25): an HTTP server serving the static
 	// web app plus the task queue/approval API. Optional; empty panel_addr
-	// disables it.
+	// disables it. A panel without a token is refused (not silently left open):
+	// the /api/* approval routes must never be reachable unauthenticated.
 	if cfg.Network.PanelAddr != "" {
-		panelSrv := &http.Server{
-			Addr:    cfg.Network.PanelAddr,
-			Handler: panel.New(coreNode.TaskStore(), "web/pwa"),
-		}
-		go func() {
-			logger.Info("panel listening", "addr", cfg.Network.PanelAddr)
-			if err := panelSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				logger.Warn("panel server", "err", err)
+		if cfg.Network.PanelToken == "" {
+			logger.Warn("panel disabled: network.panel_token is not set (refusing to serve /api/* unauthenticated)")
+		} else {
+			panelSrv := &http.Server{
+				Addr:    cfg.Network.PanelAddr,
+				Handler: panel.New(coreNode.TaskStore(), "web/pwa", pushSvc, cfg.Network.PanelToken),
 			}
-		}()
+			go func() {
+				logger.Info("panel listening", "addr", cfg.Network.PanelAddr)
+				if err := panelSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					logger.Warn("panel server", "err", err)
+				}
+			}()
+		}
 	}
 
 	serveErr := make(chan error, 1)

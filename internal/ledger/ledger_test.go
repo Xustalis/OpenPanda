@@ -268,6 +268,10 @@ func TestAbilityMatches(t *testing.T) {
 		{"build:macos", "build", true},       // suffix
 		{"build:macos", "BUILD_MACOS", true}, // case + separator fold
 		{"lint", "gpu:train", false},         // unrelated
+		{"glint", "lint", false},             // substring collision must not match
+		{"rebuild", "build", false},          // substring collision must not match
+		{"gpus", "gpu", false},               // substring collision must not match
+		{"test", "latest", false},            // substring collision must not match
 		{"io", "gpio:write", false},          // degenerate fragment guarded
 		{"", "lint", false},                  // empty declared
 		{"lint", "", false},                  // empty required

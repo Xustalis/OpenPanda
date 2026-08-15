@@ -44,6 +44,34 @@ func TestTierFromCommand(t *testing.T) {
 	}
 }
 
+func TestTierFromCommandCombinedFlagsAndPassThrough(t *testing.T) {
+	cases := []struct {
+		command string
+		args    []string
+		want    int
+	}{
+		// Combined short flags: "-ec" carries "-c" alongside "-e", which a bare
+		// first-word match on "-c" would otherwise miss.
+		{"bash", []string{"-ec", "rm -rf /"}, TierIrreversible},
+		{"sh", []string{"-xc", "rm -rf /"}, TierIrreversible},
+		// Pass-through wrappers: the destructive command hides behind the wrapper.
+		{"env", []string{"rm", "-rf", "/"}, TierIrreversible},
+		{"env", []string{"HOME=/tmp", "rm", "-rf", "/"}, TierIrreversible},
+		{"nohup", []string{"rm", "-rf", "/"}, TierIrreversible},
+		{"timeout", []string{"5", "rm", "-rf", "/"}, TierIrreversible},
+		{"busybox", []string{"rm", "-rf", "/"}, TierIrreversible},
+		{"nice", []string{"-n", "10", "rm", "-rf", "/"}, TierIrreversible},
+		// Benign pass-through and combined flags stay Tier 1.
+		{"env", []string{"EDITOR=vim", "git", "status"}, TierReversible},
+		{"bash", []string{"-ec", "echo hello"}, TierReversible},
+	}
+	for _, tc := range cases {
+		if got := TierFromCommand(tc.command, tc.args...); got != tc.want {
+			t.Fatalf("TierFromCommand(%q, %v)=%d, want %d", tc.command, tc.args, got, tc.want)
+		}
+	}
+}
+
 func TestTierFromCommandUnwrapsInterpreters(t *testing.T) {
 	cases := []struct {
 		command string
