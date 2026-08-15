@@ -45,6 +45,11 @@ type Agent struct {
 	BestAt       []string `yaml:"best_at"`
 	NotFor       []string `yaml:"not_for"`
 	CostTier     string   `yaml:"cost_tier"`
+	// Tier mirrors NativeAbility.Tier: 1=reversible, 2=irreversible (needs
+	// auth). Zero defaults to 2 — an agent CLI can run arbitrary shell through
+	// the model, so the safe default is to require consent unless the card
+	// explicitly declares the agent read-only (P1-15).
+	Tier int `yaml:"tier"`
 }
 
 // ManualAbility is a human-performed task.

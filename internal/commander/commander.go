@@ -115,7 +115,14 @@ func (r *Router) Route(required []string) (Plan, error) {
 		return Plan{Kind: "native", Ability: ab.ID, Command: ab.Command, Args: ab.Args, Tier: tier}, nil
 	}
 	if name, ag, ok := r.MatchAgent(required); ok {
-		return Plan{Kind: "agent", Ability: name, Agent: name, Adapter: ag.Adapter}, nil
+		// P1-15: agent plans carry a tier like native ones. An undeclared tier
+		// defaults to 2 — an LLM agent can execute arbitrary commands, so the
+		// absence of a declaration must fail closed, not open.
+		tier := ag.Tier
+		if tier == 0 {
+			tier = defense.TierIrreversible
+		}
+		return Plan{Kind: "agent", Ability: name, Agent: name, Adapter: ag.Adapter, Tier: tier}, nil
 	}
 	if ab, ok := r.MatchManual(required); ok {
 		return Plan{Kind: "manual", Ability: ab.ID, Notify: ab.Notify}, nil
@@ -134,6 +141,11 @@ func (r *Router) Execute(ctx context.Context, plan Plan, prompt string, cwd stri
 		}
 		return r.execNative(ctx, plan, cwd)
 	case "agent":
+		// P1-15: the tier model covers agents too — a Tier-2 agent without
+		// consent is refused before the adapter subprocess is spawned.
+		if err := defense.Authorize(plan.Tier, authorized); err != nil {
+			return Result{OK: false, ExitCode: 1, Stderr: err.Error()}
+		}
 		return r.execAgent(ctx, plan, prompt, cwd)
 	case "manual":
 		return Result{OK: false, ExitCode: 0, Stdout: plan.Notify, NeedManual: true}

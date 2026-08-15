@@ -41,7 +41,9 @@ func newCoreWithAgent(t *testing.T, id string) *Core {
 		Device:        id,
 		ResourceClass: "Standard",
 		Agents: map[string]ledger.Agent{
-			"claude_code": {Adapter: "claude_code.py", Capabilities: []string{"code:modify"}},
+			// Tier 1 declared explicitly: these tests exercise scope-drift, not
+			// tier authorization (P1-15 defaults undeclared agents to Tier 2).
+			"claude_code": {Adapter: "claude_code.py", Capabilities: []string{"code:modify"}, Tier: 1},
 		},
 		Capacity: ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
 	}
