@@ -247,28 +247,24 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 	return parseResponse(&mr), nil
 }
 
-// parseResponse reduces a response to its text (preferring text blocks, falling
-// back to thinking) and its tool_use blocks. It records whether the provider
-// stopped at max_tokens, so callers can surface a truncation rather than pass a
-// silently cut answer through.
+// parseResponse reduces a response to its text (text blocks only) and its
+// tool_use blocks. It records whether the provider stopped at max_tokens, so
+// callers can surface a truncation rather than pass a silently cut answer
+// through. Thinking blocks are deliberately not used as the answer: a
+// thinking-only response carries no reply, and surfacing the model's private
+// reasoning would leak it to the user (D14).
 func parseResponse(mr *messagesResponse) Response {
 	var out Response
-	var texts, thinkings []string
+	var texts []string
 	for _, b := range mr.Content {
 		switch b.Type {
 		case "text":
 			texts = append(texts, b.Text)
-		case "thinking":
-			thinkings = append(thinkings, b.Text)
 		case "tool_use":
 			out.ToolUses = append(out.ToolUses, ToolUse{ID: b.ID, Name: b.Name, Input: b.Input})
 		}
 	}
-	if len(texts) > 0 {
-		out.Text = strings.Join(texts, "")
-	} else {
-		out.Text = strings.Join(thinkings, "")
-	}
+	out.Text = strings.Join(texts, "")
 	out.Truncated = mr.StopReason == "max_tokens"
 	return out
 }

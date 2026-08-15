@@ -164,3 +164,19 @@ func TestRoutePreferredFallsBackWhenUnavailable(t *testing.T) {
 		t.Fatalf("decision = %+v, want fallback to full (named node offline)", d)
 	}
 }
+
+// TestRoutePreferredMatchesName verifies the preferred node matches on the
+// display name (what the entry model sees) and returns the routing id as the
+// target, so a node whose id and name differ still routes correctly (D6).
+func TestRoutePreferredMatchesName(t *testing.T) {
+	employees := []ledger.Node{
+		{ID: "mac-1", Name: "MacBook Pro", Status: "online", SchedulerTier: 2, Native: []ledger.NativeAbility{{ID: "build"}}},
+		{ID: "opi", Name: "Orange Pi", Status: "online", SchedulerTier: 3, Native: []ledger.NativeAbility{{ID: "build"}}},
+	}
+	neverLocal := func([]string) bool { return false }
+
+	d := Route("self", []string{"self"}, employees, neverLocal, []string{"build"}, "MacBook Pro")
+	if d.Action != ActionForward || d.Target != "mac-1" {
+		t.Fatalf("decision = %+v, want forward to mac-1 by display name", d)
+	}
+}

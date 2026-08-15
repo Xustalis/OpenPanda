@@ -361,25 +361,29 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 	var out []Node
 	for rows.Next() {
 		var n Node
-		var native, agents, manual, capJSON, resJSON string
+		// JSON columns are nullable in practice: resource_profile_json is added
+		// later by a migration (legacy rows are NULL until re-upserted), and a
+		// partial insert leaves the others NULL too. Scan all of them as nullable
+		// so a single such row does not fail the whole directory query.
+		var native, agents, manual, capJSON, resJSON sql.NullString
 		if err := rows.Scan(&n.ID, &n.Name, &n.Chip, &n.Status, &n.LastSeen, &n.SchedulerTier,
 			&native, &agents, &manual, &capJSON, &resJSON); err != nil {
 			return nil, err
 		}
-		if native != "" {
-			_ = json.Unmarshal([]byte(native), &n.Native)
+		if native.Valid && native.String != "" {
+			_ = json.Unmarshal([]byte(native.String), &n.Native)
 		}
-		if agents != "" {
-			_ = json.Unmarshal([]byte(agents), &n.Agents)
+		if agents.Valid && agents.String != "" {
+			_ = json.Unmarshal([]byte(agents.String), &n.Agents)
 		}
-		if manual != "" {
-			_ = json.Unmarshal([]byte(manual), &n.Manual)
+		if manual.Valid && manual.String != "" {
+			_ = json.Unmarshal([]byte(manual.String), &n.Manual)
 		}
-		if capJSON != "" {
-			_ = json.Unmarshal([]byte(capJSON), &n.Capacity)
+		if capJSON.Valid && capJSON.String != "" {
+			_ = json.Unmarshal([]byte(capJSON.String), &n.Capacity)
 		}
-		if resJSON != "" {
-			_ = json.Unmarshal([]byte(resJSON), &n.ResourceProfile)
+		if resJSON.Valid && resJSON.String != "" {
+			_ = json.Unmarshal([]byte(resJSON.String), &n.ResourceProfile)
 		}
 		out = append(out, n)
 	}

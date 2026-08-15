@@ -27,7 +27,10 @@ func NewScope(spec string) *Scope {
 			continue
 		}
 		p = filepath.ToSlash(filepath.Clean(p))
-		if p == "." || p == "/" {
+		// "." and "/" declare the whole tree (no restriction); ".." and "../…"
+		// escape the working directory, so none of them restrict anything and
+		// all are dropped rather than silently widening the scope outward.
+		if p == "." || p == "/" || p == ".." || strings.HasPrefix(p, "../") {
 			continue
 		}
 		roots = append(roots, strings.TrimSuffix(p, "/"))

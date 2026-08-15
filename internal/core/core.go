@@ -234,10 +234,20 @@ func (c *Core) RunMonitor(ctx context.Context) {
 				continue
 			}
 			if len(expired) > 0 {
-				// A task that timed out while paused in waiting_context would
-				// otherwise leak its entry in pendingCtx (P2-7).
 				for _, id := range expired {
+					// A task that timed out while paused in waiting_context would
+					// otherwise leak its entry in pendingCtx (P2-7).
 					c.pendingCtx.Delete(id)
+					// Propagate the timeout up the delegation chain so a root
+					// scheduler blocked in Submit unblocks (D3). relayToParent is
+					// a no-op for a root task; signalResult no-ops without a waiter.
+					if tk, err := c.store.Get(ctx, id); err == nil {
+						res := bus.TaskResultPayload{
+							TaskID: id, AttemptID: tk.AttemptID, OK: false, ExitCode: 1, Stderr: "lease expired",
+						}
+						c.relayToParent(ctx, bus.MsgTaskResult, tk.Chain, res)
+						c.signalResult(id, res)
+					}
 				}
 				c.logger.Info("monitor expired tasks", "count", len(expired))
 			}
@@ -379,11 +389,13 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 		conn.Close()
 		return nil, err
 	}
+	ts := time.Now().Unix()
 	env, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, bus.HelloPayload{
 		NodeID: c.nodeID,
 		Ver:    "0.1.0-dev",
 		Card:   card,
-		Sig:    bus.HelloSig(c.sharedSecret, c.nodeID),
+		Ts:     ts,
+		Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
 	})
 	if err != nil {
 		conn.Close()
@@ -441,9 +453,9 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		return
 	}
 	// Verify the transport signature before trusting the claimed identity
-	// (design §16 / P0-1). Fail closed: an unauthenticated hello registers
-	// nothing and receives no reply.
-	if !bus.VerifyHello(c.sharedSecret, p.NodeID, p.Sig) {
+	// (design §16 / P0-1). Fail closed: an unauthenticated or stale hello
+	// registers nothing and receives no reply.
+	if !bus.VerifyHello(c.sharedSecret, p.NodeID, p.Ts, p.Sig, time.Now()) {
 		c.logger.Warn("rejected hello: bad signature", "peer", p.NodeID)
 		return
 	}
@@ -480,11 +492,13 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	if err != nil {
 		return
 	}
+	ts := time.Now().Unix()
 	if err := c.reply(ctx, env, bus.MsgHello, bus.HelloPayload{
 		NodeID: c.nodeID,
 		Ver:    "0.1.0-dev",
 		Card:   card,
-		Sig:    bus.HelloSig(c.sharedSecret, c.nodeID),
+		Ts:     ts,
+		Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
 	}); err != nil {
 		c.logger.Debug("hello reply failed", "peer", env.From, "err", err)
 	}
@@ -559,6 +573,13 @@ func (c *Core) helloCard() (json.RawMessage, error) {
 	return json.Marshal(c.summary())
 }
 
+// normalizeWSURL turns a bare host[:port] peer address into a WebSocket URL,
+// preserving an explicit scheme (ws:// or wss://) when the caller supplied one.
+// The plaintext default is deliberate: the node listener has no TLS termination
+// of its own, and link encryption for node-to-node traffic is delegated to the
+// network layer (Tailscale). A deployment that reaches peers over an untrusted
+// plain network must specify wss:// explicitly and terminate TLS in front of
+// the listener.
 func normalizeWSURL(addr string) string {
 	if addr == "" {
 		return ""

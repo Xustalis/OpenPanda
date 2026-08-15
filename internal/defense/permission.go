@@ -41,6 +41,7 @@ func Authorize(tier int, authorized bool) error {
 // interpreter invoked with a code flag ("bash -c", "sh -c", "python -c", …)
 // is judged by the code it runs rather than by the interpreter's name.
 func TierFromCommand(command string, args ...string) int {
+	command = normalizeCommand(command)
 	if destructiveVerbs[command] {
 		return TierIrreversible
 	}
@@ -54,7 +55,13 @@ func TierFromCommand(command string, args ...string) int {
 		return TierReversible
 	}
 	if flag, ok := interpreterCodeFlag[command]; ok {
-		if code := codeArg(flag, args); code != "" && codeEscalates(code) {
+		if code := codeArg(flag, args); code != "" {
+			if codeEscalates(code) {
+				return TierIrreversible
+			}
+		} else if hasPositionalArg(args) {
+			// An interpreter invoked with a script file ("bash evil.sh") runs
+			// code whose content is not visible here; fail closed to Tier 2.
 			return TierIrreversible
 		}
 	}
@@ -67,6 +74,8 @@ func TierFromCommand(command string, args ...string) int {
 var destructiveVerbs = map[string]bool{
 	"sudo": true, "su": true, "doas": true,
 	"rm": true, "dd": true, "mkfs": true,
+	"mv": true, "cp": true, "chmod": true,
+	"kill": true, "pkill": true,
 	"shutdown": true, "reboot": true, "poweroff": true,
 	"systemctl": true, "mount": true, "umount": true,
 	"iptables": true, "nft": true,
@@ -164,6 +173,32 @@ func isNumeric(s string) bool {
 		}
 	}
 	return true
+}
+
+// normalizeCommand reduces a command to its bare executable name: strips a
+// directory path and a Windows ".exe" suffix, so "/bin/rm" and "rm.exe" match
+// the same verb tables as "rm".
+func normalizeCommand(command string) string {
+	if i := strings.LastIndexAny(command, `/\`); i >= 0 {
+		command = command[i+1:]
+	}
+	if len(command) > 4 && strings.EqualFold(command[len(command)-4:], ".exe") {
+		command = command[:len(command)-4]
+	}
+	return command
+}
+
+// hasPositionalArg reports whether args contains a non-flag argument. For an
+// interpreter invoked without a code flag, that argument is a script file (or
+// module) whose content cannot be inspected here, so the caller treats it as
+// Tier 2.
+func hasPositionalArg(args []string) bool {
+	for _, a := range args {
+		if a != "" && a[0] != '-' {
+			return true
+		}
+	}
+	return false
 }
 
 // codeArg returns the argument immediately following flag (e.g. the code

@@ -68,11 +68,13 @@ func Route(self string, chain []string, employees []ledger.Node, localMatch func
 	}
 
 	// A named node is authoritative when it can take the task; otherwise fall
-	// through to normal ranking so the task still runs somewhere capable.
+	// through to normal ranking so the task still runs somewhere capable. Match
+	// on either the node id (the routing key) or its display name, since the
+	// entry model sees the latter in the device summary.
 	if preferred != "" {
 		for _, n := range matching {
-			if n.ID == preferred {
-				return Decision{Action: ActionForward, Target: preferred}
+			if n.ID == preferred || n.Name == preferred {
+				return Decision{Action: ActionForward, Target: n.ID}
 			}
 		}
 	}

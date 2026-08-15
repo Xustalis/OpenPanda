@@ -56,39 +56,51 @@ func (e *Executor) Run(ctx context.Context, command string, args ...string) Nati
 	// secrets (P1-1).
 	cmd.Env = security.NewSandbox(e.dir).Env(e.env...)
 
-	var stdout, stderr []byte
-	cmd.Stdout = &outBuf{&stdout}
-	cmd.Stderr = &outBuf{&stderr}
+	var stdout, stderr executil.Capture
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
 	err := cmd.Run()
 	res := NativeResult{
 		ExitCode: 0,
-		Stdout:   string(stdout),
-		Stderr:   string(stderr),
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
 	}
-	if err != nil {
+	switch {
+	case err == nil:
+		res.OK = true
+	case ctx.Err() == context.DeadlineExceeded:
+		res.OK = false
+		res.ExitCode = 124 // convention: timeout (matches coreutils timeout)
+		if res.Stderr == "" {
+			res.Stderr = "command timed out"
+		}
+	case ctx.Err() == context.Canceled:
+		res.OK = false
+		res.ExitCode = 130 // convention: SIGINT
+		if res.Stderr == "" {
+			res.Stderr = "command canceled"
+		}
+	default:
 		if ee, ok := err.(*exec.ExitError); ok {
 			res.ExitCode = ee.ExitCode()
-			res.OK = ee.ExitCode() == 0
+			res.OK = res.ExitCode == 0
+			if res.ExitCode < 0 && res.Stderr == "" {
+				// Killed by a signal (ExitCode -1): give a diagnostic rather than
+				// an empty stderr.
+				res.Stderr = err.Error()
+			}
 		} else {
-			// Command could not start (not found, timeout, ctx cancelled).
+			// Command could not start (not found, permission, …): a non-zero
+			// code so a failed start is never reported as a clean exit (D11).
 			res.OK = false
+			res.ExitCode = 127
 			if res.Stderr == "" {
 				res.Stderr = err.Error()
 			}
 		}
-	} else {
-		res.OK = true
 	}
 	return res
-}
-
-// outBuf accumulates writes into a byte slice (exec.Cmd requires io.Writer).
-type outBuf struct{ p *[]byte }
-
-func (b *outBuf) Write(p []byte) (int, error) {
-	*b.p = append(*b.p, p...)
-	return len(p), nil
 }
 
 // LookPath reports whether an executable exists on PATH.

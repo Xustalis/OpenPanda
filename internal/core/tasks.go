@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -169,28 +170,6 @@ func (s *TaskStore) notifyReview(t Task) {
 	go fn(t)
 }
 
-// apply writes the new state + event. attemptID is carried through unchanged
-// unless a caller explicitly rotates it (retry/transfer). result, if non-nil,
-// is stored into result_json.
-func (s *TaskStore) apply(ctx context.Context, taskID, to, owner, attemptID, event string, data any, result any) error {
-	now := s.now()
-	dataJSON, _ := json.Marshal(data)
-	var resultJSON any
-	if result != nil {
-		b, _ := json.Marshal(result)
-		resultJSON = string(b)
-	}
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, owner_node=?, attempt_id=?, state_version=state_version+1,
-			result_json=COALESCE(?, result_json), updated_at=?
-		WHERE task_id=?`,
-		to, owner, attemptID, resultJSON, now, taskID)
-	if err != nil {
-		return fmt.Errorf("update task state: %w", err)
-	}
-	return s.recordEvent(ctx, taskID, event, dataJSON)
-}
-
 // applyCAS writes the new state + event atomically, succeeding only if the
 // stored (state, owner_node) still match what the caller read. This closes the
 // TOCTOU window between the Get-and-check and the UPDATE (P1-2): without the
@@ -214,6 +193,34 @@ func (s *TaskStore) applyCAS(ctx context.Context, taskID, from, to, owner, attem
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("%w: task %s state=%s owner=%s", ErrConflict, taskID, from, owner)
+	}
+	return s.recordEvent(ctx, taskID, event, dataJSON)
+}
+
+// applyState writes the new state + event atomically, succeeding only if the
+// stored state still matches `from`. Unlike applyCAS it does not require the
+// stored owner to match `owner` (which it also rewrites): remote result
+// handlers legitimately move ownership from executor back to delegator. The
+// state guard is what prevents a concurrent timeout/cancel from being
+// overwritten by a result that read the pre-transition state.
+func (s *TaskStore) applyState(ctx context.Context, taskID, from, to, owner, attemptID, event string, data, result any) error {
+	now := s.now()
+	dataJSON, _ := json.Marshal(data)
+	var resultJSON any
+	if result != nil {
+		b, _ := json.Marshal(result)
+		resultJSON = string(b)
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET state=?, owner_node=?, attempt_id=?, state_version=state_version+1,
+			result_json=COALESCE(?, result_json), updated_at=?
+		WHERE task_id=? AND state=?`,
+		to, owner, attemptID, resultJSON, now, taskID, from)
+	if err != nil {
+		return fmt.Errorf("update task state: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: task %s state=%s", ErrConflict, taskID, from)
 	}
 	return s.recordEvent(ctx, taskID, event, dataJSON)
 }
@@ -333,7 +340,10 @@ func (s *TaskStore) CompleteFromRemote(ctx context.Context, taskID, owner string
 	if Terminal(cur.State) {
 		return nil // already closed; keep first result
 	}
-	if err := s.apply(ctx, taskID, StateDone, owner, cur.AttemptID, EvResult, result, result); err != nil {
+	if err := s.applyState(ctx, taskID, cur.State, StateDone, owner, cur.AttemptID, EvResult, result, result); err != nil {
+		if errors.Is(err, ErrConflict) {
+			return nil // a concurrent transition closed it first; keep that outcome
+		}
 		return err
 	}
 	s.logger.Debug("remote completion recorded", "task", taskID, "from", cur.State)
@@ -430,8 +440,11 @@ func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason st
 	if Terminal(cur.State) {
 		return nil
 	}
-	if err := s.apply(ctx, taskID, StateFailed, owner, cur.AttemptID, EvResult,
+	if err := s.applyState(ctx, taskID, cur.State, StateFailed, owner, cur.AttemptID, EvResult,
 		map[string]any{"failed": reason}, map[string]any{"failed": reason}); err != nil {
+		if errors.Is(err, ErrConflict) {
+			return nil // a concurrent transition closed it first; keep that outcome
+		}
 		return err
 	}
 	s.logger.Debug("remote failure recorded", "task", taskID, "from", cur.State)
@@ -476,14 +489,15 @@ func (s *TaskStore) AdoptAttempt(ctx context.Context, taskID, attemptID string) 
 
 // SetLease stamps lease_expires_at = now + durationMS for a task. The
 // timeout monitor fails tasks whose lease expires while still active. A
-// non-positive duration is a no-op.
+// non-positive duration is a no-op. The duration is rounded up to a whole
+// second so a sub-second lease does not collapse to zero and expire instantly.
 func (s *TaskStore) SetLease(ctx context.Context, taskID string, durationMS int64) error {
 	if durationMS <= 0 {
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE tasks SET lease_expires_at=?, updated_at=? WHERE task_id=?`,
-		s.now()+durationMS/1000, s.now(), taskID)
+		s.now()+(durationMS+999)/1000, s.now(), taskID)
 	if err != nil {
 		return fmt.Errorf("set lease: %w", err)
 	}
@@ -570,8 +584,20 @@ func (s *TaskStore) ForceFail(ctx context.Context, taskID, reason string) error 
 	if Terminal(cur.State) {
 		return nil
 	}
-	return s.apply(ctx, taskID, StateFailed, cur.OwnerNode, cur.AttemptID, EvResult,
-		map[string]any{"failed": reason}, map[string]any{"failed": reason})
+	// Guarded by both state and owner (applyCAS, not apply): a task that a
+	// concurrent transition already closed must not be overwritten back to
+	// failed. Owner matches the value just read, so only a concurrent owner
+	// change (which means someone else is actively working the task) loses.
+	if err := s.applyCAS(ctx, taskID, cur.State, StateFailed, cur.OwnerNode, cur.AttemptID, EvResult,
+		map[string]any{"failed": reason}, map[string]any{"failed": reason}); err != nil {
+		if errors.Is(err, ErrConflict) {
+			if after, gerr := s.Get(ctx, taskID); gerr == nil && Terminal(after.State) {
+				return nil // already closed concurrently; nothing to force
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 // Recover normalizes tasks left in an active state by a previous process

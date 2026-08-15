@@ -74,6 +74,11 @@ func ParseSkill(data []byte) (*Skill, error) {
 	if s.Scope == "" {
 		s.Scope = ScopeGlobal // an omitted scope defaults to global
 	}
+	switch s.Scope {
+	case ScopeGlobal, ScopeProject, ScopeDevice:
+	default:
+		return nil, fmt.Errorf("skills: unknown scope %q", s.Scope)
+	}
 	s.Body = strings.TrimSpace(body)
 	return s, nil
 }

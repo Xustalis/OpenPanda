@@ -57,6 +57,7 @@ task 示例：
     "spec": {
       "scope": "目标文件或组件",
       "target": "要达成什么",
+      "node": "优先运行的目标节点 id（可选，取自设备列表，省略则由调度器择优）",
       "constraints": ["不能做的事"],
       "success_definition": "怎么验证完成"
     },

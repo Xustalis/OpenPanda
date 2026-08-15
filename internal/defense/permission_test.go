@@ -100,3 +100,33 @@ func TestTierFromCommandUnwrapsInterpreters(t *testing.T) {
 		}
 	}
 }
+
+func TestTierFromCommandNormalizesAndScripts(t *testing.T) {
+	cases := []struct {
+		command string
+		args    []string
+		want    int
+	}{
+		// Path-qualified and .exe-suffixed destructive verbs must not evade the
+		// verb table (D9).
+		{"/bin/rm", []string{"-rf", "/"}, TierIrreversible},
+		{`C:\Windows\System32\rm.exe`, []string{"-rf", "/"}, TierIrreversible},
+		{"rm.exe", nil, TierIrreversible},
+		{"/usr/bin/mv", []string{"a", "b"}, TierIrreversible},
+		// Newly added destructive verbs.
+		{"cp", nil, TierIrreversible},
+		{"chmod", []string{"777", "x"}, TierIrreversible},
+		{"kill", []string{"-9", "1"}, TierIrreversible},
+		{"pkill", []string{"node"}, TierIrreversible},
+		// An interpreter invoked with a script file runs unseen code (D9).
+		{"bash", []string{"evil.sh"}, TierIrreversible},
+		{"sh", []string{"-x", "deploy.sh"}, TierIrreversible},
+		{"python", []string{"wipe.py"}, TierIrreversible},
+		{"node", []string{"run.js"}, TierIrreversible},
+	}
+	for _, tc := range cases {
+		if got := TierFromCommand(tc.command, tc.args...); got != tc.want {
+			t.Fatalf("TierFromCommand(%q, %v)=%d, want %d", tc.command, tc.args, got, tc.want)
+		}
+	}
+}

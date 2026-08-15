@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/xenith/panda/internal/bus"
 	"github.com/xenith/panda/internal/scheduler"
@@ -108,6 +109,12 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 				return t, res, err
 			}
 			return final, res, nil
+		case <-time.After(defaultDelegateTimeout):
+			// A dead target must not leave Submit blocked forever (D3): the same
+			// default deadline forwardDelegated stamps on the lease bounds the
+			// wait, after which the task is failed and an error returned.
+			c.failLocal(ctx, t.TaskID, errors.New("delegation timeout"))
+			return t, bus.TaskResultPayload{}, fmt.Errorf("delegation timeout waiting for %s", decision.Target)
 		case <-ctx.Done():
 			return t, bus.TaskResultPayload{}, ctx.Err()
 		}

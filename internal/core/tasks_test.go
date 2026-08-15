@@ -404,3 +404,96 @@ func TestEventsRecorded(t *testing.T) {
 		t.Fatalf("unexpected event sequence: %v", []string{events[0].Type, events[1].Type})
 	}
 }
+
+// TestApplyStateGuardRejectsStaleWrite exercises the state-only guard used by
+// the remote-result writers: a transition that read a stale state (dispatched)
+// must conflict once the task has actually moved on (running), rather than
+// silently overwriting the newer state.
+func TestApplyStateGuardRejectsStaleWrite(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "t", "root")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	must(s.Queue(ctx, tk.TaskID, "root"))
+	must(s.Dispatch(ctx, tk.TaskID, "root", "win"))
+	// Move to running, invalidating any transition that read dispatched.
+	must(s.Accept(ctx, tk.TaskID, "win"))
+
+	if err := s.applyState(ctx, tk.TaskID, StateDispatched, StateDone, "root", tk.AttemptID, EvResult, nil, nil); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale write = %v, want ErrConflict", err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != StateRunning {
+		t.Fatalf("state = %s, want running (stale write must not overwrite)", got.State)
+	}
+}
+
+// TestRemoteResultDoesNotOverwriteTerminal verifies CompleteFromRemote and
+// FailFromRemote are idempotent against an already-closed task: a late result
+// (or failure) must not resurrect a done task.
+func TestRemoteResultDoesNotOverwriteTerminal(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "t", "root")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	must(s.Queue(ctx, tk.TaskID, "root"))
+	must(s.Dispatch(ctx, tk.TaskID, "root", "win"))
+	must(s.Accept(ctx, tk.TaskID, "win"))
+	must(s.Complete(ctx, tk.TaskID, "win", map[string]any{"ok": true}))
+
+	if err := s.FailFromRemote(ctx, tk.TaskID, "root", "late failure"); err != nil {
+		t.Fatalf("fail from remote on done: %v", err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != StateDone {
+		t.Fatalf("state = %s, want done (late failure must not overwrite)", got.State)
+	}
+}
+
+// TestForceFailDoesNotOverwriteTerminal verifies the timeout monitor cannot
+// resurrect a task that completed concurrently with the lease expiring.
+func TestForceFailDoesNotOverwriteTerminal(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "t", "root")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	must(s.Queue(ctx, tk.TaskID, "root"))
+	must(s.Dispatch(ctx, tk.TaskID, "root", "root"))
+	must(s.Accept(ctx, tk.TaskID, "root"))
+	must(s.Complete(ctx, tk.TaskID, "root", map[string]any{"ok": true}))
+
+	if err := s.ForceFail(ctx, tk.TaskID, "lease expired"); err != nil {
+		t.Fatalf("force fail on done: %v", err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != StateDone {
+		t.Fatalf("state = %s, want done (force fail must not overwrite)", got.State)
+	}
+}

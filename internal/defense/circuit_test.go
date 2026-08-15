@@ -97,3 +97,19 @@ func TestCircuitBreakerDefaults(t *testing.T) {
 		t.Fatalf("default cooldown = %s, want 30s", b.cooldown)
 	}
 }
+
+func TestCircuitBreakerEvictsOnSuccess(t *testing.T) {
+	b := NewCircuitBreaker(1, time.Millisecond)
+	b.Allow("agent:claude")
+	b.RecordFailure("agent:claude")
+	if len(b.states) != 1 {
+		t.Fatalf("states after failure = %d, want 1", len(b.states))
+	}
+	b.RecordSuccess("agent:claude")
+	if len(b.states) != 0 {
+		t.Fatalf("states after success = %d, want 0 (D29 eviction)", len(b.states))
+	}
+	if b.State("agent:claude") != CircuitClosed {
+		t.Fatalf("evicted key must read closed")
+	}
+}

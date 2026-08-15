@@ -31,7 +31,10 @@ func NewNetworkGuard(hosts ...string) *NetworkGuard {
 }
 
 // CheckURL validates a URL against the guard: it must be https and its host
-// must be in the allowlist. Localhost is always allowed for development.
+// must be in the allowlist. localhost/127.0.0.1 is exempt from the https
+// requirement (plaintext is fine for a local dev model), but is still subject
+// to the host allowlist — so a guard pinned to a remote endpoint (D7) rejects
+// localhost too.
 func (g *NetworkGuard) CheckURL(rawurl string) error {
 	u, err := url.Parse(rawurl)
 	if err != nil {
@@ -50,4 +53,15 @@ func (g *NetworkGuard) CheckURL(rawurl string) error {
 		return nil
 	}
 	return fmt.Errorf("network guard: host %q not in allowlist", u.Host)
+}
+
+// EndpointHost returns the lowercased host (host:port) of a URL, or "" when the
+// URL cannot be parsed or has no host. Callers use it to pin the guard to the
+// configured model endpoint so the allowlist is never empty in production.
+func EndpointHost(rawurl string) string {
+	u, err := url.Parse(rawurl)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Host)
 }

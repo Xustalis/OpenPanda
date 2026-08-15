@@ -47,11 +47,11 @@ func SnapshotDir(root string) (Snapshot, error) {
 		if d.IsDir() {
 			return nil
 		}
-		// SQLite journal files (-wal/-shm) are transient host machine state: any
-		// live SQLite connection in WAL mode writes them continuously, including
-		// this node's own process while it runs the task. They carry no signal
-		// about what the agent changed, so they are excluded from drift detection.
-		if strings.HasSuffix(d.Name(), "-wal") || strings.HasSuffix(d.Name(), "-shm") {
+		// SQLite transient files (-wal/-shm/-journal) are host machine state: any
+		// live SQLite connection writes them continuously, including this node's
+		// own process while it runs the task. They carry no signal about what the
+		// agent changed, so they are excluded from drift detection.
+		if strings.HasSuffix(d.Name(), "-wal") || strings.HasSuffix(d.Name(), "-shm") || strings.HasSuffix(d.Name(), "-journal") {
 			return nil
 		}
 		fi, err := d.Info()

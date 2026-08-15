@@ -52,6 +52,15 @@ func TestAdvanceLifecycle(t *testing.T) {
 	}
 }
 
+func TestAdvanceZeroLastUsedStaysActive(t *testing.T) {
+	// A freshly approved skill has a zero LastUsed; it must not read as ~2000
+	// years of dormancy and expire immediately (D18).
+	sk := &Skill{Name: "fresh", Status: StatusActive}
+	if got := Advance(sk, time.Now()); got != StatusActive {
+		t.Errorf("zero LastUsed = %v, want active", got)
+	}
+}
+
 func TestRecordUse(t *testing.T) {
 	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
 	sk := &Skill{Name: "x", Status: StatusDormant}

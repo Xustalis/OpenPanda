@@ -21,6 +21,11 @@ func Advance(sk *Skill, now time.Time) Status {
 	if sk.Status == StatusPending || sk.Status == StatusExpired {
 		return sk.Status
 	}
+	if sk.LastUsed.IsZero() {
+		// Never used yet (e.g. freshly approved): the idle clock has not started,
+		// so a zero LastUsed must not read as ~2000 years of dormancy (D18).
+		return StatusActive
+	}
 	idle := now.Sub(sk.LastUsed)
 	switch {
 	case idle >= expireAfter:

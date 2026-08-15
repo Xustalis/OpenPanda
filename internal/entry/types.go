@@ -59,6 +59,7 @@ type Requires struct {
 type TaskSpecDetail struct {
 	Scope             string   `json:"scope"`
 	Target            string   `json:"target"`
+	Node              string   `json:"node,omitempty"` // preferred node id/name; empty lets the scheduler choose
 	Constraints       []string `json:"constraints"`
 	SuccessDefinition string   `json:"success_definition"`
 }

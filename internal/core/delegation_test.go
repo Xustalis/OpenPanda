@@ -171,3 +171,41 @@ func TestLoopGuard(t *testing.T) {
 	}
 	t.Fatalf("entry task did not return to queued (decline) within deadline")
 }
+
+// TestDeclineTerminalizesLocalRow verifies a node that creates a task row and
+// then declines it (no capability match) moves its local row to a terminal state
+// instead of leaving it submitted/dispatched as an orphan (D2).
+func TestDeclineTerminalizesLocalRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	entry := newCore(t, "entry-dec", "127.0.0.1:17941")
+	// worker has only sys:info, so a gpio:read delegate is declined.
+	worker := newCore(t, "worker-dec", "127.0.0.1:17942")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17941", "127.0.0.1:17942")
+
+	env, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-dec", "m1", bus.TaskDelegatePayload{
+		TaskID: "dec-task", Title: "t", Intent: "x", Requires: []string{"gpio:read"},
+		Chain: []string{"entry-dec"},
+	})
+	if err := entry.sendTo("worker-dec", env); err != nil {
+		t.Fatalf("delegate: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		tk, err := worker.store.Get(ctx, "dec-task")
+		if err != nil {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		if tk.State == StateCancelled {
+			return // declined task was terminalized, not left orphaned
+		}
+		if tk.State == StateDone || tk.State == StateFailed || tk.State == StateExpired {
+			t.Fatalf("declined task reached unexpected terminal state %s", tk.State)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("worker did not terminalize the declined task within deadline")
+}

@@ -11,6 +11,9 @@ func TestRedactKeyValue(t *testing.T) {
 		"ANTHROPIC_API_KEY=sk-test-123 more text":    "ANTHROPIC_API_KEY=[redacted] more text",
 		"token=xyz,next=1":                           "token=[redacted],next=1",
 		"authorization: Bearer abc.def.ghi trailing": "authorization: Bearer [redacted] trailing",
+		`{"api_key": "sk-json-123"}`:                 `{"api_key": "[redacted]"}`,
+		`{"secret": "s3cr3t", "next": 1}`:            `{"secret": "[redacted]", "next": 1}`,
+		`token: "quoted value here"`:                 `token: "[redacted]"`,
 	}
 	for in, want := range cases {
 		if got := Redact(in); got != want {

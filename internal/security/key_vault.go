@@ -9,14 +9,21 @@ import "regexp"
 // misbehaving adapter echoing them back into a result or log.
 func Redact(s string) string {
 	s = kvSecretRe.ReplaceAllString(s, `${1}[redacted]`)
+	s = kvSecretQuotedRe.ReplaceAllString(s, `${1}[redacted]${2}`)
 	return bearerRe.ReplaceAllString(s, `${1}[redacted]`)
 }
 
 // kvSecretRe matches credential-named keys followed by "=" or ":" and a single
-// value token, e.g. `ANTHROPIC_API_KEY=sk-...` or `token=xyz`. The key token is
-// matched without a leading word boundary so embedded names like
+// unquoted value token, e.g. `ANTHROPIC_API_KEY=sk-...` or `token=xyz`. The key
+// token is matched without a leading word boundary so embedded names like
 // `ANTHROPIC_API_KEY` (where "API_KEY" follows an underscore) are caught.
 var kvSecretRe = regexp.MustCompile(`(?i)((?:api[_-]?key|apikey|secret|token|password|passwd|credential)[a-z0-9_-]*\s*[=:]\s*)[^\s,;"']+`)
+
+// kvSecretQuotedRe matches the JSON/YAML form where the value is quoted
+// (`"api_key": "sk-..."`), which kvSecretRe misses because its value token
+// excludes quotes. The surrounding quotes are captured and preserved so the
+// scrubbed output stays well-formed.
+var kvSecretQuotedRe = regexp.MustCompile(`(?i)((?:api[_-]?key|apikey|secret|token|password|passwd|credential)[a-z0-9_-]*["']?\s*[=:]\s*["'])[^"']*(["'])`)
 
 // bearerRe matches a Bearer token: `Bearer <token>` (also the value of an
 // Authorization header, whose token is the sensitive part).

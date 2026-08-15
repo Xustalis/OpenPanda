@@ -71,7 +71,7 @@ func runSidecar(ctx context.Context, name string, req map[string]any) sidecarRes
 	}
 	cmd := executil.CommandContext(ctx, "python3", voiceDir+"/"+name)
 	cmd.Stdin = bytes.NewReader(in)
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr executil.Capture
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 

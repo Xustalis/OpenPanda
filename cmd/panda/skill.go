@@ -17,12 +17,16 @@ import (
 // sign-off.
 func runSkill(args []string) {
 	// A bare `panda skill` lists skills (the most common action); subcommands
-	// approve/reject drive the pending-skill approval flow.
+	// approve/reject drive the pending-skill approval flow. --config may appear
+	// anywhere, so strip it first and treat the first remaining arg as the
+	// subcommand (mirroring the flag.FlagSet behavior of the other subcommands).
+	configPath, positional := splitConfig(args)
+
 	cmd := "list"
-	if len(args) > 0 {
-		cmd = args[0]
+	if len(positional) > 0 {
+		cmd = positional[0]
+		positional = positional[1:]
 	}
-	configPath, positional := splitConfig(args[1:])
 
 	cfg, err := config.Load(configPath)
 	if err != nil {

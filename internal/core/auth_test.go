@@ -69,7 +69,8 @@ func TestRejectBadHelloSig(t *testing.T) {
 
 	ws := rawDial(t, "127.0.0.1:17970")
 	env, _ := bus.NewEnvelope(bus.MsgHello, "attacker", "h-1", bus.HelloPayload{
-		NodeID: "attacker", Ver: "t", Sig: bus.HelloSig("wrong-secret", "attacker"),
+		NodeID: "attacker", Ver: "t", Ts: time.Now().Unix(),
+		Sig: bus.HelloSig("wrong-secret", "attacker", time.Now().Unix()),
 	})
 	if err := ws.WriteJSON(env); err != nil {
 		t.Fatalf("write hello: %v", err)
@@ -103,8 +104,9 @@ func TestRejectSpoofedSender(t *testing.T) {
 	ws := rawDial(t, "127.0.0.1:17971")
 
 	// Valid hello as "attacker".
+	ts := time.Now().Unix()
 	hello, _ := bus.NewEnvelope(bus.MsgHello, "attacker", "h-1", bus.HelloPayload{
-		NodeID: "attacker", Ver: "t", Sig: bus.HelloSig(testSharedSecret, "attacker"),
+		NodeID: "attacker", Ver: "t", Ts: ts, Sig: bus.HelloSig(testSharedSecret, "attacker", ts),
 	})
 	if err := ws.WriteJSON(hello); err != nil {
 		t.Fatalf("write hello: %v", err)

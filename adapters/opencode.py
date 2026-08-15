@@ -31,7 +31,10 @@ def main():
         return
 
     prompt = req.get("prompt", "")
-    timeout = int(req.get("timeout_s", DEFAULT_TIMEOUT))
+    try:
+        timeout = int(req.get("timeout_s", DEFAULT_TIMEOUT))
+    except (TypeError, ValueError):
+        timeout = DEFAULT_TIMEOUT
     cwd = req.get("cwd") or None
 
     # opencode resolves --model as provider/model; a bare model name fails. A

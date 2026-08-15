@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -62,8 +63,11 @@ func runAsk(args []string) {
 	// Optional MCP server: spawn it, import its tool surface into the registry,
 	// and tear it down when the ask ends. --mcp is a space-separated command (no
 	// quoting), matching the stdio servers PANDA targets (filesystem/git/fetch).
-	if *mcpCmd != "" {
+	if strings.TrimSpace(*mcpCmd) != "" {
 		parts := splitCommand(*mcpCmd)
+		if len(parts) == 0 {
+			fatal("start mcp server", fmt.Errorf("empty --mcp command"))
+		}
 		mcpClient, err := mcp.NewStdioClient(context.Background(), parts[0], parts[1:]...)
 		if err != nil {
 			fatal("start mcp server", err)
@@ -250,7 +254,7 @@ func toTaskInput(spec *entry.TaskSpec) core.TaskInput {
 		Intent:        intent.String(),
 		SpecJSON:      string(specJSON),
 		Requires:      spec.Requires.Abilities,
-		PreferredNode: spec.Spec.Scope,
+		PreferredNode: spec.Spec.Node,
 		Complexity:    spec.Complexity,
 		Risk:          spec.Risk,
 		ResourceJSON:  string(resourceJSON),
@@ -258,5 +262,5 @@ func toTaskInput(spec *entry.TaskSpec) core.TaskInput {
 }
 
 func readStdin() ([]byte, error) {
-	return os.ReadFile("/dev/stdin")
+	return io.ReadAll(os.Stdin)
 }

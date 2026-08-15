@@ -71,17 +71,13 @@ func (b *CircuitBreaker) Allow(key string) bool {
 	return false
 }
 
-// RecordSuccess closes the circuit for key and resets the failure count.
+// RecordSuccess closes the circuit for key and resets the failure count. A
+// closed circuit with zero failures is the same as an absent entry, so it is
+// deleted rather than left to accumulate forever in a long-lived daemon (D29).
 func (b *CircuitBreaker) RecordSuccess(key string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	st := b.states[key]
-	if st == nil {
-		return
-	}
-	st.state = CircuitClosed
-	st.failures = 0
-	st.openedAt = time.Time{}
+	delete(b.states, key)
 }
 
 // RecordFailure counts a consecutive failure and opens the circuit once the

@@ -63,7 +63,14 @@ func (t *Tool) Execute(name string, args map[string]any) (string, error) {
 // would exceed a limit — the Hermes merge workflow. With no target it lists
 // both personal layers; target=project lists one project.
 func (t *Tool) read(args map[string]any) (string, error) {
-	target, _ := argString(args, "target")
+	target := ""
+	if v, ok := args["target"]; ok {
+		s, ok := v.(string)
+		if !ok {
+			return "", fmt.Errorf("memory: argument %q must be a string", "target")
+		}
+		target = s
+	}
 	switch target {
 	case "", targetUser, targetMemory:
 		return t.readPersonal()

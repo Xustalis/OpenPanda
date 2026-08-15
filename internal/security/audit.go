@@ -24,8 +24,9 @@ type Audit struct{ db *sql.DB }
 // NewAudit wraps a DB.
 func NewAudit(db *sql.DB) *Audit { return &Audit{db: db} }
 
-// Record writes one entry. It logs a failure to the caller rather than
-// returning it, because audit must never break the hot execution path.
+// Record writes one entry. It returns any write error to the caller so the
+// caller can log it, but audit must never break the hot execution path: the
+// Core.audit wrapper logs and drops the error rather than aborting the loop.
 func (a *Audit) Record(ctx context.Context, e Entry) error {
 	_, err := a.db.ExecContext(ctx, `
 		INSERT INTO audit_log (ts, who, what, target, result, detail)

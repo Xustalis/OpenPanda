@@ -40,12 +40,21 @@ type AdapterRequest struct {
 
 // modelEnv injects the model provider config into the adapter process env so
 // adapters (e.g. the claude CLI) point at DeepSeek. Secrets are passed only
-// via env and never echoed to logs.
+// via env and never echoed to logs. Empty base_url/model fall back to the same
+// defaults the entry model applies, so the adapter and entry never diverge.
 func modelEnv(model config.ModelConfig) []string {
+	base := model.BaseURL
+	if base == "" {
+		base = "https://api.deepseek.com/anthropic"
+	}
+	name := model.Model
+	if name == "" {
+		name = "deepseek-chat"
+	}
 	env := []string{
-		"ANTHROPIC_BASE_URL=" + model.BaseURL,
+		"ANTHROPIC_BASE_URL=" + base,
 		"ANTHROPIC_API_KEY=" + model.APIKey,
-		"ANTHROPIC_MODEL=" + model.Model,
+		"ANTHROPIC_MODEL=" + name,
 	}
 	return env
 }
@@ -55,9 +64,10 @@ func modelEnv(model config.ModelConfig) []string {
 // adapter reaches the configured provider; the subprocess is sandboxed to the
 // task directory with a minimal environment (see security.Sandbox).
 func runAdapterProcess(ctx context.Context, name string, prompt string, cwd string, model config.ModelConfig) AgentResult {
-	// The model endpoint must be HTTPS so the API key never travels cleartext.
+	// The model endpoint must be HTTPS so the API key never travels cleartext,
+	// and pinned to the configured host so the allowlist is never empty (D7).
 	if model.BaseURL != "" {
-		if err := security.NewNetworkGuard().CheckURL(model.BaseURL); err != nil {
+		if err := security.NewNetworkGuard(security.EndpointHost(model.BaseURL)).CheckURL(model.BaseURL); err != nil {
 			return AgentResult{OK: false, Result: security.Redact(err.Error()), ExitCode: 1}
 		}
 	}
@@ -74,7 +84,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	}
 	cmd := executil.CommandContext(ctx, "python3", path)
 	cmd.Stdin = bytes.NewReader(reqJSON)
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr executil.Capture
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	security.NewSandbox(cwd).Apply(cmd, modelEnv(model)...)

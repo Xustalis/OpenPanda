@@ -40,13 +40,12 @@ func EphemeralNodeID(base string) string {
 
 // Node owns this process's ledger identity.
 type Node struct {
-	db      *sql.DB
-	id      string
-	card    ledger.Card
-	tier    int
-	logger  *slog.Logger
-	hbTick  time.Duration
-	timeout time.Duration
+	db     *sql.DB
+	id     string
+	card   ledger.Card
+	tier   int
+	logger *slog.Logger
+	hbTick time.Duration
 }
 
 // NewNode builds a Node with an optional card. A nil card is allowed for a
@@ -56,13 +55,12 @@ func NewNode(db *sql.DB, id string, card ledger.Card, tier int, logger *slog.Log
 		logger = slog.Default()
 	}
 	return &Node{
-		db:      db,
-		id:      id,
-		card:    card,
-		tier:    tier,
-		logger:  logger,
-		hbTick:  15 * time.Second,
-		timeout: 3 * 15 * time.Second, // offline after ~45s of missed heartbeats
+		db:     db,
+		id:     id,
+		card:   card,
+		tier:   tier,
+		logger: logger,
+		hbTick: 15 * time.Second,
 	}
 }
 

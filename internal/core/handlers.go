@@ -91,11 +91,24 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 			c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
 				TaskID: t.TaskID, Reason: err.Error(),
 			})
+			c.terminalizeDeclined(ctx, t.TaskID, err.Error())
 		}
 	case scheduler.ActionDecline:
 		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
 			TaskID: t.TaskID, Reason: decision.Reason,
 		})
+		c.terminalizeDeclined(ctx, t.TaskID, decision.Reason)
+	}
+}
+
+// terminalizeDeclined moves a locally-created task row to a terminal state when
+// this node declines to run it (no matching capability, or a failed forward).
+// Without this the row lingers in submitted/queued/dispatched, polluting the
+// queue and — on restart — being resurrected by Recover. Cancel is the only
+// terminal transition legal from every pre-execution state.
+func (c *Core) terminalizeDeclined(ctx context.Context, taskID, reason string) {
+	if err := c.store.Cancel(ctx, taskID); err != nil {
+		c.logger.Warn("terminalize declined task", "task", taskID, "err", err)
 	}
 }
 
@@ -183,6 +196,13 @@ func (c *Core) onlineEmployees(ctx context.Context) []ledger.Node {
 	return nodes
 }
 
+// defaultDelegateTimeout is the lease applied to a forwarded task's local copy
+// when the wire payload carries no explicit timeout. It bounds how long a
+// delegator waits on a dead executor before failing the task and propagating
+// the failure upstream. Generous enough for real agent work, short enough that
+// a crashed executor does not stall the chain indefinitely.
+const defaultDelegateTimeout = 10 * time.Minute
+
 // forwardDelegated records the task as dispatched to target and sends the
 // delegate onward, carrying the appended chain.
 func (c *Core) forwardDelegated(ctx context.Context, taskID, target string, p bus.TaskDelegatePayload, chain []string) error {
@@ -191,6 +211,17 @@ func (c *Core) forwardDelegated(ctx context.Context, taskID, target string, p bu
 	}
 	if err := c.store.Dispatch(ctx, taskID, c.nodeID, target); err != nil {
 		return fmt.Errorf("dispatch: %w", err)
+	}
+	// Stamp a lease on the local copy so a dead executor is detected and the
+	// failure propagated, instead of leaving this copy dispatched forever (D3).
+	// The timeout is carried on the wire so every hop inherits the same deadline.
+	timeoutMS := p.TimeoutMS
+	if timeoutMS <= 0 {
+		timeoutMS = defaultDelegateTimeout.Milliseconds()
+		p.TimeoutMS = timeoutMS
+	}
+	if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
+		return fmt.Errorf("set lease: %w", err)
 	}
 	p.Chain = chain
 	msgID, err := newUUID()
@@ -291,6 +322,11 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	default:
 		return bus.TaskResultPayload{}, fmt.Errorf("cannot run task in state %s", task.State)
 	}
+
+	// Notify the delegator that this node has accepted the task so its copy
+	// transitions dispatched -> running and can time the execution (D3). A local
+	// task (chain = [self]) has no predecessor and relayToParent is a no-op.
+	c.relayToParent(ctx, bus.MsgTaskAccept, task.Chain, bus.TaskAcceptPayload{TaskID: taskID})
 
 	// Capture the current attempt id so the result carries it; the delegator
 	// uses it to reject stale results after a transfer/retry.
