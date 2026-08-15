@@ -914,11 +914,66 @@ func (c *Core) handleCancel(ctx context.Context, env bus.Envelope) {
 	if err != nil {
 		c.logger.Warn("cancel failed", "task", p.TaskID, "err", err)
 	}
-	// Drop paused-context entries for the cancelled tasks so a waiting_context
-	// task cancelled mid-fetch does not leak in pendingCtx (P2-7).
+	c.finishCancel(ctx, cancelled)
+}
+
+// finishCancel runs the post-cascade cleanup for a cancelled task set: drop
+// paused-context entries so a waiting_context task cancelled mid-fetch does
+// not leak in pendingCtx (P2-7), and propagate the cancel to any remote
+// executors holding dispatch leases (P2-3).
+func (c *Core) finishCancel(ctx context.Context, cancelled []string) {
 	for _, id := range cancelled {
 		c.pendingCtx.Delete(id)
+		c.forwardCancelDownstream(ctx, id)
 	}
+}
+
+// CancelTree is the local-entry cancel: cascade locally, then notify
+// downstream executors. The CLI and any in-process caller share the exact
+// post-cancel behaviour of the wire handler.
+func (c *Core) CancelTree(ctx context.Context, taskID string) error {
+	cancelled, err := c.store.CancelCascade(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	c.finishCancel(ctx, cancelled)
+	return nil
+}
+
+// forwardCancelDownstream propagates a cancel to the remote executor holding
+// the dispatch lease, if any (P2-3). Without it, cancelling a delegated task
+// cancelled only the delegator's local copy: the executor kept running to
+// completion and its eventual result landed on an already-cancelled task.
+// The receiver's handleCancel re-runs its own cascade-and-forward, so the
+// cancel walks the whole downstream chain hop by hop.
+func (c *Core) forwardCancelDownstream(ctx context.Context, taskID string) {
+	target, err := c.store.DispatchTarget(ctx, taskID)
+	if err != nil {
+		c.logger.Warn("cancel: dispatch target lookup", "task", taskID, "err", err)
+		return
+	}
+	if target == "" || target == c.nodeID {
+		return // never dispatched, or dispatched to ourselves
+	}
+	msgID, err := newUUID()
+	if err != nil {
+		c.logger.Warn("cancel: mint message id", "task", taskID, "err", err)
+		return
+	}
+	env, err := bus.NewEnvelope(bus.MsgTaskCancel, c.nodeID, msgID, bus.TaskCancelPayload{
+		TaskID: taskID, Reason: "cancelled by delegator",
+	})
+	if err != nil {
+		c.logger.Warn("cancel: build envelope", "task", taskID, "err", err)
+		return
+	}
+	env.To = target
+	if err := c.sendTo(target, env); err != nil {
+		// The executor may be gone; its lease expiry will clean up regardless.
+		c.logger.Warn("cancel: forward downstream", "task", taskID, "to", target, "err", err)
+		return
+	}
+	c.logger.Info("cancel forwarded downstream", "task", taskID, "to", target)
 }
 
 // reply sends a message back to the sender of env.
