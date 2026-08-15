@@ -8,10 +8,15 @@ network:
   listen_addr: ":7836"
   peers:
     - "192.168.0.100:7836"   # MacBook（入口/调度节点）
+    - "192.168.0.107:7836"   # Windows 桌面（执行节点）
 
 storage:
   db_path: "/home/xenith/panda/data/panda.db"
   context_path: "/home/xenith/panda/data/context"
+  memory_path: "/home/xenith/panda/memory"
+  projects_path: "/home/xenith/panda/projects"
+  skills_path: "/home/xenith/panda/skills"
+  work_path: "/home/xenith/panda"
 
 log:
   level: "debug"

@@ -30,17 +30,20 @@ type Decision struct {
 // Route decides where a task with the given required abilities should run.
 //
 // Local capability wins first — native > agent > manual, as judged by the
-// injected localMatch predicate (the core's commander router). Otherwise it
-// picks the best online peer that matches and is not already on the chain (so a
-// forwarded task never loops back through an earlier hop): highest scheduler
-// tier first, then lowest id as a deterministic tiebreak. If no peer matches,
-// it falls back to a sub-scheduler (tier > 1) — a peer that can route the task
-// further downstream even though it cannot execute it itself. Only when neither
-// exists does it decline.
+// injected localMatch predicate (the core's commander router). Otherwise, a
+// user-named node (preferred) that is online, not already on the chain, and
+// matches the required abilities is honored over tier ranking: when the user
+// says "run it on the Orange Pi", the task goes there even if a higher-tier
+// peer also advertises the ability. Absent a preference, it picks the best
+// online matching peer — highest scheduler tier first, then lowest id as a
+// deterministic tiebreak (so a forwarded task never loops back through an
+// earlier hop). If no peer matches, it falls back to a sub-scheduler (tier >
+// 1) — a peer that can route the task further downstream even though it cannot
+// execute it itself. Only when neither exists does it decline.
 //
 // MVP scope: this is deterministic capability + tier matching, not full scored
 // ranking — capacity/load/cost weighting (design doc §6.3) is a later sprint.
-func Route(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string) Decision {
+func Route(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, preferred string) Decision {
 	if localMatch(required) {
 		return Decision{Action: ActionLocal}
 	}
@@ -61,6 +64,16 @@ func Route(self string, chain []string, employees []ledger.Node, localMatch func
 			// A non-matching node can still forward onward if it is a
 			// sub-scheduler (Standard/Full), not a leaf worker (Micro).
 			subs = append(subs, n)
+		}
+	}
+
+	// A named node is authoritative when it can take the task; otherwise fall
+	// through to normal ranking so the task still runs somewhere capable.
+	if preferred != "" {
+		for _, n := range matching {
+			if n.ID == preferred {
+				return Decision{Action: ActionForward, Target: preferred}
+			}
 		}
 	}
 

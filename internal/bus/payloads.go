@@ -50,6 +50,7 @@ type TaskDelegatePayload struct {
 	Intent       string   `json:"intent"`
 	SpecJSON     string   `json:"spec_json,omitempty"`
 	Requires     []string `json:"requires,omitempty"`
+	PreferredNode string  `json:"preferred_node,omitempty"` // user-named node; honored when it matches
 	Chain        []string `json:"chain"`
 	TimeoutMS    int64    `json:"timeout_ms,omitempty"`
 	MaxRetries   int      `json:"max_retries,omitempty"`

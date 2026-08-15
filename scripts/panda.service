@@ -12,6 +12,8 @@ Type=simple
 User=xenith
 Group=xenith
 WorkingDirectory=/home/xenith/panda
+# 共享密钥经 EnvironmentFile 注入（不写入 config.yaml，避免密钥进 git）
+EnvironmentFile=/home/xenith/panda/panda.env
 # 以绝对路径启动；daemon 输出 JSON 日志到 stderr，由 journald 收集
 ExecStart=/home/xenith/panda/panda --config /home/xenith/panda/config.yaml --card /home/xenith/panda/capabilities.yaml
 # 崩溃自动重启，5s 退避（嵌入式节点资源有限，不设过激进的重试）

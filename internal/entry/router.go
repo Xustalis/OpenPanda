@@ -2,14 +2,36 @@ package entry
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
 
 // jsonLeadInMax is the longest prose lead-in tolerated before an embedded JSON
-// object is treated as a directive. A short lead-in ("任务如下：") is a real
-// directive; a JSON object buried deeper in prose is an illustrative example.
-const jsonLeadInMax = 100
+// object is treated as a directive. Reasoning models emit a chain-of-thought
+// preamble before committing to the JSON, so the limit must be generous; it
+// only stops a JSON object buried deep in a long prose answer from being
+// executed (paired with looksIllustrative below).
+const jsonLeadInMax = 2000
+
+// illustrativeMarkers are words that signal a prose answer is *showing* a JSON
+// example rather than *committing* to a directive. When any appears in the
+// lead-in prose, the embedded JSON is not executed.
+var illustrativeMarkers = []string{
+	"示例", "例如", "比如", "样例", "仅供参考",
+	"for example", "e.g.",
+}
+
+// looksIllustrative reports whether prose reads as showing an example JSON
+// rather than committing to a directive.
+func looksIllustrative(prose string) bool {
+	for _, m := range illustrativeMarkers {
+		if strings.Contains(prose, m) {
+			return true
+		}
+	}
+	return false
+}
 
 // ParseOutput turns raw model text into a validated Output. The model may emit
 // JSON for tool_call/task or plain prose for answer. Anything that is not a
@@ -31,13 +53,13 @@ func ParseOutput(raw string) (Output, error) {
 		return out, nil
 	}
 
-	// The model sometimes prefixes a structured directive with a sentence of
-	// prose. Extract the first balanced JSON object and retry — but only when the
-	// object starts near the beginning (a short lead-in); a JSON object buried in
-	// a long prose answer is an illustrative example, not a directive, and must
-	// fall back to answer.
+	// The model sometimes prefixes a structured directive with prose — a short
+	// lead-in sentence or a chain-of-thought preamble. Extract the first balanced
+	// JSON object and accept it only if the lead-in is not too long and does not
+	// read as showing an example (rather than committing to a directive).
 	if obj := extractJSONObject(raw); obj != "" && obj != raw {
-		if lead := strings.TrimSpace(raw[:strings.IndexByte(raw, '{')]); len(lead) <= jsonLeadInMax {
+		lead := strings.TrimSpace(raw[:strings.IndexByte(raw, '{')])
+		if len(lead) <= jsonLeadInMax && !looksIllustrative(lead) {
 			if out, ok, err := decodeEnvelope(obj); err != nil {
 				return Output{}, err
 			} else if ok {
@@ -61,8 +83,14 @@ func decodeEnvelope(raw string) (Output, bool, error) {
 		Task *TaskSpec `json:"task"`
 	}
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
-		// Not JSON: let the caller decide whether to try extraction or fall
-		// back to a natural-language answer.
+		// A syntax error means raw is not JSON, so the caller may try extraction
+		// or fall back to an answer. A type error means raw is JSON but does not
+		// match the envelope schema — a model error that must surface, never
+		// silently degrade to an answer.
+		var ute *json.UnmarshalTypeError
+		if errors.As(err, &ute) {
+			return Output{}, false, err
+		}
 		return Output{}, false, nil
 	}
 

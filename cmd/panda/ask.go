@@ -240,15 +240,16 @@ func toTaskInput(spec *entry.TaskSpec) core.TaskInput {
 	resourceJSON, _ := json.Marshal(spec.Resources)
 
 	return core.TaskInput{
-		Title:        spec.Title,
-		Project:      spec.Project,
-		ContextType:  spec.ContextType,
-		Intent:       intent.String(),
-		SpecJSON:     string(specJSON),
-		Requires:     spec.Requires.Abilities,
-		Complexity:   spec.Complexity,
-		Risk:         spec.Risk,
-		ResourceJSON: string(resourceJSON),
+		Title:         spec.Title,
+		Project:       spec.Project,
+		ContextType:   spec.ContextType,
+		Intent:        intent.String(),
+		SpecJSON:      string(specJSON),
+		Requires:      spec.Requires.Abilities,
+		PreferredNode: spec.Spec.Scope,
+		Complexity:    spec.Complexity,
+		Risk:          spec.Risk,
+		ResourceJSON:  string(resourceJSON),
 	}
 }
 

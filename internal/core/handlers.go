@@ -77,7 +77,7 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	}
 
 	required := delegateRequired(p)
-	decision := scheduler.Route(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), required)
+	decision := scheduler.Route(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), required, p.PreferredNode)
 
 	switch decision.Action {
 	case scheduler.ActionLocal:

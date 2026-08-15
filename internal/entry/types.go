@@ -63,8 +63,8 @@ type TaskSpecDetail struct {
 // ResourceProfile is a coarse resource hint, not a safety rating (design doc
 // §7.3; complexity/risk are recorded but do not auto-switch model tiers in MVP).
 type ResourceProfile struct {
-	CPU          int    `json:"cpu"`
-	RAMGB        int    `json:"ram_gb"`
-	GPUVRAMGB    int    `json:"gpu_vram_gb"`
-	DurationHint string `json:"duration_hint"` // short | long
+	CPU          int     `json:"cpu"`
+	RAMGB        float64 `json:"ram_gb"`
+	GPUVRAMGB    float64 `json:"gpu_vram_gb"`
+	DurationHint string  `json:"duration_hint"` // short | long
 }

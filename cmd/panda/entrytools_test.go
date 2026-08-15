@@ -69,7 +69,7 @@ func TestExecuteTool(t *testing.T) {
 
 func TestAppendToolTurnsNative(t *testing.T) {
 	turns := []entry.Turn{{Role: "user", Content: "记住我偏好暗色主题"}}
-	call := &entry.ToolCall{ID: "toolu_1", Tool: "memory.add", Arguments: map[string]any{"entry": "x"}}
+	call := &entry.ToolCall{ID: "toolu_1", Tool: "memory_add", Arguments: map[string]any{"entry": "x"}}
 	turns = appendToolTurns(turns, call, "已记住")
 
 	if len(turns) != 3 {
@@ -77,7 +77,7 @@ func TestAppendToolTurnsNative(t *testing.T) {
 	}
 	assistant := turns[1]
 	if len(assistant.Blocks) != 1 || assistant.Blocks[0].Type != "tool_use" ||
-		assistant.Blocks[0].ID != "toolu_1" || assistant.Blocks[0].Name != "memory.add" {
+		assistant.Blocks[0].ID != "toolu_1" || assistant.Blocks[0].Name != "memory_add" {
 		t.Fatalf("assistant blocks = %+v, want the tool_use replay", assistant.Blocks)
 	}
 	user := turns[2]
@@ -91,13 +91,13 @@ func TestAppendToolTurnsTextFallback(t *testing.T) {
 	turns := []entry.Turn{{Role: "user", Content: "hi"}}
 	// No tool_use id: the pre-tool_use text fallback must carry the call and
 	// result as prose.
-	call := &entry.ToolCall{Tool: "memory.add", Arguments: map[string]any{"entry": "x"}}
+	call := &entry.ToolCall{Tool: "memory_add", Arguments: map[string]any{"entry": "x"}}
 	turns = appendToolTurns(turns, call, "已记住")
 
 	if len(turns) != 3 {
 		t.Fatalf("turns = %d, want 3", len(turns))
 	}
-	if len(turns[1].Blocks) != 0 || !strings.Contains(turns[1].Content, "memory.add") {
+	if len(turns[1].Blocks) != 0 || !strings.Contains(turns[1].Content, "memory_add") {
 		t.Fatalf("assistant fallback = %+v, want prose carrying the call", turns[1])
 	}
 	if len(turns[2].Blocks) != 0 || !strings.Contains(turns[2].Content, "已记住") {

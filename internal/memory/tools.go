@@ -10,10 +10,10 @@ import (
 // tool_call. These are protocol strings shared with the entry-layer prompt;
 // Tool.Execute enforces them, so the model never touches memory files directly.
 const (
-	ToolRead    = "memory.read"
-	ToolAdd     = "memory.add"
-	ToolReplace = "memory.replace"
-	ToolRemove  = "memory.remove"
+	ToolRead    = "memory_read"
+	ToolAdd     = "memory_add"
+	ToolReplace = "memory_replace"
+	ToolRemove  = "memory_remove"
 )
 
 // Tool targets — the memory layer a tool acts on. user and memory are the two

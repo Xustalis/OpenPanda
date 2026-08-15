@@ -68,7 +68,6 @@ type messagesRequest struct {
 	System     string     `json:"system,omitempty"`
 	Messages   []message  `json:"messages"`
 	Tools      []ToolSpec `json:"tools,omitempty"`
-	ToolChoice string     `json:"tool_choice,omitempty"`
 }
 
 // message is one conversation message. Content is either a plain string (the
@@ -154,9 +153,10 @@ func (c *Client) CompleteTurns(ctx context.Context, system string, turns []Turn)
 }
 
 // CompleteTurnsWithTools runs one call with a conversation history and an
-// optional tool set, returning both text and any tool_use blocks. When tools is
-// non-empty, tool_choice is pinned to "auto": DeepSeek rejects "required" while
-// thinking is enabled (deepseek-reasoner), so "auto" is the safe default.
+// optional tool set, returning both text and any tool_use blocks. tool_choice is
+// left unset: the Messages API defaults to "auto" when tools are present, and
+// DeepSeek's Anthropic endpoint rejects the string "auto" (it wants the
+// internally-tagged object form). Omitting it is simpler and correct.
 func (c *Client) CompleteTurnsWithTools(ctx context.Context, system string, turns []Turn, tools []ToolSpec) (Response, error) {
 	if c.apiKey == "" {
 		return Response{}, ErrNoKey
@@ -172,7 +172,6 @@ func (c *Client) CompleteTurnsWithTools(ctx context.Context, system string, turn
 	req := messagesRequest{Model: c.model, MaxTokens: c.maxTokens, System: system, Messages: msgs}
 	if len(tools) > 0 {
 		req.Tools = tools
-		req.ToolChoice = "auto"
 	}
 	return c.completeWithRetry(ctx, req)
 }

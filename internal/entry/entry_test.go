@@ -147,6 +147,47 @@ func TestParseOutputJSONWithTrailingProse(t *testing.T) {
 	}
 }
 
+func TestParseOutputReasoningPreamble(t *testing.T) {
+	// A reasoning model may emit a chain-of-thought preamble before committing to
+	// the directive JSON. It is not an illustrative example, so the JSON must be
+	// accepted and routed, not degraded to an answer.
+	raw := "这个任务需要在香橙派节点上运行 uname -a 查看系统信息。根据设备列表，" +
+		"orangepi3b 提供 sys:info 能力，最接近这个需求。我会将任务调度到该节点执行。" +
+		`{"kind":"task","task":{"title":"查看系统信息","context_type":"command","requires":{"abilities":["sys:info"]}}}`
+	out, err := ParseOutput(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if out.Kind != KindTask || out.Task == nil || out.Task.Title != "查看系统信息" {
+		t.Fatalf("reasoning preamble should route to task, got %+v", out)
+	}
+}
+
+func TestParseOutputFractionalRAM(t *testing.T) {
+	// A resource hint may legitimately be fractional (e.g. 0.1 GB RAM for a
+	// small task); it must parse, not fail on an int field.
+	raw := `{"kind":"task","task":{"title":"查系统","context_type":"command","requires":{"abilities":["sys:info"]},"resource_profile":{"cpu":1,"ram_gb":0.1,"gpu_vram_gb":0.5,"duration_hint":"short"}}}`
+	out, err := ParseOutput(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if out.Kind != KindTask || out.Task == nil {
+		t.Fatalf("out = %+v", out)
+	}
+	if out.Task.Resources.RAMGB != 0.1 || out.Task.Resources.GPUVRAMGB != 0.5 {
+		t.Fatalf("resources = %+v", out.Task.Resources)
+	}
+}
+
+func TestParseOutputTypeErrorSurfaces(t *testing.T) {
+	// Valid JSON with a schema mismatch (string where a number belongs) is a
+	// model error that must surface, not silently degrade to an answer.
+	raw := `{"kind":"task","task":{"title":"x","context_type":"file","requires":{"abilities":["a"]},"complexity":"high"}}`
+	if _, err := ParseOutput(raw); err == nil {
+		t.Fatalf("expected type error to surface")
+	}
+}
+
 func TestParseOutputIllustrativeJSONIsAnswer(t *testing.T) {
 	// A long prose answer that embeds an illustrative JSON example is not a
 	// directive; it must fall back to answer rather than executing the JSON as a
@@ -254,7 +295,7 @@ func TestClassifyTurnsSendsHistory(t *testing.T) {
 
 	turns := []Turn{
 		{Role: "user", Content: "记住我偏好暗色主题"},
-		{Role: "assistant", Content: "tool_call: {\"tool\":\"memory.add\"}"},
+		{Role: "assistant", Content: "tool_call: {\"tool\":\"memory_add\"}"},
 		{Role: "user", Content: "工具结果：已记住"},
 	}
 	if _, err := ClassifyTurns(context.Background(), c, nil, "", turns); err != nil {
@@ -272,7 +313,7 @@ func TestClassifyToolUse(t *testing.T) {
 		w.Header().Set("content-type", "application/json")
 		resp := map[string]any{
 			"content": []map[string]any{
-				{"type": "tool_use", "id": "toolu_1", "name": "memory.add", "input": map[string]any{"target": "user", "entry": "偏好暗色主题"}},
+				{"type": "tool_use", "id": "toolu_1", "name": "memory_add", "input": map[string]any{"target": "user", "entry": "偏好暗色主题"}},
 			},
 		}
 		b, _ := json.Marshal(resp)
@@ -282,14 +323,14 @@ func TestClassifyToolUse(t *testing.T) {
 	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
 
 	reg := NewRegistry()
-	reg.Register(Tool{Name: "memory.add", Description: "remember", Schema: map[string]any{"type": "object"},
+	reg.Register(Tool{Name: "memory_add", Description: "remember", Schema: map[string]any{"type": "object"},
 		Run: func(ctx context.Context, args map[string]any) (string, error) { return "ok", nil }})
 
 	out, err := ClassifyTurnsWithTools(context.Background(), c, nil, "", []Turn{{Role: "user", Content: "记住我偏好暗色主题"}}, reg)
 	if err != nil {
 		t.Fatalf("classify: %v", err)
 	}
-	if out.Kind != KindToolCall || out.Tool == nil || out.Tool.Tool != "memory.add" || out.Tool.ID != "toolu_1" {
+	if out.Kind != KindToolCall || out.Tool == nil || out.Tool.Tool != "memory_add" || out.Tool.ID != "toolu_1" {
 		t.Fatalf("out = %+v", out)
 	}
 	if out.Tool.Arguments["entry"] != "偏好暗色主题" {
@@ -317,15 +358,15 @@ func TestCompleteTurnsWithToolsSendsTools(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
 
-	tools := []ToolSpec{{Name: "memory.add", Description: "remember", InputSchema: map[string]any{"type": "object"}}}
+	tools := []ToolSpec{{Name: "memory_add", Description: "remember", InputSchema: map[string]any{"type": "object"}}}
 	if _, err := c.CompleteTurnsWithTools(context.Background(), "sys", []Turn{{Role: "user", Content: "hi"}}, tools); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	if gotTools != 1 {
 		t.Errorf("tools sent = %d, want 1", gotTools)
 	}
-	if gotToolChoice != "auto" {
-		t.Errorf("tool_choice = %q, want auto", gotToolChoice)
+	if gotToolChoice != "" {
+		t.Errorf("tool_choice = %q, want empty (omitted; defaults to auto)", gotToolChoice)
 	}
 }
 

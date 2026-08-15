@@ -23,6 +23,7 @@ type TaskInput struct {
 	Intent       string
 	SpecJSON     string
 	Requires     []string
+	PreferredNode string // user-named node (task spec scope); routing prefers it when it can match
 	Complexity   float64
 	Risk         string
 	ResourceJSON string
@@ -70,7 +71,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 	}
 
 	chain := []string{c.nodeID}
-	decision := scheduler.Route(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), in.Requires)
+	decision := scheduler.Route(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), in.Requires, in.PreferredNode)
 
 	switch decision.Action {
 	case scheduler.ActionLocal:
@@ -87,6 +88,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			SpecJSON:     in.SpecJSON,
 			Requires:     in.Requires,
 			Chain:        chain,
+			PreferredNode: in.PreferredNode,
 			Complexity:   in.Complexity,
 			Risk:         in.Risk,
 			AttemptID:    t.AttemptID,
