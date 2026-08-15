@@ -14,20 +14,20 @@ import (
 // mirrors the wire TaskDelegatePayload but originates locally rather than over
 // the bus. The caller (cmd/panda) owns the translation from entry.TaskSpec.
 type TaskInput struct {
-	Title        string
-	Project      string
-	ContextType  string
-	ContextHash  string // pre-packed snapshot hash; empty means "pack if applicable"
-	ContextLevel string // pointer|summary|full; empty is derived by packContext
-	RepoPath     string // file-type repo root for auto-packing (MVP: CLI not yet wired)
-	Intent       string
-	SpecJSON     string
-	Requires     []string
+	Title         string
+	Project       string
+	ContextType   string
+	ContextHash   string // pre-packed snapshot hash; empty means "pack if applicable"
+	ContextLevel  string // pointer|summary|full; empty is derived by packContext
+	RepoPath      string // file-type repo root for auto-packing (MVP: CLI not yet wired)
+	Intent        string
+	SpecJSON      string
+	Requires      []string
 	PreferredNode string // user-named node (task spec scope); routing prefers it when it can match
-	Complexity   float64
-	Risk         string
-	ResourceJSON string
-	Authorized   bool // user consented to executing tier-2 (irreversible) commands
+	Complexity    float64
+	Risk          string
+	ResourceJSON  string
+	Authorized    bool // user consented to executing tier-2 (irreversible) commands
 }
 
 // detail folds the input into the persisted detail columns.
@@ -78,20 +78,20 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 		return c.runLocal(ctx, t, in)
 	case scheduler.ActionForward:
 		payload := bus.TaskDelegatePayload{
-			TaskID:       t.TaskID,
-			Project:      in.Project,
-			Title:        in.Title,
-			ContextType:  in.ContextType,
-			ContextHash:  hash,
-			ContextLevel: level,
-			Intent:       in.Intent,
-			SpecJSON:     in.SpecJSON,
-			Requires:     in.Requires,
-			Chain:        chain,
+			TaskID:        t.TaskID,
+			Project:       in.Project,
+			Title:         in.Title,
+			ContextType:   in.ContextType,
+			ContextHash:   hash,
+			ContextLevel:  level,
+			Intent:        in.Intent,
+			SpecJSON:      in.SpecJSON,
+			Requires:      in.Requires,
+			Chain:         chain,
 			PreferredNode: in.PreferredNode,
-			Complexity:   in.Complexity,
-			Risk:         in.Risk,
-			AttemptID:    t.AttemptID,
+			Complexity:    in.Complexity,
+			Risk:          in.Risk,
+			AttemptID:     t.AttemptID,
 		}
 		// Register a waiter so the inbound task_result unblocks this call.
 		ch := make(chan bus.TaskResultPayload, 1)

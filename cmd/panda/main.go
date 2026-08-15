@@ -24,7 +24,7 @@ import (
 	"github.com/xenith/panda/internal/storage"
 )
 
-var version = "0.1.0-dev"
+var version = "0.0.1"
 
 func main() {
 	if len(os.Args) > 1 {
@@ -106,6 +106,7 @@ func runDaemon() {
 
 	coreNode := core.NewCore(db, core.NodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 	coreNode.SetWorkDir(cfg.Storage.WorkPath)
+	coreNode.SetHostStatePaths(hostStatePaths(cfg))
 	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
 
 	// Attach the memory layer (design §17/§8): project-memory injection into
@@ -221,6 +222,19 @@ func schedulerTier(resourceClass string) int {
 		return 5
 	default:
 		return 1
+	}
+}
+
+// hostStatePaths returns the node's own bookkeeping paths — its SQLite/memory
+// trees and the agent CLI's own config dir — so scope-drift detection ignores
+// the host's side-effect writes rather than flagging them as agent drift.
+func hostStatePaths(cfg *config.Config) []string {
+	return []string{
+		filepath.Dir(cfg.Storage.DBPath), // data/: panda.db + -wal/-shm + context/
+		cfg.Storage.MemoryPath,
+		cfg.Storage.ProjectsPath,
+		cfg.Storage.SkillsPath,
+		filepath.Join(cfg.Storage.WorkPath, ".claude"), // the agent CLI's own project config
 	}
 }
 

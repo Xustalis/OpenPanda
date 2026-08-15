@@ -338,6 +338,41 @@ func TestClassifyToolUse(t *testing.T) {
 	}
 }
 
+// TestClassifyToolUseDropsExtra verifies that text emitted alongside a tool
+// call and any tool_use after the first are preserved in Output.Note instead
+// of being silently dropped (P2-21).
+func TestClassifyToolUseDropsExtra(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		resp := map[string]any{
+			"content": []map[string]any{
+				{"type": "text", "text": "先读记忆再合并"},
+				{"type": "tool_use", "id": "toolu_1", "name": "memory_read", "input": map[string]any{"target": "user"}},
+				{"type": "tool_use", "id": "toolu_2", "name": "memory_add", "input": map[string]any{"target": "memory", "entry": "x"}},
+			},
+		}
+		b, _ := json.Marshal(resp)
+		_, _ = w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+	reg := NewRegistry()
+
+	out, err := ClassifyTurnsWithTools(context.Background(), c, nil, "", []Turn{{Role: "user", Content: "合并记忆"}}, reg)
+	if err != nil {
+		t.Fatalf("classify: %v", err)
+	}
+	if out.Kind != KindToolCall || out.Tool == nil || out.Tool.Tool != "memory_read" || out.Tool.ID != "toolu_1" {
+		t.Fatalf("out = %+v", out)
+	}
+	if !strings.Contains(out.Note, "先读记忆再合并") {
+		t.Fatalf("note missing accompanying text: %q", out.Note)
+	}
+	if !strings.Contains(out.Note, "memory_add") {
+		t.Fatalf("note missing extra tool_use: %q", out.Note)
+	}
+}
+
 func TestCompleteTurnsWithToolsSendsTools(t *testing.T) {
 	var gotTools int
 	var gotToolChoice string

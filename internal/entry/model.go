@@ -63,11 +63,11 @@ func NewClient(model config.ModelConfig) *Client {
 
 // messagesRequest is the Anthropic Messages API request body.
 type messagesRequest struct {
-	Model      string     `json:"model"`
-	MaxTokens  int        `json:"max_tokens"`
-	System     string     `json:"system,omitempty"`
-	Messages   []message  `json:"messages"`
-	Tools      []ToolSpec `json:"tools,omitempty"`
+	Model     string     `json:"model"`
+	MaxTokens int        `json:"max_tokens"`
+	System    string     `json:"system,omitempty"`
+	Messages  []message  `json:"messages"`
+	Tools     []ToolSpec `json:"tools,omitempty"`
 }
 
 // message is one conversation message. Content is either a plain string (the

@@ -16,11 +16,12 @@ import (
 // execution context, so nothing auto-generated takes effect without a human
 // sign-off.
 func runSkill(args []string) {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: panda skill list | approve <name> | reject <name> [--config PATH]")
-		os.Exit(2)
+	// A bare `panda skill` lists skills (the most common action); subcommands
+	// approve/reject drive the pending-skill approval flow.
+	cmd := "list"
+	if len(args) > 0 {
+		cmd = args[0]
 	}
-	cmd := args[0]
 	configPath, positional := splitConfig(args[1:])
 
 	cfg, err := config.Load(configPath)

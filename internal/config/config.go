@@ -110,12 +110,16 @@ func Default() *Config {
 // DefaultPath is where the node looks for its config file.
 const DefaultPath = "/etc/panda/config.yaml"
 
-// Load reads the config from path. If path is empty, DefaultPath is used.
-// A missing file is not an error; defaults apply. An unreadable or malformed
-// file is an error so a bad deployment surfaces loudly.
+// Load reads the config from path. If path is empty, the PANDA_CONFIG_PATH env
+// var (if set) or DefaultPath is used. A missing file is not an error; defaults
+// apply. An unreadable or malformed file is an error so a bad deployment
+// surfaces loudly.
 func Load(path string) (*Config, error) {
 	if path == "" {
-		path = DefaultPath
+		path = os.Getenv("PANDA_CONFIG_PATH")
+		if path == "" {
+			path = DefaultPath
+		}
 	}
 	cfg := Default()
 	data, err := os.ReadFile(path)
@@ -135,8 +139,8 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// applyEnv lets PANDA_CONFIG_PATH override the file path and individual env
-// vars override fields, useful for tests and containerized deploys.
+// applyEnv lets individual env vars override config fields, useful for tests
+// and containerized deploys.
 func (c *Config) applyEnv() {
 	if v := os.Getenv("PANDA_NODE_NAME"); v != "" {
 		c.Node.Name = v

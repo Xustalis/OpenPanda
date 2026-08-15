@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,6 +73,11 @@ type Core struct {
 	// measured against (design §14.2 signal A). Default "." (the daemon's
 	// working directory); a deploy can pin it to a project root.
 	workDir string
+	// hostStatePaths are the node's own bookkeeping paths (SQLite/memory trees,
+	// the agent CLI's own config dir). Scope drift ignores changes under them,
+	// since the node and its tools write them as a side effect of running a task
+	// — not as the agent's work product.
+	hostStatePaths []string
 
 	// sharedSecret authenticates inbound hello messages (design §16 / P0-1).
 	// Empty is fail-closed: no peer can authenticate until it is set.
@@ -147,6 +154,45 @@ func (c *Core) SetWorkDir(dir string) {
 	c.workDir = dir
 }
 
+// SetHostStatePaths records the node's own bookkeeping paths — its SQLite/memory
+// trees and the agent CLI's own config dir — so scope-drift detection never
+// flags the host's side-effect writes as agent drift. Paths may be relative to
+// the working directory; they are normalized to absolute on entry.
+func (c *Core) SetHostStatePaths(paths []string) {
+	c.hostStatePaths = make([]string, 0, len(paths))
+	for _, p := range paths {
+		if abs, err := filepath.Abs(p); err == nil {
+			c.hostStatePaths = append(c.hostStatePaths, filepath.Clean(abs))
+		}
+	}
+}
+
+// filterHostDrift drops changed paths that live under a host-owned directory.
+// Changes there (SQLite WAL, skill/dream files, the agent CLI's own config) are
+// the node's own bookkeeping, not the agent's task output, so they must not
+// pause a task for scope drift.
+func (c *Core) filterHostDrift(drift []string) []string {
+	if len(c.hostStatePaths) == 0 {
+		return drift
+	}
+	wd, _ := filepath.Abs(c.workDir)
+	out := make([]string, 0, len(drift))
+	for _, p := range drift {
+		ap := filepath.Join(wd, p)
+		keep := true
+		for _, h := range c.hostStatePaths {
+			if ap == h || strings.HasPrefix(ap, h+string(filepath.Separator)) {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // SetSharedSecret sets the shared secret used to authenticate inbound hello
 // messages (design §16 / P0-1). An empty secret is fail-closed: no peer can
 // authenticate, so the WebSocket listener accepts no hello until a secret is
@@ -182,13 +228,18 @@ func (c *Core) RunMonitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			n, err := c.store.ExpireTasks(ctx)
+			expired, err := c.store.ExpireTasks(ctx)
 			if err != nil {
 				c.logger.Warn("expire tasks", "err", err)
 				continue
 			}
-			if n > 0 {
-				c.logger.Info("monitor expired tasks", "count", n)
+			if len(expired) > 0 {
+				// A task that timed out while paused in waiting_context would
+				// otherwise leak its entry in pendingCtx (P2-7).
+				for _, id := range expired {
+					c.pendingCtx.Delete(id)
+				}
+				c.logger.Info("monitor expired tasks", "count", len(expired))
 			}
 		}
 	}

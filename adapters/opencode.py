@@ -5,10 +5,10 @@ Protocol (shared with claude_code.py):
   stdin:  a JSON object with keys {prompt, timeout_s, cwd} (cwd optional)
   stdout: a JSON object with keys {ok, result, exit_code, tokens, cost}
 
-OpenCode is model-agnostic; the Go core injects ANTHROPIC_BASE_URL /
-ANTHROPIC_API_KEY / ANTHROPIC_MODEL so `opencode run` routes through the same
-configured provider (DeepSeek by default) as the entry model. This adapter
-never prints secrets.
+OpenCode is model-agnostic. By default it runs opencode's built-in free model,
+which needs no API key or provider configuration; set OPENCODE_MODEL (or
+ANTHROPIC_MODEL) to a provider/model id (e.g. deepseek/deepseek-chat) to use a
+custom provider. This adapter never prints secrets.
 """
 import json
 import os
@@ -16,6 +16,10 @@ import subprocess
 import sys
 
 DEFAULT_TIMEOUT = 600
+# opencode resolves --model as provider/model; a bare model name is not a valid
+# provider and fails resolution. The built-in free model needs no key or config,
+# so it is the default when no provider/model id is given.
+DEFAULT_MODEL = "opencode/deepseek-v4-flash-free"
 
 
 def main():
@@ -30,23 +34,22 @@ def main():
     timeout = int(req.get("timeout_s", DEFAULT_TIMEOUT))
     cwd = req.get("cwd") or None
 
-    # OpenCode picks up the Anthropic-compatible endpoint from the env the Go
-    # core sets; --model selects the provider model.
-    model = os.environ.get("ANTHROPIC_MODEL", "")
-    cmd = ["opencode", "run", "--print-logs=false"]
-    if model:
-        cmd += ["--model", model]
-    cmd += [prompt]
+    # opencode resolves --model as provider/model; a bare model name fails. A
+    # provider/model id from env wins; otherwise default to the built-in free
+    # model, which needs no API key.
+    model = os.environ.get("OPENCODE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
+    if "/" not in model:
+        model = DEFAULT_MODEL
+    cmd = ["opencode", "run", "--print-logs=false", "--model", model, prompt]
 
     env = os.environ.copy()
-    # Go core must have set this; surface a clear error if absent.
-    if not env.get("ANTHROPIC_API_KEY"):
-        _emit(False, "ANTHROPIC_API_KEY not set", 3)
-        return
-
+    # No API-key requirement: the free provider needs none; a custom provider
+    # supplies its own credentials. stdin is /dev/null so opencode never waits
+    # on an inherited pipe for the prompt.
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd
+            cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            timeout=timeout, env=env, cwd=cwd,
         )
     except subprocess.TimeoutExpired:
         _emit(False, "opencode timed out", 124)

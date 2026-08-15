@@ -104,24 +104,33 @@ func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall)
 	return result
 }
 
-// appendToolTurns records a tool call and its result in the conversation. A
-// native tool_use call is replayed as tool_use + tool_result blocks (the
-// Anthropic Messages API contract); the text-JSON fallback (no tool_use id) is
-// carried as prose, preserving the pre-tool_use behavior.
-func appendToolTurns(turns []entry.Turn, call *entry.ToolCall, result string) []entry.Turn {
+// appendToolTurns records a tool call, its accompanying note (text the model
+// emitted alongside the call or extra tool_use the executor skipped), and its
+// result in the conversation. A native tool_use call is replayed as tool_use +
+// tool_result blocks (the Anthropic Messages API contract); the text-JSON
+// fallback (no tool_use id) is carried as prose, preserving the pre-tool_use
+// behavior.
+func appendToolTurns(turns []entry.Turn, call *entry.ToolCall, note, result string) []entry.Turn {
 	if call.ID != "" {
+		assistant := entry.Turn{Role: "assistant"}
+		if note != "" {
+			assistant.Blocks = append(assistant.Blocks, entry.ContentBlock{Type: "text", Text: note})
+		}
+		assistant.Blocks = append(assistant.Blocks, entry.ContentBlock{Type: "tool_use", ID: call.ID, Name: call.Tool, Input: call.Arguments})
 		return append(turns,
-			entry.Turn{Role: "assistant", Blocks: []entry.ContentBlock{
-				{Type: "tool_use", ID: call.ID, Name: call.Tool, Input: call.Arguments},
-			}},
+			assistant,
 			entry.Turn{Role: "user", Blocks: []entry.ContentBlock{
 				{Type: "tool_result", ToolUseID: call.ID, Content: result},
 			}},
 		)
 	}
 	assistant, _ := json.Marshal(call)
+	msg := "tool_call: " + string(assistant)
+	if note != "" {
+		msg = note + "\n" + msg
+	}
 	return append(turns,
-		entry.Turn{Role: "assistant", Content: "tool_call: " + string(assistant)},
+		entry.Turn{Role: "assistant", Content: msg},
 		entry.Turn{Role: "user", Content: "工具结果：" + result},
 	)
 }

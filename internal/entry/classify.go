@@ -2,6 +2,9 @@ package entry
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/xenith/panda/internal/ledger"
 )
@@ -39,7 +42,11 @@ func classify(ctx context.Context, c *Client, devices []ledger.Node, memory stri
 	// the registry rather than the text parser.
 	if len(resp.ToolUses) > 0 {
 		tu := resp.ToolUses[0]
-		return Output{Kind: KindToolCall, Tool: &ToolCall{ID: tu.ID, Tool: tu.Name, Arguments: tu.Input}}, nil
+		out := Output{Kind: KindToolCall, Tool: &ToolCall{ID: tu.ID, Tool: tu.Name, Arguments: tu.Input}}
+		if note := droppedToolNote(resp); note != "" {
+			out.Note = note
+		}
+		return out, nil
 	}
 	out, err := ParseOutput(resp.Text)
 	if err != nil {
@@ -56,4 +63,28 @@ func classify(ctx context.Context, c *Client, devices []ledger.Node, memory stri
 		out.Answer += "\n\n[回答因长度上限被截断]"
 	}
 	return out, nil
+}
+
+// droppedToolNote captures the content the executor will not act on — text the
+// model emitted alongside a tool call, and any tool_use after the first — so
+// the ask loop can surface it to the user and replay it to the model instead of
+// silently discarding it.
+func droppedToolNote(resp Response) string {
+	var parts []string
+	if resp.Text != "" {
+		parts = append(parts, resp.Text)
+	}
+	for _, extra := range resp.ToolUses[1:] {
+		keys := make([]string, 0, len(extra.Input))
+		for k := range extra.Input {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var args []string
+		for _, k := range keys {
+			args = append(args, fmt.Sprintf("%s=%v", k, extra.Input[k]))
+		}
+		parts = append(parts, fmt.Sprintf("tool %s(%s)", extra.Name, strings.Join(args, ", ")))
+	}
+	return strings.Join(parts, "\n")
 }

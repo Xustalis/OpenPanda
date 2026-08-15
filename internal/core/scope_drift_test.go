@@ -85,6 +85,49 @@ func TestScopeDriftPausesAgent(t *testing.T) {
 	}
 }
 
+// TestScopeDriftIgnoresHostState verifies that the node's own bookkeeping paths
+// (its SQLite dir, the agent CLI's own config) do not count as agent drift: the
+// host writes them as a side effect of running a task, so a task that touches
+// only host-state files completes even when it declares a narrow scope.
+func TestScopeDriftIgnoresHostState(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreWithAgent(t, "drift-node-host")
+	work := t.TempDir()
+	c.SetWorkDir(work)
+	c.SetHostStatePaths([]string{
+		filepath.Join(work, "data"),
+		filepath.Join(work, ".claude"),
+	})
+
+	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
+		_ = os.MkdirAll(filepath.Join(work, "data"), 0o755)
+		_ = os.WriteFile(filepath.Join(work, "data", "panda.db-wal"), []byte("x"), 0o644)
+		_ = os.MkdirAll(filepath.Join(work, ".claude"), 0o755)
+		_ = os.WriteFile(filepath.Join(work, ".claude", "settings.local.json"), []byte("x"), 0o644)
+		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}
+	})
+
+	task, result, err := c.SubmitLocal(ctx, TaskInput{
+		Title:       "host state writes",
+		Project:     "proj",
+		ContextType: "file",
+		Intent:      "touch host state",
+		SpecJSON:    `{"scope":"allowed","target":"x"}`,
+		Requires:    []string{"code:modify"},
+		Complexity:  0.1,
+		Risk:        "low",
+	})
+	if err != nil {
+		t.Fatalf("submit local: %v", err)
+	}
+	if task.State != StateDone {
+		t.Fatalf("state = %s, want done (host-state writes are not drift)", task.State)
+	}
+	if !result.OK {
+		t.Fatalf("result not ok: %+v", result)
+	}
+}
+
 // TestAgentWithinScopeCompletes verifies the happy path: an agent that edits
 // only within its declared scope completes normally.
 func TestAgentWithinScopeCompletes(t *testing.T) {

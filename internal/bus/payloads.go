@@ -39,24 +39,24 @@ type HeartbeatPayload struct {
 //     context (no snapshot transfer).
 //   - context_level "full": context_data carries the inline snapshot (base64).
 type TaskDelegatePayload struct {
-	TaskID       string   `json:"task_id"`
-	ParentID     string   `json:"parent_id,omitempty"`
-	Project      string   `json:"project,omitempty"`
-	Title        string   `json:"title,omitempty"`
-	ContextType  string   `json:"context_type,omitempty"`
-	ContextHash  string   `json:"context_hash,omitempty"`
-	ContextLevel string   `json:"context_level,omitempty"` // pointer|summary|full
-	ContextData  []byte   `json:"context_data,omitempty"`  // inline full snapshot
-	Intent       string   `json:"intent"`
-	SpecJSON     string   `json:"spec_json,omitempty"`
-	Requires     []string `json:"requires,omitempty"`
-	PreferredNode string  `json:"preferred_node,omitempty"` // user-named node; honored when it matches
-	Chain        []string `json:"chain"`
-	TimeoutMS    int64    `json:"timeout_ms,omitempty"`
-	MaxRetries   int      `json:"max_retries,omitempty"`
-	Complexity   float64  `json:"complexity,omitempty"`
-	Risk         string   `json:"risk,omitempty"`
-	AttemptID    string   `json:"attempt_id,omitempty"`
+	TaskID        string   `json:"task_id"`
+	ParentID      string   `json:"parent_id,omitempty"`
+	Project       string   `json:"project,omitempty"`
+	Title         string   `json:"title,omitempty"`
+	ContextType   string   `json:"context_type,omitempty"`
+	ContextHash   string   `json:"context_hash,omitempty"`
+	ContextLevel  string   `json:"context_level,omitempty"` // pointer|summary|full
+	ContextData   []byte   `json:"context_data,omitempty"`  // inline full snapshot
+	Intent        string   `json:"intent"`
+	SpecJSON      string   `json:"spec_json,omitempty"`
+	Requires      []string `json:"requires,omitempty"`
+	PreferredNode string   `json:"preferred_node,omitempty"` // user-named node; honored when it matches
+	Chain         []string `json:"chain"`
+	TimeoutMS     int64    `json:"timeout_ms,omitempty"`
+	MaxRetries    int      `json:"max_retries,omitempty"`
+	Complexity    float64  `json:"complexity,omitempty"`
+	Risk          string   `json:"risk,omitempty"`
+	AttemptID     string   `json:"attempt_id,omitempty"`
 }
 
 // TitleOrDefault returns the explicit title, falling back to the intent.

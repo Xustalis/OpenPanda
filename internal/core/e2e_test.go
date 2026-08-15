@@ -76,12 +76,12 @@ func TestTaskTimeoutFails(t *testing.T) {
 		t.Fatalf("stamp lease: %v", err)
 	}
 
-	n, err := s.ExpireTasks(ctx)
+	expired, err := s.ExpireTasks(ctx)
 	if err != nil {
 		t.Fatalf("expire: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("expected 1 expired, got %d", n)
+	if len(expired) != 1 {
+		t.Fatalf("expected 1 expired, got %d", len(expired))
 	}
 	got, _ := s.Get(ctx, tk.TaskID)
 	if got.State != StateFailed {

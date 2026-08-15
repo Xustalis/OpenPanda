@@ -17,12 +17,15 @@ const (
 )
 
 // Output is the parsed result of one entry-model call. Exactly one of
-// Answer/Tool/Task is populated, matching Kind.
+// Answer/Tool/Task is populated, matching Kind. Note carries content the
+// executor does not act on — text emitted alongside a tool call and any
+// tool_use after the first — so callers can surface it rather than drop it.
 type Output struct {
 	Kind   Kind
 	Answer string    // KindAnswer
 	Tool   *ToolCall // KindToolCall
 	Task   *TaskSpec // KindTask
+	Note   string    // dropped text / extra tool_use (KindToolCall)
 }
 
 // ToolCall is a validated tool invocation request. ID carries the tool_use id

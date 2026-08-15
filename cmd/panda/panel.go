@@ -199,11 +199,11 @@ func runCancel(args []string) {
 	}
 	defer db.Close()
 
-	n, err := store.CancelCascade(context.Background(), id)
+	ids, err := store.CancelCascade(context.Background(), id)
 	if err != nil {
 		fatal("cancel", err)
 	}
-	fmt.Printf("cancelled %d task(s)\n", n)
+	fmt.Printf("cancelled %d task(s)\n", len(ids))
 }
 
 // runApprove implements `panda approve <id>` — approves a reviewed task

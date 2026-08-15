@@ -133,6 +133,7 @@ cp config.example.yaml /etc/panda/config.yaml   # 或留在本地，用 --config
 ```yaml
 network:
   listen_addr: ":7836"        # WebSocket 监听地址
+  shared_secret: "..."        # 节点间 HMAC 鉴权——所有节点必须共享同一值
   peers:                      # 网络中的其他节点
     - "orangepi3b.tailnet.ts.net:7836"
 model:
@@ -156,8 +157,10 @@ model:
 问任何问题——入口模型自动决定是回答、调用工具、还是委派：
 
 ```bash
-./bin/panda ask "总结一下最近一周的 git log"
+./bin/panda ask --card config/capabilities.macbook.yaml "总结一下最近一周的 git log"
 ```
+
+> `--card` 指向本机能力卡；不带它时 answer/tool_call 照常工作，但委派任务的输出会拒绝执行。
 
 查看网络与队列：
 
@@ -190,6 +193,8 @@ model:
 | `panda queue` | 列出任务队列 |
 | `panda task [--config PATH] <task-id>` | 任务详情 |
 | `panda cancel [--config PATH] <task-id>` | 取消任务（级联到执行节点） |
+| `panda approve [--config PATH] <task-id>` | 批准进入 review 的任务（review → done） |
+| `panda reject [--config PATH] [--reason s] <task-id>` | 拒绝进入 review 的任务 |
 | `panda logs [--config PATH] <task-id>` | 任务执行日志 |
 | `panda skill` | Skill 存储管理 |
 | `panda version` | 打印版本号 |
@@ -201,6 +206,7 @@ model:
 | `node` | `name` | 唯一节点 ID（全网使用） |
 | `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → 调度器层级 |
 | `network` | `listen_addr` | WebSocket 监听地址 |
+| `network` | `shared_secret` | 节点间 HMAC 鉴权密钥；WS 监听缺它不启动（所有节点共享同一值） |
 | `network` | `panel_addr` | 可选 webui 侧车 HTTP 地址（内核忽略） |
 | `network` | `peers` | 要拨号的手动 peer 地址 |
 | `storage` | `db_path` | SQLite 数据库路径 |

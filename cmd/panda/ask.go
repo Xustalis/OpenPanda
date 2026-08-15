@@ -104,6 +104,7 @@ func runAsk(args []string) {
 		sched = core.NewCore(db, core.EphemeralNodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 		sched.SetMemoryStores(injector, daily, skillStore)
 		sched.SetWorkDir(cfg.Storage.WorkPath)
+		sched.SetHostStatePaths(hostStatePaths(cfg))
 		sched.SetSharedSecret(cfg.Network.SharedSecret)
 		ctx, cancel := context.WithCancel(context.Background())
 		schedCtx = ctx
@@ -158,8 +159,11 @@ func runAsk(args []string) {
 			runAskTask(sched, schedCtx, out.Task, *authorize)
 			return
 		case entry.KindToolCall:
+			if out.Note != "" {
+				fmt.Fprintln(os.Stderr, "panda: note: "+strings.ReplaceAll(out.Note, "\n", " "))
+			}
 			result := executeTool(ctx, registry, out.Tool)
-			turns = appendToolTurns(turns, out.Tool, result)
+			turns = appendToolTurns(turns, out.Tool, out.Note, result)
 		default:
 			fmt.Println(out.Answer)
 			return

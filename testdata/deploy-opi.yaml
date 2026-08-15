@@ -6,6 +6,8 @@ node:
 
 network:
   listen_addr: ":7836"
+  # 所有节点必须共享同一个 shared_secret（可经 PANDA_SHARED_SECRET 环境变量注入）
+  shared_secret: ""
   peers:
     - "192.168.0.100:7836"   # MacBook（入口/调度节点）
     - "192.168.0.107:7836"   # Windows 桌面（执行节点）

@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Snapshot is a point-in-time record of the regular files under a directory,
@@ -44,6 +45,13 @@ func SnapshotDir(root string) (Snapshot, error) {
 			return err
 		}
 		if d.IsDir() {
+			return nil
+		}
+		// SQLite journal files (-wal/-shm) are transient host machine state: any
+		// live SQLite connection in WAL mode writes them continuously, including
+		// this node's own process while it runs the task. They carry no signal
+		// about what the agent changed, so they are excluded from drift detection.
+		if strings.HasSuffix(d.Name(), "-wal") || strings.HasSuffix(d.Name(), "-shm") {
 			return nil
 		}
 		fi, err := d.Info()

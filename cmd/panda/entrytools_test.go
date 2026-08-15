@@ -70,7 +70,7 @@ func TestExecuteTool(t *testing.T) {
 func TestAppendToolTurnsNative(t *testing.T) {
 	turns := []entry.Turn{{Role: "user", Content: "记住我偏好暗色主题"}}
 	call := &entry.ToolCall{ID: "toolu_1", Tool: "memory_add", Arguments: map[string]any{"entry": "x"}}
-	turns = appendToolTurns(turns, call, "已记住")
+	turns = appendToolTurns(turns, call, "", "已记住")
 
 	if len(turns) != 3 {
 		t.Fatalf("turns = %d, want 3", len(turns))
@@ -87,12 +87,32 @@ func TestAppendToolTurnsNative(t *testing.T) {
 	}
 }
 
+func TestAppendToolTurnsNativeWithNote(t *testing.T) {
+	turns := []entry.Turn{{Role: "user", Content: "合并记忆"}}
+	call := &entry.ToolCall{ID: "toolu_1", Tool: "memory_read", Arguments: map[string]any{"target": "user"}}
+	// Accompanying text and an extra tool_use are replayed as an assistant text
+	// block ahead of the executed tool_use, so the model sees them next round.
+	turns = appendToolTurns(turns, call, "先读记忆再合并\n工具 memory_add(target=memory)", "已读")
+
+	if len(turns) != 3 {
+		t.Fatalf("turns = %d, want 3", len(turns))
+	}
+	assistant := turns[1]
+	if len(assistant.Blocks) != 2 || assistant.Blocks[0].Type != "text" ||
+		assistant.Blocks[1].Type != "tool_use" {
+		t.Fatalf("assistant blocks = %+v, want [text, tool_use]", assistant.Blocks)
+	}
+	if !strings.Contains(assistant.Blocks[0].Text, "先读记忆再合并") {
+		t.Fatalf("assistant text = %q, want the note", assistant.Blocks[0].Text)
+	}
+}
+
 func TestAppendToolTurnsTextFallback(t *testing.T) {
 	turns := []entry.Turn{{Role: "user", Content: "hi"}}
 	// No tool_use id: the pre-tool_use text fallback must carry the call and
 	// result as prose.
 	call := &entry.ToolCall{Tool: "memory_add", Arguments: map[string]any{"entry": "x"}}
-	turns = appendToolTurns(turns, call, "已记住")
+	turns = appendToolTurns(turns, call, "", "已记住")
 
 	if len(turns) != 3 {
 		t.Fatalf("turns = %d, want 3", len(turns))

@@ -1,8 +1,10 @@
 GO ?= go
 BIN := bin/panda
+VERSION ?= 0.0.1
+LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: all build build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 \
-        test vet race gate run measure clean icons
+        test vet race gate run measure clean icons release
 
 all: build
 
@@ -26,6 +28,21 @@ build-linux-amd64:
 
 build-windows-amd64:
 	GOOS=windows GOARCH=amd64 $(GO) build -ldflags "-s -w" -o $(BIN)-windows-amd64.exe ./cmd/panda
+
+# Release: version-tagged binaries for every target platform into dist/.
+release: release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64
+
+release-darwin-arm64:
+	GOOS=darwin GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/panda-$(VERSION)-darwin-arm64 ./cmd/panda
+
+release-linux-arm64:
+	GOOS=linux GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/panda-$(VERSION)-linux-arm64 ./cmd/panda
+
+release-linux-amd64:
+	GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/panda-$(VERSION)-linux-amd64 ./cmd/panda
+
+release-windows-amd64:
+	GOOS=windows GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/panda-$(VERSION)-windows-amd64.exe ./cmd/panda
 
 test:
 	$(GO) test ./...
@@ -56,4 +73,4 @@ measure:
 		kill -TERM $$(cat /tmp/panda-measure.pid) 2>/dev/null
 
 clean:
-	rm -rf bin
+	rm -rf bin dist

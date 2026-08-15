@@ -52,7 +52,7 @@ def _openwakeword(duration):
     from openwakeword.model import Model
 
     model_path = os.environ.get("PANDA_WAKE_MODEL", "")
-    oww = Model(wakeword_models=[model_path] if model_path else ["hey_jarvis"])
+    oww = Model(wakeword_models=[model_path] if model_path else ["hey_panda"])
 
     pa = pyaudio.PyAudio()
     stream = pa.open(

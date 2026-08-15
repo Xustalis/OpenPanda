@@ -15,8 +15,10 @@ import (
 )
 
 // adapterDir is where adapter scripts live. Resolved relative to the working
-// directory; the install layout puts adapters/ next to the binary. It is a
-// var so tests can point it at a temp dir.
+// directory, so the daemon must run from the install root (adapters/ sits
+// beside the binary in the repo layout) or adapters/ must be linked into the
+// cwd — a bare binary copied to /usr/local/bin will not find them. It is a var
+// so tests can point it at a temp dir.
 var adapterDir = "adapters"
 
 // adapterPath joins an adapter name under adapterDir, rejecting any name that

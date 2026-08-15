@@ -158,6 +158,7 @@ The config is small and self-explanatory. The two things that matter most:
 ```yaml
 network:
   listen_addr: ":7836"        # WebSocket listener
+  shared_secret: "..."        # HMAC auth between nodes — all nodes must share the same value
   peers:                      # other nodes in your network
     - "orangepi3b.tailnet.ts.net:7836"
 model:
@@ -183,8 +184,10 @@ A node without a card still participates in heartbeats, but it won't be routed w
 Ask anything — the entry model decides whether to answer, call a tool, or delegate:
 
 ```bash
-./bin/panda ask "summarize the git log for the last week"
+./bin/panda ask --card config/capabilities.macbook.yaml "summarize the git log for the last week"
 ```
+
+> `--card` points at this node's capability card; answer/tool_call work without it, but a delegated-task output is refused without it.
 
 Inspect the network and queue:
 
@@ -217,6 +220,8 @@ Manage skills:
 | `panda queue` | List the task queue |
 | `panda task [--config PATH] <task-id>` | Task details |
 | `panda cancel [--config PATH] <task-id>` | Cancel a task (cascades to the executing node) |
+| `panda approve [--config PATH] <task-id>` | Approve a reviewed task (review → done) |
+| `panda reject [--config PATH] [--reason s] <task-id>` | Reject a reviewed task |
 | `panda logs [--config PATH] <task-id>` | Task execution logs |
 | `panda skill` | Skill store management |
 | `panda version` | Print version |
@@ -228,6 +233,7 @@ Manage skills:
 | `node` | `name` | Unique node ID (used across the network) |
 | `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → scheduler tier |
 | `network` | `listen_addr` | WebSocket listener address |
+| `network` | `shared_secret` | HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it (all nodes share one value) |
 | `network` | `panel_addr` | Optional webui sidecar HTTP address (kernel ignores it) |
 | `network` | `peers` | Manual peer addresses to dial |
 | `storage` | `db_path` | SQLite database path |

@@ -134,6 +134,7 @@ cp config.example.yaml /etc/panda/config.yaml   # またはローカルに置い
 ```yaml
 network:
   listen_addr: ":7836"        # WebSocketリスナー
+  shared_secret: "..."        # ノード間のHMAC認証 — 全ノードが同じ値を共有
   peers:                      # ネットワーク内の他のノード
     - "orangepi3b.tailnet.ts.net:7836"
 model:
@@ -191,6 +192,8 @@ model:
 | `panda queue` | タスクキューの一覧 |
 | `panda task [--config PATH] <task-id>` | タスクの詳細 |
 | `panda cancel [--config PATH] <task-id>` | タスクをキャンセル（実行ノードへカスケード） |
+| `panda approve [--config PATH] <task-id>` | レビュー中のタスクを承認（review → done） |
+| `panda reject [--config PATH] [--reason s] <task-id>` | レビュー中のタスクを却下 |
 | `panda logs [--config PATH] <task-id>` | タスク実行ログ |
 | `panda skill` | スキルストアの管理 |
 | `panda version` | バージョンを表示 |
@@ -202,6 +205,7 @@ model:
 | `node` | `name` | 一意なノードID（ネットワーク全体で使用） |
 | `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → スケジューラTier |
 | `network` | `listen_addr` | WebSocketリスナーアドレス |
+| `network` | `shared_secret` | ノード間ハローを認証するHMACシークレット；WSリスナーはこれが無いと起動しない（全ノード共通の値） |
 | `network` | `panel_addr` | PWAパネルのHTTPアドレス（空 = 無効） |
 | `network` | `peers` | 接続する手動ピアアドレス |
 | `storage` | `db_path` | SQLiteデータベースのパス |

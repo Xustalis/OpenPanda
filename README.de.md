@@ -162,6 +162,7 @@ Die Config ist klein und selbsterklärend. Das Wichtigste:
 ```yaml
 network:
   listen_addr: ":7836"        # WebSocket-Listener
+  shared_secret: "..."        # HMAC-Authentifizierung zwischen Nodes — alle teilen denselben Wert
   peers:                      # weitere Nodes im Netzwerk
     - "orangepi3b.tailnet.ts.net:7836"
 model:
@@ -221,6 +222,8 @@ Skills verwalten:
 | `panda queue` | Task-Warteschlange anzeigen |
 | `panda task [--config PATH] <task-id>` | Task-Details |
 | `panda cancel [--config PATH] <task-id>` | Task abbrechen (kaskadiert an den ausführenden Node) |
+| `panda approve [--config PATH] <task-id>` | Review-Task freigeben (review → done) |
+| `panda reject [--config PATH] [--reason s] <task-id>` | Review-Task ablehnen |
 | `panda logs [--config PATH] <task-id>` | Task-Ausführungslogs |
 | `panda skill` | Skill-Store-Verwaltung |
 | `panda version` | Version anzeigen |
@@ -232,6 +235,7 @@ Skills verwalten:
 | `node` | `name` | Eindeutige Node-ID (netzwerkweit) |
 | `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → Scheduler-Tier |
 | `network` | `listen_addr` | WebSocket-Listener-Adresse |
+| `network` | `shared_secret` | HMAC-Geheimnis zur Node-Authentifizierung; der WS-Listener startet ohne es nicht (alle Nodes teilen einen Wert) |
 | `network` | `panel_addr` | HTTP-Adresse des PWA-Panels (leer = deaktiviert) |
 | `network` | `peers` | Manuelle Peer-Adressen zum Anwählen |
 | `storage` | `db_path` | SQLite-Datenbankpfad |

@@ -6,6 +6,10 @@ node:
 
 network:
   listen_addr: ":7836"           # WebSocket listener (kernel daemon)
+  # ── Transport auth: the WS listener REFUSES to start without a shared secret ──
+  # The HMAC secret authenticates node-to-node hellos; every node in the P2P
+  # network must share the same value. Prefer env PANDA_SHARED_SECRET.
+  shared_secret: ""              # e.g. openssl rand -hex 32; keep out of public repos
   # ── webui sidecar only (webui/cmd/panel); the kernel daemon never mounts it ──
   panel_addr: ":7840"            # optional legacy PWA panel HTTP address (empty = disabled)
   # panel_token: ""              # Bearer token guarding /api/* (required to enable the panel; prefer env PANDA_PANEL_TOKEN)

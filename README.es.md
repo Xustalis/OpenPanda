@@ -163,6 +163,7 @@ La configuración es pequeña y autoexplicativa. Lo más importante:
 ```yaml
 network:
   listen_addr: ":7836"        # listener WebSocket
+  shared_secret: "..."        # autenticación HMAC entre nodos — todos comparten el mismo valor
   peers:                      # otros nodos de tu red
     - "orangepi3b.tailnet.ts.net:7836"
 model:
@@ -224,6 +225,8 @@ Gestiona las skills:
 | `panda queue` | Listar la cola de tareas |
 | `panda task [--config PATH] <task-id>` | Detalles de la tarea |
 | `panda cancel [--config PATH] <task-id>` | Cancelar una tarea (en cascada al nodo ejecutor) |
+| `panda approve [--config PATH] <task-id>` | Aprobar una tarea en revisión (review → done) |
+| `panda reject [--config PATH] [--reason s] <task-id>` | Rechazar una tarea en revisión |
 | `panda logs [--config PATH] <task-id>` | Registros de ejecución de la tarea |
 | `panda skill` | Gestión del almacén de skills |
 | `panda version` | Imprimir la versión |
@@ -235,6 +238,7 @@ Gestiona las skills:
 | `node` | `name` | ID de nodo único (usado en toda la red) |
 | `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → nivel del scheduler |
 | `network` | `listen_addr` | Dirección del listener WebSocket |
+| `network` | `shared_secret` | Secreto HMAC que autentica los hellos entre nodos; el listener WS no arranca sin él (todos los nodos comparten un valor) |
 | `network` | `panel_addr` | Dirección HTTP del panel PWA (vacío = desactivado) |
 | `network` | `peers` | Direcciones de pares manuales a las que conectarse |
 | `storage` | `db_path` | Ruta de la base de datos SQLite |

@@ -95,3 +95,41 @@ func TestChangedNoDiff(t *testing.T) {
 		t.Errorf("identical snapshots changed = %v, want none", got)
 	}
 }
+
+// TestSnapshotIgnoresSQLiteJournal verifies that SQLite journal files (-wal/-shm)
+// are excluded from the snapshot: they are transient host machine state written
+// by any live SQLite connection, so a changing WAL must not read as agent drift.
+func TestSnapshotIgnoresSQLiteJournal(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"panda.db":      "db",
+		"panda.db-wal":  "wal-1",
+		"panda.db-shm":  "shm",
+		"real/work.txt": "todo",
+	})
+
+	before, err := SnapshotDir(dir)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	// Only the journal file changes; the real work file is untouched.
+	if err := os.WriteFile(filepath.Join(dir, "panda.db-wal"), []byte("wal-2-changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := SnapshotDir(dir)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if got := before.Changed(after); len(got) != 0 {
+		t.Errorf("journal change read as drift: %v, want none", got)
+	}
+
+	// A real file change is still detected.
+	if err := os.WriteFile(filepath.Join(dir, "real/work.txt"), []byte("done"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after2, _ := SnapshotDir(dir)
+	if got := before.Changed(after2); !reflect.DeepEqual(got, []string{"real/work.txt"}) {
+		t.Errorf("real change = %v, want [real/work.txt]", got)
+	}
+}

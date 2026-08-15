@@ -521,30 +521,32 @@ func (s *TaskStore) SetDetail(ctx context.Context, taskID string, d TaskDetail) 
 	return nil
 }
 
-// ExpireTasks fails any active task whose lease has expired. Returns the
-// number of tasks failed. Called periodically by the monitor.
-func (s *TaskStore) ExpireTasks(ctx context.Context) (int, error) {
+// ExpireTasks fails any active task whose lease has expired. It returns the
+// task IDs actually failed, so the caller can clean up per-task state. Called
+// periodically by the monitor.
+func (s *TaskStore) ExpireTasks(ctx context.Context) ([]string, error) {
 	now := s.now()
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT task_id FROM tasks
 		 WHERE lease_expires_at > 0 AND lease_expires_at < ?
 		   AND state IN ('dispatched','waiting_context','running','review')`, now)
 	if err != nil {
-		return 0, fmt.Errorf("scan leases: %w", err)
+		return nil, fmt.Errorf("scan leases: %w", err)
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return 0, err
+			return nil, err
 		}
 		ids = append(ids, id)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return nil, err
 	}
+	var failed []string
 	for _, id := range ids {
 		// The monitor acts on behalf of the lease holder regardless of the
 		// stored owner (a crashed process may no longer hold it).
@@ -552,9 +554,10 @@ func (s *TaskStore) ExpireTasks(ctx context.Context) (int, error) {
 			s.logger.Warn("expire task", "task", id, "err", err)
 			continue
 		}
+		failed = append(failed, id)
 		s.logger.Info("task failed by timeout", "task", id)
 	}
-	return len(ids), nil
+	return failed, nil
 }
 
 // ForceFail fails an active task regardless of owner. Used by the timeout
@@ -628,36 +631,47 @@ func (s *TaskStore) Cancel(ctx context.Context, taskID string) error {
 }
 
 // CancelCascade cancels taskID and every descendant. Descendants are found by
-// parent_id links; the walk recurses so multi-level trees behave. The returned
-// count is the number of tasks actually transitioned to cancelled — already-
-// terminal tasks are skipped, not counted.
-func (s *TaskStore) CancelCascade(ctx context.Context, taskID string) (int, error) {
+// parent_id links; the walk recurses so multi-level trees behave. A visited set
+// guards against a parent_id cycle, which would otherwise recurse forever. The
+// returned slice lists the tasks actually transitioned to cancelled — already-
+// terminal tasks are skipped, not included.
+func (s *TaskStore) CancelCascade(ctx context.Context, taskID string) ([]string, error) {
+	var cancelled []string
+	visited := make(map[string]bool)
+	if err := s.cancelCascade(ctx, taskID, visited, &cancelled); err != nil {
+		return nil, err
+	}
+	return cancelled, nil
+}
+
+func (s *TaskStore) cancelCascade(ctx context.Context, taskID string, visited map[string]bool, cancelled *[]string) error {
+	if visited[taskID] {
+		return nil // already walked; a cycle in parent_id must not recurse forever
+	}
+	visited[taskID] = true
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	count := 0
 	if !Terminal(cur.State) {
 		if err := s.Cancel(ctx, taskID); err != nil {
-			return 0, err
+			return err
 		}
-		count = 1
+		*cancelled = append(*cancelled, taskID)
 	}
 	children, err := s.Children(ctx, taskID)
 	if err != nil {
-		return count, err
+		return err
 	}
 	for _, c := range children {
 		if Terminal(c.State) {
 			continue
 		}
-		n, err := s.CancelCascade(ctx, c.TaskID)
-		if err != nil {
-			return count, err
+		if err := s.cancelCascade(ctx, c.TaskID, visited, cancelled); err != nil {
+			return err
 		}
-		count += n
 	}
-	return count, nil
+	return nil
 }
 
 // Children lists direct children of taskID.

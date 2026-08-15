@@ -340,7 +340,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		after, err := defense.SnapshotDir(c.workDir)
 		if err != nil {
 			c.logger.Warn("snapshot workdir after agent", "task", taskID, "err", err)
-		} else if drift := scope.Drift(after.Changed(before)); len(drift) > 0 {
+		} else if drift := c.filterHostDrift(scope.Drift(after.Changed(before))); len(drift) > 0 {
 			msg := "scope drift: agent changed files outside declared scope: " + strings.Join(drift, ", ")
 			c.audit(ctx, taskID, "scope:drift", plan.Agent, "denied", msg)
 			if err := c.store.Pause(ctx, taskID, c.nodeID, msg); err != nil {
@@ -691,8 +691,14 @@ func (c *Core) handleCancel(ctx context.Context, env bus.Envelope) {
 			"from", env.From, "owner", t.OwnerNode, "parent", parent)
 		return
 	}
-	if _, err := c.store.CancelCascade(ctx, p.TaskID); err != nil {
+	cancelled, err := c.store.CancelCascade(ctx, p.TaskID)
+	if err != nil {
 		c.logger.Warn("cancel failed", "task", p.TaskID, "err", err)
+	}
+	// Drop paused-context entries for the cancelled tasks so a waiting_context
+	// task cancelled mid-fetch does not leak in pendingCtx (P2-7).
+	for _, id := range cancelled {
+		c.pendingCtx.Delete(id)
 	}
 }
 

@@ -27,6 +27,8 @@ testdata/run/
 
 # Hermes personal memory (Dreaming runtime output)
 /memory/
+/projects/
+/skills/
 
 # Python
 __pycache__/

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xenith/panda/internal/bus"
 	"github.com/xenith/panda/internal/ctxstore"
 	"github.com/xenith/panda/internal/ledger"
 )
@@ -153,5 +154,38 @@ func TestContextFetchMiss(t *testing.T) {
 	}
 	if !sawWait || !sawResume {
 		t.Fatalf("leaf events missing wait/resume: wait=%v resume=%v (%+v)", sawWait, sawResume, evs)
+	}
+}
+
+// TestCancelClearsPendingContext verifies that cancelling a task paused in
+// waiting_context drops its pendingCtx entry, so the paused context does not
+// leak when the task is cancelled mid-fetch (P2-7).
+func TestCancelClearsPendingContext(t *testing.T) {
+	ctx := context.Background()
+	c := newCore(t, "cancel-pending", "")
+
+	// A task owned by a peer; the pending context entry mimics a task paused
+	// in waiting_context waiting for its full snapshot.
+	tk := createTask(t, c.store, "", "paused", "peer")
+	c.pendingCtx.Store(tk.TaskID, &pendingContext{
+		intent: "run", required: []string{"sys:info"}, ctxType: "summary",
+	})
+
+	env, err := bus.NewEnvelope(bus.MsgTaskCancel, "peer", "msg-1",
+		bus.TaskCancelPayload{TaskID: tk.TaskID})
+	if err != nil {
+		t.Fatalf("envelope: %v", err)
+	}
+	c.handleCancel(ctx, env)
+
+	if _, ok := c.pendingCtx.Load(tk.TaskID); ok {
+		t.Fatalf("pendingCtx entry survived cancel")
+	}
+	got, err := c.store.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if got.State != StateCancelled {
+		t.Fatalf("task state = %s, want cancelled", got.State)
 	}
 }

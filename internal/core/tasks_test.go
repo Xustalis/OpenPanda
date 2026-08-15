@@ -235,12 +235,12 @@ func TestCancelCascade(t *testing.T) {
 		must(s.Queue(context.Background(), id, "root"))
 	}
 
-	count, err := s.CancelCascade(context.Background(), parent.TaskID)
+	ids, err := s.CancelCascade(context.Background(), parent.TaskID)
 	if err != nil {
 		t.Fatalf("cancel cascade: %v", err)
 	}
-	if count != 4 {
-		t.Fatalf("cancelled %d, want 4", count)
+	if len(ids) != 4 {
+		t.Fatalf("cancelled %d, want 4", len(ids))
 	}
 	for _, id := range []string{parent.TaskID, child1.TaskID, child2.TaskID, grand.TaskID} {
 		got, err := s.Get(context.Background(), id)
@@ -274,16 +274,51 @@ func TestCancelCascadeSkipsTerminalRoot(t *testing.T) {
 	must(s.Complete(ctx, root.TaskID, "win", nil))
 	must(s.Queue(ctx, child.TaskID, "root"))
 
-	count, err := s.CancelCascade(ctx, root.TaskID)
+	ids, err := s.CancelCascade(ctx, root.TaskID)
 	if err != nil {
 		t.Fatalf("cancel cascade: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("cancelled %d, want 1 (root already terminal)", count)
+	if len(ids) != 1 {
+		t.Fatalf("cancelled %d, want 1 (root already terminal)", len(ids))
 	}
 	got, _ := s.Get(ctx, child.TaskID)
 	if got.State != StateCancelled {
 		t.Fatalf("child state = %s, want cancelled", got.State)
+	}
+}
+
+// TestCancelCascadeCycle verifies a parent_id cycle terminates instead of
+// recursing forever, cancelling every node on the cycle exactly once.
+func TestCancelCascadeCycle(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	a := createTask(t, s, "", "a", "root")
+	b := createTask(t, s, a.TaskID, "b", "root")
+	// Close the cycle: a's parent is now b.
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET parent_id=? WHERE task_id=?`, b.TaskID, a.TaskID); err != nil {
+		t.Fatalf("link cycle: %v", err)
+	}
+	for _, id := range []string{a.TaskID, b.TaskID} {
+		if err := s.Queue(ctx, id, "root"); err != nil {
+			t.Fatalf("queue %s: %v", id, err)
+		}
+	}
+	ids, err := s.CancelCascade(ctx, a.TaskID)
+	if err != nil {
+		t.Fatalf("cancel cascade: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("cancelled %d, want 2", len(ids))
+	}
+	for _, id := range []string{a.TaskID, b.TaskID} {
+		got, err := s.Get(ctx, id)
+		if err != nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+		if got.State != StateCancelled {
+			t.Fatalf("task %s state = %s, want cancelled", id, got.State)
+		}
 	}
 }
 
