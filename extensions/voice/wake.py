@@ -9,8 +9,13 @@ no key) or "pvporcupine" (needs a Picovoice access key in PANDA_PORCUPINE_KEY).
           result is "wake" on detection, "timeout" otherwise.
 
 Local:  pip install openwakeword pyaudio numpy
-        A bundled model is used by default (set PANDA_WAKE_MODEL to a .tflite
-        path to override; a custom "hey panda" model is a follow-up).
+
+Wake word (P2-21): neither backend's built-in keyword table contains
+"hey_panda", so pointing the default at it made the extension fail out of the
+box. The defaults below are built-in keywords that actually ship with each
+backend; override with PANDA_WAKE_KEYWORD (built-in name) or, for
+openwakeword, PANDA_WAKE_MODEL (path to a custom .tflite model, e.g. a trained
+"hey panda").
 """
 import json
 import os
@@ -19,6 +24,10 @@ import time
 
 BACKEND = os.environ.get("PANDA_WAKE_BACKEND", "openwakeword")
 DEFAULT_DURATION = 10.0
+
+# Built-in keywords guaranteed present in each backend's default model set.
+DEFAULT_KEYWORD_OWW = "hey_jarvis"
+DEFAULT_KEYWORD_PORCUPINE = "porcupine"
 
 
 def main():
@@ -52,7 +61,8 @@ def _openwakeword(duration):
     from openwakeword.model import Model
 
     model_path = os.environ.get("PANDA_WAKE_MODEL", "")
-    oww = Model(wakeword_models=[model_path] if model_path else ["hey_panda"])
+    keyword = os.environ.get("PANDA_WAKE_KEYWORD", "") or DEFAULT_KEYWORD_OWW
+    oww = Model(wakeword_models=[model_path] if model_path else [keyword])
 
     pa = pyaudio.PyAudio()
     stream = pa.open(
@@ -82,7 +92,8 @@ def _porcupine(duration):
     import pvporcupine
     import pyaudio
 
-    porcupine = pvporcupine.create(access_key=key, keywords=["hey_panda"])
+    keyword = os.environ.get("PANDA_WAKE_KEYWORD", "") or DEFAULT_KEYWORD_PORCUPINE
+    porcupine = pvporcupine.create(access_key=key, keywords=[keyword])
     pa = pyaudio.PyAudio()
     stream = pa.open(
         rate=porcupine.sample_rate, channels=1, format=pyaudio.paInt16,
