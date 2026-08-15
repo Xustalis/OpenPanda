@@ -27,10 +27,14 @@ type Subscription struct {
 
 // Notification is the JSON payload delivered to the browser. The service worker
 // reads title/body/id to render and group the notification (web/pwa/sw.js).
+// Icon and Badge carry the PWA icon URLs so a push shows the app mark even on
+// a platform that does not render the manifest icon automatically (P2-17).
 type Notification struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
 	ID    string `json:"id"`
+	Icon  string `json:"icon,omitempty"`
+	Badge string `json:"badge,omitempty"`
 }
 
 // Store persists push subscriptions in SQLite, one row per device.

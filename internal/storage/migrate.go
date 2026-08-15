@@ -14,6 +14,7 @@ func Migrate(db *sql.DB) error {
 			name TEXT, department TEXT, chip TEXT,
 			native_json TEXT, agents_json TEXT, manual_json TEXT,
 			capacity_json TEXT,
+			resource_profile_json TEXT,
 			status TEXT, last_seen INTEGER,
 			scheduler_tier INTEGER
 		)`,
@@ -87,6 +88,9 @@ func Migrate(db *sql.DB) error {
 	// introduced. CREATE TABLE IF NOT EXISTS does not alter an existing table,
 	// so a dev's data/panda.db from an earlier build must gain the column here.
 	if err := addColumnIfMissing(db, "tasks", "authorized", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	if err := addColumnIfMissing(db, "employee_cache", "resource_profile_json", "TEXT"); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	return nil

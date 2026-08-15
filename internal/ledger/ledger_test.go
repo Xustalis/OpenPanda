@@ -148,6 +148,44 @@ func TestLoadCardMissingFileErrors(t *testing.T) {
 	}
 }
 
+func TestRegisterQueryResourceProfileRoundTrip(t *testing.T) {
+	db := openLedgerDB(t)
+	c := testCard()
+	c.ResourceProfile = ResourceProfile{CPU: 4, RAMGB: 8, DurationHint: "long"}
+
+	if err := Register(db, c, "opi3b", 1); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	nodes, err := Query(db, "online", "")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(nodes))
+	}
+	if got := nodes[0].ResourceProfile; got != c.ResourceProfile {
+		t.Fatalf("resource profile round-trip = %+v, want %+v", got, c.ResourceProfile)
+	}
+}
+
+func TestLoadCardRejectsInvalidResourceProfile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "capabilities.yaml")
+
+	c := testCard()
+	c.ResourceProfile = ResourceProfile{CPU: -1}
+	writeCard(t, p, c)
+	if _, err := LoadCard(p); err == nil {
+		t.Fatalf("expected error for negative cpu")
+	}
+
+	c = testCard()
+	c.ResourceProfile = ResourceProfile{DurationHint: "overnight"}
+	writeCard(t, p, c)
+	if _, err := LoadCard(p); err == nil {
+		t.Fatalf("expected error for invalid duration_hint")
+	}
+}
+
 func TestUpsertRemoteRoundTrip(t *testing.T) {
 	db := openLedgerDB(t)
 	sum := CapabilitySummary{

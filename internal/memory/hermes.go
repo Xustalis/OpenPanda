@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // Hermes manages the Hermes personal-assistant memory store rooted at a
@@ -17,6 +18,7 @@ import (
 // state (.dreams/, OpenClaw layout, Sprint 3.2).
 type Hermes struct {
 	root string
+	mu   sync.Mutex // serializes whole-file writes so concurrent saves cannot interleave
 }
 
 // NewHermes wraps a memory/ root directory.
@@ -73,6 +75,10 @@ func (h *Hermes) save(path string, m MemFile, defaultLimit int) error {
 	if m.Chars() > limit {
 		return fmt.Errorf("%w: at %d/%d chars", ErrOverLimit, m.Chars(), limit)
 	}
+	// Serialize the write so a concurrent SaveMemory/SaveUser cannot truncate and
+	// interleave with this one, which would leave a torn MEMORY.md on disk.
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if err := os.MkdirAll(h.root, 0o755); err != nil {
 		return fmt.Errorf("memory: create memory dir: %w", err)
 	}

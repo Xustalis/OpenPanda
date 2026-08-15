@@ -60,11 +60,20 @@ func (p *Projects) Load(name string) (MemFile, error) {
 	return m, nil
 }
 
-// Save writes a project's memory, creating the project directory as needed.
+// Save writes a project's memory, creating the project directory as needed. It
+// enforces the project character cap and refuses an over-limit file rather than
+// silently truncating, mirroring Hermes.save.
 func (p *Projects) Save(name string, m MemFile) error {
 	path, err := p.Path(name)
 	if err != nil {
 		return err
+	}
+	limit := m.Limit
+	if limit <= 0 {
+		limit = ProjectCharLimit
+	}
+	if m.Chars() > limit {
+		return fmt.Errorf("%w: at %d/%d chars", ErrOverLimit, m.Chars(), limit)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("memory: create project dir: %w", err)

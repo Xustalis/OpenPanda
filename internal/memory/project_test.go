@@ -1,6 +1,10 @@
 package memory
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestValidateName(t *testing.T) {
 	valid := []string{"panda", "117club", "my-project", "a.b"}
@@ -50,5 +54,22 @@ func TestProjectsPathRejectsTraversal(t *testing.T) {
 	p := NewProjects(t.TempDir())
 	if _, err := p.Path("../escape"); err == nil {
 		t.Errorf("Path with traversal should error")
+	}
+}
+
+// TestProjectsSaveEnforcesCap verifies Save rejects an over-limit project memory
+// rather than silently truncating it (P2-11), mirroring Hermes.save.
+func TestProjectsSaveEnforcesCap(t *testing.T) {
+	p := NewProjects(t.TempDir())
+	m := MemFile{Entries: []string{strings.Repeat("x", ProjectCharLimit+100)}}
+	if err := p.Save("panda", m); !errors.Is(err, ErrOverLimit) {
+		t.Fatalf("save over cap: got %v, want ErrOverLimit", err)
+	}
+	got, err := p.Load("panda")
+	if err != nil {
+		t.Fatalf("load after failed save: %v", err)
+	}
+	if len(got.Entries) != 0 {
+		t.Errorf("failed save should write nothing, got %v", got.Entries)
 	}
 }

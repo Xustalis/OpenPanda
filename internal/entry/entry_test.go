@@ -91,6 +91,26 @@ func TestParseOutputFencedJSON(t *testing.T) {
 	}
 }
 
+// TestParseOutputPreservesComplexity verifies the C-02 MVP chain: a model-emitted
+// complexity survives ParseOutput and passes ValidateTaskSpec with the value
+// intact (the core persists it; here we assert the entry side records it).
+func TestParseOutputPreservesComplexity(t *testing.T) {
+	raw := `{"kind":"task","task":{"title":"跑测试","context_type":"file","requires":{"abilities":["lint"]},"complexity":0.7}}`
+	out, err := ParseOutput(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if out.Kind != KindTask || out.Task == nil {
+		t.Fatalf("out = %+v", out)
+	}
+	if out.Task.Complexity != 0.7 {
+		t.Fatalf("complexity = %v, want 0.7", out.Task.Complexity)
+	}
+	if err := ValidateTaskSpec(out.Task); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
 func TestParseOutputProseIsAnswer(t *testing.T) {
 	out, err := ParseOutput("这是一个普通的回答，不是 JSON。")
 	if err != nil {

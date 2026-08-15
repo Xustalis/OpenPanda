@@ -2,7 +2,10 @@ package memory
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -66,5 +69,33 @@ func TestHermesSaveEnforcesCap(t *testing.T) {
 	}
 	if len(got.Entries) != 0 {
 		t.Errorf("failed save should write nothing, got %v", got.Entries)
+	}
+}
+
+// TestHermesConcurrentSaveNoTornWrite verifies whole-file saves are serialized:
+// many goroutines writing distinct snapshots must leave a single complete
+// snapshot on disk, never an interleaved/torn one (P2-11 data-loss class).
+func TestHermesConcurrentSaveNoTornWrite(t *testing.T) {
+	h := NewHermes(t.TempDir())
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_ = h.SaveMemory(MemFile{Entries: []string{fmt.Sprintf("entry-%02d", i)}})
+		}(i)
+	}
+	wg.Wait()
+
+	data, err := os.ReadFile(MemoryPath(h.root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ParseMem(data)
+	if len(got.Entries) != 1 {
+		t.Fatalf("torn write: %d entries, want 1 complete snapshot: %q", len(got.Entries), data)
+	}
+	if !strings.HasPrefix(got.Entries[0], "entry-") {
+		t.Fatalf("unexpected content: %q", got.Entries[0])
 	}
 }

@@ -30,7 +30,13 @@ self.addEventListener('push', (e) => {
   let data = {};
   try { data = e.data ? e.data.json() : {}; } catch (_) { /* non-JSON push */ }
   const title = data.title || 'PANDA';
-  const options = { body: data.body || '', tag: data.id || undefined, data: { id: data.id } };
+  const options = {
+    body: data.body || '',
+    tag: data.id || undefined,
+    icon: data.icon || undefined,
+    badge: data.badge || undefined,
+    data: { id: data.id }
+  };
   e.waitUntil(self.registration.showNotification(title, options));
 });
 

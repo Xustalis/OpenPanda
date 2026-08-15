@@ -2,7 +2,7 @@ GO ?= go
 BIN := bin/panda
 
 .PHONY: all build build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 \
-        test vet run measure clean
+        test vet race gate run measure clean icons
 
 all: build
 
@@ -28,6 +28,16 @@ test:
 
 vet:
 	$(GO) vet ./...
+
+race:
+	$(GO) test -race ./...
+
+# Merge gate (C-10): a PR must pass build + vet + test + race before landing.
+gate: build vet test race
+
+# Regenerate the PWA icon set (web/pwa/icons/) from the stdlib-only generator.
+icons:
+	$(GO) run ./scripts/genicons
 
 run:
 	$(GO) run ./cmd/panda --config config.example.yaml

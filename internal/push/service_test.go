@@ -85,7 +85,7 @@ func TestNotifyEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := Notification{Title: "PANDA", Body: "needs review", ID: "t-1"}
+	want := Notification{Title: "PANDA", Body: "needs review", ID: "t-1", Icon: "/icons/icon-192.png", Badge: "/icons/badge-72.png"}
 	if err := svc.Notify(context.Background(), want); err != nil {
 		t.Fatal(err)
 	}

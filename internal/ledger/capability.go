@@ -18,13 +18,14 @@ import (
 
 // Card is the parsed form of capabilities.yaml for this node.
 type Card struct {
-	Device        string           `yaml:"device"`
-	ResourceClass string           `yaml:"resource_class"`
-	Chip          string           `yaml:"chip"`
-	Native        []NativeAbility  `yaml:"native"`
-	Agents        map[string]Agent `yaml:"agents"`
-	Manual        []ManualAbility  `yaml:"manual"`
-	Capacity      Capacity         `yaml:"capacity"`
+	Device          string           `yaml:"device"`
+	ResourceClass   string           `yaml:"resource_class"`
+	Chip            string           `yaml:"chip"`
+	Native          []NativeAbility  `yaml:"native"`
+	Agents          map[string]Agent `yaml:"agents"`
+	Manual          []ManualAbility  `yaml:"manual"`
+	Capacity        Capacity         `yaml:"capacity"`
+	ResourceProfile ResourceProfile  `yaml:"resource_profile"`
 }
 
 // NativeAbility is a deterministic command this node can run.
@@ -58,6 +59,17 @@ type Capacity struct {
 	RAMGB         int `yaml:"ram_gb" json:"ram_gb"`
 	MaxConcurrent int `yaml:"max_concurrent_tasks" json:"max_concurrent_tasks"`
 	CurrentTasks  int `yaml:"current_tasks" json:"current_tasks"`
+}
+
+// ResourceProfile is a node-side, manually declared resource hint (design §13.2;
+// Sprint 5.1 consumes it for weighted scoring). It mirrors entry.ResourceProfile
+// in shape so the task and node sides compare field-for-field, but is declared in
+// ledger to avoid an entry→ledger import cycle. Static for the life of a card.
+type ResourceProfile struct {
+	CPU          int    `yaml:"cpu" json:"cpu"`
+	RAMGB        int    `yaml:"ram_gb" json:"ram_gb"`
+	GPUVRAMGB    int    `yaml:"gpu_vram_gb" json:"gpu_vram_gb"`
+	DurationHint string `yaml:"duration_hint" json:"duration_hint"` // short | long
 }
 
 // CapabilitySummary is the compact capability profile a node advertises in its
@@ -95,24 +107,29 @@ func Register(db *sql.DB, c Card, id string, tier int) error {
 	if err != nil {
 		return fmt.Errorf("marshal capacity: %w", err)
 	}
+	resJSON, err := json.Marshal(c.ResourceProfile)
+	if err != nil {
+		return fmt.Errorf("marshal resource profile: %w", err)
+	}
 
-	return upsertNode(db, id, c.Device, c.Chip, string(native), string(agents), string(manual), string(capJSON), tier)
+	return upsertNode(db, id, c.Device, c.Chip, string(native), string(agents), string(manual), string(capJSON), string(resJSON), tier)
 }
 
-// upsertNode writes one directory row — native/agents/manual/capacity already
-// marshalled to JSON — and marks it online. Shared by Register (self, full
-// card) and UpsertRemote (peer, ID-only summary) so the upsert SQL lives in one
-// place.
-func upsertNode(db *sql.DB, id, device, chip, nativeJSON, agentsJSON, manualJSON, capJSON string, tier int) error {
+// upsertNode writes one directory row — native/agents/manual/capacity/resource
+// profile already marshalled to JSON — and marks it online. Shared by Register
+// (self, full card) and UpsertRemote (peer, ID-only summary) so the upsert SQL
+// lives in one place.
+func upsertNode(db *sql.DB, id, device, chip, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON string, tier int) error {
 	_, err := db.Exec(`
-		INSERT INTO employee_cache (id, name, department, chip, native_json, agents_json, manual_json, capacity_json, status, last_seen, scheduler_tier)
-		VALUES (?, ?, '', ?, ?, ?, ?, ?, 'online', ?, ?)
+		INSERT INTO employee_cache (id, name, department, chip, native_json, agents_json, manual_json, capacity_json, resource_profile_json, status, last_seen, scheduler_tier)
+		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, 'online', ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name=excluded.name, chip=excluded.chip,
 			native_json=excluded.native_json, agents_json=excluded.agents_json,
 			manual_json=excluded.manual_json, capacity_json=excluded.capacity_json,
+			resource_profile_json=excluded.resource_profile_json,
 			status='online', last_seen=excluded.last_seen, scheduler_tier=excluded.scheduler_tier`,
-		id, device, chip, nativeJSON, agentsJSON, manualJSON, capJSON, storage.Now(), tier,
+		id, device, chip, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, storage.Now(), tier,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert %s: %w", id, err)
@@ -182,21 +199,22 @@ func UpsertRemote(db *sql.DB, id string, s CapabilitySummary) error {
 		return fmt.Errorf("marshal remote capacity: %w", err)
 	}
 
-	return upsertNode(db, id, s.Device, s.Chip, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), s.SchedulerTier)
+	return upsertNode(db, id, s.Device, s.Chip, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), "", s.SchedulerTier)
 }
 
 // Node is a single employee_cache row, decoded.
 type Node struct {
-	ID            string
-	Name          string
-	Chip          string
-	Status        string
-	LastSeen      int64
-	SchedulerTier int
-	Native        []NativeAbility
-	Agents        map[string]Agent
-	Manual        []ManualAbility
-	Capacity      Capacity
+	ID              string
+	Name            string
+	Chip            string
+	Status          string
+	LastSeen        int64
+	SchedulerTier   int
+	Native          []NativeAbility
+	Agents          map[string]Agent
+	Manual          []ManualAbility
+	Capacity        Capacity
+	ResourceProfile ResourceProfile
 }
 
 // Abilities returns this node's displayable ability list — native IDs plus an
@@ -323,7 +341,7 @@ func tokenSubset(a, b []string) bool {
 
 // Query returns nodes matching filters. Empty status or name matches all.
 func Query(db *sql.DB, status, name string) ([]Node, error) {
-	q := `SELECT id, name, chip, status, last_seen, scheduler_tier, native_json, agents_json, manual_json, capacity_json
+	q := `SELECT id, name, chip, status, last_seen, scheduler_tier, native_json, agents_json, manual_json, capacity_json, resource_profile_json
 	      FROM employee_cache WHERE 1=1`
 	var args []any
 	if status != "" {
@@ -343,9 +361,9 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 	var out []Node
 	for rows.Next() {
 		var n Node
-		var native, agents, manual, capJSON string
+		var native, agents, manual, capJSON, resJSON string
 		if err := rows.Scan(&n.ID, &n.Name, &n.Chip, &n.Status, &n.LastSeen, &n.SchedulerTier,
-			&native, &agents, &manual, &capJSON); err != nil {
+			&native, &agents, &manual, &capJSON, &resJSON); err != nil {
 			return nil, err
 		}
 		if native != "" {
@@ -359,6 +377,9 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 		}
 		if capJSON != "" {
 			_ = json.Unmarshal([]byte(capJSON), &n.Capacity)
+		}
+		if resJSON != "" {
+			_ = json.Unmarshal([]byte(resJSON), &n.ResourceProfile)
 		}
 		out = append(out, n)
 	}

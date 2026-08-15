@@ -91,3 +91,44 @@ func TestConversationRetrievesByQuery(t *testing.T) {
 		t.Errorf("conversation should always include the user profile, got %q", got)
 	}
 }
+
+func TestRankTopKBoundary(t *testing.T) {
+	// Six relevant entries, k=5: exactly the top five must come back, so the
+	// boundary does not over- or under-return.
+	entries := []string{
+		"构建缓存清理",
+		"构建发布流程",
+		"构建失败排查",
+		"构建日志位置",
+		"构建脚本维护",
+		"构建依赖下载",
+	}
+	got := Retriever{}.Rank("构建", entries, 5)
+	if len(got) != 5 {
+		t.Fatalf("rank returned %d entries, want exactly 5 (top-k boundary)", len(got))
+	}
+}
+
+func TestRankZeroOrNegativeK(t *testing.T) {
+	entries := []string{"构建", "发布"}
+	r := Retriever{}
+	if got := r.Rank("构建", entries, 0); got != nil {
+		t.Fatalf("k=0: got %v, want nil", got)
+	}
+	if got := r.Rank("构建", entries, -1); got != nil {
+		t.Fatalf("k<0: got %v, want nil", got)
+	}
+}
+
+func TestRankCJKSingleIdeographOverlap(t *testing.T) {
+	// A single shared content ideograph is a real (weak) relevance signal; a lone
+	// CJK function word must not match anything.
+	entries := []string{"构建缓存", "部署发布"}
+	r := Retriever{}
+	if got := r.Rank("构建", entries, 2); len(got) == 0 || got[0] != "构建缓存" {
+		t.Fatalf("single-ideograph overlap = %v, want the 构建 entry", got)
+	}
+	if got := r.Rank("是", entries, 2); len(got) != 0 {
+		t.Fatalf("function-word-only query matched: %v", got)
+	}
+}

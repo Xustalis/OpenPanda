@@ -133,6 +133,8 @@ func runDaemon() {
 				Title: "PANDA · 任务需要审批",
 				Body:  t.Title,
 				ID:    t.TaskID,
+				Icon:  "/icons/icon-192.png",
+				Badge: "/icons/badge-72.png",
 			}); err != nil {
 				logger.Warn("notify review", "task", t.TaskID, "err", err)
 			}
