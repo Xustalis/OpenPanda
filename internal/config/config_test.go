@@ -140,3 +140,49 @@ func TestModelEnvOverrides(t *testing.T) {
 		t.Fatalf("model = %+v", cfg.Model)
 	}
 }
+
+// TestSecretFilePermsTightened verifies P1-19: a config file carrying secrets
+// (api_key / shared_secret / panel_token) with group/world-readable bits is
+// tightened to 0600 at load time.
+func TestSecretFilePermsTightened(t *testing.T) {
+	p := writeTemp(t, `
+node:
+  name: "test-node"
+network:
+  shared_secret: "s3cret"
+model:
+  api_key: "sk-test"
+`)
+	if err := os.Chmod(p, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if _, err := Load(p); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := st.Mode().Perm(); got != 0o600 {
+		t.Fatalf("perm = %o, want 600", got)
+	}
+}
+
+// TestSecretlessFilePermsUntouched is the negative control: a config without
+// secrets keeps whatever permissions the deployer chose.
+func TestSecretlessFilePermsUntouched(t *testing.T) {
+	p := writeTemp(t, "node:\n  name: \"test-node\"\n")
+	if err := os.Chmod(p, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if _, err := Load(p); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := st.Mode().Perm(); got != 0o644 {
+		t.Fatalf("perm = %o, want untouched 644", got)
+	}
+}

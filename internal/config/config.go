@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 
@@ -136,6 +137,7 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
+	hardenSecretPerms(path, data)
 	cfg.applyEnv()
 	if cfg.Node.Name == "" {
 		return nil, fmt.Errorf("config %s: node.name must not be empty", path)
@@ -196,4 +198,48 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("PANDA_PUSH_VAPID_KEY_PATH"); v != "" {
 		c.Push.VAPIDKeyPath = v
 	}
+}
+
+// hardenSecretPerms enforces 0600 on a config file that contains secrets
+// (P1-19). api_key / shared_secret / panel_token in a world- or
+// group-readable file are recoverable by any local user, so the file's
+// permission bits are tightened at load time. Prefer the PANDA_* env vars
+// (which leave nothing on disk) — a startup warning says so when a secret is
+// found in the file. A chmod failure is logged, not fatal: the config is
+// still usable, and refusing to boot would lock out existing deployments.
+func hardenSecretPerms(path string, data []byte) {
+	// Probe only the secret-bearing fields; a YAML anchor or comment cannot
+	// forge a non-empty value here.
+	var probe struct {
+		Network struct {
+			SharedSecret string `yaml:"shared_secret"`
+			PanelToken   string `yaml:"panel_token"`
+		} `yaml:"network"`
+		Model struct {
+			APIKey string `yaml:"api_key"`
+		} `yaml:"model"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		return // the real unmarshal already reported any syntax error
+	}
+	if probe.Network.SharedSecret == "" && probe.Network.PanelToken == "" && probe.Model.APIKey == "" {
+		return
+	}
+
+	slog.Warn("config file contains secrets; prefer env vars "+
+		"(PANDA_SHARED_SECRET / PANDA_PANEL_TOKEN / PANDA_MODEL_API_KEY)", "path", path)
+
+	st, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	if st.Mode().Perm()&0o077 == 0 {
+		return // already owner-only
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		slog.Warn("config contains secrets but permissions could not be tightened to 0600",
+			"path", path, "err", err)
+		return
+	}
+	slog.Warn("tightened config file permissions to 0600 (contains secrets)", "path", path)
 }
