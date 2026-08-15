@@ -16,7 +16,7 @@ import (
 	"testing"
 
 	"github.com/xenith/panda/internal/core"
-	"github.com/xenith/panda/internal/push"
+	"github.com/xenith/panda/webui/push"
 	"github.com/xenith/panda/internal/storage"
 )
 

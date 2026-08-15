@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  PANDA macOS node — LaunchAgent, runs the kernel daemon headless in the
+  background: no terminal window, starts at login, restarts on crash.
+
+  Install (adjust paths below to your checkout first):
+    cp deploy/macos/com.panda.node.plist ~/Library/LaunchAgents/
+    launchctl unload ~/Library/LaunchAgents/com.panda.node.plist 2>/dev/null
+    launchctl load   ~/Library/LaunchAgents/com.panda.node.plist
+
+  Logs: /tmp/panda-daemon.out.log (JSON) and /tmp/panda-daemon.err.log.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.panda.node</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/xenith/Documents/project/panda/bin/panda</string>
+		<string>--config</string>
+		<string>/Users/xenith/Documents/project/panda/config.yaml</string>
+		<string>--card</string>
+		<string>/Users/xenith/Documents/project/panda/config/capabilities.macbook.yaml</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/xenith/Documents/project/panda</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>/tmp/panda-daemon.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/panda-daemon.err.log</string>
+</dict>
+</plist>

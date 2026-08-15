@@ -5,9 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/xenith/panda/internal/executil"
 )
 
 // FileContext is the file-type task context (design doc §12.5). It records
@@ -56,7 +57,7 @@ func (fc *FileContext) Hash() string {
 
 // gitOut runs a git command and returns trimmed stdout, or "" on failure.
 func gitOut(ctx context.Context, dir string, args ...string) string {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := executil.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {

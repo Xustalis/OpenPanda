@@ -25,11 +25,13 @@ type NodeConfig struct {
 	ResourceClass string `yaml:"resource_class"` // Micro | Standard | Full
 }
 
-// NetworkConfig controls the WebSocket listener and manual peers.
+// NetworkConfig controls the WebSocket listener and manual peers. PanelAddr and
+// PanelToken are read only by the optional webui sidecar (webui/cmd/panel), not
+// by the kernel daemon.
 type NetworkConfig struct {
 	ListenAddr   string   `yaml:"listen_addr"`   // e.g. ":7836"
-	PanelAddr    string   `yaml:"panel_addr"`    // HTTP panel/PWA listener, e.g. ":7840"
-	PanelToken   string   `yaml:"panel_token"`   // Bearer token guarding /api/*; the panel refuses to start without it
+	PanelAddr    string   `yaml:"panel_addr"`    // webui sidecar HTTP listener, e.g. ":7840"
+	PanelToken   string   `yaml:"panel_token"`   // Bearer token guarding /api/* in the webui sidecar
 	SharedSecret string   `yaml:"shared_secret"` // HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it
 	Peers        []string `yaml:"peers"`         // e.g. "orangepi3b.tailnet-name.ts.net:7836"
 }
@@ -59,10 +61,11 @@ type ModelConfig struct {
 	MaxTokens int    `yaml:"max_tokens"` // completion cap; 0 = provider/entry default
 }
 
-// PushConfig enables Web Push notifications (design P3-26). VAPID (RFC 8292)
-// needs a stable P-256 keypair and a mailto:/https: subject identifying the
-// sender; the key is persisted at vapid_key_path so browser subscriptions stay
-// valid across restarts.
+// PushConfig enables Web Push notifications (design P3-26) for the optional
+// webui sidecar (webui/cmd/panel); the kernel daemon does not read it. VAPID
+// (RFC 8292) needs a stable P-256 keypair and a mailto:/https: subject
+// identifying the sender; the key is persisted at vapid_key_path so browser
+// subscriptions stay valid across restarts.
 type PushConfig struct {
 	Enabled      bool   `yaml:"enabled"`
 	VAPIDSubject string `yaml:"vapid_subject"` // e.g. mailto:ops@example.com

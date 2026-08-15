@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/xenith/panda/internal/executil"
 	"github.com/xenith/panda/internal/security"
 )
 
@@ -47,7 +48,7 @@ func (e *Executor) Run(ctx context.Context, command string, args ...string) Nati
 		defer cancel()
 	}
 
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := executil.CommandContext(ctx, command, args...)
 	cmd.Dir = e.dir
 	// Run under the same minimal, secret-free environment as adapter
 	// subprocesses (security.Sandbox), never the parent's full os.Environ(),

@@ -1,7 +1,7 @@
 GO ?= go
 BIN := bin/panda
 
-.PHONY: all build build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 \
+.PHONY: all build build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 \
         test vet race gate run measure clean icons
 
 all: build
@@ -9,6 +9,10 @@ all: build
 # Default: native platform binary (release: stripped symbols)
 build:
 	$(GO) build -ldflags "-s -w" -o $(BIN) ./cmd/panda
+
+# Optional legacy web control panel as a standalone sidecar (webui/README.md).
+build-webui:
+	$(GO) build -ldflags "-s -w" -o $(BIN)-webui ./webui/cmd/panel
 
 # Cross-compile targets (design doc §4.4)
 build-darwin-arm64:

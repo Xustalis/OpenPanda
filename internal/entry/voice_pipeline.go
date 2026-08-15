@@ -5,7 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
+
+	"github.com/xenith/panda/internal/executil"
 )
 
 // voiceDir is where the voice sidecars live, resolved relative to the working
@@ -68,7 +69,7 @@ func runSidecar(ctx context.Context, name string, req map[string]any) sidecarRes
 	if req != nil {
 		in, _ = json.Marshal(req)
 	}
-	cmd := exec.CommandContext(ctx, "python3", voiceDir+"/"+name)
+	cmd := executil.CommandContext(ctx, "python3", voiceDir+"/"+name)
 	cmd.Stdin = bytes.NewReader(in)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

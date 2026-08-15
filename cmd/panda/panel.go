@@ -206,6 +206,63 @@ func runCancel(args []string) {
 	fmt.Printf("cancelled %d task(s)\n", n)
 }
 
+// runApprove implements `panda approve <id>` — approves a reviewed task
+// (review -> done). Kernel-form replacement for the web panel's approve action.
+func runApprove(args []string) {
+	fs := flag.NewFlagSet("approve", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config.yaml")
+	fs.Parse(args)
+	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "usage: panda approve [--config PATH] <task-id>")
+		os.Exit(2)
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, store, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	if err := store.Approve(context.Background(), id); err != nil {
+		fatal("approve", err)
+	}
+	fmt.Printf("approved %s\n", id)
+}
+
+// runReject implements `panda reject <id> [--reason s]` — rejects a reviewed
+// task (review -> failed). Kernel-form replacement for the web panel's reject.
+func runReject(args []string) {
+	fs := flag.NewFlagSet("reject", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config.yaml")
+	reason := fs.String("reason", "", "rejection reason")
+	fs.Parse(args)
+	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "usage: panda reject [--config PATH] [--reason s] <task-id>")
+		os.Exit(2)
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, store, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	if err := store.Reject(context.Background(), id, *reason); err != nil {
+		fatal("reject", err)
+	}
+	fmt.Printf("rejected %s\n", id)
+}
+
 // runLogs implements `panda logs <id>` — the event timeline only.
 func runLogs(args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)

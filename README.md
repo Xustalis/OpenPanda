@@ -66,8 +66,9 @@ WebSocket links you control.
   the node is idle.
 - **Voice entry** — optional sidecar pipeline (wake word → STT → LLM → TTS),
   hardware-gated and ready for embedded microphones.
-- **PWA control panel** — a web console for the task queue, task details, and
-  human-in-the-loop approvals; installable as a Progressive Web App.
+- **Headless kernel + CLI panel** — the daemon runs without a web UI; drive it
+  from the terminal (`panda status/queue/task/approve/reject/cancel/logs`). The
+  legacy PWA console still exists as an optional, frozen `webui/` sidecar.
 - **Defense & safety layers** — permission tiers, a circuit breaker, scope-drift
   and infinite-loop detection, plus execution-side hardening: sandboxing,
   network allow-lists, secret redaction, and audit logging.
@@ -80,7 +81,7 @@ WebSocket links you control.
 
 ```
                         ┌───────────────────────────┐
-                        │   You: CLI / PWA / voice  │
+                        │     You: CLI / voice     │
                         └─────────────┬─────────────┘
                                       │
                  ┌────────────────────▼────────────────────┐
@@ -227,7 +228,7 @@ Manage skills:
 | `node` | `name` | Unique node ID (used across the network) |
 | `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → scheduler tier |
 | `network` | `listen_addr` | WebSocket listener address |
-| `network` | `panel_addr` | PWA panel HTTP address (empty = disabled) |
+| `network` | `panel_addr` | Optional webui sidecar HTTP address (kernel ignores it) |
 | `network` | `peers` | Manual peer addresses to dial |
 | `storage` | `db_path` | SQLite database path |
 | `storage` | `context_path` | Context snapshot store |
@@ -292,14 +293,16 @@ done
 | Glue / adapters | Python 3.10+ |
 | Transport | WebSocket + JSON envelopes |
 | State | SQLite in WAL mode |
-| Frontend | PWA (vanilla web app + service worker) |
+| Frontend | Optional `webui/` PWA sidecar (frozen; kernel is headless) |
 | LLM access | Anthropic-compatible `/v1/messages` endpoint (e.g. DeepSeek) |
 
 ## Roadmap
 
 Phase 3 (memory + voice + safety) is in progress. The memory layer, Dreaming
-engine, skills system, PWA panel, and execution hardening are implemented;
-voice entry is code-complete and waiting on microphone-hardware validation.
+engine, skills system, and execution hardening are implemented; voice entry is
+code-complete and waiting on microphone-hardware validation. The web panel was
+pulled out into a frozen `webui/` sidecar — the kernel runs headless, and the
+roadmap ahead is a desktop client.
 
 ## Contributing
 

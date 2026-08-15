@@ -5,8 +5,9 @@ node:
   resource_class: "Standard"  # Micro | Standard | Full
 
 network:
-  listen_addr: ":7836"           # WebSocket listener
-  panel_addr: ":7840"            # HTTP PWA control panel (empty = disabled)
+  listen_addr: ":7836"           # WebSocket listener (kernel daemon)
+  # ── webui sidecar only (webui/cmd/panel); the kernel daemon never mounts it ──
+  panel_addr: ":7840"            # optional legacy PWA panel HTTP address (empty = disabled)
   # panel_token: ""              # Bearer token guarding /api/* (required to enable the panel; prefer env PANDA_PANEL_TOKEN)
   peers:                         # manual peers
     - "orangepi3b.tailnet-name.ts.net:7836"
@@ -31,6 +32,7 @@ model:
   # api_key: ""                   # secret; prefer env PANDA_MODEL_API_KEY
 
 # Web Push notifications (design P3-26): task entering review → phone push.
+# Only the optional webui sidecar reads this — the kernel daemon ignores it.
 # Requires HTTPS to work from a phone PWA; VAPID key is auto-generated and
 # persisted at vapid_key_path on first boot (keep it stable).
 push:

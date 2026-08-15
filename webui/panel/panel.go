@@ -1,7 +1,7 @@
-// Package panel serves the PWA control panel: the static web app under web/pwa
-// plus the JSON API that backs it — task queue, task detail, and the human
-// approval of reviewed tasks (design §14.2 Layer 4). It is the HTTP face of the
-// daemon, distinct from the node-to-node WebSocket transport in internal/bus.
+// Package panel serves the legacy PWA control panel (kept frozen as an optional
+// webui/ sidecar; the kernel daemon no longer mounts it): the static web app
+// under webui/web/pwa plus the JSON API that backs it — task queue, task detail,
+// and the human approval of reviewed tasks (design §14.2 Layer 4).
 package panel
 
 import (
@@ -16,11 +16,11 @@ import (
 	"time"
 
 	"github.com/xenith/panda/internal/core"
-	"github.com/xenith/panda/internal/push"
+	"github.com/xenith/panda/webui/push"
 )
 
 // New builds the panel HTTP handler. staticDir is the directory holding the PWA
-// static files (web/pwa); JSON endpoints are served under /api/. pushSvc, when
+// static files (webui/web/pwa); JSON endpoints are served under /api/. pushSvc, when
 // non-nil, additionally serves the Web Push subscription endpoints. token is the
 // Bearer credential guarding every /api/* route; the static files under / are
 // served unauthenticated (they carry no secrets, the API does). An empty token

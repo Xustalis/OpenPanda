@@ -17,6 +17,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/xenith/panda/internal/executil"
 )
 
 // Tool is one tool advertised by an MCP server (the tools/list shape).
@@ -60,7 +62,7 @@ type rpcError struct {
 // e.g. a binary path). It returns a started, initialized client; the caller
 // owns it and must Close it.
 func NewStdioClient(ctx context.Context, command string, args ...string) (*Client, error) {
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := executil.CommandContext(ctx, command, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("mcp: stdin pipe: %w", err)

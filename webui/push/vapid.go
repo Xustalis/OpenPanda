@@ -1,8 +1,8 @@
-// Package push implements the daemon side of Web Push notifications
-// (design P3-26): the VAPID identity (RFC 8292), message encryption
+// Package push implements the (frozen) Web Push notifications behind the webui
+// panel (design P3-26): the VAPID identity (RFC 8292), message encryption
 // (RFC 8291 over the aes128gcm content coding from RFC 8188), subscription
 // storage, and delivery to the browser's push service. The browser side lives
-// in web/pwa (service worker + subscription).
+// in webui/web/pwa (service worker + subscription).
 package push
 
 import (

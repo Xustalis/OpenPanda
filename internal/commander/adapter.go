@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/xenith/panda/internal/config"
+	"github.com/xenith/panda/internal/executil"
 	"github.com/xenith/panda/internal/security"
 )
 
@@ -69,7 +70,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	if err != nil {
 		return AgentResult{OK: false, Result: security.Redact(err.Error()), ExitCode: 1}
 	}
-	cmd := exec.CommandContext(ctx, "python3", path)
+	cmd := executil.CommandContext(ctx, "python3", path)
 	cmd.Stdin = bytes.NewReader(reqJSON)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

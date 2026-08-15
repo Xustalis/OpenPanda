@@ -47,7 +47,7 @@ PANDA 把你拥有的每一台设备——笔记本、单板电脑、桌面机�
 - **自进化 Skill 系统**——程序性记忆以 `SKILL.md` 文件存在：每个 skill 声明适用时机、运行方式，并在每次使用后自我迭代。
 - **双层记忆**——按用户与按项目隔离的记忆（`USER.md` / `MEMORY.md` 风格），外加隔离墙；后台 **Dreaming** 引擎在节点空闲时把日常日志沉淀为长期记忆。
 - **语音入口**——可选的 sidecar 管线（唤醒词 → 语音识别 → LLM → 语音合成），硬件门控，为嵌入式麦克风准备。
-- **PWA 控制台**——任务队列、任务详情、人工审批的 Web 控制台，可安装为渐进式 Web 应用。
+- **无头内核 + CLI 面板**——守护进程不挂载 Web 界面，终端驱动即可（`panda status/queue/task/approve/reject/cancel/logs`）。旧版 PWA 控制台仍以可选、冻结的 `webui/` 侧车形式保留。
 - **防御与安全层**——权限 Tier、熔断器、范围漂移与死循环检测；执行侧加固：沙箱、网络白名单、密钥脱敏、审计日志。
 - **极致轻量**——稳态 RSS 约 **13–20 MB**，为资源受限的单板电脑而生。
 - **干净交叉编译**——每个平台一个静态二进制，无需 CGO（纯 Go SQLite，`modernc.org/sqlite`）。
@@ -56,7 +56,7 @@ PANDA 把你拥有的每一台设备——笔记本、单板电脑、桌面机�
 
 ```
                         ┌───────────────────────────┐
-                        │   你：CLI / PWA / 语音     │
+                        │     你：CLI / 语音       │
                         └─────────────┬─────────────┘
                                       │
                  ┌────────────────────▼────────────────────┐
@@ -201,7 +201,7 @@ model:
 | `node` | `name` | 唯一节点 ID（全网使用） |
 | `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → 调度器层级 |
 | `network` | `listen_addr` | WebSocket 监听地址 |
-| `network` | `panel_addr` | PWA 面板 HTTP 地址（空 = 禁用） |
+| `network` | `panel_addr` | 可选 webui 侧车 HTTP 地址（内核忽略） |
 | `network` | `peers` | 要拨号的手动 peer 地址 |
 | `storage` | `db_path` | SQLite 数据库路径 |
 | `storage` | `context_path` | 上下文快照存储 |
@@ -261,12 +261,12 @@ done
 | 胶水 / 适配器 | Python 3.10+ |
 | 传输 | WebSocket + JSON 信封 |
 | 状态 | WAL 模式的 SQLite |
-| 前端 | PWA（原生 Web 应用 + service worker） |
+| 前端 | 可选 `webui/` PWA 侧车（冻结；内核为无头形态） |
 | LLM 访问 | Anthropic 兼容 `/v1/messages` 端点（如 DeepSeek） |
 
 ## 路线图
 
-Phase 3（记忆 + 语音 + 安全）进行中。记忆层、Dreaming 引擎、Skill 系统、PWA 面板与执行侧加固已完成；语音入口代码完成，等待麦克风硬件实测。
+Phase 3（记忆 + 语音 + 安全）进行中。记忆层、Dreaming 引擎、Skill 系统与执行侧加固已完成；语音入口代码完成，等待麦克风硬件实测。Web 面板已抽出为冻结的 `webui/` 侧车——内核为无头形态，后续规划为桌面客户端。
 
 ## 参与贡献
 

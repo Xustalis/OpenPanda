@@ -1,14 +1,14 @@
 // Command panda is the PANDA core daemon. It registers this node's
 // capabilities and, once peers connect, delegates/executes tasks over
 // WebSocket. Subcommands: ask (unified entry model), status/queue/task/
-// cancel/logs (CLI panel), version. With no subcommand it runs the daemon.
+// approve/reject/cancel/logs (CLI panel), version. With no subcommand it runs
+// the daemon (headless kernel — the web panel is a separate webui/ sidecar).
 package main
 
 import (
 	"context"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -20,8 +20,6 @@ import (
 	"github.com/xenith/panda/internal/ledger"
 	"github.com/xenith/panda/internal/log"
 	"github.com/xenith/panda/internal/memory"
-	"github.com/xenith/panda/internal/panel"
-	"github.com/xenith/panda/internal/push"
 	"github.com/xenith/panda/internal/skills"
 	"github.com/xenith/panda/internal/storage"
 )
@@ -45,6 +43,12 @@ func main() {
 			return
 		case "cancel":
 			runCancel(os.Args[2:])
+			return
+		case "approve":
+			runApprove(os.Args[2:])
+			return
+		case "reject":
+			runReject(os.Args[2:])
 			return
 		case "logs":
 			runLogs(os.Args[2:])
@@ -116,30 +120,8 @@ func runDaemon() {
 		skills.NewStore(cfg.Storage.SkillsPath),
 	)
 
-	// Web Push (design P3-26): when enabled, a task entering review fires a push
-	// to every subscribed device so the operator can approve/reject from a phone.
-	// Disabled by default; the endpoints and sender are only wired when on.
-	var pushSvc *push.Service
-	if cfg.Push.Enabled {
-		keys, err := push.LoadOrCreateVAPIDKeys(cfg.Push.VAPIDKeyPath, cfg.Push.VAPIDSubject)
-		if err != nil {
-			fatal("load vapid keys", err)
-		}
-		pushSvc = push.NewService(keys, push.NewStore(db), logger)
-		coreNode.TaskStore().SetOnReview(func(t core.Task) {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			if err := pushSvc.Notify(ctx, push.Notification{
-				Title: "PANDA · 任务需要审批",
-				Body:  t.Title,
-				ID:    t.TaskID,
-				Icon:  "/icons/icon-192.png",
-				Badge: "/icons/badge-72.png",
-			}); err != nil {
-				logger.Warn("notify review", "task", t.TaskID, "err", err)
-			}
-		})
-	}
+	// Web Push lives in the webui sidecar (webui/cmd/panel), not the kernel;
+	// the kernel stays headless. See webui/README.md.
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -205,26 +187,8 @@ func runDaemon() {
 		"db", cfg.Storage.DBPath,
 	)
 
-	// PWA control panel (design §11 / P3-25): an HTTP server serving the static
-	// web app plus the task queue/approval API. Optional; empty panel_addr
-	// disables it. A panel without a token is refused (not silently left open):
-	// the /api/* approval routes must never be reachable unauthenticated.
-	if cfg.Network.PanelAddr != "" {
-		if cfg.Network.PanelToken == "" {
-			logger.Warn("panel disabled: network.panel_token is not set (refusing to serve /api/* unauthenticated)")
-		} else {
-			panelSrv := &http.Server{
-				Addr:    cfg.Network.PanelAddr,
-				Handler: panel.New(coreNode.TaskStore(), "web/pwa", pushSvc, cfg.Network.PanelToken),
-			}
-			go func() {
-				logger.Info("panel listening", "addr", cfg.Network.PanelAddr)
-				if err := panelSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-					logger.Warn("panel server", "err", err)
-				}
-			}()
-		}
-	}
+	// The kernel runs headless: the legacy PWA panel is an optional sidecar
+	// (webui/cmd/panel), never mounted here. See webui/README.md.
 
 	serveErr := make(chan error, 1)
 	// Fail-closed transport auth (design §16 / P0-1): without a shared secret no
