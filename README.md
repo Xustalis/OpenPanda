@@ -278,6 +278,26 @@ go test ./internal/core/ -run 'TestTwoNodeProtocol|TestDelegateIdempotent|TestCa
 
 ## Deployment
 
+### Network security baseline
+
+PANDA nodes speak plain WebSocket (`ws://`) by default. **Plain WebSocket must
+only be used over a trusted private path:**
+
+- Loopback / same-host links (e.g. `127.0.0.1`, `localhost`).
+- A private overlay network you control, such as **Tailscale** or a VPN.
+- A physically isolated LAN where every device is trusted.
+
+**If any PANDA peer crosses the public Internet, terminate TLS in front of the
+WebSocket listener** (e.g. nginx, Caddy, Traefik) and configure peers with the
+`wss://` URL. The `shared_secret` authenticates node-to-node hellos, but it is
+*not* a substitute for transport encryption — do not expose a plain `ws://`
+listener on the public Internet.
+
+The optional `panel_addr` serves plain HTTP for the legacy PWA sidecar. Keep it
+on loopback, or put it behind the same TLS reverse proxy.
+
+### Memory footprint
+
 PANDA targets low-power devices. Verify your steady-state memory before shipping
 to hardware — a single `ps` sample is unreliable due to GC noise; take several:
 

@@ -83,6 +83,10 @@ type Core struct {
 	// Empty is fail-closed: no peer can authenticate until it is set.
 	sharedSecret string
 
+	// maxConns and maxConnsPerIP bound concurrent inbound WS connections (A2).
+	maxConns      int
+	maxConnsPerIP int
+
 	mu      sync.RWMutex
 	peers   map[string]*Peer
 	greeted map[string]bool // node ids we have replied hello to
@@ -199,6 +203,13 @@ func (c *Core) filterHostDrift(drift []string) []string {
 // configured.
 func (c *Core) SetSharedSecret(secret string) {
 	c.sharedSecret = secret
+}
+
+// SetLimits configures the global and per-IP inbound connection limits. A
+// limit <= 0 disables that limit.
+func (c *Core) SetLimits(maxConns, maxConnsPerIP int) {
+	c.maxConns = maxConns
+	c.maxConnsPerIP = maxConnsPerIP
 }
 
 // Idle reports whether the node has no active (running, dispatched, or
@@ -344,8 +355,9 @@ func (c *Core) Shutdown(ctx context.Context) {
 // ctx is done.
 func (c *Core) Listen(ctx context.Context, addr string) error {
 	srv := bus.NewServer(addr, c.logger, func(conn *bus.Conn, _ string) {
-		go c.handleInbound(ctx, conn)
+		c.handleInbound(ctx, conn)
 	})
+	srv.SetLimits(c.maxConns, c.maxConnsPerIP)
 	return srv.Listen(ctx)
 }
 
@@ -360,6 +372,7 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 		conn.Close()
 	}()
 	go conn.StartPingLoop(ctx, 30*time.Second)
+	helloSeen := false
 	for {
 		var env bus.Envelope
 		if err := conn.ReadJSON(&env); err != nil {
@@ -380,6 +393,12 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 			return
 		}
 		c.dispatch(ctx, conn, env)
+		if !helloSeen {
+			helloSeen = true
+			// Hello completed: switch from the short server-side hello deadline
+			// to the normal pong/keepalive deadline.
+			_ = conn.ResetReadDeadline()
+		}
 	}
 }
 

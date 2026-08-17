@@ -16,6 +16,7 @@ import (
 	"github.com/xenith/panda/internal/scheduler"
 	"github.com/xenith/panda/internal/security"
 	"github.com/xenith/panda/internal/skills"
+	"github.com/xenith/panda/internal/storage"
 )
 
 // handleDelegate processes an incoming task_delegate. It decides where the
@@ -443,6 +444,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			trackTask(c, task.Project, required, task.Title, false)
 			return bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, OK: false, ExitCode: 1, Stderr: msg,
+				Tokens: res.Tokens, Cost: res.Cost,
 			}, nil
 		}
 	}
@@ -459,7 +461,10 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 		c.logTask(task.Title, true)
 		trackTask(c, task.Project, required, task.Title, true)
-		return bus.TaskResultPayload{TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: 0, Stdout: res.Stdout}, nil
+		return bus.TaskResultPayload{
+			TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: 0, Stdout: res.Stdout,
+			Tokens: res.Tokens, Cost: res.Cost,
+		}, nil
 	}
 
 	if !res.OK {
@@ -473,6 +478,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		trackTask(c, task.Project, required, task.Title, false)
 		return bus.TaskResultPayload{
 			TaskID: taskID, AttemptID: attemptID, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
+			Tokens: res.Tokens, Cost: res.Cost,
 		}, nil
 	}
 
@@ -488,6 +494,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	trackTask(c, task.Project, required, task.Title, true)
 	return bus.TaskResultPayload{
 		TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
+		Tokens: res.Tokens, Cost: res.Cost,
 	}, nil
 }
 
@@ -859,6 +866,24 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			c.logger.Warn("fail from result", "task", p.TaskID, "err", err)
 		}
 	}
+
+	// Record delegation outcome for scheduling analysis (B2). Only record when
+	// this node actually delegated the task to the sender of the result.
+	if target, err := c.store.DispatchTarget(ctx, p.TaskID); err == nil && target == env.From {
+		delegateTs, err := c.store.LastDelegateTime(ctx, p.TaskID)
+		if err != nil {
+			c.logger.Warn("last delegate time", "task", p.TaskID, "err", err)
+		}
+		var latencyMs int64
+		if delegateTs > 0 {
+			latencyMs = (storage.Now() - delegateTs) * 1000
+		}
+		if err := c.store.RecordDelegationMetric(ctx, p.TaskID, string(c.nodeID), env.From,
+			t.Requires, p.OK, latencyMs, p.Tokens); err != nil {
+			c.logger.Warn("record delegation metric", "task", p.TaskID, "err", err)
+		}
+	}
+
 	// Relay the result up the delegation chain so the root scheduler learns
 	// the outcome (a root with no predecessor is a no-op).
 	c.relayToParent(ctx, bus.MsgTaskResult, t.Chain, p)

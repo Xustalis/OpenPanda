@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestMain runs the fake MCP server when PANDA_MCP_FAKE is set, so the client
@@ -60,6 +61,11 @@ func fakeServer() {
 						"description": "always reports an error",
 						"inputSchema": map[string]any{"type": "object"},
 					},
+					{
+						"name":        "hang",
+						"description": "never responds",
+						"inputSchema": map[string]any{"type": "object"},
+					},
 				},
 			})
 		case "tools/call":
@@ -68,12 +74,18 @@ func fakeServer() {
 				Arguments map[string]any `json:"arguments"`
 			}
 			_ = json.Unmarshal(req.Params, &params)
-			if params.Name == "failing" {
+			switch params.Name {
+			case "failing":
 				respond(req.ID, map[string]any{
 					"content": []map[string]any{{"type": "text", "text": "boom"}},
 					"isError": true,
 				})
-			} else {
+			case "hang":
+				// Never respond, so the client must hit its call timeout and
+				// kill the process group. Use a long sleep (not select{}) so the
+				// Go runtime deadlock detector does not terminate the fake server.
+				time.Sleep(1 * time.Hour)
+			default:
 				respond(req.ID, map[string]any{
 					"content": []map[string]any{{"type": "text", "text": fmt.Sprintf("echo: %v", params.Arguments["x"])}},
 				})
@@ -102,8 +114,8 @@ func TestStdioRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools) != 2 || tools[0].Name != "echo" {
-		t.Fatalf("tools = %+v, want echo + failing", tools)
+	if len(tools) != 3 || tools[0].Name != "echo" {
+		t.Fatalf("tools = %+v, want echo + failing + hang", tools)
 	}
 
 	got, err := client.CallTool(context.Background(), "echo", map[string]any{"x": "hello"})
@@ -126,5 +138,35 @@ func TestCallToolError(t *testing.T) {
 	// A server signalling isError must surface as an error, not silent text.
 	if _, err := client.CallTool(context.Background(), "failing", nil); err == nil {
 		t.Fatal("call tool: expected an error for an isError response")
+	}
+}
+
+// TestCallToolTimeoutKillsProcess verifies that a hung MCP tool call hits the
+// hard timeout and kills the child process group, leaving the client unable to
+// make further calls.
+func TestCallToolTimeoutKillsProcess(t *testing.T) {
+	t.Setenv("PANDA_MCP_FAKE", "1")
+	client, err := NewStdioClient(context.Background(), os.Args[0])
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	defer client.Close()
+
+	client.callTimeout = 500 * time.Millisecond
+
+	start := time.Now()
+	_, err = client.CallTool(context.Background(), "hang", nil)
+	elapsed := time.Since(start)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected timeout error, got %v", err)
+	}
+	if elapsed > 2*client.callTimeout {
+		t.Fatalf("timeout took too long: %v", elapsed)
+	}
+
+	// After the process group is killed, subsequent calls must fail.
+	_, err = client.CallTool(context.Background(), "echo", map[string]any{"x": "hello"})
+	if err == nil {
+		t.Fatal("expected error after process was killed")
 	}
 }

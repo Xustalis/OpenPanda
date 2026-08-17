@@ -247,6 +247,20 @@ go test ./internal/core/ -run 'TestTwoNodeProtocol|TestDelegateIdempotent|TestCa
 
 ## 部署
 
+### 网络安全基线
+
+PANDA 节点默认使用明文 WebSocket（`ws://`）。**明文 WebSocket 只允许在可信私有路径上使用：**
+
+- 本机回环（如 `127.0.0.1`、`localhost`）。
+- 你控制的私有覆盖网络，例如 **Tailscale** 或 VPN。
+- 所有设备均受信任的物理隔离局域网。
+
+**只要任一 PANDA peer 跨越公网，就必须在 WebSocket 监听器前终结 TLS**（如 nginx、Caddy、Traefik），并在 peer 地址中使用 `wss://`。`shared_secret` 仅用于节点间 hello 的 HMAC 鉴权，**不能替代传输层加密**——请勿将明文 `ws://` 监听直接暴露到公网。
+
+可选的 `panel_addr` 为旧版 PWA 侧车提供纯 HTTP 服务，请保持回环，或同样置于 TLS 反向代理之后。
+
+### 内存占用
+
 PANDA 面向低功耗设备。上硬件前请先验证稳态内存——单次 `ps` 采样因 GC 噪声并不可靠，多采几次：
 
 ```bash

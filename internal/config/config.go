@@ -30,11 +30,13 @@ type NodeConfig struct {
 // PanelToken are read only by the optional webui sidecar (webui/cmd/panel), not
 // by the kernel daemon.
 type NetworkConfig struct {
-	ListenAddr   string   `yaml:"listen_addr"`   // e.g. ":7836"
-	PanelAddr    string   `yaml:"panel_addr"`    // webui sidecar HTTP listener; loopback by default (P1-24)
-	PanelToken   string   `yaml:"panel_token"`   // Bearer token guarding /api/* in the webui sidecar
-	SharedSecret string   `yaml:"shared_secret"` // HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it
-	Peers        []string `yaml:"peers"`         // e.g. "orangepi3b.tailnet-name.ts.net:7836"
+	ListenAddr          string   `yaml:"listen_addr"`            // e.g. ":7836"
+	PanelAddr           string   `yaml:"panel_addr"`             // webui sidecar HTTP listener; loopback by default (P1-24)
+	PanelToken          string   `yaml:"panel_token"`            // Bearer token guarding /api/* in the webui sidecar
+	SharedSecret        string   `yaml:"shared_secret"`          // HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it
+	Peers               []string `yaml:"peers"`                  // e.g. "orangepi3b.tailnet-name.ts.net:7836"
+	MaxConnections      int      `yaml:"max_connections"`        // global concurrent WS connection limit (0 = unlimited)
+	MaxConnectionsPerIP int      `yaml:"max_connections_per_ip"` // per-remote-IP concurrent WS connection limit (0 = unlimited)
 }
 
 // StorageConfig controls local persistence.
@@ -87,6 +89,9 @@ func Default() *Config {
 			// the LAN. Set panel_addr explicitly to expose it (e.g. behind a
 			// TLS reverse proxy).
 			PanelAddr: "127.0.0.1:7840",
+			// Conservative defaults for a personal device network.
+			MaxConnections:      64,
+			MaxConnectionsPerIP: 8,
 		},
 		Storage: StorageConfig{
 			DBPath:       "./data/panda.db",

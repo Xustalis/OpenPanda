@@ -3,18 +3,22 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/xenith/panda/internal/config"
 	"github.com/xenith/panda/internal/core"
 	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/panda/internal/security"
 	"github.com/xenith/panda/internal/storage"
 )
 
@@ -311,4 +315,118 @@ func ts(unix int64) string {
 		return "-"
 	}
 	return time.Unix(unix, 0).Format(time.RFC3339)
+}
+
+// runAudit implements `panda audit verify [--task <id>]` — verify the hash
+// chain of either the global audit_log or one task's event timeline.
+func runAudit(args []string) {
+	fs := flag.NewFlagSet("audit", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config.yaml")
+	taskID := fs.String("task", "", "verify the event chain for a specific task (empty = verify global audit chain)")
+	fs.Parse(args)
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, store, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	if *taskID != "" {
+		if err := store.VerifyTaskEventChain(context.Background(), *taskID); err != nil {
+			fmt.Fprintf(os.Stderr, "panda: task event chain broken: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("task %s event chain: OK\n", *taskID)
+		return
+	}
+
+	audit := security.NewAudit(db)
+	if err := audit.VerifyChain(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "panda: audit chain broken: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("audit chain: OK")
+}
+
+// runMetrics implements `panda metrics [--csv]` — export delegation metrics.
+func runMetrics(args []string) {
+	fs := flag.NewFlagSet("metrics", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config.yaml")
+	asCSV := fs.Bool("csv", true, "output as CSV")
+	fs.Parse(args)
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, store, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	metrics, err := store.ListDelegationMetrics(context.Background())
+	if err != nil {
+		fatal("list metrics", err)
+	}
+	if len(metrics) == 0 {
+		fmt.Println("no delegation metrics")
+		return
+	}
+
+	if *asCSV {
+		w := csv.NewWriter(os.Stdout)
+		_ = w.Write([]string{"id", "task_id", "delegator", "executor", "abilities", "success", "latency_ms", "tokens", "created_at"})
+		for _, m := range metrics {
+			abilities := ""
+			if m.AbilitiesJSON != "" {
+				var parsed []string
+				if err := json.Unmarshal([]byte(m.AbilitiesJSON), &parsed); err == nil {
+					abilities = strings.Join(parsed, ";")
+				} else {
+					abilities = m.AbilitiesJSON
+				}
+			}
+			tokens := ""
+			if m.Tokens.Valid {
+				tokens = strconv.FormatInt(m.Tokens.Int64, 10)
+			}
+			_ = w.Write([]string{
+				strconv.FormatInt(m.ID, 10),
+				m.TaskID,
+				m.Delegator,
+				m.Executor,
+				abilities,
+				strconv.FormatBool(m.Success),
+				strconv.FormatInt(m.LatencyMs, 10),
+				tokens,
+				ts(m.CreatedAt),
+			})
+		}
+		w.Flush()
+		if err := w.Error(); err != nil {
+			fatal("write csv", err)
+		}
+		return
+	}
+
+	for _, m := range metrics {
+		abilities := ""
+		if m.AbilitiesJSON != "" {
+			var parsed []string
+			if err := json.Unmarshal([]byte(m.AbilitiesJSON), &parsed); err == nil {
+				abilities = strings.Join(parsed, ", ")
+			}
+		}
+		tokens := "-"
+		if m.Tokens.Valid {
+			tokens = strconv.FormatInt(m.Tokens.Int64, 10)
+		}
+		fmt.Printf("%d  %s  %s→%s  ok=%v  latency=%dms  tokens=%s  abilities=%s\n",
+			m.ID, ts(m.CreatedAt), m.Delegator, m.Executor, m.Success, m.LatencyMs, tokens, abilities)
+	}
 }

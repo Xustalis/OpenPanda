@@ -68,7 +68,7 @@ type Task struct {
 	// Authorized records whether the user consented to executing tier-2
 	// (irreversible) commands. It is server-side state (design §16 / P0-1), not
 	// wire-carried, so a delegated task cannot forge authorization.
-	Authorized   bool
+	Authorized bool
 	// Requires is the capability set the task was routed with. Persisted so a
 	// decline can be re-routed to the next-best node without the original wire
 	// payload (P1-5).

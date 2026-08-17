@@ -61,6 +61,12 @@ func main() {
 		case "skill":
 			runSkill(os.Args[2:])
 			return
+		case "metrics":
+			runMetrics(os.Args[2:])
+			return
+		case "audit":
+			runAudit(os.Args[2:])
+			return
 		case "version":
 			fmt.Printf("panda %s\n", version)
 			return
@@ -68,7 +74,7 @@ func main() {
 			// A bare unknown word must not fall through to runDaemon (P1-25):
 			// "panda statsu" (a typo) would otherwise start a resident daemon.
 			fmt.Fprintf(os.Stderr, "panda: unknown subcommand %q\n", os.Args[1])
-			fmt.Fprintln(os.Stderr, "usage: panda [ask|status|queue|task|cancel|approve|reject|logs|skill|version] — or no subcommand to run the daemon")
+			fmt.Fprintln(os.Stderr, "usage: panda [ask|status|queue|task|cancel|approve|reject|logs|skill|metrics|audit|version] — or no subcommand to run the daemon")
 			os.Exit(2)
 		}
 	}
@@ -119,6 +125,7 @@ func runDaemon() {
 	coreNode.SetWorkDir(cfg.Storage.WorkPath)
 	coreNode.SetHostStatePaths(hostStatePaths(cfg))
 	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
+	coreNode.SetLimits(cfg.Network.MaxConnections, cfg.Network.MaxConnectionsPerIP)
 
 	// Attach the memory layer (design §17/§8): project-memory injection into
 	// agent execution context, daily logging that feeds the Dreaming engine, and

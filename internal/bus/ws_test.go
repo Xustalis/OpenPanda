@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,7 +20,7 @@ func startTestServer(t *testing.T, addr string, handler func(*Conn)) (context.Ca
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	srv := NewServer(addr, testLogger(), func(conn *Conn, _ string) {
-		go handler(conn)
+		handler(conn)
 	})
 	done := make(chan error, 1)
 	go func() { done <- srv.Listen(ctx) }()
@@ -113,15 +115,13 @@ func TestPingLoopSendsPings(t *testing.T) {
 	defer cancel()
 
 	srv := NewServer("127.0.0.1:17877", testLogger(), func(conn *Conn, _ string) {
-		go func() {
-			go conn.StartPingLoop(ctx, 20*time.Millisecond)
-			var env Envelope
-			for {
-				if err := conn.ReadJSON(&env); err != nil {
-					return
-				}
+		go conn.StartPingLoop(ctx, 20*time.Millisecond)
+		var env Envelope
+		for {
+			if err := conn.ReadJSON(&env); err != nil {
+				return
 			}
-		}()
+		}
 	})
 	srvDone := make(chan error, 1)
 	go func() { srvDone <- srv.Listen(ctx) }()
@@ -154,4 +154,126 @@ func TestPingLoopSendsPings(t *testing.T) {
 func isReadTimeout(err error) bool {
 	var netErr interface{ Timeout() bool }
 	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+// TestServerDropsSlowHello verifies an inbound WebSocket connection that never
+// sends a hello is closed within helloTimeout.
+func TestServerDropsSlowHello(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	srv := NewServer("127.0.0.1:17879", testLogger(), func(conn *Conn, _ string) {
+		var env Envelope
+		for {
+			if err := conn.ReadJSON(&env); err != nil {
+				return
+			}
+		}
+	})
+	srv.helloTimeout = 500 * time.Millisecond
+	done := make(chan error, 1)
+	go func() { done <- srv.Listen(ctx) }()
+	time.Sleep(100 * time.Millisecond)
+
+	ws, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:17879/ws", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer ws.Close()
+
+	start := time.Now()
+	// Read without sending anything; the server should close us once
+	// srv.helloTimeout expires.
+	_ = ws.SetReadDeadline(time.Now().Add(srv.helloTimeout + 500*time.Millisecond))
+	_, _, err = ws.ReadMessage()
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("expected slow hello to be closed")
+	}
+	if elapsed < srv.helloTimeout-100*time.Millisecond {
+		t.Fatalf("closed too fast: %v", elapsed)
+	}
+}
+
+// TestServerEnforcesConnectionLimits verifies global and per-IP connection
+// limits are applied before the WebSocket upgrade.
+func TestServerEnforcesConnectionLimits(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conns := make(chan *Conn, 4)
+	// Use two separate channels instead of reassigning one variable: the handler
+	// closure captures the variable by reference, so reassignment races with the
+	// goroutine still reading the first channel.
+	block1 := make(chan struct{})
+	block2 := make(chan struct{})
+	var block atomic.Value
+	block.Store(block1)
+	srv := NewServer("127.0.0.1:17880", testLogger(), func(conn *Conn, _ string) {
+		conns <- conn
+		// Block until the test releases so connections count as active.
+		<-block.Load().(chan struct{})
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- srv.Listen(ctx) }()
+	time.Sleep(100 * time.Millisecond)
+
+	dialer := *websocket.DefaultDialer
+	dialer.HandshakeTimeout = 2 * time.Second
+
+	// Per-IP limit: allow only one connection from the same IP.
+	srv.SetLimits(10, 1)
+
+	ws1, resp, err := dialer.Dial("ws://127.0.0.1:17880/ws", nil)
+	if err != nil {
+		t.Fatalf("first dial: %v (status %d)", err, statusOf(resp))
+	}
+	defer ws1.Close()
+
+	_, resp, err = dialer.Dial("ws://127.0.0.1:17880/ws", nil)
+	if err == nil {
+		t.Fatalf("second same-IP dial should have been rejected")
+	}
+	if statusOf(resp) != http.StatusServiceUnavailable {
+		t.Fatalf("second same-IP status = %d, want 503", statusOf(resp))
+	}
+
+	// Release the first connection and reset limits for the global-limit check.
+	// With global=2 and per-IP=10, three same-IP connections should hit the
+	// global limit on the third.
+	close(block1)
+	// Wait for the handler goroutine to unblock and decrement counters.
+	time.Sleep(100 * time.Millisecond)
+
+	block.Store(block2)
+	srv.SetLimits(2, 10)
+
+	ws2, resp, err := dialer.Dial("ws://127.0.0.1:17880/ws", nil)
+	if err != nil {
+		t.Fatalf("global-limit first dial: %v (status %d)", err, statusOf(resp))
+	}
+	defer ws2.Close()
+
+	ws3, resp, err := dialer.Dial("ws://127.0.0.1:17880/ws", nil)
+	if err != nil {
+		t.Fatalf("global-limit second dial: %v (status %d)", err, statusOf(resp))
+	}
+	defer ws3.Close()
+
+	_, resp, err = dialer.Dial("ws://127.0.0.1:17880/ws", nil)
+	if err == nil {
+		t.Fatalf("third dial should have been rejected by global limit")
+	}
+	if statusOf(resp) != http.StatusServiceUnavailable {
+		t.Fatalf("third dial status = %d, want 503", statusOf(resp))
+	}
+	close(block2)
+}
+
+func statusOf(resp *http.Response) int {
+	if resp == nil {
+		return 0
+	}
+	return resp.StatusCode
 }

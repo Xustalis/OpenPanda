@@ -199,7 +199,9 @@ func (s *TaskStore) withTx(ctx context.Context, fn func(tx *sql.Tx) error) error
 	return tx.Commit()
 }
 
-// recordEventTx is recordEvent inside an existing transaction.
+// recordEventTx is recordEvent inside an existing transaction. It links the
+// new row into the per-task audit chain by computing the previous event's hash
+// and storing it as prev_hash (A3).
 func (s *TaskStore) recordEventTx(ctx context.Context, tx *sql.Tx, taskID, typ string, data any) error {
 	var raw []byte
 	switch v := data.(type) {
@@ -208,9 +210,29 @@ func (s *TaskStore) recordEventTx(ctx context.Context, tx *sql.Tx, taskID, typ s
 	default:
 		raw, _ = json.Marshal(v)
 	}
-	_, err := tx.ExecContext(ctx,
-		`INSERT INTO task_events (task_id, ts, type, data_json) VALUES (?, ?, ?, ?)`,
-		taskID, s.now(), typ, string(raw))
+	ts := s.now()
+
+	var prevHash string
+	var prev struct {
+		PrevHash string
+		TS       int64
+		Type     string
+		DataJSON string
+	}
+	err := tx.QueryRowContext(ctx,
+		`SELECT prev_hash, ts, type, data_json FROM task_events
+		 WHERE task_id=? ORDER BY id DESC LIMIT 1`, taskID).Scan(
+		&prev.PrevHash, &prev.TS, &prev.Type, &prev.DataJSON)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read prev event: %w", err)
+	}
+	if err == nil {
+		prevHash = hashEvent(prev.PrevHash, taskID, prev.TS, prev.Type, prev.DataJSON)
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO task_events (task_id, ts, type, data_json, prev_hash) VALUES (?, ?, ?, ?, ?)`,
+		taskID, ts, typ, string(raw), prevHash)
 	if err != nil {
 		return fmt.Errorf("record event %s: %w", typ, err)
 	}
@@ -279,20 +301,9 @@ func (s *TaskStore) applyState(ctx context.Context, taskID, from, to, owner, att
 // recordEvent appends to task_events. The data parameter is either a map or
 // already-marshaled JSON bytes.
 func (s *TaskStore) recordEvent(ctx context.Context, taskID, typ string, data any) error {
-	var raw []byte
-	switch v := data.(type) {
-	case []byte:
-		raw = v
-	default:
-		raw, _ = json.Marshal(v)
-	}
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO task_events (task_id, ts, type, data_json) VALUES (?, ?, ?, ?)`,
-		taskID, s.now(), typ, string(raw))
-	if err != nil {
-		return fmt.Errorf("record event %s: %w", typ, err)
-	}
-	return nil
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		return s.recordEventTx(ctx, tx, taskID, typ, data)
+	})
 }
 
 // Queue transitions submitted -> queued.
@@ -898,7 +909,7 @@ func (s *TaskStore) ListByState(ctx context.Context, state string) ([]Task, erro
 // Events returns the event timeline for a task, oldest first.
 func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, task_id, ts, type, data_json FROM task_events
+		`SELECT id, task_id, ts, type, data_json, prev_hash FROM task_events
 		 WHERE task_id = ? ORDER BY id ASC`, taskID)
 	if err != nil {
 		return nil, err
@@ -907,12 +918,30 @@ func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) 
 	var out []Event
 	for rows.Next() {
 		var e Event
-		if err := rows.Scan(&e.ID, &e.TaskID, &e.TS, &e.Type, &e.DataJSON); err != nil {
+		if err := rows.Scan(&e.ID, &e.TaskID, &e.TS, &e.Type, &e.DataJSON, &e.PrevHash); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// VerifyTaskEventChain verifies the per-task hash chain for taskID. It returns
+// nil if the chain is intact, or an error describing the first break.
+func (s *TaskStore) VerifyTaskEventChain(ctx context.Context, taskID string) error {
+	events, err := s.Events(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("load events: %w", err)
+	}
+	var prevHash string
+	for i, e := range events {
+		if e.PrevHash != prevHash {
+			return fmt.Errorf("event %d (id=%d) prev_hash mismatch: got %s, want %s",
+				i+1, e.ID, e.PrevHash, prevHash)
+		}
+		prevHash = hashEvent(e.PrevHash, e.TaskID, e.TS, e.Type, e.DataJSON)
+	}
+	return nil
 }
 
 // Event is one task_events row.
@@ -922,6 +951,7 @@ type Event struct {
 	TS       int64
 	Type     string
 	DataJSON string
+	PrevHash string
 }
 
 // RotateAttempt mints a new attempt_id for a retry/transfer. The caller must

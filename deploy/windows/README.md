@@ -15,3 +15,12 @@ make build-windows-amd64        # → bin/panda-windows-amd64.exe
 - `start-panda-hidden.vbs` — wscript 静默启动（隐藏窗口，计划任务/登录自启用）
 
 两个启动脚本都引用 `C:\panda\panda.exe`，所以改名是必须的，否则双击/静默启动会找不到二进制。
+
+## 网络安全约束
+
+PANDA 节点默认使用明文 WebSocket（`ws://`）。Windows 节点与其他节点通信时：
+
+- 仅在 Tailscale/VPN、回环或可信局域网内使用明文 WebSocket。
+- 若任一节点位于公网或跨互联网，必须在 WebSocket 监听器前部署 TLS 反向代理（如 Caddy、nginx），并将 peer 地址改为 `wss://`。
+
+`shared_secret` 只鉴权、不加密，不能替代 TLS。

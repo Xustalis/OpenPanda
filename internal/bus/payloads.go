@@ -81,13 +81,15 @@ type TaskDeclinePayload struct {
 
 // TaskResultPayload is the completion result.
 type TaskResultPayload struct {
-	TaskID    string `json:"task_id"`
-	AttemptID string `json:"attempt_id"`
-	OK        bool   `json:"ok"`
-	ExitCode  int    `json:"exit_code"`
-	Stdout    string `json:"stdout,omitempty"`
-	Stderr    string `json:"stderr,omitempty"`
-	Artifacts string `json:"artifacts,omitempty"`
+	TaskID    string  `json:"task_id"`
+	AttemptID string  `json:"attempt_id"`
+	OK        bool    `json:"ok"`
+	ExitCode  int     `json:"exit_code"`
+	Stdout    string  `json:"stdout,omitempty"`
+	Stderr    string  `json:"stderr,omitempty"`
+	Artifacts string  `json:"artifacts,omitempty"`
+	Tokens    int     `json:"tokens,omitempty"`
+	Cost      float64 `json:"cost,omitempty"`
 }
 
 // TaskCancelPayload requests cancellation.

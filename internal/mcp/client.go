@@ -17,9 +17,14 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xenith/panda/internal/executil"
 )
+
+// defaultCallTimeout is the hard upper bound for any single MCP request,
+// matching the commander adapter's execution ceiling (P1-17 / A4).
+const defaultCallTimeout = 630 * time.Second
 
 // Tool is one tool advertised by an MCP server (the tools/list shape).
 type Tool struct {
@@ -31,11 +36,13 @@ type Tool struct {
 // Client is a stdio MCP client bound to one child server process. Requests are
 // serialized with a mutex because MCP stdio is a single ordered stream.
 type Client struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
-	mu     sync.Mutex
-	nextID int
+	cmd         *exec.Cmd
+	stdin       io.WriteCloser
+	stdout      *bufio.Reader
+	stdoutPipe  io.ReadCloser // closed on timeout/cleanup to unblock the reader goroutine
+	mu          sync.Mutex
+	nextID      int
+	callTimeout time.Duration
 }
 
 type rpcRequest struct {
@@ -67,7 +74,7 @@ func NewStdioClient(ctx context.Context, command string, args ...string) (*Clien
 	if err != nil {
 		return nil, fmt.Errorf("mcp: stdin pipe: %w", err)
 	}
-	stdout, err := cmd.StdoutPipe()
+	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("mcp: stdout pipe: %w", err)
 	}
@@ -75,7 +82,7 @@ func NewStdioClient(ctx context.Context, command string, args ...string) (*Clien
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("mcp: start %s: %w", command, err)
 	}
-	c := &Client{cmd: cmd, stdin: stdin, stdout: bufio.NewReader(stdout)}
+	c := &Client{cmd: cmd, stdin: stdin, stdoutPipe: stdoutPipe, stdout: bufio.NewReader(stdoutPipe), callTimeout: defaultCallTimeout}
 	if err := c.initialize(ctx); err != nil {
 		_ = c.Close()
 		return nil, err
@@ -134,10 +141,15 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 	return b.String(), nil
 }
 
-// Close closes the child's stdin and waits for it to exit.
+// Close terminates the child server and waits for it to exit. It kills the
+// whole process group so orphaned grandchildren are cleaned up (P1-17 / A4).
 func (c *Client) Close() error {
+	_ = c.kill()
 	if c.stdin != nil {
 		_ = c.stdin.Close()
+	}
+	if c.stdoutPipe != nil {
+		_ = c.stdoutPipe.Close()
 	}
 	if c.cmd != nil && c.cmd.Process != nil {
 		_ = c.cmd.Wait()
@@ -145,10 +157,21 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// kill sends SIGKILL to the child's process group. It is safe to call multiple
+// times and is a no-op once the process has already exited.
+func (c *Client) kill() error {
+	if c.cmd == nil || c.cmd.Process == nil {
+		return nil
+	}
+	// executil.CommandContext sets cmd.Cancel to kill the process group.
+	return c.cmd.Cancel()
+}
+
 // call sends one JSON-RPC request and reads the matching response. It assumes a
 // newline-delimited stream and that the server does not interleave unsolicited
 // notifications with responses (true of the filesystem/git/fetch servers PANDA
-// targets).
+// targets). A hard callTimeout bounds the wait; on expiry the whole child
+// process group is killed so a hung MCP server cannot stall the ask loop.
 func (c *Client) call(ctx context.Context, method string, params any, out any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -161,19 +184,45 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 	if _, err := c.stdin.Write(append(b, '\n')); err != nil {
 		return fmt.Errorf("mcp: write request: %w", err)
 	}
-	resp, err := c.readResponse()
-	if err != nil {
-		return err
+
+	callCtx, cancel := context.WithTimeout(ctx, c.callTimeout)
+	defer cancel()
+
+	type result struct {
+		resp rpcResponse
+		err  error
 	}
-	if resp.Error != nil {
-		return fmt.Errorf("mcp: rpc error %d: %s", resp.Error.Code, resp.Error.Message)
-	}
-	if out != nil {
-		if err := json.Unmarshal(resp.Result, out); err != nil {
-			return fmt.Errorf("mcp: decode result: %w", err)
+	respCh := make(chan result, 1)
+	go func() {
+		r, e := c.readResponse()
+		respCh <- result{resp: r, err: e}
+	}()
+
+	select {
+	case <-callCtx.Done():
+		_ = c.kill()
+		// Close stdout to unblock the reader goroutine, then drain it so a
+		// subsequent call cannot start a second reader racing on the same
+		// bufio.Reader.
+		if c.stdoutPipe != nil {
+			_ = c.stdoutPipe.Close()
 		}
+		<-respCh
+		return fmt.Errorf("mcp: call %s timed out after %s: %w", method, c.callTimeout, callCtx.Err())
+	case res := <-respCh:
+		if res.err != nil {
+			return res.err
+		}
+		if res.resp.Error != nil {
+			return fmt.Errorf("mcp: rpc error %d: %s", res.resp.Error.Code, res.resp.Error.Message)
+		}
+		if out != nil {
+			if err := json.Unmarshal(res.resp.Result, out); err != nil {
+				return fmt.Errorf("mcp: decode result: %w", err)
+			}
+		}
+		return nil
 	}
-	return nil
 }
 
 // readResponse reads lines from stdout, skipping notifications (messages with

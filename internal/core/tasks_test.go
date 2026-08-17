@@ -497,3 +497,58 @@ func TestForceFailDoesNotOverwriteTerminal(t *testing.T) {
 		t.Fatalf("state = %s, want done (force fail must not overwrite)", got.State)
 	}
 }
+
+// TestTaskEventChainValid verifies the per-task hash chain is intact after a
+// normal state-machine walk.
+func TestTaskEventChainValid(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "chain", "root")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	must(s.Queue(ctx, tk.TaskID, "root"))
+	must(s.Dispatch(ctx, tk.TaskID, "root", "win"))
+	must(s.Accept(ctx, tk.TaskID, "win"))
+	must(s.Complete(ctx, tk.TaskID, "win", map[string]any{"ok": true}))
+
+	if err := s.VerifyTaskEventChain(ctx, tk.TaskID); err != nil {
+		t.Fatalf("verify task event chain: %v", err)
+	}
+}
+
+// TestTaskEventChainTamperDetect verifies VerifyTaskEventChain detects a
+// mutated event payload: changing event 1's data invalidates event 2's link.
+func TestTaskEventChainTamperDetect(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "tamper", "root")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	must(s.Queue(ctx, tk.TaskID, "root"))
+	// Create a second event so tampering the first breaks the forward link.
+	must(s.Dispatch(ctx, tk.TaskID, "root", "win"))
+
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE task_events SET data_json=? WHERE task_id=? AND type=?`,
+		`{"tampered":true}`, tk.TaskID, EvQueue)
+	if err != nil {
+		t.Fatalf("tamper event: %v", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		t.Fatalf("expected to tamper 1 event, got %d", n)
+	}
+
+	if err := s.VerifyTaskEventChain(ctx, tk.TaskID); err == nil {
+		t.Fatalf("expected tamper detection error, got nil")
+	}
+}
