@@ -4,29 +4,47 @@ import { clearToken, getToken, onUnauthorized, setToken } from './api/client'
 import { locale, localeNames, locales, onLocaleChange, setLocale, t } from './i18n'
 import { QueueView } from './views/queue'
 import { DetailView } from './views/detail'
-import { AskView } from './views/ask'
+import { SessionsView } from './views/sessions'
 import { ProjectsView } from './views/projects'
 import { NodesView } from './views/nodes'
+import { SettingsView } from './views/settings'
+import { SkillsView } from './views/skills'
+import { SystemView } from './views/system'
+import { RemindersView } from './views/reminders'
+import { MemoryView } from './views/memory'
 
 type Route =
+  | { view: 'sessions'; id: string | null }
   | { view: 'queue' }
-  | { view: 'ask' }
   | { view: 'projects' }
   | { view: 'nodes' }
+  | { view: 'skills' }
+  | { view: 'reminders' }
+  | { view: 'memory' }
+  | { view: 'system' }
+  | { view: 'settings' }
   | { view: 'detail'; id: string }
 
 function parseHash(): Route {
   const hash = location.hash.replace(/^#\/?/, '')
   if (hash.startsWith('task/')) return { view: 'detail', id: decodeURIComponent(hash.slice(5)) }
-  if (hash === 'ask') return { view: 'ask' }
+  if (hash.startsWith('chat/')) return { view: 'sessions', id: decodeURIComponent(hash.slice(5)) }
+  if (hash === 'queue') return { view: 'queue' }
   if (hash === 'projects') return { view: 'projects' }
   if (hash === 'nodes') return { view: 'nodes' }
-  return { view: 'queue' }
+  if (hash === 'skills') return { view: 'skills' }
+  if (hash === 'reminders') return { view: 'reminders' }
+  if (hash === 'memory') return { view: 'memory' }
+  if (hash === 'system') return { view: 'system' }
+  if (hash === 'settings') return { view: 'settings' }
+  return { view: 'sessions', id: null }
 }
 
 function navigate(route: Route): void {
-  location.hash =
-    route.view === 'detail' ? `#/task/${encodeURIComponent(route.id)}` : `#/${route.view}`
+  if (route.view === 'detail') location.hash = `#/task/${encodeURIComponent(route.id)}`
+  else if (route.view === 'sessions')
+    location.hash = route.id ? `#/chat/${encodeURIComponent(route.id)}` : '#/chat'
+  else location.hash = `#/${route.view}`
 }
 
 /** Re-render the subtree on locale change (the whole shell is cheap). */
@@ -72,22 +90,29 @@ export function App() {
   return (
     <div class="shell">
       <aside class="sidebar">
-        <a href="#/queue" class="wordmark-link">
+        <a href="#/chat" class="wordmark-link">
           <PandaWordmark />
         </a>
         {(
           [
+            ['sessions', 'nav.sessions'],
             ['queue', 'nav.queue'],
-            ['ask', 'nav.ask'],
             ['projects', 'nav.projects'],
             ['nodes', 'nav.nodes'],
+            ['skills', 'nav.skills'],
+            ['reminders', 'nav.reminders'],
+            ['memory', 'nav.memory'],
+            ['system', 'nav.system'],
           ] as const
         ).map(([v, key]) => (
-          <a key={v} href={`#/${v}`} class={`nav-item${active === v ? ' active' : ''}`}>
+          <a key={v} href={v === 'sessions' ? '#/chat' : `#/${v}`} class={`nav-item${active === v ? ' active' : ''}`}>
             {t(key)}
           </a>
         ))}
         <div class="sidebar-footer">
+          <a href="#/settings" class={`nav-item${active === 'settings' ? ' active' : ''}`}>
+            {t('nav.settings')}
+          </a>
           <LocalePicker />
           <button
             class="nav-item"
@@ -101,15 +126,24 @@ export function App() {
         </div>
       </aside>
       <main class="main">
+        {route.view === 'sessions' && (
+          <SessionsView
+            activeId={route.id}
+            onOpenSession={(id) => navigate({ view: 'sessions', id: id || null })}
+            onOpenTask={(id) => navigate({ view: 'detail', id })}
+          />
+        )}
         {route.view === 'queue' && <QueueView onOpen={(id) => navigate({ view: 'detail', id })} />}
         {route.view === 'detail' && (
           <DetailView id={route.id} onBack={() => navigate({ view: 'queue' })} />
         )}
-        {route.view === 'ask' && (
-          <AskView onTaskCreated={(id) => navigate({ view: 'detail', id })} />
-        )}
         {route.view === 'projects' && <ProjectsView onOpenProject={() => navigate({ view: 'queue' })} />}
         {route.view === 'nodes' && <NodesView />}
+        {route.view === 'skills' && <SkillsView />}
+        {route.view === 'reminders' && <RemindersView />}
+        {route.view === 'memory' && <MemoryView />}
+        {route.view === 'system' && <SystemView />}
+        {route.view === 'settings' && <SettingsView />}
       </main>
     </div>
   )

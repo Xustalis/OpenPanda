@@ -23,15 +23,19 @@ const anthropicVersion = "2023-06-01"
 // hardcoded 1024 was), while still bounding a runaway generation.
 const defaultMaxTokens = 4096
 
-// Client talks to an Anthropic-compatible Messages API (DeepSeek's
-// /anthropic endpoint). It is small and dependency-free so the core daemon
-// does not pull in an SDK.
+// Client talks to an Anthropic-compatible Messages API or an OpenAI-compatible
+// Chat Completions API, selected by the config's api_type. It is small and
+// dependency-free so the core daemon does not pull in an SDK.
 type Client struct {
+	apiType   string
 	baseURL   string
 	apiKey    string
 	model     string
 	maxTokens int
 	hc        *http.Client
+	// hcStream serves streaming requests: no total timeout (a long stream is
+	// legitimate); liveness comes from the caller's context.
+	hcStream  *http.Client
 	maxRetry  int
 	retryBase time.Duration
 }
@@ -58,11 +62,13 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		maxTokens = defaultMaxTokens
 	}
 	return &Client{
+		apiType:   model.NormalizedAPIType(),
 		baseURL:   strings.TrimRight(base, "/"),
 		apiKey:    model.APIKey,
 		model:     name,
 		maxTokens: maxTokens,
 		hc:        &http.Client{Timeout: 30 * time.Second},
+		hcStream:  &http.Client{},
 		maxRetry:  2,
 		retryBase: 500 * time.Millisecond,
 	}, nil
@@ -72,6 +78,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 type messagesRequest struct {
 	Model     string     `json:"model"`
 	MaxTokens int        `json:"max_tokens"`
+	Stream    bool       `json:"stream,omitempty"`
 	System    string     `json:"system,omitempty"`
 	Messages  []message  `json:"messages"`
 	Tools     []ToolSpec `json:"tools,omitempty"`
@@ -160,14 +167,26 @@ func (c *Client) CompleteTurns(ctx context.Context, system string, turns []Turn)
 }
 
 // CompleteTurnsWithTools runs one call with a conversation history and an
-// optional tool set, returning both text and any tool_use blocks. tool_choice is
-// left unset: the Messages API defaults to "auto" when tools are present, and
-// DeepSeek's Anthropic endpoint rejects the string "auto" (it wants the
-// internally-tagged object form). Omitting it is simpler and correct.
+// optional tool set, returning both text and any tool_use blocks. It dispatches
+// on the configured api type; the Anthropic path leaves tool_choice unset: the
+// Messages API defaults to "auto" when tools are present, and DeepSeek's
+// Anthropic endpoint rejects the string "auto" (it wants the internally-tagged
+// object form). Omitting it is simpler and correct.
 func (c *Client) CompleteTurnsWithTools(ctx context.Context, system string, turns []Turn, tools []ToolSpec) (Response, error) {
-	if c.apiKey == "" {
-		return Response{}, ErrNoKey
+	if c.apiType == config.APITypeOpenAI {
+		return c.completeOpenAI(ctx, system, turns, tools)
 	}
+	req := messagesRequest{Model: c.model, MaxTokens: c.maxTokens, System: system, Messages: turnsToMessages(turns)}
+	if len(tools) > 0 {
+		req.Tools = tools
+	}
+	return c.completeWithRetry(ctx, req)
+}
+
+// turnsToMessages converts the internal Turn history into Messages API
+// messages: a Turn with Blocks carries structured content, a plain Turn a
+// string content.
+func turnsToMessages(turns []Turn) []message {
 	msgs := make([]message, len(turns))
 	for i, t := range turns {
 		if len(t.Blocks) > 0 {
@@ -176,11 +195,78 @@ func (c *Client) CompleteTurnsWithTools(ctx context.Context, system string, turn
 			msgs[i] = message{Role: t.Role, Content: t.Content}
 		}
 	}
-	req := messagesRequest{Model: c.model, MaxTokens: c.maxTokens, System: system, Messages: msgs}
-	if len(tools) > 0 {
-		req.Tools = tools
+	return msgs
+}
+
+// completeOpenAI runs one non-streaming Chat Completions call with retry.
+func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn, tools []ToolSpec) (Response, error) {
+	if c.apiKey == "" {
+		return Response{}, ErrNoKey
 	}
-	return c.completeWithRetry(ctx, req)
+	req := oaiRequest{Model: c.model, MaxTokens: c.maxTokens, Messages: turnsToOpenAI(system, turns)}
+	if len(tools) > 0 {
+		req.Tools = specsToOpenAI(tools)
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return Response{}, fmt.Errorf("entry: marshal request: %w", err)
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= c.maxRetry; attempt++ {
+		if attempt > 0 {
+			if err := sleepCtx(ctx, c.retryBase<<uint(attempt-1)); err != nil {
+				return Response{}, err
+			}
+		}
+		resp, err := c.completeOnceOpenAI(ctx, payload)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if !retryable(err) {
+			break
+		}
+	}
+	return Response{}, lastErr
+}
+
+func (c *Client) completeOnceOpenAI(ctx context.Context, payload []byte) (Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(payload))
+	if err != nil {
+		return Response{}, err
+	}
+	httpReq.Header.Set("content-type", "application/json")
+	httpReq.Header.Set("authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.hc.Do(httpReq)
+	if err != nil {
+		if ctx.Err() != nil {
+			return Response{}, fmt.Errorf("entry: request: %w", err)
+		}
+		return Response{}, &transientError{err: err}
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return Response{}, &transientError{err: fmt.Errorf("read response: %w", err)}
+	}
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		return Response{}, &retryableError{status: resp.StatusCode, body: string(body)}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return Response{}, fmt.Errorf("entry: api status %d: %s", resp.StatusCode, truncate(string(body), 300))
+	}
+
+	var or oaiResponse
+	if err := json.Unmarshal(body, &or); err != nil {
+		return Response{}, fmt.Errorf("entry: parse response: %w", err)
+	}
+	if or.Error != nil {
+		return Response{}, fmt.Errorf("entry: api error: %s", or.Error.Message)
+	}
+	return parseOpenAIResponse(&or), nil
 }
 
 // completeWithRetry runs req with the configured retry/backoff and returns the

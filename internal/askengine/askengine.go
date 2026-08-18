@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xenith/openpanda/internal/config"
@@ -21,6 +23,7 @@ import (
 	"github.com/xenith/openpanda/internal/ledger"
 	"github.com/xenith/openpanda/internal/mcp"
 	"github.com/xenith/openpanda/internal/memory"
+	"github.com/xenith/openpanda/internal/reminders"
 	"github.com/xenith/openpanda/internal/skills"
 	"github.com/xenith/openpanda/internal/storage"
 )
@@ -43,18 +46,47 @@ type Options struct {
 type Engine struct {
 	cfg      *config.Config
 	db       *sql.DB
-	client   *entry.Client
-	registry *entry.Registry
+	client   atomic.Pointer[entry.Client]
 	injector *memory.Injector
 
-	mcp    *mcp.Client
-	logger *slog.Logger
+	// registry is swapped whole by SetMCPCommand; regMu guards the swap and
+	// gives in-flight Asks a stable registry reference.
+	regMu    sync.RWMutex
+	registry *entry.Registry
 
-	// sched is non-nil exactly when Options.CardPath was set.
+	hermes   *memory.Hermes
+	projects *memory.Projects
+	remind   *reminders.Store
+
+	mcp        *mcp.Client
+	mcpCommand string
+	logger     *slog.Logger
+
+	// sched is non-nil exactly when Options.CardPath was set. schedMu
+	// serializes task submission: a submit may temporarily pin the core's
+	// work dir to a session worktree, which must not interleave.
 	sched       *core.Core
+	schedMu     sync.Mutex
 	schedCtx    context.Context
 	schedCancel context.CancelFunc
 }
+
+// SetModel hot-swaps the entry model client at runtime (the settings page):
+// a failed build leaves the previous client serving.
+func (e *Engine) SetModel(mc config.ModelConfig) error {
+	c, err := entry.NewClient(mc)
+	if err != nil {
+		return err
+	}
+	e.client.Store(c)
+	return nil
+}
+
+// ModelConfig returns the engine's current model configuration.
+func (e *Engine) ModelConfig() config.ModelConfig { return e.cfg.Model }
+
+// Config returns the engine's loaded configuration.
+func (e *Engine) Config() *config.Config { return e.cfg }
 
 // Result is the outcome of one Ask call.
 type Result struct {
@@ -74,37 +106,68 @@ type Result struct {
 	ExitCode  int
 }
 
+// SetMCPCommand hot-swaps the stdio MCP server at runtime (the settings
+// page): a new registry is built (memory + system + reminder tools), the new
+// server spawned and its tools imported, then the swap happens atomically.
+// An empty command disables MCP. A failed spawn leaves the previous registry
+// and server serving. The ctx spawns the new server; the engine's own
+// lifetime is unchanged.
+func (e *Engine) SetMCPCommand(ctx context.Context, cmd string) error {
+	e.regMu.Lock()
+	defer e.regMu.Unlock()
+
+	reg := buildToolRegistry(e.hermes, e.projects, e.remind)
+	var client *mcp.Client
+	if cmd != "" {
+		parts := splitCommand(cmd)
+		if len(parts) == 0 {
+			return fmt.Errorf("askengine: empty MCP command")
+		}
+		var err error
+		client, err = mcp.NewStdioClient(ctx, parts[0], nil, parts[1:]...)
+		if err != nil {
+			return fmt.Errorf("askengine: start MCP server: %w", err)
+		}
+		if err := registerMCPTools(ctx, reg, client); err != nil {
+			client.Close()
+			return fmt.Errorf("askengine: register MCP tools: %w", err)
+		}
+	}
+
+	old := e.mcp
+	e.registry = reg
+	e.mcp = client
+	e.mcpCommand = cmd
+	if old != nil {
+		old.Close()
+	}
+	return nil
+}
+
+// MCPCommand returns the current MCP server command ("" = disabled).
+func (e *Engine) MCPCommand() string {
+	e.regMu.RLock()
+	defer e.regMu.RUnlock()
+	return e.mcpCommand
+}
+
+// currentRegistry snapshots the registry for one Ask.
+func (e *Engine) currentRegistry() *entry.Registry {
+	e.regMu.RLock()
+	defer e.regMu.RUnlock()
+	return e.registry
+}
+
 // New builds an engine from cfg: opens storage, wires memory stores and the
 // tool registry, connects the entry model client, optionally loads the
 // capability card (creating the scheduler core and dialing peers once so the
 // first classification already sees remote capabilities), and optionally
-// spawns the MCP server.
+// spawns the MCP server. An Options.MCPCommand of "" falls back to
+// config.yaml's mcp.command, so a configured server needs no CLI flag.
 func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error) {
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	}
-
-	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
-	projects := memory.NewProjects(cfg.Storage.ProjectsPath)
-	injector := memory.NewInjector(hermes, projects)
-	registry := buildToolRegistry(hermes, projects)
-
-	var mcpClient *mcp.Client
-	if cmd := opts.MCPCommand; cmd != "" {
-		parts := splitCommand(cmd)
-		if len(parts) == 0 {
-			return nil, fmt.Errorf("askengine: empty MCP command")
-		}
-		var err error
-		mcpClient, err = mcp.NewStdioClient(ctx, parts[0], nil, parts[1:]...)
-		if err != nil {
-			return nil, fmt.Errorf("askengine: start MCP server: %w", err)
-		}
-		if err := registerMCPTools(ctx, registry, mcpClient); err != nil {
-			mcpClient.Close()
-			return nil, fmt.Errorf("askengine: register MCP tools: %w", err)
-		}
 	}
 
 	db, err := storage.Open(cfg.Storage.DBPath)
@@ -116,6 +179,12 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		return nil, fmt.Errorf("askengine: migrate database: %w", err)
 	}
 
+	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
+	projects := memory.NewProjects(cfg.Storage.ProjectsPath)
+	injector := memory.NewInjector(hermes, projects)
+	remind := reminders.NewStore(db)
+	registry := buildToolRegistry(hermes, projects, remind)
+
 	client, err := entry.NewClient(cfg.Model)
 	if err != nil {
 		db.Close()
@@ -125,11 +194,24 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 	e := &Engine{
 		cfg:      cfg,
 		db:       db,
-		client:   client,
 		registry: registry,
 		injector: injector,
-		mcp:      mcpClient,
+		hermes:   hermes,
+		projects: projects,
+		remind:   remind,
 		logger:   logger,
+	}
+	e.client.Store(client)
+
+	mcpCmd := opts.MCPCommand
+	if mcpCmd == "" {
+		mcpCmd = cfg.MCP.Command
+	}
+	if mcpCmd != "" {
+		if err := e.SetMCPCommand(ctx, mcpCmd); err != nil {
+			e.Close()
+			return nil, err
+		}
 	}
 
 	if opts.CardPath != "" {
@@ -197,11 +279,29 @@ func (e *Engine) MaintainPeers(ctx context.Context) {
 	}
 }
 
+// StreamCallbacks receives live progress while an ask converges. OnDelta
+// delivers answer text incrementally (streaming); OnStatus delivers one-line
+// progress notes (tool calls, task submission).
+type StreamCallbacks struct {
+	OnDelta  func(text string)
+	OnStatus func(text string)
+}
+
 // Ask runs one prompt through the unified entry model. A tool_call intent is
 // executed (memory/MCP tools) and its result fed back, converging to a final
 // answer or task; a task is submitted through the scheduler core (local or
 // delegated) and its outcome returned.
 func (e *Engine) Ask(ctx context.Context, prompt string, authorize bool) (*Result, error) {
+	return e.AskTurns(ctx, nil, prompt, "", authorize, StreamCallbacks{})
+}
+
+// AskTurns is the session-aware ask: history carries the conversation so far
+// (plain user/assistant turns), workDir optionally pins where a classified
+// task executes (a session's git worktree), and the callbacks stream live
+// progress. A nil OnDelta still streams internally — it just is not forwarded.
+func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, workDir string, authorize bool, cb StreamCallbacks) (*Result, error) {
+	client := e.client.Load()
+
 	// Devices visible to classification: the local capability directory
 	// (populated by the daemon's heartbeats and our own peer dials).
 	devices, err := ledger.Query(e.db, "online", "")
@@ -216,10 +316,19 @@ func (e *Engine) Ask(ctx context.Context, prompt string, authorize bool) (*Resul
 		e.logger.Warn("load memory", "err", merr)
 	}
 
-	turns := []entry.Turn{{Role: "user", Content: prompt}}
+	turns := make([]entry.Turn, 0, len(history)+1)
+	turns = append(turns, history...)
+	turns = append(turns, entry.Turn{Role: "user", Content: prompt})
+	reg := e.currentRegistry()
 	const maxRounds = 6
 	for round := 0; round < maxRounds; round++ {
-		out, err := entry.ClassifyTurnsWithTools(ctx, e.client, devices, conversationMemory, turns, e.registry)
+		var out entry.Output
+		var err error
+		if cb.OnDelta != nil {
+			out, err = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, reg, cb.OnDelta)
+		} else {
+			out, err = entry.ClassifyTurnsWithTools(ctx, client, devices, conversationMemory, turns, reg)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -231,8 +340,14 @@ func (e *Engine) Ask(ctx context.Context, prompt string, authorize bool) (*Resul
 			if e.sched == nil {
 				return nil, fmt.Errorf("task output requires a capability card (engine built without CardPath)")
 			}
-			return e.submitTask(out.Task, authorize), nil
+			if cb.OnStatus != nil {
+				cb.OnStatus(fmt.Sprintf("submitting task: %s", out.Task.Title))
+			}
+			return e.submitTask(out.Task, authorize, workDir), nil
 		case entry.KindToolCall:
+			if cb.OnStatus != nil {
+				cb.OnStatus(fmt.Sprintf("running tool %s…", out.Tool.Tool))
+			}
 			result := executeTool(ctx, e.registry, out.Tool)
 			turns = appendToolTurns(turns, out.Tool, out.Note, result)
 		default:
@@ -243,10 +358,19 @@ func (e *Engine) Ask(ctx context.Context, prompt string, authorize bool) (*Resul
 }
 
 // submitTask executes a classified task spec through the scheduler core and
-// maps the outcome to a Result.
-func (e *Engine) submitTask(spec *entry.TaskSpec, authorized bool) *Result {
+// maps the outcome to a Result. workDir, when set, temporarily pins the core's
+// execution directory (a session worktree); the configured work path is
+// restored afterwards. The schedMu lock keeps concurrent submits from
+// interleaving the work-dir swap.
+func (e *Engine) submitTask(spec *entry.TaskSpec, authorized bool, workDir string) *Result {
 	in := toTaskInput(spec)
 	in.Authorized = authorized
+	e.schedMu.Lock()
+	defer e.schedMu.Unlock()
+	if workDir != "" {
+		e.sched.SetWorkDir(workDir)
+		defer e.sched.SetWorkDir(e.cfg.Storage.WorkPath)
+	}
 	task, result, err := e.sched.Submit(e.schedCtx, in)
 	if err != nil {
 		return &Result{Kind: "task", TaskState: "failed", Stderr: err.Error(), ExitCode: 1}

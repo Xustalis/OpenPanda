@@ -12,6 +12,7 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.22-blue)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+![Status](https://img.shields.io/badge/status-pre--release-yellow)
 
 ---
 
@@ -48,8 +49,8 @@ WebSocket links you control.
 
 - **Heterogeneous node network** — nodes advertise their real capabilities
   (CPU class, shell, agent adapters) via a capability card; the network routes
-  each task to the node that can actually do it. Built for MacBook ↔ Orange Pi 3B
-  and everything in between.
+  each task to the node that can actually do it. Built for laptops, SBCs,
+  desktops, and every platform tier in between.
 - **Unified entry model** — one prompt in, three intents out: `answer`
   (pure LLM reply), `tool_call` (your tools), `task` (delegated to a node).
   Automatic intent classification with graceful fallback.
@@ -98,7 +99,7 @@ WebSocket links you control.
                        │                              │
           ┌────────────▼────────────┐     ┌────────────▼────────────┐
           │        Worker node      │     │        Worker node      │
-          │   e.g. MacBook (Full)   │     │   e.g. Orange Pi (Micro) │
+          │  e.g. Laptop (Standard)  │     │    e.g. SBC (Micro)      │
           └─────────────────────────┘     └─────────────────────────┘
 ```
 
@@ -144,7 +145,7 @@ make vet            # static analysis
 Cross-compile for the devices you actually run:
 
 ```bash
-make build-linux-arm64   # → bin/panda-linux-arm64  (e.g. Orange Pi)
+make build-linux-arm64   # → bin/panda-linux-arm64  (SBCs, embedded boards)
 make build-linux-amd64   # → bin/panda-linux-amd64
 make build-darwin-arm64  # → bin/panda-darwin-arm64
 make build-windows-amd64 # → bin/panda-windows-amd64.exe
@@ -165,7 +166,7 @@ network:
   listen_addr: ":7836"        # WebSocket listener
   shared_secret: "..."        # HMAC auth between nodes — all nodes must share the same value
   peers:                      # other nodes in your network
-    - "orangepi3b.tailnet.ts.net:7836"
+    - "worker-1.your-tailnet.ts.net:7836"
 model:
   base_url: "https://api.deepseek.com/anthropic"  # any /v1/messages-compatible endpoint
   model: "deepseek-chat"
@@ -191,7 +192,7 @@ Then open `http://127.0.0.1:7840` and use the printed Bearer token for the
 For manual or multi-node deployment:
 
 ```bash
-./bin/panda --config config.yaml --card config/capabilities.macbook.yaml
+./bin/panda --config config.yaml --card config/capabilities.example-desktop.yaml
 ```
 
 Each node that can *execute* work should be started with its capability card.
@@ -202,7 +203,7 @@ A node without a card still participates in heartbeats, but it won't be routed w
 Ask anything — the entry model decides whether to answer, call a tool, or delegate:
 
 ```bash
-./bin/panda ask --card config/capabilities.macbook.yaml "summarize the git log for the last week"
+./bin/panda ask --card config/capabilities.example-desktop.yaml "summarize the git log for the last week"
 ```
 
 > `--card` points at this node's capability card; answer/tool_call work without it, but a delegated-task output is refused without it.
@@ -283,18 +284,16 @@ Config load order: `--config` flag > environment > default `/etc/openpanda/confi
 
 ## Documentation
 
-Full documentation lives in the [`docs/`](docs/) directory, which is split into
-public and internal parts:
+Full documentation lives in the [`docs/`](docs/) directory:
 
-- [Documentation index](docs/README.md) — entry point for all documents.
+- [Documentation index](docs/README.md) — entry point for the public docs.
 - [Contributing guide](CONTRIBUTING.md) — toolchain, engineering gates,
-  code conventions, and the PR checklist.
+  code conventions, and the PR checklist (translations available in
+  `CONTRIBUTING.zh-CN.md` / `CONTRIBUTING.ja.md` / `CONTRIBUTING.es.md` /
+  `CONTRIBUTING.de.md`).
 - [Desktop & packaging roadmap](docs/plans/roadmap-desktop-and-packaging.md) —
-  the staged plan toward the desktop client.
-- [Phase reports](docs/reports/) — progress reports for each phase and sprint.
-
-Internal planning, design, and audit documents are kept out of the public
-repository.
+  staged plan toward a native desktop client, signed installers, notarization,
+  and auto-updates.
 
 ## Testing
 
@@ -338,7 +337,7 @@ to hardware — a single `ps` sample is unreliable due to GC noise; take several
 ```bash
 make build
 for i in 1 2 3 4 5; do
-  ./bin/panda --config testdata/mac-config.yaml >/dev/null 2>&1 &
+  ./bin/panda --config testdata/node-a.yaml >/dev/null 2>&1 &
   PID=$!; sleep 3
   ps -o rss= -p $PID | awk '{printf "%d MB\n", $1/1024}'
   kill -TERM $PID; wait $PID 2>/dev/null
@@ -358,13 +357,10 @@ done
 
 ## Roadmap
 
-Phase 3 (memory + voice + safety) is complete. The memory layer, Dreaming
-engine, skills system, and execution hardening are implemented; voice entry is
-code-complete and waiting on microphone-hardware validation. The web console
-has been rebuilt (Vite + Preact, embedded in the binary) and the interactive
-REPL landed with it — two-node delegation is verified live
-([report](docs/reports/delegation-loopback-2026-08-18.md)). Phase 4 (desktop
-client and beyond) is planned in the
+Phases 0–3 (entry model · P2P delegation · memory + voice + execution
+hardening · kernel/console/REPL rebuild + live two-node verification) are
+complete. Phase 4 (desktop client + signed installer pipeline + auto-update
+mechanism + release channels) is planned in detail in the
 [desktop & packaging roadmap](docs/plans/roadmap-desktop-and-packaging.md).
 
 ## Contributing
@@ -378,7 +374,11 @@ engineering gates before opening a pull request:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full conventions: error
 wrapping (`%w` / `errors.Is`), complexity limits, no dead code, concurrency
-rules, i18n rules, and the commit style.
+rules, i18n rules, and the commit style. Translated editions are available in
+[`CONTRIBUTING.zh-CN.md`](CONTRIBUTING.zh-CN.md),
+[`CONTRIBUTING.ja.md`](CONTRIBUTING.ja.md),
+[`CONTRIBUTING.es.md`](CONTRIBUTING.es.md), and
+[`CONTRIBUTING.de.md`](CONTRIBUTING.de.md).
 
 ## License
 

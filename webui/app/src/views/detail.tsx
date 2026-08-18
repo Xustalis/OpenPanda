@@ -10,6 +10,8 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
   const { data: task, error } = useAsync(() => api.task(id), [id], change)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState('')
+  const [rejecting, setRejecting] = useState(false)
+  const [rejectReason, setRejectReason] = useState('')
 
   async function act(fn: () => Promise<unknown>) {
     if (busy) return
@@ -41,19 +43,48 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
           <StateBadge state={task.state} />
         </div>
         <div class="detail-actions">
-          {task.state === 'review' && (
+          {task.state === 'review' && !rejecting && (
             <>
               <button class="btn primary" disabled={busy} onClick={() => act(() => api.approve(task.id))}>
                 {t('detail.approve')}
               </button>
-              <button
-                class="btn danger"
-                disabled={busy}
-                onClick={() => act(() => api.reject(task.id, t('detail.rejectedViaWeb')))}
-              >
+              <button class="btn danger" disabled={busy} onClick={() => setRejecting(true)}>
                 {t('detail.reject')}
               </button>
             </>
+          )}
+          {task.state === 'review' && rejecting && (
+            <div class="reject-form">
+              <input
+                class="input"
+                type="text"
+                placeholder={t('detail.rejectReason')}
+                value={rejectReason}
+                onInput={(e) => setRejectReason((e.target as HTMLInputElement).value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    act(() => api.reject(task.id, rejectReason.trim() || t('detail.rejectedViaWeb'))).then(() =>
+                      setRejecting(false),
+                    )
+                  }
+                  if (e.key === 'Escape') setRejecting(false)
+                }}
+              />
+              <button
+                class="btn danger"
+                disabled={busy}
+                onClick={() =>
+                  act(() => api.reject(task.id, rejectReason.trim() || t('detail.rejectedViaWeb'))).then(() =>
+                    setRejecting(false),
+                  )
+                }
+              >
+                {t('detail.rejectConfirm')}
+              </button>
+              <button class="btn" disabled={busy} onClick={() => setRejecting(false)}>
+                {t('common.cancel')}
+              </button>
+            </div>
           )}
           {cancellable && (
             <button class="btn" disabled={busy} onClick={() => act(() => api.cancel(task.id))}>

@@ -124,8 +124,40 @@ func runDoctor(args []string) {
 		} else {
 			fail("doctor.db.no", "path", cfg.Storage.DBPath)
 		}
+		if cfg.Model.APIKey != "" {
+			pass("doctor.modelkey.ok")
+		} else {
+			fail("doctor.modelkey.no")
+		}
 	} else {
 		fail("doctor.config.no", "err", err.Error())
+	}
+
+	// Adapter runtime: the agent adapters are Python scripts next to the
+	// daemon's working directory, driven by python3, and they wrap the
+	// agent CLIs (claude / opencode). Each is reported; only "no agent CLI
+	// at all" counts as a problem — native-only nodes stay valid.
+	if lp, err := exec.LookPath("python3"); err == nil {
+		pass("doctor.python3.ok", "path", lp)
+	} else {
+		fail("doctor.python3.no")
+	}
+	if dir := findAdaptersDir(); dir != "" {
+		pass("doctor.adapters.ok", "path", dir)
+	} else {
+		fail("doctor.adapters.no")
+	}
+	agentsFound := 0
+	for _, bin := range []string{"claude", "opencode"} {
+		if lp, err := exec.LookPath(bin); err == nil {
+			agentsFound++
+			pass("doctor.agent.ok", "name", bin, "path", lp)
+		} else {
+			pass("doctor.agent.no", "name", bin)
+		}
+	}
+	if agentsFound == 0 {
+		fail("doctor.agent.none")
 	}
 
 	if problems == 0 {
@@ -134,6 +166,22 @@ func runDoctor(args []string) {
 	}
 	fmt.Println(i18n.Tf(loc, "doctor.fail", "n", fmt.Sprint(problems)))
 	os.Exit(1)
+}
+
+// findAdaptersDir locates the adapters/ directory — relative to the working
+// directory first (the documented run-from-repo-root layout), then next to
+// the executable (a relocated install). Empty when not found.
+func findAdaptersDir() string {
+	candidates := []string{"adapters"}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "adapters"))
+	}
+	for _, dir := range candidates {
+		if st, err := os.Stat(filepath.Join(dir, "claude_code.py")); err == nil && !st.IsDir() {
+			return dir
+		}
+	}
+	return ""
 }
 
 // configFileUsed mirrors config.Load's resolution for display purposes.

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/xenith/openpanda/internal/ledger"
@@ -36,7 +37,7 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("event: change\ndata: init\n\n"))
 	flusher.Flush()
 
-	var lastTask, lastNode string
+	var lastTask, lastNode, lastRem string
 	first := true
 	ticker := time.NewTicker(eventsPollInterval)
 	defer ticker.Stop()
@@ -58,18 +59,23 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 				return // store failure: drop the stream; the client reconnects
 			}
 			nodeFP := h.nodeFingerprint()
-			if !first && taskFP == lastTask && nodeFP == lastNode {
+			remFP := h.reminderFingerprint()
+			if !first && taskFP == lastTask && nodeFP == lastNode && remFP == lastRem {
 				continue
 			}
 			first = false
-			lastTask, lastNode = taskFP, nodeFP
-			kind := "tasks"
-			data := taskFP
+			lastTask, lastNode, lastRem = taskFP, nodeFP, remFP
+			kinds := []string{"tasks"}
+			data := []string{taskFP}
 			if nodeFP != "" {
-				kind = "tasks,nodes"
-				data = taskFP + "/" + nodeFP
+				kinds = append(kinds, "nodes")
+				data = append(data, nodeFP)
 			}
-			if _, err := w.Write([]byte("event: change\ndata: " + kind + " " + data + "\n\n")); err != nil {
+			if remFP != "" {
+				kinds = append(kinds, "reminders")
+				data = append(data, remFP)
+			}
+			if _, err := w.Write([]byte("event: change\ndata: " + strings.Join(kinds, ",") + " " + strings.Join(data, "/") + "\n\n")); err != nil {
 				return
 			}
 			flusher.Flush()

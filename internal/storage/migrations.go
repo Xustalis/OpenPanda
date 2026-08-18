@@ -28,6 +28,7 @@ var migrations = []Migration{
 	{Version: 5, Name: "add_delegation_metrics", Apply: migrateV5},
 	{Version: 6, Name: "add_audit_hash_chain", Apply: migrateV6},
 	{Version: 7, Name: "backfill_audit_hash_chain", Apply: migrateV7},
+	{Version: 8, Name: "add_reminders", Apply: migrateV8},
 }
 
 func migrateV1(tx *sql.Tx) error {
@@ -148,6 +149,21 @@ func migrateV6(tx *sql.Tx) error {
 		return err
 	}
 	return nil
+}
+
+func migrateV8(tx *sql.Tx) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS reminders (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		message TEXT NOT NULL,
+		due_at INTEGER NOT NULL,
+		created_at INTEGER NOT NULL,
+		fired_at INTEGER,
+		source TEXT NOT NULL DEFAULT 'cli'
+	)`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(fired_at, due_at)`)
+	return err
 }
 
 // migrateV7 backfills empty/NULL prev_hash values for rows that predate the hash

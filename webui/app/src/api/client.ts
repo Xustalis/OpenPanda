@@ -43,6 +43,12 @@ export function clearToken(): void {
 // Session fallback when localStorage is unavailable (private mode).
 let sessionToken = ''
 
+/** The token for the current session — localStorage or the session fallback.
+ *  Used by both header-based fetches and the ?token= EventSource URL. */
+export function currentToken(): string {
+  return getToken() || sessionToken
+}
+
 // Auto-login: `panda web` / `/web` open the browser at /?token=… so no
 // manual paste is needed. Consume it once — store the token, then strip it
 // from the address bar so it does not linger in history or get re-shared
@@ -64,7 +70,7 @@ export function onUnauthorized(fn: () => void): () => void {
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {}
-  const token = getToken() || sessionToken
+  const token = currentToken()
   if (token) headers.Authorization = `Bearer ${token}`
   if (body !== undefined) headers['Content-Type'] = 'application/json'
 
@@ -153,8 +159,7 @@ export const api = {
   },
 
   reject(id: string, reason?: string): Promise<void> {
-    const q = reason ? `?reason=${encodeURIComponent(reason)}` : ''
-    return request('POST', `/api/tasks/${id}/reject${q}`)
+    return request('POST', `/api/tasks/${id}/reject`, reason ? { reason } : undefined)
   },
 
   cancel(id: string): Promise<{ id: string; cancelled: number }> {
@@ -180,4 +185,269 @@ export const api = {
   nodes(): Promise<NodeInfo[]> {
     return request('GET', '/api/nodes')
   },
+
+  // ---- Model settings ----
+
+  getModelSettings(): Promise<ModelSettings> {
+    return request('GET', '/api/settings/model')
+  },
+
+  putModelSettings(s: ModelSettings): Promise<ModelSettings> {
+    return request('PUT', '/api/settings/model', s)
+  },
+
+  testModelSettings(s: ModelSettings): Promise<{ ok: boolean; reply?: string; error?: string }> {
+    return request('POST', '/api/settings/model/test', s)
+  },
+
+  // ---- Chat sessions (worktree-isolated threads) ----
+
+  sessions(): Promise<Session[]> {
+    return request('GET', '/api/sessions')
+  },
+
+  createSession(title?: string): Promise<Session> {
+    return request('POST', '/api/sessions', { title })
+  },
+
+  session(id: string): Promise<Session> {
+    return request('GET', `/api/sessions/${encodeURIComponent(id)}`)
+  },
+
+  deleteSession(id: string): Promise<void> {
+    return request('DELETE', `/api/sessions/${encodeURIComponent(id)}`)
+  },
+
+  sessionDiff(id: string): Promise<SessionDiff> {
+    return request('GET', `/api/sessions/${encodeURIComponent(id)}/diff`)
+  },
+
+  sessionMerge(id: string, message?: string): Promise<{ merged: boolean; subject: string }> {
+    return request('POST', `/api/sessions/${encodeURIComponent(id)}/merge`, message ? { message } : {})
+  },
+
+  // ---- Reminders ----
+
+  reminders(): Promise<Reminder[]> {
+    return request('GET', '/api/reminders')
+  },
+
+  createReminder(body: { message: string; after_minutes?: number; due_at?: string }): Promise<Reminder> {
+    return request('POST', '/api/reminders', body)
+  },
+
+  deleteReminder(id: number): Promise<{ deleted: number }> {
+    return request('DELETE', `/api/reminders/${id}`)
+  },
+
+  // ---- Memory (USER.md / MEMORY.md / DREAMS.md) ----
+
+  memory(): Promise<MemoryFiles> {
+    return request('GET', '/api/memory')
+  },
+
+  // ---- MCP settings ----
+
+  getMCPSettings(): Promise<MCPSettings> {
+    return request('GET', '/api/settings/mcp')
+  },
+
+  putMCPSettings(s: MCPSettings): Promise<MCPSettings> {
+    return request('PUT', '/api/settings/mcp', s)
+  },
+
+  // ---- Web Push (reminder notifications) ----
+
+  pushKey(): Promise<{ key: string }> {
+    return request('GET', '/api/push/key')
+  },
+
+  pushSubscribe(sub: PushSubscriptionJSON): Promise<{ status: string }> {
+    return request('POST', '/api/push/subscribe', sub)
+  },
+
+  // ---- System (version / metrics / audit / skills) ----
+
+  version(): Promise<{ version: string }> {
+    return request('GET', '/api/version')
+  },
+
+  metrics(): Promise<DelegationMetric[]> {
+    return request('GET', '/api/metrics')
+  },
+
+  verifyAudit(taskId?: string): Promise<{ ok: boolean; scope: string; entries?: number; error?: string }> {
+    const q = taskId ? `?task_id=${encodeURIComponent(taskId)}` : ''
+    return request('GET', `/api/audit${q}`)
+  },
+
+  auditEntries(): Promise<AuditEntry[]> {
+    return request('GET', '/api/audit/entries')
+  },
+
+  skills(): Promise<SkillEntry[]> {
+    return request('GET', '/api/skills')
+  },
+
+  approveSkill(name: string): Promise<void> {
+    return request('POST', '/api/skills/approve', { name })
+  },
+
+  rejectSkill(name: string): Promise<void> {
+    return request('POST', '/api/skills/reject', { name })
+  },
+}
+
+export interface SessionDiff {
+  id: string
+  branch: string
+  changes: { status: string; path: string }[]
+  patch: string
+}
+
+export interface DelegationMetric {
+  id: number
+  task_id: string
+  delegator: string
+  executor: string
+  abilities: string
+  success: boolean
+  latency_ms: number
+  tokens: number | null
+  created_at: string
+}
+
+export interface AuditEntry {
+  ts: string
+  who: string
+  what: string
+  target: string
+  result: string
+  detail: string
+}
+
+export interface SkillEntry {
+  name: string
+  description: string
+  scope: string
+  key?: string
+  status: string
+  use_count: number
+}
+
+export interface ModelSettings {
+  api_type: 'anthropic' | 'openai'
+  base_url: string
+  model: string
+  max_tokens: number
+  api_key?: string // write-only: empty = keep the stored key
+  api_key_set?: boolean
+  api_key_hint?: string
+}
+
+export interface MCPSettings {
+  command: string // space-separated stdio MCP server argv; "" = disabled
+  from_config?: boolean
+}
+
+export interface Reminder {
+  id: number
+  message: string
+  due_at: number // Unix seconds
+  created_at: number
+  fired_at: number // 0 = pending
+  source: string // "tool" | "cli" | "web"
+}
+
+export interface MemoryFiles {
+  user: string
+  memory: string
+  dreams: string
+  time: string // node's current time, RFC3339
+}
+
+export interface SessionTurn {
+  role: 'user' | 'assistant'
+  text: string
+  kind?: 'answer' | 'task' | 'error'
+  ref?: string
+}
+
+export interface Session {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+  branch?: string
+  worktree?: string
+  turns: SessionTurn[]
+}
+
+// ---- Streaming session ask (SSE over fetch POST) ----
+
+export interface AskStreamHandlers {
+  onDelta(text: string): void
+  onStatus(text: string): void
+  onResult(r: AskResult): void
+  onError(message: string): void
+}
+
+/** POST /api/sessions/{id}/ask and consume its SSE stream. Resolves when the
+ * stream ends; errors surface through onError (and reject on transport
+ * failure before the stream starts). */
+export async function askSessionStream(
+  id: string,
+  prompt: string,
+  authorize: boolean,
+  h: AskStreamHandlers,
+): Promise<void> {
+  const token = currentToken()
+  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}/ask`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ prompt, authorize }),
+  })
+  if (!res.ok) {
+    if (res.status === 401) {
+      clearToken()
+      unauthorizedListeners.forEach((fn) => fn())
+    }
+    const text = await res.text().catch(() => '')
+    throw new ApiError(res.status, text || res.statusText)
+  }
+  if (!res.body) throw new ApiError(0, 'no response body')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let sep: number
+    while ((sep = buf.indexOf('\n\n')) !== -1) {
+      const frame = buf.slice(0, sep)
+      buf = buf.slice(sep + 2)
+      let event = 'message'
+      const dataLines: string[] = []
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('event: ')) event = line.slice(7).trim()
+        else if (line.startsWith('data: ')) dataLines.push(line.slice(6))
+      }
+      if (dataLines.length === 0) continue
+      let payload: any
+      try {
+        payload = JSON.parse(dataLines.join('\n'))
+      } catch {
+        continue
+      }
+      if (event === 'delta') h.onDelta(payload.text ?? '')
+      else if (event === 'status') h.onStatus(payload.text ?? '')
+      else if (event === 'result') h.onResult(payload as AskResult)
+      else if (event === 'error') h.onError(payload.message ?? 'unknown error')
+    }
+  }
 }

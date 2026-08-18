@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { currentToken } from './api/client'
 import { onLocaleChange } from './i18n'
 
 /** Re-render on locale change. */
@@ -31,11 +32,13 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[], reloadKey = 0
 }
 
 /** Subscribe to the panel's SSE change feed. Returns the latest change
- *  counter — bump it into useAsync's reloadKey to re-fetch on change. */
+ *  counter — bump it into useAsync's reloadKey to re-fetch on change.
+ *  EventSource cannot send an Authorization header, so the token rides
+ *  along as ?token= (the panel accepts either). */
 export function useChangeSignal(): number {
   const [tick, setTick] = useState(0)
   useEffect(() => {
-    const es = new EventSource('/api/events')
+    const es = new EventSource(`/api/events?token=${encodeURIComponent(currentToken())}`)
     es.addEventListener('change', () => setTick((v) => v + 1))
     es.onerror = () => {
       /* EventSource auto-reconnects; nothing to do */

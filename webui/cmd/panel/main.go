@@ -22,6 +22,7 @@ import (
 	"github.com/xenith/openpanda/internal/core"
 	"github.com/xenith/openpanda/internal/log"
 	"github.com/xenith/openpanda/internal/memory"
+	"github.com/xenith/openpanda/internal/reminders"
 	"github.com/xenith/openpanda/internal/storage"
 	"github.com/xenith/openpanda/webui/panel"
 	"github.com/xenith/openpanda/webui/push"
@@ -120,6 +121,26 @@ func main() {
 		})
 	}
 
+	// Reminders (P1-28): the sidecar is long-lived, so it runs the scanner —
+	// Web Push when configured, SSE change signal to open consoles otherwise.
+	reminderStore := reminders.NewStore(db)
+	reminderScan := reminders.NewScanner(reminderStore, 15*time.Second, func(r reminders.Reminder) {
+		if pushSvc != nil {
+			nctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := pushSvc.Notify(nctx, push.Notification{
+				Title: "OpenPanda · Reminder",
+				Body:  r.Message,
+				ID:    fmt.Sprintf("reminder-%d", r.ID),
+				Icon:  "/icons/icon-192.png",
+				Badge: "/icons/badge-72.png",
+			}); err != nil {
+				logger.Warn("reminder push", "err", err)
+			}
+		}
+	}, logger)
+	go reminderScan.Run(ctx)
+
 	srv := &http.Server{
 		Addr: cfg.Network.PanelAddr,
 		Handler: panel.New(panel.Deps{
@@ -128,6 +149,9 @@ func main() {
 			DB:        db,
 			Projects:  memory.NewProjects(cfg.Storage.ProjectsPath),
 			Push:      pushSvc,
+			Reminders: reminderStore,
+			Cfg:       cfg,
+			ConfigPath: configPathOrDefault(*configPath),
 			StaticDir: *staticDir,
 			Token:     cfg.Network.PanelToken,
 		}),
@@ -154,6 +178,18 @@ func main() {
 func fatal(step string, err error) {
 	fmt.Fprintf(os.Stderr, "panda-webui: %s: %v\n", step, err)
 	os.Exit(1)
+}
+
+// configPathOrDefault mirrors config.Load's path resolution so the settings
+// APIs persist into the file the sidecar loaded.
+func configPathOrDefault(flagPath string) string {
+	if flagPath != "" {
+		return flagPath
+	}
+	if env := os.Getenv("OPENPANDA_CONFIG_PATH"); env != "" {
+		return env
+	}
+	return config.DefaultPath
 }
 
 // panelURL turns a listen address into the URL a browser can open (a bare

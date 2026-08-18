@@ -17,9 +17,10 @@ import (
 )
 
 var (
-	bg    = color.RGBA{0x11, 0x18, 0x27, 0xff} // #111827 theme background
-	white = color.RGBA{0xff, 0xff, 0xff, 0xff}
-	black = color.RGBA{0x1f, 0x29, 0x37, 0xff}
+	bg    = color.RGBA{0x2f, 0x9e, 0x6b, 0xff} // #2f9e6b bamboo green (matches favicon.svg)
+	white = color.RGBA{0xfa, 0xf6, 0xee, 0xff} // cream panda face
+	black = color.RGBA{0x1d, 0x2b, 0x24, 0xff} // soft charcoal patches
+	blush = color.RGBA{0xf2, 0xa7, 0xb3, 0xff} // rosy cheeks
 )
 
 func main() {
@@ -50,24 +51,44 @@ func render(path string, s int, withBG bool) {
 	}
 }
 
-// drawPanda paints a simple geometric panda face: two ears behind a white face,
-// black eye patches with pupils, and a nose. Coordinates are fractions of s so
+// drawPanda paints the cheerful geometric panda face: two round ears, a cream
+// face, glossy tilted eye patches, rosy blush cheeks, and a happy open smile —
+// mirroring webui/app/src/brand/panda.tsx. Coordinates are fractions of s so
 // the mark scales across icon sizes.
 func drawPanda(img *image.RGBA, s int) {
 	f := float64(s)
 	// ears (behind the face)
-	fillCircle(img, 0.30*f, 0.28*f, 0.14*f, black)
-	fillCircle(img, 0.70*f, 0.28*f, 0.14*f, black)
+	fillCircle(img, 0.21*f, 0.26*f, 0.15*f, black)
+	fillCircle(img, 0.79*f, 0.26*f, 0.15*f, black)
 	// face
-	fillCircle(img, 0.50*f, 0.55*f, 0.34*f, white)
-	// eye patches
-	fillCircle(img, 0.38*f, 0.50*f, 0.10*f, black)
-	fillCircle(img, 0.62*f, 0.50*f, 0.10*f, black)
-	// pupils
-	fillCircle(img, 0.38*f, 0.50*f, 0.035*f, white)
-	fillCircle(img, 0.62*f, 0.50*f, 0.035*f, white)
+	fillCircle(img, 0.50*f, 0.56*f, 0.36*f, white)
+	// eye patches (slightly bigger, tilted inward)
+	fillCircle(img, 0.35*f, 0.49*f, 0.11*f, black)
+	fillCircle(img, 0.65*f, 0.49*f, 0.11*f, black)
+	// glossy pupils with sparkle
+	fillCircle(img, 0.369*f, 0.509*f, 0.039*f, white)
+	fillCircle(img, 0.631*f, 0.509*f, 0.039*f, white)
+	fillCircle(img, 0.383*f, 0.496*f, 0.014*f, black)
+	fillCircle(img, 0.645*f, 0.496*f, 0.014*f, black)
+	// blush cheeks
+	fillCircle(img, 0.242*f, 0.633*f, 0.053*f, blush)
+	fillCircle(img, 0.758*f, 0.633*f, 0.053*f, blush)
 	// nose
-	fillCircle(img, 0.50*f, 0.64*f, 0.05*f, black)
+	fillCircle(img, 0.50*f, 0.641*f, 0.05*f, black)
+	// happy smile — a stamped arc under the nose
+	smileArc(img, 0.50*f, 0.641*f, 0.117*f, 0.034*f, black, f)
+}
+
+// smileArc stamps small filled circles along a downward semicircle centered at
+// (cx, cy) with radius r — the poor man's stroke for a bezier-free smile.
+func smileArc(img *image.RGBA, cx, cy, r, dot float64, c color.RGBA, f float64) {
+	steps := 14
+	for i := 0; i <= steps; i++ {
+		theta := math.Pi * float64(i) / float64(steps) // 0..π = lower half
+		x := cx + r*math.Cos(theta)
+		y := cy + r*math.Sin(theta)*0.78 // slightly flattened smile
+		fillCircle(img, x, y, dot*(0.9+0.1*math.Sin(theta)), c)
+	}
 }
 
 // fillCircle blends an anti-aliased filled circle centered at (cx, cy) with

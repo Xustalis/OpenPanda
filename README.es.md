@@ -12,6 +12,7 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.22-blue)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+![Status](https://img.shields.io/badge/status-pre--release-yellow)
 
 ---
 
@@ -50,7 +51,7 @@ través de enlaces WebSocket directos que tú controlas.
 - **Red de nodos heterogéneos** — cada nodo publica sus capacidades reales
   (clase de CPU, shell, adaptadores de agente) mediante una tarjeta de
   capacidades; la red enruta cada tarea al nodo que realmente puede hacerla.
-  Diseñado para MacBook ↔ Orange Pi 3B y todo lo que haya en medio.
+  Diseñado para portátiles, SBC, escritorios y todos los niveles de plataforma intermedios.
 - **Modelo de entrada unificado** — una petición de entrada, tres intenciones de
   salida: `answer` (respuesta pura del LLM), `tool_call` (tus herramientas) y
   `task` (delegada a un nodo). Clasificación automática de intenciones con
@@ -98,7 +99,7 @@ través de enlaces WebSocket directos que tú controlas.
                        │                              │
           ┌────────────▼────────────┐     ┌────────────▼────────────┐
           │      Nodo trabajador    │     │      Nodo trabajador    │
-          │   p. ej. MacBook (Full) │     │   p. ej. Orange Pi (Micro)│
+          │  p. ej. Portátil (Std)  │     │   p. ej. SBC (Micro)     │
           └─────────────────────────┘     └─────────────────────────┘
 ```
 
@@ -144,7 +145,7 @@ make vet            # análisis estático
 Cross-compile para los dispositivos que realmente usas:
 
 ```bash
-make build-linux-arm64   # → bin/panda-linux-arm64  (p. ej. Orange Pi)
+make build-linux-arm64   # → bin/panda-linux-arm64  (SBCs, placas empotradas)
 make build-linux-amd64   # → bin/panda-linux-amd64
 make build-darwin-arm64  # → bin/panda-darwin-arm64
 make build-windows-amd64 # → bin/panda-windows-amd64.exe
@@ -165,7 +166,7 @@ network:
   listen_addr: ":7836"        # listener WebSocket
   shared_secret: "..."        # autenticación HMAC entre nodos — todos comparten el mismo valor
   peers:                      # otros nodos de tu red
-    - "orangepi3b.tailnet.ts.net:7836"
+    - "worker-1.your-tailnet.ts.net:7836"
 model:
   base_url: "https://api.deepseek.com/anthropic"  # cualquier endpoint compatible con /v1/messages
   model: "deepseek-chat"
@@ -178,7 +179,7 @@ del archivo de configuración siempre que sea posible.
 ### Ejecutar el daemon
 
 ```bash
-./bin/panda --config config.yaml --card config/capabilities.macbook.yaml
+./bin/panda --config config.yaml --card config/capabilities.example-desktop.yaml
 ```
 
 Cada nodo que pueda *ejecutar* trabajo debe iniciarse con su tarjeta de
@@ -271,19 +272,15 @@ valor por defecto `/etc/openpanda/config.yaml`.
 
 ## Documentación
 
-La documentación completa vive en el directorio [`docs/`](docs/), dividida en
-partes públicas e internas:
+La documentación completa vive en el directorio [`docs/`](docs/):
 
-- [Índice de documentación](docs/README.md) — punto de entrada de todos los
-  documentos.
+- [Índice de documentación](docs/README.md) — punto de entrada de los documentos públicos.
 - [Guía de contribución](CONTRIBUTING.md) — herramienta, gates de ingeniería,
-  convenciones de código y lista de verificación para PR.
+  convenciones de código y lista de verificación para PR
+  (traducciones: `CONTRIBUTING.es.md` / `CONTRIBUTING.zh-CN.md` / `CONTRIBUTING.ja.md` / `CONTRIBUTING.de.md`).
 - [Hoja de ruta de escritorio y empaquetado](docs/plans/roadmap-desktop-and-packaging.md) —
-  el plan por etapas hacia el cliente de escritorio.
-- [Informes de fase](docs/reports/) — informes de progreso de cada fase y sprint.
-
-Los documentos internos de planificación, diseño y auditoría quedan fuera del
-repositorio público.
+  el plan por etapas para cliente nativo de escritorio, instaladores firmados,
+  notarización y actualizaciones automáticas.
 
 ## Pruebas
 
@@ -308,7 +305,7 @@ debido al ruido del GC; toma varias:
 ```bash
 make build
 for i in 1 2 3 4 5; do
-  ./bin/panda --config testdata/mac-config.yaml >/dev/null 2>&1 &
+  ./bin/panda --config testdata/node-a.yaml >/dev/null 2>&1 &
   PID=$!; sleep 3
   ps -o rss= -p $PID | awk '{printf "%d MB\n", $1/1024}'
   kill -TERM $PID; wait $PID 2>/dev/null
@@ -328,15 +325,11 @@ done
 
 ## Hoja de ruta
 
-La fase 3 (memoria + voz + seguridad) está completada. La capa de memoria, el motor
-Dreaming, el sistema de skills y el endurecimiento de la ejecución
-están implementados; la entrada por voz está completa en código y a la espera de
-validación con hardware de micrófono. La consola web fue reconstruida con
-Vite + Preact e incrustada en el binario, y el REPL interactivo llegó con ella —
-la delegación de dos nodos está verificada en vivo
-([informe](docs/reports/delegation-loopback-2026-08-18.md)). La fase 4 (cliente
-de escritorio, entre otros) está planificada en la
-[hoja de ruta de escritorio y empaquetado](docs/plans/roadmap-desktop-and-packaging.md).
+Las fases 0–3 (modelo de entrada · delegación P2P · memoria+voz+endurecimiento
+de la ejecución · reconstrucción de kernel/consola/REPL + verificación real
+de dos nodos) están completas. La fase 4 (cliente de escritorio + pipeline
+de instaladores firmados + mecanismo de actualizaciones automáticas + canales
+de lanzamiento) está detallada en la [hoja de ruta de escritorio y empaquetado](docs/plans/roadmap-desktop-and-packaging.md).
 
 ## Contribuciones
 
@@ -351,6 +344,7 @@ cumple estos gates de ingeniería antes de abrir un pull request:
 Consulta la [guía de contribución](CONTRIBUTING.md) para las convenciones
 completas: envoltura de errores (`%w` / `errors.Is`), límites de complejidad,
 nada de código muerto, reglas de concurrencia, reglas de i18n y estilo de commits.
+Traducciones: [`CONTRIBUTING.es.md`](CONTRIBUTING.es.md)、[`CONTRIBUTING.zh-CN.md`](CONTRIBUTING.zh-CN.md)、[`CONTRIBUTING.ja.md`](CONTRIBUTING.ja.md)、[`CONTRIBUTING.de.md`](CONTRIBUTING.de.md)。
 
 ## Licencia
 

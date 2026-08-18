@@ -13,7 +13,7 @@ import (
 // parsed Output. It is the answer/fallback entry point; the tool path is
 // ClassifyTurnsWithTools.
 func Classify(ctx context.Context, c *Client, devices []ledger.Node, memory, user string) (Output, error) {
-	return classify(ctx, c, devices, memory, []Turn{{Role: "user", Content: user}}, nil)
+	return ClassifyTurnsWithTools(ctx, c, devices, memory, []Turn{{Role: "user", Content: user}}, nil)
 }
 
 // ClassifyTurns is Classify with a conversation history and no tools.
@@ -25,10 +25,6 @@ func ClassifyTurns(ctx context.Context, c *Client, devices []ledger.Node, memory
 // tool registry. A native tool_use response becomes a KindToolCall output; a
 // text response falls through to the existing JSON/prose parsing (answer/task).
 func ClassifyTurnsWithTools(ctx context.Context, c *Client, devices []ledger.Node, memory string, turns []Turn, registry *Registry) (Output, error) {
-	return classify(ctx, c, devices, memory, turns, registry)
-}
-
-func classify(ctx context.Context, c *Client, devices []ledger.Node, memory string, turns []Turn, registry *Registry) (Output, error) {
 	system := BuildPrompt(PromptOptions{Devices: devices, Memory: memory})
 	var specs []ToolSpec
 	if registry != nil {
@@ -38,6 +34,29 @@ func classify(ctx context.Context, c *Client, devices []ledger.Node, memory stri
 	if err != nil {
 		return Output{}, WrapAPIError(err)
 	}
+	return resolveResponse(resp)
+}
+
+// ClassifyStreamWithTools is ClassifyTurnsWithTools with live text streaming:
+// answer deltas are delivered to onDelta as the provider emits them, while the
+// parsed Output is returned once complete.
+func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.Node, memory string, turns []Turn, registry *Registry, onDelta func(string)) (Output, error) {
+	system := BuildPrompt(PromptOptions{Devices: devices, Memory: memory})
+	var specs []ToolSpec
+	if registry != nil {
+		specs = registry.Specs()
+	}
+	resp, err := c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta)
+	if err != nil {
+		return Output{}, WrapAPIError(err)
+	}
+	return resolveResponse(resp)
+}
+
+// resolveResponse routes one completed model response: a native tool_use is
+// authoritative (route to the registry); text falls through to the JSON/prose
+// parser (answer/task).
+func resolveResponse(resp Response) (Output, error) {
 	// A tool_use is authoritative: the model chose a controlled tool, so route to
 	// the registry rather than the text parser.
 	if len(resp.ToolUses) > 0 {

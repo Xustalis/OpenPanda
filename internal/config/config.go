@@ -19,6 +19,7 @@ type Config struct {
 	Log     LogConfig     `yaml:"log"`
 	Model   ModelConfig   `yaml:"model"`
 	Push    PushConfig    `yaml:"push"`
+	MCP     MCPConfig     `yaml:"mcp"`
 }
 
 // NodeConfig identifies this node.
@@ -55,14 +56,43 @@ type LogConfig struct {
 	Level string `yaml:"level"` // debug | info | warn | error
 }
 
+// API type wire values: which request/response dialect the provider speaks.
+const (
+	// APITypeAnthropic is the Anthropic Messages API (/v1/messages, x-api-key
+	// header). DeepSeek's /anthropic endpoint and Anthropic itself use it.
+	APITypeAnthropic = "anthropic"
+	// APITypeOpenAI is the OpenAI Chat Completions API (/v1/chat/completions,
+	// Authorization: Bearer). OpenAI, DeepSeek's OpenAI endpoint, and most
+	// third-party gateways (Ollama, vLLM, OneAPI…) use it.
+	APITypeOpenAI = "openai"
+)
+
 // ModelConfig selects the LLM provider for the entry model and the agent
-// adapters. DeepSeek exposes an Anthropic-compatible Messages API, so base_url
-// defaults there; any /v1/messages-compatible endpoint works.
+// adapters. api_type picks the wire format — "anthropic" (Messages API,
+// default) or "openai" (Chat Completions) — so any provider works with a
+// custom base_url + model; the user is never locked to a fixed vendor.
 type ModelConfig struct {
+	APIType   string `yaml:"api_type"`   // "anthropic" | "openai" (default anthropic)
 	BaseURL   string `yaml:"base_url"`   // e.g. https://api.deepseek.com/anthropic
 	APIKey    string `yaml:"api_key"`    // secret; prefer env OPENPANDA_MODEL_API_KEY
-	Model     string `yaml:"model"`      // e.g. deepseek-chat | deepseek-reasoner
+	Model     string `yaml:"model"`      // e.g. deepseek-chat | gpt-4o-mini — fully user-defined
 	MaxTokens int    `yaml:"max_tokens"` // completion cap; 0 = provider/entry default
+}
+
+// NormalizedAPIType returns the validated api type, defaulting to Anthropic.
+func (m ModelConfig) NormalizedAPIType() string {
+	if m.APIType == APITypeOpenAI {
+		return APITypeOpenAI
+	}
+	return APITypeAnthropic
+}
+
+// MCPConfig selects the stdio MCP server whose tools the ask engine may call
+// (design §7.3). Command is a space-separated argv (quotes honored), e.g.
+// `npx -y @modelcontextprotocol/server-filesystem /tmp`. Empty disables MCP;
+// a CLI --mcp flag overrides it.
+type MCPConfig struct {
+	Command string `yaml:"command"`
 }
 
 // PushConfig enables Web Push notifications (design P3-26) for the optional
@@ -219,6 +249,9 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("OPENPANDA_WORK_PATH"); v != "" {
 		c.Storage.WorkPath = v
 	}
+	if v := os.Getenv("OPENPANDA_MODEL_API_TYPE"); v != "" {
+		c.Model.APIType = v
+	}
 	if v := os.Getenv("OPENPANDA_MODEL_BASE_URL"); v != "" {
 		c.Model.BaseURL = v
 	}
@@ -239,6 +272,168 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("OPENPANDA_PUSH_VAPID_KEY_PATH"); v != "" {
 		c.Push.VAPIDKeyPath = v
 	}
+	if v := os.Getenv("OPENPANDA_MCP_COMMAND"); v != "" {
+		c.MCP.Command = v
+	}
+}
+
+// UpdateModelSection persists mc's model fields into the YAML file at path,
+// creating the file (from defaults) when missing. It round-trips the document
+// as a yaml.Node so every other section — and its comments — survives the
+// edit byte-for-byte; only the model mapping's values are replaced. Fields mc
+// leaves empty-string are dropped from the file so defaults apply again.
+func UpdateModelSection(path string, mc ModelConfig) error {
+	var root yaml.Node
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := yaml.Unmarshal(data, &root); err != nil {
+			return fmt.Errorf("parse config %s: %w", path, err)
+		}
+		if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+			return fmt.Errorf("config %s: not a YAML mapping", path)
+		}
+	case os.IsNotExist(err):
+		doc := Default()
+		doc.Model = mc
+		out, err := yaml.Marshal(doc)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(path, out, 0o600)
+	default:
+		return fmt.Errorf("read config %s: %w", path, err)
+	}
+	top := root.Content[0]
+
+	// Locate or create the model mapping.
+	model := mappingValue(top, "model")
+	if model == nil {
+		keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "model"}
+		model = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		top.Content = append(top.Content, keyNode, model)
+	}
+	if model.Kind != yaml.MappingNode {
+		return fmt.Errorf("config %s: model is not a mapping", path)
+	}
+
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{"api_type", mc.NormalizedAPIType()},
+		{"base_url", mc.BaseURL},
+		{"api_key", mc.APIKey},
+		{"model", mc.Model},
+	}
+	for _, f := range fields {
+		setMapField(model, f.name, f.value)
+	}
+	if mc.MaxTokens > 0 {
+		setMapField(model, "max_tokens", strconv.Itoa(mc.MaxTokens))
+	}
+
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return err
+	}
+	hardenSecretPerms(path, out)
+	return nil
+}
+
+// UpdateMCPSection persists the mcp.command field into the YAML file at
+// path, creating the file (from defaults) when missing. It round-trips the
+// document like UpdateModelSection so other sections and their comments
+// survive byte-for-byte. An empty command removes the field, disabling MCP.
+func UpdateMCPSection(path string, command string) error {
+	var root yaml.Node
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := yaml.Unmarshal(data, &root); err != nil {
+			return fmt.Errorf("parse config %s: %w", path, err)
+		}
+		if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+			return fmt.Errorf("config %s: not a YAML mapping", path)
+		}
+	case os.IsNotExist(err):
+		doc := Default()
+		doc.MCP.Command = command
+		out, err := yaml.Marshal(doc)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(path, out, 0o600)
+	default:
+		return fmt.Errorf("read config %s: %w", path, err)
+	}
+	top := root.Content[0]
+
+	mcp := mappingValue(top, "mcp")
+	if mcp == nil {
+		if command == "" {
+			return nil // disabling with nothing stored: nothing to write
+		}
+		keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "mcp"}
+		mcp = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		top.Content = append(top.Content, keyNode, mcp)
+	}
+	if mcp.Kind != yaml.MappingNode {
+		return fmt.Errorf("config %s: mcp is not a mapping", path)
+	}
+	setMapField(mcp, "command", command)
+
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return err
+	}
+	hardenSecretPerms(path, out)
+	return nil
+}
+
+// mappingValue returns the value node paired with key in a mapping node, or
+// nil when absent.
+func mappingValue(m *yaml.Node, key string) *yaml.Node {
+	if m.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return m.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// setMapField upserts key: value (empty value removes the key) in mapping
+// node m, preserving order and neighbouring comments.
+func setMapField(m *yaml.Node, key, value string) {
+	// Drop existing entries for the key first (a duplicate key would be a
+	// parse error on reload).
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			if value == "" {
+				m.Content = append(m.Content[:i], m.Content[i+2:]...)
+				return
+			}
+			m.Content[i+1].Value = value
+			m.Content[i+1].Tag = "!!str"
+			return
+		}
+	}
+	if value == "" {
+		return
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+	)
 }
 
 // hardenSecretPerms enforces 0600 on a config file that contains secrets

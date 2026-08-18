@@ -19,14 +19,20 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/xenith/openpanda/internal/askengine"
 	"github.com/xenith/openpanda/internal/config"
 	"github.com/xenith/openpanda/internal/i18n"
 	"github.com/xenith/openpanda/internal/log"
 	"github.com/xenith/openpanda/internal/memory"
+	"github.com/xenith/openpanda/internal/reminders"
+	"github.com/xenith/openpanda/internal/sessions"
+	"github.com/xenith/openpanda/internal/skills"
 	"github.com/xenith/openpanda/webui/panel"
+	"github.com/xenith/openpanda/webui/push"
 )
 
 func runWeb(args []string) {
@@ -82,14 +88,54 @@ func runWeb(args []string) {
 		defer engine.Close()
 	}
 
+	// Web Push (optional): reminder notifications go straight to the browser
+	// when a subscription exists.
+	var pushSvc *push.Service
+	if cfg.Push.Enabled {
+		keys, err := push.LoadOrCreateVAPIDKeys(cfg.Push.VAPIDKeyPath, cfg.Push.VAPIDSubject)
+		if err != nil {
+			logger.Warn("push disabled: load vapid keys failed", "err", err)
+		} else {
+			pushSvc = push.NewService(keys, push.NewStore(db), logger)
+		}
+	}
+
+	// Reminders (P1-28): the panel is a long-lived process, so it runs the
+	// reminder scanner — Web Push when configured, and the SSE change feed
+	// (the reminder fingerprint) refreshes any open console.
+	reminderStore := reminders.NewStore(db)
+	reminderScan := reminders.NewScanner(reminderStore, 15*time.Second, func(r reminders.Reminder) {
+		if pushSvc != nil {
+			nctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := pushSvc.Notify(nctx, push.Notification{
+				Title: "OpenPanda · Reminder",
+				Body:  r.Message,
+				ID:    fmt.Sprintf("reminder-%d", r.ID),
+				Icon:  "/icons/icon-192.png",
+				Badge: "/icons/badge-72.png",
+			}); err != nil {
+				logger.Warn("reminder push", "err", err)
+			}
+		}
+	}, logger)
+	go reminderScan.Run(context.Background())
+
 	srv := &http.Server{
 		Addr: addr,
 		Handler: panel.New(panel.Deps{
-			Store:    store,
-			Engine:   engine,
-			DB:       db,
-			Projects: memory.NewProjects(cfg.Storage.ProjectsPath),
-			Token:    token,
+			Store:      store,
+			Engine:     engine,
+			DB:         db,
+			Projects:   memory.NewProjects(cfg.Storage.ProjectsPath),
+			Sessions:   sessions.NewStore(filepath.Join(filepath.Dir(cfg.Storage.DBPath), "sessions")),
+			Worktrees:  openWorktreesBestEffort(cfg.Storage.WorkPath),
+			SkillStore: skills.NewStore(cfg.Storage.SkillsPath),
+			Reminders:  reminderStore,
+			Push:       pushSvc,
+			Cfg:        cfg,
+			ConfigPath: resolvedConfigPath(*configPath),
+			Token:      token,
 		}),
 	}
 	// Bind synchronously so a taken port surfaces as an error, not a
@@ -113,4 +159,26 @@ func runWeb(args []string) {
 	<-ctx.Done()
 	fmt.Println(i18n.T(loc, "web.stopped"))
 	_ = srv.Shutdown(context.Background())
+}
+
+// resolvedConfigPath mirrors config.Load's path resolution so the settings
+// API persists into the same file the node loaded.
+func resolvedConfigPath(flagPath string) string {
+	if flagPath != "" {
+		return flagPath
+	}
+	if env := os.Getenv("OPENPANDA_CONFIG_PATH"); env != "" {
+		return env
+	}
+	return config.DefaultPath
+}
+
+// openWorktreesBestEffort returns a Worktrees for the work path, or nil when
+// it is not a git repository (sessions then run without isolation).
+func openWorktreesBestEffort(workPath string) *sessions.Worktrees {
+	wt, err := sessions.OpenWorktrees(workPath)
+	if err != nil {
+		return nil
+	}
+	return wt
 }

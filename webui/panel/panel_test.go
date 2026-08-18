@@ -339,6 +339,52 @@ func TestAuthRateLimited(t *testing.T) {
 	}
 }
 
+// TestAuthLockoutStillAcceptsCorrectToken verifies a locked-out IP can still
+// authenticate with the correct token: the lockout throttles wrong guesses, it
+// must never lock the user out of the panel while their browser reconnects
+// with valid credentials (EventSource retries with a stale token used to burn
+// the whole budget and freeze the panel with 429s).
+func TestAuthLockoutStillAcceptsCorrectToken(t *testing.T) {
+	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Token: testToken})
+	for i := 0; i < maxAuthFailures; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+		req.Header.Set("Authorization", "Bearer wrong")
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with correct token despite lockout", rr.Code)
+	}
+	// The successful auth reset the budget: the next wrong guess is a fresh 401.
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	req.Header.Set("Authorization", "Bearer wrong")
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (budget was reset by the successful auth)", rr.Code)
+	}
+}
+
+// TestAuthTokenViaQuery verifies the ?token= fallback, which EventSource needs
+// because it cannot send an Authorization header.
+func TestAuthTokenViaQuery(t *testing.T) {
+	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Token: testToken})
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks?token="+testToken, nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 via query token", rr.Code)
+	}
+	// A wrong query token is still rejected and counts as a failure.
+	req = httptest.NewRequest(http.MethodGet, "/api/tasks?token=wrong", nil)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 for wrong query token", rr.Code)
+	}
+}
+
 // TestAuthRateLimitWindowReset verifies the lockout expires with its window.
 func TestAuthRateLimitWindowReset(t *testing.T) {
 	old := authFailWindow

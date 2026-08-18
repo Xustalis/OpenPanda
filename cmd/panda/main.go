@@ -23,11 +23,13 @@ import (
 	"github.com/xenith/openpanda/internal/ledger"
 	"github.com/xenith/openpanda/internal/log"
 	"github.com/xenith/openpanda/internal/memory"
+	"github.com/xenith/openpanda/internal/reminders"
 	"github.com/xenith/openpanda/internal/skills"
 	"github.com/xenith/openpanda/internal/storage"
+	versionpkg "github.com/xenith/openpanda/internal/version"
 )
 
-var version = "0.0.1"
+var version = versionpkg.Version
 
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
@@ -79,6 +81,12 @@ func main() {
 		case "skill":
 			runSkill(args)
 			return
+		case "reminder":
+			runReminder(args)
+			return
+		case "detect":
+			runDetect(args)
+			return
 		case "metrics":
 			runMetrics(args)
 			return
@@ -92,7 +100,7 @@ func main() {
 			// A bare unknown word must not fall through to runDaemon (P1-25):
 			// "panda statsu" (a typo) would otherwise start a resident daemon.
 			fmt.Fprintf(os.Stderr, "panda: unknown subcommand %q\n", sub)
-			fmt.Fprintln(os.Stderr, "usage: panda [ask|repl|web|install|uninstall|doctor|status|queue|task|cancel|approve|reject|logs|skill|metrics|audit|version] — or no subcommand to run the daemon")
+			fmt.Fprintln(os.Stderr, "usage: panda [ask|repl|web|install|uninstall|doctor|detect|status|queue|task|cancel|approve|reject|logs|skill|reminder|metrics|audit|version] — or no subcommand to run the daemon")
 			os.Exit(2)
 		}
 	}
@@ -195,6 +203,20 @@ func runDaemon() {
 	)
 	dreamSched.OnError = func(err error) { logger.Warn("dreaming sweep", "err", err) }
 	go dreamSched.Run(ctx)
+
+	// Reminders (design P1-28): claim due reminders in the background and
+	// log them. The web panel runs its own scanner with Web Push + SSE
+	// delivery; ClaimDue's atomic claim keeps the two from double-firing.
+	reminderScan := reminders.NewScanner(
+		reminders.NewStore(db),
+		15*time.Second,
+		func(r reminders.Reminder) {
+			logger.Info("reminder due", "id", r.ID, "message", r.Message,
+				"due", time.Unix(r.DueAt, 0).Format(time.RFC3339))
+		},
+		logger,
+	)
+	go reminderScan.Run(ctx)
 
 	if err := coreNode.Register(ctx); err != nil {
 		fatal("register node", err)

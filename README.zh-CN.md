@@ -11,6 +11,7 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.22-blue)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+![Status](https://img.shields.io/badge/status-pre--release-yellow)
 
 ---
 
@@ -40,7 +41,7 @@ OpenPanda 把你拥有的每一台设备——笔记本、单板电脑、桌面�
 
 ## 核心特性
 
-- **异构节点网络**——每个节点通过能力卡（capability card）声明真实能力（CPU 等级、shell、Agent 适配器）；网络把任务路由给真正能干活的节点。为 MacBook ↔ 香橙派 3B 以及介于两者之间的各种设备而设计。
+- **异构节点网络**——每个节点通过能力卡（capability card）声明真实能力（CPU 等级、shell、Agent 适配器）；网络把任务路由给真正能干活的节点。为笔记本电脑、开发板、台式机以及各种性能层级的设备而设计。
 - **统一入口模型**——一条指令进入，三种意图输出：`answer`（纯 LLM 回答）、`tool_call`（调用你的工具）、`task`（委派到节点执行）。自动意图分类，并带优雅降级。
 - **三层能力执行**——`native`（直接执行 shell 命令）、`agent`（基于适配器的 Agent，例如通过 Anthropic 兼容端点调用 Claude Code）、`manual`（进队列，等你人工审批/手动执行）。
 - **P2P 委派协议**——基于 WebSocket + JSON 的幂等 `task_id` 与每次执行唯一的 `attempt_id`，崩溃重试绝不会重复执行。
@@ -68,7 +69,7 @@ OpenPanda 把你拥有的每一台设备——笔记本、单板电脑、桌面�
                        │                              │
           ┌────────────▼────────────┐     ┌────────────▼────────────┐
           │         工作节点         │     │         工作节点         │
-          │   如 MacBook（Full）    │     │   如 香橙派（Micro）      │
+          │   如 笔记本（Standard）│     │   如 开发板（Micro）     │
           └─────────────────────────┘     └─────────────────────────┘
 ```
 
@@ -135,7 +136,7 @@ network:
   listen_addr: ":7836"        # WebSocket 监听地址
   shared_secret: "..."        # 节点间 HMAC 鉴权——所有节点必须共享同一值
   peers:                      # 网络中的其他节点
-    - "orangepi3b.tailnet.ts.net:7836"
+    - "worker-1.your-tailnet.ts.net:7836"
 model:
   base_url: "https://api.deepseek.com/anthropic"  # 任何兼容 /v1/messages 的端点
   model: "deepseek-chat"
@@ -147,7 +148,7 @@ model:
 ### 运行守护进程
 
 ```bash
-./bin/panda --config config.yaml --card config/capabilities.macbook.yaml
+./bin/panda --config config.yaml --card config/capabilities.example-desktop.yaml
 ```
 
 每个**能执行任务**的节点都应带上自己的能力卡启动。没有能力卡的节点仍参与心跳，但不会被委派任务。
@@ -157,7 +158,7 @@ model:
 问任何问题——入口模型自动决定是回答、调用工具、还是委派：
 
 ```bash
-./bin/panda ask --card config/capabilities.macbook.yaml "总结一下最近一周的 git log"
+./bin/panda ask --card config/capabilities.example-desktop.yaml "总结一下最近一周的 git log"
 ```
 
 > `--card` 指向本机能力卡；不带它时 answer/tool_call 照常工作，但委派任务的输出会拒绝执行。
@@ -238,14 +239,12 @@ model:
 
 ## 文档
 
-完整文档位于 [`docs/`](docs/) 目录，按公开/内部分层：
+完整文档位于 [`docs/`](docs/) 目录：
 
-- [文档索引](docs/README.md) —— 所有文档的入口。
-- [贡献指南](CONTRIBUTING.md) —— 工具链、工程质量门槛、代码规范、PR 清单。
-- [桌面端与分发路线图](docs/plans/roadmap-desktop-and-packaging.md) —— 迈向桌面客户端的分阶段规划。
-- [阶段报告](docs/reports/) —— 各 Phase / Sprint 的进度报告。
-
-内部规划、设计与审查文档不随公开仓库推送。
+- [文档索引](docs/README.md) —— 公开文档入口。
+- [贡献指南](CONTRIBUTING.md) —— 工具链、工程质量门槛、代码规范、PR 清单
+  （译版见 `CONTRIBUTING.zh-CN.md` / `CONTRIBUTING.ja.md` / `CONTRIBUTING.es.md` / `CONTRIBUTING.de.md`）。
+- [桌面端与分发路线图](docs/plans/roadmap-desktop-and-packaging.md) —— 面向桌面客户端、签名安装包、公证与自动更新管道的分阶段规划。
 
 ## 测试
 
@@ -281,7 +280,7 @@ OpenPanda 面向低功耗设备。上硬件前请先验证稳态内存——单�
 ```bash
 make build
 for i in 1 2 3 4 5; do
-  ./bin/panda --config testdata/mac-config.yaml >/dev/null 2>&1 &
+  ./bin/panda --config testdata/node-a.yaml >/dev/null 2>&1 &
   PID=$!; sleep 3
   ps -o rss= -p $PID | awk '{printf "%d MB\n", $1/1024}'
   kill -TERM $PID; wait $PID 2>/dev/null
@@ -301,7 +300,7 @@ done
 
 ## 路线图
 
-Phase 3（记忆 + 语音 + 安全）已完成。记忆层、Dreaming 引擎、Skill 系统与执行侧加固已落地；语音入口代码完成，等待麦克风硬件实测。Web 控制台已用 Vite + Preact 重建并内嵌进二进制，交互式 REPL 随之落地——双节点委派已完成实机验证（[报告](docs/reports/delegation-loopback-2026-08-18.md)）。Phase 4（桌面客户端等）见[桌面与分发路线图](docs/plans/roadmap-desktop-and-packaging.md)。
+Phase 0–3（入口模型 · 双节点委派 · 记忆+语音+执行加固 · 内核/控制台/REPL 重建 + 实机双节点验证）已完成。Phase 4（桌面客户端 + 签名安装流水线 + 自动更新机制 + 发布渠道）详见[桌面与分发路线图](docs/plans/roadmap-desktop-and-packaging.md)。
 
 ## 参与贡献
 
@@ -311,7 +310,7 @@ Phase 3（记忆 + 语音 + 安全）已完成。记忆层、Dreaming 引擎、S
 - `gofmt -l internal/ cmd/ adapters/` 必须无输出。
 - 核心模块测试覆盖尽量保持在 ~60% 以上。
 
-完整工程规范见 [CONTRIBUTING.md](CONTRIBUTING.md)：错误包装（`%w` / `errors.Is`）、复杂度限制、无死代码、并发规则、i18n 规则与提交信息风格。
+完整工程规范见 [CONTRIBUTING.md](CONTRIBUTING.md)：错误包装（`%w` / `errors.Is`）、复杂度限制、无死代码、并发规则、i18n 规则与提交信息风格。译版见 [`CONTRIBUTING.zh-CN.md`](CONTRIBUTING.zh-CN.md)、[`CONTRIBUTING.ja.md`](CONTRIBUTING.ja.md)、[`CONTRIBUTING.es.md`](CONTRIBUTING.es.md)、[`CONTRIBUTING.de.md`](CONTRIBUTING.de.md)。
 
 ## 许可
 

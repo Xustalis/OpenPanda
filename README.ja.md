@@ -12,6 +12,7 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.22-blue)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+![Status](https://img.shields.io/badge/status-pre--release-yellow)
 
 ---
 
@@ -41,7 +42,7 @@ OpenPandaは、あなたが所有するすべてのデバイス——ノートPC
 
 ## 主な機能
 
-- **異種ノードネットワーク** — 各ノードが能力カード（capability card）で実力（CPUクラス、シェル、Agentアダプタ）を宣言。ネットワークはタスクを本当に実行できるノードにルーティングします。MacBook ↔ Orange Pi 3B、およびその間のあらゆるデバイス向けに設計されています。
+- **異種ノードネットワーク** — 各ノードが能力カード（capability card）で実力（CPUクラス、シェル、Agentアダプタ）を宣言。ネットワークはタスクを本当に実行できるノードにルーティングします。ノートPC、SBC、デスクトップ、その他あらゆる階層のデバイス向けに設計されています。
 - **統一エントリモデル** — 1つのプロンプト入力に対して3つのインテントを出力：`answer`（純粋なLLM応答）、`tool_call`（あなたのツール）、`task`（ノードへ委譲）。自動インテント分類と、フォールバックによる穏やかな劣化。
 - **3層の能力実行** — `native`（シェル直接実行）、`agent`（アダプタ経由のAgent、例：Anthropic互換エンドポイント経由のClaude Code）、`manual`（キューに入れてあなたの承認/手動実行を待つ）。
 - **P2P委譲プロトコル** — WebSocket + JSON上で、冪等な`task_id`キーと実行ごとに一意な`attempt_id`を使用。クラッシュ後の再試行が二重実行されることはありません。
@@ -69,7 +70,7 @@ OpenPandaは、あなたが所有するすべてのデバイス——ノートPC
                        │                              │
           ┌────────────▼────────────┐     ┌────────────▼────────────┐
           │        Workerノード     │     │        Workerノード     │
-          │   例：MacBook (Full)    │     │   例：Orange Pi (Micro)  │
+          │   例：ノートPC (Standard)│     │ 例：シングルボード (Micro)│
           └─────────────────────────┘     └─────────────────────────┘
 ```
 
@@ -115,7 +116,7 @@ make vet            # 静的解析
 実際に使うデバイス向けにクロスコンパイル:
 
 ```bash
-make build-linux-arm64   # → bin/panda-linux-arm64  （例：Orange Pi）
+make build-linux-arm64   # → bin/panda-linux-arm64  （SBC・組み込みボード向け）
 make build-linux-amd64   # → bin/panda-linux-amd64
 make build-darwin-arm64  # → bin/panda-darwin-arm64
 make build-windows-amd64 # → bin/panda-windows-amd64.exe
@@ -136,7 +137,7 @@ network:
   listen_addr: ":7836"        # WebSocketリスナー
   shared_secret: "..."        # ノード間のHMAC認証 — 全ノードが同じ値を共有
   peers:                      # ネットワーク内の他のノード
-    - "orangepi3b.tailnet.ts.net:7836"
+    - "worker-1.your-tailnet.ts.net:7836"
 model:
   base_url: "https://api.deepseek.com/anthropic"  # 任意の /v1/messages 互換エンドポイント
   model: "deepseek-chat"
@@ -148,7 +149,7 @@ model:
 ### デーモンの起動
 
 ```bash
-./bin/panda --config config.yaml --card config/capabilities.macbook.yaml
+./bin/panda --config config.yaml --card config/capabilities.example-desktop.yaml
 ```
 
 タスクを*実行*できる各ノードは、能力カード付きで起動してください。カードなしのノードはハートビートには参加しますが、タスクは割り当てられません。
@@ -237,14 +238,12 @@ model:
 
 ## ドキュメント
 
-完全なドキュメントは[`docs/`](docs/)ディレクトリにあり、公開部分と内部部分に分かれています:
+完全なドキュメントは[`docs/`](docs/)ディレクトリにあります：
 
-- [ドキュメントインデックス](docs/README.md) — すべてのドキュメントへの入り口。
-- [コントリビューションガイド](CONTRIBUTING.md) — ツールチェーン、品質ゲート、コード規約、PRチェックリスト。
-- [デスクトップ＆パッケージングロードマップ](docs/plans/roadmap-desktop-and-packaging.md) — デスクトップクライアントへ向けた段階的計画。
-- [フェーズレポート](docs/reports/) — 各フェーズ・スプリントの進捗レポート。
-
-内部の企画・設計・監査ドキュメントは公開リポジトリから除外されています。
+- [ドキュメントインデックス](docs/README.md) — 公開ドキュメントへの入り口。
+- [コントリビューションガイド](CONTRIBUTING.md) — ツールチェーン、品質ゲート、コード規約、PRチェックリスト
+  （日本語版：`CONTRIBUTING.ja.md`、他言語版は `CONTRIBUTING.zh-CN.md` / `CONTRIBUTING.es.md` / `CONTRIBUTING.de.md`）。
+- [デスクトップ＆パッケージングロードマップ](docs/plans/roadmap-desktop-and-packaging.md) — ネイティブデスクトップクライアント、署名付きインストーラ、公証、自動更新に向けた段階計画。
 
 ## テスト
 
@@ -266,7 +265,7 @@ OpenPandaは低消費電力デバイスをターゲットにしています。�
 ```bash
 make build
 for i in 1 2 3 4 5; do
-  ./bin/panda --config testdata/mac-config.yaml >/dev/null 2>&1 &
+  ./bin/panda --config testdata/node-a.yaml >/dev/null 2>&1 &
   PID=$!; sleep 3
   ps -o rss= -p $PID | awk '{printf "%d MB\n", $1/1024}'
   kill -TERM $PID; wait $PID 2>/dev/null
@@ -286,7 +285,7 @@ done
 
 ## ロードマップ
 
-Phase 3（メモリ + 音声 + 安全）は完了しました。メモリレイヤ、Dreamingエンジン、スキルシステム、実行強化は実装済み。音声エントリはコード完成済みで、マイクハードウェアでの検証を待っています。WebコンソールはVite + Preactで再構築されバイナリに組み込まれ、対話型REPLも同時に導入 — 2ノード間の委譲を実機検証済みです（[レポート](docs/reports/delegation-loopback-2026-08-18.md)）。Phase 4（デスクトップクライアントなど）は[デスクトップ＆パッケージングロードマップ](docs/plans/roadmap-desktop-and-packaging.md)で計画中です。
+Phase 0–3（エントリモデル・P2P委譲・メモリ/音声/実行の強化・カーネル/コンソール/REPLの再構築＋実機2ノード検証）は完了。Phase 4（デスクトップクライアント＋署名付きインストーラパイプライン＋自動更新機構＋リリースチャネル）については[デスクトップ＆パッケージングロードマップ](docs/plans/roadmap-desktop-and-packaging.md)に詳しく計画されています。
 
 ## コントリビューション
 
@@ -296,7 +295,7 @@ Phase 3（メモリ + 音声 + 安全）は完了しました。メモリレイ�
 - `gofmt -l internal/ cmd/ adapters/` の出力が空であること。
 - コアモジュールのテストカバレッジを可能な限り約60%以上に保つこと。
 
-完全な規約は[コントリビューションガイド](CONTRIBUTING.md)を参照してください：エラーラッピング（`%w` / `errors.Is`）、複雑度制限、デッドコード禁止、並行処理ルール、i18n規約、コミットスタイル。
+完全な規約は[コントリビューションガイド](CONTRIBUTING.md)を参照してください：エラーラッピング（`%w` / `errors.Is`）、複雑度制限、デッドコード禁止、並行処理ルール、i18n規約、コミットスタイル。各言語版ガイド：[`CONTRIBUTING.ja.md`](CONTRIBUTING.ja.md)、[`CONTRIBUTING.zh-CN.md`](CONTRIBUTING.zh-CN.md)、[`CONTRIBUTING.es.md`](CONTRIBUTING.es.md)、[`CONTRIBUTING.de.md`](CONTRIBUTING.de.md)。
 
 ## ライセンス
 
