@@ -59,7 +59,11 @@ logs/
 /PANDA-*.md
 /docs/*
 !/docs/README.md
+!/docs/reports/
+/docs/reports/*
 !/docs/reports/system-audit-2026-08-18.md
+!/docs/plans/
+/docs/plans/*
 !/docs/plans/roadmap-desktop-and-packaging.md
 
 # TRAE assistant workspace
