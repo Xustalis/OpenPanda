@@ -191,6 +191,9 @@ model:
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<问题>"` | 统一入口：分类为 answer / tool_call / task 并执行 |
 | `panda repl [--config PATH] [--card PATH]` | 交互式 shell：斜杠命令（tasks/approve/projects/nodes/lang），裸输入走提问引擎，`/web` 一键拉起内嵌控制台 |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | 一条命令起 Web 控制台：默认回环监听 + 临时令牌，浏览器打开即已登录 |
+| `panda install [--dir PATH] [--no-path]` | 将 `panda` 注册为全局命令（PATH 持久化、重启后仍可用），并自动验证安装副本可运行 |
+| `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run]` | 安全卸载：先展示完整计划，需输入 `confirm` 二次确认，白名单删除，用户资产（projects/memory/skills）始终保留，生成 zip 备份与清理报告 |
+| `panda doctor [--config PATH]` | 自检：安装副本可运行、PATH 解析正常、持久化在重启后有效、配置/数据库可用 |
 | `panda status` | 节点与任务状态 |
 | `panda queue` | 列出任务队列 |
 | `panda task [--config PATH] <task-id>` | 任务详情 |

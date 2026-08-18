@@ -190,6 +190,9 @@ model:
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<質問>"` | 統一エントリ：answer / tool_call / task に分類して実行 |
 | `panda repl [--config PATH] [--card PATH]` | 対話シェル：スラッシュコマンド（tasks/approve/projects/nodes/lang）、素の入力は ask エンジンへ、`/web` で組み込みコンソールを起動 |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | コマンド1つで Web コンソール：デフォルトはループバック + 一時トークン、ブラウザが開いた時点でログイン済み |
+| `panda install [--dir PATH] [--no-path]` | `panda` をグローバルコマンドとして PATH に登録（再起動後も有効）、インストール済みコピーの自動検証付き |
+| `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run]` | 安全なアンインストール：計画を表示 → `confirm` 入力で二次確認、ホワイトリスト削除のみ、ユーザーアセット（projects/memory/skills）は常に保持、zip バックアップとレポートを生成 |
+| `panda doctor [--config PATH]` | セルフチェック：インストール済みコピーの実行、PATH 解決、永続化、設定/DB の可用性 |
 | `panda status` | ノードとタスクの状態 |
 | `panda queue` | タスクキューの一覧 |
 | `panda task [--config PATH] <task-id>` | タスクの詳細 |

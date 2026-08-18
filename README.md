@@ -236,6 +236,9 @@ Manage skills:
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<question>"` | Unified entry: classify into answer / tool_call / task and execute |
 | `panda repl [--config PATH] [--card PATH]` | Interactive shell: slash commands (tasks/approve/projects/nodes/lang), bare input goes to the ask engine, `/web` boots the embedded console |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | One-command web console: loopback + ephemeral token by default, opens the browser already logged in |
+| `panda install [--dir PATH] [--no-path]` | Register `panda` globally on PATH (persistent across reboots) and self-verify the installed copy |
+| `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run]` | Safe removal: full plan first, `confirm` required, whitelist-only deletion, user assets (projects/memory/skills) always kept, zip backup + report |
+| `panda doctor [--config PATH]` | Self-check: installed copy runs, PATH resolves, persistence survives reboot, config/database usable |
 | `panda status` | Node & task status |
 | `panda queue` | List the task queue |
 | `panda task [--config PATH] <task-id>` | Task details |

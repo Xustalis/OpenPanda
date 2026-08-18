@@ -220,6 +220,9 @@ Skills verwalten:
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<Frage>"` | Einheitliches Eingabemodell: klassifiziert in answer / tool_call / task und führt aus |
 | `panda repl [--config PATH] [--card PATH]` | Interaktive Shell: Slash-Befehle (tasks/approve/projects/nodes/lang), freie Eingabe geht an die ask-Engine, `/web` startet die eingebettete Konsole |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | Web-Konsole mit einem Befehl: standardmäßig Loopback + flüchtiges Token, der Browser öffnet sich bereits angemeldet |
+| `panda install [--dir PATH] [--no-path]` | Registriert `panda` als globales Kommando im PATH (überlebt Neustarts) und verifiziert die installierte Kopie automatisch |
+| `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run]` | Sichere Deinstallation: erst der volle Plan, dann zwingend `confirm`, Löschung nur nach Whitelist, Nutzerdaten (projects/memory/skills) bleiben immer erhalten, Zip-Backup und Bericht |
+| `panda doctor [--config PATH]` | Selbstcheck: installierte Kopie läuft, PATH löst auf, Persistenz überlebt den Neustart, Konfiguration/Datenbank nutzbar |
 | `panda status` | Node- & Task-Status |
 | `panda queue` | Task-Warteschlange anzeigen |
 | `panda task [--config PATH] <task-id>` | Task-Details |
