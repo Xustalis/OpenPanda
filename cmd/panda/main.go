@@ -1,8 +1,10 @@
 // Command panda is the PANDA core daemon. It registers this node's
 // capabilities and, once peers connect, delegates/executes tasks over
-// WebSocket. Subcommands: ask (unified entry model), status/queue/task/
-// approve/reject/cancel/logs (CLI panel), version. With no subcommand it runs
-// the daemon (headless kernel — the web panel is a separate webui/ sidecar).
+// WebSocket. Subcommands: ask (unified entry model), repl (interactive shell
+// over the same store, with /web to boot the embedded console), status/queue/
+// task/approve/reject/cancel/logs (one-shot panel), version. With no
+// subcommand it runs the daemon (headless kernel — the web panel is a
+// separate webui/ sidecar).
 package main
 
 import (
@@ -37,6 +39,9 @@ func main() {
 		switch sub {
 		case "ask":
 			runAsk(args)
+			return
+		case "repl":
+			runRepl(args)
 			return
 		case "status":
 			runStatus(args)
@@ -75,7 +80,7 @@ func main() {
 			// A bare unknown word must not fall through to runDaemon (P1-25):
 			// "panda statsu" (a typo) would otherwise start a resident daemon.
 			fmt.Fprintf(os.Stderr, "panda: unknown subcommand %q\n", sub)
-			fmt.Fprintln(os.Stderr, "usage: panda [ask|status|queue|task|cancel|approve|reject|logs|skill|metrics|audit|version] — or no subcommand to run the daemon")
+			fmt.Fprintln(os.Stderr, "usage: panda [ask|repl|status|queue|task|cancel|approve|reject|logs|skill|metrics|audit|version] — or no subcommand to run the daemon")
 			os.Exit(2)
 		}
 	}
@@ -88,7 +93,7 @@ func main() {
 // subcommand; this lets users write `panda --config x.yaml status` as well
 // as `panda status --config x.yaml`.
 func parseSubcommand(args []string) (string, []string) {
-	valueFlags := map[string]bool{"--config": true, "--card": true}
+	valueFlags := map[string]bool{"--config": true, "--card": true, "--mcp": true}
 	var global []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
