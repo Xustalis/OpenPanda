@@ -1,7 +1,9 @@
-// Command panel runs the legacy PWA control panel as an optional sidecar,
-// reading the same SQLite store the kernel daemon writes. The kernel daemon no
-// longer mounts the web UI; start this separately if you still want the browser
-// console (see webui/README.md). Kept frozen — no further optimization planned.
+// Command panel runs the web control panel as a sidecar, reading the same
+// SQLite store the kernel daemon writes (see webui/README.md). Besides the
+// read-only queue it serves the panel's write paths: POST /api/ask (the
+// unified entry, shared with `panda ask`), project create, cancel, and node
+// listing. --card wires the ask engine's task execution (same flag as
+// `panda ask`); without it /api/ask answers questions but refuses tasks.
 package main
 
 import (
@@ -16,9 +18,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xenith/openpanda/internal/askengine"
 	"github.com/xenith/openpanda/internal/config"
 	"github.com/xenith/openpanda/internal/core"
 	"github.com/xenith/openpanda/internal/log"
+	"github.com/xenith/openpanda/internal/memory"
 	"github.com/xenith/openpanda/internal/storage"
 	"github.com/xenith/openpanda/webui/panel"
 	"github.com/xenith/openpanda/webui/push"
@@ -27,7 +31,9 @@ import (
 func main() {
 	var (
 		configPath = flag.String("config", "", "path to config.yaml (default /etc/openpanda/config.yaml)")
-		staticDir  = flag.String("static", "webui/web/pwa", "directory holding the PWA static files")
+		staticDir  = flag.String("static", "webui/web", "directory holding the built web app")
+		cardPath   = flag.String("card", "", "path to capabilities.yaml (enables task execution in /api/ask)")
+		mcpCommand = flag.String("mcp", "", "space-separated stdio MCP server command whose tools /api/ask may call")
 	)
 	flag.Parse()
 
@@ -64,6 +70,27 @@ func main() {
 
 	store := core.NewTaskStore(db, logger)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// The ask engine powers POST /api/ask — the same unified entry `panda ask`
+	// runs (classification, memory/MCP tools, task submission). It needs a
+	// model endpoint; --card additionally opts in to task execution exactly
+	// like `panda ask --card`. Without an endpoint the panel still serves the
+	// queue/projects/nodes and /api/ask reports it is not configured.
+	var engine *askengine.Engine
+	if cfg.Model.BaseURL != "" {
+		engine, err = askengine.New(ctx, cfg, askengine.Options{
+			CardPath:   *cardPath,
+			MCPCommand: *mcpCommand,
+			Logger:     logger,
+		})
+		if err != nil {
+			fatal("init ask engine", err)
+		}
+		defer engine.Close()
+	}
+
 	var pushSvc *push.Service
 	if cfg.Push.Enabled {
 		keys, err := push.LoadOrCreateVAPIDKeys(cfg.Push.VAPIDKeyPath, cfg.Push.VAPIDSubject)
@@ -72,10 +99,10 @@ func main() {
 		}
 		pushSvc = push.NewService(keys, push.NewStore(db), logger)
 		store.SetOnReview(func(t core.Task) {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			nctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			if err := pushSvc.Notify(ctx, push.Notification{
-				Title: "PANDA · 任务需要审批",
+			if err := pushSvc.Notify(nctx, push.Notification{
+				Title: "OpenPanda · 任务需要审批",
 				Body:  t.Title,
 				ID:    t.TaskID,
 				Icon:  "/icons/icon-192.png",
@@ -86,21 +113,26 @@ func main() {
 		})
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	srv := &http.Server{
-		Addr:    cfg.Network.PanelAddr,
-		Handler: panel.New(store, *staticDir, pushSvc, cfg.Network.PanelToken),
+		Addr: cfg.Network.PanelAddr,
+		Handler: panel.New(panel.Deps{
+			Store:     store,
+			Engine:    engine,
+			DB:        db,
+			Projects:  memory.NewProjects(cfg.Storage.ProjectsPath),
+			Push:      pushSvc,
+			StaticDir: *staticDir,
+			Token:     cfg.Network.PanelToken,
+		}),
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
 
-	logger.Info("panda webui sidecar listening", "addr", cfg.Network.PanelAddr, "static", *staticDir)
+	logger.Info("openpanda webui sidecar listening", "addr", cfg.Network.PanelAddr, "static", *staticDir)
 
 	select {
 	case <-ctx.Done():
-		logger.Info("panda webui sidecar shutting down")
+		logger.Info("openpanda webui sidecar shutting down")
 		_ = srv.Shutdown(context.Background())
 	case err := <-errCh:
 		if err != nil && err != http.ErrServerClosed {

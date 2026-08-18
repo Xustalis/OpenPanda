@@ -75,7 +75,7 @@ func TestListTasks(t *testing.T) {
 	_, _ = store.Create(ctx, "", "proj", "task one", "node", []string{"node"})
 	_, _ = store.Create(ctx, "", "other", "task two", "node", []string{"node"})
 
-	h := New(store, t.TempDir(), nil, testToken)
+	h := New(Deps{Store: store, StaticDir: t.TempDir(), Token: testToken})
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks", nil))
 	if rr.Code != http.StatusOK {
@@ -96,7 +96,7 @@ func TestListTasksFilterByProject(t *testing.T) {
 	_, _ = store.Create(ctx, "", "proj", "task one", "node", []string{"node"})
 	_, _ = store.Create(ctx, "", "other", "task two", "node", []string{"node"})
 
-	h := New(store, t.TempDir(), nil, testToken)
+	h := New(Deps{Store: store, StaticDir: t.TempDir(), Token: testToken})
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks?project=proj", nil))
 	var tasks []taskJSON
@@ -109,7 +109,7 @@ func TestListTasksFilterByProject(t *testing.T) {
 }
 
 func TestGetTaskNotFound(t *testing.T) {
-	h := New(newTestStore(t), t.TempDir(), nil, testToken)
+	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Token: testToken})
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks/nope", nil))
 	if rr.Code != http.StatusNotFound {
@@ -121,7 +121,7 @@ func TestApproveReview(t *testing.T) {
 	store := newTestStore(t)
 	task := reviewTask(t, store)
 
-	h := New(store, t.TempDir(), nil, testToken)
+	h := New(Deps{Store: store, StaticDir: t.TempDir(), Token: testToken})
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks/"+task.TaskID+"/approve", nil))
 	if rr.Code != http.StatusOK {
@@ -137,7 +137,7 @@ func TestRejectReview(t *testing.T) {
 	store := newTestStore(t)
 	task := reviewTask(t, store)
 
-	h := New(store, t.TempDir(), nil, testToken)
+	h := New(Deps{Store: store, StaticDir: t.TempDir(), Token: testToken})
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks/"+task.TaskID+"/reject?reason=nope", nil))
 	if rr.Code != http.StatusOK {
@@ -154,7 +154,7 @@ func TestApproveNonReviewConflicts(t *testing.T) {
 	ctx := context.Background()
 	task, _ := store.Create(ctx, "", "proj", "still submitted", "node", []string{"node"})
 
-	h := New(store, t.TempDir(), nil, testToken)
+	h := New(Deps{Store: store, StaticDir: t.TempDir(), Token: testToken})
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks/"+task.TaskID+"/approve", nil))
 	if rr.Code != http.StatusConflict {
@@ -180,7 +180,7 @@ func newTestPushService(t *testing.T) *push.Service {
 }
 
 func TestPushKey(t *testing.T) {
-	h := New(newTestStore(t), t.TempDir(), newTestPushService(t), testToken)
+	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Push: newTestPushService(t), Token: testToken})
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/push/key", nil))
 	if rr.Code != http.StatusOK {
@@ -209,7 +209,7 @@ func validSubJSON() string {
 }
 
 func TestPushSubscribeRejectsInvalid(t *testing.T) {
-	h := New(newTestStore(t), t.TempDir(), newTestPushService(t), testToken)
+	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Push: newTestPushService(t), Token: testToken})
 	rr := httptest.NewRecorder()
 	req := authedReq(http.MethodPost, "/api/push/subscribe", nil)
 	req.Body = io.NopCloser(strings.NewReader(`{"endpoint":"https://example.com/push/1","keys":{"p256dh":"short","auth":"short"}}`))
@@ -220,7 +220,7 @@ func TestPushSubscribeRejectsInvalid(t *testing.T) {
 }
 
 func TestPushSubscribeUnsubscribeRoundTrip(t *testing.T) {
-	h := New(newTestStore(t), t.TempDir(), newTestPushService(t), testToken)
+	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Push: newTestPushService(t), Token: testToken})
 	// subscribe
 	rr := httptest.NewRecorder()
 	req := authedReq(http.MethodPost, "/api/push/subscribe", nil)
@@ -240,7 +240,7 @@ func TestPushSubscribeUnsubscribeRoundTrip(t *testing.T) {
 }
 
 func TestAPIAuthRequired(t *testing.T) {
-	h := New(newTestStore(t), t.TempDir(), nil, testToken)
+	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Token: testToken})
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/tasks", nil)) // no header
 	if rr.Code != http.StatusUnauthorized {
@@ -249,7 +249,7 @@ func TestAPIAuthRequired(t *testing.T) {
 }
 
 func TestAPIWrongToken(t *testing.T) {
-	h := New(newTestStore(t), t.TempDir(), nil, testToken)
+	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Token: testToken})
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 	req.Header.Set("Authorization", "Bearer wrong")
 	rr := httptest.NewRecorder()
@@ -262,7 +262,7 @@ func TestAPIWrongToken(t *testing.T) {
 func TestEmptyTokenFailsClosed(t *testing.T) {
 	// A panel configured without a token must never serve /api/* — fail closed
 	// even if a client supplies a Bearer header.
-	h := New(newTestStore(t), t.TempDir(), nil, "")
+	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir()})
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 	req.Header.Set("Authorization", "Bearer anything")
 	rr := httptest.NewRecorder()
@@ -277,7 +277,7 @@ func TestStaticServedWithoutAuth(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	h := New(newTestStore(t), dir, nil, testToken)
+	h := New(Deps{Store: newTestStore(t), StaticDir: dir, Token: testToken})
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil)) // no header
 	if rr.Code != http.StatusOK {
@@ -293,7 +293,7 @@ func TestApproveErrorDoesNotLeakInternals(t *testing.T) {
 	ctx := context.Background()
 	task, _ := store.Create(ctx, "", "proj", "internal-secret-detail", "node", []string{"node"})
 
-	h := New(store, t.TempDir(), nil, testToken)
+	h := New(Deps{Store: store, StaticDir: t.TempDir(), Token: testToken})
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks/"+task.TaskID+"/approve", nil))
 	if rr.Code != http.StatusConflict {
@@ -311,7 +311,7 @@ func TestApproveErrorDoesNotLeakInternals(t *testing.T) {
 // maxAuthFailures wrong tokens the IP is locked out with 429, while other IPs
 // are unaffected.
 func TestAuthRateLimited(t *testing.T) {
-	h := New(newTestStore(t), t.TempDir(), nil, testToken)
+	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Token: testToken})
 
 	badAttempt := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
@@ -345,7 +345,7 @@ func TestAuthRateLimitWindowReset(t *testing.T) {
 	authFailWindow = 50 * time.Millisecond
 	t.Cleanup(func() { authFailWindow = old })
 
-	h := New(newTestStore(t), t.TempDir(), nil, testToken)
+	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Token: testToken})
 	for i := 0; i < maxAuthFailures; i++ {
 		req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 		h.ServeHTTP(httptest.NewRecorder(), req)

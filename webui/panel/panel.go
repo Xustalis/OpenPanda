@@ -17,30 +17,60 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xenith/openpanda/internal/askengine"
 	"github.com/xenith/openpanda/internal/core"
+	"github.com/xenith/openpanda/internal/memory"
 	"github.com/xenith/openpanda/webui/push"
 )
 
-// New builds the panel HTTP handler. staticDir is the directory holding the PWA
-// static files (webui/web/pwa); JSON endpoints are served under /api/. pushSvc, when
-// non-nil, additionally serves the Web Push subscription endpoints. token is the
-// Bearer credential guarding every /api/* route; the static files under / are
-// served unauthenticated (they carry no secrets, the API does). An empty token
-// fails closed: /api/* rejects every request until a token is configured.
-func New(store *core.TaskStore, staticDir string, pushSvc *push.Service, token string) http.Handler {
-	h := &handler{store: store, push: pushSvc}
+// Deps wires the panel to its collaborators. Store is required; everything
+// else degrades gracefully — Engine nil means /api/ask answers-only mode,
+// Projects nil disables the project endpoints, DB nil disables /api/nodes.
+type Deps struct {
+	Store     *core.TaskStore
+	Engine    *askengine.Engine
+	DB        *sql.DB
+	Projects  *memory.Projects
+	Push      *push.Service
+	StaticDir string
+	Token     string
+}
+
+// New builds the panel HTTP handler: the static web app under StaticDir plus
+// the JSON API that backs it — task queue, task detail, ask (unified entry),
+// projects, nodes, cancel/logs, the human approval of reviewed tasks (design
+// §14.2 Layer 4), and an SSE change feed. Push, when non-nil, additionally
+// serves the Web Push subscription endpoints. Token is the Bearer credential
+// guarding every /api/* route; the static files under / are served
+// unauthenticated (they carry no secrets, the API does). An empty token fails
+// closed: /api/* rejects every request until a token is configured.
+func New(d Deps) http.Handler {
+	h := &handler{
+		store:    d.Store,
+		engine:   d.Engine,
+		db:       d.DB,
+		projects: d.Projects,
+		push:     d.Push,
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/tasks", h.listTasks)
 	mux.HandleFunc("GET /api/tasks/{id}", h.getTask)
 	mux.HandleFunc("POST /api/tasks/{id}/approve", h.approveTask)
 	mux.HandleFunc("POST /api/tasks/{id}/reject", h.rejectTask)
-	if pushSvc != nil {
+	mux.HandleFunc("POST /api/tasks/{id}/cancel", h.cancelTask)
+	mux.HandleFunc("GET /api/tasks/{id}/logs", h.taskLogs)
+	mux.HandleFunc("POST /api/ask", h.ask)
+	mux.HandleFunc("GET /api/projects", h.listProjects)
+	mux.HandleFunc("POST /api/projects", h.createProject)
+	mux.HandleFunc("GET /api/nodes", h.listNodes)
+	mux.HandleFunc("GET /api/events", h.events)
+	if d.Push != nil {
 		mux.HandleFunc("GET /api/push/key", h.pushKey)
 		mux.HandleFunc("POST /api/push/subscribe", h.pushSubscribe)
 		mux.HandleFunc("POST /api/push/unsubscribe", h.pushUnsubscribe)
 	}
-	mux.Handle("/", http.FileServer(http.Dir(staticDir)))
-	return authMiddleware(token, mux)
+	mux.Handle("/", http.FileServer(http.Dir(d.StaticDir)))
+	return authMiddleware(d.Token, mux)
 }
 
 // authMiddleware guards /api/* with a constant-time Bearer comparison. An empty
@@ -127,8 +157,11 @@ func clientIP(r *http.Request) string {
 }
 
 type handler struct {
-	store *core.TaskStore
-	push  *push.Service
+	store    *core.TaskStore
+	engine   *askengine.Engine
+	db       *sql.DB
+	projects *memory.Projects
+	push     *push.Service
 }
 
 // taskJSON is the wire form of a task row, with stable snake_case names so the

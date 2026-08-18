@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -42,6 +43,26 @@ func (p *Projects) Path(name string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(p.root, name, "MEMORY.md"), nil
+}
+
+// List returns the names of the projects that exist under the root (i.e. have
+// a directory), sorted. A missing root yields an empty list — no projects yet.
+func (p *Projects) List() ([]string, error) {
+	entries, err := os.ReadDir(p.root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("memory: list projects: %w", err)
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 // Load reads a project's memory as a MemFile with the project limit applied. A

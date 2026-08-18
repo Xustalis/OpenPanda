@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strconv"
 
@@ -74,6 +75,39 @@ type PushConfig struct {
 	VAPIDSubject string `yaml:"vapid_subject"` // e.g. mailto:ops@example.com
 	VAPIDKeyPath string `yaml:"vapid_key_path"`
 }
+
+// validResourceClasses are the resource classes schedulerTier understands;
+// anything else silently degrades to a worker tier, so catch typos at startup.
+var validResourceClasses = map[string]bool{"Micro": true, "Standard": true, "Full": true, "": true}
+
+// Validate reports statically invalid configuration before the node starts:
+// an unknown resource_class (a typo silently downgrades the scheduler tier),
+// malformed peer addresses (must be host:port), or a listen/panel address that
+// is not host:port. Reachability is NOT checked here — peers may come and go
+// at runtime; the daemon's MaintainPeer loop already warns on dial failures.
+func (c *Config) Validate() error {
+	if !validResourceClasses[c.Node.ResourceClass] {
+		return fmt.Errorf("config: node.resource_class %q is invalid (want Micro, Standard, or Full)", c.Node.ResourceClass)
+	}
+	for _, addr := range []struct{ name, value string }{
+		{"network.listen_addr", c.Network.ListenAddr},
+		{"network.panel_addr", c.Network.PanelAddr},
+	} {
+		if addr.value == "" {
+			continue // optional / disabled
+		}
+		if _, _, err := net.SplitHostPort(addr.value); err != nil {
+			return fmt.Errorf("config: %s %q is not host:port: %w", addr.name, addr.value, err)
+		}
+	}
+	for i, peer := range c.Network.Peers {
+		if _, _, err := net.SplitHostPort(peer); err != nil {
+			return fmt.Errorf("config: network.peers[%d] %q is not host:port: %w", i, peer, err)
+		}
+	}
+	return nil
+}
+
 
 // Default returns a Config with safe local-development defaults.
 func Default() *Config {
@@ -146,6 +180,9 @@ func Load(path string) (*Config, error) {
 	cfg.applyEnv()
 	if cfg.Node.Name == "" {
 		return nil, fmt.Errorf("config %s: node.name must not be empty", path)
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
 	return cfg, nil
 }

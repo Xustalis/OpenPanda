@@ -1,4 +1,4 @@
-package main
+package askengine
 
 import (
 	"context"
@@ -38,7 +38,7 @@ func buildToolRegistry(hermes *memory.Hermes, projects *memory.Projects) *entry.
 		Name:        memory.ToolAdd,
 		Description: "记住一条新记忆。target：user（用户偏好/沟通风格）、memory（环境事实/全局约定/纠正）、project（项目约定）。",
 		Schema: map[string]any{
-			"type": "object",
+			"type":       "object",
 			"properties": map[string]any{
 				"target":  targetEnum,
 				"entry":   map[string]any{"type": "string", "description": "要记住的内容"},
@@ -55,7 +55,7 @@ func buildToolRegistry(hermes *memory.Hermes, projects *memory.Projects) *entry.
 		Name:        memory.ToolReplace,
 		Description: "替换一条已有记忆。old 用能唯一匹配该条目的子串（匹配到多条会报错，需给更具体子串）。",
 		Schema: map[string]any{
-			"type": "object",
+			"type":       "object",
 			"properties": map[string]any{
 				"target":  targetEnum,
 				"old":     map[string]any{"type": "string", "description": "能唯一匹配待替换条目的子串"},
@@ -73,7 +73,7 @@ func buildToolRegistry(hermes *memory.Hermes, projects *memory.Projects) *entry.
 		Name:        memory.ToolRemove,
 		Description: "删除一条记忆。old 用能唯一匹配该条目的子串。",
 		Schema: map[string]any{
-			"type": "object",
+			"type":       "object",
 			"properties": map[string]any{
 				"target":  targetEnum,
 				"old":     map[string]any{"type": "string", "description": "能唯一匹配待删除条目的子串"},
@@ -137,8 +137,7 @@ func appendToolTurns(turns []entry.Turn, call *entry.ToolCall, note, result stri
 
 // registerMCPTools lists the tools a stdio MCP server advertises and registers
 // each as an entry-model tool whose Run delegates to the server. The server is
-// spawned and owned by the caller (see --mcp in runAsk); this only imports its
-// tool surface into the registry.
+// spawned and owned by the Engine; this only imports its tool surface.
 func registerMCPTools(ctx context.Context, reg *entry.Registry, client *mcp.Client) error {
 	tools, err := client.ListTools(ctx)
 	if err != nil {
