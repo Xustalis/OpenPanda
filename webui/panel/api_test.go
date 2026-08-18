@@ -78,8 +78,8 @@ func TestCancelTask(t *testing.T) {
 		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
 	}
 	var out struct {
-		ID       string `json:"id"`
-		Cancelled int   `json:"cancelled"`
+		ID        string `json:"id"`
+		Cancelled int    `json:"cancelled"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)

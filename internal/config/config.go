@@ -108,7 +108,6 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-
 // Default returns a Config with safe local-development defaults.
 func Default() *Config {
 	return &Config{
