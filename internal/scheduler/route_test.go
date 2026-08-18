@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 func TestAppendChainLoop(t *testing.T) {

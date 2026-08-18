@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 // TestDelegationMetricRecorded verifies that a successful remote delegation

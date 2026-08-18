@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/xenith/panda/internal/executil"
+	"github.com/xenith/openpanda/internal/executil"
 )
 
 // voiceDir is where the voice sidecars live, resolved relative to the working

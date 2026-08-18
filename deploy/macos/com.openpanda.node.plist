@@ -5,16 +5,16 @@
   background: no terminal window, starts at login, restarts on crash.
 
   Install (adjust paths below to your checkout first):
-    cp deploy/macos/com.panda.node.plist ~/Library/LaunchAgents/
-    launchctl unload ~/Library/LaunchAgents/com.panda.node.plist 2>/dev/null
-    launchctl load   ~/Library/LaunchAgents/com.panda.node.plist
+    cp deploy/macos/com.openpanda.node.plist ~/Library/LaunchAgents/
+    launchctl unload ~/Library/LaunchAgents/com.openpanda.node.plist 2>/dev/null
+    launchctl load   ~/Library/LaunchAgents/com.openpanda.node.plist
 
   Logs: /tmp/panda-daemon.out.log (JSON) and /tmp/panda-daemon.err.log.
 -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.panda.node</string>
+	<string>com.openpanda.node</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/Users/xenith/Documents/project/panda/bin/panda</string>

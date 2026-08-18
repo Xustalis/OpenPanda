@@ -11,11 +11,11 @@ import (
 	"time"
 )
 
-// TestMain runs the fake MCP server when PANDA_MCP_FAKE is set, so the client
+// TestMain runs the fake MCP server when OPENPANDA_MCP_FAKE is set, so the client
 // tests can spawn this test binary as a real stdio subprocess. The fake server
 // speaks the JSON-RPC handshake the client expects and exits on stdin EOF.
 func TestMain(m *testing.M) {
-	if os.Getenv("PANDA_MCP_FAKE") == "1" {
+	if os.Getenv("OPENPANDA_MCP_FAKE") == "1" {
 		fakeServer()
 		os.Exit(0)
 	}
@@ -107,10 +107,10 @@ func respond(id any, result any) {
 }
 
 func TestStdioRoundTrip(t *testing.T) {
-	// Spawn this test binary as the fake server: PANDA_MCP_FAKE makes TestMain
+	// Spawn this test binary as the fake server: OPENPANDA_MCP_FAKE makes TestMain
 	// run fakeServer() instead of the test suite. It is passed explicitly
 	// because the child no longer inherits the parent environment (M5).
-	client, err := NewStdioClient(context.Background(), os.Args[0], []string{"PANDA_MCP_FAKE=1"})
+	client, err := NewStdioClient(context.Background(), os.Args[0], []string{"OPENPANDA_MCP_FAKE=1"})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestStdioRoundTrip(t *testing.T) {
 }
 
 func TestCallToolError(t *testing.T) {
-	client, err := NewStdioClient(context.Background(), os.Args[0], []string{"PANDA_MCP_FAKE=1"})
+	client, err := NewStdioClient(context.Background(), os.Args[0], []string{"OPENPANDA_MCP_FAKE=1"})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestCallToolError(t *testing.T) {
 // hard timeout and kills the child process group, leaving the client unable to
 // make further calls.
 func TestCallToolTimeoutKillsProcess(t *testing.T) {
-	client, err := NewStdioClient(context.Background(), os.Args[0], []string{"PANDA_MCP_FAKE=1"})
+	client, err := NewStdioClient(context.Background(), os.Args[0], []string{"OPENPANDA_MCP_FAKE=1"})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
@@ -179,23 +179,23 @@ func TestCallToolTimeoutKillsProcess(t *testing.T) {
 // environment (M5): only the sandbox base (PATH etc.) and explicitly declared
 // variables are visible to the server.
 func TestMinimalEnvironment(t *testing.T) {
-	t.Setenv("PANDA_MCP_LEAK_CHECK", "parent-secret")
+	t.Setenv("OPENPANDA_MCP_LEAK_CHECK", "parent-secret")
 	client, err := NewStdioClient(context.Background(), os.Args[0],
-		[]string{"PANDA_MCP_FAKE=1", "PANDA_MCP_DECLARED=granted"})
+		[]string{"OPENPANDA_MCP_FAKE=1", "OPENPANDA_MCP_DECLARED=granted"})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
 	defer client.Close()
 
-	got, err := client.CallTool(context.Background(), "getenv", map[string]any{"name": "PANDA_MCP_LEAK_CHECK"})
+	got, err := client.CallTool(context.Background(), "getenv", map[string]any{"name": "OPENPANDA_MCP_LEAK_CHECK"})
 	if err != nil {
 		t.Fatalf("getenv: %v", err)
 	}
 	if got != "" {
-		t.Fatalf("child inherited parent env PANDA_MCP_LEAK_CHECK=%q", got)
+		t.Fatalf("child inherited parent env OPENPANDA_MCP_LEAK_CHECK=%q", got)
 	}
 
-	got, err = client.CallTool(context.Background(), "getenv", map[string]any{"name": "PANDA_MCP_DECLARED"})
+	got, err = client.CallTool(context.Background(), "getenv", map[string]any{"name": "OPENPANDA_MCP_DECLARED"})
 	if err != nil {
 		t.Fatalf("getenv: %v", err)
 	}

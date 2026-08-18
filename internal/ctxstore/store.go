@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/xenith/panda/internal/storage"
+	"github.com/xenith/openpanda/internal/storage"
 )
 
 // Entry is one stored context snapshot.

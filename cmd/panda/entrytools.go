@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/xenith/panda/internal/entry"
-	"github.com/xenith/panda/internal/mcp"
-	"github.com/xenith/panda/internal/memory"
+	"github.com/xenith/openpanda/internal/entry"
+	"github.com/xenith/openpanda/internal/mcp"
+	"github.com/xenith/openpanda/internal/memory"
 )
 
 // buildToolRegistry wires the memory tools into the entry-model tool registry.

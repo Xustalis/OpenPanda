@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Voice sidecar: text-to-speech (TTS).
 
-Speaks the text from stdin. Backend selected by PANDA_TTS_BACKEND: "piper"
+Speaks the text from stdin. Backend selected by OPENPANDA_TTS_BACKEND: "piper"
 (default, local neural) or "pyttsx3" (espeak fallback).
 
   stdin:  JSON {"text": str}
   stdout: JSON {"ok": bool, "result": str, "exit_code": int}
 
-Local:    pip install piper-tts sounddevice  (plus a .onnx voice at PANDA_PIPER_MODEL)
+Local:    pip install piper-tts sounddevice  (plus a .onnx voice at OPENPANDA_PIPER_MODEL)
 Fallback: pip install pyttsx3  (plus a platform backend, e.g. espeak)
 """
 import json
 import os
 import sys
 
-BACKEND = os.environ.get("PANDA_TTS_BACKEND", "piper")
+BACKEND = os.environ.get("OPENPANDA_TTS_BACKEND", "piper")
 
 
 def main():
@@ -36,7 +36,7 @@ def main():
         elif BACKEND == "piper":
             _speak_piper(text)
         else:
-            _emit(False, "unknown PANDA_TTS_BACKEND %r" % BACKEND, 2)
+            _emit(False, "unknown OPENPANDA_TTS_BACKEND %r" % BACKEND, 2)
             return
     except Exception as exc:  # noqa: BLE001 — driver/model may be absent
         _emit(False, "tts failed: %s" % exc, 4)
@@ -57,9 +57,9 @@ def _speak_piper(text):
     import numpy as np
     import sounddevice as sd
 
-    model = os.environ.get("PANDA_PIPER_MODEL", "")
+    model = os.environ.get("OPENPANDA_PIPER_MODEL", "")
     if not model:
-        raise RuntimeError("PANDA_PIPER_MODEL not set")
+        raise RuntimeError("OPENPANDA_PIPER_MODEL not set")
     voice = PiperVoice.load(model)
     chunks = []
     for chunk in voice.synthesize_stream_raw(text):

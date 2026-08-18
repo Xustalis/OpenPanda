@@ -22,7 +22,7 @@ func WrapAPIError(err error) error {
 	switch {
 	case errors.Is(err, ErrNoKey):
 		return &ClassifyError{
-			UserMsg: "未配置模型 API key（config model.api_key 或 PANDA_MODEL_API_KEY）",
+			UserMsg: "未配置模型 API key（config model.api_key 或 OPENPANDA_MODEL_API_KEY）",
 			Err:     err,
 		}
 	case errors.Is(err, context.Canceled):

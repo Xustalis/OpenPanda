@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/xenith/panda/internal/config"
-	"github.com/xenith/panda/internal/skills"
+	"github.com/xenith/openpanda/internal/config"
+	"github.com/xenith/openpanda/internal/skills"
 )
 
 // runSkill implements `panda skill list|approve|reject` — the user-facing

@@ -1,6 +1,6 @@
-# 🐼 PANDA
+# 🐼 OpenPanda
 
-**P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant
+**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant
 
 > Cualquier dispositivo, cualquier potencia de cálculo, un solo comando.
 > Un asistente personal de orquestación de tareas que se ejecuta en tus
@@ -17,7 +17,7 @@
 
 ## Índice
 
-- [¿Qué es PANDA?](#qué-es-panda)
+- [¿Qué es OpenPanda?](#qué-es-panda)
 - [Características principales](#características-principales)
 - [Arquitectura](#arquitectura)
 - [Primeros pasos](#primeros-pasos)
@@ -33,11 +33,11 @@
 - [Licencia](#licencia)
 - [Agradecimientos](#agradecimientos)
 
-## ¿Qué es PANDA?
+## ¿Qué es OpenPanda?
 
-PANDA convierte cada dispositivo que tienes — un portátil, un ordenador de placa
+OpenPanda convierte cada dispositivo que tienes — un portátil, un ordenador de placa
 única, un escritorio — en un *nodo* de tu red personal de tareas. Preguntas una
-sola vez, desde cualquier dispositivo, y PANDA delega la tarea al nodo mejor
+sola vez, desde cualquier dispositivo, y OpenPanda delega la tarea al nodo mejor
 preparado para ejecutarla, devuelve el resultado y recuerda lo aprendido para la
 próxima vez.
 
@@ -155,7 +155,7 @@ make build-windows-amd64 # → bin/panda-windows-amd64.exe
 Copia la configuración de ejemplo y edítala para cada nodo:
 
 ```bash
-cp config.example.yaml /etc/panda/config.yaml   # o déjala local y usa --config
+cp config.example.yaml /etc/openpanda/config.yaml   # o déjala local y usa --config
 ```
 
 La configuración es pequeña y autoexplicativa. Lo más importante:
@@ -169,10 +169,10 @@ network:
 model:
   base_url: "https://api.deepseek.com/anthropic"  # cualquier endpoint compatible con /v1/messages
   model: "deepseek-chat"
-  # api_key: ""               # prefiere la variable de entorno PANDA_MODEL_API_KEY
+  # api_key: ""               # prefiere la variable de entorno OPENOPENOpenPanda_MODEL_API_KEY
 ```
 
-Los secretos (claves de API del modelo) se leen de `PANDA_MODEL_API_KEY` en lugar
+Los secretos (claves de API del modelo) se leen de `OPENOPENOpenPanda_MODEL_API_KEY` en lugar
 del archivo de configuración siempre que sea posible.
 
 ### Ejecutar el daemon
@@ -244,7 +244,7 @@ Gestiona las skills:
 | `network` | `max_connections` | Límite global de conexiones WS concurrentes (0 = ilimitado) |
 | `network` | `max_connections_per_ip` | Límite de conexiones WS concurrentes por IP remota (0 = ilimitado) |
 | `network` | `panel_addr` | Dirección HTTP del panel PWA (vacío = desactivado) |
-| `network` | `panel_token` | Token Bearer que protege `/api/*` del sidecar (prefiere `PANDA_PANEL_TOKEN`) |
+| `network` | `panel_token` | Token Bearer que protege `/api/*` del sidecar (prefiere `OPENOPENOpenPanda_PANEL_TOKEN`) |
 | `network` | `peers` | Direcciones de pares manuales a las que conectarse |
 | `storage` | `db_path` | Ruta de la base de datos SQLite |
 | `storage` | `context_path` | Almacén de snapshots de contexto |
@@ -255,14 +255,14 @@ Gestiona las skills:
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | URL base de la API Messages compatible con Anthropic |
 | `model` | `model` | ID del modelo (p. ej. `deepseek-chat`, `deepseek-reasoner`) |
-| `model` | `api_key` | Secreto — prefiere `PANDA_MODEL_API_KEY` |
+| `model` | `api_key` | Secreto — prefiere `OPENOPENOpenPanda_MODEL_API_KEY` |
 | `model` | `max_tokens` | Límite de tokens de completado (por defecto 4096) |
 | `push` | `enabled` | Servir `/api/push/*` y enviar Web Push (solo sidecar webui) |
 | `push` | `vapid_subject` | Sujeto VAPID (p. ej. una dirección `mailto:`) |
 | `push` | `vapid_key_path` | Ruta de la clave VAPID (generada automáticamente en el primer arranque) |
 
 Orden de carga de la configuración: bandera `--config` > variable de entorno >
-valor por defecto `/etc/panda/config.yaml`.
+valor por defecto `/etc/openpanda/config.yaml`.
 
 ## Documentación
 
@@ -295,7 +295,7 @@ go test ./internal/core/ -run 'TestTwoNodeProtocol|TestDelegateIdempotent|TestCa
 
 ## Despliegue
 
-PANDA apunta a dispositivos de bajo consumo. Verifica la memoria en estado
+OpenPanda apunta a dispositivos de bajo consumo. Verifica la memoria en estado
 estable antes de desplegar en hardware — una sola muestra de `ps` no es fiable
 debido al ruido del GC; toma varias:
 

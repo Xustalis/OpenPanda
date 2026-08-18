@@ -1,24 +1,24 @@
 # 真实多机部署配置：香橙派 3B 执行节点（Micro）
-# 复制到 /home/xenith/panda/config.yaml
+# 复制到 /home/xenith/openpanda/config.yaml
 node:
   name: "orangepi3b"
   resource_class: "Micro"
 
 network:
   listen_addr: ":7836"
-  # 所有节点必须共享同一个 shared_secret（可经 PANDA_SHARED_SECRET 环境变量注入）
+  # 所有节点必须共享同一个 shared_secret（可经 OPENPANDA_SHARED_SECRET 环境变量注入）
   shared_secret: ""
   peers:
     - "192.168.0.100:7836"   # MacBook（入口/调度节点）
     - "192.168.0.107:7836"   # Windows 桌面（执行节点）
 
 storage:
-  db_path: "/home/xenith/panda/data/panda.db"
-  context_path: "/home/xenith/panda/data/context"
-  memory_path: "/home/xenith/panda/memory"
-  projects_path: "/home/xenith/panda/projects"
-  skills_path: "/home/xenith/panda/skills"
-  work_path: "/home/xenith/panda"
+  db_path: "/home/xenith/openpanda/data/openpanda.db"
+  context_path: "/home/xenith/openpanda/data/context"
+  memory_path: "/home/xenith/openpanda/memory"
+  projects_path: "/home/xenith/openpanda/projects"
+  skills_path: "/home/xenith/openpanda/skills"
+  work_path: "/home/xenith/openpanda"
 
 log:
   level: "debug"

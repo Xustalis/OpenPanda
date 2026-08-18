@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/panda/internal/util"
+	"github.com/xenith/openpanda/internal/util"
 )
 
 // dreamInterval is the minimum gap between Deep promotions (design §17.3:

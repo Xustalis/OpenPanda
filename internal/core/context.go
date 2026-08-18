@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/xenith/panda/internal/bus"
-	"github.com/xenith/panda/internal/commander"
-	"github.com/xenith/panda/internal/ctxstore"
+	"github.com/xenith/openpanda/internal/bus"
+	"github.com/xenith/openpanda/internal/commander"
+	"github.com/xenith/openpanda/internal/ctxstore"
 )
 
 // pendingContext is the execution context saved when a task pauses in

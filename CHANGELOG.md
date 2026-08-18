@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+**Project renamed to OpenPanda** (Open + Personal Adaptive Node-based Distributed Assistant). Go module path is now `github.com/xenith/openpanda`; all env vars use the `OPENPANDA_` prefix (historical entries below were rewritten to the new names for consistency — the referenced commits predate the rename); systemd/LaunchAgent units are `openpanda.service` / `com.openpanda.node.plist`; default DB filename is `openpanda.db`. The CLI binary keeps the short name `panda`.
+
 Thirteen commits since v0.0.1 (Sprint 1 batches 1–3, Sprint 2 paper mechanisms, P1/P2 hardening, Sprint 3 batch). All gates green throughout: build / vet / full tests / `-race` / cross-compile.
 
 ### Added
@@ -10,13 +12,13 @@ Thirteen commits since v0.0.1 (Sprint 1 batches 1–3, Sprint 2 paper mechanisms
 - **Decline auto-reroute** — tasks persist their `requires` capability set (`requires_json` column, both submit and delegate paths); a declined task re-runs DCPS scoring excluding historical decliners (`DeclinedBy` from `EvDecline` audit events) and re-dispatches to the next-best node (dad4f04, P1-5).
 - **`panda metrics [--csv]`** — export delegation metrics; **`panda audit verify [--task <id>]`** — verify the `prev_hash` chain of the global audit log or one task's event timeline (6f2c8d5).
 - **PRAGMA `user_version` driven SQLite migrations** (6f2c8d5, A1) and a **`prev_hash` audit chain** for `task_events` and `audit_log` (6f2c8d5, A3).
-- **`PANDA_WAKE_KEYWORD`** env override for the voice wake word; openwakeword can still point at a custom `.tflite` via `PANDA_WAKE_MODEL` (2e72c8c).
+- **`OPENPANDA_WAKE_KEYWORD`** env override for the voice wake word; openwakeword can still point at a custom `.tflite` via `OPENPANDA_WAKE_MODEL` (2e72c8c).
 
 ### Changed
 
 - **Peer reconnect replaces stale connections** — a new conn from the same authenticated identity swaps into the registry (old conn closed outside the lock), and `handleHello` re-greets on replacement; registry removal matches by conn pointer (befa3bd, P1-7).
 - **Agent path joins the Tier authorization model** — `ledger.Agent` gains a `tier` field; undeclared agents default to Tier 2 (fail closed) and are rejected by `defense.Authorize` before the adapter subprocess is spawned; explicit `tier: 1` cards run without approval (c26b11e, P1-15).
-- **Secret-file hardening** — configs containing `api_key` / `shared_secret` / `panel_token` are auto-chmod'd to 0600 with a startup warning preferring env vars (`PANDA_SHARED_SECRET` / `PANDA_PANEL_TOKEN` / `PANDA_MODEL_API_KEY`); chmod failure warns without blocking (e5de650, P1-19).
+- **Secret-file hardening** — configs containing `api_key` / `shared_secret` / `panel_token` are auto-chmod'd to 0600 with a startup warning preferring env vars (`OPENPANDA_SHARED_SECRET` / `OPENPANDA_PANEL_TOKEN` / `OPENPANDA_MODEL_API_KEY`); chmod failure warns without blocking (e5de650, P1-19).
 - **Interpreter `-c` classification is whitelist-based** — only provably pure-output code (echo/print/console.log…) stays Tier 1, everything else is Tier 2 (38186af, P1-14).
 - **Panel defaults to loopback** — `127.0.0.1:7840`; non-loopback binds warn about plain HTTP (3c7e8f4, P1-24).
 - **Deployment baseline documented** — plain `ws://` only over loopback/Tailscale/trusted LAN, TLS reverse proxy + `wss://` across the public Internet (6f2c8d5, C1).

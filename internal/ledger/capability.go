@@ -13,7 +13,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/xenith/panda/internal/storage"
+	"github.com/xenith/openpanda/internal/storage"
 )
 
 // Card is the parsed form of capabilities.yaml for this node.

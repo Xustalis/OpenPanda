@@ -19,7 +19,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/xenith/panda/internal/util"
+	"github.com/xenith/openpanda/internal/util"
 )
 
 // Scope is the visibility tier of a skill (design §8.3).

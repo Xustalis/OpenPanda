@@ -3,7 +3,7 @@ package ledger
 import (
 	"testing"
 
-	"github.com/xenith/panda/internal/storage"
+	"github.com/xenith/openpanda/internal/storage"
 )
 
 // TestQuerySurvivesLegacyNullResourceProfile reproduces the upgrade path where a

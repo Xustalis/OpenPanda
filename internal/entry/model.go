@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/panda/internal/config"
-	"github.com/xenith/panda/internal/security"
+	"github.com/xenith/openpanda/internal/config"
+	"github.com/xenith/openpanda/internal/security"
 )
 
 // anthropicVersion is the header required by Anthropic-compatible endpoints.

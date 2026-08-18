@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xenith/panda/internal/core"
-	"github.com/xenith/panda/webui/push"
+	"github.com/xenith/openpanda/internal/core"
+	"github.com/xenith/openpanda/webui/push"
 )
 
 // New builds the panel HTTP handler. staticDir is the directory holding the PWA

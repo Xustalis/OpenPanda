@@ -7,7 +7,7 @@
 #
 # 特性：
 #   - 自动构建缺失的二进制
-#   - 自动生成 PANDA_PANEL_TOKEN（如未设置）
+#   - 自动生成 OPENPANDA_PANEL_TOKEN（如未设置）
 #   - Ctrl+C 一次停止两个进程
 #   - 默认绑定 loopback，安全用于本机开发
 
@@ -39,20 +39,20 @@ if [[ ! -x bin/panda-webui ]]; then
 fi
 
 # 自动生成本地共享密钥与面板令牌（仅用于本地开发）
-if [[ -z "${PANDA_SHARED_SECRET:-}" ]]; then
-    PANDA_SHARED_SECRET="local-$(openssl rand -hex 32 2>/dev/null || date +%s%N | sha256sum | head -c 64)"
-    export PANDA_SHARED_SECRET
-    echo "[run-local] 已生成本地共享密钥：$PANDA_SHARED_SECRET"
+if [[ -z "${OPENPANDA_SHARED_SECRET:-}" ]]; then
+    OPENPANDA_SHARED_SECRET="local-$(openssl rand -hex 32 2>/dev/null || date +%s%N | sha256sum | head -c 64)"
+    export OPENPANDA_SHARED_SECRET
+    echo "[run-local] 已生成本地共享密钥：$OPENPANDA_SHARED_SECRET"
 fi
-if [[ -z "${PANDA_PANEL_TOKEN:-}" ]]; then
-    PANDA_PANEL_TOKEN="local-$(openssl rand -hex 16 2>/dev/null || date +%s%N | sha256sum | head -c 32)"
-    export PANDA_PANEL_TOKEN
-    echo "[run-local] 已生成本地面板令牌：$PANDA_PANEL_TOKEN"
+if [[ -z "${OPENPANDA_PANEL_TOKEN:-}" ]]; then
+    OPENPANDA_PANEL_TOKEN="local-$(openssl rand -hex 16 2>/dev/null || date +%s%N | sha256sum | head -c 32)"
+    export OPENPANDA_PANEL_TOKEN
+    echo "[run-local] 已生成本地面板令牌：$OPENPANDA_PANEL_TOKEN"
 fi
 
 # 模型 API 密钥检查（ask 子命令需要）
-if [[ -z "${PANDA_MODEL_API_KEY:-}" ]]; then
-    echo "[run-local] 提示：未设置 PANDA_MODEL_API_KEY，panda ask 将无法调用模型"
+if [[ -z "${OPENPANDA_MODEL_API_KEY:-}" ]]; then
+    echo "[run-local] 提示：未设置 OPENPANDA_MODEL_API_KEY，panda ask 将无法调用模型"
 fi
 
 # 确保数据目录存在
@@ -129,7 +129,7 @@ echo "==============================================="
 echo "PANDA 本地服务已启动"
 echo "==============================================="
 echo "Web 面板:   http://127.0.0.1:7840"
-echo "API 令牌:   $PANDA_PANEL_TOKEN"
+echo "API 令牌:   $OPENPANDA_PANEL_TOKEN"
 echo "核心日志:   /tmp/panda-core.log"
 echo "WebUI 日志: /tmp/panda-webui.log"
 echo "配置文件:   $ROOT_DIR/$CONFIG"

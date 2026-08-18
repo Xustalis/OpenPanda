@@ -5,7 +5,7 @@
 set -euo pipefail
 
 HOST="${1:-orangepi}"
-REMOTE_DIR="${REMOTE_DIR:-/home/xenith/panda}"
+REMOTE_DIR="${REMOTE_DIR:-/home/xenith/openpanda}"
 
 echo "==> 交叉编译 linux-arm64"
 make build-linux-arm64
@@ -23,7 +23,7 @@ ssh "$HOST" "chmod +x $REMOTE_DIR/panda"
 # 共享密钥（gitignored，来自 data/network-secret）经 systemd EnvironmentFile 注入，
 # 不写入 config.yaml——后者由 testdata/deploy-opi.yaml 生成、会被 git 跟踪。
 if [ -f data/network-secret ]; then
-  printf 'PANDA_SHARED_SECRET=%s\n' "$(cat data/network-secret)" > /tmp/panda.env
+  printf 'OPENPANDA_SHARED_SECRET=%s\n' "$(cat data/network-secret)" > /tmp/panda.env
   scp /tmp/panda.env "$HOST:$REMOTE_DIR/panda.env"
   ssh "$HOST" "chmod 600 $REMOTE_DIR/panda.env"
   rm -f /tmp/panda.env
@@ -32,8 +32,8 @@ else
 fi
 
 echo "==> 安装 systemd 服务"
-scp scripts/panda.service "$HOST:/tmp/panda.service"
-ssh "$HOST" "sudo -n install -m 644 /tmp/panda.service /etc/systemd/system/panda.service && rm -f /tmp/panda.service"
+scp scripts/openpanda.service "$HOST:/tmp/openpanda.service"
+ssh "$HOST" "sudo -n install -m 644 /tmp/openpanda.service /etc/systemd/system/openpanda.service && rm -f /tmp/openpanda.service"
 
 echo "==> 启用并重启服务"
 ssh "$HOST" "sudo -n systemctl daemon-reload && sudo -n systemctl enable --now panda >/dev/null 2>&1; sudo -n systemctl restart panda"

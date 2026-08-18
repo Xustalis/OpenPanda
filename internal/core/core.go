@@ -13,16 +13,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xenith/panda/internal/bus"
-	"github.com/xenith/panda/internal/commander"
-	"github.com/xenith/panda/internal/config"
-	"github.com/xenith/panda/internal/ctxstore"
-	"github.com/xenith/panda/internal/defense"
-	"github.com/xenith/panda/internal/ledger"
-	"github.com/xenith/panda/internal/memory"
-	"github.com/xenith/panda/internal/security"
-	"github.com/xenith/panda/internal/skills"
-	"github.com/xenith/panda/internal/util"
+	"github.com/xenith/openpanda/internal/bus"
+	"github.com/xenith/openpanda/internal/commander"
+	"github.com/xenith/openpanda/internal/config"
+	"github.com/xenith/openpanda/internal/ctxstore"
+	"github.com/xenith/openpanda/internal/defense"
+	"github.com/xenith/openpanda/internal/ledger"
+	"github.com/xenith/openpanda/internal/memory"
+	"github.com/xenith/openpanda/internal/security"
+	"github.com/xenith/openpanda/internal/skills"
+	"github.com/xenith/openpanda/internal/util"
 )
 
 // Peer is an established connection to another node.

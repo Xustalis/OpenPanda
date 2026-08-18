@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/panda/internal/bus"
-	"github.com/xenith/panda/internal/ctxstore"
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/bus"
+	"github.com/xenith/openpanda/internal/ctxstore"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 // TestPackContextLevels covers the packContext decision table in isolation:

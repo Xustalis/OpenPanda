@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 // systemPrompt is the entry model's system prompt (design doc §7.3). The two

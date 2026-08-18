@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/xenith/panda/internal/config"
-	"github.com/xenith/panda/internal/defense"
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/config"
+	"github.com/xenith/openpanda/internal/defense"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 // Router matches a task's required abilities against a node's capability

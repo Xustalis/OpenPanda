@@ -16,13 +16,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/xenith/panda/internal/config"
-	"github.com/xenith/panda/internal/core"
-	"github.com/xenith/panda/internal/ledger"
-	"github.com/xenith/panda/internal/log"
-	"github.com/xenith/panda/internal/memory"
-	"github.com/xenith/panda/internal/skills"
-	"github.com/xenith/panda/internal/storage"
+	"github.com/xenith/openpanda/internal/config"
+	"github.com/xenith/openpanda/internal/core"
+	"github.com/xenith/openpanda/internal/ledger"
+	"github.com/xenith/openpanda/internal/log"
+	"github.com/xenith/openpanda/internal/memory"
+	"github.com/xenith/openpanda/internal/skills"
+	"github.com/xenith/openpanda/internal/storage"
 )
 
 var version = "0.0.1"
@@ -106,7 +106,7 @@ func parseSubcommand(args []string) (string, []string) {
 
 func runDaemon() {
 	var (
-		configPath = flag.String("config", "", "path to config.yaml (default /etc/panda/config.yaml)")
+		configPath = flag.String("config", "", "path to config.yaml (default /etc/openpanda/config.yaml)")
 		cardPath   = flag.String("card", "", "path to capabilities.yaml")
 	)
 	flag.Parse()
@@ -271,7 +271,7 @@ func schedulerTier(resourceClass string) int {
 // the host's side-effect writes rather than flagging them as agent drift.
 func hostStatePaths(cfg *config.Config) []string {
 	return []string{
-		filepath.Dir(cfg.Storage.DBPath), // data/: panda.db + -wal/-shm + context/
+		filepath.Dir(cfg.Storage.DBPath), // data/: openpanda.db + -wal/-shm + context/
 		cfg.Storage.MemoryPath,
 		cfg.Storage.ProjectsPath,
 		cfg.Storage.SkillsPath,

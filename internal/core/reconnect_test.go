@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/panda/internal/bus"
+	"github.com/xenith/openpanda/internal/bus"
 )
 
 // TestPeerReconnectReplacesStaleConn verifies P1-7: when a peer redials (new

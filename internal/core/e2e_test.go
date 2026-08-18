@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/panda/internal/bus"
-	"github.com/xenith/panda/internal/config"
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/bus"
+	"github.com/xenith/openpanda/internal/config"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 // TestDelegateIdempotent sends the same task_delegate twice; the second must

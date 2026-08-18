@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xenith/panda/internal/commander"
-	"github.com/xenith/panda/internal/config"
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/commander"
+	"github.com/xenith/openpanda/internal/config"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 func TestTaskScope(t *testing.T) {
@@ -103,7 +103,7 @@ func TestScopeDriftIgnoresHostState(t *testing.T) {
 
 	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
 		_ = os.MkdirAll(filepath.Join(work, "data"), 0o755)
-		_ = os.WriteFile(filepath.Join(work, "data", "panda.db-wal"), []byte("x"), 0o644)
+		_ = os.WriteFile(filepath.Join(work, "data", "openpanda.db-wal"), []byte("x"), 0o644)
 		_ = os.MkdirAll(filepath.Join(work, ".claude"), 0o755)
 		_ = os.WriteFile(filepath.Join(work, ".claude", "settings.local.json"), []byte("x"), 0o644)
 		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}

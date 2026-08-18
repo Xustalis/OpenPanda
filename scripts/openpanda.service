@@ -1,5 +1,5 @@
 # PANDA 节点守护进程（香橙派 / 嵌入式节点）
-# 安装:  sudo install -m 644 panda.service /etc/systemd/system/panda.service
+# 安装:  sudo install -m 644 openpanda.service /etc/systemd/system/openpanda.service
 # 启用:  sudo systemctl daemon-reload && sudo systemctl enable --now panda
 [Unit]
 Description=PANDA distributed task node daemon
@@ -11,11 +11,11 @@ Type=simple
 # 运行用户与工作目录（按设备实际调整）
 User=xenith
 Group=xenith
-WorkingDirectory=/home/xenith/panda
+WorkingDirectory=/home/xenith/openpanda
 # 共享密钥经 EnvironmentFile 注入（不写入 config.yaml，避免密钥进 git）
-EnvironmentFile=/home/xenith/panda/panda.env
+EnvironmentFile=/home/xenith/openpanda/panda.env
 # 以绝对路径启动；daemon 输出 JSON 日志到 stderr，由 journald 收集
-ExecStart=/home/xenith/panda/panda --config /home/xenith/panda/config.yaml --card /home/xenith/panda/capabilities.yaml
+ExecStart=/home/xenith/openpanda/panda --config /home/xenith/openpanda/config.yaml --card /home/xenith/openpanda/capabilities.yaml
 # 崩溃自动重启，5s 退避（嵌入式节点资源有限，不设过激进的重试）
 Restart=on-failure
 RestartSec=5
@@ -30,7 +30,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/xenith/panda
+ReadWritePaths=/home/xenith/openpanda
 # 网络族只保留 INET（API/WS）与 UNIX（本地 socket），阻断 raw/蓝牙等逃逸面
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 # seccomp 白名单。@system-service 若导致 Python adapter 子进程失败，

@@ -17,9 +17,9 @@ func writeTemp(t *testing.T, content string) string {
 
 func TestLoadDefaultsOnMissingFile(t *testing.T) {
 	// DefaultPath won't exist in CI; loading must return defaults, not error.
-	orig := os.Getenv("PANDA_NODE_NAME")
-	os.Setenv("PANDA_NODE_NAME", "")
-	defer os.Setenv("PANDA_NODE_NAME", orig)
+	orig := os.Getenv("OPENPANDA_NODE_NAME")
+	os.Setenv("OPENPANDA_NODE_NAME", "")
+	defer os.Setenv("OPENPANDA_NODE_NAME", orig)
 
 	cfg, err := Load(filepath.Join(t.TempDir(), "does-not-exist.yaml"))
 	if err != nil {
@@ -78,8 +78,8 @@ func TestLoadEmptyNodeNameRejected(t *testing.T) {
 
 func TestEnvOverrides(t *testing.T) {
 	p := writeTemp(t, "node:\n  name: \"file-node\"\n")
-	os.Setenv("PANDA_NODE_NAME", "env-node")
-	defer os.Unsetenv("PANDA_NODE_NAME")
+	os.Setenv("OPENPANDA_NODE_NAME", "env-node")
+	defer os.Unsetenv("OPENPANDA_NODE_NAME")
 
 	cfg, err := Load(p)
 	if err != nil {
@@ -123,12 +123,12 @@ model:
 
 func TestModelEnvOverrides(t *testing.T) {
 	p := writeTemp(t, "node:\n  name: \"n\"\n")
-	os.Setenv("PANDA_MODEL_BASE_URL", "https://env.example.com")
-	os.Setenv("PANDA_MODEL_API_KEY", "sk-env")
-	os.Setenv("PANDA_MODEL", "deepseek-chat")
-	defer os.Unsetenv("PANDA_MODEL_BASE_URL")
-	defer os.Unsetenv("PANDA_MODEL_API_KEY")
-	defer os.Unsetenv("PANDA_MODEL")
+	os.Setenv("OPENPANDA_MODEL_BASE_URL", "https://env.example.com")
+	os.Setenv("OPENPANDA_MODEL_API_KEY", "sk-env")
+	os.Setenv("OPENPANDA_MODEL", "deepseek-chat")
+	defer os.Unsetenv("OPENPANDA_MODEL_BASE_URL")
+	defer os.Unsetenv("OPENPANDA_MODEL_API_KEY")
+	defer os.Unsetenv("OPENPANDA_MODEL")
 
 	cfg, err := Load(p)
 	if err != nil {

@@ -59,7 +59,7 @@ type LogConfig struct {
 // defaults there; any /v1/messages-compatible endpoint works.
 type ModelConfig struct {
 	BaseURL   string `yaml:"base_url"`   // e.g. https://api.deepseek.com/anthropic
-	APIKey    string `yaml:"api_key"`    // secret; prefer env PANDA_MODEL_API_KEY
+	APIKey    string `yaml:"api_key"`    // secret; prefer env OPENPANDA_MODEL_API_KEY
 	Model     string `yaml:"model"`      // e.g. deepseek-chat | deepseek-reasoner
 	MaxTokens int    `yaml:"max_tokens"` // completion cap; 0 = provider/entry default
 }
@@ -94,7 +94,7 @@ func Default() *Config {
 			MaxConnectionsPerIP: 8,
 		},
 		Storage: StorageConfig{
-			DBPath:       "./data/panda.db",
+			DBPath:       "./data/openpanda.db",
 			ContextPath:  "./data/context",
 			MemoryPath:   "./memory",
 			ProjectsPath: "./projects",
@@ -118,15 +118,15 @@ func Default() *Config {
 }
 
 // DefaultPath is where the node looks for its config file.
-const DefaultPath = "/etc/panda/config.yaml"
+const DefaultPath = "/etc/openpanda/config.yaml"
 
-// Load reads the config from path. If path is empty, the PANDA_CONFIG_PATH env
+// Load reads the config from path. If path is empty, the OPENPANDA_CONFIG_PATH env
 // var (if set) or DefaultPath is used. A missing file is not an error; defaults
 // apply. An unreadable or malformed file is an error so a bad deployment
 // surfaces loudly.
 func Load(path string) (*Config, error) {
 	if path == "" {
-		path = os.Getenv("PANDA_CONFIG_PATH")
+		path = os.Getenv("OPENPANDA_CONFIG_PATH")
 		if path == "" {
 			path = DefaultPath
 		}
@@ -153,54 +153,54 @@ func Load(path string) (*Config, error) {
 // applyEnv lets individual env vars override config fields, useful for tests
 // and containerized deploys.
 func (c *Config) applyEnv() {
-	if v := os.Getenv("PANDA_NODE_NAME"); v != "" {
+	if v := os.Getenv("OPENPANDA_NODE_NAME"); v != "" {
 		c.Node.Name = v
 	}
-	if v := os.Getenv("PANDA_LISTEN_ADDR"); v != "" {
+	if v := os.Getenv("OPENPANDA_LISTEN_ADDR"); v != "" {
 		c.Network.ListenAddr = v
 	}
-	if v := os.Getenv("PANDA_PANEL_ADDR"); v != "" {
+	if v := os.Getenv("OPENPANDA_PANEL_ADDR"); v != "" {
 		c.Network.PanelAddr = v
 	}
-	if v := os.Getenv("PANDA_PANEL_TOKEN"); v != "" {
+	if v := os.Getenv("OPENPANDA_PANEL_TOKEN"); v != "" {
 		c.Network.PanelToken = v
 	}
-	if v := os.Getenv("PANDA_SHARED_SECRET"); v != "" {
+	if v := os.Getenv("OPENPANDA_SHARED_SECRET"); v != "" {
 		c.Network.SharedSecret = v
 	}
-	if v := os.Getenv("PANDA_DB_PATH"); v != "" {
+	if v := os.Getenv("OPENPANDA_DB_PATH"); v != "" {
 		c.Storage.DBPath = v
 	}
-	if v := os.Getenv("PANDA_MEMORY_PATH"); v != "" {
+	if v := os.Getenv("OPENPANDA_MEMORY_PATH"); v != "" {
 		c.Storage.MemoryPath = v
 	}
-	if v := os.Getenv("PANDA_PROJECTS_PATH"); v != "" {
+	if v := os.Getenv("OPENPANDA_PROJECTS_PATH"); v != "" {
 		c.Storage.ProjectsPath = v
 	}
-	if v := os.Getenv("PANDA_SKILLS_PATH"); v != "" {
+	if v := os.Getenv("OPENPANDA_SKILLS_PATH"); v != "" {
 		c.Storage.SkillsPath = v
 	}
-	if v := os.Getenv("PANDA_WORK_PATH"); v != "" {
+	if v := os.Getenv("OPENPANDA_WORK_PATH"); v != "" {
 		c.Storage.WorkPath = v
 	}
-	if v := os.Getenv("PANDA_MODEL_BASE_URL"); v != "" {
+	if v := os.Getenv("OPENPANDA_MODEL_BASE_URL"); v != "" {
 		c.Model.BaseURL = v
 	}
-	if v := os.Getenv("PANDA_MODEL_API_KEY"); v != "" {
+	if v := os.Getenv("OPENPANDA_MODEL_API_KEY"); v != "" {
 		c.Model.APIKey = v
 	}
-	if v := os.Getenv("PANDA_MODEL"); v != "" {
+	if v := os.Getenv("OPENPANDA_MODEL"); v != "" {
 		c.Model.Model = v
 	}
-	if v := os.Getenv("PANDA_MODEL_MAX_TOKENS"); v != "" {
+	if v := os.Getenv("OPENPANDA_MODEL_MAX_TOKENS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			c.Model.MaxTokens = n
 		}
 	}
-	if v := os.Getenv("PANDA_PUSH_VAPID_SUBJECT"); v != "" {
+	if v := os.Getenv("OPENPANDA_PUSH_VAPID_SUBJECT"); v != "" {
 		c.Push.VAPIDSubject = v
 	}
-	if v := os.Getenv("PANDA_PUSH_VAPID_KEY_PATH"); v != "" {
+	if v := os.Getenv("OPENPANDA_PUSH_VAPID_KEY_PATH"); v != "" {
 		c.Push.VAPIDKeyPath = v
 	}
 }
@@ -208,7 +208,7 @@ func (c *Config) applyEnv() {
 // hardenSecretPerms enforces 0600 on a config file that contains secrets
 // (P1-19). api_key / shared_secret / panel_token in a world- or
 // group-readable file are recoverable by any local user, so the file's
-// permission bits are tightened at load time. Prefer the PANDA_* env vars
+// permission bits are tightened at load time. Prefer the OPENPANDA_* env vars
 // (which leave nothing on disk) — a startup warning says so when a secret is
 // found in the file. A chmod failure is logged, not fatal: the config is
 // still usable, and refusing to boot would lock out existing deployments.
@@ -232,7 +232,7 @@ func hardenSecretPerms(path string, data []byte) {
 	}
 
 	slog.Warn("config file contains secrets; prefer env vars "+
-		"(PANDA_SHARED_SECRET / PANDA_PANEL_TOKEN / PANDA_MODEL_API_KEY)", "path", path)
+		"(OPENPANDA_SHARED_SECRET / OPENPANDA_PANEL_TOKEN / OPENPANDA_MODEL_API_KEY)", "path", path)
 
 	st, err := os.Stat(path)
 	if err != nil {

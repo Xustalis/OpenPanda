@@ -16,17 +16,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/xenith/panda/internal/config"
-	"github.com/xenith/panda/internal/core"
-	"github.com/xenith/panda/internal/log"
-	"github.com/xenith/panda/internal/storage"
-	"github.com/xenith/panda/webui/panel"
-	"github.com/xenith/panda/webui/push"
+	"github.com/xenith/openpanda/internal/config"
+	"github.com/xenith/openpanda/internal/core"
+	"github.com/xenith/openpanda/internal/log"
+	"github.com/xenith/openpanda/internal/storage"
+	"github.com/xenith/openpanda/webui/panel"
+	"github.com/xenith/openpanda/webui/push"
 )
 
 func main() {
 	var (
-		configPath = flag.String("config", "", "path to config.yaml (default /etc/panda/config.yaml)")
+		configPath = flag.String("config", "", "path to config.yaml (default /etc/openpanda/config.yaml)")
 		staticDir  = flag.String("static", "webui/web/pwa", "directory holding the PWA static files")
 	)
 	flag.Parse()

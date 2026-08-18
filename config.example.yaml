@@ -1,5 +1,5 @@
 # PANDA node configuration
-# Copy to /etc/panda/config.yaml on each node, or run with --config.
+# Copy to /etc/openpanda/config.yaml on each node, or run with --config.
 node:
   name: "macbook-m1"
   resource_class: "Standard"  # Micro | Standard | Full
@@ -12,7 +12,7 @@ network:
   # and set peers to "wss://host:port".
   # ── Transport auth: the WS listener REFUSES to start without a shared secret ──
   # The HMAC secret authenticates node-to-node hellos; every node in the P2P
-  # network must share the same value. Prefer env PANDA_SHARED_SECRET.
+  # network must share the same value. Prefer env OPENPANDA_SHARED_SECRET.
   # NOTE: shared_secret authenticates peers but does NOT encrypt payloads.
   shared_secret: ""              # e.g. openssl rand -hex 32; keep out of public repos
   # ── Connection limits (slow-DoS protection) ──
@@ -20,12 +20,12 @@ network:
   # max_connections_per_ip: 8      # per-remote-IP concurrent WS connections (0 = unlimited)
   # ── webui sidecar only (webui/cmd/panel); the kernel daemon never mounts it ──
   panel_addr: "127.0.0.1:7840"      # optional legacy PWA panel HTTP address; plain HTTP — keep loopback or put it behind a TLS reverse proxy (empty = disabled)
-  # panel_token: ""              # Bearer token guarding /api/* (required to enable the panel; prefer env PANDA_PANEL_TOKEN)
+  # panel_token: ""              # Bearer token guarding /api/* (required to enable the panel; prefer env OPENPANDA_PANEL_TOKEN)
   peers:                         # manual peers
     - "orangepi3b.tailnet-name.ts.net:7836"
 
 storage:
-  db_path: "./data/panda.db"
+  db_path: "./data/openpanda.db"
   context_path: "./data/context"
   memory_path: "./memory"        # Hermes personal memory root (Phase 3)
   projects_path: "./projects"    # per-project memory root (Phase 3)
@@ -41,7 +41,7 @@ model:
   base_url: "https://api.deepseek.com/anthropic"
   model: "deepseek-chat"          # deepseek-chat | deepseek-reasoner
   # max_tokens: 4096              # completion cap; default 4096
-  # api_key: ""                   # secret; prefer env PANDA_MODEL_API_KEY
+  # api_key: ""                   # secret; prefer env OPENPANDA_MODEL_API_KEY
 
 # Web Push notifications (design P3-26): task entering review → phone push.
 # Only the optional webui sidecar reads this — the kernel daemon ignores it.

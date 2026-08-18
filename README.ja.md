@@ -1,6 +1,6 @@
-# 🐼 PANDA
+# 🐼 OpenPanda
 
-**P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant
+**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant
 
 > あらゆるデバイス、あらゆる演算力、ひとつのコマンド。
 > あなたが持つ異種のデバイスを、ピアツーピアのノードネットワークとして
@@ -17,7 +17,7 @@
 
 ## 目次
 
-- [PANDAとは](#pandaとは)
+- [OpenPandaとは](#pandaとは)
 - [主な機能](#主な機能)
 - [アーキテクチャ](#アーキテクチャ)
 - [はじめに](#はじめに)
@@ -33,9 +33,9 @@
 - [ライセンス](#ライセンス)
 - [謝辞](#謝辞)
 
-## PANDAとは
+## OpenPandaとは
 
-PANDAは、あなたが所有するすべてのデバイス——ノートPC、シングルボードコンピュータ、デスクトップ——を、個人タスクネットワークの*ノード*に変えます。どのデバイスからでも一度だけ指示を出すだけで、PANDAがタスクを最適なノードに委譲し、結果を返し、学んだことを次回のために記憶します。
+OpenPandaは、あなたが所有するすべてのデバイス——ノートPC、シングルボードコンピュータ、デスクトップ——を、個人タスクネットワークの*ノード*に変えます。どのデバイスからでも一度だけ指示を出すだけで、OpenPandaがタスクを最適なノードに委譲し、結果を返し、学んだことを次回のために記憶します。
 
 設計の根幹は**個人用**システムです。クラウド依存なし、記憶はあなたのデバイスにだけ残り、各ノードはあなたが管理する直接のWebSocketリンクでピアと通信します。
 
@@ -126,7 +126,7 @@ make build-windows-amd64 # → bin/panda-windows-amd64.exe
 サンプル設定をコピーして、ノードごとに編集:
 
 ```bash
-cp config.example.yaml /etc/panda/config.yaml   # またはローカルに置いて --config で指定
+cp config.example.yaml /etc/openpanda/config.yaml   # またはローカルに置いて --config で指定
 ```
 
 設定は小さく、自己説明的です。もっとも重要な2箇所:
@@ -140,10 +140,10 @@ network:
 model:
   base_url: "https://api.deepseek.com/anthropic"  # 任意の /v1/messages 互換エンドポイント
   model: "deepseek-chat"
-  # api_key: ""               # 環境変数 PANDA_MODEL_API_KEY を推奨
+  # api_key: ""               # 環境変数 OPENOPENOpenPanda_MODEL_API_KEY を推奨
 ```
 
-シークレット（モデルのAPIキー）は、可能な限り設定ファイルではなく`PANDA_MODEL_API_KEY`環境変数から読み取ります。
+シークレット（モデルのAPIキー）は、可能な限り設定ファイルではなく`OPENOPENOpenPanda_MODEL_API_KEY`環境変数から読み取ります。
 
 ### デーモンの起動
 
@@ -211,7 +211,7 @@ model:
 | `network` | `max_connections` | グローバル同時WS接続数の上限（0 = 無制限） |
 | `network` | `max_connections_per_ip` | リモートIPごとの同時WS接続数の上限（0 = 無制限） |
 | `network` | `panel_addr` | PWAパネルのHTTPアドレス（空 = 無効） |
-| `network` | `panel_token` | サイドカーの`/api/*`を守るBearerトークン（`PANDA_PANEL_TOKEN`を推奨） |
+| `network` | `panel_token` | サイドカーの`/api/*`を守るBearerトークン（`OPENOPENOpenPanda_PANEL_TOKEN`を推奨） |
 | `network` | `peers` | 接続する手動ピアアドレス |
 | `storage` | `db_path` | SQLiteデータベースのパス |
 | `storage` | `context_path` | コンテキストスナップショットストア |
@@ -222,13 +222,13 @@ model:
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic互換Messages APIのベースURL |
 | `model` | `model` | モデルID（例：`deepseek-chat`、`deepseek-reasoner`） |
-| `model` | `api_key` | シークレット — `PANDA_MODEL_API_KEY`を推奨 |
+| `model` | `api_key` | シークレット — `OPENOPENOpenPanda_MODEL_API_KEY`を推奨 |
 | `model` | `max_tokens` | 補完トークン上限（デフォルト4096） |
 | `push` | `enabled` | `/api/push/*`の提供とWeb Push送信を有効化（webuiサイドカーのみ） |
 | `push` | `vapid_subject` | VAPIDサブジェクト（例：`mailto:`アドレス） |
 | `push` | `vapid_key_path` | VAPIDキーのパス（初回起動時に自動生成） |
 
-設定の読み込み順序: `--config`フラグ > 環境変数 > 既定 `/etc/panda/config.yaml`。
+設定の読み込み順序: `--config`フラグ > 環境変数 > 既定 `/etc/openpanda/config.yaml`。
 
 ## ドキュメント
 
@@ -255,7 +255,7 @@ go test ./internal/core/ -run 'TestTwoNodeProtocol|TestDelegateIdempotent|TestCa
 
 ## デプロイ
 
-PANDAは低消費電力デバイスをターゲットにしています。ハードウェアへ載せる前に、定常メモリを検証してください——`ps`の1回のサンプリングはGCノイズで不正確なため、複数回測定します:
+OpenPandaは低消費電力デバイスをターゲットにしています。ハードウェアへ載せる前に、定常メモリを検証してください——`ps`の1回のサンプリングはGCノイズで不正確なため、複数回測定します:
 
 ```bash
 make build

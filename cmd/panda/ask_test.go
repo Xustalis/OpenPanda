@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xenith/panda/internal/entry"
+	"github.com/xenith/openpanda/internal/entry"
 )
 
 // TestToTaskInput verifies the TaskSpec → TaskInput translation, especially the

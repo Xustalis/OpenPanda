@@ -1,6 +1,6 @@
-# 🐼 PANDA
+# 🐼 OpenPanda
 
-**P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant
+**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant
 
 > Jedes Gerät, jede Rechenleistung, ein Befehl.
 > Ein persönlicher Task-Orchestrierungs-Assistent, der als Peer-to-Peer-Netzwerk
@@ -17,7 +17,7 @@
 
 ## Inhaltsverzeichnis
 
-- [Was ist PANDA?](#was-ist-panda)
+- [Was ist OpenPanda?](#was-ist-panda)
 - [Hauptfunktionen](#hauptfunktionen)
 - [Architektur](#architektur)
 - [Schnellstart](#schnellstart)
@@ -33,11 +33,11 @@
 - [Lizenz](#lizenz)
 - [Danksagung](#danksagung)
 
-## Was ist PANDA?
+## Was ist OpenPanda?
 
-PANDA macht aus jedem Gerät, das dir gehört — Laptop, Einplatinencomputer, Desktop —
+OpenPanda macht aus jedem Gerät, das dir gehört — Laptop, Einplatinencomputer, Desktop —
 einen *Node* in deinem persönlichen Task-Netzwerk. Du stellst einmal eine Anfrage,
-von welchem Gerät auch immer, und PANDA delegiert den Task an den Node, der ihn am
+von welchem Gerät auch immer, und OpenPanda delegiert den Task an den Node, der ihn am
 besten ausführen kann, liefert das Ergebnis zurück und merkt sich für das nächste
 Mal, was es gelernt hat.
 
@@ -154,7 +154,7 @@ make build-windows-amd64 # → bin/panda-windows-amd64.exe
 Beispiel-Config kopieren und pro Node anpassen:
 
 ```bash
-cp config.example.yaml /etc/panda/config.yaml   # oder lokal behalten und per --config setzen
+cp config.example.yaml /etc/openpanda/config.yaml   # oder lokal behalten und per --config setzen
 ```
 
 Die Config ist klein und selbsterklärend. Das Wichtigste:
@@ -168,10 +168,10 @@ network:
 model:
   base_url: "https://api.deepseek.com/anthropic"  # beliebiger /v1/messages-kompatibler Endpoint
   model: "deepseek-chat"
-  # api_key: ""               # bevorzugt über die Env-Variable PANDA_MODEL_API_KEY
+  # api_key: ""               # bevorzugt über die Env-Variable OPENOPENOpenPanda_MODEL_API_KEY
 ```
 
-Geheimnisse (Modell-API-Keys) werden möglichst über `PANDA_MODEL_API_KEY` gelesen,
+Geheimnisse (Modell-API-Keys) werden möglichst über `OPENOPENOpenPanda_MODEL_API_KEY` gelesen,
 nicht aus der Config-Datei.
 
 ### Daemon starten
@@ -241,7 +241,7 @@ Skills verwalten:
 | `network` | `max_connections` | Globales Limit gleichzeitiger WS-Verbindungen (0 = unbegrenzt) |
 | `network` | `max_connections_per_ip` | Limit gleichzeitiger WS-Verbindungen pro Remote-IP (0 = unbegrenzt) |
 | `network` | `panel_addr` | HTTP-Adresse des PWA-Panels (leer = deaktiviert) |
-| `network` | `panel_token` | Bearer-Token für `/api/*` des Sidecars (bevorzugt `PANDA_PANEL_TOKEN`) |
+| `network` | `panel_token` | Bearer-Token für `/api/*` des Sidecars (bevorzugt `OPENOPENOpenPanda_PANEL_TOKEN`) |
 | `network` | `peers` | Manuelle Peer-Adressen zum Anwählen |
 | `storage` | `db_path` | SQLite-Datenbankpfad |
 | `storage` | `context_path` | Context-Snapshot-Speicher |
@@ -252,13 +252,13 @@ Skills verwalten:
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic-kompatible Messages-API-Basis-URL |
 | `model` | `model` | Modell-ID (z. B. `deepseek-chat`, `deepseek-reasoner`) |
-| `model` | `api_key` | Geheim — bevorzugt `PANDA_MODEL_API_KEY` |
+| `model` | `api_key` | Geheim — bevorzugt `OPENOPENOpenPanda_MODEL_API_KEY` |
 | `model` | `max_tokens` | Completion-Token-Limit (Standard 4096) |
 | `push` | `enabled` | `/api/push/*` bereitstellen und Web Push senden (nur webui-Sidecar) |
 | `push` | `vapid_subject` | VAPID-Subject (z. B. eine `mailto:`-Adresse) |
 | `push` | `vapid_key_path` | Pfad des VAPID-Schlüssels (wird beim ersten Start automatisch erzeugt) |
 
-Ladereihenfolge der Config: `--config`-Flag > Umgebungsvariable > Standard `/etc/panda/config.yaml`.
+Ladereihenfolge der Config: `--config`-Flag > Umgebungsvariable > Standard `/etc/openpanda/config.yaml`.
 
 ## Dokumentation
 
@@ -290,7 +290,7 @@ go test ./internal/core/ -run 'TestTwoNodeProtocol|TestDelegateIdempotent|TestCa
 
 ## Deployment
 
-PANDA zielt auf stromsparende Geräte. Vor dem Einsatz auf Hardware sollte der
+OpenPanda zielt auf stromsparende Geräte. Vor dem Einsatz auf Hardware sollte der
 steady-state Speicherverbrauch verifiziert werden — eine einzelne `ps`-Messung
 ist wegen GC-Rauschen unzuverlässig; besser mehrfach messen:
 

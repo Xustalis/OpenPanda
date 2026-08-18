@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/panda/internal/bus"
-	"github.com/xenith/panda/internal/defense"
-	"github.com/xenith/panda/internal/ledger"
-	"github.com/xenith/panda/internal/scheduler"
-	"github.com/xenith/panda/internal/security"
-	"github.com/xenith/panda/internal/skills"
-	"github.com/xenith/panda/internal/storage"
+	"github.com/xenith/openpanda/internal/bus"
+	"github.com/xenith/openpanda/internal/defense"
+	"github.com/xenith/openpanda/internal/ledger"
+	"github.com/xenith/openpanda/internal/scheduler"
+	"github.com/xenith/openpanda/internal/security"
+	"github.com/xenith/openpanda/internal/skills"
+	"github.com/xenith/openpanda/internal/storage"
 )
 
 // handleDelegate processes an incoming task_delegate. It decides where the

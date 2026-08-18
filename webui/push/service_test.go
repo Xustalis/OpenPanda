@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xenith/panda/internal/storage"
+	"github.com/xenith/openpanda/internal/storage"
 )
 
 func newTestService(t *testing.T) (*Service, *Store) {

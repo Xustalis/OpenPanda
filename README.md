@@ -1,6 +1,6 @@
-# 🐼 PANDA
+# 🐼 OpenPanda
 
-**P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant
+**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant
 
 > Any device, any compute, one command.
 > A personal task-orchestration assistant that runs across your heterogeneous
@@ -17,7 +17,7 @@
 
 ## Table of contents
 
-- [What is PANDA?](#what-is-panda)
+- [What is OpenPanda?](#what-is-panda)
 - [Key features](#key-features)
 - [Architecture](#architecture)
 - [Getting started](#getting-started)
@@ -33,10 +33,10 @@
 - [License](#license)
 - [Acknowledgements](#acknowledgements)
 
-## What is PANDA?
+## What is OpenPanda?
 
-PANDA turns every device you own — a laptop, a single-board computer, a desktop —
-into a *node* in a personal task network. You ask once, from any device, and PANDA
+OpenPanda turns every device you own — a laptop, a single-board computer, a desktop —
+into a *node* in a personal task network. You ask once, from any device, and OpenPanda
 delegates the task to the node best suited to run it, streams back the result, and
 remembers what it learned for next time.
 
@@ -150,7 +150,7 @@ make build-windows-amd64 # → bin/panda-windows-amd64.exe
 Copy the example config and edit it for each node:
 
 ```bash
-cp config.example.yaml /etc/panda/config.yaml   # or keep it local and use --config
+cp config.example.yaml /etc/openpanda/config.yaml   # or keep it local and use --config
 ```
 
 The config is small and self-explanatory. The two things that matter most:
@@ -164,10 +164,10 @@ network:
 model:
   base_url: "https://api.deepseek.com/anthropic"  # any /v1/messages-compatible endpoint
   model: "deepseek-chat"
-  # api_key: ""               # prefer the PANDA_MODEL_API_KEY env var
+  # api_key: ""               # prefer the OPENOPENOpenPanda_MODEL_API_KEY env var
 ```
 
-Secrets (model API keys) are read from `PANDA_MODEL_API_KEY` rather than the
+Secrets (model API keys) are read from `OPENOPENOpenPanda_MODEL_API_KEY` rather than the
 config file whenever possible.
 
 ### Run the daemon
@@ -252,7 +252,7 @@ Manage skills:
 | `network` | `max_connections` | Global concurrent WS connection limit (0 = unlimited) |
 | `network` | `max_connections_per_ip` | Per-remote-IP concurrent WS connection limit (0 = unlimited) |
 | `network` | `panel_addr` | Optional webui sidecar HTTP address (kernel ignores it) |
-| `network` | `panel_token` | Bearer token guarding the sidecar's `/api/*` (prefer `PANDA_PANEL_TOKEN`) |
+| `network` | `panel_token` | Bearer token guarding the sidecar's `/api/*` (prefer `OPENOPENOpenPanda_PANEL_TOKEN`) |
 | `network` | `peers` | Manual peer addresses to dial |
 | `storage` | `db_path` | SQLite database path |
 | `storage` | `context_path` | Context snapshot store |
@@ -263,13 +263,13 @@ Manage skills:
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic-compatible Messages API base URL |
 | `model` | `model` | Model id (e.g. `deepseek-chat`, `deepseek-reasoner`) |
-| `model` | `api_key` | Secret — prefer `PANDA_MODEL_API_KEY` |
+| `model` | `api_key` | Secret — prefer `OPENOPENOpenPanda_MODEL_API_KEY` |
 | `model` | `max_tokens` | Completion cap (default 4096) |
 | `push` | `enabled` | Serve `/api/push/*` and send Web Push (webui sidecar only) |
 | `push` | `vapid_subject` | VAPID subject (e.g. `mailto:` address) |
 | `push` | `vapid_key_path` | VAPID key path (auto-generated on first boot) |
 
-Config load order: `--config` flag > environment > default `/etc/panda/config.yaml`.
+Config load order: `--config` flag > environment > default `/etc/openpanda/config.yaml`.
 
 ## Documentation
 
@@ -302,14 +302,14 @@ go test ./internal/core/ -run 'TestTwoNodeProtocol|TestDelegateIdempotent|TestCa
 
 ### Network security baseline
 
-PANDA nodes speak plain WebSocket (`ws://`) by default. **Plain WebSocket must
+OpenPanda nodes speak plain WebSocket (`ws://`) by default. **Plain WebSocket must
 only be used over a trusted private path:**
 
 - Loopback / same-host links (e.g. `127.0.0.1`, `localhost`).
 - A private overlay network you control, such as **Tailscale** or a VPN.
 - A physically isolated LAN where every device is trusted.
 
-**If any PANDA peer crosses the public Internet, terminate TLS in front of the
+**If any OpenPanda peer crosses the public Internet, terminate TLS in front of the
 WebSocket listener** (e.g. nginx, Caddy, Traefik) and configure peers with the
 `wss://` URL. The `shared_secret` authenticates node-to-node hellos, but it is
 *not* a substitute for transport encryption — do not expose a plain `ws://`
@@ -320,7 +320,7 @@ on loopback, or put it behind the same TLS reverse proxy.
 
 ### Memory footprint
 
-PANDA targets low-power devices. Verify your steady-state memory before shipping
+OpenPanda targets low-power devices. Verify your steady-state memory before shipping
 to hardware — a single `ps` sample is unreliable due to GC noise; take several:
 
 ```bash

@@ -29,14 +29,14 @@ func TestNativeExecutorCwdIsolation(t *testing.T) {
 // inherit host secrets (P1-1): the parent's full environment is not forwarded,
 // so a leaked model key can never reach a native command.
 func TestNativeExecutorEnvExcludesSecrets(t *testing.T) {
-	t.Setenv("PANDA_MODEL_API_KEY", "sk-panda-secret")
+	t.Setenv("OPENPANDA_MODEL_API_KEY", "sk-panda-secret")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-anthropic-secret")
 
 	res := NewExecutor().WithDir(t.TempDir()).Run(context.Background(), "env")
 	if !res.OK {
 		t.Fatalf("env failed: %s", res.Stderr)
 	}
-	for _, k := range []string{"PANDA_MODEL_API_KEY", "ANTHROPIC_API_KEY"} {
+	for _, k := range []string{"OPENPANDA_MODEL_API_KEY", "ANTHROPIC_API_KEY"} {
 		if strings.Contains(res.Stdout, k) {
 			t.Fatalf("native env leaked %s", k)
 		}

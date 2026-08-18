@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/panda/internal/config"
+	"github.com/xenith/openpanda/internal/config"
 )
 
 // fakeAdapter writes a known JSON result to stdout, so we can test the

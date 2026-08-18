@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/panda/internal/config"
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/config"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 // startModelServer spins up a fake Anthropic-compatible endpoint whose text

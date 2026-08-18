@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 // slowNativeAbility is a long-running native capability used to catch a task

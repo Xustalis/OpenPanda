@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 // TestSubmitLocalRunsNative verifies the local entry loop end-to-end: create a

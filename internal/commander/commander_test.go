@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xenith/panda/internal/config"
-	"github.com/xenith/panda/internal/defense"
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/config"
+	"github.com/xenith/openpanda/internal/defense"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 func testCard() ledger.Card {

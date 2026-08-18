@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/panda/internal/config"
-	"github.com/xenith/panda/internal/core"
-	"github.com/xenith/panda/internal/ledger"
-	"github.com/xenith/panda/internal/security"
-	"github.com/xenith/panda/internal/storage"
+	"github.com/xenith/openpanda/internal/config"
+	"github.com/xenith/openpanda/internal/core"
+	"github.com/xenith/openpanda/internal/ledger"
+	"github.com/xenith/openpanda/internal/security"
+	"github.com/xenith/openpanda/internal/storage"
 )
 
 // The panel subcommands (status/queue/task/cancel/logs) are read-mostly views

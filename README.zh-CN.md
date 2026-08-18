@@ -1,6 +1,6 @@
-# 🐼 PANDA
+# 🐼 OpenPanda
 
-**P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant
+**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant
 
 > 任何设备，任何算力，一个指令。
 > 一个把「个人」放在第一位的任务编排助手——以 P2P 节点网络的方式，运行在你的异构设备之间。
@@ -34,7 +34,7 @@
 
 ## 这是什么
 
-PANDA 把你拥有的每一台设备——笔记本、单板电脑、桌面机——都变成个人任务网络里的一个**节点**。你只需要在任何一台设备上发出一次指令，PANDA 就会把任务委派给最适合执行的节点，回传结果，并把学到的经验记住，留待下次使用。
+OpenPanda 把你拥有的每一台设备——笔记本、单板电脑、桌面机——都变成个人任务网络里的一个**节点**。你只需要在任何一台设备上发出一次指令，OpenPanda 就会把任务委派给最适合执行的节点，回传结果，并把学到的经验记住，留待下次使用。
 
 它从设计之初就是**个人**系统：不依赖云端、记忆只留在你的设备上、每个节点之间通过你能掌控的直连 WebSocket 通信。
 
@@ -125,7 +125,7 @@ make build-windows-amd64 # → bin/panda-windows-amd64.exe
 复制示例配置，为每个节点修改：
 
 ```bash
-cp config.example.yaml /etc/panda/config.yaml   # 或留在本地，用 --config 指定
+cp config.example.yaml /etc/openpanda/config.yaml   # 或留在本地，用 --config 指定
 ```
 
 配置很精简，注释自解释。最核心的两处：
@@ -139,10 +139,10 @@ network:
 model:
   base_url: "https://api.deepseek.com/anthropic"  # 任何兼容 /v1/messages 的端点
   model: "deepseek-chat"
-  # api_key: ""               # 优先使用 PANDA_MODEL_API_KEY 环境变量
+  # api_key: ""               # 优先使用 OPENOPENOpenPanda_MODEL_API_KEY 环境变量
 ```
 
-密钥（模型 API key）尽量从 `PANDA_MODEL_API_KEY` 环境变量读取，而非配置文件。
+密钥（模型 API key）尽量从 `OPENOPENOpenPanda_MODEL_API_KEY` 环境变量读取，而非配置文件。
 
 ### 运行守护进程
 
@@ -212,7 +212,7 @@ model:
 | `network` | `max_connections` | 全局并发 WS 连接上限（0 = 不限） |
 | `network` | `max_connections_per_ip` | 单远端 IP 并发 WS 连接上限（0 = 不限） |
 | `network` | `panel_addr` | 可选 webui 侧车 HTTP 地址（内核忽略） |
-| `network` | `panel_token` | 侧车 `/api/*` 的 Bearer 令牌（优先用 `PANDA_PANEL_TOKEN`） |
+| `network` | `panel_token` | 侧车 `/api/*` 的 Bearer 令牌（优先用 `OPENOPENOpenPanda_PANEL_TOKEN`） |
 | `network` | `peers` | 要拨号的手动 peer 地址 |
 | `storage` | `db_path` | SQLite 数据库路径 |
 | `storage` | `context_path` | 上下文快照存储 |
@@ -223,13 +223,13 @@ model:
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic 兼容 Messages API 基地址 |
 | `model` | `model` | 模型 id（如 `deepseek-chat`、`deepseek-reasoner`） |
-| `model` | `api_key` | 密钥——优先用 `PANDA_MODEL_API_KEY` |
+| `model` | `api_key` | 密钥——优先用 `OPENOPENOpenPanda_MODEL_API_KEY` |
 | `model` | `max_tokens` | 补全 token 上限（默认 4096） |
 | `push` | `enabled` | 开启 `/api/push/*` 与 Web Push 发送（仅 webui 侧车读取） |
 | `push` | `vapid_subject` | VAPID subject（如 `mailto:` 地址） |
 | `push` | `vapid_key_path` | VAPID 密钥路径（首次启动自动生成） |
 
-配置加载优先级：`--config` 参数 > 环境变量 > 默认 `/etc/panda/config.yaml`。
+配置加载优先级：`--config` 参数 > 环境变量 > 默认 `/etc/openpanda/config.yaml`。
 
 ## 文档
 
@@ -258,19 +258,19 @@ go test ./internal/core/ -run 'TestTwoNodeProtocol|TestDelegateIdempotent|TestCa
 
 ### 网络安全基线
 
-PANDA 节点默认使用明文 WebSocket（`ws://`）。**明文 WebSocket 只允许在可信私有路径上使用：**
+OpenPanda 节点默认使用明文 WebSocket（`ws://`）。**明文 WebSocket 只允许在可信私有路径上使用：**
 
 - 本机回环（如 `127.0.0.1`、`localhost`）。
 - 你控制的私有覆盖网络，例如 **Tailscale** 或 VPN。
 - 所有设备均受信任的物理隔离局域网。
 
-**只要任一 PANDA peer 跨越公网，就必须在 WebSocket 监听器前终结 TLS**（如 nginx、Caddy、Traefik），并在 peer 地址中使用 `wss://`。`shared_secret` 仅用于节点间 hello 的 HMAC 鉴权，**不能替代传输层加密**——请勿将明文 `ws://` 监听直接暴露到公网。
+**只要任一 OpenPanda peer 跨越公网，就必须在 WebSocket 监听器前终结 TLS**（如 nginx、Caddy、Traefik），并在 peer 地址中使用 `wss://`。`shared_secret` 仅用于节点间 hello 的 HMAC 鉴权，**不能替代传输层加密**——请勿将明文 `ws://` 监听直接暴露到公网。
 
 可选的 `panel_addr` 为旧版 PWA 侧车提供纯 HTTP 服务，请保持回环，或同样置于 TLS 反向代理之后。
 
 ### 内存占用
 
-PANDA 面向低功耗设备。上硬件前请先验证稳态内存——单次 `ps` 采样因 GC 噪声并不可靠，多采几次：
+OpenPanda 面向低功耗设备。上硬件前请先验证稳态内存——单次 `ps` 采样因 GC 噪声并不可靠，多采几次：
 
 ```bash
 make build

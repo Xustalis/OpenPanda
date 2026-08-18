@@ -9,12 +9,12 @@ import (
 func TestSandboxEnvDoesNotLeakSecrets(t *testing.T) {
 	// Simulate unrelated secrets in the parent process env; the sandbox env
 	// allowlist must not forward them to the (potentially remote) subprocess.
-	t.Setenv("PANDA_TEST_SECRET", "hunter2")
+	t.Setenv("OPENPANDA_TEST_SECRET", "hunter2")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "topsecret")
 
 	env := NewSandbox("").Env("ANTHROPIC_API_KEY=k")
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "PANDA_TEST_SECRET=") || strings.HasPrefix(kv, "AWS_SECRET_ACCESS_KEY=") {
+		if strings.HasPrefix(kv, "OPENPANDA_TEST_SECRET=") || strings.HasPrefix(kv, "AWS_SECRET_ACCESS_KEY=") {
 			t.Fatalf("sandbox env leaked a parent secret: %q", kv)
 		}
 	}

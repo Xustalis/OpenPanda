@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/xenith/panda/internal/util"
+	"github.com/xenith/openpanda/internal/util"
 )
 
 // Hermes manages the Hermes personal-assistant memory store rooted at a

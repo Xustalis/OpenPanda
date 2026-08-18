@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Voice sidecar: wake-word detection ("hey panda").
 
-Backend selected by PANDA_WAKE_BACKEND: "openwakeword" (default, open source,
-no key) or "pvporcupine" (needs a Picovoice access key in PANDA_PORCUPINE_KEY).
+Backend selected by OPENPANDA_WAKE_BACKEND: "openwakeword" (default, open source,
+no key) or "pvporcupine" (needs a Picovoice access key in OPENPANDA_PORCUPINE_KEY).
 
   stdin:  JSON {"duration_s": float}  (optional; seconds to listen, 0 = forever)
   stdout: JSON {"ok": bool, "result": str, "exit_code": int}
@@ -13,8 +13,8 @@ Local:  pip install openwakeword pyaudio numpy
 Wake word (P2-21): neither backend's built-in keyword table contains
 "hey_panda", so pointing the default at it made the extension fail out of the
 box. The defaults below are built-in keywords that actually ship with each
-backend; override with PANDA_WAKE_KEYWORD (built-in name) or, for
-openwakeword, PANDA_WAKE_MODEL (path to a custom .tflite model, e.g. a trained
+backend; override with OPENPANDA_WAKE_KEYWORD (built-in name) or, for
+openwakeword, OPENPANDA_WAKE_MODEL (path to a custom .tflite model, e.g. a trained
 "hey panda").
 """
 import json
@@ -22,7 +22,7 @@ import os
 import sys
 import time
 
-BACKEND = os.environ.get("PANDA_WAKE_BACKEND", "openwakeword")
+BACKEND = os.environ.get("OPENPANDA_WAKE_BACKEND", "openwakeword")
 DEFAULT_DURATION = 10.0
 
 # Built-in keywords guaranteed present in each backend's default model set.
@@ -46,7 +46,7 @@ def main():
         elif BACKEND == "openwakeword":
             detected = _openwakeword(duration)
         else:
-            _emit(False, "unknown PANDA_WAKE_BACKEND %r" % BACKEND, 2)
+            _emit(False, "unknown OPENPANDA_WAKE_BACKEND %r" % BACKEND, 2)
             return
     except Exception as exc:  # noqa: BLE001 — missing driver / mic / model
         _emit(False, "wake failed: %s" % exc, 4)
@@ -60,8 +60,8 @@ def _openwakeword(duration):
     import pyaudio
     from openwakeword.model import Model
 
-    model_path = os.environ.get("PANDA_WAKE_MODEL", "")
-    keyword = os.environ.get("PANDA_WAKE_KEYWORD", "") or DEFAULT_KEYWORD_OWW
+    model_path = os.environ.get("OPENPANDA_WAKE_MODEL", "")
+    keyword = os.environ.get("OPENPANDA_WAKE_KEYWORD", "") or DEFAULT_KEYWORD_OWW
     oww = Model(wakeword_models=[model_path] if model_path else [keyword])
 
     pa = pyaudio.PyAudio()
@@ -86,13 +86,13 @@ def _openwakeword(duration):
 
 
 def _porcupine(duration):
-    key = os.environ.get("PANDA_PORCUPINE_KEY", "")
+    key = os.environ.get("OPENPANDA_PORCUPINE_KEY", "")
     if not key:
-        raise RuntimeError("PANDA_PORCUPINE_KEY not set")
+        raise RuntimeError("OPENPANDA_PORCUPINE_KEY not set")
     import pvporcupine
     import pyaudio
 
-    keyword = os.environ.get("PANDA_WAKE_KEYWORD", "") or DEFAULT_KEYWORD_PORCUPINE
+    keyword = os.environ.get("OPENPANDA_WAKE_KEYWORD", "") or DEFAULT_KEYWORD_PORCUPINE
     porcupine = pvporcupine.create(access_key=key, keywords=[keyword])
     pa = pyaudio.PyAudio()
     stream = pa.open(

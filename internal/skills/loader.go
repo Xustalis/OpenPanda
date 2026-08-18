@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/xenith/panda/internal/util"
+	"github.com/xenith/openpanda/internal/util"
 )
 
 // IndexEntry is a lightweight skill reference for progressive loading (Hermes's

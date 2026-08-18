@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 func newTestNode(t *testing.T) *Node {

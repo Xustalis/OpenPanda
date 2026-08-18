@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 // Classify runs the unified entry model once with no tools and returns the

@@ -2,7 +2,7 @@
 """Voice sidecar: speech-to-text (ASR).
 
 Captures one utterance from the microphone and transcribes it. Backend selected
-by PANDA_ASR_BACKEND: "faster-whisper" (default, local) or "google" (cloud).
+by OPENPANDA_ASR_BACKEND: "faster-whisper" (default, local) or "google" (cloud).
 Missing drivers/keys emit ok=false so the Go core degrades gracefully.
 
   stdin:  (unused; empty JSON optional)
@@ -10,7 +10,7 @@ Missing drivers/keys emit ok=false so the Go core degrades gracefully.
           result is the transcript on success.
 
 Local: pip install faster-whisper SpeechRecognition pyaudio
-       (a Whisper model is downloaded on first run; PANDA_WHISPER_MODEL, default
+       (a Whisper model is downloaded on first run; OPENPANDA_WHISPER_MODEL, default
         "base", selects the size — "tiny"/"base" fit the Orange Pi).
 Cloud: pip install SpeechRecognition pyaudio (Google's free endpoint).
 """
@@ -18,8 +18,8 @@ import json
 import os
 import sys
 
-BACKEND = os.environ.get("PANDA_ASR_BACKEND", "faster-whisper")
-WHISPER_MODEL = os.environ.get("PANDA_WHISPER_MODEL", "base")
+BACKEND = os.environ.get("OPENPANDA_ASR_BACKEND", "faster-whisper")
+WHISPER_MODEL = os.environ.get("OPENPANDA_WHISPER_MODEL", "base")
 
 
 def main():
@@ -44,7 +44,7 @@ def main():
         elif BACKEND == "faster-whisper":
             transcript = _faster_whisper(audio)
         else:
-            _emit(False, "unknown PANDA_ASR_BACKEND %r" % BACKEND, 2)
+            _emit(False, "unknown OPENPANDA_ASR_BACKEND %r" % BACKEND, 2)
             return
     except sr.UnknownValueError:
         _emit(False, "speech not understood", 1)

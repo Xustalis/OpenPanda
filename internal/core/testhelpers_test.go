@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/xenith/panda/internal/storage"
+	"github.com/xenith/openpanda/internal/storage"
 )
 
 // testLogger returns a silent logger for tests.

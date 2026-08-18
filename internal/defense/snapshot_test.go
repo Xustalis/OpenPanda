@@ -102,9 +102,9 @@ func TestChangedNoDiff(t *testing.T) {
 func TestSnapshotIgnoresSQLiteJournal(t *testing.T) {
 	dir := t.TempDir()
 	writeFiles(t, dir, map[string]string{
-		"panda.db":      "db",
-		"panda.db-wal":  "wal-1",
-		"panda.db-shm":  "shm",
+		"openpanda.db":      "db",
+		"openpanda.db-wal":  "wal-1",
+		"openpanda.db-shm":  "shm",
 		"real/work.txt": "todo",
 	})
 
@@ -113,7 +113,7 @@ func TestSnapshotIgnoresSQLiteJournal(t *testing.T) {
 		t.Fatalf("snapshot: %v", err)
 	}
 	// Only the journal file changes; the real work file is untouched.
-	if err := os.WriteFile(filepath.Join(dir, "panda.db-wal"), []byte("wal-2-changed"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "openpanda.db-wal"), []byte("wal-2-changed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	after, err := SnapshotDir(dir)

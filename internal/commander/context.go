@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/xenith/panda/internal/executil"
+	"github.com/xenith/openpanda/internal/executil"
 )
 
 // FileContext is the file-type task context (design doc §12.5). It records

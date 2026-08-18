@@ -4,7 +4,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/xenith/panda/internal/ledger"
+	"github.com/xenith/openpanda/internal/ledger"
 )
 
 // Scored-ranking weights (design doc §6.3, DCPS soft-penalty mapping):
