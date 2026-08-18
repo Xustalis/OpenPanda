@@ -218,6 +218,8 @@ Skills verwalten:
 |---|---|
 | `panda` (ohne Argumente) | Daemon starten: Node registrieren, Heartbeat, WS-Server, Peer-Reconnect |
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<Frage>"` | Einheitliches Eingabemodell: klassifiziert in answer / tool_call / task und führt aus |
+| `panda repl [--config PATH] [--card PATH]` | Interaktive Shell: Slash-Befehle (tasks/approve/projects/nodes/lang), freie Eingabe geht an die ask-Engine, `/web` startet die eingebettete Konsole |
+| `panda web [--config PATH] [--card PATH] [--no-browser]` | Web-Konsole mit einem Befehl: standardmäßig Loopback + flüchtiges Token, der Browser öffnet sich bereits angemeldet |
 | `panda status` | Node- & Task-Status |
 | `panda queue` | Task-Warteschlange anzeigen |
 | `panda task [--config PATH] <task-id>` | Task-Details |

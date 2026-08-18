@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -41,11 +40,19 @@ func main() {
 	if err != nil {
 		fatal("load config", err)
 	}
+	// Zero-config convenience: default to loopback, and generate an
+	// ephemeral token there when none is configured (printed below). A
+	// non-loopback bind still fails closed — an unauthenticated panel on
+	// the network is never acceptable.
 	if cfg.Network.PanelAddr == "" {
-		fatal("config", fmt.Errorf("network.panel_addr is not set (refusing to serve with no bind address)"))
+		cfg.Network.PanelAddr = "127.0.0.1:7840"
 	}
 	if cfg.Network.PanelToken == "" {
-		fatal("config", fmt.Errorf("network.panel_token is not set (refusing to serve /api/* unauthenticated)"))
+		if !panel.IsLoopbackAddr(cfg.Network.PanelAddr) {
+			fatal("config", fmt.Errorf("network.panel_token is not set and the bind %s is not loopback — set OPENPANDA_PANEL_TOKEN (refusing to serve /api/* unauthenticated)", cfg.Network.PanelAddr))
+		}
+		cfg.Network.PanelToken = panel.NewToken()
+		fmt.Fprintln(os.Stderr, "panda-webui: no panel_token configured — generated an ephemeral one for this session")
 	}
 
 	log.Setup(cfg.Log.Level, nil)
@@ -54,7 +61,7 @@ func main() {
 	// The panel speaks plain HTTP: a non-loopback bind exposes the Bearer
 	// token and task contents to anyone on the path (P1-24). Warn loudly;
 	// the fix is a TLS reverse proxy, not a wider bind.
-	if !isLoopbackAddr(cfg.Network.PanelAddr) {
+	if !panel.IsLoopbackAddr(cfg.Network.PanelAddr) {
 		logger.Warn("panel bound to a non-loopback address over plain HTTP — bearer token and task contents are sniffable; use 127.0.0.1 or a TLS reverse proxy",
 			"addr", cfg.Network.PanelAddr)
 	}
@@ -129,6 +136,9 @@ func main() {
 	go func() { errCh <- srv.ListenAndServe() }()
 
 	logger.Info("openpanda webui sidecar listening", "addr", cfg.Network.PanelAddr, "static", *staticDir)
+	// The ready URL carries the token so the console logs in without a
+	// manual paste (the app strips it from the address bar on load).
+	fmt.Println("open:", panel.AppendToken(panelURL(cfg.Network.PanelAddr), cfg.Network.PanelToken))
 
 	select {
 	case <-ctx.Done():
@@ -146,17 +156,15 @@ func fatal(step string, err error) {
 	os.Exit(1)
 }
 
-// isLoopbackAddr reports whether a listen address binds only to loopback
-// ("127.0.0.1:7840", "[::1]:7840", "localhost:7840"). A bare port (":7840")
-// binds every interface and is not loopback.
-func isLoopbackAddr(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
+// panelURL turns a listen address into the URL a browser can open (a bare
+// or wildcard host becomes localhost).
+func panelURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return false
+		return "http://" + addr
 	}
-	if strings.EqualFold(host, "localhost") {
-		return true
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+		host = "localhost"
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return "http://" + net.JoinHostPort(host, port)
 }

@@ -16,6 +16,8 @@ build:
 # folds it into the panel binary. Requires node/npm.
 web:
 	cd webui/app && npm install --no-fund --no-audit && npm run build
+	@if grep -q 'dist-placeholder' webui/panel/dist/index.html; then \
+		echo "make web: dist/index.html is still the placeholder — the build did not land"; exit 1; fi
 
 # Web panel sidecar with the embedded console. `make web` first for a real UI;
 # without it the binary embeds the committed placeholder.

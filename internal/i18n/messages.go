@@ -53,9 +53,14 @@ var messages = map[Locale]map[string]string{
 		"repl.nodes.none": "no nodes registered",
 		"repl.nodes.head": "nodes",
 
-		"repl.web.started": "web console: {url}  (token: {token})",
-		"repl.web.running": "web console already running at {url}",
-		"repl.web.noToken": "network.panel_token is not set — add it to config.yaml to use /web",
+		"repl.web.started":   "web console: {url}  (token: {token})",
+		"repl.web.running":   "web console already running at {url}",
+		"repl.web.noToken":   "network.panel_token is not set and the bind is not loopback — set OPENPANDA_PANEL_TOKEN to serve beyond this machine",
+		"repl.web.ephemeral": "no panel_token configured — generated an ephemeral one for this session",
+
+		"web.started":   "web console listening — {url}",
+		"web.nobrowser": "open the URL above in a browser; Ctrl-C stops the console.",
+		"web.stopped":   "web console stopped",
 
 		"repl.err.store":  "store: {err}",
 		"repl.err.config": "config: {err}",
@@ -108,9 +113,14 @@ var messages = map[Locale]map[string]string{
 		"repl.nodes.none": "尚无已注册节点",
 		"repl.nodes.head": "节点",
 
-		"repl.web.started": "Web 控制台：{url}（令牌：{token}）",
-		"repl.web.running": "Web 控制台已在 {url} 运行",
-		"repl.web.noToken": "未设置 network.panel_token — 请在 config.yaml 中添加后再用 /web",
+		"repl.web.started":   "Web 控制台：{url}（令牌：{token}）",
+		"repl.web.running":   "Web 控制台已在 {url} 运行",
+		"repl.web.noToken":   "未设置 network.panel_token 且监听地址非回环 — 对外提供服务请设置 OPENPANDA_PANEL_TOKEN",
+		"repl.web.ephemeral": "未配置 panel_token — 已为本次会话生成临时令牌",
+
+		"web.started":   "Web 控制台已监听 — {url}",
+		"web.nobrowser": "请在浏览器打开上述地址；Ctrl-C 停止。",
+		"web.stopped":   "Web 控制台已停止",
 
 		"repl.err.store":  "存储：{err}",
 		"repl.err.config": "配置：{err}",
@@ -163,9 +173,14 @@ var messages = map[Locale]map[string]string{
 		"repl.nodes.none": "登録済みノードなし",
 		"repl.nodes.head": "ノード",
 
-		"repl.web.started": "Web コンソール：{url}（トークン：{token}）",
-		"repl.web.running": "Web コンソールは {url} で実行中",
-		"repl.web.noToken": "network.panel_token が未設定 — /web には config.yaml への追加が必要",
+		"repl.web.started":   "Web コンソール：{url}（トークン：{token}）",
+		"repl.web.running":   "Web コンソールは {url} で実行中",
+		"repl.web.noToken":   "network.panel_token が未設定かつバインドがループバック以外 — 外部に公開するには OPENPANDA_PANEL_TOKEN を設定してください",
+		"repl.web.ephemeral": "panel_token 未設定 — このセッション用に一時トークンを生成しました",
+
+		"web.started":   "Web コンソール待ち受け中 — {url}",
+		"web.nobrowser": "上記のURLをブラウザで開いてください。Ctrl-C で停止します。",
+		"web.stopped":   "Web コンソールを停止しました",
 
 		"repl.err.store":  "ストア：{err}",
 		"repl.err.config": "設定：{err}",
@@ -218,9 +233,14 @@ var messages = map[Locale]map[string]string{
 		"repl.nodes.none": "sin nodos registrados",
 		"repl.nodes.head": "nodos",
 
-		"repl.web.started": "consola web: {url}  (token: {token})",
-		"repl.web.running": "la consola web ya corre en {url}",
-		"repl.web.noToken": "network.panel_token no está configurado — añádelo a config.yaml para /web",
+		"repl.web.started":   "consola web: {url}  (token: {token})",
+		"repl.web.running":   "la consola web ya corre en {url}",
+		"repl.web.noToken":   "network.panel_token no está configurado y el bind no es loopback — configura OPENPANDA_PANEL_TOKEN para servir más allá de esta máquina",
+		"repl.web.ephemeral": "panel_token sin configurar — se generó uno efímero para esta sesión",
+
+		"web.started":   "consola web escuchando — {url}",
+		"web.nobrowser": "abre la URL anterior en un navegador; Ctrl-C detiene la consola.",
+		"web.stopped":   "consola web detenida",
 
 		"repl.err.store":  "almacén: {err}",
 		"repl.err.config": "config: {err}",
@@ -273,9 +293,14 @@ var messages = map[Locale]map[string]string{
 		"repl.nodes.none": "keine Knoten registriert",
 		"repl.nodes.head": "Knoten",
 
-		"repl.web.started": "Web-Konsole: {url}  (Token: {token})",
-		"repl.web.running": "Web-Konsole läuft bereits unter {url}",
-		"repl.web.noToken": "network.panel_token fehlt — für /web in config.yaml eintragen",
+		"repl.web.started":   "Web-Konsole: {url}  (Token: {token})",
+		"repl.web.running":   "Web-Konsole läuft bereits unter {url}",
+		"repl.web.noToken":   "network.panel_token fehlt und der Bind ist nicht Loopback — für Betrieb außerhalb dieses Rechners OPENPANDA_PANEL_TOKEN setzen",
+		"repl.web.ephemeral": "kein panel_token konfiguriert — ein flüchtiges Token wurde für diese Sitzung erzeugt",
+
+		"web.started":   "Web-Konsole lauscht — {url}",
+		"web.nobrowser": "die URL oben im Browser öffnen; Ctrl-C beendet die Konsole.",
+		"web.stopped":   "Web-Konsole beendet",
 
 		"repl.err.store":  "Store: {err}",
 		"repl.err.config": "Konfig: {err}",

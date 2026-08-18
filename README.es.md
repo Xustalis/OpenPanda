@@ -221,6 +221,8 @@ Gestiona las skills:
 |---|---|
 | `panda` (sin argumentos) | Ejecutar el daemon: registrar nodo, heartbeat, servidor WS, reconexión de pares |
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<pregunta>"` | Entrada unificada: clasifica en answer / tool_call / task y ejecuta |
+| `panda repl [--config PATH] [--card PATH]` | Shell interactivo: comandos slash (tasks/approve/projects/nodes/lang), la entrada simple va al motor ask, `/web` arranca la consola incrustada |
+| `panda web [--config PATH] [--card PATH] [--no-browser]` | Consola web con un solo comando: loopback + token efímero por defecto, el navegador se abre ya con la sesión iniciada |
 | `panda status` | Estado del nodo y de las tareas |
 | `panda queue` | Listar la cola de tareas |
 | `panda task [--config PATH] <task-id>` | Detalles de la tarea |

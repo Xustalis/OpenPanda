@@ -188,6 +188,8 @@ model:
 |---|---|
 | `panda`（引数なし） | デーモン起動：ノード登録、ハートビート、WSサーバー、ピア再接続 |
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<質問>"` | 統一エントリ：answer / tool_call / task に分類して実行 |
+| `panda repl [--config PATH] [--card PATH]` | 対話シェル：スラッシュコマンド（tasks/approve/projects/nodes/lang）、素の入力は ask エンジンへ、`/web` で組み込みコンソールを起動 |
+| `panda web [--config PATH] [--card PATH] [--no-browser]` | コマンド1つで Web コンソール：デフォルトはループバック + 一時トークン、ブラウザが開いた時点でログイン済み |
 | `panda status` | ノードとタスクの状態 |
 | `panda queue` | タスクキューの一覧 |
 | `panda task [--config PATH] <task-id>` | タスクの詳細 |

@@ -384,12 +384,24 @@ func (r *repl) cmdNodes(arg string) {
 }
 
 // cmdWeb boots the embedded web console in-process (the same handler the
-// webui sidecar serves) and opens the browser. Requires network.panel_token;
-// an empty token would fail closed on every /api/* call anyway.
+// webui sidecar serves) and opens the browser already logged in: the URL
+// carries the token, which the app consumes once and strips. Zero-config on
+// loopback — no addr defaults to 127.0.0.1:7840, no token gets an ephemeral
+// one. A non-loopback bind without a configured token still refuses: an
+// unauthenticated panel on the network is never acceptable.
 func (r *repl) cmdWeb(arg string) {
-	if r.cfg.Network.PanelToken == "" {
-		fmt.Println(i18n.T(r.loc, "repl.web.noToken"))
-		return
+	addr := r.cfg.Network.PanelAddr
+	if addr == "" {
+		addr = "127.0.0.1:7840"
+	}
+	token := r.cfg.Network.PanelToken
+	if token == "" {
+		if !panel.IsLoopbackAddr(addr) {
+			fmt.Println(i18n.T(r.loc, "repl.web.noToken"))
+			return
+		}
+		token = panel.NewToken()
+		fmt.Println(i18n.T(r.loc, "repl.web.ephemeral"))
 	}
 	if r.webSrv != nil {
 		fmt.Println(i18n.Tf(r.loc, "repl.web.running", "url", r.webURL))
@@ -400,9 +412,9 @@ func (r *repl) cmdWeb(arg string) {
 		Engine:   r.engine,
 		DB:       r.db,
 		Projects: r.projects,
-		Token:    r.cfg.Network.PanelToken,
+		Token:    token,
 	})
-	srv := &http.Server{Addr: r.cfg.Network.PanelAddr, Handler: handler}
+	srv := &http.Server{Addr: addr, Handler: handler}
 	// Bind synchronously so a taken port surfaces as an error, not a silent
 	// goroutine death.
 	ln, err := net.Listen("tcp", srv.Addr)
@@ -413,8 +425,8 @@ func (r *repl) cmdWeb(arg string) {
 	go func() { _ = srv.Serve(ln) }()
 	r.webSrv = srv
 	r.webURL = panelURL(ln.Addr().String())
-	fmt.Println(i18n.Tf(r.loc, "repl.web.started", "url", r.webURL, "token", r.cfg.Network.PanelToken))
-	openBrowser(r.webURL)
+	fmt.Println(i18n.Tf(r.loc, "repl.web.started", "url", r.webURL, "token", token))
+	openBrowser(panel.AppendToken(r.webURL, token))
 }
 
 // cmdAuthorize toggles tier-2 (irreversible) command authorization for the

@@ -43,6 +43,9 @@ func main() {
 		case "repl":
 			runRepl(args)
 			return
+		case "web":
+			runWeb(args)
+			return
 		case "status":
 			runStatus(args)
 			return
@@ -80,7 +83,7 @@ func main() {
 			// A bare unknown word must not fall through to runDaemon (P1-25):
 			// "panda statsu" (a typo) would otherwise start a resident daemon.
 			fmt.Fprintf(os.Stderr, "panda: unknown subcommand %q\n", sub)
-			fmt.Fprintln(os.Stderr, "usage: panda [ask|repl|status|queue|task|cancel|approve|reject|logs|skill|metrics|audit|version] — or no subcommand to run the daemon")
+			fmt.Fprintln(os.Stderr, "usage: panda [ask|repl|web|status|queue|task|cancel|approve|reject|logs|skill|metrics|audit|version] — or no subcommand to run the daemon")
 			os.Exit(2)
 		}
 	}

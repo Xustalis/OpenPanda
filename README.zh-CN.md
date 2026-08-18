@@ -189,6 +189,8 @@ model:
 |---|---|
 | `panda`（无参数） | 运行守护进程：节点注册、心跳、WS 服务、peer 重连 |
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<问题>"` | 统一入口：分类为 answer / tool_call / task 并执行 |
+| `panda repl [--config PATH] [--card PATH]` | 交互式 shell：斜杠命令（tasks/approve/projects/nodes/lang），裸输入走提问引擎，`/web` 一键拉起内嵌控制台 |
+| `panda web [--config PATH] [--card PATH] [--no-browser]` | 一条命令起 Web 控制台：默认回环监听 + 临时令牌，浏览器打开即已登录 |
 | `panda status` | 节点与任务状态 |
 | `panda queue` | 列出任务队列 |
 | `panda task [--config PATH] <task-id>` | 任务详情 |

@@ -70,8 +70,10 @@ WebSocket links you control.
   seat: bare input goes to the ask engine, slash commands drive the panel
   surfaces (`/tasks`, `/approve`, `/projects`, `/nodes`, `/lang` …), and `/web`
   boots the embedded console (queue, ask, projects, nodes, approvals) in one
-  click. Five UI languages: English, 简体中文, 日本語, Español, Deutsch. The
-  same console also ships as a standalone `webui/` sidecar.
+  click. `panda web` is the one-command path: loopback bind + ephemeral token
+  by default, browser opens already logged in (no config, no token paste).
+  Five UI languages: English, 简体中文, 日本語, Español, Deutsch. The same
+  console also ships as a standalone `webui/` sidecar.
 - **Defense & safety layers** — permission tiers, a circuit breaker, scope-drift
   and infinite-loop detection, plus execution-side hardening: sandboxing,
   network allow-lists, secret redaction, and audit logging.
@@ -233,6 +235,7 @@ Manage skills:
 | `panda` (no args) | Run the daemon: register node, heartbeat, WS server, peer reconnect |
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<question>"` | Unified entry: classify into answer / tool_call / task and execute |
 | `panda repl [--config PATH] [--card PATH]` | Interactive shell: slash commands (tasks/approve/projects/nodes/lang), bare input goes to the ask engine, `/web` boots the embedded console |
+| `panda web [--config PATH] [--card PATH] [--no-browser]` | One-command web console: loopback + ephemeral token by default, opens the browser already logged in |
 | `panda status` | Node & task status |
 | `panda queue` | List the task queue |
 | `panda task [--config PATH] <task-id>` | Task details |

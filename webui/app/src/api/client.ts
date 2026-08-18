@@ -43,6 +43,18 @@ export function clearToken(): void {
 // Session fallback when localStorage is unavailable (private mode).
 let sessionToken = ''
 
+// Auto-login: `panda web` / `/web` open the browser at /?token=… so no
+// manual paste is needed. Consume it once — store the token, then strip it
+// from the address bar so it does not linger in history or get re-shared
+// accidentally when copying the URL.
+{
+  const urlToken = new URLSearchParams(location.search).get('token')
+  if (urlToken) {
+    setToken(urlToken)
+    history.replaceState(null, '', location.pathname + location.hash)
+  }
+}
+
 const unauthorizedListeners = new Set<() => void>()
 
 export function onUnauthorized(fn: () => void): () => void {
