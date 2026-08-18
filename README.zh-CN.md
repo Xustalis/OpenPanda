@@ -60,6 +60,8 @@ Claude Code、Codex、OpenCode、OpenClaw……每一个都是单机上的强力
 - **三层能力执行**——`native`（直接执行 shell 命令）、`agent`（基于适配器的 Agent，例如通过 Anthropic 兼容端点调用 Claude Code）、`manual`（进队列，等你人工审批/手动执行）。
 - **P2P 委派协议**——基于 WebSocket + JSON 的幂等 `task_id` 与每次执行唯一的 `attempt_id`，崩溃重试绝不会重复执行。
 - **自进化 Skill 系统**——程序性记忆以 `SKILL.md` 文件存在：每个 skill 声明适用时机、运行方式，并在每次使用后自我迭代。
+- **日常助手工具**——Agent 能读系统时钟、查实时天气，还能**设置定时提醒**（`reminder.set`）：SQLite 存储、扫描器到点触发、Web Push 推送 + SSE 实时刷新到任何打开的控制台；CLI 侧 `panda reminder list/add/rm` 管理。
+- **MCP 接入**——通过 config.yaml（`mcp.command`）或控制台设置页配置一个 stdio MCP 服务器；其工具**热加载**进 Agent 工具表，无需重启守护进程。
 - **双层记忆**——按用户与按项目隔离的记忆（`USER.md` / `MEMORY.md` 风格），外加隔离墙；后台 **Dreaming** 引擎在节点空闲时把日常日志沉淀为长期记忆。
 - **语音入口**——可选的 sidecar 管线（唤醒词 → 语音识别 → LLM → 语音合成），硬件门控，为嵌入式麦克风准备。
 - **交互式 REPL + 内嵌 Web 控制台**——`panda repl` 是操作席：裸输入直达 ask 引擎，斜杠命令驱动面板（`/tasks`、`/approve`、`/projects`、`/nodes`、`/lang`……），`/web` 一键启动内嵌控制台（对话、任务看板、审批、提醒、记忆）。`panda web` 一条命令开箱即用：默认回环绑定 + 临时 token，浏览器自动登录。五种界面语言：English、简体中文、日本語、Español、Deutsch。
@@ -122,6 +124,7 @@ Claude Code、Codex、OpenCode、OpenClaw……每一个都是单机上的强力
 
 ```bash
 make build          # 本机二进制 → bin/panda（release，剥离符号）
+make web            # 构建内嵌 Web 控制台（需 node/npm；跳过则控制台显示提示页）
 make test           # 运行完整测试套件
 make vet            # 静态分析
 ```
@@ -159,7 +162,17 @@ model:
 
 密钥（模型 API key）尽量从 `OPENPANDA_MODEL_API_KEY` 环境变量读取，而非配置文件。
 
-### 运行守护进程
+### 运行
+
+最快看到全貌的方式是一条命令起 Web 控制台：回环监听 + 临时 token，浏览器打开即已登录——无需改配置、无需贴 token：
+
+```bash
+./bin/panda web
+```
+
+如果还没配置模型端点，控制台的设置页可以直接管理（Anthropic / OpenAI 兼容）。
+
+常驻多节点部署则运行守护进程本身：
 
 ```bash
 ./bin/panda --config config.yaml --card config/capabilities.example-desktop.yaml
@@ -217,9 +230,11 @@ model:
 | `panda reject [--config PATH] [--reason s] <task-id>` | 拒绝进入 review 的任务 |
 | `panda logs [--config PATH] <task-id>` | 任务执行日志 |
 | `panda skill` | Skill 存储管理 |
+| `panda reminder list \| add \| rm` | 定时提醒：列出 / 新增（`--after 10m` 或 `--at "2006-01-02 15:04"`）/ 删除 |
+| `panda detect [-o PATH]` | 扫描本机硬件（CPU/RAM/GPU/Agent CLI）生成 capabilities.yaml 草稿 |
 | `panda metrics [--csv]` | 导出委派指标 |
 | `panda audit [--task <id>]` | 校验审计日志或单任务事件的 `prev_hash` 链 |
-| `panda version` | 打印版本号 |
+| `panda version` / `panda help` | 打印版本号 / 命令总览 |
 
 ## 配置
 
@@ -231,8 +246,8 @@ model:
 | `network` | `shared_secret` | 节点间 HMAC 鉴权密钥；WS 监听缺它不启动（所有节点共享同一值） |
 | `network` | `max_connections` | 全局并发 WS 连接上限（0 = 不限） |
 | `network` | `max_connections_per_ip` | 单远端 IP 并发 WS 连接上限（0 = 不限） |
-| `network` | `panel_addr` | 可选 webui 侧车 HTTP 地址（内核忽略） |
-| `network` | `panel_token` | 侧车 `/api/*` 的 Bearer 令牌（优先用 `OPENPANDA_PANEL_TOKEN`） |
+| `network` | `panel_addr` | Web 控制台 HTTP 地址（`panda web` / `/web`）；默认 `127.0.0.1:7840` |
+| `network` | `panel_token` | 控制台 `/api/*` 的 Bearer 令牌（回环监听时自动生成临时令牌；优先用 `OPENPANDA_PANEL_TOKEN`） |
 | `network` | `peers` | 要拨号的手动 peer 地址 |
 | `storage` | `db_path` | SQLite 数据库路径 |
 | `storage` | `context_path` | 上下文快照存储 |
@@ -244,8 +259,10 @@ model:
 | `model` | `base_url` | Anthropic 兼容 Messages API 基地址 |
 | `model` | `model` | 模型 id（如 `deepseek-chat`、`deepseek-reasoner`） |
 | `model` | `api_key` | 密钥——优先用 `OPENPANDA_MODEL_API_KEY` |
+| `model` | `api_type` | `anthropic` \| `openai`（默认 `anthropic`） |
 | `model` | `max_tokens` | 补全 token 上限（默认 4096） |
-| `push` | `enabled` | 开启 `/api/push/*` 与 Web Push 发送（仅 webui 侧车读取） |
+| `mcp` | `command` | stdio MCP 服务器命令行（空 = 禁用）；工具热加载进 Agent 工具表 |
+| `push` | `enabled` | 开启 `/api/push/*` 与 Web Push 发送（内嵌控制台 + webui 侧车） |
 | `push` | `vapid_subject` | VAPID subject（如 `mailto:` 地址） |
 | `push` | `vapid_key_path` | VAPID 密钥路径（首次启动自动生成） |
 
@@ -309,8 +326,8 @@ done
 | 胶水 / 适配器 | Python 3.10+ |
 | 传输 | WebSocket + JSON 信封 |
 | 状态 | WAL 模式的 SQLite |
-| 前端 | 可选 `webui/` PWA 侧车（冻结；内核为无头形态） |
-| LLM 访问 | Anthropic 兼容 `/v1/messages` 端点（如 DeepSeek） |
+| 前端 | Web 控制台（Vite + Preact，`go:embed` 单二进制）经 `panda repl` → `/web` 或 `panda web` 启动；独立 `webui/` 侧车并存 |
+| LLM 访问 | Anthropic 兼容 `/v1/messages` 或 OpenAI 兼容端点（如 DeepSeek） |
 
 ## 路线图
 

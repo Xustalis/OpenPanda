@@ -66,8 +66,8 @@ logs/
 # Local personal configs and per-device capability cards:
 # keep them on disk so `panda` keeps working, but never push them upstream.
 /config.local.yaml
-/config/capabilities.macbook.yaml
-/config/capabilities.orangepi3b.yaml
+/config/capabilities.*.yaml
+!/config/capabilities.example-*.yaml
 
 # TRAE assistant workspace
 .trae/

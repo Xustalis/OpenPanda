@@ -18,7 +18,7 @@ that keep the codebase readable as it grows.
 git clone https://github.com/xenith/openpanda
 cd openpanda
 make run            # daemon with the example config
-make web            # build the console into webui/panel/dist (go:embed)
+make web            # build the console into webui/panel/dist/app (go:embed)
 make build-webui    # standalone panel sidecar with the console embedded
 ```
 

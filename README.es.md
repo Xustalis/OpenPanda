@@ -36,11 +36,32 @@
 
 ## ¿Qué es OpenPanda?
 
-OpenPanda convierte cada dispositivo que tienes — un portátil, un ordenador de placa
-única, un escritorio — en un *nodo* de tu red personal de tareas. Preguntas una
-sola vez, desde cualquier dispositivo, y OpenPanda delega la tarea al nodo mejor
-preparado para ejecutarla, devuelve el resultado y recuerda lo aprendido para la
-próxima vez.
+OpenPanda **no es otro CLI de agentes** — es la capa *por encima* de ellos: el
+mayordomo de todos tus dispositivos y todas tus herramientas.
+
+Claude Code, Codex, OpenCode, OpenClaw … cada uno es un agente potente en *una*
+máquina. OpenPanda no compite con ellos — los **contrata**. Sea cual sea el
+dispositivo desde el que hablas, ese dispositivo se convierte en el comandante:
+responde directamente cuando puede, y cuando no puede, enruta la tarea por tu red
+al nodo que sí puede hacerla — entregándosela a los agentes de ese nodo (Claude
+Code, Codex, …), o directamente al hardware cuando basta una acción de
+dispositivo pura (un servomotor no necesita un LLM).
+
+```
+sub-agentes (una máquina)    orquestación de agentes (una máquina)   OpenPanda (muchas máquinas)
+┌──────────────┐             ┌──────────────┐             ┌──────────────────────┐
+│ Claude Code  │             │ multi-agente │             │ flota heterogénea    │
+│ Codex …      │             │ orquestación │             │ + sus agentes        │
+│              │             │              │             │ + hardware directo   │
+└──────────────┘             └──────────────┘             └──────────────────────┘
+                por encima de todos ellos: OpenPanda delega, ellos ejecutan
+```
+
+En la práctica: preguntas una sola vez, desde cualquier dispositivo, y OpenPanda
+delega la tarea al nodo mejor preparado para ejecutarla, devuelve el resultado y
+recuerda lo aprendido para la próxima vez — manteniendo el trabajo de proyectos
+estrictamente aislado de la memoria personal, para que tu base de código nunca
+se desvíe porque «al asistente le consta que prefieres los temas oscuros».
 
 Está construido desde cero como un sistema **personal**: sin dependencia de la
 nube, tu memoria permanece en tus dispositivos y cada nodo habla con sus pares a
@@ -65,15 +86,32 @@ través de enlaces WebSocket directos que tú controlas.
   fallo nunca se ejecuten dos veces.
 - **Skills auto-evolutivas** — memoria procedimental en archivos `SKILL.md`: una
   skill declara cuándo aplica y cómo se ejecuta, y puede refinarse tras cada uso.
+- **Herramientas de asistente diario** — el agente puede leer el reloj del
+  sistema, obtener el clima en vivo y programar **recordatorios**
+  (`reminder.set`): almacenados en SQLite, disparados por un escáner y
+  entregados como notificaciones Web Push y actualizaciones SSE en vivo a
+  cualquier consola abierta. `panda reminder list/add/rm` los gestiona desde la
+  CLI.
+- **Integración MCP** — un servidor MCP de stdio configurable en config.yaml
+  (`mcp.command`) o en la página de ajustes de la consola; sus herramientas se
+  cargan **en caliente** en el conjunto de herramientas del agente, sin
+  reiniciar el daemon.
 - **Memoria de dos capas** — memoria por usuario y por proyecto (estilo `USER.md`
   / `MEMORY.md`) tras un muro de aislamiento, más un motor **Dreaming** en segundo
   plano que consolida los registros diarios en memoria a largo plazo mientras el
   nodo está inactivo.
 - **Entrada por voz** — pipeline sidecar opcional (palabra de activación → STT →
   LLM → TTS), controlado por hardware y listo para micrófonos embebidos.
-- **Panel de control PWA** — una consola web para la cola de tareas, los detalles
-  de las tareas y las aprobaciones con intervención humana; instalable como
-  Progressive Web App.
+- **REPL interactivo + consola web embebida** — `panda repl` es el puesto de
+  mando: la entrada directa va al motor de preguntas, los comandos con barra
+  (`/tasks`, `/approve`, `/projects`, `/nodes`, `/lang` …) gobiernan el panel y
+  `/web` arranca la consola embebida en un clic. La cola de tareas es un
+  **tablero kanban** (pendiente / en curso / en revisión / terminado) con
+  aprobaciones en línea, más chat, recordatorios, un visor de memoria
+  (USER / MEMORY / DREAMS) y una página de ajustes (endpoint del modelo —
+  compatible Anthropic u OpenAI — y servidor MCP). `panda web` es la vía de un
+  solo comando: bind de loopback + token efímero por defecto, el navegador se
+  abre ya autenticado. Cinco idiomas de interfaz.
 - **Capas de defensa y seguridad** — niveles de permisos, un cortacircuitos,
   detección de desviación de alcance y de bucles infinitos, además de
   endurecimiento del lado de la ejecución: sandbox, listas blancas de red,
@@ -87,7 +125,7 @@ través de enlaces WebSocket directos que tú controlas.
 
 ```
                         ┌───────────────────────────┐
-                        │  Tú: CLI / PWA / voz      │
+                        │  Tú: CLI / web / voz      │
                         └─────────────┬─────────────┘
                                       │
                  ┌────────────────────▼────────────────────┐
@@ -138,6 +176,7 @@ Dentro de cada nodo:
 
 ```bash
 make build          # binario nativo → bin/panda (release, sin símbolos)
+make web            # consola web embebida en el binario (requiere node/npm; omitir = página de aviso)
 make test           # ejecutar toda la suite de pruebas
 make vet            # análisis estático
 ```
@@ -176,7 +215,20 @@ model:
 Los secretos (claves de API del modelo) se leen de `OPENPANDA_MODEL_API_KEY` en lugar
 del archivo de configuración siempre que sea posible.
 
-### Ejecutar el daemon
+### Ejecutar
+
+La forma más rápida de ver el sistema completo es la consola web de un solo
+comando: bind de loopback, token efímero y el navegador se abre ya
+autenticado — sin editar configuración ni pegar tokens:
+
+```bash
+./bin/panda web
+```
+
+Si aún no hay un endpoint del modelo configurado, la página de ajustes de la
+consola lo gestiona directamente (compatible Anthropic u OpenAI).
+
+Para un despliegue residente multi-nodo, arranca el propio daemon:
 
 ```bash
 ./bin/panda --config config.yaml --card config/capabilities.example-desktop.yaml
@@ -235,6 +287,8 @@ Gestiona las skills:
 | `panda reject [--config PATH] [--reason s] <task-id>` | Rechazar una tarea en revisión |
 | `panda logs [--config PATH] <task-id>` | Registros de ejecución de la tarea |
 | `panda skill` | Gestión del almacén de skills |
+| `panda reminder list \| add \| rm` | Recordatorios: listar / añadir (`--after 10m` o `--at "2006-01-02 15:04"`) / eliminar |
+| `panda detect [-o PATH]` | Escanea el hardware de esta máquina (CPU/RAM/GPU/CLIs de agente) y genera un borrador de capabilities.yaml |
 | `panda metrics [--csv]` | Exportar métricas de delegación |
 | `panda audit [--task <id>]` | Verificar la cadena `prev_hash` del registro de auditoría o de los eventos de una tarea |
 | `panda version` | Imprimir la versión |
@@ -249,8 +303,8 @@ Gestiona las skills:
 | `network` | `shared_secret` | Secreto HMAC que autentica los hellos entre nodos; el listener WS no arranca sin él (todos los nodos comparten un valor) |
 | `network` | `max_connections` | Límite global de conexiones WS concurrentes (0 = ilimitado) |
 | `network` | `max_connections_per_ip` | Límite de conexiones WS concurrentes por IP remota (0 = ilimitado) |
-| `network` | `panel_addr` | Dirección HTTP del panel PWA (vacío = desactivado) |
-| `network` | `panel_token` | Token Bearer que protege `/api/*` del sidecar (prefiere `OPENPANDA_PANEL_TOKEN`) |
+| `network` | `panel_addr` | Dirección HTTP de la consola web (`panda web` / `/web`); por defecto `127.0.0.1:7840` |
+| `network` | `panel_token` | Token Bearer que protege `/api/*` de la consola (loopback genera uno efímero; prefiere `OPENPANDA_PANEL_TOKEN`) |
 | `network` | `peers` | Direcciones de pares manuales a las que conectarse |
 | `storage` | `db_path` | Ruta de la base de datos SQLite |
 | `storage` | `context_path` | Almacén de snapshots de contexto |
@@ -262,8 +316,10 @@ Gestiona las skills:
 | `model` | `base_url` | URL base de la API Messages compatible con Anthropic |
 | `model` | `model` | ID del modelo (p. ej. `deepseek-chat`, `deepseek-reasoner`) |
 | `model` | `api_key` | Secreto — prefiere `OPENPANDA_MODEL_API_KEY` |
+| `model` | `api_type` | `anthropic` \| `openai` (por defecto `anthropic`) |
 | `model` | `max_tokens` | Límite de tokens de completado (por defecto 4096) |
-| `push` | `enabled` | Servir `/api/push/*` y enviar Web Push (solo sidecar webui) |
+| `mcp` | `command` | Línea de comandos del servidor MCP stdio (vacío = desactivado); las herramientas se cargan en caliente en el conjunto del agente |
+| `push` | `enabled` | Servir `/api/push/*` y enviar Web Push (consola embebida + sidecar webui) |
 | `push` | `vapid_subject` | Sujeto VAPID (p. ej. una dirección `mailto:`) |
 | `push` | `vapid_key_path` | Ruta de la clave VAPID (generada automáticamente en el primer arranque) |
 
@@ -320,8 +376,8 @@ done
 | Pegamento / adaptadores | Python 3.10+ |
 | Transporte | WebSocket + envoltorios JSON |
 | Estado | SQLite en modo WAL |
-| Frontend | PWA (app web vanilla + service worker) |
-| Acceso a LLM | Endpoint `/v1/messages` compatible con Anthropic (p. ej. DeepSeek) |
+| Frontend | Consola web (Vite + Preact, `go:embed` en un solo binario) |
+| Acceso a LLM | Endpoints compatibles con Anthropic `/v1/messages` u OpenAI (p. ej. DeepSeek) |
 
 ## Hoja de ruta
 

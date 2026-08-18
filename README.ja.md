@@ -36,7 +36,21 @@
 
 ## OpenPandaとは
 
-OpenPandaは、あなたが所有するすべてのデバイス——ノートPC、シングルボードコンピュータ、デスクトップ——を、個人タスクネットワークの*ノード*に変えます。どのデバイスからでも一度だけ指示を出すだけで、OpenPandaがタスクを最適なノードに委譲し、結果を返し、学んだことを次回のために記憶します。
+OpenPanda は**また一つの Agent CLI ではありません**——それらの**上流**に位置するレイヤー、あなたのすべてのデバイスとすべてのツールの執事です。
+
+Claude Code、Codex、OpenCode、OpenClaw……どれも単一マシン上の強力な Agent です。OpenPanda はそれらと競合せず、**雇用**します。どのデバイスで話しかけても、そのデバイスが総司令となり、自分でできることはその場でこなし、できない場合はネットワーク越しに本当にできるノードへルーティングします。そのノード自身の Agent（Claude Code、Codex など）に任せるか、単なるデバイス操作（サーボの制御など）なら Agent を介さず直接実行します。
+
+```
+サブエージェント（単一マシン）    Agent オーケストレーション（単一マシン）   OpenPanda（複数デバイス）
+┌──────────────┐          ┌──────────────┐          ┌──────────────────────┐
+│ Claude Code  │          │ マルチエージェント│          │ 異種混合デバイス群       │
+│ Codex …      │          │ オーケストレーション│          │ + 各デバイスの Agent   │
+│              │          │              │          │ + 生のハードウェア      │
+└──────────────┘          └──────────────┘          └──────────────────────┘
+                これらすべての上流：OpenPanda が委譲し、彼らが実行する
+```
+
+実際の使い方：どのデバイスからでも一度指示を出すだけで、OpenPanda がタスクを最適なノードに委譲し、結果を返し、学んだことを次回のために記憶します。プロジェクトの作業は個人の記憶から厳密に隔離されているため、「アシスタントがダークテーマ好きを知っている」せいでコードベースが暴走することはありません。
 
 設計の根幹は**個人用**システムです。クラウド依存なし、記憶はあなたのデバイスにだけ残り、各ノードはあなたが管理する直接のWebSocketリンクでピアと通信します。
 
@@ -47,9 +61,11 @@ OpenPandaは、あなたが所有するすべてのデバイス——ノートPC
 - **3層の能力実行** — `native`（シェル直接実行）、`agent`（アダプタ経由のAgent、例：Anthropic互換エンドポイント経由のClaude Code）、`manual`（キューに入れてあなたの承認/手動実行を待つ）。
 - **P2P委譲プロトコル** — WebSocket + JSON上で、冪等な`task_id`キーと実行ごとに一意な`attempt_id`を使用。クラッシュ後の再試行が二重実行されることはありません。
 - **自己進化するスキル** — `SKILL.md`ファイルによるプロシージャル記憶：各スキルは適用条件と実行方法を宣言し、使用ごとに洗練できます。
+- **日常アシスタントツール** — エージェントはシステム時計の読み取り、リアルタイム天気の取得、そして**リマインダーの設定**（`reminder.set`）が可能。SQLite に保存され、スキャナーが発火し、Web Push 通知と SSE ライブ更新で開いているコンソールに届きます。CLI からは `panda reminder list/add/rm`。
+- **MCP 統合** — config.yaml（`mcp.command`）またはコンソールの設定ページで stdio MCP サーバーを 1 台設定でき、そのツールはデーモン再起動なしでエージェントのツールセットに**ホットロード**されます。
 - **2層メモリ** — ユーザー単位・プロジェクト単位で分離された記憶（`USER.md` / `MEMORY.md`形式）を隔離壁の背後に保持。さらにバックグラウンドの**Dreaming**エンジンが、ノードがアイドルの間に日次ログを長期記憶へ統合します。
 - **音声入力** — オプションのサイドカーパイプライン（ウェイクワード → STT → LLM → TTS）。ハードウェアゲート付きで、組み込みマイク向けに準備されています。
-- **PWAコントロールパネル** — タスクキュー・タスク詳細・人間による承認のためのWebコンソール。Progressive Web Appとしてインストール可能。
+- **対話型 REPL + 内蔵 Web コンソール** — `panda repl` が操作席：素の入力は ask エンジンへ、スラッシュコマンド（`/tasks`、`/approve`、`/projects`、`/nodes`、`/lang`…）でパネルを駆動し、`/web` で内蔵コンソールをワンクリック起動。タスクキューは**カンバンボード**（未着手/進行中/承認待ち/完了）でインライン承認対応。チャット、リマインダー、メモリビューア（USER/MEMORY/DREAMS）、設定ページ（モデルエンドポイント：Anthropic/OpenAI 互換、MCP サーバー）も同梱。`panda web` はワンコマンドで起動：デフォルトでループバック + 一時トークン、ブラウザがログイン済みで開きます。UI 言語は 5 種類。
 - **防御と安全レイヤ** — 権限Tier、サーキットブレーカー、スコープ逸脱検出と無限ループ検出。実行側の強化：サンドボックス、ネットワーク許可リスト、シークレットの秘匿化、監査ログ。
 - **スリム設計** — 定常RSSは約 **13–20 MB**。リソース制約のあるシングルボードコンピュータで動くことを前提に設計されています。
 - **クリーンなクロスコンパイル** — プラットフォームごとに単一の静的バイナリ、CGO不要（`modernc.org/sqlite`による純Go SQLite）。
@@ -58,7 +74,7 @@ OpenPandaは、あなたが所有するすべてのデバイス——ノートPC
 
 ```
                         ┌───────────────────────────┐
-                        │   あなた：CLI / PWA / 音声 │
+                        │  あなた：CLI / Web / 音声  │
                         └─────────────┬─────────────┘
                                       │
                  ┌────────────────────▼────────────────────┐
@@ -109,6 +125,7 @@ OpenPandaは、あなたが所有するすべてのデバイス——ノートPC
 
 ```bash
 make build          # ネイティブバイナリ → bin/panda（リリース、strip済み）
+make web            # 内蔵Webコンソールをバイナリに組み込み（node/npm 必須。省略するとヒントページ表示）
 make test           # 全テストスイートを実行
 make vet            # 静的解析
 ```
@@ -146,7 +163,17 @@ model:
 
 シークレット（モデルのAPIキー）は、可能な限り設定ファイルではなく`OPENPANDA_MODEL_API_KEY`環境変数から読み取ります。
 
-### デーモンの起動
+### 起動
+
+システム全体を最速で見る方法は、ワンコマンドのWebコンソール：ループバック + 一時トークンで、ブラウザがログイン済みで開きます——設定編集もトークンの貼り付けも不要：
+
+```bash
+./bin/panda web
+```
+
+モデルのエンドポイント（Anthropic / OpenAI 互換）は、未設定ならコンソールの設定ページから直接管理できます。
+
+常駐マルチノード構成ではデーモンそのものを起動します：
 
 ```bash
 ./bin/panda --config config.yaml --card config/capabilities.example-desktop.yaml
@@ -202,6 +229,8 @@ model:
 | `panda reject [--config PATH] [--reason s] <task-id>` | レビュー中のタスクを却下 |
 | `panda logs [--config PATH] <task-id>` | タスク実行ログ |
 | `panda skill` | スキルストアの管理 |
+| `panda reminder list \| add \| rm` | リマインダー：一覧 / 追加（`--after 10m` または `--at "2006-01-02 15:04"`）/ 削除 |
+| `panda detect [-o PATH]` | このマシンのハードウェア（CPU/RAM/GPU/Agent CLI）をスキャンして capabilities.yaml のドラフトを生成 |
 | `panda metrics [--csv]` | 委譲メトリクスをエクスポート |
 | `panda audit [--task <id>]` | 監査ログまたは単一タスクイベントの `prev_hash` チェーンを検証 |
 | `panda version` | バージョンを表示 |
@@ -216,8 +245,8 @@ model:
 | `network` | `shared_secret` | ノード間ハローを認証するHMACシークレット；WSリスナーはこれが無いと起動しない（全ノード共通の値） |
 | `network` | `max_connections` | グローバル同時WS接続数の上限（0 = 無制限） |
 | `network` | `max_connections_per_ip` | リモートIPごとの同時WS接続数の上限（0 = 無制限） |
-| `network` | `panel_addr` | PWAパネルのHTTPアドレス（空 = 無効） |
-| `network` | `panel_token` | サイドカーの`/api/*`を守るBearerトークン（`OPENPANDA_PANEL_TOKEN`を推奨） |
+| `network` | `panel_addr` | WebコンソールのHTTPアドレス（`panda web` / `/web`）。デフォルト `127.0.0.1:7840` |
+| `network` | `panel_token` | コンソールの`/api/*`を守るBearerトークン（ループバックでは一時トークンを自動生成。`OPENPANDA_PANEL_TOKEN`を推奨） |
 | `network` | `peers` | 接続する手動ピアアドレス |
 | `storage` | `db_path` | SQLiteデータベースのパス |
 | `storage` | `context_path` | コンテキストスナップショットストア |
@@ -229,8 +258,10 @@ model:
 | `model` | `base_url` | Anthropic互換Messages APIのベースURL |
 | `model` | `model` | モデルID（例：`deepseek-chat`、`deepseek-reasoner`） |
 | `model` | `api_key` | シークレット — `OPENPANDA_MODEL_API_KEY`を推奨 |
+| `model` | `api_type` | `anthropic` \| `openai`（デフォルト `anthropic`） |
 | `model` | `max_tokens` | 補完トークン上限（デフォルト4096） |
-| `push` | `enabled` | `/api/push/*`の提供とWeb Push送信を有効化（webuiサイドカーのみ） |
+| `mcp` | `command` | stdio MCP サーバーのコマンドライン（空 = 無効）。ツールはエージェントのツールセットにホットロード |
+| `push` | `enabled` | `/api/push/*`の提供とWeb Push送信を有効化（内蔵コンソール + webuiサイドカー） |
 | `push` | `vapid_subject` | VAPIDサブジェクト（例：`mailto:`アドレス） |
 | `push` | `vapid_key_path` | VAPIDキーのパス（初回起動時に自動生成） |
 
@@ -280,8 +311,8 @@ done
 | グルー / アダプタ | Python 3.10+ |
 | トランスポート | WebSocket + JSONエンベロープ |
 | 状態 | WALモードのSQLite |
-| フロントエンド | PWA（素のWebアプリ + Service Worker） |
-| LLMアクセス | Anthropic互換`/v1/messages`エンドポイント（例：DeepSeek） |
+| フロントエンド | Webコンソール（Vite + Preact、`go:embed`で単一バイナリ） |
+| LLMアクセス | Anthropic互換`/v1/messages`またはOpenAI互換エンドポイント（例：DeepSeek） |
 
 ## ロードマップ
 

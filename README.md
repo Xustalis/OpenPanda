@@ -81,6 +81,13 @@ WebSocket links you control.
   `attempt_id`s over WebSocket + JSON, so crashed retries never double-execute.
 - **Self-evolving skills** — procedural memory in `SKILL.md` files: a skill
   declares when it applies, how it runs, and can be refined after each use.
+- **Daily-assistant tools** — the agent can read the system clock, fetch live
+  weather, and set **scheduled reminders** (`reminder.set`): stored in SQLite,
+  fired by a scanner, delivered as Web Push notifications and live SSE updates
+  to any open console. `panda reminder list/add/rm` manages them from the CLI.
+- **MCP integration** — one stdio Model Context Protocol server configurable
+  in `config.yaml` (`mcp.command`) or the console's settings page; its tools
+  join the agent's toolset live, no daemon restart.
 - **Two-layer memory** — per-user and per-project memory (`USER.md` /
   `MEMORY.md` style) kept behind an isolation wall, plus a background
   **Dreaming** engine that consolidates daily logs into long-term memory while
@@ -90,11 +97,14 @@ WebSocket links you control.
 - **Interactive REPL + embedded web console** — `panda repl` is the operator's
   seat: bare input goes to the ask engine, slash commands drive the panel
   surfaces (`/tasks`, `/approve`, `/projects`, `/nodes`, `/lang` …), and `/web`
-  boots the embedded console (queue, ask, projects, nodes, approvals) in one
-  click. `panda web` is the one-command path: loopback bind + ephemeral token
-  by default, browser opens already logged in (no config, no token paste).
-  Five UI languages: English, 简体中文, 日本語, Español, Deutsch. The same
-  console also ships as a standalone `webui/` sidecar.
+  boots the embedded console in one click. The console's task queue is a
+  **kanban board** (to do / in progress / in review / finished) with inline
+  approvals, plus chat sessions, reminders, a memory viewer (USER / MEMORY /
+  DREAMS), and a settings page (model endpoint — Anthropic or OpenAI
+  compatible — and MCP server). `panda web` is the one-command path: loopback
+  bind + ephemeral token by default, browser opens already logged in (no
+  config, no token paste). Five UI languages: English, 简体中文, 日本語,
+  Español, Deutsch.
 - **Defense & safety layers** — permission tiers, a circuit breaker, scope-drift
   and infinite-loop detection, plus execution-side hardening: sandboxing,
   network allow-lists, secret redaction, and audit logging.
@@ -107,7 +117,7 @@ WebSocket links you control.
 
 ```
                         ┌───────────────────────────┐
-                        │     You: CLI / voice     │
+                        │  You: CLI / web / voice  │
                         └─────────────┬─────────────┘
                                       │
                  ┌────────────────────▼────────────────────┐
@@ -158,6 +168,7 @@ Inside each node:
 
 ```bash
 make build          # native binary → bin/panda (release, stripped)
+make web            # web console into the binary (needs node/npm; skip = console shows a hint page)
 make test           # run the full test suite
 make vet            # static analysis
 ```
@@ -198,18 +209,18 @@ config file whenever possible.
 
 ### Run the daemon
 
-For local development, the fastest way is the provided helper, which builds
-both binaries if needed, generates local tokens, and starts the daemon plus
-the optional webui sidecar:
+The fastest way to see the whole system is the one-command web console:
+loopback bind, ephemeral token, browser opens already logged in — no config
+editing, no token pasting:
 
 ```bash
-make run-local
+./bin/panda web
 ```
 
-Then open `http://127.0.0.1:7840` and use the printed Bearer token for the
-`/api/*` endpoints.
+The console also manages the model endpoint (Anthropic- or OpenAI-compatible)
+from its settings page if you haven't configured one yet.
 
-For manual or multi-node deployment:
+For a resident multi-node setup, run the daemon itself:
 
 ```bash
 ./bin/panda --config config.yaml --card config/capabilities.example-desktop.yaml
@@ -268,9 +279,11 @@ Manage skills:
 | `panda reject [--config PATH] [--reason s] <task-id>` | Reject a reviewed task |
 | `panda logs [--config PATH] <task-id>` | Task execution logs |
 | `panda skill` | Skill store management |
+| `panda reminder list \| add \| rm` | Scheduled reminders: list / add (`--after 10m` or `--at "2006-01-02 15:04"`) / remove |
+| `panda detect [-o PATH]` | Scan this machine's hardware (CPU/RAM/GPU/agent CLIs) into a capabilities.yaml draft |
 | `panda metrics [--csv]` | Export delegation metrics |
 | `panda audit [--task <id>]` | Verify the `prev_hash` chain of the audit log or one task's events |
-| `panda version` | Print version |
+| `panda version` / `panda help` | Print version / command overview |
 
 ## Configuration
 
@@ -282,8 +295,8 @@ Manage skills:
 | `network` | `shared_secret` | HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it (all nodes share one value) |
 | `network` | `max_connections` | Global concurrent WS connection limit (0 = unlimited) |
 | `network` | `max_connections_per_ip` | Per-remote-IP concurrent WS connection limit (0 = unlimited) |
-| `network` | `panel_addr` | Optional webui sidecar HTTP address (kernel ignores it) |
-| `network` | `panel_token` | Bearer token guarding the sidecar's `/api/*` (prefer `OPENPANDA_PANEL_TOKEN`) |
+| `network` | `panel_addr` | Web console HTTP address (`panda web` / `/web`); default `127.0.0.1:7840` |
+| `network` | `panel_token` | Bearer token guarding the console's `/api/*` (loopback auto-generates an ephemeral one; prefer `OPENPANDA_PANEL_TOKEN`) |
 | `network` | `peers` | Manual peer addresses to dial |
 | `storage` | `db_path` | SQLite database path |
 | `storage` | `context_path` | Context snapshot store |
@@ -292,11 +305,13 @@ Manage skills:
 | `storage` | `skills_path` | Procedural-memory root |
 | `storage` | `work_path` | Where agents execute; scope drift is measured here |
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
-| `model` | `base_url` | Anthropic-compatible Messages API base URL |
+| `model` | `base_url` | Anthropic- or OpenAI-compatible API base URL |
 | `model` | `model` | Model id (e.g. `deepseek-chat`, `deepseek-reasoner`) |
+| `model` | `api_type` | `anthropic` \| `openai` (default `anthropic`) |
 | `model` | `api_key` | Secret — prefer `OPENPANDA_MODEL_API_KEY` |
 | `model` | `max_tokens` | Completion cap (default 4096) |
-| `push` | `enabled` | Serve `/api/push/*` and send Web Push (webui sidecar only) |
+| `mcp` | `command` | stdio MCP server argv (empty = disabled); tools hot-load into the agent toolset |
+| `push` | `enabled` | Serve `/api/push/*` and send Web Push (embedded console + webui sidecar) |
 | `push` | `vapid_subject` | VAPID subject (e.g. `mailto:` address) |
 | `push` | `vapid_key_path` | VAPID key path (auto-generated on first boot) |
 
@@ -346,8 +361,9 @@ WebSocket listener** (e.g. nginx, Caddy, Traefik) and configure peers with the
 *not* a substitute for transport encryption — do not expose a plain `ws://`
 listener on the public Internet.
 
-The optional `panel_addr` serves plain HTTP for the legacy PWA sidecar. Keep it
-on loopback, or put it behind the same TLS reverse proxy.
+The `panel_addr` web console serves plain HTTP and carries a Bearer token (an
+ephemeral one is auto-generated on loopback). Keep it on loopback, or put it
+behind the same TLS reverse proxy.
 
 ### Memory footprint
 
@@ -373,7 +389,7 @@ done
 | Transport | WebSocket + JSON envelopes |
 | State | SQLite in WAL mode |
 | Frontend | Web console (Vite + Preact, `go:embed` single binary) via `panda repl` → `/web`, or the standalone `webui/` sidecar |
-| LLM access | Anthropic-compatible `/v1/messages` endpoint (e.g. DeepSeek) |
+| LLM access | Anthropic-compatible `/v1/messages` or OpenAI-compatible endpoints (e.g. DeepSeek) |
 
 ## Roadmap
 
