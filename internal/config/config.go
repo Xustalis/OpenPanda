@@ -36,7 +36,7 @@ type NetworkConfig struct {
 	PanelAddr           string   `yaml:"panel_addr"`             // webui sidecar HTTP listener; loopback by default (P1-24)
 	PanelToken          string   `yaml:"panel_token"`            // Bearer token guarding /api/* in the webui sidecar
 	SharedSecret        string   `yaml:"shared_secret"`          // HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it
-	Peers               []string `yaml:"peers"`                  // e.g. "orangepi3b.tailnet-name.ts.net:7836"
+	Peers               []string `yaml:"peers"`                  // e.g. "worker-1.your-tailnet.ts.net:7836"
 	MaxConnections      int      `yaml:"max_connections"`        // global concurrent WS connection limit (0 = unlimited)
 	MaxConnectionsPerIP int      `yaml:"max_connections_per_ip"` // per-remote-IP concurrent WS connection limit (0 = unlimited)
 }

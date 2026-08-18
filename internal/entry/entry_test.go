@@ -155,8 +155,8 @@ func TestParseOutputReasoningPreamble(t *testing.T) {
 	// A reasoning model may emit a chain-of-thought preamble before committing to
 	// the directive JSON. It is not an illustrative example, so the JSON must be
 	// accepted and routed, not degraded to an answer.
-	raw := "这个任务需要在香橙派节点上运行 uname -a 查看系统信息。根据设备列表，" +
-		"orangepi3b 提供 sys:info 能力，最接近这个需求。我会将任务调度到该节点执行。" +
+	raw := "这个任务需要在远程节点上运行 uname -a 查看系统信息。根据设备列表，" +
+		"worker-1 提供 sys:info 能力，最接近这个需求。我会将任务调度到该节点执行。" +
 		`{"kind":"task","task":{"title":"查看系统信息","context_type":"command","requires":{"abilities":["sys:info"]}}}`
 	out, err := ParseOutput(raw)
 	if err != nil {
