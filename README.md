@@ -36,10 +36,30 @@
 
 ## What is OpenPanda?
 
-OpenPanda turns every device you own — a laptop, a single-board computer, a desktop —
-into a *node* in a personal task network. You ask once, from any device, and OpenPanda
-delegates the task to the node best suited to run it, streams back the result, and
-remembers what it learned for next time.
+OpenPanda is **not another agent CLI** — it is the layer *above* them: the household
+manager for every device and every tool you own.
+
+Claude Code, Codex, OpenCode, OpenClaw … each is a powerful agent on *one* machine.
+OpenPanda doesn't compete with them — it **hires** them. Whatever device you speak to
+becomes the commander; it answers directly when it can, and when it can't, it routes
+the task over your network to whichever node can actually do the work — handing it to
+that node's own agents (Claude Code, Codex, …), or straight to the hardware when a
+plain device action is all that's needed (a servo doesn't need an LLM).
+
+```
+sub-agents (single machine)   agent teams (single machine)   OpenPanda (many machines)
+┌──────────────┐              ┌──────────────┐               ┌──────────────────────┐
+│ Claude Code  │              │ multi-agent  │               │ heterogeneous fleet  │
+│ Codex …      │              │ orchestration│               │ + their agents       │
+│              │              │              │               │ + bare hardware      │
+└──────────────┘              └──────────────┘               └──────────────────────┘
+      upstream of all of them: OpenPanda delegates, they execute
+```
+
+In practice: you ask once, from any device, and OpenPanda delegates the task to the
+node best suited to run it, streams back the result, and remembers what it learned
+for next time — while keeping project work strictly isolated from personal memory,
+so your codebase never drifts because "the assistant knows you prefer dark themes".
 
 It is built from the ground up as a **personal** system: no cloud dependency, your
 memory stays on your devices, and every node speaks to its peers over direct

@@ -44,10 +44,16 @@ const zhCN: Messages = {
   'state.expired': '已过期',
 
   // Queue view
-  'queue.subtitle': '本节点知晓的全部任务，实时更新。',
+  'queue.subtitle': '任务看板：等待的、在做的、等你审批的、刚完成的——一目了然，实时更新。',
   'queue.allStates': '全部状态',
   'queue.allProjects': '全部项目',
   'queue.empty': '还没有任务。去「对话」说点什么来创建一个。',
+  'queue.col.todo': '待办事项',
+  'queue.col.doing': '进行中',
+  'queue.col.review': '审核中',
+  'queue.col.done': '完成任务',
+  'queue.colEmpty': '暂无任务',
+  'queue.more': '还有 {n} 条…',
   'queue.title': '标题',
   'queue.project': '项目',
   'queue.state': '状态',

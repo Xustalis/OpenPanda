@@ -45,7 +45,13 @@ const de: Messages = {
   'state.expired': 'abgelaufen',
 
   // Queue view
-  'queue.subtitle': 'Alle Aufgaben, die dieser Knoten kennt — live.',
+  'queue.subtitle': 'Ein Kanban deiner Aufgaben: wartend, laufend, wartet auf deine Freigabe, gerade fertig — live.',
+  'queue.col.todo': 'Offen',
+  'queue.col.doing': 'In Arbeit',
+  'queue.col.review': 'In Prüfung',
+  'queue.col.done': 'Fertig',
+  'queue.colEmpty': 'Nichts hier',
+  'queue.more': '{n} weitere…',
   'queue.allStates': 'Alle Zustände',
   'queue.allProjects': 'Alle Projekte',
   'queue.empty': 'Keine Aufgaben. Sag etwas im Chat, um eine zu erstellen.',

@@ -47,7 +47,13 @@ const en: Messages = {
   'state.expired': 'expired',
 
   // Queue view
-  'queue.subtitle': 'Every task this node knows about, live.',
+  'queue.subtitle': 'A kanban of your tasks: waiting, running, awaiting your approval, just finished — live.',
+  'queue.col.todo': 'To do',
+  'queue.col.doing': 'In progress',
+  'queue.col.review': 'In review',
+  'queue.col.done': 'Finished',
+  'queue.colEmpty': 'Nothing here',
+  'queue.more': '{n} more…',
   'queue.allStates': 'All states',
   'queue.allProjects': 'All projects',
   'queue.empty': 'No tasks. Say something in Chat to create one.',

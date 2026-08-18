@@ -309,11 +309,19 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 		devices = nil
 	}
 
-	// Hermes memory relevant to this prompt; a load failure degrades to
-	// classifying without memory rather than failing the ask.
-	conversationMemory, merr := e.injector.Conversation(prompt)
-	if merr != nil {
-		e.logger.Warn("load memory", "err", merr)
+	// Memory wall (design §17.2): Hermes personal memory enters only
+	// project-free conversations. A pinned workDir marks a project/workspace
+	// conversation (a session's worktree or the shared work path) — its
+	// classification and any task it spawns must stay untainted by personal
+	// memory, so nothing is loaded at all. Project memory reaches execution
+	// later via ContextPack on the executing node, never this prompt.
+	conversationMemory := ""
+	if workDir == "" {
+		var merr error
+		conversationMemory, merr = e.injector.Conversation(prompt)
+		if merr != nil {
+			e.logger.Warn("load memory", "err", merr)
+		}
 	}
 
 	turns := make([]entry.Turn, 0, len(history)+1)
@@ -356,6 +364,11 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	}
 	return nil, fmt.Errorf("reached max tool rounds (%d) without converging", maxRounds)
 }
+
+// WorkPath returns the configured work directory — the project workspace
+// panel sessions execute in. It lets the panel pin non-repo sessions to the
+// work path so the memory wall (§17.2) holds for them too.
+func (e *Engine) WorkPath() string { return e.cfg.Storage.WorkPath }
 
 // submitTask executes a classified task spec through the scheduler core and
 // maps the outcome to a Result. workDir, when set, temporarily pins the core's

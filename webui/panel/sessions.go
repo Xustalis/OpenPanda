@@ -197,10 +197,19 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cb := askengine.StreamCallbacks{
-		OnDelta: func(text string) { send("delta", map[string]string{"text": text}) },
+		OnDelta:  func(text string) { send("delta", map[string]string{"text": text}) },
 		OnStatus: func(text string) { send("status", map[string]string{"text": text}) },
 	}
-	out, err := h.engine.AskTurns(r.Context(), history, req.Prompt, sess.Worktree, req.Authorize, cb)
+
+	// Every panel session is a workspace conversation: repo sessions run in
+	// their worktree, non-repo ones in the shared work path. Pinning a
+	// non-empty workDir for both keeps the memory wall (§17.2) intact —
+	// personal memory never enters a session prompt.
+	workDir := sess.Worktree
+	if workDir == "" {
+		workDir = h.engine.WorkPath()
+	}
+	out, err := h.engine.AskTurns(r.Context(), history, req.Prompt, workDir, req.Authorize, cb)
 	if err != nil {
 		send("error", map[string]string{"message": err.Error()})
 		_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "assistant", Text: "⚠ " + err.Error(), Kind: "error"})

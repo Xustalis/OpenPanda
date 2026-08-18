@@ -45,7 +45,13 @@ const es: Messages = {
   'state.expired': 'expirada',
 
   // Queue view
-  'queue.subtitle': 'Todas las tareas que conoce este nodo, en vivo.',
+  'queue.subtitle': 'Un tablero de tus tareas: esperando, en curso, pendientes de tu aprobación, recién terminadas — en vivo.',
+  'queue.col.todo': 'Pendientes',
+  'queue.col.doing': 'En curso',
+  'queue.col.review': 'En revisión',
+  'queue.col.done': 'Terminadas',
+  'queue.colEmpty': 'Nada por aquí',
+  'queue.more': '{n} más…',
   'queue.allStates': 'Todos los estados',
   'queue.allProjects': 'Todos los proyectos',
   'queue.empty': 'Sin tareas. Pide algo en el Chat para crear una.',

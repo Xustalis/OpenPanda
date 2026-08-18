@@ -44,7 +44,13 @@ const ja: Messages = {
   'state.expired': '期限切れ',
 
   // Queue view
-  'queue.subtitle': 'このノードが把握しているすべてのタスク（リアルタイム）。',
+  'queue.subtitle': 'タスクボード：待機中・実行中・承認待ち・完了がひと目でわかり、リアルタイムに更新されます。',
+  'queue.col.todo': '未着手',
+  'queue.col.doing': '進行中',
+  'queue.col.review': '承認待ち',
+  'queue.col.done': '完了',
+  'queue.colEmpty': 'タスクなし',
+  'queue.more': '他 {n} 件…',
   'queue.allStates': 'すべての状態',
   'queue.allProjects': 'すべてのプロジェクト',
   'queue.empty': 'タスクはまだありません。「チャット」から何か依頼してみましょう。',
