@@ -17,15 +17,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/xenith/openpanda/internal/askengine"
-	"github.com/xenith/openpanda/internal/config"
-	"github.com/xenith/openpanda/internal/core"
-	"github.com/xenith/openpanda/internal/log"
-	"github.com/xenith/openpanda/internal/memory"
-	"github.com/xenith/openpanda/internal/reminders"
-	"github.com/xenith/openpanda/internal/storage"
-	"github.com/xenith/openpanda/webui/panel"
-	"github.com/xenith/openpanda/webui/push"
+	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/log"
+	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/webui/panel"
+	"github.com/Xustalis/OpenPanda/webui/push"
 )
 
 func main() {

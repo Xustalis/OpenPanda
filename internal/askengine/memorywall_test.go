@@ -12,10 +12,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/xenith/openpanda/internal/config"
-	"github.com/xenith/openpanda/internal/entry"
-	"github.com/xenith/openpanda/internal/memory"
-	"github.com/xenith/openpanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 // TestAskTurnsMemoryWall verifies the isolation wall of design §17.2 at the

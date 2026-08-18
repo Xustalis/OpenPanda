@@ -15,7 +15,7 @@ that keep the codebase readable as it grows.
 ## Getting started
 
 ```bash
-git clone https://github.com/xenith/openpanda
+git clone https://github.com/Xustalis/OpenPanda
 cd openpanda
 make run            # daemon with the example config
 make web            # build the console into webui/panel/dist/app (go:embed)

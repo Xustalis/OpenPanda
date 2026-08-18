@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/xenith/openpanda/internal/security"
-	versionpkg "github.com/xenith/openpanda/internal/version"
+	"github.com/Xustalis/OpenPanda/internal/security"
+	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 )
 
 // getVersion serves GET /api/version — the web equivalent of `panda version`.

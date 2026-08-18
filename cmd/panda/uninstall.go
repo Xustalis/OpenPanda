@@ -24,9 +24,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/openpanda/internal/config"
-	"github.com/xenith/openpanda/internal/i18n"
-	"github.com/xenith/openpanda/internal/install"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/install"
 )
 
 func runUninstall(args []string) {

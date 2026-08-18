@@ -4,7 +4,7 @@
 
 Initial open-source pre-release.
 
-**Project renamed to OpenPanda** (Open + Personal Adaptive Node-based Distributed Assistant). Go module path is now `github.com/xenith/openpanda`; all env vars use the `OPENPANDA_` prefix; systemd/LaunchAgent units are `openpanda.service` / `com.openpanda.node.plist`; default DB filename is `openpanda.db`. The CLI binary keeps the short name `panda`.
+**Project renamed to OpenPanda** (Open + Personal Adaptive Node-based Distributed Assistant). Go module path is now `github.com/Xustalis/OpenPanda`; all env vars use the `OPENPANDA_` prefix; systemd/LaunchAgent units are `openpanda.service` / `com.openpanda.node.plist`; default DB filename is `openpanda.db`. The CLI binary keeps the short name `panda`.
 
 All gates green throughout: build / vet / full tests / `-race` / cross-compile. Covers the full kernel feature set (daemon, CLI, P2P delegation, audit chain, migrations, scheduler scoring + dedup, SSE panel, embedded web console, interactive REPL, cross-platform install/uninstall/doctor).
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xenith/openpanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 )
 
 func TestSplitCommand(t *testing.T) {

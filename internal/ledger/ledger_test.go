@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/xenith/openpanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 // writeCard serializes a Card to YAML at path (mirrors LoadCard).

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/xenith/openpanda/internal/skills"
+	"github.com/Xustalis/OpenPanda/internal/skills"
 )
 
 // skillJSON is the wire form of a skills.IndexEntry.

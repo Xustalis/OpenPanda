@@ -13,7 +13,7 @@ OpenPanda をより良くすることに関心をお寄せいただき、あり�
 ## はじめに
 
 ```bash
-git clone https://github.com/xenith/openpanda
+git clone https://github.com/Xustalis/OpenPanda
 cd openpanda
 make run            # 設定例を使用してデーモンを起動
 make web            # コンソールを webui/panel/dist にビルド（go:embed）

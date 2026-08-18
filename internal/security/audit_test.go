@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/xenith/openpanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 func openAuditTestDB(t *testing.T) *sql.DB {

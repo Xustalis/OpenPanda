@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xenith/openpanda/internal/util"
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // Turn is one stored conversation message.

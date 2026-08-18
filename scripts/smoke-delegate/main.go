@@ -25,10 +25,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/xenith/openpanda/internal/config"
-	"github.com/xenith/openpanda/internal/core"
-	"github.com/xenith/openpanda/internal/ledger"
-	"github.com/xenith/openpanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 func main() {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/openpanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
 // eventsPollInterval is how often the SSE feed re-checks the task/node

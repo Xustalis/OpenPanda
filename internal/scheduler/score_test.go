@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/openpanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
 // TestFreshnessDecay verifies the TMB delayed-discount weight: a 5-minute-old

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/xenith/openpanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 // DelegationMetric is one row of the delegation_metrics table.

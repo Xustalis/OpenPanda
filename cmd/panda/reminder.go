@@ -20,9 +20,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/openpanda/internal/config"
-	"github.com/xenith/openpanda/internal/reminders"
-	"github.com/xenith/openpanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 func runReminder(args []string) {

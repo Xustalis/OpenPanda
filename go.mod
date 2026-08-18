@@ -1,4 +1,4 @@
-module github.com/xenith/openpanda
+module github.com/Xustalis/OpenPanda
 
 go 1.26.5
 

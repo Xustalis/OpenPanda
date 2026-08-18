@@ -27,7 +27,7 @@ is steering toward, written down so contributions can align with it.
       signed checksums (SHA256SUMS + minisign), a GitHub Release pipeline,
       and a changelog-per-tag policy.
 - [ ] **Homebrew tap** (`brew install xenith/tap/openpanda`) — formula built
-      from release artifacts; keep `go install github.com/xenith/openpanda@…`
+      from release artifacts; keep `go install github.com/Xustalis/OpenPanda@…`
       working for Go users.
 - [ ] **First-run experience** — `panda init` (interactive config + capability
       card generation, today hand-edited) so a new node reaches the network

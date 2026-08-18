@@ -17,15 +17,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/xenith/openpanda/internal/config"
-	"github.com/xenith/openpanda/internal/core"
-	"github.com/xenith/openpanda/internal/entry"
-	"github.com/xenith/openpanda/internal/ledger"
-	"github.com/xenith/openpanda/internal/mcp"
-	"github.com/xenith/openpanda/internal/memory"
-	"github.com/xenith/openpanda/internal/reminders"
-	"github.com/xenith/openpanda/internal/skills"
-	"github.com/xenith/openpanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/mcp"
+	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/skills"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 // Options tunes how the engine is built.

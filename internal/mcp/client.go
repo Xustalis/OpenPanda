@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xenith/openpanda/internal/executil"
-	"github.com/xenith/openpanda/internal/security"
+	"github.com/Xustalis/OpenPanda/internal/executil"
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // defaultCallTimeout is the hard upper bound for any single MCP request,

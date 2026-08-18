@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/openpanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 )
 
 // The entry model otherwise has no clock of its own — it cannot answer "what

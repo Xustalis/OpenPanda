@@ -15,7 +15,7 @@ convenciones que mantienen el código legible a medida que crece.
 ## Primeros pasos
 
 ```bash
-git clone https://github.com/xenith/openpanda
+git clone https://github.com/Xustalis/OpenPanda
 cd openpanda
 make run            # arranca el daemon con la configuración de ejemplo
 make web            # compila la consola en webui/panel/dist (go:embed)

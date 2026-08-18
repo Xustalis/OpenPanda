@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/openpanda/internal/config"
-	"github.com/xenith/openpanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 )
 
 // modelSettingsJSON is the wire form of the model configuration. The API key

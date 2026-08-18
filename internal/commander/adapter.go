@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/openpanda/internal/config"
-	"github.com/xenith/openpanda/internal/executil"
-	"github.com/xenith/openpanda/internal/security"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/executil"
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // adapterDir is where adapter scripts live. Resolved relative to the working

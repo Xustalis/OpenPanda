@@ -8,8 +8,8 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/xenith/openpanda/internal/executil"
-	"github.com/xenith/openpanda/internal/security"
+	"github.com/Xustalis/OpenPanda/internal/executil"
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // NativeResult is the outcome of a deterministic command.

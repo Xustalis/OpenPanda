@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/openpanda/internal/bus"
-	"github.com/xenith/openpanda/internal/ctxstore"
+	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/ctxstore"
 )
 
 // Wire-protocol authorization regression tests (P1-1/2/11, batch 1 of the

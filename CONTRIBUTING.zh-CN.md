@@ -13,7 +13,7 @@
 ## 快速开始
 
 ```bash
-git clone https://github.com/xenith/openpanda
+git clone https://github.com/Xustalis/OpenPanda
 cd openpanda
 make run            # 使用示例配置启动守护进程
 make web            # 把控制台构建到 webui/panel/dist（go:embed）

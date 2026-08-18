@@ -3,7 +3,7 @@ package memory
 import (
 	"sort"
 
-	"github.com/xenith/openpanda/internal/util"
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // conversationMemoryK is the maximum number of world-note (MEMORY.md) entries

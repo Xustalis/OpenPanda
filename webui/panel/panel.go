@@ -17,14 +17,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xenith/openpanda/internal/askengine"
-	"github.com/xenith/openpanda/internal/config"
-	"github.com/xenith/openpanda/internal/core"
-	"github.com/xenith/openpanda/internal/memory"
-	"github.com/xenith/openpanda/internal/reminders"
-	"github.com/xenith/openpanda/internal/sessions"
-	"github.com/xenith/openpanda/internal/skills"
-	"github.com/xenith/openpanda/webui/push"
+	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
+	"github.com/Xustalis/OpenPanda/internal/skills"
+	"github.com/Xustalis/OpenPanda/webui/push"
 )
 
 // Deps wires the panel to its collaborators. Store is required; everything

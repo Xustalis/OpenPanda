@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xenith/openpanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
 func TestPanelURL(t *testing.T) {

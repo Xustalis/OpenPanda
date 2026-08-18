@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/openpanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 )
 
 // TestRetryThenReview verifies a task that keeps failing is retried up to the

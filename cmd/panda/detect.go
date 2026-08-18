@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/openpanda/internal/ledger"
-	versionpkg "github.com/xenith/openpanda/internal/version"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
+	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"gopkg.in/yaml.v3"
 )
 

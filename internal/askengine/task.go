@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/openpanda/internal/config"
-	"github.com/xenith/openpanda/internal/core"
-	"github.com/xenith/openpanda/internal/entry"
-	"github.com/xenith/openpanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
 // schedulerTier maps a resource class to the DCPS-style scheduler tier used

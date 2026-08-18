@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/openpanda/internal/bus"
-	"github.com/xenith/openpanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
 // startChain boots a linear three-node chain root → mid → leaf over real

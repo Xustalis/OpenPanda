@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/openpanda/internal/ledger"
-	"github.com/xenith/openpanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/memory"
 )
 
 // askRequest is the body of POST /api/ask.

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xenith/openpanda/internal/memory"
-	"github.com/xenith/openpanda/internal/skills"
+	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/skills"
 )
 
 // TestWithProjectMemory verifies the isolation wall (design §17.2) at the core

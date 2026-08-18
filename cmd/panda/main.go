@@ -18,15 +18,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/xenith/openpanda/internal/config"
-	"github.com/xenith/openpanda/internal/core"
-	"github.com/xenith/openpanda/internal/ledger"
-	"github.com/xenith/openpanda/internal/log"
-	"github.com/xenith/openpanda/internal/memory"
-	"github.com/xenith/openpanda/internal/reminders"
-	"github.com/xenith/openpanda/internal/skills"
-	"github.com/xenith/openpanda/internal/storage"
-	versionpkg "github.com/xenith/openpanda/internal/version"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/log"
+	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/skills"
+	"github.com/Xustalis/OpenPanda/internal/storage"
+	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 )
 
 var version = versionpkg.Version

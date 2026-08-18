@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/xenith/openpanda/internal/executil"
+	"github.com/Xustalis/OpenPanda/internal/executil"
 )
 
 // worktreeDir is the directory (inside the repo) where session worktrees

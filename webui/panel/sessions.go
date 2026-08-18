@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/xenith/openpanda/internal/askengine"
-	"github.com/xenith/openpanda/internal/entry"
-	"github.com/xenith/openpanda/internal/sessions"
+	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
 // ---- Session CRUD ----

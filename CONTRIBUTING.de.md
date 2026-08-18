@@ -15,7 +15,7 @@ und die Konventionen, die den Code auch bei wachsendem Umfang lesbar halten.
 ## Erste Schritte
 
 ```bash
-git clone https://github.com/xenith/openpanda
+git clone https://github.com/Xustalis/OpenPanda
 cd openpanda
 make run            # Daemon mit der Beispielkonfiguration starten
 make web            # Konsole nach webui/panel/dist bauen (go:embed)

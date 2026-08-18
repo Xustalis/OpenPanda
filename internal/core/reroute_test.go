@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/openpanda/internal/config"
-	"github.com/xenith/openpanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
 // P1-5 regression tests: a declined task is re-routed to the next-best node

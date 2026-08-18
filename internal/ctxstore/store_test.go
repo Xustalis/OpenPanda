@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/xenith/openpanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 func openStoreDB(t *testing.T, max int) *Store {

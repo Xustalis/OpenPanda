@@ -5,7 +5,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/xenith/openpanda/internal/util"
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // Deep-ranking weights, matching OpenClaw's six signals (design §17.3). The

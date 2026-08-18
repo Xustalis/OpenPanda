@@ -23,13 +23,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/openpanda/internal/askengine"
-	"github.com/xenith/openpanda/internal/config"
-	"github.com/xenith/openpanda/internal/core"
-	"github.com/xenith/openpanda/internal/i18n"
-	"github.com/xenith/openpanda/internal/ledger"
-	"github.com/xenith/openpanda/internal/memory"
-	"github.com/xenith/openpanda/webui/panel"
+	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/webui/panel"
 )
 
 // repl carries the session state: the shared store/projects handles, the

@@ -9,8 +9,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/xenith/openpanda/internal/storage"
-	"github.com/xenith/openpanda/internal/util"
+	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // TaskStore manages the tasks and task_events tables. It enforces the state

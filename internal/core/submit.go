@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/xenith/openpanda/internal/bus"
-	"github.com/xenith/openpanda/internal/scheduler"
+	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
 
 // TaskInput is the local-entry form of a task: the structured task the entry

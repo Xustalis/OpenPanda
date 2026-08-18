@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/xenith/openpanda/internal/askengine"
-	"github.com/xenith/openpanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/config"
 )
 
 // runAsk implements `panda ask "..."` — one call through the unified entry

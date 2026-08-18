@@ -11,8 +11,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/xenith/openpanda/internal/ledger"
-	"github.com/xenith/openpanda/internal/util"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // NodeID is this node's stable identifier. Phase 0 uses the configured name;

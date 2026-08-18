@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/xenith/openpanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/config"
 )
 
 // StreamTurnsWithTools runs one call with a conversation history, an optional

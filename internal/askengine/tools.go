@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xenith/openpanda/internal/entry"
-	"github.com/xenith/openpanda/internal/mcp"
-	"github.com/xenith/openpanda/internal/memory"
-	"github.com/xenith/openpanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/mcp"
+	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/reminders"
 )
 
 // buildToolRegistry wires the memory, system-data (time/weather), reminder,

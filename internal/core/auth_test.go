@@ -9,8 +9,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/xenith/openpanda/internal/bus"
-	"github.com/xenith/openpanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
 // rawDial opens a raw WebSocket to addr's control endpoint, so a test can send

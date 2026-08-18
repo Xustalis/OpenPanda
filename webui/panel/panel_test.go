@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xenith/openpanda/internal/core"
-	"github.com/xenith/openpanda/internal/storage"
-	"github.com/xenith/openpanda/webui/push"
+	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/webui/push"
 )
 
 func newTestStore(t *testing.T) *core.TaskStore {

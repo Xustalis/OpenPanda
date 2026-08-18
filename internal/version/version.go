@@ -2,7 +2,7 @@
 // (`panda version`) and the web panel (/api/version) report the same value.
 // Release builds override it via -ldflags:
 //
-//	-X github.com/xenith/openpanda/internal/version.Version=$(VERSION)
+//	-X github.com/Xustalis/OpenPanda/internal/version.Version=$(VERSION)
 package version
 
 // Version is the semantic version of this build.

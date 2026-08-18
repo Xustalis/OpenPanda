@@ -1,7 +1,7 @@
 GO ?= go
 BIN := bin/panda
 VERSION ?= 0.0.1
-LDFLAGS := -s -w -X github.com/xenith/openpanda/internal/version.Version=$(VERSION)
+LDFLAGS := -s -w -X github.com/Xustalis/OpenPanda/internal/version.Version=$(VERSION)
 
 .PHONY: all build web build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 \
         test vet race gate run run-local measure clean icons release
