@@ -1,0 +1,13 @@
+{
+  "name": "OpenPanda",
+  "short_name": "OpenPanda",
+  "description": "OpenPanda — open-source personal task orchestration across your devices",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#101418",
+  "theme_color": "#101418",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
