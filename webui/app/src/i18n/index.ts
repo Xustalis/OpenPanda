@@ -53,9 +53,15 @@ function detectLocale(): Locale {
 }
 
 /** Translate a key, interpolating `{param}` placeholders. Falls back to
- *  English, then to the key itself so missing strings stay greppable. */
-export function t(key: string, params?: Record<string, string | number>): string {
+ *  English, then to the key itself so missing strings stay greppable. The
+ *  second argument may instead be a plain fallback string (used for
+ *  wire-stable identifiers such as task states). */
+export function t(key: string, params?: Record<string, string | number> | string): string {
   let text = dictionaries[current][key] ?? dictionaries.en[key] ?? key
+  if (typeof params === 'string') {
+    if (text === key) return params
+    return text
+  }
   if (params) {
     for (const [name, value] of Object.entries(params)) {
       text = text.replaceAll(`{${name}}`, String(value))

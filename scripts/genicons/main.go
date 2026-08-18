@@ -23,7 +23,7 @@ var (
 )
 
 func main() {
-	out := "web/pwa/icons"
+	out := "webui/app/public/icons"
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		log.Fatalf("mkdir %s: %v", out, err)
 	}

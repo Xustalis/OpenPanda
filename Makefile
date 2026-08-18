@@ -3,7 +3,7 @@ BIN := bin/panda
 VERSION ?= 0.0.1
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 \
+.PHONY: all build web build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 \
         test vet race gate run run-local measure clean icons release
 
 all: build
@@ -12,8 +12,14 @@ all: build
 build:
 	$(GO) build -ldflags "-s -w" -o $(BIN) ./cmd/panda
 
-# Optional legacy web control panel as a standalone sidecar (webui/README.md).
-build-webui:
+# Build the web console (webui/app) into webui/panel/dist, where go:embed
+# folds it into the panel binary. Requires node/npm.
+web:
+	cd webui/app && npm install --no-fund --no-audit && npm run build
+
+# Web panel sidecar with the embedded console. `make web` first for a real UI;
+# without it the binary embeds the committed placeholder.
+build-webui: web
 	$(GO) build -ldflags "-s -w" -o $(BIN)-webui ./webui/cmd/panel
 
 # Cross-compile targets (design doc §4.4)
@@ -30,7 +36,8 @@ build-windows-amd64:
 	GOOS=windows GOARCH=amd64 $(GO) build -ldflags "-s -w" -o $(BIN)-windows-amd64.exe ./cmd/panda
 
 # Release: version-tagged binaries for every target platform into dist/.
-release: release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64
+# One `make web` up front — the embedded console is platform-independent.
+release: web release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64
 
 release-darwin-arm64:
 	GOOS=darwin GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/panda-$(VERSION)-darwin-arm64 ./cmd/panda
@@ -56,7 +63,7 @@ race:
 # Merge gate (C-10): a PR must pass build + vet + test + race before landing.
 gate: build vet test race
 
-# Regenerate the PWA icon set (web/pwa/icons/) from the stdlib-only generator.
+# Regenerate the PWA icon set (webui/app/public/icons/) from the stdlib-only generator.
 icons:
 	$(GO) run ./scripts/genicons
 

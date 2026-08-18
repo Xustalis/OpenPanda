@@ -33,6 +33,12 @@ testdata/run/
 # Node (webui/web frontend tooling)
 node_modules/
 
+# Embedded web console build output: only the placeholder is committed so
+# `go build` works without node; `make web` materializes the real app.
+!webui/panel/dist/
+webui/panel/dist/*
+!webui/panel/dist/index.html
+
 # Python
 __pycache__/
 *.pyc

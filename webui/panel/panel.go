@@ -69,7 +69,7 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("POST /api/push/subscribe", h.pushSubscribe)
 		mux.HandleFunc("POST /api/push/unsubscribe", h.pushUnsubscribe)
 	}
-	mux.Handle("/", http.FileServer(http.Dir(d.StaticDir)))
+	mux.Handle("/", staticHandler(d.StaticDir))
 	return authMiddleware(d.Token, mux)
 }
 

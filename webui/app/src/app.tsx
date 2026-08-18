@@ -2,14 +2,31 @@ import { useEffect, useState } from 'preact/hooks'
 import { PandaWordmark } from './brand/panda'
 import { clearToken, getToken, onUnauthorized, setToken } from './api/client'
 import { locale, localeNames, locales, onLocaleChange, setLocale, t } from './i18n'
+import { QueueView } from './views/queue'
+import { DetailView } from './views/detail'
+import { AskView } from './views/ask'
+import { ProjectsView } from './views/projects'
+import { NodesView } from './views/nodes'
 
-type View = 'queue' | 'ask' | 'projects' | 'nodes'
+type Route =
+  | { view: 'queue' }
+  | { view: 'ask' }
+  | { view: 'projects' }
+  | { view: 'nodes' }
+  | { view: 'detail'; id: string }
 
-const VIEW_KEYS: Record<View, string> = {
-  queue: 'nav.queue',
-  ask: 'nav.ask',
-  projects: 'nav.projects',
-  nodes: 'nav.nodes',
+function parseHash(): Route {
+  const hash = location.hash.replace(/^#\/?/, '')
+  if (hash.startsWith('task/')) return { view: 'detail', id: decodeURIComponent(hash.slice(5)) }
+  if (hash === 'ask') return { view: 'ask' }
+  if (hash === 'projects') return { view: 'projects' }
+  if (hash === 'nodes') return { view: 'nodes' }
+  return { view: 'queue' }
+}
+
+function navigate(route: Route): void {
+  location.hash =
+    route.view === 'detail' ? `#/task/${encodeURIComponent(route.id)}` : `#/${route.view}`
 }
 
 /** Re-render the subtree on locale change (the whole shell is cheap). */
@@ -18,10 +35,20 @@ function useLocaleRerender(): void {
   useEffect(() => onLocaleChange(() => force((v) => v + 1)), [])
 }
 
+/** Hash-based routing: back/forward work, deep links to a task work. */
+function useRoute(): Route {
+  const [route, setRoute] = useState<Route>(parseHash)
+  useEffect(() => {
+    const on = () => setRoute(parseHash())
+    addEventListener('hashchange', on)
+    return () => removeEventListener('hashchange', on)
+  }, [])
+  return route
+}
+
 export function App() {
   useLocaleRerender()
-
-  const [view, setView] = useState<View>('queue')
+  const route = useRoute()
   const [authed, setAuthed] = useState<boolean>(getToken() !== '')
   const [gateError, setGateError] = useState('')
 
@@ -40,31 +67,49 @@ export function App() {
     )
   }
 
+  const active: string = route.view === 'detail' ? 'queue' : route.view
+
   return (
     <div class="shell">
       <aside class="sidebar">
-        <PandaWordmark />
-        {(Object.keys(VIEW_KEYS) as View[]).map((v) => (
-          <button
-            key={v}
-            class={`nav-item${view === v ? ' active' : ''}`}
-            onClick={() => setView(v)}
-          >
-            {t(VIEW_KEYS[v])}
-          </button>
+        <a href="#/queue" class="wordmark-link">
+          <PandaWordmark />
+        </a>
+        {(
+          [
+            ['queue', 'nav.queue'],
+            ['ask', 'nav.ask'],
+            ['projects', 'nav.projects'],
+            ['nodes', 'nav.nodes'],
+          ] as const
+        ).map(([v, key]) => (
+          <a key={v} href={`#/${v}`} class={`nav-item${active === v ? ' active' : ''}`}>
+            {t(key)}
+          </a>
         ))}
         <div class="sidebar-footer">
           <LocalePicker />
-          <button class="nav-item" onClick={() => { clearToken(); setAuthed(false) }}>
+          <button
+            class="nav-item"
+            onClick={() => {
+              clearToken()
+              setAuthed(false)
+            }}
+          >
             {t('token.logout')}
           </button>
         </div>
       </aside>
       <main class="main">
-        {/* Views land in Phase C2; the shell proves nav + i18n + auth wiring. */}
-        <h1 class="page-title">{t(VIEW_KEYS[view])}</h1>
-        <p class="page-sub">{t('app.tagline')}</p>
-        <div class="card">{t('common.empty')}</div>
+        {route.view === 'queue' && <QueueView onOpen={(id) => navigate({ view: 'detail', id })} />}
+        {route.view === 'detail' && (
+          <DetailView id={route.id} onBack={() => navigate({ view: 'queue' })} />
+        )}
+        {route.view === 'ask' && (
+          <AskView onTaskCreated={(id) => navigate({ view: 'detail', id })} />
+        )}
+        {route.view === 'projects' && <ProjectsView onOpenProject={() => navigate({ view: 'queue' })} />}
+        {route.view === 'nodes' && <NodesView />}
       </main>
     </div>
   )
@@ -98,8 +143,9 @@ function TokenGate(props: { error: string; onConnected(): void; onRejected(): vo
     setBusy(true)
     try {
       setToken(token.trim())
-      // Cheap auth probe: 401 fires onUnauthorized and throws ApiError(401).
-      const res = await fetch('/api/tasks', { headers: { Authorization: `Bearer ${token.trim()}` } })
+      const res = await fetch('/api/tasks', {
+        headers: { Authorization: `Bearer ${token.trim()}` },
+      })
       if (res.ok) props.onConnected()
       else props.onRejected()
     } finally {
