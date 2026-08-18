@@ -442,16 +442,29 @@ func (c *Core) DialPeer(ctx context.Context, addr string) error {
 }
 
 // MaintainPeer connects outbound to addr and blocks serving the connection
-// until it drops or ctx is done. It is the body of a daemon's reconnect loop:
-// dial, serve, and return on drop so the caller can back off and redial. A nil
-// return means the connection was established and later dropped; a non-nil
-// return means the dial (or hello) failed.
+// until the peer EDGE is down, not just our conn: after a mutual-dial dedup
+// (see ensurePeer) our outbound conn may be the loser while the peer's own
+// inbound conn keeps the edge alive — redialing then would only recreate the
+// one-second flap the dedup exists to stop. A nil return means the edge
+// dropped (or ctx is done) and the caller may redial; a non-nil return means
+// the dial (or hello) failed.
 func (c *Core) MaintainPeer(ctx context.Context, addr string) error {
 	conn, err := c.dial(ctx, addr)
 	if err != nil {
 		return err
 	}
 	c.handleInbound(ctx, conn)
+	// Our outbound conn ended. If the peer still reaches us on its own conn,
+	// wait for that conn to die too before handing control back.
+	if id := conn.PeerID(); id != "" {
+		for c.connFor(id) != nil {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(250 * time.Millisecond):
+			}
+		}
+	}
 	return nil
 }
 
@@ -465,6 +478,8 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
+	// Locally-initiated: peer dedup needs the direction (see ensurePeer).
+	conn.MarkOutbound()
 	// Send hello to identify ourselves and advertise our capability card.
 	card, err := c.helloCard()
 	if err != nil {
@@ -497,28 +512,54 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 }
 
 // ensurePeer registers conn under id. A repeated hello on the SAME conn is a
-// no-op; a hello on a NEW conn replaces the stale registration (P1-7): the
-// fresh, authenticated hello proves liveness, while the old conn may be a
-// half-dead socket whose read loop has not noticed yet. Without replacement a
-// reconnecting peer could never reclaim its identity — sends kept going to
-// the dead conn, and when the dead conn's read loop finally exited,
-// removePeerForConn would delete the identity even though the live
-// replacement conn was right there.
+// no-op. A hello on a NEW conn takes over in two distinct situations:
 //
-// The old conn is closed AFTER the swap and outside the mutex. Its read-loop
-// cleanup calls removePeerForConn(oldConn), which matches by conn identity —
-// the registry now holds the new conn, so the new registration survives.
+//   - Same direction (both conns locally-initiated, or both inbound): the
+//     fresh, authenticated hello proves liveness, while the old conn may be a
+//     half-dead socket whose read loop has not noticed yet (P1-7). Without
+//     replacement a reconnecting peer could never reclaim its identity —
+//     sends kept going to the dead conn, and when the dead conn's read loop
+//     finally exited, removePeerForConn would delete the identity even though
+//     the live replacement conn was right there.
 //
-// Returns true when a stale registration was replaced, so the hello handler
-// knows to reply on the new conn even if this peer was already greeted —
-// otherwise the reconnecting side never learns our identity on its new conn
-// and drops our first inbound message as "message before hello".
-func (c *Core) ensurePeer(id string, conn *bus.Conn) bool {
+//   - Opposite directions: two nodes dialed each other simultaneously, so
+//     each side holds one outbound and one inbound conn to the same peer.
+//     Both cannot survive — the second registration used to close the first,
+//     whose MaintainPeer redialed a second later, replacing the other side's
+//     conn in turn: an endless one-second connect/disconnect flap that
+//     churned the capability directory offline/online. The tie-break is
+//     deterministic: the conn initiated by the lexicographically smaller
+//     node id wins, and both sides compute the same winner, so exactly one
+//     TCP conn survives and both registries agree.
+//
+// The old conn on a replacement is closed AFTER the swap and outside the
+// mutex; its read-loop cleanup calls removePeerForConn(oldConn), which
+// matches by conn identity — the registry now holds the new conn, so the new
+// registration survives. A losing (deduped) conn is closed by the hello
+// handler after one final hello reply, so the losing dialer can bind our
+// identity and quiesce instead of redialing blind.
+//
+// Returns (replaced, accepted): accepted=false means this conn lost the
+// mutual-dial tie-break and must not be registered; replaced=true means a
+// stale registration was displaced, so the hello handler replies on the new
+// conn even if this peer was already greeted — otherwise the reconnecting
+// side never learns our identity on its new conn and drops our first inbound
+// message as "message before hello".
+func (c *Core) ensurePeer(id string, conn *bus.Conn) (replaced, accepted bool) {
 	c.mu.Lock()
 	old := c.peers[id]
 	if old != nil && old.conn == conn {
 		c.mu.Unlock()
-		return false
+		return false, true
+	}
+	if old != nil && old.conn.Outbound() != conn.Outbound() {
+		// Opposite directions: deterministic mutual-dial dedup. The winner
+		// is the conn initiated by the smaller node id.
+		if conn.Outbound() != (c.nodeID < id) {
+			c.mu.Unlock()
+			c.logger.Info("peer connection deduped", "peer", id)
+			return false, false
+		}
 	}
 	c.peers[id] = &Peer{id: id, conn: conn}
 	n := len(c.peers)
@@ -529,7 +570,7 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) bool {
 		old.conn.Close()
 	}
 	c.logger.Info("peer registered", "peer", id, "active", n)
-	return old != nil
+	return old != nil, true
 }
 
 // dispatch routes an envelope to its handler. conn is the connection the
@@ -580,7 +621,27 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		return
 	}
 	conn.SetPeerID(p.NodeID)
-	replaced := c.ensurePeer(p.NodeID, conn)
+	replaced, accepted := c.ensurePeer(p.NodeID, conn)
+	if !accepted {
+		// Lost the mutual-dial tie-break: this conn is about to be closed
+		// and the surviving registration already ingested the card. Reply
+		// once anyway so the losing dialer can bind our identity (it then
+		// sees the edge is alive through its inbound conn and stops
+		// redialing), then drop the loser.
+		card, err := c.helloCard()
+		if err == nil {
+			ts := time.Now().Unix()
+			_ = c.reply(ctx, env, bus.MsgHello, bus.HelloPayload{
+				NodeID: c.nodeID,
+				Ver:    "0.1.0-dev",
+				Card:   card,
+				Ts:     ts,
+				Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
+			})
+		}
+		conn.Close()
+		return
+	}
 	// Ingest the peer's advertised capability card so routing can consider it.
 	if len(p.Card) > 0 {
 		var sum ledger.CapabilitySummary

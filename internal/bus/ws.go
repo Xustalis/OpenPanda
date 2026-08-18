@@ -39,7 +39,11 @@ type Conn struct {
 	mu     sync.Mutex // serializes writes
 	idMu   sync.RWMutex
 	peerID string // authenticated node id, bound once at hello
-	logger *slog.Logger
+	// outbound marks a locally-initiated connection (we dialed); inbound
+	// conns (we accepted) leave it false. Peer dedup uses it to pick a
+	// deterministic winner between simultaneous mutual dials.
+	outbound bool
+	logger   *slog.Logger
 }
 
 // SetPeerID binds the authenticated node id to this connection (set once, at
@@ -55,6 +59,20 @@ func (c *Conn) PeerID() string {
 	c.idMu.RLock()
 	defer c.idMu.RUnlock()
 	return c.peerID
+}
+
+// MarkOutbound flags this connection as locally-initiated; Outbound reports it.
+func (c *Conn) MarkOutbound() {
+	c.idMu.Lock()
+	c.outbound = true
+	c.idMu.Unlock()
+}
+
+// Outbound reports whether this connection was initiated by this side.
+func (c *Conn) Outbound() bool {
+	c.idMu.RLock()
+	defer c.idMu.RUnlock()
+	return c.outbound
 }
 
 func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
