@@ -169,10 +169,10 @@ network:
 model:
   base_url: "https://api.deepseek.com/anthropic"  # cualquier endpoint compatible con /v1/messages
   model: "deepseek-chat"
-  # api_key: ""               # prefiere la variable de entorno OPENOPENOpenPanda_MODEL_API_KEY
+  # api_key: ""               # prefiere la variable de entorno OPENPANDA_MODEL_API_KEY
 ```
 
-Los secretos (claves de API del modelo) se leen de `OPENOPENOpenPanda_MODEL_API_KEY` en lugar
+Los secretos (claves de API del modelo) se leen de `OPENPANDA_MODEL_API_KEY` en lugar
 del archivo de configuración siempre que sea posible.
 
 ### Ejecutar el daemon
@@ -244,7 +244,7 @@ Gestiona las skills:
 | `network` | `max_connections` | Límite global de conexiones WS concurrentes (0 = ilimitado) |
 | `network` | `max_connections_per_ip` | Límite de conexiones WS concurrentes por IP remota (0 = ilimitado) |
 | `network` | `panel_addr` | Dirección HTTP del panel PWA (vacío = desactivado) |
-| `network` | `panel_token` | Token Bearer que protege `/api/*` del sidecar (prefiere `OPENOPENOpenPanda_PANEL_TOKEN`) |
+| `network` | `panel_token` | Token Bearer que protege `/api/*` del sidecar (prefiere `OPENPANDA_PANEL_TOKEN`) |
 | `network` | `peers` | Direcciones de pares manuales a las que conectarse |
 | `storage` | `db_path` | Ruta de la base de datos SQLite |
 | `storage` | `context_path` | Almacén de snapshots de contexto |
@@ -255,7 +255,7 @@ Gestiona las skills:
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | URL base de la API Messages compatible con Anthropic |
 | `model` | `model` | ID del modelo (p. ej. `deepseek-chat`, `deepseek-reasoner`) |
-| `model` | `api_key` | Secreto — prefiere `OPENOPENOpenPanda_MODEL_API_KEY` |
+| `model` | `api_key` | Secreto — prefiere `OPENPANDA_MODEL_API_KEY` |
 | `model` | `max_tokens` | Límite de tokens de completado (por defecto 4096) |
 | `push` | `enabled` | Servir `/api/push/*` y enviar Web Push (solo sidecar webui) |
 | `push` | `vapid_subject` | Sujeto VAPID (p. ej. una dirección `mailto:`) |
@@ -271,9 +271,10 @@ partes públicas e internas:
 
 - [Índice de documentación](docs/README.md) — punto de entrada de todos los
   documentos.
-- [Manual de desarrollo](docs/guides/DEVELOPMENT.md) — quickstart, mapa de
-  directorios, convenciones de ingeniería, gates de calidad e inventario de
-  pruebas.
+- [Guía de contribución](CONTRIBUTING.md) — herramienta, gates de ingeniería,
+  convenciones de código y lista de verificación para PR.
+- [Hoja de ruta de escritorio y empaquetado](docs/plans/roadmap-desktop-and-packaging.md) —
+  el plan por etapas hacia el cliente de escritorio.
 - [Informes de fase](docs/reports/) — informes de progreso de cada fase y sprint.
 
 Los documentos internos de planificación, diseño y auditoría quedan fuera del
@@ -325,9 +326,12 @@ done
 La fase 3 (memoria + voz + seguridad) está completada. La capa de memoria, el motor
 Dreaming, el sistema de skills y el endurecimiento de la ejecución
 están implementados; la entrada por voz está completa en código y a la espera de
-validación con hardware de micrófono. El panel web se extrajo como sidecar `webui/`
-congelado — el kernel funciona en modo headless. La fase 4 (cliente de escritorio,
-entre otros) está en planificación.
+validación con hardware de micrófono. La consola web fue reconstruida con
+Vite + Preact e incrustada en el binario, y el REPL interactivo llegó con ella —
+la delegación de dos nodos está verificada en vivo
+([informe](docs/reports/delegation-loopback-2026-08-18.md)). La fase 4 (cliente
+de escritorio, entre otros) está planificada en la
+[hoja de ruta de escritorio y empaquetado](docs/plans/roadmap-desktop-and-packaging.md).
 
 ## Contribuciones
 
@@ -339,9 +343,9 @@ cumple estos gates de ingeniería antes de abrir un pull request:
 - Mantén la cobertura de pruebas de los módulos centrales por encima de ~60 %
   cuando sea posible.
 
-Consulta el [manual de desarrollo](docs/guides/DEVELOPMENT.md) para las
-convenciones completas: envoltura de errores (`%w` / `errors.Is`), límites de
-complejidad, nada de código muerto y reglas de concurrencia.
+Consulta la [guía de contribución](CONTRIBUTING.md) para las convenciones
+completas: envoltura de errores (`%w` / `errors.Is`), límites de complejidad,
+nada de código muerto, reglas de concurrencia, reglas de i18n y estilo de commits.
 
 ## Licencia
 

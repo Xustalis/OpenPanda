@@ -140,10 +140,10 @@ network:
 model:
   base_url: "https://api.deepseek.com/anthropic"  # 任意の /v1/messages 互換エンドポイント
   model: "deepseek-chat"
-  # api_key: ""               # 環境変数 OPENOPENOpenPanda_MODEL_API_KEY を推奨
+  # api_key: ""               # 環境変数 OPENPANDA_MODEL_API_KEY を推奨
 ```
 
-シークレット（モデルのAPIキー）は、可能な限り設定ファイルではなく`OPENOPENOpenPanda_MODEL_API_KEY`環境変数から読み取ります。
+シークレット（モデルのAPIキー）は、可能な限り設定ファイルではなく`OPENPANDA_MODEL_API_KEY`環境変数から読み取ります。
 
 ### デーモンの起動
 
@@ -211,7 +211,7 @@ model:
 | `network` | `max_connections` | グローバル同時WS接続数の上限（0 = 無制限） |
 | `network` | `max_connections_per_ip` | リモートIPごとの同時WS接続数の上限（0 = 無制限） |
 | `network` | `panel_addr` | PWAパネルのHTTPアドレス（空 = 無効） |
-| `network` | `panel_token` | サイドカーの`/api/*`を守るBearerトークン（`OPENOPENOpenPanda_PANEL_TOKEN`を推奨） |
+| `network` | `panel_token` | サイドカーの`/api/*`を守るBearerトークン（`OPENPANDA_PANEL_TOKEN`を推奨） |
 | `network` | `peers` | 接続する手動ピアアドレス |
 | `storage` | `db_path` | SQLiteデータベースのパス |
 | `storage` | `context_path` | コンテキストスナップショットストア |
@@ -222,7 +222,7 @@ model:
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic互換Messages APIのベースURL |
 | `model` | `model` | モデルID（例：`deepseek-chat`、`deepseek-reasoner`） |
-| `model` | `api_key` | シークレット — `OPENOPENOpenPanda_MODEL_API_KEY`を推奨 |
+| `model` | `api_key` | シークレット — `OPENPANDA_MODEL_API_KEY`を推奨 |
 | `model` | `max_tokens` | 補完トークン上限（デフォルト4096） |
 | `push` | `enabled` | `/api/push/*`の提供とWeb Push送信を有効化（webuiサイドカーのみ） |
 | `push` | `vapid_subject` | VAPIDサブジェクト（例：`mailto:`アドレス） |
@@ -235,7 +235,8 @@ model:
 完全なドキュメントは[`docs/`](docs/)ディレクトリにあり、公開部分と内部部分に分かれています:
 
 - [ドキュメントインデックス](docs/README.md) — すべてのドキュメントへの入り口。
-- [開発ハンドブック](docs/guides/DEVELOPMENT.md) — クイックスタート、ディレクトリマップ、エンジニアリング規約、品質ゲート、テスト一覧。
+- [コントリビューションガイド](CONTRIBUTING.md) — ツールチェーン、品質ゲート、コード規約、PRチェックリスト。
+- [デスクトップ＆パッケージングロードマップ](docs/plans/roadmap-desktop-and-packaging.md) — デスクトップクライアントへ向けた段階的計画。
 - [フェーズレポート](docs/reports/) — 各フェーズ・スプリントの進捗レポート。
 
 内部の企画・設計・監査ドキュメントは公開リポジトリから除外されています。
@@ -280,7 +281,7 @@ done
 
 ## ロードマップ
 
-Phase 3（メモリ + 音声 + 安全）は完了しました。メモリレイヤ、Dreamingエンジン、スキルシステム、実行強化は実装済み。音声エントリはコード完成済みで、マイクハードウェアでの検証を待っています。Webパネルは凍結された`webui/`サイドカーに分離され、カーネルはヘッドレスで動作します。Phase 4（デスクトップクライアントなど）は計画中です。
+Phase 3（メモリ + 音声 + 安全）は完了しました。メモリレイヤ、Dreamingエンジン、スキルシステム、実行強化は実装済み。音声エントリはコード完成済みで、マイクハードウェアでの検証を待っています。WebコンソールはVite + Preactで再構築されバイナリに組み込まれ、対話型REPLも同時に導入 — 2ノード間の委譲を実機検証済みです（[レポート](docs/reports/delegation-loopback-2026-08-18.md)）。Phase 4（デスクトップクライアントなど）は[デスクトップ＆パッケージングロードマップ](docs/plans/roadmap-desktop-and-packaging.md)で計画中です。
 
 ## コントリビューション
 
@@ -290,7 +291,7 @@ Phase 3（メモリ + 音声 + 安全）は完了しました。メモリレイ�
 - `gofmt -l internal/ cmd/ adapters/` の出力が空であること。
 - コアモジュールのテストカバレッジを可能な限り約60%以上に保つこと。
 
-完全な規約は[開発ハンドブック](docs/guides/DEVELOPMENT.md)を参照してください：エラーラッピング（`%w` / `errors.Is`）、複雑度制限、デッドコード禁止、並行処理ルール。
+完全な規約は[コントリビューションガイド](CONTRIBUTING.md)を参照してください：エラーラッピング（`%w` / `errors.Is`）、複雑度制限、デッドコード禁止、並行処理ルール、i18n規約、コミットスタイル。
 
 ## ライセンス
 

@@ -168,10 +168,10 @@ network:
 model:
   base_url: "https://api.deepseek.com/anthropic"  # beliebiger /v1/messages-kompatibler Endpoint
   model: "deepseek-chat"
-  # api_key: ""               # bevorzugt über die Env-Variable OPENOPENOpenPanda_MODEL_API_KEY
+  # api_key: ""               # bevorzugt über die Env-Variable OPENPANDA_MODEL_API_KEY
 ```
 
-Geheimnisse (Modell-API-Keys) werden möglichst über `OPENOPENOpenPanda_MODEL_API_KEY` gelesen,
+Geheimnisse (Modell-API-Keys) werden möglichst über `OPENPANDA_MODEL_API_KEY` gelesen,
 nicht aus der Config-Datei.
 
 ### Daemon starten
@@ -241,7 +241,7 @@ Skills verwalten:
 | `network` | `max_connections` | Globales Limit gleichzeitiger WS-Verbindungen (0 = unbegrenzt) |
 | `network` | `max_connections_per_ip` | Limit gleichzeitiger WS-Verbindungen pro Remote-IP (0 = unbegrenzt) |
 | `network` | `panel_addr` | HTTP-Adresse des PWA-Panels (leer = deaktiviert) |
-| `network` | `panel_token` | Bearer-Token für `/api/*` des Sidecars (bevorzugt `OPENOPENOpenPanda_PANEL_TOKEN`) |
+| `network` | `panel_token` | Bearer-Token für `/api/*` des Sidecars (bevorzugt `OPENPANDA_PANEL_TOKEN`) |
 | `network` | `peers` | Manuelle Peer-Adressen zum Anwählen |
 | `storage` | `db_path` | SQLite-Datenbankpfad |
 | `storage` | `context_path` | Context-Snapshot-Speicher |
@@ -252,7 +252,7 @@ Skills verwalten:
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic-kompatible Messages-API-Basis-URL |
 | `model` | `model` | Modell-ID (z. B. `deepseek-chat`, `deepseek-reasoner`) |
-| `model` | `api_key` | Geheim — bevorzugt `OPENOPENOpenPanda_MODEL_API_KEY` |
+| `model` | `api_key` | Geheim — bevorzugt `OPENPANDA_MODEL_API_KEY` |
 | `model` | `max_tokens` | Completion-Token-Limit (Standard 4096) |
 | `push` | `enabled` | `/api/push/*` bereitstellen und Web Push senden (nur webui-Sidecar) |
 | `push` | `vapid_subject` | VAPID-Subject (z. B. eine `mailto:`-Adresse) |
@@ -266,8 +266,10 @@ Die vollständige Dokumentation liegt im [`docs/`](docs/)-Verzeichnis, aufgeteil
 in öffentliche und interne Teile:
 
 - [Dokumentationsindex](docs/README.md) — Einstiegspunkt für alle Dokumente.
-- [Entwicklungs-Handbuch](docs/guides/DEVELOPMENT.md) — Schnellstart,
-  Verzeichniskarte, Engineering-Konventionen, Qualitäts-Gates und Testinventar.
+- [Beitragsleitfaden](CONTRIBUTING.md) — Toolchain, Engineering-Gates,
+  Code-Konventionen und die PR-Checkliste.
+- [Desktop- & Paketierungs-Roadmap](docs/plans/roadmap-desktop-and-packaging.md) —
+  der gestufte Plan Richtung Desktop-Client.
 - [Phasen-Berichte](docs/reports/) — Fortschrittsberichte für jede Phase und
   jedes Sprint.
 
@@ -320,9 +322,12 @@ done
 Phase 3 (Gedächtnis + Sprache + Sicherheit) ist abgeschlossen. Die Gedächtnis-Schicht, die
 Dreaming-Engine, das Skill-System und die Ausführungshärtung sind
 implementiert; die Spracheingabe ist code-komplett und wartet auf die Validierung
-mit Mikrofon-Hardware. Das Web-Panel wurde als eingefrorener `webui/`-Sidecar
-ausgelagert — der Kernel läuft headless. Phase 4 (u. a. Desktop-Client) ist in
-Planung.
+mit Mikrofon-Hardware. Die Web-Konsole wurde mit Vite + Preact neu gebaut und
+in die Binärdatei eingebettet, das interaktive REPL ist mit ihr gelandet — die
+Zwei-Knoten-Delegation ist live verifiziert
+([Bericht](docs/reports/delegation-loopback-2026-08-18.md)). Phase 4 (u. a.
+Desktop-Client) ist in der
+[Desktop- & Paketierungs-Roadmap](docs/plans/roadmap-desktop-and-packaging.md) geplant.
 
 ## Mitwirken
 
@@ -334,8 +339,9 @@ Pull Request die Engineering-Gates beachten:
 - Testabdeckung der Kern-Module möglichst über ~60 % halten.
 
 Die vollständigen Konventionen stehen im
-[Entwicklungs-Handbuch](docs/guides/DEVELOPMENT.md): Error-Wrapping
-(`%w` / `errors.Is`), Komplexitäts-Limits, kein toter Code, Concurrency-Regeln.
+[Beitragsleitfaden](CONTRIBUTING.md): Error-Wrapping
+(`%w` / `errors.Is`), Komplexitäts-Limits, kein toter Code, Concurrency-Regeln,
+i18n-Regeln und Commit-Stil.
 
 ## Lizenz
 

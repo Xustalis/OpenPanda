@@ -139,10 +139,10 @@ network:
 model:
   base_url: "https://api.deepseek.com/anthropic"  # 任何兼容 /v1/messages 的端点
   model: "deepseek-chat"
-  # api_key: ""               # 优先使用 OPENOPENOpenPanda_MODEL_API_KEY 环境变量
+  # api_key: ""               # 优先使用 OPENPANDA_MODEL_API_KEY 环境变量
 ```
 
-密钥（模型 API key）尽量从 `OPENOPENOpenPanda_MODEL_API_KEY` 环境变量读取，而非配置文件。
+密钥（模型 API key）尽量从 `OPENPANDA_MODEL_API_KEY` 环境变量读取，而非配置文件。
 
 ### 运行守护进程
 
@@ -212,7 +212,7 @@ model:
 | `network` | `max_connections` | 全局并发 WS 连接上限（0 = 不限） |
 | `network` | `max_connections_per_ip` | 单远端 IP 并发 WS 连接上限（0 = 不限） |
 | `network` | `panel_addr` | 可选 webui 侧车 HTTP 地址（内核忽略） |
-| `network` | `panel_token` | 侧车 `/api/*` 的 Bearer 令牌（优先用 `OPENOPENOpenPanda_PANEL_TOKEN`） |
+| `network` | `panel_token` | 侧车 `/api/*` 的 Bearer 令牌（优先用 `OPENPANDA_PANEL_TOKEN`） |
 | `network` | `peers` | 要拨号的手动 peer 地址 |
 | `storage` | `db_path` | SQLite 数据库路径 |
 | `storage` | `context_path` | 上下文快照存储 |
@@ -223,7 +223,7 @@ model:
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic 兼容 Messages API 基地址 |
 | `model` | `model` | 模型 id（如 `deepseek-chat`、`deepseek-reasoner`） |
-| `model` | `api_key` | 密钥——优先用 `OPENOPENOpenPanda_MODEL_API_KEY` |
+| `model` | `api_key` | 密钥——优先用 `OPENPANDA_MODEL_API_KEY` |
 | `model` | `max_tokens` | 补全 token 上限（默认 4096） |
 | `push` | `enabled` | 开启 `/api/push/*` 与 Web Push 发送（仅 webui 侧车读取） |
 | `push` | `vapid_subject` | VAPID subject（如 `mailto:` 地址） |
@@ -236,7 +236,8 @@ model:
 完整文档位于 [`docs/`](docs/) 目录，按公开/内部分层：
 
 - [文档索引](docs/README.md) —— 所有文档的入口。
-- [开发工作手册](docs/guides/DEVELOPMENT.md) —— 快速开始、目录地图、工程规范、质量门槛、测试清单。
+- [贡献指南](CONTRIBUTING.md) —— 工具链、工程质量门槛、代码规范、PR 清单。
+- [桌面端与分发路线图](docs/plans/roadmap-desktop-and-packaging.md) —— 迈向桌面客户端的分阶段规划。
 - [阶段报告](docs/reports/) —— 各 Phase / Sprint 的进度报告。
 
 内部规划、设计与审查文档不随公开仓库推送。
@@ -295,7 +296,7 @@ done
 
 ## 路线图
 
-Phase 3（记忆 + 语音 + 安全）已完成（见 [phase3-report.md](docs/reports/phase3-report.md)）。记忆层、Dreaming 引擎、Skill 系统与执行侧加固已落地；语音入口代码完成，等待麦克风硬件实测。Web 面板已抽出为冻结的 `webui/` 侧车——内核为无头形态。Phase 4（桌面客户端等）规划中。
+Phase 3（记忆 + 语音 + 安全）已完成。记忆层、Dreaming 引擎、Skill 系统与执行侧加固已落地；语音入口代码完成，等待麦克风硬件实测。Web 控制台已用 Vite + Preact 重建并内嵌进二进制，交互式 REPL 随之落地——双节点委派已完成实机验证（[报告](docs/reports/delegation-loopback-2026-08-18.md)）。Phase 4（桌面客户端等）见[桌面与分发路线图](docs/plans/roadmap-desktop-and-packaging.md)。
 
 ## 参与贡献
 
@@ -305,7 +306,7 @@ Phase 3（记忆 + 语音 + 安全）已完成（见 [phase3-report.md](docs/rep
 - `gofmt -l internal/ cmd/ adapters/` 必须无输出。
 - 核心模块测试覆盖尽量保持在 ~60% 以上。
 
-完整工程规范见[开发工作手册](docs/guides/DEVELOPMENT.md)：错误包装（`%w` / `errors.Is`）、复杂度限制、无死代码、并发规则等。
+完整工程规范见 [CONTRIBUTING.md](CONTRIBUTING.md)：错误包装（`%w` / `errors.Is`）、复杂度限制、无死代码、并发规则、i18n 规则与提交信息风格。
 
 ## 许可
 

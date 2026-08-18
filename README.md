@@ -66,9 +66,12 @@ WebSocket links you control.
   the node is idle.
 - **Voice entry** — optional sidecar pipeline (wake word → STT → LLM → TTS),
   hardware-gated and ready for embedded microphones.
-- **Headless kernel + CLI panel** — the daemon runs without a web UI; drive it
-  from the terminal (`panda status/queue/task/approve/reject/cancel/logs`). The
-  legacy PWA console still exists as an optional, frozen `webui/` sidecar.
+- **Interactive REPL + embedded web console** — `panda repl` is the operator's
+  seat: bare input goes to the ask engine, slash commands drive the panel
+  surfaces (`/tasks`, `/approve`, `/projects`, `/nodes`, `/lang` …), and `/web`
+  boots the embedded console (queue, ask, projects, nodes, approvals) in one
+  click. Five UI languages: English, 简体中文, 日本語, Español, Deutsch. The
+  same console also ships as a standalone `webui/` sidecar.
 - **Defense & safety layers** — permission tiers, a circuit breaker, scope-drift
   and infinite-loop detection, plus execution-side hardening: sandboxing,
   network allow-lists, secret redaction, and audit logging.
@@ -164,10 +167,10 @@ network:
 model:
   base_url: "https://api.deepseek.com/anthropic"  # any /v1/messages-compatible endpoint
   model: "deepseek-chat"
-  # api_key: ""               # prefer the OPENOPENOpenPanda_MODEL_API_KEY env var
+  # api_key: ""               # prefer the OPENPANDA_MODEL_API_KEY env var
 ```
 
-Secrets (model API keys) are read from `OPENOPENOpenPanda_MODEL_API_KEY` rather than the
+Secrets (model API keys) are read from `OPENPANDA_MODEL_API_KEY` rather than the
 config file whenever possible.
 
 ### Run the daemon
@@ -229,6 +232,7 @@ Manage skills:
 |---|---|
 | `panda` (no args) | Run the daemon: register node, heartbeat, WS server, peer reconnect |
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<question>"` | Unified entry: classify into answer / tool_call / task and execute |
+| `panda repl [--config PATH] [--card PATH]` | Interactive shell: slash commands (tasks/approve/projects/nodes/lang), bare input goes to the ask engine, `/web` boots the embedded console |
 | `panda status` | Node & task status |
 | `panda queue` | List the task queue |
 | `panda task [--config PATH] <task-id>` | Task details |
@@ -252,7 +256,7 @@ Manage skills:
 | `network` | `max_connections` | Global concurrent WS connection limit (0 = unlimited) |
 | `network` | `max_connections_per_ip` | Per-remote-IP concurrent WS connection limit (0 = unlimited) |
 | `network` | `panel_addr` | Optional webui sidecar HTTP address (kernel ignores it) |
-| `network` | `panel_token` | Bearer token guarding the sidecar's `/api/*` (prefer `OPENOPENOpenPanda_PANEL_TOKEN`) |
+| `network` | `panel_token` | Bearer token guarding the sidecar's `/api/*` (prefer `OPENPANDA_PANEL_TOKEN`) |
 | `network` | `peers` | Manual peer addresses to dial |
 | `storage` | `db_path` | SQLite database path |
 | `storage` | `context_path` | Context snapshot store |
@@ -263,7 +267,7 @@ Manage skills:
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic-compatible Messages API base URL |
 | `model` | `model` | Model id (e.g. `deepseek-chat`, `deepseek-reasoner`) |
-| `model` | `api_key` | Secret — prefer `OPENOPENOpenPanda_MODEL_API_KEY` |
+| `model` | `api_key` | Secret — prefer `OPENPANDA_MODEL_API_KEY` |
 | `model` | `max_tokens` | Completion cap (default 4096) |
 | `push` | `enabled` | Serve `/api/push/*` and send Web Push (webui sidecar only) |
 | `push` | `vapid_subject` | VAPID subject (e.g. `mailto:` address) |
@@ -277,8 +281,10 @@ Full documentation lives in the [`docs/`](docs/) directory, which is split into
 public and internal parts:
 
 - [Documentation index](docs/README.md) — entry point for all documents.
-- [Development handbook](docs/guides/DEVELOPMENT.md) — quickstart, directory
-  map, engineering conventions, quality gates, and test inventory.
+- [Contributing guide](CONTRIBUTING.md) — toolchain, engineering gates,
+  code conventions, and the PR checklist.
+- [Desktop & packaging roadmap](docs/plans/roadmap-desktop-and-packaging.md) —
+  the staged plan toward the desktop client.
 - [Phase reports](docs/reports/) — progress reports for each phase and sprint.
 
 Internal planning, design, and audit documents are kept out of the public
@@ -341,17 +347,19 @@ done
 | Glue / adapters | Python 3.10+ |
 | Transport | WebSocket + JSON envelopes |
 | State | SQLite in WAL mode |
-| Frontend | Optional `webui/` PWA sidecar (frozen; kernel is headless) |
+| Frontend | Web console (Vite + Preact, `go:embed` single binary) via `panda repl` → `/web`, or the standalone `webui/` sidecar |
 | LLM access | Anthropic-compatible `/v1/messages` endpoint (e.g. DeepSeek) |
 
 ## Roadmap
 
-Phase 3 (memory + voice + safety) is complete — see
-[phase3-report.md](docs/reports/phase3-report.md). The memory layer, Dreaming
+Phase 3 (memory + voice + safety) is complete. The memory layer, Dreaming
 engine, skills system, and execution hardening are implemented; voice entry is
-code-complete and waiting on microphone-hardware validation. The web panel was
-pulled out into a frozen `webui/` sidecar — the kernel runs headless. Phase 4
-(desktop client and beyond) is in planning.
+code-complete and waiting on microphone-hardware validation. The web console
+has been rebuilt (Vite + Preact, embedded in the binary) and the interactive
+REPL landed with it — two-node delegation is verified live
+([report](docs/reports/delegation-loopback-2026-08-18.md)). Phase 4 (desktop
+client and beyond) is planned in the
+[desktop & packaging roadmap](docs/plans/roadmap-desktop-and-packaging.md).
 
 ## Contributing
 
@@ -362,9 +370,9 @@ engineering gates before opening a pull request:
 - `gofmt -l internal/ cmd/ adapters/` must be empty.
 - Keep core-module test coverage above ~60% where practical.
 
-See the [development handbook](docs/guides/DEVELOPMENT.md) for the full
-conventions: error wrapping (`%w` / `errors.Is`), complexity limits, no dead
-code, and concurrency rules.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full conventions: error
+wrapping (`%w` / `errors.Is`), complexity limits, no dead code, concurrency
+rules, i18n rules, and the commit style.
 
 ## License
 
