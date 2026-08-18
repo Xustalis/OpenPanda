@@ -12,12 +12,13 @@ all: build
 build:
 	$(GO) build -ldflags "-s -w" -o $(BIN) ./cmd/panda
 
-# Build the web console (webui/app) into webui/panel/dist, where go:embed
-# folds it into the panel binary. Requires node/npm.
+# Build the web console (webui/app) into webui/panel/dist/app, where go:embed
+# folds it into the panel binary. Requires node/npm. The committed
+# dist/index.html placeholder is never touched (vite empties only dist/app).
 web:
 	cd webui/app && npm install --no-fund --no-audit && npm run build
-	@if grep -q 'dist-placeholder' webui/panel/dist/index.html; then \
-		echo "make web: dist/index.html is still the placeholder — the build did not land"; exit 1; fi
+	@if [ ! -f webui/panel/dist/app/index.html ]; then \
+		echo "make web: dist/app/index.html missing — the build did not land"; exit 1; fi
 
 # Web panel sidecar with the embedded console. `make web` first for a real UI;
 # without it the binary embeds the committed placeholder.

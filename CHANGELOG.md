@@ -8,6 +8,27 @@ Initial open-source pre-release.
 
 All gates green throughout: build / vet / full tests / `-race` / cross-compile. Covers the full kernel feature set (daemon, CLI, P2P delegation, audit chain, migrations, scheduler scoring + dedup, SSE panel, embedded web console, interactive REPL, cross-platform install/uninstall/doctor).
 
+### v0.0.1 pre-release audit fixes
+
+- **Web console embedding restructured** — the vite build now lands in
+  `dist/app/` while the committed `dist/index.html` placeholder is never
+  touched by a build. Previously a `make web` + `git add -A` cycle could
+  commit a hashed index.html pointing at ignored `/assets/*`, which left
+  every fresh clone with a white-screen console. The placeholder is now
+  stable, `make web` guards on `dist/app/index.html` existing, and the
+  static handler prefers the real build with the placeholder as fallback.
+- **`panda help`** — the subcommand now exists (also `-h`/`--help`) and
+  prints an oriented overview instead of an error; unknown subcommands
+  print the same usage.
+- **Brand residue** — the entry model's system prompt introduced the agent
+  as "PANDA"; it now says "OpenPanda" (user-visible in every reply).
+  `config.example.yaml` header likewise.
+- **`config.example.yaml`** — documents the previously undocumented `mcp:`
+  section and `model.api_type` (anthropic | openai); push section comments
+  updated for the embedded console era.
+- **Dead link** — roadmap referenced a local-only delegation report; now
+  points at `scripts/smoke-delegate`, which reproduces the verification.
+
 ### Added
 
 - **`panda install` / `panda uninstall` / `panda doctor` — global command lifecycle, cross-platform** — `panda install` copies the binary to `~/.local/bin` (unix) / `%LOCALAPPDATA%\OpenPanda\bin` (Windows) and registers it on PATH persistently: a marked block in shell rc files (`# >>> openpanda path >>>`, idempotent, user lines untouched) on unix, HKCU\Environment on Windows via the registry API with the value type preserved (`setx` avoided — it truncates PATH at 1024 chars) plus a WM_SETTINGCHANGE broadcast; it then self-verifies by executing the installed copy. `panda doctor` is the standalone self-check (installed copy runs / PATH resolves / persistence survives reboot / config & DB usable; exit 1 on any failure). `panda uninstall` is whitelist-safe: it prints the full plan, requires typing `confirm` (or `--yes` for scripts, `--dry-run` to preview), deletes only explicitly-derived targets (binary, PATH registration, DB + journals, context dir, VAPID key, config only inside owned roots), always keeps user assets (projects/memory/skills/work dirs — anything overlapping home or an asset is auto-flipped to keep), writes a zip backup of the deleted state to the home dir first, and produces a deleted/kept report file. Guardrail core in `internal/install` (unit-tested, incl. symlink-safety: links are removed, never followed). Five-language CLI messages throughout.

@@ -1,4 +1,4 @@
-# PANDA node configuration
+# OpenPanda node configuration
 # Copy to /etc/openpanda/config.yaml on each node, or run with --config.
 node:
   name: "macbook-m1"
@@ -40,13 +40,21 @@ log:
 model:
   base_url: "https://api.deepseek.com/anthropic"
   model: "deepseek-chat"          # deepseek-chat | deepseek-reasoner
+  # api_type: "anthropic"         # anthropic | openai (default anthropic)
   # max_tokens: 4096              # completion cap; default 4096
   # api_key: ""                   # secret; prefer env OPENPANDA_MODEL_API_KEY
 
+# MCP server (Model Context Protocol): one stdio server whose tools become
+# callable by the ask engine. The command is space-separated argv; empty
+# disables MCP. Reloaded live when changed — no daemon restart needed.
+# mcp:
+#   command: "npx -y @modelcontextprotocol/server-filesystem /tmp"
+
 # Web Push notifications (design P3-26): task entering review → phone push.
-# Only the optional webui sidecar reads this — the kernel daemon ignores it.
-# Requires HTTPS to work from a phone PWA; VAPID key is auto-generated and
-# persisted at vapid_key_path on first boot (keep it stable).
+# Read by the embedded console (`panda web`); requires a secure context —
+# HTTPS, or loopback which browsers already treat as secure.
+# VAPID key is auto-generated and persisted at vapid_key_path on first boot
+# (keep it stable).
 push:
   enabled: false                  # true to serve /api/push/* and send pushes
   vapid_subject: "mailto:panda@localhost"

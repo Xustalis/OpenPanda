@@ -96,11 +96,14 @@ func main() {
 		case "version":
 			fmt.Printf("panda %s\n", version)
 			return
+		case "help", "-h", "--help":
+			printUsage(os.Stdout)
+			return
 		default:
 			// A bare unknown word must not fall through to runDaemon (P1-25):
 			// "panda statsu" (a typo) would otherwise start a resident daemon.
 			fmt.Fprintf(os.Stderr, "panda: unknown subcommand %q\n", sub)
-			fmt.Fprintln(os.Stderr, "usage: panda [ask|repl|web|install|uninstall|doctor|detect|status|queue|task|cancel|approve|reject|logs|skill|reminder|metrics|audit|version] — or no subcommand to run the daemon")
+			printUsage(os.Stderr)
 			os.Exit(2)
 		}
 	}
@@ -321,4 +324,28 @@ func hostStatePaths(cfg *config.Config) []string {
 func fatal(step string, err error) {
 	fmt.Fprintf(os.Stderr, "panda: %s: %v\n", step, err)
 	os.Exit(1)
+}
+
+// printUsage lists the subcommands with a one-line hint each — `panda help`
+// should orient a first-time user, not just enumerate words.
+func printUsage(w *os.File) {
+	fmt.Fprintln(w, "panda — personal task orchestration across your devices")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "no subcommand   run the node daemon (registers, listens, delegates)")
+	fmt.Fprintln(w, "ask <text>      send text through the ask engine (classification → task)")
+	fmt.Fprintln(w, "repl            interactive shell over the same engine")
+	fmt.Fprintln(w, "web             start the web console (browser opens, auto-login)")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "status|queue|task|cancel|approve|reject|logs   task panel one-shots")
+	fmt.Fprintln(w, "reminder        list/add/rm scheduled reminders")
+	fmt.Fprintln(w, "skill           manage agent skills")
+	fmt.Fprintln(w, "metrics|audit   node metrics / audit trail")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "install|uninstall   put panda on PATH (persistent) / remove it")
+	fmt.Fprintln(w, "doctor          post-install self-check")
+	fmt.Fprintln(w, "detect          scan hardware → capabilities.yaml draft")
+	fmt.Fprintln(w, "version         print the version")
+	fmt.Fprintln(w, "help            this help")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "global flags: --config <path>, --card <path>, --mcp <cmd> (before or after the subcommand)")
 }

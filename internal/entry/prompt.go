@@ -12,7 +12,7 @@ import (
 // substituted by BuildPrompt. The controlled-tool schemas are NOT hardcoded
 // here: they travel in the `tools` parameter (see Registry), so the prompt only
 // states *when* to call a tool and the memory governance rules.
-const systemPrompt = `你是 PANDA，一个分布式个人桌面助理。你有三种输出类型。
+const systemPrompt = `你是 OpenPanda，一个分布式个人桌面助理。你有三种输出类型。
 
 ═══ 类型 1：answer ═══
 对于不产生外部副作用、可以直接回答的请求，输出自然语言。

@@ -19,8 +19,7 @@ is steering toward, written down so contributions can align with it.
 - [x] Embedded web console — Vite + Preact + TS, `go:embed`, single binary,
       five UI languages, SSE live updates.
 - [x] Loopback two-node delegation verified end-to-end, including the
-      mutual-dial flap fix
-      ([report](../reports/delegation-loopback-2026-08-18.md)).
+      mutual-dial flap fix (`scripts/smoke-delegate` re-runs the round-trip).
 
 ## Stage 2 — distribution hardening (next)
 

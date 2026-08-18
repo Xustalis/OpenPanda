@@ -20,9 +20,9 @@ func (s Stats) successRate() float64 {
 // created once and then patched on discovery rather than duplicated.
 //
 // Hermes's alternative single-task trigger (>=5 tool calls) is deliberately
-// omitted: PANDA's agent runs as a subprocess, so the core cannot observe the
-// agent's internal tool-call count. The aggregate gate is the one PANDA can
-// actually feed from its task history.
+// omitted: OpenPanda's agent runs as a subprocess, so the core cannot observe
+// the agent's internal tool-call count. The aggregate gate is the one
+// OpenPanda can actually feed from its task history.
 func ShouldCreate(stats Stats, exists bool) bool {
 	if exists || stats.Successes == 0 {
 		return false

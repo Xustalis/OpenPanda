@@ -2,16 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#101418" />
-    <meta name="description" content="OpenPanda — open-source personal task orchestration across your devices" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="manifest" href="/manifest.webmanifest" />
     <title>OpenPanda</title>
-    <script type="module" crossorigin src="/assets/index-JbWul8pt.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DfL-yygO.css">
   </head>
   <body>
-    <div id="app"></div>
+    <!-- dist-placeholder: committed so `go build` works before the web
+         console is built; `make web` materializes the real app under
+         dist/app (this file is never touched by the build, so a stray
+         `git add -A` can't leak a hashed index.html into the repo). The
+         marker is what the Makefile checks to catch a missing build. -->
+    <p style="font-family: sans-serif">
+      OpenPanda web console not built yet — run <code>make web</code>.
+    </p>
   </body>
 </html>
