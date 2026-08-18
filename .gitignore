@@ -30,6 +30,9 @@ testdata/run/
 /projects/
 /skills/
 
+# Node (webui/web frontend tooling)
+node_modules/
+
 # Python
 __pycache__/
 *.pyc
@@ -50,12 +53,17 @@ Thumbs.db
 logs/
 
 # Internal design & planning docs (kept out of the public repo).
-# Root design/plan docs and everything under docs/ except the index carry
-# private info (devices, IPs, local paths, usernames) and personal notes, so
-# only docs/README.md ships.
+# Root design/plan docs and most docs/ content carry private info (devices,
+# IPs, local paths, usernames) and personal notes. Public docs are whitelisted
+# file by file: the index, the system audit report, and the public roadmap.
 /PANDA-*.md
 /docs/*
 !/docs/README.md
+!/docs/reports/system-audit-2026-08-18.md
+!/docs/plans/roadmap-desktop-and-packaging.md
+
+# TRAE assistant workspace
+.trae/
 
 # Local / personal tooling (unrelated to PANDA core)
 .workbuddy/

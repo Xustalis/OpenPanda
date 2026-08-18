@@ -226,6 +226,8 @@ Skills verwalten:
 | `panda reject [--config PATH] [--reason s] <task-id>` | Review-Task ablehnen |
 | `panda logs [--config PATH] <task-id>` | Task-Ausführungslogs |
 | `panda skill` | Skill-Store-Verwaltung |
+| `panda metrics [--csv]` | Delegations-Metriken exportieren |
+| `panda audit [--task <id>]` | `prev_hash`-Kette des Audit-Logs oder der Events eines Tasks verifizieren |
 | `panda version` | Version anzeigen |
 
 ## Konfiguration
@@ -236,7 +238,10 @@ Skills verwalten:
 | `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → Scheduler-Tier |
 | `network` | `listen_addr` | WebSocket-Listener-Adresse |
 | `network` | `shared_secret` | HMAC-Geheimnis zur Node-Authentifizierung; der WS-Listener startet ohne es nicht (alle Nodes teilen einen Wert) |
+| `network` | `max_connections` | Globales Limit gleichzeitiger WS-Verbindungen (0 = unbegrenzt) |
+| `network` | `max_connections_per_ip` | Limit gleichzeitiger WS-Verbindungen pro Remote-IP (0 = unbegrenzt) |
 | `network` | `panel_addr` | HTTP-Adresse des PWA-Panels (leer = deaktiviert) |
+| `network` | `panel_token` | Bearer-Token für `/api/*` des Sidecars (bevorzugt `PANDA_PANEL_TOKEN`) |
 | `network` | `peers` | Manuelle Peer-Adressen zum Anwählen |
 | `storage` | `db_path` | SQLite-Datenbankpfad |
 | `storage` | `context_path` | Context-Snapshot-Speicher |
@@ -248,6 +253,10 @@ Skills verwalten:
 | `model` | `base_url` | Anthropic-kompatible Messages-API-Basis-URL |
 | `model` | `model` | Modell-ID (z. B. `deepseek-chat`, `deepseek-reasoner`) |
 | `model` | `api_key` | Geheim — bevorzugt `PANDA_MODEL_API_KEY` |
+| `model` | `max_tokens` | Completion-Token-Limit (Standard 4096) |
+| `push` | `enabled` | `/api/push/*` bereitstellen und Web Push senden (nur webui-Sidecar) |
+| `push` | `vapid_subject` | VAPID-Subject (z. B. eine `mailto:`-Adresse) |
+| `push` | `vapid_key_path` | Pfad des VAPID-Schlüssels (wird beim ersten Start automatisch erzeugt) |
 
 Ladereihenfolge der Config: `--config`-Flag > Umgebungsvariable > Standard `/etc/panda/config.yaml`.
 
@@ -308,10 +317,12 @@ done
 
 ## Roadmap
 
-Phase 3 (Gedächtnis + Sprache + Sicherheit) läuft. Die Gedächtnis-Schicht, die
-Dreaming-Engine, das Skill-System, das PWA-Panel und die Ausführungshärtung sind
+Phase 3 (Gedächtnis + Sprache + Sicherheit) ist abgeschlossen. Die Gedächtnis-Schicht, die
+Dreaming-Engine, das Skill-System und die Ausführungshärtung sind
 implementiert; die Spracheingabe ist code-komplett und wartet auf die Validierung
-mit Mikrofon-Hardware.
+mit Mikrofon-Hardware. Das Web-Panel wurde als eingefrorener `webui/`-Sidecar
+ausgelagert — der Kernel läuft headless. Phase 4 (u. a. Desktop-Client) ist in
+Planung.
 
 ## Mitwirken
 

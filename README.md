@@ -172,6 +172,19 @@ config file whenever possible.
 
 ### Run the daemon
 
+For local development, the fastest way is the provided helper, which builds
+both binaries if needed, generates local tokens, and starts the daemon plus
+the optional webui sidecar:
+
+```bash
+make run-local
+```
+
+Then open `http://127.0.0.1:7840` and use the printed Bearer token for the
+`/api/*` endpoints.
+
+For manual or multi-node deployment:
+
 ```bash
 ./bin/panda --config config.yaml --card config/capabilities.macbook.yaml
 ```
@@ -224,6 +237,8 @@ Manage skills:
 | `panda reject [--config PATH] [--reason s] <task-id>` | Reject a reviewed task |
 | `panda logs [--config PATH] <task-id>` | Task execution logs |
 | `panda skill` | Skill store management |
+| `panda metrics [--csv]` | Export delegation metrics |
+| `panda audit [--task <id>]` | Verify the `prev_hash` chain of the audit log or one task's events |
 | `panda version` | Print version |
 
 ## Configuration
@@ -234,7 +249,10 @@ Manage skills:
 | `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → scheduler tier |
 | `network` | `listen_addr` | WebSocket listener address |
 | `network` | `shared_secret` | HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it (all nodes share one value) |
+| `network` | `max_connections` | Global concurrent WS connection limit (0 = unlimited) |
+| `network` | `max_connections_per_ip` | Per-remote-IP concurrent WS connection limit (0 = unlimited) |
 | `network` | `panel_addr` | Optional webui sidecar HTTP address (kernel ignores it) |
+| `network` | `panel_token` | Bearer token guarding the sidecar's `/api/*` (prefer `PANDA_PANEL_TOKEN`) |
 | `network` | `peers` | Manual peer addresses to dial |
 | `storage` | `db_path` | SQLite database path |
 | `storage` | `context_path` | Context snapshot store |
@@ -246,6 +264,10 @@ Manage skills:
 | `model` | `base_url` | Anthropic-compatible Messages API base URL |
 | `model` | `model` | Model id (e.g. `deepseek-chat`, `deepseek-reasoner`) |
 | `model` | `api_key` | Secret — prefer `PANDA_MODEL_API_KEY` |
+| `model` | `max_tokens` | Completion cap (default 4096) |
+| `push` | `enabled` | Serve `/api/push/*` and send Web Push (webui sidecar only) |
+| `push` | `vapid_subject` | VAPID subject (e.g. `mailto:` address) |
+| `push` | `vapid_key_path` | VAPID key path (auto-generated on first boot) |
 
 Config load order: `--config` flag > environment > default `/etc/panda/config.yaml`.
 
@@ -324,11 +346,12 @@ done
 
 ## Roadmap
 
-Phase 3 (memory + voice + safety) is in progress. The memory layer, Dreaming
+Phase 3 (memory + voice + safety) is complete — see
+[phase3-report.md](docs/reports/phase3-report.md). The memory layer, Dreaming
 engine, skills system, and execution hardening are implemented; voice entry is
 code-complete and waiting on microphone-hardware validation. The web panel was
-pulled out into a frozen `webui/` sidecar — the kernel runs headless, and the
-roadmap ahead is a desktop client.
+pulled out into a frozen `webui/` sidecar — the kernel runs headless. Phase 4
+(desktop client and beyond) is in planning.
 
 ## Contributing
 

@@ -1,6 +1,7 @@
 package push
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
@@ -178,4 +179,58 @@ func decodeAuth(t *testing.T, sub Subscription) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// TestRedactEndpoint verifies the log scrubbing (L2): the capability-secret
+// path never appears, the host is kept, and the hash is stable per path.
+func TestRedactEndpoint(t *testing.T) {
+	got := redactEndpoint("https://push.example.com/send/secret-token-123")
+	if strings.Contains(got, "secret-token-123") {
+		t.Fatalf("redacted endpoint leaks path: %q", got)
+	}
+	if !strings.HasPrefix(got, "https://push.example.com/") {
+		t.Fatalf("redacted endpoint dropped scheme/host: %q", got)
+	}
+	if got != redactEndpoint("https://push.example.com/send/secret-token-123") {
+		t.Fatal("redaction must be deterministic so failures stay correlatable")
+	}
+	if got == redactEndpoint("https://push.example.com/send/other-device") {
+		t.Fatal("different paths must hash differently")
+	}
+	if bad := redactEndpoint("https://"); bad != "[invalid endpoint]" {
+		t.Fatalf("hostless endpoint = %q, want [invalid endpoint]", bad)
+	}
+}
+
+// TestNotifyLogsRedactedEndpoint drives a real send failure and asserts the
+// log line carries no usable endpoint URL.
+func TestNotifyLogsRedactedEndpoint(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	_, store := newTestService(t)
+	keys, err := GenerateVAPIDKeys("mailto:test@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	svc := NewService(keys, store, slog.New(slog.NewTextHandler(&logs, nil)))
+	svc.client = srv.Client() // trust the test server's self-signed cert
+
+	_, sub := testSubscription(t, srv.URL+"/push/secret-capability")
+	if err := svc.Subscribe(context.Background(), sub); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Notify(context.Background(), Notification{Title: "x", Body: "y", ID: "z"}); err != nil {
+		t.Fatal(err)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "push send failed") {
+		t.Fatalf("expected a failure log line, got %q", out)
+	}
+	if strings.Contains(out, "secret-capability") {
+		t.Fatalf("log leaked endpoint capability secret: %q", out)
+	}
 }

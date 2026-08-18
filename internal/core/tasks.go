@@ -220,7 +220,7 @@ func (s *TaskStore) recordEventTx(ctx context.Context, tx *sql.Tx, taskID, typ s
 		DataJSON string
 	}
 	err := tx.QueryRowContext(ctx,
-		`SELECT prev_hash, ts, type, data_json FROM task_events
+		`SELECT COALESCE(prev_hash, ''), ts, type, data_json FROM task_events
 		 WHERE task_id=? ORDER BY id DESC LIMIT 1`, taskID).Scan(
 		&prev.PrevHash, &prev.TS, &prev.Type, &prev.DataJSON)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -909,7 +909,7 @@ func (s *TaskStore) ListByState(ctx context.Context, state string) ([]Task, erro
 // Events returns the event timeline for a task, oldest first.
 func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, task_id, ts, type, data_json, prev_hash FROM task_events
+		`SELECT id, task_id, ts, type, data_json, COALESCE(prev_hash, '') FROM task_events
 		 WHERE task_id = ? ORDER BY id ASC`, taskID)
 	if err != nil {
 		return nil, err

@@ -3,6 +3,7 @@ package push
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -146,7 +147,7 @@ func (s *Service) Notify(ctx context.Context, n Notification) error {
 	}
 	for _, sub := range subs {
 		if err := s.send(ctx, sub, n); err != nil {
-			s.logger.Warn("push send failed", "endpoint", sub.Endpoint, "err", err)
+			s.logger.Warn("push send failed", "endpoint", redactEndpoint(sub.Endpoint), "err", err)
 		}
 	}
 	return nil
@@ -228,6 +229,19 @@ func origin(endpoint string) string {
 		return ""
 	}
 	return u.Scheme + "://" + u.Host
+}
+
+// redactEndpoint scrubs a push endpoint for logging (L2): the path carries the
+// per-device capability secret, so it is replaced by a short hash. The host is
+// kept so a failing push service stays identifiable, and the hash keeps
+// per-device failures correlatable without leaking a usable URL.
+func redactEndpoint(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" {
+		return "[invalid endpoint]"
+	}
+	sum := sha256.Sum256([]byte(u.EscapedPath()))
+	return fmt.Sprintf("%s://%s/[path sha256:%x]", u.Scheme, u.Host, sum[:8])
 }
 
 // validateEndpoint rejects non-HTTPS or hostless push endpoints (P2-4). The

@@ -30,7 +30,11 @@ func startModelServer(t *testing.T, text string) *Client {
 		_, _ = w.Write(b)
 	}))
 	t.Cleanup(srv.Close)
-	return NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "deepseek-chat"})
+	client, err := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "deepseek-chat"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	return client
 }
 
 func TestClassifyTask(t *testing.T) {
@@ -291,7 +295,10 @@ func TestClassifyTurnsSendsHistory(t *testing.T) {
 		_, _ = w.Write(b)
 	}))
 	t.Cleanup(srv.Close)
-	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+	c, err := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
 
 	turns := []Turn{
 		{Role: "user", Content: "记住我偏好暗色主题"},
@@ -320,7 +327,10 @@ func TestClassifyToolUse(t *testing.T) {
 		_, _ = w.Write(b)
 	}))
 	t.Cleanup(srv.Close)
-	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+	c, err := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
 
 	reg := NewRegistry()
 	reg.Register(Tool{Name: "memory_add", Description: "remember", Schema: map[string]any{"type": "object"},
@@ -355,7 +365,10 @@ func TestClassifyToolUseDropsExtra(t *testing.T) {
 		_, _ = w.Write(b)
 	}))
 	t.Cleanup(srv.Close)
-	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+	c, err := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
 	reg := NewRegistry()
 
 	out, err := ClassifyTurnsWithTools(context.Background(), c, nil, "", []Turn{{Role: "user", Content: "合并记忆"}}, reg)
@@ -391,7 +404,10 @@ func TestCompleteTurnsWithToolsSendsTools(t *testing.T) {
 		_, _ = w.Write(b)
 	}))
 	t.Cleanup(srv.Close)
-	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+	c, err := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
 
 	tools := []ToolSpec{{Name: "memory_add", Description: "remember", InputSchema: map[string]any{"type": "object"}}}
 	if _, err := c.CompleteTurnsWithTools(context.Background(), "sys", []Turn{{Role: "user", Content: "hi"}}, tools); err != nil {
@@ -435,7 +451,10 @@ func TestCompleteRetriesServerError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk", Model: "m"})
+	c, err := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
 	c.maxRetry = 2
 	c.retryBase = time.Millisecond
 
@@ -473,7 +492,10 @@ func TestCompleteRetriesTransientTransport(t *testing.T) {
 		}
 	}()
 
-	c := NewClient(config.ModelConfig{BaseURL: "http://" + ln.Addr().String(), APIKey: "sk", Model: "m"})
+	c, err := NewClient(config.ModelConfig{BaseURL: "http://" + ln.Addr().String(), APIKey: "sk", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
 	c.maxRetry = 1
 	c.retryBase = time.Millisecond
 
@@ -496,7 +518,10 @@ func TestCompleteNoRetryClientError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk", Model: "m"})
+	c, err := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
 	c.maxRetry = 2
 	c.retryBase = time.Millisecond
 
@@ -505,5 +530,20 @@ func TestCompleteNoRetryClientError(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("calls = %d, want 1 (client error is not retried)", calls.Load())
+	}
+}
+
+// TestNewClientRejectsPlainHTTP verifies the endpoint guard (M2): a remote
+// http:// base_url would send the API key cleartext and must be rejected at
+// construction, while loopback http stays allowed for a local dev model —
+// the same semantics the commander applies to adapter endpoints (D7).
+func TestNewClientRejectsPlainHTTP(t *testing.T) {
+	if _, err := NewClient(config.ModelConfig{BaseURL: "http://api.deepseek.com/anthropic", APIKey: "sk"}); err == nil {
+		t.Fatal("expected error for a non-https remote base_url")
+	}
+	for _, base := range []string{"http://127.0.0.1:8080", "http://localhost:11434", "https://api.deepseek.com/anthropic"} {
+		if _, err := NewClient(config.ModelConfig{BaseURL: base, APIKey: "sk"}); err != nil {
+			t.Fatalf("base_url %q should be accepted: %v", base, err)
+		}
 	}
 }

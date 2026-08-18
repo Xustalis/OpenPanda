@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 )
 
@@ -25,6 +27,7 @@ var migrations = []Migration{
 	{Version: 4, Name: "add_employee_resource_profile_json", Apply: migrateV4},
 	{Version: 5, Name: "add_delegation_metrics", Apply: migrateV5},
 	{Version: 6, Name: "add_audit_hash_chain", Apply: migrateV6},
+	{Version: 7, Name: "backfill_audit_hash_chain", Apply: migrateV7},
 }
 
 func migrateV1(tx *sql.Tx) error {
@@ -145,6 +148,119 @@ func migrateV6(tx *sql.Tx) error {
 		return err
 	}
 	return nil
+}
+
+// migrateV7 backfills empty/NULL prev_hash values for rows that predate the hash
+// chain (V6). This makes existing audit and event chains verifiable instead of
+// failing on every NULL scan. The chain content is not altered — only the link
+// that was missing when the column was added is recomputed from the existing
+// rows in their natural order.
+func migrateV7(tx *sql.Tx) error {
+	if err := backfillAuditChain(tx); err != nil {
+		return fmt.Errorf("backfill audit chain: %w", err)
+	}
+	if err := backfillTaskEventChain(tx); err != nil {
+		return fmt.Errorf("backfill task event chain: %w", err)
+	}
+	return nil
+}
+
+func backfillAuditChain(tx *sql.Tx) error {
+	rows, err := tx.Query(`SELECT id, COALESCE(prev_hash, ''), ts, who, what, target, result, detail FROM audit_log ORDER BY id ASC`)
+	if err != nil {
+		return err
+	}
+	type row struct {
+		id       int64
+		prevHash string
+		ts       int64
+		who      string
+		what     string
+		target   string
+		result   string
+		detail   string
+	}
+	var chain []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.prevHash, &r.ts, &r.who, &r.what, &r.target, &r.result, &r.detail); err != nil {
+			rows.Close()
+			return err
+		}
+		chain = append(chain, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	var prevHash string
+	for i, r := range chain {
+		if r.prevHash == "" {
+			if _, err := tx.Exec(`UPDATE audit_log SET prev_hash = ? WHERE id = ?`, prevHash, r.id); err != nil {
+				return err
+			}
+		}
+		prevHash = hashAudit(prevHash, r.ts, r.who, r.what, r.target, r.result, r.detail)
+		_ = i
+	}
+	return nil
+}
+
+func backfillTaskEventChain(tx *sql.Tx) error {
+	rows, err := tx.Query(`SELECT id, task_id, COALESCE(prev_hash, ''), ts, type, data_json FROM task_events ORDER BY task_id, id ASC`)
+	if err != nil {
+		return err
+	}
+	type row struct {
+		id       int64
+		taskID   string
+		prevHash string
+		ts       int64
+		typ      string
+		dataJSON string
+	}
+	var chain []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.taskID, &r.prevHash, &r.ts, &r.typ, &r.dataJSON); err != nil {
+			rows.Close()
+			return err
+		}
+		chain = append(chain, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	prevTask := ""
+	var prevHash string
+	for _, r := range chain {
+		if r.taskID != prevTask {
+			prevHash = ""
+			prevTask = r.taskID
+		}
+		if r.prevHash == "" {
+			if _, err := tx.Exec(`UPDATE task_events SET prev_hash = ? WHERE id = ?`, prevHash, r.id); err != nil {
+				return err
+			}
+		}
+		prevHash = hashEvent(prevHash, r.taskID, r.ts, r.typ, r.dataJSON)
+	}
+	return nil
+}
+
+func hashAudit(prevHash string, ts int64, who, what, target, result, detail string) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s|%d|%s|%s|%s|%s|%s", prevHash, ts, who, what, target, result, detail)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func hashEvent(prevHash, taskID string, ts int64, typ, dataJSON string) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s|%d|%s|%s|%s", prevHash, ts, taskID, typ, dataJSON)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // addColumnIfMissingTx appends a column to a table if it is not already present,

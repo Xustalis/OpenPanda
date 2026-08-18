@@ -32,40 +32,41 @@ func main() {
 		fmt.Printf("panda %s\n", version)
 		return
 	}
-	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
-		switch os.Args[1] {
+	sub, args := parseSubcommand(os.Args[1:])
+	if sub != "" {
+		switch sub {
 		case "ask":
-			runAsk(os.Args[2:])
+			runAsk(args)
 			return
 		case "status":
-			runStatus(os.Args[2:])
+			runStatus(args)
 			return
 		case "queue":
-			runQueue(os.Args[2:])
+			runQueue(args)
 			return
 		case "task":
-			runTask(os.Args[2:])
+			runTask(args)
 			return
 		case "cancel":
-			runCancel(os.Args[2:])
+			runCancel(args)
 			return
 		case "approve":
-			runApprove(os.Args[2:])
+			runApprove(args)
 			return
 		case "reject":
-			runReject(os.Args[2:])
+			runReject(args)
 			return
 		case "logs":
-			runLogs(os.Args[2:])
+			runLogs(args)
 			return
 		case "skill":
-			runSkill(os.Args[2:])
+			runSkill(args)
 			return
 		case "metrics":
-			runMetrics(os.Args[2:])
+			runMetrics(args)
 			return
 		case "audit":
-			runAudit(os.Args[2:])
+			runAudit(args)
 			return
 		case "version":
 			fmt.Printf("panda %s\n", version)
@@ -73,12 +74,34 @@ func main() {
 		default:
 			// A bare unknown word must not fall through to runDaemon (P1-25):
 			// "panda statsu" (a typo) would otherwise start a resident daemon.
-			fmt.Fprintf(os.Stderr, "panda: unknown subcommand %q\n", os.Args[1])
+			fmt.Fprintf(os.Stderr, "panda: unknown subcommand %q\n", sub)
 			fmt.Fprintln(os.Stderr, "usage: panda [ask|status|queue|task|cancel|approve|reject|logs|skill|metrics|audit|version] — or no subcommand to run the daemon")
 			os.Exit(2)
 		}
 	}
 	runDaemon()
+}
+
+// parseSubcommand scans args, skips leading global flags and their values,
+// and returns the first non-flag argument (the subcommand) plus everything
+// after it. Global flags like --config may appear before or after the
+// subcommand; this lets users write `panda --config x.yaml status` as well
+// as `panda status --config x.yaml`.
+func parseSubcommand(args []string) (string, []string) {
+	valueFlags := map[string]bool{"--config": true, "--card": true}
+	var global []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "-") {
+			if valueFlags[a] && i+1 < len(args) {
+				global = append(global, a, args[i+1])
+				i++ // skip the flag's value
+			}
+			continue
+		}
+		return a, append(global, args[i+1:]...)
+	}
+	return "", nil
 }
 
 func runDaemon() {

@@ -229,6 +229,8 @@ Gestiona las skills:
 | `panda reject [--config PATH] [--reason s] <task-id>` | Rechazar una tarea en revisión |
 | `panda logs [--config PATH] <task-id>` | Registros de ejecución de la tarea |
 | `panda skill` | Gestión del almacén de skills |
+| `panda metrics [--csv]` | Exportar métricas de delegación |
+| `panda audit [--task <id>]` | Verificar la cadena `prev_hash` del registro de auditoría o de los eventos de una tarea |
 | `panda version` | Imprimir la versión |
 
 ## Configuración
@@ -239,7 +241,10 @@ Gestiona las skills:
 | `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → nivel del scheduler |
 | `network` | `listen_addr` | Dirección del listener WebSocket |
 | `network` | `shared_secret` | Secreto HMAC que autentica los hellos entre nodos; el listener WS no arranca sin él (todos los nodos comparten un valor) |
+| `network` | `max_connections` | Límite global de conexiones WS concurrentes (0 = ilimitado) |
+| `network` | `max_connections_per_ip` | Límite de conexiones WS concurrentes por IP remota (0 = ilimitado) |
 | `network` | `panel_addr` | Dirección HTTP del panel PWA (vacío = desactivado) |
+| `network` | `panel_token` | Token Bearer que protege `/api/*` del sidecar (prefiere `PANDA_PANEL_TOKEN`) |
 | `network` | `peers` | Direcciones de pares manuales a las que conectarse |
 | `storage` | `db_path` | Ruta de la base de datos SQLite |
 | `storage` | `context_path` | Almacén de snapshots de contexto |
@@ -251,6 +256,10 @@ Gestiona las skills:
 | `model` | `base_url` | URL base de la API Messages compatible con Anthropic |
 | `model` | `model` | ID del modelo (p. ej. `deepseek-chat`, `deepseek-reasoner`) |
 | `model` | `api_key` | Secreto — prefiere `PANDA_MODEL_API_KEY` |
+| `model` | `max_tokens` | Límite de tokens de completado (por defecto 4096) |
+| `push` | `enabled` | Servir `/api/push/*` y enviar Web Push (solo sidecar webui) |
+| `push` | `vapid_subject` | Sujeto VAPID (p. ej. una dirección `mailto:`) |
+| `push` | `vapid_key_path` | Ruta de la clave VAPID (generada automáticamente en el primer arranque) |
 
 Orden de carga de la configuración: bandera `--config` > variable de entorno >
 valor por defecto `/etc/panda/config.yaml`.
@@ -313,10 +322,12 @@ done
 
 ## Hoja de ruta
 
-La fase 3 (memoria + voz + seguridad) está en curso. La capa de memoria, el motor
-Dreaming, el sistema de skills, el panel PWA y el endurecimiento de la ejecución
+La fase 3 (memoria + voz + seguridad) está completada. La capa de memoria, el motor
+Dreaming, el sistema de skills y el endurecimiento de la ejecución
 están implementados; la entrada por voz está completa en código y a la espera de
-validación con hardware de micrófono.
+validación con hardware de micrófono. El panel web se extrajo como sidecar `webui/`
+congelado — el kernel funciona en modo headless. La fase 4 (cliente de escritorio,
+entre otros) está en planificación.
 
 ## Contribuciones
 

@@ -197,6 +197,8 @@ model:
 | `panda reject [--config PATH] [--reason s] <task-id>` | 拒绝进入 review 的任务 |
 | `panda logs [--config PATH] <task-id>` | 任务执行日志 |
 | `panda skill` | Skill 存储管理 |
+| `panda metrics [--csv]` | 导出委派指标 |
+| `panda audit [--task <id>]` | 校验审计日志或单任务事件的 `prev_hash` 链 |
 | `panda version` | 打印版本号 |
 
 ## 配置
@@ -207,7 +209,10 @@ model:
 | `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → 调度器层级 |
 | `network` | `listen_addr` | WebSocket 监听地址 |
 | `network` | `shared_secret` | 节点间 HMAC 鉴权密钥；WS 监听缺它不启动（所有节点共享同一值） |
+| `network` | `max_connections` | 全局并发 WS 连接上限（0 = 不限） |
+| `network` | `max_connections_per_ip` | 单远端 IP 并发 WS 连接上限（0 = 不限） |
 | `network` | `panel_addr` | 可选 webui 侧车 HTTP 地址（内核忽略） |
+| `network` | `panel_token` | 侧车 `/api/*` 的 Bearer 令牌（优先用 `PANDA_PANEL_TOKEN`） |
 | `network` | `peers` | 要拨号的手动 peer 地址 |
 | `storage` | `db_path` | SQLite 数据库路径 |
 | `storage` | `context_path` | 上下文快照存储 |
@@ -219,6 +224,10 @@ model:
 | `model` | `base_url` | Anthropic 兼容 Messages API 基地址 |
 | `model` | `model` | 模型 id（如 `deepseek-chat`、`deepseek-reasoner`） |
 | `model` | `api_key` | 密钥——优先用 `PANDA_MODEL_API_KEY` |
+| `model` | `max_tokens` | 补全 token 上限（默认 4096） |
+| `push` | `enabled` | 开启 `/api/push/*` 与 Web Push 发送（仅 webui 侧车读取） |
+| `push` | `vapid_subject` | VAPID subject（如 `mailto:` 地址） |
+| `push` | `vapid_key_path` | VAPID 密钥路径（首次启动自动生成） |
 
 配置加载优先级：`--config` 参数 > 环境变量 > 默认 `/etc/panda/config.yaml`。
 
@@ -286,7 +295,7 @@ done
 
 ## 路线图
 
-Phase 3（记忆 + 语音 + 安全）进行中。记忆层、Dreaming 引擎、Skill 系统与执行侧加固已完成；语音入口代码完成，等待麦克风硬件实测。Web 面板已抽出为冻结的 `webui/` 侧车——内核为无头形态，后续规划为桌面客户端。
+Phase 3（记忆 + 语音 + 安全）已完成（见 [phase3-report.md](docs/reports/phase3-report.md)）。记忆层、Dreaming 引擎、Skill 系统与执行侧加固已落地；语音入口代码完成，等待麦克风硬件实测。Web 面板已抽出为冻结的 `webui/` 侧车——内核为无头形态。Phase 4（桌面客户端等）规划中。
 
 ## 参与贡献
 

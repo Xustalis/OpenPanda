@@ -55,7 +55,7 @@ func (a *Audit) lastHash(ctx context.Context) (string, error) {
 		Detail   string
 	}
 	err := a.db.QueryRowContext(ctx,
-		`SELECT prev_hash, ts, who, what, target, result, detail FROM audit_log
+		`SELECT COALESCE(prev_hash, ''), ts, who, what, target, result, detail FROM audit_log
 		 ORDER BY id DESC LIMIT 1`).Scan(
 		&prev.PrevHash, &prev.TS, &prev.Who, &prev.What, &prev.Target, &prev.Result, &prev.Detail)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -88,7 +88,7 @@ type AuditRow struct {
 // Entries returns all audit rows, oldest first.
 func (a *Audit) Entries(ctx context.Context) ([]AuditRow, error) {
 	rows, err := a.db.QueryContext(ctx,
-		`SELECT id, ts, who, what, target, result, detail, prev_hash FROM audit_log ORDER BY id ASC`)
+		`SELECT id, ts, who, what, target, result, detail, COALESCE(prev_hash, '') FROM audit_log ORDER BY id ASC`)
 	if err != nil {
 		return nil, err
 	}

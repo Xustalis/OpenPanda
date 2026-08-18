@@ -68,7 +68,7 @@ func runAsk(args []string) {
 		if len(parts) == 0 {
 			fatal("start mcp server", fmt.Errorf("empty --mcp command"))
 		}
-		mcpClient, err := mcp.NewStdioClient(context.Background(), parts[0], parts[1:]...)
+		mcpClient, err := mcp.NewStdioClient(context.Background(), parts[0], nil, parts[1:]...)
 		if err != nil {
 			fatal("start mcp server", err)
 		}
@@ -136,7 +136,10 @@ func runAsk(args []string) {
 		fmt.Fprintf(os.Stderr, "panda: load memory: %v\n", merr)
 	}
 
-	client := entry.NewClient(cfg.Model)
+	client, err := entry.NewClient(cfg.Model)
+	if err != nil {
+		fatal("model client", err)
+	}
 	ctx := context.Background()
 
 	// Multi-turn loop: a tool_call is executed and its result fed back so the

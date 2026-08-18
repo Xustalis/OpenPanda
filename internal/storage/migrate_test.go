@@ -136,6 +136,108 @@ func TestMigrateFromV4IsNoOp(t *testing.T) {
 	}
 }
 
+func TestMigrateBackfillsHashChain(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	// Create a V6-era schema: tables exist, prev_hash columns exist, but rows were
+	// written with NULL prev_hash before the backfill logic was available.
+	baseline := []string{
+		`CREATE TABLE audit_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, who TEXT,
+			what TEXT, target TEXT, result TEXT, detail TEXT, prev_hash TEXT
+		)`,
+		`CREATE TABLE task_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, ts INTEGER,
+			type TEXT, data_json TEXT, prev_hash TEXT
+		)`,
+	}
+	for _, stmt := range baseline {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create table: %v", err)
+		}
+	}
+	if _, err := db.Exec(`PRAGMA user_version = 6`); err != nil {
+		t.Fatalf("set user_version: %v", err)
+	}
+
+	// Insert two audit rows with NULL prev_hash.
+	if _, err := db.Exec(`INSERT INTO audit_log (ts, who, what, target, result, detail, prev_hash)
+		VALUES (1, 'a', 'x', 't1', 'ok', 'd1', NULL)`); err != nil {
+		t.Fatalf("insert audit 1: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO audit_log (ts, who, what, target, result, detail, prev_hash)
+		VALUES (2, 'a', 'y', 't2', 'ok', 'd2', NULL)`); err != nil {
+		t.Fatalf("insert audit 2: %v", err)
+	}
+
+	// Insert events for two tasks: first event NULL, second event NULL.
+	if _, err := db.Exec(`INSERT INTO task_events (task_id, ts, type, data_json, prev_hash)
+		VALUES ('task-a', 1, 'submit', '{}', NULL)`); err != nil {
+		t.Fatalf("insert event 1: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO task_events (task_id, ts, type, data_json, prev_hash)
+		VALUES ('task-a', 2, 'result', '{}', NULL)`); err != nil {
+		t.Fatalf("insert event 2: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO task_events (task_id, ts, type, data_json, prev_hash)
+		VALUES ('task-b', 3, 'submit', '{}', NULL)`); err != nil {
+		t.Fatalf("insert event 3: %v", err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate from v6: %v", err)
+	}
+
+	// Verify the audit chain is intact.
+	rows, err := db.Query(`SELECT prev_hash, ts, who, what, target, result, detail FROM audit_log ORDER BY id ASC`)
+	if err != nil {
+		t.Fatalf("query audit: %v", err)
+	}
+	defer rows.Close()
+	var prevHash string
+	for rows.Next() {
+		var h string
+		var ts int64
+		var who, what, target, result, detail string
+		if err := rows.Scan(&h, &ts, &who, &what, &target, &result, &detail); err != nil {
+			t.Fatalf("scan audit: %v", err)
+		}
+		if h != prevHash {
+			t.Fatalf("audit prev_hash mismatch: got %q, want %q", h, prevHash)
+		}
+		prevHash = hashAudit(h, ts, who, what, target, result, detail)
+	}
+
+	// Verify task-a's event chain: first event empty, second equals hash of first.
+	var first, second string
+	if err := db.QueryRow(`SELECT prev_hash FROM task_events WHERE task_id = 'task-a' ORDER BY id ASC LIMIT 1`).Scan(&first); err != nil {
+		t.Fatalf("scan task-a first: %v", err)
+	}
+	if first != "" {
+		t.Fatalf("task-a genesis prev_hash = %q, want empty", first)
+	}
+	if err := db.QueryRow(`SELECT prev_hash FROM task_events WHERE task_id = 'task-a' ORDER BY id ASC LIMIT 1 OFFSET 1`).Scan(&second); err != nil {
+		t.Fatalf("scan task-a second: %v", err)
+	}
+	wantSecond := hashEvent("", "task-a", 1, "submit", "{}")
+	if second != wantSecond {
+		t.Fatalf("task-a second prev_hash = %q, want %q", second, wantSecond)
+	}
+
+	// Verify task-b's genesis event is empty.
+	var b string
+	if err := db.QueryRow(`SELECT prev_hash FROM task_events WHERE task_id = 'task-b'`).Scan(&b); err != nil {
+		t.Fatalf("scan task-b: %v", err)
+	}
+	if b != "" {
+		t.Fatalf("task-b genesis prev_hash = %q, want empty", b)
+	}
+}
+
 func columnExists(t *testing.T, db *sql.DB, table, col string) bool {
 	t.Helper()
 	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/xenith/panda/internal/executil"
+	"github.com/xenith/panda/internal/security"
 )
 
 // defaultCallTimeout is the hard upper bound for any single MCP request,
@@ -65,11 +66,14 @@ type rpcError struct {
 }
 
 // NewStdioClient spawns command args... and performs the initialize handshake.
-// The child inherits the parent's environment (a server may need its own env,
-// e.g. a binary path). It returns a started, initialized client; the caller
-// owns it and must Close it.
-func NewStdioClient(ctx context.Context, command string, args ...string) (*Client, error) {
+// The child runs with a minimal environment (M5): the security.Sandbox base
+// (PATH and the usual session variables) plus the explicitly declared env —
+// the parent's full environment is no longer inherited, so a server only sees
+// the variables the caller grants it. It returns a started, initialized
+// client; the caller owns it and must Close it.
+func NewStdioClient(ctx context.Context, command string, env []string, args ...string) (*Client, error) {
 	cmd := executil.CommandContext(ctx, command, args...)
+	security.NewSandbox("").Apply(cmd, env...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("mcp: stdin pipe: %w", err)

@@ -10,9 +10,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xenith/panda/internal/core"
@@ -45,10 +47,16 @@ func New(store *core.TaskStore, staticDir string, pushSvc *push.Service, token s
 // token fails closed (every /api/* request is rejected) so the panel can never
 // run open by accident; the daemon additionally refuses to start the panel at
 // all when no token is configured (see cmd/panda). Static assets under / are
-// always served.
+// always served. Failed attempts are rate-limited per client IP (L1).
 func authMiddleware(token string, next http.Handler) http.Handler {
+	limiter := &authLimiter{failures: map[string]*authFailure{}}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
+			ip := clientIP(r)
+			if limiter.locked(ip) {
+				writeErr(w, http.StatusTooManyRequests, errors.New("too many failed attempts"))
+				return
+			}
 			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			// Hash both sides so the comparison is constant-time regardless of
 			// length — ConstantTimeCompare otherwise early-returns on a length
@@ -56,12 +64,66 @@ func authMiddleware(token string, next http.Handler) http.Handler {
 			gotSum := sha256.Sum256([]byte(got))
 			wantSum := sha256.Sum256([]byte(token))
 			if token == "" || subtle.ConstantTimeCompare(gotSum[:], wantSum[:]) != 1 {
+				limiter.fail(ip)
 				writeErr(w, http.StatusUnauthorized, errors.New("unauthorized"))
 				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// maxAuthFailures is the number of failed Bearer attempts one client IP may
+// make within authFailWindow before it is locked out with 429 (L1). Without a
+// limit the constant-time comparison would still permit full-speed brute force.
+const maxAuthFailures = 5
+
+// authFailWindow is a var so tests can shrink it.
+var authFailWindow = time.Minute
+
+// authLimiter tracks failed Bearer attempts per client IP in a fixed window.
+// A locked-out IP is rejected even with a correct token until the window
+// resets — a deliberate trade-off that keeps the limiter trivial.
+type authLimiter struct {
+	mu       sync.Mutex
+	failures map[string]*authFailure
+}
+
+type authFailure struct {
+	count int
+	reset time.Time
+}
+
+// locked reports whether ip has exhausted its failure budget for the current
+// window.
+func (l *authLimiter) locked(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	f := l.failures[ip]
+	return f != nil && time.Now().Before(f.reset) && f.count >= maxAuthFailures
+}
+
+// fail records one failed attempt for ip, starting a fresh window when the
+// previous one expired.
+func (l *authLimiter) fail(ip string) {
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	f := l.failures[ip]
+	if f == nil || now.After(f.reset) {
+		f = &authFailure{reset: now.Add(authFailWindow)}
+		l.failures[ip] = f
+	}
+	f.count++
+}
+
+// clientIP extracts the IP part of the request's RemoteAddr.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 type handler struct {

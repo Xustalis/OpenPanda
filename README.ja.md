@@ -196,6 +196,8 @@ model:
 | `panda reject [--config PATH] [--reason s] <task-id>` | レビュー中のタスクを却下 |
 | `panda logs [--config PATH] <task-id>` | タスク実行ログ |
 | `panda skill` | スキルストアの管理 |
+| `panda metrics [--csv]` | 委譲メトリクスをエクスポート |
+| `panda audit [--task <id>]` | 監査ログまたは単一タスクイベントの `prev_hash` チェーンを検証 |
 | `panda version` | バージョンを表示 |
 
 ## 設定
@@ -206,7 +208,10 @@ model:
 | `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → スケジューラTier |
 | `network` | `listen_addr` | WebSocketリスナーアドレス |
 | `network` | `shared_secret` | ノード間ハローを認証するHMACシークレット；WSリスナーはこれが無いと起動しない（全ノード共通の値） |
+| `network` | `max_connections` | グローバル同時WS接続数の上限（0 = 無制限） |
+| `network` | `max_connections_per_ip` | リモートIPごとの同時WS接続数の上限（0 = 無制限） |
 | `network` | `panel_addr` | PWAパネルのHTTPアドレス（空 = 無効） |
+| `network` | `panel_token` | サイドカーの`/api/*`を守るBearerトークン（`PANDA_PANEL_TOKEN`を推奨） |
 | `network` | `peers` | 接続する手動ピアアドレス |
 | `storage` | `db_path` | SQLiteデータベースのパス |
 | `storage` | `context_path` | コンテキストスナップショットストア |
@@ -218,6 +223,10 @@ model:
 | `model` | `base_url` | Anthropic互換Messages APIのベースURL |
 | `model` | `model` | モデルID（例：`deepseek-chat`、`deepseek-reasoner`） |
 | `model` | `api_key` | シークレット — `PANDA_MODEL_API_KEY`を推奨 |
+| `model` | `max_tokens` | 補完トークン上限（デフォルト4096） |
+| `push` | `enabled` | `/api/push/*`の提供とWeb Push送信を有効化（webuiサイドカーのみ） |
+| `push` | `vapid_subject` | VAPIDサブジェクト（例：`mailto:`アドレス） |
+| `push` | `vapid_key_path` | VAPIDキーのパス（初回起動時に自動生成） |
 
 設定の読み込み順序: `--config`フラグ > 環境変数 > 既定 `/etc/panda/config.yaml`。
 
@@ -271,7 +280,7 @@ done
 
 ## ロードマップ
 
-Phase 3（メモリ + 音声 + 安全）が進行中です。メモリレイヤ、Dreamingエンジン、スキルシステム、PWAパネル、実行強化は実装済み。音声エントリはコード完成済みで、マイクハードウェアでの検証を待っています。
+Phase 3（メモリ + 音声 + 安全）は完了しました。メモリレイヤ、Dreamingエンジン、スキルシステム、実行強化は実装済み。音声エントリはコード完成済みで、マイクハードウェアでの検証を待っています。Webパネルは凍結された`webui/`サイドカーに分離され、カーネルはヘッドレスで動作します。Phase 4（デスクトップクライアントなど）は計画中です。
 
 ## コントリビューション
 

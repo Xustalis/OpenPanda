@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/xenith/panda/internal/config"
+	"github.com/xenith/panda/internal/security"
 )
 
 // anthropicVersion is the header required by Anthropic-compatible endpoints.
@@ -36,11 +37,17 @@ type Client struct {
 }
 
 // NewClient builds a client from the model config. A zero baseURL/model falls
-// back to config defaults, so callers can pass config.Default().Model.
-func NewClient(model config.ModelConfig) *Client {
+// back to config defaults, so callers can pass config.Default().Model. The
+// endpoint must be HTTPS so the API key never travels cleartext (M2); loopback
+// http stays allowed for a local dev model, matching the guard the commander
+// applies to adapter endpoints (D7).
+func NewClient(model config.ModelConfig) (*Client, error) {
 	base := model.BaseURL
 	if base == "" {
 		base = "https://api.deepseek.com/anthropic"
+	}
+	if err := security.NewNetworkGuard(security.EndpointHost(base)).CheckURL(base); err != nil {
+		return nil, err
 	}
 	name := model.Model
 	if name == "" {
@@ -58,7 +65,7 @@ func NewClient(model config.ModelConfig) *Client {
 		hc:        &http.Client{Timeout: 30 * time.Second},
 		maxRetry:  2,
 		retryBase: 500 * time.Millisecond,
-	}
+	}, nil
 }
 
 // messagesRequest is the Anthropic Messages API request body.

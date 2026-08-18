@@ -4,7 +4,7 @@ VERSION ?= 0.0.1
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: all build build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 \
-        test vet race gate run measure clean icons release
+        test vet race gate run run-local measure clean icons release
 
 all: build
 
@@ -62,6 +62,10 @@ icons:
 
 run:
 	$(GO) run ./cmd/panda --config config.example.yaml
+
+# Start the daemon + webui sidecar locally with one command (see scripts/run-local.sh).
+run-local:
+	exec ./scripts/run-local.sh
 
 # Measure steady-state RSS: start core, sample after 2s, stop.
 measure:

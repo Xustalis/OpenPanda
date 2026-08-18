@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xenith/panda/internal/core"
 	"github.com/xenith/panda/internal/storage"
@@ -303,5 +304,57 @@ func TestApproveErrorDoesNotLeakInternals(t *testing.T) {
 		if strings.Contains(body, leak) {
 			t.Fatalf("error body leaked internal detail %q: %q", leak, body)
 		}
+	}
+}
+
+// TestAuthRateLimited verifies the per-IP failure budget (L1): after
+// maxAuthFailures wrong tokens the IP is locked out with 429, while other IPs
+// are unaffected.
+func TestAuthRateLimited(t *testing.T) {
+	h := New(newTestStore(t), t.TempDir(), nil, testToken)
+
+	badAttempt := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+		req.Header.Set("Authorization", "Bearer wrong")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	for i := 0; i < maxAuthFailures; i++ {
+		if rr := badAttempt(); rr.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status = %d, want 401", i+1, rr.Code)
+		}
+	}
+	if rr := badAttempt(); rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 after %d failures", rr.Code, maxAuthFailures)
+	}
+
+	// A different client IP still has its own budget and can authenticate.
+	req := authedReq(http.MethodGet, "/api/tasks", nil)
+	req.RemoteAddr = "198.51.100.7:9999"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("other ip: status = %d, want 200", rr.Code)
+	}
+}
+
+// TestAuthRateLimitWindowReset verifies the lockout expires with its window.
+func TestAuthRateLimitWindowReset(t *testing.T) {
+	old := authFailWindow
+	authFailWindow = 50 * time.Millisecond
+	t.Cleanup(func() { authFailWindow = old })
+
+	h := New(newTestStore(t), t.TempDir(), nil, testToken)
+	for i := 0; i < maxAuthFailures; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	time.Sleep(2 * authFailWindow)
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d after window reset, want 200", rr.Code)
 	}
 }
