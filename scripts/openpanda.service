@@ -1,36 +1,35 @@
-# PANDA 节点守护进程（香橙派 / 嵌入式节点）
+# OpenPanda 节点守护进程（嵌入式 / 服务器节点）
 # 安装:  sudo install -m 644 openpanda.service /etc/systemd/system/openpanda.service
-# 启用:  sudo systemctl daemon-reload && sudo systemctl enable --now panda
+# 启用:  sudo systemctl daemon-reload && sudo systemctl enable --now openpanda
 [Unit]
-Description=PANDA distributed task node daemon
+Description=OpenPanda distributed task node daemon
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 # 运行用户与工作目录（按设备实际调整）
-User=xenith
-Group=xenith
-WorkingDirectory=/home/xenith/openpanda
+User=openpanda
+Group=openpanda
+WorkingDirectory=/opt/openpanda
 # 共享密钥经 EnvironmentFile 注入（不写入 config.yaml，避免密钥进 git）
-EnvironmentFile=/home/xenith/openpanda/panda.env
+EnvironmentFile=/opt/openpanda/openpanda.env
 # 以绝对路径启动；daemon 输出 JSON 日志到 stderr，由 journald 收集
-ExecStart=/home/xenith/openpanda/panda --config /home/xenith/openpanda/config.yaml --card /home/xenith/openpanda/capabilities.yaml
+ExecStart=/opt/openpanda/panda --config /opt/openpanda/config.yaml --card /opt/openpanda/capabilities.yaml
 # 崩溃自动重启，5s 退避（嵌入式节点资源有限，不设过激进的重试）
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=4096
 
-# ── 执行侧沙箱（design §19 / P3-29）────────────────────────────
-# 这些指令对 daemon 及其派生的子进程（adapters 的 python3）同时生效，
-# 是本节点最重的一层"真隔离"：未经 root/容器即可限制文件与网络面。
+# ── 执行侧沙箱 ─────────────────────────────────────────────────
+# 这些指令对 daemon 及其派生的子进程（adapters 的 python3）同时生效。
 # 注意：ReadWritePaths 必须覆盖 daemon 写的一切路径（db/context/memory/
 # projects/skills/vapid 均在 WorkingDirectory 之下，故整目录可写即可）。
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/xenith/openpanda
+ReadWritePaths=/opt/openpanda
 # 网络族只保留 INET（API/WS）与 UNIX（本地 socket），阻断 raw/蓝牙等逃逸面
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 # seccomp 白名单。@system-service 若导致 Python adapter 子进程失败，

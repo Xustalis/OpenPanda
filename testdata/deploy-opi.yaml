@@ -1,24 +1,24 @@
-# 真实多机部署配置：香橙派 3B 执行节点（Micro）
-# 复制到 /home/xenith/openpanda/config.yaml
+# 示例多机部署配置：嵌入式 Linux 执行节点（Micro 资源类）
+# 按实际环境复制并调整：安装路径、用户、peer 地址
 node:
-  name: "orangepi3b"
+  name: "node-arm64-0"
   resource_class: "Micro"
 
 network:
   listen_addr: ":7836"
-  # 所有节点必须共享同一个 shared_secret（可经 OPENPANDA_SHARED_SECRET 环境变量注入）
+  # 所有节点必须共享同一个 shared_secret（经 OPENPANDA_SHARED_SECRET 环境变量注入，不要写入此文件）
   shared_secret: ""
   peers:
-    - "192.168.0.100:7836"   # MacBook（入口/调度节点）
-    - "192.168.0.107:7836"   # Windows 桌面（执行节点）
+    - "scheduler.example.internal:7836"   # 入口/调度节点
+    - "worker.example.internal:7836"      # 另一个执行节点
 
 storage:
-  db_path: "/home/xenith/openpanda/data/openpanda.db"
-  context_path: "/home/xenith/openpanda/data/context"
-  memory_path: "/home/xenith/openpanda/memory"
-  projects_path: "/home/xenith/openpanda/projects"
-  skills_path: "/home/xenith/openpanda/skills"
-  work_path: "/home/xenith/openpanda"
+  db_path: "/opt/openpanda/data/openpanda.db"
+  context_path: "/opt/openpanda/data/context"
+  memory_path: "/opt/openpanda/memory"
+  projects_path: "/opt/openpanda/projects"
+  skills_path: "/opt/openpanda/skills"
+  work_path: "/opt/openpanda"
 
 log:
-  level: "debug"
+  level: "info"
