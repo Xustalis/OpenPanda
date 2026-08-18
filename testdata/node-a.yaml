@@ -1,0 +1,30 @@
+# 本地 loopback/集成测试双节点示例配置 —— 节点 A（测试入口）
+# 用途：与 node-b.yaml 组合，在同机启动两个进程（不同端口），
+#       用于验证 P2P 委派、hello 握手、审计链对账等功能。
+# 使用：
+#   export OPENPANDA_SHARED_SECRET="your-test-secret-CHANGEME"
+#   ./bin/panda --config testdata/node-a.yaml
+node:
+  name: "test-node-a"
+  resource_class: "Standard"
+
+network:
+  listen_addr: "127.0.0.1:17836"
+  shared_secret: ""               # 经环境变量注入；禁止写入此文件
+  panel:
+    addr: "127.0.0.1:17837"
+    token: ""                     # 经 OPENPANDA_PANEL_TOKEN 注入
+  peers:
+    - "127.0.0.1:17936"          # 对应 node-b 的 listen_addr
+
+storage:
+  db_path: "testdata/node-a.db"
+  context_path: "testdata/node-a/context"
+  memory_path: "testdata/node-a/memory"
+  projects_path: "testdata/node-a/projects"
+  skills_path: "testdata/node-a/skills"
+  work_path: "testdata/node-a"
+
+log:
+  level: "debug"
+  format: "json"

@@ -58,20 +58,16 @@ Thumbs.db
 *.log
 logs/
 
-# Internal design & planning docs (kept out of the public repo).
-# Root design/plan docs and most docs/ content carry private info (devices,
-# IPs, local paths, usernames) and personal notes. Public docs are whitelisted
-# file by file: the index, the system audit report, and the public roadmap.
+# Internal design & planning docs stay local-only under docs/author/.
+# The rest of docs/ is versioned normally (index, roadmap, user guides...).
 /PANDA-*.md
-/docs/*
-!/docs/README.md
-!/docs/reports/
-/docs/reports/*
-!/docs/reports/system-audit-2026-08-18.md
-!/docs/reports/delegation-loopback-2026-08-18.md
-!/docs/plans/
-/docs/plans/*
-!/docs/plans/roadmap-desktop-and-packaging.md
+/docs/author/
+
+# Local personal configs and per-device capability cards:
+# keep them on disk so `panda` keeps working, but never push them upstream.
+/config.local.yaml
+/config/capabilities.macbook.yaml
+/config/capabilities.orangepi3b.yaml
 
 # TRAE assistant workspace
 .trae/

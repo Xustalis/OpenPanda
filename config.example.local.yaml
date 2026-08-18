@@ -1,0 +1,38 @@
+# 本地单节点（loopback）最小配置示例
+# 复制为 config.local.yaml 后按需调整：
+#   cp config.example.local.yaml config.local.yaml
+# 密钥与令牌请通过环境变量注入，不要写入此文件：
+#   export OPENPANDA_SHARED_SECRET=...
+#   export OPENPANDA_PANEL_TOKEN=...
+#   export OPENPANDA_MODEL_API_KEY=...
+node:
+  name: "local-node"
+  resource_class: "Standard"
+
+network:
+  listen_addr: "127.0.0.1:7840"
+  shared_secret: ""  # 留空即可，单节点不需要 P2P
+  panel:
+    addr: "127.0.0.1:7841"
+    token: ""         # 留空；经 OPENPANDA_PANEL_TOKEN 注入
+
+storage:
+  db_path: "openpanda.db"
+  context_path: "data/context"
+  memory_path: "memory"
+  projects_path: "projects"
+  skills_path: "skills"
+  work_path: "."
+
+model:
+  provider: ""       # opencode / litellm / openai / anthropic / deepseek ...
+  base_url: ""       # 如 provider 需要自定义 endpoint
+  model: ""          # 如 claude-opus-4, gpt-4o-mini, deepseek-chat ...
+  api_key: ""        # 留空；优先经 OPENPANDA_MODEL_API_KEY 注入
+
+log:
+  level: "info"
+  format: "json"
+
+capabilities:
+  max_concurrent: 2

@@ -2,7 +2,7 @@
 # run-local.sh — 一键启动本地 PANDA（守护进程 + webui 侧车）
 #
 # 用法：
-#   ./scripts/run-local.sh              # 使用 config.local.yaml
+#   ./scripts/run-local.sh              # 使用 config.example.local.yaml
 #   ./scripts/run-local.sh --config     # 使用当前目录的 config.yaml
 #
 # 特性：
@@ -16,8 +16,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-# 选择配置：优先 config.local.yaml，除非显式指定 --config
-CONFIG="config.local.yaml"
+# 选择配置：优先 config.example.local.yaml，除非显式指定 --config
+CONFIG="config.example.local.yaml"
 if [[ "${1:-}" == "--config" ]]; then
     CONFIG="config.yaml"
 fi
@@ -88,7 +88,7 @@ trap cleanup INT TERM EXIT
 
 # 启动守护进程
 echo "[run-local] 启动核心守护进程 (config: $CONFIG) ..."
-./bin/panda --config "$CONFIG" --card config/capabilities.macbook.yaml > /tmp/panda-core.log 2>&1 &
+./bin/panda --config "$CONFIG" --card config/capabilities.example-desktop.yaml > /tmp/panda-core.log 2>&1 &
 DAEMON_PID=$!
 
 # 等待守护进程就绪（最多 5 秒）

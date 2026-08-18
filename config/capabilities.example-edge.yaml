@@ -1,0 +1,35 @@
+# 边缘节点能力卡示例（嵌入式 SBC / 低功耗 ARM 板）
+# 复制并按实际设备改名后使用：
+#   cp config/capabilities.example-edge.yaml config/capabilities.my-edge.yaml
+name: "example-edge-sbc"
+node_type: "worker"
+hardware:
+  cpu_cores: 4
+  ram_gb: 2
+  disk_gb: 64
+  gpu: false
+  platform: "sbc"
+
+agents:
+  shell: true
+  file_read: true
+  file_write: true
+  git: false
+  code_edit: false
+
+resources:
+  cpu_budget: 2
+  ram_budget_mb: 1024
+  max_concurrent: 1
+
+features:
+  - name: "gpio"
+    description: "可读写板子的 GPIO 引脚（需要设备树开启）"
+  - name: "sysinfo"
+    description: "温度、电压、CPU 负载采集"
+  - name: "network_ping"
+    description: "从本节点所在网段做 ICMP/TCP 端口存活探测"
+
+commands:
+  shell: "/bin/bash"
+  # allowed_bin: ["cat", "grep", "ping", "ssh"]

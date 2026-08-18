@@ -1,0 +1,37 @@
+# 桌面工作节点能力卡示例（开发机 / 普通 PC）
+# 复制并按实际设备改名后使用：
+#   cp config/capabilities.example-desktop.yaml config/capabilities.my-desktop.yaml
+name: "example-desktop"
+node_type: "worker"
+hardware:
+  cpu_cores: 8
+  ram_gb: 16
+  disk_gb: 512
+  gpu: false
+  platform: "desktop"
+
+agents:
+  shell: true
+  file_read: true
+  file_write: true
+  git: true
+  code_edit: true
+  # 把下面这行注释去掉，并在本机安装对应 adapter 即可启用：
+  # python_kernel: true
+
+resources:
+  cpu_budget: 4            # 单个任务最多占用多少 CPU 核当量级
+  ram_budget_mb: 8192      # 单个任务最多内存限额（估算，用于调度打分）
+  max_concurrent: 3        # 本节点并行任务数上限
+
+features:
+  # 本机声明的额外能力（会在 ask 选择节点时参与打分）
+  - name: "browser_automation"
+    description: "可以启动本地浏览器执行 UI 自动化 / E2E 检查"
+  - name: "long_running_build"
+    description: "适合跑长时间编译/链接/打包任务"
+
+commands:
+  shell: "/bin/bash"
+  # 如需让任务只能调用白名单命令，取消下行注释并维护：
+  # allowed_bin: ["git", "go", "node", "npm", "make"]

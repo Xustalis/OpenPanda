@@ -18,7 +18,7 @@ ssh "$TARGET" "sudo -n systemctl stop openpanda 2>/dev/null || true"
 echo "==> 上传到 $TARGET:$REMOTE_DIR"
 ssh "$TARGET" "sudo -n mkdir -p $REMOTE_DIR/data $REMOTE_DIR/memory $REMOTE_DIR/projects $REMOTE_DIR/skills && sudo -n chown -R ${REMOTE_USER}:${REMOTE_USER} $REMOTE_DIR"
 scp bin/panda-linux-arm64 "$TARGET:$REMOTE_DIR/panda"
-scp config/capabilities.orangepi3b.yaml "$TARGET:$REMOTE_DIR/capabilities.yaml"
+scp config/capabilities.example-edge.yaml "$TARGET:$REMOTE_DIR/capabilities.yaml"
 scp testdata/deploy-opi.yaml "$TARGET:$REMOTE_DIR/config.yaml"
 ssh "$TARGET" "chmod +x $REMOTE_DIR/panda"
 
