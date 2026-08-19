@@ -15,6 +15,10 @@ const en: Messages = {
   'nav.memory': 'Memory',
   'nav.system': 'System',
   'nav.settings': 'Settings',
+  'nav.group.tasks': 'Tasks',
+  'nav.group.orchestrate': 'Devices & agents',
+  'nav.group.personal': 'Personal',
+  'nav.group.system': 'System',
 
   // Token gate
   'token.title': 'Connect to your node',

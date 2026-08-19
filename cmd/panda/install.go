@@ -186,13 +186,7 @@ func findAdaptersDir() string {
 
 // configFileUsed mirrors config.Load's resolution for display purposes.
 func configFileUsed(explicit string) string {
-	if explicit != "" {
-		return explicit
-	}
-	if env := os.Getenv("OPENPANDA_CONFIG_PATH"); env != "" {
-		return env
-	}
-	return config.DefaultPath
+	return config.ResolvePath(explicit)
 }
 
 func joinPaths(ps []string) string {

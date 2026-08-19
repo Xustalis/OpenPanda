@@ -25,6 +25,30 @@ type Route =
   | { view: 'settings' }
   | { view: 'detail'; id: string }
 
+/** Sidebar groups: primary Chat stays standalone up top; the rest are folded
+ *  into labeled sections so first-time users see a short menu, not eight
+ *  competing concepts. Each group collapses to further reduce noise. */
+interface NavGroup {
+  id: string
+  label: string
+  items: Array<[view: string, key: string]>
+}
+
+const navGroups: NavGroup[] = [
+  { id: 'tasks', label: 'nav.group.tasks', items: [['queue', 'nav.queue'], ['projects', 'nav.projects']] },
+  { id: 'orchestrate', label: 'nav.group.orchestrate', items: [['nodes', 'nav.nodes'], ['skills', 'nav.skills']] },
+  { id: 'personal', label: 'nav.group.personal', items: [['reminders', 'nav.reminders'], ['memory', 'nav.memory']] },
+  { id: 'system', label: 'nav.group.system', items: [['system', 'nav.system']] },
+]
+
+// Advanced groups start folded; the two everyday sections stay open.
+const defaultCollapsed: Record<string, boolean> = {
+  tasks: false,
+  orchestrate: true,
+  personal: true,
+  system: true,
+}
+
 function parseHash(): Route {
   const hash = location.hash.replace(/^#\/?/, '')
   if (hash.startsWith('task/')) return { view: 'detail', id: decodeURIComponent(hash.slice(5)) }
@@ -69,6 +93,9 @@ export function App() {
   const route = useRoute()
   const [authed, setAuthed] = useState<boolean>(getToken() !== '')
   const [gateError, setGateError] = useState('')
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(defaultCollapsed)
+
+  const toggleGroup = (id: string) => setCollapsed((c) => ({ ...c, [id]: !c[id] }))
 
   useEffect(() => onUnauthorized(() => setAuthed(false)), [])
 
@@ -93,22 +120,35 @@ export function App() {
         <a href="#/chat" class="wordmark-link">
           <PandaWordmark />
         </a>
-        {(
-          [
-            ['sessions', 'nav.sessions'],
-            ['queue', 'nav.queue'],
-            ['projects', 'nav.projects'],
-            ['nodes', 'nav.nodes'],
-            ['skills', 'nav.skills'],
-            ['reminders', 'nav.reminders'],
-            ['memory', 'nav.memory'],
-            ['system', 'nav.system'],
-          ] as const
-        ).map(([v, key]) => (
-          <a key={v} href={v === 'sessions' ? '#/chat' : `#/${v}`} class={`nav-item${active === v ? ' active' : ''}`}>
-            {t(key)}
-          </a>
-        ))}
+        <a href="#/chat" class={`nav-item${active === 'sessions' ? ' active' : ''}`}>
+          {t('nav.sessions')}
+        </a>
+        {navGroups.map((group) => {
+          const containsActive = group.items.some(([v]) => v === active)
+          // A group holding the current view always stays open, even if the
+          // user folded it, so the active item is never hidden.
+          const open = containsActive || !collapsed[group.id]
+          return (
+            <div class="nav-group" key={group.id}>
+              <button
+                class="nav-group-head"
+                onClick={() => toggleGroup(group.id)}
+                aria-expanded={open}
+              >
+                <span>{t(group.label)}</span>
+                <span class={`nav-chevron${open ? ' open' : ''}`} aria-hidden="true">
+                  ▾
+                </span>
+              </button>
+              {open &&
+                group.items.map(([v, key]) => (
+                  <a key={v} href={`#/${v}`} class={`nav-item${active === v ? ' active' : ''}`}>
+                    {t(key)}
+                  </a>
+                ))}
+            </div>
+          )
+        })}
         <div class="sidebar-footer">
           <a href="#/settings" class={`nav-item${active === 'settings' ? ' active' : ''}`}>
             {t('nav.settings')}

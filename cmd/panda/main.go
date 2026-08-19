@@ -87,6 +87,9 @@ func main() {
 		case "detect":
 			runDetect(args)
 			return
+		case "init":
+			runInit(args)
+			return
 		case "metrics":
 			runMetrics(args)
 			return
@@ -347,6 +350,7 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "metrics|audit   node metrics / audit trail")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "install|uninstall   put panda on PATH (persistent) / remove it")
+	fmt.Fprintln(w, "init            interactive first-run setup (config.yaml + capability card)")
 	fmt.Fprintln(w, "doctor          post-install self-check")
 	fmt.Fprintln(w, "detect          scan hardware → capabilities.yaml draft")
 	fmt.Fprintln(w, "version         print the version")

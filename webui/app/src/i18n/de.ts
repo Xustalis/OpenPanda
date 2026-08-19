@@ -13,6 +13,10 @@ const de: Messages = {
   'nav.memory': 'Gedächtnis',
   'nav.system': 'System',
   'nav.settings': 'Einstellungen',
+  'nav.group.tasks': 'Aufgaben',
+  'nav.group.orchestrate': 'Geräte & Agents',
+  'nav.group.personal': 'Persönlich',
+  'nav.group.system': 'System',
 
   // Token gate
   'token.title': 'Mit deinem Knoten verbinden',

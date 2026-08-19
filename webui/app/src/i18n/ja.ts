@@ -13,6 +13,10 @@ const ja: Messages = {
   'nav.memory': 'メモリー',
   'nav.system': 'システム',
   'nav.settings': '設定',
+  'nav.group.tasks': 'タスク',
+  'nav.group.orchestrate': 'デバイスとエージェント',
+  'nav.group.personal': 'パーソナル',
+  'nav.group.system': 'システム',
 
   // Token gate
   'token.title': 'ノードに接続',

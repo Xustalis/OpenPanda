@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"gopkg.in/yaml.v3"
@@ -110,6 +111,13 @@ type PushConfig struct {
 // anything else silently degrades to a worker tier, so catch typos at startup.
 var validResourceClasses = map[string]bool{"Micro": true, "Standard": true, "Full": true, "": true}
 
+// ValidResourceClass reports whether s is a resource class the scheduler
+// understands (empty counts as "unset → default"). `panda init` uses it to
+// re-prompt on typos before they can break a later config load.
+func ValidResourceClass(s string) bool {
+	return validResourceClasses[s]
+}
+
 // Validate reports statically invalid configuration before the node starts:
 // an unknown resource_class (a typo silently downgrades the scheduler tier),
 // malformed peer addresses (must be host:port), or a listen/panel address that
@@ -183,16 +191,46 @@ func Default() *Config {
 // DefaultPath is where the node looks for its config file.
 const DefaultPath = "/etc/openpanda/config.yaml"
 
+// UserConfigPath returns a user-writable config location —
+// ~/.config/openpanda/config.yaml on Linux,
+// ~/Library/Application Support/openpanda/config.yaml on macOS,
+// %LOCALAPPDATA%\openpanda\config.yaml on Windows. It is where `panda init`
+// writes by default, so a first run never needs root to place its config.
+func UserConfigPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "openpanda", "config.yaml"), nil
+}
+
+// ResolvePath returns the config path a node actually reads, in order:
+// explicit flag > OPENPANDA_CONFIG_PATH > a user-level config (if present) >
+// the system default. Load and the panel mirrors all go through here, so a
+// `panda init`-written user config is picked up automatically by `panda web`
+// and the daemon without extra flags.
+func ResolvePath(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if env := os.Getenv("OPENPANDA_CONFIG_PATH"); env != "" {
+		return env
+	}
+	if user, err := UserConfigPath(); err == nil {
+		if _, err := os.Stat(user); err == nil {
+			return user
+		}
+	}
+	return DefaultPath
+}
+
 // Load reads the config from path. If path is empty, the OPENPANDA_CONFIG_PATH env
 // var (if set) or DefaultPath is used. A missing file is not an error; defaults
 // apply. An unreadable or malformed file is an error so a bad deployment
 // surfaces loudly.
 func Load(path string) (*Config, error) {
 	if path == "" {
-		path = os.Getenv("OPENPANDA_CONFIG_PATH")
-		if path == "" {
-			path = DefaultPath
-		}
+		path = ResolvePath("")
 	}
 	cfg := Default()
 	data, err := os.ReadFile(path)

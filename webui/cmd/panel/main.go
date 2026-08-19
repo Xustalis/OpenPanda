@@ -184,13 +184,7 @@ func fatal(step string, err error) {
 // configPathOrDefault mirrors config.Load's path resolution so the settings
 // APIs persist into the file the sidecar loaded.
 func configPathOrDefault(flagPath string) string {
-	if flagPath != "" {
-		return flagPath
-	}
-	if env := os.Getenv("OPENPANDA_CONFIG_PATH"); env != "" {
-		return env
-	}
-	return config.DefaultPath
+	return config.ResolvePath(flagPath)
 }
 
 // panelURL turns a listen address into the URL a browser can open (a bare

@@ -13,6 +13,10 @@ const zhCN: Messages = {
   'nav.memory': '记忆',
   'nav.system': '系统',
   'nav.settings': '设置',
+  'nav.group.tasks': '任务',
+  'nav.group.orchestrate': '设备与智能体',
+  'nav.group.personal': '个人',
+  'nav.group.system': '系统',
 
   // Token gate
   'token.title': '连接到你的节点',

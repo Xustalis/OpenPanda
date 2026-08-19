@@ -13,6 +13,10 @@ const es: Messages = {
   'nav.memory': 'Memoria',
   'nav.system': 'Sistema',
   'nav.settings': 'Ajustes',
+  'nav.group.tasks': 'Tareas',
+  'nav.group.orchestrate': 'Dispositivos y agentes',
+  'nav.group.personal': 'Personal',
+  'nav.group.system': 'Sistema',
 
   // Token gate
   'token.title': 'Conecta con tu nodo',

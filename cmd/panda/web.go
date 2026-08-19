@@ -164,13 +164,7 @@ func runWeb(args []string) {
 // resolvedConfigPath mirrors config.Load's path resolution so the settings
 // API persists into the same file the node loaded.
 func resolvedConfigPath(flagPath string) string {
-	if flagPath != "" {
-		return flagPath
-	}
-	if env := os.Getenv("OPENPANDA_CONFIG_PATH"); env != "" {
-		return env
-	}
-	return config.DefaultPath
+	return config.ResolvePath(flagPath)
 }
 
 // openWorktreesBestEffort returns a Worktrees for the work path, or nil when
