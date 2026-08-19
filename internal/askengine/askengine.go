@@ -37,6 +37,11 @@ type Options struct {
 	// MCPCommand is an optional space-separated stdio MCP server command
 	// whose tools are imported into the registry.
 	MCPCommand string
+	// QueueTasks routes classified tasks through the async queue (core.Enqueue)
+	// instead of blocking inline submission: the task lands in queued and the
+	// queue scheduler starts it when resources allow — the panel's mode, where
+	// progress streams into the session. The CLI keeps inline (blocking) mode.
+	QueueTasks bool
 	// Logger defaults to a warn-level stderr handler.
 	Logger *slog.Logger
 }
@@ -64,11 +69,14 @@ type Engine struct {
 
 	// sched is non-nil exactly when Options.CardPath was set. schedMu
 	// serializes task submission: a submit may temporarily pin the core's
-	// work dir to a session worktree, which must not interleave.
+	// work dir to a session worktree, which must not interleave. (Queue
+	// mode never swaps the global work dir — it travels per task.)
 	sched       *core.Core
 	schedMu     sync.Mutex
 	schedCtx    context.Context
 	schedCancel context.CancelFunc
+	// queueTasks mirrors Options.QueueTasks.
+	queueTasks bool
 }
 
 // SetModel hot-swaps the entry model client at runtime (the settings page):
@@ -192,14 +200,15 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 	}
 
 	e := &Engine{
-		cfg:      cfg,
-		db:       db,
-		registry: registry,
-		injector: injector,
-		hermes:   hermes,
-		projects: projects,
-		remind:   remind,
-		logger:   logger,
+		cfg:        cfg,
+		db:         db,
+		registry:   registry,
+		injector:   injector,
+		hermes:     hermes,
+		projects:   projects,
+		remind:     remind,
+		logger:     logger,
+		queueTasks: opts.QueueTasks,
 	}
 	e.client.Store(client)
 
@@ -232,6 +241,13 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		e.sched = sched
 		e.schedCtx = schedCtx
 		e.schedCancel = cancel
+
+		// Queue mode runs the node-local queue scheduler so enqueued tasks
+		// execute here even if the kernel daemon is down (ClaimLocal's CAS
+		// keeps the two instances from double-running a task).
+		if opts.QueueTasks {
+			sched.StartQueueScheduler(schedCtx)
+		}
 
 		for _, peer := range cfg.Network.Peers {
 			if err := sched.DialPeer(schedCtx, peer); err != nil {
@@ -370,14 +386,36 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 // work path so the memory wall (§17.2) holds for them too.
 func (e *Engine) WorkPath() string { return e.cfg.Storage.WorkPath }
 
+// EnqueueTask routes a directly-created task (the panel's board "new task"
+// form) through the async queue: it lands in queued and the scheduler starts
+// it when resources allow. Needs a capability card, like task submission.
+func (e *Engine) EnqueueTask(ctx context.Context, in core.TaskInput, q core.QueueSpec) (core.Task, error) {
+	if e.sched == nil {
+		return core.Task{}, fmt.Errorf("task creation requires a capability card (engine built without CardPath)")
+	}
+	return e.sched.Enqueue(ctx, in, q)
+}
+
 // submitTask executes a classified task spec through the scheduler core and
-// maps the outcome to a Result. workDir, when set, temporarily pins the core's
-// execution directory (a session worktree); the configured work path is
-// restored afterwards. The schedMu lock keeps concurrent submits from
-// interleaving the work-dir swap.
+// maps the outcome to a Result. In queue mode the task is Enqueued and the
+// call returns immediately (TaskState "queued"); the queue scheduler starts
+// it when resources allow and the session streams its progress. In inline
+// mode workDir, when set, temporarily pins the core's execution directory (a
+// session worktree); the configured work path is restored afterwards. The
+// schedMu lock keeps concurrent inline submits from interleaving the
+// work-dir swap.
 func (e *Engine) submitTask(spec *entry.TaskSpec, authorized bool, workDir string) *Result {
 	in := toTaskInput(spec)
 	in.Authorized = authorized
+	if e.queueTasks {
+		q := core.DefaultQueueSpec()
+		q.WorkDir = workDir // travels per task; "" falls back to the core's work dir
+		task, err := e.sched.Enqueue(e.schedCtx, in, q)
+		if err != nil {
+			return &Result{Kind: "task", TaskState: "failed", Stderr: err.Error(), ExitCode: 1}
+		}
+		return &Result{Kind: "task", TaskID: task.TaskID, TaskState: task.State}
+	}
 	e.schedMu.Lock()
 	defer e.schedMu.Unlock()
 	if workDir != "" {

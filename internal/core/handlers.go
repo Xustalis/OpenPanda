@@ -389,6 +389,15 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 
 	prompt, usedSkills := buildAgentPrompt(c, intent, task.Project, task.Title)
 
+	// workDir is normally the node-wide execution directory; a queued task may
+	// pin its own (a panel session's worktree) so concurrent tasks never share
+	// a working directory (queue redesign — SetWorkDir is process-global and
+	// only the synchronous paths may swap it).
+	workDir := c.workDir
+	if task.WorkDir != "" {
+		workDir = task.WorkDir
+	}
+
 	// Scope drift (design §14.2 signal A): for an agent task that declares a
 	// scope, snapshot the working directory before execution so changes outside
 	// the scope can be intercepted rather than silently committed. The agent
@@ -397,12 +406,12 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	var before defense.Snapshot
 	if plan.Kind == "agent" && !scope.Empty() {
 		var err error
-		if before, err = defense.SnapshotDir(c.workDir); err != nil {
+		if before, err = defense.SnapshotDir(workDir); err != nil {
 			c.logger.Warn("snapshot workdir before agent", "task", taskID, "err", err)
 		}
 	}
 
-	res := c.router.Execute(ctx, plan, prompt, c.workDir, task.Authorized)
+	res := c.router.Execute(ctx, plan, prompt, workDir, task.Authorized)
 	if plan.Kind == "agent" {
 		if res.OK {
 			c.breaker.RecordSuccess(breakerKey)
@@ -428,7 +437,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// (design §14.2 "拦截 → 暂停 → 分析") rather than mark it done or fail it
 	// into the retry loop — a deterministic intercept will not improve on retry.
 	if plan.Kind == "agent" && !scope.Empty() && res.OK {
-		after, err := defense.SnapshotDir(c.workDir)
+		after, err := defense.SnapshotDir(workDir)
 		if err != nil {
 			c.logger.Warn("snapshot workdir after agent", "task", taskID, "err", err)
 		} else if drift := c.filterHostDrift(scope.Drift(after.Changed(before))); len(drift) > 0 {

@@ -111,9 +111,39 @@ export interface Task {
   spec?: string
   result?: string
   risk?: string
+  // Queue redesign fields: the board sorts by seq (drag order) then
+  // priority, and jumps into session_id when set.
+  priority?: 'high' | 'normal' | 'low'
+  seq?: number
+  session_id?: string
+  resource_keys?: string[]
+  scheduled?: boolean
   created_at: string
   updated_at: string
   events?: TaskEvent[]
+}
+
+/** One probed agent CLI (GET /api/agents): install state + version. */
+export interface AgentInfo {
+  name: string
+  binary: string
+  installed: boolean
+  path?: string
+  version?: string
+}
+
+export type AgentTestResult = {
+  name: string
+  ok: boolean
+  path?: string
+  version?: string
+  error?: string
+}
+
+export type CreateTaskResult = {
+  task_id: string
+  session_id: string
+  state: string
 }
 
 export interface AskResult {
@@ -148,6 +178,40 @@ export const api = {
     if (params?.project) q.set('project', params.project)
     const suffix = q.size > 0 ? `?${q}` : ''
     return request('GET', `/api/tasks${suffix}`)
+  },
+
+  // ---- Board task management (queue redesign) ----
+
+  /** Submit a task from the board: enqueues it and links a fresh session
+   *  (title = task title, prompt = first user turn). */
+  createTask(body: {
+    title: string
+    prompt?: string
+    priority?: 'high' | 'normal' | 'low'
+    project?: string
+    resource_keys?: string[]
+  }): Promise<CreateTaskResult> {
+    return request('POST', '/api/tasks', body)
+  },
+
+  /** Quick priority change from a board card. */
+  patchTask(id: string, priority: 'high' | 'normal' | 'low'): Promise<{ id: string; priority: string }> {
+    return request('PATCH', `/api/tasks/${encodeURIComponent(id)}`, { priority })
+  },
+
+  /** Persist a drag: ids arrive top-to-bottom and get seq 1..n. */
+  reorderTasks(ids: string[]): Promise<{ updated: number }> {
+    return request('POST', '/api/tasks/reorder', { ids })
+  },
+
+  // ---- Agent CLIs (settings visibility) ----
+
+  agents(): Promise<AgentInfo[]> {
+    return request('GET', '/api/agents')
+  },
+
+  testAgent(name: string): Promise<AgentTestResult> {
+    return request('POST', `/api/agents/${encodeURIComponent(name)}/test`)
   },
 
   task(id: string): Promise<Task> {

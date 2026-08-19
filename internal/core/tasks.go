@@ -107,18 +107,22 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	var lease sql.NullInt64
 	var contextType, contextHash, risk, resource, requiresJSON sql.NullString
 	var complexity sql.NullFloat64
+	var sessionID, resourceKeysJSON, workDir sql.NullString
+	var scheduled int
 	err := s.db.QueryRowContext(ctx,
 		`SELECT `+taskColumns+` FROM tasks WHERE task_id = ?`, taskID).
 		Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State, &t.OwnerNode,
 			&t.AttemptID, &t.StateVersion, &chainJSON, &intent, &spec,
 			&result, &contextType, &contextHash, &complexity, &risk, &resource,
 			&requiresJSON, &lease,
-			&t.CreatedAt, &t.UpdatedAt, &t.Authorized)
+			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
+			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled)
 	if err != nil {
 		return Task{}, err
 	}
 	_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
 	_ = json.Unmarshal([]byte(requiresJSON.String), &t.Requires)
+	_ = json.Unmarshal([]byte(resourceKeysJSON.String), &t.ResourceKeys)
 	t.Intent = intent.String
 	t.SpecJSON = spec.String
 	t.ResultJSON = result.String
@@ -128,6 +132,9 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	t.Risk = risk.String
 	t.ResourceJSON = resource.String
 	t.LeaseExpires = lease.Int64
+	t.SessionID = sessionID.String
+	t.WorkDir = workDir.String
+	t.Scheduled = scheduled != 0
 	return t, nil
 }
 
@@ -304,6 +311,12 @@ func (s *TaskStore) recordEvent(ctx context.Context, taskID, typ string, data an
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		return s.recordEventTx(ctx, tx, taskID, typ, data)
 	})
+}
+
+// RecordEvent is the exported recordEvent for collaborators outside core
+// (the panel's session finalizer marks summary turns this way).
+func (s *TaskStore) RecordEvent(ctx context.Context, taskID, typ string, data any) error {
+	return s.recordEvent(ctx, taskID, typ, data)
 }
 
 // Queue transitions submitted -> queued.
@@ -700,6 +713,116 @@ func (s *TaskStore) CountActive(ctx context.Context, owner string) (int, error) 
 	return n, nil
 }
 
+// CountScheduledActive counts execution slots occupied by locally-scheduled
+// tasks, regardless of owner: the queue scheduler may adopt queued tasks left
+// behind by another process instance (e.g. a restarted panel sidecar), so its
+// concurrency budget must count what is actually running, not just rows that
+// already carry its own node id.
+func (s *TaskStore) CountScheduledActive(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tasks WHERE scheduled=1 AND state IN ('dispatched','running','waiting_context')`).
+		Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count scheduled active: %w", err)
+	}
+	return n, nil
+}
+
+// SetQueueMeta stamps the queue-scheduling metadata on a task and marks it
+// scheduled (owned by the local queue scheduler). Called once by Enqueue
+// before the task enters queued state.
+func (s *TaskStore) SetQueueMeta(ctx context.Context, taskID string, priority int, sessionID, workDir string, resourceKeys []string) error {
+	keysJSON, err := json.Marshal(resourceKeys)
+	if err != nil {
+		return fmt.Errorf("marshal resource keys: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE tasks SET priority=?, session_id=?, work_dir=?, resource_keys_json=?, scheduled=1, updated_at=?
+		WHERE task_id=?`,
+		priority, sessionID, workDir, string(keysJSON), s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("set queue meta: %w", err)
+	}
+	return nil
+}
+
+// SetPriority changes a task's queue priority. Only meaningful before the
+// task finishes; the board and scheduler read it on their next tick.
+func (s *TaskStore) SetPriority(ctx context.Context, taskID string, priority int) error {
+	if priority < PriorityHigh || priority > PriorityLow {
+		return fmt.Errorf("priority %d out of range", priority)
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET priority=?, updated_at=? WHERE task_id=?`,
+		priority, s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("set priority: %w", err)
+	}
+	return nil
+}
+
+// SetSeq sets the manual (drag) ordering value. 0 clears it back to pure
+// priority/FIFO placement.
+func (s *TaskStore) SetSeq(ctx context.Context, taskID string, seq int64) error {
+	if seq < 0 {
+		return fmt.Errorf("seq must be >= 0")
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET seq=?, updated_at=? WHERE task_id=?`,
+		seq, s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("set seq: %w", err)
+	}
+	return nil
+}
+
+// SetSessionID links a task to a panel conversation after the fact (session
+// asks learn the task id only once the engine returns it).
+func (s *TaskStore) SetSessionID(ctx context.Context, taskID, sessionID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET session_id=?, updated_at=? WHERE task_id=?`,
+		sessionID, s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("set session id: %w", err)
+	}
+	return nil
+}
+
+// ListReady returns every task waiting for the local queue scheduler: queued
+// and marked scheduled. Ordering happens in the scheduler's policy, not here.
+func (s *TaskStore) ListReady(ctx context.Context) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+taskColumns+` FROM tasks WHERE state = ? AND scheduled = 1`, StateQueued)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+// ClaimLocal moves a queued task to dispatched-to-self for the queue
+// scheduler. Unlike Dispatch it does not require the caller to already own
+// the task: scheduled tasks are a node-local pool any running scheduler
+// instance may adopt (e.g. after a panel restart left them queued). The
+// state-guarded UPDATE is the race arbiter — exactly one claimant wins.
+func (s *TaskStore) ClaimLocal(ctx context.Context, taskID, node string) error {
+	now := s.now()
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state=?, owner_node=?, state_version=state_version+1, updated_at=?
+			WHERE task_id=? AND state=?`,
+			StateDispatched, node, now, taskID, StateQueued)
+		if err != nil {
+			return fmt.Errorf("claim task: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: task %s not queued (claimed concurrently)", ErrConflict, taskID)
+		}
+		return s.recordEventTx(ctx, tx, taskID, EvDelegate, map[string]any{"target": node, "by": "queue"})
+	})
+}
+
 // ExpireTasks fails any active task whose lease has expired. It returns the
 // task IDs actually failed, so the caller can clean up per-task state. Called
 // periodically by the monitor.
@@ -983,7 +1106,8 @@ func (s *TaskStore) RotateAttempt(ctx context.Context, taskID, owner string) (st
 const taskColumns = `task_id, parent_id, project, title, state, owner_node, attempt_id,
 	state_version, chain_json, intent, spec_json, result_json,
 	context_type, context_hash, complexity, risk, resource_json, requires_json,
-	lease_expires_at, created_at, updated_at, authorized`
+	lease_expires_at, created_at, updated_at, authorized,
+	priority, seq, session_id, resource_keys_json, work_dir, scheduled`
 
 func scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task
@@ -994,15 +1118,19 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var lease sql.NullInt64
 		var contextType, contextHash, risk, resource, requiresJSON sql.NullString
 		var complexity sql.NullFloat64
+		var sessionID, resourceKeysJSON, workDir sql.NullString
+		var scheduled int
 		if err := rows.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State,
 			&t.OwnerNode, &t.AttemptID, &t.StateVersion, &chainJSON, &intent,
 			&spec, &result, &contextType, &contextHash, &complexity, &risk, &resource,
 			&requiresJSON, &lease,
-			&t.CreatedAt, &t.UpdatedAt, &t.Authorized); err != nil {
+			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
+			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
 		_ = json.Unmarshal([]byte(requiresJSON.String), &t.Requires)
+		_ = json.Unmarshal([]byte(resourceKeysJSON.String), &t.ResourceKeys)
 		t.Intent = intent.String
 		t.SpecJSON = spec.String
 		t.ResultJSON = result.String
@@ -1012,6 +1140,9 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		t.Risk = risk.String
 		t.ResourceJSON = resource.String
 		t.LeaseExpires = lease.Int64
+		t.SessionID = sessionID.String
+		t.WorkDir = workDir.String
+		t.Scheduled = scheduled != 0
 		out = append(out, t)
 	}
 	return out, rows.Err()

@@ -148,7 +148,7 @@ func runDoctor(args []string) {
 		fail("doctor.adapters.no")
 	}
 	agentsFound := 0
-	for _, bin := range []string{"claude", "opencode"} {
+	for _, bin := range []string{"claude", "opencode", "codex"} {
 		if lp, err := exec.LookPath(bin); err == nil {
 			agentsFound++
 			pass("doctor.agent.ok", "name", bin, "path", lp)

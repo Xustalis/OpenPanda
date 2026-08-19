@@ -90,8 +90,9 @@ func detectCard() ledger.Card {
 	}
 
 	// Agents: probe the known agent CLIs and prewire their adapter entries.
+	// Keep in sync with the panel's probe list (webui/panel/agents.go).
 	card.Agents = map[string]ledger.Agent{}
-	for name, bin := range map[string]string{"claude_code": "claude", "opencode": "opencode"} {
+	for name, bin := range map[string]string{"claude_code": "claude", "opencode": "opencode", "codex": "codex"} {
 		if path, err := exec.LookPath(bin); err == nil {
 			card.Agents[name] = ledger.Agent{
 				Adapter:      name,

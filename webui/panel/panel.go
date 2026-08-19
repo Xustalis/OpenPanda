@@ -5,6 +5,7 @@
 package panel
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
@@ -71,14 +72,23 @@ func New(d Deps) http.Handler {
 		cfg:        d.Cfg,
 		configPath: d.ConfigPath,
 	}
+	// Session summary finalizer (queue redesign §5): finished tasks fold
+	// their result into the linked chat as an assistant turn. Runs for the
+	// process lifetime; no-op without the sessions store.
+	h.startSessionFinalizer(context.Background())
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/tasks", h.listTasks)
+	mux.HandleFunc("POST /api/tasks", h.createTask)
 	mux.HandleFunc("GET /api/tasks/{id}", h.getTask)
+	mux.HandleFunc("PATCH /api/tasks/{id}", h.patchTask)
+	mux.HandleFunc("POST /api/tasks/reorder", h.reorderTasks)
 	mux.HandleFunc("POST /api/tasks/{id}/approve", h.approveTask)
 	mux.HandleFunc("POST /api/tasks/{id}/reject", h.rejectTask)
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", h.cancelTask)
 	mux.HandleFunc("GET /api/tasks/{id}/logs", h.taskLogs)
 	mux.HandleFunc("POST /api/ask", h.ask)
+	mux.HandleFunc("GET /api/agents", h.listAgents)
+	mux.HandleFunc("POST /api/agents/{name}/test", h.testAgent)
 	mux.HandleFunc("GET /api/projects", h.listProjects)
 	mux.HandleFunc("POST /api/projects", h.createProject)
 	mux.HandleFunc("GET /api/nodes", h.listNodes)
@@ -261,20 +271,27 @@ type handler struct {
 // taskJSON is the wire form of a task row, with stable snake_case names so the
 // PWA does not depend on Go field casing.
 type taskJSON struct {
-	ID        string      `json:"id"`
-	ParentID  string      `json:"parent_id"`
-	Project   string      `json:"project"`
-	Title     string      `json:"title"`
-	State     string      `json:"state"`
-	Owner     string      `json:"owner"`
-	AttemptID string      `json:"attempt_id"`
-	Intent    string      `json:"intent,omitempty"`
-	Spec      string      `json:"spec,omitempty"`
-	Result    string      `json:"result,omitempty"`
-	Risk      string      `json:"risk,omitempty"`
-	CreatedAt string      `json:"created_at"`
-	UpdatedAt string      `json:"updated_at"`
-	Events    []eventJSON `json:"events,omitempty"`
+	ID        string `json:"id"`
+	ParentID  string `json:"parent_id"`
+	Project   string `json:"project"`
+	Title     string `json:"title"`
+	State     string `json:"state"`
+	Owner     string `json:"owner"`
+	AttemptID string `json:"attempt_id"`
+	Intent    string `json:"intent,omitempty"`
+	Spec      string `json:"spec,omitempty"`
+	Result    string `json:"result,omitempty"`
+	Risk      string `json:"risk,omitempty"`
+	// Queue redesign fields: the board sorts by priority, then seq (drag
+	// order, 0 = not dragged), and jumps into session_id when set.
+	Priority     string      `json:"priority"`
+	Seq          int64       `json:"seq"`
+	SessionID    string      `json:"session_id,omitempty"`
+	ResourceKeys []string    `json:"resource_keys,omitempty"`
+	Scheduled    bool        `json:"scheduled"`
+	CreatedAt    string      `json:"created_at"`
+	UpdatedAt    string      `json:"updated_at"`
+	Events       []eventJSON `json:"events,omitempty"`
 }
 
 type eventJSON struct {
@@ -285,20 +302,51 @@ type eventJSON struct {
 
 func toTaskJSON(t core.Task) taskJSON {
 	return taskJSON{
-		ID:        t.TaskID,
-		ParentID:  t.ParentID,
-		Project:   t.Project,
-		Title:     t.Title,
-		State:     t.State,
-		Owner:     t.OwnerNode,
-		AttemptID: t.AttemptID,
-		Intent:    t.Intent,
-		Spec:      t.SpecJSON,
-		Result:    t.ResultJSON,
-		Risk:      t.Risk,
-		CreatedAt: ts(t.CreatedAt),
-		UpdatedAt: ts(t.UpdatedAt),
+		ID:           t.TaskID,
+		ParentID:     t.ParentID,
+		Project:      t.Project,
+		Title:        t.Title,
+		State:        t.State,
+		Owner:        t.OwnerNode,
+		AttemptID:    t.AttemptID,
+		Intent:       t.Intent,
+		Spec:         t.SpecJSON,
+		Result:       t.ResultJSON,
+		Risk:         t.Risk,
+		Priority:     priorityLabel(t.Priority),
+		Seq:          t.Seq,
+		SessionID:    t.SessionID,
+		ResourceKeys: t.ResourceKeys,
+		Scheduled:    t.Scheduled,
+		CreatedAt:    ts(t.CreatedAt),
+		UpdatedAt:    ts(t.UpdatedAt),
 	}
+}
+
+// priorityLabel maps the stored numeric priority to its wire label; unknown
+// values report normal rather than breaking the board.
+func priorityLabel(p int) string {
+	switch p {
+	case core.PriorityHigh:
+		return "high"
+	case core.PriorityLow:
+		return "low"
+	default:
+		return "normal"
+	}
+}
+
+// parsePriority is priorityLabel's inverse; ok=false on unknown labels.
+func parsePriority(label string) (int, bool) {
+	switch label {
+	case "high":
+		return core.PriorityHigh, true
+	case "normal":
+		return core.PriorityNormal, true
+	case "low":
+		return core.PriorityLow, true
+	}
+	return 0, false
 }
 
 // listTasks serves the queue, optionally filtered by state and project.

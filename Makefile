@@ -4,7 +4,7 @@ VERSION ?= 0.0.1
 LDFLAGS := -s -w -X github.com/Xustalis/OpenPanda/internal/version.Version=$(VERSION)
 
 .PHONY: all build web build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 \
-        test vet race gate run run-local measure clean icons release
+        dev test vet race gate run run-local measure clean icons release
 
 all: build
 
@@ -70,8 +70,13 @@ gate: build vet test race
 icons:
 	$(GO) run ./scripts/genicons
 
+# Quick-start: build (if needed) and open the web console with config.yaml.
+# One command to see everything — auto token, auto browser, loopback-only.
+dev: build
+	./bin/panda web --config config.yaml
+
 run:
-	$(GO) run ./cmd/panda --config config.example.yaml
+	$(GO) run ./cmd/panda --config config.yaml
 
 # Start the daemon + webui sidecar locally with one command (see scripts/run-local.sh).
 run-local:

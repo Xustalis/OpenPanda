@@ -133,7 +133,12 @@ export function App() {
             onOpenTask={(id) => navigate({ view: 'detail', id })}
           />
         )}
-        {route.view === 'queue' && <QueueView onOpen={(id) => navigate({ view: 'detail', id })} />}
+        {route.view === 'queue' && (
+          <QueueView
+            onOpen={(id) => navigate({ view: 'detail', id })}
+            onOpenSession={(id) => navigate({ view: 'sessions', id })}
+          />
+        )}
         {route.view === 'detail' && (
           <DetailView id={route.id} onBack={() => navigate({ view: 'queue' })} />
         )}

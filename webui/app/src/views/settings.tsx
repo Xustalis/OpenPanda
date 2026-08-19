@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks'
-import { api, type MCPSettings, type ModelSettings } from '../api/client'
+import { api, type AgentInfo, type AgentTestResult, type MCPSettings, type ModelSettings } from '../api/client'
 import { useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 
@@ -190,7 +190,85 @@ export function SettingsView() {
       </form>
 
       <MCPSection />
+      <AgentsSection />
     </section>
+  )
+}
+
+/** Agent CLIs (queue redesign §6): which coding agents the node can drive —
+ *  claude code / opencode / codex — with install path, best-effort version,
+ *  and a live connectivity test. */
+function AgentsSection() {
+  const [agents, setAgents] = useState<AgentInfo[] | null>(null)
+  const [error, setError] = useState('')
+  const [testing, setTesting] = useState('')
+  const [results, setResults] = useState<Record<string, AgentTestResult>>({})
+
+  useEffect(() => {
+    api
+      .agents()
+      .then(setAgents)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+  }, [])
+
+  async function test(name: string) {
+    if (testing) return
+    setTesting(name)
+    try {
+      const r = await api.testAgent(name)
+      setResults((rs) => ({ ...rs, [name]: r }))
+    } catch (e: unknown) {
+      setResults((rs) => ({
+        ...rs,
+        [name]: { name, ok: false, error: e instanceof Error ? e.message : String(e) },
+      }))
+    } finally {
+      setTesting('')
+    }
+  }
+
+  if (error) {
+    return (
+      <div class="card settings-card">
+        <h2 class="block-title">{t('settings.agents')}</h2>
+        <p class="gate-error">{error}</p>
+      </div>
+    )
+  }
+  if (!agents) return null
+
+  return (
+    <div class="card settings-card agents-card">
+      <h2 class="block-title">{t('settings.agents')}</h2>
+      <p class="hint">{t('settings.agentsHelp')}</p>
+      <ul class="agent-list">
+        {agents.map((a) => {
+          const r = results[a.name]
+          return (
+            <li key={a.name} class={`agent-row${a.installed ? '' : ' missing'}`}>
+              <div class="agent-main">
+                <span class="agent-name mono">{a.binary}</span>
+                <span class={`badge ${a.installed ? 'green' : 'red'}`}>
+                  {a.installed ? t('settings.agentInstalled') : t('settings.agentMissing')}
+                </span>
+                {a.installed && a.version && <span class="agent-version dim">{a.version}</span>}
+              </div>
+              {a.installed && a.path && <div class="agent-path dim mono">{a.path}</div>}
+              {r && (
+                <div class={`test-result ${r.ok ? 'ok' : 'bad'}`}>
+                  {r.ok
+                    ? t('settings.agentOk', { version: r.version ?? '' })
+                    : `${t('settings.agentFail')} ${r.error ?? ''}`}
+                </div>
+              )}
+              <button class="btn small" disabled={!a.installed || testing !== ''} onClick={() => test(a.name)}>
+                {testing === a.name ? t('settings.agentTesting') : t('settings.agentTest')}
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
   )
 }
 

@@ -228,6 +228,13 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	send("result", res)
 
+	// Queue redesign: bind a spawned task back to this session so the board
+	// card can jump into it and the session streams the task's progress.
+	if out.Kind == "task" && out.TaskID != "" {
+		// Bookkeeping only; the result already streamed to the client.
+		_ = h.store.SetSessionID(r.Context(), out.TaskID, sess.ID)
+	}
+
 	turn := sessions.Turn{Role: "assistant", Kind: out.Kind}
 	if out.Kind == "task" {
 		turn.Text = out.TaskID

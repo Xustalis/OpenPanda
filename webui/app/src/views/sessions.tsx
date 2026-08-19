@@ -8,7 +8,7 @@ import {
   type SessionTurn,
 } from '../api/client'
 import { PandaMark } from '../brand/panda'
-import { useLocaleRerender } from '../hooks'
+import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 
 /** A chat message in the transcript: a stored turn, or the in-flight
@@ -306,6 +306,8 @@ function ChatHero({ onPick }: { onPick(prompt: string): void }) {
 }
 
 function ChatBubble({ msg, onOpenTask }: { msg: ChatMsg; onOpenTask(id: string): void }) {
+  const [chainOpen, setChainOpen] = useState(false)
+
   if (msg.role === 'user') {
     return (
       <div class="msg user">
@@ -335,6 +337,10 @@ function ChatBubble({ msg, onOpenTask }: { msg: ChatMsg; onOpenTask(id: string):
           <div class="task-card">
             <span class="badge blue">{t('state.running') === msg.result?.task_state ? t('sessions.taskCreated') : msg.result?.task_state || t('sessions.taskCreated')}</span>
             {msg.result?.stdout && <pre class="task-out">{msg.result.stdout}</pre>}
+            <button class="btn small chain-toggle" onClick={() => setChainOpen((v) => !v)}>
+              {chainOpen ? t('sessions.chainHide') : t('sessions.chainShow')}
+            </button>
+            {chainOpen && <TaskChain taskId={msg.ref} />}
             <a href={`#/task/${encodeURIComponent(msg.ref)}`} onClick={() => onOpenTask(msg.ref!)}>
               {t('sessions.viewTask')} →
             </a>
@@ -342,5 +348,26 @@ function ChatBubble({ msg, onOpenTask }: { msg: ChatMsg; onOpenTask(id: string):
         )}
       </div>
     </div>
+  )
+}
+
+/** The task's thinking chain: the task_events log replayed live — history
+ *  comes from GET /api/tasks/{id}/logs, and the panel's SSE change signal
+ *  triggers a refetch while the chain is open (design §5). */
+function TaskChain({ taskId }: { taskId: string }) {
+  const change = useChangeSignal()
+  const { data, error } = useAsync(() => api.logs(taskId), [taskId], change)
+  if (error) return <p class="dim chain-empty">{t('common.error')} ({error})</p>
+  const events = data?.events ?? []
+  if (events.length === 0) return <p class="dim chain-empty">{t('sessions.chainEmpty')}</p>
+  return (
+    <ol class="timeline chain">
+      {events.map((ev, i) => (
+        <li key={i}>
+          <span class="dim">{new Date(ev.ts * 1000).toLocaleTimeString()}</span> <code>{ev.type}</code>
+          {ev.data && ev.data !== '{}' && <pre class="timeline-data">{ev.data}</pre>}
+        </li>
+      ))}
+    </ol>
   )
 }

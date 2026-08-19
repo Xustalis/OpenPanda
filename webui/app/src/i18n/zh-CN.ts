@@ -60,6 +60,21 @@ const zhCN: Messages = {
   'queue.owner': '归属',
   'queue.updated': '更新时间',
 
+  // Queue board (queue redesign)
+  'queue.new': '新建任务',
+  'queue.newTitle': '标题',
+  'queue.newPrompt': '提示词（可选）— 作为任务指令，也是关联会话的首条消息',
+  'queue.newPriority': '优先级',
+  'queue.newProject': '项目',
+  'queue.create': '创建任务',
+  'queue.creating': '创建中…',
+  'queue.priority.high': '高',
+  'queue.priority.normal': '普通',
+  'queue.priority.low': '低',
+  'queue.priorityHint': '点击切换优先级（高 → 普通 → 低）',
+  'queue.dropHere': '拖放到此重排顺序',
+  'queue.openSession': '打开关联会话',
+
   // Detail view
   'detail.back': '返回队列',
   'detail.approve': '批准',
@@ -93,6 +108,9 @@ const zhCN: Messages = {
   'sessions.s3': '找一个小 bug 并修掉',
   'sessions.taskCreated': '任务已创建',
   'sessions.viewTask': '查看任务',
+  'sessions.chainShow': '思维链',
+  'sessions.chainHide': '收起',
+  'sessions.chainEmpty': '暂无任务事件。',
   'sessions.delete': '删除对话（及其工作树）',
   'sessions.changes': '处变更',
   'sessions.worktreeChanges': '工作树变更',
@@ -124,6 +142,16 @@ const zhCN: Messages = {
   'settings.saved': '已保存 — 下一条消息即使用新配置。',
   'settings.mcp': 'MCP 服务器',
   'settings.mcpCommand': '启动命令',
+
+  // Agent CLIs (queue redesign)
+  'settings.agents': 'Agent 命令行',
+  'settings.agentsHelp': '本节点可驱动的编码 agent。安装对应 CLI 后会自动出现在这里；「测试」会实际运行一次以检查连通性。',
+  'settings.agentInstalled': '已安装',
+  'settings.agentMissing': '未安装',
+  'settings.agentTest': '测试',
+  'settings.agentTesting': '测试中…',
+  'settings.agentOk': '正常 — {version}',
+  'settings.agentFail': '测试失败：',
   'settings.mcpPlaceholder': '例如：npx -y @modelcontextprotocol/server-filesystem /tmp',
   'settings.mcpHelp':
     '标准输入输出的 MCP 服务器命令（空格分隔参数）。留空表示禁用。保存时会实际启动并拉取工具列表，成功后 Agent 立即可调用，无需重启。',

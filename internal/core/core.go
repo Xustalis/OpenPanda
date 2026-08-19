@@ -20,6 +20,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/util"
@@ -99,6 +100,12 @@ type Core struct {
 	// response, so handleContextAck can resume the task once the snapshot
 	// arrives.
 	pendingCtx sync.Map // string -> *pendingContext
+
+	// queueSched is the node-local task queue scheduler (panel queue
+	// redesign): it adopts queued-and-scheduled tasks when resources allow.
+	// Nil until StartQueueScheduler runs; Enqueue still works without it (the
+	// task waits in queued for any scheduler instance to pick it up).
+	queueSched *queue.Scheduler
 }
 
 // NewCore constructs a Core. The card may be zero for a minimal node. The

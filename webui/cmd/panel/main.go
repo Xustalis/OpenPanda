@@ -91,6 +91,7 @@ func main() {
 		engine, err = askengine.New(ctx, cfg, askengine.Options{
 			CardPath:   *cardPath,
 			MCPCommand: *mcpCommand,
+			QueueTasks: true,
 			Logger:     logger,
 		})
 		if err != nil {

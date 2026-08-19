@@ -29,6 +29,7 @@ var migrations = []Migration{
 	{Version: 6, Name: "add_audit_hash_chain", Apply: migrateV6},
 	{Version: 7, Name: "backfill_audit_hash_chain", Apply: migrateV7},
 	{Version: 8, Name: "add_reminders", Apply: migrateV8},
+	{Version: 9, Name: "add_tasks_queue_meta", Apply: migrateV9},
 }
 
 func migrateV1(tx *sql.Tx) error {
@@ -149,6 +150,50 @@ func migrateV6(tx *sql.Tx) error {
 		return err
 	}
 	return nil
+}
+
+// migrateV9 adds the task-queue scheduling metadata (panel queue redesign):
+// priority/seq drive the board ordering, session_id links a task to its panel
+// conversation, resource_keys_json declares the resources the task occupies
+// (conflict detection for parallel scheduling), work_dir pins execution to a
+// session worktree, and scheduled marks tasks owned by the local queue
+// scheduler (as opposed to delegation re-routing). A store without the tasks
+// table (event/audit-only legacy DBs) skips the whole step.
+func migrateV9(tx *sql.Tx) error {
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	for _, col := range []struct{ name, def string }{
+		{"priority", "INTEGER NOT NULL DEFAULT 1"},
+		{"seq", "INTEGER NOT NULL DEFAULT 0"},
+		{"session_id", "TEXT"},
+		{"resource_keys_json", "TEXT"},
+		{"work_dir", "TEXT"},
+		{"scheduled", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := addColumnIfMissingTx(tx, "tasks", col.name, col.def); err != nil {
+			return err
+		}
+	}
+	_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_queue ON tasks(state, scheduled)`)
+	return err
+}
+
+// tableExistsTx reports whether name is an existing table.
+func tableExistsTx(tx *sql.Tx, name string) (bool, error) {
+	var one int
+	err := tx.QueryRow(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func migrateV8(tx *sql.Tx) error {

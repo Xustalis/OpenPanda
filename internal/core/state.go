@@ -46,6 +46,14 @@ const (
 	EvExpire   = "expire"
 )
 
+// Task priority levels for the panel queue (smaller runs first). The DB
+// column defaults to PriorityNormal so pre-redesign rows keep FIFO behavior.
+const (
+	PriorityHigh   = 0
+	PriorityNormal = 1
+	PriorityLow    = 2
+)
+
 // Task is the persisted task row (Phase 0 subset of the schema).
 type Task struct {
 	TaskID       string
@@ -76,6 +84,19 @@ type Task struct {
 	LeaseExpires int64
 	CreatedAt    int64
 	UpdatedAt    int64
+
+	// Queue-scheduling metadata (panel queue redesign). Priority/Seq order the
+	// board and the local scheduler (seq>0 = user-dragged, wins over priority);
+	// SessionID links the task to its panel conversation; ResourceKeys declare
+	// the resources the task occupies for conflict detection; WorkDir pins
+	// execution to a session worktree; Scheduled marks tasks owned by the local
+	// queue scheduler (never the delegation re-routing path).
+	Priority     int
+	Seq          int64
+	SessionID    string
+	ResourceKeys []string
+	WorkDir      string
+	Scheduled    bool
 }
 
 // TaskDetail is the entry-model-derived task metadata (design doc §6.1 tasks

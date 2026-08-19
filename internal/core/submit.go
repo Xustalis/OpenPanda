@@ -151,33 +151,43 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 
 // runLocal executes a task on this node and returns the final row + result.
 // It is the shared local branch for both SubmitLocal and Submit's local route.
-// A failed task is retried (with a fresh attempt) up to the loop detector's
-// budget; past that it is paused into review for human analysis rather than
-// left in failed or retried forever (design §14.2 signal C, plan P2-18).
 func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.TaskResultPayload, error) {
 	result, err := c.execute(ctx, t.TaskID, in.Intent, in.Requires)
+	return c.retryLoop(ctx, t.TaskID, in.Intent, in.Requires, result, err)
+}
+
+// retryLoop drives a task from its first execution outcome to a stable state:
+// a failed task is retried (with a fresh attempt) up to the loop detector's
+// budget; past that it is paused into review for human analysis rather than
+// left in failed or retried forever (design §14.2 signal C, plan P2-18). It is
+// shared by the synchronous Submit paths and the queue scheduler's runner.
+func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []string, result bus.TaskResultPayload, err error) (Task, bus.TaskResultPayload, error) {
 	if err != nil && !errors.Is(err, ErrCancelled) {
-		c.failLocal(ctx, t.TaskID, err)
-		return t, result, err
+		c.failLocal(ctx, taskID, err)
+		final, gerr := c.store.Get(ctx, taskID)
+		if gerr != nil {
+			return Task{}, result, gerr
+		}
+		return final, result, err
 	}
 
 	retries := 0
 	for {
-		final, err := c.store.Get(ctx, t.TaskID)
+		final, err := c.store.Get(ctx, taskID)
 		if err != nil {
-			return t, result, err
+			return Task{}, result, err
 		}
 		if final.State != StateFailed {
 			return final, result, nil
 		}
-		if !c.loop.Allow(t.TaskID) {
-			if rerr := c.store.Review(ctx, t.TaskID, c.nodeID, result.Stderr); rerr != nil {
-				c.logger.Warn("review task", "task", t.TaskID, "err", rerr)
+		if !c.loop.Allow(taskID) {
+			if rerr := c.store.Review(ctx, taskID, c.nodeID, result.Stderr); rerr != nil {
+				c.logger.Warn("review task", "task", taskID, "err", rerr)
 			}
 			// Re-fetch so the returned row reflects the review transition.
-			final, err = c.store.Get(ctx, t.TaskID)
+			final, err = c.store.Get(ctx, taskID)
 			if err != nil {
-				return t, result, err
+				return Task{}, result, err
 			}
 			return final, result, nil
 		}
@@ -187,16 +197,20 @@ func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.Ta
 		if c.sleep != nil {
 			c.sleep(c.retryBackoff << uint(retries))
 		}
-		if rerr := c.retryOnce(ctx, t.TaskID); rerr != nil {
-			c.logger.Warn("retry task", "task", t.TaskID, "err", rerr)
+		if rerr := c.retryOnce(ctx, taskID); rerr != nil {
+			c.logger.Warn("retry task", "task", taskID, "err", rerr)
 			return final, result, rerr
 		}
 		retries++
-		c.logger.Info("retrying task", "task", t.TaskID)
-		result, err = c.run(ctx, t.TaskID, in.Intent, in.Requires)
+		c.logger.Info("retrying task", "task", taskID)
+		result, err = c.run(ctx, taskID, intent, required)
 		if err != nil && !errors.Is(err, ErrCancelled) {
-			c.failLocal(ctx, t.TaskID, err)
-			return t, result, err
+			c.failLocal(ctx, taskID, err)
+			final, gerr := c.store.Get(ctx, taskID)
+			if gerr != nil {
+				return Task{}, result, gerr
+			}
+			return final, result, err
 		}
 	}
 }

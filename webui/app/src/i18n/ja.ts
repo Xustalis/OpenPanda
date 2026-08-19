@@ -60,6 +60,21 @@ const ja: Messages = {
   'queue.owner': '担当',
   'queue.updated': '更新日時',
 
+  // Queue board (queue redesign)
+  'queue.new': '新規タスク',
+  'queue.newTitle': 'タイトル',
+  'queue.newPrompt': 'プロンプト（任意）— タスクの指示になり、連携セッションの最初のメッセージにもなります',
+  'queue.newPriority': '優先度',
+  'queue.newProject': 'プロジェクト',
+  'queue.create': 'タスクを作成',
+  'queue.creating': '作成中…',
+  'queue.priority.high': '高',
+  'queue.priority.normal': '通常',
+  'queue.priority.low': '低',
+  'queue.priorityHint': 'クリックで優先度を切り替え（高 → 通常 → 低）',
+  'queue.dropHere': 'ドロップして並べ替え',
+  'queue.openSession': '連携セッションを開く',
+
   // Detail view
   'detail.back': 'キューに戻る',
   'detail.approve': '承認',
@@ -93,6 +108,9 @@ const ja: Messages = {
   'sessions.s3': '小さなバグを見つけて直して',
   'sessions.taskCreated': 'タスクを作成しました',
   'sessions.viewTask': 'タスクを見る',
+  'sessions.chainShow': '思考の連鎖',
+  'sessions.chainHide': '折りたたむ',
+  'sessions.chainEmpty': 'タスクイベントはまだありません。',
   'sessions.delete': 'チャットを削除（ワークツリーも）',
   'sessions.changes': '件の変更',
   'sessions.worktreeChanges': 'ワークツリーの変更',
@@ -124,6 +142,16 @@ const ja: Messages = {
   'settings.saved': '保存しました — 次のメッセージから新設定が使われます。',
   'settings.mcp': 'MCP サーバー',
   'settings.mcpCommand': '起動コマンド',
+
+  // Agent CLIs (queue redesign)
+  'settings.agents': 'Agent CLI',
+  'settings.agentsHelp': 'このノードが駆動できるコーディング agent。CLI をインストールするとここに表示されます。「テスト」はバイナリを実際に実行して接続を確認します。',
+  'settings.agentInstalled': 'インストール済み',
+  'settings.agentMissing': '未インストール',
+  'settings.agentTest': 'テスト',
+  'settings.agentTesting': 'テスト中…',
+  'settings.agentOk': '正常 — {version}',
+  'settings.agentFail': 'テスト失敗：',
   'settings.mcpPlaceholder': '例: npx -y @modelcontextprotocol/server-filesystem /tmp',
   'settings.mcpHelp':
     'stdio 型 MCP サーバーのコマンド（引数はスペース区切り）。空欄で無効化。保存時に実際にサーバーを起動してツール一覧を取得し、成功すればエージェントは再起動なしで即利用できます。',

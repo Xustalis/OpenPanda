@@ -63,6 +63,21 @@ const en: Messages = {
   'queue.owner': 'Owner',
   'queue.updated': 'Updated',
 
+  // Queue board (queue redesign)
+  'queue.new': 'New task',
+  'queue.newTitle': 'Title',
+  'queue.newPrompt': 'Prompt (optional) — becomes the task instruction and the session’s first message',
+  'queue.newPriority': 'Priority',
+  'queue.newProject': 'Project',
+  'queue.create': 'Create task',
+  'queue.creating': 'Creating…',
+  'queue.priority.high': 'High',
+  'queue.priority.normal': 'Normal',
+  'queue.priority.low': 'Low',
+  'queue.priorityHint': 'Click to cycle priority (high → normal → low)',
+  'queue.dropHere': 'Drop to reorder',
+  'queue.openSession': 'Open linked session',
+
   // Detail view
   'detail.back': 'Back to queue',
   'detail.approve': 'Approve',
@@ -97,6 +112,9 @@ const en: Messages = {
   'sessions.s3': 'Find and fix a small bug',
   'sessions.taskCreated': 'Task created',
   'sessions.viewTask': 'View task',
+  'sessions.chainShow': 'Thinking chain',
+  'sessions.chainHide': 'Hide chain',
+  'sessions.chainEmpty': 'No task events yet.',
   'sessions.delete': 'Delete chat (and its worktree)',
   'sessions.changes': 'changes',
   'sessions.worktreeChanges': 'Worktree changes',
@@ -128,6 +146,17 @@ const en: Messages = {
   'settings.saved': 'Saved — the next message uses the new settings.',
   'settings.mcp': 'MCP server',
   'settings.mcpCommand': 'Launch command',
+
+  // Agent CLIs (queue redesign)
+  'settings.agents': 'Agent CLIs',
+  'settings.agentsHelp':
+    'Coding agents this node can drive. Install the CLI and it appears here; Test runs the binary to check connectivity.',
+  'settings.agentInstalled': 'installed',
+  'settings.agentMissing': 'not installed',
+  'settings.agentTest': 'Test',
+  'settings.agentTesting': 'Testing…',
+  'settings.agentOk': 'OK — {version}',
+  'settings.agentFail': 'Test failed:',
   'settings.mcpPlaceholder': 'e.g. npx -y @modelcontextprotocol/server-filesystem /tmp',
   'settings.mcpHelp':
     'A stdio MCP server command (space-separated arguments). Leave empty to disable. Saving actually spawns the server and fetches its tool list — on success the agent can call the tools immediately, no restart needed.',

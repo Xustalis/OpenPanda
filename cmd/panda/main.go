@@ -196,6 +196,11 @@ func runDaemon() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Queue scheduler (panel queue redesign): adopt queued-and-scheduled tasks
+	// in policy order (drag seq → priority → FIFO) when resources allow. Runs
+	// alongside the daemon so enqueued tasks execute even without the panel.
+	coreNode.StartQueueScheduler(ctx)
+
 	// Dreaming (design §17.3): consolidate the daily logs into long-term memory
 	// in the background — only while the node is idle, at most once per day.
 	dreamSched := memory.NewScheduler(

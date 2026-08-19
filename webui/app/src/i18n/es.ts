@@ -61,6 +61,21 @@ const es: Messages = {
   'queue.owner': 'Responsable',
   'queue.updated': 'Actualizada',
 
+  // Queue board (queue redesign)
+  'queue.new': 'Nueva tarea',
+  'queue.newTitle': 'Título',
+  'queue.newPrompt': 'Indicación (opcional) — se convierte en la instrucción de la tarea y en el primer mensaje de la sesión',
+  'queue.newPriority': 'Prioridad',
+  'queue.newProject': 'Proyecto',
+  'queue.create': 'Crear tarea',
+  'queue.creating': 'Creando…',
+  'queue.priority.high': 'Alta',
+  'queue.priority.normal': 'Normal',
+  'queue.priority.low': 'Baja',
+  'queue.priorityHint': 'Clic para alternar la prioridad (alta → normal → baja)',
+  'queue.dropHere': 'Suelta aquí para reordenar',
+  'queue.openSession': 'Abrir sesión vinculada',
+
   // Detail view
   'detail.back': 'Volver a la cola',
   'detail.approve': 'Aprobar',
@@ -94,6 +109,9 @@ const es: Messages = {
   'sessions.s3': 'Encuentra y arregla un bug pequeño',
   'sessions.taskCreated': 'Tarea creada',
   'sessions.viewTask': 'Ver tarea',
+  'sessions.chainShow': 'Cadena de razonamiento',
+  'sessions.chainHide': 'Ocultar',
+  'sessions.chainEmpty': 'Aún no hay eventos de la tarea.',
   'sessions.delete': 'Eliminar chat (y su worktree)',
   'sessions.changes': 'cambios',
   'sessions.worktreeChanges': 'Cambios del worktree',
@@ -125,6 +143,17 @@ const es: Messages = {
   'settings.saved': 'Guardado — el próximo mensaje usa la nueva configuración.',
   'settings.mcp': 'Servidor MCP',
   'settings.mcpCommand': 'Comando de arranque',
+
+  // Agent CLIs (queue redesign)
+  'settings.agents': 'CLI de agentes',
+  'settings.agentsHelp':
+    'Agentes de código que este nodo puede manejar. Instala el CLI y aparecerá aquí; «Probar» ejecuta el binario para comprobar la conectividad.',
+  'settings.agentInstalled': 'instalado',
+  'settings.agentMissing': 'no instalado',
+  'settings.agentTest': 'Probar',
+  'settings.agentTesting': 'Probando…',
+  'settings.agentOk': 'OK — {version}',
+  'settings.agentFail': 'Prueba fallida:',
   'settings.mcpPlaceholder': 'p. ej. npx -y @modelcontextprotocol/server-filesystem /tmp',
   'settings.mcpHelp':
     'Comando de un servidor MCP stdio (argumentos separados por espacios). Vacío lo desactiva. Al guardar se arranca el servidor y se obtiene su lista de herramientas; si funciona, el agente puede usarlas al instante, sin reiniciar.',

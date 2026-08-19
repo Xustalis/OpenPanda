@@ -61,6 +61,21 @@ const de: Messages = {
   'queue.owner': 'Verantwortlich',
   'queue.updated': 'Aktualisiert',
 
+  // Queue board (queue redesign)
+  'queue.new': 'Neue Aufgabe',
+  'queue.newTitle': 'Titel',
+  'queue.newPrompt': 'Prompt (optional) — wird zur Aufgabenanweisung und zur ersten Nachricht der Session',
+  'queue.newPriority': 'Priorität',
+  'queue.newProject': 'Projekt',
+  'queue.create': 'Aufgabe erstellen',
+  'queue.creating': 'Wird erstellt…',
+  'queue.priority.high': 'Hoch',
+  'queue.priority.normal': 'Normal',
+  'queue.priority.low': 'Niedrig',
+  'queue.priorityHint': 'Klicken zum Wechseln der Priorität (hoch → normal → niedrig)',
+  'queue.dropHere': 'Zum Neuanordnen hier ablegen',
+  'queue.openSession': 'Verknüpfte Session öffnen',
+
   // Detail view
   'detail.back': 'Zurück zur Warteschlange',
   'detail.approve': 'Genehmigen',
@@ -94,6 +109,9 @@ const de: Messages = {
   'sessions.s3': 'Finde und behebe einen kleinen Bug',
   'sessions.taskCreated': 'Aufgabe erstellt',
   'sessions.viewTask': 'Aufgabe ansehen',
+  'sessions.chainShow': 'Gedankenkette',
+  'sessions.chainHide': 'Ausblenden',
+  'sessions.chainEmpty': 'Noch keine Aufgaben-Ereignisse.',
   'sessions.delete': 'Chat löschen (inkl. Worktree)',
   'sessions.changes': 'Änderungen',
   'sessions.worktreeChanges': 'Worktree-Änderungen',
@@ -125,6 +143,17 @@ const de: Messages = {
   'settings.saved': 'Gespeichert — die nächste Nachricht nutzt die neuen Einstellungen.',
   'settings.mcp': 'MCP-Server',
   'settings.mcpCommand': 'Startbefehl',
+
+  // Agent CLIs (queue redesign)
+  'settings.agents': 'Agent-CLIs',
+  'settings.agentsHelp':
+    'Coding-Agents, die dieser Knoten steuern kann. Installiere die CLI, erscheint sie hier; „Testen“ führt die Binärdatei aus und prüft die Verbindung.',
+  'settings.agentInstalled': 'installiert',
+  'settings.agentMissing': 'nicht installiert',
+  'settings.agentTest': 'Testen',
+  'settings.agentTesting': 'Testen…',
+  'settings.agentOk': 'OK — {version}',
+  'settings.agentFail': 'Test fehlgeschlagen:',
   'settings.mcpPlaceholder': 'z. B. npx -y @modelcontextprotocol/server-filesystem /tmp',
   'settings.mcpHelp':
     'Befehl eines stdio-MCP-Servers (Argumente leerzeichengetrennt). Leer deaktiviert MCP. Beim Speichern wird der Server tatsächlich gestartet und seine Tool-Liste geholt — bei Erfolg kann der Agent die Tools sofort nutzen, ohne Neustart.',
