@@ -144,16 +144,16 @@ func main() {
 	srv := &http.Server{
 		Addr: cfg.Network.PanelAddr,
 		Handler: panel.New(panel.Deps{
-			Store:     store,
-			Engine:    engine,
-			DB:        db,
-			Projects:  memory.NewProjects(cfg.Storage.ProjectsPath),
-			Push:      pushSvc,
-			Reminders: reminderStore,
-			Cfg:       cfg,
+			Store:      store,
+			Engine:     engine,
+			DB:         db,
+			Projects:   memory.NewProjects(cfg.Storage.ProjectsPath),
+			Push:       pushSvc,
+			Reminders:  reminderStore,
+			Cfg:        cfg,
 			ConfigPath: configPathOrDefault(*configPath),
-			StaticDir: *staticDir,
-			Token:     cfg.Network.PanelToken,
+			StaticDir:  *staticDir,
+			Token:      cfg.Network.PanelToken,
 		}),
 	}
 	errCh := make(chan error, 1)

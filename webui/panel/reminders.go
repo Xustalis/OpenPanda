@@ -24,9 +24,9 @@ func (h *handler) listReminders(w http.ResponseWriter, r *http.Request) {
 // Body: {"message": "...", "after_minutes": 10} or {"message": "...", "due_at": "2026-08-18T15:00:00+08:00"}.
 func (h *handler) createReminder(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Message      string `json:"message"`
+		Message      string  `json:"message"`
 		AfterMinutes float64 `json:"after_minutes"`
-		DueAt        string `json:"due_at"`
+		DueAt        string  `json:"due_at"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))

@@ -53,9 +53,9 @@ func weekdayCN(t time.Time) string {
 // weather tool endpoints (package vars so tests can point them at an
 // httptest server). Open-Meteo is keyless, free, and HTTPS-only.
 var (
-	weatherGeocodeURL = "https://geocoding-api.open-meteo.com/v1/search"
+	weatherGeocodeURL  = "https://geocoding-api.open-meteo.com/v1/search"
 	weatherForecastURL = "https://api.open-meteo.com/v1/forecast"
-	weatherHTTPClient = &http.Client{Timeout: 10 * time.Second}
+	weatherHTTPClient  = &http.Client{Timeout: 10 * time.Second}
 )
 
 // weatherDescription maps WMO weather codes to human-readable Chinese.
@@ -100,16 +100,16 @@ type geocodeResponse struct {
 
 type forecastResponse struct {
 	Current struct {
-		Time               string  `json:"time"`
-		Temperature        float64 `json:"temperature_2m"`
-		Apparent           float64 `json:"apparent_temperature"`
-		Humidity           int     `json:"relative_humidity_2m"`
-		WeatherCode        int     `json:"weather_code"`
-		WindSpeed          float64 `json:"wind_speed_10m"`
+		Time        string  `json:"time"`
+		Temperature float64 `json:"temperature_2m"`
+		Apparent    float64 `json:"apparent_temperature"`
+		Humidity    int     `json:"relative_humidity_2m"`
+		WeatherCode int     `json:"weather_code"`
+		WindSpeed   float64 `json:"wind_speed_10m"`
 	} `json:"current"`
 	Daily struct {
-		Time       []string `json:"time"`
-		WeatherCode []int    `json:"weather_code"`
+		Time        []string  `json:"time"`
+		WeatherCode []int     `json:"weather_code"`
 		TempMax     []float64 `json:"temperature_2m_max"`
 		TempMin     []float64 `json:"temperature_2m_min"`
 	} `json:"daily"`

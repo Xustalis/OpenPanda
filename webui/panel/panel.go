@@ -40,8 +40,8 @@ type Deps struct {
 	Push       *push.Service
 	Sessions   *sessions.Store
 	Worktrees  *sessions.Worktrees
-	SkillStore *skills.Store      // nil disables the skill approval endpoints
-	Reminders  *reminders.Store   // nil disables the reminder endpoints
+	SkillStore *skills.Store    // nil disables the skill approval endpoints
+	Reminders  *reminders.Store // nil disables the reminder endpoints
 	Cfg        *config.Config
 	ConfigPath string // where PUT /api/settings/model persists ("" = memory only)
 	StaticDir  string
@@ -122,7 +122,20 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("POST /api/push/unsubscribe", h.pushUnsubscribe)
 	}
 	mux.Handle("/", staticHandler(d.StaticDir))
-	return authMiddleware(d.Token, mux)
+	return securityHeaders(authMiddleware(d.Token, mux))
+}
+
+// securityHeaders adds defense-in-depth response headers to every request
+// served by the panel. Even though the panel defaults to loopback binding,
+// these headers protect against MIME sniffing, clickjacking, and referrer
+// leakage if the panel is ever exposed behind a reverse proxy.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // authMiddleware guards /api/* with a constant-time Bearer comparison. An empty

@@ -9,7 +9,7 @@
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Go](https://img.shields.io/badge/Go-%E2%89%A51.22-blue)
+![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-blue)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 ![Status](https://img.shields.io/badge/status-pre--release-yellow)
@@ -168,7 +168,7 @@ Im Inneren jedes Nodes:
 
 | Werkzeug | Version |
 |---|---|
-| Go | 1.22+ (Modul zielt auf 1.26.5) |
+| Go | 1.26.5+ |
 | Python | 3.10+ (Agent-Adapter / Voice-Sidecar) |
 | make | beliebige neuere Version |
 

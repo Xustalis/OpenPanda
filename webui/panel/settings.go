@@ -138,7 +138,7 @@ func (h *handler) testModelSettings(w http.ResponseWriter, r *http.Request) {
 
 // mcpSettingsJSON is the wire form of the MCP server configuration.
 type mcpSettingsJSON struct {
-	Command string `json:"command"` // space-separated stdio MCP server argv; "" = disabled
+	Command string `json:"command"`     // space-separated stdio MCP server argv; "" = disabled
 	FromCfg bool   `json:"from_config"` // true when the value came from config.yaml rather than the engine
 }
 

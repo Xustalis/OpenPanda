@@ -22,7 +22,7 @@ network:
   panel_addr: "127.0.0.1:7840"      # optional legacy PWA panel HTTP address; plain HTTP — keep loopback or put it behind a TLS reverse proxy (empty = disabled)
   # panel_token: ""              # Bearer token guarding /api/* (required to enable the panel; prefer env OPENPANDA_PANEL_TOKEN)
   peers:                         # manual peers
-    - "worker-1.your-tailnet.ts.net:7836"
+    # - "worker-1.your-tailnet.ts.net:7836"
 
 storage:
   db_path: "./data/openpanda.db"
