@@ -310,6 +310,11 @@ export const api = {
     return request('GET', '/api/memory')
   },
 
+  /** Rewrite USER.md / MEMORY.md ("user" | "memory"); dreams is read-only. */
+  saveMemory(file: 'user' | 'memory', content: string): Promise<{ file: string; chars: number; limit: number }> {
+    return request('PUT', `/api/memory/${file}`, { content })
+  },
+
   // ---- MCP settings ----
 
   getMCPSettings(): Promise<MCPSettings> {
@@ -428,6 +433,8 @@ export interface MemoryFiles {
   memory: string
   dreams: string
   time: string // node's current time, RFC3339
+  user_limit: number // char caps for the live edit counter
+  mem_limit: number
 }
 
 export interface SessionTurn {

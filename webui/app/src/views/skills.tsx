@@ -2,6 +2,9 @@ import { useState } from 'preact/hooks'
 import { api, type SkillEntry } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
+import { ErrorState, PageHeader } from '../components/page'
+import { toast, toastError } from '../components/toast'
+import { confirmDialog } from '../components/confirm'
 
 /** The skills view: every skill with its approval status — the web
  *  equivalent of `panda skill list`. Pending entries await the human
@@ -9,33 +12,54 @@ import { t } from '../i18n'
 export function SkillsView() {
   useLocaleRerender()
   const change = useChangeSignal()
-  const { data: skills, error } = useAsync(() => api.skills(), [], change)
+  const [tick, setTick] = useState(0)
+  const { data: skills, error } = useAsync(() => api.skills(), [], change + tick)
   const [busy, setBusy] = useState('')
-  const [actionError, setActionError] = useState('')
 
   async function act(name: string, approve: boolean) {
     if (busy) return
+    // Rejecting a skill is irreversible and buries the generated content —
+    // confirm before it happens.
+    if (!approve) {
+      const ok = await confirmDialog({
+        title: t('skills.rejectConfirmTitle'),
+        message: t('skills.rejectConfirmMsg', { name }),
+        confirmLabel: t('skills.reject'),
+      })
+      if (!ok) return
+    }
     setBusy(name)
-    setActionError('')
     try {
-      if (approve) await api.approveSkill(name)
-      else await api.rejectSkill(name)
+      if (approve) {
+        await api.approveSkill(name)
+        toast(t('skills.approvedToast', { name }), 'success')
+      } else {
+        await api.rejectSkill(name)
+        toast(t('skills.rejectedToast', { name }), 'info')
+      }
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e))
+      toastError(e)
     } finally {
       setBusy('')
     }
   }
 
-  if (error) return <p class="dim">{t('common.error')} ({error})</p>
+  if (error)
+    return (
+      <ErrorState
+        title={t('skills.title')}
+        sub={t('skills.subtitle')}
+        error={error}
+        onRetry={() => setTick((v) => v + 1)}
+      />
+    )
 
   const pending = (skills ?? []).filter((s) => s.status === 'pending')
   const rest = (skills ?? []).filter((s) => s.status !== 'pending')
 
   return (
     <section>
-      <h1 class="page-title">{t('skills.title')}</h1>
-      <p class="page-sub">{t('skills.subtitle')}</p>
+      <PageHeader title={t('skills.title')} sub={t('skills.subtitle')} />
 
       {pending.length > 0 && (
         <div class="card skills-pending">
@@ -56,7 +80,6 @@ export function SkillsView() {
           <SkillRow key={s.name} skill={s} busy={busy === s.name} onAct={act} />
         ))}
       </div>
-      {actionError && <p class="gate-error">{actionError}</p>}
     </section>
   )
 }

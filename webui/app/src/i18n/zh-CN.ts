@@ -31,9 +31,11 @@ const zhCN: Messages = {
   'common.error': '出了点问题。',
   'common.retry': '重试',
   'common.cancel': '取消',
+  'common.confirm': '确认',
   'common.save': '保存',
   'common.close': '关闭',
   'common.empty': '这里还没有内容。',
+  'common.loadFail': '加载失败 — 请稍后重试。',
 
   // Task states
   'state.submitted': '已提交',
@@ -86,6 +88,10 @@ const zhCN: Messages = {
   'detail.rejectReason': '原因（可选，记录进任务日志）',
   'detail.rejectConfirm': '确认拒绝',
   'detail.cancelTask': '取消任务',
+  'detail.cancelConfirmTitle': '取消这个任务？',
+  'detail.cancelConfirmMsg': '任务将被标记为已取消，正在执行的进程会被终止。',
+  'detail.cancelledToast': '任务已取消。',
+  'detail.approvedToast': '任务已批准。',
   'detail.rejectedViaWeb': '经 Web 面板拒绝',
   'detail.id': '任务 ID',
   'detail.project': '项目',
@@ -116,6 +122,9 @@ const zhCN: Messages = {
   'sessions.chainHide': '收起',
   'sessions.chainEmpty': '暂无任务事件。',
   'sessions.delete': '删除对话（及其工作树）',
+  'sessions.deleteTitle': '删除这个对话？',
+  'sessions.deleteMsg': '对话记录及其 git 工作树、分支将被一并删除，无法恢复。',
+  'sessions.deleteConfirm': '删除对话',
   'sessions.changes': '处变更',
   'sessions.worktreeChanges': '工作树变更',
   'sessions.merge': '合并到当前分支',
@@ -171,6 +180,10 @@ const zhCN: Messages = {
   'skills.noOthers': '还没有已批准或已拒绝的技能。',
   'skills.approve': '批准',
   'skills.reject': '拒绝',
+  'skills.rejectConfirmTitle': '拒绝这个技能？',
+  'skills.rejectConfirmMsg': '技能 {name} 将被标记为已拒绝，不会再运行。',
+  'skills.approvedToast': '技能 {name} 已批准。',
+  'skills.rejectedToast': '技能 {name} 已拒绝。',
 
   // System view
   'system.title': '系统',
@@ -225,6 +238,9 @@ const zhCN: Messages = {
   'reminders.dueIn': '{d}后',
   'reminders.overdue': '已到点',
   'reminders.firedAt': '触发于',
+  'reminders.delete': '删除',
+  'reminders.deleteTitle': '删除这条提醒？',
+  'reminders.deleteMsg': '提醒将被永久删除，到点不会再触发。',
   'reminders.notify': '开启浏览器通知',
   'reminders.notifyHint': '开启后，即使页面在后台，到点的提醒也会推送系统通知。',
   'reminders.notifyOn': '浏览器通知已开启 — 到点的提醒会推送系统通知。',
@@ -242,6 +258,10 @@ const zhCN: Messages = {
   'memory.memory': '学到的东西',
   'memory.dreams': '梦境',
   'memory.empty': '（暂无内容 — 记忆会随对话逐渐积累）',
+  'memory.edit': '编辑',
+  'memory.editHint': '多条记忆用 § 分隔；保存后立即生效。',
+  'memory.saved': '已保存 — 下一条消息即生效。',
+  'memory.saving': '保存中…',
 }
 
 export default zhCN

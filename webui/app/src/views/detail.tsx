@@ -3,30 +3,58 @@ import { api, type Task } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { StateBadge } from '../components/state-badge'
+import { toast, toastError } from '../components/toast'
+import { confirmDialog } from '../components/confirm'
 
 export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
   useLocaleRerender()
   const change = useChangeSignal()
-  const { data: task, error } = useAsync(() => api.task(id), [id], change)
+  const [tick, setTick] = useState(0)
+  const { data: task, error } = useAsync(() => api.task(id), [id], change + tick)
   const [busy, setBusy] = useState(false)
-  const [actionError, setActionError] = useState('')
   const [rejecting, setRejecting] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
 
-  async function act(fn: () => Promise<unknown>) {
+  async function act(fn: () => Promise<unknown>, okMsg?: string) {
     if (busy) return
     setBusy(true)
-    setActionError('')
     try {
       await fn()
+      if (okMsg) toast(okMsg, 'success')
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e))
+      toastError(e)
     } finally {
       setBusy(false)
     }
   }
 
-  if (error) return <p class="dim">{t('common.error')} ({error})</p>
+  async function cancelTask() {
+    const ok = await confirmDialog({
+      title: t('detail.cancelConfirmTitle'),
+      message: t('detail.cancelConfirmMsg'),
+      confirmLabel: t('detail.cancelTask'),
+    })
+    if (!ok) return
+    await act(() => api.cancel(task!.id), t('detail.cancelledToast'))
+  }
+
+  if (error)
+    return (
+      <section>
+        <button class="btn" onClick={onBack}>
+          ← {t('detail.back')}
+        </button>
+        <div class="card error-state" style={{ marginTop: '16px' }}>
+          <span class="error-state-title">{t('common.loadFail')}</span>
+          <span class="dim error-state-detail">{error}</span>
+          <div>
+            <button class="btn" onClick={() => setTick((v) => v + 1)}>
+              {t('common.retry')}
+            </button>
+          </div>
+        </div>
+      </section>
+    )
   if (!task) return <p class="dim">{t('common.loading')}</p>
 
   const cancellable = !['done', 'failed', 'cancelled', 'expired'].includes(task.state)
@@ -45,7 +73,11 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
         <div class="detail-actions">
           {task.state === 'review' && !rejecting && (
             <>
-              <button class="btn primary" disabled={busy} onClick={() => act(() => api.approve(task.id))}>
+              <button
+                class="btn primary"
+                disabled={busy}
+                onClick={() => act(() => api.approve(task.id), t('detail.approvedToast'))}
+              >
                 {t('detail.approve')}
               </button>
               <button class="btn danger" disabled={busy} onClick={() => setRejecting(true)}>
@@ -87,12 +119,11 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
             </div>
           )}
           {cancellable && (
-            <button class="btn" disabled={busy} onClick={() => act(() => api.cancel(task.id))}>
+            <button class="btn" disabled={busy} onClick={cancelTask}>
               {t('detail.cancelTask')}
             </button>
           )}
         </div>
-        {actionError && <p class="gate-error">{actionError}</p>}
       </div>
 
       <div class="detail-grid">

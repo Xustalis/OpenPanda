@@ -12,6 +12,8 @@ import { SkillsView } from './views/skills'
 import { SystemView } from './views/system'
 import { RemindersView } from './views/reminders'
 import { MemoryView } from './views/memory'
+import { ToastHost } from './components/toast'
+import { ConfirmHost } from './components/confirm'
 
 type Route =
   | { view: 'sessions'; id: string | null }
@@ -116,6 +118,8 @@ export function App() {
 
   return (
     <div class="shell">
+      <ToastHost />
+      <ConfirmHost />
       <aside class="sidebar">
         <a href="#/chat" class="wordmark-link">
           <PandaWordmark />

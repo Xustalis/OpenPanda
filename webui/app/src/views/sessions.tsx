@@ -10,6 +10,8 @@ import {
 import { PandaMark } from '../brand/panda'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
+import { toastError } from '../components/toast'
+import { confirmDialog } from '../components/confirm'
 
 /** A chat message in the transcript: a stored turn, or the in-flight
  * assistant reply being streamed right now. */
@@ -117,7 +119,19 @@ export function SessionsView({
   }
 
   async function removeChat(id: string) {
-    await api.deleteSession(id)
+    // Deleting a session also drops its worktree and branch — confirm first.
+    const ok = await confirmDialog({
+      title: t('sessions.deleteTitle'),
+      message: t('sessions.deleteMsg'),
+      confirmLabel: t('sessions.deleteConfirm'),
+    })
+    if (!ok) return
+    try {
+      await api.deleteSession(id)
+    } catch (e) {
+      toastError(e)
+      return
+    }
     setSessions((ls) => ls.filter((s) => s.id !== id))
     if (id === activeId) onOpenSession('')
   }

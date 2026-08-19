@@ -2,6 +2,9 @@ import { useState } from 'preact/hooks'
 import { api, type Reminder } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
+import { ErrorState, PageHeader } from '../components/page'
+import { toast, toastError } from '../components/toast'
+import { confirmDialog } from '../components/confirm'
 
 /** The reminders view — the web face of the reminder system (design P1-28):
  *  add ("remind me in N minutes" or at an absolute time), watch the pending
@@ -10,19 +13,18 @@ import { t } from '../i18n'
 export function RemindersView() {
   useLocaleRerender()
   const change = useChangeSignal()
-  const { data: reminders, error } = useAsync(() => api.reminders(), [], change)
+  const [tick, setTick] = useState(0)
+  const { data: reminders, error } = useAsync(() => api.reminders(), [], change + tick)
   const [message, setMessage] = useState('')
   const [minutes, setMinutes] = useState('')
   const [dueAt, setDueAt] = useState('')
   const [adding, setAdding] = useState(false)
-  const [addError, setAddError] = useState('')
   const [notifyState, setNotifyState] = useState<'idle' | 'on' | 'unsupported' | 'denied' | 'error'>('idle')
 
   async function add(e: Event) {
     e.preventDefault()
     if (adding || !message.trim()) return
     setAdding(true)
-    setAddError('')
     try {
       if (dueAt) {
         // datetime-local has no timezone; interpret it in the browser's zone.
@@ -35,17 +37,24 @@ export function RemindersView() {
       setMinutes('')
       setDueAt('')
     } catch (err) {
-      setAddError(err instanceof Error ? err.message : String(err))
+      toastError(err)
     } finally {
       setAdding(false)
     }
   }
 
   async function remove(id: number) {
+    // Deleting a pending reminder cancels it for good — confirm first.
+    const ok = await confirmDialog({
+      title: t('reminders.deleteTitle'),
+      message: t('reminders.deleteMsg'),
+      confirmLabel: t('reminders.delete'),
+    })
+    if (!ok) return
     try {
       await api.deleteReminder(id)
-    } catch {
-      // the SSE signal re-syncs the list; a missing row is harmless
+    } catch (e) {
+      toastError(e)
     }
   }
 
@@ -76,15 +85,22 @@ export function RemindersView() {
     }
   }
 
-  if (error) return <p class="dim">{t('common.error')} ({error})</p>
+  if (error)
+    return (
+      <ErrorState
+        title={t('reminders.title')}
+        sub={t('reminders.subtitle')}
+        error={error}
+        onRetry={() => setTick((v) => v + 1)}
+      />
+    )
 
   const pending = (reminders ?? []).filter((r) => r.fired_at === 0)
   const fired = (reminders ?? []).filter((r) => r.fired_at !== 0)
 
   return (
     <section>
-      <h1 class="page-title">{t('reminders.title')}</h1>
-      <p class="page-sub">{t('reminders.subtitle')}</p>
+      <PageHeader title={t('reminders.title')} sub={t('reminders.subtitle')} />
 
       <form class="card reminder-form" onSubmit={add}>
         <input
@@ -118,7 +134,6 @@ export function RemindersView() {
           {t('reminders.add')}
         </button>
       </form>
-      {addError && <p class="gate-error">{addError}</p>}
 
       <NotifyBanner state={notifyState} onEnable={enableNotifications} />
 
@@ -170,7 +185,7 @@ function ReminderRow({ r, onDelete }: { r: Reminder; onDelete(id: number): void 
           {pending ? when : '✓'}
         </span>
         <button class="btn danger" onClick={() => onDelete(r.id)}>
-          {t('common.close')}
+          {t('reminders.delete')}
         </button>
       </div>
     </div>

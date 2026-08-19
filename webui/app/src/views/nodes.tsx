@@ -1,21 +1,34 @@
+import { useState } from 'preact/hooks'
 import { api } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
+import { ErrorState, PageHeader } from '../components/page'
 
 export function NodesView() {
   useLocaleRerender()
   const change = useChangeSignal()
-  const { data: nodes, error } = useAsync(() => api.nodes(), [], change)
+  const [tick, setTick] = useState(0)
+  const { data: nodes, error } = useAsync(() => api.nodes(), [], change + tick)
 
-  if (error) return <p class="dim">{t('common.error')} ({error})</p>
+  if (error)
+    return (
+      <ErrorState
+        title={t('nav.nodes')}
+        sub={t('nodes.subtitle')}
+        error={error}
+        onRetry={() => setTick((v) => v + 1)}
+      />
+    )
 
   return (
     <section>
-      <h1 class="page-title">{t('nav.nodes')}</h1>
-      <p class="page-sub">{t('nodes.subtitle')}</p>
+      <PageHeader title={t('nav.nodes')} sub={t('nodes.subtitle')} />
 
       {nodes === null ? (
-        <p class="dim">{t('common.loading')}</p>
+        <p class="dim">
+          <span class="spinner spinner-inline" aria-hidden="true" />
+          {t('common.loading')}
+        </p>
       ) : nodes.length === 0 ? (
         <div class="card">{t('nodes.empty')}</div>
       ) : (

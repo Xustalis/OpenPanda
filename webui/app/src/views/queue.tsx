@@ -3,6 +3,7 @@ import { api, type Task } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { StateBadge } from '../components/state-badge'
+import { ErrorState } from '../components/page'
 
 // The queue is a kanban board (design §11.2): the user never navigates a task
 // tree — they see what is waiting, what is running, what needs their approval,
@@ -67,7 +68,15 @@ export function QueueView({
     return [...set].sort()
   }, [tasks])
 
-  if (error) return <p class="dim">{t('common.error')} ({error})</p>
+  if (error)
+    return (
+      <ErrorState
+        title={t('nav.queue')}
+        sub={t('queue.subtitle')}
+        error={error}
+        onRetry={bump}
+      />
+    )
 
   const byColumn = new Map<string, Task[]>()
   for (const col of COLUMNS) byColumn.set(col.key, [])

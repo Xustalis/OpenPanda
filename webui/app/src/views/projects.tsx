@@ -2,36 +2,44 @@ import { useState } from 'preact/hooks'
 import { api } from '../api/client'
 import { useAsync, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
+import { ErrorState, PageHeader } from '../components/page'
+import { toastError } from '../components/toast'
 
 export function ProjectsView({ onOpenProject }: { onOpenProject(name: string): void }) {
   useLocaleRerender()
-  const { data, error } = useAsync(() => api.projects(), [])
+  const [tick, setTick] = useState(0)
+  const { data, error } = useAsync(() => api.projects(), [], tick)
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
-  const [formError, setFormError] = useState('')
 
   async function create(e: Event) {
     e.preventDefault()
     const trimmed = name.trim()
     if (!trimmed || busy) return
     setBusy(true)
-    setFormError('')
     try {
       await api.createProject(trimmed)
       setName('')
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : String(err))
+      toastError(err)
     } finally {
       setBusy(false)
     }
   }
 
-  if (error) return <p class="dim">{t('common.error')} ({error})</p>
+  if (error)
+    return (
+      <ErrorState
+        title={t('nav.projects')}
+        sub={t('projects.subtitle')}
+        error={error}
+        onRetry={() => setTick((v) => v + 1)}
+      />
+    )
 
   return (
     <section>
-      <h1 class="page-title">{t('nav.projects')}</h1>
-      <p class="page-sub">{t('projects.subtitle')}</p>
+      <PageHeader title={t('nav.projects')} sub={t('projects.subtitle')} />
 
       <form class="card project-create" onSubmit={create}>
         <input
@@ -44,11 +52,13 @@ export function ProjectsView({ onOpenProject }: { onOpenProject(name: string): v
         <button class="btn primary" type="submit" disabled={busy || !name.trim()}>
           {t('projects.create')}
         </button>
-        {formError && <p class="gate-error">{formError}</p>}
       </form>
 
       {data === null ? (
-        <p class="dim">{t('common.loading')}</p>
+        <p class="dim">
+          <span class="spinner spinner-inline" aria-hidden="true" />
+          {t('common.loading')}
+        </p>
       ) : data.projects.length === 0 ? (
         <div class="card">{t('projects.empty')}</div>
       ) : (

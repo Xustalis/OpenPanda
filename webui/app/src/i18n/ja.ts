@@ -31,9 +31,11 @@ const ja: Messages = {
   'common.error': '問題が発生しました。',
   'common.retry': '再試行',
   'common.cancel': 'キャンセル',
+  'common.confirm': '確認',
   'common.save': '保存',
   'common.close': '閉じる',
   'common.empty': 'まだ何もありません。',
+  'common.loadFail': '読み込みに失敗しました — 少し待ってから再試行してください。',
 
   // Task states
   'state.submitted': '送信済み',
@@ -86,6 +88,10 @@ const ja: Messages = {
   'detail.rejectReason': '理由（任意、タスクログに記録）',
   'detail.rejectConfirm': '却下を確定',
   'detail.cancelTask': 'タスクをキャンセル',
+  'detail.cancelConfirmTitle': 'このタスクをキャンセルしますか？',
+  'detail.cancelConfirmMsg': 'タスクはキャンセル済みとしてマークされ、実行中のプロセスは停止されます。',
+  'detail.cancelledToast': 'タスクをキャンセルしました。',
+  'detail.approvedToast': 'タスクを承認しました。',
   'detail.rejectedViaWeb': 'Web パネルから却下',
   'detail.id': 'タスク ID',
   'detail.project': 'プロジェクト',
@@ -116,6 +122,9 @@ const ja: Messages = {
   'sessions.chainHide': '折りたたむ',
   'sessions.chainEmpty': 'タスクイベントはまだありません。',
   'sessions.delete': 'チャットを削除（ワークツリーも）',
+  'sessions.deleteTitle': 'このチャットを削除しますか？',
+  'sessions.deleteMsg': '会話履歴と git ワークツリー、ブランチがすべて削除されます。元に戻せません。',
+  'sessions.deleteConfirm': 'チャットを削除',
   'sessions.changes': '件の変更',
   'sessions.worktreeChanges': 'ワークツリーの変更',
   'sessions.merge': '現在のブランチへマージ',
@@ -171,6 +180,10 @@ const ja: Messages = {
   'skills.noOthers': '承認済み/拒否済みのスキルはまだありません。',
   'skills.approve': '承認',
   'skills.reject': '拒否',
+  'skills.rejectConfirmTitle': 'このスキルを拒否しますか？',
+  'skills.rejectConfirmMsg': 'スキル {name} は拒否済みとしてマークされ、実行されなくなります。',
+  'skills.approvedToast': 'スキル {name} を承認しました。',
+  'skills.rejectedToast': 'スキル {name} を拒否しました。',
 
   // System view
   'system.title': 'システム',
@@ -226,6 +239,9 @@ const ja: Messages = {
   'reminders.dueIn': 'あと {d}',
   'reminders.overdue': '時刻到達',
   'reminders.firedAt': '発火',
+  'reminders.delete': '削除',
+  'reminders.deleteTitle': 'このリマインダーを削除しますか？',
+  'reminders.deleteMsg': 'リマインダーは完全に削除され、通知されなくなります。',
   'reminders.notify': 'ブラウザ通知を有効化',
   'reminders.notifyHint': '有効にすると、タブが背景でも時刻になったリマインダーがシステム通知で届きます。',
   'reminders.notifyOn': 'ブラウザ通知は有効です — 発火したリマインダーが通知されます。',
@@ -244,6 +260,10 @@ const ja: Messages = {
   'memory.memory': '学んだこと',
   'memory.dreams': '夢',
   'memory.empty': '（まだ何もありません — 記憶は会話とともに蓄積されます）',
+  'memory.edit': '編集',
+  'memory.editHint': '複数の記憶は § で区切ります。保存するとすぐに反映されます。',
+  'memory.saved': '保存しました — 次のメッセージから反映されます。',
+  'memory.saving': '保存中…',
 }
 
 export default ja

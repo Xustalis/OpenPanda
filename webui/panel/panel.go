@@ -112,6 +112,7 @@ func New(d Deps) http.Handler {
 	}
 	if d.Cfg != nil {
 		mux.HandleFunc("GET /api/memory", h.getMemory)
+		mux.HandleFunc("PUT /api/memory/{file}", h.putMemory)
 	}
 	mux.HandleFunc("GET /api/settings/mcp", h.getMCPSettings)
 	mux.HandleFunc("PUT /api/settings/mcp", h.putMCPSettings)

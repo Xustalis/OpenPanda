@@ -32,9 +32,11 @@ const de: Messages = {
   'common.error': 'Etwas ist schiefgelaufen.',
   'common.retry': 'Erneut versuchen',
   'common.cancel': 'Abbrechen',
+  'common.confirm': 'Bestätigen',
   'common.save': 'Speichern',
   'common.close': 'Schließen',
   'common.empty': 'Hier ist noch nichts.',
+  'common.loadFail': 'Laden fehlgeschlagen — bitte gleich noch einmal versuchen.',
 
   // Task states
   'state.submitted': 'eingereicht',
@@ -87,6 +89,10 @@ const de: Messages = {
   'detail.rejectReason': 'Grund (optional, wird im Aufgabenlog erfasst)',
   'detail.rejectConfirm': 'Ablehnen bestätigen',
   'detail.cancelTask': 'Aufgabe abbrechen',
+  'detail.cancelConfirmTitle': 'Diese Aufgabe abbrechen?',
+  'detail.cancelConfirmMsg': 'Die Aufgabe wird als abgebrochen markiert; laufende Prozesse werden beendet.',
+  'detail.cancelledToast': 'Aufgabe abgebrochen.',
+  'detail.approvedToast': 'Aufgabe genehmigt.',
   'detail.rejectedViaWeb': 'über Web-Panel abgelehnt',
   'detail.id': 'Aufgaben-ID',
   'detail.project': 'Projekt',
@@ -117,6 +123,9 @@ const de: Messages = {
   'sessions.chainHide': 'Ausblenden',
   'sessions.chainEmpty': 'Noch keine Aufgaben-Ereignisse.',
   'sessions.delete': 'Chat löschen (inkl. Worktree)',
+  'sessions.deleteTitle': 'Diesen Chat löschen?',
+  'sessions.deleteMsg': 'Verlauf, git-Worktree und Branch werden gelöscht — das kann nicht rückgängig gemacht werden.',
+  'sessions.deleteConfirm': 'Chat löschen',
   'sessions.changes': 'Änderungen',
   'sessions.worktreeChanges': 'Worktree-Änderungen',
   'sessions.merge': 'In aktuellen Branch mergen',
@@ -174,6 +183,10 @@ const de: Messages = {
   'skills.noOthers': 'Noch keine freigegebenen oder abgelehnten Skills.',
   'skills.approve': 'Freigeben',
   'skills.reject': 'Ablehnen',
+  'skills.rejectConfirmTitle': 'Diesen Skill ablehnen?',
+  'skills.rejectConfirmMsg': 'Skill {name} wird als abgelehnt markiert und läuft nicht mehr.',
+  'skills.approvedToast': 'Skill {name} genehmigt.',
+  'skills.rejectedToast': 'Skill {name} abgelehnt.',
 
   // System view
   'system.title': 'System',
@@ -230,6 +243,9 @@ const de: Messages = {
   'reminders.dueIn': 'in {d}',
   'reminders.overdue': 'fällig',
   'reminders.firedAt': 'ausgelöst',
+  'reminders.delete': 'Löschen',
+  'reminders.deleteTitle': 'Diese Erinnerung löschen?',
+  'reminders.deleteMsg': 'Die Erinnerung wird endgültig gelöscht und nicht mehr ausgelöst.',
   'reminders.notify': 'Browser-Benachrichtigungen aktivieren',
   'reminders.notifyHint': 'Wenn aktiviert, kommen fällige Erinnerungen als Systembenachrichtigung — auch bei Tab im Hintergrund.',
   'reminders.notifyOn': 'Browser-Benachrichtigungen aktiv — fällige Erinnerungen werden gepusht.',
@@ -248,6 +264,10 @@ const de: Messages = {
   'memory.memory': 'Was er gelernt hat',
   'memory.dreams': 'Träume',
   'memory.empty': '(noch nichts hier — Gedächtnis wächst mit den Gesprächen)',
+  'memory.edit': 'Bearbeiten',
+  'memory.editHint': 'Einträge mit § trennen; gilt sofort nach dem Speichern.',
+  'memory.saved': 'Gespeichert — gilt ab der nächsten Nachricht.',
+  'memory.saving': 'Speichern…',
 }
 
 export default de

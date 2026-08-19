@@ -237,6 +237,141 @@ button {
   max-width: none;
 }
 
+/* ---- Toasts (global feedback, P1) ---- */
+
+.toast-host {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  max-width: min(380px, calc(100vw - 40px));
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 10px 14px;
+  font-size: 13.5px;
+  animation: toast-in 0.18s ease;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.toast-error {
+  border-color: var(--danger);
+}
+
+.toast-success {
+  border-color: var(--accent);
+}
+
+.toast-msg {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.toast-close {
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.toast-close:hover {
+  color: var(--text);
+}
+
+/* ---- Confirm dialog (dangerous operations, P1) ---- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  padding: 24px;
+}
+
+.modal {
+  width: min(400px, 100%);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: toast-in 0.15s ease;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.modal-msg {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13.5px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* ---- Shared page error / loading states (design-language unification, P1) ---- */
+
+.error-state {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.error-state-title {
+  color: var(--danger);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.error-state-detail {
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.spinner-inline {
+  display: inline-block;
+  vertical-align: -2px;
+  margin-right: 8px;
+}
+
 /* ---- Brand ---- */
 
 .wordmark {
@@ -1338,6 +1473,87 @@ label {
   font-size: 13px;
   line-height: 1.6;
   max-height: 60vh;
+}
+
+/* Productized memory rendering (P1): each §-separated entry is its own row.
+   A "fresh" entry — one the agent added since the previous load — carries an
+   accent bar and a soft glow that fades out. */
+.memory-entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.memory-entry {
+  padding: 9px 12px;
+  border-left: 3px solid var(--border-soft);
+  font-size: 13.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: memory-fresh 2.4s ease forwards;
+}
+
+.memory-entry + .memory-entry {
+  border-top: 1px solid var(--border-soft);
+}
+
+.memory-entry.fresh {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+@keyframes memory-fresh {
+  from {
+    background: var(--accent-soft);
+  }
+}
+
+.memory-edit-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.memory-counter {
+  font-size: 12px;
+}
+
+.memory-counter.over {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.memory-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memory-textarea {
+  resize: vertical;
+  min-height: 180px;
+  line-height: 1.6;
+  font-size: 13px;
+}
+
+.memory-editor-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.memory-editor-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .mcp-card {

@@ -32,9 +32,11 @@ const es: Messages = {
   'common.error': 'Algo salió mal.',
   'common.retry': 'Reintentar',
   'common.cancel': 'Cancelar',
+  'common.confirm': 'Confirmar',
   'common.save': 'Guardar',
   'common.close': 'Cerrar',
   'common.empty': 'Aún no hay nada aquí.',
+  'common.loadFail': 'Error al cargar — inténtalo de nuevo en un momento.',
 
   // Task states
   'state.submitted': 'enviada',
@@ -87,6 +89,10 @@ const es: Messages = {
   'detail.rejectReason': 'Motivo (opcional, queda en el registro de la tarea)',
   'detail.rejectConfirm': 'Confirmar rechazo',
   'detail.cancelTask': 'Cancelar tarea',
+  'detail.cancelConfirmTitle': '¿Cancelar esta tarea?',
+  'detail.cancelConfirmMsg': 'La tarea se marcará como cancelada y cualquier proceso en ejecución se detendrá.',
+  'detail.cancelledToast': 'Tarea cancelada.',
+  'detail.approvedToast': 'Tarea aprobada.',
   'detail.rejectedViaWeb': 'rechazada vía panel web',
   'detail.id': 'ID de tarea',
   'detail.project': 'Proyecto',
@@ -117,6 +123,9 @@ const es: Messages = {
   'sessions.chainHide': 'Ocultar',
   'sessions.chainEmpty': 'Aún no hay eventos de la tarea.',
   'sessions.delete': 'Eliminar chat (y su worktree)',
+  'sessions.deleteTitle': '¿Eliminar este chat?',
+  'sessions.deleteMsg': 'Se eliminarán la conversación, su worktree de git y la rama — no se puede deshacer.',
+  'sessions.deleteConfirm': 'Eliminar chat',
   'sessions.changes': 'cambios',
   'sessions.worktreeChanges': 'Cambios del worktree',
   'sessions.merge': 'Fusionar en la rama actual',
@@ -174,6 +183,10 @@ const es: Messages = {
   'skills.noOthers': 'Aún no hay habilidades aprobadas o rechazadas.',
   'skills.approve': 'Aprobar',
   'skills.reject': 'Rechazar',
+  'skills.rejectConfirmTitle': '¿Rechazar esta habilidad?',
+  'skills.rejectConfirmMsg': 'La habilidad {name} se marcará como rechazada y no volverá a ejecutarse.',
+  'skills.approvedToast': 'Habilidad {name} aprobada.',
+  'skills.rejectedToast': 'Habilidad {name} rechazada.',
 
   // System view
   'system.title': 'Sistema',
@@ -230,6 +243,9 @@ const es: Messages = {
   'reminders.dueIn': 'en {d}',
   'reminders.overdue': 'vencido',
   'reminders.firedAt': 'disparado',
+  'reminders.delete': 'Eliminar',
+  'reminders.deleteTitle': '¿Eliminar este recordatorio?',
+  'reminders.deleteMsg': 'El recordatorio se eliminará permanentemente y no volverá a avisar.',
   'reminders.notify': 'Activar notificaciones del navegador',
   'reminders.notifyHint': 'Al activarlo, los recordatorios llegan como notificaciones del sistema aunque la pestaña esté en segundo plano.',
   'reminders.notifyOn': 'Notificaciones activadas — los recordatorios se enviarán al navegador.',
@@ -248,6 +264,10 @@ const es: Messages = {
   'memory.memory': 'Lo que aprendió',
   'memory.dreams': 'Sueños',
   'memory.empty': '(aún nada por aquí — la memoria se acumula con las conversaciones)',
+  'memory.edit': 'Editar',
+  'memory.editHint': 'Separa las entradas con §; se aplica al guardar.',
+  'memory.saved': 'Guardado — surte efecto desde el próximo mensaje.',
+  'memory.saving': 'Guardando…',
 }
 
 export default es

@@ -34,9 +34,11 @@ const en: Messages = {
   'common.error': 'Something went wrong.',
   'common.retry': 'Retry',
   'common.cancel': 'Cancel',
+  'common.confirm': 'Confirm',
   'common.save': 'Save',
   'common.close': 'Close',
   'common.empty': 'Nothing here yet.',
+  'common.loadFail': 'Failed to load — try again shortly.',
 
   // Task states (wire-stable identifiers from internal/core/state.go)
   'state.submitted': 'submitted',
@@ -89,6 +91,10 @@ const en: Messages = {
   'detail.rejectReason': 'Reason (optional, recorded in the task log)',
   'detail.rejectConfirm': 'Confirm reject',
   'detail.cancelTask': 'Cancel task',
+  'detail.cancelConfirmTitle': 'Cancel this task?',
+  'detail.cancelConfirmMsg': 'The task will be marked cancelled and any running process will be stopped.',
+  'detail.cancelledToast': 'Task cancelled.',
+  'detail.approvedToast': 'Task approved.',
   'detail.rejectedViaWeb': 'rejected via web panel',
   'detail.id': 'Task ID',
   'detail.project': 'Project',
@@ -120,6 +126,9 @@ const en: Messages = {
   'sessions.chainHide': 'Hide chain',
   'sessions.chainEmpty': 'No task events yet.',
   'sessions.delete': 'Delete chat (and its worktree)',
+  'sessions.deleteTitle': 'Delete this chat?',
+  'sessions.deleteMsg': 'The conversation, its git worktree, and branch will be deleted — this cannot be undone.',
+  'sessions.deleteConfirm': 'Delete chat',
   'sessions.changes': 'changes',
   'sessions.worktreeChanges': 'Worktree changes',
   'sessions.merge': 'Merge into current branch',
@@ -177,6 +186,10 @@ const en: Messages = {
   'skills.noOthers': 'No approved or rejected skills yet.',
   'skills.approve': 'Approve',
   'skills.reject': 'Reject',
+  'skills.rejectConfirmTitle': 'Reject this skill?',
+  'skills.rejectConfirmMsg': 'Skill {name} will be marked rejected and will never run.',
+  'skills.approvedToast': 'Skill {name} approved.',
+  'skills.rejectedToast': 'Skill {name} rejected.',
 
   // System view
   'system.title': 'System',
@@ -232,6 +245,9 @@ const en: Messages = {
   'reminders.dueIn': 'in {d}',
   'reminders.overdue': 'due now',
   'reminders.firedAt': 'fired',
+  'reminders.delete': 'Delete',
+  'reminders.deleteTitle': 'Delete this reminder?',
+  'reminders.deleteMsg': 'The reminder will be deleted permanently and will not fire.',
   'reminders.notify': 'Enable browser notifications',
   'reminders.notifyHint': 'When enabled, reminders fire as system notifications even with this tab in the background.',
   'reminders.notifyOn': 'Browser notifications on — due reminders will be pushed.',
@@ -250,6 +266,10 @@ const en: Messages = {
   'memory.memory': 'What it learned',
   'memory.dreams': 'Dreams',
   'memory.empty': '(nothing here yet — memory builds up over conversations)',
+  'memory.edit': 'Edit',
+  'memory.editHint': 'Separate entries with §; takes effect on save.',
+  'memory.saved': 'Saved — effective from the next message.',
+  'memory.saving': 'Saving…',
 }
 
 export default en
