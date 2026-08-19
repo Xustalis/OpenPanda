@@ -256,7 +256,7 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, payload []byte) (Respon
 		return Response{}, &retryableError{status: resp.StatusCode, body: string(body)}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Response{}, fmt.Errorf("entry: api status %d: %s", resp.StatusCode, truncate(string(body), 300))
+		return Response{}, &statusError{status: resp.StatusCode, body: string(body)}
 	}
 
 	var or oaiResponse
@@ -327,7 +327,7 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 		return Response{}, &retryableError{status: resp.StatusCode, body: string(body)}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Response{}, fmt.Errorf("entry: api status %d: %s", resp.StatusCode, truncate(string(body), 300))
+		return Response{}, &statusError{status: resp.StatusCode, body: string(body)}
 	}
 
 	var mr messagesResponse
@@ -369,6 +369,19 @@ type retryableError struct {
 
 func (e *retryableError) Error() string {
 	return fmt.Sprintf("entry: retryable status %d: %s", e.status, truncate(e.body, 200))
+}
+
+// statusError marks a definitive non-OK, non-retryable API response: the
+// provider answered and rejected the call (bad key, wrong endpoint, bad
+// request). The carried code lets WrapAPIError turn it into an actionable
+// user message instead of a generic "try again later".
+type statusError struct {
+	status int
+	body   string
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("entry: api status %d: %s", e.status, truncate(e.body, 300))
 }
 
 // transientError marks a transport-level failure (connection reset, DNS, EOF,

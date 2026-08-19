@@ -4,11 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 func TestSplitCommand(t *testing.T) {
@@ -122,5 +130,72 @@ func TestAppendToolTurnsTextFallback(t *testing.T) {
 	}
 	if len(turns[2].Blocks) != 0 || !strings.Contains(turns[2].Content, "已记住") {
 		t.Fatalf("user fallback = %+v, want prose carrying the result", turns[2])
+	}
+}
+
+// TestAskTurnsMaxRoundsConverges verifies the ask loop's graceful
+// degradation: a model that never stops calling tools used to surface
+// "reached max tool rounds" as an error; now the engine runs one final
+// tool-free call over the accumulated history, forcing a text answer — the
+// ask always converges to something useful.
+func TestAskTurnsMaxRoundsConverges(t *testing.T) {
+	var mu sync.Mutex
+	var toolCalls, plainCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		hasTools := strings.Contains(string(b), `"tools"`)
+		mu.Lock()
+		if hasTools {
+			toolCalls++
+		} else {
+			plainCalls++
+		}
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if hasTools {
+			// Endless tool loop: every tool-bearing request gets another call.
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"echo","arguments":"{\"x\":1}"}}]}}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"已尽力，这是最终答复"}}]}`)
+	}))
+	defer srv.Close()
+
+	client, err := entry.NewClient(config.ModelConfig{
+		APIType: "openai", BaseURL: srv.URL, Model: "test-model", APIKey: "test-key",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	db, err := storage.Open(filepath.Join(root, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	e := &Engine{
+		cfg:      &config.Config{},
+		injector: memory.NewInjector(nil, nil),
+		registry: newTestRegistry(),
+		db:       db,
+	}
+	e.client.Store(client)
+
+	res, err := e.AskTurns(context.Background(), nil, "hi", "", true, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	if res.Kind != "answer" || !strings.Contains(res.Answer, "最终答复") {
+		t.Fatalf("res = %+v, want a converged answer", res)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if toolCalls != 6 {
+		t.Fatalf("tool-bearing calls = %d, want 6 (maxRounds)", toolCalls)
+	}
+	if plainCalls != 1 {
+		t.Fatalf("final tool-free calls = %d, want 1", plainCalls)
 	}
 }

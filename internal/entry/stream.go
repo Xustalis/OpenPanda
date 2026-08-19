@@ -20,9 +20,91 @@ import (
 // CompleteTurnsWithTools and dispatches on the configured api type.
 func (c *Client) StreamTurnsWithTools(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string)) (Response, error) {
 	if c.apiType == config.APITypeOpenAI {
-		return c.streamOpenAI(ctx, system, turns, tools, onDelta)
+		return c.streamWithRetry(ctx, func(on func(string)) (Response, error) {
+			return c.streamOpenAI(ctx, system, turns, tools, on)
+		}, onDelta)
 	}
-	return c.streamAnthropic(ctx, system, turns, tools, onDelta)
+	return c.streamWithRetry(ctx, func(on func(string)) (Response, error) {
+		return c.streamAnthropic(ctx, system, turns, tools, on)
+	}, onDelta)
+}
+
+// streamWithRetry gives the streaming path the transport resilience the
+// non-streaming path has (completeWithRetry): a retryable failure (weak
+// network, 429, 5xx) is replayed with backoff — but only while no delta has
+// been delivered to the caller. Once the user has seen text, a replay would
+// duplicate it, so the failure surfaces instead. A caller-cancelled context is
+// never retried. Delivery is judged by the deltaGuard, so a structured output
+// whose deltas were suppressed still counts as unseen and stays retryable.
+func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta func(string)) (Response, error), onDelta func(string)) (Response, error) {
+	guard := newDeltaGuard(onDelta)
+	var lastErr error
+	for attempt := 0; attempt <= c.maxRetry; attempt++ {
+		if attempt > 0 {
+			if err := sleepCtx(ctx, c.retryBase<<uint(attempt-1)); err != nil {
+				return Response{}, err
+			}
+		}
+		resp, err := stream(guard.on)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if guard.delivered || ctx.Err() != nil || !retryable(err) {
+			break
+		}
+	}
+	return Response{}, lastErr
+}
+
+// deltaGuard wraps the caller's onDelta for one streaming call and owns the
+// two concerns that share a single piece of state — what the user has
+// actually seen:
+//
+//   - Suppression: a task spec arrives as bare JSON (the system prompt
+//     demands "只输出一个 JSON 对象"), and raw JSON must never stream into a
+//     chat bubble or terminal — the parsed Output delivers it rendered at
+//     the end. The first visible byte decides the response's shape: '{' or
+//     a code fence withholds every delta; anything else is answer prose and
+//     streams live, starting with the bytes buffered while deciding.
+//   - Delivery: streamWithRetry replays a failed attempt only while the user
+//     has seen nothing, so a suppressed structured delta does not count as
+//     delivered — a mid-JSON transport drop is still safely retried.
+type deltaGuard struct {
+	onDelta    func(string)
+	buffered   []string
+	decided    bool
+	structured bool
+	delivered  bool
+}
+
+func newDeltaGuard(onDelta func(string)) *deltaGuard {
+	return &deltaGuard{onDelta: onDelta}
+}
+
+// on is the delta sink the stream implementations call.
+func (g *deltaGuard) on(text string) {
+	if !g.decided {
+		g.buffered = append(g.buffered, text)
+		trimmed := strings.TrimLeft(strings.Join(g.buffered, ""), " \t\r\n")
+		if trimmed == "" {
+			return // nothing visible yet; keep buffering
+		}
+		g.decided = true
+		g.structured = trimmed[0] == '{' || trimmed[0] == '`'
+		if g.structured {
+			g.buffered = nil
+			return
+		}
+		text = strings.Join(g.buffered, "")
+		g.buffered = nil
+	} else if g.structured {
+		return
+	}
+	g.delivered = true
+	if g.onDelta != nil {
+		g.onDelta(text)
+	}
 }
 
 // ---- Anthropic Messages SSE streaming ----
@@ -133,12 +215,21 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 
 	resp, err := c.hcStream.Do(httpReq)
 	if err != nil {
-		return Response{}, fmt.Errorf("entry: request: %w", err)
+		// A caller-cancelled context is not a transient failure and must not
+		// be retried; anything else (DNS, reset, EOF) is.
+		if ctx.Err() != nil {
+			return Response{}, fmt.Errorf("entry: request: %w", err)
+		}
+		return Response{}, &transientError{err: err}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return Response{}, &retryableError{status: resp.StatusCode, body: string(body)}
+	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return Response{}, fmt.Errorf("entry: api status %d: %s", resp.StatusCode, truncate(string(body), 300))
+		return Response{}, &statusError{status: resp.StatusCode, body: string(body)}
 	}
 
 	acc := &anthAccumulator{blocks: map[int]*ContentBlock{}, rawArgs: map[int]*strings.Builder{}}
@@ -174,7 +265,9 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 		}
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		return Response{}, fmt.Errorf("entry: read stream: %w", err)
+		// A mid-stream transport drop (unexpected EOF / reset) is transient;
+		// streamWithRetry only replays it when nothing was delivered yet.
+		return Response{}, &transientError{err: fmt.Errorf("read stream: %w", err)}
 	}
 	return acc.result(), nil
 }
@@ -208,12 +301,19 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 
 	resp, err := c.hcStream.Do(httpReq)
 	if err != nil {
-		return Response{}, fmt.Errorf("entry: request: %w", err)
+		if ctx.Err() != nil {
+			return Response{}, fmt.Errorf("entry: request: %w", err)
+		}
+		return Response{}, &transientError{err: err}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return Response{}, &retryableError{status: resp.StatusCode, body: string(body)}
+	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return Response{}, fmt.Errorf("entry: api status %d: %s", resp.StatusCode, truncate(string(body), 300))
+		return Response{}, &statusError{status: resp.StatusCode, body: string(body)}
 	}
 
 	acc := &oaiAccumulator{calls: map[int]oaiToolCall{}}
@@ -240,7 +340,9 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 		}
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		return Response{}, fmt.Errorf("entry: read stream: %w", err)
+		// A mid-stream transport drop (unexpected EOF / reset) is transient;
+		// streamWithRetry only replays it when nothing was delivered yet.
+		return Response{}, &transientError{err: fmt.Errorf("read stream: %w", err)}
 	}
 	return acc.result(), nil
 }

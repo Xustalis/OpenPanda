@@ -3,6 +3,8 @@ package entry
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -533,6 +535,65 @@ func TestCompleteNoRetryClientError(t *testing.T) {
 	}
 }
 
+// TestWrapAPIErrorActionableMessages verifies the error→guidance mapping: a
+// rejected key, a wrong endpoint, a rate limit, and an outage each produce a
+// distinct user-facing message that names the knob to fix, instead of the
+// generic "try again later".
+func TestWrapAPIErrorActionableMessages(t *testing.T) {
+	cases := []struct {
+		name    string
+		err     error
+		wantSub string
+	}{
+		{"unauthorized", &statusError{status: http.StatusUnauthorized, body: "bad key"}, "api_key"},
+		{"forbidden", &statusError{status: http.StatusForbidden, body: "denied"}, "api_key"},
+		{"not found", &statusError{status: http.StatusNotFound, body: "no route"}, "base_url"},
+		{"rate limited after retries", &retryableError{status: http.StatusTooManyRequests, body: "slow down"}, "限流"},
+		{"server down after retries", &retryableError{status: http.StatusBadGateway, body: "boom"}, "暂时不可用"},
+		{"unreachable", &transientError{err: errors.New("connection refused")}, "无法连接"},
+		{"no key", ErrNoKey, "API key"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wrapped := WrapAPIError(tc.err)
+			var ce *ClassifyError
+			if !errors.As(wrapped, &ce) {
+				t.Fatalf("WrapAPIError(%v) = %T, want *ClassifyError", tc.err, wrapped)
+			}
+			if !strings.Contains(ce.UserMsg, tc.wantSub) {
+				t.Fatalf("UserMsg = %q, want substring %q", ce.UserMsg, tc.wantSub)
+			}
+		})
+	}
+}
+
+// TestClassifySurfacesActionableError runs the full path — a 401 from the
+// provider must reach the caller as the "fix your api_key" message, not the
+// generic fallback.
+func TestClassifySurfacesActionableError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"type":"authentication_error","message":"invalid x-api-key"}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-wrong", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	_, err = Classify(context.Background(), c, nil, "", "hi")
+	if err == nil {
+		t.Fatal("expected error for 401")
+	}
+	var ce *ClassifyError
+	if !errors.As(err, &ce) {
+		t.Fatalf("err = %T (%v), want *ClassifyError", err, err)
+	}
+	if !strings.Contains(ce.Error(), "api_key") {
+		t.Fatalf("message = %q, want api_key guidance", ce.Error())
+	}
+}
+
 // TestNewClientRejectsPlainHTTP verifies the endpoint guard (M2): a remote
 // http:// base_url would send the API key cleartext and must be rejected at
 // construction, while loopback http stays allowed for a local dev model —
@@ -545,5 +606,146 @@ func TestNewClientRejectsPlainHTTP(t *testing.T) {
 		if _, err := NewClient(config.ModelConfig{BaseURL: base, APIKey: "sk"}); err != nil {
 			t.Fatalf("base_url %q should be accepted: %v", base, err)
 		}
+	}
+}
+
+// ---- streaming delta guard ----
+
+// startStreamServer spins up a fake OpenAI-compatible SSE endpoint emitting
+// the given text chunks as content deltas, then [DONE].
+func startStreamServer(t *testing.T, chunks []string) *Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		for _, c := range chunks {
+			b, _ := json.Marshal(map[string]any{
+				"choices": []map[string]any{{"delta": map[string]string{"content": c}}},
+			})
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+			flusher.Flush()
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	t.Cleanup(srv.Close)
+	c, err := NewClient(config.ModelConfig{APIType: "openai", BaseURL: srv.URL, APIKey: "sk", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	return c
+}
+
+// TestDeltaGuardSuppressesStructuredOutput verifies the guard's core rule: a
+// task spec streams as bare JSON, and raw JSON must never reach the user —
+// deltas are withheld while still not counting as delivered (so a mid-stream
+// transport drop stays retryable).
+func TestDeltaGuardSuppressesStructuredOutput(t *testing.T) {
+	var got []string
+	g := newDeltaGuard(func(s string) { got = append(got, s) })
+	g.on(`{"kind":`)
+	g.on(`"task":{}}`)
+	if len(got) != 0 {
+		t.Fatalf("forwarded %q, want structured output fully suppressed", got)
+	}
+	if g.delivered {
+		t.Fatal("suppressed deltas must not count as delivered (stream stays retryable)")
+	}
+}
+
+// TestDeltaGuardStreamsProseWithBufferedPrefix verifies prose streams live,
+// with the whitespace buffered during the decision flushed ahead of it.
+func TestDeltaGuardStreamsProseWithBufferedPrefix(t *testing.T) {
+	var got []string
+	g := newDeltaGuard(func(s string) { got = append(got, s) })
+	g.on("\n\n") // whitespace-only: buffered, nothing forwarded yet
+	g.on("你好")   // decision: prose; the buffered prefix flushes with it
+	g.on("，世界")
+	if strings.Join(got, "") != "\n\n你好，世界" {
+		t.Fatalf("forwarded %q, want the buffered prefix plus live deltas", got)
+	}
+	if !g.delivered {
+		t.Fatal("prose must count as delivered")
+	}
+}
+
+// TestDeltaGuardSuppressesFencedJSON verifies the ```json fence form of a
+// structured output is suppressed too.
+func TestDeltaGuardSuppressesFencedJSON(t *testing.T) {
+	var got []string
+	g := newDeltaGuard(func(s string) { got = append(got, s) })
+	g.on("```json\n")
+	g.on(`{"kind":"task"}`)
+	g.on("\n```")
+	if len(got) != 0 || g.delivered {
+		t.Fatalf("forwarded %q delivered=%v, want fenced JSON fully suppressed", got, g.delivered)
+	}
+}
+
+// TestStreamSuppressesTaskJSONEndToEnd runs the guard through the real
+// streaming path: a task-JSON response streams nothing to onDelta while the
+// full text still arrives in the Response.
+func TestStreamSuppressesTaskJSONEndToEnd(t *testing.T) {
+	taskJSON := `{"kind":"task","task":{"title":"跑测试","context_type":"command","requires":{"abilities":["lint"]}}}`
+	c := startStreamServer(t, []string{`{"kind":"task",`, `"task":{"title":"跑测试",`, `"context_type":"command","requires":{"abilities":["lint"]}}}`})
+
+	var got []string
+	resp, err := c.StreamTurnsWithTools(context.Background(), "", []Turn{{Role: "user", Content: "跑下测试"}}, nil, func(s string) { got = append(got, s) })
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("onDelta got %q, want the task JSON suppressed", got)
+	}
+	if resp.Text != taskJSON {
+		t.Fatalf("text = %q, want the full JSON in the response", resp.Text)
+	}
+}
+
+// TestStreamRetriesThenSuppressesStructured verifies the retry and the guard
+// compose: a 429 first attempt is retried (nothing was delivered — the JSON
+// was suppressed), and the successful replay still streams nothing raw.
+func TestStreamRetriesThenSuppressesStructured(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte("rate limited"))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		for _, c := range []string{`{"kind":`, `"task":{}}`} {
+			b, _ := json.Marshal(map[string]any{
+				"choices": []map[string]any{{"delta": map[string]string{"content": c}}},
+			})
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+			flusher.Flush()
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := NewClient(config.ModelConfig{APIType: "openai", BaseURL: srv.URL, APIKey: "sk", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	c.maxRetry = 2
+	c.retryBase = time.Millisecond
+
+	var got []string
+	resp, err := c.StreamTurnsWithTools(context.Background(), "", []Turn{{Role: "user", Content: "hi"}}, nil, func(s string) { got = append(got, s) })
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d, want 2 (429 then success)", calls.Load())
+	}
+	if len(got) != 0 {
+		t.Fatalf("onDelta got %q, want structured output suppressed", got)
+	}
+	if resp.Text != `{"kind":"task":{}}` {
+		t.Fatalf("text = %q", resp.Text)
 	}
 }

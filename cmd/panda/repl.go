@@ -177,7 +177,10 @@ func (r *repl) dispatch(line string) {
 }
 
 // ask runs one prompt through the unified entry engine and prints the
-// converged result: an answer, or a task with its outcome.
+// converged result: an answer, or a task with its outcome. On an interactive
+// terminal the answer streams live as the model emits it — the panel's UX
+// brought to the shell; piped output stays clean, printing the full answer
+// once at the end for scripts.
 func (r *repl) ask(text string) {
 	if r.engine == nil {
 		fmt.Println(i18n.T(r.loc, "repl.ask.noEngine"))
@@ -186,18 +189,44 @@ func (r *repl) ask(text string) {
 	if r.interactive {
 		fmt.Println(i18n.T(r.loc, "repl.ask.busy"))
 	}
-	out, err := r.engine.Ask(context.Background(), text, r.authorize)
+	var delivered bool
+	cb := askengine.StreamCallbacks{}
+	if stdoutIsTTY() {
+		cb.OnDelta = func(chunk string) {
+			delivered = true
+			fmt.Print(chunk)
+		}
+		cb.OnStatus = func(note string) {
+			// Progress lines print only before any answer text has streamed,
+			// so they never cut a sentence in half.
+			if !delivered {
+				fmt.Printf("· %s\n", note)
+			}
+		}
+	}
+	out, err := r.engine.AskTurns(context.Background(), nil, text, "", r.authorize, cb)
 	if err != nil {
+		if delivered {
+			fmt.Println()
+		}
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 		return
 	}
 	switch out.Kind {
 	case "answer":
+		if delivered {
+			// The answer already streamed live; just close the line.
+			fmt.Println()
+			break
+		}
 		if out.Note != "" {
 			fmt.Println(out.Note)
 		}
 		fmt.Println(out.Answer)
 	case "task":
+		if delivered {
+			fmt.Println()
+		}
 		fmt.Println(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
 		if out.OK {
 			fmt.Print(out.Stdout)
@@ -494,6 +523,16 @@ func localeCodes() string {
 // progress hints are printed only then; piped input stays clean for scripts).
 func stdinIsTTY() bool {
 	stat, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return stat.Mode()&os.ModeCharDevice != 0
+}
+
+// stdoutIsTTY reports whether stdout is an interactive terminal (answers
+// stream live only then; piped output prints once, clean for scripts).
+func stdoutIsTTY() bool {
+	stat, err := os.Stdout.Stat()
 	if err != nil {
 		return false
 	}

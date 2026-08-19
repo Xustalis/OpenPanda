@@ -372,13 +372,41 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 			if cb.OnStatus != nil {
 				cb.OnStatus(fmt.Sprintf("running tool %s…", out.Tool.Tool))
 			}
-			result := executeTool(ctx, e.registry, out.Tool)
+			// Execute against the same registry snapshot classification saw:
+			// a mid-ask SetMCPCommand swap would otherwise make the model's
+			// tool call hit a registry that no longer knows it.
+			result := executeTool(ctx, reg, out.Tool)
 			turns = appendToolTurns(turns, out.Tool, out.Note, result)
 		default:
 			return &Result{Kind: "answer", Answer: out.Answer}, nil
 		}
 	}
-	return nil, fmt.Errorf("reached max tool rounds (%d) without converging", maxRounds)
+
+	// Round budget exhausted without a converged intent: run one final
+	// tool-free call over the accumulated history. Without tools the model
+	// can only answer in text — the tools already ran and their results are
+	// in the turns — so the ask converges to something useful instead of
+	// surfacing a loop error to the user.
+	var final entry.Output
+	var ferr error
+	if cb.OnDelta != nil {
+		final, ferr = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, nil, cb.OnDelta)
+	} else {
+		final, ferr = entry.ClassifyTurns(ctx, client, devices, conversationMemory, turns)
+	}
+	if ferr != nil {
+		return nil, fmt.Errorf("reached max tool rounds (%d): %w", maxRounds, ferr)
+	}
+	if final.Kind == entry.KindTask {
+		if e.sched == nil {
+			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议任务「%s」，但当前未加载能力卡片，无法提交。", maxRounds, final.Task.Title)}, nil
+		}
+		if cb.OnStatus != nil {
+			cb.OnStatus(fmt.Sprintf("submitting task: %s", final.Task.Title))
+		}
+		return e.submitTask(final.Task, authorize, workDir), nil
+	}
+	return &Result{Kind: "answer", Answer: final.Answer}, nil
 }
 
 // WorkPath returns the configured work directory — the project workspace

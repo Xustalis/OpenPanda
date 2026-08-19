@@ -51,7 +51,7 @@ func runAsk(args []string) {
 	}
 	defer engine.Close()
 
-	out, err := engine.Ask(context.Background(), prompt, *authorize)
+	out, streamed, err := askStreaming(engine, prompt, *authorize)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 		os.Exit(1)
@@ -59,7 +59,9 @@ func runAsk(args []string) {
 
 	switch out.Kind {
 	case "answer":
-		fmt.Println(out.Answer)
+		if !streamed {
+			fmt.Println(out.Answer)
+		}
 	case "task":
 		fmt.Printf("task %s %s\n", out.TaskID, out.TaskState)
 		if out.OK {
@@ -69,4 +71,36 @@ func runAsk(args []string) {
 			os.Exit(1)
 		}
 	}
+}
+
+// askStreaming runs one ask with live streaming on an interactive terminal —
+// answer text prints as the model emits it, and tool progress prints as
+// one-line notes before any text arrives. Piped output stays clean: no
+// callbacks are attached, and the full answer prints once at the end. The
+// streamed marker tells the caller to skip the duplicate final print.
+func askStreaming(engine *askengine.Engine, prompt string, authorize bool) (*askengine.Result, bool, error) {
+	if !stdoutIsTTY() {
+		out, err := engine.Ask(context.Background(), prompt, authorize)
+		return out, false, err
+	}
+	var delivered bool
+	cb := askengine.StreamCallbacks{
+		OnDelta: func(chunk string) {
+			delivered = true
+			fmt.Print(chunk)
+		},
+		OnStatus: func(note string) {
+			if !delivered {
+				fmt.Printf("· %s\n", note)
+			}
+		},
+	}
+	out, err := engine.AskTurns(context.Background(), nil, prompt, "", authorize, cb)
+	if err != nil && delivered {
+		fmt.Println()
+	}
+	if err == nil && delivered {
+		fmt.Println()
+	}
+	return out, delivered, err
 }
