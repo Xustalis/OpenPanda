@@ -1,7 +1,7 @@
 # 定位重构与 UX 整改方案
 
 日期：2026-08-19
-状态：进行中
+状态：P0 / P1 已完成（2026-08-20，commit 45ee941）；P2 待做
 
 ## 1. 定位修正（核心结论）
 
@@ -31,9 +31,9 @@ OpenPanda **不是「更强的编码 agent」**，而是你所有设备与 agent
 - [x] 默认落地页为 chat，侧栏导航分组/折叠（渐进揭示，弱化概念轰炸）
 
 ### P1 — 产品化
-- [ ] 设计语言统一（projects / nodes / skills / reminders / memory / system / settings）
-- [ ] memory 页从「调试页」产品化（渲染 / 可编辑 / 高亮）
-- [ ] 错误友好化 + 全局 toast + 危险操作二次确认
+- [x] 设计语言统一（projects / nodes / skills / reminders / memory / system / settings）— 共享 `PageHeader` / `ErrorState` 组件，统一页面头部与错误展示（含重试按钮）
+- [x] memory 页从「调试页」产品化（渲染 / 可编辑 / 高亮）— § 分隔条目化渲染、新增条目高亮、字符计数与超限提示、就地编辑（`PUT /api/memory/{file}`）
+- [x] 错误友好化 + 全局 toast + 危险操作二次确认 — 全局 ToastHost（错误手动关闭 / 成功与信息自动消失）；删除会话、拒绝技能、取消任务、删除提醒均需二次确认；五种语言文案齐全
 
 ### P2 — 打磨
 - [ ] kanban 拖拽键盘 / 触屏可及

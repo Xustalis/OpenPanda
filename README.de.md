@@ -107,8 +107,8 @@ dein Speicher bleibt auf deinen Geräten, und jeder Node spricht mit seinen Peer
   (`/tasks`, `/approve`, `/projects`, `/nodes`, `/lang` …) steuern das Panel,
   und `/web` startet die eingebettete Konsole per Klick. Die Task-Warteschlange
   ist ein **Kanban-Board** (offen / in Arbeit / in Prüfung / fertig) mit
-  Inline-Freigaben, dazu Chat, Erinnerungen, ein Speicher-Viewer (USER /
-  MEMORY / DREAMS) und eine Einstellungsseite (Modell-Endpoint —
+  Inline-Freigaben, dazu Chat, Erinnerungen, eine editierbare Speicher-Seite
+  (USER / MEMORY / DREAMS) und eine Einstellungsseite (Modell-Endpoint —
   Anthropic- oder OpenAI-kompatibel — und MCP-Server). `panda web` ist der
   Ein-Befehl-Weg: standardmäßig Loopback-Bind + temporäres Token, der Browser
   öffnet sich bereits angemeldet. Fünf UI-Sprachen.
@@ -192,7 +192,14 @@ make build-windows-amd64 # → bin/panda-windows-amd64.exe
 
 ### Konfiguration
 
-Beispiel-Config kopieren und pro Node anpassen:
+Interaktiv einrichten — Modell-Endpoint, Node-Name und Capability-Karte
+entstehen in einem einzigen Dialog:
+
+```bash
+./bin/panda init
+```
+
+Oder die Beispiel-Config kopieren und pro Node anpassen:
 
 ```bash
 cp config.example.yaml /etc/openpanda/config.yaml   # oder lokal behalten und per --config setzen
@@ -274,6 +281,7 @@ Skills verwalten:
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<Frage>"` | Einheitliches Eingabemodell: klassifiziert in answer / tool_call / task und führt aus |
 | `panda repl [--config PATH] [--card PATH]` | Interaktive Shell: Slash-Befehle (tasks/approve/projects/nodes/lang), freie Eingabe geht an die ask-Engine, `/web` startet die eingebettete Konsole |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | Web-Konsole mit einem Befehl: standardmäßig Loopback + flüchtiges Token, der Browser öffnet sich bereits angemeldet |
+| `panda init` | Interaktive Ersteinrichtung: erzeugt `config.yaml` + `capabilities.yaml` (Modell-Endpoint, Node-Name, Hardware-Scan-Standardwerte) |
 | `panda install [--dir PATH] [--no-path]` | Registriert `panda` als globales Kommando im PATH (überlebt Neustarts) und verifiziert die installierte Kopie automatisch |
 | `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run]` | Sichere Deinstallation: erst der volle Plan, dann zwingend `confirm`, Löschung nur nach Whitelist, Nutzerdaten (projects/memory/skills) bleiben immer erhalten, Zip-Backup und Bericht |
 | `panda doctor [--config PATH]` | Selbstcheck: installierte Kopie läuft, PATH löst auf, Persistenz überlebt den Neustart, Konfiguration/Datenbank nutzbar |

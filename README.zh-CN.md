@@ -64,7 +64,7 @@ Claude Code、Codex、OpenCode、OpenClaw……每一个都是单机上的强力
 - **MCP 接入**——通过 config.yaml（`mcp.command`）或控制台设置页配置一个 stdio MCP 服务器；其工具**热加载**进 Agent 工具表，无需重启守护进程。
 - **双层记忆**——按用户与按项目隔离的记忆（`USER.md` / `MEMORY.md` 风格），外加隔离墙；后台 **Dreaming** 引擎在节点空闲时把日常日志沉淀为长期记忆。
 - **语音入口**——可选的 sidecar 管线（唤醒词 → 语音识别 → LLM → 语音合成），硬件门控，为嵌入式麦克风准备。
-- **交互式 REPL + 内嵌 Web 控制台**——`panda repl` 是操作席：裸输入直达 ask 引擎，斜杠命令驱动面板（`/tasks`、`/approve`、`/projects`、`/nodes`、`/lang`……），`/web` 一键启动内嵌控制台（对话、任务看板、审批、提醒、记忆）。`panda web` 一条命令开箱即用：默认回环绑定 + 临时 token，浏览器自动登录。五种界面语言：English、简体中文、日本語、Español、Deutsch。
+- **交互式 REPL + 内嵌 Web 控制台**——`panda repl` 是操作席：裸输入直达 ask 引擎，斜杠命令驱动面板（`/tasks`、`/approve`、`/projects`、`/nodes`、`/lang`……），`/web` 一键启动内嵌控制台（对话、任务看板、审批、提醒、可编辑的记忆页）。`panda web` 一条命令开箱即用：默认回环绑定 + 临时 token，浏览器自动登录。五种界面语言：English、简体中文、日本語、Español、Deutsch。
 - **防御与安全层**——权限 Tier、熔断器、范围漂移与死循环检测；执行侧加固：沙箱、网络白名单、密钥脱敏、审计日志。
 - **极致轻量**——稳态 RSS 约 **13–20 MB**，为资源受限的单板电脑而生。
 - **干净交叉编译**——每个平台一个静态二进制，无需 CGO（纯 Go SQLite，`modernc.org/sqlite`）。
@@ -140,7 +140,13 @@ make build-windows-amd64 # → bin/panda-windows-amd64.exe
 
 ### 配置
 
-复制示例配置，为每个节点修改：
+用一条交互式命令完成初始化——模型端点、节点名和能力卡一次生成：
+
+```bash
+./bin/panda init
+```
+
+或者复制示例配置，为每个节点修改：
 
 ```bash
 cp config.example.yaml /etc/openpanda/config.yaml   # 或留在本地，用 --config 指定
@@ -219,6 +225,7 @@ model:
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<问题>"` | 统一入口：分类为 answer / tool_call / task 并执行 |
 | `panda repl [--config PATH] [--card PATH]` | 交互式 shell：斜杠命令（tasks/approve/projects/nodes/lang），裸输入走提问引擎，`/web` 一键拉起内嵌控制台 |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | 一条命令起 Web 控制台：默认回环监听 + 临时令牌，浏览器打开即已登录 |
+| `panda init` | 交互式首次配置：一键生成 `config.yaml` + `capabilities.yaml`（模型端点、节点名、硬件扫描默认值） |
 | `panda install [--dir PATH] [--no-path]` | 将 `panda` 注册为全局命令（PATH 持久化、重启后仍可用），并自动验证安装副本可运行 |
 | `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run]` | 安全卸载：先展示完整计划，需输入 `confirm` 二次确认，白名单删除，用户资产（projects/memory/skills）始终保留，生成 zip 备份与清理报告 |
 | `panda doctor [--config PATH]` | 自检：安装副本可运行、PATH 解析正常、持久化在重启后有效、配置/数据库可用 |

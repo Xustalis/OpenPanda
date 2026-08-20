@@ -65,7 +65,7 @@ Claude Code、Codex、OpenCode、OpenClaw……どれも単一マシン上の強
 - **MCP 統合** — config.yaml（`mcp.command`）またはコンソールの設定ページで stdio MCP サーバーを 1 台設定でき、そのツールはデーモン再起動なしでエージェントのツールセットに**ホットロード**されます。
 - **2層メモリ** — ユーザー単位・プロジェクト単位で分離された記憶（`USER.md` / `MEMORY.md`形式）を隔離壁の背後に保持。さらにバックグラウンドの**Dreaming**エンジンが、ノードがアイドルの間に日次ログを長期記憶へ統合します。
 - **音声入力** — オプションのサイドカーパイプライン（ウェイクワード → STT → LLM → TTS）。ハードウェアゲート付きで、組み込みマイク向けに準備されています。
-- **対話型 REPL + 内蔵 Web コンソール** — `panda repl` が操作席：素の入力は ask エンジンへ、スラッシュコマンド（`/tasks`、`/approve`、`/projects`、`/nodes`、`/lang`…）でパネルを駆動し、`/web` で内蔵コンソールをワンクリック起動。タスクキューは**カンバンボード**（未着手/進行中/承認待ち/完了）でインライン承認対応。チャット、リマインダー、メモリビューア（USER/MEMORY/DREAMS）、設定ページ（モデルエンドポイント：Anthropic/OpenAI 互換、MCP サーバー）も同梱。`panda web` はワンコマンドで起動：デフォルトでループバック + 一時トークン、ブラウザがログイン済みで開きます。UI 言語は 5 種類。
+- **対話型 REPL + 内蔵 Web コンソール** — `panda repl` が操作席：素の入力は ask エンジンへ、スラッシュコマンド（`/tasks`、`/approve`、`/projects`、`/nodes`、`/lang`…）でパネルを駆動し、`/web` で内蔵コンソールをワンクリック起動。タスクキューは**カンバンボード**（未着手/進行中/承認待ち/完了）でインライン承認対応。チャット、リマインダー、編集可能なメモリページ（USER/MEMORY/DREAMS）、設定ページ（モデルエンドポイント：Anthropic/OpenAI 互換、MCP サーバー）も同梱。`panda web` はワンコマンドで起動：デフォルトでループバック + 一時トークン、ブラウザがログイン済みで開きます。UI 言語は 5 種類。
 - **防御と安全レイヤ** — 権限Tier、サーキットブレーカー、スコープ逸脱検出と無限ループ検出。実行側の強化：サンドボックス、ネットワーク許可リスト、シークレットの秘匿化、監査ログ。
 - **スリム設計** — 定常RSSは約 **13–20 MB**。リソース制約のあるシングルボードコンピュータで動くことを前提に設計されています。
 - **クリーンなクロスコンパイル** — プラットフォームごとに単一の静的バイナリ、CGO不要（`modernc.org/sqlite`による純Go SQLite）。
@@ -141,7 +141,13 @@ make build-windows-amd64 # → bin/panda-windows-amd64.exe
 
 ### 設定
 
-サンプル設定をコピーして、ノードごとに編集:
+対話形式で1発初期化 — モデルエンドポイント、ノード名、ケイパビリティカードをまとめて生成:
+
+```bash
+./bin/panda init
+```
+
+またはサンプル設定をコピーして、ノードごとに編集:
 
 ```bash
 cp config.example.yaml /etc/openpanda/config.yaml   # またはローカルに置いて --config で指定
@@ -218,6 +224,7 @@ model:
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<質問>"` | 統一エントリ：answer / tool_call / task に分類して実行 |
 | `panda repl [--config PATH] [--card PATH]` | 対話シェル：スラッシュコマンド（tasks/approve/projects/nodes/lang）、素の入力は ask エンジンへ、`/web` で組み込みコンソールを起動 |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | コマンド1つで Web コンソール：デフォルトはループバック + 一時トークン、ブラウザが開いた時点でログイン済み |
+| `panda init` | 対話形式の初回セットアップ：`config.yaml` + `capabilities.yaml` を生成（モデルエンドポイント、ノード名、ハードウェアスキャンの既定値） |
 | `panda install [--dir PATH] [--no-path]` | `panda` をグローバルコマンドとして PATH に登録（再起動後も有効）、インストール済みコピーの自動検証付き |
 | `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run]` | 安全なアンインストール：計画を表示 → `confirm` 入力で二次確認、ホワイトリスト削除のみ、ユーザーアセット（projects/memory/skills）は常に保持、zip バックアップとレポートを生成 |
 | `panda doctor [--config PATH]` | セルフチェック：インストール済みコピーの実行、PATH 解決、永続化、設定/DB の可用性 |

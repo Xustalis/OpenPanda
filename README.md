@@ -99,8 +99,8 @@ WebSocket links you control.
   surfaces (`/tasks`, `/approve`, `/projects`, `/nodes`, `/lang` …), and `/web`
   boots the embedded console in one click. The console's task queue is a
   **kanban board** (to do / in progress / in review / finished) with inline
-  approvals, plus chat sessions, reminders, a memory viewer (USER / MEMORY /
-  DREAMS), and a settings page (model endpoint — Anthropic or OpenAI
+  approvals, plus chat sessions, reminders, an editable memory page (USER /
+  MEMORY / DREAMS), and a settings page (model endpoint — Anthropic or OpenAI
   compatible — and MCP server). `panda web` is the one-command path: loopback
   bind + ephemeral token by default, browser opens already logged in (no
   config, no token paste). Five UI languages: English, 简体中文, 日本語,
@@ -184,7 +184,14 @@ make build-windows-amd64 # → bin/panda-windows-amd64.exe
 
 ### Configure
 
-Copy the example config and edit it for each node:
+Bootstrap a node interactively — the model endpoint, node name, and a
+capabilities card are generated from one prompt:
+
+```bash
+./bin/panda init
+```
+
+Or copy the example config and edit it for each node:
 
 ```bash
 cp config.example.yaml /etc/openpanda/config.yaml   # or keep it local and use --config
@@ -268,6 +275,7 @@ Manage skills:
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<question>"` | Unified entry: classify into answer / tool_call / task and execute |
 | `panda repl [--config PATH] [--card PATH]` | Interactive shell: slash commands (tasks/approve/projects/nodes/lang), bare input goes to the ask engine, `/web` boots the embedded console |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | One-command web console: loopback + ephemeral token by default, opens the browser already logged in |
+| `panda init` | Interactive first-run setup: generates `config.yaml` + `capabilities.yaml` (model endpoint, node name, hardware-scan defaults) |
 | `panda install [--dir PATH] [--no-path]` | Register `panda` globally on PATH (persistent across reboots) and self-verify the installed copy |
 | `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run]` | Safe removal: full plan first, `confirm` required, whitelist-only deletion, user assets (projects/memory/skills) always kept, zip backup + report |
 | `panda doctor [--config PATH]` | Self-check: installed copy runs, PATH resolves, persistence survives reboot, config/database usable |
