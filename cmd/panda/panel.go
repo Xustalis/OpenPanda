@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -61,8 +61,13 @@ func runStatus(args []string) {
 	if err != nil {
 		fatal("query employees", err)
 	}
+	if jsonOutput {
+		emitJSON(nodes)
+		return
+	}
+	loc := i18n.Detect()
 	if len(nodes) == 0 {
-		fmt.Println("no nodes registered")
+		fmt.Println(i18n.T(loc, "cli.status.none"))
 		return
 	}
 
@@ -82,11 +87,13 @@ func runStatus(args []string) {
 	}
 }
 
-// runQueue implements `panda queue [--state s]` — the task list, newest first.
+// runQueue implements `panda queue [--state s] [--project p]` — the task
+// board, newest activity first (the web listTasks semantics).
 func runQueue(args []string) {
 	fs := flag.NewFlagSet("queue", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
 	state := fs.String("state", "", "filter by state (empty = all)")
+	project := fs.String("project", "", "filter by project (empty = all)")
 	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
@@ -103,82 +110,28 @@ func runQueue(args []string) {
 	if err != nil {
 		fatal("list tasks", err)
 	}
-	if len(tasks) == 0 {
-		fmt.Println("no tasks")
+	var filtered []core.Task
+	for _, t := range tasks {
+		if *project == "" || t.Project == *project {
+			filtered = append(filtered, t)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].UpdatedAt > filtered[j].UpdatedAt })
+
+	if jsonOutput {
+		out := make([]taskJSON, 0, len(filtered))
+		for _, t := range filtered {
+			out = append(out, taskToJSON(t))
+		}
+		emitJSON(out)
 		return
 	}
-	for _, t := range tasks {
-		fmt.Printf("%-36s %-12s %-6s %s\n", t.TaskID, t.State, t.OwnerNode, t.Title)
+	if len(filtered) == 0 {
+		fmt.Println(i18n.T(i18n.Detect(), "cli.queue.none"))
+		return
 	}
-}
-
-// runTask implements `panda task <id>` — one task's full row + event timeline.
-func runTask(args []string) {
-	fs := flag.NewFlagSet("task", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
-	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
-	if id == "" {
-		fmt.Fprintln(os.Stderr, "usage: panda task [--config PATH] <task-id>")
-		os.Exit(2)
-	}
-
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		fatal("load config", err)
-	}
-	db, store, err := panelStore(cfg)
-	if err != nil {
-		fatal("open store", err)
-	}
-	defer db.Close()
-
-	t, err := store.Get(context.Background(), id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			fmt.Fprintf(os.Stderr, "panda: no such task: %s\n", id)
-			os.Exit(1)
-		}
-		fatal("get task", err)
-	}
-	fmt.Printf("id:       %s\n", t.TaskID)
-	fmt.Printf("parent:   %s\n", orDash(t.ParentID))
-	fmt.Printf("project:  %s\n", orDash(t.Project))
-	fmt.Printf("title:    %s\n", t.Title)
-	fmt.Printf("state:    %s\n", t.State)
-	fmt.Printf("owner:    %s\n", t.OwnerNode)
-	fmt.Printf("attempt:  %s\n", t.AttemptID)
-	fmt.Printf("chain:    %s\n", strings.Join(t.Chain, " -> "))
-	fmt.Printf("created:  %s\n", ts(t.CreatedAt))
-	fmt.Printf("updated:  %s\n", ts(t.UpdatedAt))
-	if t.ContextType != "" {
-		fmt.Printf("context:  %s\n", t.ContextType)
-	}
-	if t.Intent != "" {
-		fmt.Printf("intent:   %s\n", t.Intent)
-	}
-	if t.SpecJSON != "" {
-		fmt.Printf("spec:     %s\n", t.SpecJSON)
-	}
-	if t.Risk != "" {
-		fmt.Printf("risk:     %s\n", t.Risk)
-	}
-	if t.Complexity != 0 {
-		fmt.Printf("complexity: %.2f\n", t.Complexity)
-	}
-	if t.ResultJSON != "" {
-		fmt.Printf("result:   %s\n", t.ResultJSON)
-	}
-
-	events, err := store.Events(context.Background(), id)
-	if err != nil {
-		fatal("load events", err)
-	}
-	if len(events) > 0 {
-		fmt.Println("events:")
-		for _, e := range events {
-			fmt.Printf("  %s  %-10s %s\n", ts(e.TS), e.Type, e.DataJSON)
-		}
+	for _, t := range filtered {
+		fmt.Printf("%-36s %-12s %-8s %-8s %s\n", t.TaskID, t.State, priorityName(t.Priority), orDash(t.OwnerNode), t.Title)
 	}
 }
 
@@ -207,7 +160,11 @@ func runCancel(args []string) {
 	if err != nil {
 		fatal("cancel", err)
 	}
-	fmt.Printf("cancelled %d task(s)\n", len(ids))
+	if jsonOutput {
+		emitJSON(map[string]any{"cancelled": ids})
+		return
+	}
+	fmt.Println(i18n.Tf(i18n.Detect(), "cli.cancel.done", "n", fmt.Sprint(len(ids))))
 }
 
 // runApprove implements `panda approve <id>` — approves a reviewed task
@@ -235,7 +192,11 @@ func runApprove(args []string) {
 	if err := store.Approve(context.Background(), id); err != nil {
 		fatal("approve", err)
 	}
-	fmt.Printf("approved %s\n", id)
+	if jsonOutput {
+		emitJSON(map[string]string{"id": id, "status": "approved"})
+		return
+	}
+	fmt.Println(i18n.Tf(i18n.Detect(), "cli.approve.done", "id", id))
 }
 
 // runReject implements `panda reject <id> [--reason s]` — rejects a reviewed
@@ -264,7 +225,11 @@ func runReject(args []string) {
 	if err := store.Reject(context.Background(), id, *reason); err != nil {
 		fatal("reject", err)
 	}
-	fmt.Printf("rejected %s\n", id)
+	if jsonOutput {
+		emitJSON(map[string]string{"id": id, "status": "rejected"})
+		return
+	}
+	fmt.Println(i18n.Tf(i18n.Detect(), "cli.reject.done", "id", id))
 }
 
 // runLogs implements `panda logs <id>` — the event timeline only.
@@ -292,8 +257,12 @@ func runLogs(args []string) {
 	if err != nil {
 		fatal("load events", err)
 	}
+	if jsonOutput {
+		emitJSON(events)
+		return
+	}
 	if len(events) == 0 {
-		fmt.Printf("no events for %s\n", id)
+		fmt.Println(i18n.Tf(i18n.Detect(), "cli.logs.none", "id", id))
 		return
 	}
 	for _, e := range events {
@@ -317,12 +286,19 @@ func ts(unix int64) string {
 	return time.Unix(unix, 0).Format(time.RFC3339)
 }
 
-// runAudit implements `panda audit verify [--task <id>]` — verify the hash
-// chain of either the global audit_log or one task's event timeline.
+// runAudit implements `panda audit [entries|verify]` — the hash-chained
+// trail. Bare `panda audit` keeps its historical verify semantics; `entries`
+// prints the rows (optionally one task's event timeline), `verify` checks the
+// chain of either the global audit_log or one task's events.
 func runAudit(args []string) {
+	verb := "verify"
+	if len(args) > 0 && (args[0] == "entries" || args[0] == "verify") {
+		verb, args = args[0], args[1:]
+	}
+
 	fs := flag.NewFlagSet("audit", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
-	taskID := fs.String("task", "", "verify the event chain for a specific task (empty = verify global audit chain)")
+	taskID := fs.String("task", "", "scope the operation to one task (entries: its events; verify: its event chain)")
 	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
@@ -335,10 +311,19 @@ func runAudit(args []string) {
 	}
 	defer db.Close()
 
+	if verb == "entries" {
+		runAuditEntries(db, store, *taskID)
+		return
+	}
+
 	if *taskID != "" {
 		if err := store.VerifyTaskEventChain(context.Background(), *taskID); err != nil {
 			fmt.Fprintf(os.Stderr, "panda: task event chain broken: %v\n", err)
 			os.Exit(1)
+		}
+		if jsonOutput {
+			emitJSON(map[string]string{"scope": "task", "id": *taskID, "chain": "ok"})
+			return
 		}
 		fmt.Printf("task %s event chain: OK\n", *taskID)
 		return
@@ -349,7 +334,50 @@ func runAudit(args []string) {
 		fmt.Fprintf(os.Stderr, "panda: audit chain broken: %v\n", err)
 		os.Exit(1)
 	}
+	if jsonOutput {
+		emitJSON(map[string]string{"scope": "global", "chain": "ok"})
+		return
+	}
 	fmt.Println("audit chain: OK")
+}
+
+// runAuditEntries prints audit trail rows — the global audit_log, or one
+// task's event timeline with --task.
+func runAuditEntries(db *sql.DB, store *core.TaskStore, taskID string) {
+	if taskID != "" {
+		events, err := store.Events(context.Background(), taskID)
+		if err != nil {
+			fatal("load events", err)
+		}
+		if jsonOutput {
+			emitJSON(events)
+			return
+		}
+		if len(events) == 0 {
+			fmt.Println(i18n.Tf(i18n.Detect(), "cli.logs.none", "id", taskID))
+			return
+		}
+		for _, e := range events {
+			fmt.Printf("%s  %-10s %s\n", ts(e.TS), e.Type, e.DataJSON)
+		}
+		return
+	}
+
+	rows, err := security.NewAudit(db).Entries(context.Background())
+	if err != nil {
+		fatal("load audit entries", err)
+	}
+	if jsonOutput {
+		emitJSON(rows)
+		return
+	}
+	if len(rows) == 0 {
+		fmt.Println(i18n.T(i18n.Detect(), "cli.audit.none"))
+		return
+	}
+	for _, r := range rows {
+		fmt.Printf("%-20s %-24s %-16s %-12s %-8s %s\n", ts(r.TS), r.Who, r.What, r.Target, r.Result, r.Detail)
+	}
 }
 
 // runMetrics implements `panda metrics [--csv]` — export delegation metrics.
@@ -374,7 +402,16 @@ func runMetrics(args []string) {
 		fatal("list metrics", err)
 	}
 	if len(metrics) == 0 {
-		fmt.Println("no delegation metrics")
+		if jsonOutput {
+			emitJSON([]struct{}{})
+			return
+		}
+		fmt.Println(i18n.T(i18n.Detect(), "cli.metrics.none"))
+		return
+	}
+
+	if jsonOutput {
+		emitJSON(metrics)
 		return
 	}
 

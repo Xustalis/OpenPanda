@@ -3,8 +3,8 @@ package main
 // Command reminder manages scheduled reminders (design P1-28) from the CLI:
 //
 //	panda reminder list
-//	panda reminder add --after 10m "提醒内容"      # 相对时间（30s/10m/2h/1h30m）
-//	panda reminder add --at "2026-08-18 15:00" "开会" # 绝对时间（本地时区）
+//	panda reminder add --after 10m "standup"        # relative (30s/10m/2h/1h30m)
+//	panda reminder add --at "2026-08-18 15:00" "meeting" # absolute (local tz)
 //	panda reminder rm 3
 //
 // Reminders fire wherever a scanner runs — the daemon or the web panel
@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
@@ -39,14 +40,14 @@ func runReminder(args []string) {
 	case "rm", "remove", "del":
 		reminderRemove(rest)
 	default:
-		fmt.Fprintf(os.Stderr, "panda: unknown reminder subcommand %q\n", sub)
+		fmt.Fprintln(os.Stderr, i18n.Tf(i18n.Detect(), "cli.reminder.unknown", "cmd", sub))
 		reminderUsage()
 		os.Exit(2)
 	}
 }
 
 func reminderUsage() {
-	fmt.Fprintln(os.Stderr, "usage: panda reminder <list | add --after 10m \"内容\" | add --at \"2006-01-02 15:04\" \"内容\" | rm <id>>")
+	fmt.Fprintln(os.Stderr, "usage: panda reminder <list | add --after 10m \"text\" | add --at \"2006-01-02 15:04\" \"text\" | rm <id>>")
 }
 
 // reminderStore opens the reminder store from cfg's database.
@@ -81,8 +82,12 @@ func reminderList(args []string) {
 	if err != nil {
 		fatal("list reminders", err)
 	}
+	if jsonOutput {
+		emitJSON(list)
+		return
+	}
 	if len(list) == 0 {
-		fmt.Println("no reminders")
+		fmt.Println(i18n.T(i18n.Detect(), "cli.reminder.none"))
 		return
 	}
 	for _, r := range list {
@@ -103,13 +108,14 @@ func reminderAdd(args []string) {
 	fs.Parse(args)
 
 	message := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	loc := i18n.Detect()
 	if message == "" {
-		fmt.Fprintln(os.Stderr, "panda: missing reminder message")
+		fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.reminder.noMessage"))
 		reminderUsage()
 		os.Exit(2)
 	}
 	if (*after == "") == (*at == "") {
-		fmt.Fprintln(os.Stderr, "panda: exactly one of --after / --at is required")
+		fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.reminder.oneFlag"))
 		reminderUsage()
 		os.Exit(2)
 	}
@@ -118,7 +124,7 @@ func reminderAdd(args []string) {
 	if *after != "" {
 		dur, err := time.ParseDuration(*after)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "panda: invalid --after %q: %v\n", *after, err)
+			fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.reminder.badAfter", "value", *after, "err", err.Error()))
 			os.Exit(2)
 		}
 		due = time.Now().Add(dur)
@@ -130,7 +136,7 @@ func reminderAdd(args []string) {
 			}
 		}
 		if due.IsZero() {
-			fmt.Fprintf(os.Stderr, "panda: invalid --at %q — use \"2006-01-02 15:04\"\n", *at)
+			fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.reminder.badAt", "value", *at))
 			os.Exit(2)
 		}
 	}
@@ -149,7 +155,11 @@ func reminderAdd(args []string) {
 	if err != nil {
 		fatal("add reminder", err)
 	}
-	fmt.Printf("reminder #%d set — fires %s\n", r.ID, due.Format("2006-01-02 15:04:05"))
+	if jsonOutput {
+		emitJSON(r)
+		return
+	}
+	fmt.Println(i18n.Tf(i18n.Detect(), "cli.reminder.added", "id", strconv.FormatInt(r.ID, 10), "due", due.Format("2006-01-02 15:04:05")))
 	fmt.Printf("  %s\n", message)
 }
 
@@ -164,7 +174,7 @@ func reminderRemove(args []string) {
 	}
 	id, err := strconv.ParseInt(idRaw, 10, 64)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "panda: invalid id %q\n", idRaw)
+		fmt.Fprintln(os.Stderr, i18n.Tf(i18n.Detect(), "cli.reminder.badID", "id", idRaw))
 		os.Exit(2)
 	}
 
@@ -183,8 +193,12 @@ func reminderRemove(args []string) {
 		fatal("remove reminder", err)
 	}
 	if !ok {
-		fmt.Fprintf(os.Stderr, "panda: no reminder #%d\n", id)
+		fmt.Fprintln(os.Stderr, i18n.Tf(i18n.Detect(), "cli.reminder.notFound", "id", strconv.FormatInt(id, 10)))
 		os.Exit(1)
 	}
-	fmt.Printf("removed reminder #%d\n", id)
+	if jsonOutput {
+		emitJSON(map[string]any{"id": id, "status": "removed"})
+		return
+	}
+	fmt.Println(i18n.Tf(i18n.Detect(), "cli.reminder.removed", "id", strconv.FormatInt(id, 10)))
 }

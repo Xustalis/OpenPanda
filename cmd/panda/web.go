@@ -127,7 +127,7 @@ func runWeb(args []string) {
 			Store:      store,
 			Engine:     engine,
 			DB:         db,
-			Projects:   memory.NewProjects(cfg.Storage.ProjectsPath),
+			Projects:   memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memoryLimits(cfg)),
 			Sessions:   sessions.NewStore(filepath.Join(filepath.Dir(cfg.Storage.DBPath), "sessions")),
 			Worktrees:  openWorktreesBestEffort(cfg.Storage.WorkPath),
 			SkillStore: skills.NewStore(cfg.Storage.SkillsPath),

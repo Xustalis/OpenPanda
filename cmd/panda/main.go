@@ -24,6 +24,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/log"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
@@ -36,7 +37,8 @@ func main() {
 		fmt.Printf("panda %s\n", version)
 		return
 	}
-	sub, args := parseSubcommand(os.Args[1:])
+	args := stripJSONFlag(os.Args[1:])
+	sub, args := parseSubcommand(args)
 	if sub != "" {
 		switch sub {
 		case "ask":
@@ -96,6 +98,21 @@ func main() {
 		case "audit":
 			runAudit(args)
 			return
+		case "session", "sessions":
+			runSession(args)
+			return
+		case "memory":
+			runMemory(args)
+			return
+		case "config":
+			runConfig(args)
+			return
+		case "agents":
+			runAgents(args)
+			return
+		case "project":
+			runProject(args)
+			return
 		case "version":
 			fmt.Printf("panda %s\n", version)
 			return
@@ -111,6 +128,21 @@ func main() {
 		}
 	}
 	runDaemon()
+}
+
+// stripJSONFlag removes every --json occurrence from args (it may sit before
+// or after the subcommand) and sets jsonOutput so panel-style commands emit
+// their JSON wire form.
+func stripJSONFlag(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == "--json" {
+			jsonOutput = true
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // parseSubcommand scans args, skips leading global flags and their values,
@@ -176,20 +208,25 @@ func runDaemon() {
 	}
 
 	coreNode := core.NewCore(db, core.NodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
+	coreNode.SetRouterPolicy(cfg.Injection, cfg.Routing)
 	coreNode.SetWorkDir(cfg.Storage.WorkPath)
 	coreNode.SetHostStatePaths(hostStatePaths(cfg))
 	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
 	coreNode.SetLimits(cfg.Network.MaxConnections, cfg.Network.MaxConnectionsPerIP)
 
-	// Attach the memory layer (design §17/§8): project-memory injection into
-	// agent execution context, daily logging that feeds the Dreaming engine, and
-	// skill progressive loading. Load failures degrade to no injection and are
+	// Attach the memory layer (design §17/§8): daily logging that feeds the
+	// Dreaming engine, and skill progressive loading. Project memory is no
+	// longer injected into agent prompts (A1); the injector instead supplies
+	// the A3 memory-file manifest for selective loading. Character caps come
+	// from config memory.limits. Load failures degrade gracefully and are
 	// logged by the core, not fatal here.
-	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
-	projects := memory.NewProjects(cfg.Storage.ProjectsPath)
+	limits := memoryLimits(cfg)
+	hermes := memory.NewHermesWithLimits(cfg.Storage.MemoryPath, limits)
+	projects := memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, limits)
+	daily := memory.NewDaily(hermes.WarmDir())
 	coreNode.SetMemoryStores(
 		memory.NewInjector(hermes, projects),
-		memory.NewDaily(hermes.WarmDir()),
+		daily,
 		skills.NewStore(cfg.Storage.SkillsPath),
 	)
 
@@ -206,12 +243,33 @@ func runDaemon() {
 
 	// Dreaming (design §17.3): consolidate the daily logs into long-term memory
 	// in the background — only while the node is idle, at most once per day.
+	// The same tick also enforces the daily-log retention windows (A4: the
+	// production wiring of daily.Prune, once per day, independently of the
+	// dream cadence). Promotions land in the audit log (EvMemoryPromotion) so
+	// the Web console can show — and correct or delete — what was memorized.
+	dreamer := memory.NewDreamer(hermes)
+	audit := security.NewAudit(db)
+	dreamer.OnPromotion = func(entry string, viaWhitelist bool) {
+		channel := "threshold"
+		if viaWhitelist {
+			channel = "whitelist"
+		}
+		if err := audit.Record(ctx, security.Entry{
+			Who:    cfg.Node.Name,
+			What:   core.EvMemoryPromotion,
+			Target: "MEMORY.md",
+			Result: "ok",
+			Detail: channel + ": " + entry,
+		}); err != nil {
+			logger.Warn("record memory promotion", "err", err)
+		}
+	}
 	dreamSched := memory.NewScheduler(
-		memory.NewDreamer(hermes),
+		dreamer,
 		memory.NewDreamDiary(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md")),
 		func() bool { return coreNode.Idle(ctx) },
 		5*time.Minute,
-	)
+	).WithDaily(daily)
 	dreamSched.OnError = func(err error) { logger.Warn("dreaming sweep", "err", err) }
 	go dreamSched.Run(ctx)
 
@@ -329,32 +387,72 @@ func hostStatePaths(cfg *config.Config) []string {
 	}
 }
 
+// memoryLimits maps the configured memory caps (config memory.limits) into
+// the memory package's Limits, so the daemon, the REPL and `panda web` all
+// enforce the same values; zero fields fall back inside the memory package.
+func memoryLimits(cfg *config.Config) memory.Limits {
+	return memory.Limits{
+		User:    cfg.Memory.Limits.User,
+		Memory:  cfg.Memory.Limits.Memory,
+		Project: cfg.Memory.Limits.Project,
+	}
+}
+
 func fatal(step string, err error) {
 	fmt.Fprintf(os.Stderr, "panda: %s: %v\n", step, err)
 	os.Exit(1)
 }
 
-// printUsage lists the subcommands with a one-line hint each — `panda help`
+// printUsage lists the subcommands as a grouped command tree — `panda help`
 // should orient a first-time user, not just enumerate words.
 func printUsage(w *os.File) {
 	fmt.Fprintln(w, "panda — personal task orchestration across your devices")
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "no subcommand   run the node daemon (registers, listens, delegates)")
-	fmt.Fprintln(w, "ask <text>      send text through the ask engine (classification → task)")
-	fmt.Fprintln(w, "repl            interactive shell over the same engine")
-	fmt.Fprintln(w, "web             start the web console (browser opens, auto-login)")
+	fmt.Fprintln(w, "runtime:")
+	fmt.Fprintln(w, "  (no subcommand)        run the node daemon (registers, listens, delegates)")
+	fmt.Fprintln(w, "  ask <text>             unified entry: classify → answer or execute a task")
+	fmt.Fprintln(w, "                         (--output-format json|stream-json for headless use)")
+	fmt.Fprintln(w, "  repl                   interactive shell (banner, /help pager, Tab completion)")
+	fmt.Fprintln(w, "  web                    start the web console (browser opens, auto-login)")
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "status|queue|task|cancel|approve|reject|logs   task panel one-shots")
-	fmt.Fprintln(w, "reminder        list/add/rm scheduled reminders")
-	fmt.Fprintln(w, "skill           manage agent skills")
-	fmt.Fprintln(w, "metrics|audit   node metrics / audit trail")
+	fmt.Fprintln(w, "sessions:")
+	fmt.Fprintln(w, "  session list|new|show|rm|ask|diff|merge   chat sessions over git worktrees")
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "install|uninstall   put panda on PATH (persistent) / remove it")
-	fmt.Fprintln(w, "init            interactive first-run setup (config.yaml + capability card)")
-	fmt.Fprintln(w, "doctor          post-install self-check")
-	fmt.Fprintln(w, "detect          scan hardware → capabilities.yaml draft")
-	fmt.Fprintln(w, "version         print the version")
-	fmt.Fprintln(w, "help            this help")
+	fmt.Fprintln(w, "tasks:")
+	fmt.Fprintln(w, "  queue [--state s] [--project p]           the task board")
+	fmt.Fprintln(w, "  task <id>                                 show one task + timeline")
+	fmt.Fprintln(w, "  task add --title T [--prompt P] [--priority low|medium|normal|high|critical]")
+	fmt.Fprintln(w, "           [--project p] [--authorize]      enqueue a task (needs --card)")
+	fmt.Fprintln(w, "  task priority <id> <level>                change a task's priority")
+	fmt.Fprintln(w, "  task move <id> <seq>                      reorder the drag-sort queue")
+	fmt.Fprintln(w, "  cancel|approve|reject|logs <id>           one-shot task actions (also")
+	fmt.Fprintln(w, "                                            usable as `panda task <verb>`)")
+	fmt.Fprintln(w, "  project list|create                       project memories")
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "global flags: --config <path>, --card <path>, --mcp <cmd> (before or after the subcommand)")
+	fmt.Fprintln(w, "memory:")
+	fmt.Fprintln(w, "  memory list|get|set|rm [name]             user/memory/dreams/topic:<n>/")
+	fmt.Fprintln(w, "                                            project:<n>/daily:<date> files")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "settings:")
+	fmt.Fprintln(w, "  config model|mcp|limits|routing|injection|approval get|set|test")
+	fmt.Fprintln(w, "                                            view/edit config.yaml (comments kept)")
+	fmt.Fprintln(w, "  agents [test <name>]                      probe installed agent CLIs")
+	fmt.Fprintln(w, "  reminder list|add|rm                      scheduled reminders")
+	fmt.Fprintln(w, "  skill list|approve|reject                 agent skill management")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "observability:")
+	fmt.Fprintln(w, "  status                                    node identity + capability directory")
+	fmt.Fprintln(w, "  metrics [--csv]                           delegation metrics")
+	fmt.Fprintln(w, "  audit verify [--task id]                  verify the hash chain")
+	fmt.Fprintln(w, "  audit entries [--task id]                 print audit trail rows")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "setup:")
+	fmt.Fprintln(w, "  install|uninstall                         put panda on PATH / remove it")
+	fmt.Fprintln(w, "  init                                      interactive first-run setup")
+	fmt.Fprintln(w, "  doctor                                    post-install self-check")
+	fmt.Fprintln(w, "  detect                                    scan hardware → capabilities.yaml draft")
+	fmt.Fprintln(w, "  version|help                              version / this help")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "global flags: --config <path>, --card <path>, --mcp <cmd>, --json")
+	fmt.Fprintln(w, "              (before or after the subcommand; --json = JSON output)")
 }

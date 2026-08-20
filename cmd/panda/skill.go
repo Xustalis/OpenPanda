@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 )
 
@@ -39,11 +40,11 @@ func runSkill(args []string) {
 		skillList(store)
 	case "approve", "reject":
 		if len(positional) != 1 {
-			fatalf("skill %s needs exactly one skill name", cmd)
+			fatalf("%s", i18n.Tf(i18n.Detect(), "cli.skill.needName", "cmd", cmd))
 		}
 		approveSkill(store, positional[0], cmd == "approve")
 	default:
-		fmt.Fprintf(os.Stderr, "unknown skill command %q\n", cmd)
+		fmt.Fprintln(os.Stderr, i18n.Tf(i18n.Detect(), "cli.skill.unknown", "cmd", cmd))
 		os.Exit(2)
 	}
 }
@@ -73,8 +74,16 @@ func skillList(store *skills.Store) {
 	if err != nil {
 		fatal("index skills", err)
 	}
+	if jsonOutput {
+		if index == nil {
+			emitJSON([]struct{}{})
+			return
+		}
+		emitJSON(index)
+		return
+	}
 	if len(index) == 0 {
-		fmt.Println("（无技能）")
+		fmt.Println(i18n.T(i18n.Detect(), "cli.skill.none"))
 		return
 	}
 	sort.Slice(index, func(i, j int) bool { return index[i].Name < index[j].Name })
@@ -97,13 +106,13 @@ func approveSkill(store *skills.Store, name string, approve bool) {
 	for i := range index {
 		if index[i].Name == name {
 			if entry != nil {
-				fatalf("multiple skills named %q; rename to make it unique", name)
+				fatalf("%s", i18n.Tf(i18n.Detect(), "cli.skill.duplicate", "name", name))
 			}
 			entry = &index[i]
 		}
 	}
 	if entry == nil {
-		fatalf("skill %q not found", name)
+		fatalf("%s", i18n.Tf(i18n.Detect(), "cli.skill.notFound", "name", name))
 	}
 
 	var serr error
@@ -115,11 +124,19 @@ func approveSkill(store *skills.Store, name string, approve bool) {
 	if serr != nil {
 		fatal("update skill", serr)
 	}
-	action := "已批准"
-	if !approve {
-		action = "已拒绝"
+	if jsonOutput {
+		status := "approved"
+		if !approve {
+			status = "rejected"
+		}
+		emitJSON(map[string]string{"name": name, "status": status})
+		return
 	}
-	fmt.Printf("%s：%s\n", action, name)
+	if approve {
+		fmt.Println(i18n.Tf(i18n.Detect(), "cli.skill.approved", "name", name))
+	} else {
+		fmt.Println(i18n.Tf(i18n.Detect(), "cli.skill.rejected", "name", name))
+	}
 }
 
 // fatalf reports a usage error and exits, mirroring fatal for non-error paths.
