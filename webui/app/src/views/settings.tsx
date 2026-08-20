@@ -1,7 +1,16 @@
 import { useEffect, useState } from 'preact/hooks'
-import { api, type AgentInfo, type AgentTestResult, type MCPSettings, type ModelSettings } from '../api/client'
+import {
+  api,
+  type AgentInfo,
+  type AgentTestResult,
+  type AppSettings,
+  type MCPSettings,
+  type ModelSettings,
+} from '../api/client'
 import { useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
+import { locale, localeNames, locales, setLocale } from '../i18n'
+import { onThemeChange, setTheme, theme } from '../theme'
 
 type ApiType = 'anthropic' | 'openai'
 
@@ -10,11 +19,117 @@ const EXAMPLES: Record<ApiType, { base: string; model: string }> = {
   openai: { base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
 }
 
-/** The settings page: configure the LLM provider from the web console —
- * Anthropic or OpenAI-wire format, any base URL, any model. Changes persist
- * to config.yaml and hot-swap the engine (no restart needed). */
+/** Settings sections: the left rail groups the page Codex-style instead of
+ *  dumping every form on one scroll. "memory" and "devices" are jumps, not
+ *  sections — they already live on their own pages. */
+type Section = 'general' | 'config' | 'memory' | 'devices' | 'agents'
+
+const SECTIONS: Array<{ id: Section; label: string; jump?: string }> = [
+  { id: 'general', label: 'settings.group.general' },
+  { id: 'config', label: 'settings.group.config' },
+  { id: 'memory', label: 'settings.group.memory', jump: '#/memory' },
+  { id: 'devices', label: 'settings.group.devices', jump: '#/nodes' },
+  { id: 'agents', label: 'settings.group.agents' },
+]
+
+/** The settings page (C1): grouped behind a left rail — general (language +
+ *  appearance theme), config (model, MCP, and the four app policies:
+ *  injection, routing preference, memory caps, approval gate), plus jumps to
+ *  the memory console and the devices page, and the agent CLI roster. */
 export function SettingsView() {
   useLocaleRerender()
+  const [section, setSection] = useState<Section>('general')
+
+  return (
+    <section>
+      <h1 class="page-title">{t('settings.title')}</h1>
+      <p class="page-sub">{t('settings.subtitle')}</p>
+
+      <div class="settings-layout">
+        <nav class="settings-nav" aria-label={t('settings.title')}>
+          {SECTIONS.map((s) =>
+            s.jump ? (
+              <a key={s.id} href={s.jump} class="settings-nav-item">
+                {t(s.label)}
+              </a>
+            ) : (
+              <button
+                key={s.id}
+                type="button"
+                class={`settings-nav-item${section === s.id ? ' active' : ''}`}
+                onClick={() => setSection(s.id)}
+              >
+                {t(s.label)}
+              </button>
+            ),
+          )}
+        </nav>
+
+        <div class="settings-body">
+          {section === 'general' && <GeneralSection />}
+          {section === 'config' && (
+            <>
+              <ModelSection />
+              <MCPSection />
+              <PolicySection />
+            </>
+          )}
+          {section === 'agents' && <AgentsSection />}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/** General: language + appearance theme (light / dark / follow system). */
+function GeneralSection() {
+  const [, force] = useState(0)
+  useEffect(() => onThemeChange(() => force((v) => v + 1)), [])
+
+  return (
+    <div class="card settings-card">
+      <h2 class="block-title">{t('settings.group.general')}</h2>
+
+      <div class="field-group">
+        <label>{t('settings.language')}</label>
+        <select
+          class="input"
+          value={locale()}
+          onChange={(e) => setLocale((e.target as HTMLSelectElement).value as never)}
+        >
+          {locales.map((l) => (
+            <option key={l} value={l}>
+              {localeNames[l]}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div class="field-group">
+        <label>{t('settings.theme')}</label>
+        <div class="segmented" role="radiogroup">
+          {(['light', 'dark', 'auto'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="radio"
+              aria-checked={theme() === v}
+              class={`seg${theme() === v ? ' on' : ''}`}
+              onClick={() => setTheme(v)}
+            >
+              {t(`settings.theme.${v}`)}
+            </button>
+          ))}
+        </div>
+        <p class="hint">{t('settings.themeHelp')}</p>
+      </div>
+    </div>
+  )
+}
+
+/** The LLM provider form: Anthropic or OpenAI-wire format, any base URL,
+ *  any model. Changes persist to config.yaml and hot-swap the engine. */
+function ModelSection() {
   const [form, setForm] = useState<ModelSettings | null>(null)
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState('')
@@ -32,10 +147,10 @@ export function SettingsView() {
 
   if (!form) {
     return (
-      <section>
-        <h1 class="page-title">{t('settings.title')}</h1>
+      <div class="card settings-card">
+        <h2 class="block-title">{t('settings.model')}</h2>
         <p class="page-sub dim">{error || t('common.loading')}</p>
-      </section>
+      </div>
     )
   }
 
@@ -87,111 +202,273 @@ export function SettingsView() {
   }
 
   return (
-    <section class="settings">
-      <h1 class="page-title">{t('settings.title')}</h1>
-      <p class="page-sub">{t('settings.subtitle')}</p>
+    <form class="card settings-card" onSubmit={save}>
+      <h2 class="block-title">{t('settings.model')}</h2>
 
-      <form class="card settings-card" onSubmit={save}>
+      <div class="field-group">
+        <label>{t('settings.apiType')}</label>
+        <div class="segmented" role="radiogroup">
+          {(['anthropic', 'openai'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="radio"
+              aria-checked={apiType === v}
+              class={`seg${apiType === v ? ' on' : ''}`}
+              onClick={() => patch({ api_type: v })}
+            >
+              {v === 'anthropic' ? t('settings.anthropic') : t('settings.openai')}
+            </button>
+          ))}
+        </div>
+        <p class="hint">{t('settings.apiTypeHelp')}</p>
+      </div>
+
+      <div class="field-row">
         <div class="field-group">
-          <label>{t('settings.apiType')}</label>
-          <div class="segmented" role="radiogroup">
-            {(['anthropic', 'openai'] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                role="radio"
-                aria-checked={apiType === v}
-                class={`seg${apiType === v ? ' on' : ''}`}
-                onClick={() => patch({ api_type: v })}
-              >
-                {v === 'anthropic' ? t('settings.anthropic') : t('settings.openai')}
-              </button>
-            ))}
-          </div>
-          <p class="hint">{t('settings.apiTypeHelp')}</p>
+          <label for="base-url">{t('settings.baseURL')}</label>
+          <input
+            id="base-url"
+            class="input mono"
+            type="url"
+            required
+            placeholder={EXAMPLES[apiType].base}
+            value={form.base_url}
+            onInput={(e) => patch({ base_url: (e.target as HTMLInputElement).value })}
+          />
+          <p class="hint">{t('settings.baseURLHelp')}</p>
         </div>
+        <div class="field-group">
+          <label for="model">{t('settings.model')}</label>
+          <input
+            id="model"
+            class="input mono"
+            type="text"
+            required
+            placeholder={EXAMPLES[apiType].model}
+            value={form.model}
+            onInput={(e) => patch({ model: (e.target as HTMLInputElement).value })}
+          />
+          <p class="hint">{t('settings.modelHelp')}</p>
+        </div>
+      </div>
 
+      <div class="field-row">
+        <div class="field-group">
+          <label for="api-key">{t('settings.apiKey')}</label>
+          <input
+            id="api-key"
+            class="input mono"
+            type="password"
+            autocomplete="off"
+            placeholder={form.api_key_set ? `${t('settings.apiKeySet')} ${form.api_key_hint ?? ''}` : 'sk-…'}
+            value={apiKey}
+            onInput={(e) => setApiKey((e.target as HTMLInputElement).value)}
+          />
+          <p class="hint">{form.api_key_set ? t('settings.apiKeyKeep') : t('settings.apiKeyHelp')}</p>
+        </div>
+        <div class="field-group">
+          <label for="max-tokens">{t('settings.maxTokens')}</label>
+          <input
+            id="max-tokens"
+            class="input"
+            type="number"
+            min={0}
+            step={256}
+            value={form.max_tokens || 0}
+            onInput={(e) => patch({ max_tokens: Number((e.target as HTMLInputElement).value) || 0 })}
+          />
+          <p class="hint">{t('settings.maxTokensHelp')}</p>
+        </div>
+      </div>
+
+      {testResult && (
+        <p class={`test-result ${testResult.ok ? 'ok' : 'bad'}`}>
+          {testResult.ok
+            ? t('settings.testOk', { reply: (testResult.reply || '').slice(0, 80) })
+            : `${t('settings.testFail')} ${testResult.error ?? ''}`}
+        </p>
+      )}
+      {error && <p class="gate-error">{error}</p>}
+      {notice && <p class="test-result ok">{notice}</p>}
+
+      <div class="settings-actions">
+        <button type="button" class="btn" disabled={testing || !dirty} onClick={test}>
+          {testing ? t('settings.testing') : t('settings.test')}
+        </button>
+        <button class="btn primary" type="submit" disabled={saving}>
+          {saving ? t('common.save') + '…' : t('common.save')}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+/** App policies (C1, GET/PUT /api/settings/app): how Panda injects itself,
+ *  which agents routing prefers, the memory caps, and the approval gate.
+ *  The sandbox row is GET-only — it describes the confinement every agent
+ *  subprocess already runs under, it is not a switch. */
+function PolicySection() {
+  const [form, setForm] = useState<AppSettings | null>(null)
+  const [agentsText, setAgentsText] = useState('')
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    api
+      .getAppSettings()
+      .then((s) => {
+        setForm(s)
+        setAgentsText(s.preferred_agents.join(', '))
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+  }, [])
+
+  if (error && !form) {
+    return (
+      <div class="card settings-card">
+        <h2 class="block-title">{t('settings.policy')}</h2>
+        <p class="gate-error">{error}</p>
+      </div>
+    )
+  }
+  if (!form) return null
+
+  function patch(p: Partial<AppSettings>) {
+    setForm((f) => (f ? { ...f, ...p } : f))
+    setNotice('')
+  }
+
+  async function save(e: Event) {
+    e.preventDefault()
+    if (saving || !form) return
+    setSaving(true)
+    setError('')
+    try {
+      const saved = await api.putAppSettings({
+        ...form,
+        preferred_agents: agentsText
+          .split(/[,，\s]+/)
+          .map((s) => s.trim())
+          .filter((s) => s !== ''),
+      })
+      setForm(saved)
+      setAgentsText(saved.preferred_agents.join(', '))
+      setNotice(t('settings.saved'))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form class="card settings-card" onSubmit={save}>
+      <h2 class="block-title">{t('settings.policy')}</h2>
+      <p class="hint">{t('settings.policyHelp')}</p>
+
+      <div class="field-group">
+        <label>{t('settings.injection')}</label>
+        <div class="segmented" role="radiogroup">
+          {(['auto', 'always', 'never'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="radio"
+              aria-checked={form.injection_model === v}
+              class={`seg${form.injection_model === v ? ' on' : ''}`}
+              onClick={() => patch({ injection_model: v })}
+            >
+              {t(`settings.injection.${v}`)}
+            </button>
+          ))}
+        </div>
+        <p class="hint">{t('settings.injectionHelp')}</p>
+      </div>
+
+      <div class="field-group">
+        <label for="preferred-agents">{t('settings.preferredAgents')}</label>
+        <input
+          id="preferred-agents"
+          class="input mono"
+          type="text"
+          placeholder="codex, claude"
+          value={agentsText}
+          onInput={(e) => {
+            setAgentsText((e.target as HTMLInputElement).value)
+            setNotice('')
+          }}
+        />
+        <p class="hint">{t('settings.preferredAgentsHelp')}</p>
+      </div>
+
+      <div class="field-group">
+        <label>{t('settings.memoryLimits')}</label>
         <div class="field-row">
-          <div class="field-group">
-            <label for="base-url">{t('settings.baseURL')}</label>
-            <input
-              id="base-url"
-              class="input mono"
-              type="url"
-              required
-              placeholder={EXAMPLES[apiType].base}
-              value={form.base_url}
-              onInput={(e) => patch({ base_url: (e.target as HTMLInputElement).value })}
-            />
-            <p class="hint">{t('settings.baseURLHelp')}</p>
-          </div>
-          <div class="field-group">
-            <label for="model">{t('settings.model')}</label>
-            <input
-              id="model"
-              class="input mono"
-              type="text"
-              required
-              placeholder={EXAMPLES[apiType].model}
-              value={form.model}
-              onInput={(e) => patch({ model: (e.target as HTMLInputElement).value })}
-            />
-            <p class="hint">{t('settings.modelHelp')}</p>
-          </div>
+          {(['user', 'memory', 'project'] as const).map((k) => (
+            <div class="field-group" key={k}>
+              <label for={`limit-${k}`}>{t(`settings.limit.${k}`)}</label>
+              <input
+                id={`limit-${k}`}
+                class="input"
+                type="number"
+                min={1}
+                step={1}
+                value={form.memory_limits[k] || 0}
+                onInput={(e) =>
+                  patch({
+                    memory_limits: {
+                      ...form.memory_limits,
+                      [k]: Number((e.target as HTMLInputElement).value) || 0,
+                    },
+                  })
+                }
+              />
+            </div>
+          ))}
         </div>
+        <p class="hint">{t('settings.memoryLimitsHelp')}</p>
+      </div>
 
-        <div class="field-row">
-          <div class="field-group">
-            <label for="api-key">{t('settings.apiKey')}</label>
-            <input
-              id="api-key"
-              class="input mono"
-              type="password"
-              autocomplete="off"
-              placeholder={form.api_key_set ? `${t('settings.apiKeySet')} ${form.api_key_hint ?? ''}` : 'sk-…'}
-              value={apiKey}
-              onInput={(e) => setApiKey((e.target as HTMLInputElement).value)}
-            />
-            <p class="hint">{form.api_key_set ? t('settings.apiKeyKeep') : t('settings.apiKeyHelp')}</p>
-          </div>
-          <div class="field-group">
-            <label for="max-tokens">{t('settings.maxTokens')}</label>
-            <input
-              id="max-tokens"
-              class="input"
-              type="number"
-              min={0}
-              step={256}
-              value={form.max_tokens || 0}
-              onInput={(e) => patch({ max_tokens: Number((e.target as HTMLInputElement).value) || 0 })}
-            />
-            <p class="hint">{t('settings.maxTokensHelp')}</p>
-          </div>
+      <div class="field-group">
+        <label>{t('settings.approval')}</label>
+        <div class="segmented" role="radiogroup">
+          {(['always', 'on-request', 'never'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="radio"
+              aria-checked={form.approval_mode === v}
+              class={`seg${form.approval_mode === v ? ' on' : ''}`}
+              onClick={() => patch({ approval_mode: v })}
+            >
+              {t(`settings.approval.${v}`)}
+            </button>
+          ))}
         </div>
+        <p class="hint">{t('settings.approvalHelp')}</p>
+      </div>
 
-        {testResult && (
-          <p class={`test-result ${testResult.ok ? 'ok' : 'bad'}`}>
-            {testResult.ok
-              ? t('settings.testOk', { reply: (testResult.reply || '').slice(0, 80) })
-              : `${t('settings.testFail')} ${testResult.error ?? ''}`}
+      {form.sandbox && (
+        <div class="field-group">
+          <label>{t('settings.sandbox')}</label>
+          <p class="hint">
+            {t('settings.sandboxDesc')}
+            {form.sandbox.work_path && <span class="mono"> {form.sandbox.work_path}</span>}
           </p>
-        )}
-        {error && <p class="gate-error">{error}</p>}
-        {notice && <p class="test-result ok">{notice}</p>}
-
-        <div class="settings-actions">
-          <button type="button" class="btn" disabled={testing || !dirty} onClick={test}>
-            {testing ? t('settings.testing') : t('settings.test')}
-          </button>
-          <button class="btn primary" type="submit" disabled={saving}>
-            {saving ? t('common.save') + '…' : t('common.save')}
-          </button>
         </div>
-      </form>
+      )}
 
-      <MCPSection />
-      <AgentsSection />
-    </section>
+      {error && <p class="gate-error">{error}</p>}
+      {notice && <p class="test-result ok">{notice}</p>}
+
+      <div class="settings-actions">
+        <button class="btn primary" type="submit" disabled={saving}>
+          {saving ? t('common.save') + '…' : t('common.save')}
+        </button>
+      </div>
+    </form>
   )
 }
 

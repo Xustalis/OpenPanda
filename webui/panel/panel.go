@@ -91,7 +91,10 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/agents/{name}/test", h.testAgent)
 	mux.HandleFunc("GET /api/projects", h.listProjects)
 	mux.HandleFunc("POST /api/projects", h.createProject)
+	mux.HandleFunc("GET /api/projects/{name}/memory", h.getProjectMemory)
+	mux.HandleFunc("PUT /api/projects/{name}/memory", h.putProjectMemory)
 	mux.HandleFunc("GET /api/nodes", h.listNodes)
+	mux.HandleFunc("GET /api/self", h.getSelf)
 	mux.HandleFunc("GET /api/events", h.events)
 	mux.HandleFunc("GET /api/settings/model", h.getModelSettings)
 	mux.HandleFunc("PUT /api/settings/model", h.putModelSettings)
@@ -113,6 +116,10 @@ func New(d Deps) http.Handler {
 	if d.Cfg != nil {
 		mux.HandleFunc("GET /api/memory", h.getMemory)
 		mux.HandleFunc("PUT /api/memory/{file}", h.putMemory)
+		mux.HandleFunc("PUT /api/memory/topics/{name}", h.putMemoryTopic)
+		mux.HandleFunc("DELETE /api/memory/topics/{name}", h.deleteMemoryTopic)
+		mux.HandleFunc("GET /api/settings/app", h.getAppSettings)
+		mux.HandleFunc("PUT /api/settings/app", h.putAppSettings)
 	}
 	mux.HandleFunc("GET /api/settings/mcp", h.getMCPSettings)
 	mux.HandleFunc("PUT /api/settings/mcp", h.putMCPSettings)

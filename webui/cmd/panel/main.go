@@ -145,10 +145,14 @@ func main() {
 	srv := &http.Server{
 		Addr: cfg.Network.PanelAddr,
 		Handler: panel.New(panel.Deps{
-			Store:      store,
-			Engine:     engine,
-			DB:         db,
-			Projects:   memory.NewProjects(cfg.Storage.ProjectsPath),
+			Store:  store,
+			Engine: engine,
+			DB:     db,
+			Projects: memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memory.Limits{
+				User:    cfg.Memory.Limits.User,
+				Memory:  cfg.Memory.Limits.Memory,
+				Project: cfg.Memory.Limits.Project,
+			}),
 			Push:       pushSvc,
 			Reminders:  reminderStore,
 			Cfg:        cfg,

@@ -34,5 +34,25 @@ log:
   level: "info"
   format: "json"
 
+# 模型注入策略：auto = agent 自带模型凭证时不注入，否则注入 panda 配置的模型
+# （注入时会在任务输出开头声明并写入审计/事件流）；always = 总是注入；never = 永不注入
+injection:
+  model: "auto"
+
+# 路由偏好：列出的 agent 在评分时获得 +0.5 加权；首选 agent 不可用时自动顺延下一个
+# routing:
+#   preferred_agents: []
+
+# 记忆文件字符上限（缺省即使用默认值）
+# memory:
+#   limits:
+#     user: 5000
+#     memory: 10000
+#     project: 30000
+
+# 任务审批：always = 每次都需审批；on-request = 仅高风险任务；never = 从不审批
+# approval:
+#   mode: "on-request"
+
 capabilities:
   max_concurrent: 2

@@ -3,7 +3,7 @@ import { api, type Reminder } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { ErrorState, PageHeader } from '../components/page'
-import { toast, toastError } from '../components/toast'
+import { toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 
 /** The reminders view — the web face of the reminder system (design P1-28):

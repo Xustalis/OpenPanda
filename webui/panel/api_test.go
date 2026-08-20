@@ -156,7 +156,7 @@ func TestListNodes(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
 	}
-	var nodes []nodeJSON
+	var nodes []nodeRow
 	if err := json.Unmarshal(rr.Body.Bytes(), &nodes); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

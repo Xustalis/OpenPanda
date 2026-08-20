@@ -1,8 +1,10 @@
-// OpenPanda service worker: cache-first for static assets, network-only for
-// /api/* (the API is live data behind auth — never cached). Deliberately
-// minimal: install → precache the shell, fetch → pass through.
+// OpenPanda service worker: network-first for navigations (index.html must
+// always track the latest build), cache-first for static assets (build
+// output is content-hashed, so new deploys carry new URLs and stale entries
+// are never served), network-only for /api/* (live data behind auth).
+// Bumping CACHE retires old caches on activate via the whitelist sweep.
 
-const CACHE = 'openpanda-v1'
+const CACHE = 'openpanda-v2'
 const SHELL = ['/', '/favicon.svg', '/manifest.webmanifest']
 
 self.addEventListener('install', (e) => {
@@ -22,6 +24,25 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url)
   if (url.pathname.startsWith('/api/')) return // live data: always network
   if (e.request.method !== 'GET') return
+  if (url.origin !== location.origin) return
+
+  // Navigations (index.html): network-first so a fresh deploy always wins;
+  // fall back to the cached shell only when offline. Hash routing (#/...) 
+  // keeps every navigation pointed at '/', which is what we precache.
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request)
+        .then((res) => {
+          if (res.ok) {
+            const copy = res.clone()
+            caches.open(CACHE).then((c) => c.put('/', copy))
+          }
+          return res
+        })
+        .catch(() => caches.match(e.request).then((hit) => hit ?? caches.match('/'))),
+    )
+    return
+  }
 
   e.respondWith(
     caches.match(e.request).then(
@@ -29,7 +50,7 @@ self.addEventListener('fetch', (e) => {
         hit ??
         fetch(e.request).then((res) => {
           // Cache same-origin static responses for offline reloads.
-          if (res.ok && url.origin === location.origin) {
+          if (res.ok) {
             const copy = res.clone()
             caches.open(CACHE).then((c) => c.put(e.request, copy))
           }

@@ -157,12 +157,61 @@ export interface AskResult {
   exit_code?: number
 }
 
+/** One agent declared on a node's capability card (GET /api/nodes). */
+export interface NodeAgentDetail {
+  capabilities?: string[]
+  best_at?: string[]
+  not_for?: string[]
+  cost_tier?: string
+  tier?: number
+}
+
+/** One decoded ledger directory row — the full capability card. */
 export interface NodeInfo {
   id: string
+  name: string
   status: string
-  chip: string
+  chip?: string
   last_seen: string
+  scheduler_tier: number
   abilities: string[]
+  native_ids?: string[]
+  agents?: Record<string, NodeAgentDetail>
+  capacity: { cpu_cores: number; ram_gb: number; max_concurrent_tasks: number; current_tasks: number }
+  resource_profile?: { cpu: number; ram_gb: number; gpu_vram_gb: number; duration_hint: string }
+}
+
+/** GET /api/self — this machine's device profile (+ its ledger card). */
+export interface SelfInfo {
+  hostname: string
+  os: string
+  arch: string
+  chip?: string
+  cpu_cores: number
+  ram_gb?: number
+  node_name?: string
+  node?: NodeInfo
+}
+
+/** GET/PUT /api/settings/app — the four app policy groups (C1). */
+export interface AppSettings {
+  injection_model: 'auto' | 'always' | 'never'
+  preferred_agents: string[]
+  memory_limits: { user: number; memory: number; project: number }
+  approval_mode: 'always' | 'on-request' | 'never'
+  sandbox?: { work_path: string } // GET-only: read-only confinement info
+}
+
+/** One topics/*.md (or daily/*.md) file in GET /api/memory. */
+export interface TopicFile {
+  name: string
+  content: string
+}
+
+export interface ProjectMemory {
+  project: string
+  content: string
+  limit: number
 }
 
 export interface ProjectList {
@@ -250,6 +299,21 @@ export const api = {
     return request('GET', '/api/nodes')
   },
 
+  /** This machine's device profile and its capability card. */
+  self(): Promise<SelfInfo> {
+    return request('GET', '/api/self')
+  },
+
+  // ---- App policy settings (injection / routing / memory caps / approval) ----
+
+  getAppSettings(): Promise<AppSettings> {
+    return request('GET', '/api/settings/app')
+  },
+
+  putAppSettings(s: AppSettings): Promise<AppSettings> {
+    return request('PUT', '/api/settings/app', s)
+  },
+
   // ---- Model settings ----
 
   getModelSettings(): Promise<ModelSettings> {
@@ -310,9 +374,30 @@ export const api = {
     return request('GET', '/api/memory')
   },
 
-  /** Rewrite USER.md / MEMORY.md ("user" | "memory"); dreams is read-only. */
-  saveMemory(file: 'user' | 'memory', content: string): Promise<{ file: string; chars: number; limit: number }> {
+  /** Rewrite USER.md / MEMORY.md (§ entries) or DREAMS.md (free-form diary). */
+  saveMemory(
+    file: 'user' | 'memory' | 'dreams',
+    content: string,
+  ): Promise<{ file: string; chars: number; limit: number }> {
     return request('PUT', `/api/memory/${file}`, { content })
+  },
+
+  /** Create or rewrite one topics/<name>.md file (§ entries). */
+  saveMemoryTopic(name: string, content: string): Promise<{ topic: string; chars: number; limit: number }> {
+    return request('PUT', `/api/memory/topics/${encodeURIComponent(name)}`, { content })
+  },
+
+  deleteMemoryTopic(name: string): Promise<{ topic: string; status: string }> {
+    return request('DELETE', `/api/memory/topics/${encodeURIComponent(name)}`)
+  },
+
+  /** One project's MEMORY.md (§ entries) with its configured cap. */
+  projectMemory(name: string): Promise<ProjectMemory> {
+    return request('GET', `/api/projects/${encodeURIComponent(name)}/memory`)
+  },
+
+  saveProjectMemory(name: string, content: string): Promise<{ project: string; chars: number; limit: number }> {
+    return request('PUT', `/api/projects/${encodeURIComponent(name)}/memory`, { content })
   },
 
   // ---- MCP settings ----
@@ -433,8 +518,11 @@ export interface MemoryFiles {
   memory: string
   dreams: string
   time: string // node's current time, RFC3339
-  user_limit: number // char caps for the live edit counter
+  user_limit: number // char caps for the live edit counter (config values)
   mem_limit: number
+  project_limit: number
+  topics: TopicFile[] // topics/*.md — selective-load memory files
+  daily: TopicFile[] // warm-layer diary (read-only, newest first)
 }
 
 export interface SessionTurn {

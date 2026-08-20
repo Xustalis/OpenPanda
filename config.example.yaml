@@ -50,6 +50,39 @@ model:
 # mcp:
 #   command: "npx -y @modelcontextprotocol/server-filesystem /tmp"
 
+# Model injection into agent subprocesses. Default: agent-native models win.
+#   auto    inject panda's model endpoint only when the agent carries no model
+#           credentials of its own (env ANTHROPIC_API_KEY/OPENAI_API_KEY,
+#           login state, or its config files) and panda has a model configured
+#   always  always override the agent with panda's model endpoint (legacy)
+#   never   never inject; agents always use their own models
+# Every injection is announced at the top of the task output and recorded in
+# the audit log and the task event stream.
+injection:
+  model: "auto"                # auto | always | never
+
+# Local agent routing tuning. Routing scores each matching agent as
+# capability match × cost-tier discount, then picks the highest score;
+# agents listed here get a +0.5 bonus. If the chosen agent's CLI is missing
+# at execution time, the next-best matching agent is tried (fallback chain).
+# routing:
+#   preferred_agents: []       # e.g. ["codex", "opencode"]
+
+# Memory system tunables. Character caps for each memory file class; files
+# over the cap are refused on write.
+# memory:
+#   limits:
+#     user: 5000               # USER.md (user profile)
+#     memory: 10000            # MEMORY.md (environment notes)
+#     project: 30000           # per-project MEMORY.md
+
+# Task approval gate.
+#   always      every task needs explicit approval before execution
+#   on-request  only tasks the entry model flags as risky need approval
+#   never       tasks run as classified
+# approval:
+#   mode: "on-request"         # always | on-request | never
+
 # Web Push notifications (design P3-26): task entering review → phone push.
 # Read by the embedded console (`panda web`); requires a secure context —
 # HTTPS, or loopback which browsers already treat as secure.

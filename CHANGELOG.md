@@ -29,6 +29,24 @@ All gates green throughout: build / vet / full tests / `-race` / cross-compile. 
 - **Dead link** — roadmap referenced a local-only delegation report; now
   points at `scripts/smoke-delegate`, which reproduces the verification.
 
+### Planned follow-ups (deferred)
+
+Deliberately parked for after v0.0.1 — tracked here so they stay visible:
+
+- **Keyboard shortcuts** — global hotkeys for the console (new chat, quick
+  task, view switching).
+- **Browser integration** — a companion browser surface for the assistant.
+- **Git surface** — first-class git views (branch state, history, remotes)
+  in the console.
+- **Worktree management** — list/prune/inspect chat worktrees from the
+  console instead of only on chat deletion.
+- **Personalization** — user-tunable assistant personality & presentation
+  preferences.
+- **Web search caching** — cache layer for agent web searches to cut repeat
+  fetches and latency.
+- **Reasoning effort tiers** — expose low/medium/high reasoning strength as
+  a per-task setting.
+
 ### Added
 
 - **`panda install` / `panda uninstall` / `panda doctor` — global command lifecycle, cross-platform** — `panda install` copies the binary to `~/.local/bin` (unix) / `%LOCALAPPDATA%\OpenPanda\bin` (Windows) and registers it on PATH persistently: a marked block in shell rc files (`# >>> openpanda path >>>`, idempotent, user lines untouched) on unix, HKCU\Environment on Windows via the registry API with the value type preserved (`setx` avoided — it truncates PATH at 1024 chars) plus a WM_SETTINGCHANGE broadcast; it then self-verifies by executing the installed copy. `panda doctor` is the standalone self-check (installed copy runs / PATH resolves / persistence survives reboot / config & DB usable; exit 1 on any failure). `panda uninstall` is whitelist-safe: it prints the full plan, requires typing `confirm` (or `--yes` for scripts, `--dry-run` to preview), deletes only explicitly-derived targets (binary, PATH registration, DB + journals, context dir, VAPID key, config only inside owned roots), always keeps user assets (projects/memory/skills/work dirs — anything overlapping home or an asset is auto-flipped to keep), writes a zip backup of the deleted state to the home dir first, and produces a deleted/kept report file. Guardrail core in `internal/install` (unit-tested, incl. symlink-safety: links are removed, never followed). Five-language CLI messages throughout.

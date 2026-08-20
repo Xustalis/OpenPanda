@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -101,17 +100,11 @@ func (h *handler) taskLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"id": id, "events": out})
 }
 
-// nodeJSON is the wire form of a capability-directory node.
-type nodeJSON struct {
-	ID        string   `json:"id"`
-	Status    string   `json:"status"`
-	Chip      string   `json:"chip"`
-	LastSeen  string   `json:"last_seen"`
-	Abilities []string `json:"abilities"`
-}
-
 // listNodes serves GET /api/nodes — the local capability directory (every node
 // this one knows about: itself via the daemon's heartbeat, plus remote peers).
+// Each row carries the full card breakdown (hardware capacity, resource
+// profile, native ids, per-agent capabilities) so the console can expand a
+// node's detail without a second round-trip (C3).
 func (h *handler) listNodes(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("node directory not configured"))
@@ -122,21 +115,37 @@ func (h *handler) listNodes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, errors.New("query nodes failed"))
 		return
 	}
-	out := make([]nodeJSON, 0, len(nodes))
+	out := make([]nodeRow, 0, len(nodes))
 	for _, n := range nodes {
-		seen := "never"
-		if n.LastSeen != 0 {
-			seen = time.Unix(n.LastSeen, 0).Format(time.RFC3339)
-		}
-		out = append(out, nodeJSON{
-			ID:        n.ID,
-			Status:    n.Status,
-			Chip:      n.Chip,
-			LastSeen:  seen,
-			Abilities: n.Abilities(),
-		})
+		out = append(out, toNodeRow(n))
 	}
 	writeJSON(w, out)
+}
+
+// getProjectMemory serves GET /api/projects/{name}/memory — one project's
+// MEMORY.md content (the read half of PUT /api/projects/{name}/memory),
+// loaded through the Projects store so name validation and the configured
+// cap apply. A project without a memory file reads as empty, not an error.
+func (h *handler) getProjectMemory(w http.ResponseWriter, r *http.Request) {
+	if h.projects == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("projects not configured"))
+		return
+	}
+	name := r.PathValue("name")
+	if err := memory.ValidateName(name); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid project name"))
+		return
+	}
+	mf, err := h.projects.Load(name)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("load project memory failed"))
+		return
+	}
+	writeJSON(w, map[string]any{
+		"project": name,
+		"content": string(mf.Bytes()),
+		"limit":   h.projects.Limit(),
+	})
 }
 
 // listProjects serves GET /api/projects — the project names known to the
@@ -181,7 +190,7 @@ func (h *handler) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	// Idempotent create: saving the empty seed marks the project as existing
 	// (List lists directories); re-creating an existing project is a no-op.
-	if err := h.projects.Save(req.Name, memory.MemFile{Limit: memory.ProjectCharLimit}); err != nil {
+	if err := h.projects.Save(req.Name, memory.MemFile{Limit: h.projects.Limit()}); err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("create project failed"))
 		return
 	}
