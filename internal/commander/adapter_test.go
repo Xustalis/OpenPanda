@@ -28,7 +28,7 @@ func TestRunAdapterProcess(t *testing.T) {
 	adapterDir = dir // redirect the constant for this test
 	defer func() { adapterDir = oldDir }()
 
-	res := runAdapterProcess(context.Background(), "fake.py", "PANDA", "", config.ModelConfig{})
+	res := runAdapterProcess(context.Background(), "fake.py", "PANDA", "", nil)
 	if !res.OK {
 		t.Fatalf("adapter failed: %+v", res)
 	}
@@ -42,7 +42,7 @@ func TestRunAdapterMissingBinary(t *testing.T) {
 	adapterDir = t.TempDir() // no adapters here
 	defer func() { adapterDir = oldDir }()
 
-	res := runAdapterProcess(context.Background(), "nope.py", "x", "", config.ModelConfig{})
+	res := runAdapterProcess(context.Background(), "nope.py", "x", "", nil)
 	if res.OK {
 		t.Fatalf("expected failure for missing adapter")
 	}
@@ -114,7 +114,7 @@ func TestAdapterHardTimeout(t *testing.T) {
 	defer func() { adapterHardTimeout = oldTimeout }()
 
 	start := time.Now()
-	res := runAdapterProcess(context.Background(), "slow.py", "x", "", config.ModelConfig{})
+	res := runAdapterProcess(context.Background(), "slow.py", "x", "", nil)
 	elapsed := time.Since(start)
 
 	if res.OK {

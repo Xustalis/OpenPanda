@@ -44,6 +44,19 @@ const (
 	EvTransfer = "transfer"
 	EvCancel   = "cancel"
 	EvExpire   = "expire"
+
+	// EvModelInjection records that panda injected its model endpoint into
+	// the agent subprocess (injection visibility, A1): the Web task detail
+	// replays it like any other lifecycle event.
+	EvModelInjection = "model_injection"
+	// EvAgentFallback records that the scored primary agent was unavailable
+	// and execution fell back to a runner-up (A2 fallback chain).
+	EvAgentFallback = "agent_fallback"
+	// EvMemoryPromotion records that the Dreaming engine promoted an entry
+	// into MEMORY.md (A4 visibility): the console shows what was memorized
+	// — and whether it came through the repeated-emphasis whitelist channel —
+	// so the user can correct or delete it via the memory API.
+	EvMemoryPromotion = "memory_promotion"
 )
 
 // Task priority levels for the panel queue (smaller runs first). The DB

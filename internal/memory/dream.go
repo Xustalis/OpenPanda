@@ -21,6 +21,24 @@ const (
 	minCandidateChars = 10
 )
 
+const (
+	// dailyExternalDiscount is the A4 "logs are low-weight" factor: candidates
+	// whose provenance carries external daily-log lines ([ext], user/wire text)
+	// are weak evidence, so their Deep score is halved before the threshold
+	// gates. Agent-observed (trusted) candidates keep full weight.
+	dailyExternalDiscount = 0.5
+	// PromotionSourceTag marks entries promoted through the repeated-emphasis
+	// whitelist channel, so the user can tell log-derived memory in MEMORY.md
+	// and correct or delete it via the memory API.
+	PromotionSourceTag = "[from:日志]"
+	// emphasizeWindowDays / emphasizeMinDays define "repeated emphasis": the
+	// agent itself observed the same text on at least emphasizeMinDays distinct
+	// days within the last emphasizeWindowDays. That — and never external-only
+	// repetition — opens the whitelist channel around the provenance gate.
+	emphasizeWindowDays = 7
+	emphasizeMinDays    = 3
+)
+
 // Candidate is one short-term signal consolidated out of the daily logs.
 type Candidate struct {
 	Text    string
@@ -41,6 +59,12 @@ type Dreamer struct {
 	minScore   float64
 	minRecall  int
 	minQueries int
+	// OnPromotion, when set, is invoked for every entry promoted into
+	// MEMORY.md (A4 visibility): the daemon records an audit/event
+	// (core.EvMemoryPromotion) so the console can show what the Dreaming
+	// engine memorized and let the user correct or delete it. viaWhitelist
+	// reports whether the entry came through the repeated-emphasis channel.
+	OnPromotion func(entry string, viaWhitelist bool)
 }
 
 // NewDreamer builds a dreamer with OpenClaw's default thresholds.
@@ -159,6 +183,18 @@ func rem(candidates []*Candidate) map[string]int {
 // the threshold and provenance gates into MEMORY.md. Promotion is additive —
 // each promoted text becomes one entry, and an over-limit add is skipped (the
 // agent consolidates MEMORY.md via the memory tool, per the Hermes workflow).
+//
+// A4 gates, in order:
+//  1. A candidate carrying external daily-log sources gets its score halved
+//     (dailyExternalDiscount) — logs are low-weight evidence.
+//  2. Count and distinct-day minimums apply to every candidate.
+//  3. Fully trusted candidates must also clear minScore.
+//  4. Candidates with any untrusted source are dropped by the provenance gate
+//     unless they show repeated emphasis — the agent itself observed the text
+//     on >=emphasizeMinDays distinct days within the last emphasizeWindowDays.
+//     Such whitelist promotions are annotated with PromotionSourceTag so the
+//     user can review and correct them. External-only repetition never opens
+//     the channel (stored prompt injection stays closed, P1-22).
 func (d *Dreamer) deep(candidates []*Candidate) ([]string, error) {
 	mem, err := d.hermes.LoadMemory()
 	if err != nil {
@@ -180,14 +216,33 @@ func (d *Dreamer) deep(candidates []*Candidate) ([]string, error) {
 			consolidationSignal(first, last),
 			conceptualSignal(c.Text),
 		)
+		trusted := Sources(c.Sources).Trusted()
+		if !trusted {
+			// A4 low weight: daily-log lines carrying external input are weak
+			// evidence — discount before the threshold gates (see the weight
+			// system in signals.go; this discount rides beside it).
+			score *= dailyExternalDiscount
+		}
 		c.Score = score
-		if score < d.minScore || c.Count < d.minRecall || len(c.Days) < d.minQueries {
+		if c.Count < d.minRecall || len(c.Days) < d.minQueries {
 			continue
 		}
-		if !Sources(c.Sources).Trusted() {
-			continue // provenance taint gate: drop untrusted origins wholesale
+		entry := c.Text
+		viaWhitelist := false
+		if trusted {
+			if score < d.minScore {
+				continue
+			}
+		} else {
+			// Provenance taint gate with the repeated-emphasis whitelist
+			// channel: only the agent's own repeated observations open it.
+			if trustedDaysWithin(c, now, emphasizeWindowDays*24*time.Hour) < emphasizeMinDays {
+				continue
+			}
+			entry = c.Text + " " + PromotionSourceTag
+			viaWhitelist = true
 		}
-		if err := mem.Add(c.Text); err != nil {
+		if err := mem.Add(entry); err != nil {
 			// A candidate already promoted into MEMORY.md (and still present in
 			// the warm daily logs) is not an error — skip it, don't abort the
 			// whole sweep. An over-limit add likewise leaves consolidation to
@@ -197,7 +252,10 @@ func (d *Dreamer) deep(candidates []*Candidate) ([]string, error) {
 			}
 			return nil, err
 		}
-		promoted = append(promoted, c.Text)
+		promoted = append(promoted, entry)
+		if d.OnPromotion != nil {
+			d.OnPromotion(entry, viaWhitelist)
+		}
 	}
 
 	if len(promoted) > 0 {
@@ -206,6 +264,29 @@ func (d *Dreamer) deep(candidates []*Candidate) ([]string, error) {
 		}
 	}
 	return promoted, nil
+}
+
+// trustedDaysWithin counts the distinct days a candidate was observed by a
+// trusted source within [now-window, now] — the "repeated emphasis" measure
+// that opens the whitelist promotion channel. External sightings never count:
+// user/wire text repeating itself is exactly the injection pattern the
+// provenance gate exists to stop.
+func trustedDaysWithin(c *Candidate, now time.Time, window time.Duration) int {
+	cutoff := now.Add(-window)
+	var days []time.Time
+	for _, s := range c.Sources {
+		if !s.Trusted {
+			continue
+		}
+		date, ok := parseDailyName(s.Path)
+		if !ok || date.Before(cutoff) {
+			continue
+		}
+		if !containsDay(days, date) {
+			days = append(days, date)
+		}
+	}
+	return len(days)
 }
 
 // stripDailyPrefix removes the "- 15:04:05 " prefix Daily.Append writes.

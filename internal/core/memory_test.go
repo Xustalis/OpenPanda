@@ -2,6 +2,7 @@ package core
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,15 +10,16 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/skills"
 )
 
-// TestWithProjectMemory verifies the isolation wall (design §17.2) at the core
-// execution layer: a project's agent prompt is prepended with that project's
-// own memory only, never Hermes memory.
-func TestWithProjectMemory(t *testing.T) {
+// TestAgentPromptOmitsProjectMemory verifies the A1 decision at the core
+// execution layer: the project's MEMORY.md is no longer packed into the
+// agent prompt (token savings); skills remain the only prompt injection.
+// The memory multi-file redesign owns the replacement loading path.
+func TestAgentPromptOmitsProjectMemory(t *testing.T) {
 	root := t.TempDir()
 	hermes := memory.NewHermes(root)
 	projects := memory.NewProjects(root)
 
-	// Distinct markers to prove the two stores cannot cross the wall.
+	// Distinct markers to prove neither memory class reaches the prompt.
 	if err := hermes.SaveMemory(memory.MemFile{Entries: []string{"HERMES-SECRET: dark theme"}}); err != nil {
 		t.Fatalf("save hermes: %v", err)
 	}
@@ -27,17 +29,13 @@ func TestWithProjectMemory(t *testing.T) {
 
 	intent := "refactor the router"
 
-	// No memory configured: the intent passes through unchanged.
+	// Memory configured: the agent prompt must NOT contain project memory
+	// (nor Hermes memory), only the intent itself.
 	c := &Core{logger: testLogger()}
-	if got := withProjectMemory(c, intent, "panda"); got != intent {
-		t.Errorf("nil memory should leave intent unchanged, got %q", got)
-	}
-
-	// Memory configured: project memory is prepended, Hermes memory is not.
 	c.memory = memory.NewInjector(hermes, projects)
-	got := withProjectMemory(c, intent, "panda")
-	if !strings.Contains(got, "PROJECT-MEM") {
-		t.Errorf("prompt should contain project memory, got %q", got)
+	got, used := buildAgentPrompt(c, intent, "panda", "refactor")
+	if strings.Contains(got, "PROJECT-MEM") {
+		t.Errorf("agent prompt must no longer contain project memory, got %q", got)
 	}
 	if strings.Contains(got, "HERMES-SECRET") {
 		t.Errorf("prompt must not leak Hermes memory, got %q", got)
@@ -45,10 +43,42 @@ func TestWithProjectMemory(t *testing.T) {
 	if !strings.Contains(got, intent) {
 		t.Errorf("prompt should still contain the intent, got %q", got)
 	}
+	if len(used) != 0 {
+		t.Errorf("no skills configured, used = %d", len(used))
+	}
+}
 
-	// Empty project: no project memory to pack, so the intent is unchanged.
-	if got := withProjectMemory(c, intent, ""); got != intent {
-		t.Errorf("empty project should leave intent unchanged, got %q", got)
+// TestAgentPromptCarriesMemoryManifest verifies the A3 replacement path at
+// the core execution layer: outside a project the agent prompt carries the
+// memory file manifest (paths + summaries, fenced as data) instead of the
+// memory content itself; inside a project nothing memory-related is injected.
+func TestAgentPromptCarriesMemoryManifest(t *testing.T) {
+	root := t.TempDir()
+	hermes := memory.NewHermes(root)
+	projects := memory.NewProjects(root)
+	if err := hermes.SaveMemory(memory.MemFile{Entries: []string{"HERMES-FACT: dark theme", "HERMES-SECOND: standing desk"}}); err != nil {
+		t.Fatalf("save hermes: %v", err)
+	}
+
+	c := &Core{logger: testLogger()}
+	c.memory = memory.NewInjector(hermes, projects)
+
+	got, _ := buildAgentPrompt(c, "fix the build", "", "fix build")
+	if !strings.Contains(got, "记忆文件清单") || !strings.Contains(got, "MEMORY.md") {
+		t.Errorf("manifest missing from non-project prompt: %q", got)
+	}
+	if !strings.Contains(got, filepath.Join(root, "MEMORY.md")) {
+		t.Errorf("manifest must carry the absolute file path: %q", got)
+	}
+	// Manifest mode lists files, it does not dump their entries.
+	if strings.Contains(got, "HERMES-SECOND") {
+		t.Errorf("prompt must not dump full memory content: %q", got)
+	}
+
+	// Inside a project the isolation wall holds: no manifest either.
+	got, _ = buildAgentPrompt(c, "fix the build", "panda", "fix build")
+	if strings.Contains(got, "记忆文件清单") {
+		t.Errorf("project prompt must not carry the manifest: %q", got)
 	}
 }
 

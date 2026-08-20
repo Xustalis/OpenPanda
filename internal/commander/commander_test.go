@@ -38,7 +38,7 @@ func testCard() ledger.Card {
 }
 
 func TestRouteNative(t *testing.T) {
-	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, err := r.Route([]string{"sys:info"})
 	if err != nil {
 		t.Fatalf("route: %v", err)
@@ -49,7 +49,7 @@ func TestRouteNative(t *testing.T) {
 }
 
 func TestRouteAgent(t *testing.T) {
-	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, err := r.Route([]string{"code:modify"})
 	if err != nil {
 		t.Fatalf("route: %v", err)
@@ -60,7 +60,7 @@ func TestRouteAgent(t *testing.T) {
 }
 
 func TestRouteSecondAgent(t *testing.T) {
-	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, err := r.Route([]string{"web:search"})
 	if err != nil {
 		t.Fatalf("route: %v", err)
@@ -77,7 +77,7 @@ func TestMatchAgentDeterministic(t *testing.T) {
 	// the map would flip run-to-run.
 	card.Agents["aaa_code"] = ledger.Agent{Adapter: "aaa", Capabilities: []string{"code:lint"}}
 	card.Agents["zzz_code"] = ledger.Agent{Adapter: "zzz", Capabilities: []string{"code:lint"}}
-	r := NewRouter(card, NewExecutor(), config.ModelConfig{})
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 
 	for i := 0; i < 50; i++ {
 		name, _, ok := r.MatchAgent([]string{"code:lint"})
@@ -88,7 +88,7 @@ func TestMatchAgentDeterministic(t *testing.T) {
 }
 
 func TestRouteManual(t *testing.T) {
-	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, err := r.Route([]string{"design:figma"})
 	if err != nil {
 		t.Fatalf("route: %v", err)
@@ -99,14 +99,14 @@ func TestRouteManual(t *testing.T) {
 }
 
 func TestRouteNoMatch(t *testing.T) {
-	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	if _, err := r.Route([]string{"gpu:train"}); err == nil {
 		t.Fatalf("expected error for unmatched ability")
 	}
 }
 
 func TestRouteAgentByName(t *testing.T) {
-	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, err := r.Route([]string{"agent:claude_code"})
 	if err != nil {
 		t.Fatalf("route: %v", err)
@@ -121,7 +121,7 @@ func TestRouteNormalizedMatch(t *testing.T) {
 	// bridges the category prefix.
 	card := testCard()
 	card.Native = append(card.Native, ledger.NativeAbility{ID: "lint", Command: "npx", Args: []string{"eslint"}})
-	r := NewRouter(card, NewExecutor(), config.ModelConfig{})
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, err := r.Route([]string{"code:lint"})
 	if err != nil {
 		t.Fatalf("route: %v", err)
@@ -132,7 +132,7 @@ func TestRouteNormalizedMatch(t *testing.T) {
 }
 
 func TestRouteShortFragmentDoesNotFanOut(t *testing.T) {
-	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	if _, err := r.Route([]string{"io"}); err == nil {
 		t.Fatalf("expected no match for degenerate 2-char fragment")
 	}
@@ -142,7 +142,7 @@ func TestNativePriorityOverAgent(t *testing.T) {
 	card := testCard()
 	// Add an agent that also claims sys:info — native must win.
 	card.Agents["x"] = ledger.Agent{Adapter: "x.py", Capabilities: []string{"sys:info"}}
-	r := NewRouter(card, NewExecutor(), config.ModelConfig{})
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, _ := r.Route([]string{"sys:info"})
 	if plan.Kind != "native" {
 		t.Fatalf("native priority violated: got %s", plan.Kind)
@@ -153,7 +153,7 @@ func TestExecuteNative(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uname not available on windows")
 	}
-	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, _ := r.Route([]string{"sys:info"})
 	res := r.Execute(context.Background(), plan, "", "", false)
 	if !res.OK {
@@ -169,7 +169,7 @@ func TestExecuteTier2RequiresAuth(t *testing.T) {
 	card.Native = append(card.Native, ledger.NativeAbility{
 		ID: "danger:reboot", Command: "sudo", Args: []string{"reboot"}, Tier: 2,
 	})
-	r := NewRouter(card, NewExecutor(), config.ModelConfig{})
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, err := r.Route([]string{"danger:reboot"})
 	if err != nil {
 		t.Fatalf("route: %v", err)
@@ -188,7 +188,7 @@ func TestExecuteTier2RequiresAuth(t *testing.T) {
 }
 
 func TestExecuteAgent(t *testing.T) {
-	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{})
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, err := r.Route([]string{"code:modify"})
 	if err != nil {
 		t.Fatalf("route: %v", err)
@@ -197,7 +197,9 @@ func TestExecuteAgent(t *testing.T) {
 		t.Fatalf("plan = %s, want agent", plan.Kind)
 	}
 	// Inject a fake adapter so the test exercises the agent execution path
-	// (execAgent -> runAdapter) without invoking a real LLM CLI.
+	// (execAgent -> runAdapter) without invoking a real LLM CLI. The fake
+	// prober pairs with it so no real CLI needs to be installed.
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
 	r.runAdapter = func(ctx context.Context, adapter, prompt, cwd string) AgentResult {
 		if adapter != "claude_code.py" {
 			t.Fatalf("adapter = %q, want claude_code.py", adapter)
@@ -229,7 +231,7 @@ func TestExecuteAgentDeclaredTier1(t *testing.T) {
 	ag := card.Agents["claude_code"]
 	ag.Tier = 1
 	card.Agents["claude_code"] = ag
-	r := NewRouter(card, NewExecutor(), config.ModelConfig{})
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, err := r.Route([]string{"code:modify"})
 	if err != nil {
 		t.Fatalf("route: %v", err)
@@ -237,6 +239,7 @@ func TestExecuteAgentDeclaredTier1(t *testing.T) {
 	if plan.Tier != 1 {
 		t.Fatalf("declared tier = %d, want 1", plan.Tier)
 	}
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
 	r.runAdapter = func(ctx context.Context, adapter, prompt, cwd string) AgentResult {
 		return AgentResult{OK: true, Result: "refactored", ExitCode: 0}
 	}
@@ -252,7 +255,7 @@ func TestRouteTierFromCommand(t *testing.T) {
 	card.Native = append(card.Native, ledger.NativeAbility{
 		ID: "danger:sudo", Command: "sudo", Args: []string{"echo", "hi"},
 	})
-	r := NewRouter(card, NewExecutor(), config.ModelConfig{})
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, _ := r.Route([]string{"danger:sudo"})
 	if plan.Tier != 2 {
 		t.Fatalf("inferred tier = %d, want 2", plan.Tier)

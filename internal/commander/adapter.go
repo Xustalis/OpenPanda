@@ -15,6 +15,21 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
+// memoryFilesKey is the context key carrying the selective-loading memory
+// file list (A3) from the orchestration layer down to the adapter request,
+// without widening every execution-path signature in between.
+type memoryFilesKey struct{}
+
+// WithMemoryFiles attaches the node's memory file paths (absolute) to an
+// execution context; runAdapterProcess copies them into AdapterRequest so an
+// agent that received the prompt manifest can read the listed files itself.
+func WithMemoryFiles(ctx context.Context, paths []string) context.Context {
+	if len(paths) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, memoryFilesKey{}, paths)
+}
+
 // adapterDir is where adapter scripts live. Resolved relative to the working
 // directory, so the daemon must run from the install root (adapters/ sits
 // beside the binary in the repo layout) or adapters/ must be linked into the
@@ -37,12 +52,19 @@ type AdapterRequest struct {
 	Prompt   string `json:"prompt"`
 	TimeoutS int    `json:"timeout_s"`
 	CWD      string `json:"cwd,omitempty"`
+	// MemoryFiles lists the absolute paths of the node's personal memory
+	// files (A3 selective loading). The prompt carries the manifest (file
+	// index + summaries); this list gives the orchestration layer's view of
+	// the same files so adapters that support file access can let the agent
+	// read only what it needs instead of the whole memory content.
+	MemoryFiles []string `json:"memory_files,omitempty"`
 }
 
-// modelEnv injects the model provider config into the adapter process env so
-// adapters (e.g. the claude CLI) point at DeepSeek. Secrets are passed only
-// via env and never echoed to logs. Empty base_url/model fall back to the same
-// defaults the entry model applies, so the adapter and entry never diverge.
+// modelEnv builds the model provider env injected into the adapter process
+// when the injection policy says so (see Router.InjectionDecision). Secrets
+// are passed only via env and never echoed to logs. Empty base_url/model
+// fall back to the same defaults the entry model applies, so the adapter and
+// entry never diverge.
 func modelEnv(model config.ModelConfig) []string {
 	base := model.BaseURL
 	if base == "" {
@@ -72,19 +94,15 @@ const adapterTimeoutS = 600
 var adapterHardTimeout = (adapterTimeoutS + 30) * time.Second
 
 // runAdapterProcess spawns adapters/<name> with a JSON request on stdin and
-// reads a JSON result from stdout. The model config is injected via env so the
-// adapter reaches the configured provider; the subprocess is sandboxed to the
-// task directory with a minimal environment (see security.Sandbox).
-func runAdapterProcess(ctx context.Context, name string, prompt string, cwd string, model config.ModelConfig) AgentResult {
-	// The model endpoint must be HTTPS so the API key never travels cleartext,
-	// and pinned to the configured host so the allowlist is never empty (D7).
-	if model.BaseURL != "" {
-		if err := security.NewNetworkGuard(security.EndpointHost(model.BaseURL)).CheckURL(model.BaseURL); err != nil {
-			return AgentResult{OK: false, Result: security.Redact(err.Error()), ExitCode: 1}
-		}
-	}
-
+// reads a JSON result from stdout. env carries the model-provider override
+// when the injection policy decided one is needed (empty otherwise — the
+// agent then uses its own model); the subprocess is sandboxed to the task
+// directory with a minimal environment (see security.Sandbox).
+func runAdapterProcess(ctx context.Context, name string, prompt string, cwd string, env []string) AgentResult {
 	req := AdapterRequest{Prompt: prompt, TimeoutS: adapterTimeoutS, CWD: cwd}
+	if mf, ok := ctx.Value(memoryFilesKey{}).([]string); ok {
+		req.MemoryFiles = mf
+	}
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
 		return AgentResult{OK: false, Result: "bad adapter request", ExitCode: 1}
@@ -101,7 +119,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	var stdout, stderr executil.Capture
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	security.NewSandbox(cwd).Apply(cmd, modelEnv(model)...)
+	security.NewSandbox(cwd).Apply(cmd, env...)
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {

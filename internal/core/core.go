@@ -134,19 +134,32 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		retryBackoff: time.Second,
 	}
 	// The commander needs at least one native ability to route; a zero card
-	// yields a router that declines everything.
+	// yields a router that declines everything. The router starts with default
+	// policy (auto injection, no preferred agents); SetRouterPolicy applies
+	// the loaded config once the caller has it.
 	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 {
-		c.router = commander.NewRouter(card, commander.NewExecutor(), model)
+		c.router = commander.NewRouter(card, commander.NewExecutor(), model, config.InjectionConfig{}, config.RoutingConfig{})
 	}
 	return c
+}
+
+// SetRouterPolicy applies the configured injection/routing policy to the
+// commander router (injection.model and routing.preferred_agents). Call it
+// after NewCore with the loaded config sections; a nil router (empty card)
+// makes it a no-op.
+func (c *Core) SetRouterPolicy(injection config.InjectionConfig, routing config.RoutingConfig) {
+	if c.router != nil {
+		c.router.SetPolicy(injection, routing)
+	}
 }
 
 // Register upserts this node in the local ledger.
 func (c *Core) Register(ctx context.Context) error { return c.node.Register(ctx) }
 
-// SetMemoryStores attaches the memory layer (design §17/§8): the injector for
-// project memory, the daily log writer feeding the Dreaming engine, and the
-// skill store for progressive loading. Any may be nil to disable its layer.
+// SetMemoryStores attaches the memory layer (design §17/§8): the Hermes
+// injector (entry-model conversation context; no longer used for agent-prompt
+// injection since A1), the daily log writer feeding the Dreaming engine, and
+// the skill store for progressive loading. Any may be nil to disable its layer.
 func (c *Core) SetMemoryStores(inj *memory.Injector, daily *memory.Daily, sk *skills.Store) {
 	c.memory = inj
 	c.daily = daily

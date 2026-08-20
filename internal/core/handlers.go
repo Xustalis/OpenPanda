@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -389,6 +391,15 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 
 	prompt, usedSkills := buildAgentPrompt(c, intent, task.Project, task.Title)
 
+	// Model-injection policy check (A1): decided before execution so the
+	// announcement, audit entry, and task event all describe what the adapter
+	// subprocess is about to receive. The actual announcement is emitted after
+	// execution, gated on the adapter really having run.
+	var injection commander.InjectionDecision
+	if plan.Kind == "agent" {
+		injection = c.router.InjectionDecision(plan.Adapter)
+	}
+
 	// workDir is normally the node-wide execution directory; a queued task may
 	// pin its own (a panel session's worktree) so concurrent tasks never share
 	// a working directory (queue redesign — SetWorkDir is process-global and
@@ -411,8 +422,54 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 	}
 
-	res := c.router.Execute(ctx, plan, prompt, workDir, task.Authorized)
+	// Selective memory loading (A3): for an agent task outside a project, hand
+	// the adapter the absolute paths of the personal memory files so the
+	// orchestration layer (and the agent itself, via the manifest in the
+	// prompt) can read only what the task needs. Project executions get no
+	// memory at all (D3 isolation wall).
+	execCtx := ctx
+	if plan.Kind == "agent" && task.Project == "" && c.memory != nil {
+		if files, err := c.memory.Manifest(); err == nil {
+			paths := make([]string, 0, len(files))
+			for _, f := range files {
+				paths = append(paths, f.Path)
+			}
+			execCtx = commander.WithMemoryFiles(ctx, paths)
+		}
+	}
+
+	res := c.router.Execute(execCtx, plan, prompt, workDir, task.Authorized)
 	if plan.Kind == "agent" {
+		// Fallback chain visibility (A2): res.Agent names the agent that
+		// actually executed; a mismatch means the scored primary's CLI was
+		// unavailable and a runner-up took over. The breaker tracks the agent
+		// that really ran.
+		if res.Agent != "" && res.Agent != plan.Agent {
+			breakerKey = "agent:" + res.Agent
+			c.audit(ctx, taskID, "agent:fallback", plan.Agent, "fallback", "primary unavailable, fell back to "+res.Agent)
+			if err := c.store.RecordEvent(ctx, taskID, EvAgentFallback, map[string]any{"from": plan.Agent, "to": res.Agent}); err != nil {
+				c.logger.Warn("record agent fallback event", "task", taskID, "err", err)
+			}
+		}
+		// Explicit injection reminder (A1): when panda overrode the agent's
+		// model endpoint, say so at the top of the output, in the audit log,
+		// and in the task event stream the Web task detail replays. Gated on
+		// the adapter actually running (a tier refusal spawns nothing).
+		if injection.Inject && res.Agent != "" {
+			notice := commander.InjectionNotice(injection, res.Agent)
+			if res.Stdout != "" {
+				res.Stdout = notice + "\n" + res.Stdout
+			} else {
+				res.Stdout = notice
+			}
+			c.audit(ctx, taskID, "model:injected", res.Agent, "injected",
+				"model="+injection.Model+" endpoint="+injection.BaseURL+" reason="+injection.Reason)
+			if err := c.store.RecordEvent(ctx, taskID, EvModelInjection, map[string]any{
+				"agent": res.Agent, "model": injection.Model, "base_url": injection.BaseURL, "reason": injection.Reason,
+			}); err != nil {
+				c.logger.Warn("record model injection event", "task", taskID, "err", err)
+			}
+		}
 		if res.OK {
 			c.breaker.RecordSuccess(breakerKey)
 		} else if c.breaker.RecordFailure(breakerKey) {
@@ -523,34 +580,29 @@ func taskScope(specJSON string) string {
 	return spec.Scope
 }
 
-// withProjectMemory prepends a project's own MEMORY.md to the agent intent so
-// the execution context carries the project's conventions (design §17.2). Only
-// project memory is packed here — Hermes memory never crosses the isolation
-// wall. A nil injector, an empty project, a load error, or empty memory all
-// leave the intent unchanged.
-func withProjectMemory(c *Core, intent, project string) string {
-	if c.memory == nil || project == "" {
-		return intent
-	}
-	mem, err := c.memory.ContextPack(project)
-	if err != nil {
-		c.logger.Warn("load project memory", "project", project, "err", err)
-		return intent
-	}
-	if mem == "" {
-		return intent
-	}
-	return "以下为本项目记忆（仅本项目执行参考）：\n" + mem + "\n\n任务指令：\n" + intent
-}
-
-// buildAgentPrompt assembles the full agent execution prompt — the task intent
-// plus, in order, the project's own memory (design §17.2) and any matched
+// buildAgentPrompt assembles the full agent execution prompt — the memory
+// file manifest (A3 selective loading) plus the task intent plus any matched
 // skills (design §8.5) — and returns the skills that were actually loaded, so
-// the caller can record their use. Skill matching keys off the short title, not
-// the full intent, so a long instruction does not over-match on common words.
+// the caller can record their use. Skill matching keys off the short title,
+// not the full intent, so a long instruction does not over-match on common
+// words.
+//
+// Project memory (MEMORY.md) is deliberately NOT packed into the agent prompt
+// anymore (A1 decision): it used to be prepended wholesale here, burning
+// tokens on every task. Its replacement is the A3 manifest: outside a project
+// the agent receives an index of the personal memory files (paths + one-line
+// summaries) and reads what it needs with its own file tools; inside a project
+// no memory is injected at all (D3 isolation wall).
 func buildAgentPrompt(c *Core, intent, project, title string) (string, []*skills.Skill) {
-	intent = withProjectMemory(c, intent, project)
-	return withSkills(c, intent, project, title)
+	prompt, used := withSkills(c, intent, project, title)
+	if project == "" && c.memory != nil {
+		if files, err := c.memory.Manifest(); err == nil {
+			if manifest := memory.RenderManifest(files); manifest != "" {
+				prompt = manifest + "\n\n" + prompt
+			}
+		}
+	}
+	return prompt, used
 }
 
 // withSkills prepends matched active skills to the intent via the lightweight

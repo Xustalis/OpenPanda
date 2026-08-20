@@ -29,11 +29,45 @@ import (
 // USER.md (who the user is, ~500 tokens) and MEMORY.md (what the agent knows
 // about the world, ~800 tokens) — and PANDA gives project memory more room
 // because it is injected into a full agent context (design §17.2).
+//
+// These constants are the compile-time fallbacks; deployments configure real
+// caps via config memory.limits.{user,memory,project}, injected at store
+// construction (NewHermesWithLimits / NewProjectsWithLimits).
 const (
 	UserCharLimit    = 1375 // Hermes USER.md (~500 tokens)
 	MemoryCharLimit  = 2200 // Hermes MEMORY.md (~800 tokens)
 	ProjectCharLimit = 8000 // per-project MEMORY.md (PANDA-specific)
 )
+
+// Limits carries the configurable character caps (config memory.limits). A
+// non-positive field falls back to the matching compile-time constant, so a
+// zero Limits keeps the historical behavior.
+type Limits struct {
+	User    int // USER.md cap
+	Memory  int // MEMORY.md and topics/*.md cap
+	Project int // per-project MEMORY.md cap
+}
+
+func (l Limits) user() int {
+	if l.User > 0 {
+		return l.User
+	}
+	return UserCharLimit
+}
+
+func (l Limits) memory() int {
+	if l.Memory > 0 {
+		return l.Memory
+	}
+	return MemoryCharLimit
+}
+
+func (l Limits) project() int {
+	if l.Project > 0 {
+		return l.Project
+	}
+	return ProjectCharLimit
+}
 
 // entrySep is the Hermes delimiter between memory entries (U+00A7).
 const entrySep = "§"

@@ -48,6 +48,9 @@ func newCoreWithAgent(t *testing.T, id string) *Core {
 		Capacity: ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
 	}
 	c := NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
+	// Tests in this suite fake the adapter runner, so pair it with an
+	// always-available prober: no real agent CLI needs to be installed.
+	c.router.SetAgentProber(func(string, ledger.Agent) bool { return true })
 	c.SetSharedSecret(testSharedSecret)
 	return c
 }

@@ -187,8 +187,13 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		return nil, fmt.Errorf("askengine: migrate database: %w", err)
 	}
 
-	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
-	projects := memory.NewProjects(cfg.Storage.ProjectsPath)
+	limits := memory.Limits{
+		User:    cfg.Memory.Limits.User,
+		Memory:  cfg.Memory.Limits.Memory,
+		Project: cfg.Memory.Limits.Project,
+	}
+	hermes := memory.NewHermesWithLimits(cfg.Storage.MemoryPath, limits)
+	projects := memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, limits)
 	injector := memory.NewInjector(hermes, projects)
 	remind := reminders.NewStore(db)
 	registry := buildToolRegistry(hermes, projects, remind)
@@ -233,6 +238,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		// node id never collides with the concurrently running daemon on the
 		// same node (the daemon owns the stable identity and listener).
 		sched := core.NewCore(db, core.EphemeralNodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
+		sched.SetRouterPolicy(cfg.Injection, cfg.Routing)
 		sched.SetMemoryStores(injector, memory.NewDaily(hermes.WarmDir()), skills.NewStore(cfg.Storage.SkillsPath))
 		sched.SetWorkDir(cfg.Storage.WorkPath)
 		sched.SetHostStatePaths(hostStatePaths(cfg))
@@ -329,8 +335,8 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	// project-free conversations. A pinned workDir marks a project/workspace
 	// conversation (a session's worktree or the shared work path) — its
 	// classification and any task it spawns must stay untainted by personal
-	// memory, so nothing is loaded at all. Project memory reaches execution
-	// later via ContextPack on the executing node, never this prompt.
+	// memory, so nothing is loaded at all. Project memory never enters this
+	// prompt either; the execution path loads it selectively (A1), not here.
 	conversationMemory := ""
 	if workDir == "" {
 		var merr error

@@ -75,6 +75,7 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	sched := core.NewCore(db, core.EphemeralNodeID(cfg.Node.Name), card, 5, logger, cfg.Model)
+	sched.SetRouterPolicy(cfg.Injection, cfg.Routing)
 	sched.SetSharedSecret(cfg.Network.SharedSecret)
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)

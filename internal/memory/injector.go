@@ -1,6 +1,9 @@
 package memory
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // Injector assembles the memory text injected into a given context (design
 // §17.2). It is the only sanctioned way to pull memory into a prompt; its two
@@ -18,12 +21,14 @@ func NewInjector(hermes *Hermes, projects *Projects) *Injector {
 }
 
 // Conversation returns the Hermes personal memory for the entry model's system
-// prompt: the full user profile (USER.md, always relevant) plus the world notes
-// (MEMORY.md) most relevant to query. An empty query returns the full MEMORY.md
-// (no relevance signal, so nothing is filtered); a non-empty query returns at
-// most conversationMemoryK matching entries, so a growing hot layer no longer
-// forces the whole file into every prompt. It returns "" when there is no
-// memory. The result is a frozen snapshot — a later write does not change it.
+// prompt: the full user profile (USER.md, always relevant — it is small) plus
+// the world notes (MEMORY.md and the topics/*.md extension files) most
+// relevant to query. The hot-layer files are scored together as one pool (A3
+// multi-file retrieval): a non-empty query returns at most conversationMemoryK
+// matching entries across all files, so a growing hot layer no longer forces
+// the whole file set into every prompt; an empty query returns the full pool
+// (no relevance signal, so nothing is filtered). It returns "" when there is
+// no memory. The result is a frozen snapshot — a later write does not change it.
 func (i *Injector) Conversation(query string) (string, error) {
 	if i.hermes == nil {
 		return "", nil
@@ -36,11 +41,51 @@ func (i *Injector) Conversation(query string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	entries := mem.Entries
+	pool := append([]string(nil), mem.Entries...)
+	// Topic files join the same retrieval pool; an unreadable topic is
+	// skipped rather than failing the whole injection.
+	if names, err := i.hermes.ListTopics(); err == nil {
+		for _, name := range names {
+			if t, err := i.hermes.LoadTopic(name); err == nil {
+				pool = append(pool, t.Entries...)
+			}
+		}
+	}
+	entries := pool
 	if query != "" {
-		entries = Retriever{}.Rank(query, mem.Entries, conversationMemoryK)
+		entries = Retriever{}.Rank(query, pool, conversationMemoryK)
 	}
 	return joinSnapshot(user, MemFile{Entries: entries, Limit: mem.Limit}), nil
+}
+
+// Manifest returns the personal memory file index (absolute paths + one-line
+// summaries) for selective loading by external agents (A3): instead of packing
+// the whole memory content into the agent prompt, the agent receives the list
+// and reads the files it needs with its own file tools. Nil hermes yields nil.
+func (i *Injector) Manifest() ([]FileSummary, error) {
+	if i.hermes == nil {
+		return nil, nil
+	}
+	return i.hermes.Files()
+}
+
+// RenderManifest renders a file index as the prompt section handed to external
+// agents (A3 selective loading): a per-file line with entry count, absolute
+// path and a summary hint, plus the "read on demand" instruction. The block is
+// fenced as data (P1-23) — summaries derive from memory content, which may
+// embed user-originated text and must never be read as instructions. An empty
+// index renders to "" (no manifest noise when there is no memory).
+func RenderManifest(files []FileSummary) string {
+	if len(files) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("记忆文件清单（按需自读，无需全部加载；条目以 § 分隔）：\n")
+	for _, f := range files {
+		fmt.Fprintf(&b, "- %s（%d 条，%d 字符）%s｜摘要：%s\n", f.Name, f.Entries, f.Chars, f.Path, f.Summary)
+	}
+	b.WriteString("如任务需要相关背景，请自行读取上述对应文件；不需要的文件不要读。")
+	return fenceMemoryData(b.String())
 }
 
 // joinSnapshot renders the two personal-memory layers as one prompt block,

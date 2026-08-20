@@ -16,14 +16,26 @@ import (
 // Hermes, and is injected only into that project's agent context — never into
 // Hermes.
 type Projects struct {
-	root string
-	mu   sync.Mutex // serializes whole-file writes so concurrent saves cannot interleave (P1-21)
+	root   string
+	limits Limits     // configured cap; zero falls back to ProjectCharLimit
+	mu     sync.Mutex // serializes whole-file writes so concurrent saves cannot interleave (P1-21)
 }
 
-// NewProjects wraps a projects/ root directory.
+// NewProjects wraps a projects/ root directory with the historical
+// compile-time cap. Configured deployments use NewProjectsWithLimits instead.
 func NewProjects(root string) *Projects {
-	return &Projects{root: root}
+	return NewProjectsWithLimits(root, Limits{})
 }
+
+// NewProjectsWithLimits wraps a projects/ root directory with a configurable
+// character cap (config memory.limits.project); a non-positive value falls
+// back to ProjectCharLimit.
+func NewProjectsWithLimits(root string, limits Limits) *Projects {
+	return &Projects{root: root, limits: limits}
+}
+
+// Limit returns the effective per-project character cap.
+func (p *Projects) Limit() int { return p.limits.project() }
 
 // ValidateName rejects project names that are empty or could escape the
 // projects root via a path separator. A valid name is a single path segment.
@@ -76,12 +88,12 @@ func (p *Projects) Load(name string) (MemFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return MemFile{Limit: ProjectCharLimit}, nil
+			return MemFile{Limit: p.limits.project()}, nil
 		}
 		return MemFile{}, fmt.Errorf("memory: read project memory %q: %w", name, err)
 	}
 	m := ParseMem(data)
-	m.Limit = ProjectCharLimit
+	m.Limit = p.limits.project()
 	return m, nil
 }
 
@@ -95,7 +107,7 @@ func (p *Projects) Save(name string, m MemFile) error {
 	}
 	limit := m.Limit
 	if limit <= 0 {
-		limit = ProjectCharLimit
+		limit = p.limits.project()
 	}
 	if m.Chars() > limit {
 		return fmt.Errorf("%w: at %d/%d chars", ErrOverLimit, m.Chars(), limit)

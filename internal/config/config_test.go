@@ -33,6 +33,28 @@ func TestLoadDefaultsOnMissingFile(t *testing.T) {
 	}
 }
 
+func TestLoadMissingFileAppliesEnvOverrides(t *testing.T) {
+	// Without a config file, OPENPANDA_* env vars must still override defaults,
+	// matching the semantics of the normal load path.
+	t.Setenv("OPENPANDA_PANEL_TOKEN", "env-token")
+	t.Setenv("OPENPANDA_NODE_NAME", "env-node")
+	t.Setenv("OPENPANDA_DB_PATH", "/tmp/env.db")
+
+	cfg, err := Load(filepath.Join(t.TempDir(), "does-not-exist.yaml"))
+	if err != nil {
+		t.Fatalf("load missing: %v", err)
+	}
+	if cfg.Network.PanelToken != "env-token" {
+		t.Fatalf("panel token = %q, want env override", cfg.Network.PanelToken)
+	}
+	if cfg.Node.Name != "env-node" {
+		t.Fatalf("node name = %q, want env override", cfg.Node.Name)
+	}
+	if cfg.Storage.DBPath != "/tmp/env.db" {
+		t.Fatalf("db path = %q, want env override", cfg.Storage.DBPath)
+	}
+}
+
 func TestLoadParsesYAML(t *testing.T) {
 	p := writeTemp(t, `
 node:

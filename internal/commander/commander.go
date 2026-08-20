@@ -3,12 +3,14 @@ package commander
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // Router matches a task's required abilities against a node's capability
@@ -18,16 +20,40 @@ type Router struct {
 	card     ledger.Card
 	executor *Executor
 	model    config.ModelConfig
+	// injectionModel is the normalized injection.model strategy
+	// (auto | always | never). Zero value means auto.
+	injectionModel string
+	// preferred lists agent names that receive a score bonus during routing.
+	preferred []string
+	// probeAgent reports whether an agent's CLI is usable on this machine.
+	// Injectable for tests; production probes PATH (see defaultAgentProbe).
+	probeAgent func(name string, ag ledger.Agent) bool
 	// runAdapter is injectable for tests; production uses RunAgent.
 	runAdapter func(ctx context.Context, adapter string, prompt string, cwd string) AgentResult
 }
 
-// NewRouter builds a router from this node's capability card. The model config
-// is injected into agent adapter subprocesses (base URL + key + model).
-func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig) *Router {
-	r := &Router{card: card, executor: executor, model: model}
+// NewRouter builds a router from this node's capability card. The model
+// config is injected into agent adapter subprocesses only as the injection
+// policy allows (default auto: agent-native credentials win); routing honors
+// the preferred-agents bonus and falls back across scored candidates.
+func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, injection config.InjectionConfig, routing config.RoutingConfig) *Router {
+	r := &Router{
+		card:           card,
+		executor:       executor,
+		model:          model,
+		injectionModel: injection.NormalizedModel(),
+		preferred:      routing.PreferredAgents,
+	}
 	r.runAdapter = r.runAdapterDefault
+	r.probeAgent = defaultAgentProbe
 	return r
+}
+
+// SetPolicy swaps the injection/routing policy after construction (the core
+// builds its router before the full config is wired through).
+func (r *Router) SetPolicy(injection config.InjectionConfig, routing config.RoutingConfig) {
+	r.injectionModel = injection.NormalizedModel()
+	r.preferred = routing.PreferredAgents
 }
 
 // SetAdapterRunner overrides the agent adapter invocation. It is a test seam:
@@ -35,6 +61,12 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig) *
 // (e.g. scope-drift interception in core) inject a fake here.
 func (r *Router) SetAdapterRunner(fn func(ctx context.Context, adapter, prompt, cwd string) AgentResult) {
 	r.runAdapter = fn
+}
+
+// SetAgentProber overrides the agent availability probe. Test seam: suites
+// with a fake adapter runner normally pair it with an always-available probe.
+func (r *Router) SetAgentProber(fn func(name string, ag ledger.Agent) bool) {
+	r.probeAgent = fn
 }
 
 // Plan describes how to execute a task on this node.
@@ -47,6 +79,10 @@ type Plan struct {
 	Agent   string
 	Adapter string
 	Notify  string
+	// Alternates lists the remaining matching agents in score order. When
+	// the primary agent's CLI is unavailable at execution time, execAgent
+	// falls back through this chain.
+	Alternates []string
 }
 
 // Match finds the first native ability whose id matches any of required.
@@ -61,35 +97,116 @@ func (r *Router) MatchNative(required []string) (ledger.NativeAbility, bool) {
 	return ledger.NativeAbility{}, false
 }
 
-// MatchAgent finds a configured agent that satisfies any of required — either
-// by name ("agent:<name>", the form the device summary advertises) or by one
-// of its declared capabilities. Capability matches iterate agent names in
-// sorted order so the choice is deterministic when several agents declare the
-// same capability.
-func (r *Router) MatchAgent(required []string) (string, ledger.Agent, bool) {
+// preferredBonus is the score bonus an agent listed in
+// routing.preferred_agents receives during ranking.
+const preferredBonus = 0.5
+
+// AgentCandidate is one scored agent match produced by RankAgents.
+type AgentCandidate struct {
+	Name  string
+	Agent ledger.Agent
+	Score float64
+}
+
+// costMultiplier converts a card's cost_tier label into a routing discount:
+// cheaper agents score higher. An unknown/missing tier gets the middle-of-the
+// road factor so undeclared agents neither win nor lose on cost alone.
+func costMultiplier(tier string) float64 {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case "low":
+		return 1.0
+	case "low_medium":
+		return 0.9
+	case "medium":
+		return 0.8
+	case "medium_high":
+		return 0.7
+	case "high":
+		return 0.6
+	default:
+		return 0.8
+	}
+}
+
+// RankAgents scores every agent that satisfies any of required and returns
+// the candidates sorted by descending score (ties broken by name, so the
+// choice stays deterministic across map iteration orders).
+//
+// Score = capability match (1.0 exact / 0.9 token-subset) × cost_tier
+// discount + preferred-agents bonus. A requirement of the form
+// "agent:<name>" pins that exact agent — an explicit user choice never fans
+// out to substitutes.
+func (r *Router) RankAgents(required []string) []AgentCandidate {
+	for _, req := range required {
+		if name, ok := strings.CutPrefix(req, "agent:"); ok {
+			if ag, exists := r.card.Agents[name]; exists {
+				return []AgentCandidate{{Name: name, Agent: ag, Score: 1 + r.bonus(name)}}
+			}
+		}
+	}
+
+	preferred := make(map[string]bool, len(r.preferred))
+	for _, n := range r.preferred {
+		preferred[n] = true
+	}
+
+	var out []AgentCandidate
 	names := make([]string, 0, len(r.card.Agents))
 	for name := range r.card.Agents {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
-	for _, req := range required {
-		if name, ok := strings.CutPrefix(req, "agent:"); ok {
-			if ag, exists := r.card.Agents[name]; exists {
-				return name, ag, true
-			}
-			continue
-		}
-		for _, name := range names {
-			ag := r.card.Agents[name]
+	for _, name := range names {
+		ag := r.card.Agents[name]
+		best := 0.0
+		for _, req := range required {
 			for _, cap := range ag.Capabilities {
-				if ledger.AbilityMatches(cap, req) {
-					return name, ag, true
+				if cap == req {
+					if best < 1.0 {
+						best = 1.0
+					}
+				} else if ledger.AbilityMatches(cap, req) && best < 0.9 {
+					best = 0.9
 				}
 			}
 		}
+		if best == 0 {
+			continue
+		}
+		score := best*costMultiplier(ag.CostTier) + r.bonus(name)
+		out = append(out, AgentCandidate{Name: name, Agent: ag, Score: score})
 	}
-	return "", ledger.Agent{}, false
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// bonus returns the preferred-agents score bonus for name.
+func (r *Router) bonus(name string) float64 {
+	for _, p := range r.preferred {
+		if p == name {
+			return preferredBonus
+		}
+	}
+	return 0
+}
+
+// MatchAgent finds the best-scoring configured agent that satisfies any of
+// required — either by name ("agent:<name>", the form the device summary
+// advertises) or by one of its declared capabilities. Scoring is
+// capability match × cost_tier discount plus the preferred-agents bonus
+// (see RankAgents); the deterministic tie-break keeps repeated runs stable.
+func (r *Router) MatchAgent(required []string) (string, ledger.Agent, bool) {
+	cands := r.RankAgents(required)
+	if len(cands) == 0 {
+		return "", ledger.Agent{}, false
+	}
+	return cands[0].Name, cands[0].Agent, true
 }
 
 // MatchManual finds a manual ability whose id matches any of required.
@@ -114,15 +231,20 @@ func (r *Router) Route(required []string) (Plan, error) {
 		}
 		return Plan{Kind: "native", Ability: ab.ID, Command: ab.Command, Args: ab.Args, Tier: tier}, nil
 	}
-	if name, ag, ok := r.MatchAgent(required); ok {
+	if cands := r.RankAgents(required); len(cands) > 0 {
+		top := cands[0]
 		// P1-15: agent plans carry a tier like native ones. An undeclared tier
 		// defaults to 2 — an LLM agent can execute arbitrary commands, so the
 		// absence of a declaration must fail closed, not open.
-		tier := ag.Tier
+		tier := top.Agent.Tier
 		if tier == 0 {
 			tier = defense.TierIrreversible
 		}
-		return Plan{Kind: "agent", Ability: name, Agent: name, Adapter: ag.Adapter, Tier: tier}, nil
+		plan := Plan{Kind: "agent", Ability: top.Name, Agent: top.Name, Adapter: top.Agent.Adapter, Tier: tier}
+		for _, c := range cands[1:] {
+			plan.Alternates = append(plan.Alternates, c.Name)
+		}
+		return plan, nil
 	}
 	if ab, ok := r.MatchManual(required); ok {
 		return Plan{Kind: "manual", Ability: ab.ID, Notify: ab.Notify}, nil
@@ -169,14 +291,37 @@ func (r *Router) execNative(ctx context.Context, plan Plan, cwd string) Result {
 }
 
 func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd string) Result {
-	ar := r.runAdapter(ctx, plan.Adapter, prompt, cwd)
+	// Fallback chain: run the highest-scored agent whose CLI is actually
+	// available; an unavailable candidate (missing binary / failed probe) is
+	// skipped in favor of the next match. All unavailable fails closed with
+	// an explicit error the upper layer can turn into a manual plan.
+	attempts := append([]string{plan.Agent}, plan.Alternates...)
+	var unavailable []string
+	for _, name := range attempts {
+		ag, ok := r.card.Agents[name]
+		if !ok {
+			unavailable = append(unavailable, name+" (not on card)")
+			continue
+		}
+		if !r.probeAgent(name, ag) {
+			unavailable = append(unavailable, name+" (cli unavailable)")
+			continue
+		}
+		ar := r.runAdapter(ctx, ag.Adapter, prompt, cwd)
+		return Result{
+			OK:       ar.OK,
+			ExitCode: ar.ExitCode,
+			Stdout:   ar.Result,
+			Stderr:   "",
+			Tokens:   ar.Tokens,
+			Cost:     ar.Cost,
+			Agent:    name,
+		}
+	}
 	return Result{
-		OK:       ar.OK,
-		ExitCode: ar.ExitCode,
-		Stdout:   ar.Result,
-		Stderr:   "",
-		Tokens:   ar.Tokens,
-		Cost:     ar.Cost,
+		OK:       false,
+		ExitCode: 1,
+		Stderr:   "no usable agent (tried " + strings.Join(unavailable, ", ") + "); install an agent CLI or route manually",
 	}
 }
 
@@ -189,6 +334,10 @@ type Result struct {
 	Tokens     int
 	Cost       float64
 	NeedManual bool
+	// Agent is the agent that actually executed (may differ from the plan's
+	// primary when the fallback chain kicked in). Empty for non-agent plans
+	// and when no candidate was usable at all.
+	Agent string
 }
 
 // AgentResult is what an adapter returns.
@@ -201,8 +350,52 @@ type AgentResult struct {
 }
 
 // runAdapterDefault shells out to a Python adapter in adapters/, injecting
-// the model config so the adapter can reach the configured provider.
+// the model config only when the injection policy says so (default auto:
+// agent-native credentials win).
 func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt string, cwd string) AgentResult {
-	// The Go core injects secrets via env; adapters read them from os.environ.
-	return runAdapterProcess(ctx, adapter, prompt, cwd, r.model)
+	dec := r.InjectionDecision(adapter)
+	var env []string
+	if dec.Inject {
+		// The model endpoint must be HTTPS so the API key never travels
+		// cleartext, and pinned to the configured host so the allowlist is
+		// never empty (D7). Only enforced when we actually inject the env.
+		if r.model.BaseURL != "" {
+			if err := security.NewNetworkGuard(security.EndpointHost(r.model.BaseURL)).CheckURL(r.model.BaseURL); err != nil {
+				return AgentResult{OK: false, Result: security.Redact(err.Error()), ExitCode: 1}
+			}
+		}
+		env = modelEnv(r.model)
+	}
+	return runAdapterProcess(ctx, adapter, prompt, cwd, env)
+}
+
+// adapterBinaries maps adapter scripts to the CLI binary they drive, used by
+// the availability probe when the card declares no install_check.
+var adapterBinaries = map[string]string{
+	"claude_code.py": "claude",
+	"opencode.py":    "opencode",
+	"codex.py":       "codex",
+}
+
+// agentBinary derives the CLI binary for an agent: the card's install_check
+// ("which claude") wins, then the known adapter map. "" means the probe
+// cannot decide and the agent is treated as available (the adapter itself
+// will fail loudly if its CLI is really missing).
+func agentBinary(name string, ag ledger.Agent) string {
+	if fields := strings.Fields(ag.InstallCheck); len(fields) == 2 &&
+		(fields[0] == "which" || fields[0] == "command") {
+		return fields[1]
+	}
+	return adapterBinaries[ag.Adapter]
+}
+
+// defaultAgentProbe reports whether an agent's CLI resolves on PATH. It is
+// the production availability probe behind the fallback chain.
+func defaultAgentProbe(name string, ag ledger.Agent) bool {
+	bin := agentBinary(name, ag)
+	if bin == "" {
+		return true // unknown CLI: let the adapter try
+	}
+	_, err := exec.LookPath(bin)
+	return err == nil
 }

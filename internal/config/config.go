@@ -14,13 +14,103 @@ import (
 
 // Config is the top-level node configuration.
 type Config struct {
-	Node    NodeConfig    `yaml:"node"`
-	Network NetworkConfig `yaml:"network"`
-	Storage StorageConfig `yaml:"storage"`
-	Log     LogConfig     `yaml:"log"`
-	Model   ModelConfig   `yaml:"model"`
-	Push    PushConfig    `yaml:"push"`
-	MCP     MCPConfig     `yaml:"mcp"`
+	Node      NodeConfig      `yaml:"node"`
+	Network   NetworkConfig   `yaml:"network"`
+	Storage   StorageConfig   `yaml:"storage"`
+	Log       LogConfig       `yaml:"log"`
+	Model     ModelConfig     `yaml:"model"`
+	Push      PushConfig      `yaml:"push"`
+	MCP       MCPConfig       `yaml:"mcp"`
+	Injection InjectionConfig `yaml:"injection"`
+	Routing   RoutingConfig   `yaml:"routing"`
+	Memory    MemoryConfig    `yaml:"memory"`
+	Approval  ApprovalConfig  `yaml:"approval"`
+}
+
+// Injection model strategies (injection.model).
+const (
+	// InjectionModelAuto injects the panda model endpoint into an agent
+	// subprocess only when the agent carries no model credentials of its own
+	// (env vars, login state, or its config files) and panda has a model
+	// configured. This is the default: agent-native models win.
+	InjectionModelAuto = "auto"
+	// InjectionModelAlways always overrides the agent with the panda model
+	// endpoint (legacy behavior).
+	InjectionModelAlways = "always"
+	// InjectionModelNever never injects; agents always use their own models.
+	InjectionModelNever = "never"
+)
+
+// InjectionConfig controls what panda injects into agent subprocesses.
+type InjectionConfig struct {
+	Model string `yaml:"model"` // auto | always | never (default auto)
+}
+
+// NormalizedModel returns the validated injection.model strategy, defaulting
+// to auto when unset.
+func (i InjectionConfig) NormalizedModel() string {
+	switch i.Model {
+	case InjectionModelAlways, InjectionModelNever:
+		return i.Model
+	default:
+		return InjectionModelAuto
+	}
+}
+
+// RoutingConfig tunes local agent routing.
+type RoutingConfig struct {
+	// PreferredAgents lists agent names that receive a score bonus during
+	// routing, so the user can pin favorites without editing capability cards.
+	PreferredAgents []string `yaml:"preferred_agents"`
+}
+
+// Default memory size limits (characters). They override the compile-time
+// constants in internal/memory once that package becomes config-driven.
+const (
+	DefaultMemoryLimitUser    = 5000
+	DefaultMemoryLimitMemory  = 10000
+	DefaultMemoryLimitProject = 30000
+)
+
+// MemoryConfig holds memory-system tunables.
+type MemoryConfig struct {
+	Limits MemoryLimitsConfig `yaml:"limits"`
+}
+
+// MemoryLimitsConfig caps the size of each memory file class. Zero or
+// negative values fall back to the defaults at load time, so old config
+// files without a memory section keep working.
+type MemoryLimitsConfig struct {
+	User    int `yaml:"user"`    // USER.md cap (default 5000)
+	Memory  int `yaml:"memory"`  // MEMORY.md cap (default 10000)
+	Project int `yaml:"project"` // per-project MEMORY.md cap (default 30000)
+}
+
+// Approval modes (approval.mode).
+const (
+	// ApprovalModeAlways requires explicit user approval for every task.
+	ApprovalModeAlways = "always"
+	// ApprovalModeOnRequest requires approval only when the entry model marks
+	// a task as needing it (default).
+	ApprovalModeOnRequest = "on-request"
+	// ApprovalModeNever never asks; tasks run as classified.
+	ApprovalModeNever = "never"
+)
+
+// ApprovalConfig controls the task approval gate.
+type ApprovalConfig struct {
+	Mode string `yaml:"mode"` // always | on-request | never (default on-request)
+}
+
+// NormalizedMode returns the validated approval mode, defaulting to
+// on-request when unset.
+func (a ApprovalConfig) NormalizedMode() string {
+	switch a.Mode {
+	case ApprovalModeAlways, ApprovalModeNever:
+		return a.Mode
+	default:
+		return ApprovalModeOnRequest
+	}
 }
 
 // NodeConfig identifies this node.
@@ -143,7 +233,51 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: network.peers[%d] %q is not host:port: %w", i, peer, err)
 		}
 	}
+	switch c.Injection.Model {
+	case "", InjectionModelAuto, InjectionModelAlways, InjectionModelNever:
+	default:
+		return fmt.Errorf("config: injection.model %q is invalid (want auto, always, or never)", c.Injection.Model)
+	}
+	switch c.Approval.Mode {
+	case "", ApprovalModeAlways, ApprovalModeOnRequest, ApprovalModeNever:
+	default:
+		return fmt.Errorf("config: approval.mode %q is invalid (want always, on-request, or never)", c.Approval.Mode)
+	}
+	for _, limit := range []struct {
+		name  string
+		value int
+	}{
+		{"memory.limits.user", c.Memory.Limits.User},
+		{"memory.limits.memory", c.Memory.Limits.Memory},
+		{"memory.limits.project", c.Memory.Limits.Project},
+	} {
+		if limit.value < 0 {
+			return fmt.Errorf("config: %s %d must not be negative", limit.name, limit.value)
+		}
+	}
 	return nil
+}
+
+// normalize fills in defaults for fields that load as zero on old config
+// files (or explicit empties), so callers can read every field without
+// nil-checks. Load runs it after unmarshal; Default() already carries these
+// values, so this is a no-op for a fresh config.
+func (c *Config) normalize() {
+	if c.Injection.Model == "" {
+		c.Injection.Model = InjectionModelAuto
+	}
+	if c.Approval.Mode == "" {
+		c.Approval.Mode = ApprovalModeOnRequest
+	}
+	if c.Memory.Limits.User <= 0 {
+		c.Memory.Limits.User = DefaultMemoryLimitUser
+	}
+	if c.Memory.Limits.Memory <= 0 {
+		c.Memory.Limits.Memory = DefaultMemoryLimitMemory
+	}
+	if c.Memory.Limits.Project <= 0 {
+		c.Memory.Limits.Project = DefaultMemoryLimitProject
+	}
 }
 
 // Default returns a Config with safe local-development defaults.
@@ -184,6 +318,22 @@ func Default() *Config {
 			Enabled:      false,
 			VAPIDSubject: "mailto:panda@localhost",
 			VAPIDKeyPath: "./data/vapid.pem",
+		},
+		Injection: InjectionConfig{
+			Model: InjectionModelAuto,
+		},
+		Routing: RoutingConfig{
+			PreferredAgents: []string{},
+		},
+		Memory: MemoryConfig{
+			Limits: MemoryLimitsConfig{
+				User:    DefaultMemoryLimitUser,
+				Memory:  DefaultMemoryLimitMemory,
+				Project: DefaultMemoryLimitProject,
+			},
+		},
+		Approval: ApprovalConfig{
+			Mode: ApprovalModeOnRequest,
 		},
 	}
 }
@@ -236,6 +386,7 @@ func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			cfg.applyEnv()
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("read config %s: %w", path, err)
@@ -251,6 +402,7 @@ func Load(path string) (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
+	cfg.normalize()
 	return cfg, nil
 }
 
