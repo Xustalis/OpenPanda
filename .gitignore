@@ -25,6 +25,10 @@ context/
 *.sock
 testdata/run/
 
+# Live personal data (real memory/diary/skills captured from this machine —
+# test fixtures for local runs only, never for the repo)
+testdata/live/
+
 # Hermes personal memory (Dreaming runtime output)
 /memory/
 /projects/
