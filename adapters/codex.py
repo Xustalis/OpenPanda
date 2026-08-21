@@ -14,10 +14,27 @@ never prints secrets.
 """
 import json
 import os
+import signal
 import subprocess
 import sys
 
 DEFAULT_TIMEOUT = 600
+
+# POSIX: run the CLI in its own process group so a timeout kills the whole
+# tree — the CLI's children inherit the stdout pipe and keep it open after
+# the parent dies, which would leave the read loop blocked.
+_GROUP_KW = {"start_new_session": True} if sys.platform != "win32" else {}
+
+
+def _kill_tree(proc):
+    """Kill the CLI and everything it spawned (they hold the pipes open)."""
+    if sys.platform != "win32":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+            return
+        except OSError:
+            pass  # group already gone — fall through to the direct kill
+    proc.kill()
 
 
 def main():
@@ -35,7 +52,13 @@ def main():
         timeout = DEFAULT_TIMEOUT
     cwd = req.get("cwd") or None
 
-    cmd = ["codex", "exec", "--json", "--skip-git-repo-check"]
+    # -s danger-full-access: codex's own seatbelt sandbox cannot even
+    # initialize under a non-interactive parent (its state DB in $HOME and
+    # PATH-alias creation fail with EPERM before the first turn). PANDA
+    # already confines this adapter to the task cwd with a minimal env
+    # (security.Sandbox), which is exactly the "externally sandboxed"
+    # case codex documents for bypassing its sandbox.
+    cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "-s", "danger-full-access"]
     # Optional model override: CODEX_MODEL (or the generic ANTHROPIC_MODEL
     # convention used by the other adapters) maps to codex's -m flag.
     model = os.environ.get("CODEX_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
@@ -43,24 +66,109 @@ def main():
         cmd += ["--model", model]
     cmd.append(prompt)
 
+    # Stream the JSONL output live: tool/command items become progress
+    # notes on stderr (see the Go harness progressWriter), so the task
+    # timeline fills in while codex works. stderr drains on a thread so a
+    # chatty CLI cannot fill the pipe and deadlock the stdout loop.
+    import threading
     try:
-        result = subprocess.run(
-            cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-            timeout=timeout, env=os.environ.copy(), cwd=cwd,
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, env=os.environ.copy(), cwd=cwd,
+            **_GROUP_KW,
         )
-    except subprocess.TimeoutExpired:
-        _emit(False, "codex timed out", 124)
-        return
     except FileNotFoundError:
         _emit(False, "codex binary not found", 127)
         return
+    err_chunks = []
+    def drain():
+        for chunk in iter(proc.stderr.readline, ""):
+            err_chunks.append(chunk)
+        proc.stderr.close()
+    t = threading.Thread(target=drain, daemon=True)
+    t.start()
 
-    text, tokens = _reduce(result.stdout)
+    # Watchdog: the stdout loop below blocks on the CLI's pipe, so
+    # proc.wait(timeout) can never fire while the CLI is hung mid-stream
+    # (pipe still open, no output). A timer thread kills the whole process
+    # tree at the deadline instead — the closed pipes unblock both readers
+    # and the loop exits, so the timeout is enforced over the WHOLE run,
+    # not just the tail after stdout EOF.
+    finished = threading.Event()
+    expired = threading.Event()
+    def watchdog():
+        if finished.wait(timeout):
+            return  # completed within the deadline
+        expired.set()
+        _kill_tree(proc)
+    threading.Thread(target=watchdog, daemon=True).start()
+
+    lines = []
+    try:
+        for line in proc.stdout:
+            lines.append(line)
+            note = _note(line)
+            if note:
+                _progress(note)
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        proc.wait()
+        _emit(False, "codex timed out", 124)
+        return
+    finally:
+        finished.set()
+        t.join(timeout=2)
+    if expired.is_set():
+        proc.wait()
+        _emit(False, "codex timed out", 124)
+        return
+
+    text, tokens = _reduce("".join(lines))
     if not text:
         # No parseable events (older CLI without --json, or a plain error):
         # fall back to whatever the CLI printed.
-        text = result.stdout.strip() or result.stderr.strip()
-    _emit(result.returncode == 0, text, result.returncode, tokens)
+        text = "".join(lines).strip() or "".join(err_chunks).strip()
+    _emit(proc.returncode == 0, text, proc.returncode, tokens)
+
+
+def _note(line):
+    """One progress note from a codex JSONL event line, or None.
+
+    Completed items map to short notes: command executions (name + command),
+    file changes (path), MCP tool calls. Agent messages are the answer, not
+    progress, so they are skipped here.
+    """
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(obj, dict) or obj.get("type") != "item.completed":
+        return None
+    item = obj.get("item")
+    if not isinstance(item, dict):
+        return None
+    it = item.get("type")
+    if it == "command_execution":
+        arg = str(item.get("command") or "")[:80]
+        return f"shell: {arg}" if arg else "shell command"
+    if it == "file_change":
+        return f"edit: {item.get('path') or ''}"
+    if it == "mcp_tool_call":
+        server = item.get("server") or ""
+        tool = item.get("tool") or ""
+        return f"mcp: {server}.{tool}".strip(".")
+    if it == "web_search":
+        return f"search: {str(item.get('query') or '')[:60]}"
+    return None
+
+
+def _progress(note):
+    sys.stderr.write(json.dumps({"type": "progress", "note": note}, ensure_ascii=False) + "\n")
+    sys.stderr.flush()
 
 
 def _reduce(stdout):
