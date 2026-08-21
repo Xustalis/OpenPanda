@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
@@ -20,6 +21,11 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
+
+// progressInterval is the minimum spacing between EvProgress recordings:
+// dense enough to feel live in `panda task` / the panel timeline, sparse
+// enough that a chatty adapter cannot flood the event chain.
+const progressInterval = 2 * time.Second
 
 // handleDelegate processes an incoming task_delegate. It decides where the
 // task runs: locally (Phase 0 behavior), forwarded to a capable peer (P2P
@@ -438,6 +444,35 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 	}
 
+	// Live agent progress (A5): adapters stream short NDJSON progress notes
+	// on stderr; the sink records them as EvProgress task events so
+	// `panda task <id>` (and the panel timeline) shows what the agent is
+	// doing while it runs instead of after it finishes. Throttled: at most
+	// one event per progressInterval; identical consecutive notes skip.
+	if plan.Kind == "agent" {
+		var lastNote atomic.Value // string
+		lastNote.Store("")
+		execCtx = commander.WithProgress(execCtx, func(note string) {
+			if prev, _ := lastNote.Load().(string); prev == note {
+				return // identical consecutive note: skip
+			}
+			lastNote.Store(note)
+			c.progressMu.Lock()
+			due := time.Since(c.lastProgress) >= progressInterval
+			if due {
+				c.lastProgress = time.Now()
+			}
+			c.progressMu.Unlock()
+			if !due {
+				return
+			}
+			if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID, EvProgress,
+				map[string]any{"note": note}); err != nil {
+				c.logger.Warn("record agent progress", "task", taskID, "err", err)
+			}
+		})
+	}
+
 	res := c.router.Execute(execCtx, plan, prompt, workDir, task.Authorized)
 	if plan.Kind == "agent" {
 		// Fallback chain visibility (A2): res.Agent names the agent that
@@ -602,6 +637,12 @@ func buildAgentPrompt(c *Core, intent, project, title string) (string, []*skills
 			}
 		}
 	}
+	// Output style rider: the agent's final message is shown to the user
+	// (often verbatim in a terminal) and may be spoken aloud by the voice
+	// pipeline, so it must read as a direct answer — not a transcript of
+	// the agent's exploration. Execution details stay in the task's event
+	// stream (panda task <id>) for anyone who wants the full trail.
+	prompt += "\n\n输出要求：最后用简洁的自然语言直接给出结果（做了什么、答案是什么）。不要罗列你的执行步骤、中间输出或思考过程；不要使用表情符号；标题/表格/代码块仅在内容确有需要时使用。"
 	return prompt, used
 }
 

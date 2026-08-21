@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/defense"
@@ -308,11 +309,35 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 			continue
 		}
 		ar := r.runAdapter(ctx, ag.Adapter, prompt, cwd)
+		// One bounded retry on provider-side turbulence (rate limit /
+		// overload / 5xx): these resolve in seconds, and the narrow
+		// transientAgentFailure patterns keep real task failures — and
+		// their side effects — from ever being re-run.
+		if !ar.OK && transientAgentFailure(ar) {
+			select {
+			case <-ctx.Done():
+			case <-time.After(3 * time.Second):
+			}
+			if ctx.Err() == nil {
+				retry := r.runAdapter(ctx, ag.Adapter, prompt, cwd)
+				if retry.OK {
+					retry.Result = "[retried once after transient provider error] " + retry.Result
+					ar = retry
+				}
+			}
+		}
+		// On failure the adapter's diagnosis lives in ar.Result (Stdout);
+		// mirroring it into Stderr keeps store.Fail and the task-result
+		// payload from recording an empty reason.
+		stderr := ""
+		if !ar.OK {
+			stderr = ar.Result
+		}
 		return Result{
 			OK:       ar.OK,
 			ExitCode: ar.ExitCode,
 			Stdout:   ar.Result,
-			Stderr:   "",
+			Stderr:   stderr,
 			Tokens:   ar.Tokens,
 			Cost:     ar.Cost,
 			Agent:    name,

@@ -100,13 +100,16 @@ func buildToolRegistry(hermes *memory.Hermes, projects *memory.Projects, rem *re
 	return reg
 }
 
-// registerReminderTools adds reminder.set / reminder.list — the design's
+// registerReminderTools adds reminder_set / reminder_list — the design's
 // P1-28 "提醒我 5 分钟后开会" surface. The scanner that actually fires them
 // lives in the daemon / web panel (reminders.Scanner); the CLI ask process
-// is short-lived and only writes them.
+// is short-lived and only writes them. Tool names use underscores: the
+// Anthropic tools API restricts names to ^[a-zA-Z0-9_-]+$ (no dots), and
+// strict providers (e.g. DeepSeek's /anthropic endpoint) reject the request
+// outright with a 400 otherwise.
 func registerReminderTools(reg *entry.Registry, rem *reminders.Store) {
 	reg.Register(entry.Tool{
-		Name:        "reminder.set",
+		Name:        "reminder_set",
 		Description: "设置一个定时提醒。after_minutes 填“多少分钟后提醒”；at 填绝对时间（RFC3339，如 2026-08-18T15:00:00+08:00，或不带时区则按本地时间）。两个参数二选一。",
 		Schema: map[string]any{
 			"type": "object",
@@ -137,7 +140,7 @@ func registerReminderTools(reg *entry.Registry, rem *reminders.Store) {
 	})
 
 	reg.Register(entry.Tool{
-		Name:        "reminder.list",
+		Name:        "reminder_list",
 		Description: "列出当前所有未触发的提醒。",
 		Schema: map[string]any{
 			"type":       "object",

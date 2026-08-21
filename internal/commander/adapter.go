@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -30,12 +31,106 @@ func WithMemoryFiles(ctx context.Context, paths []string) context.Context {
 	return context.WithValue(ctx, memoryFilesKey{}, paths)
 }
 
-// adapterDir is where adapter scripts live. Resolved relative to the working
-// directory, so the daemon must run from the install root (adapters/ sits
-// beside the binary in the repo layout) or adapters/ must be linked into the
-// cwd — a bare binary copied to /usr/local/bin will not find them. It is a var
-// so tests can point it at a temp dir.
+// progressKey is the context key carrying the live progress sink from the
+// orchestration layer (core's execute → RecordEvent) down to the adapter
+// process reader, without widening every execution-path signature.
+type progressKey struct{}
+
+// ProgressFunc receives one adapter progress note (a short human-readable
+// line, e.g. "Bash: du -ah | sort -rh") as the agent works.
+type ProgressFunc func(note string)
+
+// WithProgress attaches a progress sink to an execution context. Adapters
+// emit NDJSON progress objects on stderr; runAdapterProcess parses them and
+// forwards the note here, so the task's event timeline fills in while the
+// agent runs instead of only when it finishes. Nil/absent = no sink; the
+// parsing still isolates progress lines from the diagnostic stderr.
+func WithProgress(ctx context.Context, fn ProgressFunc) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, progressKey{}, fn)
+}
+
+// progressWriter splits an adapter's stderr stream: lines that parse as
+// {"type":"progress","note":…} go to the sink (if any); everything else is
+// retained for failure diagnosis exactly like the old raw Capture. Writes
+// are called from the cmd's scanner goroutine (cmd.Run's copier), so the
+// sink must be safe for concurrent use — RecordEvent is.
+type progressWriter struct {
+	capture executil.Capture
+	sink    ProgressFunc
+}
+
+func (w *progressWriter) Write(p []byte) (int, error) {
+	start := 0
+	for i := 0; i <= len(p); i++ {
+		if i == len(p) || p[i] == '\n' {
+			if i > start {
+				w.line(p[start:i])
+			}
+			start = i + 1
+		}
+	}
+	return len(p), nil
+}
+
+// line handles one complete stderr line (partial lines never reach here
+// because Write only processes up to the last newline; a trailing partial
+// line is captured verbatim by the fallback at flush time).
+func (w *progressWriter) line(b []byte) {
+	var probe struct {
+		Type string `json:"type"`
+		Note string `json:"note"`
+	}
+	if err := json.Unmarshal(b, &probe); err == nil && probe.Type == "progress" && probe.Note != "" {
+		note := strings.TrimSpace(probe.Note)
+		if len([]rune(note)) > 300 {
+			note = string([]rune(note)[:300]) + "…"
+		}
+		if w.sink != nil {
+			w.sink(note)
+		}
+		return
+	}
+	w.capture.Write(b)
+	w.capture.Write([]byte("\n"))
+}
+
+// String returns the non-progress stderr retained for diagnostics.
+func (w *progressWriter) String() string { return w.capture.String() }
+
+// adapterDir is where adapter scripts live; a var so tests can point it at a
+// temp dir. Relative values are resolved against the daemon cwd (repo root)
+// and then beside the running binary (bin/panda → ../adapters) — the sandbox
+// sets the adapter's cwd to the TASK work dir, so a bare relative script path
+// would make python look for adapters/ inside the task dir and die with exit 2.
 var adapterDir = "adapters"
+
+// resolveAdapterDir absolutizes a relative adapterDir when an adapters/ dir
+// exists beside the cwd or the executable; otherwise the relative name stands
+// (the spawn error then names the missing path naturally).
+func resolveAdapterDir() string {
+	if filepath.IsAbs(adapterDir) {
+		return adapterDir
+	}
+	if abs, err := filepath.Abs(adapterDir); err == nil {
+		if st, err := os.Stat(abs); err == nil && st.IsDir() {
+			return abs
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		for _, cand := range []string{
+			filepath.Join(filepath.Dir(exe), "..", "adapters"),
+			filepath.Join(filepath.Dir(exe), "adapters"),
+		} {
+			if st, err := os.Stat(cand); err == nil && st.IsDir() {
+				return cand
+			}
+		}
+	}
+	return adapterDir
+}
 
 // adapterPath joins an adapter name under adapterDir, rejecting any name that
 // could escape it via a path separator or a ".." element (P2-5). Adapter names
@@ -44,7 +139,7 @@ func adapterPath(name string) (string, error) {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
 		return "", fmt.Errorf("invalid adapter name %q", name)
 	}
-	return filepath.Join(adapterDir, name), nil
+	return filepath.Join(resolveAdapterDir(), name), nil
 }
 
 // AdapterRequest is written to the adapter's stdin.
@@ -97,7 +192,9 @@ var adapterHardTimeout = (adapterTimeoutS + 30) * time.Second
 // reads a JSON result from stdout. env carries the model-provider override
 // when the injection policy decided one is needed (empty otherwise — the
 // agent then uses its own model); the subprocess is sandboxed to the task
-// directory with a minimal environment (see security.Sandbox).
+// directory with a minimal environment (see security.Sandbox). stderr is
+// split through progressWriter: NDJSON progress lines go to the context's
+// sink, the rest is retained for failure diagnosis.
 func runAdapterProcess(ctx context.Context, name string, prompt string, cwd string, env []string) AgentResult {
 	req := AdapterRequest{Prompt: prompt, TimeoutS: adapterTimeoutS, CWD: cwd}
 	if mf, ok := ctx.Value(memoryFilesKey{}).([]string); ok {
@@ -116,7 +213,11 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	defer cancel()
 	cmd := executil.CommandContext(ctx, "python3", path)
 	cmd.Stdin = bytes.NewReader(reqJSON)
-	var stdout, stderr executil.Capture
+	var stdout executil.Capture
+	var stderr progressWriter
+	if sink, ok := ctx.Value(progressKey{}).(ProgressFunc); ok {
+		stderr.sink = sink
+	}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	security.NewSandbox(cwd).Apply(cmd, env...)
@@ -145,4 +246,34 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	// have echoed into the result before it enters the task/log pipeline.
 	out.Result = security.Redact(out.Result)
 	return out
+}
+
+// transientAgentFailure reports whether an adapter failure looks like
+// provider-side turbulence rather than the task itself failing: rate
+// limits, overload, 5xx/api errors, dropped connections. The patterns are
+// deliberately narrow — an agent that did real work and then failed
+// ("command not found", a failed test, a refused permission) never matches,
+// so a retry cannot silently duplicate side effects.
+func transientAgentFailure(ar AgentResult) bool {
+	if ar.OK {
+		return false
+	}
+	msg := strings.ToLower(ar.Result)
+	for _, pat := range []string{
+		"rate limit", "rate_limit", "429", "overloaded",
+		"api error", "bad gateway", "service unavailable",
+		"connection reset", "connection refused", "unexpected eof",
+		"timed out reading response",
+	} {
+		if strings.Contains(msg, pat) {
+			return true
+		}
+	}
+	// Bare 5xx status mentions ("error 502", "HTTP 503").
+	for _, code := range []string{"500", "502", "503", "504"} {
+		if strings.Contains(msg, code) {
+			return true
+		}
+	}
+	return false
 }

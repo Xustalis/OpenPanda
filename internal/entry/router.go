@@ -77,6 +77,13 @@ func ParseOutput(raw string) (Output, error) {
 // a nil error. An error is returned only when raw is valid JSON but fails
 // validation (a model error that must surface, never degrade to an answer).
 func decodeEnvelope(raw string) (Output, bool, error) {
+	// Only an object can be an envelope. A bare JSON scalar ("2", "true",
+	// "\"yes\"") is a valid JSON value that merely fails to unmarshal into
+	// the struct — that is a terse answer, not a malformed directive, so it
+	// must fall back to KindAnswer instead of surfacing a validation error.
+	if raw == "" || raw[0] != '{' {
+		return Output{}, false, nil
+	}
 	var envelope struct {
 		Kind Kind      `json:"kind"`
 		Tool *ToolCall `json:"tool"`

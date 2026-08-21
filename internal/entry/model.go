@@ -104,6 +104,31 @@ type ContentBlock struct {
 	Content   string         `json:"content,omitempty"`     // tool_result content
 }
 
+// MarshalJSON emits only the fields each block type carries on the wire.
+// Crucially, a tool_use block ALWAYS carries "input" (an empty object for a
+// no-argument tool): the Anthropic Messages schema requires the field, and
+// strict Anthropic-compatible providers (e.g. DeepSeek's /anthropic endpoint)
+// reject the request with a 400 when map omitempty drops the empty input.
+func (b ContentBlock) MarshalJSON() ([]byte, error) {
+	m := map[string]any{"type": b.Type}
+	switch b.Type {
+	case "tool_use":
+		m["id"] = b.ID
+		m["name"] = b.Name
+		if b.Input == nil {
+			m["input"] = map[string]any{}
+		} else {
+			m["input"] = b.Input
+		}
+	case "tool_result":
+		m["tool_use_id"] = b.ToolUseID
+		m["content"] = b.Content
+	default: // text | thinking
+		m["text"] = b.Text
+	}
+	return json.Marshal(m)
+}
+
 // ToolSpec describes one tool the model may call (Anthropic Messages API shape).
 type ToolSpec struct {
 	Name        string         `json:"name"`

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/Xustalis/OpenPanda/internal/executil"
+	"github.com/Xustalis/OpenPanda/internal/mdtext"
 )
 
 // voiceDir is where the voice sidecars live, resolved relative to the working
@@ -41,9 +42,11 @@ func Listen(ctx context.Context, durationS float64) Transcript {
 }
 
 // Speak speaks text via the TTS sidecar. A missing driver is returned as an
-// error, not fatal.
+// error, not fatal. The text is stripped of Markdown first — emphasis
+// markers, fences and table pipes read as noise ("星号星号", "反引号") when
+// spoken, so the pipeline always renders answers to prose before TTS.
 func Speak(ctx context.Context, text string) error {
-	res := runSidecar(ctx, "tts.py", map[string]any{"text": text})
+	res := runSidecar(ctx, "tts.py", map[string]any{"text": mdtext.Plain(text)})
 	if !res.ok {
 		if res.err != "" {
 			return fmt.Errorf("tts: %s", res.err)

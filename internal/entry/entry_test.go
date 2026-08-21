@@ -127,6 +127,22 @@ func TestParseOutputProseIsAnswer(t *testing.T) {
 	}
 }
 
+// TestParseOutputScalarIsAnswer guards the terse-answer regression: a bare
+// JSON scalar ("2") is valid JSON that fails to unmarshal into the envelope
+// struct; it used to surface as a validation error instead of falling back
+// to an answer (seen live: "1+1等于几" → "2" → unmarshal type error).
+func TestParseOutputScalarIsAnswer(t *testing.T) {
+	for _, raw := range []string{"2", "true", `"yes"`, "[1, 2]"} {
+		out, err := ParseOutput(raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", raw, err)
+		}
+		if out.Kind != KindAnswer || out.Answer != raw {
+			t.Fatalf("scalar %q should be answer verbatim, got kind=%s answer=%q", raw, out.Kind, out.Answer)
+		}
+	}
+}
+
 func TestParseOutputProseThenJSON(t *testing.T) {
 	// The model may prefix a structured directive with a sentence. The prose is
 	// discarded and the JSON object is authoritative.
@@ -679,6 +695,59 @@ func TestDeltaGuardSuppressesFencedJSON(t *testing.T) {
 	g.on("\n```")
 	if len(got) != 0 || g.delivered {
 		t.Fatalf("forwarded %q delivered=%v, want fenced JSON fully suppressed", got, g.delivered)
+	}
+}
+
+// TestDeltaGuardSuppressesJSONAfterProseLeadIn covers the reasoning-preamble
+// shape seen live: the model thinks out loud in prose, then emits the task
+// JSON on its own line. The prose streams; the JSON must not (the parsed
+// Output renders it). The structured start may split across deltas.
+func TestDeltaGuardSuppressesJSONAfterProseLeadIn(t *testing.T) {
+	var got []string
+	g := newDeltaGuard(func(s string) { got = append(got, s) })
+	g.on("需要查一下状态。\n")
+	g.on("\n{") // the newline pair + '{' split right at the boundary
+	g.on(`"kind":"task","task":{}}`)
+	joined := strings.Join(got, "")
+	if joined != "需要查一下状态。\n\n" {
+		t.Fatalf("forwarded %q, want the lead-in prose only", joined)
+	}
+	if g.delivered != true {
+		t.Fatal("prose lead-in counts as delivered once forwarded")
+	}
+	if !g.structured {
+		t.Fatal("guard must latch structured once the JSON line starts")
+	}
+}
+
+// TestDeltaGuardFlushesHeldBackTail verifies prose ending in bytes that were
+// withheld as a possible structured prefix (but never became one) reaches
+// the user at end-of-stream.
+func TestDeltaGuardFlushesHeldBackTail(t *testing.T) {
+	var got []string
+	g := newDeltaGuard(func(s string) { got = append(got, s) })
+	g.on("答案是 42")
+	g.on("\n") // trailing newline held back pending a possible directive
+	if strings.Join(got, "") != "答案是 42" {
+		t.Fatalf("premature forward %q", got)
+	}
+	g.flush()
+	if strings.Join(got, "") != "答案是 42\n" {
+		t.Fatalf("flush forwarded %q, want the held-back tail", got)
+	}
+}
+
+// TestDeltaGuardInlineBracesStillStream pins the counter-case: a '{' on the
+// same line as prose (inline code/braces in a normal answer) must keep
+// streaming — only a line-initial brace starts suppression.
+func TestDeltaGuardInlineBracesStillStream(t *testing.T) {
+	var got []string
+	g := newDeltaGuard(func(s string) { got = append(got, s) })
+	g.on("格式是 {host} 占位符")
+	g.on("，注意 ``code`` 标记。")
+	g.flush()
+	if strings.Join(got, "") != "格式是 {host} 占位符，注意 ``code`` 标记。" {
+		t.Fatalf("inline braces must stream verbatim, got %q", got)
 	}
 }
 

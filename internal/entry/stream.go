@@ -47,6 +47,7 @@ func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta func(s
 		}
 		resp, err := stream(guard.on)
 		if err == nil {
+			guard.flush()
 			return resp, nil
 		}
 		lastErr = err
@@ -76,6 +77,7 @@ type deltaGuard struct {
 	decided    bool
 	structured bool
 	delivered  bool
+	pending    strings.Builder // prose mode: bytes withheld pending a possible structured start
 }
 
 func newDeltaGuard(onDelta func(string)) *deltaGuard {
@@ -101,10 +103,97 @@ func (g *deltaGuard) on(text string) {
 	} else if g.structured {
 		return
 	}
+	// Prose mode. The parser accepts a lead-in followed by a JSON directive,
+	// so a structured block may still appear mid-stream (e.g. a reasoning
+	// preamble before the task JSON). Watch for a line-initial '{' or a
+	// ``` fence — including one split across deltas — and suppress from
+	// there; the parsed Output renders the directive at the end.
+	g.pending.WriteString(text)
+	s := g.pending.String()
+	if i := structuredStartIndex(s); i >= 0 {
+		// Keep the directive's own leading newline with the prose so the
+		// lead-in ends on its blank line; everything from '{' on is dropped.
+		g.forward(s[:i+1])
+		g.structured = true
+		g.pending.Reset()
+		return
+	}
+	safe := len(s) - holdbackLen(s)
+	if safe > 0 {
+		g.forward(s[:safe])
+		rest := s[safe:]
+		g.pending.Reset()
+		g.pending.WriteString(rest)
+	}
+}
+
+// flush forwards any prose still withheld at end-of-stream: bytes held back
+// as a possible structured prefix that never developed.
+func (g *deltaGuard) flush() {
+	if g.decided && !g.structured {
+		g.forward(g.pending.String())
+		g.pending.Reset()
+	}
+}
+
+func (g *deltaGuard) forward(s string) {
+	if s == "" {
+		return
+	}
 	g.delivered = true
 	if g.onDelta != nil {
-		g.onDelta(text)
+		g.onDelta(s)
 	}
+}
+
+// structuredStartIndex reports the offset of the first line-initial '{' or
+// ``` fence in s (the shapes the parser's extractJSONObject/stripFences act
+// on), or -1. A '{' on the SAME line as prior prose is left alone — inline
+// braces in normal answers must keep streaming.
+func structuredStartIndex(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\n' {
+			continue
+		}
+		t := strings.TrimLeft(s[i+1:], " \t")
+		if strings.HasPrefix(t, "{") || strings.HasPrefix(t, "```") {
+			return i
+		}
+	}
+	return -1
+}
+
+// holdbackLen returns how many trailing bytes of s must wait for the next
+// delta: trailing newline(s) (the directive may start next), or a last-line
+// tail that is a strict prefix of "{" / "```json" (mid-fence split).
+func holdbackLen(s string) int {
+	j := len(s)
+	for j > 0 && (s[j-1] == '\n' || s[j-1] == '\r') {
+		j--
+	}
+	if j < len(s) {
+		return len(s) - j
+	}
+	i := strings.LastIndexByte(s, '\n')
+	tail := s[i+1:]
+	if tail != "" && (tail[0] == '{' || tail[0] == '`') && structPrefixChars(tail) {
+		return len(tail)
+	}
+	return 0
+}
+
+// structPrefixChars reports whether every byte of t could belong to the
+// prologue of a structured block ('{', '`', or fence language letters).
+func structPrefixChars(t string) bool {
+	for _, c := range t {
+		switch {
+		case c == '{', c == '`':
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ---- Anthropic Messages SSE streaming ----

@@ -106,6 +106,13 @@ type Core struct {
 	// Nil until StartQueueScheduler runs; Enqueue still works without it (the
 	// task waits in queued for any scheduler instance to pick it up).
 	queueSched *queue.Scheduler
+
+	// progressMu + lastProgress throttle EvProgress recordings across ALL
+	// concurrently running tasks: they are one shared limiter, deliberately —
+	// progress events are a convenience view, not per-task state, and a node
+	// running several agents must not multiply its event writes.
+	progressMu    sync.Mutex
+	lastProgress  time.Time
 }
 
 // NewCore constructs a Core. The card may be zero for a minimal node. The
@@ -647,17 +654,24 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		// and the surviving registration already ingested the card. Reply
 		// once anyway so the losing dialer can bind our identity (it then
 		// sees the edge is alive through its inbound conn and stops
-		// redialing), then drop the loser.
-		card, err := c.helloCard()
-		if err == nil {
+		// redialing), then drop the loser. The reply MUST go out on this
+		// arriving conn, not via the registry (c.reply) — the registry
+		// points at the surviving conn, and a hello-less loser never binds
+		// our identity, skips MaintainPeer's edge wait, and redials every
+		// second (the mutual-dial reconnect storm).
+		if card, err := c.helloCard(); err == nil {
 			ts := time.Now().Unix()
-			_ = c.reply(ctx, env, bus.MsgHello, bus.HelloPayload{
-				NodeID: c.nodeID,
-				Ver:    "0.1.0-dev",
-				Card:   card,
-				Ts:     ts,
-				Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
-			})
+			if msgID, err := newUUID(); err == nil {
+				if envOut, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, bus.HelloPayload{
+					NodeID: c.nodeID,
+					Ver:    "0.1.0-dev",
+					Card:   card,
+					Ts:     ts,
+					Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
+				}); err == nil {
+					_ = conn.Send(envOut)
+				}
+			}
 		}
 		conn.Close()
 		return

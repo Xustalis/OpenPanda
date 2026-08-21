@@ -17,15 +17,19 @@ func Classify(ctx context.Context, c *Client, devices []ledger.Node, memory, use
 }
 
 // ClassifyTurns is Classify with a conversation history and no tools.
-func ClassifyTurns(ctx context.Context, c *Client, devices []ledger.Node, memory string, turns []Turn) (Output, error) {
-	return ClassifyTurnsWithTools(ctx, c, devices, memory, turns, nil)
+func ClassifyTurns(ctx context.Context, c *Client, devices []ledger.Node, memory string, turns []Turn, opts ...ClassifyOption) (Output, error) {
+	return ClassifyTurnsWithTools(ctx, c, devices, memory, turns, nil, opts...)
 }
 
 // ClassifyTurnsWithTools runs the entry model with a conversation history and a
 // tool registry. A native tool_use response becomes a KindToolCall output; a
 // text response falls through to the existing JSON/prose parsing (answer/task).
-func ClassifyTurnsWithTools(ctx context.Context, c *Client, devices []ledger.Node, memory string, turns []Turn, registry *Registry) (Output, error) {
-	system := BuildPrompt(PromptOptions{Devices: devices, Memory: memory})
+func ClassifyTurnsWithTools(ctx context.Context, c *Client, devices []ledger.Node, memory string, turns []Turn, registry *Registry, opts ...ClassifyOption) (Output, error) {
+	po := PromptOptions{Devices: devices, Memory: memory}
+	for _, o := range opts {
+		o(&po)
+	}
+	system := BuildPrompt(po)
 	var specs []ToolSpec
 	if registry != nil {
 		specs = registry.Specs()
@@ -40,8 +44,12 @@ func ClassifyTurnsWithTools(ctx context.Context, c *Client, devices []ledger.Nod
 // ClassifyStreamWithTools is ClassifyTurnsWithTools with live text streaming:
 // answer deltas are delivered to onDelta as the provider emits them, while the
 // parsed Output is returned once complete.
-func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.Node, memory string, turns []Turn, registry *Registry, onDelta func(string)) (Output, error) {
-	system := BuildPrompt(PromptOptions{Devices: devices, Memory: memory})
+func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.Node, memory string, turns []Turn, registry *Registry, onDelta func(string), opts ...ClassifyOption) (Output, error) {
+	po := PromptOptions{Devices: devices, Memory: memory}
+	for _, o := range opts {
+		o(&po)
+	}
+	system := BuildPrompt(po)
 	var specs []ToolSpec
 	if registry != nil {
 		specs = registry.Specs()

@@ -16,6 +16,12 @@ const systemPrompt = `你是 OpenPanda，你所有设备与 agent 的「大总�
 
 ═══ 类型 1：answer ═══
 对于不产生外部副作用、可以直接回答的请求，输出自然语言。
+回答风格（重要）：
+- 直接给结论/答案本身，不要展示你的分析过程、犹豫或"让我想想"式推理
+- 用户只关心答案与必要的简短依据；中间步骤、备选方案的权衡取舍一律省略
+- 用简洁的自然语言段落；列表仅在枚举时用，表格仅在并排比较数值时用
+- 少用标题和加粗；代码围栏只在用户要代码时使用
+- 回复可能被语音朗读或显示在纯文本终端：避免嵌套结构、表情符号和装饰性符号
 
 ═══ 类型 2：tool_call ═══
 当需要调用受控工具（工具列表通过 tools 参数给出，如 memory_add / memory_read 等）时，使用工具调用返回工具名和参数。Go 核心负责校验、授权、执行和记录。
@@ -71,7 +77,8 @@ requires.abilities 的取值必须、也只能从下方「当前可用设备」�
 - native 能力直接写其 id（例如列表里的 lint、build:macos）
 - agent 能力写 agent:<名字>（例如列表里的 agent:claude_code）
 - 严禁编造列表之外的 ID（code:lint、command:run、eslint.check 这类都不合法）
-- 若列表里没有完全匹配的，选语义最接近的一个，仍须来自列表
+- 若列表里没有完全匹配的 native id：只要目标设备声明了 agent（如 agent:claude_code），就委派给该 agent —— agent 拥有完整的 shell、文件系统与命令执行能力，可以完成查找文件、运行任意命令、检查系统等通用操作；此时绝不要降级为"给出建议让用户手动执行"，必须输出 task 委派
+- agent 的具体能力见设备列表中每个 agent 的说明行；跨多步、需要判断力的操作优先选 agent 而非固定参数的 native
 
 Go 核心必须先校验 kind、工具白名单、参数 schema、权限和当前节点能力，再执行工具或任务；模型输出不能直接当作 shell 命令或硬件指令。
 
@@ -85,6 +92,19 @@ Go 核心必须先校验 kind、工具白名单、参数 schema、权限和当�
 type PromptOptions struct {
 	Devices []ledger.Node // capability directory snapshot (may be empty)
 	Memory  string        // Hermes memory summary (may be empty; capped)
+	// ASCIIOnly asks the model to reply in plain-English ASCII. Set when the
+	// client is a bare Linux console: its PSF font has no CJK glyphs, so any
+	// Chinese in the reply renders as replacement diamonds.
+	ASCIIOnly bool
+}
+
+// ClassifyOption tweaks the system prompt the Classify* entry points build.
+type ClassifyOption func(*PromptOptions)
+
+// WithASCIIOnly makes the entry model answer in English/ASCII (for terminals
+// that cannot render CJK).
+func WithASCIIOnly() ClassifyOption {
+	return func(p *PromptOptions) { p.ASCIIOnly = true }
 }
 
 // BuildPrompt assembles the system prompt with the device capability summary
@@ -95,19 +115,38 @@ func BuildPrompt(opts PromptOptions) string {
 	if memory == "" {
 		memory = "（暂无）"
 	}
-	return fmt.Sprintf(systemPrompt, devices, memory)
+	prompt := fmt.Sprintf(systemPrompt, devices, memory)
+	if opts.ASCIIOnly {
+		prompt += "\n\n═══ 输出环境限制 ═══\n" +
+			"用户当前终端是无法渲染中日韩文字的裸字符控制台（任何 CJK 字符都会显示为乱码方块）。" +
+			"无论用户使用什么语言提问，你的最终回答必须使用英文，且只使用 ASCII 字符；" +
+			"专有名词与文件路径保持原样。"
+	}
+	return prompt
 }
 
-// summarizeDevices renders each node's device + native/agent abilities as one
-// compact line, so the model can route to a real capability instead of
-// hallucinating one.
+// summarizeDevices renders each node as a compact block: native ability IDs on
+// one line, then one line per agent with its capabilities/best_at — the model
+// must see what an agent is actually good at (shell, file ops, arbitrary
+// commands) or it refuses to route anything that has no exact native ID.
 func summarizeDevices(nodes []ledger.Node) string {
 	if len(nodes) == 0 {
 		return "（暂无设备能力摘要）"
 	}
 	var b strings.Builder
 	for _, n := range nodes {
-		b.WriteString(fmt.Sprintf("- %s (%s): %s\n", n.Name, n.Chip, strings.Join(n.Abilities(), ", ")))
+		var native []string
+		for _, a := range n.Native {
+			native = append(native, a.ID)
+		}
+		fmt.Fprintf(&b, "- %s (%s) native: %s\n", n.Name, n.Chip, strings.Join(native, ", "))
+		for name, ag := range n.Agents {
+			desc := strings.Join(ag.Capabilities, "/")
+			if len(ag.BestAt) > 0 {
+				desc += "（最擅长：" + strings.Join(ag.BestAt, "、") + "）"
+			}
+			fmt.Fprintf(&b, "    agent:%s — %s\n", name, desc)
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

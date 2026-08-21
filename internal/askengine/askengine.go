@@ -42,6 +42,10 @@ type Options struct {
 	// queue scheduler starts it when resources allow — the panel's mode, where
 	// progress streams into the session. The CLI keeps inline (blocking) mode.
 	QueueTasks bool
+	// ReplyASCII makes the entry model answer in English/ASCII. Set it when
+	// the client runs on a bare Linux console whose font has no CJK glyphs
+	// (Chinese replies would otherwise render as diamonds).
+	ReplyASCII bool
 	// Logger defaults to a warn-level stderr handler.
 	Logger *slog.Logger
 }
@@ -77,6 +81,8 @@ type Engine struct {
 	schedCancel context.CancelFunc
 	// queueTasks mirrors Options.QueueTasks.
 	queueTasks bool
+	// replyASCII mirrors Options.ReplyASCII (per-engine classify option).
+	replyASCII bool
 }
 
 // SetModel hot-swaps the entry model client at runtime (the settings page):
@@ -107,6 +113,7 @@ type Result struct {
 
 	// Task fields, valid when Kind == "task".
 	TaskID    string
+	TaskTitle string // for conversation history: "the task that ran" in one line
 	TaskState string
 	OK        bool
 	Stdout    string
@@ -214,6 +221,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		remind:     remind,
 		logger:     logger,
 		queueTasks: opts.QueueTasks,
+		replyASCII: opts.ReplyASCII,
 	}
 	e.client.Store(client)
 
@@ -350,14 +358,18 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	turns = append(turns, history...)
 	turns = append(turns, entry.Turn{Role: "user", Content: prompt})
 	reg := e.currentRegistry()
+	var classifyOpts []entry.ClassifyOption
+	if e.replyASCII {
+		classifyOpts = append(classifyOpts, entry.WithASCIIOnly())
+	}
 	const maxRounds = 6
 	for round := 0; round < maxRounds; round++ {
 		var out entry.Output
 		var err error
 		if cb.OnDelta != nil {
-			out, err = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, reg, cb.OnDelta)
+			out, err = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, reg, cb.OnDelta, classifyOpts...)
 		} else {
-			out, err = entry.ClassifyTurnsWithTools(ctx, client, devices, conversationMemory, turns, reg)
+			out, err = entry.ClassifyTurnsWithTools(ctx, client, devices, conversationMemory, turns, reg, classifyOpts...)
 		}
 		if err != nil {
 			return nil, err
@@ -396,9 +408,9 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	var final entry.Output
 	var ferr error
 	if cb.OnDelta != nil {
-		final, ferr = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, nil, cb.OnDelta)
+		final, ferr = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, nil, cb.OnDelta, classifyOpts...)
 	} else {
-		final, ferr = entry.ClassifyTurns(ctx, client, devices, conversationMemory, turns)
+		final, ferr = entry.ClassifyTurns(ctx, client, devices, conversationMemory, turns, classifyOpts...)
 	}
 	if ferr != nil {
 		return nil, fmt.Errorf("reached max tool rounds (%d): %w", maxRounds, ferr)
@@ -448,7 +460,7 @@ func (e *Engine) submitTask(spec *entry.TaskSpec, authorized bool, workDir strin
 		if err != nil {
 			return &Result{Kind: "task", TaskState: "failed", Stderr: err.Error(), ExitCode: 1}
 		}
-		return &Result{Kind: "task", TaskID: task.TaskID, TaskState: task.State}
+		return &Result{Kind: "task", TaskID: task.TaskID, TaskTitle: task.Title, TaskState: task.State}
 	}
 	e.schedMu.Lock()
 	defer e.schedMu.Unlock()
@@ -463,6 +475,7 @@ func (e *Engine) submitTask(spec *entry.TaskSpec, authorized bool, workDir strin
 	res := &Result{
 		Kind:      "task",
 		TaskID:    task.TaskID,
+		TaskTitle: task.Title,
 		TaskState: task.State,
 		OK:        result.OK,
 		Stdout:    result.Stdout,

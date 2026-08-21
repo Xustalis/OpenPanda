@@ -16,11 +16,13 @@ import (
 
 // The entry model otherwise has no clock of its own — it cannot answer "what
 // time is it", "what day is today", or anything date-aware without a tool.
-// time.now gives it the host's current time (design §7.3: the entry model
-// runs on a host and may read its system clock).
+// time_now gives it the host's current time (design §7.3: the entry model
+// runs on a host and may read its system clock). Underscored name: the
+// Anthropic tools API restricts names to ^[a-zA-Z0-9_-]+$ and strict
+// providers (DeepSeek /anthropic) 400 on dots.
 func registerTimeTool(reg *entry.Registry) {
 	reg.Register(entry.Tool{
-		Name:        "time.now",
+		Name:        "time_now",
 		Description: "获取宿主机当前系统时间（本地时区）。回答“现在几点/今天几号/星期几/明天是什么日期”等任何与当前时间有关的问题前，必须先调用此工具。",
 		Schema: map[string]any{
 			"type":       "object",
@@ -120,7 +122,7 @@ type forecastResponse struct {
 // then fetch current conditions plus today/tomorrow.
 func registerWeatherTool(reg *entry.Registry) {
 	reg.Register(entry.Tool{
-		Name:        "weather.get",
+		Name:        "weather_get",
 		Description: "查询指定地点的实时天气（含今天与明天的预报）。location 为城市名，支持中文或英文（如“北京”、“上海”、“Tokyo”）。",
 		Schema: map[string]any{
 			"type": "object",
