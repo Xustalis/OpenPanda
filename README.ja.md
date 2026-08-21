@@ -182,7 +182,7 @@ model:
 常駐マルチノード構成ではデーモンそのものを起動します：
 
 ```bash
-./bin/panda --config config.yaml --card config/capabilities.example-desktop.yaml
+./bin/panda daemon --config config.yaml --card config/capabilities.example-desktop.yaml
 ```
 
 タスクを*実行*できる各ノードは、能力カード付きで起動してください。カードなしのノードはハートビートには参加しますが、タスクは割り当てられません。
@@ -220,7 +220,8 @@ model:
 
 | コマンド | 説明 |
 |---|---|
-| `panda`（引数なし） | デーモン起動：ノード登録、ハートビート、WSサーバー、ピア再接続 |
+| `panda`（引数なし） | 対話型REPLを起動（`panda repl`と同じ）；デーモンは `panda daemon` サブコマンドに移行 |
+| `panda daemon [--config PATH] [--card PATH]` | デーモン起動：ノード登録、ハートビート、WSサーバー、ピア再接続 |
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<質問>"` | 統一エントリ：answer / tool_call / task に分類して実行 |
 | `panda repl [--config PATH] [--card PATH]` | 対話シェル：スラッシュコマンド（tasks/approve/projects/nodes/lang）、素の入力は ask エンジンへ、`/web` で組み込みコンソールを起動 |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | コマンド1つで Web コンソール：デフォルトはループバック + 一時トークン、ブラウザが開いた時点でログイン済み |
@@ -303,7 +304,7 @@ OpenPandaは低消費電力デバイスをターゲットにしています。�
 ```bash
 make build
 for i in 1 2 3 4 5; do
-  ./bin/panda --config testdata/node-a.yaml >/dev/null 2>&1 &
+  ./bin/panda daemon --config testdata/node-a.yaml >/dev/null 2>&1 &
   PID=$!; sleep 3
   ps -o rss= -p $PID | awk '{printf "%d MB\n", $1/1024}'
   kill -TERM $PID; wait $PID 2>/dev/null

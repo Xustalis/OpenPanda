@@ -88,7 +88,7 @@ trap cleanup INT TERM EXIT
 
 # 启动守护进程
 echo "[run-local] 启动核心守护进程 (config: $CONFIG) ..."
-./bin/panda --config "$CONFIG" --card config/capabilities.example-desktop.yaml > /tmp/panda-core.log 2>&1 &
+./bin/panda daemon --config "$CONFIG" --card config/capabilities.example-desktop.yaml > /tmp/panda-core.log 2>&1 &
 DAEMON_PID=$!
 
 # 等待守护进程就绪（最多 5 秒）

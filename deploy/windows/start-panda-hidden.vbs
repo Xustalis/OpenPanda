@@ -4,4 +4,4 @@
 ' The daemon still logs to C:\panda\daemon.log via cmd redirection.
 Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = "C:\panda"
-sh.Run "cmd /c ""C:\panda\panda.exe"" --config C:\panda\config.yaml --card C:\panda\capabilities.yaml >> C:\panda\daemon.log 2>&1", 0, False
+sh.Run "cmd /c ""C:\panda\panda.exe"" daemon --config C:\panda\config.yaml --card C:\panda\capabilities.yaml >> C:\panda\daemon.log 2>&1", 0, False

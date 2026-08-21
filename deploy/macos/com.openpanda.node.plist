@@ -18,6 +18,7 @@
         <key>ProgramArguments</key>
         <array>
                 <string>/usr/local/openpanda/bin/panda</string>
+                <string>daemon</string>
                 <string>--config</string>
                 <string>/usr/local/openpanda/config.yaml</string>
                 <string>--card</string>

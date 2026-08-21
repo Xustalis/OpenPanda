@@ -238,7 +238,7 @@ der Konsole direkt (Anthropic- oder OpenAI-kompatibel).
 Für ein residentes Multi-Node-Setup starte den Daemon selbst:
 
 ```bash
-./bin/panda --config config.yaml --card config/capabilities.example-desktop.yaml
+./bin/panda daemon --config config.yaml --card config/capabilities.example-desktop.yaml
 ```
 
 Jeder Node, der Arbeit *ausführen* kann, sollte mit seiner Capability Card starten.
@@ -277,7 +277,8 @@ Skills verwalten:
 
 | Befehl | Beschreibung |
 |---|---|
-| `panda` (ohne Argumente) | Daemon starten: Node registrieren, Heartbeat, WS-Server, Peer-Reconnect |
+| `panda` (ohne Argumente) | Öffnet die interaktive REPL (wie `panda repl`); der Daemon läuft jetzt über den Subcommand `panda daemon` |
+| `panda daemon [--config PATH] [--card PATH]` | Daemon starten: Node registrieren, Heartbeat, WS-Server, Peer-Reconnect |
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<Frage>"` | Einheitliches Eingabemodell: klassifiziert in answer / tool_call / task und führt aus |
 | `panda repl [--config PATH] [--card PATH]` | Interaktive Shell: Slash-Befehle (tasks/approve/projects/nodes/lang), freie Eingabe geht an die ask-Engine, `/web` startet die eingebettete Konsole |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | Web-Konsole mit einem Befehl: standardmäßig Loopback + flüchtiges Token, der Browser öffnet sich bereits angemeldet |
@@ -366,7 +367,7 @@ ist wegen GC-Rauschen unzuverlässig; besser mehrfach messen:
 ```bash
 make build
 for i in 1 2 3 4 5; do
-  ./bin/panda --config testdata/node-a.yaml >/dev/null 2>&1 &
+  ./bin/panda daemon --config testdata/node-a.yaml >/dev/null 2>&1 &
   PID=$!; sleep 3
   ps -o rss= -p $PID | awk '{printf "%d MB\n", $1/1024}'
   kill -TERM $PID; wait $PID 2>/dev/null

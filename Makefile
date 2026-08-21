@@ -76,7 +76,7 @@ dev: build
 	./bin/panda web --config config.yaml
 
 run:
-	$(GO) run ./cmd/panda --config config.yaml
+	$(GO) run ./cmd/panda daemon --config config.yaml
 
 # Start the daemon + webui sidecar locally with one command (see scripts/run-local.sh).
 run-local:
@@ -85,7 +85,7 @@ run-local:
 # Measure steady-state RSS: start core, sample after 2s, stop.
 measure:
 	@$(MAKE) build
-	@./bin/panda --config testdata/node-a.yaml > /tmp/panda-measure.log 2>&1 & \
+	@./bin/panda daemon --config testdata/node-a.yaml > /tmp/panda-measure.log 2>&1 & \
 		echo $$! > /tmp/panda-measure.pid; \
 		sleep 2; \
 		ps -o rss= -p $$(cat /tmp/panda-measure.pid) | awk '{printf "RSS: %.2f MB\n", $$1/1024}'; \

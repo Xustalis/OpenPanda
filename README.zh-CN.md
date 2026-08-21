@@ -181,7 +181,7 @@ model:
 常驻多节点部署则运行守护进程本身：
 
 ```bash
-./bin/panda --config config.yaml --card config/capabilities.example-desktop.yaml
+./bin/panda daemon --config config.yaml --card config/capabilities.example-desktop.yaml
 ```
 
 每个**能执行任务**的节点都应带上自己的能力卡启动。没有能力卡的节点仍参与心跳，但不会被委派任务。
@@ -221,7 +221,8 @@ model:
 
 | 命令 | 说明 |
 |---|---|
-| `panda`（无参数） | 运行守护进程：节点注册、心跳、WS 服务、peer 重连 |
+| `panda`（无参数） | 进入交互式 REPL（与 `panda repl` 相同）；守护进程改为 `panda daemon` 子命令运行 |
+| `panda daemon [--config PATH] [--card PATH]` | 运行守护进程：节点注册、心跳、WS 服务、peer 重连 |
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<问题>"` | 统一入口：分类为 answer / tool_call / task 并执行 |
 | `panda repl [--config PATH] [--card PATH]` | 交互式 shell：斜杠命令（tasks/approve/projects/nodes/lang），裸输入走提问引擎，`/web` 一键拉起内嵌控制台 |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | 一条命令起 Web 控制台：默认回环监听 + 临时令牌，浏览器打开即已登录 |
@@ -318,7 +319,7 @@ OpenPanda 面向低功耗设备。上硬件前请先验证稳态内存——单�
 ```bash
 make build
 for i in 1 2 3 4 5; do
-  ./bin/panda --config testdata/node-a.yaml >/dev/null 2>&1 &
+  ./bin/panda daemon --config testdata/node-a.yaml >/dev/null 2>&1 &
   PID=$!; sleep 3
   ps -o rss= -p $PID | awk '{printf "%d MB\n", $1/1024}'
   kill -TERM $PID; wait $PID 2>/dev/null

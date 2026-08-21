@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+### CLI experience overhaul (conversation, reporting, output hygiene)
+
+- **REPL multi-turn context** — bare-mode asks accumulate a conversation
+  bounded by a 24k-character budget (whole exchanges evicted oldest-first,
+  so a user turn never replays without its answer) and persist it to
+  `~/.local/state/openpanda/conversation.json`: a new terminal resumes
+  where the last one ended. `/new` clears it, `/history` views it, `!!`
+  repeats the last prompt, and `panda ask --continue` picks the thread up
+  one-shot.
+- **Out-of-band task reporting** — the interactive REPL runs a task
+  watcher that polls the store's state fingerprint and prints a ✓/✗ line
+  when a task reaches a terminal state (queued board tasks, web-console
+  submissions, peer delegations) — interleaved into the line editor
+  without losing the in-progress buffer. Inline asks absorb their own
+  outcome and are never double-notified.
+- **Live task board** — `panda queue --watch` (and `/tasks watch` in the
+  REPL) redraws the queue in place every 2s with state-colored rows;
+  Ctrl-C exits the view, not the process.
+- **Markdown output hygiene** — new `internal/mdtext` renders answers per
+  sink: color TTYs get ANSI emphasis (cyan headings, bold, dim code,
+  aligned tables), pipes and bare consoles get plain text, and the voice
+  pipeline (`Speak`) always strips Markdown before TTS. Streaming deltas
+  render line-by-line through the same rules, so no raw `**`/`|`/`#`
+  markers leak into any surface.
+- **Answer discipline** — the entry prompt now demands conclusions-first
+  answers (no visible reasoning, minimal structure), and agent prompts
+  carry an output rider: the final message reports what was done, not the
+  exploration trail. Execution detail stays in `panda task <id>` events —
+  the CLI equivalent of a collapsed "show work" section.
+- **codex adapter** — runs with `-s danger-full-access`: codex's own
+  sandbox cannot initialize under a non-interactive parent (its state DB
+  and PATH-alias creation fail with EPERM before the first turn), and
+  PANDA already confines the adapter to the task cwd. Agent failures also
+  now surface their diagnosis instead of an empty `result {"failed":""}`.
+
 Initial open-source pre-release.
 
 **Project renamed to OpenPanda** (Open + Personal Adaptive Node-based Distributed Assistant). Go module path is now `github.com/Xustalis/OpenPanda`; all env vars use the `OPENPANDA_` prefix; systemd/LaunchAgent units are `openpanda.service` / `com.openpanda.node.plist`; default DB filename is `openpanda.db`. The CLI binary keeps the short name `panda`.
@@ -103,3 +138,15 @@ Deliberately parked for after v0.0.1 — tracked here so they stay visible:
 - **Gates and small hardening** — Makefile `measure` target referenced a non-existent config (now matches the README snippet); six files reformatted to satisfy the gofmt gate; README badge/prerequisites state Go ≥1.26 across all five editions; `.gitignore` gains `.openpanda/` (the worktree dir was only excluded via local `.git/info/exclude` — risk of accidental commits on fresh clones); the example config's phantom peer is commented out so `make run` doesn't hot-loop warnings; the panel gains a `securityHeaders` middleware (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`) as defense-in-depth (cacde7b).
 - **SQLite v9 migration on legacy DBs** — the queue-schema migration crashed on databases created before the `tasks` table existed; it now creates the table when missing (0e8d850).
 - **Actionable API error mapping** — non-OK status codes are preserved through the streaming path so errors reach the user as guidance, not raw transport noise: 401/403 point at `model.api_key`, 404 at `base_url`/model name, 400 at the request, persistent 429/5xx name rate limiting or service unavailability, and connection failures suggest a network check (df47725).
+
+### CLI front door & REPL overhaul
+
+- **CLI front door** — bare `panda` now opens the interactive REPL (was: the headless daemon); the kernel moved to an explicit `panda daemon` subcommand (systemd/LaunchAgent/Windows launchers updated accordingly). Deploy files updated.
+- **Slash command menu** — typing a `/` prefix in the REPL live-lists matching commands under the prompt (capped at 10 with a (+N, Tab) hint); completion itself stays on Tab. Fixes the auto-complete loop where `/e` snapped to `/exit ` and backspacing re-triggered it.
+- **Startup banner redesign** — classic figlet lettering spells out OpenPanda in pure ASCII (renders on any terminal), with node/model/workdir info lines; colors on TTY only.
+- **TTY/console degradation** — on a bare Linux console (TERM=linux) the UI falls back to English and ASCII separators so nothing renders as diamonds; non-UTF-8 terminals swap `·` separators for `|`.
+- **Anthropic tools API compatibility** — tool_use blocks now always carry `input` (empty object for no-arg tools): map omitempty previously dropped it and strict Anthropic-compatible providers (DeepSeek /anthropic) rejected follow-up turns with a 400. Dotted tool names (reminder.set, time.now, weather.get) renamed to underscores to satisfy the ^[a-zA-Z0-9_-]+$ pattern.
+- **work_path auto-creation** — the daemon mkdirs all storage roots (context/memory/projects/skills/work) at boot; a missing work dir used to surface as a misleading fork/exec ENOENT on the command binary.
+- **Mutual-dial reconnect storm fixed** — the dedup loser's final hello reply went out on the registry conn instead of the arriving conn, so the loser never bound the peer identity, skipped MaintainPeer's edge wait, and redialed every second; observed 869 reconnects in 15 minutes on real hardware, now 1 with silence after.
+- **Capability card autodiscovery** — --card now defaults to ./capabilities.yaml then /etc/openpanda/capabilities.yaml, so installed nodes execute tasks with zero flags.
+- **parseSubcommand flag passthrough** — bare `panda --config x.yaml` no longer loses its flags to the default REPL target.

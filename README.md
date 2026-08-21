@@ -230,7 +230,7 @@ from its settings page if you haven't configured one yet.
 For a resident multi-node setup, run the daemon itself:
 
 ```bash
-./bin/panda --config config.yaml --card config/capabilities.example-desktop.yaml
+./bin/panda daemon --config config.yaml --card config/capabilities.example-desktop.yaml
 ```
 
 Each node that can *execute* work should be started with its capability card.
@@ -271,7 +271,8 @@ Manage skills:
 
 | Command | Description |
 |---|---|
-| `panda` (no args) | Run the daemon: register node, heartbeat, WS server, peer reconnect |
+| `panda` (no args) | Open the interactive REPL (same as `panda repl`); the daemon now runs via the `panda daemon` subcommand |
+| `panda daemon [--config PATH] [--card PATH]` | Run the daemon: register node, heartbeat, WS server, peer reconnect |
 | `panda ask [--config PATH] [--card PATH] [--authorize] "<question>"` | Unified entry: classify into answer / tool_call / task and execute |
 | `panda repl [--config PATH] [--card PATH]` | Interactive shell: slash commands (tasks/approve/projects/nodes/lang), bare input goes to the ask engine, `/web` boots the embedded console |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | One-command web console: loopback + ephemeral token by default, opens the browser already logged in |
@@ -381,7 +382,7 @@ to hardware — a single `ps` sample is unreliable due to GC noise; take several
 ```bash
 make build
 for i in 1 2 3 4 5; do
-  ./bin/panda --config testdata/node-a.yaml >/dev/null 2>&1 &
+  ./bin/panda daemon --config testdata/node-a.yaml >/dev/null 2>&1 &
   PID=$!; sleep 3
   ps -o rss= -p $PID | awk '{printf "%d MB\n", $1/1024}'
   kill -TERM $PID; wait $PID 2>/dev/null
