@@ -218,7 +218,7 @@ func runSessionRm(args []string) {
 func runSessionAsk(args []string) {
 	fs := flag.NewFlagSet("session ask", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", "", "path to capabilities.yaml (required to execute tasks)")
+	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered; required to execute tasks)")
 	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated)")
 	authorize := fs.Bool("authorize", false, "authorize tier-2 (irreversible) commands")
 	fs.Parse(args)
@@ -296,7 +296,10 @@ func runSessionAsk(args []string) {
 	case "task":
 		fmt.Println(i18n.Tf(loc, "cli.session.task", "id", out.TaskID, "state", out.TaskState))
 		if out.OK {
-			fmt.Print(out.Stdout)
+			fmt.Print(renderCliMd(out.Stdout))
+			if s := strings.TrimRight(out.Stdout, "\n"); s != "" && !strings.HasSuffix(out.Stdout, "\n") {
+				fmt.Println()
+			}
 		} else {
 			fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
 			os.Exit(1)
@@ -310,22 +313,17 @@ func askSessionTurns(engine *askengine.Engine, history []entry.Turn, prompt, wor
 	if !stdoutIsTTY() {
 		return engine.AskTurns(context.Background(), history, prompt, workDir, authorize, askengine.StreamCallbacks{})
 	}
-	var delivered bool
+	lr := newStreamLineRenderer()
 	cb := askengine.StreamCallbacks{
-		OnDelta: func(chunk string) {
-			delivered = true
-			fmt.Print(chunk)
-		},
+		OnDelta: func(chunk string) { lr.delta(chunk) },
 		OnStatus: func(note string) {
-			if !delivered {
+			if !lr.printed {
 				fmt.Printf("· %s\n", note)
 			}
 		},
 	}
 	out, err := engine.AskTurns(context.Background(), history, prompt, workDir, authorize, cb)
-	if delivered {
-		fmt.Println()
-	}
+	lr.flush()
 	return out, err
 }
 

@@ -1,10 +1,9 @@
-// Command panda is the PANDA core daemon. It registers this node's
-// capabilities and, once peers connect, delegates/executes tasks over
-// WebSocket. Subcommands: ask (unified entry model), repl (interactive shell
-// over the same store, with /web to boot the embedded console), status/queue/
-// task/approve/reject/cancel/logs (one-shot panel), version. With no
-// subcommand it runs the daemon (headless kernel — the web panel is a
-// separate webui/ sidecar).
+// Command panda is the OpenPanda CLI. With no subcommand it drops into the
+// interactive REPL (the operator's seat); `panda daemon` runs the headless
+// kernel that registers this node's capabilities and delegates/executes
+// tasks over WebSocket. Other subcommands: ask (unified entry model), web
+// (embedded console), status/queue/task/approve/reject/cancel/logs (one-shot
+// panel), version.
 package main
 
 import (
@@ -41,10 +40,13 @@ func main() {
 	sub, args := parseSubcommand(args)
 	if sub != "" {
 		switch sub {
+		case "daemon", "serve":
+			runDaemon(args)
+			return
 		case "ask":
 			runAsk(args)
 			return
-		case "repl":
+		case "repl", "chat":
 			runRepl(args)
 			return
 		case "web":
@@ -120,14 +122,17 @@ func main() {
 			printUsage(os.Stdout)
 			return
 		default:
-			// A bare unknown word must not fall through to runDaemon (P1-25):
-			// "panda statsu" (a typo) would otherwise start a resident daemon.
+			// A bare unknown word must not silently fall through (P1-25):
+			// "panda statsu" (a typo) should neither start the REPL nor a
+			// resident daemon — name the fix instead.
 			fmt.Fprintf(os.Stderr, "panda: unknown subcommand %q\n", sub)
 			printUsage(os.Stderr)
 			os.Exit(2)
 		}
 	}
-	runDaemon()
+	// No subcommand: the interactive REPL is the product's front door;
+	// the kernel is an explicit `panda daemon` away.
+	runRepl(args)
 }
 
 // stripJSONFlag removes every --json occurrence from args (it may sit before
@@ -164,15 +169,17 @@ func parseSubcommand(args []string) (string, []string) {
 		}
 		return a, append(global, args[i+1:]...)
 	}
-	return "", nil
+	// No subcommand: args is flags-only (any bare word would have returned
+	// above), so pass them through untouched — the default target (the REPL)
+	// parses --config/--card/--mcp itself.
+	return "", args
 }
 
-func runDaemon() {
-	var (
-		configPath = flag.String("config", "", "path to config.yaml (default /etc/openpanda/config.yaml)")
-		cardPath   = flag.String("card", "", "path to capabilities.yaml")
-	)
-	flag.Parse()
+func runDaemon(args []string) {
+	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config.yaml (default /etc/openpanda/config.yaml)")
+	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered ./capabilities.yaml or /etc/openpanda/capabilities.yaml)")
+	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -184,6 +191,21 @@ func runDaemon() {
 
 	if err := os.MkdirAll(filepath.Dir(cfg.Storage.DBPath), 0o755); err != nil {
 		fatal("create data dir", err)
+	}
+	// Storage roots the runtime writes into must exist before any task
+	// executes: the sandbox sets a child's cwd to work_path, and a missing
+	// dir surfaces as a misleading fork/exec ENOENT blaming the command
+	// binary instead of the absent working directory.
+	for _, dir := range []string{
+		cfg.Storage.ContextPath,
+		cfg.Storage.MemoryPath,
+		cfg.Storage.ProjectsPath,
+		cfg.Storage.SkillsPath,
+		cfg.Storage.WorkPath,
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fatal("create storage dir", err)
+		}
 	}
 
 	db, err := storage.Open(cfg.Storage.DBPath)
@@ -209,7 +231,15 @@ func runDaemon() {
 
 	coreNode := core.NewCore(db, core.NodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 	coreNode.SetRouterPolicy(cfg.Injection, cfg.Routing)
-	coreNode.SetWorkDir(cfg.Storage.WorkPath)
+	// The work dir travels to adapter subprocesses as their cwd (via the
+	// sandbox and the adapter request's CWD field), so it must be absolute —
+	// a relative path would resolve against the TASK dir inside the adapter
+	// and make python's subprocess.run fail instantly.
+	if absWork, err := filepath.Abs(cfg.Storage.WorkPath); err == nil {
+		coreNode.SetWorkDir(absWork)
+	} else {
+		coreNode.SetWorkDir(cfg.Storage.WorkPath)
+	}
 	coreNode.SetHostStatePaths(hostStatePaths(cfg))
 	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
 	coreNode.SetLimits(cfg.Network.MaxConnections, cfg.Network.MaxConnectionsPerIP)
@@ -409,7 +439,8 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "panda — personal task orchestration across your devices")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "runtime:")
-	fmt.Fprintln(w, "  (no subcommand)        run the node daemon (registers, listens, delegates)")
+	fmt.Fprintln(w, "  (no subcommand)        interactive REPL — the operator's seat (same as `panda repl`)")
+	fmt.Fprintln(w, "  daemon                 run the node kernel headless (registers, listens, delegates)")
 	fmt.Fprintln(w, "  ask <text>             unified entry: classify → answer or execute a task")
 	fmt.Fprintln(w, "                         (--output-format json|stream-json for headless use)")
 	fmt.Fprintln(w, "  repl                   interactive shell (banner, /help pager, Tab completion)")
@@ -419,7 +450,7 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "  session list|new|show|rm|ask|diff|merge   chat sessions over git worktrees")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "tasks:")
-	fmt.Fprintln(w, "  queue [--state s] [--project p]           the task board")
+	fmt.Fprintln(w, "  queue [--state s] [--project p] [--watch] the task board (--watch: live view)")
 	fmt.Fprintln(w, "  task <id>                                 show one task + timeline")
 	fmt.Fprintln(w, "  task add --title T [--prompt P] [--priority low|medium|normal|high|critical]")
 	fmt.Fprintln(w, "           [--project p] [--authorize]      enqueue a task (needs --card)")

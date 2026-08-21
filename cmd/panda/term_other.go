@@ -33,4 +33,8 @@ func (t *termSession) watchInterrupt(ctx context.Context, cancel context.CancelF
 	<-ctx.Done()
 }
 
+// deliver has no in-place line editor to interleave with on this platform;
+// false tells the caller to print the line itself.
+func (t *termSession) deliver(line string) bool { return false }
+
 func (t *termSession) restore() {}

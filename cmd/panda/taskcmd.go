@@ -74,7 +74,7 @@ func taskUsage() {
 func runTaskShow(args []string) {
 	fs := flag.NewFlagSet("task", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
 		taskUsage()
@@ -193,7 +193,7 @@ func taskStoreFatal(err error, id string) {
 func runTaskAdd(args []string) {
 	fs := flag.NewFlagSet("task add", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", "", "path to capabilities.yaml (required)")
+	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered)")
 	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated)")
 	title := fs.String("title", "", "task title (required)")
 	prompt := fs.String("prompt", "", "task prompt (defaults to the title)")

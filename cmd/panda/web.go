@@ -38,7 +38,7 @@ import (
 func runWeb(args []string) {
 	fs := flag.NewFlagSet("web", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", "", "path to capabilities.yaml (enables task execution in /api/ask)")
+	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered; enables task execution in /api/ask)")
 	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated)")
 	noBrowser := fs.Bool("no-browser", false, "print the URL instead of opening a browser")
 	fs.Parse(args)

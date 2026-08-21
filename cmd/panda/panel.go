@@ -87,13 +87,15 @@ func runStatus(args []string) {
 	}
 }
 
-// runQueue implements `panda queue [--state s] [--project p]` — the task
-// board, newest activity first (the web listTasks semantics).
+// runQueue implements `panda queue [--state s] [--project p] [--watch]` —
+// the task board, newest activity first (the web listTasks semantics);
+// --watch switches to the in-place refreshing live board.
 func runQueue(args []string) {
 	fs := flag.NewFlagSet("queue", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
 	state := fs.String("state", "", "filter by state (empty = all)")
 	project := fs.String("project", "", "filter by project (empty = all)")
+	watch := fs.Bool("watch", false, "live view: redraw in place until Ctrl-C")
 	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
@@ -105,6 +107,11 @@ func runQueue(args []string) {
 		fatal("open store", err)
 	}
 	defer db.Close()
+
+	if *watch {
+		watchQueue(context.Background(), store, *state, *project)
+		return
+	}
 
 	tasks, err := store.ListByState(context.Background(), *state)
 	if err != nil {
@@ -139,7 +146,7 @@ func runQueue(args []string) {
 func runCancel(args []string) {
 	fs := flag.NewFlagSet("cancel", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda cancel [--config PATH] <task-id>")
@@ -172,7 +179,7 @@ func runCancel(args []string) {
 func runApprove(args []string) {
 	fs := flag.NewFlagSet("approve", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda approve [--config PATH] <task-id>")
@@ -205,7 +212,7 @@ func runReject(args []string) {
 	fs := flag.NewFlagSet("reject", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
 	reason := fs.String("reason", "", "rejection reason")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(args, map[string]bool{"--config": true, "--reason": true}))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda reject [--config PATH] [--reason s] <task-id>")

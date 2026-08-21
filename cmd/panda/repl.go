@@ -25,10 +25,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
@@ -68,6 +70,17 @@ type repl struct {
 	term        *termSession
 	activeSess  string
 	push        *push.Service
+
+	// Conversation memory for bare (session-less) mode: every ask's prompt
+	// and outcome accumulate here so follow-up questions keep context — the
+	// multi-turn UX users expect from a chat, without /resume-ing a session.
+	convo []entry.Turn
+	// watcher bookkeeping (repl_watch.go): asking=true suppresses
+	// completion notifications while an inline ask is mid-flight (it prints
+	// its own result); baseline is the last-seen task state fingerprint.
+	watchMu  sync.Mutex
+	asking   bool
+	baseline map[string]string
 }
 
 // replCmd is one slash command: a name, the i18n key of its help line, and
@@ -85,6 +98,8 @@ var replCommands []replCmd
 func init() {
 	replCommands = []replCmd{
 		{"ask", "cmd.ask", (*repl).cmdAsk},
+		{"new", "cmd.new", (*repl).cmdNew},
+		{"history", "cmd.history", (*repl).cmdHistory},
 		{"tasks", "cmd.tasks", (*repl).cmdTasks},
 		{"task", "cmd.task", (*repl).cmdTask},
 		{"cancel", "cmd.cancel", (*repl).cmdCancel},
@@ -116,11 +131,11 @@ func init() {
 func runRepl(args []string) {
 	fs := flag.NewFlagSet("repl", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", "", "path to capabilities.yaml (required to execute tasks)")
+	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered ./capabilities.yaml or /etc/openpanda/capabilities.yaml)")
 	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated)")
 	fs.Parse(args)
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := loadConfigQuietly(*configPath)
 	if err != nil {
 		fatal("load config", err)
 	}
@@ -131,8 +146,12 @@ func runRepl(args []string) {
 	defer db.Close()
 
 	interactive := stdinIsTTY()
+	detected := i18n.Detect()
+	if isLinuxConsole() {
+		detected = "en" // console font has no CJK glyphs; keep every UI line readable
+	}
 	r := &repl{
-		loc:         i18n.Detect(),
+		loc:         detected,
 		cfg:         cfg,
 		configPath:  config.ResolvePath(*configPath),
 		db:          db,
@@ -146,6 +165,10 @@ func runRepl(args []string) {
 	}
 	if interactive {
 		r.term = newTermSession()
+		if r.term != nil && cliStateDir() != "" {
+			_ = os.MkdirAll(cliStateDir(), 0o700)
+			r.term.initHistory(filepath.Join(cliStateDir(), "history"))
+		}
 	}
 
 	// Web Push (optional) — same contract as `panda web` so /web serves the
@@ -162,6 +185,7 @@ func runRepl(args []string) {
 		engine, err := askengine.New(context.Background(), cfg, askengine.Options{
 			CardPath:   *cardPath,
 			MCPCommand: *mcpCmd,
+			ReplyASCII: isLinuxConsole(),
 		})
 		if err != nil {
 			fatal("ask engine", err)
@@ -173,6 +197,24 @@ func runRepl(args []string) {
 	r.printBanner()
 	if r.engine != nil && !r.hasCard {
 		fmt.Println(i18n.T(r.loc, "repl.ask.noCard"))
+	}
+
+	// Task watcher (interactive only): poll the store's task fingerprint
+	// and surface out-of-band completions while the user idles at the
+	// prompt — tasks that finished elsewhere (web console, queue scheduler,
+	// another node's delegation) report themselves instead of sitting
+	// silent until the next /tasks.
+	if r.interactive {
+		watchCtx, watchCancel := context.WithCancel(context.Background())
+		defer watchCancel()
+		go r.watchTasks(watchCtx)
+	}
+
+	// Resume the persisted bare-mode conversation (people reopen
+	// terminals, not conversations); /new starts a fresh one.
+	if c := loadConvo(); len(c) > 0 {
+		r.convo = c
+		fmt.Println(i18n.Tf(r.loc, "repl.convo.resumed", "n", fmt.Sprint(len(c)/2)))
 	}
 
 	sc := bufio.NewScanner(os.Stdin)
@@ -220,8 +262,39 @@ func (r *repl) slashNames() []string {
 	return names
 }
 
-// printBanner draws the codex-style startup box: identity line, model line,
-// work dir, then three orientation hints.
+// figletFont is the classic figlet "standard" lettering subset used by the
+// banner, each glyph a fixed 8-column 5-row cell — pure ASCII, so the wordmark
+// renders identically on iTerm2 and a bare Linux console.
+var figletFont = map[rune][]string{
+	'O': {"  ___   ", " / _ \\  ", "| | | | ", "| |_| | ", " \\___/  "},
+	'p': {" _ __   ", "| '_ \\  ", "| |_) | ", "| .__/  ", "|_|     "},
+	'e': {"        ", "  ___   ", " / _ \\  ", "|  __/  ", " \\___|  "},
+	'n': {"        ", " _ __   ", "| '_ \\  ", "| | | | ", "|_| |_| "},
+	'P': {" ____   ", "|  _ \\  ", "| |_) | ", "| __/   ", "|_|     "},
+	'a': {"        ", "  __ _  ", " / _` | ", "| (_| | ", " \\__,_| "},
+	'd': {"      _ ", " __ _(_)", "/ _` |  ", "| (_| | ", " \\__,_| "},
+}
+
+// figlet renders word in the 5-row lettering above (unknown runes render as
+// blanks); the caller prints each returned line.
+func figlet(word string) []string {
+	rows := make([]string, 5)
+	for _, ch := range word {
+		glyph, ok := figletFont[ch]
+		if !ok {
+			glyph = []string{"        ", "        ", "        ", "        ", "        "}
+		}
+		for i := 0; i < 5; i++ {
+			rows[i] += glyph[i]
+		}
+	}
+	return rows
+}
+
+// printBanner draws the startup screen: the OpenPanda wordmark in figlet
+// lettering, then node/model/workdir info lines and orientation hints.
+// runRepl already degrades r.loc to English on a bare Linux console, so
+// nothing here renders as a diamond (art is pure ASCII, separators degrade).
 func (r *repl) printBanner() {
 	model := i18n.T(r.loc, "repl.banner.noModel")
 	if r.cfg.Model.BaseURL != "" {
@@ -230,26 +303,30 @@ func (r *repl) printBanner() {
 			model = r.cfg.Model.BaseURL
 		}
 	}
-	lines := []string{
-		fmt.Sprintf("%s v%s", i18n.T(r.loc, "repl.banner.title"), version),
-		i18n.Tf(r.loc, "repl.banner.node", "node", r.cfg.Node.Name, "model", model),
-		i18n.Tf(r.loc, "repl.banner.dir", "dir", r.cfg.Storage.WorkPath),
-	}
-	width := 0
-	for _, l := range lines {
-		if n := len([]rune(l)); n > width {
-			width = n
+	color := func(code, s string) string {
+		if !stdoutIsTTY() {
+			return s
 		}
+		return "\x1b[" + code + "m" + s + "\x1b[0m"
 	}
-	fmt.Println("┌─" + strings.Repeat("─", width+2) + "┐")
-	for _, l := range lines {
-		pad := width - len([]rune(l))
-		fmt.Println("│ " + l + strings.Repeat(" ", pad) + " │")
+	sep := " · " // hint separator; ASCII fallback for non-unicode terminals
+	if !termSupportsUnicode() {
+		sep = " | "
 	}
-	fmt.Println("└─" + strings.Repeat("─", width+2) + "┘")
-	fmt.Println(i18n.T(r.loc, "repl.banner.hint1"))
-	fmt.Println(i18n.T(r.loc, "repl.banner.hint2"))
-	fmt.Println(i18n.T(r.loc, "repl.banner.hint3"))
+	fmt.Println()
+	for _, line := range figlet("OpenPanda") {
+		fmt.Println(color("32", line)) // green wordmark, like claude-code's art
+	}
+	fmt.Println(color("1", fmt.Sprintf("  %s v%s", i18n.T(r.loc, "repl.banner.title"), version)))
+	fmt.Println(color("36", "  "+i18n.Tf(r.loc, "repl.banner.node", "node", r.cfg.Node.Name, "model", model)))
+	fmt.Println(color("2", "  "+i18n.Tf(r.loc, "repl.banner.dir", "dir", r.cfg.Storage.WorkPath)))
+	fmt.Println()
+	fmt.Println(color("2", "  "+i18n.T(r.loc, "repl.banner.hint1")+sep+
+		i18n.T(r.loc, "repl.banner.hint2")+sep+i18n.T(r.loc, "repl.banner.hint3")))
+	if isLinuxConsole() {
+		fmt.Println(color("33", "  ! bare console font has no CJK glyphs; answers are forced to English."))
+		fmt.Println(color("33", "    for Chinese on this screen: sudo apt install fbterm fonts-wqy-zenhei && fbterm"))
+	}
 	fmt.Println()
 }
 
@@ -278,6 +355,8 @@ func (r *repl) printFooter() {
 	sess := "-"
 	if r.activeSess != "" {
 		sess = r.activeSess
+	} else if n := len(r.convo) / 2; n > 0 {
+		sess = fmt.Sprintf("chat(%d turns)", n)
 	}
 	fmt.Println(color("2", fmt.Sprintf("%s:%s  %s:%s  %s:%s  %s:%s",
 		i18n.T(r.loc, "repl.footer.node"), r.cfg.Node.Name,
@@ -286,11 +365,16 @@ func (r *repl) printFooter() {
 		i18n.T(r.loc, "repl.footer.session"), sess)))
 }
 
-// dispatch routes one input line: slash commands to the table, anything else
-// to the ask engine. Unknown commands name the fix (/help), never exit.
+// dispatch routes one input line: slash commands to the table, `!!` repeats
+// the previous ask (the shell habit), anything else goes to the ask engine.
+// Unknown commands name the fix (/help), never exit.
 func (r *repl) dispatch(line string) {
 	line = strings.TrimSpace(line)
 	if line == "" {
+		return
+	}
+	if line == "!!" {
+		r.repeatLast()
 		return
 	}
 	if !strings.HasPrefix(line, "/") {
@@ -314,15 +398,18 @@ func (r *repl) dispatch(line string) {
 // ask runs one prompt through the unified entry engine and prints the
 // converged result. With an active session (/resume) the turn runs with the
 // session's full history in its worktree and is persisted to the thread —
-// the web console's session ask, in the shell. Esc / Ctrl-C interrupts the
-// run; a double Ctrl-C exits.
+// the web console's session ask, in the shell. In bare mode the turn runs
+// with this REPL run's accumulated conversation (r.convo) so follow-ups
+// keep context; /new clears it. Esc / Ctrl-C interrupts the run; a double
+// Ctrl-C exits.
 func (r *repl) ask(text string) {
 	if r.engine == nil {
 		fmt.Println(i18n.T(r.loc, "repl.ask.noEngine"))
 		return
 	}
 
-	// Session-aware context (mirrors panel sessionAsk).
+	// Session-aware context (mirrors panel sessionAsk); bare mode replays
+	// the in-memory conversation instead.
 	var history []entry.Turn
 	workDir := ""
 	if r.activeSess != "" && r.sessionsSt != nil {
@@ -341,6 +428,8 @@ func (r *repl) ask(text string) {
 				}
 			}
 		}
+	} else {
+		history = append(history, r.convo...)
 	}
 
 	if r.interactive {
@@ -349,19 +438,20 @@ func (r *repl) ask(text string) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var delivered bool
+	lr := newStreamLineRenderer()
 	cb := askengine.StreamCallbacks{}
 	if stdoutIsTTY() {
-		cb.OnDelta = func(chunk string) {
-			delivered = true
-			fmt.Print(chunk)
-		}
+		cb.OnDelta = func(chunk string) { lr.delta(chunk) }
 		cb.OnStatus = func(note string) {
-			if !delivered {
+			if !lr.printed {
 				fmt.Printf("· %s\n", note)
 			}
 		}
 	}
+	delivered := func() bool { return lr.printed }
+
+	r.setAsking(true)
+	defer r.setAsking(false)
 
 	type outcome struct {
 		out *askengine.Result
@@ -379,11 +469,12 @@ func (r *repl) ask(text string) {
 		r.term.watchInterrupt(ctx, cancel, i18n.T(r.loc, "repl.interrupted"))
 	}
 	<-got
+	lr.flush()
+	// Absorb whatever terminal states this ask produced into the watcher's
+	// baseline so the completion is not notified twice (the ask prints it).
+	r.resetWatchBaseline()
 
 	if res.err != nil {
-		if delivered {
-			fmt.Println()
-		}
 		fmt.Fprintln(os.Stderr, "panda: "+res.err.Error())
 		return
 	}
@@ -402,29 +493,137 @@ func (r *repl) ask(text string) {
 			turn.Text = out.Answer
 		}
 		_, _ = r.sessionsSt.AppendTurn(r.activeSess, turn)
+	} else {
+		r.rememberTurn(text, out)
 	}
 
 	switch out.Kind {
 	case "answer":
-		if delivered {
-			fmt.Println()
+		if delivered() {
 			break
 		}
 		if out.Note != "" {
-			fmt.Println(out.Note)
+			fmt.Println(r.renderMd(out.Note))
 		}
-		fmt.Println(out.Answer)
+		fmt.Println(r.renderMd(out.Answer))
 	case "task":
-		if delivered {
-			fmt.Println()
-		}
 		fmt.Println(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
 		if out.OK {
-			fmt.Print(out.Stdout)
+			fmt.Print(r.renderMd(out.Stdout))
+			if s := strings.TrimRight(out.Stdout, "\n"); s != "" && !strings.HasSuffix(out.Stdout, "\n") {
+				fmt.Println()
+			}
 		} else {
 			fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
 		}
 	}
+}
+
+// repeatLast re-runs the previous user ask (`!!`) — the shell habit for
+// "ask that again" (after a model swap, a failed run, new context).
+func (r *repl) repeatLast() {
+	if r.activeSess == "" {
+		for i := len(r.convo) - 1; i >= 0; i-- {
+			if r.convo[i].Role == "user" {
+				fmt.Println("!! " + r.convo[i].Content)
+				r.ask(r.convo[i].Content)
+				return
+			}
+		}
+	}
+	if r.term != nil {
+		for i := len(r.term.history) - 1; i >= 0; i-- {
+			l := strings.TrimSpace(r.term.history[i])
+			if l != "" && !strings.HasPrefix(l, "/") && l != "!!" {
+				fmt.Println("!! " + l)
+				r.ask(l)
+				return
+			}
+		}
+	}
+	fmt.Println(i18n.T(r.loc, "repl.bang.none"))
+}
+
+// rememberTurn records one bare-mode exchange through the shared convo
+// helpers (see convo.go): pair-aligned character-budget trimming and
+// persistence to the state dir, so the next REPL and `ask --continue`
+// both resume it.
+func (r *repl) rememberTurn(text string, out *askengine.Result) {
+	r.convo = appendConvo(r.convo, text, out)
+}
+
+// cmdNew clears the bare-mode conversation (/new) — the "new chat" of a
+// chat app. Bound sessions keep their own history and are unaffected.
+func (r *repl) cmdNew(arg string) {
+	if r.activeSess != "" {
+		fmt.Println(i18n.T(r.loc, "repl.new.session"))
+		return
+	}
+	n := len(r.convo)
+	r.convo = nil
+	clearConvo()
+	fmt.Println(i18n.Tf(r.loc, "repl.new.cleared", "n", fmt.Sprint(n/2)))
+}
+
+// cmdHistory prints the recent bare-mode conversation compactly — the
+// "scroll up" of a chat app when the terminal has moved on.
+func (r *repl) cmdHistory(arg string) {
+	if r.activeSess != "" {
+		fmt.Println(i18n.T(r.loc, "repl.new.session"))
+		return
+	}
+	if len(r.convo) == 0 {
+		fmt.Println(i18n.T(r.loc, "repl.history.empty"))
+		return
+	}
+	fmt.Println(i18n.T(r.loc, "repl.history.head"))
+	// newest last, like a chat transcript; cap the listing, the window
+	// itself may hold far more.
+	turns := r.convo
+	if len(turns) > 20 {
+		turns = turns[len(turns)-20:]
+	}
+	for _, t := range turns {
+		who := i18n.T(r.loc, "repl.history.you")
+		if t.Role != "user" {
+			who = i18n.T(r.loc, "repl.history.panda")
+		}
+		fmt.Printf("  %s: %s\n", who, head(t.Content, 200))
+	}
+}
+
+// renderMd on the REPL delegates to renderCliMd (ask.go): same sink rules
+// — color TTYs get the ANSI Markdown render, pipes and bare consoles get
+// plain text. Streaming deltas bypass rendering: they print raw for the
+// typing feel; only final blocks render.
+func (r *repl) renderMd(s string) string { return renderCliMd(s) }
+
+// head truncates s to at most n runes, marking a cut with an ellipsis.
+func head(s string, n int) string {
+	rs := []rune(strings.TrimSpace(s))
+	if len(rs) <= n {
+		return string(rs)
+	}
+	return string(rs[:n]) + "…"
+}
+
+// firstLine returns s's first non-empty line — for a task summary turn the
+// opening sentence usually carries the answer.
+func firstLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// shortID abbreviates a UUID to its first dash-group for one-line display.
+func shortID(id string) string {
+	if i := strings.IndexByte(id, '-'); i > 0 {
+		return id[:i]
+	}
+	return id
 }
 
 // cmdAsk is the explicit /ask form; bare input is the shortcut.
@@ -436,11 +635,24 @@ func (r *repl) cmdAsk(arg string) {
 	r.ask(arg)
 }
 
-// cmdTasks lists the queue, optionally filtered by state (/tasks running).
+// cmdTasks lists the queue, optionally filtered by state (/tasks running);
+// "/tasks watch" (or "/tasks running watch") opens the live board — the
+// in-place refreshing view of `panda queue --watch`, inside the REPL.
 func (r *repl) cmdTasks(arg string) {
 	state := ""
-	if fields := strings.Fields(arg); len(fields) > 0 {
-		state = fields[0]
+	watch := false
+	for _, f := range strings.Fields(arg) {
+		if f == "watch" || f == "-w" {
+			watch = true
+			continue
+		}
+		if state == "" {
+			state = f
+		}
+	}
+	if watch {
+		watchQueue(context.Background(), r.store, state, "")
+		return
 	}
 	tasks, err := r.store.ListByState(context.Background(), state)
 	if err != nil {
