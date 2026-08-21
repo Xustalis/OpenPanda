@@ -211,8 +211,10 @@ const maxAuthFailures = 5
 var authFailWindow = time.Minute
 
 // authLimiter tracks failed Bearer attempts per client IP in a fixed window.
-// A locked-out IP is rejected even with a correct token until the window
-// resets — a deliberate trade-off that keeps the limiter trivial.
+// A locked-out IP is rejected until the window resets, but the token check
+// above runs FIRST: a correct token always passes and resets the budget, so
+// a client holding valid credentials can never lock itself out (an
+// EventSource reconnecting with a stale token merely fails again).
 type authLimiter struct {
 	mu       sync.Mutex
 	failures map[string]*authFailure
