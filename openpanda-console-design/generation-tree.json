@@ -1,0 +1,67 @@
+{
+  "root": {
+    "nodeId": "gen-project-shell",
+    "kind": "project-shell",
+    "pageIds": [
+      "page-chat-desktop",
+      "page-queue-desktop",
+      "page-detail-desktop",
+      "page-settings-desktop",
+      "page-chat-mobile",
+      "page-queue-mobile",
+      "page-detail-mobile",
+      "page-settings-mobile"
+    ],
+    "output": "colors_and_type.css",
+    "sharedRegions": ["color-system", "typography-system", "radius-scale", "shadow-model"],
+    "privateRegions": [],
+    "mutableSlots": [],
+    "status": "generated",
+    "children": [
+      {
+        "nodeId": "gen-chat",
+        "kind": "page-leaf",
+        "pageIds": ["page-chat-desktop", "page-chat-mobile"],
+        "output": "pages/chat-desktop.html, pages/chat-mobile.html",
+        "sharedRegions": ["project-shell"],
+        "privateRegions": ["chat-thread-rail", "chat-pane", "composer"],
+        "mutableSlots": ["active-nav-item"],
+        "status": "generated",
+        "children": []
+      },
+      {
+        "nodeId": "gen-queue",
+        "kind": "page-leaf",
+        "pageIds": ["page-queue-desktop", "page-queue-mobile"],
+        "output": "pages/queue-desktop.html, pages/queue-mobile.html",
+        "sharedRegions": ["project-shell"],
+        "privateRegions": ["kanban-board", "task-cards", "filters"],
+        "mutableSlots": ["active-nav-item"],
+        "status": "generated",
+        "children": []
+      },
+      {
+        "nodeId": "gen-detail",
+        "kind": "page-leaf",
+        "pageIds": ["page-detail-desktop", "page-detail-mobile"],
+        "output": "pages/detail-desktop.html, pages/detail-mobile.html",
+        "sharedRegions": ["project-shell"],
+        "privateRegions": ["detail-header", "metadata-grid", "timeline", "output-log"],
+        "mutableSlots": ["active-nav-item"],
+        "status": "generated",
+        "children": []
+      },
+      {
+        "nodeId": "gen-settings",
+        "kind": "page-leaf",
+        "pageIds": ["page-settings-desktop", "page-settings-mobile"],
+        "output": "pages/settings-desktop.html, pages/settings-mobile.html",
+        "sharedRegions": ["project-shell"],
+        "privateRegions": ["settings-section-rail", "settings-form-cards"],
+        "mutableSlots": ["active-nav-item"],
+        "status": "generated",
+        "children": []
+      }
+    ]
+  }
+}

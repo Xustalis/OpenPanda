@@ -1,0 +1,211 @@
+{
+  "schemaVersion": "1.0",
+  "skillProvenance": {
+    "name": "solo-design",
+    "version": "2026.08.06.19.15.08",
+    "release": "prompt-base-cloud-ssot-migration",
+    "version_source": "skill-release-manifest.json",
+    "read_status": "loaded"
+  },
+  "project": {
+    "name": "openpanda-console-design",
+    "displayName": "OpenPanda 控制台设计",
+    "path": "/Users/xenith/Documents/project/panda/openpanda-console-design",
+    "operation": "create",
+    "resolvedLane": "complex_html_page",
+    "deviceType": "desktop",
+    "intentProfile": {
+      "caseFamily": "free_exploration",
+      "complexity": "complex",
+      "displayName": "multi-device-console-prototype"
+    },
+    "selectedIntentWorkflowRead": true,
+    "contextRequirementsLoaded": [
+      { "path": "intent-workflows/intent-project-complex-build/INTENT_WORKFLOW.md", "readStatus": "loaded", "bodyRead": true, "recordedAt": "2026-08-21T00:00:00.000Z" },
+      { "path": "shared-runtime/runtime-boundaries/lane-runtime-contracts.md", "readStatus": "loaded", "bodyRead": true, "recordedAt": "2026-08-21T00:00:00.000Z" },
+      { "path": "shared-runtime/agent-dispatch-runtime/lane-dispatch-index.md", "readStatus": "loaded", "bodyRead": true, "recordedAt": "2026-08-21T00:00:00.000Z" },
+      { "path": "shared-runtime/agent-dispatch-runtime/shared-page-rendering-kernel.md", "readStatus": "loaded", "bodyRead": true, "recordedAt": "2026-08-21T00:00:00.000Z" },
+      { "path": "delivery-quality/page-rendering-quality-gate.md", "readStatus": "loaded", "bodyRead": true, "recordedAt": "2026-08-21T00:00:00.000Z" },
+      { "path": "delivery-quality/design-artifact-validation.md", "readStatus": "loaded", "bodyRead": true, "recordedAt": "2026-08-21T00:00:00.000Z" },
+      { "path": "delivery-quality/delivery-evidence-contract.md", "readStatus": "loaded", "bodyRead": true, "recordedAt": "2026-08-21T00:00:00.000Z" },
+      { "path": "visual-experience/visual-experience-guidelines.md", "readStatus": "loaded", "bodyRead": true, "recordedAt": "2026-08-21T00:00:00.000Z" },
+      { "path": "visual-experience/visual-checkpoint-protocol.md", "readStatus": "loaded", "bodyRead": true, "recordedAt": "2026-08-21T00:00:00.000Z" },
+      { "path": "shared-runtime/design-artifact-formats/design-project-file-format.md", "readStatus": "loaded", "bodyRead": true, "recordedAt": "2026-08-21T00:00:00.000Z" },
+      { "path": "shared-runtime/orchestration-summary-contract/orchestration-summary-contract.md", "readStatus": "loaded", "bodyRead": true, "recordedAt": "2026-08-21T00:00:00.000Z" }
+    ],
+    "contextReadScope": ["complex_html_page", "lane-runtime-contracts", "lane-dispatch-index", "shared-page-rendering-kernel", "page-rendering-quality-gate", "design-artifact-validation", "delivery-evidence-contract", "visual-experience-guidelines", "visual-checkpoint-protocol", "design-project-file-format", "orchestration-summary-contract"],
+    "readScopeLedger": [],
+    "dispatchPreflightManifest": [],
+    "expectedDispatches": [],
+    "validationRunDiscipline": {
+      "mode": "run-once-after-generation",
+      "recordedAt": "2026-08-21T00:00:00.000Z"
+    },
+    "validationHistory": [],
+    "validationRepairLedger": [],
+    "validationSnapshot": {},
+    "artifactReadinessEvidence": {},
+    "lowValueCallWatchdog": {
+      "applies": true,
+      "noProgressSignals": ["no_tool_call", "no_artifact_diff", "no_structured_decision"],
+      "noProgressNextAction": "enter_readiness_or_blocked_summary",
+      "recordedAt": "2026-08-21T00:00:00.000Z"
+    },
+    "sourceAuthorityLock": null,
+    "visualQualityCheckpoints": [
+      {
+        "checkpointId": "vq-anchor",
+        "dimension": "visual-anchor",
+        "expected": "Panda wordmark + bamboo-green accent consistently visible in sidebar/header across all pages",
+        "evidenceTarget": "pages/*.html sidebar/header regions"
+      },
+      {
+        "checkpointId": "vq-hierarchy",
+        "dimension": "information-hierarchy",
+        "expected": "Primary action (chat input / kanban columns / task metadata / settings sections) dominates first scan; secondary info muted",
+        "evidenceTarget": "pages/*.html main content regions"
+      },
+      {
+        "checkpointId": "vq-structure",
+        "dimension": "composition-structure",
+        "expected": "Desktop uses fixed sidebar + scrollable main; mobile uses stacked single-column with bottom tab nav",
+        "evidenceTarget": "pages/*-desktop.html and pages/*-mobile.html"
+      },
+      {
+        "checkpointId": "vq-implementation",
+        "dimension": "implementation-strategy",
+        "expected": "Shared CSS variables power both device groups; pages use semantic op-* tokens and matching radius/shadow model",
+        "evidenceTarget": "colors_and_type.css + pages/*.html"
+      }
+    ],
+    "cssPreflightEvidence": {
+      "ranAt": "2026-08-21T00:00:00.000Z",
+      "scriptPath": "shared-runtime/deterministic-tooling/apply-html-head-contract.mjs",
+      "inputCss": "colors_and_type.css",
+      "outputHtml": ".preflight/preflight.html",
+      "exitCode": 0,
+      "status": "passed"
+    },
+    "generationTree": {
+      "nodeId": "gen-project-shell",
+      "kind": "project-shell",
+      "status": "generated",
+      "children": [
+        { "nodeId": "gen-chat", "kind": "page-leaf", "status": "generated" },
+        { "nodeId": "gen-queue", "kind": "page-leaf", "status": "generated" },
+        { "nodeId": "gen-detail", "kind": "page-leaf", "status": "generated" },
+        { "nodeId": "gen-settings", "kind": "page-leaf", "status": "generated" }
+      ]
+    },
+    "mobileNavigation": {
+      "applies": true,
+      "type": "bottom-tab",
+      "items": [
+        { "key": "chat", "label": "聊天", "icon": "message-circle" },
+        { "key": "queue", "label": "看板", "icon": "layout-kanban" },
+        { "key": "nodes", "label": "节点", "icon": "server" },
+        { "key": "settings", "label": "设置", "icon": "settings" }
+      ],
+      "heightPx": 56,
+      "position": "flow-bottom",
+      "activeState": "primary icon+label color only; geometry stays identical"
+    },
+    "designRead": "Personal task-orchestration console / power users managing heterogeneous devices / professional but friendly / information-dense / avoid generic SaaS blandness",
+    "designDials": {
+      "layoutVariance": 3,
+      "motionIntensity": 2,
+      "visualDensity": 4
+    }
+  },
+  "designSource": {
+    "operatingMode": "free-explore",
+    "cssFilePath": "colors_and_type.css",
+    "brandPrefix": "op",
+    "styleConstraints": {
+      "radiusMax": 16,
+      "staticShadowAlphaMax": 0.05
+    }
+  },
+  "pages": [
+    {
+      "nodeId": "page-chat-desktop",
+      "title": "聊天 - 桌面端",
+      "htmlSrc": "pages/chat-desktop.html",
+      "targetDevice": "desktop",
+      "pageIndex": 1,
+      "visualNorthStar": "Claude-Code-style chat with warm panda personality: thread rail + clean message bubbles + prominent composer",
+      "compositionPattern": "sidebar-left / thread-rail / chat-pane three-pane app shell",
+      "continuityAnchors": ["shared sidebar navigation", "bamboo-green active states", "op-* token system"]
+    },
+    {
+      "nodeId": "page-queue-desktop",
+      "title": "任务看板 - 桌面端",
+      "htmlSrc": "pages/queue-desktop.html",
+      "targetDevice": "desktop",
+      "pageIndex": 2,
+      "visualNorthStar": "Operator's mission control: four-column kanban with clear status, priority, and node attribution",
+      "compositionPattern": "sidebar-left / header filters / 4-column kanban grid",
+      "continuityAnchors": ["shared sidebar navigation", "bamboo-green active states", "op-* token system"]
+    },
+    {
+      "nodeId": "page-detail-desktop",
+      "title": "任务详情 - 桌面端",
+      "htmlSrc": "pages/detail-desktop.html",
+      "targetDevice": "desktop",
+      "pageIndex": 3,
+      "visualNorthStar": "Forensic task inspector: metadata grid, event timeline, and scrollable output log",
+      "compositionPattern": "sidebar-left / detail header / two-column metadata + timeline",
+      "continuityAnchors": ["shared sidebar navigation", "bamboo-green active states", "op-* token system"]
+    },
+    {
+      "nodeId": "page-settings-desktop",
+      "title": "设置 - 桌面端",
+      "htmlSrc": "pages/settings-desktop.html",
+      "targetDevice": "desktop",
+      "pageIndex": 4,
+      "visualNorthStar": "Calm configuration surface: section rail + grouped form cards with clear affordances",
+      "compositionPattern": "sidebar-left / settings-section-rail / form-cards area",
+      "continuityAnchors": ["shared sidebar navigation", "bamboo-green active states", "op-* token system"]
+    },
+    {
+      "nodeId": "page-chat-mobile",
+      "title": "聊天 - 移动端",
+      "htmlSrc": "pages/chat-mobile.html",
+      "targetDevice": "mobile",
+      "pageIndex": 5,
+      "visualNorthStar": "Mobile-first conversation: stacked bubbles, thumb-friendly composer, bottom tab nav",
+      "compositionPattern": "single-column stack / fixed composer / bottom tab bar",
+      "continuityAnchors": ["shared bottom tab navigation", "bamboo-green active states", "op-* token system"]
+    },
+    {
+      "nodeId": "page-queue-mobile",
+      "title": "任务看板 - 移动端",
+      "htmlSrc": "pages/queue-mobile.html",
+      "targetDevice": "mobile",
+      "pageIndex": 6,
+      "visualNorthStar": "Mobile kanban: vertically stacked status sections with tappable cards",
+      "compositionPattern": "single-column stack / status sections / bottom tab bar",
+      "continuityAnchors": ["shared bottom tab navigation", "bamboo-green active states", "op-* token system"]
+    },
+    {
+      "nodeId": "page-detail-mobile",
+      "title": "任务详情 - 移动端",
+      "htmlSrc": "pages/detail-mobile.html",
+      "targetDevice": "mobile",
+      "pageIndex": 7,
+      "visualNorthStar": "Mobile task inspector: back button, metadata, timeline, output log in a scrollable stack",
+      "compositionPattern": "top bar / stacked sections / bottom tab bar",
+      "continuityAnchors": ["shared bottom tab navigation", "bamboo-green active states", "op-* token system"]
+    },
+    {
+      "nodeId": "page-settings-mobile",
+      "title": "设置 - 移动端",
+      "htmlSrc": "pages/settings-mobile.html",
+      "targetDevice": "mobile",
+      "pageIndex": 8,
+      "visualNorthStar": "Mobile settings: grouped cards with toggles and inputs, easy thumb reach",
+      "compositionPattern": "single-column stack / grouped cards / bottom tab bar",
+      "continuityAnchors": ["shared bottom tab navigation", "bamboo-green active states", "op-* token system"]
+    }
+  ]
+}

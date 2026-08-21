@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>任务看板 - OpenPanda</title>
+    <style id="theme-vars">
+/* OpenPanda Console Design System — dark-first, bamboo-green accent, warm panda neutrals */
+
+:root {
+  color-scheme: dark;
+
+  /* Core surfaces */
+  --op-background: #0f1310;
+  --op-foreground: #e8ece7;
+  --op-card: #161d18;
+  --op-card-foreground: #e8ece7;
+  --op-popover: #161d18;
+  --op-popover-foreground: #e8ece7;
+  --op-muted: #1d2620;
+  --op-muted-foreground: #8fa094;
+
+  /* Brand primary */
+  --op-primary: #3aa673;
+  --op-primary-foreground: #0a2317;
+
+  /* Borders and inputs */
+  --op-border: #28322b;
+  --op-border-soft: #1f2822;
+  --op-input: #28322b;
+  --op-ring: #55c78d;
+
+  /* Semantic aliases for internal consistency */
+  --op-bg: #0f1310;
+  --op-bg-raised: #161d18;
+  --op-bg-inset: #0b0f0c;
+  --op-bg-hover: #1d2620;
+  --op-text: #e8ece7;
+  --op-text-dim: #8fa094;
+  --op-accent: #55c78d;
+  --op-accent-strong: #3aa673;
+  --op-accent-ink: #0a2317;
+  --op-accent-soft: rgba(85, 199, 141, 0.14);
+
+  /* State colors */
+  --state-success: #55c78d;
+  --state-warning: #e2b93b;
+  --state-error: #ef6a6a;
+  --state-info: #6db3f2;
+
+  /* Radius scale */
+  --op-radius-small: 4px;
+  --op-radius-medium: 8px;
+  --op-radius-large: 12px;
+  --op-radius-full: 9999px;
+
+  /* Panda brand accents */
+  --op-panda-head: #f7f3ea;
+  --op-panda-blush: #f2a7b3;
+
+  /* Depth */
+  --op-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 28px rgba(0, 0, 0, 0.22);
+
+  /* Typography */
+  --op-font:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --op-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Density */
+  --op-sidebar-width: 212px;
+  --op-header-height: 56px;
+  --op-mobile-nav-height: 56px;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --op-background: #f4f6f3;
+  --op-foreground: #1d2721;
+  --op-card: #ffffff;
+  --op-card-foreground: #1d2721;
+  --op-popover: #ffffff;
+  --op-popover-foreground: #1d2721;
+  --op-muted: #e7ebe6;
+  --op-muted-foreground: #5f6d64;
+  --op-primary: #1e7350;
+  --op-primary-foreground: #ffffff;
+  --op-border: #d8ded7;
+  --op-border-soft: #e4e9e3;
+  --op-input: #d8ded7;
+  --op-ring: #26875c;
+  --op-bg: #f4f6f3;
+  --op-bg-raised: #ffffff;
+  --op-bg-inset: #edf0ec;
+  --op-bg-hover: #e7ebe6;
+  --op-text: #1d2721;
+  --op-text-dim: #5f6d64;
+  --op-accent: #26875c;
+  --op-accent-strong: #1e7350;
+  --op-accent-ink: #ffffff;
+  --op-accent-soft: rgba(38, 135, 92, 0.1);
+  --op-panda-head: #ffffff;
+  --op-shadow: 0 1px 2px rgba(20, 40, 30, 0.06), 0 8px 28px rgba(20, 40, 30, 0.08);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+    --op-background: #f4f6f3;
+    --op-foreground: #1d2721;
+    --op-card: #ffffff;
+    --op-card-foreground: #1d2721;
+    --op-popover: #ffffff;
+    --op-popover-foreground: #1d2721;
+    --op-muted: #e7ebe6;
+    --op-muted-foreground: #5f6d64;
+    --op-primary: #1e7350;
+    --op-primary-foreground: #ffffff;
+    --op-border: #d8ded7;
+    --op-border-soft: #e4e9e3;
+    --op-input: #d8ded7;
+    --op-ring: #26875c;
+    --op-bg: #f4f6f3;
+    --op-bg-raised: #ffffff;
+    --op-bg-inset: #edf0ec;
+    --op-bg-hover: #e7ebe6;
+    --op-text: #1d2721;
+    --op-text-dim: #5f6d64;
+    --op-accent: #26875c;
+    --op-accent-strong: #1e7350;
+    --op-accent-ink: #ffffff;
+    --op-accent-soft: rgba(38, 135, 92, 0.1);
+    --op-panda-head: #ffffff;
+    --op-shadow: 0 1px 2px rgba(20, 40, 30, 0.06), 0 8px 28px rgba(20, 40, 30, 0.08);
+  }
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--op-background);
+    --color-foreground: var(--op-foreground);
+    --color-card: var(--op-card);
+    --color-card-foreground: var(--op-card-foreground);
+    --color-popover: var(--op-popover);
+    --color-popover-foreground: var(--op-popover-foreground);
+    --color-primary: var(--op-primary);
+    --color-primary-foreground: var(--op-primary-foreground);
+    --color-muted: var(--op-muted);
+    --color-muted-foreground: var(--op-muted-foreground);
+    --color-accent: var(--op-accent);
+    --color-border: var(--op-border);
+    --color-input: var(--op-input);
+    --color-ring: var(--op-ring);
+    --radius-sm: var(--op-radius-small);
+    --radius-md: var(--op-radius-medium);
+    --radius-lg: var(--op-radius-large);
+  }
+  @layer base {
+    body { background: var(--op-background); color: var(--op-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--op-background); }
+      .text-background { color: var(--op-background); }
+      .border-background { border-color: var(--op-background); }
+      .ring-background { --tw-ring-color: var(--op-background); }
+      .bg-foreground { background-color: var(--op-foreground); }
+      .text-foreground { color: var(--op-foreground); }
+      .border-foreground { border-color: var(--op-foreground); }
+      .ring-foreground { --tw-ring-color: var(--op-foreground); }
+      .bg-card { background-color: var(--op-card); }
+      .text-card { color: var(--op-card); }
+      .border-card { border-color: var(--op-card); }
+      .ring-card { --tw-ring-color: var(--op-card); }
+      .bg-card-foreground { background-color: var(--op-card-foreground); }
+      .text-card-foreground { color: var(--op-card-foreground); }
+      .border-card-foreground { border-color: var(--op-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--op-card-foreground); }
+      .bg-popover { background-color: var(--op-popover); }
+      .text-popover { color: var(--op-popover); }
+      .border-popover { border-color: var(--op-popover); }
+      .ring-popover { --tw-ring-color: var(--op-popover); }
+      .bg-popover-foreground { background-color: var(--op-popover-foreground); }
+      .text-popover-foreground { color: var(--op-popover-foreground); }
+      .border-popover-foreground { border-color: var(--op-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--op-popover-foreground); }
+      .bg-primary { background-color: var(--op-primary); }
+      .text-primary { color: var(--op-primary); }
+      .border-primary { border-color: var(--op-primary); }
+      .ring-primary { --tw-ring-color: var(--op-primary); }
+      .bg-primary-foreground { background-color: var(--op-primary-foreground); }
+      .text-primary-foreground { color: var(--op-primary-foreground); }
+      .border-primary-foreground { border-color: var(--op-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--op-primary-foreground); }
+      .bg-muted { background-color: var(--op-muted); }
+      .text-muted { color: var(--op-muted); }
+      .border-muted { border-color: var(--op-muted); }
+      .ring-muted { --tw-ring-color: var(--op-muted); }
+      .bg-muted-foreground { background-color: var(--op-muted-foreground); }
+      .text-muted-foreground { color: var(--op-muted-foreground); }
+      .border-muted-foreground { border-color: var(--op-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--op-muted-foreground); }
+      .bg-accent { background-color: var(--op-accent); }
+      .text-accent { color: var(--op-accent); }
+      .border-accent { border-color: var(--op-accent); }
+      .ring-accent { --tw-ring-color: var(--op-accent); }
+      .bg-border { background-color: var(--op-border); }
+      .text-border { color: var(--op-border); }
+      .border-border { border-color: var(--op-border); }
+      .ring-border { --tw-ring-color: var(--op-border); }
+      .bg-input { background-color: var(--op-input); }
+      .text-input { color: var(--op-input); }
+      .border-input { border-color: var(--op-input); }
+      .ring-input { --tw-ring-color: var(--op-input); }
+      .bg-ring { background-color: var(--op-ring); }
+      .text-ring { color: var(--op-ring); }
+      .border-ring { border-color: var(--op-ring); }
+      .ring-ring { --tw-ring-color: var(--op-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen antialiased pb-[var(--op-mobile-nav-height)]">
+  <!-- Header -->
+  <header class="sticky top-0 z-20 h-[var(--op-header-height)] border-b border-[var(--op-border)] bg-[var(--op-background)]/95 backdrop-blur flex items-center justify-between px-4">
+    <div class="flex items-center gap-2">
+      <div class="h-7 w-7 rounded-lg bg-[var(--op-accent)] flex items-center justify-center text-[var(--op-accent-ink)]">
+        <i data-lucide="bot" class="h-4 w-4"></i>
+      </div>
+      <div>
+        <h1 class="text-sm font-semibold text-[var(--op-text)] leading-tight">任务看板</h1>
+        <p class="text-[10px] text-[var(--op-text-dim)] leading-tight">小事自动处理，大事分派到人</p>
+      </div>
+    </div>
+    <button class="h-8 w-8 rounded-full bg-[var(--op-primary)] flex items-center justify-center text-[var(--op-primary-foreground)] active:opacity-80">
+      <i data-lucide="plus" class="h-4 w-4"></i>
+    </button>
+  </header>
+
+  <!-- Quick input -->
+  <div class="px-4 py-3">
+    <div class="flex gap-2 rounded-xl border border-[var(--op-border)] bg-[var(--op-bg-raised)] p-2 shadow-[var(--op-shadow)]">
+      <div class="flex-1 flex items-center gap-2 px-2">
+        <i data-lucide="sparkles" class="h-4 w-4 text-[var(--op-accent)] flex-shrink-0"></i>
+        <input type="text" placeholder="让 OpenPanda 帮你新建任务" class="w-full bg-transparent text-sm text-[var(--op-text)] placeholder:text-[var(--op-text-dim)] outline-none">
+      </div>
+      <button class="rounded-lg bg-[var(--op-primary)] px-3 py-2 text-sm font-medium text-[var(--op-primary-foreground)] active:opacity-80">创建</button>
+    </div>
+  </div>
+
+  <!-- Horizontal tab nav -->
+  <div class="sticky top-[var(--op-header-height)] z-10 bg-[var(--op-background)] border-b border-[var(--op-border)]">
+    <div class="flex overflow-x-auto hide-scrollbar px-4 py-2 gap-2" role="tablist">
+      <button class="tab-btn flex-shrink-0 rounded-full px-3 py-1.5 text-xs font-medium bg-[var(--op-accent-soft)] text-[var(--op-accent)] border border-[var(--op-accent)]/20" data-target="todo">待办 <span class="ml-1 opacity-70">3</span></button>
+      <button class="tab-btn flex-shrink-0 rounded-full px-3 py-1.5 text-xs font-medium text-[var(--op-text-dim)] bg-[var(--op-muted)] border border-transparent" data-target="progress">进行中 <span class="ml-1 opacity-70">2</span></button>
+      <button class="tab-btn flex-shrink-0 rounded-full px-3 py-1.5 text-xs font-medium text-[var(--op-text-dim)] bg-[var(--op-muted)] border border-transparent" data-target="review">审核中 <span class="ml-1 opacity-70">2</span></button>
+      <button class="tab-btn flex-shrink-0 rounded-full px-3 py-1.5 text-xs font-medium text-[var(--op-text-dim)] bg-[var(--op-muted)] border border-transparent" data-target="done">已完成 <span class="ml-1 opacity-70">2</span></button>
+    </div>
+  </div>
+
+  <!-- Tab panels -->
+  <main class="px-4 py-3 space-y-6">
+    <!-- To Do panel -->
+    <section id="todo" class="tab-panel">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="h-2 w-2 rounded-full bg-[var(--op-text-dim)]"></span>
+        <h2 class="text-sm font-medium text-[var(--op-text)]">待办</h2>
+        <span class="text-xs text-[var(--op-text-dim)] px-2 py-0.5 rounded-full bg-[var(--op-muted)]">3</span>
+      </div>
+
+      <article data-dom-id="task-card-1" class="rounded-xl border border-[var(--op-border)] bg-[var(--op-card)] p-4 shadow-sm active:border-[var(--op-accent)]/40 mb-3">
+        <div class="flex items-start justify-between gap-3 mb-3">
+          <div class="flex flex-wrap gap-2">
+            <span class="inline-flex items-center rounded-full border border-[var(--op-border)] px-2.5 py-1 text-xs text-[var(--op-text-dim)]">个人助手</span>
+            <span class="inline-flex items-center rounded-full bg-[var(--state-warning)]/10 px-2.5 py-1 text-xs font-medium text-[var(--state-warning)]">中优先级</span>
+          </div>
+          <button class="h-8 w-8 rounded-full flex items-center justify-center text-[var(--op-text-dim)] active:bg-[var(--op-bg-hover)]">
+            <i data-lucide="more-horizontal" class="h-4 w-4"></i>
+          </button>
+        </div>
+        <h3 class="text-base font-medium text-[var(--op-text)] mb-2">总结本周 git log</h3>
+        <p class="text-sm text-[var(--op-text-dim)] mb-4">拉取所有仓库提交记录，生成本周改动摘要，并标记需要人工确认的大变更。</p>
+        <div class="flex items-center justify-between">
+          <span class="inline-flex items-center rounded-md bg-[var(--op-muted)] px-2 py-1 text-xs text-[var(--op-text-dim)]">待处理</span>
+          <div class="flex items-center gap-2">
+            <button class="inline-flex items-center gap-1 rounded-lg bg-[var(--op-bg-hover)] px-3 py-2 text-xs font-medium text-[var(--op-text)] active:bg-[var(--op-border)]">
+              <i data-lucide="play" class="h-3.5 w-3.5"></i>
+              开始
+            </button>
+            <button class="inline-flex items-center gap-1 rounded-lg bg-[var(--state-error)]/10 px-3 py-2 text-xs font-medium text-[var(--state-error)] active:bg-[var(--state-error)]/20">
+              <i data-lucide="trash-2" class="h-3.5 w-3.5"></i>
+            </button>
+          </div>
+        </div>
+      </article>
+
+      <article class="rounded-xl border border-[var(--op-border)] bg-[var(--op-card)] p-4 shadow-sm active:border-[var(--op-accent)]/40 mb-3">
+        <div class="flex items-start justify-between gap-3 mb-3">
+          <div class="flex flex-wrap gap-2">
+            <span class="inline-flex items-center rounded-full border border-[var(--op-border)] px-2.5 py-1 text-xs text-[var(--op-text-dim)]">DevOps</span>
+            <span class="inline-flex items-center rounded-full bg-[var(--state-error)]/10 px-2.5 py-1 text-xs font-medium text-[var(--state-error)]">高优先级</span>
+          </div>
+        </div>
+        <h3 class="text-base font-medium text-[var(--op-text)] mb-2">在 SBC 上运行测试</h3>
+        <p class="text-sm text-[var(--op-text-dim)] mb-4">将最新镜像刷入树莓派 5，执行端到端测试并回传日志与性能指标。</p>
+        <div class="flex items-center justify-between">
+          <span class="inline-flex items-center rounded-md bg-[var(--op-muted)] px-2 py-1 text-xs text-[var(--op-text-dim)]">待处理</span>
+          <button class="inline-flex items-center gap-1 rounded-lg bg-[var(--op-bg-hover)] px-3 py-2 text-xs font-medium text-[var(--op-text)] active:bg-[var(--op-border)]">
+            <i data-lucide="play" class="h-3.5 w-3.5"></i>
+            开始
+          </button>
+        </div>
+      </article>
+
+      <article class="rounded-xl border border-[var(--op-border)] bg-[var(--op-card)] p-4 shadow-sm active:border-[var(--op-accent)]/40">
+        <div class="flex items-start justify-between gap-3 mb-3">
+          <div class="flex flex-wrap gap-2">
+            <span class="inline-flex items-center rounded-full border border-[var(--op-border)] px-2.5 py-1 text-xs text-[var(--op-text-dim)]">文档</span>
+            <span class="inline-flex items-center rounded-full bg-[var(--state-info)]/10 px-2.5 py-1 text-xs font-medium text-[var(--state-info)]">低优先级</span>
+          </div>
+        </div>
+        <h3 class="text-base font-medium text-[var(--op-text)] mb-2">更新节点部署 README</h3>
+        <p class="text-sm text-[var(--op-text-dim)] mb-4">补充 Docker Compose 启动步骤和环境变量说明。</p>
+        <div class="flex items-center justify-between">
+          <span class="inline-flex items-center rounded-md bg-[var(--op-muted)] px-2 py-1 text-xs text-[var(--op-text-dim)]">待处理</span>
+          <button class="inline-flex items-center gap-1 rounded-lg bg-[var(--op-bg-hover)] px-3 py-2 text-xs font-medium text-[var(--op-text)] active:bg-[var(--op-border)]">
+            <i data-lucide="play" class="h-3.5 w-3.5"></i>
+            开始
+          </button>
+        </div>
+      </article>
+    </section>
+
+    <!-- In Progress panel -->
+    <section id="progress" class="tab-panel hidden">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="h-2 w-2 rounded-full bg-[var(--state-info)]"></span>
+        <h2 class="text-sm font-medium text-[var(--op-text)]">进行中</h2>
+        <span class="text-xs text-[var(--op-text-dim)] px-2 py-0.5 rounded-full bg-[var(--op-muted)]">2</span>
+      </div>
+
+      <article class="rounded-xl border border-[var(--op-border)] bg-[var(--op-card)] p-4 shadow-sm active:border-[var(--op-accent)]/40 mb-3">
+        <div class="flex items-start justify-between gap-3 mb-3">
+          <div class="flex flex-wrap gap-2">
+            <span class="inline-flex items-center rounded-full border border-[var(--op-border)] px-2.5 py-1 text-xs text-[var(--op-text-dim)]">Code Review</span>
+            <span class="inline-flex items-center rounded-full bg-[var(--state-error)]/10 px-2.5 py-1 text-xs font-medium text-[var(--state-error)]">高优先级</span>
+          </div>
+        </div>
+        <h3 class="text-base font-medium text-[var(--op-text)] mb-2">审查 Claude Code 的改动</h3>
+        <p class="text-sm text-[var(--op-text-dim)] mb-4">检查 agent 提交的 API 重命名是否符合项目规范，确认无破坏性变更。</p>
+        <div class="flex items-center justify-between">
+          <span class="inline-flex items-center rounded-md bg-[var(--state-info)]/10 px-2 py-1 text-xs text-[var(--state-info)]">执行中</span>
+          <div class="flex items-center gap-2">
+            <button class="inline-flex items-center gap-1 rounded-lg bg-[var(--state-success)]/10 px-3 py-2 text-xs font-medium text-[var(--state-success)] active:bg-[var(--state-success)]/20">
+              <i data-lucide="check" class="h-3.5 w-3.5"></i>
+              完成
+            </button>
+            <button class="inline-flex items-center gap-1 rounded-lg bg-[var(--state-error)]/10 px-3 py-2 text-xs font-medium text-[var(--state-error)] active:bg-[var(--state-error)]/20">
+              <i data-lucide="x" class="h-3.5 w-3.5"></i>
+            </button>
+          </div>
+        </div>
+      </article>
+
+      <article class="rounded-xl border border-[var(--op-border)] bg-[var(--op-card)] p-4 shadow-sm active:border-[var(--op-accent)]/40">
+        <div class="flex items-start justify-between gap-3 mb-3">
+          <div class="flex flex-wrap gap-2">
+            <span class="inline-flex items-center rounded-full border border-[var(--op-border)] px-2.5 py-1 text-xs text-[var(--op-text-dim)]">家庭</span>
+            <span class="inline-flex items-center rounded-full bg-[var(--state-warning)]/10 px-2.5 py-1 text-xs font-medium text-[var(--state-warning)]">中优先级</span>
+          </div>
+        </div>
+        <h3 class="text-base font-medium text-[var(--op-text)] mb-2">同步 NAS 相册到云端</h3>
+        <p class="text-sm text-[var(--op-text-dim)] mb-4">增量上传昨日照片，完成后发送家庭群通知。</p>
+        <div class="flex items-center justify-between">
+          <span class="inline-flex items-center rounded-md bg-[var(--state-info)]/10 px-2 py-1 text-xs text-[var(--state-info)]">执行中</span>
+          <button class="inline-flex items-center gap-1 rounded-lg bg-[var(--state-success)]/10 px-3 py-2 text-xs font-medium text-[var(--state-success)] active:bg-[var(--state-success)]/20">
+            <i data-lucide="check" class="h-3.5 w-3.5"></i>
+            完成
+          </button>
+        </div>
+      </article>
+    </section>
+
+    <!-- In Review panel -->
+    <section id="review" class="tab-panel hidden">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="h-2 w-2 rounded-full bg-[var(--state-warning)]"></span>
+        <h2 class="text-sm font-medium text-[var(--op-text)]">审核中</h2>
+        <span class="text-xs text-[var(--op-text-dim)] px-2 py-0.5 rounded-full bg-[var(--op-muted)]">2</span>
+      </div>
+
+      <article data-dom-id="task-card-2" class="rounded-xl border border-[var(--op-border)] bg-[var(--op-card)] p-4 shadow-sm active:border-[var(--op-accent)]/40 mb-3">
+        <div class="flex items-start justify-between gap-3 mb-3">
+          <div class="flex flex-wrap gap-2">
+            <span class="inline-flex items-center rounded-full border border-[var(--op-border)] px-2.5 py-1 text-xs text-[var(--op-text-dim)]">采购</span>
+            <span class="inline-flex items-center rounded-full bg-[var(--state-warning)]/10 px-2.5 py-1 text-xs font-medium text-[var(--state-warning)]">中优先级</span>
+          </div>
+        </div>
+        <h3 class="text-base font-medium text-[var(--op-text)] mb-2">比价家用路由器并生成报告</h3>
+        <p class="text-sm text-[var(--op-text-dim)] mb-4">抓取 3 个平台价格与评测数据，汇总成对比表格等待主人确认。</p>
+        <div class="mb-3">
+          <span class="inline-flex items-center rounded-md bg-[var(--state-warning)]/10 px-2 py-1 text-xs text-[var(--state-warning)]">待确认</span>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <button class="inline-flex items-center justify-center gap-1 rounded-lg bg-[var(--state-success)]/10 px-4 py-3 text-sm font-medium text-[var(--state-success)] active:bg-[var(--state-success)]/20">
+            <i data-lucide="check" class="h-4 w-4"></i>
+            批准
+          </button>
+          <button class="inline-flex items-center justify-center gap-1 rounded-lg bg-[var(--state-error)]/10 px-4 py-3 text-sm font-medium text-[var(--state-error)] active:bg-[var(--state-error)]/20">
+            <i data-lucide="x" class="h-4 w-4"></i>
+            驳回
+          </button>
+        </div>
+      </article>
+
+      <article class="rounded-xl border border-[var(--op-border)] bg-[var(--op-card)] p-4 shadow-sm active:border-[var(--op-accent)]/40">
+        <div class="flex items-start justify-between gap-3 mb-3">
+          <div class="flex flex-wrap gap-2">
+            <span class="inline-flex items-center rounded-full border border-[var(--op-border)] px-2.5 py-1 text-xs text-[var(--op-text-dim)]">财务</span>
+            <span class="inline-flex items-center rounded-full bg-[var(--state-info)]/10 px-2.5 py-1 text-xs font-medium text-[var(--state-info)]">低优先级</span>
+          </div>
+        </div>
+        <h3 class="text-base font-medium text-[var(--op-text)] mb-2">整理上月电子发票</h3>
+        <p class="text-sm text-[var(--op-text-dim)] mb-4">按类别归档发票文件，生成报销汇总表。</p>
+        <div class="mb-3">
+          <span class="inline-flex items-center rounded-md bg-[var(--state-warning)]/10 px-2 py-1 text-xs text-[var(--state-warning)]">待确认</span>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <button class="inline-flex items-center justify-center gap-1 rounded-lg bg-[var(--state-success)]/10 px-4 py-3 text-sm font-medium text-[var(--state-success)] active:bg-[var(--state-success)]/20">
+            <i data-lucide="check" class="h-4 w-4"></i>
+            批准
+          </button>
+          <button class="inline-flex items-center justify-center gap-1 rounded-lg bg-[var(--state-error)]/10 px-4 py-3 text-sm font-medium text-[var(--state-error)] active:bg-[var(--state-error)]/20">
+            <i data-lucide="x" class="h-4 w-4"></i>
+            驳回
+          </button>
+        </div>
+      </article>
+    </section>
+
+    <!-- Finished panel -->
+    <section id="done" class="tab-panel hidden">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="h-2 w-2 rounded-full bg-[var(--state-success)]"></span>
+        <h2 class="text-sm font-medium text-[var(--op-text)]">已完成</h2>
+        <span class="text-xs text-[var(--op-text-dim)] px-2 py-0.5 rounded-full bg-[var(--op-muted)]">2</span>
+      </div>
+
+      <article class="rounded-xl border border-[var(--op-border)] bg-[var(--op-card)] p-4 shadow-sm active:border-[var(--op-accent)]/40 mb-3">
+        <div class="flex items-start justify-between gap-3 mb-3">
+          <div class="flex flex-wrap gap-2">
+            <span class="inline-flex items-center rounded-full border border-[var(--op-border)] px-2.5 py-1 text-xs text-[var(--op-text-dim)]">系统</span>
+            <span class="inline-flex items-center rounded-full bg-[var(--state-success)]/10 px-2.5 py-1 text-xs font-medium text-[var(--state-success)]">已完成</span>
+          </div>
+        </div>
+        <h3 class="text-base font-medium text-[var(--op-text)] mb-2">备份所有节点配置</h3>
+        <p class="text-sm text-[var(--op-text-dim)] mb-4">3 个节点配置已导出并加密上传至对象存储。</p>
+        <div class="flex items-center justify-between">
+          <span class="inline-flex items-center rounded-md bg-[var(--state-success)]/10 px-2 py-1 text-xs text-[var(--state-success)]">完成</span>
+          <button class="inline-flex items-center gap-1 rounded-lg bg-[var(--state-error)]/10 px-3 py-2 text-xs font-medium text-[var(--state-error)] active:bg-[var(--state-error)]/20">
+            <i data-lucide="archive" class="h-3.5 w-3.5"></i>
+            归档
+          </button>
+        </div>
+      </article>
+
+      <article class="rounded-xl border border-[var(--op-border)] bg-[var(--op-card)] p-4 shadow-sm active:border-[var(--op-accent)]/40">
+        <div class="flex items-start justify-between gap-3 mb-3">
+          <div class="flex flex-wrap gap-2">
+            <span class="inline-flex items-center rounded-full border border-[var(--op-border)] px-2.5 py-1 text-xs text-[var(--op-text-dim)]">健康</span>
+            <span class="inline-flex items-center rounded-full bg-[var(--state-success)]/10 px-2.5 py-1 text-xs font-medium text-[var(--state-success)]">已完成</span>
+          </div>
+        </div>
+        <h3 class="text-base font-medium text-[var(--op-text)] mb-2">汇总昨日睡眠与步数数据</h3>
+        <p class="text-sm text-[var(--op-text-dim)] mb-4">已生成可视化日报并推送至手表与手机。</p>
+        <div class="flex items-center justify-between">
+          <span class="inline-flex items-center rounded-md bg-[var(--state-success)]/10 px-2 py-1 text-xs text-[var(--state-success)]">完成</span>
+          <button class="inline-flex items-center gap-1 rounded-lg bg-[var(--state-error)]/10 px-3 py-2 text-xs font-medium text-[var(--state-error)] active:bg-[var(--state-error)]/20">
+            <i data-lucide="archive" class="h-3.5 w-3.5"></i>
+            归档
+          </button>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <!-- Bottom tab nav -->
+  <nav class="fixed bottom-0 left-0 right-0 z-30 h-[var(--op-mobile-nav-height)] border-t border-[var(--op-border)] bg-[var(--op-bg-raised)]">
+    <div class="grid h-full grid-cols-4">
+      <a href="chat-mobile.html" class="flex flex-col items-center justify-center gap-1 text-[var(--op-text-dim)] active:text-[var(--op-text)]">
+        <i data-lucide="home" class="h-5 w-5"></i>
+        <span class="text-[10px]">首页</span>
+      </a>
+      <a href="queue-mobile.html" class="flex flex-col items-center justify-center gap-1 text-[var(--op-accent)]">
+        <i data-lucide="layout-kanban" class="h-5 w-5"></i>
+        <span class="text-[10px] font-medium">队列</span>
+      </a>
+      <a href="#" class="flex flex-col items-center justify-center gap-1 text-[var(--op-text-dim)] active:text-[var(--op-text)]">
+        <i data-lucide="server" class="h-5 w-5"></i>
+        <span class="text-[10px]">节点</span>
+      </a>
+      <a href="settings-mobile.html" data-dom-id="nav-settings" class="flex flex-col items-center justify-center gap-1 text-[var(--op-text-dim)] active:text-[var(--op-text)]">
+        <i data-lucide="settings" class="h-5 w-5"></i>
+        <span class="text-[10px]">设置</span>
+      </a>
+    </div>
+  </nav>
+
+  <a href="chat-mobile.html" data-dom-id="nav-chat" class="hidden">返回聊天</a>
+
+  <script>
+    lucide.createIcons();
+
+    // Simple tab switching
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const panels = document.querySelectorAll('.tab-panel');
+
+    tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const target = btn.dataset.target;
+
+        tabBtns.forEach(b => {
+          b.classList.remove('bg-[var(--op-accent-soft)]', 'text-[var(--op-accent)]', 'border-[var(--op-accent)]/20');
+          b.classList.add('text-[var(--op-text-dim)]', 'bg-[var(--op-muted)]', 'border-transparent');
+        });
+        btn.classList.remove('text-[var(--op-text-dim)]', 'bg-[var(--op-muted)]', 'border-transparent');
+        btn.classList.add('bg-[var(--op-accent-soft)]', 'text-[var(--op-accent)]', 'border-[var(--op-accent)]/20');
+
+        panels.forEach(p => {
+          if (p.id === target) {
+            p.classList.remove('hidden');
+          } else {
+            p.classList.add('hidden');
+          }
+        });
+      });
+    });
+  </script>
+</body>
+</html>

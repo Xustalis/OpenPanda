@@ -1,0 +1,129 @@
+/* OpenPanda Console Design System — dark-first, bamboo-green accent, warm panda neutrals */
+
+:root {
+  color-scheme: dark;
+
+  /* Core surfaces */
+  --op-background: #0f1310;
+  --op-foreground: #e8ece7;
+  --op-card: #161d18;
+  --op-card-foreground: #e8ece7;
+  --op-popover: #161d18;
+  --op-popover-foreground: #e8ece7;
+  --op-muted: #1d2620;
+  --op-muted-foreground: #8fa094;
+
+  /* Brand primary */
+  --op-primary: #3aa673;
+  --op-primary-foreground: #0a2317;
+
+  /* Borders and inputs */
+  --op-border: #28322b;
+  --op-border-soft: #1f2822;
+  --op-input: #28322b;
+  --op-ring: #55c78d;
+
+  /* Semantic aliases for internal consistency */
+  --op-bg: #0f1310;
+  --op-bg-raised: #161d18;
+  --op-bg-inset: #0b0f0c;
+  --op-bg-hover: #1d2620;
+  --op-text: #e8ece7;
+  --op-text-dim: #8fa094;
+  --op-accent: #55c78d;
+  --op-accent-strong: #3aa673;
+  --op-accent-ink: #0a2317;
+  --op-accent-soft: rgba(85, 199, 141, 0.14);
+
+  /* State colors */
+  --state-success: #55c78d;
+  --state-warning: #e2b93b;
+  --state-error: #ef6a6a;
+  --state-info: #6db3f2;
+
+  /* Radius scale */
+  --op-radius-small: 4px;
+  --op-radius-medium: 8px;
+  --op-radius-large: 12px;
+  --op-radius-full: 9999px;
+
+  /* Panda brand accents */
+  --op-panda-head: #f7f3ea;
+  --op-panda-blush: #f2a7b3;
+
+  /* Depth */
+  --op-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 28px rgba(0, 0, 0, 0.22);
+
+  /* Typography */
+  --op-font:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --op-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Density */
+  --op-sidebar-width: 212px;
+  --op-header-height: 56px;
+  --op-mobile-nav-height: 56px;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --op-background: #f4f6f3;
+  --op-foreground: #1d2721;
+  --op-card: #ffffff;
+  --op-card-foreground: #1d2721;
+  --op-popover: #ffffff;
+  --op-popover-foreground: #1d2721;
+  --op-muted: #e7ebe6;
+  --op-muted-foreground: #5f6d64;
+  --op-primary: #1e7350;
+  --op-primary-foreground: #ffffff;
+  --op-border: #d8ded7;
+  --op-border-soft: #e4e9e3;
+  --op-input: #d8ded7;
+  --op-ring: #26875c;
+  --op-bg: #f4f6f3;
+  --op-bg-raised: #ffffff;
+  --op-bg-inset: #edf0ec;
+  --op-bg-hover: #e7ebe6;
+  --op-text: #1d2721;
+  --op-text-dim: #5f6d64;
+  --op-accent: #26875c;
+  --op-accent-strong: #1e7350;
+  --op-accent-ink: #ffffff;
+  --op-accent-soft: rgba(38, 135, 92, 0.1);
+  --op-panda-head: #ffffff;
+  --op-shadow: 0 1px 2px rgba(20, 40, 30, 0.06), 0 8px 28px rgba(20, 40, 30, 0.08);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+    --op-background: #f4f6f3;
+    --op-foreground: #1d2721;
+    --op-card: #ffffff;
+    --op-card-foreground: #1d2721;
+    --op-popover: #ffffff;
+    --op-popover-foreground: #1d2721;
+    --op-muted: #e7ebe6;
+    --op-muted-foreground: #5f6d64;
+    --op-primary: #1e7350;
+    --op-primary-foreground: #ffffff;
+    --op-border: #d8ded7;
+    --op-border-soft: #e4e9e3;
+    --op-input: #d8ded7;
+    --op-ring: #26875c;
+    --op-bg: #f4f6f3;
+    --op-bg-raised: #ffffff;
+    --op-bg-inset: #edf0ec;
+    --op-bg-hover: #e7ebe6;
+    --op-text: #1d2721;
+    --op-text-dim: #5f6d64;
+    --op-accent: #26875c;
+    --op-accent-strong: #1e7350;
+    --op-accent-ink: #ffffff;
+    --op-accent-soft: rgba(38, 135, 92, 0.1);
+    --op-panda-head: #ffffff;
+    --op-shadow: 0 1px 2px rgba(20, 40, 30, 0.06), 0 8px 28px rgba(20, 40, 30, 0.08);
+  }
+}
