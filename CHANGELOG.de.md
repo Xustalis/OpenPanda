@@ -2,134 +2,136 @@
 
 [English](CHANGELOG.md) · [简体中文](CHANGELOG.zh-CN.md) · [日本語](CHANGELOG.ja.md) · [Español](CHANGELOG.es.md) · [Deutsch](CHANGELOG.de.md)
 
+## Über das Projekt
+
+OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant) ist ein persönliches Task-Orchestrierungs-Kernel: Ein `panda`-Binary läuft auf jedem deiner Geräte, die Knoten finden sich über einen authentifizierten WebSocket-Bus, ein Entry-Modell verwandelt jede Anfrage in eine direkte Antwort oder eine ausführbare Task-Spezifikation, und der Scheduler leitet jede Aufgabe an das am besten geeignete Gerät und den passenden Agenten. Die CLI ist die Hauptschnittstelle des Kernels — ein nacktes `panda` öffnet die interaktive REPL — und die Web-Konsole ist eine dünne Hülle über demselben Store und derselben Engine.
+
+## Versionsregeln
+
+- Versionen folgen `MAJOR.MINOR.PATCH`. Das Projekt ist in der Anfangsentwicklung (`0.0.x`): Ein Patch-Release darf Funktionen hinzufügen, Fehler beheben und — ausnahmsweise — Breaking Changes einführen, die stets unter **Breaking Changes** aufgeführt werden.
+- Ein Release wird durch das Tag `vX.Y.Z` geschnitten; jeder Commit seit dem vorherigen Tag gehört zum Abschnitt der neuen Version. `[Unreleased]` sammelt die Arbeit seit dem letzten Tag.
+- Jede Version wird in vier Kategorien dokumentiert: **Hinzugefügt** (neue Funktionen), **Behoben** (Fehlerkorrekturen), **Verbessert** (Verfeinerungen), **Breaking Changes** (erfordert Handeln beim Upgrade).
+- Jeder Eintrag benennt die Änderung und ihre sichtbare Wirkung in ein bis drei Zeilen; der einführende Commit wird zitiert, wo das der Archäologie hilft.
+- Die englische Datei ist maßgeblich. Die Übersetzungen zh-CN / ja / es / de spiegeln sie und können um ein Release kurz verzögert sein.
+
 ## [Unreleased]
 
 ## [0.0.2] - 2026-08-22
 
-Das CLI-zuerste-Release: das Kernel-Redesign landet — jede Web-Fähigkeit hat jetzt ein CLI-Pendant —, die REPL wird die Vordertür des Produkts, und die CLI erhält Konversationsgedächtnis, Live-Aufgabenberichte und Markdown-Rendering je nach Ausgabekanal.
-
-### CLI-Vordertür & REPL-Überholung
-
-- **CLI-Vordertür** — ein nacktes `panda` öffnet jetzt die interaktive REPL (zuvor: der Daemon ohne Oberfläche); der Kernel zog in den expliziten Subcommand `panda daemon`. Die systemd/LaunchAgent/Windows-Starter und die Makefile-Run-Ziele starten den Daemon nun explizit.
-- **REPL-Mehrrunden-Kontext** — Fragen im nackten Modus sammeln eine Konversation mit einem Budget von 24k Zeichen (ganze Austausche werden zuerst aus dem ältesten entfernt, sodass ein Nutzerturn nie ohne seine Antwort wiedergegeben wird) und persistieren nach `~/.local/state/openpanda/conversation.json`: ein neues Terminal setzt dort fort, wo das letzte endete. `/new` leert, `/history` zeigt, `!!` wiederholt die letzte Frage, und `panda ask --continue` nimmt den Faden einmalig auf.
-- **Out-of-Band-Aufgabenberichte** — die interaktive REPL betreibt einen Aufgaben-Watcher, der den Status-Fingerprint des Stores abfragt und eine ✓/✗-Zeile druckt, sobald eine Aufgabe einen Endzustand erreicht (Board-Warteschlangenaufgaben, Web-Konsolen-Einreichungen, Peer-Delegationen) — in den Zeileneditor eingefügt, ohne den laufenden Puffer zu verlieren. Inline-Asks absorbieren ihr eigenes Ergebnis und werden nie doppelt gemeldet.
-- **Live-Aufgabenboard** — `panda queue --watch` (und `/tasks watch` in der REPL) zeichnet die Warteschlange alle 2s an Ort und Stelle neu, Zeilen nach Status gefärbt; Strg-C beendet die Ansicht, nicht den Prozess.
-- **Slash-Befehlsmenü** — die Eingabe eines `/`-Präfixes listet in der REPL passende Befehle live unter dem Prompt auf (Deckelung bei 10 mit einem (+N, Tab)-Hinweis); die Vervollständigung bleibt bei Tab. Behebt die Auto-Complete-Schleife, in der `/e` auf `/exit ` zuschnappte und Rücklöschen sie erneut auslöste.
-- **Start-Banner-Redesign** — klassische Figlet-Lettern schreiben OpenPanda in reinem ASCII (rendert auf jedem Terminal), mit Infozeilen zu Knoten/Modell/Arbeitsverzeichnis; Farbe nur auf TTYs.
-- **TTY/Konsolen-Degradierung** — auf einer nackten Linux-Konsole (TERM=linux) fällt die Oberfläche auf Englisch und ASCII-Trenner zurück, sodass nichts als Rauten erscheint; Nicht-UTF-8-Terminals tauschen den `·`-Trenner gegen `|`.
-- **Auto-Erkennung der Fähigkeitskarte** — `--card` probiert standardmäßig `./capabilities.yaml` und dann `/etc/openpanda/capabilities.yaml`, sodass installierte Knoten Aufgaben ohne Flags ausführen.
-- **Flag-Umsortierung** — Flags dürfen nach Positionsargumenten stehen (`panda task <id> --config x`): das Go-flag-Paket schluckte nachgestellte Flags stumm in den Positionstext; jeder Subcommand hebt sie jetzt vor.
-
-### Kernel-Redesign — die CLI ist der Kernel, das Web die dünne Hülle
-
-- **Injektions-Policy (Stufe A)** — `injection.model: auto|always|never`: agent-native Modell-Zugangsdaten gewinnen standardmäßig; jede Credential-Injektion wird in der Aufgaben-Ausgabe angekündigt und audit-protokolliert.
-- **Kostenbewusstes Routing (Stufe A)** — die Agentenauswahl bewertet Fähigkeit × cost_tier mit `preferred_agents`-Bonus, mit Rückfall auf den nächstbesten passenden Agenten.
-- **Gedächtnis-Überholung (Stufe A)** — konfigurierbare Obergrenzen (`memory.limits`), Mehrfach-Datei-Topics mit manifest-artiger selektiver Injektion und Sedimentierung von Dreams mit niedrigem Gewicht.
-- **Hardware-Sondierung (Stufe A)** — ein geteiltes `internal/hwinfo`-Paket trägt `panda detect` und `/api/self`.
-- **CLI-Befehlsfamilien (Stufe B)** — jede Web-Fähigkeit hat ein CLI-Pendant: `panda session` (worktree-isolierte Chat-Sitzungen), `task` (Board, Zeitleiste, Anlegen), `memory` (Mehrfach-Datei-Bearbeitung), `config`, `agents` (Sondierung + Konnektivitätstests) und `project` — alle teilen die Dienstschicht mit dem Panel. Plattform-Terminal-Helfer (term_darwin/linux/unix/other) liefern Raw-Modus-UX.
-- **Panel: Self, App-Einstellungen, Memory-Topics (Stufe C)** — `GET /api/self` (Geräteprofil), `GET/PUT /api/settings/app` (validierte App-Policy-Speicherung) und eine Memory-API mit Topics pro Datei; die Memory-Seite der Konsole ist für Topics produktgerecht gemacht, Einstellungen sind gruppiert und i18n über alle fünf Sprachen synchronisiert.
-- **Testabdeckung der Panel-Endpunkte** — siebzehn Tests schließen die risikoreichsten Lücken aus dem Audit: Sessions-CRUD plus ein echtes Git-Ende-zu-Ende (Worktree-Ausschnitt über HTTP, Diff, Merge gelandet im Haupt-Checkout), Schlüssel-Maskierung der Modelleinstellungen (das rohe Geheimnis verlässt nie das Haus), MCP-Startfehler als 400, Skills-Lebenszyklus, Reminders-CRUD und die System-Endpunkte.
-
-### Ausgabe-Hygiene & Adapter
-
-- **Markdown-Ausgabe-Hygiene** — das neue `internal/mdtext` rendert Antworten je nach Ziel: Farb-TTYs erhalten ANSI-Betonung (zyane Überschriften, Fettdruck, dunkler Code, ausgerichtete Tabellen), Pipes und nackte Konsolen erhalten Klartext, und die Sprach-Pipeline (`Speak`) entfernt Markdown immer vor dem TTS. Streaming-Deltas werden Zeile für Zeile durch dieselben Regeln gerendert, sodass kein roher `**`/`|`/`#`-Marker auf eine Oberfläche durchsickert.
-- **Antwortdisziplin** — der Entry-Prompt verlangt jetzt Antworten, die mit dem Schluss beginnen (kein sichtbares Schließen, minimale Struktur), und Agenten-Prompts tragen einen Ausgabe-Zusatz: die finale Nachricht berichtet, was getan wurde, nicht den Erkundungspfad. Ausführungsdetails bleiben in den `panda task <id>`-Ereignissen — das CLI-Äquivalent eines eingeklappten „Arbeitsschritte anzeigen“.
-- **codex-Adapter** — läuft mit `-s danger-full-access`: codex' eigene Sandbox kann sich unter einem nicht-interaktiven Elternprozess nicht einmal initialisieren (seine Zustands-DB und die PATH-Alias-Erstellung scheitern mit EPERM vor der ersten Runde), und PANDA sperrt den Adapter ohnehin auf das Aufgaben-cwd. Agentenfehler zeigen jetzt zudem ihre Diagnose statt einer leeren `result {"failed":""}`.
+Das CLI-zuerste-Release: Das Kernel-Redesign (Stufen A–C) landet — jede Web-Fähigkeit erhält ein CLI-Pendant, die REPL wird die Vordertür, und die CLI erhält Konversationsgedächtnis, Live-Aufgabenberichte und Markdown-Rendering je nach Ausgabekanal.
 
 ### Hinzugefügt
 
-- **Ressourcenbewusste lokale Aufgaben-Warteschlange** — das synchrone Modell von `core.Submit` wird eine asynchrone Queue: `internal/scheduler/queue` sortiert Aufgaben nach Drag-Sequenz → Priorität → FIFO und kontrolliert Starts über eine Ressourcen-Sperr-Registry plus `MaxConcurrent`, sodass Aufgaben mit disjunkten Ressourcen an einer blockierten Warteschlange vorbeiziehen. Aufgaben erhalten `priority`/`seq`/`session_id`/`resource_keys` (SQLite v9), und Board-Aufgaben springen in ihre verknüpfte Sitzung (0e8d850).
-- **`panda init` — interaktiver Erststart** — schreibt `config.yaml` + `capabilities.yaml` aus einem einzigen interaktiven Prompt in ein benutzerbeschreibbares Verzeichnis: Hardware-Scan-Defaults, validierte Enum-Eingaben (bei Tippfehlern erneut fragen), Prompts in fünf Sprachen. `config.ResolvePath` liefert eine einzige Auflösungsreihenfolge (Flag > Umgebungsvariable > Benutzerkonfiguration > Systemstandard), geteilt von Daemon, `panda web`, dem WebUI-Sidecar und Doctor, sodass eine von init geschriebene Konfig überall ohne Extra-Flags aufgegriffen wird (f5610fc).
-- **Konsolen-P1-Politur — vereinheitlichte Seiten, editierbares Gedächtnis, Toasts, Bestätigungsdialoge** — geteilte `PageHeader`/`ErrorState`-Komponenten standardisieren Struktur und Fehlerbehandlung jeder Ansicht; die Memory-Seite wird zur Produktseite (Einträge per `§` getrennt, Neueintrag-Hervorhebung, Zeichenzähler, Direktbearbeitung über das neue `PUT /api/memory/{file}`); globales Toast-Feedback (Fehler manuell wegklickbar, Erfolg/Info automatisch) ersetzt verstreute Fehlermeldungen je Ansicht; destruktive Aktionen — Chat löschen, Skill ablehnen, Aufgabe abbrechen, Erinnerung löschen — erfordern jetzt einen Bestätigungsdialog (45ee941).
-
-### Geändert
-
-- **Gruppierte Sidebar-Navigation** — die Konsolennavigation faltet sich zu einklappbaren Abschnitten (Aufgaben / Geräte & Agenten / Persönlich / System) mit automatisch ausgeklapptem aktivem Abschnitt — fortschreitende Offenlegung statt acht flacher Einträge; der Entry-Prompt ist als „Dirigent“-Persona neu gefasst: einfache Fragen direkt beantwortet, komplexe Arbeit an Geräte und Agenten delegiert (f5610fc).
-- **Streaming-Resilienz und Konvergenz der Ask-Pipeline** — `streamWithRetry` wiederholt transiente Abbrüche (429/5xx/Netzwerk) mit Backoff, solange kein Delta den Nutzer erreicht hat; `deltaGuard` hält rohe strukturierte Ausgabe (Task-JSON, ```json-Zäune) aus Chat-Bubbles und Terminals fern, und unterdrückte Deltas zählen nicht als zugestellt, was Abbrüche mitten im JSON wiederholbar hält; eine Tool-Schleife, die maxRounds erschöpft, konvergiert jetzt über einen finalen tool-freien Aufruf statt zu fehlschlagen; die Tool-Ausführung nutzt denselben Registry-Schnappschuss, den die Klassifikation sah, was „unknown tool“-Fehler beim MCP-Hot-Switch verhindert; CLI/REPL-Antworten streamen live auf einem TTY (Tool-Fortschritt als einzeilige Notizen), Pipe-Ausgabe bleibt sauber (df47725).
+- **CLI-Befehlsfamilien** — jede Web-Fähigkeit hat ein CLI-Pendant: `panda session | task | memory | config | agents | project`, alle teilen die Dienstschicht des Panels (a4cba5f).
+- **Ressourcenbewusste lokale Aufgaben-Warteschlange** — `core.Submit` wird asynchron: Reihenfolge Drag-Sequenz → Priorität → FIFO, kontrolliert über eine Ressourcen-Sperr-Registry plus `MaxConcurrent`; Aufgaben mit disjunkten Ressourcen ziehen an einer blockierten Warteschlange vorbei; Aufgaben erhalten `priority`/`seq`/`session_id`/`resource_keys` (SQLite v9) (0e8d850).
+- **REPL-Konversationsgedächtnis** — 24k-Zeichen-Budget mit paarweisem Entfernen (ein Nutzerturn wird nie ohne seine Antwort wiedergegeben), persistiert in `~/.local/state/openpanda/conversation.json`; `/new`, `/history`, `!!` und `panda ask --continue` (f0a1b9f).
+- **Out-of-Band-Aufgabenberichte** — ein REPL-Watcher druckt eine ✓/✗-Zeile, sobald eine Aufgabe einen Endzustand erreicht (Board, Web-Konsole, Peer-Delegation), ohne die Eingabezeile zu stören; Inline-Asks werden nie doppelt gemeldet (f0a1b9f).
+- **Live-Aufgabenboard** — `panda queue --watch` und `/tasks watch` zeichnen die Warteschlange alle 2s neu, Zeilen nach Status gefärbt; Strg-C beendet die Ansicht, nicht den Prozess (f0a1b9f).
+- **`internal/mdtext`** — Markdown-Rendering je nach Ziel: ANSI-Betonung auf Farb-TTYs, Klartext für Pipes und nackte Konsolen, vor TTS immer entfernt; Streaming-Deltas werden Zeile für Zeile durch dieselben Regeln gerendert (e94f72f).
+- **Live-Agenten-Fortschritt** — Adapter streamen NDJSON-Fortschrittsnotizen auf stderr, als gedrosselte `EvProgress`-Ereignisse protokolliert: `panda task <id>` und die Panel-Zeitleiste zeigen, was der Agent während der Ausführung tut (93a453a).
+- **Injektions-Policy** — `injection.model: auto|always|never`: agent-native Zugangsdaten gewinnen standardmäßig; jede Injektion wird in der Aufgaben-Ausgabe angekündigt und audit-protokolliert (852b27e).
+- **Kostenbewusstes Routing** — die Agentenauswahl bewertet Fähigkeit × cost_tier mit `preferred_agents`-Bonus, mit Rückfall auf den nächstbesten Agenten (852b27e).
+- **Gedächtnis-Überholung** — konfigurierbare Obergrenzen (`memory.limits`), Mehrfach-Datei-Topics mit selektiver Injektion, Sedimentierung von Dreams mit niedrigem Gewicht (852b27e).
+- **`internal/hwinfo`** — geteiltes Hardware-Sondierungspaket, trägt `panda detect` und den neuen Endpunkt `GET /api/self` (852b27e, 1a97fd7).
+- **Panel-App-Einstellungen und Memory-Topics** — `GET/PUT /api/settings/app` mit validierter Policy-Speicherung; die Memory-API erhält Topics pro Datei; die Memory-Seite ist produktgerecht, Einstellungen gruppiert, i18n in fünf Sprachen synchron (1a97fd7).
+- **`panda init`** — interaktiver Erststart, schreibt `config.yaml` + `capabilities.yaml`; `config.ResolvePath` vereinheitlicht die Auflösung (Flag > Umgebungsvariable > Benutzerkonfiguration > Systemstandard) (f5610fc).
+- **Konsolen-Politur** — geteilte `PageHeader`/`ErrorState`-Komponenten, globale Toasts und Bestätigungsdialoge bei destruktiven Aktionen (45ee941).
+- **REPL-Ergonomie** — Slash-Befehlsmenü unter dem Prompt, figlet-Banner in reinem ASCII, Englisch/ASCII-Rückfall bei TERM=linux und Auto-Erkennung für `--card` (`./capabilities.yaml` → `/etc/openpanda/capabilities.yaml`) (f0a1b9f).
+- **`scripts/deploy-pi.sh`** — Orange-Pi-Deployment mit einem Befehl: Cross-Compile, atomarer Binärtausch, systemd-Installation, Gesundheitscheck (d7bc87f).
 
 ### Behoben
 
-- **Adapter-Timeout über die gesamte Laufzeit** — die codex/claude-Adapter lasen das stdout des Agenten-CLI bis EOF, bevor sie auf den Prozess warteten, sodass ein mid-Stream feststeckendes CLI (Pipe offen, keine Ausgabe) die Leseschleife für immer blockierte — das Request-Timeout deckte nur den Schwanz nach dem stdout-EOF ab. Beide Adapter starten das CLI jetzt in einer eigenen Prozessgruppe mit einem Watchdog-Thread, der zum Stichtag den ganzen Baum tötet: Kinder erben die Pipes und halten sie offen, sodass das Töten nur des direkten Kindes die Leser blockiert ließ.
-- **Anthropic-Tools-API-Kompatibilität** — tool_use-Blöcke tragen jetzt immer `input` (leeres Objekt für Tools ohne Argumente): map-omitempty ließ es zuvor fallen, und strenge Anthropic-kompatible Anbieter (DeepSeek /anthropic) wiesen Folgerunden mit einer 400 ab. Tool-Namen mit Punkten (reminder.set, time.now, weather.get) wurden zu Unterstrichen umbenannt, um das Muster `^[a-zA-Z0-9_-]+$` zu erfüllen.
-- **work_path-Auto-Erstellung** — der Daemon legt beim Boot alle Storage-Wurzeln (context/memory/projects/skills/work) per mkdir an; ein fehlendes Arbeitsverzeichnis zeigte sich zuvor als irreführendes fork/exec-ENOENT, das die Befehls-Binärdatei beschuldigte.
-- **Gegenseitige Wahl-Wiederverbindungs-Sturmböe** — die finale hello-Antwort des Dedup-Verlierers ging über die Registry-Verbindung statt über die ankommende Verbindung, sodass der Verlierer die Peer-Identität nie band, MaintainPeers Kanten-Wartung übersprang und jede Sekunde neu wählte; auf echter Hardware wurden 869 Wiederverbindungen in 15 Minuten beobachtet, jetzt eine und danach Stille.
-- **Gates und kleine Härtungen** — das Makefile-`measure`-Ziel referenzierte eine nicht existierende Konfiguration (jetzt passend zum README-Schnipsel); sechs Dateien fürs gofmt-Gate neu formatiert; README-Badge/Voraussetzungen nennen Go ≥1.26 in allen fünf Ausgaben; `.gitignore` erhält `.openpanda/`; das Phantom-Peer der Beispielkonfiguration ist auskommentiert, damit `make run` keine Warnungen im Hot-Loop erzeugt; das Panel erhält eine `securityHeaders`-Middleware als Tiefenverteidigung (cacde7b).
-- **SQLite-v9-Migration auf Alt-DBs** — die Warteschlangen-Schema-Migration stürzte auf Datenbanken ab, die vor der Existenz der `tasks`-Tabelle erstellt wurden; sie legt die Tabelle jetzt fehlend an (0e8d850).
-- **Handhabbare API-Fehlerzuordnung** — Nicht-OK-Statuscodes bleiben auf dem Streaming-Pfad erhalten, sodass Fehler als Anleitung ankommen, nicht als rohes Transport-Rauschen: 401/403 zeigen auf `model.api_key`, 404 auf `base_url`/Modellname, 400 auf die Anfrage, anhaltende 429/5xx benennen Ratenbegrenzung oder Dienstunverfügbarkeit, und Verbindungsfehler raten zur Netzwerkprüfung (df47725).
+- **Adapter-Timeout über die gesamte Laufzeit** — ein mid-Stream feststeckendes CLI (Pipe offen, keine Ausgabe) blockierte die Leseschleife für immer; das Timeout deckte nur den Schwanz nach dem stdout-EOF ab. Beide Adapter starten das CLI in einer eigenen Prozessgruppe mit einem Watchdog-Thread, der zum Stichtag den ganzen Baum tötet (332f2d4).
+- **Anthropic-Tools-API-Kompatibilität** — tool_use-Blöcke tragen jetzt immer `input` (leeres Objekt für Tools ohne Argumente); strenge Anthropic-kompatible Anbieter (DeepSeek /anthropic) wiesen Folgerunden zuvor mit einer 400 ab. Tool-Namen mit Punkten wurden zu Unterstrichen umbenannt, um `^[a-zA-Z0-9_-]+$` zu erfüllen (93a453a).
+- **codex konnte sich unter einem nicht-interaktiven Elternprozess nicht initialisieren** (EPERM beim Schreiben seiner Zustands-DB und PATH-Aliasse vor der ersten Runde) — läuft mit `-s danger-full-access`, vom externen PANDA-Sandbox gefangen (332f2d4).
+- **Agentenfehler protokollierten eine leere Begründung** — die Adapter-Diagnose wird nun in Stderr gespiegelt, sodass `store.Fail` und Aufgabenergebnisse den echten Fehler tragen (93a453a).
+- **Gegenseitige Wahl-Wiederverbindungs-Sturmböe** — die finale hello-Antwort des Dedup-Verlierers ging über die Registry-Verbindung statt über die ankommende, sodass die Peer-Identität nie gebunden wurde und jede Sekunde neu gewählt wurde (869 Wiederverbindungen in 15 Minuten auf echter Hardware; jetzt 1) (93a453a).
+- **Fehlender work_path** zeigte sich als irreführendes fork/exec-ENOENT, das die Befehls-Binärdatei beschuldigte — der Daemon legt beim Boot alle Storage-Wurzeln an (f0a1b9f).
+- **Nachgestellte Flags wurden stumm in Positionale geschluckt** (`panda task <id> --config x` verlor die Konfiguration) — jeder Subcommand hebt Flags nun vor (f0a1b9f).
+- **Auto-Complete-Schleife** — `/e` schnappte auf `/exit ` zu und Rücklöschen löste es erneut aus (f0a1b9f).
+- **SQLite-v9-Migration crashte** auf Alt-Datenbanken, die vor der Existenz der `tasks`-Tabelle erstellt wurden; die Tabelle wird jetzt fehlend angelegt (0e8d850).
+- **API-Fehler kommen als Anleitung, nicht als Transport-Rauschen** — 401/403 zeigen auf `model.api_key`, 404 auf `base_url`/Modellname, anhaltende 429/5xx benennen Ratenbegrenzung, Verbindungsfehler raten zur Netzwerkprüfung (df47725).
+- **Gates und Härtungen** — `make measure` referenzierte eine nicht existierende Konfiguration; gofmt-Drift; falsche Go-Version im README; `.gitignore` ohne `.openpanda/`; das Phantom-Peer der Beispielkonfig loopte Warnungen; das Panel erhielt `securityHeaders`-Middleware (cacde7b).
+
+### Verbessert
+
+- **Antwortdisziplin** — der Entry-Prompt verlangt Antworten, die mit dem Schluss beginnen; Agenten-Prompts tragen einen Ausgabe-Zusatz: die finale Nachricht berichtet, was getan wurde, das Detail bleibt in den `panda task <id>`-Ereignissen (93a453a).
+- **Streaming-Resilienz** — `streamWithRetry` wiederholt transiente Abbrüche (429/5xx/Netzwerk) mit Backoff, solange nichts zugestellt wurde; `deltaGuard` hält Task-JSON aus Chat-Bubbles fern und hält Abbrüche mitten im JSON wiederholbar; ein erschöpfter Tool-Loop konvergiert über einen finalen tool-freien Aufruf; die Tool-Ausführung pinnt den Registry-Schnappschuss des Klassifikationszeitpunkts und verhindert „unknown tool“ beim MCP-Hot-Switch (df47725).
+- **Gruppierte Sidebar-Navigation** — einklappbare Abschnitte (Aufgaben / Geräte & Agenten / Persönlich / System) mit dem Entry-Prompt als „Dirigent“-Persona (f5610fc).
+- **Panel-Endpunkt-Tests** — siebzehn Tests schließen die riskantesten Lücken: Sessions-CRUD plus echtes Git-Ende-zu-Ende (Worktree-Ausschnitt über HTTP, Diff, Merge), Schlüssel-Maskierung (das rohe Geheimnis verlässt nie das Haus), MCP-Startfehler als 400, Skills-Lebenszyklus, Reminders-CRUD, System-Endpunkte (ad884bf).
+- **Stilles Konfig-Laden bei interaktiven Befehlen** — interaktive Flächen stummen den slog-Lärm des Loaders; der Daemon behält das volle Log (f0a1b9f).
+
+### Breaking Changes
+
+- **Ein nacktes `panda` öffnet jetzt die interaktive REPL** statt des Daemon ohne Oberfläche; der Kernel zog in den expliziten Subcommand `panda daemon`. Die systemd-Unit, der LaunchAgent, die Windows-Starter und die Makefile-Run-Ziele wurden aktualisiert — Deployments, die `panda` direkt aufrufen, müssen auf `panda daemon` umstellen (f0a1b9f).
 
 ## [0.0.1] - 2026-08-19
 
-Erstes Open-Source-Vorab-Release.
-
-**Projekt in OpenPanda umbenannt** (Open + Personal Adaptive Node-based Distributed Assistant). Der Go-Modulpfad ist jetzt `github.com/Xustalis/OpenPanda`; alle Umgebungsvariablen nutzen das Präfix `OPENPANDA_`; die systemd/LaunchAgent-Units sind `openpanda.service` / `com.openpanda.node.plist`; der Standard-DB-Dateiname ist `openpanda.db`. Das CLI-Binary behält den Kurznamen `panda`.
-
-Durchgehend alle Gates grün: build / vet / volle Tests / `-race` / Cross-Compile. Deckt den kompletten Kernel-Funktionsumfang ab (Daemon, CLI, P2P-Delegation, Audit-Kette, Migrationen, Scheduler-Bewertung + Dedup, SSE-Panel, eingebettete Web-Konsole, interaktive REPL, plattformübergreifendes install/uninstall/doctor) plus die Assistenten-Schicht: Agenten-Sinne, terminierte Erinnerungen, MCP-Integration, Worktree-Chat-Sitzungen und das Kanban-Board.
-
-### v0.0.1-Vorab-Release-Audit-Fixes
-
-- **Einbettung der Web-Konsole umstrukturiert** — der vite-Build landet jetzt in `dist/app/`, während der committete `dist/index.html`-Platzhalter von einem Build nie berührt wird. Zuvor konnte ein `make web` + `git add -A`-Zyklus eine gehashte index.html committen, die auf ignorierte `/assets/*` zeigte und jedem frischen Klon eine weiße Konsole hinterließ. Der Platzhalter ist jetzt stabil, `make web` bewacht die Existenz von `dist/app/index.html`, und der statische Handler bevorzugt den echten Build mit dem Platzhalter als Fallback.
-- **`panda help`** — der Subcommand existiert jetzt (auch `-h`/`--help`) und druckt eine orientierte Übersicht statt eines Fehlers; unbekannte Subcommands drucken dieselbe Verwendung.
-- **Markenreste** — das System-Prompt des Entry-Modells stellte den Agenten als „PANDA“ vor; jetzt sagt es „OpenPanda“ (in jeder Antwort für den Nutzer sichtbar). Ebenso der Kopf von `config.example.yaml`.
-- **`config.example.yaml`** — dokumentiert die zuvor undokumentierte `mcp:`-Sektion und `model.api_type` (anthropic | openai); Push-Sektions-Kommentare auf die Ära der eingebetteten Konsole aktualisiert.
-- **Toter Link** — die Roadmap referenzierte einen nur-lokalen Delegationsbericht; zeigt jetzt auf `scripts/smoke-delegate`, das die Verifikation reproduziert.
+Erstes Open-Source-Vorab-Release: der komplette Kernel-Funktionsumfang (Daemon, CLI, P2P-Delegation, Audit-Kette, Migrationen, Scheduler, SSE-Panel, eingebettete Web-Konsole, interaktive REPL, plattformübergreifender Installationslebenszyklus) plus die Assistenten-Schicht (Agenten-Sinne, Erinnerungen, MCP, Worktree-Chats, Kanban-Board). Durchgehend alle Gates grün: build / vet / volle Tests / `-race` / Cross-Compile.
 
 ### Hinzugefügt
 
-- **`panda install` / `panda uninstall` / `panda doctor` — globaler Befehlslebenszyklus, plattformübergreifend** — `panda install` kopiert das Binary nach `~/.local/bin` (unix) / `%LOCALAPPDATA%\OpenPanda\bin` (Windows) und registriert es dauerhaft im PATH: auf unix ein markierter Block in den Shell-rc-Dateien (`# >>> openpanda path >>>`, idempotent, Benutzerzeilen unberührt), auf Windows HKCU\Environment über die Registry-API mit erhaltenem Werttyp (`setx` vermieden — es kürzt PATH bei 1024 Zeichen) plus WM_SETTINGCHANGE-Broadcast; danach verifiziert es sich selbst, indem es die installierte Kopie ausführt. `panda doctor` ist der eigenständige Selbstcheck (installierte Kopie läuft / PATH löst auf / Persistenz überlebt den Reboot / Konfig & DB nutzbar; bei jedem Fehlschlag Exit 1). `panda uninstall` ist whitelist-sicher: es druckt den vollständigen Plan, verlangt das Eintippen von `confirm` (oder `--yes` für Skripte, `--dry-run` zur Vorschau), löscht nur explizit abgeleitete Ziele (Binary, PATH-Registrierung, DB + Journals, Context-Verzeichnis, VAPID-Schlüssel, Konfig nur innerhalb eigener Wurzeln), bewahrt immer Nutzer-Assets (Verzeichnisse projects/memory/skills/work — alles, was mit Home oder einem Asset überlappt, wird automatisch auf Behalten gekippt), schreibt vorab ein Zip-Backup des gelöschten Zustands ins Home und erzeugt eine Gelöscht/Behalten-Berichtsdatei. Das Geländer-Kern steckt in `internal/install` (unittestiert, inkl. Symlink-Sicherheit: Links werden entfernt, niemals gefolgt). Durchgehend CLI-Meldungen in fünf Sprachen.
-- **`panda web` — Konsole mit einem Befehl und Auto-Login** — standardmäßig Loopback-Bind und ein kurzlebiges Zufalls-Token (Null-Konfiguration), und der Browser öffnet `/?token=…`, das die App einmal konsumiert und aus der Adressleiste streift: kein Konfig-Editieren, kein Token-Einfügen. Dasselbe Null-Konfigurations- plus Auto-Login-Verhalten landet im `/web` der REPL und im `panda-webui`-Sidecar (der jetzt eineöffnbare URL druckt); Nicht-Loopback-Binds ohne konfiguriertes Token bleiben fail-closed. Das Frontend konsumiert `?token=` beim Laden (Jupyter-Stil); `make web` schlägt laut fehl, wenn der Build nicht gelandet ist (Platzhalter-Wächter).
-- **Interaktive REPL** — `panda repl` ist der Sitz des Bedieners: nackte Eingabe geht an die Ask-Engine, Slash-Befehle steuern jede Panel-Oberfläche (`/ask`, `/tasks`, `/task`, `/cancel`, `/approve`, `/reject`, `/logs`, `/projects`, `/project`, `/nodes`, `/authorize`, `/lang`), und `/web` startet die eingebettete Konsole mit einem Klick. Unbekannte Befehle nennen die Lösung und beenden nie; die Ask-Engine ist optional, sodass die REPL ohne Modell-Endpunkt weiterhin Panel-Befehle bedient (7a5c2bf).
-- **Eingebettete Web-Konsole** — die Konsole ist auf Vite + Preact + TypeScript neu gebaut (keine Runtime-Abhängigkeiten jenseits von Preact) und per `go:embed` ins Binary gefaltet: Queue/Detail/Ask/Projekte/Knoten/Freigabe-Ansichten, Live-SSE-Updates, fünf UI-Sprachen (English, 简体中文, 日本語, Español, Deutsch), Panda-Marken-SVG. `make web` baut sie; ein committeter Platzhalter hält `go build` ohne node funktionsfähig (844ccf6, 688cc20).
-- **Panel-Schreibpfade + SSE** — `POST /api/ask` (vereinheitlichtes Entry-Modell über das geteilte `askengine`-Paket), `POST /api/projects` + `GET /api/projects`, `GET /api/nodes` (live Fähigkeitsverzeichnis), `POST /api/tasks/{id}/cancel`, `GET /api/tasks/{id}/logs` und `GET /api/events` (SSE-Strom von Queue-/Knoten-Änderungen) schließen die im System-Audit gefundene Nur-Lese-Lücke (b599dc7, 6748baa).
-- **CLI-i18n** — `internal/i18n`: Locale-Erkennung, Englisch-Fallback, `{placeholder}`-Interpolation; CLI und REPL teilen sich dieselben Fünfsprach-Nachrichtenkarten, durch Hinzufügen eines Locale-Eintrags erweiterbar (7a5c2bf).
-- **Konfig-Startvalidierung** — Ressourcenklassen, Peer- und Listen-Adressen sowie Listen-/Panel-Port-Konflikte werden beim Boot geprüft statt beim Wählen zu scheitern (b599dc7).
-- **`scripts/smoke-delegate`** — prozessübergreifender Delegations-Prüfer: wird zum kurzlebigen Scheduler-Teilnehmer, reicht eine Aufgabe ein, die eine nur-Peer-Fähigkeit erfordert, und meldet, wo sie lief; Exit 0 bedeutet, dass der Hin- und Rückweg auf einem Peer done erreichte (fbb4f9e).
-- **CONTRIBUTING.md** — Engineering-Gates (`make gate`), Code-Konventionen (Fehler-Wrapping, Kommentar-Policy, Nebenläufigkeitsregeln, Fail-Closed-Sicherheit), Commit-Stil, i18n-Regeln und die PR-Checkliste; dazu die öffentliche [Desktop- & Packaging-Roadmap](docs/plans/roadmap-desktop-and-packaging.md) (Stage 1 fertig → Stage 2 Distributions-Härtung → Stage 3 Desktop auf Wails → Stage 4 Marketplace/Mobile/Mehrfachnutzer).
-- **Sprint-2-Papier-Mechanismen (ATC-MARL-Abbildung)** — `internal/scheduler/score.go`: DCPS-gewichtete Bewertung (`0.4·resource_efficiency + 0.3·user_priority + 0.2·scheduler_tier + 0.1·wait_time`), abgezinst um die TMB-Heartbeat-Frische (`exp(-λ·Δt)`, 30-Minuten-Halbwertszeit); kapazitätsgesteuertes Accept/Decline über `MaxConcurrent`; Heartbeats tragen jetzt das live `CurrentTasks` und schließen den Datenkreis beider Mechanismen (543801f).
-- **Auto-Umleitung bei Ablehnung** — Aufgaben persistieren ihren `requires`-Fähigkeitssatz (`requires_json`-Spalte, sowohl Submit- als auch Delegationspfad); eine abgelehnte Aufgabe bewertet DCPS erneut unter Ausschluss historischer Ablehner (`DeclinedBy` aus `EvDecline`-Audit-Ereignissen) und stellt den nächstbesten Knoten neu zu (dad4f04, P1-5).
-- **`panda metrics [--csv]`** — exportiert Delegations-Metriken; **`panda audit verify [--task <id>]`** — verifiziert die `prev_hash`-Kette des globalen Audit-Logs oder die Ereignis-Zeitleiste einer Aufgabe (6f2c8d5).
-- **PRAGMA-`user_version`-getriebene SQLite-Migrationen** (6f2c8d5, A1) und eine **`prev_hash`-Audit-Kette** für `task_events` und `audit_log` (6f2c8d5, A3).
-- **`OPENPANDA_WAKE_KEYWORD`**-Umgebungsvariable überschreibt das Sprach-Wachwort; openwakeword kann weiterhin über `OPENPANDA_WAKE_MODEL` auf ein eigenes `.tflite` zeigen (2e72c8c).
-- **Agenten-Sinne** — die System-Tools `time.now` und `weather.get`: das Modell hat weder Uhr noch Fenster, also stellt die Ask-Engine sie bereit (Wetter über Open-Meteo-Geocodierung + heute/morgen) (c36cad1).
-- **Terminierte Erinnerungen** — das Tool `reminder.set` lässt den Agenten eigene anlegen; SQLite-Store mit atomarem `ClaimDue` + Scanner, damit Daemon und Panel eine DB ohne Doppel-Feuern teilen; Zustellung als Web Push (Loopback gilt als sicherer Kontext, sodass `panda web` Push ohne TLS erhält) und Live-SSE-Countdowns auf jeder offenen Konsole; `panda reminder list/add/rm` verwaltet sie von der CLI (c36cad1).
-- **MCP-Integration mit Hot-Reload** — ein stdio-MCP-Server, konfigurierbar über `config.yaml` (`mcp.command`, kommentarerhaltendes Update) oder die Konsole-Einstellungskarte, die vor dem Wechsel tatsächlich den Server startet und seine Tools auflistet, um zu validieren; Tools treten sofort dem Agenten-Toolset bei, ohne Neustart (c36cad1).
-- **Chat-Sitzungen in Git-Worktrees** — Konsolen-Konversationen laufen in isolierten Git-Worktrees mit Streaming-Antworten; Sitzungs-Aufgabenkarten legen eine live Gedankenkette offen (task_events-Replay + SSE-Refetch), und abgeschlossene Aufgaben falten genau einmal eine Zusammenfassungs-Runde zurück in die Sitzung (c36cad1, 0e8d850).
-- **Kanban-Board** — ein vier Spalten umfassendes Aufgaben-Board in der Web-Konsole: Erstellformular, Prioritäts-Zyklus, Spalten-weises Drag-Umsortieren und Inline-Freigaben (da9c9e1).
-- **codex-Adapter + Agenten-Sichtbarkeit** — `adapters/codex.py` gesellt sich hinter demselben Adapter-Protokoll zu claude/opencode; die Einstellungsseite listet installierte Agenten-CLIs mit Konnektivitätstests; `panda detect` scannt Hardware (CPU/RAM/GPU/Agenten-CLIs) in einen capabilities.yaml-Entwurf; Doctor prüft jetzt auch python3, `adapters/` und die Agenten-CLIs (c36cad1, 0e8d850).
-
-### Geändert
-
-- **Peer-Wiederverbindung ersetzt veraltete Verbindungen** — eine neue Verbindung derselben authentifizierten Identität wechselt in die Registry hinein (die alte wird außerhalb des Locks geschlossen), und `handleHello` grüßt beim Austausch erneut; das Registry-Entfernen matcht per Verbindungs-Zeiger (befa3bd, P1-7).
-- **Der Agenten-Pfad tritt dem Tier-Autorisierungsmodell bei** — `ledger.Agent` erhält ein `tier`-Feld; nicht deklarierte Agenten sind standardmäßig Tier 2 (fail closed) und werden von `defense.Authorize` abgewiesen, bevor der Adapter-Subprozess erzeugt wird; explizite `tier: 1`-Karten laufen ohne Freigabe (c26b11e, P1-15).
-- **Geheimnis-Datei-Härtung** — Konfigs mit `api_key` / `shared_secret` / `panel_token` werden automatisch auf 0600 chmod-iert mit einer Start-Warnung, die Umgebungsvariablen bevorzugt (`OPENPANDA_SHARED_SECRET` / `OPENPANDA_PANEL_TOKEN` / `OPENPANDA_MODEL_API_KEY`); chmod-Fehlschlag warnt, ohne zu blockieren (e5de650, P1-19).
-- **Die Interpreter-`-c`-Klassifikation ist whitelist-basiert** — nur nachweislich rein ausgebender Code (echo/print/console.log…) bleibt Tier 1, alles andere ist Tier 2 (38186af, P1-14).
-- **Das Panel standardmäßig auf Loopback** — `127.0.0.1:7840`; Nicht-Loopback-Binds warnen vor Klartext-HTTP (3c7e8f4, P1-24).
-- **Deployment-Basislinie dokumentiert** — Klartext-`ws://` nur über Loopback/Tailscale/vertrauenswürdiges LAN, TLS-Reverse-Proxy + `wss://` über das offene Internet (6f2c8d5, C1).
-- **Harte Gedächtnis-Mauer zwischen persönlichem Gedächtnis und Arbeitsbereichs-Sitzungen** — AskTurns injizierte zuvor das persönliche Hermes-Gedächtnis in jede Klassifikation, auch in Sitzungs-Konversationen, die an einen Projekt-Worktree gebunden waren, sodass „der Nutzer mag dunkle Themes“ in eine aus jenem Chat entsprungene Code-Aufgabe sickern konnte. Ein angeheftetes workDir markiert jetzt eine Arbeitsbereichs-Konversation, und es wird überhaupt kein persönliches Gedächtnis geladen; das Panel heftet auch Nicht-Repo-Sitzungen an den Arbeitspfad an, sodass jede Sitzung als Arbeitsbereichs-Scope zählt. Projekt-Gedächtnis erreicht die Ausführung weiterhin über den ContextPack auf dem ausführenden Knoten, nie den Entry-Prompt; ein Regressionstest pinnt beide Richtungen (da9c9e1).
-- **OpenAI-Wire-Format neben Anthropic** — das Entry-Modell spricht sowohl `/v1/messages`-kompatible als auch OpenAI-kompatible Endpunkte, mit Streaming-Completions auf beiden Pfaden (c36cad1).
+- **Kernel-Fundament** — Task-Zustandsmaschine mit Leases und Absturzwiederherstellung, authentifizierter WebSocket-Knotenbus, Fähigkeitsverzeichnis und die lokale Ausführungspipeline mit dem OpenCode-Adapter (Sprint 0–1: 1be8f85..307e13a).
+- **P2P-Delegation** — knotenübergreifendes Task-Routing, kontextgestufte Übertragung, das gestufte Berechtigungsmodell (Tier 1 automatisch / Tier 2 Freigabe), GPIO-Zugriff und DCPS-Scheduling-Scores (3040e18, 6324a87).
+- **Verteidigungskette** — Scope-Drift-Erkennung, Retry-Loop-Erkennung und Befehlsklassifikation mit Tabelle destruktiver Befehle (590cacc, c647c96).
+- **Hermes-Gedächtnis und Skills** — Tagesnotizen, Dreaming mit Sedimentation, Projekt-Gedächtnis und ladbare Skills (9a41b3e).
+- **Sprach-Sidecar** — Wachwort, STT, TTS und VAD (hardwaregegate), mit `OPENPANDA_WAKE_KEYWORD` / `OPENPANDA_WAKE_MODEL`-Overrides (84faf08).
+- **Echtgeräte-Deployment** — drei Knoten auf Mac / Windows / Orange Pi verifiziert, Scope-Routing und die headless Kernel-Form (0aa9f73, 7f1f8bd).
+- **Audit und Migrationen** — `prev_hash`-Audit-Ketten, PRAGMA-`user_version`-SQLite-Migrationen, Slow-DoS-Schutz, MCP-Client-Hard-Timeout (7582754).
+- **Scheduler-Papier-Mechanismen** — DCPS-gewichtete Bewertung, abgezinst um die TMB-Heartbeat-Frische (30-Minuten-Halbwertszeit); kapazitätsgesteuertes Accept/Decline; Auto-Umleitung bei Ablehnung unter Ausschluss historischer Ablehner (f454909, 7385a89).
+- **Interaktive REPL** — Slash-Befehle über jede Panel-Fläche (`/ask`, `/tasks`, `/approve`, `/nodes`, `/web`…), i18n in fünf Sprachen, optionale Ask-Engine (6119493).
+- **Eingebettete Web-Konsole** — auf Vite + Preact + TypeScript neu gebaut und per `go:embed` ins Binary gefaltet: Queue/Detail/Ask/Projekte/Knoten-Ansichten, Live-SSE, fünf UI-Sprachen (61cc519, c9768c1).
+- **Panel-Schreibpfade + SSE** — `POST /api/ask` über das geteilte `askengine`-Paket, Projekte, Knoten, Abbruch, Logs und der `/api/events`-Änderungsstrom (b4fb9f5).
+- **`panda web`** — Loopback-Konsole mit Null-Konfiguration und URL mit kurzlebigem Auto-Login-Token (47517e3).
+- **`panda install` / `uninstall` / `doctor`** — plattformübergreifender Lebenszyklus: dauerhafte PATH-Registrierung, eigenständiger Selbstcheck, whitelist-sichere Deinstallation mit Confirm + Zip-Backup (86b9b9d).
+- **Kanban-Board** — Erstellformular, Prioritäts-Zyklus, Spalten-weises Drag-Umsortieren, Inline-Freigaben (da9c9e1).
+- **Chat-Sitzungen in Git-Worktrees** — Streaming-Antworten, live Gedankenkette, genau einmalige Zusammenfassungs-Rückfaltung (c36cad1).
+- **MCP-Integration mit Hot-Reload** — ein stdio-Server, validiert durch tatsächliches Starten vor dem Wechsel; Tools treten ohne Neustart bei (c36cad1).
+- **Terminierte Erinnerungen** — vom Agenten über das Tool `reminder.set` selbst geplant; Web Push plus SSE-Countdowns; `panda reminder` CLI (c36cad1).
+- **Agenten-Sinne** — die System-Tools `time.now` und `weather.get`: das Modell hat weder Uhr noch Fenster (c36cad1).
+- **codex-Adapter + Sichtbarkeit** — Sondierung installierter CLIs mit Konnektivitätstests; `panda detect` scannt Hardware in einen capabilities.yaml-Entwurf (c36cad1).
+- **`panda metrics [--csv]` und `panda audit verify [--task <id>]`** — Delegations-Metriken-Export und Audit-Ketten-Verifikation (7582754).
+- **`scripts/smoke-delegate`** — prozessübergreifender Delegations-Prüfer: Exit 0 heißt, eine Nur-Peer-Fähigkeits-Aufgabe erreichte done auf einem Peer.
+- **Open-Source-Dokumentation** — fünf READMEs, CONTRIBUTING mit Merge-Gates (`make gate`) und die öffentliche Roadmap (51031eb).
 
 ### Behoben
 
-- **Gegenseitiges Wahl-Verbindungsflattern** — wenn zwei Knoten sich gleichzeitig anwählten (das übliche `peers:`-auf-beiden-Seiten-Deployment), hielt jede Seite eine ausgehende und eine eingehende Verbindung zum selben Peer; die zweite Registrierung schloss die erste, deren Wiederverbindungs-Schleife eine Sekunde später neu wählte und ihrerseits die Verbindung der Gegenseite verdrängte — ein endloser ~1s-Verbindungs-/Trennungs-Zyklus, der das Fähigkeitsverzeichnis ständig offline/online wirbelte. Fix: deterministischer Tie-Break im `ensurePeer` — die vom lexikographisch kleineren Knoten-ID initiierte Verbindung gewinnt, beide Seiten berechnen denselben Gewinner, genau eine TCP-Verbindung überlebt; `MaintainPeer` blockiert jetzt, bis die Kante stirbt, statt heiß neu zu wählen (fbb4f9e, Regressionstest `TestMutualDialDedup`).
-- **Wire-Protokoll-Autorisierungslücken** — `handleResult`/`handleDecline`/`handleAccept` verifizieren, dass der Sender der aktuelle Ausführende ist (`DispatchTarget` aus `EvDelegate`-Audit-Ereignissen; leeres `AttemptID` abgewiesen); `handleContextAck` verifiziert, dass der Sender das `context_fetch`-Ziel ist; CAS-Statuswachen auf Accept/Cancel/Approve/Reject schließen TOCTOU-Rennen; `waiting_context` trägt immer einen Lease; lokale Ausführungsfehler terminalisieren, statt Zombies zu hinterlassen (a6fc1c2, P1-1/2/3/4/6/8/9/11).
-- **Befehls-Klassifikations-Bypässe** — `env -S`-Werte rekursiv klassifiziert; `php -r` gescannt; `find -exec`, `tar --checkpoint-action`, `git push/commit` und Konsorten fail-closed zu Tier 2; `make`/`ssh` treten der destruktiven Tabelle bei (38186af, P1-12/13).
-- **Prozessgruppen-Verwaltung + hartes Adapter-Timeout** — Unix-`Setpgid` mit Ganzgruppen-Kill beim Abbrechen, Windows `taskkill /T`; Adapter in ein 630s-`context.WithTimeout` gehüllt (Exit 124), keine verwaisten Enkelkinder (38186af, P1-17/18).
-- **Injektions-Kanäle des Gedächtnis-Systems** — atomare Schreibvorgänge für Hermes/Projects/skills/dream-last-deep (`util.WriteFileAtomic`); `Projects.Save`-Mutex; externe Eingabe als `[ext]` markiert und von Deep Dreaming nie befördert; Gedächtnis-Injektion in `<memory_data>` eingezäunt mit einer Daten-sind-keine-Anweisungen-Präambel; Zeilenumbruch-Sanitisierung bei Tages-Einträgen (3c7e8f4, P1-20/21/22/23, P2-16).
-- **CLI-Fallstricke** — unbekannte Subcommands beenden mit Exit 2, statt den Daemon zu starten (`panda statsu` startet keinen residenten Daemon mehr); das handgestrickte `dirOf` durch `filepath.Dir` ersetzt (3c7e8f4, P1-25/26).
-- **Abbruch-Propagation** — `task_cancel` wird jetzt flussabwärts an ausführende Knoten weitergeleitet (Dispatch-Ziel aus `EvDelegate` wiederhergestellt), hoppenweise entlang der Delegationskette kaskadierend; CLI- und Wire-Pfade teilen sich `Core.CancelTree`/`finishCancel` (66b265d, P2-3/P2-7).
-- **Transaktionale Status-Schreibvorgänge** — TaskStore-Status-UPDATEs und Audit-Ereignis-INSERTs committen in einer Transaktion (`applyCAS`, `applyState`, Accept/Decline/Approve/Reject/Cancel/CreateWithID); auch ctxstore-Upsert + Kapazitäts-Verdrängung sind transaktional, mit Regressionstest für gleichzeitiges Put (bcbf156, P2-1/14).
-- **Sprach-Wach-Defaults** — das Standard-Schlüsselwort ist jetzt ein echtes, pro Backend eingebautes (`hey_jarvis` für openwakeword, `porcupine` für pvporcupine); zuvor warf das Standard-`hey_panda` beim Boot eine Ausnahme (2e72c8c, P2-21).
-- **Slow-DoS-Schutz** — Hello-Timeout plus globale/pro-IP-Verbindungslimits (`max_connections`, `max_connections_per_ip`) (6f2c8d5, A2).
-- **MCP-Client-Hard-Timeout** mit Prozess-Kill-Fallback (6f2c8d5, A4).
-- **Umfassender Check-Sweep (D1–D32 + P1–P3)** — Delegations-Waisen terminalisiert, weitergeleitete Kopien verleast, CAS-Wachen auf ForceFail/CompleteFromRemote/FailFromRemote, `PreferredNode` an explizites `spec.node` gebunden, Hello-HMAC an ein 5-Minuten-Zeitfenster gebunden, NetworkGuard-Allowlist auf konfigurierte Endpunkte genagelt, Redact deckt JSON-anführungszeichen-Escaped-Schlüssel ab, TierFromCommand normalisiert Pfade/`.exe`, begrenzte Subprozess-Ausgabe-Erfassung (8MiB) und mehr (75b98c8).
+- **Gegenseitiges Wahl-Verbindungsflattern** — zwei sich gleichzeitig anwählende Knoten erzeugten einen endlosen ~1s-Verbindungs-/Trennungs-Zyklus; der deterministische Tie-Break in `ensurePeer` (der lexikographisch kleinere Knoten-ID gewinnt) lässt genau eine TCP-Verbindung überleben (879b42d).
+- **Wire-Protokoll-Autorisierungslücken** — result/decline/accept/context-ack verifizieren den Sender als aktuellen Ausführenden; CAS-Wachen schließen TOCTOU-Rennen; `waiting_context` trägt immer einen Lease; lokale Fehler terminalisieren ohne Zombies (9622538).
+- **Befehls-Klassifikations-Bypässe** — `env -S`-Werte rekursiv klassifiziert, `php -r` gescannt, `find -exec` / `tar --checkpoint-action` / `git push/commit` fail-closed zu Tier 2 (f5db449).
+- **Prozessgruppen-Verwaltung** — Ganzbaum-Kill beim Abbrechen (Unix `Setpgid`, Windows `taskkill /T`) und ein 630s-Adapter-Hard-Timeout (f5db449).
+- **Gedächtnis-Injektionskanäle** — atomare Schreibvorgänge für Hermes/Projects/skills, externe Eingabe als `[ext]` markiert, Gedächtnis in `<memory_data>` mit Daten-sind-keine-Anweisungen-Präambel eingezäunt (a742585).
+- **Abbruch-Propagation** — `task_cancel` kaskadiert hoppenweise zu ausführenden Knoten entlang der Delegationskette (574632a).
+- **Transaktionale Schreibvorgänge** — Task-Status-UPDATEs und ihre Audit-INSERTs committen in einer Transaktion (c5d34d4).
+- **Umfassender Sweep (D1–D32)** — Delegations-Waisen terminalisiert, weitergeleitete Kopien verleast, Hello-HMAC an ein 5-Minuten-Fenster gebunden, NetworkGuard auf konfigurierte Endpunkte genagelt, begrenzte Ausgabe-Erfassung (1694b7d).
+- **Weiße Konsole bei frischen Klonen** — ein von git wiederhergestelltes gehashtes `index.html` zeigte auf ignorierte Assets; der committete Platzhalter ist jetzt stabil und `make web` bewacht das Landen des echten Builds (ab87f90).
+- **Unbekannte Subcommands starteten einen residenten Daemon** (`panda statsu`) — jetzt Exit 2 mit Verwendung (a742585).
+- **Sprach-Wach-Defaults** — echte eingebaute Schlüsselwörter pro Backend (`hey_jarvis` / `porcupine`) (4ea73bf).
+- **Vorab-Release-Audit-Fixes** — `panda help` existiert; „PANDA“-Markenreste aus Prompts und Beispielen entfernt; `config.example.yaml` dokumentiert `mcp:` und `model.api_type`; toter Roadmap-Link behoben (2f001c0).
 
-### Geplante Nacharbeiten (aufgeschoben)
+### Verbessert
 
-Bewusst auf die Zeit nach v0.0.1 geparkt — hier festgehalten, damit sie sichtbar bleiben:
+- **Harte Gedächtnis-Mauer** — persönliches Gedächtnis wird nie in Workspace-(worktree-angepinnte)-Konversationen injiziert; Projekt-Gedächtnis erreicht die Ausführung nur über den ContextPack des ausführenden Knotens (da9c9e1).
+- **Agenten-Adapter treten dem Tier-Modell bei** — nicht deklarierte sind standardmäßig Tier 2 und werden vor dem Spawn des Subprozesses abgewiesen (a4d2d9e).
+- **OpenAI-Wire-Format neben Anthropic** — das Entry-Modell spricht beide Endpunkt-Typen, mit Streaming auf beiden (c36cad1).
+- **Geheimnis-Datei-Härtung** — Konfigs mit `api_key` / `shared_secret` / `panel_token` werden automatisch auf 0600 chmod-iert mit Umgebungsvariablen-Hinweis (6275fd4).
+- **Das Panel standardmäßig auf Loopback** (`127.0.0.1:7840`); Nicht-Loopback-Binds warnen vor Klartext-HTTP (a742585).
+- **Peer-Wiederverbindung ersetzt obsolete Verbindungen** — eine neue Verbindung derselben Identität wechselt in die Registry; das Entfernen matcht per Verbindungsidentität (7911bbe).
+- **Die Interpreter-`-c`-Klassifikation ist whitelist-basiert** — nur nachweislich rein ausgebender Code bleibt Tier 1 (f5db449).
+- **Deployment-Basislinie dokumentiert** — Klartext-`ws://` nur über Loopback/Tailscale/vertrauenswürdiges LAN; TLS + `wss://` im offenen Internet (7582754).
 
-- **Tastaturkürzel** — globale Hotkeys für die Konsole (neuer Chat, Schnellaufgabe, Ansichtswechsel).
-- **Browser-Integration** — eine Begleit-Browser-Oberfläche für den Assistenten.
-- **Git-Oberfläche** — Git-Ansichten erster Klasse (Branch-Status, Historie, Remotes) in der Konsole.
-- **Worktree-Verwaltung** — Chat-Worktrees von der Konsole aus auflisten/aufräumen/inspizieren statt nur beim Löschen des Chats.
-- **Personalisierung** — vom Nutzer einstellbare Persönlichkeit und Darstellungspräferenzen des Assistenten.
-- **Web-Suche-Caching** — Cache-Schicht für Agenten-Websuchen, um wiederholte Abrufe und Latenz zu senken.
-- **Denk-Aufwand-Stufen** — niedrige/mittlere/hohe Denkstärke als Aufgaben-Einstellung offenlegen.
+### Breaking Changes
+
+- **Projekt in OpenPanda umbenannt** — Modulpfad `github.com/Xustalis/OpenPanda`, Umgebungsvariablen mit Präfix `OPENPANDA_`, Units `openpanda.service` / `com.openpanda.node.plist`, Standard-DB `openpanda.db`; das CLI-Binary behält den Kurznamen `panda` (ac71bb1, 6f2083e).
+
+## Aufgeschobene Nacharbeiten
+
+Bewusst geparkt, damit sie sichtbar bleiben:
+
+- Tastaturkürzel für die Konsole (neuer Chat, Schnellaufgabe, Ansichtswechsel).
+- Begleit-Browser-Oberfläche für den Assistenten.
+- Git-Ansichten erster Klasse in der Konsole (Branch-Status, Historie, Remotes).
+- Worktree-Verwaltung von der Konsole (auflisten/aufräumen/inspizieren).
+- Vom Nutzer einstellbare Persönlichkeit und Darstellung des Assistenten.
+- Web-Suche-Caching gegen wiederholte Abrufe und Latenz.
+- Denk-Aufwand-Stufen pro Aufgabe (niedrig/mittel/hoch).
