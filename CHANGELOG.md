@@ -16,6 +16,17 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Added
+
+- **Multi-agent adapter registry** — `internal/agents` is the single source of truth for the agent CLIs PANDA delegates to (adapter script, probe binary, install command, docs URL). `panda detect`, `panda agents`, the web settings API, and the commander's availability probe all read from it, so adding an agent is a one-entry change.
+- **Four new agent adapters** — Grok Build, DeepSeek Harness (`dsh`), OpenClaw, and Hermes join Codex, Claude Code, and OpenCode: each a small headless Python bridge that runs the CLI and returns `{ok, result, exit_code}`.
+- **`panda agents`** — `list` (default) probes every agent on PATH with a best-effort version; `test <name>` runs a connectivity check; `install|update <name>` prints the install command + docs link. When nothing is installed, the output lists every missing agent's install command and download URL.
+- **Web settings agent roster** — the settings page's agent list now shows, for each missing agent, its install command and a download link (`/api/agents` returns `install_hint` + `install_url`).
+
+### Fixed
+
+- **Multi-line `--version` banner** (e.g. Hermes) no longer pollutes the one-line agent table — version output is truncated to its first line in both the CLI and the web settings API.
+
 ## [0.0.2] - 2026-08-22
 
 The CLI-first release: the kernel redesign lands (stages A–C) — every web capability gains a CLI peer, the REPL becomes the product's front door, and the CLI gains conversation memory, live task reporting, and per-sink Markdown rendering.

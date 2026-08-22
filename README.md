@@ -39,7 +39,8 @@
 OpenPanda is **not another agent CLI** — it is the layer *above* them: the household
 manager for every device and every tool you own.
 
-Claude Code, Codex, OpenCode, OpenClaw … each is a powerful agent on *one* machine.
+Claude Code, Codex, OpenCode, Grok Build, DeepSeek Harness, OpenClaw, Hermes … each
+is a powerful agent on *one* machine.
 OpenPanda doesn't compete with them — it **hires** them. Whatever device you speak to
 becomes the commander; it answers directly when it can, and when it can't, it routes
 the task over your network to whichever node can actually do the work — handing it to
@@ -290,6 +291,7 @@ Manage skills:
 | `panda skill` | Skill store management |
 | `panda reminder list \| add \| rm` | Scheduled reminders: list / add (`--after 10m` or `--at "2006-01-02 15:04"`) / remove |
 | `panda detect [-o PATH]` | Scan this machine's hardware (CPU/RAM/GPU/agent CLIs) into a capabilities.yaml draft |
+| `panda agents [list]` | Probe the agent CLIs on PATH (Codex, Claude Code, OpenCode, Grok Build, DeepSeek Harness, OpenClaw, Hermes); `test <name>` checks one, `install|update <name>` prints its install command + download link |
 | `panda metrics [--csv]` | Export delegation metrics |
 | `panda audit [--task <id>]` | Verify the `prev_hash` chain of the audit log or one task's events |
 | `panda version` / `panda help` | Print version / command overview |
