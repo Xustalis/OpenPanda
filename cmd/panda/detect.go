@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"gopkg.in/yaml.v3"
@@ -89,26 +90,41 @@ func detectCard() ledger.Card {
 		},
 	}
 
-	// Agents: probe the known agent CLIs and prewire their adapter entries.
-	// Keep in sync with the panel's probe list (webui/panel/agents.go).
-	card.Agents = map[string]ledger.Agent{}
-	for name, bin := range map[string]string{"claude_code": "claude", "opencode": "opencode", "codex": "codex"} {
-		if path, err := exec.LookPath(bin); err == nil {
-			card.Agents[name] = ledger.Agent{
-				Adapter:      name,
-				InstallCheck: path,
-				Capabilities: []string{"coding", "shell", "file_edit"},
-				BestAt:       []string{"multi_file_edits", "code_search", "running_tests"},
-				NotFor:       []string{"hardware_io", "realtime_control"},
-				CostTier:     "high",
-				Tier:         2,
-			}
-		}
-	}
+	// Agents: probe every known agent CLI from the registry (internal/agents)
+	// and prewire the ones present. The registry is the single source of truth
+	// shared with `panda agents`, the web settings API, and the commander's
+	// availability probe, so the draft stays in lock-step with them.
+	card.Agents = cardAgents()
 
 	_ = displays
 	_ = audio
 	return card
+}
+
+// cardAgents scans the agent registry and returns a card.Agents map with one
+// entry per installed CLI. Adapter names come from the registry (not the key),
+// so a generated draft resolves to the real adapters/*.py script.
+func cardAgents() map[string]ledger.Agent {
+	out := map[string]ledger.Agent{}
+	for _, k := range agents.Registry() {
+		bin := k.PrimaryBinary()
+		if bin == "" {
+			continue
+		}
+		if _, err := exec.LookPath(bin); err != nil {
+			continue
+		}
+		out[k.Name] = ledger.Agent{
+			Adapter:      k.Adapter,
+			InstallCheck: "which " + bin,
+			Capabilities: []string{"coding", "shell", "file_edit"},
+			BestAt:       []string{"multi_file_edits", "code_search", "running_tests"},
+			NotFor:       []string{"hardware_io", "realtime_control"},
+			CostTier:     "high",
+			Tier:         2,
+		}
+	}
+	return out
 }
 
 func hostname() string {

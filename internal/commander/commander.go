@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -402,24 +403,20 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	return runAdapterProcess(ctx, adapter, prompt, cwd, env)
 }
 
-// adapterBinaries maps adapter scripts to the CLI binary they drive, used by
-// the availability probe when the card declares no install_check.
-var adapterBinaries = map[string]string{
-	"claude_code.py": "claude",
-	"opencode.py":    "opencode",
-	"codex.py":       "codex",
-}
-
 // agentBinary derives the CLI binary for an agent: the card's install_check
-// ("which claude") wins, then the known adapter map. "" means the probe
-// cannot decide and the agent is treated as available (the adapter itself
-// will fail loudly if its CLI is really missing).
+// ("which claude") wins, then the canonical probe binary from the agent
+// registry (internal/agents) for the adapter. "" means the probe cannot
+// decide and the agent is treated as available (the adapter itself will fail
+// loudly if its CLI is really missing).
 func agentBinary(name string, ag ledger.Agent) string {
 	if fields := strings.Fields(ag.InstallCheck); len(fields) == 2 &&
 		(fields[0] == "which" || fields[0] == "command") {
 		return fields[1]
 	}
-	return adapterBinaries[ag.Adapter]
+	if k, ok := agents.ByAdapter(ag.Adapter); ok {
+		return k.PrimaryBinary()
+	}
+	return ""
 }
 
 // defaultAgentProbe reports whether an agent's CLI resolves on PATH. It is
