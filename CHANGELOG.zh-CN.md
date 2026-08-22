@@ -22,7 +22,7 @@ CLI 优先的版本：内核重设计（stage A–C）落地——每项 Web 能
 
 ### 新增功能
 
-- **CLI 命令族**——每项 Web 能力都有 CLI 对应物：`panda session | task | memory | config | agents | project`，全部与面板共享服务层（a4cba5f）。
+- **CLI 命令族**——每项 Web 能力都有 CLI 对应物：`panda session | task | memory | config | agents | project`，全部与面板共享服务层；`panda ask` 新增 `--output-format json|stream-json` 供无头调用（a4cba5f）。
 - **资源感知本地任务队列**——`core.Submit` 异步化：拖拽序 → 优先级 → FIFO 排序，资源锁注册表加 `MaxConcurrent` 把关，互不冲突的任务可越过阻塞的队列先行；任务新增 `priority`/`seq`/`session_id`/`resource_keys` 字段（SQLite v9）（0e8d850）。
 - **REPL 对话记忆**——24k 字符预算、成对淘汰（用户发言永不脱离其回答被重放），持久化到 `~/.local/state/openpanda/conversation.json`；支持 `/new`、`/history`、`!!` 与 `panda ask --continue`（f0a1b9f）。
 - **带外任务汇报**——REPL 观察器在任何任务到达终态时（看板提交、Web 控制台、跨节点委派）打印 ✓/✗ 一行，不打断输入行；行内 ask 绝不重复通知（f0a1b9f）。
@@ -74,11 +74,12 @@ CLI 优先的版本：内核重设计（stage A–C）落地——每项 Web 能
 - **内核地基**——带租约与崩溃恢复的任务状态机、带认证的 WebSocket 节点总线、能力目录、本地执行管线与 OpenCode 适配器（Sprint 0–1：1be8f85..307e13a）。
 - **P2P 委派**——跨节点任务路由、上下文分层传输、分级权限模型（Tier 1 自动 / Tier 2 审批）、GPIO 访问、DCPS 调度评分（3040e18、6324a87）。
 - **防御链**——scope 漂移检测、重试循环检测、带破坏性命令表的命令分类（590cacc、c647c96）。
-- **Hermes 记忆与技能**——每日笔记、带沉降的 dreaming、项目记忆、可加载技能（9a41b3e）。
+- **Hermes 记忆与技能**——每日笔记、带沉降的 dreaming、项目记忆、可加载技能；`panda skill` 从 CLI 管理技能审批，控制台配有 skills 视图（9a41b3e、c36cad1）。
 - **语音边车**——唤醒词、STT、TTS、VAD（硬件门控），支持 `OPENPANDA_WAKE_KEYWORD` / `OPENPANDA_WAKE_MODEL` 覆盖（84faf08）。
 - **真机部署**——Mac / Windows / 香橙派三节点部署验证、scope 路由、无头内核形态（0aa9f73、7f1f8bd）。
 - **审计与迁移**——任务事件与全局日志的 `prev_hash` 审计链、PRAGMA `user_version` SQLite 迁移、慢速 DoS 防护（hello 超时 + 连接数限制）、MCP 客户端硬超时（7582754）。
 - **调度器论文机制**——DCPS 加权评分（`0.4·resource_efficiency + 0.3·user_priority + 0.2·scheduler_tier + 0.1·wait_time`）按 TMB 心跳新鲜度折扣（30 分钟半衰期）；容量驱动 accept/decline；拒绝后自动改派并排除历史拒绝者（f454909、7385a89）。
+- **单发 CLI 面板命令**——`panda status`、`panda queue` 与 `panda task | cancel | approve | reject | logs` 无需进入 REPL 即可检视节点并管理任务（307e13a）。
 - **交互式 REPL**——斜杠命令覆盖全部面板表面（`/ask`、`/tasks`、`/approve`、`/nodes`、`/web`……）、五语言 i18n、ask 引擎可选（无模型端点也能用面板命令）（6119493）。
 - **内嵌 Web 控制台**——Vite + Preact + TypeScript 重建并经 `go:embed` 折入二进制：队列/详情/ask/项目/节点视图、实时 SSE、五种界面语言（61cc519、c9768c1）。
 - **面板写路径 + SSE**——经共享 `askengine` 的 `POST /api/ask`、项目、节点、取消、日志与 `/api/events` 变更流（b4fb9f5）。

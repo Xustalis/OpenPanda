@@ -22,7 +22,7 @@ The CLI-first release: the kernel redesign lands (stages A–C) — every web ca
 
 ### Added
 
-- **CLI command families** — every web capability has a CLI peer: `panda session | task | memory | config | agents | project`, all sharing the panel's service layer (a4cba5f).
+- **CLI command families** — every web capability has a CLI peer: `panda session | task | memory | config | agents | project`, all sharing the panel's service layer; `panda ask` gains `--output-format json|stream-json` for headless use (a4cba5f).
 - **Resource-aware local task queue** — `core.Submit` becomes async: drag-seq → priority → FIFO ordering, gated by a resource-lock registry plus `MaxConcurrent`, so disjoint-resource tasks run ahead of a blocked queue; tasks gain `priority`/`seq`/`session_id`/`resource_keys` (SQLite v9) (0e8d850).
 - **REPL conversation memory** — a 24k-character budget with pair-aligned eviction (a user turn never replays without its answer), persisted to `~/.local/state/openpanda/conversation.json`; `/new`, `/history`, `!!`, and `panda ask --continue` (f0a1b9f).
 - **Out-of-band task reporting** — a REPL watcher prints a ✓/✗ line when any task reaches a terminal state (board submissions, web console, peer delegations) without disturbing the input line; inline asks are never double-notified (f0a1b9f).
@@ -74,11 +74,12 @@ Initial open-source pre-release: the full kernel feature set (daemon, CLI, P2P d
 - **Kernel foundations** — task state machine with leases and crash recovery, authenticated WebSocket node bus, capability directory, and the local execution pipeline with the OpenCode adapter (Sprint 0–1: 1be8f85..307e13a).
 - **P2P delegation** — cross-node task routing with context-tiered transfer, the tiered permission model (Tier 1 auto-run / Tier 2 approval), GPIO access, and DCPS scheduling scores (3040e18, 6324a87).
 - **Defense chain** — scope-drift detection, retry-loop detection, and command classification with a destructive-command table (590cacc, c647c96).
-- **Hermes memory and skills** — daily notes, dreaming with sedimentation, project memory, and loadable skills (9a41b3e).
+- **Hermes memory and skills** — daily notes, dreaming with sedimentation, project memory, and loadable skills; `panda skill` manages skill approvals from the CLI and the console carries a skills view (9a41b3e, c36cad1).
 - **Voice sidecar** — wake word, STT, TTS, and VAD (hardware-gated), with `OPENPANDA_WAKE_KEYWORD` / `OPENPANDA_WAKE_MODEL` overrides (84faf08).
 - **Real-device bringup** — three-node deployment verified on Mac / Windows / Orange Pi, scope routing, and the headless kernel form (0aa9f73, 7f1f8bd).
 - **Audit and migrations** — `prev_hash` audit chains for task events and the global log, PRAGMA `user_version` SQLite migrations, slow-DoS protection (hello timeout + connection limits), MCP client hard timeout (7582754).
 - **Scheduler paper mechanisms** — DCPS weighted scoring (`0.4·resource_efficiency + 0.3·user_priority + 0.2·scheduler_tier + 0.1·wait_time`) discounted by TMB heartbeat freshness (30-minute half-life); capacity-driven accept/decline; decline auto-reroute excluding historical decliners (f454909, 7385a89).
+- **One-shot CLI panel commands** — `panda status`, `panda queue`, and `panda task | cancel | approve | reject | logs` inspect the node and manage tasks without entering the REPL (307e13a).
 - **Interactive REPL** — slash commands over every panel surface (`/ask`, `/tasks`, `/approve`, `/nodes`, `/web`…), five-language i18n, optional ask engine so panel commands work without a model endpoint (6119493).
 - **Embedded web console** — rebuilt on Vite + Preact + TypeScript and folded into the binary via `go:embed`: queue/detail/ask/projects/nodes views, live SSE updates, five UI languages (61cc519, c9768c1).
 - **Panel write paths + SSE** — `POST /api/ask` via the shared `askengine` package, projects, nodes, cancel, logs, and the `/api/events` change feed (b4fb9f5).

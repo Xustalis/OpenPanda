@@ -22,7 +22,7 @@ El lanzamiento centrado en la CLI: el rediseño del kernel (etapas A–C) aterri
 
 ### Añadido
 
-- **Familias de comandos CLI** — cada capacidad web tiene su par en CLI: `panda session | task | memory | config | agents | project`, todas compartiendo la capa de servicios del panel (a4cba5f).
+- **Familias de comandos CLI** — cada capacidad web tiene su par en CLI: `panda session | task | memory | config | agents | project`, todas compartiendo la capa de servicios del panel; `panda ask` gana `--output-format json|stream-json` para uso sin terminal (a4cba5f).
 - **Cola local consciente de recursos** — `core.Submit` pasa a asíncrona: orden por secuencia de arrastre → prioridad → FIFO, controlada por un registro de bloqueos de recursos más `MaxConcurrent`; las tareas con recursos disjuntos adelantan a una cola bloqueada; las tareas ganan `priority`/`seq`/`session_id`/`resource_keys` (SQLite v9) (0e8d850).
 - **Memoria de conversación de la REPL** — presupuesto de 24k caracteres con expulsión alineada por pares (un turno del usuario nunca se reproduce sin su respuesta), persistida en `~/.local/state/openpanda/conversation.json`; `/new`, `/history`, `!!` y `panda ask --continue` (f0a1b9f).
 - **Reporte de tareas fuera de banda** — un observador de la REPL imprime una línea ✓/✗ cuando una tarea alcanza estado terminal (tablero, consola web, delegaciones entre nodos) sin perturbar la línea de entrada; las preguntas en línea nunca se notifican dos veces (f0a1b9f).
@@ -74,11 +74,12 @@ Pre-lanzamiento inicial de código abierto: el conjunto completo del kernel (dem
 - **Cimientos del kernel** — máquina de estados de tareas con leases y recuperación de caídas, bus WebSocket autenticado, directorio de capacidades y el pipeline de ejecución local con el adaptador OpenCode (Sprint 0–1: 1be8f85..307e13a).
 - **Delegación P2P** — enrutamiento de tareas entre nodos, transferencia por niveles de contexto, modelo de permisos por tiers (Tier 1 automático / Tier 2 aprobación), acceso GPIO y puntuación de planificación DCPS (3040e18, 6324a87).
 - **Cadena de defensa** — detección de desviación de scope, detección de bucles de reintento y clasificación de comandos con tabla de comandos destructivos (590cacc, c647c96).
-- **Memoria Hermes y skills** — notas diarias, dreaming con sedimentación, memoria de proyecto y skills cargables (9a41b3e).
+- **Memoria Hermes y skills** — notas diarias, dreaming con sedimentación, memoria de proyecto y skills cargables; `panda skill` gestiona las aprobaciones desde la CLI y la consola lleva una vista de skills (9a41b3e, c36cad1).
 - **Sidecar de voz** — palabra de activación, STT, TTS y VAD (con puerta de hardware), con overrides `OPENPANDA_WAKE_KEYWORD` / `OPENPANDA_WAKE_MODEL` (84faf08).
 - **Despliegue en hardware real** — tres nodos verificados en Mac / Windows / Orange Pi, enrutamiento por scope y la forma kernel sin interfaz (0aa9f73, 7f1f8bd).
 - **Auditoría y migraciones** — cadenas de auditoría `prev_hash`, migraciones SQLite por PRAGMA `user_version`, protección contra slow-DoS, timeout duro del cliente MCP (7582754).
 - **Mecanismos del paper del planificador** — puntuación ponderada DCPS descontada por la frescura del heartbeat TMB (vida media de 30 minutos); accept/decline por capacidad; reenrutado automático ante rechazo excluyendo a los rechazadores históricos (f454909, 7385a89).
+- **Comandos de panel CLI de una sola pasada** — `panda status`, `panda queue` y `panda task | cancel | approve | reject | logs` inspeccionan el nodo y gestionan tareas sin entrar en la REPL (307e13a).
 - **REPL interactiva** — comandos con barra sobre cada superficie del panel (`/ask`, `/tasks`, `/approve`, `/nodes`, `/web`…), i18n en cinco idiomas, motor ask opcional (6119493).
 - **Consola web embebida** — reconstruida en Vite + Preact + TypeScript y plegada al binario vía `go:embed`: vistas de cola/detalle/ask/proyectos/nodos, SSE en vivo, cinco idiomas de UI (61cc519, c9768c1).
 - **Rutas de escritura del panel + SSE** — `POST /api/ask` vía el paquete compartido `askengine`, proyectos, nodos, cancelación, registros y el flujo de cambios `/api/events` (b4fb9f5).

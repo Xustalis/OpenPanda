@@ -22,7 +22,7 @@ Das CLI-zuerste-Release: Das Kernel-Redesign (Stufen A–C) landet — jede Web-
 
 ### Hinzugefügt
 
-- **CLI-Befehlsfamilien** — jede Web-Fähigkeit hat ein CLI-Pendant: `panda session | task | memory | config | agents | project`, alle teilen die Dienstschicht des Panels (a4cba5f).
+- **CLI-Befehlsfamilien** — jede Web-Fähigkeit hat ein CLI-Pendant: `panda session | task | memory | config | agents | project`, alle teilen die Dienstschicht des Panels; `panda ask` erhält `--output-format json|stream-json` für Headless-Nutzung (a4cba5f).
 - **Ressourcenbewusste lokale Aufgaben-Warteschlange** — `core.Submit` wird asynchron: Reihenfolge Drag-Sequenz → Priorität → FIFO, kontrolliert über eine Ressourcen-Sperr-Registry plus `MaxConcurrent`; Aufgaben mit disjunkten Ressourcen ziehen an einer blockierten Warteschlange vorbei; Aufgaben erhalten `priority`/`seq`/`session_id`/`resource_keys` (SQLite v9) (0e8d850).
 - **REPL-Konversationsgedächtnis** — 24k-Zeichen-Budget mit paarweisem Entfernen (ein Nutzerturn wird nie ohne seine Antwort wiedergegeben), persistiert in `~/.local/state/openpanda/conversation.json`; `/new`, `/history`, `!!` und `panda ask --continue` (f0a1b9f).
 - **Out-of-Band-Aufgabenberichte** — ein REPL-Watcher druckt eine ✓/✗-Zeile, sobald eine Aufgabe einen Endzustand erreicht (Board, Web-Konsole, Peer-Delegation), ohne die Eingabezeile zu stören; Inline-Asks werden nie doppelt gemeldet (f0a1b9f).
@@ -74,11 +74,12 @@ Erstes Open-Source-Vorab-Release: der komplette Kernel-Funktionsumfang (Daemon, 
 - **Kernel-Fundament** — Task-Zustandsmaschine mit Leases und Absturzwiederherstellung, authentifizierter WebSocket-Knotenbus, Fähigkeitsverzeichnis und die lokale Ausführungspipeline mit dem OpenCode-Adapter (Sprint 0–1: 1be8f85..307e13a).
 - **P2P-Delegation** — knotenübergreifendes Task-Routing, kontextgestufte Übertragung, das gestufte Berechtigungsmodell (Tier 1 automatisch / Tier 2 Freigabe), GPIO-Zugriff und DCPS-Scheduling-Scores (3040e18, 6324a87).
 - **Verteidigungskette** — Scope-Drift-Erkennung, Retry-Loop-Erkennung und Befehlsklassifikation mit Tabelle destruktiver Befehle (590cacc, c647c96).
-- **Hermes-Gedächtnis und Skills** — Tagesnotizen, Dreaming mit Sedimentation, Projekt-Gedächtnis und ladbare Skills (9a41b3e).
+- **Hermes-Gedächtnis und Skills** — Tagesnotizen, Dreaming mit Sedimentation, Projekt-Gedächtnis und ladbare Skills; `panda skill` verwaltet Skill-Freigaben von der CLI und die Konsole trägt eine Skills-Ansicht (9a41b3e, c36cad1).
 - **Sprach-Sidecar** — Wachwort, STT, TTS und VAD (hardwaregegate), mit `OPENPANDA_WAKE_KEYWORD` / `OPENPANDA_WAKE_MODEL`-Overrides (84faf08).
 - **Echtgeräte-Deployment** — drei Knoten auf Mac / Windows / Orange Pi verifiziert, Scope-Routing und die headless Kernel-Form (0aa9f73, 7f1f8bd).
 - **Audit und Migrationen** — `prev_hash`-Audit-Ketten, PRAGMA-`user_version`-SQLite-Migrationen, Slow-DoS-Schutz, MCP-Client-Hard-Timeout (7582754).
 - **Scheduler-Papier-Mechanismen** — DCPS-gewichtete Bewertung, abgezinst um die TMB-Heartbeat-Frische (30-Minuten-Halbwertszeit); kapazitätsgesteuertes Accept/Decline; Auto-Umleitung bei Ablehnung unter Ausschluss historischer Ablehner (f454909, 7385a89).
+- **Einmalige CLI-Panel-Befehle** — `panda status`, `panda queue` und `panda task | cancel | approve | reject | logs` inspizieren den Knoten und verwalten Aufgaben ohne die REPL zu betreten (307e13a).
 - **Interaktive REPL** — Slash-Befehle über jede Panel-Fläche (`/ask`, `/tasks`, `/approve`, `/nodes`, `/web`…), i18n in fünf Sprachen, optionale Ask-Engine (6119493).
 - **Eingebettete Web-Konsole** — auf Vite + Preact + TypeScript neu gebaut und per `go:embed` ins Binary gefaltet: Queue/Detail/Ask/Projekte/Knoten-Ansichten, Live-SSE, fünf UI-Sprachen (61cc519, c9768c1).
 - **Panel-Schreibpfade + SSE** — `POST /api/ask` über das geteilte `askengine`-Paket, Projekte, Knoten, Abbruch, Logs und der `/api/events`-Änderungsstrom (b4fb9f5).

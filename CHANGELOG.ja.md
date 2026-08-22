@@ -22,7 +22,7 @@ CLI ファーストのリリース：カーネル再設計（stage A–C）が�
 
 ### 追加
 
-- **CLI コマンドファミリー**——すべての Web 機能に CLI の対応物：`panda session | task | memory | config | agents | project`、すべてパネルとサービス層を共有（a4cba5f）。
+- **CLI コマンドファミリー**——すべての Web 機能に CLI の対応物：`panda session | task | memory | config | agents | project`、すべてパネルとサービス層を共有。`panda ask` はヘッドレス用途の `--output-format json|stream-json` を獲得（a4cba5f）。
 - **リソース考慮のローカルタスクキュー**——`core.Submit` が非同期化：ドラッグ順 → 優先度 → FIFO で並べ、リソースロックレジストリと `MaxConcurrent` で門番。リソースが衝突しないタスクは詰まったキューを追い越す。タスクは `priority`/`seq`/`session_id`/`resource_keys` を獲得（SQLite v9）（0e8d850）。
 - **REPL 会話メモリ**——24k 文字の予算でペア整列の退避（ユーザー発言がその回答と切り離されて再生されることはない）、`~/.local/state/openpanda/conversation.json` に永続化。`/new`、`/history`、`!!`、`panda ask --continue` に対応（f0a1b9f）。
 - **帯域外タスク報告**——REPL のウォッチャーが任意のタスクの終状態到達時（ボード・Web コンソール・ピア委譲）に ✓/✗ を 1 行表示し、入力行は乱さない。インライン ask は二重通知しない（f0a1b9f）。
@@ -74,11 +74,12 @@ CLI ファーストのリリース：カーネル再設計（stage A–C）が�
 - **カーネル基盤**——リースとクラッシュ復旧付きタスク状態機械、認証付き WebSocket ノードバス、能力ディレクトリ、OpenCode アダプター付きローカル実行パイプライン（Sprint 0–1：1be8f85..307e13a）。
 - **P2P 委譲**——クロスノードのタスクルーティング、コンテキスト階層転送、段階的権限モデル（Tier 1 自動 / Tier 2 承認）、GPIO アクセス、DCPS スケジューリングスコア（3040e18、6324a87）。
 - **防御チェーン**——scope ドリフト検出、リトライループ検出、破壊的コマンド表付きコマンド分類（590cacc、c647c96）。
-- **Hermes メモリとスキル**——日次ノート、沈殿付き dreaming、プロジェクトメモリ、ロード可能スキル（9a41b3e）。
+- **Hermes メモリとスキル**——日次ノート、沈殿付き dreaming、プロジェクトメモリ、ロード可能スキル。`panda skill` が CLI からスキル承認を管理し、コンソールに skills ビューを搭載（9a41b3e、c36cad1）。
 - **音声サイドカー**——ウェイクワード、STT、TTS、VAD（ハードウェアゲート付き）、`OPENPANDA_WAKE_KEYWORD` / `OPENPANDA_WAKE_MODEL` 上書き（84faf08）。
 - **実機デプロイ**——Mac / Windows / Orange Pi の 3 ノード検証、scope ルーティング、ヘッドレスカーネル形態（0aa9f73、7f1f8bd）。
 - **監査とマイグレーション**——`prev_hash` 監査チェーン、PRAGMA `user_version` の SQLite マイグレーション、スロー DoS 防護、MCP クライアントのハードタイムアウト（7582754）。
 - **スケジューラ論文メカニズム**——DCPS 加重スコアを TMB ハートビート新しさで割り引き（30 分半減期）。容量駆動 accept/decline、拒否後の自動再経路（歴史の拒否者を除外）（f454909、7385a89）。
+- **単発 CLI パネルコマンド**——`panda status`、`panda queue`、そして `panda task | cancel | approve | reject | logs` は REPL に入らずにノードを検視しタスクを管理（307e13a）。
 - **対話 REPL**——全パネル面をカバーするスラッシュコマンド（`/ask`、`/tasks`、`/approve`、`/nodes`、`/web`…）、5 言語 i18n、ask エンジンは任意（6119493）。
 - **組み込み Web コンソール**——Vite + Preact + TypeScript で再構築し `go:embed` でバイナリに折り込み。キュー/詳細/ask/プロジェクト/ノードビュー、ライブ SSE、5 UI 言語（61cc519、c9768c1）。
 - **パネル書き込み経路 + SSE**——共有 `askengine` による `POST /api/ask`、プロジェクト、ノード、キャンセル、ログ、`/api/events` 変更フィード（b4fb9f5）。
