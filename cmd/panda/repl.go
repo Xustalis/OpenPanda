@@ -937,12 +937,9 @@ func (r *repl) cmdNodes(arg string) {
 }
 
 // cmdAgents lists the agent CLIs this node can delegate to (same probe as
-// `panda agents`).
+// `panda agents`, driven by the agent registry).
 func (r *repl) cmdAgents(arg string) {
-	statuses := make([]agentStatus, 0, len(agentProbes))
-	for _, p := range agentProbes {
-		statuses = append(statuses, probeAgentCLI(p))
-	}
+	statuses := probeAgentStatuses()
 	fmt.Println(i18n.T(r.loc, "repl.agents.head"))
 	for _, a := range statuses {
 		mark := " "
