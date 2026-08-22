@@ -5,10 +5,10 @@ Protocol (shared with codex.py / claude_code.py / opencode.py):
   stdin:  a JSON object with keys {prompt, timeout_s, cwd} (cwd optional)
   stdout: a JSON object with keys {ok, result, exit_code, tokens, cost}
 
-Runs `grok --output-format plain --always-approve <prompt>` headless. Plain
-output is human-readable text, so the result is used verbatim; a non-zero
-exit (or empty output on failure) becomes the diagnosis. This adapter never
-prints secrets.
+Runs `grok --single <prompt> --output-format plain --always-approve` headless.
+Plain output is human-readable text, so the result is used verbatim; a
+non-zero exit (or empty output on failure) becomes the diagnosis. This
+adapter never prints secrets.
 """
 import json
 import os
@@ -33,9 +33,11 @@ def main():
         timeout = DEFAULT_TIMEOUT
     cwd = req.get("cwd") or None
 
-    # Headless plain-text mode; --always-approve lets it run to completion
-    # without an interactive permission prompt.
-    cmd = ["grok", "--output-format", "plain", "--always-approve", prompt]
+    # Headless single-turn mode. A positional [PROMPT] starts the interactive
+    # TUI, so the prompt must ride --single/-p ("print the response to stdout
+    # and exit"); --always-approve runs tool calls without an interactive
+    # permission prompt, and --output-format plain keeps the result as text.
+    cmd = ["grok", "--single", prompt, "--output-format", "plain", "--always-approve"]
 
     try:
         result = subprocess.run(
