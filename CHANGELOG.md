@@ -22,6 +22,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **Four new agent adapters** — Grok Build, DeepSeek Harness (`dsh`), OpenClaw, and Hermes join Codex, Claude Code, and OpenCode: each a small headless Python bridge that runs the CLI and returns `{ok, result, exit_code}`.
 - **`panda agents`** — `list` (default) probes every agent on PATH with a best-effort version; `test <name>` runs a connectivity check; `install|update <name>` prints the install command + docs link. When nothing is installed, the output lists every missing agent's install command and download URL.
 - **Web settings agent roster** — the settings page's agent list now shows, for each missing agent, its install command and a download link (`/api/agents` returns `install_hint` + `install_url`).
+- **Superior task review (`上级完成度判定`)** — after an agent runs, the entry model judges the result against the task's success criteria (`entry.Supervise`, outputs `done`/`continue`). A `continue` verdict re-delegates the follow-up instruction (what remains + next step) to the agent chain, looping until the reviewer accepts the work or a capped round budget (default 5) runs out.
+- **Terminal routing by risk** — a completed reversible task lands in **done** (已完成); an accepted irreversible (Tier-2) task — pushes, deletes, irreversible state changes — parks in **review** (待审批) with its result for human sign-off; a task the reviewer keeps rejecting parks in **review** with a `needs_followup` marker. The review events replay in the web task detail.
 
 ### Fixed
 

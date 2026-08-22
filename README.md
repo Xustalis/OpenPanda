@@ -78,6 +78,12 @@ WebSocket links you control.
 - **Three-tier capability execution** — `native` (direct shell execution),
   `agent` (adapter-backed agent, e.g. Claude Code via an Anthropic-compatible
   endpoint), and `manual` (queued for you to approve/run by hand).
+- **Superior task review** — after an agent runs, the entry model judges the
+  result against the task's success criteria; incomplete work is re-delegated
+  to the agent chain (with what remains and the next step) until it is accepted
+  or the round budget runs out. Completed reversible tasks finish into
+  **done**, while irreversible side effects (pushes, deletes, …) and
+  never-satisfied tasks land in **review** for your explicit approval.
 - **P2P delegation protocol** — idempotent `task_id` keys and per-attempt
   `attempt_id`s over WebSocket + JSON, so crashed retries never double-execute.
 - **Self-evolving skills** — procedural memory in `SKILL.md` files: a skill
