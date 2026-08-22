@@ -231,6 +231,10 @@ func runDaemon(args []string) {
 
 	coreNode := core.NewCore(db, core.NodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 	coreNode.SetRouterPolicy(cfg.Injection, cfg.Routing)
+	// Supervision (上级完成度判定): judge agent results against the task's
+	// success criteria and re-delegate work that isn't complete. A model-less
+	// node skips this — agent tasks finish in one shot as before.
+	coreNode.AttachSupervisor(cfg.Model)
 	// The work dir travels to adapter subprocesses as their cwd (via the
 	// sandbox and the adapter request's CWD field), so it must be absolute —
 	// a relative path would resolve against the TASK dir inside the adapter

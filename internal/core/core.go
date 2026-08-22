@@ -18,6 +18,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ctxstore"
 	"github.com/Xustalis/OpenPanda/internal/defense"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
@@ -60,6 +61,15 @@ type Core struct {
 	// breaker trips the circuit for a failing agent so the node stops routing
 	// work to it (design §14 Layer 1, P2-27).
 	breaker *defense.CircuitBreaker
+	// supervisor judges whether an agent's result actually satisfies the task
+	// (上级完成度判定). It drives the execute → judge → re-delegate loop for
+	// agent tasks: nil disables supervision, so an agent task finishes in one
+	// shot exactly as before.
+	supervisor *entry.Client
+	// superviseRounds caps how many execute → judge → re-delegate rounds one
+	// agent task is allowed before it is parked in review for human help. A
+	// value <= 0 falls back to defaultSuperviseRounds.
+	superviseRounds int
 	// loop pauses a task that keeps failing instead of retrying it forever
 	// (design §14.2 signal C, P2-18).
 	loop *defense.LoopDetector
@@ -115,6 +125,11 @@ type Core struct {
 	lastProgress time.Time
 }
 
+// defaultSuperviseRounds is the maximum number of execute → judge →
+// re-delegate rounds an agent task is allowed before it is parked in review
+// rather than looping indefinitely on a task the supervisor keeps rejecting.
+const defaultSuperviseRounds = 5
+
 // NewCore constructs a Core. The card may be zero for a minimal node. The
 // model config is forwarded to the commander for agent adapter subprocesses.
 func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog.Logger, model config.ModelConfig) *Core {
@@ -137,8 +152,9 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		auditLog: security.NewAudit(db),
 		workDir:  ".",
 
-		sleep:        time.Sleep,
-		retryBackoff: time.Second,
+		superviseRounds: defaultSuperviseRounds,
+		sleep:           time.Sleep,
+		retryBackoff:    time.Second,
 	}
 	// The commander needs at least one native ability to route; a zero card
 	// yields a router that declines everything. The router starts with default
@@ -157,6 +173,35 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 func (c *Core) SetRouterPolicy(injection config.InjectionConfig, routing config.RoutingConfig) {
 	if c.router != nil {
 		c.router.SetPolicy(injection, routing)
+	}
+}
+
+// SetSupervisor attaches the entry model client that judges agent task
+// completeness (上级完成度判定). A nil client disables supervision: agent
+// tasks then finish in one shot exactly as before, so minimal nodes and tests
+// are unaffected.
+func (c *Core) SetSupervisor(client *entry.Client) { c.supervisor = client }
+
+// SetSuperviseRounds bounds the execute → judge → re-delegate loop for agent
+// tasks. A value <= 0 resets to defaultSuperviseRounds.
+func (c *Core) SetSuperviseRounds(n int) {
+	if n < 1 {
+		n = defaultSuperviseRounds
+	}
+	c.superviseRounds = n
+}
+
+// AttachSupervisor builds a supervisor client from the model config and
+// attaches it — but only when the model is actually configured (an API key is
+// present), so a model-less node keeps single-shot agent execution instead of
+// burning a wasted judge call per task. A build failure is non-fatal: agent
+// tasks then finish in one shot exactly as before.
+func (c *Core) AttachSupervisor(model config.ModelConfig) {
+	if strings.TrimSpace(model.APIKey) == "" {
+		return
+	}
+	if client, err := entry.NewClient(model); err == nil {
+		c.supervisor = client
 	}
 }
 

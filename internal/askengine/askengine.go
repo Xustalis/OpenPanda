@@ -247,6 +247,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		// same node (the daemon owns the stable identity and listener).
 		sched := core.NewCore(db, core.EphemeralNodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 		sched.SetRouterPolicy(cfg.Injection, cfg.Routing)
+		sched.AttachSupervisor(cfg.Model)
 		sched.SetMemoryStores(injector, memory.NewDaily(hermes.WarmDir()), skills.NewStore(cfg.Storage.SkillsPath))
 		sched.SetWorkDir(cfg.Storage.WorkPath)
 		sched.SetHostStatePaths(hostStatePaths(cfg))

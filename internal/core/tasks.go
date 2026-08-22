@@ -535,6 +535,22 @@ func (s *TaskStore) Pause(ctx context.Context, taskID, owner, reason string) err
 		map[string]any{"reason": reason})
 }
 
+// PauseWithResult transitions a running task to review while preserving the
+// execution result, so the human reviewer sees what was done as well as why it
+// needs sign-off (supervision loop terminal: an irreversible task, or one that
+// exhausted its round budget without satisfying the success criteria).
+func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, result any) error {
+	cur, err := s.Get(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if cur.State != StateRunning {
+		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateRunning)
+	}
+	return s.applyCAS(ctx, taskID, StateRunning, StateReview, owner, cur.AttemptID, EvReview,
+		map[string]any{"reason": "awaiting approval"}, result)
+}
+
 // Approve accepts a reviewed task, moving it review -> done. Approval is a
 // human override (design §14.2 Layer 4), so — like Cancel — it requires only
 // that the task be in review, not that the caller hold the lease.

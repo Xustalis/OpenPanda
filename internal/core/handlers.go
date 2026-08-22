@@ -14,6 +14,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/defense"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
@@ -409,12 +410,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// uses it to reject stale results after a transfer/retry.
 	attemptID := task.AttemptID
 
-	prompt, usedSkills := buildAgentPrompt(c, intent, task.Project, task.Title)
-
-	// Model-injection policy check (A1): decided before execution so the
-	// announcement, audit entry, and task event all describe what the adapter
-	// subprocess is about to receive. The actual announcement is emitted after
-	// execution, gated on the adapter really having run.
+	// Model-injection policy check (A1): decided once before the supervision
+	// loop — the adapter (and therefore the plan) is identical across rounds,
+	// so the decision does not vary between an initial run and a re-delegation.
 	var injection commander.InjectionDecision
 	if plan.Kind == "agent" {
 		injection = c.router.InjectionDecision(plan.Adapter)
@@ -431,8 +429,8 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 
 	// Scope drift (design §14.2 signal A): for an agent task that declares a
 	// scope, snapshot the working directory before execution so changes outside
-	// the scope can be intercepted rather than silently committed. The agent
-	// runs inside c.workDir, which the sandbox also confines it to.
+	// the scope can be intercepted rather than silently committed. The snapshot
+	// is taken once and reused across supervision rounds.
 	scope := defense.NewScope(taskScope(task.SpecJSON))
 	var before defense.Snapshot
 	if plan.Kind == "agent" && !scope.Empty() {
@@ -442,11 +440,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 	}
 
-	// Selective memory loading (A3): for an agent task outside a project, hand
-	// the adapter the absolute paths of the personal memory files so the
-	// orchestration layer (and the agent itself, via the manifest in the
-	// prompt) can read only what the task needs. Project executions get no
-	// memory at all (D3 isolation wall).
+	// Selective memory loading (A3) and live progress (A5) are per-task, not
+	// per-round: the memory-file manifest and the throttled progress sink are
+	// built once and reused across supervision rounds.
 	execCtx := ctx
 	if plan.Kind == "agent" && task.Project == "" && c.memory != nil {
 		if files, err := c.memory.Manifest(); err == nil {
@@ -457,12 +453,6 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			execCtx = commander.WithMemoryFiles(ctx, paths)
 		}
 	}
-
-	// Live agent progress (A5): adapters stream short NDJSON progress notes
-	// on stderr; the sink records them as EvProgress task events so
-	// `panda task <id>` (and the panel timeline) shows what the agent is
-	// doing while it runs instead of after it finishes. Throttled: at most
-	// one event per progressInterval; identical consecutive notes skip.
 	if plan.Kind == "agent" {
 		var lastNote atomic.Value // string
 		lastNote.Store("")
@@ -487,112 +477,200 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		})
 	}
 
-	res := c.router.Execute(execCtx, plan, prompt, workDir, task.Authorized)
-	if plan.Kind == "agent" {
-		// Fallback chain visibility (A2): res.Agent names the agent that
-		// actually executed; a mismatch means the scored primary's CLI was
-		// unavailable and a runner-up took over. The breaker tracks the agent
-		// that really ran.
-		if res.Agent != "" && res.Agent != plan.Agent {
-			breakerKey = "agent:" + res.Agent
-			c.audit(ctx, taskID, "agent:fallback", plan.Agent, "fallback", "primary unavailable, fell back to "+res.Agent)
-			if err := c.store.RecordEvent(ctx, taskID, EvAgentFallback, map[string]any{"from": plan.Agent, "to": res.Agent}); err != nil {
-				c.logger.Warn("record agent fallback event", "task", taskID, "err", err)
-			}
-		}
-		// Explicit injection reminder (A1): when panda overrode the agent's
-		// model endpoint, say so at the top of the output, in the audit log,
-		// and in the task event stream the Web task detail replays. Gated on
-		// the adapter actually running (a tier refusal spawns nothing).
-		if injection.Inject && res.Agent != "" {
-			notice := commander.InjectionNotice(injection, res.Agent)
-			if res.Stdout != "" {
-				res.Stdout = notice + "\n" + res.Stdout
-			} else {
-				res.Stdout = notice
-			}
-			c.audit(ctx, taskID, "model:injected", res.Agent, "injected",
-				"model="+injection.Model+" endpoint="+injection.BaseURL+" reason="+injection.Reason)
-			if err := c.store.RecordEvent(ctx, taskID, EvModelInjection, map[string]any{
-				"agent": res.Agent, "model": injection.Model, "base_url": injection.BaseURL, "reason": injection.Reason,
-			}); err != nil {
-				c.logger.Warn("record model injection event", "task", taskID, "err", err)
-			}
-		}
-		if res.OK {
-			c.breaker.RecordSuccess(breakerKey)
-		} else if c.breaker.RecordFailure(breakerKey) {
-			c.audit(ctx, taskID, "circuit:open", plan.Agent, "failed", "agent failure threshold reached")
-		}
-		// Skills only steer agent execution; record their use so the lifecycle
-		// (dormant/expired) reflects real usage.
-		recordSkillUse(c, usedSkills, res.OK)
-	}
-	// A Tier-2 (irreversible) native command is high-risk: record who ran it
-	// and whether it was authorized, for later review (P3-32).
-	if plan.Kind == "native" && plan.Tier >= defense.TierIrreversible {
-		result := "authorized"
-		if !task.Authorized {
-			result = "denied"
-		}
-		c.audit(ctx, taskID, "native:tier2", plan.Command, result, "")
+	// Supervision loop. An agent task under a supervisor executes once and is
+	// then judged; a "continue" verdict re-delegates the follow-up instruction
+	// to the same plan (whose fallback chain may pick a different agent if the
+	// primary's CLI is unavailable) until the judging model accepts the work or
+	// the round budget runs out. Every non-agent plan — and every agent plan
+	// without a supervisor — converges in a single round.
+	maxRounds := 1
+	if plan.Kind == "agent" && c.supervisor != nil {
+		maxRounds = c.superviseRounds
 	}
 
-	// Scope-drift intercept: a successful agent that touched files outside its
-	// declared scope has overstepped the task. Pause it for human analysis
-	// (design §14.2 "拦截 → 暂停 → 分析") rather than mark it done or fail it
-	// into the retry loop — a deterministic intercept will not improve on retry.
-	if plan.Kind == "agent" && !scope.Empty() && res.OK {
-		after, err := defense.SnapshotDir(workDir)
-		if err != nil {
-			c.logger.Warn("snapshot workdir after agent", "task", taskID, "err", err)
-		} else if drift := c.filterHostDrift(scope.Drift(after.Changed(before))); len(drift) > 0 {
-			msg := "scope drift: agent changed files outside declared scope: " + strings.Join(drift, ", ")
-			c.audit(ctx, taskID, "scope:drift", plan.Agent, "denied", msg)
-			if err := c.store.Pause(ctx, taskID, c.nodeID, msg); err != nil {
+	currentIntent := intent
+	var res commander.Result
+	var usedSkills []*skills.Skill
+	verdict := entry.SuperviseVerdict{Status: "done"}
+	for round := 0; round < maxRounds; round++ {
+		prompt, skillsUsed := buildAgentPrompt(c, currentIntent, task.Project, task.Title)
+		usedSkills = skillsUsed
+
+		res = c.router.Execute(execCtx, plan, prompt, workDir, task.Authorized)
+
+		if plan.Kind == "agent" {
+			// Fallback chain visibility (A2): res.Agent names the agent that
+			// actually executed; a mismatch means the scored primary's CLI was
+			// unavailable and a runner-up took over. The breaker tracks the agent
+			// that really ran.
+			if res.Agent != "" && res.Agent != plan.Agent {
+				breakerKey = "agent:" + res.Agent
+				c.audit(ctx, taskID, "agent:fallback", plan.Agent, "fallback", "primary unavailable, fell back to "+res.Agent)
+				if err := c.store.RecordEvent(ctx, taskID, EvAgentFallback, map[string]any{"from": plan.Agent, "to": res.Agent}); err != nil {
+					c.logger.Warn("record agent fallback event", "task", taskID, "err", err)
+				}
+			}
+			// Explicit injection reminder (A1): when panda overrode the agent's
+			// model endpoint, say so at the top of the output, in the audit log,
+			// and in the task event stream the Web task detail replays. Gated on
+			// the adapter actually running (a tier refusal spawns nothing).
+			if injection.Inject && res.Agent != "" {
+				notice := commander.InjectionNotice(injection, res.Agent)
+				if res.Stdout != "" {
+					res.Stdout = notice + "\n" + res.Stdout
+				} else {
+					res.Stdout = notice
+				}
+				c.audit(ctx, taskID, "model:injected", res.Agent, "injected",
+					"model="+injection.Model+" endpoint="+injection.BaseURL+" reason="+injection.Reason)
+				if err := c.store.RecordEvent(ctx, taskID, EvModelInjection, map[string]any{
+					"agent": res.Agent, "model": injection.Model, "base_url": injection.BaseURL, "reason": injection.Reason,
+				}); err != nil {
+					c.logger.Warn("record model injection event", "task", taskID, "err", err)
+				}
+			}
+			if res.OK {
+				c.breaker.RecordSuccess(breakerKey)
+			} else if c.breaker.RecordFailure(breakerKey) {
+				c.audit(ctx, taskID, "circuit:open", plan.Agent, "failed", "agent failure threshold reached")
+			}
+			// Skills only steer agent execution; record their use so the lifecycle
+			// (dormant/expired) reflects real usage.
+			recordSkillUse(c, usedSkills, res.OK)
+		}
+		// A Tier-2 (irreversible) native command is high-risk: record who ran it
+		// and whether it was authorized, for later review (P3-32).
+		if plan.Kind == "native" && plan.Tier >= defense.TierIrreversible {
+			result := "authorized"
+			if !task.Authorized {
+				result = "denied"
+			}
+			c.audit(ctx, taskID, "native:tier2", plan.Command, result, "")
+		}
+
+		// Scope-drift intercept: a successful agent that touched files outside
+		// its declared scope has overstepped the task. Pause it for human
+		// analysis rather than mark it done, fail it into the retry loop, or
+		// re-delegate — a deterministic intercept will not improve on retry.
+		if plan.Kind == "agent" && !scope.Empty() && res.OK {
+			after, err := defense.SnapshotDir(workDir)
+			if err != nil {
+				c.logger.Warn("snapshot workdir after agent", "task", taskID, "err", err)
+			} else if drift := c.filterHostDrift(scope.Drift(after.Changed(before))); len(drift) > 0 {
+				msg := "scope drift: agent changed files outside declared scope: " + strings.Join(drift, ", ")
+				c.audit(ctx, taskID, "scope:drift", plan.Agent, "denied", msg)
+				if err := c.store.Pause(ctx, taskID, c.nodeID, msg); err != nil {
+					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+						return bus.TaskResultPayload{}, ErrCancelled
+					}
+					return bus.TaskResultPayload{}, fmt.Errorf("pause on scope drift: %w", err)
+				}
+				c.logTask(task.Title, false)
+				trackTask(c, task.Project, required, task.Title, false)
+				return bus.TaskResultPayload{
+					TaskID: taskID, AttemptID: attemptID, OK: false, ExitCode: 1, Stderr: msg,
+					Tokens: res.Tokens, Cost: res.Cost,
+				}, nil
+			}
+		}
+
+		if res.NeedManual {
+			// Manual tasks: notify and mark done; the human completes offline.
+			if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{
+				"manual": true, "notify": res.Stdout,
+			}); err != nil {
 				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 					return bus.TaskResultPayload{}, ErrCancelled
 				}
-				return bus.TaskResultPayload{}, fmt.Errorf("pause on scope drift: %w", err)
+				return bus.TaskResultPayload{}, fmt.Errorf("complete manual: %w", err)
+			}
+			c.logTask(task.Title, true)
+			trackTask(c, task.Project, required, task.Title, true)
+			return bus.TaskResultPayload{
+				TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: 0, Stdout: res.Stdout,
+				Tokens: res.Tokens, Cost: res.Cost,
+			}, nil
+		}
+
+		if !res.OK {
+			if err := c.store.Fail(ctx, taskID, c.nodeID, res.Stderr); err != nil {
+				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+					return bus.TaskResultPayload{}, ErrCancelled
+				}
+				return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
 			}
 			c.logTask(task.Title, false)
 			trackTask(c, task.Project, required, task.Title, false)
 			return bus.TaskResultPayload{
-				TaskID: taskID, AttemptID: attemptID, OK: false, ExitCode: 1, Stderr: msg,
+				TaskID: taskID, AttemptID: attemptID, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
 				Tokens: res.Tokens, Cost: res.Cost,
 			}, nil
 		}
+
+		// Supervision applies only to agent tasks under a configured supervisor.
+		if plan.Kind != "agent" || c.supervisor == nil {
+			break
+		}
+		v, serr := entry.Supervise(ctx, c.supervisor, currentIntent, res.Stdout)
+		if serr != nil {
+			// Supervisor unreachable: fail open toward "done" (verification is a
+			// safety net, not a gate) but leave a trace of the failure.
+			c.logger.Warn("supervise call failed", "task", taskID, "err", serr)
+		}
+		verdict = v
+		if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID, EvSupervise, map[string]any{
+			"round": round + 1, "status": v.Status, "reason": v.Reason, "followup": v.Followup,
+		}); err != nil {
+			c.logger.Warn("record supervise event", "task", taskID, "err", err)
+		}
+		if v.Status == "done" {
+			break
+		}
+		if strings.TrimSpace(v.Followup) == "" {
+			currentIntent = currentIntent + "\n\n上一轮未能完整完成，请继续完成剩余工作，并汇报最终结果。"
+		} else {
+			currentIntent = v.Followup
+		}
 	}
 
-	if res.NeedManual {
-		// Manual tasks: notify and mark done; the human completes offline.
-		if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{
-			"manual": true, "notify": res.Stdout,
+	// The supervisor did not accept the result within the round budget: park in
+	// review with the latest result and a marker so a human sees what was done
+	// and what remains, rather than loop indefinitely or silently accept it.
+	if plan.Kind == "agent" && c.supervisor != nil && verdict.Status == "continue" {
+		if err := c.store.PauseWithResult(ctx, taskID, c.nodeID, map[string]any{
+			"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
+			"needs_followup": true,
 		}); err != nil {
 			if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 				return bus.TaskResultPayload{}, ErrCancelled
 			}
-			return bus.TaskResultPayload{}, fmt.Errorf("complete manual: %w", err)
-		}
-		c.logTask(task.Title, true)
-		trackTask(c, task.Project, required, task.Title, true)
-		return bus.TaskResultPayload{
-			TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: 0, Stdout: res.Stdout,
-			Tokens: res.Tokens, Cost: res.Cost,
-		}, nil
-	}
-
-	if !res.OK {
-		if err := c.store.Fail(ctx, taskID, c.nodeID, res.Stderr); err != nil {
-			if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
-				return bus.TaskResultPayload{}, ErrCancelled
-			}
-			return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
+			return bus.TaskResultPayload{}, fmt.Errorf("pause for follow-up: %w", err)
 		}
 		c.logTask(task.Title, false)
 		trackTask(c, task.Project, required, task.Title, false)
 		return bus.TaskResultPayload{
-			TaskID: taskID, AttemptID: attemptID, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
+			TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
+			Tokens: res.Tokens, Cost: res.Cost,
+		}, nil
+	}
+
+	// Terminal routing. An accepted irreversible (Tier-2) agent task — one whose
+	// side effects (pushes, deletes, irreversible state changes) are not
+	// auto-approved — parks in review with its result for human sign-off; every
+	// other completed run (reversible agent, native, manual) finishes into done.
+	if plan.Kind == "agent" && plan.Tier >= defense.TierIrreversible {
+		if err := c.store.PauseWithResult(ctx, taskID, c.nodeID, map[string]any{
+			"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
+		}); err != nil {
+			if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+				return bus.TaskResultPayload{}, ErrCancelled
+			}
+			return bus.TaskResultPayload{}, fmt.Errorf("pause for approval: %w", err)
+		}
+		c.logTask(task.Title, true)
+		trackTask(c, task.Project, required, task.Title, true)
+		return bus.TaskResultPayload{
+			TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 			Tokens: res.Tokens, Cost: res.Cost,
 		}, nil
 	}

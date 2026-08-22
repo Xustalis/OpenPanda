@@ -57,6 +57,13 @@ const (
 	// — and whether it came through the repeated-emphasis whitelist channel —
 	// so the user can correct or delete it via the memory API.
 	EvMemoryPromotion = "memory_promotion"
+
+	// EvSupervise records one round of the execute → judge → re-delegate loop:
+	// whether the reviewing model judged an agent's result complete ("done") or
+	// in need of more work ("continue"), plus the follow-up instruction on a
+	// "continue". The Web task detail replays it so the user can see the
+	// superior's reasoning behind a re-delegation or a review parking.
+	EvSupervise = "supervise"
 )
 
 // Task priority levels for the panel queue (smaller runs first). The DB
