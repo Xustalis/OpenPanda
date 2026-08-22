@@ -170,6 +170,8 @@ const en: Messages = {
   'settings.agentTesting': 'Testing…',
   'settings.agentOk': 'OK — {version}',
   'settings.agentFail': 'Test failed:',
+  'settings.agentDownload': 'Download',
+  'settings.agentInstall': 'Install command:',
   'settings.mcpPlaceholder': 'e.g. npx -y @modelcontextprotocol/server-filesystem /tmp',
   'settings.mcpHelp':
     'A stdio MCP server command (space-separated arguments). Leave empty to disable. Saving actually spawns the server and fetches its tool list — on success the agent can call the tools immediately, no restart needed.',

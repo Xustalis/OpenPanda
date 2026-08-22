@@ -165,6 +165,8 @@ const ja: Messages = {
   'settings.agentTesting': 'テスト中…',
   'settings.agentOk': '正常 — {version}',
   'settings.agentFail': 'テスト失敗：',
+  'settings.agentDownload': 'ダウンロード',
+  'settings.agentInstall': 'インストールコマンド：',
   'settings.mcpPlaceholder': '例: npx -y @modelcontextprotocol/server-filesystem /tmp',
   'settings.mcpHelp':
     'stdio 型 MCP サーバーのコマンド（引数はスペース区切り）。空欄で無効化。保存時に実際にサーバーを起動してツール一覧を取得し、成功すればエージェントは再起動なしで即利用できます。',

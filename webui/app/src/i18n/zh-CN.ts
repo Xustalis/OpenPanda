@@ -165,6 +165,8 @@ const zhCN: Messages = {
   'settings.agentTesting': '测试中…',
   'settings.agentOk': '正常 — {version}',
   'settings.agentFail': '测试失败：',
+  'settings.agentDownload': '下载',
+  'settings.agentInstall': '安装命令：',
   'settings.mcpPlaceholder': '例如：npx -y @modelcontextprotocol/server-filesystem /tmp',
   'settings.mcpHelp':
     '标准输入输出的 MCP 服务器命令（空格分隔参数）。留空表示禁用。保存时会实际启动并拉取工具列表，成功后 Agent 立即可调用，无需重启。',

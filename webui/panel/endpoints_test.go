@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	agentreg "github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
@@ -644,7 +645,7 @@ func TestAgentProbeAndTest(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/agents", nil))
 	var agents []agentJSON
-	if err := json.Unmarshal(rr.Body.Bytes(), &agents); err != nil || len(agents) != len(agentCLIs) {
+	if err := json.Unmarshal(rr.Body.Bytes(), &agents); err != nil || len(agents) != len(agentreg.Registry()) {
 		t.Fatalf("agents = %s err %v", rr.Body.String(), err)
 	}
 	found := map[string]agentJSON{}

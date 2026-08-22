@@ -167,6 +167,8 @@ const de: Messages = {
   'settings.agentTesting': 'Testen…',
   'settings.agentOk': 'OK — {version}',
   'settings.agentFail': 'Test fehlgeschlagen:',
+  'settings.agentDownload': 'Herunterladen',
+  'settings.agentInstall': 'Installationsbefehl:',
   'settings.mcpPlaceholder': 'z. B. npx -y @modelcontextprotocol/server-filesystem /tmp',
   'settings.mcpHelp':
     'Befehl eines stdio-MCP-Servers (Argumente leerzeichengetrennt). Leer deaktiviert MCP. Beim Speichern wird der Server tatsächlich gestartet und seine Tool-Liste geholt — bei Erfolg kann der Agent die Tools sofort nutzen, ohne Neustart.',

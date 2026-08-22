@@ -123,13 +123,16 @@ export interface Task {
   events?: TaskEvent[]
 }
 
-/** One probed agent CLI (GET /api/agents): install state + version. */
+/** One probed agent CLI (GET /api/agents): install state + version + install guidance. */
 export interface AgentInfo {
   name: string
+  display_name?: string
   binary: string
   installed: boolean
   path?: string
   version?: string
+  install_hint?: string
+  install_url?: string
 }
 
 export type AgentTestResult = {

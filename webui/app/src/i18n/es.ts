@@ -167,6 +167,8 @@ const es: Messages = {
   'settings.agentTesting': 'Probando…',
   'settings.agentOk': 'OK — {version}',
   'settings.agentFail': 'Prueba fallida:',
+  'settings.agentDownload': 'Descargar',
+  'settings.agentInstall': 'Comando de instalación:',
   'settings.mcpPlaceholder': 'p. ej. npx -y @modelcontextprotocol/server-filesystem /tmp',
   'settings.mcpHelp':
     'Comando de un servidor MCP stdio (argumentos separados por espacios). Vacío lo desactiva. Al guardar se arranca el servidor y se obtiene su lista de herramientas; si funciona, el agente puede usarlas al instante, sin reiniciar.',

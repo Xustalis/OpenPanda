@@ -525,12 +525,27 @@ function AgentsSection() {
             <li key={a.name} class={`agent-row${a.installed ? '' : ' missing'}`}>
               <div class="agent-main">
                 <span class="agent-name mono">{a.binary}</span>
+                {a.display_name && <span class="agent-version dim">{a.display_name}</span>}
                 <span class={`badge ${a.installed ? 'green' : 'red'}`}>
                   {a.installed ? t('settings.agentInstalled') : t('settings.agentMissing')}
                 </span>
                 {a.installed && a.version && <span class="agent-version dim">{a.version}</span>}
               </div>
               {a.installed && a.path && <div class="agent-path dim mono">{a.path}</div>}
+              {!a.installed && (
+                <div class="agent-install">
+                  {a.install_hint && (
+                    <div class="agent-path dim mono">
+                      {t('settings.agentInstall')} {a.install_hint}
+                    </div>
+                  )}
+                  {a.install_url && (
+                    <a class="btn small" href={a.install_url} target="_blank" rel="noreferrer">
+                      {t('settings.agentDownload')}
+                    </a>
+                  )}
+                </div>
+              )}
               {r && (
                 <div class={`test-result ${r.ok ? 'ok' : 'bad'}`}>
                   {r.ok

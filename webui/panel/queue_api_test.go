@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
@@ -182,7 +183,7 @@ func TestListAgentsSmoke(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(out) != len(agentCLIs) {
-		t.Fatalf("agents = %d, want %d", len(out), len(agentCLIs))
+	if len(out) != len(agents.Registry()) {
+		t.Fatalf("agents = %d, want %d", len(out), len(agents.Registry()))
 	}
 }
