@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -60,24 +61,37 @@ func WithProgress(ctx context.Context, fn ProgressFunc) context.Context {
 type progressWriter struct {
 	capture executil.Capture
 	sink    ProgressFunc
+	// partial holds the bytes of the current line that have no terminating
+	// '\n' yet. The pipe copier may split one stderr line across several
+	// Write calls; buffering here keeps a split line from being misread as a
+	// complete line (which would drop a progress note or corrupt diagnostics).
+	partial []byte
 }
 
+// maxProgressLine bounds partial: a progress line is a short JSON object, so
+// anything this long is noise and is spilled to diagnostics, keeping partial
+// from growing without limit against pathological stderr (D13).
+const maxProgressLine = 4096
+
 func (w *progressWriter) Write(p []byte) (int, error) {
-	start := 0
-	for i := 0; i <= len(p); i++ {
-		if i == len(p) || p[i] == '\n' {
-			if i > start {
-				w.line(p[start:i])
-			}
-			start = i + 1
+	w.partial = append(w.partial, p...)
+	for {
+		i := bytes.IndexByte(w.partial, '\n')
+		if i < 0 {
+			break
 		}
+		w.line(w.partial[:i])
+		w.partial = w.partial[i+1:]
+	}
+	if len(w.partial) > maxProgressLine {
+		w.capture.Write(w.partial)
+		w.partial = nil
 	}
 	return len(p), nil
 }
 
-// line handles one complete stderr line (partial lines never reach here
-// because Write only processes up to the last newline; a trailing partial
-// line is captured verbatim by the fallback at flush time).
+// line handles one complete, '\n'-terminated stderr line (a line is buffered
+// in partial by Write until its newline arrives).
 func (w *progressWriter) line(b []byte) {
 	var probe struct {
 		Type string `json:"type"`
@@ -97,8 +111,16 @@ func (w *progressWriter) line(b []byte) {
 	w.capture.Write([]byte("\n"))
 }
 
-// String returns the non-progress stderr retained for diagnostics.
-func (w *progressWriter) String() string { return w.capture.String() }
+// String returns the non-progress stderr retained for diagnostics, flushing
+// any unterminated trailing bytes (not a complete line, so never progress)
+// into the capture first.
+func (w *progressWriter) String() string {
+	if len(w.partial) > 0 {
+		w.capture.Write(w.partial)
+		w.partial = nil
+	}
+	return w.capture.String()
+}
 
 // adapterDir is where adapter scripts live; a var so tests can point it at a
 // temp dir. Relative values are resolved against the daemon cwd (repo root)
@@ -248,6 +270,11 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	return out
 }
 
+// transientStatusRE matches a bare HTTP 5xx status token. Word boundaries
+// keep the token from matching glued digits ("5000", "15020") — a real task
+// failure that mentions a large number or a port must not read as provider 5xx.
+var transientStatusRE = regexp.MustCompile(`\b(?:500|502|503|504)\b`)
+
 // transientAgentFailure reports whether an adapter failure looks like
 // provider-side turbulence rather than the task itself failing: rate
 // limits, overload, 5xx/api errors, dropped connections. The patterns are
@@ -270,10 +297,8 @@ func transientAgentFailure(ar AgentResult) bool {
 		}
 	}
 	// Bare 5xx status mentions ("error 502", "HTTP 503").
-	for _, code := range []string{"500", "502", "503", "504"} {
-		if strings.Contains(msg, code) {
-			return true
-		}
+	if transientStatusRE.MatchString(msg) {
+		return true
 	}
 	return false
 }

@@ -385,7 +385,7 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 			if cb.OnStatus != nil {
 				cb.OnStatus(fmt.Sprintf("submitting task: %s", out.Task.Title))
 			}
-			return e.submitTask(out.Task, authorize, workDir), nil
+			return e.submitTask(out.Task, prompt, authorize, workDir), nil
 		case entry.KindToolCall:
 			if cb.OnStatus != nil {
 				cb.OnStatus(fmt.Sprintf("running tool %s…", out.Tool.Tool))
@@ -422,7 +422,7 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 		if cb.OnStatus != nil {
 			cb.OnStatus(fmt.Sprintf("submitting task: %s", final.Task.Title))
 		}
-		return e.submitTask(final.Task, authorize, workDir), nil
+		return e.submitTask(final.Task, prompt, authorize, workDir), nil
 	}
 	return &Result{Kind: "answer", Answer: final.Answer}, nil
 }
@@ -450,9 +450,17 @@ func (e *Engine) EnqueueTask(ctx context.Context, in core.TaskInput, q core.Queu
 // session worktree); the configured work path is restored afterwards. The
 // schedMu lock keeps concurrent inline submits from interleaving the
 // work-dir swap.
-func (e *Engine) submitTask(spec *entry.TaskSpec, authorized bool, workDir string) *Result {
+func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool, workDir string) *Result {
 	in := toTaskInput(spec)
 	in.Authorized = authorized
+	if prompt != "" {
+		// Carry the user's original words into the agent prompt as a fidelity
+		// backstop: the intent above is the entry model's distillation, which
+		// can drop detail. The raw query lets the agent recover it, and it
+		// travels with the intent (persisted + delegated), so retries and
+		// peers that pick up the task also see it.
+		in.Intent += "\n\n用户原始请求（上下文参考，以任务指令为准）：\n" + prompt
+	}
 	if e.queueTasks {
 		q := core.DefaultQueueSpec()
 		q.WorkDir = workDir // travels per task; "" falls back to the core's work dir

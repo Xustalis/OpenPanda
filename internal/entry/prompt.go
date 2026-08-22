@@ -2,6 +2,7 @@ package entry
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -140,7 +141,13 @@ func summarizeDevices(nodes []ledger.Node) string {
 			native = append(native, a.ID)
 		}
 		fmt.Fprintf(&b, "- %s (%s) native: %s\n", n.Name, n.Chip, strings.Join(native, ", "))
-		for name, ag := range n.Agents {
+		names := make([]string, 0, len(n.Agents))
+		for name := range n.Agents {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			ag := n.Agents[name]
 			desc := strings.Join(ag.Capabilities, "/")
 			if len(ag.BestAt) > 0 {
 				desc += "（最擅长：" + strings.Join(ag.BestAt, "、") + "）"

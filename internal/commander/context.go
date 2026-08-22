@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/executil"
@@ -49,8 +50,15 @@ func (fc *FileContext) Hash() string {
 	fmt.Fprintf(h, "branch=%s\n", fc.Branch)
 	fmt.Fprintf(h, "commit=%s\n", fc.Commit)
 	fmt.Fprintf(h, "scope=%s\n", strings.Join(fc.Scope, ","))
-	for k, v := range fc.Env {
-		fmt.Fprintf(h, "env:%s=%s\n", k, v)
+	// Sort env keys: Go randomizes map iteration order, which would otherwise
+	// make this "reproducible" hash drift and break it as a pointer-hit key.
+	keys := make([]string, 0, len(fc.Env))
+	for k := range fc.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(h, "env:%s=%s\n", k, fc.Env[k])
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

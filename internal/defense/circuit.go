@@ -111,3 +111,23 @@ func (b *CircuitBreaker) State(key string) CircuitState {
 	}
 	return CircuitClosed
 }
+
+// Blocked reports whether key is currently unavailable for new work: the
+// circuit is open within its cooldown, or a half-open trial is already in
+// flight. Unlike Allow it never mutates state, so callers that are merely
+// filtering candidates (e.g. dropping a fallback agent before routing) can
+// consult it without spending a half-open trial slot on an agent they may
+// not end up running.
+func (b *CircuitBreaker) Blocked(key string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	st := b.states[key]
+	if st == nil || st.state == CircuitClosed {
+		return false
+	}
+	if st.state == CircuitOpen {
+		return time.Since(st.openedAt) < b.cooldown
+	}
+	// Half-open: a trial is already in flight, so the circuit is not clear.
+	return true
+}

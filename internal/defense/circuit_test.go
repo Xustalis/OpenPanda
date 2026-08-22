@@ -113,3 +113,29 @@ func TestCircuitBreakerEvictsOnSuccess(t *testing.T) {
 		t.Fatalf("evicted key must read closed")
 	}
 }
+
+func TestCircuitBreakerBlockedIsReadOnly(t *testing.T) {
+	b := NewCircuitBreaker(1, time.Millisecond)
+	if b.Blocked("agent:claude") {
+		t.Fatalf("unknown key must not be blocked")
+	}
+
+	b.Allow("agent:claude")
+	b.RecordFailure("agent:claude")
+	if !b.Blocked("agent:claude") {
+		t.Fatalf("open circuit within cooldown must be blocked")
+	}
+	if b.State("agent:claude") != CircuitOpen {
+		t.Fatalf("Blocked must not transition open -> half-open, got %s", b.State("agent:claude"))
+	}
+
+	// Cooldown elapses: Blocked must clear (the circuit may now admit a
+	// half-open trial), still without mutating it.
+	time.Sleep(2 * time.Millisecond)
+	if b.Blocked("agent:claude") {
+		t.Fatalf("open circuit after cooldown must not be blocked")
+	}
+	if b.State("agent:claude") != CircuitOpen {
+		t.Fatalf("Blocked after cooldown must leave state open, got %s", b.State("agent:claude"))
+	}
+}

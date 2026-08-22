@@ -256,14 +256,13 @@ func backfillAuditChain(tx *sql.Tx) error {
 	}
 
 	var prevHash string
-	for i, r := range chain {
+	for _, r := range chain {
 		if r.prevHash == "" {
 			if _, err := tx.Exec(`UPDATE audit_log SET prev_hash = ? WHERE id = ?`, prevHash, r.id); err != nil {
 				return err
 			}
 		}
 		prevHash = hashAudit(prevHash, r.ts, r.who, r.what, r.target, r.result, r.detail)
-		_ = i
 	}
 	return nil
 }

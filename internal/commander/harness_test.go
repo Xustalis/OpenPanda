@@ -67,7 +67,35 @@ not json at all
 	}
 }
 
-// TestProgressLongNoteTruncates verifies a pathological note is clipped to
+// TestProgressWriterBuffersSplitLines verifies a stderr line split across
+// pipe reads is still assembled correctly: progress notes reach the sink and
+// noise fragments stay in diagnostics without leaking either way.
+func TestProgressWriterBuffersSplitLines(t *testing.T) {
+	var notes []string
+	w := progressWriter{sink: func(n string) { notes = append(notes, n) }}
+
+	// A progress line split across three writes.
+	w.Write([]byte(`{"type":"progr`))
+	w.Write([]byte(`ess","note":"Bash: `))
+	w.Write([]byte(`ls -la"}` + "\n"))
+
+	// A diagnostic line split across two writes.
+	w.Write([]byte("some plain "))
+	w.Write([]byte("diagnostic line\n"))
+
+	if len(notes) != 1 || notes[0] != "Bash: ls -la" {
+		t.Fatalf("notes = %v", notes)
+	}
+	diag := w.String()
+	if !strings.Contains(diag, "some plain diagnostic line") {
+		t.Fatalf("diagnostics lost: %q", diag)
+	}
+	if strings.Contains(diag, "progress") || strings.Contains(diag, "Bash") {
+		t.Fatalf("progress leaked into diagnostics: %q", diag)
+	}
+}
+
+// TestProgressWriterLongNoteTruncates verifies a pathological note is clipped to
 // 300 runes so one event cannot bloat the chain.
 func TestProgressLongNoteTruncates(t *testing.T) {
 	var got string
@@ -187,6 +215,8 @@ func TestTransientPatterns(t *testing.T) {
 		"command not found: duu",
 		"permission denied",
 		"exit status 1",
+		"processed 5000 items",
+		"listen on port 15020",
 		"",
 	}
 	for _, s := range yes {

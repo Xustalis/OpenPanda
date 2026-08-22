@@ -365,6 +365,20 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			c.audit(ctx, taskID, "agent:spawn", plan.Agent, "open", "circuit open")
 			return bus.TaskResultPayload{}, fmt.Errorf("agent %s circuit open", plan.Agent)
 		}
+		// Drop circuit-open alternates before the fallback chain runs. The
+		// commander's fallback only knows about CLI availability, not breaker
+		// state, so a blocked runner-up would otherwise be re-entered while it
+		// is failing repeatedly. Blocked is read-only: filtering must not spend
+		// a half-open trial slot on an agent this task may never reach.
+		if len(plan.Alternates) > 0 {
+			alternates := make([]string, 0, len(plan.Alternates))
+			for _, name := range plan.Alternates {
+				if !c.breaker.Blocked("agent:" + name) {
+					alternates = append(alternates, name)
+				}
+			}
+			plan.Alternates = alternates
+		}
 	}
 
 	task, err := c.store.Get(ctx, taskID)

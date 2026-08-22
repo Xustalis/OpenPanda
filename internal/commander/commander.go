@@ -102,6 +102,10 @@ func (r *Router) MatchNative(required []string) (ledger.NativeAbility, bool) {
 // routing.preferred_agents receives during ranking.
 const preferredBonus = 0.5
 
+// retryBackoff is the wait before a single retry on a transient provider
+// failure (rate limit / 5xx). Deliberately short: these resolve in seconds.
+const retryBackoff = 3 * time.Second
+
 // AgentCandidate is one scored agent match produced by RankAgents.
 type AgentCandidate struct {
 	Name  string
@@ -314,9 +318,13 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// transientAgentFailure patterns keep real task failures — and
 		// their side effects — from ever being re-run.
 		if !ar.OK && transientAgentFailure(ar) {
+			timer := time.NewTimer(retryBackoff)
 			select {
 			case <-ctx.Done():
-			case <-time.After(3 * time.Second):
+				if !timer.Stop() {
+					<-timer.C
+				}
+			case <-timer.C:
 			}
 			if ctx.Err() == nil {
 				retry := r.runAdapter(ctx, ag.Adapter, prompt, cwd)

@@ -111,8 +111,8 @@ type Core struct {
 	// concurrently running tasks: they are one shared limiter, deliberately —
 	// progress events are a convenience view, not per-task state, and a node
 	// running several agents must not multiply its event writes.
-	progressMu    sync.Mutex
-	lastProgress  time.Time
+	progressMu   sync.Mutex
+	lastProgress time.Time
 }
 
 // NewCore constructs a Core. The card may be zero for a minimal node. The
