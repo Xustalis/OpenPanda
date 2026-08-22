@@ -93,8 +93,8 @@ var known = []Known{
 		Adapter:     "hermes.py",
 		Binaries:    []string{"hermes"},
 		DisplayName: "Hermes",
-		InstallHint: "",
-		InstallURL:  "",
+		InstallHint: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+		InstallURL:  "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
 	},
 }
 
