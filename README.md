@@ -169,20 +169,58 @@ Inside each node:
 ## Installing
 
 Get a release binary in one line — macOS, Linux, or Windows; consistent
-experience, no root required. Full guide and troubleshooting:
-[docs/install.md](docs/install.md).
+experience, no root required. The installer downloads the matching release
+archive, verifies its SHA-256, unpacks the binary plus its agent adapters
+(`adapters/*.py`) into a per-user prefix, and links `panda` onto your `PATH`.
 
 | Platform | Command |
 |---|---|
 | macOS / Linux | `curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh \| sh` |
 | macOS (Homebrew) | `brew tap Xustalis/openpanda && brew install openpanda` |
-| Windows (PowerShell) | `Set-ExecutionPolicy -Scope Process Bypass` then `irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 \| iex` |
+| Windows (PowerShell) | `Set-ExecutionPolicy -Scope Process Bypass`, then `irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 \| iex` |
 
-The installer downloads the matching release archive, verifies its SHA-256,
-unpacks the binary plus its agent adapters (`adapters/*.py`) into a per-user
-prefix, and links `panda` onto your `PATH`. It then interactively asks whether
-to register an auto-start service (`panda daemon` at login). After installing,
-`panda init` → `panda repl` (or `panda web`) works immediately.
+Override the defaults with flags:
+
+```bash
+sh scripts/install.sh --version 0.0.3           # pin a version (default: latest)
+sh scripts/install.sh --prefix /opt/openpanda   # custom install directory
+sh scripts/install.sh --yes                     # also register auto-start, no prompt
+sh scripts/install.sh --no-service              # skip auto-start entirely
+```
+
+On macOS / Linux files land under a per-user prefix following the XDG convention:
+
+```
+${XDG_DATA_HOME:-~/.local/share}/openpanda/
+├── bin/panda            # the real binary
+├── adapters/*.py        # agent adapters (the daemon needs these to delegate)
+├── config.example.yaml
+└── capabilities.example-*.yaml
+```
+
+`~/.local/bin/panda` is a symlink to that binary (already on `PATH`); if your
+shell doesn't include `~/.local/bin`, the script prints the `export PATH` line to
+add. On Windows the files go to `%LOCALAPPDATA%\OpenPanda\` and its `bin` is added
+to your user `PATH`. The installer can also register an auto-start service
+(`panda daemon` at login) — say yes only after `panda init`, since the daemon
+won't start without a config.
+
+After installing, bootstrap and run:
+
+```bash
+panda init      # interactive config.yaml + capabilities card
+panda doctor    # self-check: binary / PATH / config / adapters / agents
+panda repl      # drop into the interactive REPL
+panda web       # open the embedded web console (loopback, auto-login)
+```
+
+To remove everything:
+
+- macOS / Linux: `rm -rf ~/.local/share/openpanda ~/.local/bin/panda` (and stop any
+  auto-start service first).
+- Windows: delete `%LOCALAPPDATA%\OpenPanda` and remove its `bin` from the user `PATH`.
+
+Full guide and troubleshooting: [docs/install.md](docs/install.md).
 
 ## Getting started
 

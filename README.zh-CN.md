@@ -114,7 +114,7 @@ Claude Code、Codex、OpenCode、OpenClaw……每一个都是单机上的强力
 
 ## 安装
 
-一行命令获取发布版二进制——支持 macOS、Linux 或 Windows；体验一致，无需 root。完整指南与故障排查见 [docs/install.md](docs/install.md)。
+一行命令获取发布版二进制——支持 macOS、Linux 或 Windows；体验一致，无需 root。安装器会下载对应平台的 release 包、校验 SHA-256、把二进制连同 agent 适配器（`adapters/*.py`）解压到用户前缀，并把 `panda` 链接到你的 `PATH`。
 
 | 平台 | 命令 |
 |---|---|
@@ -122,7 +122,42 @@ Claude Code、Codex、OpenCode、OpenClaw……每一个都是单机上的强力
 | macOS（Homebrew） | `brew tap Xustalis/openpanda && brew install openpanda` |
 | Windows（PowerShell） | `Set-ExecutionPolicy -Scope Process Bypass` 后执行 `irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 \| iex` |
 
-安装脚本会下载对应平台的发布包，校验 SHA-256，把二进制连同 agent 适配器（`adapters/*.py`）解压到用户前缀，并将 `panda` 链接到你的 `PATH`；随后交互式询问是否注册开机自启服务（登录时运行 `panda daemon`）。安装完成后，`panda init` → `panda repl`（或 `panda web`）即可立即使用。
+用参数覆盖默认行为：
+
+```bash
+sh scripts/install.sh --version 0.0.3           # 指定版本（默认 latest）
+sh scripts/install.sh --prefix /opt/openpanda   # 自定义安装目录
+sh scripts/install.sh --yes                     # 一并注册开机自启，不再询问
+sh scripts/install.sh --no-service              # 完全不碰开机自启
+```
+
+macOS / Linux 下文件装入遵循 XDG 约定的用户前缀：
+
+```
+${XDG_DATA_HOME:-~/.local/share}/openpanda/
+├── bin/panda            # 真实二进制
+├── adapters/*.py        # agent 适配器（daemon 委派任务必需）
+├── config.example.yaml
+└── capabilities.example-*.yaml
+```
+
+`~/.local/bin/panda` 是指向该二进制的软链（已在 `PATH` 中）；若你的 shell 未包含 `~/.local/bin`，脚本会打印需要补充的 `export PATH` 一行。Windows 下文件装入 `%LOCALAPPDATA%\OpenPanda\`，并把其 `bin` 加入用户 `PATH`。安装器还可注册开机自启服务（登录时运行 `panda daemon`）——请先 `panda init` 再开启，否则 daemon 会因缺少配置而无法启动。
+
+安装完成后，初始化并运行：
+
+```bash
+panda init      # 交互式生成 config.yaml 与能力卡
+panda doctor    # 自检：二进制 / PATH / 配置 / 适配器 / agent
+panda repl      # 进入交互式命令行
+panda web       # 打开内嵌 Web 控制台（回环监听、自动登录）
+```
+
+要彻底移除：
+
+- macOS / Linux：`rm -rf ~/.local/share/openpanda ~/.local/bin/panda`（并先停用开机自启）。
+- Windows：删除 `%LOCALAPPDATA%\OpenPanda`，并从用户 `PATH` 移除对应 `bin` 目录。
+
+完整指南与故障排查见 [docs/install.md](docs/install.md)。
 
 ## 快速开始
 

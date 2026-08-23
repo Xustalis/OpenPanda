@@ -115,7 +115,7 @@ Claude Code、Codex、OpenCode、OpenClaw……どれも単一マシン上の強
 
 ## インストール
 
-1 行でリリースバイナリを入手できます。macOS / Linux / Windows 対応、一貫した体験で root 不要。詳しいガイドとトラブルシューティングは [docs/install.md](docs/install.md) を参照してください。
+1 行でリリースバイナリを入手できます。macOS / Linux / Windows 対応、一貫した体験で root 不要。インストーラーは対応するリリースアーカイブをダウンロードして SHA-256 を検証し、バイナリと agent アダプター（`adapters/*.py`）をユーザー単位のプレフィックスに展開し、`panda` を `PATH` にリンクします。
 
 | プラットフォーム | コマンド |
 |---|---|
@@ -123,7 +123,42 @@ Claude Code、Codex、OpenCode、OpenClaw……どれも単一マシン上の強
 | macOS（Homebrew） | `brew tap Xustalis/openpanda && brew install openpanda` |
 | Windows（PowerShell） | `Set-ExecutionPolicy -Scope Process Bypass` を実行後、`irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 \| iex` |
 
-インストーラーは対応するリリースアーカイブをダウンロードして SHA-256 を検証し、バイナリと agent アダプター（`adapters/*.py`）をユーザー単位のプレフィックスに展開し、`panda` を `PATH` にリンクします。その後、自動起動サービス（ログイン時の `panda daemon`）を登録するかを対話的に尋ねます。インストール後は `panda init` → `panda repl`（または `panda web`）がすぐに使えます。
+フラグでデフォルトを上書きできます：
+
+```bash
+sh scripts/install.sh --version 0.0.3           # バージョン指定（デフォルト latest）
+sh scripts/install.sh --prefix /opt/openpanda   # カスタムインストール先
+sh scripts/install.sh --yes                     # 自動起動も登録（確認なし）
+sh scripts/install.sh --no-service              # 自動起動は一切しない
+```
+
+macOS / Linux では XDG 規約に沿ったユーザー単位のプレフィックスに配置されます：
+
+```
+${XDG_DATA_HOME:-~/.local/share}/openpanda/
+├── bin/panda            # 実体バイナリ
+├── adapters/*.py        # agent アダプター（daemon がタスク委譲に必要）
+├── config.example.yaml
+└── capabilities.example-*.yaml
+```
+
+`~/.local/bin/panda` はそのバイナリへのシンボリックリンク（`PATH` に含まれます）。シェルが `~/.local/bin` を含まない場合は、スクリプトが追加すべき `export PATH` の行を表示します。Windows では `%LOCALAPPDATA%\OpenPanda\` に展開され、その `bin` がユーザー `PATH` に追加されます。インストーラーは自動起動サービス（ログイン時の `panda daemon`）も登録できますが、先に `panda init` を実行してから有効にしてください。設定がないと daemon は起動しません。
+
+インストール後は、初期化して実行します：
+
+```bash
+panda init      # 対話形式で config.yaml とケイパビリティカードを生成
+panda doctor    # 自己診断：バイナリ / PATH / 設定 / アダプター / agent
+panda repl      # 対話型 REPL に入る
+panda web       # 内蔵 Web コンソールを開く（ループバック、自動ログイン）
+```
+
+完全に削除するには：
+
+- macOS / Linux：`rm -rf ~/.local/share/openpanda ~/.local/bin/panda`（先に自動起動を停止）。
+- Windows：`%LOCALAPPDATA%\OpenPanda` を削除し、ユーザー `PATH` から対応する `bin` を削除。
+
+詳しいガイドとトラブルシューティングは [docs/install.md](docs/install.md) を参照してください。
 
 ## はじめに
 
