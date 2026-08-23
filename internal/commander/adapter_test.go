@@ -127,3 +127,56 @@ func TestAdapterHardTimeout(t *testing.T) {
 		t.Fatalf("hard timeout not enforced promptly: %v", elapsed)
 	}
 }
+
+// TestAdapterCandidateDirsFollowsSymlink verifies a packaged install layout:
+// the real binary lives at <prefix>/bin/panda with adapters beside it under
+// <prefix>/adapters, and a symlink on PATH (~/.local/bin/panda) resolves back
+// to it. The candidate list must include <prefix>/adapters when handed the
+// symlink path, or the spawned adapter would die with a missing path.
+func TestAdapterCandidateDirsFollowsSymlink(t *testing.T) {
+	prefix := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(prefix, "bin", "panda")
+	if err := os.WriteFile(real, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Normalize prefix the same way EvalSymlinks does — on macOS /var is a
+	// symlink to /private/var, so the candidate under the real binary reports
+	// /private/... while t.TempDir() handed us /var/... .
+	if resolved, err := filepath.EvalSymlinks(prefix); err == nil {
+		prefix = resolved
+	}
+	want := filepath.Join(prefix, "adapters")
+
+	// Symlinks are unsupported on Windows without privileges; skip there.
+	link := filepath.Join(t.TempDir(), "panda")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	found := false
+	for _, cand := range adapterCandidateDirs(link) {
+		if sameAbs(cand, want) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("adapterCandidateDirs(%q) missing %q (got %v)", link, want, adapterCandidateDirs(link))
+	}
+}
+
+// sameAbs compares two paths after absolutizing + cleaning, so the test works
+// whether the caller hands an absolute or relative link path.
+func sameAbs(a, b string) bool {
+	aa, err := filepath.Abs(a)
+	if err != nil {
+		return a == b
+	}
+	bb, err := filepath.Abs(b)
+	if err != nil {
+		return a == b
+	}
+	return filepath.Clean(aa) == filepath.Clean(bb)
+}

@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build web console (embedded into binary)
+        run: make web
+
+      - name: Package releases (cross-compile + archive + checksums)
+        run: make package VERSION="${GITHUB_REF_NAME#v}"
+
+      - name: Verify checksums
+        run: cd dist && sha256sum -c checksums.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/panda-*.tar.gz
+            dist/panda-*.zip
+            dist/checksums.txt

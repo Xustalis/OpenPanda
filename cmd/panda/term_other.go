@@ -10,11 +10,33 @@ import (
 	"context"
 	"io"
 	"os"
+	"strings"
 )
 
-type termSession struct{}
+type termSession struct {
+	history     []string // oldest first, capped (mirrors the unix session)
+	historyPath string   // "" = no persistence
+}
 
 func newTermSession() *termSession { return nil }
+
+// initHistory loads previously entered lines from path and marks it for
+// persistence, mirroring the unix implementation so shared REPL code compiles.
+func (t *termSession) initHistory(path string) {
+	t.historyPath = path
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, l := range strings.Split(string(data), "\n") {
+		if l = strings.TrimRight(l, "\r"); strings.TrimSpace(l) != "" {
+			t.history = append(t.history, l)
+		}
+	}
+	if n := len(t.history); n > 1000 {
+		t.history = t.history[n-1000:]
+	}
+}
 
 func (t *termSession) readLine(prompt string, completions []string) (string, error) {
 	// Callers gate on stdinIsTTY; on non-unix TTYs we still fall back to a

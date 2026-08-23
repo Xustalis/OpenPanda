@@ -129,6 +129,11 @@ func (w *progressWriter) String() string {
 // would make python look for adapters/ inside the task dir and die with exit 2.
 var adapterDir = "adapters"
 
+// AdapterDir returns the directory the current process resolves adapter
+// scripts from. The self-updater uses it to install updated adapter scripts
+// beside the running binary without re-deriving the resolution rules.
+func AdapterDir() string { return resolveAdapterDir() }
+
 // resolveAdapterDir absolutizes a relative adapterDir when an adapters/ dir
 // exists beside the cwd or the executable; otherwise the relative name stands
 // (the spawn error then names the missing path naturally).
@@ -142,16 +147,43 @@ func resolveAdapterDir() string {
 		}
 	}
 	if exe, err := os.Executable(); err == nil {
-		for _, cand := range []string{
-			filepath.Join(filepath.Dir(exe), "..", "adapters"),
-			filepath.Join(filepath.Dir(exe), "adapters"),
-		} {
+		for _, cand := range adapterCandidateDirs(exe) {
 			if st, err := os.Stat(cand); err == nil && st.IsDir() {
 				return cand
 			}
 		}
 	}
 	return adapterDir
+}
+
+// adapterCandidateDirs lists the adapters/ directories to probe for a given
+// executable path, in priority order. A packaged install (one-click script,
+// Homebrew) symlinks the real binary onto PATH (e.g. ~/.local/bin/panda →
+// ~/.local/share/openpanda/panda), so we follow the link and look beside the
+// real binary — alongside the repo-layout “../adapters“ fallback — or the
+// spawned adapter would name a missing path and die.
+func adapterCandidateDirs(exe string) []string {
+	if exe == "" {
+		return nil
+	}
+	real := exe
+	if r, err := filepath.EvalSymlinks(exe); err == nil {
+		real = r
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, base := range []string{exe, real} {
+		for _, p := range []string{
+			filepath.Join(filepath.Dir(base), "adapters"),
+			filepath.Join(filepath.Dir(base), "..", "adapters"),
+		} {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	return out
 }
 
 // adapterPath joins an adapter name under adapterDir, rejecting any name that

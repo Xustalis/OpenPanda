@@ -170,11 +170,22 @@ func runDoctor(args []string) {
 
 // findAdaptersDir locates the adapters/ directory — relative to the working
 // directory first (the documented run-from-repo-root layout), then next to
-// the executable (a relocated install). Empty when not found.
+// the executable (a relocated install). A packaged install (Homebrew or the
+// one-click script) symlinks the binary onto PATH, so we follow the link to
+// the real binary and probe beside it too. Empty when not found.
 func findAdaptersDir() string {
 	candidates := []string{"adapters"}
 	if exe, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "adapters"))
+		real := exe
+		if r, err := filepath.EvalSymlinks(exe); err == nil {
+			real = r
+		}
+		for _, base := range []string{exe, real} {
+			candidates = append(candidates,
+				filepath.Join(filepath.Dir(base), "adapters"),
+				filepath.Join(filepath.Dir(base), "..", "adapters"),
+			)
+		}
 	}
 	for _, dir := range candidates {
 		if st, err := os.Stat(filepath.Join(dir, "claude_code.py")); err == nil && !st.IsDir() {
