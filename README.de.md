@@ -21,6 +21,7 @@
 - [Was ist OpenPanda?](#was-ist-panda)
 - [Hauptfunktionen](#hauptfunktionen)
 - [Architektur](#architektur)
+- [Installation](#installation)
 - [Schnellstart](#schnellstart)
 - [Verwendung](#verwendung)
 - [CLI-Referenz](#cli-referenz)
@@ -112,6 +113,10 @@ dein Speicher bleibt auf deinen Geräten, und jeder Node spricht mit seinen Peer
   Anthropic- oder OpenAI-kompatibel — und MCP-Server). `panda web` ist der
   Ein-Befehl-Weg: standardmäßig Loopback-Bind + temporäres Token, der Browser
   öffnet sich bereits angemeldet. Fünf UI-Sprachen.
+- **Self-Update** — `panda web` (und `/web`) prüft im Hintergrund den Release-Kanal;
+  die Konsole lädt ein verfügbares Update herunter, verifiziert es und installiert
+  es per Klick, sobald die Aufgaben-Warteschlange leer ist. Ein heruntergeladenes
+  Update zu verwerfen hinterlässt keine Reste.
 - **Defense- und Sicherheits-Schichten** — Berechtigungs-Tiers, ein
   Circuit Breaker, Scope-Drift- und Endlosschleifen-Erkennung, plus
   Ausführungshärtung: Sandboxing, Netzwerk-Allowlists, Secret-Redaction und
@@ -161,6 +166,24 @@ Im Inneren jedes Nodes:
 │ log / util     strukturierte JSON-Logs, UUIDv7              │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## Installation
+
+Hole dir ein Release-Binary in einer Zeile — macOS, Linux oder Windows; einheitliches
+Erlebnis, kein Root nötig. Vollständige Anleitung und Fehlerbehebung:
+[docs/install.md](docs/install.md).
+
+| Plattform | Befehl |
+|---|---|
+| macOS / Linux | `curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh \| sh` |
+| macOS (Homebrew) | `brew tap Xustalis/openpanda && brew install openpanda` |
+| Windows (PowerShell) | `Set-ExecutionPolicy -Scope Process Bypass`, dann `irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 \| iex` |
+
+Der Installer lädt das passende Release-Archiv, prüft dessen SHA-256, entpackt das
+Binary samt seiner Agent-Adapter (`adapters/*.py`) in ein nutzerbezogenes Präfix
+und verlinkt `panda` in deinen `PATH`. Danach fragt er interaktiv, ob ein
+Auto-Start-Dienst registriert werden soll (`panda daemon` beim Login). Nach der
+Installation funktioniert `panda init` → `panda repl` (oder `panda web`) sofort.
 
 ## Schnellstart
 
@@ -359,6 +382,28 @@ go test ./internal/core/ -run 'TestTwoNodeProtocol|TestDelegateIdempotent|TestCa
 ```
 
 ## Deployment
+
+### Netzwerk-Sicherheitsbasis
+
+OpenPanda-Knoten sprechen standardmäßig unverschlüsseltes WebSocket (`ws://`).
+**Unverschlüsseltes WebSocket darf nur über einen vertrauenswürdigen privaten Pfad
+verwendet werden:**
+
+- Loopback- / Same-Host-Verbindungen (z. B. `127.0.0.1`, `localhost`).
+- Ein privates Overlay-Netzwerk, das du kontrollierst, etwa **Tailscale** oder ein VPN.
+- Ein physisch isoliertes LAN, in dem jedes Gerät vertraut ist.
+
+**Falls ein OpenPanda-Peer das öffentliche Internet überquert, beende TLS vor dem
+WebSocket-Listener** (z. B. nginx, Caddy, Traefik) und konfiguriere Peers mit der
+`wss://`-URL. Das `shared_secret` authentifiziert die Node-zu-Node-Begrüßungen, ist
+aber *kein* Ersatz für Transportverschlüsselung — stelle keinen unverschlüsselten
+`ws://`-Listener ins öffentliche Internet.
+
+Die `panel_addr`-Webkonsole liefert unverschlüsseltes HTTP und trägt ein
+Bearer-Token (auf Loopback wird ein ephemeres automatisch erzeugt). Halte sie auf
+Loopback oder hinter demselben TLS-Reverse-Proxy.
+
+### Speicherbedarf
 
 OpenPanda zielt auf stromsparende Geräte. Vor dem Einsatz auf Hardware sollte der
 steady-state Speicherverbrauch verifiziert werden — eine einzelne `ps`-Messung

@@ -16,6 +16,22 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Añadido
+
+- **Registro multiagente de adaptadores** — `internal/agents` es la única fuente de verdad para los CLI de agentes que PANDA delega (script adaptador, binario de sondeo, comando de instalación, URL de docs). `panda detect`, `panda agents`, la API de ajustes web y el sondeo de disponibilidad del commander leen de ahí, de modo que añadir un agente es cambiar una sola entrada.
+- **Cuatro nuevos adaptadores de agente** — Grok Build, DeepSeek Harness (`dsh`), OpenClaw y Hermes se unen a Codex, Claude Code y OpenCode: cada uno un pequeño puente Python headless que ejecuta el CLI y devuelve `{ok, result, exit_code}`.
+- **`panda agents`** — `list` (por defecto) sondea cada agente en PATH con la mejor versión posible; `test <name>` ejecuta una comprobación de conectividad; `install|update <name>` imprime el comando de instalación + enlace a la documentación. Cuando no hay nada instalado, la salida lista el comando de instalación y la URL de descarga de cada agente faltante.
+- **Lista de agentes en ajustes web** — la lista de agentes de la página de ajustes muestra ahora, para cada agente que falta, su comando de instalación y un enlace de descarga (`/api/agents` devuelve `install_hint` + `install_url`).
+- **Revisión superior de tareas (`superior task review`)** — tras ejecutarse un agente, el modelo de entrada evalúa el resultado contra los criterios de éxito de la tarea (`entry.Supervise`, salida `done`/`continue`). Un veredicto `continue` re-delega la instrucción de continuación (lo que falta + siguiente paso) a la cadena de agentes, en bucle hasta que el revisor acepta el trabajo o se agota un presupuesto de rondas (5 por defecto).
+- **Enrutado terminal por riesgo** — una tarea reversible completada cae en **done** (已完成); una tarea irreversible (Tier-2) aceptada — pushes, borrados, cambios de estado irreversibles — se aparca en **review** (待审批) con su resultado a la espera de tu firma; una tarea que el revisor sigue rechazando se aparca en **review** con la marca `needs_followup`. Los eventos de revisión se reproducen en el detalle de tarea web.
+- **Instalador de una línea** — `scripts/install.sh` (POSIX) y `scripts/install.ps1` (PowerShell) descargan el archivo de release correspondiente, verifican su SHA-256, desempaquetan el binario y sus adaptadores de agente en un prefijo por usuario y enlazan `panda` en el `PATH`, con un servicio de arranque automático opcional (`panda daemon` al iniciar sesión). Un tap de Homebrew (`brew tap Xustalis/openpanda && brew install openpanda`) cubre macOS.
+- **Empaquetado de releases** — `scripts/package.sh` (y `make package`) compilan de forma cruzada todas las plataformas soportadas en `dist/panda-<version>-<os>-<arch>.tar.gz` / `.zip` más un `checksums.txt`, listos para GitHub Releases.
+- **Auto-actualización** — `panda web` y el `/web` de la REPL comprueban el canal de releases en busca de un CLI más nuevo mientras se ejecutan; la consola web descarga y verifica la actualización y, una vez la cola de tareas está inactiva, la aplica en un clic (intercambio atómico del binario, refresco de adaptadores, reinicio). Descartar una actualización descargada no deja residuos; en Windows el `.old` de respaldo del intercambio se limpia en el siguiente arranque.
+
+### Corregido
+
+- **El banner multilínea de `--version`** (p. ej. Hermes) ya no ensucia la tabla de agentes de una línea — la salida de versión se trunca a su primera línea tanto en la CLI como en la API de ajustes web.
+
 ## [0.0.2] - 2026-08-22
 
 El lanzamiento centrado en la CLI: el rediseño del kernel (etapas A–C) aterriza —cada capacidad web gana su par en CLI—, la REPL se convierte en la puerta principal, y la CLI gana memoria de conversación, reporte de tareas en vivo y renderizado de Markdown según el destino.

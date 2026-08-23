@@ -16,6 +16,22 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
+### 追加
+
+- **マルチエージェントアダプターレジストリ**——`internal/agents` は PANDA が委譲するすべての agent CLI の唯一の真実源（アダプタースクリプト、プローブバイナリ、インストールコマンド、ドキュメント URL）。`panda detect`、`panda agents`、Web 設定 API、commander の可用性プローブはすべてここから読み取るため、agent の追加は 1 箇所の変更で済む。
+- **4 つの新しい agent アダプター**——Grok Build、DeepSeek Harness（`dsh`）、OpenClaw、Hermes が Codex、Claude Code、OpenCode に加わった。いずれも CLI を実行して `{ok, result, exit_code}` を返す小型のヘッドレス Python ブリッジ。
+- **`panda agents`**——`list`（デフォルト）は PATH 上の各 agent をベストエフォートでバージョン検査する。`test <name>` は接続確認、`install|update <name>` はインストールコマンド + ドキュメントリンクを表示する。何もインストールされていない場合、全エージェントのインストールコマンドとダウンロード URL を一覧表示する。
+- **Web 設定の agent 一覧**——設定ページの agent リストで、未インストールの agent ごとにインストールコマンドとダウンロードリンクを表示する（`/api/agents` が `install_hint` + `install_url` を返す）。
+- **上位の完了判定（`superior task review`）**——agent 実行後、エントリモデルがタスクの成功基準に照らして結果を判定する（`entry.Supervise`、出力は `done`/`continue`）。`continue` 判定は後続の指示（残り作業 + 次のステップ）を agent チェーンに再委譲し、レビューが受理されるか上限ラウンド数（デフォルト 5）に達するまで繰り返す。
+- **リスクによる終端ルーティング**——完了した可逆タスクは **done**（完了）へ。受理済みの不可逆（Tier-2）タスク——push・削除・不可逆な状態変更——は結果とともに **review**（承認待ち）で待機し、人間の承認を仰ぐ。レビューが何度も却下するタスクは `needs_followup` の印付きで **review** に留まる。レビュー判定イベントは Web のタスク詳細で再生される。
+- **ワンラインインストーラー**——`scripts/install.sh`（POSIX）と `scripts/install.ps1`（PowerShell）が対応プラットフォームのリリースアーカイブをダウンロードし、SHA-256 を検証して、バイナリと agent アダプターをユーザー単位のプレフィックスに展開し、`panda` を `PATH` にリンクする。任意で自動起動サービス（ログイン時に `panda daemon`）を登録できる。macOS には Homebrew tap（`brew tap Xustalis/openpanda && brew install openpanda`）も提供する。
+- **リリースパッケージング**——`scripts/package.sh`（および `make package`）が全対応プラットフォームをクロスコンパイルして `dist/panda-<version>-<os>-<arch>.tar.gz` / `.zip` と `checksums.txt` を生成し、GitHub Releases にそのまま利用できる。
+- **セルフアップデート**——`panda web` と REPL の `/web` は実行中にリリースチャネルをバックグラウンドでチェックする。Web コンソールが更新をダウンロード・検証し、タスクキューがアイドルになると 1 クリックで適用する（バイナリの原子的置換、アダプター更新、再起動）。ダウンロード済み更新を破棄しても残留物は残らない。Windows では置換時に生じる `.old` サイドカーを次回起動時に掃除する。
+
+### 修正
+
+- **複数行の `--version` バナー**（例：Hermes）が 1 行の agent テーブルを汚す問題を解消——バージョン出力は CLI と Web 設定 API の両方で先頭行に切り詰められる。
+
 ## [0.0.2] - 2026-08-22
 
 CLI ファーストのリリース：カーネル再設計（stage A–C）が完了——すべての Web 機能に CLI 対応物が揃い、REPL が製品の正玄関となり、CLI は会話メモリ・リアルタイムタスク報告・出力先ごとの Markdown レンダリングを獲得した。

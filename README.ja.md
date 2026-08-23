@@ -21,6 +21,7 @@
 - [OpenPandaとは](#pandaとは)
 - [主な機能](#主な機能)
 - [アーキテクチャ](#アーキテクチャ)
+- [インストール](#インストール)
 - [はじめに](#はじめに)
 - [使い方](#使い方)
 - [CLI リファレンス](#cli-リファレンス)
@@ -66,6 +67,7 @@ Claude Code、Codex、OpenCode、OpenClaw……どれも単一マシン上の強
 - **2層メモリ** — ユーザー単位・プロジェクト単位で分離された記憶（`USER.md` / `MEMORY.md`形式）を隔離壁の背後に保持。さらにバックグラウンドの**Dreaming**エンジンが、ノードがアイドルの間に日次ログを長期記憶へ統合します。
 - **音声入力** — オプションのサイドカーパイプライン（ウェイクワード → STT → LLM → TTS）。ハードウェアゲート付きで、組み込みマイク向けに準備されています。
 - **対話型 REPL + 内蔵 Web コンソール** — `panda repl` が操作席：素の入力は ask エンジンへ、スラッシュコマンド（`/tasks`、`/approve`、`/projects`、`/nodes`、`/lang`…）でパネルを駆動し、`/web` で内蔵コンソールをワンクリック起動。タスクキューは**カンバンボード**（未着手/進行中/承認待ち/完了）でインライン承認対応。チャット、リマインダー、編集可能なメモリページ（USER/MEMORY/DREAMS）、設定ページ（モデルエンドポイント：Anthropic/OpenAI 互換、MCP サーバー）も同梱。`panda web` はワンコマンドで起動：デフォルトでループバック + 一時トークン、ブラウザがログイン済みで開きます。UI 言語は 5 種類。
+- **セルフアップデート** — `panda web`（および `/web`）はバックグラウンドでリリースチャネルを確認し、コンソールが利用可能な更新をダウンロード・検証して、タスクキューがアイドルになると 1 クリックでインストールします。ダウンロード済みの更新を破棄しても何も残りません。
 - **防御と安全レイヤ** — 権限Tier、サーキットブレーカー、スコープ逸脱検出と無限ループ検出。実行側の強化：サンドボックス、ネットワーク許可リスト、シークレットの秘匿化、監査ログ。
 - **スリム設計** — 定常RSSは約 **13–20 MB**。リソース制約のあるシングルボードコンピュータで動くことを前提に設計されています。
 - **クリーンなクロスコンパイル** — プラットフォームごとに単一の静的バイナリ、CGO不要（`modernc.org/sqlite`による純Go SQLite）。
@@ -110,6 +112,18 @@ Claude Code、Codex、OpenCode、OpenClaw……どれも単一マシン上の強
 │ log / util     構造化JSONログ、UUIDv7                       │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## インストール
+
+1 行でリリースバイナリを入手できます。macOS / Linux / Windows 対応、一貫した体験で root 不要。詳しいガイドとトラブルシューティングは [docs/install.md](docs/install.md) を参照してください。
+
+| プラットフォーム | コマンド |
+|---|---|
+| macOS / Linux | `curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh \| sh` |
+| macOS（Homebrew） | `brew tap Xustalis/openpanda && brew install openpanda` |
+| Windows（PowerShell） | `Set-ExecutionPolicy -Scope Process Bypass` を実行後、`irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 \| iex` |
+
+インストーラーは対応するリリースアーカイブをダウンロードして SHA-256 を検証し、バイナリと agent アダプター（`adapters/*.py`）をユーザー単位のプレフィックスに展開し、`panda` を `PATH` にリンクします。その後、自動起動サービス（ログイン時の `panda daemon`）を登録するかを対話的に尋ねます。インストール後は `panda init` → `panda repl`（または `panda web`）がすぐに使えます。
 
 ## はじめに
 
@@ -298,6 +312,20 @@ go test ./internal/core/ -run 'TestTwoNodeProtocol|TestDelegateIdempotent|TestCa
 ```
 
 ## デプロイ
+
+### ネットワークセキュリティ基盤
+
+OpenPandaのノードはデフォルトで平文 WebSocket（`ws://`）で通信します。**平文 WebSocket は信頼できるプライベート経路でのみ使用してください：**
+
+- ループバック / 同一ホスト接続（例：`127.0.0.1`、`localhost`）。
+- **Tailscale** や VPN など、自分が管理するプライベートオーバーレイネットワーク。
+- 全デバイスが信頼できる物理的に隔離された LAN。
+
+**いずれかの OpenPanda ピアが公衆インターネットを経由する場合は、WebSocket リスナーの手前で TLS を終端してください**（nginx、Caddy、Traefik など）。ピアには `wss://` URL を設定します。`shared_secret` はノード間の hello を認証するもので、トランスポート暗号化の代わりには*なりません*。平文 `ws://` リスナーを公衆インターネットに公開しないでください。
+
+`panel_addr` の Web コンソールは平文 HTTP で Bearer トークンを運びます（ループバックでは一時トークンが自動生成されます）。ループバックに留めるか、同じ TLS リバースプロキシの背後に配置してください。
+
+### メモリフットプリント
 
 OpenPandaは低消費電力デバイスをターゲットにしています。ハードウェアへ載せる前に、定常メモリを検証してください——`ps`の1回のサンプリングはGCノイズで不正確なため、複数回測定します:
 

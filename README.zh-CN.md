@@ -20,6 +20,7 @@
 - [这是什么](#这是什么)
 - [核心特性](#核心特性)
 - [架构](#架构)
+- [安装](#安装)
 - [快速开始](#快速开始)
 - [使用示例](#使用示例)
 - [CLI 参考](#cli-参考)
@@ -110,6 +111,18 @@ Claude Code、Codex、OpenCode、OpenClaw……每一个都是单机上的强力
 │ log / util     结构化 JSON 日志，UUIDv7                     │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## 安装
+
+一行命令获取发布版二进制——支持 macOS、Linux 或 Windows；体验一致，无需 root。完整指南与故障排查见 [docs/install.md](docs/install.md)。
+
+| 平台 | 命令 |
+|---|---|
+| macOS / Linux | `curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh \| sh` |
+| macOS（Homebrew） | `brew tap Xustalis/openpanda && brew install openpanda` |
+| Windows（PowerShell） | `Set-ExecutionPolicy -Scope Process Bypass` 后执行 `irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 \| iex` |
+
+安装脚本会下载对应平台的发布包，校验 SHA-256，把二进制连同 agent 适配器（`adapters/*.py`）解压到用户前缀，并将 `panda` 链接到你的 `PATH`；随后交互式询问是否注册开机自启服务（登录时运行 `panda daemon`）。安装完成后，`panda init` → `panda repl`（或 `panda web`）即可立即使用。
 
 ## 快速开始
 
