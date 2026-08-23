@@ -14,7 +14,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Entries name the change and its user-visible effect in one to three lines; the introducing commit is cited where it aids archaeology.
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
-## [Unreleased]
+## [0.0.3] - 2026-08-23
 
 ### Added
 

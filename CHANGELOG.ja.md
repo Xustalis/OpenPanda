@@ -14,7 +14,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 各項目は変更内容とユーザーから見える影響を 1〜3 行で書き、必要に応じて導入コミットを付記して遡りやすくする。
 - 英語版（CHANGELOG.md）が正。zh-CN / ja / es / de の翻訳はそのミラーで、リリース前後は一時的に遅れることがある。
 
-## [Unreleased]
+## [0.0.3] - 2026-08-23
 
 ### 追加
 
