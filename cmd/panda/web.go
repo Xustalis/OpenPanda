@@ -31,6 +31,8 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
+	"github.com/Xustalis/OpenPanda/internal/updater"
+	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"github.com/Xustalis/OpenPanda/webui/panel"
 	"github.com/Xustalis/OpenPanda/webui/push"
 )
@@ -121,6 +123,16 @@ func runWeb(args []string) {
 	}, logger)
 	go reminderScan.Run(context.Background())
 
+	// Self-update: check the release channel in the background while the panel
+	// runs, so a newer CLI is discovered during normal use rather than only on
+	// demand. Apply gates on task-queue idle so an update never interrupts work.
+	updateMgr := updater.New(updater.Options{
+		Current: versionpkg.Version,
+		Logger:  logger,
+		Idle:    store.Idle,
+	})
+	updateMgr.StartAutoCheck(context.Background(), 0)
+
 	srv := &http.Server{
 		Addr: addr,
 		Handler: panel.New(panel.Deps{
@@ -136,6 +148,7 @@ func runWeb(args []string) {
 			Cfg:        cfg,
 			ConfigPath: resolvedConfigPath(*configPath),
 			Token:      token,
+			Updater:    updateMgr,
 		}),
 	}
 	// Bind synchronously so a taken port surfaces as an error, not a

@@ -1028,6 +1028,18 @@ func (s *TaskStore) Children(ctx context.Context, parentID string) ([]Task, erro
 	return scanTasks(rows)
 }
 
+// Idle reports whether the store has no in-flight tasks (running, dispatched,
+// or waiting for context). It mirrors Core.Idle so callers that only hold a
+// *TaskStore (the web panel) can gate on the same condition without a Core.
+func (s *TaskStore) Idle(ctx context.Context) bool {
+	for _, state := range []string{StateRunning, StateDispatched, StateWaitingCtx} {
+		if tasks, err := s.ListByState(ctx, state); err == nil && len(tasks) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // ListByState returns tasks filtered by state ("" = all), newest first.
 func (s *TaskStore) ListByState(ctx context.Context, state string) ([]Task, error) {
 	q := `SELECT ` + taskColumns + ` FROM tasks`

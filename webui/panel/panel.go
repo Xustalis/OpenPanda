@@ -25,6 +25,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
+	"github.com/Xustalis/OpenPanda/internal/updater"
 	"github.com/Xustalis/OpenPanda/webui/push"
 )
 
@@ -47,6 +48,7 @@ type Deps struct {
 	ConfigPath string // where PUT /api/settings/model persists ("" = memory only)
 	StaticDir  string
 	Token      string
+	Updater    *updater.Manager // nil disables the self-update endpoints
 }
 
 // New builds the panel HTTP handler: the static web app under StaticDir plus
@@ -71,6 +73,7 @@ func New(d Deps) http.Handler {
 		reminders:  d.Reminders,
 		cfg:        d.Cfg,
 		configPath: d.ConfigPath,
+		updater:    d.Updater,
 	}
 	// Session summary finalizer (queue redesign §5): finished tasks fold
 	// their result into the linked chat as an assistant turn. Runs for the
@@ -103,6 +106,13 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/metrics", h.listMetrics)
 	mux.HandleFunc("GET /api/audit", h.verifyAudit)
 	mux.HandleFunc("GET /api/audit/entries", h.auditEntries)
+	if d.Updater != nil {
+		mux.HandleFunc("GET /api/update", h.getUpdate)
+		mux.HandleFunc("POST /api/update/check", h.checkUpdate)
+		mux.HandleFunc("POST /api/update/download", h.downloadUpdate)
+		mux.HandleFunc("POST /api/update/apply", h.applyUpdate)
+		mux.HandleFunc("POST /api/update/cancel", h.cancelUpdate)
+	}
 	if d.SkillStore != nil {
 		mux.HandleFunc("GET /api/skills", h.listSkills)
 		mux.HandleFunc("POST /api/skills/approve", h.skillAction(true))
@@ -276,6 +286,7 @@ type handler struct {
 	reminders  *reminders.Store
 	cfg        *config.Config
 	configPath string
+	updater    *updater.Manager
 }
 
 // taskJSON is the wire form of a task row, with stable snake_case names so the

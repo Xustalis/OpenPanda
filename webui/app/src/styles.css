@@ -1290,6 +1290,29 @@ label {
   gap: 10px;
 }
 
+.update-card {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.update-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.update-note {
+  margin: 0;
+}
+
+.update-version {
+  margin: 4px 0 0;
+}
+
 /* ---- Reject reason form ---- */
 
 .reject-form {

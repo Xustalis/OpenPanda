@@ -1,5 +1,5 @@
-import { useState } from 'preact/hooks'
-import { api, type AuditEntry, type DelegationMetric } from '../api/client'
+import { useCallback, useEffect, useState } from 'preact/hooks'
+import { api, type AuditEntry, type DelegationMetric, type UpdateStatus } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 
@@ -51,6 +51,7 @@ export function SystemView() {
             </p>
           )}
         </div>
+        <UpdateCard />
       </div>
 
       <div class="detail-block">
@@ -118,6 +119,105 @@ export function SystemView() {
         )}
       </div>
     </section>
+  )
+}
+
+function UpdateCard() {
+  const [status, setStatus] = useState<UpdateStatus | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await api.updateStatus())
+    } catch {
+      // The backend restarts right after apply; ignore the transient miss.
+    }
+  }, [])
+
+  useEffect(() => {
+    void refresh()
+    const id = window.setInterval(() => void refresh(), 2000)
+    return () => window.clearInterval(id)
+  }, [refresh])
+
+  async function act(fn: () => Promise<UpdateStatus>) {
+    setBusy(true)
+    setActionError(null)
+    try {
+      setStatus(await fn())
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+      void refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!status) {
+    return (
+      <div class="card update-card">
+        <span class="dim">{t('system.updateTitle')}</span>
+        <p class="dim">{t('common.loading')}</p>
+      </div>
+    )
+  }
+
+  const stage = status.stage
+  const error = actionError ?? (stage === 'error' ? status.error ?? '' : null)
+
+  return (
+    <div class="card update-card">
+      <span class="dim">{t('system.updateTitle')}</span>
+
+      {stage === 'checking' && <p class="dim">{t('system.updateChecking')}</p>}
+      {stage === 'downloading' && <p class="dim">{t('system.updateDownloading')}</p>}
+      {stage === 'applying' && <p class="dim">{t('system.updateApplying')}</p>}
+      {stage === 'done' && <p class="test-result ok">{t('system.updateDone')}</p>}
+
+      {stage === 'available' && (
+        <div class="update-actions">
+          <p class="update-note">{t('system.updateAvailable', { latest: status.latest ?? '' })}</p>
+          <button class="btn" disabled={busy} onClick={() => void act(() => api.downloadUpdate())}>
+            {t('system.updateDownload')}
+          </button>
+        </div>
+      )}
+
+      {stage === 'staged' && (
+        <div class="update-actions">
+          <p class="update-note">{t('system.updateStaged', { latest: status.latest ?? '' })}</p>
+          {status.idle ? (
+            <button class="btn" disabled={busy} onClick={() => void act(() => api.applyUpdate())}>
+              {t('system.updateApply')}
+            </button>
+          ) : (
+            <p class="dim">{t('system.updateWaiting')}</p>
+          )}
+          <button class="btn" disabled={busy} onClick={() => void act(() => api.cancelUpdate())}>
+            {t('system.updateDiscard')}
+          </button>
+        </div>
+      )}
+
+      {(stage === 'idle' || stage === 'error') && (
+        <div class="update-actions">
+          {stage === 'idle' && <p class="dim">{t('system.updateUpToDate')}</p>}
+          {error && (
+            <p class="test-result bad">
+              {t('system.updateError')} {error}
+            </p>
+          )}
+          <button class="btn" disabled={busy} onClick={() => void act(() => api.checkUpdate())}>
+            {t('system.updateCheck')}
+          </button>
+        </div>
+      )}
+
+      <p class="dim update-version">
+        {t('system.updateCurrent')}: <span class="mono">{status.current}</span>
+      </p>
+    </div>
   )
 }
 

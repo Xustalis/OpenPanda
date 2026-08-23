@@ -43,6 +43,8 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
+	"github.com/Xustalis/OpenPanda/internal/updater"
+	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"github.com/Xustalis/OpenPanda/webui/panel"
 	"github.com/Xustalis/OpenPanda/webui/push"
 )
@@ -1105,6 +1107,14 @@ func (r *repl) cmdWeb(arg string) {
 		fmt.Println(i18n.Tf(r.loc, "repl.web.running", "url", r.webURL))
 		return
 	}
+	// Self-update: discover newer CLI releases in the background; apply gates
+	// on the task queue being idle (same policy as `panda web`).
+	updateMgr := updater.New(updater.Options{
+		Current: versionpkg.Version,
+		Idle:    r.store.Idle,
+	})
+	updateMgr.StartAutoCheck(context.Background(), 0)
+
 	handler := panel.New(panel.Deps{
 		Store:      r.store,
 		Engine:     r.engine,
@@ -1118,6 +1128,7 @@ func (r *repl) cmdWeb(arg string) {
 		Cfg:        r.cfg,
 		ConfigPath: r.configPath,
 		Token:      token,
+		Updater:    updateMgr,
 	})
 	srv := &http.Server{Addr: addr, Handler: handler}
 	// Bind synchronously so a taken port surfaces as an error, not a silent

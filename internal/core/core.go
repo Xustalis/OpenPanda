@@ -289,10 +289,7 @@ func (c *Core) SetLimits(maxConns, maxConnsPerIP int) {
 // consolidation only when the node is free, so dreaming never competes with
 // real work.
 func (c *Core) Idle(ctx context.Context) bool {
-	running, _ := c.store.ListByState(ctx, StateRunning)
-	dispatched, _ := c.store.ListByState(ctx, StateDispatched)
-	waiting, _ := c.store.ListByState(ctx, StateWaitingCtx)
-	return len(running) == 0 && len(dispatched) == 0 && len(waiting) == 0
+	return c.store.Idle(ctx)
 }
 
 // RunHeartbeat starts the heartbeat loop: each tick updates the local ledger

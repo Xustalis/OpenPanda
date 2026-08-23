@@ -160,6 +160,16 @@ export interface AskResult {
   exit_code?: number
 }
 
+/** GET /api/update — the self-update pipeline status snapshot. */
+export interface UpdateStatus {
+  stage: 'idle' | 'checking' | 'available' | 'downloading' | 'staged' | 'applying' | 'done' | 'error'
+  current: string
+  latest?: string
+  available: boolean
+  idle: boolean
+  error?: string
+}
+
 /** One agent declared on a node's capability card (GET /api/nodes). */
 export interface NodeAgentDetail {
   capabilities?: string[]
@@ -427,6 +437,28 @@ export const api = {
 
   version(): Promise<{ version: string }> {
     return request('GET', '/api/version')
+  },
+
+  // ---- Self-update (check / download / apply / discard) ----
+
+  updateStatus(): Promise<UpdateStatus> {
+    return request('GET', '/api/update')
+  },
+
+  checkUpdate(): Promise<UpdateStatus> {
+    return request('POST', '/api/update/check')
+  },
+
+  downloadUpdate(): Promise<UpdateStatus> {
+    return request('POST', '/api/update/download')
+  },
+
+  applyUpdate(): Promise<UpdateStatus> {
+    return request('POST', '/api/update/apply')
+  },
+
+  cancelUpdate(): Promise<UpdateStatus> {
+    return request('POST', '/api/update/cancel')
   },
 
   metrics(): Promise<DelegationMetric[]> {
