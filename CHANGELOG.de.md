@@ -78,7 +78,7 @@ Erstes Open-Source-Vorab-Release: der komplette Kernel-Funktionsumfang (Daemon, 
 - **Sprach-Sidecar** — Wachwort, STT, TTS und VAD (hardwaregegate), mit `OPENPANDA_WAKE_KEYWORD` / `OPENPANDA_WAKE_MODEL`-Overrides (84faf08).
 - **Echtgeräte-Deployment** — drei Knoten auf Mac / Windows / Orange Pi verifiziert, Scope-Routing und die headless Kernel-Form (0aa9f73, 7f1f8bd).
 - **Audit und Migrationen** — `prev_hash`-Audit-Ketten, PRAGMA-`user_version`-SQLite-Migrationen, Slow-DoS-Schutz, MCP-Client-Hard-Timeout (7582754).
-- **Scheduler-Papier-Mechanismen** — DCPS-gewichtete Bewertung, abgezinst um die TMB-Heartbeat-Frische (30-Minuten-Halbwertszeit); kapazitätsgesteuertes Accept/Decline; Auto-Umleitung bei Ablehnung unter Ausschluss historischer Ablehner (f454909, 7385a89).
+- **Scheduler-Mechanismen** — DCPS-gewichtete Bewertung, abgezinst um die TMB-Heartbeat-Frische (30-Minuten-Halbwertszeit); kapazitätsgesteuertes Accept/Decline; Auto-Umleitung bei Ablehnung unter Ausschluss historischer Ablehner (f454909, 7385a89).
 - **Einmalige CLI-Panel-Befehle** — `panda status`, `panda queue` und `panda task | cancel | approve | reject | logs` inspizieren den Knoten und verwalten Aufgaben ohne die REPL zu betreten (307e13a).
 - **Interaktive REPL** — Slash-Befehle über jede Panel-Fläche (`/ask`, `/tasks`, `/approve`, `/nodes`, `/web`…), i18n in fünf Sprachen, optionale Ask-Engine (6119493).
 - **Eingebettete Web-Konsole** — auf Vite + Preact + TypeScript neu gebaut und per `go:embed` ins Binary gefaltet: Queue/Detail/Ask/Projekte/Knoten-Ansichten, Live-SSE, fünf UI-Sprachen (61cc519, c9768c1).

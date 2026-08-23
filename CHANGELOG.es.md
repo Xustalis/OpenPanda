@@ -78,7 +78,7 @@ Pre-lanzamiento inicial de código abierto: el conjunto completo del kernel (dem
 - **Sidecar de voz** — palabra de activación, STT, TTS y VAD (con puerta de hardware), con overrides `OPENPANDA_WAKE_KEYWORD` / `OPENPANDA_WAKE_MODEL` (84faf08).
 - **Despliegue en hardware real** — tres nodos verificados en Mac / Windows / Orange Pi, enrutamiento por scope y la forma kernel sin interfaz (0aa9f73, 7f1f8bd).
 - **Auditoría y migraciones** — cadenas de auditoría `prev_hash`, migraciones SQLite por PRAGMA `user_version`, protección contra slow-DoS, timeout duro del cliente MCP (7582754).
-- **Mecanismos del paper del planificador** — puntuación ponderada DCPS descontada por la frescura del heartbeat TMB (vida media de 30 minutos); accept/decline por capacidad; reenrutado automático ante rechazo excluyendo a los rechazadores históricos (f454909, 7385a89).
+- **Mecanismos del planificador** — puntuación ponderada DCPS descontada por la frescura del heartbeat TMB (vida media de 30 minutos); accept/decline por capacidad; reenrutado automático ante rechazo excluyendo a los rechazadores históricos (f454909, 7385a89).
 - **Comandos de panel CLI de una sola pasada** — `panda status`, `panda queue` y `panda task | cancel | approve | reject | logs` inspeccionan el nodo y gestionan tareas sin entrar en la REPL (307e13a).
 - **REPL interactiva** — comandos con barra sobre cada superficie del panel (`/ask`, `/tasks`, `/approve`, `/nodes`, `/web`…), i18n en cinco idiomas, motor ask opcional (6119493).
 - **Consola web embebida** — reconstruida en Vite + Preact + TypeScript y plegada al binario vía `go:embed`: vistas de cola/detalle/ask/proyectos/nodos, SSE en vivo, cinco idiomas de UI (61cc519, c9768c1).

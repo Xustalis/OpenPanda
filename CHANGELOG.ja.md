@@ -78,7 +78,7 @@ CLI ファーストのリリース：カーネル再設計（stage A–C）が�
 - **音声サイドカー**——ウェイクワード、STT、TTS、VAD（ハードウェアゲート付き）、`OPENPANDA_WAKE_KEYWORD` / `OPENPANDA_WAKE_MODEL` 上書き（84faf08）。
 - **実機デプロイ**——Mac / Windows / Orange Pi の 3 ノード検証、scope ルーティング、ヘッドレスカーネル形態（0aa9f73、7f1f8bd）。
 - **監査とマイグレーション**——`prev_hash` 監査チェーン、PRAGMA `user_version` の SQLite マイグレーション、スロー DoS 防護、MCP クライアントのハードタイムアウト（7582754）。
-- **スケジューラ論文メカニズム**——DCPS 加重スコアを TMB ハートビート新しさで割り引き（30 分半減期）。容量駆動 accept/decline、拒否後の自動再経路（歴史の拒否者を除外）（f454909、7385a89）。
+- **スケジューラメカニズム**——DCPS 加重スコアを TMB ハートビート新しさで割り引き（30 分半減期）。容量駆動 accept/decline、拒否後の自動再経路（歴史の拒否者を除外）（f454909、7385a89）。
 - **単発 CLI パネルコマンド**——`panda status`、`panda queue`、そして `panda task | cancel | approve | reject | logs` は REPL に入らずにノードを検視しタスクを管理（307e13a）。
 - **対話 REPL**——全パネル面をカバーするスラッシュコマンド（`/ask`、`/tasks`、`/approve`、`/nodes`、`/web`…）、5 言語 i18n、ask エンジンは任意（6119493）。
 - **組み込み Web コンソール**——Vite + Preact + TypeScript で再構築し `go:embed` でバイナリに折り込み。キュー/詳細/ask/プロジェクト/ノードビュー、ライブ SSE、5 UI 言語（61cc519、c9768c1）。

@@ -410,5 +410,5 @@ Veröffentlicht unter der [MIT-Lizenz](LICENSE).
 
 ## Danksagung
 
-Inspiriert von der Theorie des verteilten Multi-Agent-Schedulings (ATC-MARL) und
+Inspiriert von der Theorie des verteilten Multi-Agent-Schedulings und
 von den Gedächtnismustern von Hermes und OpenClaw. Gebaut von Xenith.

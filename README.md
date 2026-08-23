@@ -21,6 +21,7 @@
 - [What is OpenPanda?](#what-is-panda)
 - [Key features](#key-features)
 - [Architecture](#architecture)
+- [Installing](#installing)
 - [Getting started](#getting-started)
 - [Usage](#usage)
 - [CLI reference](#cli-reference)
@@ -112,6 +113,10 @@ WebSocket links you control.
   bind + ephemeral token by default, browser opens already logged in (no
   config, no token paste). Five UI languages: English, 简体中文, 日本語,
   Español, Deutsch.
+- **Self-update** — `panda web` (and `/web`) checks the release channel in the
+  background; the console downloads and verifies an available update, then
+  installs it in one click once the task queue is idle. Discard a downloaded
+  update and nothing is left behind.
 - **Defense & safety layers** — permission tiers, a circuit breaker, scope-drift
   and infinite-loop detection, plus execution-side hardening: sandboxing,
   network allow-lists, secret redaction, and audit logging.
@@ -160,6 +165,24 @@ Inside each node:
 │ log / util     structured JSON logs, UUIDv7                 │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## Installing
+
+Get a release binary in one line — macOS, Linux, or Windows; consistent
+experience, no root required. Full guide and troubleshooting:
+[docs/install.md](docs/install.md).
+
+| Platform | Command |
+|---|---|
+| macOS / Linux | `curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh \| sh` |
+| macOS (Homebrew) | `brew tap Xustalis/openpanda && brew install openpanda` |
+| Windows (PowerShell) | `Set-ExecutionPolicy -Scope Process Bypass` then `irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 \| iex` |
+
+The installer downloads the matching release archive, verifies its SHA-256,
+unpacks the binary plus its agent adapters (`adapters/*.py`) into a per-user
+prefix, and links `panda` onto your `PATH`. It then interactively asks whether
+to register an auto-start service (`panda daemon` at login). After installing,
+`panda init` → `panda repl` (or `panda web`) works immediately.
 
 ## Getting started
 
@@ -439,5 +462,5 @@ Released under the [MIT License](LICENSE).
 
 ## Acknowledgements
 
-Inspired by distributed multi-agent scheduling theory (ATC-MARL) and by the
+Inspired by distributed multi-agent scheduling theory and by the
 memory patterns of Hermes and OpenClaw. Built by Xenith.

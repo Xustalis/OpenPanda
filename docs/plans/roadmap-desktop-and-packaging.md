@@ -34,6 +34,10 @@ is steering toward, written down so contributions can align with it.
       without reading two YAML files.
 - [ ] **Packaging** — `.deb`/`.rpm` for the SBC use case (Orange Pi et al.),
       systemd unit templates in `contrib/`, LaunchAgent plist for macOS.
+- [x] **CLI self-update** — `panda web` / `/web` check the release channel in
+      the background, download + SHA-256-verify the platform archive, and swap
+      the binary once the task queue is idle (`internal/updater`). Desktop is
+      still **后期/planned** — see Stage 3 below.
 - [ ] **Real-device fleet validation** — run the smoke-delegate matrix
       (macOS ↔ linux-arm64 SBC) from the delegation report on real hardware,
       not just loopback node pairs.
@@ -52,9 +56,11 @@ The desktop app is a *shell over the CLI*, never a second implementation:
       SSE event stream.
 - [ ] **Voice entry graduates** — the sidecar pipeline (wake word → STT →
       LLM → TTS) gets a desktop toggle once microphone validation lands.
-- [ ] **Auto-update** — desktop builds check the release channel; kernel
-      updates preserve the on-disk DB migrations (`user_version` PRAGMA
-      already guarantees forward-only schema).
+- [ ] **Auto-update**（后期/planned）— desktop builds check the release
+      channel; kernel updates preserve the on-disk DB migrations
+      (`user_version` PRAGMA already guarantees forward-only schema). CLI
+      self-update already ships in Stage 2; the desktop shell reuses the same
+      `internal/updater` path once it exists.
 
 ## Stage 4 — beyond
 

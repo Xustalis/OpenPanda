@@ -417,5 +417,5 @@ Publicado bajo la [Licencia MIT](LICENSE).
 
 ## Agradecimientos
 
-Inspirado por la teoría de planificación multiagente distribuida (ATC-MARL) y por
+Inspirado por la teoría de planificación multiagente distribuida y por
 los patrones de memoria de Hermes y OpenClaw. Construido por Xenith.

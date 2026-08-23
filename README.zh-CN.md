@@ -65,6 +65,7 @@ Claude Code、Codex、OpenCode、OpenClaw……每一个都是单机上的强力
 - **双层记忆**——按用户与按项目隔离的记忆（`USER.md` / `MEMORY.md` 风格），外加隔离墙；后台 **Dreaming** 引擎在节点空闲时把日常日志沉淀为长期记忆。
 - **语音入口**——可选的 sidecar 管线（唤醒词 → 语音识别 → LLM → 语音合成），硬件门控，为嵌入式麦克风准备。
 - **交互式 REPL + 内嵌 Web 控制台**——`panda repl` 是操作席：裸输入直达 ask 引擎，斜杠命令驱动面板（`/tasks`、`/approve`、`/projects`、`/nodes`、`/lang`……），`/web` 一键启动内嵌控制台（对话、任务看板、审批、提醒、可编辑的记忆页）。`panda web` 一条命令开箱即用：默认回环绑定 + 临时 token，浏览器自动登录。五种界面语言：English、简体中文、日本語、Español、Deutsch。
+- **自更新**——`panda web`（及 `/web`）在后台检查发布渠道；控制台下载并校验可用更新，待任务队列空闲后一键安装。放弃已下载的更新则不留任何残留。
 - **防御与安全层**——权限 Tier、熔断器、范围漂移与死循环检测；执行侧加固：沙箱、网络白名单、密钥脱敏、审计日志。
 - **极致轻量**——稳态 RSS 约 **13–20 MB**，为资源受限的单板电脑而生。
 - **干净交叉编译**——每个平台一个静态二进制，无需 CGO（纯 Go SQLite，`modernc.org/sqlite`）。
@@ -357,4 +358,4 @@ Phase 0–3（入口模型 · 双节点委派 · 记忆+语音+执行加固 · �
 
 ## 致谢
 
-灵感来自分布式多 Agent 调度理论（ATC-MARL）以及 Hermes 与 OpenClaw 的记忆模式。由 Xenith 构建。
+灵感来自分布式多 Agent 调度理论以及 Hermes 与 OpenClaw 的记忆模式。由 Xenith 构建。

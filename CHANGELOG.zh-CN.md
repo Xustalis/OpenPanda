@@ -16,6 +16,22 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
+### 新增功能
+
+- **多智能体适配器注册表**——`internal/agents` 是 PANDA 委派的所有 agent CLI 的唯一事实来源（适配器脚本、探测二进制、安装命令、文档 URL）。`panda detect`、`panda agents`、Web 设置 API 与 commander 的可用性探测都从此读取，新增一个 agent 只需改一处。
+- **四个新 agent 适配器**——Grok Build、DeepSeek Harness（`dsh`）、OpenClaw 与 Hermes 加入 Codex、Claude Code、OpenCode 行列：各自是一个小巧的无头 Python 桥接，运行 CLI 并返回 `{ok, result, exit_code}`。
+- **`panda agents`**——`list`（默认）尽力探测 PATH 上每个 agent 的版本；`test <name>` 跑连通性检查；`install|update <name>` 打印安装命令 + 文档链接。若什么都没装，输出列出每个缺失 agent 的安装命令与下载 URL。
+- **Web 设置 agent 名册**——设置页的 agent 列表现在为每个缺失 agent 展示安装命令与下载链接（`/api/agents` 返回 `install_hint` + `install_url`）。
+- **上级完成度判定（`superior task review`）**——agent 运行后，入口模型对照任务成功标准判定结果（`entry.Supervise`，输出 `done`/`continue`）。`continue` 判定会把后续指令（还剩什么 + 下一步）重新委派给 agent 链，循环直到评审通过或达到轮次预算上限（默认 5）。
+- **按风险分流的终态**——可逆任务完成进入 **done**（已完成）；已接受但不可逆的（Tier-2）任务——推送、删除、不可逆状态变更——停在 **review**（待审批）等待人工签字；评审反复拒绝的任务以 `needs_followup` 标记停在 **review**。评审判定事件在 Web 任务详情中回放。
+- **一键安装器**——`scripts/install.sh`（POSIX）与 `scripts/install.ps1`（PowerShell）下载对应平台的发布包，校验 SHA-256，把二进制连同 agent 适配器解压到用户前缀，并将 `panda` 链接到 `PATH`，可选注册开机自启服务（登录时运行 `panda daemon`）。macOS 另提供 Homebrew tap（`brew tap Xustalis/openpanda && brew install openpanda`）。
+- **发布打包**——`scripts/package.sh`（及 `make package`）交叉编译所有支持平台，产出 `dist/panda-<version>-<os>-<arch>.tar.gz` / `.zip` 与 `checksums.txt`，可直接用于 GitHub Releases。
+- **自更新**——`panda web` 与 REPL `/web` 运行期间在后台检查是否有新版 CLI；Web 控制台下载并校验更新，待任务队列空闲后一键应用（原子替换二进制、刷新适配器、重启）。放弃已下载的更新不产生残留；Windows 上替换产生的 `.old` 副产物在下次启动时清理。
+
+### 问题修复
+
+- **多行 `--version` 横幅**（如 Hermes）不再污染单行 agent 表——版本输出在 CLI 与 Web 设置 API 中都截断为首行。
+
 ## [0.0.2] - 2026-08-22
 
 CLI 优先的版本：内核重设计（stage A–C）落地——每项 Web 能力都有了 CLI 对应物，REPL 成为产品正门，CLI 获得对话记忆、实时任务汇报与按输出端渲染的 Markdown。
@@ -78,7 +94,7 @@ CLI 优先的版本：内核重设计（stage A–C）落地——每项 Web 能
 - **语音边车**——唤醒词、STT、TTS、VAD（硬件门控），支持 `OPENPANDA_WAKE_KEYWORD` / `OPENPANDA_WAKE_MODEL` 覆盖（84faf08）。
 - **真机部署**——Mac / Windows / 香橙派三节点部署验证、scope 路由、无头内核形态（0aa9f73、7f1f8bd）。
 - **审计与迁移**——任务事件与全局日志的 `prev_hash` 审计链、PRAGMA `user_version` SQLite 迁移、慢速 DoS 防护（hello 超时 + 连接数限制）、MCP 客户端硬超时（7582754）。
-- **调度器论文机制**——DCPS 加权评分（`0.4·resource_efficiency + 0.3·user_priority + 0.2·scheduler_tier + 0.1·wait_time`）按 TMB 心跳新鲜度折扣（30 分钟半衰期）；容量驱动 accept/decline；拒绝后自动改派并排除历史拒绝者（f454909、7385a89）。
+- **调度器机制**——DCPS 加权评分（`0.4·resource_efficiency + 0.3·user_priority + 0.2·scheduler_tier + 0.1·wait_time`）按 TMB 心跳新鲜度折扣（30 分钟半衰期）；容量驱动 accept/decline；拒绝后自动改派并排除历史拒绝者（f454909、7385a89）。
 - **单发 CLI 面板命令**——`panda status`、`panda queue` 与 `panda task | cancel | approve | reject | logs` 无需进入 REPL 即可检视节点并管理任务（307e13a）。
 - **交互式 REPL**——斜杠命令覆盖全部面板表面（`/ask`、`/tasks`、`/approve`、`/nodes`、`/web`……）、五语言 i18n、ask 引擎可选（无模型端点也能用面板命令）（6119493）。
 - **内嵌 Web 控制台**——Vite + Preact + TypeScript 重建并经 `go:embed` 折入二进制：队列/详情/ask/项目/节点视图、实时 SSE、五种界面语言（61cc519、c9768c1）。
