@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/ins
 等效的显式写法：
 
 ```bash
-sh scripts/install.sh --version 0.0.2          # 安装指定版本（默认 latest）
+sh scripts/install.sh --version 0.0.3          # 安装指定版本（默认 latest）
 sh scripts/install.sh --prefix /opt/openpanda  # 自定义安装目录
 sh scripts/install.sh --yes                    # 额外注册开机自启（不询问）
 sh scripts/install.sh --no-service             # 不碰开机自启
@@ -58,7 +58,7 @@ irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps
 或下载后运行：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.0.2 -Yes
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.0.3 -Yes
 ```
 
 安装到 `%LOCALAPPDATA%\OpenPanda\`，并把 `bin` 加入**用户 PATH**（持久化）。交互式运行时询问是否注册**登录计划任务**（`schtasks /SC ONLOGON`）在后台跑 `panda daemon`。
@@ -113,11 +113,11 @@ panda doctor    # 自检：二进制 / PATH / 配置 / 适配器 / agent 是否�
 2. `.github/workflows/release.yml` 自动跨平台构建 → 打包 `.tar.gz`/`.zip` → 生成 `checksums.txt` → 发布 GitHub Release。
 3. 落地后可用：
    - 项目 README / `docs/install.md` 里的一键脚本直接装到最新版；
-   - Homebrew 用户 `brew upgrade openpanda`（如需严格校验，用 `brew bump-formula-pr` 把 `sha256 :no_check` 换成真实值）。
+   - Homebrew 用户 `brew upgrade openpanda`；发布流程会生成带固定 SHA-256 的配方并同步到 tap。
 
 ## 疑难排查
 
 - **`panda not found`**：新开终端使 PATH 生效，或手动 `export PATH="$HOME/.local/bin:$PATH"`。
 - **校验失败**：可能是下载被代理/断点续传破坏，重跑即可（脚本会用全新临时目录）。
-- **不支持的系统/架构**：脚本会明确报错；目前发布 `darwin/linux/windows` 的 `amd64` 与 `darwin/linux` 的 `arm64`。
+- **不支持的系统/架构**：脚本会明确报错；目前发布 `darwin/linux/windows` 的 `amd64` 与 `arm64`。
 - **daemon 起不来**：先 `panda doctor` 与 `panda init`；回环监听会自动生成临时 token，但对外监听且未配置 `shared_secret` 会拒绝启动（安全约束）。

@@ -11,6 +11,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,7 +35,10 @@ jobs:
         run: make package VERSION="${GITHUB_REF_NAME#v}"
 
       - name: Verify checksums
-        run: cd dist && sha256sum -c checksums.txt
+        run: ./scripts/verify-release.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Render checksum-pinned Homebrew formula
+        run: ./scripts/render-homebrew-formula.sh "${GITHUB_REF_NAME#v}"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -43,3 +48,20 @@ jobs:
             dist/panda-*.tar.gz
             dist/panda-*.zip
             dist/checksums.txt
+            dist/openpanda.rb
+
+      - name: Update Homebrew tap
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        env:
+          GH_TOKEN: ${{ env.HOMEBREW_TAP_TOKEN }}
+        run: |
+          work="$(mktemp -d)"
+          gh repo clone Xustalis/homebrew-openpanda "$work/tap"
+          mkdir -p "$work/tap/Formula"
+          cp dist/openpanda.rb "$work/tap/Formula/openpanda.rb"
+          cd "$work/tap"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Formula/openpanda.rb
+          git diff --cached --quiet || git commit -m "openpanda ${GITHUB_REF_NAME}"
+          git push

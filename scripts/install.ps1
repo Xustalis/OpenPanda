@@ -4,7 +4,7 @@
 #   Set-ExecutionPolicy -Scope Process Bypass
 #   irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 | iex
 # or download and run:
-#   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.0.2 -Yes
+#   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.0.3 -Yes
 #
 # Installs panda.exe + adapters into %LOCALAPPDATA%\OpenPanda, adds its bin
 # dir to the user PATH (persistent), and — when run interactively — asks
@@ -26,18 +26,15 @@ function Ok($m)    { Write-Host "OK   $m" -ForegroundColor Green }
 function Warn($m)  { Write-Host "WARN $m" -ForegroundColor Yellow }
 function Fail($m)  { Write-Host "ERR  $m" -ForegroundColor Red; exit 1 }
 
-$Repo = "https://github.com/Xustalis/OpenPanda"
-$Api  = "https://api.github.com/repos/Xustalis/OpenPanda/releases/latest"
+$Repo = if ($env:OPENPANDA_REPO_URL) { $env:OPENPANDA_REPO_URL } else { "https://github.com/Xustalis/OpenPanda" }
+$Api  = if ($env:OPENPANDA_RELEASE_API) { $env:OPENPANDA_RELEASE_API } else { "https://api.github.com/repos/Xustalis/OpenPanda/releases/latest" }
 
 # ── Arch detection ──────────────────────────────────────────────────────────
-$arch = switch ($env:PROCESSOR_ARCHITECTURE) {
+$nativeArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+$arch = switch ($nativeArch) {
     "AMD64" { "amd64" }
     "ARM64" { "arm64" }
-    default { "amd64" }
-}
-if ($arch -ne "amd64") {
-    Warn "当前架构 $arch ：仅发布 windows-amd64，将按 amd64 处理（若失败请改在 x64 主机安装）。"
-    $arch = "amd64"
+    default { Fail "不支持的 Windows 架构: $nativeArch（仅支持 amd64 与 arm64）" }
 }
 
 # ── Resolve version ─────────────────────────────────────────────────────────
@@ -56,8 +53,8 @@ if (-not $Prefix) {
 }
 $BinDir  = Join-Path $Prefix "bin"
 $Exe     = Join-Path $BinDir "panda.exe"
-$Archive = "panda-$Version-windows-amd64.zip"
-$Base    = "$Repo/releases/download/v$Version"
+$Archive = "panda-$Version-windows-$arch.zip"
+$Base    = if ($env:OPENPANDA_RELEASE_BASE) { $env:OPENPANDA_RELEASE_BASE } else { "$Repo/releases/download/v$Version" }
 
 Info "安装 $Archive 到 $Prefix …"
 
@@ -67,21 +64,18 @@ try {
     $zip = Join-Path $work $Archive
     Invoke-WebRequest -Uri "$Base/$Archive" -OutFile $zip
 
-    # SHA-256 verification (non-fatal if checksums.txt is absent)
+    # SHA-256 verification is mandatory for release installs.
     $sumPath = Join-Path $work "checksums.txt"
     try {
         Invoke-WebRequest -Uri "$Base/checksums.txt" -OutFile $sumPath
-        $wantLine = (Get-Content $sumPath | Where-Object { $_ -match [regex]::Escape($Archive) } | Select-Object -First 1)
-        if ($wantLine) {
-            $wantHash = ($wantLine -split "\s+")[0]
-            $gotHash  = (Get-FileHash -Algorithm SHA256 $zip).Hash
-            if ($wantHash -and ($wantHash -ne $gotHash)) {
-                Fail "SHA-256 校验失败（期望 $wantHash，得到 $gotHash）"
-            }
-            Ok "SHA-256 校验通过"
-        }
+        $wantLine = (Get-Content $sumPath | Where-Object { $_ -match ("\s" + [regex]::Escape($Archive) + "$") } | Select-Object -First 1)
+        if (-not $wantLine) { Fail "checksums.txt 缺少 $Archive 条目" }
+        $wantHash = ($wantLine -split "\s+")[0].ToUpperInvariant()
+        $gotHash  = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToUpperInvariant()
+        if ($wantHash -ne $gotHash) { Fail "SHA-256 校验失败（期望 $wantHash，得到 $gotHash）" }
+        Ok "SHA-256 校验通过"
     } catch {
-        Warn "未找到 checksums.txt，跳过 SHA-256 校验"
+        Fail "下载或读取 checksums.txt 失败，拒绝在无法校验的情况下安装"
     }
 
     # Unpack: archive holds a single top-level `openpanda/` directory

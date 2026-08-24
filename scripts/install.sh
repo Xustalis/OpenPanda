@@ -3,7 +3,7 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh
-#   sh install.sh --version 0.0.2            # pin a release
+#   sh install.sh --version 0.0.3            # pin a release
 #   sh install.sh --prefix /opt/openpanda    # custom install dir
 #   sh install.sh --yes                      # also register auto-start (no prompt)
 #   sh install.sh --no-service               # never touch auto-start
@@ -97,12 +97,13 @@ case "$ARCH" in
     *) die "不支持的架构: $ARCH（仅提供 amd64 与 arm64）" ;;
 esac
 
-REPO="https://github.com/Xustalis/OpenPanda"
+REPO="${OPENPANDA_REPO_URL:-https://github.com/Xustalis/OpenPanda}"
+API="${OPENPANDA_RELEASE_API:-https://api.github.com/repos/Xustalis/OpenPanda/releases/latest}"
 
 # ── Resolve version ─────────────────────────────────────────────────────────
 if [ "$VERSION" = "latest" ]; then
     info "查询最新发行版…"
-    tag="$(fetch_stdout "https://api.github.com/repos/Xustalis/OpenPanda/releases/latest" \
+    tag="$(fetch_stdout "$API" \
         | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
     [ -n "$tag" ] || die "无法解析最新版本号（网络/API 问题？也可用 --version 直接指定）"
     VERSION="${tag#v}"
@@ -112,7 +113,7 @@ else
 fi
 
 ARCHIVE="panda-$VERSION-$OS-$ARCH.tar.gz"
-BASE="$REPO/releases/download/v$VERSION"
+BASE="${OPENPANDA_RELEASE_BASE:-$REPO/releases/download/v$VERSION}"
 
 # ── Install prefix (aligns with Go os.UserConfigDir / XDG) ───────────────────
 if [ -z "$PREFIX" ]; then
@@ -127,17 +128,16 @@ trap 'rm -rf "$WORK"' EXIT
 
 download "$BASE/$ARCHIVE" "$WORK/$ARCHIVE" || die "下载失败: $BASE/$ARCHIVE"
 download "$BASE/checksums.txt" "$WORK/checksums.txt" 2>/dev/null \
-    || warn "未找到 checksums.txt，跳过 SHA-256 校验"
+    || die "下载 checksums.txt 失败，拒绝在无法校验的情况下安装"
 
 if [ -f "$WORK/checksums.txt" ]; then
     want="$(awk -v f="$ARCHIVE" '$2==f {print $1; exit}' "$WORK/checksums.txt")"
-    if [ -n "$want" ]; then
-        got="$(sha256 "$WORK/$ARCHIVE")"
-        if [ "$got" != "$want" ]; then
-            die "SHA-256 校验失败（期望 $want，得到 $got）"
-        fi
-        ok "SHA-256 校验通过"
+    [ -n "$want" ] || die "checksums.txt 缺少 $ARCHIVE 条目"
+    got="$(sha256 "$WORK/$ARCHIVE")"
+    if [ "$got" != "$want" ]; then
+        die "SHA-256 校验失败（期望 $want，得到 $got）"
     fi
+    ok "SHA-256 校验通过"
 fi
 
 # Unpack: the archive is a single top-level `openpanda/` directory holding

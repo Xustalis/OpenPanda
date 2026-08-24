@@ -1,0 +1,92 @@
+name: Installers
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/installers.yml'
+      - '.github/workflows/release.yml'
+      - 'Makefile'
+      - 'scripts/install.sh'
+      - 'scripts/install.ps1'
+      - 'scripts/package.sh'
+      - 'scripts/verify-release.sh'
+      - 'deploy/homebrew/**'
+      - 'adapters/**'
+      - 'config.example.yaml'
+      - 'config/capabilities.example-*.yaml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/installers.yml'
+      - '.github/workflows/release.yml'
+      - 'Makefile'
+      - 'scripts/install.sh'
+      - 'scripts/install.ps1'
+      - 'scripts/package.sh'
+      - 'scripts/verify-release.sh'
+      - 'deploy/homebrew/**'
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+      - name: Package all supported targets
+        run: make package VERSION=0.0.0-test
+      - name: Verify installer asset contract
+        run: ./scripts/verify-release.sh 0.0.0-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-assets
+          path: dist/
+
+  unix-install:
+    needs: package
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, macos-13]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer-assets
+          path: dist
+      - name: Install through the public shell-installer path
+        shell: bash
+        run: |
+          python3 -m http.server 8765 --directory dist >/tmp/openpanda-installer-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          test_home="$RUNNER_TEMP/openpanda-home"
+          mkdir -p "$test_home"
+          HOME="$test_home" OPENPANDA_RELEASE_BASE=http://127.0.0.1:8765 \
+            sh scripts/install.sh --version 0.0.0-test --prefix "$test_home/openpanda" --no-service
+          "$test_home/openpanda/bin/panda" version | grep 0.0.0-test
+
+  windows-install:
+    needs: package
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer-assets
+          path: dist
+      - name: Install through the public PowerShell-installer path
+        shell: powershell
+        run: |
+          $server = Start-Process python -ArgumentList '-m','http.server','8765','--directory','dist' -PassThru
+          try {
+            $env:OPENPANDA_RELEASE_BASE = 'http://127.0.0.1:8765'
+            $prefix = Join-Path $env:RUNNER_TEMP 'OpenPanda'
+            & .\scripts\install.ps1 -Version 0.0.0-test -Prefix $prefix -NoService
+            & (Join-Path $prefix 'bin\panda.exe') version | Select-String '0.0.0-test'
+          } finally {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+          }

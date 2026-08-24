@@ -140,13 +140,15 @@ func LatestVersion(ctx context.Context, repo string) (string, error) {
 }
 
 // AssetName returns the release asset file name for the current platform and
-// the given version. Unix targets ship .tar.gz; Windows ships a single
-// windows-amd64 .zip (script install.ps1).
+// the given version. Unix and Windows targets use the same GOARCH naming
+// convention as scripts/package.sh; this keeps self-update aligned with the
+// standalone installers.
 func AssetName(version string) string {
-	os := runtime.GOOS
-	arch := runtime.GOARCH
+	return assetNameFor(version, runtime.GOOS, runtime.GOARCH)
+}
+
+func assetNameFor(version, os, arch string) string {
 	if os == "windows" {
-		arch = "amd64" // only windows-amd64 is published
 		return fmt.Sprintf("panda-%s-%s-%s.zip", version, os, arch)
 	}
 	return fmt.Sprintf("panda-%s-%s-%s.tar.gz", version, os, arch)

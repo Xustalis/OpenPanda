@@ -48,6 +48,9 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.installer-go-cache/
+.installer-go-modcache/
+.installer-test-dist/
 
 # OS
 .DS_Store

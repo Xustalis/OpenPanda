@@ -1,9 +1,10 @@
 GO ?= go
 BIN := bin/panda
-VERSION ?= 0.0.2
+VERSION ?= 0.0.3
 LDFLAGS := -s -w -X github.com/Xustalis/OpenPanda/internal/version.Version=$(VERSION)
 
-.PHONY: all build web build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 \
+.PHONY: all build web build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
+        release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
         dev test vet race gate run run-local measure clean icons release package
 
 all: build
@@ -38,9 +39,12 @@ build-linux-amd64:
 build-windows-amd64:
 	GOOS=windows GOARCH=amd64 $(GO) build -ldflags "-s -w" -o $(BIN)-windows-amd64.exe ./cmd/panda
 
+build-windows-arm64:
+	GOOS=windows GOARCH=arm64 $(GO) build -ldflags "-s -w" -o $(BIN)-windows-arm64.exe ./cmd/panda
+
 # Release: version-tagged binaries for every target platform into dist/.
 # One `make web` up front — the embedded console is platform-independent.
-release: web release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64
+release: web release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64
 
 release-darwin-amd64:
 	GOOS=darwin GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/panda-$(VERSION)-darwin-amd64 ./cmd/panda
@@ -56,6 +60,9 @@ release-linux-amd64:
 
 release-windows-amd64:
 	GOOS=windows GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/panda-$(VERSION)-windows-amd64.exe ./cmd/panda
+
+release-windows-arm64:
+	GOOS=windows GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/panda-$(VERSION)-windows-arm64.exe ./cmd/panda
 
 # One-command release packaging: cross-compiles every supported platform into
 # dist/panda-<version>-<os>-<arch>.tar.gz (unix) / .zip (windows) plus a
