@@ -63,6 +63,10 @@ jobs:
           python3 -m http.server 8765 --directory dist >/tmp/openpanda-installer-http.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
+          for attempt in 1 2 3 4 5; do
+            curl -fsS http://127.0.0.1:8765/checksums.txt >/dev/null && break
+            sleep 1
+          done
           test_home="$RUNNER_TEMP/openpanda-home"
           mkdir -p "$test_home"
           HOME="$test_home" OPENPANDA_RELEASE_BASE=http://127.0.0.1:8765 \
@@ -83,6 +87,17 @@ jobs:
         run: |
           $server = Start-Process python -ArgumentList '-m','http.server','8765','--directory','dist' -PassThru
           try {
+            $ready = $false
+            foreach ($attempt in 1..10) {
+              try {
+                Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8765/checksums.txt' | Out-Null
+                $ready = $true
+                break
+              } catch {
+                Start-Sleep -Seconds 1
+              }
+            }
+            if (-not $ready) { throw 'local release server did not become ready' }
             $env:OPENPANDA_RELEASE_BASE = 'http://127.0.0.1:8765'
             $prefix = Join-Path $env:RUNNER_TEMP 'OpenPanda'
             & .\scripts\install.ps1 -Version 0.0.0-test -Prefix $prefix -NoService
