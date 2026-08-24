@@ -22,6 +22,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/log"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -62,6 +63,9 @@ func main() {
 			runDoctor(args)
 			return
 		case "status":
+			runStatus(args)
+			return
+		case "nodes":
 			runStatus(args)
 			return
 		case "queue":
@@ -185,6 +189,12 @@ func runDaemon(args []string) {
 	if err != nil {
 		fatal("load config", err)
 	}
+	effectiveIdentity := cfg.Node.EffectiveIdentity()
+	identityLock, err := nodeidentity.Acquire(cfg.Node.Kind, effectiveIdentity)
+	if err != nil {
+		fatal("start node", err)
+	}
+	defer identityLock.Release()
 
 	log.Setup(cfg.Log.Level, nil)
 	logger := log.From(context.Background())
@@ -228,8 +238,11 @@ func runDaemon(args []string) {
 			fatal("load capabilities", err)
 		}
 	}
+	card.NodeKind = cfg.Node.Kind
+	card.NodeIdentity = effectiveIdentity
 
-	coreNode := core.NewCore(db, core.NodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
+	runtimeNodeID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, effectiveIdentity)
+	coreNode := core.NewCore(db, runtimeNodeID, card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 	coreNode.SetRouterPolicy(cfg.Injection, cfg.Routing)
 	// Supervision (上级完成度判定): judge agent results against the task's
 	// success criteria and re-delegate work that isn't complete. A model-less
@@ -365,6 +378,7 @@ func runDaemon(args []string) {
 	logger.Info("panda core started",
 		"version", version,
 		"node", cfg.Node.Name,
+		"node_kind", cfg.Node.Kind,
 		"resource_class", cfg.Node.ResourceClass,
 		"card", *cardPath,
 		"listen", cfg.Network.ListenAddr,
@@ -445,6 +459,7 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "runtime:")
 	fmt.Fprintln(w, "  (no subcommand)        interactive REPL — the operator's seat (same as `panda repl`)")
 	fmt.Fprintln(w, "  daemon                 run the node kernel headless (registers, listens, delegates)")
+	fmt.Fprintln(w, "  nodes                  show current and known nodes (same data as status)")
 	fmt.Fprintln(w, "  ask <text>             unified entry: classify → answer or execute a task")
 	fmt.Fprintln(w, "                         (--output-format json|stream-json for headless use)")
 	fmt.Fprintln(w, "  repl                   interactive shell (banner, /help pager, Tab completion)")
