@@ -2,12 +2,16 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -116,7 +120,9 @@ func (a ApprovalConfig) NormalizedMode() string {
 // NodeConfig identifies this node.
 type NodeConfig struct {
 	Name          string `yaml:"name"`
-	ResourceClass string `yaml:"resource_class"` // Micro | Standard | Full
+	ResourceClass string `yaml:"resource_class"`     // Micro | Standard | Full
+	Kind          string `yaml:"kind"`               // physical | vm (default physical)
+	Identity      string `yaml:"identity,omitempty"` // stable VM identity; physical nodes use host fingerprint
 }
 
 // NetworkConfig controls the WebSocket listener and manual peers. PanelAddr and
@@ -201,6 +207,61 @@ type PushConfig struct {
 // anything else silently degrades to a worker tier, so catch typos at startup.
 var validResourceClasses = map[string]bool{"Micro": true, "Standard": true, "Full": true, "": true}
 
+const (
+	NodeKindPhysical = "physical"
+	NodeKindVM       = "vm"
+)
+
+// ValidNodeKind reports whether kind is a supported node identity class.
+func ValidNodeKind(kind string) bool {
+	return kind == "" || kind == NodeKindPhysical || kind == NodeKindVM
+}
+
+// MachineIdentity returns a stable, non-secret identity for the current host.
+// OPENPANDA_NODE_IDENTITY is accepted for compatibility when generating a
+// default config; physical runtime locking still uses PhysicalIdentity.
+func MachineIdentity() string {
+	if v := os.Getenv("OPENPANDA_NODE_IDENTITY"); v != "" {
+		return v
+	}
+	return PhysicalIdentity()
+}
+
+// PhysicalIdentity ignores user-provided overrides and identifies the host
+// itself. It is used for the physical-node singleton lock.
+func PhysicalIdentity() string {
+	for _, p := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id", "/var/db/SystemConfiguration/.com.apple.uuid"} {
+		if b, err := os.ReadFile(p); err == nil {
+			if s := strings.TrimSpace(string(b)); s != "" {
+				return "machine-" + shortHash(s)
+			}
+		}
+	}
+	host, _ := os.Hostname()
+	if host == "" {
+		host = runtime.GOOS + "-" + runtime.GOARCH
+	}
+	return "host-" + shortHash(host)
+}
+
+// EffectiveIdentity is the identity used for runtime ownership. Physical
+// nodes always use the host fingerprint; VM nodes may supply a separate stable
+// identity so a host and its guest can coexist.
+func (n NodeConfig) EffectiveIdentity() string {
+	if n.Kind == NodeKindPhysical {
+		return PhysicalIdentity()
+	}
+	if strings.TrimSpace(n.Identity) != "" {
+		return strings.TrimSpace(n.Identity)
+	}
+	return PhysicalIdentity()
+}
+
+func shortHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:8])
+}
+
 // ValidResourceClass reports whether s is a resource class the scheduler
 // understands (empty counts as "unset → default"). `panda init` uses it to
 // re-prompt on typos before they can break a later config load.
@@ -216,6 +277,12 @@ func ValidResourceClass(s string) bool {
 func (c *Config) Validate() error {
 	if !validResourceClasses[c.Node.ResourceClass] {
 		return fmt.Errorf("config: node.resource_class %q is invalid (want Micro, Standard, or Full)", c.Node.ResourceClass)
+	}
+	if !ValidNodeKind(c.Node.Kind) {
+		return fmt.Errorf("config: node.kind %q is invalid (want physical or vm)", c.Node.Kind)
+	}
+	if c.Node.Kind == NodeKindVM && strings.TrimSpace(c.Node.Identity) == "" {
+		return fmt.Errorf("config: node.identity is required for vm nodes")
 	}
 	for _, addr := range []struct{ name, value string }{
 		{"network.listen_addr", c.Network.ListenAddr},
@@ -263,6 +330,12 @@ func (c *Config) Validate() error {
 // nil-checks. Load runs it after unmarshal; Default() already carries these
 // values, so this is a no-op for a fresh config.
 func (c *Config) normalize() {
+	if c.Node.Kind == "" {
+		c.Node.Kind = NodeKindPhysical
+	}
+	if c.Node.Kind != NodeKindVM && strings.TrimSpace(c.Node.Identity) == "" {
+		c.Node.Identity = MachineIdentity()
+	}
 	if c.Injection.Model == "" {
 		c.Injection.Model = InjectionModelAuto
 	}
@@ -280,12 +353,59 @@ func (c *Config) normalize() {
 	}
 }
 
-// Default returns a Config with safe local-development defaults.
+// UserDataDir returns the per-user state directory used when no config
+// overrides storage paths. It follows the install / uninstall layout from
+// docs/install.md and the READMEs:
+//   - Unix: ${XDG_DATA_HOME:-$HOME/.local/share}/openpanda
+//   - macOS: ~/Library/Application Support/openpanda (falls back to the
+//     Unix convention when os.UserHomeDir fails)
+//   - Windows: %LOCALAPPDATA%\openpanda
+//
+// A best-effort fallback (./data relative to cwd) is used when the home
+// directory cannot be determined — that keeps test and container scenarios
+// working without user intervention.
+func UserDataDir() (string, error) {
+	if runtime.GOOS == "windows" {
+		if base := os.Getenv("LOCALAPPDATA"); base != "" {
+			return filepath.Join(base, "openpanda"), nil
+		}
+	} else if runtime.GOOS == "darwin" {
+		if dir, err := os.UserConfigDir(); err == nil {
+			// os.UserConfigDir on macOS = ~/Library/Application Support.
+			// Keep data alongside config for a single easy-to-find folder.
+			return filepath.Join(dir, "openpanda"), nil
+		}
+	}
+	// Generic Unix / fallback: XDG_DATA_HOME or ~/.local/share/openpanda.
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		return filepath.Join(xdg, "openpanda"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("user home dir: %w", err)
+	}
+	return filepath.Join(home, ".local", "share", "openpanda"), nil
+}
+
+// userDataDirBestEffort mirrors UserDataDir but returns ./data as a safe
+// fallback when the user's home cannot be resolved — used by Default() so
+// callers that do not check the error still get a usable path.
+func userDataDirBestEffort() string {
+	if d, err := UserDataDir(); err == nil {
+		return d
+	}
+	return "data"
+}
+
+// Default returns a Config with per-user absolute paths by default, so
+// running `panda` from any working directory hits the same SQLite store.
 func Default() *Config {
+	data := userDataDirBestEffort()
 	return &Config{
 		Node: NodeConfig{
 			Name:          "macbook",
 			ResourceClass: "Standard",
+			Kind:          NodeKindPhysical,
 		},
 		Network: NetworkConfig{
 			ListenAddr: ":7836",
@@ -299,12 +419,12 @@ func Default() *Config {
 			MaxConnectionsPerIP: 8,
 		},
 		Storage: StorageConfig{
-			DBPath:       "./data/openpanda.db",
-			ContextPath:  "./data/context",
-			MemoryPath:   "./memory",
-			ProjectsPath: "./projects",
-			SkillsPath:   "./skills",
-			WorkPath:     ".",
+			DBPath:       filepath.Join(data, "openpanda.db"),
+			ContextPath:  filepath.Join(data, "context"),
+			MemoryPath:   filepath.Join(data, "memory"),
+			ProjectsPath: filepath.Join(data, "projects"),
+			SkillsPath:   filepath.Join(data, "skills"),
+			WorkPath:     data,
 		},
 		Log: LogConfig{
 			Level: "info",
@@ -317,7 +437,7 @@ func Default() *Config {
 		Push: PushConfig{
 			Enabled:      false,
 			VAPIDSubject: "mailto:panda@localhost",
-			VAPIDKeyPath: "./data/vapid.pem",
+			VAPIDKeyPath: filepath.Join(data, "vapid.pem"),
 		},
 		Injection: InjectionConfig{
 			Model: InjectionModelAuto,
@@ -374,6 +494,35 @@ func ResolvePath(explicit string) string {
 	return DefaultPath
 }
 
+// resolveRelativePaths rebases every storage path that is still relative
+// onto baseDir. Old config files written by `panda init` (when Default used
+// ./data relatives) keep working regardless of the process's cwd: they are
+// interpreted relative to the config file's directory, not the user's shell
+// location. Absolute paths are untouched.
+func (c *Config) resolveRelativePaths(baseDir string) {
+	if !filepath.IsAbs(c.Storage.DBPath) {
+		c.Storage.DBPath = filepath.Join(baseDir, c.Storage.DBPath)
+	}
+	if !filepath.IsAbs(c.Storage.ContextPath) {
+		c.Storage.ContextPath = filepath.Join(baseDir, c.Storage.ContextPath)
+	}
+	if !filepath.IsAbs(c.Storage.MemoryPath) {
+		c.Storage.MemoryPath = filepath.Join(baseDir, c.Storage.MemoryPath)
+	}
+	if !filepath.IsAbs(c.Storage.ProjectsPath) {
+		c.Storage.ProjectsPath = filepath.Join(baseDir, c.Storage.ProjectsPath)
+	}
+	if !filepath.IsAbs(c.Storage.SkillsPath) {
+		c.Storage.SkillsPath = filepath.Join(baseDir, c.Storage.SkillsPath)
+	}
+	if !filepath.IsAbs(c.Storage.WorkPath) {
+		c.Storage.WorkPath = filepath.Join(baseDir, c.Storage.WorkPath)
+	}
+	if !filepath.IsAbs(c.Push.VAPIDKeyPath) {
+		c.Push.VAPIDKeyPath = filepath.Join(baseDir, c.Push.VAPIDKeyPath)
+	}
+}
+
 // Load reads the config from path. If path is empty, the OPENPANDA_CONFIG_PATH env
 // var (if set) or DefaultPath is used. A missing file is not an error; defaults
 // apply. An unreadable or malformed file is an error so a bad deployment
@@ -386,7 +535,13 @@ func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// No config file on disk: Default already has absolute per-user
+			// paths, so there is nothing to rebase.
 			cfg.applyEnv()
+			cfg.normalize()
+			if err := cfg.Validate(); err != nil {
+				return nil, err
+			}
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("read config %s: %w", path, err)
@@ -395,6 +550,12 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	hardenSecretPerms(path, data)
+	// Rebase relative storage paths onto the config file's directory so
+	// `./data/openpanda.db` in config.yaml always points next to the YAML,
+	// never next to whatever directory the user ran `panda` from.
+	if abs, err := filepath.Abs(path); err == nil {
+		cfg.resolveRelativePaths(filepath.Dir(abs))
+	}
 	cfg.applyEnv()
 	if cfg.Node.Name == "" {
 		return nil, fmt.Errorf("config %s: node.name must not be empty", path)
@@ -403,6 +564,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
 	cfg.normalize()
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
+	}
 	return cfg, nil
 }
 
@@ -411,6 +575,12 @@ func Load(path string) (*Config, error) {
 func (c *Config) applyEnv() {
 	if v := os.Getenv("OPENPANDA_NODE_NAME"); v != "" {
 		c.Node.Name = v
+	}
+	if v := os.Getenv("OPENPANDA_NODE_KIND"); v != "" {
+		c.Node.Kind = v
+	}
+	if v := os.Getenv("OPENPANDA_NODE_IDENTITY"); v != "" {
+		c.Node.Identity = v
 	}
 	if v := os.Getenv("OPENPANDA_LISTEN_ADDR"); v != "" {
 		c.Network.ListenAddr = v
