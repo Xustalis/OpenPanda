@@ -74,6 +74,23 @@ func TestRegisterQueryLifecycle(t *testing.T) {
 	}
 }
 
+func TestNodeIdentityRoundTrip(t *testing.T) {
+	db := openLedgerDB(t)
+	c := testCard()
+	c.NodeKind = "vm"
+	c.NodeIdentity = "vm-test-1"
+	if err := Register(db, c, "vm-node", 1); err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := Query(db, "", "")
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("query = %v %+v", err, nodes)
+	}
+	if nodes[0].NodeKind != "vm" || nodes[0].NodeIdentity != "vm-test-1" {
+		t.Fatalf("identity = %+v", nodes[0])
+	}
+}
+
 func TestHeartbeatUpdatesStatus(t *testing.T) {
 	db := openLedgerDB(t)
 	c := testCard()

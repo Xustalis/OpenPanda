@@ -7,6 +7,8 @@
 node:
   name: "test-node-a"
   resource_class: "Standard"
+  kind: "vm"
+  identity: "local-test-node-a"
 
 network:
   listen_addr: "127.0.0.1:17836"

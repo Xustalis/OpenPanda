@@ -391,7 +391,7 @@ func (c *Core) RunMonitor(ctx context.Context) {
 					// a no-op for a root task; signalResult no-ops without a waiter.
 					if tk, err := c.store.Get(ctx, id); err == nil {
 						res := bus.TaskResultPayload{
-							TaskID: id, AttemptID: tk.AttemptID, OK: false, ExitCode: 1, Stderr: "lease expired",
+							TaskID: id, AttemptID: tk.AttemptID, State: StateFailed, OK: false, ExitCode: 1, Stderr: "lease expired",
 						}
 						c.relayToParent(ctx, bus.MsgTaskResult, tk.Chain, res)
 						c.signalResult(id, res)
@@ -805,6 +805,8 @@ func (c *Core) summary() ledger.CapabilitySummary {
 	s := ledger.CapabilitySummary{
 		Device:        c.card.Device,
 		ResourceClass: c.card.ResourceClass,
+		NodeKind:      c.card.NodeKind,
+		NodeIdentity:  c.card.NodeIdentity,
 		SchedulerTier: c.tier,
 		Chip:          c.card.Chip,
 		Capacity:      c.card.Capacity,

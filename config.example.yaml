@@ -3,6 +3,9 @@
 node:
   name: "macbook-m1"
   resource_class: "Standard"  # Micro | Standard | Full
+  kind: "physical"             # physical | vm; one physical node per host
+  # VM deployments must set a stable identity distinct from the host.
+  # identity: "vm-macbook-dev"
 
 network:
   listen_addr: ":7836"           # WebSocket listener (kernel daemon)

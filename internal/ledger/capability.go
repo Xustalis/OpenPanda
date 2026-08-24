@@ -20,6 +20,8 @@ import (
 type Card struct {
 	Device          string           `yaml:"device"`
 	ResourceClass   string           `yaml:"resource_class"`
+	NodeKind        string           `yaml:"node_kind,omitempty" json:"node_kind,omitempty"`
+	NodeIdentity    string           `yaml:"node_identity,omitempty" json:"node_identity,omitempty"`
 	Chip            string           `yaml:"chip"`
 	Native          []NativeAbility  `yaml:"native"`
 	Agents          map[string]Agent `yaml:"agents"`
@@ -84,6 +86,8 @@ type ResourceProfile struct {
 type CapabilitySummary struct {
 	Device        string              `json:"device"`
 	ResourceClass string              `json:"resource_class"`
+	NodeKind      string              `json:"node_kind,omitempty"`
+	NodeIdentity  string              `json:"node_identity,omitempty"`
 	SchedulerTier int                 `json:"scheduler_tier"`
 	Chip          string              `json:"chip,omitempty"`
 	NativeIDs     []string            `json:"native_ids,omitempty"`
@@ -117,24 +121,32 @@ func Register(db *sql.DB, c Card, id string, tier int) error {
 		return fmt.Errorf("marshal resource profile: %w", err)
 	}
 
-	return upsertNode(db, id, c.Device, c.Chip, string(native), string(agents), string(manual), string(capJSON), string(resJSON), tier)
+	kind, identity := c.NodeKind, c.NodeIdentity
+	if kind == "" {
+		kind = "physical"
+	}
+	if identity == "" {
+		identity = id
+	}
+	return upsertNode(db, id, c.Device, c.Chip, kind, identity, string(native), string(agents), string(manual), string(capJSON), string(resJSON), tier)
 }
 
 // upsertNode writes one directory row — native/agents/manual/capacity/resource
 // profile already marshalled to JSON — and marks it online. Shared by Register
 // (self, full card) and UpsertRemote (peer, ID-only summary) so the upsert SQL
 // lives in one place.
-func upsertNode(db *sql.DB, id, device, chip, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON string, tier int) error {
+func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON string, tier int) error {
 	_, err := db.Exec(`
-		INSERT INTO employee_cache (id, name, department, chip, native_json, agents_json, manual_json, capacity_json, resource_profile_json, status, last_seen, scheduler_tier)
-		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, 'online', ?, ?)
+		INSERT INTO employee_cache (id, name, department, chip, node_kind, node_identity, native_json, agents_json, manual_json, capacity_json, resource_profile_json, status, last_seen, scheduler_tier)
+		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name=excluded.name, chip=excluded.chip,
+			node_kind=excluded.node_kind, node_identity=excluded.node_identity,
 			native_json=excluded.native_json, agents_json=excluded.agents_json,
 			manual_json=excluded.manual_json, capacity_json=excluded.capacity_json,
 			resource_profile_json=excluded.resource_profile_json,
 			status='online', last_seen=excluded.last_seen, scheduler_tier=excluded.scheduler_tier`,
-		id, device, chip, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, storage.Now(), tier,
+		id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, storage.Now(), tier,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert %s: %w", id, err)
@@ -204,22 +216,31 @@ func UpsertRemote(db *sql.DB, id string, s CapabilitySummary) error {
 		return fmt.Errorf("marshal remote capacity: %w", err)
 	}
 
-	return upsertNode(db, id, s.Device, s.Chip, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), "", s.SchedulerTier)
+	kind, identity := s.NodeKind, s.NodeIdentity
+	if kind == "" {
+		kind = "physical"
+	}
+	if identity == "" {
+		identity = id
+	}
+	return upsertNode(db, id, s.Device, s.Chip, kind, identity, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), "", s.SchedulerTier)
 }
 
 // Node is a single employee_cache row, decoded.
 type Node struct {
-	ID              string
-	Name            string
-	Chip            string
-	Status          string
-	LastSeen        int64
-	SchedulerTier   int
-	Native          []NativeAbility
-	Agents          map[string]Agent
-	Manual          []ManualAbility
-	Capacity        Capacity
-	ResourceProfile ResourceProfile
+	ID              string           `json:"id"`
+	Name            string           `json:"name"`
+	Chip            string           `json:"chip,omitempty"`
+	NodeKind        string           `json:"node_kind"`
+	NodeIdentity    string           `json:"node_identity,omitempty"`
+	Status          string           `json:"status"`
+	LastSeen        int64            `json:"last_seen"`
+	SchedulerTier   int              `json:"scheduler_tier"`
+	Native          []NativeAbility  `json:"native,omitempty"`
+	Agents          map[string]Agent `json:"agents,omitempty"`
+	Manual          []ManualAbility  `json:"manual,omitempty"`
+	Capacity        Capacity         `json:"capacity"`
+	ResourceProfile ResourceProfile  `json:"resource_profile"`
 }
 
 // Abilities returns this node's displayable ability list — native IDs plus an
@@ -346,7 +367,7 @@ func tokenSubset(a, b []string) bool {
 
 // Query returns nodes matching filters. Empty status or name matches all.
 func Query(db *sql.DB, status, name string) ([]Node, error) {
-	q := `SELECT id, name, chip, status, last_seen, scheduler_tier, native_json, agents_json, manual_json, capacity_json, resource_profile_json
+	q := `SELECT id, name, chip, COALESCE(node_kind, 'physical'), COALESCE(node_identity, ''), status, last_seen, scheduler_tier, native_json, agents_json, manual_json, capacity_json, resource_profile_json
 	      FROM employee_cache WHERE 1=1`
 	var args []any
 	if status != "" {
@@ -371,7 +392,7 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 		// partial insert leaves the others NULL too. Scan all of them as nullable
 		// so a single such row does not fail the whole directory query.
 		var native, agents, manual, capJSON, resJSON sql.NullString
-		if err := rows.Scan(&n.ID, &n.Name, &n.Chip, &n.Status, &n.LastSeen, &n.SchedulerTier,
+		if err := rows.Scan(&n.ID, &n.Name, &n.Chip, &n.NodeKind, &n.NodeIdentity, &n.Status, &n.LastSeen, &n.SchedulerTier,
 			&native, &agents, &manual, &capJSON, &resJSON); err != nil {
 			return nil, err
 		}

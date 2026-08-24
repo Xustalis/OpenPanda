@@ -31,6 +31,20 @@ func TestLoadDefaultsOnMissingFile(t *testing.T) {
 	if cfg.Network.ListenAddr == "" {
 		t.Fatalf("expected default listen addr")
 	}
+	if cfg.Node.Kind != NodeKindPhysical || cfg.Node.Identity == "" {
+		t.Fatalf("expected physical identity defaults, got %+v", cfg.Node)
+	}
+}
+
+func TestNodeKindAndIdentity(t *testing.T) {
+	p := writeTemp(t, "node:\n  name: vm-1\n  kind: vm\n  identity: vm-identity-1\n")
+	cfg, err := Load(p)
+	if err != nil { t.Fatalf("load vm: %v", err) }
+	if cfg.Node.Kind != NodeKindVM || cfg.Node.Identity != "vm-identity-1" { t.Fatalf("node = %+v", cfg.Node) }
+	p = writeTemp(t, "node:\n  name: bad\n  kind: container\n")
+	if _, err := Load(p); err == nil { t.Fatal("expected invalid node kind error") }
+	p = writeTemp(t, "node:\n  name: vm-missing-id\n  kind: vm\n")
+	if _, err := Load(p); err == nil { t.Fatal("expected vm identity requirement") }
 }
 
 func TestLoadMissingFileAppliesEnvOverrides(t *testing.T) {

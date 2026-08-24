@@ -472,7 +472,7 @@ func (s *TaskStore) Complete(ctx context.Context, taskID, owner string, result a
 
 // CompleteFromRemote records a remote executor's final result on the
 // delegator's copy. The delegator may be in submitted/queued/dispatched/
-// running; any non-terminal state is accepted, and the owner is moved to
+// running; review is intentionally protected, and the owner is moved to
 // the delegator (who holds the parent-side lease).
 func (s *TaskStore) CompleteFromRemote(ctx context.Context, taskID, owner string, result any) error {
 	cur, err := s.Get(ctx, taskID)
@@ -482,6 +482,9 @@ func (s *TaskStore) CompleteFromRemote(ctx context.Context, taskID, owner string
 	if Terminal(cur.State) {
 		return nil // already closed; keep first result
 	}
+	if cur.State == StateReview {
+		return nil // human-review state is protected from late remote results
+	}
 	if err := s.applyState(ctx, taskID, cur.State, StateDone, owner, cur.AttemptID, EvResult, result, result); err != nil {
 		if errors.Is(err, ErrConflict) {
 			return nil // a concurrent transition closed it first; keep that outcome
@@ -489,6 +492,40 @@ func (s *TaskStore) CompleteFromRemote(ctx context.Context, taskID, owner string
 		return err
 	}
 	s.logger.Debug("remote completion recorded", "task", taskID, "from", cur.State)
+	return nil
+}
+
+// ReviewFromRemote records that a remote executor parked the task for human
+// review. Unlike Review, which is the local retry-loop transition from failed,
+// a remote result may arrive while the delegator's copy is submitted, queued,
+// dispatched, or running. The state is still guarded so a concurrent terminal
+// transition wins and cannot be overwritten by a late result.
+func (s *TaskStore) ReviewFromRemote(ctx context.Context, taskID, owner string, result any) error {
+	cur, err := s.Get(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if Terminal(cur.State) {
+		return nil
+	}
+	if cur.State == StateReview {
+		return nil // do not let a late failure overwrite a human-review pause
+	}
+	if err := s.applyState(ctx, taskID, cur.State, StateReview, owner, cur.AttemptID, EvReview, result, result); err != nil {
+		if errors.Is(err, ErrConflict) {
+			return nil
+		}
+		return err
+	}
+	// Review has no lease pressure. Keep this behavior identical to local
+	// Pause/PauseWithResult and notify any panel/review hook.
+	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET lease_expires_at=NULL WHERE task_id=?`, taskID); err != nil {
+		s.logger.Warn("clear remote review lease", "task", taskID, "err", err)
+	}
+	cur.State = StateReview
+	cur.OwnerNode = owner
+	cur.UpdatedAt = s.now()
+	s.notifyReview(cur)
 	return nil
 }
 
@@ -605,13 +642,17 @@ func (s *TaskStore) Reject(ctx context.Context, taskID, reason string) error {
 }
 
 // FailFromRemote records a remote executor's failure on the delegator's copy.
-// Mirrors CompleteFromRemote: any non-terminal state is accepted.
+// Mirrors CompleteFromRemote, while preserving a task already parked for
+// human review.
 func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason string) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
 	}
 	if Terminal(cur.State) {
+		return nil
+	}
+	if cur.State == StateReview {
 		return nil
 	}
 	if err := s.applyState(ctx, taskID, cur.State, StateFailed, owner, cur.AttemptID, EvResult,

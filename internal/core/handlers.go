@@ -568,7 +568,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				c.logTask(task.Title, false)
 				trackTask(c, task.Project, required, task.Title, false)
 				return bus.TaskResultPayload{
-					TaskID: taskID, AttemptID: attemptID, OK: false, ExitCode: 1, Stderr: msg,
+					TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: false, ExitCode: 1, Stderr: msg,
 					Tokens: res.Tokens, Cost: res.Cost,
 				}, nil
 			}
@@ -587,7 +587,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			c.logTask(task.Title, true)
 			trackTask(c, task.Project, required, task.Title, true)
 			return bus.TaskResultPayload{
-				TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: 0, Stdout: res.Stdout,
+				TaskID: taskID, AttemptID: attemptID, State: StateDone, OK: true, ExitCode: 0, Stdout: res.Stdout,
 				Tokens: res.Tokens, Cost: res.Cost,
 			}, nil
 		}
@@ -602,7 +602,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			c.logTask(task.Title, false)
 			trackTask(c, task.Project, required, task.Title, false)
 			return bus.TaskResultPayload{
-				TaskID: taskID, AttemptID: attemptID, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
+				TaskID: taskID, AttemptID: attemptID, State: StateFailed, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
 				Tokens: res.Tokens, Cost: res.Cost,
 			}, nil
 		}
@@ -649,7 +649,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		c.logTask(task.Title, false)
 		trackTask(c, task.Project, required, task.Title, false)
 		return bus.TaskResultPayload{
-			TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
+			TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 			Tokens: res.Tokens, Cost: res.Cost,
 		}, nil
 	}
@@ -670,7 +670,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		c.logTask(task.Title, true)
 		trackTask(c, task.Project, required, task.Title, true)
 		return bus.TaskResultPayload{
-			TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
+			TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 			Tokens: res.Tokens, Cost: res.Cost,
 		}, nil
 	}
@@ -686,7 +686,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	c.logTask(task.Title, true)
 	trackTask(c, task.Project, required, task.Title, true)
 	return bus.TaskResultPayload{
-		TaskID: taskID, AttemptID: attemptID, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
+		TaskID: taskID, AttemptID: attemptID, State: StateDone, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 		Tokens: res.Tokens, Cost: res.Cost,
 	}, nil
 }
@@ -928,7 +928,7 @@ func (c *Core) handleDecline(ctx context.Context, env bus.Envelope) {
 	// Unblock a synchronous Submit that forwarded this task: it sees a failed
 	// result (exit 1) rather than hanging forever with no capability anywhere.
 	c.signalResult(p.TaskID, bus.TaskResultPayload{
-		TaskID: p.TaskID, OK: false, ExitCode: 1, Stderr: "declined: " + p.Reason,
+		TaskID: p.TaskID, State: StateFailed, OK: false, ExitCode: 1, Stderr: "declined: " + p.Reason,
 	})
 }
 
@@ -1051,14 +1051,39 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			"stored", t.AttemptID, "got", p.AttemptID)
 		return
 	}
-	if p.OK {
+	state := p.State
+	if state == "" {
+		// Backward compatibility for nodes that predate the explicit state field.
+		if p.OK {
+			state = StateDone
+		} else {
+			state = StateFailed
+		}
+	}
+	switch state {
+	case StateDone:
+		if !p.OK {
+			c.logger.Warn("inconsistent task_result state", "task", p.TaskID, "state", state, "ok", p.OK)
+			return
+		}
 		if err := c.store.CompleteFromRemote(ctx, p.TaskID, c.nodeID, p); err != nil {
 			c.logger.Warn("complete from result", "task", p.TaskID, "err", err)
 		}
-	} else {
+	case StateReview:
+		if err := c.store.ReviewFromRemote(ctx, p.TaskID, c.nodeID, p); err != nil {
+			c.logger.Warn("review from result", "task", p.TaskID, "err", err)
+		}
+	case StateFailed:
 		if err := c.store.FailFromRemote(ctx, p.TaskID, c.nodeID, p.Stderr); err != nil {
 			c.logger.Warn("fail from result", "task", p.TaskID, "err", err)
 		}
+	case StateCancelled:
+		if err := c.store.Cancel(ctx, p.TaskID); err != nil && !errors.Is(err, ErrConflict) {
+			c.logger.Warn("cancel from result", "task", p.TaskID, "err", err)
+		}
+	default:
+		c.logger.Warn("unknown task_result state ignored", "task", p.TaskID, "state", state)
+		return
 	}
 
 	// Record delegation outcome for scheduling analysis (B2). Only record when
@@ -1073,7 +1098,7 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			latencyMs = (storage.Now() - delegateTs) * 1000
 		}
 		if err := c.store.RecordDelegationMetric(ctx, p.TaskID, string(c.nodeID), env.From,
-			t.Requires, p.OK, latencyMs, p.Tokens); err != nil {
+			t.Requires, state == StateDone, latencyMs, p.Tokens); err != nil {
 			c.logger.Warn("record delegation metric", "task", p.TaskID, "err", err)
 		}
 	}

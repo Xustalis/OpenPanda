@@ -5,7 +5,9 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -18,6 +20,23 @@ import (
 // NodeID is this node's stable identifier. Phase 0 uses the configured name;
 // a generated UUID may be preferred once remote discovery exists.
 func NodeID(cfgName string) string { return cfgName }
+
+// RuntimeNodeID keeps legacy physical node IDs stable while preventing a VM
+// configured with the same display name from colliding with its host node.
+func RuntimeNodeID(name, kind, identity string) string {
+	if kind != "vm" {
+		return NodeID(name)
+	}
+	if identity == "" {
+		return name + "@vm"
+	}
+	return name + "@vm-" + shortIdentity(identity)
+}
+
+func shortIdentity(identity string) string {
+	sum := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(sum[:6])
+}
 
 // EphemeralNodeID derives a short-lived identity from base for processes that
 // dial peers but are not the long-running daemon (e.g. `panda ask`). It appends

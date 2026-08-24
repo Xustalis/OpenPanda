@@ -279,6 +279,12 @@ model:
   # api_key: ""               # prefer the OPENPANDA_MODEL_API_KEY env var
 ```
 
+Node identity rules are enforced at daemon startup. A physical host may run
+only one `physical` node, regardless of its display name. A virtual machine
+may run as an additional `vm` node; set a stable `node.identity` for each VM.
+The OS lock is keyed by physical-host identity or VM identity, so an ordinary
+second process on the same device is rejected while host plus VM is allowed.
+
 Secrets (model API keys) are read from `OPENPANDA_MODEL_API_KEY` rather than the
 config file whenever possible.
 
@@ -369,6 +375,8 @@ Manage skills:
 |---|---|---|
 | `node` | `name` | Unique node ID (used across the network) |
 | `node` | `resource_class` | `Micro` \| `Standard` \| `Full` → scheduler tier |
+| `node` | `kind` | `physical` (default) or `vm`; controls the local singleton rule |
+| `node` | `identity` | Stable VM identity; physical nodes use the host fingerprint and ignore this override |
 | `network` | `listen_addr` | WebSocket listener address |
 | `network` | `shared_secret` | HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it (all nodes share one value) |
 | `network` | `max_connections` | Global concurrent WS connection limit (0 = unlimited) |
@@ -376,6 +384,11 @@ Manage skills:
 | `network` | `panel_addr` | Web console HTTP address (`panda web` / `/web`); default `127.0.0.1:7840` |
 | `network` | `panel_token` | Bearer token guarding the console's `/api/*` (loopback auto-generates an ephemeral one; prefer `OPENPANDA_PANEL_TOKEN`) |
 | `network` | `peers` | Manual peer addresses to dial |
+
+Use `panda nodes` (or `panda status`) to inspect node kind, local/remote
+placement and running state. `panda status --running` shows only nodes with a
+fresh runtime heartbeat; the Web Nodes page exposes the same data through
+`/api/self` and `/api/nodes`.
 | `storage` | `db_path` | SQLite database path |
 | `storage` | `context_path` | Context snapshot store |
 | `storage` | `memory_path` | Personal memory root |

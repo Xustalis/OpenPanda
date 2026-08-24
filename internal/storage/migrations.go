@@ -30,6 +30,18 @@ var migrations = []Migration{
 	{Version: 7, Name: "backfill_audit_hash_chain", Apply: migrateV7},
 	{Version: 8, Name: "add_reminders", Apply: migrateV8},
 	{Version: 9, Name: "add_tasks_queue_meta", Apply: migrateV9},
+	{Version: 10, Name: "add_node_identity", Apply: migrateV10},
+}
+
+func migrateV10(tx *sql.Tx) error {
+	exists, err := tableExistsTx(tx, "employee_cache")
+	if err != nil || !exists {
+		return err
+	}
+	if err := addColumnIfMissingTx(tx, "employee_cache", "node_kind", "TEXT NOT NULL DEFAULT 'physical'"); err != nil {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "employee_cache", "node_identity", "TEXT")
 }
 
 func migrateV1(tx *sql.Tx) error {
