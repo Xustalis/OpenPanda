@@ -14,6 +14,28 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Cada entrada nombra el cambio y su efecto visible en una a tres líneas; se cita el commit que lo introdujo cuando ayuda a la arqueología.
 - Este archivo en inglés es el canónico. Las traducciones zh-CN / ja / es / de lo replican y pueden retrasarse brevemente alrededor de un lanzamiento.
 
+## [0.0.4-beta] - 2026-08-24
+
+> Versión beta: release de nodos distribuidos. Para detalles completos ve la [sección 0.0.4-beta en CHANGELOG.md](CHANGELOG.md).
+>
+> Destacados: tipo de nodo physical / vm + identidad estable, guardia singleton por host (paquete `nodeidentity`), endurecimiento del protocolo de adaptadores + tests de contrato, `/api/self` + `/api/nodes` y página Nodes en la web, utilidades de laboratorio de 3 nodos, y la corrección raíz del fallo de SQLite `SQLITE_CANTOPEN 14` en instalaciones Homebrew / cualquier cwd.
+
+### Añadido
+
+- `node.kind = physical | vm` + identidad estable. VM exige `node.identity`; peer hello v2 transporta ambos campos; migración v10 de `employee_cache` rellena `DEFAULT 'physical'`.
+- Singleton daemon guard (`nodeidentity`): `flock(2)` en Unix / `LockFileEx` en Windows; un segundo daemon sobre la misma identidad sale limpio con diagnóstico.
+- Protocolo unificado `{ok, result, exit_code}` con captura de stderr como diagnóstico; `tests/adapter_contract_test.py` nuevo.
+- Rutas `/api/self` + `/api/nodes` y pestaña Nodes en la web con tabla running/last-seen.
+- `scripts/lab/*` + `scripts/scenario-model/` + `scripts/task-timeline/` + plan `docs/testing/distributed-lab-plan.md`.
+
+### Corregido
+
+- **Fallo de arranque en Homebrew / cualquier cwd (SQLITE_CANTOPEN 14)**: 1) `Default()` ahora usa `UserDataDir()` según plataforma, 2) `resolveRelativePaths()` en `Load()` reubica rutas relativas antiguas al directorio del YAML, 3) `storage.Open()` crea el padre de la DB, 4) `panelStore()` crea el directorio de storage completo en entradas REPL/web/queue.
+
+### Mejorado
+
+- `panda nodes` gana columna `Kind` (physical | vm).
+
 ## [0.0.3] - 2026-08-23
 
 ### Añadido

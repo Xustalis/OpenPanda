@@ -14,6 +14,75 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Entries name the change and its user-visible effect in one to three lines; the introducing commit is cited where it aids archaeology.
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
+## [0.0.4-beta] - 2026-08-24
+
+Beta snapshot: the distributed-node release. The engine now models physical vs VM nodes,
+guards singleton identity per host, ships hardening + contract tests for the adapter
+protocol, exposes a `/api/self` + `/api/nodes` surface with a web Nodes page, and — as
+of this cycle — installs cleanly **from any working directory** on Homebrew installs
+(which was the last blocker for casual use).
+
+### Added
+
+- **Node kind and stable identity** — `node.kind = physical | vm`. Physical nodes derive
+  a stable ID from the host fingerprint (hostname + MAC hash); VM nodes require an
+  explicit `node.identity` so you can pin the same identity across reprovisioned
+  cloud instances. `panda init` now prompts for kind and (when VM) the stable identity.
+  Peer hello protocol v2 carries `node_kind` + `node_identity` and `employee_cache`
+  v10 backfills the two columns with `DEFAULT 'physical'` for existing rows.
+- **Singleton daemon guard (`nodeidentity` package)** — `Acquire(kind, identity)` takes
+  an OS-level file lock in `$USER_DATA_DIR/locks/`, with platform-native `flock(2)` on
+  Unix / `LockFileEx` on Windows. Running a second `panda daemon` on the same identity
+  exits cleanly with a diagnostic instead of corrupting the shared store.
+- **Adapter protocol hardening + contract test** — commander/adapter.go now returns a
+  unified `{ok, result, exit_code}` frame with stderr-as-diagnostic capture for
+  non-zero exits; adapter/inject logs every injection decision (auto | always | never)
+  for operator audit. `tests/adapter_contract_test.py` validates every adapter speaks
+  the same frame, and `testdata/scenarios/long_task.py` drives the queue cancel path.
+  `adapters/codex.py` argument parsing and stdout framing were fixed as part of the
+  hardening work.
+- **`/api/self` + `/api/nodes` + web Nodes page** — panel/self.go exposes the local
+  node (name, kind, identity, resource class, running state, capabilities) and the
+  node directory (local + connected peers with last-seen / running state). The new
+  `Nodes` tab (`webui/app/src/views/nodes.tsx`) renders a running/last-seen table
+  with kind + resource class chips.
+- **Distributed-lab toolkit** — `scripts/lab/generate-three-node.sh` bootstraps three
+  isolated configs (physical A + B + a VM node) with distinct identities, shared
+  secrets and pre-wired peer lists; `scripts/scenario-model/main.go` scores
+  scheduling/routing scenarios against a directory of YAML configs;
+  `scripts/task-timeline/main.go` emits an ASCII timeline of task transitions per
+  node straight from `openpanda.db`, great for recovery audits.
+  `docs/testing/distributed-lab-plan.md` records the three-node scenarios that must
+  pass before beta→GA.
+
+### Fixed
+
+- **Homebrew / any-cwd startup failure (SQLITE_CANTOPEN 14)** — default storage
+  paths were `./data/openpanda.db` and friends, so `panda` failed to open the DB
+  whenever you launched it from any shell directory other than the project root
+  (common with Homebrew installs). The fix is multi-layered:
+  1. `config.Default()` now anchors DB/memory/projects/skills/work paths to
+     `UserDataDir()` — platform-standard per-user state (`~/Library/Application
+     Support/openpanda` on macOS, `${XDG_DATA_HOME:-$HOME/.local/share}/openpanda`
+     on Linux, `%LOCALAPPDATA%\openpanda` on Windows).
+  2. `config.Load()` runs `resolveRelativePaths()` against the YAML's own directory
+     so legacy configs written by pre-v0.0.4 `panda init` keep reading next to the
+     YAML file, never next to the shell cwd.
+  3. `storage.Open()` MkdirAll's the DB's parent directory even for exotic
+     manually-specified paths.
+  4. `panelStore()` (used by REPL, `panda web`, panel commands, queue, task, …)
+     now creates the full storage directory set just like `runDaemon` already did.
+  Smoke-tested: `panda queue` from `/` with a fresh HOME auto-creates the user data
+  dir, initializes `openpanda.db`, and prints the empty queue.
+
+### Changed
+
+- `panda nodes` output gained a `Kind` column (physical | vm) so distributed setups
+  can tell the host-backed nodes apart from provisioned VM identities at a glance.
+- README: added identity singleton rule section, kind/identity reference rows in the
+  node config table, and a `panda nodes` command mention to surface the new
+  visibility surface.
+
 ## [0.0.3] - 2026-08-23
 
 ### Added

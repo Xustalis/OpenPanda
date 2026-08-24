@@ -14,6 +14,32 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Jeder Eintrag benennt die Änderung und ihre sichtbare Wirkung in ein bis drei Zeilen; der einführende Commit wird zitiert, wo das der Archäologie hilft.
 - Die englische Datei ist maßgeblich. Die Übersetzungen zh-CN / ja / es / de spiegeln sie und können um ein Release kurz verzögert sein.
 
+## [0.0.4-beta] - 2026-08-24
+
+> Beta-Snapshot: Release für verteilte Knoten. Vollständige Details siehe [Abschnitt 0.0.4-beta in CHANGELOG.md](CHANGELOG.md).
+>
+> Highlights: physical / VM Knotentyp + stabile Identity, Singleton-Daemon-Guard pro Host (`nodeidentity`-Paket), Adapterprotokoll-Härtung + Vertragstests, `/api/self` + `/api/nodes` samt Nodes-Webseite, 3-Knoten-Verteilt-Labor-Tools und die Root-Cause-Behebung von SQLITE_CANTOPEN 14 bei Homebrew-Installs / beliebigem cwd.
+
+### Hinzugefügt
+
+- `node.kind = physical | vm` + stabile Identity; VM verlangt `node.identity` explizit; peer hello v2 überträgt die Felder; `employee_cache`-Migration v10 befüllt bestehende Zeilen mit `DEFAULT 'physical'`.
+- Singleton-Daemon-Guard via OS-Level File-Lock: `flock(2)` unter Unix, `LockFileEx` unter Windows — ein zweiter `panda daemon` zur gleichen Identity beendet sich sauber mit Diagnose.
+- Einheitlicher Frame `{ok, result, exit_code}` inkl. stderr-als-Diagnose bei Non-Zero-Exits. Neuer Test `tests/adapter_contract_test.py`.
+- Routen `/api/self` + `/api/nodes` + Web-Tab Nodes mit running/last-seen-Tabelle.
+- `scripts/lab/*` + `scripts/scenario-model/` + `scripts/task-timeline/` + Testplan `docs/testing/distributed-lab-plan.md`.
+
+### Behoben
+
+- **Startfehler (SQLITE_CANTOPEN 14) unter Homebrew / beliebigem cwd**:
+  1. `config.Default()` an `UserDataDir()` (plattformspezifisch) verankert.
+  2. `resolveRelativePaths()` in `Load()`: alte relative Pfade werden zum YAML-Verzeichnis statt zum Shell-cwd aufgelöst.
+  3. `storage.Open()` erzeugt DB-Elternverzeichnis via MkdirAll.
+  4. `panelStore()` (REPL / web / queue / …) erzeugt jetzt alle Storage-Verzeichnisse, analog zu `runDaemon`.
+
+### Verbessert
+
+- `panda nodes` Ausgabe um Spalte `Kind` (physical | vm) erweitert.
+
 ## [0.0.3] - 2026-08-23
 
 ### Hinzugefügt

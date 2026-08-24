@@ -14,6 +14,28 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 各項目は変更内容とユーザーから見える影響を 1〜3 行で書き、必要に応じて導入コミットを付記して遡りやすくする。
 - 英語版（CHANGELOG.md）が正。zh-CN / ja / es / de の翻訳はそのミラーで、リリース前後は一時的に遅れることがある。
 
+## [0.0.4-beta] - 2026-08-24
+
+> 本セクションは日本語版準備中です。詳細は [CHANGELOG.md の 0.0.4-beta 節](CHANGELOG.md) を参照してください。
+>
+> ハイライト：物理/VM ノード種別と安定したノード ID、ホスト単位の singleton daemon guard（`nodeidentity` パッケージ）、アダプタープロトコルの硬直化と契約テスト、`/api/self` + `/api/nodes` と Nodes Web ページ、3 ノード分散実験ツール、そして Homebrew/任意 cwd での SQLite 起動失敗（SQLITE_CANTOPEN 14）の根本修正。
+
+### 追加
+
+- ノード種別 `physical | vm` と安定した identity。VM は `node.identity` 必須。peer hello v2 で伝送、`employee_cache` v10 で既存行を `DEFAULT 'physical'` で埋め戻し。
+- `nodeidentity.Acquire(kind, identity)`：Unix は `flock(2)`、Windows は `LockFileEx` で同一識別子の `panda daemon` 二重起動を防止。
+- アダプタープロトコル統一（`{ok, result, exit_code}` + stderr 診断キャプチャ）。`tests/adapter_contract_test.py` 新設。
+- `/api/self` + `/api/nodes`、web の Nodes タブ（running/last-seen テーブル）。
+- 3 ノード実験スクリプト群と `docs/testing/distributed-lab-plan.md`。
+
+### 修正
+
+- **Homebrew / 任意 cwd での起動失敗（SQLITE_CANTOPEN 14）**：`config.Default()` をユーザーごとの `UserDataDir()` にアンカー、`config.Load()` で相対パスを YAML のあるディレクトリへ再配置、`storage.Open()` で DB 親ディレクトリを自動作成、`panelStore()` で REPL/web/queue 系入口も完全なディレクトリセットを作成。
+
+### 変更
+
+- `panda nodes` 出力に `Kind` カラム追加。
+
 ## [0.0.3] - 2026-08-23
 
 ### 追加
