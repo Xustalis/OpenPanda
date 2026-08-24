@@ -398,8 +398,11 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 				return AgentResult{OK: false, Result: security.Redact(err.Error()), ExitCode: 1}
 			}
 		}
-		env = modelEnv(r.model)
+		env = modelEnvForAdapter(r.model, adapter)
 	}
+	// Native Agent credentials must survive the minimal sandbox even when PANDA
+	// does not inject its own model. Only adapter-specific keys are forwarded.
+	env = mergeAdapterEnv(adapterCredentialEnv(adapter), env)
 	return runAdapterProcess(ctx, adapter, prompt, cwd, env)
 }
 

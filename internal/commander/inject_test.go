@@ -122,6 +122,14 @@ func TestInjectionAutoNoModelConfigured(t *testing.T) {
 	}
 }
 
+func TestInjectionCodexDoesNotPretendAnthropicMapping(t *testing.T) {
+	cleanCredentialEnv(t)
+	r := injectionRouter(testModel, config.InjectionModelAuto)
+	if d := r.InjectionDecision("codex.py"); d.Inject {
+		t.Fatalf("codex must not receive an unverified Anthropic injection: %+v", d)
+	}
+}
+
 // TestInjectionDecisionDefaultMode verifies the zero-value policy (old
 // configs / zero InjectionConfig) normalizes to auto.
 func TestInjectionDecisionDefaultMode(t *testing.T) {

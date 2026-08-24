@@ -71,6 +71,42 @@ func TestModelEnvInjectsProvider(t *testing.T) {
 	}
 }
 
+func TestModelEnvRejectsUnsupportedProviderMapping(t *testing.T) {
+	env := modelEnvForAdapter(config.ModelConfig{
+		APIType: config.APITypeOpenAI, BaseURL: "https://api.openai.com/v1", APIKey: "sk-test", Model: "gpt-4o",
+	}, "claude_code.py")
+	if len(env) != 0 {
+		t.Fatalf("openai config must not be mapped to Claude env: %v", env)
+	}
+}
+
+func TestAdapterCredentialEnvIsWhitelisted(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "anthropic-token")
+	t.Setenv("OPENAI_API_KEY", "openai-secret")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "unrelated")
+	env := adapterCredentialEnv("codex.py")
+	if len(env) != 1 || env[0] != "OPENAI_API_KEY=openai-secret" {
+		t.Fatalf("codex credential env = %v, want only OpenAI key", env)
+	}
+}
+
+func TestMergeAdapterEnvInjectedValueWinsWithoutDuplicates(t *testing.T) {
+	got := mergeAdapterEnv(
+		[]string{"PATH=/bin", "ANTHROPIC_API_KEY=native", "OPENAI_API_KEY=openai"},
+		[]string{"ANTHROPIC_API_KEY=panda", "ANTHROPIC_MODEL=model"},
+	)
+	want := []string{"PATH=/bin", "ANTHROPIC_API_KEY=panda", "OPENAI_API_KEY=openai", "ANTHROPIC_MODEL=model"}
+	if len(got) != len(want) {
+		t.Fatalf("merged env = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("merged env[%d] = %q, want %q (all=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
 // TestAdapterPathRejectsTraversal verifies adapter names are flat filenames
 // (P2-5): anything path-like (.., separators, absolute) is a traversal attempt
 // and must be rejected before it reaches exec.CommandContext.
@@ -86,6 +122,14 @@ func TestAdapterPathRejectsTraversal(t *testing.T) {
 	}
 	if p == "" {
 		t.Fatal("empty path for valid adapter name")
+	}
+}
+
+func TestResolveAdapterDirEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(adapterDirEnv, dir)
+	if got := resolveAdapterDir(); got != dir {
+		t.Fatalf("resolveAdapterDir = %q, want env override %q", got, dir)
 	}
 }
 

@@ -129,6 +129,12 @@ func (w *progressWriter) String() string {
 // would make python look for adapters/ inside the task dir and die with exit 2.
 var adapterDir = "adapters"
 
+// adapterDirEnv lets integration environments point a packaged panda binary
+// at scenario adapters without copying them into the installation directory.
+// Production keeps the bundled adapters/ default; tests and multi-node labs
+// can set OPENPANDA_ADAPTER_DIR to an absolute, controlled directory.
+const adapterDirEnv = "OPENPANDA_ADAPTER_DIR"
+
 // AdapterDir returns the directory the current process resolves adapter
 // scripts from. The self-updater uses it to install updated adapter scripts
 // beside the running binary without re-deriving the resolution rules.
@@ -138,6 +144,17 @@ func AdapterDir() string { return resolveAdapterDir() }
 // exists beside the cwd or the executable; otherwise the relative name stands
 // (the spawn error then names the missing path naturally).
 func resolveAdapterDir() string {
+	if override := strings.TrimSpace(os.Getenv(adapterDirEnv)); override != "" {
+		if filepath.IsAbs(override) {
+			return filepath.Clean(override)
+		}
+		// Resolve once against the process cwd before the sandbox changes the
+		// adapter subprocess cwd to the task work directory.
+		if abs, err := filepath.Abs(override); err == nil {
+			return abs
+		}
+		return override
+	}
 	if filepath.IsAbs(adapterDir) {
 		return adapterDir
 	}
@@ -215,6 +232,12 @@ type AdapterRequest struct {
 // fall back to the same defaults the entry model applies, so the adapter and
 // entry never diverge.
 func modelEnv(model config.ModelConfig) []string {
+	return modelEnvForAdapter(model, "claude_code.py")
+}
+
+// modelEnvForAdapter maps PANDA's provider config only to an adapter contract
+// that is exact and testable. Unsupported mappings return no override.
+func modelEnvForAdapter(model config.ModelConfig, adapter string) []string {
 	base := model.BaseURL
 	if base == "" {
 		base = "https://api.deepseek.com/anthropic"
@@ -223,12 +246,66 @@ func modelEnv(model config.ModelConfig) []string {
 	if name == "" {
 		name = "deepseek-chat"
 	}
-	env := []string{
-		"ANTHROPIC_BASE_URL=" + base,
-		"ANTHROPIC_API_KEY=" + model.APIKey,
-		"ANTHROPIC_MODEL=" + name,
+	switch adapter {
+	case "claude_code.py":
+		if model.NormalizedAPIType() != config.APITypeAnthropic {
+			return nil
+		}
+		return []string{
+			"ANTHROPIC_BASE_URL=" + base,
+			"ANTHROPIC_API_KEY=" + model.APIKey,
+			"ANTHROPIC_MODEL=" + name,
+		}
+	default:
+		return nil
 	}
-	return env
+}
+
+// adapterCredentialEnv preserves only credentials explicitly belonging to the
+// selected adapter. Sandbox.Apply clears the parent environment, so without
+// this bridge native Claude/Codex credentials detected by InjectionDecision
+// would disappear before the CLI starts.
+func adapterCredentialEnv(adapter string) []string {
+	keys := map[string][]string{
+		"claude_code.py": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
+		"codex.py":       {"OPENAI_API_KEY"},
+		"opencode.py":    {"ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
+	}[adapter]
+	var out []string
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			out = append(out, key+"="+value)
+		}
+	}
+	return out
+}
+
+// mergeAdapterEnv builds a duplicate-free environment. Injected values replace
+// native values for the same key, which is important for injection.model=always:
+// child CLIs must see one deterministic provider credential, not two entries
+// whose precedence depends on libc/runtime behavior.
+func mergeAdapterEnv(native, injected []string) []string {
+	values := make(map[string]string, len(native)+len(injected))
+	order := make([]string, 0, len(native)+len(injected))
+	add := func(entries []string) {
+		for _, kv := range entries {
+			key, _, ok := strings.Cut(kv, "=")
+			if !ok || key == "" {
+				continue
+			}
+			if _, exists := values[key]; !exists {
+				order = append(order, key)
+			}
+			values[key] = kv[strings.IndexByte(kv, '=')+1:]
+		}
+	}
+	add(native)
+	add(injected)
+	out := make([]string, 0, len(order))
+	for _, key := range order {
+		out = append(out, key+"="+values[key])
+	}
+	return out
 }
 
 // adapterTimeoutS is the budget advertised to the adapter in its request.
