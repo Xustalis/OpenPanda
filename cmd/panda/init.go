@@ -69,6 +69,13 @@ func runInit(args []string) {
 	nodeName := prompt(i18n.T(loc, "init.node.name"), card.Device)
 	resourceClass := promptValid(i18n.T(loc, "init.node.class"), card.ResourceClass,
 		func(s string) bool { return config.ValidResourceClass(s) })
+	nodeKind := promptValid(i18n.T(loc, "init.node.kind"), def.Node.Kind,
+		func(s string) bool { return config.ValidNodeKind(s) })
+	nodeIdentity := ""
+	if nodeKind == config.NodeKindVM {
+		nodeIdentity = promptValid(i18n.T(loc, "init.node.identity"), "",
+			func(s string) bool { return strings.TrimSpace(s) != "" })
+	}
 	apiType := promptValid(i18n.T(loc, "init.model.apitype"), config.APITypeAnthropic,
 		func(s string) bool { return s == config.APITypeAnthropic || s == config.APITypeOpenAI })
 	baseURL := prompt(i18n.T(loc, "init.model.baseurl"), def.Model.BaseURL)
@@ -77,6 +84,8 @@ func runInit(args []string) {
 
 	def.Node.Name = orDefault(nodeName, def.Node.Name)
 	def.Node.ResourceClass = orDefault(resourceClass, def.Node.ResourceClass)
+	def.Node.Kind = orDefault(nodeKind, config.NodeKindPhysical)
+	def.Node.Identity = nodeIdentity
 	def.Model.APIType = orDefault(apiType, config.APITypeAnthropic)
 	def.Model.BaseURL = orDefault(baseURL, def.Model.BaseURL)
 	def.Model.Model = orDefault(model, def.Model.Model)

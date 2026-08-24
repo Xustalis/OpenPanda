@@ -81,8 +81,14 @@ type TaskDeclinePayload struct {
 
 // TaskResultPayload is the completion result.
 type TaskResultPayload struct {
-	TaskID    string  `json:"task_id"`
-	AttemptID string  `json:"attempt_id"`
+	TaskID    string `json:"task_id"`
+	AttemptID string `json:"attempt_id"`
+	// State is the executor's persisted task state at the time it reports.
+	// It is optional for wire compatibility with older nodes; when absent the
+	// receiver derives done/failed from OK. New nodes must preserve review so a
+	// supervisor that did not accept the work cannot be promoted to done by a
+	// parent node.
+	State     string  `json:"state,omitempty"`
 	OK        bool    `json:"ok"`
 	ExitCode  int     `json:"exit_code"`
 	Stdout    string  `json:"stdout,omitempty"`

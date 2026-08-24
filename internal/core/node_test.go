@@ -40,6 +40,16 @@ func TestEphemeralNodeIDUniqueAndPrefixed(t *testing.T) {
 	}
 }
 
+func TestRuntimeNodeIDSeparatesVMFromPhysical(t *testing.T) {
+	if got := RuntimeNodeID("mac", "physical", "host-a"); got != "mac" {
+		t.Fatalf("physical id = %q", got)
+	}
+	vm := RuntimeNodeID("mac", "vm", "vm-identity-1234567890")
+	if vm == "mac" || !strings.HasPrefix(vm, "mac@vm-") {
+		t.Fatalf("vm id = %q", vm)
+	}
+}
+
 func TestRegisterAndQuery(t *testing.T) {
 	n := newTestNode(t)
 	ctx := context.Background()

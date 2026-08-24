@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -9,6 +10,88 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
+
+// TestRemoteReviewStatePropagates verifies the long-running supervision
+// contract over a real authenticated WebSocket: an executor that exhausts its
+// supervisor budget reports review, and the delegator must not promote that
+// result to done merely because the adapter exited successfully.
+func TestRemoteReviewStatePropagates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-review-wire", "127.0.0.1:17936")
+	worker := newSuperviseCore(t, "worker-review-wire", 1)
+	worker.SetWorkDir(t.TempDir())
+	worker.SetSuperviseRounds(1)
+	worker.SetSupervisor(newFakeSupervisor(t, func(int) string {
+		return `{"status":"continue","reason":"incomplete","followup":"finish remaining work"}`
+	}))
+	var calls atomic.Int32
+	worker.router.SetAdapterRunner(agentRunner(&calls))
+	startPair(t, ctx, entry, worker, "127.0.0.1:17936", "127.0.0.1:17937")
+
+	env, err := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-review-wire", "review-wire-1", bus.TaskDelegatePayload{
+		TaskID: "review-wire-task", Title: "long task", Intent: "finish a multi-step change",
+		Requires: []string{"code:modify"}, Chain: []string{"entry-review-wire"}, AttemptID: "attempt-review-wire",
+	})
+	if err != nil {
+		t.Fatalf("build delegate: %v", err)
+	}
+	if err := entry.sendTo("worker-review-wire", env); err != nil {
+		t.Fatalf("send delegate: %v", err)
+	}
+
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		entryTask, entryErr := entry.store.Get(ctx, "review-wire-task")
+		workerTask, workerErr := worker.store.Get(ctx, "review-wire-task")
+		if entryErr == nil && workerErr == nil && entryTask.State == StateReview && workerTask.State == StateReview {
+			if calls.Load() != 1 {
+				t.Fatalf("worker ran %d rounds, want 1", calls.Load())
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	entryTask, _ := entry.store.Get(ctx, "review-wire-task")
+	workerTask, _ := worker.store.Get(ctx, "review-wire-task")
+	t.Fatalf("review state did not propagate: entry=%s worker=%s", entryTask.State, workerTask.State)
+}
+
+func TestRemoteReviewRejectsLateDone(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "review-protected", "entry")
+	if err := s.Queue(ctx, tk.TaskID, "entry"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Dispatch(ctx, tk.TaskID, "entry", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReviewFromRemote(ctx, tk.TaskID, "entry", map[string]any{"state": StateReview}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompleteFromRemote(ctx, tk.TaskID, "entry", map[string]any{"state": StateDone}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateReview {
+		t.Fatalf("late remote done changed protected review state to %s", got.State)
+	}
+}
+
+func TestCapabilitySummaryCarriesNodeIdentity(t *testing.T) {
+	c := newCore(t, "vm-node", "127.0.0.1:17986")
+	c.card.NodeKind = "vm"
+	c.card.NodeIdentity = "vm-test-identity"
+	s := c.summary()
+	if s.NodeKind != "vm" || s.NodeIdentity != "vm-test-identity" {
+		t.Fatalf("summary identity = %+v", s)
+	}
+}
 
 // TestTwoNodeProtocol spins up two cores over real WebSocket on loopback and
 // verifies: hello exchange registers peers, task_delegate is routed, and the

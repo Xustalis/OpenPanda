@@ -3,6 +3,8 @@
 node:
   name: "test-node-b"
   resource_class: "Micro"
+  kind: "vm"
+  identity: "local-test-node-b"
 
 network:
   listen_addr: "127.0.0.1:17936"

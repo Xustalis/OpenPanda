@@ -121,6 +121,8 @@ var messages = map[Locale]map[string]string{
 		"init.invalid":        "not a valid value — try again (Enter keeps the default)",
 		"init.node.name":      "Node name",
 		"init.node.class":     "Resource class (Micro/Standard/Full)",
+		"init.node.kind":      "Node kind (physical/vm)",
+		"init.node.identity":  "VM identity (stable and unique)",
 		"init.model.apitype":  "Model API type (anthropic/openai)",
 		"init.model.baseurl":  "Model base URL",
 		"init.model.name":     "Model name",
