@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
@@ -27,7 +29,25 @@ import (
 // a one-shot DB handle; none of them starts the daemon loop.
 
 // panelStore opens the DB, applies migrations, and returns a ready store.
+// It also ensures the storage directories (context/memory/projects/skills/
+// work) exist, matching runDaemon — the REPL, web server, and panel commands
+// all go through here, so nothing fails because a user data directory was
+// missing on first launch from an arbitrary cwd.
 func panelStore(cfg *config.Config) (*sql.DB, *core.TaskStore, error) {
+	if err := os.MkdirAll(filepath.Dir(cfg.Storage.DBPath), 0o755); err != nil {
+		return nil, nil, fmt.Errorf("create data dir: %w", err)
+	}
+	for _, dir := range []string{
+		cfg.Storage.ContextPath,
+		cfg.Storage.MemoryPath,
+		cfg.Storage.ProjectsPath,
+		cfg.Storage.SkillsPath,
+		cfg.Storage.WorkPath,
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, nil, fmt.Errorf("create storage dir %s: %w", dir, err)
+		}
+	}
 	db, err := storage.Open(cfg.Storage.DBPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open database: %w", err)
@@ -45,6 +65,7 @@ func panelStore(cfg *config.Config) (*sql.DB, *core.TaskStore, error) {
 func runStatus(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
+	runningOnly := fs.Bool("running", false, "show only currently running nodes")
 	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
@@ -61,30 +82,60 @@ func runStatus(args []string) {
 	if err != nil {
 		fatal("query employees", err)
 	}
+	views := make([]nodeStatusView, 0, len(nodes))
+	for _, n := range nodes {
+		local := n.ID == core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity())
+		running := false
+		if local {
+			held, lockErr := nodeidentity.Held(cfg.Node.Kind, cfg.Node.EffectiveIdentity())
+			running = lockErr == nil && held && n.Status == "online"
+		} else {
+			running = n.Status == "online" && n.LastSeen > 0 && time.Now().Unix()-n.LastSeen <= 45
+		}
+		if *runningOnly && !running {
+			continue
+		}
+		views = append(views, nodeStatusView{Node: n, Local: local, Running: running})
+	}
 	if jsonOutput {
-		emitJSON(nodes)
+		emitJSON(views)
 		return
 	}
 	loc := i18n.Detect()
-	if len(nodes) == 0 {
+	if len(views) == 0 {
 		fmt.Println(i18n.T(loc, "cli.status.none"))
 		return
 	}
 
 	// Stable order: by ID.
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
 
-	for _, n := range nodes {
+	for _, view := range views {
+		n := view.Node
 		seen := time.Unix(n.LastSeen, 0).Format(time.RFC3339)
 		if n.LastSeen == 0 {
 			seen = "never"
 		}
 		abilities := n.Abilities()
-		fmt.Printf("%-16s status=%-8s chip=%-40s last_seen=%s\n", n.ID, n.Status, n.Chip, seen)
+		local := "remote"
+		if n.ID == core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity()) {
+			local = "local"
+		}
+		running := "stopped"
+		if view.Running {
+			running = "running"
+		}
+		fmt.Printf("%-16s kind=%-8s %-6s %-7s status=%-8s chip=%-40s last_seen=%s\n", n.ID, n.NodeKind, local, running, n.Status, n.Chip, seen)
 		if len(abilities) > 0 {
 			fmt.Printf("  abilities: %s\n", strings.Join(abilities, ", "))
 		}
 	}
+}
+
+type nodeStatusView struct {
+	ledger.Node
+	Local   bool `json:"local"`
+	Running bool `json:"running"`
 }
 
 // runQueue implements `panda queue [--state s] [--project p] [--watch]` —

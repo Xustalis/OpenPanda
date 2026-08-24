@@ -8,6 +8,8 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,7 +17,18 @@ import (
 )
 
 // Open opens (or creates) the SQLite database at path in WAL mode.
+// The parent directory is created automatically so callers never hit
+// SQLITE_CANTOPEN (error 14) because a parent directory was missing — this
+// is the most common first-run failure when `panda` is invoked from any
+// directory other than the project root.
 func Open(path string) (*sql.DB, error) {
+	if path != ":memory:" {
+		if dir := filepath.Dir(path); dir != "" && dir != "." {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return nil, fmt.Errorf("create db dir %s: %w", dir, err)
+			}
+		}
+	}
 	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)", escapeDBPath(path))
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
