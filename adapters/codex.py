@@ -52,16 +52,14 @@ def main():
         timeout = DEFAULT_TIMEOUT
     cwd = req.get("cwd") or None
 
-    # -s danger-full-access: codex's own seatbelt sandbox cannot even
-    # initialize under a non-interactive parent (its state DB in $HOME and
-    # PATH-alias creation fail with EPERM before the first turn). PANDA
-    # already confines this adapter to the task cwd with a minimal env
-    # (security.Sandbox), which is exactly the "externally sandboxed"
-    # case codex documents for bypassing its sandbox.
-    cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "-s", "danger-full-access"]
-    # Optional model override: CODEX_MODEL (or the generic ANTHROPIC_MODEL
-    # convention used by the other adapters) maps to codex's -m flag.
-    model = os.environ.get("CODEX_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
+    # PANDA's sandbox is a cwd/env boundary, not OS isolation. Keep Codex's
+    # own workspace policy enabled and make the run non-interactive/ephemeral.
+    cmd = ["codex", "exec", "--json", "--skip-git-repo-check",
+           "--sandbox", "workspace-write", "-c", "approval_policy=\"never\"",
+           "--ephemeral"]
+    # Model selection is Codex-specific; Anthropic variables must not leak
+    # into this provider contract.
+    model = os.environ.get("CODEX_MODEL", "")
     if model:
         cmd += ["--model", model]
     cmd.append(prompt)

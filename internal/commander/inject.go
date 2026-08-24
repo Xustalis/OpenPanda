@@ -33,6 +33,9 @@ func (r *Router) InjectionDecision(adapter string) InjectionDecision {
 	case config.InjectionModelNever:
 		return InjectionDecision{Inject: false, Reason: "injection.model=never"}
 	case config.InjectionModelAlways:
+		if !supportsModelInjection(adapter, r.model) {
+			return InjectionDecision{Inject: false, Reason: "model injection is not safely supported for " + adapter}
+		}
 		return InjectionDecision{
 			Inject:  true,
 			Reason:  "injection.model=always",
@@ -53,12 +56,26 @@ func (r *Router) InjectionDecision(adapter string) InjectionDecision {
 			Reason: "agent has no own credentials but panda has no model configured",
 		}
 	}
+	if !supportsModelInjection(adapter, r.model) {
+		return InjectionDecision{
+			Inject: false,
+			Reason: "model injection is not safely supported for " + adapter,
+		}
+	}
 	return InjectionDecision{
 		Inject:  true,
 		Reason:  "agent has no own model credentials and panda has a model configured",
 		Model:   effectiveModelName(r.model),
 		BaseURL: effectiveBaseURL(r.model),
 	}
+}
+
+// supportsModelInjection is intentionally conservative. Claude's adapter has
+// an unambiguous Anthropic env contract. Codex and OpenCode require provider
+// configuration whose exact shape varies by CLI version; silently reusing
+// Anthropic variables there can select the wrong provider while looking valid.
+func supportsModelInjection(adapter string, model config.ModelConfig) bool {
+	return adapter == "claude_code.py" && model.NormalizedAPIType() == config.APITypeAnthropic
 }
 
 // effectiveBaseURL/effectiveModelName mirror the defaults modelEnv applies, so
