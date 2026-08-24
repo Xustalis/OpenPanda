@@ -3,9 +3,13 @@ package panel
 import (
 	"net/http"
 	"runtime"
+	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/hwinfo"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 )
 
 // selfJSON is the wire form of GET /api/self — this machine's device profile
@@ -13,14 +17,18 @@ import (
 // helpers `panda detect` uses, sunk into the internal layer), plus this
 // node's capability-card summary from the ledger when one is registered.
 type selfJSON struct {
-	Hostname string   `json:"hostname"`
-	OS       string   `json:"os"`
-	Arch     string   `json:"arch"`
-	Chip     string   `json:"chip,omitempty"`
-	CPUCores int      `json:"cpu_cores"`
-	RAMGB    int      `json:"ram_gb,omitempty"`
-	NodeName string   `json:"node_name,omitempty"`
-	Node     *nodeRow `json:"node,omitempty"`
+	Hostname     string   `json:"hostname"`
+	OS           string   `json:"os"`
+	Arch         string   `json:"arch"`
+	Chip         string   `json:"chip,omitempty"`
+	CPUCores     int      `json:"cpu_cores"`
+	RAMGB        int      `json:"ram_gb,omitempty"`
+	NodeName     string   `json:"node_name,omitempty"`
+	NodeID       string   `json:"node_id,omitempty"`
+	NodeKind     string   `json:"node_kind,omitempty"`
+	NodeIdentity string   `json:"node_identity,omitempty"`
+	NodeRunning  bool     `json:"node_running"`
+	Node         *nodeRow `json:"node,omitempty"`
 }
 
 // nodeRow is the full decoded directory row: the hardware/resources/agents
@@ -30,6 +38,10 @@ type nodeRow struct {
 	ID              string                     `json:"id"`
 	Name            string                     `json:"name"`
 	Status          string                     `json:"status"`
+	NodeKind        string                     `json:"node_kind"`
+	NodeIdentity    string                     `json:"node_identity,omitempty"`
+	IsLocal         bool                       `json:"is_local,omitempty"`
+	Running         bool                       `json:"running"`
 	Chip            string                     `json:"chip,omitempty"`
 	LastSeen        string                     `json:"last_seen"`
 	SchedulerTier   int                        `json:"scheduler_tier"`
@@ -62,11 +74,24 @@ func (h *handler) getSelf(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.cfg != nil {
 		out.NodeName = h.cfg.Node.Name
+		out.NodeID = localNodeID(h.cfg)
+		out.NodeKind = h.cfg.Node.Kind
+		out.NodeIdentity = h.cfg.Node.EffectiveIdentity()
+		held, err := nodeidentity.Held(h.cfg.Node.Kind, h.cfg.Node.EffectiveIdentity())
+		out.NodeRunning = err == nil && held
 	}
 	if h.db != nil && out.NodeName != "" {
-		if nodes, err := ledger.Query(h.db, "", out.NodeName); err == nil && len(nodes) > 0 {
-			row := toNodeRow(nodes[0])
-			out.Node = &row
+		if nodes, err := ledger.Query(h.db, "", ""); err == nil {
+			for _, n := range nodes {
+				if n.ID != localNodeID(h.cfg) {
+					continue
+				}
+				row := toNodeRow(n)
+				row.IsLocal = true
+				out.Node = &row
+				out.NodeRunning = out.NodeRunning && n.Status == "online"
+				break
+			}
 		}
 	}
 	writeJSON(w, out)
@@ -78,6 +103,9 @@ func toNodeRow(n ledger.Node) nodeRow {
 		ID:            n.ID,
 		Name:          n.Name,
 		Status:        n.Status,
+		NodeKind:      n.NodeKind,
+		NodeIdentity:  n.NodeIdentity,
+		Running:       n.Status == "online" && n.LastSeen > 0 && time.Now().Unix()-n.LastSeen <= 45,
 		Chip:          n.Chip,
 		LastSeen:      "never",
 		SchedulerTier: n.SchedulerTier,
@@ -107,4 +135,11 @@ func toNodeRow(n ledger.Node) nodeRow {
 		row.ResourceProfile = &rp
 	}
 	return row
+}
+
+func localNodeID(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity())
 }
