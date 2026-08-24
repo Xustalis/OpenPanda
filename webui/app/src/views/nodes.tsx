@@ -59,6 +59,7 @@ export function NodesView() {
 function isSelfNode(self: SelfInfo | null, n: NodeInfo): boolean {
   if (!self) return false
   if (self.node && self.node.id === n.id) return true
+  if (self.node_id && self.node_id === n.id) return true
   return self.node_name !== '' && (n.name === self.node_name || n.id === self.node_name)
 }
 
@@ -71,6 +72,10 @@ function SelfCard({ self }: { self: SelfInfo }) {
         <span class="node-name">{self.hostname}</span>
         <span class="badge green">{t('nodes.self')}</span>
         {self.node_name && <span class="badge">{t('nodes.nodeName')}: {self.node_name}</span>}
+        {self.node_kind && <span class="badge">{self.node_kind}</span>}
+        <span class={`badge ${self.node_running ? 'green' : 'red'}`}>
+          {self.node_running ? 'running' : 'not running'}
+        </span>
       </div>
       <p class="dim">
         {self.os}/{self.arch}
@@ -94,6 +99,8 @@ function NodeCard({ node, isSelf }: { node: NodeInfo; isSelf: boolean }) {
         <span class="node-id mono">{node.id}</span>
         {node.name && node.name !== node.id && <span class="node-name">{node.name}</span>}
         <span class={`badge ${node.status === 'online' ? 'green' : ''}`}>{node.status}</span>
+        <span class="badge">{node.node_kind}</span>
+        <span class={`badge ${node.running ? 'green' : 'red'}`}>{node.running ? 'running' : 'stopped'}</span>
         {isSelf && <span class="badge green">{t('nodes.self')}</span>}
       </div>
       {node.chip && <p class="dim">{node.chip}</p>}

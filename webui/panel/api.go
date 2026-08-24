@@ -9,6 +9,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 )
 
 // askRequest is the body of POST /api/ask.
@@ -117,7 +118,13 @@ func (h *handler) listNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]nodeRow, 0, len(nodes))
 	for _, n := range nodes {
-		out = append(out, toNodeRow(n))
+		row := toNodeRow(n)
+		if h.cfg != nil && n.ID == localNodeID(h.cfg) {
+			row.IsLocal = true
+			held, err := nodeidentity.Held(h.cfg.Node.Kind, h.cfg.Node.EffectiveIdentity())
+			row.Running = err == nil && held && n.Status == "online"
+		}
+		out = append(out, row)
 	}
 	writeJSON(w, out)
 }

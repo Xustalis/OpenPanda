@@ -934,7 +934,7 @@ func (r *repl) cmdNodes(arg string) {
 		if n.LastSeen == 0 {
 			seen = "never"
 		}
-		fmt.Printf("  %-16s %-8s %-30s %s\n", n.ID, n.Status, n.Chip, seen)
+		fmt.Printf("  %-16s %-8s %-8s %-30s %s\n", n.ID, n.NodeKind, n.Status, n.Chip, seen)
 	}
 }
 

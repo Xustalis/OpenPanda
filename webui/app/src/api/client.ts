@@ -184,6 +184,10 @@ export interface NodeInfo {
   id: string
   name: string
   status: string
+  node_kind: 'physical' | 'vm' | string
+  node_identity?: string
+  is_local?: boolean
+  running: boolean
   chip?: string
   last_seen: string
   scheduler_tier: number
@@ -203,6 +207,10 @@ export interface SelfInfo {
   cpu_cores: number
   ram_gb?: number
   node_name?: string
+  node_id?: string
+  node_kind?: 'physical' | 'vm' | string
+  node_identity?: string
+  node_running: boolean
   node?: NodeInfo
 }
 
