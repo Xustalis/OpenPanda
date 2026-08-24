@@ -14,6 +14,32 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 每条记录以一至三行写明变更内容与用户可见的影响；必要时标注引入该变更的提交，便于追溯。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
+## [0.0.4-beta] - 2026-08-24
+
+Beta 快照：分布式节点发布。引擎现在区分物理节点与虚拟机节点、守护同节点身份的单例、为适配器协议补齐加固与契约测试、暴露带 Nodes 页的 `/api/self` + `/api/nodes` 接口，并且——本轮彻底解决——Homebrew 安装后从**任意工作目录**都能干净启动（此前的日常使用最后一块阻塞）。
+
+### 新增功能
+
+- **节点类型 + 稳定身份**——`node.kind = physical | vm`。物理节点用主机指纹（主机名 + MAC 哈希）推导稳定 ID；虚拟机节点要求显式 `node.identity`，以便在重建的云实例上保持同一身份。`panda init` 现在会询问类型和（若为 VM）稳定身份。Peer hello 协议 v2 携带 `node_kind` + `node_identity`；`employee_cache` v10 迁移为两列补 `DEFAULT 'physical'`。
+- **单例守护锁（`nodeidentity` 包）**——`Acquire(kind, identity)` 在 `$USER_DATA_DIR/locks/` 下取 OS 级文件锁：Unix 用 `flock(2)`，Windows 用 `LockFileEx`。对同一身份再跑一次 `panda daemon` 会打印诊断后干净退出，避免破坏共享存储。
+- **适配器协议加固 + 契约测试**——`internal/commander/adapter.go` 返回统一 `{ok, result, exit_code}` 帧，非零退出时把 stderr 作为诊断保留；`inject` 对每次凭据注入决策（auto | always | never）写入日志便于操作者审计。`tests/adapter_contract_test.py` 验证每个适配器都讲同一套帧；`testdata/scenarios/long_task.py` 用于压测队列取消路径。`adapters/codex.py` 的参数解析与 stdout framing 同步修复。
+- **`/api/self` + `/api/nodes` + 网页 Nodes 面板**——`panel/self.go` 暴露本地节点（name / kind / identity / resource class / running state / capabilities）与节点目录（本地 + 已连接 peer，含最后一次可见时间/运行态）。新增 Nodes 页（`webui/app/src/views/nodes.tsx`）以 running/last-seen 表格渲染 kind + 资源等级 chip。
+- **分布式实验室工具箱**——`scripts/lab/generate-three-node.sh` 生成三个互相隔离的配置（物理 A/B + 一个 VM 节点），带独立身份、共享密钥与已预装 peer 列表；`scripts/scenario-model/main.go` 读取 YAML 目录给出调度/路由预测评分；`scripts/task-timeline/main.go` 直接从 `openpanda.db` 输出每个节点的任务迁移 ASCII 时间线，适合恢复审计。`docs/testing/distributed-lab-plan.md` 记录 beta→GA 前必须通过的三节点场景用例。
+
+### 问题修复
+
+- **Homebrew / 任意 cwd 启动失败（SQLITE_CANTOPEN 错误 14）**——默认存储路径原来是 `./data/openpanda.db`，在非项目目录下（Homebrew 安装的常态）打开 DB 失败。多层修复：
+  1. `config.Default()` 现在把 DB/memory/projects/skills/work 全部锚定到 `UserDataDir()`（按平台的用户态目录：macOS `~/Library/Application Support/openpanda`；Linux `${XDG_DATA_HOME:-$HOME/.local/share}/openpanda`；Windows `%LOCALAPPDATA%\openpanda`）。
+  2. `config.Load()` 运行 `resolveRelativePaths()`，把 YAML 里遗留的相对路径按「YAML 自己所在目录」重定位，保证 pre-v0.0.4 的 `panda init` 写出来的旧配置读的还是 YAML 旁边的 data 目录，不是 shell cwd。
+  3. `storage.Open()` 无论手工指定什么怪路径都会 `MkdirAll` 数据库的父目录。
+  4. `panelStore()`（REPL、`panda web`、面板命令、queue/task 等入口共用）现在像 `runDaemon` 一样一次性创建完整存储目录。
+  冒烟验证：用全新 HOME 从 `/` 下 `panda queue` → 自动创建用户数据目录并初始化 DB，输出队列为空。
+
+### 优化改进
+
+- `panda nodes` 输出新增 `Kind` 列（physical | vm），分布式部署一眼就能区分宿主机器节点与置备的 VM 身份。
+- README：新增「身份单例规则」小节，节点配置表补上 kind/identity 参考行，并首次在命令总览里带出 `panda nodes`。
+
 ## [0.0.3] - 2026-08-23
 
 ### 新增功能
