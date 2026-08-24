@@ -1,31 +1,12 @@
 name: Installers
 
 on:
-  workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/workflows/installers.yml'
-      - '.github/workflows/release.yml'
-      - 'Makefile'
-      - 'scripts/install.sh'
-      - 'scripts/install.ps1'
-      - 'scripts/package.sh'
-      - 'scripts/verify-release.sh'
-      - 'deploy/homebrew/**'
-      - 'adapters/**'
-      - 'config.example.yaml'
-      - 'config/capabilities.example-*.yaml'
   push:
     branches: [main]
-    paths:
-      - '.github/workflows/installers.yml'
-      - '.github/workflows/release.yml'
-      - 'Makefile'
-      - 'scripts/install.sh'
-      - 'scripts/install.ps1'
-      - 'scripts/package.sh'
-      - 'scripts/verify-release.sh'
-      - 'deploy/homebrew/**'
+
+concurrency:
+  group: installers-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   package:
