@@ -48,29 +48,35 @@ jobs:
       - name: Extract release notes from CHANGELOG.md
         # Pull the tagged version's section out of the canonical changelog so
         # the GitHub Release body mirrors it (generate_release_notes alone
-        # only lists commits, which told users nothing in 0.0.5). Append the
-        # standard install commands — the release page is where new users
-        # land first. Full section headers ("## [X.Y.Z]") are demoted one
-        # level so the body renders with sane hierarchy.
+        # only lists commits, which told users nothing in 0.0.5). The body is
+        # English-only by convention; a language switcher line at the top
+        # links to the translated CHANGELOGs, and the standard install
+        # commands close it out — the release page is where new users land
+        # first. Full section headers ("## [X.Y.Z]") are demoted one level so
+        # the body renders with sane hierarchy.
         run: |
           ver="${GITHUB_REF_NAME#v}"
           notes="dist/release-notes.md"
+          section="dist/changelog-section.md"
           mkdir -p dist
           awk -v ver="$ver" '
             $0 ~ "^## \\[" ver "\\]" { in_section=1; sub(/^## /, "### "); print; next }
             in_section && /^## \[/ { in_section=0 }
             in_section && /^### / { sub(/^### /, "#### "); print; next }
             in_section { print }
-          ' CHANGELOG.md > "$notes"
-          if [ ! -s "$notes" ]; then
+          ' CHANGELOG.md > "$section"
+          if [ ! -s "$section" ]; then
             echo "CHANGELOG.md has no section for $ver — refusing to publish an empty body" >&2
             exit 1
           fi
+          repo="https://github.com/Xustalis/OpenPanda/blob/main"
+          printf '%s\n\n' "**Release notes:** English · [简体中文]($repo/CHANGELOG.zh-CN.md) · [日本語]($repo/CHANGELOG.ja.md) · [Español]($repo/CHANGELOG.es.md) · [Deutsch]($repo/CHANGELOG.de.md)" > "$notes"
+          cat "$section" >> "$notes"
           cat >> "$notes" <<'INSTALL'
 
           ---
 
-          ## Install / 升级
+          ## Install
 
           **macOS / Linux**
 
@@ -90,7 +96,7 @@ jobs:
           brew install Xustalis/openpanda/openpanda
           ```
 
-          安装后运行 `panda init` 初始化，或直接 `panda` 进入 REPL。已在运行的旧版本用上面的同条命令即可原地升级（覆盖安装，用户数据保留）。
+          After installing, run `panda init` to set the node up, or just type `panda` to drop into the REPL. An older install upgrades in place with the same command — user data is preserved.
           INSTALL
 
       - name: Publish GitHub Release
