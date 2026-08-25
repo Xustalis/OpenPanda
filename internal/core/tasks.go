@@ -330,6 +330,15 @@ func (s *TaskStore) Dispatch(ctx context.Context, taskID, owner, target string) 
 		map[string]any{"target": target})
 }
 
+// RetargetDelegation records a new delegation target for a task that is
+// already dispatched — e.g. the local queue scheduler forwarding its claim to
+// a capable peer. State and owner stay unchanged; only the EvDelegate audit
+// event is appended, which is what DispatchTarget and isCurrentExecutor
+// authenticate the peer's result/decline against.
+func (s *TaskStore) RetargetDelegation(ctx context.Context, taskID, target string) error {
+	return s.recordEvent(ctx, taskID, EvDelegate, map[string]any{"target": target, "by": "queue-forward"})
+}
+
 // DispatchTarget returns the node this task was most recently dispatched to,
 // read from the task_events audit trail (Dispatch records the target on its
 // EvDelegate event). "" means the task was never dispatched. Wire handlers use

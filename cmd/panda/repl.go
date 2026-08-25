@@ -69,6 +69,7 @@ type repl struct {
 	quit        bool
 	webSrv      *http.Server
 	webURL      string
+	webToken    string
 	term        *termSession
 	activeSess  string
 	push        *push.Service
@@ -1109,7 +1110,11 @@ func (r *repl) cmdWeb(arg string) {
 		fmt.Println(i18n.T(r.loc, "repl.web.ephemeral"))
 	}
 	if r.webSrv != nil {
+		// Already serving: re-open the browser logged in with the token the
+		// running panel was started with (a fresh ephemeral would not match
+		// the server). The user typed /web because they want the console.
 		fmt.Println(i18n.Tf(r.loc, "repl.web.running", "url", r.webURL))
+		openBrowser(panel.AppendToken(r.webURL, r.webToken))
 		return
 	}
 	// Self-update: discover newer CLI releases in the background; apply gates
@@ -1137,16 +1142,23 @@ func (r *repl) cmdWeb(arg string) {
 	})
 	srv := &http.Server{Addr: addr, Handler: handler}
 	// Bind synchronously so a taken port surfaces as an error, not a silent
-	// goroutine death.
-	ln, err := net.Listen("tcp", srv.Addr)
+	// goroutine death. A taken port falls forward to a nearby one instead of
+	// failing — /web must always end with a usable console.
+	ln, bound, err := listenPanel(addr)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 		return
 	}
+	if bound != addr {
+		fmt.Println(i18n.Tf(r.loc, "web.portfallback", "orig", addr, "actual", bound))
+	}
 	go func() { _ = srv.Serve(ln) }()
 	r.webSrv = srv
 	r.webURL = panelURL(ln.Addr().String())
-	fmt.Println(i18n.Tf(r.loc, "repl.web.started", "url", r.webURL, "token", token))
+	r.webToken = token
+	// The token is never shown to the user: the browser opens already
+	// authenticated. The URL printed is the clean one.
+	fmt.Println(i18n.Tf(r.loc, "repl.web.started", "url", r.webURL))
 	openBrowser(panel.AppendToken(r.webURL, token))
 }
 

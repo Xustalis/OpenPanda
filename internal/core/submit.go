@@ -95,6 +95,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			Complexity:    in.Complexity,
 			Risk:          in.Risk,
 			AttemptID:     t.AttemptID,
+			Authorized:    in.Authorized,
 		}
 		// Register a waiter so the inbound task_result unblocks this call.
 		ch := make(chan bus.TaskResultPayload, 1)
