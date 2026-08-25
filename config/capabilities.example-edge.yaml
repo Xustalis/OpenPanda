@@ -1,35 +1,49 @@
 # 边缘节点能力卡示例（嵌入式 SBC / 低功耗 ARM 板）
 # 复制并按实际设备改名后使用：
 #   cp config/capabilities.example-edge.yaml config/capabilities.my-edge.yaml
-name: "example-edge-sbc"
-node_type: "worker"
-hardware:
+# 或直接让 panda 扫描硬件生成草稿：
+#   panda detect > capabilities.yaml
+#
+# schema 说明见 capabilities.example-desktop.yaml。边缘节点一般不装
+# agent CLI，只声明 native 白名单命令与 manual 人工能力。
+
+device: "example-edge-sbc"
+resource_class: "Micro"
+node_kind: "physical"
+chip: "ARM Cortex-A72"
+
+native:
+  - id: "sys:info"
+    command: "uname"
+    args: ["-a"]
+    tier: 1
+    description: "system info"
+  - id: "temp:read"
+    command: "vcgencmd"
+    args: ["measure_temp"]
+    tier: 1
+    description: "SoC temperature"
+  - id: "net:ping"
+    command: "ping"
+    args: ["-c", "4", "1.1.1.1"]
+    tier: 1
+    description: "ICMP reachability probe from this node's network segment"
+
+# 边缘板无 agent CLI 时整个 agents 段可省略；装了低开销 CLI 也可声明：
+# agents:
+#   opencode:
+#     adapter: "opencode.py"
+#     install_check: "opencode --version"
+#     capabilities: ["coding", "file_edit"]
+#     best_at: ["small_edits"]
+#     cost_tier: "low"
+#     tier: 2
+
+manual:
+  - id: "gpio:wire"
+    notify: "需要人工按接线图接好 GPIO 引脚后回复"
+
+capacity:
   cpu_cores: 4
   ram_gb: 2
-  disk_gb: 64
-  gpu: false
-  platform: "sbc"
-
-agents:
-  shell: true
-  file_read: true
-  file_write: true
-  git: false
-  code_edit: false
-
-resources:
-  cpu_budget: 2
-  ram_budget_mb: 1024
-  max_concurrent: 1
-
-features:
-  - name: "gpio"
-    description: "可读写板子的 GPIO 引脚（需要设备树开启）"
-  - name: "sysinfo"
-    description: "温度、电压、CPU 负载采集"
-  - name: "network_ping"
-    description: "从本节点所在网段做 ICMP/TCP 端口存活探测"
-
-commands:
-  shell: "/bin/bash"
-  # allowed_bin: ["cat", "grep", "ping", "ssh"]
+  max_concurrent_tasks: 1

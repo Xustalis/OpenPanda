@@ -5,8 +5,19 @@ import (
 	"testing"
 )
 
+// isolateLocks redirects the lock root to a per-test temp dir: on darwin
+// os.UserConfigDir() ignores XDG_CONFIG_HOME, so the env var alone would leak
+// test locks into the real user directory (and fail under sandboxed test
+// environments that cannot write it).
+func isolateLocks(t *testing.T) {
+	t.Helper()
+	old := lockRootOverride
+	lockRootOverride = t.TempDir()
+	t.Cleanup(func() { lockRootOverride = old })
+}
+
 func TestAcquireRejectsDuplicateAndAllowsDifferentKind(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateLocks(t)
 	a, err := Acquire(KindPhysical, "host-a")
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
@@ -25,14 +36,14 @@ func TestAcquireRejectsDuplicateAndAllowsDifferentKind(t *testing.T) {
 }
 
 func TestAcquireRejectsUnknownKind(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateLocks(t)
 	if _, err := Acquire("container", "host-c"); err == nil {
 		t.Fatal("expected unsupported kind rejection")
 	}
 }
 
 func TestReleaseAllowsReacquire(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateLocks(t)
 	a, err := Acquire(KindPhysical, "host-b")
 	if err != nil {
 		t.Fatal(err)
