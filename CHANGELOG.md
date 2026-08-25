@@ -2,6 +2,28 @@
 
 [English](CHANGELOG.md) · [简体中文](CHANGELOG.zh-CN.md) · [日本語](CHANGELOG.ja.md) · [Español](CHANGELOG.es.md) · [Deutsch](CHANGELOG.de.md)
 
+## Install
+
+**macOS / Linux**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 | iex
+```
+
+**macOS (Homebrew)**
+
+```sh
+brew install Xustalis/openpanda/openpanda
+```
+
+After installing, run `panda init` to set the node up, or just type `panda` to drop into the REPL. An older install upgrades in place with the same command — user data is preserved.
+
 ## About
 
 OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant) is a personal task-orchestration kernel: one `panda` binary runs on each of your devices, nodes find each other over an authenticated WebSocket bus, an entry model turns each request into a direct answer or an executable task spec, and the scheduler routes every task to the device and agent best suited to run it. The CLI is the kernel's primary interface — bare `panda` drops into an interactive REPL — and the web console is a thin shell over the same store and engine.

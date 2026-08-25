@@ -2,6 +2,28 @@
 
 [English](CHANGELOG.md) · [简体中文](CHANGELOG.zh-CN.md) · [日本語](CHANGELOG.ja.md) · [Español](CHANGELOG.es.md) · [Deutsch](CHANGELOG.de.md)
 
+## ワンコマンドインストール
+
+**macOS / Linux**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh
+```
+
+**Windows（PowerShell）**
+
+```powershell
+irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 | iex
+```
+
+**macOS（Homebrew）**
+
+```sh
+brew install Xustalis/openpanda/openpanda
+```
+
+インストール後は `panda init` でセットアップ、またはそのまま `panda` で REPL に入る。旧バージョンは同じコマンドでその場アップグレード（上書きインストール、ユーザーデータは保持される）。
+
 ## プロジェクト概要
 
 OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant）は個人向けタスクオーケストレーションカーネル：各デバイスで 1 つの `panda` バイナリが走り、ノード同士は認証付き WebSocket バスで発見し合い、エントリモデルが各リクエストを直接回答または実行可能なタスク仕様へ変換し、スケジューラが各タスクを最適なデバイスとエージェントへルーティングする。CLI がカーネルの主インターフェース（素の `panda` で対話 REPL に入る）で、Web コンソールは同じストアとエンジンの上に立つ薄いシェル。
