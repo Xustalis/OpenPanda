@@ -14,11 +14,11 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 各項目は変更内容とユーザーから見える影響を 1〜3 行で書き、必要に応じて導入コミットを付記して遡りやすくする。
 - 英語版（CHANGELOG.md）が正。zh-CN / ja / es / de の翻訳はそのミラーで、リリース前後は一時的に遅れることがある。
 
-## [0.0.4-beta] - 2026-08-24
+## [0.0.4] - 2026-08-25
 
-> 本セクションは日本語版準備中です。詳細は [CHANGELOG.md の 0.0.4-beta 節](CHANGELOG.md) を参照してください。
+> 本セクションは日本語版準備中です。詳細は [CHANGELOG.md の 0.0.4 節](CHANGELOG.md) を参照してください。
 >
-> ハイライト：物理/VM ノード種別と安定したノード ID、ホスト単位の singleton daemon guard（`nodeidentity` パッケージ）、アダプタープロトコルの硬直化と契約テスト、`/api/self` + `/api/nodes` と Nodes Web ページ、3 ノード分散実験ツール、そして Homebrew/任意 cwd での SQLite 起動失敗（SQLITE_CANTOPEN 14）の根本修正。
+> ハイライト：物理/VM ノード種別と安定したノード ID、ホスト単位の singleton daemon guard（`nodeidentity` パッケージ）、アダプタープロトコルの硬直化と契約テスト、`/api/self` + `/api/nodes` と Nodes Web ページ、3 ノード分散実験ツール、Homebrew/任意 cwd での SQLite 起動失敗（SQLITE_CANTOPEN 14）の根本修正。beta 以降：エントリーモデルの判定キャッシュ、階層化 system prompt、ゼロ設定 Web オンボーディング、共有アダプター harness、tier-2 承認 UX、インストーラー/アンインストーラーの整備、アップデーターの changelog ダイジェスト、1 問式 `panda init`、シナリオ別 FAQ。
 
 ### 追加
 

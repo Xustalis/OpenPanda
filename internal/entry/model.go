@@ -327,6 +327,12 @@ func (c *Client) CompleteTurns(ctx context.Context, system string, turns []Turn)
 // Anthropic endpoint rejects the string "auto" (it wants the internally-tagged
 // object form). Omitting it is simpler and correct.
 func (c *Client) CompleteTurnsWithTools(ctx context.Context, system string, turns []Turn, tools []ToolSpec) (Response, error) {
+	if c.apiKey == "" {
+		// Same guard as the streaming and OpenAI paths: an empty key would
+		// otherwise hit the provider and come back as a misleading 401
+		// "invalid key" instead of "not configured".
+		return Response{}, ErrNoKey
+	}
 	if c.apiType == config.APITypeOpenAI {
 		return c.completeOpenAI(ctx, system, turns, tools)
 	}

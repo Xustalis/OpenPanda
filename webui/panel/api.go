@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
@@ -55,6 +56,13 @@ func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 
 	out, err := eng.Ask(r.Context(), req.Prompt, req.Authorize)
 	if err != nil {
+		// A missing API key is a configuration gap, not a server fault: 503
+		// keeps it in the same family as "engine not configured" so clients
+		// treat it as "finish setup and retry" rather than a crash.
+		if errors.Is(err, entry.ErrNoKey) {
+			writeErr(w, http.StatusServiceUnavailable, err)
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

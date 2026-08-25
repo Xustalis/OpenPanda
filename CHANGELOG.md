@@ -14,13 +14,16 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Entries name the change and its user-visible effect in one to three lines; the introducing commit is cited where it aids archaeology.
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
-## [0.0.4-beta] - 2026-08-24
+## [0.0.4] - 2026-08-25
 
-Beta snapshot: the distributed-node release. The engine now models physical vs VM nodes,
-guards singleton identity per host, ships hardening + contract tests for the adapter
-protocol, exposes a `/api/self` + `/api/nodes` surface with a web Nodes page, and — as
-of this cycle — installs cleanly **from any working directory** on Homebrew installs
-(which was the last blocker for casual use).
+The distributed-node release, GA. The engine models physical vs VM nodes, guards
+singleton identity per host, ships hardening + contract tests for the adapter
+protocol, and exposes a `/api/self` + `/api/nodes` surface with a web Nodes page.
+Since the beta snapshot, the follow-up cycle landed the entry-model decision caches,
+a layered system prompt, a zero-config web onboarding flow, a shared adapter harness,
+tier-2 authorization UX, installer/uninstaller sweeps, updater changelog digests, a
+one-question `panda init`, and a scenario-based FAQ. Installs cleanly **from any
+working directory** and the first public release with end-to-end docs.
 
 ### Added
 
@@ -53,7 +56,26 @@ of this cycle — installs cleanly **from any working directory** on Homebrew in
   `scripts/task-timeline/main.go` emits an ASCII timeline of task transitions per
   node straight from `openpanda.db`, great for recovery audits.
   `docs/testing/distributed-lab-plan.md` records the three-node scenarios that must
-  pass before beta→GA.
+  pass before GA — the release gate.
+- **Entry-model decision caches** — intent classification and supervise verdicts hit
+  a disk cache (`entry_cache`, migration v11) keyed by prompt + device snapshot, so
+  identical inputs skip the LLM call entirely. The system prompt is layered
+  pi-style: a compact resident core carries the routing decision, with
+  memory-governance and verbose task-JSON layers attached on demand, keeping the
+  stable prefix provider-cacheable. The commander model's own token consumption is
+  billed into delegation metrics (executor `entry:<model>`).
+- **Zero-config web onboarding** — `panda web` boots without any configuration and
+  serves queue/projects/nodes immediately; a banner offers one-step model setup
+  (API type / base URL / model / key with a live connectivity test), and saving
+  hot-loads the engine — the first conversation works without a restart.
+- **Updater changelog digest + daemon notice** — the update card in the web console
+  shows the latest release's changelog digest (collapsible notes beside the
+  download/apply buttons), and the headless daemon logs an update-available notice
+  (6h auto-check, once per version) since it cannot apply updates itself.
+- **Scenario FAQ** — `docs/faq.md` answers the high-frequency questions by scenario
+  (first steps, model-error decoding, agent adapters, tier-2 authorization, review,
+  scope drift, multi-device networking, data locations, upgrades); `docs/README.md`
+  now indexes the user guides separately from internal plans.
 
 ### Fixed
 
@@ -74,11 +96,48 @@ of this cycle — installs cleanly **from any working directory** on Homebrew in
      now creates the full storage directory set just like `runDaemon` already did.
   Smoke-tested: `panda queue` from `/` with a fresh HOME auto-creates the user data
   dir, initializes `openpanda.db`, and prints the empty queue.
+- **Missing-key misdiagnosis on the Anthropic path** — a non-streaming call with no
+  API key sent the empty-key request anyway and surfaced the provider's 401 as
+  "invalid key" instead of "not configured". All call paths now return the
+  actionable `panda init` / web-settings hint, the REPL banner marks an
+  unkeyed model inline, and the panel reports configuration gaps as 503 (same
+  family as "engine not configured") rather than a server-fault 500.
+- **Tier-2 authorization UX** — a tier-2 refusal now carries an actionable hint
+  (`--authorize` or a `tier: 1` card declaration) and skips the retry budget
+  straight to review: retrying cannot produce consent. Registry-driven credential
+  probing covers Claude Code's new `~/.claude/config.json` + `settings.json`
+  locations. Scope parsing extracts path tokens only, so natural-language
+  descriptions like “工作目录下的 haiku.txt” no longer trip drift warnings on
+  legitimate file operations.
+- **Installer / uninstaller** — `install.sh` resumes partial downloads (`curl -C -`),
+  persists PATH with the same marked block `panda install` writes, and its generated
+  LaunchAgent/systemd services rely on the daemon's config auto-discovery instead of
+  hardcoded `--config`/`--card` paths. `panda uninstall` sweeps the distribution
+  prefix (bin/, adapters/, example configs) while refusing Homebrew Cellars (keg
+  stays whole, `brew uninstall openpanda` hint) and source checkouts.
+- **Any-cwd adapter resolution** — delegation from a temp working directory failed
+  with "can't open file …/adapters/claude_code.py"; the resolver now walks up from
+  the cwd to locate `adapters/` and falls back to the absolute adapter path.
+- **Ask-engine device visibility** — an ask engine built against a fresh database
+  self-registers its node under the daemon's stable runtime ID, so the entry model
+  no longer sees an empty device list on first use.
 
 ### Changed
 
 - `panda nodes` output gained a `Kind` column (physical | vm) so distributed setups
   can tell the host-backed nodes apart from provisioned VM identities at a glance.
+- **Shared adapter harness** — the seven agent adapters now share one harness
+  library (`adapters/_harness.py`) for the `{ok, result, exit_code}` framing,
+  argument parsing, and timeout handling, cutting the per-adapter boilerplate.
+- **One-question init** — `panda init` asks a single question (configure a model
+  now?) with hardware detection filling in name, resource class, kind, and a VM
+  identity when the host probes as a guest; `--defaults` / `--non-interactive`
+  drop even that prompt. The example capability cards are rewritten to the real
+  `ledger.Card` schema with agent tier semantics.
+- **Default model moves to `deepseek-v4-flash`** — the `deepseek-chat`/`reasoner`
+  aliases were retired by the provider on 2026-07-24; the pro model is
+  deliberately never a default (cost control). Card discovery also looks next to
+  the resolved config file, matching the daemon's discovery order.
 - README: added identity singleton rule section, kind/identity reference rows in the
   node config table, and a `panda nodes` command mention to surface the new
   visibility surface.

@@ -184,8 +184,10 @@ func TestModelSettingsHotLoadEngine(t *testing.T) {
 	if code != http.StatusOK || out["base_url"] != "http://127.0.0.1:9" || out["model"] != "boot-model" {
 		t.Fatalf("get after hot-load = %v", out)
 	}
-	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/ask", `{"prompt":"hi"}`)); code != http.StatusInternalServerError {
-		t.Fatalf("ask after hot-load status = %d, want 500 (engine live, endpoint dead)", code)
+	// No API key was saved: the ask surfaces the missing-key configuration
+	// gap as 503 (same family as "not configured"), not a server-fault 500.
+	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/ask", `{"prompt":"hi"}`)); code != http.StatusServiceUnavailable {
+		t.Fatalf("ask after hot-load status = %d, want 503 (engine live, key missing)", code)
 	}
 
 	// The config file on disk carries the model for the next start.

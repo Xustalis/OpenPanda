@@ -14,11 +14,11 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Cada entrada nombra el cambio y su efecto visible en una a tres líneas; se cita el commit que lo introdujo cuando ayuda a la arqueología.
 - Este archivo en inglés es el canónico. Las traducciones zh-CN / ja / es / de lo replican y pueden retrasarse brevemente alrededor de un lanzamiento.
 
-## [0.0.4-beta] - 2026-08-24
+## [0.0.4] - 2026-08-25
 
-> Versión beta: release de nodos distribuidos. Para detalles completos ve la [sección 0.0.4-beta en CHANGELOG.md](CHANGELOG.md).
+> GA: release de nodos distribuidos. Para detalles completos ve la [sección 0.0.4 en CHANGELOG.md](CHANGELOG.md).
 >
-> Destacados: tipo de nodo physical / vm + identidad estable, guardia singleton por host (paquete `nodeidentity`), endurecimiento del protocolo de adaptadores + tests de contrato, `/api/self` + `/api/nodes` y página Nodes en la web, utilidades de laboratorio de 3 nodos, y la corrección raíz del fallo de SQLite `SQLITE_CANTOPEN 14` en instalaciones Homebrew / cualquier cwd.
+> Destacados: tipo de nodo physical / vm + identidad estable, guardia singleton por host (paquete `nodeidentity`), endurecimiento del protocolo de adaptadores + tests de contrato, `/api/self` + `/api/nodes` y página Nodes en la web, utilidades de laboratorio de 3 nodos, y la corrección raíz del fallo de SQLite `SQLITE_CANTOPEN 14` en instalaciones Homebrew / cualquier cwd. Desde la beta: cachés de decisión del modelo de entrada, system prompt por capas, onboarding web sin configuración, harness de adaptadores compartido, UX de autorización tier-2, barrido de instalador/desinstalador, resumen de changelog en el actualizador, `panda init` de una pregunta y FAQ por escenarios.
 
 ### Añadido
 
