@@ -173,6 +173,15 @@ const ja: Messages = {
   'settings.mcpSaved': '保存しました — MCP ツールをホットロードしました。',
   'settings.mcpValidating': 'サーバーを起動してツールを取得中…',
 
+  // Onboarding (first-run model setup)
+  'onboarding.banner': 'モデルが未設定です — チャットを始めるには設定してください。',
+  'onboarding.cta': '設定する',
+  'onboarding.title': 'モデルを設定',
+  'onboarding.subtitle':
+    'プロバイダー情報を入力するとチャットが有効になります。保存した設定はすぐに反映され、再起動は不要です。',
+  'onboarding.saved': 'モデルを設定しました — チャットをご利用いただけます。',
+  'onboarding.skip': 'あとで',
+
   // Skills view
   'skills.title': 'スキル',
   'skills.subtitle': '自動生成されたスキルは人の承認まで保留されます — 未承認の生成物は実行されません。',
@@ -221,6 +230,7 @@ const ja: Messages = {
   'system.updateDownload': 'ダウンロード',
   'system.updateDownloading': '更新をダウンロード中…',
   'system.updateStaged': '{latest} をインストールする準備ができました。',
+  'system.updateNotesTitle': '変更履歴',
   'system.updateApply': '更新をインストール',
   'system.updateApplying': '更新を適用中…',
   'system.updateDone': '更新を適用しました — 再起動中…',

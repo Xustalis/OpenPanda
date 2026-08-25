@@ -34,7 +34,8 @@ type createTaskRequest struct {
 // the session. Needs the ask engine with a capability card — the same
 // requirement as task execution via /api/ask.
 func (h *handler) createTask(w http.ResponseWriter, r *http.Request) {
-	if h.engine == nil {
+	eng := h.currentEngine()
+	if eng == nil {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("task creation not configured (set model.base_url to enable)"))
 		return
 	}
@@ -76,9 +77,9 @@ func (h *handler) createTask(w http.ResponseWriter, r *http.Request) {
 	q := core.DefaultQueueSpec()
 	q.Priority = priority
 	q.ResourceKeys = req.ResourceKeys
-	q.WorkDir = h.engine.WorkPath()
+	q.WorkDir = eng.WorkPath()
 
-	task, err := h.engine.EnqueueTask(r.Context(), in, q)
+	task, err := eng.EnqueueTask(r.Context(), in, q)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

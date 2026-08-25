@@ -165,6 +165,8 @@ export interface UpdateStatus {
   stage: 'idle' | 'checking' | 'available' | 'downloading' | 'staged' | 'applying' | 'done' | 'error'
   current: string
   latest?: string
+  /** Changelog digest of the latest release (present once a check found one). */
+  notes?: string
   available: boolean
   idle: boolean
   error?: string

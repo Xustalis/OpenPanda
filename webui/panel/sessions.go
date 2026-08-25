@@ -160,7 +160,8 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("prompt must not be empty"))
 		return
 	}
-	if h.engine == nil {
+	eng := h.currentEngine()
+	if eng == nil {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("ask engine not configured (configure the model in Settings)"))
 		return
 	}
@@ -207,9 +208,9 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// personal memory never enters a session prompt.
 	workDir := sess.Worktree
 	if workDir == "" {
-		workDir = h.engine.WorkPath()
+		workDir = eng.WorkPath()
 	}
-	out, err := h.engine.AskTurns(r.Context(), history, req.Prompt, workDir, req.Authorize, cb)
+	out, err := eng.AskTurns(r.Context(), history, req.Prompt, workDir, req.Authorize, cb)
 	if err != nil {
 		send("error", map[string]string{"message": err.Error()})
 		_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "assistant", Text: "⚠ " + err.Error(), Kind: "error"})

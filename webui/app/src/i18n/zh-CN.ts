@@ -173,6 +173,14 @@ const zhCN: Messages = {
   'settings.mcpSaved': '已保存 — MCP 工具已热加载。',
   'settings.mcpValidating': '正在启动服务器并拉取工具…',
 
+  // Onboarding (first-run model setup)
+  'onboarding.banner': '还没有配置模型 — 配置后才能开始对话。',
+  'onboarding.cta': '去配置',
+  'onboarding.title': '配置模型',
+  'onboarding.subtitle': '填写服务商信息即可启用对话；保存后立即生效，无需重启。',
+  'onboarding.saved': '模型已配置 — 现在可以开始对话了。',
+  'onboarding.skip': '暂不配置',
+
   // Skills view
   'skills.title': '技能',
   'skills.subtitle': '自动生成的技能在人工批准前保持待定状态 — 未审核的生成内容不会运行。',
@@ -221,6 +229,7 @@ const zhCN: Messages = {
   'system.updateDownload': '下载更新',
   'system.updateDownloading': '正在下载更新…',
   'system.updateStaged': '已准备好安装 {latest}。',
+  'system.updateNotesTitle': '变更摘要',
   'system.updateApply': '立即更新',
   'system.updateApplying': '正在应用更新…',
   'system.updateDone': '更新已应用，正在重启…',

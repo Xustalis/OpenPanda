@@ -47,12 +47,13 @@ func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("prompt must not be empty"))
 		return
 	}
-	if h.engine == nil {
+	eng := h.currentEngine()
+	if eng == nil {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("ask engine not configured (set model.base_url to enable /api/ask)"))
 		return
 	}
 
-	out, err := h.engine.Ask(r.Context(), req.Prompt, req.Authorize)
+	out, err := eng.Ask(r.Context(), req.Prompt, req.Authorize)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

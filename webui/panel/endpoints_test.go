@@ -284,10 +284,15 @@ func TestModelSettingsGetMasksKey(t *testing.T) {
 func TestModelSettingsPutRoundTrip(t *testing.T) {
 	h, _, configPath := newEnginePanel(t)
 
-	// PUT without an engine wired fails closed with 503.
-	bare := New(Deps{Store: newTestStore(t), Cfg: config.Default(), StaticDir: t.TempDir(), Token: testToken})
-	if code, _ := doJSON(t, bare, jsonReq(http.MethodPut, "/api/settings/model", `{}`)); code != http.StatusServiceUnavailable {
-		t.Fatalf("put without engine status = %d, want 503", code)
+	// An engine-less panel rejects an empty base_url; with a holder wired a
+	// full save hot-loads the engine instead (TestModelSettingsHotLoadEngine).
+	// The bare config must clear Default()'s model endpoint: an empty request
+	// base_url means "keep the current one", and the default is non-empty.
+	bareCfg := config.Default()
+	bareCfg.Model.BaseURL = ""
+	bare := New(Deps{Store: newTestStore(t), Cfg: bareCfg, StaticDir: t.TempDir(), Token: testToken})
+	if code, _ := doJSON(t, bare, jsonReq(http.MethodPut, "/api/settings/model", `{}`)); code != http.StatusBadRequest {
+		t.Fatalf("put with empty base_url status = %d, want 400", code)
 	}
 
 	body := `{"api_type":"openai","base_url":"http://127.0.0.1:1/v1","model":"gpt-test","max_tokens":128}`
@@ -324,10 +329,13 @@ func TestModelSettingsTestEndpoint(t *testing.T) {
 		t.Fatalf("dead endpoint must report ok:false with error: %v", out)
 	}
 
-	// Without an engine the endpoint is unavailable.
+	// Without an engine the connectivity test still works — the onboarding
+	// form verifies a candidate provider before the first save hot-loads
+	// the engine. A dead endpoint reports ok:false, not a 5xx.
 	bare := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Token: testToken})
-	if code, _ := doJSON(t, bare, jsonReq(http.MethodPost, "/api/settings/model/test", `{}`)); code != http.StatusServiceUnavailable {
-		t.Fatalf("test without engine status = %d, want 503", code)
+	code, out = doJSON(t, bare, jsonReq(http.MethodPost, "/api/settings/model/test", `{"base_url":"http://127.0.0.1:9","model":"m"}`))
+	if code != http.StatusOK || out["ok"] != false {
+		t.Fatalf("test without engine = %d %v, want 200 ok:false", code, out)
 	}
 }
 

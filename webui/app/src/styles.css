@@ -1309,6 +1309,30 @@ label {
   margin: 0;
 }
 
+/* Changelog digest of the pending release: a collapsed <details> so the card
+   stays compact until the user asks what changed. */
+.update-notes {
+  width: 100%;
+}
+
+.update-notes summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.update-notes pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim, inherit);
+  background: var(--bg-inset, rgba(127, 127, 127, 0.08));
+  border-radius: 6px;
+}
+
 .update-version {
   margin: 4px 0 0;
 }
@@ -2108,4 +2132,42 @@ label {
 .memory-entry-editbox {
   width: 100%;
   margin-top: 6px;
+}
+
+/* ---- Onboarding banner (first-run model setup) ---- */
+
+.onboarding-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+  padding: 12px 16px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  background: rgba(226, 185, 59, 0.08);
+}
+
+.onboarding-banner-text {
+  font-size: 13.5px;
+}
+
+/* With the banner riding above a view, the main pane becomes a column so
+   height:100% children (the chat grid) size to the remaining space instead
+   of overflowing past the fold. */
+.main:has(> .onboarding-banner) {
+  display: flex;
+  flex-direction: column;
+}
+
+.main:has(> .onboarding-banner) > .chat {
+  flex: 1;
+  min-height: 0;
+}
+
+/* The one-step setup form reuses the modal chrome; wider for field rows. */
+.onboarding-modal {
+  width: min(560px, 100%);
+  gap: 14px;
 }

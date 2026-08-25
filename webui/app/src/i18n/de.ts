@@ -175,6 +175,15 @@ const de: Messages = {
   'settings.mcpSaved': 'Gespeichert — MCP-Tools heiß geladen.',
   'settings.mcpValidating': 'Server wird gestartet, Tools werden geholt…',
 
+  // Onboarding (first-run model setup)
+  'onboarding.banner': 'Noch kein Modell konfiguriert — richte eines ein, um zu chatten.',
+  'onboarding.cta': 'Einrichten',
+  'onboarding.title': 'Modell einrichten',
+  'onboarding.subtitle':
+    'Gib deine Anbieter-Daten ein, um den Chat zu aktivieren. Gespeicherte Einstellungen greifen sofort — kein Neustart nötig.',
+  'onboarding.saved': 'Modell konfiguriert — der Chat ist einsatzbereit.',
+  'onboarding.skip': 'Später',
+
   // Skills view
   'skills.title': 'Skills',
   'skills.subtitle':
@@ -225,6 +234,7 @@ const de: Messages = {
   'system.updateDownload': 'Herunterladen',
   'system.updateDownloading': 'Update wird heruntergeladen…',
   'system.updateStaged': 'Bereit zur Installation von {latest}.',
+  'system.updateNotesTitle': 'Änderungsprotokoll',
   'system.updateApply': 'Update installieren',
   'system.updateApplying': 'Update wird angewendet…',
   'system.updateDone': 'Update angewendet — Neustart…',
