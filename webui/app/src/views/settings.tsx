@@ -10,6 +10,7 @@ import {
 import { useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { locale, localeNames, locales, setLocale } from '../i18n'
+import { notifyModelSaved } from './onboarding'
 import { onThemeChange, setTheme, theme } from '../theme'
 
 type ApiType = 'anthropic' | 'openai'
@@ -194,6 +195,7 @@ function ModelSection() {
       setForm(saved)
       setApiKey('')
       setNotice(t('settings.saved'))
+      notifyModelSaved() // the onboarding banner re-checks and hides
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {

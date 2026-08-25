@@ -8,6 +8,7 @@ import { SessionsView } from './views/sessions'
 import { ProjectsView } from './views/projects'
 import { NodesView } from './views/nodes'
 import { SettingsView } from './views/settings'
+import { OnboardingBanner } from './views/onboarding'
 import { SkillsView } from './views/skills'
 import { SystemView } from './views/system'
 import { RemindersView } from './views/reminders'
@@ -170,6 +171,7 @@ export function App() {
         </div>
       </aside>
       <main class="main">
+        <OnboardingBanner />
         {route.view === 'sessions' && (
           <SessionsView
             activeId={route.id}

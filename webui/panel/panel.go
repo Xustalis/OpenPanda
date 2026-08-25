@@ -33,22 +33,27 @@ import (
 // else degrades gracefully — Engine nil means /api/ask answers-only mode,
 // Projects nil disables the project endpoints, DB nil disables /api/nodes,
 // Sessions nil disables the chat-session endpoints, Worktrees nil means
-// sessions run without git isolation.
+// sessions run without git isolation. EngineHolder, when set, supersedes
+// Engine: the handler resolves the engine through it on every request, and
+// the model-settings save path can hot-load an engine at runtime (the
+// zero-config start → first saved model transition) instead of demanding a
+// process restart.
 type Deps struct {
-	Store      *core.TaskStore
-	Engine     *askengine.Engine
-	DB         *sql.DB
-	Projects   *memory.Projects
-	Push       *push.Service
-	Sessions   *sessions.Store
-	Worktrees  *sessions.Worktrees
-	SkillStore *skills.Store    // nil disables the skill approval endpoints
-	Reminders  *reminders.Store // nil disables the reminder endpoints
-	Cfg        *config.Config
-	ConfigPath string // where PUT /api/settings/model persists ("" = memory only)
-	StaticDir  string
-	Token      string
-	Updater    *updater.Manager // nil disables the self-update endpoints
+	Store        *core.TaskStore
+	Engine       *askengine.Engine
+	EngineHolder *EngineHolder
+	DB           *sql.DB
+	Projects     *memory.Projects
+	Push         *push.Service
+	Sessions     *sessions.Store
+	Worktrees    *sessions.Worktrees
+	SkillStore   *skills.Store    // nil disables the skill approval endpoints
+	Reminders    *reminders.Store // nil disables the reminder endpoints
+	Cfg          *config.Config
+	ConfigPath   string // where PUT /api/settings/model persists ("" = memory only)
+	StaticDir    string
+	Token        string
+	Updater      *updater.Manager // nil disables the self-update endpoints
 }
 
 // New builds the panel HTTP handler: the static web app under StaticDir plus
@@ -64,6 +69,7 @@ func New(d Deps) http.Handler {
 	h := &handler{
 		store:      d.Store,
 		engine:     d.Engine,
+		engines:    d.EngineHolder,
 		db:         d.DB,
 		projects:   d.Projects,
 		push:       d.Push,
@@ -276,7 +282,8 @@ func clientIP(r *http.Request) string {
 
 type handler struct {
 	store      *core.TaskStore
-	engine     *askengine.Engine
+	engine     *askengine.Engine // static engine; ignored when engines != nil
+	engines    *EngineHolder     // reloadable engine source; nil = static
 	db         *sql.DB
 	projects   *memory.Projects
 	push       *push.Service

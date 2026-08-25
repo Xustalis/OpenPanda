@@ -74,21 +74,20 @@ func runWeb(args []string) {
 
 	logger := log.From(context.Background())
 
-	// Optional ask engine — same contract as the REPL: without a model
-	// endpoint the console still serves queue/projects/nodes; /api/ask
-	// reports it is not configured.
-	var engine *askengine.Engine
-	if cfg.Model.BaseURL != "" {
-		engine, err = askengine.New(context.Background(), cfg, askengine.Options{
-			CardPath:   *cardPath,
-			MCPCommand: *mcpCmd,
-			Logger:     logger,
-		})
-		if err != nil {
-			fatal("init ask engine", err)
-		}
-		defer engine.Close()
+	// Optional ask engine behind a reloadable holder — same contract as the
+	// REPL: without a model endpoint the console still serves
+	// queue/projects/nodes; /api/ask reports it is not configured. The
+	// holder lets the settings page build the engine at runtime once a
+	// model is saved (zero-config start → first save), no restart needed.
+	engines, err := panel.NewEngineHolder(cfg, askengine.Options{
+		CardPath:   *cardPath,
+		MCPCommand: *mcpCmd,
+		Logger:     logger,
+	})
+	if err != nil {
+		fatal("init ask engine", err)
 	}
+	defer engines.Close()
 
 	// Web Push (optional): reminder notifications go straight to the browser
 	// when a subscription exists.
@@ -136,19 +135,19 @@ func runWeb(args []string) {
 	srv := &http.Server{
 		Addr: addr,
 		Handler: panel.New(panel.Deps{
-			Store:      store,
-			Engine:     engine,
-			DB:         db,
-			Projects:   memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memoryLimits(cfg)),
-			Sessions:   sessions.NewStore(filepath.Join(filepath.Dir(cfg.Storage.DBPath), "sessions")),
-			Worktrees:  openWorktreesBestEffort(cfg.Storage.WorkPath),
-			SkillStore: skills.NewStore(cfg.Storage.SkillsPath),
-			Reminders:  reminderStore,
-			Push:       pushSvc,
-			Cfg:        cfg,
-			ConfigPath: resolvedConfigPath(*configPath),
-			Token:      token,
-			Updater:    updateMgr,
+			Store:        store,
+			EngineHolder: engines,
+			DB:           db,
+			Projects:     memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memoryLimits(cfg)),
+			Sessions:     sessions.NewStore(filepath.Join(filepath.Dir(cfg.Storage.DBPath), "sessions")),
+			Worktrees:    openWorktreesBestEffort(cfg.Storage.WorkPath),
+			SkillStore:   skills.NewStore(cfg.Storage.SkillsPath),
+			Reminders:    reminderStore,
+			Push:         pushSvc,
+			Cfg:          cfg,
+			ConfigPath:   resolvedConfigPath(*configPath),
+			Token:        token,
+			Updater:      updateMgr,
 		}),
 	}
 	// Bind synchronously so a taken port surfaces as an error, not a

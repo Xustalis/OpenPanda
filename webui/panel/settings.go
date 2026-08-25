@@ -41,13 +41,12 @@ func (h *handler) getModelSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // putModelSettings serves PUT /api/settings/model — validate, persist to the
-// config file (comments preserved), and hot-swap the engine's model client so
-// the next ask already uses the new provider.
+// config file (comments preserved), then apply live: an existing engine
+// hot-swaps its model client (SetModel); a zero-config panel (engine nil,
+// holder wired) builds the engine right here, so the first saved model
+// enables /api/ask without a restart. On a static answers-only panel (no
+// engine, no holder) the settings still persist for the next start.
 func (h *handler) putModelSettings(w http.ResponseWriter, r *http.Request) {
-	if h.engine == nil {
-		writeErr(w, http.StatusServiceUnavailable, errors.New("ask engine not configured"))
-		return
-	}
 	var req modelSettingsJSON
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
@@ -65,6 +64,10 @@ func (h *handler) putModelSettings(w http.ResponseWriter, r *http.Request) {
 	if key := strings.TrimSpace(req.APIKey); key != "" {
 		mc.APIKey = key
 	}
+	if mc.BaseURL == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("base_url must not be empty"))
+		return
+	}
 
 	// Build a client first: invalid base URLs fail here without touching the
 	// stored config.
@@ -78,13 +81,25 @@ func (h *handler) putModelSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := h.engine.SetModel(mc); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
+	// Keep the live config in sync: GET falls back to it without an engine,
+	// and a holder reload builds the next engine from it.
+	if h.cfg != nil {
+		h.cfg.Model = mc
 	}
-	// Keep the engine's shared config in sync so GET reflects the new state.
-	if cfg := h.engine.Config(); cfg != nil {
-		cfg.Model = mc
+	if eng := h.currentEngine(); eng != nil {
+		if err := eng.SetModel(mc); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		if cfg := eng.Config(); cfg != nil {
+			cfg.Model = mc
+		}
+	} else if h.engines != nil {
+		// Zero-config start, first model saved: hot-load the engine now.
+		if err := h.engines.Reload(); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	writeJSON(w, modelSettingsJSON{
 		APIType:    mc.NormalizedAPIType(),
@@ -98,12 +113,10 @@ func (h *handler) putModelSettings(w http.ResponseWriter, r *http.Request) {
 
 // testModelSettings serves POST /api/settings/model/test — runs a one-word
 // completion against the given (or current) provider settings and reports
-// whether the endpoint answered, so the settings page can verify before save.
+// whether the endpoint answered, so the settings page — and the onboarding
+// form on a zero-config panel — can verify before saving. It needs no live
+// engine: the candidate settings alone are enough to dial the provider.
 func (h *handler) testModelSettings(w http.ResponseWriter, r *http.Request) {
-	if h.engine == nil {
-		writeErr(w, http.StatusServiceUnavailable, errors.New("ask engine not configured"))
-		return
-	}
 	var req modelSettingsJSON
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
@@ -146,20 +159,24 @@ type mcpSettingsJSON struct {
 // command (from the engine's live state, falling back to config.yaml).
 func (h *handler) getMCPSettings(w http.ResponseWriter, r *http.Request) {
 	cmd := ""
-	if h.engine != nil {
-		cmd = h.engine.MCPCommand()
+	eng := h.currentEngine()
+	if eng != nil {
+		cmd = eng.MCPCommand()
 	} else if h.cfg != nil {
 		cmd = h.cfg.MCP.Command
 	}
-	writeJSON(w, mcpSettingsJSON{Command: cmd, FromCfg: h.engine == nil})
+	writeJSON(w, mcpSettingsJSON{Command: cmd, FromCfg: eng == nil})
 }
 
 // putMCPSettings serves PUT /api/settings/mcp — validate the command by
 // actually spawning the server and listing its tools, persist to config.yaml,
 // then hot-swap the engine's MCP client. An empty command disables MCP.
+// Needs a live engine (MCP tools live inside it); configure the model first
+// — the settings save hot-loads one.
 func (h *handler) putMCPSettings(w http.ResponseWriter, r *http.Request) {
-	if h.engine == nil {
-		writeErr(w, http.StatusServiceUnavailable, errors.New("ask engine not configured"))
+	eng := h.currentEngine()
+	if eng == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("ask engine not configured (save a model first)"))
 		return
 	}
 	var req mcpSettingsJSON
@@ -173,7 +190,7 @@ func (h *handler) putMCPSettings(w http.ResponseWriter, r *http.Request) {
 	// without touching the stored config or the running registry.
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	if err := h.engine.SetMCPCommand(ctx, cmd); err != nil {
+	if err := eng.SetMCPCommand(ctx, cmd); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
@@ -192,8 +209,8 @@ func (h *handler) putMCPSettings(w http.ResponseWriter, r *http.Request) {
 // engineModel returns the engine's current model config; a nil engine (answers
 // panel without a provider) falls back to the loaded config.
 func (h *handler) engineModel() config.ModelConfig {
-	if h.engine != nil {
-		return h.engine.ModelConfig()
+	if eng := h.currentEngine(); eng != nil {
+		return eng.ModelConfig()
 	}
 	if h.cfg != nil {
 		return h.cfg.Model

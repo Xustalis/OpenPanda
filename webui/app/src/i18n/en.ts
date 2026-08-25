@@ -178,6 +178,15 @@ const en: Messages = {
   'settings.mcpSaved': 'Saved — MCP tools hot-loaded.',
   'settings.mcpValidating': 'Starting server and fetching tools…',
 
+  // Onboarding (first-run model setup)
+  'onboarding.banner': 'No model configured yet — set one up to start chatting.',
+  'onboarding.cta': 'Set up',
+  'onboarding.title': 'Configure a model',
+  'onboarding.subtitle':
+    'Fill in your provider details to enable chat. Saved settings apply immediately — no restart needed.',
+  'onboarding.saved': 'Model configured — chat is ready to go.',
+  'onboarding.skip': 'Not now',
+
   // Skills view
   'skills.title': 'Skills',
   'skills.subtitle':
@@ -227,6 +236,7 @@ const en: Messages = {
   'system.updateDownload': 'Download',
   'system.updateDownloading': 'Downloading update…',
   'system.updateStaged': 'Ready to install {latest}.',
+  'system.updateNotesTitle': 'Changelog',
   'system.updateApply': 'Install update',
   'system.updateApplying': 'Applying update…',
   'system.updateDone': 'Update applied — restarting…',
