@@ -14,6 +14,16 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 每条记录以一至三行写明变更内容与用户可见的影响；必要时标注引入该变更的提交，便于追溯。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
+## [0.0.5] - 2026-08-25
+
+0.0.4 GA 当天的补丁版，来自首次真实三设备安装的反馈：两项安装器健壮性修复 + 一项 Windows 数据安全修复。
+
+### 问题修复
+
+- **Windows 数据目录不再与安装目录冲突。** 原默认数据目录为 `%LOCALAPPDATA%\openpanda`，而安装器写入 `%LOCALAPPDATA%\OpenPanda`——在大小写不敏感的 NTFS 上两者是同一目录，数据库、记忆与项目全部落在安装前缀*内部*，卸载时会一并清扫。数据目录现改为 `%LOCALAPPDATA%\openpanda-data`。从 0.0.4 升级的 Windows 节点将以全新存储启动（旧数据本就位于安装前缀内，按设计不保证在卸载后幸存）。
+- **安装器可在 GitHub API 限流下工作。** `api.github.com` 对未认证请求的限额为每 IP 每小时 60 次；耗尽时，两个安装器都会改走 `/releases/latest` 的 302 重定向解析最新版本（该端点不受同样限制）。用 `--version` / `-Version` 手动指定版本的方式保持不变。
+- **`install.ps1` 在 Windows PowerShell 5.1 无法访问 GitHub 的机器上可用。** 脚本现在开头强制 TLS 1.2，优先使用系统自带的 `curl.exe`（Windows 10 1803+）下载并以 `Invoke-WebRequest` 兜底，并补充超时——损坏的 WinINET 代理配置会快速失败而不是长时间挂起。
+
 ## [0.0.4] - 2026-08-25
 
 分布式节点正式版（GA）。引擎区分物理节点与虚拟机节点、守护同节点身份的单例、为适配器协议补齐加固与契约测试、暴露带 Nodes 页的 `/api/self` + `/api/nodes` 接口。beta 之后跟进落地：入口模型决策缓存、分层 system prompt、零配置 Web 引导、共享适配器 harness、tier-2 授权体验、安装/卸载清扫、更新器 changelog 摘要、一问式 `panda init` 与场景化 FAQ。Homebrew 安装后从**任意工作目录**都能干净启动，首个带完整上手文档的公开发布。

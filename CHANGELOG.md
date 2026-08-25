@@ -14,6 +14,32 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Entries name the change and its user-visible effect in one to three lines; the introducing commit is cited where it aids archaeology.
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
+## [0.0.5] - 2026-08-25
+
+A same-day patch over 0.0.4 GA, prompted by the first real three-device
+install: two installer robustness fixes and one data-safety fix on Windows.
+
+### Fixed
+
+- **Windows data directory no longer collides with the install prefix.** The
+  default state dir was `%LOCALAPPDATA%\openpanda` while the installer writes to
+  `%LOCALAPPDATA%\OpenPanda` — the same directory on case-insensitive NTFS, so
+  the SQLite database, memory, and projects lived *inside* the install prefix
+  and an uninstall swept them away. The data dir is now
+  `%LOCALAPPDATA%\openpanda-data`. Windows nodes coming from 0.0.4 start with a
+  fresh store (the old one sat inside the install prefix and was not expected
+  to survive an uninstall anyway).
+- **Installers survive GitHub API rate limits.** `api.github.com` allows 60
+  unauthenticated requests per IP per hour; when exhausted, both installers now
+  resolve the latest version through the `/releases/latest` 302 redirect, which
+  is not rate-limited the same way. Pinning with `--version` / `-Version` keeps
+  working.
+- **`install.ps1` works on machines where Windows PowerShell 5.1 cannot reach
+  GitHub.** The script now forces TLS 1.2 up front, prefers the bundled
+  `curl.exe` (Windows 10 1803+) for every download with `Invoke-WebRequest` as
+  fallback, and adds timeouts so a broken WinINET proxy configuration fails
+  fast instead of hanging.
+
 ## [0.0.4] - 2026-08-25
 
 The distributed-node release, GA. The engine models physical vs VM nodes, guards

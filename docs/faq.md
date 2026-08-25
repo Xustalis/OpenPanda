@@ -94,7 +94,7 @@ OpenPanda 自己不执行长程任务，而是委派给设备上安装的 agent 
 
 **数据存在哪里？**
 
-用户级目录，与安装位置无关：macOS `~/Library/Application Support/openpanda`，Linux `~/.local/share/openpanda`，Windows `%LOCALAPPDATA%\openpanda`。`memory/`、`projects/`、`skills/` 是用户资产，卸载默认保留。
+用户级目录，与安装位置无关：macOS `~/Library/Application Support/openpanda`，Linux `~/.local/share/openpanda`，Windows `%LOCALAPPDATA%\openpanda-data`（刻意与安装目录 `%LOCALAPPDATA%\OpenPanda` 区分，避免大小写不敏感的 NTFS 把两者折叠成同一目录）。`memory/`、`projects/`、`skills/` 是用户资产，卸载默认保留。
 
 **如何升级？**
 
