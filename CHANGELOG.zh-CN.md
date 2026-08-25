@@ -2,6 +2,28 @@
 
 [English](CHANGELOG.md) · [简体中文](CHANGELOG.zh-CN.md) · [日本語](CHANGELOG.ja.md) · [Español](CHANGELOG.es.md) · [Deutsch](CHANGELOG.de.md)
 
+## 一键安装
+
+**macOS / Linux**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh
+```
+
+**Windows（PowerShell）**
+
+```powershell
+irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 | iex
+```
+
+**macOS（Homebrew）**
+
+```sh
+brew install Xustalis/openpanda/openpanda
+```
+
+安装后运行 `panda init` 初始化，或直接输入 `panda` 进入 REPL。已在运行的旧版本用上面的同条命令即可原地升级（覆盖安装，用户数据保留）。
+
 ## 项目概述
 
 OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant）是一个个人任务编排内核：每台设备运行一个 `panda` 二进制，节点经带认证的 WebSocket 总线互相发现，入口模型把每个请求变成直接回答或可执行的任务规格，调度器再把任务路由到最适合运行的设备与智能体。CLI 是内核的主接口——裸 `panda` 直接进入交互式 REPL——Web 控制台则是跑在同一套存储与引擎上的薄壳。
