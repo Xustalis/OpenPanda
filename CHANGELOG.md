@@ -16,64 +16,23 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [0.0.5] - 2026-08-25
 
-A patch over 0.0.4 GA, driven by the first real three-device lab (macOS +
-OrangePi + Windows): cross-device scheduling was incomplete, several runtime
-states misreported themselves, and the first installs surfaced installer and
-data-safety issues on Windows. Everything below was verified on real hardware
-before release.
+The three-device lab patch: the first real macOS + OrangePi + Windows cluster — installed from the public installers, linked over LAN, driven end-to-end — exposed that queued tasks never left their origin node, tier-2 consent died at the delegation boundary, and a locked-out agent CLI could attract routing and hang for minutes. Five commits, all verified on that hardware.
+
+### Added
+
+- **`panda task add --requires`** — declare the abilities a task needs (`--requires gpio:read`, comma-separated); a queued task without a local match is routed to a device that has them, the same root-scheduler policy `panda ask` has always used (c4e1bc7).
 
 ### Fixed
 
-- **Queued tasks now route cross-device.** Tasks created with `panda task add`
-  or the web console were claimed and executed by the *origin* node only, so a
-  task requiring an ability only another device had failed outright. The queue
-  scheduler now applies the same root-scheduler policy as `panda ask`: when the
-  local node cannot serve the required abilities, the claim is re-targeted to a
-  capable peer and the peer's result completes the origin's task row. `panda
-  task add` gains `--requires` to declare the abilities a task needs.
-- **Tier-2 authorization travels with delegation.** `--authorize` consent was
-  local to the submitting node, so an agent task delegated to a peer bounced at
-  the executor's defense layer even though the user had approved it. Consent
-  now propagates on the authenticated bus and is honored by the executor.
-- **Locked-out agent CLIs no longer attract routing.** A capability card is
-  static, but an installed CLI can be unusable (e.g. `claude.exe` present with
-  no login state on a node with no model key): routing to it produced a long
-  runtime hang before failure. Both the local fallback chain and the
-  capability summary advertised to peers now check viability — CLI on PATH
-  *and* a reachable model (own credentials or injection) — so such nodes are
-  skipped up front.
-- **`panda web` no longer dies on a taken port.** A second `/web` (or a
-  leftover process) errored with `bind: address already in use`; the console
-  now falls forward to a nearby port and says so. The session token is no
-  longer printed — the browser opens already authenticated — and invoking
-  `/web` while it runs re-opens the browser logged in instead of just printing
-  a URL. `--no-browser` still prints a token-carrying URL for manual use.
-- **Peer hello now reports the real version.** Nodes advertised a hardcoded
-  `0.1.0-dev`, so `panda nodes` showed wrong versions across a mixed-version
-  fleet. All three hello paths report `version.Version`.
-- **The capability card next to the resolved config wins over `./capabilities.yaml`.**
-  Starting a daemon from a directory that happens to contain a capabilities.yaml
-  (a repo checkout, another node's card) silently loaded the wrong card. The
-  init-written card next to the config file is now preferred; `--card` still
-  overrides explicitly.
-- **Windows data directory no longer collides with the install prefix.** The
-  default state dir was `%LOCALAPPDATA%\openpanda` while the installer writes to
-  `%LOCALAPPDATA%\OpenPanda` — the same directory on case-insensitive NTFS, so
-  the SQLite database, memory, and projects lived *inside* the install prefix
-  and an uninstall swept them away. The data dir is now
-  `%LOCALAPPDATA%\openpanda-data`. Windows nodes coming from 0.0.4 start with a
-  fresh store (the old one sat inside the install prefix and was not expected
-  to survive an uninstall anyway).
-- **Installers survive GitHub API rate limits.** `api.github.com` allows 60
-  unauthenticated requests per IP per hour; when exhausted, both installers now
-  resolve the latest version through the `/releases/latest` 302 redirect, which
-  is not rate-limited the same way. Pinning with `--version` / `-Version` keeps
-  working.
-- **`install.ps1` works on machines where Windows PowerShell 5.1 cannot reach
-  GitHub.** The script now forces TLS 1.2 up front, prefers the bundled
-  `curl.exe` (Windows 10 1803+) for every download with `Invoke-WebRequest` as
-  fallback, and adds timeouts so a broken WinINET proxy configuration fails
-  fast instead of hanging.
+- **Queued tasks now route cross-device** — tasks from `panda task add` and the web console were claimed and executed by the origin node only: a task requiring an ability only another device had failed outright (`route: no capability matches` for `pi.uptime` filed on a Mac). On claim the scheduler now consults the root scheduler; with no local match the claim is re-targeted to a capable peer (declined-by loop protection, lease so a dead executor is detected), and the peer's result completes the origin's row. Verified in all three directions on the lab: Mac→OrangePi, OrangePi→Mac, Windows→OrangePi (c4e1bc7).
+- **Tier-2 authorization travels with delegation** — `--authorize` consent was local to the submitting node, so an agent task delegated to a peer bounced at the executor's defense layer even though the user had approved it. Consent now propagates on the authenticated bus and the executor honors it: a credential-less OrangePi filing an authorized coding task at the Mac's claude completes instead of dying in review (c4e1bc7).
+- **Locked-out agent CLIs no longer attract routing** — a capability card is static, but an installed CLI can be unusable: `claude.exe` on the Windows box with no login state and no model key advertised `agent:*` to the fleet, routing sent it a coding task, and it hung for minutes before failing on a network error. The local fallback chain and the capability summary advertised over hello now gate on viability — CLI on PATH *and* a reachable model (own credentials or injection); the Windows summary now advertises only `win.sysinfo` (2db530f).
+- **`panda web` no longer dies on a taken port** — a second `/web` (or a leftover process) errored with `bind: address already in use` and printed a token to copy by hand. The console now falls forward to a nearby port and says so; the browser opens already authenticated (the token is never printed), and `/web` while it runs re-opens the browser logged in. `--no-browser` still prints a token-carrying URL for manual use (c4e1bc7).
+- **Peer hello reports the real version** — all three hello paths advertised a hardcoded `0.1.0-dev`, so `panda nodes` showed wrong versions across a mixed-version fleet; they now report `version.Version` (all three lab devices show 0.0.5) (2db530f).
+- **The capability card next to the resolved config wins over `./capabilities.yaml`** — starting a daemon from a directory that happens to contain a capabilities.yaml (a repo checkout, another node's card) silently loaded the wrong card; the init-written card next to the config file now takes precedence, `--card` still overrides (2db530f).
+- **Windows data directory no longer collides with the install prefix** — the default state dir `%LOCALAPPDATA%\openpanda` and the install prefix `%LOCALAPPDATA%\OpenPanda` are the same directory on case-insensitive NTFS: the SQLite store, memory, and projects lived inside the install prefix and an uninstall swept them away. The data dir is now `%LOCALAPPDATA%\openpanda-data`; Windows nodes coming from 0.0.4 start with a fresh store (fc50721).
+- **Installers survive a rate-limited GitHub API and a broken WinPS 5.1 HTTP stack** — `api.github.com` allows 60 unauthenticated requests per IP per hour; when exhausted, both installers now resolve the latest version through the `/releases/latest` 302 redirect instead. `install.ps1` forces TLS 1.2 up front, prefers the bundled `curl.exe` (Windows 10 1803+) with `Invoke-WebRequest` fallback, and adds timeouts so a broken WinINET proxy fails fast instead of hanging. Both behaviors were hit during the real three-device install (109b567).
+- **Homebrew tap push authenticated** — the release workflow's tap-update step failed with `could not read Username` when the job token lacked the grant; the push URL now embeds the token (6868a63).
 
 ## [0.0.4] - 2026-08-25
 
