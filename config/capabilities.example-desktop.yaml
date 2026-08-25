@@ -1,37 +1,55 @@
 # 桌面工作节点能力卡示例（开发机 / 普通 PC）
 # 复制并按实际设备改名后使用：
 #   cp config/capabilities.example-desktop.yaml config/capabilities.my-desktop.yaml
-name: "example-desktop"
-node_type: "worker"
-hardware:
-  cpu_cores: 8
-  ram_gb: 16
-  disk_gb: 512
-  gpu: false
-  platform: "desktop"
+# 或直接让 panda 扫描硬件生成草稿：
+#   panda detect > capabilities.yaml
+#
+# 字段与 internal/ledger/capability.go 的 Card 结构一一对应：
+#   device         节点名（显示用）
+#   resource_class Micro | Standard | Full（调度打分用）
+#   node_kind      physical | vm（同机 singleton 锁按 kind 区分）
+#   native         本机可确定性执行的白名单命令（tier: 1=可逆 2=不可逆需授权）
+#   agents         已安装的 agent CLI（adapter 指向 adapters/<name>.py）
+#                  tier 缺省为 2（不可逆，执行需 --authorize，完成后进待审批）；
+#                  只读型 agent 可声明 tier: 1 直接完成
+#   capacity       本节点并行任务数与资源上限
+
+device: "example-desktop"
+resource_class: "Standard"
+node_kind: "physical"
+chip: "Apple M1 / x86_64"
+
+native:
+  - id: "sys:info"
+    command: "uname"
+    args: ["-a"]
+    tier: 1
+    description: "system info"
+  - id: "disk:usage"
+    command: "df"
+    args: ["-h", "."]
+    tier: 1
+    description: "disk usage of the work directory"
 
 agents:
-  shell: true
-  file_read: true
-  file_write: true
-  git: true
-  code_edit: true
-  # 把下面这行注释去掉，并在本机安装对应 adapter 即可启用：
-  # python_kernel: true
+  claude_code:
+    adapter: "claude_code.py"
+    install_check: "claude --version"
+    capabilities: ["coding", "shell", "file_edit", "build"]
+    best_at: ["multi_file_edits", "code_search", "running_tests"]
+    not_for: ["hardware_io", "realtime_control"]
+    cost_tier: "high"
+    tier: 2
+  codex:
+    adapter: "codex.py"
+    install_check: "codex --version"
+    capabilities: ["coding", "shell", "file_edit"]
+    best_at: ["code_review", "refactoring"]
+    not_for: ["hardware_io"]
+    cost_tier: "medium"
+    tier: 2
 
-resources:
-  cpu_budget: 4            # 单个任务最多占用多少 CPU 核当量级
-  ram_budget_mb: 8192      # 单个任务最多内存限额（估算，用于调度打分）
-  max_concurrent: 3        # 本节点并行任务数上限
-
-features:
-  # 本机声明的额外能力（会在 ask 选择节点时参与打分）
-  - name: "browser_automation"
-    description: "可以启动本地浏览器执行 UI 自动化 / E2E 检查"
-  - name: "long_running_build"
-    description: "适合跑长时间编译/链接/打包任务"
-
-commands:
-  shell: "/bin/bash"
-  # 如需让任务只能调用白名单命令，取消下行注释并维护：
-  # allowed_bin: ["git", "go", "node", "npm", "make"]
+capacity:
+  cpu_cores: 8
+  ram_gb: 16
+  max_concurrent_tasks: 3

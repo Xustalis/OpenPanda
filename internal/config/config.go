@@ -430,8 +430,11 @@ func Default() *Config {
 			Level: "info",
 		},
 		Model: ModelConfig{
-			BaseURL:   "https://api.deepseek.com/anthropic",
-			Model:     "deepseek-chat",
+			BaseURL: "https://api.deepseek.com/anthropic",
+			// deepseek-chat/deepseek-reasoner were deprecated aliases retired
+			// by DeepSeek on 2026-07-24; deepseek-v4-flash is the successor
+			// default (deepseek-v4-pro is deliberately never a default).
+			Model:     "deepseek-v4-flash",
 			MaxTokens: 4096,
 		},
 		Push: PushConfig{

@@ -87,10 +87,19 @@ func (l *Lock) Release() error {
 	return closeErr
 }
 
+// lockRootOverride redirects the lock directory for tests: os.UserConfigDir()
+// ignores XDG_CONFIG_HOME on darwin, so the env-var approach alone leaks test
+// locks into the real user directory on macOS.
+var lockRootOverride string
+
 func lockPath(kind, identity string) (string, error) {
-	root, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve node lock directory: %w", err)
+	root := lockRootOverride
+	if root == "" {
+		var err error
+		root, err = os.UserConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve node lock directory: %w", err)
+		}
 	}
 	sum := sha256.Sum256([]byte(identity))
 	return filepath.Join(root, "openpanda", "locks", kind+"-"+hex.EncodeToString(sum[:12])+".lock"), nil
