@@ -96,6 +96,16 @@ fetch_stdout() { # <url> → stdout — API metadata (where the 60 req/h limit b
     fi
 }
 
+fetch_stdout_headers() { # <url> → first-response headers (the 302 itself) on
+    # stdout, so the caller can read the Location header; used as the
+    # rate-limit-free "latest tag" lookup.
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSI --connect-timeout 15 "$1"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -S --spider --max-redirect=0 "$1" 2>&1
+    fi
+}
+
 # ── SHA-256 across macOS (shasum) and Linux (sha256sum) ─────────────────────
 sha256() { # <file> → lowercase hex
     if command -v sha256sum >/dev/null 2>&1; then
@@ -131,6 +141,13 @@ if [ "$VERSION" = "latest" ]; then
     info "查询最新发行版…"
     tag="$(fetch_stdout "$API" \
         | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
+    if [ -z "$tag" ]; then
+        # api.github.com 限流（60 req/h/IP）时，改走 releases/latest 的 302
+        # 重定向解析版本号 —— 该端点不受同一限流约束。
+        tag="$(fetch_stdout_headers "$REPO/releases/latest" \
+            | sed -n 's/^[Ll]ocation:.*\/tag\/\([^\/[:space:]]*\).*/\1/p' | head -n1)"
+        [ -n "$tag" ] && info "（API 限流，已通过重定向解析）"
+    fi
     [ -n "$tag" ] || die "无法解析最新版本号（网络/API 问题？也可用 --version 直接指定）"
     VERSION="${tag#v}"
     info "最新版本: v$VERSION"

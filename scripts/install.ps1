@@ -21,10 +21,44 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Windows PowerShell 5.1 may default to TLS 1.0/1.1, which GitHub rejects.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = `
+        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {}
+
 function Info($m)  { Write-Host "[openpanda] $m" -ForegroundColor DarkGray }
 function Ok($m)    { Write-Host "OK   $m" -ForegroundColor Green }
 function Warn($m)  { Write-Host "WARN $m" -ForegroundColor Yellow }
 function Fail($m)  { Write-Host "ERR  $m" -ForegroundColor Red; exit 1 }
+
+# curl.exe ships with Windows 10 1803+ and is far more reliable than the
+# .NET HTTP stack of Windows PowerShell 5.1 (stale proxy settings, TLS
+# quirks). Prefer it when present; fall back to the cmdlets otherwise.
+$script:CurlExe = $null
+try { $script:CurlExe = (Get-Command curl.exe -ErrorAction Stop).Source } catch {}
+
+function Get-Url([string]$Url, [string]$OutFile) {
+    if ($script:CurlExe) {
+        & $script:CurlExe -fsSL --retry 3 --connect-timeout 20 -o $OutFile $Url
+        if ($LASTEXITCODE -eq 0) { return }
+        Warn "curl.exe exited $LASTEXITCODE for $Url, retrying with Invoke-WebRequest..."
+    }
+    Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri $Url -OutFile $OutFile
+}
+
+function Get-Json([string]$Url) {
+    if ($script:CurlExe) {
+        $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("openpanda-api-" + [guid]::NewGuid().ToString("N") + ".json")
+        & $script:CurlExe -fsSL --retry 3 --connect-timeout 20 -o $tmp $Url
+        if ($LASTEXITCODE -eq 0) {
+            try { return (Get-Content -Raw $tmp | ConvertFrom-Json) }
+            finally { Remove-Item -f $tmp -ErrorAction SilentlyContinue }
+        }
+        Warn "curl.exe exited $LASTEXITCODE for $Url, retrying with Invoke-RestMethod..."
+    }
+    return (Invoke-RestMethod -UseBasicParsing -TimeoutSec 30 -Uri $Url)
+}
 
 $Repo = if ($env:OPENPANDA_REPO_URL) { $env:OPENPANDA_REPO_URL } else { "https://github.com/Xustalis/OpenPanda" }
 $Api  = if ($env:OPENPANDA_RELEASE_API) { $env:OPENPANDA_RELEASE_API } else { "https://api.github.com/repos/Xustalis/OpenPanda/releases/latest" }
@@ -40,8 +74,37 @@ $arch = switch ($nativeArch) {
 # Resolve version
 if ($Version -eq "latest") {
     Info "Checking the latest release..."
-    $rel = Invoke-RestMethod -Uri $Api -ErrorAction Stop
-    $Version = $rel.tag_name.TrimStart("v")
+    $tag = $null
+    try { $tag = (Get-Json $Api).tag_name } catch {
+        Warn "GitHub API unreachable; falling back to the release redirect..."
+    }
+    if (-not $tag) {
+        # api.github.com is rate-limited per IP (60 req/h); the
+        # /releases/latest 302 redirect is not. Try curl.exe first, then raw
+        # .NET with the proxy bypassed (works even when the WinINET stack
+        # used by Invoke-WebRequest is misconfigured).
+        try {
+            if ($script:CurlExe) {
+                $hdr = & $script:CurlExe -fsSI --connect-timeout 20 "$Repo/releases/latest" 2>$null
+                $loc = ($hdr | Where-Object { $_ -match '^[Ll]ocation:' } | Select-Object -First 1)
+                if ($loc -match '^[Ll]ocation:\s*(\S+)') { $tag = $Matches[1] }
+            }
+        } catch {}
+        if (-not $tag) {
+            try {
+                $req = [System.Net.HttpWebRequest]::Create("$Repo/releases/latest")
+                $req.AllowAutoRedirect = $false
+                $req.Proxy = $null
+                $req.Timeout = 20000
+                $resp = $req.GetResponse()
+                $tag = $resp.Headers["Location"]
+                $resp.Close()
+            } catch {}
+        }
+        if ($tag -and $tag -match '/tag/(v?[0-9][^/?#]*)') { $tag = $Matches[1] } else { $tag = $null }
+    }
+    if (-not $tag) { Fail "Unable to resolve the latest release (network/API issue? Pin it: -Version 0.0.4)" }
+    $Version = $tag.TrimStart("v")
     Info "Latest version: v$Version"
 } else {
     $Version = $Version.TrimStart("v")
@@ -62,12 +125,12 @@ $work = Join-Path ([System.IO.Path]::GetTempPath()) ("openpanda-" + [guid]::NewG
 New-Item -ItemType Directory -Path $work | Out-Null
 try {
     $zip = Join-Path $work $Archive
-    Invoke-WebRequest -Uri "$Base/$Archive" -OutFile $zip
+    Get-Url "$Base/$Archive" $zip
 
     # SHA-256 verification is mandatory for release installs.
     $sumPath = Join-Path $work "checksums.txt"
     try {
-        Invoke-WebRequest -Uri "$Base/checksums.txt" -OutFile $sumPath
+        Get-Url "$Base/checksums.txt" $sumPath
         $wantLine = (Get-Content $sumPath | Where-Object { $_ -match ("\s" + [regex]::Escape($Archive) + "$") } | Select-Object -First 1)
         if (-not $wantLine) { Fail "checksums.txt has no entry for $Archive" }
         $wantHash = ($wantLine -split "\s+")[0].ToUpperInvariant()
