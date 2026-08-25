@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
 
@@ -178,6 +179,20 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 			return Task{}, result, err
 		}
 		if final.State != StateFailed {
+			return final, result, nil
+		}
+		// A tier-2 authorization refusal is deterministic policy, not a
+		// failed attempt: retrying cannot produce consent, so the task goes
+		// straight to review with the actionable reason instead of burning
+		// the retry budget (and re-spawning nothing) first.
+		if commander.IsAuthorizationRefusal(result.Stderr) {
+			if rerr := c.store.Review(ctx, taskID, c.nodeID, result.Stderr); rerr != nil {
+				c.logger.Warn("review task", "task", taskID, "err", rerr)
+			}
+			final, err = c.store.Get(ctx, taskID)
+			if err != nil {
+				return Task{}, result, err
+			}
 			return final, result, nil
 		}
 		if !c.loop.Allow(taskID) {

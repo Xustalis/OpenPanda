@@ -1,10 +1,14 @@
 // Package agents is the single source of truth for the agent CLIs PANDA can
 // delegate to. It maps each agent's registry key to its adapter script, the
-// binary names to probe on PATH, and install/update guidance (download link +
-// install command). The CLI (`panda agents`), the capability-card generator
-// (`panda detect`), the web settings API (webui/panel), and the commander's
-// availability probe all read from here instead of each hardcoding their own
-// table, so adding an agent is a single-entry change.
+// binary names to probe on PATH, install/update guidance (download link +
+// install command), and the agent's credential manifest (which env vars and
+// config files prove the agent brings its own model, and how PANDA's model
+// config maps onto the agent's env contract). The CLI (`panda agents`), the
+// capability-card generator (`panda detect`), the web settings API
+// (webui/panel), the commander's availability probe, and the commander's
+// credential probe/injection all read from here instead of each hardcoding
+// their own table, so adding an agent (with credentials) is a single-entry
+// change.
 package agents
 
 import "sort"
@@ -29,6 +33,41 @@ type Known struct {
 	InstallHint string
 	// InstallURL is the documentation or download page. Empty when unknown.
 	InstallURL string
+	// CredentialEnvVars is the probe side of the agent's credential
+	// manifest: env var names that prove the agent carries model
+	// credentials of its own (e.g. claude's ANTHROPIC_API_KEY /
+	// ANTHROPIC_AUTH_TOKEN). When one is set, the commander leaves the
+	// agent's native model alone and only forwards these vars through the
+	// sandbox. Empty means "unknown" — probes fall back to the union of
+	// common provider keys.
+	CredentialEnvVars []string
+	// CredentialFiles lists home-relative files whose presence (non-empty)
+	// proves the agent is logged in / configured with its own provider —
+	// e.g. codex stores its auth and provider sections in ~/.codex.
+	CredentialFiles []string
+	// CredentialFileFields narrows selected CredentialFiles to the JSON
+	// fields whose (non-empty) presence marks real credentials. A file
+	// listed here counts only when at least one named field is set — some
+	// agents keep a state file that exists long before any login (Claude
+	// Code writes ~/.claude.json on first run), and treating its mere
+	// existence as credentials would wrongly disable model injection.
+	CredentialFileFields map[string][]string
+	// ModelEnv is the injection side of the credential manifest: the env
+	// vars the agent CLI reads for its model endpoint. Nil means model
+	// injection is not safely supported for this agent (its env contract
+	// is ambiguous or it always brings its own key), so PANDA never
+	// overrides its endpoint.
+	ModelEnv *ModelEnvMapping
+}
+
+// ModelEnvMapping names the env vars one agent CLI reads for its model
+// endpoint. It is data, not code: the commander translates its model config
+// through the mapping, so a new agent in the registry gets credential probing
+// and (when a mapping is declared) injection without any commander change.
+type ModelEnvMapping struct {
+	BaseURL string // env var carrying the provider base URL, e.g. ANTHROPIC_BASE_URL
+	APIKey  string // env var carrying the API key, e.g. ANTHROPIC_API_KEY
+	Model   string // env var carrying the model name, e.g. ANTHROPIC_MODEL
 }
 
 // PrimaryBinary returns the canonical CLI binary to probe, or "" if none.
@@ -47,22 +86,56 @@ var known = []Known{
 		DisplayName: "Claude Code",
 		InstallHint: "npm install -g @anthropic-ai/claude-code",
 		InstallURL:  "https://docs.anthropic.com/en/docs/claude-code/setup",
+		// Claude Code has an unambiguous Anthropic env contract, so it is
+		// the one agent PANDA can inject a model endpoint into (see
+		// commander's DeepSeek flash injection).
+		CredentialEnvVars: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
+		CredentialFiles: []string{
+			".claude/config.json",       // 2.1.x API-key login (primaryApiKey)
+			".claude/settings.json",     // user-managed env (ANTHROPIC_AUTH_TOKEN / BASE_URL)
+			".claude.json",              // legacy: oauthAccount / primaryApiKey fields
+			".claude/.credentials.json", // subscription OAuth tokens
+		},
+		// ~/.claude.json is Claude Code's onboarding/state file: it exists
+		// after the very first run even with no login — only its
+		// oauthAccount / primaryApiKey fields mean credentials. config.json
+		// carries primaryApiKey; settings.json authenticates through its env
+		// block (dotted paths). ~/.claude/.credentials.json is written only
+		// after OAuth login, so its presence alone suffices.
+		CredentialFileFields: map[string][]string{
+			".claude.json":        {"oauthAccount", "primaryApiKey"},
+			".claude/config.json": {"primaryApiKey"},
+			".claude/settings.json": {
+				"env.ANTHROPIC_AUTH_TOKEN",
+				"env.ANTHROPIC_API_KEY",
+				"apiKeyHelper",
+			},
+		},
+		ModelEnv: &ModelEnvMapping{
+			BaseURL: "ANTHROPIC_BASE_URL",
+			APIKey:  "ANTHROPIC_API_KEY",
+			Model:   "ANTHROPIC_MODEL",
+		},
 	},
 	{
-		Name:        "opencode",
-		Adapter:     "opencode.py",
-		Binaries:    []string{"opencode"},
-		DisplayName: "OpenCode",
-		InstallHint: "curl -fsSL https://opencode.ai/install | bash",
-		InstallURL:  "https://opencode.ai/docs",
+		Name:              "opencode",
+		Adapter:           "opencode.py",
+		Binaries:          []string{"opencode"},
+		DisplayName:       "OpenCode",
+		InstallHint:       "curl -fsSL https://opencode.ai/install | bash",
+		InstallURL:        "https://opencode.ai/docs",
+		CredentialEnvVars: []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
+		CredentialFiles:   []string{".config/opencode/opencode.json", ".config/opencode/auth.json"},
 	},
 	{
-		Name:        "codex",
-		Adapter:     "codex.py",
-		Binaries:    []string{"codex"},
-		DisplayName: "Codex (OpenAI)",
-		InstallHint: "npm install -g @openai/codex",
-		InstallURL:  "https://developers.openai.com/codex/",
+		Name:              "codex",
+		Adapter:           "codex.py",
+		Binaries:          []string{"codex"},
+		DisplayName:       "Codex (OpenAI)",
+		InstallHint:       "npm install -g @openai/codex",
+		InstallURL:        "https://developers.openai.com/codex/",
+		CredentialEnvVars: []string{"OPENAI_API_KEY"},
+		CredentialFiles:   []string{".codex/auth.json", ".codex/config.toml"},
 	},
 	{
 		Name:        "grok_build",

@@ -2,6 +2,7 @@ package commander
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -265,14 +266,14 @@ func (r *Router) Execute(ctx context.Context, plan Plan, prompt string, cwd stri
 	switch plan.Kind {
 	case "native":
 		if err := defense.Authorize(plan.Tier, authorized); err != nil {
-			return Result{OK: false, ExitCode: 1, Stderr: err.Error()}
+			return Result{OK: false, ExitCode: 1, Stderr: authorizationHint(err, plan)}
 		}
 		return r.execNative(ctx, plan, cwd)
 	case "agent":
 		// P1-15: the tier model covers agents too — a Tier-2 agent without
 		// consent is refused before the adapter subprocess is spawned.
 		if err := defense.Authorize(plan.Tier, authorized); err != nil {
-			return Result{OK: false, ExitCode: 1, Stderr: err.Error()}
+			return Result{OK: false, ExitCode: 1, Stderr: authorizationHint(err, plan)}
 		}
 		return r.execAgent(ctx, plan, prompt, cwd)
 	case "manual":
@@ -280,6 +281,32 @@ func (r *Router) Execute(ctx context.Context, plan Plan, prompt string, cwd stri
 	default:
 		return Result{OK: false, ExitCode: 1, Stderr: "unknown plan kind " + plan.Kind}
 	}
+}
+
+// authorizationHint turns a tier-2 refusal into an actionable message: the
+// sentinel alone ("defense: tier-2 command requires authorization") tells the
+// user the task was blocked but not how to unblock it. The hint names both
+// exits — one-shot consent via --authorize, or a standing tier:1 declaration
+// on the agent in capabilities.yaml — and stays inside the sentinel's prefix
+// so IsAuthorizationRefusal keeps matching the failure wherever it surfaces.
+func authorizationHint(err error, plan Plan) string {
+	if !errors.Is(err, defense.ErrNotAuthorized) {
+		return err.Error()
+	}
+	msg := err.Error()
+	switch plan.Kind {
+	case "agent":
+		return msg + fmt.Sprintf(" (agent %q is tier-2; re-submit with --authorize, or declare tier:1 on it in capabilities.yaml)", plan.Agent)
+	default:
+		return msg + " (re-submit with --authorize to consent to irreversible commands)"
+	}
+}
+
+// IsAuthorizationRefusal reports whether a failure string carries the tier-2
+// authorization refusal. The retry loop uses it to skip pointless re-runs: a
+// policy refusal is deterministic — another attempt cannot produce consent.
+func IsAuthorizationRefusal(stderr string) bool {
+	return strings.Contains(stderr, defense.ErrNotAuthorized.Error())
 }
 
 func (r *Router) execNative(ctx context.Context, plan Plan, cwd string) Result {

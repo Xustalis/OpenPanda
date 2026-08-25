@@ -85,3 +85,36 @@ func TestScopeCleanup(t *testing.T) {
 		t.Errorf("trailing-slash dir root should match children")
 	}
 }
+
+// TestScopeProseTolerant covers the natural-language scopes entry models
+// emit despite the path-list instruction: the named file must be in scope and
+// the prose filler must not become a phantom root that flags every change.
+func TestScopeProseTolerant(t *testing.T) {
+	tests := []struct {
+		name      string
+		spec      string
+		path      string
+		want      bool
+		wantEmpty bool
+	}{
+		{"cjk wrapper around file", "工作目录下的 haiku.txt", "haiku.txt", true, false},
+		{"cjk wrapper around dir", "src/ 下的所有文件", "src/api/main.go", true, false},
+		{"cjk mixed files", "haiku.txt 和 note.md", "note.md", true, false},
+		{"english prose", "the file haiku.txt in the work directory", "haiku.txt", true, false},
+		{"english prose drops filler", "the file haiku.txt in the work directory", "file", false, false},
+		{"quoted file", `"haiku.txt"`, "haiku.txt", true, false},
+		{"pure prose no roots", "所有文件", "anything.txt", true, true},
+		{"empty when unsure", "", "anything.txt", true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewScope(tt.spec)
+			if s.Empty() != tt.wantEmpty {
+				t.Fatalf("Empty() = %v, want %v (spec %q)", s.Empty(), tt.wantEmpty, tt.spec)
+			}
+			if got := s.Contains(tt.path); got != tt.want {
+				t.Fatalf("Contains(%q) = %v, want %v (spec %q)", tt.path, got, tt.want, tt.spec)
+			}
+		})
+	}
+}
