@@ -359,7 +359,12 @@ func (c *Config) normalize() {
 //   - Unix: ${XDG_DATA_HOME:-$HOME/.local/share}/openpanda
 //   - macOS: ~/Library/Application Support/openpanda (falls back to the
 //     Unix convention when os.UserHomeDir fails)
-//   - Windows: %LOCALAPPDATA%\openpanda
+//   - Windows: %LOCALAPPDATA%\openpanda-data
+//
+// On Windows the directory is deliberately NOT "openpanda": the installer
+// prefix is %LOCALAPPDATA%\OpenPanda and NTFS is case-insensitive, so a
+// same-named data dir would collapse into the install prefix and an
+// uninstall would take the database with it.
 //
 // A best-effort fallback (./data relative to cwd) is used when the home
 // directory cannot be determined — that keeps test and container scenarios
@@ -367,7 +372,7 @@ func (c *Config) normalize() {
 func UserDataDir() (string, error) {
 	if runtime.GOOS == "windows" {
 		if base := os.Getenv("LOCALAPPDATA"); base != "" {
-			return filepath.Join(base, "openpanda"), nil
+			return filepath.Join(base, "openpanda-data"), nil
 		}
 	} else if runtime.GOOS == "darwin" {
 		if dir, err := os.UserConfigDir(); err == nil {

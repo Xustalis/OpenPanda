@@ -6,4 +6,4 @@
 package version
 
 // Version is the semantic version of this build.
-var Version = "0.0.4"
+var Version = "0.0.5"
