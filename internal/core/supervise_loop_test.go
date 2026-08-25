@@ -161,3 +161,69 @@ func TestSuperviseTerminalRoutesIrreversibleToReview(t *testing.T) {
 		t.Fatalf("state = %s, want review (irreversible needs approval)", task.State)
 	}
 }
+
+// TestSuperviseRecordsEntryUsage verifies the commander model's own token
+// consumption is billed into the delegation metrics: a supervisor whose
+// provider reports usage produces an "entry:<model>" row the web panel's
+// tokens column picks up alongside adapter delegations.
+func TestSuperviseRecordsEntryUsage(t *testing.T) {
+	ctx := context.Background()
+	c := newSuperviseCore(t, "sup-usage", 1)
+	c.SetWorkDir(t.TempDir())
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		resp := map[string]any{
+			"content": []map[string]string{{"type": "text", "text": `{"status":"done","reason":"全部完成","followup":""}`}},
+			"usage":   map[string]int{"input_tokens": 100, "output_tokens": 20},
+		}
+		b, _ := json.Marshal(resp)
+		_, _ = w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+	client, err := entry.NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "deepseek-chat"})
+	if err != nil {
+		t.Fatalf("new supervisor client: %v", err)
+	}
+	c.SetSupervisor(client)
+
+	var calls atomic.Int32
+	c.router.SetAdapterRunner(agentRunner(&calls))
+
+	task, _, err := c.SubmitLocal(ctx, TaskInput{
+		Title:       "fix bugs",
+		Project:     "proj",
+		ContextType: "command",
+		Intent:      "fix all bugs",
+		Requires:    []string{"code:modify"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if task.State != StateDone {
+		t.Fatalf("state = %s, want done", task.State)
+	}
+
+	metrics, err := c.store.ListDelegationMetrics(ctx)
+	if err != nil {
+		t.Fatalf("list metrics: %v", err)
+	}
+	found := false
+	for _, m := range metrics {
+		if m.Executor == "entry:deepseek-chat" {
+			found = true
+			if m.TaskID != task.TaskID {
+				t.Fatalf("entry usage row task = %s, want %s", m.TaskID, task.TaskID)
+			}
+			if !m.Tokens.Valid || m.Tokens.Int64 != 120 {
+				t.Fatalf("entry usage tokens = %+v, want 120 (100 in + 20 out)", m.Tokens)
+			}
+			if !m.Success {
+				t.Fatal("entry usage row should record the done verdict as success")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no entry:<model> metric row recorded; metrics = %+v", metrics)
+	}
+}

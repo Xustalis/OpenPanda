@@ -11,13 +11,16 @@ import (
 // the agent's result actually satisfy the task, or does work remain?
 type SuperviseVerdict struct {
 	// Status is "done" (the task is complete) or "continue" (work remains).
-	Status string
+	Status string `json:"status"`
 	// Reason is a one-line justification for the verdict.
-	Reason string
+	Reason string `json:"reason"`
 	// Followup is, for a "continue" verdict, the remaining work and the next
 	// step for the following agent. Empty for "done".
-	Followup string
+	Followup string `json:"followup"`
 }
+
+// superviseCacheNS is the DiskCache namespace for supervise verdicts.
+const superviseCacheNS = "supervise"
 
 // superviseSystemPrompt instructs the entry model to act as the reviewing
 // superior ("上级"): it judges an agent's result against the task's success
@@ -37,7 +40,18 @@ const superviseSystemPrompt = `你是执行结果审核员（上级）。一个�
 // satisfies the task described by intent (which carries the success criteria).
 // On a call failure it fails open toward "done" — verification is a safety
 // net, not a gate, and a broken supervisor must not stall a finished task.
+// Verdicts are cached on disk keyed by (intent, result): a re-submitted task
+// with unchanged inputs reuses the previous judgment without an LLM call.
+// Fail-open verdicts (unavailable / unparsable) are never cached.
 func Supervise(ctx context.Context, c *Client, intent, result string) (SuperviseVerdict, error) {
+	dc := c.diskCache()
+	k1, k2 := hashString(intent), hashString(result)
+	if dc != nil {
+		var v SuperviseVerdict
+		if dc.Get(ctx, superviseCacheNS, k1, k2, &v) {
+			return v, nil
+		}
+	}
 	user := "任务要求：\n" + intent + "\n\n智能体回报：\n" + result
 	text, err := c.Complete(ctx, superviseSystemPrompt, user)
 	if err != nil {
@@ -48,6 +62,9 @@ func Supervise(ctx context.Context, c *Client, intent, result string) (Supervise
 		// Unparsable verdict: accept the work rather than loop on a model that
 		// will not produce the expected shape. The reason records the defect.
 		return SuperviseVerdict{Status: "done", Reason: "verdict unparsable: " + err.Error()}, nil
+	}
+	if dc != nil {
+		dc.Put(ctx, superviseCacheNS, k1, k2, v)
 	}
 	return v, nil
 }

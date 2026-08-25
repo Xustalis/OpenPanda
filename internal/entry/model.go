@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -17,6 +18,12 @@ import (
 
 // anthropicVersion is the header required by Anthropic-compatible endpoints.
 const anthropicVersion = "2023-06-01"
+
+// defaultModel is the entry model used when the config names none.
+// deepseek-chat/deepseek-reasoner were deprecated aliases (retired by
+// DeepSeek on 2026-07-24); deepseek-v4-flash is the successor default. The
+// default BaseURL stays the Anthropic-compatible endpoint.
+const defaultModel = "deepseek-v4-flash"
 
 // defaultMaxTokens is the completion cap when the config does not specify one.
 // It is high enough that a normal answer is not silently truncated (the previous
@@ -38,6 +45,22 @@ type Client struct {
 	hcStream  *http.Client
 	maxRetry  int
 	retryBase time.Duration
+	// promptCache toggles provider-native prompt-cache markers on outgoing
+	// requests (Anthropic cache_control breakpoints / OpenAI
+	// prompt_cache_key). Default on: the markers are hints a provider is free
+	// to ignore — DeepSeek's Anthropic endpoint silently drops cache_control —
+	// so the flag only ever changes what the provider may reuse, never
+	// correctness.
+	promptCache atomic.Bool
+	// cache is the optional disk cache for entry-model decisions. Nil (the
+	// default) disables it; the engine attaches one over the node database.
+	cache atomic.Pointer[DiskCache]
+	// usageIn/usageOut accumulate the provider-reported token consumption of
+	// every successful call, so callers (the metrics path) can bill the
+	// commander model's own cost without threading usage through every
+	// signature.
+	usageIn  atomic.Int64
+	usageOut atomic.Int64
 }
 
 // NewClient builds a client from the model config. A zero baseURL/model falls
@@ -55,13 +78,13 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 	}
 	name := model.Model
 	if name == "" {
-		name = "deepseek-chat"
+		name = defaultModel
 	}
 	maxTokens := model.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = defaultMaxTokens
 	}
-	return &Client{
+	c := &Client{
 		apiType:   model.NormalizedAPIType(),
 		baseURL:   strings.TrimRight(base, "/"),
 		apiKey:    model.APIKey,
@@ -71,17 +94,116 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		hcStream:  &http.Client{},
 		maxRetry:  2,
 		retryBase: 500 * time.Millisecond,
-	}, nil
+	}
+	c.promptCache.Store(true)
+	return c, nil
 }
 
-// messagesRequest is the Anthropic Messages API request body.
+// SetPromptCaching toggles provider-native prompt-cache markers on outgoing
+// requests. Enabled by default; see Client.promptCache.
+func (c *Client) SetPromptCaching(enabled bool) { c.promptCache.Store(enabled) }
+
+// SetDiskCache attaches the disk cache used for entry-model decision reuse
+// (classify / supervise). A nil cache disables it.
+func (c *Client) SetDiskCache(dc *DiskCache) { c.cache.Store(dc) }
+
+// diskCache returns the attached cache, or nil when none was attached.
+func (c *Client) diskCache() *DiskCache { return c.cache.Load() }
+
+// ModelName returns the configured model id, for metric labels.
+func (c *Client) ModelName() string { return c.model }
+
+// Usage is the provider-reported token consumption of one or more calls.
+type Usage struct {
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
+}
+
+// Total is the combined input+output token count.
+func (u Usage) Total() int64 { return u.InputTokens + u.OutputTokens }
+
+// Sub returns u minus other, clamped at zero per component — the consumption
+// that happened between two Usage snapshots.
+func (u Usage) Sub(other Usage) Usage {
+	return Usage{
+		InputTokens:  max(u.InputTokens-other.InputTokens, 0),
+		OutputTokens: max(u.OutputTokens-other.OutputTokens, 0),
+	}
+}
+
+// Usage returns the client's cumulative token consumption across every
+// successful call since construction. Providers that do not report usage
+// contribute zero.
+func (c *Client) Usage() Usage {
+	return Usage{InputTokens: c.usageIn.Load(), OutputTokens: c.usageOut.Load()}
+}
+
+// addUsage accumulates one reported usage block.
+func (c *Client) addUsage(in, out int64) {
+	if in > 0 {
+		c.usageIn.Add(in)
+	}
+	if out > 0 {
+		c.usageOut.Add(out)
+	}
+}
+
+// messagesRequest is the Anthropic Messages API request body. System is
+// either a plain string or a []systemBlock when prompt-cache markers are on
+// (see systemPayload).
 type messagesRequest struct {
 	Model     string     `json:"model"`
 	MaxTokens int        `json:"max_tokens"`
 	Stream    bool       `json:"stream,omitempty"`
-	System    string     `json:"system,omitempty"`
+	System    any        `json:"system,omitempty"`
 	Messages  []message  `json:"messages"`
 	Tools     []ToolSpec `json:"tools,omitempty"`
+}
+
+// systemBlock is one Anthropic system content block. cache_control marks a
+// prompt-cache breakpoint: providers that support it cache everything up to
+// and including the block; providers that do not (e.g. DeepSeek's Anthropic
+// endpoint) ignore the marker without erroring.
+type systemBlock struct {
+	Type         string       `json:"type"`
+	Text         string       `json:"text"`
+	CacheControl *cacheMarker `json:"cache_control,omitempty"`
+}
+
+// cacheMarker is the Anthropic prompt-cache breakpoint directive.
+type cacheMarker struct {
+	Type string `json:"type"` // "ephemeral"
+}
+
+// systemPayload renders the system prompt for the Anthropic wire format.
+// With prompt caching on, the prompt splits at the memory-section marker and
+// the stable prefix (rules + devices) carries a cache_control breakpoint, so
+// the provider reuses that prefix across the calls of one conversation
+// instead of re-billing it every time. With caching off the system stays a
+// plain string — the escape hatch for providers that reject block arrays.
+func (c *Client) systemPayload(system string) any {
+	if system == "" {
+		return nil
+	}
+	if !c.promptCache.Load() {
+		return system
+	}
+	stable, volatile := splitPromptSections(system)
+	marked := systemBlock{Type: "text", Text: stable, CacheControl: &cacheMarker{Type: "ephemeral"}}
+	if volatile == "" {
+		return []systemBlock{marked}
+	}
+	return []systemBlock{marked, {Type: "text", Text: volatile}}
+}
+
+// oaiPromptCacheKey derives the OpenAI prompt_cache_key — a routing hint
+// that keeps requests sharing a conversation skeleton on the same cache
+// shard — from the stable prompt prefix (rules + devices). It is stable
+// across the calls of one conversation and changes when the device snapshot
+// changes.
+func (c *Client) oaiPromptCacheKey(system string) string {
+	stable, _ := splitPromptSections(system)
+	return hashString(stable)[:32]
 }
 
 // message is one conversation message. Content is either a plain string (the
@@ -155,9 +277,16 @@ type Response struct {
 
 // messagesResponse is the Messages API response body.
 type messagesResponse struct {
-	Content    []ContentBlock `json:"content"`
-	StopReason string         `json:"stop_reason"`
-	Error      *apiError      `json:"error,omitempty"`
+	Content    []ContentBlock  `json:"content"`
+	StopReason string          `json:"stop_reason"`
+	Usage      *anthropicUsage `json:"usage,omitempty"`
+	Error      *apiError       `json:"error,omitempty"`
+}
+
+// anthropicUsage is the Messages API token-usage block.
+type anthropicUsage struct {
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
 }
 
 type apiError struct {
@@ -201,7 +330,7 @@ func (c *Client) CompleteTurnsWithTools(ctx context.Context, system string, turn
 	if c.apiType == config.APITypeOpenAI {
 		return c.completeOpenAI(ctx, system, turns, tools)
 	}
-	req := messagesRequest{Model: c.model, MaxTokens: c.maxTokens, System: system, Messages: turnsToMessages(turns)}
+	req := messagesRequest{Model: c.model, MaxTokens: c.maxTokens, System: c.systemPayload(system), Messages: turnsToMessages(turns)}
 	if len(tools) > 0 {
 		req.Tools = tools
 	}
@@ -229,6 +358,9 @@ func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn
 		return Response{}, ErrNoKey
 	}
 	req := oaiRequest{Model: c.model, MaxTokens: c.maxTokens, Messages: turnsToOpenAI(system, turns)}
+	if c.promptCache.Load() {
+		req.PromptCacheKey = c.oaiPromptCacheKey(system)
+	}
 	if len(tools) > 0 {
 		req.Tools = specsToOpenAI(tools)
 	}
@@ -290,6 +422,9 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, payload []byte) (Respon
 	}
 	if or.Error != nil {
 		return Response{}, fmt.Errorf("entry: api error: %s", or.Error.Message)
+	}
+	if or.Usage != nil {
+		c.addUsage(or.Usage.PromptTokens, or.Usage.CompletionTokens)
 	}
 	return parseOpenAIResponse(&or), nil
 }
@@ -361,6 +496,9 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 	}
 	if mr.Error != nil {
 		return Response{}, fmt.Errorf("entry: api error: %s", mr.Error.Message)
+	}
+	if mr.Usage != nil {
+		c.addUsage(mr.Usage.InputTokens, mr.Usage.OutputTokens)
 	}
 	return parseResponse(&mr), nil
 }

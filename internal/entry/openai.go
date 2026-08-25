@@ -10,12 +10,30 @@ import (
 
 // oaiRequest is the Chat Completions request body. ToolChoice is omitted: the
 // API defaults to "auto" when tools are present, mirroring the Anthropic path.
+// PromptCacheKey and StreamOptions are the provider-native prompt-cache /
+// usage hints, attached only while prompt caching is enabled so a strict
+// legacy provider can opt out (SetPromptCaching(false)).
 type oaiRequest struct {
-	Model     string       `json:"model"`
-	MaxTokens int          `json:"max_tokens,omitempty"`
-	Stream    bool         `json:"stream,omitempty"`
-	Messages  []oaiMessage `json:"messages"`
-	Tools     []oaiTool    `json:"tools,omitempty"`
+	Model          string            `json:"model"`
+	MaxTokens      int               `json:"max_tokens,omitempty"`
+	Stream         bool              `json:"stream,omitempty"`
+	Messages       []oaiMessage      `json:"messages"`
+	Tools          []oaiTool         `json:"tools,omitempty"`
+	PromptCacheKey string            `json:"prompt_cache_key,omitempty"`
+	StreamOptions  *oaiStreamOptions `json:"stream_options,omitempty"`
+}
+
+// oaiStreamOptions asks OpenAI-compatible providers to include a final usage
+// chunk in streamed responses (include_usage), so token consumption is
+// visible without a second request.
+type oaiStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+// oaiUsage is the Chat Completions token-usage block.
+type oaiUsage struct {
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
 }
 
 // oaiMessage is one Chat Completions message: a plain system/user/assistant
@@ -61,6 +79,7 @@ type oaiResponse struct {
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *oaiUsage `json:"usage,omitempty"`
 	Error *oaiError `json:"error,omitempty"`
 }
 
@@ -70,7 +89,8 @@ type oaiError struct {
 }
 
 // oaiChunk is one streamed chunk: choices[0].delta carries either text or
-// incremental tool_call fragments addressed by index.
+// incremental tool_call fragments addressed by index. The final chunk (with
+// stream_options.include_usage) carries the usage block and empty choices.
 type oaiChunk struct {
 	Choices []struct {
 		Delta struct {
@@ -79,6 +99,7 @@ type oaiChunk struct {
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *oaiUsage `json:"usage,omitempty"`
 	Error *oaiError `json:"error,omitempty"`
 }
 
@@ -166,15 +187,23 @@ func parseOpenAIResponse(r *oaiResponse) Response {
 
 // oaiAccumulator assembles a Response from streamed chunks. Tool-call
 // fragments arrive split across chunks and addressed by index; Arguments
-// strings are concatenated until finish.
+// strings are concatenated until finish. Usage arrives once, in the final
+// chunk, and is accumulated per attempt (the caller bills it only when the
+// stream completes, so a retried attempt is never double-counted).
 type oaiAccumulator struct {
 	texts     []string
 	calls     map[int]oaiToolCall
 	order     []int
 	truncated bool
+	usageIn   int64
+	usageOut  int64
 }
 
 func (a *oaiAccumulator) feed(chunk *oaiChunk, onDelta func(string)) {
+	if chunk.Usage != nil {
+		a.usageIn = chunk.Usage.PromptTokens
+		a.usageOut = chunk.Usage.CompletionTokens
+	}
 	if len(chunk.Choices) == 0 {
 		return
 	}

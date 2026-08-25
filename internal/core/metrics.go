@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
@@ -53,6 +55,22 @@ func (s *TaskStore) RecordDelegationMetric(
 		taskID, delegator, executor, string(abilitiesJSON), boolToInt(success), latencyMs, tokensArg, storage.Now(),
 	)
 	return err
+}
+
+// recordEntryUsage bills the entry (commander) model's own token consumption
+// for one judge call into the delegation metrics, so the panel's tokens column
+// reflects the commander's cost alongside adapter delegations. The executor
+// label "entry:<model>" keeps the rows distinguishable; a provider that does
+// not report usage (delta zero) records nothing.
+func (c *Core) recordEntryUsage(ctx context.Context, taskID string, client *entry.Client, before entry.Usage, success bool, latency time.Duration) {
+	delta := client.Usage().Sub(before)
+	if delta.Total() == 0 {
+		return
+	}
+	if err := c.store.RecordDelegationMetric(ctx, taskID, string(c.nodeID), "entry:"+client.ModelName(),
+		nil, success, latency.Milliseconds(), int(delta.Total())); err != nil {
+		c.logger.Warn("record entry usage", "task", taskID, "err", err)
+	}
 }
 
 // ListDelegationMetrics returns all recorded delegation metrics, newest first.

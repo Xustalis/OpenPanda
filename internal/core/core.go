@@ -195,12 +195,15 @@ func (c *Core) SetSuperviseRounds(n int) {
 // attaches it — but only when the model is actually configured (an API key is
 // present), so a model-less node keeps single-shot agent execution instead of
 // burning a wasted judge call per task. A build failure is non-fatal: agent
-// tasks then finish in one shot exactly as before.
+// tasks then finish in one shot exactly as before. The supervisor also gets
+// the disk cache over the node database: identical (intent, result) pairs
+// reuse the previous verdict without an LLM call.
 func (c *Core) AttachSupervisor(model config.ModelConfig) {
 	if strings.TrimSpace(model.APIKey) == "" {
 		return
 	}
 	if client, err := entry.NewClient(model); err == nil {
+		client.SetDiskCache(entry.NewDiskCache(c.db))
 		c.supervisor = client
 	}
 }

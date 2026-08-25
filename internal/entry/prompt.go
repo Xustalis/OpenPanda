@@ -1,34 +1,64 @@
 package entry
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
-// systemPrompt is the entry model's system prompt (design doc §7.3). The two
-// placeholder sections — device capability summary and user memory — are
-// substituted by BuildPrompt. The controlled-tool schemas are NOT hardcoded
-// here: they travel in the `tools` parameter (see Registry), so the prompt only
-// states *when* to call a tool and the memory governance rules.
-const systemPrompt = `你是 OpenPanda，你所有设备与 agent 的「大总管 / 指挥家」：简单的事你亲自动手，复杂的事你调兵遣将——委派给网络里最合适的那台设备、那个 agent 去完成。你有三种输出类型。
+// The system prompt is layered (pi-style minimal kernel): a compact resident
+// core carries the routing decision — answer / tool_call / task — while the
+// memory governance rules and the verbose task JSON example are attached only
+// when the conversation shows it needs them (ChooseLayers). The device
+// summary and the user memory wall close the prompt; the memory section is
+// the split point between the stable prefix (rules + devices, which the
+// provider prompt cache can reuse) and the volatile tail.
+
+// coreRules is the resident prompt kernel: role, the three output types with
+// their routing criteria, and the compact task JSON skeleton — everything the
+// model needs to classify correctly on a first call, without the optional
+// layers.
+const coreRules = `你是 OpenPanda，你所有设备与 agent 的「大总管 / 指挥家」：简单的事你亲自动手，复杂的事你调兵遣将——委派给网络里最合适的那台设备、那个 agent 去完成。你有三种输出类型。
 
 ═══ 类型 1：answer ═══
-对于不产生外部副作用、可以直接回答的请求，输出自然语言。
-回答风格（重要）：
-- 直接给结论/答案本身，不要展示你的分析过程、犹豫或"让我想想"式推理
-- 用户只关心答案与必要的简短依据；中间步骤、备选方案的权衡取舍一律省略
-- 用简洁的自然语言段落；列表仅在枚举时用，表格仅在并排比较数值时用
-- 少用标题和加粗；代码围栏只在用户要代码时使用
+不产生外部副作用、可以直接回答的请求，输出自然语言。
+- 直接给结论/答案本身，不要展示分析过程、犹豫或"让我想想"式推理
+- 用简洁的自然语言段落；列表仅在枚举时用，少用标题和加粗
 - 回复可能被语音朗读或显示在纯文本终端：避免嵌套结构、表情符号和装饰性符号
 
 ═══ 类型 2：tool_call ═══
 当需要调用受控工具（工具列表通过 tools 参数给出，如 memory_add / memory_read 等）时，使用工具调用返回工具名和参数。Go 核心负责校验、授权、执行和记录。
 注意：设备列表里列出的 native/agent 能力（如 sys:info、build:macos）不是受控工具，必须走 task 类型。
 
-记忆治理规则（何时该记、何时不该记）：
+═══ 类型 3：task ═══
+当任务需要调用某台设备上列出的能力（native/agent）、修改文件、检查代码、运行命令、构建软件、运行 GPU 负载、或涉及多步骤跨设备执行时，输出结构化任务 JSON。路由判断：
+- 需要调用设备列表里的能力 / 改文件 / 跑命令 / 编译构建部署 / GPU → task
+- 需要记忆/天气/提醒等受控工具 → tool_call（走工具调用）
+- 简单到能在 30 秒内独自完成的（回答问题、写个小脚本、改个单行配置）→ 直接回答，不必委派
+
+task 时，只输出一个 JSON 对象，前后不得有任何解释文字，骨架：
+{"kind":"task","task":{"title":"简短描述","project":"项目名或null","context_type":"file|command|hardware|stream","requires":{"abilities":["..."]},"spec":{"scope":"允许改动的文件/目录：逗号分隔的相对路径","target":"要达成什么","constraints":["不能做的事"],"success_definition":"怎么验证完成"},"complexity":0.0,"risk":"low|medium|high|critical","resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short|long"}}}
+
+spec.scope 必须是逗号分隔的相对路径列表（如 "src/api,webui/app.tsx"），不要写自然语言描述；不确定或允许整个工作目录时留空 ""。
+
+requires.abilities 的取值必须、也只能从下方「当前可用设备」列出的能力 ID 中一字不差地选取：
+- native 能力直接写其 id（例如列表里的 lint、build:macos），agent 能力写 agent:<名字>（例如 agent:claude_code）
+- 严禁编造列表之外的 ID（code:lint、command:run、eslint.check 这类都不合法）
+- 若列表里没有完全匹配的 native id：只要目标设备声明了 agent，就委派给该 agent —— agent 拥有完整的 shell、文件系统与命令执行能力；此时绝不要降级为"给出建议让用户手动执行"，必须输出 task 委派
+
+Go 核心必须先校验 kind、工具白名单、参数 schema、权限和当前节点能力，再执行工具或任务；模型输出不能直接当作 shell 命令或硬件指令。`
+
+// memoryRulesSection is the memory governance layer: when to record, what to
+// skip, and how to maintain a full memory. Attached only once the session has
+// actually used a memory tool (ChooseLayers) — the tool schemas alone carry
+// enough semantics for a first call.
+const memoryRulesSection = `
+
+═══ 记忆治理规则（何时该记、何时不该记） ═══
 该记（主动记忆，无需用户要求）：
 - 用户偏好（"我更喜欢 TypeScript"）、沟通风格 → 记到 user 层
 - 环境事实（"这台服务器是 Debian 12"）、全局约定、纠正（"别用 sudo，用户在 docker 组"）、已完成的工作 → 记到 memory 层
@@ -36,24 +66,16 @@ const systemPrompt = `你是 OpenPanda，你所有设备与 agent 的「大总�
 - 用户显式要求"记住 X"
 不该记（跳过）：
 - 琐碎/明显的信息、可轻易重新查到的、原始数据转储、会话临时信息
+维护：记忆接近上限时，先 memory_read 看现有条目，用 memory_replace 合并重叠、memory_remove 删过期，再 memory_add；超限的 add 会报错并回滚。`
 
-维护：记忆接近上限时，先 memory_read 看现有条目，用 memory_replace 合并重叠、memory_remove 删过期，再 memory_add；超限的 add 会报错并回滚。
+// taskExampleSection is the verbose task layer: the full JSON example with
+// per-field semantics. Attached only when a task recently appeared in the
+// conversation (ChooseLayers) — the resident skeleton already lets the model
+// emit a valid first task; this layer refines tasks once the session is in
+// task mode.
+const taskExampleSection = `
 
-═══ 类型 3：task ═══
-当任务需要调用某台设备上列出的能力（native/agent）、修改文件、检查代码、运行命令、构建软件、运行 GPU 负载、或涉及多步骤跨设备执行时，输出结构化任务 JSON。
-
-路由的判断标准：
-- 需要调用设备列表里的 native/agent 能力（sys:info、build:macos 等）→ task
-- 需要改文件 / 检查代码 / 运行命令 → task
-- 需要编译/构建/部署 → task
-- 需要 GPU 训练/渲染 → task
-- 需要控制物理硬件但当前设备不支持 → task
-- 需要记忆/天气/提醒等受控工具 → tool_call（走工具调用）
-- 简单到你能在 30 秒内独自完成的（回答问题、写个小脚本、改个单行配置）→ 直接回答，不必委派
-
-task 时，只输出一个 JSON 对象，前后不得有任何解释文字。
-
-task 示例：
+═══ task 完整示例 ═══
 {
   "kind": "task",
   "task": {
@@ -62,7 +84,7 @@ task 示例：
     "context_type": "file|command|hardware|stream",
     "requires": {"abilities": ["lint"]},
     "spec": {
-      "scope": "目标文件或组件",
+      "scope": "允许改动的文件/目录，逗号分隔的相对路径；不确定则留空",
       "target": "要达成什么",
       "node": "优先运行的目标节点 id（可选，取自设备列表，省略则由调度器择优）",
       "constraints": ["不能做的事"],
@@ -73,26 +95,100 @@ task 示例：
     "resource_profile": {"cpu": 1, "ram_gb": 1, "gpu_vram_gb": 0, "duration_hint": "short|long"}
   }
 }
+agent 的具体能力见设备列表中每个 agent 的说明行；跨多步、需要判断力的操作优先选 agent 而非固定参数的 native。`
 
-requires.abilities 的取值必须、也只能从下方「当前可用设备」列出的能力 ID 中一字不差地选取：
-- native 能力直接写其 id（例如列表里的 lint、build:macos）
-- agent 能力写 agent:<名字>（例如列表里的 agent:claude_code）
-- 严禁编造列表之外的 ID（code:lint、command:run、eslint.check 这类都不合法）
-- 若列表里没有完全匹配的 native id：只要目标设备声明了 agent（如 agent:claude_code），就委派给该 agent —— agent 拥有完整的 shell、文件系统与命令执行能力，可以完成查找文件、运行任意命令、检查系统等通用操作；此时绝不要降级为"给出建议让用户手动执行"，必须输出 task 委派
-- agent 的具体能力见设备列表中每个 agent 的说明行；跨多步、需要判断力的操作优先选 agent 而非固定参数的 native
+// memorySectionMarker starts the volatile tail of the system prompt (the user
+// memory wall, which changes with the conversation); everything before it —
+// routing rules plus the device summary — is the stable, cacheable prefix.
+const memorySectionMarker = "═══ 用户记忆"
 
-Go 核心必须先校验 kind、工具白名单、参数 schema、权限和当前节点能力，再执行工具或任务；模型输出不能直接当作 shell 命令或硬件指令。
+// splitPromptSections splits a system prompt at the memory section marker
+// into (stable, volatile). A prompt without the marker (e.g. the supervise
+// prompt) is entirely stable.
+func splitPromptSections(system string) (stable, volatile string) {
+	if i := strings.Index(system, memorySectionMarker); i >= 0 {
+		return system[:i], system[i:]
+	}
+	return system, ""
+}
 
-═══ 当前可用设备 ═══
-%s
+// PromptLayers selects the optional prompt sections for one classification
+// call: the memory governance rules join once the session has actually used a
+// memory tool, and the verbose task JSON example joins once a task recently
+// appeared in the conversation. The resident core always carries the compact
+// routing rules and task skeleton, so a first-call classification needs
+// neither optional layer.
+type PromptLayers struct {
+	MemoryRules bool
+	TaskExample bool
+}
 
-═══ 用户记忆（仅对话参考，不进入项目工作） ═══
-%s`
+// layersWindow bounds how far back ChooseLayers looks for recent task
+// activity: a task from many turns ago says little about the current ask.
+const layersWindow = 8
+
+// memoryToolPrefix names the memory tool family (memory_read/add/replace/
+// remove), whose use triggers the memory governance layer.
+const memoryToolPrefix = "memory_"
+
+// taskTurnMarkers are the assistant-turn shapes that mean "a task ran": the
+// CLI conversation summarizes a task outcome as "[任务<id> <state>] …", and a
+// replayed task directive carries the kind tag.
+var taskTurnMarkers = []string{"[任务", `"kind":"task"`, `"kind": "task"`}
+
+// ChooseLayers is the pure injection decision: given the conversation turns
+// so far, which optional prompt sections does this call need? Memory-tool
+// activity is scanned across the whole history (once the session is a memory
+// session it stays one); task activity only within the recent window.
+func ChooseLayers(turns []Turn) PromptLayers {
+	var l PromptLayers
+	for _, t := range turns {
+		if mentionsMemoryTool(t) {
+			l.MemoryRules = true
+		}
+	}
+	start := 0
+	if len(turns) > layersWindow {
+		start = len(turns) - layersWindow
+	}
+	for _, t := range turns[start:] {
+		if t.Role == "assistant" && mentionsTask(t) {
+			l.TaskExample = true
+		}
+	}
+	return l
+}
+
+// mentionsMemoryTool reports whether one turn shows memory-tool activity: a
+// native tool_use block naming a memory_* tool, or the text-JSON fallback
+// prose carrying such a call.
+func mentionsMemoryTool(t Turn) bool {
+	for _, b := range t.Blocks {
+		if b.Type == "tool_use" && strings.HasPrefix(b.Name, memoryToolPrefix) {
+			return true
+		}
+	}
+	return strings.Contains(t.Content, `"tool":"memory_`) ||
+		strings.Contains(t.Content, `"tool": "memory_`)
+}
+
+// mentionsTask reports whether an assistant turn records a task outcome.
+func mentionsTask(t Turn) bool {
+	for _, m := range taskTurnMarkers {
+		if strings.Contains(t.Content, m) {
+			return true
+		}
+	}
+	return false
+}
 
 // PromptOptions carries the dynamic parts of the system prompt.
 type PromptOptions struct {
 	Devices []ledger.Node // capability directory snapshot (may be empty)
 	Memory  string        // Hermes memory summary (may be empty; capped)
+	// History is the conversation so far; ChooseLayers reads it to decide
+	// which optional prompt layers (memory rules, task example) to attach.
+	History []Turn
 	// ASCIIOnly asks the model to reply in plain-English ASCII. Set when the
 	// client is a bare Linux console: its PSF font has no CJK glyphs, so any
 	// Chinese in the reply renders as replacement diamonds.
@@ -108,22 +204,74 @@ func WithASCIIOnly() ClassifyOption {
 	return func(p *PromptOptions) { p.ASCIIOnly = true }
 }
 
-// BuildPrompt assembles the system prompt with the device capability summary
-// and user-memory placeholder filled in.
+// BuildPrompt assembles the layered system prompt: the resident routing core,
+// the optional layers ChooseLayers picks from the history, then the device
+// capability summary (stable prefix end) and the user-memory wall (volatile
+// tail).
 func BuildPrompt(opts PromptOptions) string {
-	devices := summarizeDevices(opts.Devices)
+	layers := ChooseLayers(opts.History)
+	devices := summarizeDevicesCached(opts.Devices)
 	memory := opts.Memory
 	if memory == "" {
 		memory = "（暂无）"
 	}
-	prompt := fmt.Sprintf(systemPrompt, devices, memory)
+	var b strings.Builder
+	b.WriteString(coreRules)
+	if layers.MemoryRules {
+		b.WriteString(memoryRulesSection)
+	}
+	if layers.TaskExample {
+		b.WriteString(taskExampleSection)
+	}
+	b.WriteString("\n\n═══ 当前可用设备 ═══\n")
+	b.WriteString(devices)
+	b.WriteString("\n\n═══ 用户记忆（仅对话参考，不进入项目工作） ═══\n")
+	b.WriteString(memory)
 	if opts.ASCIIOnly {
-		prompt += "\n\n═══ 输出环境限制 ═══\n" +
+		b.WriteString("\n\n═══ 输出环境限制 ═══\n" +
 			"用户当前终端是无法渲染中日韩文字的裸字符控制台（任何 CJK 字符都会显示为乱码方块）。" +
 			"无论用户使用什么语言提问，你的最终回答必须使用英文，且只使用 ASCII 字符；" +
-			"专有名词与文件路径保持原样。"
+			"专有名词与文件路径保持原样。")
 	}
-	return prompt
+	return b.String()
+}
+
+// deviceSummaryCache is a single-entry memo of the last device summary: the
+// capability directory rarely changes between calls, so hashing the snapshot
+// and reusing the rendered summary skips the rebuild and — more importantly —
+// keeps the stable prompt prefix byte-identical, which the provider prompt
+// cache needs to hit.
+var deviceSummaryCache struct {
+	mu     sync.Mutex
+	key    string
+	result string
+}
+
+// deviceSnapshotKey hashes the device snapshot; an identical snapshot (same
+// nodes, same abilities) yields an identical key.
+func deviceSnapshotKey(nodes []ledger.Node) string {
+	blob, err := json.Marshal(nodes)
+	if err != nil {
+		// Unmarshalable nodes (never in practice): fall back to a stable
+		// textual form so the key stays a pure function of the content.
+		return hashString(fmt.Sprint(nodes))
+	}
+	return hashString(string(blob))
+}
+
+// summarizeDevicesCached returns the device summary, reusing the previous
+// rendering when the snapshot hash is unchanged.
+func summarizeDevicesCached(nodes []ledger.Node) string {
+	key := deviceSnapshotKey(nodes)
+	deviceSummaryCache.mu.Lock()
+	defer deviceSummaryCache.mu.Unlock()
+	if key == deviceSummaryCache.key && deviceSummaryCache.result != "" {
+		return deviceSummaryCache.result
+	}
+	s := summarizeDevices(nodes)
+	deviceSummaryCache.key = key
+	deviceSummaryCache.result = s
+	return s
 }
 
 // summarizeDevices renders each node as a compact block: native ability IDs on

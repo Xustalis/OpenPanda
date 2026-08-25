@@ -611,7 +611,11 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if plan.Kind != "agent" || c.supervisor == nil {
 			break
 		}
+		usageBefore := c.supervisor.Usage()
+		judgeStart := time.Now()
 		v, serr := entry.Supervise(ctx, c.supervisor, currentIntent, res.Stdout)
+		c.recordEntryUsage(context.WithoutCancel(ctx), taskID, c.supervisor, usageBefore,
+			v.Status == "done", time.Since(judgeStart))
 		if serr != nil {
 			// Supervisor unreachable: fail open toward "done" (verification is a
 			// safety net, not a gate) but leave a trace of the failure.

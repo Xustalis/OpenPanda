@@ -31,6 +31,28 @@ var migrations = []Migration{
 	{Version: 8, Name: "add_reminders", Apply: migrateV8},
 	{Version: 9, Name: "add_tasks_queue_meta", Apply: migrateV9},
 	{Version: 10, Name: "add_node_identity", Apply: migrateV10},
+	{Version: 11, Name: "add_entry_cache", Apply: migrateV11},
+}
+
+// migrateV11 adds entry_cache: the disk cache for entry-model decisions
+// (intent classification and supervise verdicts). Rows are namespaced
+// ("classify" | "supervise") and keyed by the SHA-256 of the prompt side and
+// the device-snapshot / result side, so a changed input naturally misses. The
+// entry package evicts rows older than its TTL; the created_at index keeps
+// that delete cheap.
+func migrateV11(tx *sql.Tx) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS entry_cache (
+		ns TEXT NOT NULL,
+		k1 TEXT NOT NULL,
+		k2 TEXT NOT NULL,
+		output_json TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY (ns, k1, k2)
+	)`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_entry_cache_created ON entry_cache(created_at)`)
+	return err
 }
 
 func migrateV10(tx *sql.Tx) error {
