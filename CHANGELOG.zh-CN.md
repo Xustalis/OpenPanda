@@ -16,19 +16,23 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [0.0.5] - 2026-08-25
 
-0.0.4 GA 的补丁版，来自首次真实三设备实验室（macOS + 香橙派 + Windows）的反馈：跨设备调度不完整、若干运行时状态自述错误、首次安装暴露的安装器与 Windows 数据安全问题。以下全部修复均已在真实硬件上验证后才发布。
+三设备实验室补丁：首个真实 macOS + 香橙派 + Windows 集群（公开安装器安装、局域网组网、端到端跑任务）暴露出——队列任务走不出发起节点、tier-2 授权在委派边界丢失、被锁死的 agent CLI 会吸引路由并挂起数分钟。共 5 个提交，全部在该硬件上验证。
+
+### 新增
+
+- **`panda task add --requires`** — 声明任务所需能力（`--requires gpio:read`，逗号分隔）；本节点无此能力的队列任务会被路由到拥有该能力的设备，与 `panda ask` 一直采用的根调度策略一致（c4e1bc7）。
 
 ### 问题修复
 
-- **队列任务支持跨设备路由。** `panda task add` 与 Web 控制台创建的任务此前只由*发起*节点认领执行——当任务所需能力只在其他设备上有时直接失败。队列调度器现在采用与 `panda ask` 相同的根调度策略：本节点无法满足所需能力时，认领会改派给有能力的 peer，peer 的结果回填发起节点的任务行。`panda task add` 新增 `--requires` 声明任务所需能力。
-- **Tier-2 授权随委派传递。** `--authorize` 的授权此前只在提交节点本地生效——委派到 peer 的 agent 任务到了执行节点会被防御层拒绝，即使用户已经批准过。授权现在随认证总线传递，执行节点照常放行。
-- **被锁死的 agent CLI 不再吸引路由。** 能力卡是静态的，但已安装的 CLI 可能不可用（如 `claude.exe` 存在但无登录态、节点又没配模型 key）：路由过去只会换来长时间挂起后失败。本地回退链与宣告给 peer 的能力摘要现在都会检查可用性——CLI 在 PATH *且* 模型可达（自带凭证或可注入）——此类节点会被提前跳过。
-- **`panda web` 端口被占不再报错退出。** 第二次 `/web`（或残留进程）此前报 `bind: address already in use`；控制台现在自动换到相邻端口并明确提示。会话 token 不再打印——浏览器直接带凭证打开；`/web` 已在运行时会重新打开已登录的浏览器而不是只打印 URL。`--no-browser` 仍打印带 token 的 URL 供手动使用。
-- **Peer hello 上报真实版本号。** 节点此前广播硬编码的 `0.1.0-dev`，混合版本集群里 `panda nodes` 显示的版本全是错的。三条 hello 路径统一上报 `version.Version`。
-- **配置文件旁的能力卡优先于 `./capabilities.yaml`。** 在恰好含有 capabilities.yaml 的目录（仓库检出、其他节点的卡）启动 daemon 会静默加载错误的卡。现在优先加载 init 写在配置文件旁边的卡；`--card` 显式指定仍然最高。
-- **Windows 数据目录不再与安装目录冲突。** 原默认数据目录为 `%LOCALAPPDATA%\openpanda`，而安装器写入 `%LOCALAPPDATA%\OpenPanda`——在大小写不敏感的 NTFS 上两者是同一目录，数据库、记忆与项目全部落在安装前缀*内部*，卸载时会一并清扫。数据目录现改为 `%LOCALAPPDATA%\openpanda-data`。从 0.0.4 升级的 Windows 节点将以全新存储启动（旧数据本就位于安装前缀内，按设计不保证在卸载后幸存）。
-- **安装器可在 GitHub API 限流下工作。** `api.github.com` 对未认证请求的限额为每 IP 每小时 60 次；耗尽时，两个安装器都会改走 `/releases/latest` 的 302 重定向解析最新版本（该端点不受同样限制）。用 `--version` / `-Version` 手动指定版本的方式保持不变。
-- **`install.ps1` 在 Windows PowerShell 5.1 无法访问 GitHub 的机器上可用。** 脚本现在开头强制 TLS 1.2，优先使用系统自带的 `curl.exe`（Windows 10 1803+）下载并以 `Invoke-WebRequest` 兜底，并补充超时——损坏的 WinINET 代理配置会快速失败而不是长时间挂起。
+- **队列任务支持跨设备路由** — `panda task add` 与 Web 控制台创建的任务此前只由发起节点认领执行：任务所需能力只在其他设备上时直接失败（在 Mac 上提交 `pi.uptime` 报 `route: no capability matches`）。调度器认领时现在会咨询根调度器：本节点无匹配即把认领改派给有能力的 peer（含已拒绝节点环路保护、lease 检测执行节点死亡），peer 的结果回填发起节点的任务行。实验室三个方向实测：Mac→OrangePi、OrangePi→Mac、Windows→OrangePi 全部完成（c4e1bc7）。
+- **Tier-2 授权随委派传递** — `--authorize` 的授权此前只在提交节点本地生效：委派到 peer 的 agent 任务到了执行节点被防御层拒绝，即使用户已批准。授权现在随认证总线传递、执行节点照常放行——无凭证的香橙派向 Mac 的 claude 提交已授权 coding 任务，现在能跑完而不是死在 review（c4e1bc7）。
+- **被锁死的 agent CLI 不再吸引路由** — 能力卡是静态的，但已安装的 CLI 可能不可用：Windows 上的 `claude.exe` 无登录态、节点又没配模型 key，却向集群宣告 `agent:*`；路由把 coding 任务派过去，挂起数分钟后才以网络错误失败。本地回退链与 hello 宣告的能力摘要现在都按可用性把关——CLI 在 PATH *且* 模型可达（自带凭证或可注入）；该 Windows 节点的摘要现在只宣告 `win.sysinfo`（2db530f）。
+- **`panda web` 端口被占不再报错退出** — 第二次 `/web`（或残留进程）此前报 `bind: address already in use`，还要用户手动复制 token。控制台现在自动换到相邻端口并明确提示；浏览器直接带凭证打开（token 不再打印），`/web` 已在运行时会重新打开已登录的浏览器。`--no-browser` 仍打印带 token 的 URL 供手动使用（c4e1bc7）。
+- **Peer hello 上报真实版本号** — 三条 hello 路径此前广播硬编码的 `0.1.0-dev`，混合版本集群里 `panda nodes` 显示的版本全是错的；现在统一上报 `version.Version`（实验室三台设备均显示 0.0.5）（2db530f）。
+- **配置文件旁的能力卡优先于 `./capabilities.yaml`** — 在恰好含有 capabilities.yaml 的目录（仓库检出、其他节点的卡）启动 daemon 会静默加载错误的卡；现在优先加载 init 写在配置文件旁边的卡，`--card` 显式指定仍然最高（2db530f）。
+- **Windows 数据目录不再与安装目录冲突** — 默认数据目录 `%LOCALAPPDATA%\openpanda` 与安装前缀 `%LOCALAPPDATA%\OpenPanda` 在大小写不敏感的 NTFS 上是同一目录：数据库、记忆与项目全部落在安装前缀内部，卸载时会一并清扫。数据目录现改为 `%LOCALAPPDATA%\openpanda-data`；从 0.0.4 升级的 Windows 节点以全新存储启动（fc50721）。
+- **安装器可在 GitHub API 限流与 WinPS 5.1 HTTP 栈损坏的机器上工作** — `api.github.com` 对未认证请求限额为每 IP 每小时 60 次，耗尽时两个安装器都改走 `/releases/latest` 的 302 重定向解析最新版本；`install.ps1` 开头强制 TLS 1.2，优先使用系统自带 `curl.exe`（Windows 10 1803+）并以 `Invoke-WebRequest` 兜底，补充超时让损坏的 WinINET 代理快速失败而不是挂起。两者均在真实三设备安装中命中过（109b567）。
+- **Homebrew tap 推送认证修复** — release 工作流的 tap 更新步骤此前因 job token 权限不足报 `could not read Username`；推送 URL 现在内嵌 token（6868a63）。
 
 ## [0.0.4] - 2026-08-25
 
