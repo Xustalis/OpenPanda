@@ -238,6 +238,65 @@ func TestMigrateBackfillsHashChain(t *testing.T) {
 	}
 }
 
+// TestMigrateV11EntryCache verifies the entry_cache table is created both on
+// a fresh database and on a legacy database pinned at v10 (the pre-cache
+// schema), and that re-running Migrate on either is a no-op.
+func TestMigrateV11EntryCache(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version int // user_version to pin before migrating; 0 = fresh db
+	}{
+		{"fresh database", 0},
+		{"legacy v10 database", 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := Open(":memory:")
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer db.Close()
+
+			if tc.version > 0 {
+				if _, err := db.Exec(`PRAGMA user_version = 10`); err != nil {
+					t.Fatalf("set user_version: %v", err)
+				}
+			}
+			if err := Migrate(db); err != nil {
+				t.Fatalf("migrate: %v", err)
+			}
+
+			var one int
+			if err := db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='entry_cache'`).Scan(&one); err != nil {
+				t.Fatalf("entry_cache table missing after migration: %v", err)
+			}
+			var version int
+			if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+				t.Fatalf("read user_version: %v", err)
+			}
+			if want := migrations[len(migrations)-1].Version; version != want {
+				t.Fatalf("user_version = %d, want %d", version, want)
+			}
+
+			// Idempotent: a second run must not fail or duplicate anything.
+			if err := Migrate(db); err != nil {
+				t.Fatalf("re-migrate: %v", err)
+			}
+
+			// The table is writable in the shape the entry package expects.
+			if _, err := db.Exec(`INSERT INTO entry_cache (ns, k1, k2, output_json, created_at) VALUES ('classify', 'a', 'b', '{}', 0)`); err != nil {
+				t.Fatalf("insert entry_cache: %v", err)
+			}
+			var blob string
+			if err := db.QueryRow(`SELECT output_json FROM entry_cache WHERE ns='classify' AND k1='a' AND k2='b'`).Scan(&blob); err != nil {
+				t.Fatalf("select entry_cache: %v", err)
+			}
+			if blob != "{}" {
+				t.Fatalf("output_json = %q, want {}", blob)
+			}
+		})
+	}
+}
+
 func columnExists(t *testing.T, db *sql.DB, table, col string) bool {
 	t.Helper()
 	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))

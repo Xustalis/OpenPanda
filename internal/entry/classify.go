@@ -2,12 +2,17 @@ package entry
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
+
+// classificationCacheNS is the DiskCache namespace for intent classification
+// (answer / tool_call / task).
+const classificationCacheNS = "classify"
 
 // Classify runs the unified entry model once with no tools and returns the
 // parsed Output. It is the answer/fallback entry point; the tool path is
@@ -21,11 +26,70 @@ func ClassifyTurns(ctx context.Context, c *Client, devices []ledger.Node, memory
 	return ClassifyTurnsWithTools(ctx, c, devices, memory, turns, nil, opts...)
 }
 
+// classifyCacheKey builds the disk-cache key for one classification: k1 hashes
+// the prompt side — conversation turns, the memory summary, and the tool
+// roster (the available tools shape the routing decision) — and k2 hashes the
+// device snapshot. Any input change lands on a different key and misses.
+func classifyCacheKey(turns []Turn, memory string, devices []ledger.Node, registry *Registry) (k1, k2 string) {
+	var b strings.Builder
+	for _, t := range turns {
+		b.WriteString(t.Role)
+		b.WriteByte('\n')
+		b.WriteString(t.Content)
+		if len(t.Blocks) > 0 {
+			if blob, err := json.Marshal(t.Blocks); err == nil {
+				b.Write(blob)
+			}
+		}
+		b.WriteByte('\n')
+	}
+	b.WriteString("memory:\n")
+	b.WriteString(memory)
+	if registry != nil {
+		for _, s := range registry.Specs() {
+			b.WriteString("\ntool:")
+			b.WriteString(s.Name)
+		}
+	}
+	return hashString(b.String()), deviceSnapshotKey(devices)
+}
+
+// cachedClassification returns a previously stored classification for these
+// exact inputs, if the client carries a disk cache and one exists.
+func cachedClassification(ctx context.Context, c *Client, turns []Turn, memory string, devices []ledger.Node, registry *Registry) (Output, bool) {
+	dc := c.diskCache()
+	if dc == nil {
+		return Output{}, false
+	}
+	k1, k2 := classifyCacheKey(turns, memory, devices, registry)
+	var out Output
+	if !dc.Get(ctx, classificationCacheNS, k1, k2, &out) {
+		return Output{}, false
+	}
+	return out, true
+}
+
+// storeClassification saves a successful classification for reuse. Best-effort:
+// a failed write only costs a future miss.
+func storeClassification(ctx context.Context, c *Client, turns []Turn, memory string, devices []ledger.Node, registry *Registry, out Output) {
+	dc := c.diskCache()
+	if dc == nil {
+		return
+	}
+	k1, k2 := classifyCacheKey(turns, memory, devices, registry)
+	dc.Put(ctx, classificationCacheNS, k1, k2, out)
+}
+
 // ClassifyTurnsWithTools runs the entry model with a conversation history and a
 // tool registry. A native tool_use response becomes a KindToolCall output; a
 // text response falls through to the existing JSON/prose parsing (answer/task).
+// Identical inputs (turns, memory, devices, tool roster) are served from the
+// disk cache without an LLM call.
 func ClassifyTurnsWithTools(ctx context.Context, c *Client, devices []ledger.Node, memory string, turns []Turn, registry *Registry, opts ...ClassifyOption) (Output, error) {
-	po := PromptOptions{Devices: devices, Memory: memory}
+	if out, ok := cachedClassification(ctx, c, turns, memory, devices, registry); ok {
+		return out, nil
+	}
+	po := PromptOptions{Devices: devices, Memory: memory, History: turns}
 	for _, o := range opts {
 		o(&po)
 	}
@@ -38,14 +102,27 @@ func ClassifyTurnsWithTools(ctx context.Context, c *Client, devices []ledger.Nod
 	if err != nil {
 		return Output{}, WrapAPIError(err)
 	}
-	return resolveResponse(resp)
+	out, err := resolveResponse(resp)
+	if err != nil {
+		return Output{}, err
+	}
+	storeClassification(ctx, c, turns, memory, devices, registry, out)
+	return out, nil
 }
 
 // ClassifyStreamWithTools is ClassifyTurnsWithTools with live text streaming:
 // answer deltas are delivered to onDelta as the provider emits them, while the
-// parsed Output is returned once complete.
+// parsed Output is returned once complete. A cache hit delivers the stored
+// answer as one delta; structured outputs (task/tool_call) never stream, same
+// as the live path.
 func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.Node, memory string, turns []Turn, registry *Registry, onDelta func(string), opts ...ClassifyOption) (Output, error) {
-	po := PromptOptions{Devices: devices, Memory: memory}
+	if out, ok := cachedClassification(ctx, c, turns, memory, devices, registry); ok {
+		if out.Kind == KindAnswer && onDelta != nil && out.Answer != "" {
+			onDelta(out.Answer)
+		}
+		return out, nil
+	}
+	po := PromptOptions{Devices: devices, Memory: memory, History: turns}
 	for _, o := range opts {
 		o(&po)
 	}
@@ -58,7 +135,12 @@ func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.No
 	if err != nil {
 		return Output{}, WrapAPIError(err)
 	}
-	return resolveResponse(resp)
+	out, err := resolveResponse(resp)
+	if err != nil {
+		return Output{}, err
+	}
+	storeClassification(ctx, c, turns, memory, devices, registry, out)
+	return out, nil
 }
 
 // resolveResponse routes one completed model response: a native tool_use is

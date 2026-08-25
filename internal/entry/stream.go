@@ -200,11 +200,17 @@ func structPrefixChars(t string) bool {
 
 // anthropicStreamEvent is one SSE data payload; only the fields PANDA acts on
 // are modeled. index addresses the content block a delta belongs to.
+// message_start carries the input-token usage on message.usage;
+// message_delta carries the cumulative output-token count on usage.
 type anthropicStreamEvent struct {
-	Type         string         `json:"type"` // content_block_start | content_block_delta | message_delta | error
+	Type         string         `json:"type"` // content_block_start | content_block_delta | message_start | message_delta | error
 	Index        int            `json:"index"`
 	ContentBlock ContentBlock   `json:"content_block"`
 	Delta        anthropicDelta `json:"delta"`
+	Message      struct {
+		Usage *anthropicUsage `json:"usage"`
+	} `json:"message"`
+	Usage *anthropicUsage `json:"usage"`
 }
 
 type anthropicDelta struct {
@@ -214,13 +220,40 @@ type anthropicDelta struct {
 	StopReason  string `json:"stop_reason"`
 }
 
-// anthAccumulator assembles a Response from Anthropic stream events.
+// anthAccumulator assembles a Response from Anthropic stream events. Usage is
+// accumulated per attempt (the caller bills it only when the stream
+// completes, so a retried attempt is never double-counted).
 type anthAccumulator struct {
 	texts     []string
 	blocks    map[int]*ContentBlock    // by stream index
 	rawArgs   map[int]*strings.Builder // tool_use partial_json, by index
 	order     []int
 	truncated bool
+	usageIn   int64
+	usageOut  int64
+}
+
+// noteUsage records a usage-bearing event: message_start carries the
+// input-token count on message.usage, message_delta the cumulative
+// output-token count on usage. Counts only grow within one attempt, so a
+// provider that reports both takes the larger of each.
+func (a *anthAccumulator) noteUsage(ev *anthropicStreamEvent) {
+	var u *anthropicUsage
+	switch ev.Type {
+	case "message_start":
+		u = ev.Message.Usage
+	case "message_delta":
+		u = ev.Usage
+	}
+	if u == nil {
+		return
+	}
+	if u.InputTokens > a.usageIn {
+		a.usageIn = u.InputTokens
+	}
+	if u.OutputTokens > a.usageOut {
+		a.usageOut = u.OutputTokens
+	}
 }
 
 func (a *anthAccumulator) start(ev *anthropicStreamEvent) {
@@ -282,7 +315,7 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 	req := messagesRequest{
 		Model:     c.model,
 		MaxTokens: c.maxTokens,
-		System:    system,
+		System:    c.systemPayload(system),
 		Messages:  turnsToMessages(turns),
 		Stream:    true,
 	}
@@ -340,8 +373,9 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 				acc.start(&ev)
 			case "content_block_delta":
 				acc.delta(&ev, onDelta)
-			case "message_delta":
-				if ev.Delta.StopReason == "max_tokens" {
+			case "message_start", "message_delta":
+				acc.noteUsage(&ev)
+				if ev.Type == "message_delta" && ev.Delta.StopReason == "max_tokens" {
 					acc.truncated = true
 				}
 			case "error":
@@ -358,6 +392,9 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 		// streamWithRetry only replays it when nothing was delivered yet.
 		return Response{}, &transientError{err: fmt.Errorf("read stream: %w", err)}
 	}
+	// Bill this attempt's usage only on success: a failed attempt that got
+	// replaced by a retry must not be counted.
+	c.addUsage(acc.usageIn, acc.usageOut)
 	return acc.result(), nil
 }
 
@@ -372,6 +409,13 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 		MaxTokens: c.maxTokens,
 		Stream:    true,
 		Messages:  turnsToOpenAI(system, turns),
+	}
+	if c.promptCache.Load() {
+		req.PromptCacheKey = c.oaiPromptCacheKey(system)
+		// include_usage rides the same flag: both are OpenAI-specific hints a
+		// strict legacy provider may reject, so SetPromptCaching(false) is the
+		// single escape hatch that strips them.
+		req.StreamOptions = &oaiStreamOptions{IncludeUsage: true}
 	}
 	if len(tools) > 0 {
 		req.Tools = specsToOpenAI(tools)
@@ -433,5 +477,8 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 		// streamWithRetry only replays it when nothing was delivered yet.
 		return Response{}, &transientError{err: fmt.Errorf("read stream: %w", err)}
 	}
+	// Bill this attempt's usage only on success: a failed attempt that got
+	// replaced by a retry must not be counted.
+	c.addUsage(acc.usageIn, acc.usageOut)
 	return acc.result(), nil
 }

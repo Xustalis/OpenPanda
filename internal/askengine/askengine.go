@@ -92,6 +92,7 @@ func (e *Engine) SetModel(mc config.ModelConfig) error {
 	if err != nil {
 		return err
 	}
+	c.SetDiskCache(entry.NewDiskCache(e.db))
 	e.client.Store(c)
 	return nil
 }
@@ -210,6 +211,9 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		db.Close()
 		return nil, fmt.Errorf("askengine: model client: %w", err)
 	}
+	// Disk cache for entry-model decisions (classify/supervise): identical
+	// inputs skip the LLM call entirely. Best-effort by design.
+	client.SetDiskCache(entry.NewDiskCache(db))
 
 	e := &Engine{
 		cfg:        cfg,
@@ -241,6 +245,19 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		if err != nil {
 			e.Close()
 			return nil, fmt.Errorf("askengine: load capabilities: %w", err)
+		}
+		// Mirror the daemon's card enrichment: kind/identity come from the
+		// config (the card file may omit them), and the node is registered
+		// under the same stable runtime ID the daemon uses. Without this, a
+		// fresh database shows an empty device list to the entry model —
+		// every ask degrades to "no devices available" even though this
+		// process can execute the card's tasks locally. The upsert is
+		// idempotent with the daemon's own registration.
+		card.NodeKind = cfg.Node.Kind
+		card.NodeIdentity = cfg.Node.EffectiveIdentity()
+		stableID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, card.NodeIdentity)
+		if err := ledger.Register(db, card, stableID, schedulerTier(cfg.Node.ResourceClass)); err != nil {
+			logger.Warn("self-register failed", "node", stableID, "err", err)
 		}
 		// The engine's scheduler is a short-lived/ephemeral participant: its
 		// node id never collides with the concurrently running daemon on the
@@ -330,8 +347,18 @@ func (e *Engine) Ask(ctx context.Context, prompt string, authorize bool) (*Resul
 // (plain user/assistant turns), workDir optionally pins where a classified
 // task executes (a session's git worktree), and the callbacks stream live
 // progress. A nil OnDelta still streams internally — it just is not forwarded.
-func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, workDir string, authorize bool, cb StreamCallbacks) (*Result, error) {
+func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, workDir string, authorize bool, cb StreamCallbacks) (res *Result, err error) {
 	client := e.client.Load()
+
+	// Bill the commander model's own token consumption for this ask into the
+	// delegation metrics once it finishes (whatever the outcome), so the
+	// panel's tokens column shows entry-model cost alongside adapter
+	// delegations. The record survives the ask's context via WithoutCancel.
+	usageBefore := client.Usage()
+	askStart := time.Now()
+	defer func() {
+		e.recordEntryUsage(context.WithoutCancel(ctx), res, client, usageBefore, time.Since(askStart))
+	}()
 
 	// Devices visible to classification: the local capability directory
 	// (populated by the daemon's heartbeats and our own peer dials).
@@ -492,6 +519,27 @@ func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool
 		ExitCode:  result.ExitCode,
 	}
 	return res
+}
+
+// recordEntryUsage bills the entry (commander) model's own token consumption
+// for one ask into the delegation metrics, so the panel's tokens column
+// reflects the commander's cost alongside adapter delegations. The executor
+// label "entry:<model>" keeps the rows distinguishable; providers that do not
+// report usage (delta zero) record nothing.
+func (e *Engine) recordEntryUsage(ctx context.Context, res *Result, client *entry.Client, before entry.Usage, latency time.Duration) {
+	delta := client.Usage().Sub(before)
+	if delta.Total() == 0 {
+		return
+	}
+	taskID := ""
+	if res != nil {
+		taskID = res.TaskID
+	}
+	store := core.NewTaskStore(e.db, e.logger)
+	if err := store.RecordDelegationMetric(ctx, taskID, e.cfg.Node.Name, "entry:"+client.ModelName(),
+		nil, true, latency.Milliseconds(), int(delta.Total())); err != nil {
+		e.logger.Warn("askengine: record entry usage", "err", err)
+	}
 }
 
 // Close releases the engine's resources (DB handle, scheduler core, MCP
