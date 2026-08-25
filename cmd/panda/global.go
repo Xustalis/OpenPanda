@@ -20,18 +20,21 @@ import (
 // panel-style commands then emit their JSON wire form instead of text.
 var jsonOutput bool
 
-// defaultCardPath discovers a capability card without --card: ./capabilities.yaml
-// first (repo-root dev flow), then next to the auto-discovered config file —
-// where `panda init` writes the card (the user config dir, or /etc/openpanda
-// for system installs; this is what daemon services without explicit flags
-// rely on) — then /etc/openpanda/capabilities.yaml directly. Empty means no
-// card — answer and tool_call still work, task execution stays off.
+// defaultCardPath discovers a capability card without --card: next to the
+// auto-discovered config file first — where `panda init` writes the card (the
+// user config dir, or /etc/openpanda for system installs; this is what daemon
+// services without explicit flags rely on) — then ./capabilities.yaml (repo
+// dev flow: when the cwd also holds the config, both candidates are the same
+// file, so the order only matters when they diverge, and the init-written
+// card is the node's real identity), then /etc/openpanda/capabilities.yaml
+// directly. Empty means no card — answer and tool_call still work, task
+// execution stays off.
 func defaultCardPath() string {
-	candidates := []string{"capabilities.yaml"}
+	candidates := []string{}
 	if cfgPath := config.ResolvePath(""); cfgPath != "" {
 		candidates = append(candidates, filepath.Join(filepath.Dir(cfgPath), "capabilities.yaml"))
 	}
-	candidates = append(candidates, "/etc/openpanda/capabilities.yaml")
+	candidates = append(candidates, "capabilities.yaml", "/etc/openpanda/capabilities.yaml")
 	for _, p := range candidates {
 		if _, err := os.Stat(p); err == nil {
 			return p

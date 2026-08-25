@@ -14,15 +14,48 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Entries name the change and its user-visible effect in one to three lines; the introducing commit is cited where it aids archaeology.
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
-## [Unreleased]
+## [0.0.5] - 2026-08-25
 
-A same-day patch over 0.0.4 GA, prompted by the first real three-device
-install: two installer robustness fixes and one data-safety fix on Windows.
-(The 0.0.5 tag was briefly published and then withdrawn before GA gating;
-these fixes await the next numbered release.)
+A patch over 0.0.4 GA, driven by the first real three-device lab (macOS +
+OrangePi + Windows): cross-device scheduling was incomplete, several runtime
+states misreported themselves, and the first installs surfaced installer and
+data-safety issues on Windows. Everything below was verified on real hardware
+before release.
 
 ### Fixed
 
+- **Queued tasks now route cross-device.** Tasks created with `panda task add`
+  or the web console were claimed and executed by the *origin* node only, so a
+  task requiring an ability only another device had failed outright. The queue
+  scheduler now applies the same root-scheduler policy as `panda ask`: when the
+  local node cannot serve the required abilities, the claim is re-targeted to a
+  capable peer and the peer's result completes the origin's task row. `panda
+  task add` gains `--requires` to declare the abilities a task needs.
+- **Tier-2 authorization travels with delegation.** `--authorize` consent was
+  local to the submitting node, so an agent task delegated to a peer bounced at
+  the executor's defense layer even though the user had approved it. Consent
+  now propagates on the authenticated bus and is honored by the executor.
+- **Locked-out agent CLIs no longer attract routing.** A capability card is
+  static, but an installed CLI can be unusable (e.g. `claude.exe` present with
+  no login state on a node with no model key): routing to it produced a long
+  runtime hang before failure. Both the local fallback chain and the
+  capability summary advertised to peers now check viability — CLI on PATH
+  *and* a reachable model (own credentials or injection) — so such nodes are
+  skipped up front.
+- **`panda web` no longer dies on a taken port.** A second `/web` (or a
+  leftover process) errored with `bind: address already in use`; the console
+  now falls forward to a nearby port and says so. The session token is no
+  longer printed — the browser opens already authenticated — and invoking
+  `/web` while it runs re-opens the browser logged in instead of just printing
+  a URL. `--no-browser` still prints a token-carrying URL for manual use.
+- **Peer hello now reports the real version.** Nodes advertised a hardcoded
+  `0.1.0-dev`, so `panda nodes` showed wrong versions across a mixed-version
+  fleet. All three hello paths report `version.Version`.
+- **The capability card next to the resolved config wins over `./capabilities.yaml`.**
+  Starting a daemon from a directory that happens to contain a capabilities.yaml
+  (a repo checkout, another node's card) silently loaded the wrong card. The
+  init-written card next to the config file is now preferred; `--card` still
+  overrides explicitly.
 - **Windows data directory no longer collides with the install prefix.** The
   default state dir was `%LOCALAPPDATA%\openpanda` while the installer writes to
   `%LOCALAPPDATA%\OpenPanda` — the same directory on case-insensitive NTFS, so

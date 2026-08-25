@@ -2,6 +2,7 @@ package commander
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -423,5 +424,40 @@ func TestClaudeSettingsEnvBlocksInjection(t *testing.T) {
 	}
 	if d := r.InjectionDecision("claude_code.py"); !d.Inject {
 		t.Fatalf("settings.json without auth env must not block injection: %+v", d)
+	}
+}
+
+// TestAgentViableLockedOutCLI reproduces the three-device lab failure: a
+// claude CLI installed on PATH but with no login state on a node that has no
+// model key configured. The old PATH-only probe advertised it, routing sent
+// work there, and the task died after a long runtime hang. Viability must
+// fail closed in exactly this shape.
+func TestAgentViableLockedOutCLI(t *testing.T) {
+	cleanCredentialEnv(t)
+	// claude must resolve on PATH for the probe to reach the credential
+	// stage; skip when the host has no claude binary.
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("claude CLI not installed on this host")
+	}
+	card := testCard()
+	ag := card.Agents["claude_code"]
+	if ag.Adapter == "" {
+		t.Fatal("test card has no claude_code agent")
+	}
+	// No model configured, no agent credentials → not viable.
+	r := injectionRouter(config.ModelConfig{}, config.InjectionModelAuto)
+	if r.AgentViable("claude_code", ag) {
+		t.Fatal("installed-but-locked-out agent must not be viable")
+	}
+	// With a model key configured, injection makes it viable again.
+	r2 := injectionRouter(testModel, config.InjectionModelAuto)
+	if !r2.AgentViable("claude_code", ag) {
+		t.Fatal("agent with injectable model must be viable")
+	}
+	// And with its own credentials, viable regardless of model config.
+	t.Setenv("ANTHROPIC_API_KEY", "agent-own-key")
+	r3 := injectionRouter(config.ModelConfig{}, config.InjectionModelAuto)
+	if !r3.AgentViable("claude_code", ag) {
+		t.Fatal("agent with own credentials must be viable")
 	}
 }
