@@ -7,22 +7,25 @@ out="${1:-.lab/three-node}"
 secret="${OPENPANDA_SHARED_SECRET:-lab-secret-change-me}"
 mkdir -p "$out/entry" "$out/agent" "$out/tools"
 
+# Storage paths are written relative to each config file's own directory: the
+# daemon resolves relative paths against the config location, not the caller's
+# cwd, so "$out/<node>/data" would nest twice when $out itself is relative.
 write_config() {
-  local path="$1" name="$2" addr="$3" root="$4" class="$5" peer1="$6" peer2="$7"
+  local path="$1" name="$2" addr="$3" class="$4" peer1="$5" peer2="$6"
   printf '%s\n' \
     "node:" "  name: \"$name\"" "  resource_class: \"$class\"" \
     "  kind: \"vm\"" "  identity: \"local-lab-$name\"" \
     "network:" "  listen_addr: \"$addr\"" "  shared_secret: \"$secret\"" \
     "  peers:" "    - \"$peer1\"" "    - \"$peer2\"" \
-    "storage:" "  db_path: \"$root/openpanda.db\"" "  context_path: \"$root/context\"" \
-    "  memory_path: \"$root/memory\"" "  projects_path: \"$root/projects\"" \
-    "  skills_path: \"$root/skills\"" "  work_path: \"$root/work\"" \
+    "storage:" "  db_path: \"data/openpanda.db\"" "  context_path: \"data/context\"" \
+    "  memory_path: \"data/memory\"" "  projects_path: \"data/projects\"" \
+    "  skills_path: \"data/skills\"" "  work_path: \"data/work\"" \
     "log:" "  level: \"debug\"" > "$path"
 }
 
-write_config "$out/entry/config.yaml" entry 127.0.0.1:17801 "$out/entry/data" Standard 127.0.0.1:17802 127.0.0.1:17803
-write_config "$out/agent/config.yaml" agent 127.0.0.1:17802 "$out/agent/data" Standard 127.0.0.1:17801 127.0.0.1:17803
-write_config "$out/tools/config.yaml" tools 127.0.0.1:17803 "$out/tools/data" Micro 127.0.0.1:17801 127.0.0.1:17802
+write_config "$out/entry/config.yaml" entry 127.0.0.1:17801 Standard 127.0.0.1:17802 127.0.0.1:17803
+write_config "$out/agent/config.yaml" agent 127.0.0.1:17802 Standard 127.0.0.1:17801 127.0.0.1:17803
+write_config "$out/tools/config.yaml" tools 127.0.0.1:17803 Micro 127.0.0.1:17801 127.0.0.1:17802
 
 cat >> "$out/agent/config.yaml" <<'EOF'
 model:

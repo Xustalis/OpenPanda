@@ -304,6 +304,11 @@ func (r *repl) printBanner() {
 		if model == "" {
 			model = r.cfg.Model.BaseURL
 		}
+		// A default base_url with no key looks configured but answers nothing:
+		// say so up front instead of failing on the first ask.
+		if strings.TrimSpace(r.cfg.Model.APIKey) == "" {
+			model += " · " + i18n.T(r.loc, "repl.banner.noKey")
+		}
 	}
 	color := func(code, s string) string {
 		if !stdoutIsTTY() {

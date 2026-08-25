@@ -182,7 +182,7 @@ archive, verifies its SHA-256, unpacks the binary plus its agent adapters
 Override the defaults with flags:
 
 ```bash
-sh scripts/install.sh --version 0.0.3           # pin a version (default: latest)
+sh scripts/install.sh --version 0.0.4           # pin a version (default: latest)
 sh scripts/install.sh --prefix /opt/openpanda   # custom install directory
 sh scripts/install.sh --yes                     # also register auto-start, no prompt
 sh scripts/install.sh --no-service              # skip auto-start entirely

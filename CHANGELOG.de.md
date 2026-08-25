@@ -14,11 +14,11 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Jeder Eintrag benennt die Änderung und ihre sichtbare Wirkung in ein bis drei Zeilen; der einführende Commit wird zitiert, wo das der Archäologie hilft.
 - Die englische Datei ist maßgeblich. Die Übersetzungen zh-CN / ja / es / de spiegeln sie und können um ein Release kurz verzögert sein.
 
-## [0.0.4-beta] - 2026-08-24
+## [0.0.4] - 2026-08-25
 
-> Beta-Snapshot: Release für verteilte Knoten. Vollständige Details siehe [Abschnitt 0.0.4-beta in CHANGELOG.md](CHANGELOG.md).
+> GA: Release für verteilte Knoten. Vollständige Details siehe [Abschnitt 0.0.4 in CHANGELOG.md](CHANGELOG.md).
 >
-> Highlights: physical / VM Knotentyp + stabile Identity, Singleton-Daemon-Guard pro Host (`nodeidentity`-Paket), Adapterprotokoll-Härtung + Vertragstests, `/api/self` + `/api/nodes` samt Nodes-Webseite, 3-Knoten-Verteilt-Labor-Tools und die Root-Cause-Behebung von SQLITE_CANTOPEN 14 bei Homebrew-Installs / beliebigem cwd.
+> Highlights: physical / VM Knotentyp + stabile Identity, Singleton-Daemon-Guard pro Host (`nodeidentity`-Paket), Adapterprotokoll-Härtung + Vertragstests, `/api/self` + `/api/nodes` samt Nodes-Webseite, 3-Knoten-Verteilt-Labor-Tools und die Root-Cause-Behebung von SQLITE_CANTOPEN 14 bei Homebrew-Installs / beliebigem cwd. Seit der Beta: Entscheidungscaches des Entry-Modells, geschichteter Systemprompt, Web-Onboarding ohne Konfiguration, gemeinsamer Adapter-Harness, Tier-2-Autorisierungs-UX, Installer-/Deinstaller-Aufräumen, Changelog-Digest im Updater, einfragen `panda init` und Szenario-FAQ.
 
 ### Hinzugefügt
 

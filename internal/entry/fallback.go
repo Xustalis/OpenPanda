@@ -26,7 +26,7 @@ func WrapAPIError(err error) error {
 	switch {
 	case errors.Is(err, ErrNoKey):
 		return &ClassifyError{
-			UserMsg: "未配置模型 API key（config model.api_key 或 OPENPANDA_MODEL_API_KEY）",
+			UserMsg: "未配置模型 API key：运行 `panda init` 完成引导配置，或打开 `panda web` 在设置页填写（也可用 OPENPANDA_MODEL_API_KEY 环境变量）",
 			Err:     err,
 		}
 	case errors.Is(err, context.Canceled):

@@ -14,9 +14,9 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 每条记录以一至三行写明变更内容与用户可见的影响；必要时标注引入该变更的提交，便于追溯。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
-## [0.0.4-beta] - 2026-08-24
+## [0.0.4] - 2026-08-25
 
-Beta 快照：分布式节点发布。引擎现在区分物理节点与虚拟机节点、守护同节点身份的单例、为适配器协议补齐加固与契约测试、暴露带 Nodes 页的 `/api/self` + `/api/nodes` 接口，并且——本轮彻底解决——Homebrew 安装后从**任意工作目录**都能干净启动（此前的日常使用最后一块阻塞）。
+分布式节点正式版（GA）。引擎区分物理节点与虚拟机节点、守护同节点身份的单例、为适配器协议补齐加固与契约测试、暴露带 Nodes 页的 `/api/self` + `/api/nodes` 接口。beta 之后跟进落地：入口模型决策缓存、分层 system prompt、零配置 Web 引导、共享适配器 harness、tier-2 授权体验、安装/卸载清扫、更新器 changelog 摘要、一问式 `panda init` 与场景化 FAQ。Homebrew 安装后从**任意工作目录**都能干净启动，首个带完整上手文档的公开发布。
 
 ### 新增功能
 
@@ -24,7 +24,11 @@ Beta 快照：分布式节点发布。引擎现在区分物理节点与虚拟机
 - **单例守护锁（`nodeidentity` 包）**——`Acquire(kind, identity)` 在 `$USER_DATA_DIR/locks/` 下取 OS 级文件锁：Unix 用 `flock(2)`，Windows 用 `LockFileEx`。对同一身份再跑一次 `panda daemon` 会打印诊断后干净退出，避免破坏共享存储。
 - **适配器协议加固 + 契约测试**——`internal/commander/adapter.go` 返回统一 `{ok, result, exit_code}` 帧，非零退出时把 stderr 作为诊断保留；`inject` 对每次凭据注入决策（auto | always | never）写入日志便于操作者审计。`tests/adapter_contract_test.py` 验证每个适配器都讲同一套帧；`testdata/scenarios/long_task.py` 用于压测队列取消路径。`adapters/codex.py` 的参数解析与 stdout framing 同步修复。
 - **`/api/self` + `/api/nodes` + 网页 Nodes 面板**——`panel/self.go` 暴露本地节点（name / kind / identity / resource class / running state / capabilities）与节点目录（本地 + 已连接 peer，含最后一次可见时间/运行态）。新增 Nodes 页（`webui/app/src/views/nodes.tsx`）以 running/last-seen 表格渲染 kind + 资源等级 chip。
-- **分布式实验室工具箱**——`scripts/lab/generate-three-node.sh` 生成三个互相隔离的配置（物理 A/B + 一个 VM 节点），带独立身份、共享密钥与已预装 peer 列表；`scripts/scenario-model/main.go` 读取 YAML 目录给出调度/路由预测评分；`scripts/task-timeline/main.go` 直接从 `openpanda.db` 输出每个节点的任务迁移 ASCII 时间线，适合恢复审计。`docs/testing/distributed-lab-plan.md` 记录 beta→GA 前必须通过的三节点场景用例。
+- **分布式实验室工具箱**——`scripts/lab/generate-three-node.sh` 生成三个互相隔离的配置（物理 A/B + 一个 VM 节点），带独立身份、共享密钥与已预装 peer 列表；`scripts/scenario-model/main.go` 读取 YAML 目录给出调度/路由预测评分；`scripts/task-timeline/main.go` 直接从 `openpanda.db` 输出每个节点的任务迁移 ASCII 时间线，适合恢复审计。`docs/testing/distributed-lab-plan.md` 记录 GA 前必须通过的三节点场景用例（发布门禁）。
+- **入口模型决策缓存**——意图分类与监督判定命中磁盘缓存（`entry_cache`，迁移 v11，键为 prompt + 设备快照），相同输入直接跳过 LLM 调用。system prompt 分层（pi 风格）：精简常驻核心承载路由决策，记忆治理与详尽任务 JSON 层按需附加，稳定前缀可被服务商缓存。指挥官模型自身的 token 消耗计入委派指标（executor `entry:<model>`）。
+- **零配置 Web 引导**——`panda web` 无任何配置也能启动，queue/projects/nodes 立即可用；横幅提供一步式模型设置（API 类型 / base URL / 模型 / key，带实时连通性测试），保存即热加载引擎——无需重启就能开始第一次对话。
+- **更新器 changelog 摘要 + daemon 通知**——Web 控制台的更新卡片展示最新 release 的 changelog 摘要（下载/应用按钮旁的折叠笔记），无头 daemon 每 6 小时自动检查并在日志里提示新版本（每版本只提示一次，因为它无法自我应用更新）。
+- **场景化 FAQ**——`docs/faq.md` 按场景回答高频问题（入门步骤、模型报错解读、agent 适配器、tier-2 授权、review、scope drift、多设备组网、数据位置、升级）；`docs/README.md` 将用户指南与内部计划分开索引。
 
 ### 问题修复
 
@@ -34,10 +38,18 @@ Beta 快照：分布式节点发布。引擎现在区分物理节点与虚拟机
   3. `storage.Open()` 无论手工指定什么怪路径都会 `MkdirAll` 数据库的父目录。
   4. `panelStore()`（REPL、`panda web`、面板命令、queue/task 等入口共用）现在像 `runDaemon` 一样一次性创建完整存储目录。
   冒烟验证：用全新 HOME 从 `/` 下 `panda queue` → 自动创建用户数据目录并初始化 DB，输出队列为空。
+- **Anthropic 路径空 key 误诊**——非流式调用在未配置 key 时照样发出空 key 请求，把服务商的 401 报成「key 无效」而不是「未配置」。现在所有调用路径返回可操作的 `panda init` / Web 设置页提示；REPL 横幅内联标注未配 key 的模型；面板把配置缺口报为 503（与「引擎未配置」同类）而非服务器错误 500。
+- **tier-2 授权体验**——tier-2 拒绝现在附带可操作提示（`--authorize` 或能力卡 `tier: 1` 声明），并跳过重试预算直接进入 review：重试不可能产生授权。注册表驱动的凭证探测覆盖 Claude Code 新版 `~/.claude/config.json` + `settings.json` 位置。scope 解析只提取路径 token，自然语言描述（如「工作目录下的 haiku.txt」）不再对合法文件操作误报 drift。
+- **安装器 / 卸载器**——`install.sh` 支持断点续传（`curl -C -`），PATH 持久化与 `panda install` 写同一标记块，生成的 LaunchAgent/systemd 服务依赖 daemon 的配置自动发现而非硬编码 `--config`/`--card` 路径。`panda uninstall` 清扫发行前缀（bin/、adapters/、示例配置），拒绝动 Homebrew Cellar（keg 保持完整，提示 `brew uninstall openpanda`）与源码 checkout。
+- **任意 cwd 适配器解析**——从临时工作目录委派任务曾失败（"can't open file …/adapters/claude_code.py"）；解析器现在从 cwd 向上逐级定位 `adapters/` 并回退到绝对适配器路径。
+- **ask engine 设备可见性**——基于全新数据库构建的 ask engine 用 daemon 的稳定运行时 ID 自注册节点，入口模型不再在首次使用时看到空设备列表。
 
 ### 优化改进
 
 - `panda nodes` 输出新增 `Kind` 列（physical | vm），分布式部署一眼就能区分宿主机器节点与置备的 VM 身份。
+- **共享适配器 harness**——七个 agent 适配器共用一个 harness 库（`adapters/_harness.py`）处理 `{ok, result, exit_code}` 帧、参数解析与超时，削减每个适配器的样板代码。
+- **一问式 init**——`panda init` 只问一个问题（现在配置模型吗？），硬件探测自动填名称、资源等级、类型与 VM 身份（宿主探测为 guest 时）；`--defaults` / `--non-interactive` 连这一问都跳过。示例能力卡重写为真实 `ledger.Card` schema 并说明 agent tier 语义。
+- **默认模型切换为 `deepseek-v4-flash`**——`deepseek-chat`/`reasoner` 别名已于 2026-07-24 被服务商退役；pro 模型绝不作为默认（成本控制）。能力卡发现同时查找已解析配置文件旁边，与 daemon 的发现顺序一致。
 - README：新增「身份单例规则」小节，节点配置表补上 kind/identity 参考行，并首次在命令总览里带出 `panda nodes`。
 
 ## [0.0.3] - 2026-08-23

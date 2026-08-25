@@ -2,7 +2,13 @@
 
 OpenPanda project docs that are intentionally part of the public source tree.
 
-## Public documents
+## User guides
+
+- [`install.md`](install.md) — install guide: one-line script, Homebrew, Windows, source builds, auto-start services, uninstall/purge, release process, install troubleshooting. (中文)
+- [`faq.md`](faq.md) — FAQ by scenario: first steps, model configuration errors, agent adapters, task scheduling (tier-2 authorization, review, scope drift), multi-device networking, data locations, upgrades. (中文)
+- [`testing/distributed-lab-plan.md`](testing/distributed-lab-plan.md) — the three-node interop scenarios gating each release.
+
+## Internal documents
 
 - [`plans/roadmap-desktop-and-packaging.md`](plans/roadmap-desktop-and-packaging.md) — high-level roadmap for the desktop client & packaging pipeline.
 - [`plans/v0.0.4-followup-optimizations.md`](plans/v0.0.4-followup-optimizations.md) — post-v0.0.4-beta code-audit findings (installer P0 bug, model-call layer, adapter harness) and the v4 improvement plan with evidence.
