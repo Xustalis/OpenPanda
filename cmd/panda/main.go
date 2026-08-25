@@ -27,6 +27,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/updater"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 )
 
@@ -182,7 +183,7 @@ func parseSubcommand(args []string) (string, []string) {
 func runDaemon(args []string) {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml (default /etc/openpanda/config.yaml)")
-	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered ./capabilities.yaml or /etc/openpanda/capabilities.yaml)")
+	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered — ./capabilities.yaml, next to the resolved config, or /etc/openpanda/capabilities.yaml)")
 	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
@@ -333,6 +334,23 @@ func runDaemon(args []string) {
 		logger,
 	)
 	go reminderScan.Run(ctx)
+
+	// Self-update notices (v0.0.4 follow-up #5): the headless daemon
+	// cannot apply updates itself — there is no console to consent
+	// from — but it still checks periodically and logs a notice, so an
+	// operator reading the daemon log learns a release is waiting
+	// instead of discovering it on the next web visit.
+	updateNotice := updater.New(updater.Options{
+		Current: version,
+		Logger:  logger,
+		Idle:    func(ctx context.Context) bool { return coreNode.Idle(ctx) },
+		OnAvailable: func(v string) {
+			logger.Info("update available",
+				"version", v,
+				"hint", "open the web console (系统 → 更新) to review the changelog and apply")
+		},
+	})
+	updateNotice.StartAutoCheck(ctx, 6*time.Hour)
 
 	if err := coreNode.Register(ctx); err != nil {
 		fatal("register node", err)
@@ -498,7 +516,7 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "setup:")
 	fmt.Fprintln(w, "  install|uninstall                         put panda on PATH / remove it")
-	fmt.Fprintln(w, "  init                                      interactive first-run setup")
+	fmt.Fprintln(w, "  init [--defaults|--non-interactive]      first-run setup (one question; flags = zero prompts)")
 	fmt.Fprintln(w, "  doctor                                    post-install self-check")
 	fmt.Fprintln(w, "  detect                                    scan hardware → capabilities.yaml draft")
 	fmt.Fprintln(w, "  version|help                              version / this help")

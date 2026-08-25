@@ -14,8 +14,13 @@ Group=openpanda
 WorkingDirectory=/opt/openpanda
 # 共享密钥经 EnvironmentFile 注入（不写入 config.yaml，避免密钥进 git）
 EnvironmentFile=/opt/openpanda/openpanda.env
-# 以绝对路径启动；daemon 输出 JSON 日志到 stderr，由 journald 收集
-ExecStart=/opt/openpanda/panda daemon --config /opt/openpanda/config.yaml --card /opt/openpanda/capabilities.yaml
+# 嵌入式节点的 config 不在用户级自动发现链上（OPENPANDA_CONFIG_PATH →
+# 用户级 → /etc/openpanda），故经环境变量显式指定——daemon 的 ResolvePath
+# 第一优先级就是它；能力卡由 WorkingDirectory 下的 capabilities.yaml 自动发现。
+Environment="OPENPANDA_CONFIG_PATH=/opt/openpanda/config.yaml"
+# 以绝对路径启动（不带 --config/--card，与 install.sh / deploy 模板一致）；
+# daemon 输出 JSON 日志到 stderr，由 journald 收集
+ExecStart=/opt/openpanda/panda daemon
 # 崩溃自动重启，5s 退避（嵌入式节点资源有限，不设过激进的重试）
 Restart=on-failure
 RestartSec=5

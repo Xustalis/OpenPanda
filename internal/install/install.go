@@ -1,7 +1,8 @@
 // Package install implements `panda install` / `panda uninstall` /
 // `panda doctor`: placing the binary on PATH (persistently, per-OS), and a
 // whitelist-based uninstall that backs up and removes only OpenPanda-owned
-// state while preserving user assets (projects, memory, skills, work).
+// state while preserving user assets (projects, memory, skills, work) —
+// unless the user passes --purge and survives its second confirmation.
 //
 // Safety model: uninstall never walks the filesystem looking for things to
 // delete. Every deletion candidate is derived from explicit inputs (the
@@ -232,6 +233,89 @@ func ownedConfigRoots(installDir string) []string {
 	return roots
 }
 
+// distributionPrefix resolves the running binary through PATH symlinks and,
+// when it sits in a <prefix>/bin directory with an adapters/ sibling, reports
+// that prefix — the layout install.sh, the self-updater, and the Homebrew
+// formula all produce.
+func distributionPrefix(exePath string) (string, bool) {
+	if exePath == "" {
+		return "", false
+	}
+	real := exePath
+	if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
+		real = resolved
+	}
+	dir := filepath.Dir(real)
+	if filepath.Base(dir) != "bin" {
+		return "", false
+	}
+	prefix := filepath.Dir(dir)
+	if st, err := os.Stat(filepath.Join(prefix, "adapters")); err != nil || !st.IsDir() {
+		return "", false
+	}
+	return prefix, true
+}
+
+// SweepablePrefix reports the distribution prefix when it is safe for the
+// uninstall to sweep it: not a Homebrew Cellar (brew owns those files) and
+// not a source checkout (go.mod / .git beside a locally built bin/panda —
+// the dev repo layout, where adapters/ belongs to git, not to us).
+func SweepablePrefix(exePath string) (string, bool) {
+	prefix, ok := distributionPrefix(exePath)
+	if !ok || underHomebrew(prefix) || looksLikeCheckout(prefix) {
+		return "", false
+	}
+	return prefix, true
+}
+
+// underHomebrew reports whether prefix lives inside a Homebrew Cellar, where
+// the package manager owns the files.
+func underHomebrew(prefix string) bool {
+	for dir := filepath.Clean(prefix); ; dir = filepath.Dir(dir) {
+		if filepath.Base(dir) == "Cellar" {
+			return true
+		}
+		if dir == string(filepath.Separator) || dir == "" || filepath.Dir(dir) == dir {
+			return false
+		}
+	}
+}
+
+// looksLikeCheckout guards the prefix sweep: a Go checkout of this project
+// (go.mod / .git at the root, adapters/ beside a locally built bin/panda)
+// must not be treated as an installed distribution.
+func looksLikeCheckout(prefix string) bool {
+	for _, marker := range []string{"go.mod", ".git"} {
+		if _, err := os.Stat(filepath.Join(prefix, marker)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// distributionEntries lists the release archive's layout inside a
+// distribution prefix: the binary dir, the adapters, and the example
+// configs / license it drops. Anything else in the prefix (e.g. Linux XDG
+// storage roots) is not ours and stays.
+func distributionEntries(prefix string) []string {
+	entries := []string{
+		filepath.Join(prefix, "bin"),
+		filepath.Join(prefix, "adapters"),
+	}
+	for _, name := range []string{
+		"config.example.yaml",
+		"capabilities.example-desktop.yaml",
+		"capabilities.example-edge.yaml",
+		"LICENSE",
+		"README.md",
+	} {
+		if _, err := os.Stat(filepath.Join(prefix, name)); err == nil {
+			entries = append(entries, filepath.Join(prefix, name))
+		}
+	}
+	return entries
+}
+
 // Scan builds the full uninstall plan. Deletion candidates outside the
 // whitelist, or overlapping home / user assets, are downgraded to keep —
 // the function never upgrades anything to Delete, so it cannot manufacture
@@ -241,6 +325,16 @@ func Scan(in PlanInput) []Target {
 	home, _ := os.UserHomeDir()
 	home = filepath.Clean(home)
 
+	// A Homebrew install: brew owns the whole Cellar keg — the binary, the
+	// adapters, the PATH symlink `brew link` created. Deleting any of it
+	// directly leaves a broken keg brew still tracks, so every candidate that
+	// lives inside (or resolves into) the Cellar is kept with the hint that
+	// the real removal is `brew uninstall openpanda`.
+	brewPrefix := ""
+	if prefix, isPrefix := distributionPrefix(in.ExePath); isPrefix && underHomebrew(prefix) {
+		brewPrefix = prefix
+	}
+
 	// 1. Binaries: the installed copy and, if different, the invoked one.
 	seenBinary := map[string]bool{}
 	for _, b := range []string{filepath.Join(in.InstallDir, ExeName()), in.ExePath} {
@@ -249,7 +343,29 @@ func Scan(in PlanInput) []Target {
 		}
 		b = filepath.Clean(b)
 		seenBinary[b] = true
+		if resolvesInto(b, brewPrefix) {
+			targets = append(targets, mkTarget(b, KindBinary, false,
+				"managed by Homebrew — run `brew uninstall openpanda`"))
+			continue
+		}
 		targets = append(targets, mkTarget(b, KindBinary, true, ""))
+	}
+
+	// 1b. Distribution prefix (install.sh / self-update layout): the binary
+	// resolved through the PATH symlink sits at <prefix>/bin/panda with
+	// adapters/ beside it. Those distribution entries are ours to sweep; the
+	// prefix itself is only rmdir'd afterwards when left empty (the caller),
+	// so Linux XDG storage roots sharing the prefix survive.
+	if prefix, ok := SweepablePrefix(in.ExePath); ok {
+		for _, entry := range distributionEntries(prefix) {
+			if entry = filepath.Clean(entry); !seenBinary[entry] {
+				seenBinary[entry] = true
+				targets = append(targets, mkTarget(entry, KindBinary, true, ""))
+			}
+		}
+	} else if brewPrefix != "" {
+		targets = append(targets, mkTarget(brewPrefix, KindBinary, false,
+			"managed by Homebrew — run `brew uninstall openpanda`"))
 	}
 
 	// 2. PATH persistence (informational; removal goes through the
@@ -388,6 +504,25 @@ func within(child, parent string) bool {
 	return err == nil && rel != "." && !strings.HasPrefix(rel, "..")
 }
 
+// resolvesInto reports whether path itself, or whatever it symlinks to, lives
+// inside parent. It is how the Homebrew guard catches both the Cellar binary
+// and the /opt/homebrew/bin PATH link brew's `brew link` created. An empty
+// parent (no brew install) is never a match; so is a path that cannot be
+// resolved (missing file) — mkTarget then reports it as non-existent.
+func resolvesInto(path, parent string) bool {
+	if parent == "" || path == "" {
+		return false
+	}
+	if within(filepath.Clean(path), parent) {
+		return true
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	return within(real, parent)
+}
+
 func cleanAbs(p string) string {
 	if p == "" {
 		return ""
@@ -408,10 +543,12 @@ func tern(cond bool, a, b string) string {
 
 // ---- backup ----
 
-// BackupZip writes the existing delete-kind targets (data/config — never the
-// binary, never rc entries) into a zip so an uninstall is reversible. Files
-// that vanished between Scan and execution are skipped silently. Returns the
-// number of files archived.
+// BackupZip archives the given targets into a zip so an uninstall is
+// reversible. Which items land in the archive is the caller's decision: a
+// normal uninstall passes the delete-kind targets (data/config), a --purge
+// run also passes the user-asset targets that are about to die. The binary
+// and PATH entries are never archived; files that vanished between Scan and
+// execution are skipped silently. Returns the number of files archived.
 func BackupZip(dest string, targets []Target) (int, error) {
 	f, err := os.Create(dest)
 	if err != nil {
@@ -421,7 +558,7 @@ func BackupZip(dest string, targets []Target) (int, error) {
 	zw := zip.NewWriter(f)
 	count := 0
 	for _, t := range targets {
-		if !t.Delete || !t.Exists || (t.Kind != KindData && t.Kind != KindConfig) {
+		if !t.Exists || t.Kind == KindBinary || t.Kind == KindPath {
 			continue
 		}
 		root := filepath.Base(t.Path)
@@ -474,4 +611,119 @@ func RemoveOne(path string) error {
 		return os.RemoveAll(path)
 	}
 	return os.Remove(path)
+}
+
+// ---- execution ----
+
+// UninstallOptions drives ExecuteUninstall.
+type UninstallOptions struct {
+	// BackupPath is where the backup zip is written; empty skips the backup.
+	BackupPath string
+	// Purge additionally deletes the user-asset targets (memory/projects/
+	// skills/work). The caller owns the double confirmation — this field is
+	// the result of the second prompt, never a default.
+	Purge bool
+	// BackupOnly writes the backup and returns without deleting anything.
+	BackupOnly bool
+}
+
+// UninstallOutcome reports what an ExecuteUninstall run did. Individual
+// failures are collected in Failed rather than aborting the run — the
+// uninstall report surfaces them at the end.
+type UninstallOutcome struct {
+	BackupFiles int
+	BackupErr   error
+	Deleted     []Target // OpenPanda-owned items removed
+	Purged      []Target // user-asset dirs removed (--purge)
+	Kept        []Target // items the run left on disk
+	Failed      []string // "path (error)" entries
+}
+
+// isAssetKind reports whether kind marks a user-asset target.
+func isAssetKind(kind string) bool {
+	return kind == KindMemory || kind == KindProject || kind == KindSkill || kind == KindWork
+}
+
+// ExecuteUninstall runs the backup + deletion phases of an uninstall over a
+// scanned plan. It deletes exactly what the plan marked Delete — minus the
+// PATH entries, which the caller removes through the per-OS rc editors —
+// and, when Purge is set, the user-asset targets. Purge candidates are
+// guarded here as well: an asset path that is empty, a filesystem root, the
+// home directory, or an ancestor of it is kept regardless of the flag.
+// BackupOnly stops after the backup so nothing is removed.
+func ExecuteUninstall(targets []Target, opt UninstallOptions) UninstallOutcome {
+	var out UninstallOutcome
+	home, _ := os.UserHomeDir()
+	home = filepath.Clean(home)
+
+	// Purge candidates up front: the user-asset targets, minus anything the
+	// purge guardrails refuse to touch — so the backup archives exactly the
+	// assets that will die (never, say, the whole home directory).
+	var purgeList []Target
+	if opt.Purge {
+		for _, t := range targets {
+			if !isAssetKind(t.Kind) || !t.Exists {
+				continue
+			}
+			if reason := purgeGuard(t.Path, home); reason != "" {
+				t.Reason = reason
+				out.Kept = append(out.Kept, t)
+				continue
+			}
+			purgeList = append(purgeList, t)
+		}
+	}
+
+	if opt.BackupPath != "" {
+		var archive []Target
+		for _, t := range targets {
+			if t.Exists && t.Delete && (t.Kind == KindData || t.Kind == KindConfig) {
+				archive = append(archive, t)
+			}
+		}
+		// The assets are about to die too — they must be recoverable.
+		archive = append(archive, purgeList...)
+		n, err := BackupZip(opt.BackupPath, archive)
+		out.BackupFiles = n
+		out.BackupErr = err
+	}
+	if opt.BackupOnly {
+		return out
+	}
+	for _, t := range targets {
+		switch {
+		case t.Kind == KindPath:
+			continue // handled by the caller via RemovePATHPersistence
+		case !t.Delete:
+			if !opt.Purge || !isAssetKind(t.Kind) {
+				out.Kept = append(out.Kept, t)
+			}
+		default:
+			if err := RemoveOne(t.Path); err != nil {
+				out.Failed = append(out.Failed, fmt.Sprintf("%s (%v)", t.Path, err))
+			} else if t.Exists {
+				out.Deleted = append(out.Deleted, t)
+			}
+		}
+	}
+	for _, t := range purgeList {
+		if err := RemoveOne(t.Path); err != nil {
+			out.Failed = append(out.Failed, fmt.Sprintf("%s (%v)", t.Path, err))
+		} else {
+			out.Purged = append(out.Purged, t)
+		}
+	}
+	return out
+}
+
+// purgeGuard returns a non-empty reason when a purge candidate must not be
+// deleted: a filesystem root, the home directory, or anything containing it.
+func purgeGuard(path, home string) string {
+	switch {
+	case path == "" || path == "." || path == string(filepath.Separator):
+		return "refusing to touch a filesystem root"
+	case home != "" && (path == home || within(home, path)):
+		return "overlaps the home directory"
+	}
+	return ""
 }

@@ -178,6 +178,7 @@ function UpdateCard() {
       {stage === 'available' && (
         <div class="update-actions">
           <p class="update-note">{t('system.updateAvailable', { latest: status.latest ?? '' })}</p>
+          <UpdateNotes notes={status.notes} />
           <button class="btn" disabled={busy} onClick={() => void act(() => api.downloadUpdate())}>
             {t('system.updateDownload')}
           </button>
@@ -187,6 +188,7 @@ function UpdateCard() {
       {stage === 'staged' && (
         <div class="update-actions">
           <p class="update-note">{t('system.updateStaged', { latest: status.latest ?? '' })}</p>
+          <UpdateNotes notes={status.notes} />
           {status.idle ? (
             <button class="btn" disabled={busy} onClick={() => void act(() => api.applyUpdate())}>
               {t('system.updateApply')}
@@ -218,6 +220,18 @@ function UpdateCard() {
         {t('system.updateCurrent')}: <span class="mono">{status.current}</span>
       </p>
     </div>
+  )
+}
+
+/** The latest release's changelog digest — plain lines under a small heading,
+ *  shown only when there is something to show. */
+function UpdateNotes({ notes }: { notes?: string }) {
+  if (!notes) return null
+  return (
+    <details class="update-notes">
+      <summary class="dim">{t('system.updateNotesTitle')}</summary>
+      <pre>{notes}</pre>
+    </details>
   )
 }
 
