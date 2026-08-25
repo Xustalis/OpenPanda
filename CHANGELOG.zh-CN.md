@@ -14,12 +14,18 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 每条记录以一至三行写明变更内容与用户可见的影响；必要时标注引入该变更的提交，便于追溯。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
-## [Unreleased]
+## [0.0.5] - 2026-08-25
 
-0.0.4 GA 当天的补丁，来自首次真实三设备安装的反馈：两项安装器健壮性修复 + 一项 Windows 数据安全修复。（0.0.5 tag 曾短暂发布后撤回——GA 门禁未过；以上修复待并入下一个正式版本。）
+0.0.4 GA 的补丁版，来自首次真实三设备实验室（macOS + 香橙派 + Windows）的反馈：跨设备调度不完整、若干运行时状态自述错误、首次安装暴露的安装器与 Windows 数据安全问题。以下全部修复均已在真实硬件上验证后才发布。
 
 ### 问题修复
 
+- **队列任务支持跨设备路由。** `panda task add` 与 Web 控制台创建的任务此前只由*发起*节点认领执行——当任务所需能力只在其他设备上有时直接失败。队列调度器现在采用与 `panda ask` 相同的根调度策略：本节点无法满足所需能力时，认领会改派给有能力的 peer，peer 的结果回填发起节点的任务行。`panda task add` 新增 `--requires` 声明任务所需能力。
+- **Tier-2 授权随委派传递。** `--authorize` 的授权此前只在提交节点本地生效——委派到 peer 的 agent 任务到了执行节点会被防御层拒绝，即使用户已经批准过。授权现在随认证总线传递，执行节点照常放行。
+- **被锁死的 agent CLI 不再吸引路由。** 能力卡是静态的，但已安装的 CLI 可能不可用（如 `claude.exe` 存在但无登录态、节点又没配模型 key）：路由过去只会换来长时间挂起后失败。本地回退链与宣告给 peer 的能力摘要现在都会检查可用性——CLI 在 PATH *且* 模型可达（自带凭证或可注入）——此类节点会被提前跳过。
+- **`panda web` 端口被占不再报错退出。** 第二次 `/web`（或残留进程）此前报 `bind: address already in use`；控制台现在自动换到相邻端口并明确提示。会话 token 不再打印——浏览器直接带凭证打开；`/web` 已在运行时会重新打开已登录的浏览器而不是只打印 URL。`--no-browser` 仍打印带 token 的 URL 供手动使用。
+- **Peer hello 上报真实版本号。** 节点此前广播硬编码的 `0.1.0-dev`，混合版本集群里 `panda nodes` 显示的版本全是错的。三条 hello 路径统一上报 `version.Version`。
+- **配置文件旁的能力卡优先于 `./capabilities.yaml`。** 在恰好含有 capabilities.yaml 的目录（仓库检出、其他节点的卡）启动 daemon 会静默加载错误的卡。现在优先加载 init 写在配置文件旁边的卡；`--card` 显式指定仍然最高。
 - **Windows 数据目录不再与安装目录冲突。** 原默认数据目录为 `%LOCALAPPDATA%\openpanda`，而安装器写入 `%LOCALAPPDATA%\OpenPanda`——在大小写不敏感的 NTFS 上两者是同一目录，数据库、记忆与项目全部落在安装前缀*内部*，卸载时会一并清扫。数据目录现改为 `%LOCALAPPDATA%\openpanda-data`。从 0.0.4 升级的 Windows 节点将以全新存储启动（旧数据本就位于安装前缀内，按设计不保证在卸载后幸存）。
 - **安装器可在 GitHub API 限流下工作。** `api.github.com` 对未认证请求的限额为每 IP 每小时 60 次；耗尽时，两个安装器都会改走 `/releases/latest` 的 302 重定向解析最新版本（该端点不受同样限制）。用 `--version` / `-Version` 手动指定版本的方式保持不变。
 - **`install.ps1` 在 Windows PowerShell 5.1 无法访问 GitHub 的机器上可用。** 脚本现在开头强制 TLS 1.2，优先使用系统自带的 `curl.exe`（Windows 10 1803+）下载并以 `Invoke-WebRequest` 兜底，并补充超时——损坏的 WinINET 代理配置会快速失败而不是长时间挂起。

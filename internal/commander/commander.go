@@ -48,7 +48,10 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 		preferred:      routing.PreferredAgents,
 	}
 	r.runAdapter = r.runAdapterDefault
-	r.probeAgent = defaultAgentProbe
+	// The production probe is credential-aware (AgentViable), not just a
+	// PATH check: routing to an installed-but-locked-out CLI guarantees a
+	// runtime failure after a long hang.
+	r.probeAgent = r.AgentViable
 	return r
 }
 
@@ -458,4 +461,36 @@ func defaultAgentProbe(name string, ag ledger.Agent) bool {
 	}
 	_, err := exec.LookPath(bin)
 	return err == nil
+}
+
+// AgentViable reports whether an agent can actually execute on this machine:
+// its CLI resolves on PATH AND it can reach a model — either its own
+// credentials (registry manifest) or panda's configured model via injection.
+// An installed-but-locked-out CLI (e.g. claude.exe without login state on a
+// node with no model key) fails only after minutes of runtime hang; probing
+// viability up front keeps both the local fallback chain and the capability
+// summary peers route on from ever selecting such an agent.
+func (r *Router) AgentViable(name string, ag ledger.Agent) bool {
+	bin := agentBinary(name, ag)
+	if bin != "" {
+		if _, err := exec.LookPath(bin); err != nil {
+			return false
+		}
+	}
+	// Unknown adapters keep the legacy "let the adapter try" behavior: their
+	// credential contract is not in the registry, so viability cannot be
+	// judged here.
+	if _, known := agents.ByAdapter(ag.Adapter); !known {
+		return true
+	}
+	if own, _ := probeAgentCredentials(ag.Adapter); own {
+		return true
+	}
+	// No credentials of its own: the agent runs only when panda's model can
+	// be injected into it — strategy allows it, a key is configured, and the
+	// registry declares a safe env mapping for the adapter.
+	if r.injectionModel == config.InjectionModelNever {
+		return false
+	}
+	return r.model.APIKey != "" && supportsModelInjection(ag.Adapter, r.model)
 }

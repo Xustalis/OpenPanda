@@ -25,6 +25,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/util"
+	"github.com/Xustalis/OpenPanda/internal/version"
 )
 
 // Peer is an established connection to another node.
@@ -566,7 +567,7 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 	ts := time.Now().Unix()
 	env, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, bus.HelloPayload{
 		NodeID: c.nodeID,
-		Ver:    "0.1.0-dev",
+		Ver:    version.Version,
 		Card:   card,
 		Ts:     ts,
 		Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
@@ -709,7 +710,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 			if msgID, err := newUUID(); err == nil {
 				if envOut, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, bus.HelloPayload{
 					NodeID: c.nodeID,
-					Ver:    "0.1.0-dev",
+					Ver:    version.Version,
 					Card:   card,
 					Ts:     ts,
 					Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
@@ -752,7 +753,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	ts := time.Now().Unix()
 	if err := c.reply(ctx, env, bus.MsgHello, bus.HelloPayload{
 		NodeID: c.nodeID,
-		Ver:    "0.1.0-dev",
+		Ver:    version.Version,
 		Card:   card,
 		Ts:     ts,
 		Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
@@ -819,6 +820,13 @@ func (c *Core) summary() ledger.CapabilitySummary {
 	}
 	s.AgentCaps = make(map[string][]string, len(c.card.Agents))
 	for name, ag := range c.card.Agents {
+		// Advertise only agents that can actually run here (CLI present and
+		// a reachable model — own credentials or injection). A card entry
+		// whose CLI is installed but locked out would otherwise attract
+		// cross-device routing and fail at runtime after a long hang.
+		if c.router != nil && !c.router.AgentViable(name, ag) {
+			continue
+		}
 		s.AgentCaps[name] = ag.Capabilities
 	}
 	for _, m := range c.card.Manual {
