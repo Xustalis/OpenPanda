@@ -133,6 +133,49 @@ func TestResolveAdapterDirEnvOverride(t *testing.T) {
 	}
 }
 
+// TestResolveAdapterDirWalksUpFromCwd covers repo-subdir runs: `panda` started
+// from webui/ (or any nested checkout dir) must still find the checkout's
+// adapters/ by walking up from the process cwd, without the env override.
+func TestResolveAdapterDirWalksUpFromCwd(t *testing.T) {
+	root := t.TempDir()
+	adapters := filepath.Join(root, "adapters")
+	if err := os.MkdirAll(adapters, 0o755); err != nil {
+		t.Fatalf("mkdir adapters: %v", err)
+	}
+	nested := filepath.Join(root, "webui", "app")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	oldDir := adapterDir
+	adapterDir = "adapters" // the production default
+	defer func() { adapterDir = oldDir }()
+	t.Chdir(nested)
+
+	if got := resolveAdapterDir(); got != adapters {
+		t.Fatalf("resolveAdapterDir from %q = %q, want ancestor %q", nested, got, adapters)
+	}
+}
+
+// TestResolveAdapterDirFallsBackToCwdAbsolute verifies the no-match fallback
+// is a stable cwd-absolute path, not the bare relative name the sandbox would
+// re-resolve against the task directory (the old failure mode printed
+// <task-workdir>/adapters/<name>.py and hid the real location).
+func TestResolveAdapterDirFallsBackToCwdAbsolute(t *testing.T) {
+	empty := t.TempDir()
+	oldDir := adapterDir
+	adapterDir = "adapters"
+	defer func() { adapterDir = oldDir }()
+	t.Chdir(empty)
+
+	got := resolveAdapterDir()
+	if !filepath.IsAbs(got) {
+		t.Fatalf("resolveAdapterDir fallback = %q, want absolute", got)
+	}
+	if want := filepath.Join(empty, "adapters"); got != want {
+		t.Fatalf("resolveAdapterDir fallback = %q, want %q", got, want)
+	}
+}
+
 // slowAdapter reads the request and then sleeps far past any test budget,
 // simulating an adapter that ignores the advertised timeout_s.
 const slowAdapter = `#!/usr/bin/env python3

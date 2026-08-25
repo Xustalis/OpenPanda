@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/executil"
 	"github.com/Xustalis/OpenPanda/internal/security"
@@ -140,9 +141,11 @@ const adapterDirEnv = "OPENPANDA_ADAPTER_DIR"
 // beside the running binary without re-deriving the resolution rules.
 func AdapterDir() string { return resolveAdapterDir() }
 
-// resolveAdapterDir absolutizes a relative adapterDir when an adapters/ dir
-// exists beside the cwd or the executable; otherwise the relative name stands
-// (the spawn error then names the missing path naturally).
+// resolveAdapterDir absolutizes a relative adapterDir by probing, in order:
+// the process cwd, each ancestor of the cwd (repo-subdir runs), and the
+// directories beside the running binary (packaged installs). If nothing
+// matches, the cwd-absolute path stands so the spawn error names a stable
+// path instead of one re-resolved against the sandbox's task cwd.
 func resolveAdapterDir() string {
 	if override := strings.TrimSpace(os.Getenv(adapterDirEnv)); override != "" {
 		if filepath.IsAbs(override) {
@@ -162,6 +165,14 @@ func resolveAdapterDir() string {
 		if st, err := os.Stat(abs); err == nil && st.IsDir() {
 			return abs
 		}
+		// Walk up from the cwd: `panda` started anywhere inside a repo checkout
+		// (e.g. webui/) still finds the repo's adapters/ without the env var.
+		for dir := filepath.Dir(abs); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+			cand := filepath.Join(dir, "adapters")
+			if st, err := os.Stat(cand); err == nil && st.IsDir() {
+				return cand
+			}
+		}
 	}
 	if exe, err := os.Executable(); err == nil {
 		for _, cand := range adapterCandidateDirs(exe) {
@@ -169,6 +180,12 @@ func resolveAdapterDir() string {
 				return cand
 			}
 		}
+	}
+	// No adapters/ found anywhere: keep the cwd-absolute path so the spawn
+	// error names a stable location instead of one re-resolved against the
+	// sandbox's task directory (which would mislead diagnosis).
+	if abs, err := filepath.Abs(adapterDir); err == nil {
+		return abs
 	}
 	return adapterDir
 }
@@ -235,44 +252,35 @@ func modelEnv(model config.ModelConfig) []string {
 	return modelEnvForAdapter(model, "claude_code.py")
 }
 
-// modelEnvForAdapter maps PANDA's provider config only to an adapter contract
-// that is exact and testable. Unsupported mappings return no override.
+// modelEnvForAdapter maps PANDA's provider config onto the adapter's env
+// contract declared in the agent registry (credential manifest); adapters
+// without a declared mapping — or a config the mapping cannot carry — get no
+// override. The DeepSeek flash guard applies here too (effectiveModelName):
+// deepseek-v4-pro is never injected on any path.
 func modelEnvForAdapter(model config.ModelConfig, adapter string) []string {
-	base := model.BaseURL
-	if base == "" {
-		base = "https://api.deepseek.com/anthropic"
-	}
-	name := model.Model
-	if name == "" {
-		name = "deepseek-chat"
-	}
-	switch adapter {
-	case "claude_code.py":
-		if model.NormalizedAPIType() != config.APITypeAnthropic {
-			return nil
-		}
-		return []string{
-			"ANTHROPIC_BASE_URL=" + base,
-			"ANTHROPIC_API_KEY=" + model.APIKey,
-			"ANTHROPIC_MODEL=" + name,
-		}
-	default:
+	if !supportsModelInjection(adapter, model) {
 		return nil
+	}
+	k, _ := agents.ByAdapter(adapter)
+	return []string{
+		k.ModelEnv.BaseURL + "=" + effectiveBaseURL(model),
+		k.ModelEnv.APIKey + "=" + model.APIKey,
+		k.ModelEnv.Model + "=" + effectiveModelName(model),
 	}
 }
 
 // adapterCredentialEnv preserves only credentials explicitly belonging to the
-// selected adapter. Sandbox.Apply clears the parent environment, so without
-// this bridge native Claude/Codex credentials detected by InjectionDecision
-// would disappear before the CLI starts.
+// selected adapter, per its registry credential manifest. Sandbox.Apply
+// clears the parent environment, so without this bridge native Claude/Codex
+// credentials detected by InjectionDecision would disappear before the CLI
+// starts.
 func adapterCredentialEnv(adapter string) []string {
-	keys := map[string][]string{
-		"claude_code.py": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
-		"codex.py":       {"OPENAI_API_KEY"},
-		"opencode.py":    {"ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
-	}[adapter]
+	k, ok := agents.ByAdapter(adapter)
+	if !ok {
+		return nil
+	}
 	var out []string
-	for _, key := range keys {
+	for _, key := range k.CredentialEnvVars {
 		if value := os.Getenv(key); value != "" {
 			out = append(out, key+"="+value)
 		}

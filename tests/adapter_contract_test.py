@@ -4,6 +4,9 @@
 These tests never call a real provider. They put a deterministic fake CLI first
 on PATH, run the actual adapter script, and assert the adapter's subprocess
 argv, cwd, environment, progress stream, timeout result, and JSON reduction.
+The HarnessContractTest cases drive the shared runtime (adapters/_harness.py)
+directly: request parsing, the unified result envelope, exit-code passthrough,
+and the timeout process-tree kill.
 """
 import json
 import os
@@ -12,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -43,6 +47,21 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=5):
         lines = [line for line in proc.stderr.splitlines() if line.strip()]
         payload = json.loads(proc.stdout.strip())
         return payload, lines, tmp
+
+
+def run_harness(body, stdin_data="", env=None, timeout=5):
+    """Run a snippet against adapters/_harness.py directly and return
+    (stdout payload, completed process)."""
+    code = ("import sys; sys.path.insert(0, %r); import _harness; " % str(ADAPTERS)) + body
+    merged = os.environ.copy()
+    if env:
+        merged.update(env)
+    proc = subprocess.run(
+        [sys.executable, "-c", code], input=stdin_data, text=True,
+        capture_output=True, env=merged, cwd=str(ROOT), timeout=timeout,
+    )
+    payload = json.loads(proc.stdout.strip()) if proc.stdout.strip() else None
+    return payload, proc
 
 
 class AdapterContractTest(unittest.TestCase):
@@ -118,6 +137,107 @@ time.sleep(10)
         )
         self.assertFalse(payload["ok"], payload)
         self.assertEqual(payload["exit_code"], 124)
+
+
+class HarnessContractTest(unittest.TestCase):
+    """Direct contracts for the shared runtime adapters/_harness.py."""
+
+    def test_read_request_parses_contract(self):
+        req = {"prompt": "hi there", "timeout_s": 7, "cwd": "/tmp"}
+        payload, proc = run_harness(
+            "p, t, c = _harness.read_request(); _harness.emit(True, p, t)",
+            stdin_data=json.dumps(req),
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "hi there")
+        self.assertEqual(payload["exit_code"], 7)
+        self.assertEqual(proc.returncode, 0)
+
+    def test_invalid_request_json_is_reported(self):
+        payload, proc = run_harness(
+            "_harness.read_request()", stdin_data="not json {{{")
+        self.assertFalse(payload["ok"], payload)
+        self.assertEqual(payload["result"], "invalid request JSON")
+        self.assertEqual(payload["exit_code"], 2)
+        self.assertEqual(proc.returncode, 0)
+
+    def test_run_simple_passes_exit_code_through(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            write_executable(tmp / "failcli", r'''
+import sys
+print("boom output")
+sys.exit(3)
+''')
+            payload, _ = run_harness(
+                "_harness.run_simple([%r])" % str(tmp / "failcli"))
+            self.assertFalse(payload["ok"], payload)
+            self.assertEqual(payload["exit_code"], 3)
+            self.assertEqual(payload["result"], "boom output")
+
+    def test_run_simple_falls_back_to_stderr_diagnosis(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            write_executable(tmp / "errcli", r'''
+import sys
+sys.stderr.write("diagnosis text")
+sys.exit(1)
+''')
+            payload, _ = run_harness(
+                "_harness.run_simple([%r])" % str(tmp / "errcli"))
+            self.assertFalse(payload["ok"], payload)
+            self.assertEqual(payload["exit_code"], 1)
+            self.assertEqual(payload["result"], "diagnosis text")
+
+    def test_run_simple_missing_binary_is_reported(self):
+        payload, _ = run_harness(
+            "_harness.run_simple(['definitely-not-on-path-xyz'])")
+        self.assertFalse(payload["ok"], payload)
+        self.assertEqual(payload["exit_code"], 127)
+        self.assertEqual(payload["result"], "definitely-not-on-path-xyz binary not found")
+
+    def test_timeout_kills_whole_process_tree(self):
+        """The watchdog timeout must kill the CLI AND its children: the child
+        keeps appending heartbeat lines while alive, so the tree kill is
+        proven by the heartbeats stopping."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            heartbeat = tmp / "hb.log"
+            write_executable(tmp / "treechild", r'''
+import os, time
+path = os.environ["TREE_HB"]
+while True:
+    with open(path, "a") as f:
+        f.write("tick\n")
+    time.sleep(0.1)
+''')
+            write_executable(tmp / "treecli", r'''
+import os, subprocess, sys, time
+subprocess.Popen([sys.executable, os.environ["TREE_CHILD"]])
+time.sleep(60)
+''')
+            payload, _ = run_harness(
+                "_harness.run_simple([%r], timeout=2, label='treecli')"
+                % str(tmp / "treecli"),
+                env={"TREE_CHILD": str(tmp / "treechild"),
+                     "TREE_HB": str(heartbeat)},
+                timeout=6,
+            )
+            self.assertFalse(payload["ok"], payload)
+            self.assertEqual(payload["exit_code"], 124)
+            self.assertEqual(payload["result"], "treecli timed out")
+
+            def ticks():
+                return len(heartbeat.read_text().splitlines()) if heartbeat.exists() else 0
+
+            # The grandchild ran (heartbeats accumulated during the 2s run)…
+            time.sleep(0.8)
+            first = ticks()
+            self.assertGreater(first, 0, "grandchild never started")
+            # …and died with the tree instead of outliving the timeout.
+            time.sleep(0.8)
+            self.assertEqual(ticks(), first,
+                             "grandchild survived the process-tree kill")
 
 
 if __name__ == "__main__":
