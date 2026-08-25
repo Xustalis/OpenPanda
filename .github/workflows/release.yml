@@ -45,10 +45,58 @@ jobs:
       - name: Render checksum-pinned Homebrew formula
         run: ./scripts/render-homebrew-formula.sh "${GITHUB_REF_NAME#v}"
 
+      - name: Extract release notes from CHANGELOG.md
+        # Pull the tagged version's section out of the canonical changelog so
+        # the GitHub Release body mirrors it (generate_release_notes alone
+        # only lists commits, which told users nothing in 0.0.5). Append the
+        # standard install commands — the release page is where new users
+        # land first. Full section headers ("## [X.Y.Z]") are demoted one
+        # level so the body renders with sane hierarchy.
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          notes="dist/release-notes.md"
+          mkdir -p dist
+          awk -v ver="$ver" '
+            $0 ~ "^## \\[" ver "\\]" { in_section=1; sub(/^## /, "### "); print; next }
+            in_section && /^## \[/ { in_section=0 }
+            in_section && /^### / { sub(/^### /, "#### "); print; next }
+            in_section { print }
+          ' CHANGELOG.md > "$notes"
+          if [ ! -s "$notes" ]; then
+            echo "CHANGELOG.md has no section for $ver — refusing to publish an empty body" >&2
+            exit 1
+          fi
+          cat >> "$notes" <<'INSTALL'
+
+          ---
+
+          ## Install / 升级
+
+          **macOS / Linux**
+
+          ```sh
+          curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh
+          ```
+
+          **Windows (PowerShell)**
+
+          ```powershell
+          irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 | iex
+          ```
+
+          **macOS (Homebrew)**
+
+          ```sh
+          brew install Xustalis/openpanda/openpanda
+          ```
+
+          安装后运行 `panda init` 初始化，或直接 `panda` 进入 REPL。已在运行的旧版本用上面的同条命令即可原地升级（覆盖安装，用户数据保留）。
+          INSTALL
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: dist/release-notes.md
           files: |
             dist/panda-*.tar.gz
             dist/panda-*.zip
