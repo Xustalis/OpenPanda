@@ -165,3 +165,63 @@ func TestSameResourceSerializes(t *testing.T) {
 	}
 	t.Fatal("first task never reached running")
 }
+
+// TestEnqueueRoutesToPeer verifies the queue path is cross-device: a task
+// enqueued on a node that cannot execute it (no gpio:read) is claimed by the
+// local scheduler, forwarded to a capable peer, executed there, and the
+// result completes the origin's row. Queued tasks must be first-class network
+// citizens — the same routing contract as Submit.
+func TestEnqueueRoutesToPeer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	root := newCore(t, "queue-root", "127.0.0.1:17941")
+	leaf := newCoreWithNative(t, "queue-leaf", "127.0.0.1:17942", ledger.NativeAbility{
+		ID: "gpio:read", Command: "echo", Args: []string{"queue-gpio-ok"},
+	})
+	if err := root.Register(ctx); err != nil {
+		t.Fatalf("root register: %v", err)
+	}
+	if err := leaf.Register(ctx); err != nil {
+		t.Fatalf("leaf register: %v", err)
+	}
+	go func() { _ = root.Listen(ctx, "127.0.0.1:17941") }()
+	go func() { _ = leaf.Listen(ctx, "127.0.0.1:17942") }()
+	time.Sleep(200 * time.Millisecond)
+	if err := root.DialPeer(ctx, "127.0.0.1:17942"); err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	root.StartQueueScheduler(ctx)
+
+	tk, err := root.Enqueue(ctx, TaskInput{
+		Title: "read gpio via queue", Intent: "read gpio", Requires: []string{"gpio:read"},
+	}, DefaultQueueSpec())
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := root.store.Get(ctx, tk.TaskID)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got.State == StateDone {
+			if !strings.Contains(got.ResultJSON, "queue-gpio-ok") {
+				t.Fatalf("result = %s, want queue-gpio-ok", got.ResultJSON)
+			}
+			leafRow, err := leaf.store.Get(ctx, tk.TaskID)
+			if err != nil || leafRow.State != StateDone {
+				t.Fatalf("leaf task state = %s (err %v), want done", leafRow.State, err)
+			}
+			return
+		}
+		if got.State == StateFailed || got.State == StateReview {
+			t.Fatalf("task ended in %s (result %s)", got.State, got.ResultJSON)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("queued task never reached done via peer within deadline")
+}

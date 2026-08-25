@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -151,19 +152,29 @@ func runWeb(args []string) {
 		}),
 	}
 	// Bind synchronously so a taken port surfaces as an error, not a
-	// silent goroutine death.
-	ln, err := net.Listen("tcp", srv.Addr)
+	// silent goroutine death. A taken port falls forward to a nearby one
+	// (listenPanel) instead of failing — the user asked for the console,
+	// not an error message.
+	ln, bound, err := listenPanel(addr)
 	if err != nil {
 		fatal("listen", err)
 	}
+	if bound != addr {
+		fmt.Println(i18n.Tf(loc, "web.portfallback", "orig", addr, "actual", bound))
+	}
 	go func() { _ = srv.Serve(ln) }()
 
-	url := panel.AppendToken(panelURL(ln.Addr().String()), token)
-	fmt.Println(i18n.Tf(loc, "web.started", "url", url))
+	url := panelURL(ln.Addr().String())
 	if *noBrowser {
+		// Manual mode only: the user opens the browser themselves, so the
+		// printed URL must carry the token. In the normal path the browser
+		// is opened for them, already authenticated — the token never
+		// needs to be seen or remembered.
+		fmt.Println(i18n.Tf(loc, "web.started", "url", panel.AppendToken(url, token)))
 		fmt.Println(i18n.T(loc, "web.nobrowser"))
 	} else {
-		openBrowser(url)
+		fmt.Println(i18n.Tf(loc, "web.started", "url", url))
+		openBrowser(panel.AppendToken(url, token))
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -171,6 +182,34 @@ func runWeb(args []string) {
 	<-ctx.Done()
 	fmt.Println(i18n.T(loc, "web.stopped"))
 	_ = srv.Shutdown(context.Background())
+}
+
+// listenPanel binds the panel address, falling forward through a few nearby
+// ports when the configured one is taken (typically another `panda web`
+// already running). Failing with "address already in use" leaves the user
+// with nothing actionable; serving on the next port with a notice keeps the
+// one-command promise. Returns the listener and the address actually bound.
+func listenPanel(addr string) (net.Listener, string, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err == nil {
+		return ln, addr, nil
+	}
+	host, portStr, splitErr := net.SplitHostPort(addr)
+	if splitErr != nil {
+		return nil, "", err
+	}
+	port, convErr := strconv.Atoi(portStr)
+	if convErr != nil {
+		return nil, "", err
+	}
+	for i := 1; i <= 5; i++ {
+		alt := net.JoinHostPort(host, strconv.Itoa(port+i))
+		altLn, altErr := net.Listen("tcp", alt)
+		if altErr == nil {
+			return altLn, alt, nil
+		}
+	}
+	return nil, "", err
 }
 
 // resolvedConfigPath mirrors config.Load's path resolution so the settings

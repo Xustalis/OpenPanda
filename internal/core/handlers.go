@@ -76,6 +76,14 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	if err := c.store.AdoptAttempt(ctx, t.TaskID, p.AttemptID); err != nil {
 		c.logger.Warn("adopt attempt", "task", t.TaskID, "err", err)
 	}
+	// Adopt the origin user's tier-2 consent so the executor's defense layer
+	// honors what the delegating user already approved (the authenticated bus
+	// is the trust boundary; see TaskDelegatePayload.Authorized).
+	if p.Authorized {
+		if err := c.store.SetAuthorized(ctx, t.TaskID, true); err != nil {
+			c.logger.Warn("adopt authorization", "task", t.TaskID, "err", err)
+		}
+	}
 	// Persist the entry-model detail carried on the wire so the local queue
 	// shows intent/context/complexity/risk even before execution starts.
 	if err := c.store.SetDetail(ctx, t.TaskID, delegateDetail(p)); err != nil {
@@ -996,6 +1004,7 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 		ContextType: t.ContextType,
 		ContextHash: t.ContextHash,
 		AttemptID:   t.AttemptID,
+		Authorized:  t.Authorized,
 	}
 	if t.ContextHash != "" {
 		payload.ContextLevel = "pointer"

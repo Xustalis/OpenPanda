@@ -58,6 +58,13 @@ type TaskDelegatePayload struct {
 	Complexity    float64  `json:"complexity,omitempty"`
 	Risk          string   `json:"risk,omitempty"`
 	AttemptID     string   `json:"attempt_id,omitempty"`
+	// Authorized carries the origin user's tier-2 consent (design §16) so a
+	// delegated task does not bounce at the executor's defense layer. It is
+	// only meaningful on an authenticated bus: the transport's shared-secret
+	// HMAC is what makes this unforgeable by non-peers, and the origin node
+	// only sets it after the user explicitly authorized (task add
+	// --authorize / ask --authorize).
+	Authorized bool `json:"authorized,omitempty"`
 }
 
 // TitleOrDefault returns the explicit title, falling back to the intent.

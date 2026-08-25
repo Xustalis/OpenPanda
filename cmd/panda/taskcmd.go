@@ -200,6 +200,7 @@ func runTaskAdd(args []string) {
 	priority := fs.String("priority", "normal", "priority: "+cliPriorities)
 	project := fs.String("project", "", "project to attach the task to")
 	authorize := fs.Bool("authorize", false, "authorize tier-2 (irreversible) commands")
+	requires := fs.String("requires", "coding", "comma-separated ability ids the task needs (routed cross-device)")
 	fs.Parse(args)
 
 	loc := i18n.Detect()
@@ -231,11 +232,20 @@ func runTaskAdd(args []string) {
 	}
 	defer engine.Close()
 
+	requiresList := []string{}
+	for _, r := range strings.Split(*requires, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			requiresList = append(requiresList, r)
+		}
+	}
+	if len(requiresList) == 0 {
+		requiresList = []string{"coding"}
+	}
 	in := core.TaskInput{
 		Title:      *title,
 		Project:    *project,
 		Intent:     *prompt,
-		Requires:   []string{"coding"},
+		Requires:   requiresList,
 		Authorized: *authorize,
 	}
 	q := core.DefaultQueueSpec()

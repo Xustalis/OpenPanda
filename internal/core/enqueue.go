@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
+	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 )
 
@@ -141,6 +144,15 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 		c.logger.Warn("queue: load claimed task", "task", taskID, "err", err)
 		return
 	}
+	// Cross-device routing: when this node cannot serve the task's required
+	// abilities, hand it to a capable peer — the same root-scheduler policy
+	// Submit applies (design §2.4). The claim is re-targeted to the peer and
+	// its task_result completes the local row via handleResult, so there is
+	// nothing left to run here. Queued tasks are first-class network
+	// citizens, not local-only work.
+	if c.forwardScheduled(ctx, t) {
+		return
+	}
 	result, err := c.run(ctx, taskID, t.Intent, t.Requires)
 	final, _, rerr := c.retryLoop(ctx, taskID, t.Intent, t.Requires, result, err)
 	if rerr != nil && !errors.Is(rerr, ErrCancelled) {
@@ -151,4 +163,89 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 	// Unblock any synchronous waiter (delegation-style waits on enqueued
 	// tasks); a no-op when nobody is waiting.
 	c.signalResult(taskID, result)
+}
+
+// forwardScheduled routes a claimed queue task to a capable peer when this
+// node cannot execute it. It returns true when the task was handed off (the
+// result arrives asynchronously via handleResult); false means the caller
+// should proceed with local execution — either this node matches, or no peer
+// does (the local run then fails with the standard capability error).
+func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
+	if c.localMatch()(t.Requires) || len(t.Requires) == 0 {
+		return false
+	}
+	chain := t.Chain
+	if len(chain) == 0 {
+		chain = []string{c.nodeID}
+	}
+	// Loop safety, same as rerouteDeclined (P1-5): exclude every node that
+	// already declined this task so a re-queued task is not handed straight
+	// back to its last decliner.
+	excluded, err := c.store.DeclinedBy(ctx, t.TaskID)
+	if err != nil {
+		c.logger.Warn("queue forward: declined-by", "task", t.TaskID, "err", err)
+	}
+	seenChain := append(slices.Clone(chain), excluded...)
+	decision := scheduler.Route(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires, "")
+	if decision.Action != scheduler.ActionForward {
+		c.logger.Info("queue: no peer for task", "task", t.TaskID,
+			"action", string(decision.Action), "reason", decision.Reason)
+		return false
+	}
+	p := bus.TaskDelegatePayload{
+		TaskID:      t.TaskID,
+		ParentID:    t.ParentID,
+		Project:     t.Project,
+		Title:       t.Title,
+		ContextType: t.ContextType,
+		ContextHash: t.ContextHash,
+		Intent:      t.Intent,
+		SpecJSON:    t.SpecJSON,
+		Requires:    t.Requires,
+		Chain:       chain,
+		Complexity:  t.Complexity,
+		Risk:        t.Risk,
+		AttemptID:   t.AttemptID,
+		Authorized:  t.Authorized,
+	}
+	if err := c.sendClaimedDelegate(ctx, t.TaskID, decision.Target, p); err != nil {
+		c.logger.Warn("queue: forward to peer failed", "task", t.TaskID,
+			"target", decision.Target, "err", err)
+		return false
+	}
+	c.logger.Info("queue: task forwarded to peer", "task", t.TaskID, "target", decision.Target)
+	return true
+}
+
+// sendClaimedDelegate re-targets an already-claimed (dispatched-to-self) task
+// to target and sends the delegate envelope. Unlike dispatchDelegated it does
+// not transition state — the queue claim already moved the task to dispatched —
+// it records the new delegation target on the audit trail (so isCurrentExecutor
+// authenticates the peer's result/decline) and stamps a lease so a dead
+// executor is detected (D3).
+func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p bus.TaskDelegatePayload) error {
+	if err := c.store.RetargetDelegation(ctx, taskID, target); err != nil {
+		return fmt.Errorf("retarget: %w", err)
+	}
+	timeoutMS := p.TimeoutMS
+	if timeoutMS <= 0 {
+		timeoutMS = defaultDelegateTimeout.Milliseconds()
+		p.TimeoutMS = timeoutMS
+	}
+	if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
+		return fmt.Errorf("set lease: %w", err)
+	}
+	msgID, err := newUUID()
+	if err != nil {
+		return err
+	}
+	env, err := bus.NewEnvelope(bus.MsgTaskDelegate, c.nodeID, msgID, p)
+	if err != nil {
+		return err
+	}
+	env.To = target
+	if err := c.sendTo(target, env); err != nil {
+		return fmt.Errorf("send: %w", err)
+	}
+	return nil
 }

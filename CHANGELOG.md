@@ -14,10 +14,12 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Entries name the change and its user-visible effect in one to three lines; the introducing commit is cited where it aids archaeology.
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
-## [0.0.5] - 2026-08-25
+## [Unreleased]
 
 A same-day patch over 0.0.4 GA, prompted by the first real three-device
 install: two installer robustness fixes and one data-safety fix on Windows.
+(The 0.0.5 tag was briefly published and then withdrawn before GA gating;
+these fixes await the next numbered release.)
 
 ### Fixed
 
