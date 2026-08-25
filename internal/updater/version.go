@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"runtime"
 	"strings"
 )
@@ -34,11 +35,13 @@ const (
 
 // Status is the wire shape served at GET /api/update. It is a point-in-time
 // snapshot; the console polls it (or reads the POST responses) to track
-// progress through check, download, and apply.
+// progress through check, download, and apply. Notes carries the latest
+// release's changelog digest once a check has found one.
 type Status struct {
 	Stage     Stage  `json:"stage"`
 	Current   string `json:"current"`
 	Latest    string `json:"latest,omitempty"`
+	Notes     string `json:"notes,omitempty"`
 	Available bool   `json:"available"`
 	Idle      bool   `json:"idle"`
 	Error     string `json:"error,omitempty"`
@@ -56,6 +59,11 @@ type Options struct {
 	// waiting-for-context tasks). Apply refuses to proceed while it returns
 	// false, so an update never interrupts live work.
 	Idle func(context.Context) bool
+	// OnAvailable, when set, is invoked once per discovered version when a
+	// check finds a newer release — the headless daemon's only channel to
+	// surface an update notice. The web panel needs no callback: it polls
+	// GET /api/update.
+	OnAvailable func(version string)
 }
 
 // DefaultRepo is where release archives and the checksums file live.
@@ -106,38 +114,78 @@ func numericParts(v string) []int {
 	return out
 }
 
-// LatestVersion queries the GitHub "latest" release for repo and returns its
-// tag with the leading "v" stripped.
-func LatestVersion(ctx context.Context, repo string) (string, error) {
+// Release is the latest GitHub release: its version tag (leading "v"
+// stripped) and the raw release-notes body, which the console surfaces as a
+// changelog digest when an update is available.
+type Release struct {
+	Version string
+	Notes   string
+}
+
+// Latest queries the GitHub "latest" release for repo.
+func Latest(ctx context.Context, repo string) (Release, error) {
 	if repo == "" {
 		repo = DefaultRepo
 	}
 	url := "https://api.github.com/repos/" + repo + "/releases/latest"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return Release{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "OpenPanda-updater")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("release lookup: %w", err)
+		return Release{}, fmt.Errorf("release lookup: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("release lookup returned %s", resp.Status)
+		return Release{}, fmt.Errorf("release lookup returned %s", resp.Status)
 	}
 	var rel struct {
 		TagName string `json:"tag_name"`
+		Body    string `json:"body"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return "", fmt.Errorf("release lookup: %w", err)
+		return Release{}, fmt.Errorf("release lookup: %w", err)
 	}
 	if rel.TagName == "" {
-		return "", fmt.Errorf("release has no tag_name")
+		return Release{}, fmt.Errorf("release has no tag_name")
 	}
-	return strings.TrimPrefix(rel.TagName, "v"), nil
+	return Release{Version: strings.TrimPrefix(rel.TagName, "v"), Notes: rel.Body}, nil
 }
+
+// summarizeNotes trims a release-notes body to the short changelog digest
+// shown next to "update available": the first 12 non-empty lines capped at
+// 600 runes, with markdown images and HTML tags stripped — they render as
+// noise in the console card.
+func summarizeNotes(body string) string {
+	var lines []string
+	for _, ln := range strings.Split(strings.TrimSpace(body), "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		ln = imgRE.ReplaceAllString(ln, "")
+		ln = tagRE.ReplaceAllString(ln, "")
+		if ln = strings.TrimSpace(ln); ln != "" {
+			lines = append(lines, ln)
+		}
+		if len(lines) >= 12 {
+			break
+		}
+	}
+	out := strings.Join(lines, "\n")
+	if r := []rune(out); len(r) > 600 {
+		out = string(r[:600]) + "…"
+	}
+	return out
+}
+
+var (
+	imgRE = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
+	tagRE = regexp.MustCompile(`<[^>]+>`)
+)
 
 // AssetName returns the release asset file name for the current platform and
 // the given version. Unix and Windows targets use the same GOARCH naming

@@ -21,12 +21,14 @@ import (
 // mutex; the long-running network steps (check, download) release the lock so
 // status polls are never blocked.
 type Manager struct {
-	mu     sync.Mutex
-	opts   Options
-	stage  Stage
-	latest string
-	errMsg string
-	staged *stagedRelease
+	mu       sync.Mutex
+	opts     Options
+	stage    Stage
+	latest   string
+	notes    string
+	errMsg   string
+	staged   *stagedRelease
+	notified string // last version OnAvailable fired for, so ticks don't repeat
 }
 
 // stagedRelease is a downloaded-and-verified release waiting to be applied.
@@ -70,6 +72,7 @@ func (m *Manager) statusLocked(ctx context.Context) Status {
 		Stage:   m.stage,
 		Current: m.opts.Current,
 		Latest:  m.latest,
+		Notes:   m.notes,
 		Error:   m.errMsg,
 		Idle:    m.opts.Idle(ctx),
 	}
@@ -83,15 +86,17 @@ func (m *Manager) statusLocked(ctx context.Context) Status {
 // Check queries GitHub for the latest release and updates the stage to
 // available (newer) or idle (up to date). A network or GitHub error leaves the
 // manager in the error stage with the message recorded; the auto-check loop
-// retries on the next tick.
+// retries on the next tick. When a newer release is found, OnAvailable (if
+// set) fires once per version — the headless daemon's update notice.
 func (m *Manager) Check(ctx context.Context) error {
 	m.mu.Lock()
 	m.stage = StageChecking
 	m.errMsg = ""
 	m.latest = ""
+	m.notes = ""
 	m.mu.Unlock()
 
-	latest, err := LatestVersion(ctx, m.opts.Repo)
+	rel, err := Latest(ctx, m.opts.Repo)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -100,9 +105,14 @@ func (m *Manager) Check(ctx context.Context) error {
 		m.stage = StageError
 		return err
 	}
-	m.latest = latest
-	if CompareVersion(latest, m.opts.Current) > 0 {
+	m.latest = rel.Version
+	m.notes = summarizeNotes(rel.Notes)
+	if CompareVersion(rel.Version, m.opts.Current) > 0 {
 		m.stage = StageAvailable
+		if m.opts.OnAvailable != nil && m.notified != rel.Version {
+			m.notified = rel.Version
+			m.opts.OnAvailable(rel.Version)
+		}
 	} else {
 		m.stage = StageIdle
 	}
@@ -198,6 +208,7 @@ func (m *Manager) Cancel() {
 		m.staged = nil
 	}
 	m.latest = ""
+	m.notes = ""
 	m.errMsg = ""
 	m.stage = StageIdle
 }

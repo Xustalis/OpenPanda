@@ -5,13 +5,17 @@ package main
 //  1. Scan first — the full plan (what dies, what stays, where the backup
 //     lands) is printed before anything is touched.
 //  2. Explicit confirmation — the user must type `confirm`; piped/empty
-//     input aborts unless --yes was passed for scripted runs.
+//     input aborts unless --yes was passed for scripted runs. `--purge`
+//     (also delete user data) demands a second, distinct confirmation and
+//     aborts the ENTIRE uninstall — backup included — when refused.
 //  3. Whitelist only — deletions come exclusively from Scan's explicit
 //     inputs (installed binary, PATH registration, config-declared state
 //     files) after guardrails flip anything overlapping the home directory
 //     or user assets (memory/, projects/, skills/, work dirs) to "keep".
 //  4. Backup by default — the data/config items slated for deletion are
-//     zipped to the home directory before removal.
+//     zipped to the home directory before removal (on a --purge run the
+//     user assets are archived too). --backup-only writes the zip and
+//     touches nothing else.
 //  5. Report — every deleted and kept item is written to a report file the
 //     user can keep.
 
@@ -32,10 +36,19 @@ import (
 func runUninstall(args []string) {
 	fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
-	yes := fs.Bool("yes", false, "skip the interactive confirmation (for scripts)")
+	yes := fs.Bool("yes", false, "skip the interactive confirmation(s) (for scripts)")
 	noBackup := fs.Bool("no-backup", false, "delete without writing a backup zip")
 	dryRun := fs.Bool("dry-run", false, "print the plan and exit without deleting anything")
+	purge := fs.Bool("purge", false, "also delete user data (memory/projects/skills/work); requires a second confirmation (or --yes)")
+	backupOnly := fs.Bool("backup-only", false, "write the backup zip but delete nothing")
 	fs.Parse(args)
+
+	if *purge && *backupOnly {
+		fatal("uninstall", fmt.Errorf("--purge 与 --backup-only 互斥：一个删除用户数据，一个不删除任何内容"))
+	}
+	if *backupOnly && *noBackup {
+		fatal("uninstall", fmt.Errorf("--backup-only 需要备份：请去掉 --no-backup"))
+	}
 
 	loc := i18n.Detect()
 
@@ -63,6 +76,9 @@ func runUninstall(args []string) {
 	if err != nil {
 		fatal("uninstall", err)
 	}
+	// Resolve the distribution prefix before anything is deleted: once the
+	// binary is gone, EvalSymlinks can no longer find it.
+	sweepPrefix, sweepable := install.SweepablePrefix(exe)
 	targets := install.Scan(install.PlanInput{
 		Storage:        storage,
 		ConfigFileUsed: cfgFile,
@@ -83,12 +99,23 @@ func runUninstall(args []string) {
 		}
 	}
 
+	// The purge preview: user assets --purge would additionally delete.
+	purgeAssets := assetTargets(targets)
+	if *purge && len(purgeAssets) > 0 {
+		fmt.Println("  " + i18n.T(loc, "uninstall.purge.head"))
+		for _, t := range purgeAssets {
+			fmt.Println("  " + i18n.Tf(loc, "uninstall.purge.item", "path", t.Path, "kind", t.Kind, "size", humanBytes(t.Bytes)))
+		}
+	}
+
 	home, _ := os.UserHomeDir()
 	stamp := time.Now().Format("20060102-150405")
 	backupPath := filepath.Join(home, "openpanda-backup-"+stamp+".zip")
 	reportPath := filepath.Join(home, "openpanda-uninstall-report-"+stamp+".txt")
 	if *noBackup {
 		fmt.Println(i18n.T(loc, "uninstall.backup.skip"))
+	} else if *backupOnly {
+		fmt.Println(i18n.Tf(loc, "uninstall.backuponly", "path", backupPath))
 	} else {
 		fmt.Println(i18n.Tf(loc, "uninstall.backup.at", "path", backupPath))
 	}
@@ -99,7 +126,8 @@ func runUninstall(args []string) {
 	}
 
 	// ---- confirmation ----
-	if !*yes {
+	// Backup-only touches nothing destructive, so it needs no prompt.
+	if !*backupOnly && !*yes {
 		if !stdinIsTTY() {
 			fmt.Fprintln(os.Stderr, "panda: "+i18n.T(loc, "uninstall.noninteractive"))
 			os.Exit(1)
@@ -110,40 +138,54 @@ func runUninstall(args []string) {
 			fmt.Println(i18n.T(loc, "uninstall.abort"))
 			return
 		}
+		if *purge {
+			// Second, distinct gate: refusing it aborts the whole
+			// uninstall — nothing is deleted, nothing is backed up.
+			fmt.Print(i18n.T(loc, "uninstall.purge.prompt"))
+			line, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+			if strings.TrimSpace(line) != "purge" {
+				fmt.Println(i18n.T(loc, "uninstall.purge.abort"))
+				return
+			}
+		}
 	}
 
 	// ---- execute ----
-	backupCount := 0
+	if !*backupOnly {
+		install.StopServices()
+	}
+	opt := install.UninstallOptions{Purge: *purge, BackupOnly: *backupOnly}
 	if !*noBackup {
-		n, err := install.BackupZip(backupPath, targets)
-		if err != nil {
-			// A failed backup must not stop the uninstall halfway, but it
-			// must be loud — the user asked for reversibility.
-			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(loc, "uninstall.backup.fail", "err", err.Error()))
-		}
-		backupCount = n
+		opt.BackupPath = backupPath
+	}
+	outcome := install.ExecuteUninstall(targets, opt)
+	if outcome.BackupErr != nil {
+		// A failed backup must not stop the uninstall halfway, but it
+		// must be loud — the user asked for reversibility.
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(loc, "uninstall.backup.fail", "err", outcome.BackupErr.Error()))
 	}
 
-	install.StopServices()
+	if *backupOnly {
+		fmt.Println(i18n.Tf(loc, "uninstall.backuponly.done", "path", backupPath, "n", fmt.Sprint(outcome.BackupFiles)))
+		return
+	}
 
-	var deleted, kept, failed []string
-	for _, t := range targets {
-		switch {
-		case t.Kind == install.KindPath:
-			continue // handled below via the per-OS editors
-		case !t.Delete:
-			kept = append(kept, describeTarget(t))
-		default:
-			if err := install.RemoveOne(t.Path); err != nil {
-				failed = append(failed, fmt.Sprintf("%s (%v)", t.Path, err))
-			} else if t.Exists {
-				deleted = append(deleted, describeTarget(t))
-			}
-		}
+	var deleted []string
+	for _, t := range outcome.Deleted {
+		deleted = append(deleted, describeTarget(t))
 	}
 	if changed, err := install.RemovePATHPersistence(dir); err == nil {
 		for _, c := range changed {
 			deleted = append(deleted, c+" (PATH)")
+		}
+	}
+
+	// The distribution prefix itself goes away only when the sweep left it
+	// empty — os.Remove refuses non-empty dirs, so Linux XDG storage roots
+	// sharing the prefix (data/ memory/ …) are untouched by construction.
+	if sweepable {
+		if err := os.Remove(sweepPrefix); err == nil {
+			deleted = append(deleted, sweepPrefix)
 		}
 	}
 
@@ -154,25 +196,47 @@ func runUninstall(args []string) {
 	for _, d := range deleted {
 		fmt.Fprintf(&b, "  %s\n", d)
 	}
-	fmt.Fprintf(&b, "\nKEPT — user assets (%d):\n", len(kept))
-	for _, k := range kept {
-		fmt.Fprintf(&b, "  %s\n", k)
+	if len(outcome.Purged) > 0 {
+		fmt.Fprintf(&b, "\nPURGED — user data removed via --purge (%d):\n", len(outcome.Purged))
+		for _, t := range outcome.Purged {
+			fmt.Fprintf(&b, "  %s\n", describeTarget(t))
+		}
+	}
+	fmt.Fprintf(&b, "\nKEPT — user assets (%d):\n", len(outcome.Kept))
+	for _, t := range outcome.Kept {
+		fmt.Fprintf(&b, "  %s\n", describeTarget(t))
 	}
 	if !*noBackup {
-		fmt.Fprintf(&b, "\nBACKUP: %s (%d files)\n", backupPath, backupCount)
+		fmt.Fprintf(&b, "\nBACKUP: %s (%d files)\n", backupPath, outcome.BackupFiles)
 	}
-	if len(failed) > 0 {
-		fmt.Fprintf(&b, "\nFAILED (%d):\n", len(failed))
-		for _, f := range failed {
+	if len(outcome.Failed) > 0 {
+		fmt.Fprintf(&b, "\nFAILED (%d):\n", len(outcome.Failed))
+		for _, f := range outcome.Failed {
 			fmt.Fprintf(&b, "  %s\n", f)
 		}
 	}
 	_ = os.WriteFile(reportPath, []byte(b.String()), 0o644)
 
 	fmt.Println(i18n.Tf(loc, "uninstall.done", "path", reportPath))
-	if len(failed) > 0 {
+	if len(outcome.Failed) > 0 {
 		os.Exit(1)
 	}
+}
+
+// assetTargets returns the user-asset entries of a scan — the trees a
+// --purge run would additionally delete (and archive) after its own
+// confirmation.
+func assetTargets(targets []install.Target) []install.Target {
+	var out []install.Target
+	for _, t := range targets {
+		switch t.Kind {
+		case install.KindMemory, install.KindProject, install.KindSkill, install.KindWork:
+			if t.Exists {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
 }
 
 func describeTarget(t install.Target) string {

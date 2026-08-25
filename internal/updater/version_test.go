@@ -45,9 +45,30 @@ func TestChecksumFor(t *testing.T) {
 	data := "abc  panda-1.2.3-linux-amd64.tar.gz\n" +
 		"def *panda-1.2.3-windows-amd64.zip\n"
 	if got := checksumFor(data, "panda-1.2.3-linux-amd64.tar.gz"); got != "abc" {
-		t.Fatalf("checksumFor returned %q", got)
+		t.Fatalf("checksumFor returned %q, want %q", got, "abc")
 	}
 	if got := checksumFor(data, "missing.zip"); got != "" {
 		t.Fatalf("checksumFor missing entry = %q", got)
+	}
+}
+
+func TestSummarizeNotes(t *testing.T) {
+	tests := []struct {
+		name, body, want string
+	}{
+		{"empty", "", ""},
+		{"blank only", "\n \n\t\n", ""},
+		{"keeps plain lines", "## 新增\n- adapter harness\n- 更新器回滚", "## 新增\n- adapter harness\n- 更新器回滚"},
+		{"strips images and html", "![logo](https://x/y.png) hello <b>world</b>", "hello world"},
+		{"caps line count", "1\n\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14",
+			"1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12"},
+		{"caps length with ellipsis", string(make([]rune, 700)), string(make([]rune, 600)) + "…"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := summarizeNotes(tt.body); got != tt.want {
+				t.Fatalf("summarizeNotes = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

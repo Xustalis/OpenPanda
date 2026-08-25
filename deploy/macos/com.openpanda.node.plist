@@ -4,10 +4,18 @@
   OpenPanda macOS node — LaunchAgent, runs the kernel daemon headless in the
   background: no terminal window, starts at login, restarts on crash.
 
-  Install (adjust paths below to your checkout / install prefix first):
+  Install (adjust the binary path / WorkingDirectory below to your checkout
+  or install prefix first):
     cp deploy/macos/com.openpanda.node.plist ~/Library/LaunchAgents/
     launchctl unload ~/Library/LaunchAgents/com.openpanda.node.plist 2>/dev/null
     launchctl load   ~/Library/LaunchAgents/com.openpanda.node.plist
+
+  No --config/--card flags: the daemon auto-discovers them the same way an
+  interactive `panda daemon` does — OPENPANDA_CONFIG_PATH →
+  ~/Library/Application Support/openpanda/config.yaml (where `panda init`
+  writes) → /etc/openpanda/config.yaml; the capability card is looked up in
+  the working directory and next to the resolved config. To pin a specific
+  config, add an EnvironmentVariables dict with OPENPANDA_CONFIG_PATH.
 
   Logs: /tmp/openpanda-daemon.out.log (JSON) and /tmp/openpanda-daemon.err.log.
 -->
@@ -19,10 +27,6 @@
         <array>
                 <string>/usr/local/openpanda/bin/panda</string>
                 <string>daemon</string>
-                <string>--config</string>
-                <string>/usr/local/openpanda/config.yaml</string>
-                <string>--card</string>
-                <string>/usr/local/openpanda/capabilities.yaml</string>
         </array>
         <key>WorkingDirectory</key>
         <string>/usr/local/openpanda</string>
