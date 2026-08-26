@@ -1052,33 +1052,54 @@ func (s *TaskStore) recoverBatchTx(ctx context.Context, tx *sql.Tx, from []strin
 // per the state machine, so a stale caller cannot force a task into a state
 // the table does not allow. Callers authorizing the *source* of the cancel do
 // so upstream (see Core.handleCancel).
+//
+// The pre-check and the guarded UPDATE below are not atomic, so a cancel can
+// race the execute loop's own transitions (dispatched→running on accept,
+// queued→dispatched on re-dispatch). A zero-row update used to fail with
+// ErrConflict right there — silently dropping a cancel that was fully legal a
+// millisecond later and letting the task run to completion under nodes that
+// believed it cancelled (the cancel-propagation CI flake). Instead, re-read
+// and retry: a task that reached a terminal state wins (done keeps its
+// recorded result, a concurrent cancel is idempotent success); a task that
+// merely moved between active states is still cancellable, and the loop lands
+// the cancel on the fresh state.
 func (s *TaskStore) Cancel(ctx context.Context, taskID string) error {
-	cur, err := s.Get(ctx, taskID)
-	if err != nil {
-		return err
-	}
-	if Terminal(cur.State) {
-		return nil // already done/cancelled/expired
-	}
-	if !CanTransition(cur.State, StateCancelled) {
-		return fmt.Errorf("%w: %s -> %s", ErrIllegal, cur.State, StateCancelled)
-	}
-	// Guarded UPDATE (P1-4): a concurrent Complete between the pre-check and
-	// this write must win — overwriting done back to cancelled would lose the
-	// recorded result.
-	return s.withTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `
-			UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
-			WHERE task_id=? AND state=?`,
-			StateCancelled, s.now(), taskID, cur.State)
+	for attempt := 0; attempt < 5; attempt++ {
+		cur, err := s.Get(ctx, taskID)
 		if err != nil {
-			return fmt.Errorf("cancel task: %w", err)
+			return err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return fmt.Errorf("%w: task %s cancelled concurrently", ErrConflict, taskID)
+		if Terminal(cur.State) {
+			return nil // already done/cancelled/expired
 		}
-		return s.recordEventTx(ctx, tx, taskID, EvCancel, map[string]any{"from": cur.State})
-	})
+		if !CanTransition(cur.State, StateCancelled) {
+			return fmt.Errorf("%w: %s -> %s", ErrIllegal, cur.State, StateCancelled)
+		}
+		// Guarded UPDATE (P1-4): a concurrent Complete between the pre-check and
+		// this write must win — overwriting done back to cancelled would lose the
+		// recorded result.
+		conflicted := false
+		if err := s.withTx(ctx, func(tx *sql.Tx) error {
+			res, err := tx.ExecContext(ctx, `
+				UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
+				WHERE task_id=? AND state=?`,
+				StateCancelled, s.now(), taskID, cur.State)
+			if err != nil {
+				return fmt.Errorf("cancel task: %w", err)
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				conflicted = true // state moved under us; retry with fresh state
+				return nil
+			}
+			return s.recordEventTx(ctx, tx, taskID, EvCancel, map[string]any{"from": cur.State})
+		}); err != nil {
+			return err
+		}
+		if !conflicted {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: task %s cancelled concurrently", ErrConflict, taskID)
 }
 
 // CancelCascade cancels taskID and every descendant. Descendants are found by

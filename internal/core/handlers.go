@@ -468,6 +468,22 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	switch task.State {
 	case StateDispatched:
 		if err := c.store.Accept(ctx, taskID, c.nodeID); err != nil {
+			// The accept can lose the race with a cancel landing between the
+			// pre-check above and the guarded write. Reporting a plain error
+			// here would turn into a task_decline, bouncing a task that is
+			// already closed back into re-routing; re-read and distinguish:
+			// running means a duplicate context_ack raced ahead (execute on),
+			// terminal means the task was closed under us (cancelled/expired —
+			// execution acknowledges, no result is reported).
+			if errors.Is(err, ErrConflict) {
+				fresh, gerr := c.store.Get(ctx, taskID)
+				if gerr == nil && fresh.State == StateRunning {
+					break // duplicate accept raced ahead; fall through to execution
+				}
+				if gerr == nil && Terminal(fresh.State) {
+					return bus.TaskResultPayload{}, ErrCancelled
+				}
+			}
 			return bus.TaskResultPayload{}, fmt.Errorf("accept: %w", err)
 		}
 	case StateWaitingCtx:

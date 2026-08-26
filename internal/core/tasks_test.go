@@ -3,9 +3,12 @@ package core
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 func newTestStore(t *testing.T) *TaskStore {
@@ -284,6 +287,147 @@ func TestCancelCascadeSkipsTerminalRoot(t *testing.T) {
 	got, _ := s.Get(ctx, child.TaskID)
 	if got.State != StateCancelled {
 		t.Fatalf("child state = %s, want cancelled", got.State)
+	}
+}
+
+// TestCancelRetriesAfterConcurrentAccept reproduces the cancel-propagation
+// flake deterministically: a task_cancel and the executor's accept race on a
+// dispatched task, and the accept commits between Cancel's pre-check and its
+// guarded UPDATE. The cancel must not be dropped with ErrConflict — the task
+// merely moved between active states and is still cancellable — so Cancel
+// retries against the fresh state and lands cancelled. The pre-fix behavior
+// returned ErrConflict here, the wire handler dropped the cancel, and the
+// executor ran to completion under a node that believed the task cancelled.
+//
+// The race is staged through the store's now hook: it fires while Cancel
+// evaluates its UPDATE arguments (before the statement executes, while the
+// deferred transaction holds no locks) and commits the concurrent accept
+// through a second connection. A second connection is required because the
+// store's pool is capped at one connection, and a :memory: database is not
+// shared between pools — hence the temp file.
+func TestCancelRetriesAfterConcurrentAccept(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "cancel.db")
+	db1, err := storage.Open(path)
+	if err != nil {
+		t.Fatalf("open db1: %v", err)
+	}
+	defer db1.Close()
+	if err := storage.Migrate(db1); err != nil {
+		t.Fatalf("migrate db1: %v", err)
+	}
+	db2, err := storage.Open(path)
+	if err != nil {
+		t.Fatalf("open db2: %v", err)
+	}
+	defer db2.Close()
+	if err := storage.Migrate(db2); err != nil {
+		t.Fatalf("migrate db2: %v", err)
+	}
+
+	canceller := NewTaskStore(db1, testLogger()) // the node cancelling
+	executor := NewTaskStore(db2, testLogger())  // the node accepting
+
+	tk := createTask(t, canceller, "", "race", "root")
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(canceller.Queue(ctx, tk.TaskID, "root"))
+	must(canceller.Dispatch(ctx, tk.TaskID, "root", "leaf"))
+
+	// Arm a one-shot hook: the next now() call (Cancel's UPDATE timestamp)
+	// first commits the executor's accept on the second connection.
+	armed := true
+	canceller.now = func() int64 {
+		if !armed {
+			return storage.Now()
+		}
+		armed = false
+		if err := executor.Accept(ctx, tk.TaskID, "leaf"); err != nil {
+			t.Errorf("staged concurrent accept: %v", err)
+		}
+		return storage.Now()
+	}
+
+	if err := canceller.Cancel(ctx, tk.TaskID); err != nil {
+		t.Fatalf("cancel after concurrent accept: %v", err)
+	}
+	got, err := canceller.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != StateCancelled {
+		t.Fatalf("state = %s, want cancelled (cancel was dropped)", got.State)
+	}
+}
+
+// TestCancelIdempotentWhenConcurrentlyClosed verifies the other outcome of
+// the same race: when the task reaches a terminal state (here done) between
+// Cancel's pre-check and its guarded write, Cancel returns nil instead of
+// ErrConflict — the recorded result wins and a concurrent cancel is
+// idempotent success, matching the pre-check's behavior for an already-
+// terminal task.
+func TestCancelIdempotentWhenConcurrentlyClosed(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "closed.db")
+	db1, err := storage.Open(path)
+	if err != nil {
+		t.Fatalf("open db1: %v", err)
+	}
+	defer db1.Close()
+	if err := storage.Migrate(db1); err != nil {
+		t.Fatalf("migrate db1: %v", err)
+	}
+	db2, err := storage.Open(path)
+	if err != nil {
+		t.Fatalf("open db2: %v", err)
+	}
+	defer db2.Close()
+	if err := storage.Migrate(db2); err != nil {
+		t.Fatalf("migrate db2: %v", err)
+	}
+
+	canceller := NewTaskStore(db1, testLogger())
+	executor := NewTaskStore(db2, testLogger())
+
+	tk := createTask(t, canceller, "", "closed", "root")
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(canceller.Queue(ctx, tk.TaskID, "root"))
+	must(canceller.Dispatch(ctx, tk.TaskID, "root", "leaf"))
+
+	armed := true
+	canceller.now = func() int64 {
+		if !armed {
+			return storage.Now()
+		}
+		armed = false
+		if err := executor.Accept(ctx, tk.TaskID, "leaf"); err != nil {
+			t.Errorf("staged accept: %v", err)
+			return storage.Now()
+		}
+		if err := executor.Complete(ctx, tk.TaskID, "leaf", map[string]any{"ok": true}); err != nil {
+			t.Errorf("staged complete: %v", err)
+		}
+		return storage.Now()
+	}
+
+	if err := canceller.Cancel(ctx, tk.TaskID); err != nil {
+		t.Fatalf("cancel on concurrently completed task: %v", err)
+	}
+	got, err := canceller.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != StateDone {
+		t.Fatalf("state = %s, want done (recorded result must win over cancel)", got.State)
 	}
 }
 
