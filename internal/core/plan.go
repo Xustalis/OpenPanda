@@ -157,8 +157,21 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 			return "", fmt.Errorf("create stage %s: %w", st.ID, err)
 		}
 		// No work dir: the executor derives one per stage. Resource keys are the
-		// plan's, so two plans that touch the same resource still serialize.
-		if err := c.store.SetQueueMeta(ctx, t.TaskID, q.Priority, q.SessionID, "", q.ResourceKeys); err != nil {
+		// plan's when the caller named any, so two plans that touch the same
+		// resource still serialize; otherwise each stage gets a key of its own.
+		//
+		// That default matters: with none, every stage falls back to the shared
+		// agent lock (queue.DefaultResourceKey), which exists because two
+		// anonymous tasks would trample one working tree. Stages cannot — each
+		// derives its own directory (stageWorkDir) — so the lock would only make
+		// independent stages queue behind each other, which is the opposite of
+		// what a plan's fan-out means. Concurrency stays bounded by
+		// MaxConcurrent, and ordering by the dependency graph.
+		keys := q.ResourceKeys
+		if len(keys) == 0 {
+			keys = []string{"plan:" + planID + ":" + st.ID}
+		}
+		if err := c.store.SetQueueMeta(ctx, t.TaskID, q.Priority, q.SessionID, "", keys); err != nil {
 			return "", fmt.Errorf("queue meta for stage %s: %w", st.ID, err)
 		}
 		if err := c.store.SetStage(ctx, t.TaskID, planID, st.ID, st.Needs); err != nil {

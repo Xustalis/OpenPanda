@@ -168,13 +168,25 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 	c.signalResult(taskID, result)
 }
 
-// forwardScheduled routes a claimed queue task to a capable peer when this
-// node cannot execute it. It returns true when the task was handed off (the
-// result arrives asynchronously via handleResult); false means the caller
-// should proceed with local execution — either this node matches, or no peer
-// does (the local run then fails with the standard capability error).
+// forwardScheduled routes a claimed queue task to the node that should run it.
+// It returns true when the task was handed off (the result arrives
+// asynchronously via handleResult); false means the caller should proceed with
+// local execution — either this node won the routing decision, or nobody did
+// (the local run then fails with the standard capability error).
+//
+// The decision is scheduler.Route's, not this function's. It used to be "if I
+// can do it, I do it", which is the short-circuit RouteAt's doc comment says was
+// removed in v0.0.6 because it makes load balancing impossible by construction —
+// but it was removed from Route only, and this is the path every plan stage and
+// every panel-submitted task takes. Asking here meant a stage needing a GPU ran
+// on the Orange Pi whenever the Pi happened to hold the ability, and a burst of
+// queued tasks all stayed on the node that accepted them while idle peers
+// watched. Both are the exact cases the hardware filter and the score exist for.
 func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
-	if c.localMatch()(t.Requires) || len(t.Requires) == 0 {
+	// A task pinned to a directory on this machine is local work by definition:
+	// the delegate payload carries no work dir (each executor derives its own),
+	// so a forwarded copy would run against a different tree.
+	if t.WorkDir != "" {
 		return false
 	}
 	chain := t.Chain
