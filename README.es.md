@@ -183,7 +183,7 @@ agente (`adapters/*.py`) en un prefijo por usuario y enlaza `panda` en tu `PATH`
 Sobrescribe los valores por defecto con estos flags:
 
 ```bash
-sh scripts/install.sh --version 0.0.4           # fijar versión (por defecto: latest)
+sh scripts/install.sh --version 0.0.6           # fijar versión (por defecto: latest)
 sh scripts/install.sh --prefix /opt/openpanda   # directorio de instalación propio
 sh scripts/install.sh --yes                     # registrar también el autoarranque, sin preguntar
 sh scripts/install.sh --no-service              # omitir el autoarranque por completo

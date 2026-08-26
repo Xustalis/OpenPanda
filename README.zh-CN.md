@@ -125,7 +125,7 @@ Claude Code、Codex、OpenCode、OpenClaw……每一个都是单机上的强力
 用参数覆盖默认行为：
 
 ```bash
-sh scripts/install.sh --version 0.0.4           # 指定版本（默认 latest）
+sh scripts/install.sh --version 0.0.6           # 指定版本（默认 latest）
 sh scripts/install.sh --prefix /opt/openpanda   # 自定义安装目录
 sh scripts/install.sh --yes                     # 一并注册开机自启，不再询问
 sh scripts/install.sh --no-service              # 完全不碰开机自启
