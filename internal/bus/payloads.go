@@ -3,6 +3,7 @@ package bus
 import (
 	"encoding/json"
 	"time"
+	"unicode/utf8"
 )
 
 func unixNow() int64 { return time.Now().Unix() }
@@ -134,6 +135,62 @@ type TaskResultPayload struct {
 	// hands it to the successor stages as their input; the executor stays the
 	// node that holds the bytes until someone pulls them.
 	OutputArtifact string `json:"output_artifact,omitempty"`
+}
+
+// maxWireText bounds one text field an executor fills from a child process's
+// output. executil.Capture lets a command produce 8 MiB per stream while
+// readLimit caps a whole frame at 4 MiB, so an unclamped result is not merely
+// large: the receiver's read limit closes the connection, the result never
+// lands, and a training run that took an hour is lost because its log was
+// verbose. 512 KiB per field leaves the rest of the frame to the envelope and
+// to JSON escaping. The full output stays on the node that produced it (and
+// travels deliberately, as an artifact) — only the copy in the message shrinks.
+const maxWireText = 512 << 10
+
+// clampForWire bounds the process-output fields so the frame cannot exceed the
+// transport limit. It returns a copy: the sender's own struct, which is what
+// its local task row was written from, is left intact.
+func (p TaskResultPayload) clampForWire() any {
+	p.Stdout = clampText(p.Stdout, maxWireText)
+	p.Stderr = clampText(p.Stderr, maxWireText)
+	return p
+}
+
+// clampText shortens s to at most max bytes, keeping its head and its tail. A
+// long log's useful parts are its beginning (what it set out to do) and its end
+// (how it turned out, the final accuracy line); the middle is the part nobody
+// reads, and dropping the tail instead would throw away the answer. The cut
+// lands on a rune boundary so the text stays valid UTF-8.
+func clampText(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	const marker = "\n...[中间已截断，完整输出留在执行节点]...\n"
+	keep := max - len(marker)
+	if keep < 2 {
+		return s[:headBoundary(s, max)]
+	}
+	head := headBoundary(s, keep/2)
+	tail := tailBoundary(s, keep-keep/2)
+	return s[:head] + marker + s[len(s)-tail:]
+}
+
+// headBoundary returns the largest n <= want with s[:n] ending on a rune
+// boundary, so a truncated head stays valid UTF-8.
+func headBoundary(s string, want int) int {
+	for want > 0 && !utf8.RuneStart(s[want]) {
+		want--
+	}
+	return want
+}
+
+// tailBoundary returns the largest n <= want with s[len(s)-n:] starting on a
+// rune boundary — the same guarantee for the retained tail.
+func tailBoundary(s string, want int) int {
+	for want > 0 && !utf8.RuneStart(s[len(s)-want]) {
+		want--
+	}
+	return want
 }
 
 // TaskProgressPayload is a liveness beat from the node executing a task to the

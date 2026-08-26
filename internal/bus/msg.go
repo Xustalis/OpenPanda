@@ -44,9 +44,20 @@ type Envelope struct {
 }
 
 // NewEnvelope builds an envelope. msgID must be non-empty for idempotency.
+//
+// A payload that carries process output gets a chance to shrink first
+// (wireClamper). The frame limit is this package's own constraint, so honouring
+// it belongs here rather than in every caller: a sender is free to write a frame
+// larger than readLimit, and the cost lands on the receiver, which closes the
+// connection instead of delivering the message. Clamping at the point every
+// message is built means a completed task cannot lose its result — and take the
+// peer link with it — because its log was long.
 func NewEnvelope(typ, from, msgID string, payload any) (Envelope, error) {
 	var raw json.RawMessage
 	if payload != nil {
+		if c, ok := payload.(wireClamper); ok {
+			payload = c.clampForWire()
+		}
 		b, err := json.Marshal(payload)
 		if err != nil {
 			return Envelope{}, fmt.Errorf("marshal payload: %w", err)
@@ -57,6 +68,13 @@ func NewEnvelope(typ, from, msgID string, payload any) (Envelope, error) {
 		V: 1, Type: typ, MsgID: msgID, From: from, Payload: raw,
 		TS: nowUnix(),
 	}, nil
+}
+
+// wireClamper is a payload that knows how to bound its own oversized fields.
+// clampForWire returns a clamped copy (payloads travel by value), so the
+// caller's own struct is never mutated behind its back.
+type wireClamper interface {
+	clampForWire() any
 }
 
 // PayloadInto decodes the envelope payload into v.
