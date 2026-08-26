@@ -76,6 +76,9 @@ func runVoice(args []string) {
 		CardPath:   *cardPath,
 		MCPCommand: *mcpCmd,
 		ReplyASCII: isLinuxConsole(),
+		// Voice is a long-lived listening loop: same reasoning as the REPL —
+		// peers dial in the background, the mic opens without dead air.
+		AsyncPeers: true,
 	})
 	if err != nil {
 		fatal("ask engine", err)
