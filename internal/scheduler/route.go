@@ -100,7 +100,7 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 			// choosing among the same directory this node already sees.
 			continue
 		}
-		if n.Matches(required) {
+		if n.Matches(required) || len(required) == 0 {
 			matching = append(matching, n)
 		} else if n.SchedulerTier > 1 {
 			// A non-matching node can still forward onward if it is a
@@ -113,7 +113,14 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 	// declares its hardware — big enough for the work. This is R2: the Orange Pi
 	// has the ability to start a training run and 0 GiB of VRAM to finish it, so
 	// it declines itself and looks outward instead of failing at the last moment.
-	canLocal := localMatch(required) && (!haveSelf || selfNode.Fits(req))
+	//
+	// An empty requirement is no constraint rather than an unsatisfiable one: a
+	// plan stage may declare only hardware (plan.Validate asks for an intent, not
+	// an ability), and Matches of an empty list matches nobody. Reading it as
+	// "nobody can do this" would send such a stage to a sub-scheduler or decline
+	// it, when in fact every node can run it and only the hardware filter has an
+	// opinion.
+	canLocal := (len(required) == 0 || localMatch(required)) && (!haveSelf || selfNode.Fits(req))
 
 	// A named node is authoritative when it can take the task; otherwise fall
 	// through to scored ranking so the task still runs somewhere capable. Match
