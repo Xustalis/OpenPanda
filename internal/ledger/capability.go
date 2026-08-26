@@ -207,6 +207,23 @@ func MarkOffline(db *sql.DB, id string) error {
 	return nil
 }
 
+// Remove deletes a node's directory row. A removed remote that is still
+// alive re-appears on its next hello, so removal is for stale rows: a
+// renamed machine, a peer whose identity changed, a decommissioned node.
+// The self node is the callers' business to refuse (this layer has no
+// notion of "local"), not this function's.
+func Remove(db *sql.DB, id string) (int64, error) {
+	res, err := db.Exec(`DELETE FROM employee_cache WHERE id=?`, id)
+	if err != nil {
+		return 0, fmt.Errorf("remove node %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("remove node %s: rows: %w", id, err)
+	}
+	return n, nil
+}
+
 // UpsertRemote writes a peer's capability summary into the local directory,
 // marking it online. Remote nodes are stored with ID-only abilities (no
 // executable commands) since this node never runs their commands directly —

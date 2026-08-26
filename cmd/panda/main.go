@@ -72,6 +72,11 @@ func main() {
 			runStatus(args)
 			return
 		case "nodes":
+			// `nodes remove <id>` is the only verb; plain `nodes` lists.
+			if len(args) > 0 && (args[0] == "remove" || args[0] == "rm") {
+				runNodeRemove(args[1:])
+				return
+			}
 			runStatus(args)
 			return
 		case "queue":

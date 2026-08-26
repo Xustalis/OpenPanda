@@ -382,6 +382,8 @@ const zhCN: Messages = {
   'nodes.cores': '{n} 核',
   'nodes.concurrency': '{cur}/{max} 任务',
   'nodes.details': '能力卡详情',
+  'nodes.remove': '移除节点',
+  'nodes.removeConfirm': '把 {name} 从节点目录移除？该行处于离线、已无活跃 peer 支撑——若机器回来会自行重新注册。',
   'nodes.detailsHide': '收起',
   'nodes.hardware': '硬件',
   'nodes.resources': '资源画像',

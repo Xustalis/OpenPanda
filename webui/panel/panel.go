@@ -103,6 +103,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/projects/{name}/memory", h.getProjectMemory)
 	mux.HandleFunc("PUT /api/projects/{name}/memory", h.putProjectMemory)
 	mux.HandleFunc("GET /api/nodes", h.listNodes)
+	mux.HandleFunc("DELETE /api/nodes/{id}", h.removeNode)
 	mux.HandleFunc("GET /api/self", h.getSelf)
 	mux.HandleFunc("GET /api/events", h.events)
 	mux.HandleFunc("GET /api/settings/model", h.getModelSettings)

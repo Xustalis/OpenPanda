@@ -392,6 +392,8 @@ const de: Messages = {
   'nodes.cores': '{n} Kerne',
   'nodes.concurrency': '{cur}/{max} Aufgaben',
   'nodes.details': 'Fähigkeitskarte',
+  'nodes.remove': 'Knoten entfernen',
+  'nodes.removeConfirm': '{name} aus dem Knotenverzeichnis entfernen? Die Zeile ist offline und wird von keinem lebenden Peer gestützt — kehrt die Maschine zurück, registriert sie sich selbst erneut.',
   'nodes.detailsHide': 'Einklappen',
   'nodes.hardware': 'Hardware',
   'nodes.resources': 'Ressourcenprofil',

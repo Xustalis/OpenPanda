@@ -392,6 +392,8 @@ const es: Messages = {
   'nodes.cores': '{n} núcleos',
   'nodes.concurrency': '{cur}/{max} tareas',
   'nodes.details': 'Ficha de capacidades',
+  'nodes.remove': 'Eliminar nodo',
+  'nodes.removeConfirm': '¿Eliminar {name} del directorio de nodos? Su fila está sin conexión y no la respalda ningún par vivo — si la máquina vuelve, se vuelve a registrar sola.',
   'nodes.detailsHide': 'Contraer',
   'nodes.hardware': 'Hardware',
   'nodes.resources': 'Perfil de recursos',

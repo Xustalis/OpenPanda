@@ -385,6 +385,8 @@ const ja: Messages = {
   'nodes.cores': '{n} コア',
   'nodes.concurrency': '{cur}/{max} タスク',
   'nodes.details': '能力カード詳細',
+  'nodes.remove': 'ノードを削除',
+  'nodes.removeConfirm': '{name} をノードディレクトリから削除しますか？この行はオフラインで、稼働中の peer に裏付けられていません——マシンが戻れば自分で再登録します。',
   'nodes.detailsHide': '折りたたむ',
   'nodes.hardware': 'ハードウェア',
   'nodes.resources': 'リソースプロファイル',
