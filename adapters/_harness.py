@@ -29,6 +29,16 @@ import threading
 
 DEFAULT_TIMEOUT = 600
 
+# An adapter's whole result travels as one JSON line on stdout, and the Go side
+# retains a bounded amount of it (executil.Capture, 8 MiB): a chatty CLI that
+# overruns that cap does not get a truncated result, it gets none at all,
+# because the surviving bytes are no longer parseable JSON and the run reads as
+# "adapter output not JSON" after the work was already done. So the result is
+# bounded here, where it is still structured. 200k characters is far more than
+# a human reads and far less than the cap.
+MAX_RESULT_CHARS = 200_000
+TRUNCATION_MARKER = "\n...[中间已截断，完整输出留在执行节点]...\n"
+
 # POSIX: run the CLI in its own process group so a timeout kills the whole
 # tree — the CLI's children inherit the stdout pipe and keep it open after
 # the parent dies, which would leave the read loop blocked.
@@ -56,11 +66,27 @@ def read_request(default_timeout=DEFAULT_TIMEOUT):
     return prompt, timeout, cwd
 
 
+def clamp_result(text, limit=MAX_RESULT_CHARS):
+    """Bound a result string, keeping its head and its tail.
+
+    A long run's useful parts are its start (what it set out to do) and its end
+    (how it turned out — the accuracy line, the error). Dropping the tail would
+    throw away the answer, so the middle goes instead.
+    """
+    if not isinstance(text, str) or len(text) <= limit:
+        return text
+    keep = limit - len(TRUNCATION_MARKER)
+    if keep < 2:
+        return text[:limit]
+    head = keep // 2
+    return text[:head] + TRUNCATION_MARKER + text[-(keep - head):]
+
+
 def emit(ok, result, exit_code, tokens=None, cost=None):
     """Write the unified adapter result JSON to stdout (one line, flushed)."""
     payload = {
         "ok": bool(ok),
-        "result": result,
+        "result": clamp_result(result),
         "exit_code": exit_code,
     }
     if tokens is not None:
