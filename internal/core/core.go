@@ -564,8 +564,17 @@ func (c *Core) MaintainPeer(ctx context.Context, addr string) error {
 	c.handleInbound(ctx, conn)
 	// Our outbound conn ended. If the peer still reaches us on its own conn,
 	// wait for that conn to die too before handing control back.
+	//
+	// A nil connFor at the first check is not proof the edge is gone: in a
+	// mutual dial our outbound can lose the dedup and be torn down while the
+	// peer's surviving conn is still mid-handshake on our side — checking
+	// once at that instant reads "no peer" and returns, and the caller
+	// redials into the exact one-second flap the dedup exists to stop. So
+	// absent conns are waited out through a short grace window; a peer that
+	// is genuinely gone costs at most that window before the redial.
 	if id := conn.PeerID(); id != "" {
-		for c.connFor(id) != nil {
+		graceUntil := time.Now().Add(2 * time.Second)
+		for c.connFor(id) != nil || time.Now().Before(graceUntil) {
 			select {
 			case <-ctx.Done():
 				return nil

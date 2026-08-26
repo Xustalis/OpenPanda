@@ -19,56 +19,9 @@ func TestInPATH(t *testing.T) {
 	}
 }
 
-func TestAddRemovePATHIdempotent(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("ZDOTDIR", "")
-
-	rc := filepath.Join(home, ".zshrc")
-	orig := "# user content\nexport EDITOR=vim\n"
-	if err := os.WriteFile(rc, []byte(orig), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	dir := filepath.Join(home, ".local", "bin")
-	written, err := AddToPATH(dir)
-	if err != nil || len(written) != 1 || written[0] != rc {
-		t.Fatalf("AddToPATH = %v, %v", written, err)
-	}
-	data, _ := os.ReadFile(rc)
-	s := string(data)
-	if !strings.Contains(s, markerBegin) || !strings.Contains(s, dir) {
-		t.Fatalf("rc missing marker/export: %q", s)
-	}
-	if !strings.Contains(s, "export EDITOR=vim") {
-		t.Fatal("user content lost")
-	}
-
-	// Second run must not duplicate the block.
-	if _, err := AddToPATH(dir); err != nil {
-		t.Fatal(err)
-	}
-	data, _ = os.ReadFile(rc)
-	if got := strings.Count(string(data), markerBegin); got != 1 {
-		t.Fatalf("marker duplicated %d times", got)
-	}
-
-	// Doctor's persistence probe must see it; removal must restore the file.
-	if got := PathPersistedAt(dir); len(got) != 1 {
-		t.Fatalf("PathPersistedAt = %v, want [%s]", got, rc)
-	}
-	changed, err := RemovePATHPersistence(dir)
-	if err != nil || len(changed) != 1 {
-		t.Fatalf("RemovePATHPersistence = %v, %v", changed, err)
-	}
-	data, _ = os.ReadFile(rc)
-	if strings.Contains(string(data), markerBegin) {
-		t.Fatalf("marker survived removal: %q", data)
-	}
-	if !strings.Contains(string(data), "export EDITOR=vim") {
-		t.Fatal("user content lost on removal")
-	}
-}
+// TestAddRemovePATHIdempotent lives in path_unix_test.go: it pins the rc-file
+// marked-block behavior that only the unix PATH persistence (path_unix.go)
+// has; Windows uses the registry instead.
 
 func TestScanGuardrails(t *testing.T) {
 	root := t.TempDir()
@@ -322,7 +275,9 @@ func TestBackupZipAndRemoveOne(t *testing.T) {
 	os.MkdirAll(target, 0o755)
 	os.WriteFile(filepath.Join(target, "precious.txt"), []byte("keep me"), 0o644)
 	link := filepath.Join(root, "linkdir")
-	os.Symlink(target, link)
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip("symlinks unavailable")
+	}
 
 	zipPath := filepath.Join(root, "backup.zip")
 	n, err := BackupZip(zipPath, []Target{

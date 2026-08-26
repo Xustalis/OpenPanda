@@ -1,11 +1,17 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Xustalis/OpenPanda/internal/cliui"
+)
 
 // TestRuneWidth pins the compact width table the line editor's wrap math
 // depends on: CJK and emoji render double-wide, ASCII and combining marks
 // narrow/zero. A regression here desyncs the in-place menu rendering on
-// Chinese input.
+// Chinese input. The table itself lives in internal/cliui (the status line
+// shares it); the unix-only term_unix.go wrappers are one-line pass-throughs,
+// so the test targets cliui directly and runs on every platform.
 func TestRuneWidth(t *testing.T) {
 	cases := []struct {
 		r    rune
@@ -18,14 +24,14 @@ func TestRuneWidth(t *testing.T) {
 		{0x0301, 0}, // combining acute accent
 	}
 	for _, c := range cases {
-		if got := runeWidth(c.r); got != c.want {
-			t.Errorf("runeWidth(%q U+%04X) = %d, want %d", c.r, c.r, got, c.want)
+		if got := cliui.RuneWidth(c.r); got != c.want {
+			t.Errorf("RuneWidth(%q U+%04X) = %d, want %d", c.r, c.r, got, c.want)
 		}
 	}
 }
 
 func TestDisplayWidth(t *testing.T) {
-	if got := displayWidth("panda> 你好"); got != 7+4 {
-		t.Errorf("displayWidth = %d, want %d", got, 7+4)
+	if got := cliui.DisplayWidth("panda> 你好"); got != 7+4 {
+		t.Errorf("DisplayWidth = %d, want %d", got, 7+4)
 	}
 }

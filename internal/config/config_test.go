@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -78,7 +80,12 @@ func TestLoadMissingFileAppliesEnvOverrides(t *testing.T) {
 }
 
 func TestLoadParsesYAML(t *testing.T) {
-	p := writeTemp(t, `
+	// An absolute db path must round-trip untouched. "/tmp/test.db" would
+	// smuggle in a unix assumption: on Windows it is volume-less, counts as
+	// relative, and legitimately rebases onto the config's dir — so build a
+	// path that is absolute on whichever platform runs the test.
+	db := filepath.Join(t.TempDir(), "test.db")
+	p := writeTemp(t, fmt.Sprintf(`
 node:
   name: "test-node"
   resource_class: "Micro"
@@ -89,8 +96,8 @@ network:
     - "peer1:9999"
 
 storage:
-  db_path: "/tmp/test.db"
-`)
+  db_path: '%s'
+`, db))
 	cfg, err := Load(p)
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -101,7 +108,7 @@ storage:
 	if cfg.Network.ListenAddr != "127.0.0.1:9999" || len(cfg.Network.Peers) != 1 {
 		t.Fatalf("network = %+v", cfg.Network)
 	}
-	if cfg.Storage.DBPath != "/tmp/test.db" {
+	if cfg.Storage.DBPath != db {
 		t.Fatalf("db = %q", cfg.Storage.DBPath)
 	}
 }
@@ -189,6 +196,9 @@ func TestModelEnvOverrides(t *testing.T) {
 // (api_key / shared_secret / panel_token) with group/world-readable bits is
 // tightened to 0600 at load time.
 func TestSecretFilePermsTightened(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod has no permission semantics on Windows (only the read-only bit); perms tightening is unix-only")
+	}
 	p := writeTemp(t, `
 node:
   name: "test-node"
@@ -215,6 +225,9 @@ model:
 // TestSecretlessFilePermsUntouched is the negative control: a config without
 // secrets keeps whatever permissions the deployer chose.
 func TestSecretlessFilePermsUntouched(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod has no permission semantics on Windows (only the read-only bit); the negative control is unix-only")
+	}
 	p := writeTemp(t, "node:\n  name: \"test-node\"\n")
 	if err := os.Chmod(p, 0o644); err != nil {
 		t.Fatalf("chmod: %v", err)
