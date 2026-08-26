@@ -36,7 +36,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Entries name the change and its user-visible effect in one to three lines; the introducing commit is cited where it aids archaeology.
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
-## [Unreleased]
+## [0.0.6] - 2026-08-27
 
 The cross-device compute release takes shape: a request that needs different machines for different steps is now a first-class plan whose stages run where the hardware is, and both surfaces — the CLI and the web console — gained the presentation layer they lacked: live feedback while an ask converges, real Markdown in the browser, and the input editor a daily driver needs.
 

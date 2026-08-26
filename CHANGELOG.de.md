@@ -36,7 +36,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Jeder Eintrag benennt die Änderung und ihre sichtbare Wirkung in ein bis drei Zeilen; der einführende Commit wird zitiert, wo das der Archäologie hilft.
 - Die englische Datei ist maßgeblich. Die Übersetzungen zh-CN / ja / es / de spiegeln sie und können um ein Release kurz verzögert sein.
 
-## [Unreleased]
+## [0.0.6] - 2026-08-27
 
 Das Release über geräteübergreifendes Rechnen nimmt Form an: Eine Anfrage, die für verschiedene Schritte verschiedene Maschinen braucht, ist jetzt ein Plan erster Klasse, dessen Stufen dort laufen, wo die Hardware ist — und beide Oberflächen, CLI und Web-Konsole, bekamen die Präsentationsschicht, die ihnen fehlte: Live-Feedback während ein ask konvergiert, echtes Markdown im Browser und den Eingabe-Editor, den der Alltag verlangt.
 
