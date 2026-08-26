@@ -272,7 +272,9 @@ model:
 |---|---|
 | `panda`（无参数） | 进入交互式 REPL（与 `panda repl` 相同）；守护进程改为 `panda daemon` 子命令运行 |
 | `panda daemon [--config PATH] [--card PATH]` | 运行守护进程：节点注册、心跳、WS 服务、peer 重连 |
-| `panda ask [--config PATH] [--card PATH] [--authorize] "<问题>"` | 统一入口：分类为 answer / tool_call / task 并执行 |
+| `panda ask [--config PATH] [--card PATH] [--authorize] "<问题>"` | 统一入口：分类为 answer / tool_call / task / plan 并执行 |
+| `panda plan run <文件.yaml> \| show <id> \| example` | 跨设备多阶段流水线：一个阶段就是一个普通任务（排队、按硬件路由、重试、进审批停泊），plan 负责排序并把上一阶段的工作目录交给下一台机器的阶段；`run --dry-run` 只校验并打印路由，不创建任何东西 |
+| `panda voice [--once] [--mute]` | 桌宠入口：唤醒词 → ASR → 同一条入口管线 → TTS，为无键盘设备而生；`--once` 只处理一句话，`--mute` 只打印不朗读 |
 | `panda repl [--config PATH] [--card PATH]` | 交互式 shell：斜杠命令（tasks/approve/projects/nodes/lang），裸输入走提问引擎，`/web` 一键拉起内嵌控制台 |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | 一条命令起 Web 控制台：默认回环监听 + 临时令牌，浏览器打开即已登录 |
 | `panda init` | 交互式首次配置：一键生成 `config.yaml` + `capabilities.yaml`（模型端点、节点名、硬件扫描默认值） |

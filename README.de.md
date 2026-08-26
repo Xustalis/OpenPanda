@@ -341,7 +341,9 @@ Skills verwalten:
 |---|---|
 | `panda` (ohne Argumente) | Öffnet die interaktive REPL (wie `panda repl`); der Daemon läuft jetzt über den Subcommand `panda daemon` |
 | `panda daemon [--config PATH] [--card PATH]` | Daemon starten: Node registrieren, Heartbeat, WS-Server, Peer-Reconnect |
-| `panda ask [--config PATH] [--card PATH] [--authorize] "<Frage>"` | Einheitliches Eingabemodell: klassifiziert in answer / tool_call / task und führt aus |
+| `panda ask [--config PATH] [--card PATH] [--authorize] "<Frage>"` | Einheitliches Eingabemodell: klassifiziert in answer / tool_call / task / plan und führt aus |
+| `panda plan run <datei.yaml> \| show <id> \| example` | Mehrstufige geräteübergreifende Pipeline: Eine Stufe IST eine gewöhnliche Aufgabe (Queue, Hardware-Routing, Retry, Review-Parken), der Plan liefert die Reihenfolge und reicht das Arbeitsverzeichnis jeder Stufe an die Stufe der nächsten Maschine weiter; `run --dry-run` validiert und druckt das Routing, ohne etwas anzulegen |
+| `panda voice [--once] [--mute]` | Desktop-Tier-Einstieg: Wake Word → ASR → dieselbe Eingabe-Pipeline → TTS, für ein Gerät ohne Tastatur; `--once` bearbeitet eine einzige Äußerung, `--mute` druckt statt zu sprechen |
 | `panda repl [--config PATH] [--card PATH]` | Interaktive Shell: Slash-Befehle (tasks/approve/projects/nodes/lang), freie Eingabe geht an die ask-Engine, `/web` startet die eingebettete Konsole |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | Web-Konsole mit einem Befehl: standardmäßig Loopback + flüchtiges Token, der Browser öffnet sich bereits angemeldet |
 | `panda init` | Interaktive Ersteinrichtung: erzeugt `config.yaml` + `capabilities.yaml` (Modell-Endpoint, Node-Name, Hardware-Scan-Standardwerte) |

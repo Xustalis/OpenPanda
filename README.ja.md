@@ -271,7 +271,9 @@ model:
 |---|---|
 | `panda`（引数なし） | 対話型REPLを起動（`panda repl`と同じ）；デーモンは `panda daemon` サブコマンドに移行 |
 | `panda daemon [--config PATH] [--card PATH]` | デーモン起動：ノード登録、ハートビート、WSサーバー、ピア再接続 |
-| `panda ask [--config PATH] [--card PATH] [--authorize] "<質問>"` | 統一エントリ：answer / tool_call / task に分類して実行 |
+| `panda ask [--config PATH] [--card PATH] [--authorize] "<質問>"` | 統一エントリ：answer / tool_call / task / plan に分類して実行 |
+| `panda plan run <ファイル.yaml> \| show <id> \| example` | クロスデバイス多段パイプライン：段階はただのタスク（キュー投入、ハードウェア別ルーティング、再試行、レビュー停泊）で、plan が順序を与え、前段階の作業ディレクトリを次のマシンの段階へ渡す。`run --dry-run` は作成せずルーティングのみ検証・印刷 |
+| `panda voice [--once] [--mute]` | デスクペット入口：ウェイクワード → ASR → 同じ入口パイプライン → TTS。キーボードのないデバイス向け。`--once` は 1 発だけ処理、`--mute` は朗読の代わりに印刷 |
 | `panda repl [--config PATH] [--card PATH]` | 対話シェル：スラッシュコマンド（tasks/approve/projects/nodes/lang）、素の入力は ask エンジンへ、`/web` で組み込みコンソールを起動 |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | コマンド1つで Web コンソール：デフォルトはループバック + 一時トークン、ブラウザが開いた時点でログイン済み |
 | `panda init` | 対話形式の初回セットアップ：`config.yaml` + `capabilities.yaml` を生成（モデルエンドポイント、ノード名、ハードウェアスキャンの既定値） |

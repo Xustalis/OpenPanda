@@ -342,7 +342,9 @@ Gestiona las skills:
 |---|---|
 | `panda` (sin argumentos) | Abre la REPL interactiva (igual que `panda repl`); el daemon ahora se ejecuta con el subcomando `panda daemon` |
 | `panda daemon [--config PATH] [--card PATH]` | Ejecutar el daemon: registrar nodo, heartbeat, servidor WS, reconexión de pares |
-| `panda ask [--config PATH] [--card PATH] [--authorize] "<pregunta>"` | Entrada unificada: clasifica en answer / tool_call / task y ejecuta |
+| `panda ask [--config PATH] [--card PATH] [--authorize] "<pregunta>"` | Entrada unificada: clasifica en answer / tool_call / task / plan y ejecuta |
+| `panda plan run <archivo.yaml> \| show <id> \| example` | Tubería multietapa entre dispositivos: una etapa ES una tarea ordinaria (se encola, enruta por hardware, reintenta, se estaciona en revisión), el plan aporta el orden y entrega el directorio de trabajo de cada etapa a la etapa de la siguiente máquina; `run --dry-run` valida e imprime el enrutado sin crear nada |
+| `panda voice [--once] [--mute]` | Entrada de mascota de escritorio: palabra de activación → ASR → la misma tubería de entrada → TTS, para un dispositivo sin teclado; `--once` atiende una sola frase, `--mute` imprime en lugar de hablar |
 | `panda repl [--config PATH] [--card PATH]` | Shell interactivo: comandos slash (tasks/approve/projects/nodes/lang), la entrada simple va al motor ask, `/web` arranca la consola incrustada |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | Consola web con un solo comando: loopback + token efímero por defecto, el navegador se abre ya con la sesión iniciada |
 | `panda init` | Configuración inicial interactiva: genera `config.yaml` + `capabilities.yaml` (endpoint del modelo, nombre del nodo, valores por defecto del escaneo de hardware) |
