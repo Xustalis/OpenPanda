@@ -598,12 +598,18 @@ export interface AskStreamHandlers {
 
 /** POST /api/sessions/{id}/ask and consume its SSE stream. Resolves when the
  * stream ends; errors surface through onError (and reject on transport
- * failure before the stream starts). */
+ * failure before the stream starts).
+ *
+ * `signal` aborts the request mid-stream — that is what the composer's stop
+ * button is wired to. An abort rejects with an `AbortError`, which the caller
+ * is expected to recognize rather than report as a failure: the partial reply
+ * already on screen is the useful outcome. */
 export async function askSessionStream(
   id: string,
   prompt: string,
   authorize: boolean,
   h: AskStreamHandlers,
+  signal?: AbortSignal,
 ): Promise<void> {
   const token = currentToken()
   const res = await fetch(`/api/sessions/${encodeURIComponent(id)}/ask`, {
@@ -613,6 +619,7 @@ export async function askSessionStream(
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ prompt, authorize }),
+    signal,
   })
   if (!res.ok) {
     if (res.status === 401) {
@@ -625,33 +632,49 @@ export async function askSessionStream(
   if (!res.body) throw new ApiError(0, 'no response body')
 
   const reader = res.body.getReader()
+  // fetch's own abort does not always propagate to a reader that is parked in
+  // read(); cancelling it explicitly ends the loop immediately.
+  const onAbort = () => void reader.cancel().catch(() => {})
+  signal?.addEventListener('abort', onAbort, { once: true })
   const decoder = new TextDecoder()
   let buf = ''
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buf += decoder.decode(value, { stream: true })
-    let sep: number
-    while ((sep = buf.indexOf('\n\n')) !== -1) {
-      const frame = buf.slice(0, sep)
-      buf = buf.slice(sep + 2)
-      let event = 'message'
-      const dataLines: string[] = []
-      for (const line of frame.split('\n')) {
-        if (line.startsWith('event: ')) event = line.slice(7).trim()
-        else if (line.startsWith('data: ')) dataLines.push(line.slice(6))
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      let sep: number
+      while ((sep = buf.indexOf('\n\n')) !== -1) {
+        const frame = buf.slice(0, sep)
+        buf = buf.slice(sep + 2)
+        let event = 'message'
+        const dataLines: string[] = []
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('event: ')) event = line.slice(7).trim()
+          else if (line.startsWith('data: ')) dataLines.push(line.slice(6))
+        }
+        if (dataLines.length === 0) continue
+        let payload: any
+        try {
+          payload = JSON.parse(dataLines.join('\n'))
+        } catch {
+          continue
+        }
+        if (event === 'delta') h.onDelta(payload.text ?? '')
+        else if (event === 'status') h.onStatus(payload.text ?? '')
+        else if (event === 'result') h.onResult(payload as AskResult)
+        else if (event === 'error') h.onError(payload.message ?? 'unknown error')
       }
-      if (dataLines.length === 0) continue
-      let payload: any
-      try {
-        payload = JSON.parse(dataLines.join('\n'))
-      } catch {
-        continue
-      }
-      if (event === 'delta') h.onDelta(payload.text ?? '')
-      else if (event === 'status') h.onStatus(payload.text ?? '')
-      else if (event === 'result') h.onResult(payload as AskResult)
-      else if (event === 'error') h.onError(payload.message ?? 'unknown error')
     }
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
   }
+  // A cancelled reader ends the loop cleanly, so surface the abort the way
+  // fetch would have if it had won the race.
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+}
+
+/** Whether a caught error is an abort (the user pressing stop), not a fault. */
+export function isAbort(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError'
 }

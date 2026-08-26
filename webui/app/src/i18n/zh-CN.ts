@@ -18,6 +18,18 @@ const zhCN: Messages = {
   'nav.group.personal': '个人',
   'nav.group.system': '系统',
 
+  // ⌘K 命令面板
+  'palette.trigger': '搜索…',
+  'palette.title': '命令面板',
+  'palette.placeholder': '跳转页面、切换主题或语言…',
+  'palette.noMatch': '没有匹配的命令。',
+  'palette.footMove': '移动',
+  'palette.footRun': '打开',
+  'palette.footClose': '关闭',
+  'palette.group.go': '前往',
+  'palette.group.language': '语言',
+  'palette.group.account': '连接',
+
   // Token gate
   'token.title': '连接到你的节点',
   'token.description': '输入该节点配置中的面板令牌（config.yaml 的 network.panel_token）。',
@@ -106,6 +118,7 @@ const zhCN: Messages = {
   // Sessions (chat) view
   'sessions.new': '新对话',
   'sessions.railEmpty': '还没有对话。',
+  'sessions.threads': '会话列表',
   'sessions.untitled': '未命名对话',
   'sessions.placeholder': '向 OpenPanda 提问…（Enter 发送，Shift+Enter 换行）',
   'sessions.authorize': '授权高风险操作',
@@ -129,6 +142,12 @@ const zhCN: Messages = {
   'sessions.worktreeChanges': '工作树变更',
   'sessions.merge': '合并到当前分支',
   'sessions.merging': '合并中…',
+  'sessions.stop': '停止',
+  'sessions.stopped': '已被你停止。',
+
+  // Markdown 渲染（助手回复）
+  'md.copy': '复制',
+  'md.copied': '已复制',
 
   // Settings view
   'settings.title': '设置',

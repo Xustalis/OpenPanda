@@ -68,16 +68,12 @@ func (r *repl) completionNote(t core.Task) string {
 	if len([]rune(title)) > 48 {
 		title = string([]rune(title)[:48]) + "…"
 	}
-	mark, code := "✓", "32"
+	p := pal()
+	mark, tint := p.MarkOK(), p.Success
 	if t.State != core.StateDone {
-		mark = "✗"
-		code = "31"
+		mark, tint = p.MarkFail(), p.Danger
 	}
-	line := fmt.Sprintf("%s %s (%s) — /task %s", mark, title, t.State, shortID(t.TaskID))
-	if stdoutIsTTY() {
-		return "\x1b[" + code + "m" + line + "\x1b[0m"
-	}
-	return line
+	return tint(fmt.Sprintf("%s %s (%s) — /task %s", mark, title, t.State, shortID(t.TaskID)))
 }
 
 // notify delivers one watcher line: through the terminal layer when the

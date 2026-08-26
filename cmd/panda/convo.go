@@ -26,6 +26,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
 // maxConvoChars is the replay budget for the bare-mode conversation:
@@ -112,9 +113,10 @@ func trimConvo(turns []entry.Turn) []entry.Turn {
 // appendConvo records one exchange (user prompt + assistant outcome) into
 // the conversation, trims to budget, persists, and returns the new view.
 // A task outcome is summarized (title, state, result head) — the next ask
-// knows what was done without the full stdout.
-func appendConvo(turns []entry.Turn, text string, out *askengine.Result) []entry.Turn {
-	assistant := convoSummaryOf(out)
+// knows what was done without the full stdout. The locale is the caller's
+// (the REPL's, so /lang is honoured), not a freshly detected one.
+func appendConvo(turns []entry.Turn, loc i18n.Locale, text string, out *askengine.Result) []entry.Turn {
+	assistant := convoSummaryOf(loc, out)
 	turns = append(turns,
 		entry.Turn{Role: "user", Content: text},
 		entry.Turn{Role: "assistant", Content: assistant},
@@ -125,9 +127,9 @@ func appendConvo(turns []entry.Turn, text string, out *askengine.Result) []entry
 }
 
 // convoSummaryOf renders the assistant side of one exchange.
-func convoSummaryOf(out *askengine.Result) string {
+func convoSummaryOf(loc i18n.Locale, out *askengine.Result) string {
 	if out == nil {
-		return "（无输出）"
+		return i18n.T(loc, "convo.noOutput")
 	}
 	switch out.Kind {
 	case "answer":
@@ -135,10 +137,14 @@ func convoSummaryOf(out *askengine.Result) string {
 			return out.Answer
 		}
 	case "task":
-		s := "[任务" + shortID(out.TaskID) + " " + out.TaskState + "] "
+		var s string
 		if out.TaskTitle != "" {
-			s += out.TaskTitle + "："
+			s = i18n.Tf(loc, "convo.taskTitle",
+				"id", shortID(out.TaskID), "state", out.TaskState, "title", out.TaskTitle)
+		} else {
+			s = i18n.Tf(loc, "convo.task", "id", shortID(out.TaskID), "state", out.TaskState)
 		}
+		s += " "
 		if out.OK {
 			s += firstLine(head(out.Stdout, 1200))
 		} else {
@@ -147,15 +153,15 @@ func convoSummaryOf(out *askengine.Result) string {
 		return s
 	case "plan":
 		// The next turn has to know a pipeline is under way, and by which stages:
-		// "结果呢" following a plan is a question about those stage ids, and the
-		// marker also keeps the task prompt layer attached (ChooseLayers).
-		s := "[计划" + shortID(out.PlanID) + " 已启动] " + out.PlanGoal
+		// "and the result?" following a plan is a question about those stage ids,
+		// and the marker also keeps the task prompt layer attached (ChooseLayers).
+		s := i18n.Tf(loc, "convo.plan", "id", shortID(out.PlanID), "goal", out.PlanGoal)
 		if names := stageNames(out.PlanStages); names != "" {
-			s += "（阶段：" + names + "）"
+			s += i18n.Tf(loc, "convo.stages", "names", names)
 		}
 		return s
 	}
-	return "（无输出）"
+	return i18n.T(loc, "convo.noOutput")
 }
 
 // stageNames lists a plan's stage ids in order, for the conversation record.

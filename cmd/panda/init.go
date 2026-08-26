@@ -56,10 +56,10 @@ func runInit(args []string) {
 		def.Node.Kind = config.NodeKindVM
 		def.Node.Identity = autoVMIdentity()
 	}
-	fmt.Println(initTf(loc, "init.node.summary", "name", def.Node.Name,
+	fmt.Println(i18n.Tf(loc, "init.node.summary", "name", def.Node.Name,
 		"class", def.Node.ResourceClass, "kind", def.Node.Kind))
 	if def.Node.Kind == config.NodeKindVM {
-		fmt.Println(initTf(loc, "init.node.vm", "identity", def.Node.Identity))
+		fmt.Println(i18n.Tf(loc, "init.node.vm", "identity", def.Node.Identity))
 	}
 
 	// Model setup is the single question. --defaults, --non-interactive, and
@@ -69,13 +69,13 @@ func runInit(args []string) {
 	case *defaultsMode:
 		if adoptEnvModel(def) {
 			modelConfigured = true
-			fmt.Println(initT(loc, "init.model.env"))
+			fmt.Println(i18n.T(loc, "init.model.env"))
 		}
 	case *nonInteractive || !stdinIsTTY():
 		// Nothing to ask: defaults only, never block on input.
 	default:
 		in := bufio.NewReader(os.Stdin)
-		if askYes(in, initT(loc, "init.model.ask")) {
+		if askYes(in, i18n.T(loc, "init.model.ask")) {
 			prompt := func(label, fallback string) string {
 				if fallback != "" {
 					fmt.Printf("%s [%s]: ", label, fallback)
@@ -109,7 +109,7 @@ func runInit(args []string) {
 		}
 	}
 	if !modelConfigured {
-		fmt.Println(initT(loc, "init.model.skipped"))
+		fmt.Println(i18n.T(loc, "init.model.skipped"))
 	}
 
 	// Belt and braces: never write a config the node would refuse to load.
@@ -228,68 +228,6 @@ func autoVMIdentity() string {
 		return "vm-" + h
 	}
 	return config.MachineIdentity()
-}
-
-// initStrings holds the copy the simplified flow needs but internal/i18n
-// does not carry yet (that package is frozen while parallel work lands).
-// It mirrors i18n's shape: per-locale maps, English fallback, {name}
-// placeholders.
-var initStrings = map[i18n.Locale]map[string]string{
-	i18n.English: {
-		"init.node.summary":  "node: {name} ({class}/{kind})",
-		"init.node.vm":       "vm detected — identity: {identity}",
-		"init.model.ask":     "Configure the model now? (Enter = skip; set it later on the web settings page)",
-		"init.model.env":     "model config taken from the environment (OPENPANDA_MODEL_API_KEY / OPENPANDA_MODEL)",
-		"init.model.skipped": "model config skipped — set it later on the web settings page (`panda web`)",
-	},
-	i18n.ChineseSimp: {
-		"init.node.summary":  "节点：{name}（{class}/{kind}）",
-		"init.node.vm":       "检测到虚拟机 — identity：{identity}",
-		"init.model.ask":     "要现在配置模型吗？（回车 = 跳过，稍后可在 web 设置页配置）",
-		"init.model.env":     "模型配置取自环境变量（OPENPANDA_MODEL_API_KEY / OPENPANDA_MODEL）",
-		"init.model.skipped": "已跳过模型配置 — 稍后可在 web 设置页配置（`panda web`）",
-	},
-	i18n.Japanese: {
-		"init.node.summary":  "ノード：{name}（{class}/{kind}）",
-		"init.node.vm":       "VM を検出 — identity：{identity}",
-		"init.model.ask":     "モデルを今すぐ設定しますか？（Enter = スキップ、後で Web 設定ページで設定できます）",
-		"init.model.env":     "モデル設定を環境変数から取得（OPENPANDA_MODEL_API_KEY / OPENPANDA_MODEL）",
-		"init.model.skipped": "モデル設定をスキップしました — 後で Web 設定ページ（`panda web`）で設定できます",
-	},
-	i18n.Spanish: {
-		"init.node.summary":  "nodo: {name} ({class}/{kind})",
-		"init.node.vm":       "VM detectada — identity: {identity}",
-		"init.model.ask":     "¿Configurar el modelo ahora? (Enter = omitir; podrás configurarlo luego en la página de ajustes web)",
-		"init.model.env":     "configuración del modelo tomada del entorno (OPENPANDA_MODEL_API_KEY / OPENPANDA_MODEL)",
-		"init.model.skipped": "configuración del modelo omitida — configúrala luego en la página de ajustes web (`panda web`)",
-	},
-	i18n.German: {
-		"init.node.summary":  "Knoten: {name} ({class}/{kind})",
-		"init.node.vm":       "VM erkannt — identity: {identity}",
-		"init.model.ask":     "Modell jetzt konfigurieren? (Enter = überspringen; später in den Web-Einstellungen möglich)",
-		"init.model.env":     "Modellkonfiguration aus der Umgebung übernommen (OPENPANDA_MODEL_API_KEY / OPENPANDA_MODEL)",
-		"init.model.skipped": "Modellkonfiguration übersprungen — später in den Web-Einstellungen (`panda web`) festlegen",
-	},
-}
-
-// initT translates a key from initStrings, falling back to English.
-func initT(loc i18n.Locale, key string) string {
-	if m := initStrings[loc]; m != nil {
-		if s, ok := m[key]; ok {
-			return s
-		}
-	}
-	return initStrings[i18n.English][key]
-}
-
-// initTf translates and interpolates {name} placeholders from alternating
-// key/value pairs, like i18n.Tf.
-func initTf(loc i18n.Locale, key string, pairs ...string) string {
-	s := initT(loc, key)
-	for i := 0; i+1 < len(pairs); i += 2 {
-		s = strings.ReplaceAll(s, "{"+pairs[i]+"}", pairs[i+1])
-	}
-	return s
 }
 
 // resolveInitConfigPath picks where init writes: an explicit flag or

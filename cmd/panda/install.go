@@ -73,21 +73,36 @@ func runInstall(args []string) {
 }
 
 // runDoctor is the post-install / post-update self-check. It exits 1 when
-// any check fails so scripts can gate on it.
+// any check fails so scripts can gate on it. The checks themselves live in
+// doctorReport so `/doctor` inside the REPL can print the same report without
+// taking the process down with it.
 func runDoctor(args []string) {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
 	fs.Parse(args)
 
 	loc := i18n.Detect()
-	fmt.Println(i18n.T(loc, "doctor.title"))
+	if problems := doctorReport(loc, *configPath); problems > 0 {
+		fmt.Println(i18n.Tf(loc, "doctor.fail", "n", fmt.Sprint(problems)))
+		os.Exit(1)
+	}
+	fmt.Println(i18n.T(loc, "doctor.pass"))
+}
+
+// doctorReport prints the self-check report and returns the number of failed
+// checks. The ✓/✗ marks degrade to +/x on a terminal without the glyphs and
+// are tinted on a colour one — a page of checks is read by scanning for the
+// failures, so they have to stand out.
+func doctorReport(loc i18n.Locale, configPath string) int {
+	p := pal()
+	fmt.Println(p.Heading(i18n.T(loc, "doctor.title")))
 	problems := 0
 	fail := func(key string, pairs ...string) {
 		problems++
-		fmt.Println("  ✗ " + i18n.Tf(loc, key, pairs...))
+		fmt.Println("  " + p.Danger(p.MarkFail()) + " " + i18n.Tf(loc, key, pairs...))
 	}
 	pass := func(key string, pairs ...string) {
-		fmt.Println("  ✓ " + i18n.Tf(loc, key, pairs...))
+		fmt.Println("  " + p.Success(p.MarkOK()) + " " + i18n.Tf(loc, key, pairs...))
 	}
 
 	exe, _ := os.Executable()
@@ -119,8 +134,8 @@ func runDoctor(args []string) {
 		fail("doctor.persist.no")
 	}
 
-	if cfg, err := config.Load(*configPath); err == nil {
-		pass("doctor.config.ok", "path", configFileUsed(*configPath), "name", cfg.Node.Name)
+	if cfg, err := config.Load(configPath); err == nil {
+		pass("doctor.config.ok", "path", configFileUsed(configPath), "name", cfg.Node.Name)
 		if st, err := os.Stat(cfg.Storage.DBPath); err == nil {
 			pass("doctor.db.ok", "path", cfg.Storage.DBPath, "size", fmt.Sprintf("%d B", st.Size()))
 		} else {
@@ -166,12 +181,7 @@ func runDoctor(args []string) {
 		fail("doctor.agent.none")
 	}
 
-	if problems == 0 {
-		fmt.Println(i18n.T(loc, "doctor.pass"))
-		return
-	}
-	fmt.Println(i18n.Tf(loc, "doctor.fail", "n", fmt.Sprint(problems)))
-	os.Exit(1)
+	return problems
 }
 
 // findAdaptersDir locates the adapters/ directory — relative to the working

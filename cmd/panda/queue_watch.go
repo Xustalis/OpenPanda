@@ -12,9 +12,11 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
@@ -61,14 +63,16 @@ func watchQueue(ctx context.Context, store *core.TaskStore, state, project strin
 			} else {
 				fmt.Print("\x1b[H") // repaint from the top
 			}
-			fmt.Printf("\x1b[1m%s\x1b[0m  %s  (\x1b[2m%s\x1b[0m)\r\n",
-				i18n.T(loc, "cli.watch.head"), time.Now().Format("15:04:05"), i18n.Tf(loc, "cli.watch.hint", "key", "^C"))
+			p := pal()
+			fmt.Printf("%s  %s  (%s)\r\n",
+				p.Bold(i18n.T(loc, "cli.watch.head")), time.Now().Format("15:04:05"),
+				p.Muted(i18n.Tf(loc, "cli.watch.hint", "key", "^C")))
 			if len(rows) == 0 {
 				fmt.Println("  " + i18n.T(loc, "cli.queue.none"))
 			}
 			for _, t := range rows {
-				fmt.Printf("  %-10s %-12s %-8s %-12s %s\r\n",
-					shortID(t.TaskID), colorState(t.State), priorityName(t.Priority), orDash(t.OwnerNode), clipRunes(t.Title, 44))
+				fmt.Printf("  %-10s %s %-8s %-12s %s\r\n",
+					shortID(t.TaskID), stateCell(t.State, 12), priorityName(t.Priority), orDash(t.OwnerNode), clipRunes(t.Title, 44))
 			}
 			fmt.Print("\x1b[J") // clear stale rows below (shrunk lists)
 		}
@@ -85,21 +89,30 @@ func watchQueue(ctx context.Context, store *core.TaskStore, state, project strin
 // colorState tints a state word on TTYs — green done, red failed, yellow
 // running/review, dim otherwise — so the board scans like the web console.
 func colorState(s string) string {
-	if !stdoutIsTTY() {
-		return s
-	}
-	code := "2" // dim
+	p := pal()
 	switch s {
 	case core.StateDone:
-		code = "32"
+		return p.Success(s)
 	case core.StateFailed, core.StateCancelled, core.StateExpired:
-		code = "31"
+		return p.Danger(s)
 	case core.StateRunning, core.StateReview, core.StateDispatched:
-		code = "33"
+		return p.Warn(s)
 	case core.StateQueued, core.StateSubmitted:
-		code = "36"
+		return p.Info(s)
 	}
-	return "\x1b[" + code + "m" + s + "\x1b[0m"
+	return p.Muted(s)
+}
+
+// stateCell is colorState padded to n columns. The padding has to be computed
+// here rather than with %-12s: a tinted word carries escape bytes, and the
+// verb-width padding fmt applies would count those, knocking every column after
+// it out of alignment on a colour terminal.
+func stateCell(s string, n int) string {
+	pad := n - cliui.DisplayWidth(s)
+	if pad < 0 {
+		pad = 0
+	}
+	return colorState(s) + strings.Repeat(" ", pad)
 }
 
 // clipRunes truncates s to at most n runes with an ellipsis marker.

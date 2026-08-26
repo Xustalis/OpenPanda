@@ -18,6 +18,18 @@ const es: Messages = {
   'nav.group.personal': 'Personal',
   'nav.group.system': 'Sistema',
 
+  // Paleta de comandos (⌘K)
+  'palette.trigger': 'Buscar…',
+  'palette.title': 'Paleta de comandos',
+  'palette.placeholder': 'Ir a una página, cambiar tema o idioma…',
+  'palette.noMatch': 'Ningún comando coincide.',
+  'palette.footMove': 'mover',
+  'palette.footRun': 'abrir',
+  'palette.footClose': 'cerrar',
+  'palette.group.go': 'Ir a',
+  'palette.group.language': 'Idioma',
+  'palette.group.account': 'Conexión',
+
   // Token gate
   'token.title': 'Conecta con tu nodo',
   'token.description':
@@ -107,6 +119,7 @@ const es: Messages = {
   // Sessions (chat) view
   'sessions.new': 'Nuevo chat',
   'sessions.railEmpty': 'Aún no hay conversaciones.',
+  'sessions.threads': 'Conversaciones',
   'sessions.untitled': 'Chat sin título',
   'sessions.placeholder': 'Pregunta a OpenPanda… (Enter para enviar, Shift+Enter para nueva línea)',
   'sessions.authorize': 'Autorizar acciones de riesgo',
@@ -130,6 +143,12 @@ const es: Messages = {
   'sessions.worktreeChanges': 'Cambios del worktree',
   'sessions.merge': 'Fusionar en la rama actual',
   'sessions.merging': 'Fusionando…',
+  'sessions.stop': 'Detener',
+  'sessions.stopped': 'Detenido por ti.',
+
+  // Renderizado Markdown (respuestas del asistente)
+  'md.copy': 'Copiar',
+  'md.copied': 'Copiado',
 
   // Settings view
   'settings.title': 'Ajustes',

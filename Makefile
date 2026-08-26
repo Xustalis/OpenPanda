@@ -3,7 +3,7 @@ BIN := bin/panda
 VERSION ?= 0.0.3
 LDFLAGS := -s -w -X github.com/Xustalis/OpenPanda/internal/version.Version=$(VERSION)
 
-.PHONY: all build web build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
+.PHONY: all build web web-test build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
         dev test vet fmt fmt-check race gate run run-local measure clean icons release package
 
@@ -17,9 +17,15 @@ build:
 # folds it into the panel binary. Requires node/npm. The committed
 # dist/index.html placeholder is never touched (vite empties only dist/app).
 web:
-	cd webui/app && npm install --no-fund --no-audit && npm run build
+	cd webui/app && npm install --no-fund --no-audit && npm run typecheck && npm run build
 	@if [ ! -f webui/panel/dist/app/index.html ]; then \
 		echo "make web: dist/app/index.html missing — the build did not land"; exit 1; fi
+
+# Console typecheck + unit tests (node's own runner — no test framework is
+# installed). Separate from `make test` because it needs node, which the Go
+# gate does not: CI runs it wherever `make web` runs.
+web-test:
+	cd webui/app && npm install --no-fund --no-audit && npm run typecheck && npm test
 
 # Web panel sidecar with the embedded console. `make web` first for a real UI;
 # without it the binary embeds the committed placeholder.
