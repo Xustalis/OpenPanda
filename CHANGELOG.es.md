@@ -36,7 +36,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Cada entrada nombra el cambio y su efecto visible en una a tres líneas; se cita el commit que lo introdujo cuando ayuda a la arqueología.
 - Este archivo en inglés es el canónico. Las traducciones zh-CN / ja / es / de lo replican y pueden retrasarse brevemente alrededor de un lanzamiento.
 
-## [Unreleased]
+## [0.0.6] - 2026-08-27
 
 El lanzamiento de computación entre dispositivos toma forma: una solicitud que necesita máquinas distintas para pasos distintos es ahora un plan de primera clase cuyas etapas corren donde está el hardware, y ambas superficies —el CLI y la consola web— ganaron la capa de presentación que les faltaba: retroalimentación en vivo mientras un ask converge, Markdown de verdad en el navegador, y el editor de entrada que el uso diario exige.
 
