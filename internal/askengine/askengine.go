@@ -47,6 +47,13 @@ type Options struct {
 	// the client runs on a bare Linux console whose font has no CJK glyphs
 	// (Chinese replies would otherwise render as diamonds).
 	ReplyASCII bool
+	// AsyncPeers dials configured peers in the background instead of waiting
+	// for the dials (and a settle window) before New returns. Interactive
+	// surfaces (the REPL) want this: an offline peer's dial timeout is
+	// routine in a long-lived session, not worth dead air before the banner.
+	// One-shot callers (panda ask) leave it off — their routing decision runs
+	// immediately and needs the conns settled first.
+	AsyncPeers bool
 	// Logger defaults to a warn-level stderr handler.
 	Logger *slog.Logger
 }
@@ -311,13 +318,40 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 			sched.StartQueueScheduler(schedCtx)
 		}
 
-		for _, peer := range cfg.Network.Peers {
-			if err := sched.DialPeer(schedCtx, peer); err != nil {
-				logger.Warn("peer dial failed", "peer", peer, "err", err)
+		if opts.AsyncPeers {
+			// Interactive surfaces: dial in the background and never hold the
+			// first prompt — an offline peer can burn the dialer's full 10s
+			// timeout, and it used to (serially, before the banner). The conns
+			// land in the registry whenever they land; a delegation arriving
+			// before that sees the same state as a peer that is offline. Dial
+			// failures log at debug: an offline peer is routine in a
+			// long-lived session, and a WARN on stderr would land mid-keystroke
+			// on the line editor.
+			for _, peer := range cfg.Network.Peers {
+				go func(p string) {
+					if err := sched.DialPeer(schedCtx, p); err != nil {
+						logger.Debug("peer dial failed", "peer", p, "err", err)
+					}
+				}(peer)
 			}
-		}
-		if len(cfg.Network.Peers) > 0 {
-			waitForPeers(schedCtx, db, 2*time.Second)
+		} else {
+			// One-shot callers need the conns before the first routing
+			// decision, but not one at a time: dials run concurrently so an
+			// unreachable peer's timeout does not gate a reachable one.
+			var wg sync.WaitGroup
+			for _, peer := range cfg.Network.Peers {
+				wg.Add(1)
+				go func(p string) {
+					defer wg.Done()
+					if err := sched.DialPeer(schedCtx, p); err != nil {
+						logger.Warn("peer dial failed", "peer", p, "err", err)
+					}
+				}(peer)
+			}
+			wg.Wait()
+			if len(cfg.Network.Peers) > 0 {
+				waitForPeers(schedCtx, db, 2*time.Second)
+			}
 		}
 	}
 

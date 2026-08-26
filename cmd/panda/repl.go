@@ -218,6 +218,10 @@ func runRepl(args []string) {
 			CardPath:   *cardPath,
 			MCPCommand: *mcpCmd,
 			ReplyASCII: isLinuxConsole(),
+			// The session is long-lived and interactive: peers dial in the
+			// background instead of gating the banner (an offline peer's dial
+			// timeout is routine, not 10s of dead air before the first prompt).
+			AsyncPeers: true,
 		})
 		if err != nil {
 			fatal("ask engine", err)
