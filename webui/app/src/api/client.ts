@@ -322,6 +322,12 @@ export const api = {
     return request('GET', '/api/nodes')
   },
 
+  /** Drop a stale node row (offline remote only — the server refuses the
+   *  local node and online nodes, since both re-register themselves). */
+  removeNode(id: string): Promise<{ id: string; removed: boolean }> {
+    return request('DELETE', `/api/nodes/${encodeURIComponent(id)}`)
+  },
+
   /** This machine's device profile and its capability card. */
   self(): Promise<SelfInfo> {
     return request('GET', '/api/self')

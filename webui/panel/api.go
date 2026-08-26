@@ -157,6 +157,46 @@ func (h *handler) listNodes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// removeNode serves DELETE /api/nodes/{id} — drops a stale row from the
+// capability directory (a renamed machine, a peer whose identity changed,
+// a decommissioned node). Two refusals, both about making the operation
+// honest rather than magic: the local node's row (this machine's own
+// heartbeat re-inserts it on the next beat — removing it here is a no-op
+// wearing a success message), and an online node (its next hello
+// re-registers it; a row backed by a live peer is not stale).
+func (h *handler) removeNode(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("node directory not configured"))
+		return
+	}
+	id := r.PathValue("id")
+	if h.cfg != nil && id == localNodeID(h.cfg) {
+		writeErr(w, http.StatusBadRequest, errors.New("this is the local node's row — this machine's own heartbeat re-registers it"))
+		return
+	}
+	nodes, err := ledger.Query(h.db, "", "")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("query nodes failed"))
+		return
+	}
+	for _, n := range nodes {
+		if n.ID != id {
+			continue
+		}
+		if n.Status == "online" {
+			writeErr(w, http.StatusConflict, errors.New("node is online — its next hello re-registers it; stop the node first"))
+			return
+		}
+		if _, err := ledger.Remove(h.db, id); err != nil {
+			writeErr(w, http.StatusInternalServerError, errors.New("remove failed"))
+			return
+		}
+		writeJSON(w, map[string]any{"id": id, "removed": true})
+		return
+	}
+	writeErr(w, http.StatusNotFound, errors.New("no such node"))
+}
+
 // getProjectMemory serves GET /api/projects/{name}/memory — one project's
 // MEMORY.md content (the read half of PUT /api/projects/{name}/memory),
 // loaded through the Projects store so name validation and the configured

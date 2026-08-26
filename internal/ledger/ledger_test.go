@@ -127,6 +127,52 @@ func TestMarkOffline(t *testing.T) {
 	}
 }
 
+func TestRemove(t *testing.T) {
+	db := openLedgerDB(t)
+	if err := Register(db, testCard(), "opi3b", 1); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := Register(db, testCard(), "macbook", 1); err != nil {
+		t.Fatalf("register macbook: %v", err)
+	}
+
+	n, err := Remove(db, "opi3b")
+	if err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 row removed, got %d", n)
+	}
+	nodes, _ := Query(db, "", "")
+	if len(nodes) != 1 || nodes[0].ID != "macbook" {
+		t.Fatalf("expected only macbook left, got %v", nodes)
+	}
+
+	// Unknown id: no error, zero rows — removal is idempotent from the
+	// caller's perspective.
+	n, err = Remove(db, "ghost")
+	if err != nil || n != 0 {
+		t.Fatalf("expected (0, nil) for unknown id, got (%d, %v)", n, err)
+	}
+
+	// A registered remote re-appears on its next hello after removal —
+	// the directory, not Remove, decides who is stale. (macbook is online
+	// too: Register never demotes it, only MarkOffline does.)
+	if err := UpsertRemote(db, "opi3b", CapabilitySummary{Device: "opi3b"}); err != nil {
+		t.Fatalf("upsert remote: %v", err)
+	}
+	online, _ := Query(db, "online", "")
+	found := false
+	for _, n := range online {
+		if n.ID == "opi3b" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected re-registered opi3b online, got %v", online)
+	}
+}
+
 func TestQueryByNameFilter(t *testing.T) {
 	db := openLedgerDB(t)
 	if err := Register(db, testCard(), "a", 1); err != nil {

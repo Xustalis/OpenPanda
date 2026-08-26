@@ -394,6 +394,8 @@ const en: Messages = {
   'nodes.cores': '{n} cores',
   'nodes.concurrency': '{cur}/{max} tasks',
   'nodes.details': 'Capability card',
+  'nodes.remove': 'Remove node',
+  'nodes.removeConfirm': 'Remove {name} from the node directory? Its row is offline and not backed by a live peer — if the machine comes back it re-registers itself.',
   'nodes.detailsHide': 'Collapse',
   'nodes.hardware': 'Hardware',
   'nodes.resources': 'Resources',

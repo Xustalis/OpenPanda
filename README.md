@@ -391,7 +391,10 @@ Manage skills:
 Use `panda nodes` (or `panda status`) to inspect node kind, local/remote
 placement and running state. `panda status --running` shows only nodes with a
 fresh runtime heartbeat; the Web Nodes page exposes the same data through
-`/api/self` and `/api/nodes`.
+`/api/self` and `/api/nodes`. Stale rows (a renamed machine, a peer whose
+identity changed, a decommissioned node) can be dropped with `panda nodes
+remove <id>` or the console's Remove button — the local node's own row and
+online nodes are refused, since both re-register themselves.
 | `storage` | `db_path` | SQLite database path |
 | `storage` | `context_path` | Context snapshot store |
 | `storage` | `memory_path` | Personal memory root |

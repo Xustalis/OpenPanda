@@ -2877,8 +2877,21 @@ label {
   font-weight: 600;
 }
 
-.node-detail-toggle {
+.node-actions {
   margin-top: 6px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.node-actions .node-detail-toggle {
+  margin-top: 0;
+}
+
+.node-remove-error {
+  margin: 6px 0 0;
+  color: var(--danger);
+  font-size: 12.5px;
 }
 
 .node-detail {

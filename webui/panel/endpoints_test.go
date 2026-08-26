@@ -16,6 +16,7 @@ import (
 	agentreg "github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -679,5 +680,58 @@ func TestAgentProbeAndTest(t *testing.T) {
 	}
 	if code, _ := doJSON(t, h, authedReq(http.MethodPost, "/api/agents/ghost/test", nil)); code != http.StatusNotFound {
 		t.Fatalf("unknown agent status = %d, want 404", code)
+	}
+}
+
+// TestRemoveNode covers DELETE /api/nodes/{id}: a stale offline remote is
+// removed; the local node's own row is refused (its heartbeat re-registers
+// it); an online node is refused (its next hello re-registers it); an
+// unknown id is a 404.
+func TestRemoveNode(t *testing.T) {
+	db := newMigratedDB(t)
+	cfg := config.Default()
+	h := New(Deps{Store: newTestStore(t), DB: db, Cfg: cfg, StaticDir: t.TempDir(), Token: testToken})
+
+	// Two stale offline rows — the pre-identity-fix duplicates — and one
+	// live remote.
+	if err := ledger.Register(db, ledger.Card{Device: "stale-1"}, "stale-1", 1); err != nil {
+		t.Fatalf("register stale-1: %v", err)
+	}
+	if err := ledger.MarkOffline(db, "stale-1"); err != nil {
+		t.Fatalf("offline stale-1: %v", err)
+	}
+	if err := ledger.Register(db, ledger.Card{Device: "stale-2"}, "stale-2", 1); err != nil {
+		t.Fatalf("register stale-2: %v", err)
+	}
+	if err := ledger.MarkOffline(db, "stale-2"); err != nil {
+		t.Fatalf("offline stale-2: %v", err)
+	}
+	if err := ledger.UpsertRemote(db, "live-pi", ledger.CapabilitySummary{Device: "live-pi"}); err != nil {
+		t.Fatalf("upsert live-pi: %v", err)
+	}
+
+	// Offline remote: removed.
+	code, out := doJSON(t, h, authedReq(http.MethodDelete, "/api/nodes/stale-1", nil))
+	if code != http.StatusOK || out["removed"] != true {
+		t.Fatalf("remove stale-1 = %d %v", code, out)
+	}
+	nodes, err := ledger.Query(db, "offline", "")
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("expected only stale-2 left, got %d nodes (err %v)", len(nodes), err)
+	}
+
+	// Online remote: refused — a live peer re-registers itself.
+	if code, _ := doJSON(t, h, authedReq(http.MethodDelete, "/api/nodes/live-pi", nil)); code != http.StatusConflict {
+		t.Fatalf("online remove = %d, want 409", code)
+	}
+
+	// The local node's own row: refused.
+	if code, _ := doJSON(t, h, authedReq(http.MethodDelete, "/api/nodes/"+localNodeID(cfg), nil)); code != http.StatusBadRequest {
+		t.Fatalf("self remove = %d, want 400", code)
+	}
+
+	// Unknown id: 404.
+	if code, _ := doJSON(t, h, authedReq(http.MethodDelete, "/api/nodes/ghost", nil)); code != http.StatusNotFound {
+		t.Fatalf("unknown remove = %d, want 404", code)
 	}
 }

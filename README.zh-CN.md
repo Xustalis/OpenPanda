@@ -281,7 +281,8 @@ model:
 | `panda install [--dir PATH] [--no-path]` | 将 `panda` 注册为全局命令（PATH 持久化、重启后仍可用），并自动验证安装副本可运行 |
 | `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run]` | 安全卸载：先展示完整计划，需输入 `confirm` 二次确认，白名单删除，用户资产（projects/memory/skills）始终保留，生成 zip 备份与清理报告 |
 | `panda doctor [--config PATH]` | 自检：安装副本可运行、PATH 解析正常、持久化在重启后有效、配置/数据库可用 |
-| `panda status` | 节点与任务状态 |
+| `panda status` | 节点与任务状态（`panda nodes` 同义；`--running` 只看活跃心跳） |
+| `panda nodes remove <id>` | 从节点目录移除过期行（改过名的机器、换了身份的 peer、退役节点）；本机自己的行与在线节点会被拒绝——它们会自行重新注册 |
 | `panda queue` | 列出任务队列 |
 | `panda task [--config PATH] <task-id>` | 任务详情 |
 | `panda cancel [--config PATH] <task-id>` | 取消任务（级联到执行节点） |

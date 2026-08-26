@@ -43,7 +43,12 @@ export function NodesView() {
       ) : (
         <div class="node-grid">
           {nodes.map((n) => (
-            <NodeCard key={n.id} node={n} isSelf={isSelfNode(self, n)} />
+            <NodeCard
+              key={n.id}
+              node={n}
+              isSelf={isSelfNode(self, n)}
+              onRemoved={() => setTick((v) => v + 1)}
+            />
           ))}
         </div>
       )}
@@ -88,11 +93,38 @@ function SelfCard({ self }: { self: SelfInfo }) {
 
 /** One capability card: the summary line, and an expandable breakdown of
  *  hardware capacity, the declared resource profile, and each agent the
- *  node advertises (capabilities / best at / not for). */
-function NodeCard({ node, isSelf }: { node: NodeInfo; isSelf: boolean }) {
+ *  node advertises (capabilities / best at / not for). Offline remote
+ *  cards carry a remove action: their row is not backed by a live peer
+ *  (renamed machine, changed identity, decommissioned node). */
+function NodeCard({
+  node,
+  isSelf,
+  onRemoved,
+}: {
+  node: NodeInfo
+  isSelf: boolean
+  onRemoved(): void
+}) {
   const [open, setOpen] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const [removeErr, setRemoveErr] = useState('')
   const agentNames = node.agents ? Object.keys(node.agents) : []
   const displayName = (node.name && node.name !== node.id) ? node.name : node.id
+  const canRemove = !isSelf && node.status !== 'online'
+
+  async function remove() {
+    if (removing) return
+    if (!window.confirm(t('nodes.removeConfirm', { name: displayName }))) return
+    setRemoving(true)
+    setRemoveErr('')
+    try {
+      await api.removeNode(node.id)
+      onRemoved()
+    } catch (e) {
+      setRemoveErr(e instanceof Error ? e.message : String(e))
+      setRemoving(false)
+    }
+  }
 
   return (
     <div class="card node-card">
@@ -126,9 +158,17 @@ function NodeCard({ node, isSelf }: { node: NodeInfo; isSelf: boolean }) {
         </div>
       )}
 
-      <button class="btn small node-detail-toggle" onClick={() => setOpen(!open)}>
-        {open ? t('nodes.detailsHide') : t('nodes.details')}
-      </button>
+      <div class="node-actions">
+        <button class="btn small node-detail-toggle" onClick={() => setOpen(!open)}>
+          {open ? t('nodes.detailsHide') : t('nodes.details')}
+        </button>
+        {canRemove && (
+          <button class="btn small danger" type="button" disabled={removing} onClick={remove}>
+            {removing ? t('common.loading') : t('nodes.remove')}
+          </button>
+        )}
+      </div>
+      {removeErr && <p class="node-remove-error">{removeErr}</p>}
 
       {open && (
         <div class="node-detail">

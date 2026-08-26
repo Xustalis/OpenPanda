@@ -132,6 +132,56 @@ func runStatus(args []string) {
 	}
 }
 
+// runNodeRemove implements `panda nodes remove <id>` — drops a stale row
+// from the capability directory: a renamed machine, a peer whose identity
+// changed (the pre-identity-fix rows with random suffixes), a decommissioned
+// node. The self row and online nodes are refused for the same reason the
+// panel refuses them: both re-register themselves, so "removing" them would
+// be a no-op wearing a success message.
+func runNodeRemove(args []string) {
+	fs := flag.NewFlagSet("nodes remove", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config.yaml")
+	fs.Parse(args)
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fatal("usage", fmt.Errorf("panda nodes remove <id>"))
+	}
+	id := rest[0]
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, _, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	loc := i18n.Detect()
+	if id == core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity()) {
+		fatal("remove node", fmt.Errorf("%s", i18n.T(loc, "cli.nodes.self")))
+	}
+	nodes, err := ledger.Query(db, "", "")
+	if err != nil {
+		fatal("query employees", err)
+	}
+	for _, n := range nodes {
+		if n.ID != id {
+			continue
+		}
+		if n.Status == "online" {
+			fatal("remove node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.online", "id", id)))
+		}
+		if _, err := ledger.Remove(db, id); err != nil {
+			fatal("remove node", err)
+		}
+		fmt.Println(i18n.Tf(loc, "cli.nodes.removed", "id", id))
+		return
+	}
+	fatal("remove node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.none", "id", id)))
+}
+
 type nodeStatusView struct {
 	ledger.Node
 	Local   bool `json:"local"`

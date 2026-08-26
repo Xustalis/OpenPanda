@@ -49,6 +49,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **CLI 的展示层** — `internal/cliui`：一次性解析的统一调色板，以及实时状态行（spinner、动词、耗时、token 数——后两者早已记录、只是从未展示），管道输出时退化为静态行。行编辑器学会括号粘贴与多行输入（粘贴多行提示词只触发一次 ask，历史也按单条回放）、Ctrl-R 增量历史搜索、以及没人愿意重打的 id 的参数位补全。未知命令给出 did-you-mean；`/help` 按意图分组内联打印；新命令覆盖第一次 ask 跑通后自然会需要的东西（`/cost`、`/model`、`/status`、`/doctor`、`/export`、`/clear`），外加 `@file` 附件与 `!cmd` 直通，让人不必离开提示符（c538ab6）。
 - **Web 聊天界面补课** — 手写 Markdown 渲染器（零 `innerHTML`，因此无需 sanitizer 依赖；29 个 node 测试）替换回复里的字面 `**bold**` 与 ``` 围栏；流式期间输入框主按钮变为停止按钮（SSE 读取器接受 AbortSignal）；读者上滚后自动滚动不再拉扯视图；Cmd+K 命令面板与侧边栏共用同一导航词汇；移动端会话抽屉替代 `display:none`（c538ab6）。
 - **状态页** — `docs/status.md` 记录哪些能用、哪些只是构建了、哪些缺失，含旗舰流水线的验证状态（76c5b69）。
+- **过期节点行可移除** — `panda nodes remove <id>` 与离线节点卡上的移除按钮，删除已无活跃 peer 支撑的目录行（改过名的机器、换了身份的 peer、退役节点）。本机自己的行与在线节点会被拒绝——它们会自行重新注册，"移除"只会是一次穿着成功消息的无操作。
 - **Release 说明工具链** — release 工作流把版本对应的 CHANGELOG 段落加各平台安装命令发布为 release 正文，段落缺失时构建失败；0.0.5 release 页按该标准重写为纯英文正文加语言切换器；每个 CHANGELOG 顶部加一键安装（4e12779, c25a3cb, 98e10df, 600ffb3）。
 
 ### 问题修复
