@@ -43,7 +43,7 @@ func TestPredecessor(t *testing.T) {
 func matchAny(required []string) bool { return len(required) > 0 && required[0] == "local:ok" }
 
 func TestRouteLocalWins(t *testing.T) {
-	d := Route("self", []string{"self"}, nil, matchAny, []string{"local:ok"}, "")
+	d := Route("self", []string{"self"}, nil, matchAny, []string{"local:ok"}, ledger.ResourceProfile{}, "")
 	if d.Action != ActionLocal {
 		t.Fatalf("action = %s, want local", d.Action)
 	}
@@ -58,7 +58,7 @@ func TestRouteForwardsToMatchingPeer(t *testing.T) {
 	}
 	neverLocal := func([]string) bool { return false }
 
-	d := Route("self", []string{"self"}, employees, neverLocal, []string{"gpio:read"}, "")
+	d := Route("self", []string{"self"}, employees, neverLocal, []string{"gpio:read"}, ledger.ResourceProfile{}, "")
 	if d.Action != ActionForward || d.Target != "a" {
 		t.Fatalf("decision = %+v, want forward to a (lowest id, online, non-self)", d)
 	}
@@ -70,7 +70,7 @@ func TestRouteDeclinesWhenNoMatch(t *testing.T) {
 	}
 	neverLocal := func([]string) bool { return false }
 
-	d := Route("self", []string{"self"}, employees, neverLocal, []string{"code:modify"}, "")
+	d := Route("self", []string{"self"}, employees, neverLocal, []string{"code:modify"}, ledger.ResourceProfile{}, "")
 	if d.Action != ActionDecline || d.Reason == "" {
 		t.Fatalf("decision = %+v, want decline with reason", d)
 	}
@@ -83,7 +83,7 @@ func TestRouteSkipsNodeAlreadyOnChain(t *testing.T) {
 	}
 	neverLocal := func([]string) bool { return false }
 
-	d := Route("self", []string{"root", "a", "self"}, employees, neverLocal, []string{"gpio:read"}, "")
+	d := Route("self", []string{"root", "a", "self"}, employees, neverLocal, []string{"gpio:read"}, ledger.ResourceProfile{}, "")
 	if d.Action != ActionDecline {
 		t.Fatalf("decision = %+v, want decline (candidate already on chain)", d)
 	}
@@ -98,7 +98,7 @@ func TestRouteForwardsToSubScheduler(t *testing.T) {
 	}
 	neverLocal := func([]string) bool { return false }
 
-	d := Route("self", []string{"self"}, employees, neverLocal, []string{"code:modify"}, "")
+	d := Route("self", []string{"self"}, employees, neverLocal, []string{"code:modify"}, ledger.ResourceProfile{}, "")
 	if d.Action != ActionForward || d.Target != "sub" {
 		t.Fatalf("decision = %+v, want forward to sub-scheduler (tier>1)", d)
 	}
@@ -113,7 +113,7 @@ func TestRoutePrefersMatchingOverSubScheduler(t *testing.T) {
 	}
 	neverLocal := func([]string) bool { return false }
 
-	d := Route("self", []string{"self"}, employees, neverLocal, []string{"code:modify"}, "")
+	d := Route("self", []string{"self"}, employees, neverLocal, []string{"code:modify"}, ledger.ResourceProfile{}, "")
 	if d.Action != ActionForward || d.Target != "z-match" {
 		t.Fatalf("decision = %+v, want forward to matching peer (z-match)", d)
 	}
@@ -129,7 +129,7 @@ func TestRoutePrefersHigherTier(t *testing.T) {
 	}
 	neverLocal := func([]string) bool { return false }
 
-	d := Route("self", []string{"self"}, employees, neverLocal, []string{"build"}, "")
+	d := Route("self", []string{"self"}, employees, neverLocal, []string{"build"}, ledger.ResourceProfile{}, "")
 	if d.Action != ActionForward || d.Target != "full" {
 		t.Fatalf("decision = %+v, want forward to full (higher tier)", d)
 	}
@@ -144,7 +144,7 @@ func TestRouteHonorsPreferredNode(t *testing.T) {
 	}
 	neverLocal := func([]string) bool { return false }
 
-	d := Route("self", []string{"self"}, employees, neverLocal, []string{"build"}, "micro")
+	d := Route("self", []string{"self"}, employees, neverLocal, []string{"build"}, ledger.ResourceProfile{}, "micro")
 	if d.Action != ActionForward || d.Target != "micro" {
 		t.Fatalf("decision = %+v, want forward to named node micro", d)
 	}
@@ -159,7 +159,7 @@ func TestRoutePreferredFallsBackWhenUnavailable(t *testing.T) {
 	}
 	neverLocal := func([]string) bool { return false }
 
-	d := Route("self", []string{"self"}, employees, neverLocal, []string{"build"}, "micro")
+	d := Route("self", []string{"self"}, employees, neverLocal, []string{"build"}, ledger.ResourceProfile{}, "micro")
 	if d.Action != ActionForward || d.Target != "full" {
 		t.Fatalf("decision = %+v, want fallback to full (named node offline)", d)
 	}
@@ -175,7 +175,7 @@ func TestRoutePreferredMatchesName(t *testing.T) {
 	}
 	neverLocal := func([]string) bool { return false }
 
-	d := Route("self", []string{"self"}, employees, neverLocal, []string{"build"}, "MacBook Pro")
+	d := Route("self", []string{"self"}, employees, neverLocal, []string{"build"}, ledger.ResourceProfile{}, "MacBook Pro")
 	if d.Action != ActionForward || d.Target != "mac-1" {
 		t.Fatalf("decision = %+v, want forward to mac-1 by display name", d)
 	}

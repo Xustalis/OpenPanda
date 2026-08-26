@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 )
 
@@ -144,6 +145,27 @@ func convoSummaryOf(out *askengine.Result) string {
 			s += head(out.Stderr, 400)
 		}
 		return s
+	case "plan":
+		// The next turn has to know a pipeline is under way, and by which stages:
+		// "结果呢" following a plan is a question about those stage ids, and the
+		// marker also keeps the task prompt layer attached (ChooseLayers).
+		s := "[计划" + shortID(out.PlanID) + " 已启动] " + out.PlanGoal
+		if names := stageNames(out.PlanStages); names != "" {
+			s += "（阶段：" + names + "）"
+		}
+		return s
 	}
 	return "（无输出）"
+}
+
+// stageNames lists a plan's stage ids in order, for the conversation record.
+func stageNames(stages []core.Task) string {
+	if len(stages) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(stages))
+	for _, t := range stages {
+		ids = append(ids, t.StageID+" "+t.State)
+	}
+	return strings.Join(ids, " → ")
 }

@@ -23,6 +23,9 @@ storage:
   projects_path: "projects"
   skills_path: "skills"
   work_path: "."
+  # 任务产物池：跨节点搬运的打包产物按哈希命名存放在此。
+  # 不用 ctxstore（Micro 节点 LRU 只留 5 条，会被静默淘汰），也不入 SQLite（产物按 GB 计）。
+  artifact_path: "artifacts"
 
 model:
   provider: ""       # opencode / litellm / openai / anthropic / deepseek ...
@@ -53,6 +56,19 @@ injection:
 # 任务审批：always = 每次都需审批；on-request = 仅高风险任务；never = 从不审批
 # approval:
 #   mode: "on-request"
+
+# 长任务时间预算（单位：秒；留空或删掉即用内置默认值）。
+# 深度学习这类任务动辄跑几小时，而默认值是按"改一段代码"调的，所以这三个旋钮必须能改。
+# timeouts:
+#   # 一次任务尝试能持有租约多久，超时后监控视执行方已死并重新路由。
+#   # 执行期间会按 lease/3 心跳续租，所以它约束的是"执行方失联多久"，不是任务总时长。
+#   # 默认 1200。必须明显大于 agent_s：租约在适配器还在正常跑的时候过期，
+#   # 任务会被强制失败并重新分发，同一份活会在两台机器上同时跑第二遍。
+#   task_lease_s: 1200
+#   # 单次 agent 适配器执行的墙钟预算（会告知适配器，并以硬 deadline 强制执行）。默认 600。
+#   agent_s: 600
+#   # 单个任务的 执行 → 评审 → 重新分发 循环上限。默认 5。
+#   supervise_rounds: 5
 
 capabilities:
   max_concurrent: 2

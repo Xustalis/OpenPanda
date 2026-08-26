@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/artifact"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -54,6 +55,9 @@ func main() {
 		case "web":
 			runWeb(args)
 			return
+		case "voice":
+			runVoice(args)
+			return
 		case "install":
 			runInstall(args)
 			return
@@ -74,6 +78,9 @@ func main() {
 			return
 		case "task":
 			runTask(args)
+			return
+		case "plan":
+			runPlan(args)
 			return
 		case "cancel":
 			runCancel(args)
@@ -213,6 +220,7 @@ func runDaemon(args []string) {
 		cfg.Storage.ProjectsPath,
 		cfg.Storage.SkillsPath,
 		cfg.Storage.WorkPath,
+		cfg.Storage.ArtifactPath,
 	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			fatal("create storage dir", err)
@@ -260,7 +268,16 @@ func runDaemon(args []string) {
 	}
 	coreNode.SetHostStatePaths(hostStatePaths(cfg))
 	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
+	// The artifact pool is the data plane: a stage's packed output, named by its
+	// hash, that a later stage on another node pulls over the bus. Without it a
+	// delegated task can only carry a path, which means nothing on the node that
+	// receives it.
+	coreNode.SetArtifactStore(artifact.NewStore(cfg.Storage.ArtifactPath))
 	coreNode.SetLimits(cfg.Network.MaxConnections, cfg.Network.MaxConnectionsPerIP)
+	// Execution timeouts (timeouts.*): the agent budget and the task lease. A
+	// deep-learning stage runs far longer than a code edit, so both are operator
+	// knobs; SetTimeouts also keeps the lease above the agent's hard limit.
+	coreNode.SetTimeouts(cfg.Timeouts)
 
 	// Attach the memory layer (design §17/§8): daily logging that feeds the
 	// Dreaming engine, and skill progressive loading. Project memory is no
@@ -482,6 +499,8 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "                         (--output-format json|stream-json for headless use)")
 	fmt.Fprintln(w, "  repl                   interactive shell (banner, /help pager, Tab completion)")
 	fmt.Fprintln(w, "  web                    start the web console (browser opens, auto-login)")
+	fmt.Fprintln(w, "  voice [--once] [--mute] hands-free entry: wake word → ask → spoken reply")
+	fmt.Fprintln(w, "                         (needs extensions/voice sidecars)")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "sessions:")
 	fmt.Fprintln(w, "  session list|new|show|rm|ask|diff|merge   chat sessions over git worktrees")
@@ -495,6 +514,9 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "  task move <id> <seq>                      reorder the drag-sort queue")
 	fmt.Fprintln(w, "  cancel|approve|reject|logs <id>           one-shot task actions (also")
 	fmt.Fprintln(w, "                                            usable as `panda task <verb>`)")
+	fmt.Fprintln(w, "  plan run <file.yaml> [--dry-run]          start a multi-stage, multi-device")
+	fmt.Fprintln(w, "                                            pipeline (`plan example` to start)")
+	fmt.Fprintln(w, "  plan show <plan-id>                       stage states + artifact wiring")
 	fmt.Fprintln(w, "  project list|create                       project memories")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "memory:")

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -40,8 +41,12 @@ type Client struct {
 	model     string
 	maxTokens int
 	hc        *http.Client
-	// hcStream serves streaming requests: no total timeout (a long stream is
-	// legitimate); liveness comes from the caller's context.
+	// hcStream serves streaming requests. It deliberately has no
+	// http.Client.Timeout — that clock covers the whole response body, so any
+	// value large enough for a long generation is useless as a liveness check,
+	// and any value small enough to be useful truncates a legitimate stream
+	// mid-token. Liveness comes from streamTransport's per-phase deadlines plus
+	// the caller's context.
 	hcStream  *http.Client
 	maxRetry  int
 	retryBase time.Duration
@@ -91,12 +96,38 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		model:     name,
 		maxTokens: maxTokens,
 		hc:        &http.Client{Timeout: 30 * time.Second},
-		hcStream:  &http.Client{},
+		hcStream:  &http.Client{Transport: streamTransport()},
 		maxRetry:  2,
 		retryBase: 500 * time.Millisecond,
 	}
 	c.promptCache.Store(true)
 	return c, nil
+}
+
+// streamTransport bounds every phase of a streaming request that can hang
+// *before* tokens start flowing, without bounding the stream itself: TCP connect,
+// TLS handshake, and the wait for response headers. A model endpoint that
+// blackholes the connection — a wrong host, a dropped route mid-flight on a
+// multi-device network — used to hang the caller indefinitely whenever its
+// context carried no deadline, and the entry model sits on the critical path of
+// every classify/answer, so that hang stalls the node rather than one request.
+// Once headers arrive, nothing here limits how long the body may take.
+func streamTransport() *http.Transport {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		// The gap between "request sent" and "first header byte" is the
+		// provider's queue + prefill. Generous, but finite.
+		ResponseHeaderTimeout: 120 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConnsPerHost:   2,
+	}
 }
 
 // SetPromptCaching toggles provider-native prompt-cache markers on outgoing

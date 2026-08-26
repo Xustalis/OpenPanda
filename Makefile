@@ -5,7 +5,7 @@ LDFLAGS := -s -w -X github.com/Xustalis/OpenPanda/internal/version.Version=$(VER
 
 .PHONY: all build web build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
-        dev test vet race gate run run-local measure clean icons release package
+        dev test vet fmt fmt-check race gate run run-local measure clean icons release package
 
 all: build
 
@@ -77,11 +77,22 @@ test:
 vet:
 	$(GO) vet ./...
 
+# Formatting is part of the gate, not a reviewer's job: gofmt disagreements are
+# the one class of diff noise that is entirely mechanical to prevent.
+fmt:
+	$(GO) fmt ./...
+
+fmt-check:
+	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt needed:"; echo "$$unformatted"; exit 1; \
+	fi
+
 race:
 	$(GO) test -race ./...
 
-# Merge gate (C-10): a PR must pass build + vet + test + race before landing.
-gate: build vet test race
+# Merge gate (C-10): a PR must pass fmt + build + vet + test + race before landing.
+gate: fmt-check build vet test race
 
 # Regenerate the PWA icon set (webui/app/public/icons/) from the stdlib-only generator.
 icons:

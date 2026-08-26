@@ -47,3 +47,11 @@ capacity:
   cpu_cores: 4
   ram_gb: 2
   max_concurrent_tasks: 1
+
+# 声明的硬件上限（schema 见 capabilities.example-desktop.yaml）。
+# 边缘板写出 gpu_vram_gb: 0，是为了让重算力任务主动路由到别处而不是在这里失败。
+resource_profile:
+  cpu: 4
+  ram_gb: 2
+  gpu_vram_gb: 0
+  duration_hint: short

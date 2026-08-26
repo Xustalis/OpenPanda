@@ -74,7 +74,8 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 	}
 
 	chain := []string{c.nodeID}
-	decision := scheduler.Route(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), in.Requires, in.PreferredNode)
+	decision := scheduler.Route(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), in.Requires,
+		resourceRequirement(in.ResourceJSON), in.PreferredNode)
 
 	switch decision.Action {
 	case scheduler.ActionLocal:
@@ -94,6 +95,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			PreferredNode: in.PreferredNode,
 			Complexity:    in.Complexity,
 			Risk:          in.Risk,
+			ResourceJSON:  in.ResourceJSON,
 			AttemptID:     t.AttemptID,
 			Authorized:    in.Authorized,
 		}
@@ -180,6 +182,11 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 			return Task{}, result, err
 		}
 		if final.State != StateFailed {
+			// The task settled without needing (another) retry. Drop its failure
+			// count: keeping it would both leak one map entry per task for the
+			// daemon's lifetime and charge a future execution of this id for
+			// attempts that have already been resolved.
+			c.loop.Reset(taskID)
 			return final, result, nil
 		}
 		// A tier-2 authorization refusal is deterministic policy, not a
@@ -190,6 +197,7 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 			if rerr := c.store.Review(ctx, taskID, c.nodeID, result.Stderr); rerr != nil {
 				c.logger.Warn("review task", "task", taskID, "err", rerr)
 			}
+			c.reviewReset(taskID)
 			final, err = c.store.Get(ctx, taskID)
 			if err != nil {
 				return Task{}, result, err
@@ -200,6 +208,7 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 			if rerr := c.store.Review(ctx, taskID, c.nodeID, result.Stderr); rerr != nil {
 				c.logger.Warn("review task", "task", taskID, "err", rerr)
 			}
+			c.reviewReset(taskID)
 			// Re-fetch so the returned row reflects the review transition.
 			final, err = c.store.Get(ctx, taskID)
 			if err != nil {
@@ -230,6 +239,16 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 		}
 	}
 }
+
+// reviewReset clears a parked task's failure count. A task in review is waiting
+// on a person, and the only ways out of that state are deliberate human
+// transitions (approve, reject, cancel, or send it back to the queue). Whichever
+// they pick, the next execution of this id must start with its full retry budget:
+// without this, a task the human sends back is already out of retries and parks
+// itself again on its first failure — the review round-trip accomplishes nothing.
+// The in-loop counter is what bounds an automatic retry storm, and it keeps
+// accumulating for as long as the loop actually runs.
+func (c *Core) reviewReset(taskID string) { c.loop.Reset(taskID) }
 
 // retryOnce rotates the attempt and returns a failed task to the queue,
 // dispatched back to this node, so run() can accept and re-execute it.

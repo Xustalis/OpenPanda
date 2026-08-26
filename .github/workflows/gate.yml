@@ -1,0 +1,54 @@
+name: Gate
+
+# CONTRIBUTING.md promises "a pull request is merged only when all gates are
+# green". Until this workflow existed that sentence described nothing: the only
+# two workflows ran on push-to-main and on a tag, so a pull request could land
+# without ever building. This is the enforcement half of that promise.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+      # make gate = fmt-check + build + vet + test + race. The race leg is the
+      # slow one and the reason for the 25-minute budget.
+      - name: make gate
+        run: make gate
+
+  # The daemon is expected to run on Windows and macOS nodes, so the test suite
+  # has to pass there too — a Windows-only path breaking is exactly the class of
+  # bug a Linux-only gate cannot see.
+  cross-platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+      - name: Build
+        run: go build ./...
+      - name: Test
+        run: go test ./...

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -22,7 +23,7 @@ type askRequest struct {
 // askResult is the wire form of askengine.Result: an answer carries text; a
 // task carries its id/state plus execution output.
 type askResult struct {
-	Kind      string `json:"kind"` // "answer" | "task"
+	Kind      string `json:"kind"` // "answer" | "task" | "plan"
 	Answer    string `json:"answer,omitempty"`
 	TaskID    string `json:"task_id,omitempty"`
 	TaskState string `json:"task_state,omitempty"`
@@ -30,6 +31,33 @@ type askResult struct {
 	Stdout    string `json:"stdout,omitempty"`
 	Stderr    string `json:"stderr,omitempty"`
 	ExitCode  int    `json:"exit_code,omitempty"`
+	// Plan fields (kind == "plan"): a multi-stage pipeline has no single task id
+	// and no result yet — its stages are queued and run on other machines — so the
+	// client follows it by plan id and shows the stage ids it was decomposed into.
+	PlanID     string   `json:"plan_id,omitempty"`
+	PlanGoal   string   `json:"plan_goal,omitempty"`
+	PlanStages []string `json:"plan_stages,omitempty"`
+}
+
+// planResultOf maps one ask outcome into the panel wire form, so the ask and
+// session-ask handlers cannot drift on which fields a plan carries.
+func planResultOf(out *askengine.Result) askResult {
+	res := askResult{
+		Kind:      out.Kind,
+		Answer:    out.Answer,
+		TaskID:    out.TaskID,
+		TaskState: out.TaskState,
+		OK:        out.OK,
+		Stdout:    out.Stdout,
+		Stderr:    out.Stderr,
+		ExitCode:  out.ExitCode,
+		PlanID:    out.PlanID,
+		PlanGoal:  out.PlanGoal,
+	}
+	for _, t := range out.PlanStages {
+		res.PlanStages = append(res.PlanStages, t.StageID)
+	}
+	return res
 }
 
 // ask serves POST /api/ask — the unified entry: one prompt in, answer or task
@@ -66,16 +94,7 @@ func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, askResult{
-		Kind:      out.Kind,
-		Answer:    out.Answer,
-		TaskID:    out.TaskID,
-		TaskState: out.TaskState,
-		OK:        out.OK,
-		Stdout:    out.Stdout,
-		Stderr:    out.Stderr,
-		ExitCode:  out.ExitCode,
-	})
+	writeJSON(w, planResultOf(out))
 }
 
 // cancelTask serves POST /api/tasks/{id}/cancel — cancels a task and its

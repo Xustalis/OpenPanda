@@ -84,6 +84,16 @@ logs/
 
 # Git worktrees managed by external tools (e.g. openpanda worktree helper)
 .openpanda/
+
+# Local scratch: analysis notes and agent scratchpads that get regenerated every
+# session. They were previously neither tracked nor ignored, so `git add -A`
+# would have committed them — including .lab-real/, a live multi-node lab
+# directory that holds a real shared secret.
+/findings.md
+/progress.md
+/task_plan.md
+/.lab-real/
+/.planning/
 check_emails.py
 fetch_emails.py
 .claude/settings.local.json

@@ -23,6 +23,12 @@ const (
 	MsgTaskCancel   = "task_cancel"
 	MsgContextFetch = "context_fetch"
 	MsgContextAck   = "context_ack"
+	// Artifact transfer is a pull in fixed-size chunks: the node that needs a
+	// task's output asks the node that holds it, one offset at a time. It is
+	// chunked because a single frame may not exceed readLimit (4 MiB) and an
+	// artifact is a build tree or a trained model.
+	MsgArtifactFetch = "artifact_fetch"
+	MsgArtifactChunk = "artifact_chunk"
 )
 
 // Envelope is the JSON wire format (design doc §10.3). MsgID is a UUIDv7

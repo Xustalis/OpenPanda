@@ -287,6 +287,9 @@ func runSessionAsk(args []string) {
 	if out.Kind == "task" {
 		turn.Text = out.TaskID
 		turn.Ref = out.TaskID
+	} else if out.Kind == "plan" {
+		turn.Text = out.PlanID
+		turn.Ref = out.PlanID
 	} else {
 		turn.Text = out.Answer
 	}
@@ -304,6 +307,8 @@ func runSessionAsk(args []string) {
 			fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
 			os.Exit(1)
 		}
+	case "plan":
+		printAskPlan(out)
 	}
 }
 

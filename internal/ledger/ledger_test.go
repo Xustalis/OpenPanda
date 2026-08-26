@@ -214,6 +214,9 @@ func TestUpsertRemoteRoundTrip(t *testing.T) {
 		AgentCaps:     map[string][]string{"claude_code": {"code:modify"}},
 		ManualIDs:     []string{"design:figma"},
 		Capacity:      Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
+		// The compute half of the card. Before v0.0.6 UpsertRemote dropped it, so
+		// every peer looked equally able to train a model.
+		ResourceProfile: ResourceProfile{CPU: 8, RAMGB: 32, GPUVRAMGB: 12, DurationHint: "long"},
 	}
 	if err := UpsertRemote(db, "windows", sum); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -240,6 +243,17 @@ func TestUpsertRemoteRoundTrip(t *testing.T) {
 	}
 	if len(n.Manual) != 1 || n.Manual[0].ID != "design:figma" {
 		t.Fatalf("manual ids not round-tripped: %+v", n.Manual)
+	}
+	// The declared hardware must survive the hop: this is what lets a task that
+	// needs 8 GiB of VRAM be routed to this node and kept off a node with none.
+	if want := (ResourceProfile{CPU: 8, RAMGB: 32, GPUVRAMGB: 12, DurationHint: "long"}); n.ResourceProfile != want {
+		t.Fatalf("resource profile = %+v, want %+v", n.ResourceProfile, want)
+	}
+	if !n.Fits(ResourceProfile{GPUVRAMGB: 8}) {
+		t.Errorf("12 GiB card should fit an 8 GiB requirement")
+	}
+	if n.Fits(ResourceProfile{GPUVRAMGB: 24}) {
+		t.Errorf("12 GiB card must not fit a 24 GiB requirement")
 	}
 
 	// Upserting again must update in place, not duplicate.

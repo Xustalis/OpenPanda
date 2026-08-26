@@ -57,3 +57,45 @@ func ValidateToolCall(tc *ToolCall) error {
 	}
 	return nil
 }
+
+// maxPlanStages bounds a model-emitted plan at the entry boundary. The plan
+// package enforces the same ceiling (plan.MaxStages) when it converts the spec;
+// this check exists so a runaway plan is refused before anything downstream
+// allocates for it. The two constants are deliberately independent — this one
+// guards the untrusted-input boundary, that one guards the execution model.
+const maxPlanStages = 64
+
+// ValidatePlanSpec checks the shape of a model-emitted plan: the fields the
+// converter needs, and the two mistakes a model actually makes — a stage with no
+// id (so nothing can depend on it) and a duplicate id (so a Needs reference is
+// ambiguous). Dependency correctness itself — dangling needs, cycles — is the
+// plan package's job, checked once against the real Plan rather than twice
+// against two representations.
+func ValidatePlanSpec(p *PlanSpec) error {
+	if p == nil {
+		return fmt.Errorf("entry: plan is nil")
+	}
+	if p.Goal == "" {
+		return fmt.Errorf("entry: plan.goal is required")
+	}
+	if len(p.Stages) == 0 {
+		return fmt.Errorf("entry: plan.stages is required")
+	}
+	if len(p.Stages) > maxPlanStages {
+		return fmt.Errorf("entry: plan has %d stages, limit is %d", len(p.Stages), maxPlanStages)
+	}
+	seen := make(map[string]bool, len(p.Stages))
+	for i, s := range p.Stages {
+		if s.ID == "" {
+			return fmt.Errorf("entry: plan.stages[%d].id is required", i)
+		}
+		if seen[s.ID] {
+			return fmt.Errorf("entry: plan has two stages named %q", s.ID)
+		}
+		seen[s.ID] = true
+		if s.Intent == "" {
+			return fmt.Errorf("entry: plan.stages[%d] (%s) has no intent", i, s.ID)
+		}
+	}
+	return nil
+}

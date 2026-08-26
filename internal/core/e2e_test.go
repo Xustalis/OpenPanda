@@ -136,6 +136,83 @@ func TestRecoverRestoresState(t *testing.T) {
 	}
 }
 
+// TestRecoverPreservesReviewQueue pins the invariant that a restart must not
+// touch the human-approval queue: a task parked in review keeps its state and
+// its result_json (the evidence the human came back for), while an interrupted
+// running task is failed and gets an audit event for the transition.
+func TestRecoverPreservesReviewQueue(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	drive := func(tk Task) {
+		t.Helper()
+		must(s.Queue(ctx, tk.TaskID, "root"))
+		must(s.Dispatch(ctx, tk.TaskID, "root", "root"))
+		must(s.Accept(ctx, tk.TaskID, "root"))
+	}
+
+	review := createTask(t, s, "", "awaiting-approval", "root")
+	drive(review)
+	must(s.PauseWithResult(ctx, review.TaskID, "root", map[string]any{
+		"ok": true, "stdout": "deleted 3 files, confirm?",
+	}))
+	before, err := s.Get(ctx, review.TaskID)
+	if err != nil {
+		t.Fatalf("get review task: %v", err)
+	}
+	if before.State != StateReview || before.ResultJSON == "" {
+		t.Fatalf("setup: state=%s result=%q, want review with a result", before.State, before.ResultJSON)
+	}
+
+	running := createTask(t, s, "", "interrupted", "root")
+	drive(running)
+
+	if _, err := s.Recover(ctx); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+
+	after, err := s.Get(ctx, review.TaskID)
+	if err != nil {
+		t.Fatalf("get review task after recover: %v", err)
+	}
+	if after.State != StateReview {
+		t.Fatalf("review task state = %s, want review (restart must not drain the approval queue)", after.State)
+	}
+	if after.ResultJSON != before.ResultJSON {
+		t.Fatalf("review result_json = %q, want preserved %q", after.ResultJSON, before.ResultJSON)
+	}
+
+	got, err := s.Get(ctx, running.TaskID)
+	if err != nil {
+		t.Fatalf("get running task: %v", err)
+	}
+	if got.State != StateFailed {
+		t.Fatalf("running task state = %s, want failed", got.State)
+	}
+	evs, err := s.Events(ctx, running.TaskID)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	var recovered bool
+	for _, e := range evs {
+		if e.Type == EvRecover {
+			recovered = true
+		}
+	}
+	if !recovered {
+		t.Fatalf("no %s event on the audit chain after recovery", EvRecover)
+	}
+	if evs[len(evs)-1].Type != EvRecover {
+		t.Fatalf("last event = %s, want %s", evs[len(evs)-1].Type, EvRecover)
+	}
+}
+
 // TestCancelPropagates verifies a cancel message reaches the executor and the
 // task is marked cancelled (P0-37).
 func TestCancelPropagates(t *testing.T) {

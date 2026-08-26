@@ -53,7 +53,7 @@ func NewScope(spec string) *Scope {
 // cannot become phantom roots.
 func scopeTokens(part string) []string {
 	p := strings.TrimSpace(part)
-	p = strings.Trim(p, `"'` + "`")
+	p = strings.Trim(p, `"'`+"`")
 	if p == "" {
 		return nil
 	}
@@ -63,7 +63,7 @@ func scopeTokens(part string) []string {
 	}
 	var out []string
 	for _, f := range fields {
-		f = strings.Trim(f, `"'` + "`")
+		f = strings.Trim(f, `"'`+"`")
 		if f == "" || hasCJK(f) {
 			continue
 		}

@@ -191,6 +191,24 @@ func directoryTraversal(name string) bool {
 	return false
 }
 
+// safeLinkTarget rejects a symlink whose target resolves outside root. The link
+// is resolved the way the filesystem will resolve it — relative to the directory
+// holding the link — so "a/b -> ../../etc" is judged from a/, not from root.
+func safeLinkTarget(root, rel, linkname string) error {
+	if linkname == "" {
+		return fmt.Errorf("release archive symlink %s has an empty target; refusing", rel)
+	}
+	if filepath.IsAbs(linkname) || strings.HasPrefix(filepath.ToSlash(linkname), "/") {
+		return fmt.Errorf("release archive symlink %s -> %s is absolute; refusing", rel, linkname)
+	}
+	resolved := filepath.Clean(filepath.Join(root, filepath.Dir(rel), filepath.FromSlash(linkname)))
+	cleanRoot := filepath.Clean(root)
+	if resolved != cleanRoot && !strings.HasPrefix(resolved, cleanRoot+string(filepath.Separator)) {
+		return fmt.Errorf("release archive symlink %s -> %s resolves outside the extraction root; refusing", rel, linkname)
+	}
+	return nil
+}
+
 func untargz(archive, root string) error {
 	f, err := os.Open(archive)
 	if err != nil {
@@ -233,8 +251,37 @@ func untargz(archive, root string) error {
 				return err
 			}
 		case tar.TypeSymlink:
-			_ = os.Remove(target)
-			_ = os.Symlink(hdr.Linkname, target)
+			// A symlink's danger is not its own path — sanitizeEntry already
+			// bounded that — but where it points. Left unchecked, an archive can
+			// ship "bin -> /usr/local" and then a later, perfectly well-named
+			// entry "bin/panda" writes through the link to a path outside root.
+			// This is the extraction half of the self-update trust chain, so a
+			// bad link fails the whole update instead of being skipped.
+			if err := safeLinkTarget(root, rel, hdr.Linkname); err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			if err := os.Symlink(hdr.Linkname, target); err != nil {
+				return err
+			}
+		case tar.TypeLink:
+			// A hard link names an inode, not a path: it can alias a file
+			// outside root that no path check can see.
+			return fmt.Errorf("release archive contains a hard link (%s -> %s); refusing", rel, hdr.Linkname)
+		case tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
+			// Devices and FIFOs have no place in a release archive.
+			return fmt.Errorf("release archive entry %s has unsupported tar type %d; refusing", rel, hdr.Typeflag)
+		default:
+			// Everything else is pax/GNU metadata (global and per-file extended
+			// headers, long-name entries), which the reader has already folded
+			// into the headers it hands back. Ignoring them keeps ordinary
+			// GNU-tar archives extractable.
+			continue
 		}
 	}
 	return nil

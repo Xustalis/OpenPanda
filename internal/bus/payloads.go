@@ -58,6 +58,13 @@ type TaskDelegatePayload struct {
 	Complexity    float64  `json:"complexity,omitempty"`
 	Risk          string   `json:"risk,omitempty"`
 	AttemptID     string   `json:"attempt_id,omitempty"`
+	// ResourceJSON is the task's declared hardware requirement (a marshalled
+	// entry.ResourceProfile). It travels with the delegation because the
+	// requirement is a property of the work, not of the node that first saw it:
+	// a relay that re-routes a task onward must be able to keep a training run
+	// off a node with no VRAM, and without this field the constraint would be
+	// lost at the first hop.
+	ResourceJSON string `json:"resource_json,omitempty"`
 	// Authorized carries the origin user's tier-2 consent (design §16) so a
 	// delegated task does not bounce at the executor's defense layer. It is
 	// only meaningful on an authenticated bus: the transport's shared-secret
@@ -65,6 +72,25 @@ type TaskDelegatePayload struct {
 	// only sets it after the user explicitly authorized (task add
 	// --authorize / ask --authorize).
 	Authorized bool `json:"authorized,omitempty"`
+	// Plan-plane fields (v0.0.6). A delegated stage carries its place in the
+	// plan and the artifacts it consumes: PlanID/StageID identify it for the
+	// orchestrator's audit trail, and Inputs names each predecessor's packed
+	// output plus a node that holds it, so the executor can pull the tree it
+	// must start from. Empty on a standalone task.
+	PlanID  string        `json:"plan_id,omitempty"`
+	StageID string        `json:"stage_id,omitempty"`
+	Inputs  []ArtifactRef `json:"inputs,omitempty"`
+}
+
+// ArtifactRef names one artifact and a node known to hold it — the data-plane
+// half of a stage dependency. A hash alone is not enough to fetch: content
+// addressing says what the bytes must be, not who has them. Stage records which
+// plan stage produced it, which is what makes the extraction order of a
+// multi-input stage deterministic across nodes.
+type ArtifactRef struct {
+	Stage  string `json:"stage,omitempty"`
+	Hash   string `json:"hash"`
+	Source string `json:"source"`
 }
 
 // TitleOrDefault returns the explicit title, falling back to the intent.
@@ -103,6 +129,23 @@ type TaskResultPayload struct {
 	Artifacts string  `json:"artifacts,omitempty"`
 	Tokens    int     `json:"tokens,omitempty"`
 	Cost      float64 `json:"cost,omitempty"`
+	// OutputArtifact is the hash of the tree this stage produced, packed into the
+	// executor's artifact pool. The node orchestrating the plan records it and
+	// hands it to the successor stages as their input; the executor stays the
+	// node that holds the bytes until someone pulls them.
+	OutputArtifact string `json:"output_artifact,omitempty"`
+}
+
+// TaskProgressPayload is a liveness beat from the node executing a task to the
+// node that delegated it. The executor sends one per lease-renewal tick; each
+// receiver refreshes the lease on its own copy of the task and relays the beat
+// one hop further up the chain, so a stage that legitimately runs for an hour
+// is never mistaken for a dead executor anywhere along the delegation path.
+// Note is an optional human-readable status line.
+type TaskProgressPayload struct {
+	TaskID    string `json:"task_id"`
+	AttemptID string `json:"attempt_id,omitempty"`
+	Note      string `json:"note,omitempty"`
 }
 
 // TaskCancelPayload requests cancellation.
@@ -128,3 +171,39 @@ type ContextAckPayload struct {
 	Data   []byte   `json:"data,omitempty"`
 	Refs   []string `json:"refs,omitempty"`
 }
+
+// ArtifactFetchPayload asks a peer for one chunk of a task artifact, starting at
+// Offset. The requester drives the transfer: it asks for the next offset only
+// after the previous chunk landed, which makes a dropped or corrupt chunk a
+// re-request rather than a failed transfer.
+type ArtifactFetchPayload struct {
+	TaskID string `json:"task_id"`
+	Hash   string `json:"hash"`
+	Offset int64  `json:"offset"`
+}
+
+// ArtifactChunkPayload answers an artifact_fetch. Data holds at most
+// ArtifactChunkBytes of the packed archive at Offset (base64 on the wire, since
+// it is a []byte). Total is the archive's full size so the requester can show
+// progress and reject a stream that changes length mid-transfer, and EOF marks
+// the last chunk — the point at which the accumulated bytes are hashed against
+// Hash before the artifact is allowed into the pool.
+//
+// OK is false when the peer does not hold the artifact or refuses to serve it;
+// the requester then asks a different node instead of retrying forever.
+type ArtifactChunkPayload struct {
+	TaskID string `json:"task_id"`
+	Hash   string `json:"hash"`
+	Offset int64  `json:"offset"`
+	Data   []byte `json:"data,omitempty"`
+	Total  int64  `json:"total,omitempty"`
+	EOF    bool   `json:"eof,omitempty"`
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// ArtifactChunkBytes is the payload size one artifact_chunk carries. The
+// transport caps a frame at readLimit (4 MiB) and []byte is base64-encoded in
+// JSON (a 4/3 expansion), so 1 MiB of artifact becomes roughly 1.4 MiB on the
+// wire — comfortably under the cap even with the envelope around it.
+const ArtifactChunkBytes = 1 << 20

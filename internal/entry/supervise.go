@@ -10,7 +10,8 @@ import (
 // SuperviseVerdict is the outcome of a post-execution completion check: did
 // the agent's result actually satisfy the task, or does work remain?
 type SuperviseVerdict struct {
-	// Status is "done" (the task is complete) or "continue" (work remains).
+	// Status is "done" (the task is complete), "continue" (work remains), or
+	// "review" (no verdict could be obtained — hand it to a human).
 	Status string `json:"status"`
 	// Reason is a one-line justification for the verdict.
 	Reason string `json:"reason"`
@@ -36,13 +37,23 @@ const superviseSystemPrompt = `你是执行结果审核员（上级）。一个�
 只输出一个 JSON 对象，不要输出任何其他文字或解释：
 {"status":"done"|"continue","reason":"一句话结论","followup":"continue 时必填：剩余工作与下一步指令"}`
 
+// Supervise verdict statuses. Done/Continue are the two judgments the model may
+// emit; Review is produced only by Supervise itself when it cannot obtain a
+// judgment at all, and asks the caller to park the task for a human.
+const (
+	VerdictDone     = "done"
+	VerdictContinue = "continue"
+	VerdictReview   = "review"
+)
+
 // Supervise asks the configured entry model whether an agent's result fully
 // satisfies the task described by intent (which carries the success criteria).
-// On a call failure it fails open toward "done" — verification is a safety
-// net, not a gate, and a broken supervisor must not stall a finished task.
-// Verdicts are cached on disk keyed by (intent, result): a re-submitted task
-// with unchanged inputs reuses the previous judgment without an LLM call.
-// Fail-open verdicts (unavailable / unparsable) are never cached.
+// When no verdict can be obtained — the model is unreachable, or its output is
+// not a verdict — it returns VerdictReview: unverified work is handed to a
+// human rather than silently promoted to done, since only a task that met its
+// success definition may finish. Verdicts are cached on disk keyed by
+// (intent, result): a re-submitted task with unchanged inputs reuses the
+// previous judgment without an LLM call. Review verdicts are never cached.
 func Supervise(ctx context.Context, c *Client, intent, result string) (SuperviseVerdict, error) {
 	dc := c.diskCache()
 	k1, k2 := hashString(intent), hashString(result)
@@ -55,13 +66,14 @@ func Supervise(ctx context.Context, c *Client, intent, result string) (Supervise
 	user := "任务要求：\n" + intent + "\n\n智能体回报：\n" + result
 	text, err := c.Complete(ctx, superviseSystemPrompt, user)
 	if err != nil {
-		return SuperviseVerdict{Status: "done", Reason: "supervisor unavailable: accepting result"}, err
+		return SuperviseVerdict{Status: VerdictReview, Reason: "supervisor unavailable: parking for human review"}, err
 	}
 	v, err := parseSuperviseVerdict(text)
 	if err != nil {
-		// Unparsable verdict: accept the work rather than loop on a model that
-		// will not produce the expected shape. The reason records the defect.
-		return SuperviseVerdict{Status: "done", Reason: "verdict unparsable: " + err.Error()}, nil
+		// Unparsable verdict: the result is unverified, so it goes to a human
+		// instead of looping on a model that will not produce the expected
+		// shape. The reason records the defect.
+		return SuperviseVerdict{Status: VerdictReview, Reason: "verdict unparsable: " + err.Error()}, nil
 	}
 	if dc != nil {
 		dc.Put(ctx, superviseCacheNS, k1, k2, v)
