@@ -92,6 +92,7 @@ const zhCN: Messages = {
   'queue.priorityHint': '点击切换优先级（高 → 普通 → 低）',
   'queue.dropHere': '拖放到此重排顺序',
   'queue.openSession': '打开关联会话',
+  'queue.collapse': '收起',
 
   // Detail view
   'detail.back': '返回队列',
@@ -144,6 +145,11 @@ const zhCN: Messages = {
   'sessions.merging': '合并中…',
   'sessions.stop': '停止',
   'sessions.stopped': '已被你停止。',
+  'sessions.folderPick': '选择本地文件夹',
+  'sessions.folderSelected': '📁 已选择文件夹，{n} 个文件：',
+  'sessions.folderTruncated': '  …（还有 {n} 个文件）',
+  'sessions.folderFollowUp': '请基于以上文件内容处理我的请求：',
+  'sessions.projectPrefix': '[项目: {name}]',
 
   // Markdown 渲染（助手回复）
   'md.copy': '复制',

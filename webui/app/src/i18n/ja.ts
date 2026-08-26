@@ -92,6 +92,7 @@ const ja: Messages = {
   'queue.priorityHint': 'クリックで優先度を切り替え（高 → 通常 → 低）',
   'queue.dropHere': 'ドロップして並べ替え',
   'queue.openSession': '連携セッションを開く',
+  'queue.collapse': '折りたたむ',
 
   // Detail view
   'detail.back': 'キューに戻る',
@@ -144,6 +145,11 @@ const ja: Messages = {
   'sessions.merging': 'マージ中…',
   'sessions.stop': '停止',
   'sessions.stopped': '停止しました。',
+  'sessions.folderPick': 'ローカルフォルダを選択',
+  'sessions.folderSelected': '📁 フォルダを選択しました（{n} ファイル）：',
+  'sessions.folderTruncated': '  …（他 {n} ファイル）',
+  'sessions.folderFollowUp': '上記のファイルに基づいてリクエストを処理してください：',
+  'sessions.projectPrefix': '[プロジェクト: {name}]',
 
   // Markdown 描画（アシスタントの返答）
   'md.copy': 'コピー',

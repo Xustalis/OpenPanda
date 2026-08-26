@@ -19,7 +19,7 @@ const COLUMNS: { key: 'todo' | 'doing' | 'review' | 'done'; states: string[] }[]
 // Cap per column: recent history stays scannable without an endless wall of
 // finished cards (design §11.2 shows "DONE · last 24h"; a count cap is the
 // simpler equivalent for now).
-const DONE_COLUMN_LIMIT = 20
+const DONE_COLUMN_LIMIT = 8
 
 // Priority wire labels → sort weight; mirrors the scheduler's policy order.
 const PRIO_WEIGHT: Record<string, number> = { high: 0, normal: 1, low: 2 }
@@ -268,7 +268,9 @@ function KanbanColumn({
   onMutated(): void
 }) {
   const [drag, setDrag] = useState<DragState | null>(null)
-  const shown = colKey === 'done' ? tasks.slice(0, DONE_COLUMN_LIMIT) : tasks
+  const [expanded, setExpanded] = useState(false)
+  const limit = colKey === 'done' && !expanded ? DONE_COLUMN_LIMIT : tasks.length
+  const shown = colKey === 'done' ? tasks.slice(0, limit) : tasks
   const hidden = tasks.length - shown.length
 
   /** Drop: splice the dragged card out and reinsert at the hovered slot,
@@ -317,25 +319,43 @@ function KanbanColumn({
         {t(`queue.col.${colKey}`)}
         <span class="kanban-count">{tasks.length}</span>
       </h2>
-      {shown.length === 0 ? (
-        <p class="kanban-empty dim">{t('queue.colEmpty')}</p>
-      ) : (
-        shown.map((task, i) => (
-          <KanbanCard
-            key={task.id}
-            task={task}
-            index={i}
-            dropBefore={drag != null && drag.dragID !== task.id && drag.overIndex === i}
-            onOpen={onOpen}
-            onOpenSession={onOpenSession}
-            onMutated={onMutated}
-            onDragStart={(id) => setDrag({ dragID: id, overIndex: i })}
-            onDragOver={(index) => setDrag((d) => (d ? { ...d, overIndex: index } : d))}
-            onDragEnd={() => setDrag(null)}
-          />
-        ))
+      <div
+        class={`kanban-list${
+          colKey === 'done' && expanded ? ' kanban-list--dense' : ''
+        }`}
+      >
+        {shown.length === 0 ? (
+          <p class="kanban-empty dim">{t('queue.colEmpty')}</p>
+        ) : (
+          shown.map((task, i) => (
+            <KanbanCard
+              key={task.id}
+              task={task}
+              index={i}
+              dropBefore={drag != null && drag.dragID !== task.id && drag.overIndex === i}
+              onOpen={onOpen}
+              onOpenSession={onOpenSession}
+              onMutated={onMutated}
+              onDragStart={(id) => setDrag({ dragID: id, overIndex: i })}
+              onDragOver={(index) => setDrag((d) => (d ? { ...d, overIndex: index } : d))}
+              onDragEnd={() => setDrag(null)}
+            />
+          ))
+        )}
+      </div>
+      {(hidden > 0 || (expanded && shown.length > DONE_COLUMN_LIMIT)) && (
+        <button
+          class={`kanban-expand-btn${expanded ? ' is-open' : ''}`}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          <span class="kanban-expand-count">
+            {expanded
+              ? t('queue.collapse')
+              : t('queue.more', { n: String(hidden) })}
+          </span>
+          <span class="kanban-expand-caret" aria-hidden="true" />
+        </button>
       )}
-      {hidden > 0 && <p class="dim kanban-more">{t('queue.more', { n: String(hidden) })}</p>}
       {drag && <div class="kanban-dropzone" onClick={() => void drop()}>{t('queue.dropHere')}</div>}
     </div>
   )

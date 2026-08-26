@@ -52,6 +52,9 @@ export function SessionsView({
   const [authorize, setAuthorize] = useState(false)
   const [busy, setBusy] = useState(false)
   const [loadError, setLoadError] = useState('')
+  const [selectedProject, setSelectedProject] = useState('')
+  const [projects, setProjects] = useState<string[]>([])
+  const folderInputRef = useRef<HTMLInputElement>(null)
   // True only while a thread's transcript is in flight, so the pane can show
   // its shape instead of an empty box (or worse, the "new chat" hero).
   const [loading, setLoading] = useState(false)
@@ -79,6 +82,14 @@ export function SessionsView({
       .then(setSessions)
       .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)))
   }, [activeId])
+
+  // Load projects for the folder/project picker
+  useEffect(() => {
+    api
+      .projects()
+      .then((p) => setProjects(p.projects ?? []))
+      .catch(() => {})
+  }, [])
 
   // Load the active thread's transcript.
   useEffect(() => {
@@ -198,10 +209,34 @@ export function SessionsView({
     inflight.current?.abort()
   }
 
+  function handleFolderPick(e: Event) {
+    const files = (e.target as HTMLInputElement).files
+    if (!files || files.length === 0) return
+    // Build a readable summary of the picked folder contents
+    const paths: string[] = []
+    for (let i = 0; i < Math.min(files.length, 50); i++) {
+      const f = files[i] as File & { webkitRelativePath?: string }
+      if (f.webkitRelativePath) paths.push(f.webkitRelativePath)
+      else paths.push(f.name)
+    }
+    const folderSummary =
+      t('sessions.folderSelected', { n: String(files.length) }) + '\n' +
+      paths.map((p) => `  - ${p}`).join('\n') +
+      (files.length > 50 ? '\n' + t('sessions.folderTruncated', { n: String(files.length - 50) }) : '') +
+      '\n\n' + t('sessions.folderFollowUp')
+    setInput((prev) => (prev ? `${prev}\n\n${folderSummary}` : folderSummary))
+    // Reset so picking the same folder twice still fires change
+    if (folderInputRef.current) folderInputRef.current.value = ''
+  }
+
   async function send(e?: Event) {
     e?.preventDefault()
-    const prompt = input.trim()
+    let prompt = input.trim()
     if (!prompt || busy) return
+    // Prepend project context when one is selected
+    if (selectedProject) {
+      prompt = t('sessions.projectPrefix', { name: selectedProject }) + '\n\n' + prompt
+    }
     let id = activeId
     const ctrl = new AbortController()
     inflight.current = ctrl
@@ -395,6 +430,39 @@ export function SessionsView({
             as a single control rather than a field with a toolbar loose
             underneath it — the focus ring belongs to the whole thing. */}
         <form class="composer" onSubmit={send}>
+          <div class="composer-toolbar">
+            <select
+              class="input project-picker"
+              value={selectedProject}
+              onChange={(e) => setSelectedProject((e.target as HTMLSelectElement).value)}
+              title={t('queue.allProjects')}
+            >
+              <option value="">📂 {t('queue.allProjects')}</option>
+              {projects.map((p) => (
+                <option key={p} value={p}>
+                  📁 {p}
+                </option>
+              ))}
+            </select>
+            <button
+              class="btn small folder-btn"
+              type="button"
+              title={t('sessions.folderPick')}
+              onClick={() => folderInputRef.current?.click()}
+            >
+              📁 {t('sessions.folderPick')}
+            </button>
+            <input
+              ref={folderInputRef}
+              type="file"
+              // @ts-expect-error non-standard attrs for folder picking
+              webkitdirectory=""
+              directory=""
+              multiple
+              style="display:none"
+              onChange={handleFolderPick}
+            />
+          </div>
           <div class="composer-box">
             <textarea
               ref={composer}

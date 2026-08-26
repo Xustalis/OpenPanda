@@ -92,12 +92,17 @@ function SelfCard({ self }: { self: SelfInfo }) {
 function NodeCard({ node, isSelf }: { node: NodeInfo; isSelf: boolean }) {
   const [open, setOpen] = useState(false)
   const agentNames = node.agents ? Object.keys(node.agents) : []
+  const displayName = (node.name && node.name !== node.id) ? node.name : node.id
 
   return (
     <div class="card node-card">
-      <div class="node-head">
-        <span class="node-id mono">{node.id}</span>
-        {node.name && node.name !== node.id && <span class="node-name">{node.name}</span>}
+      <div class="node-head" style="width: 100%;">
+        <span class="node-name" title={displayName}>{displayName}</span>
+      </div>
+      {node.name && node.name !== node.id && (
+        <span class="node-id mono" title={node.id}>{node.id}</span>
+      )}
+      <div class="node-badges">
         <span class={`badge ${node.status === 'online' ? 'green' : ''}`}>{node.status}</span>
         <span class="badge">{node.node_kind}</span>
         <span class={`badge ${node.running ? 'green' : 'red'}`}>{node.running ? 'running' : 'stopped'}</span>
