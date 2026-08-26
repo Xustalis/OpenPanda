@@ -126,7 +126,7 @@ Claude Code、Codex、OpenCode、OpenClaw……どれも単一マシン上の強
 フラグでデフォルトを上書きできます：
 
 ```bash
-sh scripts/install.sh --version 0.0.4           # バージョン指定（デフォルト latest）
+sh scripts/install.sh --version 0.0.6           # バージョン指定（デフォルト latest）
 sh scripts/install.sh --prefix /opt/openpanda   # カスタムインストール先
 sh scripts/install.sh --yes                     # 自動起動も登録（確認なし）
 sh scripts/install.sh --no-service              # 自動起動は一切しない

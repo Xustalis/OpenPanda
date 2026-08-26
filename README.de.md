@@ -183,7 +183,7 @@ ein nutzerbezogenes Präfix und verlinkt `panda` in deinen `PATH`.
 Überschreibe die Standardwerte mit Flags:
 
 ```bash
-sh scripts/install.sh --version 0.0.4           # Version festlegen (Standard: latest)
+sh scripts/install.sh --version 0.0.6           # Version festlegen (Standard: latest)
 sh scripts/install.sh --prefix /opt/openpanda   # eigenes Installationsverzeichnis
 sh scripts/install.sh --yes                     # Auto-Start ebenfalls registrieren, ohne Nachfrage
 sh scripts/install.sh --no-service              # Auto-Start komplett überspringen
