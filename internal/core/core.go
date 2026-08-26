@@ -100,9 +100,15 @@ type Core struct {
 	maxConns      int
 	maxConnsPerIP int
 
-	mu      sync.RWMutex
-	peers   map[string]*Peer
-	greeted map[string]bool // node ids we have replied hello to
+	mu    sync.RWMutex
+	peers map[string]*Peer
+	// greetedConns tracks the conns whose first hello we already replied
+	// to, so the handshake terminates without ping-ponging while a hello on
+	// any NEW conn (reconnect, replacement, mutual-dial loser) still gets
+	// its identity-binding reply. Keyed by conn, not peer id: the peer id
+	// key made the reply follow the registry entry, which a concurrent
+	// tie-break replacement can swap mid-handshake.
+	greetedConns map[*bus.Conn]bool
 
 	// waiters maps task_id -> result channel for synchronous Submit calls
 	// that forwarded a task and are blocked awaiting the outcome.
@@ -162,20 +168,20 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		logger = slog.Default()
 	}
 	c := &Core{
-		db:       db,
-		nodeID:   nodeID,
-		card:     card,
-		tier:     tier,
-		logger:   logger,
-		store:    NewTaskStore(db, logger),
-		ctx:      ctxstore.New(db, ctxstore.MaxEntriesForResourceClass(card.ResourceClass)),
-		node:     NewNode(db, nodeID, card, tier, logger),
-		peers:    make(map[string]*Peer),
-		greeted:  make(map[string]bool),
-		breaker:  defense.NewCircuitBreaker(0, 0),
-		loop:     defense.NewLoopDetector(2),
-		auditLog: security.NewAudit(db),
-		workDir:  ".",
+		db:           db,
+		nodeID:       nodeID,
+		card:         card,
+		tier:         tier,
+		logger:       logger,
+		store:        NewTaskStore(db, logger),
+		ctx:          ctxstore.New(db, ctxstore.MaxEntriesForResourceClass(card.ResourceClass)),
+		node:         NewNode(db, nodeID, card, tier, logger),
+		peers:        make(map[string]*Peer),
+		greetedConns: make(map[*bus.Conn]bool),
+		breaker:      defense.NewCircuitBreaker(0, 0),
+		loop:         defense.NewLoopDetector(2),
+		auditLog:     security.NewAudit(db),
+		workDir:      ".",
 
 		superviseRounds: defaultSuperviseRounds,
 		leaseTimeout:    defaultDelegateTimeout,
@@ -515,14 +521,13 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 // considering it.
 func (c *Core) removePeerForConn(conn *bus.Conn) {
 	c.mu.Lock()
+	// Drop the per-conn greeting marker: a reconnect arrives on a NEW conn,
+	// which must get a fresh hello reply to bind our identity.
+	delete(c.greetedConns, conn)
 	var gone []string
 	for id, p := range c.peers {
 		if p.conn == conn {
 			delete(c.peers, id)
-			// Clear the hello-reply marker so a reconnect redoes the
-			// handshake; otherwise a reconnecting peer never receives our
-			// hello back and cannot register us on its side.
-			delete(c.greeted, id)
 			gone = append(gone, id)
 		}
 	}
@@ -653,21 +658,19 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 // mutex; its read-loop cleanup calls removePeerForConn(oldConn), which
 // matches by conn identity — the registry now holds the new conn, so the new
 // registration survives. A losing (deduped) conn is closed by the hello
-// handler after one final hello reply, so the losing dialer can bind our
-// identity and quiesce instead of redialing blind.
+// handler after the identity-binding reply that handleHello already sent on
+// it (greeting is per-conn, so the loser's first hello always earned one), so
+// the losing dialer can bind our identity and quiesce instead of redialing
+// blind.
 //
-// Returns (replaced, accepted): accepted=false means this conn lost the
-// mutual-dial tie-break and must not be registered; replaced=true means a
-// stale registration was displaced, so the hello handler replies on the new
-// conn even if this peer was already greeted — otherwise the reconnecting
-// side never learns our identity on its new conn and drops our first inbound
-// message as "message before hello".
-func (c *Core) ensurePeer(id string, conn *bus.Conn) (replaced, accepted bool) {
+// Returns accepted=false when this conn lost the mutual-dial tie-break and
+// must not be registered; true otherwise.
+func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
 	c.mu.Lock()
 	old := c.peers[id]
 	if old != nil && old.conn == conn {
 		c.mu.Unlock()
-		return false, true
+		return true
 	}
 	if old != nil && old.conn.Outbound() != conn.Outbound() {
 		// Opposite directions: deterministic mutual-dial dedup. The winner
@@ -675,7 +678,7 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) (replaced, accepted bool) {
 		if conn.Outbound() != (c.nodeID < id) {
 			c.mu.Unlock()
 			c.logger.Info("peer connection deduped", "peer", id)
-			return false, false
+			return false
 		}
 	}
 	c.peers[id] = &Peer{id: id, conn: conn}
@@ -687,7 +690,7 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) (replaced, accepted bool) {
 		old.conn.Close()
 	}
 	c.logger.Info("peer registered", "peer", id, "active", n)
-	return old != nil, true
+	return true
 }
 
 // dispatch routes an envelope to its handler. conn is the connection the
@@ -744,31 +747,37 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		return
 	}
 	conn.SetPeerID(p.NodeID)
-	replaced, accepted := c.ensurePeer(p.NodeID, conn)
+
+	// Send our hello reply BEFORE registering the conn, and directly on the
+	// conn this hello arrived on — never via the registry (c.reply). The far
+	// end of THIS conn is the read loop waiting to bind our identity, and
+	// the registry is a moving target under mutual dials: if the tie-break
+	// swaps this peer's registry entry between the greeted check and a
+	// registry-routed send, the reply lands on the surviving conn while
+	// this one dies hello-less — the losing dialer never learns the edge is
+	// alive through its inbound conn, its MaintainPeer returns immediately
+	// (PeerID was never bound), and the caller redials into the one-second
+	// connect/disconnect flap the dedup exists to stop. Replying before
+	// ensurePeer also means a concurrent replacement cannot close this conn
+	// out from under the reply. Greeting is tracked per CONN, so every new
+	// conn — a reconnect, a replacement, a tie-break loser — gets exactly
+	// one identity-binding reply, while a repeat hello on an already-greeted
+	// conn gets none (handshake termination).
+	c.mu.Lock()
+	already := c.greetedConns[conn]
+	c.greetedConns[conn] = true
+	c.mu.Unlock()
+	if !already {
+		c.sendHelloReply(conn, p.NodeID)
+	}
+
+	accepted := c.ensurePeer(p.NodeID, conn)
 	if !accepted {
-		// Lost the mutual-dial tie-break: this conn is about to be closed
-		// and the surviving registration already ingested the card. Reply
-		// once anyway so the losing dialer can bind our identity (it then
-		// sees the edge is alive through its inbound conn and stops
-		// redialing), then drop the loser. The reply MUST go out on this
-		// arriving conn, not via the registry (c.reply) — the registry
-		// points at the surviving conn, and a hello-less loser never binds
-		// our identity, skips MaintainPeer's edge wait, and redials every
-		// second (the mutual-dial reconnect storm).
-		if card, err := c.helloCard(); err == nil {
-			ts := time.Now().Unix()
-			if msgID, err := newUUID(); err == nil {
-				if envOut, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, bus.HelloPayload{
-					NodeID: c.nodeID,
-					Ver:    version.Version,
-					Card:   card,
-					Ts:     ts,
-					Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
-				}); err == nil {
-					_ = conn.Send(envOut)
-				}
-			}
-		}
+		// Lost the mutual-dial tie-break: the reply above already left on
+		// this conn, so the losing dialer bound our identity and its
+		// MaintainPeer will hold the edge through its inbound conn instead
+		// of redialing. The surviving registration already ingested the
+		// card; drop the loser.
 		conn.Close()
 		return
 	}
@@ -782,33 +791,34 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		}
 	}
 	c.logger.Info("peer hello", "peer", p.NodeID, "ver", p.Ver)
+}
 
-	// Reply with our own hello only once per peer, so the handshake
-	// terminates instead of ping-ponging forever. Exception: a hello that
-	// REPLACED a stale conn (P1-7) gets a fresh reply — the reconnecting peer
-	// must bind our identity to its new conn, or it will drop our first
-	// message as arriving before hello.
-	c.mu.Lock()
-	if c.greeted[p.NodeID] && !replaced {
-		c.mu.Unlock()
-		return
-	}
-	c.greeted[p.NodeID] = true
-	c.mu.Unlock()
-
+// sendHelloReply transmits this node's hello on conn so the far end can bind
+// our identity. Direct send on the given conn, never registry-routed — see
+// handleHello for why the handshake reply must follow the conn it answers.
+func (c *Core) sendHelloReply(conn *bus.Conn, to string) {
 	card, err := c.helloCard()
 	if err != nil {
 		return
 	}
 	ts := time.Now().Unix()
-	if err := c.reply(ctx, env, bus.MsgHello, bus.HelloPayload{
+	msgID, err := newUUID()
+	if err != nil {
+		return
+	}
+	envOut, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, bus.HelloPayload{
 		NodeID: c.nodeID,
 		Ver:    version.Version,
 		Card:   card,
 		Ts:     ts,
 		Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
-	}); err != nil {
-		c.logger.Debug("hello reply failed", "peer", env.From, "err", err)
+	})
+	if err != nil {
+		return
+	}
+	envOut.To = to
+	if err := conn.Send(envOut); err != nil {
+		c.logger.Debug("hello reply failed", "peer", to, "err", err)
 	}
 }
 

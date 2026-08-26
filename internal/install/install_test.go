@@ -4,9 +4,24 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// setUserHome pins the user home directory for a test: HOME on unix,
+// USERPROFILE on Windows. os.UserHomeDir reads exactly these per-OS, so a
+// fake home that only lands in HOME is invisible on Windows and every
+// home-derived behavior (owned-config roots, purge guardrails) silently
+// tests the real runner home instead.
+func setUserHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("ZDOTDIR", "")
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+}
 
 func TestInPATH(t *testing.T) {
 	dir := t.TempDir()
@@ -26,8 +41,7 @@ func TestInPATH(t *testing.T) {
 func TestScanGuardrails(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("ZDOTDIR", "")
+	setUserHome(t, home)
 
 	db := filepath.Join(root, "data", "openpanda.db")
 	os.MkdirAll(filepath.Dir(db), 0o755)
@@ -94,8 +108,7 @@ func TestScanGuardrails(t *testing.T) {
 // the Linux XDG default puts storage roots in there too.
 func TestScanSweepsDistributionPrefix(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("ZDOTDIR", "")
+	setUserHome(t, home)
 
 	prefix := t.TempDir() // stands in for ~/.local/share/openpanda
 	// Scan resolves through symlinks; macOS TempDir is /var behind /private/var.
@@ -159,8 +172,7 @@ func TestScanSweepsDistributionPrefix(t *testing.T) {
 // swept: a Homebrew Cellar (brew owns the files) and a source checkout
 // (go.mod / .git beside a locally built bin/panda).
 func TestSweepablePrefixRefusals(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("ZDOTDIR", "")
+	setUserHome(t, t.TempDir())
 
 	mkLayout := func(root string) string {
 		binDir := filepath.Join(root, "bin")
@@ -207,8 +219,7 @@ func TestSweepablePrefixRefusals(t *testing.T) {
 // `brew uninstall openpanda` hint.
 func TestScanKeepsHomebrewCellar(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("ZDOTDIR", "")
+	setUserHome(t, home)
 
 	tmp := t.TempDir()
 	if resolved, err := filepath.EvalSymlinks(tmp); err == nil {
@@ -328,8 +339,7 @@ func TestBackupZipAndRemoveOne(t *testing.T) {
 func newUninstallFixture(t *testing.T) (home, root string, targets []Target) {
 	t.Helper()
 	home = t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("ZDOTDIR", "")
+	setUserHome(t, home)
 	root = t.TempDir()
 
 	db := filepath.Join(root, "data", "openpanda.db")
@@ -530,8 +540,7 @@ func TestExecuteUninstallPurge(t *testing.T) {
 // directory must never be purged, flag or not.
 func TestExecuteUninstallPurgeRefusesHome(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("ZDOTDIR", "")
+	setUserHome(t, home)
 	// Pin the config to a custom (nonexistent) location so the test never
 	// depends on — or touches — /etc/openpanda on the host.
 	t.Setenv("OPENPANDA_CONFIG_PATH", filepath.Join(t.TempDir(), "none.yaml"))
@@ -586,7 +595,9 @@ func TestCopySelf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Mode()&0o111 == 0 {
+	// Windows never reports unix exec bits (mode is 0666 / read-only 0444);
+	// executability there comes from the .exe extension ExeName() gave us.
+	if runtime.GOOS != "windows" && st.Mode()&0o111 == 0 {
 		t.Fatal("installed binary is not executable")
 	}
 	// Re-running the copy over an existing destination is the update path.
