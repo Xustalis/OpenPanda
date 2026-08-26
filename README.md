@@ -347,7 +347,9 @@ Manage skills:
 |---|---|
 | `panda` (no args) | Open the interactive REPL (same as `panda repl`); the daemon now runs via the `panda daemon` subcommand |
 | `panda daemon [--config PATH] [--card PATH]` | Run the daemon: register node, heartbeat, WS server, peer reconnect |
-| `panda ask [--config PATH] [--card PATH] [--authorize] "<question>"` | Unified entry: classify into answer / tool_call / task and execute |
+| `panda ask [--config PATH] [--card PATH] [--authorize] "<question>"` | Unified entry: classify into answer / tool_call / task / plan and execute |
+| `panda plan run <file.yaml> \| show <id> \| example` | Multi-stage cross-device pipeline: a stage IS an ordinary task (queues, routes by hardware, retries, parks in review), the plan adds the ordering and hands each stage's output dir to the next machine's stage; `run --dry-run` validates and prints the routing without creating anything |
+| `panda voice [--once] [--mute]` | Desk-pet entry: wake word → ASR → the same entry pipeline → TTS, for a device with no keyboard; `--once` handles a single utterance, `--mute` prints instead of speaking |
 | `panda repl [--config PATH] [--card PATH]` | Interactive shell: slash commands (tasks/approve/projects/nodes/lang), bare input goes to the ask engine, `/web` boots the embedded console |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | One-command web console: loopback + ephemeral token by default, opens the browser already logged in |
 | `panda init` | Interactive first-run setup: generates `config.yaml` + `capabilities.yaml` (model endpoint, node name, hardware-scan defaults) |
