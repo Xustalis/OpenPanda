@@ -255,6 +255,11 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 			e.Close()
 			return nil, fmt.Errorf("askengine: load capabilities: %w", err)
 		}
+		// Same pruning the daemon does: a native ability whose command is not
+		// installed here would win the native plan and fail at exec.
+		if dropped := card.PruneUnavailableNative(); len(dropped) > 0 {
+			logger.Warn("native abilities dropped: command not found on this host", "ids", dropped)
+		}
 		// Mirror the daemon's card enrichment: kind/identity come from the
 		// config (the card file may omit them), and the node is registered
 		// under the same stable runtime ID the daemon uses. Without this, a

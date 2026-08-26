@@ -13,6 +13,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/pyexec"
 	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
@@ -443,7 +444,7 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 // loudly if its CLI is really missing).
 func agentBinary(name string, ag ledger.Agent) string {
 	if fields := strings.Fields(ag.InstallCheck); len(fields) == 2 &&
-		(fields[0] == "which" || fields[0] == "command") {
+		(fields[0] == "which" || fields[0] == "command" || fields[0] == "where") {
 		return fields[1]
 	}
 	if k, ok := agents.ByAdapter(ag.Adapter); ok {
@@ -464,13 +465,22 @@ func defaultAgentProbe(name string, ag ledger.Agent) bool {
 }
 
 // AgentViable reports whether an agent can actually execute on this machine:
-// its CLI resolves on PATH AND it can reach a model — either its own
-// credentials (registry manifest) or panda's configured model via injection.
-// An installed-but-locked-out CLI (e.g. claude.exe without login state on a
-// node with no model key) fails only after minutes of runtime hang; probing
-// viability up front keeps both the local fallback chain and the capability
-// summary peers route on from ever selecting such an agent.
+// the adapter runtime exists, its CLI resolves on PATH, AND it can reach a
+// model — either its own credentials (registry manifest) or panda's configured
+// model via injection. An installed-but-locked-out CLI (e.g. claude.exe without
+// login state on a node with no model key) fails only after minutes of runtime
+// hang; probing viability up front keeps both the local fallback chain and the
+// capability summary peers route on from ever selecting such an agent.
 func (r *Router) AgentViable(name string, ag ledger.Agent) bool {
+	// Every agent tier runs through a Python adapter, so a host without an
+	// interpreter can run none of them however well the CLI itself is
+	// installed. Without this check such a node advertises coding abilities,
+	// wins the routing score, accepts the delegated stage and fails at exec
+	// time — and in the flagship pipeline that is the development stage landing
+	// on a machine that cannot start it.
+	if !pyexec.Available() {
+		return false
+	}
 	bin := agentBinary(name, ag)
 	if bin != "" {
 		if _, err := exec.LookPath(bin); err != nil {

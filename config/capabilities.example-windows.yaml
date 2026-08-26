@@ -1,0 +1,76 @@
+# Windows 算力节点能力卡示例（台式机 / 带独显的工作站）
+# 复制并按实际设备改名后使用：
+#   copy config\capabilities.example-windows.yaml capabilities.yaml
+# 或直接让 panda 扫描硬件生成草稿（推荐，硬件字段自动填好）：
+#   panda detect > capabilities.yaml
+#   panda card rescan --write     # 之后重新扫描并合并，手改的字段不会丢
+#
+# schema 说明见 capabilities.example-desktop.yaml。这份示例存在的唯一理由是：
+# 另外三份示例卡的 native 段是 POSIX 专属的（uname -a / df -h . / ping -c 4 /
+# vcgencmd），把它们照抄到 Windows 节点上，这些能力会在路由里赢过 agent，然后
+# 在 exec 时以 127 失败。Windows 下的等价命令写在下面。
+#
+# 注：native.command 是直接 exec，不经过 shell，所以只能写真正的可执行文件。
+# dir / echo 这类 cmd.exe 内建命令必须写成 cmd /c dir。
+
+device: "example-windows-workstation"
+resource_class: "Full"
+node_kind: "physical"
+chip: "AMD Ryzen 9 / NVIDIA RTX"
+
+native:
+  - id: "sys:info"
+    command: "cmd"
+    args: ["/c", "ver"]
+    tier: 1
+    description: "system info"
+  - id: "disk:usage"
+    command: "cmd"
+    args: ["/c", "dir"]
+    tier: 1
+    description: "disk usage of the work directory"
+  - id: "net:ping"
+    command: "ping"
+    args: ["-n", "4", "1.1.1.1"]
+    tier: 1
+    description: "ICMP reachability probe from this node's network segment"
+  - id: "gpu:status"
+    command: "nvidia-smi"
+    args: []
+    tier: 1
+    description: "GPU utilisation and VRAM usage"
+
+agents:
+  claude_code:
+    adapter: "claude_code.py"
+    # Windows 用 where 而不是 which；install_check 的动词会被
+    # commander.agentBinary 解析出探测用的二进制名。
+    install_check: "where claude"
+    capabilities: ["coding", "shell", "file_edit", "build"]
+    best_at: ["multi_file_edits", "code_search", "running_tests"]
+    not_for: ["hardware_io", "realtime_control"]
+    cost_tier: "high"
+    tier: 2
+  codex:
+    adapter: "codex.py"
+    install_check: "where codex"
+    capabilities: ["coding", "shell", "file_edit"]
+    best_at: ["code_review", "refactoring"]
+    not_for: ["hardware_io"]
+    cost_tier: "medium"
+    tier: 2
+
+capacity:
+  cpu_cores: 16
+  ram_gb: 64
+  max_concurrent_tasks: 4
+
+# 这台机器在旗舰流水线里是"算力"角色：训练/推理阶段要落在这里，
+# 所以 gpu_vram_gb 必须如实声明 —— 它是路由的硬判据。
+# 有独显但读不出显存大小时写 -1（present, size unknown），路由放行、
+# 运行时再见真章；写 0 等于宣布本机没有 GPU，会被 GPU 任务排除。
+resource_profile:
+  cpu: 16
+  ram_gb: 64
+  gpu_vram_gb: 24
+  duration_hint: long

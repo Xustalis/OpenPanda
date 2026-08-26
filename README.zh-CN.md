@@ -289,6 +289,7 @@ model:
 | `panda skill` | Skill 存储管理 |
 | `panda reminder list \| add \| rm` | 定时提醒：列出 / 新增（`--after 10m` 或 `--at "2006-01-02 15:04"`）/ 删除 |
 | `panda detect [-o PATH]` | 扫描本机硬件（CPU/RAM/GPU/Agent CLI）生成 capabilities.yaml 草稿 |
+| `panda card show \| rescan \| edit \| set` | 本节点能力卡：查看（含来源文件路径）、重新扫描硬件与已安装的 Agent CLI（`rescan` 先打印差异，`--write` 才写入并保留 `.bak`）、在 `$EDITOR` 中编辑、或用 `set <字段>=<值>` 无编辑器修改。探测得到的硬件字段会被覆盖，人工决定的字段（节点名、resource_class、max_concurrent_tasks、agent tier、native/manual 能力）一律保留 |
 | `panda metrics [--csv]` | 导出委派指标 |
 | `panda audit [--task <id>]` | 校验审计日志或单任务事件的 `prev_hash` 链 |
 | `panda version` / `panda help` | 打印版本号 / 命令总览 |

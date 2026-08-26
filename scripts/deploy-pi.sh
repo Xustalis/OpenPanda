@@ -2,7 +2,8 @@
 # 一键部署 OpenPanda 到香橙派（PI_HOST/PI_USER 可覆盖）。
 #
 # 用法（在 Mac / 开发机上执行）:
-#   PI_HOST=192.168.0.106 ./scripts/deploy-pi.sh
+#   PI_HOST=<pi 的 IP 或主机名> ./scripts/deploy-pi.sh
+#   PI_HOST=orangepi.local PI_USER=pi ./scripts/deploy-pi.sh
 #
 # 前置: Pi 的 sshd 可达（若未开启，先在 Pi 本机终端执行:
 #   sudo systemctl enable --now ssh）
@@ -16,8 +17,15 @@
 #   5. 健康检查: 服务 active + 7836 监听 + 版本号
 set -euo pipefail
 
-HOST="${PI_HOST:-192.168.0.106}"
-USER_="${PI_USER:-xenith}"
+# PI_HOST 没有默认值，且必须由调用方给出: 这里曾经硬编码一台开发机的
+# 局域网地址，于是任何人跑这个脚本都会去部署别人网段里的某台机器 —— 要么
+# 超时，要么打到一台不相干的主机上。没有 PI_HOST 就直接退出。
+HOST="${PI_HOST:-}"
+if [ -z "$HOST" ]; then
+  echo "用法: PI_HOST=<pi 的 IP 或主机名> [PI_USER=<登录用户>] $0" >&2
+  exit 2
+fi
+USER_="${PI_USER:-$(id -un)}"
 TARGET="${USER_}@${HOST}"
 REMOTE_DIR="/home/${USER_}/openpanda"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"

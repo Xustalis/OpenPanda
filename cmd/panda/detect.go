@@ -8,20 +8,21 @@ package main
 //
 //	panda detect                # print draft to stdout
 //	panda detect -o capabilities.yaml
+//
+// The probing itself lives in internal/hwinfo, shared with `panda card rescan`
+// and the panel's /api/self, so the numbers a node advertises cannot depend on
+// which surface produced them.
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"runtime"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
+	"github.com/Xustalis/OpenPanda/internal/hwinfo"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"gopkg.in/yaml.v3"
@@ -55,10 +56,8 @@ func runDetect(args []string) {
 // detectCard probes the host and assembles a Card draft.
 func detectCard() ledger.Card {
 	cores := runtime.NumCPU()
-	ramGB := detectRAMGB()
-	gpus := detectGPUs()
-	displays := detectDisplays()
-	audio := detectAudio()
+	ramGB := hwinfo.RAMGB()
+	vram := hwinfo.GPUVRAMGB()
 
 	// Resource class from RAM: <8GB = Micro, <32GB = Standard, else Full.
 	class := "Standard"
@@ -74,9 +73,9 @@ func detectCard() ledger.Card {
 	}
 
 	card := ledger.Card{
-		Device:        hostname(),
+		Device:        hwinfo.Hostname(),
 		ResourceClass: class,
-		Chip:          detectCPUModel(),
+		Chip:          hwinfo.CPUModel(),
 		Capacity: ledger.Capacity{
 			CPUCores:      cores,
 			RAMGB:         ramGB,
@@ -85,8 +84,8 @@ func detectCard() ledger.Card {
 		ResourceProfile: ledger.ResourceProfile{
 			CPU:          cores,
 			RAMGB:        ramGB,
-			GPUVRAMGB:    detectGPUVRAMGB(gpus),
-			DurationHint: "short",
+			GPUVRAMGB:    vram,
+			DurationHint: durationHint(cores, ramGB, vram),
 		},
 	}
 
@@ -95,10 +94,29 @@ func detectCard() ledger.Card {
 	// shared with `panda agents`, the web settings API, and the commander's
 	// availability probe, so the draft stays in lock-step with them.
 	card.Agents = cardAgents()
-
-	_ = displays
-	_ = audio
 	return card
+}
+
+// durationHint classifies what this machine is *for*, which is what the hint
+// means on a card: a box with a GPU or a wide CPU is where long training runs
+// belong, an SBC is where short interactive work belongs. It used to be
+// hardcoded "short", which described the Orange Pi and mislabelled every
+// workstation the network ever joined.
+func durationHint(cores, ramGB, vram int) string {
+	if vram > 0 || vram == ledger.GPUVRAMUnknown || cores >= 8 || ramGB >= 32 {
+		return "long"
+	}
+	return "short"
+}
+
+// installCheckFor renders the shell one-liner a card carries so a human (or a
+// remote node reading the card) can verify the CLI is really installed.
+// `which` does not exist on Windows; `where` is its equivalent.
+func installCheckFor(bin string) string {
+	if runtime.GOOS == "windows" {
+		return "where " + bin
+	}
+	return "which " + bin
 }
 
 // cardAgents scans the agent registry and returns a card.Agents map with one
@@ -107,16 +125,13 @@ func detectCard() ledger.Card {
 func cardAgents() map[string]ledger.Agent {
 	out := map[string]ledger.Agent{}
 	for _, k := range agents.Registry() {
-		bin := k.PrimaryBinary()
+		bin := installedBinary(k)
 		if bin == "" {
-			continue
-		}
-		if _, err := exec.LookPath(bin); err != nil {
 			continue
 		}
 		out[k.Name] = ledger.Agent{
 			Adapter:      k.Adapter,
-			InstallCheck: "which " + bin,
+			InstallCheck: installCheckFor(bin),
 			Capabilities: []string{"coding", "shell", "file_edit"},
 			BestAt:       []string{"multi_file_edits", "code_search", "running_tests"},
 			NotFor:       []string{"hardware_io", "realtime_control"},
@@ -127,135 +142,18 @@ func cardAgents() map[string]ledger.Agent {
 	return out
 }
 
-func hostname() string {
-	h, err := os.Hostname()
-	if err != nil || h == "" {
-		return "unknown-host"
-	}
-	return h
-}
-
-// probe runs a command with a short timeout and returns trimmed stdout.
-func probe(name string, args ...string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func detectCPUModel() string {
-	switch runtime.GOOS {
-	case "darwin":
-		return probe("sysctl", "-n", "machdep.cpu.brand_string")
-	case "linux":
-		if out := probe("sh", "-c", "grep -m1 'model name' /proc/cpuinfo"); out != "" {
-			if _, v, ok := strings.Cut(out, ":"); ok {
-				return strings.TrimSpace(v)
-			}
+// installedBinary returns the first of an agent's known binary names that is on
+// PATH, or "". Every alias is tried, not just the primary one: a CLI installed
+// under its alternate name (claude-code vs claude) is installed either way, and
+// probing only the primary name is how a present agent goes unadvertised.
+func installedBinary(k agents.Known) string {
+	for _, bin := range k.Binaries {
+		if bin == "" {
+			continue
 		}
-		if out := probe("lscpu"); out != "" {
-			for _, line := range strings.Split(out, "\n") {
-				if strings.HasPrefix(line, "Model name:") {
-					return strings.TrimSpace(strings.TrimPrefix(line, "Model name:"))
-				}
-			}
+		if _, err := exec.LookPath(bin); err == nil {
+			return bin
 		}
 	}
-	return fmt.Sprintf("%s/%s (unknown model)", runtime.GOOS, runtime.GOARCH)
-}
-
-func detectRAMGB() int {
-	switch runtime.GOOS {
-	case "darwin":
-		if out := probe("sysctl", "-n", "hw.memsize"); out != "" {
-			if n, err := strconv.ParseInt(out, 10, 64); err == nil {
-				return int(n / (1 << 30))
-			}
-		}
-	case "linux":
-		if out := probe("sh", "-c", "grep -m1 MemTotal /proc/meminfo"); out != "" {
-			re := regexp.MustCompile(`(\d+)\s*kB`)
-			if m := re.FindStringSubmatch(out); m != nil {
-				if n, err := strconv.Atoi(m[1]); err == nil {
-					return n / (1024 * 1024)
-				}
-			}
-		}
-	}
-	return 0
-}
-
-// detectGPUs lists GPU names (best effort). macOS uses system_profiler; on
-// Linux lspci is attempted and falls back to none.
-func detectGPUs() []string {
-	switch runtime.GOOS {
-	case "darwin":
-		out := probe("system_profiler", "SPDisplaysDataType")
-		if out == "" {
-			return nil
-		}
-		var gpus []string
-		for _, line := range strings.Split(out, "\n") {
-			if strings.Contains(line, "Chipset Model:") {
-				if _, v, ok := strings.Cut(strings.TrimSpace(line), "Chipset Model:"); ok {
-					gpus = append(gpus, strings.TrimSpace(v))
-				}
-			}
-		}
-		return gpus
-	case "linux":
-		out := probe("sh", "-c", "lspci 2>/dev/null | grep -i 'vga\\|3d controller' || true")
-		if out == "" {
-			return nil
-		}
-		var gpus []string
-		for _, line := range strings.Split(out, "\n") {
-			if _, v, ok := strings.Cut(line, ": "); ok {
-				gpus = append(gpus, strings.TrimSpace(v))
-			}
-		}
-		return gpus
-	}
-	return nil
-}
-
-// detectGPUVRAMGB reads VRAM from system_profiler on macOS; unknown (0) elsewhere.
-func detectGPUVRAMGB(gpus []string) int {
-	if len(gpus) == 0 || runtime.GOOS != "darwin" {
-		return 0
-	}
-	out := probe("system_profiler", "SPDisplaysDataType")
-	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "VRAM") {
-			// e.g. "VRAM (Total): 8 GB" / "VRAM (Shared): 16 GB"
-			re := regexp.MustCompile(`(\d+)\s*GB`)
-			if m := re.FindStringSubmatch(line); m != nil {
-				if n, err := strconv.Atoi(m[1]); err == nil {
-					return n
-				}
-			}
-		}
-	}
-	return 0
-}
-
-// detectDisplays reports the display count (best effort, macOS only).
-func detectDisplays() int {
-	if runtime.GOOS != "darwin" {
-		return 0
-	}
-	out := probe("system_profiler", "SPDisplaysDataType")
-	return strings.Count(out, "Resolution:")
-}
-
-// detectAudio reports whether an audio input device exists (best effort, macOS only).
-func detectAudio() bool {
-	if runtime.GOOS != "darwin" {
-		return false
-	}
-	out := probe("system_profiler", "SPAudioDataType")
-	return strings.Contains(out, "Input Source") || strings.Contains(out, "Microphone")
+	return ""
 }

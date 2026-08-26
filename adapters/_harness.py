@@ -42,7 +42,12 @@ TRUNCATION_MARKER = "\n...[中间已截断，完整输出留在执行节点]...\
 # POSIX: run the CLI in its own process group so a timeout kills the whole
 # tree — the CLI's children inherit the stdout pipe and keep it open after
 # the parent dies, which would leave the read loop blocked.
-GROUP_KW = {"start_new_session": True} if sys.platform != "win32" else {}
+# Windows: CREATE_NEW_PROCESS_GROUP is the closest equivalent, and kill_tree
+# uses taskkill /T there because there is no killpg.
+if sys.platform == "win32":
+    GROUP_KW = {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+else:
+    GROUP_KW = {"start_new_session": True}
 
 
 def read_request(default_timeout=DEFAULT_TIMEOUT):
@@ -116,8 +121,28 @@ def parse_json_line(line):
 
 
 def kill_tree(proc):
-    """Kill the CLI and everything it spawned (they hold the pipes open)."""
-    if sys.platform != "win32":
+    """Kill the CLI and everything it spawned (they hold the pipes open).
+
+    proc.kill() alone kills one process. An agent CLI is a launcher: it spawns
+    node, git, ripgrep, its own MCP servers. The survivors inherit the stdout
+    pipe, so the read loop never sees EOF and a timed-out task hangs forever
+    instead of being reported as a timeout — which is worse than the timeout,
+    because the scheduler is still holding a slot for it.
+    """
+    if sys.platform == "win32":
+        # No killpg on Windows; taskkill /T walks the child tree. Its console
+        # window is suppressed so a headless node stays headless.
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                timeout=10,
+            )
+            return
+        except (OSError, subprocess.SubprocessError):
+            pass  # taskkill missing or the process already gone
+    else:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
             return
