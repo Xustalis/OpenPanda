@@ -497,6 +497,9 @@ func (r *repl) ask(text string) {
 		if out.Kind == "task" {
 			turn.Text = out.TaskID
 			turn.Ref = out.TaskID
+		} else if out.Kind == "plan" {
+			turn.Text = out.PlanID
+			turn.Ref = out.PlanID
 		} else {
 			turn.Text = out.Answer
 		}
@@ -524,6 +527,16 @@ func (r *repl) ask(text string) {
 		} else {
 			fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
 		}
+	case "plan":
+		// A plan does not finish inside the ask: its stages are queued and will
+		// run on other machines. Print the board and how to follow it.
+		if !out.OK {
+			fmt.Fprintf(os.Stderr, "panda: 计划启动失败: %s\n", out.Stderr)
+			break
+		}
+		fmt.Printf("计划 %s（%d 个阶段）：%s\n", out.PlanID, len(out.PlanStages), out.PlanGoal)
+		printPlanStages(out.PlanStages)
+		fmt.Printf("跟踪：panda plan show %s\n", out.PlanID)
 	}
 }
 

@@ -92,8 +92,17 @@ func score(n ledger.Node, now int64) float64 {
 // a forwarded task never loops back through an earlier hop. now is the Unix
 // evaluation time for the freshness discount.
 func pickBest(nodes []ledger.Node, now int64) string {
+	id, _ := pickBestScored(nodes, now)
+	return id
+}
+
+// pickBestScored is pickBest plus the winning score, which is what lets this
+// node enter its own ranking as one candidate among many: comparing "best peer"
+// against "myself" needs the number, not just the name. An empty set scores 0,
+// so a lone capable local node wins by default.
+func pickBestScored(nodes []ledger.Node, now int64) (string, float64) {
 	if len(nodes) == 0 {
-		return ""
+		return "", 0
 	}
 	best := nodes[0]
 	bestScore := score(best, now)
@@ -103,5 +112,5 @@ func pickBest(nodes []ledger.Node, now int64) string {
 			best, bestScore = n, s
 		}
 	}
-	return best.ID
+	return best.ID, bestScore
 }

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -29,6 +30,7 @@ type Config struct {
 	Routing   RoutingConfig   `yaml:"routing"`
 	Memory    MemoryConfig    `yaml:"memory"`
 	Approval  ApprovalConfig  `yaml:"approval"`
+	Timeouts  TimeoutsConfig  `yaml:"timeouts"`
 }
 
 // Injection model strategies (injection.model).
@@ -146,11 +148,63 @@ type StorageConfig struct {
 	ProjectsPath string `yaml:"projects_path"` // per-project memory root (projects/)
 	SkillsPath   string `yaml:"skills_path"`   // procedural-memory root (skills/)
 	WorkPath     string `yaml:"work_path"`     // agents execute here; scope drift is measured against it
+	ArtifactPath string `yaml:"artifact_path"` // packed task artifacts (artifacts/), named by hash
 }
 
 // LogConfig controls structured logging.
 type LogConfig struct {
 	Level string `yaml:"level"` // debug | info | warn | error
+}
+
+// Built-in timeout defaults, used when timeouts.* is unset. The lease must stay
+// comfortably above the agent budget: a task whose lease expires while its
+// adapter is still legitimately running gets force-failed and re-routed, so the
+// same work runs twice on two nodes at once.
+const (
+	DefaultAgentTimeoutS     = 600
+	DefaultTaskLeaseS        = 1200
+	DefaultSuperviseRoundsCf = 5
+)
+
+// TimeoutsConfig bounds long-running task execution. All durations are seconds;
+// zero means "use the built-in default". Operators need these knobs because a
+// deep-learning stage can legitimately run far longer than a code edit, and the
+// defaults are tuned for the latter.
+type TimeoutsConfig struct {
+	// TaskLeaseS is how long one task attempt may hold its lease before the
+	// monitor treats the executor as dead. The lease is renewed on a heartbeat
+	// while execution is live, so this bounds silence, not total runtime.
+	TaskLeaseS int `yaml:"task_lease_s"`
+	// AgentS is the wall-clock budget for one agent-adapter execution
+	// (advertised to the adapter and enforced with a hard deadline).
+	AgentS int `yaml:"agent_s"`
+	// SuperviseRounds caps the execute → judge → re-delegate loop per task.
+	SuperviseRounds int `yaml:"supervise_rounds"`
+}
+
+// TaskLease returns the configured task lease, or the default when unset.
+func (t TimeoutsConfig) TaskLease() time.Duration {
+	if t.TaskLeaseS > 0 {
+		return time.Duration(t.TaskLeaseS) * time.Second
+	}
+	return DefaultTaskLeaseS * time.Second
+}
+
+// AgentTimeout returns the configured agent-execution budget, or the default
+// when unset.
+func (t TimeoutsConfig) AgentTimeout() time.Duration {
+	if t.AgentS > 0 {
+		return time.Duration(t.AgentS) * time.Second
+	}
+	return DefaultAgentTimeoutS * time.Second
+}
+
+// Rounds returns the configured supervision round budget, or the default.
+func (t TimeoutsConfig) Rounds() int {
+	if t.SuperviseRounds > 0 {
+		return t.SuperviseRounds
+	}
+	return DefaultSuperviseRoundsCf
 }
 
 // API type wire values: which request/response dialect the provider speaks.
@@ -351,6 +405,15 @@ func (c *Config) normalize() {
 	if c.Memory.Limits.Project <= 0 {
 		c.Memory.Limits.Project = DefaultMemoryLimitProject
 	}
+	// Artifacts are task *outputs* that travel between nodes: a build tree, a
+	// trained model. They get a root of their own because they belong neither
+	// in ctxstore (whose LRU keeps as few as 5 entries on a Micro node and
+	// would silently evict them) nor in SQLite (they are measured in GB). The
+	// root is derived from the database's directory rather than fixed at
+	// Default() time, so it follows storage wherever the deployer put it.
+	if strings.TrimSpace(c.Storage.ArtifactPath) == "" {
+		c.Storage.ArtifactPath = filepath.Join(filepath.Dir(c.Storage.DBPath), "artifacts")
+	}
 }
 
 // UserDataDir returns the per-user state directory used when no config
@@ -430,6 +493,11 @@ func Default() *Config {
 			ProjectsPath: filepath.Join(data, "projects"),
 			SkillsPath:   filepath.Join(data, "skills"),
 			WorkPath:     data,
+			// ArtifactPath is deliberately left empty here and derived in
+			// normalize() from whatever the database path ends up being. A
+			// config file that moves storage next to itself but predates
+			// artifact_path would otherwise keep the per-user default and
+			// scatter a node's state across two roots.
 		},
 		Log: LogConfig{
 			Level: "info",
@@ -462,6 +530,11 @@ func Default() *Config {
 		},
 		Approval: ApprovalConfig{
 			Mode: ApprovalModeOnRequest,
+		},
+		Timeouts: TimeoutsConfig{
+			TaskLeaseS:      DefaultTaskLeaseS,
+			AgentS:          DefaultAgentTimeoutS,
+			SuperviseRounds: DefaultSuperviseRoundsCf,
 		},
 	}
 }
@@ -525,6 +598,12 @@ func (c *Config) resolveRelativePaths(baseDir string) {
 	}
 	if !filepath.IsAbs(c.Storage.WorkPath) {
 		c.Storage.WorkPath = filepath.Join(baseDir, c.Storage.WorkPath)
+	}
+	// artifact_path is the one storage path with no default of its own: an
+	// empty value must not become baseDir itself, which would drop multi-GB
+	// archives next to the YAML. normalize() derives it instead.
+	if c.Storage.ArtifactPath != "" && !filepath.IsAbs(c.Storage.ArtifactPath) {
+		c.Storage.ArtifactPath = filepath.Join(baseDir, c.Storage.ArtifactPath)
 	}
 	if !filepath.IsAbs(c.Push.VAPIDKeyPath) {
 		c.Push.VAPIDKeyPath = filepath.Join(baseDir, c.Push.VAPIDKeyPath)
@@ -616,6 +695,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("OPENPANDA_WORK_PATH"); v != "" {
 		c.Storage.WorkPath = v
+	}
+	if v := os.Getenv("OPENPANDA_ARTIFACT_PATH"); v != "" {
+		c.Storage.ArtifactPath = v
 	}
 	if v := os.Getenv("OPENPANDA_MODEL_API_TYPE"); v != "" {
 		c.Model.APIType = v

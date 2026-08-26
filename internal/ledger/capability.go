@@ -79,10 +79,20 @@ type ResourceProfile struct {
 	DurationHint string `yaml:"duration_hint" json:"duration_hint"` // short | long
 }
 
+// Declared reports whether this profile says anything at all about hardware. An
+// all-zero profile is the shape of a card that never wrote a resource_profile
+// block, and that is silence, not a claim of zero capacity — every card shipped
+// before v0.0.6 looks like this. Treating silence as "no VRAM" would decline
+// every GPU task in the network, so Fits passes an undeclared node through and
+// the requirement is enforced only where it can be checked.
+func (r ResourceProfile) Declared() bool {
+	return r.CPU > 0 || r.RAMGB > 0 || r.GPUVRAMGB > 0 || r.DurationHint != ""
+}
+
 // CapabilitySummary is the compact capability profile a node advertises in its
 // hello handshake (design doc §2.1 capability exchange). It carries only what
-// routing needs — ability IDs, scheduler tier, and current capacity — not the
-// executable commands, which stay on the owning node.
+// routing needs — ability IDs, scheduler tier, current capacity and the declared
+// hardware profile — not the executable commands, which stay on the owning node.
 type CapabilitySummary struct {
 	Device        string              `json:"device"`
 	ResourceClass string              `json:"resource_class"`
@@ -94,6 +104,11 @@ type CapabilitySummary struct {
 	AgentCaps     map[string][]string `json:"agent_caps,omitempty"`
 	ManualIDs     []string            `json:"manual_ids,omitempty"`
 	Capacity      Capacity            `json:"capacity"`
+	// ResourceProfile is what makes "this node cannot run that" decidable off the
+	// network instead of only locally: a task declaring 8 GiB of VRAM must not be
+	// forwarded to a node with none, and before v0.0.6 the peer half of this
+	// field was simply dropped, so every peer looked equally capable.
+	ResourceProfile ResourceProfile `json:"resource_profile,omitempty"`
 }
 
 // Register inserts (or upserts) this node's card into the local capability
@@ -215,6 +230,10 @@ func UpsertRemote(db *sql.DB, id string, s CapabilitySummary) error {
 	if err != nil {
 		return fmt.Errorf("marshal remote capacity: %w", err)
 	}
+	resJSON, err := json.Marshal(s.ResourceProfile)
+	if err != nil {
+		return fmt.Errorf("marshal remote resource profile: %w", err)
+	}
 
 	kind, identity := s.NodeKind, s.NodeIdentity
 	if kind == "" {
@@ -223,7 +242,7 @@ func UpsertRemote(db *sql.DB, id string, s CapabilitySummary) error {
 	if identity == "" {
 		identity = id
 	}
-	return upsertNode(db, id, s.Device, s.Chip, kind, identity, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), "", s.SchedulerTier)
+	return upsertNode(db, id, s.Device, s.Chip, kind, identity, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), string(resJSON), s.SchedulerTier)
 }
 
 // Node is a single employee_cache row, decoded.
@@ -284,6 +303,32 @@ func (n Node) Matches(required []string) bool {
 		}
 	}
 	return false
+}
+
+// Fits reports whether this node's declared hardware satisfies a task's declared
+// requirement. It is the compute half of routing, where Matches is the ability
+// half: the Orange Pi genuinely has the coding ability and genuinely cannot train
+// a model, and only this comparison can tell those apart.
+//
+// Both sides are permissive when silent. A requirement of zero asks for nothing
+// and every node fits it; a node that declares no profile at all is unknown
+// rather than empty (see ResourceProfile.Declared) and is allowed through, since
+// the alternative is that a network of pre-v0.0.6 cards can route nothing. Only
+// a node that positively declares its hardware can be positively excluded.
+func (n Node) Fits(req ResourceProfile) bool {
+	if !req.Declared() || !n.ResourceProfile.Declared() {
+		return true
+	}
+	if req.GPUVRAMGB > 0 && n.ResourceProfile.GPUVRAMGB < req.GPUVRAMGB {
+		return false
+	}
+	if req.RAMGB > 0 && n.ResourceProfile.RAMGB > 0 && n.ResourceProfile.RAMGB < req.RAMGB {
+		return false
+	}
+	if req.CPU > 0 && n.ResourceProfile.CPU > 0 && n.ResourceProfile.CPU < req.CPU {
+		return false
+	}
+	return true
 }
 
 // tokenizedAbilities returns the declared native/agent/manual ability ids as

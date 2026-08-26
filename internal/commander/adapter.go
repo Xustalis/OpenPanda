@@ -322,10 +322,36 @@ func mergeAdapterEnv(native, injected []string) []string {
 // the Go side wraps the spawn in a hard context deadline slightly past the
 // advertised budget. Combined with process-group cancellation (executil),
 // hitting the deadline kills the adapter and every CLI it spawned.
-// adapterHardTimeout is a var so tests can shrink it.
-const adapterTimeoutS = 600
+// Both are vars: SetAgentTimeout retunes them from config at startup, and tests
+// shrink them.
+const defaultAdapterTimeoutS = 600
 
-var adapterHardTimeout = (adapterTimeoutS + 30) * time.Second
+// hardTimeoutGrace is how far past the advertised budget the enforced deadline
+// sits, giving a well-behaved adapter room to wind down and report.
+const hardTimeoutGrace = 30 * time.Second
+
+var (
+	adapterTimeoutS    = defaultAdapterTimeoutS
+	adapterHardTimeout = defaultAdapterTimeoutS*time.Second + hardTimeoutGrace
+)
+
+// SetAgentTimeout retunes the agent-adapter execution budget. A deep-learning
+// stage legitimately runs far longer than a code edit, so the limit has to be
+// operator-tunable rather than a compile-time constant. Values under a minute
+// are ignored as misconfiguration. Process-global: call it during startup,
+// before any task executes.
+func SetAgentTimeout(d time.Duration) {
+	if d < time.Minute {
+		return
+	}
+	adapterTimeoutS = int(d / time.Second)
+	adapterHardTimeout = d + hardTimeoutGrace
+}
+
+// AgentHardTimeout reports the enforced wall-clock limit for one agent
+// execution. A task's lease must exceed it, or the lease monitor force-fails
+// work that is still legitimately running — see core.Core.SetTimeouts.
+func AgentHardTimeout() time.Duration { return adapterHardTimeout }
 
 // runAdapterProcess spawns adapters/<name> with a JSON request on stdin and
 // reads a JSON result from stdout. env carries the model-provider override

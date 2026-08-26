@@ -51,7 +51,7 @@ func TestScoredRankingPrefersFreshAndFree(t *testing.T) {
 	d := RouteAt("self", []string{"self"}, []ledger.Node{
 		mk("busy", 5, now, 4, 4),
 		mk("idle", 5, now, 4, 0),
-	}, neverLocal, []string{"build"}, "", now)
+	}, neverLocal, []string{"build"}, ledger.ResourceProfile{}, "", now)
 	if d.Action != ActionForward || d.Target != "idle" {
 		t.Fatalf("efficiency ranking: %+v, want forward to idle", d)
 	}
@@ -61,7 +61,7 @@ func TestScoredRankingPrefersFreshAndFree(t *testing.T) {
 	d = RouteAt("self", []string{"self"}, []ledger.Node{
 		mk("stale-full", 10, now-2*3600, 4, 0),
 		mk("fresh-micro", 1, now, 4, 0),
-	}, neverLocal, []string{"build"}, "", now)
+	}, neverLocal, []string{"build"}, ledger.ResourceProfile{}, "", now)
 	if d.Action != ActionForward || d.Target != "fresh-micro" {
 		t.Fatalf("freshness ranking: %+v, want forward to fresh-micro", d)
 	}
@@ -71,7 +71,7 @@ func TestScoredRankingPrefersFreshAndFree(t *testing.T) {
 	d = RouteAt("self", []string{"self"}, []ledger.Node{
 		mk("b-node", 5, now, 4, 0),
 		mk("a-node", 5, now, 4, 0),
-	}, neverLocal, []string{"build"}, "", now)
+	}, neverLocal, []string{"build"}, ledger.ResourceProfile{}, "", now)
 	if d.Target != "a-node" {
 		t.Fatalf("tie-break: %+v, want a-node", d)
 	}
@@ -85,7 +85,7 @@ func TestPreferredStillAuthoritative(t *testing.T) {
 			Native: []ledger.NativeAbility{{ID: "build"}}, Capacity: ledger.Capacity{MaxConcurrent: 8}},
 		{ID: "named", Name: "named", Status: "online", LastSeen: now - 3600, SchedulerTier: 1,
 			Native: []ledger.NativeAbility{{ID: "build"}}, Capacity: ledger.Capacity{MaxConcurrent: 1, CurrentTasks: 1}},
-	}, func([]string) bool { return false }, []string{"build"}, "named", now)
+	}, func([]string) bool { return false }, []string{"build"}, ledger.ResourceProfile{}, "named", now)
 	if d.Action != ActionForward || d.Target != "named" {
 		t.Fatalf("preferred node: %+v, want forward to named", d)
 	}

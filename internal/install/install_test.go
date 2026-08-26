@@ -188,8 +188,8 @@ func TestScanSweepsDistributionPrefix(t *testing.T) {
 		}
 		t.Fatalf("missing target %s", path)
 	}
-	must(binDir, true)                             // whole bin dir swept
-	must(filepath.Join(prefix, "adapters"), true)  // adapters swept
+	must(binDir, true)                            // whole bin dir swept
+	must(filepath.Join(prefix, "adapters"), true) // adapters swept
 	must(filepath.Join(prefix, "config.example.yaml"), true)
 	must(filepath.Join(storage, "openpanda.db"), true) // db still targeted as data
 	must(link, true)                                   // PATH link removed

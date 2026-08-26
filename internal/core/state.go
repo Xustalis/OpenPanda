@@ -1,7 +1,11 @@
 // Package core hosts the node lifecycle and the task state machine.
 package core
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/Xustalis/OpenPanda/internal/bus"
+)
 
 // State-machine errors. Callers should wrap them with %w to preserve
 // errors.Is checks.
@@ -64,6 +68,14 @@ const (
 	// "continue". The Web task detail replays it so the user can see the
 	// superior's reasoning behind a re-delegation or a review parking.
 	EvSupervise = "supervise"
+
+	// EvRecover records that a daemon restart normalized a task left in an
+	// active state by the previous process instance: running/waiting_context
+	// become failed (their execution is gone), dispatched/submitted return to
+	// queued. Written per task so the audit chain explains a state change that
+	// no user or peer requested. review is never recovered — see
+	// TaskStore.Recover.
+	EvRecover = "recover"
 )
 
 // Task priority levels for the panel queue (smaller runs first). The DB
@@ -117,6 +129,18 @@ type Task struct {
 	ResourceKeys []string
 	WorkDir      string
 	Scheduled    bool
+
+	// Plan-plane metadata (v0.0.6). A stage of a plan is an ordinary task, so
+	// these are the only things it carries beyond one: PlanID/StageID name its
+	// place in the plan, Needs is the stage_ids it waits for, and the artifacts
+	// are the data plane — Inputs are the trees this stage starts from (each with
+	// a node known to hold it), OutputArtifact the tree it produced for its
+	// successors. All empty on a standalone task.
+	PlanID         string
+	StageID        string
+	Needs          []string
+	Inputs         []bus.ArtifactRef
+	OutputArtifact string
 }
 
 // TaskDetail is the entry-model-derived task metadata (design doc §6.1 tasks

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -89,6 +91,21 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	if err := c.store.SetDetail(ctx, t.TaskID, delegateDetail(p)); err != nil {
 		c.logger.Warn("set detail", "task", t.TaskID, "err", err)
 	}
+	// A delegated stage of a plan keeps its place in that plan and the artifacts
+	// it must start from. Both are needed locally before execution: run() derives
+	// the stage work dir from plan_id/stage_id, and fetchStageInputs pulls the
+	// inputs from the nodes named here. The dependency graph is deliberately not
+	// carried: only the node orchestrating the plan decides what runs next.
+	if p.PlanID != "" || p.StageID != "" {
+		if err := c.store.SetStage(ctx, t.TaskID, p.PlanID, p.StageID, nil); err != nil {
+			c.logger.Warn("set stage", "task", t.TaskID, "err", err)
+		}
+		if len(p.Inputs) > 0 {
+			if err := c.store.SetStageInputs(ctx, t.TaskID, p.Inputs); err != nil {
+				c.logger.Warn("set stage inputs", "task", t.TaskID, "err", err)
+			}
+		}
+	}
 	if p.TimeoutMS > 0 {
 		if err := c.store.SetLease(ctx, t.TaskID, p.TimeoutMS); err != nil {
 			c.logger.Warn("set lease", "task", t.TaskID, "err", err)
@@ -96,7 +113,8 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	}
 
 	required := delegateRequired(p)
-	decision := scheduler.Route(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), required, p.PreferredNode)
+	decision := scheduler.Route(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), required,
+		resourceRequirement(p.ResourceJSON), p.PreferredNode)
 
 	switch decision.Action {
 	case scheduler.ActionLocal:
@@ -171,7 +189,7 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 			// deadline when the wire carried no explicit timeout.
 			timeoutMS := p.TimeoutMS
 			if timeoutMS <= 0 {
-				timeoutMS = defaultDelegateTimeout.Milliseconds()
+				timeoutMS = c.lease().Milliseconds()
 			}
 			if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
 				c.logger.Warn("lease waiting-context task", "task", taskID, "err", err)
@@ -237,6 +255,32 @@ func delegateRequired(p bus.TaskDelegatePayload) []string {
 	return nil
 }
 
+// resourceRequirement decodes a task's declared hardware requirement into the
+// form routing compares against a node's card. The task side is
+// entry.ResourceProfile (floats — a model asked for "1.5 GiB" is a legitimate
+// answer), the node side is ledger.ResourceProfile (whole units — a card declares
+// the hardware that is physically there), so the crossing rounds *up*: needing
+// 1.5 GiB of VRAM means an 1 GiB card will not do.
+//
+// An unparseable or absent profile is no requirement at all rather than an error.
+// The field is optional, most tasks have none, and a task must not become
+// unroutable because its resource hint was malformed.
+func resourceRequirement(resourceJSON string) ledger.ResourceProfile {
+	if resourceJSON == "" {
+		return ledger.ResourceProfile{}
+	}
+	var want entry.ResourceProfile
+	if err := json.Unmarshal([]byte(resourceJSON), &want); err != nil {
+		return ledger.ResourceProfile{}
+	}
+	return ledger.ResourceProfile{
+		CPU:          want.CPU,
+		RAMGB:        int(math.Ceil(want.RAMGB)),
+		GPUVRAMGB:    int(math.Ceil(want.GPUVRAMGB)),
+		DurationHint: want.DurationHint,
+	}
+}
+
 // localMatch reports whether this node's commander can route the required
 // abilities locally. A nil router (no capability card) matches nothing.
 func (c *Core) localMatch() func([]string) bool {
@@ -250,22 +294,44 @@ func (c *Core) localMatch() func([]string) bool {
 }
 
 // onlineEmployees returns the known online nodes (self included) from the
-// local capability directory.
+// local capability directory, with this node's own active-task count refreshed
+// from the tasks table.
+//
+// The refresh matters now that routing scores this node against its peers: self's
+// row is only as fresh as the last heartbeat tick, so a burst of tasks published
+// in one breath would all be scored against a count of zero and all stay home —
+// exactly the load-balancing case the scoring exists for. Peers' counts arrive by
+// heartbeat and cannot be better than that; ours can, and it is one COUNT.
 func (c *Core) onlineEmployees(ctx context.Context) []ledger.Node {
 	nodes, err := ledger.Query(c.db, "online", "")
 	if err != nil {
 		c.logger.Warn("query employees", "err", err)
 		return nil
 	}
+	var active int
+	if err := c.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tasks WHERE state IN ('running','waiting_context')`).Scan(&active); err != nil {
+		c.logger.Warn("count active tasks for routing", "err", err)
+		return nodes
+	}
+	for i := range nodes {
+		if nodes[i].ID == c.nodeID {
+			nodes[i].Capacity.CurrentTasks = active
+			break
+		}
+	}
 	return nodes
 }
 
-// defaultDelegateTimeout is the lease applied to a forwarded task's local copy
-// when the wire payload carries no explicit timeout. It bounds how long a
-// delegator waits on a dead executor before failing the task and propagating
-// the failure upstream. Generous enough for real agent work, short enough that
-// a crashed executor does not stall the chain indefinitely.
-const defaultDelegateTimeout = 10 * time.Minute
+// defaultDelegateTimeout is the fallback task lease, used when the wire payload
+// carries no explicit timeout and no config override is in force. It bounds how
+// long a delegator waits on a *silent* executor before failing the task and
+// propagating the failure upstream — not how long the work may take: a live
+// executor heartbeats the lease (renewLease) for as long as it runs.
+//
+// It must stay above commander.AgentHardTimeout(); SetTimeouts enforces that
+// for configured values.
+const defaultDelegateTimeout = 20 * time.Minute
 
 // forwardDelegated records the task as dispatched to target and sends the
 // delegate onward, carrying the appended chain.
@@ -288,7 +354,7 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 	// The timeout is carried on the wire so every hop inherits the same deadline.
 	timeoutMS := p.TimeoutMS
 	if timeoutMS <= 0 {
-		timeoutMS = defaultDelegateTimeout.Milliseconds()
+		timeoutMS = c.lease().Milliseconds()
 		p.TimeoutMS = timeoutMS
 	}
 	if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
@@ -322,7 +388,12 @@ func delegateDetail(p bus.TaskDelegatePayload) TaskDetail {
 		SpecJSON:    p.SpecJSON,
 		Complexity:  p.Complexity,
 		Risk:        p.Risk,
-		Requires:    delegateRequired(p),
+		// The hardware requirement is persisted, not just consulted in passing:
+		// this node may re-route the task later (a decline, a re-queue), and the
+		// wire payload is gone by then. Without it a training task would lose its
+		// GPU requirement at the second hop.
+		ResourceJSON: p.ResourceJSON,
+		Requires:     delegateRequired(p),
 	}
 }
 
@@ -418,6 +489,19 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// uses it to reject stale results after a transfer/retry.
 	attemptID := task.AttemptID
 
+	// Execution lifetime (P0-1). Two things must hold for a long stage — a
+	// training run, a multi-minute agent session — to survive:
+	//   1. its lease has to keep being renewed, here and one hop up the chain,
+	//      or the monitor force-fails work that is still running and the parent
+	//      re-routes it to a second node;
+	//   2. a force-fail has to actually stop the subprocess, which needs a
+	//      cancellable context registered under the task id.
+	// Both stop when this function returns.
+	execCtx, cancelExec := context.WithCancel(ctx)
+	defer cancelExec()
+	defer c.registerRunning(taskID, cancelExec)()
+	defer c.renewLease(execCtx, taskID, task.Chain, attemptID)()
+
 	// Model-injection policy check (A1): decided once before the supervision
 	// loop — the adapter (and therefore the plan) is identical across rounds,
 	// so the decision does not vary between an initial run and a re-delegation.
@@ -435,6 +519,24 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		workDir = task.WorkDir
 	}
 
+	// A stage of a plan executes in a directory of its own, derived here rather
+	// than carried on the wire (see stageWorkDir), and pre-loaded with the trees
+	// its predecessors produced. Both steps must happen before anything runs: the
+	// training stage's whole reason to exist is the script the coding stage wrote.
+	// Returning the error rather than running on absent input is what keeps a
+	// successor from reporting green over work that was done on nothing — the
+	// caller's retry/fail path then retries the pull or surfaces the failure to
+	// the delegator.
+	if task.PlanID != "" {
+		workDir = c.stageWorkDir(task.PlanID, task.StageID)
+		if err := os.MkdirAll(workDir, 0o755); err != nil {
+			return bus.TaskResultPayload{}, fmt.Errorf("create stage work dir: %w", err)
+		}
+		if err := c.fetchStageInputs(execCtx, task, workDir); err != nil {
+			return bus.TaskResultPayload{}, fmt.Errorf("stage inputs: %w", err)
+		}
+	}
+
 	// Scope drift (design §14.2 signal A): for an agent task that declares a
 	// scope, snapshot the working directory before execution so changes outside
 	// the scope can be intercepted rather than silently committed. The snapshot
@@ -450,15 +552,15 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 
 	// Selective memory loading (A3) and live progress (A5) are per-task, not
 	// per-round: the memory-file manifest and the throttled progress sink are
-	// built once and reused across supervision rounds.
-	execCtx := ctx
+	// built once and reused across supervision rounds. They decorate execCtx,
+	// which already carries the cancellation the abort registry holds.
 	if plan.Kind == "agent" && task.Project == "" && c.memory != nil {
 		if files, err := c.memory.Manifest(); err == nil {
 			paths := make([]string, 0, len(files))
 			for _, f := range files {
 				paths = append(paths, f.Path)
 			}
-			execCtx = commander.WithMemoryFiles(ctx, paths)
+			execCtx = commander.WithMemoryFiles(execCtx, paths)
 		}
 	}
 	if plan.Kind == "agent" {
@@ -499,7 +601,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	currentIntent := intent
 	var res commander.Result
 	var usedSkills []*skills.Skill
-	verdict := entry.SuperviseVerdict{Status: "done"}
+	verdict := entry.SuperviseVerdict{Status: entry.VerdictDone}
 	for round := 0; round < maxRounds; round++ {
 		prompt, skillsUsed := buildAgentPrompt(c, currentIntent, task.Project, task.Title)
 		usedSkills = skillsUsed
@@ -583,19 +685,22 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 
 		if res.NeedManual {
-			// Manual tasks: notify and mark done; the human completes offline.
-			if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{
+			// Manual tasks park in review, not done: the human has not acted yet,
+			// and only a task meeting its success definition may enter done. The
+			// notify text is preserved as the result so whoever picks it up sees
+			// what is being asked of them; Approve/Reject moves it on from there.
+			if err := c.store.PauseWithResult(ctx, taskID, c.nodeID, map[string]any{
 				"manual": true, "notify": res.Stdout,
 			}); err != nil {
 				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 					return bus.TaskResultPayload{}, ErrCancelled
 				}
-				return bus.TaskResultPayload{}, fmt.Errorf("complete manual: %w", err)
+				return bus.TaskResultPayload{}, fmt.Errorf("pause manual: %w", err)
 			}
-			c.logTask(task.Title, true)
-			trackTask(c, task.Project, required, task.Title, true)
+			c.logTask(task.Title, false)
+			trackTask(c, task.Project, required, task.Title, false)
 			return bus.TaskResultPayload{
-				TaskID: taskID, AttemptID: attemptID, State: StateDone, OK: true, ExitCode: 0, Stdout: res.Stdout,
+				TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: 0, Stdout: res.Stdout,
 				Tokens: res.Tokens, Cost: res.Cost,
 			}, nil
 		}
@@ -623,10 +728,10 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		judgeStart := time.Now()
 		v, serr := entry.Supervise(ctx, c.supervisor, currentIntent, res.Stdout)
 		c.recordEntryUsage(context.WithoutCancel(ctx), taskID, c.supervisor, usageBefore,
-			v.Status == "done", time.Since(judgeStart))
+			v.Status == entry.VerdictDone, time.Since(judgeStart))
 		if serr != nil {
-			// Supervisor unreachable: fail open toward "done" (verification is a
-			// safety net, not a gate) but leave a trace of the failure.
+			// Supervisor unreachable: Supervise returns VerdictReview, so the work
+			// parks for a human below rather than being accepted unverified.
 			c.logger.Warn("supervise call failed", "task", taskID, "err", serr)
 		}
 		verdict = v
@@ -635,7 +740,12 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}); err != nil {
 			c.logger.Warn("record supervise event", "task", taskID, "err", err)
 		}
-		if v.Status == "done" {
+		if v.Status == entry.VerdictDone {
+			break
+		}
+		if v.Status == entry.VerdictReview {
+			// No verdict obtainable: stop iterating and let the review branch
+			// below hand the result to a human.
 			break
 		}
 		if strings.TrimSpace(v.Followup) == "" {
@@ -645,13 +755,32 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 	}
 
-	// The supervisor did not accept the result within the round budget: park in
-	// review with the latest result and a marker so a human sees what was done
-	// and what remains, rather than loop indefinitely or silently accept it.
-	if plan.Kind == "agent" && c.supervisor != nil && verdict.Status == "continue" {
+	// A stage hands its work-dir to its successors as a content-addressed
+	// artifact. It is packed before the terminal branches below, not inside one of
+	// them, because a stage that parks in review still produced a tree and the
+	// hash has to travel with the result either way. A pack failure fails the
+	// stage: reporting done without an artifact would block every successor
+	// forever on something that was never produced.
+	var outputArtifact string
+	if task.PlanID != "" {
+		var perr error
+		if outputArtifact, perr = c.packStageOutput(ctx, task, workDir); perr != nil {
+			return bus.TaskResultPayload{}, perr
+		}
+	}
+
+	// The supervisor did not accept the result: either work still remains after
+	// the round budget ("continue"), or no verdict could be obtained at all
+	// ("review" — model unreachable or unparsable output). Both park in review
+	// with the latest result and a marker so a human sees what was done and what
+	// remains, rather than looping indefinitely or silently accepting unverified
+	// work.
+	if plan.Kind == "agent" && c.supervisor != nil &&
+		(verdict.Status == entry.VerdictContinue || verdict.Status == entry.VerdictReview) {
 		if err := c.store.PauseWithResult(ctx, taskID, c.nodeID, map[string]any{
 			"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
-			"needs_followup": true,
+			"needs_followup": verdict.Status == entry.VerdictContinue,
+			"verdict":        verdict.Status, "verdict_reason": verdict.Reason,
 		}); err != nil {
 			if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 				return bus.TaskResultPayload{}, ErrCancelled
@@ -662,7 +791,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		trackTask(c, task.Project, required, task.Title, false)
 		return bus.TaskResultPayload{
 			TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-			Tokens: res.Tokens, Cost: res.Cost,
+			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact,
 		}, nil
 	}
 
@@ -683,7 +812,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		trackTask(c, task.Project, required, task.Title, true)
 		return bus.TaskResultPayload{
 			TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-			Tokens: res.Tokens, Cost: res.Cost,
+			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact,
 		}, nil
 	}
 
@@ -699,7 +828,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	trackTask(c, task.Project, required, task.Title, true)
 	return bus.TaskResultPayload{
 		TaskID: taskID, AttemptID: attemptID, State: StateDone, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-		Tokens: res.Tokens, Cost: res.Cost,
+		Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact,
 	}, nil
 }
 
@@ -886,6 +1015,44 @@ func (c *Core) handleAccept(ctx context.Context, env bus.Envelope) {
 	c.relayToParent(ctx, bus.MsgTaskAccept, t.Chain, p)
 }
 
+// handleProgress processes a liveness beat from the node executing a task. The
+// delegator's own copy of the task carries a lease stamped once at dispatch, so
+// without this the origin node would expire a task whose executor is still
+// legitimately working — and re-route the same work to a second node. The beat
+// refreshes that lease and is relayed one hop further up, keeping every node on
+// a multi-hop chain (Pi → Mac → Windows) in agreement that the work is alive.
+func (c *Core) handleProgress(ctx context.Context, env bus.Envelope) {
+	var p bus.TaskProgressPayload
+	if err := env.PayloadInto(&p); err != nil {
+		c.logger.Warn("bad task_progress", "err", err)
+		return
+	}
+	t, err := c.store.Get(ctx, p.TaskID)
+	if err != nil {
+		c.logger.Debug("progress for unknown task", "task", p.TaskID)
+		return
+	}
+	if Terminal(t.State) {
+		return
+	}
+	if !c.isCurrentExecutor(ctx, t, env.From) {
+		// Same authorization rule as accept/decline/result: only the node this
+		// task was handed to may claim its work is alive, or any authenticated
+		// peer could hold another node's task open indefinitely.
+		c.logger.Warn("progress from non-executor ignored", "task", p.TaskID, "from", env.From)
+		return
+	}
+	if p.AttemptID != "" && t.AttemptID != "" && p.AttemptID != t.AttemptID {
+		// A beat from a superseded attempt (after a retry/transfer) must not
+		// extend the current one's lease.
+		return
+	}
+	if err := c.store.SetLease(ctx, p.TaskID, c.lease().Milliseconds()); err != nil {
+		c.logger.Warn("refresh lease from progress", "task", p.TaskID, "err", err)
+	}
+	c.relayToParent(ctx, bus.MsgTaskProgress, t.Chain, p)
+}
+
 // isCurrentExecutor reports whether from is the node expected to report on
 // this task: the recorded dispatch target (read from the EvDelegate audit
 // event), or — once acceptance has moved the lease — the stored owner. Wire
@@ -982,7 +1149,8 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	// past decliner. Suffixing the chain keeps the persisted/wire chain clean.
 	seenChain := append(slices.Clone(t.Chain), excluded...)
 
-	decision := scheduler.Route(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires, "")
+	decision := scheduler.Route(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
+		resourceRequirement(t.ResourceJSON), "")
 	if decision.Action != scheduler.ActionForward {
 		c.logger.Info("reroute: no alternate node", "task", taskID, "action", decision.Action)
 		return false
@@ -992,19 +1160,20 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	// carried by pointer: the new executor fetches the snapshot from the
 	// context source if it does not already hold it.
 	payload := bus.TaskDelegatePayload{
-		TaskID:      t.TaskID,
-		ParentID:    t.ParentID,
-		Project:     t.Project,
-		Title:       t.Title,
-		Intent:      t.Intent,
-		SpecJSON:    t.SpecJSON,
-		Requires:    t.Requires,
-		Complexity:  t.Complexity,
-		Risk:        t.Risk,
-		ContextType: t.ContextType,
-		ContextHash: t.ContextHash,
-		AttemptID:   t.AttemptID,
-		Authorized:  t.Authorized,
+		TaskID:       t.TaskID,
+		ParentID:     t.ParentID,
+		Project:      t.Project,
+		Title:        t.Title,
+		Intent:       t.Intent,
+		SpecJSON:     t.SpecJSON,
+		Requires:     t.Requires,
+		Complexity:   t.Complexity,
+		Risk:         t.Risk,
+		ResourceJSON: t.ResourceJSON,
+		ContextType:  t.ContextType,
+		ContextHash:  t.ContextHash,
+		AttemptID:    t.AttemptID,
+		Authorized:   t.Authorized,
 	}
 	if t.ContextHash != "" {
 		payload.ContextLevel = "pointer"
@@ -1099,6 +1268,15 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 		return
 	}
 
+	// Plan plane: the executor's artifact is the successors' input, so it is
+	// adopted into this node's pool and recorded on the local row before deciding
+	// what became ready. It is recorded for a review result too — the tree exists
+	// either way, and the hash would otherwise be lost by the time a human
+	// approves the stage.
+	if t.PlanID != "" {
+		c.adoptStageOutput(ctx, t, env.From, p.OutputArtifact)
+	}
+
 	// Record delegation outcome for scheduling analysis (B2). Only record when
 	// this node actually delegated the task to the sender of the result.
 	if target, err := c.store.DispatchTarget(ctx, p.TaskID); err == nil && target == env.From {
@@ -1174,12 +1352,14 @@ func (c *Core) handleCancel(ctx context.Context, env bus.Envelope) {
 	c.finishCancel(ctx, cancelled)
 }
 
-// finishCancel runs the post-cascade cleanup for a cancelled task set: drop
-// paused-context entries so a waiting_context task cancelled mid-fetch does
-// not leak in pendingCtx (P2-7), and propagate the cancel to any remote
-// executors holding dispatch leases (P2-3).
+// finishCancel runs the post-cascade cleanup for a cancelled task set: abort the
+// local execution so a cancelled task stops doing work instead of only losing
+// its database row, drop paused-context entries so a waiting_context task
+// cancelled mid-fetch does not leak in pendingCtx (P2-7), and propagate the
+// cancel to any remote executors holding dispatch leases (P2-3).
 func (c *Core) finishCancel(ctx context.Context, cancelled []string) {
 	for _, id := range cancelled {
+		c.cancelRunning(id)
 		c.pendingCtx.Delete(id)
 		c.forwardCancelDownstream(ctx, id)
 	}

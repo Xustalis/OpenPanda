@@ -63,14 +63,14 @@ func TestSuperviseContinue(t *testing.T) {
 	}
 }
 
-func TestSuperviseFailOpenOnUnparsable(t *testing.T) {
+func TestSuperviseUnparsableParksForReview(t *testing.T) {
 	c := startModelServer(t, "抱歉，我无法判断。")
 	v, err := Supervise(context.Background(), c, "task A", "agent said done")
 	if err != nil {
 		t.Fatalf("supervise must not error on unparsable verdict: %v", err)
 	}
-	if v.Status != "done" {
-		t.Fatalf("status = %q, want done (fail open)", v.Status)
+	if v.Status != VerdictReview {
+		t.Fatalf("status = %q, want review (unverified work goes to a human)", v.Status)
 	}
 	if !strings.Contains(v.Reason, "unparsable") {
 		t.Fatalf("reason = %q, want unparsable marker", v.Reason)

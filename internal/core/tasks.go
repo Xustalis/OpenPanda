@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -109,6 +110,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	var complexity sql.NullFloat64
 	var sessionID, resourceKeysJSON, workDir sql.NullString
 	var scheduled int
+	var planID, stageID, needsJSON, inputsJSON, outputArt sql.NullString
 	err := s.db.QueryRowContext(ctx,
 		`SELECT `+taskColumns+` FROM tasks WHERE task_id = ?`, taskID).
 		Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State, &t.OwnerNode,
@@ -116,13 +118,16 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 			&result, &contextType, &contextHash, &complexity, &risk, &resource,
 			&requiresJSON, &lease,
 			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
-			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled)
+			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
+			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt)
 	if err != nil {
 		return Task{}, err
 	}
 	_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
 	_ = json.Unmarshal([]byte(requiresJSON.String), &t.Requires)
 	_ = json.Unmarshal([]byte(resourceKeysJSON.String), &t.ResourceKeys)
+	_ = json.Unmarshal([]byte(needsJSON.String), &t.Needs)
+	_ = json.Unmarshal([]byte(inputsJSON.String), &t.Inputs)
 	t.Intent = intent.String
 	t.SpecJSON = spec.String
 	t.ResultJSON = result.String
@@ -135,6 +140,9 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	t.SessionID = sessionID.String
 	t.WorkDir = workDir.String
 	t.Scheduled = scheduled != 0
+	t.PlanID = planID.String
+	t.StageID = stageID.String
+	t.OutputArtifact = outputArt.String
 	return t, nil
 }
 
@@ -959,33 +967,83 @@ func (s *TaskStore) ForceFail(ctx context.Context, taskID, reason string) error 
 }
 
 // Recover normalizes tasks left in an active state by a previous process
-// instance. Running/waiting_context/review become failed (execution was
-// interrupted); dispatched returns to queued for re-dispatch. Returns the
-// number of tasks touched.
+// instance. Running/waiting_context become failed (execution was interrupted);
+// dispatched/submitted return to queued for re-dispatch. Returns the number of
+// tasks touched.
+//
+// review is deliberately excluded: a task parked for human sign-off has no
+// executing process to lose, so a restart must not discard the queue of things
+// waiting on a person — every other path in this file protects that invariant
+// (CompleteFromRemote / FailFromRemote / ReviewFromRemote return early on
+// StateReview, ExpireTasks excludes it), and Recover runs unconditionally on
+// every daemon start. The interrupted rows also keep their result_json so the
+// evidence of what ran survives, and each transition is written to the audit
+// chain rather than mutating state_version silently.
 func (s *TaskStore) Recover(ctx context.Context) (int, error) {
-	now := s.now()
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?,
-			lease_expires_at=NULL, result_json='{"recovered":"interrupted"}'
-		WHERE state IN ('running','waiting_context','review')`,
-		StateFailed, now)
+	var failed, requeued int
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		n, err := s.recoverBatchTx(ctx, tx, []string{StateRunning, StateWaitingCtx}, StateFailed, "interrupted")
+		if err != nil {
+			return fmt.Errorf("recover active tasks: %w", err)
+		}
+		failed = n
+		n, err = s.recoverBatchTx(ctx, tx, []string{StateDispatched, StateSubmitted}, StateQueued, "requeued")
+		if err != nil {
+			return fmt.Errorf("recover dispatched tasks: %w", err)
+		}
+		requeued = n
+		return nil
+	})
 	if err != nil {
-		return 0, fmt.Errorf("recover active tasks: %w", err)
+		return 0, err
 	}
-	failed, _ := res.RowsAffected()
-
-	res, err = s.db.ExecContext(ctx, `
-		UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?,
-			lease_expires_at=NULL
-		WHERE state IN ('dispatched','submitted')`,
-		StateQueued, now)
-	if err != nil {
-		return int(failed), fmt.Errorf("recover dispatched tasks: %w", err)
-	}
-	requeued, _ := res.RowsAffected()
-
 	s.logger.Info("task recovery", "failed", failed, "requeued", requeued)
-	return int(failed + requeued), nil
+	return failed + requeued, nil
+}
+
+// recoverBatchTx moves every task in one of from's states to to, clearing the
+// lease and appending an EvRecover event per task so the audit chain stays
+// complete. It leaves result_json untouched.
+func (s *TaskStore) recoverBatchTx(ctx context.Context, tx *sql.Tx, from []string, to, disposition string) (int, error) {
+	ph := make([]string, len(from))
+	args := make([]any, 0, len(from))
+	for i, st := range from {
+		ph[i] = "?"
+		args = append(args, st)
+	}
+	rows, err := tx.QueryContext(ctx,
+		`SELECT task_id, state FROM tasks WHERE state IN (`+strings.Join(ph, ",")+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	type row struct{ id, state string }
+	var found []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.state); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		found = append(found, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	now := s.now()
+	for _, r := range found {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?,
+				lease_expires_at=NULL WHERE task_id=?`, to, now, r.id); err != nil {
+			return 0, err
+		}
+		if err := s.recordEventTx(ctx, tx, r.id, EvRecover, map[string]any{
+			"from": r.state, "to": to, "disposition": disposition,
+		}); err != nil {
+			return 0, err
+		}
+	}
+	return len(found), nil
 }
 
 // Cancel marks a task cancelled if it is still active. Cancellation is the
@@ -1185,7 +1243,8 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	state_version, chain_json, intent, spec_json, result_json,
 	context_type, context_hash, complexity, risk, resource_json, requires_json,
 	lease_expires_at, created_at, updated_at, authorized,
-	priority, seq, session_id, resource_keys_json, work_dir, scheduled`
+	priority, seq, session_id, resource_keys_json, work_dir, scheduled,
+	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact`
 
 func scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task
@@ -1195,20 +1254,24 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var intent, spec, result sql.NullString
 		var lease sql.NullInt64
 		var contextType, contextHash, risk, resource, requiresJSON sql.NullString
-		var complexity sql.NullFloat64
 		var sessionID, resourceKeysJSON, workDir sql.NullString
+		var complexity sql.NullFloat64
 		var scheduled int
+		var planID, stageID, needsJSON, inputsJSON, outputArt sql.NullString
 		if err := rows.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State,
 			&t.OwnerNode, &t.AttemptID, &t.StateVersion, &chainJSON, &intent,
 			&spec, &result, &contextType, &contextHash, &complexity, &risk, &resource,
 			&requiresJSON, &lease,
 			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
-			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled); err != nil {
+			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
+			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
 		_ = json.Unmarshal([]byte(requiresJSON.String), &t.Requires)
 		_ = json.Unmarshal([]byte(resourceKeysJSON.String), &t.ResourceKeys)
+		_ = json.Unmarshal([]byte(needsJSON.String), &t.Needs)
+		_ = json.Unmarshal([]byte(inputsJSON.String), &t.Inputs)
 		t.Intent = intent.String
 		t.SpecJSON = spec.String
 		t.ResultJSON = result.String
@@ -1221,6 +1284,9 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		t.SessionID = sessionID.String
 		t.WorkDir = workDir.String
 		t.Scheduled = scheduled != 0
+		t.PlanID = planID.String
+		t.StageID = stageID.String
+		t.OutputArtifact = outputArt.String
 		out = append(out, t)
 	}
 	return out, rows.Err()

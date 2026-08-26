@@ -63,14 +63,24 @@ func TierFromCommand(command string, args ...string) int {
 		}
 		return TierReversible
 	}
-	if flag, ok := interpreterCodeFlag[command]; ok {
-		if code := codeArg(flag, args); code != "" {
+	if flags, ok := interpreterCodeFlags[command]; ok {
+		if code := codeArg(flags, args); code != "" {
 			if codeEscalates(code) {
 				return TierIrreversible
 			}
 		} else if hasPositionalArg(args) {
 			// An interpreter invoked with a script file ("bash evil.sh") runs
 			// code whose content is not visible here; fail closed to Tier 2.
+			return TierIrreversible
+		}
+	}
+	// Wrappers whose payload cannot be located positionally (flock takes a lock
+	// file first, watch/time take a whole command line, script/runuser take code
+	// behind -c). Rather than guess which argument is the command, judge the
+	// joined argv the way interpreter code is judged: only a provably pure-output
+	// line stays Tier 1.
+	if opaqueWrappers[command] && len(args) > 0 {
+		if codeEscalates(strings.Join(args, " ")) {
 			return TierIrreversible
 		}
 	}
@@ -86,28 +96,108 @@ func TierFromCommand(command string, args ...string) int {
 // destructiveVerbs are command names treated as irreversible (Tier 2) by
 // default: privilege escalation and destructive filesystem/network/system
 // operations (design doc §16).
+//
+// The table is deliberately cross-platform. A Windows node is a first-class
+// executor in this network, and a table that only knows POSIX verbs classifies
+// `del /f /s /q` as reversible — so the Windows and macOS verbs are listed
+// beside their POSIX equivalents rather than left to a later port. Package
+// managers are here because installing a dependency mutates the machine outside
+// the task's working directory and cannot be undone by discarding the workspace.
+//
+// Over-inclusion is cheap: this table is only a backstop for a native ability
+// whose capability card omits `tier:` (commander.Router.Route). A card that
+// declares its own tier always wins, so a node that genuinely wants unattended
+// `git checkout` says so in the card.
 var destructiveVerbs = map[string]bool{
-	"sudo": true, "su": true, "doas": true,
+	"sudo": true, "su": true, "doas": true, "runas": true,
 	"rm": true, "dd": true, "mkfs": true,
 	"mv": true, "cp": true, "chmod": true,
-	"kill": true, "pkill": true,
-	"shutdown": true, "reboot": true, "poweroff": true,
+	"kill": true, "pkill": true, "killall": true,
+	"shutdown": true, "reboot": true, "poweroff": true, "halt": true,
 	"systemctl": true, "mount": true, "umount": true,
 	"iptables": true, "nft": true,
 	// Remote execution and arbitrary-recipe execution (P1-13): ssh runs a
 	// command on another machine; make runs whatever the Makefile says.
 	"ssh": true, "make": true,
+	// Destructive or ownership-changing filesystem verbs the first table missed.
+	// truncate/shred destroy file contents in place; chown/chgrp/chflags/chattr
+	// and the ACL tools hand control of a path to another principal; ln -sf
+	// rewrites a path to point somewhere else; tee writes to whatever it is
+	// given; rsync --delete mirrors a deletion.
+	"truncate": true, "shred": true, "chown": true, "chgrp": true,
+	"chflags": true, "chattr": true, "setfacl": true, "ln": true,
+	"tee": true, "rsync": true, "scp": true, "sftp": true,
+	// Network fetches write a file from an untrusted source and are the first
+	// half of every curl-pipe-shell chain.
+	"curl": true, "wget": true,
+	// Scheduling and service management install work that outlives the task.
+	"crontab": true, "at": true, "batch": true, "launchctl": true,
+	"systemd-run": true, "service": true, "schtasks": true,
+	// Kernel/disk/firmware level state.
+	"insmod": true, "rmmod": true, "modprobe": true, "sysctl": true,
+	"fdisk": true, "parted": true, "mkswap": true, "swapoff": true,
+	"diskutil": true, "hdiutil": true, "tmutil": true,
+	// macOS security and system posture.
+	"csrutil": true, "spctl": true, "softwareupdate": true, "defaults": true,
+	// Containers and cluster control planes: a container can mount the host,
+	// and an apply/destroy reshapes infrastructure.
+	"docker": true, "podman": true, "nerdctl": true, "kubectl": true,
+	"helm": true, "terraform": true, "ansible": true, "ansible-playbook": true,
+	// Firewalls beyond iptables/nft.
+	"ufw": true, "firewall-cmd": true,
+	// Package managers: installing mutates the machine outside the workspace,
+	// and the package's own install scripts run arbitrary code. pacman, apk-tools
+	// and dpkg are driven by flags rather than subcommands, so they are graded
+	// wholesale; the subcommand-driven managers are gated in commandArgRisks so
+	// that a plain `npm test` still runs unattended.
+	"pacman": true, "dpkg": true, "rpm": true,
+	// Windows verbs. cmd builtins (del/rd/copy/move/ren) are unreachable as
+	// executables, but codeEscalates scans `cmd /c "…"` token by token against
+	// this same table, so listing them is what classifies the payload.
+	"del": true, "erase": true, "rd": true, "rmdir": true, "format": true,
+	"reg": true, "regedit": true, "taskkill": true, "diskpart": true,
+	"bcdedit": true, "netsh": true, "sc": true, "wmic": true, "attrib": true,
+	"icacls": true, "cacls": true, "takeown": true, "robocopy": true,
+	"xcopy": true, "copy": true, "move": true, "ren": true, "rename": true,
+	"mklink": true, "vssadmin": true, "cipher": true, "fsutil": true,
 }
 
-// interpreterCodeFlag maps an interpreter executable to the flag that means
-// "the next argument is a program/script to execute" (-c for shells, -c/-e for
-// scripting runtimes). Such a wrapper runs arbitrary code, so its tier is
-// decided by scanning that code rather than by the interpreter's name.
-var interpreterCodeFlag = map[string]string{
-	"bash": "-c", "sh": "-c", "zsh": "-c", "dash": "-c", "ksh": "-c", "fish": "-c",
-	"python": "-c", "python2": "-c", "python3": "-c",
-	"perl": "-e", "ruby": "-e", "node": "-e", "nodejs": "-e", "deno": "-e",
-	"php": "-r",
+// interpreterCodeFlags maps an interpreter executable to the flags that mean
+// "the next argument is a program to execute". Such a wrapper runs arbitrary
+// code, so its tier is decided by scanning that code rather than by the
+// interpreter's name.
+//
+// Several interpreters accept more than one spelling (pwsh takes -Command and
+// -c; cmd takes /c and /k), which is why the value is a list: matching only the
+// canonical flag would let the other spelling through unscanned.
+var interpreterCodeFlags = map[string][]string{
+	"bash": {"-c"}, "sh": {"-c"}, "zsh": {"-c"}, "dash": {"-c"},
+	"ksh": {"-c"}, "fish": {"-c"}, "csh": {"-c"}, "tcsh": {"-c"},
+	"python": {"-c"}, "python2": {"-c"}, "python3": {"-c"},
+	"perl": {"-e"}, "ruby": {"-e"}, "node": {"-e", "-p", "--eval"},
+	"nodejs": {"-e"}, "deno": {"-e"}, "php": {"-r"},
+	"lua": {"-e"}, "luajit": {"-e"}, "tclsh": {"-c"},
+	"rscript": {"-e"}, "julia": {"-e"}, "groovy": {"-e"},
+	// awk's program is a positional argument, so hasPositionalArg is what
+	// classifies `awk 'BEGIN{system("…")}'`; -f names a program file.
+	"awk": {"-f"}, "gawk": {"-f"}, "mawk": {"-f"},
+	// macOS: osascript -e runs AppleScript, which reaches the shell through
+	// `do shell script`.
+	"osascript": {"-e"},
+	// Windows shells. normalizeCommand has already stripped ".exe", and codeArg
+	// matches flags case-insensitively, so -Command and -command both scan.
+	"powershell": {"-Command", "-EncodedCommand", "-File", "-c"},
+	"pwsh":       {"-Command", "-EncodedCommand", "-File", "-c"},
+	"cmd":        {"/c", "/k"},
+}
+
+// opaqueWrappers run a command that cannot be located by position: flock takes
+// a lock file before the command, watch/time take a whole command line, script
+// and runuser hide it behind -c. The joined argv is judged as interpreter code
+// instead of guessing which token is the payload.
+var opaqueWrappers = map[string]bool{
+	"flock": true, "watch": true, "time": true, "script": true,
+	"runuser": true, "taskset": true, "chrt": true, "setarch": true,
 }
 
 // commandArgRisks are per-command argument scanners (P1-13): the command is
@@ -130,12 +220,86 @@ var commandArgRisks = map[string]func(args []string) bool{
 		sub := firstPositional(args)
 		return gitRiskySubcommands[sub]
 	},
+	// sed -i edits files in place; without it sed only writes to stdout. The
+	// suffix form (-i.bak) is the same flag, so this is a prefix test.
+	"sed": hasAnyShortFlagPrefix("-i", "--in-place"),
+	// Toolchains that are read-only for build/list but mutate the machine or run
+	// downloaded code for install/publish/run.
+	"go":     subcommandIn("install", "run", "generate", "clean", "get"),
+	"cargo":  subcommandIn("install", "publish", "run"),
+	"dotnet": subcommandIn("run", "publish", "tool"),
+}
+
+// pkgMutatingSubcommands are the subcommands that make a package manager change
+// the machine: they install, remove or upgrade software, or run code shipped in
+// a package. Listing (list/search/info/outdated) and test/build scripts are
+// absent on purpose — a node that needed approval to run `npm test` could not
+// work unattended, which is the whole point of the scheduler.
+var pkgMutatingSubcommands = []string{
+	"install", "i", "add", "ci", "reinstall", "update", "upgrade", "up",
+	"dist-upgrade", "remove", "rm", "uninstall", "erase", "purge",
+	"autoremove", "publish", "link", "unlink", "exec", "dlx", "run",
+	"create", "init", "sync", "bootstrap",
+}
+
+// pkgManagers are the subcommand-driven package managers gated by
+// pkgMutatingSubcommands.
+var pkgManagers = []string{
+	"apt", "apt-get", "aptitude", "yum", "dnf", "zypper", "apk",
+	"snap", "flatpak", "brew", "port", "nix-env",
+	"pip", "pip3", "pipx", "uv", "poetry", "conda", "mamba",
+	"npm", "pnpm", "yarn", "bun", "gem", "composer", "cpan",
+	"choco", "winget", "scoop",
+}
+
+func init() {
+	mutating := subcommandIn(pkgMutatingSubcommands...)
+	for _, m := range pkgManagers {
+		// A manager that already has a bespoke scanner keeps it.
+		if _, exists := commandArgRisks[m]; !exists {
+			commandArgRisks[m] = mutating
+		}
+	}
+}
+
+// hasAnyShortFlagPrefix returns a scanner that is true when an argument is one
+// of flags, or is that flag with a value attached ("-i.bak", "--in-place=.bak").
+func hasAnyShortFlagPrefix(flags ...string) func(args []string) bool {
+	return func(args []string) bool {
+		for _, a := range args {
+			for _, f := range flags {
+				if a == f || strings.HasPrefix(a, f+"=") ||
+					(!strings.HasPrefix(f, "--") && strings.HasPrefix(a, f)) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
+
+// subcommandIn returns a scanner that is true when the first positional
+// argument is one of subs.
+func subcommandIn(subs ...string) func(args []string) bool {
+	set := make(map[string]bool, len(subs))
+	for _, s := range subs {
+		set[s] = true
+	}
+	return func(args []string) bool { return set[firstPositional(args)] }
 }
 
 // gitRiskySubcommands run hooks or have irreversible/shared-state effects.
+// checkout/switch/restore/stash discard uncommitted work in the tree — the most
+// common way an agent destroys work that was never committed anywhere — and
+// clone runs the remote's hooks and config on first checkout.
 var gitRiskySubcommands = map[string]bool{
 	"push": true, "commit": true, "merge": true, "rebase": true,
 	"reset": true, "clean": true, "filter-branch": true, "update-ref": true,
+	"checkout": true, "switch": true, "restore": true, "stash": true,
+	"clone": true, "am": true, "cherry-pick": true, "revert": true,
+	"apply": true, "gc": true, "prune": true, "worktree": true,
+	"submodule": true, "remote": true, "config": true, "tag": true,
+	"branch": true, "mv": true, "rm": true,
 }
 
 // hasAnyArg reports a scanner that is true when any argument equals one of the
@@ -234,6 +398,10 @@ var shellComposition = []string{"$(", "`", ";", "&&", "||", "|", ">", "&", "\n"}
 var passThroughVerbs = map[string]bool{
 	"env": true, "nohup": true, "timeout": true, "nice": true,
 	"busybox": true, "xargs": true, "command": true, "stdbuf": true,
+	// Same shape (wrapper [flags] cmd args…): detaching, unbuffering and
+	// re-prioritising a command all leave the payload as the first positional.
+	"setsid": true, "unbuffer": true, "ionice": true, "eatmydata": true,
+	"proxychains": true, "proxychains4": true,
 }
 
 // passThroughValueFlags lists, per pass-through wrapper, the flags that take a
@@ -246,6 +414,7 @@ var passThroughValueFlags = map[string][]string{
 	"nice":    {"-n", "--adjustment"},
 	"env":     {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
 	"stdbuf":  {"-i", "--input", "-o", "--output", "-e", "--error"},
+	"ionice":  {"-c", "--class", "-n", "--classdata", "-p", "--pid"},
 }
 
 // unwrapPassThrough returns the first argument that names a command (not a
@@ -323,24 +492,80 @@ func hasPositionalArg(args []string) bool {
 	return false
 }
 
-// codeArg returns the argument immediately following flag (e.g. the code
-// string after "-c"), or "" when flag is absent. It also recognizes the flag
-// letter inside a combined short-flag cluster ("-ec" carries -c alongside -e),
-// which a bare first-word match would otherwise miss.
-func codeArg(flag string, args []string) string {
-	if len(flag) < 2 {
-		return ""
-	}
-	r := rune(flag[1])
-	for i, a := range args {
-		if a == flag || (len(a) > 2 && a[0] == '-' && a[1] != '-' && strings.ContainsRune(a[1:], r)) {
-			if i+1 < len(args) {
-				return args[i+1]
-			}
-			return ""
+// codeArg returns the code an interpreter was asked to run, trying each flag
+// the interpreter accepts, or "" when none of them appears. Separated, attached
+// and long-option spellings all resolve (see codeArgFor).
+func codeArg(flags []string, args []string) string {
+	for _, flag := range flags {
+		if len(flag) < 2 {
+			continue
+		}
+		if code, ok := codeArgFor(flag, args); ok {
+			return code
 		}
 	}
 	return ""
+}
+
+// codeArgFor locates one flag's value, in all three spellings an interpreter
+// accepts: separated ("-c CODE"), attached ("-cCODE", which python and pwsh both
+// take), and long-option ("--eval=CODE"). It reports whether the flag was found
+// at all, so an empty-but-present value is not retried as a different flag.
+//
+// The attached form used to fall through this function entirely: the cluster
+// test below matched "-cimport os; os.remove('x')" as a short-flag group, then
+// read the *next* argument — which does not exist — and returned "". The code
+// was never scanned and the command graded Tier 1. Returning the remainder after
+// the flag letter is what closes that.
+func codeArgFor(flag string, args []string) (string, bool) {
+	long := strings.HasPrefix(flag, "--") || flag[0] == '/' && len(flag) > 2
+	for i, a := range args {
+		if strings.EqualFold(a, flag) {
+			if i+1 < len(args) {
+				return args[i+1], true
+			}
+			return "", true
+		}
+		if len(a) <= len(flag) {
+			continue
+		}
+		// "--eval=CODE" / "/c:CODE": value after the separator.
+		if strings.EqualFold(a[:len(flag)], flag) && (a[len(flag)] == '=' || a[len(flag)] == ':') {
+			return a[len(flag)+1:], true
+		}
+		if long {
+			continue
+		}
+		// Attached short form: "-cCODE", or a short-flag cluster ending in the
+		// code flag ("-uc CODE" → the cluster carries the letter, the value is
+		// the next argument).
+		if a[0] != flag[0] || a[1] == '-' {
+			continue
+		}
+		if rest, ok := attachedShortValue(a, rune(flag[1])); ok {
+			if rest != "" {
+				return rest, true
+			}
+			if i+1 < len(args) {
+				return args[i+1], true
+			}
+			return "", true
+		}
+	}
+	return "", false
+}
+
+// attachedShortValue splits a short-flag argument at the code flag's letter and
+// returns whatever follows it. "-cCODE" with letter 'c' yields "CODE"; "-uc"
+// yields "" (the value is the next argument); an argument without the letter
+// yields ok=false.
+func attachedShortValue(arg string, letter rune) (string, bool) {
+	for i, r := range arg[1:] {
+		if r == letter {
+			return arg[1+i+len(string(letter)):], true
+		}
+	}
+	return "", false
 }
 
 // codeEscalates reports whether interpreter code is destructive enough to

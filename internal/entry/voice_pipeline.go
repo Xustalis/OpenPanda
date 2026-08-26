@@ -17,10 +17,17 @@ var voiceDir = "extensions/voice"
 // Transcript is one captured utterance: the wake word fired and the speech that
 // followed was transcribed. OK is false (with Err set) when a sidecar is
 // unavailable — a missing key or driver degrades, it never crashes the caller.
+//
+// Timeout separates the two very different reasons OK can be false. Nobody spoke
+// is the normal outcome of a listening round and the caller should simply go
+// around again; a broken sidecar will break identically on the next round, so a
+// caller that cannot tell them apart either spins a hot loop respawning python
+// or reports a missing driver as silence.
 type Transcript struct {
-	OK   bool
-	Text string
-	Err  string
+	OK      bool
+	Text    string
+	Timeout bool
+	Err     string
 }
 
 // Listen blocks until the wake word fires (or durationS elapses), then captures
@@ -32,13 +39,16 @@ type Transcript struct {
 func Listen(ctx context.Context, durationS float64) Transcript {
 	wake := runSidecar(ctx, "wake.py", map[string]any{"duration_s": durationS})
 	if !wake.ok {
-		return Transcript{OK: false, Err: wake.err}
+		return Transcript{OK: false, Err: wake.reason()}
 	}
 	if wake.result != "wake" {
-		return Transcript{OK: false, Err: wake.result} // "timeout"
+		return Transcript{OK: false, Timeout: true, Err: wake.result} // "timeout"
 	}
 	stt := runSidecar(ctx, "stt.py", nil)
-	return Transcript{OK: stt.ok, Text: stt.result, Err: stt.err}
+	if !stt.ok {
+		return Transcript{OK: false, Err: stt.reason()}
+	}
+	return Transcript{OK: true, Text: stt.result}
 }
 
 // Speak speaks text via the TTS sidecar. A missing driver is returned as an
@@ -48,10 +58,7 @@ func Listen(ctx context.Context, durationS float64) Transcript {
 func Speak(ctx context.Context, text string) error {
 	res := runSidecar(ctx, "tts.py", map[string]any{"text": mdtext.Plain(text)})
 	if !res.ok {
-		if res.err != "" {
-			return fmt.Errorf("tts: %s", res.err)
-		}
-		return fmt.Errorf("tts: %s", res.result)
+		return fmt.Errorf("tts: %s", res.reason())
 	}
 	return nil
 }
@@ -61,6 +68,21 @@ type sidecarResult struct {
 	ok     bool
 	result string
 	err    string
+}
+
+// reason is the failure message of a non-ok result. The two fields carry it in
+// two different situations and a caller that reads only one loses the message:
+// err holds a spawn/exit/protocol failure (the sidecar never answered), while a
+// sidecar that ran fine and *reported* a failure ("No module named 'numpy'")
+// puts its reason in result.
+func (r sidecarResult) reason() string {
+	if r.err != "" {
+		return r.err
+	}
+	if r.result != "" {
+		return r.result
+	}
+	return "sidecar failed with no reason given"
 }
 
 // runSidecar spawns extensions/voice/<name> with a JSON request on stdin and

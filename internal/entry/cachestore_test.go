@@ -310,7 +310,7 @@ func TestSuperviseDiskCacheHitAndMiss(t *testing.T) {
 	}
 }
 
-func TestSuperviseFailOpenNotCached(t *testing.T) {
+func TestSuperviseReviewVerdictNotCached(t *testing.T) {
 	var mu sync.Mutex
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -335,14 +335,14 @@ func TestSuperviseFailOpenNotCached(t *testing.T) {
 		if err != nil {
 			t.Fatalf("supervise %d: %v", i+1, err)
 		}
-		if v.Status != "done" {
-			t.Fatalf("verdict %d = %+v, want done (fail open)", i+1, v)
+		if v.Status != VerdictReview {
+			t.Fatalf("verdict %d = %+v, want review (no verdict obtainable)", i+1, v)
 		}
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if calls != 2 {
-		t.Fatalf("llm calls = %d, want 2 (fail-open verdicts must not be cached)", calls)
+		t.Fatalf("llm calls = %d, want 2 (review verdicts must not be cached)", calls)
 	}
 }
 

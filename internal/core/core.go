@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/artifact"
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -112,6 +113,29 @@ type Core struct {
 	// arrives.
 	pendingCtx sync.Map // string -> *pendingContext
 
+	// artifacts is the node's content-addressed pool of task outputs: the data
+	// plane that lets one node consume what another produced. Nil on a node
+	// with no pool configured, which then cannot fetch stage inputs.
+	artifacts *artifact.Store
+
+	// pendingArt maps task_id|hash -> the in-flight inbound transfer, so
+	// handleArtifactChunk can deliver a chunk to the fetch that asked for it
+	// and reject one from any other node.
+	pendingArt sync.Map // string -> *artifactTransfer
+
+	// running maps task_id -> the CancelFunc of the context its execution runs
+	// under, so a lease expiry, a cancel message or a shutdown can actually stop
+	// the work instead of only rewriting the database row. Without it a task
+	// reported failed keeps its agent subprocess writing files and committing
+	// code, and the parent's re-route then runs the same work twice concurrently.
+	running sync.Map // string -> context.CancelFunc
+
+	// leaseTimeout is how long one task attempt may hold its lease before the
+	// monitor treats its executor as dead. Renewed on a heartbeat during
+	// execution (see renewLease), so it bounds silence rather than runtime.
+	// Guarded by mu; SetTimeouts keeps it above the agent hard timeout.
+	leaseTimeout time.Duration
+
 	// queueSched is the node-local task queue scheduler (panel queue
 	// redesign): it adopts queued-and-scheduled tasks when resources allow.
 	// Nil until StartQueueScheduler runs; Enqueue still works without it (the
@@ -154,6 +178,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		workDir:  ".",
 
 		superviseRounds: defaultSuperviseRounds,
+		leaseTimeout:    defaultDelegateTimeout,
 		sleep:           time.Sleep,
 		retryBackoff:    time.Second,
 	}
@@ -380,6 +405,10 @@ func (c *Core) RunMonitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// Plan convergence does not depend on who finished a stage: a review
+			// approved from the CLI or the console moves the row in another
+			// process, and only this sweep would notice.
+			c.sweepPlans(ctx)
 			expired, err := c.store.ExpireTasks(ctx)
 			if err != nil {
 				c.logger.Warn("expire tasks", "err", err)
@@ -387,6 +416,12 @@ func (c *Core) RunMonitor(ctx context.Context) {
 			}
 			if len(expired) > 0 {
 				for _, id := range expired {
+					// A force-fail that only rewrites the database row leaves the
+					// agent subprocess running — still writing files, still
+					// committing — under a task already reported failed upstream,
+					// which the parent then re-routes to a second node. Abort the
+					// local execution for real.
+					c.cancelRunning(id)
 					// A task that timed out while paused in waiting_context would
 					// otherwise leak its entry in pendingCtx (P2-7).
 					c.pendingCtx.Delete(id)
@@ -659,6 +694,8 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 		c.handleAccept(ctx, env)
 	case bus.MsgTaskDecline:
 		c.handleDecline(ctx, env)
+	case bus.MsgTaskProgress:
+		c.handleProgress(ctx, env)
 	case bus.MsgTaskResult:
 		c.handleResult(ctx, env)
 	case bus.MsgTaskCancel:
@@ -667,6 +704,10 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 		c.handleContextFetch(ctx, env)
 	case bus.MsgContextAck:
 		c.handleContextAck(ctx, env)
+	case bus.MsgArtifactFetch:
+		c.handleArtifactFetch(ctx, env)
+	case bus.MsgArtifactChunk:
+		c.handleArtifactChunk(ctx, env)
 	case bus.MsgHeartbeat:
 		c.handleHeartbeat(ctx, env)
 	default:
@@ -803,17 +844,18 @@ func (c *Core) signalResult(taskID string, p bus.TaskResultPayload) {
 }
 
 // summary reduces this node's capability card to the compact profile it
-// advertises over hello. Remote nodes need ability IDs and capacity to route,
-// not the executable commands themselves.
+// advertises over hello. Remote nodes need ability IDs, capacity and the declared
+// hardware profile to route — not the executable commands themselves.
 func (c *Core) summary() ledger.CapabilitySummary {
 	s := ledger.CapabilitySummary{
-		Device:        c.card.Device,
-		ResourceClass: c.card.ResourceClass,
-		NodeKind:      c.card.NodeKind,
-		NodeIdentity:  c.card.NodeIdentity,
-		SchedulerTier: c.tier,
-		Chip:          c.card.Chip,
-		Capacity:      c.card.Capacity,
+		Device:          c.card.Device,
+		ResourceClass:   c.card.ResourceClass,
+		NodeKind:        c.card.NodeKind,
+		NodeIdentity:    c.card.NodeIdentity,
+		SchedulerTier:   c.tier,
+		Chip:            c.card.Chip,
+		Capacity:        c.card.Capacity,
+		ResourceProfile: c.card.ResourceProfile,
 	}
 	for _, n := range c.card.Native {
 		s.NativeIDs = append(s.NativeIDs, n.ID)

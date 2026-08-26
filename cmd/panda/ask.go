@@ -33,13 +33,27 @@ type askJSON struct {
 	Stdout    string `json:"stdout,omitempty"`
 	Stderr    string `json:"stderr,omitempty"`
 	ExitCode  int    `json:"exit_code,omitempty"`
+	// Plan fields (kind == "plan"): the stage list is what makes the routing
+	// decision auditable from a script — which stage went where, and what it is
+	// waiting for.
+	PlanID   string          `json:"plan_id,omitempty"`
+	PlanGoal string          `json:"plan_goal,omitempty"`
+	Stages   []planStageJSON `json:"stages,omitempty"`
 }
 
 func resultToJSON(out *askengine.Result) askJSON {
-	return askJSON{
+	j := askJSON{
 		Kind: out.Kind, Answer: out.Answer, TaskID: out.TaskID, TaskState: out.TaskState,
 		OK: out.OK, Stdout: out.Stdout, Stderr: out.Stderr, ExitCode: out.ExitCode,
+		PlanID: out.PlanID, PlanGoal: out.PlanGoal,
 	}
+	for _, t := range out.PlanStages {
+		j.Stages = append(j.Stages, planStageJSON{
+			Stage: t.StageID, TaskID: t.TaskID, State: t.State,
+			Owner: t.OwnerNode, Needs: t.Needs, Output: t.OutputArtifact,
+		})
+	}
+	return j
 }
 
 // runAsk implements `panda ask "..."` — one call through the unified entry
@@ -114,7 +128,7 @@ func runAsk(args []string) {
 		}
 		recordConvo(out)
 		emitJSON(resultToJSON(out))
-		if out.Kind == "task" && !out.OK {
+		if (out.Kind == "task" || out.Kind == "plan") && !out.OK {
 			os.Exit(1)
 		}
 		return
@@ -146,7 +160,25 @@ func runAsk(args []string) {
 			fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
 			os.Exit(1)
 		}
+	case "plan":
+		printAskPlan(out)
 	}
+}
+
+// printAskPlan renders a plan the entry model just started. A plan is
+// asynchronous — its stages are queued and will run on other machines — so the
+// useful output is the board plus how to follow it, not a result that does not
+// exist yet.
+func printAskPlan(out *askengine.Result) {
+	if !out.OK {
+		fmt.Fprintf(os.Stderr, "panda: 计划启动失败: %s\n", out.Stderr)
+		os.Exit(1)
+	}
+	fmt.Printf("plan:   %s\n", out.PlanID)
+	fmt.Printf("goal:   %s\n", out.PlanGoal)
+	fmt.Printf("stages: %d\n", len(out.PlanStages))
+	printPlanStages(out.PlanStages)
+	fmt.Printf("\nfollow: panda plan show %s\n", out.PlanID)
 }
 
 // renderCliMd adapts a model/agent output block to the CLI sink: color
@@ -247,7 +279,7 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt str
 		Data askJSON `json:"data"`
 	}{"result", result})
 	fmt.Println(string(line))
-	if out.Kind == "task" && !out.OK {
+	if (out.Kind == "task" || out.Kind == "plan") && !out.OK {
 		os.Exit(1)
 	}
 }

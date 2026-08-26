@@ -160,6 +160,9 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 		return
 	}
 	c.logger.Info("queue: task finished", "task", taskID, "state", final.State)
+	// A finished stage may have released its successors. The plan node is the one
+	// that decides, and for a locally-executed stage that is this node.
+	c.advanceStagePlan(ctx, final)
 	// Unblock any synchronous waiter (delegation-style waits on enqueued
 	// tasks); a no-op when nobody is waiting.
 	c.signalResult(taskID, result)
@@ -186,27 +189,34 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		c.logger.Warn("queue forward: declined-by", "task", t.TaskID, "err", err)
 	}
 	seenChain := append(slices.Clone(chain), excluded...)
-	decision := scheduler.Route(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires, "")
+	decision := scheduler.Route(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
+		resourceRequirement(t.ResourceJSON), "")
 	if decision.Action != scheduler.ActionForward {
 		c.logger.Info("queue: no peer for task", "task", t.TaskID,
 			"action", string(decision.Action), "reason", decision.Reason)
 		return false
 	}
 	p := bus.TaskDelegatePayload{
-		TaskID:      t.TaskID,
-		ParentID:    t.ParentID,
-		Project:     t.Project,
-		Title:       t.Title,
-		ContextType: t.ContextType,
-		ContextHash: t.ContextHash,
-		Intent:      t.Intent,
-		SpecJSON:    t.SpecJSON,
-		Requires:    t.Requires,
-		Chain:       chain,
-		Complexity:  t.Complexity,
-		Risk:        t.Risk,
-		AttemptID:   t.AttemptID,
-		Authorized:  t.Authorized,
+		TaskID:       t.TaskID,
+		ParentID:     t.ParentID,
+		Project:      t.Project,
+		Title:        t.Title,
+		ContextType:  t.ContextType,
+		ContextHash:  t.ContextHash,
+		Intent:       t.Intent,
+		SpecJSON:     t.SpecJSON,
+		Requires:     t.Requires,
+		Chain:        chain,
+		Complexity:   t.Complexity,
+		Risk:         t.Risk,
+		ResourceJSON: t.ResourceJSON,
+		AttemptID:    t.AttemptID,
+		Authorized:   t.Authorized,
+		// A stage travels with its plan identity and its inputs, so the executor
+		// can pull the trees its predecessors produced. Empty on a plain task.
+		PlanID:  t.PlanID,
+		StageID: t.StageID,
+		Inputs:  t.Inputs,
 	}
 	if err := c.sendClaimedDelegate(ctx, t.TaskID, decision.Target, p); err != nil {
 		c.logger.Warn("queue: forward to peer failed", "task", t.TaskID,
@@ -229,7 +239,7 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 	}
 	timeoutMS := p.TimeoutMS
 	if timeoutMS <= 0 {
-		timeoutMS = defaultDelegateTimeout.Milliseconds()
+		timeoutMS = c.lease().Milliseconds()
 		p.TimeoutMS = timeoutMS
 	}
 	if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {

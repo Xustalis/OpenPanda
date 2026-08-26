@@ -23,6 +23,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/mcp"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/plan"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -105,7 +106,7 @@ func (e *Engine) Config() *config.Config { return e.cfg }
 
 // Result is the outcome of one Ask call.
 type Result struct {
-	// Kind is "answer" or "task" — the final converged intent.
+	// Kind is "answer", "task" or "plan" — the final converged intent.
 	Kind string
 	// Answer carries the model's text reply when Kind == "answer".
 	Answer string
@@ -120,6 +121,14 @@ type Result struct {
 	Stdout    string
 	Stderr    string
 	ExitCode  int
+
+	// Plan fields, valid when Kind == "plan". A plan is asynchronous by nature —
+	// its stages run on other machines, in waves — so the call returns as soon as
+	// the stages exist and the first wave is released; PlanID is how the caller
+	// follows it from there.
+	PlanID     string
+	PlanGoal   string
+	PlanStages []core.Task
 }
 
 // SetMCPCommand hot-swaps the stdio MCP server at runtime (the settings
@@ -414,6 +423,11 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 				cb.OnStatus(fmt.Sprintf("submitting task: %s", out.Task.Title))
 			}
 			return e.submitTask(out.Task, prompt, authorize, workDir), nil
+		case entry.KindPlan:
+			if cb.OnStatus != nil {
+				cb.OnStatus(fmt.Sprintf("starting plan: %s", out.Plan.Goal))
+			}
+			return e.startClassifiedPlan(ctx, out.Plan, authorize)
 		case entry.KindToolCall:
 			if cb.OnStatus != nil {
 				cb.OnStatus(fmt.Sprintf("running tool %s…", out.Tool.Tool))
@@ -452,6 +466,15 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 		}
 		return e.submitTask(final.Task, prompt, authorize, workDir), nil
 	}
+	if final.Kind == entry.KindPlan {
+		if e.sched == nil {
+			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议多阶段计划「%s」，但当前未加载能力卡片，无法启动。", maxRounds, final.Plan.Goal)}, nil
+		}
+		if cb.OnStatus != nil {
+			cb.OnStatus(fmt.Sprintf("starting plan: %s", final.Plan.Goal))
+		}
+		return e.startClassifiedPlan(ctx, final.Plan, authorize)
+	}
 	return &Result{Kind: "answer", Answer: final.Answer}, nil
 }
 
@@ -468,6 +491,64 @@ func (e *Engine) EnqueueTask(ctx context.Context, in core.TaskInput, q core.Queu
 		return core.Task{}, fmt.Errorf("task creation requires a capability card (engine built without CardPath)")
 	}
 	return e.sched.Enqueue(ctx, in, q)
+}
+
+// StartPlan hands a multi-stage plan to the scheduler core, which creates one
+// task per stage and releases the ones with no dependencies. It is the plan
+// plane's only entry point outside the daemon's own completion hooks: without it
+// the flagship cross-device pipeline — develop where a coding agent lives, train
+// where the GPU lives, report where the user is — was reachable only from a test.
+// Needs a capability card for the same reason task submission does: a plan whose
+// stages cannot be routed is a plan that cannot start.
+func (e *Engine) StartPlan(ctx context.Context, p plan.Plan, q core.QueueSpec) (string, error) {
+	if e.sched == nil {
+		return "", fmt.Errorf("starting a plan requires a capability card (engine built without CardPath)")
+	}
+	return e.sched.StartPlan(ctx, p, q)
+}
+
+// PlanStages returns every stage of one plan, for following a run.
+func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, error) {
+	if e.sched == nil {
+		return nil, fmt.Errorf("reading a plan requires a capability card (engine built without CardPath)")
+	}
+	return e.sched.TaskStore().PlanStages(ctx, planID)
+}
+
+// startClassifiedPlan turns a model-emitted plan into a running pipeline. It is
+// the other half of the plan entry point: `panda plan run` covers the pipeline
+// you keep as a file, this covers the one you ask for in a sentence — which is
+// the case the project exists for, since the point of a plan is not having to
+// visit three machines yourself.
+//
+// The plan's `authorize` flag is deliberately ignored: a stage never carries
+// tier-2 consent (core.StartPlan), so an irreversible stage parks in review for
+// a person instead of inheriting a blanket approval given to the whole sentence.
+// Consent for one shell command is not consent for a three-machine pipeline.
+func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, _ bool) (*Result, error) {
+	if e.sched == nil {
+		return nil, fmt.Errorf("plan output requires a capability card (engine built without CardPath)")
+	}
+	p, err := plan.FromSpec(*spec)
+	if err != nil {
+		// A plan the model got wrong has created nothing, so the useful answer is
+		// the defect itself rather than a failed run: the user (or the next turn)
+		// can see that the stages did not hang together.
+		return &Result{Kind: "answer", Answer: "计划无法执行：" + err.Error()}, nil
+	}
+	q := core.DefaultQueueSpec()
+	// No work dir, for the same reason `panda plan run` sets none: a path on this
+	// machine means nothing on the machine that runs the stage.
+	q.WorkDir = ""
+	planID, err := e.sched.StartPlan(ctx, p, q)
+	if err != nil {
+		return &Result{Kind: "plan", PlanID: planID, PlanGoal: p.Goal, Stderr: err.Error(), ExitCode: 1}, nil
+	}
+	stages, serr := e.sched.TaskStore().PlanStages(ctx, planID)
+	if serr != nil {
+		e.logger.Warn("askengine: read plan stages", "plan", planID, "err", serr)
+	}
+	return &Result{Kind: "plan", PlanID: planID, PlanGoal: p.Goal, PlanStages: stages, OK: true}, nil
 }
 
 // submitTask executes a classified task spec through the scheduler core and

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -56,5 +57,52 @@ func TestRunSidecarNotJSON(t *testing.T) {
 	res := runSidecar(context.Background(), "fake.py", nil)
 	if res.ok || res.err == "" {
 		t.Fatalf("runSidecar = %+v, want ok=false with err", res)
+	}
+}
+
+// TestListenReportsBrokenSidecar separates the two reasons Listen fails. A
+// sidecar that ran and reported "No module named 'numpy'" puts that message in
+// `result`, not `err`; reading only `err` reported a missing driver as an empty
+// error, which a looping caller cannot distinguish from "nobody spoke" — so it
+// respawns python forever while the prompt says nothing is wrong.
+func TestListenReportsBrokenSidecar(t *testing.T) {
+	dir := writeFake(t, "")
+	if err := os.WriteFile(filepath.Join(dir, "wake.py"), []byte(`import json
+print(json.dumps({"ok": False, "result": "wake failed: No module named 'numpy'"}))
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := voiceDir
+	voiceDir = dir
+	defer func() { voiceDir = old }()
+
+	got := Listen(context.Background(), 1)
+	if got.OK {
+		t.Fatal("a broken wake sidecar reported a successful capture")
+	}
+	if got.Timeout {
+		t.Error("a broken sidecar was reported as a timeout; the caller would loop on it")
+	}
+	if !strings.Contains(got.Err, "numpy") {
+		t.Errorf("Err = %q, want the sidecar's own reason", got.Err)
+	}
+}
+
+// TestListenTimeout is the other half: the wake word simply never fired. It must
+// be marked as a timeout so the caller listens again rather than exiting.
+func TestListenTimeout(t *testing.T) {
+	dir := writeFake(t, "")
+	if err := os.WriteFile(filepath.Join(dir, "wake.py"), []byte(`import json
+print(json.dumps({"ok": True, "result": "timeout"}))
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := voiceDir
+	voiceDir = dir
+	defer func() { voiceDir = old }()
+
+	got := Listen(context.Background(), 1)
+	if got.OK || !got.Timeout {
+		t.Fatalf("Listen = %+v, want a timeout", got)
 	}
 }

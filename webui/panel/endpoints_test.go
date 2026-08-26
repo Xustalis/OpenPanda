@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Xustalis/OpenPanda/internal/askengine"
 	agentreg "github.com/Xustalis/OpenPanda/internal/agents"
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/sessions"

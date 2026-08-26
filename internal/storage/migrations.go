@@ -32,6 +32,53 @@ var migrations = []Migration{
 	{Version: 9, Name: "add_tasks_queue_meta", Apply: migrateV9},
 	{Version: 10, Name: "add_node_identity", Apply: migrateV10},
 	{Version: 11, Name: "add_entry_cache", Apply: migrateV11},
+	{Version: 12, Name: "add_plan_stages_and_artifacts", Apply: migrateV12},
+}
+
+// migrateV12 adds the plan plane and the data plane to the task table rather
+// than beside it. A stage of a plan is an ordinary task — it inherits the CAS
+// state machine, the task_events audit chain, the lease, retry and approval —
+// so what a stage needs beyond a task is only: which plan it belongs to, which
+// stage of it, what it waits for, and the artifacts it consumes and produces.
+//
+// artifacts is the local pool's index, not the bytes: the archives live under
+// storage.artifact_path named by their hash (a trained model is measured in GB
+// and has no business in SQLite). The row records size, manifest and the task
+// that produced it, so the pool can be listed and pruned without unpacking
+// every archive on disk.
+func migrateV12(tx *sql.Tx) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS artifacts (
+		hash TEXT PRIMARY KEY,
+		size INTEGER NOT NULL,
+		task_id TEXT,
+		created_at INTEGER NOT NULL,
+		manifest_json TEXT
+	)`); err != nil {
+		return err
+	}
+	// The tasks-side half is guarded on the table existing, as migrateV10 is for
+	// employee_cache: a partially-built database (a test fixture, or a dev
+	// database restored from a subset of the baseline) must still migrate rather
+	// than wedge the version at 11 forever.
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	for _, col := range []string{
+		"plan_id",              // stages of one plan share it
+		"stage_id",             // the stage's name within that plan
+		"needs_json",           // the stage_ids this stage waits for
+		"input_artifacts_json", // [{stage,hash,source}] this stage starts from
+		"output_artifact",      // hash of the tree this stage produced
+	} {
+		if err := addColumnIfMissingTx(tx, "tasks", col, "TEXT"); err != nil {
+			return err
+		}
+	}
+	// The orchestrator's hot query is "the stages of this plan", asked every
+	// time a stage finishes to decide what became ready.
+	_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_plan ON tasks(plan_id, stage_id)`)
+	return err
 }
 
 // migrateV11 adds entry_cache: the disk cache for entry-model decisions

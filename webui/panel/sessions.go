@@ -217,16 +217,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := askResult{
-		Kind:      out.Kind,
-		Answer:    out.Answer,
-		TaskID:    out.TaskID,
-		TaskState: out.TaskState,
-		OK:        out.OK,
-		Stdout:    out.Stdout,
-		Stderr:    out.Stderr,
-		ExitCode:  out.ExitCode,
-	}
+	res := planResultOf(out)
 	send("result", res)
 
 	// Queue redesign: bind a spawned task back to this session so the board
@@ -237,10 +228,14 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	turn := sessions.Turn{Role: "assistant", Kind: out.Kind}
-	if out.Kind == "task" {
+	switch out.Kind {
+	case "task":
 		turn.Text = out.TaskID
 		turn.Ref = out.TaskID
-	} else {
+	case "plan":
+		turn.Text = out.PlanID
+		turn.Ref = out.PlanID
+	default:
 		turn.Text = out.Answer
 	}
 	if _, err := h.sessions.AppendTurn(sess.ID, turn); err != nil {

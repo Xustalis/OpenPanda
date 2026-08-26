@@ -88,6 +88,7 @@ func decodeEnvelope(raw string) (Output, bool, error) {
 		Kind Kind      `json:"kind"`
 		Tool *ToolCall `json:"tool"`
 		Task *TaskSpec `json:"task"`
+		Plan *PlanSpec `json:"plan"`
 	}
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
 		// A syntax error means raw is not JSON, so the caller may try extraction
@@ -119,6 +120,15 @@ func decodeEnvelope(raw string) (Output, bool, error) {
 			return Output{}, false, err
 		}
 		return Output{Kind: KindTask, Task: envelope.Task}, true, nil
+
+	case KindPlan:
+		if envelope.Plan == nil {
+			return Output{}, false, fmt.Errorf("entry: plan missing plan object")
+		}
+		if err := ValidatePlanSpec(envelope.Plan); err != nil {
+			return Output{}, false, err
+		}
+		return Output{Kind: KindPlan, Plan: envelope.Plan}, true, nil
 
 	default:
 		// KindAnswer and unknown kinds carry no payload; the caller falls back

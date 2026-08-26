@@ -39,12 +39,20 @@ func TestLoadDefaultsOnMissingFile(t *testing.T) {
 func TestNodeKindAndIdentity(t *testing.T) {
 	p := writeTemp(t, "node:\n  name: vm-1\n  kind: vm\n  identity: vm-identity-1\n")
 	cfg, err := Load(p)
-	if err != nil { t.Fatalf("load vm: %v", err) }
-	if cfg.Node.Kind != NodeKindVM || cfg.Node.Identity != "vm-identity-1" { t.Fatalf("node = %+v", cfg.Node) }
+	if err != nil {
+		t.Fatalf("load vm: %v", err)
+	}
+	if cfg.Node.Kind != NodeKindVM || cfg.Node.Identity != "vm-identity-1" {
+		t.Fatalf("node = %+v", cfg.Node)
+	}
 	p = writeTemp(t, "node:\n  name: bad\n  kind: container\n")
-	if _, err := Load(p); err == nil { t.Fatal("expected invalid node kind error") }
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected invalid node kind error")
+	}
 	p = writeTemp(t, "node:\n  name: vm-missing-id\n  kind: vm\n")
-	if _, err := Load(p); err == nil { t.Fatal("expected vm identity requirement") }
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected vm identity requirement")
+	}
 }
 
 func TestLoadMissingFileAppliesEnvOverrides(t *testing.T) {
@@ -220,5 +228,73 @@ func TestSecretlessFilePermsUntouched(t *testing.T) {
 	}
 	if got := st.Mode().Perm(); got != 0o644 {
 		t.Fatalf("perm = %o, want untouched 644", got)
+	}
+}
+
+// TestArtifactPathResolution covers the four ways artifact_path can arrive.
+// The empty cases are the ones that matter: a config file written before the
+// artifact pool existed has no artifact_path at all, and an empty value would
+// resolve to the config's own directory — dropping multi-GB archives next to
+// the YAML instead of in a pool of their own.
+func TestArtifactPathResolution(t *testing.T) {
+	base := func(p string) string { return filepath.Dir(p) }
+
+	// Absent from the file entirely: derived from wherever the database went,
+	// so a node's state stays under one root.
+	p := writeTemp(t, "node:\n  name: n1\nstorage:\n  db_path: \"openpanda.db\"\n")
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if want := filepath.Join(base(p), "artifacts"); cfg.Storage.ArtifactPath != want {
+		t.Fatalf("artifact_path = %q, want %q", cfg.Storage.ArtifactPath, want)
+	}
+
+	// Absent, and storage left at the per-user default: an absolute pool beside
+	// the default database, never a relative path and never the cwd.
+	p = writeTemp(t, "node:\n  name: n1\n")
+	cfg, err = Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !filepath.IsAbs(cfg.Storage.ArtifactPath) {
+		t.Fatalf("default artifact_path %q is not absolute", cfg.Storage.ArtifactPath)
+	}
+	if want := filepath.Join(filepath.Dir(cfg.Storage.DBPath), "artifacts"); cfg.Storage.ArtifactPath != want {
+		t.Fatalf("artifact_path = %q, want %q beside the database", cfg.Storage.ArtifactPath, want)
+	}
+
+	// Explicitly empty: same derivation, not the config's own directory.
+	p = writeTemp(t, "node:\n  name: n1\nstorage:\n  artifact_path: \"\"\n")
+	cfg, err = Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Storage.ArtifactPath == base(p) {
+		t.Fatalf("an empty artifact_path resolved to the config directory %q", base(p))
+	}
+	if !filepath.IsAbs(cfg.Storage.ArtifactPath) {
+		t.Fatalf("empty artifact_path resolved to %q, want an absolute pool", cfg.Storage.ArtifactPath)
+	}
+
+	// Relative: rebased onto the config's directory, like every other storage path.
+	p = writeTemp(t, "node:\n  name: n1\nstorage:\n  artifact_path: \"pool\"\n")
+	cfg, err = Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if want := filepath.Join(base(p), "pool"); cfg.Storage.ArtifactPath != want {
+		t.Fatalf("artifact_path = %q, want %q", cfg.Storage.ArtifactPath, want)
+	}
+
+	// Absolute: untouched.
+	abs := filepath.Join(t.TempDir(), "elsewhere")
+	p = writeTemp(t, "node:\n  name: n1\nstorage:\n  artifact_path: "+abs+"\n")
+	cfg, err = Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Storage.ArtifactPath != abs {
+		t.Fatalf("artifact_path = %q, want the absolute %q", cfg.Storage.ArtifactPath, abs)
 	}
 }

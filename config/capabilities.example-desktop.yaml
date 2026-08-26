@@ -13,6 +13,10 @@
 #                  tier 缺省为 2（不可逆，执行需 --authorize，完成后进待审批）；
 #                  只读型 agent 可声明 tier: 1 直接完成
 #   capacity       本节点并行任务数与资源上限
+#   resource_profile 声明的硬件（cpu / ram_gb / gpu_vram_gb / duration_hint）。
+#                  capacity 是"现在还能接几个"，这里是"跑得动什么"：路由把它当硬判据，
+#                  声明 gpu_vram_gb: 8 的任务不会落到 gpu_vram_gb: 0 的节点上。
+#                  整段省略等于"未声明"，路由放行 —— 想被排除必须开口。
 
 device: "example-desktop"
 resource_class: "Standard"
@@ -53,3 +57,11 @@ capacity:
   cpu_cores: 8
   ram_gb: 16
   max_concurrent_tasks: 3
+
+# 声明的硬件上限，路由的硬判据：任务声明 gpu_vram_gb: 8 时，
+# 只有这里 >= 8 的节点才会被选中。整段省略等于"未声明"，路由放行不排除。
+resource_profile:
+  cpu: 8
+  ram_gb: 16
+  gpu_vram_gb: 8
+  duration_hint: long
