@@ -15,9 +15,11 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/install"
+	"github.com/Xustalis/OpenPanda/internal/pyexec"
 )
 
 func runInstall(args []string) {
@@ -134,11 +136,12 @@ func runDoctor(args []string) {
 	}
 
 	// Adapter runtime: the agent adapters are Python scripts next to the
-	// daemon's working directory, driven by python3, and they wrap the
-	// agent CLIs (claude / opencode). Each is reported; only "no agent CLI
-	// at all" counts as a problem — native-only nodes stay valid.
-	if lp, err := exec.LookPath("python3"); err == nil {
-		pass("doctor.python3.ok", "path", lp)
+	// daemon's working directory, driven by the resolved interpreter (pyexec —
+	// "python3" is not a portable name; Windows ships `py` instead), and they
+	// wrap the agent CLIs. Each is reported; only "no agent CLI at all" counts
+	// as a problem — native-only nodes stay valid.
+	if py := pyexec.Describe(); py != "" {
+		pass("doctor.python3.ok", "path", py)
 	} else {
 		fail("doctor.python3.no")
 	}
@@ -147,13 +150,16 @@ func runDoctor(args []string) {
 	} else {
 		fail("doctor.adapters.no")
 	}
+	// The registry, not a hand-written list: an agent added to internal/agents
+	// was invisible to doctor until it was also remembered here.
 	agentsFound := 0
-	for _, bin := range []string{"claude", "opencode", "codex"} {
-		if lp, err := exec.LookPath(bin); err == nil {
+	for _, k := range agents.Registry() {
+		if bin := installedBinary(k); bin != "" {
 			agentsFound++
+			lp, _ := exec.LookPath(bin)
 			pass("doctor.agent.ok", "name", bin, "path", lp)
 		} else {
-			pass("doctor.agent.no", "name", bin)
+			pass("doctor.agent.no", "name", k.PrimaryBinary())
 		}
 	}
 	if agentsFound == 0 {

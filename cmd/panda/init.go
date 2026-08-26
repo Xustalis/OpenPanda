@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/hwinfo"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"gopkg.in/yaml.v3"
 )
@@ -186,18 +187,23 @@ var vmVendorKeywords = []string{
 // kern.hv_support is useless as a signal — it is 1 on every Apple Silicon
 // Mac (the OS itself runs on Apple's hypervisor), so vendor strings are
 // matched instead. On Linux the cpuinfo hypervisor flag or DMI names decide.
+// On Windows the BIOS vendor keys in the registry carry the same DMI strings.
 func detectVM() bool {
 	switch runtime.GOOS {
 	case "darwin":
-		blob := strings.ToLower(probe("sysctl", "-n", "hw.model") + " " +
-			probe("ioreg", "-rn", "IOPlatformExpertDevice"))
+		blob := strings.ToLower(hwinfo.Probe("sysctl", "-n", "hw.model") + " " +
+			hwinfo.Probe("ioreg", "-rn", "IOPlatformExpertDevice"))
 		return containsAny(blob, vmVendorKeywords)
 	case "linux":
-		if probe("sh", "-c", "grep -m1 hypervisor /proc/cpuinfo") != "" {
+		if hwinfo.Probe("sh", "-c", "grep -m1 hypervisor /proc/cpuinfo") != "" {
 			return true
 		}
-		blob := strings.ToLower(probe("sh", "-c",
+		blob := strings.ToLower(hwinfo.Probe("sh", "-c",
 			"cat /sys/class/dmi/id/product_name /sys/class/dmi/id/sys_vendor 2>/dev/null"))
+		return containsAny(blob, vmVendorKeywords)
+	case "windows":
+		blob := strings.ToLower(hwinfo.Probe("reg", "query",
+			`HKLM\HARDWARE\DESCRIPTION\System\BIOS`, "/s"))
 		return containsAny(blob, vmVendorKeywords)
 	}
 	return false
@@ -218,7 +224,7 @@ func containsAny(s string, keywords []string) bool {
 // fingerprint; the machine identity is the fallback when the hostname is
 // unknown.
 func autoVMIdentity() string {
-	if h := hostname(); h != "" && h != "unknown-host" {
+	if h := hwinfo.Hostname(); h != "" && h != "unknown-host" {
 		return "vm-" + h
 	}
 	return config.MachineIdentity()

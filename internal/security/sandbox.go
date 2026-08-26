@@ -9,6 +9,7 @@ package security
 import (
 	"os"
 	"os/exec"
+	"runtime"
 )
 
 // Sandbox sets an adapter subprocess's working directory and replaces its
@@ -37,19 +38,47 @@ type Sandbox struct {
 // NewSandbox builds a sandbox rooted at dir.
 func NewSandbox(dir string) *Sandbox { return &Sandbox{dir: dir} }
 
+// posixEnvKeys are the variables a POSIX adapter needs to function at all.
+// HOME is here on purpose — agent CLIs read their own config and auth from it.
+var posixEnvKeys = []string{"PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "TMPDIR"}
+
+// windowsEnvKeys are the Windows equivalents. This list is not cosmetic: a
+// process started with only PATH set on Windows is broken in ways that look like
+// application bugs. Python resolves its install root through SYSTEMROOT and its
+// user site-packages through APPDATA, the runtime finds DLLs under SystemRoot,
+// PATHEXT is what makes `python` resolve to `python.exe` at all, and TEMP/TMP
+// are where every toolchain writes scratch files. Sending a POSIX-only env to a
+// Windows adapter is why the compute node could not launch one.
+//
+// Case matters to no one here (Windows env lookup is case-insensitive) but the
+// spellings below are the conventional ones.
+var windowsEnvKeys = []string{
+	"PATH", "PATHEXT", "SYSTEMROOT", "windir", "SystemDrive", "COMSPEC",
+	"TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+	"APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
+	"USERNAME", "USERDOMAIN", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+	"LANG",
+}
+
 // Env returns the subprocess environment: a fixed allow-list of the variables an
 // adapter needs to function at all, plus any explicitly injected entries (e.g.
 // model credentials). Everything else in the parent's environment is dropped.
 // HOME is forwarded on purpose — agent CLIs read their own config and auth from
 // it — so this is an environment filter, not a home-directory boundary.
+//
+// Unset variables are omitted rather than forwarded empty: exporting HOME="" to
+// a child is not the same as leaving it unset, and several CLIs treat the empty
+// value as a configured-but-broken home and fail instead of falling back.
 func (s *Sandbox) Env(extra ...string) []string {
-	env := []string{
-		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + os.Getenv("HOME"),
-		"USER=" + os.Getenv("USER"),
-		"SHELL=" + os.Getenv("SHELL"),
-		"LANG=" + os.Getenv("LANG"),
-		"TMPDIR=" + os.Getenv("TMPDIR"),
+	keys := posixEnvKeys
+	if runtime.GOOS == "windows" {
+		keys = windowsEnvKeys
+	}
+	env := make([]string, 0, len(keys)+len(extra))
+	for _, k := range keys {
+		if v, ok := os.LookupEnv(k); ok && v != "" {
+			env = append(env, k+"="+v)
+		}
 	}
 	return append(env, extra...)
 }

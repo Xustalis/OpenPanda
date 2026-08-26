@@ -359,6 +359,7 @@ Gestiona las skills:
 | `panda skill` | Gestión del almacén de skills |
 | `panda reminder list \| add \| rm` | Recordatorios: listar / añadir (`--after 10m` o `--at "2006-01-02 15:04"`) / eliminar |
 | `panda detect [-o PATH]` | Escanea el hardware de esta máquina (CPU/RAM/GPU/CLIs de agente) y genera un borrador de capabilities.yaml |
+| `panda card show \| rescan \| edit \| set` | Tarjeta de capacidades de este nodo: mostrarla (con el archivo de origen), volver a escanear el hardware y los CLIs de agente instalados (`rescan` imprime el diff, `--write` lo aplica y conserva un `.bak`), abrirla en `$EDITOR`, o `set <campo>=<valor>` sin editor. Los campos de hardware detectados se sobrescriben; las decisiones escritas a mano (nombre del nodo, resource_class, max_concurrent_tasks, tier de cada agente, habilidades native/manual) se conservan |
 | `panda metrics [--csv]` | Exportar métricas de delegación |
 | `panda audit [--task <id>]` | Verificar la cadena `prev_hash` del registro de auditoría o de los eventos de una tarea |
 | `panda version` | Imprimir la versión |

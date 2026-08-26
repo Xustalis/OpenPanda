@@ -15,6 +15,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/executil"
+	"github.com/Xustalis/OpenPanda/internal/pyexec"
 	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
@@ -376,7 +377,19 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	}
 	ctx, cancel := context.WithTimeout(ctx, adapterHardTimeout)
 	defer cancel()
-	cmd := executil.CommandContext(ctx, "python3", path)
+	cmd, ok := pyexec.Command(ctx, path)
+	if !ok {
+		// No interpreter on this host. Say so instead of exec'ing a name that
+		// is not there: "python3: no such file or directory" reads like a
+		// PANDA bug, and on Windows the bare name can resolve to a Store stub
+		// that fails in a way nobody can act on. AgentViable checks the same
+		// thing up front so a task normally never reaches here.
+		return AgentResult{
+			OK: false, ExitCode: 127,
+			Result: "no Python 3 interpreter found for adapter " + name +
+				" — install Python 3 or set " + pyexec.EnvOverride,
+		}
+	}
 	cmd.Stdin = bytes.NewReader(reqJSON)
 	var stdout executil.Capture
 	var stderr progressWriter

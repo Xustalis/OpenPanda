@@ -288,6 +288,7 @@ model:
 | `panda skill` | スキルストアの管理 |
 | `panda reminder list \| add \| rm` | リマインダー：一覧 / 追加（`--after 10m` または `--at "2006-01-02 15:04"`）/ 削除 |
 | `panda detect [-o PATH]` | このマシンのハードウェア（CPU/RAM/GPU/Agent CLI）をスキャンして capabilities.yaml のドラフトを生成 |
+| `panda card show \| rescan \| edit \| set` | このノードの能力カード：内容と読み込み元のパスを表示、ハードウェアとインストール済み Agent CLI を再スキャン（`rescan` は差分のみ表示、`--write` で適用し `.bak` を残す）、`$EDITOR` で編集、`set <フィールド>=<値>` でエディタ無しに 1 項目だけ変更。探測されたハードウェア項目は上書きされ、人が決めた項目（ノード名・resource_class・max_concurrent_tasks・agent の tier・native/manual 能力）は保持されます |
 | `panda metrics [--csv]` | 委譲メトリクスをエクスポート |
 | `panda audit [--task <id>]` | 監査ログまたは単一タスクイベントの `prev_hash` チェーンを検証 |
 | `panda version` | バージョンを表示 |

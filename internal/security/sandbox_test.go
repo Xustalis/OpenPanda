@@ -2,9 +2,49 @@ package security
 
 import (
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// The allow-list has to match the platform the adapter actually runs on. A
+// Windows python started with only the POSIX names set cannot find its own
+// install root (SYSTEMROOT) or user site-packages (APPDATA), which surfaces as
+// "the compute node cannot launch agents" rather than as a missing variable.
+func TestSandboxEnvCarriesThisPlatformsEssentials(t *testing.T) {
+	want := []string{"PATH"}
+	if runtime.GOOS == "windows" {
+		want = append(want, "SYSTEMROOT", "PATHEXT", "TEMP", "APPDATA", "USERPROFILE")
+	} else {
+		want = append(want, "HOME")
+	}
+	for _, k := range want {
+		t.Setenv(k, "x")
+	}
+	env := NewSandbox("").Env()
+	for _, k := range want {
+		found := false
+		for _, kv := range env {
+			if strings.EqualFold(kv, k+"=x") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s missing from the %s sandbox env: %v", k, runtime.GOOS, env)
+		}
+	}
+}
+
+// An unset variable must be omitted, not forwarded as empty: HOME="" reads as a
+// configured-but-broken home to several CLIs, which then fail instead of
+// falling back to the OS default.
+func TestSandboxEnvOmitsUnsetVariables(t *testing.T) {
+	for _, kv := range NewSandbox("").Env("INJECTED=v") {
+		if strings.HasSuffix(kv, "=") {
+			t.Errorf("empty variable forwarded to the child: %q", kv)
+		}
+	}
+}
 
 func TestSandboxEnvDoesNotLeakSecrets(t *testing.T) {
 	// Simulate unrelated secrets in the parent process env; the sandbox env

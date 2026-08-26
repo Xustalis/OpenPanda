@@ -103,6 +103,9 @@ func main() {
 		case "detect":
 			runDetect(args)
 			return
+		case "card":
+			runCard(args)
+			return
 		case "init":
 			runInit(args)
 			return
@@ -245,6 +248,14 @@ func runDaemon(args []string) {
 		card, err = ledger.LoadCard(*cardPath)
 		if err != nil {
 			fatal("load capabilities", err)
+		}
+		// A card copied from another machine can declare commands this host
+		// does not have (the shipped examples are POSIX-only). Advertising them
+		// would win the native plan and fail at exec, so they go before the
+		// card is ever registered or sent in a hello.
+		if dropped := card.PruneUnavailableNative(); len(dropped) > 0 {
+			logger.Warn("native abilities dropped: command not found on this host",
+				"ids", strings.Join(dropped, ","))
 		}
 	}
 	card.NodeKind = cfg.Node.Kind
@@ -541,6 +552,9 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "  init [--defaults|--non-interactive]      first-run setup (one question; flags = zero prompts)")
 	fmt.Fprintln(w, "  doctor                                    post-install self-check")
 	fmt.Fprintln(w, "  detect                                    scan hardware → capabilities.yaml draft")
+	fmt.Fprintln(w, "  card show|rescan|edit|set                 this node's capability card: read it,")
+	fmt.Fprintln(w, "                                            re-scan hardware + agent CLIs (--write),")
+	fmt.Fprintln(w, "                                            edit it in $EDITOR, or set one field")
 	fmt.Fprintln(w, "  version|help                              version / this help")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "global flags: --config <path>, --card <path>, --mcp <cmd>, --json")

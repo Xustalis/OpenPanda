@@ -358,6 +358,7 @@ Skills verwalten:
 | `panda skill` | Skill-Store-Verwaltung |
 | `panda reminder list \| add \| rm` | Erinnerungen: auflisten / anlegen (`--after 10m` oder `--at "2006-01-02 15:04"`) / löschen |
 | `panda detect [-o PATH]` | Scannt die Hardware dieser Maschine (CPU/RAM/GPU/Agent-CLIs) in einen capabilities.yaml-Entwurf |
+| `panda card show \| rescan \| edit \| set` | Die Capability-Card dieses Knotens: anzeigen (samt Quelldatei), Hardware und installierte Agent-CLIs neu scannen (`rescan` zeigt nur das Diff, `--write` wendet es an und behält ein `.bak`), in `$EDITOR` bearbeiten oder mit `set <Feld>=<Wert>` ohne Editor ändern. Erkannte Hardware-Felder werden überschrieben, handgeschriebene Entscheidungen (Knotenname, resource_class, max_concurrent_tasks, Agent-Tier, native/manual-Fähigkeiten) bleiben erhalten |
 | `panda metrics [--csv]` | Delegations-Metriken exportieren |
 | `panda audit [--task <id>]` | `prev_hash`-Kette des Audit-Logs oder der Events eines Tasks verifizieren |
 | `panda version` | Version anzeigen |

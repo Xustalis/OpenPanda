@@ -79,6 +79,17 @@ type ResourceProfile struct {
 	DurationHint string `yaml:"duration_hint" json:"duration_hint"` // short | long
 }
 
+// GPUVRAMUnknown marks a node whose GPU exists but whose size could not be read
+// — no nvidia-smi, a driver that reports nothing, a card behind a hypervisor.
+//
+// It has to be distinguishable from 0. Fits treats a declared VRAM figure as a
+// hard filter, so if an unreadable card wrote 0 the machine that owns the GPU
+// would be excluded from exactly the tasks it exists to run, while an Orange Pi
+// that honestly declares 0 sits there holding the training stage. Unknown is
+// therefore permissive (the node stays a candidate and finds out at run time),
+// and a real 0 keeps excluding. hwinfo.GPUVRAMGB is what produces the value.
+const GPUVRAMUnknown = -1
+
 // Declared reports whether this profile says anything at all about hardware. An
 // all-zero profile is the shape of a card that never wrote a resource_profile
 // block, and that is silence, not a claim of zero capacity — every card shipped
@@ -314,12 +325,15 @@ func (n Node) Matches(required []string) bool {
 // and every node fits it; a node that declares no profile at all is unknown
 // rather than empty (see ResourceProfile.Declared) and is allowed through, since
 // the alternative is that a network of pre-v0.0.6 cards can route nothing. Only
-// a node that positively declares its hardware can be positively excluded.
+// a node that positively declares its hardware can be positively excluded — and
+// GPUVRAMUnknown is not a positive declaration, it is "there is a card here and
+// nothing would tell me how big it is".
 func (n Node) Fits(req ResourceProfile) bool {
 	if !req.Declared() || !n.ResourceProfile.Declared() {
 		return true
 	}
-	if req.GPUVRAMGB > 0 && n.ResourceProfile.GPUVRAMGB < req.GPUVRAMGB {
+	if req.GPUVRAMGB > 0 && n.ResourceProfile.GPUVRAMGB >= 0 &&
+		n.ResourceProfile.GPUVRAMGB < req.GPUVRAMGB {
 		return false
 	}
 	if req.RAMGB > 0 && n.ResourceProfile.RAMGB > 0 && n.ResourceProfile.RAMGB < req.RAMGB {
