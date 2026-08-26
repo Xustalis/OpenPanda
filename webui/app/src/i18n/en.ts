@@ -95,6 +95,7 @@ const en: Messages = {
   'queue.priorityHint': 'Click to cycle priority (high → normal → low)',
   'queue.dropHere': 'Drop to reorder',
   'queue.openSession': 'Open linked session',
+  'queue.collapse': 'Collapse',
 
   // Detail view
   'detail.back': 'Back to queue',
@@ -148,6 +149,11 @@ const en: Messages = {
   'sessions.merging': 'Merging…',
   'sessions.stop': 'Stop',
   'sessions.stopped': 'Stopped by you.',
+  'sessions.folderPick': 'Pick a local folder',
+  'sessions.folderSelected': '📁 Folder selected, {n} files:',
+  'sessions.folderTruncated': '  … ({n} more files)',
+  'sessions.folderFollowUp': 'Please handle my request based on the files above:',
+  'sessions.projectPrefix': '[Project: {name}]',
 
   // Markdown rendering (assistant replies)
   'md.copy': 'Copy',

@@ -1699,7 +1699,31 @@ label {
   padding: 14px 24px 16px;
   display: flex;
   flex-direction: column;
+  gap: 10px;
+}
+
+.composer-toolbar {
+  max-width: 780px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.project-picker {
+  width: auto;
+  min-width: 160px;
+  font-size: 13px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.folder-btn {
+  font-size: 12.5px;
+  padding: 5px 11px;
+  white-space: nowrap;
 }
 
 /* The single control: one border, one radius, one focus ring for the textarea
@@ -2145,31 +2169,52 @@ label {
 
 .node-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
 }
 
 .node-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  min-width: 0;
 }
 
 .node-head {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 10px;
 }
 
 .node-id {
   font-weight: 600;
-  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  font-size: 13px;
+}
+
+.node-name {
+  font-weight: 650;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .node-card p {
   margin: 0;
   font-size: 13px;
+  line-height: 1.5;
+}
+
+.node-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
 }
 
 .node-abilities {
@@ -2384,7 +2429,7 @@ label {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
   gap: 14px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .kanban-col {
@@ -2393,9 +2438,51 @@ label {
   border-radius: 12px;
   padding: 12px;
   min-height: 120px;
+  max-height: min(calc(100vh - 210px), 760px);
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* ---- Kanban list: scrollable inner container so columns stay height-locked ---- */
+
+.kanban-list {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+  margin-right: -2px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-soft) transparent;
+}
+
+.kanban-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.kanban-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.kanban-list::-webkit-scrollbar-thumb {
+  background: var(--border-soft);
+  border-radius: 999px;
+}
+
+.kanban-list::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+/* Dense grid layout for the done column when expanded — keeps the board
+   visually balanced instead of one column stretching into empty space. */
+.kanban-list--dense {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 8px;
+  align-content: start;
 }
 
 .kanban-head {
@@ -2495,6 +2582,90 @@ label {
 .btn.small {
   padding: 3px 10px;
   font-size: 12px;
+}
+
+.kanban-expand-btn {
+  align-self: center;
+  margin-top: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px 6px 15px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.kanban-expand-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  transform: translateY(-0.5px);
+}
+
+.kanban-expand-count {
+  white-space: nowrap;
+}
+
+.kanban-expand-caret {
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  opacity: 0.85;
+}
+
+.kanban-expand-btn.is-open .kanban-expand-caret {
+  transform: rotate(-135deg) translateY(1px);
+}
+
+/* Tighter cards for finished tasks to reduce visual noise */
+.kanban-card.finished {
+  padding: 8px 10px;
+  gap: 4px;
+}
+
+.kanban-card.finished .kanban-title {
+  font-size: 13px;
+  -webkit-line-clamp: 1;
+}
+
+.kanban-card.finished .kanban-meta {
+  font-size: 11px;
+  gap: 2px 8px;
+}
+
+/* Even more compact: when the done column is in 2-col dense grid mode.
+   Strip metadata (node/time) to leave just title + status, so rows stay short. */
+.kanban-list--dense .kanban-card.finished {
+  padding: 6px 8px;
+  gap: 3px;
+  border-radius: 8px;
+}
+
+.kanban-list--dense .kanban-card.finished .kanban-title {
+  font-size: 12px;
+  -webkit-line-clamp: 2;
+}
+
+.kanban-list--dense .kanban-card.finished .kanban-meta {
+  display: none;
+}
+
+.kanban-list--dense .kanban-card.finished .kanban-card-top {
+  gap: 4px;
+}
+
+.kanban-list--dense .kanban-card.finished .kanban-actions {
+  display: none;
 }
 
 /* ---- Queue board additions (queue redesign) ---- */

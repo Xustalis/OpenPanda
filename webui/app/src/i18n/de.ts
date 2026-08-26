@@ -93,6 +93,7 @@ const de: Messages = {
   'queue.priorityHint': 'Klicken zum Wechseln der Priorität (hoch → normal → niedrig)',
   'queue.dropHere': 'Zum Neuanordnen hier ablegen',
   'queue.openSession': 'Verknüpfte Session öffnen',
+  'queue.collapse': 'Einklappen',
 
   // Detail view
   'detail.back': 'Zurück zur Warteschlange',
@@ -145,6 +146,11 @@ const de: Messages = {
   'sessions.merging': 'Merge läuft…',
   'sessions.stop': 'Stopp',
   'sessions.stopped': 'Von dir gestoppt.',
+  'sessions.folderPick': 'Lokalen Ordner wählen',
+  'sessions.folderSelected': '📁 Ordner ausgewählt, {n} Dateien:',
+  'sessions.folderTruncated': '  … ({n} weitere Dateien)',
+  'sessions.folderFollowUp': 'Bearbeite meine Anfrage auf Basis der obigen Dateien:',
+  'sessions.projectPrefix': '[Projekt: {name}]',
 
   // Markdown-Darstellung (Assistenten-Antworten)
   'md.copy': 'Kopieren',
