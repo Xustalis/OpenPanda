@@ -308,7 +308,7 @@ func runSessionAsk(args []string) {
 			os.Exit(1)
 		}
 	case "plan":
-		printAskPlan(out)
+		printAskPlan(loc, out)
 	}
 }
 
@@ -321,9 +321,9 @@ func askSessionTurns(engine *askengine.Engine, history []entry.Turn, prompt, wor
 	lr := newStreamLineRenderer()
 	cb := askengine.StreamCallbacks{
 		OnDelta: func(chunk string) { lr.delta(chunk) },
-		OnStatus: func(note string) {
+		OnProgress: func(p askengine.Progress) {
 			if !lr.printed {
-				fmt.Printf("· %s\n", note)
+				fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(i18n.Detect(), p))
 			}
 		},
 	}

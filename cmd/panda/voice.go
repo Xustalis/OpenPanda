@@ -19,11 +19,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
 // voiceValueFlags enumerates `panda voice`'s value-carrying flags for
@@ -59,8 +61,9 @@ func runVoice(args []string) {
 	if err != nil {
 		fatal("load config", err)
 	}
+	loc := i18n.Detect()
 	if cfg.Model.BaseURL == "" {
-		fmt.Fprintln(os.Stderr, "panda: 语音入口需要模型端点（config 里的 model.base_url）")
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.T(loc, "cli.voice.needModel"))
 		os.Exit(2)
 	}
 
@@ -85,14 +88,14 @@ func runVoice(args []string) {
 	history := loadConvo()
 
 	if *cardPath == "" {
-		fmt.Fprintln(os.Stderr, "提示：没有能力卡片，只能回答，无法派发任务（--card）")
+		fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.voice.noCard"))
 	}
-	fmt.Println("语音入口已就绪，说唤醒词开始（Ctrl-C 退出）")
+	fmt.Println(i18n.T(loc, "cli.voice.ready"))
 
 	for {
 		t := entry.Listen(ctx, *listen)
 		if ctx.Err() != nil {
-			fmt.Println("\n已退出")
+			fmt.Println("\n" + i18n.T(loc, "cli.voice.exited"))
 			return
 		}
 		if !t.OK {
@@ -101,11 +104,11 @@ func runVoice(args []string) {
 			// on the next round, so it stops the loop instead of spinning on it,
 			// respawning python forever behind a silent prompt.
 			if !t.Timeout {
-				fmt.Fprintf(os.Stderr, "panda: 语音输入不可用：%s\n", firstLine(t.Err))
+				fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(loc, "cli.voice.unavailable", "err", firstLine(t.Err)))
 				os.Exit(1)
 			}
 			if *once {
-				fmt.Println("没有听到唤醒词")
+				fmt.Println(i18n.T(loc, "cli.voice.noWake"))
 				return
 			}
 			continue
@@ -117,7 +120,7 @@ func runVoice(args []string) {
 			}
 			continue
 		}
-		fmt.Printf("\n听到：%s\n", text)
+		fmt.Println("\n" + i18n.Tf(loc, "cli.voice.heard", "text", text))
 
 		out, err := engine.AskTurns(ctx, history, text, "", false, askengine.StreamCallbacks{})
 		if err != nil {
@@ -127,8 +130,8 @@ func runVoice(args []string) {
 			}
 			continue
 		}
-		history = appendConvo(history, text, out)
-		speakBack(ctx, out, *mute)
+		history = appendConvo(history, loc, text, out)
+		speakBack(ctx, loc, out, *mute)
 		if *once {
 			return
 		}
@@ -138,12 +141,12 @@ func runVoice(args []string) {
 // speakBack prints the outcome in full and speaks the short form. The two differ
 // on purpose: the terminal gets the board and the ids, the speaker gets the one
 // sentence a person standing in the room needs.
-func speakBack(ctx context.Context, out *askengine.Result, mute bool) {
+func speakBack(ctx context.Context, loc i18n.Locale, out *askengine.Result, mute bool) {
 	switch out.Kind {
 	case "answer":
 		fmt.Println(renderCliMd(out.Answer))
 	case "task":
-		fmt.Printf("任务 %s（%s）\n", out.TaskID, out.TaskState)
+		fmt.Println(i18n.Tf(loc, "cli.voice.task", "id", out.TaskID, "state", out.TaskState))
 		if out.OK {
 			fmt.Print(renderCliMd(out.Stdout))
 			if s := strings.TrimRight(out.Stdout, "\n"); s != "" && !strings.HasSuffix(out.Stdout, "\n") {
@@ -154,52 +157,52 @@ func speakBack(ctx context.Context, out *askengine.Result, mute bool) {
 		}
 	case "plan":
 		if !out.OK {
-			fmt.Fprintf(os.Stderr, "panda: 计划启动失败: %s\n", out.Stderr)
+			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(loc, "cli.plan.failed", "err", out.Stderr))
 		} else {
-			fmt.Printf("计划 %s（%d 个阶段）：%s\n", out.PlanID, len(out.PlanStages), out.PlanGoal)
+			fmt.Println(i18n.Tf(loc, "cli.plan.started",
+				"id", out.PlanID, "n", strconv.Itoa(len(out.PlanStages)), "goal", out.PlanGoal))
 			printPlanStages(out.PlanStages)
-			fmt.Printf("跟踪：panda plan show %s\n", out.PlanID)
+			fmt.Println(i18n.Tf(loc, "cli.plan.follow", "id", out.PlanID))
 		}
 	}
-	line := spokenReply(out)
+	line := spokenReply(loc, out)
 	if line == "" {
 		return
 	}
 	if mute {
-		fmt.Printf("（朗读）%s\n", line)
+		fmt.Println(i18n.Tf(loc, "cli.voice.muted", "line", line))
 		return
 	}
 	if err := entry.Speak(ctx, line); err != nil && ctx.Err() == nil {
 		// A missing TTS driver must not lose the reply: it is already printed
 		// above, so the note is all that is owed.
-		fmt.Fprintf(os.Stderr, "panda: 无法朗读（%s）\n", firstLine(err.Error()))
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(loc, "cli.voice.cannotSpeak", "err", firstLine(err.Error())))
 	}
 }
 
 // spokenReply is the sentence read aloud for one outcome.
-func spokenReply(out *askengine.Result) string {
+func spokenReply(loc i18n.Locale, out *askengine.Result) string {
 	switch out.Kind {
 	case "answer":
 		return head(strings.TrimSpace(out.Answer), maxSpeakChars)
 	case "task":
-		// review is the 待审批 state and the one outcome the user must hear about:
-		// nothing ran, and nothing will until they approve it.
+		// review is the pending-approval state and the one outcome the user must
+		// hear about: nothing ran, and nothing will until they approve it.
 		if out.TaskState == "review" {
-			return "这件事需要你审批，任务已经在待审批队列里等着了。"
+			return i18n.T(loc, "cli.voice.say.review")
 		}
 		if !out.OK {
-			return "任务没跑成功。" + head(firstLine(out.Stderr), 200)
+			return i18n.Tf(loc, "cli.voice.say.failed", "detail", head(firstLine(out.Stderr), 200))
 		}
 		if s := head(firstLine(out.Stdout), maxSpeakChars); s != "" {
-			return "做完了。" + s
+			return i18n.Tf(loc, "cli.voice.say.done", "detail", s)
 		}
-		return "做完了。"
+		return i18n.T(loc, "cli.voice.say.doneBare")
 	case "plan":
 		if !out.OK {
-			return "计划没能启动。"
+			return i18n.T(loc, "cli.voice.say.planFailed")
 		}
-		return fmt.Sprintf("这件事要跨机器做，我拆成了 %d 段，已经开始跑了，跑完再告诉你。",
-			len(out.PlanStages))
+		return i18n.Tf(loc, "cli.voice.say.plan", "n", strconv.Itoa(len(out.PlanStages)))
 	}
 	return ""
 }

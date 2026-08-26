@@ -20,6 +20,18 @@ const en: Messages = {
   'nav.group.personal': 'Personal',
   'nav.group.system': 'System',
 
+  // ⌘K command palette
+  'palette.trigger': 'Search…',
+  'palette.title': 'Command palette',
+  'palette.placeholder': 'Go to a page, switch theme or language…',
+  'palette.noMatch': 'No matching command.',
+  'palette.footMove': 'move',
+  'palette.footRun': 'open',
+  'palette.footClose': 'close',
+  'palette.group.go': 'Go to',
+  'palette.group.language': 'Language',
+  'palette.group.account': 'Connection',
+
   // Token gate
   'token.title': 'Connect to your node',
   'token.description':
@@ -109,6 +121,7 @@ const en: Messages = {
   // Sessions (chat) view
   'sessions.new': 'New chat',
   'sessions.railEmpty': 'No conversations yet.',
+  'sessions.threads': 'Conversations',
   'sessions.untitled': 'Untitled chat',
   'sessions.placeholder': 'Ask OpenPanda… (Enter to send, Shift+Enter for a new line)',
   'sessions.authorize': 'Authorize risky actions',
@@ -133,6 +146,12 @@ const en: Messages = {
   'sessions.worktreeChanges': 'Worktree changes',
   'sessions.merge': 'Merge into current branch',
   'sessions.merging': 'Merging…',
+  'sessions.stop': 'Stop',
+  'sessions.stopped': 'Stopped by you.',
+
+  // Markdown rendering (assistant replies)
+  'md.copy': 'Copy',
+  'md.copied': 'Copied',
 
   // Settings view
   'settings.title': 'Settings',

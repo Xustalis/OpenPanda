@@ -18,6 +18,18 @@ const ja: Messages = {
   'nav.group.personal': 'パーソナル',
   'nav.group.system': 'システム',
 
+  // ⌘K コマンドパレット
+  'palette.trigger': '検索…',
+  'palette.title': 'コマンドパレット',
+  'palette.placeholder': 'ページ移動、テーマや言語の切り替え…',
+  'palette.noMatch': '一致するコマンドがありません。',
+  'palette.footMove': '移動',
+  'palette.footRun': '開く',
+  'palette.footClose': '閉じる',
+  'palette.group.go': '移動',
+  'palette.group.language': '言語',
+  'palette.group.account': '接続',
+
   // Token gate
   'token.title': 'ノードに接続',
   'token.description': 'このノードの設定（config.yaml の network.panel_token）にあるパネルトークンを入力してください。',
@@ -106,6 +118,7 @@ const ja: Messages = {
   // Sessions (chat) view
   'sessions.new': '新しいチャット',
   'sessions.railEmpty': 'まだ会話はありません。',
+  'sessions.threads': '会話一覧',
   'sessions.untitled': '無題のチャット',
   'sessions.placeholder': 'OpenPanda に質問…（Enter で送信、Shift+Enter で改行）',
   'sessions.authorize': '高リスク操作を許可',
@@ -129,6 +142,12 @@ const ja: Messages = {
   'sessions.worktreeChanges': 'ワークツリーの変更',
   'sessions.merge': '現在のブランチへマージ',
   'sessions.merging': 'マージ中…',
+  'sessions.stop': '停止',
+  'sessions.stopped': '停止しました。',
+
+  // Markdown 描画（アシスタントの返答）
+  'md.copy': 'コピー',
+  'md.copied': 'コピーしました',
 
   // Settings view
   'settings.title': '設定',

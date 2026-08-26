@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/mdtext"
@@ -115,7 +116,7 @@ func runAsk(args []string) {
 	}
 	recordConvo := func(out *askengine.Result) {
 		if *continueConvo {
-			appendConvo(history, prompt, out)
+			appendConvo(history, loc, prompt, out)
 		}
 	}
 
@@ -137,7 +138,7 @@ func runAsk(args []string) {
 		return
 	}
 
-	out, streamed, err := askStreaming(engine, history, prompt, *authorize)
+	out, streamed, st, err := askStreaming(engine, history, prompt, *authorize, loc)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 		os.Exit(1)
@@ -161,17 +162,18 @@ func runAsk(args []string) {
 			os.Exit(1)
 		}
 	case "plan":
-		printAskPlan(out)
+		printAskPlan(loc, out)
 	}
+	printCost(st, out)
 }
 
 // printAskPlan renders a plan the entry model just started. A plan is
 // asynchronous — its stages are queued and will run on other machines — so the
 // useful output is the board plus how to follow it, not a result that does not
 // exist yet.
-func printAskPlan(out *askengine.Result) {
+func printAskPlan(loc i18n.Locale, out *askengine.Result) {
 	if !out.OK {
-		fmt.Fprintf(os.Stderr, "panda: 计划启动失败: %s\n", out.Stderr)
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(loc, "cli.plan.failed", "err", out.Stderr))
 		os.Exit(1)
 	}
 	fmt.Printf("plan:   %s\n", out.PlanID)
@@ -251,6 +253,12 @@ func (l *streamLineRenderer) flush() {
 	}
 }
 
+// pending is the incomplete line still in the buffer — what the model has
+// written since the last newline. It cannot be printed yet (inline Markdown is
+// rendered per whole line), but it can be previewed on the status line so a
+// long paragraph does not look like a stall.
+func (l *streamLineRenderer) pending() string { return l.buf.String() }
+
 // runAskStreamJSON is the headless streaming mode: one NDJSON event per line
 // (status / delta / result / error), consumable by scripts and other tools.
 func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt string, authorize bool, record func(*askengine.Result)) {
@@ -285,26 +293,59 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt str
 }
 
 // askStreaming runs one ask with live streaming on an interactive terminal —
-// answer lines print rendered as the model emits them (streamLineRenderer),
-// and tool progress prints as one-line notes before any text arrives.
-// Piped output stays clean: no callbacks are attached, and the full answer
-// prints once at the end. The streamed marker tells the caller to skip the
-// duplicate final print.
-func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt string, authorize bool) (*askengine.Result, bool, error) {
+// a spinner and elapsed clock while nothing has arrived yet, then answer lines
+// rendered as the model emits them (streamLineRenderer), with tool progress as
+// one-line notes before any text. Piped output stays clean: no callbacks are
+// attached, nothing is animated, and the full answer prints once at the end.
+// The streamed marker tells the caller to skip the duplicate final print; the
+// returned status line carries the run's numbers for a closing cost line.
+func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt string, authorize bool, loc i18n.Locale) (*askengine.Result, bool, *cliui.Status, error) {
+	st := newStatusLine(loc)
 	if !stdoutIsTTY() {
 		out, err := engine.AskTurns(context.Background(), history, prompt, "", authorize, askengine.StreamCallbacks{})
-		return out, false, err
+		return out, false, st, err
 	}
 	lr := newStreamLineRenderer()
 	cb := askengine.StreamCallbacks{
-		OnDelta: func(chunk string) { lr.delta(chunk) },
-		OnStatus: func(note string) {
-			if !lr.printed {
-				fmt.Printf("· %s\n", note)
+		OnDelta: func(chunk string) {
+			// Only a chunk that completes a line prints anything; the rest just
+			// fills the renderer's buffer, so the status line stays put — but
+			// the buffered tail is previewed there, because a paragraph that
+			// takes twenty seconds to reach its newline should still look like
+			// it is being written.
+			if strings.ContainsRune(chunk, '\n') {
+				st.Suspend(func() { lr.delta(chunk) })
+				st.Preview(lr.pending())
+				return
 			}
+			lr.delta(chunk)
+			st.Preview(lr.pending())
+		},
+		OnProgress: func(p askengine.Progress) {
+			note := progressNote(loc, p)
+			if lr.printed {
+				st.Note(note) // mid-answer: ephemeral, never interrupts the text
+				return
+			}
+			st.Log(pal().Muted(pal().MarkBullet() + " " + note))
 		},
 	}
+	st.Start(statusVerb(loc))
 	out, err := engine.AskTurns(context.Background(), history, prompt, "", authorize, cb)
+	st.Stop()
 	lr.flush()
-	return out, lr.printed, err
+	return out, lr.printed, st, err
+}
+
+// printCost closes an interactive ask with what it cost: elapsed time, and the
+// token count when the provider reports one. Dimmed, one line, TTY only — a
+// piped ask must stay byte-clean for whatever consumes it.
+func printCost(st *cliui.Status, out *askengine.Result) {
+	if st == nil || out == nil || !stdoutIsTTY() {
+		return
+	}
+	st.SetTokens(out.Tokens())
+	if s := st.Stats(); s != "" {
+		fmt.Println(pal().Muted(pal().MarkBullet() + " " + s))
+	}
 }

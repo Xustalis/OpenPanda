@@ -10,12 +10,21 @@ import (
 	"context"
 	"io"
 	"os"
-	"strings"
+	"strconv"
+
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
 type termSession struct {
 	history     []string // oldest first, capped (mirrors the unix session)
 	historyPath string   // "" = no persistence
+
+	// loc mirrors the unix session's field so the shared REPL code compiles
+	// unchanged. This editor has no in-place UI of its own to label — no
+	// Ctrl-R search line — so nothing reads it here.
+	loc i18n.Locale
+	// argHint likewise: a scanner line read has no Tab key to complete on.
+	argHint argResolver
 }
 
 func newTermSession() *termSession { return nil }
@@ -28,14 +37,7 @@ func (t *termSession) initHistory(path string) {
 	if err != nil {
 		return
 	}
-	for _, l := range strings.Split(string(data), "\n") {
-		if l = strings.TrimRight(l, "\r"); strings.TrimSpace(l) != "" {
-			t.history = append(t.history, l)
-		}
-	}
-	if n := len(t.history); n > 1000 {
-		t.history = t.history[n-1000:]
-	}
+	t.history = loadHistoryFile(data, 1000)
 }
 
 func (t *termSession) readLine(prompt string, completions []string) (string, error) {
@@ -60,3 +62,13 @@ func (t *termSession) watchInterrupt(ctx context.Context, cancel context.CancelF
 func (t *termSession) deliver(line string) bool { return false }
 
 func (t *termSession) restore() {}
+
+// termColumns reports the terminal width for the status line. No ioctl here, so
+// COLUMNS is the only hint available; 0 means "unknown, do not truncate".
+func termColumns() int {
+	n, err := strconv.Atoi(os.Getenv("COLUMNS"))
+	if err != nil || n < 20 {
+		return 0
+	}
+	return n
+}

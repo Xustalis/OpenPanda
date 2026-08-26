@@ -18,6 +18,18 @@ const de: Messages = {
   'nav.group.personal': 'Persönlich',
   'nav.group.system': 'System',
 
+  // ⌘K-Befehlspalette
+  'palette.trigger': 'Suchen…',
+  'palette.title': 'Befehlspalette',
+  'palette.placeholder': 'Seite öffnen, Design oder Sprache wechseln…',
+  'palette.noMatch': 'Kein passender Befehl.',
+  'palette.footMove': 'wechseln',
+  'palette.footRun': 'öffnen',
+  'palette.footClose': 'schließen',
+  'palette.group.go': 'Gehe zu',
+  'palette.group.language': 'Sprache',
+  'palette.group.account': 'Verbindung',
+
   // Token gate
   'token.title': 'Mit deinem Knoten verbinden',
   'token.description':
@@ -107,6 +119,7 @@ const de: Messages = {
   // Sessions (chat) view
   'sessions.new': 'Neuer Chat',
   'sessions.railEmpty': 'Noch keine Unterhaltungen.',
+  'sessions.threads': 'Unterhaltungen',
   'sessions.untitled': 'Unbenannter Chat',
   'sessions.placeholder': 'Frag OpenPanda… (Enter zum Senden, Shift+Enter für neue Zeile)',
   'sessions.authorize': 'Risikoreiche Aktionen erlauben',
@@ -130,6 +143,12 @@ const de: Messages = {
   'sessions.worktreeChanges': 'Worktree-Änderungen',
   'sessions.merge': 'In aktuellen Branch mergen',
   'sessions.merging': 'Merge läuft…',
+  'sessions.stop': 'Stopp',
+  'sessions.stopped': 'Von dir gestoppt.',
+
+  // Markdown-Darstellung (Assistenten-Antworten)
+  'md.copy': 'Kopieren',
+  'md.copied': 'Kopiert',
 
   // Settings view
   'settings.title': 'Einstellungen',

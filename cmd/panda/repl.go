@@ -78,20 +78,40 @@ type repl struct {
 	// and outcome accumulate here so follow-up questions keep context — the
 	// multi-turn UX users expect from a chat, without /resume-ing a session.
 	convo []entry.Turn
+	// lastFooter is the footer as last printed; an identical one is skipped
+	// (printFooter runs before every prompt).
+	lastFooter string
+	// Session cost, accumulated across every ask this run and reported by
+	// /cost. The provider reports zero tokens for endpoints that send no
+	// usage block; the turn count and model time are always meaningful.
+	costTurns int
+	costIn    int64
+	costOut   int64
+	costWall  time.Duration
 	// watcher bookkeeping (repl_watch.go): asking=true suppresses
 	// completion notifications while an inline ask is mid-flight (it prints
 	// its own result); baseline is the last-seen task state fingerprint.
 	watchMu  sync.Mutex
 	asking   bool
 	baseline map[string]string
+
+	// Tab-completion caches (repl_complete.go). The line editor recomputes
+	// its candidate menu on every keystroke, so the state lookups behind
+	// argument completion are memoized for a couple of seconds.
+	taskIDCache  argCache
+	sessionCache argCache
+	projectCache argCache
+	memoryCache  argCache
 }
 
-// replCmd is one slash command: a name, the i18n key of its help line, and
-// its handler (arg is everything after the command name, trimmed).
+// replCmd is one slash command: a name, the help group it is listed under
+// (see repl_help.go), the i18n key of its help line, and its handler (arg is
+// everything after the command name, trimmed).
 type replCmd struct {
-	name string
-	help string
-	run  func(r *repl, arg string)
+	name  string
+	group string
+	help  string
+	run   func(r *repl, arg string)
 }
 
 // replCommands is the dispatch table in help-display order. Populated in
@@ -100,30 +120,35 @@ var replCommands []replCmd
 
 func init() {
 	replCommands = []replCmd{
-		{"ask", "cmd.ask", (*repl).cmdAsk},
-		{"new", "cmd.new", (*repl).cmdNew},
-		{"history", "cmd.history", (*repl).cmdHistory},
-		{"tasks", "cmd.tasks", (*repl).cmdTasks},
-		{"task", "cmd.task", (*repl).cmdTask},
-		{"cancel", "cmd.cancel", (*repl).cmdCancel},
-		{"approve", "cmd.approve", (*repl).cmdApprove},
-		{"reject", "cmd.reject", (*repl).cmdReject},
-		{"logs", "cmd.logs", (*repl).cmdLogs},
-		{"sessions", "cmd.sessions", (*repl).cmdSessions},
-		{"resume", "cmd.resume", (*repl).cmdResume},
-		{"memory", "cmd.memory", (*repl).cmdMemory},
-		{"projects", "cmd.projects", (*repl).cmdProjects},
-		{"project", "cmd.project", (*repl).cmdProject},
-		{"nodes", "cmd.nodes", (*repl).cmdNodes},
-		{"agents", "cmd.agents", (*repl).cmdAgents},
-		{"config", "cmd.config", (*repl).cmdConfig},
-		{"context", "cmd.context", (*repl).cmdContext},
-		{"policy", "cmd.policy", (*repl).cmdPolicy},
-		{"web", "cmd.web", (*repl).cmdWeb},
-		{"authorize", "cmd.authorize", (*repl).cmdAuthorize},
-		{"lang", "cmd.lang", (*repl).cmdLang},
-		{"help", "cmd.help", (*repl).cmdHelp},
-		{"quit", "cmd.quit", (*repl).cmdQuit},
+		{"ask", "chat", "cmd.ask", (*repl).cmdAsk},
+		{"new", "chat", "cmd.new", (*repl).cmdNew},
+		{"history", "chat", "cmd.history", (*repl).cmdHistory},
+		{"export", "chat", "cmd.export", (*repl).cmdExport},
+		{"cost", "chat", "cmd.cost", (*repl).cmdCost},
+		{"model", "chat", "cmd.model", (*repl).cmdModel},
+		{"sessions", "chat", "cmd.sessions", (*repl).cmdSessions},
+		{"resume", "chat", "cmd.resume", (*repl).cmdResume},
+		{"clear", "chat", "cmd.clear", (*repl).cmdClear},
+		{"tasks", "tasks", "cmd.tasks", (*repl).cmdTasks},
+		{"task", "tasks", "cmd.task", (*repl).cmdTask},
+		{"cancel", "tasks", "cmd.cancel", (*repl).cmdCancel},
+		{"approve", "tasks", "cmd.approve", (*repl).cmdApprove},
+		{"reject", "tasks", "cmd.reject", (*repl).cmdReject},
+		{"logs", "tasks", "cmd.logs", (*repl).cmdLogs},
+		{"memory", "memory", "cmd.memory", (*repl).cmdMemory},
+		{"projects", "memory", "cmd.projects", (*repl).cmdProjects},
+		{"project", "memory", "cmd.project", (*repl).cmdProject},
+		{"context", "memory", "cmd.context", (*repl).cmdContext},
+		{"nodes", "system", "cmd.nodes", (*repl).cmdNodes},
+		{"agents", "system", "cmd.agents", (*repl).cmdAgents},
+		{"config", "system", "cmd.config", (*repl).cmdConfig},
+		{"policy", "system", "cmd.policy", (*repl).cmdPolicy},
+		{"doctor", "system", "cmd.doctor", (*repl).cmdDoctor},
+		{"web", "system", "cmd.web", (*repl).cmdWeb},
+		{"authorize", "system", "cmd.authorize", (*repl).cmdAuthorize},
+		{"lang", "system", "cmd.lang", (*repl).cmdLang},
+		{"help", "system", "cmd.help", (*repl).cmdHelp},
+		{"quit", "system", "cmd.quit", (*repl).cmdQuit},
 	}
 }
 
@@ -168,9 +193,13 @@ func runRepl(args []string) {
 	}
 	if interactive {
 		r.term = newTermSession()
-		if r.term != nil && cliStateDir() != "" {
-			_ = os.MkdirAll(cliStateDir(), 0o700)
-			r.term.initHistory(filepath.Join(cliStateDir(), "history"))
+		if r.term != nil {
+			r.term.loc = r.loc               // the editor labels its own search line
+			r.term.argHint = r.argCandidates // …and completes ids, not just command names
+			if cliStateDir() != "" {
+				_ = os.MkdirAll(cliStateDir(), 0o700)
+				r.term.initHistory(filepath.Join(cliStateDir(), "history"))
+			}
 		}
 	}
 
@@ -311,54 +340,46 @@ func (r *repl) printBanner() {
 			model += " · " + i18n.T(r.loc, "repl.banner.noKey")
 		}
 	}
-	color := func(code, s string) string {
-		if !stdoutIsTTY() {
-			return s
-		}
-		return "\x1b[" + code + "m" + s + "\x1b[0m"
-	}
-	sep := " · " // hint separator; ASCII fallback for non-unicode terminals
-	if !termSupportsUnicode() {
-		sep = " | "
-	}
+	p := pal()
+	sep := p.Separator() // hint separator; ASCII fallback for non-unicode terminals
 	fmt.Println()
 	for _, line := range figlet("OpenPanda") {
-		fmt.Println(color("32", line)) // green wordmark, like claude-code's art
+		fmt.Println(p.Accent(line)) // brand wordmark, like claude-code's art
 	}
-	fmt.Println(color("1", fmt.Sprintf("  %s v%s", i18n.T(r.loc, "repl.banner.title"), version)))
-	fmt.Println(color("36", "  "+i18n.Tf(r.loc, "repl.banner.node", "node", r.cfg.Node.Name, "model", model)))
-	fmt.Println(color("2", "  "+i18n.Tf(r.loc, "repl.banner.dir", "dir", r.cfg.Storage.WorkPath)))
+	fmt.Println(p.Bold(fmt.Sprintf("  %s v%s", i18n.T(r.loc, "repl.banner.title"), version)))
+	fmt.Println(p.Info("  " + i18n.Tf(r.loc, "repl.banner.node", "node", r.cfg.Node.Name, "model", model)))
+	fmt.Println(p.Muted("  " + i18n.Tf(r.loc, "repl.banner.dir", "dir", r.cfg.Storage.WorkPath)))
 	fmt.Println()
-	fmt.Println(color("2", "  "+i18n.T(r.loc, "repl.banner.hint1")+sep+
-		i18n.T(r.loc, "repl.banner.hint2")+sep+i18n.T(r.loc, "repl.banner.hint3")))
+	fmt.Println(p.Muted("  " + i18n.T(r.loc, "repl.banner.hint1") + sep +
+		i18n.T(r.loc, "repl.banner.hint2") + sep + i18n.T(r.loc, "repl.banner.hint3")))
 	if isLinuxConsole() {
-		fmt.Println(color("33", "  ! bare console font has no CJK glyphs; answers are forced to English."))
-		fmt.Println(color("33", "    for Chinese on this screen: sudo apt install fbterm fonts-wqy-zenhei && fbterm"))
+		fmt.Println(p.Warn("  ! bare console font has no CJK glyphs; answers are forced to English."))
+		fmt.Println(p.Warn("    for Chinese on this screen: sudo apt install fbterm fonts-wqy-zenhei && fbterm"))
 	}
 	fmt.Println()
 }
 
 // printFooter prints the status line above the prompt: node name, approval
 // mode (color-coded), authorization state, and the active session.
+//
+// It prints only when something in it changed. Reprinting an identical line
+// before every prompt was pure noise — three quarters of a long session's
+// scrollback was the same footer — while a change (an /auth toggle, a /resume,
+// a turn added to the conversation) is exactly what the user needs to see.
 func (r *repl) printFooter() {
-	color := func(code, s string) string {
-		if !stdoutIsTTY() {
-			return s
-		}
-		return "\x1b[" + code + "m" + s + "\x1b[0m"
-	}
+	p := pal()
 	mode := r.cfg.Approval.NormalizedMode()
 	switch mode {
 	case config.ApprovalModeAlways:
-		mode = color("31", mode) // red
+		mode = p.Danger(mode)
 	case config.ApprovalModeOnRequest:
-		mode = color("33", mode) // yellow
+		mode = p.Warn(mode)
 	default:
-		mode = color("32", mode) // green
+		mode = p.Success(mode)
 	}
-	authz := color("2", i18n.T(r.loc, "repl.footer.authz.off"))
+	authz := p.Muted(i18n.T(r.loc, "repl.footer.authz.off"))
 	if r.authorize {
-		authz = color("31", i18n.T(r.loc, "repl.footer.authz.on"))
+		authz = p.Danger(i18n.T(r.loc, "repl.footer.authz.on"))
 	}
 	sess := "-"
 	if r.activeSess != "" {
@@ -366,16 +387,22 @@ func (r *repl) printFooter() {
 	} else if n := len(r.convo) / 2; n > 0 {
 		sess = fmt.Sprintf("chat(%d turns)", n)
 	}
-	fmt.Println(color("2", fmt.Sprintf("%s:%s  %s:%s  %s:%s  %s:%s",
+	line := p.Muted(fmt.Sprintf("%s:%s  %s:%s  %s:%s  %s:%s",
 		i18n.T(r.loc, "repl.footer.node"), r.cfg.Node.Name,
 		i18n.T(r.loc, "repl.footer.approval"), mode,
 		i18n.T(r.loc, "repl.footer.authz"), authz,
-		i18n.T(r.loc, "repl.footer.session"), sess)))
+		i18n.T(r.loc, "repl.footer.session"), sess))
+	if line == r.lastFooter {
+		return
+	}
+	r.lastFooter = line
+	fmt.Println(line)
 }
 
 // dispatch routes one input line: slash commands to the table, `!!` repeats
-// the previous ask (the shell habit), anything else goes to the ask engine.
-// Unknown commands name the fix (/help), never exit.
+// the previous ask (the shell habit), `!cmd` runs a shell command in the work
+// dir, anything else goes to the ask engine (with @file references expanded
+// first). Unknown commands name the closest real one, never exit.
 func (r *repl) dispatch(line string) {
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -383,6 +410,10 @@ func (r *repl) dispatch(line string) {
 	}
 	if line == "!!" {
 		r.repeatLast()
+		return
+	}
+	if strings.HasPrefix(line, "!") {
+		r.runShell(strings.TrimSpace(line[1:]))
 		return
 	}
 	if !strings.HasPrefix(line, "/") {
@@ -401,6 +432,9 @@ func (r *repl) dispatch(line string) {
 		}
 	}
 	fmt.Println(i18n.Tf(r.loc, "repl.unknown", "cmd", "/"+name))
+	if s := suggest(name, commandNames()); s != "" {
+		fmt.Println("  " + i18n.Tf(r.loc, "repl.didyoumean", "cmd", "/"+s))
+	}
 }
 
 // ask runs one prompt through the unified entry engine and prints the
@@ -415,6 +449,9 @@ func (r *repl) ask(text string) {
 		fmt.Println(i18n.T(r.loc, "repl.ask.noEngine"))
 		return
 	}
+	// @path references become inline file blocks before the prompt leaves the
+	// REPL, so "explain @main.go" works without the user pasting the file.
+	text = r.expandFileRefs(text)
 
 	// Session-aware context (mirrors panel sessionAsk); bare mode replays
 	// the in-memory conversation instead.
@@ -440,8 +477,14 @@ func (r *repl) ask(text string) {
 		history = append(history, r.convo...)
 	}
 
+	// The live status line: a spinner, the verb, elapsed time, and the interrupt
+	// hint, repainted in place. Streamed answer text prints *through* it (Suspend
+	// erases the line, prints, repaints below), so the wait is never silent.
+	st := newStatusLine(r.loc)
 	if r.interactive {
-		fmt.Println(i18n.T(r.loc, "repl.ask.busy"))
+		st.Hint(i18n.T(r.loc, "cli.status.interrupt"))
+		st.Start(statusVerb(r.loc))
+		defer st.Stop()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -449,11 +492,29 @@ func (r *repl) ask(text string) {
 	lr := newStreamLineRenderer()
 	cb := askengine.StreamCallbacks{}
 	if stdoutIsTTY() {
-		cb.OnDelta = func(chunk string) { lr.delta(chunk) }
-		cb.OnStatus = func(note string) {
-			if !lr.printed {
-				fmt.Printf("· %s\n", note)
+		cb.OnDelta = func(chunk string) {
+			// A chunk without a newline only fills the renderer's buffer — no
+			// output, so no need to disturb the status line for it. The buffered
+			// tail is previewed on that line instead, so a long paragraph reads
+			// as "being written" rather than "hung".
+			if strings.ContainsRune(chunk, '\n') {
+				st.Suspend(func() { lr.delta(chunk) })
+				st.Preview(lr.pending())
+				return
 			}
+			lr.delta(chunk)
+			st.Preview(lr.pending())
+		}
+		cb.OnProgress = func(p askengine.Progress) {
+			// Before any answer text a progress note is worth keeping on screen
+			// (it explains a long wait); once the answer is streaming, the same
+			// note would interrupt it, so it stays ephemeral in the status line.
+			note := progressNote(r.loc, p)
+			if lr.printed {
+				st.Note(note)
+				return
+			}
+			st.Log(pal().Muted(pal().MarkBullet() + " " + note))
 		}
 	}
 	delivered := func() bool { return lr.printed }
@@ -477,6 +538,7 @@ func (r *repl) ask(text string) {
 		r.term.watchInterrupt(ctx, cancel, i18n.T(r.loc, "repl.interrupted"))
 	}
 	<-got
+	st.Stop() // erase the spinner before anything else prints
 	lr.flush()
 	// Absorb whatever terminal states this ask produced into the watcher's
 	// baseline so the completion is not notified twice (the ask prints it).
@@ -531,13 +593,23 @@ func (r *repl) ask(text string) {
 		// A plan does not finish inside the ask: its stages are queued and will
 		// run on other machines. Print the board and how to follow it.
 		if !out.OK {
-			fmt.Fprintf(os.Stderr, "panda: 计划启动失败: %s\n", out.Stderr)
+			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(r.loc, "cli.plan.failed", "err", out.Stderr))
 			break
 		}
-		fmt.Printf("计划 %s（%d 个阶段）：%s\n", out.PlanID, len(out.PlanStages), out.PlanGoal)
+		fmt.Println(i18n.Tf(r.loc, "cli.plan.started",
+			"id", out.PlanID, "n", strconv.Itoa(len(out.PlanStages)), "goal", out.PlanGoal))
 		printPlanStages(out.PlanStages)
-		fmt.Printf("跟踪：panda plan show %s\n", out.PlanID)
+		fmt.Println(i18n.Tf(r.loc, "cli.plan.follow", "id", out.PlanID))
 	}
+
+	// The closing line: what this turn cost (elapsed, and tokens when the
+	// provider reports them), and the same numbers added to the session total
+	// that /cost reports.
+	r.costTurns++
+	r.costIn += out.InputTokens
+	r.costOut += out.OutputTokens
+	r.costWall += out.Latency
+	printCost(st, out)
 }
 
 // repeatLast re-runs the previous user ask (`!!`) — the shell habit for
@@ -570,7 +642,7 @@ func (r *repl) repeatLast() {
 // persistence to the state dir, so the next REPL and `ask --continue`
 // both resume it.
 func (r *repl) rememberTurn(text string, out *askengine.Result) {
-	r.convo = appendConvo(r.convo, text, out)
+	r.convo = appendConvo(r.convo, r.loc, text, out)
 }
 
 // cmdNew clears the bare-mode conversation (/new) — the "new chat" of a
@@ -1202,50 +1274,14 @@ func (r *repl) cmdLang(arg string) {
 	for _, loc := range i18n.Locales {
 		if strings.EqualFold(string(loc), strings.TrimSpace(arg)) {
 			r.loc = loc
+			if r.term != nil {
+				r.term.loc = loc
+			}
 			fmt.Println(i18n.Tf(r.loc, "repl.lang.set", "lang", i18n.LocaleNames[loc]))
 			return
 		}
 	}
 	fmt.Println(i18n.Tf(r.loc, "repl.lang.bad", "lang", arg, "list", localeCodes()))
-}
-
-// cmdHelp renders the full command reference through the user's pager
-// ($PAGER, falling back to less); when neither is available or the session
-// is piped, it prints directly.
-func (r *repl) cmdHelp(arg string) {
-	var b strings.Builder
-	b.WriteString(i18n.T(r.loc, "repl.help") + ":\n\n")
-	for _, c := range replCommands {
-		fmt.Fprintf(&b, "  /%-10s %s\n", c.name, i18n.T(r.loc, c.help))
-	}
-	b.WriteString("\n" + i18n.T(r.loc, "repl.help.keys") + "\n")
-	b.WriteString("  " + i18n.T(r.loc, "repl.help.esc") + "\n")
-	b.WriteString("  " + i18n.T(r.loc, "repl.help.ctrlc") + "\n")
-	b.WriteString("  " + i18n.T(r.loc, "repl.help.ctrlc2") + "\n")
-	b.WriteString("  " + i18n.T(r.loc, "repl.help.tab") + "\n")
-	text := b.String()
-
-	if !r.interactive || !stdoutIsTTY() {
-		fmt.Print(text)
-		return
-	}
-	pager := os.Getenv("PAGER")
-	if pager == "" {
-		if _, err := exec.LookPath("less"); err == nil {
-			pager = "less"
-		}
-	}
-	if pager == "" {
-		fmt.Print(text)
-		return
-	}
-	cmd := exec.Command(pager)
-	cmd.Stdin = strings.NewReader(text)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Print(text)
-	}
 }
 
 // cmdQuit exits the loop; defers close the db, engine, and web server.

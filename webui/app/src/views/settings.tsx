@@ -16,7 +16,7 @@ import { onThemeChange, setTheme, theme } from '../theme'
 type ApiType = 'anthropic' | 'openai'
 
 const EXAMPLES: Record<ApiType, { base: string; model: string }> = {
-  anthropic: { base: 'https://api.anthropic.com', model: 'claude-sonnet-4-5' },
+  anthropic: { base: 'https://api.anthropic.com', model: 'claude-sonnet-5' },
   openai: { base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
 }
 

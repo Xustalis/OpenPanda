@@ -21,6 +21,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -43,14 +44,14 @@ func runUninstall(args []string) {
 	backupOnly := fs.Bool("backup-only", false, "write the backup zip but delete nothing")
 	fs.Parse(args)
 
+	loc := i18n.Detect()
+
 	if *purge && *backupOnly {
-		fatal("uninstall", fmt.Errorf("--purge 与 --backup-only 互斥：一个删除用户数据，一个不删除任何内容"))
+		fatal("uninstall", errors.New(i18n.T(loc, "cli.uninstall.purgeConflict")))
 	}
 	if *backupOnly && *noBackup {
-		fatal("uninstall", fmt.Errorf("--backup-only 需要备份：请去掉 --no-backup"))
+		fatal("uninstall", errors.New(i18n.T(loc, "cli.uninstall.backupConflict")))
 	}
-
-	loc := i18n.Detect()
 
 	// Best-effort config: an unreadable config must not block removing the
 	// binary and PATH entries — the plan simply lists no storage items.

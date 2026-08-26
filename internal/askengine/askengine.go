@@ -129,6 +129,22 @@ type Result struct {
 	PlanID     string
 	PlanGoal   string
 	PlanStages []core.Task
+
+	// Cost of this ask, as reported by the entry model's provider (zero for
+	// providers that report no usage). The CLI shows them on its closing status
+	// line; the panel bills them through RecordDelegationMetric.
+	InputTokens  int64
+	OutputTokens int64
+	Latency      time.Duration
+}
+
+// Tokens is the ask's total token count (input + output), 0 when the provider
+// reports no usage.
+func (r *Result) Tokens() int64 {
+	if r == nil {
+		return 0
+	}
+	return r.InputTokens + r.OutputTokens
 }
 
 // SetMCPCommand hot-swaps the stdio MCP server at runtime (the settings
@@ -343,10 +359,53 @@ func (e *Engine) MaintainPeers(ctx context.Context) {
 
 // StreamCallbacks receives live progress while an ask converges. OnDelta
 // delivers answer text incrementally (streaming); OnStatus delivers one-line
-// progress notes (tool calls, task submission).
+// progress notes (tool calls, task submission) as ready-made English prose,
+// and OnProgress delivers the same events structured, for a caller that owns a
+// locale and wants to phrase them itself. Set whichever fits — OnProgress wins
+// when both are present.
 type StreamCallbacks struct {
-	OnDelta  func(text string)
-	OnStatus func(text string)
+	OnDelta    func(text string)
+	OnStatus   func(text string)
+	OnProgress func(Progress)
+}
+
+// ProgressKind names what the engine is about to do.
+type ProgressKind string
+
+const (
+	ProgressTask ProgressKind = "task" // submitting a classified task
+	ProgressPlan ProgressKind = "plan" // starting a multi-stage plan
+	ProgressTool ProgressKind = "tool" // running a tool
+)
+
+// Progress is one structured progress event: the action, and the name of what
+// it acts on (a task title, a plan goal, a tool name). The engine deliberately
+// holds no locale — the CLI translates these through internal/i18n and the
+// panel through the browser's language, from the same event.
+type Progress struct {
+	Kind ProgressKind
+	Name string
+}
+
+// progress reports one event to whichever callback the caller supplied. The
+// English prose lives here, in one place, so it stays a fallback rather than
+// the only phrasing available.
+func (cb StreamCallbacks) progress(kind ProgressKind, name string) {
+	if cb.OnProgress != nil {
+		cb.OnProgress(Progress{Kind: kind, Name: name})
+		return
+	}
+	if cb.OnStatus == nil {
+		return
+	}
+	switch kind {
+	case ProgressTask:
+		cb.OnStatus(fmt.Sprintf("submitting task: %s", name))
+	case ProgressPlan:
+		cb.OnStatus(fmt.Sprintf("starting plan: %s", name))
+	case ProgressTool:
+		cb.OnStatus(fmt.Sprintf("running tool %s…", name))
+	}
 }
 
 // Ask runs one prompt through the unified entry model. A tool_call intent is
@@ -371,6 +430,14 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	usageBefore := client.Usage()
 	askStart := time.Now()
 	defer func() {
+		// Same numbers, two consumers: the result carries them back to the
+		// caller (the CLI's closing "1.8s · 1.2k tokens" line) and the metrics
+		// row bills them.
+		if res != nil {
+			d := client.Usage().Sub(usageBefore)
+			res.InputTokens, res.OutputTokens = d.InputTokens, d.OutputTokens
+			res.Latency = time.Since(askStart)
+		}
 		e.recordEntryUsage(context.WithoutCancel(ctx), res, client, usageBefore, time.Since(askStart))
 	}()
 
@@ -424,19 +491,13 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 			if e.sched == nil {
 				return nil, fmt.Errorf("task output requires a capability card (engine built without CardPath)")
 			}
-			if cb.OnStatus != nil {
-				cb.OnStatus(fmt.Sprintf("submitting task: %s", out.Task.Title))
-			}
+			cb.progress(ProgressTask, out.Task.Title)
 			return e.submitTask(out.Task, prompt, authorize, workDir), nil
 		case entry.KindPlan:
-			if cb.OnStatus != nil {
-				cb.OnStatus(fmt.Sprintf("starting plan: %s", out.Plan.Goal))
-			}
+			cb.progress(ProgressPlan, out.Plan.Goal)
 			return e.startClassifiedPlan(ctx, out.Plan, authorize)
 		case entry.KindToolCall:
-			if cb.OnStatus != nil {
-				cb.OnStatus(fmt.Sprintf("running tool %s…", out.Tool.Tool))
-			}
+			cb.progress(ProgressTool, out.Tool.Tool)
 			// Execute against the same registry snapshot classification saw:
 			// a mid-ask SetMCPCommand swap would otherwise make the model's
 			// tool call hit a registry that no longer knows it.
@@ -466,18 +527,14 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 		if e.sched == nil {
 			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议任务「%s」，但当前未加载能力卡片，无法提交。", maxRounds, final.Task.Title)}, nil
 		}
-		if cb.OnStatus != nil {
-			cb.OnStatus(fmt.Sprintf("submitting task: %s", final.Task.Title))
-		}
+		cb.progress(ProgressTask, final.Task.Title)
 		return e.submitTask(final.Task, prompt, authorize, workDir), nil
 	}
 	if final.Kind == entry.KindPlan {
 		if e.sched == nil {
 			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议多阶段计划「%s」，但当前未加载能力卡片，无法启动。", maxRounds, final.Plan.Goal)}, nil
 		}
-		if cb.OnStatus != nil {
-			cb.OnStatus(fmt.Sprintf("starting plan: %s", final.Plan.Goal))
-		}
+		cb.progress(ProgressPlan, final.Plan.Goal)
 		return e.startClassifiedPlan(ctx, final.Plan, authorize)
 	}
 	return &Result{Kind: "answer", Answer: final.Answer}, nil

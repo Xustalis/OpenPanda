@@ -20,6 +20,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/artifact"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/log"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -139,8 +140,14 @@ func main() {
 		default:
 			// A bare unknown word must not silently fall through (P1-25):
 			// "panda statsu" (a typo) should neither start the REPL nor a
-			// resident daemon — name the fix instead.
-			fmt.Fprintf(os.Stderr, "panda: unknown subcommand %q\n", sub)
+			// resident daemon — name the fix instead. When the word is one
+			// typo away from a real subcommand, say which: that is the whole
+			// difference between a dead end and a correction.
+			p := palFor(os.Stderr)
+			fmt.Fprintf(os.Stderr, "panda: %s %s\n", i18n.T(i18n.Detect(), "cli.unknownSub"), p.Command(sub))
+			if s := suggest(sub, subcommandNames()); s != "" {
+				fmt.Fprintf(os.Stderr, "  %s\n\n", i18n.Tf(i18n.Detect(), "repl.didyoumean", "cmd", p.Command(s)))
+			}
 			printUsage(os.Stderr)
 			os.Exit(2)
 		}
@@ -148,6 +155,20 @@ func main() {
 	// No subcommand: the interactive REPL is the product's front door;
 	// the kernel is an explicit `panda daemon` away.
 	runRepl(args)
+}
+
+// subcommandNames lists every accepted subcommand for typo suggestions. It is
+// the switch in main() written out once more, deliberately: the switch is the
+// dispatcher and must stay a switch (aliases share a case), while this is the
+// vocabulary, and a name missing here costs a suggestion, not a command.
+func subcommandNames() []string {
+	return []string{
+		"daemon", "serve", "ask", "repl", "chat", "web", "voice",
+		"install", "uninstall", "doctor", "status", "nodes", "queue",
+		"task", "plan", "cancel", "approve", "reject", "logs", "skill",
+		"reminder", "detect", "card", "init", "metrics", "audit", "session",
+		"sessions", "memory", "config", "agents", "project", "version", "help",
+	}
 }
 
 // stripJSONFlag removes every --json occurrence from args (it may sit before
@@ -375,7 +396,7 @@ func runDaemon(args []string) {
 		OnAvailable: func(v string) {
 			logger.Info("update available",
 				"version", v,
-				"hint", "open the web console (系统 → 更新) to review the changelog and apply")
+				"hint", "open the web console (System → Updates) to review the changelog and apply")
 		},
 	})
 	updateNotice.StartAutoCheck(ctx, 6*time.Hour)
@@ -498,65 +519,69 @@ func fatal(step string, err error) {
 }
 
 // printUsage lists the subcommands as a grouped command tree — `panda help`
-// should orient a first-time user, not just enumerate words.
+// should orient a first-time user, not just enumerate words. Every line goes
+// through styleHelpLine, which tints headings and the typeable part of each
+// entry (see ui.go); on a non-colour stream it is the same plain text as before.
 func printUsage(w *os.File) {
-	fmt.Fprintln(w, "panda — personal task orchestration across your devices")
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "runtime:")
-	fmt.Fprintln(w, "  (no subcommand)        interactive REPL — the operator's seat (same as `panda repl`)")
-	fmt.Fprintln(w, "  daemon                 run the node kernel headless (registers, listens, delegates)")
-	fmt.Fprintln(w, "  nodes                  show current and known nodes (same data as status)")
-	fmt.Fprintln(w, "  ask <text>             unified entry: classify → answer or execute a task")
-	fmt.Fprintln(w, "                         (--output-format json|stream-json for headless use)")
-	fmt.Fprintln(w, "  repl                   interactive shell (banner, /help pager, Tab completion)")
-	fmt.Fprintln(w, "  web                    start the web console (browser opens, auto-login)")
-	fmt.Fprintln(w, "  voice [--once] [--mute] hands-free entry: wake word → ask → spoken reply")
-	fmt.Fprintln(w, "                         (needs extensions/voice sidecars)")
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "sessions:")
-	fmt.Fprintln(w, "  session list|new|show|rm|ask|diff|merge   chat sessions over git worktrees")
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "tasks:")
-	fmt.Fprintln(w, "  queue [--state s] [--project p] [--watch] the task board (--watch: live view)")
-	fmt.Fprintln(w, "  task <id>                                 show one task + timeline")
-	fmt.Fprintln(w, "  task add --title T [--prompt P] [--priority low|medium|normal|high|critical]")
-	fmt.Fprintln(w, "           [--project p] [--authorize]      enqueue a task (needs --card)")
-	fmt.Fprintln(w, "  task priority <id> <level>                change a task's priority")
-	fmt.Fprintln(w, "  task move <id> <seq>                      reorder the drag-sort queue")
-	fmt.Fprintln(w, "  cancel|approve|reject|logs <id>           one-shot task actions (also")
-	fmt.Fprintln(w, "                                            usable as `panda task <verb>`)")
-	fmt.Fprintln(w, "  plan run <file.yaml> [--dry-run]          start a multi-stage, multi-device")
-	fmt.Fprintln(w, "                                            pipeline (`plan example` to start)")
-	fmt.Fprintln(w, "  plan show <plan-id>                       stage states + artifact wiring")
-	fmt.Fprintln(w, "  project list|create                       project memories")
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "memory:")
-	fmt.Fprintln(w, "  memory list|get|set|rm [name]             user/memory/dreams/topic:<n>/")
-	fmt.Fprintln(w, "                                            project:<n>/daily:<date> files")
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "settings:")
-	fmt.Fprintln(w, "  config model|mcp|limits|routing|injection|approval get|set|test")
-	fmt.Fprintln(w, "                                            view/edit config.yaml (comments kept)")
-	fmt.Fprintln(w, "  agents [test <name>]                      probe installed agent CLIs")
-	fmt.Fprintln(w, "  reminder list|add|rm                      scheduled reminders")
-	fmt.Fprintln(w, "  skill list|approve|reject                 agent skill management")
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "observability:")
-	fmt.Fprintln(w, "  status                                    node identity + capability directory")
-	fmt.Fprintln(w, "  metrics [--csv]                           delegation metrics")
-	fmt.Fprintln(w, "  audit verify [--task id]                  verify the hash chain")
-	fmt.Fprintln(w, "  audit entries [--task id]                 print audit trail rows")
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "setup:")
-	fmt.Fprintln(w, "  install|uninstall                         put panda on PATH / remove it")
-	fmt.Fprintln(w, "  init [--defaults|--non-interactive]      first-run setup (one question; flags = zero prompts)")
-	fmt.Fprintln(w, "  doctor                                    post-install self-check")
-	fmt.Fprintln(w, "  detect                                    scan hardware → capabilities.yaml draft")
-	fmt.Fprintln(w, "  card show|rescan|edit|set                 this node's capability card: read it,")
-	fmt.Fprintln(w, "                                            re-scan hardware + agent CLIs (--write),")
-	fmt.Fprintln(w, "                                            edit it in $EDITOR, or set one field")
-	fmt.Fprintln(w, "  version|help                              version / this help")
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "global flags: --config <path>, --card <path>, --mcp <cmd>, --json")
-	fmt.Fprintln(w, "              (before or after the subcommand; --json = JSON output)")
+	p := palFor(w)
+	line := func(s string) { fmt.Fprintln(w, styleHelpLine(p, s)) }
+	line("panda — personal task orchestration across your devices")
+	line("")
+	line("runtime:")
+	line("  (no subcommand)        interactive REPL — the operator's seat (same as `panda repl`)")
+	line("  daemon                 run the node kernel headless (registers, listens, delegates)")
+	line("  nodes                  show current and known nodes (same data as status)")
+	line("  ask <text>             unified entry: classify → answer or execute a task")
+	line("                         (--output-format json|stream-json for headless use)")
+	line("  repl                   interactive shell (banner, /help pager, Tab completion)")
+	line("  web                    start the web console (browser opens, auto-login)")
+	line("  voice [--once] [--mute] hands-free entry: wake word → ask → spoken reply")
+	line("                         (needs extensions/voice sidecars)")
+	line("")
+	line("sessions:")
+	line("  session list|new|show|rm|ask|diff|merge   chat sessions over git worktrees")
+	line("")
+	line("tasks:")
+	line("  queue [--state s] [--project p] [--watch] the task board (--watch: live view)")
+	line("  task <id>                                 show one task + timeline")
+	line("  task add --title T [--prompt P] [--priority low|medium|normal|high|critical]")
+	line("           [--project p] [--authorize]      enqueue a task (needs --card)")
+	line("  task priority <id> <level>                change a task's priority")
+	line("  task move <id> <seq>                      reorder the drag-sort queue")
+	line("  cancel|approve|reject|logs <id>           one-shot task actions (also")
+	line("                                            usable as `panda task <verb>`)")
+	line("  plan run <file.yaml> [--dry-run]          start a multi-stage, multi-device")
+	line("                                            pipeline (`plan example` to start)")
+	line("  plan show <plan-id>                       stage states + artifact wiring")
+	line("  project list|create                       project memories")
+	line("")
+	line("memory:")
+	line("  memory list|get|set|rm [name]             user/memory/dreams/topic:<n>/")
+	line("                                            project:<n>/daily:<date> files")
+	line("")
+	line("settings:")
+	line("  config model|mcp|limits|routing|injection|approval get|set|test")
+	line("                                            view/edit config.yaml (comments kept)")
+	line("  agents [test <name>]                      probe installed agent CLIs")
+	line("  reminder list|add|rm                      scheduled reminders")
+	line("  skill list|approve|reject                 agent skill management")
+	line("")
+	line("observability:")
+	line("  status                                    node identity + capability directory")
+	line("  metrics [--csv]                           delegation metrics")
+	line("  audit verify [--task id]                  verify the hash chain")
+	line("  audit entries [--task id]                 print audit trail rows")
+	line("")
+	line("setup:")
+	line("  install|uninstall                         put panda on PATH / remove it")
+	line("  init [--defaults|--non-interactive]      first-run setup (one question; flags = zero prompts)")
+	line("  doctor                                    post-install self-check")
+	line("  detect                                    scan hardware → capabilities.yaml draft")
+	line("  card show|rescan|edit|set                  this node's capability card: read it,")
+	line("                                            re-scan hardware + agent CLIs (--write),")
+	line("                                            edit it in $EDITOR, or set one field")
+	line("  version|help                              version / this help")
+	line("")
+	line("global flags: --config <path>, --card <path>, --mcp <cmd>, --json")
+	line("              (before or after the subcommand; --json = JSON output)")
 }

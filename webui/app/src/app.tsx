@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'preact/hooks'
-import { PandaWordmark } from './brand/panda'
+import { PandaAscii, PandaWordmark } from './brand/panda'
 import { clearToken, getToken, onUnauthorized, setToken } from './api/client'
-import { locale, localeNames, locales, onLocaleChange, setLocale, t } from './i18n'
+import { onLocaleChange, t } from './i18n'
+import { defaultCollapsed, navGroups, navigate, parseHash, type Route } from './nav'
 import { QueueView } from './views/queue'
 import { DetailView } from './views/detail'
 import { SessionsView } from './views/sessions'
@@ -15,64 +16,7 @@ import { RemindersView } from './views/reminders'
 import { MemoryView } from './views/memory'
 import { ToastHost } from './components/toast'
 import { ConfirmHost } from './components/confirm'
-
-type Route =
-  | { view: 'sessions'; id: string | null }
-  | { view: 'queue' }
-  | { view: 'projects' }
-  | { view: 'nodes' }
-  | { view: 'skills' }
-  | { view: 'reminders' }
-  | { view: 'memory' }
-  | { view: 'system' }
-  | { view: 'settings' }
-  | { view: 'detail'; id: string }
-
-/** Sidebar groups: primary Chat stays standalone up top; the rest are folded
- *  into labeled sections so first-time users see a short menu, not eight
- *  competing concepts. Each group collapses to further reduce noise. */
-interface NavGroup {
-  id: string
-  label: string
-  items: Array<[view: string, key: string]>
-}
-
-const navGroups: NavGroup[] = [
-  { id: 'tasks', label: 'nav.group.tasks', items: [['queue', 'nav.queue'], ['projects', 'nav.projects']] },
-  { id: 'orchestrate', label: 'nav.group.orchestrate', items: [['nodes', 'nav.nodes'], ['skills', 'nav.skills']] },
-  { id: 'personal', label: 'nav.group.personal', items: [['reminders', 'nav.reminders'], ['memory', 'nav.memory']] },
-  { id: 'system', label: 'nav.group.system', items: [['system', 'nav.system']] },
-]
-
-// Advanced groups start folded; the two everyday sections stay open.
-const defaultCollapsed: Record<string, boolean> = {
-  tasks: false,
-  orchestrate: true,
-  personal: true,
-  system: true,
-}
-
-function parseHash(): Route {
-  const hash = location.hash.replace(/^#\/?/, '')
-  if (hash.startsWith('task/')) return { view: 'detail', id: decodeURIComponent(hash.slice(5)) }
-  if (hash.startsWith('chat/')) return { view: 'sessions', id: decodeURIComponent(hash.slice(5)) }
-  if (hash === 'queue') return { view: 'queue' }
-  if (hash === 'projects') return { view: 'projects' }
-  if (hash === 'nodes') return { view: 'nodes' }
-  if (hash === 'skills') return { view: 'skills' }
-  if (hash === 'reminders') return { view: 'reminders' }
-  if (hash === 'memory') return { view: 'memory' }
-  if (hash === 'system') return { view: 'system' }
-  if (hash === 'settings') return { view: 'settings' }
-  return { view: 'sessions', id: null }
-}
-
-function navigate(route: Route): void {
-  if (route.view === 'detail') location.hash = `#/task/${encodeURIComponent(route.id)}`
-  else if (route.view === 'sessions')
-    location.hash = route.id ? `#/chat/${encodeURIComponent(route.id)}` : '#/chat'
-  else location.hash = `#/${route.view}`
-}
+import { PaletteHost, openPalette } from './components/palette'
 
 /** Re-render the subtree on locale change (the whole shell is cheap). */
 function useLocaleRerender(): void {
@@ -91,9 +35,34 @@ function useRoute(): Route {
   return route
 }
 
+/** True while the shell is in its narrow layout, where the sidebar is a
+ *  horizontal strip rather than a column.
+ *
+ *  The strip shows every destination flattened into one scrolling row, because
+ *  a collapsible group head is a disclosure control for a *column* and there
+ *  is no column here to disclose. That in turn means the groups have to be
+ *  open in the strip whatever the user folded on the desktop layout —
+ *  otherwise hiding the heads would leave Nodes, Skills, Reminders, Memory and
+ *  System with nothing anywhere that reaches them. Kept in JS rather than CSS
+ *  for exactly that reason: the collapse is state, not presentation.
+ *
+ *  Matches the `max-width: 720px` breakpoint in styles.css. */
+function useNarrow(): boolean {
+  const query = '(max-width: 720px)'
+  const [narrow, setNarrow] = useState(() => matchMedia(query).matches)
+  useEffect(() => {
+    const mq = matchMedia(query)
+    const on = () => setNarrow(mq.matches)
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+  return narrow
+}
+
 export function App() {
   useLocaleRerender()
   const route = useRoute()
+  const narrow = useNarrow()
   const [authed, setAuthed] = useState<boolean>(getToken() !== '')
   const [gateError, setGateError] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(defaultCollapsed)
@@ -116,23 +85,35 @@ export function App() {
   }
 
   const active: string = route.view === 'detail' ? 'queue' : route.view
+  const logout = () => {
+    clearToken()
+    setAuthed(false)
+  }
 
   return (
     <div class="shell">
       <ToastHost />
       <ConfirmHost />
+      <PaletteHost onLogout={logout} />
       <aside class="sidebar">
         <a href="#/chat" class="wordmark-link">
           <PandaWordmark />
         </a>
+        {/* The palette's trigger is a visible button, not just a shortcut: a
+            keystroke nobody is told about is a feature nobody has. */}
+        <button class="palette-trigger" onClick={openPalette}>
+          <span>{t('palette.trigger')}</span>
+          <kbd>{modKeyLabel()}K</kbd>
+        </button>
         <a href="#/chat" class={`nav-item${active === 'sessions' ? ' active' : ''}`}>
           {t('nav.sessions')}
         </a>
         {navGroups.map((group) => {
           const containsActive = group.items.some(([v]) => v === active)
           // A group holding the current view always stays open, even if the
-          // user folded it, so the active item is never hidden.
-          const open = containsActive || !collapsed[group.id]
+          // user folded it, so the active item is never hidden. In the narrow
+          // strip every group is open — see useNarrow.
+          const open = narrow || containsActive || !collapsed[group.id]
           return (
             <div class="nav-group" key={group.id}>
               <button
@@ -154,18 +135,16 @@ export function App() {
             </div>
           )
         })}
+        {/* The footer holds only what is not a page of its own. Language and
+            appearance used to sit here as well, which meant the console
+            shipped two controls for one setting and neither told you the
+            other existed — they live on the settings page now, and ⌘K
+            switches them without leaving the current view. */}
         <div class="sidebar-footer">
           <a href="#/settings" class={`nav-item${active === 'settings' ? ' active' : ''}`}>
             {t('nav.settings')}
           </a>
-          <LocalePicker />
-          <button
-            class="nav-item"
-            onClick={() => {
-              clearToken()
-              setAuthed(false)
-            }}
-          >
+          <button class="nav-item" onClick={logout}>
             {t('token.logout')}
           </button>
         </div>
@@ -200,21 +179,11 @@ export function App() {
   )
 }
 
-function LocalePicker() {
-  return (
-    <select
-      class="input"
-      value={locale()}
-      onChange={(e) => setLocale((e.target as HTMLSelectElement).value as never)}
-      aria-label="Language"
-    >
-      {locales.map((l) => (
-        <option key={l} value={l}>
-          {localeNames[l]}
-        </option>
-      ))}
-    </select>
-  )
+/** The modifier the palette actually listens for, spelled the way the user's
+ *  keyboard spells it: ⌘ on Apple hardware, Ctrl everywhere else. */
+function modKeyLabel(): string {
+  const p = navigator.platform || ''
+  return /Mac|iPhone|iPad/.test(p) ? '⌘' : 'Ctrl '
 }
 
 /** First-run screen: ask for the panel token, validate it against /api/tasks. */
@@ -241,10 +210,8 @@ function TokenGate(props: { error: string; onConnected(): void; onRejected(): vo
   return (
     <div class="gate">
       <form class="gate-card" onSubmit={submit}>
-        <h1>
-          <PandaWordmark />
-        </h1>
-        <p>{t('token.description')}</p>
+        <PandaAscii scale={9} />
+        <p class="gate-lede">{t('token.description')}</p>
         <label for="token">{t('token.label')}</label>
         <input
           id="token"

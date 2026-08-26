@@ -6,14 +6,21 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
+
+// The spoken sentences are asserted in Chinese on purpose: this surface exists
+// for the Orange Pi sitting on a desk, and zh-CN is the locale it runs in. The
+// locale is passed explicitly so the assertions do not depend on the ambient
+// LANG of whoever runs the suite.
+const spokenLoc = i18n.ChineseSimp
 
 // TestSpokenReplyReview is the one outcome the voice surface must not get wrong.
 // A task parked in review has run nothing and will run nothing until a person
 // approves it; speaking "做完了" there would be a lie told to someone who has no
 // terminal in front of them to check.
 func TestSpokenReplyReview(t *testing.T) {
-	got := spokenReply(&askengine.Result{Kind: "task", TaskState: "review"})
+	got := spokenReply(spokenLoc, &askengine.Result{Kind: "task", TaskState: "review"})
 	if !strings.Contains(got, "审批") {
 		t.Fatalf("a review task was spoken as %q; it never mentions approval", got)
 	}
@@ -22,7 +29,7 @@ func TestSpokenReplyReview(t *testing.T) {
 // TestSpokenReplyTask covers the two settled task outcomes: success speaks the
 // head of the output, failure says so instead of staying silent.
 func TestSpokenReplyTask(t *testing.T) {
-	ok := spokenReply(&askengine.Result{Kind: "task", TaskState: "done", OK: true,
+	ok := spokenReply(spokenLoc, &askengine.Result{Kind: "task", TaskState: "done", OK: true,
 		Stdout: "准确率 0.93\n更多细节在日志里"})
 	if !strings.Contains(ok, "准确率 0.93") {
 		t.Errorf("success reply dropped the result: %q", ok)
@@ -30,7 +37,7 @@ func TestSpokenReplyTask(t *testing.T) {
 	if strings.Contains(ok, "更多细节") {
 		t.Errorf("success reply read the whole output aloud: %q", ok)
 	}
-	bad := spokenReply(&askengine.Result{Kind: "task", TaskState: "failed", ExitCode: 1,
+	bad := spokenReply(spokenLoc, &askengine.Result{Kind: "task", TaskState: "failed", ExitCode: 1,
 		Stderr: "no such file"})
 	if strings.Contains(bad, "做完了") {
 		t.Errorf("a failed task was spoken as success: %q", bad)
@@ -41,7 +48,7 @@ func TestSpokenReplyTask(t *testing.T) {
 // work. A plan's stages run on other machines, so the honest sentence is "开始跑
 // 了…跑完再告诉你", not a result.
 func TestSpokenReplyPlan(t *testing.T) {
-	got := spokenReply(&askengine.Result{Kind: "plan", OK: true, PlanID: "p1", PlanGoal: "训练模型",
+	got := spokenReply(spokenLoc, &askengine.Result{Kind: "plan", OK: true, PlanID: "p1", PlanGoal: "训练模型",
 		PlanStages: []core.Task{{StageID: "develop"}, {StageID: "train"}, {StageID: "report"}}})
 	if !strings.Contains(got, "3 段") {
 		t.Errorf("plan reply does not say how many stages: %q", got)
@@ -51,12 +58,24 @@ func TestSpokenReplyPlan(t *testing.T) {
 	}
 }
 
+// TestSpokenReplyLocalized guards the reason these strings moved into i18n at
+// all: an English-locale sitting must not have Chinese read aloud to it.
+func TestSpokenReplyLocalized(t *testing.T) {
+	got := spokenReply(i18n.English, &askengine.Result{Kind: "task", TaskState: "review"})
+	if strings.ContainsAny(got, "审批任务计划") {
+		t.Errorf("English locale spoke Chinese: %q", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "approval") {
+		t.Errorf("English review reply never mentions approval: %q", got)
+	}
+}
+
 // TestSpokenReplyTruncates keeps a long answer from being read aloud in full: a
 // listener cannot skim or scroll back, so the speaker gets a bounded sentence
 // while the terminal keeps the whole text.
 func TestSpokenReplyTruncates(t *testing.T) {
 	long := strings.Repeat("一段很长的解释。", 400)
-	got := spokenReply(&askengine.Result{Kind: "answer", Answer: long})
+	got := spokenReply(spokenLoc, &askengine.Result{Kind: "answer", Answer: long})
 	if n := len([]rune(got)); n > maxSpeakChars+1 { // +1 for the ellipsis
 		t.Errorf("spoken answer is %d runes, cap is %d", n, maxSpeakChars)
 	}

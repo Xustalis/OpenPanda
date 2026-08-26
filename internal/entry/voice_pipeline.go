@@ -8,6 +8,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/executil"
 	"github.com/Xustalis/OpenPanda/internal/mdtext"
+	"github.com/Xustalis/OpenPanda/internal/pyexec"
 )
 
 // voiceDir is where the voice sidecars live, resolved relative to the working
@@ -94,7 +95,11 @@ func runSidecar(ctx context.Context, name string, req map[string]any) sidecarRes
 	if req != nil {
 		in, _ = json.Marshal(req)
 	}
-	cmd := executil.CommandContext(ctx, "python3", voiceDir+"/"+name)
+	cmd, ok := pyexec.Command(ctx, voiceDir+"/"+name)
+	if !ok {
+		return sidecarResult{ok: false, err: "no Python 3 interpreter found for the voice sidecar" +
+			" — install Python 3 or set " + pyexec.EnvOverride}
+	}
 	cmd.Stdin = bytes.NewReader(in)
 	var stdout, stderr executil.Capture
 	cmd.Stdout = &stdout
