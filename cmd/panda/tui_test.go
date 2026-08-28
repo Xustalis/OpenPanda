@@ -86,6 +86,36 @@ func TestResultBlockPlanFailed(t *testing.T) {
 	}
 }
 
+// TestThoughtFoldDoesNotPromiseAnUnavailableKey pins the inline-mode constraint.
+// A committed block has already been written into the terminal's scrollback, so
+// it can never be redrawn — advertising ctrl+o on it would point at a key that
+// cannot touch it. The fold reports how much is hidden instead, which is a fact
+// about this block rather than a promise about a future one.
+func TestThoughtFoldDoesNotPromiseAnUnavailableKey(t *testing.T) {
+	b := block{kind: blockThought, thoughtLines: []string{"first", "second", "third"}}
+
+	folded := b.render(theme{loc: loc}, 80, false)
+	if strings.Contains(folded, "ctrl+o") {
+		t.Fatalf("the fold must not point at a key that cannot redraw it: %q", folded)
+	}
+	if !strings.Contains(folded, "3 lines") {
+		t.Fatalf("the fold should say how much is hidden: %q", folded)
+	}
+	if !strings.Contains(folded, "first") {
+		t.Fatalf("the fold should keep a teaser of the reasoning: %q", folded)
+	}
+
+	expanded := b.render(theme{loc: loc}, 80, true)
+	if strings.Contains(expanded, "3 lines") {
+		t.Fatalf("an expanded thought should not report a fold: %q", expanded)
+	}
+	for _, want := range []string{"first", "second", "third"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded thought missing %q: %q", want, expanded)
+		}
+	}
+}
+
 // TestTruncate checks the rune-aware clip used by the folded thought summary.
 func TestTruncate(t *testing.T) {
 	if got := truncate("hello", 10); got != "hello" {
