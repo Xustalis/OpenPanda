@@ -142,8 +142,13 @@ type sessionAskRequest struct {
 // sessionAsk serves POST /api/sessions/{id}/ask as a Server-Sent Events
 // stream: the conversation runs with the session's full history, and the
 // session's git worktree is the execution directory for any classified task.
-// Events: "delta" (answer text chunk), "status" (one-line progress), "result"
-// (the final askResult), "error".
+// Events: "reasoning" (chain-of-thought chunk), "delta" (answer text chunk),
+// "status" (one-line progress), "result" (the final askResult), "error".
+//
+// Reasoning travels on its own event so the console can show it apart from the
+// answer. It is display-only — D14 keeps it out of the answer text, out of the
+// stored turn and out of the task result — so a thread reloaded from disk shows
+// the reply without the reasoning that produced it.
 func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -198,8 +203,9 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cb := askengine.StreamCallbacks{
-		OnDelta:  func(text string) { send("delta", map[string]string{"text": text}) },
-		OnStatus: func(text string) { send("status", map[string]string{"text": text}) },
+		OnReasoning: func(text string) { send("reasoning", map[string]string{"text": text}) },
+		OnDelta:     func(text string) { send("delta", map[string]string{"text": text}) },
+		OnStatus:    func(text string) { send("status", map[string]string{"text": text}) },
 	}
 
 	// Every panel session is a workspace conversation: repo sessions run in

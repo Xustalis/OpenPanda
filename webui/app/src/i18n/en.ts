@@ -136,6 +136,7 @@ const en: Messages = {
   'sessions.authorize': 'Authorize risky actions',
   'sessions.send': 'Send',
   'sessions.thinking': 'Thinking…',
+  'sessions.thought': 'Thought',
   'sessions.hello': 'Hi, I’m Panda',
   'sessions.hint':
     'Each conversation runs in its own git worktree — ask anything, changes stay isolated on a branch.',

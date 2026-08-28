@@ -133,6 +133,7 @@ const zhCN: Messages = {
   'sessions.authorize': '授权高风险操作',
   'sessions.send': '发送',
   'sessions.thinking': '思考中…',
+  'sessions.thought': '思维链',
   'sessions.hello': '你好，我是 Panda',
   'sessions.hint': '每个对话都在独立的 git 工作树中运行 — 随便问，改动隔离在专属分支上。',
   'sessions.s1': '总结一下这个仓库',

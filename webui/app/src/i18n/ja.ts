@@ -133,6 +133,7 @@ const ja: Messages = {
   'sessions.authorize': '高リスク操作を許可',
   'sessions.send': '送信',
   'sessions.thinking': '考え中…',
+  'sessions.thought': '思考過程',
   'sessions.hello': 'こんにちは、Panda です',
   'sessions.hint': '各会話は専用の git ワークツリーで実行されます — 変更は独立したブランチに隔離されます。',
   'sessions.s1': 'このリポジトリを要約して',

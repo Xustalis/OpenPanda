@@ -1531,6 +1531,56 @@ label {
   font-size: var(--fs-small);
 }
 
+/* ---- Chat thought block (sessions) ----
+   Reasoning is display-only (D14) and sits apart from the answer: dimmed and
+   italic so it reads as working rather than as reply. */
+
+.thought-block {
+  margin-bottom: var(--sp-2);
+}
+
+.thought-block > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-small);
+  list-style: none;
+}
+
+.thought-block > summary::-webkit-details-marker {
+  display: none;
+}
+
+.thought-block > summary::before {
+  content: '▸';
+  font-size: 0.8em;
+  transition: transform var(--dur-fast) ease;
+}
+
+.thought-block[open] > summary::before {
+  content: '▾';
+}
+
+.thought-block > summary:hover {
+  color: var(--text-secondary);
+}
+
+.thought-body {
+  margin-top: var(--sp-2);
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--hairline-xs);
+  font-size: var(--fs-small);
+  font-style: italic;
+  color: var(--text-tertiary);
+  /* Reasoning is one long unbroken stream; without wrapping it would run off
+     the bubble instead of into it. */
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 /* ---- Chat (sessions) — codex / claude code style ---- */
 
 .chat {

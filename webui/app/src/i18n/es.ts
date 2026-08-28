@@ -134,6 +134,7 @@ const es: Messages = {
   'sessions.authorize': 'Autorizar acciones de riesgo',
   'sessions.send': 'Enviar',
   'sessions.thinking': 'Pensando…',
+  'sessions.thought': 'Razonamiento',
   'sessions.hello': 'Hola, soy Panda',
   'sessions.hint': 'Cada conversación corre en su propio worktree de git — los cambios quedan aislados en una rama.',
   'sessions.s1': 'Resume este repositorio',
