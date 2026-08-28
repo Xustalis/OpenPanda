@@ -1439,6 +1439,98 @@ label {
   border: 1px solid var(--hairline-xs);
 }
 
+/* ---- Task result viewer (detail) ----
+   A result is a JSON blob; these rules present the fields lifted out of it and
+   keep the blob itself collapsible, so the section reads as an outcome rather
+   than as a payload. */
+
+.result-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-small);
+}
+
+.result-ok {
+  color: var(--accent-1);
+  font-weight: var(--fw-semibold);
+}
+
+.result-bad {
+  color: var(--danger);
+  font-weight: var(--fw-semibold);
+}
+
+.result-reason {
+  margin: 0;
+  font-style: italic;
+}
+
+.result-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.result-block pre,
+.detail-raw {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: var(--sp-3);
+  background: var(--bg-inset);
+  border: 1px solid var(--hairline-xs);
+  border-radius: var(--radius-md);
+  /* Long lines wrap instead of forcing a horizontal scrollbar: agent output is
+     frequently one very long line, and a sideways scroll hid the tail. */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.result-err {
+  color: var(--danger);
+}
+
+/* Collapsed payloads: the summary is the readable line, the body the evidence. */
+.raw-toggle > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-small);
+  list-style: none;
+}
+
+.raw-toggle > summary::-webkit-details-marker {
+  display: none;
+}
+
+.raw-toggle > summary::before {
+  content: '▸';
+  font-size: 0.8em;
+  transition: transform var(--dur-fast) ease;
+}
+
+.raw-toggle[open] > summary::before {
+  content: '▾';
+}
+
+.raw-toggle > summary:hover {
+  color: var(--text-secondary);
+}
+
+.detail-raw {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-small);
+}
+
 /* ---- Chat (sessions) — codex / claude code style ---- */
 
 .chat {

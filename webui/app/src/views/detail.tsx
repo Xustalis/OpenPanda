@@ -5,6 +5,9 @@ import { t } from '../i18n'
 import { StateBadge } from '../components/state-badge'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
+import DecisionOrbit from '../components/orbit'
+import { JsonInline } from '../components/json-inline'
+import { prettifyJson } from '../format/json'
 
 export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
   useLocaleRerender()
@@ -126,6 +129,11 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
         </div>
       </div>
 
+      {/* The orbit tails this task's trace stream over SSE by itself, so
+          routing, execution and supervision land here as they happen instead
+          of waiting for the next poll of the task row. */}
+      <DecisionOrbit task={task} defaultOpen />
+
       <div class="detail-grid">
         <Field label={t('detail.id')} value={task.id} mono />
         <Field label={t('detail.project')} value={task.project || '—'} />
@@ -139,7 +147,7 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
       {task.result && (
         <div class="detail-block">
           <h2>{t('detail.result')}</h2>
-          <pre>{task.result}</pre>
+          <ResultView raw={task.result} />
         </div>
       )}
 
@@ -171,11 +179,80 @@ function Timeline({ events }: { events: NonNullable<Task['events']> }) {
         <li key={i}>
           <span class="dim">{new Date(ev.ts * 1000).toLocaleTimeString()}</span>{' '}
           <code>{ev.type}</code>
-          {ev.data && ev.data !== '{}' && <pre class="timeline-data">{ev.data}</pre>}
+          {ev.data && ev.data !== '{}' && <JsonInline raw={ev.data} />}
         </li>
       ))}
     </ol>
   )
+}
+
+/** A task result is a JSON blob with a handful of well-known keys — ok,
+ *  exit_code, stdout, stderr, agent, plus whatever the supervisor added.
+ *  Rendering the blob itself is what made this page read as a wall of JSON:
+ *  the useful parts were in there, buried in escaping. This lifts them out and
+ *  keeps the original one click away rather than one keypress of devtools.
+ *
+ *  Anything that is not an object we recognise falls back to the raw text —
+ *  a half-understood result shown verbatim beats a blank panel. */
+function ResultView({ raw }: { raw: string }) {
+  const r = parseResult(raw)
+  if (!r) return <pre class="detail-raw">{prettifyJson(raw)}</pre>
+
+  const ok = r.ok !== false
+  const exit = typeof r.exit_code === 'number' ? r.exit_code : null
+  const agent = text(r.agent)
+  const stdout = text(r.stdout)
+  const stderr = text(r.stderr)
+  const verdict = text(r.verdict)
+  const reason = text(r.verdict_reason)
+
+  return (
+    <div class="result-view">
+      <div class="result-meta">
+        <span class={ok ? 'result-ok' : 'result-bad'}>
+          {ok ? t('detail.result.ok') : t('detail.result.failed')}
+        </span>
+        {exit !== null && <span class="dim">{t('detail.result.exit', { n: String(exit) })}</span>}
+        {agent && <span class="dim">{t('detail.result.agent', { agent })}</span>}
+      </div>
+
+      {verdict && <p class="dim">{t('detail.result.verdict', { verdict })}</p>}
+      {reason && <p class="dim result-reason">{reason}</p>}
+
+      {stdout && (
+        <div class="result-block">
+          <span class="dim">{t('detail.result.stdout')}</span>
+          <pre>{stdout}</pre>
+        </div>
+      )}
+      {stderr && (
+        <div class="result-block">
+          <span class="dim">{t('detail.result.stderr')}</span>
+          <pre class="result-err">{stderr}</pre>
+        </div>
+      )}
+
+      <details class="raw-toggle">
+        <summary class="dim">{t('detail.result.raw')}</summary>
+        <pre class="detail-raw">{prettifyJson(raw)}</pre>
+      </details>
+    </div>
+  )
+}
+
+/** Parses a result blob into an object, or returns null when it is not one.
+ *  Callers treat null as "show the text as-is". */
+function parseResult(raw: string): Record<string, unknown> | null {
+  try {
+    const v: unknown = JSON.parse(raw)
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
+function text(v: unknown): string {
+  return typeof v === 'string' ? v : ''
 }
 
 function fmt(iso: string): string {

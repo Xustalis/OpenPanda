@@ -116,6 +116,14 @@ const es: Messages = {
   'detail.risk': 'Riesgo',
   'detail.result': 'Resultado',
   'detail.timeline': 'Cronología',
+  'detail.result.ok': 'Correcto',
+  'detail.result.failed': 'Falló',
+  'detail.result.exit': 'código de salida {n}',
+  'detail.result.agent': 'agente {agent}',
+  'detail.result.verdict': 'veredicto del supervisor: {verdict}',
+  'detail.result.stdout': 'Salida',
+  'detail.result.stderr': 'Salida de error',
+  'detail.result.raw': 'JSON sin procesar',
 
   // Sessions (chat) view
   'sessions.new': 'Nuevo chat',

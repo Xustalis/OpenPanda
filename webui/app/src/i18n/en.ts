@@ -118,6 +118,14 @@ const en: Messages = {
   'detail.risk': 'Risk',
   'detail.result': 'Result',
   'detail.timeline': 'Timeline',
+  'detail.result.ok': 'Succeeded',
+  'detail.result.failed': 'Failed',
+  'detail.result.exit': 'exit {n}',
+  'detail.result.agent': 'agent {agent}',
+  'detail.result.verdict': 'supervisor verdict: {verdict}',
+  'detail.result.stdout': 'Output',
+  'detail.result.stderr': 'Error output',
+  'detail.result.raw': 'Raw JSON',
 
   // Sessions (chat) view
   'sessions.new': 'New chat',
