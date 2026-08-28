@@ -10,6 +10,7 @@ package askengine
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
@@ -143,6 +145,28 @@ type Result struct {
 	InputTokens  int64
 	OutputTokens int64
 	Latency      time.Duration
+
+	// NeedsApproval is set on a task Result when execution refused for lack of
+	// tier-2 (irreversible) consent and the caller supplied no OnApproval
+	// callback: the task is parked in review and Approval carries what a person
+	// must sign off on. A caller whose UI cannot answer a synchronous callback
+	// (the termios REPL, whose interrupt watcher owns the terminal mid-ask)
+	// reads this after the ask returns, prompts on its own event loop, and calls
+	// ResumeApproved. When OnApproval is set the engine consults it inline and
+	// this stays false.
+	NeedsApproval bool
+	Approval      *ApprovalRequest
+}
+
+// ApprovalRequest describes a tier-2 (irreversible) action awaiting the user's
+// consent at the inline approval gate: the task the entry model routed and the
+// executor's refusal reason. It is what an OnApproval callback renders and what
+// a NeedsApproval Result carries back for a caller that prompts out-of-band.
+type ApprovalRequest struct {
+	TaskID string
+	Title  string
+	Intent string
+	Reason string // the executor's authorization-refusal message
 }
 
 // Tokens is the ask's total token count (input + output), 0 when the provider
@@ -298,8 +322,12 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		}
 		// The engine's scheduler is a short-lived/ephemeral participant: its
 		// node id never collides with the concurrently running daemon on the
-		// same node (the daemon owns the stable identity and listener).
-		sched := core.NewCore(db, core.EphemeralNodeID(cfg.Node.Name), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
+		// same node (the daemon owns the stable identity and listener). The
+		// ephemeral id derives from the *stable* runtime id, not the bare
+		// config name, so a VM ask session still trims back to the same
+		// "name@vm-…" row the daemon registered and routing sees its own
+		// capacity (scheduler.IsSelfRow strips the 8-hex suffix).
+		sched := core.NewCore(db, core.EphemeralNodeID(stableID), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 		sched.SetRouterPolicy(cfg.Injection, cfg.Routing)
 		sched.AttachSupervisor(cfg.Model)
 		sched.SetMemoryStores(injector, memory.NewDaily(hermes.WarmDir()), skills.NewStore(cfg.Storage.SkillsPath))
@@ -392,15 +420,24 @@ func (e *Engine) MaintainPeers(ctx context.Context) {
 }
 
 // StreamCallbacks receives live progress while an ask converges. OnDelta
-// delivers answer text incrementally (streaming); OnStatus delivers one-line
-// progress notes (tool calls, task submission) as ready-made English prose,
-// and OnProgress delivers the same events structured, for a caller that owns a
-// locale and wants to phrase them itself. Set whichever fits — OnProgress wins
-// when both are present.
+// delivers answer text incrementally (streaming); OnReasoning delivers the
+// model's chain-of-thought live (display-only, kept out of the answer and
+// history per D14); OnStatus delivers one-line progress notes (tool calls, task
+// submission) as ready-made English prose, and OnProgress delivers the same
+// events structured, for a caller that owns a locale and wants to phrase them
+// itself. Set whichever fits — OnProgress wins when both are present.
 type StreamCallbacks struct {
-	OnDelta    func(text string)
-	OnStatus   func(text string)
-	OnProgress func(Progress)
+	OnDelta     func(text string)
+	OnReasoning func(text string)
+	OnStatus    func(text string)
+	OnProgress  func(Progress)
+	// OnApproval is consulted when an inline task refuses for lack of tier-2
+	// (irreversible) consent and the approval mode is not "never". Returning
+	// true re-runs the task authorized in the same round-trip (ResumeApproved);
+	// returning false leaves it parked in review. A nil callback means the
+	// caller cannot answer synchronously: the engine returns a NeedsApproval
+	// Result instead, for the caller to handle on its own event loop.
+	OnApproval func(ApprovalRequest) bool
 }
 
 // ProgressKind names what the engine is about to do.
@@ -410,6 +447,12 @@ const (
 	ProgressTask ProgressKind = "task" // submitting a classified task
 	ProgressPlan ProgressKind = "plan" // starting a multi-stage plan
 	ProgressTool ProgressKind = "tool" // running a tool
+	// The following are lifecycle milestones bridged from the scheduler core's
+	// trace events while a synchronous Submit blocks — so the CLI shows the run
+	// advancing (routing → executing → judging) instead of a frozen spinner.
+	ProgressRoute ProgressKind = "route" // scheduler picked a node
+	ProgressExec  ProgressKind = "exec"  // the agent/adapter started running
+	ProgressJudge ProgressKind = "judge" // a supervision round is evaluating the result
 )
 
 // Progress is one structured progress event: the action, and the name of what
@@ -439,6 +482,12 @@ func (cb StreamCallbacks) progress(kind ProgressKind, name string) {
 		cb.OnStatus(fmt.Sprintf("starting plan: %s", name))
 	case ProgressTool:
 		cb.OnStatus(fmt.Sprintf("running tool %s…", name))
+	case ProgressRoute:
+		cb.OnStatus(fmt.Sprintf("routing to %s…", name))
+	case ProgressExec:
+		cb.OnStatus(fmt.Sprintf("running %s…", name))
+	case ProgressJudge:
+		cb.OnStatus(fmt.Sprintf("reviewing result (%s)…", name))
 	}
 }
 
@@ -471,6 +520,11 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 			d := client.Usage().Sub(usageBefore)
 			res.InputTokens, res.OutputTokens = d.InputTokens, d.OutputTokens
 			res.Latency = time.Since(askStart)
+			// Reasoning backstop (D14): every return path funnels through
+			// here, so one strip covers the Answer this engine hands to
+			// conversation history and the panel, even if a future provider
+			// path forgets the per-parse removal.
+			res.Answer = entry.StripThinking(res.Answer)
 		}
 		e.recordEntryUsage(context.WithoutCancel(ctx), res, client, usageBefore, time.Since(askStart))
 	}()
@@ -509,8 +563,8 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	for round := 0; round < maxRounds; round++ {
 		var out entry.Output
 		var err error
-		if cb.OnDelta != nil {
-			out, err = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, reg, cb.OnDelta, classifyOpts...)
+		if cb.OnDelta != nil || cb.OnReasoning != nil {
+			out, err = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, reg, cb.OnDelta, cb.OnReasoning, classifyOpts...)
 		} else {
 			out, err = entry.ClassifyTurnsWithTools(ctx, client, devices, conversationMemory, turns, reg, classifyOpts...)
 		}
@@ -526,7 +580,7 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 				return nil, fmt.Errorf("task output requires a capability card (engine built without CardPath)")
 			}
 			cb.progress(ProgressTask, out.Task.Title)
-			return e.submitTask(out.Task, prompt, authorize, workDir), nil
+			return e.submitTask(out.Task, prompt, authorize, workDir, cb), nil
 		case entry.KindPlan:
 			cb.progress(ProgressPlan, out.Plan.Goal)
 			return e.startClassifiedPlan(ctx, out.Plan, authorize)
@@ -549,8 +603,8 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	// surfacing a loop error to the user.
 	var final entry.Output
 	var ferr error
-	if cb.OnDelta != nil {
-		final, ferr = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, nil, cb.OnDelta, classifyOpts...)
+	if cb.OnDelta != nil || cb.OnReasoning != nil {
+		final, ferr = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, nil, cb.OnDelta, cb.OnReasoning, classifyOpts...)
 	} else {
 		final, ferr = entry.ClassifyTurns(ctx, client, devices, conversationMemory, turns, classifyOpts...)
 	}
@@ -562,7 +616,7 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议任务「%s」，但当前未加载能力卡片，无法提交。", maxRounds, final.Task.Title)}, nil
 		}
 		cb.progress(ProgressTask, final.Task.Title)
-		return e.submitTask(final.Task, prompt, authorize, workDir), nil
+		return e.submitTask(final.Task, prompt, authorize, workDir, cb), nil
 	}
 	if final.Kind == entry.KindPlan {
 		if e.sched == nil {
@@ -644,7 +698,32 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 	if serr != nil {
 		e.logger.Warn("askengine: read plan stages", "plan", planID, "err", serr)
 	}
+	// The per-stage classify_result events are traced inside core.StartPlan at
+	// stage creation, before AdvancePlan releases anything — leading each
+	// stage's own execution events in the orbit timeline.
 	return &Result{Kind: "plan", PlanID: planID, PlanGoal: p.Goal, PlanStages: stages, OK: true}, nil
+}
+
+// gateAuthorized resolves the effective tier-2 consent for a task from the
+// configured approval mode and any standing session authorization. It is the
+// single decision point for the three modes so the semantics stay auditable
+// (and unit-testable) in one place:
+//
+//   - never       — tier-2 runs as classified; consent is implied.
+//   - on-request  — the default; consent is withheld until the user approves
+//     at the inline gate (a tier-2 task parks in review otherwise), unless an
+//     explicit session grant (--authorize / /authorize on) already consented.
+//   - always      — same as on-request at this layer. The extra "confirm every
+//     run" strictness is a UI concern enforced by the caller (it does not cache
+//     a prior yes across turns); an explicit grant still satisfies the gate.
+//
+// A session grant (sessionAuthorized: --authorize / /authorize on) is an
+// explicit standing consent and satisfies every mode.
+func gateAuthorized(mode string, sessionAuthorized bool) bool {
+	if mode == config.ApprovalModeNever {
+		return true
+	}
+	return sessionAuthorized
 }
 
 // submitTask executes a classified task spec through the scheduler core and
@@ -655,9 +734,18 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 // session worktree); the configured work path is restored afterwards. The
 // schedMu lock keeps concurrent inline submits from interleaving the
 // work-dir swap.
-func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool, workDir string) *Result {
+func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool, workDir string, cb StreamCallbacks) *Result {
 	in := toTaskInput(spec)
+	// Approval mode is the real tier-2 gate (design §16): "never" auto-consents
+	// so an irreversible task runs as classified; "on-request"/"always" withhold
+	// consent until the user approves at the inline gate below. A session-level
+	// authorization (/authorize on, --authorize) is an explicit standing consent
+	// and always satisfies the gate regardless of mode.
+	authorized = gateAuthorized(e.cfg.Approval.NormalizedMode(), authorized)
 	in.Authorized = authorized
+	// classify_result is traced inside core's createTask — before routing,
+	// before the queue claims the task — so no emission happens here.
+	in.ClassifyKind = "task"
 	if prompt != "" {
 		// Carry the user's original words into the agent prompt as a fidelity
 		// backstop: the intent above is the entry model's distillation, which
@@ -681,6 +769,20 @@ func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool
 		e.sched.SetWorkDir(workDir)
 		defer e.sched.SetWorkDir(e.cfg.Storage.WorkPath)
 	}
+	// Bridge the core's lifecycle trace events to the caller's progress feed for
+	// the duration of this synchronous run, so a blocking agent execution shows
+	// routing → executing → judging instead of a frozen spinner. schedMu already
+	// serializes runs, so the observer sees only this ask's events; it is cleared
+	// on return. A caller with no progress sink installs nothing.
+	if cb.OnProgress != nil || cb.OnStatus != nil {
+		store := e.sched.TaskStore()
+		store.SetOnEvent(func(_, typ string, data any) {
+			if kind, name, ok := progressForEvent(typ, data); ok {
+				cb.progress(kind, name)
+			}
+		})
+		defer store.SetOnEvent(nil)
+	}
 	task, result, err := e.sched.Submit(e.schedCtx, in)
 	if err != nil {
 		return &Result{Kind: "task", TaskState: "failed", Stderr: err.Error(), ExitCode: 1}
@@ -695,7 +797,110 @@ func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool
 		Stderr:    result.Stderr,
 		ExitCode:  result.ExitCode,
 	}
+	// Inline approval closure: a tier-2 task with no standing consent parks in
+	// review with an authorization-refusal reason. Turn that dead end into a
+	// decision — consult the caller's OnApproval, and on a yes re-run the same
+	// task authorized in one round-trip (agent scheduling completes without any
+	// background scheduler). A caller with no synchronous callback gets a
+	// NeedsApproval Result to handle on its own event loop.
+	if !authorized && task.State == core.StateReview && commander.IsAuthorizationRefusal(result.Stderr) {
+		req := ApprovalRequest{TaskID: task.TaskID, Title: task.Title, Intent: in.Intent, Reason: result.Stderr}
+		if cb.OnApproval == nil {
+			res.NeedsApproval = true
+			res.Approval = &req
+			return res
+		}
+		if cb.OnApproval(req) {
+			return e.resumeLocked(req.TaskID)
+		}
+	}
 	return res
+}
+
+// progressForEvent maps a scheduler-core trace event to a Progress the caller
+// can render, or reports ok=false for events with no live-progress meaning. It
+// is the one place that knows which core event types (internal/core/trace.go,
+// state.go) correspond to the CLI's routing/executing/judging phases. Event
+// data arrives as it was recorded — a map before marshaling, or JSON bytes
+// after — so it is read through eventField, which handles both.
+func progressForEvent(typ string, data any) (ProgressKind, string, bool) {
+	switch typ {
+	case core.EvRouteDecision:
+		name := eventField(data, "target_node")
+		if name == "" {
+			name = eventField(data, "action") // "local" when no target node
+		}
+		return ProgressRoute, name, true
+	case core.EvExecAgentStart:
+		name := eventField(data, "agent")
+		if name == "" {
+			name = eventField(data, "adapter")
+		}
+		return ProgressExec, name, true
+	case core.EvSupervisionRound:
+		name := eventField(data, "verdict")
+		return ProgressJudge, name, true
+	}
+	return "", "", false
+}
+
+// eventField extracts a string field from a recorded event's data, which is
+// either a map[string]any (pre-marshal) or JSON bytes (post-marshal in the
+// state-transition path). Missing/absent yields "".
+func eventField(data any, key string) string {
+	switch v := data.(type) {
+	case map[string]any:
+		if s, ok := v[key].(string); ok {
+			return s
+		}
+	case []byte:
+		var m map[string]any
+		if json.Unmarshal(v, &m) == nil {
+			if s, ok := m[key].(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// resumeLocked re-runs an approved review-parked task synchronously and maps
+// the outcome to a Result. The caller must hold schedMu (submitTask does), so
+// any pinned session work dir is still in effect for the re-run.
+func (e *Engine) resumeLocked(taskID string) *Result {
+	task, result, err := e.sched.ResumeApproved(e.schedCtx, taskID)
+	if err != nil {
+		return &Result{Kind: "task", TaskID: taskID, TaskState: "review", Stderr: err.Error(), ExitCode: 1}
+	}
+	return &Result{
+		Kind:      "task",
+		TaskID:    task.TaskID,
+		TaskTitle: task.Title,
+		TaskState: task.State,
+		OK:        result.OK,
+		Stdout:    result.Stdout,
+		Stderr:    result.Stderr,
+		ExitCode:  result.ExitCode,
+	}
+}
+
+// ResumeApproved re-runs a task the user approved out-of-band (a NeedsApproval
+// Result the caller surfaced and confirmed) with tier-2 consent, on this node,
+// synchronously. It is the counterpart to submitTask's inline OnApproval path
+// for callers — the termios REPL — that prompt after the ask returns rather
+// than from within a callback. workDir pins the re-run's execution directory
+// (the session worktree), matching the original submission.
+func (e *Engine) ResumeApproved(taskID, workDir string) *Result {
+	if e.sched == nil {
+		return &Result{Kind: "task", TaskState: "failed", Stderr: "task execution requires a capability card", ExitCode: 1}
+	}
+	e.schedMu.Lock()
+	defer e.schedMu.Unlock()
+	if workDir != "" {
+		e.sched.SetWorkDir(workDir)
+		defer e.sched.SetWorkDir(e.cfg.Storage.WorkPath)
+	}
+	return e.resumeLocked(taskID)
 }
 
 // recordEntryUsage bills the entry (commander) model's own token consumption

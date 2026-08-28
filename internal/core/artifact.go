@@ -76,7 +76,30 @@ func artifactKey(taskID, hash string) string { return taskID + "|" + hash }
 // pool and returns its manifest. An artifact the node already holds is returned
 // without any bytes on the wire — the hash is proof enough, which is what makes
 // re-delegating a stage to a node that ran an earlier one nearly free.
+//
+// The thin wrapper exists so every exit path — the local-hit fast return, every
+// abort inside the transfer loop, and success — lands one artifact_transfer
+// trace event without sprinkling emissions through the loop.
 func (c *Core) FetchArtifact(ctx context.Context, source, taskID, hash string) (artifact.Manifest, error) {
+	start := time.Now()
+	m, err := c.fetchArtifact(ctx, source, taskID, hash)
+	ev := map[string]any{
+		"from_node":  source,
+		"to_node":    c.nodeID,
+		"hash":       hash,
+		"ok":         err == nil,
+		"elapsed_ms": time.Since(start).Milliseconds(),
+	}
+	if err != nil {
+		ev["error"] = err.Error()
+	} else {
+		ev["size_bytes"] = m.Size
+	}
+	c.EvTrace(ctx, taskID, EvArtifactTransfer, ev)
+	return m, err
+}
+
+func (c *Core) fetchArtifact(ctx context.Context, source, taskID, hash string) (artifact.Manifest, error) {
 	if c.artifacts == nil {
 		return artifact.Manifest{}, errors.New("core: no artifact pool configured")
 	}

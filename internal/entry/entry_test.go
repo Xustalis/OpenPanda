@@ -169,6 +169,35 @@ func TestParseOutputJSONWithTrailingProse(t *testing.T) {
 	}
 }
 
+// TestParseOutputAnswerEnvelope guards the JSON-leak fix: a model that wraps its
+// reply as {"kind":"answer","answer":"…"} must be unwrapped to clean prose
+// rather than have the raw JSON envelope printed verbatim to the user.
+func TestParseOutputAnswerEnvelope(t *testing.T) {
+	raw := `{"kind":"answer","answer":"PPO 是一种策略梯度强化学习算法。"}`
+	out, err := ParseOutput(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if out.Kind != KindAnswer {
+		t.Fatalf("answer envelope should be KindAnswer, got %s", out.Kind)
+	}
+	if out.Answer != "PPO 是一种策略梯度强化学习算法。" {
+		t.Fatalf("answer not unwrapped, got %q", out.Answer)
+	}
+}
+
+// TestParseOutputEmptyAnswerEnvelope verifies a contentless answer envelope
+// falls back to prose handling instead of rendering a hollow "{...}".
+func TestParseOutputEmptyAnswerEnvelope(t *testing.T) {
+	out, err := ParseOutput(`{"kind":"answer","answer":""}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if out.Kind != KindAnswer {
+		t.Fatalf("empty answer envelope should degrade to KindAnswer, got %s", out.Kind)
+	}
+}
+
 func TestParseOutputReasoningPreamble(t *testing.T) {
 	// A reasoning model may emit a chain-of-thought preamble before committing to
 	// the directive JSON. It is not an illustrative example, so the JSON must be
@@ -658,7 +687,7 @@ func startStreamServer(t *testing.T, chunks []string) *Client {
 // transport drop stays retryable).
 func TestDeltaGuardSuppressesStructuredOutput(t *testing.T) {
 	var got []string
-	g := newDeltaGuard(func(s string) { got = append(got, s) })
+	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
 	g.on(`{"kind":`)
 	g.on(`"task":{}}`)
 	if len(got) != 0 {
@@ -673,7 +702,7 @@ func TestDeltaGuardSuppressesStructuredOutput(t *testing.T) {
 // with the whitespace buffered during the decision flushed ahead of it.
 func TestDeltaGuardStreamsProseWithBufferedPrefix(t *testing.T) {
 	var got []string
-	g := newDeltaGuard(func(s string) { got = append(got, s) })
+	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
 	g.on("\n\n") // whitespace-only: buffered, nothing forwarded yet
 	g.on("你好")   // decision: prose; the buffered prefix flushes with it
 	g.on("，世界")
@@ -689,7 +718,7 @@ func TestDeltaGuardStreamsProseWithBufferedPrefix(t *testing.T) {
 // structured output is suppressed too.
 func TestDeltaGuardSuppressesFencedJSON(t *testing.T) {
 	var got []string
-	g := newDeltaGuard(func(s string) { got = append(got, s) })
+	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
 	g.on("```json\n")
 	g.on(`{"kind":"task"}`)
 	g.on("\n```")
@@ -704,7 +733,7 @@ func TestDeltaGuardSuppressesFencedJSON(t *testing.T) {
 // Output renders it). The structured start may split across deltas.
 func TestDeltaGuardSuppressesJSONAfterProseLeadIn(t *testing.T) {
 	var got []string
-	g := newDeltaGuard(func(s string) { got = append(got, s) })
+	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
 	g.on("需要查一下状态。\n")
 	g.on("\n{") // the newline pair + '{' split right at the boundary
 	g.on(`"kind":"task","task":{}}`)
@@ -725,7 +754,7 @@ func TestDeltaGuardSuppressesJSONAfterProseLeadIn(t *testing.T) {
 // the user at end-of-stream.
 func TestDeltaGuardFlushesHeldBackTail(t *testing.T) {
 	var got []string
-	g := newDeltaGuard(func(s string) { got = append(got, s) })
+	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
 	g.on("答案是 42")
 	g.on("\n") // trailing newline held back pending a possible directive
 	if strings.Join(got, "") != "答案是 42" {
@@ -742,12 +771,109 @@ func TestDeltaGuardFlushesHeldBackTail(t *testing.T) {
 // streaming — only a line-initial brace starts suppression.
 func TestDeltaGuardInlineBracesStillStream(t *testing.T) {
 	var got []string
-	g := newDeltaGuard(func(s string) { got = append(got, s) })
+	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
 	g.on("格式是 {host} 占位符")
 	g.on("，注意 ``code`` 标记。")
 	g.flush()
 	if strings.Join(got, "") != "格式是 {host} 占位符，注意 ``code`` 标记。" {
 		t.Fatalf("inline braces must stream verbatim, got %q", got)
+	}
+}
+
+// TestStreamCapturesOpenAIReasoning verifies Phase 1.3 for the OpenAI path:
+// chain-of-thought on delta.reasoning_content is surfaced live to the reasoning
+// sink and kept entirely out of the answer text (D14). The answer content still
+// streams to onDelta and lands in Response.Text.
+func TestStreamCapturesOpenAIReasoning(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		emit := func(delta map[string]string) {
+			b, _ := json.Marshal(map[string]any{
+				"choices": []map[string]any{{"delta": delta}},
+			})
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+			flusher.Flush()
+		}
+		emit(map[string]string{"reasoning_content": "let me "})
+		emit(map[string]string{"reasoning_content": "think…"})
+		emit(map[string]string{"content": "Hello"})
+		emit(map[string]string{"content": " world"})
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := NewClient(config.ModelConfig{APIType: "openai", BaseURL: srv.URL, APIKey: "sk", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	var answer, reasoning []string
+	resp, err := c.StreamTurnsWithTools(context.Background(), "", []Turn{{Role: "user", Content: "hi"}}, nil,
+		func(s string) { answer = append(answer, s) },
+		func(s string) { reasoning = append(reasoning, s) })
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	if got := strings.Join(reasoning, ""); got != "let me think…" {
+		t.Fatalf("reasoning sink = %q, want the chain-of-thought delivered live", got)
+	}
+	if got := strings.Join(answer, ""); got != "Hello world" {
+		t.Fatalf("answer sink = %q, want only the answer content", got)
+	}
+	if resp.Text != "Hello world" {
+		t.Fatalf("Response.Text = %q, want the answer with no reasoning folded in", resp.Text)
+	}
+	if resp.Reasoning != "let me think…" {
+		t.Fatalf("Response.Reasoning = %q, want the captured chain-of-thought", resp.Reasoning)
+	}
+}
+
+// TestStreamCapturesAnthropicReasoning verifies Phase 1.3 for the Anthropic
+// path: a thinking block streams thinking_delta events to the reasoning sink
+// and is kept out of the answer text (D14).
+func TestStreamCapturesAnthropicReasoning(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		emit := func(ev map[string]any) {
+			b, _ := json.Marshal(ev)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+			flusher.Flush()
+		}
+		// A thinking block at index 0, then an answer text block at index 1.
+		emit(map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "thinking"}})
+		emit(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "thinking_delta", "thinking": "weigh "}})
+		emit(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "thinking_delta", "thinking": "options"}})
+		emit(map[string]any{"type": "content_block_start", "index": 1, "content_block": map[string]any{"type": "text"}})
+		emit(map[string]any{"type": "content_block_delta", "index": 1, "delta": map[string]any{"type": "text_delta", "text": "Answer."}})
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	var answer, reasoning []string
+	resp, err := c.StreamTurnsWithTools(context.Background(), "", []Turn{{Role: "user", Content: "hi"}}, nil,
+		func(s string) { answer = append(answer, s) },
+		func(s string) { reasoning = append(reasoning, s) })
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	if got := strings.Join(reasoning, ""); got != "weigh options" {
+		t.Fatalf("reasoning sink = %q, want the thinking block delivered live", got)
+	}
+	if got := strings.Join(answer, ""); got != "Answer." {
+		t.Fatalf("answer sink = %q, want only the text block", got)
+	}
+	if resp.Text != "Answer." {
+		t.Fatalf("Response.Text = %q, want no thinking folded in", resp.Text)
+	}
+	if resp.Reasoning != "weigh options" {
+		t.Fatalf("Response.Reasoning = %q, want the captured thinking", resp.Reasoning)
 	}
 }
 
@@ -759,7 +885,7 @@ func TestStreamSuppressesTaskJSONEndToEnd(t *testing.T) {
 	c := startStreamServer(t, []string{`{"kind":"task",`, `"task":{"title":"跑测试",`, `"context_type":"command","requires":{"abilities":["lint"]}}}`})
 
 	var got []string
-	resp, err := c.StreamTurnsWithTools(context.Background(), "", []Turn{{Role: "user", Content: "跑下测试"}}, nil, func(s string) { got = append(got, s) })
+	resp, err := c.StreamTurnsWithTools(context.Background(), "", []Turn{{Role: "user", Content: "跑下测试"}}, nil, func(s string) { got = append(got, s) }, nil)
 	if err != nil {
 		t.Fatalf("stream: %v", err)
 	}
@@ -804,7 +930,7 @@ func TestStreamRetriesThenSuppressesStructured(t *testing.T) {
 	c.retryBase = time.Millisecond
 
 	var got []string
-	resp, err := c.StreamTurnsWithTools(context.Background(), "", []Turn{{Role: "user", Content: "hi"}}, nil, func(s string) { got = append(got, s) })
+	resp, err := c.StreamTurnsWithTools(context.Background(), "", []Turn{{Role: "user", Content: "hi"}}, nil, func(s string) { got = append(got, s) }, nil)
 	if err != nil {
 		t.Fatalf("stream: %v", err)
 	}

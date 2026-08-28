@@ -230,6 +230,17 @@ func runRepl(args []string) {
 		r.engine = engine
 	}
 
+	// The rich full-screen front end (Bubble Tea) drives an interactive TTY with
+	// a configured engine; it replaces the banner, footer, task watcher and line
+	// loop below with a managed display. PANDA_CLASSIC_REPL falls back here.
+	if shouldUseTUI(r) {
+		runTUI(r)
+		if r.webSrv != nil {
+			_ = r.webSrv.Close()
+		}
+		return
+	}
+
 	r.printBanner()
 	if r.engine != nil && !r.hasCard {
 		fmt.Println(i18n.T(r.loc, "repl.ask.noCard"))
@@ -441,6 +452,65 @@ func (r *repl) dispatch(line string) {
 	}
 }
 
+// askContext derives the conversation history and working directory for one
+// prompt, and records the user's turn where it belongs. With an active session
+// it appends the turn to the thread and replays the whole thread (so the model
+// sees the full history the web console would send) in the session's worktree;
+// a stale session id drops silently back to bare mode. In bare mode it replays
+// this run's in-memory conversation and leaves the turn to be paired with its
+// answer by recordOutcome.
+//
+// Both front ends (the classic loop and the Bubble Tea TUI) call this, so
+// /resume binds a session for either one instead of only the loop it was typed
+// in.
+func (r *repl) askContext(text string) ([]entry.Turn, string) {
+	var history []entry.Turn
+	workDir := ""
+	if r.activeSess != "" && r.sessionsSt != nil {
+		sess, err := r.sessionsSt.Get(r.activeSess)
+		if err != nil {
+			r.activeSess = "" // stale id: drop silently back to bare mode
+		} else if _, err := r.sessionsSt.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: text}); err == nil {
+			sess, _ = r.sessionsSt.Get(sess.ID)
+			for _, t := range sess.Turns {
+				history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
+			}
+			workDir = sess.Worktree
+			if workDir == "" && r.engine != nil {
+				workDir = r.engine.WorkPath()
+			}
+			return history, workDir
+		}
+	}
+	return append(history, r.convo...), workDir
+}
+
+// recordOutcome persists the assistant side of a finished turn: into the active
+// session thread (binding a spawned task to it so the console can follow the
+// run), or into this run's in-memory conversation when no session is bound. A
+// task or plan stores its id as the turn's ref, which is what /history and the
+// console render as a link rather than prose.
+func (r *repl) recordOutcome(ctx context.Context, text string, out *askengine.Result) {
+	if out == nil {
+		return
+	}
+	if r.activeSess == "" || r.sessionsSt == nil {
+		r.rememberTurn(text, out)
+		return
+	}
+	turn := sessions.Turn{Role: "assistant", Kind: out.Kind, Text: out.Answer}
+	switch out.Kind {
+	case "task":
+		turn.Text, turn.Ref = out.TaskID, out.TaskID
+		if out.TaskID != "" && r.store != nil {
+			_ = r.store.SetSessionID(ctx, out.TaskID, r.activeSess)
+		}
+	case "plan":
+		turn.Text, turn.Ref = out.PlanID, out.PlanID
+	}
+	_, _ = r.sessionsSt.AppendTurn(r.activeSess, turn)
+}
+
 // ask runs one prompt through the unified entry engine and prints the
 // converged result. With an active session (/resume) the turn runs with the
 // session's full history in its worktree and is persisted to the thread —
@@ -459,27 +529,7 @@ func (r *repl) ask(text string) {
 
 	// Session-aware context (mirrors panel sessionAsk); bare mode replays
 	// the in-memory conversation instead.
-	var history []entry.Turn
-	workDir := ""
-	if r.activeSess != "" && r.sessionsSt != nil {
-		sess, err := r.sessionsSt.Get(r.activeSess)
-		if err != nil {
-			r.activeSess = "" // stale id: drop silently back to bare mode
-		} else {
-			if _, err := r.sessionsSt.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: text}); err == nil {
-				sess, _ = r.sessionsSt.Get(sess.ID)
-				for _, t := range sess.Turns {
-					history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
-				}
-				workDir = sess.Worktree
-				if workDir == "" {
-					workDir = r.engine.WorkPath()
-				}
-			}
-		}
-	} else {
-		history = append(history, r.convo...)
-	}
+	history, workDir := r.askContext(text)
 
 	// The live status line: a spinner, the verb, elapsed time, and the interrupt
 	// hint, repainted in place. Streamed answer text prints *through* it (Suspend
@@ -510,6 +560,17 @@ func (r *repl) ask(text string) {
 			st.Preview(lr.pending())
 		}
 		cb.OnProgress = func(p askengine.Progress) {
+			// Advance the phase chain (classify → routing → executing → judging)
+			// so the status line's trailing meta tracks a delegated run instead of
+			// sitting on "routing" until the result lands.
+			switch p.Kind {
+			case askengine.ProgressTask, askengine.ProgressPlan, askengine.ProgressRoute:
+				st.Phase("route", "routing")
+			case askengine.ProgressExec, askengine.ProgressTool:
+				st.Phase("exec", "executing")
+			case askengine.ProgressJudge:
+				st.Phase("judge", "judging")
+			}
 			// Before any answer text a progress note is worth keeping on screen
 			// (it explains a long wait); once the answer is streaming, the same
 			// note would interrupt it, so it stays ephemeral in the status line.
@@ -519,6 +580,19 @@ func (r *repl) ask(text string) {
 				return
 			}
 			st.Log(pal().Muted(pal().MarkBullet() + " " + note))
+		}
+		// Reasoning (chain-of-thought) arrives before the answer on reasoning
+		// models. Phase 1 surfaces it as a live dim preview on the status line so
+		// the model's thinking is visible without a stall; it is display-only and
+		// never persisted (D14). The richer collapsible thought block is Phase 2.
+		var thinking thoughtPreview
+		cb.OnReasoning = func(chunk string) {
+			if lr.printed {
+				return // answer has started; reasoning is done
+			}
+			if line := thinking.feed(chunk); line != "" {
+				st.Preview(pal().Muted(line))
+			}
 		}
 	}
 	delivered := func() bool { return lr.printed }
@@ -554,25 +628,17 @@ func (r *repl) ask(text string) {
 	}
 	out := res.out
 
-	// Bind a spawned task back to the active session and persist the reply.
-	if r.activeSess != "" && r.sessionsSt != nil {
-		if out.Kind == "task" && out.TaskID != "" {
-			_ = r.store.SetSessionID(context.Background(), out.TaskID, r.activeSess)
-		}
-		turn := sessions.Turn{Role: "assistant", Kind: out.Kind}
-		if out.Kind == "task" {
-			turn.Text = out.TaskID
-			turn.Ref = out.TaskID
-		} else if out.Kind == "plan" {
-			turn.Text = out.PlanID
-			turn.Ref = out.PlanID
-		} else {
-			turn.Text = out.Answer
-		}
-		_, _ = r.sessionsSt.AppendTurn(r.activeSess, turn)
-	} else {
-		r.rememberTurn(text, out)
+	// Inline approval gate: a tier-2 task with no standing consent comes back
+	// parked in review (the engine leaves OnApproval nil for the REPL so the
+	// prompt happens here, on the main loop, after the interrupt watcher has
+	// released the terminal — a raw-mode read from the ask goroutine would fight
+	// it for stdin). On a yes, re-run the same task authorized in place.
+	if out != nil && out.NeedsApproval && out.Approval != nil {
+		out = r.approveInline(out, workDir)
 	}
+
+	// Bind a spawned task back to the active session and persist the reply.
+	r.recordOutcome(context.Background(), text, out)
 
 	switch out.Kind {
 	case "answer":
@@ -804,6 +870,36 @@ func (r *repl) cmdCancel(arg string) {
 		return
 	}
 	fmt.Println(i18n.Tf(r.loc, "repl.cancel.done", "n", fmt.Sprint(len(ids))))
+}
+
+// approveInline renders the tier-2 approval card for a task the engine parked
+// in review, prompts the user on the main loop, and — on a yes — re-runs the
+// task authorized in place, returning the resumed Result. On a no (or a failed
+// prompt) it returns the original review Result so the caller prints the parked
+// state and the /approve hint. It runs after the ask goroutine has finished and
+// the interrupt watcher released the terminal, so the raw-mode read is safe.
+func (r *repl) approveInline(out *askengine.Result, workDir string) *askengine.Result {
+	req := out.Approval
+	p := pal()
+	fmt.Println(p.Warn(p.MarkBullet() + " " + i18n.T(r.loc, "repl.approval.head")))
+	fmt.Println(p.Muted("  " + i18n.Tf(r.loc, "repl.approval.task", "title", req.Title)))
+	if reason := strings.TrimSpace(req.Reason); reason != "" {
+		fmt.Println(p.Muted("  " + i18n.Tf(r.loc, "repl.approval.reason", "reason", reason)))
+	}
+	approved := false
+	if r.interactive && r.term != nil {
+		ans, err := r.term.readLine(i18n.T(r.loc, "repl.approval.prompt"), nil)
+		if err == nil {
+			ans = strings.ToLower(strings.TrimSpace(ans))
+			approved = ans == "y" || ans == "yes"
+		}
+	}
+	if !approved {
+		fmt.Println(p.Muted(i18n.Tf(r.loc, "repl.approval.denied", "id", req.TaskID)))
+		return out
+	}
+	fmt.Println(p.Success(i18n.T(r.loc, "repl.approval.approved")))
+	return r.engine.ResumeApproved(req.TaskID, workDir)
 }
 
 // cmdApprove approves a reviewed task (review -> done).

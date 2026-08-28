@@ -298,7 +298,9 @@ type handler struct {
 }
 
 // taskJSON is the wire form of a task row, with stable snake_case names so the
-// PWA does not depend on Go field casing.
+// PWA does not depend on Go field casing. All visibility-extension fields are
+// optional (omitempty): old clients never see them, new clients paint richer
+// views when they are present.
 type taskJSON struct {
 	ID        string `json:"id"`
 	ParentID  string `json:"parent_id"`
@@ -321,6 +323,20 @@ type taskJSON struct {
 	CreatedAt    string      `json:"created_at"`
 	UpdatedAt    string      `json:"updated_at"`
 	Events       []eventJSON `json:"events,omitempty"`
+
+	// — Decision-orbit visibility (§5.2). traces are the subset of Events
+	// that belong to the 8-track set, decoded so the client avoids a second
+	// JSON.parse per row. delegation_chain and plan_meta aggregate data
+	// already on the task row so the orbit can render without a follow-up
+	// round-trip.
+	Traces          []traceEventJSON    `json:"traces,omitempty"`
+	DelegationChain []delegationHopJSON `json:"delegation_chain,omitempty"`
+	PlanMeta        *planMetaJSON       `json:"plan_meta,omitempty"`
+	// — Structured extras (§3.3). supervision = the latest supervision_round's
+	// counters so the orbit paints round N/Budget badges; tier2_ops = every
+	// parked or executed irreversible operation summary (K5 visibility).
+	Supervision *supervisionJSON `json:"supervision,omitempty"`
+	Tier2Ops    []tier2OpJSON    `json:"tier2_ops,omitempty"`
 }
 
 type eventJSON struct {
@@ -329,8 +345,66 @@ type eventJSON struct {
 	Data string `json:"data"`
 }
 
+// traceEventJSON is a task_events row restricted to the 8 visible-track set.
+// Data is pre-decoded so the browser reads structured objects; on malformed
+// JSON we keep the raw string via the fallback_raw field so users still see
+// the data instead of a silent swallow.
+type traceEventJSON struct {
+	ID      int64  `json:"id"`
+	TS      int64  `json:"ts"`
+	Type    string `json:"type"`
+	Data    any    `json:"data,omitempty"`
+	DataRaw string `json:"data_raw,omitempty"`
+}
+
+// planMetaJSON surfaces enough data for the orbit to show the "Plan (3 stages)"
+// header and the stage-level letters (dev✓ trn⚠ rpt·). The fields are parsed
+// from the task row's PlanID / StageID / Needs / Inputs / OutputArtifact so
+// the wire does not duplicate the plan engine's internal state.
+type planMetaJSON struct {
+	PlanID         string   `json:"plan_id,omitempty"`
+	StageID        string   `json:"stage_id,omitempty"`
+	StageCount     int      `json:"stage_count,omitempty"`
+	StageLabels    []string `json:"stage_labels,omitempty"`
+	Needs          string   `json:"needs,omitempty"`
+	OutputArtifact string   `json:"output_artifact,omitempty"`
+}
+
+// delegationHopJSON is one leg of a task's travel — the UI draws these as an
+// ordered flow ("macbook-m1 → orangepi3b → win-desktop") with chip glyphs and
+// hop numbers. hop=1 is the originator → first executor leg. Accepted=true
+// means the peer node's handleTaskAccept wrote this event back via the
+// authenticated bus; the absence of an accept leg (only outbound) means the
+// hop was attempted but the peer never acknowledged.
+type delegationHopJSON struct {
+	Hop      int    `json:"hop"`
+	FromNode string `json:"from_node"`
+	ToNode   string `json:"to_node"`
+	Via      string `json:"via,omitempty"` // "direct" | "retarget"
+	Accepted bool   `json:"accepted"`
+	TS       int64  `json:"ts"`
+}
+
+// supervisionJSON rolls up the latest supervision_round event so the orbit's
+// progress badge can say "Round 1 / 5" without re-scanning traces on the
+// client. latest_verdict is absent until at least one round has completed.
+type supervisionJSON struct {
+	Round         int    `json:"round"`
+	Budget        int    `json:"budget"`
+	LatestVerdict string `json:"latest_verdict,omitempty"`
+}
+
+// tier2OpJSON is a single irreversible operation surfaced by the defense
+// layer's tier2_triggered event. The UI renders these in the review dock so
+// users see exactly what they're signing off on before clicking Approve.
+type tier2OpJSON struct {
+	Op     string `json:"op"`
+	Target string `json:"target,omitempty"`
+	Risk   string `json:"risk"` // "high" | "medium" | "low"
+}
+
 func toTaskJSON(t core.Task) taskJSON {
-	return taskJSON{
+	out := taskJSON{
 		ID:           t.TaskID,
 		ParentID:     t.ParentID,
 		Project:      t.Project,
@@ -350,6 +424,51 @@ func toTaskJSON(t core.Task) taskJSON {
 		CreatedAt:    ts(t.CreatedAt),
 		UpdatedAt:    ts(t.UpdatedAt),
 	}
+	if t.PlanID != "" || t.StageID != "" || t.OutputArtifact != "" {
+		// StageCount/StageLabels are intentionally NOT derived here: Needs is
+		// this stage's dependency list, not the plan's stage list, so
+		// len(Needs) would label the last stage of a 3-stage plan "2 stages".
+		// getTask fills them from the canonical stage rows via enrichPlanMeta.
+		out.PlanMeta = &planMetaJSON{
+			PlanID:         t.PlanID,
+			StageID:        t.StageID,
+			Needs:          firstNeed(t.Needs),
+			OutputArtifact: t.OutputArtifact,
+		}
+	}
+	return out
+}
+
+// enrichPlanMeta fills StageCount/StageLabels from the plan engine's canonical
+// stage rows. The detail endpoint pays one indexed query (idx_tasks_plan) to
+// get the badge right; listTasks skips this to avoid N+1 on the queue board,
+// where plan_meta has no consumer today. On a delegated executor node the
+// store holds only the local stage row, so the count degrades to 1 — the
+// orchestrator's view is the complete one, and that is where users watch.
+func (h *handler) enrichPlanMeta(ctx context.Context, out *taskJSON, t core.Task) {
+	if out.PlanMeta == nil || t.PlanID == "" {
+		return
+	}
+	stages, err := h.store.PlanStages(ctx, t.PlanID)
+	if err != nil || len(stages) == 0 {
+		return // visibility hint only: never fail the endpoint over it
+	}
+	labels := make([]string, 0, len(stages))
+	for _, st := range stages {
+		labels = append(labels, st.StageID)
+	}
+	out.PlanMeta.StageCount = len(stages)
+	out.PlanMeta.StageLabels = labels
+}
+
+// firstNeed collapses the Needs list (possibly several keys) to a single
+// display string for the orbit's "need this" rail. Empty string when nothing
+// was declared.
+func firstNeed(needs []string) string {
+	if len(needs) == 0 {
+		return ""
+	}
+	return needs[0]
 }
 
 // priorityLabel maps the stored numeric priority to its wire label; unknown
@@ -403,6 +522,20 @@ func (h *handler) listTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// visibleTraceTypes is the 8-track set the decision-orbit component paints.
+// Mirrors the map in events.go (same package, kept here so getTask's filter
+// is obvious without chasing a separate file).
+var visibleTraceTypes = map[string]bool{
+	"classify_result":    true,
+	"route_decision":     true,
+	"delegation_hop":     true,
+	"exec_agent_start":   true,
+	"supervision_round":  true,
+	"tier2_triggered":    true,
+	"plan_stage_changed": true,
+	"artifact_transfer":  true,
+}
+
 // getTask serves one task's full row plus its event timeline.
 func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -416,9 +549,151 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := toTaskJSON(t)
+	h.enrichPlanMeta(r.Context(), &out, t)
 	if events, err := h.store.Events(r.Context(), id); err == nil {
+		var hops []delegationHopJSON
+		hopsSeen := make(map[string]bool) // key = from_node + "|" + to_node
+		var latestSupervision *supervisionJSON
+		var tierOps []tier2OpJSON
 		for _, e := range events {
 			out.Events = append(out.Events, eventJSON{TS: e.TS, Type: e.Type, Data: e.DataJSON})
+			if visibleTraceTypes[e.Type] {
+				te := traceEventJSON{ID: e.ID, TS: e.TS, Type: e.Type}
+				if e.DataJSON != "" {
+					var decoded any
+					if err := json.Unmarshal([]byte(e.DataJSON), &decoded); err == nil {
+						te.Data = decoded
+					} else {
+						te.DataRaw = e.DataJSON
+					}
+				}
+				out.Traces = append(out.Traces, te)
+				// — Structured aggregation: each visible track contributes data
+				//    to one or more rollup fields. Never fail the endpoint over
+				//    bad JSON — these are visibility hints only.
+				switch e.Type {
+				case "route_decision":
+					var payload struct {
+						Self  string   `json:"self_id"`
+						Chain []string `json:"chain"`
+					}
+					if json.Unmarshal([]byte(e.DataJSON), &payload) == nil {
+						// Route chain represents the visited path BEFORE this
+						// decision — render each adjacent pair as a synthetic
+						// hop so the delegation trail doesn't have gaps where
+						// the route phase skipped the delegation bus.
+						prev := payload.Self
+						for i, n := range payload.Chain {
+							if n == "" || n == prev {
+								continue
+							}
+							key := prev + "|" + n
+							if hopsSeen[key] {
+								prev = n
+								continue
+							}
+							hopsSeen[key] = true
+							hops = append(hops, delegationHopJSON{
+								Hop:      len(hops) + 1,
+								FromNode: prev,
+								ToNode:   n,
+								Via:      "route",
+								Accepted: true,
+								TS:       e.TS,
+							})
+							_ = i
+							prev = n
+						}
+					}
+				case "delegation_hop":
+					var payload struct {
+						From string `json:"from_node"`
+						To   string `json:"to_node"`
+						Via  string `json:"via"`
+					}
+					// Back-compat with legacy rows that still use short names
+					// (pre-0.0.7-beta trace shape). Accept both forms.
+					if json.Unmarshal([]byte(e.DataJSON), &payload) != nil || (payload.From == "" && payload.To == "") {
+						var legacy struct {
+							From string `json:"from"`
+							To   string `json:"to"`
+							Via  string `json:"via"`
+						}
+						if json.Unmarshal([]byte(e.DataJSON), &legacy) == nil {
+							payload.From = legacy.From
+							payload.To = legacy.To
+							payload.Via = legacy.Via
+						}
+					}
+					if payload.From != "" || payload.To != "" {
+						key := payload.From + "|" + payload.To
+						if !hopsSeen[key] {
+							hopsSeen[key] = true
+							via := payload.Via
+							if via == "" {
+								via = "direct"
+							}
+							// handleTaskAccept writes on the TO node: it is
+							// the acknowledgement leg. All other write sites
+							// are outbound dispatches → accepted=false until the
+							// accept event rounds the bus back.
+							accepted := false
+							hops = append(hops, delegationHopJSON{
+								Hop:      len(hops) + 1,
+								FromNode: payload.From,
+								ToNode:   payload.To,
+								Via:      via,
+								Accepted: accepted,
+								TS:       e.TS,
+							})
+						}
+					}
+				case "supervision_round":
+					var payload struct {
+						Round   int    `json:"round"`
+						Budget  int    `json:"budget"`
+						Verdict string `json:"verdict"`
+						Status  string `json:"verdict_status"`
+					}
+					if json.Unmarshal([]byte(e.DataJSON), &payload) == nil {
+						verdict := payload.Verdict
+						if verdict == "" {
+							verdict = payload.Status
+						}
+						latestSupervision = &supervisionJSON{
+							Round:         payload.Round,
+							Budget:        payload.Budget,
+							LatestVerdict: verdict,
+						}
+					}
+				case "tier2_triggered":
+					var payload struct {
+						Operations []struct {
+							Op     string `json:"op"`
+							Target string `json:"target"`
+							Risk   string `json:"risk"`
+						} `json:"operations"`
+					}
+					if json.Unmarshal([]byte(e.DataJSON), &payload) == nil {
+						for _, op := range payload.Operations {
+							tierOps = append(tierOps, tier2OpJSON{
+								Op:     op.Op,
+								Target: op.Target,
+								Risk:   op.Risk,
+							})
+						}
+					}
+				}
+			}
+		}
+		if len(hops) > 0 {
+			out.DelegationChain = hops
+		}
+		if latestSupervision != nil {
+			out.Supervision = latestSupervision
+		}
+		if len(tierOps) > 0 {
+			out.Tier2Ops = tierOps
 		}
 	}
 	writeJSON(w, out)

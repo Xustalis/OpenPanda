@@ -8,6 +8,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
 
@@ -30,6 +31,11 @@ type TaskInput struct {
 	Risk          string
 	ResourceJSON  string
 	Authorized    bool // user consented to executing tier-2 (irreversible) commands
+	// ClassifyKind carries the entry model's classification ("task") for trace
+	// emission. Empty means the input did not come from a classified ask (a
+	// direct CLI submission, a delegated peer task): no classify_result event
+	// fires for those, matching the pre-trace behavior.
+	ClassifyKind string
 }
 
 // detail folds the input into the persisted detail columns.
@@ -74,8 +80,77 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 	}
 
 	chain := []string{c.nodeID}
-	decision := scheduler.Route(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), in.Requires,
+	employees := c.onlineEmployees(ctx)
+	localMatch := c.localMatch()
+	decision := scheduler.Route(c.nodeID, chain, employees, localMatch, in.Requires,
 		resourceRequirement(in.ResourceJSON), in.PreferredNode)
+
+	// — Trace: route decision with per-candidate score breakdown (orbit Step-2).
+	// Build the same candidate set RouteAt uses (online + hardware fit +
+	// capability match). Best-effort; any error is logged and the execution
+	// path is unaffected.
+	{
+		req := resourceRequirement(in.ResourceJSON)
+		seen := make(map[string]bool, len(chain))
+		for _, n := range chain {
+			seen[n] = true
+		}
+		now := time.Now().Unix()
+		var capable []ledger.Node
+		for _, n := range employees {
+			if scheduler.IsSelfRow(n.ID, c.nodeID) {
+				continue
+			}
+			if n.Status != "online" || seen[n.ID] {
+				continue
+			}
+			if !n.Fits(req) {
+				continue
+			}
+			if n.Matches(in.Requires) || len(in.Requires) == 0 {
+				capable = append(capable, n)
+			}
+		}
+		// Also route the self-node in so ScoreAllCandidates can apply localBias.
+		for i := range employees {
+			if scheduler.IsSelfRow(employees[i].ID, c.nodeID) {
+				capable = append(capable, employees[i])
+				break
+			}
+		}
+		allCandidates := scheduler.ScoreAllCandidates(capable, c.nodeID, in.PreferredNode, now)
+		// — Pick the breakdown that actually drove the decision so the orbit
+		//    can explain "why this node". For ActionLocal the winner is the
+		//    local self node (top of allCandidates due to localBias); for
+		//    ActionForward it's decision.Target; decline leaves it nil (no
+		//    winner, no score to explain).
+		var chosenBreakdown any
+		switch decision.Action {
+		case scheduler.ActionLocal:
+			for i := range allCandidates {
+				if scheduler.IsSelfRow(allCandidates[i].NodeID, c.nodeID) {
+					chosenBreakdown = allCandidates[i].Breakdown
+					break
+				}
+			}
+		case scheduler.ActionForward:
+			for i := range allCandidates {
+				if allCandidates[i].NodeID == decision.Target {
+					chosenBreakdown = allCandidates[i].Breakdown
+					break
+				}
+			}
+		}
+		c.EvTrace(ctx, t.TaskID, EvRouteDecision, map[string]any{
+			"action":          decision.Action,
+			"target_node":     decision.Target,
+			"reason":          decision.Reason,
+			"score_breakdown": chosenBreakdown,
+			"self_id":         c.nodeID,
+			"chain":           chain,
+			"candidates":      allCandidates,
+		})
+	}
 
 	switch decision.Action {
 	case scheduler.ActionLocal:
@@ -150,6 +225,18 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 	if err := c.store.SetDetail(ctx, t.TaskID, d); err != nil {
 		return Task{}, "", "", fmt.Errorf("set detail: %w", err)
 	}
+	// — Trace: the entry model's classification, fired at task creation —
+	// before Submit's routing decision, before the queue scheduler claims an
+	// enqueued task, before anything runs. The orbit's Step-1 (意图分类) must
+	// lead the timeline, not trail the result it was supposed to explain
+	// (design doc §3.1.1: kind/note/stages_count; a single task is one stage).
+	if in.ClassifyKind != "" {
+		c.EvTrace(ctx, t.TaskID, EvClassifyResult, map[string]any{
+			"kind":         in.ClassifyKind,
+			"note":         in.Title,
+			"stages_count": 1,
+		})
+	}
 	return t, hash, level, nil
 }
 
@@ -158,6 +245,47 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.TaskResultPayload, error) {
 	result, err := c.execute(ctx, t.TaskID, in.Intent, in.Requires)
 	return c.retryLoop(ctx, t.TaskID, in.Intent, in.Requires, result, err)
+}
+
+// ResumeApproved grants tier-2 consent to a task parked in review by an
+// authorization refusal and re-runs it synchronously on this node, returning
+// the final row and result. It is the inline approval closure: when the user
+// approves a tier-2 agent at the ask/repl prompt, the task that just refused
+// runs to completion in the same round-trip — no background scheduler required
+// (the ask/repl process runs none). This is the cost-efficient path: the tier-2
+// refusal is raised before the agent subprocess ever spawns, so the first
+// Submit spent no agent tokens and the resume is the sole execution.
+//
+// The task must be in review; its intent and requirements are read from the
+// persisted row (the entry model's distilled intent, plus the appended user
+// prompt, both stored at submit). A concurrent scheduler claiming the
+// just-approved task is tolerated: Dispatch loses the CAS and we report the
+// current row rather than double-running.
+func (c *Core) ResumeApproved(ctx context.Context, taskID string) (Task, bus.TaskResultPayload, error) {
+	cur, err := c.store.Get(ctx, taskID)
+	if err != nil {
+		return Task{}, bus.TaskResultPayload{}, err
+	}
+	if cur.State != StateReview {
+		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume approved: task %s state=%s, want %s", taskID, cur.State, StateReview)
+	}
+	// Approve grants consent (authorized=1) and moves review -> queued.
+	if err := c.store.Approve(ctx, taskID); err != nil {
+		return cur, bus.TaskResultPayload{}, fmt.Errorf("approve: %w", err)
+	}
+	// The parking already reset the retry budget; keep it fresh for this run.
+	c.reviewReset(taskID)
+	if err := c.store.Dispatch(ctx, taskID, c.nodeID, c.nodeID); err != nil {
+		// A queue scheduler sharing this store may have claimed the queued row
+		// first; leave the run to it and report the current state.
+		final, gerr := c.store.Get(ctx, taskID)
+		if gerr != nil {
+			return cur, bus.TaskResultPayload{}, gerr
+		}
+		return final, bus.TaskResultPayload{}, nil
+	}
+	result, err := c.run(ctx, taskID, cur.Intent, cur.Requires)
+	return c.retryLoop(ctx, taskID, cur.Intent, cur.Requires, result, err)
 }
 
 // retryLoop drives a task from its first execution outcome to a stable state:

@@ -190,11 +190,24 @@ func userShell() (shell, flag string) {
 const maxRefBytes = 32 * 1024
 
 // expandFileRefs replaces every `@path` token in text with a fenced block of
-// that file's content, appended after the prompt. Tokens that do not resolve to
-// a readable file are left alone — an email address or a decorator is not a
-// file reference, and rewriting it would corrupt the question.
+// that file's content, appended after the prompt, and prints one notice per
+// attachment. Tokens that do not resolve to a readable file are left alone — an
+// email address or a decorator is not a file reference, and rewriting it would
+// corrupt the question.
 func (r *repl) expandFileRefs(text string) string {
-	var blocks []string
+	prompt, notes := r.expandFileRefsNotes(text)
+	for _, n := range notes {
+		fmt.Println(n)
+	}
+	return prompt
+}
+
+// expandFileRefsNotes does the expansion and returns the notices instead of
+// printing them, so a full-screen front end can commit them to its transcript.
+// Writing to stdout directly while Bubble Tea holds the terminal would land
+// inside the frame it is repainting.
+func (r *repl) expandFileRefsNotes(text string) (string, []string) {
+	var blocks, notes []string
 	seen := map[string]bool{}
 	for _, field := range strings.Fields(text) {
 		raw := strings.TrimRight(strings.TrimPrefix(field, "@"), ".,;:!?)")
@@ -213,7 +226,7 @@ func (r *repl) expandFileRefs(text string) string {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			fmt.Println(pal().Warn(i18n.Tf(r.loc, "repl.at.fail", "path", raw, "err", err.Error())))
+			notes = append(notes, pal().Warn(i18n.Tf(r.loc, "repl.at.fail", "path", raw, "err", err.Error())))
 			continue
 		}
 		seen[raw] = true
@@ -226,13 +239,13 @@ func (r *repl) expandFileRefs(text string) string {
 			body += "\n… (truncated at " + cliui.HumanCount(maxRefBytes) + " bytes)"
 		}
 		blocks = append(blocks, fmt.Sprintf("`%s`:\n```%s\n%s\n```", raw, fenceLang(raw), strings.TrimRight(body, "\n")))
-		fmt.Println(pal().Muted(pal().MarkBullet() + " " +
+		notes = append(notes, pal().Muted(pal().MarkBullet()+" "+
 			i18n.Tf(r.loc, "repl.at.attached", "path", raw, "n", fmt.Sprint(countLines(body)))))
 	}
 	if len(blocks) == 0 {
-		return text
+		return text, notes
 	}
-	return text + "\n\n" + strings.Join(blocks, "\n\n")
+	return text + "\n\n" + strings.Join(blocks, "\n\n"), notes
 }
 
 // fenceLang maps a file extension to a Markdown fence language, so the model

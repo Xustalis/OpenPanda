@@ -18,15 +18,15 @@ import (
 // provider streams it, while tool_use blocks and the final Response are
 // accumulated and returned at the end. It is the streaming counterpart of
 // CompleteTurnsWithTools and dispatches on the configured api type.
-func (c *Client) StreamTurnsWithTools(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string)) (Response, error) {
+func (c *Client) StreamTurnsWithTools(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
 	if c.apiType == config.APITypeOpenAI {
-		return c.streamWithRetry(ctx, func(on func(string)) (Response, error) {
-			return c.streamOpenAI(ctx, system, turns, tools, on)
-		}, onDelta)
+		return c.streamWithRetry(ctx, func(on, onR func(string)) (Response, error) {
+			return c.streamOpenAI(ctx, system, turns, tools, on, onR)
+		}, onDelta, onReasoning)
 	}
-	return c.streamWithRetry(ctx, func(on func(string)) (Response, error) {
-		return c.streamAnthropic(ctx, system, turns, tools, on)
-	}, onDelta)
+	return c.streamWithRetry(ctx, func(on, onR func(string)) (Response, error) {
+		return c.streamAnthropic(ctx, system, turns, tools, on, onR)
+	}, onDelta, onReasoning)
 }
 
 // streamWithRetry gives the streaming path the transport resilience the
@@ -36,8 +36,8 @@ func (c *Client) StreamTurnsWithTools(ctx context.Context, system string, turns 
 // duplicate it, so the failure surfaces instead. A caller-cancelled context is
 // never retried. Delivery is judged by the deltaGuard, so a structured output
 // whose deltas were suppressed still counts as unseen and stays retryable.
-func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta func(string)) (Response, error), onDelta func(string)) (Response, error) {
-	guard := newDeltaGuard(onDelta)
+func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta, onReasoning func(string)) (Response, error), onDelta func(string), onReasoning func(string)) (Response, error) {
+	guard := newDeltaGuard(onDelta, onReasoning)
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 {
@@ -45,8 +45,12 @@ func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta func(s
 				return Response{}, err
 			}
 		}
-		resp, err := stream(guard.on)
+		resp, err := stream(guard.on, guard.onReason)
 		if err == nil {
+			// The accumulators join every raw delta — including inlined
+			// reasoning — so the final text must pass the same stripping the
+			// user's live deltas did (think.go, D14).
+			resp.Text = stripThinkingBlock(resp.Text)
 			guard.flush()
 			return resp, nil
 		}
@@ -59,9 +63,13 @@ func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta func(s
 }
 
 // deltaGuard wraps the caller's onDelta for one streaming call and owns the
-// two concerns that share a single piece of state — what the user has
-// actually seen:
+// concerns that share a single piece of state — what the user has actually
+// seen:
 //
+//   - Reasoning removal: providers that inline chain-of-thought into the
+//     content field wrap it in  tags; thinkStripper runs ahead of every
+//     other decision so reasoning never reaches the user nor biases the
+//     structured-shape detection (think.go, D14).
 //   - Suppression: a task spec arrives as bare JSON (the system prompt
 //     demands "只输出一个 JSON 对象"), and raw JSON must never stream into a
 //     chat bubble or terminal — the parsed Output delivers it rendered at
@@ -72,20 +80,45 @@ func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta func(s
 //     has seen nothing, so a suppressed structured delta does not count as
 //     delivered — a mid-JSON transport drop is still safely retried.
 type deltaGuard struct {
-	onDelta    func(string)
-	buffered   []string
-	decided    bool
-	structured bool
-	delivered  bool
-	pending    strings.Builder // prose mode: bytes withheld pending a possible structured start
+	onDelta     func(string)
+	onReasoning func(string)
+	buffered    []string
+	decided     bool
+	structured  bool
+	delivered   bool
+	pending     strings.Builder // prose mode: bytes withheld pending a possible structured start
+	think       thinkStripper   // removes inlined  reasoning before anything else
 }
 
-func newDeltaGuard(onDelta func(string)) *deltaGuard {
-	return &deltaGuard{onDelta: onDelta}
+func newDeltaGuard(onDelta func(string), onReasoning func(string)) *deltaGuard {
+	return &deltaGuard{onDelta: onDelta, onReasoning: onReasoning}
+}
+
+// onReason is the reasoning sink the stream implementations call with
+// chain-of-thought from a provider's SEPARATE reasoning field (Anthropic
+// thinking_delta, OpenAI reasoning_content). It bypasses the structured-shape
+// decision and the think stripper entirely — reasoning arrives already
+// separated from the answer, so it is neither JSON to suppress nor inline
+// <think> tags to strip. It is display-only and deliberately does NOT set
+// delivered: reasoning is regenerable scratch, so a transport drop that showed
+// only reasoning stays retryable (the retry re-fills the thinking block).
+func (g *deltaGuard) onReason(text string) {
+	if text == "" || g.onReasoning == nil {
+		return
+	}
+	g.onReasoning(text)
 }
 
 // on is the delta sink the stream implementations call.
 func (g *deltaGuard) on(text string) {
+	if text = g.think.feed(text); text == "" {
+		return // reasoning, or bytes still undecidable as a split tag
+	}
+	g.deliver(text)
+}
+
+// deliver runs the structured-shape decision on think-stripped prose.
+func (g *deltaGuard) deliver(text string) {
 	if !g.decided {
 		g.buffered = append(g.buffered, text)
 		trimmed := strings.TrimLeft(strings.Join(g.buffered, ""), " \t\r\n")
@@ -128,8 +161,12 @@ func (g *deltaGuard) on(text string) {
 }
 
 // flush forwards any prose still withheld at end-of-stream: bytes held back
-// as a possible structured prefix that never developed.
+// by the think stripper as a possible split tag (now literal text), then
+// bytes held back as a possible structured prefix that never developed.
 func (g *deltaGuard) flush() {
+	if tail := g.think.flush(); tail != "" {
+		g.deliver(tail)
+	}
 	if g.decided && !g.structured {
 		g.forward(g.pending.String())
 		g.pending.Reset()
@@ -214,17 +251,22 @@ type anthropicStreamEvent struct {
 }
 
 type anthropicDelta struct {
-	Type        string `json:"type"` // text_delta | input_json_delta
+	Type        string `json:"type"` // text_delta | input_json_delta | thinking_delta
 	Text        string `json:"text"`
+	Thinking    string `json:"thinking"` // thinking_delta: chain-of-thought scratch
 	PartialJSON string `json:"partial_json"`
 	StopReason  string `json:"stop_reason"`
 }
 
 // anthAccumulator assembles a Response from Anthropic stream events. Usage is
 // accumulated per attempt (the caller bills it only when the stream
-// completes, so a retried attempt is never double-counted).
+// completes, so a retried attempt is never double-counted). Reasoning from
+// thinking blocks is collected separately from the answer text (D14): it is
+// surfaced live via the reasoning sink and returned on Response.Reasoning,
+// never joined into Response.Text.
 type anthAccumulator struct {
 	texts     []string
+	reasoning []string
 	blocks    map[int]*ContentBlock    // by stream index
 	rawArgs   map[int]*strings.Builder // tool_use partial_json, by index
 	order     []int
@@ -265,7 +307,7 @@ func (a *anthAccumulator) start(ev *anthropicStreamEvent) {
 	a.order = append(a.order, ev.Index)
 }
 
-func (a *anthAccumulator) delta(ev *anthropicStreamEvent, onDelta func(string)) {
+func (a *anthAccumulator) delta(ev *anthropicStreamEvent, onDelta func(string), onReasoning func(string)) {
 	b, ok := a.blocks[ev.Index]
 	if !ok {
 		return
@@ -275,6 +317,13 @@ func (a *anthAccumulator) delta(ev *anthropicStreamEvent, onDelta func(string)) 
 		b.Text += ev.Delta.Text
 		if b.Type == "text" && onDelta != nil {
 			onDelta(ev.Delta.Text)
+		}
+	case "thinking_delta":
+		// Chain-of-thought on a thinking block: collect it apart from the
+		// answer and surface it live, but never fold it into b.Text (D14).
+		a.reasoning = append(a.reasoning, ev.Delta.Thinking)
+		if onReasoning != nil {
+			onReasoning(ev.Delta.Thinking)
 		}
 	case "input_json_delta":
 		if sb := a.rawArgs[ev.Index]; sb != nil {
@@ -304,11 +353,12 @@ func (a *anthAccumulator) result() Response {
 		}
 	}
 	out.Text = strings.Join(texts, "")
+	out.Reasoning = strings.Join(a.reasoning, "")
 	out.Truncated = a.truncated
 	return out
 }
 
-func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string)) (Response, error) {
+func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
 	if c.apiKey == "" {
 		return Response{}, ErrNoKey
 	}
@@ -372,7 +422,7 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 			case "content_block_start":
 				acc.start(&ev)
 			case "content_block_delta":
-				acc.delta(&ev, onDelta)
+				acc.delta(&ev, onDelta, onReasoning)
 			case "message_start", "message_delta":
 				acc.noteUsage(&ev)
 				if ev.Type == "message_delta" && ev.Delta.StopReason == "max_tokens" {
@@ -400,7 +450,7 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 
 // ---- OpenAI Chat Completions SSE streaming ----
 
-func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string)) (Response, error) {
+func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
 	if c.apiKey == "" {
 		return Response{}, ErrNoKey
 	}
@@ -469,7 +519,7 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 			if chunk.Error != nil {
 				return Response{}, fmt.Errorf("entry: api error: %s", chunk.Error.Message)
 			}
-			acc.feed(&chunk, onDelta)
+			acc.feed(&chunk, onDelta, onReasoning)
 		}
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {

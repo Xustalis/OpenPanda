@@ -1,0 +1,221 @@
+package main
+
+// Turn handlers: how the model folds streamed events into the in-flight turn and
+// commits the finished turn to scrollback. Kept apart from the keystroke routing
+// in tui_update.go so each file reads as one concern.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
+)
+
+// onDelta appends one streamed answer chunk. The first answer text also closes
+// the thought: reasoning precedes the answer on reasoning models, so once prose
+// starts, the thought block is committed to scrollback (folded or expanded per
+// the current Ctrl+O state) and the answer streams live below it.
+func (m tuiModel) onDelta(chunk string) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	if !m.thoughtDone {
+		m.thoughtDone = true
+		if len(m.thought) > 0 {
+			tb := block{kind: blockThought, thoughtLines: m.thought}
+			cmds = append(cmds, tea.Println(tb.render(m.th, m.width, m.expandThought)))
+		}
+	}
+	m.liveAnswer.WriteString(chunk)
+	cmds = append(cmds, waitForActivity(m.stream))
+	return m, tea.Batch(cmds...)
+}
+
+// onProgress folds one lifecycle event into the turn. A task/plan event opens the
+// delegated-task card (committing any thought that led to the delegation, the way
+// the first answer delta does); the routing/exec/judge milestones that follow
+// advance that card's trail. The note is kept either way, for the status line on
+// turns that never delegate.
+func (m tuiModel) onProgress(p askengine.Progress) (tea.Model, tea.Cmd) {
+	label := progressNote(m.loc, p)
+	m.note = label
+	now := time.Now()
+
+	var cmds []tea.Cmd
+	switch p.Kind {
+	case askengine.ProgressTask, askengine.ProgressPlan:
+		if !m.thoughtDone {
+			m.thoughtDone = true
+			if len(m.thought) > 0 {
+				tb := block{kind: blockThought, thoughtLines: m.thought}
+				cmds = append(cmds, tea.Println(tb.render(m.th, m.width, m.expandThought)))
+			}
+		}
+		m.liveTask = newTaskProgress(p.Name, now)
+	default:
+		if m.liveTask != nil {
+			m.liveTask.advance(label, now)
+		}
+	}
+	cmds = append(cmds, waitForActivity(m.stream))
+	return m, tea.Batch(cmds...)
+}
+
+// onDone commits the finished turn. It records the exchange into conversation
+// memory, then pushes the answer / task / plan / error block to scrollback and
+// clears the live region. A tier-2 task parked for approval switches the model
+// into approving mode instead of committing.
+func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
+	m.mode = modeIdle
+	m.stream = nil
+
+	if msg.err != nil {
+		// A user-initiated cancel (Esc / Ctrl+C mid-stream) surfaces as a context
+		// error; that is a quiet "interrupted" note, not a red failure block.
+		done := m.turnEnded()
+		m.resetLive()
+		if errors.Is(msg.err, context.Canceled) {
+			note := block{kind: blockNote, body: i18n.T(m.loc, "repl.interrupted")}
+			return m, tea.Batch(done, tea.Println(note.render(m.th, m.width, m.expandThought)))
+		}
+		blk := block{kind: blockError, body: msg.err.Error()}
+		return m, tea.Batch(done, tea.Println(blk.render(m.th, m.width, m.expandThought)))
+	}
+	out := msg.out
+	if out != nil && out.NeedsApproval && out.Approval != nil {
+		m.pending = out
+		m.mode = modeApproving
+		// The watcher stays quiet while the card is up: the parked task's own
+		// "review" state is what the card is showing.
+		return m, nil // the card renders in View; keys handled by onApprovalKey
+	}
+	return m.commit(out)
+}
+
+// onResumed commits the outcome of a ResumeApproved re-run.
+func (m tuiModel) onResumed(msg resumedMsg) (tea.Model, tea.Cmd) {
+	m.mode = modeIdle
+	m.pending = nil
+	return m.commit(msg.out)
+}
+
+// turnEnded releases the out-of-band watcher and hands back the command that
+// absorbs this turn's terminal states into its baseline, so a task the turn just
+// finished is reported once — by the turn — and not again by the watcher.
+func (m tuiModel) turnEnded() tea.Cmd {
+	if m.r == nil {
+		return nil
+	}
+	m.r.setAsking(false)
+	return absorbBaseline(m.r)
+}
+
+// commit records the turn into conversation memory and pushes its result block
+// to scrollback, clearing the live region. Persistence goes through the shared
+// repl helper, so a turn taken inside a /resume'd session lands in that thread
+// (and a spawned task is bound to it) exactly as the classic loop would.
+func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
+	done := m.turnEnded()
+	if out == nil {
+		m.resetLive()
+		return m, done
+	}
+	if m.r != nil {
+		m.r.recordOutcome(context.Background(), m.pendingPrompt, out)
+	}
+	blk := resultBlock(out, m.liveAnswer.String())
+	// A delegated turn carries its card's title and stage trail into scrollback,
+	// so the committed block records the same route/exec/judge evidence the live
+	// card showed rather than just the final output.
+	if blk.kind == blockTask && m.liveTask != nil {
+		blk.title = m.liveTask.title
+		blk.stages = m.liveTask.trail(time.Since(m.liveTask.started))
+	}
+	m.resetLive()
+	if blk.body == "" && blk.kind == blockAnswer {
+		return m, done
+	}
+	return m, tea.Batch(done, tea.Println(blk.render(m.th, m.width, m.expandThought)))
+}
+
+// resultBlock turns an engine Result into the transcript block for its kind.
+// liveAnswer is the streamed text already accumulated (used for answers so the
+// committed block matches exactly what streamed).
+func resultBlock(out *askengine.Result, liveAnswer string) block {
+	switch out.Kind {
+	case "task":
+		if out.OK {
+			return block{kind: blockTask, ok: true, body: strings.TrimRight(out.Stdout, "\n")}
+		}
+		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, out.Stderr)}
+	case "plan":
+		return block{kind: blockInfo, body: planSummaryLine(out)}
+	default: // answer
+		body := strings.TrimSpace(liveAnswer)
+		if body == "" {
+			body = strings.TrimSpace(out.Answer)
+		}
+		if note := strings.TrimSpace(out.Note); note != "" {
+			body = note + "\n" + body
+		}
+		return block{kind: blockAnswer, body: body}
+	}
+}
+
+// planSummaryLine is the one-line commit for a started plan: a plan runs
+// asynchronously, so the transcript records that it started and how to follow it.
+func planSummaryLine(out *askengine.Result) string {
+	return fmt.Sprintf("plan %s · %d stages · %s", out.PlanID, len(out.PlanStages), out.PlanGoal)
+}
+
+// onApprovalKey handles the tier-2 approval card: y approves (resume the task
+// authorized), n/Esc denies and commits a note.
+func (m tuiModel) onApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch strings.ToLower(msg.String()) {
+	case "y":
+		req := m.pending.Approval
+		m.mode = modeAsking
+		m.started = time.Now()
+		return m, tea.Batch(m.sp.Tick, resumeApproved(m.engine, req.TaskID, ""))
+	case "n", "esc":
+		id := m.pending.Approval.TaskID
+		m.pending = nil
+		m.mode = modeIdle
+		done := m.turnEnded()
+		note := block{kind: blockNote, body: i18n.Tf(m.loc, "repl.approval.denied", "id", id)}
+		return m, tea.Batch(done, tea.Println(note.render(m.th, m.width, m.expandThought)))
+	}
+	return m, nil
+}
+
+// resetLive clears the in-flight turn state after a turn commits.
+func (m *tuiModel) resetLive() {
+	m.liveAnswer.Reset()
+	m.thought = nil
+	m.thoughtDone = false
+	m.note = ""
+	m.pendingPrompt = ""
+	m.liveTask = nil
+}
+
+// appendReasoning folds a reasoning chunk into the running thought lines: it
+// keeps whole lines, so a chunk that splits mid-line extends the last line
+// rather than starting a new one. Display-only (D14).
+func appendReasoning(lines []string, chunk string) []string {
+	if chunk == "" {
+		return lines
+	}
+	parts := strings.Split(chunk, "\n")
+	if len(lines) == 0 {
+		lines = append(lines, "")
+	}
+	lines[len(lines)-1] += parts[0]
+	for _, p := range parts[1:] {
+		lines = append(lines, p)
+	}
+	return lines
+}

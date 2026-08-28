@@ -101,9 +101,26 @@ func (m *Manager) Check(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err != nil {
-		m.errMsg = err.Error()
-		m.stage = StageError
-		return err
+		// Rate-limit (429 + 403-w/remaining=0) and access-denied (403/401/404 on
+		// a private repo) are conditions the panel must not paint as a red
+		// update error: the binary is still functional, the check just isn't
+		// reachable right now. Degrade to StageIdle and carry the human hint
+		// in Notes so the UI can surface it muted. Any other error (network
+		// timeout, bad body, …) retains StageError so the operator can see
+		// the real issue.
+		switch err.(type) {
+		case *RateLimitExceeded, *AccessDenied:
+			m.stage = StageIdle
+			m.latest = ""
+			m.errMsg = ""
+			m.notes = "暂无法检查更新：" + err.Error()
+			m.opts.Logger.Warn("updater: check degraded to idle", "err", err)
+			return nil
+		default:
+			m.errMsg = err.Error()
+			m.stage = StageError
+			return err
+		}
 	}
 	m.latest = rel.Version
 	m.notes = summarizeNotes(rel.Notes)

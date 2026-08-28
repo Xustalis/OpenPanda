@@ -72,10 +72,12 @@ func ParseOutput(raw string) (Output, error) {
 }
 
 // decodeEnvelope unmarshals raw into the top-level envelope and resolves it to
-// an Output. The ok result is true only when raw is a valid tool_call/task
-// directive; a non-JSON payload or an answer/unknown kind returns ok=false with
-// a nil error. An error is returned only when raw is valid JSON but fails
-// validation (a model error that must surface, never degrade to an answer).
+// an Output. The ok result is true when raw is a valid tool_call/task/plan
+// directive or an {"kind":"answer","answer":"…"} envelope with a non-empty
+// answer; a non-JSON payload, an empty/contentless answer, or an unknown kind
+// returns ok=false with a nil error. An error is returned only when raw is valid
+// JSON but fails validation (a model error that must surface, never degrade to
+// an answer).
 func decodeEnvelope(raw string) (Output, bool, error) {
 	// Only an object can be an envelope. A bare JSON scalar ("2", "true",
 	// "\"yes\"") is a valid JSON value that merely fails to unmarshal into
@@ -85,10 +87,11 @@ func decodeEnvelope(raw string) (Output, bool, error) {
 		return Output{}, false, nil
 	}
 	var envelope struct {
-		Kind Kind      `json:"kind"`
-		Tool *ToolCall `json:"tool"`
-		Task *TaskSpec `json:"task"`
-		Plan *PlanSpec `json:"plan"`
+		Kind   Kind      `json:"kind"`
+		Answer string    `json:"answer"`
+		Tool   *ToolCall `json:"tool"`
+		Task   *TaskSpec `json:"task"`
+		Plan   *PlanSpec `json:"plan"`
 	}
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
 		// A syntax error means raw is not JSON, so the caller may try extraction
@@ -130,9 +133,19 @@ func decodeEnvelope(raw string) (Output, bool, error) {
 		}
 		return Output{Kind: KindPlan, Plan: envelope.Plan}, true, nil
 
+	case KindAnswer:
+		// A model that wraps its reply as {"kind":"answer","answer":"…"} instead
+		// of emitting bare prose must be unwrapped, or the raw JSON envelope leaks
+		// to the user as the "answer". Only a non-empty answer field is a real
+		// directive; an empty one falls back to prose handling so we never render
+		// a contentless envelope.
+		if strings.TrimSpace(envelope.Answer) == "" {
+			return Output{}, false, nil
+		}
+		return Output{Kind: KindAnswer, Answer: envelope.Answer}, true, nil
+
 	default:
-		// KindAnswer and unknown kinds carry no payload; the caller falls back
-		// to prose handling.
+		// Unknown kinds carry no payload; the caller falls back to prose handling.
 		return Output{}, false, nil
 	}
 }

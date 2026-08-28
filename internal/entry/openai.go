@@ -70,12 +70,18 @@ type oaiFunctionCall struct {
 	Arguments string `json:"arguments"` // JSON-encoded string
 }
 
-// oaiResponse is the non-streaming response body.
+// oaiResponse is the non-streaming response body. The message's
+// reasoning_content / reasoning fields (DeepSeek-R1-style reasoners and relays
+// that separate chain-of-thought from content) are captured onto
+// Response.Reasoning for display only — surfaced to a reasoning sink, never
+// merged into the answer or session history (D14).
 type oaiResponse struct {
 	Choices []struct {
 		Message struct {
-			Content   string        `json:"content"`
-			ToolCalls []oaiToolCall `json:"tool_calls"`
+			Content          string        `json:"content"`
+			ReasoningContent string        `json:"reasoning_content"`
+			Reasoning        string        `json:"reasoning"`
+			ToolCalls        []oaiToolCall `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -89,13 +95,18 @@ type oaiError struct {
 }
 
 // oaiChunk is one streamed chunk: choices[0].delta carries either text or
-// incremental tool_call fragments addressed by index. The final chunk (with
-// stream_options.include_usage) carries the usage block and empty choices.
+// incremental tool_call fragments addressed by index. Reasoning-bearing
+// providers stream chain-of-thought on delta.reasoning_content / delta.
+// reasoning — surfaced live to the reasoning sink and kept off the answer
+// (D14). The final chunk (with stream_options.include_usage) carries the
+// usage block and empty choices.
 type oaiChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string        `json:"content"`
-			ToolCalls []oaiToolCall `json:"tool_calls"`
+			Content          string        `json:"content"`
+			ReasoningContent string        `json:"reasoning_content"`
+			Reasoning        string        `json:"reasoning"`
+			ToolCalls        []oaiToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -161,13 +172,23 @@ func specsToOpenAI(specs []ToolSpec) []oaiTool {
 }
 
 // parseOpenAIResponse reduces a non-streaming response to the internal shape.
+// The content passes stripThinkingBlock: a reasoner or relay that inlines
+// chain-of-thought into content as  tags must not leak it into the
+// answer, the session history, or a task result (D14).
 func parseOpenAIResponse(r *oaiResponse) Response {
 	var out Response
 	if len(r.Choices) == 0 {
 		return out
 	}
 	c := r.Choices[0]
-	out.Text = c.Message.Content
+	out.Text = stripThinkingBlock(c.Message.Content)
+	// Chain-of-thought from the separate reasoning field is display-only (D14):
+	// captured on Response.Reasoning, never merged into Text.
+	if c.Message.ReasoningContent != "" {
+		out.Reasoning = c.Message.ReasoningContent
+	} else {
+		out.Reasoning = c.Message.Reasoning
+	}
 	for _, tc := range c.Message.ToolCalls {
 		var input map[string]any
 		if tc.Function.Arguments != "" {
@@ -192,6 +213,7 @@ func parseOpenAIResponse(r *oaiResponse) Response {
 // stream completes, so a retried attempt is never double-counted).
 type oaiAccumulator struct {
 	texts     []string
+	reasoning []string
 	calls     map[int]oaiToolCall
 	order     []int
 	truncated bool
@@ -199,7 +221,7 @@ type oaiAccumulator struct {
 	usageOut  int64
 }
 
-func (a *oaiAccumulator) feed(chunk *oaiChunk, onDelta func(string)) {
+func (a *oaiAccumulator) feed(chunk *oaiChunk, onDelta func(string), onReasoning func(string)) {
 	if chunk.Usage != nil {
 		a.usageIn = chunk.Usage.PromptTokens
 		a.usageOut = chunk.Usage.CompletionTokens
@@ -208,6 +230,21 @@ func (a *oaiAccumulator) feed(chunk *oaiChunk, onDelta func(string)) {
 		return
 	}
 	c := chunk.Choices[0]
+	// Chain-of-thought arrives on a separate field (reasoning_content, or the
+	// bare reasoning alias): collect it apart from the answer and surface it
+	// live, but never let it reach a.texts / the answer or history (D14).
+	if r := c.Delta.ReasoningContent; r != "" {
+		a.reasoning = append(a.reasoning, r)
+		if onReasoning != nil {
+			onReasoning(r)
+		}
+	}
+	if r := c.Delta.Reasoning; r != "" {
+		a.reasoning = append(a.reasoning, r)
+		if onReasoning != nil {
+			onReasoning(r)
+		}
+	}
 	if c.Delta.Content != "" {
 		a.texts = append(a.texts, c.Delta.Content)
 		if onDelta != nil {
@@ -240,6 +277,7 @@ func (a *oaiAccumulator) feed(chunk *oaiChunk, onDelta func(string)) {
 func (a *oaiAccumulator) result() Response {
 	var out Response
 	out.Text = strings.Join(a.texts, "")
+	out.Reasoning = strings.Join(a.reasoning, "")
 	out.Truncated = a.truncated
 	for _, idx := range a.order {
 		tc := a.calls[idx]

@@ -35,6 +35,35 @@ func Route(self string, chain []string, employees []ledger.Node, localMatch func
 	return RouteAt(self, chain, employees, localMatch, required, req, preferred, time.Now().Unix())
 }
 
+// IsSelfRow reports whether the capability-directory row id names the same
+// physical node as the routing participant self. self may be an ephemeral
+// identity — core.EphemeralNodeID appends an 8-hex random suffix to the
+// stable id ("macbook-1f3a2b4c") so a short-lived ask session never collides
+// with the daemon on the bus, while the directory row carries the stable id
+// the daemon registered ("macbook", or "macbook@vm-…" for a VM). Without the
+// suffix strip, the ask session never recognizes its own row: haveSelf stays
+// false, RouteAt falls into its no-row "stay local" default, and load
+// balancing silently degrades to run-everything-here.
+func IsSelfRow(id, self string) bool {
+	if id == self {
+		return true
+	}
+	i := strings.LastIndex(self, "-")
+	if i <= 0 || len(self)-i-1 != 8 {
+		return false
+	}
+	for _, c := range self[i+1:] {
+		if !isHexDigit(c) {
+			return false
+		}
+	}
+	return id == self[:i]
+}
+
+func isHexDigit(c rune) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
 // localBias is how much this node's own score is favoured over an equally-loaded
 // peer's. It is the cost of a hop expressed in the same units as the score:
 // moving a task means shipping its context and pulling its artifacts back, so an
@@ -87,7 +116,7 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 
 	var matching, subs []ledger.Node
 	for _, n := range employees {
-		if n.ID == self {
+		if IsSelfRow(n.ID, self) {
 			selfNode, haveSelf = n, true
 			continue
 		}
@@ -137,7 +166,7 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 		}
 	}
 
-	target, peerScore := pickBestScored(matching, now)
+	target, peerScore := pickBestScored(matching, now, preferred)
 	if canLocal {
 		if !haveSelf {
 			// No row of our own to score against. Absence of evidence about our
@@ -145,14 +174,14 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 			// registers itself, so this is the fixture case: stay local.
 			return Decision{Action: ActionLocal}
 		}
-		if localScore := score(selfNode, now) + localBias; target == "" || localScore >= peerScore {
+		if localScore := score(selfNode, now, preferred) + localBias; target == "" || localScore >= peerScore {
 			return Decision{Action: ActionLocal}
 		}
 	}
 	if target != "" {
 		return Decision{Action: ActionForward, Target: target}
 	}
-	if sub, _ := pickBestScored(subs, now); sub != "" {
+	if sub, _ := pickBestScored(subs, now, preferred); sub != "" {
 		return Decision{Action: ActionForward, Target: sub}
 	}
 	return Decision{

@@ -10,8 +10,9 @@
 #   node_kind      physical | vm（同机 singleton 锁按 kind 区分）
 #   native         本机可确定性执行的白名单命令（tier: 1=可逆 2=不可逆需授权）
 #   agents         已安装的 agent CLI（adapter 指向 adapters/<name>.py）
-#                  tier 缺省为 2（不可逆，执行需 --authorize，完成后进待审批）；
-#                  只读型 agent 可声明 tier: 1 直接完成
+#                  tier 缺省为 2（不可逆）：未授权会被拒绝并进待审批，批准后带
+#                  授权重跑；--authorize 提交则执行后直接完成（一次同意即可）；
+#                  只读型 agent 可声明 tier: 1 免授权直接完成
 #   capacity       本节点并行任务数与资源上限
 #   resource_profile 声明的硬件（cpu / ram_gb / gpu_vram_gb / duration_hint）。
 #                  capacity 是"现在还能接几个"，这里是"跑得动什么"：路由把它当硬判据，
