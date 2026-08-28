@@ -134,6 +134,7 @@ const de: Messages = {
   'sessions.authorize': 'Risikoreiche Aktionen erlauben',
   'sessions.send': 'Senden',
   'sessions.thinking': 'Denkt nach…',
+  'sessions.thought': 'Gedankengang',
   'sessions.hello': 'Hi, ich bin Panda',
   'sessions.hint': 'Jede Unterhaltung läuft in ihrem eigenen git-Worktree — Änderungen bleiben auf einem Branch isoliert.',
   'sessions.s1': 'Fasse dieses Repository zusammen',

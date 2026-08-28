@@ -700,6 +700,9 @@ export interface Session {
 // ---- Streaming session ask (SSE over fetch POST) ----
 
 export interface AskStreamHandlers {
+  /** Chain-of-thought, on its own stream. Display-only (D14): never merge it
+   *  into the answer or the stored turn. */
+  onReasoning(text: string): void
   onDelta(text: string): void
   onStatus(text: string): void
   onResult(r: AskResult): void
@@ -770,7 +773,8 @@ export async function askSessionStream(
         } catch {
           continue
         }
-        if (event === 'delta') h.onDelta(payload.text ?? '')
+        if (event === 'reasoning') h.onReasoning(payload.text ?? '')
+        else if (event === 'delta') h.onDelta(payload.text ?? '')
         else if (event === 'status') h.onStatus(payload.text ?? '')
         else if (event === 'result') h.onResult(payload as AskResult)
         else if (event === 'error') h.onError(payload.message ?? 'unknown error')

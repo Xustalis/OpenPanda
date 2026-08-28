@@ -36,6 +36,11 @@ interface ChatMsg extends SessionTurn {
   streaming?: boolean
   status?: string
   result?: AskResult
+  /** Chain-of-thought for this reply. It streams on its own event and is
+   *  display-only (D14): it is never merged into the answer, and it is not
+   *  persisted with the turn, so a thread reloaded from disk comes back
+   *  without it. */
+  thought?: string
 }
 
 /** The sessions view: a thread rail on the left (codex / claude code style)
@@ -283,6 +288,7 @@ export function SessionsView({
         prompt,
         authorize,
         {
+          onReasoning: (text) => patch((m) => ({ ...m, thought: (m.thought ?? '') + text })),
           onDelta: (text) => patch((m) => ({ ...m, text: m.text + text })),
           onStatus: (text) => patch((m) => ({ ...m, status: text })),
           onResult: (r) => patch((m) => ({ ...m, result: r, status: undefined })),
@@ -654,6 +660,16 @@ function ChatBubble(props: {
           )}
         </div>
 
+        {/* — slot-thought: chain-of-thought, above the answer the way a
+              reasoning model produces it. It starts open while thinking is all
+              that is happening and folds once prose arrives, so the reply is
+              not pushed down by the working that produced it. */}
+        {msg.thought && (
+          <div class="bubble-slot-row slot-thought u-w-100">
+            <ThoughtBlock text={msg.thought} live={hasThinking} />
+          </div>
+        )}
+
         {/* — slot-chat: primary copy (markdown / literal error / empty). */}
         <div class="bubble-slot-row slot-chat u-w-100">
           {msg.text &&
@@ -734,5 +750,26 @@ function TaskChain({ taskId }: { taskId: string }) {
         </li>
       ))}
     </ol>
+  )
+}
+
+/** Chain-of-thought, shown apart from the answer.
+ *
+ *  Reasoning arrives on its own stream and is display-only (D14): it never
+ *  enters the answer text, the stored turn, or a task result. That is why it
+ *  gets its own block rather than being prepended to the reply — and why a
+ *  thread reloaded from disk comes back without it.
+ *
+ *  While the model is reasoning it is the only thing happening, so the block
+ *  starts open; the caller folds it once prose arrives. */
+function ThoughtBlock({ text, live }: { text: string; live: boolean }) {
+  return (
+    <details class="thought-block" open={live}>
+      <summary class="u-color-tert">
+        {t('sessions.thought')}
+        {live && <span class="spinner" aria-hidden="true" />}
+      </summary>
+      <div class="thought-body">{text}</div>
+    </details>
   )
 }
