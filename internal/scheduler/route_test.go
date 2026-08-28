@@ -40,6 +40,30 @@ func TestPredecessor(t *testing.T) {
 	}
 }
 
+// TestIsSelfRow pins the ephemeral-id semantics: an ask session's scheduler
+// runs under "base-xxxxxxxx" while the directory row carries the stable id,
+// and the suffix strip must recognize the same physical node without
+// misfiring on names that merely contain a dash.
+func TestIsSelfRow(t *testing.T) {
+	cases := []struct {
+		id, self string
+		want     bool
+	}{
+		{"macbook", "macbook", true},                                          // exact stable id
+		{"macbook", "macbook-1f3a2b4c", true},                                 // ephemeral over stable base
+		{"macbook@vm-ab12cd34ef56", "macbook@vm-ab12cd34ef56-9d8c7b6a", true}, // ephemeral over vm id
+		{"macbook", "macbook-pro", false},                                     // dash, but suffix not 8 hex
+		{"macbook", "macbook-1f3a2b4", false},                                 // 7-hex suffix, not ephemeral shape
+		{"macbook", "imac-1f3a2b4c", false},                                   // different base
+		{"macbook", "imac", false},                                            // different stable id
+	}
+	for _, c := range cases {
+		if got := IsSelfRow(c.id, c.self); got != c.want {
+			t.Fatalf("IsSelfRow(%q, %q) = %v, want %v", c.id, c.self, got, c.want)
+		}
+	}
+}
+
 func matchAny(required []string) bool { return len(required) > 0 && required[0] == "local:ok" }
 
 func TestRouteLocalWins(t *testing.T) {

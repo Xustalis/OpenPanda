@@ -30,6 +30,13 @@ type TaskStore struct {
 	// notification path.
 	onReview   func(Task)
 	onReviewMu sync.RWMutex
+	// onEvent, when set, is called after every task event is appended, with the
+	// task id and event type. It is a display-only progress feed (the ask engine
+	// bridges it to the CLI status line during a synchronous Submit). The callback
+	// MUST NOT touch the store and MUST NOT block: it runs on the goroutine that
+	// recorded the event, inside its transaction.
+	onEvent   func(taskID, typ string, data any)
+	onEventMu sync.RWMutex
 }
 
 // NewTaskStore wraps a DB. now may be nil (defaults to Unix time).
@@ -47,6 +54,17 @@ func (s *TaskStore) SetOnReview(fn func(Task)) {
 	s.onReviewMu.Lock()
 	s.onReview = fn
 	s.onReviewMu.Unlock()
+}
+
+// SetOnEvent installs (or clears, with nil) the per-event observer fired after
+// every task event is appended. It is a best-effort, display-only feed: the
+// callback must not touch the store or block, since it runs synchronously on
+// the recording goroutine. The ask engine uses it to surface live route/exec/
+// judge progress while a synchronous Submit blocks (P0 §1.4).
+func (s *TaskStore) SetOnEvent(fn func(taskID, typ string, data any)) {
+	s.onEventMu.Lock()
+	s.onEvent = fn
+	s.onEventMu.Unlock()
 }
 
 // Create inserts a new task in submitted state with a fresh UUIDv7 id.
@@ -250,6 +268,27 @@ func (s *TaskStore) recordEventTx(ctx context.Context, tx *sql.Tx, taskID, typ s
 		taskID, ts, typ, string(raw), prevHash)
 	if err != nil {
 		return fmt.Errorf("record event %s: %w", typ, err)
+	}
+	// Bump the task's updated_at so an appended event alone (progress, trace,
+	// judge — events that do not change state) still moves the row's freshness
+	// stamp. The web panel's change detector fingerprints (id, state, updated_at);
+	// without this bump, tool/route/delegation events never flip the fingerprint
+	// and the console silently misses them until the next state change (P0 §1.5).
+	// A no-op when the caller (applyCAS/applyState) already set updated_at to the
+	// same tick in this transaction.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE tasks SET updated_at=? WHERE task_id=? AND updated_at<?`,
+		ts, taskID, ts); err != nil {
+		return fmt.Errorf("bump updated_at for %s: %w", taskID, err)
+	}
+	// Notify the display-only observer (best-effort). Fired synchronously on this
+	// goroutine, still inside the tx — the callback is contractually forbidden
+	// from touching the store or blocking, so this cannot deadlock the connection.
+	s.onEventMu.RLock()
+	fn := s.onEvent
+	s.onEventMu.RUnlock()
+	if fn != nil {
+		fn(taskID, typ, data)
 	}
 	return nil
 }
@@ -605,9 +644,24 @@ func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, r
 		map[string]any{"reason": "awaiting approval"}, result)
 }
 
-// Approve accepts a reviewed task, moving it review -> done. Approval is a
-// human override (design §14.2 Layer 4), so — like Cancel — it requires only
-// that the task be in review, not that the caller hold the lease.
+// Approve accepts a reviewed task. What "accept" means depends on how the
+// task parked:
+//
+//   - A review parked from failed — a tier-2 authorization refusal or an
+//     exhausted retry budget, both of which Fail before parking — has no
+//     executed work to accept. Approval is the human consenting to the run:
+//     the task re-enters queued carrying the tier-2 authorization, its
+//     scheduled flag re-armed so the queue scheduler (daemon/panel) adopts it
+//     on its next pass. An inline caller (ask/repl) that runs the task itself
+//     uses ResumeApproved instead, which re-executes in the same round-trip.
+//   - Every other review entry parks from running with work already done —
+//     a manual step performed, a supervision round awaiting sign-off, an
+//     unauthorized tier-2 backstop park, or a scope-drift intercept. Approval
+//     accepts that work into done (review -> done).
+//
+// Either way approval is a human override (design §14.2 Layer 4), so — like
+// Cancel — it requires only that the task be in review, not that the caller
+// hold the lease.
 func (s *TaskStore) Approve(ctx context.Context, taskID string) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
@@ -616,20 +670,64 @@ func (s *TaskStore) Approve(ctx context.Context, taskID string) error {
 	if cur.State != StateReview {
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateReview)
 	}
+	resume := s.reviewFromFailure(ctx, taskID)
 	// Guarded UPDATE (P2-8): a concurrent reject/approve must not both win.
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `
-			UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
-			WHERE task_id=? AND state=?`,
-			StateDone, s.now(), taskID, StateReview)
+		var res sql.Result
+		if resume {
+			// Grant the tier-2 consent the refusal was waiting for; the
+			// lease is already clear (entering review cleared it). Re-arm the
+			// scheduled flag: an inline-submitted task (ask/repl) parked with
+			// scheduled=0, so without this the daemon/panel queue scheduler —
+			// which only claims scheduled=1 rows — would never re-adopt the
+			// approved task and it would sit queued forever. Setting it is
+			// harmless for a task that was already scheduled.
+			res, err = tx.ExecContext(ctx, `
+				UPDATE tasks SET state=?, authorized=1, scheduled=1, state_version=state_version+1, updated_at=?
+				WHERE task_id=? AND state=?`,
+				StateQueued, s.now(), taskID, StateReview)
+		} else {
+			res, err = tx.ExecContext(ctx, `
+				UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
+				WHERE task_id=? AND state=?`,
+				StateDone, s.now(), taskID, StateReview)
+		}
 		if err != nil {
 			return fmt.Errorf("approve task: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return fmt.Errorf("%w: task %s approved concurrently", ErrConflict, taskID)
 		}
-		return s.recordEventTx(ctx, tx, taskID, EvReview, map[string]any{"approved": true})
+		return s.recordEventTx(ctx, tx, taskID, EvReview, map[string]any{
+			"approved": true,
+			"resumed":  resume,
+		})
 	})
+}
+
+// reviewFromFailure reports whether the task's latest review parking came
+// from the failed state: the parking review event directly follows a fail
+// result (a tier-2 refusal or a spent retry budget). Every other review
+// entry — manual, supervision sign-off, an unauthorized tier-2 backstop
+// park, scope drift, a remote park — follows execution events, and Approve
+// treats those as finished work. Read failures are conservative (false):
+// accepting existing work is the safer default for an unreadable audit chain.
+func (s *TaskStore) reviewFromFailure(ctx context.Context, taskID string) bool {
+	var typ, data string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT type, data_json FROM task_events
+		WHERE task_id=? AND id < (SELECT COALESCE(MAX(id), 0) FROM task_events WHERE task_id=? AND type=?)
+		ORDER BY id DESC LIMIT 1`,
+		taskID, taskID, EvReview).Scan(&typ, &data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false
+	}
+	if err != nil {
+		s.logger.Warn("review origin: read prev event", "task", taskID, "err", err)
+		return false
+	}
+	// Fail records its outcome as an EvResult event carrying a "failed" key.
+	return typ == EvResult && strings.Contains(data, `"failed"`)
 }
 
 // Reject fails a reviewed task, moving it review -> failed. Like Approve, it is

@@ -177,6 +177,17 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		if err := c.store.SetStage(ctx, t.TaskID, planID, st.ID, st.Needs); err != nil {
 			return "", fmt.Errorf("stamp stage %s: %w", st.ID, err)
 		}
+		// — Trace: the entry model classified this sentence as a plan, one
+		// event per stage task, fired at stage creation — before AdvancePlan
+		// releases anything, so the orbit's "plan · stage i/N" chip leads the
+		// stage's own execution events (design doc §3.1.1).
+		c.EvTrace(ctx, t.TaskID, EvClassifyResult, map[string]any{
+			"kind":         "plan",
+			"note":         p.Goal,
+			"plan_goal":    p.Goal,
+			"stages_count": len(p.Stages),
+			"stage_id":     st.ID,
+		})
 	}
 	c.logger.Info("plan started", "plan", planID, "stages", len(p.Stages), "goal", p.Goal)
 	if err := c.AdvancePlan(ctx, planID); err != nil {
@@ -229,6 +240,15 @@ func (c *Core) AdvancePlan(ctx context.Context, planID string) error {
 			// predecessor is done and produced nothing fetchable, so the stage
 			// would run on absent data. Fail it and let the plan surface that.
 			c.logger.Warn("plan: stage inputs unresolved", "plan", planID, "stage", st.ID, "err", err)
+			c.EvTrace(ctx, t.TaskID, EvPlanStageChanged, map[string]any{
+				"plan_id":          planID,
+				"stage_id":         st.ID,
+				"stage_title":      t.Title, // §3.1.1 design doc field
+				"stage_count":      len(stages),
+				"transition":       "unlocked",  // design doc enum: unlocked|started|completed
+				"needs_satisfied":  []string{},  // unlock failed → nothing is
+				"transition_error": err.Error(), // best-effort, for detail view
+			})
 			if ferr := c.store.Cancel(ctx, t.TaskID); ferr != nil {
 				c.logger.Warn("plan: cancel unresolvable stage", "task", t.TaskID, "err", ferr)
 			}
@@ -257,6 +277,22 @@ func (c *Core) AdvancePlan(ctx context.Context, planID string) error {
 			continue
 		}
 		released++
+		// — Stage unlocked + input dependencies now satisfied.
+		// (design doc §3.1.1: transition ∈ {unlocked, started, completed})
+		sat := make([]string, 0, len(st.Needs))
+		sat = append(sat, st.Needs...)
+		if len(sat) == 0 {
+			// keep JSON non-null so the orbit renders [] cleanly
+			sat = []string{}
+		}
+		c.EvTrace(ctx, t.TaskID, EvPlanStageChanged, map[string]any{
+			"plan_id":         planID,
+			"stage_id":        st.ID,
+			"stage_title":     t.Title,
+			"stage_count":     len(stages),
+			"transition":      "unlocked",
+			"needs_satisfied": sat,
+		})
 		c.logger.Info("plan: stage released", "plan", planID, "stage", st.ID,
 			"task", t.TaskID, "inputs", len(inputs))
 	}
@@ -459,6 +495,23 @@ func (c *Core) packStageOutput(ctx context.Context, t Task, workDir string) (str
 func (c *Core) advanceStagePlan(ctx context.Context, t Task) {
 	if t.PlanID == "" {
 		return
+	}
+	// — Trace: stage reached the completed transition. Emitted exactly once
+	// per stage (AdvancePlan is idempotent, but this guard prevents the same
+	// terminal stage id from being emitted twice from the adopt call path).
+	// Guard by state: any terminal means done.
+	switch t.State {
+	case StateDone, StateReview, StateCancelled, StateFailed:
+		sibs, _ := c.store.PlanStages(ctx, t.PlanID)
+		c.EvTrace(ctx, t.TaskID, EvPlanStageChanged, map[string]any{
+			"plan_id":         t.PlanID,
+			"stage_id":        t.StageID,
+			"stage_title":     t.Title,
+			"stage_count":     len(sibs),
+			"transition":      "completed",
+			"needs_satisfied": []string{},
+			"artifact_hash":   t.OutputArtifact,
+		})
 	}
 	if err := c.AdvancePlan(ctx, t.PlanID); err != nil {
 		c.logger.Warn("advance plan", "plan", t.PlanID, "after", t.StageID, "err", err)

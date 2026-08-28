@@ -8,6 +8,9 @@
 *.out
 dist/
 bin/
+# Ad-hoc smoke binaries built to verify a dependency resolves (e.g. the
+# Bubble Tea import probe). Always regenerated, never committed.
+/_teasmoke
 
 # SQLite
 *.db
@@ -92,6 +95,10 @@ logs/
 /findings.md
 /progress.md
 /task_plan.md
+# Local review / handoff notes: same class as findings.md, regenerated per
+# session, never pushed.
+/审查报告_*.md
+/ClaudeCode任务交接_*.md
 /.lab-real/
 /.planning/
 check_emails.py

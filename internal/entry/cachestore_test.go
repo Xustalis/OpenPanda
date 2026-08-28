@@ -241,12 +241,12 @@ func TestClassifyStreamCacheHitDeliversAnswerDelta(t *testing.T) {
 	ctx := context.Background()
 
 	var deltas1 []string
-	out1, err := ClassifyStreamWithTools(ctx, c, nil, "", []Turn{{Role: "user", Content: "天气"}}, nil, func(s string) { deltas1 = append(deltas1, s) })
+	out1, err := ClassifyStreamWithTools(ctx, c, nil, "", []Turn{{Role: "user", Content: "天气"}}, nil, func(s string) { deltas1 = append(deltas1, s) }, nil)
 	if err != nil {
 		t.Fatalf("stream 1: %v", err)
 	}
 	var deltas2 []string
-	out2, err := ClassifyStreamWithTools(ctx, c, nil, "", []Turn{{Role: "user", Content: "天气"}}, nil, func(s string) { deltas2 = append(deltas2, s) })
+	out2, err := ClassifyStreamWithTools(ctx, c, nil, "", []Turn{{Role: "user", Content: "天气"}}, nil, func(s string) { deltas2 = append(deltas2, s) }, nil)
 	if err != nil {
 		t.Fatalf("stream 2: %v", err)
 	}
@@ -596,7 +596,7 @@ func TestOpenAIStreamSendsCacheKeyAndUsageOption(t *testing.T) {
 		t.Fatalf("new client: %v", err)
 	}
 
-	if _, err := c.StreamTurnsWithTools(context.Background(), "sys", []Turn{{Role: "user", Content: "hi"}}, nil, nil); err != nil {
+	if _, err := c.StreamTurnsWithTools(context.Background(), "sys", []Turn{{Role: "user", Content: "hi"}}, nil, nil, nil); err != nil {
 		t.Fatalf("stream: %v", err)
 	}
 	var req struct {
@@ -615,7 +615,7 @@ func TestOpenAIStreamSendsCacheKeyAndUsageOption(t *testing.T) {
 
 	// Opt-out strips both hints.
 	c.SetPromptCaching(false)
-	if _, err := c.StreamTurnsWithTools(context.Background(), "sys", []Turn{{Role: "user", Content: "hi"}}, nil, nil); err != nil {
+	if _, err := c.StreamTurnsWithTools(context.Background(), "sys", []Turn{{Role: "user", Content: "hi"}}, nil, nil, nil); err != nil {
 		t.Fatalf("stream 2: %v", err)
 	}
 	if strings.Contains(body, "prompt_cache_key") || strings.Contains(body, "stream_options") {
@@ -671,7 +671,7 @@ func TestUsageAccumulatedOpenAIStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
-	if _, err := c.StreamTurnsWithTools(context.Background(), "", []Turn{{Role: "user", Content: "hi"}}, nil, nil); err != nil {
+	if _, err := c.StreamTurnsWithTools(context.Background(), "", []Turn{{Role: "user", Content: "hi"}}, nil, nil, nil); err != nil {
 		t.Fatalf("stream: %v", err)
 	}
 	if u := c.Usage(); u.InputTokens != 7 || u.OutputTokens != 3 {
@@ -714,7 +714,7 @@ func TestUsageAccumulatedAnthropicStream(t *testing.T) {
 		t.Fatalf("new client: %v", err)
 	}
 	var got string
-	resp, err := c.StreamTurnsWithTools(context.Background(), "", []Turn{{Role: "user", Content: "hi"}}, nil, func(s string) { got += s })
+	resp, err := c.StreamTurnsWithTools(context.Background(), "", []Turn{{Role: "user", Content: "hi"}}, nil, func(s string) { got += s }, nil)
 	if err != nil {
 		t.Fatalf("stream: %v", err)
 	}

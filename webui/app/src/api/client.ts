@@ -99,6 +99,92 @@ export interface TaskEvent {
   data: string
 }
 
+// — Decision-orbit wire types. Mirrors the Go taskJSON additions in
+// webui/panel/panel.go. Every field is optional so old task payloads paint
+// without crashing; the orbit degrades gracefully to a hidden/collapsed
+// placeholder when traces are empty.
+
+export type TraceKind =
+  | 'classify_result'
+  | 'route_decision'
+  | 'delegation_hop'
+  | 'exec_agent_start'
+  | 'supervision_round'
+  | 'tier2_triggered'
+  | 'plan_stage_changed'
+  | 'artifact_transfer'
+
+export interface ScoreBreakdown {
+  resource_efficiency: number
+  scheduler_tier: number
+  wait_time: number
+  // heartbeat_age is the wire-contract age in seconds (§3.1.1): 0 = brand-new
+  // heartbeat, higher = stale. heartbeat_freshness is the internal (0,1]
+  // weight used by routing; both are populated so the orbit can show either
+  // a friendly age label ("12s ago") or a fitness bar.
+  heartbeat_age?: number
+  heartbeat_freshness?: number
+  local_bonus?: number
+  total: number
+}
+
+export interface ScoredCandidate {
+  node_id: string
+  node_name?: string
+  // total_score is the flat numeric ranking (§3.1.1 short path); consumers
+  // that want the "why" read breakdown.*. Both are populated on the wire.
+  total_score: number
+  breakdown: ScoreBreakdown
+}
+
+export interface TraceEvent {
+  id: number
+  ts: number
+  type: TraceKind
+  task_id?: string
+  data?: any
+  data_raw?: string
+}
+
+export interface PlanMeta {
+  plan_id?: string
+  stage_id?: string
+  stage_count?: number
+  stage_labels?: string[]
+  needs?: string
+  output_artifact?: string
+}
+
+// delegationHop is a single leg of a task's trip. hop=1 is the originator →
+// first executor leg. accepted=true means the TO node wrote back an
+// acknowledgement event; if only the outbound leg is present the hop was
+// attempted but never confirmed. via = "route" | "direct" | "retarget".
+export interface DelegationHop {
+  hop: number
+  from_node: string
+  to_node: string
+  via?: 'route' | 'direct' | 'retarget'
+  accepted: boolean
+  ts: number
+}
+
+// supervision rolls up the latest supervision_round event so UI badges can
+// show "Round 1 / 5" without re-scanning traces. latest_verdict is absent
+// until the first round completes (typically "done" | "continue").
+export interface Supervision {
+  round: number
+  budget: number
+  latest_verdict?: string
+}
+
+// tier2Op is one irreversible operation the defense layer flagged. Users
+// review these in the approval dock before clicking Approve.
+export interface Tier2Op {
+  op: string
+  target?: string
+  risk: 'high' | 'medium' | 'low' | string
+}
+
 export interface Task {
   id: string
   parent_id: string
@@ -121,6 +207,15 @@ export interface Task {
   created_at: string
   updated_at: string
   events?: TaskEvent[]
+
+  // Decision-orbit visibility (P0 redesign, §5.2). All optional.
+  traces?: TraceEvent[]
+  // §3.3 extended visibility: structured delegation hops with per-hop
+  // confirmation + round counters + tier-2 operation rollups.
+  delegation_chain?: DelegationHop[]
+  plan_meta?: PlanMeta
+  supervision?: Supervision
+  tier2_ops?: Tier2Op[]
 }
 
 /** One probed agent CLI (GET /api/agents): install state + version + install guidance. */
@@ -170,6 +265,10 @@ export interface UpdateStatus {
   available: boolean
   idle: boolean
   error?: string
+  /** True when the update loop has backed off to idle for this run due to
+   *  a transient upstream error (GitHub 403/rate limit, network offline).
+   *  The UI shows a soft "updates paused" banner in this case. */
+  degraded?: boolean
 }
 
 /** One agent declared on a node's capability card (GET /api/nodes). */
@@ -200,7 +299,10 @@ export interface NodeInfo {
   resource_profile?: { cpu: number; ram_gb: number; gpu_vram_gb: number; duration_hint: string }
 }
 
-/** GET /api/self — this machine's device profile (+ its ledger card). */
+/** GET /api/self — this machine's device profile (+ its ledger card),
+ *  plus the running version and a projection of the updater's live status.
+ *  `update` is omitted entirely when the node runs without an updater
+ *  (e.g. some dev or daemon-only binaries). */
 export interface SelfInfo {
   hostname: string
   os: string
@@ -214,6 +316,8 @@ export interface SelfInfo {
   node_identity?: string
   node_running: boolean
   node?: NodeInfo
+  version: string
+  update?: UpdateStatus
 }
 
 /** GET/PUT /api/settings/app — the four app policy groups (C1). */
@@ -683,4 +787,103 @@ export async function askSessionStream(
 /** Whether a caught error is an abort (the user pressing stop), not a fault. */
 export function isAbort(err: unknown): boolean {
   return err instanceof DOMException && err.name === 'AbortError'
+}
+
+// ---- SSE live subscriptions -----------------------------------------------
+
+/** Change payload delivered on `event: change` — the "what changed" portion of
+ *  the SSE line: `tasks/nodes/reminders [fp/tasks /fp/nodes /fp/reminders]`.
+ *  Old servers that only send `init` or a single task fingerprint still
+ *  deserialize safely (unknown keys are empty strings). */
+export interface ChangeEvent {
+  kinds: string[]
+  taskFP?: string
+  nodeFP?: string
+  reminderFP?: string
+  raw: string
+}
+
+/** SSE subscription options. Pass `trace: true` to opt into the orbit-level
+ *  `event: trace` stream; by default you only get `event: change` and the
+ *  15-second heartbeat comment — byte-for-byte identical to the old feed. */
+export interface SubscribeEventsOptions {
+  trace?: boolean
+  onChange?: (ev: ChangeEvent) => void
+  onTrace?: (ev: TraceEvent) => void
+  signal?: AbortSignal
+}
+
+/**
+ * Opens GET /api/events as a long-lived SSE stream. Returns a Promise that
+ * resolves when the connection ends naturally (server close, network drop);
+ * consumers unsubscribe by passing an AbortSignal and aborting it.
+ *
+ * Design rationale (§5.1): this is one shared EventSource per call so the
+ * orbit/hooks layer can multiplex `onTrace` events to the right task's
+ * reducer. Authentication uses the ?token= query param because browsers'
+ * EventSource API cannot send Authorization headers.
+ */
+export function subscribeEvents(opts: SubscribeEventsOptions): Promise<void> {
+  const params = new URLSearchParams()
+  const token = currentToken()
+  if (token) params.set('token', token)
+  if (opts.trace) params.set('trace', '1')
+  const url = '/api/events' + (params.size ? '?' + params.toString() : '')
+
+  const es = new EventSource(url, { withCredentials: false })
+
+  const cleanup = () => {
+    try { es.close() } catch { /* closed twice during abort; ignore */ }
+  }
+  if (opts.signal) {
+    if (opts.signal.aborted) { cleanup(); return Promise.resolve() }
+    opts.signal.addEventListener('abort', cleanup, { once: true })
+  }
+
+  return new Promise<void>((resolve) => {
+    es.addEventListener('change', (e: any) => {
+      if (!opts.onChange) return
+      const raw: string = e.data ?? ''
+      const parts = raw.split(' ')
+      const kinds = (parts[0] ?? '').split(',').filter(Boolean)
+      const fps = (parts[1] ?? '').split('/')
+      opts.onChange({
+        kinds,
+        taskFP: fps[0],
+        nodeFP: fps[1],
+        reminderFP: fps[2],
+        raw,
+      })
+    })
+    es.addEventListener('trace', (e: any) => {
+      if (!opts.onTrace) return
+      try {
+        const payload = JSON.parse(e.data ?? '{}') as any
+        opts.onTrace({
+          id: payload.id ?? 0,
+          ts: payload.ts ?? 0,
+          task_id: payload.task_id,
+          type: payload.type,
+          data: payload.data,
+          data_raw: typeof payload.data === 'string' ? payload.data : undefined,
+        })
+      } catch {
+        // Malformed trace frames are dropped: the orbit fall-back is the
+        // hydrate-from-getTask() call, not the live stream.
+      }
+    })
+    es.addEventListener('error', () => {
+      // EventSource auto-reconnects with exponential backoff on its own. We
+      // surface the drop via a synthetic change-event kind "reconnect" so the
+      // app can re-fetch once if it wants, but never block on a glitch.
+      try {
+        opts.onChange?.({ kinds: ['reconnect'], raw: 'reconnect' })
+      } catch { /* ignore */ }
+    })
+    es.addEventListener('close', () => { cleanup(); resolve() })
+    // The underlying EventSource has no standardized "close" lifecycle on its
+    // own (it retries forever). We honor abort via the signal path above; if
+    // nothing else tears the stream down this promise simply never resolves,
+    // which matches the "infinite subscription" semantics the caller wants.
+  })
 }

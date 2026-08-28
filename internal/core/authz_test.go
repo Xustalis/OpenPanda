@@ -270,6 +270,87 @@ func TestApproveRejectGuarded(t *testing.T) {
 	}
 }
 
+// TestApproveResumesFailedReview pins P0-1: a review parked from failed — the
+// tier-2 authorization-refusal path (Fail, then Review) — approves into a
+// re-queued, authorized task the scheduler executes again, not into done. The
+// command never ran; approving it must not fabricate a completion.
+func TestApproveResumesFailedReview(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	s := NewTaskStore(db, testLogger())
+	tk, _ := s.Create(ctx, "", "", "push work", "owner", []string{"owner"})
+	if err := s.Queue(ctx, tk.TaskID, "owner"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := s.Dispatch(ctx, tk.TaskID, "owner", "owner"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if err := s.Accept(ctx, tk.TaskID, "owner"); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if err := s.Fail(ctx, tk.TaskID, "owner", "tier-2 refusal: push requires authorization"); err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+	if err := s.Review(ctx, tk.TaskID, "owner", "tier-2 refusal"); err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if err := s.Approve(ctx, tk.TaskID); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != StateQueued {
+		t.Fatalf("approved failed-review task state = %s, want %s (re-scheduled for execution)", got.State, StateQueued)
+	}
+	if !got.Authorized {
+		t.Fatal("approved failed-review task must carry the tier-2 consent (authorized)")
+	}
+	if !got.Scheduled {
+		t.Fatal("approved failed-review task must be re-armed for the queue scheduler (scheduled): an inline-submitted task parks with scheduled=0, so without this the daemon/panel never re-adopts it")
+	}
+}
+
+// TestApproveAcceptsManualReview pins the other half of P0-1: a review
+// parked from running (manual work, supervision sign-off, tier-2 awaiting
+// approval) has work to accept, so approval still completes it (review ->
+// done) rather than running it again.
+func TestApproveAcceptsManualReview(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	s := NewTaskStore(db, testLogger())
+	tk, _ := s.Create(ctx, "", "", "manual step", "owner", []string{"owner"})
+	if err := s.Queue(ctx, tk.TaskID, "owner"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := s.Dispatch(ctx, tk.TaskID, "owner", "owner"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if err := s.Accept(ctx, tk.TaskID, "owner"); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if err := s.SetAuthorized(ctx, tk.TaskID, false); err != nil {
+		t.Fatalf("clear authorized: %v", err)
+	}
+	if err := s.PauseWithResult(ctx, tk.TaskID, "owner", map[string]any{"manual": true}); err != nil {
+		t.Fatalf("pause with result: %v", err)
+	}
+	if err := s.Approve(ctx, tk.TaskID); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != StateDone {
+		t.Fatalf("approved manual-review task state = %s, want %s (work already done, accepted)", got.State, StateDone)
+	}
+	if got.Authorized {
+		t.Fatal("approve-accept must not grant tier-2 consent as a side effect")
+	}
+}
+
 // TestReviewLeaseClearedAndNotExpired verifies P1-8: entering review clears
 // the lease, and ExpireTasks never scans review tasks.
 func TestReviewLeaseClearedAndNotExpired(t *testing.T) {

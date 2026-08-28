@@ -25,6 +25,39 @@ func createTask(t *testing.T, s *TaskStore, parent, title, owner string) Task {
 	return tk
 }
 
+// TestRecordEventBumpsUpdatedAt guards the web-console live-refresh path (P0
+// §1.5): an appended event that does not change state must still move
+// tasks.updated_at, because the panel's SSE change detector fingerprints on
+// (id, state, updated_at). Without the bump, progress/trace/tool events never
+// flip the fingerprint and the console silently misses them.
+func TestRecordEventBumpsUpdatedAt(t *testing.T) {
+	s := newTestStore(t)
+	// A monotonic clock so each store timestamp is strictly newer than the last,
+	// making the bump observable regardless of wall-clock resolution.
+	var tick int64
+	s.now = func() int64 { tick++; return tick }
+	ctx := context.Background()
+
+	tk := createTask(t, s, "", "event bump", "node")
+	before, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get before: %v", err)
+	}
+	if err := s.RecordEvent(ctx, tk.TaskID, EvProgress, map[string]any{"note": "step"}); err != nil {
+		t.Fatalf("record event: %v", err)
+	}
+	after, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get after: %v", err)
+	}
+	if !(after.UpdatedAt > before.UpdatedAt) {
+		t.Fatalf("updated_at not bumped by event: before=%d after=%d", before.UpdatedAt, after.UpdatedAt)
+	}
+	if after.State != before.State {
+		t.Fatalf("state changed unexpectedly: %s -> %s", before.State, after.State)
+	}
+}
+
 // TestConcurrentTransitionSingleWinner races two goroutines closing the same
 // running task. The state/owner CAS guard (P1-2) must let exactly one win; the
 // other loses with ErrConflict (or ErrIllegal if it observed the new state in a

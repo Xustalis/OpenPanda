@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -143,6 +144,13 @@ func runAsk(args []string) {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 		os.Exit(1)
 	}
+	// Inline approval gate: a tier-2 task with no standing consent returns parked
+	// in review. On an interactive terminal, prompt and — on a yes — re-run it
+	// authorized in place before recording the turn, so --continue captures the
+	// resolved outcome rather than the transient review.
+	if out.NeedsApproval && out.Approval != nil {
+		out = confirmApprovalCLI(engine, out, loc)
+	}
 	recordConvo(out)
 
 	switch out.Kind {
@@ -270,8 +278,9 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt str
 		fmt.Println(string(line))
 	}
 	cb := askengine.StreamCallbacks{
-		OnDelta:  func(text string) { write(map[string]any{"type": "delta", "text": text}) },
-		OnStatus: func(text string) { write(map[string]any{"type": "status", "text": text}) },
+		OnDelta:     func(text string) { write(map[string]any{"type": "delta", "text": text}) },
+		OnReasoning: func(text string) { write(map[string]any{"type": "reasoning", "text": text}) },
+		OnStatus:    func(text string) { write(map[string]any{"type": "status", "text": text}) },
 	}
 	out, err := engine.AskTurns(context.Background(), history, prompt, "", authorize, cb)
 	if err != nil {
@@ -306,6 +315,7 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt string,
 		return out, false, st, err
 	}
 	lr := newStreamLineRenderer()
+	var thinking thoughtPreview
 	cb := askengine.StreamCallbacks{
 		OnDelta: func(chunk string) {
 			// Only a chunk that completes a line prints anything; the rest just
@@ -321,8 +331,33 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt string,
 			lr.delta(chunk)
 			st.Preview(lr.pending())
 		},
+		OnReasoning: func(chunk string) {
+			// Chain-of-thought precedes the answer on reasoning models; preview
+			// it live and dim until the answer starts. Display-only (D14).
+			if lr.printed {
+				return
+			}
+			if line := thinking.feed(chunk); line != "" {
+				st.Preview(pal().Muted(line))
+			}
+		},
 		OnProgress: func(p askengine.Progress) {
 			note := progressNote(loc, p)
+			// Advance the phase chain so the status line's trailing meta shows
+			// classify → routing → executing (P0 redesign §D3 parity with the
+			// web DecisionOrbit). Tools run inside exec; planning/task creation
+			// is classified as routing work because the scheduler has to pick
+			// a node at that boundary.
+			switch p.Kind {
+			case askengine.ProgressTask, askengine.ProgressPlan, askengine.ProgressRoute:
+				st.Phase("route", "routing")
+			case askengine.ProgressExec:
+				st.Phase("exec", "executing")
+			case askengine.ProgressJudge:
+				st.Phase("judge", "judging")
+			case askengine.ProgressTool:
+				st.Phase("exec", "executing")
+			}
 			if lr.printed {
 				st.Note(note) // mid-answer: ephemeral, never interrupts the text
 				return
@@ -331,10 +366,53 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt string,
 		},
 	}
 	st.Start(statusVerb(loc))
+	st.Phase("classify", "classifying")
 	out, err := engine.AskTurns(context.Background(), history, prompt, "", authorize, cb)
+	if err == nil {
+		// A tool-less answer emits no progress events, so nudge it into exec for
+		// the closing chain. A task/plan already advanced through route/exec/judge
+		// via the progress bridge — don't re-append exec after judge. Always land
+		// on done so the closing phase line reads as a finished run.
+		if out.Kind == "answer" {
+			st.Phase("exec", "executing")
+		}
+		st.Phase("done", "done")
+	}
 	st.Stop()
 	lr.flush()
 	return out, lr.printed, st, err
+}
+
+// confirmApprovalCLI renders the tier-2 approval card for a task the engine
+// parked in review, prompts on the interactive terminal, and — on a yes —
+// re-runs the task authorized in place, returning the resumed Result. On a no,
+// a non-interactive stdin, or a read error it returns the original review
+// Result unchanged. It mirrors the REPL's approveInline for the one-shot
+// `panda ask` path.
+func confirmApprovalCLI(engine *askengine.Engine, out *askengine.Result, loc i18n.Locale) *askengine.Result {
+	req := out.Approval
+	p := pal()
+	fmt.Println(p.Warn(p.MarkBullet() + " " + i18n.T(loc, "repl.approval.head")))
+	fmt.Println(p.Muted("  " + i18n.Tf(loc, "repl.approval.task", "title", req.Title)))
+	if reason := strings.TrimSpace(req.Reason); reason != "" {
+		fmt.Println(p.Muted("  " + i18n.Tf(loc, "repl.approval.reason", "reason", reason)))
+	}
+	// Only an interactive terminal can answer; a piped/headless ask leaves the
+	// task parked (the JSON/stream paths never reach here — they surface review
+	// directly), so the operator can /approve it from the daemon or web console.
+	if !stdoutIsTTY() || !stdinIsTTY() {
+		fmt.Println(p.Muted(i18n.Tf(loc, "repl.approval.denied", "id", req.TaskID)))
+		return out
+	}
+	fmt.Print(i18n.T(loc, "repl.approval.prompt"))
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	ans := strings.ToLower(strings.TrimSpace(line))
+	if ans != "y" && ans != "yes" {
+		fmt.Println(p.Muted(i18n.Tf(loc, "repl.approval.denied", "id", req.TaskID)))
+		return out
+	}
+	fmt.Println(p.Success(i18n.T(loc, "repl.approval.approved")))
+	return engine.ResumeApproved(req.TaskID, "")
 }
 
 // printCost closes an interactive ask with what it cost: elapsed time, and the

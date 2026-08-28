@@ -269,5 +269,14 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 	if err := c.sendTo(target, env); err != nil {
 		return fmt.Errorf("send: %w", err)
 	}
+	// — Trace: queue re-route hop (from=here, to=target), same shape as
+	// dispatchDelegated's so the orbit treats both alike.
+	c.EvTrace(ctx, taskID, EvDelegationHop, map[string]any{
+		"from_node":  c.nodeID,
+		"to_node":    target,
+		"via":        "retarget",
+		"chain":      p.Chain,
+		"attempt_id": p.AttemptID,
+	})
 	return nil
 }

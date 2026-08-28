@@ -36,30 +36,41 @@ func (r *repl) watchTasks(ctx context.Context) {
 		if r.askingNow() {
 			continue // an inline ask is running; it reports its own outcome
 		}
-		tasks, err := r.store.ListByState(ctx, "")
-		if err != nil {
-			continue
-		}
-		cur := make(map[string]core.Task, len(tasks))
-		states := make(map[string]string, len(tasks))
-		for _, t := range tasks {
-			cur[t.TaskID] = t
-			states[t.TaskID] = t.State
-		}
-		var notes []string
-		r.watchMu.Lock()
-		for id, st := range states {
-			prev, seen := r.baseline[id]
-			if seen && prev != st && isTerminalState(st) {
-				notes = append(notes, r.completionNote(cur[id]))
-			}
-		}
-		r.baseline = states
-		r.watchMu.Unlock()
-		for _, n := range notes {
+		for _, n := range r.pollCompletions(ctx) {
 			r.notify(n)
 		}
 	}
+}
+
+// pollCompletions reads the task store once and returns a report line for every
+// task that reached a terminal state since the last poll, adopting the new
+// states as the baseline. Both front ends share it: the classic loop prints the
+// lines through the line editor, the TUI commits them as transcript notes.
+func (r *repl) pollCompletions(ctx context.Context) []string {
+	if r.store == nil {
+		return nil
+	}
+	tasks, err := r.store.ListByState(ctx, "")
+	if err != nil {
+		return nil
+	}
+	cur := make(map[string]core.Task, len(tasks))
+	states := make(map[string]string, len(tasks))
+	for _, t := range tasks {
+		cur[t.TaskID] = t
+		states[t.TaskID] = t.State
+	}
+	var notes []string
+	r.watchMu.Lock()
+	for id, st := range states {
+		prev, seen := r.baseline[id]
+		if seen && prev != st && isTerminalState(st) {
+			notes = append(notes, r.completionNote(cur[id]))
+		}
+	}
+	r.baseline = states
+	r.watchMu.Unlock()
+	return notes
 }
 
 // completionNote renders one finished/failed task as a single report line.
@@ -102,6 +113,9 @@ func (r *repl) askingNow() bool {
 // resetWatchBaseline re-reads the current task states and adopts them as
 // the seen baseline, so already-finished tasks are never announced.
 func (r *repl) resetWatchBaseline() {
+	if r.store == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	tasks, err := r.store.ListByState(ctx, "")

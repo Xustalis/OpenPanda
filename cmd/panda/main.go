@@ -40,6 +40,12 @@ func main() {
 		fmt.Printf("panda %s\n", version)
 		return
 	}
+	// `panda --help` / `panda -h` must show the main help, not be swallowed
+	// by parseSubcommand's "leading dash = flag" skip and fall into the REPL.
+	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
+		printUsage(os.Stdout)
+		return
+	}
 	args := stripJSONFlag(os.Args[1:])
 	sub, args := parseSubcommand(args)
 	if sub != "" {

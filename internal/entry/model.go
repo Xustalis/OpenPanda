@@ -304,6 +304,12 @@ type Response struct {
 	Text      string
 	ToolUses  []ToolUse
 	Truncated bool
+	// Reasoning is the model's chain-of-thought captured from a SEPARATE wire
+	// field — Anthropic thinking blocks, OpenAI-compat delta.reasoning_content —
+	// never from inlined <think> tags in Text. It is display-only scratch: the
+	// streaming path surfaces it live via a reasoning sink, and it is kept out
+	// of Text and out of session history (D14). Callers must not persist it.
+	Reasoning string
 }
 
 // messagesResponse is the Messages API response body.
@@ -545,7 +551,9 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 // callers can surface a truncation rather than pass a silently cut answer
 // through. Thinking blocks are deliberately not used as the answer: a
 // thinking-only response carries no reply, and surfacing the model's private
-// reasoning would leak it to the user (D14).
+// reasoning would leak it to the user (D14). Text blocks still pass
+// stripThinkingBlock as a backstop for relays that inline reasoning into
+// the text content itself.
 func parseResponse(mr *messagesResponse) Response {
 	var out Response
 	var texts []string
@@ -557,7 +565,7 @@ func parseResponse(mr *messagesResponse) Response {
 			out.ToolUses = append(out.ToolUses, ToolUse{ID: b.ID, Name: b.Name, Input: b.Input})
 		}
 	}
-	out.Text = strings.Join(texts, "")
+	out.Text = stripThinkingBlock(strings.Join(texts, ""))
 	out.Truncated = mr.StopReason == "max_tokens"
 	return out
 }

@@ -78,6 +78,16 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	if err := c.store.AdoptAttempt(ctx, t.TaskID, p.AttemptID); err != nil {
 		c.logger.Warn("adopt attempt", "task", t.TaskID, "err", err)
 	}
+	// — Trace: this node accepted a delegation hop (from=upstream delegator,
+	// to=here). The orbit's delegation-chain reconstruction flattens these in
+	// arrival order; best-effort only.
+	c.EvTrace(ctx, t.TaskID, EvDelegationHop, map[string]any{
+		"from_node":  env.From,
+		"to_node":    c.nodeID,
+		"via":        "direct",
+		"chain":      chain,
+		"attempt_id": p.AttemptID,
+	})
 	// Adopt the origin user's tier-2 consent so the executor's defense layer
 	// honors what the delegating user already approved (the authenticated bus
 	// is the trust boundary; see TaskDelegatePayload.Authorized).
@@ -315,7 +325,7 @@ func (c *Core) onlineEmployees(ctx context.Context) []ledger.Node {
 		return nodes
 	}
 	for i := range nodes {
-		if nodes[i].ID == c.nodeID {
+		if scheduler.IsSelfRow(nodes[i].ID, c.nodeID) {
 			nodes[i].Capacity.CurrentTasks = active
 			break
 		}
@@ -373,6 +383,16 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 	if err := c.sendTo(target, env); err != nil {
 		return fmt.Errorf("send: %w", err)
 	}
+	// — Trace: this node handed the task one hop downstream (from=here,
+	// to=target). Recorded on this node's copy so the origin's task detail
+	// shows the outbound leg too.
+	c.EvTrace(ctx, taskID, EvDelegationHop, map[string]any{
+		"from_node":  c.nodeID,
+		"to_node":    target,
+		"via":        "direct",
+		"chain":      chain,
+		"attempt_id": p.AttemptID,
+	})
 	c.logger.Info("forwarded delegated task", "task", taskID, "to", target)
 	return nil
 }
@@ -622,7 +642,87 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		prompt, skillsUsed := buildAgentPrompt(c, currentIntent, task.Project, task.Title)
 		usedSkills = skillsUsed
 
+		// — Trace: exec_agent_start (orbit Step-3 "starting this stage on N").
+		// We report before Execute so the orbit paints the stage bar as
+		// running immediately. Best-effort only.
+		c.EvTrace(execCtx, taskID, EvExecAgentStart, map[string]any{
+			"round":      round,
+			"budget":     maxRounds,
+			"plan_kind":  plan.Kind,
+			"agent":      plan.Agent,
+			"adapter":    plan.Adapter,
+			"authorized": task.Authorized,
+			"tier":       plan.Tier,
+		})
+
 		res = c.router.Execute(execCtx, plan, prompt, workDir, task.Authorized)
+
+		// — Trace: the Tier-2 gate outcome. A refusal is deterministic policy
+		// (the task parks in review with the reason); an authorized run is
+		// traced once on the first round — the gate verdict does not change
+		// between supervision rounds.
+		if plan.Tier >= defense.TierIrreversible && (round == 0 || commander.IsAuthorizationRefusal(res.Stderr)) {
+			op := plan.Command
+			target := ""
+			if plan.Kind == "agent" {
+				op = plan.Agent
+			}
+			// Design doc §3.1.1: operations: [{op, target, risk}] array.
+			// If the gate refused we have a raw reason string; translate
+			// target/risk to "unknown" when the defense layer did not
+			// decompose them for us.
+			// Defense layer currently has two tiers only: reversible vs
+			// irreversible (Tier-2). Any Tier-2 here is at least medium risk.
+			ops := []map[string]any{{
+				"op":     op,
+				"target": target,
+				"risk":   "medium",
+			}}
+			ev := map[string]any{
+				"operations":       ops,
+				"kind":             plan.Kind,
+				"tier":             plan.Tier,
+				"authorized":       task.Authorized,
+				"result":           "authorized",
+				"parked_in_review": false,
+			}
+			if commander.IsAuthorizationRefusal(res.Stderr) {
+				// A refusal is deterministic policy: the task parks in review
+				// with the reason (retryLoop routes it there), so the orbit
+				// marks the parking now — the later PauseWithResult trace is
+				// for the *accepted* outcome and never fires on this path.
+				ev["result"] = "denied"
+				ev["reason"] = res.Stderr
+				ev["parked_in_review"] = true
+			}
+			c.EvTrace(execCtx, taskID, EvTier2Triggered, ev)
+		}
+
+		// — Trace: supervision_round result. Emitted after each judge pass so
+		// the detail view can paint the "2/5" badge and the verdict pill.
+		// If this is the last round we won't judge, so emit once with the
+		// raw exit status.
+		roundOut := map[string]any{
+			"round":  round + 1,
+			"budget": maxRounds,
+			"agent":  res.Agent,
+			"ok":     res.OK,
+		}
+		switch {
+		case plan.Kind == "agent" && c.supervisor != nil && round < maxRounds-1 && res.OK:
+			// judged below inside the same if; leave placeholder
+			roundOut["verdict_status"] = "pending"
+		case !res.OK:
+			// A failed round is never judged (the failure branch below
+			// returns before Supervise runs), so reporting the verdict
+			// variable — its zero value, or the previous round's — would paint
+			// "done" over a failed attempt. The execution outcome is the only
+			// truthful status here.
+			roundOut["verdict_status"] = "failed"
+		default:
+			roundOut["verdict_status"] = string(verdict.Status)
+		}
+		c.EvTrace(execCtx, taskID, EvSupervisionRound, roundOut)
 
 		if plan.Kind == "agent" {
 			// Fallback chain visibility (A2): res.Agent names the agent that
@@ -746,8 +846,10 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		c.recordEntryUsage(context.WithoutCancel(ctx), taskID, c.supervisor, usageBefore,
 			v.Status == entry.VerdictDone, time.Since(judgeStart))
 		if serr != nil {
-			// Supervisor unreachable: Supervise returns VerdictReview, so the work
-			// parks for a human below rather than being accepted unverified.
+			// Supervisor unreachable: Supervise degrades to a done verdict whose
+			// reason records that the result went unverified, so the work
+			// completes below instead of parking — the outage is ours, not the
+			// task's.
 			c.logger.Warn("supervise call failed", "task", taskID, "err", serr)
 		}
 		verdict = v
@@ -786,11 +888,11 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	}
 
 	// The supervisor did not accept the result: either work still remains after
-	// the round budget ("continue"), or no verdict could be obtained at all
-	// ("review" — model unreachable or unparsable output). Both park in review
-	// with the latest result and a marker so a human sees what was done and what
-	// remains, rather than looping indefinitely or silently accepting unverified
-	// work.
+	// the round budget ("continue"), or the model answered without a usable
+	// verdict ("review" — unparsable output; an unreachable model degrades to
+	// done instead). Both park in review with the latest result and a marker so
+	// a human sees what was done and what remains, rather than looping
+	// indefinitely or silently accepting unverified work.
 	if plan.Kind == "agent" && c.supervisor != nil &&
 		(verdict.Status == entry.VerdictContinue || verdict.Status == entry.VerdictReview) {
 		if err := c.store.PauseWithResult(ctx, taskID, c.nodeID, map[string]any{
@@ -811,25 +913,46 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}, nil
 	}
 
-	// Terminal routing. An accepted irreversible (Tier-2) agent task — one whose
-	// side effects (pushes, deletes, irreversible state changes) are not
-	// auto-approved — parks in review with its result for human sign-off; every
-	// other completed run (reversible agent, native, manual) finishes into done.
+	// Terminal routing. An accepted irreversible (Tier-2) agent task whose run
+	// was already consented to — via --authorize at submit, or by approving the
+	// refusal's review, which re-queues the task carrying consent — completes
+	// directly: that consent is the single explicit approval, and a second
+	// sign-off on the finished result would add friction without adding
+	// information, since the side effects already happened under it. Only the
+	// anomalous case — a Tier-2 agent result that reached this branch without
+	// authorization (the executor's gate refuses those, so this is defense in
+	// depth) — still parks in review for human sign-off.
 	if plan.Kind == "agent" && plan.Tier >= defense.TierIrreversible {
-		if err := c.store.PauseWithResult(ctx, taskID, c.nodeID, map[string]any{
-			"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
-		}); err != nil {
-			if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
-				return bus.TaskResultPayload{}, ErrCancelled
+		parked := !task.Authorized
+		// — Trace: the terminal Tier-2 agent outcome. Wire shape matches
+		// design doc §3.1.1: operations: [{op,target,risk}].
+		c.EvTrace(ctx, taskID, EvTier2Triggered, map[string]any{
+			"operations":       []map[string]any{{"op": plan.Agent, "target": "", "risk": "medium"}},
+			"kind":             plan.Kind,
+			"tier":             plan.Tier,
+			"result":           "authorized",
+			"parked_in_review": parked,
+		})
+		if parked {
+			if err := c.store.PauseWithResult(ctx, taskID, c.nodeID, map[string]any{
+				"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
+			}); err != nil {
+				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+					return bus.TaskResultPayload{}, ErrCancelled
+				}
+				return bus.TaskResultPayload{}, fmt.Errorf("pause for approval: %w", err)
 			}
-			return bus.TaskResultPayload{}, fmt.Errorf("pause for approval: %w", err)
+			c.logTask(task.Title, true)
+			trackTask(c, task.Project, required, task.Title, true)
+			return bus.TaskResultPayload{
+				TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
+				Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact,
+			}, nil
 		}
-		c.logTask(task.Title, true)
-		trackTask(c, task.Project, required, task.Title, true)
-		return bus.TaskResultPayload{
-			TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact,
-		}, nil
+		// Consent already on record: audit the auto-acceptance the way an
+		// authorized native Tier-2 run is audited, then fall through to
+		// Complete.
+		c.audit(ctx, taskID, "agent:tier2", plan.Agent, "authorized", "completed under submit-time consent")
 	}
 
 	if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{

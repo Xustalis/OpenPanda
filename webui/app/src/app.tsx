@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'preact/hooks'
 import { PandaAscii, PandaWordmark } from './brand/panda'
-import { clearToken, getToken, onUnauthorized, setToken } from './api/client'
+import { api, clearToken, getToken, onUnauthorized, setToken, type UpdateStatus } from './api/client'
 import { onLocaleChange, t } from './i18n'
+import { useAsync } from './hooks'
 import { defaultCollapsed, navGroups, navigate, parseHash, type Route } from './nav'
 import { QueueView } from './views/queue'
 import { DetailView } from './views/detail'
@@ -151,6 +152,7 @@ export function App() {
       </aside>
       <main class="main">
         <OnboardingBanner />
+        <UpdateBanner />
         {route.view === 'sessions' && (
           <SessionsView
             activeId={route.id}
@@ -175,6 +177,56 @@ export function App() {
         {route.view === 'system' && <SystemView />}
         {route.view === 'settings' && <SettingsView />}
       </main>
+    </div>
+  )
+}
+
+/** Paints a soft "updates paused" banner at the top of every view when the
+ *  updater has backed off to idle (403 / rate limit / network offline).
+ *  Also paints a "new version available" pill in the rare case a check
+ *  succeeded and found one. Both are non-blocking — the banner is
+ *  dismissible and collapses automatically after 15 seconds. */
+function UpdateBanner() {
+  const { data: self } = useAsync(() => api.self(), [])
+  const [dismissed, setDismissed] = useState(false)
+  const up: UpdateStatus | undefined = self?.update
+  useEffect(() => {
+    if (!up) return
+    const id = setTimeout(() => setDismissed(true), 15000)
+    return () => clearTimeout(id)
+  }, [up?.stage, up?.error, up?.latest, up?.degraded])
+  if (!up || dismissed) return null
+  const paused = up.degraded || (up.stage === 'idle' && !!up.error)
+  if (!paused && !up.available) return null
+  if (paused) {
+    return (
+      <div class="banner banner-warn update-banner" role="status">
+        <span class="banner-ico" aria-hidden>🔕</span>
+        <span class="banner-body">
+          <strong>{t('ui.update.degraded.title')}</strong>
+          <span class="banner-sub">
+            {up.error || t('ui.update.degraded.sub')}
+          </span>
+        </span>
+        <a class="banner-link" href="#/system">{t('ui.update.degraded.cta')}</a>
+        <button
+          class="banner-close"
+          onClick={() => setDismissed(true)}
+          aria-label={t('ui.update.degraded.close')}
+        >×</button>
+      </div>
+    )
+  }
+  // New version available is a rarer, softer path.
+  return (
+    <div class="banner banner-info update-banner" role="status">
+      <span class="banner-ico" aria-hidden>✨</span>
+      <span class="banner-body">
+        <strong>{t('ui.update.available.title', { version: up.latest ?? '' })}</strong>
+        <span class="banner-sub">{up.notes ?? t('ui.update.available.sub')}</span>
+      </span>
+      <a class="banner-link" href="#/system">{t('ui.update.available.cta')}</a>
+      <button class="banner-close" onClick={() => setDismissed(true)} aria-label={t('ui.update.degraded.close')}>×</button>
     </div>
   )
 }

@@ -4,9 +4,11 @@ import {
   askSessionStream,
   isAbort,
   type AskResult,
+  type NodeInfo,
   type Session,
   type SessionDiff,
   type SessionTurn,
+  type Task,
 } from '../api/client'
 import { PandaAscii, PandaMark } from '../brand/panda'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
@@ -14,6 +16,8 @@ import { t } from '../i18n'
 import { Markdown } from '../md/render'
 import { toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
+import DecisionOrbit from '../components/orbit'
+import FleetTopologyCard from '../components/fleet'
 
 /** Grow the composer with its content up to a ceiling, then scroll inside.
  *  A fixed two-row box makes pasting a paragraph feel like typing into a
@@ -90,6 +94,21 @@ export function SessionsView({
       .then((p) => setProjects(p.projects ?? []))
       .catch(() => {})
   }, [])
+
+  // Live node directory + change signal → re-fetch on SSE changes so the
+  // fleet card and single-node orbit collapse both always show current net.
+  const nodeTick = useChangeSignal()
+  const { data: nodesData } = useAsync<NodeInfo[]>(
+    () => api.nodes().catch(() => [] as NodeInfo[]),
+    [],
+    nodeTick,
+  )
+  const nodes: NodeInfo[] = nodesData ?? []
+  const selfNodeId = nodes.find((n) => n.is_local)?.id
+  // Orbit's single-node branch keys on REACHABLE devices: an offline row in
+  // the directory is not a routing candidate, so it must not suppress the
+  // "add a second device" CTA.
+  const onlineNodeCount = nodes.filter((n) => n.status === 'online').length
 
   // Load the active thread's transcript.
   useEffect(() => {
@@ -420,9 +439,17 @@ export function SessionsView({
           }}
         >
           {msgs.length === 0 && loading && <ChatSkeleton />}
-          {msgs.length === 0 && !loading && !busy && <ChatHero onPick={(p) => setInput(p)} />}
+          {msgs.length === 0 && !loading && !busy && (
+            <ChatEmpty nodes={nodes} selfNodeId={selfNodeId} onPick={(p) => setInput(p)} />
+          )}
           {msgs.map((m, i) => (
-            <ChatBubble key={i} msg={m} onOpenTask={onOpenTask} />
+            <ChatBubble
+              key={i}
+              msg={m}
+              onOpenTask={onOpenTask}
+              onlineNodeCount={onlineNodeCount}
+              selfNodeId={selfNodeId}
+            />
           ))}
         </div>
 
@@ -531,28 +558,43 @@ function ChatSkeleton() {
   )
 }
 
-/** Empty-state hero: the block wordmark, then a few starter prompts. The mark
- *  is the loud one here — an empty transcript is the only place in the console
- *  with room for it, and it beats a lone illustration for telling you what you
- *  are looking at. */
-function ChatHero({ onPick }: { onPick(prompt: string): void }) {
+/** Empty-state split-screen (D5). Left 50% paints the FleetTopologyCard so
+ *  a single-node user immediately sees the network CTA, while a multi-node
+ *  user reads their node directory. Right 50% is the chat "hero" — the
+ *  Panda mark + starter prompts. Below 960px the grid collapses to one
+ *  column and fleet stacks above the hero. */
+function ChatEmpty(props: {
+  nodes: NodeInfo[]
+  selfNodeId?: string
+  onPick(prompt: string): void
+}) {
+  const { nodes, selfNodeId, onPick } = props
   return (
-    <div class="chat-hero">
-      <PandaAscii scale={8} />
-      <h2>{t('sessions.hello')}</h2>
-      <p>{t('sessions.hint')}</p>
-      <div class="hero-chips">
-        {(['s1', 's2', 's3'] as const).map((k) => (
-          <button key={k} class="chip" onClick={() => onPick(t(`sessions.${k}`))}>
-            {t(`sessions.${k}`)}
-          </button>
-        ))}
+    <div class="chat-empty">
+      <FleetTopologyCard nodes={nodes} selfNodeId={selfNodeId} />
+      <div class="chat-empty-cta">
+        <PandaAscii scale={5} />
+        <h1>{t('sessions.hello')}</h1>
+        <p>{t('sessions.hint')}</p>
+        <div class="hero-chips u-mt-0">
+          {(['s1', 's2', 's3'] as const).map((k) => (
+            <button key={k} class="chip" onClick={() => onPick(t(`sessions.${k}`))}>
+              {t(`sessions.${k}`)}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )
 }
 
-function ChatBubble({ msg, onOpenTask }: { msg: ChatMsg; onOpenTask(id: string): void }) {
+function ChatBubble(props: {
+  msg: ChatMsg
+  onOpenTask(id: string): void
+  onlineNodeCount?: number
+  selfNodeId?: string
+}) {
+  const { msg, onOpenTask, onlineNodeCount, selfNodeId } = props
   const [chainOpen, setChainOpen] = useState(false)
 
   if (msg.role === 'user') {
@@ -561,54 +603,115 @@ function ChatBubble({ msg, onOpenTask }: { msg: ChatMsg; onOpenTask(id: string):
     return (
       <div class="msg user">
         <div class="msg-avatar you">You</div>
-        <div class="msg-body">
-          <p class="msg-text">{msg.text}</p>
+        <div class="msg-body bubble role-user">
+          <div class="bubble-slot-row slot-title" />
+          <div class="bubble-slot-row slot-chat">
+            <p class="msg-text u-m-0 u-w-100">{msg.text}</p>
+          </div>
+          <div class="bubble-slot-row slot-meta" />
         </div>
       </div>
     )
   }
+
+  const isTaskKind = msg.kind === 'task' && Boolean(msg.ref)
+  const hasTaskStatus = Boolean(msg.streaming && msg.status)
+  const hasThinking = Boolean(msg.streaming && !msg.text && !msg.status)
+
   return (
     <div class="msg panda">
       <div class="msg-avatar">
         <PandaMark size={28} />
       </div>
-      <div class="msg-body">
-        {/* An error carries no Markdown — keep it literal so a stray `*` in a
-            stderr line is not read as emphasis. */}
-        {msg.text &&
-          (msg.kind === 'error' ? (
-            <p class="msg-text">{msg.text}</p>
+      <div class="msg-body bubble role-panda">
+        {/* — slot-title: orbit strip for task-class messages (collapsed by
+              default), or the streaming "thinking / status" so the spinner
+              lives in the same lane regardless of whether there's text yet. */}
+        <div class="bubble-slot-row slot-title">
+          {isTaskKind ? (
+            <div class="u-flex-1">
+              <TaskOrbit
+                taskId={msg.ref!}
+                onlineNodeCount={onlineNodeCount}
+                selfNodeId={selfNodeId}
+              />
+            </div>
           ) : (
-            <Markdown text={msg.text} class="msg-text" />
-          ))}
-        {msg.streaming && !msg.text && !msg.status && (
-          <span class="status-line">
-            <span class="spinner" aria-hidden="true" />
-            {t('sessions.thinking')}
-          </span>
-        )}
-        {msg.streaming && msg.status && (
-          <span class="status-line">
-            <span class="spinner" aria-hidden="true" />
-            {msg.status}
-          </span>
-        )}
-        {msg.streaming && msg.text && <span class="cursor" aria-hidden="true" />}
-        {msg.kind === 'task' && msg.ref && (
-          <div class="task-card">
-            <span class="badge blue">{t('state.running') === msg.result?.task_state ? t('sessions.taskCreated') : msg.result?.task_state || t('sessions.taskCreated')}</span>
-            {msg.result?.stdout && <pre class="task-out">{msg.result.stdout}</pre>}
-            <button class="btn small chain-toggle" onClick={() => setChainOpen((v) => !v)}>
-              {chainOpen ? t('sessions.chainHide') : t('sessions.chainShow')}
-            </button>
-            {chainOpen && <TaskChain taskId={msg.ref} />}
-            <a href={`#/task/${encodeURIComponent(msg.ref)}`} onClick={() => onOpenTask(msg.ref!)}>
-              {t('sessions.viewTask')} →
-            </a>
-          </div>
-        )}
+            <div class="u-flex-1" />
+          )}
+          {hasThinking && (
+            <span class="status-line u-color-tert">
+              <span class="spinner" aria-hidden="true" />
+              {t('sessions.thinking')}
+            </span>
+          )}
+          {hasTaskStatus && (
+            <span class="status-line u-color-tert">
+              <span class="spinner" aria-hidden="true" />
+              {msg.status}
+            </span>
+          )}
+        </div>
+
+        {/* — slot-chat: primary copy (markdown / literal error / empty). */}
+        <div class="bubble-slot-row slot-chat u-w-100">
+          {msg.text &&
+            (msg.kind === 'error' ? (
+              <p class="msg-text">{msg.text}</p>
+            ) : (
+              <Markdown text={msg.text} class="msg-text" />
+            ))}
+          {msg.streaming && msg.text && <span class="cursor" aria-hidden="true" />}
+        </div>
+
+        {/* — slot-meta: task card (link + chain) stays below the copy, inside
+              the meta lane so its chrome reads like context, not a separate
+              card. */}
+        <div class="bubble-slot-row slot-meta">
+          {isTaskKind && msg.ref && (
+            <div class="task-card u-flex-1 u-min-w-0">
+              <span class="badge blue">
+                {t('state.running') === msg.result?.task_state
+                  ? t('sessions.taskCreated')
+                  : msg.result?.task_state || t('sessions.taskCreated')}
+              </span>
+              {msg.result?.stdout && <pre class="task-out">{msg.result.stdout}</pre>}
+              <button class="btn small chain-toggle" onClick={() => setChainOpen((v) => !v)}>
+                {chainOpen ? t('sessions.chainHide') : t('sessions.chainShow')}
+              </button>
+              {chainOpen && <TaskChain taskId={msg.ref} />}
+              <a href={`#/task/${encodeURIComponent(msg.ref)}`} onClick={() => onOpenTask(msg.ref!)}>
+                {t('sessions.viewTask')} →
+              </a>
+            </div>
+          )}
+        </div>
       </div>
     </div>
+  )
+}
+
+/** Mounts DecisionOrbit for a single task id. Loads the task once for its
+ *  Task.traces / plan_meta / delegation_chain (the initial hydrate), and
+ *  leaves SSE tailing to DecisionOrbit → useTraceForTask inside. */
+function TaskOrbit(props: {
+  taskId: string
+  onlineNodeCount?: number
+  selfNodeId?: string
+}) {
+  const change = useChangeSignal()
+  const { data: task } = useAsync<Task>(
+    () => api.task(props.taskId).catch(() => null as any),
+    [props.taskId],
+    change,
+  )
+  return (
+    <DecisionOrbit
+      task={task ?? undefined}
+      onlineNodeCount={props.onlineNodeCount}
+      selfNodeId={props.selfNodeId}
+      defaultOpen={false}
+    />
   )
 }
 

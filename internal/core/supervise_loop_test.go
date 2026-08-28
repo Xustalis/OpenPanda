@@ -132,10 +132,12 @@ func TestSuperviseLoopParksOnBudgetExhausted(t *testing.T) {
 	}
 }
 
-// TestSuperviseTerminalRoutesIrreversibleToReview verifies that an accepted
-// irreversible (tier-2) agent task parks in review even when the supervisor says
-// done, so its side effects get human sign-off before being finalized.
-func TestSuperviseTerminalRoutesIrreversibleToReview(t *testing.T) {
+// TestSuperviseTerminalCompletesAuthorizedIrreversible verifies that an
+// accepted irreversible (tier-2) agent task completes directly when its run
+// was consented to at submit (--authorize, or approving the refusal's review,
+// which re-queues carrying consent): that consent is the single approval, so
+// the finished result is not parked for a second sign-off.
+func TestSuperviseTerminalCompletesAuthorizedIrreversible(t *testing.T) {
 	ctx := context.Background()
 	c := newSuperviseCore(t, "sup-irrev", 2)
 	c.SetWorkDir(t.TempDir())
@@ -157,8 +159,131 @@ func TestSuperviseTerminalRoutesIrreversibleToReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
+	if task.State != StateDone {
+		t.Fatalf("state = %s, want done (authorized tier-2 completes without a second approval)", task.State)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("agent ran %d times, want 1", calls.Load())
+	}
+}
+
+// TestSuperviseTerminalRefusesUnauthorizedIrreversible keeps the consent gate
+// the direct-completion rule relaxes: a tier-2 agent task submitted without
+// --authorize never executes, and parks in review carrying the actionable
+// refusal — approving that review re-queues the run with consent.
+func TestSuperviseTerminalRefusesUnauthorizedIrreversible(t *testing.T) {
+	ctx := context.Background()
+	c := newSuperviseCore(t, "sup-irrev-unauth", 2)
+	c.SetWorkDir(t.TempDir())
+	c.SetSupervisor(newFakeSupervisor(t, func(call int) string {
+		return `{"status":"done","reason":"完成","followup":""}`
+	}))
+
+	var calls atomic.Int32
+	c.router.SetAdapterRunner(agentRunner(&calls))
+
+	task, result, err := c.SubmitLocal(ctx, TaskInput{
+		Title:       "push changes",
+		Project:     "proj",
+		ContextType: "command",
+		Intent:      "push to remote",
+		Requires:    []string{"code:modify"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
 	if task.State != StateReview {
-		t.Fatalf("state = %s, want review (irreversible needs approval)", task.State)
+		t.Fatalf("state = %s, want review (tier-2 without consent parks with the refusal)", task.State)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("agent ran %d times, want 0 (the gate refuses before the adapter spawns)", calls.Load())
+	}
+	if !commander.IsAuthorizationRefusal(result.Stderr) {
+		t.Fatalf("result stderr = %q, want the tier-2 authorization refusal", result.Stderr)
+	}
+}
+
+// TestResumeApprovedRunsInPlace pins the inline approval closure (the ask/repl
+// path): a tier-2 task parked in review by an authorization refusal, once the
+// user consents, re-runs to completion in the same process — no background
+// scheduler — and the agent spawns exactly once (the refusal was raised before
+// the first spawn, so no work is duplicated).
+func TestResumeApprovedRunsInPlace(t *testing.T) {
+	ctx := context.Background()
+	c := newSuperviseCore(t, "sup-resume", 2)
+	c.SetWorkDir(t.TempDir())
+	c.SetSupervisor(newFakeSupervisor(t, func(call int) string {
+		return `{"status":"done","reason":"完成","followup":""}`
+	}))
+
+	var calls atomic.Int32
+	c.router.SetAdapterRunner(agentRunner(&calls))
+
+	task, result, err := c.SubmitLocal(ctx, TaskInput{
+		Title:       "push changes",
+		Project:     "proj",
+		ContextType: "command",
+		Intent:      "push to remote",
+		Requires:    []string{"code:modify"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if task.State != StateReview {
+		t.Fatalf("pre-approval state = %s, want review", task.State)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("agent ran %d times before approval, want 0", calls.Load())
+	}
+	if !commander.IsAuthorizationRefusal(result.Stderr) {
+		t.Fatalf("pre-approval stderr = %q, want the tier-2 refusal", result.Stderr)
+	}
+
+	final, res, err := c.ResumeApproved(ctx, task.TaskID)
+	if err != nil {
+		t.Fatalf("resume approved: %v", err)
+	}
+	if final.State != StateDone {
+		t.Fatalf("post-approval state = %s, want done", final.State)
+	}
+	if !final.Authorized {
+		t.Fatal("resumed task must carry the tier-2 consent")
+	}
+	if !res.OK {
+		t.Fatalf("resumed result OK = false, want true (stderr=%q)", res.Stderr)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("agent ran %d times, want 1 (the resume is the sole spawn)", calls.Load())
+	}
+}
+
+// TestResumeApprovedRejectsNonReview guards the precondition: ResumeApproved is
+// only valid on a review-parked task, never a running or done one.
+func TestResumeApprovedRejectsNonReview(t *testing.T) {
+	ctx := context.Background()
+	c := newSuperviseCore(t, "sup-resume-guard", 1)
+	c.SetWorkDir(t.TempDir())
+	c.SetSupervisor(newFakeSupervisor(t, func(call int) string {
+		return `{"status":"done","reason":"完成","followup":""}`
+	}))
+	var calls atomic.Int32
+	c.router.SetAdapterRunner(agentRunner(&calls))
+
+	task, _, err := c.SubmitLocal(ctx, TaskInput{
+		Title:       "build",
+		Project:     "proj",
+		ContextType: "command",
+		Intent:      "build the project",
+		Requires:    []string{"code:modify"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if task.State != StateDone {
+		t.Fatalf("state = %s, want done (tier-1 runs without consent)", task.State)
+	}
+	if _, _, err := c.ResumeApproved(ctx, task.TaskID); err == nil {
+		t.Fatal("resume of a done task must error, not re-run it")
 	}
 }
 

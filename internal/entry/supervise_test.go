@@ -2,8 +2,12 @@ package entry
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Xustalis/OpenPanda/internal/config"
 )
 
 func TestParseSuperviseVerdict(t *testing.T) {
@@ -74,5 +78,31 @@ func TestSuperviseUnparsableParksForReview(t *testing.T) {
 	}
 	if !strings.Contains(v.Reason, "unparsable") {
 		t.Fatalf("reason = %q, want unparsable marker", v.Reason)
+	}
+}
+
+// TestSuperviseUnreachableDegradesToDone pins the degradation rule: a
+// supervisor outage is an infrastructure fault, not a defect in the finished
+// work, so an unreachable model accepts the result with an "unverified"
+// reason instead of parking the task for a human.
+func TestSuperviseUnreachableDegradesToDone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	base := srv.URL
+	srv.Close() // the port is now closed: every request fails to connect
+	c, err := NewClient(config.ModelConfig{BaseURL: base, APIKey: "sk-test", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	c.maxRetry = 0 // fail fast: the retry budget is not what this test exercises
+
+	v, err := Supervise(context.Background(), c, "task A", "agent said done")
+	if err == nil {
+		t.Fatal("supervise must surface the transport error")
+	}
+	if v.Status != VerdictDone {
+		t.Fatalf("status = %q, want done (unreachable supervisor degrades, does not park)", v.Status)
+	}
+	if !strings.Contains(v.Reason, "without verification") {
+		t.Fatalf("reason = %q, want the without-verification marker", v.Reason)
 	}
 }

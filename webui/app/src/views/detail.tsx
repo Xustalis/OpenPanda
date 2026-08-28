@@ -44,7 +44,7 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
         <button class="btn" onClick={onBack}>
           ← {t('detail.back')}
         </button>
-        <div class="card error-state" style={{ marginTop: '16px' }}>
+        <div class="card error-state u-mt-16">
           <span class="error-state-title">{t('common.loadFail')}</span>
           <span class="dim error-state-detail">{error}</span>
           <div>

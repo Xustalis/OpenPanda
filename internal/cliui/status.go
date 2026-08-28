@@ -59,6 +59,20 @@ type Status struct {
 	running bool
 	stop    chan struct{}
 	done    chan struct{}
+
+	// phase chain (P0 redesign §4). Phase records are kept ordered; the
+	// current phase also duplicates into .note so it still surfaces on a
+	// repaint even when we haven't reworked the render chrome yet.
+	phases       []PhaseRecord
+	currentPhase string
+}
+
+// PhaseRecord is one finished (or in-flight) orbit step.
+type PhaseRecord struct {
+	Name  string // stable id: "classify" | "route" | "exec" | "done"
+	Label string // human label
+	Start time.Time
+	Dur   time.Duration // zero means still active
 }
 
 // NewStatus builds a status line writing to w. live enables the animation and
@@ -154,6 +168,70 @@ func (s *Status) Hint(h string) {
 	defer s.mu.Unlock()
 	s.hint = h
 	s.paintLocked()
+}
+
+// Phase advances the orbit's phase chain. name is a stable id the caller can
+// re-enter to correct an earlier optimistic guess; label is the user-facing
+// text. If the phase is already current the call is a no-op so the caller
+// never needs to track whether it already fired.
+//
+// Completes any previously in-flight phase and prints a lightweight progress
+// summary to .note ("classify → route → executing"), which keeps the full
+// render chrome untouched (§D3 render is still handled by the front-end
+// DecisionOrbit component; CLI here only gives at-a-glance parity).
+func (s *Status) Phase(name, label string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if name == "" {
+		return
+	}
+	now := time.Now()
+	// Close the previously in-flight phase (same-name re-entry is a no-op).
+	if len(s.phases) > 0 && s.currentPhase != name {
+		last := &s.phases[len(s.phases)-1]
+		if last.Dur == 0 {
+			last.Dur = now.Sub(last.Start)
+		}
+	}
+	if s.currentPhase != name {
+		s.phases = append(s.phases, PhaseRecord{Name: name, Label: label, Start: now})
+		s.currentPhase = name
+	}
+	// Reflect the chain through the note field so the status line shows it
+	// without touching renderLocked's width math.
+	s.note = s.phaseChainLocked()
+	s.paintLocked()
+}
+
+// PhaseHistory returns a shallow copy of the phase record list — for the
+// closing summary line. Live durations are resolved at call time.
+func (s *Status) PhaseHistory() []PhaseRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	out := make([]PhaseRecord, len(s.phases))
+	copy(out, s.phases)
+	for i := range out {
+		if out[i].Dur == 0 && !out[i].Start.IsZero() {
+			out[i].Dur = now.Sub(out[i].Start)
+		}
+	}
+	return out
+}
+
+func (s *Status) phaseChainLocked() string {
+	if len(s.phases) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(s.phases))
+	for _, p := range s.phases {
+		if p.Label != "" {
+			parts = append(parts, p.Label)
+		} else {
+			parts = append(parts, p.Name)
+		}
+	}
+	return strings.Join(parts, " → ")
 }
 
 // Preview shows a live tail of text that is still arriving — the words the

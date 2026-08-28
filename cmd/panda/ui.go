@@ -39,6 +39,28 @@ func newStatusLine(loc i18n.Locale) *cliui.Status {
 // the constructor so every surface uses the same vocabulary.
 func statusVerb(loc i18n.Locale) string { return i18n.T(loc, "cli.status.thinking") }
 
+// thoughtPreview turns a stream of reasoning deltas into a one-line preview for
+// the status line: it keeps only the tail after the last newline (the thought
+// still being written) so a long chain-of-thought stays a single moving line
+// rather than scrolling the terminal. It holds no full transcript — Phase 1
+// reasoning is display-only (D14); the collapsible thought block is Phase 2.
+type thoughtPreview struct {
+	line strings.Builder
+}
+
+// feed consumes one reasoning delta and returns the current preview line, or ""
+// when there is nothing printable yet. Newlines reset the line to the text that
+// follows the last one.
+func (t *thoughtPreview) feed(chunk string) string {
+	if i := strings.LastIndexByte(chunk, '\n'); i >= 0 {
+		t.line.Reset()
+		t.line.WriteString(chunk[i+1:])
+	} else {
+		t.line.WriteString(chunk)
+	}
+	return strings.TrimSpace(t.line.String())
+}
+
 // progressNote phrases one engine progress event in the user's language. The
 // engine reports these structured precisely so the wording lives here, next to
 // every other user-facing string, instead of being composed in English inside
@@ -51,6 +73,12 @@ func progressNote(loc i18n.Locale, p askengine.Progress) string {
 		return i18n.Tf(loc, "cli.progress.plan", "goal", p.Name)
 	case askengine.ProgressTool:
 		return i18n.Tf(loc, "cli.progress.tool", "name", p.Name)
+	case askengine.ProgressRoute:
+		return i18n.Tf(loc, "cli.progress.route", "node", p.Name)
+	case askengine.ProgressExec:
+		return i18n.Tf(loc, "cli.progress.exec", "agent", p.Name)
+	case askengine.ProgressJudge:
+		return i18n.T(loc, "cli.progress.judge")
 	}
 	return p.Name
 }

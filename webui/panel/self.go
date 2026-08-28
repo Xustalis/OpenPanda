@@ -3,6 +3,7 @@ package panel
 import (
 	"net/http"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -10,25 +11,54 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/hwinfo"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
+	"github.com/Xustalis/OpenPanda/internal/updater"
+	"github.com/Xustalis/OpenPanda/internal/version"
 )
 
 // selfJSON is the wire form of GET /api/self — this machine's device profile
 // (C3): OS/architecture/CPU/memory probed via internal/hwinfo (the same
 // helpers `panda detect` uses, sunk into the internal layer), plus this
-// node's capability-card summary from the ledger when one is registered.
+// node's capability-card summary from the ledger when one is registered,
+// plus the running Version and the self-update manager's live status (so
+// the console can paint a soft banner when the updater has degraded to
+// idle after a 403 / rate limit GitHub API call, instead of silently
+// hiding it until the user clicks System).
 type selfJSON struct {
-	Hostname     string   `json:"hostname"`
-	OS           string   `json:"os"`
-	Arch         string   `json:"arch"`
-	Chip         string   `json:"chip,omitempty"`
-	CPUCores     int      `json:"cpu_cores"`
-	RAMGB        int      `json:"ram_gb,omitempty"`
-	NodeName     string   `json:"node_name,omitempty"`
-	NodeID       string   `json:"node_id,omitempty"`
-	NodeKind     string   `json:"node_kind,omitempty"`
-	NodeIdentity string   `json:"node_identity,omitempty"`
-	NodeRunning  bool     `json:"node_running"`
-	Node         *nodeRow `json:"node,omitempty"`
+	Hostname     string       `json:"hostname"`
+	OS           string       `json:"os"`
+	Arch         string       `json:"arch"`
+	Chip         string       `json:"chip,omitempty"`
+	CPUCores     int          `json:"cpu_cores"`
+	RAMGB        int          `json:"ram_gb,omitempty"`
+	NodeName     string       `json:"node_name,omitempty"`
+	NodeID       string       `json:"node_id,omitempty"`
+	NodeKind     string       `json:"node_kind,omitempty"`
+	NodeIdentity string       `json:"node_identity,omitempty"`
+	NodeRunning  bool         `json:"node_running"`
+	Node         *nodeRow     `json:"node,omitempty"`
+	Version      string       `json:"version"`
+	Update       *updateSlice `json:"update,omitempty"`
+}
+
+// updateSlice is the panel's projection of updater.Status, with one
+// derived flag, `degraded`, added: it is true when the check loop has
+// backed off to idle because of a transient upstream error (rate limit,
+// 403 forbidden, network offline) and will not retry until the next
+// restart. The UI paints this as a soft "updates paused" banner rather
+// than silently leaving the user unable to discover why no new version
+// ever surfaces.
+type updateSlice struct {
+	Stage     string `json:"stage"`
+	Current   string `json:"current"`
+	Latest    string `json:"latest,omitempty"`
+	Notes     string `json:"notes,omitempty"`
+	Available bool   `json:"available"`
+	Idle      bool   `json:"idle"`
+	Error     string `json:"error,omitempty"`
+	// Degraded means "check has opted out of network calls this run".
+	// Mirrors the StageIdle-with-error contract internal/updater uses on
+	// 403/429 (rate limit / private repo access denied).
+	Degraded bool `json:"degraded"`
 }
 
 // nodeRow is the full decoded directory row: the hardware/resources/agents
@@ -71,6 +101,7 @@ func (h *handler) getSelf(w http.ResponseWriter, r *http.Request) {
 		Chip:     hwinfo.CPUModel(),
 		CPUCores: runtime.NumCPU(),
 		RAMGB:    hwinfo.RAMGB(),
+		Version:  version.Version,
 	}
 	if h.cfg != nil {
 		out.NodeName = h.cfg.Node.Name
@@ -92,6 +123,28 @@ func (h *handler) getSelf(w http.ResponseWriter, r *http.Request) {
 				out.NodeRunning = out.NodeRunning && n.Status == "online"
 				break
 			}
+		}
+	}
+	if h.updater != nil {
+		s := h.updater.Status()
+		degraded := false
+		// StageIdle means "not attempting anything right now". It is
+		// semantically degraded when it is accompanied by a sticky error
+		// (rate limit exceeded, private repo 403) — those are the cases
+		// internal/updater opts into by explicitly setting the stage to
+		// Idle in the error handler.
+		if strings.EqualFold(string(s.Stage), string(updater.StageIdle)) && s.Error != "" {
+			degraded = true
+		}
+		out.Update = &updateSlice{
+			Stage:     string(s.Stage),
+			Current:   s.Current,
+			Latest:    s.Latest,
+			Notes:     s.Notes,
+			Available: s.Available,
+			Idle:      s.Idle,
+			Error:     s.Error,
+			Degraded:  degraded,
 		}
 	}
 	writeJSON(w, out)

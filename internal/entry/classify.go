@@ -112,10 +112,12 @@ func ClassifyTurnsWithTools(ctx context.Context, c *Client, devices []ledger.Nod
 
 // ClassifyStreamWithTools is ClassifyTurnsWithTools with live text streaming:
 // answer deltas are delivered to onDelta as the provider emits them, while the
-// parsed Output is returned once complete. A cache hit delivers the stored
-// answer as one delta; structured outputs (task/tool_call) never stream, same
-// as the live path.
-func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.Node, memory string, turns []Turn, registry *Registry, onDelta func(string), opts ...ClassifyOption) (Output, error) {
+// parsed Output is returned once complete. Chain-of-thought from a provider's
+// separate reasoning field is delivered to onReasoning live (display-only, kept
+// out of Output per D14); pass nil to ignore it. A cache hit delivers the
+// stored answer as one delta; structured outputs (task/tool_call) never stream,
+// same as the live path.
+func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.Node, memory string, turns []Turn, registry *Registry, onDelta func(string), onReasoning func(string), opts ...ClassifyOption) (Output, error) {
 	if out, ok := cachedClassification(ctx, c, turns, memory, devices, registry); ok {
 		if out.Kind == KindAnswer && onDelta != nil && out.Answer != "" {
 			onDelta(out.Answer)
@@ -131,7 +133,7 @@ func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.No
 	if registry != nil {
 		specs = registry.Specs()
 	}
-	resp, err := c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta)
+	resp, err := c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta, onReasoning)
 	if err != nil {
 		return Output{}, WrapAPIError(err)
 	}
