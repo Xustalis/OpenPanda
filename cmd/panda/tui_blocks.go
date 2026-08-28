@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -71,19 +72,29 @@ func (b block) render(t theme, width int, expandThought bool) string {
 }
 
 // renderThought draws the collapsible chain-of-thought. Folded, it is a single
-// dim line with a hint that Ctrl+O opens it; expanded, the full reasoning prints
-// dim+italic under a header. It is never part of the answer (D14) — this is a
-// display affordance over text the engine already keeps out of history.
+// dim line: the label, a one-line teaser, and how many lines are folded away.
+// Expanded, the full reasoning prints dim+italic under the header. It is never
+// part of the answer (D14) — this is a display affordance over text the engine
+// already keeps out of history.
+//
+// The fold reports its line count rather than advertising "ctrl+o". This front
+// end runs inline, so a committed block has already been written into the
+// terminal's scrollback and can never be redrawn: the toggle governs the
+// thought being streamed and every thought committed after it flips, not the
+// blocks already above the cursor. Printing a key hint on a block that key
+// cannot touch would be a promise the display cannot keep.
 func (b block) renderThought(t theme, expand bool) string {
 	star := t.glyph("✻", "*")
 	label := i18n.T(t.loc, "tui.thought.head")
 	if !expand {
-		summary := firstThoughtLine(b.thoughtLines)
 		head := t.muted.Render(star + " " + label)
-		if summary != "" {
+		if summary := firstThoughtLine(b.thoughtLines); summary != "" {
 			head += t.muted.Render(" · " + truncate(summary, 60))
 		}
-		return head + t.muted.Render("  (ctrl+o)")
+		if n := len(b.thoughtLines); n > 1 {
+			head += t.muted.Render(" · " + i18n.Tf(t.loc, "tui.thought.lines", "n", strconv.Itoa(n)))
+		}
+		return head
 	}
 	var sb strings.Builder
 	sb.WriteString(t.muted.Render(star + " " + label))
