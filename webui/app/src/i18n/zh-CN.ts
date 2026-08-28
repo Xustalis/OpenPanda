@@ -115,6 +115,14 @@ const zhCN: Messages = {
   'detail.risk': '风险',
   'detail.result': '执行结果',
   'detail.timeline': '事件时间线',
+  'detail.result.ok': '成功',
+  'detail.result.failed': '失败',
+  'detail.result.exit': '退出码 {n}',
+  'detail.result.agent': '智能体 {agent}',
+  'detail.result.verdict': '监督判定：{verdict}',
+  'detail.result.stdout': '输出',
+  'detail.result.stderr': '错误输出',
+  'detail.result.raw': '原始 JSON',
 
   // Sessions (chat) view
   'sessions.new': '新对话',

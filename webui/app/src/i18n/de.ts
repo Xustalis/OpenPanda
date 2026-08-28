@@ -116,6 +116,14 @@ const de: Messages = {
   'detail.risk': 'Risiko',
   'detail.result': 'Ergebnis',
   'detail.timeline': 'Zeitverlauf',
+  'detail.result.ok': 'Erfolgreich',
+  'detail.result.failed': 'Fehlgeschlagen',
+  'detail.result.exit': 'Exit-Code {n}',
+  'detail.result.agent': 'Agent {agent}',
+  'detail.result.verdict': 'Supervisor-Urteil: {verdict}',
+  'detail.result.stdout': 'Ausgabe',
+  'detail.result.stderr': 'Fehlerausgabe',
+  'detail.result.raw': 'Rohes JSON',
 
   // Sessions (chat) view
   'sessions.new': 'Neuer Chat',

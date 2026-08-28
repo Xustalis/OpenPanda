@@ -18,6 +18,7 @@ import { toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 import DecisionOrbit from '../components/orbit'
 import FleetTopologyCard from '../components/fleet'
+import { JsonInline } from '../components/json-inline'
 
 /** Grow the composer with its content up to a ceiling, then scroll inside.
  *  A fixed two-row box makes pasting a paragraph feel like typing into a
@@ -729,7 +730,7 @@ function TaskChain({ taskId }: { taskId: string }) {
       {events.map((ev, i) => (
         <li key={i}>
           <span class="dim">{new Date(ev.ts * 1000).toLocaleTimeString()}</span> <code>{ev.type}</code>
-          {ev.data && ev.data !== '{}' && <pre class="timeline-data">{ev.data}</pre>}
+          {ev.data && ev.data !== '{}' && <JsonInline raw={ev.data} />}
         </li>
       ))}
     </ol>

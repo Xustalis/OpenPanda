@@ -115,6 +115,14 @@ const ja: Messages = {
   'detail.risk': 'リスク',
   'detail.result': '実行結果',
   'detail.timeline': 'タイムライン',
+  'detail.result.ok': '成功',
+  'detail.result.failed': '失敗',
+  'detail.result.exit': '終了コード {n}',
+  'detail.result.agent': 'エージェント {agent}',
+  'detail.result.verdict': '監督判定：{verdict}',
+  'detail.result.stdout': '出力',
+  'detail.result.stderr': 'エラー出力',
+  'detail.result.raw': '生の JSON',
 
   // Sessions (chat) view
   'sessions.new': '新しいチャット',
