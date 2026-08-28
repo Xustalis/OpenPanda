@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -57,17 +58,25 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Println(blk.render(m.th, m.width, m.expandThought))
 		}
 		return m, nil
+	case droppedMsg:
+		// The pump's ask was released while it was parked. There is nothing to
+		// fold in and the pump is not re-armed, which is what ends it.
+		return m, nil
 	}
 	return m, nil
 }
+
+// interruptWindow is how long a second Esc/Ctrl-C during a turn counts as
+// "quit" rather than a second cancel. It mirrors the classic loop's window so
+// the two front ends answer the same keystrokes the same way.
+const interruptWindow = time.Second
 
 // onKey dispatches a keystroke according to the current mode.
 func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		if m.mode == modeAsking && m.stream != nil {
-			m.stream.cancel() // interrupt the ask; the doneMsg will land with ctx error
-			return m, nil
+		if m.mode == modeAsking {
+			return m.interrupt()
 		}
 		m.quitting = true
 		return m, tea.Quit
@@ -78,8 +87,8 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch m.mode {
 	case modeAsking:
-		if msg.Type == tea.KeyEsc && m.stream != nil {
-			m.stream.cancel()
+		if msg.Type == tea.KeyEsc {
+			return m.interrupt()
 		}
 		return m, nil
 	case modeApproving:
@@ -87,6 +96,45 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m.onIdleKey(msg)
 	}
+}
+
+// interrupt answers Esc/Ctrl-C during a turn. It releases this front end from
+// the ask; it does not stop the work. Once the engine hands a task to the core,
+// the core owns that task's lifetime — submitTask runs under the engine's own
+// context, not the ask's — so the task runs to completion and the out-of-band
+// watcher announces it here when it lands. That is why the late doneMsg is
+// dropped rather than committed (see onDone) and why the note says the task
+// keeps going instead of claiming it stopped.
+//
+// Pressing twice inside interruptWindow quits. That is the escape hatch for the
+// case where nothing can be released at all, and it is what keeps a wedged
+// turn from trapping the user in the program.
+func (m tuiModel) interrupt() (tea.Model, tea.Cmd) {
+	now := time.Now()
+	if !m.lastInterrupt.IsZero() && now.Sub(m.lastInterrupt) < interruptWindow {
+		m.quitting = true
+		return m, tea.Quit
+	}
+	m.lastInterrupt = now
+
+	if m.stream == nil {
+		// A ResumeApproved re-run is in flight. It has no stream to release and
+		// the engine runs it under its own context, so stay in the turn and say
+		// plainly what the key did not do — leaving the spinner up is more
+		// honest than returning to a prompt while work continues.
+		note := block{kind: blockNote, body: i18n.T(m.loc, "tui.turn.busy")}
+		return m, tea.Println(note.render(m.th, m.width, m.expandThought))
+	}
+
+	m.stream.drop()
+	m.mode = modeIdle
+	m.stream = nil
+	m.resetLive()
+	note := block{kind: blockNote, body: i18n.T(m.loc, "tui.turn.detached")}
+	return m, tea.Batch(
+		m.turnEnded(),
+		tea.Println(note.render(m.th, m.width, m.expandThought)),
+	)
 }
 
 // onIdleKey handles input while waiting at the prompt. When the slash-command
@@ -196,17 +244,26 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 
 	history, workDir := m.history(prompt)
 	m.pendingPrompt = prompt
+	m.turnWorkDir = workDir
 	m.mode = modeAsking
 	m.started = time.Now()
+	m.lastInterrupt = time.Time{} // each turn gets a fresh double-tap window
 	m.liveAnswer.Reset()
 	m.thought = nil
 	m.thoughtDone = false
 	m.note = ""
 	// The turn reports its own outcome, so the out-of-band watcher holds its
 	// tongue until it commits (mirrors the classic loop's setAsking).
-	m.r.setAsking(true)
+	//
+	// A repl built without one (some tests) cannot report that it is busy and
+	// asks without standing consent, which the approval gate turns into an
+	// on-request refusal like any other.
+	if m.r != nil {
+		m.r.setAsking(true)
+	}
+	authorize := m.r != nil && m.r.authorize
 
-	stream, pump := startAsk(m.engine, history, prompt, workDir, m.r.authorize)
+	stream, pump := startAsk(m.engine, history, prompt, workDir, authorize)
 	m.stream = stream
 	return m, tea.Batch(append(cmds, m.sp.Tick, pump)...)
 }

@@ -57,9 +57,22 @@ type tuiModel struct {
 	stream  *askStream
 	started time.Time
 
+	// lastInterrupt timestamps the previous Esc/Ctrl-C of a turn. A second one
+	// inside interruptWindow quits outright, so an ask that cannot actually be
+	// released — the core owns a delegated task's lifetime, not this front end
+	// — can never trap the user in the program. It is the same double-tap the
+	// classic loop uses, so both front ends feel alike.
+	lastInterrupt time.Time
+
 	// pendingPrompt is the user text of the in-flight ask, kept so the turn can
 	// be recorded into conversation memory when it completes.
 	pendingPrompt string
+
+	// turnWorkDir is the worktree this turn runs in — the session's when a
+	// session is bound, empty for a bare chat. A tier-2 task parked for
+	// approval has to resume in the same tree, so it is kept until the turn
+	// commits rather than re-derived at approval time.
+	turnWorkDir string
 
 	// In-flight turn state. liveAnswer accumulates streamed answer text (shown
 	// in the ephemeral region, committed to scrollback when the turn ends);

@@ -70,6 +70,13 @@ func (m tuiModel) onProgress(p askengine.Progress) (tea.Model, tea.Cmd) {
 // clears the live region. A tier-2 task parked for approval switches the model
 // into approving mode instead of committing.
 func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
+	// An ask the user stopped waiting on still finishes — releasing the front
+	// end never stopped the work. The watcher announces that outcome, since
+	// turnEnded re-armed it when the turn was detached; committing here as
+	// well would print the same result twice.
+	if msg.stream != nil && msg.stream.detached {
+		return m, nil
+	}
 	m.mode = modeIdle
 	m.stream = nil
 
@@ -127,7 +134,7 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 	if m.r != nil {
 		m.r.recordOutcome(context.Background(), m.pendingPrompt, out)
 	}
-	blk := resultBlock(out, m.liveAnswer.String())
+	blk := resultBlock(out, m.liveAnswer.String(), m.loc)
 	// A delegated turn carries its card's title and stage trail into scrollback,
 	// so the committed block records the same route/exec/judge evidence the live
 	// card showed rather than just the final output.
@@ -145,7 +152,7 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 // resultBlock turns an engine Result into the transcript block for its kind.
 // liveAnswer is the streamed text already accumulated (used for answers so the
 // committed block matches exactly what streamed).
-func resultBlock(out *askengine.Result, liveAnswer string) block {
+func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) block {
 	switch out.Kind {
 	case "task":
 		if out.OK {
@@ -153,6 +160,13 @@ func resultBlock(out *askengine.Result, liveAnswer string) block {
 		}
 		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, out.Stderr)}
 	case "plan":
+		// A plan that failed to start has no board to follow and no stages, so
+		// its summary line would read "plan  · 0 stages" — a failure rendered
+		// as a success. Surface it as the error it is, the way the classic loop
+		// does.
+		if !out.OK {
+			return block{kind: blockError, body: i18n.Tf(loc, "cli.plan.failed", "err", out.Stderr)}
+		}
 		return block{kind: blockInfo, body: planSummaryLine(out)}
 	default: // answer
 		body := strings.TrimSpace(liveAnswer)
@@ -175,12 +189,24 @@ func planSummaryLine(out *askengine.Result) string {
 // onApprovalKey handles the tier-2 approval card: y approves (resume the task
 // authorized), n/Esc denies and commits a note.
 func (m tuiModel) onApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The card only renders while pending is set, but Update sees every
+	// keystroke, so guard the dereference instead of trusting the mode flag to
+	// stay in step with the field.
+	if m.pending == nil || m.pending.Approval == nil {
+		m.mode = modeIdle
+		return m, nil
+	}
 	switch strings.ToLower(msg.String()) {
 	case "y":
 		req := m.pending.Approval
 		m.mode = modeAsking
 		m.started = time.Now()
-		return m, tea.Batch(m.sp.Tick, resumeApproved(m.engine, req.TaskID, ""))
+		m.lastInterrupt = time.Time{} // the re-run gets its own double-tap window
+		// Resume in the tree this turn was running in. A task started inside a
+		// /resume'd session must not silently re-run under the engine's default
+		// work path — for an irreversible task that is the wrong directory, not
+		// merely a cosmetic difference.
+		return m, tea.Batch(m.sp.Tick, resumeApproved(m.engine, req.TaskID, m.turnWorkDir))
 	case "n", "esc":
 		id := m.pending.Approval.TaskID
 		m.pending = nil
