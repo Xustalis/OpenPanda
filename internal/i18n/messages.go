@@ -266,6 +266,8 @@ var messages = map[Locale]map[string]string{
 		"tui.hint.quit":         "ctrl+c quit",
 		"tui.approval.yes":      "run it",
 		"tui.approval.no":       "keep parked",
+		"tui.turn.detached":     "stopped waiting — the task keeps running and reports here when it finishes · ctrl+c twice to quit",
+		"tui.turn.busy":         "an approved task is re-running and cannot be interrupted · ctrl+c twice to quit",
 		"tui.welcome.tips":      "type / for commands · @file to attach a file · /help for the full guide",
 
 		"init.node.summary":  "node: {name} ({class}/{kind})",
@@ -643,6 +645,8 @@ var messages = map[Locale]map[string]string{
 		"tui.hint.quit":         "ctrl+c 退出",
 		"tui.approval.yes":      "执行",
 		"tui.approval.no":       "保持挂起",
+		"tui.turn.detached":     "已停止等待 —— 任务继续运行，完成后会在此报告 · 连按两次 ctrl+c 退出",
+		"tui.turn.busy":         "已批准的任务正在重跑，无法中断 · 连按两次 ctrl+c 退出",
 		"tui.welcome.tips":      "输入 / 唤出命令 · @文件 附带文件 · /help 查看完整指南",
 
 		"init.node.summary":  "节点：{name}（{class}/{kind}）",
@@ -1020,6 +1024,8 @@ var messages = map[Locale]map[string]string{
 		"tui.hint.quit":         "ctrl+c 終了",
 		"tui.approval.yes":      "実行",
 		"tui.approval.no":       "保留のまま",
+		"tui.turn.detached":     "待機をやめました —— タスクは実行を続け、完了時にここへ報告します · ctrl+c を 2 回で終了",
+		"tui.turn.busy":         "承認済みタスクを再実行中のため中断できません · ctrl+c を 2 回で終了",
 		"tui.welcome.tips":      "/ でコマンド一覧 · @ファイル で添付 · /help で全ガイド",
 
 		"init.node.summary":  "ノード：{name}（{class}/{kind}）",
@@ -1397,6 +1403,8 @@ var messages = map[Locale]map[string]string{
 		"tui.hint.quit":         "ctrl+c salir",
 		"tui.approval.yes":      "ejecutar",
 		"tui.approval.no":       "dejar en espera",
+		"tui.turn.detached":     "se dejó de esperar — la tarea sigue ejecutándose y se informará aquí al terminar · ctrl+c dos veces para salir",
+		"tui.turn.busy":         "una tarea aprobada se está reejecutando y no se puede interrumpir · ctrl+c dos veces para salir",
 		"tui.welcome.tips":      "escribe / para los comandos · @archivo para adjuntar · /help para la guía completa",
 
 		"init.node.summary":  "nodo: {name} ({class}/{kind})",
@@ -1774,6 +1782,8 @@ var messages = map[Locale]map[string]string{
 		"tui.hint.quit":         "ctrl+c beenden",
 		"tui.approval.yes":      "ausführen",
 		"tui.approval.no":       "geparkt lassen",
+		"tui.turn.detached":     "Warten beendet — die Aufgabe läuft weiter und meldet sich hier, wenn sie fertig ist · ctrl+c zweimal zum Beenden",
+		"tui.turn.busy":         "Eine genehmigte Aufgabe läuft erneut und kann nicht unterbrochen werden · ctrl+c zweimal zum Beenden",
 		"tui.welcome.tips":      "/ für Befehle · @Datei zum Anhängen · /help für die ganze Anleitung",
 
 		"init.node.summary":  "Knoten: {name} ({class}/{kind})",

@@ -5,7 +5,13 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
+
+// loc is the locale the block tests render in. It only matters for keys with
+// interpolations, but passing it keeps these call sites honest about the real
+// signature.
+const loc = i18n.Locale("en")
 
 // TestAppendReasoning pins the fold from streamed reasoning chunks to whole
 // lines: a chunk without a newline extends the current line (chain-of-thought
@@ -34,15 +40,15 @@ func TestAppendReasoning(t *testing.T) {
 // (what the user actually saw) and falls back to Result.Answer, and that an
 // incidental Note is kept above the answer.
 func TestResultBlockAnswer(t *testing.T) {
-	b := resultBlock(&askengine.Result{Kind: "answer", Answer: "fallback"}, "streamed")
+	b := resultBlock(&askengine.Result{Kind: "answer", Answer: "fallback"}, "streamed", loc)
 	if b.kind != blockAnswer || b.body != "streamed" {
 		t.Fatalf("streamed preferred: kind=%v body=%q", b.kind, b.body)
 	}
-	b = resultBlock(&askengine.Result{Kind: "answer", Answer: "fallback"}, "   ")
+	b = resultBlock(&askengine.Result{Kind: "answer", Answer: "fallback"}, "   ", loc)
 	if b.body != "fallback" {
 		t.Fatalf("empty stream should fall back: body=%q", b.body)
 	}
-	b = resultBlock(&askengine.Result{Kind: "answer", Answer: "a", Note: "heads up"}, "")
+	b = resultBlock(&askengine.Result{Kind: "answer", Answer: "a", Note: "heads up"}, "", loc)
 	if !strings.HasPrefix(b.body, "heads up\n") {
 		t.Fatalf("note should lead the body: %q", b.body)
 	}
@@ -51,13 +57,32 @@ func TestResultBlockAnswer(t *testing.T) {
 // TestResultBlockTask distinguishes a succeeded task (its stdout, success tint)
 // from a failed one (exit code + stderr).
 func TestResultBlockTask(t *testing.T) {
-	ok := resultBlock(&askengine.Result{Kind: "task", OK: true, Stdout: "done\n"}, "")
+	ok := resultBlock(&askengine.Result{Kind: "task", OK: true, Stdout: "done\n"}, "", loc)
 	if ok.kind != blockTask || !ok.ok || ok.body != "done" {
 		t.Fatalf("ok task: %+v", ok)
 	}
-	bad := resultBlock(&askengine.Result{Kind: "task", OK: false, ExitCode: 2, Stderr: "boom"}, "")
+	bad := resultBlock(&askengine.Result{Kind: "task", OK: false, ExitCode: 2, Stderr: "boom"}, "", loc)
 	if bad.kind != blockTask || bad.ok || !strings.Contains(bad.body, "exit 2") || !strings.Contains(bad.body, "boom") {
 		t.Fatalf("bad task: %+v", bad)
+	}
+}
+
+// TestResultBlockPlanFailed pins the failure path: a plan that never started
+// carries an empty id and no stages, so rendering it through the success line
+// would announce "plan  · 0 stages" — a failure dressed as a success. It has to
+// come back as an error block instead.
+func TestResultBlockPlanFailed(t *testing.T) {
+	bad := resultBlock(&askengine.Result{Kind: "plan", Stderr: "no card", ExitCode: 1}, "", loc)
+	if bad.kind != blockError {
+		t.Fatalf("kind: got %v want blockError", bad.kind)
+	}
+	if !strings.Contains(bad.body, "no card") {
+		t.Fatalf("the reason belongs in the block: %q", bad.body)
+	}
+	// The success path still summarises the board that was actually queued.
+	good := resultBlock(&askengine.Result{Kind: "plan", OK: true, PlanID: "p1", PlanGoal: "ship it"}, "", loc)
+	if good.kind != blockInfo || !strings.Contains(good.body, "p1") {
+		t.Fatalf("ok plan: kind=%v body=%q", good.kind, good.body)
 	}
 }
 
