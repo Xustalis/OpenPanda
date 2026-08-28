@@ -158,6 +158,7 @@ export function App() {
             activeId={route.id}
             onOpenSession={(id) => navigate({ view: 'sessions', id: id || null })}
             onOpenTask={(id) => navigate({ view: 'detail', id })}
+            onOpenNodes={() => navigate({ view: 'nodes' })}
           />
         )}
         {route.view === 'queue' && (

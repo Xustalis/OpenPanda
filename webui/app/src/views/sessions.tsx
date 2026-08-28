@@ -49,10 +49,15 @@ export function SessionsView({
   activeId,
   onOpenSession,
   onOpenTask,
+  onOpenNodes,
 }: {
   activeId: string | null
   onOpenSession(id: string): void
   onOpenTask(id: string): void
+  /** Where the fleet card's "invite a device" CTA leads. Without it the CTA
+   *  paints disabled, which reads as a broken button rather than as an
+   *  invitation. */
+  onOpenNodes(): void
 }) {
   useLocaleRerender()
   const [sessions, setSessions] = useState<Session[]>([])
@@ -447,7 +452,12 @@ export function SessionsView({
         >
           {msgs.length === 0 && loading && <ChatSkeleton />}
           {msgs.length === 0 && !loading && !busy && (
-            <ChatEmpty nodes={nodes} selfNodeId={selfNodeId} onPick={(p) => setInput(p)} />
+            <ChatEmpty
+              nodes={nodes}
+              selfNodeId={selfNodeId}
+              onPick={(p) => setInput(p)}
+              onAddDevice={onOpenNodes}
+            />
           )}
           {msgs.map((m, i) => (
             <ChatBubble
@@ -574,11 +584,12 @@ function ChatEmpty(props: {
   nodes: NodeInfo[]
   selfNodeId?: string
   onPick(prompt: string): void
+  onAddDevice(): void
 }) {
-  const { nodes, selfNodeId, onPick } = props
+  const { nodes, selfNodeId, onPick, onAddDevice } = props
   return (
     <div class="chat-empty">
-      <FleetTopologyCard nodes={nodes} selfNodeId={selfNodeId} />
+      <FleetTopologyCard nodes={nodes} selfNodeId={selfNodeId} onAddDevice={onAddDevice} />
       <div class="chat-empty-cta">
         <PandaAscii scale={5} />
         <h1>{t('sessions.hello')}</h1>
