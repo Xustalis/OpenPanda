@@ -56,12 +56,15 @@ func (c *Core) outboxDrop(ctx context.Context, peer, taskID string) {
 	}
 }
 
-// outboxFlush re-delivers every parked result destined for peer. Invoked when a
-// peer's hello is accepted — the moment a return channel exists again. Each
-// entry is sent independently so one bad payload cannot block the rest; a
-// successful send removes the entry, a failed send leaves it for the next
-// reconnect. The flush runs in its own goroutine so the handshake path is never
-// blocked by result delivery.
+// outboxFlush re-delivers every parked result AND cancel destined for peer.
+// Invoked when a peer's hello is accepted — the moment a return channel exists
+// again. Each entry is sent independently so one bad payload cannot block the
+// rest; a successful send removes the entry, a failed send leaves it for the
+// next reconnect. Cancels ride the same guarantee (S2-7): a cancel that could
+// not be delivered is re-delivered here, and the receiver's handleCancel is
+// idempotent (a cancel on a terminal or unknown task is a no-op). The flush
+// runs in its own goroutine so the handshake path is never blocked by
+// delivery.
 func (c *Core) outboxFlush(ctx context.Context, peer string) {
 	if c.db == nil || peer == "" {
 		return
@@ -91,7 +94,32 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 		c.logger.Warn("outbox: rows", "peer", peer, "err", err)
 		return
 	}
-	if len(entries) == 0 {
+	type cancelEntry struct {
+		taskID string
+		reason string
+	}
+	var cancels []cancelEntry
+	crows, err := c.db.QueryContext(ctx,
+		`SELECT task_id, reason FROM cancel_outbox WHERE peer = ?`, peer)
+	if err != nil {
+		c.logger.Warn("outbox: query cancels", "peer", peer, "err", err)
+	} else {
+		for crows.Next() {
+			var e cancelEntry
+			if err := crows.Scan(&e.taskID, &e.reason); err != nil {
+				crows.Close()
+				c.logger.Warn("outbox: scan cancels", "peer", peer, "err", err)
+				return
+			}
+			cancels = append(cancels, e)
+		}
+		crows.Close()
+		if err := crows.Err(); err != nil {
+			c.logger.Warn("outbox: cancel rows", "peer", peer, "err", err)
+			return
+		}
+	}
+	if len(entries) == 0 && len(cancels) == 0 {
 		return
 	}
 	go func() {
@@ -108,6 +136,13 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 			}
 			c.outboxDrop(flushCtx, peer, e.taskID)
 			c.logger.Info("outbox: redelivered result", "task", e.taskID, "peer", peer)
+		}
+		for _, e := range cancels {
+			if !c.deliverCancel(flushCtx, peer, e.taskID, e.reason) {
+				continue // still parked; retry on next reconnect
+			}
+			c.outboxCancelDrop(flushCtx, peer, e.taskID)
+			c.logger.Info("outbox: redelivered cancel", "task", e.taskID, "peer", peer)
 		}
 	}()
 }
@@ -129,6 +164,61 @@ func (c *Core) deliverResult(ctx context.Context, peer string, p bus.TaskResultP
 	env.To = peer
 	if err := c.sendTo(peer, env); err != nil {
 		c.logger.Warn("outbox: send", "task", p.TaskID, "peer", peer, "err", err)
+		return false
+	}
+	return true
+}
+
+// outboxCancelPersist stores a task_cancel that could not be delivered to peer,
+// upserting on (peer, task_id). A persistence failure is logged, not fatal:
+// the downstream lease monitor still bounds the worst case, it just costs the
+// executor extra work on an abandoned task (S2-7).
+func (c *Core) outboxCancelPersist(ctx context.Context, peer, taskID, reason string) {
+	if c.db == nil || peer == "" || taskID == "" {
+		return
+	}
+	_, err := c.db.ExecContext(ctx,
+		`INSERT INTO cancel_outbox (peer, task_id, reason, created_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(peer, task_id) DO UPDATE SET reason = excluded.reason, created_at = excluded.created_at`,
+		peer, taskID, reason, storage.Now())
+	if err != nil {
+		c.logger.Warn("outbox: persist cancel", "task", taskID, "peer", peer, "err", err)
+		return
+	}
+	c.logger.Info("outbox: cancel parked for redelivery", "task", taskID, "peer", peer)
+}
+
+// outboxCancelDrop removes a delivered cancel so it is not resent.
+func (c *Core) outboxCancelDrop(ctx context.Context, peer, taskID string) {
+	if c.db == nil || peer == "" || taskID == "" {
+		return
+	}
+	if _, err := c.db.ExecContext(ctx,
+		`DELETE FROM cancel_outbox WHERE peer = ? AND task_id = ?`, peer, taskID); err != nil {
+		c.logger.Warn("outbox: drop delivered cancel", "task", taskID, "peer", peer, "err", err)
+	}
+}
+
+// deliverCancel places a task_cancel envelope on the wire to peer, returning
+// whether it was accepted by the connection. Shared by the initial send path
+// (forwardCancelDownstream) and the flush path.
+func (c *Core) deliverCancel(ctx context.Context, peer, taskID, reason string) bool {
+	msgID, err := newUUID()
+	if err != nil {
+		c.logger.Warn("outbox: mint cancel id", "task", taskID, "err", err)
+		return false
+	}
+	env, err := bus.NewEnvelope(bus.MsgTaskCancel, c.nodeID, msgID, bus.TaskCancelPayload{
+		TaskID: taskID, Reason: reason,
+	})
+	if err != nil {
+		c.logger.Warn("outbox: build cancel envelope", "task", taskID, "err", err)
+		return false
+	}
+	env.To = peer
+	if err := c.sendTo(peer, env); err != nil {
+		c.logger.Warn("outbox: send cancel", "task", taskID, "peer", peer, "err", err)
 		return false
 	}
 	return true
