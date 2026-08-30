@@ -369,8 +369,14 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// The tools policy rides the context (the runAdapter seam's signature
 		// stays unchanged for tests); runAdapterProcess copies it into the
 		// request. MCP passthrough materializes a project .mcp.json for the
-		// run when the policy is extended and a server is configured.
-		runCtx := WithToolsPolicy(ctx, r.toolsPolicy)
+		// run when the policy is extended and a server is configured. A
+		// per-task override (WithToolsPolicy set by the orchestration layer on
+		// ctx) wins: the global policy is applied only when the context
+		// carries no task-level policy yet.
+		runCtx := ctx
+		if ctx.Value(toolsPolicyKey{}) == nil {
+			runCtx = WithToolsPolicy(ctx, r.toolsPolicy)
+		}
 		cleanupMCP := r.materializeMCPPassthrough(ag.Adapter, cwd)
 		ar := r.runAdapter(runCtx, ag.Adapter, prompt, cwd)
 		cleanupMCP()

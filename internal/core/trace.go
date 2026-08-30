@@ -24,7 +24,7 @@ const (
 	EvArtifactTransfer = "artifact_transfer"  // artifact fetch → from/to/hash/size/ok/elapsed
 	EvAgentUsage       = "agent_usage"        // adapter's structured token breakdown → agent/input/output/cache_*
 	EvContextOverflow  = "context_overflow"   // agent failed on its context window → parked in review, retry cannot help
-	EvSubagentEvent    = "subagent_event"     // agent spawned a sub-agent (Claude Task tool) → note/round
+	EvSubagentEvent    = "subagent_event"     // agent spawned a sub-agent (Claude Task tool) → note
 )
 
 // EvTrace records one trace event. Errors are downgraded to a warning log: a

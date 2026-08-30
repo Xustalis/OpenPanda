@@ -125,6 +125,65 @@ func TestExecAgentFallback(t *testing.T) {
 	}
 }
 
+// TestExecAgentPerTaskToolsPolicyWins: a per-task tools policy set on the
+// execution context (task spec override) reaches the adapter request, and the
+// router's global policy must not overwrite it.
+func TestExecAgentPerTaskToolsPolicyWins(t *testing.T) {
+	card := scoreCard()
+	card.Agents["cheap"] = ledger.Agent{Adapter: "opencode.py", Capabilities: []string{"code:modify"}, CostTier: "low", Tier: 1}
+	// Global policy is extended; the per-task override says minimal.
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{ToolsPolicy: config.ToolsPolicyExtended})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	var gotPolicy string
+	r.SetAdapterRunner(func(ctx context.Context, _, _, _ string) AgentResult {
+		if v := ctx.Value(toolsPolicyKey{}); v != nil {
+			gotPolicy = v.(string)
+		}
+		return AgentResult{OK: true, Result: "done", ExitCode: 0}
+	})
+
+	plan, err := r.Route([]string{"code:modify"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	ctx := WithToolsPolicy(context.Background(), config.ToolsPolicyMinimal)
+	res := r.Execute(ctx, plan, "fix it", "", false)
+	if !res.OK {
+		t.Fatalf("execute: %+v", res)
+	}
+	if gotPolicy != config.ToolsPolicyMinimal {
+		t.Fatalf("adapter saw tools policy %q, want the per-task override %q", gotPolicy, config.ToolsPolicyMinimal)
+	}
+}
+
+// TestExecAgentGlobalPolicyAppliesWithoutOverride: with no per-task policy on
+// the context, the router's global policy still reaches the adapter.
+func TestExecAgentGlobalPolicyAppliesWithoutOverride(t *testing.T) {
+	card := scoreCard()
+	card.Agents["cheap"] = ledger.Agent{Adapter: "opencode.py", Capabilities: []string{"code:modify"}, CostTier: "low", Tier: 1}
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{ToolsPolicy: config.ToolsPolicyExtended})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	var gotPolicy string
+	r.SetAdapterRunner(func(ctx context.Context, _, _, _ string) AgentResult {
+		if v := ctx.Value(toolsPolicyKey{}); v != nil {
+			gotPolicy = v.(string)
+		}
+		return AgentResult{OK: true, Result: "done", ExitCode: 0}
+	})
+
+	plan, err := r.Route([]string{"code:modify"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	res := r.Execute(context.Background(), plan, "fix it", "", false)
+	if !res.OK {
+		t.Fatalf("execute: %+v", res)
+	}
+	if gotPolicy != config.ToolsPolicyExtended {
+		t.Fatalf("adapter saw tools policy %q, want the global %q", gotPolicy, config.ToolsPolicyExtended)
+	}
+}
+
 // TestExecAgentAllUnavailable: every candidate fails the probe, so execution
 // fails closed with an explicit "no usable agent" error the upper layer can
 // turn into a manual plan.
