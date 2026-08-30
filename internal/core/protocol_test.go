@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
@@ -56,6 +57,129 @@ func TestRemoteReviewStatePropagates(t *testing.T) {
 	entryTask, _ := entry.store.Get(ctx, "review-wire-task")
 	workerTask, _ := worker.store.Get(ctx, "review-wire-task")
 	t.Fatalf("review state did not propagate: entry=%s worker=%s", entryTask.State, workerTask.State)
+}
+
+// TestRemoteResumeApprovedReRunsOnExecutor pins the cross-node approval
+// closure: a tier-2 task delegated to a peer refuses unauthorized, the review
+// propagates back to the delegator (surfacing as an approval request), and
+// the user's consent re-runs the task on the executor — the node holding the
+// capability — via task_resume, not on the delegator (which cannot route the
+// ability at all). Both copies converge to done, and the agent spawned exactly
+// once: the refusal preceded the first spawn, so the resume is the sole run.
+func TestRemoteResumeApprovedReRunsOnExecutor(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-resume-wire", "127.0.0.1:17938")
+	worker := newSuperviseCore(t, "worker-resume-wire", 2)
+	worker.SetWorkDir(t.TempDir())
+	var calls atomic.Int32
+	worker.router.SetAdapterRunner(agentRunner(&calls))
+	startPair(t, ctx, entry, worker, "127.0.0.1:17938", "127.0.0.1:17939")
+
+	// Unauthorized submit: the entry cannot match code:modify locally, so the
+	// task forwards to the worker, whose tier-2 gate refuses before the agent
+	// spawns and parks the task in review on both nodes.
+	task, result, err := entry.Submit(ctx, TaskInput{
+		Title: "push changes", Project: "proj", ContextType: "command",
+		Intent: "push to remote", Requires: []string{"code:modify"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if task.State != StateReview {
+		t.Fatalf("pre-approval entry state = %s, want review", task.State)
+	}
+	if !commander.IsAuthorizationRefusal(result.Stderr) {
+		t.Fatalf("pre-approval stderr = %q, want the tier-2 refusal", result.Stderr)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("agent ran %d times before approval, want 0 (gate refuses before spawn)", calls.Load())
+	}
+
+	final, res, err := entry.ResumeApproved(ctx, task.TaskID)
+	if err != nil {
+		t.Fatalf("resume approved: %v", err)
+	}
+	if final.State != StateDone {
+		t.Fatalf("post-approval entry state = %s, want done", final.State)
+	}
+	if !res.OK {
+		t.Fatalf("resumed result OK = false (stderr=%q)", res.Stderr)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("agent ran %d times, want 1 (the resume is the sole spawn)", calls.Load())
+	}
+
+	// The executor's copy must converge too: a local-only re-run would have
+	// stranded the worker's review row while the entry reported done.
+	workerTask, err := worker.store.Get(ctx, task.TaskID)
+	if err != nil {
+		t.Fatalf("load worker copy: %v", err)
+	}
+	if workerTask.State != StateDone {
+		t.Fatalf("post-approval worker state = %s, want done", workerTask.State)
+	}
+	if !workerTask.Authorized {
+		t.Fatal("worker copy must carry the tier-2 consent")
+	}
+}
+
+// TestRemoteResumeRejectedFromNonDelegator guards the resume authorization:
+// only the task's delegator (the chain predecessor) may grant tier-2 consent.
+// A resume from any other authenticated peer is dropped, and the task stays
+// parked in review.
+func TestRemoteResumeRejectedFromNonDelegator(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-resume-guard", "127.0.0.1:17940")
+	worker := newSuperviseCore(t, "worker-resume-guard", 2)
+	worker.SetWorkDir(t.TempDir())
+	stranger := newCore(t, "stranger-resume-guard", "127.0.0.1:17941")
+	var calls atomic.Int32
+	worker.router.SetAdapterRunner(agentRunner(&calls))
+	startPair(t, ctx, entry, worker, "127.0.0.1:17940", "127.0.0.1:17942")
+	if err := stranger.DialPeer(ctx, "127.0.0.1:17942"); err != nil {
+		t.Fatalf("stranger dial worker: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	task, _, err := entry.Submit(ctx, TaskInput{
+		Title: "deploy", Project: "proj", ContextType: "command",
+		Intent: "deploy the build", Requires: []string{"code:modify"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if task.State != StateReview {
+		t.Fatalf("pre-approval state = %s, want review", task.State)
+	}
+
+	env, err := bus.NewEnvelope(bus.MsgTaskResume, "stranger-resume-guard", "resume-stranger-1", bus.TaskResumePayload{
+		TaskID: task.TaskID, AttemptID: task.AttemptID,
+	})
+	if err != nil {
+		t.Fatalf("build resume: %v", err)
+	}
+	if err := stranger.sendTo("worker-resume-guard", env); err != nil {
+		t.Fatalf("send resume: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	workerTask, err := worker.store.Get(ctx, task.TaskID)
+	if err != nil {
+		t.Fatalf("load worker copy: %v", err)
+	}
+	if workerTask.State != StateReview {
+		t.Fatalf("worker state after forged resume = %s, want review (unauthorized resume must be dropped)", workerTask.State)
+	}
+	if workerTask.Authorized {
+		t.Fatal("forged resume must not grant authorization")
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("agent ran %d times, want 0 (forged resume must not re-run)", calls.Load())
+	}
 }
 
 func TestRemoteReviewRejectsLateDone(t *testing.T) {

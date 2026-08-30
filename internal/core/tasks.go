@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
@@ -705,29 +706,57 @@ func (s *TaskStore) Approve(ctx context.Context, taskID string) error {
 	})
 }
 
-// reviewFromFailure reports whether the task's latest review parking came
-// from the failed state: the parking review event directly follows a fail
-// result (a tier-2 refusal or a spent retry budget). Every other review
-// entry — manual, supervision sign-off, an unauthorized tier-2 backstop
-// park, scope drift, a remote park — follows execution events, and Approve
-// treats those as finished work. Read failures are conservative (false):
-// accepting existing work is the safer default for an unreadable audit chain.
+// reviewFromFailure reports whether the task's latest review parking has no
+// executed work to accept, so Approve should re-run it (review -> queued,
+// carrying consent) instead of accepting it into done. Two shapes qualify:
+//
+//   - A local park: Fail directly followed by the review event — a tier-2
+//     authorization refusal or a spent retry budget, both of which Fail
+//     before parking.
+//   - A remote park: this is the delegator's copy, parked by ReviewFromRemote
+//     with the executor's result. A tier-2 refusal on the executor reaches
+//     here as a review whose own event data carries the refusal (the agent
+//     never spawned), so the same no-executed-work rule applies.
+//
+// Every other review entry — manual, supervision sign-off, an unauthorized
+// tier-2 backstop park, scope drift, a remote review with real work attached —
+// follows execution events, and Approve treats those as finished work. Read
+// failures are conservative (false): accepting existing work is the safer
+// default for an unreadable audit chain.
 func (s *TaskStore) reviewFromFailure(ctx context.Context, taskID string) bool {
-	var typ, data string
-	err := s.db.QueryRowContext(ctx, `
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT type, data_json FROM task_events
-		WHERE task_id=? AND id < (SELECT COALESCE(MAX(id), 0) FROM task_events WHERE task_id=? AND type=?)
-		ORDER BY id DESC LIMIT 1`,
-		taskID, taskID, EvReview).Scan(&typ, &data)
-	if errors.Is(err, sql.ErrNoRows) {
+		WHERE task_id=? AND id <= (SELECT COALESCE(MAX(id), 0) FROM task_events WHERE task_id=? AND type=?)
+		ORDER BY id DESC LIMIT 2`,
+		taskID, taskID, EvReview)
+	if err != nil {
+		s.logger.Warn("review origin: read events", "task", taskID, "err", err)
 		return false
 	}
-	if err != nil {
-		s.logger.Warn("review origin: read prev event", "task", taskID, "err", err)
-		return false
+	defer rows.Close()
+	var prevTyp, prevData string
+	seenReview := false
+	for rows.Next() {
+		var typ, data string
+		if err := rows.Scan(&typ, &data); err != nil {
+			s.logger.Warn("review origin: scan event", "task", taskID, "err", err)
+			return false
+		}
+		if !seenReview {
+			// The latest EvReview event itself. Both park shapes carry the
+			// refusal where a local park's Review writes it as "reason" and a
+			// remote park's ReviewFromRemote embeds the executor's result —
+			// the sentinel survives either embedding.
+			seenReview = true
+			if commander.IsAuthorizationRefusal(data) {
+				return true
+			}
+			continue
+		}
+		prevTyp, prevData = typ, data
 	}
 	// Fail records its outcome as an EvResult event carrying a "failed" key.
-	return typ == EvResult && strings.Contains(data, `"failed"`)
+	return prevTyp == EvResult && strings.Contains(prevData, `"failed"`)
 }
 
 // Reject fails a reviewed task, moving it review -> failed. Like Approve, it is

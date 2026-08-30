@@ -92,6 +92,11 @@ func (n *Node) Register(ctx context.Context) error {
 	return nil
 }
 
+// SetCard swaps the card a reload just installed, so the next Register or
+// capacity snapshot reflects it. The daemon serializes reloads; this method is
+// only the node-local half of Core.ReloadCard.
+func (n *Node) SetCard(card ledger.Card) { n.card = card }
+
 // RunHeartbeat starts a ticker that updates last_seen + capacity until ctx
 // is done. It is safe to call concurrently with other core loops.
 func (n *Node) RunHeartbeat(ctx context.Context) {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 )
 
@@ -24,6 +25,7 @@ func registerTimeTool(reg *entry.Registry) {
 	reg.Register(entry.Tool{
 		Name:        "time_now",
 		Description: "获取宿主机当前系统时间（本地时区）。回答“现在几点/今天几号/星期几/明天是什么日期”等任何与当前时间有关的问题前，必须先调用此工具。",
+		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -124,6 +126,7 @@ func registerWeatherTool(reg *entry.Registry) {
 	reg.Register(entry.Tool{
 		Name:        "weather_get",
 		Description: "查询指定地点的实时天气（含今天与明天的预报）。location 为城市名，支持中文或英文（如“北京”、“上海”、“Tokyo”）。",
+		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

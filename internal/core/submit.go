@@ -248,13 +248,18 @@ func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.Ta
 }
 
 // ResumeApproved grants tier-2 consent to a task parked in review by an
-// authorization refusal and re-runs it synchronously on this node, returning
-// the final row and result. It is the inline approval closure: when the user
-// approves a tier-2 agent at the ask/repl prompt, the task that just refused
-// runs to completion in the same round-trip — no background scheduler required
-// (the ask/repl process runs none). This is the cost-efficient path: the tier-2
-// refusal is raised before the agent subprocess ever spawns, so the first
-// Submit spent no agent tokens and the resume is the sole execution.
+// authorization refusal and re-runs it, returning the final row and result.
+// It is the inline approval closure: when the user approves a tier-2 agent at
+// the ask/repl prompt, the task that just refused runs to completion in the
+// same round-trip — no background scheduler required (the ask/repl process
+// runs none). This is the cost-efficient path: the tier-2 refusal is raised
+// before the agent subprocess ever spawns, so the first Submit spent no agent
+// tokens and the resume is the sole execution.
+//
+// Where the re-run happens follows the task: a task this node executed runs
+// here; a task a peer executed re-runs on that peer (task_resume), because
+// this node may lack the capability that routed the task away in the first
+// place, and the executor's review-parked copy is the one holding the work.
 //
 // The task must be in review; its intent and requirements are read from the
 // persisted row (the entry model's distilled intent, plus the appended user
@@ -268,6 +273,12 @@ func (c *Core) ResumeApproved(ctx context.Context, taskID string) (Task, bus.Tas
 	}
 	if cur.State != StateReview {
 		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume approved: task %s state=%s, want %s", taskID, cur.State, StateReview)
+	}
+	// A remote executor's refusal parks both copies in review; the consent —
+	// and therefore the re-run — belongs to the executor.
+	if target, terr := c.store.DispatchTarget(ctx, taskID); terr == nil &&
+		target != "" && !scheduler.IsSelfRow(target, c.nodeID) {
+		return c.resumeRemote(ctx, cur, target)
 	}
 	// Approve grants consent (authorized=1) and moves review -> queued.
 	if err := c.store.Approve(ctx, taskID); err != nil {
@@ -286,6 +297,76 @@ func (c *Core) ResumeApproved(ctx context.Context, taskID string) (Task, bus.Tas
 	}
 	result, err := c.run(ctx, taskID, cur.Intent, cur.Requires)
 	return c.retryLoop(ctx, taskID, cur.Intent, cur.Requires, result, err)
+}
+
+// resumeRemote forwards an approval to the node that executed the task: it
+// grants the consent on the local copy (review -> queued -> dispatched, the
+// same transitions Submit's forward path records so the inbound result
+// authenticates against the dispatch target), sends task_resume, and blocks
+// until the executor's re-run reports back — the refusal-propagation path in
+// reverse. A dead executor fails the task rather than parking it forever; its
+// lease renewal during a live re-run keeps the wait bounded by real liveness,
+// not by the timeout alone.
+func (c *Core) resumeRemote(ctx context.Context, cur Task, target string) (Task, bus.TaskResultPayload, error) {
+	taskID := cur.TaskID
+	// Approve's resume branch: review -> queued carrying authorized=1. The
+	// refusal-sentinel detection in reviewFromFailure recognizes the remote
+	// park; without it Approve would accept the never-executed work as done.
+	if err := c.store.Approve(ctx, taskID); err != nil {
+		return cur, bus.TaskResultPayload{}, fmt.Errorf("approve: %w", err)
+	}
+	if err := c.store.Dispatch(ctx, taskID, c.nodeID, target); err != nil {
+		// A queue scheduler sharing this store may have claimed the queued row
+		// first (Approve re-arms scheduled=1); leave the run to it — it
+		// re-routes the task, carrying the consent just granted.
+		final, gerr := c.store.Get(ctx, taskID)
+		if gerr != nil {
+			return cur, bus.TaskResultPayload{}, gerr
+		}
+		return final, bus.TaskResultPayload{}, nil
+	}
+	// Refresh the lease so the timeout monitor bounds the wait on a silent
+	// executor, and register a waiter so the inbound task_result unblocks it.
+	if err := c.store.SetLease(ctx, taskID, c.lease().Milliseconds()); err != nil {
+		c.logger.Warn("resume: set lease", "task", taskID, "err", err)
+	}
+	ch := make(chan bus.TaskResultPayload, 1)
+	c.waiters.Store(taskID, ch)
+	defer c.waiters.Delete(taskID)
+
+	msgID, err := newUUID()
+	if err != nil {
+		return cur, bus.TaskResultPayload{}, fmt.Errorf("mint message id: %w", err)
+	}
+	env, err := bus.NewEnvelope(bus.MsgTaskResume, c.nodeID, msgID, bus.TaskResumePayload{
+		TaskID: taskID, AttemptID: cur.AttemptID,
+	})
+	if err != nil {
+		return cur, bus.TaskResultPayload{}, fmt.Errorf("build resume: %w", err)
+	}
+	env.To = target
+	if err := c.sendTo(target, env); err != nil {
+		// The executor went away between the refusal and the approval: fail
+		// the task with the reason rather than leaving it dispatched to a
+		// dead peer for the whole lease window.
+		c.failLocal(ctx, taskID, err)
+		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume on %s: %w", target, err)
+	}
+	c.logger.Info("resume forwarded to executor", "task", taskID, "to", target)
+
+	select {
+	case res := <-ch:
+		final, gerr := c.store.Get(ctx, taskID)
+		if gerr != nil {
+			return cur, res, gerr
+		}
+		return final, res, nil
+	case <-time.After(c.lease()):
+		c.failLocal(ctx, taskID, errors.New("resume timeout"))
+		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume timeout waiting for %s", target)
+	case <-ctx.Done():
+		return cur, bus.TaskResultPayload{}, ctx.Err()
+	}
 }
 
 // retryLoop drives a task from its first execution outcome to a stable state:

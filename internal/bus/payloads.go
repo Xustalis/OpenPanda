@@ -25,11 +25,17 @@ type HelloPayload struct {
 	Sig    string          `json:"sig"`
 }
 
-// HeartbeatPayload carries status + capacity.
+// HeartbeatPayload carries status + capacity. Card is an optional capability
+// summary (same compact JSON form as HelloPayload.Card) sent when the sender
+// just reloaded its card, so peers learn the new abilities without waiting for
+// a reconnect — heartbeats flow every few seconds, hellos only at dial time.
+// Old nodes that do not know the field ignore it; new nodes that receive it
+// without it fall back to the hello-time card.
 type HeartbeatPayload struct {
-	Status   string  `json:"status"`   // online|busy|offline
-	Load     float64 `json:"load"`     // 0.0-1.0
-	Capacity string  `json:"capacity"` // raw JSON from the card
+	Status   string          `json:"status"`   // online|busy|offline
+	Load     float64         `json:"load"`     // 0.0-1.0
+	Capacity string          `json:"capacity"` // raw JSON from the card
+	Card     json.RawMessage `json:"card,omitempty"`
 }
 
 // TaskDelegatePayload is the task handoff (design doc §10.3 example). The
@@ -209,6 +215,17 @@ type TaskProgressPayload struct {
 type TaskCancelPayload struct {
 	TaskID string `json:"task_id"`
 	Reason string `json:"reason,omitempty"`
+}
+
+// TaskResumePayload carries an approved re-run across the wire: the delegator's
+// user consented to the tier-2 (irreversible) work the executor refused to run
+// unauthorized, and the re-run happens on the executor — the node whose
+// capability match routed the task there in the first place. AttemptID bounds
+// the resume to the attempt the delegator's copy still carries, so a task that
+// was transferred or re-dispatched in the meantime ignores a stale resume.
+type TaskResumePayload struct {
+	TaskID    string `json:"task_id"`
+	AttemptID string `json:"attempt_id,omitempty"`
 }
 
 // ContextFetchPayload asks the source node for a full context snapshot.

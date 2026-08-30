@@ -21,6 +21,11 @@ const (
 	MsgTaskRetry    = "task_retry"
 	MsgTaskTransfer = "task_transfer"
 	MsgTaskCancel   = "task_cancel"
+	// MsgTaskResume is the delegator's approval for a task the executor
+	// parked in review for lack of tier-2 consent: the user granted it, and
+	// the re-run belongs on the node that holds the task (its capability
+	// match, context, and worktree), not wherever the approval was given.
+	MsgTaskResume   = "task_resume"
 	MsgContextFetch = "context_fetch"
 	MsgContextAck   = "context_ack"
 	// Artifact transfer is a pull in fixed-size chunks: the node that needs a

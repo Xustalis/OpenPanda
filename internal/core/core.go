@@ -47,6 +47,16 @@ type Core struct {
 	ctx    *ctxstore.Store
 	node   *Node
 	router *commander.Router
+	// cardMu guards the card and the router built from it — the two things
+	// ReloadCard swaps at runtime. Reads go through Card() and currentRouter()
+	// so a hot reload never races a concurrent routing decision.
+	cardMu sync.RWMutex
+	// model / routerInjection / routerRouting remember what the daemon wired
+	// at startup so ReloadCard can rebuild the router identically (with the
+	// new card) instead of leaving the old router routing on stale abilities.
+	model           config.ModelConfig
+	routerInjection config.InjectionConfig
+	routerRouting   config.RoutingConfig
 	// memory injects project memory into agent execution context (design §17.2
 	// isolation wall). Nil disables injection; tests and minimal nodes leave it
 	// nil and are unaffected.
@@ -182,6 +192,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		loop:         defense.NewLoopDetector(2),
 		auditLog:     security.NewAudit(db),
 		workDir:      ".",
+		model:        model,
 
 		superviseRounds: defaultSuperviseRounds,
 		leaseTimeout:    defaultDelegateTimeout,
@@ -201,10 +212,108 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 // SetRouterPolicy applies the configured injection/routing policy to the
 // commander router (injection.model and routing.preferred_agents). Call it
 // after NewCore with the loaded config sections; a nil router (empty card)
-// makes it a no-op.
+// makes it a no-op. The sections are also remembered so ReloadCard can rebuild
+// the router with the same policy.
 func (c *Core) SetRouterPolicy(injection config.InjectionConfig, routing config.RoutingConfig) {
-	if c.router != nil {
-		c.router.SetPolicy(injection, routing)
+	c.cardMu.Lock()
+	c.routerInjection = injection
+	c.routerRouting = routing
+	router := c.router
+	c.cardMu.Unlock()
+	if router != nil {
+		router.SetPolicy(injection, routing)
+	}
+}
+
+// Card snapshots the current capability card (guarding the swap a reload may
+// be performing concurrently).
+func (c *Core) Card() ledger.Card {
+	c.cardMu.RLock()
+	defer c.cardMu.RUnlock()
+	return c.card
+}
+
+// currentRouter snapshots the router built from the current card.
+func (c *Core) currentRouter() *commander.Router {
+	c.cardMu.RLock()
+	defer c.cardMu.RUnlock()
+	return c.router
+}
+
+// ReloadCard swaps the capability card at runtime: load + validate the file,
+// prune native abilities this host cannot run, swap the card and rebuild the
+// router from it, re-register this node in the local directory, then announce
+// the change to every connected peer with a card-carrying heartbeat. Until now
+// a card edit required a daemon restart before the network saw the new
+// abilities; this is the "改卡热生效" half of the equation.
+func (c *Core) ReloadCard(ctx context.Context, path string) error {
+	card, err := ledger.LoadCard(path)
+	if err != nil {
+		return fmt.Errorf("reload card: %w", err)
+	}
+	if dropped := card.PruneUnavailableNative(); len(dropped) > 0 {
+		c.logger.Warn("reloaded card: native abilities dropped: command not found on this host", "ids", strings.Join(dropped, ","))
+	}
+	// Node kind/identity live in config, not the card file; carry them over
+	// exactly as the daemon's startup path does, or the re-registered row
+	// would silently flip to the defaults.
+	c.cardMu.RLock()
+	card.NodeKind = c.card.NodeKind
+	card.NodeIdentity = c.card.NodeIdentity
+	c.cardMu.RUnlock()
+
+	c.cardMu.Lock()
+	c.card = card
+	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 {
+		c.router = commander.NewRouter(card, commander.NewExecutor(), c.model, c.routerInjection, c.routerRouting)
+	} else {
+		c.router = nil
+	}
+	c.cardMu.Unlock()
+
+	c.node.SetCard(card)
+	if err := c.node.Register(ctx); err != nil {
+		return err
+	}
+	c.broadcastCard(ctx)
+	c.logger.Info("card reloaded", "path", path)
+	return nil
+}
+
+// broadcastCard announces the current capability summary to every connected
+// peer as a heartbeat carrying the card, so peers adopt the new abilities
+// without waiting for a reconnect. Send failures are skipped like the
+// heartbeat loop's: the next tick's plain heartbeat still refreshes liveness.
+func (c *Core) broadcastCard(ctx context.Context) {
+	card, err := c.helloCard()
+	if err != nil {
+		c.logger.Warn("marshal card for broadcast", "err", err)
+		return
+	}
+	capJSON, _ := c.node.capacitySnapshot(ctx)
+	c.mu.RLock()
+	conns := make(map[string]*bus.Conn, len(c.peers))
+	for id, p := range c.peers {
+		conns[id] = p.conn
+	}
+	c.mu.RUnlock()
+	for id, conn := range conns {
+		msgID, err := newUUID()
+		if err != nil {
+			c.logger.Warn("mint card-broadcast id", "err", err)
+			return
+		}
+		env, err := bus.NewEnvelope(bus.MsgHeartbeat, c.nodeID, msgID, bus.HeartbeatPayload{
+			Status: "online", Load: 0, Capacity: capJSON, Card: card,
+		})
+		if err != nil {
+			c.logger.Warn("build card heartbeat", "err", err)
+			return
+		}
+		env.To = id
+		if err := conn.Send(env); err != nil {
+			c.logger.Debug("card heartbeat send", "peer", id, "err", err)
+		}
 	}
 }
 
@@ -395,6 +504,20 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 	}
 	if err := ledger.Heartbeat(c.db, env.From, status, p.Capacity); err != nil {
 		c.logger.Warn("apply heartbeat", "from", env.From, "err", err)
+	}
+	// A card-carrying heartbeat is the peer announcing a hot reload: adopt
+	// its new capability summary right away instead of routing against the
+	// hello-time card until the next reconnect. Absent on ordinary beats —
+	// and on every old-node heartbeat — the field is simply not there.
+	if len(p.Card) > 0 {
+		var sum ledger.CapabilitySummary
+		if err := json.Unmarshal(p.Card, &sum); err != nil {
+			c.logger.Warn("bad capability card in heartbeat", "peer", env.From, "err", err)
+		} else if err := ledger.UpsertRemote(c.db, env.From, sum); err != nil {
+			c.logger.Warn("upsert remote card from heartbeat", "peer", env.From, "err", err)
+		} else {
+			c.logger.Info("peer card updated", "peer", env.From)
+		}
 	}
 }
 
@@ -719,6 +842,8 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 		c.handleResult(ctx, env)
 	case bus.MsgTaskCancel:
 		c.handleCancel(ctx, env)
+	case bus.MsgTaskResume:
+		c.handleResume(ctx, env)
 	case bus.MsgContextFetch:
 		c.handleContextFetch(ctx, env)
 	case bus.MsgContextAck:
@@ -875,34 +1000,37 @@ func (c *Core) signalResult(taskID string, p bus.TaskResultPayload) {
 }
 
 // summary reduces this node's capability card to the compact profile it
-// advertises over hello. Remote nodes need ability IDs, capacity and the declared
-// hardware profile to route — not the executable commands themselves.
+// advertises over hello (and card-carrying heartbeats). Remote nodes need
+// ability IDs, capacity and the declared hardware profile to route — not the
+// executable commands themselves.
 func (c *Core) summary() ledger.CapabilitySummary {
+	card := c.Card()
+	router := c.currentRouter()
 	s := ledger.CapabilitySummary{
-		Device:          c.card.Device,
-		ResourceClass:   c.card.ResourceClass,
-		NodeKind:        c.card.NodeKind,
-		NodeIdentity:    c.card.NodeIdentity,
+		Device:          card.Device,
+		ResourceClass:   card.ResourceClass,
+		NodeKind:        card.NodeKind,
+		NodeIdentity:    card.NodeIdentity,
 		SchedulerTier:   c.tier,
-		Chip:            c.card.Chip,
-		Capacity:        c.card.Capacity,
-		ResourceProfile: c.card.ResourceProfile,
+		Chip:            card.Chip,
+		Capacity:        card.Capacity,
+		ResourceProfile: card.ResourceProfile,
 	}
-	for _, n := range c.card.Native {
+	for _, n := range card.Native {
 		s.NativeIDs = append(s.NativeIDs, n.ID)
 	}
-	s.AgentCaps = make(map[string][]string, len(c.card.Agents))
-	for name, ag := range c.card.Agents {
+	s.AgentCaps = make(map[string][]string, len(card.Agents))
+	for name, ag := range card.Agents {
 		// Advertise only agents that can actually run here (CLI present and
 		// a reachable model — own credentials or injection). A card entry
 		// whose CLI is installed but locked out would otherwise attract
 		// cross-device routing and fail at runtime after a long hang.
-		if c.router != nil && !c.router.AgentViable(name, ag) {
+		if router != nil && !router.AgentViable(name, ag) {
 			continue
 		}
 		s.AgentCaps[name] = ag.Capabilities
 	}
-	for _, m := range c.card.Manual {
+	for _, m := range card.Manual {
 		s.ManualIDs = append(s.ManualIDs, m.ID)
 	}
 	return s

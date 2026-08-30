@@ -143,7 +143,9 @@ func TestRejectSpoofedSender(t *testing.T) {
 // TestDelegatedTier2CannotForgeAuthorization verifies a delegated task cannot
 // escalate to tier-2 authorization: the wire payload no longer carries an
 // authorized flag, so the worker reads it from the DB (default false) and denies
-// the tier-2 command (design §16 / P0-1).
+// the tier-2 command (design §16 / P0-1). The denial parks the task in review
+// — the same shape as the local refusal — rather than failing it, so the
+// delegator's user can resolve it by approving the re-run.
 func TestDelegatedTier2CannotForgeAuthorization(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -165,7 +167,7 @@ func TestDelegatedTier2CannotForgeAuthorization(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		tk, err := worker.store.Get(ctx, "tier2-forged")
-		if err == nil && tk.State == StateFailed {
+		if err == nil && tk.State == StateReview {
 			if tk.Authorized {
 				t.Fatalf("delegated task was authorized; the wire must not set authorized")
 			}
@@ -185,7 +187,7 @@ func TestDelegatedTier2CannotForgeAuthorization(t *testing.T) {
 	for _, e := range evs {
 		t.Logf("  event %s data=%s", e.Type, e.DataJSON)
 	}
-	t.Fatalf("worker did not fail tier-2 delegated task within deadline")
+	t.Fatalf("worker did not park refused tier-2 delegated task within deadline")
 }
 
 // TestLocalTier2AuthorizedRuns is the positive contrast: a local task with
