@@ -693,19 +693,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 	}
 
-	// Selective memory loading (A3) and live progress (A5) are per-task, not
-	// per-round: the memory-file manifest and the throttled progress sink are
-	// built once and reused across supervision rounds. They decorate execCtx,
-	// which already carries the cancellation the abort registry holds.
-	if plan.Kind == "agent" && task.Project == "" && c.memory != nil {
-		if files, err := c.memory.Manifest(); err == nil {
-			paths := make([]string, 0, len(files))
-			for _, f := range files {
-				paths = append(paths, f.Path)
-			}
-			execCtx = commander.WithMemoryFiles(execCtx, paths)
-		}
-	}
+	// Live progress (A5) is per-task, not per-round: the throttled progress
+	// sink is built once and reused across supervision rounds. It decorates
+	// execCtx, which already carries the cancellation the abort registry holds.
 	if plan.Kind == "agent" {
 		var lastNote atomic.Value // string
 		lastNote.Store("")
@@ -728,6 +718,16 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				c.logger.Warn("record agent progress", "task", taskID, "err", err)
 			}
 		})
+	}
+
+	// Per-task agent timeout by plan kind: a training stage gets a larger
+	// budget than a code edit without the operator having to retune the
+	// global default. The override rides the context so runAdapterProcess
+	// picks it up without the execution-path signatures changing.
+	if plan.Kind == "agent" {
+		if d := c.agentTimeoutForKind(plan.Kind); d > 0 {
+			execCtx = commander.WithAgentTimeout(execCtx, d)
+		}
 	}
 
 	// Supervision loop. An agent task under a supervisor executes once and is

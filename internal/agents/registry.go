@@ -33,6 +33,13 @@ type Known struct {
 	InstallHint string
 	// InstallURL is the documentation or download page. Empty when unknown.
 	InstallURL string
+	// InitHint is a one-line command to initialize an installed-but-unconfigured
+	// agent CLI (e.g. accepting terms, generating project files). Empty when the
+	// agent needs no initialization beyond installation. `panda agents` and
+	// `panda detect` surface this when the binary is present but credentials
+	// or state files are missing, so the operator can distinguish "not installed"
+	// from "installed but not initialized".
+	InitHint string
 	// CredentialEnvVars is the probe side of the agent's credential
 	// manifest: env var names that prove the agent carries model
 	// credentials of its own (e.g. claude's ANTHROPIC_API_KEY /
@@ -86,6 +93,7 @@ var known = []Known{
 		DisplayName: "Claude Code",
 		InstallHint: "npm install -g @anthropic-ai/claude-code",
 		InstallURL:  "https://docs.anthropic.com/en/docs/claude-code/setup",
+		InitHint:    "claude init  # accept terms and create ~/.claude/ state files",
 		// Claude Code has an unambiguous Anthropic env contract, so it is
 		// the one agent PANDA can inject a model endpoint into (see
 		// commander's DeepSeek flash injection).
@@ -134,6 +142,7 @@ var known = []Known{
 		DisplayName:       "Codex (OpenAI)",
 		InstallHint:       "npm install -g @openai/codex",
 		InstallURL:        "https://developers.openai.com/codex/",
+		InitHint:          "codex --help  # first run creates ~/.codex/ config directory",
 		CredentialEnvVars: []string{"OPENAI_API_KEY"},
 		CredentialFiles:   []string{".codex/auth.json", ".codex/config.toml"},
 	},
