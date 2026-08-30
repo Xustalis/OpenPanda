@@ -328,3 +328,31 @@ func TestSetTimeoutsKeepsLeaseAboveAgentLimit(t *testing.T) {
 		t.Fatalf("lease = %v, want the configured 2h", got)
 	}
 }
+
+// TestAgentTimeoutByKind verifies that per-kind overrides take precedence over
+// the global agent timeout and that an unlisted kind falls back to the default.
+func TestAgentTimeoutByKind(t *testing.T) {
+	db := openTestDB(t)
+	c := NewCore(db, "worker", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	t.Cleanup(func() { commander.SetAgentTimeout(config.DefaultAgentTimeoutS * time.Second) })
+
+	c.SetTimeouts(config.TimeoutsConfig{
+		AgentS: 600,
+		AgentByKind: map[string]int{
+			"training": 1800,
+			"qa":       300,
+		},
+	})
+
+	// A listed kind returns its own timeout.
+	if got := c.agentTimeoutForKind("training"); got != 30*time.Minute {
+		t.Fatalf("training timeout = %v, want 30m", got)
+	}
+	if got := c.agentTimeoutForKind("qa"); got != 5*time.Minute {
+		t.Fatalf("qa timeout = %v, want 5m", got)
+	}
+	// An unlisted kind returns 0 (use the global default).
+	if got := c.agentTimeoutForKind("coding"); got != 0 {
+		t.Fatalf("coding timeout = %v, want 0 (global default)", got)
+	}
+}
