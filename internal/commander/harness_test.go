@@ -39,7 +39,7 @@ func tier1Plan(t *testing.T, r *Router) Plan {
 func TestProgressWriterSplitsStream(t *testing.T) {
 	var mu sync.Mutex
 	var notes []string
-	w := progressWriter{sink: func(note string) {
+	w := progressWriter{sink: func(note, kind string) {
 		mu.Lock()
 		defer mu.Unlock()
 		notes = append(notes, note)
@@ -72,7 +72,7 @@ not json at all
 // noise fragments stay in diagnostics without leaking either way.
 func TestProgressWriterBuffersSplitLines(t *testing.T) {
 	var notes []string
-	w := progressWriter{sink: func(n string) { notes = append(notes, n) }}
+	w := progressWriter{sink: func(n, _ string) { notes = append(notes, n) }}
 
 	// A progress line split across three writes.
 	w.Write([]byte(`{"type":"progr`))
@@ -99,7 +99,7 @@ func TestProgressWriterBuffersSplitLines(t *testing.T) {
 // 300 runes so one event cannot bloat the chain.
 func TestProgressLongNoteTruncates(t *testing.T) {
 	var got string
-	w := progressWriter{sink: func(n string) { got = n }}
+	w := progressWriter{sink: func(n, _ string) { got = n }}
 	long := strings.Repeat("x", 500)
 	w.Write([]byte(fmt.Sprintf(`{"type":"progress","note":%q}`+"\n", long)))
 	if n := len([]rune(got)); n > 302 {
@@ -133,7 +133,7 @@ print(json.dumps({"ok": True, "result": "done", "exit_code": 0}))
 
 	var mu sync.Mutex
 	var notes []string
-	ctx := WithProgress(context.Background(), func(note string) {
+	ctx := WithProgress(context.Background(), func(note, kind string) {
 		mu.Lock()
 		defer mu.Unlock()
 		notes = append(notes, note)

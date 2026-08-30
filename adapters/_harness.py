@@ -149,6 +149,20 @@ def progress(note):
     sys.stderr.flush()
 
 
+def progress_kind(kind, note):
+    """Emit one typed progress event with a kind tag.
+
+    The Go harness parses the optional "kind" field and records it as a
+    distinct event category (e.g. "subagent" for Claude's Task tool), so
+    the orchestration layer can see WHEN the agent spawns sub-agents
+    instead of treating them as ordinary tool notes.
+    """
+    sys.stderr.write(json.dumps(
+        {"type": "progress", "kind": kind, "note": note},
+        ensure_ascii=False) + "\n")
+    sys.stderr.flush()
+
+
 def parse_json_line(line):
     """Parse one stdout line as a JSON object, or None (blank/invalid/non-dict)."""
     line = line.strip()

@@ -103,9 +103,7 @@ def _run_stream(base, model, cwd, timeout):
         state["saw_event"] = True
         et = ev.get("type")
         if et == "assistant":
-            note = _tool_note(ev)
-            if note:
-                harness.progress(note)
+            _emit_tool_events(ev)
         elif et == "result":
             state["final"] = ev
 
@@ -182,6 +180,40 @@ def _run_plain(base, model, cwd, timeout):
     }
 
 
+def _emit_tool_events(ev):
+    """Emit progress events for one assistant event's tool uses.
+
+    Sub-agent Task tool calls get their own typed progress event
+    (kind="subagent") so the orchestration layer can see when the agent
+    delegates work to its own sub-agents; everything else becomes a
+    regular tool progress note.
+    """
+    msg = ev.get("message")
+    if not isinstance(msg, dict):
+        return
+    for block in msg.get("content") or []:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        name = block.get("name", "tool")
+        inp = block.get("input") or {}
+        arg = ""
+        if isinstance(inp, dict):
+            for k in ("command", "file_path", "pattern", "path", "url", "query"):
+                if inp.get(k):
+                    arg = str(inp[k])
+                    break
+        if len(arg) > 80:
+            arg = arg[:79] + "\u2026"
+        note = f"{name}: {arg}" if arg else name
+        # Claude's built-in Task tool spawns a sub-agent: surface it as a
+        # typed event so the Go harness records it distinctly from an
+        # ordinary tool call (the operator sees the delegation chain).
+        if name == "Task":
+            harness.progress_kind("subagent", note)
+        else:
+            harness.progress(note)
+
+
 def _tool_note(ev):
     """Summarize one assistant event's tool uses as a progress note."""
     msg = ev.get("message")
@@ -200,7 +232,7 @@ def _tool_note(ev):
                     arg = str(inp[k])
                     break
         if len(arg) > 80:
-            arg = arg[:79] + "…"
+            arg = arg[:79] + "\u2026"
         parts.append(f"{name}: {arg}" if arg else name)
     return " | ".join(parts)
 

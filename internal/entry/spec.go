@@ -39,6 +39,9 @@ func ValidateTaskSpec(t *TaskSpec) error {
 	if t.Risk != "" && !validRisk[t.Risk] {
 		return fmt.Errorf("entry: task.risk %q invalid", t.Risk)
 	}
+	if t.ToolsPolicy != "" && t.ToolsPolicy != "minimal" && t.ToolsPolicy != "extended" {
+		return fmt.Errorf("entry: task.tools_policy %q invalid (must be minimal or extended)", t.ToolsPolicy)
+	}
 	return nil
 }
 
