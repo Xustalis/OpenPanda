@@ -57,6 +57,10 @@ type Core struct {
 	model           config.ModelConfig
 	routerInjection config.InjectionConfig
 	routerRouting   config.RoutingConfig
+	// mcpPassthrough remembers the configured stdio MCP server (mcp.command)
+	// so ReloadCard's router rebuild re-applies the extended-policy
+	// passthrough; guarded by cardMu like the router policy above.
+	mcpPassthrough string
 	// memory injects project memory into agent execution context (design §17.2
 	// isolation wall). Nil disables injection; tests and minimal nodes leave it
 	// nil and are unaffected.
@@ -225,6 +229,20 @@ func (c *Core) SetRouterPolicy(injection config.InjectionConfig, routing config.
 	}
 }
 
+// SetAgentMCPPassthrough sets the stdio MCP server (mcp.command argv string,
+// empty disables) that extended-policy agent runs expose to the delegated
+// agent CLI via a work-dir .mcp.json. Remembered like the router policy so a
+// ReloadCard rebuild re-applies it.
+func (c *Core) SetAgentMCPPassthrough(command string) {
+	c.cardMu.Lock()
+	c.mcpPassthrough = command
+	router := c.router
+	c.cardMu.Unlock()
+	if router != nil {
+		router.SetMCPPassthrough(command)
+	}
+}
+
 // Card snapshots the current capability card (guarding the swap a reload may
 // be performing concurrently).
 func (c *Core) Card() ledger.Card {
@@ -266,6 +284,7 @@ func (c *Core) ReloadCard(ctx context.Context, path string) error {
 	c.card = card
 	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 {
 		c.router = commander.NewRouter(card, commander.NewExecutor(), c.model, c.routerInjection, c.routerRouting)
+		c.router.SetMCPPassthrough(c.mcpPassthrough)
 	} else {
 		c.router = nil
 	}
@@ -567,6 +586,7 @@ func (c *Core) RunMonitor(ctx context.Context) {
 					if tk, err := c.store.Get(ctx, id); err == nil {
 						res := bus.TaskResultPayload{
 							TaskID: id, AttemptID: tk.AttemptID, State: StateFailed, OK: false, ExitCode: 1, Stderr: "lease expired",
+							Chain: tk.Chain,
 						}
 						c.relayToParent(ctx, bus.MsgTaskResult, tk.Chain, res)
 						c.signalResult(id, res)

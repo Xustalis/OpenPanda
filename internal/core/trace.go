@@ -22,6 +22,8 @@ const (
 	EvTier2Triggered   = "tier2_triggered"    // defense.Authorize tier≥2 result → operations/parked_in_review
 	EvPlanStageChanged = "plan_stage_changed" // plan stage unlock/start/complete → plan_id/stage_id/transition
 	EvArtifactTransfer = "artifact_transfer"  // artifact fetch → from/to/hash/size/ok/elapsed
+	EvAgentUsage       = "agent_usage"        // adapter's structured token breakdown → agent/input/output/cache_*
+	EvContextOverflow  = "context_overflow"   // agent failed on its context window → parked in review, retry cannot help
 )
 
 // EvTrace records one trace event. Errors are downgraded to a warning log: a
