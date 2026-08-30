@@ -30,7 +30,7 @@ import (
 
 func main() {
 	var (
-		configPath = flag.String("config", "", "path to config.yaml (default /etc/openpanda/config.yaml)")
+		configPath = flag.String("config", "", fmt.Sprintf("path to config.yaml (default %s)", config.SystemConfigPath()))
 		staticDir  = flag.String("static", "", "serve a directory instead of the embedded web app (dev override)")
 		cardPath   = flag.String("card", "", "path to capabilities.yaml (enables task execution in /api/ask)")
 		mcpCommand = flag.String("mcp", "", "space-separated stdio MCP server command whose tools /api/ask may call")

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -87,12 +88,12 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 		case <-ticker.C:
-			taskFP, err := h.taskFingerprint(r)
+			taskFP, err := h.cachedTaskFingerprint(r)
 			if err != nil {
 				return // store failure: drop the stream; the client reconnects
 			}
-			nodeFP := h.nodeFingerprint()
-			remFP := h.reminderFingerprint()
+			nodeFP := h.cachedNodeFingerprint()
+			remFP := h.cachedReminderFingerprint()
 			fpChanged := first || taskFP != lastTask || nodeFP != lastNode || remFP != lastRem
 			if fpChanged {
 				first = false
@@ -196,45 +197,138 @@ func (e *staticError) Error() string { return e.msg }
 // taskFingerprint digests the visible task set (id:state:updated per task)
 // into a hex string; a changed task or a new/deleted task changes it.
 func (h *handler) taskFingerprint(r *http.Request) (string, error) {
-	tasks, err := h.store.ListByState(r.Context(), "")
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.New()
-	var buf [8]byte
-	for _, t := range tasks {
-		sum.Write([]byte(t.TaskID))
-		sum.Write([]byte{':'})
-		sum.Write([]byte(t.State))
-		sum.Write([]byte{':'})
-		binary.BigEndian.PutUint64(buf[:], uint64(t.UpdatedAt))
-		sum.Write(buf[:])
-		sum.Write([]byte{';'})
-	}
-	return hex.EncodeToString(sum.Sum(nil))[:16], nil
+	return h.cachedTaskFingerprint(r)
+}
+
+// cachedTaskFingerprint runs the task-set scan behind the shared cache so the
+// full-table read happens at most once per poll interval across every
+// connected client (see sharedFingerprints).
+func (h *handler) cachedTaskFingerprint(r *http.Request) (string, error) {
+	return sharedFingerprints.get("tasks", func() (string, error) {
+		tasks, err := h.store.ListByState(r.Context(), "")
+		if err != nil {
+			return "", err
+		}
+		sum := sha256.New()
+		var buf [8]byte
+		for _, t := range tasks {
+			sum.Write([]byte(t.TaskID))
+			sum.Write([]byte{':'})
+			sum.Write([]byte(t.State))
+			sum.Write([]byte{':'})
+			binary.BigEndian.PutUint64(buf[:], uint64(t.UpdatedAt))
+			sum.Write(buf[:])
+			sum.Write([]byte{';'})
+		}
+		return hex.EncodeToString(sum.Sum(nil))[:16], nil
+	})
 }
 
 // nodeFingerprint digests the node directory into a hex string; a node coming
 // or going (LastSeen flips its status) changes it. Empty when the panel has
 // no DB handle.
 func (h *handler) nodeFingerprint() string {
+	return h.cachedNodeFingerprint()
+}
+
+// cachedNodeFingerprint runs the node-directory scan behind the shared cache.
+func (h *handler) cachedNodeFingerprint() string {
 	if h.db == nil {
 		return ""
 	}
-	nodes, err := ledger.Query(h.db, "", "")
-	if err != nil {
+	fp, _ := sharedFingerprints.get("nodes", func() (string, error) {
+		nodes, err := ledger.Query(h.db, "", "")
+		if err != nil {
+			return "", err
+		}
+		sum := sha256.New()
+		var buf [8]byte
+		for _, n := range nodes {
+			sum.Write([]byte(n.ID))
+			sum.Write([]byte{':'})
+			sum.Write([]byte(n.Status))
+			sum.Write([]byte{':'})
+			binary.BigEndian.PutUint64(buf[:], uint64(n.LastSeen))
+			sum.Write(buf[:])
+			sum.Write([]byte{';'})
+		}
+		return hex.EncodeToString(sum.Sum(nil))[:16], nil
+	})
+	return fp
+}
+
+// cachedReminderFingerprint routes the reminder digest (defined in
+// reminders.go) through the same shared cache as the task and node scans.
+func (h *handler) cachedReminderFingerprint() string {
+	if h.reminders == nil {
 		return ""
 	}
-	sum := sha256.New()
-	var buf [8]byte
-	for _, n := range nodes {
-		sum.Write([]byte(n.ID))
-		sum.Write([]byte{':'})
-		sum.Write([]byte(n.Status))
-		sum.Write([]byte{':'})
-		binary.BigEndian.PutUint64(buf[:], uint64(n.LastSeen))
-		sum.Write(buf[:])
-		sum.Write([]byte{';'})
+	fp, _ := sharedFingerprints.get("reminders", func() (string, error) {
+		return h.reminderFingerprint(), nil
+	})
+	return fp
+}
+
+// sharedFingerprints memoizes the SSE change-detection digests for every
+// connection. Each SSE stream polls once per eventsPollInterval; without this
+// cache, N connections meant N full scans per second, so scan load grew with
+// the audience. With a TTL equal to the poll interval, the store is scanned
+// once per window no matter how many clients watch — and because the cache
+// lifetime equals the poll cadence, change detection latency is unchanged.
+var sharedFingerprints = newFingerprintCache(eventsPollInterval)
+
+// fingerprintCache is a TTL cache with single-flight dedup: concurrent callers
+// asking for the same expired key coalesce into one load instead of stampeding
+// the store. Failed loads are not cached, so a transient error does not pin a
+// stale value for the whole TTL window.
+type fingerprintCache struct {
+	mu   sync.Mutex
+	ttl  time.Duration
+	now  func() time.Time // injectable for tests
+	ents map[string]*fpEntry
+}
+
+type fpEntry struct {
+	val   string
+	stamp time.Time
+	// done closes once val is populated; waiters blocked on a load in flight
+	// read val only after it closes.
+	done chan struct{}
+}
+
+func newFingerprintCache(ttl time.Duration) *fingerprintCache {
+	return &fingerprintCache{ttl: ttl, now: time.Now, ents: map[string]*fpEntry{}}
+}
+
+// get returns the cached value for key, or runs load exactly once for the
+// current window — concurrent callers block on the same load.
+func (c *fingerprintCache) get(key string, load func() (string, error)) (string, error) {
+	c.mu.Lock()
+	now := c.now()
+	if e := c.ents[key]; e != nil && now.Sub(e.stamp) < c.ttl {
+		c.mu.Unlock()
+		<-e.done
+		return e.val, nil
 	}
-	return hex.EncodeToString(sum.Sum(nil))[:16]
+	e := &fpEntry{stamp: now, done: make(chan struct{})}
+	c.ents[key] = e
+	c.mu.Unlock()
+
+	val, err := load()
+	if err != nil {
+		// Drop the in-flight entry so the next caller retries immediately;
+		// waiters observing this entry see an empty fingerprint, which the
+		// change loop treats as "no signal from this source" rather than a
+		// state change.
+		c.mu.Lock()
+		if c.ents[key] == e {
+			delete(c.ents, key)
+		}
+		c.mu.Unlock()
+		close(e.done)
+		return "", err
+	}
+	e.val = val
+	close(e.done)
+	return val, nil
 }
