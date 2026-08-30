@@ -63,6 +63,7 @@ type repl struct {
 	sessionsSt  *sessions.Store
 	worktrees   *sessions.Worktrees
 	engine      *askengine.Engine
+	cardPath    string
 	hasCard     bool
 	authorize   bool
 	interactive bool
@@ -140,6 +141,7 @@ func init() {
 		{"project", "memory", "cmd.project", (*repl).cmdProject},
 		{"context", "memory", "cmd.context", (*repl).cmdContext},
 		{"nodes", "system", "cmd.nodes", (*repl).cmdNodes},
+		{"card", "system", "cmd.card", (*repl).cmdCard},
 		{"agents", "system", "cmd.agents", (*repl).cmdAgents},
 		{"config", "system", "cmd.config", (*repl).cmdConfig},
 		{"policy", "system", "cmd.policy", (*repl).cmdPolicy},
@@ -188,6 +190,7 @@ func runRepl(args []string) {
 		hermes:      memory.NewHermesWithLimits(cfg.Storage.MemoryPath, memoryLimits(cfg)),
 		sessionsSt:  sessions.NewStore(sessionStoreRoot(cfg)),
 		worktrees:   openWorktreesBestEffort(cfg.Storage.WorkPath),
+		cardPath:    *cardPath,
 		hasCard:     *cardPath != "",
 		interactive: interactive,
 	}
@@ -489,7 +492,10 @@ func (r *repl) askContext(text string) ([]entry.Turn, string) {
 // session thread (binding a spawned task to it so the console can follow the
 // run), or into this run's in-memory conversation when no session is bound. A
 // task or plan stores its id as the turn's ref, which is what /history and the
-// console render as a link rather than prose.
+// console render as a link rather than prose. The stored text is the converged
+// report when the ask produced one (the sub-agent round's whole point — the
+// next turn replays it as the model's own words), or the pointer summary
+// otherwise.
 func (r *repl) recordOutcome(ctx context.Context, text string, out *askengine.Result) {
 	if out == nil {
 		return
@@ -498,15 +504,15 @@ func (r *repl) recordOutcome(ctx context.Context, text string, out *askengine.Re
 		r.rememberTurn(text, out)
 		return
 	}
-	turn := sessions.Turn{Role: "assistant", Kind: out.Kind, Text: out.Answer}
+	turn := sessions.Turn{Role: "assistant", Kind: out.Kind, Text: convoSummaryOf(r.loc, out)}
 	switch out.Kind {
 	case "task":
-		turn.Text, turn.Ref = out.TaskID, out.TaskID
+		turn.Ref = out.TaskID
 		if out.TaskID != "" && r.store != nil {
 			_ = r.store.SetSessionID(ctx, out.TaskID, r.activeSess)
 		}
 	case "plan":
-		turn.Text, turn.Ref = out.PlanID, out.PlanID
+		turn.Ref = out.PlanID
 	}
 	_, _ = r.sessionsSt.AppendTurn(r.activeSess, turn)
 }
@@ -650,6 +656,20 @@ func (r *repl) ask(text string) {
 		}
 		fmt.Println(r.renderMd(out.Answer))
 	case "task":
+		// Sub-agent round: the converged report is the reply. It streamed
+		// live like an answer's text, so print it only when nothing was
+		// delivered, and demote the raw agent output to a pointer line —
+		// it used to be the whole display, burying the model's summary
+		// under a wall of log. Without a report (queue-parked, budget-cut,
+		// report degraded) the raw output stays the primary display.
+		if strings.TrimSpace(out.Answer) != "" {
+			if !delivered() {
+				fmt.Println(r.renderMd(out.Answer))
+			}
+			fmt.Println(pal().Muted(i18n.Tf(r.loc, "repl.ask.taskReport",
+				"id", out.TaskID, "state", out.TaskState)))
+			break
+		}
 		fmt.Println(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
 		if out.OK {
 			fmt.Print(r.renderMd(out.Stdout))
@@ -1107,8 +1127,24 @@ func (r *repl) cmdProject(arg string) {
 	fmt.Println(i18n.Tf(r.loc, "repl.project.created", "name", name))
 }
 
-// cmdNodes lists the local capability directory.
+// cmdNodes lists the local capability directory, and carries the pairing
+// verbs: `add` appends a peer (config + live dial), `disconnect` drops one
+// from the dial list, `invite` prints the other machine's join guide.
 func (r *repl) cmdNodes(arg string) {
+	fields := strings.Fields(arg)
+	if len(fields) > 0 {
+		switch fields[0] {
+		case "add":
+			r.cmdNodesAdd(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), "add")))
+			return
+		case "disconnect", "dc":
+			r.cmdNodesDisconnect(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
+			return
+		case "invite":
+			r.cmdNodesInvite()
+			return
+		}
+	}
 	nodes, err := ledger.Query(r.db, "", "")
 	if err != nil {
 		r.storeErr(err)
@@ -1322,6 +1358,7 @@ func (r *repl) cmdWeb(arg string) {
 		Push:       r.push,
 		Cfg:        r.cfg,
 		ConfigPath: r.configPath,
+		CardPath:   r.cardPath,
 		Token:      token,
 		Updater:    updateMgr,
 	})

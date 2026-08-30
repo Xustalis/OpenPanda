@@ -3,6 +3,7 @@ import { api, type AgentInfo, type NodeInfo, type SelfInfo, type Task } from '..
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { ErrorState, PageHeader } from '../components/page'
+import { AddDeviceCard, CardEditor } from '../components/card-editor'
 
 /** Devices & nodes (C3): which device this console runs on (/api/self),
  *  the capability directory with expandable hardware/resources/agents
@@ -32,6 +33,12 @@ export function NodesView() {
       <PageHeader title={t('nav.nodes')} sub={t('nodes.subtitle')} />
 
       {self && <SelfCard self={self} />}
+
+      {/* Stage 6: the join-a-device form (add a peer to the dial list) and
+          the local card editor (/card's web twin) — both live on the fleet
+          page because that's where "what can this fleet do" is managed. */}
+      <AddDeviceCard onAdded={() => setTick((v) => v + 1)} />
+      <CardEditor onChanged={() => setTick((v) => v + 1)} />
 
       {nodes === null ? (
         <p class="dim">

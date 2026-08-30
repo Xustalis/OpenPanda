@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -78,12 +79,28 @@ func main() {
 			runStatus(args)
 			return
 		case "nodes":
-			// `nodes remove <id>` is the only verb; plain `nodes` lists.
-			if len(args) > 0 && (args[0] == "remove" || args[0] == "rm") {
-				runNodeRemove(args[1:])
-				return
+			// Verbs that rewrite the peer list live here; `remove` drops a
+			// stale directory row; bare `nodes` lists the fleet.
+			if len(args) > 0 {
+				switch args[0] {
+				case "add":
+					runNodesAdd(args[1:])
+					return
+				case "disconnect", "dc":
+					runNodesDisconnect(args[1:])
+					return
+				case "invite":
+					runNodesInvite(args[1:])
+					return
+				case "remove", "rm":
+					runNodeRemove(args[1:])
+					return
+				}
 			}
 			runStatus(args)
+			return
+		case "pair":
+			runPair(args)
 			return
 		case "queue":
 			runQueue(args)
@@ -175,7 +192,7 @@ func main() {
 func subcommandNames() []string {
 	return []string{
 		"daemon", "serve", "ask", "repl", "chat", "web", "voice",
-		"install", "uninstall", "doctor", "status", "nodes", "queue",
+		"install", "uninstall", "doctor", "status", "nodes", "pair", "queue",
 		"task", "plan", "cancel", "approve", "reject", "logs", "skill",
 		"reminder", "detect", "card", "init", "metrics", "audit", "session",
 		"sessions", "memory", "config", "agents", "project", "version", "help",
@@ -238,6 +255,17 @@ func runDaemon(args []string) {
 		fatal("start node", err)
 	}
 	defer identityLock.Release()
+
+	// PID file next to the database: `panda card` write commands read it to
+	// SIGHUP this process into hot-reloading the card (see notifyDaemonReload
+	// in cmd/panda/hotreload_unix.go). Written best-effort — without it the
+	// CLI falls back to the restart hint, which is the pre-existing behavior.
+	pidPath := filepath.Join(filepath.Dir(cfg.Storage.DBPath), "daemon.pid")
+	if err := os.MkdirAll(filepath.Dir(pidPath), 0o755); err == nil {
+		if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err == nil {
+			defer os.Remove(pidPath)
+		}
+	}
 
 	log.Setup(cfg.Log.Level, nil)
 	logger := log.From(context.Background())
@@ -343,6 +371,23 @@ func runDaemon(args []string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Hot reload (阶段 3): SIGHUP re-reads the capability card and rebroadcasts
+	// it — the signal `panda card` write commands send after touching the file.
+	// A separate channel, deliberately: folding SIGHUP into the NotifyContext
+	// above would make it shut the daemon down, the exact opposite of intent.
+	// On Windows the notification simply never fires (the OS does not deliver
+	// the signal), so the CLI prints its restart hint instead.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go func() {
+		for range hup {
+			if err := coreNode.ReloadCard(context.Background(), *cardPath); err != nil {
+				logger.Warn("reload card on SIGHUP", "err", err)
+			}
+		}
+	}()
 
 	// Queue scheduler (panel queue redesign): adopt queued-and-scheduled tasks
 	// in policy order (drag seq → priority → FIFO) when resources allow. Runs
@@ -542,6 +587,12 @@ func printUsage(w *os.File) {
 	line("  (no subcommand)        interactive REPL — the operator's seat (same as `panda repl`)")
 	line("  daemon                 run the node kernel headless (registers, listens, delegates)")
 	line("  nodes                  show current and known nodes (same data as status)")
+	line("  nodes add <host:port>  add a peer to dial (generates shared_secret when missing,")
+	line("                         prints the join guide for the other machine)")
+	line("  nodes invite           print the join guide without changing the peer list")
+	line("  nodes disconnect <a>   remove a peer from the dial list")
+	line("  pair --secret S --peer <host:port>")
+	line("                         join an existing network from a new machine")
 	line("  ask <text>             unified entry: classify → answer or execute a task")
 	line("                         (--output-format json|stream-json for headless use)")
 	line("  repl                   interactive shell (banner, /help pager, Tab completion)")
@@ -591,6 +642,8 @@ func printUsage(w *os.File) {
 	line("  card show|rescan|edit|set                  this node's capability card: read it,")
 	line("                                            re-scan hardware + agent CLIs (--write),")
 	line("                                            edit it in $EDITOR, or set one field")
+	line("  card native|agent|manual add|remove|set   structured card edits (comments kept,")
+	line("                                            validated, hot-reloaded into the daemon)")
 	line("  version|help                              version / this help")
 	line("")
 	line("global flags: --config <path>, --card <path>, --mcp <cmd>, --json")

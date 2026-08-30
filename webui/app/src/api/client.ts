@@ -320,6 +320,66 @@ export interface SelfInfo {
   update?: UpdateStatus
 }
 
+/** — Capability card (stage 6): GET /api/card's parsed form mirrors
+ * ledger.Card on the wire (snake_case). native/manual are lists, agents a
+ * name-keyed record; tier is 1 (reversible) or 2 (irreversible/needs auth). */
+export interface CardNative {
+  id: string
+  command: string
+  args?: string[]
+  tier: number
+  description?: string
+}
+
+export interface CardAgent {
+  adapter: string
+  install_check?: string
+  capabilities?: string[]
+  best_at?: string[]
+  not_for?: string[]
+  cost_tier?: string
+  tier: number
+}
+
+export interface CardManual {
+  id: string
+  notify: string
+}
+
+export interface CapabilityCard {
+  device: string
+  resource_class: string
+  node_kind?: string
+  node_identity?: string
+  chip?: string
+  native?: CardNative[]
+  agents?: Record<string, CardAgent>
+  manual?: CardManual[]
+}
+
+/** GET /api/card — parsed card + raw YAML + path (the raw editor's text). */
+export interface CardFile {
+  path: string
+  raw: string
+  card: CapabilityCard
+}
+
+/** POST /api/nodes/add — what `panda nodes add` prints, structured: the
+ * join guide for the other machine (steps + install command + where the
+ * shared secret lives) plus whether the peer was dialed live. The secret
+ * itself is never on the wire — only the file it lives in. */
+export interface NodesAddResult {
+  addr: string
+  added: boolean
+  secret_generated: boolean
+  dialed: boolean
+  dial_error?: string
+  config_path: string
+  listen_addr: string
+  invite_steps: string[]
+  install_command: string
+}
+
 /** GET/PUT /api/settings/app — the four app policy groups (C1). */
 export interface AppSettings {
   injection_model: 'auto' | 'always' | 'never'
@@ -430,6 +490,83 @@ export const api = {
    *  local node and online nodes, since both re-register themselves). */
   removeNode(id: string): Promise<{ id: string; removed: boolean }> {
     return request('DELETE', `/api/nodes/${encodeURIComponent(id)}`)
+  },
+
+  /** Join a device: append the peer to config.yaml (+ shared secret when
+   *  missing) and dial it live when an engine is running. Returns the join
+   *  guide for the other machine. */
+  addNode(addr: string): Promise<NodesAddResult> {
+    return request('POST', '/api/nodes/add', { addr })
+  },
+
+  // ---- Capability card (structured editor + raw YAML editor) ----
+
+  card(): Promise<CardFile> {
+    return request('GET', '/api/card')
+  },
+
+  /** Whole-file replacement (the raw editor's save). Server-side validation
+   *  via ledger.LoadCard; the previous card is kept as .bak. */
+  putCardRaw(yaml: string): Promise<{ status: string; live: boolean }> {
+    return request('PUT', '/api/card', { yaml })
+  },
+
+  addNativeAbility(body: {
+    id: string
+    command: string
+    args?: string[]
+    tier?: number
+    description?: string
+  }): Promise<{ status: string; live: boolean }> {
+    return request('POST', '/api/card/native', body)
+  },
+
+  removeNativeAbility(id: string): Promise<{ status: string; live: boolean }> {
+    return request('DELETE', `/api/card/native/${encodeURIComponent(id)}`)
+  },
+
+  addCardAgent(
+    name: string,
+    body: {
+      adapter: string
+      install_check?: string
+      capabilities?: string[]
+      best_at?: string[]
+      not_for?: string[]
+      cost_tier?: string
+      tier?: number
+    },
+  ): Promise<{ status: string; live: boolean }> {
+    return request('POST', `/api/card/agents/${encodeURIComponent(name)}`, body)
+  },
+
+  /** Partial update — only the fields present in the body are rewritten
+   *  (undefined stays "leave the card alone"). */
+  patchCardAgent(
+    name: string,
+    body: Partial<{
+      adapter: string
+      install_check: string
+      capabilities: string[]
+      best_at: string[]
+      not_for: string[]
+      cost_tier: string
+      tier: number
+    }>,
+  ): Promise<{ status: string; live: boolean }> {
+    return request('PATCH', `/api/card/agents/${encodeURIComponent(name)}`, body)
+  },
+
+  removeCardAgent(name: string): Promise<{ status: string; live: boolean }> {
+    return request('DELETE', `/api/card/agents/${encodeURIComponent(name)}`)
+  },
+
+  addManualAbility(body: { id: string; notify: string }): Promise<{ status: string; live: boolean }> {
+    return request('POST', '/api/card/manual', body)
+  },
+
+  removeManualAbility(id: string): Promise<{ status: string; live: boolean }> {
+    return request('DELETE', `/api/card/manual/${encodeURIComponent(id)}`)
   },
 
   /** This machine's device profile and its capability card. */

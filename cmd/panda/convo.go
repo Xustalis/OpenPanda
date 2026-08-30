@@ -137,6 +137,13 @@ func convoSummaryOf(loc i18n.Locale, out *askengine.Result) string {
 			return out.Answer
 		}
 	case "task":
+		// A converged ask carries the model's report over the task fields —
+		// the transcript should remember what the model told the user, with
+		// the raw output still reachable through the task id. The pointer
+		// summary below is the degraded path (queue-parked, budget-cut).
+		if strings.TrimSpace(out.Answer) != "" {
+			return out.Answer
+		}
 		var s string
 		if out.TaskTitle != "" {
 			s = i18n.Tf(loc, "convo.taskTitle",

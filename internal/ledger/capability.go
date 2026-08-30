@@ -18,46 +18,46 @@ import (
 
 // Card is the parsed form of capabilities.yaml for this node.
 type Card struct {
-	Device          string           `yaml:"device"`
-	ResourceClass   string           `yaml:"resource_class"`
+	Device          string           `yaml:"device" json:"device"`
+	ResourceClass   string           `yaml:"resource_class" json:"resource_class"`
 	NodeKind        string           `yaml:"node_kind,omitempty" json:"node_kind,omitempty"`
 	NodeIdentity    string           `yaml:"node_identity,omitempty" json:"node_identity,omitempty"`
-	Chip            string           `yaml:"chip"`
-	Native          []NativeAbility  `yaml:"native"`
-	Agents          map[string]Agent `yaml:"agents"`
-	Manual          []ManualAbility  `yaml:"manual"`
-	Capacity        Capacity         `yaml:"capacity"`
-	ResourceProfile ResourceProfile  `yaml:"resource_profile"`
+	Chip            string           `yaml:"chip" json:"chip"`
+	Native          []NativeAbility  `yaml:"native" json:"native"`
+	Agents          map[string]Agent `yaml:"agents" json:"agents"`
+	Manual          []ManualAbility  `yaml:"manual" json:"manual"`
+	Capacity        Capacity         `yaml:"capacity" json:"capacity"`
+	ResourceProfile ResourceProfile  `yaml:"resource_profile" json:"resource_profile"`
 }
 
 // NativeAbility is a deterministic command this node can run.
 type NativeAbility struct {
-	ID          string   `yaml:"id"`
-	Command     string   `yaml:"command"`
-	Args        []string `yaml:"args"`
-	Tier        int      `yaml:"tier"` // 1=reversible (default) 2=irreversible (needs auth)
-	Description string   `yaml:"description"`
+	ID          string   `yaml:"id" json:"id"`
+	Command     string   `yaml:"command" json:"command"`
+	Args        []string `yaml:"args" json:"args"`
+	Tier        int      `yaml:"tier" json:"tier"` // 1=reversible (default) 2=irreversible (needs auth)
+	Description string   `yaml:"description" json:"description"`
 }
 
 // Agent is an installed agent CLI + its capabilities.
 type Agent struct {
-	Adapter      string   `yaml:"adapter"`
-	InstallCheck string   `yaml:"install_check"`
-	Capabilities []string `yaml:"capabilities"`
-	BestAt       []string `yaml:"best_at"`
-	NotFor       []string `yaml:"not_for"`
-	CostTier     string   `yaml:"cost_tier"`
+	Adapter      string   `yaml:"adapter" json:"adapter"`
+	InstallCheck string   `yaml:"install_check" json:"install_check"`
+	Capabilities []string `yaml:"capabilities" json:"capabilities"`
+	BestAt       []string `yaml:"best_at" json:"best_at"`
+	NotFor       []string `yaml:"not_for" json:"not_for"`
+	CostTier     string   `yaml:"cost_tier" json:"cost_tier"`
 	// Tier mirrors NativeAbility.Tier: 1=reversible, 2=irreversible (needs
 	// auth). Zero defaults to 2 — an agent CLI can run arbitrary shell through
 	// the model, so the safe default is to require consent unless the card
 	// explicitly declares the agent read-only (P1-15).
-	Tier int `yaml:"tier"`
+	Tier int `yaml:"tier" json:"tier"`
 }
 
 // ManualAbility is a human-performed task.
 type ManualAbility struct {
-	ID     string `yaml:"id"`
-	Notify string `yaml:"notify"`
+	ID     string `yaml:"id" json:"id"`
+	Notify string `yaml:"notify" json:"notify"`
 }
 
 // Capacity describes current resource availability.
