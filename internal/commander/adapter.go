@@ -19,19 +19,19 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
-// memoryFilesKey is the context key carrying the selective-loading memory
-// file list (A3) from the orchestration layer down to the adapter request,
-// without widening every execution-path signature in between.
-type memoryFilesKey struct{}
+// timeoutKey is the context key carrying a per-task agent timeout override.
+// When set, runAdapterProcess uses it instead of the global adapterTimeoutS,
+// so task kinds with different runtime characteristics (training vs QA) can
+// each get their own budget without changing the process-global default.
+type timeoutKey struct{}
 
-// WithMemoryFiles attaches the node's memory file paths (absolute) to an
-// execution context; runAdapterProcess copies them into AdapterRequest so an
-// agent that received the prompt manifest can read the listed files itself.
-func WithMemoryFiles(ctx context.Context, paths []string) context.Context {
-	if len(paths) == 0 {
+// WithAgentTimeout attaches a per-task agent execution timeout to the context;
+// runAdapterProcess honours it over the global SetAgentTimeout value.
+func WithAgentTimeout(ctx context.Context, d time.Duration) context.Context {
+	if d <= 0 {
 		return ctx
 	}
-	return context.WithValue(ctx, memoryFilesKey{}, paths)
+	return context.WithValue(ctx, timeoutKey{}, d)
 }
 
 // progressKey is the context key carrying the live progress sink from the
@@ -264,12 +264,6 @@ type AdapterRequest struct {
 	Prompt   string `json:"prompt"`
 	TimeoutS int    `json:"timeout_s"`
 	CWD      string `json:"cwd,omitempty"`
-	// MemoryFiles lists the absolute paths of the node's personal memory
-	// files (A3 selective loading). The prompt carries the manifest (file
-	// index + summaries); this list gives the orchestration layer's view of
-	// the same files so adapters that support file access can let the agent
-	// read only what it needs instead of the whole memory content.
-	MemoryFiles []string `json:"memory_files,omitempty"`
 	// Resume carries the agent session id a previous run returned, so a
 	// follow-up round (the supervision loop's "continue" verdict) resumes the
 	// agent's own conversation instead of cold-starting on the bare follow-up
@@ -411,10 +405,11 @@ func AgentHardTimeout() time.Duration { return adapterHardTimeout }
 // split through progressWriter: NDJSON progress lines go to the context's
 // sink, the rest is retained for failure diagnosis.
 func runAdapterProcess(ctx context.Context, name string, prompt string, cwd string, env []string) AgentResult {
-	req := AdapterRequest{Prompt: prompt, TimeoutS: adapterTimeoutS, CWD: cwd}
-	if mf, ok := ctx.Value(memoryFilesKey{}).([]string); ok {
-		req.MemoryFiles = mf
+	timeout := adapterTimeoutS
+	if d, ok := ctx.Value(timeoutKey{}).(time.Duration); ok && d > 0 {
+		timeout = int(d / time.Second)
 	}
+	req := AdapterRequest{Prompt: prompt, TimeoutS: timeout, CWD: cwd}
 	if rid, ok := ctx.Value(resumeKey{}).(string); ok {
 		req.Resume = rid
 	}

@@ -155,11 +155,21 @@ type Core struct {
 	// find a new route before failing it (S1-1). Guarded by mu.
 	orphanSeen map[string]time.Time
 
+	// peerBlocked maps peer node id -> agent names that peer's heartbeats
+	// report as circuit-open, so routing can strip them from the peer's
+	// ability set and weigh failure history into candidate selection.
+	// Guarded by mu; entries die with the peer's connection.
+	peerBlocked map[string][]string
+
 	// leaseTimeout is how long one task attempt may hold its lease before the
 	// monitor treats its executor as dead. Renewed on a heartbeat during
 	// execution (see renewLease), so it bounds silence rather than runtime.
 	// Guarded by mu; SetTimeouts keeps it above the agent hard timeout.
 	leaseTimeout time.Duration
+	// agentByKind maps plan kinds (e.g. "training", "qa") to their per-task
+	// agent timeout overrides (seconds). A kind not present falls back to the
+	// global agent timeout. Set by SetTimeouts from config.timeouts.agent_by_kind.
+	agentByKind map[string]int
 
 	// queueSched is the node-local task queue scheduler (panel queue
 	// redesign): it adopts queued-and-scheduled tasks when resources allow.
@@ -198,6 +208,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		peers:        make(map[string]*Peer),
 		greetedConns: make(map[*bus.Conn]bool),
 		orphanSeen:   make(map[string]time.Time),
+		peerBlocked:  make(map[string][]string),
 		breaker:      defense.NewCircuitBreaker(0, 0),
 		loop:         defense.NewLoopDetector(2),
 		auditLog:     security.NewAudit(db),
@@ -330,6 +341,7 @@ func (c *Core) broadcastCard(ctx context.Context) {
 		}
 		env, err := bus.NewEnvelope(bus.MsgHeartbeat, c.nodeID, msgID, bus.HeartbeatPayload{
 			Status: "online", Load: 0, Capacity: capJSON, Card: card,
+			BlockedAgents: c.blockedAgents(),
 		})
 		if err != nil {
 			c.logger.Warn("build card heartbeat", "err", err)
@@ -501,6 +513,7 @@ func (c *Core) broadcastHeartbeat(ctx context.Context) {
 		}
 		env, err := bus.NewEnvelope(bus.MsgHeartbeat, c.nodeID, msgID, bus.HeartbeatPayload{
 			Status: "online", Load: load, Capacity: capJSON,
+			BlockedAgents: c.blockedAgents(),
 		})
 		if err != nil {
 			c.logger.Warn("build heartbeat", "err", err)
@@ -530,6 +543,17 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 	if err := ledger.Heartbeat(c.db, env.From, status, p.Capacity); err != nil {
 		c.logger.Warn("apply heartbeat", "from", env.From, "err", err)
 	}
+	// Heartbeats also publish the sender's circuit-open agents so this node's
+	// routing can weigh the peer's failure history (see applyPeerBlockers).
+	// The field is absent both on old nodes and when nothing is blocked; both
+	// cases mean "no list to remember", so drop any previously published one.
+	c.mu.Lock()
+	if len(p.BlockedAgents) > 0 {
+		c.peerBlocked[env.From] = p.BlockedAgents
+	} else {
+		delete(c.peerBlocked, env.From)
+	}
+	c.mu.Unlock()
 	// A card-carrying heartbeat is the peer announcing a hot reload: adopt
 	// its new capability summary right away instead of routing against the
 	// hello-time card until the next reconnect. Absent on ordinary beats —
@@ -548,6 +572,20 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 
 // Recover normalizes tasks left active by a previous process instance.
 func (c *Core) Recover(ctx context.Context) (int, error) { return c.store.Recover(ctx) }
+
+// blockedAgents enumerates this node's circuit-open agent names (breaker
+// keys minus the "agent:" prefix) for heartbeat publication, so peers' route
+// decisions can avoid agents that are failing repeatedly here instead of
+// learning it one bounce-decline at a time.
+func (c *Core) blockedAgents() []string {
+	var out []string
+	for _, key := range c.breaker.BlockedKeys() {
+		if name, ok := strings.CutPrefix(key, "agent:"); ok {
+			out = append(out, name)
+		}
+	}
+	return out
+}
 
 // RunMonitor scans for expired leases and fails them. It returns when ctx
 // is done.
@@ -697,6 +735,9 @@ func (c *Core) removePeerForConn(conn *bus.Conn) {
 	c.mu.Unlock()
 	for _, id := range gone {
 		c.logger.Info("peer disconnected", "peer", id)
+		c.mu.Lock()
+		delete(c.peerBlocked, id)
+		c.mu.Unlock()
 		if err := ledger.MarkOffline(c.db, id); err != nil {
 			c.logger.Warn("mark peer offline", "peer", id, "err", err)
 		}

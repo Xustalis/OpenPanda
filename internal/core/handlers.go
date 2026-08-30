@@ -375,6 +375,46 @@ func (c *Core) onlineEmployees(ctx context.Context) []ledger.Node {
 			break
 		}
 	}
+	return c.applyPeerBlockers(nodes)
+}
+
+// applyPeerBlockers strips agents a peer's heartbeats report as circuit-open
+// from that peer's ability set, so Route weighs the peer's failure history
+// into candidate selection instead of learning it one bounce-decline at a
+// time: a node whose only match for the task is a failing agent loses the
+// match and the task routes to a healthier candidate directly. The self row
+// is left alone — the local breaker is enforced at execution time (run),
+// where a half-open trial can still clear the circuit.
+func (c *Core) applyPeerBlockers(nodes []ledger.Node) []ledger.Node {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for i := range nodes {
+		if scheduler.IsSelfRow(nodes[i].ID, c.nodeID) || len(nodes[i].Agents) == 0 {
+			continue
+		}
+		blocked := c.peerBlocked[nodes[i].ID]
+		if len(blocked) == 0 {
+			continue
+		}
+		hit := false
+		for _, name := range blocked {
+			if _, ok := nodes[i].Agents[name]; ok {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			continue
+		}
+		agents := make(map[string]ledger.Agent, len(nodes[i].Agents))
+		for name, ag := range nodes[i].Agents {
+			agents[name] = ag
+		}
+		for _, name := range blocked {
+			delete(agents, name)
+		}
+		nodes[i].Agents = agents
+	}
 	return nodes
 }
 

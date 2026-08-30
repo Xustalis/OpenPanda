@@ -204,6 +204,11 @@ type TimeoutsConfig struct {
 	// AgentS is the wall-clock budget for one agent-adapter execution
 	// (advertised to the adapter and enforced with a hard deadline).
 	AgentS int `yaml:"agent_s"`
+	// AgentByKind overrides AgentS for specific plan kinds (e.g. "training",
+	// "qa"). A kind not listed falls back to AgentS. This lets long-running
+	// training stages get a larger budget without inflating the default for
+	// quick code-edit tasks.
+	AgentByKind map[string]int `yaml:"agent_by_kind"`
 	// SuperviseRounds caps the execute → judge → re-delegate loop per task.
 	SuperviseRounds int `yaml:"supervise_rounds"`
 }
@@ -223,6 +228,16 @@ func (t TimeoutsConfig) AgentTimeout() time.Duration {
 		return time.Duration(t.AgentS) * time.Second
 	}
 	return DefaultAgentTimeoutS * time.Second
+}
+
+// AgentTimeoutForKind returns the per-kind agent timeout when configured,
+// falling back to AgentTimeout. A kind not present in AgentByKind uses the
+// global AgentS, so only kinds that genuinely differ need an entry.
+func (t TimeoutsConfig) AgentTimeoutForKind(kind string) time.Duration {
+	if s, ok := t.AgentByKind[kind]; ok && s > 0 {
+		return time.Duration(s) * time.Second
+	}
+	return t.AgentTimeout()
 }
 
 // Rounds returns the configured supervision round budget, or the default.
