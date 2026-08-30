@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/plan"
@@ -419,12 +420,25 @@ func (c *Core) adoptStageOutput(ctx context.Context, t Task, from, hash string) 
 // and never carried on the wire: a path from another machine means nothing here,
 // and two stages running on one node must not share a tree — the second would
 // pack the first's files as its own output.
-func (c *Core) stageWorkDir(planID, stageID string) string {
+//
+// Both identities are whitelisted again here even though handleDelegate and
+// plan.Validate already refuse unsafe values: the ids sit in the database in
+// between, and the directory this function returns is created with MkdirAll and
+// later packed and shipped — the one place where a traversal must be proved
+// impossible rather than assumed (review P0-1).
+func (c *Core) stageWorkDir(planID, stageID string) (string, error) {
+	if !plan.ValidID(planID) || !plan.ValidID(stageID) {
+		return "", fmt.Errorf("unsafe stage identity: plan %q stage %q", planID, stageID)
+	}
 	root := c.workDir
 	if root == "" {
 		root = os.TempDir()
 	}
-	return filepath.Join(root, "plans", planID, stageID)
+	dir := filepath.Join(root, "plans", planID, stageID)
+	if !strings.HasPrefix(dir, filepath.Clean(root)+string(os.PathSeparator)) {
+		return "", fmt.Errorf("stage work dir escapes root: %q", dir)
+	}
+	return dir, nil
 }
 
 // fetchStageInputs pulls and extracts every input a stage declares. All inputs

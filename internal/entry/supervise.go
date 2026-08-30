@@ -38,9 +38,9 @@ const superviseSystemPrompt = `你是执行结果审核员（上级）。一个�
 {"status":"done"|"continue","reason":"一句话结论","followup":"continue 时必填：剩余工作与下一步指令"}`
 
 // Supervise verdict statuses. Done/Continue are the two judgments the model may
-// emit; Review is produced only by Supervise itself when the model answers but
-// its output is not a verdict, and asks the caller to park the task for a
-// human. An unreachable model degrades to Done instead (see Supervise).
+// emit; Review is produced by Supervise itself when the model answers without
+// a usable verdict — or when the model is unreachable (review P1-6) — and asks
+// the caller to park the task for a human.
 const (
 	VerdictDone     = "done"
 	VerdictContinue = "continue"
@@ -51,13 +51,14 @@ const (
 // satisfies the task described by intent (which carries the success criteria).
 // A model that answers without producing a verdict returns VerdictReview:
 // unverified work is handed to a human rather than silently promoted to done.
-// An unreachable model degrades rather than parks: the outage is an
-// infrastructure fault, not a defect in the finished work, so the verdict is
-// done with a reason recording that the result went unverified (the caller's
-// warn log and the supervise event keep the degradation visible). Verdicts are
-// cached on disk keyed by (intent, result): a re-submitted task with unchanged
-// inputs reuses the previous judgment without an LLM call. Review verdicts and
-// degraded verdicts are never cached.
+// An unreachable model also parks the task for review (review P1-6): the
+// project's primary guarantee is that only work meeting its success definition
+// ever reaches done, and a supervisor outage is precisely when nothing can be
+// verified — degrading to done then would silently accept every agent task
+// while the endpoint is unhealthy. Parking keeps the terminal state honest; a
+// human can approve (or re-run) once the supervisor recovers. The error still
+// travels to the caller, which logs it. Parked verdicts are never cached — a
+// re-run under a healthy supervisor judges from scratch.
 func Supervise(ctx context.Context, c *Client, intent, result string) (SuperviseVerdict, error) {
 	dc := c.diskCache()
 	k1, k2 := hashString(intent), hashString(result)
@@ -70,12 +71,10 @@ func Supervise(ctx context.Context, c *Client, intent, result string) (Supervise
 	user := "任务要求：\n" + intent + "\n\n智能体回报：\n" + result
 	text, err := c.Complete(ctx, superviseSystemPrompt, user)
 	if err != nil {
-		// Degrade, don't park: a supervisor outage must not send every
-		// finished task to the review queue. The result stands accepted with
-		// the reason marking it unverified; the error still travels to the
-		// caller, which logs it. Never cached — a re-run under a healthy
-		// supervisor judges from scratch.
-		return SuperviseVerdict{Status: VerdictDone, Reason: "supervisor unavailable: accepted without verification"}, err
+		// Park, don't accept: with no supervisor there is no verification, and
+		// an unverified result must not be promoted to done (review P1-6).
+		// Hand it to a human; the error travels to the caller for logging.
+		return SuperviseVerdict{Status: VerdictReview, Reason: "supervisor unavailable: result unverified, parked for review"}, err
 	}
 	v, err := parseSuperviseVerdict(text)
 	if err != nil {

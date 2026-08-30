@@ -568,7 +568,12 @@ func Default() *Config {
 			Kind:          NodeKindPhysical,
 		},
 		Network: NetworkConfig{
-			ListenAddr: ":7836",
+			// Loopback by default (review P1-2): the bus speaks unauthenticated-
+			// after-hello WebSocket, so a wildcard bind would expose delegation
+			// traffic and the hello signature to the LAN. A node that should be
+			// reachable by peers must set listen_addr explicitly — to a routable
+			// interface or, preferably, a Tailscale/WireGuard overlay address.
+			ListenAddr: "127.0.0.1:7836",
 			// Loopback by default (P1-24): the panel speaks plain HTTP, so a
 			// wildcard bind would expose the Bearer token and task contents to
 			// the LAN. Set panel_addr explicitly to expose it (e.g. behind a
@@ -937,6 +942,111 @@ func UpdateMCPSection(path string, command string) error {
 	}
 	hardenSecretPerms(path, out)
 	return nil
+}
+
+// UpdateNetworkSection persists the network fields a device join changes —
+// listen_addr, shared_secret, peers — into the YAML file at path, creating
+// the file (from defaults) when missing. It round-trips the document like
+// UpdateModelSection so every other section — and its comments — survives the
+// edit byte-for-byte.
+//
+// Zero values mean "leave the stored value alone": a caller that only adds a
+// peer passes ListenAddr/SharedSecret empty, and a caller that only sets the
+// secret passes a nil Peers. Removing a peer is expressed by passing the full
+// remaining list; an empty-but-non-nil list clears the key so defaults apply.
+func UpdateNetworkSection(path string, nc NetworkConfig) error {
+	var root yaml.Node
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := yaml.Unmarshal(data, &root); err != nil {
+			return fmt.Errorf("parse config %s: %w", path, err)
+		}
+		if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+			return fmt.Errorf("config %s: not a YAML mapping", path)
+		}
+	case os.IsNotExist(err):
+		doc := Default()
+		doc.Network = nc
+		out, err := yaml.Marshal(doc)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(path, out, 0o600)
+	default:
+		return fmt.Errorf("read config %s: %w", path, err)
+	}
+	top := root.Content[0]
+
+	network, err := ensureNetworkMapping(top, path)
+	if err != nil {
+		return err
+	}
+	if nc.ListenAddr != "" {
+		setMapField(network, "listen_addr", nc.ListenAddr)
+	}
+	if nc.SharedSecret != "" {
+		setMapField(network, "shared_secret", nc.SharedSecret)
+	}
+	if nc.Peers != nil {
+		setMapFieldSeq(network, "peers", nc.Peers)
+	}
+
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return err
+	}
+	hardenSecretPerms(path, out)
+	return nil
+}
+
+// ensureNetworkMapping returns the network mapping node, creating the section
+// when the config has none yet.
+func ensureNetworkMapping(top *yaml.Node, path string) (*yaml.Node, error) {
+	if v := mappingValue(top, "network"); v != nil {
+		if v.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("config %s: network is not a mapping", path)
+		}
+		return v, nil
+	}
+	key := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "network"}
+	v := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	top.Content = append(top.Content, key, v)
+	return v, nil
+}
+
+// setMapFieldSeq upserts key: [values…] in mapping node m as a block-style
+// sequence, preserving order and neighbouring comments.
+func setMapFieldSeq(m *yaml.Node, key string, values []string) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			if len(values) == 0 {
+				m.Content = append(m.Content[:i], m.Content[i+2:]...)
+				return
+			}
+			m.Content[i+1] = stringSeqNode(values)
+			return
+		}
+	}
+	if len(values) == 0 {
+		return
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		stringSeqNode(values),
+	)
+}
+
+// stringSeqNode builds a block-style sequence node of plain string scalars.
+func stringSeqNode(values []string) *yaml.Node {
+	seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	for _, v := range values {
+		seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v})
+	}
+	return seq
 }
 
 // mappingValue returns the value node paired with key in a mapping node, or

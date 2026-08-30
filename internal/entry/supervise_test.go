@@ -81,11 +81,11 @@ func TestSuperviseUnparsableParksForReview(t *testing.T) {
 	}
 }
 
-// TestSuperviseUnreachableDegradesToDone pins the degradation rule: a
-// supervisor outage is an infrastructure fault, not a defect in the finished
-// work, so an unreachable model accepts the result with an "unverified"
-// reason instead of parking the task for a human.
-func TestSuperviseUnreachableDegradesToDone(t *testing.T) {
+// TestSuperviseUnreachableParksForReview pins the reliability rule (review
+// P1-6): only verified work may reach done, and a supervisor outage is exactly
+// when nothing can be verified. An unreachable model therefore parks the result
+// for a human rather than silently accepting it.
+func TestSuperviseUnreachableParksForReview(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	base := srv.URL
 	srv.Close() // the port is now closed: every request fails to connect
@@ -99,10 +99,10 @@ func TestSuperviseUnreachableDegradesToDone(t *testing.T) {
 	if err == nil {
 		t.Fatal("supervise must surface the transport error")
 	}
-	if v.Status != VerdictDone {
-		t.Fatalf("status = %q, want done (unreachable supervisor degrades, does not park)", v.Status)
+	if v.Status != VerdictReview {
+		t.Fatalf("status = %q, want review (unreachable supervisor parks, does not accept)", v.Status)
 	}
-	if !strings.Contains(v.Reason, "without verification") {
-		t.Fatalf("reason = %q, want the without-verification marker", v.Reason)
+	if !strings.Contains(v.Reason, "unverified") {
+		t.Fatalf("reason = %q, want the unverified marker", v.Reason)
 	}
 }
