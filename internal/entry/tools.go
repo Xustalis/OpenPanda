@@ -13,7 +13,14 @@ type Tool struct {
 	Name        string
 	Description string
 	Schema      map[string]any // JSON Schema for the tool's input arguments
-	Run         func(ctx context.Context, args map[string]any) (string, error)
+	// Tier grades the tool's side effect on the defense scale (see
+	// internal/defense: 1 reversible, 2 irreversible). 0 (unset) is
+	// fail-closed — the gate treats it as Tier 2 — so a tool with state
+	// effects must declare itself to run unattended: read-only and memory
+	// tools declare Tier 1; tools that mutate node/card/task state declare
+	// Tier 2 and run only under an explicit authorization for the ask.
+	Tier int
+	Run  func(ctx context.Context, args map[string]any) (string, error)
 }
 
 // spec converts the tool to its wire form (the Messages API tool schema).

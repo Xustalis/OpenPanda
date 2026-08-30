@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/mcp"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -14,11 +15,13 @@ import (
 )
 
 // buildToolRegistry wires the memory, system-data (time/weather), reminder,
-// and MCP tools into the entry-model tool registry. The schemas live here
-// (the assembly layer) rather than in the prompt or in the memory package,
-// so entry and memory stay decoupled: entry owns the registry, memory owns
-// the executor, and this package glues them together.
-func buildToolRegistry(hermes *memory.Hermes, projects *memory.Projects, rem *reminders.Store) *entry.Registry {
+// management, and MCP tools into the entry-model tool registry. The schemas
+// live here (the assembly layer) rather than in the prompt or in the memory
+// package, so entry and memory stay decoupled: entry owns the registry,
+// memory owns the executor, and this package glues them together. The engine
+// reference is held, not read: the management tools dereference it inside
+// Run, after New has (maybe) attached the scheduler.
+func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projects, rem *reminders.Store) *entry.Registry {
 	mem := memory.NewTool(hermes, projects)
 	reg := entry.NewRegistry()
 
@@ -28,6 +31,7 @@ func buildToolRegistry(hermes *memory.Hermes, projects *memory.Projects, rem *re
 	reg.Register(entry.Tool{
 		Name:        memory.ToolRead,
 		Description: "列出当前记忆条目（合并/删除前先读）。target 可选：user / memory / project。",
+		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"target": targetEnum, "project": projectArg},
@@ -40,6 +44,7 @@ func buildToolRegistry(hermes *memory.Hermes, projects *memory.Projects, rem *re
 	reg.Register(entry.Tool{
 		Name:        memory.ToolAdd,
 		Description: "记住一条新记忆。target：user（用户偏好/沟通风格）、memory（环境事实/全局约定/纠正）、project（项目约定）。",
+		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -57,6 +62,7 @@ func buildToolRegistry(hermes *memory.Hermes, projects *memory.Projects, rem *re
 	reg.Register(entry.Tool{
 		Name:        memory.ToolReplace,
 		Description: "替换一条已有记忆。old 用能唯一匹配该条目的子串（匹配到多条会报错，需给更具体子串）。",
+		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -75,6 +81,7 @@ func buildToolRegistry(hermes *memory.Hermes, projects *memory.Projects, rem *re
 	reg.Register(entry.Tool{
 		Name:        memory.ToolRemove,
 		Description: "删除一条记忆。old 用能唯一匹配该条目的子串。",
+		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -92,6 +99,9 @@ func buildToolRegistry(hermes *memory.Hermes, projects *memory.Projects, rem *re
 	// System-data tools (§7.3): the model has no clock or senses of its own.
 	registerTimeTool(reg)
 	registerWeatherTool(reg)
+
+	// Management tools (v1): the read half of openpanda 调用 openpanda.
+	registerMgmtTools(reg, e)
 
 	if rem != nil {
 		registerReminderTools(reg, rem)
@@ -111,6 +121,7 @@ func registerReminderTools(reg *entry.Registry, rem *reminders.Store) {
 	reg.Register(entry.Tool{
 		Name:        "reminder_set",
 		Description: "设置一个定时提醒。after_minutes 填“多少分钟后提醒”；at 填绝对时间（RFC3339，如 2026-08-18T15:00:00+08:00，或不带时区则按本地时间）。两个参数二选一。",
+		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -142,6 +153,7 @@ func registerReminderTools(reg *entry.Registry, rem *reminders.Store) {
 	reg.Register(entry.Tool{
 		Name:        "reminder_list",
 		Description: "列出当前所有未触发的提醒。",
+		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -198,17 +210,32 @@ func reminderDueTime(args map[string]any) (time.Time, error) {
 
 // executeTool runs a tool call through the registry and returns a user-facing
 // result (a tool failure is folded into the result, not a hard exit, so the
-// model can consolidate and retry).
-func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall) string {
+// model can consolidate and retry). authorized is the ask's effective tier-2
+// consent: a Tier-2 tool without it is refused before Run, and the refusal —
+// with the consent instructions for the current surface — becomes the
+// tool_result the model relays to the user (design §16: the same fail-closed
+// gate native and agent plans pass through in commander.Router.Execute).
+func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall, authorized bool) string {
 	t, ok := reg.Lookup(call.Tool)
 	if !ok {
 		return "工具执行失败：未知工具 " + call.Tool
+	}
+	if err := defense.Authorize(t.Tier, authorized); err != nil {
+		return "工具执行被拒（tier-2 需授权）：" + toolConsentHint(t)
 	}
 	result, err := t.Run(ctx, call.Arguments)
 	if err != nil {
 		return "工具执行失败：" + err.Error()
 	}
 	return result
+}
+
+// toolConsentHint tells the model — so it can tell the user — how to grant the
+// consent a refused tool needs: one standing grant per surface (the /authorize
+// toggle in the REPL, --authorize for one-shot asks, the authorize checkbox in
+// the web console). It is phrased as data for the model, not as an instruction.
+func toolConsentHint(t entry.Tool) string {
+	return fmt.Sprintf("工具 %s 属 tier-2（不可逆）操作，本次会话未开启授权。请让用户开启授权后重试（REPL 输入 /authorize，一次性调用加 --authorize，Web 面板勾选“授权”）。", t.Name)
 }
 
 // appendToolTurns records a tool call, its accompanying note (text the model
@@ -255,7 +282,12 @@ func registerMCPTools(ctx context.Context, reg *entry.Registry, client *mcp.Clie
 		reg.Register(entry.Tool{
 			Name:        t.Name,
 			Description: t.Description,
-			Schema:      t.InputSchema,
+			// An MCP server is user-configured opt-in (the user wrote its
+			// command into config.yaml), which is the standing consent a
+			// Tier-1 grading needs; the server's own tools police their own
+			// side effects.
+			Tier:   defense.TierReversible,
+			Schema: t.InputSchema,
 			Run: func(ctx context.Context, args map[string]any) (string, error) {
 				return client.CallTool(ctx, t.Name, args)
 			},

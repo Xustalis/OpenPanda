@@ -51,9 +51,9 @@ func TestAskRecordsEntryUsage(t *testing.T) {
 	e := &Engine{
 		cfg:      &config.Config{},
 		injector: memory.NewInjector(hermes, nil),
-		registry: buildToolRegistry(hermes, nil, nil),
 		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
+	e.registry = buildToolRegistry(e, hermes, nil, nil)
 	e.db = db
 	e.client.Store(client)
 

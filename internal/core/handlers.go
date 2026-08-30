@@ -264,7 +264,7 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 // not a limit); a load-count failure fails closed (declining is recoverable —
 // the delegator re-routes — while over-committing a saturated node is not).
 func (c *Core) hasCapacity(ctx context.Context) bool {
-	maxConcurrent := c.card.Capacity.MaxConcurrent
+	maxConcurrent := c.Card().Capacity.MaxConcurrent
 	if maxConcurrent <= 0 {
 		return true
 	}
@@ -318,10 +318,11 @@ func resourceRequirement(resourceJSON string) ledger.ResourceProfile {
 // abilities locally. A nil router (no capability card) matches nothing.
 func (c *Core) localMatch() func([]string) bool {
 	return func(required []string) bool {
-		if c.router == nil {
+		router := c.currentRouter()
+		if router == nil {
 			return false
 		}
-		_, err := c.router.Route(required)
+		_, err := router.Route(required)
 		return err == nil
 	}
 }
@@ -469,11 +470,12 @@ func (c *Core) prepare(ctx context.Context, taskID string) error {
 // moved it there), dispatched (the normal path), or waiting_context (resumed
 // here after the snapshot arrived).
 func (c *Core) run(ctx context.Context, taskID, intent string, required []string) (bus.TaskResultPayload, error) {
-	if c.router == nil {
+	router := c.currentRouter()
+	if router == nil {
 		// No capability card loaded: nothing to execute.
 		return bus.TaskResultPayload{}, fmt.Errorf("no commander configured")
 	}
-	plan, err := c.router.Route(required)
+	plan, err := router.Route(required)
 	if err != nil {
 		return bus.TaskResultPayload{}, fmt.Errorf("route: %w", err)
 	}
@@ -566,7 +568,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// so the decision does not vary between an initial run and a re-delegation.
 	var injection commander.InjectionDecision
 	if plan.Kind == "agent" {
-		injection = c.router.InjectionDecision(plan.Adapter)
+		injection = router.InjectionDecision(plan.Adapter)
 	}
 
 	// workDir is normally the node-wide execution directory; a queued task may
@@ -682,7 +684,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			"tier":       plan.Tier,
 		})
 
-		res = c.router.Execute(execCtx, plan, prompt, workDir, task.Authorized)
+		res = router.Execute(execCtx, plan, prompt, workDir, task.Authorized)
 
 		// — Trace: the Tier-2 gate outcome. A refusal is deterministic policy
 		// (the task parks in review with the reason); an authorized run is
@@ -849,6 +851,33 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 
 		if !res.OK {
+			// A tier-2 authorization refusal is deterministic policy, not a failed
+			// attempt: retrying cannot produce consent. Park the task in review —
+			// running -> failed -> review, the same shape the local retry loop
+			// parks in — so an approval (inline at the ask prompt, or a
+			// task_resume from the delegator) can re-run it with consent. Failing
+			// here instead would strand the refusal as a dead-end failure on the
+			// delegator: it surfaces the reason but offers no way to resolve it.
+			if commander.IsAuthorizationRefusal(res.Stderr) {
+				if err := c.store.Fail(ctx, taskID, c.nodeID, res.Stderr); err != nil {
+					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+						return bus.TaskResultPayload{}, ErrCancelled
+					}
+					return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
+				}
+				if err := c.store.Review(ctx, taskID, c.nodeID, res.Stderr); err != nil {
+					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+						return bus.TaskResultPayload{}, ErrCancelled
+					}
+					return bus.TaskResultPayload{}, fmt.Errorf("park refused task: %w", err)
+				}
+				c.logTask(task.Title, false)
+				trackTask(c, task.Project, required, task.Title, false)
+				return bus.TaskResultPayload{
+					TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
+					Tokens: res.Tokens, Cost: res.Cost,
+				}, nil
+			}
 			if err := c.store.Fail(ctx, taskID, c.nodeID, res.Stderr); err != nil {
 				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 					return bus.TaskResultPayload{}, ErrCancelled
@@ -1592,6 +1621,74 @@ func (c *Core) forwardCancelDownstream(ctx context.Context, taskID string) {
 		return
 	}
 	c.logger.Info("cancel forwarded downstream", "task", taskID, "to", target)
+}
+
+// handleResume processes an incoming task_resume: the delegator's user
+// approved the tier-2 consent this node's defense layer refused to run
+// without, and the re-run belongs here — on the node that holds the task
+// (its capability match, context snapshot, and worktree) rather than
+// wherever the approval was given. Only the task's immediate predecessor in
+// the delegation chain may grant that consent (authorization after
+// authentication, the same rule handleCancel applies); a resume from any
+// other node is dropped.
+func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
+	var p bus.TaskResumePayload
+	if err := env.PayloadInto(&p); err != nil {
+		c.logger.Warn("bad task_resume", "err", err, "from", env.From)
+		return
+	}
+	t, err := c.store.Get(ctx, p.TaskID)
+	if err != nil {
+		c.logger.Debug("resume for unknown task", "task", p.TaskID, "from", env.From)
+		return
+	}
+	if parent := scheduler.Predecessor(t.Chain, c.nodeID); env.From != parent {
+		c.logger.Warn("resume from non-delegator ignored", "task", p.TaskID,
+			"from", env.From, "parent", parent)
+		return
+	}
+	if p.AttemptID != "" && t.AttemptID != "" && t.AttemptID != p.AttemptID {
+		c.logger.Info("stale attempt resume ignored", "task", p.TaskID,
+			"stored", t.AttemptID, "got", p.AttemptID)
+		return
+	}
+	if t.State != StateReview {
+		// Answer honestly instead of leaving the delegator waiting on its
+		// lease timeout: a task that moved on (timed out, cancelled, already
+		// re-run) cannot take the consent, and a failed result is the one
+		// state every delegator path already renders.
+		c.logger.Warn("resume for task not in review", "task", p.TaskID, "state", t.State)
+		c.relayToParent(ctx, bus.MsgTaskResult, t.Chain, bus.TaskResultPayload{
+			TaskID: t.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,
+			Stderr: "resume: task state is " + t.State,
+		})
+		return
+	}
+	// Re-run asynchronously so the message loop stays responsive to
+	// task_cancel while the (potentially long) agent run proceeds. The
+	// outcome travels back over the normal task_result path.
+	go func() {
+		final, result, rerr := c.ResumeApproved(ctx, p.TaskID)
+		if rerr != nil {
+			result = bus.TaskResultPayload{
+				TaskID: p.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,
+				Stderr: "resume: " + rerr.Error(),
+			}
+		}
+		// ResumeApproved can return without a wire-shaped outcome when a
+		// local queue scheduler raced the just-approved task (its dispatch
+		// lost the CAS): report the row's state so the delegator's wait ends
+		// with the truth instead of an empty result it must guess at.
+		switch result.State {
+		case StateDone, StateReview, StateFailed, StateCancelled:
+		default:
+			result = bus.TaskResultPayload{
+				TaskID: p.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,
+				Stderr: "resume: task claimed by " + final.State + " before re-run",
+			}
+		}
+		c.relayToParent(ctx, bus.MsgTaskResult, t.Chain, result)
+	}()
 }
 
 // reply sends a message back to the sender of env.

@@ -93,6 +93,9 @@ type Engine struct {
 	queueTasks bool
 	// replyASCII mirrors Options.ReplyASCII (per-engine classify option).
 	replyASCII bool
+	// cardPath mirrors Options.CardPath: the capabilities.yaml the engine
+	// loaded its scheduler from, reported by the system_status tool.
+	cardPath string
 }
 
 // SetModel hot-swaps the entry model client at runtime (the settings page):
@@ -188,7 +191,7 @@ func (e *Engine) SetMCPCommand(ctx context.Context, cmd string) error {
 	e.regMu.Lock()
 	defer e.regMu.Unlock()
 
-	reg := buildToolRegistry(e.hermes, e.projects, e.remind)
+	reg := buildToolRegistry(e, e.hermes, e.projects, e.remind)
 	var client *mcp.Client
 	if cmd != "" {
 		parts := splitCommand(cmd)
@@ -260,7 +263,6 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 	projects := memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, limits)
 	injector := memory.NewInjector(hermes, projects)
 	remind := reminders.NewStore(db)
-	registry := buildToolRegistry(hermes, projects, remind)
 
 	client, err := entry.NewClient(cfg.Model)
 	if err != nil {
@@ -274,7 +276,6 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 	e := &Engine{
 		cfg:        cfg,
 		db:         db,
-		registry:   registry,
 		injector:   injector,
 		hermes:     hermes,
 		projects:   projects,
@@ -282,7 +283,12 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		logger:     logger,
 		queueTasks: opts.QueueTasks,
 		replyASCII: opts.ReplyASCII,
+		cardPath:   opts.CardPath,
 	}
+	// The registry is built with the engine itself: the management tools hold
+	// it and dereference lazily, so a scheduler attached below (or never,
+	// without CardPath) is seen at call time.
+	e.registry = buildToolRegistry(e, hermes, projects, remind)
 	e.client.Store(client)
 
 	mcpCmd := opts.MCPCommand
@@ -559,7 +565,21 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	if e.replyASCII {
 		classifyOpts = append(classifyOpts, entry.WithASCIIOnly())
 	}
+	// The tool gate shares the task gate's consent semantics: "never"
+	// auto-consents, an explicit session grant (--authorize / /authorize /
+	// the panel's authorize field) satisfies every mode.
+	toolAuthorized := gateAuthorized(e.cfg.Approval.NormalizedMode(), authorize)
 	const maxRounds = 6
+	// maxTasks bounds how many sub-agent rounds one ask may run. A task round
+	// is minutes of work and a full agent transcript of tokens, so its budget
+	// is separate from (and inside) the round budget: the loop may still spend
+	// its remaining rounds converging on a report.
+	const maxTasks = 3
+	taskRounds := 0
+	// lastTask keeps the most recent task outcome so the converged Result
+	// carries the task fields (id/state/output) alongside the model's report.
+	var lastTask *Result
+rounds:
 	for round := 0; round < maxRounds; round++ {
 		var out entry.Output
 		var err error
@@ -574,13 +594,52 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 
 		switch out.Kind {
 		case entry.KindAnswer:
+			if lastTask != nil {
+				// The model has seen the task's outcome and is reporting it:
+				// the report is the answer, the task fields ride along.
+				lastTask.Answer = out.Answer
+				return lastTask, nil
+			}
 			return &Result{Kind: "answer", Answer: out.Answer}, nil
 		case entry.KindTask:
 			if e.sched == nil {
 				return nil, fmt.Errorf("task output requires a capability card (engine built without CardPath)")
 			}
 			cb.progress(ProgressTask, out.Task.Title)
-			return e.submitTask(out.Task, prompt, authorize, workDir, cb), nil
+			res := e.submitTask(out.Task, prompt, authorize, workDir, cb)
+			if e.queueTasks {
+				// Async mode: the board product. The queued pointer is the
+				// result — the session streams the task's progress and the
+				// finalizer folds its summary, so there is no observation to
+				// feed back and nothing to report in this turn.
+				return res, nil
+			}
+			if res.NeedsApproval {
+				// The inline gate parks the ask; the front-end prompts on its
+				// own event loop and resumes via ResumeApprovedReport.
+				return res, nil
+			}
+			if taskRounds >= maxTasks {
+				// Budget spent: stop delegating and converge on what ran.
+				// Record the refused dispatch so the final tool-free call
+				// explains itself instead of silently dropping the model's
+				// latest intent.
+				turns = append(turns,
+					entry.Turn{Role: "assistant", Content: taskDispatchNote(out.Task)},
+					entry.Turn{Role: "user", Content: fmt.Sprintf(taskBudgetNote, maxTasks)},
+				)
+				break rounds
+			}
+			taskRounds++
+			lastTask = res
+			// The sub-agent round: the task is one step of this conversation,
+			// not its end. Replay the dispatch as the model's own words, feed
+			// the outcome back as the observation it reports on, and let the
+			// loop converge — to a report, a follow-up task, or a question.
+			turns = append(turns,
+				entry.Turn{Role: "assistant", Content: taskDispatchNote(out.Task)},
+				entry.Turn{Role: "user", Content: taskObservation(res)},
+			)
 		case entry.KindPlan:
 			cb.progress(ProgressPlan, out.Plan.Goal)
 			return e.startClassifiedPlan(ctx, out.Plan, authorize)
@@ -589,7 +648,7 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 			// Execute against the same registry snapshot classification saw:
 			// a mid-ask SetMCPCommand swap would otherwise make the model's
 			// tool call hit a registry that no longer knows it.
-			result := executeTool(ctx, reg, out.Tool)
+			result := executeTool(ctx, reg, out.Tool, toolAuthorized)
 			turns = appendToolTurns(turns, out.Tool, out.Note, result)
 		default:
 			return &Result{Kind: "answer", Answer: out.Answer}, nil
@@ -615,8 +674,23 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 		if e.sched == nil {
 			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议任务「%s」，但当前未加载能力卡片，无法提交。", maxRounds, final.Task.Title)}, nil
 		}
+		if lastTask != nil && taskRounds >= maxTasks {
+			// The loop was cut for budget and the model still wants another
+			// delegation: surface what ran instead of quietly exceeding it.
+			return lastTask, nil
+		}
 		cb.progress(ProgressTask, final.Task.Title)
-		return e.submitTask(final.Task, prompt, authorize, workDir, cb), nil
+		res := e.submitTask(final.Task, prompt, authorize, workDir, cb)
+		if !res.NeedsApproval && !e.queueTasks {
+			// No rounds left to converge through, so produce the report in
+			// one shot rather than returning raw output.
+			if report, rerr := e.reportTaskOutcome(ctx, turns, devices, conversationMemory, classifyOpts, final.Task, res); rerr == nil {
+				res.Answer = report
+			} else {
+				e.logger.Warn("askengine: task report degraded", "task", res.TaskID, "err", rerr)
+			}
+		}
+		return res, nil
 	}
 	if final.Kind == entry.KindPlan {
 		if e.sched == nil {
@@ -625,6 +699,10 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 		cb.progress(ProgressPlan, final.Plan.Goal)
 		return e.startClassifiedPlan(ctx, final.Plan, authorize)
 	}
+	if lastTask != nil {
+		lastTask.Answer = final.Answer
+		return lastTask, nil
+	}
 	return &Result{Kind: "answer", Answer: final.Answer}, nil
 }
 
@@ -632,6 +710,37 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 // panel sessions execute in. It lets the panel pin non-repo sessions to the
 // work path so the memory wall (§17.2) holds for them too.
 func (e *Engine) WorkPath() string { return e.cfg.Storage.WorkPath }
+
+// CardPath returns the capabilities.yaml the engine's scheduler was built
+// from — the file /card edits and reloads.
+func (e *Engine) CardPath() string { return e.cardPath }
+
+// ReloadCard hot-swaps the scheduler's capability card (the /card edit path):
+// the core re-reads the file, rebuilds its router, re-registers, and tells
+// connected peers. The engine's own cardPath is what the system_status tool
+// reports, so it moves too. Errors when the engine runs cardless — there is
+// nothing to reload.
+func (e *Engine) ReloadCard(path string) error {
+	if e.sched == nil {
+		return fmt.Errorf("askengine: no scheduler (engine built without CardPath)")
+	}
+	if err := e.sched.ReloadCard(e.schedCtx, path); err != nil {
+		return err
+	}
+	e.cardPath = path
+	return nil
+}
+
+// DialPeer dials addr on the engine's scheduler right now — /nodes add's
+// live-connect path, so a peer freshly appended to the config joins this
+// session without a restart. The connection registers itself (hello exchange)
+// on success; the caller decides whether to wait or dial in the background.
+func (e *Engine) DialPeer(ctx context.Context, addr string) error {
+	if e.sched == nil {
+		return fmt.Errorf("askengine: no scheduler (engine built without CardPath)")
+	}
+	return e.sched.DialPeer(ctx, addr)
+}
 
 // EnqueueTask routes a directly-created task (the panel's board "new task"
 // form) through the async queue: it lands in queued and the scheduler starts

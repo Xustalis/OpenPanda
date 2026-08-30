@@ -59,8 +59,8 @@ func TestAskTurnsMemoryWall(t *testing.T) {
 	e := &Engine{
 		cfg:      &config.Config{},
 		injector: memory.NewInjector(hermes, nil),
-		registry: buildToolRegistry(hermes, nil, nil),
 	}
+	e.registry = buildToolRegistry(e, hermes, nil, nil)
 	// AskTurns reads the capability directory (ledger.Query); give it a real
 	// (empty) SQLite store so the query succeeds with no devices.
 	db, err := storage.Open(filepath.Join(root, "test.db"))

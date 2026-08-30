@@ -63,15 +63,33 @@ func TestExecuteTool(t *testing.T) {
 	reg := newTestRegistry()
 	ctx := context.Background()
 
-	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "echo", Arguments: map[string]any{"x": 1}}); got != "got 1" {
+	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "echo", Arguments: map[string]any{"x": 1}}, true); got != "got 1" {
 		t.Errorf("executeTool = %q, want success result", got)
 	}
 	// A tool failure is folded into the result, never a hard exit.
-	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "failing"}); !strings.Contains(got, "boom") {
+	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "failing"}, true); !strings.Contains(got, "boom") {
 		t.Errorf("executeTool failure = %q, want it to carry the error", got)
 	}
-	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "nope"}); !strings.Contains(got, "未知工具") {
+	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "nope"}, true); !strings.Contains(got, "未知工具") {
 		t.Errorf("executeTool unknown = %q, want unknown-tool message", got)
+	}
+}
+
+// TestExecuteToolTierGate verifies the fail-closed tool gate: a tool that
+// declares no tier (0) is treated as Tier 2 and refused without consent, the
+// refusal carrying the consent hint instead of a bare error.
+func TestExecuteToolTierGate(t *testing.T) {
+	reg := newTestRegistry()
+	ctx := context.Background()
+
+	// "echo" declares no tier: 0 is fail-closed (graded Tier 2), so an
+	// unauthorized ask is refused before Run.
+	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "echo"}, false); !strings.Contains(got, "被拒") {
+		t.Errorf("executeTool unauthorized = %q, want the refusal", got)
+	}
+	// The same call runs under consent.
+	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "echo", Arguments: map[string]any{"x": 1}}, true); got != "got 1" {
+		t.Errorf("executeTool authorized = %q, want success result", got)
 	}
 }
 
