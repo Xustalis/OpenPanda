@@ -13,6 +13,7 @@ package cliui
 
 import (
 	"os"
+	"runtime"
 	"strings"
 )
 
@@ -71,9 +72,16 @@ func colorEnabled(tty bool) bool {
 		return false
 	}
 	switch os.Getenv("TERM") {
-	case "", "dumb":
-		// No terminfo to speak of: emitting SGR would be a guess.
+	case "dumb":
+		// An explicit no-capability terminfo: never emit SGR.
 		return false
+	case "":
+		// No terminfo to speak of. On unix that means emitting SGR would be
+		// a guess, so colour stays off. Windows consoles (cmd.exe, PowerShell,
+		// Windows Terminal) simply never set TERM, yet they speak ANSI once
+		// the stream is a real terminal — so an empty TERM there enables
+		// colour for TTY output instead of greyscaling every Windows session.
+		return runtime.GOOS == "windows" && tty
 	}
 	return tty
 }

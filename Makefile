@@ -19,7 +19,7 @@ LDFLAGS_DEV := -s -w
 CGO_ENABLED ?= 0
 export CGO_ENABLED
 
-.PHONY: all build web web-test build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
+.PHONY: all build web web-test build-webui build-darwin-amd64 build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
         dev test vet fmt fmt-check race race-focused gate gate-all run run-local measure clean icons release package release-local
 
@@ -53,6 +53,9 @@ build-webui: web fmt-check vet
 	$(GO) build -ldflags "$(LDFLAGS_DEV)" -o $(BIN)-webui ./webui/cmd/panel
 
 # Cross-compile targets (design doc §4.4)
+build-darwin-amd64: fmt-check vet
+	GOOS=darwin GOARCH=amd64 $(GO) build -ldflags "-s -w" -o $(BIN)-darwin-amd64 ./cmd/panda
+
 build-darwin-arm64: fmt-check vet
 	GOOS=darwin GOARCH=arm64 $(GO) build -ldflags "-s -w" -o $(BIN)-darwin-arm64 ./cmd/panda
 

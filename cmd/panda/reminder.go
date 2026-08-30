@@ -32,6 +32,12 @@ func runReminder(args []string) {
 		os.Exit(2)
 	}
 	sub, rest := args[0], args[1:]
+	// --help/-h is not a real verb: print the usage line and exit 0, the
+	// same contract every flag.FlagSet subcommand gives its --help.
+	if sub == "--help" || sub == "-h" {
+		fmt.Println("usage: panda reminder <list | add --after 10m \"text\" | add --at \"2006-01-02 15:04\" \"text\" | rm <id>>")
+		return
+	}
 	switch sub {
 	case "list", "ls":
 		reminderList(rest)

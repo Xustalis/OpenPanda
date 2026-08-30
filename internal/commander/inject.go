@@ -127,7 +127,7 @@ func effectiveBaseURL(model config.ModelConfig) string {
 func effectiveModelName(model config.ModelConfig) string {
 	name := model.Model
 	if name == "" {
-		return "deepseek-chat"
+		return "deepseek-v4-flash"
 	}
 	if name == deepseekProModel {
 		return deepseekFlashModel

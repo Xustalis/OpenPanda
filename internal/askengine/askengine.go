@@ -134,6 +134,11 @@ type Result struct {
 	Stdout    string
 	Stderr    string
 	ExitCode  int
+	// Report is the LLM-generated summary of the task outcome. It is filled
+	// by SummarizeResult after every inline task (success or failure) so the
+	// user sees a human-readable summary instead of raw stdout/stderr. A
+	// model failure leaves it empty, and the caller falls back to raw output.
+	Report string
 
 	// Plan fields, valid when Kind == "plan". A plan is asynchronous by nature —
 	// its stages run on other machines, in waves — so the call returns as soon as
@@ -641,6 +646,15 @@ rounds:
 				// own event loop and resumes via ResumeApprovedReport.
 				return res, nil
 			}
+			// Inline task completed: generate a human-readable summary so the
+			// user sees what happened instead of raw stdout/stderr. A model
+			// failure degrades gracefully (Report stays empty), so the summary
+			// never blocks result delivery.
+			if report, rerr := entry.SummarizeResult(ctx, client, res.TaskTitle, out.Task.Spec.Target, res.OK, res.ExitCode, res.Stdout, res.Stderr); rerr == nil {
+				res.Report = report
+			} else {
+				e.logger.Warn("askengine: task summary degraded", "task", res.TaskID, "err", rerr)
+			}
 			if taskRounds >= maxTasks {
 				// Budget spent: stop delegating and converge on what ran.
 				// Record the refused dispatch so the final tool-free call
@@ -942,7 +956,13 @@ func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool
 			return res
 		}
 		if cb.OnApproval(req) {
-			return e.resumeLocked(req.TaskID)
+			resumed := e.resumeLocked(req.TaskID)
+			// Summarize the resumed task outcome so the user sees a report
+			// instead of raw output, matching the inline submit path.
+			if report, rerr := entry.SummarizeResult(e.schedCtx, e.client.Load(), resumed.TaskTitle, in.Intent, resumed.OK, resumed.ExitCode, resumed.Stdout, resumed.Stderr); rerr == nil {
+				resumed.Report = report
+			}
+			return resumed
 		}
 	}
 	return res
@@ -1080,7 +1100,14 @@ func (e *Engine) ResumeApproved(taskID, workDir string) *Result {
 		e.sched.SetWorkDir(workDir)
 		defer e.sched.SetWorkDir(e.cfg.Storage.WorkPath)
 	}
-	return e.resumeLocked(taskID)
+	res := e.resumeLocked(taskID)
+	// Summarize the resumed task outcome so the user sees a report instead of
+	// raw output, matching the inline submit path. Use a background context
+	// since this is a synchronous call from the REPL/TUI.
+	if report, rerr := entry.SummarizeResult(context.Background(), e.client.Load(), res.TaskTitle, "", res.OK, res.ExitCode, res.Stdout, res.Stderr); rerr == nil {
+		res.Report = report
+	}
+	return res
 }
 
 // recordEntryUsage bills the entry (commander) model's own token consumption

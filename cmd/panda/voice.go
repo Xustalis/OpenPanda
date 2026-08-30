@@ -50,7 +50,7 @@ const maxSpeakChars = 700
 func runVoice(args []string) {
 	fs := flag.NewFlagSet("voice", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered ./capabilities.yaml or /etc/openpanda/capabilities.yaml)")
+	cardPath := fs.String("card", defaultCardPath(), fmt.Sprintf("path to capabilities.yaml (default: discovered ./capabilities.yaml or %s)", systemCardPath()))
 	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated)")
 	listen := fs.Float64("listen", 0, "seconds to wait for the wake word each round (0 = wait indefinitely)")
 	once := fs.Bool("once", false, "handle a single utterance and exit")

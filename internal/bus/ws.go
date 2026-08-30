@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/gorilla/websocket"
 )
 
@@ -249,7 +250,12 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("inbound connection", "remote", r.RemoteAddr)
 	// The Core loop drives reads via a Reader; onConn must block while the
 	// connection is alive so the server can accurately account for limits.
-	s.onConn(conn, "")
+	// Guarded synchronously (not guard.Go): a panic in one connection's read
+	// loop is logged and closes only that connection — a hostile or buggy peer
+	// must not be able to crash the whole node.
+	guard.Call(s.logger, "bus: conn read loop "+r.RemoteAddr, func() { _ = conn.Close() }, func() {
+		s.onConn(conn, "")
+	})
 	s.dec(ip)
 }
 

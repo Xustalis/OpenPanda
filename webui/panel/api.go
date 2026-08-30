@@ -31,6 +31,10 @@ type askResult struct {
 	Stdout    string `json:"stdout,omitempty"`
 	Stderr    string `json:"stderr,omitempty"`
 	ExitCode  int    `json:"exit_code,omitempty"`
+	// Report is the LLM-generated summary of the task outcome. It is filled
+	// by SummarizeResult after every inline task so the web UI shows a
+	// human-readable summary instead of raw stdout/stderr.
+	Report string `json:"report,omitempty"`
 	// Plan fields (kind == "plan"): a multi-stage pipeline has no single task id
 	// and no result yet — its stages are queued and run on other machines — so the
 	// client follows it by plan id and shows the stage ids it was decomposed into.
@@ -51,6 +55,7 @@ func planResultOf(out *askengine.Result) askResult {
 		Stdout:    out.Stdout,
 		Stderr:    out.Stderr,
 		ExitCode:  out.ExitCode,
+		Report:    out.Report,
 		PlanID:    out.PlanID,
 		PlanGoal:  out.PlanGoal,
 	}

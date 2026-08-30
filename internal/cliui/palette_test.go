@@ -2,6 +2,7 @@ package cliui
 
 import (
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +50,14 @@ func TestColorEnabledPrecedence(t *testing.T) {
 		{"CLICOLOR_FORCE without a tty", map[string]string{"CLICOLOR_FORCE": "1"}, false, true},
 		{"CLICOLOR=0 disables", map[string]string{"CLICOLOR": "0"}, true, false},
 		{"TERM=dumb disables", map[string]string{"TERM": "dumb"}, true, false},
+		// The Windows console split: TERM is never set by cmd.exe/PowerShell,
+		// so an empty TERM on a TTY means colour there — and stays off
+		// everywhere else. The expectation follows the host GOOS so the case
+		// pins both branches of the runtime check.
+		{"TERM empty on a tty", map[string]string{"TERM": ""}, true, runtime.GOOS == "windows"},
+		{"TERM empty without a tty", map[string]string{"TERM": ""}, false, false},
+		{"TERM=dumb disables even where empty TERM would enable", map[string]string{"TERM": "dumb"}, true, false},
+		{"NO_COLOR beats the empty-TERM enablement", map[string]string{"TERM": "", "NO_COLOR": ""}, true, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

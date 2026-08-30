@@ -33,7 +33,7 @@ func injectionRouter(model config.ModelConfig, mode string) *Router {
 var testModel = config.ModelConfig{
 	BaseURL: "https://api.deepseek.com/anthropic",
 	APIKey:  "sk-test",
-	Model:   "deepseek-chat",
+	Model:   "deepseek-v4-flash",
 }
 
 func TestInjectionNever(t *testing.T) {
@@ -54,7 +54,7 @@ func TestInjectionAlways(t *testing.T) {
 	if !d.Inject {
 		t.Fatalf("always mode must inject, got %+v", d)
 	}
-	if d.Model != "deepseek-chat" || d.BaseURL == "" {
+	if d.Model != "deepseek-v4-flash" || d.BaseURL == "" {
 		t.Fatalf("decision should carry the injected model/endpoint, got %+v", d)
 	}
 }
@@ -108,8 +108,8 @@ func TestInjectionAutoInjectsWhenNoCredentials(t *testing.T) {
 	if !d.Inject {
 		t.Fatalf("auto must inject when agent has no creds and panda has a model: %+v", d)
 	}
-	if d.Model != "deepseek-chat" {
-		t.Fatalf("decision model = %q, want deepseek-chat", d.Model)
+	if d.Model != "deepseek-v4-flash" {
+		t.Fatalf("decision model = %q, want deepseek-v4-flash", d.Model)
 	}
 }
 
@@ -148,9 +148,9 @@ func TestInjectionDecisionDefaultMode(t *testing.T) {
 // TestInjectionNoticeNoSecrets: the announcement names the model/endpoint
 // and reason but never the API key.
 func TestInjectionNoticeNoSecrets(t *testing.T) {
-	d := InjectionDecision{Inject: true, Reason: "injection.model=always", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/anthropic"}
+	d := InjectionDecision{Inject: true, Reason: "injection.model=always", Model: "deepseek-v4-flash", BaseURL: "https://api.deepseek.com/anthropic"}
 	note := InjectionNotice(d, "claude_code")
-	if !strings.Contains(note, "deepseek-chat") || !strings.Contains(note, "claude_code") {
+	if !strings.Contains(note, "deepseek-v4-flash") || !strings.Contains(note, "claude_code") {
 		t.Fatalf("notice should name model and agent: %q", note)
 	}
 	if strings.Contains(note, "sk-") {

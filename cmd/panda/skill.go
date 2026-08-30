@@ -28,6 +28,12 @@ func runSkill(args []string) {
 		cmd = positional[0]
 		positional = positional[1:]
 	}
+	// --help/-h is not a real verb: print the usage line and exit 0, the
+	// same contract every flag.FlagSet subcommand gives its --help.
+	if cmd == "--help" || cmd == "-h" {
+		fmt.Println("usage: panda skill [--config PATH] <list | approve <name> | reject <name>>")
+		return
+	}
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
