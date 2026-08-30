@@ -28,6 +28,7 @@ type agentStatus struct {
 	Version     string `json:"version,omitempty"`
 	InstallHint string `json:"install_hint,omitempty"`
 	InstallURL  string `json:"install_url,omitempty"`
+	InitHint    string `json:"init_hint,omitempty"`
 }
 
 // probeAgentCLI resolves one registry entry to an install status: any of its
@@ -39,6 +40,7 @@ func probeAgentCLI(k agents.Known) agentStatus {
 		DisplayName: k.DisplayName,
 		InstallHint: k.InstallHint,
 		InstallURL:  k.InstallURL,
+		InitHint:    k.InitHint,
 	}
 	for _, bin := range k.Binaries {
 		if path, err := exec.LookPath(bin); err == nil {
@@ -161,6 +163,7 @@ func runAgentInstall(loc i18n.Locale, name string) {
 			"display_name": k.DisplayName,
 			"install_hint": k.InstallHint,
 			"install_url":  k.InstallURL,
+			"init_hint":    k.InitHint,
 		})
 		return
 	}
@@ -173,6 +176,9 @@ func runAgentInstall(loc i18n.Locale, name string) {
 	}
 	if k.InstallURL != "" {
 		fmt.Println(i18n.Tf(loc, "cli.agents.install.url", "url", k.InstallURL))
+	}
+	if k.InitHint != "" {
+		fmt.Printf("  After install, initialize: %s\n", k.InitHint)
 	}
 }
 
