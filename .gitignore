@@ -54,6 +54,8 @@ venv/
 .installer-go-cache/
 .installer-go-modcache/
 .installer-test-dist/
+# In-workspace Go build cache (used where the sandbox forbids /tmp)
+.gocache-tmp/
 
 # OS
 .DS_Store
@@ -104,3 +106,6 @@ logs/
 check_emails.py
 fetch_emails.py
 .claude/settings.local.json
+
+
+.gocache-tmp

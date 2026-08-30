@@ -21,7 +21,7 @@ export CGO_ENABLED
 
 .PHONY: all build web web-test build-webui build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
-        dev test vet fmt fmt-check race gate gate-all run run-local measure clean icons release package release-local
+        dev test vet fmt fmt-check race race-focused gate gate-all run run-local measure clean icons release package release-local
 
 all: build
 
@@ -122,6 +122,13 @@ fmt-check:
 
 race:
 	$(GO) test -race ./...
+
+# race-focused is the race detector scoped to the packages that actually share
+# state across goroutines and connections — the CI gate's race leg. `race`
+# (full suite) remains the pre-release check; the extra minutes it spends on
+# goroutine-free packages buy no detections.
+race-focused:
+	$(GO) test -race ./internal/core/... ./internal/commander/... ./internal/bus/... ./internal/storage/...
 
 # ============================================================================
 # CI Gate 清单化 (§稳定性 P1)

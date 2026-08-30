@@ -4,6 +4,13 @@ name: Gate
 # green". Until this workflow existed that sentence described nothing: the only
 # two workflows ran on push-to-main and on a tag, so a pull request could land
 # without ever building. This is the enforcement half of that promise.
+#
+# The checks run as independent parallel jobs instead of one serial `make
+# gate`: feedback lands as fast as the slowest single leg instead of the sum
+# of all of them, and a fmt failure no longer waits behind a compile. The
+# race leg is scoped to the concurrency-hot packages (`make race-focused`) —
+# the full-suite race was the cost driver of the old serial gate while every
+# goroutine the detector exists for lives in core/commander/bus/storage.
 
 on:
   pull_request:
@@ -18,19 +25,73 @@ permissions:
   contents: read
 
 jobs:
-  gate:
+  lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
           cache: true
-      # make gate = fmt-check + build + vet + test + race. The race leg is the
-      # slow one and the reason for the 25-minute budget.
-      - name: make gate
-        run: make gate
+      - name: gofmt
+        run: make fmt-check
+      - name: go vet
+        run: make vet
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+      - name: Build
+        run: go build ./...
+      - name: Test
+        run: go test ./...
+
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+      # The race detector over the packages that actually share state across
+      # goroutines and connections. `make race` (full suite) stays available
+      # locally for release preparation.
+      - name: Race (concurrency-hot packages)
+        run: make race-focused
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: webui/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: webui/app/package-lock.json
+      - name: Install
+        run: npm ci --no-fund --no-audit
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      # Proves the embedded-console build lands where go:embed expects it.
+      - name: Build
+        run: npm run build
+      - name: Verify embed output
+        run: test -f ../panel/dist/app/index.html
 
   # The daemon is expected to run on Windows and macOS nodes, so the test suite
   # has to pass there too — a Windows-only path breaking is exactly the class of
