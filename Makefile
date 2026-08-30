@@ -121,14 +121,15 @@ fmt-check:
 	fi
 
 race:
-	$(GO) test -race ./...
+	CGO_ENABLED=1 $(GO) test -race ./...
 
 # race-focused is the race detector scoped to the packages that actually share
 # state across goroutines and connections — the CI gate's race leg. `race`
 # (full suite) remains the pre-release check; the extra minutes it spends on
-# goroutine-free packages buy no detections.
+# goroutine-free packages buy no detections. CGO is forced on because -race
+# requires it and some runners leave it disabled.
 race-focused:
-	$(GO) test -race ./internal/core/... ./internal/commander/... ./internal/bus/... ./internal/storage/...
+	CGO_ENABLED=1 $(GO) test -race ./internal/core/... ./internal/commander/... ./internal/bus/... ./internal/storage/...
 
 # ============================================================================
 # CI Gate 清单化 (§稳定性 P1)
