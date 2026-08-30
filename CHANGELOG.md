@@ -55,6 +55,7 @@ The usability release: the capability card — the file that tells the scheduler
 - **Graceful shutdown on Windows** — CTRL_CLOSE/LOGOFF/SHUTDOWN console events now trigger the same orderly shutdown path as SIGTERM on unix (`SetConsoleCtrlHandler`, short cleanup window).
 - **Windows console colors** — the TUI palette enables colors on a Windows console TTY when TERM is unset; `dumb` and `NO_COLOR` still take precedence.
 - **`make build-darwin-amd64`** — Intel Mac build target alongside the other per-platform targets.
+- **Agent capability surface and per-task tools policy** — the agent registry now declares each CLI's native capabilities (skills, MCP, sub-agents) instead of per-adapter hard-coding; the entry model can request a per-task tools policy (`minimal` / `extended`) that overrides the global routing policy, so a high-complexity task can unlock the agent's full surface for that task alone. Claude Code sub-agent spawns (the Task tool) surface as typed `subagent` progress events and land in the task timeline unthrottled (this release).
 
 ### Fixed
 
