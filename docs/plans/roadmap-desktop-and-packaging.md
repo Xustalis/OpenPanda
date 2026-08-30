@@ -26,8 +26,9 @@ is steering toward, written down so contributions can align with it.
 - [ ] **Release channel discipline** — `make release` artifacts exist; add
       signed checksums (SHA256SUMS + minisign), a GitHub Release pipeline,
       and a changelog-per-tag policy.
-- [ ] **Homebrew tap** (`brew install xenith/tap/openpanda`) — formula built
-      from release artifacts; keep `go install github.com/Xustalis/OpenPanda@…`
+- [x] **Homebrew tap** (`brew tap Xustalis/openpanda && brew install openpanda`) — formula
+      built from release artifacts (`deploy/homebrew/openpanda.rb`, pushed to the tap by
+      release.yml); keep `go install github.com/Xustalis/OpenPanda@…`
       working for Go users.
 - [ ] **First-run experience** — `panda init` (interactive config + capability
       card generation, today hand-edited) so a new node reaches the network

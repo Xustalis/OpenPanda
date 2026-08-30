@@ -121,7 +121,7 @@ dein Speicher bleibt auf deinen Geräten, und jeder Node spricht mit seinen Peer
   Circuit Breaker, Scope-Drift- und Endlosschleifen-Erkennung, plus
   Ausführungshärtung: Sandboxing, Netzwerk-Allowlists, Secret-Redaction und
   Audit-Logging.
-- **Schlank gebaut** — steady-state RSS ≈ **13–20 MB**, entwickelt für
+- **Schlank gebaut** — steady-state RSS ≈ **21–23 MB** (gemessen mit `make measure`), entwickelt für
   ressourcenbeschränkte Einplatinencomputer.
 - **Sauberes Cross-Compiling** — ein statisches Binary pro Plattform, kein CGO
   nötig (reines-Go-SQLite über `modernc.org/sqlite`).
@@ -277,7 +277,7 @@ network:
     - "worker-1.your-tailnet.ts.net:7836"
 model:
   base_url: "https://api.deepseek.com/anthropic"  # beliebiger /v1/messages-kompatibler Endpoint
-  model: "deepseek-chat"
+  model: "deepseek-v4-flash"
   # api_key: ""               # bevorzugt über die Env-Variable OPENPANDA_MODEL_API_KEY
 ```
 
@@ -341,28 +341,42 @@ Skills verwalten:
 |---|---|
 | `panda` (ohne Argumente) | Öffnet die interaktive REPL (wie `panda repl`); der Daemon läuft jetzt über den Subcommand `panda daemon` |
 | `panda daemon [--config PATH] [--card PATH]` | Daemon starten: Node registrieren, Heartbeat, WS-Server, Peer-Reconnect |
-| `panda ask [--config PATH] [--card PATH] [--authorize] "<Frage>"` | Einheitliches Eingabemodell: klassifiziert in answer / tool_call / task / plan und führt aus |
+| `panda ask [--config PATH] [--card PATH] [--authorize] [--output-format json \| stream-json] "<Frage>"` | Einheitliches Eingabemodell: klassifiziert in answer / tool_call / task / plan und führt aus; `--output-format` gibt für den Headless-Betrieb ein JSON-Objekt oder NDJSON-Ereignisse aus |
 | `panda plan run <datei.yaml> \| show <id> \| example` | Mehrstufige geräteübergreifende Pipeline: Eine Stufe IST eine gewöhnliche Aufgabe (Queue, Hardware-Routing, Retry, Review-Parken), der Plan liefert die Reihenfolge und reicht das Arbeitsverzeichnis jeder Stufe an die Stufe der nächsten Maschine weiter; `run --dry-run` validiert und druckt das Routing, ohne etwas anzulegen |
 | `panda voice [--once] [--mute]` | Desktop-Tier-Einstieg: Wake Word → ASR → dieselbe Eingabe-Pipeline → TTS, für ein Gerät ohne Tastatur; `--once` bearbeitet eine einzige Äußerung, `--mute` druckt statt zu sprechen |
 | `panda repl [--config PATH] [--card PATH]` | Interaktive Shell: Slash-Befehle (tasks/approve/projects/nodes/lang), freie Eingabe geht an die ask-Engine, `/web` startet die eingebettete Konsole |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | Web-Konsole mit einem Befehl: standardmäßig Loopback + flüchtiges Token, der Browser öffnet sich bereits angemeldet |
+| `panda session list \| new \| show \| rm \| ask \| diff \| merge` | Chat-Sitzungen über Git-Worktrees: `new [--title T]` schneidet einen Worktree in einem Repo aus, `ask <id> <prompt>` setzt eine fort, `diff <id>` zeigt ihre Änderungen, `merge <id> [--message M]` führt den Branch in HEAD zusammen |
 | `panda init` | Interaktive Ersteinrichtung: erzeugt `config.yaml` + `capabilities.yaml` (Modell-Endpoint, Node-Name, Hardware-Scan-Standardwerte) |
 | `panda install [--dir PATH] [--no-path]` | Registriert `panda` als globales Kommando im PATH (überlebt Neustarts) und verifiziert die installierte Kopie automatisch |
-| `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run]` | Sichere Deinstallation: erst der volle Plan, dann zwingend `confirm`, Löschung nur nach Whitelist, Nutzerdaten (projects/memory/skills) bleiben immer erhalten, Zip-Backup und Bericht |
+| `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run] [--purge]` | Sichere Deinstallation: erst der volle Plan, dann zwingend `confirm`, Löschung nur nach Whitelist, Nutzerdaten (projects/memory/skills) bleiben immer erhalten, Zip-Backup und Bericht; `--purge` löscht auch die Nutzerdaten und verlangt eine zweite Bestätigung |
 | `panda doctor [--config PATH]` | Selbstcheck: installierte Kopie läuft, PATH löst auf, Persistenz überlebt den Neustart, Konfiguration/Datenbank nutzbar |
 | `panda status` | Node- & Task-Status |
+| `panda nodes` | Aktuelle und bekannte Knoten (dieselben Daten wie status) |
+| `panda nodes add <host:port>` | Einen Peer zum Anwählen hinzufügen (erzeugt `shared_secret`, falls es fehlt, und druckt die Beitrittsanleitung für die andere Maschine) — wählt ohne Neustart sofort an |
+| `panda nodes invite` | Druckt die Beitrittsanleitung, ohne die Peer-Liste zu ändern |
+| `panda nodes disconnect <addr>` | Entfernt einen Peer aus der Anwahlliste |
+| `panda nodes remove <id>` | Löscht eine verwaiste Verzeichniszeile ohne lebenden Peer; der lokale Knoten und Online-Knoten werden abgelehnt |
+| `panda pair --secret S --peer <host:port>` | Von einer neuen Maschine einem bestehenden Netz beitreten: schreibt das gemeinsame Geheimnis und den Peer in die Konfiguration dieses Knotens |
 | `panda queue` | Task-Warteschlange anzeigen |
-| `panda task [--config PATH] <task-id>` | Task-Details |
+| `panda task [--config PATH] <task-id>` | Task-Details + Zeitachse |
+| `panda task add --title T [--prompt P] [--priority STUFE] [--project p] [--authorize]` | Einen Task von Hand einreihen (braucht `--card`); Priorität ist `low \| medium \| normal \| high \| critical` |
+| `panda task priority <id> <level>` | Die Priorität eines Tasks ändern |
+| `panda task move <id> <seq>` | Die Drag-Sort-Warteschlange umsortieren |
 | `panda cancel [--config PATH] <task-id>` | Task abbrechen (kaskadiert an den ausführenden Node) |
 | `panda approve [--config PATH] <task-id>` | Review-Task freigeben (review → done) |
 | `panda reject [--config PATH] [--reason s] <task-id>` | Review-Task ablehnen |
 | `panda logs [--config PATH] <task-id>` | Task-Ausführungslogs |
-| `panda skill` | Skill-Store-Verwaltung |
+| `panda skill list \| approve <name> \| reject <name>` | Skill-Store-Verwaltung |
 | `panda reminder list \| add \| rm` | Erinnerungen: auflisten / anlegen (`--after 10m` oder `--at "2006-01-02 15:04"`) / löschen |
+| `panda memory list \| get \| set \| rm` | Speicherdateien: `user \| memory \| dreams \| topic:<n> \| project:<n> \| daily:<date>` (`set` liest standardmäßig stdin oder `--file F`; dreams und daily sind schreibgeschützt) |
+| `panda project list \| create` | Projektspeicher |
+| `panda config <Abschnitt> <get \| set \| test>` | `config.yaml` ansehen/bearbeiten (Kommentare bleiben erhalten): Abschnitte `model \| mcp \| limits \| routing \| injection \| approval`; Änderungen greifen nach Neustart von Daemon/Panel |
 | `panda detect [-o PATH]` | Scannt die Hardware dieser Maschine (CPU/RAM/GPU/Agent-CLIs) in einen capabilities.yaml-Entwurf |
 | `panda card show \| rescan \| edit \| set` | Die Capability-Card dieses Knotens: anzeigen (samt Quelldatei), Hardware und installierte Agent-CLIs neu scannen (`rescan` zeigt nur das Diff, `--write` wendet es an und behält ein `.bak`), in `$EDITOR` bearbeiten oder mit `set <Feld>=<Wert>` ohne Editor ändern. Erkannte Hardware-Felder werden überschrieben, handgeschriebene Entscheidungen (Knotenname, resource_class, max_concurrent_tasks, Agent-Tier, native/manual-Fähigkeiten) bleiben erhalten |
+| `panda card native \| agent \| manual add \| remove \| set` | Strukturierte Kartenbearbeitung von der CLI: dieselbe Validierung + `.bak` + atomare Schreibpipeline wie der Editor, heiß in den laufenden Daemon nachgeladen |
 | `panda metrics [--csv]` | Delegations-Metriken exportieren |
-| `panda audit [--task <id>]` | `prev_hash`-Kette des Audit-Logs oder der Events eines Tasks verifizieren |
+| `panda audit verify \| entries [--task <id>]` | `verify` prüft die `prev_hash`-Kette des Audit-Logs (oder der Events eines Tasks); `entries` druckt die Audit-Protokollzeilen |
 | `panda version` | Version anzeigen |
 
 ## Konfiguration
@@ -384,12 +398,22 @@ Skills verwalten:
 | `storage` | `projects_path` | Pro-Projekt-Gedächtnis |
 | `storage` | `skills_path` | Prozedurales Gedächtnis |
 | `storage` | `work_path` | Ausführungsverzeichnis der Agents; Scope-Drift wird hier gemessen |
+| `storage` | `artifact_path` | Pool für gepackte Task-Artefakte (nach Hash benannt; Stufen-Ergebnisse werden darüber zwischen Knoten übertragen) |
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic-kompatible Messages-API-Basis-URL |
-| `model` | `model` | Modell-ID (z. B. `deepseek-chat`, `deepseek-reasoner`) |
+| `model` | `model` | Modell-ID (z. B. `deepseek-v4-flash`) |
 | `model` | `api_key` | Geheim — bevorzugt `OPENPANDA_MODEL_API_KEY` |
 | `model` | `api_type` | `anthropic` \| `openai` (Standard `anthropic`) |
 | `model` | `max_tokens` | Completion-Token-Limit (Standard 4096) |
+| `injection` | `model` | Modell-Injektion in Agent-Subprozesse: `auto` (Standard — nur injizieren, wenn der Agent keine eigenen Modell-Zugangsdaten hat) \| `always` \| `never` |
+| `routing` | `preferred_agents` | Agent-Namen, die einen Routing-Bonus von +0,5 erhalten |
+| `memory` | `limits.user` | Zeichenlimit für USER.md (Standard 5000) |
+| `memory` | `limits.memory` | Zeichenlimit für MEMORY.md (Standard 10000) |
+| `memory` | `limits.project` | Zeichenlimit für das projektbezogene MEMORY.md (Standard 30000) |
+| `approval` | `mode` | Task-Freigabe-Gate: `always` \| `on-request` (Standard — nur vom Modell als riskant markierte Tasks) \| `never` |
+| `timeouts` | `task_lease_s` | Wie lange ein Task-Versuch seinen Lease halten darf (Standard 1200); muss deutlich über `agent_s` liegen |
+| `timeouts` | `agent_s` | Echtzeit-Budget für eine Agent-Adapter-Ausführung (Standard 600) |
+| `timeouts` | `supervise_rounds` | Obergrenze der execute → judge → re-delegate-Schleife pro Task (Standard 5) |
 | `mcp` | `command` | Kommandozeile des stdio-MCP-Servers (leer = deaktiviert); Werkzeuge werden heiß in das Agenten-Set geladen |
 | `push` | `enabled` | `/api/push/*` bereitstellen und Web Push senden (eingebettete Konsole + webui-Sidecar) |
 | `push` | `vapid_subject` | VAPID-Subject (z. B. eine `mailto:`-Adresse) |

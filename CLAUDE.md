@@ -21,17 +21,37 @@ make test
 # Run tests with race detector
 make race
 
+# Race detector scoped to the concurrency-sensitive packages (storage, core, bus, panel)
+make race-focused
+
 # Static analysis
 make vet
 
-# Merge gate: build + vet + test + race (must pass before PR lands)
+# Format check (gofmt) / format all Go code
+make fmt-check
+make fmt
+
+# Merge gate: fmt-check + vet + build + test + race (must pass before PR lands)
 make gate
 
+# The full gate: gate + web-test + web (web console tests and embedded build)
+make gate-all
+
+# Web console tests (node --test) / build the web console into the binary
+make web-test
+make web
+
 # Cross-compile targets
+make build-darwin-amd64
+make build-darwin-arm64
 make build-linux-arm64
 make build-linux-amd64
-make build-darwin-arm64
 make build-windows-amd64
+make build-windows-arm64
+
+# Package release archives (dist/) / local packaging
+make package
+make release-local
 
 # Run a single test
 go test -run TestName ./path/to/package/...
@@ -51,14 +71,14 @@ make measure
 The codebase is a Go 1.26+ monorepo with pure-Go SQLite (no CGO).
 
 ### Entry Points
-- `cmd/panda/` — CLI entry point with subcommands: `ask`, `repl`, `web`, `daemon`, `task`, `skill`, `reminder`, `config`, `session`, `queue`, `uninstall`
-- `webui/cmd/panel/` — Web console sidecar (embeds the React app via go:embed)
+- `cmd/panda/` — CLI entry point with subcommands: `daemon`/`serve`, `ask`, `repl`/`chat`, `web`, `voice`, `install`, `uninstall`, `doctor`, `status`, `nodes` (`add`/`invite`/`disconnect`/`remove`), `pair`, `queue`, `task` (`add`/`priority`/`move`), `plan`, `cancel`, `approve`, `reject`, `logs`, `skill`, `reminder`, `detect`, `card` (`show`/`rescan`/`edit`/`set` + `native`/`agent`/`manual`), `init`, `metrics`, `audit` (`verify`/`entries`), `session`/`sessions`, `memory`, `config`, `agents`, `project`, `version`, `help`
+- `webui/cmd/panel/` — Web console sidecar (embeds the Preact app via go:embed)
 
 ### Core Packages (`internal/`)
 
 **Node Lifecycle & Task Orchestration:**
 - `core/` — Root daemon type (`Core`) wiring node lifecycle, task store, and WebSocket transport. Contains the task execution loop, delegation, retry, supervision (judge → re-delegate), and metrics.
-- `entry/` — Unified entry model: classifies user input into `answer` (LLM reply), `tool_call` (tool invocation), or `task` (delegated to a node). ~3000 lines handling prompt building, streaming, tool routing, and output parsing.
+- `entry/` — Unified entry model: classifies user input into `answer` (LLM reply), `tool_call` (tool invocation), `task` (delegated to a node), or `plan` (multi-stage pipeline whose stages run on different machines). Handles prompt building, streaming, tool routing, and output parsing.
 - `scheduler/` — Task routing and scoring. `queue/` manages the task queue; `route.go` picks the best node; `score.go` ranks candidates; `chain.go` handles multi-step delegation chains.
 - `commander/` — Three-tier execution: `native` (direct shell via `executil`), `agent` (adapter-backed, e.g. Claude Code), `manual` (queued for human approval). `adapter.go` manages agent adapters; `native.go` runs shell commands; `inject.go` injects memory/skills into agent context.
 
@@ -103,7 +123,7 @@ The codebase is a Go 1.26+ monorepo with pure-Go SQLite (no CGO).
 - Adapters are installed alongside the binary and needed for agent-tier execution
 
 ### Web Console
-- `webui/app/` — React frontend (built with npm/vite)
+- `webui/app/` — Preact frontend (built with npm/vite)
 - `webui/panel/` — Go sidecar that embeds the built frontend via go:embed
 - `webui/push/` — Web Push notification support
 - Build with `make web` (requires node/npm)

@@ -8,7 +8,7 @@ convenciones que mantienen el código legible a medida que crece.
 
 | Herramienta | Versión | Usada para                                    |
 | ----------- | ------- | --------------------------------------------- |
-| Go          | ≥ 1.22  | kernel, CLI, panel, tests                     |
+| Go          | ≥ 1.26.5 | kernel, CLI, panel, tests                     |
 | Node.js     | ≥ 18    | consola web (`webui/app`)                     |
 | Python      | ≥ 3.10  | sidecar de voz, adaptadores de agentes        |
 
@@ -42,6 +42,8 @@ make gate           # build + vet + test + race (la puerta de fusión)
 gofmt -l internal/ cmd/ adapters/ webui/panel/   # no debe imprimir nada
 cd webui/app && npm run typecheck                # si tocaste la consola web
 ```
+
+CI ejecuta las mismas comprobaciones como trabajos en paralelo — `lint` (gofmt + vet), `test`, `race` (acotado a los paquetes calientes en concurrencia mediante `make race-focused`), `web` (typecheck + tests de node + el build de la consola incrustada) y la matriz multiplataforma — y este `make gate` completo sigue siendo la vara local; mantén ambos en verde.
 
 - **`go test -race ./...` debe pasar** — el kernel es un sistema concurrente
   (registro de pares, almacén de tareas, hub SSE); cualquier hallazgo del

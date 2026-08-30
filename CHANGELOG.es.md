@@ -36,6 +36,31 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Cada entrada nombra el cambio y su efecto visible en una a tres líneas; se cita el commit que lo introdujo cuando ayuda a la arqueología.
 - Este archivo en inglés es el canónico. Las traducciones zh-CN / ja / es / de lo replican y pueden retrasarse brevemente alrededor de un lanzamiento.
 
+## [Unreleased]
+
+### Añadido
+
+- **Guardia de recuperación para goroutines residentes** — el nuevo `internal/guard` envuelve las goroutines de larga duración: un panic se registra con su pila completa y desencadena un apagado controlado en lugar de dejar un proceso medio muerto en ejecución; un panic en el bucle de lectura de una conexión del bus solo cierra esa conexión.
+- **Apagado elegante en Windows** — los eventos de consola CTRL_CLOSE/LOGOFF/SHUTDOWN ahora activan la misma ruta de apagado ordenado que SIGTERM en unix (`SetConsoleCtrlHandler`, ventana de limpieza breve).
+- **Colores en la consola de Windows** — la paleta del TUI habilita colores en la TTY de la consola de Windows cuando TERM no está definido; `dumb` y `NO_COLOR` siguen teniendo prioridad.
+- **`make build-darwin-amd64`** — objetivo de compilación para Mac Intel, junto a los demás objetivos por plataforma.
+
+### Corregido
+
+- **Exclusión mutua en las migraciones** — las migraciones de esquema se ejecutan bajo `BEGIN IMMEDIATE` y re-verifican `user_version` dentro de la transacción, de modo que dos procesos que abren la misma base de datos aplican cada versión exactamente una vez; un binario anterior al esquema de la base de datos ahora falla explícitamente en lugar de continuar en silencio.
+- **Web: un único bus de eventos** — la consola ahora mantiene una sola conexión SSE con contador de referencias, autenticada con cabecera `Authorization` (sin token en la URL), con reconexión automática de retroceso exponencial, y distribuye los eventos change y trace a todos los suscriptores.
+- **Web: carrera de flujo de sesión** — las escrituras de streaming solo se aplican mientras la sesión está activa; cambiar de sesión en pleno flujo ya no mezcla burbujas entre hilos, y las cargas de transcripción obsoletas se abortan al cambiar.
+- **Web: robustez y accesibilidad** — un límite de errores de nivel superior con reintento; trampa de foco en la paleta de comandos y los diálogos de confirmación; tarjetas kanban operables por teclado (Enter/Space, con foco visible); el sondeo del sistema se pausa cuando la pestaña está oculta y omite sondeos aún en curso; claves de lista estables.
+- **`panda skill --help` / `panda reminder --help`** — imprimen el uso y salen con 0 en lugar de tratar `--help` como un verbo desconocido.
+- **CI: reparadas las patas del gate y el instalador** — reparadas las cuatro patas fallidas del gate y el pipeline del instalador (7c418b0).
+- **CLI: los bloques de pensamiento plegados ya no anuncian una clave que no puede desplegarlos** (e772598).
+
+### Mejorado
+
+- **Directorio de configuración del sistema según plataforma** — el directorio de respaldo para la configuración del sistema sigue siendo `/etc/openpanda` en unix y `%ProgramData%\OpenPanda` en Windows.
+- **Una sola ruta de inicialización del almacén** — el daemon y el panel web abren el almacén mediante la misma función (`cmd/panda/store.go`); el panel ya no omite el directorio del pool de artefactos.
+- **Panel web: los escaneos de eventos se desacoplan del número de conexiones** — las huellas de tareas/nodos/recordatorios se cachean durante un intervalo de sondeo, por lo que la carga de escaneo se mantiene prácticamente constante aunque crezcan los suscriptores.
+
 ## [0.0.6] - 2026-08-27
 
 El lanzamiento de computación entre dispositivos toma forma: una solicitud que necesita máquinas distintas para pasos distintos es ahora un plan de primera clase cuyas etapas corren donde está el hardware, y ambas superficies —el CLI y la consola web— ganaron la capa de presentación que les faltaba: retroalimentación en vivo mientras un ask converge, Markdown de verdad en el navegador, y el editor de entrada que el uso diario exige.

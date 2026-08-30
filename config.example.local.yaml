@@ -1,6 +1,11 @@
 # 本地单节点（loopback）最小配置示例
 # 复制为 config.local.yaml 后按需调整：
 #   cp config.example.local.yaml config.local.yaml
+# 注意：config.local.yaml 不会被自动发现（自动发现顺序是 --config 参数 >
+# OPENPANDA_CONFIG_PATH > 用户配置目录 > 系统默认路径）。必须显式指定：
+#   panda daemon --config config.local.yaml
+# 或：
+#   export OPENPANDA_CONFIG_PATH=$PWD/config.local.yaml
 # 密钥与令牌请通过环境变量注入，不要写入此文件：
 #   export OPENPANDA_SHARED_SECRET=...
 #   export OPENPANDA_PANEL_TOKEN=...
@@ -12,9 +17,8 @@ node:
 network:
   listen_addr: "127.0.0.1:7840"
   shared_secret: ""  # 留空即可，单节点不需要 P2P
-  panel:
-    addr: "127.0.0.1:7841"
-    token: ""         # 留空；经 OPENPANDA_PANEL_TOKEN 注入
+  panel_addr: "127.0.0.1:7841"   # webui 面板（panda web）HTTP 地址
+  panel_token: ""                # 留空；经 OPENPANDA_PANEL_TOKEN 注入
 
 storage:
   db_path: "openpanda.db"
@@ -28,14 +32,13 @@ storage:
   artifact_path: "artifacts"
 
 model:
-  provider: ""       # opencode / litellm / openai / anthropic / deepseek ...
+  api_type: ""       # anthropic | openai（缺省 anthropic）
   base_url: ""       # 如 provider 需要自定义 endpoint
-  model: ""          # 如 claude-opus-4, gpt-4o-mini, deepseek-chat ...
+  model: ""          # 如 claude-opus-4, gpt-4o-mini, deepseek-v4-flash ...
   api_key: ""        # 留空；优先经 OPENPANDA_MODEL_API_KEY 注入
 
 log:
   level: "info"
-  format: "json"
 
 # 模型注入策略：auto = agent 自带模型凭证时不注入，否则注入 panda 配置的模型
 # （注入时会在任务输出开头声明并写入审计/事件流）；always = 总是注入；never = 永不注入
@@ -70,5 +73,4 @@ injection:
 #   # 单个任务的 执行 → 评审 → 重新分发 循环上限。默认 5。
 #   supervise_rounds: 5
 
-capabilities:
-  max_concurrent: 2
+# 并发能力卡（并发上限等）不在本文件配置，由 capabilities.yaml 能力卡声明。

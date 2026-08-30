@@ -8,7 +8,7 @@ that keep the codebase readable as it grows.
 
 | Tool    | Version | Needed for                    |
 | ------- | ------- | ----------------------------- |
-| Go      | ≥ 1.22  | kernel, CLI, panel, tests     |
+| Go      | ≥ 1.26.5 | kernel, CLI, panel, tests     |
 | Node.js | ≥ 18    | web console (`webui/app`)     |
 | Python  | ≥ 3.10  | voice sidecar, agent adapters |
 

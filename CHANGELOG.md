@@ -36,6 +36,59 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Entries name the change and its user-visible effect in one to three lines; the introducing commit is cited where it aids archaeology.
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
+## [Unreleased]
+
+### Added
+
+- **Recover guard for resident goroutines** — new `internal/guard` wraps long-running goroutines: a panic is logged with its full stack and triggers a controlled shutdown instead of leaving a half-dead process running; a panic in a per-connection bus read loop closes only that connection.
+- **Graceful shutdown on Windows** — CTRL_CLOSE/LOGOFF/SHUTDOWN console events now trigger the same orderly shutdown path as SIGTERM on unix (`SetConsoleCtrlHandler`, short cleanup window).
+- **Windows console colors** — the TUI palette enables colors on a Windows console TTY when TERM is unset; `dumb` and `NO_COLOR` still take precedence.
+- **`make build-darwin-amd64`** — Intel Mac build target alongside the other per-platform targets.
+
+### Fixed
+
+- **Migration mutual exclusion** — schema migrations run under `BEGIN IMMEDIATE` and re-check `user_version` inside the transaction, so two processes opening the same database apply each version exactly once; a binary older than the database schema now fails loudly instead of silently continuing.
+- **Web: one event bus** — the console now holds a single ref-counted SSE connection authenticated with an `Authorization` header (no token in the URL), reconnects with exponential backoff, and fans change and trace events out to every subscriber.
+- **Web: session stream race** — streaming writes now apply only while the session is active; switching sessions mid-stream no longer mixes bubbles across threads, and stale transcript loads are aborted on switch.
+- **Web: robustness and accessibility** — a top-level error boundary with retry; focus trapping in the command palette and confirm dialogs; keyboard-operable kanban cards (Enter/Space with visible focus); system polling pauses while the tab is hidden and skips polls still in flight; stable list keys.
+- **`panda skill --help` / `panda reminder --help`** — print their usage and exit 0 instead of treating `--help` as an unknown verb.
+- **CI: gate and installer legs repaired** — all four failing gate legs and the installer pipeline repaired (7c418b0).
+- **CLI: folded thought blocks no longer advertise a key that cannot unfold them** (e772598).
+
+### Changed
+
+- **Platform-aware system config directory** — the system fallback config directory is still `/etc/openpanda` on unix and `%ProgramData%\OpenPanda` on Windows.
+- **One store-initialization path** — the daemon and the web panel open the store through the same function (`cmd/panda/store.go`); the panel no longer misses the artifact-pool directory.
+- **Web panel: event scans decouple from connection count** — task/node/reminder fingerprints are cached for one poll interval, so scan load stays roughly constant as subscribers grow.
+
+## [0.0.7] - 2026-08-30
+
+The usability release: the capability card — the file that tells the scheduler what this node can do — is now editable from every surface (CLI, REPL, TUI, and the web console) without restarting the daemon; adding a second device is a product flow instead of a config-file puzzle; and every task outcome now gets a human-readable summary so the user sees what happened instead of a wall of raw stdout.
+
+### Added
+
+- **Structured card editing everywhere** — `panda card native add|remove`, `panda card agent add|remove|set`, `panda card manual add|remove` (structured subcommands, not just the editor); the same operations from `/card` in the REPL and TUI; and a full card editor in the web console (`/api/card` plus agent/native/manual endpoints). Every write path goes through the same validator + `.bak` + atomic-write pipeline so a bad edit cannot corrupt the card (1b8e2b7).
+- **Device pairing** — `panda pair` generates a shared secret, prints the onboarding instructions for the new device, and writes both sides' configs; `panda nodes add <addr>` appends a peer and live-dials it without a restart; the web console's "Invite a device" CTA now wires to the nodes page with the actual pairing flow (763bff6, 5748cec).
+- **Hot card reload** — editing the card (from any surface) triggers `ReloadCard`: the scheduler re-reads, re-registers abilities, and broadcasts a heartbeat carrying the new card to every connected peer, so changes propagate without a daemon restart (3d6feeb).
+- **Bubble Tea TUI** — `panda` now drops into a Bubble Tea front end with a working tier-2 approval path (inline approval card, `y` to approve, `n` to park for `/approve`); the classic REPL is still available via `PANDA_CLASSIC_REPL=1` (06cca6a).
+- **LLM task summary** — after every inline task (success or failure), the engine calls the entry model to produce a human-readable summary of what happened; the summary is rendered in the REPL, TUI, and web console before the raw output, so the user sees "what was done + key output" (success) or "why it failed + what to do next" (failure) instead of raw stdout/stderr. A model failure degrades gracefully — the summary is skipped and raw output is shown (this release).
+- **Web: thought streaming and task progress** — the model's reasoning is streamed into the chat as a collapsible thought block (03a4301); task messages show progress and result instead of just the payload (4ba931f).
+- **Remote tier-2 resume** — when a tier-2 task is approved after being delegated to a remote node, the re-run happens on the executor (where the work belongs), not on the approver's machine (3d6feeb).
+
+### Fixed
+
+- **P0 security findings closed** — plan_id/stage_id path traversal (arbitrary directory read+exfiltration via `../../../../` in stage work dirs) is now blocked by ID validation + root-prefix assertion; result delivery after peer disconnect is persisted in an outbox and re-delivered on reconnect (review P0-2); TUI interrupt/quit semantics fixed so Ctrl+C actually exits (763bff6, 5129461).
+- **P1 security hardening** — default listen address changed from `0.0.0.0:7836` to `127.0.0.1:7836` (daemon no longer binds all interfaces by default); `context_fetch` now requires the peer to be in the task's delegation chain; supervisor unavailability parks the task for review instead of silently accepting an unverified result (763bff6).
+- **Entry model: no more doubled user turns** — strict providers (Anthropic-compatible) were returning 400 on conversations where the session replay doubled or dangled a user turn; the normalize step now merges consecutive plain-text turns of the same role (8174e78).
+- **Orchestration timing and web message race** — judge runtime is no longer billed to the executing stage (a separate `judge_start` trace marker); supervision loop traces exec before the round result so continue→continue paths don't hide the re-execution; web optimistic turn state is extracted into `chatstate.ts` and on error the optimistic bubble is removed so the assistant's reply no longer lands inside a user message (97d5c62).
+- **Cancel race with executor accept** — a cancel that arrived during the executor's accept window was dropped; the cancel is now queued and applied once the accept completes (a19b33b).
+- **Windows gate and mutual-dial handshake deterministic** — the cross-platform CI gate now passes on Windows; the mutual-dial tie-break is deterministic regardless of arrival order (526c731).
+- **CI: parallel gate jobs** — the gate workflow now runs build/vet/test/typecheck as parallel jobs, scoping the race detector to the packages that need it, and gating the web console typecheck (3f302f1).
+
+### Changed
+
+- **Default listen address** — the daemon now binds `127.0.0.1:7836` by default instead of `0.0.0.0:7836`. Existing deployments that relied on the old default must set `network.listen_addr` explicitly in `config.yaml` or via `OPENPANDA_LISTEN_ADDR`.
+
 ## [0.0.6] - 2026-08-27
 
 The cross-device compute release takes shape: a request that needs different machines for different steps is now a first-class plan whose stages run where the hardware is, and both surfaces — the CLI and the web console — gained the presentation layer they lacked: live feedback while an ask converges, real Markdown in the browser, and the input editor a daily driver needs.

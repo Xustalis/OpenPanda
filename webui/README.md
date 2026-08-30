@@ -1,8 +1,7 @@
 # webui — the OpenPanda console
 
-Two consoles live here: the **current one** (Vite + Preact + TypeScript,
-embedded into the Go binary via `go:embed`) and the **frozen legacy PWA**
-(kept for reference, not developed further).
+The current console (Vite + Preact + TypeScript) lives here, embedded into
+the Go binary via `go:embed`.
 
 ## Layout
 
@@ -11,8 +10,7 @@ embedded into the Go binary via `go:embed`) and the **frozen legacy PWA**
 | `app/`            | Console frontend source — Vite + Preact + TS, five-language i18n       |
 | `panel/`          | Go panel package: HTTP handlers, SSE hub, `go:embed` of `app` builds   |
 | `cmd/panel/`      | Standalone sidecar binary (`panda-webui`) for split deployments        |
-| `web/pwa/`        | Legacy PWA assets — **frozen**, kept for reference only                |
-| `push/`           | Web Push (VAPID, encryption, subscriptions) — used by both panels      |
+| `push/`           | Web Push (VAPID, encryption, subscriptions) — used by the panel        |
 
 ## How it ships
 
@@ -42,10 +40,3 @@ npm run build       # outputs to ../panel/dist/app
 UI strings must go through the i18n layer (`app/src/i18n/`) with the key
 present in every locale — English is the fallback, missing keys must not
 ship. See [CONTRIBUTING](../CONTRIBUTING.md) for the full conventions.
-
-## The frozen legacy panel
-
-`web/pwa/` is the original hand-rolled PWA from the pre-kernel era. It is
-deliberately frozen: no new features, no fixes unless a security issue. The
-migration path for anything it did that the new console lacks is a feature
-request against `app/`, not a patch to `web/pwa/`.

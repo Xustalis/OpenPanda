@@ -21,9 +21,13 @@ network:
   # ── Connection limits (slow-DoS protection) ──
   # max_connections: 64            # global concurrent WS connections (0 = unlimited)
   # max_connections_per_ip: 8      # per-remote-IP concurrent WS connections (0 = unlimited)
-  # ── webui sidecar only (webui/cmd/panel); the kernel daemon never mounts it ──
-  panel_addr: "127.0.0.1:7840"      # optional legacy PWA panel HTTP address; plain HTTP — keep loopback or put it behind a TLS reverse proxy (empty = disabled)
-  # panel_token: ""              # Bearer token guarding /api/* (required to enable the panel; prefer env OPENPANDA_PANEL_TOKEN)
+  # ── Embedded console / panel address ──
+  # Reused by the webui sidecar (webui/cmd/panel), `panda web`, and the REPL
+  # `/web` command. Empty falls back to 127.0.0.1:7840; a non-loopback bind
+  # without panel_token refuses to start. Plain HTTP — keep loopback or put
+  # it behind a TLS reverse proxy.
+  panel_addr: "127.0.0.1:7840"
+  # panel_token: ""              # Bearer token guarding /api/* (prefer env OPENPANDA_PANEL_TOKEN)
   peers:                         # manual peers
     # - "worker-1.your-tailnet.ts.net:7836"
 
@@ -34,6 +38,10 @@ storage:
   projects_path: "./projects"    # per-project memory root (Phase 3)
   skills_path: "./skills"        # procedural-memory root (Phase 3)
   work_path: "."                 # agents execute here; scope drift measured here
+  # Packed task-artifact pool: artifacts shipped across nodes are stored here,
+  # named by hash. Not ctxstore (the Micro-node LRU keeps only 5 entries and
+  # would silently evict them), not SQLite (artifacts are gigabyte-scale).
+  # artifact_path: "artifacts"
 
 log:
   level: "info"                  # debug | info | warn | error
@@ -42,14 +50,16 @@ log:
 # Anthropic-compatible Messages API; any /v1/messages-compatible endpoint works.
 model:
   base_url: "https://api.deepseek.com/anthropic"
-  model: "deepseek-chat"          # deepseek-chat | deepseek-reasoner
+  model: "deepseek-v4-flash"      # the old chat/reasoner aliases were retired 2026-07-24
   # api_type: "anthropic"         # anthropic | openai (default anthropic)
   # max_tokens: 4096              # completion cap; default 4096
   # api_key: ""                   # secret; prefer env OPENPANDA_MODEL_API_KEY
 
 # MCP server (Model Context Protocol): one stdio server whose tools become
 # callable by the ask engine. The command is space-separated argv; empty
-# disables MCP. Reloaded live when changed — no daemon restart needed.
+# disables MCP. Live reload applies only where the engine is held reloadable —
+# `panda web` and the REPL pick up changes without a restart; the headless
+# daemon builds its engine once at startup and needs a restart to see edits.
 # mcp:
 #   command: "npx -y @modelcontextprotocol/server-filesystem /tmp"
 
@@ -85,6 +95,23 @@ injection:
 #   never       tasks run as classified
 # approval:
 #   mode: "on-request"         # always | on-request | never
+
+# Time budget for long tasks (seconds; omit or delete to use built-in
+# defaults). Deep-learning-style tasks can run for hours, while the defaults
+# are tuned for "patch a snippet of code" — so these knobs must be tunable.
+# timeouts:
+#   # How long one task attempt may hold its lease; after expiry the supervisor
+#   # treats the executor as dead and re-routes. Heartbeats renew at lease/3
+#   # during execution, so this bounds "how long an executor may go silent",
+#   # not total task time. Default 1200. Must stay well above agent_s: if the
+#   # lease expires while the adapter is still running fine, the task is force-
+#   # failed and re-dispatched, so the same work runs twice on two machines.
+#   task_lease_s: 1200
+#   # Wall-clock budget for one agent-adapter execution (told to the adapter and
+#   # enforced as a hard deadline). Default 600.
+#   agent_s: 600
+#   # Cap on the execute → judge → re-dispatch loop per task. Default 5.
+#   supervise_rounds: 5
 
 # Web Push notifications (design P3-26): task entering review → phone push.
 # Read by the embedded console (`panda web`); requires a secure context —

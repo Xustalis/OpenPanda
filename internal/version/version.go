@@ -7,7 +7,5 @@ package version
 
 // Version is the semantic version of this build.
 //
-// v0.0.7-beta is an INTERNAL testing marker: it must not be tagged, released,
-// or shipped. CompareVersion treats its numeric prefix (0.0.7) as newer than
-// every published release, so the self-updater will never prompt over it.
-var Version = "0.0.7-beta"
+// v0.0.7 is the current release. Release builds override it via -ldflags.
+var Version = "0.0.7"
