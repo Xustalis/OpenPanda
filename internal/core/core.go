@@ -150,6 +150,11 @@ type Core struct {
 	// code, and the parent's re-route then runs the same work twice concurrently.
 	running sync.Map // string -> context.CancelFunc
 
+	// orphanSeen records when a forwarded task was first sighted orphaned in
+	// queued after a restart, so the rescue sweep gives it a grace window to
+	// find a new route before failing it (S1-1). Guarded by mu.
+	orphanSeen map[string]time.Time
+
 	// leaseTimeout is how long one task attempt may hold its lease before the
 	// monitor treats its executor as dead. Renewed on a heartbeat during
 	// execution (see renewLease), so it bounds silence rather than runtime.
@@ -192,6 +197,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		node:         NewNode(db, nodeID, card, tier, logger),
 		peers:        make(map[string]*Peer),
 		greetedConns: make(map[*bus.Conn]bool),
+		orphanSeen:   make(map[string]time.Time),
 		breaker:      defense.NewCircuitBreaker(0, 0),
 		loop:         defense.NewLoopDetector(2),
 		auditLog:     security.NewAudit(db),
@@ -557,6 +563,13 @@ func (c *Core) RunMonitor(ctx context.Context) {
 			// approved from the CLI or the console moves the row in another
 			// process, and only this sweep would notice.
 			c.sweepPlans(ctx)
+			// S1-1: a restart orphans forwarded tasks in queued — no lease, no
+			// waiter, nothing else touches them. Re-route them or fail them out
+			// after the grace window so the upstream chain learns the outcome.
+			c.rescueOrphanedForwards(ctx)
+			// S1-4: directory rows for silently-dead peers stay online forever
+			// without a liveness sweep, and routing keeps aiming ghosts.
+			c.sweepStalePeers(ctx)
 			expired, err := c.store.ExpireTasks(ctx)
 			if err != nil {
 				c.logger.Warn("expire tasks", "err", err)
