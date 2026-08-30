@@ -207,6 +207,60 @@ func MarkOffline(db *sql.DB, id string) error {
 	return nil
 }
 
+// MarkOnline flips a node back to online without touching last_seen — the
+// symmetric of MarkOffline for rows the stale sweep flipped by mistake (a
+// self row caught between beats); the node's own next heartbeat restores
+// capacity and freshness.
+func MarkOnline(db *sql.DB, id string) error {
+	_, err := db.Exec(`UPDATE employee_cache SET status='online' WHERE id=?`, id)
+	if err != nil {
+		return fmt.Errorf("mark online %s: %w", id, err)
+	}
+	return nil
+}
+
+// ExpireStale marks nodes offline whose status still claims online but whose
+// last heartbeat is older than maxAgeSec seconds. IDs in exclude are left
+// alone (peers the caller still holds a live connection to). Rows that never
+// heartbeated (last_seen = 0, hand-built fixtures) are left untouched — the
+// sweep acts on silence, not on the absence of a clock. Returns the ids
+// actually flipped.
+func ExpireStale(db *sql.DB, maxAgeSec int64, exclude []string) ([]string, error) {
+	cutoff := storage.Now() - maxAgeSec
+	rows, err := db.Query(
+		`SELECT id FROM employee_cache WHERE status='online' AND last_seen > 0 AND last_seen < ?`, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("scan stale nodes: %w", err)
+	}
+	skip := make(map[string]bool, len(exclude))
+	for _, id := range exclude {
+		skip[id] = true
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if !skip[id] {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var flipped []string
+	for _, id := range ids {
+		if _, err := db.Exec(`UPDATE employee_cache SET status='offline' WHERE id=? AND status='online'`, id); err != nil {
+			return flipped, fmt.Errorf("expire stale %s: %w", id, err)
+		}
+		flipped = append(flipped, id)
+	}
+	return flipped, nil
+}
+
 // Remove deletes a node's directory row. A removed remote that is still
 // alive re-appears on its next hello, so removal is for stale rows: a
 // renamed machine, a peer whose identity changed, a decommissioned node.
