@@ -36,6 +36,13 @@ type HeartbeatPayload struct {
 	Load     float64         `json:"load"`     // 0.0-1.0
 	Capacity string          `json:"capacity"` // raw JSON from the card
 	Card     json.RawMessage `json:"card,omitempty"`
+	// BlockedAgents lists agent names whose circuit is open on the sender
+	// (repeated failures). Peers strip these from the sender's ability set
+	// when routing, so failure history weighs into candidate selection
+	// instead of being learned one bounce-decline at a time. Absent on old
+	// nodes and when nothing is blocked; receivers treat absent as "drop
+	// any previously published list".
+	BlockedAgents []string `json:"blocked_agents,omitempty"`
 }
 
 // TaskDelegatePayload is the task handoff (design doc §10.3 example). The

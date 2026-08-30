@@ -1,6 +1,7 @@
 package defense
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
@@ -130,4 +131,30 @@ func (b *CircuitBreaker) Blocked(key string) bool {
 	}
 	// Half-open: a trial is already in flight, so the circuit is not clear.
 	return true
+}
+
+// BlockedKeys enumerates every key currently unavailable for new work (same
+// predicate as Blocked), sorted for deterministic wire encoding. Callers
+// publish this so OTHER nodes' routing can weigh failure history too — the
+// breaker is per-process memory, and without the publication a delegator
+// only learns a peer's agent is circuit-open by bouncing a decline off it.
+func (b *CircuitBreaker) BlockedKeys() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []string
+	now := time.Now()
+	for key, st := range b.states {
+		switch st.state {
+		case CircuitClosed:
+			continue
+		case CircuitOpen:
+			if now.Sub(st.openedAt) < b.cooldown {
+				out = append(out, key)
+			}
+		case CircuitHalfOpen:
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
