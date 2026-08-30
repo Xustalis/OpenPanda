@@ -3624,6 +3624,128 @@ label {
   white-space: nowrap;
 }
 
+/* ---- Capability card editor + add-device form (stage 6) ---- */
+
+.card-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.card-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.section-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: var(--fw-medium);
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+
+.card-entry {
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+}
+
+.card-entry p {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+}
+
+.card-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.card-entry-name {
+  font-weight: 600;
+}
+
+.card-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.card-add-row .input {
+  flex: 1 1 160px;
+  min-width: 140px;
+  width: auto;
+}
+
+.card-add-row .btn {
+  flex: 0 0 auto;
+}
+
+/* The tier toggle on an agent row: tier 2 (irreversible) reads as a caution
+   chip so the current consent posture is visible without clicking. */
+.btn.warn {
+  color: var(--warn);
+  border-color: var(--warn-border, var(--border));
+  background: transparent;
+  background-image: none;
+}
+
+.btn.warn:hover:not(:disabled) {
+  background: var(--warn-soft, var(--bg-hover));
+}
+
+.card-raw-toggle {
+  margin-top: 4px;
+}
+
+.card-raw-editor textarea {
+  font-size: 12.5px;
+  line-height: 1.55;
+  resize: vertical;
+  min-height: 200px;
+}
+
+.add-device-card {
+  margin-top: 14px;
+}
+
+.join-guide {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.join-guide p {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.join-guide .ok {
+  color: var(--accent);
+}
+
+.join-steps {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.join-steps code {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+
 /* ---- Memory: topics / daily / projects panes (C2) ---- */
 
 .memory-split {

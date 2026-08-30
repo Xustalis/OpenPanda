@@ -236,10 +236,18 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	turn := sessions.Turn{Role: "assistant", Kind: out.Kind}
 	switch out.Kind {
 	case "task":
-		turn.Text = out.TaskID
+		// Queue mode: the turn records the dispatch (the finalizer folds the
+		// outcome as its own turn once the task lands in a terminal state).
+		// A bare task id used to be the text — unreadable in the thread and
+		// meaningless noise when the next ask replays the history to the
+		// model.
+		turn.Text = "已派发任务：" + out.TaskTitle + "（" + out.TaskID + "）"
+		if out.Answer != "" {
+			turn.Text = out.Answer
+		}
 		turn.Ref = out.TaskID
 	case "plan":
-		turn.Text = out.PlanID
+		turn.Text = "已启动多阶段计划：" + out.PlanGoal + "（" + out.PlanID + "）"
 		turn.Ref = out.PlanID
 	default:
 		turn.Text = out.Answer

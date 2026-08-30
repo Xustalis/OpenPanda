@@ -159,6 +159,21 @@ func runAsk(args []string) {
 			fmt.Println(renderCliMd(out.Answer))
 		}
 	case "task":
+		// Sub-agent round: the converged report is the reply (it streamed
+		// live when the terminal supports it), with the raw agent output
+		// demoted to a pointer line. Without a report the raw output is the
+		// display, as before.
+		if strings.TrimSpace(out.Answer) != "" {
+			if !streamed {
+				fmt.Println(renderCliMd(out.Answer))
+			}
+			fmt.Println(pal().Muted(i18n.Tf(loc, "repl.ask.taskReport",
+				"id", out.TaskID, "state", out.TaskState)))
+			if !out.OK {
+				os.Exit(1)
+			}
+			break
+		}
 		fmt.Println(i18n.Tf(loc, "cli.ask.task", "id", out.TaskID, "state", out.TaskState))
 		if out.OK {
 			fmt.Print(renderCliMd(out.Stdout))

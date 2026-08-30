@@ -147,6 +147,7 @@ func runWeb(args []string) {
 			Push:         pushSvc,
 			Cfg:          cfg,
 			ConfigPath:   resolvedConfigPath(*configPath),
+			CardPath:     *cardPath,
 			Token:        token,
 			Updater:      updateMgr,
 		}),

@@ -8,6 +8,9 @@ package main
 //	panda card rescan --write       # …and apply it (a .bak is kept)
 //	panda card edit                 # open $EDITOR, validate before installing
 //	panda card set <field>=<value>  # one field, no editor
+//	panda card native add|remove …  # structured edits of the command abilities
+//	panda card agent add|remove|set … # structured edits of the agent CLIs
+//	panda card manual add|remove …  # structured edits of the human abilities
 //
 // It exists because the card is the one file that decides what work this machine
 // is offered, and until now it could only be produced once (`panda detect`, which
@@ -49,11 +52,17 @@ func runCard(args []string) {
 		runCardEdit(rest)
 	case "set":
 		runCardSet(rest)
+	case "native":
+		runCardNative(rest)
+	case "agent", "agents":
+		runCardAgent(rest)
+	case "manual":
+		runCardManual(rest)
 	case "path":
 		fmt.Println(orDash(cardTargetPath("")))
 	default:
 		fmt.Fprintf(os.Stderr, "panda: unknown card subcommand %q\n", sub)
-		fmt.Fprintln(os.Stderr, "usage: panda card [show|rescan|edit|set|path]")
+		fmt.Fprintln(os.Stderr, "usage: panda card [show|rescan|edit|set|native|agent|manual|path]")
 		os.Exit(2)
 	}
 }
@@ -83,7 +92,10 @@ func cardSubcommand(args []string) (string, []string) {
 	if subIdx >= 0 {
 		rest = append(append([]string{}, args[:subIdx]...), args[subIdx+1:]...)
 	}
-	return sub, reorderFlags(rest, commonValueFlags)
+	// cardMutDashFlags (a superset of commonValueFlags) so the structured
+	// edits' value-carrying flags — "--command go" et al. — keep their pair
+	// through the hoist instead of stranding the value among the positionals.
+	return sub, reorderFlags(rest, cardMutDashFlags)
 }
 
 // cardValueFlags are the value-carrying flags `panda card` accepts, keyed by
@@ -226,7 +238,7 @@ func runCardRescan(args []string) {
 	}
 	if !jsonOutput {
 		fmt.Printf("%s updated (%d change(s))\n", path, len(diffs))
-		fmt.Println("restart the daemon for the new card to be advertised to peers")
+		notifyDaemonReload()
 	}
 }
 
@@ -302,7 +314,7 @@ func runCardEdit(args []string) {
 		fatal("write card", err)
 	}
 	fmt.Printf("%s saved\n", path)
-	fmt.Println("restart the daemon for the new card to be advertised to peers")
+	notifyDaemonReload()
 }
 
 // openEditor runs the user's editor on path, wired to the real terminal.
@@ -364,7 +376,7 @@ func runCardSet(args []string) {
 		return
 	}
 	fmt.Printf("%s updated\n", path)
-	fmt.Println("restart the daemon for the new card to be advertised to peers")
+	notifyDaemonReload()
 }
 
 // setCardField applies one <field>=<value> assignment. Only the scalar fields a

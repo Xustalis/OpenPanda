@@ -67,6 +67,38 @@ func TestResultBlockTask(t *testing.T) {
 	}
 }
 
+// TestResultBlockTaskReport pins the sub-agent round's committed body: the
+// converged report is the reply, and the raw agent output is demoted to a
+// pointer line that names the task — never the body itself.
+func TestResultBlockTaskReport(t *testing.T) {
+	out := &askengine.Result{
+		Kind: "task", OK: true, TaskID: "t-1", TaskState: "done",
+		Answer: "构建通过，两处测试已补", Stdout: "wall of agent log",
+	}
+	b := resultBlock(out, "", loc)
+	if b.kind != blockTask || !b.ok {
+		t.Fatalf("kind/ok: %+v", b)
+	}
+	if !strings.HasPrefix(b.body, "构建通过") {
+		t.Fatalf("report should lead the body: %q", b.body)
+	}
+	if strings.Contains(b.body, "wall of agent log") {
+		t.Fatalf("raw output must not be the body: %q", b.body)
+	}
+	if !strings.Contains(b.body, "panda task show t-1") {
+		t.Fatalf("raw-output pointer missing: %q", b.body)
+	}
+
+	// A failed round keeps its exit evidence alongside the report.
+	out.OK = false
+	out.ExitCode = 2
+	out.Stderr = "boom"
+	b = resultBlock(out, "", loc)
+	if !strings.Contains(b.body, "构建通过") || !strings.Contains(b.body, "exit 2") {
+		t.Fatalf("failed round body: %q", b.body)
+	}
+}
+
 // TestResultBlockPlanFailed pins the failure path: a plan that never started
 // carries an empty id and no stages, so rendering it through the success line
 // would announce "plan  · 0 stages" — a failure dressed as a success. It has to

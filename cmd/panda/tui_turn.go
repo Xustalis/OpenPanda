@@ -155,6 +155,19 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) block {
 	switch out.Kind {
 	case "task":
+		// Sub-agent round: the converged report is the reply — it streamed
+		// live into this turn's answer region, so the committed body is the
+		// model's report with the raw agent output demoted to a pointer
+		// line. Without a report (queue-parked, budget-cut, report
+		// degraded) the raw output remains the body, as before.
+		if report := strings.TrimSpace(out.Answer); report != "" {
+			body := report
+			if !out.OK {
+				body += fmt.Sprintf("\nexit %d: %s", out.ExitCode, strings.TrimSpace(out.Stderr))
+			}
+			body += "\n" + i18n.Tf(loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
+			return block{kind: blockTask, ok: out.OK, body: body}
+		}
 		if out.OK {
 			return block{kind: blockTask, ok: true, body: strings.TrimRight(out.Stdout, "\n")}
 		}

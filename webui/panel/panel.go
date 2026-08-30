@@ -51,6 +51,7 @@ type Deps struct {
 	Reminders    *reminders.Store // nil disables the reminder endpoints
 	Cfg          *config.Config
 	ConfigPath   string // where PUT /api/settings/model persists ("" = memory only)
+	CardPath     string // where the card API reads/edits capabilities.yaml ("" = engine's card)
 	StaticDir    string
 	Token        string
 	Updater      *updater.Manager // nil disables the self-update endpoints
@@ -67,19 +68,20 @@ type Deps struct {
 // closed: /api/* rejects every request until a token is configured.
 func New(d Deps) http.Handler {
 	h := &handler{
-		store:      d.Store,
-		engine:     d.Engine,
-		engines:    d.EngineHolder,
-		db:         d.DB,
-		projects:   d.Projects,
-		push:       d.Push,
-		sessions:   d.Sessions,
-		worktrees:  d.Worktrees,
-		skillStore: d.SkillStore,
-		reminders:  d.Reminders,
-		cfg:        d.Cfg,
-		configPath: d.ConfigPath,
-		updater:    d.Updater,
+		store:        d.Store,
+		engine:       d.Engine,
+		engines:      d.EngineHolder,
+		db:           d.DB,
+		projects:     d.Projects,
+		push:         d.Push,
+		sessions:     d.Sessions,
+		worktrees:    d.Worktrees,
+		skillStore:   d.SkillStore,
+		reminders:    d.Reminders,
+		cfg:          d.Cfg,
+		configPath:   d.ConfigPath,
+		cardFilePath: d.CardPath,
+		updater:      d.Updater,
 	}
 	// Session summary finalizer (queue redesign §5): finished tasks fold
 	// their result into the linked chat as an assistant turn. Runs for the
@@ -103,6 +105,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/projects/{name}/memory", h.getProjectMemory)
 	mux.HandleFunc("PUT /api/projects/{name}/memory", h.putProjectMemory)
 	mux.HandleFunc("GET /api/nodes", h.listNodes)
+	mux.HandleFunc("POST /api/nodes/add", h.addNode)
 	mux.HandleFunc("DELETE /api/nodes/{id}", h.removeNode)
 	mux.HandleFunc("GET /api/self", h.getSelf)
 	mux.HandleFunc("GET /api/events", h.events)
@@ -140,6 +143,18 @@ func New(d Deps) http.Handler {
 	}
 	mux.HandleFunc("GET /api/settings/mcp", h.getMCPSettings)
 	mux.HandleFunc("PUT /api/settings/mcp", h.putMCPSettings)
+	// Capability card (stage 6): the console's /card — structured mutations
+	// shared with the CLI/REPL (cardmut), plus the raw YAML editor. Every
+	// write hot-reloads the live engine's card.
+	mux.HandleFunc("GET /api/card", h.getCard)
+	mux.HandleFunc("PUT /api/card", h.putCardRaw)
+	mux.HandleFunc("POST /api/card/native", h.addNative)
+	mux.HandleFunc("DELETE /api/card/native/{id}", h.removeNative)
+	mux.HandleFunc("POST /api/card/agents/{name}", h.addAgent)
+	mux.HandleFunc("PATCH /api/card/agents/{name}", h.patchAgent)
+	mux.HandleFunc("DELETE /api/card/agents/{name}", h.removeAgent)
+	mux.HandleFunc("POST /api/card/manual", h.addManual)
+	mux.HandleFunc("DELETE /api/card/manual/{id}", h.removeManual)
 	if d.Sessions != nil {
 		mux.HandleFunc("GET /api/sessions", h.listSessions)
 		mux.HandleFunc("POST /api/sessions", h.createSession)
@@ -294,7 +309,10 @@ type handler struct {
 	reminders  *reminders.Store
 	cfg        *config.Config
 	configPath string
-	updater    *updater.Manager
+	// cardFilePath is where the card API edits capabilities.yaml; empty
+	// means "ask the live engine which card it was built from".
+	cardFilePath string
+	updater      *updater.Manager
 }
 
 // taskJSON is the wire form of a task row, with stable snake_case names so the
