@@ -57,7 +57,7 @@ Claude Code、Codex、OpenCode、OpenClaw……每一个都是单机上的强力
 ## 核心特性
 
 - **异构节点网络**——每个节点通过能力卡（capability card）声明真实能力（CPU 等级、shell、Agent 适配器）；网络把任务路由给真正能干活的节点。为笔记本电脑、开发板、台式机以及各种性能层级的设备而设计。
-- **统一入口模型**——一条指令进入，三种意图输出：`answer`（纯 LLM 回答）、`tool_call`（调用你的工具）、`task`（委派到节点执行）。自动意图分类，并带优雅降级。
+- **统一入口模型**——一条指令进入，四种意图输出：`answer`（纯 LLM 回答）、`tool_call`（调用你的工具）、`task`（委派到节点执行）、`plan`（跨机器多阶段流水线）。自动意图分类，并带优雅降级。
 - **三层能力执行**——`native`（直接执行 shell 命令）、`agent`（基于适配器的 Agent，例如通过 Anthropic 兼容端点调用 Claude Code）、`manual`（进队列，等你人工审批/手动执行）。
 - **P2P 委派协议**——基于 WebSocket + JSON 的幂等 `task_id` 与每次执行唯一的 `attempt_id`，崩溃重试绝不会重复执行。
 - **自进化 Skill 系统**——程序性记忆以 `SKILL.md` 文件存在：每个 skill 声明适用时机、运行方式，并在每次使用后自我迭代。
@@ -65,7 +65,9 @@ Claude Code、Codex、OpenCode、OpenClaw……每一个都是单机上的强力
 - **MCP 接入**——通过 config.yaml（`mcp.command`）或控制台设置页配置一个 stdio MCP 服务器；其工具**热加载**进 Agent 工具表，无需重启守护进程。
 - **双层记忆**——按用户与按项目隔离的记忆（`USER.md` / `MEMORY.md` 风格），外加隔离墙；后台 **Dreaming** 引擎在节点空闲时把日常日志沉淀为长期记忆。
 - **语音入口**——可选的 sidecar 管线（唤醒词 → 语音识别 → LLM → 语音合成），硬件门控，为嵌入式麦克风准备。
-- **交互式 REPL + 内嵌 Web 控制台**——`panda repl` 是操作席：裸输入直达 ask 引擎，斜杠命令驱动面板（`/tasks`、`/approve`、`/projects`、`/nodes`、`/lang`……），`/web` 一键启动内嵌控制台（对话、任务看板、审批、提醒、可编辑的记忆页）。`panda web` 一条命令开箱即用：默认回环绑定 + 临时 token，浏览器自动登录。五种界面语言：English、简体中文、日本語、Español、Deutsch。
+- **能力卡全界面编辑**——告诉调度器本节点能做什么的能力卡，可在 CLI、REPL/TUI、Web 控制台编辑，热重载进运行中的 daemon 并广播给 peer，无需重启。`panda pair` + `panda nodes add` 让添加第二台设备变成有引导的产品流程，而不是配置文件谜题。
+- **LLM 任务汇报**——每个任务完成后，入口模型会写一份简短的人类可读汇报（做了什么，或为什么失败），在 TUI、REPL、Web 控制台的原始输出之前展示。
+- **交互式 TUI + 内嵌 Web 控制台**——裸运行 `panda` 进入 Bubble Tea TUI，支持内联审批；`panda repl` 是经典操作席：裸输入直达 ask 引擎，斜杠命令驱动面板（`/tasks`、`/approve`、`/projects`、`/nodes`、`/lang`……），`/web` 一键启动内嵌控制台（对话、任务看板、审批、提醒、可编辑的记忆页）。`panda web` 一条命令开箱即用：默认回环绑定 + 临时 token，浏览器自动登录。五种界面语言：English、简体中文、日本語、Español、Deutsch。
 - **自更新**——`panda web`（及 `/web`）在后台检查发布渠道；控制台下载并校验可用更新，待任务队列空闲后一键安装。放弃已下载的更新则不留任何残留。
 - **防御与安全层**——权限 Tier、熔断器、范围漂移与死循环检测；执行侧加固：沙箱、网络白名单、密钥脱敏、审计日志。
 - **极致轻量**——稳态 RSS 约 **21–23 MB**（`make measure` 实测），为资源受限的单板电脑而生。
@@ -125,7 +127,7 @@ Claude Code、Codex、OpenCode、OpenClaw……每一个都是单机上的强力
 用参数覆盖默认行为：
 
 ```bash
-sh scripts/install.sh --version 0.0.6           # 指定版本（默认 latest）
+sh scripts/install.sh --version 0.0.7           # 指定版本（默认 latest）
 sh scripts/install.sh --prefix /opt/openpanda   # 自定义安装目录
 sh scripts/install.sh --yes                     # 一并注册开机自启，不再询问
 sh scripts/install.sh --no-service              # 完全不碰开机自启
@@ -270,7 +272,7 @@ model:
 
 | 命令 | 说明 |
 |---|---|
-| `panda`（无参数） | 进入交互式 REPL（与 `panda repl` 相同）；守护进程改为 `panda daemon` 子命令运行 |
+| `panda`（无参数） | 进入 Bubble Tea TUI（带内联审批；经典 REPL 可用 `PANDA_CLASSIC_REPL=1`）；守护进程用 `panda daemon` 子命令运行 |
 | `panda daemon [--config PATH] [--card PATH]` | 运行守护进程：节点注册、心跳、WS 服务、peer 重连 |
 | `panda ask [--config PATH] [--card PATH] [--authorize] [--output-format json \| stream-json] "<问题>"` | 统一入口：分类为 answer / tool_call / task / plan 并执行；`--output-format` 为无头使用输出单个 JSON 对象或 NDJSON 事件流 |
 | `panda plan run <文件.yaml> \| show <id> \| example` | 跨设备多阶段流水线：一个阶段就是一个普通任务（排队、按硬件路由、重试、进审批停泊），plan 负责排序并把上一阶段的工作目录交给下一台机器的阶段；`run --dry-run` 只校验并打印路由，不创建任何东西 |
@@ -357,6 +359,7 @@ model:
 完整文档位于 [`docs/`](docs/) 目录：
 
 - [文档索引](docs/README.md) —— 公开文档入口。
+- [项目现状](docs/status.md) —— 当前能用到什么程度、验证到哪一步、已知限制（当前版本：**v0.0.7**）。
 - [贡献指南](CONTRIBUTING.md) —— 工具链、工程质量门槛、代码规范、PR 清单
   （译版见 `CONTRIBUTING.zh-CN.md` / `CONTRIBUTING.ja.md` / `CONTRIBUTING.es.md` / `CONTRIBUTING.de.md`）。
 - [桌面端与分发路线图](docs/plans/roadmap-desktop-and-packaging.md) —— 面向桌面客户端、签名安装包、公证与自动更新管道的分阶段规划。

@@ -38,8 +38,19 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-08-31
+
+Das Usability-Release: Die Capability-Karte — die Datei, die dem Scheduler sagt, was dieser Knoten kann — lässt sich nun von jeder Oberfläche (CLI, REPL, TUI und Webkonsole) bearbeiten, ohne den Daemon neu zu starten; ein zweites Gerät hinzuzufügen ist jetzt ein Produktfluss statt eines Konfigurationsdatei-Rätsels; und jedes Aufgabenergebnis erhält eine menschenlesbare Zusammenfassung, sodass der Nutzer sieht, was passiert ist, statt einer Wand aus rohem stdout.
+
 ### Hinzugefügt
 
+- **Strukturierte Kartenbearbeitung überall** — `panda card native add|remove`, `panda card agent add|remove|set`, `panda card manual add|remove` (strukturierte Unterkommandos, nicht nur der Editor); dieselben Operationen über `/card` im REPL und TUI; sowie ein vollständiger Karten-Editor in der Webkonsole (`/api/card` plus agent/native/manual-Endpunkte). Alle Schreibpfade laufen durch dieselbe Validator + `.bak` + atomare Schreib-Pipeline, sodass eine fehlerhafte Bearbeitung die Karte nicht beschädigen kann (1b8e2b7).
+- **Geräte-Pairing** — `panda pair` erzeugt ein gemeinsames Secret, gibt die Beitrittsanleitung für das neue Gerät aus und schreibt beide Konfigurationen; `panda nodes add <addr>` fügt einen Peer hinzu und wählt ihn live ohne Neustart an; der „Gerät einladen“-CTA der Webkonsole verbindet nun mit dem echten Pairing-Fluss der Knotenseite (763bff6, 5748cec).
+- **Hot-Reload der Karte** — das Bearbeiten der Karte (von jeder Oberfläche) löst `ReloadCard` aus: Der Scheduler liest neu ein, registriert Fähigkeiten erneut und sendet einen Heartbeat mit der neuen Karte an alle verbundenen Peers, sodass sich Änderungen ohne Daemon-Neustart verbreiten (3d6feeb).
+- **Bubble-Tea-TUI** — `panda` öffnet nun ein Bubble-Tea-Frontend mit funktionierendem Tier-2-Genehmigungspfad (Inline-Genehmigungskarte, `y` zum Genehmigen, `n` zum Zurückstellen für `/approve`); das klassische REPL bleibt über `PANDA_CLASSIC_REPL=1` verfügbar (06cca6a).
+- **LLM-Aufgaben-Zusammenfassung** — nach jeder Inline-Aufgabe (Erfolg oder Fehlschlag) ruft die Engine das Einstiegsmodell auf, um eine menschenlesbare Zusammenfassung des Geschehenen zu erzeugen; die Zusammenfassung wird im REPL, TUI und der Webkonsole vor der rohen Ausgabe angezeigt, sodass der Nutzer „was getan wurde + wichtige Ausgabe“ (Erfolg) oder „warum es fehlschlug + was als Nächstes zu tun ist“ (Fehlschlag) sieht statt rohem stdout/stderr. Ein Modellfehler degradiert anmutig — die Zusammenfassung wird übersprungen und die rohe Ausgabe gezeigt (dieses Release).
+- **Web: Gedanken-Streaming und Aufgabenfortschritt** — die Überlegungen des Modells werden als einklappbarer Gedankenblock in den Chat gestreamt (03a4301); Aufgabennachrichten zeigen Fortschritt und Ergebnis statt nur der Nutzlast (4ba931f).
+- **Remote-Tier-2-Fortsetzung** — wenn eine Tier-2-Aufgabe nach der Delegation an einen Remote-Knoten genehmigt wird, findet der Wiederholungslauf auf dem Executor statt (wo die Arbeit hingehört), nicht auf der Maschine des Genehmigers (3d6feeb).
 - **Recover-Wache für dauerhafte Goroutinen** — das neue `internal/guard` umhüllt langlebige Goroutinen: Ein Panic wird mit vollständigem Stack protokolliert und löst ein kontrolliertes Herunterfahren aus, statt einen halbtoten Prozess weiterlaufen zu lassen; ein Panic in der Leseschleife einer einzelnen Busverbindung schließt nur diese Verbindung.
 - **Geordnetes Herunterfahren unter Windows** — die Konsolenereignisse CTRL_CLOSE/LOGOFF/SHUTDOWN lösen nun denselben geordneten Shutdown-Pfad aus wie SIGTERM unter Unix (`SetConsoleCtrlHandler`, kurzes Aufräumfenster).
 - **Farben in der Windows-Konsole** — die TUI-Palette aktiviert Farben auf einer Windows-Konsolen-TTY, wenn TERM nicht gesetzt ist; `dumb` und `NO_COLOR` haben weiter Vorrang.
@@ -47,6 +58,13 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Behoben
 
+- **P0-Sicherheitsbefunde geschlossen** — plan_id/stage_id-Pfad-Traversal (beliebiges Verzeichnislesen und -abfluss über `../../../../` in Stage-Arbeitsverzeichnissen) wird nun durch ID-Validierung + Wurzel-Präfix-Assertion blockiert; die Ergebniszustellung nach Peer-Verbindungsabbruch wird in einer Outbox persistiert und beim Wiederverbinden erneut zugestellt (Review P0-2); die TUI-Unterbrechungs-/Beendigungssemantik wurde korrigiert, sodass Ctrl+C tatsächlich beendet (763bff6, 5129461).
+- **P1-Sicherheitsverschärfung** — die Standard-Höradresse wurde von `0.0.0.0:7836` auf `127.0.0.1:7836` geändert (der Daemon bindet standardmäßig nicht mehr alle Schnittstellen); `context_fetch` verlangt nun, dass der Peer in der Delegationskette der Aufgabe ist; Unerreichbarkeit des Supervisors parkt die Aufgabe zur Prüfung, statt ein ungeprüftes Ergebnis still zu akzeptieren (763bff6).
+- **Einstiegsmodell: keine verdoppelten Nutzerzüge mehr** — strenge Anbieter (Anthropic-kompatibel) gaben 400 zurück, wenn die Sitzungswiederholung einen Nutzerzug verdoppelte oder hängen ließ; der Normalisierungsschritt führt nun aufeinanderfolgende Nur-Text-Züge derselben Rolle zusammen (8174e78).
+- **Orchestrierungszeitnahme und Web-Nachrichten-Rennbedingung** — die Richterlaufzeit wird nicht mehr der ausführenden Stage zugerechnet (ein eigener `judge_start`-Trace-Marker); die Aufsichtsschleife tracet die Ausführung vor dem Rundenergebnis, sodass weiter→weiter-Pfade die Wiederholung nicht verbergen; der optimistische Web-Zugzustand ist in `chatstate.ts` ausgelagert, und bei Fehlern wird die optimistische Blase entfernt, sodass die Antwort des Assistenten nicht mehr in einer Nutzernachricht landet (97d5c62).
+- **Abbruch-Rennbedingung mit Executor-Akzeptanz** — ein Abbruch, der während des Akzeptanzfensters des Executors ankam, wurde verworfen; der Abbruch wird nun eingereiht und nach Abschluss der Akzeptanz angewendet (a19b33b).
+- **Windows-Gate und deterministischer Mutual-Dial-Handschlag** — das plattformübergreifende CI-Gate besteht nun unter Windows; der Tie-Break des gegenseitigen Anwählens ist unabhängig von der Ankunftsfolge deterministisch (526c731).
+- **CI: parallele Gate-Jobs** — der Gate-Workflow führt nun build/vet/test/typecheck als parallele Jobs aus, begrenzt den Race-Detektor auf die Pakete, die ihn brauchen, und gatet den Typecheck der Webkonsole (3f302f1).
 - **Wechselseitiger Ausschluss bei Migrationen** — Schema-Migrationen laufen unter `BEGIN IMMEDIATE` und prüfen `user_version` innerhalb der Transaktion erneut, sodass zwei Prozesse, die dieselbe Datenbank öffnen, jede Version genau einmal anwenden; eine Binärdatei, die älter als das Datenbankschema ist, schlägt jetzt ausdrücklich fehl, statt still fortzufahren.
 - **Web: ein einziger Ereignisbus** — die Konsole hält nun eine einzelne referenzgezählte SSE-Verbindung, authentifiziert per `Authorization`-Header (kein Token in der URL), mit exponentieller Backoff-Wiederverbindung, und verteilt change- und trace-Ereignisse an alle Abonnenten.
 - **Web: Rennbedingung im Sitzungsstrom** — Streaming-Schreibvorgänge greifen nur, solange die Sitzung aktiv ist; ein Sitzungswechsel mitten im Strom mischt keine Bubbles mehr zwischen Threads, und veraltete Transkript-Ladungen werden beim Wechsel abgebrochen.
@@ -57,7 +75,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Verbessert
 
-- **Plattformgerechtes Systemkonfigurationsverzeichnis** — das System-Fallback-Konfigationsverzeichnis bleibt unter Unix `/etc/openpanda` und ist unter Windows `%ProgramData%\OpenPanda`.
+- **Standard-Höradresse** — der Daemon bindet nun standardmäßig `127.0.0.1:7836` statt `0.0.0.0:7836`. Bestehende Deployments, die sich auf den alten Standard verließen, müssen `network.listen_addr` ausdrücklich in `config.yaml` setzen oder `OPENPANDA_LISTEN_ADDR` verwenden.
+- **Plattformgerechtes Systemkonfigurationsverzeichnis** — das System-Fallback-Konfigurationsverzeichnis bleibt unter Unix `/etc/openpanda` und ist unter Windows `%ProgramData%\OpenPanda`.
 - **Ein einziger Store-Initialisierungspfad** — Daemon und Web-Panel öffnen den Store über dieselbe Funktion (`cmd/panda/store.go`); das Panel übersieht das Artefakt-Pool-Verzeichnis nicht mehr.
 - **Web-Panel: Ereignis-Scans entkoppeln sich von der Verbindungszahl** — Task-/Node-/Reminder-Fingerabdrücke werden für ein Poll-Intervall zwischengespeichert, sodass die Scan-Last auch bei wachsenden Abonnenten nahezu konstant bleibt.
 
