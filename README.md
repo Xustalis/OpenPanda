@@ -18,7 +18,7 @@
 
 ## Table of contents
 
-- [What is OpenPanda?](#what-is-panda)
+- [What is OpenPanda?](#what-is-openpanda)
 - [Key features](#key-features)
 - [Architecture](#architecture)
 - [Installing](#installing)
@@ -73,8 +73,9 @@ WebSocket links you control.
   (CPU class, shell, agent adapters) via a capability card; the network routes
   each task to the node that can actually do it. Built for laptops, SBCs,
   desktops, and every platform tier in between.
-- **Unified entry model** — one prompt in, three intents out: `answer`
-  (pure LLM reply), `tool_call` (your tools), `task` (delegated to a node).
+- **Unified entry model** — one prompt in, four intents out: `answer`
+  (pure LLM reply), `tool_call` (your tools), `task` (delegated to a node),
+  and `plan` (a multi-stage pipeline across machines).
   Automatic intent classification with graceful fallback.
 - **Three-tier capability execution** — `native` (direct shell execution),
   `agent` (adapter-backed agent, e.g. Claude Code via an Anthropic-compatible
@@ -102,7 +103,16 @@ WebSocket links you control.
   the node is idle.
 - **Voice entry** — optional sidecar pipeline (wake word → STT → LLM → TTS),
   hardware-gated and ready for embedded microphones.
-- **Interactive REPL + embedded web console** — `panda repl` is the operator's
+- **Capability card editing everywhere** — the card that tells the scheduler
+  what this node can do is editable from the CLI, REPL/TUI, and the web
+  console, hot-reloaded into the running daemon, and broadcast to peers —
+  no restart. `panda pair` + `panda nodes add` make adding a second device a
+  guided flow instead of a config-file puzzle.
+- **LLM task summary** — after every task, the entry model writes a short
+  human-readable report of what happened (or why it failed), shown before the
+  raw output in the TUI, REPL, and web console.
+- **Interactive TUI + embedded web console** — bare `panda` drops into a
+  Bubble Tea TUI with inline approval; `panda repl` is the classic operator's
   seat: bare input goes to the ask engine, slash commands drive the panel
   surfaces (`/tasks`, `/approve`, `/projects`, `/nodes`, `/lang` …), and `/web`
   boots the embedded console in one click. The console's task queue is a
@@ -182,7 +192,7 @@ archive, verifies its SHA-256, unpacks the binary plus its agent adapters
 Override the defaults with flags:
 
 ```bash
-sh scripts/install.sh --version 0.0.6           # pin a version (default: latest)
+sh scripts/install.sh --version 0.0.7           # pin a version (default: latest)
 sh scripts/install.sh --prefix /opt/openpanda   # custom install directory
 sh scripts/install.sh --yes                     # also register auto-start, no prompt
 sh scripts/install.sh --no-service              # skip auto-start entirely
@@ -443,6 +453,8 @@ Config load order: `--config` flag > environment > default `/etc/openpanda/confi
 Full documentation lives in the [`docs/`](docs/) directory:
 
 - [Documentation index](docs/README.md) — entry point for the public docs.
+- [Project status](docs/status.md) — what works today, what is verified,
+  and the known limits (current version: **v0.0.7**).
 - [Contributing guide](CONTRIBUTING.md) — toolchain, engineering gates,
   code conventions, and the PR checklist (translations available in
   `CONTRIBUTING.zh-CN.md` / `CONTRIBUTING.ja.md` / `CONTRIBUTING.es.md` /

@@ -38,30 +38,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-### Added
-
-- **Recover guard for resident goroutines** — new `internal/guard` wraps long-running goroutines: a panic is logged with its full stack and triggers a controlled shutdown instead of leaving a half-dead process running; a panic in a per-connection bus read loop closes only that connection.
-- **Graceful shutdown on Windows** — CTRL_CLOSE/LOGOFF/SHUTDOWN console events now trigger the same orderly shutdown path as SIGTERM on unix (`SetConsoleCtrlHandler`, short cleanup window).
-- **Windows console colors** — the TUI palette enables colors on a Windows console TTY when TERM is unset; `dumb` and `NO_COLOR` still take precedence.
-- **`make build-darwin-amd64`** — Intel Mac build target alongside the other per-platform targets.
-
-### Fixed
-
-- **Migration mutual exclusion** — schema migrations run under `BEGIN IMMEDIATE` and re-check `user_version` inside the transaction, so two processes opening the same database apply each version exactly once; a binary older than the database schema now fails loudly instead of silently continuing.
-- **Web: one event bus** — the console now holds a single ref-counted SSE connection authenticated with an `Authorization` header (no token in the URL), reconnects with exponential backoff, and fans change and trace events out to every subscriber.
-- **Web: session stream race** — streaming writes now apply only while the session is active; switching sessions mid-stream no longer mixes bubbles across threads, and stale transcript loads are aborted on switch.
-- **Web: robustness and accessibility** — a top-level error boundary with retry; focus trapping in the command palette and confirm dialogs; keyboard-operable kanban cards (Enter/Space with visible focus); system polling pauses while the tab is hidden and skips polls still in flight; stable list keys.
-- **`panda skill --help` / `panda reminder --help`** — print their usage and exit 0 instead of treating `--help` as an unknown verb.
-- **CI: gate and installer legs repaired** — all four failing gate legs and the installer pipeline repaired (7c418b0).
-- **CLI: folded thought blocks no longer advertise a key that cannot unfold them** (e772598).
-
-### Changed
-
-- **Platform-aware system config directory** — the system fallback config directory is still `/etc/openpanda` on unix and `%ProgramData%\OpenPanda` on Windows.
-- **One store-initialization path** — the daemon and the web panel open the store through the same function (`cmd/panda/store.go`); the panel no longer misses the artifact-pool directory.
-- **Web panel: event scans decouple from connection count** — task/node/reminder fingerprints are cached for one poll interval, so scan load stays roughly constant as subscribers grow.
-
-## [0.0.7] - 2026-08-30
+## [0.0.7] - 2026-08-31
 
 The usability release: the capability card — the file that tells the scheduler what this node can do — is now editable from every surface (CLI, REPL, TUI, and the web console) without restarting the daemon; adding a second device is a product flow instead of a config-file puzzle; and every task outcome now gets a human-readable summary so the user sees what happened instead of a wall of raw stdout.
 
@@ -74,6 +51,10 @@ The usability release: the capability card — the file that tells the scheduler
 - **LLM task summary** — after every inline task (success or failure), the engine calls the entry model to produce a human-readable summary of what happened; the summary is rendered in the REPL, TUI, and web console before the raw output, so the user sees "what was done + key output" (success) or "why it failed + what to do next" (failure) instead of raw stdout/stderr. A model failure degrades gracefully — the summary is skipped and raw output is shown (this release).
 - **Web: thought streaming and task progress** — the model's reasoning is streamed into the chat as a collapsible thought block (03a4301); task messages show progress and result instead of just the payload (4ba931f).
 - **Remote tier-2 resume** — when a tier-2 task is approved after being delegated to a remote node, the re-run happens on the executor (where the work belongs), not on the approver's machine (3d6feeb).
+- **Recover guard for resident goroutines** — new `internal/guard` wraps long-running goroutines: a panic is logged with its full stack and triggers a controlled shutdown instead of leaving a half-dead process running; a panic in a per-connection bus read loop closes only that connection.
+- **Graceful shutdown on Windows** — CTRL_CLOSE/LOGOFF/SHUTDOWN console events now trigger the same orderly shutdown path as SIGTERM on unix (`SetConsoleCtrlHandler`, short cleanup window).
+- **Windows console colors** — the TUI palette enables colors on a Windows console TTY when TERM is unset; `dumb` and `NO_COLOR` still take precedence.
+- **`make build-darwin-amd64`** — Intel Mac build target alongside the other per-platform targets.
 
 ### Fixed
 
@@ -84,10 +65,20 @@ The usability release: the capability card — the file that tells the scheduler
 - **Cancel race with executor accept** — a cancel that arrived during the executor's accept window was dropped; the cancel is now queued and applied once the accept completes (a19b33b).
 - **Windows gate and mutual-dial handshake deterministic** — the cross-platform CI gate now passes on Windows; the mutual-dial tie-break is deterministic regardless of arrival order (526c731).
 - **CI: parallel gate jobs** — the gate workflow now runs build/vet/test/typecheck as parallel jobs, scoping the race detector to the packages that need it, and gating the web console typecheck (3f302f1).
+- **Migration mutual exclusion** — schema migrations run under `BEGIN IMMEDIATE` and re-check `user_version` inside the transaction, so two processes opening the same database apply each version exactly once; a binary older than the database schema now fails loudly instead of silently continuing.
+- **Web: one event bus** — the console now holds a single ref-counted SSE connection authenticated with an `Authorization` header (no token in the URL), reconnects with exponential backoff, and fans change and trace events out to every subscriber.
+- **Web: session stream race** — streaming writes now apply only while the session is active; switching sessions mid-stream no longer mixes bubbles across threads, and stale transcript loads are aborted on switch.
+- **Web: robustness and accessibility** — a top-level error boundary with retry; focus trapping in the command palette and confirm dialogs; keyboard-operable kanban cards (Enter/Space with visible focus); system polling pauses while the tab is hidden and skips polls still in flight; stable list keys.
+- **`panda skill --help` / `panda reminder --help`** — print their usage and exit 0 instead of treating `--help` as an unknown verb.
+- **CI: gate and installer legs repaired** — all four failing gate legs and the installer pipeline repaired (7c418b0).
+- **CLI: folded thought blocks no longer advertise a key that cannot unfold them** (e772598).
 
 ### Changed
 
 - **Default listen address** — the daemon now binds `127.0.0.1:7836` by default instead of `0.0.0.0:7836`. Existing deployments that relied on the old default must set `network.listen_addr` explicitly in `config.yaml` or via `OPENPANDA_LISTEN_ADDR`.
+- **Platform-aware system config directory** — the system fallback config directory is still `/etc/openpanda` on unix and `%ProgramData%\OpenPanda` on Windows.
+- **One store-initialization path** — the daemon and the web panel open the store through the same function (`cmd/panda/store.go`); the panel no longer misses the artifact-pool directory.
+- **Web panel: event scans decouple from connection count** — task/node/reminder fingerprints are cached for one poll interval, so scan load stays roughly constant as subscribers grow.
 
 ## [0.0.6] - 2026-08-27
 
