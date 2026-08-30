@@ -55,6 +55,7 @@ Das Usability-Release: Die Capability-Karte — die Datei, die dem Scheduler sag
 - **Geordnetes Herunterfahren unter Windows** — die Konsolenereignisse CTRL_CLOSE/LOGOFF/SHUTDOWN lösen nun denselben geordneten Shutdown-Pfad aus wie SIGTERM unter Unix (`SetConsoleCtrlHandler`, kurzes Aufräumfenster).
 - **Farben in der Windows-Konsole** — die TUI-Palette aktiviert Farben auf einer Windows-Konsolen-TTY, wenn TERM nicht gesetzt ist; `dumb` und `NO_COLOR` haben weiter Vorrang.
 - **`make build-darwin-amd64`** — Intel-Mac-Buildziel neben den anderen plattformspezifischen Zielen.
+- **Agent-Fähigkeitsfläche und Task-weises Tool-Policy** — die Agent-Registry deklariert nun die nativen Fähigkeiten jeder CLI (Skills, MCP, Subagenten) statt Hardcoding pro Adapter; das Einstiegsmodell kann ein Task-weises Tool-Policy (`minimal` / `extended`) anfordern, das das globale Routing-Policy überschreibt, sodass eine hochkomplexe Aufgabe die volle Fähigkeitsfläche des Agents nur für diese Aufgabe freischalten kann. Claude-Code-Subagenten-Erzeugungen (das Task-Tool) erscheinen als typisierte `subagent`-Fortschrittsereignisse und landen ungedrosselt in der Task-Zeitleiste (dieses Release).
 
 ### Behoben
 

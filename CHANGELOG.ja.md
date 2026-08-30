@@ -55,6 +55,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **Windows でのグレースフルシャットダウン** — CTRL_CLOSE/LOGOFF/SHUTDOWN コンソールイベントが、unix の SIGTERM と同じ秩序あるシャットダウン経路を発動する（`SetConsoleCtrlHandler`、短いクリーンアップウィンドウ）。
 - **Windows コンソールの色** — TERM 未設定（Windows コンソール）の場合、TUI パレットは TTY 出力で色を有効にする；`dumb` と `NO_COLOR` は引き続き優先。
 - **`make build-darwin-amd64`** — Intel Mac 用ビルドターゲットを他のプラットフォーム別ターゲットに追加。
+- **エージェント能力面とタスク単位ツールポリシー** — エージェントレジストリが各 CLI のネイティブ能力（skills、MCP、サブエージェント）を宣言し、アダプタごとのハードコードを廃止；エントリモデルはタスク単位のツールポリシー（`minimal` / `extended`）を要求してグローバルルーティングポリシーを上書きでき、高複雑度タスクはそのタスクだけエージェントの全能力面を解放できる。Claude Code のサブエージェント起動（Task ツール）は型付き `subagent` 進捗イベントとして現れ、スロットリングなしでタスクタイムラインに入る（本リリース）。
 
 ### 修正
 

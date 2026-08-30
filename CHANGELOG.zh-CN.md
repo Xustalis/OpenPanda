@@ -55,6 +55,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **Windows 优雅关停** — CTRL_CLOSE/LOGOFF/SHUTDOWN 控制台事件现在触发与 unix SIGTERM 相同的有序关停路径（`SetConsoleCtrlHandler`，短清理窗口）。
 - **Windows 控制台颜色** — TERM 未设置时（Windows 控制台），TUI 调色板在 TTY 输出上启用颜色；`dumb` 与 `NO_COLOR` 仍优先。
 - **`make build-darwin-amd64`** — Intel Mac 构建目标，与其他按平台划分的目标并列。
+- **Agent 能力面与每任务工具策略** — Agent 注册表现在声明每个 CLI 的原生能力（skills、MCP、子代理），不再逐适配器硬编码；入口模型可为单个任务请求工具策略（`minimal` / `extended`）覆盖全局路由策略，高复杂度任务可以只为该任务解锁 Agent 的完整能力面。Claude Code 的子代理派生（Task 工具）以类型化 `subagent` 进度事件呈现，不限流地进入任务时间线（本版本）。
 
 ### 问题修复
 

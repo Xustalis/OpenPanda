@@ -55,6 +55,7 @@ La versión de usabilidad: la tarjeta de capacidades —el archivo que dice al p
 - **Apagado elegante en Windows** — los eventos de consola CTRL_CLOSE/LOGOFF/SHUTDOWN ahora activan la misma ruta de apagado ordenado que SIGTERM en unix (`SetConsoleCtrlHandler`, ventana de limpieza breve).
 - **Colores en la consola de Windows** — la paleta del TUI habilita colores en la TTY de la consola de Windows cuando TERM no está definido; `dumb` y `NO_COLOR` siguen teniendo prioridad.
 - **`make build-darwin-amd64`** — objetivo de compilación para Mac Intel, junto a los demás objetivos por plataforma.
+- **Superficie de capacidades de agentes y política de herramientas por tarea** — el registro de agentes ahora declara las capacidades nativas de cada CLI (skills, MCP, subagentes) en lugar de codificarlo por adaptador; el modelo de entrada puede solicitar una política de herramientas por tarea (`minimal` / `extended`) que anula la política global de enrutamiento, de modo que una tarea de alta complejidad puede desbloquear la superficie completa del agente solo para esa tarea. Las creaciones de subagentes de Claude Code (la herramienta Task) aparecen como eventos de progreso tipados `subagent` y entran en la línea de tiempo de la tarea sin limitación de ritmo (esta versión).
 
 ### Corregido
 
