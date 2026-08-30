@@ -66,7 +66,7 @@ func resultToJSON(out *askengine.Result) askJSON {
 func runAsk(args []string) {
 	fs := flag.NewFlagSet("ask", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered ./capabilities.yaml or /etc/openpanda/capabilities.yaml)")
+	cardPath := fs.String("card", defaultCardPath(), fmt.Sprintf("path to capabilities.yaml (default: discovered ./capabilities.yaml or %s)", systemCardPath()))
 	authorize := fs.Bool("authorize", false, "authorize tier-2 (irreversible) commands")
 	continueConvo := fs.Bool("continue", false, "continue the persisted conversation (the REPL's thread)")
 	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated), e.g. \"npx -y @modelcontextprotocol/server-filesystem /tmp\"")

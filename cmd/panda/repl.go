@@ -161,7 +161,7 @@ func init() {
 func runRepl(args []string) {
 	fs := flag.NewFlagSet("repl", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered ./capabilities.yaml or /etc/openpanda/capabilities.yaml)")
+	cardPath := fs.String("card", defaultCardPath(), fmt.Sprintf("path to capabilities.yaml (default: discovered ./capabilities.yaml or %s)", systemCardPath()))
 	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated)")
 	fs.Parse(args)
 
@@ -692,6 +692,14 @@ func (r *repl) ask(text string) {
 			}
 			fmt.Println(pal().Muted(i18n.Tf(r.loc, "repl.ask.taskReport",
 				"id", out.TaskID, "state", out.TaskState)))
+			break
+		}
+		// LLM-generated summary: the dedicated "report after execution" call
+		// fills Report so the user sees a human-readable summary instead of
+		// raw stdout/stderr. Render it before the raw output.
+		if strings.TrimSpace(out.Report) != "" {
+			fmt.Println(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
+			fmt.Println(r.renderMd(out.Report))
 			break
 		}
 		fmt.Println(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))

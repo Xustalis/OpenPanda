@@ -174,6 +174,13 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 			body += "\n" + i18n.Tf(loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
 			return block{kind: blockTask, ok: out.OK, body: body}
 		}
+		// LLM-generated summary: the dedicated "report after execution" call
+		// fills Report so the user sees a human-readable summary instead of
+		// raw stdout/stderr.
+		if summary := strings.TrimSpace(out.Report); summary != "" {
+			body := i18n.Tf(loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState) + "\n" + summary
+			return block{kind: blockTask, ok: out.OK, body: body}
+		}
 		if out.OK {
 			return block{kind: blockTask, ok: true, body: strings.TrimRight(out.Stdout, "\n")}
 		}

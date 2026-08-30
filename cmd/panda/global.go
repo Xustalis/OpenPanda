@@ -34,13 +34,21 @@ func defaultCardPath() string {
 	if cfgPath := config.ResolvePath(""); cfgPath != "" {
 		candidates = append(candidates, filepath.Join(filepath.Dir(cfgPath), "capabilities.yaml"))
 	}
-	candidates = append(candidates, "capabilities.yaml", "/etc/openpanda/capabilities.yaml")
+	candidates = append(candidates, "capabilities.yaml", filepath.Join(config.SystemConfigDir(), "capabilities.yaml"))
 	for _, p := range candidates {
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
 	return ""
+}
+
+// systemCardPath is the machine-wide capability card location, derived from
+// the platform's system config dir (/etc/openpanda on unix,
+// %ProgramData%\OpenPanda on Windows). Used both for discovery and for the
+// --card help text, so the two can never disagree.
+func systemCardPath() string {
+	return filepath.Join(config.SystemConfigDir(), "capabilities.yaml")
 }
 
 // isLinuxConsole reports whether we are on a bare kernel VT (TERM=linux):

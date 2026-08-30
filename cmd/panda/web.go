@@ -17,15 +17,13 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
-	"os/signal"
 	"path/filepath"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/log"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -51,6 +49,13 @@ func runWeb(args []string) {
 		fatal("load config", err)
 	}
 	loc := i18n.Detect()
+
+	// The shutdown context is created up front (not at the end of the
+	// function) so the background reminder scanner and the updater's
+	// auto-check are wired to the same ctx that ends the process — they
+	// stop with the server instead of holding background.Context.
+	ctx, cancel := shutdownContext()
+	defer cancel()
 
 	// Zero-config on loopback, fail closed elsewhere (same policy as the
 	// sidecar and /web).
@@ -121,7 +126,7 @@ func runWeb(args []string) {
 			}
 		}
 	}, logger)
-	go reminderScan.Run(context.Background())
+	guard.Go(logger, "web: reminder scanner", cancel, func() { reminderScan.Run(ctx) })
 
 	// Self-update: check the release channel in the background while the panel
 	// runs, so a newer CLI is discovered during normal use rather than only on
@@ -131,7 +136,10 @@ func runWeb(args []string) {
 		Logger:  logger,
 		Idle:    store.Idle,
 	})
-	updateMgr.StartAutoCheck(context.Background(), 0)
+	// StartAutoCheck spawns its loop internally; it is wired to ctx here so it
+	// stops with the process, but a panic inside it is not guard-wrapped
+	// (internal/updater is outside the cmd/panda wiring scope).
+	updateMgr.StartAutoCheck(ctx, 0)
 
 	srv := &http.Server{
 		Addr: addr,
@@ -178,8 +186,6 @@ func runWeb(args []string) {
 		openBrowser(panel.AppendToken(url, token))
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	<-ctx.Done()
 	fmt.Println(i18n.T(loc, "web.stopped"))
 	_ = srv.Shutdown(context.Background())

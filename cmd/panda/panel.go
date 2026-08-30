@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,7 +20,6 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 	"github.com/Xustalis/OpenPanda/internal/security"
-	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 // The panel subcommands (status/queue/task/cancel/logs) are read-mostly views
@@ -29,32 +27,14 @@ import (
 // a one-shot DB handle; none of them starts the daemon loop.
 
 // panelStore opens the DB, applies migrations, and returns a ready store.
-// It also ensures the storage directories (context/memory/projects/skills/
-// work) exist, matching runDaemon — the REPL, web server, and panel commands
-// all go through here, so nothing fails because a user data directory was
-// missing on first launch from an arbitrary cwd.
+// Storage startup is shared with runDaemon via openStore (see store.go), so
+// the REPL, web server, and panel commands all see the same directory list —
+// nothing fails because a user data directory was missing on first launch
+// from an arbitrary cwd.
 func panelStore(cfg *config.Config) (*sql.DB, *core.TaskStore, error) {
-	if err := os.MkdirAll(filepath.Dir(cfg.Storage.DBPath), 0o755); err != nil {
-		return nil, nil, fmt.Errorf("create data dir: %w", err)
-	}
-	for _, dir := range []string{
-		cfg.Storage.ContextPath,
-		cfg.Storage.MemoryPath,
-		cfg.Storage.ProjectsPath,
-		cfg.Storage.SkillsPath,
-		cfg.Storage.WorkPath,
-	} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, nil, fmt.Errorf("create storage dir %s: %w", dir, err)
-		}
-	}
-	db, err := storage.Open(cfg.Storage.DBPath)
+	db, err := openStore(cfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open database: %w", err)
-	}
-	if err := storage.Migrate(db); err != nil {
-		db.Close()
-		return nil, nil, fmt.Errorf("migrate database: %w", err)
+		return nil, nil, err
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	return db, core.NewTaskStore(db, logger), nil
