@@ -39,8 +39,23 @@ func (c *Core) SetTimeouts(t config.TimeoutsConfig) {
 	}
 	c.mu.Lock()
 	c.leaseTimeout = lease
+	c.agentByKind = t.AgentByKind
 	c.mu.Unlock()
 	c.SetSuperviseRounds(t.Rounds())
+}
+
+// agentTimeoutForKind returns the per-kind agent timeout when configured,
+// falling back to the global agent timeout. executeTaskRound calls this to
+// give training stages a larger budget without inflating the default.
+func (c *Core) agentTimeoutForKind(kind string) time.Duration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.agentByKind != nil {
+		if s, ok := c.agentByKind[kind]; ok && s > 0 {
+			return time.Duration(s) * time.Second
+		}
+	}
+	return 0 // 0 means "use the global default"
 }
 
 // lease returns this node's task lease duration.
