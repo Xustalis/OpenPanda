@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import {
-  currentToken,
-  subscribeEvents,
-  TraceEvent,
-  Task,
-} from './api/client'
-import { onLocaleChange } from './i18n'
+import { subscribeEvents } from './api/client.ts'
+import type { ChangeEvent, Task, TraceEvent } from './api/client.ts'
+import { onLocaleChange } from './i18n/index.ts'
 
 /** Re-render on locale change. */
 export function useLocaleRerender(): void {
@@ -36,46 +32,125 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[], reloadKey = 0
   return { data, error }
 }
 
-/** Subscribe to the panel's SSE change feed. Returns the latest change
- *  counter — bump it into useAsync's reloadKey to re-fetch on change.
- *  EventSource cannot send an Authorization header, so the token rides
- *  along as ?token= (the panel accepts either). */
+// — Unified event bus. ONE fetch-SSE connection to /api/events?trace=1 is
+//   shared by the entire app (the server pushes both change and trace frames
+//   on a ?trace=1 stream), fanned out to two listener sets. The old design
+//   gave every useChangeSignal() its own EventSource — N views meant N+1
+//   connections and N tokens in URLs. Reference-counted with a grace period:
+//   hooks mount/unmount on every view switch, and tearing down a long-lived
+//   stream only to re-dial it a tick later reads as churn on the wire, so
+//   the connection is only closed once the bus stays empty for BUS_GRACE_MS.
+//   Authentication is header-based (openSSE), so no token ever enters a URL.
+type ChangeListener = (ev: ChangeEvent) => void
+type TraceListener = (ev: TraceEvent) => void
+
+const changeListeners = new Set<ChangeListener>()
+const traceListeners = new Set<TraceListener>()
+
+/** How long an idle bus waits for a new subscriber before really closing. */
+export const BUS_GRACE_MS = 30_000
+
+let busStop: AbortController | null = null
+let busGraceTimer: ReturnType<typeof setTimeout> | null = null
+
+function startBusIfNeeded(): void {
+  if (busGraceTimer !== null) {
+    clearTimeout(busGraceTimer)
+    busGraceTimer = null
+  }
+  if (busStop) return
+  const ctrl = new AbortController()
+  busStop = ctrl
+  // subscribeEvents reconnects internally (exponential backoff); its promise
+  // only settles when we abort it or the token is revoked. Either way the bus
+  // slot frees itself, and the next subscriber re-dials.
+  subscribeEvents({
+    trace: true,
+    signal: ctrl.signal,
+    onChange: (ev) => {
+      // Copy-on-iterate: a listener unsubscribing mid-fan-out must not skip
+      // or double-visit its neighbors.
+      for (const l of [...changeListeners]) l(ev)
+    },
+    onTrace: (ev) => {
+      for (const l of [...traceListeners]) l(ev)
+    },
+  }).finally(() => {
+    if (busStop === ctrl) busStop = null
+  })
+}
+
+function maybeReleaseBus(): void {
+  if (changeListeners.size + traceListeners.size > 0) return
+  if (busGraceTimer !== null || !busStop) return
+  busGraceTimer = setTimeout(() => {
+    busGraceTimer = null
+    if (changeListeners.size + traceListeners.size === 0 && busStop) {
+      busStop.abort()
+      busStop = null
+    }
+  }, BUS_GRACE_MS)
+}
+
+/** Subscribe to the shared change feed. Returns an unsubscribe function.
+ *  Re-subscribing during the grace period reuses the live connection. */
+export function busSubscribeChange(fn: ChangeListener): () => void {
+  changeListeners.add(fn)
+  startBusIfNeeded()
+  return () => {
+    changeListeners.delete(fn)
+    maybeReleaseBus()
+  }
+}
+
+/** Subscribe to the shared trace feed. Returns an unsubscribe function. */
+export function busSubscribeTrace(fn: TraceListener): () => void {
+  traceListeners.add(fn)
+  startBusIfNeeded()
+  return () => {
+    traceListeners.delete(fn)
+    maybeReleaseBus()
+  }
+}
+
+/** Test seam: a snapshot of the bus internals. */
+export function __busState(): { open: boolean; change: number; trace: number } {
+  return { open: busStop !== null, change: changeListeners.size, trace: traceListeners.size }
+}
+
+/** Subscribe to the panel's change feed over the shared bus. Returns the
+ *  latest change counter — bump it into useAsync's reloadKey to re-fetch on
+ *  change. The synthetic "reconnect" event bumps it too, which is the
+ *  "refetch once after a dropped link" behavior. */
 export function useChangeSignal(): number {
   const [tick, setTick] = useState(0)
-  useEffect(() => {
-    const es = new EventSource(`/api/events?token=${encodeURIComponent(currentToken())}`)
-    es.addEventListener('change', () => setTick((v) => v + 1))
-    es.onerror = () => {
-      /* EventSource auto-reconnects; nothing to do */
-    }
-    return () => es.close()
-  }, [])
+  useEffect(() => busSubscribeChange(() => setTick((v) => v + 1)), [])
   return tick
 }
 
-// — Global trace bus. Because subscribeEvents opens one EventSource for the
-//   whole app, we fan out incoming trace frames to each per-task hook via a
-//   simple list of listeners. Shared via a module-level mutable so two hooks
-//   never open two /api/events?trace=1 streams.
-type TraceListener = (ev: TraceEvent) => void
-const traceListeners = new Set<TraceListener>()
-let traceBusStarted = false
-
-function startTraceBusIfNeeded(): void {
-  if (traceBusStarted) return
-  traceBusStarted = true
-  // Swallow the promise: the bus is infinite by design. Reconnection is
-  // handled inside subscribeEvents.
-  subscribeEvents({
-    trace: true,
-    onTrace: (ev) => {
-      for (const l of traceListeners) l(ev)
-    },
-  }).catch(() => {
-    // If the bus itself dies (tab closure / dev-mode HMR) the next hook mount
-    // will restart it with traceBusStarted reset below.
-    traceBusStarted = false
-  })
+/** setInterval that skips ticks while the tab is hidden and while the
+ *  previous tick is still in flight — for polling loops with no reason to
+ *  run when nobody is looking (the system view's update-status poll). The
+ *  callback rides a ref, so callers may pass inline closures. */
+export function useVisibleInterval(fn: () => void | Promise<unknown>, ms: number): void {
+  const fnRef = useRef(fn)
+  fnRef.current = fn
+  useEffect(() => {
+    let inflight = false
+    const tick = () => {
+      if (inflight) return
+      if (typeof document !== 'undefined' && document.hidden) return
+      inflight = true
+      Promise.resolve()
+        .then(() => fnRef.current())
+        .catch(() => {})
+        .finally(() => {
+          inflight = false
+        })
+    }
+    const id = setInterval(tick, ms)
+    return () => clearInterval(id)
+  }, [ms])
 }
 
 /**
@@ -112,15 +187,10 @@ export function useTraceForTask(
 
   useEffect(() => {
     if (!taskId) return
-    startTraceBusIfNeeded()
-    const listener: TraceListener = (ev) => {
+    return busSubscribeTrace((ev) => {
       if (ev.task_id !== taskId) return
       setTraces((cur) => mergeTraces(cur, [ev]))
-    }
-    traceListeners.add(listener)
-    return () => {
-      traceListeners.delete(listener)
-    }
+    })
   }, [taskId])
 
   return traces

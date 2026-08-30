@@ -19,6 +19,7 @@ import { confirmDialog } from '../components/confirm'
 import { buildCommands } from '../components/palette'
 import { rank } from '../components/fuzzy'
 import { patchStreaming, slashQuery } from '../components/chatstate'
+import { isLiveSession } from '../components/session-guard'
 import DecisionOrbit from '../components/orbit'
 import FleetTopologyCard from '../components/fleet'
 import { JsonInline } from '../components/json-inline'
@@ -33,9 +34,21 @@ function autoGrow(el: HTMLTextAreaElement): void {
   el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_PX)}px`
 }
 
+/** Stable keys for chat bubbles. Server turns are keyed by transcript
+ *  position (`srv-N`); locally created (optimistic / error) bubbles get a
+ *  unique id from this counter so a streaming bubble is never re-keyed
+ *  mid-flight when the list around it shifts. */
+let nextLocalMsgId = 0
+function localMsgId(): string {
+  nextLocalMsgId += 1
+  return `opt-${nextLocalMsgId}`
+}
+
 /** A chat message in the transcript: a stored turn, or the in-flight
  * assistant reply being streamed right now. */
 interface ChatMsg extends SessionTurn {
+  /** Stable render key — see `localMsgId` above. */
+  k: string
   streaming?: boolean
   status?: string
   result?: AskResult
@@ -92,6 +105,14 @@ export function SessionsView({
   const composer = useRef<HTMLTextAreaElement>(null)
   // The in-flight ask, so the stop button can abort it.
   const inflight = useRef<AbortController | null>(null)
+  // Which thread the in-flight ask belongs to. The transcript loader must not
+  // abort an ask that is painting the very thread it is about to load (the
+  // create-then-send path), and send()'s finally guard keys on it too.
+  const inflightSid = useRef<string | null>(null)
+  // Mirror of the activeId prop for send()'s async callbacks: a reply's
+  // deltas may only write to the thread that started them. Kept in sync by
+  // the effect below; send() fast-forwards it through the create flow.
+  const activeIdRef = useRef<string | null>(activeId)
   // Which row of the `/` completion menu is highlighted.
   const [completeCursor, setCompleteCursor] = useState(0)
   // The input as of the last Escape: Escape hides the menu until the text
@@ -133,11 +154,19 @@ export function SessionsView({
   // "add a second device" CTA.
   const onlineNodeCount = nodes.filter((n) => n.status === 'online').length
 
-  // Load the active thread's transcript. Never while an ask is in flight:
-  // the optimistic [user, streaming reply] pair send() just painted would be
-  // clobbered by the server's shorter view, and every subsequent delta would
-  // patch whichever message survived — writing the reply into the user's own
-  // bubble.
+  // Keep the async guard's mirror in step with the prop.
+  useEffect(() => {
+    activeIdRef.current = activeId
+  }, [activeId])
+
+  // Load the active thread's transcript. Leaving a thread mid-stream first
+  // aborts the old ask's client-side consumption — its deltas must not land
+  // in another thread's pane. The model turn itself keeps running on the
+  // server; the persisted transcript is the eventual truth, and whichever
+  // thread comes back on screen refetches it. One exception stays: an
+  // in-flight ask that belongs to the thread being opened (create-then-send)
+  // paints its own transcript and must not be clobbered by the server's
+  // shorter view.
   useEffect(() => {
     if (!activeId) {
       setSession(null)
@@ -145,17 +174,23 @@ export function SessionsView({
       setLoading(false)
       return
     }
-    if (inflight.current) return
+    if (inflight.current && inflightSid.current === activeId) return
+    inflight.current?.abort()
+    inflight.current = null
+    inflightSid.current = null
     setLoading(true)
     api
       .session(activeId)
       .then((s) => {
         setSession(s)
-        setMsgs((s.turns ?? []).map((turn) => ({ ...turn })))
+        setMsgs((s.turns ?? []).map((turn, i) => ({ ...turn, k: `srv-${i}` })))
       })
       .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
   }, [activeId])
+
+  // Unmount: nothing should keep streaming into a dead pane.
+  useEffect(() => () => inflight.current?.abort(), [])
 
   // Opening a thread always starts at its newest message.
   useEffect(() => {
@@ -297,17 +332,39 @@ export function SessionsView({
         setSession(s)
         setSessions((ls) => [s, ...ls])
         onOpenSession(s.id)
+        // The prop mirror lags this synchronous flow by one render; catch it
+        // up so the guards below recognize the freshly created thread.
+        activeIdRef.current = s.id
       }
+      // Race guard: snapshot the thread this reply belongs to. Every write
+      // below checks it — if the user switched threads mid-turn the writes
+      // are silently dropped. That is safe because the panel persists every
+      // turn: the refetch in finally (and the new thread's own loader) is
+      // the eventual truth for whichever thread ends up on screen. The
+      // stream's rendering stops; the server-side turn is not cancelled.
+      const sid = id
+      inflightSid.current = sid
+      const live = () => isLiveSession(sid, activeIdRef.current)
       setBusy(true)
-      setInput('')
-      // Sending is an explicit "show me the answer", so re-pin the view.
-      pinned.current = true
-      setMsgs((ms) => [...ms, { role: 'user', text: prompt }, { role: 'assistant', text: '', streaming: true }])
+      if (live()) {
+        setInput('')
+        // Sending is an explicit "show me the answer", so re-pin the view.
+        pinned.current = true
+        setMsgs((ms) => [
+          ...ms,
+          { role: 'user', text: prompt, k: localMsgId() },
+          { role: 'assistant', text: '', streaming: true, k: localMsgId() },
+        ])
+      }
 
       // Aim every delta at the bubble actually streaming. A refetch racing
       // the stream can leave a stale message at the tail; patching the tail
-      // blindly used to write replies into the user's own message.
-      const patch = (fn: (m: ChatMsg) => ChatMsg) => setMsgs((ms) => patchStreaming(ms, fn))
+      // blindly used to write replies into the user's own message. The
+      // session guard rides along: a backgrounded reply patches nothing.
+      const patch = (fn: (m: ChatMsg) => ChatMsg) => {
+        if (!live()) return
+        setMsgs((ms) => patchStreaming(ms, fn))
+      }
 
       await askSessionStream(
         id,
@@ -324,33 +381,44 @@ export function SessionsView({
       )
       patch((m) => ({ ...m, streaming: false, status: undefined }))
     } catch (err) {
-      if (isAbort(err)) {
-        // Stopped on purpose: mark the turn done and note why, rather than
-        // painting the user's own action as a failure. Aimed at the bubble
-        // that was streaming — same target rule as the deltas above.
-        setMsgs((ms) =>
-          patchStreaming(ms, (m) => ({
-            ...m,
-            streaming: false,
-            status: undefined,
-            text: m.text || `· ${t('sessions.stopped')}`,
-          })),
-        )
-      } else {
-        const message = err instanceof Error ? err.message : String(err)
-        setMsgs((ms) => [
-          ...ms.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
-          { role: 'assistant', kind: 'error', text: `⚠ ${message}` },
-        ])
+      if (isLiveSession(id, activeIdRef.current)) {
+        if (isAbort(err)) {
+          // Stopped on purpose: mark the turn done and note why, rather than
+          // painting the user's own action as a failure. Aimed at the bubble
+          // that was streaming — same target rule as the deltas above.
+          setMsgs((ms) =>
+            patchStreaming(ms, (m) => ({
+              ...m,
+              streaming: false,
+              status: undefined,
+              text: m.text || `· ${t('sessions.stopped')}`,
+            })),
+          )
+        } else {
+          const message = err instanceof Error ? err.message : String(err)
+          setMsgs((ms) => [
+            ...ms.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
+            { role: 'assistant', kind: 'error', text: `⚠ ${message}`, k: localMsgId() },
+          ])
+        }
       }
+      // Else the user switched threads mid-turn: the pane already belongs to
+      // the transcript loader of the new thread, so this reply's failure
+      // (or stop) has nowhere to render. The persisted transcript stands.
     } finally {
-      inflight.current = null
+      if (inflight.current === ctrl) {
+        inflight.current = null
+        inflightSid.current = null
+      }
       setBusy(false)
       // Persisted transcript is server-side truth; refresh title + turns.
       if (id) {
+        const stillActive = isLiveSession(id, activeIdRef.current)
         api.session(id).then((s) => {
-          setSession(s)
+          // The rail entry's title is worth refreshing either way; the pane
+          // belongs to whichever thread is active now.
           setSessions((ls) => ls.map((x) => (x.id === s.id ? s : x)))
+          if (stillActive) setSession(s)
         }).catch(() => {})
       }
     }
@@ -504,9 +572,9 @@ export function SessionsView({
               onAddDevice={onOpenNodes}
             />
           )}
-          {msgs.map((m, i) => (
+          {msgs.map((m) => (
             <ChatBubble
-              key={i}
+              key={m.k}
               msg={m}
               onOpenTask={onOpenTask}
               onlineNodeCount={onlineNodeCount}
@@ -792,6 +860,7 @@ function ChatBubble(props: {
                   ? t('sessions.taskCreated')
                   : msg.result?.task_state || t('sessions.taskCreated')}
               </span>
+              {msg.result?.report && <Markdown text={msg.result.report} class="task-report" />}
               {msg.result?.stdout && <pre class="task-out">{msg.result.stdout}</pre>}
               <button class="btn small chain-toggle" onClick={() => setChainOpen((v) => !v)}>
                 {chainOpen ? t('sessions.chainHide') : t('sessions.chainShow')}

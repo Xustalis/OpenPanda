@@ -236,7 +236,10 @@ function UpdateBanner() {
 /** The modifier the palette actually listens for, spelled the way the user's
  *  keyboard spells it: ⌘ on Apple hardware, Ctrl everywhere else. */
 function modKeyLabel(): string {
-  const p = navigator.platform || ''
+  // Prefer the modern UA-CH hint; `navigator.platform` is deprecated but
+  // remains the fallback on browsers without userAgentData.
+  const ua = navigator as Navigator & { userAgentData?: { platform?: string } }
+  const p = ua.userAgentData?.platform ?? navigator.platform ?? ''
   return /Mac|iPhone|iPad/.test(p) ? '⌘' : 'Ctrl '
 }
 
