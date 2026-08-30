@@ -8,12 +8,14 @@ import (
 )
 
 // Migration is a single schema change identified by a monotonic version.
-// Each migration runs inside its own transaction and, on success, advances
-// PRAGMA user_version to its Version.
+// Each migration runs inside its own BEGIN IMMEDIATE transaction (see
+// migrate.go) and, on success, advances PRAGMA user_version to its Version.
+// The Apply body receives a MigrationExec (Exec/Query/QueryRow) rather than a
+// *sql.Tx: the transaction is driven explicitly on the pooled connection.
 type Migration struct {
 	Version int
 	Name    string
-	Apply   func(*sql.Tx) error
+	Apply   func(MigrationExec) error
 }
 
 // migrations is the ordered list of schema changes from the Phase 0 baseline
@@ -34,6 +36,28 @@ var migrations = []Migration{
 	{Version: 11, Name: "add_entry_cache", Apply: migrateV11},
 	{Version: 12, Name: "add_plan_stages_and_artifacts", Apply: migrateV12},
 	{Version: 13, Name: "add_result_outbox", Apply: migrateV13},
+	{Version: 14, Name: "add_cancel_outbox", Apply: migrateV14},
+}
+
+// migrateV14 adds cancel_outbox: the delivery guarantee for task_cancel
+// messages. Like results, cancels cross the bus fire-and-forget; a cancel
+// emitted while the executor is disconnected was dropped, and the executor
+// kept burning tokens on work the delegator had given up on (its lease
+// renewal kept the task legitimately alive). Parked cancels are re-delivered
+// on the executor's next hello; the receiver is idempotent (a cancel on a
+// terminal task is a no-op), so a resend is safe.
+func migrateV14(tx MigrationExec) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS cancel_outbox (
+		peer TEXT NOT NULL,
+		task_id TEXT NOT NULL,
+		reason TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY (peer, task_id)
+	)`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_cancel_outbox_peer ON cancel_outbox(peer)`)
+	return err
 }
 
 // migrateV13 adds result_outbox: the delivery guarantee for terminal task
@@ -43,7 +67,7 @@ var migrations = []Migration{
 // are persisted here keyed by (peer, task) and re-delivered the next time the
 // peer's hello is accepted. The receiving side is idempotent (handleResult
 // ignores results for tasks it no longer owns), so a resend is safe.
-func migrateV13(tx *sql.Tx) error {
+func migrateV13(tx MigrationExec) error {
 	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS result_outbox (
 		peer TEXT NOT NULL,
 		task_id TEXT NOT NULL,
@@ -68,7 +92,7 @@ func migrateV13(tx *sql.Tx) error {
 // and has no business in SQLite). The row records size, manifest and the task
 // that produced it, so the pool can be listed and pruned without unpacking
 // every archive on disk.
-func migrateV12(tx *sql.Tx) error {
+func migrateV12(tx MigrationExec) error {
 	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS artifacts (
 		hash TEXT PRIMARY KEY,
 		size INTEGER NOT NULL,
@@ -109,7 +133,7 @@ func migrateV12(tx *sql.Tx) error {
 // the device-snapshot / result side, so a changed input naturally misses. The
 // entry package evicts rows older than its TTL; the created_at index keeps
 // that delete cheap.
-func migrateV11(tx *sql.Tx) error {
+func migrateV11(tx MigrationExec) error {
 	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS entry_cache (
 		ns TEXT NOT NULL,
 		k1 TEXT NOT NULL,
@@ -124,7 +148,7 @@ func migrateV11(tx *sql.Tx) error {
 	return err
 }
 
-func migrateV10(tx *sql.Tx) error {
+func migrateV10(tx MigrationExec) error {
 	exists, err := tableExistsTx(tx, "employee_cache")
 	if err != nil || !exists {
 		return err
@@ -135,7 +159,7 @@ func migrateV10(tx *sql.Tx) error {
 	return addColumnIfMissingTx(tx, "employee_cache", "node_identity", "TEXT")
 }
 
-func migrateV1(tx *sql.Tx) error {
+func migrateV1(tx MigrationExec) error {
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS employee_cache (
 			id TEXT PRIMARY KEY,
@@ -218,19 +242,19 @@ func migrateV1(tx *sql.Tx) error {
 	return nil
 }
 
-func migrateV2(tx *sql.Tx) error {
+func migrateV2(tx MigrationExec) error {
 	return addColumnIfMissingTx(tx, "tasks", "authorized", "INTEGER NOT NULL DEFAULT 0")
 }
 
-func migrateV3(tx *sql.Tx) error {
+func migrateV3(tx MigrationExec) error {
 	return addColumnIfMissingTx(tx, "tasks", "requires_json", "TEXT")
 }
 
-func migrateV4(tx *sql.Tx) error {
+func migrateV4(tx MigrationExec) error {
 	return addColumnIfMissingTx(tx, "employee_cache", "resource_profile_json", "TEXT")
 }
 
-func migrateV5(tx *sql.Tx) error {
+func migrateV5(tx MigrationExec) error {
 	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS delegation_metrics (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		task_id TEXT NOT NULL,
@@ -245,7 +269,7 @@ func migrateV5(tx *sql.Tx) error {
 	return err
 }
 
-func migrateV6(tx *sql.Tx) error {
+func migrateV6(tx MigrationExec) error {
 	if err := addColumnIfMissingTx(tx, "task_events", "prev_hash", "TEXT"); err != nil {
 		return err
 	}
@@ -262,7 +286,7 @@ func migrateV6(tx *sql.Tx) error {
 // session worktree, and scheduled marks tasks owned by the local queue
 // scheduler (as opposed to delegation re-routing). A store without the tasks
 // table (event/audit-only legacy DBs) skips the whole step.
-func migrateV9(tx *sql.Tx) error {
+func migrateV9(tx MigrationExec) error {
 	exists, err := tableExistsTx(tx, "tasks")
 	if err != nil {
 		return err
@@ -287,7 +311,7 @@ func migrateV9(tx *sql.Tx) error {
 }
 
 // tableExistsTx reports whether name is an existing table.
-func tableExistsTx(tx *sql.Tx, name string) (bool, error) {
+func tableExistsTx(tx MigrationExec, name string) (bool, error) {
 	var one int
 	err := tx.QueryRow(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&one)
 	if err == sql.ErrNoRows {
@@ -299,7 +323,7 @@ func tableExistsTx(tx *sql.Tx, name string) (bool, error) {
 	return true, nil
 }
 
-func migrateV8(tx *sql.Tx) error {
+func migrateV8(tx MigrationExec) error {
 	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS reminders (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		message TEXT NOT NULL,
@@ -319,7 +343,7 @@ func migrateV8(tx *sql.Tx) error {
 // failing on every NULL scan. The chain content is not altered — only the link
 // that was missing when the column was added is recomputed from the existing
 // rows in their natural order.
-func migrateV7(tx *sql.Tx) error {
+func migrateV7(tx MigrationExec) error {
 	if err := backfillAuditChain(tx); err != nil {
 		return fmt.Errorf("backfill audit chain: %w", err)
 	}
@@ -329,7 +353,7 @@ func migrateV7(tx *sql.Tx) error {
 	return nil
 }
 
-func backfillAuditChain(tx *sql.Tx) error {
+func backfillAuditChain(tx MigrationExec) error {
 	rows, err := tx.Query(`SELECT id, COALESCE(prev_hash, ''), ts, who, what, target, result, detail FROM audit_log ORDER BY id ASC`)
 	if err != nil {
 		return err
@@ -370,7 +394,7 @@ func backfillAuditChain(tx *sql.Tx) error {
 	return nil
 }
 
-func backfillTaskEventChain(tx *sql.Tx) error {
+func backfillTaskEventChain(tx MigrationExec) error {
 	rows, err := tx.Query(`SELECT id, task_id, COALESCE(prev_hash, ''), ts, type, data_json FROM task_events ORDER BY task_id, id ASC`)
 	if err != nil {
 		return err
@@ -430,7 +454,7 @@ func hashEvent(prevHash, taskID string, ts int64, typ, dataJSON string) string {
 // using PRAGMA table_info so the ALTER is a no-op on a fresh database. It is
 // kept as the bridge for historical dev databases that already have the Phase 0
 // schema but are missing columns added after the baseline.
-func addColumnIfMissingTx(tx *sql.Tx, table, col, def string) error {
+func addColumnIfMissingTx(tx MigrationExec, table, col, def string) error {
 	rows, err := tx.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
 	if err != nil {
 		return err
