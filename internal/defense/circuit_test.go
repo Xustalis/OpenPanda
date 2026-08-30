@@ -1,6 +1,7 @@
 package defense
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -137,5 +138,37 @@ func TestCircuitBreakerBlockedIsReadOnly(t *testing.T) {
 	}
 	if b.State("agent:claude") != CircuitOpen {
 		t.Fatalf("Blocked after cooldown must leave state open, got %s", b.State("agent:claude"))
+	}
+}
+
+func TestCircuitBreakerBlockedKeys(t *testing.T) {
+	b := NewCircuitBreaker(1, time.Hour)
+	if got := b.BlockedKeys(); len(got) != 0 {
+		t.Fatalf("fresh breaker has no blocked keys, got %v", got)
+	}
+
+	// Trip two circuits open; the enumeration must list both, sorted.
+	b.Allow("agent:codex")
+	b.RecordFailure("agent:codex")
+	b.Allow("agent:claude")
+	b.RecordFailure("agent:claude")
+	if got, want := b.BlockedKeys(), []string{"agent:claude", "agent:codex"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("BlockedKeys = %v, want %v", got, want)
+	}
+
+	// A success closes the circuit and drops the key from the enumeration.
+	b.RecordSuccess("agent:claude")
+	if got, want := b.BlockedKeys(), []string{"agent:codex"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("BlockedKeys after success = %v, want %v", got, want)
+	}
+
+	// Once the cooldown elapses the open circuit stops being blocked, so it
+	// must also leave the enumeration (peers may route a half-open trial).
+	short := NewCircuitBreaker(1, time.Millisecond)
+	short.Allow("agent:claude")
+	short.RecordFailure("agent:claude")
+	time.Sleep(2 * time.Millisecond)
+	if got := short.BlockedKeys(); len(got) != 0 {
+		t.Fatalf("BlockedKeys after cooldown = %v, want none", got)
 	}
 }
