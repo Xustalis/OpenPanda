@@ -2,8 +2,10 @@
 """Adapter: Claude Code CLI → PANDA Commander.
 
 Protocol (shared with codex.py / opencode.py):
-  stdin:  a JSON object with keys {prompt, timeout_s, cwd} (cwd optional)
-  stdout: a JSON object with keys {ok, result, exit_code, tokens, cost}
+  stdin:  a JSON object with keys {prompt, timeout_s, cwd} (cwd optional),
+          plus optional {resume, tools_policy}
+  stdout: a JSON object with keys {ok, result, exit_code, tokens, cost},
+          plus optional {usage, session_id}
 
 Progress channel: while the agent runs, NDJSON objects
   {"type": "progress", "note": "Bash: du -ah | sort -rh"}
@@ -14,9 +16,18 @@ stderr is retained for failure diagnosis.
 Execution mode: `claude -p --output-format stream-json --verbose` streams
 one JSON event per line. Tool-use events become progress notes (the user
 sees WHAT the agent is doing as it happens); the final `result` event
-carries the answer, token usage, and cost. Older CLIs without stream-json
-fall back to the single-shot `--output-format json` mode. This adapter
-never prints secrets.
+carries the answer, the structured token usage, the cost and the session id
+a follow-up round can resume with (--resume, so a supervision continuation
+keeps the agent's own conversation instead of cold-starting). Older CLIs
+without stream-json fall back to the single-shot `--output-format json`
+mode. This adapter never prints secrets.
+
+Tool policy: tools_policy=minimal (the default) runs under a safe file-and-
+shell whitelist; tools_policy=extended drops the whitelist so the agent's
+own Skills, sub-agent Task tool and any MCP servers configured for the work
+directory (.mcp.json, written by the Go harness) are reachable. The default
+stays minimal: unattended runs only widen their tool face under an explicit
+operator choice.
 
 The wire contract, watchdog timeout, process-tree cleanup and stderr
 diagnostics live in _harness.py; this file is only the Claude Code
@@ -36,13 +47,22 @@ class Unsupported(Exception):
 
 
 def main():
-    prompt, timeout, cwd = harness.read_request()
+    req = harness.read_request()
+    prompt, timeout, cwd = req
 
     model = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
     base = ["claude", "-p", prompt,
-            "--allowedTools", ALLOWED_TOOLS,
             "--max-turns", "30",
             "--permission-mode", "acceptEdits"]
+    # minimal (or unset) keeps the safe file-and-shell whitelist; extended
+    # leaves the tool face unrestricted so Skills / the Task (sub-agent) tool
+    # / project MCP servers work under an explicit operator choice.
+    if req.tools_policy != "extended":
+        base += ["--allowedTools", ALLOWED_TOOLS]
+    # A follow-up round resumes the agent's own session: its reasoning trail
+    # survives instead of cold-starting on the bare follow-up instruction.
+    if req.resume:
+        base += ["--resume", req.resume]
 
     try:
         out = _run_stream(base, model, cwd, timeout)
@@ -64,7 +84,8 @@ def main():
         return
 
     harness.emit(out["ok"], out["result"], out["exit_code"],
-                 tokens=out.get("tokens"), cost=out.get("cost"))
+                 tokens=out.get("tokens"), cost=out.get("cost"),
+                 usage=out.get("usage"), session_id=out.get("session_id"))
 
 
 def _run_stream(base, model, cwd, timeout):
@@ -95,14 +116,16 @@ def _run_stream(base, model, cwd, timeout):
 
     final = state["final"]
     if final is not None:
-        usage = final.get("usage") or {}
-        tokens = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
+        usage = _usage(final.get("usage"))
+        tokens = usage["input_tokens"] + usage["output_tokens"]
         return {
             "ok": not final.get("is_error") and returncode == 0,
             "result": final.get("result") or "",
             "exit_code": returncode,
             "tokens": tokens or None,
             "cost": final.get("total_cost_usd"),
+            "usage": usage,
+            "session_id": final.get("session_id") or "",
         }
 
     # No result event: either a flag the CLI rejected (older version) or a
@@ -117,6 +140,22 @@ def _run_stream(base, model, cwd, timeout):
     return {"ok": False, "result": msg, "exit_code": returncode or 1}
 
 
+def _usage(raw):
+    """Normalize the result event's usage block to the wire breakdown."""
+    raw = raw if isinstance(raw, dict) else {}
+
+    def num(key):
+        v = raw.get(key)
+        return int(v) if isinstance(v, (int, float)) and v else 0
+
+    return {
+        "input_tokens": num("input_tokens"),
+        "output_tokens": num("output_tokens"),
+        "cache_read_tokens": num("cache_read_input_tokens"),
+        "cache_write_tokens": num("cache_creation_input_tokens"),
+    }
+
+
 def _run_plain(base, model, cwd, timeout):
     """One-shot mode for older CLIs: single JSON object on stdout."""
     cmd = base + ["--output-format", "json"]
@@ -128,12 +167,18 @@ def _run_plain(base, model, cwd, timeout):
     except json.JSONDecodeError:
         return {"ok": False, "result": (err or "").strip() or "claude output not JSON",
                 "exit_code": returncode}
+    # Tokens come from the usage block, never from num_turns (a turn is not
+    # a token); CLIs too old to report usage leave the field unset.
+    usage = _usage(parsed.get("usage"))
+    tokens = usage["input_tokens"] + usage["output_tokens"]
     return {
         "ok": returncode == 0 and not parsed.get("is_error"),
         "result": parsed.get("result") or "",
         "exit_code": returncode,
-        "tokens": parsed.get("num_turns"),
-        "cost": None,
+        "tokens": tokens or None,
+        "cost": parsed.get("total_cost_usd"),
+        "usage": usage,
+        "session_id": parsed.get("session_id") or "",
     }
 
 

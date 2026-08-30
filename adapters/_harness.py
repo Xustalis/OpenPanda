@@ -5,7 +5,14 @@ Every adapter under adapters/ is a thin "how do I call this CLI" layer on top
 of this module; the shared runtime lives here, once:
 
   * wire contract  — stdin JSON request {prompt, timeout_s, cwd} and stdout
-    JSON result {ok, result, exit_code, tokens, cost} (read_request / emit)
+    JSON result {ok, result, exit_code, tokens, cost} (read_request / emit).
+    The request may additionally carry {resume, tools_policy} and the result
+    {usage, session_id} — all optional, older sides ignore unknown keys.
+    "resume" carries the agent session id a previous run returned so a
+    follow-up round continues the agent's own conversation instead of
+    cold-starting; "tools_policy" is minimal (adapter's safe tool whitelist)
+    or extended (no whitelist restriction). "usage" is the structured token
+    breakdown; "session_id" is what a later run can resume with.
   * watchdog       — the timeout covers the WHOLE run, not just the tail
     after stdout EOF: the stream loop blocks on the CLI's pipe, so a timer
     thread kills the process tree at the deadline and the closed pipes
@@ -51,10 +58,11 @@ else:
 
 
 def read_request(default_timeout=DEFAULT_TIMEOUT):
-    """Read and validate the stdin JSON contract {prompt, timeout_s, cwd}.
+    """Read and validate the stdin JSON contract.
 
     On invalid JSON the unified error result (exit_code 2) is emitted and the
-    process exits. Returns (prompt, timeout_s, cwd); cwd is None when unset.
+    process exits. Returns a Request namespace: prompt, timeout_s, cwd (None
+    when unset), resume ("" when unset) and tools_policy ("" when unset).
     """
     raw = sys.stdin.read()
     try:
@@ -62,13 +70,36 @@ def read_request(default_timeout=DEFAULT_TIMEOUT):
     except json.JSONDecodeError:
         emit(False, "invalid request JSON", 2)
         sys.exit(0)
+    if not isinstance(req, dict):
+        req = {}
     prompt = req.get("prompt", "")
     try:
         timeout = int(req.get("timeout_s", default_timeout))
     except (TypeError, ValueError):
         timeout = default_timeout
     cwd = req.get("cwd") or None
-    return prompt, timeout, cwd
+    resume = req.get("resume") or ""
+    tools_policy = req.get("tools_policy") or ""
+    return Request(prompt, timeout, cwd, resume, tools_policy)
+
+
+class Request:
+    """The parsed adapter request; iterates as (prompt, timeout, cwd) so
+    prompt, timeout, cwd = read_request() keeps working, with
+    resume/tools_policy as extra attributes."""
+
+    def __init__(self, prompt, timeout, cwd, resume, tools_policy):
+        self.prompt = prompt
+        self.timeout = timeout
+        self.cwd = cwd
+        self.resume = resume
+        self.tools_policy = tools_policy
+
+    def __iter__(self):
+        return iter((self.prompt, self.timeout, self.cwd))
+
+    def __getitem__(self, i):
+        return (self.prompt, self.timeout, self.cwd)[i]
 
 
 def clamp_result(text, limit=MAX_RESULT_CHARS):
@@ -87,8 +118,14 @@ def clamp_result(text, limit=MAX_RESULT_CHARS):
     return text[:head] + TRUNCATION_MARKER + text[-(keep - head):]
 
 
-def emit(ok, result, exit_code, tokens=None, cost=None):
-    """Write the unified adapter result JSON to stdout (one line, flushed)."""
+def emit(ok, result, exit_code, tokens=None, cost=None, usage=None, session_id=None):
+    """Write the unified adapter result JSON to stdout (one line, flushed).
+
+    usage is the optional structured token breakdown (input_tokens /
+    output_tokens / cache_* keys); session_id is the agent session a later
+    run may resume. Both ride the wire only when set, so consumers that do
+    not know them see the classic envelope unchanged.
+    """
     payload = {
         "ok": bool(ok),
         "result": clamp_result(result),
@@ -98,6 +135,10 @@ def emit(ok, result, exit_code, tokens=None, cost=None):
         payload["tokens"] = tokens
     if cost is not None:
         payload["cost"] = cost
+    if isinstance(usage, dict) and any(usage.values()):
+        payload["usage"] = usage
+    if session_id:
+        payload["session_id"] = session_id
     print(json.dumps(payload, ensure_ascii=False))
     sys.stdout.flush()
 

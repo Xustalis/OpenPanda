@@ -2,15 +2,26 @@
 """Adapter: Codex CLI → PANDA Commander.
 
 Protocol (shared with claude_code.py / opencode.py):
-  stdin:  a JSON object with keys {prompt, timeout_s, cwd} (cwd optional)
-  stdout: a JSON object with keys {ok, result, exit_code, tokens, cost}
+  stdin:  a JSON object with keys {prompt, timeout_s, cwd} (cwd optional),
+          plus optional {resume, tools_policy}
+  stdout: a JSON object with keys {ok, result, exit_code, tokens, cost},
+          plus optional {usage, session_id}
 
 Runs `codex exec --json` and reduces its JSONL event stream to the final
 agent message. Codex emits one JSON object per line; the event shape has
 changed across versions, so both the current item envelopes
 (item.completed → agent_message) and the legacy msg envelopes
-(msg.type == agent_message / task_complete) are recognised. This adapter
-never prints secrets.
+(msg.type == agent_message / task_complete) are recognised. The session id
+rides the session envelope (session_meta / session.created → payload.id);
+a follow-up round feeds it back through `codex exec resume <SESSION_ID>`,
+so a supervision continuation keeps codex's own conversation instead of
+cold-starting. This adapter never prints secrets.
+
+Tool policy: tools_policy=minimal (the default) runs under codex's
+workspace-write sandbox; tools_policy=extended escalates to
+danger-full-access so the agent can work beyond the work dir under an
+explicit operator choice. The approval policy stays non-interactive either
+way — an unattended run can never sit on a prompt.
 
 The wire contract, watchdog timeout, process-tree cleanup and stderr
 diagnostics live in _harness.py; this file is only the codex difference:
@@ -22,13 +33,28 @@ import _harness as harness
 
 
 def main():
-    prompt, timeout, cwd = harness.read_request()
+    req = harness.read_request()
+    prompt, timeout, cwd = req
 
     # PANDA's sandbox is a cwd/env boundary, not OS isolation. Keep Codex's
-    # own workspace policy enabled and make the run non-interactive/ephemeral.
-    cmd = ["codex", "exec", "--json", "--skip-git-repo-check",
-           "--sandbox", "workspace-write", "-c", "approval_policy=\"never\"",
-           "--ephemeral"]
+    # own workspace policy on top: minimal stays workspace-write, extended
+    # lifts the filesystem scope (explicit operator choice, mirroring the
+    # claude adapter's extended tool face).
+    sandbox = "danger-full-access" if req.tools_policy == "extended" else "workspace-write"
+
+    # Non-interactive headless exec; a follow-up round resumes the previous
+    # run's session (its plan history and approvals survive) instead of
+    # cold-starting on the bare follow-up instruction.
+    if req.resume:
+        cmd = ["codex", "exec", "resume", req.resume]
+    else:
+        cmd = ["codex", "exec"]
+    cmd += ["--json", "--skip-git-repo-check",
+            "--sandbox", sandbox, "-c", "approval_policy=\"never\""]
+    if not req.resume:
+        # A resumed run continues an existing session; --ephemeral would
+        # discard exactly what the resume is meant to keep.
+        cmd.append("--ephemeral")
     # Model selection is Codex-specific; Anthropic variables must not leak
     # into this provider contract.
     model = os.environ.get("CODEX_MODEL", "")
@@ -40,9 +66,13 @@ def main():
     # notes on stderr (see the Go harness progressWriter), so the task
     # timeline fills in while codex works.
     lines = []
+    state = {"session_id": ""}
 
     def on_line(line):
         lines.append(line)
+        sid = _session_id(line)
+        if sid:
+            state["session_id"] = sid
         note = _note(line)
         if note:
             harness.progress(note)
@@ -57,12 +87,30 @@ def main():
         harness.emit(False, "codex timed out", 124)
         return
 
-    text, tokens = _reduce("".join(lines))
+    text, usage = _reduce("".join(lines))
     if not text:
         # No parseable events (older CLI without --json, or a plain error):
         # fall back to whatever the CLI printed.
         text = "".join(lines).strip() or err.strip()
-    harness.emit(returncode == 0, text, returncode, tokens)
+    tokens = usage["input_tokens"] + usage["output_tokens"] or None
+    harness.emit(returncode == 0, text, returncode, tokens,
+                 usage=usage, session_id=state["session_id"])
+
+
+def _session_id(line):
+    """The session id from a codex session envelope, or "".
+
+    Current CLIs open with {"type":"session.created","payload":{"id":…}};
+    older ones print {"type":"session_meta","payload":{"id":…}}. Both carry
+    the id `codex exec resume` accepts.
+    """
+    obj = harness.parse_json_line(line)
+    if obj is None or obj.get("type") not in ("session.created", "session_meta"):
+        return ""
+    payload = obj.get("payload")
+    if isinstance(payload, dict) and payload.get("id"):
+        return str(payload["id"])
+    return ""
 
 
 def _note(line):
@@ -94,9 +142,13 @@ def _note(line):
 
 
 def _reduce(stdout):
-    """Collapse codex's JSONL event stream to (final agent message, tokens)."""
+    """Collapse codex's JSONL event stream to (final agent message, usage).
+
+    usage is the wire breakdown dict; codex reports input/output on the
+    turn envelope (and nothing cost-shaped, so cost stays unset).
+    """
     texts = []
-    tokens = None
+    usage = {"input_tokens": 0, "output_tokens": 0}
     for line in stdout.splitlines():
         obj = harness.parse_json_line(line)
         if obj is None:
@@ -107,11 +159,12 @@ def _reduce(stdout):
             texts.append(str(item["text"]))
         # Current format usage rides the turn envelope.
         if obj.get("type") == "turn.completed" and isinstance(obj.get("usage"), dict):
-            usage = obj["usage"]
+            u = obj["usage"]
             try:
-                tokens = int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
+                usage["input_tokens"] = int(u.get("input_tokens", 0))
+                usage["output_tokens"] = int(u.get("output_tokens", 0))
             except (TypeError, ValueError):
-                tokens = None
+                pass
         # Legacy format: {"msg":{"type":"agent_message","message":…}}
         msg = obj.get("msg")
         if isinstance(msg, dict):
@@ -120,7 +173,7 @@ def _reduce(stdout):
             if msg.get("type") == "task_complete" and msg.get("last_agent_message"):
                 texts.append(str(msg["last_agent_message"]))
     # The last agent message is the answer; earlier ones are interstitial.
-    return (texts[-1] if texts else ""), tokens
+    return (texts[-1] if texts else ""), usage
 
 
 if __name__ == "__main__":
