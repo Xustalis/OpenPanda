@@ -79,6 +79,15 @@ type TaskDelegatePayload struct {
 	// only sets it after the user explicitly authorized (task add
 	// --authorize / ask --authorize).
 	Authorized bool `json:"authorized,omitempty"`
+	// AuthHops bounds how far Authorized may travel (hop-limited consent):
+	// each relay decrements it before forwarding onward, and a payload whose
+	// hops are spent has its consent cleared, so the executor's defense layer
+	// asks for fresh approval instead of running irreversible work under a
+	// consent minted several nodes away. Zero alongside Authorized means
+	// "legacy/unlimited" — senders from before this field never set it, and
+	// the network's behavior for them is unchanged. New senders always set
+	// it; direct re-dispatches (decline re-route, queue forward) use 1.
+	AuthHops int `json:"auth_hops,omitempty"`
 	// Plan-plane fields (v0.0.6). A delegated stage carries its place in the
 	// plan and the artifacts it consumes: PlanID/StageID identify it for the
 	// orchestrator's audit trail, and Inputs names each predecessor's packed
@@ -123,6 +132,13 @@ type TaskDeclinePayload struct {
 type TaskResultPayload struct {
 	TaskID    string `json:"task_id"`
 	AttemptID string `json:"attempt_id"`
+	// Chain echoes the executor's delegation chain (root → executor) so a
+	// receiver that lost its local row (a restart between dispatch and
+	// result) can reconstruct the real upstream path instead of guessing
+	// [self, sender] — without it the relayed result stops one hop short of
+	// the root. Empty for nodes that predate the field; receivers fall back
+	// to the guess then.
+	Chain []string `json:"chain,omitempty"`
 	// State is the executor's persisted task state at the time it reports.
 	// It is optional for wire compatibility with older nodes; when absent the
 	// receiver derives done/failed from OK. New nodes must preserve review so a
@@ -141,6 +157,14 @@ type TaskResultPayload struct {
 	// hands it to the successor stages as their input; the executor stays the
 	// node that holds the bytes until someone pulls them.
 	OutputArtifact string `json:"output_artifact,omitempty"`
+	// Structured attribution so the origin can consume a cross-device result
+	// like an ordinary sub-agent's: who ran it (Executor — the node, stable
+	// across relay hops where env.From is only the last hop), which agent
+	// actually executed (Agent — the fallback chain may have swapped it),
+	// and how long the execution took on the executor's clock.
+	Executor   string `json:"executor,omitempty"`
+	Agent      string `json:"agent,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
 }
 
 // maxWireText bounds one text field an executor fills from a child process's
