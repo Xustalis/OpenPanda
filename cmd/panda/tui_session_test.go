@@ -41,8 +41,11 @@ func TestHistoryBareModeReplaysConvo(t *testing.T) {
 }
 
 // TestHistoryBoundSessionReplaysThread verifies that a session bound by /resume
-// governs the TUI's turns: the prompt is appended to the thread, the whole thread
-// comes back as history, and the session's worktree becomes the working dir.
+// governs the TUI's turns: the thread as it stands comes back as history, the
+// fresh prompt is persisted to the thread but NOT replayed into the history
+// (AskTurns carries it as the prompt; doubling it would send two consecutive
+// user messages, a 400 from the Messages API), and the session's worktree
+// becomes the working dir.
 func TestHistoryBoundSessionReplaysThread(t *testing.T) {
 	m, st := newSessionTUI(t)
 	sess, err := st.Create("ppo")
@@ -58,10 +61,10 @@ func TestHistoryBoundSessionReplaysThread(t *testing.T) {
 	m.r.activeSess = sess.ID
 
 	history, _ := m.history("follow-up")
-	if len(history) != 3 {
-		t.Fatalf("expected the thread plus the new turn, got %d: %+v", len(history), history)
+	if len(history) != 2 {
+		t.Fatalf("history must be the thread minus the fresh turn, got %d: %+v", len(history), history)
 	}
-	if history[0].Content != "earlier question" || history[2].Content != "follow-up" {
+	if history[0].Content != "earlier question" || history[1].Content != "earlier answer" {
 		t.Fatalf("thread replayed out of order: %+v", history)
 	}
 	// The prompt was persisted, not just replayed.
@@ -69,7 +72,7 @@ func TestHistoryBoundSessionReplaysThread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if len(got.Turns) != 3 || got.Turns[2].Role != "user" {
+	if len(got.Turns) != 3 || got.Turns[2].Role != "user" || got.Turns[2].Text != "follow-up" {
 		t.Fatalf("prompt not recorded in the thread: %+v", got.Turns)
 	}
 }

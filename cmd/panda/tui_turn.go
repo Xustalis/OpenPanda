@@ -90,6 +90,12 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(done, tea.Println(note.render(m.th, m.width, m.expandThought)))
 		}
 		blk := block{kind: blockError, body: msg.err.Error()}
+		// Pair the persisted user turn with the failure (same guard as the
+		// classic loop): a thread left dangling on a user turn 400s on its
+		// every following ask.
+		if m.r != nil {
+			m.r.recordErrorTurn(msg.err)
+		}
 		return m, tea.Batch(done, tea.Println(blk.render(m.th, m.width, m.expandThought)))
 	}
 	out := msg.out

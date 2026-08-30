@@ -120,7 +120,7 @@ type oaiChunk struct {
 // messages (one per tool_result block); plain turns pass through.
 func turnsToOpenAI(system string, turns []Turn) []oaiMessage {
 	msgs := []oaiMessage{{Role: "system", Content: system}}
-	for _, t := range turns {
+	for _, t := range normalizeTurns(turns) {
 		if len(t.Blocks) == 0 {
 			msgs = append(msgs, oaiMessage{Role: t.Role, Content: t.Content})
 			continue
