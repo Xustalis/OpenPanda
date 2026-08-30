@@ -70,6 +70,30 @@ type RoutingConfig struct {
 	// PreferredAgents lists agent names that receive a score bonus during
 	// routing, so the user can pin favorites without editing capability cards.
 	PreferredAgents []string `yaml:"preferred_agents"`
+	// ToolsPolicy grades the tool face agent adapters run with: minimal
+	// (default) keeps each adapter's safe whitelist; extended lifts the
+	// restriction so the agent's own skills, sub-agent tooling and MCP
+	// servers configured for the work directory are reachable. Widening the
+	// tool face is an explicit operator choice, never a default.
+	ToolsPolicy string `yaml:"tools_policy"`
+}
+
+// Agent tool policies (routing.tools_policy).
+const (
+	// ToolsPolicyMinimal keeps the adapter's safe tool whitelist (default).
+	ToolsPolicyMinimal = "minimal"
+	// ToolsPolicyExtended lifts the whitelist so agent-native skills, the
+	// sub-agent Task tool and project MCP servers are usable.
+	ToolsPolicyExtended = "extended"
+)
+
+// NormalizedToolsPolicy returns the validated agent tools policy, defaulting
+// to minimal when unset.
+func (r RoutingConfig) NormalizedToolsPolicy() string {
+	if r.ToolsPolicy == ToolsPolicyExtended {
+		return ToolsPolicyExtended
+	}
+	return ToolsPolicyMinimal
 }
 
 // Default memory size limits (characters). They override the compile-time
@@ -636,8 +660,27 @@ func Default() *Config {
 	}
 }
 
-// DefaultPath is where the node looks for its config file.
-const DefaultPath = "/etc/openpanda/config.yaml"
+// SystemConfigDir is the machine-wide configuration directory: /etc/openpanda
+// on unix (byte-for-byte the historical path), %ProgramData%\OpenPanda on
+// Windows, where /etc does not exist and ProgramData is the sanctioned home
+// for machine-scoped application state.
+func SystemConfigDir() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(os.Getenv("ProgramData"), "OpenPanda")
+	}
+	return "/etc/openpanda"
+}
+
+// SystemConfigPath is the machine-wide config file location derived from
+// SystemConfigDir.
+func SystemConfigPath() string {
+	return filepath.Join(SystemConfigDir(), "config.yaml")
+}
+
+// DefaultPath is where the node looks for its config file when nothing more
+// specific is found. A var (not a const) so it can follow SystemConfigDir's
+// platform split; on unix it stays exactly /etc/openpanda/config.yaml.
+var DefaultPath = SystemConfigPath()
 
 // UserConfigPath returns a user-writable config location —
 // ~/.config/openpanda/config.yaml on Linux,
