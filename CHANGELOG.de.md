@@ -56,6 +56,11 @@ Das Usability-Release: Die Capability-Karte — die Datei, die dem Scheduler sag
 - **Farben in der Windows-Konsole** — die TUI-Palette aktiviert Farben auf einer Windows-Konsolen-TTY, wenn TERM nicht gesetzt ist; `dumb` und `NO_COLOR` haben weiter Vorrang.
 - **`make build-darwin-amd64`** — Intel-Mac-Buildziel neben den anderen plattformspezifischen Zielen.
 - **Agent-Fähigkeitsfläche und Task-weises Tool-Policy** — die Agent-Registry deklariert nun die nativen Fähigkeiten jeder CLI (Skills, MCP, Subagenten) statt Hardcoding pro Adapter; das Einstiegsmodell kann ein Task-weises Tool-Policy (`minimal` / `extended`) anfordern, das das globale Routing-Policy überschreibt, sodass eine hochkomplexe Aufgabe die volle Fähigkeitsfläche des Agents nur für diese Aufgabe freischalten kann. Claude-Code-Subagenten-Erzeugungen (das Task-Tool) erscheinen als typisierte `subagent`-Fortschrittsereignisse und landen ungedrosselt in der Task-Zeitleiste (dieses Release).
+- **Agent-Timeouts nach Aufgabenart** — `timeouts.agent_by_kind` überschreibt das Agent-Wanduhr-Budget pro Aufgabenart (ein Training darf länger laufen als ein Schnellfix); nicht gelistete Arten behalten `timeouts.agent_s`, und der Task-Lease bleibt stets über dem jeweils geltenden Budget (bcbe1d2, e573c2e, 9fc2d04).
+- **Circuit-Breaker-Zustand in Heartbeats** — ein Knoten, dessen Agent-CLI dauernd fehlschlägt, meldet das im Heartbeat, sodass Peers keine Arbeit mehr an einen kaputten Agenten routen, bevor sie selbst darauf stoßen (bcbe1d2).
+- **Agent-Sitzungsfortsetzung und Nutzungserfassung** — Aufsichtsrunden setzen die eigene Konversation des Agents fort, statt sie jede Runde kalt zu starten (`session_id` + `resume` im Adapter-Drahtprotokoll), und Adapter melden eine strukturierte Token-Nutzungsaufschlüsselung, die als `agent_usage`-Ereignisse aufgezeichnet wird (e8dc68b, 183bf6f, 1722144).
+- **Obergrenze für Delegations-Tiefe** — der Konsens reist mit einem Hop-Limit über die Leitung: Ein Task kann nur eine begrenzte Zahl von Hops weiterdelegiert werden, sodass Delegationsketten nicht mehr grenzenlos wachsen können (ca5770e).
+- **Zuverlässige Cancel-Zustellung** — `task_cancel` reist nun über dieselbe Outbox wie Ergebnisse: ein Cancel, der bei getrenntem Executor ausgegeben wird, wird persistiert und beim Wiederverbinden erneut zugestellt, statt verloren zu gehen (dc4412a).
 
 ### Behoben
 
@@ -73,6 +78,8 @@ Das Usability-Release: Die Capability-Karte — die Datei, die dem Scheduler sag
 - **`panda skill --help` / `panda reminder --help`** — geben die Nutzung aus und beenden mit 0, statt `--help` als unbekanntes Verb zu behandeln.
 - **CI: Gate- und Installer-Strecken repariert** — alle vier fehlgeschlagenen Gate-Strecken und die Installer-Pipeline repariert (7c418b0).
 - **CLI: eingeklappte Gedankenblöcke zeigen keinen Schlüssel mehr an, der sie nicht entfalten kann** (e772598).
+- **Verwaiste Weiterleitungen und veraltete Verzeichniszeilen** — von einem toten Peer hängengelassene Relais werden gerettet und abgeschlossen, und Verzeichniszeilen, die kein Peer mehr trägt, werden aufgeräumt, statt für immer zu bleiben (32e4489).
+- **Push bricht bei Timeout die nachgelagerte Arbeit ab** — ein Push mit Zeitüberschreitung cancelt seine nachgelagerte Arbeit, statt sie weiterlaufen zu lassen, und das Retry-Budget überlebt Neustarts (f7efb70).
 
 ### Verbessert
 
@@ -80,6 +87,7 @@ Das Usability-Release: Die Capability-Karte — die Datei, die dem Scheduler sag
 - **Plattformgerechtes Systemkonfigurationsverzeichnis** — das System-Fallback-Konfigurationsverzeichnis bleibt unter Unix `/etc/openpanda` und ist unter Windows `%ProgramData%\OpenPanda`.
 - **Ein einziger Store-Initialisierungspfad** — Daemon und Web-Panel öffnen den Store über dieselbe Funktion (`cmd/panda/store.go`); das Panel übersieht das Artefakt-Pool-Verzeichnis nicht mehr.
 - **Web-Panel: Ereignis-Scans entkoppeln sich von der Verbindungszahl** — Task-/Node-/Reminder-Fingerabdrücke werden für ein Poll-Intervall zwischengespeichert, sodass die Scan-Last auch bei wachsenden Abonnenten nahezu konstant bleibt.
+- **Adapterweise Abstimmung** — die übrigen Agent-Adapter erhielten jeweils CLI-spezifische Aufrufbehandlung statt eines generischen Pfads (24df1c1).
 
 ## [0.0.6] - 2026-08-27
 

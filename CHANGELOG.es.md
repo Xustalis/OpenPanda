@@ -56,6 +56,11 @@ La versión de usabilidad: la tarjeta de capacidades —el archivo que dice al p
 - **Colores en la consola de Windows** — la paleta del TUI habilita colores en la TTY de la consola de Windows cuando TERM no está definido; `dumb` y `NO_COLOR` siguen teniendo prioridad.
 - **`make build-darwin-amd64`** — objetivo de compilación para Mac Intel, junto a los demás objetivos por plataforma.
 - **Superficie de capacidades de agentes y política de herramientas por tarea** — el registro de agentes ahora declara las capacidades nativas de cada CLI (skills, MCP, subagentes) en lugar de codificarlo por adaptador; el modelo de entrada puede solicitar una política de herramientas por tarea (`minimal` / `extended`) que anula la política global de enrutamiento, de modo que una tarea de alta complejidad puede desbloquear la superficie completa del agente solo para esa tarea. Las creaciones de subagentes de Claude Code (la herramienta Task) aparecen como eventos de progreso tipados `subagent` y entran en la línea de tiempo de la tarea sin limitación de ritmo (esta versión).
+- **Tiempos de espera de agente por tipo de tarea** — `timeouts.agent_by_kind` anula el presupuesto de tiempo real del agente por tipo de tarea (un entrenamiento puede ejecutarse más tiempo que una corrección rápida); los tipos no listados conservan `timeouts.agent_s`, y el arriendo de la tarea se mantiene siempre por encima del presupuesto efectivo (bcbe1d2, e573c2e, 9fc2d04).
+- **Estado del cortacircuitos en los latidos** — un nodo cuyo CLI de agente falla continuamente lo declara en su latido, de modo que los peers dejan de enrutarle trabajo antes de chocar ellos mismos con el agente roto (bcbe1d2).
+- **Reanudación de sesión de agente y contabilidad de uso** — las rondas de supervisión continúan la conversación del agente en lugar de arrancarla en frío cada ronda (`session_id` + `resume` en el protocolo de cable del adaptador), y los adaptadores informan un desglose estructurado del uso de tokens registrado como eventos `agent_usage` (e8dc68b, 183bf6f, 1722144).
+- **Límite de profundidad de delegación** — el consentimiento viaja por el cable con un límite de saltos: una tarea solo puede redelegarse un número acotado de saltos, de modo que las cadenas de delegación ya no pueden crecer sin límite (ca5770e).
+- **Entrega fiable de cancelaciones** — `task_cancel` ahora viaja por el mismo outbox que los resultados: una cancelación emitida mientras el ejecutor está desconectado se persiste y se reentrega al reconectar en lugar de perderse (dc4412a).
 
 ### Corregido
 
@@ -73,6 +78,8 @@ La versión de usabilidad: la tarjeta de capacidades —el archivo que dice al p
 - **`panda skill --help` / `panda reminder --help`** — imprimen el uso y salen con 0 en lugar de tratar `--help` como un verbo desconocido.
 - **CI: reparadas las patas del gate y el instalador** — reparadas las cuatro patas fallidas del gate y el pipeline del instalador (7c418b0).
 - **CLI: los bloques de pensamiento plegados ya no anuncian una clave que no puede desplegarlos** (e772598).
+- **Reenvíos huérfanos y filas de directorio obsoletas** — los relés dejados colgando por un peer muerto se rescatan y se terminan, y las filas del directorio que ningún peer respalda ya se barren en lugar de quedar para siempre (32e4489).
+- **El push cancela el trabajo descendente al agotar el tiempo** — un push agotado cancela su trabajo descendente en lugar de dejarlo seguir, y el presupuesto de reintentos sobrevive a los reinicios (f7efb70).
 
 ### Mejorado
 
@@ -80,6 +87,7 @@ La versión de usabilidad: la tarjeta de capacidades —el archivo que dice al p
 - **Directorio de configuración del sistema según plataforma** — el directorio de respaldo para la configuración del sistema sigue siendo `/etc/openpanda` en unix y `%ProgramData%\OpenPanda` en Windows.
 - **Una sola ruta de inicialización del almacén** — el daemon y el panel web abren el almacén mediante la misma función (`cmd/panda/store.go`); el panel ya no omite el directorio del pool de artefactos.
 - **Panel web: los escaneos de eventos se desacoplan del número de conexiones** — las huellas de tareas/nodos/recordatorios se cachean durante un intervalo de sondeo, por lo que la carga de escaneo se mantiene prácticamente constante aunque crezcan los suscriptores.
+- **Ajuste por adaptador** — los adaptadores de agentes restantes recibieron un manejo de invocación específico de su CLI en lugar de una única ruta genérica (24df1c1).
 
 ## [0.0.6] - 2026-08-27
 

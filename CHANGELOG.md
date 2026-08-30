@@ -56,6 +56,11 @@ The usability release: the capability card — the file that tells the scheduler
 - **Windows console colors** — the TUI palette enables colors on a Windows console TTY when TERM is unset; `dumb` and `NO_COLOR` still take precedence.
 - **`make build-darwin-amd64`** — Intel Mac build target alongside the other per-platform targets.
 - **Agent capability surface and per-task tools policy** — the agent registry now declares each CLI's native capabilities (skills, MCP, sub-agents) instead of per-adapter hard-coding; the entry model can request a per-task tools policy (`minimal` / `extended`) that overrides the global routing policy, so a high-complexity task can unlock the agent's full surface for that task alone. Claude Code sub-agent spawns (the Task tool) surface as typed `subagent` progress events and land in the task timeline unthrottled (this release).
+- **Per-kind agent timeouts** — `timeouts.agent_by_kind` overrides the agent wall-clock budget per task kind (a training job may run longer than a quick fix); unlisted kinds keep `timeouts.agent_s`, and the task lease is kept above whichever budget applies (bcbe1d2, e573c2e, 9fc2d04).
+- **Circuit-breaker state in heartbeats** — a node whose agent CLI keeps failing says so in its heartbeat, so peers stop routing work to a broken agent before they hit it themselves (bcbe1d2).
+- **Agent session resume and usage accounting** — supervision rounds continue the agent's own conversation instead of cold-starting it every round (`session_id` + `resume` on the adapter wire protocol), and adapters report a structured token-usage breakdown recorded as `agent_usage` events (e8dc68b, 183bf6f, 1722144).
+- **Delegation depth cap** — consent rides the wire with a hop limit: a task can only be re-delegated a bounded number of hops, so delegation chains can no longer grow without limit (ca5770e).
+- **Reliable cancel delivery** — `task_cancel` now ships through the same outbox as results: a cancel issued while the executor is disconnected is persisted and re-delivered on reconnect instead of being lost (dc4412a).
 
 ### Fixed
 
@@ -73,6 +78,8 @@ The usability release: the capability card — the file that tells the scheduler
 - **`panda skill --help` / `panda reminder --help`** — print their usage and exit 0 instead of treating `--help` as an unknown verb.
 - **CI: gate and installer legs repaired** — all four failing gate legs and the installer pipeline repaired (7c418b0).
 - **CLI: folded thought blocks no longer advertise a key that cannot unfold them** (e772598).
+- **Orphaned forwards and stale directory rows** — relays left hanging by a dead peer are rescued and finished, and directory rows no peer backs any more are swept instead of lingering forever (32e4489).
+- **Push cancels downstream on timeout** — a timed-out push cancels its downstream work instead of letting it run on, and the retry budget survives restarts (f7efb70).
 
 ### Changed
 
@@ -80,6 +87,7 @@ The usability release: the capability card — the file that tells the scheduler
 - **Platform-aware system config directory** — the system fallback config directory is still `/etc/openpanda` on unix and `%ProgramData%\OpenPanda` on Windows.
 - **One store-initialization path** — the daemon and the web panel open the store through the same function (`cmd/panda/store.go`); the panel no longer misses the artifact-pool directory.
 - **Web panel: event scans decouple from connection count** — task/node/reminder fingerprints are cached for one poll interval, so scan load stays roughly constant as subscribers grow.
+- **Per-agent adapter tuning** — the remaining agent adapters each gained CLI-specific invocation handling instead of one generic path (24df1c1).
 
 ## [0.0.6] - 2026-08-27
 
