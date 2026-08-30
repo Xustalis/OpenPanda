@@ -76,9 +76,13 @@ jobs:
         working-directory: webui/app
     steps:
       - uses: actions/checkout@v4
+      # Node 24: the console's tests are .ts files run straight through
+      # `node --test`, which needs built-in type stripping (23.6+/24) and
+      # glob arguments (21+) — Node 20 could neither, and the test step
+      # died on its first test file.
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
           cache-dependency-path: webui/app/package-lock.json
       - name: Install
