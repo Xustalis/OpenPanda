@@ -5,7 +5,17 @@
 // so nothing here reaches the browser bundle.
 
 declare module 'node:test' {
-  export function test(name: string, fn: () => void | Promise<void>): void
+  /** The mock-timer surface the bus tests drive (node ≥ 20.4). */
+  interface MockTimers {
+    enable(opts: { apis?: Array<'setTimeout' | 'setInterval' | 'setImmediate' | 'Date'> }): void
+    tick(ms: number): void
+    reset(): void
+  }
+  export interface TestContext {
+    mock: { timers: MockTimers }
+    after(fn: () => void | Promise<void>): void
+  }
+  export function test(name: string, fn: (t: TestContext) => void | Promise<void>): void
 }
 
 declare module 'node:assert/strict' {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'preact/hooks'
 import { api, type AuditEntry, type DelegationMetric, type UpdateStatus } from '../api/client'
-import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
+import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
 import { t } from '../i18n'
 
 /** The system view: version, delegation metrics (`panda metrics`), and the
@@ -135,11 +135,13 @@ function UpdateCard() {
     }
   }, [])
 
+  // Initial fetch once; then poll on a visibility-aware interval. The hook
+  // skips ticks while the tab is hidden and de-duplicates overlapping
+  // requests, so a background tab costs the backend nothing.
   useEffect(() => {
     void refresh()
-    const id = window.setInterval(() => void refresh(), 2000)
-    return () => window.clearInterval(id)
   }, [refresh])
+  useVisibleInterval(() => void refresh(), 2000)
 
   async function act(fn: () => Promise<UpdateStatus>) {
     setBusy(true)

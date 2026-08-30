@@ -3,6 +3,7 @@ import { locale, localeNames, locales, setLocale, t, type Locale } from '../i18n
 import { navigateView, navViews } from '../nav'
 import { setTheme, theme, type Theme } from '../theme'
 import { rank } from './fuzzy'
+import { useModalFocus } from './modal-focus'
 
 // ⌘K command palette. Every destination and appearance switch in the console
 // reachable from one keystroke, so learning the sidebar's tree is optional
@@ -42,6 +43,11 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
   const [cursor, setCursor] = useState(0)
   const input = useRef<HTMLInputElement>(null)
   const list = useRef<HTMLDivElement>(null)
+  const dialog = useRef<HTMLDivElement>(null)
+
+  // Focus trap: focus lands in the box on open, Tab cycles inside the
+  // palette only, and closing restores focus to whatever opened it.
+  useModalFocus(dialog, open)
 
   useEffect(() => {
     openFn = () => setOpen(true)
@@ -63,12 +69,11 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
     return () => removeEventListener('keydown', on)
   }, [])
 
-  // A fresh open is a fresh search, and the caret belongs in the box.
+  // A fresh open is a fresh search (the trap puts the caret in the box).
   useEffect(() => {
     if (!open) return
     setQuery('')
     setCursor(0)
-    input.current?.focus()
   }, [open])
 
   const commands = useMemo(() => (open ? buildCommands(onLogout) : []), [open, onLogout])
@@ -121,7 +126,7 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
         if (e.target === e.currentTarget) setOpen(false)
       }}
     >
-      <div class="palette" role="dialog" aria-modal="true" aria-label={t('palette.title')}>
+      <div ref={dialog} class="palette" role="dialog" aria-modal="true" aria-label={t('palette.title')}>
         <input
           ref={input}
           class="palette-input"

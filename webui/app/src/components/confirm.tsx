@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../i18n'
+import { useModalFocus } from './modal-focus'
 
 // Global confirm dialog (P1: "危险操作二次确认"). Promise-based so call
 // sites read like `if (!(await confirmDialog({...}))) return` — no local
@@ -29,6 +30,12 @@ export function ConfirmHost() {
     opts: ConfirmOptions
     resolve: (v: boolean) => void
   } | null>(null)
+  const box = useRef<HTMLDivElement>(null)
+
+  // Focus trap: focus moves into the dialog on open (the cancel button is
+  // the first focusable, which is the safe default for a destructive ask),
+  // Tab cycles inside, and closing restores the opener's focus.
+  useModalFocus(box, current !== null)
 
   useEffect(() => {
     ask = (opts) =>
@@ -60,11 +67,11 @@ export function ConfirmHost() {
         if (e.target === e.currentTarget) done(false)
       }}
     >
-      <div class="modal" role="alertdialog" aria-modal="true" aria-label={opts.title}>
+      <div ref={box} class="modal" role="alertdialog" aria-modal="true" aria-label={opts.title}>
         <h2 class="modal-title">{opts.title}</h2>
         <p class="modal-msg">{opts.message}</p>
         <div class="modal-actions">
-          <button class="btn" onClick={() => done(false)} autofocus>
+          <button class="btn" onClick={() => done(false)}>
             {t('common.cancel')}
           </button>
           <button

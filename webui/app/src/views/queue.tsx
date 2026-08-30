@@ -408,12 +408,25 @@ function KanbanCard({
 
   const isReview = task.state === 'review'
   const finished = ['done', 'failed', 'cancelled', 'expired'].includes(task.state)
+  const open = () => (task.session_id ? onOpenSession(task.session_id) : onOpen(task.id))
 
   return (
     <div
       class={`kanban-card${finished ? ' finished' : ''}${dropBefore ? ' drop-before' : ''}`}
+      role="button"
+      tabIndex={0}
       draggable={!finished}
-      onClick={() => (task.session_id ? onOpenSession(task.session_id) : onOpen(task.id))}
+      onClick={open}
+      onKeyDown={(e) => {
+        // The card doubles as a button for the keyboard; nested controls
+        // (priority badge, approve/reject) keep their own keys, so only act
+        // when the card itself is the event target.
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          open()
+        }
+      }}
       onDragStart={(e) => {
         if (e.dataTransfer) {
           e.dataTransfer.effectAllowed = 'move'

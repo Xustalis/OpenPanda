@@ -380,6 +380,36 @@ button {
   outline-offset: 2px;
 }
 
+/* Last-resort screen (ErrorBoundary): one centered, quiet card — the console
+   crashed, the explanation and the way back are the only two things on it. */
+.crash-panel {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-6);
+}
+
+.crash-box {
+  max-width: 520px;
+  display: grid;
+  gap: var(--sp-3);
+  text-align: center;
+}
+
+.crash-box h1 {
+  font-size: 1.2rem;
+  margin: 0;
+}
+
+.crash-box p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.crash-box .btn {
+  justify-self: center;
+}
+
 /* A press should feel like one: a 1px nudge held only while the button is
    down. Not animated, so there is nothing for the reduced-motion block below
    to take away. */
@@ -3221,6 +3251,16 @@ label {
 
 .kanban-card:hover::before {
   opacity: 1;
+}
+
+/* Keyboard reach for the board: the same lift a pointer gets, plus a ring.
+   Explicit (not just the global :focus-visible) so the card's own border and
+   shadow participate in the state. */
+.kanban-card:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+  border-color: var(--accent-2-border);
+  box-shadow: var(--shadow-md), var(--shadow-glow-2);
 }
 
 .kanban-card.finished {

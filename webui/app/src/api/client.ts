@@ -5,11 +5,10 @@
 const TOKEN_KEY = 'openpanda.token'
 
 export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
+  readonly status: number
+  constructor(status: number, message: string) {
     super(message)
+    this.status = status
   }
 }
 
@@ -52,12 +51,18 @@ export function currentToken(): string {
 // Auto-login: `panda web` / `/web` open the browser at /?token=… so no
 // manual paste is needed. Consume it once — store the token, then strip it
 // from the address bar so it does not linger in history or get re-shared
-// accidentally when copying the URL.
-{
+// accidentally when copying the URL. The guard keeps this module importable
+// outside a browser (the node-based unit tests).
+if (typeof location !== 'undefined') {
   const urlToken = new URLSearchParams(location.search).get('token')
   if (urlToken) {
     setToken(urlToken)
-    history.replaceState(null, '', location.pathname + location.hash)
+    try {
+      history.replaceState(null, '', location.pathname + location.hash)
+    } catch {
+      // history unavailable (some embedded contexts) — the token is stored,
+      // the URL cleanup is best-effort.
+    }
   }
 }
 
@@ -253,6 +258,10 @@ export interface AskResult {
   stdout?: string
   stderr?: string
   exit_code?: number
+  /** LLM-generated summary of the task outcome. Filled by SummarizeResult
+   *  after every inline task so the UI shows a human-readable summary
+   *  instead of raw stdout/stderr. */
+  report?: string
 }
 
 /** GET /api/update — the self-update pipeline status snapshot. */
@@ -834,6 +843,115 @@ export interface Session {
   turns: SessionTurn[]
 }
 
+// ---- SSE transport ---------------------------------------------------------
+//
+// Both the streaming ask (POST) and the live event feed (GET) speak the same
+// `event: …\ndata: …\n\n` framing over fetch + ReadableStream. One shared
+// opener + one shared frame parser keep the two call sites honest: the token
+// rides in an Authorization header (never in the URL, so it cannot leak via
+// access logs, referrer headers, or shared links), and framing bugs get fixed
+// exactly once.
+
+/** Incremental SSE frame parser. Feed it decoded chunks; complete frames are
+ *  delivered as (event, data) pairs — multi-line `data:` rejoined with \n,
+ *  frames without data dropped, unknown lines ignored. Exported for tests. */
+export function makeSSEFrameParser(onFrame: (event: string, data: string) => void): {
+  push(chunk: string): void
+} {
+  let buf = ''
+  return {
+    push(chunk: string): void {
+      buf += chunk
+      let sep: number
+      while ((sep = buf.indexOf('\n\n')) !== -1) {
+        const frame = buf.slice(0, sep)
+        buf = buf.slice(sep + 2)
+        let event = 'message'
+        const dataLines: string[] = []
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('event: ')) event = line.slice(7).trim()
+          else if (line.startsWith('data: ')) dataLines.push(line.slice(6))
+        }
+        if (dataLines.length === 0) continue
+        onFrame(event, dataLines.join('\n'))
+      }
+    },
+  }
+}
+
+export interface OpenSSEOptions {
+  /** Aborting ends the stream promptly. An abort RESOLVES the promise —
+   *  callers that need AbortError semantics (the composer's stop button)
+   *  re-derive them from their own signal. */
+  signal?: AbortSignal
+  method?: 'GET' | 'POST'
+  /** JSON request body for POST streams. */
+  body?: unknown
+  /** Fired once the response headers arrive with 2xx — the moment the
+   *  (re)connection is proven live. */
+  onOpen?(): void
+  /** Every complete SSE frame. `data` is the raw payload string. */
+  onEvent(event: string, data: string): void
+}
+
+/**
+ * Opens one SSE stream over fetch and pumps frames into `onEvent` until the
+ * stream ends. Promise semantics:
+ *  - natural end of the stream → resolve
+ *  - `signal` aborted → resolve (promptly: the parked reader is cancelled)
+ *  - connection error (network failure, non-2xx) → reject (ApiError carries
+ *    the status; a 401 also clears the token and fires `unauthorized`)
+ */
+export async function openSSE(url: string, opts: OpenSSEOptions): Promise<void> {
+  const headers: Record<string, string> = { Accept: 'text/event-stream' }
+  const token = currentToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+  if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
+
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: opts.method ?? 'GET',
+      headers,
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+      signal: opts.signal,
+    })
+  } catch (err) {
+    // Aborting while fetch is in flight rejects; that is a clean end, not a
+    // fault (the abort-resolves contract above).
+    if (isAbort(err) || opts.signal?.aborted) return
+    throw err
+  }
+  if (!res.ok) {
+    if (res.status === 401) {
+      clearToken()
+      unauthorizedListeners.forEach((fn) => fn())
+    }
+    const text = await res.text().catch(() => '')
+    throw new ApiError(res.status, text || res.statusText)
+  }
+  if (!res.body) throw new ApiError(0, 'no response body')
+  opts.onOpen?.()
+
+  const reader = res.body.getReader()
+  // fetch's own abort does not always propagate to a reader that is parked in
+  // read(); cancelling it explicitly ends the loop immediately.
+  const onAbort = () => void reader.cancel().catch(() => {})
+  opts.signal?.addEventListener('abort', onAbort, { once: true })
+  const decoder = new TextDecoder()
+  const parser = makeSSEFrameParser(opts.onEvent)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      parser.push(decoder.decode(value, { stream: true }))
+    }
+  } finally {
+    opts.signal?.removeEventListener('abort', onAbort)
+  }
+  // A cancelled reader ends the loop cleanly — still an abort-driven end.
+}
+
 // ---- Streaming session ask (SSE over fetch POST) ----
 
 export interface AskStreamHandlers {
@@ -861,67 +979,26 @@ export async function askSessionStream(
   h: AskStreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
-  const token = currentToken()
-  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}/ask`, {
+  await openSSE(`/api/sessions/${encodeURIComponent(id)}/ask`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ prompt, authorize }),
+    body: { prompt, authorize },
     signal,
-  })
-  if (!res.ok) {
-    if (res.status === 401) {
-      clearToken()
-      unauthorizedListeners.forEach((fn) => fn())
-    }
-    const text = await res.text().catch(() => '')
-    throw new ApiError(res.status, text || res.statusText)
-  }
-  if (!res.body) throw new ApiError(0, 'no response body')
-
-  const reader = res.body.getReader()
-  // fetch's own abort does not always propagate to a reader that is parked in
-  // read(); cancelling it explicitly ends the loop immediately.
-  const onAbort = () => void reader.cancel().catch(() => {})
-  signal?.addEventListener('abort', onAbort, { once: true })
-  const decoder = new TextDecoder()
-  let buf = ''
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      let sep: number
-      while ((sep = buf.indexOf('\n\n')) !== -1) {
-        const frame = buf.slice(0, sep)
-        buf = buf.slice(sep + 2)
-        let event = 'message'
-        const dataLines: string[] = []
-        for (const line of frame.split('\n')) {
-          if (line.startsWith('event: ')) event = line.slice(7).trim()
-          else if (line.startsWith('data: ')) dataLines.push(line.slice(6))
-        }
-        if (dataLines.length === 0) continue
-        let payload: any
-        try {
-          payload = JSON.parse(dataLines.join('\n'))
-        } catch {
-          continue
-        }
-        if (event === 'reasoning') h.onReasoning(payload.text ?? '')
-        else if (event === 'delta') h.onDelta(payload.text ?? '')
-        else if (event === 'status') h.onStatus(payload.text ?? '')
-        else if (event === 'result') h.onResult(payload as AskResult)
-        else if (event === 'error') h.onError(payload.message ?? 'unknown error')
+    onEvent: (event, data) => {
+      let payload: any
+      try {
+        payload = JSON.parse(data)
+      } catch {
+        return
       }
-    }
-  } finally {
-    signal?.removeEventListener('abort', onAbort)
-  }
-  // A cancelled reader ends the loop cleanly, so surface the abort the way
-  // fetch would have if it had won the race.
+      if (event === 'reasoning') h.onReasoning(payload.text ?? '')
+      else if (event === 'delta') h.onDelta(payload.text ?? '')
+      else if (event === 'status') h.onStatus(payload.text ?? '')
+      else if (event === 'result') h.onResult(payload as AskResult)
+      else if (event === 'error') h.onError(payload.message ?? 'unknown error')
+    },
+  })
+  // openSSE resolves on abort; the composer's stop button contract is an
+  // AbortError, so surface the abort the way fetch would have.
   if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
 }
 
@@ -955,76 +1032,138 @@ export interface SubscribeEventsOptions {
 }
 
 /**
- * Opens GET /api/events as a long-lived SSE stream. Returns a Promise that
- * resolves when the connection ends naturally (server close, network drop);
- * consumers unsubscribe by passing an AbortSignal and aborting it.
+ * Opens GET /api/events as a long-lived SSE stream and keeps it alive:
+ * transient connection errors and server-side closes trigger an automatic
+ * reconnect with exponential backoff (1s → 15s cap). The returned Promise
+ * resolves when the subscription is deliberately ended — the AbortSignal
+ * fires, or the panel answers 401 (which also clears the token and fires
+ * `unauthorized`; the gate screen handles the rest, so reconnecting into a
+ * revoked token would be pointless).
  *
- * Design rationale (§5.1): this is one shared EventSource per call so the
- * orbit/hooks layer can multiplex `onTrace` events to the right task's
- * reducer. Authentication uses the ?token= query param because browsers'
- * EventSource API cannot send Authorization headers.
+ * Each successful reconnection delivers a synthetic `onChange` event with
+ * kinds ['reconnect'] so subscribers can re-fetch once and reconcile whatever
+ * happened while the link was down — the same "refetch after reconnect"
+ * semantics the old EventSource path had.
+ *
+ * Authentication rides in an Authorization header via openSSE; the URL stays
+ * token-free (the server still accepts ?token= for legacy clients, but this
+ * client never puts the secret in a URL).
  */
 export function subscribeEvents(opts: SubscribeEventsOptions): Promise<void> {
   const params = new URLSearchParams()
-  const token = currentToken()
-  if (token) params.set('token', token)
   if (opts.trace) params.set('trace', '1')
   const url = '/api/events' + (params.size ? '?' + params.toString() : '')
 
-  const es = new EventSource(url, { withCredentials: false })
-
-  const cleanup = () => {
-    try { es.close() } catch { /* closed twice during abort; ignore */ }
-  }
-  if (opts.signal) {
-    if (opts.signal.aborted) { cleanup(); return Promise.resolve() }
-    opts.signal.addEventListener('abort', cleanup, { once: true })
-  }
-
   return new Promise<void>((resolve) => {
-    es.addEventListener('change', (e: any) => {
-      if (!opts.onChange) return
-      const raw: string = e.data ?? ''
-      const parts = raw.split(' ')
-      const kinds = (parts[0] ?? '').split(',').filter(Boolean)
-      const fps = (parts[1] ?? '').split('/')
-      opts.onChange({
-        kinds,
-        taskFP: fps[0],
-        nodeFP: fps[1],
-        reminderFP: fps[2],
-        raw,
-      })
-    })
-    es.addEventListener('trace', (e: any) => {
-      if (!opts.onTrace) return
-      try {
-        const payload = JSON.parse(e.data ?? '{}') as any
-        opts.onTrace({
-          id: payload.id ?? 0,
-          ts: payload.ts ?? 0,
-          task_id: payload.task_id,
-          type: payload.type,
-          data: payload.data,
-          data_raw: typeof payload.data === 'string' ? payload.data : undefined,
-        })
-      } catch {
-        // Malformed trace frames are dropped: the orbit fall-back is the
-        // hydrate-from-getTask() call, not the live stream.
+    let stopped = false
+    let delay = RECONNECT_MIN_MS
+    let attempt = 0
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const finish = () => {
+      if (stopped) return
+      stopped = true
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
       }
-    })
-    es.addEventListener('error', () => {
-      // EventSource auto-reconnects with exponential backoff on its own. We
-      // surface the drop via a synthetic change-event kind "reconnect" so the
-      // app can re-fetch once if it wants, but never block on a glitch.
-      try {
-        opts.onChange?.({ kinds: ['reconnect'], raw: 'reconnect' })
-      } catch { /* ignore */ }
-    })
-    es.addEventListener('close', () => { cleanup(); resolve() })
-    // The underlying EventSource has no standardized "close" lifecycle on its
-    // own (it retries forever). We honor abort via the signal path above; if
-    // nothing else tears the stream down this promise simply never resolves,
-    // which matches the "infinite subscription" semantics the caller wants.
+      resolve()
+    }
+    const onAbort = () => finish()
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        resolve()
+        return
+      }
+      opts.signal.addEventListener('abort', onAbort, { once: true })
+    }
+
+    const dispatch = (event: string, data: string) => {
+      if (event === 'change') {
+        if (!opts.onChange) return
+        const parts = data.split(' ')
+        const kinds = (parts[0] ?? '').split(',').filter(Boolean)
+        const fps = (parts[1] ?? '').split('/')
+        opts.onChange({
+          kinds,
+          taskFP: fps[0],
+          nodeFP: fps[1],
+          reminderFP: fps[2],
+          raw: data,
+        })
+      } else if (event === 'trace') {
+        if (!opts.onTrace) return
+        try {
+          const payload = JSON.parse(data || '{}') as any
+          opts.onTrace({
+            id: payload.id ?? 0,
+            ts: payload.ts ?? 0,
+            task_id: payload.task_id,
+            type: payload.type,
+            data: payload.data,
+            data_raw: typeof payload.data === 'string' ? payload.data : undefined,
+          })
+        } catch {
+          // Malformed trace frames are dropped: the orbit fall-back is the
+          // hydrate-from-getTask() call, not the live stream.
+        }
+      }
+    }
+
+    const scheduleReconnect = () => {
+      if (stopped) return
+      const wait = delay
+      delay = Math.min(delay * 2, RECONNECT_MAX_MS)
+      timer = setTimeout(() => {
+        timer = null
+        connect()
+      }, wait)
+    }
+
+    const connect = () => {
+      if (stopped) return
+      attempt++
+      const nth = attempt
+      openSSE(url, {
+        signal: opts.signal,
+        onOpen: () => {
+          if (stopped) return
+          // Link proven live again: reset the backoff and, when this was a
+          // recovery rather than the first connection, tell subscribers to
+          // re-fetch once (the synthetic "reconnect" change event).
+          delay = RECONNECT_MIN_MS
+          if (nth > 1) {
+            try {
+              opts.onChange?.({ kinds: ['reconnect'], raw: 'reconnect' })
+            } catch {
+              /* a throwing subscriber must not kill the bus */
+            }
+          }
+        },
+        onEvent: dispatch,
+      })
+        .then(() => {
+          // Abort-driven or server-side end of the stream. An aborted signal
+          // means the subscriber walked away; anything else we treat like a
+          // dropped link and re-dial — the old EventSource reconnected on
+          // every close too.
+          if (stopped || opts.signal?.aborted) return finish()
+          scheduleReconnect()
+        })
+        .catch((err: unknown) => {
+          if (stopped || isAbort(err)) return finish()
+          if (err instanceof ApiError && err.status === 401) {
+            // Token revoked: openSSE already cleared it and broadcast
+            // `unauthorized`. Reconnecting would just hammer a 401.
+            return finish()
+          }
+          scheduleReconnect()
+        })
+    }
+
+    connect()
   })
 }
+
+const RECONNECT_MIN_MS = 1000
+const RECONNECT_MAX_MS = 15000

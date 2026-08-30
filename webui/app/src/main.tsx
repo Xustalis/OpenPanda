@@ -1,9 +1,15 @@
 import { render } from 'preact'
 import { App } from './app'
+import { ErrorBoundary } from './components/error-boundary'
 import './theme' // applies the persisted light/dark/auto choice before first paint
 import './styles.css'
 
-render(<App />, document.getElementById('app')!)
+render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>,
+  document.getElementById('app')!,
+)
 
 // PWA: register the service worker for offline shell reloads and Web Push
 // (reminder notifications). The SW never caches /api/*, so live data stays

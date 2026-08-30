@@ -7,11 +7,11 @@ export interface Messages {
   [key: string]: string
 }
 
-import de from './de'
-import en from './en'
-import es from './es'
-import ja from './ja'
-import zhCN from './zh-CN'
+import de from './de.ts'
+import en from './en.ts'
+import es from './es.ts'
+import ja from './ja.ts'
+import zhCN from './zh-CN.ts'
 
 export const localeNames: Record<Locale, string> = {
   en: 'English',
@@ -43,7 +43,9 @@ function detectLocale(): Locale {
   } catch {
     // private mode etc. — fall through to navigator
   }
-  for (const tag of navigator.languages ?? []) {
+  // Guarded so the module stays importable outside a browser (node tests).
+  const tags = typeof navigator !== 'undefined' ? navigator.languages ?? [] : []
+  for (const tag of tags) {
     if (tag in dictionaries) return tag as Locale
     const base = tag.split('-')[0]
     const hit = locales.find((l) => l.split('-')[0] === base)
