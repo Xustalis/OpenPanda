@@ -3,6 +3,9 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -109,7 +112,10 @@ func createV0Schema(t *testing.T, db *sql.DB) {
 	}
 }
 
-func TestMigrateFromV4IsNoOp(t *testing.T) {
+// TestMigrateNewerDatabaseIsRefused pins the D-1 contract: an old binary
+// meeting a database that a newer binary already migrated must fail loudly,
+// not silently pass and run stale assumptions against a newer schema.
+func TestMigrateNewerDatabaseIsRefused(t *testing.T) {
 	db, err := Open(":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -123,8 +129,12 @@ func TestMigrateFromV4IsNoOp(t *testing.T) {
 		t.Fatalf("set user_version: %v", err)
 	}
 
-	if err := Migrate(db); err != nil {
-		t.Fatalf("migrate on v999: %v", err)
+	err = Migrate(db)
+	if err == nil {
+		t.Fatal("migrate on a newer database must fail, got nil")
+	}
+	if !strings.Contains(err.Error(), "newer") {
+		t.Fatalf("error should explain the version mismatch, got: %v", err)
 	}
 
 	var version int
@@ -132,7 +142,72 @@ func TestMigrateFromV4IsNoOp(t *testing.T) {
 		t.Fatalf("read user_version: %v", err)
 	}
 	if version != 999 {
-		t.Fatalf("user_version = %d, want 999", version)
+		t.Fatalf("user_version = %d, want 999 (a refused migrate must not write)", version)
+	}
+}
+
+// TestMigrateConcurrentHandles simulates two processes starting on the same
+// data directory at once (daemon + panel is the everyday case): two handles
+// migrate the same file concurrently, and the BEGIN IMMEDIATE + in-tx
+// recheck must make every version apply exactly once.
+func TestMigrateConcurrentHandles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "concurrent.db")
+
+	// Instrument the migration list: count how many times each version's
+	// Apply body actually runs. Restore the original slice when done.
+	orig := migrations
+	defer func() { migrations = orig }()
+	var mu sync.Mutex
+	counts := map[int]int{}
+	instrumented := make([]Migration, 0, len(orig))
+	for _, m := range orig {
+		apply := m.Apply
+		version := m.Version
+		m.Apply = func(tx MigrationExec) error {
+			mu.Lock()
+			counts[version]++
+			mu.Unlock()
+			return apply(tx)
+		}
+		instrumented = append(instrumented, m)
+	}
+	migrations = instrumented
+
+	dbA, err := Open(path)
+	if err != nil {
+		t.Fatalf("open A: %v", err)
+	}
+	defer dbA.Close()
+	dbB, err := Open(path)
+	if err != nil {
+		t.Fatalf("open B: %v", err)
+	}
+	defer dbB.Close()
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); errs[0] = Migrate(dbA) }()
+	go func() { defer wg.Done(); errs[1] = Migrate(dbB) }()
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("handle %c migrate failed: %v", 'A'+i, err)
+		}
+	}
+
+	want := orig[len(orig)-1].Version
+	var version int
+	if err := dbA.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != want {
+		t.Fatalf("user_version = %d, want %d", version, want)
+	}
+	for _, m := range orig {
+		if counts[m.Version] != 1 {
+			t.Errorf("migration v%d (%s) applied %d times, want exactly 1", m.Version, m.Name, counts[m.Version])
+		}
 	}
 }
 
