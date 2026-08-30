@@ -6,7 +6,7 @@ OpenPanda をより良くすることに関心をお寄せいただき、あり�
 
 | ツール  | バージョン | 用途                          |
 | ------- | ---------- | ----------------------------- |
-| Go      | ≥ 1.22     | カーネル、CLI、パネル、テスト |
+| Go      | ≥ 1.26.5 | カーネル、CLI、パネル、テスト |
 | Node.js | ≥ 18       | Web コンソール（`webui/app`） |
 | Python  | ≥ 3.10     | 音声サイドカー、Agent アダプタ |
 
@@ -37,6 +37,8 @@ make gate           # build + vet + test + race（マージゲート）
 gofmt -l internal/ cmd/ adapters/ webui/panel/   # 何も出力してはならない
 cd webui/app && npm run typecheck                # Web コンソール変更時
 ```
+
+CI は同じチェックを並行ジョブとして実行します——`lint`（gofmt + vet）、`test`、`race`（`make race-focused` により並行ホットスポットのパッケージに限定）、`web`（typecheck + node テスト + 埋め込みコンソールのビルド）、そしてクロスプラットフォームマトリクス——そのうえで、この完全な `make gate` が引き続きローカルの基準です。どちらもグリーンに保ってください。
 
 - **`go test -race ./...` が必ず通ること**——カーネルは（ピアレジストリ・タスクストア・SSE ハブといった）並行システムです。レースディテクタの指摘は警告ではなく、リリースブロッカーです。
 - コアモジュール（`internal/core`、`internal/scheduler`、`internal/storage`）は、現実的な範囲で**約 60% 以上のテストカバレッジ**を維持してください。バグ修正には、修正前に失敗するリグレッションテストを添えてください。

@@ -38,6 +38,11 @@ jobs:
         run: make fmt-check
       - name: go vet
         run: make vet
+      # Doc-drift guard: the retired deepseek-chat alias must not linger in
+      # READMEs/example configs, and install.md version examples must track
+      # the latest release tag.
+      - name: Docs drift check
+        run: sh scripts/check-docs.sh
 
   test:
     runs-on: ubuntu-latest

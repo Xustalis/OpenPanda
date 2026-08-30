@@ -69,7 +69,7 @@ Claude Code、Codex、OpenCode、OpenClaw……どれも単一マシン上の強
 - **対話型 REPL + 内蔵 Web コンソール** — `panda repl` が操作席：素の入力は ask エンジンへ、スラッシュコマンド（`/tasks`、`/approve`、`/projects`、`/nodes`、`/lang`…）でパネルを駆動し、`/web` で内蔵コンソールをワンクリック起動。タスクキューは**カンバンボード**（未着手/進行中/承認待ち/完了）でインライン承認対応。チャット、リマインダー、編集可能なメモリページ（USER/MEMORY/DREAMS）、設定ページ（モデルエンドポイント：Anthropic/OpenAI 互換、MCP サーバー）も同梱。`panda web` はワンコマンドで起動：デフォルトでループバック + 一時トークン、ブラウザがログイン済みで開きます。UI 言語は 5 種類。
 - **セルフアップデート** — `panda web`（および `/web`）はバックグラウンドでリリースチャネルを確認し、コンソールが利用可能な更新をダウンロード・検証して、タスクキューがアイドルになると 1 クリックでインストールします。ダウンロード済みの更新を破棄しても何も残りません。
 - **防御と安全レイヤ** — 権限Tier、サーキットブレーカー、スコープ逸脱検出と無限ループ検出。実行側の強化：サンドボックス、ネットワーク許可リスト、シークレットの秘匿化、監査ログ。
-- **スリム設計** — 定常RSSは約 **13–20 MB**。リソース制約のあるシングルボードコンピュータで動くことを前提に設計されています。
+- **スリム設計** — 定常RSSは約 **21–23 MB**（`make measure` 実測）。リソース制約のあるシングルボードコンピュータで動くことを前提に設計されています。
 - **クリーンなクロスコンパイル** — プラットフォームごとに単一の静的バイナリ、CGO不要（`modernc.org/sqlite`による純Go SQLite）。
 
 ## アーキテクチャ
@@ -212,7 +212,7 @@ network:
     - "worker-1.your-tailnet.ts.net:7836"
 model:
   base_url: "https://api.deepseek.com/anthropic"  # 任意の /v1/messages 互換エンドポイント
-  model: "deepseek-chat"
+  model: "deepseek-v4-flash"
   # api_key: ""               # 環境変数 OPENPANDA_MODEL_API_KEY を推奨
 ```
 
@@ -271,28 +271,42 @@ model:
 |---|---|
 | `panda`（引数なし） | 対話型REPLを起動（`panda repl`と同じ）；デーモンは `panda daemon` サブコマンドに移行 |
 | `panda daemon [--config PATH] [--card PATH]` | デーモン起動：ノード登録、ハートビート、WSサーバー、ピア再接続 |
-| `panda ask [--config PATH] [--card PATH] [--authorize] "<質問>"` | 統一エントリ：answer / tool_call / task / plan に分類して実行 |
+| `panda ask [--config PATH] [--card PATH] [--authorize] [--output-format json \| stream-json] "<質問>"` | 統一エントリ：answer / tool_call / task / plan に分類して実行；`--output-format` はヘッドレス用途に 1 つの JSON オブジェクトまたは NDJSON イベントを出力 |
 | `panda plan run <ファイル.yaml> \| show <id> \| example` | クロスデバイス多段パイプライン：段階はただのタスク（キュー投入、ハードウェア別ルーティング、再試行、レビュー停泊）で、plan が順序を与え、前段階の作業ディレクトリを次のマシンの段階へ渡す。`run --dry-run` は作成せずルーティングのみ検証・印刷 |
 | `panda voice [--once] [--mute]` | デスクペット入口：ウェイクワード → ASR → 同じ入口パイプライン → TTS。キーボードのないデバイス向け。`--once` は 1 発だけ処理、`--mute` は朗読の代わりに印刷 |
 | `panda repl [--config PATH] [--card PATH]` | 対話シェル：スラッシュコマンド（tasks/approve/projects/nodes/lang）、素の入力は ask エンジンへ、`/web` で組み込みコンソールを起動 |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | コマンド1つで Web コンソール：デフォルトはループバック + 一時トークン、ブラウザが開いた時点でログイン済み |
+| `panda session list \| new \| show \| rm \| ask \| diff \| merge` | git worktree ベースのチャットセッション：`new [--title T]` がリポジトリに worktree を切り出し、`ask <id> <prompt>` で継続、`diff <id>` で変更を確認、`merge <id> [--message M]` でブランチを HEAD にマージ |
 | `panda init` | 対話形式の初回セットアップ：`config.yaml` + `capabilities.yaml` を生成（モデルエンドポイント、ノード名、ハードウェアスキャンの既定値） |
 | `panda install [--dir PATH] [--no-path]` | `panda` をグローバルコマンドとして PATH に登録（再起動後も有効）、インストール済みコピーの自動検証付き |
-| `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run]` | 安全なアンインストール：計画を表示 → `confirm` 入力で二次確認、ホワイトリスト削除のみ、ユーザーアセット（projects/memory/skills）は常に保持、zip バックアップとレポートを生成 |
+| `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run] [--purge]` | 安全なアンインストール：計画を表示 → `confirm` 入力で二次確認、ホワイトリスト削除のみ、ユーザーアセット（projects/memory/skills）は常に保持、zip バックアップとレポートを生成；`--purge` はユーザーデータも削除し、さらにもう一度の確認が必要 |
 | `panda doctor [--config PATH]` | セルフチェック：インストール済みコピーの実行、PATH 解決、永続化、設定/DB の可用性 |
 | `panda status` | ノードとタスクの状態 |
+| `panda nodes` | 現在および既知のノード（status と同じデータ） |
+| `panda nodes add <host:port>` | ダイヤルするピアを追加（`shared_secret` 未設定時は生成し、相手マシンの参加ガイドを表示）——再起動なしで即時ダイヤル |
+| `panda nodes invite` | ピアリストを変更せずに参加ガイドを表示 |
+| `panda nodes disconnect <addr>` | ダイヤルリストからピアを削除 |
+| `panda nodes remove <id>` | ライブピアが存在しない古いディレクトリ行を削除；自ノードとオンラインノードは拒否される（再登録されるため） |
+| `panda pair --secret S --peer <host:port>` | 新しいマシンから既存ネットワークに参加：共有シークレットとピアをこのノードの設定に書き込む |
 | `panda queue` | タスクキューの一覧 |
-| `panda task [--config PATH] <task-id>` | タスクの詳細 |
+| `panda task [--config PATH] <task-id>` | タスクの詳細 + タイムライン |
+| `panda task add --title T [--prompt P] [--priority レベル] [--project p] [--authorize]` | タスクを手動でキューに投入（`--card` が必要）；優先度は `low \| medium \| normal \| high \| critical` |
+| `panda task priority <id> <level>` | タスクの優先度を変更 |
+| `panda task move <id> <seq>` | ドラッグソートキューを並べ替え |
 | `panda cancel [--config PATH] <task-id>` | タスクをキャンセル（実行ノードへカスケード） |
 | `panda approve [--config PATH] <task-id>` | レビュー中のタスクを承認（review → done） |
 | `panda reject [--config PATH] [--reason s] <task-id>` | レビュー中のタスクを却下 |
 | `panda logs [--config PATH] <task-id>` | タスク実行ログ |
-| `panda skill` | スキルストアの管理 |
+| `panda skill list \| approve <name> \| reject <name>` | スキルストアの管理 |
 | `panda reminder list \| add \| rm` | リマインダー：一覧 / 追加（`--after 10m` または `--at "2006-01-02 15:04"`）/ 削除 |
+| `panda memory list \| get \| set \| rm` | メモリファイル：`user \| memory \| dreams \| topic:<n> \| project:<n> \| daily:<date>`（`set` はデフォルトで stdin を読み、`--file F` も可；dreams と daily は読み取り専用） |
+| `panda project list \| create` | プロジェクトメモリ |
+| `panda config <セクション> <get \| set \| test>` | `config.yaml` の表示/編集（コメント保持）：セクションは `model \| mcp \| limits \| routing \| injection \| approval`；変更は daemon/パネル再起動後に反映 |
 | `panda detect [-o PATH]` | このマシンのハードウェア（CPU/RAM/GPU/Agent CLI）をスキャンして capabilities.yaml のドラフトを生成 |
 | `panda card show \| rescan \| edit \| set` | このノードの能力カード：内容と読み込み元のパスを表示、ハードウェアとインストール済み Agent CLI を再スキャン（`rescan` は差分のみ表示、`--write` で適用し `.bak` を残す）、`$EDITOR` で編集、`set <フィールド>=<値>` でエディタ無しに 1 項目だけ変更。探測されたハードウェア項目は上書きされ、人が決めた項目（ノード名・resource_class・max_concurrent_tasks・agent の tier・native/manual 能力）は保持されます |
+| `panda card native \| agent \| manual add \| remove \| set` | CLI からの構造化カード編集：エディタと同じ検証器 + `.bak` + 原子書き込みパイプラインで、稼働中の daemon にホットリロード |
 | `panda metrics [--csv]` | 委譲メトリクスをエクスポート |
-| `panda audit [--task <id>]` | 監査ログまたは単一タスクイベントの `prev_hash` チェーンを検証 |
+| `panda audit verify \| entries [--task <id>]` | `verify` は監査ログ（または単一タスクイベント）の `prev_hash` チェーンを検証；`entries` は監査証跡行を出力 |
 | `panda version` | バージョンを表示 |
 
 ## 設定
@@ -314,12 +328,22 @@ model:
 | `storage` | `projects_path` | プロジェクト単位メモリのルート |
 | `storage` | `skills_path` | プロシージャル記憶のルート |
 | `storage` | `work_path` | Agentの実行ディレクトリ；スコープ逸脱はここで計測 |
+| `storage` | `artifact_path` | パック済みタスク成果物プール（ハッシュ命名；ステージ出力はここ経由でノード間を渡る） |
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic互換Messages APIのベースURL |
-| `model` | `model` | モデルID（例：`deepseek-chat`、`deepseek-reasoner`） |
+| `model` | `model` | モデルID（例：`deepseek-v4-flash`） |
 | `model` | `api_key` | シークレット — `OPENPANDA_MODEL_API_KEY`を推奨 |
 | `model` | `api_type` | `anthropic` \| `openai`（デフォルト `anthropic`） |
 | `model` | `max_tokens` | 補完トークン上限（デフォルト4096） |
+| `injection` | `model` | Agent サブプロセスへのモデル注入：`auto`（デフォルト——Agent 自身がモデル資格情報を持たない場合のみ注入） \| `always` \| `never` |
+| `routing` | `preferred_agents` | ルーティングスコア +0.5 のボーナスが付与される Agent 名 |
+| `memory` | `limits.user` | USER.md の文字数上限（デフォルト 5000） |
+| `memory` | `limits.memory` | MEMORY.md の文字数上限（デフォルト 10000） |
+| `memory` | `limits.project` | プロジェクトごとの MEMORY.md 文字数上限（デフォルト 30000） |
+| `approval` | `mode` | タスク承認ゲート：`always` \| `on-request`（デフォルト——モデルがリスクありとマークしたタスクのみ） \| `never` |
+| `timeouts` | `task_lease_s` | タスク 1 回の試行がリースを保持できる時間（デフォルト 1200）；`agent_s` より十分大きくする必要がある |
+| `timeouts` | `agent_s` | Agent アダプター 1 回実行の実時間バジェット（デフォルト 600） |
+| `timeouts` | `supervise_rounds` | タスクごとの 実行 → 判定 → 再委譲 ループの上限（デフォルト 5） |
 | `mcp` | `command` | stdio MCP サーバーのコマンドライン（空 = 無効）。ツールはエージェントのツールセットにホットロード |
 | `push` | `enabled` | `/api/push/*`の提供とWeb Push送信を有効化（内蔵コンソール + webuiサイドカー） |
 | `push` | `vapid_subject` | VAPIDサブジェクト（例：`mailto:`アドレス） |

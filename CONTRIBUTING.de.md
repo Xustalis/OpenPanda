@@ -8,7 +8,7 @@ und die Konventionen, die den Code auch bei wachsendem Umfang lesbar halten.
 
 | Werkzeug | Version | Benötigt für                               |
 | -------- | ------- | ------------------------------------------ |
-| Go       | ≥ 1.22  | Kernel, CLI, Panel, Tests                  |
+| Go       | ≥ 1.26.5 | Kernel, CLI, Panel, Tests                  |
 | Node.js  | ≥ 18    | Web-Konsole (`webui/app`)                  |
 | Python   | ≥ 3.10  | Voice-Sidecar, Agent-Adapter               |
 
@@ -42,6 +42,8 @@ make gate           # build + vet + test + race (das Merge-Gate)
 gofmt -l internal/ cmd/ adapters/ webui/panel/   # darf nichts ausgeben
 cd webui/app && npm run typecheck                # bei Web-Konsolen-Änderungen
 ```
+
+CI führt dieselben Prüfungen als parallele Jobs aus — `lint` (gofmt + vet), `test`, `race` (über `make race-focused` auf die nebenläufigen Hotspot-Pakete beschränkt), `web` (Typecheck + Node-Tests + der Build der eingebetteten Konsole) und die Cross-Plattform-Matrix — zusätzlich bleibt dieses vollständige `make gate` der lokale Maßstab; halte beide grün.
 
 - **`go test -race ./...` muss durchlaufen** — der Kernel ist ein nebenläufiges
   System (Peer-Registry, Task-Store, SSE-Hub); Befunde des Race-Detektors sind

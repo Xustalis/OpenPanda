@@ -120,7 +120,7 @@ WebSocket links you control.
 - **Defense & safety layers** — permission tiers, a circuit breaker, scope-drift
   and infinite-loop detection, plus execution-side hardening: sandboxing,
   network allow-lists, secret redaction, and audit logging.
-- **Slim by design** — steady-state RSS ≈ **13–20 MB**, built to live on
+- **Slim by design** — steady-state RSS ≈ **21–23 MB** (measured via `make measure`), built to live on
   resource-constrained single-board computers.
 - **Cross-compiles cleanly** — one static binary per platform, no CGO needed
   (pure-Go SQLite via `modernc.org/sqlite`).
@@ -275,7 +275,7 @@ network:
     - "worker-1.your-tailnet.ts.net:7836"
 model:
   base_url: "https://api.deepseek.com/anthropic"  # any /v1/messages-compatible endpoint
-  model: "deepseek-chat"
+  model: "deepseek-v4-flash"
   # api_key: ""               # prefer the OPENPANDA_MODEL_API_KEY env var
 ```
 
@@ -347,29 +347,43 @@ Manage skills:
 |---|---|
 | `panda` (no args) | Open the interactive REPL (same as `panda repl`); the daemon now runs via the `panda daemon` subcommand |
 | `panda daemon [--config PATH] [--card PATH]` | Run the daemon: register node, heartbeat, WS server, peer reconnect |
-| `panda ask [--config PATH] [--card PATH] [--authorize] "<question>"` | Unified entry: classify into answer / tool_call / task / plan and execute |
+| `panda ask [--config PATH] [--card PATH] [--authorize] [--output-format json \| stream-json] "<question>"` | Unified entry: classify into answer / tool_call / task / plan and execute; `--output-format` emits one JSON object or NDJSON events for headless use |
 | `panda plan run <file.yaml> \| show <id> \| example` | Multi-stage cross-device pipeline: a stage IS an ordinary task (queues, routes by hardware, retries, parks in review), the plan adds the ordering and hands each stage's output dir to the next machine's stage; `run --dry-run` validates and prints the routing without creating anything |
 | `panda voice [--once] [--mute]` | Desk-pet entry: wake word → ASR → the same entry pipeline → TTS, for a device with no keyboard; `--once` handles a single utterance, `--mute` prints instead of speaking |
 | `panda repl [--config PATH] [--card PATH]` | Interactive shell: slash commands (tasks/approve/projects/nodes/lang), bare input goes to the ask engine, `/web` boots the embedded console |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | One-command web console: loopback + ephemeral token by default, opens the browser already logged in |
+| `panda session list \| new \| show \| rm \| ask \| diff \| merge` | Chat sessions over git worktrees: `new [--title T]` carves a worktree in a repo, `ask <id> <prompt>` continues one, `diff <id>` shows its changes, `merge <id> [--message M]` merges the branch into HEAD |
 | `panda init` | Interactive first-run setup: generates `config.yaml` + `capabilities.yaml` (model endpoint, node name, hardware-scan defaults) |
 | `panda install [--dir PATH] [--no-path]` | Register `panda` globally on PATH (persistent across reboots) and self-verify the installed copy |
-| `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run]` | Safe removal: full plan first, `confirm` required, whitelist-only deletion, user assets (projects/memory/skills) always kept, zip backup + report |
+| `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run] [--purge]` | Safe removal: full plan first, `confirm` required, whitelist-only deletion, user assets (projects/memory/skills) always kept, zip backup + report; `--purge` also deletes user data and needs a second confirmation |
 | `panda doctor [--config PATH]` | Self-check: installed copy runs, PATH resolves, persistence survives reboot, config/database usable |
 | `panda status` | Node & task status |
+| `panda nodes` | Current and known nodes (same data as status) |
+| `panda nodes add <host:port>` | Add a peer to dial (generates `shared_secret` when missing, prints the join guide for the other machine) — live-dials without a restart |
+| `panda nodes invite` | Print the join guide without changing the peer list |
+| `panda nodes disconnect <addr>` | Remove a peer from the dial list |
+| `panda nodes remove <id>` | Drop a stale directory row no live peer backs; the local node and online nodes are refused |
+| `panda pair --secret S --peer <host:port>` | Join an existing network from a new machine: writes the shared secret and peer into this node's config |
 | `panda queue` | List the task queue |
-| `panda task [--config PATH] <task-id>` | Task details |
+| `panda task [--config PATH] <task-id>` | Task details + timeline |
+| `panda task add --title T [--prompt P] [--priority LEVEL] [--project p] [--authorize]` | Enqueue a task by hand (needs `--card`); priority is `low \| medium \| normal \| high \| critical` |
+| `panda task priority <id> <level>` | Change a task's priority |
+| `panda task move <id> <seq>` | Reorder the drag-sort queue |
 | `panda cancel [--config PATH] <task-id>` | Cancel a task (cascades to the executing node) |
 | `panda approve [--config PATH] <task-id>` | Approve a reviewed task (review → done) |
 | `panda reject [--config PATH] [--reason s] <task-id>` | Reject a reviewed task |
 | `panda logs [--config PATH] <task-id>` | Task execution logs |
-| `panda skill` | Skill store management |
+| `panda skill list \| approve <name> \| reject <name>` | Skill store management |
 | `panda reminder list \| add \| rm` | Scheduled reminders: list / add (`--after 10m` or `--at "2006-01-02 15:04"`) / remove |
+| `panda memory list \| get \| set \| rm` | Memory files: `user \| memory \| dreams \| topic:<n> \| project:<n> \| daily:<date>` (`set` reads stdin or `--file F`; dreams and daily are read-only) |
+| `panda project list \| create` | Project memories |
+| `panda config <section> <get \| set \| test>` | View/edit `config.yaml` (comments kept): sections `model \| mcp \| limits \| routing \| injection \| approval`; changes apply after the daemon/panel restarts |
 | `panda detect [-o PATH]` | Scan this machine's hardware (CPU/RAM/GPU/agent CLIs) into a capabilities.yaml draft |
 | `panda card show \| rescan \| edit \| set` | This node's capability card: print it (and which file it came from), re-scan hardware + installed agent CLIs (`rescan` prints a diff, `--write` applies it and keeps a `.bak`), open it in `$EDITOR`, or `set <field>=<value>` headlessly. Probed hardware is overwritten, hand-written decisions (device name, resource_class, max_concurrent_tasks, agent tiers, native/manual abilities) are preserved |
+| `panda card native \| agent \| manual add \| remove \| set` | Structured card edits from the CLI: same validator + `.bak` + atomic-write pipeline as the editor, hot-reloaded into the running daemon |
 | `panda agents [list]` | Probe the agent CLIs on PATH (Codex, Claude Code, OpenCode, Grok Build, DeepSeek Harness, OpenClaw, Hermes); `test <name>` checks one, `install|update <name>` prints its install command + download link |
 | `panda metrics [--csv]` | Export delegation metrics |
-| `panda audit [--task <id>]` | Verify the `prev_hash` chain of the audit log or one task's events |
+| `panda audit verify \| entries [--task <id>]` | `verify` checks the `prev_hash` chain of the audit log (or one task's events); `entries` prints the audit trail rows |
 | `panda version` / `panda help` | Print version / command overview |
 
 ## Configuration
@@ -401,12 +415,22 @@ online nodes are refused, since both re-register themselves.
 | `storage` | `projects_path` | Per-project memory root |
 | `storage` | `skills_path` | Procedural-memory root |
 | `storage` | `work_path` | Where agents execute; scope drift is measured here |
+| `storage` | `artifact_path` | Packed task-artifact pool (hash-named; stage outputs cross nodes through it) |
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic- or OpenAI-compatible API base URL |
-| `model` | `model` | Model id (e.g. `deepseek-chat`, `deepseek-reasoner`) |
+| `model` | `model` | Model id (e.g. `deepseek-v4-flash`) |
 | `model` | `api_type` | `anthropic` \| `openai` (default `anthropic`) |
 | `model` | `api_key` | Secret — prefer `OPENPANDA_MODEL_API_KEY` |
 | `model` | `max_tokens` | Completion cap (default 4096) |
+| `injection` | `model` | Model injection into agent subprocesses: `auto` (default — inject only when the agent carries no model credentials of its own) \| `always` \| `never` |
+| `routing` | `preferred_agents` | Agent names that receive a +0.5 routing-score bonus |
+| `memory` | `limits.user` | Character cap for USER.md (default 5000) |
+| `memory` | `limits.memory` | Character cap for MEMORY.md (default 10000) |
+| `memory` | `limits.project` | Character cap for per-project MEMORY.md (default 30000) |
+| `approval` | `mode` | Task approval gate: `always` \| `on-request` (default — only model-flagged risky tasks) \| `never` |
+| `timeouts` | `task_lease_s` | How long one task attempt may hold its lease (default 1200); must stay well above `agent_s` |
+| `timeouts` | `agent_s` | Wall-clock budget for one agent-adapter execution (default 600) |
+| `timeouts` | `supervise_rounds` | Cap on the execute → judge → re-delegate loop per task (default 5) |
 | `mcp` | `command` | stdio MCP server argv (empty = disabled); tools hot-load into the agent toolset |
 | `push` | `enabled` | Serve `/api/push/*` and send Web Push (embedded console + webui sidecar) |
 | `push` | `vapid_subject` | VAPID subject (e.g. `mailto:` address) |

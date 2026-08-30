@@ -36,6 +36,31 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Jeder Eintrag benennt die Änderung und ihre sichtbare Wirkung in ein bis drei Zeilen; der einführende Commit wird zitiert, wo das der Archäologie hilft.
 - Die englische Datei ist maßgeblich. Die Übersetzungen zh-CN / ja / es / de spiegeln sie und können um ein Release kurz verzögert sein.
 
+## [Unreleased]
+
+### Hinzugefügt
+
+- **Recover-Wache für dauerhafte Goroutinen** — das neue `internal/guard` umhüllt langlebige Goroutinen: Ein Panic wird mit vollständigem Stack protokolliert und löst ein kontrolliertes Herunterfahren aus, statt einen halbtoten Prozess weiterlaufen zu lassen; ein Panic in der Leseschleife einer einzelnen Busverbindung schließt nur diese Verbindung.
+- **Geordnetes Herunterfahren unter Windows** — die Konsolenereignisse CTRL_CLOSE/LOGOFF/SHUTDOWN lösen nun denselben geordneten Shutdown-Pfad aus wie SIGTERM unter Unix (`SetConsoleCtrlHandler`, kurzes Aufräumfenster).
+- **Farben in der Windows-Konsole** — die TUI-Palette aktiviert Farben auf einer Windows-Konsolen-TTY, wenn TERM nicht gesetzt ist; `dumb` und `NO_COLOR` haben weiter Vorrang.
+- **`make build-darwin-amd64`** — Intel-Mac-Buildziel neben den anderen plattformspezifischen Zielen.
+
+### Behoben
+
+- **Wechselseitiger Ausschluss bei Migrationen** — Schema-Migrationen laufen unter `BEGIN IMMEDIATE` und prüfen `user_version` innerhalb der Transaktion erneut, sodass zwei Prozesse, die dieselbe Datenbank öffnen, jede Version genau einmal anwenden; eine Binärdatei, die älter als das Datenbankschema ist, schlägt jetzt ausdrücklich fehl, statt still fortzufahren.
+- **Web: ein einziger Ereignisbus** — die Konsole hält nun eine einzelne referenzgezählte SSE-Verbindung, authentifiziert per `Authorization`-Header (kein Token in der URL), mit exponentieller Backoff-Wiederverbindung, und verteilt change- und trace-Ereignisse an alle Abonnenten.
+- **Web: Rennbedingung im Sitzungsstrom** — Streaming-Schreibvorgänge greifen nur, solange die Sitzung aktiv ist; ein Sitzungswechsel mitten im Strom mischt keine Bubbles mehr zwischen Threads, und veraltete Transkript-Ladungen werden beim Wechsel abgebrochen.
+- **Web: Robustheit und Barrierefreiheit** — eine Top-Level-Fehlergrenze mit Wiederholung; Fokusfalle in Befehlspalette und Bestätigungsdialogen; Kanban-Karten per Tastatur bedienbar (Enter/Space, sichtbarer Fokus); System-Polling pausiert bei ausgeblendetem Tab und überspringt noch laufende Abfragen; stabile Listen-Keys.
+- **`panda skill --help` / `panda reminder --help`** — geben die Nutzung aus und beenden mit 0, statt `--help` als unbekanntes Verb zu behandeln.
+- **CI: Gate- und Installer-Strecken repariert** — alle vier fehlgeschlagenen Gate-Strecken und die Installer-Pipeline repariert (7c418b0).
+- **CLI: eingeklappte Gedankenblöcke zeigen keinen Schlüssel mehr an, der sie nicht entfalten kann** (e772598).
+
+### Verbessert
+
+- **Plattformgerechtes Systemkonfigurationsverzeichnis** — das System-Fallback-Konfigationsverzeichnis bleibt unter Unix `/etc/openpanda` und ist unter Windows `%ProgramData%\OpenPanda`.
+- **Ein einziger Store-Initialisierungspfad** — Daemon und Web-Panel öffnen den Store über dieselbe Funktion (`cmd/panda/store.go`); das Panel übersieht das Artefakt-Pool-Verzeichnis nicht mehr.
+- **Web-Panel: Ereignis-Scans entkoppeln sich von der Verbindungszahl** — Task-/Node-/Reminder-Fingerabdrücke werden für ein Poll-Intervall zwischengespeichert, sodass die Scan-Last auch bei wachsenden Abonnenten nahezu konstant bleibt.
+
 ## [0.0.6] - 2026-08-27
 
 Das Release über geräteübergreifendes Rechnen nimmt Form an: Eine Anfrage, die für verschiedene Schritte verschiedene Maschinen braucht, ist jetzt ein Plan erster Klasse, dessen Stufen dort laufen, wo die Hardware ist — und beide Oberflächen, CLI und Web-Konsole, bekamen die Präsentationsschicht, die ihnen fehlte: Live-Feedback während ein ask konvergiert, echtes Markdown im Browser und den Eingabe-Editor, den der Alltag verlangt.

@@ -68,7 +68,7 @@ Claude Code、Codex、OpenCode、OpenClaw……每一个都是单机上的强力
 - **交互式 REPL + 内嵌 Web 控制台**——`panda repl` 是操作席：裸输入直达 ask 引擎，斜杠命令驱动面板（`/tasks`、`/approve`、`/projects`、`/nodes`、`/lang`……），`/web` 一键启动内嵌控制台（对话、任务看板、审批、提醒、可编辑的记忆页）。`panda web` 一条命令开箱即用：默认回环绑定 + 临时 token，浏览器自动登录。五种界面语言：English、简体中文、日本語、Español、Deutsch。
 - **自更新**——`panda web`（及 `/web`）在后台检查发布渠道；控制台下载并校验可用更新，待任务队列空闲后一键安装。放弃已下载的更新则不留任何残留。
 - **防御与安全层**——权限 Tier、熔断器、范围漂移与死循环检测；执行侧加固：沙箱、网络白名单、密钥脱敏、审计日志。
-- **极致轻量**——稳态 RSS 约 **13–20 MB**，为资源受限的单板电脑而生。
+- **极致轻量**——稳态 RSS 约 **21–23 MB**（`make measure` 实测），为资源受限的单板电脑而生。
 - **干净交叉编译**——每个平台一个静态二进制，无需 CGO（纯 Go SQLite，`modernc.org/sqlite`）。
 
 ## 架构
@@ -211,7 +211,7 @@ network:
     - "worker-1.your-tailnet.ts.net:7836"
 model:
   base_url: "https://api.deepseek.com/anthropic"  # 任何兼容 /v1/messages 的端点
-  model: "deepseek-chat"
+  model: "deepseek-v4-flash"
   # api_key: ""               # 优先使用 OPENPANDA_MODEL_API_KEY 环境变量
 ```
 
@@ -272,29 +272,42 @@ model:
 |---|---|
 | `panda`（无参数） | 进入交互式 REPL（与 `panda repl` 相同）；守护进程改为 `panda daemon` 子命令运行 |
 | `panda daemon [--config PATH] [--card PATH]` | 运行守护进程：节点注册、心跳、WS 服务、peer 重连 |
-| `panda ask [--config PATH] [--card PATH] [--authorize] "<问题>"` | 统一入口：分类为 answer / tool_call / task / plan 并执行 |
+| `panda ask [--config PATH] [--card PATH] [--authorize] [--output-format json \| stream-json] "<问题>"` | 统一入口：分类为 answer / tool_call / task / plan 并执行；`--output-format` 为无头使用输出单个 JSON 对象或 NDJSON 事件流 |
 | `panda plan run <文件.yaml> \| show <id> \| example` | 跨设备多阶段流水线：一个阶段就是一个普通任务（排队、按硬件路由、重试、进审批停泊），plan 负责排序并把上一阶段的工作目录交给下一台机器的阶段；`run --dry-run` 只校验并打印路由，不创建任何东西 |
 | `panda voice [--once] [--mute]` | 桌宠入口：唤醒词 → ASR → 同一条入口管线 → TTS，为无键盘设备而生；`--once` 只处理一句话，`--mute` 只打印不朗读 |
 | `panda repl [--config PATH] [--card PATH]` | 交互式 shell：斜杠命令（tasks/approve/projects/nodes/lang），裸输入走提问引擎，`/web` 一键拉起内嵌控制台 |
 | `panda web [--config PATH] [--card PATH] [--no-browser]` | 一条命令起 Web 控制台：默认回环监听 + 临时令牌，浏览器打开即已登录 |
+| `panda session list \| new \| show \| rm \| ask \| diff \| merge` | 基于 git worktree 的会话：`new [--title T]` 在仓库中切出一个 worktree，`ask <id> <prompt>` 继续会话，`diff <id>` 查看其变更，`merge <id> [--message M]` 将分支合入 HEAD |
 | `panda init` | 交互式首次配置：一键生成 `config.yaml` + `capabilities.yaml`（模型端点、节点名、硬件扫描默认值） |
 | `panda install [--dir PATH] [--no-path]` | 将 `panda` 注册为全局命令（PATH 持久化、重启后仍可用），并自动验证安装副本可运行 |
-| `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run]` | 安全卸载：先展示完整计划，需输入 `confirm` 二次确认，白名单删除，用户资产（projects/memory/skills）始终保留，生成 zip 备份与清理报告 |
+| `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run] [--purge]` | 安全卸载：先展示完整计划，需输入 `confirm` 二次确认，白名单删除，用户资产（projects/memory/skills）始终保留，生成 zip 备份与清理报告；`--purge` 额外删除用户数据，需第二次确认 |
 | `panda doctor [--config PATH]` | 自检：安装副本可运行、PATH 解析正常、持久化在重启后有效、配置/数据库可用 |
-| `panda status` | 节点与任务状态（`panda nodes` 同义；`--running` 只看活跃心跳） |
-| `panda nodes remove <id>` | 从节点目录移除过期行（改过名的机器、换了身份的 peer、退役节点）；本机自己的行与在线节点会被拒绝——它们会自行重新注册 |
+| `panda status` | 节点与任务状态（`--running` 只看活跃心跳） |
+| `panda nodes` | 当前与已知节点（与 status 同源数据） |
+| `panda nodes add <host:port>` | 添加要拨号的 peer（缺 `shared_secret` 时自动生成，打印对端接入指引）——无需重启即时拨号 |
+| `panda nodes invite` | 打印接入指引，不改 peer 列表 |
+| `panda nodes disconnect <addr>` | 从拨号列表移除 peer |
+| `panda nodes remove <id>` | 从节点目录移除已无活跃 peer 支撑的过期行；本机自己的行与在线节点会被拒绝——它们会自行重新注册 |
+| `panda pair --secret S --peer <host:port>` | 从新机器加入现有网络：把共享密钥与 peer 写入本节点配置 |
 | `panda queue` | 列出任务队列 |
-| `panda task [--config PATH] <task-id>` | 任务详情 |
+| `panda task [--config PATH] <task-id>` | 任务详情 + 时间线 |
+| `panda task add --title T [--prompt P] [--priority 等级] [--project p] [--authorize]` | 手工入队一个任务（需 `--card`）；优先级为 `low \| medium \| normal \| high \| critical` |
+| `panda task priority <id> <level>` | 修改任务优先级 |
+| `panda task move <id> <seq>` | 重排拖拽排序队列 |
 | `panda cancel [--config PATH] <task-id>` | 取消任务（级联到执行节点） |
 | `panda approve [--config PATH] <task-id>` | 批准进入 review 的任务（review → done） |
 | `panda reject [--config PATH] [--reason s] <task-id>` | 拒绝进入 review 的任务 |
 | `panda logs [--config PATH] <task-id>` | 任务执行日志 |
-| `panda skill` | Skill 存储管理 |
+| `panda skill list \| approve <name> \| reject <name>` | Skill 存储管理 |
 | `panda reminder list \| add \| rm` | 定时提醒：列出 / 新增（`--after 10m` 或 `--at "2006-01-02 15:04"`）/ 删除 |
+| `panda memory list \| get \| set \| rm` | 记忆文件：`user \| memory \| dreams \| topic:<n> \| project:<n> \| daily:<date>`（`set` 默认读 stdin，也可 `--file F`；dreams 与 daily 只读） |
+| `panda project list \| create` | 项目记忆 |
+| `panda config <段> <get \| set \| test>` | 查看/编辑 `config.yaml`（保留注释）：段为 `model \| mcp \| limits \| routing \| injection \| approval`；改动在 daemon/面板重启后生效 |
 | `panda detect [-o PATH]` | 扫描本机硬件（CPU/RAM/GPU/Agent CLI）生成 capabilities.yaml 草稿 |
 | `panda card show \| rescan \| edit \| set` | 本节点能力卡：查看（含来源文件路径）、重新扫描硬件与已安装的 Agent CLI（`rescan` 先打印差异，`--write` 才写入并保留 `.bak`）、在 `$EDITOR` 中编辑、或用 `set <字段>=<值>` 无编辑器修改。探测得到的硬件字段会被覆盖，人工决定的字段（节点名、resource_class、max_concurrent_tasks、agent tier、native/manual 能力）一律保留 |
+| `panda card native \| agent \| manual add \| remove \| set` | CLI 结构化卡片编辑：与编辑器同一条校验器 + `.bak` + 原子写管线，热重载进运行中的 daemon |
 | `panda metrics [--csv]` | 导出委派指标 |
-| `panda audit [--task <id>]` | 校验审计日志或单任务事件的 `prev_hash` 链 |
+| `panda audit verify \| entries [--task <id>]` | `verify` 校验审计日志（或单任务事件）的 `prev_hash` 链；`entries` 打印审计轨迹行 |
 | `panda version` / `panda help` | 打印版本号 / 命令总览 |
 
 ## 配置
@@ -316,12 +329,22 @@ model:
 | `storage` | `projects_path` | 项目记忆根目录 |
 | `storage` | `skills_path` | 程序性记忆根目录 |
 | `storage` | `work_path` | Agent 执行目录；范围漂移在此测量 |
+| `storage` | `artifact_path` | 打包任务工件池（哈希命名；阶段产物经此跨节点流转） |
 | `log` | `level` | `debug` \| `info` \| `warn` \| `error` |
 | `model` | `base_url` | Anthropic 兼容 Messages API 基地址 |
-| `model` | `model` | 模型 id（如 `deepseek-chat`、`deepseek-reasoner`） |
+| `model` | `model` | 模型 id（如 `deepseek-v4-flash`） |
 | `model` | `api_key` | 密钥——优先用 `OPENPANDA_MODEL_API_KEY` |
 | `model` | `api_type` | `anthropic` \| `openai`（默认 `anthropic`） |
 | `model` | `max_tokens` | 补全 token 上限（默认 4096） |
+| `injection` | `model` | 向 Agent 子进程注入模型：`auto`（默认——仅当 Agent 自身不带模型凭据时注入） \| `always` \| `never` |
+| `routing` | `preferred_agents` | 获得 +0.5 路由评分加成的 Agent 名单 |
+| `memory` | `limits.user` | USER.md 字符上限（默认 5000） |
+| `memory` | `limits.memory` | MEMORY.md 字符上限（默认 10000） |
+| `memory` | `limits.project` | 每个项目 MEMORY.md 字符上限（默认 30000） |
+| `approval` | `mode` | 任务审批门：`always` \| `on-request`（默认——仅模型标记的风险任务） \| `never` |
+| `timeouts` | `task_lease_s` | 任务单次尝试可持有租约的时长（默认 1200）；必须明显大于 `agent_s` |
+| `timeouts` | `agent_s` | 一次 Agent 适配器执行的墙钟预算（默认 600） |
+| `timeouts` | `supervise_rounds` | 每个任务的 执行 → 裁判 → 再委派 循环上限（默认 5） |
 | `mcp` | `command` | stdio MCP 服务器命令行（空 = 禁用）；工具热加载进 Agent 工具表 |
 | `push` | `enabled` | 开启 `/api/push/*` 与 Web Push 发送（内嵌控制台 + webui 侧车） |
 | `push` | `vapid_subject` | VAPID subject（如 `mailto:` 地址） |
