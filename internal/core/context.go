@@ -100,6 +100,20 @@ func (c *Core) handleContextFetch(ctx context.Context, env bus.Envelope) {
 		c.logger.Warn("bad context_fetch", "err", err)
 		return
 	}
+	// Authorization after authentication (review P1-3): a context snapshot is
+	// source code, specs and conversation history, so it must not be enumerable
+	// by any peer that learned a hash from a plaintext delegate. Only a node
+	// actually part of this task's delegation — owner, chain member, or the
+	// dispatch target — may pull it; the same criteria that guard artifact
+	// fetches. Unknown task or unknown peer fails closed with a non-OK ack.
+	if !c.artifactPeerAuthorized(ctx, p.TaskID, env.From) {
+		c.logger.Warn("context_fetch from unauthorized peer", "task", p.TaskID,
+			"hash", p.Hash, "from", env.From)
+		_ = c.reply(ctx, env, bus.MsgContextAck, bus.ContextAckPayload{
+			TaskID: p.TaskID, Hash: p.Hash, OK: false,
+		})
+		return
+	}
 	e, ok, err := c.ctx.Get(ctx, p.Hash)
 	if err != nil || !ok {
 		c.logger.Debug("context miss on fetch", "hash", p.Hash, "err", err)

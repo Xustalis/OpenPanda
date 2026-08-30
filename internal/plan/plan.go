@@ -30,6 +30,26 @@ import (
 // runaway.
 const MaxStages = 64
 
+// ValidID reports whether s is a safe stage id. A stage id becomes a path
+// segment in the executor's work dir (core.stageWorkDir) and a field on the
+// wire, so anything outside [A-Za-z0-9_-] — separators, dots, backslashes —
+// is refused at the boundary instead of sanitized after the fact (review
+// P0-1: a stage id of "../../.." turned the work dir into an arbitrary
+// directory the caller could then pack and exfiltrate).
+func ValidID(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // Stage is one unit of a plan: work that can be routed to a node on its own.
 // Requires and Resources are the same vocabulary the scheduler already routes a
 // task by, so a stage is matched to a node by the existing scoring — a stage
@@ -86,6 +106,9 @@ func Validate(p Plan) error {
 			// The id becomes a database key and a wire field; surrounding
 			// whitespace would make two visually identical stages distinct.
 			return fmt.Errorf("plan: stage id %q has surrounding whitespace", s.ID)
+		}
+		if !ValidID(id) {
+			return fmt.Errorf("plan: stage id %q must be 1-64 chars of [A-Za-z0-9_-]", s.ID)
 		}
 		if prev, dup := index[id]; dup {
 			return fmt.Errorf("plan: stages %d and %d share the id %q", prev, i, id)

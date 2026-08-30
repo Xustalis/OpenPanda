@@ -431,6 +431,13 @@ func (c *Core) RunMonitor(ctx context.Context) {
 					// A task that timed out while paused in waiting_context would
 					// otherwise leak its entry in pendingCtx (P2-7).
 					c.pendingCtx.Delete(id)
+					// The lease expired on a task this node dispatched to a remote
+					// executor: tell that executor to stop (review P1-4). Without
+					// this the remote agent keeps burning tokens and writing files
+					// under a task this node has already reported failed — work that
+					// a re-route then duplicates. forwardCancelDownstream no-ops
+					// when the task never left this node.
+					c.forwardCancelDownstream(ctx, id)
 					// Propagate the timeout up the delegation chain so a root
 					// scheduler blocked in Submit unblocks (D3). relayToParent is
 					// a no-op for a root task; signalResult no-ops without a waiter.
@@ -791,6 +798,11 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		}
 	}
 	c.logger.Info("peer hello", "peer", p.NodeID, "ver", p.Ver)
+	// A return channel to this peer exists again: redeliver any terminal
+	// results parked while it was disconnected (review P0-2). This is the
+	// reconciliation point that keeps the two ends' task histories consistent
+	// across a disconnect.
+	c.outboxFlush(ctx, p.NodeID)
 }
 
 // sendHelloReply transmits this node's hello on conn so the far end can bind

@@ -33,6 +33,28 @@ var migrations = []Migration{
 	{Version: 10, Name: "add_node_identity", Apply: migrateV10},
 	{Version: 11, Name: "add_entry_cache", Apply: migrateV11},
 	{Version: 12, Name: "add_plan_stages_and_artifacts", Apply: migrateV12},
+	{Version: 13, Name: "add_result_outbox", Apply: migrateV13},
+}
+
+// migrateV13 adds result_outbox: the delivery guarantee for terminal task
+// results. A task_result is sent fire-and-forget over the bus; if the peer is
+// disconnected at that instant the outcome was silently dropped and the two
+// ends diverged forever (review P0-2). Terminal results that cannot be sent
+// are persisted here keyed by (peer, task) and re-delivered the next time the
+// peer's hello is accepted. The receiving side is idempotent (handleResult
+// ignores results for tasks it no longer owns), so a resend is safe.
+func migrateV13(tx *sql.Tx) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS result_outbox (
+		peer TEXT NOT NULL,
+		task_id TEXT NOT NULL,
+		payload_json TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY (peer, task_id)
+	)`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_result_outbox_peer ON result_outbox(peer)`)
+	return err
 }
 
 // migrateV12 adds the plan plane and the data plane to the task table rather

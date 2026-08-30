@@ -19,6 +19,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/plan"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -44,6 +45,19 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	}
 	if p.TaskID == "" {
 		c.logger.Warn("task_delegate missing task_id", "from", env.From)
+		return
+	}
+
+	// plan_id and stage_id become path segments of this node's stage work dir
+	// (stageWorkDir), so they are whitelisted at the wire boundary — a peer
+	// must never be able to aim execution or output packing at an arbitrary
+	// directory (review P0-1).
+	if (p.PlanID != "" && !plan.ValidID(p.PlanID)) || (p.StageID != "" && !plan.ValidID(p.StageID)) {
+		c.logger.Warn("task_delegate with unsafe stage identity", "task", p.TaskID,
+			"plan", p.PlanID, "stage", p.StageID, "from", env.From)
+		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
+			TaskID: p.TaskID, Reason: "invalid plan/stage id",
+		})
 		return
 	}
 
@@ -230,6 +244,15 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 		}
 		if err := c.reply(ctx, env, bus.MsgTaskResult, result); err != nil {
 			c.logger.Warn("send task_result", "err", err, "task", taskID)
+			// The delegator is unreachable at the moment the result is ready
+			// (review P0-2): park it so the outcome is redelivered on reconnect
+			// instead of the delegator's lease expiring into a false failed.
+			if result.TaskID == "" {
+				result.TaskID = taskID
+			}
+			c.outboxPersist(ctx, env.From, result)
+		} else {
+			c.outboxDrop(ctx, env.From, taskID)
 		}
 	}()
 }
@@ -564,7 +587,11 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// caller's retry/fail path then retries the pull or surfaces the failure to
 	// the delegator.
 	if task.PlanID != "" {
-		workDir = c.stageWorkDir(task.PlanID, task.StageID)
+		wd, err := c.stageWorkDir(task.PlanID, task.StageID)
+		if err != nil {
+			return bus.TaskResultPayload{}, err
+		}
+		workDir = wd
 		if err := os.MkdirAll(workDir, 0o755); err != nil {
 			return bus.TaskResultPayload{}, fmt.Errorf("create stage work dir: %w", err)
 		}
@@ -846,10 +873,10 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		c.recordEntryUsage(context.WithoutCancel(ctx), taskID, c.supervisor, usageBefore,
 			v.Status == entry.VerdictDone, time.Since(judgeStart))
 		if serr != nil {
-			// Supervisor unreachable: Supervise degrades to a done verdict whose
-			// reason records that the result went unverified, so the work
-			// completes below instead of parking — the outage is ours, not the
-			// task's.
+			// Supervisor unreachable: Supervise parks the result for review rather
+			// than accepting it unverified (review P1-6). The work stops here and
+			// a human decides it once the supervisor recovers — only verified
+			// work may reach done.
 			c.logger.Warn("supervise call failed", "task", taskID, "err", serr)
 		}
 		verdict = v
@@ -889,10 +916,11 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 
 	// The supervisor did not accept the result: either work still remains after
 	// the round budget ("continue"), or the model answered without a usable
-	// verdict ("review" — unparsable output; an unreachable model degrades to
-	// done instead). Both park in review with the latest result and a marker so
-	// a human sees what was done and what remains, rather than looping
-	// indefinitely or silently accepting unverified work.
+	// verdict ("review" — unparsable output, or an unreachable supervisor that
+	// parks rather than accepts unverified work, review P1-6). Both park in
+	// review with the latest result and a marker so a human sees what was done
+	// and what remains, rather than looping indefinitely or silently accepting
+	// unverified work.
 	if plan.Kind == "agent" && c.supervisor != nil &&
 		(verdict.Status == entry.VerdictContinue || verdict.Status == entry.VerdictReview) {
 		if err := c.store.PauseWithResult(ctx, taskID, c.nodeID, map[string]any{
@@ -1461,6 +1489,20 @@ func (c *Core) relayToParent(ctx context.Context, typ string, chain []string, pa
 	env.To = parent
 	if err := c.sendTo(parent, env); err != nil {
 		c.logger.Warn("relay", "type", typ, "to", parent, "err", err)
+		// A terminal result must survive a disconnected parent (review P0-2):
+		// park it for redelivery on the next hello instead of dropping it.
+		if typ == bus.MsgTaskResult {
+			if rp, ok := payload.(bus.TaskResultPayload); ok {
+				c.outboxPersist(ctx, parent, rp)
+			}
+		}
+		return
+	}
+	if typ == bus.MsgTaskResult {
+		// Delivered now: clear any copy parked from an earlier failed attempt.
+		if rp, ok := payload.(bus.TaskResultPayload); ok {
+			c.outboxDrop(ctx, parent, rp.TaskID)
+		}
 	}
 }
 
