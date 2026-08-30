@@ -56,6 +56,11 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **Windows 控制台颜色** — TERM 未设置时（Windows 控制台），TUI 调色板在 TTY 输出上启用颜色；`dumb` 与 `NO_COLOR` 仍优先。
 - **`make build-darwin-amd64`** — Intel Mac 构建目标，与其他按平台划分的目标并列。
 - **Agent 能力面与每任务工具策略** — Agent 注册表现在声明每个 CLI 的原生能力（skills、MCP、子代理），不再逐适配器硬编码；入口模型可为单个任务请求工具策略（`minimal` / `extended`）覆盖全局路由策略，高复杂度任务可以只为该任务解锁 Agent 的完整能力面。Claude Code 的子代理派生（Task 工具）以类型化 `subagent` 进度事件呈现，不限流地进入任务时间线（本版本）。
+- **按任务类型的 Agent 超时** — `timeouts.agent_by_kind` 按任务类型覆盖 Agent 墙钟预算（训练任务可以比快速修复跑得久）；未列出的类型沿用 `timeouts.agent_s`，任务租约始终保持在实际生效的预算之上（bcbe1d2, e573c2e, 9fc2d04）。
+- **心跳携带熔断状态** — Agent CLI 持续失败的节点会在心跳中声明熔断状态，peer 在撞上坏 Agent 之前就不再向其路由任务（bcbe1d2）。
+- **Agent 会话续接与用量记账** — 监督轮次续接 Agent 自己的会话而不再每轮冷启动（适配器线协议新增 `session_id` + `resume`），适配器上报结构化 token 用量明细并记为 `agent_usage` 事件（e8dc68b, 183bf6f, 1722144）。
+- **委派深度上限** — 同意信息随线路携带跳数上限：任务最多只能被再委派有限的跳数，委派链不再可能无限增长（ca5770e）。
+- **取消可靠送达** — `task_cancel` 现在与结果走同一条 outbox：执行者断连时发出的取消会被持久化，重连后重投，不再丢失（dc4412a）。
 
 ### 问题修复
 
@@ -73,6 +78,8 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **`panda skill --help` / `panda reminder --help`** — 打印用法并以 0 退出，不再把 `--help` 当作未知动词。
 - **CI：门禁与安装器流水线修复** — 修复全部四条失败的门禁腿与安装器流水线（7c418b0）。
 - **CLI：折叠的思维块不再展示无法展开它的密钥**（e772598）。
+- **孤儿转发与陈旧目录行** — 死掉的 peer 留下的悬空转发会被救回并完成，不再有任何 peer 背书的目录行会被清扫，不再永久滞留（32e4489）。
+- **push 超时级联取消下游** — 超时的 push 会取消其下游工作而不是任其继续跑，重试预算可跨重启存活（f7efb70）。
 
 ### 变更
 
@@ -80,6 +87,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **平台化系统配置目录** — 系统级备用配置目录在 unix 上仍是 `/etc/openpanda`，在 Windows 上为 `%ProgramData%\OpenPanda`。
 - **存储初始化收敛为一条路径** — daemon 与 Web 面板经同一函数打开存储（`cmd/panda/store.go`）；面板不再遗漏产物池目录。
 - **Web 面板：事件扫描与连接数解耦** — 任务/节点/提醒指纹缓存一个轮询周期，订阅者增长时扫描负载基本恒定。
+- **逐适配器调优** — 其余 Agent 适配器各自获得了针对其 CLI 的调用处理，不再是一条通用路径（24df1c1）。
 
 ## [0.0.6] - 2026-08-27
 
