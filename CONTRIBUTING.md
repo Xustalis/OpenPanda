@@ -43,6 +43,12 @@ gofmt -l internal/ cmd/ adapters/ webui/panel/   # must print nothing
 cd webui/app && npm run typecheck                # web console changes
 ```
 
+CI runs the same checks as parallel jobs — `lint` (gofmt + vet), `test`,
+`race` (scoped to the concurrency-hot packages via `make race-focused`),
+`web` (typecheck + node tests + the embedded-console build) and the
+cross-platform matrix — plus this full `make gate` remains the local bar;
+keep both green.
+
 - **`go test -race ./...`** must pass — the kernel is a concurrent system
   (peer registry, task store, SSE hub); race detector findings are release
   blockers, not warnings.
