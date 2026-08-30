@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -465,35 +466,56 @@ const (
 // it acts on (a task title, a plan goal, a tool name). The engine deliberately
 // holds no locale — the CLI translates these through internal/i18n and the
 // panel through the browser's language, from the same event.
+//
+// Round/Budget locate a supervision step inside its loop ("round 2/5"): set
+// on exec/judge milestones when the trace event carries them, zero otherwise.
+// Renderers stay silent about single-round runs (Budget ≤ 1).
 type Progress struct {
-	Kind ProgressKind
-	Name string
+	Kind   ProgressKind
+	Name   string
+	Round  int
+	Budget int
+}
+
+// roundNote phrases the loop position for the English status fallback; "" for
+// single-round runs, which gain nothing from a "round 1/1" decoration.
+func roundNote(p Progress) string {
+	if p.Budget <= 1 {
+		return ""
+	}
+	return fmt.Sprintf(" (%d/%d)", p.Round, p.Budget)
 }
 
 // progress reports one event to whichever callback the caller supplied. The
 // English prose lives here, in one place, so it stays a fallback rather than
 // the only phrasing available.
-func (cb StreamCallbacks) progress(kind ProgressKind, name string) {
+func (cb StreamCallbacks) progress(p Progress) {
 	if cb.OnProgress != nil {
-		cb.OnProgress(Progress{Kind: kind, Name: name})
+		cb.OnProgress(p)
 		return
 	}
 	if cb.OnStatus == nil {
 		return
 	}
-	switch kind {
+	switch p.Kind {
 	case ProgressTask:
-		cb.OnStatus(fmt.Sprintf("submitting task: %s", name))
+		cb.OnStatus(fmt.Sprintf("submitting task: %s", p.Name))
 	case ProgressPlan:
-		cb.OnStatus(fmt.Sprintf("starting plan: %s", name))
+		cb.OnStatus(fmt.Sprintf("starting plan: %s", p.Name))
 	case ProgressTool:
-		cb.OnStatus(fmt.Sprintf("running tool %s…", name))
+		cb.OnStatus(fmt.Sprintf("running tool %s…", p.Name))
 	case ProgressRoute:
-		cb.OnStatus(fmt.Sprintf("routing to %s…", name))
+		cb.OnStatus(fmt.Sprintf("routing to %s…", p.Name))
 	case ProgressExec:
-		cb.OnStatus(fmt.Sprintf("running %s…", name))
+		cb.OnStatus(fmt.Sprintf("running %s%s…", p.Name, roundNote(p)))
 	case ProgressJudge:
-		cb.OnStatus(fmt.Sprintf("reviewing result (%s)…", name))
+		// A judge_start marker arrives with no verdict yet; phrase it without
+		// the empty parens the missing verdict used to leave behind.
+		if p.Name == "" {
+			cb.OnStatus(fmt.Sprintf("reviewing result%s…", roundNote(p)))
+			return
+		}
+		cb.OnStatus(fmt.Sprintf("reviewing result (%s)%s…", p.Name, roundNote(p)))
 	}
 }
 
@@ -605,7 +627,7 @@ rounds:
 			if e.sched == nil {
 				return nil, fmt.Errorf("task output requires a capability card (engine built without CardPath)")
 			}
-			cb.progress(ProgressTask, out.Task.Title)
+			cb.progress(Progress{Kind: ProgressTask, Name: out.Task.Title})
 			res := e.submitTask(out.Task, prompt, authorize, workDir, cb)
 			if e.queueTasks {
 				// Async mode: the board product. The queued pointer is the
@@ -641,10 +663,10 @@ rounds:
 				entry.Turn{Role: "user", Content: taskObservation(res)},
 			)
 		case entry.KindPlan:
-			cb.progress(ProgressPlan, out.Plan.Goal)
+			cb.progress(Progress{Kind: ProgressPlan, Name: out.Plan.Goal})
 			return e.startClassifiedPlan(ctx, out.Plan, authorize)
 		case entry.KindToolCall:
-			cb.progress(ProgressTool, out.Tool.Tool)
+			cb.progress(Progress{Kind: ProgressTool, Name: out.Tool.Tool})
 			// Execute against the same registry snapshot classification saw:
 			// a mid-ask SetMCPCommand swap would otherwise make the model's
 			// tool call hit a registry that no longer knows it.
@@ -679,7 +701,7 @@ rounds:
 			// delegation: surface what ran instead of quietly exceeding it.
 			return lastTask, nil
 		}
-		cb.progress(ProgressTask, final.Task.Title)
+		cb.progress(Progress{Kind: ProgressTask, Name: final.Task.Title})
 		res := e.submitTask(final.Task, prompt, authorize, workDir, cb)
 		if !res.NeedsApproval && !e.queueTasks {
 			// No rounds left to converge through, so produce the report in
@@ -696,7 +718,7 @@ rounds:
 		if e.sched == nil {
 			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议多阶段计划「%s」，但当前未加载能力卡片，无法启动。", maxRounds, final.Plan.Goal)}, nil
 		}
-		cb.progress(ProgressPlan, final.Plan.Goal)
+		cb.progress(Progress{Kind: ProgressPlan, Name: final.Plan.Goal})
 		return e.startClassifiedPlan(ctx, final.Plan, authorize)
 	}
 	if lastTask != nil {
@@ -886,8 +908,8 @@ func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool
 	if cb.OnProgress != nil || cb.OnStatus != nil {
 		store := e.sched.TaskStore()
 		store.SetOnEvent(func(_, typ string, data any) {
-			if kind, name, ok := progressForEvent(typ, data); ok {
-				cb.progress(kind, name)
+			if p, ok := progressForEvent(typ, data); ok {
+				cb.progress(p)
 			}
 		})
 		defer store.SetOnEvent(nil)
@@ -931,46 +953,95 @@ func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool
 // is the one place that knows which core event types (internal/core/trace.go,
 // state.go) correspond to the CLI's routing/executing/judging phases. Event
 // data arrives as it was recorded — a map before marshaling, or JSON bytes
-// after — so it is read through eventField, which handles both.
-func progressForEvent(typ string, data any) (ProgressKind, string, bool) {
+// after — so it is read through eventField/intField, which handle both.
+func progressForEvent(typ string, data any) (Progress, bool) {
 	switch typ {
 	case core.EvRouteDecision:
 		name := eventField(data, "target_node")
 		if name == "" {
 			name = eventField(data, "action") // "local" when no target node
 		}
-		return ProgressRoute, name, true
+		return Progress{Kind: ProgressRoute, Name: name}, true
 	case core.EvExecAgentStart:
 		name := eventField(data, "agent")
 		if name == "" {
 			name = eventField(data, "adapter")
 		}
-		return ProgressExec, name, true
+		return Progress{Kind: ProgressExec, Name: name,
+			Round: intField(data, "round"), Budget: intField(data, "budget")}, true
+	case core.EvJudgeStart:
+		// Opening marker for the reviewing stage; the round's result event
+		// below repeats the phase, and the renderer dedupes the second one.
+		return Progress{Kind: ProgressJudge,
+			Round: intField(data, "round"), Budget: intField(data, "budget")}, true
 	case core.EvSupervisionRound:
-		name := eventField(data, "verdict")
-		return ProgressJudge, name, true
+		return Progress{Kind: ProgressJudge, Name: eventField(data, "verdict_status"),
+			Round: intField(data, "round"), Budget: intField(data, "budget")}, true
 	}
-	return "", "", false
+	return Progress{}, false
 }
 
 // eventField extracts a string field from a recorded event's data, which is
 // either a map[string]any (pre-marshal) or JSON bytes (post-marshal in the
-// state-transition path). Missing/absent yields "".
+// state-transition path). Missing/absent yields "". Named string types
+// (scheduler.Action and friends) count as strings: the route event stores its
+// action as its own type, and a bare .(string) assertion silently degraded
+// the progress line to "routing to …" with nothing after the preposition.
 func eventField(data any, key string) string {
 	switch v := data.(type) {
 	case map[string]any:
-		if s, ok := v[key].(string); ok {
-			return s
-		}
+		return stringField(v[key])
 	case []byte:
 		var m map[string]any
 		if json.Unmarshal(v, &m) == nil {
-			if s, ok := m[key].(string); ok {
-				return s
-			}
+			return stringField(m[key])
 		}
 	}
 	return ""
+}
+
+// stringField reads a map value as a string, accepting named string types.
+func stringField(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	if v == nil {
+		return ""
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.String {
+		return rv.String()
+	}
+	return ""
+}
+
+// intField extracts a numeric field the same way eventField does for strings:
+// counters arrive as Go ints when the event is recorded directly, and as
+// float64 after the state-transition path marshals the data to JSON.
+func intField(data any, key string) int {
+	switch v := data.(type) {
+	case map[string]any:
+		return numberField(v[key])
+	case []byte:
+		var m map[string]any
+		if json.Unmarshal(v, &m) == nil {
+			return numberField(m[key])
+		}
+	}
+	return 0
+}
+
+// numberField reads a map value as an int, accepting JSON's float64 numbers.
+func numberField(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
 }
 
 // resumeLocked re-runs an approved review-parked task synchronously and maps

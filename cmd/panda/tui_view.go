@@ -181,9 +181,14 @@ func (m tuiModel) textWidth() int {
 	return max(20, m.width-4)
 }
 
-// elapsed formats a duration as a compact clock for the status line.
+// elapsed formats a duration as a compact clock for the status line. A
+// sub-second duration prints "<1s" rather than "0s": routing decisions finish
+// in milliseconds, and "0s" reads as a broken timer instead of a fast stage.
 func elapsed(d time.Duration) string {
 	s := int(d.Seconds())
+	if s < 1 {
+		return "<1s"
+	}
 	if s < 60 {
 		return fmt.Sprintf("%ds", s)
 	}

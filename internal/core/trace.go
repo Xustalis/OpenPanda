@@ -17,6 +17,7 @@ const (
 	EvRouteDecision    = "route_decision"     // scheduler.Route → action/target/reason/score_breakdown/candidates
 	EvDelegationHop    = "delegation_hop"     // handleTaskAccept/Result → from/to/via/chain/attempt_id
 	EvExecAgentStart   = "exec_agent_start"   // router.Execute before agent run → agent/adapter/injected
+	EvJudgeStart       = "judge_start"        // supervision loop right before the judge call → round/budget; the CLI's reviewing stage starts here
 	EvSupervisionRound = "supervision_round"  // supervise loop each round → round/budget/verdict/judge_summary
 	EvTier2Triggered   = "tier2_triggered"    // defense.Authorize tier≥2 result → operations/parked_in_review
 	EvPlanStageChanged = "plan_stage_changed" // plan stage unlock/start/complete → plan_id/stage_id/transition

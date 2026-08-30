@@ -2327,6 +2327,57 @@ label {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* `/` completion menu: anchored to the composer box and opening upward, so
+   the suggestions appear where the eye already is instead of pushing the
+   transcript around. Same row vocabulary as the ⌘K palette. */
+.composer-box {
+  position: relative;
+}
+
+.complete-menu {
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px var(--shadow, rgba(0, 0, 0, 0.18));
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.complete-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: calc(var(--radius) - 3px);
+  background: transparent;
+  color: var(--text);
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.complete-item.active {
+  background: var(--accent-soft);
+}
+
+.complete-hint {
+  color: var(--text-tert, var(--tert));
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 /* Naked textarea: the box around it owns the chrome. */
 .composer-input {
   width: 100%;

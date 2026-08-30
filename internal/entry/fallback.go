@@ -2,8 +2,10 @@ package entry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 )
 
 // ClassifyError wraps a model/parse failure with a user-friendly message. The
@@ -44,7 +46,15 @@ func WrapAPIError(err error) error {
 		case se.status == http.StatusNotFound:
 			return &ClassifyError{UserMsg: "模型接口不存在，请检查 base_url 与 model 名称是否正确", Err: err}
 		case se.status == http.StatusBadRequest:
-			return &ClassifyError{UserMsg: "模型服务拒绝了请求（400），请检查 model 名称与 api_type 是否匹配", Err: err}
+			// The stock hint names the two most common causes, but a 400 can be
+			// anything the provider dislikes (a retired model name, an oversized
+			// context) — the provider's own reason rides along so the user fixes
+			// the real cause instead of chasing the hint.
+			msg := "模型服务拒绝了请求（400），请检查 model 名称与 api_type 是否匹配"
+			if detail := providerDetail(se.body); detail != "" {
+				msg += "：" + detail
+			}
+			return &ClassifyError{UserMsg: msg, Err: err}
 		}
 	}
 
@@ -66,4 +76,34 @@ func WrapAPIError(err error) error {
 	}
 
 	return &ClassifyError{UserMsg: "入口模型调用失败，请稍后重试", Err: err}
+}
+
+// providerDetail extracts the provider's rejection reason from a response
+// body for display: the message field of the usual {"error":{"message":…}}
+// envelope when the body is JSON, the first line otherwise. Bounded, so a
+// verbose provider cannot flood the chat bubble.
+func providerDetail(body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ""
+	}
+	var envelope struct {
+		Message string `json:"message"`
+		Error   struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(body), &envelope) == nil {
+		if envelope.Error.Message != "" {
+			return truncate(envelope.Error.Message, 200)
+		}
+		if envelope.Message != "" {
+			return truncate(envelope.Message, 200)
+		}
+	}
+	line := body
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	return truncate(strings.TrimSpace(line), 200)
 }
