@@ -27,6 +27,14 @@ type Router struct {
 	// injectionModel is the normalized injection.model strategy
 	// (auto | always | never). Zero value means auto.
 	injectionModel string
+	// toolsPolicy is the normalized routing.tools_policy strategy
+	// (minimal | extended) the adapters run under. Zero value means minimal.
+	toolsPolicy string
+	// mcpCommand is the configured stdio MCP server (mcp.command, argv
+	// string). Under the extended tools policy it is materialized as an
+	// .mcp.json in the agent's work directory before the run, so agents that
+	// discover project MCP configs can reach the node's server. Empty = none.
+	mcpCommand string
 	// preferred lists agent names that receive a score bonus during routing.
 	preferred []string
 	// probeAgent reports whether an agent's CLI is usable on this machine.
@@ -46,6 +54,7 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 		executor:       executor,
 		model:          model,
 		injectionModel: injection.NormalizedModel(),
+		toolsPolicy:    routing.NormalizedToolsPolicy(),
 		preferred:      routing.PreferredAgents,
 	}
 	r.runAdapter = r.runAdapterDefault
@@ -60,8 +69,21 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 // builds its router before the full config is wired through).
 func (r *Router) SetPolicy(injection config.InjectionConfig, routing config.RoutingConfig) {
 	r.injectionModel = injection.NormalizedModel()
+	r.toolsPolicy = routing.NormalizedToolsPolicy()
 	r.preferred = routing.PreferredAgents
 }
+
+// SetMCPPassthrough sets the stdio MCP server (argv string, empty disables)
+// that extended-policy agent runs expose through a work-dir .mcp.json. The
+// ask engine's own MCP client is independent of this; the passthrough only
+// concerns what the delegated agent CLIs may discover.
+func (r *Router) SetMCPPassthrough(command string) {
+	r.mcpCommand = strings.TrimSpace(command)
+}
+
+// ToolsPolicy reports the normalized agent tools policy the router runs
+// adapters under (config routing.tools_policy).
+func (r *Router) ToolsPolicy() string { return r.toolsPolicy }
 
 // SetAdapterRunner overrides the agent adapter invocation. It is a test seam:
 // suites that need to exercise agent execution without spawning a real LLM CLI
@@ -344,7 +366,14 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 			unavailable = append(unavailable, name+" (cli unavailable)")
 			continue
 		}
-		ar := r.runAdapter(ctx, ag.Adapter, prompt, cwd)
+		// The tools policy rides the context (the runAdapter seam's signature
+		// stays unchanged for tests); runAdapterProcess copies it into the
+		// request. MCP passthrough materializes a project .mcp.json for the
+		// run when the policy is extended and a server is configured.
+		runCtx := withToolsPolicy(ctx, r.toolsPolicy)
+		cleanupMCP := r.materializeMCPPassthrough(ag.Adapter, cwd)
+		ar := r.runAdapter(runCtx, ag.Adapter, prompt, cwd)
+		cleanupMCP()
 		// One bounded retry on provider-side turbulence (rate limit /
 		// overload / 5xx): these resolve in seconds, and the narrow
 		// transientAgentFailure patterns keep real task failures — and
@@ -359,7 +388,7 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 			case <-timer.C:
 			}
 			if ctx.Err() == nil {
-				retry := r.runAdapter(ctx, ag.Adapter, prompt, cwd)
+				retry := r.runAdapter(runCtx, ag.Adapter, prompt, cwd)
 				if retry.OK {
 					retry.Result = "[retried once after transient provider error] " + retry.Result
 					ar = retry
@@ -374,13 +403,15 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 			stderr = ar.Result
 		}
 		return Result{
-			OK:       ar.OK,
-			ExitCode: ar.ExitCode,
-			Stdout:   ar.Result,
-			Stderr:   stderr,
-			Tokens:   ar.Tokens,
-			Cost:     ar.Cost,
-			Agent:    name,
+			OK:        ar.OK,
+			ExitCode:  ar.ExitCode,
+			Stdout:    ar.Result,
+			Stderr:    stderr,
+			Tokens:    ar.Tokens,
+			Cost:      ar.Cost,
+			Agent:     name,
+			Usage:     ar.Usage,
+			SessionID: ar.SessionID,
 		}
 	}
 	return Result{
@@ -403,15 +434,22 @@ type Result struct {
 	// primary when the fallback chain kicked in). Empty for non-agent plans
 	// and when no candidate was usable at all.
 	Agent string
+	// Usage is the structured token breakdown the adapter reported (nil when
+	// the adapter is a plain-text one); SessionID is the agent session a
+	// follow-up round can resume (empty when the adapter has none).
+	Usage     *UsageDetail
+	SessionID string
 }
 
 // AgentResult is what an adapter returns.
 type AgentResult struct {
-	OK       bool
-	Result   string
-	ExitCode int
-	Tokens   int
-	Cost     float64
+	OK        bool
+	Result    string
+	ExitCode  int
+	Tokens    int
+	Cost      float64
+	Usage     *UsageDetail `json:"usage"`
+	SessionID string       `json:"session_id"`
 }
 
 // runAdapterDefault shells out to a Python adapter in adapters/, injecting

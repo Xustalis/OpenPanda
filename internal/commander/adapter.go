@@ -39,6 +39,34 @@ func WithMemoryFiles(ctx context.Context, paths []string) context.Context {
 // process reader, without widening every execution-path signature.
 type progressKey struct{}
 
+// resumeKey carries the agent session id a follow-up round continues: the
+// supervision loop threads the previous run's session id here so the adapter
+// resumes the agent's own conversation instead of cold-starting.
+type resumeKey struct{}
+
+// WithResume attaches an agent session id to the execution context;
+// runAdapterProcess copies it into AdapterRequest.Resume. Empty is a no-op.
+func WithResume(ctx context.Context, sessionID string) context.Context {
+	if sessionID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, resumeKey{}, sessionID)
+}
+
+// toolsPolicyKey carries the router's agent tools policy (minimal |
+// extended) down to the adapter request without widening the runAdapter
+// test seam's signature.
+type toolsPolicyKey struct{}
+
+// withToolsPolicy attaches the normalized tools policy to an execution
+// context (internal: the Router sets it right before running the adapter).
+func withToolsPolicy(ctx context.Context, policy string) context.Context {
+	if policy == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, toolsPolicyKey{}, policy)
+}
+
 // ProgressFunc receives one adapter progress note (a short human-readable
 // line, e.g. "Bash: du -ah | sort -rh") as the agent works.
 type ProgressFunc func(note string)
@@ -242,6 +270,27 @@ type AdapterRequest struct {
 	// the same files so adapters that support file access can let the agent
 	// read only what it needs instead of the whole memory content.
 	MemoryFiles []string `json:"memory_files,omitempty"`
+	// Resume carries the agent session id a previous run returned, so a
+	// follow-up round (the supervision loop's "continue" verdict) resumes the
+	// agent's own conversation instead of cold-starting on the bare follow-up
+	// text. Adapters without session support ignore it.
+	Resume string `json:"resume,omitempty"`
+	// ToolsPolicy grades the tool face the adapter runs with: minimal (or
+	// empty) keeps the adapter's safe whitelist; extended lifts it so the
+	// agent's native skills, sub-agent tooling and project MCP servers are
+	// reachable. Set by the Router from routing.tools_policy.
+	ToolsPolicy string `json:"tools_policy,omitempty"`
+}
+
+// UsageDetail is the structured token breakdown an adapter reports alongside
+// the flat Tokens total: the total feeds the existing pipeline unchanged,
+// the breakdown feeds observability (agent_usage task events) so input,
+// output and cache traffic can be told apart.
+type UsageDetail struct {
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+	CacheReadTokens  int `json:"cache_read_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
 }
 
 // modelEnv builds the model provider env injected into the adapter process
@@ -366,6 +415,12 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	if mf, ok := ctx.Value(memoryFilesKey{}).([]string); ok {
 		req.MemoryFiles = mf
 	}
+	if rid, ok := ctx.Value(resumeKey{}).(string); ok {
+		req.Resume = rid
+	}
+	if policy, ok := ctx.Value(toolsPolicyKey{}).(string); ok {
+		req.ToolsPolicy = policy
+	}
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
 		return AgentResult{OK: false, Result: "bad adapter request", ExitCode: 1}
@@ -455,6 +510,32 @@ func transientAgentFailure(ar AgentResult) bool {
 	// Bare 5xx status mentions ("error 502", "HTTP 503").
 	if transientStatusRE.MatchString(msg) {
 		return true
+	}
+	return false
+}
+
+// contextOverflowPatterns are the provider-side ways of saying "the prompt
+// plus history no longer fits the model's window". Such a failure is
+// deterministic: retrying the same prompt cannot fit it, so the upper layer
+// parks for a human (compress / split / reduce scope) instead of re-running.
+var contextOverflowPatterns = []string{
+	"context length", "context_length_exceeded", "maximum context",
+	"context window", "prompt is too long", "too many tokens",
+	"reduce the length",
+}
+
+// ContextOverflow reports whether a failure text looks like the agent's
+// context window overflowing. Exported for the orchestration layer, which
+// parks such failures in review rather than retrying them.
+func ContextOverflow(text string) bool {
+	if text == "" {
+		return false
+	}
+	msg := strings.ToLower(text)
+	for _, pat := range contextOverflowPatterns {
+		if strings.Contains(msg, pat) {
+			return true
+		}
 	}
 	return false
 }
