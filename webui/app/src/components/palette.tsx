@@ -12,7 +12,9 @@ import { rank } from './fuzzy'
 // The command list is derived from nav.ts, not written out again here: a view
 // added to the sidebar is in the palette the same day.
 
-interface Command {
+// Exported so the chat composer's `/` completion can borrow the same command
+// list instead of maintaining a second one.
+export interface Command {
   id: string
   /** Localized section heading, shown above the row in the unfiltered list. */
   group: string
@@ -172,7 +174,7 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
 
 /** The command list, rebuilt on each open so labels follow the locale and the
  *  appearance/language hints show what is currently selected. */
-function buildCommands(onLogout: () => void): Command[] {
+export function buildCommands(onLogout: () => void): Command[] {
   const go = t('palette.group.go')
   const cmds: Command[] = navViews.map(([view, key]) => ({
     id: `go:${view}`,

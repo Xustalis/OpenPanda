@@ -159,6 +159,7 @@ export function App() {
             onOpenSession={(id) => navigate({ view: 'sessions', id: id || null })}
             onOpenTask={(id) => navigate({ view: 'detail', id })}
             onOpenNodes={() => navigate({ view: 'nodes' })}
+            onLogout={logout}
           />
         )}
         {route.view === 'queue' && (

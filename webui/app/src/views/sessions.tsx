@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   api,
   askSessionStream,
@@ -16,6 +16,9 @@ import { t } from '../i18n'
 import { Markdown } from '../md/render'
 import { toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
+import { buildCommands } from '../components/palette'
+import { rank } from '../components/fuzzy'
+import { patchStreaming, slashQuery } from '../components/chatstate'
 import DecisionOrbit from '../components/orbit'
 import FleetTopologyCard from '../components/fleet'
 import { JsonInline } from '../components/json-inline'
@@ -50,6 +53,7 @@ export function SessionsView({
   onOpenSession,
   onOpenTask,
   onOpenNodes,
+  onLogout,
 }: {
   activeId: string | null
   onOpenSession(id: string): void
@@ -58,6 +62,9 @@ export function SessionsView({
    *  paints disabled, which reads as a broken button rather than as an
    *  invitation. */
   onOpenNodes(): void
+  /** The ⌘K palette's logout entry, reused by the composer's `/`
+   *  completion so both surfaces run the same command list. */
+  onLogout(): void
 }) {
   useLocaleRerender()
   const [sessions, setSessions] = useState<Session[]>([])
@@ -85,6 +92,11 @@ export function SessionsView({
   const composer = useRef<HTMLTextAreaElement>(null)
   // The in-flight ask, so the stop button can abort it.
   const inflight = useRef<AbortController | null>(null)
+  // Which row of the `/` completion menu is highlighted.
+  const [completeCursor, setCompleteCursor] = useState(0)
+  // The input as of the last Escape: Escape hides the menu until the text
+  // changes again, so the slash prefix alone cannot force it back open.
+  const [completeDismissed, setCompleteDismissed] = useState('')
   // Whether the transcript is parked at the bottom. Autoscrolling on every
   // delta is right while you are watching the reply arrive and wrong the
   // moment you scroll up to re-read something, so follow only when pinned.
@@ -121,7 +133,11 @@ export function SessionsView({
   // "add a second device" CTA.
   const onlineNodeCount = nodes.filter((n) => n.status === 'online').length
 
-  // Load the active thread's transcript.
+  // Load the active thread's transcript. Never while an ask is in flight:
+  // the optimistic [user, streaming reply] pair send() just painted would be
+  // clobbered by the server's shorter view, and every subsequent delta would
+  // patch whichever message survived — writing the reply into the user's own
+  // bubble.
   useEffect(() => {
     if (!activeId) {
       setSession(null)
@@ -129,6 +145,7 @@ export function SessionsView({
       setLoading(false)
       return
     }
+    if (inflight.current) return
     setLoading(true)
     api
       .session(activeId)
@@ -162,8 +179,10 @@ export function SessionsView({
 
   // Keep the composer's height in step with its value — including the reset
   // to two rows after a send clears it, and after a starter chip fills it.
+  // A fresh query also restarts the completion highlight at the top hit.
   useEffect(() => {
     if (composer.current) autoGrow(composer.current)
+    setCompleteCursor(0)
   }, [input])
 
   // Follow the newest message while streaming — but only while pinned.
@@ -285,8 +304,10 @@ export function SessionsView({
       pinned.current = true
       setMsgs((ms) => [...ms, { role: 'user', text: prompt }, { role: 'assistant', text: '', streaming: true }])
 
-      const patch = (fn: (m: ChatMsg) => ChatMsg) =>
-        setMsgs((ms) => ms.map((m, i) => (i === ms.length - 1 ? fn(m) : m)))
+      // Aim every delta at the bubble actually streaming. A refetch racing
+      // the stream can leave a stale message at the tail; patching the tail
+      // blindly used to write replies into the user's own message.
+      const patch = (fn: (m: ChatMsg) => ChatMsg) => setMsgs((ms) => patchStreaming(ms, fn))
 
       await askSessionStream(
         id,
@@ -305,18 +326,20 @@ export function SessionsView({
     } catch (err) {
       if (isAbort(err)) {
         // Stopped on purpose: mark the turn done and note why, rather than
-        // painting the user's own action as a failure.
+        // painting the user's own action as a failure. Aimed at the bubble
+        // that was streaming — same target rule as the deltas above.
         setMsgs((ms) =>
-          ms.map((m, i) =>
-            i === ms.length - 1
-              ? { ...m, streaming: false, status: undefined, text: m.text || `· ${t('sessions.stopped')}` }
-              : m,
-          ),
+          patchStreaming(ms, (m) => ({
+            ...m,
+            streaming: false,
+            status: undefined,
+            text: m.text || `· ${t('sessions.stopped')}`,
+          })),
         )
       } else {
         const message = err instanceof Error ? err.message : String(err)
         setMsgs((ms) => [
-          ...ms.map((m, i) => (i === ms.length - 1 ? { ...m, streaming: false } : m)),
+          ...ms.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
           { role: 'assistant', kind: 'error', text: `⚠ ${message}` },
         ])
       }
@@ -331,6 +354,28 @@ export function SessionsView({
         }).catch(() => {})
       }
     }
+  }
+
+  // `/` completion (parity with the CLI REPL's Tab completion): the composer
+  // borrows the ⌘K palette's command list — one slash and a few letters open
+  // a view, flip the theme, or log out without leaving the keyboard.
+  const slashToken = slashQuery(input)
+  const commands = useMemo(() => buildCommands(onLogout), [onLogout])
+  const completeShown = useMemo(
+    () =>
+      slashToken === null || input === completeDismissed
+        ? []
+        : rank(commands, slashToken, (c) => [c.label, c.alias ?? '', c.id.replace(':', ' ')]),
+    [commands, slashToken, input, completeDismissed],
+  )
+  // Ranking reorders on every keystroke; clamp instead of trusting the old
+  // index still points at a row.
+  const completeIdx = Math.min(completeCursor, Math.max(completeShown.length - 1, 0))
+
+  function acceptCompletion(run: () => void) {
+    setInput('')
+    setCompleteDismissed('')
+    run()
   }
 
   return (
@@ -508,6 +553,24 @@ export function SessionsView({
             />
           </div>
           <div class="composer-box">
+            {completeShown.length > 0 && (
+              <div class="complete-menu" role="listbox" aria-label={t('palette.title')}>
+                {completeShown.map((c, i) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    role="option"
+                    aria-selected={i === completeIdx}
+                    class={`complete-item${i === completeIdx ? ' active' : ''}`}
+                    onMouseMove={() => setCompleteCursor(i)}
+                    onClick={() => acceptCompletion(c.run)}
+                  >
+                    <span class="complete-label">{c.label}</span>
+                    <span class="complete-hint">{c.hint ?? c.group}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <textarea
               ref={composer}
               class="composer-input"
@@ -520,6 +583,32 @@ export function SessionsView({
                 autoGrow(el)
               }}
               onKeyDown={(e) => {
+                if (completeShown.length > 0) {
+                  // While the menu is open the navigation keys belong to it:
+                  // Tab/Enter accept, arrows move, Escape hides it until the
+                  // input changes again.
+                  if (e.key === 'Tab' || e.key === 'Enter') {
+                    e.preventDefault()
+                    const cmd = completeShown[completeIdx]
+                    if (cmd) acceptCompletion(cmd.run)
+                    return
+                  }
+                  if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) {
+                    e.preventDefault()
+                    setCompleteCursor((completeIdx + 1) % completeShown.length)
+                    return
+                  }
+                  if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) {
+                    e.preventDefault()
+                    setCompleteCursor((completeIdx - 1 + completeShown.length) % completeShown.length)
+                    return
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault()
+                    setCompleteDismissed(input)
+                    return
+                  }
+                }
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
                   send()

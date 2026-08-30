@@ -9,6 +9,7 @@ package main
 // ioctl-free env read no matter how many lines get printed.
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -66,21 +67,37 @@ func (t *thoughtPreview) feed(chunk string) string {
 // every other user-facing string, instead of being composed in English inside
 // a library.
 func progressNote(loc i18n.Locale, p askengine.Progress) string {
+	var note string
 	switch p.Kind {
 	case askengine.ProgressTask:
-		return i18n.Tf(loc, "cli.progress.task", "title", p.Name)
+		note = i18n.Tf(loc, "cli.progress.task", "title", p.Name)
 	case askengine.ProgressPlan:
-		return i18n.Tf(loc, "cli.progress.plan", "goal", p.Name)
+		note = i18n.Tf(loc, "cli.progress.plan", "goal", p.Name)
 	case askengine.ProgressTool:
-		return i18n.Tf(loc, "cli.progress.tool", "name", p.Name)
+		note = i18n.Tf(loc, "cli.progress.tool", "name", p.Name)
 	case askengine.ProgressRoute:
-		return i18n.Tf(loc, "cli.progress.route", "node", p.Name)
+		// A locally-executed task carries the scheduler's "local" action as its
+		// target; phrase it as the user's own node instead of leaking jargon.
+		node := p.Name
+		if node == "local" || node == "" {
+			node = i18n.T(loc, "cli.progress.localNode")
+		}
+		note = i18n.Tf(loc, "cli.progress.route", "node", node)
 	case askengine.ProgressExec:
-		return i18n.Tf(loc, "cli.progress.exec", "agent", p.Name)
+		note = i18n.Tf(loc, "cli.progress.exec", "agent", p.Name)
 	case askengine.ProgressJudge:
-		return i18n.T(loc, "cli.progress.judge")
+		note = i18n.T(loc, "cli.progress.judge")
+	default:
+		note = p.Name
 	}
-	return p.Name
+	// A multi-round supervision run re-executes the agent per round; the trail
+	// names the round so identical stage labels stay tellable apart. Budget ≤ 1
+	// stays unadorned.
+	if p.Budget > 1 {
+		note += " · " + i18n.Tf(loc, "cli.progress.round",
+			"round", fmt.Sprintf("%d", p.Round), "budget", fmt.Sprintf("%d", p.Budget))
+	}
+	return note
 }
 
 // palFor picks the palette for one stream. Usage text goes to stderr on a bad

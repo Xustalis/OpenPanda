@@ -668,6 +668,21 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	var usedSkills []*skills.Skill
 	verdict := entry.SuperviseVerdict{Status: entry.VerdictDone}
 	for round := 0; round < maxRounds; round++ {
+		// emitRound traces one supervision_round with the round's final verdict.
+		// Callers fire it only once the verdict actually exists — after the judge
+		// pass, or immediately for rounds that never reach a judge (a failed run,
+		// the last round of the budget, a plan without a supervisor). Tracing
+		// earlier used to hand the agent's whole runtime to the "reviewing" stage:
+		// a stage's on-screen duration runs until the next event lands.
+		emitRound := func(status string) {
+			c.EvTrace(execCtx, taskID, EvSupervisionRound, map[string]any{
+				"round":          round + 1,
+				"budget":         maxRounds,
+				"agent":          res.Agent,
+				"ok":             res.OK,
+				"verdict_status": status,
+			})
+		}
 		prompt, skillsUsed := buildAgentPrompt(c, currentIntent, task.Project, task.Title)
 		usedSkills = skillsUsed
 
@@ -727,31 +742,23 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			c.EvTrace(execCtx, taskID, EvTier2Triggered, ev)
 		}
 
-		// — Trace: supervision_round result. Emitted after each judge pass so
-		// the detail view can paint the "2/5" badge and the verdict pill.
-		// If this is the last round we won't judge, so emit once with the
-		// raw exit status.
-		roundOut := map[string]any{
-			"round":  round + 1,
-			"budget": maxRounds,
-			"agent":  res.Agent,
-			"ok":     res.OK,
+		// — Trace: supervision_round, part 1. Judged rounds trace after the
+		// judge pass below, where their verdict becomes known; only rounds that
+		// never reach a judge trace here, so the detail view's "2/5" badge and
+		// verdict pill always reflect a decided round.
+		judgeWillRun := plan.Kind == "agent" && c.supervisor != nil && round < maxRounds-1 && res.OK
+		if !judgeWillRun {
+			status := string(verdict.Status)
+			if !res.OK {
+				// A failed round is never judged (the failure branch below
+				// returns before Supervise runs), so reporting the verdict
+				// variable — its zero value, or the previous round's — would paint
+				// "done" over a failed attempt. The execution outcome is the only
+				// truthful status here.
+				status = "failed"
+			}
+			emitRound(status)
 		}
-		switch {
-		case plan.Kind == "agent" && c.supervisor != nil && round < maxRounds-1 && res.OK:
-			// judged below inside the same if; leave placeholder
-			roundOut["verdict_status"] = "pending"
-		case !res.OK:
-			// A failed round is never judged (the failure branch below
-			// returns before Supervise runs), so reporting the verdict
-			// variable — its zero value, or the previous round's — would paint
-			// "done" over a failed attempt. The execution outcome is the only
-			// truthful status here.
-			roundOut["verdict_status"] = "failed"
-		default:
-			roundOut["verdict_status"] = string(verdict.Status)
-		}
-		c.EvTrace(execCtx, taskID, EvSupervisionRound, roundOut)
 
 		if plan.Kind == "agent" {
 			// Fallback chain visibility (A2): res.Agent names the agent that
@@ -897,6 +904,15 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			break
 		}
 		usageBefore := c.supervisor.Usage()
+		// — Trace: judge_start. The reviewing stage's on-screen duration runs
+		// until the next event lands, so the judge call needs its own opening
+		// marker — otherwise its runtime is billed to the executing stage.
+		// CLI-only: it is not in the panel's forwarded-event set, so the web
+		// orbit never sees it.
+		c.EvTrace(execCtx, taskID, EvJudgeStart, map[string]any{
+			"round":  round + 1,
+			"budget": maxRounds,
+		})
 		judgeStart := time.Now()
 		v, serr := entry.Supervise(ctx, c.supervisor, currentIntent, res.Stdout)
 		c.recordEntryUsage(context.WithoutCancel(ctx), taskID, c.supervisor, usageBefore,
@@ -909,6 +925,10 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			c.logger.Warn("supervise call failed", "task", taskID, "err", serr)
 		}
 		verdict = v
+		// — Trace: supervision_round, part 2. The judge has spoken, so the
+		// round's badge can carry the verdict it actually produced — and the
+		// reviewing stage's stopwatch starts only now, not over the agent run.
+		emitRound(string(v.Status))
 		if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID, EvSupervise, map[string]any{
 			"round": round + 1, "status": v.Status, "reason": v.Reason, "followup": v.Followup,
 		}); err != nil {
