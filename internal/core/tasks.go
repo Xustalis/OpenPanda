@@ -440,6 +440,60 @@ func (s *TaskStore) DeclinedBy(ctx context.Context, taskID string) ([]string, er
 	return out, rows.Err()
 }
 
+// RetryCount returns the number of retries recorded on a task's audit trail
+// (one EvRetry event per Requeue). Unlike the in-memory loop detector — whose
+// counters reset with the process — this count survives daemon restarts, so a
+// deterministically failing task cannot earn an unbounded number of attempts
+// by crashing and restarting its node between retries (S2-6).
+func (s *TaskStore) RetryCount(ctx context.Context, taskID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM task_events WHERE task_id=? AND type=?`,
+		taskID, EvRetry).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("retry count: %w", err)
+	}
+	return n, nil
+}
+
+// QueuedDelegatedRemotely lists this node's queued tasks whose most recent
+// dispatch targeted a DIFFERENT node: delegations handed to a peer that came
+// back to queued (a restart's Recover, a decline) with nobody left to drive
+// them. Left alone they are orphans — no local scheduler adopts a row whose
+// work belongs on another device, and the upstream nodes only notice when
+// their own leases expire. The orphan sweep (rescueOrphanedForwards)
+// re-routes or fails them; see it for the full lifecycle.
+func (s *TaskStore) QueuedDelegatedRemotely(ctx context.Context, self string) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+taskColumns+` FROM tasks t
+		 WHERE t.state=? AND t.owner_node=?
+		   AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.task_id AND e.type=?)`,
+		StateQueued, self, EvDelegate)
+	if err != nil {
+		return nil, fmt.Errorf("queued delegated tasks: %w", err)
+	}
+	defer rows.Close()
+	tasks, err := scanTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	// Keep only tasks whose latest dispatch went elsewhere; a locally
+	// dispatched (or never dispatched) queued row is the queue scheduler's
+	// business, not the delegation sweep's.
+	out := make([]Task, 0, len(tasks))
+	for _, t := range tasks {
+		target, err := s.DispatchTarget(ctx, t.TaskID)
+		if err != nil {
+			s.logger.Warn("orphan sweep: dispatch target", "task", t.TaskID, "err", err)
+			continue
+		}
+		if target != "" && target != self {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
 // Accept transitions dispatched -> running and transfers the lease to the
 // executor (owner). The UPDATE carries a state guard (P1-3): without it a
 // concurrent cancel/timeout between the pre-check and the write could be
