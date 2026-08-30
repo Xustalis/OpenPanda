@@ -99,23 +99,58 @@ func TestWithSkills(t *testing.T) {
 	c := &Core{logger: testLogger(), skills: store}
 
 	// A deploy title matches the global skill.
-	got, used := withSkills(c, "deploy the release", "other-project", "deploy")
+	got, used := withSkills(c, "deploy the release", "other-project", "deploy", agentPromptBudget)
 	if !strings.Contains(got, "deploy-panda") || len(used) != 1 {
 		t.Errorf("should match global skill, got %q used=%d", got, len(used))
 	}
 	// A build title in the wrong project must not surface the panda skill.
-	got, _ = withSkills(c, "build the core", "other-project", "build")
+	got, _ = withSkills(c, "build the core", "other-project", "build", agentPromptBudget)
 	if strings.Contains(got, "build-panda") {
 		t.Errorf("project skill leaked into another project: %q", got)
 	}
 	// The right project does surface it.
-	got, _ = withSkills(c, "build the core", "panda", "build")
+	got, _ = withSkills(c, "build the core", "panda", "build", agentPromptBudget)
 	if !strings.Contains(got, "build-panda") {
 		t.Errorf("project skill should match its own project, got %q", got)
 	}
 	// No skill store: intent unchanged.
-	if got, _ := withSkills(&Core{logger: testLogger()}, "anything", "panda", "x"); got != "anything" {
+	if got, _ := withSkills(&Core{logger: testLogger()}, "anything", "panda", "x", agentPromptBudget); got != "anything" {
 		t.Errorf("nil skills should leave intent unchanged, got %q", got)
+	}
+}
+
+// TestWithSkillsBudgetDegrades verifies the prompt-budget guard: a skill body
+// that does not fit the remaining budget degrades to an index line (name +
+// description) instead of being dropped or overflowing the agent's window.
+// A budget that fits keeps the full body.
+func TestWithSkillsBudgetDegrades(t *testing.T) {
+	root := t.TempDir()
+	store := skills.NewStore(filepath.Join(root, "skills"))
+	big := &skills.Skill{Name: "big-skill", Description: "A large playbook", Scope: skills.ScopeGlobal, Status: skills.StatusActive, Body: strings.Repeat("playbook line\n", 500)}
+	if err := store.Save(big); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	c := &Core{logger: testLogger(), skills: store}
+
+	// Tight budget: the body degrades to an index line but stays visible.
+	got, used := withSkills(c, "run the playbook", "", "playbook", 100)
+	if len(used) != 1 {
+		t.Fatalf("used = %d, want 1", len(used))
+	}
+	if !strings.Contains(got, "big-skill") {
+		t.Fatalf("degraded skill lost its name: %q", got)
+	}
+	if strings.Contains(got, "playbook line\nplaybook line") {
+		t.Fatalf("full body survived the budget: %d bytes", len(got))
+	}
+	if !strings.Contains(got, "A large playbook") {
+		t.Fatalf("index line lost the description: %q", got)
+	}
+
+	// Roomy budget: the full body rides.
+	got, _ = withSkills(c, "run the playbook", "", "playbook", agentPromptBudget)
+	if !strings.Contains(got, "playbook line\nplaybook line") {
+		t.Fatalf("roomy budget should keep the full body (%d bytes)", len(got))
 	}
 }
 

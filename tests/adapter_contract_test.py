@@ -28,7 +28,7 @@ def write_executable(path, body):
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def run_adapter(name, cli_name, cli_body, env=None, timeout=5):
+def run_adapter(name, cli_name, cli_body, env=None, timeout=5, extra_request=None):
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
         work = tmp / "work"
@@ -39,6 +39,8 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=5):
         if env:
             merged.update(env)
         req = {"prompt": "contract prompt", "timeout_s": 2, "cwd": str(work)}
+        if extra_request:
+            req.update(extra_request)
         proc = subprocess.run(
             [sys.executable, str(ADAPTERS / name)],
             input=json.dumps(req), text=True, capture_output=True,
@@ -77,7 +79,7 @@ assert "--max-turns" in sys.argv and "30" in sys.argv
 assert os.getcwd().endswith("/work")
 assert os.environ.get("ANTHROPIC_API_KEY") == "native-key"
 print(json.dumps({"type":"assistant", "message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"pwd"}}]}}))
-print(json.dumps({"type":"result", "is_error":False, "result":"claude answer", "usage":{"input_tokens":3,"output_tokens":5}, "total_cost_usd":0.25}))
+print(json.dumps({"type":"result", "is_error":False, "result":"claude answer", "session_id":"sess-123", "usage":{"input_tokens":3,"output_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":1}, "total_cost_usd":0.25}))
 ''',
             env={"ANTHROPIC_API_KEY": "native-key", "CLAUDE_MODEL": "claude-test"},
         )
@@ -85,7 +87,46 @@ print(json.dumps({"type":"result", "is_error":False, "result":"claude answer", "
         self.assertEqual(payload["result"], "claude answer")
         self.assertEqual(payload["tokens"], 8)
         self.assertEqual(payload["cost"], 0.25)
+        # The structured breakdown and the resumable session ride the wire.
+        self.assertEqual(payload["session_id"], "sess-123")
+        self.assertEqual(payload["usage"], {
+            "input_tokens": 3, "output_tokens": 5,
+            "cache_read_tokens": 2, "cache_write_tokens": 1,
+        })
         self.assertTrue(any("Bash: pwd" in line for line in progress), progress)
+
+    def test_claude_resume_and_extended_policy_contract(self):
+        payload, _, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+args = sys.argv[1:]
+# A follow-up round resumes the previous session.
+assert "--resume" in args and args[args.index("--resume") + 1] == "sess-prev"
+# tools_policy=extended lifts the whitelist entirely.
+assert "--allowedTools" not in args
+print(json.dumps({"type":"result", "is_error":False, "result":"resumed",
+                  "session_id":"sess-next", "usage":{"input_tokens":1,"output_tokens":1}}))
+''',
+            extra_request={"resume": "sess-prev", "tools_policy": "extended"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "resumed")
+        self.assertEqual(payload["session_id"], "sess-next")
+
+    def test_claude_minimal_policy_keeps_whitelist(self):
+        payload, _, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+args = sys.argv[1:]
+# minimal (and unset) runs keep the safe whitelist and never resume.
+assert "--allowedTools" in args
+assert "--resume" not in args
+print(json.dumps({"type":"result", "is_error":False, "result":"ok",
+                  "usage":{"input_tokens":1,"output_tokens":1}}))
+''',
+            extra_request={"tools_policy": "minimal"},
+        )
+        self.assertTrue(payload["ok"], payload)
 
     def test_codex_workspace_write_contract(self):
         payload, progress, _ = run_adapter(
@@ -100,6 +141,7 @@ assert "-c" in args and 'approval_policy="never"' in args
 assert "--model" in args and args[args.index("--model") + 1] == "codex-test"
 assert args[-1] == "contract prompt"
 assert os.environ.get("OPENAI_API_KEY") == "openai-key"
+print(json.dumps({"type":"session.created","payload":{"id":"codex-sess-1"}}))
 print(json.dumps({"type":"item.completed","item":{"type":"command_execution","command":"git status"}}))
 print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":"codex answer"}}))
 print(json.dumps({"type":"turn.completed","usage":{"input_tokens":4,"output_tokens":6}}))
@@ -109,23 +151,158 @@ print(json.dumps({"type":"turn.completed","usage":{"input_tokens":4,"output_toke
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "codex answer")
         self.assertEqual(payload["tokens"], 10)
+        # codex reports the breakdown too (no cost: the CLI vends none).
+        self.assertEqual(payload["usage"], {"input_tokens": 4, "output_tokens": 6})
+        self.assertNotIn("cost", payload)
+        # The session id from the session envelope rides the wire for resume.
+        self.assertEqual(payload["session_id"], "codex-sess-1")
         self.assertTrue(any("shell: git status" in line for line in progress), progress)
+
+    def test_codex_resume_and_extended_policy_contract(self):
+        payload, _, _ = run_adapter(
+            "codex.py", "codex", r'''
+import json, sys
+args = sys.argv[1:]
+# A follow-up round resumes the previous session by id.
+assert args[:3] == ["exec", "resume", "codex-sess-1"], args
+# The resumed run keeps its history: no --ephemeral.
+assert "--ephemeral" not in args
+# tools_policy=extended escalates the sandbox scope.
+assert args[args.index("--sandbox") + 1] == "danger-full-access"
+assert args[-1] == "contract prompt"
+print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":"resumed"}}))
+''',
+            extra_request={"resume": "codex-sess-1", "tools_policy": "extended"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "resumed")
 
     def test_opencode_provider_model_contract(self):
         payload, _, _ = run_adapter(
             "opencode.py", "opencode", r'''
-import os, sys
+import json, os, sys
 args = sys.argv[1:]
 assert args[:2] == ["run", "--print-logs=false"]
+assert "--format" in args and args[args.index("--format") + 1] == "json"
 assert "--model" in args and args[args.index("--model") + 1] == "deepseek/deepseek-chat"
 assert args[-1] == "contract prompt"
 assert os.environ.get("OPENAI_API_KEY") == "openai-key"
-print("opencode answer")
+print(json.dumps({"type":"session.created","properties":{"info":{"id":"ses_oc1"}}}))
+print(json.dumps({"type":"message.part.updated","properties":{"sessionID":"ses_oc1","part":{"id":"p1","type":"text","text":"opencode answer"}}}))
+print(json.dumps({"type":"message.updated","properties":{"info":{"tokens":{"input":5,"output":7},"cost":0.02}}}))
 ''',
             env={"OPENCODE_MODEL": "deepseek/deepseek-chat", "OPENAI_API_KEY": "openai-key"},
         )
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "opencode answer")
+        # The event stream yields the session id and the usage breakdown.
+        self.assertEqual(payload["session_id"], "ses_oc1")
+        self.assertEqual(payload["usage"], {"input_tokens": 5, "output_tokens": 7})
+        self.assertEqual(payload["tokens"], 12)
+        self.assertEqual(payload["cost"], 0.02)
+
+    def test_opencode_resume_and_plain_fallback_contract(self):
+        # Resume threads --session through to the CLI.
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode", r'''
+import json, sys
+args = sys.argv[1:]
+assert "--session" in args and args[args.index("--session") + 1] == "ses-prev"
+print(json.dumps({"type":"message.part.updated","properties":{"part":{"id":"p","type":"text","text":"ok"}}}))
+''',
+            extra_request={"resume": "ses-prev"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "ok")
+        # A CLI that rejects --format json degrades to the plain text run.
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode", r'''
+import sys
+args = sys.argv[1:]
+if "--format" in args:
+    sys.stderr.write("error: unknown option --format\n")
+    sys.exit(1)
+assert args[:2] == ["run", "--print-logs=false"]
+print("plain opencode answer")
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "plain opencode answer")
+
+    def test_grok_session_contract(self):
+        # A first run names its own session and returns it as session_id.
+        payload, _, _ = run_adapter(
+            "grok_build.py", "grok", r'''
+import json, sys
+args = sys.argv[1:]
+assert "-s" in args and args[args.index("-s") + 1].startswith("panda-")
+assert "--single" in args and "contract prompt" in args
+assert "--output-format" in args and "plain" in args
+assert "--always-approve" in args
+print(json.dumps({"session": args[args.index("-s") + 1]}))
+print("grok answer")
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertIn("grok answer", payload["result"])
+        self.assertTrue(payload.get("session_id", "").startswith("panda-"), payload)
+        # A follow-up round resumes that named session via -s.
+        payload, _, _ = run_adapter(
+            "grok_build.py", "grok", r'''
+import sys
+args = sys.argv[1:]
+assert args[args.index("-s") + 1] == "panda-prev"
+print("grok resumed")
+''',
+            extra_request={"resume": "panda-prev"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["session_id"], "panda-prev")
+        # A CLI without -s degrades to a nameless one-shot run.
+        payload, _, _ = run_adapter(
+            "grok_build.py", "grok", r'''
+import sys
+args = sys.argv[1:]
+if "-s" in args:
+    sys.stderr.write("error: unrecognized option '-s'\n")
+    sys.exit(1)
+print("grok legacy answer")
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "grok legacy answer")
+        self.assertNotIn("session_id", payload)
+
+    def test_plain_adapters_keep_their_cli_contract(self):
+        # dsh / hermes / openclaw stay thin passthroughs: pin each command
+        # line so a future change is a deliberate contract edit.
+        payload, _, _ = run_adapter(
+            "deepseek_harness.py", "dsh", r'''
+import sys
+assert sys.argv[1:] == ["--profile", "headless", "contract prompt"]
+print("dsh answer")
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "dsh answer")
+        payload, _, _ = run_adapter(
+            "hermes.py", "hermes", r'''
+import sys
+assert sys.argv[1:] == ["--cli", "--yolo", "-z", "contract prompt"]
+print("hermes answer")
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "hermes answer")
+        payload, _, _ = run_adapter(
+            "openclaw.py", "openclaw", r'''
+import sys
+assert sys.argv[1:] == ["agent", "exec", "contract prompt"]
+print("openclaw answer")
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "openclaw answer")
 
     def test_codex_timeout_is_reported(self):
         payload, _, _ = run_adapter(
@@ -152,6 +329,30 @@ class HarnessContractTest(unittest.TestCase):
         self.assertEqual(payload["result"], "hi there")
         self.assertEqual(payload["exit_code"], 7)
         self.assertEqual(proc.returncode, 0)
+
+    def test_read_request_carries_resume_and_policy(self):
+        req = {"prompt": "p", "resume": "sess-9", "tools_policy": "extended"}
+        payload, proc = run_harness(
+            "r = _harness.read_request(); "
+            "_harness.emit(True, r.resume + ':' + r.tools_policy, 0)",
+            stdin_data=json.dumps(req),
+        )
+        self.assertEqual(payload["result"], "sess-9:extended", payload)
+
+    def test_emit_carries_usage_and_session(self):
+        payload, _ = run_harness(
+            "_harness.emit(True, 'done', 0, tokens=7, "
+            "usage={'input_tokens': 3, 'output_tokens': 4}, "
+            "session_id='sess-1')",
+        )
+        self.assertEqual(payload["tokens"], 7)
+        self.assertEqual(payload["usage"], {"input_tokens": 3, "output_tokens": 4})
+        self.assertEqual(payload["session_id"], "sess-1")
+        # An all-zero usage block is noise and stays off the wire.
+        payload, _ = run_harness(
+            "_harness.emit(True, 'done', 0, usage={'input_tokens': 0})")
+        self.assertNotIn("usage", payload)
+        self.assertNotIn("session_id", payload)
 
     def test_invalid_request_json_is_reported(self):
         payload, proc = run_harness(
