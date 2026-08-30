@@ -21,6 +21,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/artifact"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/log"
@@ -29,7 +30,6 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
-	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/updater"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 )
@@ -241,8 +241,8 @@ func parseSubcommand(args []string) (string, []string) {
 
 func runDaemon(args []string) {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml (default /etc/openpanda/config.yaml)")
-	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered — ./capabilities.yaml, next to the resolved config, or /etc/openpanda/capabilities.yaml)")
+	configPath := fs.String("config", "", fmt.Sprintf("path to config.yaml (default %s)", config.SystemConfigPath()))
+	cardPath := fs.String("card", defaultCardPath(), fmt.Sprintf("path to capabilities.yaml (default: discovered — ./capabilities.yaml, next to the resolved config, or %s)", systemCardPath()))
 	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
@@ -270,35 +270,11 @@ func runDaemon(args []string) {
 	log.Setup(cfg.Log.Level, nil)
 	logger := log.From(context.Background())
 
-	if err := os.MkdirAll(filepath.Dir(cfg.Storage.DBPath), 0o755); err != nil {
-		fatal("create data dir", err)
-	}
-	// Storage roots the runtime writes into must exist before any task
-	// executes: the sandbox sets a child's cwd to work_path, and a missing
-	// dir surfaces as a misleading fork/exec ENOENT blaming the command
-	// binary instead of the absent working directory.
-	for _, dir := range []string{
-		cfg.Storage.ContextPath,
-		cfg.Storage.MemoryPath,
-		cfg.Storage.ProjectsPath,
-		cfg.Storage.SkillsPath,
-		cfg.Storage.WorkPath,
-		cfg.Storage.ArtifactPath,
-	} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			fatal("create storage dir", err)
-		}
-	}
-
-	db, err := storage.Open(cfg.Storage.DBPath)
+	db, err := openStore(cfg)
 	if err != nil {
-		fatal("open database", err)
+		fatal("open store", err)
 	}
 	defer db.Close()
-
-	if err := storage.Migrate(db); err != nil {
-		fatal("migrate database", err)
-	}
 
 	// Load the capability card if configured. A node without a card is
 	// still a valid participant for heartbeat testing, but Phase 0
@@ -324,6 +300,9 @@ func runDaemon(args []string) {
 	runtimeNodeID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, effectiveIdentity)
 	coreNode := core.NewCore(db, runtimeNodeID, card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 	coreNode.SetRouterPolicy(cfg.Injection, cfg.Routing)
+	// Extended-policy agent runs expose the node's MCP server to the
+	// delegated agent CLI (work-dir .mcp.json); minimal policy ignores it.
+	coreNode.SetAgentMCPPassthrough(cfg.MCP.Command)
 	// Supervision (上级完成度判定): judge agent results against the task's
 	// success criteria and re-delegate work that isn't complete. A model-less
 	// node skips this — agent tasks finish in one shot as before.
@@ -369,8 +348,8 @@ func runDaemon(args []string) {
 	// Web Push lives in the webui sidecar (webui/cmd/panel), not the kernel;
 	// the kernel stays headless. See webui/README.md.
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	ctx, cancel := shutdownContext()
+	defer cancel()
 
 	// Hot reload (阶段 3): SIGHUP re-reads the capability card and rebroadcasts
 	// it — the signal `panda card` write commands send after touching the file.
@@ -381,17 +360,19 @@ func runDaemon(args []string) {
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
-	go func() {
+	guard.Go(logger, "daemon: SIGHUP card reload", cancel, func() {
 		for range hup {
 			if err := coreNode.ReloadCard(context.Background(), *cardPath); err != nil {
 				logger.Warn("reload card on SIGHUP", "err", err)
 			}
 		}
-	}()
+	})
 
 	// Queue scheduler (panel queue redesign): adopt queued-and-scheduled tasks
 	// in policy order (drag seq → priority → FIFO) when resources allow. Runs
 	// alongside the daemon so enqueued tasks execute even without the panel.
+	// StartQueueScheduler spawns its loop internally; a panic there still
+	// crashes the process (internal/core is not wrapped here by design).
 	coreNode.StartQueueScheduler(ctx)
 
 	// Dreaming (design §17.3): consolidate the daily logs into long-term memory
@@ -424,7 +405,7 @@ func runDaemon(args []string) {
 		5*time.Minute,
 	).WithDaily(daily)
 	dreamSched.OnError = func(err error) { logger.Warn("dreaming sweep", "err", err) }
-	go dreamSched.Run(ctx)
+	guard.Go(logger, "daemon: dream scheduler", cancel, func() { dreamSched.Run(ctx) })
 
 	// Reminders (design P1-28): claim due reminders in the background and
 	// log them. The web panel runs its own scanner with Web Push + SSE
@@ -438,7 +419,7 @@ func runDaemon(args []string) {
 		},
 		logger,
 	)
-	go reminderScan.Run(ctx)
+	guard.Go(logger, "daemon: reminder scanner", cancel, func() { reminderScan.Run(ctx) })
 
 	// Self-update notices (v0.0.4 follow-up #5): the headless daemon
 	// cannot apply updates itself — there is no console to consent
@@ -460,8 +441,8 @@ func runDaemon(args []string) {
 	if err := coreNode.Register(ctx); err != nil {
 		fatal("register node", err)
 	}
-	go coreNode.RunHeartbeat(ctx)
-	go coreNode.RunMonitor(ctx)
+	guard.Go(logger, "daemon: heartbeat", cancel, func() { coreNode.RunHeartbeat(ctx) })
+	guard.Go(logger, "daemon: monitor", cancel, func() { coreNode.RunMonitor(ctx) })
 
 	if n, err := coreNode.Recover(ctx); err != nil {
 		logger.Warn("task recovery failed", "err", err)
@@ -470,14 +451,14 @@ func runDaemon(args []string) {
 	}
 
 	for _, peer := range cfg.Network.Peers {
-		go func(p string) {
+		guard.Go(logger, "daemon: peer keepalive "+peer, cancel, func() {
 			backoff := 1 * time.Second
 			for {
-				err := coreNode.MaintainPeer(ctx, p)
+				err := coreNode.MaintainPeer(ctx, peer)
 				if err != nil {
 					// Dial or hello failed; back off exponentially so we do
 					// not hot-loop a permanently offline peer.
-					logger.Warn("peer dial failed", "peer", p, "err", err)
+					logger.Warn("peer dial failed", "peer", peer, "err", err)
 					select {
 					case <-ctx.Done():
 						return
@@ -495,7 +476,7 @@ func runDaemon(args []string) {
 				case <-time.After(backoff):
 				}
 			}
-		}(peer)
+		})
 	}
 
 	logger.Info("panda core started",
@@ -518,13 +499,19 @@ func runDaemon(args []string) {
 	if cfg.Network.SharedSecret == "" {
 		logger.Warn("websocket disabled: network.shared_secret is not set (refusing to accept unauthenticated peers)")
 	} else {
-		go func() { serveErr <- coreNode.Listen(ctx, cfg.Network.ListenAddr) }()
+		guard.Go(logger, "daemon: websocket listener", cancel, func() {
+			serveErr <- coreNode.Listen(ctx, cfg.Network.ListenAddr)
+		})
 	}
 
 	select {
 	case <-ctx.Done():
 		logger.Info("panda core shutting down")
-		coreNode.Shutdown(ctx)
+		// ctx is already cancelled here, so Shutdown gets its own deadline:
+		// draining in-flight work with a dead context would abort it instantly.
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		coreNode.Shutdown(shutdownCtx)
+		shutdownCancel()
 	case err := <-serveErr:
 		if err != nil {
 			fatal("websocket server", err)

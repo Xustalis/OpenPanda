@@ -68,16 +68,22 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	}
 
 	// Append this node to the delegation chain. Revisiting a node means a
-	// routing loop, which we reject instead of echoing around forever.
+	// routing loop, which we reject instead of echoing around forever; a chain
+	// that has reached the depth cap is rejected too, so sub-schedulers cannot
+	// hand work onward indefinitely (S2-5).
 	chain := p.Chain
 	if chain == nil {
 		chain = []string{env.From}
 	}
 	chain, err := scheduler.AppendChain(chain, c.nodeID)
 	if err != nil {
-		c.logger.Warn("delegation loop", "task", p.TaskID, "from", env.From)
+		reason := "delegation loop"
+		if errors.Is(err, scheduler.ErrChainTooDeep) {
+			reason = fmt.Sprintf("delegation chain exceeds %d hops", scheduler.MaxChainDepth)
+		}
+		c.logger.Warn("delegation refused", "task", p.TaskID, "from", env.From, "reason", reason)
 		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
-			TaskID: p.TaskID, Reason: "delegation loop",
+			TaskID: p.TaskID, Reason: reason,
 		})
 		return
 	}
@@ -147,7 +153,22 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		// Sub-scheduler: hand the task to a capable peer. The peer's result
 		// arrives later via handleResult, which relays it up the chain — so no
 		// immediate reply to the parent here.
-		if err := c.forwardDelegated(ctx, t.TaskID, decision.Target, p, chain); err != nil {
+		//
+		// Hop-limited consent (S2-8): the tier-2 consent minted at the origin
+		// decays one hop per relay. This node already adopted it for its own
+		// copy above; the copy forwarded onward carries one hop less, and once
+		// the hops are spent the consent is cleared so a distant executor asks
+		// for fresh approval instead of running irreversible work under a
+		// consent it was never granted. A payload with AuthHops == 0 is a
+		// legacy/unlimited sender and keeps propagating as before.
+		forward := p
+		if forward.Authorized && forward.AuthHops > 0 {
+			forward.AuthHops--
+			if forward.AuthHops == 0 {
+				forward.Authorized = false
+			}
+		}
+		if err := c.forwardDelegated(ctx, t.TaskID, decision.Target, forward, chain); err != nil {
 			c.logger.Warn("forward delegated", "task", t.TaskID, "target", decision.Target, "err", err)
 			c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
 				TaskID: t.TaskID, Reason: err.Error(),
@@ -469,7 +490,23 @@ func (c *Core) prepare(ctx context.Context, taskID string) error {
 // records the outcome. The task may already be running (a context-fetch resume
 // moved it there), dispatched (the normal path), or waiting_context (resumed
 // here after the snapshot arrived).
-func (c *Core) run(ctx context.Context, taskID, intent string, required []string) (bus.TaskResultPayload, error) {
+func (c *Core) run(ctx context.Context, taskID, intent string, required []string) (out bus.TaskResultPayload, rerr error) {
+	// Structured attribution: every result payload constructed below is
+	// stamped on the way out with who executed it, under which delegation
+	// chain, and how long it took on this node's clock. Relay hops rewrite
+	// env.From but never these fields, so the origin can consume a
+	// cross-device result like an ordinary sub-agent's (S1-3).
+	start := time.Now()
+	var taskChain []string
+	defer func() {
+		if out.TaskID != "" {
+			out.DurationMS = time.Since(start).Milliseconds()
+			out.Executor = c.nodeID
+			if len(out.Chain) == 0 {
+				out.Chain = taskChain
+			}
+		}
+	}()
 	router := c.currentRouter()
 	if router == nil {
 		// No capability card loaded: nothing to execute.
@@ -510,6 +547,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	if err != nil {
 		return bus.TaskResultPayload{}, fmt.Errorf("load task: %w", err)
 	}
+	taskChain = task.Chain
 	switch task.State {
 	case StateDispatched:
 		if err := c.store.Accept(ctx, taskID, c.nodeID); err != nil {
@@ -666,6 +704,13 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	currentIntent := intent
 	var res commander.Result
 	var usedSkills []*skills.Skill
+	// sessionID threads the agent's own conversation across supervision
+	// rounds: a "continue" verdict resumes the session that produced the
+	// work instead of cold-starting on the bare follow-up text (the agent
+	// keeps its reasoning trail; multi-round supervision stops paying the
+	// full re-orientation cost every round). Adapters without session
+	// support leave it empty and every round starts fresh, as before.
+	var sessionID string
 	verdict := entry.SuperviseVerdict{Status: entry.VerdictDone}
 	for round := 0; round < maxRounds; round++ {
 		// emitRound traces one supervision_round with the round's final verdict.
@@ -699,7 +744,14 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			"tier":       plan.Tier,
 		})
 
-		res = router.Execute(execCtx, plan, prompt, workDir, task.Authorized)
+		runCtx := execCtx
+		if sessionID != "" {
+			runCtx = commander.WithResume(execCtx, sessionID)
+		}
+		res = router.Execute(runCtx, plan, prompt, workDir, task.Authorized)
+		if res.SessionID != "" {
+			sessionID = res.SessionID
+		}
 
 		// — Trace: the Tier-2 gate outcome. A refusal is deterministic policy
 		// (the task parks in review with the reason); an authorized run is
@@ -761,6 +813,19 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 
 		if plan.Kind == "agent" {
+			// Structured usage (when the adapter speaks it): the flat Tokens
+			// total rides the existing pipeline; the breakdown lands as its
+			// own event so input/output/cache traffic can be told apart.
+			if res.Usage != nil {
+				c.EvTrace(execCtx, taskID, EvAgentUsage, map[string]any{
+					"agent":              res.Agent,
+					"round":              round,
+					"input_tokens":       res.Usage.InputTokens,
+					"output_tokens":      res.Usage.OutputTokens,
+					"cache_read_tokens":  res.Usage.CacheReadTokens,
+					"cache_write_tokens": res.Usage.CacheWriteTokens,
+				})
+			}
 			// Fallback chain visibility (A2): res.Agent names the agent that
 			// actually executed; a mismatch means the scored primary's CLI was
 			// unavailable and a runner-up took over. The breaker tracks the agent
@@ -831,7 +896,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				trackTask(c, task.Project, required, task.Title, false)
 				return bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: false, ExitCode: 1, Stderr: msg,
-					Tokens: res.Tokens, Cost: res.Cost,
+					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent,
 				}, nil
 			}
 		}
@@ -853,11 +918,38 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			trackTask(c, task.Project, required, task.Title, false)
 			return bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: 0, Stdout: res.Stdout,
-				Tokens: res.Tokens, Cost: res.Cost,
+				Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent,
 			}, nil
 		}
 
 		if !res.OK {
+			// A context-window overflow is deterministic: the same prompt will
+			// not fit on retry, so park the task for a human to compress/split
+			// it rather than burning rounds on a re-run that cannot succeed.
+			if plan.Kind == "agent" && commander.ContextOverflow(res.Stderr) {
+				msg := "agent context window overflow: " + res.Stderr
+				c.EvTrace(ctx, taskID, EvContextOverflow, map[string]any{
+					"agent": res.Agent, "round": round, "detail": res.Stderr,
+				})
+				if err := c.store.Fail(ctx, taskID, c.nodeID, msg); err != nil {
+					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+						return bus.TaskResultPayload{}, ErrCancelled
+					}
+					return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
+				}
+				if err := c.store.Review(ctx, taskID, c.nodeID, msg); err != nil {
+					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+						return bus.TaskResultPayload{}, ErrCancelled
+					}
+					return bus.TaskResultPayload{}, fmt.Errorf("park overflowed task: %w", err)
+				}
+				c.logTask(task.Title, false)
+				trackTask(c, task.Project, required, task.Title, false)
+				return bus.TaskResultPayload{
+					TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: false, ExitCode: res.ExitCode, Stderr: msg,
+					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent,
+				}, nil
+			}
 			// A tier-2 authorization refusal is deterministic policy, not a failed
 			// attempt: retrying cannot produce consent. Park the task in review —
 			// running -> failed -> review, the same shape the local retry loop
@@ -882,7 +974,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				trackTask(c, task.Project, required, task.Title, false)
 				return bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
-					Tokens: res.Tokens, Cost: res.Cost,
+					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent,
 				}, nil
 			}
 			if err := c.store.Fail(ctx, taskID, c.nodeID, res.Stderr); err != nil {
@@ -895,7 +987,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			trackTask(c, task.Project, required, task.Title, false)
 			return bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateFailed, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
-				Tokens: res.Tokens, Cost: res.Cost,
+				Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent,
 			}, nil
 		}
 
@@ -986,7 +1078,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		trackTask(c, task.Project, required, task.Title, false)
 		return bus.TaskResultPayload{
 			TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact,
+			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent,
 		}, nil
 	}
 
@@ -1023,7 +1115,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			trackTask(c, task.Project, required, task.Title, true)
 			return bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-				Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact,
+				Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent,
 			}, nil
 		}
 		// Consent already on record: audit the auto-acceptance the way an
@@ -1044,7 +1136,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	trackTask(c, task.Project, required, task.Title, true)
 	return bus.TaskResultPayload{
 		TaskID: taskID, AttemptID: attemptID, State: StateDone, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-		Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact,
+		Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent,
 	}, nil
 }
 
@@ -1064,12 +1156,27 @@ func taskScope(specJSON string) string {
 	return spec.Scope
 }
 
+// agentPromptBudget is the soft cap (bytes) on the assembled agent prompt.
+// The budget exists because the prompt is composed of unbounded parts
+// (matched skill bodies, the memory manifest) and no adapter can see an
+// agent's context window from here; overflowing the window fails the run
+// deterministically (ContextOverflow parks it). When the budget is tight the
+// skills section degrades first — full bodies shrink to index lines — while
+// the intent and the memory manifest are kept whole: the degradation order
+// is intent > memory manifest > skill index > skill body.
+const agentPromptBudget = 64000
+
+// agentOutputRider tells the agent its final message is user-facing (and may
+// be spoken), so it must read as a direct answer, not an exploration log.
+const agentOutputRider = "\n\n输出要求：最后用简洁的自然语言直接给出结果（做了什么、答案是什么）。不要罗列你的执行步骤、中间输出或思考过程；不要使用表情符号；标题/表格/代码块仅在内容确有需要时使用。"
+
 // buildAgentPrompt assembles the full agent execution prompt — the memory
 // file manifest (A3 selective loading) plus the task intent plus any matched
 // skills (design §8.5) — and returns the skills that were actually loaded, so
 // the caller can record their use. Skill matching keys off the short title,
 // not the full intent, so a long instruction does not over-match on common
-// words.
+// words. The assembly stays under agentPromptBudget by degrading skills to
+// index lines when the budget is tight.
 //
 // Project memory (MEMORY.md) is deliberately NOT packed into the agent prompt
 // anymore (A1 decision): it used to be prepended wholesale here, burning
@@ -1078,28 +1185,37 @@ func taskScope(specJSON string) string {
 // summaries) and reads what it needs with its own file tools; inside a project
 // no memory is injected at all (D3 isolation wall).
 func buildAgentPrompt(c *Core, intent, project, title string) (string, []*skills.Skill) {
-	prompt, used := withSkills(c, intent, project, title)
+	manifest := ""
 	if project == "" && c.memory != nil {
 		if files, err := c.memory.Manifest(); err == nil {
-			if manifest := memory.RenderManifest(files); manifest != "" {
-				prompt = manifest + "\n\n" + prompt
-			}
+			manifest = memory.RenderManifest(files)
 		}
+	}
+	// The intent, the manifest and the output rider are non-negotiable; only
+	// the skills section degrades. A negative remainder (a huge intent) still
+	// runs — withSkills treats it as "no room for skill bodies".
+	budget := agentPromptBudget - len(intent) - len(manifest) - len(agentOutputRider)
+	prompt, used := withSkills(c, intent, project, title, budget)
+	if manifest != "" {
+		prompt = manifest + "\n\n" + prompt
 	}
 	// Output style rider: the agent's final message is shown to the user
 	// (often verbatim in a terminal) and may be spoken aloud by the voice
 	// pipeline, so it must read as a direct answer — not a transcript of
 	// the agent's exploration. Execution details stay in the task's event
 	// stream (panda task <id>) for anyone who wants the full trail.
-	prompt += "\n\n输出要求：最后用简洁的自然语言直接给出结果（做了什么、答案是什么）。不要罗列你的执行步骤、中间输出或思考过程；不要使用表情符号；标题/表格/代码块仅在内容确有需要时使用。"
+	prompt += agentOutputRider
 	return prompt, used
 }
 
 // withSkills prepends matched active skills to the intent via the lightweight
 // index (design §8.5 progressive loading): only a matched skill's full body is
 // loaded, never the whole bank. Global skills apply everywhere; project skills
-// apply within their own project. The returned slice is the set actually loaded.
-func withSkills(c *Core, intent, project, query string) (string, []*skills.Skill) {
+// apply within their own project. budget bounds the skills section (bytes):
+// a body that does not fit degrades to an index line (name + description) so
+// the agent still knows the skill exists without the prompt overflowing the
+// agent's window. The returned slice is the set actually loaded.
+func withSkills(c *Core, intent, project, query string, budget int) (string, []*skills.Skill) {
 	if c.skills == nil {
 		return intent, nil
 	}
@@ -1121,6 +1237,7 @@ func withSkills(c *Core, intent, project, query string) (string, []*skills.Skill
 	}
 	var b strings.Builder
 	b.WriteString("可用技能（按需参考）：\n")
+	remaining := budget - b.Len()
 	var used []*skills.Skill
 	for _, e := range matched {
 		sk, err := c.skills.Load(e.Scope, e.Key, e.Name)
@@ -1128,7 +1245,18 @@ func withSkills(c *Core, intent, project, query string) (string, []*skills.Skill
 			continue
 		}
 		used = append(used, sk)
-		fmt.Fprintf(&b, "## %s\n%s\n", sk.Name, sk.Body)
+		full := fmt.Sprintf("## %s\n%s\n", sk.Name, sk.Body)
+		if len(full) <= remaining {
+			b.WriteString(full)
+			remaining -= len(full)
+			continue
+		}
+		// Budget exhausted: degrade to an index line — the agent sees the
+		// skill exists (and what it is for) without the full body.
+		line := fmt.Sprintf("## %s\n（正文超出本次提示词预算已省略，描述：%s）\n", sk.Name, sk.Description)
+		b.WriteString(line)
+		c.logger.Warn("agent prompt budget: skill degraded to index line",
+			"skill", sk.Name, "budget", budget)
 	}
 	if len(used) == 0 {
 		return intent, nil
@@ -1391,6 +1519,12 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 		AttemptID:    t.AttemptID,
 		Authorized:   t.Authorized,
 	}
+	// Hop-limited consent (S2-8): a re-route is one direct dispatch, so the
+	// consent on record covers exactly the receiving hop and must not walk
+	// further through a forwarding sub-scheduler.
+	if t.Authorized {
+		payload.AuthHops = 1
+	}
 	if t.ContextHash != "" {
 		payload.ContextLevel = "pointer"
 	}
@@ -1413,21 +1547,24 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 	t, err := c.store.Get(ctx, p.TaskID)
 	if errors.Is(err, sql.ErrNoRows) {
 		// The delegator may not have a local row if it delegated without
-		// creating one (Phase 0 entry flow). Reconstruct a minimal row,
-		// adopting the executor's attempt so the result is not flagged stale.
+		// creating one (Phase 0 entry flow), or lost it across a restart.
+		// Reconstruct a minimal row, adopting the executor's attempt so the
+		// result is not flagged stale.
 		//
-		// The chain is a guess ([self, sender]): the result payload does not
-		// carry the original delegation chain, so we cannot reconstruct the
-		// real upstream path. Consequence: relayToParent sees self as the root
-		// and does not relay this result further up. This is acceptable for the
-		// MVP reconstruction path (a node that never persisted the task is, in
-		// practice, the origin); a later phase should echo the original chain
-		// on the wire and use it here.
+		// The chain comes from the result payload itself (S1-3): the executor
+		// echoes the delegation chain it ran under, so the relayed result
+		// walks the real upstream path instead of stopping at a guessed
+		// [self, sender]. Old executors that do not echo it fall back to the
+		// guess (this node is then treated as the root).
 		if p.AttemptID == "" {
 			c.logger.Warn("result with empty attempt rejected", "task", p.TaskID, "from", env.From)
 			return
 		}
-		if _, err := c.store.CreateFromRemote(ctx, p.TaskID, p.TaskID, c.nodeID, p.AttemptID, []string{c.nodeID, env.From}); err != nil {
+		chain := p.Chain
+		if len(chain) == 0 {
+			chain = []string{c.nodeID, env.From}
+		}
+		if _, err := c.store.CreateFromRemote(ctx, p.TaskID, p.TaskID, c.nodeID, p.AttemptID, chain); err != nil {
 			c.logger.Warn("create task from result", "task", p.TaskID, "err", err)
 			return
 		}
@@ -1622,25 +1759,19 @@ func (c *Core) forwardCancelDownstream(ctx context.Context, taskID string) {
 	if target == "" || target == c.nodeID {
 		return // never dispatched, or dispatched to ourselves
 	}
-	msgID, err := newUUID()
-	if err != nil {
-		c.logger.Warn("cancel: mint message id", "task", taskID, "err", err)
+	const reason = "cancelled by delegator"
+	if c.deliverCancel(ctx, target, taskID, reason) {
+		// Delivered now: clear any copy parked from an earlier failed attempt.
+		c.outboxCancelDrop(ctx, target, taskID)
+		c.logger.Info("cancel forwarded downstream", "task", taskID, "to", target)
 		return
 	}
-	env, err := bus.NewEnvelope(bus.MsgTaskCancel, c.nodeID, msgID, bus.TaskCancelPayload{
-		TaskID: taskID, Reason: "cancelled by delegator",
-	})
-	if err != nil {
-		c.logger.Warn("cancel: build envelope", "task", taskID, "err", err)
-		return
-	}
-	env.To = target
-	if err := c.sendTo(target, env); err != nil {
-		// The executor may be gone; its lease expiry will clean up regardless.
-		c.logger.Warn("cancel: forward downstream", "task", taskID, "to", target, "err", err)
-		return
-	}
-	c.logger.Info("cancel forwarded downstream", "task", taskID, "to", target)
+	// The executor is unreachable at the moment of the cancel. Park it for
+	// redelivery on the next hello (S2-7) instead of relying on the lease
+	// alone: the lease bounds liveness, but a live executor keeps renewing
+	// it and would burn tokens on abandoned work until it finishes.
+	c.logger.Warn("cancel: forward downstream", "task", taskID, "to", target)
+	c.outboxCancelPersist(ctx, target, taskID, reason)
 }
 
 // handleResume processes an incoming task_resume: the delegator's user
@@ -1681,6 +1812,7 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 		c.relayToParent(ctx, bus.MsgTaskResult, t.Chain, bus.TaskResultPayload{
 			TaskID: t.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,
 			Stderr: "resume: task state is " + t.State,
+			Chain:  t.Chain,
 		})
 		return
 	}
@@ -1693,6 +1825,7 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 			result = bus.TaskResultPayload{
 				TaskID: p.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,
 				Stderr: "resume: " + rerr.Error(),
+				Chain:  t.Chain,
 			}
 		}
 		// ResumeApproved can return without a wire-shaped outcome when a
@@ -1705,6 +1838,7 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 			result = bus.TaskResultPayload{
 				TaskID: p.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,
 				Stderr: "resume: task claimed by " + final.State + " before re-run",
+				Chain:  t.Chain,
 			}
 		}
 		c.relayToParent(ctx, bus.MsgTaskResult, t.Chain, result)
