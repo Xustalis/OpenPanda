@@ -12,6 +12,20 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
 
+// defaultConsentHops is how far the origin's tier-2 consent may travel down
+// the delegation chain (S2-8). Each forwarding node decrements AuthHops
+// before relaying; once spent, the consent is cleared and a distant executor
+// must ask for fresh approval instead of running irreversible work under a
+// consent it was never granted.
+const defaultConsentHops = 3
+
+// maxPersistedRetries caps the total number of retries recorded on a task's
+// audit trail across daemon restarts (S2-6). The in-memory loop detector only
+// bounds retries per process lifetime; a deterministically failing task could
+// otherwise earn an unbounded number of attempts by restarting its node
+// between retries. The persisted EvRetry count closes that hole.
+const maxPersistedRetries = 5
+
 // TaskInput is the local-entry form of a task: the structured task the entry
 // model emitted, translated into the fields the core persists and executes. It
 // mirrors the wire TaskDelegatePayload but originates locally rather than over
@@ -174,6 +188,11 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			AttemptID:     t.AttemptID,
 			Authorized:    in.Authorized,
 		}
+		// Hop-limited consent (S2-8): the origin mints its consent with a
+		// bounded hop count so it decays as the task is relayed onward.
+		if in.Authorized {
+			payload.AuthHops = defaultConsentHops
+		}
 		// Register a waiter so the inbound task_result unblocks this call.
 		ch := make(chan bus.TaskResultPayload, 1)
 		c.waiters.Store(t.TaskID, ch)
@@ -194,8 +213,14 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			// default deadline forwardDelegated stamps on the lease bounds the
 			// wait, after which the task is failed and an error returned.
 			c.failLocal(ctx, t.TaskID, errors.New("delegation timeout"))
+			// S1-2: give up locally, but the executor may still be running the
+			// work — push the cancellation downstream so it stops there too.
+			c.forwardCancelDownstream(ctx, t.TaskID)
 			return t, bus.TaskResultPayload{}, fmt.Errorf("delegation timeout waiting for %s", decision.Target)
 		case <-ctx.Done():
+			// The caller walked away: the downstream copy must not keep running
+			// unattended. The cancel send cannot use the done ctx.
+			c.forwardCancelDownstream(context.WithoutCancel(ctx), t.TaskID)
 			return t, bus.TaskResultPayload{}, ctx.Err()
 		}
 	default:
@@ -363,8 +388,12 @@ func (c *Core) resumeRemote(ctx context.Context, cur Task, target string) (Task,
 		return final, res, nil
 	case <-time.After(c.lease()):
 		c.failLocal(ctx, taskID, errors.New("resume timeout"))
+		// S1-2: a silent executor may actually still be re-running the work —
+		// cancel it downstream rather than leaving both copies diverged.
+		c.forwardCancelDownstream(ctx, taskID)
 		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume timeout waiting for %s", target)
 	case <-ctx.Done():
+		c.forwardCancelDownstream(context.WithoutCancel(ctx), taskID)
 		return cur, bus.TaskResultPayload{}, ctx.Err()
 	}
 }
@@ -413,7 +442,7 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 			}
 			return final, result, nil
 		}
-		if !c.loop.Allow(taskID) {
+		if !c.loop.Allow(taskID) || c.retriesExhausted(ctx, taskID) {
 			if rerr := c.store.Review(ctx, taskID, c.nodeID, result.Stderr); rerr != nil {
 				c.logger.Warn("review task", "task", taskID, "err", rerr)
 			}
@@ -447,6 +476,23 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 			return final, result, err
 		}
 	}
+}
+
+// retriesExhausted reports whether the persisted retry budget (EvRetry events
+// on the audit trail) is spent for this task. A storage error fails open —
+// warn and allow the retry — so a flaky database cannot deadlock a task that
+// would otherwise be retried.
+func (c *Core) retriesExhausted(ctx context.Context, taskID string) bool {
+	n, err := c.store.RetryCount(ctx, taskID)
+	if err != nil {
+		c.logger.Warn("retry budget: count failed, allowing retry", "task", taskID, "err", err)
+		return false
+	}
+	if n >= maxPersistedRetries {
+		c.logger.Info("persistent retry budget exhausted", "task", taskID, "retries", n)
+		return true
+	}
+	return false
 }
 
 // reviewReset clears a parked task's failure count. A task in review is waiting
