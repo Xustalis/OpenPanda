@@ -59,10 +59,10 @@ func WithResume(ctx context.Context, sessionID string) context.Context {
 type toolsPolicyKey struct{}
 
 // WithToolsPolicy attaches the normalized tools policy to an execution
-// context. The Router calls this internally (from routing.tools_policy),
-// and the orchestration layer calls it again to override with a per-task
-// policy from the task spec. The last writer wins: a per-task override
-// set after the Router's global policy takes precedence.
+// context. The orchestration layer sets it on the execution context to
+// override with a per-task policy from the task spec; the Router applies its
+// global policy (routing.tools_policy) only when the context carries no
+// task-level policy yet, so a per-task override always takes precedence.
 func WithToolsPolicy(ctx context.Context, policy string) context.Context {
 	if policy == "" {
 		return ctx

@@ -214,28 +214,5 @@ def _emit_tool_events(ev):
             harness.progress(note)
 
 
-def _tool_note(ev):
-    """Summarize one assistant event's tool uses as a progress note."""
-    msg = ev.get("message")
-    if not isinstance(msg, dict):
-        return ""
-    parts = []
-    for block in msg.get("content") or []:
-        if not isinstance(block, dict) or block.get("type") != "tool_use":
-            continue
-        name = block.get("name", "tool")
-        inp = block.get("input") or {}
-        arg = ""
-        if isinstance(inp, dict):
-            for k in ("command", "file_path", "pattern", "path", "url", "query"):
-                if inp.get(k):
-                    arg = str(inp[k])
-                    break
-        if len(arg) > 80:
-            arg = arg[:79] + "\u2026"
-        parts.append(f"{name}: {arg}" if arg else name)
-    return " | ".join(parts)
-
-
 if __name__ == "__main__":
     main()

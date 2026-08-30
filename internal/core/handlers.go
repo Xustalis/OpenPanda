@@ -739,11 +739,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 		// Per-task tools policy: the entry model can request "extended"
 		// for high-complexity tasks that need the agent's full capability
-		// set (native skills, MCP, sub-agents). A task-level override
-		// wins over the router's global policy (the last WithToolsPolicy
-		// on the context wins, and the Router sets its own before the
-		// adapter runs — but this override is set on execCtx which the
-		// Router copies from).
+		// set (native skills, MCP, sub-agents). A task-level override wins
+		// over the router's global policy: the Router applies its global
+		// policy only when the context carries no task-level policy yet.
 		if tp := taskToolsPolicy(task.SpecJSON); tp != "" {
 			execCtx = commander.WithToolsPolicy(execCtx, tp)
 		}
