@@ -58,9 +58,12 @@ func WithResume(ctx context.Context, sessionID string) context.Context {
 // test seam's signature.
 type toolsPolicyKey struct{}
 
-// withToolsPolicy attaches the normalized tools policy to an execution
-// context (internal: the Router sets it right before running the adapter).
-func withToolsPolicy(ctx context.Context, policy string) context.Context {
+// WithToolsPolicy attaches the normalized tools policy to an execution
+// context. The Router calls this internally (from routing.tools_policy),
+// and the orchestration layer calls it again to override with a per-task
+// policy from the task spec. The last writer wins: a per-task override
+// set after the Router's global policy takes precedence.
+func WithToolsPolicy(ctx context.Context, policy string) context.Context {
 	if policy == "" {
 		return ctx
 	}
@@ -68,8 +71,11 @@ func withToolsPolicy(ctx context.Context, policy string) context.Context {
 }
 
 // ProgressFunc receives one adapter progress note (a short human-readable
-// line, e.g. "Bash: du -ah | sort -rh") as the agent works.
-type ProgressFunc func(note string)
+// line, e.g. "Bash: du -ah | sort -rh") as the agent works. The kind
+// parameter tags typed events: "" for ordinary tool notes, "subagent" when
+// the agent spawns a sub-agent (Claude's Task tool), etc. The orchestration
+// layer records the kind so the task timeline shows the delegation chain.
+type ProgressFunc func(note, kind string)
 
 // WithProgress attaches a progress sink to an execution context. Adapters
 // emit NDJSON progress objects on stderr; runAdapterProcess parses them and
@@ -126,14 +132,15 @@ func (w *progressWriter) line(b []byte) {
 	var probe struct {
 		Type string `json:"type"`
 		Note string `json:"note"`
+		Kind string `json:"kind"`
 	}
 	if err := json.Unmarshal(b, &probe); err == nil && probe.Type == "progress" && probe.Note != "" {
 		note := strings.TrimSpace(probe.Note)
 		if len([]rune(note)) > 300 {
-			note = string([]rune(note)[:300]) + "…"
+			note = string([]rune(note)[:300]) + "\u2026"
 		}
 		if w.sink != nil {
-			w.sink(note)
+			w.sink(note, probe.Kind)
 		}
 		return
 	}

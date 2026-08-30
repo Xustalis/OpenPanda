@@ -65,6 +65,31 @@ type Known struct {
 	// is ambiguous or it always brings its own key), so PANDA never
 	// overrides its endpoint.
 	ModelEnv *ModelEnvMapping
+	// Capabilities declares what the agent's CLI natively supports. The
+	// routing layer and prompt builder read these flags instead of each
+	// hard-coding per-adapter knowledge. An agent that supports Skills
+	// can reach its native skill library when the tools policy is
+	// extended; an agent that supports MCP can discover project .mcp.json
+	// servers; an agent that supports Subagents can delegate work to its
+	// own child agents.
+	Capabilities Capabilities
+}
+
+// Capabilities describes the native feature surface one agent CLI exposes.
+// Each flag is true when the agent's documented CLI surface includes the
+// corresponding feature; the routing layer and prompt builder read these
+// instead of hard-coding per-adapter knowledge.
+type Capabilities struct {
+	// SupportsSkills means the agent has a native skill/library concept
+	// reachable when the tool whitelist is lifted (extended policy).
+	SupportsSkills bool
+	// SupportsMCP means the agent auto-discovers project-level MCP
+	// servers (.mcp.json in its cwd) when the extended policy writes one.
+	SupportsMCP bool
+	// SupportsSubagents means the agent can spawn its own child agents
+	// (e.g. Claude's Task tool); the orchestration layer records the
+	// delegation events when the extended policy lifts the whitelist.
+	SupportsSubagents bool
 }
 
 // ModelEnvMapping names the env vars one agent CLI reads for its model
@@ -123,6 +148,11 @@ var known = []Known{
 			BaseURL: "ANTHROPIC_BASE_URL",
 			APIKey:  "ANTHROPIC_API_KEY",
 			Model:   "ANTHROPIC_MODEL",
+		},
+		Capabilities: Capabilities{
+			SupportsSkills:    true,
+			SupportsMCP:       true,
+			SupportsSubagents: true,
 		},
 	},
 	{

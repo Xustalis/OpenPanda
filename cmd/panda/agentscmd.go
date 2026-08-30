@@ -20,15 +20,16 @@ import (
 
 // agentStatus is the wire form of one probed agent.
 type agentStatus struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name,omitempty"`
-	Binary      string `json:"binary"`
-	Installed   bool   `json:"installed"`
-	Path        string `json:"path,omitempty"`
-	Version     string `json:"version,omitempty"`
-	InstallHint string `json:"install_hint,omitempty"`
-	InstallURL  string `json:"install_url,omitempty"`
-	InitHint    string `json:"init_hint,omitempty"`
+	Name        string   `json:"name"`
+	DisplayName string   `json:"display_name,omitempty"`
+	Binary      string   `json:"binary"`
+	Installed   bool     `json:"installed"`
+	Path        string   `json:"path,omitempty"`
+	Version     string   `json:"version,omitempty"`
+	InstallHint string   `json:"install_hint,omitempty"`
+	InstallURL  string   `json:"install_url,omitempty"`
+	InitHint    string   `json:"init_hint,omitempty"`
+	Caps        []string `json:"capabilities,omitempty"`
 }
 
 // probeAgentCLI resolves one registry entry to an install status: any of its
@@ -41,6 +42,7 @@ func probeAgentCLI(k agents.Known) agentStatus {
 		InstallHint: k.InstallHint,
 		InstallURL:  k.InstallURL,
 		InitHint:    k.InitHint,
+		Caps:        capabilityTags(k.Capabilities),
 	}
 	for _, bin := range k.Binaries {
 		if path, err := exec.LookPath(bin); err == nil {
@@ -214,4 +216,20 @@ func reportAgentTest(loc i18n.Locale, agent agentStatus, ok bool, detail string)
 		fmt.Println(i18n.Tf(loc, "cli.agents.test.fail", "name", agent.Name, "detail", detail))
 		os.Exit(1)
 	}
+}
+
+// capabilityTags translates the registry's boolean capability flags into
+// short human-readable tags for the CLI listing and JSON output.
+func capabilityTags(c agents.Capabilities) []string {
+	var tags []string
+	if c.SupportsSkills {
+		tags = append(tags, "skills")
+	}
+	if c.SupportsMCP {
+		tags = append(tags, "mcp")
+	}
+	if c.SupportsSubagents {
+		tags = append(tags, "subagents")
+	}
+	return tags
 }

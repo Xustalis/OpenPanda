@@ -55,6 +55,14 @@ type TaskSpec struct {
 	Complexity  float64         `json:"complexity"`
 	Risk        string          `json:"risk"`
 	Resources   ResourceProfile `json:"resource_profile"`
+	// ToolsPolicy is the per-task tool-face override. Empty means "use the
+	// global routing.tools_policy"; "minimal" keeps the safe whitelist;
+	// "extended" lifts it so the agent's native skills, MCP and sub-agent
+	// tools are reachable. The entry model sets this based on the task's
+	// complexity and risk: high-complexity tasks that need the agent's
+	// full capability set can request extended without operator intervention
+	// at the routing layer.
+	ToolsPolicy string `json:"tools_policy,omitempty"`
 }
 
 // Requires lists the abilities a task needs (design doc §7.3).

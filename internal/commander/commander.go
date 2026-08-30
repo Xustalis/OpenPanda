@@ -370,7 +370,7 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// stays unchanged for tests); runAdapterProcess copies it into the
 		// request. MCP passthrough materializes a project .mcp.json for the
 		// run when the policy is extended and a server is configured.
-		runCtx := withToolsPolicy(ctx, r.toolsPolicy)
+		runCtx := WithToolsPolicy(ctx, r.toolsPolicy)
 		cleanupMCP := r.materializeMCPPassthrough(ag.Adapter, cwd)
 		ar := r.runAdapter(runCtx, ag.Adapter, prompt, cwd)
 		cleanupMCP()

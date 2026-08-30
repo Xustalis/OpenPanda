@@ -699,7 +699,16 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	if plan.Kind == "agent" {
 		var lastNote atomic.Value // string
 		lastNote.Store("")
-		execCtx = commander.WithProgress(execCtx, func(note string) {
+		execCtx = commander.WithProgress(execCtx, func(note, kind string) {
+			// Sub-agent events are always recorded (never throttled):
+			// the delegation chain is too important to rate-limit.
+			if kind == "subagent" {
+				if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID,
+					EvSubagentEvent, map[string]any{"note": note}); err != nil {
+					c.logger.Warn("record sub-agent event", "task", taskID, "err", err)
+				}
+				return
+			}
 			if prev, _ := lastNote.Load().(string); prev == note {
 				return // identical consecutive note: skip
 			}
@@ -727,6 +736,16 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	if plan.Kind == "agent" {
 		if d := c.agentTimeoutForKind(plan.Kind); d > 0 {
 			execCtx = commander.WithAgentTimeout(execCtx, d)
+		}
+		// Per-task tools policy: the entry model can request "extended"
+		// for high-complexity tasks that need the agent's full capability
+		// set (native skills, MCP, sub-agents). A task-level override
+		// wins over the router's global policy (the last WithToolsPolicy
+		// on the context wins, and the Router sets its own before the
+		// adapter runs — but this override is set on execCtx which the
+		// Router copies from).
+		if tp := taskToolsPolicy(task.SpecJSON); tp != "" {
+			execCtx = commander.WithToolsPolicy(execCtx, tp)
 		}
 	}
 
@@ -1194,6 +1213,26 @@ func taskScope(specJSON string) string {
 		return ""
 	}
 	return spec.Scope
+}
+
+// taskToolsPolicy extracts the per-task tools policy from a task's persisted
+// spec JSON (entry.TaskSpec.ToolsPolicy). Empty means "use the global
+// routing.tools_policy"; "minimal" or "extended" override the router's
+// default for this task alone. A parse failure yields empty (global default).
+func taskToolsPolicy(specJSON string) string {
+	if specJSON == "" {
+		return ""
+	}
+	var spec struct {
+		ToolsPolicy string `json:"tools_policy"`
+	}
+	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
+		return ""
+	}
+	if spec.ToolsPolicy != "minimal" && spec.ToolsPolicy != "extended" {
+		return ""
+	}
+	return spec.ToolsPolicy
 }
 
 // agentPromptBudget is the soft cap (bytes) on the assembled agent prompt.
