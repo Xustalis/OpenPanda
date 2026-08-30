@@ -191,15 +191,18 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	// Persist the user turn immediately (a failed ask still leaves the
-	// question in the thread, like codex/claude code), then run with history.
-	if _, err := h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: req.Prompt}); err != nil {
-		send("error", map[string]string{"message": "save turn failed"})
-		return
-	}
+	// History is the thread as it stands. The user turn is persisted first
+	// (a failed ask still leaves the question in the thread, like codex/claude
+	// code) but excluded from the replay: AskTurns carries the prompt itself,
+	// so replaying the persisted copy too would send two consecutive user
+	// messages — a 400 from strict providers.
 	var history []entry.Turn
 	for _, t := range sess.Turns {
 		history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
+	}
+	if _, err := h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: req.Prompt}); err != nil {
+		send("error", map[string]string{"message": "save turn failed"})
+		return
 	}
 
 	cb := askengine.StreamCallbacks{

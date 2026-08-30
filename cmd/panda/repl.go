@@ -457,9 +457,12 @@ func (r *repl) dispatch(line string) {
 
 // askContext derives the conversation history and working directory for one
 // prompt, and records the user's turn where it belongs. With an active session
-// it appends the turn to the thread and replays the whole thread (so the model
-// sees the full history the web console would send) in the session's worktree;
-// a stale session id drops silently back to bare mode. In bare mode it replays
+// it replays the thread as it stands (so the model sees the full history the
+// web console would send) in the session's worktree and persists the fresh
+// turn; a stale session id drops silently back to bare mode. The persisted
+// turn never enters the replayed history: AskTurns carries it as the prompt,
+// so replaying it too would send two consecutive user messages — which the
+// Messages API rejects with a 400. In bare mode it replays
 // this run's in-memory conversation and leaves the turn to be paired with its
 // answer by recordOutcome.
 //
@@ -473,16 +476,18 @@ func (r *repl) askContext(text string) ([]entry.Turn, string) {
 		sess, err := r.sessionsSt.Get(r.activeSess)
 		if err != nil {
 			r.activeSess = "" // stale id: drop silently back to bare mode
-		} else if _, err := r.sessionsSt.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: text}); err == nil {
-			sess, _ = r.sessionsSt.Get(sess.ID)
+		} else {
 			for _, t := range sess.Turns {
 				history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
 			}
-			workDir = sess.Worktree
-			if workDir == "" && r.engine != nil {
-				workDir = r.engine.WorkPath()
+			if _, err := r.sessionsSt.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: text}); err == nil {
+				workDir = sess.Worktree
+				if workDir == "" && r.engine != nil {
+					workDir = r.engine.WorkPath()
+				}
+				return history, workDir
 			}
-			return history, workDir
+			history = nil // append failed: fall back to bare mode
 		}
 	}
 	return append(history, r.convo...), workDir
@@ -515,6 +520,19 @@ func (r *repl) recordOutcome(ctx context.Context, text string, out *askengine.Re
 		turn.Ref = out.PlanID
 	}
 	_, _ = r.sessionsSt.AppendTurn(r.activeSess, turn)
+}
+
+// recordErrorTurn persists a failed turn's assistant side into the active
+// session thread, mirroring the panel and `session ask` error paths. Without
+// it the thread ends on a dangling user turn (askContext persists the
+// question before the ask runs): the next ask replays it ahead of its own
+// prompt and the provider sees two consecutive user messages — a 400 that
+// then poisons every following turn of the session.
+func (r *repl) recordErrorTurn(err error) {
+	if err == nil || r.activeSess == "" || r.sessionsSt == nil {
+		return
+	}
+	_, _ = r.sessionsSt.AppendTurn(r.activeSess, sessions.Turn{Role: "assistant", Text: "⚠ " + err.Error(), Kind: "error"})
 }
 
 // ask runs one prompt through the unified entry engine and prints the
@@ -630,6 +648,12 @@ func (r *repl) ask(text string) {
 
 	if res.err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+res.err.Error())
+		// A cancelled ask leaves no dangling turn worth pairing (the user
+		// aborted it); every other failure records one so the thread keeps
+		// its user/assistant alternation.
+		if !errors.Is(res.err, context.Canceled) {
+			r.recordErrorTurn(res.err)
+		}
 		return
 	}
 	out := res.out

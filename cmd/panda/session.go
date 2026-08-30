@@ -255,13 +255,15 @@ func runSessionAsk(args []string) {
 		fatal("load session", err)
 	}
 
-	if _, err := store.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: prompt}); err != nil {
-		fatal("save turn", err)
-	}
-	sess, _ = store.Get(sess.ID)
+	// History is the thread as it stands; the fresh turn is persisted after
+	// building it because AskTurns carries the prompt itself — replaying the
+	// persisted copy too would send two consecutive user messages (400).
 	var history []entry.Turn
 	for _, t := range sess.Turns {
 		history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
+	}
+	if _, err := store.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: prompt}); err != nil {
+		fatal("save turn", err)
 	}
 
 	// Repo sessions run in their worktree, non-repo ones in the shared work

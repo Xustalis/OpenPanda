@@ -384,6 +384,7 @@ func (c *Client) CompleteTurnsWithTools(ctx context.Context, system string, turn
 // messages: a Turn with Blocks carries structured content, a plain Turn a
 // string content.
 func turnsToMessages(turns []Turn) []message {
+	turns = normalizeTurns(turns)
 	msgs := make([]message, len(turns))
 	for i, t := range turns {
 		if len(t.Blocks) > 0 {
@@ -393,6 +394,33 @@ func turnsToMessages(turns []Turn) []message {
 		}
 	}
 	return msgs
+}
+
+// normalizeTurns merges consecutive plain-text turns of the same role into
+// one so the wire payload satisfies the role-alternation contract strict
+// Messages-API providers enforce with a 400 (a session replay that doubles
+// or dangles a user turn would otherwise poison the whole conversation).
+// Block-bearing turns — the tool_use/tool_result contract — pass through
+// untouched: their shape is exact by construction, and merging across block
+// kinds would corrupt the linkage.
+func normalizeTurns(turns []Turn) []Turn {
+	out := make([]Turn, 0, len(turns))
+	for _, t := range turns {
+		if len(t.Blocks) == 0 && len(out) > 0 {
+			last := &out[len(out)-1]
+			if last.Role == t.Role && len(last.Blocks) == 0 {
+				switch {
+				case last.Content == "":
+					last.Content = t.Content
+				case t.Content != "":
+					last.Content += "\n\n" + t.Content
+				}
+				continue
+			}
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 // completeOpenAI runs one non-streaming Chat Completions call with retry.
