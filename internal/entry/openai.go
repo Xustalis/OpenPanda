@@ -38,11 +38,15 @@ type oaiUsage struct {
 
 // oaiMessage is one Chat Completions message: a plain system/user/assistant
 // turn, an assistant turn carrying tool_calls, or a tool result.
+// ReasoningContent is the DeepSeek thinking-passback field: set on outgoing
+// assistant messages only once the provider has demanded it (see
+// injectReasoningPassback), empty otherwise.
 type oaiMessage struct {
-	Role       string        `json:"role"`
-	Content    string        `json:"content"`
-	ToolCalls  []oaiToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string        `json:"tool_call_id,omitempty"`
+	Role             string        `json:"role"`
+	Content          string        `json:"content"`
+	ReasoningContent string        `json:"reasoning_content,omitempty"`
+	ToolCalls        []oaiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string        `json:"tool_call_id,omitempty"`
 }
 
 type oaiTool struct {
@@ -153,6 +157,21 @@ func turnsToOpenAI(system string, turns []Turn) []oaiMessage {
 		msgs = append(msgs, results...)
 	}
 	return msgs
+}
+
+// injectReasoningPassback is the Chat Completions counterpart of
+// injectThinkingPassback: every assistant message gains a placeholder
+// reasoning_content, the passback shape DeepSeek's Chat Completions route
+// demands in thinking mode. Other roles pass through untouched.
+func injectReasoningPassback(msgs []oaiMessage) []oaiMessage {
+	out := make([]oaiMessage, len(msgs))
+	for i, m := range msgs {
+		if m.Role == "assistant" && m.ReasoningContent == "" {
+			m.ReasoningContent = "."
+		}
+		out[i] = m
+	}
+	return out
 }
 
 // specsToOpenAI converts internal tool specs into Chat Completions tools.

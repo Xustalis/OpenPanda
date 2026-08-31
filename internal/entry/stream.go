@@ -362,50 +362,35 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 	if c.apiKey == "" {
 		return Response{}, ErrNoKey
 	}
-	req := messagesRequest{
-		Model:     c.model,
-		MaxTokens: c.maxTokens,
-		System:    c.systemPayload(system),
-		Messages:  turnsToMessages(turns),
-		Stream:    true,
+	msgs := turnsToMessages(turns)
+	if c.passback.Load() {
+		msgs = injectThinkingPassback(msgs)
 	}
-	if len(tools) > 0 {
-		req.Tools = tools
-	}
-	payload, err := json.Marshal(req)
-	if err != nil {
-		return Response{}, fmt.Errorf("entry: marshal request: %w", err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(payload))
+	body, err := func() (io.ReadCloser, error) {
+		resp, err := c.sendAnthropicStream(ctx, system, msgs, tools)
+		if err == nil {
+			return resp.Body, nil
+		}
+		// A thinking-passback rejection arrives before any SSE event, so the
+		// corrected payload replays safely within the same call. The flag
+		// sticks, so later calls inject up front.
+		if passbackRequired(err) && !c.passback.Load() {
+			c.passback.Store(true)
+			msgs = injectThinkingPassback(msgs)
+			resp, err = c.sendAnthropicStream(ctx, system, msgs, tools)
+			if err == nil {
+				return resp.Body, nil
+			}
+		}
+		return nil, err
+	}()
 	if err != nil {
 		return Response{}, err
 	}
-	httpReq.Header.Set("content-type", "application/json")
-	httpReq.Header.Set("accept", "text/event-stream")
-	httpReq.Header.Set("x-api-key", c.apiKey)
-	httpReq.Header.Set("anthropic-version", anthropicVersion)
-
-	resp, err := c.hcStream.Do(httpReq)
-	if err != nil {
-		// A caller-cancelled context is not a transient failure and must not
-		// be retried; anything else (DNS, reset, EOF) is.
-		if ctx.Err() != nil {
-			return Response{}, fmt.Errorf("entry: request: %w", err)
-		}
-		return Response{}, &transientError{err: err}
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return Response{}, &retryableError{status: resp.StatusCode, body: string(body)}
-	}
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return Response{}, &statusError{status: resp.StatusCode, body: string(body)}
-	}
+	defer body.Close()
 
 	acc := &anthAccumulator{blocks: map[int]*ContentBlock{}, rawArgs: map[int]*strings.Builder{}}
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -448,17 +433,15 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 	return acc.result(), nil
 }
 
-// ---- OpenAI Chat Completions SSE streaming ----
-
-func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
-	if c.apiKey == "" {
-		return Response{}, ErrNoKey
-	}
+// sendOAIStream sends one streaming Chat Completions request with msgs and
+// returns the open response on 200 (the caller owns its body), mirroring
+// sendAnthropicStream's error split.
+func (c *Client) sendOAIStream(ctx context.Context, system string, msgs []oaiMessage, tools []ToolSpec) (*http.Response, error) {
 	req := oaiRequest{
 		Model:     c.model,
 		MaxTokens: c.maxTokens,
 		Stream:    true,
-		Messages:  turnsToOpenAI(system, turns),
+		Messages:  msgs,
 	}
 	if c.promptCache.Load() {
 		req.PromptCacheKey = c.oaiPromptCacheKey(system)
@@ -472,11 +455,11 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
-		return Response{}, fmt.Errorf("entry: marshal request: %w", err)
+		return nil, fmt.Errorf("entry: marshal request: %w", err)
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(payload))
 	if err != nil {
-		return Response{}, err
+		return nil, err
 	}
 	httpReq.Header.Set("content-type", "application/json")
 	httpReq.Header.Set("accept", "text/event-stream")
@@ -485,22 +468,106 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 	resp, err := c.hcStream.Do(httpReq)
 	if err != nil {
 		if ctx.Err() != nil {
-			return Response{}, fmt.Errorf("entry: request: %w", err)
+			return nil, fmt.Errorf("entry: request: %w", err)
 		}
-		return Response{}, &transientError{err: err}
+		return nil, &transientError{err: err}
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return Response{}, &retryableError{status: resp.StatusCode, body: string(body)}
+		resp.Body.Close()
+		return nil, &retryableError{status: resp.StatusCode, body: string(body)}
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return Response{}, &statusError{status: resp.StatusCode, body: string(body)}
+		resp.Body.Close()
+		return nil, &statusError{status: resp.StatusCode, body: string(body)}
 	}
+	return resp, nil
+}
+
+// sendAnthropicStream sends one streaming Messages request with msgs and
+// returns the open response on 200 (the caller owns its body). Non-200 shapes
+// map onto the same retryable/status error split the non-streaming path uses.
+func (c *Client) sendAnthropicStream(ctx context.Context, system string, msgs []message, tools []ToolSpec) (*http.Response, error) {
+	req := messagesRequest{
+		Model:     c.model,
+		MaxTokens: c.maxTokens,
+		System:    c.systemPayload(system),
+		Messages:  msgs,
+		Stream:    true,
+	}
+	if len(tools) > 0 {
+		req.Tools = tools
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("entry: marshal request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("content-type", "application/json")
+	httpReq.Header.Set("accept", "text/event-stream")
+	httpReq.Header.Set("x-api-key", c.apiKey)
+	httpReq.Header.Set("anthropic-version", anthropicVersion)
+
+	resp, err := c.hcStream.Do(httpReq)
+	if err != nil {
+		// A caller-cancelled context is not a transient failure and must not
+		// be retried; anything else (DNS, reset, EOF) is.
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("entry: request: %w", err)
+		}
+		return nil, &transientError{err: err}
+	}
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		return nil, &retryableError{status: resp.StatusCode, body: string(body)}
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		return nil, &statusError{status: resp.StatusCode, body: string(body)}
+	}
+	return resp, nil
+}
+
+// ---- OpenAI Chat Completions SSE streaming ----
+
+func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
+	if c.apiKey == "" {
+		return Response{}, ErrNoKey
+	}
+	msgs := turnsToOpenAI(system, turns)
+	if c.passback.Load() {
+		msgs = injectReasoningPassback(msgs)
+	}
+	body, err := func() (io.ReadCloser, error) {
+		resp, err := c.sendOAIStream(ctx, system, msgs, tools)
+		if err == nil {
+			return resp.Body, nil
+		}
+		// Same passback probe as the Anthropic stream path: the 400 lands
+		// before any chunk, so the corrected payload replays safely.
+		if passbackRequired(err) && !c.passback.Load() {
+			c.passback.Store(true)
+			msgs = injectReasoningPassback(msgs)
+			resp, err = c.sendOAIStream(ctx, system, msgs, tools)
+			if err == nil {
+				return resp.Body, nil
+			}
+		}
+		return nil, err
+	}()
+	if err != nil {
+		return Response{}, err
+	}
+	defer body.Close()
 
 	acc := &oaiAccumulator{calls: map[int]oaiToolCall{}}
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()

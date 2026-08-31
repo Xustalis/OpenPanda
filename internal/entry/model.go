@@ -57,6 +57,12 @@ type Client struct {
 	// so the flag only ever changes what the provider may reuse, never
 	// correctness.
 	promptCache atomic.Bool
+	// passback records a provider that demands the thinking passback on
+	// multi-turn assistant messages (DeepSeek in thinking mode rejects the
+	// history with a 400 "must be passed back" otherwise). Once observed the
+	// flag sticks for the client's lifetime, so later calls satisfy the
+	// requirement up front instead of spending a rejected round-trip each.
+	passback atomic.Bool
 	// cache is the optional disk cache for entry-model decisions. Nil (the
 	// default) disables it; the engine attaches one over the node database.
 	cache atomic.Pointer[DiskCache]
@@ -423,12 +429,46 @@ func normalizeTurns(turns []Turn) []Turn {
 	return out
 }
 
-// completeOpenAI runs one non-streaming Chat Completions call with retry.
+// completeOpenAI runs one non-streaming Chat Completions call with retry. The
+// thinking-passback probe mirrors completeWithRetry: a rejection sets the
+// sticky flag and retries the corrected payload off the transport budget.
 func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn, tools []ToolSpec) (Response, error) {
 	if c.apiKey == "" {
 		return Response{}, ErrNoKey
 	}
-	req := oaiRequest{Model: c.model, MaxTokens: c.maxTokens, Messages: turnsToOpenAI(system, turns)}
+	msgs := turnsToOpenAI(system, turns)
+	if c.passback.Load() {
+		msgs = injectReasoningPassback(msgs)
+	}
+	var lastErr error
+	probed := false
+	for attempt := 0; attempt <= c.maxRetry; attempt++ {
+		if attempt > 0 {
+			if err := sleepCtx(ctx, c.retryBase<<uint(attempt-1)); err != nil {
+				return Response{}, err
+			}
+		}
+		resp, err := c.completeOnceOpenAI(ctx, system, msgs, tools)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if !probed && passbackRequired(err) {
+			probed = true
+			c.passback.Store(true)
+			msgs = injectReasoningPassback(msgs)
+			attempt-- // the correction retries at once, off the transport budget
+			continue
+		}
+		if !retryable(err) {
+			break
+		}
+	}
+	return Response{}, lastErr
+}
+
+func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []oaiMessage, tools []ToolSpec) (Response, error) {
+	req := oaiRequest{Model: c.model, MaxTokens: c.maxTokens, Messages: msgs}
 	if c.promptCache.Load() {
 		req.PromptCacheKey = c.oaiPromptCacheKey(system)
 	}
@@ -439,27 +479,6 @@ func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn
 	if err != nil {
 		return Response{}, fmt.Errorf("entry: marshal request: %w", err)
 	}
-
-	var lastErr error
-	for attempt := 0; attempt <= c.maxRetry; attempt++ {
-		if attempt > 0 {
-			if err := sleepCtx(ctx, c.retryBase<<uint(attempt-1)); err != nil {
-				return Response{}, err
-			}
-		}
-		resp, err := c.completeOnceOpenAI(ctx, payload)
-		if err == nil {
-			return resp, nil
-		}
-		lastErr = err
-		if !retryable(err) {
-			break
-		}
-	}
-	return Response{}, lastErr
-}
-
-func (c *Client) completeOnceOpenAI(ctx context.Context, payload []byte) (Response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return Response{}, err
@@ -500,10 +519,62 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, payload []byte) (Respon
 	return parseOpenAIResponse(&or), nil
 }
 
+// passbackRequired reports whether err is the provider's demand for the
+// thinking passback: a definitive 400 whose body names the requirement. The
+// clause is shared by both wire wordings — Anthropic's "content[].thinking …
+// must be passed back to the API" and Chat Completions' "reasoning_content …".
+func passbackRequired(err error) bool {
+	var se *statusError
+	return errors.As(err, &se) &&
+		se.status == http.StatusBadRequest &&
+		strings.Contains(se.body, "must be passed back")
+}
+
+// injectThinkingPassback satisfies a thinking-passback provider: every
+// assistant message gains a leading thinking block with a one-space
+// placeholder. The genuine chain-of-thought is display-only scratch the
+// engine never persists (D14), so a placeholder stands in; providers that
+// demand the passback accept it and the history round-trips. Assistant turns
+// that already carry a thinking block and every other role pass through
+// untouched.
+func injectThinkingPassback(msgs []message) []message {
+	out := make([]message, len(msgs))
+	for i, m := range msgs {
+		if m.Role != "assistant" {
+			out[i] = m
+			continue
+		}
+		var blocks []ContentBlock
+		switch c := m.Content.(type) {
+		case string:
+			blocks = []ContentBlock{{Type: "text", Text: c}}
+		case []ContentBlock:
+			blocks = c
+		default:
+			out[i] = m
+			continue
+		}
+		if len(blocks) > 0 && blocks[0].Type == "thinking" {
+			out[i] = m
+			continue
+		}
+		injected := make([]ContentBlock, 0, len(blocks)+1)
+		injected = append(injected, ContentBlock{Type: "thinking", Text: " "})
+		out[i] = message{Role: m.Role, Content: append(injected, blocks...)}
+	}
+	return out
+}
+
 // completeWithRetry runs req with the configured retry/backoff and returns the
-// parsed response.
+// parsed response. A thinking-passback rejection is probed once: the flag is
+// set, the assistant history gains the placeholder passback, and the corrected
+// payload retries immediately without consuming the transport retry budget.
 func (c *Client) completeWithRetry(ctx context.Context, req messagesRequest) (Response, error) {
+	if c.passback.Load() {
+		req.Messages = injectThinkingPassback(req.Messages)
+	}
 	var lastErr error
+	probed := false
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 {
 			if err := sleepCtx(ctx, c.retryBase<<uint(attempt-1)); err != nil {
@@ -515,6 +586,13 @@ func (c *Client) completeWithRetry(ctx context.Context, req messagesRequest) (Re
 			return resp, nil
 		}
 		lastErr = err
+		if !probed && passbackRequired(err) {
+			probed = true
+			c.passback.Store(true)
+			req.Messages = injectThinkingPassback(req.Messages)
+			attempt-- // the correction retries at once, off the transport budget
+			continue
+		}
 		if !retryable(err) {
 			break
 		}
