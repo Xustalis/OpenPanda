@@ -193,6 +193,10 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 		if in.Authorized {
 			payload.AuthHops = defaultConsentHops
 		}
+		// The project travels with the task: its memory inline, its tree as an
+		// artifact reference. Without this the executor gets a bare name it cannot
+		// resolve against anything local.
+		c.attachProject(ctx, &payload, in.Project)
 		// Register a waiter so the inbound task_result unblocks this call.
 		ch := make(chan bus.TaskResultPayload, 1)
 		c.waiters.Store(t.TaskID, ch)

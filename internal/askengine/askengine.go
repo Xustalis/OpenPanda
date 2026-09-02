@@ -27,6 +27,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/mcp"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/plan"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -356,6 +357,9 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		sched.SetRouterPolicy(cfg.Injection, cfg.Routing)
 		sched.AttachSupervisor(cfg.Model)
 		sched.SetMemoryStores(injector, memory.NewDaily(hermes.WarmDir()), skills.NewStore(cfg.Storage.SkillsPath))
+		// The project plane: what a delegated project task carries with it. Wired
+		// here as well as in the daemon, because an interactive ask delegates too.
+		sched.SetProjectStores(projectstore.NewStore(db), cfg.Storage.ProjectsPath)
 		sched.SetWorkDir(cfg.Storage.WorkPath)
 		sched.SetHostStatePaths(hostStatePaths(cfg))
 		sched.SetSharedSecret(cfg.Network.SharedSecret)

@@ -27,6 +27,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/log"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -351,6 +352,10 @@ func runDaemon(args []string) {
 		daily,
 		skills.NewStore(cfg.Storage.SkillsPath),
 	)
+	// The project plane: the daemon is the node that receives delegations, so it
+	// needs both halves — the table (to find a project's tree) and the memory root
+	// (to land a delegated project's memory in).
+	coreNode.SetProjectStores(projectstore.NewStore(db), cfg.Storage.ProjectsPath)
 
 	// Web Push lives in the webui sidecar (webui/cmd/panel), not the kernel;
 	// the kernel stays headless. See webui/README.md.
