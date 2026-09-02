@@ -36,7 +36,32 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Jeder Eintrag benennt die Änderung und ihre sichtbare Wirkung in ein bis drei Zeilen; der einführende Commit wird zitiert, wo das der Archäologie hilft.
 - Die englische Datei ist maßgeblich. Die Übersetzungen zh-CN / ja / es / de spiegeln sie und können um ein Release kurz verzögert sein.
 
-## [Unreleased]
+## [0.0.8] - 2026-09-02
+
+Das Projekt-Release: Ein Projekt ist nicht mehr nur ein Name an einer Aufgabe — es hat ein Arbeitsverzeichnis, eine Beschreibung und einen persistenten „aktuelles Projekt“-Zeiger, Aufgaben aus seinem Inneren erben es, und eine delegierte Aufgabe trägt das ganze Projekt zum Executor, sodass die ausführende Maschine weiß, woran sie arbeitet. Die Freigabepforte wird auf rein irreversible Arbeit neu gefasst (mit dem Download-in-Datei-Vektor nach dem Review erneut gegated), und die Konsole bekam Flächen zum Verfolgen von Plänen und Ändern von Einstellungen.
+
+### Hinzugefügt
+
+- **Projekte als Bürger erster Klasse** — eine projects-Tabelle (Arbeitsverzeichnis, Beschreibung, Zeitstempel) plus ein über die settings getragener aktueller-Projekt-Zeiger, der Einmalprozesse überlebt (`panda ask` ist kein Daemon); die komplette CLI-Fläche `panda project list | new --dir --desc | show | rename | remove | enter | exit`, wobei `list` das aktuelle markiert (a9fa471, 1260cb9).
+- **Aufgaben erben das betretene Projekt** — die Engine trägt ein Umgebungsprojekt, das ausfüllt, was der Klassifikator nicht benannt hat, und eine Aufgabe in einem Projekt kennt ihr Arbeitsverzeichnis und ihre Beschreibung — vorher wusste sie weniger als eine Aufgabe ohne Projekt (8c82c5e).
+- **Eine delegierte Aufgabe nimmt ihr Projekt mit** — der Projektspeicher wird (größenbeschränkt) in die Delegations-Payload gepackt, der Arbeitsbaum reist als gechunkte Artefakt-Referenz unter Wiederverwendung der Maschinerie der Plan-Ebene, und der Executor leitet das Arbeitsverzeichnis unter seiner eigenen Wurzel neu ab und lehnt Projektnamen mit Pfadzeichen ab (ein Name vom Bus ist nicht vertrauenswürdige Eingabe). Die fertige Ausgabe wird überschreibend ins lokale Projektverzeichnis übernommen — zwei Maschinen, die ein Projekt bearbeiten, sind ein echter Konflikt und werden nie still fusioniert (a1f1d19).
+- **Konsole: Projekte und Einstellungen** — Projekt-CRUD, Betreten/Verlassen und Metadaten in der Konsolen-API (7cda886); Projektzeilen mit Arbeitsverzeichnis, aktuellem-Projekt-Zustand und den Verben, die ihn ändern (146c1ba); sowie Freigabe-, Routing-, Speicherlimit- und Injektionseinstellungen — die Freigabepforte ist die Einstellung, die ein Nutzer nach einem Nachmittag Warteschlange am ehesten ändern will, und dafür muss er die Konsole nicht mehr verlassen. Alle vier gehen in die Einstellungs-API, die die Konsole schon hatte, statt in einen zweiten Endpunkt (7a60a80, 0736c2f).
+- **Plan-Tafel-Endpunkte** — `GET /api/plans` (welche Pläne existieren, wie weit fortgeschritten) und `GET /api/plans/{id}` (die Stufen eines Plans samt Artefakt-Verkabelung dazwischen — die Sicht, die „hat die Trainingsstufe das Skript wirklich bekommen?“ beantwortet). Ein Plan starten bleibt bei `/api/ask`, wo es schon funktionierte (932442a).
+- **Multi-Modell-Unterstützung** — kluge base_url-Normalisierung (Abschluss-Slashes, fehlende Versionspräfixe, Anbieter-Sonderfälle), Reasoning-Felder für Thinking-Modelle und OpenAI-Anbieter-Voreinstellungen (08ede13).
+
+### Behoben
+
+- **Der SSE-Fingerprint-Cache gibt Ladefehler weiter** — Aufrufer, die sich hinter einem gescheiterten Store-Scan aufstauten, bekommen jetzt denselben Fehler statt eines leeren Werts mit nil-error; ein dauerhaft scheiternder Store fächert kein falsches Änderungsereignis mehr auf jeden verbundenen Stream aus, während nur der Stream des Loaders abbricht (Review 2026-09-02, P2).
+- **TUI: ein Eingabefeld pro Slash-Befehl** — der Exec-Pfad räumt den Frame im selben Event-Loop-Durchlauf ab, der den Befehl einreiht, sodass Statuszeile und abgerundete Box nicht mehr als zweite Eingabeleiste im Scrollback zurückbleiben (6a77bf7).
+- **TUI-Stufen-Timing, Aufgabenkarten-Format, DeepSeek-Thinking-Passback** — die Richterlaufzeit wird nicht mehr der ausführenden Stufe angelastet, Aufgabenkarten rendern einheitlich, und Thinking-Modus-Konversationen scheitern beim Passback nicht mehr mit 400 (6d6e2e4).
+- **CLI-Tabellen richten nach Anzeigebreite aus** — das `%-Ns`-Padding zählte Bytes, sodass ein CJK-Titel (zwei Spalten pro Zeichen) oder eine eingefärbte Statuszelle jede folgende Spalte aus der Reihe schob; Tabellen padden jetzt nach Anzeigebreite, Task-IDs drucken kurz, wo eindeutig, und eine Runde TUI-Layout-Fixes kommt mit (8740c04).
+- **Darwin-Builds werden automatisch signiert** — Ad-hoc-Codesigning zur Build-Zeit hält macOS davon ab, ein frisch gebautes Binary beim ersten Lauf mit SIGKILL abzuschießen (3b86987).
+- **Docs: das OpenAI-kompatible Beispiel streicht den zurückgezogenen DeepSeek-Chat-Modell-Alias** (cbe52cb).
+
+### Verbessert
+
+- **Die Freigabepforte deckt nur irreversible Arbeit ab** — Tier 2 heißt jetzt „kein späterer Befehl kann es zurückholen“: Löschen, Disk-/Partitions-/Firmware-Zustand, Energiezustand, Rechteausweitung und die Argumentformen, die Arbeit verlieren (`git push --force`, `rsync --delete`, `sed -i`, `find -delete`). curl, wget, make, ssh, systemctl, mount, docker, kubectl, terraform, die Paketmanager, chmod/chown/mv/cp/tee und Verwandte laufen unbeaufsichtigt, und `bash scripts/build.sh` fragt nicht mehr nach — ein Knoten, der seinen eigenen Build nicht laufen lassen kann, kann die Arbeit nicht tun, für die er existiert (e593470).
+- **Downloads in Dateien bleiben gegated** — ein curl/wget, das seine Bytes in einen Pfad schreibt (`-o`, `-O`, `--output`), ist Tier 2: Die Bytes sind für den Klassifikator opak, und der nächste Schritt ist meist, sie auszuführen — vor dieser Änderung wurde `curl -o x …; bash x` von Anfang bis Ende als Tier 1 eingestuft. Abrufe nach stdout oder `/dev/null` — die Erreichbarkeits-Probe-Schreibweisen — sind unberührt (Review 2026-09-02, P1).
 
 ## [0.0.7] - 2026-08-31
 
