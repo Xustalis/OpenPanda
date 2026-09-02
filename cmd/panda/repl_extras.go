@@ -24,6 +24,8 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/memory"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 )
 
 // cmdClear wipes the screen and reprints the banner — the conversation is
@@ -296,4 +298,98 @@ func countLines(s string) int {
 		}
 	}
 	return n
+}
+
+// bindProject hands the engine the project this machine is in, so the next ask
+// belongs to it without the user naming it again. Called at startup and after
+// every /project switch — one path, so the engine and the stored pointer cannot
+// drift apart.
+func (r *repl) bindProject() {
+	if r.engine == nil {
+		return
+	}
+	if r.projStore == nil {
+		r.engine.SetProject("", "")
+		return
+	}
+	name, err := r.projStore.Active()
+	if err != nil || name == "" {
+		r.engine.SetProject("", "")
+		return
+	}
+	dir := ""
+	if pr, gerr := r.projStore.Get(name); gerr == nil {
+		dir = pr.WorkDir
+	}
+	r.engine.SetProject(name, dir)
+}
+
+// activeProjectName is the project the REPL is in, for the footer and the TUI
+// context line. Empty when the store is absent or nothing was entered.
+func (r *repl) activeProjectName() string {
+	if r.projStore == nil {
+		return ""
+	}
+	name, err := r.projStore.Active()
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
+// cmdProjectEnter implements /project [name]: with a name, enter it; bare, report
+// where you are. It is the same active pointer `panda project enter` writes, so a
+// project entered in the REPL is still current in the next one-shot `panda ask`.
+func (r *repl) cmdProjectEnter(arg string) {
+	if r.projStore == nil {
+		fmt.Println(i18n.T(r.loc, "cli.project.none"))
+		return
+	}
+	name := strings.TrimSpace(arg)
+	if name == "" {
+		if cur := r.activeProjectName(); cur != "" {
+			fmt.Println(i18n.Tf(r.loc, "cli.project.isActiveNamed", "name", cur))
+		} else {
+			fmt.Println(i18n.T(r.loc, "cli.project.noActive"))
+		}
+		return
+	}
+	// "-" leaves, mirroring /resume's spelling for detaching from a session.
+	if name == "-" {
+		if err := r.projStore.ClearActive(); err != nil {
+			r.storeErr(err)
+			return
+		}
+		r.bindProject()
+		fmt.Println(i18n.T(r.loc, "cli.project.noActive"))
+		return
+	}
+	if err := projectstore.ValidateName(name); err != nil {
+		fmt.Println(i18n.T(r.loc, "repl.project.bad"))
+		return
+	}
+	// Create-then-enter. /project used to only create, so entering a name that
+	// does not exist yet keeps working the way it did and lands the user inside
+	// it, which is what they wanted both times they typed it.
+	created := false
+	if _, err := r.projStore.Get(name); err != nil {
+		if _, cerr := r.projStore.EnsureFromName(name); cerr != nil {
+			r.storeErr(cerr)
+			return
+		}
+		if serr := r.projects.Save(name, memory.MemFile{Limit: r.projects.Limit()}); serr != nil {
+			r.storeErr(serr)
+			return
+		}
+		created = true
+	}
+	if err := r.projStore.SetActive(name); err != nil {
+		r.storeErr(err)
+		return
+	}
+	if created {
+		fmt.Println(i18n.Tf(r.loc, "repl.project.created", "name", name))
+	}
+	r.bindProject()
+	fmt.Println(i18n.Tf(r.loc, "cli.project.entered", "name", name))
 }

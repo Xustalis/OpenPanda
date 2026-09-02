@@ -40,6 +40,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -59,6 +60,7 @@ type repl struct {
 	db          *sql.DB
 	store       *core.TaskStore
 	projects    *memory.Projects
+	projStore   *projectstore.Store
 	hermes      *memory.Hermes
 	sessionsSt  *sessions.Store
 	worktrees   *sessions.Worktrees
@@ -138,7 +140,7 @@ func init() {
 		{"logs", "tasks", "cmd.logs", (*repl).cmdLogs},
 		{"memory", "memory", "cmd.memory", (*repl).cmdMemory},
 		{"projects", "memory", "cmd.projects", (*repl).cmdProjects},
-		{"project", "memory", "cmd.project", (*repl).cmdProject},
+		{"project", "memory", "cmd.project", (*repl).cmdProjectEnter},
 		{"context", "memory", "cmd.context", (*repl).cmdContext},
 		{"nodes", "system", "cmd.nodes", (*repl).cmdNodes},
 		{"card", "system", "cmd.card", (*repl).cmdCard},
@@ -231,6 +233,10 @@ func runRepl(args []string) {
 		}
 		defer engine.Close()
 		r.engine = engine
+		// The REPL inherits the project the user entered, so the first ask of a
+		// sitting already belongs to it. /project switches it mid-session.
+		r.projStore = projectstore.NewStore(db)
+		r.bindProject()
 	}
 
 	// The rich full-screen front end (Bubble Tea) drives an interactive TTY with

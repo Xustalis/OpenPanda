@@ -11,9 +11,9 @@ import (
 )
 
 // TestAgentPromptOmitsProjectMemory verifies the A1 decision at the core
-// execution layer: the project's MEMORY.md is no longer packed into the
-// agent prompt (token savings); skills remain the only prompt injection.
-// The memory multi-file redesign owns the replacement loading path.
+// execution layer: the project's MEMORY.md content is never packed into the
+// agent prompt (token savings). The prompt may point at the file — that is the
+// manifest — but the entries themselves stay on disk until the agent reads them.
 func TestAgentPromptOmitsProjectMemory(t *testing.T) {
 	root := t.TempDir()
 	hermes := memory.NewHermes(root)
@@ -33,7 +33,7 @@ func TestAgentPromptOmitsProjectMemory(t *testing.T) {
 	// (nor Hermes memory), only the intent itself.
 	c := &Core{logger: testLogger()}
 	c.memory = memory.NewInjector(hermes, projects)
-	got, used := buildAgentPrompt(c, intent, "panda", "refactor")
+	got, used := buildAgentPrompt(c, intent, "panda", "refactor", "")
 	if strings.Contains(got, "PROJECT-MEM") {
 		t.Errorf("agent prompt must no longer contain project memory, got %q", got)
 	}
@@ -63,7 +63,7 @@ func TestAgentPromptCarriesMemoryManifest(t *testing.T) {
 	c := &Core{logger: testLogger()}
 	c.memory = memory.NewInjector(hermes, projects)
 
-	got, _ := buildAgentPrompt(c, "fix the build", "", "fix build")
+	got, _ := buildAgentPrompt(c, "fix the build", "", "fix build", "")
 	if !strings.Contains(got, "记忆文件清单") || !strings.Contains(got, "MEMORY.md") {
 		t.Errorf("manifest missing from non-project prompt: %q", got)
 	}
@@ -75,10 +75,25 @@ func TestAgentPromptCarriesMemoryManifest(t *testing.T) {
 		t.Errorf("prompt must not dump full memory content: %q", got)
 	}
 
-	// Inside a project the isolation wall holds: no manifest either.
-	got, _ = buildAgentPrompt(c, "fix the build", "panda", "fix build")
+	// Inside a project the wall still holds — the personal-memory manifest must
+	// not appear — but the project gets a manifest of its own now. A project task
+	// used to receive strictly less context than a loose one, which is what left a
+	// delegated project task unable to tell what it was working on.
+	got, _ = buildAgentPrompt(c, "fix the build", "panda", "fix build", "/tmp/panda-tree")
 	if strings.Contains(got, "记忆文件清单") {
-		t.Errorf("project prompt must not carry the manifest: %q", got)
+		t.Errorf("project prompt must not carry the personal-memory manifest: %q", got)
+	}
+	if strings.Contains(got, "HERMES-FACT") {
+		t.Errorf("project prompt must not leak Hermes memory: %q", got)
+	}
+	if !strings.Contains(got, "当前项目：panda") {
+		t.Errorf("project prompt should name its project: %q", got)
+	}
+	if !strings.Contains(got, "/tmp/panda-tree") {
+		t.Errorf("project prompt should name the work dir it runs in: %q", got)
+	}
+	if !strings.Contains(got, filepath.Join(root, "panda", "MEMORY.md")) {
+		t.Errorf("project prompt should point at the project memory file: %q", got)
 	}
 }
 
