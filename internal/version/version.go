@@ -7,5 +7,7 @@ package version
 
 // Version is the semantic version of this build.
 //
-// v0.0.7 is the current release. Release builds override it via -ldflags.
-var Version = "0.0.7"
+// v0.0.8 is the version this tree builds (the tag for it may not be cut
+// yet — the latest release trails until then). Release builds override
+// it via -ldflags.
+var Version = "0.0.8"
