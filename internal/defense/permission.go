@@ -111,6 +111,93 @@ func TierFromCommand(command string, args ...string) int {
 	return TierReversible
 }
 
+// isDiscardPath reports whether an output target writes nothing that persists:
+// the null device, or stdout ("-"). These are the reachability-probe spellings
+// (`curl -s -o /dev/null url`, `wget -qO- url`), which must not prompt.
+func isDiscardPath(target string) bool {
+	return target == "/dev/null" || target == "-"
+}
+
+// downloadWritesFile reports whether a curl/wget argument list saves the
+// download to a path rather than writing stdout.
+//
+// A fetched-to-stdout URL is Tier 1: piping it into a shell is already gated by
+// the opacity patterns (`| sh` and friends), and everything else a plain fetch
+// does is read-only. A download written to a path is different — the bytes land
+// somewhere this classifier never sees, and the common next step is to run that
+// path (`curl -o x …; bash x` used to grade Tier 1 end to end because neither
+// half names an irreversible verb). That is the same opacity the encoded-code
+// patterns fail closed on, so it fails closed too.
+//
+// Flag spellings covered, per tool: curl's -o (separated, attached `-ofile`,
+// or clustered `-sLo file`), --output, -O/--remote-name (the file is named
+// after the URL, so there is no target to inspect — always a write); wget's -O
+// and --output-document. No other short flag of either tool carries the letter
+// o, so any single-dash cluster containing it is a write form; wget's lowercase
+// -o (a log file) matches too, which is a false positive in the fail-closed
+// direction and rare enough to keep.
+func downloadWritesFile(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		lower := strings.ToLower(args[i])
+		if !strings.HasPrefix(lower, "-") || lower == "-" {
+			continue
+		}
+		switch {
+		case lower == "--output" || lower == "--output-document":
+			// Separated value (--output FILE) — or an "=" spelling that the
+			// code-path tokenizer has already split into two tokens.
+			if i+1 < len(args) && !isDiscardPath(strings.ToLower(args[i+1])) {
+				return true
+			}
+		case strings.HasPrefix(lower, "--output=") || strings.HasPrefix(lower, "--output-document="):
+			if !isDiscardPath(lower[strings.IndexByte(lower, '=')+1:]) {
+				return true
+			}
+		case lower == "--remote-name" || lower == "--remote-name-all":
+			return true
+		}
+		if strings.HasPrefix(lower, "--") {
+			continue
+		}
+		// Short cluster. The value is whatever follows the o in the same token
+		// ("-ofile", "-O-" for stdout), else the next argument ("-o file",
+		// "-sLo file" — and for curl's -O the next argument is the URL, but a
+		// remote-named file is written either way, so gating on it is right).
+		pos := strings.IndexByte(lower, 'o')
+		if pos < 0 {
+			continue
+		}
+		if pos+1 < len(lower) {
+			if !isDiscardPath(lower[pos+1:]) {
+				return true
+			}
+			continue
+		}
+		if i+1 < len(args) && !isDiscardPath(strings.ToLower(args[i+1])) {
+			return true
+		}
+	}
+	return false
+}
+
+// codeDownloads reports whether shell code contains a curl/wget invocation in
+// a form that saves its bytes to a path — the code-scan counterpart of
+// downloadWritesFile, so `bash -c "curl -o x …; bash x"` grades Tier 2 the
+// same way the top-level `curl -o x …` does. Token granularity matches the
+// rest of codeEscalates: quotes and "=" have already been split out, which is
+// why the separated and attached --output spellings converge.
+func codeDownloads(lower string) bool {
+	toks := codeTokens(lower)
+	for i, tok := range toks {
+		if tok == "curl" || tok == "wget" {
+			if downloadWritesFile(toks[i+1:]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // hasEncodedCodeFlag reports whether an interpreter was handed a base64-encoded
 // program (PowerShell's -EncodedCommand and its abbreviations). Matched
 // case-insensitively and by prefix, since -enc, -encod and -EncodedCommand are
@@ -233,6 +320,12 @@ var commandArgRisks = map[string]func(args []string) bool{
 	"rsync": hasAnyArg("--delete", "--delete-after", "--delete-before", "--delete-during", "--del"),
 	// git: only the forms that destroy work no reflog or remote still holds.
 	"git": func(args []string) bool { return gitArgsIrreversible(args) },
+	// curl/wget: a fetch to stdout is Tier 1 (a pipe into a shell is gated by
+	// the opacity patterns); a download saved to a path is Tier 2, because the
+	// bytes are opaque to this classifier and the next step is usually to run
+	// them. See downloadWritesFile for the flag forms.
+	"curl": downloadWritesFile,
+	"wget": downloadWritesFile,
 }
 
 // gitArgsIrreversible reports whether a git invocation is one of the forms that
@@ -595,7 +688,10 @@ func codeEscalates(code string) bool {
 			return true
 		}
 	}
-	return false
+	// A download saved to a path inside the code is the two-step form of
+	// `curl … | sh`: the fetch is Tier 1 on its own, so the write is what the
+	// classifier has to see.
+	return codeDownloads(lower)
 }
 
 // codeTokens splits code into command-position candidates. It breaks on shell
