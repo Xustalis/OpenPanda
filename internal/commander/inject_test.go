@@ -461,3 +461,47 @@ func TestAgentViableLockedOutCLI(t *testing.T) {
 		t.Fatal("agent with own credentials must be viable")
 	}
 }
+
+func TestOpenAIModelInjectionForCodexAndHermes(t *testing.T) {
+	cleanCredentialEnv(t)
+	openaiModel := config.ModelConfig{
+		APIType: "openai",
+		BaseURL: "https://api.openai.com/v1",
+		APIKey:  "sk-openai-test",
+		Model:   "gpt-4o",
+	}
+
+	// Codex with OpenAI model configured in auto mode (no own credentials).
+	r := injectionRouter(openaiModel, config.InjectionModelAuto)
+	dCodex := r.InjectionDecision("codex.py")
+	if !dCodex.Inject {
+		t.Fatalf("Codex should receive OpenAI model injection in auto mode: %+v", dCodex)
+	}
+	if dCodex.Model != "gpt-4o" || dCodex.BaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("Codex decision model/url mismatch: %+v", dCodex)
+	}
+	envCodex := modelEnvForAdapter(openaiModel, "codex.py")
+	assertEnv(t, envCodex, map[string]string{
+		"OPENAI_BASE_URL": "https://api.openai.com/v1",
+		"OPENAI_API_KEY":  "sk-openai-test",
+		"OPENAI_MODEL":    "gpt-4o",
+	})
+
+	// Hermes with OpenAI model configured.
+	dHermes := r.InjectionDecision("hermes.py")
+	if !dHermes.Inject {
+		t.Fatalf("Hermes should receive OpenAI model injection in auto mode: %+v", dHermes)
+	}
+	envHermes := modelEnvForAdapter(openaiModel, "hermes.py")
+	assertEnv(t, envHermes, map[string]string{
+		"OPENAI_BASE_URL": "https://api.openai.com/v1",
+		"OPENAI_API_KEY":  "sk-openai-test",
+		"OPENAI_MODEL":    "gpt-4o",
+	})
+
+	// Claude Code should NOT be injected with OpenAI model because it expects Anthropic APIType.
+	dClaude := r.InjectionDecision("claude_code.py")
+	if dClaude.Inject {
+		t.Fatalf("Claude Code must not receive OpenAI model injection: %+v", dClaude)
+	}
+}

@@ -944,3 +944,239 @@ func TestStreamRetriesThenSuppressesStructured(t *testing.T) {
 		t.Fatalf("text = %q", resp.Text)
 	}
 }
+
+func TestURLNormalizers(t *testing.T) {
+	testsOAI := []struct {
+		in   string
+		want string
+	}{
+		{"", "https://api.openai.com/v1/chat/completions"},
+		{"https://api.openai.com", "https://api.openai.com/v1/chat/completions"},
+		{"https://api.openai.com/", "https://api.openai.com/v1/chat/completions"},
+		{"https://api.openai.com/v1", "https://api.openai.com/v1/chat/completions"},
+		{"https://api.openai.com/v1/", "https://api.openai.com/v1/chat/completions"},
+		{"https://api.openai.com/v1/chat/completions", "https://api.openai.com/v1/chat/completions"},
+		{"https://dashscope.aliyuncs.com/compatible-mode/v1", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"},
+		{"https://api.siliconflow.cn/v1", "https://api.siliconflow.cn/v1/chat/completions"},
+		{"https://open.bigmodel.cn/api/paas/v4", "https://open.bigmodel.cn/api/paas/v4/chat/completions"},
+		{"http://localhost:11434", "http://localhost:11434/v1/chat/completions"},
+		{"http://localhost:11434/v1", "http://localhost:11434/v1/chat/completions"},
+		{"http://127.0.0.1:8000/v1", "http://127.0.0.1:8000/v1/chat/completions"},
+	}
+	for _, tt := range testsOAI {
+		if got := openAIURL(tt.in); got != tt.want {
+			t.Errorf("openAIURL(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+
+	testsAnth := []struct {
+		in   string
+		want string
+	}{
+		{"", "https://api.deepseek.com/anthropic/v1/messages"},
+		{"https://api.anthropic.com", "https://api.anthropic.com/v1/messages"},
+		{"https://api.anthropic.com/v1", "https://api.anthropic.com/v1/messages"},
+		{"https://api.anthropic.com/v1/messages", "https://api.anthropic.com/v1/messages"},
+		{"https://api.deepseek.com/anthropic", "https://api.deepseek.com/anthropic/v1/messages"},
+		{"https://api.deepseek.com/anthropic/v1", "https://api.deepseek.com/anthropic/v1/messages"},
+	}
+	for _, tt := range testsAnth {
+		if got := anthropicURL(tt.in); got != tt.want {
+			t.Errorf("anthropicURL(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestBuildOAIRequestReasoningModels(t *testing.T) {
+	reqO1 := buildOAIRequest("o1-mini", 2048, true, nil, nil, "key")
+	if reqO1.MaxCompletionTokens != 2048 || reqO1.MaxTokens != 0 {
+		t.Fatalf("o1-mini should use MaxCompletionTokens: %+v", reqO1)
+	}
+
+	reqO3 := buildOAIRequest("o3-mini", 4096, false, nil, nil, "")
+	if reqO3.MaxCompletionTokens != 4096 || reqO3.MaxTokens != 0 {
+		t.Fatalf("o3-mini should use MaxCompletionTokens: %+v", reqO3)
+	}
+
+	reqGPT4 := buildOAIRequest("gpt-4o", 1024, true, nil, nil, "")
+	if reqGPT4.MaxTokens != 1024 || reqGPT4.MaxCompletionTokens != 0 {
+		t.Fatalf("gpt-4o should use MaxTokens: %+v", reqGPT4)
+	}
+}
+
+func TestParseOpenAIReasoningVariants(t *testing.T) {
+	// 1. reasoning_content (DeepSeek, SiliconFlow, vLLM)
+	r1 := &oaiResponse{
+		Choices: []struct {
+			Message struct {
+				Content          string        `json:"content"`
+				ReasoningContent string        `json:"reasoning_content"`
+				Reasoning        string        `json:"reasoning"`
+				Thought          string        `json:"thought"`
+				Thinking         string        `json:"thinking"`
+				ToolCalls        []oaiToolCall `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		}{
+			{Message: struct {
+				Content          string        `json:"content"`
+				ReasoningContent string        `json:"reasoning_content"`
+				Reasoning        string        `json:"reasoning"`
+				Thought          string        `json:"thought"`
+				Thinking         string        `json:"thinking"`
+				ToolCalls        []oaiToolCall `json:"tool_calls"`
+			}{Content: "Hello", ReasoningContent: "DeepSeek thinking"}},
+		},
+	}
+	resp1 := parseOpenAIResponse(r1)
+	if resp1.Text != "Hello" || resp1.Reasoning != "DeepSeek thinking" {
+		t.Fatalf("reasoning_content failed: %+v", resp1)
+	}
+
+	// 2. reasoning (Ollama, LM Studio)
+	r2 := &oaiResponse{
+		Choices: []struct {
+			Message struct {
+				Content          string        `json:"content"`
+				ReasoningContent string        `json:"reasoning_content"`
+				Reasoning        string        `json:"reasoning"`
+				Thought          string        `json:"thought"`
+				Thinking         string        `json:"thinking"`
+				ToolCalls        []oaiToolCall `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		}{
+			{Message: struct {
+				Content          string        `json:"content"`
+				ReasoningContent string        `json:"reasoning_content"`
+				Reasoning        string        `json:"reasoning"`
+				Thought          string        `json:"thought"`
+				Thinking         string        `json:"thinking"`
+				ToolCalls        []oaiToolCall `json:"tool_calls"`
+			}{Content: "World", Reasoning: "Ollama reasoning"}},
+		},
+	}
+	resp2 := parseOpenAIResponse(r2)
+	if resp2.Text != "World" || resp2.Reasoning != "Ollama reasoning" {
+		t.Fatalf("reasoning failed: %+v", resp2)
+	}
+
+	// 3. thought (Gemini proxy, OpenRouter)
+	r3 := &oaiResponse{
+		Choices: []struct {
+			Message struct {
+				Content          string        `json:"content"`
+				ReasoningContent string        `json:"reasoning_content"`
+				Reasoning        string        `json:"reasoning"`
+				Thought          string        `json:"thought"`
+				Thinking         string        `json:"thinking"`
+				ToolCalls        []oaiToolCall `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		}{
+			{Message: struct {
+				Content          string        `json:"content"`
+				ReasoningContent string        `json:"reasoning_content"`
+				Reasoning        string        `json:"reasoning"`
+				Thought          string        `json:"thought"`
+				Thinking         string        `json:"thinking"`
+				ToolCalls        []oaiToolCall `json:"tool_calls"`
+			}{Content: "Hi", Thought: "Gemini thought"}},
+		},
+	}
+	resp3 := parseOpenAIResponse(r3)
+	if resp3.Text != "Hi" || resp3.Reasoning != "Gemini thought" {
+		t.Fatalf("thought failed: %+v", resp3)
+	}
+
+	// 4. thinking (Groq/Cloudflare)
+	r4 := &oaiResponse{
+		Choices: []struct {
+			Message struct {
+				Content          string        `json:"content"`
+				ReasoningContent string        `json:"reasoning_content"`
+				Reasoning        string        `json:"reasoning"`
+				Thought          string        `json:"thought"`
+				Thinking         string        `json:"thinking"`
+				ToolCalls        []oaiToolCall `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		}{
+			{Message: struct {
+				Content          string        `json:"content"`
+				ReasoningContent string        `json:"reasoning_content"`
+				Reasoning        string        `json:"reasoning"`
+				Thought          string        `json:"thought"`
+				Thinking         string        `json:"thinking"`
+				ToolCalls        []oaiToolCall `json:"tool_calls"`
+			}{Content: "Yes", Thinking: "Groq thinking"}},
+		},
+	}
+	resp4 := parseOpenAIResponse(r4)
+	if resp4.Text != "Yes" || resp4.Reasoning != "Groq thinking" {
+		t.Fatalf("thinking failed: %+v", resp4)
+	}
+
+	// 5. Inlined <think> block in content
+	r5 := &oaiResponse{
+		Choices: []struct {
+			Message struct {
+				Content          string        `json:"content"`
+				ReasoningContent string        `json:"reasoning_content"`
+				Reasoning        string        `json:"reasoning"`
+				Thought          string        `json:"thought"`
+				Thinking         string        `json:"thinking"`
+				ToolCalls        []oaiToolCall `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		}{
+			{Message: struct {
+				Content          string        `json:"content"`
+				ReasoningContent string        `json:"reasoning_content"`
+				Reasoning        string        `json:"reasoning"`
+				Thought          string        `json:"thought"`
+				Thinking         string        `json:"thinking"`
+				ToolCalls        []oaiToolCall `json:"tool_calls"`
+			}{Content: "<think>raw thoughts</think>Clean Answer"}},
+		},
+	}
+	resp5 := parseOpenAIResponse(r5)
+	if resp5.Text != "Clean Answer" {
+		t.Fatalf("inlined think strip failed: %+v", resp5)
+	}
+}
+
+func TestOAIAccumulatorStreamReasoning(t *testing.T) {
+	acc := &oaiAccumulator{calls: map[int]oaiToolCall{}}
+	var deliveredDelta []string
+	var deliveredReasoning []string
+
+	onDelta := func(s string) { deliveredDelta = append(deliveredDelta, s) }
+	onReason := func(s string) { deliveredReasoning = append(deliveredReasoning, s) }
+
+	chunks := []string{
+		`{"choices":[{"delta":{"thought":"Analyzing step 1. "}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"Step 2 reasoning. "}}]}`,
+		`{"choices":[{"delta":{"content":"Answer"}}]}`,
+		`{"choices":[{"delta":{"content":" part 2."}}]}`,
+	}
+
+	for _, cJSON := range chunks {
+		var chunk oaiChunk
+		if err := json.Unmarshal([]byte(cJSON), &chunk); err != nil {
+			t.Fatalf("unmarshal chunk: %v", err)
+		}
+		acc.feed(&chunk, onDelta, onReason)
+	}
+
+	res := acc.result()
+	if res.Text != "Answer part 2." {
+		t.Fatalf("text = %q, want 'Answer part 2.'", res.Text)
+	}
+	if res.Reasoning != "Analyzing step 1. Step 2 reasoning. " {
+		t.Fatalf("reasoning = %q", res.Reasoning)
+	}
+	if len(deliveredDelta) != 2 || len(deliveredReasoning) != 2 {
+		t.Fatalf("callbacks delta=%v, reasoning=%v", deliveredDelta, deliveredReasoning)
+	}
+}

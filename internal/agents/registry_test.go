@@ -28,12 +28,15 @@ func TestCredentialManifest(t *testing.T) {
 	}
 
 	codex, ok := ByAdapter("codex.py")
-	if !ok || len(codex.CredentialEnvVars) == 0 || codex.ModelEnv != nil {
-		t.Fatalf("codex must declare probe credentials but no model-env mapping: %+v", codex)
+	if !ok || len(codex.CredentialEnvVars) == 0 || codex.ModelEnv == nil {
+		t.Fatalf("codex must declare probe credentials and OpenAI model-env mapping: %+v", codex)
+	}
+	if codex.ModelEnv.BaseURL != "OPENAI_BASE_URL" || codex.ModelEnv.APIKey != "OPENAI_API_KEY" || codex.ModelEnv.Model != "OPENAI_MODEL" {
+		t.Fatalf("codex model env mapping = %+v", codex.ModelEnv)
 	}
 	oc, ok := ByAdapter("opencode.py")
-	if !ok || len(oc.CredentialEnvVars) == 0 || oc.ModelEnv != nil {
-		t.Fatalf("opencode must declare probe credentials but no model-env mapping: %+v", oc)
+	if !ok || len(oc.CredentialEnvVars) == 0 {
+		t.Fatalf("opencode must declare probe credentials: %+v", oc)
 	}
 }
 

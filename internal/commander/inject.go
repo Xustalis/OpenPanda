@@ -75,20 +75,21 @@ func (r *Router) InjectionDecision(adapter string) InjectionDecision {
 }
 
 // supportsModelInjection is registry-driven: an agent is injectable when its
-// registry entry declares a model-env mapping (an unambiguous env contract —
-// currently only Claude Code's Anthropic variables) and panda's model speaks
-// the matching wire protocol against a DeepSeek endpoint, the one provider
-// panda vends credentials for. Codex and OpenCode bring their own keys and
-// declare no mapping, so they are never injected.
+// registry entry declares a model-env mapping and panda's model speaks a
+// compatible protocol (Anthropic or OpenAI).
 func supportsModelInjection(adapter string, model config.ModelConfig) bool {
 	k, ok := agents.ByAdapter(adapter)
 	if !ok || k.ModelEnv == nil {
 		return false
 	}
-	if model.NormalizedAPIType() != config.APITypeAnthropic {
+	apiType := model.NormalizedAPIType()
+	if k.ModelEnv.APIType != "" && k.ModelEnv.APIType != apiType {
 		return false
 	}
-	return isDeepSeekEndpoint(model.BaseURL)
+	if adapter == "claude_code.py" {
+		return isDeepSeekEndpoint(model.BaseURL)
+	}
+	return true
 }
 
 // deepSeekAPIHost is the DeepSeek API host panda injects credentials for.
@@ -119,6 +120,9 @@ const (
 // the announcement and the injected env never diverge.
 func effectiveBaseURL(model config.ModelConfig) string {
 	if model.BaseURL == "" {
+		if model.NormalizedAPIType() == config.APITypeOpenAI {
+			return "https://api.openai.com/v1"
+		}
 		return "https://api.deepseek.com/anthropic"
 	}
 	return model.BaseURL
@@ -127,6 +131,9 @@ func effectiveBaseURL(model config.ModelConfig) string {
 func effectiveModelName(model config.ModelConfig) string {
 	name := model.Model
 	if name == "" {
+		if model.NormalizedAPIType() == config.APITypeOpenAI {
+			return "gpt-4o"
+		}
 		return "deepseek-v4-flash"
 	}
 	if name == deepseekProModel {

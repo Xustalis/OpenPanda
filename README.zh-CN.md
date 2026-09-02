@@ -214,12 +214,13 @@ network:
   peers:                      # 网络中的其他节点
     - "worker-1.your-tailnet.ts.net:7836"
 model:
-  base_url: "https://api.deepseek.com/anthropic"  # 任何兼容 /v1/messages 的端点
-  model: "deepseek-v4-flash"
-  # api_key: ""               # 优先使用 OPENPANDA_MODEL_API_KEY 环境变量
+  base_url: "https://api.deepseek.com/anthropic"  # 支持 OpenAI 与 Anthropic 两类主流格式
+  model: "deepseek-v4-flash"                      # 如 gpt-4o, o3-mini, deepseek-v4-flash, qwen-plus, deepseek-r1 等
+  api_type: "anthropic"                           # anthropic | openai (默认 anthropic)
+  # api_key: ""                                   # 优先使用 OPENPANDA_MODEL_API_KEY 环境变量
 ```
 
-密钥（模型 API key）尽量从 `OPENPANDA_MODEL_API_KEY` 环境变量读取，而非配置文件。
+支持主流模型服务商（OpenAI、DeepSeek、阿里通义千问、硅基流动 SiliconFlow、月之暗面 Kimi、智谱 GLM、本地 Ollama、OpenRouter 等），详见 `config.example.yaml`。密钥（模型 API key）尽量从 `OPENPANDA_MODEL_API_KEY` 环境变量读取，而非直接明文写入配置文件。
 
 ### 运行
 
