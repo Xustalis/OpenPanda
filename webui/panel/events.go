@@ -290,9 +290,10 @@ type fingerprintCache struct {
 
 type fpEntry struct {
 	val   string
+	err   error
 	stamp time.Time
-	// done closes once val is populated; waiters blocked on a load in flight
-	// read val only after it closes.
+	// done closes once val and err are populated; waiters blocked on a load in
+	// flight read them only after it closes.
 	done chan struct{}
 }
 
@@ -308,7 +309,11 @@ func (c *fingerprintCache) get(key string, load func() (string, error)) (string,
 	if e := c.ents[key]; e != nil && now.Sub(e.stamp) < c.ttl {
 		c.mu.Unlock()
 		<-e.done
-		return e.val, nil
+		// The same outcome the loader got, error included: a waiter that
+		// returned a bare empty value made the events loop treat a failed scan
+		// as a change signal, and let every stream but the loader's survive a
+		// persistent store failure on a false fingerprint.
+		return e.val, e.err
 	}
 	e := &fpEntry{stamp: now, done: make(chan struct{})}
 	c.ents[key] = e
@@ -317,14 +322,14 @@ func (c *fingerprintCache) get(key string, load func() (string, error)) (string,
 	val, err := load()
 	if err != nil {
 		// Drop the in-flight entry so the next caller retries immediately;
-		// waiters observing this entry see an empty fingerprint, which the
-		// change loop treats as "no signal from this source" rather than a
-		// state change.
+		// waiters observing this entry see the same error, so their streams
+		// drop and the clients reconnect instead of carrying a fake signal.
 		c.mu.Lock()
 		if c.ents[key] == e {
 			delete(c.ents, key)
 		}
 		c.mu.Unlock()
+		e.err = err
 		close(e.done)
 		return "", err
 	}
