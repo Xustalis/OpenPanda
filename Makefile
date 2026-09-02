@@ -32,6 +32,7 @@ all: build
 # where a PR lands with a broken vet warning or unformatted code.
 build: fmt-check vet
 	$(GO) build -ldflags "$(LDFLAGS_DEV)" -o $(BIN) ./cmd/panda
+	@if [ "$$(uname -s)" = "Darwin" ]; then codesign --force --deep --sign - $(BIN) 2>/dev/null || true; fi
 
 # Build the web console (webui/app) into webui/panel/dist/app, where go:embed
 # folds it into the panel binary. Requires node/npm. The committed
