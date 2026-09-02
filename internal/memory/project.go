@@ -124,3 +124,23 @@ func (p *Projects) Save(name string, m MemFile) error {
 	}
 	return nil
 }
+
+// Delete removes a project's directory — its MEMORY.md and any project-scoped
+// skills alongside it. This is the only destructive call in the package, so the
+// containment argument is worth stating: ValidateName has already rejected path
+// separators, "." and "..", so the join can only name a direct child of the root,
+// and nothing outside p.root is reachable from any input.
+//
+// A project that has no directory is already deleted, so that is not an error.
+func (p *Projects) Delete(name string) error {
+	if err := ValidateName(name); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	dir := filepath.Join(p.root, name)
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("memory: remove project %q: %w", name, err)
+	}
+	return nil
+}

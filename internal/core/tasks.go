@@ -1423,6 +1423,20 @@ func (s *TaskStore) ResolveTaskID(ctx context.Context, ref string) (string, erro
 	}
 }
 
+// RenameProject moves every task from one project name to another and reports how
+// many moved. A project's name appears on its tasks as data, so renaming the
+// project without renaming them would leave the tasks pointing at a project that
+// no longer exists — visible immediately as an empty `panda queue --project`.
+func (s *TaskStore) RenameProject(ctx context.Context, oldName, newName string) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET project = ? WHERE project = ?`, newName, oldName)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // ListByState returns tasks filtered by state ("" = all), newest first.
 func (s *TaskStore) ListByState(ctx context.Context, state string) ([]Task, error) {
 	q := `SELECT ` + taskColumns + ` FROM tasks`
