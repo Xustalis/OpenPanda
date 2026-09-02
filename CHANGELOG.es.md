@@ -36,7 +36,32 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Cada entrada nombra el cambio y su efecto visible en una a tres líneas; se cita el commit que lo introdujo cuando ayuda a la arqueología.
 - Este archivo en inglés es el canónico. Las traducciones zh-CN / ja / es / de lo replican y pueden retrasarse brevemente alrededor de un lanzamiento.
 
-## [Unreleased]
+## [0.0.8] - 2026-09-02
+
+La versión de los proyectos: un proyecto ya no es solo un nombre en una tarea — tiene directorio de trabajo, descripción y un puntero persistente de «proyecto actual»; las tareas lanzadas desde dentro lo heredan, y una tarea delegada lleva el proyecto entero al ejecutor, de modo que la máquina que la ejecuta sabe en qué está trabajando. La puerta de aprobación se reencuadra a solo lo irreversible (con el vector de descarga-a-archivo regateado tras la revisión), y la consola gana superficies para seguir planes y cambiar ajustes.
+
+### Añadido
+
+- **Los proyectos como ciudadanos de primera clase** — una tabla de proyectos (directorio de trabajo, descripción, marcas de tiempo) más un puntero de proyecto actual respaldado por ajustes que sobrevive a los procesos de un solo uso (`panda ask` no es un demonio); la superficie CLI completa `panda project list | new --dir --desc | show | rename | remove | enter | exit`, con `list` marcando el actual (a9fa471, 1260cb9).
+- **Las tareas heredan el proyecto en el que entraste** — el motor lleva un proyecto ambiental que rellena lo que el clasificador no nombró, y una tarea en un proyecto conoce su directorio de trabajo y su descripción — antes sabía menos que una tarea que no pertenecía a ninguno (8c82c5e).
+- **Una tarea delegada lleva consigo su proyecto** — la memoria del proyecto viaja empaquetada en la carga de delegación (con límite de tamaño), el árbol de trabajo viaja como referencia de artefacto troceado reutilizando la maquinaria del plano de planes, y el ejecutor rederiva el directorio de trabajo bajo su propia raíz, rechazando nombres de proyecto con caracteres de ruta (un nombre que llega por el bus es entrada no confiable). El resultado terminado se adopta de vuelta al directorio local del proyecto, en modo sobrescritura — dos máquinas editando un proyecto es un conflicto real y nunca se fusiona en silencio (a1f1d19).
+- **Consola: proyectos y ajustes** — CRUD de proyectos, entrar/salir y metadatos en la API de la consola (7cda886); filas de proyecto con directorio de trabajo, estado de proyecto actual y los verbos que los cambian (146c1ba); y los ajustes de aprobación, enrutado, límite de memoria e inyección — la puerta de aprobación es el ajuste que un usuario más quiere cambiar tras mirar la cola una tarde, y ya no requiere salir de la consola. Los cuatro se unen a la API de ajustes que la consola ya tenía en vez de un segundo endpoint (7a60a80, 0736c2f).
+- **Endpoints del tablero de planes** — `GET /api/plans` (qué planes existen y cómo van) y `GET /api/plans/{id}` (las etapas de un plan con el cableado de artefactos entre ellas — la vista que responde a «¿la etapa de entrenamiento recibió de verdad el script?»). Iniciar un plan sigue en `/api/ask`, donde ya funcionaba (932442a).
+- **Soporte multimodelo** — normalización inteligente de base_url (barras finales, prefijos de versión ausentes, rarezas por proveedor), campos de razonamiento para modelos con modo de pensamiento, y preajustes del proveedor OpenAI (08ede13).
+
+### Corregido
+
+- **La caché de huellas SSE propaga los fallos de carga** — las llamadas que se apilaron tras un escaneo fallido del almacén ahora reciben el mismo error en vez de un valor vacío con error nil; un almacén que falla de forma persistente ya no difunde un evento de cambio falso a cada flujo conectado mientras solo cae el flujo del cargador (revisión 2026-09-02, P2).
+- **TUI: un cuadro de entrada por comando de barra** — la ruta de ejecución ahora limpia el marco en el mismo ciclo de eventos que encola el comando, de modo que la fila de estado y la caja redondeada ya no quedan en el historial como una segunda barra de entrada (6a77bf7).
+- **TUI: temporización de etapas, formato de tarjetas de tarea, passback de DeepSeek thinking** — el tiempo del juez ya no se factura a la etapa en ejecución, las tarjetas de tarea se renderizan uniformes, y las conversaciones en modo de pensamiento ya no fallan con 400 en el passback (6d6e2e4).
+- **Las tablas de la CLI alinean por ancho de visualización** — el relleno `%-Ns` contaba bytes, así que un título CJK (dos columnas por carácter) o una celda de estado coloreada empujaba todas las columnas posteriores fuera de línea; las tablas ahora rellenan por ancho de visualización, los id de tarea se imprimen cortos cuando no son ambiguos, y llega con ello una ronda de arreglos de diseño de la TUI (8740c04).
+- **Las compilaciones de Darwin se firman automáticamente** — la firma ad-hoc en tiempo de compilación evita que macOS envíe un SIGKILL a un binario recién compilado en su primera ejecución (3b86987).
+- **Docs: el ejemplo OpenAI-compatible elimina el alias retirado del modelo de chat de DeepSeek** (cbe52cb).
+
+### Mejorado
+
+- **La puerta de aprobación cubre solo lo irreversible** — Tier 2 ahora significa «ningún comando posterior puede deshacerlo»: borrado, estado de disco/partición/firmware, estado de energía, escalada de privilegios, y las formas de argumento que pierden trabajo (`git push --force`, `rsync --delete`, `sed -i`, `find -delete`). curl, wget, make, ssh, systemctl, mount, docker, kubectl, terraform, los gestores de paquetes, chmod/chown/mv/cp/tee y similares se ejecutan sin supervisión, y `bash scripts/build.sh` ya no pide confirmación — un nodo que no puede ejecutar su propio build no puede hacer el trabajo para el que existe (e593470).
+- **Las descargas a archivo siguen bloqueadas** — un curl/wget que guarda sus bytes en una ruta (`-o`, `-O`, `--output`) es Tier 2: los bytes son opacos al clasificador y el siguiente paso suele ser ejecutarlos, y antes de este cambio `curl -o x …; bash x` se calificaba Tier 1 de principio a fin. Las descargas a stdout o `/dev/null` — las formas de sonda de alcanzabilidad — no se ven afectadas (revisión 2026-09-02, P1).
 
 ## [0.0.7] - 2026-08-31
 

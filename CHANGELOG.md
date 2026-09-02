@@ -36,7 +36,32 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Entries name the change and its user-visible effect in one to three lines; the introducing commit is cited where it aids archaeology.
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
-## [Unreleased]
+## [0.0.8] - 2026-09-02
+
+The project release: a project is no longer a name on a task — it has a work directory, a description and a persistent current-one pointer, tasks launched from inside it inherit it, and a delegated task carries the whole project to the executor, so the machine that runs it knows what it is working on. The approval gate is re-scoped to irreversible work only (with the download-to-file vector re-gated after review), and the console gained surfaces for following plans and changing settings.
+
+### Added
+
+- **Projects as first-class citizens** — a projects table (work dir, description, timestamps) plus a settings-backed current-project pointer that survives one-shot processes (`panda ask` is not a daemon); the full CLI surface `panda project list | new --dir --desc | show | rename | remove | enter | exit`, with `list` marking the current one (a9fa471, 1260cb9).
+- **Tasks inherit the entered project** — the engine carries an ambient project that fills in what the classifier did not name, and a task in a project knows its work dir and description — before, it knew less than a task that belonged to no project (8c82c5e).
+- **A delegated task carries its project** — project memory is packed into the delegation payload (size-capped), the work tree travels as a chunked artifact reference reusing the plan plane's machinery, and the executor re-derives the work dir under its own root, rejecting project names with path characters (a name from the bus is untrusted input). Finished output is adopted back into the local project directory, overwrite-style — two machines editing one project is a real conflict and is never silently merged (a1f1d19).
+- **Console: projects and settings** — project CRUD, enter/exit and metadata in the console API (7cda886); project rows carrying work dir, current-project state and the verbs that change them (146c1ba); and approval, routing, memory-limit and injection settings — the approval gate is the setting a user most wants to change after watching the queue for an afternoon, and it no longer requires leaving the console. All four join the settings API the console already had rather than a second endpoint (7a60a80, 0736c2f).
+- **Plan board endpoints** — `GET /api/plans` (which plans exist, how far along) and `GET /api/plans/{id}` (one plan's stages with the artifact wiring between them — the view that answers "did the training stage actually get the script?"). Starting a plan stays on `/api/ask`, where it already worked (932442a).
+- **Multi-model support** — smart base-URL normalization (trailing slashes, missing version prefixes, provider quirks), reasoning fields for thinking-mode models, and OpenAI provider presets (08ede13).
+
+### Fixed
+
+- **SSE fingerprint cache propagates load failures** — callers that piled up behind a failed store scan now get the same error instead of an empty value with a nil error; a persistent store failure no longer fans a false change event out to every connected stream while only the loader's own stream drops (review 2026-09-02, P2).
+- **TUI: one input box per slash command** — the exec path now clears the frame in the same event-loop pass that queues the command, so the state row and rounded box no longer linger in scrollback as a second input bar (6a77bf7).
+- **TUI stage timing, task card formatting, DeepSeek thinking passback** — judge runtime is no longer billed to the executing stage, task cards render uniformly, and thinking-mode conversations no longer fail with 400 on passback (6d6e2e4).
+- **CLI tables align by display width** — `%-Ns` padding counted bytes, so a CJK title (two columns per rune) or a tinted state cell pushed every later column out of line; tables now pad by display width, task ids print short where unambiguous, and a round of TUI layout fixes lands with them (8740c04).
+- **Darwin builds are codesigned automatically** — ad-hoc codesigning at build time keeps macOS from SIGKILLing a freshly built binary on first run (3b86987).
+- **Docs: the OpenAI-compatible example drops the retired DeepSeek chat alias** (cbe52cb).
+
+### Changed
+
+- **The approval gate covers only irreversible work** — Tier 2 now means "no later command can put it back": deletion, disk/partition/firmware state, power state, privilege escalation, and the argument forms that lose work (`git push --force`, `rsync --delete`, `sed -i`, `find -delete`). curl, wget, make, ssh, systemctl, mount, docker, kubectl, terraform, the package managers, chmod/chown/mv/cp/tee and friends run unattended, and `bash scripts/build.sh` no longer prompts — a node that cannot run its own build cannot do the work it exists for (e593470).
+- **Download-to-file fetches stay gated** — a curl/wget that saves its bytes to a path (`-o`, `-O`, `--output`) is Tier 2: the bytes are opaque to the classifier and the next step is usually to run them, and `curl -o x …; bash x` graded Tier 1 end to end before this change. Fetches to stdout or `/dev/null` — the reachability-probe spellings — are unaffected (review 2026-09-02, P1).
 
 ## [0.0.7] - 2026-08-31
 

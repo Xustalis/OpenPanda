@@ -59,9 +59,14 @@ jobs:
           notes="dist/release-notes.md"
           section="dist/changelog-section.md"
           mkdir -p dist
+          # The heading pattern tolerates an escaped bracket ("## \[X.Y.Z\]")
+          # in addition to the plain one — a local Markdown formatter has been
+          # observed escaping these headings on save, and without the
+          # tolerance the extraction silently finds nothing and the release
+          # refuses to publish.
           awk -v ver="$ver" '
-            $0 ~ "^## \\[" ver "\\]" { in_section=1; sub(/^## /, "### "); print; next }
-            in_section && /^## \[/ { in_section=0 }
+            $0 ~ "^## \\\\?\\[" ver "\\]" { in_section=1; sub(/^## /, "### "); print; next }
+            in_section && /^## \\?\[/ { in_section=0 }
             in_section && /^### / { sub(/^### /, "#### "); print; next }
             in_section { print }
           ' CHANGELOG.md > "$section"
