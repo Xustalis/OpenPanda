@@ -50,7 +50,10 @@ func (replExecCmd) SetStderr(io.Writer) {}
 // than via tea.Println, which sidesteps any ordering race between the managed
 // renderer and the released-terminal write.
 func (m tuiModel) runSlash(text string) tea.Cmd {
-	echo := block{kind: blockUser, body: text}.render(m.th, m.textWidth(), m.expandThought)
+	// The leading blank line is the same spacing printBlock gives a committed
+	// block: a command's echo is a transcript entry like any other, and without it
+	// the echo abutted whatever the previous turn left on screen.
+	echo := "\n" + block{kind: blockUser, body: text}.render(m.th, m.textWidth(), m.expandThought)
 	return tea.Exec(replExecCmd{r: m.r, line: text, echo: echo}, func(err error) tea.Msg {
 		return execDoneMsg{err: err}
 	})

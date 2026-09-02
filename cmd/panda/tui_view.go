@@ -17,20 +17,31 @@ import (
 )
 
 func (m tuiModel) View() string {
-	if m.quitting {
+	// modeExec draws nothing on purpose: a foreground command is about to own the
+	// terminal, and whatever this frame drew would be stranded above its output.
+	if m.quitting || m.mode == modeExec {
 		return ""
 	}
+	// The leading blank line is the same breathing room printBlock gives every
+	// committed block, so the live region sits in the transcript's rhythm rather
+	// than butting against the answer above it.
 	switch m.mode {
 	case modeAsking:
 		// A delegated task's card carries its own spinner, clock and interrupt
 		// hint, so the global status line stands down while one is in flight —
 		// two competing spinners read as a glitch, not as more information.
 		if m.liveTask != nil {
-			return m.liveRegion()
+			return "\n" + m.liveRegion()
 		}
-		return m.liveRegion() + "\n" + m.statusLine()
+		// Before the first token there is nothing to show but the spinner, and an
+		// empty live region would still cost a row — leaving a blank line wedged
+		// between the prompt and the only thing moving on screen.
+		if live := m.liveRegion(); live != "" {
+			return "\n" + live + "\n" + m.statusLine()
+		}
+		return "\n" + m.statusLine()
 	case modeApproving:
-		return m.approvalCard()
+		return "\n" + m.approvalCard()
 	default:
 		return m.inputView()
 	}
@@ -91,27 +102,72 @@ func (m tuiModel) statusLine() string {
 	return strings.Join(parts, " ")
 }
 
-// inputView is the bottom rounded input box plus the state and key-hint lines
-// around it. The slash-command menu sits directly above the box, so the filtered
-// command list reads like a completion popup anchored to the prompt.
+// inputView is the rounded input box with one dim status row under it and a blank
+// line above, so the control reads as separate from the transcript instead of
+// abutting the last answer. The state used to have its own row above the box and
+// the key legend another below it, which framed the one thing the user is looking
+// at in chrome on both sides; folded into a single footer row the box stands
+// alone.
+//
+// The slash-command menu opens *below* the box, between it and the footer. Drawn
+// above, the list pushed the box down a row per match as the filter widened and
+// pulled it back up as it narrowed, so the one control the user is typing into
+// hopped around the screen while they typed. Anchored below, the box holds its
+// place directly under the transcript and the list grows into empty space, which
+// is also how the reference front end reads.
 func (m tuiModel) inputView() string {
-	var parts []string
-	if ctx := m.contextLine(); ctx != "" {
-		parts = append(parts, ctx)
+	rows := []string{
+		"", // the blank line every committed block gets above it
+		m.th.inputBox.Width(m.textWidth() + 2).Render(m.ta.View()),
 	}
-	if menu := m.menu.render(m.th, m.textWidth()); menu != "" {
-		parts = append(parts, menu)
+	// The list is capped to what the window can spare: an inline renderer repaints
+	// by counting rows back up from the cursor, so a frame taller than the terminal
+	// scrolls its own top away and every later repaint lands in the wrong place.
+	if menu := m.menu.render(m.th, m.textWidth(), m.menuRows()); menu != "" {
+		rows = append(rows, menu)
 	}
-	parts = append(parts,
-		m.th.inputBox.Width(m.textWidth()+2).Render(m.ta.View()),
-		m.hintLine())
-	return strings.Join(parts, "\n")
+	return strings.Join(append(rows, m.statusRow()), "\n")
 }
 
-// contextLine is the dim state row above the input box: which thread the next
-// prompt joins — a /resume'd session, or this run's bare chat — and whether
-// tier-2 authorization is standing open. It shows only the state that changes
-// what a prompt will do, which is the TUI's read of the classic footer.
+// menuRows is how many command rows the popup may draw: whatever the terminal has
+// left under the blank line, the three-row box and the footer, held to a handful
+// so the list stays scannable on a tall screen. The floor keeps a very short
+// window showing something rather than nothing.
+func (m tuiModel) menuRows() int {
+	const maxRows = 8
+	if m.height <= 0 {
+		return maxRows // size not reported yet (see Init)
+	}
+	return max(3, min(maxRows, m.height-6))
+}
+
+// statusRow is the dim footer under the box: the key legend on the left, the
+// state that decides what the next prompt does on the right. It never wraps —
+// the legend sheds hints until both halves fit, and if even that is not enough
+// the state keeps the row, because a hint can be found again in /help and "which
+// project am I in" cannot.
+func (m tuiModel) statusRow() string {
+	w := m.textWidth()
+	state, hints := m.contextLine(), m.hintLine()
+	switch {
+	case state == "":
+		return m.th.muted.Render(hints)
+	case hints == "":
+		return m.th.muted.Render(cliui.Truncate(state, w, m.th.unicode))
+	}
+	gap := w - cliui.DisplayWidth(hints) - cliui.DisplayWidth(state)
+	if gap < 2 {
+		return m.th.muted.Render(cliui.Truncate(state, w, m.th.unicode))
+	}
+	return m.th.muted.Render(hints + strings.Repeat(" ", gap) + state)
+}
+
+// contextLine is the state half of the status row: which thread the next prompt
+// joins — a /resume'd session, or this run's bare chat — which project it lands
+// in, and whether tier-2 authorization is standing open. It shows only the state
+// that changes what a prompt will do, which is the TUI's read of the classic
+// footer. It returns plain text; statusRow paints the whole row at once, because
+// the row's width arithmetic has to measure columns, not escape sequences.
 func (m tuiModel) contextLine() string {
 	if m.r == nil {
 		return ""
@@ -126,31 +182,38 @@ func (m tuiModel) contextLine() string {
 	parts := []string{sess}
 	// Which project the next prompt belongs to is state that changes what an ask
 	// does — the task lands in that project and runs in its tree — so it belongs
-	// on the same line as the thread.
-	if proj := m.r.activeProjectName(); proj != "" {
-		parts = append(parts, m.th.glyph("▪", "#")+" "+proj)
+	// on the same line as the thread. The name comes from the cache, not the
+	// store: this runs on every frame, including every cursor blink.
+	if m.projName != "" {
+		parts = append(parts, m.th.glyph("▪", "#")+" "+m.projName)
 	}
 	if m.r.authorize {
 		parts = append(parts, i18n.T(m.loc, "repl.footer.authz")+":"+i18n.T(m.loc, "repl.footer.authz.on"))
 	}
-	return m.th.muted.Render(strings.Join(parts, "  "+m.th.glyph("·", "|")+"  "))
+	return strings.Join(parts, "  "+m.th.glyph("·", "|")+"  ")
 }
 
-// hintLine is the dim key legend under the input box. It sheds hints rather than
-// wrapping: the legend used to be printed whole, so a narrow terminal cut it
-// mid-word ("… ctrl+o 思维链  ·  ctr") and spent a second screen row doing it.
-// Submit and quit are the two a user cannot afford to lose — how to send, how to
-// leave — so the middle two go first, in reverse order of usefulness.
+// hintLine is the key legend for the status row, in plain text. It sheds hints
+// rather than wrapping: the legend used to be printed whole, so a narrow terminal
+// cut it mid-word ("… ctrl+o 思维链  ·  ctr") and spent a second screen row doing
+// it. Submit and quit are the two a user cannot afford to lose — how to send, how
+// to leave — so the middle two go first, in reverse order of usefulness.
+//
+// The state half of the row is measured out of the budget before the legend gets
+// any of it, and below a floor the legend yields the row entirely: a squeezed
+// hint is worth less than the project the next prompt would land in.
 func (m tuiModel) hintLine() string {
-	sep := "  " + m.th.glyph("·", "|") + "  "
-	hints := []string{
-		i18n.T(m.loc, "tui.hint.submit"),
-		i18n.T(m.loc, "tui.hint.newline"),
-		i18n.T(m.loc, "tui.hint.thought"),
-		i18n.T(m.loc, "tui.hint.quit"),
+	budget := m.textWidth()
+	if state := m.contextLine(); state != "" {
+		budget -= cliui.DisplayWidth(state) + 2
 	}
+	if budget < 12 {
+		return ""
+	}
+	sep := "  " + m.th.glyph("·", "|") + "  "
+	hints := m.hintKeys()
 	fits := func() bool {
-		return cliui.DisplayWidth(strings.Join(hints, sep)) <= m.textWidth()
+		return cliui.DisplayWidth(strings.Join(hints, sep)) <= budget
 	}
 	for _, drop := range []int{2, 1} { // thought, then newline
 		if fits() {
@@ -162,9 +225,32 @@ func (m tuiModel) hintLine() string {
 	if !fits() {
 		// Two hints and still too narrow: clip, so the legend can never claim a
 		// second row from the input box.
-		line = cliui.Truncate(line, m.textWidth(), m.th.unicode)
+		line = cliui.Truncate(line, budget, m.th.unicode)
 	}
-	return m.th.muted.Render(line)
+	return line
+}
+
+// hintKeys is the legend's content: what the keys do at this moment. The slash
+// menu rebinds enter, tab, the arrows and esc while it is open, so it brings its
+// own legend — leaving "ctrl+j 换行" over a list where enter runs the highlighted
+// command would describe a keyboard the user does not currently have. Both lists
+// are ordered action-first and escape-last, and both shed their middle two under
+// the same budget (see hintLine).
+func (m tuiModel) hintKeys() []string {
+	if m.menu.active && len(m.menu.items) > 0 {
+		return []string{
+			i18n.T(m.loc, "tui.hint.menuRun"),
+			m.th.glyph("↑↓", "^v") + " " + i18n.T(m.loc, "tui.hint.menuSelect"),
+			i18n.T(m.loc, "tui.hint.menuComplete"),
+			i18n.T(m.loc, "tui.hint.menuCancel"),
+		}
+	}
+	return []string{
+		i18n.T(m.loc, "tui.hint.submit"),
+		i18n.T(m.loc, "tui.hint.newline"),
+		i18n.T(m.loc, "tui.hint.thought"),
+		i18n.T(m.loc, "tui.hint.quit"),
+	}
 }
 
 // approvalCard renders the tier-2 consent prompt for a parked task: what it
@@ -192,19 +278,24 @@ func (m tuiModel) welcome() string {
 			model = m.r.cfg.Model.BaseURL
 		}
 	}
-	// Each line is clipped to the frame rather than left to wrap: a wrapped
-	// banner grows the box a row at a time as the terminal narrows, and a path
-	// broken across two lines is harder to read than an elided one. The working
-	// directory keeps its tail — the last segments are what identifies it.
+	// The facts hang under the star as an indented group with a blank line above
+	// them, so the frame reads as a greeting with a heading instead of four stacked
+	// status lines. Each line is clipped to the frame rather than left to wrap: a
+	// wrapped banner grows the box a row at a time as the terminal narrows, and a
+	// path broken across two lines is harder to read than an elided one. The
+	// working directory keeps its tail — the last segments are what identifies it.
 	w := m.textWidth()
+	inner := max(4, w-2)
 	uni := m.th.unicode
 	var sb strings.Builder
-	sb.WriteString(m.th.heading.Render(cliui.Truncate(i18n.T(m.loc, "repl.banner.title")+" v"+version, w, uni)))
-	sb.WriteString("\n" + m.th.muted.Render(cliui.Truncate(
-		i18n.Tf(m.loc, "repl.banner.node", "node", m.r.cfg.Node.Name, "model", model), w, uni)))
-	sb.WriteString("\n" + m.th.muted.Render(cliui.TruncateTail(
-		i18n.Tf(m.loc, "repl.banner.dir", "dir", m.r.cfg.Storage.WorkPath), w, uni)))
-	sb.WriteString("\n" + m.th.muted.Render(cliui.Truncate(i18n.T(m.loc, "tui.welcome.tips"), w, uni)))
+	sb.WriteString(m.th.heading.Render(cliui.Truncate(
+		m.th.glyph("✻", "*")+" "+i18n.T(m.loc, "repl.banner.title")+" v"+version, w, uni)))
+	sb.WriteString("\n")
+	sb.WriteString("\n  " + m.th.muted.Render(cliui.Truncate(
+		i18n.Tf(m.loc, "repl.banner.node", "node", m.r.cfg.Node.Name, "model", model), inner, uni)))
+	sb.WriteString("\n  " + m.th.muted.Render(cliui.TruncateTail(
+		i18n.Tf(m.loc, "repl.banner.dir", "dir", m.r.cfg.Storage.WorkPath), inner, uni)))
+	sb.WriteString("\n  " + m.th.muted.Render(cliui.Truncate(i18n.T(m.loc, "tui.welcome.tips"), inner, uni)))
 	return m.th.welcome.Width(w + 2).Render(sb.String())
 }
 

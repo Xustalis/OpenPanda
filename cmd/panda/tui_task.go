@@ -101,7 +101,7 @@ func (tp *taskProgress) renderLive(t theme, loc i18n.Locale, spin string, now ti
 		if last {
 			mark = spin // the stage still running owns the spinner
 		}
-		line := fmt.Sprintf("  %s %s %s", arm, mark, st.label)
+		line := fmt.Sprintf("  %s  %s %s", arm, mark, st.label)
 		if d := end - st.at; d > 0 {
 			line += t.muted.Render(" · " + elapsed(d))
 		}
@@ -110,7 +110,7 @@ func (tp *taskProgress) renderLive(t theme, loc i18n.Locale, spin string, now ti
 	if len(tp.stages) == 0 {
 		// Submitted but not yet routed: show the spinner on the header's arm so
 		// the card never sits inert waiting for the first milestone.
-		sb.WriteString(fmt.Sprintf("\n  %s %s %s", arm, spin, i18n.T(loc, "tui.task.starting")))
+		sb.WriteString(fmt.Sprintf("\n  %s  %s %s", arm, spin, i18n.T(loc, "tui.task.starting")))
 	}
 	sb.WriteString("\n" + t.muted.Render(fmt.Sprintf("  (%s · %s)",
 		elapsed(total), i18n.T(loc, "cli.status.interrupt"))))

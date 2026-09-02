@@ -23,14 +23,25 @@ import (
 )
 
 // tuiMode is the model's top-level state. Keystrokes and incoming messages mean
-// different things in each: idle waits for input, asking streams a reply, and
-// approving holds a tier-2 card until the user answers y/n.
+// different things in each: idle waits for input, asking streams a reply,
+// approving holds a tier-2 card until the user answers y/n, and exec has handed
+// the terminal to a classic command handler.
 type tuiMode int
 
 const (
 	modeIdle tuiMode = iota
 	modeAsking
 	modeApproving
+	// modeExec is the window where a slash or "!" command owns the terminal, and
+	// it exists to render nothing. tea.Exec releases the tty by stopping the
+	// renderer, and stopping only erases the row the cursor sits on — everything
+	// the last frame drew above that row stays behind. The idle frame is five rows,
+	// so the blank line, the whole rounded box and the state row were stranded in
+	// scrollback, the command's output printed under them, and a fresh box
+	// repainted below that: two input bars for one command. An empty view first
+	// lets the renderer's own flush clear the region (it erases below the cursor
+	// whenever a frame shrinks), so the output lands where the box was.
+	modeExec
 )
 
 // tuiModel is the Bubble Tea model. It borrows the live REPL (r) for its engine,
@@ -52,6 +63,13 @@ type tuiModel struct {
 	width  int
 	height int
 	ready  bool
+
+	// projName caches the active project for the status row. The row is part of
+	// the ephemeral frame, so reading the pointer at render time meant one SQLite
+	// query per keystroke and per cursor blink; it is pushed instead — at startup
+	// and after a foreground command (refreshProject), and off the Update loop by
+	// the task watcher's poll, which is what catches a project entered elsewhere.
+	projName string
 
 	mode    tuiMode
 	stream  *askStream
@@ -96,9 +114,18 @@ type tuiModel struct {
 	quitting bool
 }
 
+// pulseStar is the thinking spinner: a star that swells and shrinks in place
+// rather than a glyph that spins. It is the same ✻ the thought header and the
+// welcome frame use, so "working" reads as one idea across the screen instead of
+// three unrelated symbols, and the frames run up and back down so it breathes.
+var pulseStar = spinner.Spinner{
+	Frames: []string{"·", "✢", "✳", "∗", "✻", "✽", "✻", "∗", "✳", "✢"},
+	FPS:    time.Second / 10,
+}
+
 // newTUIModel builds the model from a constructed repl (its engine, locale and
 // stores are already wired by runRepl). The input starts focused; the spinner
-// uses a unicode braille cycle or an ASCII fallback so a bare console still
+// uses the unicode star pulse or an ASCII fallback so a bare console still
 // animates.
 func newTUIModel(r *repl) tuiModel {
 	th := newTheme(r.loc)
@@ -117,7 +144,7 @@ func newTUIModel(r *repl) tuiModel {
 	ta.BlurredStyle.CursorLine = lipglossNoStyle()
 
 	sp := spinner.New()
-	sp.Spinner = spinner.MiniDot
+	sp.Spinner = pulseStar
 	if !th.unicode {
 		sp.Spinner = spinner.Line
 	}
@@ -155,7 +182,21 @@ func (m tuiModel) Init() tea.Cmd {
 // content width is decided once: the same width the live region lays out to, so
 // a streamed answer does not reflow the instant the turn commits.
 func (m tuiModel) printBlock(b block) tea.Cmd {
-	return tea.Println(b.render(m.th, m.textWidth(), m.expandThought))
+	// The leading blank line is the transcript's spacing: one per block, so turns
+	// separate into paragraphs instead of stacking into a wall of markers. It
+	// belongs here rather than in render() because it is a property of committing
+	// to scrollback — the live region draws the same blocks and supplies its own.
+	return tea.Println("\n" + b.render(m.th, m.textWidth(), m.expandThought))
+}
+
+// refreshProject re-reads the active project pointer into the model; see the
+// projName field for why the status row is pushed to rather than polled.
+func (m *tuiModel) refreshProject() {
+	if m.r == nil {
+		m.projName = ""
+		return
+	}
+	m.projName = m.r.activeProjectName()
 }
 
 // history assembles the conversation context for the next ask by delegating to

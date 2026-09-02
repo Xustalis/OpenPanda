@@ -242,11 +242,12 @@ func TestTUIWelcomeWaitsForTheTerminalSize(t *testing.T) {
 }
 
 // TestTUIWelcomeFitsItsTerminal is the visible half of the same bug. Each banner
-// line is clipped rather than wrapped, so the frame is the same six rows (two
-// borders, four facts) at every width — a wrapping banner grew a row at a time as
-// the terminal narrowed, turning the greeting into most of a small screen.
+// line is clipped rather than wrapped, so the frame is the same seven rows (two
+// borders, the heading, a blank, three facts) at every width — a wrapping banner
+// grew a row at a time as the terminal narrowed, turning the greeting into most of
+// a small screen.
 func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
-	const frameRows = 6
+	const frameRows = 7
 	for _, width := range []int{40, 52, 80, 200} {
 		m := newTestTUI(t)
 		m.r.cfg.Node.Name = "XenithdeMacBook-Pro.local"
@@ -270,8 +271,14 @@ func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
 func TestTUIHintLineShedsHintsWhenNarrow(t *testing.T) {
 	full := newTestTUI(t)
 	full = step(full, tea.WindowSizeMsg{Width: 120, Height: 40})
-	if n := strings.Count(full.hintLine(), "·"); n != 3 {
-		t.Fatalf("a wide terminal should show all four hints, separators=%d", n)
+	// The separator is a theme glyph — "·", or "|" when the terminal is not
+	// UTF-8 — so count what this theme renders rather than the literal rune.
+	// Counting "·" made the gate red on any shell whose locale env is unset
+	// (a GUI-launched terminal, most CI images): the hints were all there, only
+	// the separator had fallen back to ASCII.
+	sep := full.th.glyph("·", "|")
+	if n := strings.Count(full.hintLine(), sep); n != 3 {
+		t.Fatalf("a wide terminal should show all four hints, separators=%d in %q", n, full.hintLine())
 	}
 
 	narrow := newTestTUI(t)
@@ -282,6 +289,28 @@ func TestTUIHintLineShedsHintsWhenNarrow(t *testing.T) {
 	}
 	if !strings.Contains(line, "enter") || !strings.Contains(line, "ctrl+c") {
 		t.Fatalf("submit and quit must survive: %q", line)
+	}
+}
+
+// TestStatusRowIsOneFittingLine pins the footer that replaced the two rows around
+// the input box: one line, never wider than the frame, and when the width runs out
+// it is the state that survives rather than the key legend — a hint can be looked
+// up in /help, which project the next task lands in cannot.
+func TestStatusRowIsOneFittingLine(t *testing.T) {
+	for _, width := range []int{40, 60, 120} {
+		m := newTestTUI(t)
+		m = step(m, tea.WindowSizeMsg{Width: width, Height: 30})
+		m.projName = "panda"
+		row := m.statusRow()
+		if strings.Contains(row, "\n") {
+			t.Errorf("width %d: the status row must be a single line: %q", width, row)
+		}
+		if w := cliui.DisplayWidth(row); w > m.textWidth() {
+			t.Errorf("width %d: status row is %d columns, budget %d: %q", width, w, m.textWidth(), row)
+		}
+		if !strings.Contains(row, "panda") {
+			t.Errorf("width %d: the active project must stay visible: %q", width, row)
+		}
 	}
 }
 

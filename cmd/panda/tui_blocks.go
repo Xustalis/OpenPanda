@@ -53,9 +53,7 @@ type block struct {
 func (b block) render(t theme, width int, expandThought bool) string {
 	switch b.kind {
 	case blockUser:
-		// Echo the prompt with a prompt glyph so scrolling back reads as a
-		// dialogue rather than an undifferentiated wall of text.
-		return t.accent.Render(t.glyph("❯", ">")) + " " + b.body
+		return userText(t, b.body, width)
 	case blockAnswer:
 		return answerText(t, b.body, width)
 	case blockThought:
@@ -70,6 +68,20 @@ func (b block) render(t theme, width int, expandThought bool) string {
 		return b.body
 	}
 	return b.body
+}
+
+// userText echoes the submitted prompt under a "❯" so scrolling back reads as a
+// dialogue rather than an undifferentiated wall of text. It is dim, and wrapped
+// and hung like the answer beneath it: the user's own words are the one thing in
+// the transcript they do not need to read back, so they recede and the accent
+// colour stays reserved for the app's own voice. Wrapping matters as much as the
+// tint — only the answer half of a turn used to be wrapped, so a pasted prompt
+// ran past the frame while the reply to it stayed inside.
+func userText(t theme, body string, width int) string {
+	if width > 4 {
+		body = wrap(body, width-2)
+	}
+	return t.muted.Render(indentLines(body, t.glyph("❯", ">")+" ", "  "))
 }
 
 // answerText lays out assistant prose under a marker glyph: wrapped to the
@@ -137,10 +149,10 @@ func (b block) renderTask(t theme) string {
 	var sb strings.Builder
 	sb.WriteString(head)
 	for _, st := range b.stages {
-		sb.WriteString("\n" + t.muted.Render("  "+arm+" "+st))
+		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+st))
 	}
 	if b.meta != "" {
-		sb.WriteString("\n" + t.muted.Render("  "+arm+" "+b.meta))
+		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+b.meta))
 	}
 	if b.body != "" {
 		if b.ok {
