@@ -142,7 +142,20 @@ func (m tuiModel) Init() tea.Cmd {
 	if m.r != nil {
 		m.r.resetWatchBaseline() // adopt already-finished tasks, so startup is quiet
 	}
-	return tea.Batch(textarea.Blink, tea.Println(m.welcome()), watchTasks(m.r))
+	// The welcome frame is not printed here: Init runs before Bubble Tea reports
+	// the terminal size, so a banner printed now would be drawn to the fallback
+	// width — an 80-column box in a 52-column window. The first WindowSizeMsg
+	// prints it (see Update), which is the earliest moment the frame can match
+	// the terminal it is sitting in.
+	return tea.Batch(textarea.Blink, watchTasks(m.r))
+}
+
+// printBlock renders one committed transcript block and pushes it into the
+// terminal's scrollback. Every commit path goes through it so the transcript's
+// content width is decided once: the same width the live region lays out to, so
+// a streamed answer does not reflow the instant the turn commits.
+func (m tuiModel) printBlock(b block) tea.Cmd {
+	return tea.Println(b.render(m.th, m.textWidth(), m.expandThought))
 }
 
 // history assembles the conversation context for the next ask by delegating to

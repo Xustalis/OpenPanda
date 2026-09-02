@@ -878,10 +878,29 @@ func (r *repl) cmdTasks(arg string) {
 		fmt.Println(i18n.T(r.loc, "repl.tasks.none"))
 		return
 	}
-	fmt.Println(i18n.T(r.loc, "repl.tasks.head"))
-	for _, t := range tasks {
-		fmt.Printf("  %-36s %-10s %-8s %-8s %s\n", t.TaskID, t.State, priorityName(t.Priority), orDash(t.OwnerNode), t.Title)
+	printTaskTable(r.loc, tasks)
+}
+
+// resolveRef resolves a task reference for a REPL command. Same rules as the
+// one-shot CLI (full id, or a unique prefix — the form every listing shows), but
+// a bad reference reports and returns false rather than ending the process: the
+// REPL survives a typo.
+func (r *repl) resolveRef(ref string) (string, bool) {
+	id, err := r.store.ResolveTaskID(context.Background(), ref)
+	switch {
+	case err == nil:
+		return id, true
+	case errors.Is(err, sql.ErrNoRows):
+		fmt.Println(i18n.Tf(r.loc, "repl.task.none", "id", ref))
+	default:
+		var amb *core.AmbiguousTaskIDError
+		if errors.As(err, &amb) {
+			fmt.Println(ambiguousTaskMsg(r.loc, amb))
+			return "", false
+		}
+		r.storeErr(err)
 	}
+	return "", false
 }
 
 // cmdTask shows one task's row and event timeline.
@@ -890,12 +909,12 @@ func (r *repl) cmdTask(arg string) {
 		fmt.Println("/task " + i18n.T(r.loc, "cmd.task"))
 		return
 	}
-	t, err := r.store.Get(context.Background(), arg)
+	id, ok := r.resolveRef(arg)
+	if !ok {
+		return
+	}
+	t, err := r.store.Get(context.Background(), id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			fmt.Println(i18n.Tf(r.loc, "repl.task.none", "id", arg))
-			return
-		}
 		r.storeErr(err)
 		return
 	}
@@ -916,7 +935,11 @@ func (r *repl) cmdCancel(arg string) {
 		fmt.Println("/cancel " + i18n.T(r.loc, "cmd.cancel"))
 		return
 	}
-	ids, err := r.store.CancelCascade(context.Background(), arg)
+	id, ok := r.resolveRef(arg)
+	if !ok {
+		return
+	}
+	ids, err := r.store.CancelCascade(context.Background(), id)
 	if err != nil {
 		r.storeErr(err)
 		return
@@ -960,19 +983,27 @@ func (r *repl) cmdApprove(arg string) {
 		fmt.Println("/approve " + i18n.T(r.loc, "cmd.approve"))
 		return
 	}
-	if err := r.store.Approve(context.Background(), arg); err != nil {
+	id, ok := r.resolveRef(arg)
+	if !ok {
+		return
+	}
+	if err := r.store.Approve(context.Background(), id); err != nil {
 		r.storeErr(err)
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.approve.done", "id", arg))
+	fmt.Println(i18n.Tf(r.loc, "repl.approve.done", "id", id))
 }
 
 // cmdReject rejects a reviewed task (review -> failed); the reason is the
 // rest of the line after the id.
 func (r *repl) cmdReject(arg string) {
-	id, reason, _ := strings.Cut(arg, " ")
-	if id == "" {
+	ref, reason, _ := strings.Cut(arg, " ")
+	if ref == "" {
 		fmt.Println("/reject " + i18n.T(r.loc, "cmd.reject"))
+		return
+	}
+	id, ok := r.resolveRef(ref)
+	if !ok {
 		return
 	}
 	if err := r.store.Reject(context.Background(), id, strings.TrimSpace(reason)); err != nil {
@@ -988,7 +1019,11 @@ func (r *repl) cmdLogs(arg string) {
 		fmt.Println("/logs " + i18n.T(r.loc, "cmd.logs"))
 		return
 	}
-	r.printEvents(arg)
+	id, ok := r.resolveRef(arg)
+	if !ok {
+		return
+	}
+	r.printEvents(id)
 }
 
 // printEvents prints a task's event lines, or the none-message.
@@ -1002,9 +1037,7 @@ func (r *repl) printEvents(id string) {
 		fmt.Println(i18n.Tf(r.loc, "repl.logs.none", "id", id))
 		return
 	}
-	for _, e := range events {
-		fmt.Printf("  %s  %-10s %s\n", ts(e.TS), e.Type, e.DataJSON)
-	}
+	printEventTimeline(events, "  ")
 }
 
 // cmdSessions lists chat sessions (the web console's session rail).

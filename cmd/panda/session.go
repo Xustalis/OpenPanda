@@ -12,9 +12,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -95,9 +97,33 @@ func runSessionList(args []string) {
 		fmt.Println(i18n.T(loc, "cli.session.none"))
 		return
 	}
+	// Same column discipline as the task board: sized to the data, clipped
+	// rather than wrapped, and a dim header so the columns name themselves.
+	idW := cliui.DisplayWidth(i18n.T(loc, "cli.col.id"))
+	branchW := cliui.DisplayWidth(i18n.T(loc, "cli.col.branch"))
 	for _, s := range list {
-		branch := orDash(s.Branch)
-		fmt.Printf("%-16s %-25s %-24s turns=%-3d %s\n", s.ID, s.UpdatedAt.Format("2006-01-02 15:04"), branch, len(s.Turns), s.Title)
+		idW = max(idW, cliui.DisplayWidth(s.ID))
+		branchW = max(branchW, cliui.DisplayWidth(orDash(s.Branch)))
+	}
+	idW, branchW = min(idW, 18), min(branchW, 22)
+	const whenW, turnsW = 16, 6
+	titleW := max(20, listWidth()-(idW+whenW+branchW+turnsW+4))
+
+	fmt.Println(listHeader(
+		cell(i18n.T(loc, "cli.col.id"), idW),
+		cell(i18n.T(loc, "cli.col.when"), whenW),
+		cell(i18n.T(loc, "cli.col.branch"), branchW),
+		cell(i18n.T(loc, "cli.col.turns"), turnsW),
+		i18n.T(loc, "cli.col.title"),
+	))
+	for _, s := range list {
+		fmt.Println(row(
+			cell(s.ID, idW),
+			cell(s.UpdatedAt.Format("2006-01-02 15:04"), whenW),
+			cell(orDash(s.Branch), branchW),
+			cell(strconv.Itoa(len(s.Turns)), turnsW),
+			cell(s.Title, titleW),
+		))
 	}
 }
 

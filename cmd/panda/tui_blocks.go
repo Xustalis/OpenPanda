@@ -57,7 +57,7 @@ func (b block) render(t theme, width int, expandThought bool) string {
 		// dialogue rather than an undifferentiated wall of text.
 		return t.accent.Render(t.glyph("❯", ">")) + " " + b.body
 	case blockAnswer:
-		return b.body
+		return answerText(t, b.body, width)
 	case blockThought:
 		return b.renderThought(t, expandThought)
 	case blockNote:
@@ -70,6 +70,19 @@ func (b block) render(t theme, width int, expandThought bool) string {
 		return b.body
 	}
 	return b.body
+}
+
+// answerText lays out assistant prose under a marker glyph: wrapped to the
+// remaining width and hung under a two-column indent. The user's prompt already
+// commits with a "❯", so an unmarked answer left the two halves of a turn looking
+// like different kinds of thing — and a one-word reply ("2") was
+// indistinguishable from a stray line of terminal output. The live region uses
+// this same function, so a streaming answer does not shift when it commits.
+func answerText(t theme, body string, width int) string {
+	if width > 4 {
+		body = wrap(body, width-2)
+	}
+	return indentLines(body, t.accent.Render(t.glyph("⏺", "*"))+" ", "  ")
 }
 
 // renderThought draws the collapsible chain-of-thought. Folded, it is a single
@@ -179,9 +192,18 @@ func indentLines(s, first, cont string) string {
 // wrap hard-wraps s to width columns using lipgloss's width-aware wrapper, so
 // answer prose reflows to the terminal instead of running off the edge. A
 // non-positive width is a no-op (the model has not learned its size yet).
+//
+// lipgloss pads every wrapped line out to the block width; that padding is
+// stripped here. A committed block is written into the terminal's own scrollback,
+// so the spaces would survive in anything the user copies out of it — and the
+// live region is repainted by Bubble Tea, which clears its own lines.
 func wrap(s string, width int) string {
 	if width <= 0 {
 		return s
 	}
-	return lipgloss.NewStyle().Width(width).Render(s)
+	lines := strings.Split(lipgloss.NewStyle().Width(width).Render(s), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimRight(l, " ")
+	}
+	return strings.Join(lines, "\n")
 }

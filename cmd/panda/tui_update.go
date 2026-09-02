@@ -19,10 +19,16 @@ import (
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		first := !m.ready
 		m.width, m.height = msg.Width, msg.Height
 		m.ready = true
 		// The input spans the width minus the frame's border+padding (2+2).
 		m.ta.SetWidth(max(20, msg.Width-4))
+		if first {
+			// First size report: now the welcome frame can be drawn to the real
+			// terminal instead of to a guess (see Init).
+			return m, tea.Println(m.welcome())
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -55,7 +61,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// dispatch error as a transcript block, otherwise just resume idle.
 		if msg.err != nil {
 			blk := block{kind: blockError, body: msg.err.Error()}
-			return m, tea.Println(blk.render(m.th, m.width, m.expandThought))
+			return m, m.printBlock(blk)
 		}
 		return m, nil
 	case droppedMsg:
@@ -123,7 +129,7 @@ func (m tuiModel) interrupt() (tea.Model, tea.Cmd) {
 		// plainly what the key did not do — leaving the spinner up is more
 		// honest than returning to a prompt while work continues.
 		note := block{kind: blockNote, body: i18n.T(m.loc, "tui.turn.busy")}
-		return m, tea.Println(note.render(m.th, m.width, m.expandThought))
+		return m, m.printBlock(note)
 	}
 
 	m.stream.drop()
@@ -133,7 +139,7 @@ func (m tuiModel) interrupt() (tea.Model, tea.Cmd) {
 	note := block{kind: blockNote, body: i18n.T(m.loc, "tui.turn.detached")}
 	return m, tea.Batch(
 		m.turnEnded(),
-		tea.Println(note.render(m.th, m.width, m.expandThought)),
+		m.printBlock(note),
 	)
 }
 
@@ -227,7 +233,7 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 	}
 	// Echo the prompt into scrollback so the committed transcript reads as a
 	// dialogue, then start the ask.
-	cmds := []tea.Cmd{tea.Println(block{kind: blockUser, body: text}.render(m.th, m.width, m.expandThought))}
+	cmds := []tea.Cmd{m.printBlock(block{kind: blockUser, body: text})}
 
 	// @path references become inline file blocks before the prompt leaves the
 	// front end, so "explain @main.go" works without pasting the file. The
@@ -238,7 +244,7 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 		var notes []string
 		prompt, notes = m.r.expandFileRefsNotes(text)
 		for _, n := range notes {
-			cmds = append(cmds, tea.Println(block{kind: blockNote, body: n}.render(m.th, m.width, m.expandThought)))
+			cmds = append(cmds, m.printBlock(block{kind: blockNote, body: n}))
 		}
 	}
 

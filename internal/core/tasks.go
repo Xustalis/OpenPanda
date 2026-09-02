@@ -1350,6 +1350,79 @@ func (s *TaskStore) Idle(ctx context.Context) bool {
 	return true
 }
 
+// AmbiguousTaskIDError reports that a task-id prefix matched more than one task.
+// It carries the candidates so a CLI can show the user what to disambiguate
+// between instead of only saying that it could not decide.
+type AmbiguousTaskIDError struct {
+	Ref        string
+	Candidates []string
+}
+
+func (e *AmbiguousTaskIDError) Error() string {
+	return fmt.Sprintf("ambiguous task id %s (%d matches)", e.Ref, len(e.Candidates))
+}
+
+// resolveCandidates caps how many matches a prefix lookup reports. Three is
+// enough to show the user the collision without printing a page of ids.
+const resolveCandidates = 3
+
+// ResolveTaskID turns a user-typed task reference into a full task id. An exact
+// id is returned unchanged (a full id always wins, so a prefix that happens to
+// be another task's whole id is never surprising); otherwise the ref is matched
+// as a prefix.
+//
+// This exists because every listing surface abbreviates a task id to its first
+// UUID group — that is the only way a row fits a terminal — and an id a user can
+// read but not type is not an id. Prefixes do collide: UUIDv7 puts a millisecond
+// timestamp in exactly those leading bytes, so two tasks submitted in the same
+// second share the group. That is why the ambiguous case is an error with
+// candidates rather than a newest-wins guess: acting on the wrong task is worse
+// than asking.
+func (s *TaskStore) ResolveTaskID(ctx context.Context, ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", sql.ErrNoRows
+	}
+	var exact string
+	err := s.db.QueryRowContext(ctx, `SELECT task_id FROM tasks WHERE task_id = ?`, ref).Scan(&exact)
+	if err == nil {
+		return exact, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT task_id FROM tasks WHERE task_id LIKE ? ORDER BY created_at DESC LIMIT ?`,
+		ref+"%", resolveCandidates+1)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var found []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		found = append(found, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	switch len(found) {
+	case 0:
+		return "", sql.ErrNoRows
+	case 1:
+		return found[0], nil
+	default:
+		if len(found) > resolveCandidates {
+			found = found[:resolveCandidates]
+		}
+		return "", &AmbiguousTaskIDError{Ref: ref, Candidates: found}
+	}
+}
+
 // ListByState returns tasks filtered by state ("" = all), newest first.
 func (s *TaskStore) ListByState(ctx context.Context, state string) ([]Task, error) {
 	q := `SELECT ` + taskColumns + ` FROM tasks`

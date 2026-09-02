@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -91,6 +92,7 @@ func runTaskShow(args []string) {
 	}
 	defer db.Close()
 
+	id = resolveTaskRef(store, id)
 	t, err := store.Get(context.Background(), id)
 	if err != nil {
 		taskStoreFatal(err, id)
@@ -101,37 +103,41 @@ func runTaskShow(args []string) {
 		return
 	}
 
-	fmt.Printf("id:       %s\n", t.TaskID)
-	fmt.Printf("parent:   %s\n", orDash(t.ParentID))
-	fmt.Printf("project:  %s\n", orDash(t.Project))
-	fmt.Printf("title:    %s\n", t.Title)
-	fmt.Printf("state:    %s\n", t.State)
-	fmt.Printf("priority: %s\n", priorityName(t.Priority))
-	fmt.Printf("owner:    %s\n", t.OwnerNode)
-	fmt.Printf("attempt:  %s\n", t.AttemptID)
-	fmt.Printf("chain:    %s\n", strings.Join(t.Chain, " -> "))
-	fmt.Printf("created:  %s\n", ts(t.CreatedAt))
-	fmt.Printf("updated:  %s\n", ts(t.UpdatedAt))
+	// One field printer for the whole record: the labels line up (they did not —
+	// "complexity:" is a column wider than the format string allowed for), and a
+	// multi-line value hangs under its own label instead of starting at column
+	// zero, where a long intent used to read as the end of the record.
+	taskField("id", t.TaskID)
+	taskField("parent", orDash(t.ParentID))
+	taskField("project", orDash(t.Project))
+	taskField("title", t.Title)
+	taskField("state", colorState(t.State))
+	taskField("priority", priorityName(t.Priority))
+	taskField("owner", t.OwnerNode)
+	taskField("attempt", t.AttemptID)
+	taskField("chain", strings.Join(t.Chain, " "+pal().MarkArrow()+" "))
+	taskField("created", ts(t.CreatedAt))
+	taskField("updated", ts(t.UpdatedAt))
 	if t.SessionID != "" {
-		fmt.Printf("session:  %s\n", t.SessionID)
+		taskField("session", t.SessionID)
 	}
 	if t.ContextType != "" {
-		fmt.Printf("context:  %s\n", t.ContextType)
+		taskField("context", t.ContextType)
 	}
 	if t.Intent != "" {
-		fmt.Printf("intent:   %s\n", t.Intent)
+		taskField("intent", t.Intent)
 	}
 	if t.SpecJSON != "" {
-		fmt.Printf("spec:     %s\n", t.SpecJSON)
+		printTaskSpec(t.SpecJSON)
 	}
 	if t.Risk != "" {
-		fmt.Printf("risk:     %s\n", t.Risk)
+		taskField("risk", t.Risk)
 	}
 	if t.Complexity != 0 {
-		fmt.Printf("complexity: %.2f\n", t.Complexity)
+		taskField("complexity", fmt.Sprintf("%.2f", t.Complexity))
 	}
 	if t.ResultJSON != "" {
-		fmt.Printf("result:   %s\n", t.ResultJSON)
+		printTaskResult(t.ResultJSON)
 	}
 
 	events, err := store.Events(context.Background(), id)
@@ -139,9 +145,93 @@ func runTaskShow(args []string) {
 		fatal("load events", err)
 	}
 	if len(events) > 0 {
-		fmt.Println("events:")
-		for _, e := range events {
-			fmt.Printf("  %s  %-10s %s\n", ts(e.TS), e.Type, e.DataJSON)
+		fmt.Println(pal().Heading("events:"))
+		printEventTimeline(events, "  ")
+	}
+}
+
+// taskFieldWidth is the label column of the task record, sized to its longest
+// label ("complexity:") plus a space.
+const taskFieldWidth = 12
+
+// taskField prints one label/value line of the task record, hanging a multi-line
+// value under the label so the record stays one readable block.
+func taskField(label, value string) {
+	head := pal().Muted(cell(label+":", taskFieldWidth))
+	lines := strings.Split(strings.TrimRight(value, "\n"), "\n")
+	fmt.Println(head + lines[0])
+	for _, l := range lines[1:] {
+		if strings.TrimSpace(l) == "" {
+			fmt.Println() // a blank line in the value stays blank, not 12 spaces
+			continue
+		}
+		fmt.Println(strings.Repeat(" ", taskFieldWidth) + l)
+	}
+}
+
+// printTaskSpec renders the classifier's structured spec as labelled lines. The
+// stored form is a JSON document, and printing it raw put the task's target and
+// success criteria — the two things a reader of `panda task` came for — inside
+// escaped quotes on one unwrappable line.
+func printTaskSpec(raw string) {
+	var spec struct {
+		Scope       string   `json:"scope"`
+		Target      string   `json:"target"`
+		Constraints []string `json:"constraints"`
+		Success     string   `json:"success_definition"`
+	}
+	if err := json.Unmarshal([]byte(raw), &spec); err != nil {
+		fmt.Printf("spec:     %s\n", raw) // unknown shape: better raw than dropped
+		return
+	}
+	p := pal()
+	field := func(label, value string) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		fmt.Printf("  %s %s\n", p.Muted(cell(label, 9)), value)
+	}
+	fmt.Println(p.Heading("spec:"))
+	field("scope", spec.Scope)
+	field("target", spec.Target)
+	for i, c := range spec.Constraints {
+		label := ""
+		if i == 0 {
+			label = "limits"
+		}
+		field(label, p.MarkBullet()+" "+c)
+	}
+	field("success", spec.Success)
+}
+
+// printTaskResult renders the executor's stored result: the outcome first, then
+// the output as text. The raw column is a JSON document whose stdout field holds
+// the entire agent report with its newlines escaped — the one field a person
+// opens `panda task` to read, in the one encoding they cannot read it in.
+func printTaskResult(raw string) {
+	var res struct {
+		ExitCode int    `json:"exit_code"`
+		OK       bool   `json:"ok"`
+		Stdout   string `json:"stdout"`
+		Stderr   string `json:"stderr"`
+		Failed   string `json:"failed"`
+	}
+	if err := json.Unmarshal([]byte(raw), &res); err != nil {
+		fmt.Printf("result:   %s\n", raw)
+		return
+	}
+	p := pal()
+	outcome := p.Success(p.MarkOK() + " ok")
+	if !res.OK {
+		outcome = p.Danger(fmt.Sprintf("%s exit %d", p.MarkFail(), res.ExitCode))
+	}
+	fmt.Println(p.Heading("result:") + " " + outcome)
+	for _, body := range []string{res.Failed, strings.TrimRight(res.Stdout, "\n"), strings.TrimRight(res.Stderr, "\n")} {
+		if strings.TrimSpace(body) == "" {
+			continue
+		}
+		for _, line := range strings.Split(body, "\n") {
+			fmt.Println("  " + line)
 		}
 	}
 }
@@ -176,6 +266,35 @@ func taskToJSON(t core.Task) taskJSON {
 		Created:  ts(t.CreatedAt),
 		Updated:  ts(t.UpdatedAt),
 	}
+}
+
+// resolveTaskRef turns a user-typed task reference into a full task id, or ends
+// the command with a message that says what to type instead. Every listing shows
+// a task by its short id, so every command that takes one has to accept it.
+func resolveTaskRef(store *core.TaskStore, ref string) string {
+	id, err := store.ResolveTaskID(context.Background(), ref)
+	if err == nil {
+		return id
+	}
+	var amb *core.AmbiguousTaskIDError
+	if errors.As(err, &amb) {
+		fmt.Fprintln(os.Stderr, "panda: "+ambiguousTaskMsg(i18n.Detect(), amb))
+		os.Exit(2)
+	}
+	taskStoreFatal(err, ref)
+	return ""
+}
+
+// ambiguousTaskMsg phrases a prefix collision: how many tasks it hit, then the
+// ids themselves — the user's next command is a copy-paste from this list, so
+// printing the candidates is the whole point of the message.
+func ambiguousTaskMsg(loc i18n.Locale, amb *core.AmbiguousTaskIDError) string {
+	msg := i18n.Tf(loc, "cli.task.ambiguous",
+		"ref", amb.Ref, "n", strconv.Itoa(len(amb.Candidates)))
+	for _, c := range amb.Candidates {
+		msg += "\n  " + c
+	}
+	return msg
 }
 
 func taskStoreFatal(err error, id string) {
@@ -306,6 +425,7 @@ func runTaskPriority(args []string) {
 		fatal("open store", err)
 	}
 	defer db.Close()
+	id = resolveTaskRef(store, id)
 	if err := store.SetPriority(context.Background(), id, prio); err != nil {
 		fatal("set priority", err)
 	}
@@ -341,6 +461,7 @@ func runTaskMove(args []string) {
 		fatal("open store", oerr)
 	}
 	defer db.Close()
+	id = resolveTaskRef(store, id)
 	if err := store.SetSeq(context.Background(), id, seq); err != nil {
 		fatal("move task", err)
 	}

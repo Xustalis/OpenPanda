@@ -68,11 +68,15 @@ func watchQueue(ctx context.Context, store *core.TaskStore, state, project strin
 				p.Bold(i18n.T(loc, "cli.watch.head")), time.Now().Format("15:04:05"),
 				p.Muted(i18n.Tf(loc, "cli.watch.hint", "key", "^C")))
 			if len(rows) == 0 {
-				fmt.Println("  " + i18n.T(loc, "cli.queue.none"))
+				fmt.Print("  " + i18n.T(loc, "cli.queue.none") + "\r\n")
 			}
+			// Same column plan and same row renderer as the one-shot listing, so
+			// the two boards stay one board. The indent is the board's own, and
+			// it is charged against the width so a row still fits the terminal.
+			cols := planTaskTable(loc, rows, listWidth()-2)
+			fmt.Print("  " + taskTableHeader(loc, cols) + "\r\n")
 			for _, t := range rows {
-				fmt.Printf("  %-10s %s %-8s %-12s %s\r\n",
-					shortID(t.TaskID), stateCell(t.State, 12), priorityName(t.Priority), orDash(t.OwnerNode), clipRunes(t.Title, 44))
+				fmt.Print("  " + taskTableRow(t, cols) + "\r\n")
 			}
 			fmt.Print("\x1b[J") // clear stale rows below (shrunk lists)
 		}
@@ -113,13 +117,4 @@ func stateCell(s string, n int) string {
 		pad = 0
 	}
 	return colorState(s) + strings.Repeat(" ", pad)
-}
-
-// clipRunes truncates s to at most n runes with an ellipsis marker.
-func clipRunes(s string, n int) string {
-	rs := []rune(s)
-	if len(rs) <= n {
-		return s
-	}
-	return string(rs[:n-1]) + "…"
 }
