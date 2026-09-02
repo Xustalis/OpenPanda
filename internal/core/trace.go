@@ -13,13 +13,17 @@ import (
 // Best-effort only: a write failure is logged and otherwise ignored. The
 // scheduling/delegation/supervision machines must never stall on visibility.
 const (
-	EvClassifyResult   = "classify_result"    // entry.Classify success → kind/note/stages
-	EvRouteDecision    = "route_decision"     // scheduler.Route → action/target/reason/score_breakdown/candidates
-	EvDelegationHop    = "delegation_hop"     // handleTaskAccept/Result → from/to/via/chain/attempt_id
-	EvExecAgentStart   = "exec_agent_start"   // router.Execute before agent run → agent/adapter/injected
-	EvJudgeStart       = "judge_start"        // supervision loop right before the judge call → round/budget; the CLI's reviewing stage starts here
-	EvSupervisionRound = "supervision_round"  // supervise loop each round → round/budget/verdict/judge_summary
-	EvTier2Triggered   = "tier2_triggered"    // defense.Authorize tier≥2 result → operations/parked_in_review
+	EvClassifyResult   = "classify_result"   // entry.Classify success → kind/note/stages
+	EvRouteDecision    = "route_decision"    // scheduler.Route → action/target/reason/score_breakdown/candidates
+	EvDelegationHop    = "delegation_hop"    // handleTaskAccept/Result → from/to/via/chain/attempt_id
+	EvExecAgentStart   = "exec_agent_start"  // router.Execute before agent run → agent/adapter/injected
+	EvJudgeStart       = "judge_start"       // supervision loop right before the judge call → round/budget; the CLI's reviewing stage starts here
+	EvSupervisionRound = "supervision_round" // supervise loop each round → round/budget/verdict/judge_summary
+	EvTier2Triggered   = "tier2_triggered"   // defense.Authorize tier≥2 result → operations/parked_in_review
+	// EvProjectSync records that a project task's tree came back from the
+	// executor and was extracted into this node's copy of the project → what
+	// changed, and where it landed.
+	EvProjectSync      = "project_sync"
 	EvPlanStageChanged = "plan_stage_changed" // plan stage unlock/start/complete → plan_id/stage_id/transition
 	EvArtifactTransfer = "artifact_transfer"  // artifact fetch → from/to/hash/size/ok/elapsed
 	EvAgentUsage       = "agent_usage"        // adapter's structured token breakdown → agent/input/output/cache_*

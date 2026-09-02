@@ -230,6 +230,9 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		StageID: t.StageID,
 		Inputs:  t.Inputs,
 	}
+	// Same project carriage as the synchronous path: a queued task delegated to a
+	// peer must arrive with its project context or the peer cannot use it.
+	c.attachProject(ctx, &p, t.Project)
 	// Hop-limited consent (S2-8): a queue forward is one direct dispatch, so
 	// the consent on record covers exactly the receiving hop and must not walk
 	// further through a forwarding sub-scheduler.

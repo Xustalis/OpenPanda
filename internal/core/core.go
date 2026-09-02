@@ -22,6 +22,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -132,6 +133,13 @@ type Core struct {
 	// response, so handleContextAck can resume the task once the snapshot
 	// arrives.
 	pendingCtx sync.Map // string -> *pendingContext
+
+	// projects is the project metadata table, and projectsRoot the directory the
+	// per-project memory trees live under. Set together by SetProjectStores; nil
+	// means this node does not participate in project-aware delegation (it still
+	// runs project tasks, just without carrying the project's context).
+	projects     *projects.Store
+	projectsRoot string
 
 	// artifacts is the node's content-addressed pool of task outputs: the data
 	// plane that lets one node consume what another produced. Nil on a node
@@ -400,6 +408,16 @@ func (c *Core) SetMemoryStores(inj *memory.Injector, daily *memory.Daily, sk *sk
 	if sk != nil {
 		c.tracker = skills.NewTracker(sk)
 	}
+}
+
+// SetProjectStores attaches the project plane: the metadata table (which knows a
+// project's work tree) and the root of the project memory directories. Both are
+// needed to make a delegated project task mean anything on the receiving machine
+// — one supplies the tree to send, the other the directory to land memory in.
+// Either may be zero, which leaves project-aware delegation off.
+func (c *Core) SetProjectStores(store *projects.Store, projectsRoot string) {
+	c.projects = store
+	c.projectsRoot = projectsRoot
 }
 
 // SetWorkDir pins the directory agents execute in and scope drift is measured

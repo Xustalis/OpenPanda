@@ -103,7 +103,39 @@ type TaskDelegatePayload struct {
 	PlanID  string        `json:"plan_id,omitempty"`
 	StageID string        `json:"stage_id,omitempty"`
 	Inputs  []ArtifactRef `json:"inputs,omitempty"`
+
+	// Project plane (v0.0.8). A task that belongs to a project used to travel as
+	// a bare project *name*, which meant nothing on the receiving machine: the
+	// executor looked the name up in its own empty projects directory, found no
+	// memory and no tree, and ran an agent that could not tell what it was
+	// working on. These two fields are what make the name mean something.
+	//
+	// ProjectPack is the project's own directory — its MEMORY.md and any
+	// project-scoped skills — packed as a tar.gz and carried inline. It is
+	// bounded (MaxProjectPackBytes) because it rides in the message rather than
+	// being fetched: project memory is capped at a few thousand characters by
+	// design, so inline is cheaper than a round trip.
+	//
+	// The project's *work tree* does not travel here. It goes through the
+	// artifact plane as an entry in Inputs, which already knows how to move a
+	// tree in chunks and how to skip the transfer when the receiver holds the
+	// hash already.
+	//
+	// ProjectDir is the origin's path for the tree. It is display and log
+	// material only — a path from another machine names nothing here, and the
+	// executor derives its own directory (see Core.projectWorkDir).
+	ProjectPack []byte `json:"project_pack,omitempty"`
+	ProjectDir  string `json:"project_dir,omitempty"`
 }
+
+// MaxProjectPackBytes bounds the inline project pack. Project memory is capped
+// at a few thousand characters and a skill is a Markdown file, so a real pack is
+// kilobytes; the cap is what keeps a project directory that has accumulated
+// something unexpected (a stray binary) from being pushed through every
+// delegation. Over the cap the pack is dropped and the delegation proceeds
+// without it — the task still runs, with less context, which is strictly better
+// than a message that cannot be sent.
+const MaxProjectPackBytes = 1 << 20
 
 // ArtifactRef names one artifact and a node known to hold it — the data-plane
 // half of a stage dependency. A hash alone is not enough to fetch: content

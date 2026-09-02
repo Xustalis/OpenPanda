@@ -135,7 +135,16 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 				c.logger.Warn("set stage inputs", "task", t.TaskID, "err", err)
 			}
 		}
+	} else if len(p.Inputs) > 0 {
+		// A standalone task's inputs are its project tree. The column is the same
+		// one a stage uses; run() pulls from it either way.
+		if err := c.store.SetStageInputs(ctx, t.TaskID, p.Inputs); err != nil {
+			c.logger.Warn("set project inputs", "task", t.TaskID, "err", err)
+		}
 	}
+	// The project's memory lands before anything runs, so the agent reads it from
+	// the same path a local task would.
+	c.landProjectPack(p.Project, p.ProjectPack)
 	if p.TimeoutMS > 0 {
 		if err := c.store.SetLease(ctx, t.TaskID, p.TimeoutMS); err != nil {
 			c.logger.Warn("set lease", "task", t.TaskID, "err", err)
@@ -678,6 +687,23 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if err := c.fetchStageInputs(execCtx, task, workDir); err != nil {
 			return bus.TaskResultPayload{}, fmt.Errorf("stage inputs: %w", err)
 		}
+	} else if projectInputs(task) {
+		// A delegated project task: the tree it must start from arrived as an
+		// artifact reference, and it unpacks into this node's own directory for the
+		// project. Failing rather than running on an absent tree is the same
+		// judgement the stage path makes — an agent let loose in an empty directory
+		// reports success over work it never had the inputs to do.
+		wd, err := c.projectWorkDir(task.Project)
+		if err != nil {
+			return bus.TaskResultPayload{}, err
+		}
+		workDir = wd
+		if err := os.MkdirAll(workDir, 0o755); err != nil {
+			return bus.TaskResultPayload{}, fmt.Errorf("create project work dir: %w", err)
+		}
+		if err := c.fetchStageInputs(execCtx, task, workDir); err != nil {
+			return bus.TaskResultPayload{}, fmt.Errorf("project inputs: %w", err)
+		}
 	}
 
 	// Scope drift (design §14.2 signal A): for an agent task that declares a
@@ -1111,6 +1137,17 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		var perr error
 		if outputArtifact, perr = c.packStageOutput(ctx, task, workDir); perr != nil {
 			return bus.TaskResultPayload{}, perr
+		}
+	} else if projectInputs(task) {
+		// A project task executed on someone else's behalf hands its tree back the
+		// same way a stage does, so the changes it made reach the machine that
+		// asked. A pack failure is a warning rather than a failure here: the work
+		// itself succeeded, and reporting it failed would be a worse lie than
+		// reporting it without the tree.
+		if hash, perr := c.packStageOutput(ctx, task, workDir); perr != nil {
+			c.logger.Warn("pack project output", "task", taskID, "err", perr)
+		} else {
+			outputArtifact = hash
 		}
 	}
 
@@ -1612,6 +1649,8 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	if t.Authorized {
 		payload.AuthHops = 1
 	}
+	// A re-routed project task needs its context as much as the first attempt did.
+	c.attachProject(ctx, &payload, t.Project)
 	if t.ContextHash != "" {
 		payload.ContextLevel = "pointer"
 	}
@@ -1715,6 +1754,8 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 	// approves the stage.
 	if t.PlanID != "" {
 		c.adoptStageOutput(ctx, t, env.From, p.OutputArtifact)
+	} else if t.Project != "" && p.OutputArtifact != "" {
+		c.adoptProjectOutput(ctx, t, env.From, p.OutputArtifact)
 	}
 
 	// Record delegation outcome for scheduling analysis (B2). Only record when
