@@ -390,6 +390,25 @@ function PolicySection() {
       </div>
 
       <div class="field-group">
+        <label>{t('policy.tools')}</label>
+        <div class="segmented" role="radiogroup">
+          {(['minimal', 'extended'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="radio"
+              aria-checked={form.tools_policy === v}
+              class={`seg${form.tools_policy === v ? ' on' : ''}`}
+              onClick={() => patch({ tools_policy: v })}
+            >
+              {t(v === 'minimal' ? 'policy.toolsMinimal' : 'policy.toolsExtended')}
+            </button>
+          ))}
+        </div>
+        <p class="hint">{t('policy.toolsHelp')}</p>
+      </div>
+
+      <div class="field-group">
         <label for="preferred-agents">{t('settings.preferredAgents')}</label>
         <input
           id="preferred-agents"
