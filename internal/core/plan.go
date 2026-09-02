@@ -27,6 +27,7 @@ package core
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -97,6 +98,62 @@ func (s *TaskStore) PlanStages(ctx context.Context, planID string) ([]Task, erro
 	}
 	defer rows.Close()
 	return scanTasks(rows)
+}
+
+// PlanSummary is one plan as a listing row: how many stages it has, how many have
+// finished, and when it was last active. It is what a plan board needs before the
+// user picks one to open, and it is derived rather than stored — a plan has no row
+// of its own, only the stages that carry its id.
+type PlanSummary struct {
+	PlanID    string   `json:"plan_id"`
+	Stages    int      `json:"stages"`
+	Done      int      `json:"done"`
+	Failed    int      `json:"failed"`
+	Running   int      `json:"running"`
+	Review    int      `json:"review"`
+	Goal      string   `json:"goal,omitempty"`
+	StageIDs  []string `json:"stage_ids,omitempty"`
+	CreatedAt int64    `json:"created_at"`
+	UpdatedAt int64    `json:"updated_at"`
+}
+
+// ListPlans summarizes every plan this node knows, most recently active first.
+//
+// There is no plans table: a plan is exactly the set of tasks sharing a plan_id
+// (that is what makes a stage an ordinary task, with the CAS state machine, the
+// lease and the audit chain it already had). So the listing is an aggregate over
+// tasks, served by idx_tasks_plan.
+func (s *TaskStore) ListPlans(ctx context.Context) ([]PlanSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT plan_id, COUNT(*), MIN(created_at), MAX(updated_at),
+		       SUM(state = 'done'), SUM(state = 'failed'),
+		       SUM(state IN ('running', 'dispatched', 'waiting_context')), SUM(state = 'review'),
+		       GROUP_CONCAT(stage_id), MIN(title)
+		FROM tasks
+		WHERE plan_id IS NOT NULL AND plan_id != ''
+		GROUP BY plan_id
+		ORDER BY MAX(updated_at) DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PlanSummary
+	for rows.Next() {
+		var p PlanSummary
+		var stageIDs, goal sql.NullString
+		if err := rows.Scan(&p.PlanID, &p.Stages, &p.CreatedAt, &p.UpdatedAt,
+			&p.Done, &p.Failed, &p.Running, &p.Review, &stageIDs, &goal); err != nil {
+			return nil, err
+		}
+		if stageIDs.Valid && stageIDs.String != "" {
+			p.StageIDs = strings.Split(stageIDs.String, ",")
+		}
+		// A plan has no goal of its own on disk; the first stage's title is the
+		// closest thing to one, and it is what the user typed the plan for.
+		p.Goal = goal.String
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 // RecordArtifact indexes an artifact this node holds. The row is the pool's

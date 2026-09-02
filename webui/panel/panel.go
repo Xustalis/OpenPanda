@@ -100,6 +100,11 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/reject", h.rejectTask)
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", h.cancelTask)
 	mux.HandleFunc("GET /api/tasks/{id}/logs", h.taskLogs)
+	// The plan plane: read-only views over the tasks that already carry a
+	// plan_id. Starting a plan stays on /api/ask, which classifies and returns
+	// the id; these two are how the console follows one afterwards.
+	mux.HandleFunc("GET /api/plans", h.listPlans)
+	mux.HandleFunc("GET /api/plans/{id}", h.getPlan)
 	mux.HandleFunc("POST /api/ask", h.ask)
 	mux.HandleFunc("GET /api/agents", h.listAgents)
 	mux.HandleFunc("POST /api/agents/{name}/test", h.testAgent)
