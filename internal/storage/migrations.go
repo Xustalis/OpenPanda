@@ -37,6 +37,38 @@ var migrations = []Migration{
 	{Version: 12, Name: "add_plan_stages_and_artifacts", Apply: migrateV12},
 	{Version: 13, Name: "add_result_outbox", Apply: migrateV13},
 	{Version: 14, Name: "add_cancel_outbox", Apply: migrateV14},
+	{Version: 15, Name: "add_projects_and_settings", Apply: migrateV15},
+}
+
+// migrateV15 adds projects and settings.
+//
+// A project used to be nothing but a Markdown file under projects/ — tasks
+// carried a project *name* and the queue could filter on it, but there was
+// nowhere to record what the project is, where its files live, or which one the
+// user is currently working in. So every ask had to name it again, and a task
+// delegated to another machine arrived with a name whose directory that machine
+// had never heard of.
+//
+// projects.work_dir is what makes the project portable: it is the tree a task
+// runs in, and therefore the tree that travels with a delegation (see the
+// artifact plane). settings is a small key/value table for state that has to
+// outlive a process without belonging to the config file — active_project first
+// among them, since `panda ask` is one-shot and cannot hold it in memory.
+func migrateV15(tx MigrationExec) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS projects (
+		name TEXT PRIMARY KEY,
+		work_dir TEXT NOT NULL DEFAULT '',
+		description TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	)`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS settings (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	)`)
+	return err
 }
 
 // migrateV14 adds cancel_outbox: the delivery guarantee for task_cancel
