@@ -2,16 +2,15 @@ package defense
 
 import "testing"
 
-// TestTierCrossPlatformDestructiveForms pins the tier inference for the command
-// shapes an audit expects to be irreversible. Every case here graded Tier 1
-// before v0.0.6: the table knew only POSIX verbs, three interpreters were
-// missing entirely, and the attached code-flag form ("python -cCODE") slipped
-// past the code scanner because codeArg only ever read the *next* argument.
+// TestTierCrossPlatformIrreversibleForms pins the command shapes that must still
+// reach approval after the policy narrowed to "irreversible only". Every row here
+// destroys data, reshapes a disk, stops the machine, or hides which of those it
+// is doing — on POSIX and on Windows alike, since a Windows node is a first-class
+// executor and `del /f /s /q` destroys exactly as much as `rm -rf`.
 //
-// The Windows rows are not hypothetical — a Windows node executes tasks in this
-// network, and "irreversible operations enter pending-approval" is only true if
-// `powershell -Command "Remove-Item -Recurse -Force"` is classified as one.
-func TestTierCrossPlatformDestructiveForms(t *testing.T) {
+// The unwrapping paths matter as much as the verbs: a verb behind an interpreter
+// flag, an opaque wrapper, or a pass-through wrapper is the same verb.
+func TestTierCrossPlatformIrreversibleForms(t *testing.T) {
 	cases := []struct {
 		name string
 		cmd  string
@@ -20,7 +19,7 @@ func TestTierCrossPlatformDestructiveForms(t *testing.T) {
 		// Attached code flags: valid for python and pwsh, and previously unscanned.
 		{"python -c attached", "python3", []string{"-cimport os; os.remove('/tmp/x')"}},
 		{"node --eval=", "node", []string{"--eval=require('fs').rmSync('/tmp/x')"}},
-		// Interpreters that were absent from the table.
+		// Interpreters whose program is positional or whose runtime deletes.
 		{"awk system", "awk", []string{`BEGIN{system("rm -rf /tmp/x")}`}},
 		{"lua os.execute", "lua", []string{"-e", "os.execute('rm -rf /tmp/x')"}},
 		{"osascript shell", "osascript", []string{"-e", `do shell script "rm -rf /tmp/x"`}},
@@ -28,9 +27,11 @@ func TestTierCrossPlatformDestructiveForms(t *testing.T) {
 		{"powershell.exe path", `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
 			[]string{"-command", "Remove-Item x"}},
 		{"pwsh -c", "pwsh", []string{"-c", "rm -r -fo /x"}},
+		// Encoded code cannot be read, so it is graded by what it could hold.
 		{"pwsh -EncodedCommand", "pwsh", []string{"-EncodedCommand", "cm0gLXJmIC8="}},
+		{"pwsh -enc abbreviated", "pwsh", []string{"-enc", "cm0gLXJmIC8="}},
 		{"cmd /c del", "cmd", []string{"/c", `del /f /s /q C:\x`}},
-		{"cmd /k reg", "cmd", []string{"/k", "reg delete HKLM\\Software\\x /f"}},
+		{"cmd /c format", "cmd", []string{"/c", "format C: /q"}},
 		// Opaque wrappers: the payload is not the first positional argument.
 		{"flock", "flock", []string{"/tmp/l", "rm", "-rf", "/tmp/x"}},
 		{"script -c", "script", []string{"-c", "rm -rf /tmp/x", "/dev/null"}},
@@ -40,35 +41,24 @@ func TestTierCrossPlatformDestructiveForms(t *testing.T) {
 		// Pass-through wrappers whose inner command is positional.
 		{"setsid", "setsid", []string{"rm", "-rf", "/tmp/x"}},
 		{"ionice value flag", "ionice", []string{"-c", "2", "rm", "-rf", "/tmp/x"}},
-		// Destructive verbs the POSIX-only table missed.
+		// Deletion and in-place destruction under their own names.
 		{"truncate", "truncate", []string{"-s", "0", "/tmp/x"}},
 		{"shred", "shred", []string{"-u", "/tmp/x"}},
-		{"chown", "chown", []string{"-R", "root", "/"}},
-		{"ln -sf", "ln", []string{"-sf", "/etc/passwd", "/tmp/x"}},
-		{"curl -o", "curl", []string{"-fsSL", "http://x/y.sh", "-o", "/tmp/y.sh"}},
-		{"wget", "wget", []string{"http://x/y"}},
-		{"crontab", "crontab", []string{"/tmp/evil"}},
-		{"launchctl", "launchctl", []string{"load", "/tmp/e.plist"}},
-		{"docker run -v /", "docker", []string{"run", "-v", "/:/host", "alpine", "rm", "-rf", "/host"}},
-		{"tee", "tee", []string{"/etc/hosts"}},
-		{"rsync --delete", "rsync", []string{"-a", "--delete", "/tmp/a/", "/tmp/b/"}},
-		{"pip install", "pip", []string{"install", "evil"}},
-		{"npm install", "npm", []string{"install", "evil"}},
-		{"apt install", "apt", []string{"install", "-y", "evil"}},
-		{"winget install", "winget", []string{"install", "evil"}},
-		// Windows verbs as bare executables.
-		{"taskkill", "taskkill", []string{"/F", "/IM", "x.exe"}},
-		{"reg delete", "reg", []string{"delete", `HKLM\Software\x`, "/f"}},
-		{"icacls", "icacls", []string{"C:\\x", "/grant", "everyone:F"}},
+		{"dd", "dd", []string{"if=/dev/zero", "of=/dev/disk2"}},
+		{"mkfs", "mkfs.ext4", []string{"/dev/sdb1"}},
+		{"diskutil erase", "diskutil", []string{"eraseDisk", "APFS", "x", "disk2"}},
+		{"vssadmin", "vssadmin", []string{"delete", "shadows", "/all"}},
+		// Power state and privilege escalation.
+		{"shutdown", "shutdown", []string{"-h", "now"}},
+		{"sudo anything", "sudo", []string{"apt", "purge", "x"}},
 		// Argument-gated forms.
 		{"sed -i", "sed", []string{"-i", "s/a/b/", "/etc/hosts"}},
 		{"sed -i.bak", "sed", []string{"-i.bak", "s/a/b/", "/etc/hosts"}},
-		{"go install", "go", []string{"install", "example.com/x@latest"}},
-		// git subcommands that discard uncommitted work or run remote hooks.
-		{"git clone", "git", []string{"clone", "http://x/y"}},
+		{"rsync --delete", "rsync", []string{"-a", "--delete", "/tmp/a/", "/tmp/b/"}},
+		{"find -delete", "find", []string{"/tmp", "-delete"}},
+		{"git push --force", "git", []string{"push", "--force"}},
 		{"git checkout .", "git", []string{"checkout", "--", "."}},
-		{"git switch", "git", []string{"switch", "main"}},
-		{"git stash", "git", []string{"stash"}},
+		{"git clean -fd", "git", []string{"clean", "-fd"}},
 		// Controls that were already correct.
 		{"plain rm", "rm", []string{"-rf", "/tmp/x"}},
 		{"bash -c separated", "bash", []string{"-c", "rm -rf /tmp/x"}},
@@ -80,16 +70,18 @@ func TestTierCrossPlatformDestructiveForms(t *testing.T) {
 	}
 }
 
-// TestTierStillPassesBenignForms guards the other direction: fail-closed is only
-// affordable because ordinary read-only work stays Tier 1 and runs unattended.
-// A node that needed approval to read a temperature would defeat the point of
-// autonomous scheduling.
-func TestTierStillPassesBenignForms(t *testing.T) {
+// TestTierPassesRecoverableForms is the other half of the policy, and the half
+// that was broken: work that can be undone must run unattended. Every row here
+// graded Tier 2 before the change, so every one of them stopped a node mid-task
+// to ask a human whether it could copy a file, restart a service, install a
+// dependency or run its own build.
+func TestTierPassesRecoverableForms(t *testing.T) {
 	cases := []struct {
 		name string
 		cmd  string
 		args []string
 	}{
+		// Read-only, and already correct.
 		{"uname", "uname", []string{"-a"}},
 		{"df", "df", []string{"-h", "."}},
 		{"vcgencmd", "vcgencmd", []string{"measure_temp"}},
@@ -103,6 +95,57 @@ func TestTierStillPassesBenignForms(t *testing.T) {
 		{"printf via python attached", "python3", []string{"-cprint('hi')"}},
 		{"find plain", "find", []string{".", "-name", "*.go"}},
 		{"tar list", "tar", []string{"-tf", "a.tar"}},
+		// File work whose effect can be reversed.
+		{"cp", "cp", []string{"-r", "a", "b"}},
+		{"mv", "mv", []string{"a", "b"}},
+		{"chmod", "chmod", []string{"755", "x"}},
+		{"chown", "chown", []string{"-R", "me", "dir"}},
+		{"ln -sf", "ln", []string{"-sf", "a", "b"}},
+		{"tee", "tee", []string{"/tmp/out"}},
+		{"rsync plain", "rsync", []string{"-a", "src/", "dst/"}},
+		// Processes and services: restartable.
+		{"kill", "kill", []string{"-9", "123"}},
+		{"pkill", "pkill", []string{"node"}},
+		{"taskkill", "taskkill", []string{"/F", "/IM", "x.exe"}},
+		{"systemctl restart", "systemctl", []string{"restart", "panda"}},
+		{"launchctl", "launchctl", []string{"load", "/tmp/e.plist"}},
+		// Fetches: the file can be deleted again.
+		{"curl -o", "curl", []string{"-fsSL", "http://x/y.sh", "-o", "/tmp/y.sh"}},
+		{"wget", "wget", []string{"http://x/y"}},
+		// Builds, scripts and toolchains — the bulk of what an agent actually runs.
+		{"make", "make", []string{"all"}},
+		{"bash script path", "bash", []string{"scripts/build.sh"}},
+		{"npm install", "npm", []string{"install", "left-pad"}},
+		{"npm run", "npm", []string{"run", "build"}},
+		{"pip install", "pip", []string{"install", "requests"}},
+		{"go install", "go", []string{"install", "example.com/x@latest"}},
+		{"apt install", "apt", []string{"install", "-y", "jq"}},
+		{"winget install", "winget", []string{"install", "jq"}},
+		// Remote execution and infra: recoverable, and gating them made the
+		// scheduler unable to reach the machines it schedules onto.
+		{"ssh", "ssh", []string{"host", "uptime"}},
+		{"scp", "scp", []string{"f", "host:/tmp/"}},
+		{"docker run", "docker", []string{"run", "alpine", "echo", "hi"}},
+		{"kubectl get", "kubectl", []string{"get", "pods"}},
+		{"terraform plan", "terraform", []string{"plan"}},
+		// Config and posture changes that a later command undoes.
+		{"defaults write", "defaults", []string{"write", "com.x", "y", "1"}},
+		{"sysctl", "sysctl", []string{"-w", "net.ipv4.ip_forward=1"}},
+		{"crontab", "crontab", []string{"/tmp/jobs"}},
+		{"reg delete", "reg", []string{"delete", `HKLM\Software\x`, "/f"}},
+		{"icacls", "icacls", []string{"C:\\x", "/grant", "everyone:F"}},
+		// git: ordinary version control.
+		{"git clone", "git", []string{"clone", "http://x/y"}},
+		{"git commit", "git", []string{"commit", "-m", "x"}},
+		{"git switch", "git", []string{"switch", "main"}},
+		{"git push", "git", []string{"push", "origin", "main"}},
+		{"git stash", "git", []string{"stash"}},
+		// Ordinary shell composition. The pipeline and the `$( )` used to escalate
+		// on sight, which is what made most agent shell calls need approval.
+		{"pipeline", "bash", []string{"-c", "ls -la | wc -l"}},
+		{"substitution", "bash", []string{"-c", "echo $(git rev-parse HEAD)"}},
+		{"chained build", "bash", []string{"-c", "npm ci && npm test"}},
+		{"redirect", "bash", []string{"-c", "go build ./... > /tmp/build.log"}},
 	}
 	for _, c := range cases {
 		if got := TierFromCommand(c.cmd, c.args...); got != TierReversible {

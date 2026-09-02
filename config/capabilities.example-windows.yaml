@@ -50,7 +50,7 @@ agents:
     best_at: ["multi_file_edits", "code_search", "running_tests"]
     not_for: ["hardware_io", "realtime_control"]
     cost_tier: "high"
-    tier: 2
+    tier: 1
   codex:
     adapter: "codex.py"
     install_check: "where codex"
@@ -58,7 +58,7 @@ agents:
     best_at: ["code_review", "refactoring"]
     not_for: ["hardware_io"]
     cost_tier: "medium"
-    tier: 2
+    tier: 1
 
 capacity:
   cpu_cores: 16

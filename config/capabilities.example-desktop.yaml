@@ -8,11 +8,12 @@
 #   device         节点名（显示用）
 #   resource_class Micro | Standard | Full（调度打分用）
 #   node_kind      physical | vm（同机 singleton 锁按 kind 区分）
-#   native         本机可确定性执行的白名单命令（tier: 1=可逆 2=不可逆需授权）
+#   native         本机可确定性执行的白名单命令（tier: 1=可自动执行 2=不可逆需授权）
 #   agents         已安装的 agent CLI（adapter 指向 adapters/<name>.py）
-#                  tier 缺省为 2（不可逆）：未授权会被拒绝并进待审批，批准后带
-#                  授权重跑；--authorize 提交则执行后直接完成（一次同意即可）；
-#                  只读型 agent 可声明 tier: 1 免授权直接完成
+#                  tier 缺省为 1：agent 调度默认自动执行，不进待审批。
+#                  想让某个 agent 每次都先问你，就在它下面显式写 tier: 2 ——
+#                  未授权会被拒绝并进待审批，批准后带授权重跑；
+#                  `--authorize` 提交则一次同意直接执行完成。
 #   capacity       本节点并行任务数与资源上限
 #   resource_profile 声明的硬件（cpu / ram_gb / gpu_vram_gb / duration_hint）。
 #                  capacity 是"现在还能接几个"，这里是"跑得动什么"：路由把它当硬判据，
@@ -44,7 +45,7 @@ agents:
     best_at: ["multi_file_edits", "code_search", "running_tests"]
     not_for: ["hardware_io", "realtime_control"]
     cost_tier: "high"
-    tier: 2
+    tier: 1
   codex:
     adapter: "codex.py"
     install_check: "codex --version"
@@ -52,7 +53,7 @@ agents:
     best_at: ["code_review", "refactoring"]
     not_for: ["hardware_io"]
     cost_tier: "medium"
-    tier: 2
+    tier: 1
 
 capacity:
   cpu_cores: 8

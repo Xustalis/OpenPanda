@@ -206,46 +206,46 @@ func TestExecuteAgent(t *testing.T) {
 		}
 		return AgentResult{OK: true, Result: "refactored", ExitCode: 0, Tokens: 42, Cost: 0.01}
 	}
-	// Undeclared agent tier defaults to 2 (fail closed, P1-15), so execution
-	// without consent must be refused before the adapter is ever spawned.
-	if plan.Tier != defense.TierIrreversible {
-		t.Fatalf("undeclared agent tier = %d, want %d (fail closed)", plan.Tier, defense.TierIrreversible)
+	// An undeclared agent tier defaults to 1: delegating to an agent is the thing
+	// this network exists to do, so it runs without a human in the loop.
+	if plan.Tier != defense.TierReversible {
+		t.Fatalf("undeclared agent tier = %d, want %d (auto)", plan.Tier, defense.TierReversible)
 	}
-	refused := r.Execute(context.Background(), plan, "refactor this", "", false)
-	if refused.OK {
-		t.Fatalf("tier-2 agent without auth must be refused")
-	}
-	res := r.Execute(context.Background(), plan, "refactor this", "", true)
+	res := r.Execute(context.Background(), plan, "refactor this", "", false)
 	if !res.OK || res.Stdout != "refactored" {
-		t.Fatalf("agent exec = %+v, want ok refactored", res)
+		t.Fatalf("agent exec without consent = %+v, want ok refactored", res)
 	}
 	if res.Tokens != 42 {
 		t.Fatalf("tokens = %d, want 42", res.Tokens)
 	}
 }
 
-// TestExecuteAgentDeclaredTier1 verifies the opt-out: a card that explicitly
-// declares an agent tier 1 (read-only) runs without consent (P1-15).
-func TestExecuteAgentDeclaredTier1(t *testing.T) {
+// TestExecuteAgentDeclaredTier2 verifies the opt-in: a card that explicitly
+// declares an agent tier 2 still refuses to run it without consent. That
+// declaration is now the only way an agent reaches the approval gate, so it is
+// the escape hatch for anyone who wants a human on every delegation.
+func TestExecuteAgentDeclaredTier2(t *testing.T) {
 	card := testCard()
 	ag := card.Agents["claude_code"]
-	ag.Tier = 1
+	ag.Tier = defense.TierIrreversible
 	card.Agents["claude_code"] = ag
 	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, err := r.Route([]string{"code:modify"})
 	if err != nil {
 		t.Fatalf("route: %v", err)
 	}
-	if plan.Tier != 1 {
-		t.Fatalf("declared tier = %d, want 1", plan.Tier)
+	if plan.Tier != defense.TierIrreversible {
+		t.Fatalf("declared tier = %d, want %d", plan.Tier, defense.TierIrreversible)
 	}
 	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
 	r.runAdapter = func(ctx context.Context, adapter, prompt, cwd string) AgentResult {
 		return AgentResult{OK: true, Result: "refactored", ExitCode: 0}
 	}
-	res := r.Execute(context.Background(), plan, "refactor this", "", false)
-	if !res.OK {
-		t.Fatalf("tier-1 agent without auth = %+v, want ok", res)
+	if refused := r.Execute(context.Background(), plan, "refactor this", "", false); refused.OK {
+		t.Fatal("declared tier-2 agent without consent must be refused")
+	}
+	if res := r.Execute(context.Background(), plan, "refactor this", "", true); !res.OK {
+		t.Fatalf("declared tier-2 agent with consent = %+v, want ok", res)
 	}
 }
 
