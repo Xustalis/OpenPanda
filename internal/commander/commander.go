@@ -266,12 +266,19 @@ func (r *Router) Route(required []string) (Plan, error) {
 	}
 	if cands := r.RankAgents(required); len(cands) > 0 {
 		top := cands[0]
-		// P1-15: agent plans carry a tier like native ones. An undeclared tier
-		// defaults to 2 — an LLM agent can execute arbitrary commands, so the
-		// absence of a declaration must fail closed, not open.
+		// Agent plans carry a tier like native ones, and an undeclared tier now
+		// defaults to 1 — delegating to an agent is auto-approved.
+		//
+		// It used to default to 2, on the reasoning that an LLM agent can run
+		// arbitrary commands and so the absence of a declaration must fail closed.
+		// The cost of that was the product: every `panda ask` that classified as
+		// an agent task was refused by defense.Authorize, parked in review, and
+		// waited for a human — so the one thing the network exists to do could
+		// not happen unattended. An agent that should ask first declares
+		// `tier: 2` on itself in capabilities.yaml; that declaration still wins.
 		tier := top.Agent.Tier
 		if tier == 0 {
-			tier = defense.TierIrreversible
+			tier = defense.TierReversible
 		}
 		plan := Plan{Kind: "agent", Ability: top.Name, Agent: top.Name, Adapter: top.Agent.Adapter, Tier: tier}
 		for _, c := range cands[1:] {

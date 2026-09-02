@@ -37,7 +37,7 @@ native:
 #     capabilities: ["coding", "file_edit"]
 #     best_at: ["small_edits"]
 #     cost_tier: "low"
-#     tier: 2
+#     tier: 1   # 1 = 默认，自动执行；写 2 才会每次先进待审批
 
 manual:
   - id: "gpio:wire"

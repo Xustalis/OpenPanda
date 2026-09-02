@@ -42,7 +42,13 @@ func Authorize(tier int, authorized bool) error {
 // is judged by the code it runs rather than by the interpreter's name.
 func TierFromCommand(command string, args ...string) int {
 	command = normalizeCommand(command)
-	if destructiveVerbs[command] {
+	if irreversibleVerbs[command] {
+		return TierIrreversible
+	}
+	// Filesystem builders ship as one binary per filesystem — mkfs.ext4,
+	// mkfs.vfat, newfs_hfs, newfs_msdos — so the family prefix is the verb. A
+	// table keyed on "mkfs" alone never matched the name anyone actually runs.
+	if strings.HasPrefix(command, "mkfs.") || strings.HasPrefix(command, "newfs_") {
 		return TierIrreversible
 	}
 	// Pass-through wrappers run a later argument as the real command (env VAR=x
@@ -64,102 +70,106 @@ func TierFromCommand(command string, args ...string) int {
 		return TierReversible
 	}
 	if flags, ok := interpreterCodeFlags[command]; ok {
+		// An encoded program cannot be read, so it is graded by what it could
+		// hold. Checked before codeArg because the value that would return is the
+		// base64 blob itself, which scans clean.
+		if hasEncodedCodeFlag(args) {
+			return TierIrreversible
+		}
 		if code := codeArg(flags, args); code != "" {
 			if codeEscalates(code) {
 				return TierIrreversible
 			}
-		} else if hasPositionalArg(args) {
-			// An interpreter invoked with a script file ("bash evil.sh") runs
-			// code whose content is not visible here; fail closed to Tier 2.
-			return TierIrreversible
+		} else if pos := firstPositional(args); pos != "" {
+			// No code flag, but a positional argument. For awk and friends that
+			// argument *is* the program, so scan it; for a shell it is a script
+			// path, which scans clean and stays Tier 1.
+			//
+			// This used to fail closed on the mere presence of a positional,
+			// which made every `bash scripts/build.sh` an approval prompt. A
+			// script path is not evidence of irreversibility, and treating it as
+			// evidence is what stopped a node from running its own build.
+			if codeEscalates(pos) {
+				return TierIrreversible
+			}
 		}
 	}
 	// Wrappers whose payload cannot be located positionally (flock takes a lock
 	// file first, watch/time take a whole command line, script/runuser take code
 	// behind -c). Rather than guess which argument is the command, judge the
-	// joined argv the way interpreter code is judged: only a provably pure-output
-	// line stays Tier 1.
+	// joined argv the way interpreter code is judged.
 	if opaqueWrappers[command] && len(args) > 0 {
 		if codeEscalates(strings.Join(args, " ")) {
 			return TierIrreversible
 		}
 	}
-	// Commands that are benign with plain arguments but run arbitrary code or
-	// destroy state when specific flags/subcommands appear (P1-13): fail
-	// closed to Tier 2 when the risky form is present.
+	// Commands that are Tier 1 with ordinary arguments and irreversible in one
+	// specific form (git push --force, rsync --delete, sed -i).
 	if risk := commandArgRisks[command]; risk != nil && risk(args) {
 		return TierIrreversible
 	}
 	return TierReversible
 }
 
-// destructiveVerbs are command names treated as irreversible (Tier 2) by
-// default: privilege escalation and destructive filesystem/network/system
-// operations (design doc §16).
+// hasEncodedCodeFlag reports whether an interpreter was handed a base64-encoded
+// program (PowerShell's -EncodedCommand and its abbreviations). Matched
+// case-insensitively and by prefix, since -enc, -encod and -EncodedCommand are
+// all accepted by pwsh.
+func hasEncodedCodeFlag(args []string) bool {
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") || strings.HasPrefix(a, "/") {
+			if strings.HasPrefix(strings.ToLower(strings.TrimLeft(a, "-/")), "enc") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// irreversibleVerbs are the command names that cannot be undone, and are the
+// only names that classify as Tier 2 on their own.
 //
-// The table is deliberately cross-platform. A Windows node is a first-class
-// executor in this network, and a table that only knows POSIX verbs classifies
-// `del /f /s /q` as reversible — so the Windows and macOS verbs are listed
-// beside their POSIX equivalents rather than left to a later port. Package
-// managers are here because installing a dependency mutates the machine outside
-// the task's working directory and cannot be undone by discarding the workspace.
+// The policy this table encodes: **Tier 2 is for an irreversible loss of data or
+// of the machine's availability — something no later command can put back.**
+// Everything else is Tier 1 and runs unattended, because a node that has to ask
+// before it can copy a file, install a dependency or restart a service cannot do
+// the work it exists to do. That is the whole point of the scheduler.
 //
-// Over-inclusion is cheap: this table is only a backstop for a native ability
-// whose capability card omits `tier:` (commander.Router.Route). A card that
-// declares its own tier always wins, so a node that genuinely wants unattended
-// `git checkout` says so in the card.
-var destructiveVerbs = map[string]bool{
+// It used to be a ~90-entry "destructive" table that graded cp, mv, chmod, kill,
+// curl, wget, make, ssh, mount, systemctl, every package manager and every
+// container/infra CLI as Tier 2. All of those are recoverable — you can delete a
+// downloaded file, uninstall a package, restart a service — so all of them now
+// pass. What is left is deletion, disk/partition/firmware, power state, and
+// privilege escalation (which is a blank cheque for all three).
+//
+// The table stays cross-platform: a Windows node is a first-class executor here,
+// and `del /f /s /q` destroys exactly as much as `rm -rf`. codeEscalates scans
+// interpreter code against this same table, so the classification of a verb is
+// the same whether it is the command or is buried in `cmd /c "…"`.
+//
+// Anything a particular node wants gated beyond this list says so in its
+// capability card: an explicit `tier: 2` on a native ability always wins over
+// this inference.
+var irreversibleVerbs = map[string]bool{
+	// Privilege escalation: whatever follows can do everything below.
 	"sudo": true, "su": true, "doas": true, "runas": true,
-	"rm": true, "dd": true, "mkfs": true,
-	"mv": true, "cp": true, "chmod": true,
-	"kill": true, "pkill": true, "killall": true,
+	// Data destruction. rm/dd overwrite or unlink; shred and truncate destroy
+	// contents in place with no copy left anywhere.
+	"rm": true, "dd": true, "shred": true, "truncate": true,
+	// Filesystem creation wipes whatever the target held.
+	"mkfs": true, "mkswap": true, "newfs": true,
+	// Disk, partition and firmware level state: a mistake here can leave the
+	// machine unable to boot, which no later command can fix from inside it.
+	"fdisk": true, "parted": true, "sfdisk": true, "swapoff": true,
+	"diskutil": true, "hdiutil": true, "tmutil": true, "asr": true,
+	// Power state: the task's own machine stops answering.
 	"shutdown": true, "reboot": true, "poweroff": true, "halt": true,
-	"systemctl": true, "mount": true, "umount": true,
-	"iptables": true, "nft": true,
-	// Remote execution and arbitrary-recipe execution (P1-13): ssh runs a
-	// command on another machine; make runs whatever the Makefile says.
-	"ssh": true, "make": true,
-	// Destructive or ownership-changing filesystem verbs the first table missed.
-	// truncate/shred destroy file contents in place; chown/chgrp/chflags/chattr
-	// and the ACL tools hand control of a path to another principal; ln -sf
-	// rewrites a path to point somewhere else; tee writes to whatever it is
-	// given; rsync --delete mirrors a deletion.
-	"truncate": true, "shred": true, "chown": true, "chgrp": true,
-	"chflags": true, "chattr": true, "setfacl": true, "ln": true,
-	"tee": true, "rsync": true, "scp": true, "sftp": true,
-	// Network fetches write a file from an untrusted source and are the first
-	// half of every curl-pipe-shell chain.
-	"curl": true, "wget": true,
-	// Scheduling and service management install work that outlives the task.
-	"crontab": true, "at": true, "batch": true, "launchctl": true,
-	"systemd-run": true, "service": true, "schtasks": true,
-	// Kernel/disk/firmware level state.
-	"insmod": true, "rmmod": true, "modprobe": true, "sysctl": true,
-	"fdisk": true, "parted": true, "mkswap": true, "swapoff": true,
-	"diskutil": true, "hdiutil": true, "tmutil": true,
-	// macOS security and system posture.
-	"csrutil": true, "spctl": true, "softwareupdate": true, "defaults": true,
-	// Containers and cluster control planes: a container can mount the host,
-	// and an apply/destroy reshapes infrastructure.
-	"docker": true, "podman": true, "nerdctl": true, "kubectl": true,
-	"helm": true, "terraform": true, "ansible": true, "ansible-playbook": true,
-	// Firewalls beyond iptables/nft.
-	"ufw": true, "firewall-cmd": true,
-	// Package managers: installing mutates the machine outside the workspace,
-	// and the package's own install scripts run arbitrary code. pacman, apk-tools
-	// and dpkg are driven by flags rather than subcommands, so they are graded
-	// wholesale; the subcommand-driven managers are gated in commandArgRisks so
-	// that a plain `npm test` still runs unattended.
-	"pacman": true, "dpkg": true, "rpm": true,
-	// Windows verbs. cmd builtins (del/rd/copy/move/ren) are unreachable as
-	// executables, but codeEscalates scans `cmd /c "…"` token by token against
-	// this same table, so listing them is what classifies the payload.
-	"del": true, "erase": true, "rd": true, "rmdir": true, "format": true,
-	"reg": true, "regedit": true, "taskkill": true, "diskpart": true,
-	"bcdedit": true, "netsh": true, "sc": true, "wmic": true, "attrib": true,
-	"icacls": true, "cacls": true, "takeown": true, "robocopy": true,
-	"xcopy": true, "copy": true, "move": true, "ren": true, "rename": true,
-	"mklink": true, "vssadmin": true, "cipher": true, "fsutil": true,
+	// Windows equivalents of everything above. cmd builtins are not reachable as
+	// executables, but codeEscalates scans `cmd /c "…"` against this table, so
+	// listing them is what classifies the payload.
+	"del": true, "erase": true, "rd": true, "rmdir": true,
+	"format": true, "diskpart": true, "bcdedit": true,
+	"vssadmin": true, "cipher": true, "fsutil": true,
 }
 
 // interpreterCodeFlags maps an interpreter executable to the flags that mean
@@ -178,8 +188,9 @@ var interpreterCodeFlags = map[string][]string{
 	"nodejs": {"-e"}, "deno": {"-e"}, "php": {"-r"},
 	"lua": {"-e"}, "luajit": {"-e"}, "tclsh": {"-c"},
 	"rscript": {"-e"}, "julia": {"-e"}, "groovy": {"-e"},
-	// awk's program is a positional argument, so hasPositionalArg is what
-	// classifies `awk 'BEGIN{system("…")}'`; -f names a program file.
+	// awk's program is its first positional argument, so the positional scan in
+	// TierFromCommand is what classifies `awk 'BEGIN{system("…")}'`; -f names a
+	// program file instead.
 	"awk": {"-f"}, "gawk": {"-f"}, "mawk": {"-f"},
 	// macOS: osascript -e runs AppleScript, which reaches the shell through
 	// `do shell script`.
@@ -200,66 +211,63 @@ var opaqueWrappers = map[string]bool{
 	"runuser": true, "taskset": true, "chrt": true, "setarch": true,
 }
 
-// commandArgRisks are per-command argument scanners (P1-13): the command is
-// Tier 1 with plain arguments but fails closed to Tier 2 when a flag or
-// subcommand that executes code or destroys state is present. These are
-// backstops; an explicit capability-card tier always wins.
+// commandArgRisks are per-command argument scanners: the command is Tier 1 with
+// ordinary arguments and Tier 2 only in the form that cannot be undone. This is
+// where the policy gets its precision — `git push` is routine, `git push --force`
+// overwrites history; `rsync` copies, `rsync --delete` mirrors a deletion.
+//
+// The list used to include every package manager (install/remove/run), plus
+// go/cargo/dotnet run|install|generate, and tar/find -exec on the grounds that
+// they execute code. Executing code is not the test; irreversibility is. A build
+// or an install can be repeated or undone, so those are gone: `npm install`,
+// `npm run build` and `go run ./...` now run unattended.
 var commandArgRisks = map[string]func(args []string) bool{
-	// find -exec/-execdir/-ok/-okdir run a command per match; -delete removes
-	// every match.
-	"find": hasAnyArg("-exec", "-execdir", "-ok", "-okdir", "-delete"),
-	// tar --checkpoint-action=exec=CMD and --use-compress-program/-I run an
-	// external command mid-archive.
-	"tar": func(args []string) bool {
-		return hasAnyArgPrefix(args, "--checkpoint-action", "--use-compress-program") ||
-			hasAnyArg("-I")(args)
-	},
-	// git subcommands that run hooks (arbitrary code from .git/hooks) or push
-	// to / rewrite shared state.
-	"git": func(args []string) bool {
-		sub := firstPositional(args)
-		return gitRiskySubcommands[sub]
-	},
-	// sed -i edits files in place; without it sed only writes to stdout. The
-	// suffix form (-i.bak) is the same flag, so this is a prefix test.
+	// find -delete removes every match, with no copy left behind. -exec is not
+	// here: what it runs is classified on its own merits when it runs.
+	"find": hasAnyArg("-delete"),
+	// sed -i rewrites the file in place; without a backup suffix the original
+	// content is gone. Plain sed only writes to stdout.
 	"sed": hasAnyShortFlagPrefix("-i", "--in-place"),
-	// Toolchains that are read-only for build/list but mutate the machine or run
-	// downloaded code for install/publish/run.
-	"go":     subcommandIn("install", "run", "generate", "clean", "get"),
-	"cargo":  subcommandIn("install", "publish", "run"),
-	"dotnet": subcommandIn("run", "publish", "tool"),
+	// rsync --delete makes the destination mirror the source, deleting whatever
+	// the source no longer has.
+	"rsync": hasAnyArg("--delete", "--delete-after", "--delete-before", "--delete-during", "--del"),
+	// git: only the forms that destroy work no reflog or remote still holds.
+	"git": func(args []string) bool { return gitArgsIrreversible(args) },
 }
 
-// pkgMutatingSubcommands are the subcommands that make a package manager change
-// the machine: they install, remove or upgrade software, or run code shipped in
-// a package. Listing (list/search/info/outdated) and test/build scripts are
-// absent on purpose — a node that needed approval to run `npm test` could not
-// work unattended, which is the whole point of the scheduler.
-var pkgMutatingSubcommands = []string{
-	"install", "i", "add", "ci", "reinstall", "update", "upgrade", "up",
-	"dist-upgrade", "remove", "rm", "uninstall", "erase", "purge",
-	"autoremove", "publish", "link", "unlink", "exec", "dlx", "run",
-	"create", "init", "sync", "bootstrap",
-}
-
-// pkgManagers are the subcommand-driven package managers gated by
-// pkgMutatingSubcommands.
-var pkgManagers = []string{
-	"apt", "apt-get", "aptitude", "yum", "dnf", "zypper", "apk",
-	"snap", "flatpak", "brew", "port", "nix-env",
-	"pip", "pip3", "pipx", "uv", "poetry", "conda", "mamba",
-	"npm", "pnpm", "yarn", "bun", "gem", "composer", "cpan",
-	"choco", "winget", "scoop",
-}
-
-func init() {
-	mutating := subcommandIn(pkgMutatingSubcommands...)
-	for _, m := range pkgManagers {
-		// A manager that already has a bespoke scanner keeps it.
-		if _, exists := commandArgRisks[m]; !exists {
-			commandArgRisks[m] = mutating
-		}
+// gitArgsIrreversible reports whether a git invocation is one of the forms that
+// loses work permanently. Everything else about git — commit, merge, rebase,
+// clone, fetch, switching branches — is either recoverable from the reflog or
+// not a mutation at all, and gating it made an agent ask permission to do version
+// control.
+func gitArgsIrreversible(args []string) bool {
+	sub := firstPositional(args)
+	force := hasAnyArg("-f", "--force")(args)
+	switch sub {
+	case "push":
+		// A force push overwrites a branch other machines have; their commits are
+		// only in their own reflogs, if they still exist at all.
+		return force
+	case "reset":
+		// --hard discards uncommitted work in the tree; nothing holds a copy.
+		return hasAnyArg("--hard")(args)
+	case "clean":
+		// -f/-x removes untracked files, which by definition are in no commit.
+		return force || hasAnyArg("-x", "-fd", "-fdx", "-ffd")(args)
+	case "checkout", "restore":
+		// Path forms ("git checkout -- .", "git restore src/") throw away
+		// uncommitted edits. Switching branches does not, and is the common case.
+		return force || hasAnyArg("--", ".")(args)
+	case "branch":
+		// -D deletes an unmerged branch: its commits become unreachable.
+		return hasAnyArg("-D")(args)
+	case "stash":
+		return subcommandIn("drop", "clear")(args[1:])
+	case "filter-branch":
+		// Rewrites every commit in place.
+		return true
 	}
+	return false
 }
 
 // hasAnyShortFlagPrefix returns a scanner that is true when an argument is one
@@ -377,19 +385,31 @@ func unwrapEnvSplitString(args []string) (string, []string, bool) {
 	return "", nil, false
 }
 
-// shellEscapes are substrings that indicate code is spawning a subprocess or
-// shell, which would run commands outside first-word classification.
-var shellEscapes = []string{
-	"os.system", "subprocess", "popen", "exec(", "eval(", "system(",
-	"child_process", "spawn(", "curl ", "wget ", "| sh", "| bash", "| sudo",
+// irreversibleCodePatterns are substrings in interpreter code that reach an
+// irreversible operation the token scan cannot see. Two kinds:
+//
+//   - Language-level deletion. `os.remove(...)`, `fs.rmSync(...)` and
+//     `Remove-Item` destroy files without any token named "rm" appearing.
+//   - Opacity. Decoded, encoded or piped-into-a-shell code is not readable here
+//     at all, so it is graded by what it could be rather than by what it says.
+//     This is the one place the classifier still fails closed, and it is narrow
+//     on purpose: an ordinary pipeline is fine, a base64 blob fed to a shell is
+//     not.
+//
+// Composition itself is deliberately absent. `$(`, `|`, `;`, `&&`, `>` used to
+// escalate on sight, which made `bash -c "ls | wc -l"` a Tier 2 operation
+// requiring human approval. The token scan reads every stage of a pipeline and
+// both sides of a `&&`, so it no longer needs the blunt instrument.
+var irreversibleCodePatterns = []string{
+	// Deletion through a language runtime rather than a command.
+	"os.remove", "os.unlink", "os.rmdir", "os.removedirs", "shutil.rmtree",
+	"removeall", "rmsync", "unlinksync", "rmdirsync", "unlink(",
+	"remove-item", "fileutils.rm", "file.delete", "clear-disk", "format-volume",
+	// Opacity: code that is decoded, or handed to a shell, at run time.
+	"base64 -d", "base64 --decode", "-encodedcommand", "frombase64string",
+	"eval ", "eval(", "| sh", "|sh", "| bash", "|bash", "| zsh", "|zsh",
+	"| sudo", "|sudo", "iex ", "invoke-expression",
 }
-
-// shellComposition are substrings that let code run further commands beyond
-// what first-word classification can see: command substitution, command
-// chaining, pipelines, redirection, backgrounding, and newline-separated
-// commands. When present, the code is treated as destructive — the conservative
-// default, since the full command graph is not visible.
-var shellComposition = []string{"$(", "`", ";", "&&", "||", "|", ">", "&", "\n"}
 
 // passThroughVerbs are commands that execute a later argument as the real
 // command rather than doing the work themselves. First-word matching on these
@@ -479,19 +499,6 @@ func normalizeCommand(command string) string {
 	return command
 }
 
-// hasPositionalArg reports whether args contains a non-flag argument. For an
-// interpreter invoked without a code flag, that argument is a script file (or
-// module) whose content cannot be inspected here, so the caller treats it as
-// Tier 2.
-func hasPositionalArg(args []string) bool {
-	for _, a := range args {
-		if a != "" && a[0] != '-' {
-			return true
-		}
-	}
-	return false
-}
-
 // codeArg returns the code an interpreter was asked to run, trying each flag
 // the interpreter accepts, or "" when none of them appears. Separated, attached
 // and long-option spellings all resolve (see codeArgFor).
@@ -568,50 +575,42 @@ func attachedShortValue(arg string, letter rune) (string, bool) {
 	return "", false
 }
 
-// codeEscalates reports whether interpreter code is destructive enough to
-// warrant Tier 2. The model is whitelist-first (P1-14): only code recognized
-// as a pure-output statement stays Tier 1; anything else — including forms no
-// blacklist token matches, like os.remove('x') — fails closed to Tier 2. The
-// blacklist scans (destructive words, subprocess/shell escapes, shell
-// composition) are kept as a fast, explanatory path.
+// codeEscalates reports whether interpreter code reaches an irreversible
+// operation. It is the classifier for anything that runs code rather than doing
+// work itself: `bash -c`, `python -c`, `cmd /c`, an opaque wrapper's joined argv.
+//
+// The question it answers changed with the policy. It used to end in
+// `return !isPureOutput(lower)` — anything that was not literally an `echo` was
+// Tier 2, so `bash -c "ls"` needed human approval. Now it asks whether the code
+// names something that cannot be undone, or hides what it runs.
 func codeEscalates(code string) bool {
 	lower := strings.ToLower(code)
-	for _, tok := range strings.Fields(lower) {
-		if destructiveVerbs[tok] {
+	for _, tok := range codeTokens(lower) {
+		if irreversibleVerbs[tok] {
 			return true
 		}
 	}
-	for _, esc := range shellEscapes {
-		if strings.Contains(lower, esc) {
-			return true
-		}
-	}
-	for _, c := range shellComposition {
-		if strings.Contains(lower, c) {
-			return true
-		}
-	}
-	return !isPureOutput(lower)
-}
-
-// pureOutputPrefixes are the statement openings considered provably benign:
-// printing a value cannot modify state. Anything else an interpreter runs is
-// treated as potentially destructive.
-var pureOutputPrefixes = []string{
-	"echo ", "print(", "print ", "printf(", "printf ",
-	"console.log(", "puts ", "say ",
-}
-
-// isPureOutput reports whether the (already lower-cased) code is a single
-// pure-output statement. The caller has already verified the code contains no
-// shell composition or escape tokens, so "echo $(rm -rf /)" never reaches
-// here as safe.
-func isPureOutput(lower string) bool {
-	trimmed := strings.TrimSpace(lower)
-	for _, p := range pureOutputPrefixes {
-		if strings.HasPrefix(trimmed, p) {
+	for _, pat := range irreversibleCodePatterns {
+		if strings.Contains(lower, pat) {
 			return true
 		}
 	}
 	return false
+}
+
+// codeTokens splits code into command-position candidates. It breaks on shell
+// metacharacters as well as whitespace, so every stage of a pipeline and both
+// sides of a `;` or `&&` are scanned — `ls;rm -rf /` yields "rm", where a plain
+// whitespace split yields "ls;rm" and matches nothing. Quotes and parentheses
+// are separators too, which is what finds the verb inside `os.execute('rm -rf x')`
+// and `do shell script "rm -rf x"`.
+func codeTokens(lower string) []string {
+	return strings.FieldsFunc(lower, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\n', '\r', '|', '&', ';', '(', ')', '`', '<', '>',
+			'"', '\'', '{', '}', '[', ']', ',', '=':
+			return true
+		}
+		return false
+	})
 }
