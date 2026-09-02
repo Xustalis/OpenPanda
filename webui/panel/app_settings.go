@@ -20,7 +20,12 @@ type appSettingsJSON struct {
 	PreferredAgents []string         `json:"preferred_agents"`
 	MemoryLimits    memoryLimitsJSON `json:"memory_limits"`
 	ApprovalMode    string           `json:"approval_mode"` // always | on-request | never
-	Sandbox         *sandboxJSON     `json:"sandbox,omitempty"`
+	// ToolsPolicy grades the tool face agent adapters run with: minimal keeps each
+	// adapter's safe whitelist, extended reaches the agent's own skills, sub-agent
+	// tooling and MCP servers. `panda config routing set tools_policy` has edited
+	// it since v0.0.7; it was the one policy the console could not reach.
+	ToolsPolicy string       `json:"tools_policy"` // minimal | extended
+	Sandbox     *sandboxJSON `json:"sandbox,omitempty"`
 }
 
 type memoryLimitsJSON struct {
@@ -49,6 +54,7 @@ func (h *handler) getAppSettings(w http.ResponseWriter, r *http.Request) {
 			Project: h.cfg.Memory.Limits.Project,
 		},
 		ApprovalMode: h.cfg.Approval.NormalizedMode(),
+		ToolsPolicy:  h.cfg.Routing.NormalizedToolsPolicy(),
 		Sandbox:      &sandboxJSON{WorkPath: h.cfg.Storage.WorkPath},
 	})
 }
@@ -81,6 +87,18 @@ func (h *handler) putAppSettings(w http.ResponseWriter, r *http.Request) {
 	case config.ApprovalModeAlways, config.ApprovalModeOnRequest, config.ApprovalModeNever:
 	default:
 		writeErr(w, http.StatusBadRequest, errors.New("approval_mode must be always, on-request, or never"))
+		return
+	}
+	// An absent tools_policy keeps the current one rather than failing: a client
+	// written before this field existed still saves the rest of the policy.
+	tools := strings.TrimSpace(req.ToolsPolicy)
+	if tools == "" {
+		tools = h.cfg.Routing.NormalizedToolsPolicy()
+	}
+	switch tools {
+	case config.ToolsPolicyMinimal, config.ToolsPolicyExtended:
+	default:
+		writeErr(w, http.StatusBadRequest, errors.New("tools_policy must be minimal or extended"))
 		return
 	}
 	limits := req.MemoryLimits
@@ -135,6 +153,10 @@ func (h *handler) putAppSettings(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
+		if err := config.UpdateSectionField(h.configPath, []string{"routing"}, "tools_policy", tools); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	h.cfg.Injection.Model = injection
 	h.cfg.Routing.PreferredAgents = agents
@@ -142,12 +164,19 @@ func (h *handler) putAppSettings(w http.ResponseWriter, r *http.Request) {
 	h.cfg.Memory.Limits.Memory = limits.Memory
 	h.cfg.Memory.Limits.Project = limits.Project
 	h.cfg.Approval.Mode = approval
+	h.cfg.Routing.ToolsPolicy = tools
+	// Routing and injection are read by the router, which holds its own copy, so a
+	// change here has to re-enter it or it waits for a restart.
+	if eng := h.currentEngine(); eng != nil {
+		eng.SetRouterPolicy(h.cfg.Injection, h.cfg.Routing)
+	}
 
 	writeJSON(w, appSettingsJSON{
 		InjectionModel:  injection,
 		PreferredAgents: agents,
 		MemoryLimits:    limits,
 		ApprovalMode:    approval,
+		ToolsPolicy:     tools,
 		Sandbox:         &sandboxJSON{WorkPath: h.cfg.Storage.WorkPath},
 	})
 }

@@ -149,8 +149,6 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("GET /api/settings/app", h.getAppSettings)
 		mux.HandleFunc("PUT /api/settings/app", h.putAppSettings)
 	}
-	mux.HandleFunc("GET /api/settings/policy", h.getPolicySettings)
-	mux.HandleFunc("PUT /api/settings/policy", h.putPolicySettings)
 	mux.HandleFunc("GET /api/settings/mcp", h.getMCPSettings)
 	mux.HandleFunc("PUT /api/settings/mcp", h.putMCPSettings)
 	// Capability card (stage 6): the console's /card — structured mutations

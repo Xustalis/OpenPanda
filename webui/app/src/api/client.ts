@@ -395,6 +395,9 @@ export interface AppSettings {
   preferred_agents: string[]
   memory_limits: { user: number; memory: number; project: number }
   approval_mode: 'always' | 'on-request' | 'never'
+  /** Agent tool face: minimal keeps each adapter's whitelist, extended reaches
+   *  the agent's own skills, sub-agents and MCP servers. */
+  tools_policy: 'minimal' | 'extended'
   sandbox?: { work_path: string } // GET-only: read-only confinement info
 }
 
@@ -430,18 +433,6 @@ export interface ProjectList {
   active: string
 }
 
-// PolicySettings is the "how should this node behave" surface: the approval gate,
-// routing, memory caps and model injection. Edited together because a view that
-// fetched them separately would show four independently stale sections.
-export interface PolicySettings {
-  approval_mode: string
-  preferred_agents: string[] | null
-  tools_policy: string
-  limit_user: number
-  limit_memory: number
-  limit_project: number
-  injection_model: string
-}
 
 // ---- Endpoints ----
 
@@ -549,13 +540,6 @@ export const api = {
     return request('POST', '/api/projects/exit')
   },
 
-  policySettings(): Promise<PolicySettings> {
-    return request('GET', '/api/settings/policy')
-  },
-
-  savePolicySettings(body: Partial<PolicySettings>): Promise<PolicySettings> {
-    return request('PUT', '/api/settings/policy', body)
-  },
 
   nodes(): Promise<NodeInfo[]> {
     return request('GET', '/api/nodes')
