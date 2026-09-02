@@ -549,6 +549,17 @@ func (e *Engine) Ask(ctx context.Context, prompt string, authorize bool) (*Resul
 	return e.AskTurns(ctx, nil, prompt, "", authorize, StreamCallbacks{})
 }
 
+// SetRouterPolicy re-applies the injection and routing policy to the engine's
+// scheduler core, so a policy edited at runtime (the console's settings view)
+// takes effect without a restart. A no-op on an engine with no card, which has no
+// router to configure.
+func (e *Engine) SetRouterPolicy(injection config.InjectionConfig, routing config.RoutingConfig) {
+	if e.sched == nil {
+		return
+	}
+	e.sched.SetRouterPolicy(injection, routing)
+}
+
 // SetProject names the ambient project for the tasks this engine submits, and
 // the directory they run in. Both may be empty, which is "not in a project".
 func (e *Engine) SetProject(name, workDir string) {
