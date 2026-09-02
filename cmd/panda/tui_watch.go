@@ -56,7 +56,7 @@ func (m tuiModel) onWatch(msg watchMsg) (tea.Model, tea.Cmd) {
 	cmds := []tea.Cmd{watchTasks(m.r)}
 	for _, n := range msg.notes {
 		blk := block{kind: blockNote, body: n}
-		cmds = append(cmds, tea.Println(blk.render(m.th, m.width, m.expandThought)))
+		cmds = append(cmds, m.printBlock(blk))
 	}
 	return m, tea.Batch(cmds...)
 }

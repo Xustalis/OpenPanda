@@ -171,12 +171,19 @@ func main() {
 			// resident daemon — name the fix instead. When the word is one
 			// typo away from a real subcommand, say which: that is the whole
 			// difference between a dead end and a correction.
+			//
+			// The correction is the message. This used to print the whole
+			// command tree underneath, which pushed the "did you mean status?"
+			// line off a short terminal — burying the answer in the reference
+			// manual. One line naming `panda help` keeps the reference one
+			// keystroke away without making every typo cost sixty lines.
+			loc := i18n.Detect()
 			p := palFor(os.Stderr)
-			fmt.Fprintf(os.Stderr, "panda: %s %s\n", i18n.T(i18n.Detect(), "cli.unknownSub"), p.Command(sub))
+			fmt.Fprintf(os.Stderr, "panda: %s %s\n", i18n.T(loc, "cli.unknownSub"), p.Command(sub))
 			if s := suggest(sub, subcommandNames()); s != "" {
-				fmt.Fprintf(os.Stderr, "  %s\n\n", i18n.Tf(i18n.Detect(), "repl.didyoumean", "cmd", p.Command(s)))
+				fmt.Fprintf(os.Stderr, "  %s\n", i18n.Tf(loc, "repl.didyoumean", "cmd", p.Command(s)))
 			}
-			printUsage(os.Stderr)
+			fmt.Fprintf(os.Stderr, "  %s\n", p.Muted(i18n.T(loc, "cli.help.more")))
 			os.Exit(2)
 		}
 	}
@@ -559,6 +566,16 @@ func memoryLimits(cfg *config.Config) memory.Limits {
 func fatal(step string, err error) {
 	fmt.Fprintf(os.Stderr, "panda: %s: %v\n", step, err)
 	os.Exit(1)
+}
+
+// fatalMsg is fatal for a rejected argument rather than a failed operation:
+// there is no wrapped error to print, only the sentence that tells the user what
+// to type instead. Exit 2 is the usage code the flag parser and the unknown-
+// subcommand path already use, so a script can tell "you asked wrong" (2) from
+// "it went wrong" (1).
+func fatalMsg(msg string) {
+	fmt.Fprintf(os.Stderr, "panda: %s\n", msg)
+	os.Exit(2)
 }
 
 // printUsage lists the subcommands as a grouped command tree — `panda help`

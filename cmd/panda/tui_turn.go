@@ -27,7 +27,7 @@ func (m tuiModel) onDelta(chunk string) (tea.Model, tea.Cmd) {
 		m.thoughtDone = true
 		if len(m.thought) > 0 {
 			tb := block{kind: blockThought, thoughtLines: m.thought}
-			cmds = append(cmds, tea.Println(tb.render(m.th, m.width, m.expandThought)))
+			cmds = append(cmds, m.printBlock(tb))
 		}
 	}
 	m.liveAnswer.WriteString(chunk)
@@ -52,7 +52,7 @@ func (m tuiModel) onProgress(p askengine.Progress) (tea.Model, tea.Cmd) {
 			m.thoughtDone = true
 			if len(m.thought) > 0 {
 				tb := block{kind: blockThought, thoughtLines: m.thought}
-				cmds = append(cmds, tea.Println(tb.render(m.th, m.width, m.expandThought)))
+				cmds = append(cmds, m.printBlock(tb))
 			}
 		}
 		m.liveTask = newTaskProgress(p.Name, now)
@@ -87,7 +87,7 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 		m.resetLive()
 		if errors.Is(msg.err, context.Canceled) {
 			note := block{kind: blockNote, body: i18n.T(m.loc, "repl.interrupted")}
-			return m, tea.Batch(done, tea.Println(note.render(m.th, m.width, m.expandThought)))
+			return m, tea.Batch(done, m.printBlock(note))
 		}
 		blk := block{kind: blockError, body: msg.err.Error()}
 		// Pair the persisted user turn with the failure (same guard as the
@@ -96,7 +96,7 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 		if m.r != nil {
 			m.r.recordErrorTurn(msg.err)
 		}
-		return m, tea.Batch(done, tea.Println(blk.render(m.th, m.width, m.expandThought)))
+		return m, tea.Batch(done, m.printBlock(blk))
 	}
 	out := msg.out
 	if out != nil && out.NeedsApproval && out.Approval != nil {
@@ -152,7 +152,7 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 	if blk.body == "" && blk.kind == blockAnswer {
 		return m, done
 	}
-	return m, tea.Batch(done, tea.Println(blk.render(m.th, m.width, m.expandThought)))
+	return m, tea.Batch(done, m.printBlock(blk))
 }
 
 // resultBlock turns an engine Result into the transcript block for its kind.
@@ -244,7 +244,7 @@ func (m tuiModel) onApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeIdle
 		done := m.turnEnded()
 		note := block{kind: blockNote, body: i18n.Tf(m.loc, "repl.approval.denied", "id", id)}
-		return m, tea.Batch(done, tea.Println(note.render(m.th, m.width, m.expandThought)))
+		return m, tea.Batch(done, m.printBlock(note))
 	}
 	return m, nil
 }

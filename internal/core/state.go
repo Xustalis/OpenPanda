@@ -34,6 +34,29 @@ const (
 	StateExpired    = "expired"
 )
 
+// TaskStates lists every state a task row can hold, in lifecycle order. The
+// constants above are the vocabulary; this is that vocabulary as data, for the
+// callers that have to check a state they did not produce — `panda queue
+// --state <s>` validating a typed filter is the reason it exists. Keeping it
+// next to the constants is what keeps the two from drifting.
+func TaskStates() []string {
+	return []string{
+		StateSubmitted, StateQueued, StateDispatched, StateWaitingCtx,
+		StateRunning, StateReview, StateDone, StateFailed,
+		StateCancelled, StateExpired,
+	}
+}
+
+// IsTaskState reports whether s names a task state.
+func IsTaskState(s string) bool {
+	for _, st := range TaskStates() {
+		if st == s {
+			return true
+		}
+	}
+	return false
+}
+
 // Task event types recorded in task_events.
 const (
 	EvSubmit   = "submit"

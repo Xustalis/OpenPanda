@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
+	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
@@ -106,17 +107,27 @@ func runAgents(args []string) {
 		return
 	}
 	installed := 0
+	p := pal()
+	nameW, binW := 16, 8
 	for _, a := range statuses {
-		mark := " "
+		nameW = max(nameW, cliui.DisplayWidth(a.Name))
+		binW = max(binW, cliui.DisplayWidth(a.Binary))
+	}
+	for _, a := range statuses {
+		// An installed agent is marked and readable; a missing one is dimmed
+		// whole, so the list answers "what can this node run" at a glance instead
+		// of making the reader compare a column of asterisks.
+		mark, tint := p.Muted(p.MarkBullet()), p.Muted
 		if a.Installed {
-			mark = "*"
+			mark, tint = p.Success(p.MarkOK()), func(s string) string { return s }
 			installed++
 		}
 		version := ""
 		if a.Version != "" {
 			version = "  " + a.Version
 		}
-		fmt.Printf("  %s %-16s %-8s %s%s\n", mark, a.Name, a.Binary, orDash(a.Path), version)
+		fmt.Println("  " + mark + " " + tint(row(
+			cell(a.Name, nameW), cell(a.Binary, binW), orDash(a.Path)+version)))
 	}
 	if installed == 0 {
 		fmt.Println(i18n.T(loc, "cli.agents.none"))
@@ -193,14 +204,18 @@ func printAgentInstallHelp(statuses []agentStatus) int {
 			continue
 		}
 		missing++
-		parts := []string{fmt.Sprintf("  %s (%s):", a.Name, orDash(a.Binary))}
+		// The command and the docs URL are two different things to do, and
+		// joining them with a space produced one unusable line ("npm install -g
+		// @deepseek-ai/dsh https://github.com/…" reads as one argv). The command
+		// goes on its own line, ready to copy; the URL is dimmed underneath.
+		p := pal()
+		fmt.Printf("  %s %s\n", p.Bold(a.Name), p.Muted("("+orDash(a.Binary)+")"))
 		if a.InstallHint != "" {
-			parts = append(parts, a.InstallHint)
+			fmt.Println("    " + p.Command(a.InstallHint))
 		}
 		if a.InstallURL != "" {
-			parts = append(parts, a.InstallURL)
+			fmt.Println("    " + p.Muted(a.InstallURL))
 		}
-		fmt.Println(strings.Join(parts, " "))
 	}
 	return missing
 }

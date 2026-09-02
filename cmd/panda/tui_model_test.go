@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
@@ -217,5 +219,95 @@ func TestTUIDroppedStreamUnblocksSend(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("a send stayed blocked after the ask was dropped — goroutine leak")
+	}
+}
+
+// TestTUIWelcomeWaitsForTheTerminalSize pins the fix for a banner that used to be
+// drawn from a guess: Init must not print it (no size is known yet), and the
+// first WindowSizeMsg must.
+func TestTUIWelcomeWaitsForTheTerminalSize(t *testing.T) {
+	m := newTestTUI(t)
+	if m.ready {
+		t.Fatal("a fresh model must not claim to know its size")
+	}
+	// The first size report is what prints the banner, and only the first.
+	_, cmd := m.Update(tea.WindowSizeMsg{Width: 52, Height: 30})
+	if cmd == nil {
+		t.Fatal("first WindowSizeMsg should print the welcome frame")
+	}
+	m = step(m, tea.WindowSizeMsg{Width: 52, Height: 30})
+	if _, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40}); cmd != nil {
+		t.Fatal("a resize must not reprint the welcome frame")
+	}
+}
+
+// TestTUIWelcomeFitsItsTerminal is the visible half of the same bug. Each banner
+// line is clipped rather than wrapped, so the frame is the same six rows (two
+// borders, four facts) at every width — a wrapping banner grew a row at a time as
+// the terminal narrowed, turning the greeting into most of a small screen.
+func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
+	const frameRows = 6
+	for _, width := range []int{40, 52, 80, 200} {
+		m := newTestTUI(t)
+		m.r.cfg.Node.Name = "XenithdeMacBook-Pro.local"
+		m.r.cfg.Storage.WorkPath = "/Users/xenith/Library/Application Support/openpanda"
+		m.r.cfg.Model.Model = "deepseek-v4-flash"
+		m = step(m, tea.WindowSizeMsg{Width: width, Height: 30})
+		lines := strings.Split(m.welcome(), "\n")
+		if len(lines) != frameRows {
+			t.Errorf("width %d: banner is %d rows, want %d", width, len(lines), frameRows)
+		}
+		for _, line := range lines {
+			if w := cliui.DisplayWidth(line); w > width {
+				t.Errorf("width %d: banner line is %d columns: %q", width, w, line)
+			}
+		}
+	}
+}
+
+// TestTUIHintLineShedsHintsWhenNarrow: the legend must never wrap or be cut
+// mid-word, and submit/quit are the two hints it may not drop.
+func TestTUIHintLineShedsHintsWhenNarrow(t *testing.T) {
+	full := newTestTUI(t)
+	full = step(full, tea.WindowSizeMsg{Width: 120, Height: 40})
+	if n := strings.Count(full.hintLine(), "·"); n != 3 {
+		t.Fatalf("a wide terminal should show all four hints, separators=%d", n)
+	}
+
+	narrow := newTestTUI(t)
+	narrow = step(narrow, tea.WindowSizeMsg{Width: 46, Height: 30})
+	line := narrow.hintLine()
+	if w := cliui.DisplayWidth(line); w > narrow.textWidth() {
+		t.Fatalf("hint line is %d columns, budget %d: %q", w, narrow.textWidth(), line)
+	}
+	if !strings.Contains(line, "enter") || !strings.Contains(line, "ctrl+c") {
+		t.Fatalf("submit and quit must survive: %q", line)
+	}
+}
+
+// TestAnswerTextMarksAndHangs covers the transcript's readability fix: prose is
+// marked like the user's own turn and its continuation lines hang under that
+// marker instead of resetting to column zero.
+func TestAnswerTextMarksAndHangs(t *testing.T) {
+	th := newTheme(i18n.Locale("en"))
+	out := answerText(th, "alpha beta gamma delta epsilon zeta eta theta", 24)
+	lines := strings.Split(out, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected the body to wrap at 24 columns: %q", out)
+	}
+	if !strings.HasPrefix(lines[0], th.glyph("⏺", "*")) {
+		t.Errorf("first line lost its marker: %q", lines[0])
+	}
+	for _, l := range lines[1:] {
+		if !strings.HasPrefix(l, "  ") {
+			t.Errorf("continuation line is not hung under the marker: %q", l)
+		}
+	}
+	// A committed block lands in the terminal's own scrollback, so the wrapper's
+	// block padding must not travel with it into anything the user copies out.
+	for _, l := range lines {
+		if strings.HasSuffix(l, " ") {
+			t.Errorf("wrapped line kept trailing padding: %q", l)
+		}
 	}
 }
