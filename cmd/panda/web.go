@@ -27,6 +27,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/log"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -148,6 +149,7 @@ func runWeb(args []string) {
 			EngineHolder: engines,
 			DB:           db,
 			Projects:     memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memoryLimits(cfg)),
+			ProjectStore: projectstore.NewStore(db),
 			Sessions:     sessions.NewStore(filepath.Join(filepath.Dir(cfg.Storage.DBPath), "sessions")),
 			Worktrees:    openWorktreesBestEffort(cfg.Storage.WorkPath),
 			SkillStore:   skills.NewStore(cfg.Storage.SkillsPath),

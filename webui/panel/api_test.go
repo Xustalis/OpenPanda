@@ -184,8 +184,20 @@ func TestProjects(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("list status = %d", rr.Code)
 	}
-	if got := strings.TrimSpace(rr.Body.String()); got != `{"projects":[]}` {
-		t.Fatalf("empty list = %s, want []", got)
+	// The names array must be [] and not null so the web client can map over it.
+	// The response also carries `detail` and `active` now (a project has metadata
+	// and one of them can be current), so this asserts the field rather than the
+	// whole body.
+	var empty struct {
+		Projects []string      `json:"projects"`
+		Detail   []projectView `json:"detail"`
+		Active   string        `json:"active"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &empty); err != nil {
+		t.Fatalf("unmarshal empty list: %v", err)
+	}
+	if empty.Projects == nil || len(empty.Projects) != 0 {
+		t.Fatalf("empty list = %s, want an empty (non-null) array", rr.Body.String())
 	}
 
 	// Create via POST, then the project appears in the list.
