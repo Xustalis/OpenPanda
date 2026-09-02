@@ -2,6 +2,7 @@ package panel
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -125,6 +126,48 @@ func TestFingerprintCacheErrorNotCached(t *testing.T) {
 	// caller retries immediately.
 	if got, err := c.get("k", load); err != nil || got != "fp" || calls != 2 {
 		t.Fatalf("retry = %q, %v, calls = %d; want fp, nil, 2", got, err, calls)
+	}
+}
+
+// A load that fails while other callers are piled up behind it must hand every
+// waiter the same error, not an empty value with a nil error: the events loop
+// treats a nil-error empty fingerprint as a change signal, so the broken window
+// would fan a false change event out to every connected stream while only the
+// loader's own stream dropped.
+func TestFingerprintCacheWaitersShareLoadError(t *testing.T) {
+	c := newFingerprintCache(time.Second)
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	wantErr := context.DeadlineExceeded
+	load := func() (string, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		return "", wantErr
+	}
+
+	const workers = 8
+	var wg sync.WaitGroup
+	errs := make([]error, workers)
+	vals := make([]string, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			vals[i], errs[i] = c.get("k", load)
+		}(i)
+	}
+	<-started                         // the first worker is inside load()
+	time.Sleep(20 * time.Millisecond) // let the rest pile up behind it
+	close(release)
+	wg.Wait()
+
+	for i := range workers {
+		if !errors.Is(errs[i], wantErr) || vals[i] != "" {
+			t.Fatalf("worker %d = %q, %v; want \"\", the loader's error", i, vals[i], errs[i])
+		}
 	}
 }
 
