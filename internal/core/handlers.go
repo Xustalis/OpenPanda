@@ -785,7 +785,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				"verdict_status": status,
 			})
 		}
-		prompt, skillsUsed := buildAgentPrompt(c, currentIntent, task.Project, task.Title)
+		prompt, skillsUsed := buildAgentPrompt(c, currentIntent, task.Project, task.Title, workDir)
 		usedSkills = skillsUsed
 
 		// — Trace: exec_agent_start (orbit Step-3 "starting this stage on N").
@@ -1257,17 +1257,25 @@ const agentOutputRider = "\n\n输出要求：最后用简洁的自然语言直�
 // words. The assembly stays under agentPromptBudget by degrading skills to
 // index lines when the budget is tight.
 //
-// Project memory (MEMORY.md) is deliberately NOT packed into the agent prompt
-// anymore (A1 decision): it used to be prepended wholesale here, burning
-// tokens on every task. Its replacement is the A3 manifest: outside a project
-// the agent receives an index of the personal memory files (paths + one-line
-// summaries) and reads what it needs with its own file tools; inside a project
-// no memory is injected at all (D3 isolation wall).
-func buildAgentPrompt(c *Core, intent, project, title string) (string, []*skills.Skill) {
+// Memory is injected as a manifest rather than as content (A1 decision): project
+// memory used to be prepended wholesale here, burning tokens on every task. What
+// the agent gets is a pointer it can follow with its own file tools.
+//
+// Which manifest depends on where the task runs, and the isolation wall (D3)
+// decides: outside a project, the index of personal memory files; inside one, the
+// project's own memory and its work directory, never Hermes. Inside a project used
+// to mean *no* manifest at all, which left a project task with strictly less
+// context than a loose one — and a project task delegated to another machine
+// arrived unable to tell what it was working on.
+func buildAgentPrompt(c *Core, intent, project, title, workDir string) (string, []*skills.Skill) {
 	manifest := ""
-	if project == "" && c.memory != nil {
-		if files, err := c.memory.Manifest(); err == nil {
-			manifest = memory.RenderManifest(files)
+	if c.memory != nil {
+		if project == "" {
+			if files, err := c.memory.Manifest(); err == nil {
+				manifest = memory.RenderManifest(files)
+			}
+		} else if pm, err := c.memory.ProjectManifest(project, workDir); err == nil {
+			manifest = pm
 		}
 	}
 	// The intent, the manifest and the output rider are non-negotiable; only

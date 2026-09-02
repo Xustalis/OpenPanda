@@ -124,6 +124,12 @@ func (m tuiModel) contextLine() string {
 		sess = i18n.Tf(m.loc, "tui.ctx.turns", "n", strconv.Itoa(len(m.r.convo)/2))
 	}
 	parts := []string{sess}
+	// Which project the next prompt belongs to is state that changes what an ask
+	// does — the task lands in that project and runs in its tree — so it belongs
+	// on the same line as the thread.
+	if proj := m.r.activeProjectName(); proj != "" {
+		parts = append(parts, m.th.glyph("▪", "#")+" "+proj)
+	}
 	if m.r.authorize {
 		parts = append(parts, i18n.T(m.loc, "repl.footer.authz")+":"+i18n.T(m.loc, "repl.footer.authz.on"))
 	}

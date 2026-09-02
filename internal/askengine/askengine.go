@@ -90,6 +90,19 @@ type Engine struct {
 	schedMu     sync.Mutex
 	schedCtx    context.Context
 	schedCancel context.CancelFunc
+
+	// project is the ambient project: the one the user entered, which every task
+	// this engine submits belongs to unless the classifier named a different one.
+	// It is a field rather than a per-call argument because "which project am I
+	// in" is state the user set once, and threading it through every Ask would
+	// make the caller responsible for remembering it on every turn.
+	//
+	// projectDir is that project's work dir, used as the task's working directory
+	// when the caller did not pin one of its own (a session worktree wins, since
+	// it is the more specific choice).
+	projectMu  sync.RWMutex
+	project    string
+	projectDir string
 	// queueTasks mirrors Options.QueueTasks.
 	queueTasks bool
 	// replyASCII mirrors Options.ReplyASCII (per-engine classify option).
@@ -532,6 +545,21 @@ func (e *Engine) Ask(ctx context.Context, prompt string, authorize bool) (*Resul
 	return e.AskTurns(ctx, nil, prompt, "", authorize, StreamCallbacks{})
 }
 
+// SetProject names the ambient project for the tasks this engine submits, and
+// the directory they run in. Both may be empty, which is "not in a project".
+func (e *Engine) SetProject(name, workDir string) {
+	e.projectMu.Lock()
+	e.project, e.projectDir = name, workDir
+	e.projectMu.Unlock()
+}
+
+// Project reports the ambient project and its work dir.
+func (e *Engine) Project() (string, string) {
+	e.projectMu.RLock()
+	defer e.projectMu.RUnlock()
+	return e.project, e.projectDir
+}
+
 // AskTurns is the session-aware ask: history carries the conversation so far
 // (plain user/assistant turns), workDir optionally pins where a classified
 // task executes (a session's git worktree), and the callbacks stream live
@@ -881,6 +909,19 @@ func gateAuthorized(mode string, sessionAuthorized bool) bool {
 // work-dir swap.
 func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool, workDir string, cb StreamCallbacks) *Result {
 	in := toTaskInput(spec)
+	// The ambient project fills in what the classifier did not name. A user who
+	// has entered a project expects their next ask to belong to it without saying
+	// so again — that is what entering a project means — and the project's tree is
+	// where the work happens unless the caller pinned a more specific directory
+	// (a session worktree).
+	if project, dir := e.Project(); project != "" {
+		if in.Project == "" {
+			in.Project = project
+		}
+		if workDir == "" && dir != "" {
+			workDir = dir
+		}
+	}
 	// Approval mode is the real tier-2 gate (design §16): "never" auto-consents
 	// so an irreversible task runs as classified; "on-request"/"always" withhold
 	// consent until the user approves at the inline gate below. A session-level

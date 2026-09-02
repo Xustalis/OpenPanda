@@ -22,6 +22,7 @@ import (
 // `panda ask "question" --config x` parses the way users type it.
 var askValueFlags = map[string]bool{
 	"--config": true, "--card": true, "--mcp": true, "--output-format": true,
+	"--project": true,
 }
 
 // askJSON is the headless wire form of one ask result (shared by
@@ -71,6 +72,7 @@ func runAsk(args []string) {
 	continueConvo := fs.Bool("continue", false, "continue the persisted conversation (the REPL's thread)")
 	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated), e.g. \"npx -y @modelcontextprotocol/server-filesystem /tmp\"")
 	outputFormat := fs.String("output-format", "", "headless output: json (one object) or stream-json (NDJSON events)")
+	project := fs.String("project", "", "run this ask inside a project (default: the one you entered)")
 	fs.Parse(reorderFlags(args, askValueFlags))
 
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
@@ -107,6 +109,12 @@ func runAsk(args []string) {
 		fatal("ask engine", err)
 	}
 	defer engine.Close()
+
+	// The project is ambient state, not an argument the user should retype: an
+	// explicit --project wins, otherwise the one they entered. Naming a project
+	// that does not exist is an error rather than a silent no-op, since the whole
+	// point of the flag is to put the work somewhere findable.
+	bindAskProject(engine, cfg, *project)
 
 	// --continue: replay the persisted conversation (the REPL's thread)
 	// as history, and record this exchange back into it — a one-shot ask

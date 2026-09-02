@@ -17,6 +17,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
@@ -447,4 +448,52 @@ func runProjectRemove(args []string) {
 	if *keepMemory {
 		fmt.Println(pal().Muted("  " + i18n.Tf(loc, "cli.project.memoryKept", "name", name)))
 	}
+}
+
+// activeProject reports the project this machine is currently in, and its work
+// dir. Every entry point that submits work calls it, so "which project am I in"
+// is answered in one place; a missing table (a database from before the projects
+// migration) reads as "no project" rather than as a failure.
+func activeProject(cfg *config.Config) (name, workDir string) {
+	db, _, err := panelStore(cfg)
+	if err != nil {
+		return "", ""
+	}
+	defer db.Close()
+	store := projects.NewStore(db)
+	name, err = store.Active()
+	if err != nil || name == "" {
+		return "", ""
+	}
+	pr, err := store.Get(name)
+	if err != nil {
+		return name, ""
+	}
+	return pr.Name, pr.WorkDir
+}
+
+// bindAskProject gives an engine its ambient project: the explicit --project when
+// one was named, otherwise whatever `panda project enter` last pointed at. A named
+// project that does not exist ends the command — the flag exists to put work
+// somewhere findable, and silently running outside it would defeat that.
+func bindAskProject(engine *askengine.Engine, cfg *config.Config, named string) {
+	if engine == nil {
+		return
+	}
+	named = strings.TrimSpace(named)
+	if named == "" {
+		name, dir := activeProject(cfg)
+		engine.SetProject(name, dir)
+		return
+	}
+	db, _, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+	pr, err := projects.NewStore(db).Get(named)
+	if err != nil {
+		fatal("get project", err)
+	}
+	engine.SetProject(pr.Name, pr.WorkDir)
 }
