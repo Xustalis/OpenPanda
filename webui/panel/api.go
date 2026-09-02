@@ -12,6 +12,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 )
 
 // askRequest is the body of POST /api/ask.
@@ -228,27 +229,53 @@ func (h *handler) getProjectMemory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// listProjects serves GET /api/projects — the project names known to the
-// memory layer.
+// listProjects serves GET /api/projects — every project with its metadata, and
+// which one is current.
+//
+// This used to return bare names from the memory layer, because that was all a
+// project was. Now a project has a work directory, a description and an
+// entered/not-entered state, and the console needs all three to be more than a
+// list of labels. `projects` keeps its name-only shape for a client that only
+// wants names.
 func (h *handler) listProjects(w http.ResponseWriter, r *http.Request) {
-	if h.projects == nil {
-		writeErr(w, http.StatusServiceUnavailable, errors.New("projects not configured"))
+	if h.projectStore == nil {
+		// No metadata table: fall back to the memory-layer names so an
+		// un-migrated database still lists something rather than failing.
+		if h.projects == nil {
+			writeErr(w, http.StatusServiceUnavailable, errors.New("projects not configured"))
+			return
+		}
+		names, err := h.projects.List()
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, errors.New("list projects failed"))
+			return
+		}
+		if names == nil {
+			names = []string{}
+		}
+		writeJSON(w, map[string]any{"projects": names, "detail": []projectView{}, "active": ""})
 		return
 	}
-	names, err := h.projects.List()
+	views, active, err := h.projectViews(h.projectStore)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("list projects failed"))
 		return
 	}
-	if names == nil {
-		names = []string{}
+	names := make([]string, 0, len(views))
+	for _, v := range views {
+		names = append(names, v.Name)
 	}
-	writeJSON(w, map[string]any{"projects": names})
+	writeJSON(w, map[string]any{"projects": names, "detail": views, "active": active})
 }
 
-// createProjectRequest is the body of POST /api/projects.
+// createProjectRequest is the body of POST /api/projects. WorkDir and Description
+// are optional; enter defaults to true, matching `panda project new`, because
+// creating a project you are not in is almost never what was meant.
 type createProjectRequest struct {
-	Name string `json:"name"`
+	Name        string `json:"name"`
+	WorkDir     string `json:"work_dir,omitempty"`
+	Description string `json:"description,omitempty"`
+	Enter       *bool  `json:"enter,omitempty"`
 }
 
 // createProject serves POST /api/projects — creates a project by seeding its
@@ -270,9 +297,35 @@ func (h *handler) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	// Idempotent create: saving the empty seed marks the project as existing
 	// (List lists directories); re-creating an existing project is a no-op.
-	if err := h.projects.Save(req.Name, memory.MemFile{Limit: h.projects.Limit()}); err != nil {
+	if err := h.seedProjectMemory(req.Name); err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("create project failed"))
 		return
 	}
-	writeJSON(w, map[string]string{"name": req.Name, "status": "created"})
+	if h.projectStore == nil {
+		writeJSON(w, map[string]string{"name": req.Name, "status": "created"})
+		return
+	}
+	if err := projectstore.ValidateName(req.Name); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid project name"))
+		return
+	}
+	p, err := h.projectStore.Create(req.Name, req.WorkDir, req.Description)
+	if err != nil {
+		// Already in the table (the memory seed above is idempotent, so this is a
+		// re-create): return the existing row rather than an error.
+		if p, err = h.projectStore.Get(req.Name); err != nil {
+			writeErr(w, http.StatusInternalServerError, errors.New("create project failed"))
+			return
+		}
+	}
+	enter := req.Enter == nil || *req.Enter
+	if enter {
+		if err := h.projectStore.SetActive(p.Name); err != nil {
+			writeErr(w, http.StatusInternalServerError, errors.New("enter project failed"))
+			return
+		}
+		h.bindEngineProject(h.projectStore, p.Name)
+	}
+	entries, chars := h.projectMemorySize(p.Name)
+	writeJSON(w, projectView{Project: p, Active: enter, Entries: entries, Chars: chars})
 }

@@ -1418,20 +1418,21 @@ func (r *repl) cmdWeb(arg string) {
 	updateMgr.StartAutoCheck(context.Background(), 0)
 
 	handler := panel.New(panel.Deps{
-		Store:      r.store,
-		Engine:     r.engine,
-		DB:         r.db,
-		Projects:   r.projects,
-		Sessions:   r.sessionsSt,
-		Worktrees:  r.worktrees,
-		SkillStore: skills.NewStore(r.cfg.Storage.SkillsPath),
-		Reminders:  reminders.NewStore(r.db),
-		Push:       r.push,
-		Cfg:        r.cfg,
-		ConfigPath: r.configPath,
-		CardPath:   r.cardPath,
-		Token:      token,
-		Updater:    updateMgr,
+		Store:        r.store,
+		Engine:       r.engine,
+		DB:           r.db,
+		Projects:     r.projects,
+		ProjectStore: r.projStore,
+		Sessions:     r.sessionsSt,
+		Worktrees:    r.worktrees,
+		SkillStore:   skills.NewStore(r.cfg.Storage.SkillsPath),
+		Reminders:    reminders.NewStore(r.db),
+		Push:         r.push,
+		Cfg:          r.cfg,
+		ConfigPath:   r.configPath,
+		CardPath:     r.cardPath,
+		Token:        token,
+		Updater:      updateMgr,
 	})
 	srv := &http.Server{Addr: addr, Handler: handler}
 	// Bind synchronously so a taken port surfaces as an error, not a silent

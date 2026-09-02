@@ -22,6 +22,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -44,6 +45,7 @@ type Deps struct {
 	EngineHolder *EngineHolder
 	DB           *sql.DB
 	Projects     *memory.Projects
+	ProjectStore *projectstore.Store // nil falls back to memory-only projects
 	Push         *push.Service
 	Sessions     *sessions.Store
 	Worktrees    *sessions.Worktrees
@@ -73,6 +75,7 @@ func New(d Deps) http.Handler {
 		engines:      d.EngineHolder,
 		db:           d.DB,
 		projects:     d.Projects,
+		projectStore: d.ProjectStore,
 		push:         d.Push,
 		sessions:     d.Sessions,
 		worktrees:    d.Worktrees,
@@ -102,6 +105,11 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/agents/{name}/test", h.testAgent)
 	mux.HandleFunc("GET /api/projects", h.listProjects)
 	mux.HandleFunc("POST /api/projects", h.createProject)
+	mux.HandleFunc("GET /api/projects/{name}", h.getProject)
+	mux.HandleFunc("PATCH /api/projects/{name}", h.patchProject)
+	mux.HandleFunc("DELETE /api/projects/{name}", h.deleteProject)
+	mux.HandleFunc("POST /api/projects/{name}/enter", h.enterProject)
+	mux.HandleFunc("POST /api/projects/exit", h.exitProject)
 	mux.HandleFunc("GET /api/projects/{name}/memory", h.getProjectMemory)
 	mux.HandleFunc("PUT /api/projects/{name}/memory", h.putProjectMemory)
 	mux.HandleFunc("GET /api/nodes", h.listNodes)
@@ -297,18 +305,22 @@ func clientIP(r *http.Request) string {
 }
 
 type handler struct {
-	store      *core.TaskStore
-	engine     *askengine.Engine // static engine; ignored when engines != nil
-	engines    *EngineHolder     // reloadable engine source; nil = static
-	db         *sql.DB
-	projects   *memory.Projects
-	push       *push.Service
-	sessions   *sessions.Store
-	worktrees  *sessions.Worktrees
-	skillStore *skills.Store
-	reminders  *reminders.Store
-	cfg        *config.Config
-	configPath string
+	store    *core.TaskStore
+	engine   *askengine.Engine // static engine; ignored when engines != nil
+	engines  *EngineHolder     // reloadable engine source; nil = static
+	db       *sql.DB
+	projects *memory.Projects
+	// projectStore is the project metadata table (work dir, description, the
+	// active pointer). nil on a database from before the projects migration, which
+	// degrades the console to the memory-only project view instead of erroring.
+	projectStore *projectstore.Store
+	push         *push.Service
+	sessions     *sessions.Store
+	worktrees    *sessions.Worktrees
+	skillStore   *skills.Store
+	reminders    *reminders.Store
+	cfg          *config.Config
+	configPath   string
 	// cardFilePath is where the card API edits capabilities.yaml; empty
 	// means "ask the live engine which card it was built from".
 	cardFilePath string

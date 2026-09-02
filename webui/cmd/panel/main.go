@@ -22,6 +22,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/log"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/webui/panel"
@@ -153,12 +154,13 @@ func main() {
 				Memory:  cfg.Memory.Limits.Memory,
 				Project: cfg.Memory.Limits.Project,
 			}),
-			Push:       pushSvc,
-			Reminders:  reminderStore,
-			Cfg:        cfg,
-			ConfigPath: configPathOrDefault(*configPath),
-			StaticDir:  *staticDir,
-			Token:      cfg.Network.PanelToken,
+			ProjectStore: projectstore.NewStore(db),
+			Push:         pushSvc,
+			Reminders:    reminderStore,
+			Cfg:          cfg,
+			ConfigPath:   configPathOrDefault(*configPath),
+			StaticDir:    *staticDir,
+			Token:        cfg.Network.PanelToken,
 		}),
 	}
 	errCh := make(chan error, 1)
