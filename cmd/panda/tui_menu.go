@@ -1,7 +1,7 @@
 package main
 
 // The filterable slash-command menu. When the user starts a line with "/" the
-// model opens this popup above the input: the full slash-command table filtered
+// model opens this popup under the input: the full slash-command table filtered
 // live by what has been typed, arrow-navigable, Enter/Tab to pick. It reuses the
 // exact replCommands table the classic loop dispatches, so the two front ends
 // never drift on which commands exist or what they do — the menu is a discovery
@@ -9,6 +9,7 @@ package main
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -132,19 +133,29 @@ func (mn *slashMenu) close() {
 }
 
 // render draws the popup: one row per matching command, the selected row marked
-// and accented, the rest dim, the help text muted. It is capped to a handful of
-// rows so a long list never pushes the input off a short terminal.
-func (mn *slashMenu) render(t theme, width int) string {
-	if !mn.active || len(mn.items) == 0 {
+// and accented, the rest dim, the help text muted. rows is the caller's ceiling on
+// how many commands may show (the window's spare height, see menuRows), so a long
+// list scrolls inside its window instead of outgrowing the terminal.
+func (mn *slashMenu) render(t theme, width, rows int) string {
+	if !mn.active || len(mn.items) == 0 || rows < 1 {
 		return ""
 	}
-	const maxRows = 8
 	// Keep the selected row inside the visible window when the list is long.
 	start := 0
-	if mn.sel >= maxRows {
-		start = mn.sel - maxRows + 1
+	if mn.sel >= rows {
+		start = mn.sel - rows + 1
 	}
-	end := min(start+maxRows, len(mn.items))
+	end := min(start+rows, len(mn.items))
+
+	// The help text lines up in a column of its own: the longest visible command
+	// sets the gutter, so the list reads as two columns instead of a ragged edge
+	// where every description starts wherever its name happened to end.
+	gutter := 0
+	for i := start; i < end; i++ {
+		if n := len([]rune(mn.items[i].name)); n > gutter {
+			gutter = n
+		}
+	}
 
 	var sb strings.Builder
 	for i := start; i < end; i++ {
@@ -158,20 +169,23 @@ func (mn *slashMenu) render(t theme, width int) string {
 			marker = t.accent.Render(t.glyph("❯", ">") + " ")
 			name = t.heading.Render(it.name)
 		}
-		row := marker + name
-		// Fit the help text into whatever the marker and name leave; drop it
+		row := marker + name + strings.Repeat(" ", gutter-len([]rune(it.name)))
+		// Fit the help text into whatever the marker and gutter leave; drop it
 		// entirely on a very narrow terminal rather than force a wrap.
-		budget := max(20, width) - 2 - len([]rune(it.name)) - 1
+		budget := max(20, width) - 2 - gutter - 2
 		if desc := strings.TrimSpace(it.desc); desc != "" && budget > 4 {
-			row += " " + t.muted.Render(truncate(desc, budget))
+			row += "  " + t.muted.Render(truncate(desc, budget))
 		}
-		sb.WriteString(row)
+		sb.WriteString(strings.TrimRight(row, " "))
 		if i < end-1 {
 			sb.WriteString("\n")
 		}
 	}
-	if len(mn.items) > end-start {
-		sb.WriteString("\n" + t.muted.Render(t.glyph("…", "...")))
+	if rest := len(mn.items) - (end - start); rest > 0 {
+		// Say how many are out of view rather than printing a bare ellipsis: the
+		// count is what tells the user whether to keep typing or keep arrowing.
+		sb.WriteString("\n" + t.muted.Render("  "+t.glyph("…", "...")+" "+
+			i18n.Tf(t.loc, "tui.menu.more", "n", strconv.Itoa(rest))))
 	}
 	return sb.String()
 }

@@ -26,7 +26,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ta.SetWidth(max(20, msg.Width-4))
 		if first {
 			// First size report: now the welcome frame can be drawn to the real
-			// terminal instead of to a guess (see Init).
+			// terminal instead of to a guess (see Init), and the status row can
+			// learn which project this run started in.
+			m.refreshProject()
 			return m, tea.Println(m.welcome())
 		}
 		return m, nil
@@ -57,8 +59,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onWatch(msg)
 	case execDoneMsg:
 		// A slash/shell command finished in the foreground; the terminal is
-		// restored and its output already sits in scrollback. Surface a rare
-		// dispatch error as a transcript block, otherwise just resume idle.
+		// restored and its output already sits in scrollback. The prompt comes
+		// back (the view was blank while the command held the terminal) and the
+		// status row re-reads what a command may have just changed — /project,
+		// /resume — instead of asking the store on every frame.
+		m.mode = modeIdle
+		m.refreshProject()
 		if msg.err != nil {
 			blk := block{kind: blockError, body: msg.err.Error()}
 			return m, m.printBlock(blk)
@@ -79,6 +85,11 @@ const interruptWindow = time.Second
 
 // onKey dispatches a keystroke according to the current mode.
 func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// A foreground command owns the terminal and the view is blank; Bubble Tea is
+	// not reading input, so anything that reaches us here is not ours to act on.
+	if m.mode == modeExec {
+		return m, nil
+	}
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		if m.mode == modeAsking {
@@ -228,7 +239,11 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 	}
 	if isBareCommand(text) {
 		// Slash/shell commands reuse the repl handlers verbatim; their output
-		// flows to scrollback while Bubble Tea has the terminal released.
+		// flows to scrollback while Bubble Tea has the terminal released. The mode
+		// blanks the frame in the same event-loop pass that queues the exec, which
+		// is what stops the released terminal from stranding a copy of the input
+		// box above the command's output (see modeExec).
+		m.mode = modeExec
 		return m, m.runSlash(text)
 	}
 	// Echo the prompt into scrollback so the committed transcript reads as a
