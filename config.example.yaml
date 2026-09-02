@@ -46,14 +46,61 @@ storage:
 log:
   level: "info"                  # debug | info | warn | error
 
-# LLM provider for the entry model and agent adapters. DeepSeek exposes an
-# Anthropic-compatible Messages API; any /v1/messages-compatible endpoint works.
+# LLM provider for the entry model and agent adapters. Supports both OpenAI-compatible
+# and Anthropic-compatible endpoints.
+#
+# Examples:
+#   1. DeepSeek (Anthropic endpoint, recommended default):
+#      base_url: "https://api.deepseek.com/anthropic"
+#      model: "deepseek-v4-flash"
+#      api_type: "anthropic"
+#
+#   2. Official OpenAI:
+#      base_url: "https://api.openai.com/v1"
+#      model: "gpt-4o"  # or "o3-mini", "o1", "gpt-4o-mini"
+#      api_type: "openai"
+#
+#   3. DeepSeek (OpenAI-compatible endpoint):
+#      base_url: "https://api.deepseek.com"
+#      model: "deepseek-chat"  # or "deepseek-reasoner"
+#      api_type: "openai"
+#
+#   4. Alibaba Cloud DashScope / Tongyi Qwen (通义千问):
+#      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+#      model: "qwen-plus"  # or "qwen-max", "qwq-32b", "qwen2.5-coder-32b-instruct"
+#      api_type: "openai"
+#
+#   5. SiliconFlow (硅基流动):
+#      base_url: "https://api.siliconflow.cn/v1"
+#      model: "deepseek-ai/DeepSeek-V3"  # or "deepseek-ai/DeepSeek-R1"
+#      api_type: "openai"
+#
+#   6. Moonshot Kimi (月之暗面):
+#      base_url: "https://api.moonshot.cn/v1"
+#      model: "moonshot-v1-auto"  # or "kimi-k1.5-preview"
+#      api_type: "openai"
+#
+#   7. Zhipu AI GLM (智谱清言):
+#      base_url: "https://open.bigmodel.cn/api/paas/v4"
+#      model: "glm-4-plus"  # or "glm-4-flash"
+#      api_type: "openai"
+#
+#   8. Ollama Local:
+#      base_url: "http://localhost:11434/v1"
+#      model: "deepseek-r1:14b"  # or "qwen2.5-coder:14b", "llama3.3"
+#      api_type: "openai"
+#
+#   9. OpenRouter:
+#      base_url: "https://openrouter.ai/api/v1"
+#      model: "anthropic/claude-3.5-sonnet"
+#      api_type: "openai"
+#
 model:
   base_url: "https://api.deepseek.com/anthropic"
-  model: "deepseek-v4-flash"      # the old chat/reasoner aliases were retired 2026-07-24
-  # api_type: "anthropic"         # anthropic | openai (default anthropic)
-  # max_tokens: 4096              # completion cap; default 4096
-  # api_key: ""                   # secret; prefer env OPENPANDA_MODEL_API_KEY
+  model: "deepseek-v4-flash"
+  api_type: "anthropic"         # anthropic | openai (default anthropic)
+  # max_tokens: 4096            # completion cap; default 4096
+  # api_key: ""                 # secret; prefer env OPENPANDA_MODEL_API_KEY
 
 # MCP server (Model Context Protocol): one stdio server whose tools become
 # callable by the ask engine. The command is space-separated argv; empty

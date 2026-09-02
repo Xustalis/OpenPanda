@@ -12,15 +12,51 @@ import (
 // API defaults to "auto" when tools are present, mirroring the Anthropic path.
 // PromptCacheKey and StreamOptions are the provider-native prompt-cache /
 // usage hints, attached only while prompt caching is enabled so a strict
+// oaiRequest is the Chat Completions request body. ToolChoice is omitted: the
+// API defaults to "auto" when tools are present, mirroring the Anthropic path.
+// PromptCacheKey and StreamOptions are the provider-native prompt-cache /
+// usage hints, attached only while prompt caching is enabled so a strict
 // legacy provider can opt out (SetPromptCaching(false)).
+// MaxCompletionTokens is used for OpenAI reasoning models (o1/o3 series) which
+// reject max_tokens.
 type oaiRequest struct {
-	Model          string            `json:"model"`
-	MaxTokens      int               `json:"max_tokens,omitempty"`
-	Stream         bool              `json:"stream,omitempty"`
-	Messages       []oaiMessage      `json:"messages"`
-	Tools          []oaiTool         `json:"tools,omitempty"`
-	PromptCacheKey string            `json:"prompt_cache_key,omitempty"`
-	StreamOptions  *oaiStreamOptions `json:"stream_options,omitempty"`
+	Model               string            `json:"model"`
+	MaxTokens           int               `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int               `json:"max_completion_tokens,omitempty"`
+	Stream              bool              `json:"stream,omitempty"`
+	Messages            []oaiMessage      `json:"messages"`
+	Tools               []oaiTool         `json:"tools,omitempty"`
+	PromptCacheKey      string            `json:"prompt_cache_key,omitempty"`
+	StreamOptions       *oaiStreamOptions `json:"stream_options,omitempty"`
+}
+
+// buildOAIRequest constructs an oaiRequest, automatically choosing between
+// max_completion_tokens (for o1/o3 reasoning models) and max_tokens.
+func buildOAIRequest(model string, maxTokens int, stream bool, msgs []oaiMessage, tools []ToolSpec, promptCacheKey string) oaiRequest {
+	req := oaiRequest{
+		Model:          model,
+		Stream:         stream,
+		Messages:       msgs,
+		PromptCacheKey: promptCacheKey,
+	}
+	if isOpenAIReasoningModel(model) {
+		req.MaxCompletionTokens = maxTokens
+	} else {
+		req.MaxTokens = maxTokens
+	}
+	if len(tools) > 0 {
+		req.Tools = specsToOpenAI(tools)
+	}
+	if stream {
+		req.StreamOptions = &oaiStreamOptions{IncludeUsage: true}
+	}
+	return req
+}
+
+// isOpenAIReasoningModel reports whether model requires max_completion_tokens (o1/o3/o4/gpt-4.5 series).
+func isOpenAIReasoningModel(model string) bool {
+	lower := strings.ToLower(model)
+	return strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") || strings.Contains(lower, "gpt-4.5")
 }
 
 // oaiStreamOptions asks OpenAI-compatible providers to include a final usage
@@ -75,8 +111,8 @@ type oaiFunctionCall struct {
 }
 
 // oaiResponse is the non-streaming response body. The message's
-// reasoning_content / reasoning fields (DeepSeek-R1-style reasoners and relays
-// that separate chain-of-thought from content) are captured onto
+// reasoning_content / reasoning / thought / thinking fields (across DeepSeek-R1,
+// Qwen, Ollama, SiliconFlow, Gemini proxies, Groq, and relays) are captured onto
 // Response.Reasoning for display only — surfaced to a reasoning sink, never
 // merged into the answer or session history (D14).
 type oaiResponse struct {
@@ -85,6 +121,8 @@ type oaiResponse struct {
 			Content          string        `json:"content"`
 			ReasoningContent string        `json:"reasoning_content"`
 			Reasoning        string        `json:"reasoning"`
+			Thought          string        `json:"thought"`
+			Thinking         string        `json:"thinking"`
 			ToolCalls        []oaiToolCall `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
@@ -100,16 +138,18 @@ type oaiError struct {
 
 // oaiChunk is one streamed chunk: choices[0].delta carries either text or
 // incremental tool_call fragments addressed by index. Reasoning-bearing
-// providers stream chain-of-thought on delta.reasoning_content / delta.
-// reasoning — surfaced live to the reasoning sink and kept off the answer
-// (D14). The final chunk (with stream_options.include_usage) carries the
-// usage block and empty choices.
+// providers stream chain-of-thought on delta.reasoning_content / delta.reasoning
+// / delta.thought / delta.thinking — surfaced live to the reasoning sink and
+// kept off the answer (D14). The final chunk (with stream_options.include_usage)
+// carries the usage block and empty choices.
 type oaiChunk struct {
 	Choices []struct {
 		Delta struct {
 			Content          string        `json:"content"`
 			ReasoningContent string        `json:"reasoning_content"`
 			Reasoning        string        `json:"reasoning"`
+			Thought          string        `json:"thought"`
+			Thinking         string        `json:"thinking"`
 			ToolCalls        []oaiToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
@@ -203,10 +243,15 @@ func parseOpenAIResponse(r *oaiResponse) Response {
 	out.Text = stripThinkingBlock(c.Message.Content)
 	// Chain-of-thought from the separate reasoning field is display-only (D14):
 	// captured on Response.Reasoning, never merged into Text.
-	if c.Message.ReasoningContent != "" {
+	switch {
+	case c.Message.ReasoningContent != "":
 		out.Reasoning = c.Message.ReasoningContent
-	} else {
+	case c.Message.Reasoning != "":
 		out.Reasoning = c.Message.Reasoning
+	case c.Message.Thought != "":
+		out.Reasoning = c.Message.Thought
+	case c.Message.Thinking != "":
+		out.Reasoning = c.Message.Thinking
 	}
 	for _, tc := range c.Message.ToolCalls {
 		var input map[string]any
@@ -249,16 +294,19 @@ func (a *oaiAccumulator) feed(chunk *oaiChunk, onDelta func(string), onReasoning
 		return
 	}
 	c := chunk.Choices[0]
-	// Chain-of-thought arrives on a separate field (reasoning_content, or the
-	// bare reasoning alias): collect it apart from the answer and surface it
-	// live, but never let it reach a.texts / the answer or history (D14).
-	if r := c.Delta.ReasoningContent; r != "" {
-		a.reasoning = append(a.reasoning, r)
-		if onReasoning != nil {
-			onReasoning(r)
-		}
+	// Chain-of-thought arrives on separate reasoning fields:
+	// reasoning_content, reasoning, thought, or thinking.
+	r := c.Delta.ReasoningContent
+	if r == "" {
+		r = c.Delta.Reasoning
 	}
-	if r := c.Delta.Reasoning; r != "" {
+	if r == "" {
+		r = c.Delta.Thought
+	}
+	if r == "" {
+		r = c.Delta.Thinking
+	}
+	if r != "" {
 		a.reasoning = append(a.reasoning, r)
 		if onReasoning != nil {
 			onReasoning(r)

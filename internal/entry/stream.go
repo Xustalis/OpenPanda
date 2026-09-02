@@ -437,27 +437,19 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 // returns the open response on 200 (the caller owns its body), mirroring
 // sendAnthropicStream's error split.
 func (c *Client) sendOAIStream(ctx context.Context, system string, msgs []oaiMessage, tools []ToolSpec) (*http.Response, error) {
-	req := oaiRequest{
-		Model:     c.model,
-		MaxTokens: c.maxTokens,
-		Stream:    true,
-		Messages:  msgs,
-	}
+	promptCacheKey := ""
 	if c.promptCache.Load() {
-		req.PromptCacheKey = c.oaiPromptCacheKey(system)
-		// include_usage rides the same flag: both are OpenAI-specific hints a
-		// strict legacy provider may reject, so SetPromptCaching(false) is the
-		// single escape hatch that strips them.
-		req.StreamOptions = &oaiStreamOptions{IncludeUsage: true}
+		promptCacheKey = c.oaiPromptCacheKey(system)
 	}
-	if len(tools) > 0 {
-		req.Tools = specsToOpenAI(tools)
+	req := buildOAIRequest(c.model, c.maxTokens, true, msgs, tools, promptCacheKey)
+	if !c.promptCache.Load() {
+		req.StreamOptions = nil
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("entry: marshal request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIURL(c.baseURL), bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -503,7 +495,7 @@ func (c *Client) sendAnthropicStream(ctx context.Context, system string, msgs []
 	if err != nil {
 		return nil, fmt.Errorf("entry: marshal request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicURL(c.baseURL), bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}

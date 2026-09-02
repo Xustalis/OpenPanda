@@ -98,9 +98,10 @@ type Capabilities struct {
 // through the mapping, so a new agent in the registry gets credential probing
 // and (when a mapping is declared) injection without any commander change.
 type ModelEnvMapping struct {
-	BaseURL string // env var carrying the provider base URL, e.g. ANTHROPIC_BASE_URL
-	APIKey  string // env var carrying the API key, e.g. ANTHROPIC_API_KEY
-	Model   string // env var carrying the model name, e.g. ANTHROPIC_MODEL
+	APIType string // protocol required: "anthropic" | "openai" (empty matches any)
+	BaseURL string // env var carrying the provider base URL, e.g. ANTHROPIC_BASE_URL / OPENAI_BASE_URL
+	APIKey  string // env var carrying the API key, e.g. ANTHROPIC_API_KEY / OPENAI_API_KEY
+	Model   string // env var carrying the model name, e.g. ANTHROPIC_MODEL / OPENAI_MODEL
 }
 
 // PrimaryBinary returns the canonical CLI binary to probe, or "" if none.
@@ -120,9 +121,7 @@ var known = []Known{
 		InstallHint: "npm install -g @anthropic-ai/claude-code",
 		InstallURL:  "https://docs.anthropic.com/en/docs/claude-code/setup",
 		InitHint:    "claude init  # accept terms and create ~/.claude/ state files",
-		// Claude Code has an unambiguous Anthropic env contract, so it is
-		// the one agent PANDA can inject a model endpoint into (see
-		// commander's DeepSeek flash injection).
+		// Claude Code has an unambiguous Anthropic env contract.
 		CredentialEnvVars: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
 		CredentialFiles: []string{
 			".claude/config.json",       // 2.1.x API-key login (primaryApiKey)
@@ -130,12 +129,6 @@ var known = []Known{
 			".claude.json",              // legacy: oauthAccount / primaryApiKey fields
 			".claude/.credentials.json", // subscription OAuth tokens
 		},
-		// ~/.claude.json is Claude Code's onboarding/state file: it exists
-		// after the very first run even with no login — only its
-		// oauthAccount / primaryApiKey fields mean credentials. config.json
-		// carries primaryApiKey; settings.json authenticates through its env
-		// block (dotted paths). ~/.claude/.credentials.json is written only
-		// after OAuth login, so its presence alone suffices.
 		CredentialFileFields: map[string][]string{
 			".claude.json":        {"oauthAccount", "primaryApiKey"},
 			".claude/config.json": {"primaryApiKey"},
@@ -146,6 +139,7 @@ var known = []Known{
 			},
 		},
 		ModelEnv: &ModelEnvMapping{
+			APIType: "anthropic",
 			BaseURL: "ANTHROPIC_BASE_URL",
 			APIKey:  "ANTHROPIC_API_KEY",
 			Model:   "ANTHROPIC_MODEL",
@@ -176,6 +170,12 @@ var known = []Known{
 		InitHint:          "codex --help  # first run creates ~/.codex/ config directory",
 		CredentialEnvVars: []string{"OPENAI_API_KEY"},
 		CredentialFiles:   []string{".codex/auth.json", ".codex/config.toml"},
+		ModelEnv: &ModelEnvMapping{
+			APIType: "openai",
+			BaseURL: "OPENAI_BASE_URL",
+			APIKey:  "OPENAI_API_KEY",
+			Model:   "OPENAI_MODEL",
+		},
 	},
 	{
 		Name:        "grok_build",
@@ -202,12 +202,19 @@ var known = []Known{
 		InstallURL:  "https://docs.openclaw.ai/",
 	},
 	{
-		Name:        "hermes",
-		Adapter:     "hermes.py",
-		Binaries:    []string{"hermes"},
-		DisplayName: "Hermes",
-		InstallHint: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
-		InstallURL:  "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+		Name:              "hermes",
+		Adapter:           "hermes.py",
+		Binaries:          []string{"hermes"},
+		DisplayName:       "Hermes",
+		InstallHint:       "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+		InstallURL:        "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+		CredentialEnvVars: []string{"OPENAI_API_KEY", "HERMES_API_KEY"},
+		ModelEnv: &ModelEnvMapping{
+			APIType: "openai",
+			BaseURL: "OPENAI_BASE_URL",
+			APIKey:  "OPENAI_API_KEY",
+			Model:   "OPENAI_MODEL",
+		},
 	},
 }
 

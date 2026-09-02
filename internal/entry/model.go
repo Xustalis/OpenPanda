@@ -498,18 +498,15 @@ func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn
 }
 
 func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []oaiMessage, tools []ToolSpec) (Response, error) {
-	req := oaiRequest{Model: c.model, MaxTokens: c.maxTokens, Messages: msgs}
+	req := buildOAIRequest(c.model, c.maxTokens, false, msgs, tools, "")
 	if c.promptCache.Load() {
 		req.PromptCacheKey = c.oaiPromptCacheKey(system)
-	}
-	if len(tools) > 0 {
-		req.Tools = specsToOpenAI(tools)
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return Response{}, fmt.Errorf("entry: marshal request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIURL(c.baseURL), bytes.NewReader(payload))
 	if err != nil {
 		return Response{}, err
 	}
@@ -547,6 +544,36 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []o
 		c.addUsage(or.Usage.PromptTokens, or.Usage.CompletionTokens)
 	}
 	return parseOpenAIResponse(&or), nil
+}
+
+// openAIURL normalizes an OpenAI-compatible base URL into the full chat completions endpoint.
+func openAIURL(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return "https://api.openai.com/v1/chat/completions"
+	}
+	if strings.HasSuffix(base, "/chat/completions") {
+		return base
+	}
+	if strings.HasSuffix(base, "/v1") || strings.HasSuffix(base, "/v4") || strings.HasSuffix(base, "/v2") || strings.HasSuffix(base, "/v3") {
+		return base + "/chat/completions"
+	}
+	return base + "/v1/chat/completions"
+}
+
+// anthropicURL normalizes an Anthropic-compatible base URL into the full messages endpoint.
+func anthropicURL(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return "https://api.deepseek.com/anthropic/v1/messages"
+	}
+	if strings.HasSuffix(base, "/messages") {
+		return base
+	}
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/messages"
+	}
+	return base + "/v1/messages"
 }
 
 // passbackRequired reports whether err is the provider's demand for the
@@ -656,7 +683,7 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 	if err != nil {
 		return Response{}, fmt.Errorf("entry: marshal request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicURL(c.baseURL), bytes.NewReader(payload))
 	if err != nil {
 		return Response{}, err
 	}
