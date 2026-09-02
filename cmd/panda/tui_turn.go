@@ -161,6 +161,10 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) block {
 	switch out.Kind {
 	case "task":
+		meta := ""
+		if out.TaskID != "" && out.TaskState != "" {
+			meta = i18n.Tf(loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState)
+		}
 		// Sub-agent round: the converged report is the reply — it streamed
 		// live into this turn's answer region, so the committed body is the
 		// model's report with the raw agent output demoted to a pointer
@@ -171,20 +175,21 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 			if !out.OK {
 				body += fmt.Sprintf("\nexit %d: %s", out.ExitCode, strings.TrimSpace(out.Stderr))
 			}
-			body += "\n" + i18n.Tf(loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
-			return block{kind: blockTask, ok: out.OK, body: body}
+			if out.TaskID != "" && out.TaskState != "" {
+				meta = i18n.Tf(loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
+			}
+			return block{kind: blockTask, ok: out.OK, body: body, meta: meta}
 		}
 		// LLM-generated summary: the dedicated "report after execution" call
 		// fills Report so the user sees a human-readable summary instead of
 		// raw stdout/stderr.
 		if summary := strings.TrimSpace(out.Report); summary != "" {
-			body := i18n.Tf(loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState) + "\n" + summary
-			return block{kind: blockTask, ok: out.OK, body: body}
+			return block{kind: blockTask, ok: out.OK, body: summary, meta: meta}
 		}
 		if out.OK {
-			return block{kind: blockTask, ok: true, body: strings.TrimRight(out.Stdout, "\n")}
+			return block{kind: blockTask, ok: true, body: strings.TrimRight(out.Stdout, "\n"), meta: meta}
 		}
-		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, out.Stderr)}
+		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, out.Stderr), meta: meta}
 	case "plan":
 		// A plan that failed to start has no board to follow and no stages, so
 		// its summary line would read "plan  · 0 stages" — a failure rendered

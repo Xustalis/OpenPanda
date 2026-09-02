@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -122,12 +123,15 @@ func doctorReport(loc i18n.Locale, configPath string) int {
 		}
 		if lp, err := exec.LookPath(install.ExeName()); err == nil {
 			pass("doctor.path.ok", "path", lp)
+			if where := install.PathPersistedAt(dir); len(where) > 0 {
+				pass("doctor.persist.ok", "where", joinPaths(where))
+			} else if filepath.Clean(filepath.Dir(lp)) == filepath.Clean(dir) || strings.Contains(os.Getenv("PATH"), dir) {
+				pass("doctor.persist.ok", "where", "$PATH environment")
+			} else {
+				fail("doctor.persist.no")
+			}
 		} else {
 			fail("doctor.path.no")
-		}
-		if where := install.PathPersistedAt(dir); len(where) > 0 {
-			pass("doctor.persist.ok", "where", joinPaths(where))
-		} else {
 			fail("doctor.persist.no")
 		}
 	} else {

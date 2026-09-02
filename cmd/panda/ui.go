@@ -94,8 +94,12 @@ func progressNote(loc i18n.Locale, p askengine.Progress) string {
 	// names the round so identical stage labels stay tellable apart. Budget ≤ 1
 	// stays unadorned.
 	if p.Budget > 1 {
+		round := p.Round
+		if round <= 0 {
+			round = 1
+		}
 		note += " · " + i18n.Tf(loc, "cli.progress.round",
-			"round", fmt.Sprintf("%d", p.Round), "budget", fmt.Sprintf("%d", p.Budget))
+			"round", fmt.Sprintf("%d", round), "budget", fmt.Sprintf("%d", p.Budget))
 	}
 	return note
 }

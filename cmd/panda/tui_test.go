@@ -85,8 +85,8 @@ func TestResultBlockTaskReport(t *testing.T) {
 	if strings.Contains(b.body, "wall of agent log") {
 		t.Fatalf("raw output must not be the body: %q", b.body)
 	}
-	if !strings.Contains(b.body, "panda task show t-1") {
-		t.Fatalf("raw-output pointer missing: %q", b.body)
+	if !strings.Contains(b.meta, "panda task show t-1") {
+		t.Fatalf("raw-output pointer missing from meta: %q", b.meta)
 	}
 
 	// A failed round keeps its exit evidence alongside the report.

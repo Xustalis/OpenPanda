@@ -107,7 +107,20 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		retryBase: 500 * time.Millisecond,
 	}
 	c.promptCache.Store(true)
+	if isDeepSeekModel(name) || isDeepSeekEndpoint(base) {
+		c.passback.Store(true)
+	}
 	return c, nil
+}
+
+func isDeepSeekEndpoint(rawURL string) bool {
+	lower := strings.ToLower(rawURL)
+	return strings.Contains(lower, "deepseek.com") || lower == ""
+}
+
+func isDeepSeekModel(model string) bool {
+	lower := strings.ToLower(model)
+	return strings.Contains(lower, "deepseek") || strings.Contains(lower, "reasoner")
 }
 
 // streamTransport bounds every phase of a streaming request that can hang
@@ -255,7 +268,9 @@ type message struct {
 // tool_use/tool_result (both directions).
 type ContentBlock struct {
 	Type      string         `json:"type"`                  // text | thinking | tool_use | tool_result
-	Text      string         `json:"text,omitempty"`        // text/thinking
+	Text      string         `json:"text,omitempty"`        // text
+	Thinking  string         `json:"thinking,omitempty"`    // thinking content (Anthropic wire format)
+	Signature string         `json:"signature,omitempty"`   // thinking signature
 	ID        string         `json:"id,omitempty"`          // tool_use id
 	Name      string         `json:"name,omitempty"`        // tool_use name
 	Input     map[string]any `json:"input,omitempty"`       // tool_use input
@@ -268,6 +283,9 @@ type ContentBlock struct {
 // no-argument tool): the Anthropic Messages schema requires the field, and
 // strict Anthropic-compatible providers (e.g. DeepSeek's /anthropic endpoint)
 // reject the request with a 400 when map omitempty drops the empty input.
+// Similarly, a thinking block ALWAYS carries "thinking" (not "text"), as
+// strict Anthropic-compatible providers reject with "missing field `thinking`"
+// otherwise.
 func (b ContentBlock) MarshalJSON() ([]byte, error) {
 	m := map[string]any{"type": b.Type}
 	switch b.Type {
@@ -282,7 +300,19 @@ func (b ContentBlock) MarshalJSON() ([]byte, error) {
 	case "tool_result":
 		m["tool_use_id"] = b.ToolUseID
 		m["content"] = b.Content
-	default: // text | thinking
+	case "thinking":
+		thinking := b.Thinking
+		if thinking == "" {
+			thinking = b.Text
+		}
+		if thinking == "" {
+			thinking = " "
+		}
+		m["thinking"] = thinking
+		if b.Signature != "" {
+			m["signature"] = b.Signature
+		}
+	default: // text
 		m["text"] = b.Text
 	}
 	return json.Marshal(m)
@@ -520,14 +550,34 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []o
 }
 
 // passbackRequired reports whether err is the provider's demand for the
-// thinking passback: a definitive 400 whose body names the requirement. The
-// clause is shared by both wire wordings — Anthropic's "content[].thinking …
-// must be passed back to the API" and Chat Completions' "reasoning_content …".
+// thinking passback: a definitive 400 whose body names the requirement.
+// Two wording families are matched:
+//
+//   - Provider-native prose: Anthropic's "content[].thinking … must be
+//     passed back to the API" and Chat Completions' "reasoning_content …
+//     must be passed back".
+//   - Strict-deserializer reports (Rust serde, typed relays):
+//     "missing field `thinking`" (Messages wire, assistant block arrays
+//     lack the thinking block) and "missing field `reasoning_content`"
+//     (Chat Completions wire, assistant object lacks the passback field).
+//
+// Both shapes mean the same thing: the history must gain a thinking /
+// reasoning_content placeholder on every assistant turn before retrying.
 func passbackRequired(err error) bool {
 	var se *statusError
-	return errors.As(err, &se) &&
-		se.status == http.StatusBadRequest &&
-		strings.Contains(se.body, "must be passed back")
+	if !errors.As(err, &se) || se.status != http.StatusBadRequest {
+		return false
+	}
+	body := se.body
+	// Canonical provider wording (DeepSeek's documented rejection).
+	if strings.Contains(body, "must be passed back") {
+		return true
+	}
+	// Strict-deserializer variants — case-insensitive because backticks,
+	// straight quotes and casing differ across relays.
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "missing field") &&
+		(strings.Contains(lower, "thinking") || strings.Contains(lower, "reasoning_content"))
 }
 
 // injectThinkingPassback satisfies a thinking-passback provider: every
@@ -559,7 +609,7 @@ func injectThinkingPassback(msgs []message) []message {
 			continue
 		}
 		injected := make([]ContentBlock, 0, len(blocks)+1)
-		injected = append(injected, ContentBlock{Type: "thinking", Text: " "})
+		injected = append(injected, ContentBlock{Type: "thinking", Thinking: " ", Text: " "})
 		out[i] = message{Role: m.Role, Content: append(injected, blocks...)}
 	}
 	return out

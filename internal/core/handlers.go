@@ -792,7 +792,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// We report before Execute so the orbit paints the stage bar as
 		// running immediately. Best-effort only.
 		c.EvTrace(execCtx, taskID, EvExecAgentStart, map[string]any{
-			"round":      round,
+			"round":      round + 1,
 			"budget":     maxRounds,
 			"plan_kind":  plan.Kind,
 			"agent":      plan.Agent,
@@ -855,8 +855,10 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// judge pass below, where their verdict becomes known; only rounds that
 		// never reach a judge trace here, so the detail view's "2/5" badge and
 		// verdict pill always reflect a decided round.
+		// Gated: an authorization refusal parks before agent execution; emitting
+		// a failed supervision round would falsely mark that a judge round took place.
 		judgeWillRun := plan.Kind == "agent" && c.supervisor != nil && round < maxRounds-1 && res.OK
-		if !judgeWillRun {
+		if !judgeWillRun && !commander.IsAuthorizationRefusal(res.Stderr) {
 			status := string(verdict.Status)
 			if !res.OK {
 				// A failed round is never judged (the failure branch below
