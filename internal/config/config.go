@@ -1172,9 +1172,6 @@ func hardenSecretPerms(path string, data []byte) {
 		return
 	}
 
-	slog.Warn("config file contains secrets; prefer env vars "+
-		"(OPENPANDA_SHARED_SECRET / OPENPANDA_PANEL_TOKEN / OPENPANDA_MODEL_API_KEY)", "path", path)
-
 	st, err := os.Stat(path)
 	if err != nil {
 		return
@@ -1182,6 +1179,10 @@ func hardenSecretPerms(path string, data []byte) {
 	if st.Mode().Perm()&0o077 == 0 {
 		return // already owner-only
 	}
+
+	slog.Warn("config file contains secrets; prefer env vars "+
+		"(OPENPANDA_SHARED_SECRET / OPENPANDA_PANEL_TOKEN / OPENPANDA_MODEL_API_KEY)", "path", path)
+
 	if err := os.Chmod(path, 0o600); err != nil {
 		slog.Warn("config contains secrets but permissions could not be tightened to 0600",
 			"path", path, "err", err)

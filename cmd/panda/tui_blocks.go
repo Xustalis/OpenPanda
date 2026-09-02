@@ -43,6 +43,7 @@ type block struct {
 	// trail it went through, so scrollback keeps the evidence the live card showed.
 	title  string
 	stages []string
+	meta   string
 }
 
 // render draws the block at the given width using the theme. expandThought
@@ -105,10 +106,10 @@ func (b block) renderThought(t theme, expand bool) string {
 	return sb.String()
 }
 
-// renderTask draws a delegated-task result as a subtree: a header naming the
-// task and its outcome, one arm per lifecycle stage it went through, and a final
-// arm holding the captured output (or the error). The arm glyph (⎿) ties each
-// line to the task the way Claude Code nests a tool result under its call.
+// renderTask draws a delegated-task result: a header naming the task and its
+// outcome, one arm per lifecycle stage it went through, and a final arm holding
+// the task state pointer. Substantive answer/report prose is separated from the
+// task subtree and rendered in clean, normal prose below the card.
 func (b block) renderTask(t theme) string {
 	arm := t.glyph("⎿", "\\_")
 	head := t.glyph("●", "*") + " " + i18n.T(t.loc, "tui.task.head")
@@ -125,8 +126,15 @@ func (b block) renderTask(t theme) string {
 	for _, st := range b.stages {
 		sb.WriteString("\n" + t.muted.Render("  "+arm+" "+st))
 	}
+	if b.meta != "" {
+		sb.WriteString("\n" + t.muted.Render("  "+arm+" "+b.meta))
+	}
 	if b.body != "" {
-		sb.WriteString("\n" + t.muted.Render(indentLines(b.body, "  "+arm+" ", "     ")))
+		if b.ok {
+			sb.WriteString("\n\n" + b.body)
+		} else {
+			sb.WriteString("\n\n" + t.danger.Render(b.body))
+		}
 	}
 	return sb.String()
 }

@@ -323,7 +323,7 @@ func TestInjectThinkingPassbackShapes(t *testing.T) {
 		{Role: "user", Content: "hi"},
 		{Role: "assistant", Content: "dispatched"},
 		{Role: "assistant", Content: []ContentBlock{{Type: "tool_use", ID: "t", Name: "n"}}},
-		{Role: "assistant", Content: []ContentBlock{{Type: "thinking", Text: "kept"}, {Type: "text", Text: "x"}}},
+		{Role: "assistant", Content: []ContentBlock{{Type: "thinking", Thinking: "kept"}, {Type: "text", Text: "x"}}},
 		{Role: "user", Content: []ContentBlock{{Type: "tool_result", ToolUseID: "t", Content: "r"}}},
 	}
 	out := injectThinkingPassback(in)
@@ -342,7 +342,7 @@ func TestInjectThinkingPassbackShapes(t *testing.T) {
 	}
 	// Already-thinking assistant: unchanged (no double injection).
 	blocks, ok = contentBlocks(mustMarshal(t, out[3].Content))
-	if !ok || len(blocks) != 2 || blocks[0]["type"] != "thinking" || blocks[0]["text"] != "kept" {
+	if !ok || len(blocks) != 2 || blocks[0]["type"] != "thinking" || blocks[0]["thinking"] != "kept" {
 		t.Fatalf("thinking assistant = %v, want the original blocks", out[3].Content)
 	}
 	// User turns keep their shape entirely.
@@ -373,7 +373,14 @@ func TestPassbackRequiredDetection(t *testing.T) {
 	}{
 		{"anthropic wording", &statusError{status: 400, body: deepseekPassbackBody}, true},
 		{"openai wording", &statusError{status: 400, body: `{"error":{"message":"The reasoning_content in the thinking mode must be passed back to the API."}}`}, true},
+		// Rust/serde style deserializer rejections (typed relays / v2 endpoints):
+		// the content block-array form on the Messages wire demands a thinking block.
+		{"serde missing field thinking (backtick style)", &statusError{status: 400, body: "Failed to deserialize the JSON body into the target type: messages[1].content: missing field `thinking` at line 1 column 9878"}, true},
+		{"serde missing field thinking quotes", &statusError{status: 400, body: `{"error":"missing field \"thinking\" at messages[1]"}`}, true},
+		{"serde missing field reasoning_content", &statusError{status: 400, body: `{"detail":"messages[0]: missing field 'reasoning_content'"}`}, true},
+		// Negative cases: unrelated 400s, wrong status, wrong error type.
 		{"other 400", &statusError{status: 400, body: `{"error":{"message":"unknown variant"}}`}, false},
+		{"missing field unrelated", &statusError{status: 400, body: `{"error":"missing field \"role\""}`}, false},
 		{"non-400", &statusError{status: 401, body: deepseekPassbackBody}, false},
 		{"retryable", &retryableError{status: 429, body: deepseekPassbackBody}, false},
 	}
