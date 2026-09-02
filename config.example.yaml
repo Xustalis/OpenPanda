@@ -62,7 +62,7 @@ log:
 #
 #   3. DeepSeek (OpenAI-compatible endpoint):
 #      base_url: "https://api.deepseek.com"
-#      model: "deepseek-chat"  # or "deepseek-reasoner"
+#      model: "deepseek-v4-flash"  # or "deepseek-v4-pro" (costlier; never a default)
 #      api_type: "openai"
 #
 #   4. Alibaba Cloud DashScope / Tongyi Qwen (通义千问):
