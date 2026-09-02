@@ -410,8 +410,37 @@ export interface ProjectMemory {
   limit: number
 }
 
+// ProjectDetail is a project as the console now sees it: metadata, how big its
+// memory is, and whether it is the one currently entered. `projects` keeps the
+// name-only array so callers that just want names do not have to change.
+export interface ProjectDetail {
+  name: string
+  work_dir?: string
+  description?: string
+  created_at: string
+  updated_at: string
+  active: boolean
+  memory_entries: number
+  memory_chars: number
+}
+
 export interface ProjectList {
   projects: string[]
+  detail: ProjectDetail[]
+  active: string
+}
+
+// PolicySettings is the "how should this node behave" surface: the approval gate,
+// routing, memory caps and model injection. Edited together because a view that
+// fetched them separately would show four independently stale sections.
+export interface PolicySettings {
+  approval_mode: string
+  preferred_agents: string[] | null
+  tools_policy: string
+  limit_user: number
+  limit_memory: number
+  limit_project: number
+  injection_model: string
 }
 
 // ---- Endpoints ----
@@ -487,8 +516,45 @@ export const api = {
     return request('GET', '/api/projects')
   },
 
-  createProject(name: string): Promise<{ name: string; status: string }> {
-    return request('POST', '/api/projects', { name })
+  createProject(body: {
+    name: string
+    work_dir?: string
+    description?: string
+    enter?: boolean
+  }): Promise<ProjectDetail> {
+    return request('POST', '/api/projects', body)
+  },
+
+  project(name: string): Promise<ProjectDetail> {
+    return request('GET', `/api/projects/${encodeURIComponent(name)}`)
+  },
+
+  patchProject(
+    name: string,
+    body: { name?: string; work_dir?: string; description?: string },
+  ): Promise<ProjectDetail> {
+    return request('PATCH', `/api/projects/${encodeURIComponent(name)}`, body)
+  },
+
+  deleteProject(name: string, keepMemory: boolean): Promise<{ removed: string; memory_kept: boolean }> {
+    const q = keepMemory ? '?keep_memory=1' : ''
+    return request('DELETE', `/api/projects/${encodeURIComponent(name)}${q}`)
+  },
+
+  enterProject(name: string): Promise<ProjectDetail> {
+    return request('POST', `/api/projects/${encodeURIComponent(name)}/enter`)
+  },
+
+  exitProject(): Promise<{ left: string }> {
+    return request('POST', '/api/projects/exit')
+  },
+
+  policySettings(): Promise<PolicySettings> {
+    return request('GET', '/api/settings/policy')
+  },
+
+  savePolicySettings(body: Partial<PolicySettings>): Promise<PolicySettings> {
+    return request('PUT', '/api/settings/policy', body)
   },
 
   nodes(): Promise<NodeInfo[]> {
