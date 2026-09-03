@@ -294,6 +294,8 @@ const es: Messages = {
   'projects.noDir': 'sin directorio — las tareas usan el del nodo',
   'projects.confirmRemove': '¿Eliminar el proyecto {name}? Su directorio no se toca.',
   'projects.keepMemory': 'conservar su memoria',
+  'projects.deleteSessions': 'eliminar sesiones asociadas',
+  'projects.sessionsCount': '{count} sesiones',
   'policy.tools': 'Herramientas del agente',
   'policy.toolsMinimal': 'mínimas (lista del adaptador)',
   'policy.toolsExtended': 'ampliadas (skills, subagentes, MCP)',

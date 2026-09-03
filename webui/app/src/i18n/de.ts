@@ -294,6 +294,8 @@ const de: Messages = {
   'projects.noDir': 'kein Arbeitsverzeichnis — Aufgaben laufen im Knotenverzeichnis',
   'projects.confirmRemove': 'Projekt {name} entfernen? Das Arbeitsverzeichnis bleibt unberührt.',
   'projects.keepMemory': 'Speicherdatei behalten',
+  'projects.deleteSessions': 'verknüpfte Sitzungen löschen',
+  'projects.sessionsCount': '{count} Sitzungen',
   'policy.tools': 'Agent-Werkzeuge',
   'policy.toolsMinimal': 'minimal (Adapter-Whitelist)',
   'policy.toolsExtended': 'erweitert (Skills, Sub-Agents, MCP)',

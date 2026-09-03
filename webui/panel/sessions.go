@@ -13,9 +13,15 @@ import (
 
 // ---- Session CRUD ----
 
-// listSessions serves GET /api/sessions — every chat session, newest first.
+// listSessions serves GET /api/sessions — chat sessions, optionally filtered by ?project=.
 func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {
-	list, err := h.sessions.List()
+	var list []*sessions.Session
+	var err error
+	if projectParam, ok := r.URL.Query()["project"]; ok && len(projectParam) > 0 {
+		list, err = h.sessions.ListByProject(projectParam[0])
+	} else {
+		list, err = h.sessions.List()
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("list sessions failed"))
 		return
@@ -28,10 +34,12 @@ func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {
 
 // createSession serves POST /api/sessions — starts a session, carving its git
 // worktree when the work path is a repository (isolation is best-effort: a
-// non-repo work path still gets a session, just without a worktree).
+// non-repo work path still gets a session, just without a worktree). If
+// project is not specified, it inherits the active project if set.
 func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Title string `json:"title"`
+		Title   string `json:"title"`
+		Project string `json:"project"`
 	}
 	if r.Body != nil {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -39,7 +47,13 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	sess, err := h.sessions.Create(strings.TrimSpace(req.Title))
+	project := strings.TrimSpace(req.Project)
+	if project == "" && h.projectStore != nil {
+		if act, err := h.projectStore.Active(); err == nil && act != "" {
+			project = act
+		}
+	}
+	sess, err := h.sessions.Create(strings.TrimSpace(req.Title), project)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -216,6 +230,11 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// non-empty workDir for both keeps the memory wall (§17.2) intact —
 	// personal memory never enters a session prompt.
 	workDir := sess.Worktree
+	if workDir == "" && sess.Project != "" && h.projectStore != nil {
+		if p, err := h.projectStore.Get(sess.Project); err == nil && p.WorkDir != "" {
+			workDir = p.WorkDir
+		}
+	}
 	if workDir == "" {
 		workDir = eng.WorkPath()
 	}

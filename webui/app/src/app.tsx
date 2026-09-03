@@ -156,7 +156,12 @@ export function App() {
         {route.view === 'sessions' && (
           <SessionsView
             activeId={route.id}
-            onOpenSession={(id) => navigate({ view: 'sessions', id: id || null })}
+            project={route.project ?? null}
+            onOpenSession={(id) => navigate({ view: 'sessions', id: id || null, project: route.project })}
+            onExitProject={() => {
+              api.exitProject().catch(() => {})
+              navigate({ view: 'sessions', id: null, project: null })
+            }}
             onOpenTask={(id) => navigate({ view: 'detail', id })}
             onOpenNodes={() => navigate({ view: 'nodes' })}
             onLogout={logout}
@@ -171,7 +176,14 @@ export function App() {
         {route.view === 'detail' && (
           <DetailView id={route.id} onBack={() => navigate({ view: 'queue' })} />
         )}
-        {route.view === 'projects' && <ProjectsView onOpenProject={() => navigate({ view: 'queue' })} />}
+        {route.view === 'projects' && (
+          <ProjectsView
+            onOpenProject={(name) => {
+              api.enterProject(name).catch(() => {})
+              navigate({ view: 'sessions', id: null, project: name })
+            }}
+          />
+        )}
         {route.view === 'nodes' && <NodesView />}
         {route.view === 'skills' && <SkillsView />}
         {route.view === 'reminders' && <RemindersView />}

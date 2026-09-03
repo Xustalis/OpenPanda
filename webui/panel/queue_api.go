@@ -93,7 +93,7 @@ func (h *handler) createTask(w http.ResponseWriter, r *http.Request) {
 	// no orphan session behind.
 	sessionID := ""
 	if h.sessions != nil {
-		if sess, err := h.sessions.Create(req.Title); err == nil {
+		if sess, err := h.sessions.Create(req.Title, req.Project); err == nil {
 			sessionID = sess.ID
 			_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: req.Prompt})
 			_ = h.store.SetSessionID(r.Context(), task.TaskID, sess.ID)

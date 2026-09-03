@@ -296,6 +296,8 @@ const en: Messages = {
   'projects.noDir': 'no work directory — tasks run in the node work dir',
   'projects.confirmRemove': 'Remove project {name}? Its work directory is never touched.',
   'projects.keepMemory': 'keep its memory file',
+  'projects.deleteSessions': 'delete associated sessions',
+  'projects.sessionsCount': '{count} sessions',
   'policy.tools': 'Agent tools',
   'policy.toolsMinimal': 'minimal (adapter whitelist)',
   'policy.toolsExtended': 'extended (skills, sub-agents, MCP)',

@@ -27,9 +27,10 @@ import (
 // one currently entered.
 type projectView struct {
 	projectstore.Project
-	Active  bool `json:"active"`
-	Entries int  `json:"memory_entries"`
-	Chars   int  `json:"memory_chars"`
+	Active   bool `json:"active"`
+	Entries  int  `json:"memory_entries"`
+	Chars    int  `json:"memory_chars"`
+	Sessions int  `json:"sessions"`
 }
 
 // projectStoreOrErr guards the handlers that need the metadata table. A database
@@ -86,7 +87,19 @@ func (h *handler) projectViews(store *projectstore.Store) ([]projectView, string
 	out := make([]projectView, 0, len(list))
 	for _, p := range list {
 		entries, chars := h.projectMemorySize(p.Name)
-		out = append(out, projectView{Project: p, Active: p.Name == active, Entries: entries, Chars: chars})
+		var sessCount int
+		if h.sessions != nil {
+			if sList, err := h.sessions.ListByProject(p.Name); err == nil {
+				sessCount = len(sList)
+			}
+		}
+		out = append(out, projectView{
+			Project:  p,
+			Active:   p.Name == active,
+			Entries:  entries,
+			Chars:    chars,
+			Sessions: sessCount,
+		})
 	}
 	return out, active, nil
 }
@@ -105,7 +118,19 @@ func (h *handler) getProject(w http.ResponseWriter, r *http.Request) {
 	}
 	active, _ := store.Active()
 	entries, chars := h.projectMemorySize(name)
-	writeJSON(w, projectView{Project: p, Active: p.Name == active, Entries: entries, Chars: chars})
+	var sessCount int
+	if h.sessions != nil {
+		if sList, err := h.sessions.ListByProject(name); err == nil {
+			sessCount = len(sList)
+		}
+	}
+	writeJSON(w, projectView{
+		Project:  p,
+		Active:   p.Name == active,
+		Entries:  entries,
+		Chars:    chars,
+		Sessions: sessCount,
+	})
 }
 
 // patchProjectRequest is the body of PATCH /api/projects/{name}: a rename, a work
@@ -150,6 +175,9 @@ func (h *handler) patchProject(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			h.renameProjectMemory(name, newName)
+			if h.sessions != nil {
+				_, _ = h.sessions.RenameProject(name, newName)
+			}
 			if h.store != nil {
 				if _, terr := h.store.RenameProject(r.Context(), name, newName); terr != nil {
 					// The metadata already moved; a task that kept the old name is
@@ -182,7 +210,13 @@ func (h *handler) patchProject(w http.ResponseWriter, r *http.Request) {
 	}
 	active, _ := store.Active()
 	entries, chars := h.projectMemorySize(name)
-	writeJSON(w, projectView{Project: p, Active: p.Name == active, Entries: entries, Chars: chars})
+	var sessionCount int
+	if h.sessions != nil {
+		if sList, err := h.sessions.ListByProject(name); err == nil {
+			sessionCount = len(sList)
+		}
+	}
+	writeJSON(w, projectView{Project: p, Active: p.Name == active, Entries: entries, Chars: chars, Sessions: sessionCount})
 }
 
 // renameProjectMemory moves a project's memory directory. Copy-then-drop rather
@@ -223,7 +257,34 @@ func (h *handler) deleteProject(w http.ResponseWriter, r *http.Request) {
 	if !keepMemory && h.projects != nil {
 		_ = h.projects.Delete(name)
 	}
-	writeJSON(w, map[string]any{"removed": name, "memory_kept": keepMemory})
+
+	sessionsAction := r.URL.Query().Get("sessions")
+	if sessionsAction == "" {
+		sessionsAction = "keep"
+	}
+	sessionsAffected := 0
+	if h.sessions != nil {
+		if list, err := h.sessions.ListByProject(name); err == nil {
+			sessionsAffected = len(list)
+			for _, s := range list {
+				if sessionsAction == "delete" {
+					if h.worktrees != nil {
+						_ = h.worktrees.Remove(r.Context(), s.ID)
+					}
+					_ = h.sessions.Delete(s.ID)
+				} else {
+					_ = h.sessions.SetProject(s.ID, "")
+				}
+			}
+		}
+	}
+
+	writeJSON(w, map[string]any{
+		"removed":           name,
+		"memory_kept":       keepMemory,
+		"sessions_action":   sessionsAction,
+		"sessions_affected": sessionsAffected,
+	})
 }
 
 // enterProject serves POST /api/projects/{name}/enter — makes it the current

@@ -289,6 +289,8 @@ const zhCN: Messages = {
   'projects.noDir': '未设工作目录 —— 任务在节点工作目录中执行',
   'projects.confirmRemove': '删除项目 {name}？工作目录不会被动。',
   'projects.keepMemory': '保留记忆文件',
+  'projects.deleteSessions': '同时删除关联的会话',
+  'projects.sessionsCount': '{count} 个会话',
   'policy.tools': 'Agent 工具面',
   'policy.toolsMinimal': '最小（适配器白名单）',
   'policy.toolsExtended': '扩展（技能、子 agent、MCP）',

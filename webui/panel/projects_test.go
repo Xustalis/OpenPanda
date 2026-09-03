@@ -11,12 +11,13 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 // projectHandler builds a panel handler with the project metadata table attached
 // — the console's project surface is only more than a list of names when it is.
-func projectHandler(t *testing.T) (http.Handler, *projectstore.Store, *memory.Projects) {
+func projectHandler(t *testing.T) (http.Handler, *projectstore.Store, *memory.Projects, *sessions.Store) {
 	t.Helper()
 	db, err := storage.Open(":memory:")
 	if err != nil {
@@ -28,21 +29,23 @@ func projectHandler(t *testing.T) (http.Handler, *projectstore.Store, *memory.Pr
 	}
 	ps := projectstore.NewStore(db)
 	mem := memory.NewProjects(t.TempDir())
+	sessStore := sessions.NewStore(t.TempDir())
 	h := New(Deps{
 		Store:        core.NewTaskStore(db, slog.New(slog.DiscardHandler)),
 		DB:           db,
 		Projects:     mem,
 		ProjectStore: ps,
+		Sessions:     sessStore,
 		StaticDir:    t.TempDir(),
 		Token:        testToken,
 	})
-	return h, ps, mem
+	return h, ps, mem, sessStore
 }
 
 // TestProjectCRUDAndActive walks the surface the console gained: create with
 // metadata, read it back, rename, enter, exit, remove.
 func TestProjectCRUDAndActive(t *testing.T) {
-	h, ps, _ := projectHandler(t)
+	h, ps, _, _ := projectHandler(t)
 
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/projects",
@@ -127,7 +130,7 @@ func TestProjectCRUDAndActive(t *testing.T) {
 // TestProjectEndpointsRejectUnknownNames keeps the 404s honest: every path-addressed
 // verb must refuse a project that does not exist rather than inventing one.
 func TestProjectEndpointsRejectUnknownNames(t *testing.T) {
-	h, _, _ := projectHandler(t)
+	h, _, _, _ := projectHandler(t)
 	for _, tc := range []struct {
 		method, path string
 		body         string
@@ -156,7 +159,7 @@ func TestProjectEndpointsRejectUnknownNames(t *testing.T) {
 // before the metadata table, and a listing that showed the table alone would
 // report that work the user can still see does not exist.
 func TestProjectListAdoptsMemoryOnlyProjects(t *testing.T) {
-	h, _, mem := projectHandler(t)
+	h, _, mem, _ := projectHandler(t)
 	if err := mem.Save("legacy", memory.MemFile{Limit: mem.Limit()}); err != nil {
 		t.Fatalf("seed legacy memory: %v", err)
 	}
@@ -170,5 +173,151 @@ func TestProjectListAdoptsMemoryOnlyProjects(t *testing.T) {
 	}
 	if len(list.Projects) != 1 || list.Projects[0] != "legacy" {
 		t.Fatalf("projects = %v, want [legacy]", list.Projects)
+	}
+}
+
+// TestProjectSessionsAssociationAndDeletion covers:
+// 1. Creating session with project
+// 2. Listing sessions filtered by project
+// 3. Project detail reporting session count
+// 4. Deleting project with keep_sessions (default) vs delete_sessions
+func TestProjectSessionsAssociationAndDeletion(t *testing.T) {
+	h, ps, _, sessStore := projectHandler(t)
+
+	// Create project "projA"
+	if _, err := ps.Create("projA", "/tmp/projA", "project A"); err != nil {
+		t.Fatalf("create projA: %v", err)
+	}
+
+	// Create 2 sessions for projA, 1 global session
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/sessions",
+		strings.NewReader(`{"title":"Session A1","project":"projA"}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create session A1: %d", rr.Code)
+	}
+
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/sessions",
+		strings.NewReader(`{"title":"Session A2","project":"projA"}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create session A2: %d", rr.Code)
+	}
+
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/sessions",
+		strings.NewReader(`{"title":"Session Global"}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create global session: %d", rr.Code)
+	}
+
+	// Verify GET /api/sessions?project=projA returns 2 sessions
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/sessions?project=projA", nil))
+	var projSessions []*sessions.Session
+	if err := json.Unmarshal(rr.Body.Bytes(), &projSessions); err != nil {
+		t.Fatalf("unmarshal projSessions: %v", err)
+	}
+	if len(projSessions) != 2 {
+		t.Fatalf("len(projSessions) = %d, want 2", len(projSessions))
+	}
+
+	// Verify GET /api/projects reports sessions: 2 for projA
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/projects", nil))
+	var pList struct {
+		Detail []projectView `json:"detail"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &pList); err != nil {
+		t.Fatalf("unmarshal projects: %v", err)
+	}
+	if len(pList.Detail) != 1 || pList.Detail[0].Sessions != 2 {
+		t.Fatalf("pList.Detail = %+v, want sessions count = 2", pList.Detail)
+	}
+
+	// Delete projA with default sessions=keep
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodDelete, "/api/projects/projA?sessions=keep", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("delete projA: %d body %s", rr.Code, rr.Body.String())
+	}
+	var delResp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &delResp); err != nil {
+		t.Fatalf("unmarshal delResp: %v", err)
+	}
+	if delResp["sessions_action"] != "keep" || delResp["sessions_affected"] != float64(2) {
+		t.Fatalf("delResp = %+v, want keep and 2 affected", delResp)
+	}
+
+	// Now GET /api/sessions?project=projA should be empty
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/sessions?project=projA", nil))
+	var emptySessions []*sessions.Session
+	if err := json.Unmarshal(rr.Body.Bytes(), &emptySessions); err != nil {
+		t.Fatalf("unmarshal emptySessions: %v", err)
+	}
+	if len(emptySessions) != 0 {
+		t.Fatalf("len(emptySessions) = %d, want 0", len(emptySessions))
+	}
+
+	// Total sessions in store should still be 3 (2 disassociated + 1 global)
+	all, _ := sessStore.List()
+	if len(all) != 3 {
+		t.Fatalf("total sessions in store = %d, want 3", len(all))
+	}
+
+	// Test sessions=delete with projB
+	if _, err := ps.Create("projB", "/tmp/projB", "project B"); err != nil {
+		t.Fatalf("create projB: %v", err)
+	}
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/sessions",
+		strings.NewReader(`{"title":"Session B1","project":"projB"}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create session B1: %d", rr.Code)
+	}
+
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodDelete, "/api/projects/projB?sessions=delete", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("delete projB: %d", rr.Code)
+	}
+	allAfter, _ := sessStore.List()
+	if len(allAfter) != 3 { // was 3+1=4, now deleted 1, back to 3
+		t.Fatalf("total sessions in store after delete = %d, want 3", len(allAfter))
+	}
+
+	// Test rename cascades to sessions
+	if _, err := ps.Create("projC", "/tmp/projC", "project C"); err != nil {
+		t.Fatalf("create projC: %v", err)
+	}
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/sessions",
+		strings.NewReader(`{"title":"Session C1","project":"projC"}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create session C1: %d", rr.Code)
+	}
+	// PATCH /api/projects/projC to rename to projC-renamed
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPatch, "/api/projects/projC",
+		strings.NewReader(`{"name":"projC-renamed"}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("rename projC: %d", rr.Code)
+	}
+	var renameView projectView
+	if err := json.Unmarshal(rr.Body.Bytes(), &renameView); err != nil {
+		t.Fatalf("unmarshal renameView: %v", err)
+	}
+	if renameView.Sessions != 1 {
+		t.Errorf("renameView.Sessions = %d, want 1", renameView.Sessions)
+	}
+	// Verify session now belongs to projC-renamed
+	cList, _ := sessStore.ListByProject("projC-renamed")
+	if len(cList) != 1 {
+		t.Errorf("cList len = %d, want 1", len(cList))
+	}
+	oldCList, _ := sessStore.ListByProject("projC")
+	if len(oldCList) != 0 {
+		t.Errorf("oldCList len = %d, want 0", len(oldCList))
 	}
 }

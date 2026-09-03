@@ -63,13 +63,17 @@ interface ChatMsg extends SessionTurn {
  * and one worktree-isolated conversation on the right, streaming over SSE. */
 export function SessionsView({
   activeId,
+  project,
   onOpenSession,
+  onExitProject,
   onOpenTask,
   onOpenNodes,
   onLogout,
 }: {
   activeId: string | null
+  project?: string | null
   onOpenSession(id: string): void
+  onExitProject?(): void
   onOpenTask(id: string): void
   /** Where the fleet card's "invite a device" CTA leads. Without it the CTA
    *  paints disabled, which reads as a broken button rather than as an
@@ -123,13 +127,13 @@ export function SessionsView({
   // moment you scroll up to re-read something, so follow only when pinned.
   const pinned = useRef(true)
 
-  // Session list (refresh when the active thread changes — its title may).
+  // Session list (refresh when the active thread changes — its title may, or when project changes).
   useEffect(() => {
     api
-      .sessions()
+      .sessions(project || undefined)
       .then(setSessions)
       .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)))
-  }, [activeId])
+  }, [activeId, project])
 
   // Load projects for the folder/project picker
   useEffect(() => {
@@ -138,6 +142,22 @@ export function SessionsView({
       .then((p) => setProjects(p.projects ?? []))
       .catch(() => {})
   }, [])
+
+  // Keep selectedProject in sync with active project prop
+  useEffect(() => {
+    if (project) {
+      setSelectedProject(project)
+    } else {
+      setSelectedProject('')
+    }
+  }, [project])
+
+  // Boundary guard: if a session is active but does not belong to the newly entered project, unselect it.
+  useEffect(() => {
+    if (activeId && session && project && session.project !== project) {
+      onOpenSession('')
+    }
+  }, [project, session, activeId])
 
   // Live node directory + change signal → re-fetch on SSE changes so the
   // fleet card and single-node orbit collapse both always show current net.
@@ -262,7 +282,7 @@ export function SessionsView({
   }
 
   async function newChat() {
-    const s = await api.createSession()
+    const s = await api.createSession(undefined, project || selectedProject || undefined)
     setSessions((ls) => [s, ...ls])
     onOpenSession(s.id)
     composer.current?.focus()
@@ -317,17 +337,13 @@ export function SessionsView({
     e?.preventDefault()
     let prompt = input.trim()
     if (!prompt || busy) return
-    // Prepend project context when one is selected
-    if (selectedProject) {
-      prompt = t('sessions.projectPrefix', { name: selectedProject }) + '\n\n' + prompt
-    }
     let id = activeId
     const ctrl = new AbortController()
     inflight.current = ctrl
     try {
       // No thread yet: create one titled after the first prompt.
       if (!id) {
-        const s = await api.createSession(prompt.slice(0, 48))
+        const s = await api.createSession(prompt.slice(0, 48), project || selectedProject || undefined)
         id = s.id
         setSession(s)
         setSessions((ls) => [s, ...ls])
@@ -449,6 +465,27 @@ export function SessionsView({
   return (
     <section class={`chat${railOpen ? ' rail-open' : ''}`}>
       <aside class="thread-rail">
+        {project && (
+          <div
+            class="project-scope-banner"
+            style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; margin-bottom: 8px; background: var(--bg-hover, #f0f0f0); border-radius: 6px; font-size: 0.85rem;"
+          >
+            <span style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              📁 {project}
+            </span>
+            {onExitProject && (
+              <button
+                class="btn small"
+                type="button"
+                onClick={onExitProject}
+                title={t('projects.exit')}
+                style="padding: 2px 6px; font-size: 0.75rem; margin-left: 6px;"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        )}
         {/* Not `.primary`: a filled accent slab is the loudest thing on the
             page, and the loudest thing on the page should be the reply you are
             reading, not the button that starts a different conversation. */}
@@ -588,19 +625,21 @@ export function SessionsView({
             underneath it — the focus ring belongs to the whole thing. */}
         <form class="composer" onSubmit={send}>
           <div class="composer-toolbar">
-            <select
-              class="input project-picker"
-              value={selectedProject}
-              onChange={(e) => setSelectedProject((e.target as HTMLSelectElement).value)}
-              title={t('queue.allProjects')}
-            >
-              <option value="">📂 {t('queue.allProjects')}</option>
-              {projects.map((p) => (
-                <option key={p} value={p}>
-                  📁 {p}
-                </option>
-              ))}
-            </select>
+            {!project && (
+              <select
+                class="input project-picker"
+                value={selectedProject}
+                onChange={(e) => setSelectedProject((e.target as HTMLSelectElement).value)}
+                title={t('queue.allProjects')}
+              >
+                <option value="">📂 {t('queue.allProjects')}</option>
+                {projects.map((p) => (
+                  <option key={p} value={p}>
+                    📁 {p}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               class="btn small folder-btn"
               type="button"
