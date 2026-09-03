@@ -36,9 +36,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Jeder Eintrag benennt die Änderung und ihre sichtbare Wirkung in ein bis drei Zeilen; der einführende Commit wird zitiert, wo das der Archäologie hilft.
 - Die englische Datei ist maßgeblich. Die Übersetzungen zh-CN / ja / es / de spiegeln sie und können um ein Release kurz verzögert sein.
 
-## [0.0.8] - 2026-09-02
+## [0.0.8-alpha] - 2026-09-03
 
-Das Projekt-Release: Ein Projekt ist nicht mehr nur ein Name an einer Aufgabe — es hat ein Arbeitsverzeichnis, eine Beschreibung und einen persistenten „aktuelles Projekt“-Zeiger, Aufgaben aus seinem Inneren erben es, und eine delegierte Aufgabe trägt das ganze Projekt zum Executor, sodass die ausführende Maschine weiß, woran sie arbeitet. Die Freigabepforte wird auf rein irreversible Arbeit neu gefasst (mit dem Download-in-Datei-Vektor nach dem Review erneut gegated), und die Konsole bekam Flächen zum Verfolgen von Plänen und Ändern von Einstellungen.
+Das Projekt-Release: Ein Projekt ist nicht mehr nur ein Name an einer Aufgabe — es hat ein Arbeitsverzeichnis, eine Beschreibung und einen persistenten „aktuelles Projekt“-Zeiger, Aufgaben aus seinem Inneren erben es, und eine delegierte Aufgabe trägt das ganze Projekt zum Executor, sodass die ausführende Maschine weiß, woran sie arbeitet. Die Freigabepforte wird auf rein irreversible Arbeit neu gefasst (mit dem Download-in-Datei-Vektor nach dem Review erneut gegated), die Konsole bekam Flächen zum Verfolgen von Plänen und Ändern von Einstellungen und trägt den neuen „Panda Paper“-Look. Als Alpha geschnitten: Die Linie ist für diesen Umfang feature-complete, hatte aber weniger Einschwungzeit als eine nummerierte Version.
 
 ### Hinzugefügt
 
@@ -62,6 +62,7 @@ Das Projekt-Release: Ein Projekt ist nicht mehr nur ein Name an einer Aufgabe �
 
 - **Die Freigabepforte deckt nur irreversible Arbeit ab** — Tier 2 heißt jetzt „kein späterer Befehl kann es zurückholen“: Löschen, Disk-/Partitions-/Firmware-Zustand, Energiezustand, Rechteausweitung und die Argumentformen, die Arbeit verlieren (`git push --force`, `rsync --delete`, `sed -i`, `find -delete`). curl, wget, make, ssh, systemctl, mount, docker, kubectl, terraform, die Paketmanager, chmod/chown/mv/cp/tee und Verwandte laufen unbeaufsichtigt, und `bash scripts/build.sh` fragt nicht mehr nach — ein Knoten, der seinen eigenen Build nicht laufen lassen kann, kann die Arbeit nicht tun, für die er existiert (e593470).
 - **Downloads in Dateien bleiben gegated** — ein curl/wget, das seine Bytes in einen Pfad schreibt (`-o`, `-O`, `--output`), ist Tier 2: Die Bytes sind für den Klassifikator opak, und der nächste Schritt ist meist, sie auszuführen — vor dieser Änderung wurde `curl -o x …; bash x` von Anfang bis Ende als Tier 1 eingestuft. Abrufe nach stdout oder `/dev/null` — die Erreichbarkeits-Probe-Schreibweisen — sind unberührt (Review 2026-09-02, P1).
+- **Konsole: visuelles Redesign „Panda Paper“** — eine Re-Skin-Schicht über den bestehenden Konsolenstilen: warmes Papier-Hellthema und warme Tinte-Dunkelthema (kein reines Schwarz, kein kaltes Grau), der bambusgrüne Markenakzent um eine Stufe vertieft mit Blau reserviert für den Entscheidungs-Orbit, Serifen-Schrift nur auf der Überschriftenebene, Radien eine Stufe größer, weichere warmbraune Schatten, und die „KI-artigen“ Dekorationen (Gradienten-Überschriftentext, Gradienten-Unterstreichungen, Button-Highlight-Overlays) entfernt. Die Schicht definiert dieselben Tokens neu und kaskadiert über die alten Regeln — Markup, Klassennamen und Logik der Komponenten bleiben unangetastet (dieses Release).
 
 ## [0.0.7] - 2026-08-31
 

@@ -36,9 +36,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Entries name the change and its user-visible effect in one to three lines; the introducing commit is cited where it aids archaeology.
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
-## [0.0.8] - 2026-09-02
+## [0.0.8-alpha] - 2026-09-03
 
-The project release: a project is no longer a name on a task — it has a work directory, a description and a persistent current-one pointer, tasks launched from inside it inherit it, and a delegated task carries the whole project to the executor, so the machine that runs it knows what it is working on. The approval gate is re-scoped to irreversible work only (with the download-to-file vector re-gated after review), and the console gained surfaces for following plans and changing settings.
+The project release: a project is no longer a name on a task — it has a work directory, a description and a persistent current-one pointer, tasks launched from inside it inherit it, and a delegated task carries the whole project to the executor, so the machine that runs it knows what it is working on. The approval gate is re-scoped to irreversible work only (with the download-to-file vector re-gated after review), the console gained surfaces for following plans and changing settings, and the console wears a new "Panda Paper" skin. Cut as an alpha: the line is feature-complete for this scope, but it has seen less soak time than a numbered release.
 
 ### Added
 
@@ -62,6 +62,7 @@ The project release: a project is no longer a name on a task — it has a work d
 
 - **The approval gate covers only irreversible work** — Tier 2 now means "no later command can put it back": deletion, disk/partition/firmware state, power state, privilege escalation, and the argument forms that lose work (`git push --force`, `rsync --delete`, `sed -i`, `find -delete`). curl, wget, make, ssh, systemctl, mount, docker, kubectl, terraform, the package managers, chmod/chown/mv/cp/tee and friends run unattended, and `bash scripts/build.sh` no longer prompts — a node that cannot run its own build cannot do the work it exists for (e593470).
 - **Download-to-file fetches stay gated** — a curl/wget that saves its bytes to a path (`-o`, `-O`, `--output`) is Tier 2: the bytes are opaque to the classifier and the next step is usually to run them, and `curl -o x …; bash x` graded Tier 1 end to end before this change. Fetches to stdout or `/dev/null` — the reachability-probe spellings — are unaffected (review 2026-09-02, P1).
+- **Console: "Panda Paper" visual redesign** — a re-skin appended over the console's existing styles: warm-paper light theme and warm-ink dark theme (no pure black, no cold gray), the bamboo-green brand accent deepened a step with blue reserved for the decision-orbit path, serif display type on headings only, radii one step larger, softer warm-brown shadows, and the "AI-feel" decorations (gradient heading text, gradient underlines, button highlight overlays) removed. The layer redefines the same tokens and cascades over the old rules — component markup, class names and logic are untouched (this release).
 
 ## [0.0.7] - 2026-08-31
 
