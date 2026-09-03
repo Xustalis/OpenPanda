@@ -290,6 +290,8 @@ const ja: Messages = {
   'projects.noDir': '作業ディレクトリ未設定 — ノードの作業ディレクトリで実行されます',
   'projects.confirmRemove': 'プロジェクト {name} を削除しますか？作業ディレクトリは触りません。',
   'projects.keepMemory': 'メモリファイルを残す',
+  'projects.deleteSessions': '関連付けられたセッションも削除する',
+  'projects.sessionsCount': '{count} セッション',
   'policy.tools': 'エージェントのツール',
   'policy.toolsMinimal': '最小（アダプタの許可リスト）',
   'policy.toolsExtended': '拡張（スキル・サブエージェント・MCP）',

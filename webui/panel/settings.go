@@ -17,6 +17,8 @@ import (
 // is write-only: GET reports only whether one is set, PUT treats an empty key
 // as "keep the existing one".
 type modelSettingsJSON struct {
+	Provider   string `json:"provider,omitempty"`
+	Name       string `json:"name,omitempty"`
 	APIType    string `json:"api_type"` // "anthropic" | "openai"
 	BaseURL    string `json:"base_url"`
 	Model      string `json:"model"`
@@ -31,6 +33,8 @@ type modelSettingsJSON struct {
 func (h *handler) getModelSettings(w http.ResponseWriter, r *http.Request) {
 	mc := h.engineModel()
 	writeJSON(w, modelSettingsJSON{
+		Provider:   mc.Provider,
+		Name:       mc.Name,
 		APIType:    mc.NormalizedAPIType(),
 		BaseURL:    mc.BaseURL,
 		Model:      mc.Model,
@@ -55,11 +59,14 @@ func (h *handler) putModelSettings(w http.ResponseWriter, r *http.Request) {
 
 	cur := h.engineModel()
 	mc := config.ModelConfig{
-		APIType:   normalizeAPIType(req.APIType),
-		BaseURL:   firstNonEmpty(strings.TrimSpace(req.BaseURL), cur.BaseURL),
-		APIKey:    cur.APIKey, // empty request key keeps the stored secret
-		Model:     firstNonEmpty(strings.TrimSpace(req.Model), cur.Model),
-		MaxTokens: firstPositive(req.MaxTokens, cur.MaxTokens),
+		Provider:      firstNonEmpty(strings.TrimSpace(req.Provider), cur.Provider),
+		Name:          firstNonEmpty(strings.TrimSpace(req.Name), cur.Name),
+		ContextWindow: cur.ContextWindow,
+		APIType:       normalizeAPIType(req.APIType),
+		BaseURL:       firstNonEmpty(strings.TrimSpace(req.BaseURL), cur.BaseURL),
+		APIKey:        cur.APIKey, // empty request key keeps the stored secret
+		Model:         firstNonEmpty(strings.TrimSpace(req.Model), cur.Model),
+		MaxTokens:     firstPositive(req.MaxTokens, cur.MaxTokens),
 	}
 	if key := strings.TrimSpace(req.APIKey); key != "" {
 		mc.APIKey = key
@@ -102,6 +109,8 @@ func (h *handler) putModelSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, modelSettingsJSON{
+		Provider:   mc.Provider,
+		Name:       mc.Name,
 		APIType:    mc.NormalizedAPIType(),
 		BaseURL:    mc.BaseURL,
 		Model:      mc.Model,
@@ -124,11 +133,14 @@ func (h *handler) testModelSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	cur := h.engineModel()
 	mc := config.ModelConfig{
-		APIType:   normalizeAPIType(req.APIType),
-		BaseURL:   firstNonEmpty(strings.TrimSpace(req.BaseURL), cur.BaseURL),
-		APIKey:    cur.APIKey,
-		Model:     firstNonEmpty(strings.TrimSpace(req.Model), cur.Model),
-		MaxTokens: firstPositive(req.MaxTokens, cur.MaxTokens),
+		Provider:      firstNonEmpty(strings.TrimSpace(req.Provider), cur.Provider),
+		Name:          firstNonEmpty(strings.TrimSpace(req.Name), cur.Name),
+		ContextWindow: cur.ContextWindow,
+		APIType:       normalizeAPIType(req.APIType),
+		BaseURL:       firstNonEmpty(strings.TrimSpace(req.BaseURL), cur.BaseURL),
+		APIKey:        cur.APIKey,
+		Model:         firstNonEmpty(strings.TrimSpace(req.Model), cur.Model),
+		MaxTokens:     firstPositive(req.MaxTokens, cur.MaxTokens),
 	}
 	if key := strings.TrimSpace(req.APIKey); key != "" {
 		mc.APIKey = key

@@ -425,6 +425,7 @@ export interface ProjectDetail {
   active: boolean
   memory_entries: number
   memory_chars: number
+  sessions?: number
 }
 
 export interface ProjectList {
@@ -527,8 +528,15 @@ export const api = {
     return request('PATCH', `/api/projects/${encodeURIComponent(name)}`, body)
   },
 
-  deleteProject(name: string, keepMemory: boolean): Promise<{ removed: string; memory_kept: boolean }> {
-    const q = keepMemory ? '?keep_memory=1' : ''
+  deleteProject(
+    name: string,
+    keepMemory: boolean,
+    sessions?: 'keep' | 'delete',
+  ): Promise<{ removed: string; memory_kept: boolean; sessions_action?: string; sessions_affected?: number }> {
+    const params = new URLSearchParams()
+    if (keepMemory) params.set('keep_memory', '1')
+    if (sessions) params.set('sessions', sessions)
+    const q = params.toString() ? `?${params.toString()}` : ''
     return request('DELETE', `/api/projects/${encodeURIComponent(name)}${q}`)
   },
 
@@ -658,13 +666,14 @@ export const api = {
   },
 
   // ---- Chat sessions (worktree-isolated threads) ----
-
-  sessions(): Promise<Session[]> {
-    return request('GET', '/api/sessions')
+ 
+  sessions(project?: string): Promise<Session[]> {
+    const q = project !== undefined ? `?project=${encodeURIComponent(project)}` : ''
+    return request('GET', `/api/sessions${q}`)
   },
 
-  createSession(title?: string): Promise<Session> {
-    return request('POST', '/api/sessions', { title })
+  createSession(title?: string, project?: string): Promise<Session> {
+    return request('POST', '/api/sessions', { title, project })
   },
 
   session(id: string): Promise<Session> {
@@ -890,6 +899,7 @@ export interface Session {
   updated_at: string
   branch?: string
   worktree?: string
+  project?: string
   turns: SessionTurn[]
 }
 

@@ -125,7 +125,7 @@ export function ProjectsView({ onOpenProject }: { onOpenProject(name: string): v
                 editing={editing === p.name}
                 onEdit={() => setEditing(editing === p.name ? null : p.name)}
                 onOpen={() => onOpenProject(p.name)}
-                onEnter={() => run(() => api.enterProject(p.name))}
+                onEnter={() => onOpenProject(p.name)}
                 onExit={() => run(() => api.exitProject())}
                 onSave={(body) =>
                   run(async () => {
@@ -134,9 +134,9 @@ export function ProjectsView({ onOpenProject }: { onOpenProject(name: string): v
                     toast(t('projects.save'), 'success')
                   })
                 }
-                onRemove={(keepMemory) =>
+                onRemove={(keepMemory, deleteSessions) =>
                   run(async () => {
-                    await api.deleteProject(p.name, keepMemory)
+                    await api.deleteProject(p.name, keepMemory, deleteSessions ? 'delete' : 'keep')
                     toast(t('projects.remove'), 'success')
                   })
                 }
@@ -168,17 +168,18 @@ function ProjectRow({
   onEnter(): void
   onExit(): void
   onSave(body: { name?: string; work_dir?: string; description?: string }): void
-  onRemove(keepMemory: boolean): void
+  onRemove(keepMemory: boolean, deleteSessions: boolean): void
 }) {
   const [name, setName] = useState(project.name)
   const [dir, setDir] = useState(project.work_dir ?? '')
   const [desc, setDesc] = useState(project.description ?? '')
   const [keepMemory, setKeepMemory] = useState(false)
+  const [deleteSessions, setDeleteSessions] = useState(false)
 
   return (
     <div class={`card project-item${project.active ? ' project-active' : ''}`}>
       <div class="project-head">
-        <button class="project-name-btn" onClick={onOpen} title={t('nav.memory')}>
+        <button class="project-name-btn" onClick={onOpen} title={t('projects.enter')}>
           <span class="project-name">{project.name}</span>
         </button>
         {project.active && <span class="badge">{t('projects.current')}</span>}
@@ -206,6 +207,12 @@ function ProjectRow({
             .replace('{entries}', String(project.memory_entries))
             .replace('{chars}', String(project.memory_chars))}
         </span>
+        {project.sessions !== undefined && (
+          <span>
+            {' · '}
+            {t('projects.sessionsCount', { count: String(project.sessions) })}
+          </span>
+        )}
       </div>
 
       {editing && (
@@ -246,6 +253,16 @@ function ProjectRow({
               />
               {t('projects.keepMemory')}
             </label>
+            {project.sessions !== undefined && project.sessions > 0 && (
+              <label class="check">
+                <input
+                  type="checkbox"
+                  checked={deleteSessions}
+                  onChange={(e) => setDeleteSessions((e.target as HTMLInputElement).checked)}
+                />
+                {t('projects.deleteSessions')}
+              </label>
+            )}
             <button
               class="btn danger"
               disabled={busy}
@@ -254,7 +271,7 @@ function ProjectRow({
                 // by a remove; the confirm says so, because "remove project" is
                 // otherwise easy to read as "delete my files".
                 if (confirm(t('projects.confirmRemove').replace('{name}', project.name)))
-                  onRemove(keepMemory)
+                  onRemove(keepMemory, deleteSessions)
               }}
             >
               {t('projects.remove')}

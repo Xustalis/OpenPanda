@@ -5,8 +5,8 @@
 // bug waiting to be filed.
 
 export type Route =
-  | { view: 'sessions'; id: string | null }
-  | { view: 'queue' }
+  | { view: 'sessions'; id: string | null; project?: string | null }
+  | { view: 'queue'; project?: string | null }
   | { view: 'projects' }
   | { view: 'nodes' }
   | { view: 'skills' }
@@ -56,25 +56,46 @@ export const navViews: Array<[view: string, key: string]> = [
 ]
 
 export function parseHash(): Route {
-  const hash = location.hash.replace(/^#\/?/, '')
-  if (hash.startsWith('task/')) return { view: 'detail', id: decodeURIComponent(hash.slice(5)) }
-  if (hash.startsWith('chat/')) return { view: 'sessions', id: decodeURIComponent(hash.slice(5)) }
-  if (hash === 'queue') return { view: 'queue' }
-  if (hash === 'projects') return { view: 'projects' }
-  if (hash === 'nodes') return { view: 'nodes' }
-  if (hash === 'skills') return { view: 'skills' }
-  if (hash === 'reminders') return { view: 'reminders' }
-  if (hash === 'memory') return { view: 'memory' }
-  if (hash === 'system') return { view: 'system' }
-  if (hash === 'settings') return { view: 'settings' }
-  return { view: 'sessions', id: null }
+  const raw = location.hash.replace(/^#\/?/, '')
+  const [path = '', queryStr = ''] = raw.split('?', 2)
+  const query = new URLSearchParams(queryStr)
+  const projectParam = query.get('project') || null
+
+  if (path.startsWith('task/')) return { view: 'detail', id: decodeURIComponent(path.slice(5)) }
+  if (path.startsWith('chat/')) return { view: 'sessions', id: decodeURIComponent(path.slice(5)), project: projectParam }
+  if (path === 'chat') return { view: 'sessions', id: null, project: projectParam }
+  if (path.startsWith('projects/') && path.length > 9) {
+    return { view: 'sessions', id: null, project: decodeURIComponent(path.slice(9)) }
+  }
+  if (path === 'queue') return { view: 'queue', project: projectParam }
+  if (path === 'projects') return { view: 'projects' }
+  if (path === 'nodes') return { view: 'nodes' }
+  if (path === 'skills') return { view: 'skills' }
+  if (path === 'reminders') return { view: 'reminders' }
+  if (path === 'memory') return { view: 'memory' }
+  if (path === 'system') return { view: 'system' }
+  if (path === 'settings') return { view: 'settings' }
+  return { view: 'sessions', id: null, project: projectParam }
 }
 
 export function navigate(route: Route): void {
-  if (route.view === 'detail') location.hash = `#/task/${encodeURIComponent(route.id)}`
-  else if (route.view === 'sessions')
-    location.hash = route.id ? `#/chat/${encodeURIComponent(route.id)}` : '#/chat'
-  else location.hash = `#/${route.view}`
+  if (route.view === 'detail') {
+    location.hash = `#/task/${encodeURIComponent(route.id)}`
+  } else if (route.view === 'sessions') {
+    let base = route.id ? `#/chat/${encodeURIComponent(route.id)}` : '#/chat'
+    if (route.project) {
+      base += `?project=${encodeURIComponent(route.project)}`
+    }
+    location.hash = base
+  } else if (route.view === 'queue') {
+    let base = '#/queue'
+    if (route.project) {
+      base += `?project=${encodeURIComponent(route.project)}`
+    }
+    location.hash = base
+  } else {
+    location.hash = `#/${route.view}`
+  }
 }
 
 /** Navigate by bare view name — the palette's vocabulary, where a session or
