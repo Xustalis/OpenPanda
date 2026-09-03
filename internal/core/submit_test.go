@@ -141,4 +141,3 @@ func TestSubmitKeepsFileTaskLocalWhenCapable(t *testing.T) {
 		t.Fatalf("expected local execution, got stdout: %q", result.Stdout)
 	}
 }
-
