@@ -107,5 +107,13 @@ check_emails.py
 fetch_emails.py
 .claude/settings.local.json
 
+# Early design prototypes (superseded by webui/)
+/openpanda-console-design/
+
+# One-off review / analysis notes under docs/
+/docs/uncommitted-review-*.md
+
+# Lab scratch directories
+/.lab/
 
 .gocache-tmp
