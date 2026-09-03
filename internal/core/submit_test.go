@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -97,3 +98,47 @@ func TestSetDetailRoundTrip(t *testing.T) {
 		t.Fatalf("detail mismatch: %+v", got)
 	}
 }
+
+// TestSubmitKeepsFileTaskLocalWhenCapable verifies that when a task has ContextType "file"
+// and no distributed project (Project == ""), Submit executes it locally if the local node
+// matches the required ability, preventing it from being forwarded to a foreign node without files.
+func TestSubmitKeepsFileTaskLocalWhenCapable(t *testing.T) {
+	ctx := context.Background()
+	localEcho := ledger.NativeAbility{ID: "code:edit", Command: "echo", Args: []string{"local done"}}
+	c := newCoreWithNative(t, "local-node", "", localEcho)
+
+	// Register a peer in ledger that has much higher capacity, which would otherwise win the score
+	peerCard := ledger.Card{
+		Device:        "remote-supercomputer",
+		ResourceClass: "Full",
+		Native: []ledger.NativeAbility{
+			{ID: "code:edit", Command: "echo", Args: []string{"remote done"}},
+		},
+		Capacity: ledger.Capacity{CPUCores: 128, RAMGB: 512, MaxConcurrent: 50},
+	}
+	if err := ledger.Register(c.db, peerCard, "remote-supercomputer", 1); err != nil {
+		t.Fatalf("register peer: %v", err)
+	}
+	capJSON, _ := json.Marshal(peerCard.Capacity)
+	if err := ledger.Heartbeat(c.db, "remote-supercomputer", "online", string(capJSON)); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+
+	task, result, err := c.Submit(ctx, TaskInput{
+		Title:       "edit local code",
+		ContextType: "file",
+		Project:     "",
+		Intent:      "edit something locally",
+		Requires:    []string{"code:edit"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if task.State != StateDone {
+		t.Fatalf("state = %s, want done", task.State)
+	}
+	if result.Stdout != "local done\n" {
+		t.Fatalf("expected local execution, got stdout: %q", result.Stdout)
+	}
+}
+

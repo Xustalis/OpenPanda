@@ -51,6 +51,11 @@ func (c *Core) attachProject(ctx context.Context, p *bus.TaskDelegatePayload, pr
 	}
 	if pack, err := c.packProjectMemory(project); err != nil {
 		c.logger.Warn("pack project memory", "project", project, "err", err)
+		if p.TaskID != "" && c.store != nil {
+			_ = c.store.RecordEvent(ctx, p.TaskID, EvContextDegraded, map[string]any{
+				"stage": "pack_memory", "project": project, "err": err.Error(),
+			})
+		}
 	} else if len(pack) > 0 {
 		p.ProjectPack = pack
 	}
@@ -62,6 +67,11 @@ func (c *Core) attachProject(ctx context.Context, p *bus.TaskDelegatePayload, pr
 	ref, err := c.packProjectTree(ctx, p.TaskID, dir)
 	if err != nil {
 		c.logger.Warn("pack project tree", "project", project, "dir", dir, "err", err)
+		if p.TaskID != "" && c.store != nil {
+			_ = c.store.RecordEvent(ctx, p.TaskID, EvContextDegraded, map[string]any{
+				"stage": "pack_tree", "project": project, "dir": dir, "err": err.Error(),
+			})
+		}
 		return
 	}
 	if ref.Hash != "" {
@@ -114,8 +124,10 @@ func (c *Core) packProjectTree(ctx context.Context, taskID, dir string) (bus.Art
 	if c.artifacts == nil {
 		return bus.ArtifactRef{}, nil
 	}
-	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
-		return bus.ArtifactRef{}, nil // the tree does not exist yet; nothing to send
+	if st, err := os.Stat(dir); err != nil {
+		return bus.ArtifactRef{}, fmt.Errorf("stat project work tree %s: %w", dir, err)
+	} else if !st.IsDir() {
+		return bus.ArtifactRef{}, fmt.Errorf("project work tree %s is not a directory", dir)
 	}
 	m, err := c.artifacts.PackDir(dir)
 	if err != nil {
@@ -132,22 +144,22 @@ func (c *Core) packProjectTree(ctx context.Context, taskID, dir string) (bus.Art
 // landProjectPack extracts a delegated project's memory into this node's own
 // projects directory, so the executing agent reads the project's memory from the
 // same path a local task would. Best-effort: a task without its memory still runs.
-func (c *Core) landProjectPack(project string, pack []byte) {
+func (c *Core) landProjectPack(project string, pack []byte) error {
 	if len(pack) == 0 || project == "" || c.projectsRoot == "" {
-		return
+		return nil
 	}
 	dir, err := c.projectMemoryDir(c.projectsRoot, project)
 	if err != nil {
 		c.logger.Warn("land project pack: unsafe project name", "project", project, "err", err)
-		return
+		return err
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		c.logger.Warn("land project pack: create dir", "project", project, "err", err)
-		return
+		return err
 	}
 	if _, err := artifact.Unpack(bytes.NewReader(pack), dir); err != nil {
 		c.logger.Warn("land project pack: unpack", "project", project, "err", err)
-		return
+		return err
 	}
 	// Adopt the project locally too, so `panda project list` on the executor shows
 	// the work it is doing rather than a task belonging to nothing.
@@ -157,6 +169,7 @@ func (c *Core) landProjectPack(project string, pack []byte) {
 		}
 	}
 	c.logger.Info("project context landed", "project", project, "dir", dir, "bytes", len(pack))
+	return nil
 }
 
 // projectWorkDir is where a project's tasks execute on *this* node. The origin's

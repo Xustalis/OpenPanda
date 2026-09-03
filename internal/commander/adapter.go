@@ -480,6 +480,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	// A well-behaved adapter returns JSON; scrub anything secret-shaped it may
 	// have echoed into the result before it enters the task/log pipeline.
 	out.Result = security.Redact(out.Result)
+	out.Stderr = security.Redact(stderr.String())
 	return out
 }
 

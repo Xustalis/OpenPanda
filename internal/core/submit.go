@@ -166,6 +166,16 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 		})
 	}
 
+	// When this node is capable of executing the task, and the task has local file context
+	// without a distributed project, keep it local: the delegate payload carries no project tree,
+	// so a forwarded copy would run against an empty directory on the remote peer (matching
+	// the guard in forwardScheduled / enqueue.go:189).
+	if decision.Action == scheduler.ActionForward && in.Project == "" && in.PreferredNode == "" &&
+		in.ContextType == "file" && c.localMatch()(in.Requires) {
+		c.logger.Info("keeping file task local: no project tree to forward", "task", t.TaskID)
+		decision.Action = scheduler.ActionLocal
+	}
+
 	switch decision.Action {
 	case scheduler.ActionLocal:
 		return c.runLocal(ctx, t, in)
