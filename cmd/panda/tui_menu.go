@@ -15,11 +15,14 @@ package main
 // something to know about.
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 )
 
 // menuItem is one selectable row: a command ("/tasks") or an argument
@@ -150,11 +153,50 @@ func (mn *slashMenu) sync(input string, resolve argResolver) {
 }
 
 // argItemDesc glosses one argument candidate where a gloss helps: a locale
-// code gets its endonym, everything else (task ids, enums) stays bare — the
-// value is already the whole story.
+// code gets its endonym, model subcommands get explanations, providers get
+// their human labels, and registered models show their model ID & context size.
 func argItemDesc(cmd, cand string) string {
 	if cmd == "lang" {
 		return i18n.LocaleNames[i18n.Locale(cand)]
+	}
+	if cmd == "model" {
+		switch cand {
+		case "list":
+			return "查看内置供应商 · list providers"
+		case "add":
+			return "注册供应商或模型 · register provider/model"
+		case "remove", "rm", "del":
+			return "移除注册模型 · drop model"
+		case "fetch", "models":
+			return "拉取远端模型列表 · list remote models"
+		case "test":
+			return "测试连通性 · test connectivity"
+		}
+		if p, ok := providers.Lookup(cand); ok {
+			return p.Label + " · 默认: " + p.DefaultModel
+		}
+		if cfg, _ := config.Load(""); cfg != nil {
+			for _, m := range cfg.Models {
+				if m.Alias() == cand {
+					desc := effectiveModel(m)
+					if cw := effectiveContextWindow(m); cw > 0 {
+						desc += fmt.Sprintf(" (%dk)", cw/1000)
+					}
+					if m.Alias() == cfg.Model.Alias() {
+						desc += " ★"
+					}
+					return desc
+				}
+			}
+			if cfg.Model.Alias() == cand && (cfg.Model.Model != "" || cfg.Model.Provider != "") {
+				desc := effectiveModel(cfg.Model)
+				if cw := effectiveContextWindow(cfg.Model); cw > 0 {
+					desc += fmt.Sprintf(" (%dk)", cw/1000)
+				}
+				desc += " ★"
+				return desc
+			}
+		}
 	}
 	return ""
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/projects"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
 func runProject(args []string) {
@@ -277,6 +278,7 @@ func runProjectShow(args []string) {
 	field(i18n.T(loc, "cli.project.memory"),
 		i18n.Tf(loc, "cli.project.memorySize", "entries", fmt.Sprint(entries), "chars", fmt.Sprint(chars)))
 	printProjectTasks(loc, tasks, pr.Name)
+	printProjectSessions(loc, *configPath, pr.Name)
 }
 
 // printProjectTasks lists the project's tasks under its record. A project without
@@ -299,6 +301,28 @@ func printProjectTasks(loc i18n.Locale, store *core.TaskStore, name string) {
 	}
 	fmt.Println()
 	printTaskTable(loc, mine)
+}
+
+// printProjectSessions lists the project's sessions under its record.
+func printProjectSessions(loc i18n.Locale, configPath, name string) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return
+	}
+	store := sessions.NewStore(sessionStoreRoot(cfg))
+	list, err := store.ListByProject(name)
+	if err != nil || len(list) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println(pal().Heading(i18n.Tf(loc, "cli.project.sessionsHead", "n", fmt.Sprint(len(list)))))
+	for _, s := range list {
+		title := orDash(s.Title)
+		if len([]rune(title)) > 40 {
+			title = string([]rune(title)[:40]) + "…"
+		}
+		fmt.Printf("  %-16s  %s  %s\n", s.ID, s.UpdatedAt.Format("2006-01-02 15:04"), title)
+	}
 }
 
 func runProjectEnter(args []string) {
@@ -398,14 +422,24 @@ func runProjectRename(args []string) {
 	if rerr != nil {
 		fatal("rename project tasks", rerr)
 	}
+	var sessRenamed int
+	if cfg, cerr := config.Load(*configPath); cerr == nil {
+		sessStore := sessions.NewStore(sessionStoreRoot(cfg))
+		sessRenamed, _ = sessStore.RenameProject(oldName, newName)
+	}
+	renameConvo(oldName, newName)
+
 	loc := i18n.Detect()
 	if jsonOutput {
-		emitJSON(map[string]any{"project": pr, "tasks_updated": renamed})
+		emitJSON(map[string]any{"project": pr, "tasks_updated": renamed, "sessions_updated": sessRenamed})
 		return
 	}
 	fmt.Println(i18n.Tf(loc, "cli.project.renamed", "old", oldName, "new", newName))
 	if renamed > 0 {
 		fmt.Println(pal().Muted("  " + i18n.Tf(loc, "cli.project.tasksMoved", "n", fmt.Sprint(renamed))))
+	}
+	if sessRenamed > 0 {
+		fmt.Println(pal().Muted("  " + i18n.Tf(loc, "cli.project.sessionsMoved", "n", fmt.Sprint(sessRenamed))))
 	}
 }
 
@@ -413,10 +447,11 @@ func runProjectRemove(args []string) {
 	fs := flag.NewFlagSet("project rm", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
 	keepMemory := fs.Bool("keep-memory", false, "leave the project's memory file in place")
+	deleteSessions := fs.Bool("delete-sessions", false, "delete all sessions belonging to this project")
 	fs.Parse(reorderFlags(args, commonValueFlags))
 	name := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "usage: panda project rm <name> [--keep-memory]")
+		fmt.Fprintln(os.Stderr, "usage: panda project rm <name> [--keep-memory] [--delete-sessions]")
 		os.Exit(2)
 	}
 	store, mem, _, closeDB := projectStores(*configPath)
@@ -434,9 +469,41 @@ func runProjectRemove(args []string) {
 			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.project.memoryLeft", "name", name))
 		}
 	}
+
+	cfg, cfgErr := config.Load(*configPath)
+	var sessionsKept, sessionsDeleted int
+	if cfgErr == nil {
+		sessStore := sessions.NewStore(sessionStoreRoot(cfg))
+		if list, err := sessStore.ListByProject(name); err == nil && len(list) > 0 {
+			if *deleteSessions {
+				sessionsDeleted = len(list)
+				wt := openWorktreesBestEffort(cfg.Storage.WorkPath)
+				for _, s := range list {
+					if wt != nil {
+						_ = wt.Remove(context.Background(), s.ID)
+					}
+					_ = sessStore.Delete(s.ID)
+				}
+			} else {
+				sessionsKept = len(list)
+				for _, s := range list {
+					_ = sessStore.SetProject(s.ID, "")
+				}
+			}
+		}
+	}
+
+	deleteConvo(name)
+
 	loc := i18n.Detect()
 	if jsonOutput {
-		emitJSON(map[string]any{"removed": name, "work_dir": pr.WorkDir, "memory_kept": *keepMemory})
+		emitJSON(map[string]any{
+			"removed":          name,
+			"work_dir":         pr.WorkDir,
+			"memory_kept":      *keepMemory,
+			"sessions_kept":    sessionsKept,
+			"sessions_deleted": sessionsDeleted,
+		})
 		return
 	}
 	fmt.Println(i18n.Tf(loc, "cli.project.removed", "name", name))
@@ -447,6 +514,12 @@ func runProjectRemove(args []string) {
 	}
 	if *keepMemory {
 		fmt.Println(pal().Muted("  " + i18n.Tf(loc, "cli.project.memoryKept", "name", name)))
+	}
+	if sessionsDeleted > 0 {
+		fmt.Println(pal().Muted("  " + i18n.Tf(loc, "cli.project.sessionsDeleted", "n", fmt.Sprint(sessionsDeleted))))
+	}
+	if sessionsKept > 0 {
+		fmt.Println(pal().Muted("  " + i18n.Tf(loc, "cli.project.sessionsKept", "n", fmt.Sprint(sessionsKept))))
 	}
 }
 

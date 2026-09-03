@@ -44,6 +44,8 @@ func runSession(args []string) {
 		runSessionNew(rest)
 	case "show":
 		runSessionShow(rest)
+	case "mv", "move":
+		runSessionMove(rest)
 	case "rm", "delete":
 		runSessionRm(rest)
 	case "ask":
@@ -63,9 +65,10 @@ func runSession(args []string) {
 
 func sessionUsage() {
 	fmt.Fprintln(os.Stderr, "usage: panda session <verb>")
-	fmt.Fprintln(os.Stderr, "  list                          list sessions, newest first")
-	fmt.Fprintln(os.Stderr, "  new [--title T]               create a session (carves a worktree in a repo)")
+	fmt.Fprintln(os.Stderr, "  list [--project P]            list sessions, newest first")
+	fmt.Fprintln(os.Stderr, "  new [--title T] [--project P] create a session (carves a worktree in a repo)")
 	fmt.Fprintln(os.Stderr, "  show <id>                     show one session and its turns")
+	fmt.Fprintln(os.Stderr, "  mv <id> --project P           move session to project (empty to disassociate)")
 	fmt.Fprintln(os.Stderr, "  rm <id>                       remove the session and its worktree")
 	fmt.Fprintln(os.Stderr, "  ask <id> <prompt> [--authorize] [--card PATH]   continue a session")
 	fmt.Fprintln(os.Stderr, "  diff <id>                     show the session's worktree changes")
@@ -75,13 +78,19 @@ func sessionUsage() {
 func runSessionList(args []string) {
 	fs := flag.NewFlagSet("session list", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
+	projectName := fs.String("project", "", "filter sessions by project")
 	fs.Parse(args)
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
 	}
 	store := sessions.NewStore(sessionStoreRoot(cfg))
-	list, err := store.List()
+	var list []*sessions.Session
+	if *projectName != "" {
+		list, err = store.ListByProject(*projectName)
+	} else {
+		list, err = store.List()
+	}
 	if err != nil {
 		fatal("list sessions", err)
 	}
@@ -101,17 +110,21 @@ func runSessionList(args []string) {
 	// rather than wrapped, and a dim header so the columns name themselves.
 	idW := cliui.DisplayWidth(i18n.T(loc, "cli.col.id"))
 	branchW := cliui.DisplayWidth(i18n.T(loc, "cli.col.branch"))
+	projW := cliui.DisplayWidth(i18n.T(loc, "cli.col.project"))
 	for _, s := range list {
 		idW = max(idW, cliui.DisplayWidth(s.ID))
 		branchW = max(branchW, cliui.DisplayWidth(orDash(s.Branch)))
+		projW = max(projW, cliui.DisplayWidth(orDash(s.Project)))
 	}
 	idW, branchW = min(idW, 18), min(branchW, 22)
+	projW = min(projW, 16)
 	const whenW, turnsW = 16, 6
-	titleW := max(20, listWidth()-(idW+whenW+branchW+turnsW+4))
+	titleW := max(20, listWidth()-(idW+whenW+branchW+projW+turnsW+5))
 
 	fmt.Println(listHeader(
 		cell(i18n.T(loc, "cli.col.id"), idW),
 		cell(i18n.T(loc, "cli.col.when"), whenW),
+		cell(i18n.T(loc, "cli.col.project"), projW),
 		cell(i18n.T(loc, "cli.col.branch"), branchW),
 		cell(i18n.T(loc, "cli.col.turns"), turnsW),
 		i18n.T(loc, "cli.col.title"),
@@ -120,6 +133,7 @@ func runSessionList(args []string) {
 		fmt.Println(row(
 			cell(s.ID, idW),
 			cell(s.UpdatedAt.Format("2006-01-02 15:04"), whenW),
+			cell(orDash(s.Project), projW),
 			cell(orDash(s.Branch), branchW),
 			cell(strconv.Itoa(len(s.Turns)), turnsW),
 			cell(s.Title, titleW),
@@ -131,13 +145,18 @@ func runSessionNew(args []string) {
 	fs := flag.NewFlagSet("session new", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
 	title := fs.String("title", "", "session title (default: derived from the first ask)")
+	projectName := fs.String("project", "", "project name (default: active project)")
 	fs.Parse(args)
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
 	}
+	proj := strings.TrimSpace(*projectName)
+	if proj == "" {
+		proj, _ = activeProject(cfg)
+	}
 	store := sessions.NewStore(sessionStoreRoot(cfg))
-	sess, err := store.Create(strings.TrimSpace(*title))
+	sess, err := store.Create(strings.TrimSpace(*title), proj)
 	if err != nil {
 		fatal("create session", err)
 	}
@@ -153,6 +172,9 @@ func runSessionNew(args []string) {
 		return
 	}
 	fmt.Printf("%s  %s\n", sess.ID, i18n.T(i18n.Detect(), "cli.session.created"))
+	if sess.Project != "" {
+		fmt.Printf("project:  %s\n", sess.Project)
+	}
 	if sess.Worktree != "" {
 		fmt.Printf("worktree: %s  branch: %s\n", sess.Worktree, sess.Branch)
 	}
@@ -185,6 +207,9 @@ func runSessionShow(args []string) {
 	}
 	fmt.Printf("id:       %s\n", sess.ID)
 	fmt.Printf("title:    %s\n", orDash(sess.Title))
+	if sess.Project != "" {
+		fmt.Printf("project:  %s\n", sess.Project)
+	}
 	fmt.Printf("created:  %s\n", sess.CreatedAt.Format("2006-01-02 15:04:05"))
 	fmt.Printf("updated:  %s\n", sess.UpdatedAt.Format("2006-01-02 15:04:05"))
 	if sess.Branch != "" {
@@ -207,6 +232,38 @@ func runSessionShow(args []string) {
 			ref = "  [" + t.Ref + "]"
 		}
 		fmt.Printf("  %2d %-9s %s%s\n", i+1, t.Role, text, ref)
+	}
+}
+
+func runSessionMove(args []string) {
+	fs := flag.NewFlagSet("session mv", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config.yaml")
+	projectName := fs.String("project", "", "target project name (empty to disassociate)")
+	fs.Parse(args)
+	id := strings.TrimSpace(fs.Arg(0))
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "usage: panda session mv <id> --project <name>")
+		os.Exit(2)
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	store := sessions.NewStore(sessionStoreRoot(cfg))
+	targetProj := strings.TrimSpace(*projectName)
+	if err := store.SetProject(id, targetProj); err != nil {
+		fatal("move session", err)
+	}
+	sess, _ := store.Get(id)
+	if jsonOutput {
+		emitJSON(sess)
+		return
+	}
+	loc := i18n.Detect()
+	if sess != nil && sess.Project != "" {
+		fmt.Println(i18n.Tf(loc, "cli.session.moved", "id", id, "project", sess.Project))
+	} else {
+		fmt.Println(i18n.Tf(loc, "cli.session.unassociated", "id", id))
 	}
 }
 
@@ -292,11 +349,21 @@ func runSessionAsk(args []string) {
 		fatal("save turn", err)
 	}
 
-	// Repo sessions run in their worktree, non-repo ones in the shared work
-	// path (memory wall §17.2: personal memory never enters a session prompt).
+	// Repo sessions run in their worktree, non-repo ones in the project work dir
+	// or shared work path (memory wall §17.2: personal memory never enters a session prompt).
 	workDir := sess.Worktree
+	if workDir == "" && sess.Project != "" {
+		pStore, _, _, closeDB := projectStores(*configPath)
+		if p, err := pStore.Get(sess.Project); err == nil && p.WorkDir != "" {
+			workDir = p.WorkDir
+		}
+		closeDB()
+	}
 	if workDir == "" {
 		workDir = engine.WorkPath()
+	}
+	if sess.Project != "" {
+		engine.SetProject(sess.Project, workDir)
 	}
 
 	out, err := askSessionTurns(engine, history, prompt, workDir, *authorize)
@@ -304,6 +371,10 @@ func runSessionAsk(args []string) {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 		_, _ = store.AppendTurn(sess.ID, sessions.Turn{Role: "assistant", Text: "⚠ " + err.Error(), Kind: "error"})
 		os.Exit(1)
+	}
+
+	if sess.Title == sess.ID || sess.Title == "" {
+		_ = store.SetTitle(sess.ID, prompt)
 	}
 
 	if out.Kind == "task" && out.TaskID != "" {
