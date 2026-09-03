@@ -64,6 +64,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// status row re-reads what a command may have just changed — /project,
 		// /resume — instead of asking the store on every frame.
 		m.mode = modeIdle
+		m.applyLocale() // /lang may have switched the session language mid-run
 		m.refreshProject()
 		if msg.err != nil {
 			blk := block{kind: blockError, body: msg.err.Error()}
@@ -186,15 +187,26 @@ func (m tuiModel) onIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Grow the input box with its content up to the cap, so multi-line prompts
 	// (Ctrl+J inserts a newline) stay fully visible.
 	m.ta.SetHeight(min(8, max(1, m.ta.LineCount())))
-	// Re-filter the popup against the edited line: it opens on a bare "/token"
-	// and closes once a space (arguments) or a non-slash line is typed.
-	m.menu.sync(m.ta.Value())
+	// Re-filter the popup against the edited line: it opens on a bare "/token",
+	// then follows the argument position — "/lang " lists locale codes, the
+	// token under the cursor filters them — and closes on a non-slash line.
+	m.menu.sync(m.ta.Value(), m.argResolve())
 	return m, cmd
 }
 
-// onMenuKey handles keystrokes while the slash-command popup is open. It reports
-// handled=false for keys the menu does not claim, so the caller falls through to
-// normal editing (typing more of the filter, backspacing, etc.).
+// argResolve adapts the repl's argument resolver for the popup. nil repl (some
+// tests) disables argument candidates, leaving command completion intact.
+func (m tuiModel) argResolve() argResolver {
+	if m.r == nil {
+		return nil
+	}
+	return m.r.argCandidates
+}
+
+// onMenuKey handles keystrokes while the slash-command popup is open — over
+// command names or, past the first space, over argument candidates. It reports
+// handled=false for keys the menu does not claim, so the caller falls through
+// to normal editing (typing more of the filter, backspacing, etc.).
 func (m tuiModel) onMenuKey(msg tea.KeyMsg) (handled bool, _ tea.Model, _ tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyUp, tea.KeyCtrlP:
@@ -204,15 +216,25 @@ func (m tuiModel) onMenuKey(msg tea.KeyMsg) (handled bool, _ tea.Model, _ tea.Cm
 		m.menu.move(1)
 		return true, m, nil
 	case tea.KeyTab:
-		// Complete the token to the highlighted command and leave a trailing
-		// space so arguments can follow; the space closes the popup on re-sync.
-		if sel := m.menu.selected(); sel != "" {
-			m.ta.SetValue(sel + " ")
-			m.menu.sync(m.ta.Value())
+		// Complete to the highlighted row and leave a trailing space so the
+		// next argument can follow; the re-sync re-opens the popup on the new
+		// argument position (or closes it when there is nothing to offer).
+		if f := m.menu.fill(); f != "" {
+			m.ta.SetValue(f)
+			m.menu.sync(m.ta.Value(), m.argResolve())
 		}
 		return true, m, nil
 	case tea.KeyEnter:
-		// Enter runs the highlighted command outright — the discovery path.
+		// In command mode Enter runs the highlighted command outright — the
+		// discovery path. In argument mode it applies the highlighted
+		// candidate to the line and submits that: arrows pick, Enter answers.
+		if m.menu.argMode {
+			if f := m.menu.fill(); f != "" {
+				model, cmd := m.submit(f)
+				return true, model, cmd
+			}
+			return false, m, nil
+		}
 		if sel := m.menu.selected(); sel != "" {
 			model, cmd := m.submit(sel)
 			return true, model, cmd

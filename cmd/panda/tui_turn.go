@@ -102,6 +102,7 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 	if out != nil && out.NeedsApproval && out.Approval != nil {
 		m.pending = out
 		m.mode = modeApproving
+		m.approvalSel = 1 // arrows + Enter start on deny, the [y/N] safe default
 		// The watcher stays quiet while the card is up: the parked task's own
 		// "review" state is what the card is showing.
 		return m, nil // the card renders in View; keys handled by onApprovalKey
@@ -218,7 +219,9 @@ func planSummaryLine(out *askengine.Result) string {
 }
 
 // onApprovalKey handles the tier-2 approval card: y approves (resume the task
-// authorized), n/Esc denies and commits a note.
+// authorized), n/Esc denies and commits a note. The arrows move the focus
+// between the two choices and Enter answers the focused one, so the card can
+// be answered without leaving the navigation keys — the y/n hotkeys remain.
 func (m tuiModel) onApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// The card only renders while pending is set, but Update sees every
 	// keystroke, so guard the dereference instead of trusting the mode flag to
@@ -229,24 +232,47 @@ func (m tuiModel) onApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch strings.ToLower(msg.String()) {
 	case "y":
-		req := m.pending.Approval
-		m.mode = modeAsking
-		m.started = time.Now()
-		m.lastInterrupt = time.Time{} // the re-run gets its own double-tap window
-		// Resume in the tree this turn was running in. A task started inside a
-		// /resume'd session must not silently re-run under the engine's default
-		// work path — for an irreversible task that is the wrong directory, not
-		// merely a cosmetic difference.
-		return m, tea.Batch(m.sp.Tick, resumeApproved(m.engine, req.TaskID, m.turnWorkDir))
+		return m.approvePending()
 	case "n", "esc":
-		id := m.pending.Approval.TaskID
-		m.pending = nil
-		m.mode = modeIdle
-		done := m.turnEnded()
-		note := block{kind: blockNote, body: i18n.Tf(m.loc, "repl.approval.denied", "id", id)}
-		return m, tea.Batch(done, m.printBlock(note))
+		return m.denyPending()
+	case "up", "down", "left", "right":
+		// Two choices: any arrow hops to the other one. Holding a key
+		// toggles between them, which is the honest reading of a
+		// two-option picker.
+		m.approvalSel = 1 - m.approvalSel
+		return m, nil
+	case "enter":
+		if m.approvalSel == 0 {
+			return m.approvePending()
+		}
+		return m.denyPending()
 	}
 	return m, nil
+}
+
+// approvePending answers the approval card with yes: the parked task resumes
+// authorized, in the worktree this turn was running in.
+func (m tuiModel) approvePending() (tea.Model, tea.Cmd) {
+	req := m.pending.Approval
+	m.mode = modeAsking
+	m.started = time.Now()
+	m.lastInterrupt = time.Time{} // the re-run gets its own double-tap window
+	// Resume in the tree this turn was running in. A task started inside a
+	// /resume'd session must not silently re-run under the engine's default
+	// work path — for an irreversible task that is the wrong directory, not
+	// merely a cosmetic difference.
+	return m, tea.Batch(m.sp.Tick, resumeApproved(m.engine, req.TaskID, m.turnWorkDir))
+}
+
+// denyPending answers the approval card with no: the task stays in review and
+// a note says how to run it later.
+func (m tuiModel) denyPending() (tea.Model, tea.Cmd) {
+	id := m.pending.Approval.TaskID
+	m.pending = nil
+	m.mode = modeIdle
+	done := m.turnEnded()
+	note := block{kind: blockNote, body: i18n.Tf(m.loc, "repl.approval.denied", "id", id)}
+	return m, tea.Batch(done, m.printBlock(note))
 }
 
 // resetLive clears the in-flight turn state after a turn commits.

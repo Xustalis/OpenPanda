@@ -179,6 +179,14 @@ func runRepl(args []string) {
 
 	interactive := stdinIsTTY()
 	detected := i18n.Detect()
+	// A locale persisted by /lang (config ui.locale) wins over the ambient
+	// LANG/LC_* detection — it is an explicit choice — but OPENPANDA_LANG is
+	// the stronger, per-invocation override, so it keeps precedence.
+	if os.Getenv("OPENPANDA_LANG") == "" {
+		if saved := i18n.Parse(cfg.UI.Locale); saved != "" {
+			detected = saved
+		}
+	}
 	if isLinuxConsole() {
 		detected = "en" // console font has no CJK glyphs; keep every UI line readable
 	}
@@ -1487,10 +1495,28 @@ func (r *repl) cmdLang(arg string) {
 				r.term.loc = loc
 			}
 			fmt.Println(i18n.Tf(r.loc, "repl.lang.set", "lang", i18n.LocaleNames[loc]))
+			r.persistLocale(loc)
 			return
 		}
 	}
 	fmt.Println(i18n.Tf(r.loc, "repl.lang.bad", "lang", arg, "list", localeCodes()))
+}
+
+// persistLocale records the /lang choice as ui.locale in config.yaml so the
+// next run starts in the same language. A write failure is reported but not
+// fatal — the session keeps the new locale either way, it just does not
+// survive a restart.
+func (r *repl) persistLocale(loc i18n.Locale) {
+	if r.cfg == nil || r.cfg.UI.Locale == string(loc) {
+		return
+	}
+	if r.configPath != "" {
+		if err := config.UpdateSectionField(r.configPath, []string{"ui"}, "locale", string(loc)); err != nil {
+			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(r.loc, "repl.lang.persistFail", "err", err.Error()))
+			return
+		}
+	}
+	r.cfg.UI.Locale = string(loc)
 }
 
 // cmdQuit exits the loop; defers close the db, engine, and web server.

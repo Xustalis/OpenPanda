@@ -66,6 +66,25 @@ func matchLocale(tag string) Locale {
 	return ""
 }
 
+// Parse maps a persisted locale setting (config ui.locale) to a supported
+// Locale, case-insensitively and tolerant of the same shapes Detect accepts
+// ("zh_Hans", "zh_CN.UTF-8"). It returns "" when the value is unset or not a
+// supported language, so callers can treat it as "no preference recorded".
+func Parse(s string) Locale {
+	s = strings.ToLower(strings.TrimSpace(strings.SplitN(s, ".", 2)[0]))
+	if s == "" {
+		return ""
+	}
+	if loc := matchLocale(s); loc != "" {
+		return loc
+	}
+	base := strings.SplitN(s, "_", 2)[0]
+	if loc := matchLocale(base); loc != "" {
+		return loc
+	}
+	return ""
+}
+
 // T translates key into the given locale, falling back to English and then
 // to the key itself (missing keys stay greppable).
 func T(loc Locale, key string) string {

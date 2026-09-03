@@ -1,9 +1,11 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
@@ -83,5 +85,41 @@ func TestCmdTasksStateFilter(t *testing.T) {
 	}
 	if state != "running" {
 		t.Fatalf("state = %q, want running", state)
+	}
+}
+
+// TestCmdLangPersistsLocale pins the /lang fix: the choice lands in config.yaml
+// as ui.locale (comment-preserving), updates the in-memory config, and reloads
+// on the next start. Without persistence the switch only lived for the session.
+func TestCmdLangPersistsLocale(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/config.yaml"
+	if err := os.WriteFile(path, []byte("node:\n  name: test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &repl{loc: i18n.English, cfg: &config.Config{}, configPath: path}
+	r.cmdLang("de")
+	if r.loc != i18n.German {
+		t.Fatalf("loc = %q, want de", r.loc)
+	}
+	if r.cfg.UI.Locale != "de" {
+		t.Fatalf("in-memory ui.locale = %q, want de", r.cfg.UI.Locale)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := i18n.Parse(cfg.UI.Locale); got != i18n.German {
+		t.Fatalf("persisted ui.locale = %q, want de", cfg.UI.Locale)
+	}
+}
+
+// TestCmdLangWithoutConfigStillSwitches covers the session-only path: no
+// config path (or no cfg at all) must not break the switch itself.
+func TestCmdLangWithoutConfigStillSwitches(t *testing.T) {
+	r := &repl{loc: i18n.English, cfg: &config.Config{}}
+	r.cmdLang("ja")
+	if r.loc != i18n.Japanese || r.cfg.UI.Locale != "ja" {
+		t.Fatalf("loc=%q ui.locale=%q, want ja/ja", r.loc, r.cfg.UI.Locale)
 	}
 }

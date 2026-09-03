@@ -33,6 +33,14 @@ type Config struct {
 	Memory    MemoryConfig    `yaml:"memory"`
 	Approval  ApprovalConfig  `yaml:"approval"`
 	Timeouts  TimeoutsConfig  `yaml:"timeouts"`
+	UI        UIConfig        `yaml:"ui"`
+}
+
+// UIConfig holds front-end preferences. Locale is the language /lang last
+// switched to (en | zh-CN | ja | es | de); empty means "detect from the
+// environment", which keeps a fresh install following the terminal's LANG.
+type UIConfig struct {
+	Locale string `yaml:"locale"`
 }
 
 // Injection model strategies (injection.model).

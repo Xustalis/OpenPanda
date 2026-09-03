@@ -111,6 +111,12 @@ type tuiModel struct {
 	// shows its card and, on a yes, resumes it authorized.
 	pending *askengine.Result
 
+	// approvalSel is the focused choice on the approval card: 0 = approve,
+	// 1 = deny. It starts on deny — the same safe default as the classic
+	// [y/N] prompt — so arrows + Enter answer the card without reaching
+	// for the y/n hotkeys (which keep working).
+	approvalSel int
+
 	quitting bool
 }
 
@@ -197,6 +203,22 @@ func (m *tuiModel) refreshProject() {
 		return
 	}
 	m.projName = m.r.activeProjectName()
+}
+
+// applyLocale re-reads the repl's locale into every front-end surface that
+// captured it at startup: the theme's label locale, the slash menu's help
+// lines (resolved once when the menu was built), and the input placeholder.
+// /lang changes r.loc while this model holds its own snapshot, so without
+// this pass the chrome — footer hints, menu help, detached notes — stays in
+// the old language while only the handlers' printed output switches.
+func (m *tuiModel) applyLocale() {
+	if m.r == nil || m.r.loc == m.loc {
+		return
+	}
+	m.loc = m.r.loc
+	m.th.loc = m.r.loc
+	m.menu = newSlashMenu(m.r.loc)
+	m.ta.Placeholder = i18n.T(m.r.loc, "tui.input.placeholder")
 }
 
 // history assembles the conversation context for the next ask by delegating to
