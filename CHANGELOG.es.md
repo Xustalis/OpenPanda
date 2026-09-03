@@ -36,9 +36,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Cada entrada nombra el cambio y su efecto visible en una a tres líneas; se cita el commit que lo introdujo cuando ayuda a la arqueología.
 - Este archivo en inglés es el canónico. Las traducciones zh-CN / ja / es / de lo replican y pueden retrasarse brevemente alrededor de un lanzamiento.
 
-## [0.0.8] - 2026-09-02
+## [0.0.8-alpha] - 2026-09-03
 
-La versión de los proyectos: un proyecto ya no es solo un nombre en una tarea — tiene directorio de trabajo, descripción y un puntero persistente de «proyecto actual»; las tareas lanzadas desde dentro lo heredan, y una tarea delegada lleva el proyecto entero al ejecutor, de modo que la máquina que la ejecuta sabe en qué está trabajando. La puerta de aprobación se reencuadra a solo lo irreversible (con el vector de descarga-a-archivo regateado tras la revisión), y la consola gana superficies para seguir planes y cambiar ajustes.
+La versión de los proyectos: un proyecto ya no es solo un nombre en una tarea — tiene directorio de trabajo, descripción y un puntero persistente de «proyecto actual»; las tareas lanzadas desde dentro lo heredan, y una tarea delegada lleva el proyecto entero al ejecutor, de modo que la máquina que la ejecuta sabe en qué está trabajando. La puerta de aprobación se reencuadra a solo lo irreversible (con el vector de descarga-a-archivo regateado tras la revisión), la consola gana superficies para seguir planes y cambiar ajustes, y estrena la nueva piel «Panda Paper». Cortada como alpha: la línea está completa en su alcance, pero ha tenido menos tiempo de reposo que una versión numerada.
 
 ### Añadido
 
@@ -62,6 +62,7 @@ La versión de los proyectos: un proyecto ya no es solo un nombre en una tarea �
 
 - **La puerta de aprobación cubre solo lo irreversible** — Tier 2 ahora significa «ningún comando posterior puede deshacerlo»: borrado, estado de disco/partición/firmware, estado de energía, escalada de privilegios, y las formas de argumento que pierden trabajo (`git push --force`, `rsync --delete`, `sed -i`, `find -delete`). curl, wget, make, ssh, systemctl, mount, docker, kubectl, terraform, los gestores de paquetes, chmod/chown/mv/cp/tee y similares se ejecutan sin supervisión, y `bash scripts/build.sh` ya no pide confirmación — un nodo que no puede ejecutar su propio build no puede hacer el trabajo para el que existe (e593470).
 - **Las descargas a archivo siguen bloqueadas** — un curl/wget que guarda sus bytes en una ruta (`-o`, `-O`, `--output`) es Tier 2: los bytes son opacos al clasificador y el siguiente paso suele ser ejecutarlos, y antes de este cambio `curl -o x …; bash x` se calificaba Tier 1 de principio a fin. Las descargas a stdout o `/dev/null` — las formas de sonda de alcanzabilidad — no se ven afectadas (revisión 2026-09-02, P1).
+- **Consola: rediseño visual «Panda Paper»** — una capa de re-skin añadida sobre los estilos existentes de la consola: tema claro de papel cálido y tema oscuro de tinta cálida (sin negro puro ni gris frío), el acento de marca verde bambú profundizado un paso con el azul reservado para la órbita de decisión, tipografía serif de exhibición solo en los títulos, radios un paso más grandes, sombras marrón-cálidas más suaves, y retiradas las decoraciones «de IA» (texto degradado en títulos, subrayados degradados, capas de brillo en botones). La capa redefine los mismos tokens y se aplica en cascada sobre las reglas antiguas — el marcado de los componentes, los nombres de clase y la lógica quedan intactos (esta versión).
 
 ## [0.0.7] - 2026-08-31
 
