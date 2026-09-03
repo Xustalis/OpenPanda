@@ -262,5 +262,3 @@ func TestLandProjectPackRecordsContextDegraded(t *testing.T) {
 		t.Fatalf("no %s event recorded after corrupted landProjectPack; events: %+v", EvContextDegraded, events)
 	}
 }
-
-

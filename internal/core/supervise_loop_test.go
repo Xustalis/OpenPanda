@@ -449,4 +449,3 @@ func TestSuperviseLoopPreservesOriginalIntentAndStderr(t *testing.T) {
 		t.Fatalf("result OK = false, want true")
 	}
 }
-
