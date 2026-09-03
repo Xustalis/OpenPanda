@@ -26,6 +26,7 @@ type Config struct {
 	Storage   StorageConfig   `yaml:"storage"`
 	Log       LogConfig       `yaml:"log"`
 	Model     ModelConfig     `yaml:"model"`
+	Models    []ModelConfig   `yaml:"models,omitempty"`
 	Push      PushConfig      `yaml:"push"`
 	MCP       MCPConfig       `yaml:"mcp"`
 	Injection InjectionConfig `yaml:"injection"`
@@ -271,12 +272,22 @@ const (
 // adapters. api_type picks the wire format — "anthropic" (Messages API,
 // default) or "openai" (Chat Completions) — so any provider works with a
 // custom base_url + model; the user is never locked to a fixed vendor.
+//
+// Name and Provider power the multi-model registry: Name is the alias
+// `/model <name>` switches to (empty means "the model id is the alias"),
+// Provider is the built-in catalogue id (see internal/providers) whose
+// endpoint, dialect and per-vendor tuning the entry client merges in at
+// construction time. Both are optional — a bare ModelConfig is unchanged
+// legacy behaviour.
 type ModelConfig struct {
-	APIType   string `yaml:"api_type"`   // "anthropic" | "openai" (default anthropic)
-	BaseURL   string `yaml:"base_url"`   // e.g. https://api.deepseek.com/anthropic
-	APIKey    string `yaml:"api_key"`    // secret; prefer env OPENPANDA_MODEL_API_KEY
-	Model     string `yaml:"model"`      // e.g. deepseek-chat | gpt-4o-mini — fully user-defined
-	MaxTokens int    `yaml:"max_tokens"` // completion cap; 0 = provider/entry default
+	Name          string `yaml:"name,omitempty"`           // alias for /model switch; empty = model id
+	Provider      string `yaml:"provider,omitempty"`       // built-in provider id (internal/providers)
+	APIType       string `yaml:"api_type"`                 // "anthropic" | "openai" (default anthropic)
+	BaseURL       string `yaml:"base_url"`                 // e.g. https://api.deepseek.com/anthropic
+	APIKey        string `yaml:"api_key"`                  // secret; prefer env OPENPANDA_MODEL_API_KEY
+	Model         string `yaml:"model"`                    // e.g. deepseek-chat | gpt-4o-mini — fully user-defined
+	MaxTokens     int    `yaml:"max_tokens"`               // completion cap; 0 = provider/entry default
+	ContextWindow int    `yaml:"context_window,omitempty"` // advertised context length; 0 = unknown
 }
 
 // NormalizedAPIType returns the validated api type, defaulting to Anthropic.
@@ -285,6 +296,15 @@ func (m ModelConfig) NormalizedAPIType() string {
 		return APITypeOpenAI
 	}
 	return APITypeAnthropic
+}
+
+// Alias returns the switchable name for this model: Name when set, otherwise
+// the model id. `/model <alias>` resolves against it.
+func (m ModelConfig) Alias() string {
+	if m.Name != "" {
+		return m.Name
+	}
+	return m.Model
 }
 
 // MCPConfig selects the stdio MCP server whose tools the ask engine may call
@@ -934,6 +954,8 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 		name  string
 		value string
 	}{
+		{"name", mc.Name},
+		{"provider", mc.Provider},
 		{"api_type", mc.NormalizedAPIType()},
 		{"base_url", mc.BaseURL},
 		{"api_key", mc.APIKey},
@@ -942,8 +964,71 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 	for _, f := range fields {
 		setMapField(model, f.name, f.value)
 	}
-	if mc.MaxTokens > 0 {
-		setMapField(model, "max_tokens", strconv.Itoa(mc.MaxTokens))
+	setMapFieldInt(model, "max_tokens", mc.MaxTokens)
+	setMapFieldInt(model, "context_window", mc.ContextWindow)
+
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return err
+	}
+	hardenSecretPerms(path, out)
+	return nil
+}
+
+// UpdateModelsSection persists the multi-model registry (the models: list)
+// into the YAML file at path, creating the file from defaults when missing.
+// It round-trips the document as a yaml.Node so every other section and its
+// comments survive byte-for-byte; only the models sequence is replaced. An
+// empty list removes the key, so a config with no registry stays clean.
+//
+// The active model (the model: section) is intentionally NOT touched here —
+// callers switch it with UpdateModelSection, keeping the two concerns
+// separate so an add/remove never silently re-selects a model.
+func UpdateModelsSection(path string, models []ModelConfig) error {
+	var root yaml.Node
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := yaml.Unmarshal(data, &root); err != nil {
+			return fmt.Errorf("parse config %s: %w", path, err)
+		}
+		if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+			return fmt.Errorf("config %s: not a YAML mapping", path)
+		}
+	case os.IsNotExist(err):
+		doc := Default()
+		doc.Models = models
+		out, err := yaml.Marshal(doc)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(path, out, 0o600)
+	default:
+		return fmt.Errorf("read config %s: %w", path, err)
+	}
+	top := root.Content[0]
+
+	replaced := false
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		if top.Content[i].Value != "models" {
+			continue
+		}
+		if len(models) == 0 {
+			top.Content = append(top.Content[:i], top.Content[i+2:]...)
+		} else {
+			top.Content[i+1] = modelsSeqNode(models)
+		}
+		replaced = true
+		break
+	}
+	if !replaced && len(models) > 0 {
+		top.Content = append(top.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "models"},
+			modelsSeqNode(models),
+		)
 	}
 
 	out, err := yaml.Marshal(&root)
@@ -955,6 +1040,31 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 	}
 	hardenSecretPerms(path, out)
 	return nil
+}
+
+// modelsSeqNode builds a block-style sequence of model mappings, one per
+// registry entry, in stable field order.
+func modelsSeqNode(models []ModelConfig) *yaml.Node {
+	seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	for _, mc := range models {
+		seq.Content = append(seq.Content, modelConfigNode(mc))
+	}
+	return seq
+}
+
+// modelConfigNode renders one ModelConfig as a YAML mapping node by round-
+// tripping it through the marshaller, so field order and omitempty semantics
+// stay identical to a hand-edited config.
+func modelConfigNode(mc ModelConfig) *yaml.Node {
+	b, err := yaml.Marshal(mc)
+	if err != nil {
+		return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil || len(doc.Content) == 0 {
+		return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	}
+	return doc.Content[0]
 }
 
 // UpdateMCPSection persists the mcp.command field into the YAML file at
@@ -1154,6 +1264,29 @@ func setMapField(m *yaml.Node, key, value string) {
 	)
 }
 
+// setMapFieldInt upserts key: intValue (value <= 0 removes the key) in
+// mapping node m, tagging it as !!int so unmarshaling preserves integer types.
+func setMapFieldInt(m *yaml.Node, key string, value int) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			if value <= 0 {
+				m.Content = append(m.Content[:i], m.Content[i+2:]...)
+				return
+			}
+			m.Content[i+1].Value = strconv.Itoa(value)
+			m.Content[i+1].Tag = "!!int"
+			return
+		}
+	}
+	if value <= 0 {
+		return
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(value)},
+	)
+}
+
 // hardenSecretPerms enforces 0600 on a config file that contains secrets
 // (P1-19). api_key / shared_secret / panel_token in a world- or
 // group-readable file are recoverable by any local user, so the file's
@@ -1172,11 +1305,21 @@ func hardenSecretPerms(path string, data []byte) {
 		Model struct {
 			APIKey string `yaml:"api_key"`
 		} `yaml:"model"`
+		Models []struct {
+			APIKey string `yaml:"api_key"`
+		} `yaml:"models"`
 	}
 	if err := yaml.Unmarshal(data, &probe); err != nil {
 		return // the real unmarshal already reported any syntax error
 	}
-	if probe.Network.SharedSecret == "" && probe.Network.PanelToken == "" && probe.Model.APIKey == "" {
+	hasKey := probe.Network.SharedSecret != "" || probe.Network.PanelToken != "" || probe.Model.APIKey != ""
+	for _, m := range probe.Models {
+		if m.APIKey != "" {
+			hasKey = true
+			break
+		}
+	}
+	if !hasKey {
 		return
 	}
 

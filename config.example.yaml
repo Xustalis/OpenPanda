@@ -101,6 +101,39 @@ model:
   api_type: "anthropic"         # anthropic | openai (default anthropic)
   # max_tokens: 4096            # completion cap; default 4096
   # api_key: ""                 # secret; prefer env OPENPANDA_MODEL_API_KEY
+  # provider: "deepseek"        # built-in provider id — when set, its endpoint,
+  #                             # dialect and per-vendor tuning are merged in, so
+  #                             # base_url/api_type may be omitted (paste a key
+  #                             # and pick a model)
+
+# Multi-model registry: named models the REPL switches between with /model.
+# Each entry is a full model config; name is the alias `/model <name>` uses.
+# Add one in the REPL with `/model add <provider> <key>` — it fills endpoint,
+# dialect and tuning from the built-in catalogue, so you only supply the key.
+#
+# Built-in providers (internal/providers): deepseek, claude (Anthropic),
+# openai (ChatGPT), kimi (月之暗面), volcengine (火山引擎/豆包), zhipu (智谱),
+# qwen (通义千问), siliconflow (硅基流动), openrouter, ollama (本地), custom.
+#
+# models:
+#   - name: deepseek
+#     provider: deepseek
+#     base_url: "https://api.deepseek.com/anthropic"
+#     model: "deepseek-v4-flash"
+#     api_type: "anthropic"
+#     api_key: ""               # your key here
+#   - name: claude
+#     provider: claude
+#     base_url: "https://api.anthropic.com"
+#     model: "claude-sonnet-4-5"
+#     api_type: "anthropic"
+#     api_key: ""
+#   - name: kimi
+#     provider: kimi
+#     base_url: "https://api.moonshot.cn/v1"
+#     model: "kimi-latest"
+#     api_type: "openai"
+#     api_key: ""
 
 # MCP server (Model Context Protocol): one stdio server whose tools become
 # callable by the ask engine. The command is space-separated argv; empty
