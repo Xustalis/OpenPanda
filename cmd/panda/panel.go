@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
@@ -412,14 +413,21 @@ func runCancel(args []string) {
 	if err != nil {
 		fatal("load config", err)
 	}
-	db, store, err := panelStore(cfg)
+	// The cancel must travel through the scheduler core: a delegated task's
+	// executor only stops when a task_cancel reaches it over the bus, and the
+	// store alone never sends one. The engine dials the configured peers (the
+	// executor among them) and CancelTree fans the cancel out through them.
+	// The card is what makes the engine build that core at all.
+	engine, err := askengine.New(context.Background(), cfg, askengine.Options{
+		CardPath: defaultCardPath(),
+	})
 	if err != nil {
-		fatal("open store", err)
+		fatal("ask engine", err)
 	}
-	defer db.Close()
+	defer engine.Close()
 
-	id = resolveTaskRef(store, id)
-	ids, err := store.CancelCascade(context.Background(), id)
+	id = resolveTaskRef(engine.TaskStore(), id)
+	ids, err := engine.CancelTask(context.Background(), id)
 	if err != nil {
 		fatal("cancel", err)
 	}

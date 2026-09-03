@@ -77,7 +77,10 @@ func (h *handler) createTask(w http.ResponseWriter, r *http.Request) {
 	q := core.DefaultQueueSpec()
 	q.Priority = priority
 	q.ResourceKeys = req.ResourceKeys
-	q.WorkDir = eng.WorkPath()
+	// No WorkDir: the node-wide default the executor falls back to is the same
+	// value eng.WorkPath() would pin, and a pinned task never forwards to a
+	// peer — a board task with `requires` pointing at another device's ability
+	// must be able to leave this node.
 
 	task, err := eng.EnqueueTask(r.Context(), in, q)
 	if err != nil {

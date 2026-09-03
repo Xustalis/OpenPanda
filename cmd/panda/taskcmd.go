@@ -369,7 +369,11 @@ func runTaskAdd(args []string) {
 	}
 	q := core.DefaultQueueSpec()
 	q.Priority = prio
-	q.WorkDir = engine.WorkPath()
+	// Deliberately no WorkDir: engine.WorkPath() is the node-wide default the
+	// executor already falls back to, and pinning it re-classifies the task as
+	// local-only work — forwardScheduled skips any task with a WorkDir, so
+	// `--requires pi.uptime` on a node without that ability never reached the
+	// peer that has it (the same trap plan submission avoids).
 
 	task, err := engine.EnqueueTask(context.Background(), in, q)
 	if err != nil {

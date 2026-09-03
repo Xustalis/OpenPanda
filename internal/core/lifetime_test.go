@@ -151,7 +151,7 @@ func TestCancelAbortsRunningSubprocess(t *testing.T) {
 	// mean the kill landed on a live `sleep 60` rather than on a pre-exec race.
 	time.Sleep(500 * time.Millisecond)
 	start := time.Now()
-	if err := c.CancelTree(ctx, taskID); err != nil {
+	if _, err := c.CancelTree(ctx, taskID); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 

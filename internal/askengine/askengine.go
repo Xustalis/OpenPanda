@@ -128,8 +128,30 @@ func (e *Engine) SetModel(mc config.ModelConfig) error {
 // ModelConfig returns the engine's current model configuration.
 func (e *Engine) ModelConfig() config.ModelConfig { return e.cfg.Model }
 
+// CancelTask cancels taskID and its subtree through the scheduler core when
+// the engine has one, so the cancel reaches remote executors too. Without the
+// core (or when the scheduler is down to a plain store) it degrades to the
+// local row update — the same behaviour the direct store call had.
+//
+// The engine's core is an ephemeral sibling of the kernel daemon's: it shares
+// the task database, and its bus connections are the dialed peers, so
+// forwardCancelDownstream can deliver the task_cancel the daemon would have
+// sent had the cancel arrived on the wire.
+func (e *Engine) CancelTask(ctx context.Context, taskID string) ([]string, error) {
+	if e.sched == nil {
+		return core.NewTaskStore(e.db, e.logger).CancelCascade(ctx, taskID)
+	}
+	return e.sched.CancelTree(ctx, taskID)
+}
+
 // Config returns the engine's loaded configuration.
 func (e *Engine) Config() *config.Config { return e.cfg }
+
+// TaskStore returns the task store on the engine's database, for callers that
+// need read-level access (reference resolution) without a scheduler core.
+func (e *Engine) TaskStore() *core.TaskStore {
+	return core.NewTaskStore(e.db, e.logger)
+}
 
 // Result is the outcome of one Ask call.
 type Result struct {

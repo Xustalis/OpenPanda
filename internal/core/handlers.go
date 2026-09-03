@@ -1835,7 +1835,12 @@ func (c *Core) handleCancel(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	parent := scheduler.Predecessor(t.Chain, c.nodeID)
-	if env.From != t.OwnerNode && env.From != parent {
+	// The origin's CLI and web panel cancel through their own ephemeral core
+	// (an ask-engine sibling of the daemon), so a cancel legitimately arrives
+	// from an ephemeral id of the owner node. IsSelfRow recognizes that form;
+	// anything else from another node is an unauthorized cross-node cancel and
+	// is dropped.
+	if env.From != t.OwnerNode && env.From != parent && !scheduler.IsSelfRow(t.OwnerNode, env.From) {
 		c.logger.Warn("unauthorized cancel ignored", "task", p.TaskID,
 			"from", env.From, "owner", t.OwnerNode, "parent", parent)
 		return
@@ -1862,14 +1867,15 @@ func (c *Core) finishCancel(ctx context.Context, cancelled []string) {
 
 // CancelTree is the local-entry cancel: cascade locally, then notify
 // downstream executors. The CLI and any in-process caller share the exact
-// post-cancel behaviour of the wire handler.
-func (c *Core) CancelTree(ctx context.Context, taskID string) error {
+// post-cancel behaviour of the wire handler. The cancelled id set is the
+// store cascade's, so a caller can still report how many tasks it touched.
+func (c *Core) CancelTree(ctx context.Context, taskID string) ([]string, error) {
 	cancelled, err := c.store.CancelCascade(ctx, taskID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.finishCancel(ctx, cancelled)
-	return nil
+	return cancelled, nil
 }
 
 // forwardCancelDownstream propagates a cancel to the remote executor holding
