@@ -36,6 +36,17 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Jeder Eintrag benennt die Änderung und ihre sichtbare Wirkung in ein bis drei Zeilen; der einführende Commit wird zitiert, wo das der Archäologie hilft.
 - Die englische Datei ist maßgeblich. Die Übersetzungen zh-CN / ja / es / de spiegeln sie und können um ein Release kurz verzögert sein.
 
+## [Unreleased]
+
+### Behoben
+
+- **`/lang` wechselt jetzt wirklich die UI-Sprache** — bisher aktualisierte der Wechsel nur die Texte der klassischen REPL-Schleife; Menü, Statuszeile und Hilfetexte der TUI hielten weiter den Locale-Schnappschuss vom Start, sodass die ganze Konsole außer der Bestätigungszeile in der alten Sprache blieb. Die gewählte Sprache greift jetzt auf die gesamte Oberfläche durch und wird als `ui.locale` in config.yaml persistiert — sie überlebt also Neustarts (Konfiguration schlägt die Umgebungserkennung).
+
+### Hinzugefügt
+
+- **Argumentkandidaten im Slash-Menü** — Befehle mit aufzählbaren Argumenten (`/lang`, `/resume`, `/config set`, …) öffnen nach einem Leerzeichen hinter dem Befehlsnamen dasselbe pfeilnavigierbare Menü wie die Befehlsliste: ↑↓ bewegt, Tab vervollständigt, Enter wählt und führt aus, Esc schließt. Manuelle Eingabe funktioniert unverändert wie zuvor.
+- **Pfeiltasten-Auswahl auf der Freigabekarte** — die Freigabeaufforderung der Stufe 2 lässt sich jetzt auch mit ↑↓/←→ plus Enter beantworten (Fokus startet auf Ablehnen, konsistent mit dem bisherigen Standard), neben den unveränderten y/n/Esc-Hotkeys.
+
 ## [0.0.8-alpha] - 2026-09-03
 
 Das Projekt-Release: Ein Projekt ist nicht mehr nur ein Name an einer Aufgabe — es hat ein Arbeitsverzeichnis, eine Beschreibung und einen persistenten „aktuelles Projekt“-Zeiger, Aufgaben aus seinem Inneren erben es, und eine delegierte Aufgabe trägt das ganze Projekt zum Executor, sodass die ausführende Maschine weiß, woran sie arbeitet. Die Freigabepforte wird auf rein irreversible Arbeit neu gefasst (mit dem Download-in-Datei-Vektor nach dem Review erneut gegated), die Konsole bekam Flächen zum Verfolgen von Plänen und Ändern von Einstellungen und trägt den neuen „Panda Paper“-Look. Als Alpha geschnitten: Die Linie ist für diesen Umfang feature-complete, hatte aber weniger Einschwungzeit als eine nummerierte Version.
@@ -51,6 +62,7 @@ Das Projekt-Release: Ein Projekt ist nicht mehr nur ein Name an einer Aufgabe �
 
 ### Behoben
 
+- **Queue-Aufgaben routen wieder geräteübergreifend (CLI und Board)** — `panda task add` und das POST des Boards pinnten jede eingereihte Aufgabe auf das knotenweite Arbeitsverzeichnis, und seit v0.0.6 behandelt forwardScheduled eine gepinnte Aufgabe per Definition als rein lokale Arbeit — also scheiterte `--requires pi.uptime` auf einem Knoten ohne diese Fähigkeit mit `route: no capability matches`, statt den Peer zu erreichen, der sie hat: exakt die Fix von v0.0.5, eine Version später still rückgängig gemacht. Das Pinning war redundant (der Executor fällt ohnehin auf dasselbe knotenweite Standardverzeichnis zurück) und ist entfernt; nur eine Aufgabe mit eigenem Verzeichnis (der Worktree einer Panel-Sitzung) bleibt lokal (dieses Release).
 - **Der SSE-Fingerprint-Cache gibt Ladefehler weiter** — Aufrufer, die sich hinter einem gescheiterten Store-Scan aufstauten, bekommen jetzt denselben Fehler statt eines leeren Werts mit nil-error; ein dauerhaft scheiternder Store fächert kein falsches Änderungsereignis mehr auf jeden verbundenen Stream aus, während nur der Stream des Loaders abbricht (Review 2026-09-02, P2).
 - **TUI: ein Eingabefeld pro Slash-Befehl** — der Exec-Pfad räumt den Frame im selben Event-Loop-Durchlauf ab, der den Befehl einreiht, sodass Statuszeile und abgerundete Box nicht mehr als zweite Eingabeleiste im Scrollback zurückbleiben (6a77bf7).
 - **TUI-Stufen-Timing, Aufgabenkarten-Format, DeepSeek-Thinking-Passback** — die Richterlaufzeit wird nicht mehr der ausführenden Stufe angelastet, Aufgabenkarten rendern einheitlich, und Thinking-Modus-Konversationen scheitern beim Passback nicht mehr mit 400 (6d6e2e4).

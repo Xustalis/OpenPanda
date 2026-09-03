@@ -36,6 +36,17 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Cada entrada nombra el cambio y su efecto visible en una a tres líneas; se cita el commit que lo introdujo cuando ayuda a la arqueología.
 - Este archivo en inglés es el canónico. Las traducciones zh-CN / ja / es / de lo replican y pueden retrasarse brevemente alrededor de un lanzamiento.
 
+## [Unreleased]
+
+### Corregido
+
+- **`/lang` ahora cambia de verdad el idioma de la interfaz** — antes el cambio solo actualizaba los textos del bucle REPL clásico; el menú, la barra de estado y la ayuda de la TUI conservaban la instantánea del idioma de arranque, así que toda la consola seguía en el idioma anterior salvo la línea de confirmación. El idioma elegido ahora se propaga a toda la interfaz y se persiste como `ui.locale` en config.yaml, de modo que sobrevive a los reinicios (la configuración prevalece sobre la detección del entorno).
+
+### Añadido
+
+- **Candidatos de argumentos en el menú de barra** — los comandos con argumentos enumerados (`/lang`, `/resume`, `/config set`, …) muestran ahora el mismo menú navegable con flechas que la lista de comandos al escribir un espacio tras el nombre; ↑↓ mueve, Tab completa, Enter elige y ejecuta, Esc cierra. Escribir el argumento a mano sigue funcionando exactamente como antes.
+- **Selección con flechas en la tarjeta de aprobación** — el prompt de aprobación de nivel 2 se puede responder ahora con ↑↓/←→ más Enter (el foco empieza en denegar, igual que el valor por defecto existente), además de los atajos y/n/Esc sin cambios.
+
 ## [0.0.8-alpha] - 2026-09-03
 
 La versión de los proyectos: un proyecto ya no es solo un nombre en una tarea — tiene directorio de trabajo, descripción y un puntero persistente de «proyecto actual»; las tareas lanzadas desde dentro lo heredan, y una tarea delegada lleva el proyecto entero al ejecutor, de modo que la máquina que la ejecuta sabe en qué está trabajando. La puerta de aprobación se reencuadra a solo lo irreversible (con el vector de descarga-a-archivo regateado tras la revisión), la consola gana superficies para seguir planes y cambiar ajustes, y estrena la nueva piel «Panda Paper». Cortada como alpha: la línea está completa en su alcance, pero ha tenido menos tiempo de reposo que una versión numerada.
@@ -51,6 +62,7 @@ La versión de los proyectos: un proyecto ya no es solo un nombre en una tarea �
 
 ### Corregido
 
+- **Las tareas en cola vuelven a rutear entre dispositivos (CLI y tablero)** — `panda task add` y el POST del tablero fijaban cada tarea encola al directorio de trabajo del nodo, y desde v0.0.6 forwardScheduled trata una tarea fijada como trabajo estrictamente local, así que `--requires pi.uptime` en un nodo sin esa habilidad fallaba con `route: no capability matches` en lugar de llegar al peer que la tiene — exactamente lo que v0.0.5 arregló, deshecho en silencio una versión después. El fijado era redundante (el ejecutor ya cae al mismo directorio por defecto del nodo) y se eliminó; solo una tarea con directorio propio (el worktree de una sesión del panel) se queda local (esta versión).
 - **La caché de huellas SSE propaga los fallos de carga** — las llamadas que se apilaron tras un escaneo fallido del almacén ahora reciben el mismo error en vez de un valor vacío con error nil; un almacén que falla de forma persistente ya no difunde un evento de cambio falso a cada flujo conectado mientras solo cae el flujo del cargador (revisión 2026-09-02, P2).
 - **TUI: un cuadro de entrada por comando de barra** — la ruta de ejecución ahora limpia el marco en el mismo ciclo de eventos que encola el comando, de modo que la fila de estado y la caja redondeada ya no quedan en el historial como una segunda barra de entrada (6a77bf7).
 - **TUI: temporización de etapas, formato de tarjetas de tarea, passback de DeepSeek thinking** — el tiempo del juez ya no se factura a la etapa en ejecución, las tarjetas de tarea se renderizan uniformes, y las conversaciones en modo de pensamiento ya no fallan con 400 en el passback (6d6e2e4).
