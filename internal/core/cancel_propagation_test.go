@@ -66,7 +66,7 @@ func TestCancelPropagatesDownstream(t *testing.T) {
 		t.Fatalf("leaf never started the task")
 	}
 
-	if err := root.CancelTree(ctx, taskID); err != nil {
+	if _, err := root.CancelTree(ctx, taskID); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 

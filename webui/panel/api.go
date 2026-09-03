@@ -104,10 +104,21 @@ func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 }
 
 // cancelTask serves POST /api/tasks/{id}/cancel — cancels a task and its
-// subtree, the web equivalent of `panda cancel`.
+// subtree, the web equivalent of `panda cancel`. It goes through the ask
+// engine when one is configured so the cancel also travels to a remote
+// executor; without an engine (a model-less panel) it degrades to the local
+// row update, and a delegated task is left to its lease.
 func (h *handler) cancelTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	ids, err := h.store.CancelCascade(r.Context(), id)
+	var (
+		ids []string
+		err error
+	)
+	if eng := h.currentEngine(); eng != nil {
+		ids, err = eng.CancelTask(r.Context(), id)
+	} else {
+		ids, err = h.store.CancelCascade(r.Context(), id)
+	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeErr(w, http.StatusNotFound, errors.New("no such task"))
