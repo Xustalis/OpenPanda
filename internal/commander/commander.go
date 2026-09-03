@@ -411,8 +411,8 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// On failure the adapter's diagnosis lives in ar.Result (Stdout);
 		// mirroring it into Stderr keeps store.Fail and the task-result
 		// payload from recording an empty reason.
-		stderr := ""
-		if !ar.OK {
+		stderr := ar.Stderr
+		if !ar.OK && stderr == "" {
 			stderr = ar.Result
 		}
 		return Result{
@@ -458,6 +458,7 @@ type Result struct {
 type AgentResult struct {
 	OK        bool
 	Result    string
+	Stderr    string
 	ExitCode  int
 	Tokens    int
 	Cost      float64

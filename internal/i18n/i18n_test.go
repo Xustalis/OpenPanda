@@ -89,3 +89,43 @@ func TestParse(t *testing.T) {
 		}
 	}
 }
+
+func TestAllLocalesHaveModelKeys(t *testing.T) {
+	requiredKeys := []string{
+		"repl.model.current",
+		"repl.model.none",
+		"repl.model.set",
+		"repl.model.usage",
+		"repl.model.head",
+		"repl.model.active",
+		"repl.model.hint",
+		"repl.model.providers.head",
+		"repl.model.add.usage",
+		"repl.model.add.badprovider",
+		"repl.model.add.nokey",
+		"repl.model.add.done",
+		"repl.model.remove.usage",
+		"repl.model.remove.none",
+		"repl.model.remove.done",
+		"repl.model.remove.active",
+		"repl.model.switch.none",
+		"repl.model.fetch.head",
+		"repl.model.fetch.empty",
+		"repl.model.fetch.err",
+		"repl.model.test.ok",
+		"repl.model.test.fail",
+	}
+
+	for _, loc := range Locales {
+		dict, ok := messages[loc]
+		if !ok {
+			t.Fatalf("missing dictionary for locale %s", loc)
+		}
+		for _, k := range requiredKeys {
+			val, exists := dict[k]
+			if !exists || val == "" {
+				t.Errorf("locale %s is missing translation key %s", loc, k)
+			}
+		}
+	}
+}

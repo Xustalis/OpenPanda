@@ -184,3 +184,83 @@ func TestProjectInputsOnlyClaimsStandaloneTasks(t *testing.T) {
 		t.Error("no project means this is not a project pull")
 	}
 }
+
+// TestAttachProjectRecordsContextDegraded verifies that if packing the project's
+// work tree fails (e.g. the configured directory does not exist), an EvContextDegraded
+// event is recorded on the task row so callers and UI can observe the degradation.
+func TestAttachProjectRecordsContextDegraded(t *testing.T) {
+	c, ps, _ := projectCore(t)
+	badDir := filepath.Join(t.TempDir(), "nonexistent")
+	if _, err := ps.Create("broken", badDir, "d"); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	taskID := "task-degraded-test"
+	if _, err := c.store.CreateWithID(context.Background(), taskID, "", "broken", "title", c.nodeID, nil); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	p := bus.TaskDelegatePayload{TaskID: taskID, Project: "broken"}
+	c.attachProject(context.Background(), &p, "broken")
+
+	events, err := c.store.Events(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	found := false
+	for _, ev := range events {
+		if ev.Type == EvContextDegraded {
+			found = true
+			if !strings.Contains(ev.DataJSON, "pack_tree") {
+				t.Fatalf("event data = %s, want pack_tree stage", ev.DataJSON)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no %s event recorded on task after tree pack failure; events: %+v", EvContextDegraded, events)
+	}
+}
+
+// TestLandProjectPackRecordsContextDegraded verifies that when a delegated project pack
+// cannot be extracted (corrupted pack payload), handleDelegate records an EvContextDegraded
+// event with stage "land_memory".
+func TestLandProjectPackRecordsContextDegraded(t *testing.T) {
+	c, _, _ := projectCore(t)
+	ctx := context.Background()
+
+	taskID := "task-land-degraded"
+	payload := bus.TaskDelegatePayload{
+		TaskID:      taskID,
+		Project:     "demo",
+		Title:       "test task",
+		ProjectPack: []byte("invalid non-tar corrupted data"),
+	}
+
+	env, err := bus.NewEnvelope(bus.MsgTaskDelegate, "source-node", "msg-1", payload)
+	if err != nil {
+		t.Fatalf("new envelope: %v", err)
+	}
+
+	c.handleDelegate(ctx, env)
+
+	events, err := c.store.Events(ctx, taskID)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	found := false
+	for _, ev := range events {
+		if ev.Type == EvContextDegraded {
+			found = true
+			if !strings.Contains(ev.DataJSON, "land_memory") {
+				t.Fatalf("event data = %s, want land_memory stage", ev.DataJSON)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no %s event recorded after corrupted landProjectPack; events: %+v", EvContextDegraded, events)
+	}
+}
+
+

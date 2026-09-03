@@ -50,6 +50,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **Argument candidates in the slash menu** — commands with enumerated arguments (`/lang`, `/resume`, `/config set`, …) now pop the same arrow-navigable menu the command list uses once a space follows the command; ↑↓ moves, Tab fills, Enter picks and runs, Esc dismisses. Typing the argument by hand still works exactly as before.
 - **Arrow-key selection on the approval card** — the tier-2 approval prompt can now be answered with ↑↓/←→ plus Enter (focus starts on deny, matching the existing default), beside the unchanged y/n/Esc hotkeys.
+- **A multi-model registry for `/model`** — the entry model is no longer a single `model:` slot. A `models:` list holds named models, and `/model <alias>` switches between them (hot-swapping the engine client so the next ask uses it immediately), while `/model` lists them, `/model list` shows the built-in provider catalogue, `/model add <provider> <key>` registers one with just an API key, `/model remove <alias>` drops it, `/model fetch` pulls the provider's model list, and `/model test` runs a one-word connectivity check. Built-in providers — DeepSeek, Claude (Anthropic), ChatGPT (OpenAI), Kimi (月之暗面), 火山引擎 (Ark/豆包), 智谱, 通义千问, 硅基流动, OpenRouter, Ollama, plus a `custom` base-model fallback — supply their endpoint, dialect and per-vendor tuning (thinking passback, prompt cache, reasoning-model token caps, list-models endpoint), so a user only pastes a key.
 
 ## \[0.0.8-alpha] - 2026-09-03
 

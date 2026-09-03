@@ -959,6 +959,9 @@ func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool
 			workDir = dir
 		}
 	}
+	if in.RepoPath == "" && workDir != "" {
+		in.RepoPath = workDir
+	}
 	// Approval mode is the real tier-2 gate (design §16): "never" auto-consents
 	// so an irreversible task runs as classified; "on-request"/"always" withhold
 	// consent until the user approves at the inline gate below. A session-level

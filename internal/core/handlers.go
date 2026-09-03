@@ -144,7 +144,13 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	}
 	// The project's memory lands before anything runs, so the agent reads it from
 	// the same path a local task would.
-	c.landProjectPack(p.Project, p.ProjectPack)
+	if err := c.landProjectPack(p.Project, p.ProjectPack); err != nil {
+		if c.store != nil {
+			_ = c.store.RecordEvent(ctx, t.TaskID, EvContextDegraded, map[string]any{
+				"stage": "land_memory", "project": p.Project, "err": err.Error(),
+			})
+		}
+	}
 	if p.TimeoutMS > 0 {
 		if err := c.store.SetLease(ctx, t.TaskID, p.TimeoutMS); err != nil {
 			c.logger.Warn("set lease", "task", t.TaskID, "err", err)
@@ -1091,7 +1097,11 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			"budget": maxRounds,
 		})
 		judgeStart := time.Now()
-		v, serr := entry.Supervise(ctx, c.supervisor, currentIntent, res.Stdout)
+		judgeResult := res.Stdout
+		if strings.TrimSpace(res.Stderr) != "" {
+			judgeResult = judgeResult + "\n\n错误输出（stderr）：\n" + res.Stderr
+		}
+		v, serr := entry.Supervise(ctx, c.supervisor, currentIntent, judgeResult)
 		c.recordEntryUsage(context.WithoutCancel(ctx), taskID, c.supervisor, usageBefore,
 			v.Status == entry.VerdictDone, time.Since(judgeStart))
 		if serr != nil {
@@ -1122,7 +1132,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if strings.TrimSpace(v.Followup) == "" {
 			currentIntent = currentIntent + "\n\n上一轮未能完整完成，请继续完成剩余工作，并汇报最终结果。"
 		} else {
-			currentIntent = v.Followup
+			currentIntent = currentIntent + "\n\n[上级补充指令]\n" + v.Followup
 		}
 	}
 
@@ -1279,8 +1289,10 @@ func taskToolsPolicy(specJSON string) string {
 // deterministically (ContextOverflow parks it). When the budget is tight the
 // skills section degrades first — full bodies shrink to index lines — while
 // the intent and the memory manifest are kept whole: the degradation order
-// is intent > memory manifest > skill index > skill body.
-const agentPromptBudget = 64000
+// is intent > memory manifest > skill index > skill body. Set to 128KB so
+// multi-byte UTF-8 (e.g. Chinese text) has ample headroom without prematurely
+// degrading skills into index lines.
+const agentPromptBudget = 128000
 
 // agentOutputRider tells the agent its final message is user-facing (and may
 // be spoken), so it must read as a direct answer, not an exploration log.

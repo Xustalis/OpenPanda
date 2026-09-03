@@ -96,11 +96,11 @@ const localBias = 0.15
 // Otherwise the shape is unchanged: a user-named node (preferred) that is online,
 // not already on the chain, and capable is honoured over scored ranking; ranking
 // is the DCPS weighted score (design §6.3: resource_efficiency 0.4 +
-// scheduler_tier 0.2 + wait_time 0.1, user_priority handled by the preferred
-// short-circuit) discounted by the TMB heartbeat-freshness weight (exp decay,
-// 30-minute half-life); with no capable peer it falls back to a sub-scheduler
-// (tier > 1) that can route the task further downstream even though it cannot
-// execute it; only when neither exists does it decline.
+// user_priority 0.3 + scheduler_tier 0.2 + wait_time 0.1) discounted by the
+// TMB heartbeat-freshness weight (exp decay, 30-minute half-life); with no
+// capable peer it falls back to a sub-scheduler (tier > 1) that can route the
+// task further downstream even though it cannot execute it; only when neither
+// exists does it decline.
 func RouteAt(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, req ledger.ResourceProfile, preferred string, now int64) Decision {
 	seen := make(map[string]bool, len(chain))
 	for _, n := range chain {

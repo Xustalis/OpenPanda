@@ -185,3 +185,35 @@ func TestLogTask(t *testing.T) {
 		t.Errorf("logTask should write a daily log line")
 	}
 }
+
+// TestBuildAgentPromptBudgetAccommodatesLargeChineseIntent verifies that a multi-kilobyte
+// Chinese intent does not prematurely degrade skill bodies to index lines under the 128KB budget.
+func TestBuildAgentPromptBudgetAccommodatesLargeChineseIntent(t *testing.T) {
+	root := t.TempDir()
+	store := skills.NewStore(filepath.Join(root, "skills"))
+	sk := &skills.Skill{
+		Name:        "k8s-deploy",
+		Description: "Kubernetes 部署规范",
+		Scope:       skills.ScopeGlobal,
+		Status:      skills.StatusActive,
+		Body:        "## 详细部署指南\n1. 检查集群状态\n2. 应用 yaml 配置\n3. 验证 Pod 存活探针\n",
+	}
+	if err := store.Save(sk); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	c := &Core{logger: testLogger(), skills: store}
+
+	// Large Chinese intent: ~30,000 bytes
+	chineseIntent := strings.Repeat("请按照生产环境发布规范严格执行部署流程，确保零停机时间与监控告警正常。", 300)
+	prompt, used := buildAgentPrompt(c, chineseIntent, "", "k8s-deploy", "")
+	if len(used) != 1 {
+		t.Fatalf("used = %d, want 1", len(used))
+	}
+	if !strings.Contains(prompt, "详细部署指南") {
+		t.Fatalf("skill body was prematurely degraded into an index line under Chinese intent")
+	}
+	if !strings.Contains(prompt, "验证 Pod 存活探针") {
+		t.Fatalf("skill body content missing: %s", prompt)
+	}
+}
+

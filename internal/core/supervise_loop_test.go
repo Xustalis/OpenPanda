@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -352,3 +354,99 @@ func TestSuperviseRecordsEntryUsage(t *testing.T) {
 		t.Fatalf("no entry:<model> metric row recorded; metrics = %+v", metrics)
 	}
 }
+
+// TestSuperviseLoopPreservesOriginalIntentAndStderr verifies that when a supervisor
+// returns continue with a followup, the followup is concatenated to the original intent
+// (rather than overwriting it), and any stderr produced by the agent is supplied to the
+// supervisor for cross-verification.
+func TestSuperviseLoopPreservesOriginalIntentAndStderr(t *testing.T) {
+	ctx := context.Background()
+	c := newSuperviseCore(t, "sup-preserve", 1)
+	c.SetWorkDir(t.TempDir())
+
+	var supervisorInputs []string
+	var supMu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		supMu.Lock()
+		if len(req.Messages) > 0 {
+			supervisorInputs = append(supervisorInputs, req.Messages[0].Content)
+		}
+		call := len(supervisorInputs)
+		supMu.Unlock()
+
+		w.Header().Set("content-type", "application/json")
+		text := `{"status":"done","reason":"全部完成","followup":""}`
+		if call == 1 {
+			text = `{"status":"continue","reason":"需要补充单测","followup":"请在 tests 目录下补充测试"}`
+		}
+		resp := map[string]any{"content": []map[string]string{{"type": "text", "text": text}}}
+		b, _ := json.Marshal(resp)
+		_, _ = w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := entry.NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "deepseek-chat"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	c.SetSupervisor(client)
+
+	var prompts []string
+	var promptMu sync.Mutex
+	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
+		promptMu.Lock()
+		prompts = append(prompts, prompt)
+		promptMu.Unlock()
+		return commander.AgentResult{OK: true, Result: "agent output done", Stderr: "warning: test missing", ExitCode: 0}
+	})
+
+	task, result, err := c.SubmitLocal(ctx, TaskInput{
+		Title:       "important feature",
+		Project:     "proj",
+		ContextType: "command",
+		Intent:      "实现核心业务逻辑，成功标准：单元测试通过",
+		Requires:    []string{"code:modify"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if task.State != StateDone {
+		t.Fatalf("state = %s, want done", task.State)
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("agent ran %d times, want 2", len(prompts))
+	}
+	// Verify round 2 prompt contains the original intent AND the followup
+	if !strings.Contains(prompts[1], "实现核心业务逻辑，成功标准：单元测试通过") {
+		t.Fatalf("round 2 prompt lost original intent: %s", prompts[1])
+	}
+	if !strings.Contains(prompts[1], "请在 tests 目录下补充测试") {
+		t.Fatalf("round 2 prompt missing followup: %s", prompts[1])
+	}
+	if !strings.Contains(prompts[1], "[上级补充指令]") {
+		t.Fatalf("round 2 prompt missing [上级补充指令] section: %s", prompts[1])
+	}
+
+	// Verify supervisor in round 1 received stderr
+	supMu.Lock()
+	inputs := append([]string{}, supervisorInputs...)
+	supMu.Unlock()
+
+	if len(inputs) < 1 || !strings.Contains(inputs[0], "warning: test missing") {
+		t.Fatalf("supervisor input did not include stderr: %v", inputs)
+	}
+	// Verify supervisor in round 2 also sees original intent + followup
+	if len(inputs) < 2 || !strings.Contains(inputs[1], "实现核心业务逻辑，成功标准：单元测试通过") {
+		t.Fatalf("supervisor round 2 did not receive original intent: %v", inputs)
+	}
+	if !result.OK {
+		t.Fatalf("result OK = false, want true")
+	}
+}
+

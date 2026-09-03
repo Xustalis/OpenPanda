@@ -99,6 +99,11 @@ const (
 	// no user or peer requested. review is never recovered — see
 	// TaskStore.Recover.
 	EvRecover = "recover"
+
+	// EvContextDegraded records that a task's context (e.g. project memory pack,
+	// work tree artifact) failed to attach or land, running in a degraded state
+	// instead of failing silently.
+	EvContextDegraded = "context_degraded"
 )
 
 // Task priority levels for the panel queue (smaller runs first). The DB
