@@ -5065,3 +5065,586 @@ label {
   line-height: 1.6;
   max-width: 48ch;
 }
+
+/* ============================================================================
+   REDESIGN 2026-09 · "Panda Paper" — Kimi × Claude 风格重构层
+   ----------------------------------------------------------------------------
+   本层整层追加在原样式之后：组件零改动，类名/结构/逻辑全部保留，
+   通过「同名 token 重定义 + 级联覆盖」完成视觉换肤。
+
+   设计方向（参考 Kimi 的克制留白 × Claude 的暖纸编辑感）：
+   · 暖纸底色（light）/ 暖墨底色（dark）——拒绝纯黑纯白与冷灰
+   · 竹绿品牌 accent 加深收沉稳，蓝色仅留给 Orbit 决策链路
+   · 衬线展示字体（Iowan/Palatino/宋体）只用于标题层，正文保持无衬线
+   · 移除"AI 感"装饰：标题渐变文字、渐变下划线条、按钮高光覆层
+   · 圆角整体放大一档（8/12/16/22），阴影改用暖棕基调、更浅更软
+   · 交互微动效统一走 token 缓动，hover 只做"提亮 + 微浮起"
+   ========================================================================== */
+
+:root {
+  /* —— 暖墨（dark）—— */
+  --bg: #1c1a17;
+  --bg-chrome: #221f1b;
+  --bg-raised: #2a2721;
+  --bg-inset: #161412;
+  --bg-hover: #333028;
+  --border: #3d3930;
+  --border-soft: #2e2b25;
+  --border-strong: #514b3f;
+
+  --text: #ede9e0;
+  --text-primary: var(--text);
+  --text-secondary: #aaa292;
+  --text-tertiary: #7f7868;
+  --text-disabled: #565147;
+  --text-dim: var(--text-secondary);
+
+  --accent: #6fc7a1;
+  --accent-strong: #8ad6b5;
+  --accent-ink: #0c221a;
+  --accent-soft: rgba(111, 199, 161, 0.14);
+  --accent-1: #8fddbd;
+  --accent-2: #94c6ec;
+  --accent-2-soft: rgba(148, 198, 236, 0.1);
+  --accent-2-border: rgba(148, 198, 236, 0.32);
+
+  --danger: #e8857c;
+  --warn: #d9b45c;
+  --info: #94c6ec;
+  --danger-soft: rgba(232, 133, 124, 0.12);
+  --warn-soft: rgba(217, 180, 92, 0.12);
+  --info-soft: rgba(148, 198, 236, 0.12);
+
+  --semantic-good: #a3d9b0;
+  --semantic-good-soft: rgba(163, 217, 176, 0.09);
+  --semantic-good-border: rgba(163, 217, 176, 0.3);
+  --semantic-info: #cdbcf0;
+  --semantic-info-soft: rgba(205, 188, 240, 0.09);
+  --semantic-info-border: rgba(205, 188, 240, 0.3);
+  --semantic-warn: #e4c486;
+  --semantic-warn-soft: rgba(228, 196, 134, 0.09);
+  --semantic-warn-border: rgba(228, 196, 134, 0.3);
+  --semantic-danger: #eea49c;
+  --semantic-danger-soft: rgba(238, 164, 156, 0.09);
+  --semantic-danger-border: rgba(238, 164, 156, 0.3);
+
+  /* 圆角放大一档：更柔和、更"纸张"（仅在此声明一次，双主题共用） */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+
+  /* 暖墨阴影：纯黑但更低饱和、更大弥散 */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.24), 0 1px 2px rgba(0, 0, 0, 0.14);
+  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.16);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.36), 0 4px 10px rgba(0, 0, 0, 0.2);
+  --shadow-xl: 0 20px 56px rgba(0, 0, 0, 0.46), 0 6px 16px rgba(0, 0, 0, 0.24);
+  --shadow-accent: 0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(111, 199, 161, 0.18);
+  --shadow-glow-1: 0 0 20px rgba(143, 221, 189, 0.07);
+  --shadow-glow-2: 0 0 24px rgba(148, 198, 236, 0.09);
+
+  --backdrop: rgba(14, 12, 10, 0.55);
+  --backdrop-darker: rgba(14, 12, 10, 0.66);
+  --hairline-xs: rgba(236, 229, 216, 0.06);
+  --hairline-sm: rgba(236, 229, 216, 0.08);
+  --hairline-md: rgba(236, 229, 216, 0.11);
+  --hairline-lg: rgba(236, 229, 216, 0.3);
+
+  --accent-1-rgb: 143, 221, 189;
+  --accent-1-tint-xs: rgba(var(--accent-1-rgb), 0.05);
+  --accent-2-tint-xs: rgba(148, 198, 236, 0.05);
+  --accent-2-tint-md: rgba(148, 198, 236, 0.1);
+  --accent-2-strong-soft: rgba(148, 198, 236, 0.12);
+  --accent-2-glow: rgba(148, 198, 236, 0.08);
+  --semantic-warn-strong-soft: rgba(228, 196, 134, 0.14);
+  --semantic-danger-strong-border: rgba(238, 164, 156, 0.55);
+
+  --grad-card: linear-gradient(180deg, rgba(255, 250, 240, 0.02) 0%, transparent 100%);
+  --grad-accent-1: linear-gradient(135deg, rgba(143, 221, 189, 0.16) 0%, rgba(111, 199, 161, 0.05) 100%);
+  --grad-accent-2: linear-gradient(135deg, rgba(148, 198, 236, 0.14) 0%, rgba(148, 198, 236, 0.05) 100%);
+  --grad-hero: radial-gradient(ellipse 640px 320px at 18% 0%, rgba(143, 221, 189, 0.09) 0%, transparent 60%),
+               radial-gradient(ellipse 520px 260px at 82% 8%, rgba(148, 198, 236, 0.07) 0%, transparent 55%);
+
+  /* 排版：衬线展示字体只服务于标题层（双主题共用，声明一次） */
+  --font-display: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Songti SC',
+    'STSong', 'Noto Serif SC', 'Source Han Serif SC', Georgia, 'Times New Roman', serif;
+  --fs-display: 24px;
+}
+
+:root[data-theme='light'] {
+  /* —— 暖纸（light）—— */
+  --bg: #f5f3ec;
+  --bg-chrome: #ede9dd;
+  --bg-raised: #fcfbf7;
+  --bg-inset: #eae6d9;
+  --bg-hover: #e7e2d4;
+  --border: #ddd6c4;
+  --border-soft: #e6e0d0;
+  --border-strong: #c9c1ac;
+
+  --text: #262219;
+  --text-primary: var(--text);
+  --text-secondary: #6e6757;
+  --text-tertiary: #9b937f;
+  --text-disabled: #c4bda9;
+  --text-dim: var(--text-secondary);
+
+  --accent: #0c7a55;
+  --accent-strong: #0a6849;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(12, 122, 85, 0.1);
+  --accent-1: #0c7a55;
+  --accent-2: #2f6ca0;
+  --accent-2-soft: rgba(47, 108, 160, 0.09);
+  --accent-2-border: rgba(47, 108, 160, 0.32);
+
+  --danger: #b8493b;
+  --warn: #9a7413;
+  --info: #2f6ca0;
+  --danger-soft: rgba(184, 73, 59, 0.09);
+  --warn-soft: rgba(154, 116, 19, 0.09);
+  --info-soft: rgba(47, 108, 160, 0.09);
+
+  --semantic-good: #2e8b57;
+  --semantic-good-soft: rgba(46, 139, 87, 0.1);
+  --semantic-good-border: rgba(46, 139, 87, 0.34);
+  --semantic-info: #6a53c9;
+  --semantic-info-soft: rgba(106, 83, 201, 0.1);
+  --semantic-info-border: rgba(106, 83, 201, 0.34);
+  --semantic-warn: #9a7413;
+  --semantic-warn-soft: rgba(154, 116, 19, 0.1);
+  --semantic-warn-border: rgba(154, 116, 19, 0.34);
+  --semantic-danger: #b8493b;
+  --semantic-danger-soft: rgba(184, 73, 59, 0.1);
+  --semantic-danger-border: rgba(184, 73, 59, 0.34);
+
+  /* 暖棕基调阴影：更浅、更软，落在纸面上而非浮在空中 */
+  --shadow-xs: 0 1px 2px rgba(74, 63, 42, 0.06);
+  --shadow-sm: 0 1px 2px rgba(74, 63, 42, 0.05), 0 4px 12px rgba(74, 63, 42, 0.07);
+  --shadow-md: 0 2px 4px rgba(74, 63, 42, 0.05), 0 10px 28px rgba(74, 63, 42, 0.09);
+  --shadow-lg: 0 4px 8px rgba(74, 63, 42, 0.06), 0 18px 44px rgba(74, 63, 42, 0.12);
+  --shadow-xl: 0 8px 16px rgba(74, 63, 42, 0.08), 0 28px 64px rgba(74, 63, 42, 0.16);
+  --shadow-accent: 0 1px 2px rgba(12, 122, 85, 0.14), 0 4px 16px rgba(12, 122, 85, 0.18);
+  --shadow-glow-1: 0 0 20px rgba(12, 122, 85, 0.06);
+  --shadow-glow-2: 0 0 24px rgba(47, 108, 160, 0.07);
+
+  --backdrop: rgba(52, 44, 30, 0.32);
+  --backdrop-darker: rgba(52, 44, 30, 0.46);
+  --surface-alpha-xs: rgba(74, 63, 42, 0.02);
+  --surface-alpha-sm: rgba(74, 63, 42, 0.035);
+  --surface-alpha-md: rgba(74, 63, 42, 0.06);
+  --surface-alpha-lg: rgba(74, 63, 42, 0.1);
+  --hairline-xs: rgba(74, 63, 42, 0.07);
+  --hairline-sm: rgba(74, 63, 42, 0.09);
+  --hairline-md: rgba(74, 63, 42, 0.12);
+  --hairline-lg: rgba(74, 63, 42, 0.2);
+
+  --accent-1-rgb: 12, 122, 85;
+  --accent-1-tint-xs: rgba(var(--accent-1-rgb), 0.06);
+  --accent-2-tint-xs: rgba(47, 108, 160, 0.05);
+  --accent-2-tint-md: rgba(47, 108, 160, 0.1);
+  --accent-2-strong-soft: rgba(47, 108, 160, 0.12);
+  --accent-2-glow: rgba(47, 108, 160, 0.08);
+  --semantic-warn-strong-soft: rgba(154, 116, 19, 0.14);
+  --semantic-danger-strong-border: rgba(184, 73, 59, 0.36);
+
+  --grad-card: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, transparent 100%);
+  --grad-accent-1: linear-gradient(135deg, rgba(12, 122, 85, 0.14) 0%, rgba(12, 122, 85, 0.04) 100%);
+  --grad-accent-2: linear-gradient(135deg, rgba(47, 108, 160, 0.12) 0%, rgba(47, 108, 160, 0.04) 100%);
+  --grad-hero: radial-gradient(ellipse 640px 320px at 18% 0%, rgba(12, 122, 85, 0.07) 0%, transparent 60%),
+               radial-gradient(ellipse 520px 260px at 82% 8%, rgba(47, 108, 160, 0.05) 0%, transparent 55%);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --bg: #f5f3ec;
+    --bg-chrome: #ede9dd;
+    --bg-raised: #fcfbf7;
+    --bg-inset: #eae6d9;
+    --bg-hover: #e7e2d4;
+    --border: #ddd6c4;
+    --border-soft: #e6e0d0;
+    --border-strong: #c9c1ac;
+    --text: #262219;
+    --text-primary: var(--text);
+    --text-secondary: #6e6757;
+    --text-tertiary: #9b937f;
+    --text-disabled: #c4bda9;
+    --text-dim: var(--text-secondary);
+    --accent: #0c7a55;
+    --accent-strong: #0a6849;
+    --accent-ink: #ffffff;
+    --accent-soft: rgba(12, 122, 85, 0.1);
+    --accent-1: #0c7a55;
+    --accent-2: #2f6ca0;
+    --accent-2-soft: rgba(47, 108, 160, 0.09);
+    --accent-2-border: rgba(47, 108, 160, 0.32);
+    --danger: #b8493b;
+    --warn: #9a7413;
+    --info: #2f6ca0;
+    --danger-soft: rgba(184, 73, 59, 0.09);
+    --warn-soft: rgba(154, 116, 19, 0.09);
+    --info-soft: rgba(47, 108, 160, 0.09);
+    --semantic-good: #2e8b57;
+    --semantic-good-soft: rgba(46, 139, 87, 0.1);
+    --semantic-good-border: rgba(46, 139, 87, 0.34);
+    --semantic-info: #6a53c9;
+    --semantic-info-soft: rgba(106, 83, 201, 0.1);
+    --semantic-info-border: rgba(106, 83, 201, 0.34);
+    --semantic-warn: #9a7413;
+    --semantic-warn-soft: rgba(154, 116, 19, 0.1);
+    --semantic-warn-border: rgba(154, 116, 19, 0.34);
+    --semantic-danger: #b8493b;
+    --semantic-danger-soft: rgba(184, 73, 59, 0.1);
+    --semantic-danger-border: rgba(184, 73, 59, 0.34);
+    --shadow-xs: 0 1px 2px rgba(74, 63, 42, 0.06);
+    --shadow-sm: 0 1px 2px rgba(74, 63, 42, 0.05), 0 4px 12px rgba(74, 63, 42, 0.07);
+    --shadow-md: 0 2px 4px rgba(74, 63, 42, 0.05), 0 10px 28px rgba(74, 63, 42, 0.09);
+    --shadow-lg: 0 4px 8px rgba(74, 63, 42, 0.06), 0 18px 44px rgba(74, 63, 42, 0.12);
+    --shadow-xl: 0 8px 16px rgba(74, 63, 42, 0.08), 0 28px 64px rgba(74, 63, 42, 0.16);
+    --shadow-accent: 0 1px 2px rgba(12, 122, 85, 0.14), 0 4px 16px rgba(12, 122, 85, 0.18);
+    --shadow-glow-1: 0 0 20px rgba(12, 122, 85, 0.06);
+    --shadow-glow-2: 0 0 24px rgba(47, 108, 160, 0.07);
+    --backdrop: rgba(52, 44, 30, 0.32);
+    --backdrop-darker: rgba(52, 44, 30, 0.46);
+    --surface-alpha-xs: rgba(74, 63, 42, 0.02);
+    --surface-alpha-sm: rgba(74, 63, 42, 0.035);
+    --surface-alpha-md: rgba(74, 63, 42, 0.06);
+    --surface-alpha-lg: rgba(74, 63, 42, 0.1);
+    --hairline-xs: rgba(74, 63, 42, 0.07);
+    --hairline-sm: rgba(74, 63, 42, 0.09);
+    --hairline-md: rgba(74, 63, 42, 0.12);
+    --hairline-lg: rgba(74, 63, 42, 0.2);
+    --accent-1-rgb: 12, 122, 85;
+    --accent-1-tint-xs: rgba(var(--accent-1-rgb), 0.06);
+    --accent-2-tint-xs: rgba(47, 108, 160, 0.05);
+    --accent-2-tint-md: rgba(47, 108, 160, 0.1);
+    --accent-2-strong-soft: rgba(47, 108, 160, 0.12);
+    --accent-2-glow: rgba(47, 108, 160, 0.08);
+    --semantic-warn-strong-soft: rgba(154, 116, 19, 0.14);
+    --semantic-danger-strong-border: rgba(184, 73, 59, 0.36);
+    --grad-card: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, transparent 100%);
+    --grad-accent-1: linear-gradient(135deg, rgba(12, 122, 85, 0.14) 0%, rgba(12, 122, 85, 0.04) 100%);
+    --grad-accent-2: linear-gradient(135deg, rgba(47, 108, 160, 0.12) 0%, rgba(47, 108, 160, 0.04) 100%);
+    --grad-hero: radial-gradient(ellipse 640px 320px at 18% 0%, rgba(12, 122, 85, 0.07) 0%, transparent 60%),
+                 radial-gradient(ellipse 520px 260px at 82% 8%, rgba(47, 108, 160, 0.05) 0%, transparent 55%);
+  }
+}
+
+/* ---- 基础：主题切换渐变、选中色、滚动条 ---- */
+
+body {
+  transition: background-color var(--dur-slow) var(--ease-standard),
+              color var(--dur-slow) var(--ease-standard);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: rgba(var(--accent-1-rgb), 0.28);
+}
+
+:root {
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
+/* ---- 排版：衬线标题层（去 AI 感：无渐变字、无装饰条） ---- */
+
+.page-title {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  color: var(--text-primary);
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  -webkit-text-fill-color: currentColor;
+}
+.page-title::after {
+  content: none;
+}
+
+.page-sub {
+  color: var(--text-secondary);
+  margin-top: var(--sp-1);
+}
+
+.modal-title,
+.detail-title,
+.chat-empty-cta h1,
+.crash-box h1,
+.error-state-title {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+.chat-empty-cta h1 {
+  font-size: 30px;
+  font-weight: 600;
+}
+
+.wordmark-text {
+  font-family: var(--font-display);
+  font-size: 17px;
+  letter-spacing: 0.01em;
+}
+.wordmark-text b {
+  font-weight: 700;
+}
+
+/* ---- 外壳与侧边栏 ---- */
+
+.sidebar {
+  padding: 20px 12px 14px;
+  gap: 2px;
+}
+
+.sidebar .wordmark {
+  padding: 4px 10px 18px;
+}
+
+.nav-item {
+  border-radius: 10px;
+  padding: 8px 12px;
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease-standard),
+              color var(--dur-fast) var(--ease-standard);
+}
+.nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-group-head {
+  color: var(--text-tertiary);
+  letter-spacing: 0.1em;
+}
+
+.palette-trigger {
+  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-xs);
+  transition: border-color var(--dur-fast) var(--ease-standard),
+              box-shadow var(--dur-fast) var(--ease-standard);
+}
+.palette-trigger:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---- 按钮：去掉高光覆层，扁平 + 微浮起 ---- */
+
+.btn::before {
+  content: none;
+}
+
+.btn {
+  border-radius: 10px;
+  font-weight: 550;
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  background-image: none;
+  font-weight: 620;
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  background-image: none;
+  box-shadow: var(--shadow-accent);
+}
+.btn.danger {
+  border-color: var(--semantic-danger-border);
+}
+.btn.danger:hover:not(:disabled) {
+  box-shadow: var(--shadow-xs);
+}
+
+/* ---- 输入：纸面白底 + 柔和聚焦环 ---- */
+
+.input,
+select.input {
+  background: var(--bg-raised);
+  border-radius: 10px;
+  transition: border-color var(--dur-fast) var(--ease-standard),
+              box-shadow var(--dur-fast) var(--ease-standard);
+}
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ---- 卡片与徽章 ---- */
+
+.card {
+  border-radius: var(--radius-md);
+}
+
+.badge {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.badge.green {
+  background: var(--semantic-good-soft);
+}
+.badge.red {
+  background: var(--semantic-danger-soft);
+}
+.badge.yellow {
+  background: var(--semantic-warn-soft);
+}
+.badge.blue {
+  background: var(--accent-2-soft);
+}
+
+/* ---- 会话页：Claude 式对话区 ---- */
+
+.thread-rail {
+  padding: 14px 12px;
+}
+.thread-new {
+  border-radius: 10px;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-xs);
+}
+.thread-item {
+  border-radius: 10px;
+  transition: background var(--dur-fast) var(--ease-standard),
+              color var(--dur-fast) var(--ease-standard);
+}
+
+.chat-head {
+  padding: 14px 28px;
+}
+.chat-title {
+  font-size: 15.5px;
+}
+
+.chat-log {
+  padding: 32px 28px 20px;
+  scroll-behavior: smooth;
+}
+
+/* 气泡：去掉引用式左边条。Panda 纯文本阅读（编辑感），
+   用户消息用暖色圆角块托起（Claude 的用户气泡语言）。 */
+.bubble {
+  border-left: none;
+  border-radius: 0;
+  padding: 0;
+}
+.bubble.role-user {
+  background: var(--bg-chrome);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  padding: 10px 16px;
+}
+.bubble.role-panda {
+  padding: 2px 0;
+}
+
+/* 输入区：大圆角浮起容器，聚焦时竹绿柔光环 */
+.composer {
+  border-top: none;
+  background: transparent;
+  padding: 12px 24px 20px;
+}
+.composer-box {
+  border-radius: var(--radius-lg);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
+  padding: 12px 14px 10px;
+}
+.composer-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-sm);
+}
+
+/* 空状态：虚线框 → 纸质卡片 + 暖光晕 */
+.chat-empty-cta {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  background: var(--bg-raised);
+  background-image: var(--grad-hero);
+  box-shadow: var(--shadow-xs);
+  padding: var(--sp-8);
+}
+
+/* ---- 浮层：命令面板 / 弹窗 / 通知 ---- */
+
+.palette,
+.modal {
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl);
+}
+.modal-backdrop,
+.palette-backdrop {
+  backdrop-filter: blur(3px);
+}
+
+.toast {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.banner {
+  border-radius: var(--radius-md);
+}
+
+/* ---- 看板与列表 ---- */
+
+.kanban-card {
+  border-radius: var(--radius-md);
+}
+
+/* ---- 设置页左轨 ---- */
+
+.settings-nav-item {
+  border-radius: 10px;
+  transition: background var(--dur-fast) var(--ease-standard),
+              color var(--dur-fast) var(--ease-standard);
+}
+
+/* ---- Orbit 决策链：统一大圆角外壳 ---- */
+
+.orbit {
+  border-radius: var(--radius-lg);
+}
+
+/* ---- 登录门：纸张卡 + 暖光背景 ---- */
+
+.gate {
+  background:
+    radial-gradient(760px 380px at 50% -18%, var(--accent-soft), transparent),
+    radial-gradient(600px 300px at 85% 110%, var(--accent-2-tint-xs), transparent),
+    var(--bg);
+}
+.gate-card {
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  padding: 32px;
+}
+
+/* ---- 代码与输出块 ---- */
+
+pre,
+.md-code,
+.task-out {
+  border-radius: 10px;
+}
