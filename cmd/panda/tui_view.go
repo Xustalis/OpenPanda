@@ -254,7 +254,9 @@ func (m tuiModel) hintKeys() []string {
 }
 
 // approvalCard renders the tier-2 consent prompt for a parked task: what it
-// wants to do, why the executor refused, and the y/n choice.
+// wants to do, why the executor refused, and the y/n choice. The focused
+// choice is accented and marker-prefixed so arrows + Enter read as a picker
+// while the [y]/[n] labels keep the hotkeys discoverable.
 func (m tuiModel) approvalCard() string {
 	req := m.pending.Approval
 	var sb strings.Builder
@@ -263,8 +265,16 @@ func (m tuiModel) approvalCard() string {
 	if reason := strings.TrimSpace(req.Reason); reason != "" {
 		sb.WriteString("\n" + m.th.muted.Render(i18n.Tf(m.loc, "repl.approval.reason", "reason", reason)))
 	}
-	sb.WriteString("\n\n" + m.th.command.Render("[y]") + " " + i18n.T(m.loc, "tui.approval.yes") +
-		"   " + m.th.command.Render("[n]") + " " + i18n.T(m.loc, "tui.approval.no"))
+	choice := func(focused int, key, label string) string {
+		s := m.th.command.Render("["+key+"]") + " " + label
+		if m.approvalSel == focused {
+			return m.th.heading.Render(m.th.glyph("❯", ">")+" ") + s
+		}
+		return "  " + s
+	}
+	sb.WriteString("\n\n" + choice(0, "y", i18n.T(m.loc, "tui.approval.yes")))
+	sb.WriteString("   " + choice(1, "n", i18n.T(m.loc, "tui.approval.no")))
+	sb.WriteString("\n" + m.th.muted.Render(m.th.glyph("↑↓", "^v")+" "+i18n.T(m.loc, "tui.approval.hint")))
 	return m.th.approval.Width(m.textWidth()).Render(sb.String())
 }
 

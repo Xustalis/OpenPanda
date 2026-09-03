@@ -169,3 +169,9 @@ push:
   enabled: false                  # true to serve /api/push/* and send pushes
   vapid_subject: "mailto:panda@localhost"
   vapid_key_path: "./data/vapid.pem"
+
+# Front-end preferences. `locale` is the language /lang last switched to in
+# the REPL/TUI; empty (or omitted) follows the terminal's LANG/OPENPANDA_LANG.
+# OPENPANDA_LANG still wins over this setting when set.
+# ui:
+#   locale: "zh-CN"               # en | zh-CN | ja | es | de

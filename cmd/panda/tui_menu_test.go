@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
@@ -37,7 +38,7 @@ func TestMenuTrigger(t *testing.T) {
 // prefix matches ahead of substring matches, with the table order as tie-break.
 func TestMenuSyncFiltersAndRanks(t *testing.T) {
 	mn := newSlashMenu(i18n.Locale("en"))
-	mn.sync("/task")
+	mn.sync("/task", nil)
 	if !mn.active {
 		t.Fatal("menu should be active for /task")
 	}
@@ -55,13 +56,13 @@ func TestMenuSyncFiltersAndRanks(t *testing.T) {
 	}
 
 	// An empty filter (a bare slash) lists every command.
-	mn.sync("/")
+	mn.sync("/", nil)
 	if len(mn.items) != len(replCommands) {
 		t.Fatalf("bare slash should list all %d commands, got %d", len(replCommands), len(mn.items))
 	}
 
 	// A space closes the popup.
-	mn.sync("/tasks ")
+	mn.sync("/tasks ", nil)
 	if mn.active || len(mn.items) != 0 {
 		t.Fatalf("space should close the menu, active=%v items=%d", mn.active, len(mn.items))
 	}
@@ -71,7 +72,7 @@ func TestMenuSyncFiltersAndRanks(t *testing.T) {
 // (no wraparound past either end).
 func TestMenuMoveClamps(t *testing.T) {
 	mn := newSlashMenu(i18n.Locale("en"))
-	mn.sync("/")
+	mn.sync("/", nil)
 	mn.move(-1) // already at top
 	if mn.sel != 0 {
 		t.Fatalf("move(-1) at top should stay 0, got %d", mn.sel)
@@ -219,7 +220,7 @@ func TestMenuRowsFitTheWindow(t *testing.T) {
 	// A list longer than its window says how many are out of view, so the user
 	// knows whether to keep typing or keep arrowing.
 	mn := newSlashMenu(i18n.Locale("en"))
-	mn.sync("/")
+	mn.sync("/", nil)
 	out := mn.render(theme{loc: i18n.Locale("en")}, 100, 3)
 	rows := strings.Split(out, "\n")
 	if len(rows) != 4 {
@@ -228,5 +229,142 @@ func TestMenuRowsFitTheWindow(t *testing.T) {
 	want := i18n.Tf(i18n.Locale("en"), "tui.menu.more", "n", strconv.Itoa(len(mn.items)-3))
 	if !strings.Contains(rows[3], want) {
 		t.Errorf("overflow line should read %q: %q", want, rows[3])
+	}
+}
+
+// TestMenuArgumentMode covers the popup's second life: past the first space it
+// lists the argument candidates the resolver offers (locale codes for /lang),
+// filters by the token being typed, and fill() rewrites that token in place.
+// With no resolver it stays closed — the old behaviour for every command.
+func TestMenuArgumentMode(t *testing.T) {
+	mn := newSlashMenu(i18n.Locale("en"))
+	resolve := func(cmd string, args []string) []string {
+		if cmd == "lang" && len(args) == 1 {
+			return localeCodeList()
+		}
+		return nil
+	}
+	mn.sync("/lang ", resolve)
+	if !mn.active || !mn.argMode {
+		t.Fatal("a space after /lang should open the argument list")
+	}
+	if len(mn.items) != len(i18n.Locales) {
+		t.Fatalf("expected %d locale candidates, got %d", len(i18n.Locales), len(mn.items))
+	}
+	// A partial token filters the list case-insensitively.
+	mn.sync("/lang z", resolve)
+	if len(mn.items) != 1 || mn.items[0].name != "zh-CN" {
+		t.Fatalf("filter \"z\" should leave zh-CN, got %v", mn.items)
+	}
+	// fill() rewrites only the token under the cursor, keeping the command.
+	if got := mn.fill(); got != "/lang zh-CN " {
+		t.Fatalf("fill() = %q, want %q", got, "/lang zh-CN ")
+	}
+	// The locale rows carry their endonym as the help column.
+	mn.sync("/lang ", resolve)
+	found := false
+	for _, it := range mn.items {
+		if it.name == "zh-CN" && it.desc == i18n.LocaleNames[i18n.ChineseSimp] {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("zh-CN should be glossed with its endonym")
+	}
+	// No resolver: the popup stays closed at the argument position.
+	mn.sync("/lang ", nil)
+	if mn.active {
+		t.Fatal("nil resolver should leave the argument popup closed")
+	}
+}
+
+// TestArgMenuTabFillsAndEnterSubmits drives the key path end to end: typing
+// "/lang", Tab completes the command, the locale list opens, an arrow moves
+// the selection, Tab fills the candidate into the line, and Enter submits the
+// filled line as the command.
+func TestArgMenuTabFillsAndEnterSubmits(t *testing.T) {
+	m := newTestTUI(t)
+	m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+	for _, r := range "/lang" {
+		m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m = step(m, tea.KeyMsg{Type: tea.KeyTab}) // complete the command name
+	if m.ta.Value() != "/lang " {
+		t.Fatalf("tab should complete to %q, got %q", "/lang ", m.ta.Value())
+	}
+	if !m.menu.active || !m.menu.argMode {
+		t.Fatalf("the locale list should be open after the command completes, active=%v arg=%v", m.menu.active, m.menu.argMode)
+	}
+	if len(m.menu.items) != len(localeCodeList()) {
+		t.Fatalf("expected the locale candidates, got %d", len(m.menu.items))
+	}
+	// Arrow to the second candidate, then Tab it into the line.
+	m = step(m, tea.KeyMsg{Type: tea.KeyDown})
+	want := "/lang " + m.menu.items[m.menu.sel].name + " "
+	m = step(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.ta.Value() != want {
+		t.Fatalf("tab should fill %q, got %q", want, m.ta.Value())
+	}
+	// Enter submits the filled line: the model hands the terminal to the
+	// classic dispatch, so the mode is exec and the input is reset.
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.mode != modeExec {
+		t.Fatalf("enter should run the filled command, mode=%v", m.mode)
+	}
+	if m.ta.Value() != "" || m.menu.active {
+		t.Fatalf("submit should clear the input and close the menu, value=%q active=%v", m.ta.Value(), m.menu.active)
+	}
+}
+
+// TestApplyLocaleAfterLangCommand is the /lang regression: the handler changes
+// the repl's locale, and the front end has to follow — theme labels, menu
+// help and the input placeholder were captured at startup and used to stay in
+// the old language while only the handler's printed output switched.
+func TestApplyLocaleAfterLangCommand(t *testing.T) {
+	m := newTestTUI(t)
+	m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+	if m.loc != i18n.English || m.r.loc != i18n.English {
+		t.Fatal("test starts in English")
+	}
+	m.r.loc = i18n.ChineseSimp // what cmdLang does while the command runs
+	back := step(m, execDoneMsg{})
+	if back.loc != i18n.ChineseSimp {
+		t.Fatalf("the model should adopt the repl's locale, got %q", back.loc)
+	}
+	if back.th.loc != i18n.ChineseSimp {
+		t.Fatalf("the theme's label locale should follow, got %q", back.th.loc)
+	}
+	if back.ta.Placeholder != i18n.T(i18n.ChineseSimp, "tui.input.placeholder") {
+		t.Fatalf("the placeholder should be re-resolved, got %q", back.ta.Placeholder)
+	}
+	if len(back.menu.all) == 0 || back.menu.all[0].desc != i18n.T(i18n.ChineseSimp, replCommands[0].help) {
+		t.Fatal("the slash menu's help lines should be re-resolved in the new locale")
+	}
+}
+
+// TestApprovalArrowSelection covers the approval card's arrow picker: the
+// focus starts on deny (the [y/N] safe default), arrows toggle it, Enter
+// answers the focused choice, and the y/n hotkeys keep working.
+func TestApprovalArrowSelection(t *testing.T) {
+	m := newTestTUI(t)
+	m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.pending = &askengine.Result{
+		Kind:          "task",
+		NeedsApproval: true,
+		Approval:      &askengine.ApprovalRequest{TaskID: "t1", Title: "rm -rf build"},
+	}
+	m.mode = modeApproving
+	m.approvalSel = 1
+	if m.approvalSel != 1 {
+		t.Fatalf("focus should start on deny, got %d", m.approvalSel)
+	}
+	m = step(m, tea.KeyMsg{Type: tea.KeyUp})
+	if m.approvalSel != 0 {
+		t.Fatalf("an arrow should move focus to approve, got %d", m.approvalSel)
+	}
+	// Enter on approve resumes the task: the mode returns to asking.
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.mode != modeAsking {
+		t.Fatalf("enter on approve should resume the task, mode=%v", m.mode)
 	}
 }

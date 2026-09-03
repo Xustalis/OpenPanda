@@ -61,3 +61,31 @@ func TestDetectUnknownFallsBackToEnglish(t *testing.T) {
 		t.Fatalf("Detect() = %q, want en", got)
 	}
 }
+
+// TestParse covers the config-side counterpart of Detect: mapping a persisted
+// ui.locale value to a supported Locale, tolerating the same shapes Detect
+// accepts (case, region suffixes, encoding suffixes) and returning "" for
+// anything unsupported so callers can treat it as "no preference recorded".
+func TestParse(t *testing.T) {
+	cases := []struct {
+		in   string
+		want Locale
+	}{
+		{"en", English},
+		{"zh-CN", ChineseSimp},
+		{"ZH-cn", ChineseSimp},
+		{"zh_CN.UTF-8", ChineseSimp},
+		{"zh_Hans", ChineseSimp},
+		{"ja", Japanese},
+		{"es", Spanish},
+		{"de", German},
+		{"", ""},
+		{"klingon", ""},
+		{"  ", ""},
+	}
+	for _, c := range cases {
+		if got := Parse(c.in); got != c.want {
+			t.Errorf("Parse(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
