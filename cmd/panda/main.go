@@ -154,6 +154,9 @@ func main() {
 		case "config":
 			runConfig(args)
 			return
+		case "model", "models":
+			runModel(args)
+			return
 		case "agents":
 			runAgents(args)
 			return
@@ -203,7 +206,7 @@ func subcommandNames() []string {
 		"install", "uninstall", "doctor", "status", "nodes", "pair", "queue",
 		"task", "plan", "cancel", "approve", "reject", "logs", "skill",
 		"reminder", "detect", "card", "init", "metrics", "audit", "session",
-		"sessions", "memory", "config", "agents", "project", "version", "help",
+		"sessions", "memory", "config", "model", "models", "agents", "project", "version", "help",
 	}
 }
 
@@ -631,6 +634,7 @@ func printUsage(w *os.File) {
 	line("                                            project:<n>/daily:<date> files")
 	line("")
 	line("settings:")
+	line("  model [status|list|add|rm|switch|test]   multi-model registry and active model switcher")
 	line("  config model|mcp|limits|routing|injection|approval get|set|test")
 	line("                                            view/edit config.yaml (comments kept)")
 	line("  agents [test <name>]                      probe installed agent CLIs")

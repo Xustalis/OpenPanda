@@ -19,6 +19,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 )
 
 // argResolver returns the candidates for an argument position: cmd is the
@@ -139,11 +140,72 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 			}
 		}
 	case "model":
-		// There is no model directory to enumerate — the endpoint is the
-		// user's own. Offering the configured name still saves retyping it
-		// after a look at /config.
-		if len(args) == 1 && r.cfg != nil && r.cfg.Model.Model != "" {
-			return []string{r.cfg.Model.Model}
+		// First position: the verbs plus every registered alias and the active
+		// model (deduplicated). `/model add` completes its next position with
+		// provider ids, while remove/test/fetch complete aliases/providers.
+		if len(args) == 1 {
+			out := []string{"list", "add", "remove", "fetch", "test"}
+			seen := make(map[string]bool, len(out)+8)
+			for _, v := range out {
+				seen[v] = true
+			}
+			if r.cfg != nil {
+				for _, m := range r.cfg.Models {
+					alias := m.Alias()
+					if alias != "" && !seen[alias] {
+						seen[alias] = true
+						out = append(out, alias)
+					}
+				}
+				active := r.cfg.Model.Alias()
+				if active != "" && !seen[active] {
+					seen[active] = true
+					out = append(out, active)
+				}
+			}
+			return out
+		}
+		if len(args) == 2 {
+			switch args[0] {
+			case "add":
+				ids := make([]string, 0, len(providers.All()))
+				for _, p := range providers.All() {
+					ids = append(ids, p.ID)
+				}
+				return ids
+			case "remove", "rm", "del", "test":
+				var aliases []string
+				seen := make(map[string]bool)
+				if r.cfg != nil {
+					for _, m := range r.cfg.Models {
+						alias := m.Alias()
+						if alias != "" && !seen[alias] {
+							seen[alias] = true
+							aliases = append(aliases, alias)
+						}
+					}
+				}
+				return aliases
+			case "fetch", "models":
+				var candidates []string
+				seen := make(map[string]bool)
+				if r.cfg != nil {
+					for _, m := range r.cfg.Models {
+						alias := m.Alias()
+						if alias != "" && !seen[alias] {
+							seen[alias] = true
+							candidates = append(candidates, alias)
+						}
+					}
+				}
+				for _, p := range providers.All() {
+					if !seen[p.ID] {
+						seen[p.ID] = true
+						candidates = append(candidates, p.ID)
+					}
+				}
+				return candidates
+			}
 		}
 	}
 	return nil

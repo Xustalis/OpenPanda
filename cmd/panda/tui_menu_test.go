@@ -368,3 +368,19 @@ func TestApprovalArrowSelection(t *testing.T) {
 		t.Fatalf("enter on approve should resume the task, mode=%v", m.mode)
 	}
 }
+
+// TestMenuModelGlosses verifies that the model command's argument candidates
+// and provider options receive meaningful descriptions in the popup menu.
+func TestMenuModelGlosses(t *testing.T) {
+	verbs := []string{"list", "add", "remove", "fetch", "test"}
+	for _, v := range verbs {
+		desc := argItemDesc("model", v)
+		if desc == "" {
+			t.Errorf("expected non-empty gloss for /model %s", v)
+		}
+	}
+	provDesc := argItemDesc("model", "deepseek")
+	if !strings.Contains(provDesc, "DeepSeek") {
+		t.Errorf("expected deepseek provider gloss, got %q", provDesc)
+	}
+}

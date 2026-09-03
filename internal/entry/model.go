@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
@@ -72,6 +73,20 @@ type Client struct {
 	// signature.
 	usageIn  atomic.Int64
 	usageOut atomic.Int64
+
+	// provider is the built-in catalogue id (internal/providers) when the
+	// config named one; empty for a bare custom endpoint. It drives per-vendor
+	// tuning at construction time.
+	provider string
+	// modelsURL is the list-models endpoint resolved at construction: an
+	// absolute override when the provider carries one (DeepSeek's list lives
+	// on its OpenAI surface), empty to derive from api_type at call time.
+	modelsURL string
+	// noAuth marks a provider that needs no API key (Ollama / local vLLM), so
+	// ListModels does not refuse an empty key.
+	noAuth bool
+	// contextWindow is the advertised context length in tokens; 0 when unknown.
+	contextWindow int
 }
 
 // NewClient builds a client from the model config. A zero baseURL/model falls
@@ -80,37 +95,91 @@ type Client struct {
 // http stays allowed for a local dev model, matching the guard the commander
 // applies to adapter endpoints (D7).
 func NewClient(model config.ModelConfig) (*Client, error) {
+	p, hasProvider := providers.Lookup(model.Provider)
 	base := model.BaseURL
 	if base == "" {
-		base = "https://api.deepseek.com/anthropic"
+		if hasProvider && p.BaseURL != "" {
+			base = p.BaseURL
+		} else {
+			base = "https://api.deepseek.com/anthropic"
+		}
 	}
 	if err := security.NewNetworkGuard(security.EndpointHost(base)).CheckURL(base); err != nil {
 		return nil, err
 	}
 	name := model.Model
 	if name == "" {
-		name = defaultModel
+		if hasProvider && p.DefaultModel != "" {
+			name = p.DefaultModel
+		} else {
+			name = defaultModel
+		}
 	}
 	maxTokens := model.MaxTokens
 	if maxTokens <= 0 {
-		maxTokens = defaultMaxTokens
+		if hasProvider && p.DefaultMaxTokens > 0 {
+			maxTokens = p.DefaultMaxTokens
+		} else {
+			maxTokens = defaultMaxTokens
+		}
+	}
+	contextWindow := model.ContextWindow
+	if contextWindow <= 0 && hasProvider {
+		contextWindow = p.ContextWindow
+	}
+	apiType := strings.ToLower(strings.TrimSpace(model.APIType))
+	if apiType == "" && hasProvider {
+		apiType = strings.ToLower(strings.TrimSpace(p.APIType))
+	}
+	if apiType != config.APITypeOpenAI {
+		apiType = config.APITypeAnthropic
 	}
 	c := &Client{
-		apiType:   model.NormalizedAPIType(),
-		baseURL:   strings.TrimRight(base, "/"),
-		apiKey:    model.APIKey,
-		model:     name,
-		maxTokens: maxTokens,
-		hc:        &http.Client{Timeout: 30 * time.Second},
-		hcStream:  &http.Client{Transport: streamTransport()},
-		maxRetry:  2,
-		retryBase: 500 * time.Millisecond,
+		apiType:       apiType,
+		baseURL:       strings.TrimRight(base, "/"),
+		apiKey:        model.APIKey,
+		model:         name,
+		maxTokens:     maxTokens,
+		contextWindow: contextWindow,
+		hc:            &http.Client{Timeout: 30 * time.Second},
+		hcStream:      &http.Client{Transport: streamTransport()},
+		maxRetry:      2,
+		retryBase:     500 * time.Millisecond,
 	}
 	c.promptCache.Store(true)
+	if hasProvider {
+		c.provider = p.ID
+		c.noAuth = p.NoAuth
+		if p.ModelsPath != "" {
+			// Resolve against the *effective* base (the user's configured
+			// base_url, not the provider's catalogue default): a provider
+			// with a custom endpoint (Ollama on another port) must list
+			// models on that endpoint, not the shipped one.
+			c.modelsURL = resolveModelsURL(base, p.ModelsPath)
+		}
+		if !p.PromptCache {
+			c.promptCache.Store(false)
+		}
+		if p.ThinkingPassback {
+			c.passback.Store(true)
+		}
+	}
+	// Legacy heuristics stay as a backstop for configs without a provider id.
 	if isDeepSeekModel(name) || isDeepSeekEndpoint(base) {
 		c.passback.Store(true)
 	}
 	return c, nil
+}
+
+// resolveModelsURL turns a provider's list-models path into a concrete URL:
+// an absolute http(s) path is used verbatim (DeepSeek's list lives on its
+// OpenAI surface), a relative path is joined onto the endpoint base.
+func resolveModelsURL(base, path string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		return strings.TrimRight(strings.TrimSpace(path), "/")
+	}
+	return base + "/" + strings.TrimLeft(path, "/")
 }
 
 func isDeepSeekEndpoint(rawURL string) bool {
@@ -162,6 +231,12 @@ func (c *Client) diskCache() *DiskCache { return c.cache.Load() }
 
 // ModelName returns the configured model id, for metric labels.
 func (c *Client) ModelName() string { return c.model }
+
+// Provider returns the provider catalogue ID, or empty for a custom endpoint.
+func (c *Client) Provider() string { return c.provider }
+
+// ContextWindow returns the advertised context length in tokens, or 0 when unknown.
+func (c *Client) ContextWindow() int { return c.contextWindow }
 
 // Usage is the provider-reported token consumption of one or more calls.
 type Usage struct {
@@ -807,4 +882,84 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// ModelInfo is one entry in a provider's model catalogue.
+type ModelInfo struct {
+	ID string `json:"id"`
+}
+
+// listModelsResponse is the OpenAI /models shape — { "data": [ { "id": … } ] }
+// — which Anthropic-compatible relays emit as well.
+type listModelsResponse struct {
+	Data []ModelInfo `json:"data"`
+}
+
+// ListModels fetches the provider's model catalogue. The endpoint is derived
+// from the provider override or the configured api type (see
+// listModelsEndpoint); the response is the OpenAI "data":[{"id":…}] form. It
+// needs an API key unless the provider is no-auth (a local Ollama).
+func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	if c.apiKey == "" && !c.noAuth {
+		return nil, ErrNoKey
+	}
+	url, bearer := c.listModelsEndpoint()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if bearer {
+		req.Header.Set("authorization", "Bearer "+c.apiKey)
+	} else {
+		req.Header.Set("x-api-key", c.apiKey)
+		req.Header.Set("anthropic-version", anthropicVersion)
+	}
+
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("entry: list models: %w", err)
+		}
+		return nil, &transientError{err: err}
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, &transientError{err: fmt.Errorf("read models: %w", err)}
+	}
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		return nil, &retryableError{status: resp.StatusCode, body: string(body)}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &statusError{status: resp.StatusCode, body: string(body)}
+	}
+
+	var lr listModelsResponse
+	if err := json.Unmarshal(body, &lr); err != nil {
+		return nil, fmt.Errorf("entry: parse models: %w", err)
+	}
+	return lr.Data, nil
+}
+
+// listModelsEndpoint resolves the list-models URL and whether it wants Bearer
+// auth (OpenAI surface) or x-api-key (Anthropic surface).
+func (c *Client) listModelsEndpoint() (string, bool) {
+	// Bearer auth is used for OpenAI-compatible surfaces, plus DeepSeek whose
+	// list-models endpoint lives on its OpenAI surface even when using the
+	// Anthropic Messages dialect for completions.
+	isBearer := c.apiType == config.APITypeOpenAI || c.provider == "deepseek" || isDeepSeekEndpoint(c.baseURL)
+
+	if c.modelsURL != "" {
+		return c.modelsURL, isBearer
+	}
+	if c.apiType == config.APITypeOpenAI {
+		return strings.TrimRight(c.baseURL, "/") + "/models", true
+	}
+	// Anthropic dialect. DeepSeek's Anthropic endpoint has no list route, so
+	// fall through to its OpenAI surface even without a provider id.
+	if isDeepSeekEndpoint(c.baseURL) {
+		return "https://api.deepseek.com/models", true
+	}
+	return strings.TrimRight(c.baseURL, "/") + "/v1/models", false
 }

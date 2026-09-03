@@ -42,6 +42,7 @@ type Session struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Branch    string    `json:"branch,omitempty"`
 	Worktree  string    `json:"worktree,omitempty"`
+	Project   string    `json:"project,omitempty"`
 	Turns     []Turn    `json:"turns"`
 }
 
@@ -61,8 +62,9 @@ func NewStore(dir string) *Store {
 var ErrNotFound = errors.New("sessions: no such session")
 
 // Create starts a new session titled after the first prompt (the title is
-// derived lazily by the caller; Create accepts it directly).
-func (s *Store) Create(title string) (*Session, error) {
+// derived lazily by the caller; Create accepts it directly). An optional
+// project associates the session with that project.
+func (s *Store) Create(title string, project ...string) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := os.MkdirAll(s.root, 0o755); err != nil {
@@ -73,9 +75,14 @@ func (s *Store) Create(title string) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sessions: id: %w", err)
 	}
+	var proj string
+	if len(project) > 0 {
+		proj = strings.TrimSpace(project[0])
+	}
 	sess := &Session{
 		ID:        strings.ReplaceAll(id, "-", "")[:16],
 		Title:     title,
+		Project:   proj,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -150,6 +157,89 @@ func (s *Store) SetWorktree(id, path, branch string) error {
 	sess.Branch = branch
 	sess.UpdatedAt = time.Now()
 	return s.save(sess)
+}
+
+// SetTitle updates the title of a session.
+func (s *Store) SetTitle(id, title string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return err
+	}
+	sess.Title = strings.TrimSpace(title)
+	sess.UpdatedAt = time.Now()
+	return s.save(sess)
+}
+
+// ListByProject returns all sessions belonging to project, newest first.
+// If project is empty, it returns unassigned sessions (where Project is empty).
+func (s *Store) ListByProject(project string) ([]*Session, error) {
+	list, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	project = strings.TrimSpace(project)
+	var out []*Session
+	for _, sess := range list {
+		if sess.Project == project {
+			out = append(out, sess)
+		}
+	}
+	return out, nil
+}
+
+// SetProject updates the project association for a session.
+// An empty project string disassociates the session.
+func (s *Store) SetProject(id, project string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return err
+	}
+	sess.Project = strings.TrimSpace(project)
+	sess.UpdatedAt = time.Now()
+	return s.save(sess)
+}
+
+// RenameProject updates all sessions associated with oldName to newName.
+// It returns the number of updated sessions.
+func (s *Store) RenameProject(oldName, newName string) (int, error) {
+	oldName = strings.TrimSpace(oldName)
+	newName = strings.TrimSpace(newName)
+	if oldName == "" || oldName == newName {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	var count int
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".json")
+		sess, err := s.load(id)
+		if err != nil {
+			continue
+		}
+		if sess.Project == oldName {
+			sess.Project = newName
+			sess.UpdatedAt = time.Now()
+			if err := s.save(sess); err == nil {
+				count++
+			}
+		}
+	}
+	return count, nil
 }
 
 // Delete removes the session file (worktree cleanup is the caller's job).

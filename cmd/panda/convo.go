@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -36,13 +37,79 @@ import (
 // task reports.
 const maxConvoChars = 24000
 
+// sanitizeProjectName replaces characters that are unsafe in filenames while
+// preserving Unicode (e.g. CJK project names).
+func sanitizeProjectName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if strings.ContainsRune(`/\:*?"<>|`, r) || r < 0x20 || r == 0x7f {
+			b.WriteRune('_')
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	res := strings.TrimSpace(b.String())
+	if res == "" || res == "." || res == ".." {
+		return "project"
+	}
+	return res
+}
+
 // convoPath is the persisted conversation file ("" when no state dir).
+// Conversations are sharded by project: conversations/<project>.json, with
+// conversations/default.json when outside a project. Legacy conversation.json
+// is migrated to default.json on first access.
 func convoPath() string {
 	d := cliStateDir()
 	if d == "" {
 		return ""
 	}
-	return filepath.Join(d, "conversation.json")
+	convDir := filepath.Join(d, "conversations")
+	defFile := filepath.Join(convDir, "default.json")
+	oldFile := filepath.Join(d, "conversation.json")
+
+	// Migrate legacy single-file conversation if present.
+	if _, err := os.Stat(oldFile); err == nil {
+		if _, err := os.Stat(defFile); os.IsNotExist(err) {
+			_ = os.MkdirAll(convDir, 0o700)
+			_ = os.Rename(oldFile, defFile)
+		}
+	}
+
+	cfg, _ := config.Load("")
+	var proj string
+	if cfg != nil {
+		proj, _ = activeProject(cfg)
+	}
+	if strings.TrimSpace(proj) == "" {
+		return defFile
+	}
+	safe := sanitizeProjectName(strings.TrimSpace(proj))
+	return filepath.Join(convDir, safe+".json")
+}
+
+// renameConvo renames a project's persisted conversation file from oldName to newName.
+func renameConvo(oldName, newName string) {
+	d := cliStateDir()
+	if d == "" {
+		return
+	}
+	convDir := filepath.Join(d, "conversations")
+	oldFile := filepath.Join(convDir, sanitizeProjectName(oldName)+".json")
+	newFile := filepath.Join(convDir, sanitizeProjectName(newName)+".json")
+	if _, err := os.Stat(oldFile); err == nil {
+		_ = os.Rename(oldFile, newFile)
+	}
+}
+
+// deleteConvo removes a project's persisted conversation file.
+func deleteConvo(name string) {
+	d := cliStateDir()
+	if d == "" {
+		return
+	}
+	convFile := filepath.Join(d, "conversations", sanitizeProjectName(name)+".json")
+	_ = os.Remove(convFile)
 }
 
 // loadConvo reads the persisted conversation; missing file or a corrupt

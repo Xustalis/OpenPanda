@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/cliui"
-	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -59,34 +58,10 @@ func (r *repl) cmdCost(arg string) {
 	fmt.Printf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.out"), cliui.HumanCount(r.costOut))
 }
 
-// cmdModel shows the entry model, or switches it: `/model <name>` persists
-// model.model to config.yaml (comments preserved) and takes effect on the next
-// ask — the engine holds its own client, so the switch is announced as pending
-// rather than silently half-applied.
-func (r *repl) cmdModel(arg string) {
-	name := strings.TrimSpace(arg)
-	if name == "" {
-		if r.cfg.Model.BaseURL == "" {
-			fmt.Println(i18n.T(r.loc, "repl.model.none"))
-			return
-		}
-		fmt.Println(i18n.Tf(r.loc, "repl.model.current",
-			"model", orDash(r.cfg.Model.Model), "url", r.cfg.Model.BaseURL))
-		return
-	}
-	if strings.ContainsAny(name, " \t") {
-		fmt.Println(i18n.T(r.loc, "repl.model.usage"))
-		return
-	}
-	mc := r.cfg.Model
-	mc.Model = name
-	if err := config.UpdateModelSection(configWritePath(r.configPath), mc); err != nil {
-		r.storeErr(err)
-		return
-	}
-	r.cfg.Model.Model = name
-	fmt.Println(i18n.Tf(r.loc, "repl.model.set", "model", name))
-}
+// cmdModel is implemented in modelcmd.go — the multi-model registry that
+// lists, switches, adds (from the built-in provider catalogue), removes,
+// fetches and tests models. It lives apart from the other second-tier
+// commands because it has real state to manage.
 
 // cmdExport writes the bare-mode conversation to a Markdown file — the "save
 // this before I close the terminal" move. With no argument the name is derived
@@ -361,6 +336,7 @@ func (r *repl) cmdProjectEnter(arg string) {
 			return
 		}
 		r.bindProject()
+		r.convo = loadConvo()
 		fmt.Println(i18n.T(r.loc, "cli.project.noActive"))
 		return
 	}
@@ -391,5 +367,6 @@ func (r *repl) cmdProjectEnter(arg string) {
 		fmt.Println(i18n.Tf(r.loc, "repl.project.created", "name", name))
 	}
 	r.bindProject()
+	r.convo = loadConvo()
 	fmt.Println(i18n.Tf(r.loc, "cli.project.entered", "name", name))
 }
