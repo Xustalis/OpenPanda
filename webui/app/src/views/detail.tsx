@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks'
-import { api, type Task } from '../api/client'
+import { api } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { StateBadge } from '../components/state-badge'
