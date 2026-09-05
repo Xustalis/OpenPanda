@@ -21,6 +21,8 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/charmbracelet/x/term"
+
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/hwinfo"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -75,38 +77,7 @@ func runInit(args []string) {
 		// Nothing to ask: defaults only, never block on input.
 	default:
 		in := bufio.NewReader(os.Stdin)
-		if askYes(in, i18n.T(loc, "init.model.ask")) {
-			prompt := func(label, fallback string) string {
-				if fallback != "" {
-					fmt.Printf("%s [%s]: ", label, fallback)
-				} else {
-					fmt.Printf("%s: ", label)
-				}
-				s, _ := in.ReadString('\n')
-				s = strings.TrimSpace(s)
-				if s == "" {
-					return fallback
-				}
-				return s
-			}
-			// promptValid re-asks while the answer fails accept(); empty keeps the default.
-			promptValid := func(label, fallback string, accept func(string) bool) string {
-				for {
-					s := prompt(label, fallback)
-					if accept(s) {
-						return s
-					}
-					fmt.Println(i18n.T(loc, "init.invalid"))
-				}
-			}
-			def.Model.APIType = orDefault(promptValid(i18n.T(loc, "init.model.apitype"), config.APITypeAnthropic,
-				func(s string) bool { return s == config.APITypeAnthropic || s == config.APITypeOpenAI }),
-				config.APITypeAnthropic)
-			def.Model.BaseURL = orDefault(prompt(i18n.T(loc, "init.model.baseurl"), def.Model.BaseURL), def.Model.BaseURL)
-			def.Model.Model = orDefault(prompt(i18n.T(loc, "init.model.name"), def.Model.Model), def.Model.Model)
-			def.Model.APIKey = prompt(i18n.T(loc, "init.model.apikey"), "")
-			modelConfigured = true
-		}
+		modelConfigured = interactiveModelSetup(in, def, loc)
 	}
 	if !modelConfigured {
 		fmt.Println(i18n.T(loc, "init.model.skipped"))
@@ -257,4 +228,88 @@ func orDefault(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+func interactiveModelSetup(in *bufio.Reader, def *config.Config, loc i18n.Locale) bool {
+	if !askYes(in, i18n.T(loc, "init.model.ask")) {
+		return false
+	}
+	fmt.Println()
+	fmt.Println("请选择模型供应商 / Select Model Provider:")
+	fmt.Println("  1) DeepSeek (https://api.deepseek.com/v1) [推荐 / Recommended]")
+	fmt.Println("  2) Anthropic / Claude (https://api.anthropic.com)")
+	fmt.Println("  3) OpenAI (https://api.openai.com/v1)")
+	fmt.Println("  4) Ollama 本地模型 (http://localhost:11434/v1)")
+	fmt.Println("  5) 自定义 / Custom Endpoint")
+	fmt.Printf("输入选择 / Choice [1]: ")
+	choice, _ := in.ReadString('\n')
+	choice = strings.TrimSpace(choice)
+	if choice == "" {
+		choice = "1"
+	}
+
+	var apiType, baseURL, defaultModel string
+	var needsAuth bool = true
+
+	switch choice {
+	case "2":
+		apiType = config.APITypeAnthropic
+		baseURL = "https://api.anthropic.com"
+		defaultModel = "claude-3-5-sonnet-20241022"
+	case "3":
+		apiType = config.APITypeOpenAI
+		baseURL = "https://api.openai.com/v1"
+		defaultModel = "gpt-4o"
+	case "4":
+		apiType = config.APITypeOpenAI
+		baseURL = "http://localhost:11434/v1"
+		defaultModel = "qwen2.5-coder:14b"
+		needsAuth = false
+	case "5":
+		fmt.Printf("API Type (openai/anthropic) [openai]: ")
+		t, _ := in.ReadString('\n')
+		t = strings.TrimSpace(t)
+		if t == "anthropic" {
+			apiType = config.APITypeAnthropic
+		} else {
+			apiType = config.APITypeOpenAI
+		}
+		fmt.Printf("Base URL: ")
+		u, _ := in.ReadString('\n')
+		baseURL = strings.TrimSpace(u)
+		defaultModel = "default"
+	default: // "1"
+		apiType = config.APITypeOpenAI
+		baseURL = "https://api.deepseek.com/v1"
+		defaultModel = "deepseek-chat"
+	}
+
+	fmt.Printf("Model Name [%s]: ", defaultModel)
+	modelName, _ := in.ReadString('\n')
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		modelName = defaultModel
+	}
+
+	var apiKey string
+	if needsAuth {
+		fmt.Print("API Key (输入隐藏 / input hidden): ")
+		if stdinIsTTY() {
+			pw, err := term.ReadPassword(os.Stdin.Fd())
+			fmt.Println()
+			if err == nil {
+				apiKey = strings.TrimSpace(string(pw))
+			}
+		}
+		if apiKey == "" {
+			k, _ := in.ReadString('\n')
+			apiKey = strings.TrimSpace(k)
+		}
+	}
+
+	def.Model.APIType = apiType
+	def.Model.BaseURL = baseURL
+	def.Model.Model = modelName
+	def.Model.APIKey = apiKey
+	return true
 }

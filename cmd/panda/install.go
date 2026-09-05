@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
@@ -44,6 +45,25 @@ func runInstall(args []string) {
 		fatal("install", err)
 	}
 	fmt.Println(i18n.Tf(loc, "install.copied", "path", bin))
+
+	if ad := findAdaptersDir(); ad != "" {
+		targetDirs := []string{
+			filepath.Join(filepath.Dir(dir), "adapters"),
+			filepath.Join(filepath.Dir(dir), "share", "openpanda", "adapters"),
+		}
+		if ucd, err := os.UserConfigDir(); err == nil && ucd != "" {
+			targetDirs = append(targetDirs, filepath.Join(ucd, "openpanda", "adapters"))
+		}
+		for _, td := range targetDirs {
+			if !samePath(ad, td) {
+				if err := copyAdaptersDir(ad, td); err != nil {
+					fmt.Fprintln(os.Stderr, "install: copy adapters: "+err.Error())
+				} else {
+					fmt.Println(i18n.Tf(loc, "install.copied", "path", td))
+				}
+			}
+		}
+	}
 
 	// Register on PATH unless suppressed. Idempotent on both platforms.
 	if !*noPath {
@@ -204,8 +224,19 @@ func findAdaptersDir() string {
 			candidates = append(candidates,
 				filepath.Join(filepath.Dir(base), "adapters"),
 				filepath.Join(filepath.Dir(base), "..", "adapters"),
+				filepath.Join(filepath.Dir(base), "..", "share", "openpanda", "adapters"),
 			)
 		}
+	}
+	if ucd, err := os.UserConfigDir(); err == nil && ucd != "" {
+		candidates = append(candidates, filepath.Join(ucd, "openpanda", "adapters"))
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates,
+			filepath.Join(home, ".local", "adapters"),
+			filepath.Join(home, ".local", "share", "openpanda", "adapters"),
+			filepath.Join(home, ".openpanda", "adapters"),
+		)
 	}
 	for _, dir := range candidates {
 		if st, err := os.Stat(filepath.Join(dir, "claude_code.py")); err == nil && !st.IsDir() {
@@ -213,6 +244,44 @@ func findAdaptersDir() string {
 		}
 	}
 	return ""
+}
+
+func copyAdaptersDir(src, dst string) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		perm := os.FileMode(0o755)
+		if err == nil {
+			perm = info.Mode().Perm()
+		}
+		if err := os.WriteFile(dstPath, data, perm); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func samePath(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // configFileUsed mirrors config.Load's resolution for display purposes.
