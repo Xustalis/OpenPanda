@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/cliui"
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -385,35 +386,81 @@ func (m tuiModel) askingButtonHit(x, y int) int {
 	return -1
 }
 
-// welcome is the startup banner pushed into scrollback: the wordmark, version,
-// node/model, working directory and orientation tips, framed in brand green.
-func (m tuiModel) welcome() string {
-	model := i18n.T(m.loc, "repl.banner.noModel")
-	if m.r.cfg.Model.BaseURL != "" {
-		model = m.r.cfg.Model.Model
-		if model == "" {
-			model = m.r.cfg.Model.BaseURL
+// renderWelcomeBanner builds the unified startup/clear banner:
+//   - If width >= 76: full 72-col ASCII brand wordmark in brandGreen
+//   - If width < 76: compact single-line heading (✻ OpenPanda v...)
+//   - Version, Node & Model, Working Directory
+//   - Interactive tips (commands, file attach, help guide)
+func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th theme) string {
+	if width <= 0 {
+		width = 80
+	}
+	uni := th.unicode
+
+	model := i18n.T(loc, "repl.banner.noModel")
+	nodeName := ""
+	workPath := ""
+	if cfg != nil {
+		nodeName = cfg.Node.Name
+		workPath = cfg.Storage.WorkPath
+		if cfg.Model.BaseURL != "" {
+			model = cfg.Model.Model
+			if model == "" {
+				model = cfg.Model.BaseURL
+			}
+			if strings.TrimSpace(cfg.Model.APIKey) == "" {
+				model += " · " + i18n.T(loc, "repl.banner.noKey")
+			}
 		}
 	}
-	// The facts hang under the star as an indented group with a blank line above
-	// them, so the frame reads as a greeting with a heading instead of four stacked
-	// status lines. Each line is clipped to the frame rather than left to wrap: a
-	// wrapped banner grows the box a row at a time as the terminal narrows, and a
-	// path broken across two lines is harder to read than an elided one. The
-	// working directory keeps its tail — the last segments are what identifies it.
-	w := m.textWidth()
-	inner := max(4, w-2)
-	uni := m.th.unicode
+
+	contentWidth := max(20, width-2)
 	var sb strings.Builder
-	sb.WriteString(m.th.heading.Render(cliui.Truncate(
-		m.th.glyph("✻", "*")+" "+i18n.T(m.loc, "repl.banner.title")+" v"+version, w, uni)))
+
+	if width >= 76 {
+		for i, line := range figlet("OpenPanda") {
+			if i > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(th.accent.Render(line))
+		}
+		sb.WriteString("\n\n")
+		sb.WriteString(th.heading.Render("  " + i18n.T(loc, "repl.banner.title") + " v" + version))
+	} else {
+		sb.WriteString(th.heading.Render(cliui.Truncate(
+			"  "+th.glyph("✻", "*")+" "+i18n.T(loc, "repl.banner.title")+" v"+version, width, uni)))
+	}
+
 	sb.WriteString("\n")
-	sb.WriteString("\n  " + m.th.muted.Render(cliui.Truncate(
-		i18n.Tf(m.loc, "repl.banner.node", "node", m.r.cfg.Node.Name, "model", model), inner, uni)))
-	sb.WriteString("\n  " + m.th.muted.Render(cliui.TruncateTail(
-		i18n.Tf(m.loc, "repl.banner.dir", "dir", m.r.cfg.Storage.WorkPath), inner, uni)))
-	sb.WriteString("\n  " + m.th.muted.Render(cliui.Truncate(i18n.T(m.loc, "tui.welcome.tips"), inner, uni)))
-	return m.th.welcome.Width(w + 2).Render(sb.String())
+	sb.WriteString(th.muted.Render("  " + cliui.Truncate(
+		i18n.Tf(loc, "repl.banner.node", "node", nodeName, "model", model), contentWidth, uni)))
+	sb.WriteString("\n")
+	sb.WriteString(th.muted.Render("  " + cliui.TruncateTail(
+		i18n.Tf(loc, "repl.banner.dir", "dir", workPath), contentWidth, uni)))
+	sb.WriteString("\n\n")
+	sb.WriteString(th.muted.Render("  " + cliui.Truncate(
+		i18n.T(loc, "tui.welcome.tips"), contentWidth, uni)))
+
+	if isLinuxConsole() {
+		sb.WriteString("\n" + th.warn.Render("  ! bare console font has no CJK glyphs; answers are forced to English."))
+		sb.WriteString("\n" + th.warn.Render("    for Chinese on this screen: sudo apt install fbterm fonts-wqy-zenhei && fbterm"))
+	}
+
+	return sb.String()
+}
+
+// welcome is the startup banner pushed into scrollback: the wordmark, version,
+// node/model, working directory and orientation tips.
+func (m tuiModel) welcome() string {
+	w := m.width
+	if w <= 0 {
+		w = 80
+	}
+	cfg := (*config.Config)(nil)
+	if m.r != nil {
+		cfg = m.r.cfg
+	}
+	return renderWelcomeBanner(cfg, m.loc, w, m.th)
 }
 
 // textWidth is the usable content width inside the frame (terminal minus the

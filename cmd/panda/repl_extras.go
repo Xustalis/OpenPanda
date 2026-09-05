@@ -373,3 +373,17 @@ func (r *repl) cmdProjectEnter(arg string) {
 	r.convo = loadConvo()
 	fmt.Println(i18n.Tf(r.loc, "cli.project.entered", "name", name))
 }
+
+// cmdVersion reports the current OpenPanda version and runtime environment.
+func (r *repl) cmdVersion(arg string) {
+	p := pal()
+	fmt.Printf("%s v%s (%s/%s)\n", p.Bold("OpenPanda"), version, runtime.GOOS, runtime.GOARCH)
+	if r.cfg != nil {
+		if r.cfg.Node.Name != "" {
+			fmt.Printf("  %-10s %s\n", i18n.T(r.loc, "repl.footer.node")+":", r.cfg.Node.Name)
+		}
+		if r.cfg.Model.Name != "" {
+			fmt.Printf("  %-10s %s\n", "model:", r.cfg.Model.Name)
+		}
+	}
+}
