@@ -201,7 +201,10 @@ func TestAskTurnsMaxRoundsConverges(t *testing.T) {
 	}
 	e.client.Store(client)
 
-	res, err := e.AskTurns(context.Background(), nil, "hi", "", true, StreamCallbacks{})
+	// "run" keeps the ask off the Tier-1 fast path (a bare greeting like "hi"
+	// is now answered conversationally, without the tool loop this test
+	// exercises).
+	res, err := e.AskTurns(context.Background(), nil, "run the echo tool", "", true, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("ask: %v", err)
 	}
