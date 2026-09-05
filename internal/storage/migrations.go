@@ -38,6 +38,16 @@ var migrations = []Migration{
 	{Version: 13, Name: "add_result_outbox", Apply: migrateV13},
 	{Version: 14, Name: "add_cancel_outbox", Apply: migrateV14},
 	{Version: 15, Name: "add_projects_and_settings", Apply: migrateV15},
+	{Version: 16, Name: "add_delegation_metrics_cost", Apply: migrateV16},
+}
+
+// migrateV16 adds cost to delegation_metrics for token-cost accounting.
+func migrateV16(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "delegation_metrics")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "delegation_metrics", "cost", "REAL")
 }
 
 // migrateV15 adds projects and settings.

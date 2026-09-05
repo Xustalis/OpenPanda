@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -54,6 +55,21 @@ func TestResultBlockAnswer(t *testing.T) {
 	}
 }
 
+func TestResultBlockCostMeta(t *testing.T) {
+	res := &askengine.Result{
+		Kind:         "answer",
+		Answer:       "hello",
+		InputTokens:  1000,
+		OutputTokens: 200,
+		Latency:      1500 * time.Millisecond,
+		Cost:         0.0035,
+	}
+	b := resultBlock(res, "", loc)
+	if !strings.Contains(b.meta, "1.5s") || !strings.Contains(b.meta, "1.2k tokens") || !strings.Contains(b.meta, "($0.0035)") {
+		t.Fatalf("expected b.meta to contain latency, tokens and cost, got %q", b.meta)
+	}
+}
+
 // TestResultBlockTask distinguishes a succeeded task (its stdout, success tint)
 // from a failed one (exit code + stderr).
 func TestResultBlockTask(t *testing.T) {
@@ -96,6 +112,32 @@ func TestResultBlockTaskReport(t *testing.T) {
 	b = resultBlock(out, "", loc)
 	if !strings.Contains(b.body, "构建通过") || !strings.Contains(b.body, "exit 2") {
 		t.Fatalf("failed round body: %q", b.body)
+	}
+}
+
+// TestResultBlockExecutionAttribution verifies that a completed task block
+// retains and renders its executor agent, model, and injection status.
+func TestResultBlockExecutionAttribution(t *testing.T) {
+	out := &askengine.Result{
+		Kind:      "task",
+		OK:        true,
+		TaskID:    "t-attr",
+		TaskState: "done",
+		Agent:     "claude_code",
+		Model:     "deepseek-v4-flash",
+		Injected:  true,
+		Answer:    "已抓取到最新要闻",
+	}
+	b := resultBlock(out, "", i18n.ChineseSimp)
+	if b.agent != "claude_code" || b.model != "deepseek-v4-flash" || !b.injected {
+		t.Fatalf("resultBlock did not capture execution attribution: %+v", b)
+	}
+	rendered := b.render(newTheme(i18n.ChineseSimp), 80, false)
+	if !strings.Contains(rendered, "claude_code (deepseek-v4-flash)") {
+		t.Fatalf("rendered block should contain agent and model: %q", rendered)
+	}
+	if !strings.Contains(rendered, "模型能力已注入") {
+		t.Fatalf("rendered block should indicate model injection: %q", rendered)
 	}
 }
 

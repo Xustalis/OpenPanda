@@ -1,4 +1,4 @@
-# 更新日志
+# [](https://)更新日志
 
 [English](CHANGELOG.md) · [简体中文](CHANGELOG.zh-CN.md) · [日本語](CHANGELOG.ja.md) · [Español](CHANGELOG.es.md) · [Deutsch](CHANGELOG.de.md)
 
@@ -41,9 +41,11 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 ### 修复
 
 - **`/lang` 现在真正切换界面语言** —— 此前切换只更新了经典 REPL 循环的文案；TUI 的菜单、状态行与帮助文本仍持有启动时的 locale 快照，除确认行外整个界面都停留在旧语言。现在所选语言会同步到整个界面，并以 `ui.locale` 持久化到 config.yaml，重启后依然生效（配置优先于环境检测）。
+- **凭据兜底注入后的元数据丢失** —— 修复了当 Agent 本地凭证失效（401/403/额度不足）触发调度器自动注入配置模型兜底运行后，执行结果未能正确向上传递 `Injected` 标记及模型名称，导致核心层未发出 `model_injection` 事件及注入通知的问题。
 
 ### 新增
 
+- **执行过程与模型调度全透明展示** —— 彻底打开黑盒：Agent 运行时执行的各项操作（如 `Bash: curl ...`、文件读写、工具调用等）现在通过 `EvProgress` 实时同步推送到 TUI 运行卡片与足迹跟踪中；在任务完成后的卡片与终端输出中，新增轻量调度归属提示（例如 `⎿ 调度执行：claude_code (deepseek-v4-flash) · 模型能力已注入`），让用户直观看到是哪个 Agent 调度了何种模型、调用了哪些工具去完成任务，确保每一步执行真实可见，方便准确核对 Token 账单与外部网络请求。
 - **斜杠菜单的参数候选** —— 带枚举参数的命令（`/lang`、`/resume`、`/config set` 等）在命令名后输入空格即弹出与命令列表相同的方向键菜单：↑↓ 移动、Tab 补全、Enter 选中并执行、Esc 关闭；手动输入参数的原有方式完全保留。
 - **审批卡方向键选择** —— 二级审批提示现在可用 ↑↓/←→ 加 Enter 回答（焦点默认落在"拒绝"，与原有默认一致），原 y/n/Esc 热键保持不变。
 
@@ -138,7 +140,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **`panda voice`** — 唤醒词 → ASR → 同一条入口管线 → TTS：无键盘设备的桌宠入口（c10b8af）。
 - **`panda card show | rescan | edit | set`** — 一个命令族管理能力卡：打印（及来源文件）、重扫硬件与已装 agent CLI（`rescan` 打印差异，`--write` 应用并保留 `.bak`，手写决策不被覆盖）、用 `$EDITOR` 编辑、或无头地设置字段。`panda detect`、卡的 rescan 与面板共用同一检测层（`internal/hwinfo`）（fdb56b8）。
 - **CLI 的展示层** — `internal/cliui`：一次性解析的统一调色板，以及实时状态行（spinner、动词、耗时、token 数——后两者早已记录、只是从未展示），管道输出时退化为静态行。行编辑器学会括号粘贴与多行输入（粘贴多行提示词只触发一次 ask，历史也按单条回放）、Ctrl-R 增量历史搜索、以及没人愿意重打的 id 的参数位补全。未知命令给出 did-you-mean；`/help` 按意图分组内联打印；新命令覆盖第一次 ask 跑通后自然会需要的东西（`/cost`、`/model`、`/status`、`/doctor`、`/export`、`/clear`），外加 `@file` 附件与 `!cmd` 直通，让人不必离开提示符（c538ab6）。
-- **Web 聊天界面补课** — 手写 Markdown 渲染器（零 `innerHTML`，因此无需 sanitizer 依赖；29 个 node 测试）替换回复里的字面 `**bold**` 与 ``` 围栏；流式期间输入框主按钮变为停止按钮（SSE 读取器接受 AbortSignal）；读者上滚后自动滚动不再拉扯视图；Cmd+K 命令面板与侧边栏共用同一导航词汇；移动端会话抽屉替代 `display:none`（c538ab6）。
+- **Web 聊天界面补课** — 手写 Markdown 渲染器（零 `innerHTML`，因此无需 sanitizer 依赖；29 个 node 测试）替换回复里的字面 `**bold**` 与 ```围栏；流式期间输入框主按钮变为停止按钮（SSE 读取器接受 AbortSignal）；读者上滚后自动滚动不再拉扯视图；Cmd+K 命令面板与侧边栏共用同一导航词汇；移动端会话抽屉替代`display:none`（c538ab6）。
 - **状态页** — `docs/status.md` 记录哪些能用、哪些只是构建了、哪些缺失，含旗舰流水线的验证状态（76c5b69）。
 - **过期节点行可移除** — `panda nodes remove <id>` 与离线节点卡上的移除按钮，删除已无活跃 peer 支撑的目录行（改过名的机器、换了身份的 peer、退役节点）。本机自己的行与在线节点会被拒绝——它们会自行重新注册，"移除"只会是一次穿着成功消息的无操作。
 - **Release 说明工具链** — release 工作流把版本对应的 CHANGELOG 段落加各平台安装命令发布为 release 正文，段落缺失时构建失败；0.0.5 release 页按该标准重写为纯英文正文加语言切换器；每个 CHANGELOG 顶部加一键安装（4e12779, c25a3cb, 98e10df, 600ffb3）。
@@ -164,7 +166,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 - **队列任务支持跨设备路由** — `panda task add` 与 Web 控制台创建的任务此前只由发起节点认领执行：任务所需能力只在其他设备上时直接失败（在 Mac 上提交 `pi.uptime` 报 `route: no capability matches`）。调度器认领时现在会咨询根调度器：本节点无匹配即把认领改派给有能力的 peer（含已拒绝节点环路保护、lease 检测执行节点死亡），peer 的结果回填发起节点的任务行。实验室三个方向实测：Mac→OrangePi、OrangePi→Mac、Windows→OrangePi 全部完成（c4e1bc7）。
 - **Tier-2 授权随委派传递** — `--authorize` 的授权此前只在提交节点本地生效：委派到 peer 的 agent 任务到了执行节点被防御层拒绝，即使用户已批准。授权现在随认证总线传递、执行节点照常放行——无凭证的香橙派向 Mac 的 claude 提交已授权 coding 任务，现在能跑完而不是死在 review（c4e1bc7）。
-- **被锁死的 agent CLI 不再吸引路由** — 能力卡是静态的，但已安装的 CLI 可能不可用：Windows 上的 `claude.exe` 无登录态、节点又没配模型 key，却向集群宣告 `agent:*`；路由把 coding 任务派过去，挂起数分钟后才以网络错误失败。本地回退链与 hello 宣告的能力摘要现在都按可用性把关——CLI 在 PATH *且* 模型可达（自带凭证或可注入）；该 Windows 节点的摘要现在只宣告 `win.sysinfo`（2db530f）。
+- **被锁死的 agent CLI 不再吸引路由** — 能力卡是静态的，但已安装的 CLI 可能不可用：Windows 上的 `claude.exe` 无登录态、节点又没配模型 key，却向集群宣告 `agent:*`；路由把 coding 任务派过去，挂起数分钟后才以网络错误失败。本地回退链与 hello 宣告的能力摘要现在都按可用性把关——CLI 在 PATH _且_ 模型可达（自带凭证或可注入）；该 Windows 节点的摘要现在只宣告 `win.sysinfo`（2db530f）。
 - **`panda web` 端口被占不再报错退出** — 第二次 `/web`（或残留进程）此前报 `bind: address already in use`，还要用户手动复制 token。控制台现在自动换到相邻端口并明确提示；浏览器直接带凭证打开（token 不再打印），`/web` 已在运行时会重新打开已登录的浏览器。`--no-browser` 仍打印带 token 的 URL 供手动使用（c4e1bc7）。
 - **Peer hello 上报真实版本号** — 三条 hello 路径此前广播硬编码的 `0.1.0-dev`，混合版本集群里 `panda nodes` 显示的版本全是错的；现在统一上报 `version.Version`（实验室三台设备均显示 0.0.5）（2db530f）。
 - **配置文件旁的能力卡优先于 `./capabilities.yaml`** — 在恰好含有 capabilities.yaml 的目录（仓库检出、其他节点的卡）启动 daemon 会静默加载错误的卡；现在优先加载 init 写在配置文件旁边的卡，`--card` 显式指定仍然最高（2db530f）。
@@ -195,7 +197,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
   2. `config.Load()` 运行 `resolveRelativePaths()`，把 YAML 里遗留的相对路径按「YAML 自己所在目录」重定位，保证 pre-v0.0.4 的 `panda init` 写出来的旧配置读的还是 YAML 旁边的 data 目录，不是 shell cwd。
   3. `storage.Open()` 无论手工指定什么怪路径都会 `MkdirAll` 数据库的父目录。
   4. `panelStore()`（REPL、`panda web`、面板命令、queue/task 等入口共用）现在像 `runDaemon` 一样一次性创建完整存储目录。
-  冒烟验证：用全新 HOME 从 `/` 下 `panda queue` → 自动创建用户数据目录并初始化 DB，输出队列为空。
+     冒烟验证：用全新 HOME 从 `/` 下 `panda queue` → 自动创建用户数据目录并初始化 DB，输出队列为空。
 - **Anthropic 路径空 key 误诊**——非流式调用在未配置 key 时照样发出空 key 请求，把服务商的 401 报成「key 无效」而不是「未配置」。现在所有调用路径返回可操作的 `panda init` / Web 设置页提示；REPL 横幅内联标注未配 key 的模型；面板把配置缺口报为 503（与「引擎未配置」同类）而非服务器错误 500。
 - **tier-2 授权体验**——tier-2 拒绝现在附带可操作提示（`--authorize` 或能力卡 `tier: 1` 声明），并跳过重试预算直接进入 review：重试不可能产生授权。注册表驱动的凭证探测覆盖 Claude Code 新版 `~/.claude/config.json` + `settings.json` 位置。scope 解析只提取路径 token，自然语言描述（如「工作目录下的 haiku.txt」）不再对合法文件操作误报 drift。
 - **安装器 / 卸载器**——`install.sh` 支持断点续传（`curl -C -`），PATH 持久化与 `panda install` 写同一标记块，生成的 LaunchAgent/systemd 服务依赖 daemon 的配置自动发现而非硬编码 `--config`/`--card` 路径。`panda uninstall` 清扫发行前缀（bin/、adapters/、示例配置），拒绝动 Homebrew Cellar（keg 保持完整，提示 `brew uninstall openpanda`）与源码 checkout。
@@ -254,7 +256,7 @@ CLI 优先的版本：内核重设计（stage A–C）落地——每项 Web 能
 ### 问题修复
 
 - **适配器全时段超时**——CLI 中途卡死（管道开着、无输出）会让读取循环永久阻塞，超时只覆盖 stdout EOF 之后；现在 CLI 跑在独立进程组，看门狗线程到期限击杀整棵进程树（332f2d4）。
-- **Anthropic 工具 API 兼容**——tool_use 块现在总是携带 `input`（无参工具为空对象），此前严格的 Anthropic 兼容服务商（DeepSeek /anthropic）会以 400 拒绝后续轮次；带点工具名改为下划线以满足 `^[a-zA-Z0-9_-]+$`（93a453a）。
+- **Anthropic 工具 API 兼容**——tool*use 块现在总是携带 `input`（无参工具为空对象），此前严格的 Anthropic 兼容服务商（DeepSeek /anthropic）会以 400 拒绝后续轮次；带点工具名改为下划线以满足 `^[a-zA-Z0-9*-]+$`（93a453a）。
 - **codex 在非交互父进程下无法初始化**（首轮前写状态库与 PATH 别名即 EPERM）——改以 `-s danger-full-access` 运行，由 PANDA 外层沙箱约束（332f2d4）。
 - **agent 失败原因为空**——适配器诊断信息现在镜像进 Stderr，`store.Fail` 与任务结果携带真实错误（93a453a）。
 - **互拨重连风暴**——去重输家的最后一声 hello 走了注册表连接而非到达连接，导致其对端身份从未绑定、每秒重拨（实测 15 分钟 869 次，现仅 1 次）（93a453a）。

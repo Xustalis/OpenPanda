@@ -73,6 +73,19 @@ type Known struct {
 	// that supports MCP can discover project .mcp.json servers; an agent
 	// that supports Subagents can delegate work to its own child agents.
 	Capabilities Capabilities
+	// SelfContainedModel is true when the agent ships with its own built-in
+	// free or local model provider (e.g. OpenCode's opencode/deepseek-v4-flash-free),
+	// requiring no external API keys or configuration to be viable.
+	SelfContainedModel bool
+	// DefaultCapabilities are the task capabilities this agent provides when
+	// generating capability cards (panda detect).
+	DefaultCapabilities []string
+	// DefaultBestAt are the specialized task tags this agent excels at.
+	DefaultBestAt []string
+	// DefaultCostTier is the routing cost tier ("low", "low_medium", "medium", "medium_high", "high").
+	DefaultCostTier string
+	// DefaultTier is the capability tier (default: 2).
+	DefaultTier int
 }
 
 // Capabilities describes the native feature surface one agent CLI exposes.
@@ -149,16 +162,31 @@ var known = []Known{
 			SupportsMCP:       true,
 			SupportsSubagents: true,
 		},
+		DefaultCapabilities: []string{"coding", "shell", "file_edit", "refactoring"},
+		DefaultBestAt:       []string{"multi_file_edits", "code_search", "refactoring", "complex_reasoning"},
+		DefaultCostTier:     "medium_high",
+		DefaultTier:         2,
 	},
 	{
-		Name:              "opencode",
-		Adapter:           "opencode.py",
-		Binaries:          []string{"opencode"},
-		DisplayName:       "OpenCode",
-		InstallHint:       "curl -fsSL https://opencode.ai/install | bash",
-		InstallURL:        "https://opencode.ai/docs",
-		CredentialEnvVars: []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
-		CredentialFiles:   []string{".config/opencode/opencode.json", ".config/opencode/auth.json"},
+		Name:               "opencode",
+		Adapter:            "opencode.py",
+		Binaries:           []string{"opencode"},
+		DisplayName:        "OpenCode",
+		InstallHint:        "curl -fsSL https://opencode.ai/install | bash",
+		InstallURL:         "https://opencode.ai/docs",
+		SelfContainedModel: true,
+		CredentialEnvVars:  []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
+		CredentialFiles:    []string{".config/opencode/opencode.json", ".config/opencode/opencode.jsonc", ".config/opencode/auth.json"},
+		ModelEnv: &ModelEnvMapping{
+			APIType: "openai",
+			BaseURL: "OPENAI_BASE_URL",
+			APIKey:  "OPENAI_API_KEY",
+			Model:   "OPENCODE_MODEL",
+		},
+		DefaultCapabilities: []string{"coding", "shell", "file_edit", "scripts"},
+		DefaultBestAt:       []string{"fast_scripts", "quick_edits", "code_search"},
+		DefaultCostTier:     "low",
+		DefaultTier:         2,
 	},
 	{
 		Name:              "codex",
@@ -176,14 +204,30 @@ var known = []Known{
 			APIKey:  "OPENAI_API_KEY",
 			Model:   "OPENAI_MODEL",
 		},
+		DefaultCapabilities: []string{"coding", "shell", "file_edit", "code_review"},
+		DefaultBestAt:       []string{"code_review", "running_tests", "multi_file_edits"},
+		DefaultCostTier:     "medium",
+		DefaultTier:         2,
 	},
 	{
-		Name:        "grok_build",
-		Adapter:     "grok_build.py",
-		Binaries:    []string{"grok"},
-		DisplayName: "Grok Build (xAI)",
-		InstallHint: "curl -fsSL https://x.ai/cli/install.sh | bash",
-		InstallURL:  "https://docs.x.ai/build/overview",
+		Name:              "grok_build",
+		Adapter:           "grok_build.py",
+		Binaries:          []string{"grok"},
+		DisplayName:       "Grok Build (xAI)",
+		InstallHint:       "curl -fsSL https://x.ai/cli/install.sh | bash",
+		InstallURL:        "https://docs.x.ai/build/overview",
+		CredentialEnvVars: []string{"XAI_API_KEY", "GROK_API_KEY"},
+		CredentialFiles:   []string{".grok/config.toml", ".grok/auth.json"},
+		ModelEnv: &ModelEnvMapping{
+			APIType: "openai",
+			BaseURL: "GROK_BASE_URL",
+			APIKey:  "XAI_API_KEY",
+			Model:   "GROK_MODEL",
+		},
+		DefaultCapabilities: []string{"coding", "shell", "file_edit", "build"},
+		DefaultBestAt:       []string{"build_diagnostics", "code_search", "refactoring"},
+		DefaultCostTier:     "medium",
+		DefaultTier:         2,
 	},
 	{
 		Name:              "deepseek_harness",
@@ -193,20 +237,37 @@ var known = []Known{
 		InstallHint:       "npm install -g @deepseek-ai/dsh",
 		InstallURL:        "https://github.com/deepseek-ai/deepseek-harness",
 		CredentialEnvVars: []string{"DEEPSEEK_API_KEY"},
+		CredentialFiles:   []string{".dsh/config.json", ".dsh/auth.json"},
 		ModelEnv: &ModelEnvMapping{
 			APIType: "openai",
 			BaseURL: "DEEPSEEK_BASE_URL",
 			APIKey:  "DEEPSEEK_API_KEY",
 			Model:   "DEEPSEEK_MODEL",
 		},
+		DefaultCapabilities: []string{"coding", "shell", "file_edit", "deepseek"},
+		DefaultBestAt:       []string{"code_generation", "code_explanation"},
+		DefaultCostTier:     "low",
+		DefaultTier:         2,
 	},
 	{
-		Name:        "openclaw",
-		Adapter:     "openclaw.py",
-		Binaries:    []string{"openclaw"},
-		DisplayName: "OpenClaw",
-		InstallHint: "curl -fsSL https://openclaw.ai/install.sh | bash",
-		InstallURL:  "https://docs.openclaw.ai/",
+		Name:              "openclaw",
+		Adapter:           "openclaw.py",
+		Binaries:          []string{"openclaw"},
+		DisplayName:       "OpenClaw",
+		InstallHint:       "curl -fsSL https://openclaw.ai/install.sh | bash",
+		InstallURL:        "https://docs.openclaw.ai/",
+		CredentialEnvVars: []string{"OPENCLAW_API_KEY", "OPENAI_API_KEY"},
+		CredentialFiles:   []string{".openclaw/config.json", ".openclaw/auth.json"},
+		ModelEnv: &ModelEnvMapping{
+			APIType: "openai",
+			BaseURL: "OPENAI_BASE_URL",
+			APIKey:  "OPENCLAW_API_KEY",
+			Model:   "OPENCLAW_MODEL",
+		},
+		DefaultCapabilities: []string{"coding", "shell", "file_edit", "automation"},
+		DefaultBestAt:       []string{"automation", "shell_execution"},
+		DefaultCostTier:     "medium",
+		DefaultTier:         2,
 	},
 	{
 		Name:              "hermes",
@@ -216,12 +277,17 @@ var known = []Known{
 		InstallHint:       "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
 		InstallURL:        "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
 		CredentialEnvVars: []string{"OPENAI_API_KEY", "HERMES_API_KEY"},
+		CredentialFiles:   []string{".hermes/auth.json", ".hermes/config.yaml", ".hermes/.env"},
 		ModelEnv: &ModelEnvMapping{
 			APIType: "openai",
 			BaseURL: "OPENAI_BASE_URL",
 			APIKey:  "OPENAI_API_KEY",
 			Model:   "OPENAI_MODEL",
 		},
+		DefaultCapabilities: []string{"coding", "shell", "file_edit", "long_running"},
+		DefaultBestAt:       []string{"long_running_tasks", "shell_execution", "multi_file_edits"},
+		DefaultCostTier:     "low_medium",
+		DefaultTier:         2,
 	},
 }
 

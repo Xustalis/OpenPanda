@@ -31,6 +31,7 @@ const minLeaseRenewInterval = 200 * time.Millisecond
 // runtime: renewLease heartbeats it while execution is live.
 func (c *Core) SetTimeouts(t config.TimeoutsConfig) {
 	commander.SetAgentTimeout(t.AgentTimeout())
+	commander.SetSilenceTimeout(t.SilenceTimeout())
 	lease := t.TaskLease()
 	if floor := commander.AgentHardTimeout() * 2; lease < floor {
 		c.logger.Warn("task lease raised above the agent hard timeout",

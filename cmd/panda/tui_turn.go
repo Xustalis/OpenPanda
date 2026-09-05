@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
@@ -166,6 +167,16 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 		if out.TaskID != "" && out.TaskState != "" {
 			meta = i18n.Tf(loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState)
 		}
+		appendCostMeta := func(base string) string {
+			cm := resultCostMeta(out)
+			if cm == "" {
+				return base
+			}
+			if base == "" {
+				return cm
+			}
+			return base + " · " + cm
+		}
 		// Sub-agent round: the converged report is the reply — it streamed
 		// live into this turn's answer region, so the committed body is the
 		// model's report with the raw agent output demoted to a pointer
@@ -179,18 +190,18 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 			if out.TaskID != "" && out.TaskState != "" {
 				meta = i18n.Tf(loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
 			}
-			return block{kind: blockTask, ok: out.OK, body: body, meta: meta}
+			return block{kind: blockTask, ok: out.OK, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
 		}
 		// LLM-generated summary: the dedicated "report after execution" call
 		// fills Report so the user sees a human-readable summary instead of
 		// raw stdout/stderr.
 		if summary := strings.TrimSpace(out.Report); summary != "" {
-			return block{kind: blockTask, ok: out.OK, body: summary, meta: meta}
+			return block{kind: blockTask, ok: out.OK, body: summary, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
 		}
 		if out.OK {
-			return block{kind: blockTask, ok: true, body: strings.TrimRight(out.Stdout, "\n"), meta: meta}
+			return block{kind: blockTask, ok: true, body: strings.TrimRight(out.Stdout, "\n"), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
 		}
-		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, out.Stderr), meta: meta}
+		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, out.Stderr), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
 	case "plan":
 		// A plan that failed to start has no board to follow and no stages, so
 		// its summary line would read "plan  · 0 stages" — a failure rendered
@@ -208,8 +219,29 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 		if note := strings.TrimSpace(out.Note); note != "" {
 			body = note + "\n" + body
 		}
-		return block{kind: blockAnswer, body: body}
+		return block{kind: blockAnswer, body: body, meta: resultCostMeta(out)}
 	}
+}
+
+func resultCostMeta(out *askengine.Result) string {
+	if out == nil {
+		return ""
+	}
+	var parts []string
+	if out.Latency > 0 {
+		parts = append(parts, cliui.HumanDuration(out.Latency))
+	}
+	tok := out.Tokens()
+	if tok > 0 {
+		parts = append(parts, cliui.HumanCount(tok)+" tokens")
+	}
+	if out.Cost > 0 {
+		parts = append(parts, fmt.Sprintf("($%.4f)", out.Cost))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " · ")
 }
 
 // planSummaryLine is the one-line commit for a started plan: a plan runs

@@ -56,6 +56,9 @@ func (r *repl) cmdCost(arg string) {
 	}
 	fmt.Printf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.in"), cliui.HumanCount(r.costIn))
 	fmt.Printf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.out"), cliui.HumanCount(r.costOut))
+	if r.costTotalUSD > 0 {
+		fmt.Printf("  %-14s $%.4f\n", i18n.T(r.loc, "repl.cost.est"), r.costTotalUSD)
+	}
 }
 
 // cmdModel is implemented in modelcmd.go — the multi-model registry that

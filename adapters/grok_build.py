@@ -44,6 +44,9 @@ def main():
     session = req.resume or "panda-" + uuid.uuid4().hex[:12]
     cmd = ["grok", "-s", session, "--single", prompt,
            "--output-format", "plain", "--always-approve"]
+    model = os.environ.get("GROK_MODEL", "")
+    if model:
+        cmd += ["--model", model]
 
     try:
         returncode, out, err = harness.run_plain(cmd, cwd=cwd, timeout=timeout)

@@ -14,6 +14,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
@@ -38,6 +39,7 @@ func TestAskRecordsEntryUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	client.SetPricing(providers.Pricing{InputPerMillion: 10.0, OutputPerMillion: 20.0})
 	db, err := storage.Open(filepath.Join(root, "test.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +67,10 @@ func TestAskRecordsEntryUsage(t *testing.T) {
 		t.Fatalf("res = %+v, want the answer 你好呀", res)
 	}
 
+	if res.Cost <= 0 {
+		t.Fatalf("expected res.Cost > 0, got %f", res.Cost)
+	}
+
 	metrics, err := core.NewTaskStore(db, nil).ListDelegationMetrics(context.Background())
 	if err != nil {
 		t.Fatalf("list metrics: %v", err)
@@ -75,6 +81,9 @@ func TestAskRecordsEntryUsage(t *testing.T) {
 			found = true
 			if !m.Tokens.Valid || m.Tokens.Int64 != 14 {
 				t.Fatalf("entry usage tokens = %+v, want 14 (8 in + 6 out)", m.Tokens)
+			}
+			if !m.Cost.Valid || m.Cost.Float64 <= 0 {
+				t.Fatalf("entry usage cost = %+v, want valid > 0", m.Cost)
 			}
 		}
 	}

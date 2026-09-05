@@ -57,7 +57,7 @@ def main():
         cmd.append("--ephemeral")
     # Model selection is Codex-specific; Anthropic variables must not leak
     # into this provider contract.
-    model = os.environ.get("CODEX_MODEL", "")
+    model = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL", "")
     if model:
         cmd += ["--model", model]
     cmd.append(prompt)

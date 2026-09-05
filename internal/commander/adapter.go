@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
@@ -32,6 +33,18 @@ func WithAgentTimeout(ctx context.Context, d time.Duration) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, timeoutKey{}, d)
+}
+
+// silenceTimeoutKey is the context key carrying a per-task silence timeout override.
+type silenceTimeoutKey struct{}
+
+// WithSilenceTimeout attaches a progress silence limit to the context; runAdapterProcess
+// aborts if no progress or output is received for this duration.
+func WithSilenceTimeout(ctx context.Context, d time.Duration) context.Context {
+	if d <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, silenceTimeoutKey{}, d)
 }
 
 // progressKey is the context key carrying the live progress sink from the
@@ -95,8 +108,9 @@ func WithProgress(ctx context.Context, fn ProgressFunc) context.Context {
 // are called from the cmd's scanner goroutine (cmd.Run's copier), so the
 // sink must be safe for concurrent use — RecordEvent is.
 type progressWriter struct {
-	capture executil.Capture
-	sink    ProgressFunc
+	capture    executil.Capture
+	sink       ProgressFunc
+	onActivity func()
 	// partial holds the bytes of the current line that have no terminating
 	// '\n' yet. The pipe copier may split one stderr line across several
 	// Write calls; buffering here keeps a split line from being misread as a
@@ -110,6 +124,9 @@ type progressWriter struct {
 const maxProgressLine = 4096
 
 func (w *progressWriter) Write(p []byte) (int, error) {
+	if w.onActivity != nil && len(p) > 0 {
+		w.onActivity()
+	}
 	w.partial = append(w.partial, p...)
 	for {
 		i := bytes.IndexByte(w.partial, '\n')
@@ -125,6 +142,22 @@ func (w *progressWriter) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// activityWriter wraps an executil.Capture and triggers onActivity on every write.
+type activityWriter struct {
+	capture    executil.Capture
+	onActivity func()
+}
+
+func (a *activityWriter) Write(p []byte) (int, error) {
+	if a.onActivity != nil && len(p) > 0 {
+		a.onActivity()
+	}
+	return a.capture.Write(p)
+}
+
+func (a *activityWriter) Bytes() []byte  { return a.capture.Bytes() }
+func (a *activityWriter) String() string { return a.capture.String() }
 
 // line handles one complete, '\n'-terminated stderr line (a line is buffered
 // in partial by Write until its newline arrives).
@@ -314,12 +347,20 @@ func modelEnvForAdapter(model config.ModelConfig, adapter string) []string {
 		return nil
 	}
 	k, _ := agents.ByAdapter(adapter)
-	env := []string{
-		k.ModelEnv.BaseURL + "=" + effectiveBaseURL(model),
-		k.ModelEnv.APIKey + "=" + model.APIKey,
-		k.ModelEnv.Model + "=" + effectiveModelName(model),
-		"OPENPANDA_INJECTED_MODEL=1",
+	if k.ModelEnv == nil {
+		return nil
 	}
+	var env []string
+	if k.ModelEnv.BaseURL != "" {
+		env = append(env, k.ModelEnv.BaseURL+"="+effectiveBaseURL(model))
+	}
+	if k.ModelEnv.APIKey != "" {
+		env = append(env, k.ModelEnv.APIKey+"="+model.APIKey)
+	}
+	if k.ModelEnv.Model != "" {
+		env = append(env, k.ModelEnv.Model+"="+effectiveModelName(model))
+	}
+	env = append(env, "OPENPANDA_INJECTED_MODEL=1")
 	if adapter == "claude_code.py" {
 		env = append(env, "ANTHROPIC_AUTH_TOKEN=")
 	}
@@ -390,6 +431,7 @@ const hardTimeoutGrace = 30 * time.Second
 var (
 	adapterTimeoutS    = defaultAdapterTimeoutS
 	adapterHardTimeout = defaultAdapterTimeoutS*time.Second + hardTimeoutGrace
+	silenceTimeout     time.Duration
 )
 
 // SetAgentTimeout retunes the agent-adapter execution budget. A deep-learning
@@ -403,6 +445,14 @@ func SetAgentTimeout(d time.Duration) {
 	}
 	adapterTimeoutS = int(d / time.Second)
 	adapterHardTimeout = d + hardTimeoutGrace
+}
+
+// SetSilenceTimeout retunes the progress silence limit. 0 means disabled.
+func SetSilenceTimeout(d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	silenceTimeout = d
 }
 
 // AgentHardTimeout reports the enforced wall-clock limit for one agent
@@ -422,6 +472,11 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	if d, ok := ctx.Value(timeoutKey{}).(time.Duration); ok && d > 0 {
 		timeout = int(d / time.Second)
 	}
+	silenceLimit := silenceTimeout
+	if d, ok := ctx.Value(silenceTimeoutKey{}).(time.Duration); ok && d > 0 {
+		silenceLimit = d
+	}
+
 	req := AdapterRequest{Prompt: prompt, TimeoutS: timeout, CWD: cwd}
 	if rid, ok := ctx.Value(resumeKey{}).(string); ok {
 		req.Resume = rid
@@ -440,6 +495,50 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	}
 	ctx, cancel := context.WithTimeout(ctx, adapterHardTimeout)
 	defer cancel()
+
+	var (
+		actMu        sync.Mutex
+		lastActivity = time.Now()
+		stalled      bool
+	)
+	touch := func() {
+		actMu.Lock()
+		lastActivity = time.Now()
+		actMu.Unlock()
+	}
+
+	if silenceLimit > 0 {
+		stopWatchdog := make(chan struct{})
+		defer close(stopWatchdog)
+		go func() {
+			tick := silenceLimit / 4
+			if tick < 50*time.Millisecond {
+				tick = 50 * time.Millisecond
+			}
+			t := time.NewTicker(tick)
+			defer t.Stop()
+			for {
+				select {
+				case <-stopWatchdog:
+					return
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					actMu.Lock()
+					silent := time.Since(lastActivity) >= silenceLimit
+					actMu.Unlock()
+					if silent {
+						actMu.Lock()
+						stalled = true
+						actMu.Unlock()
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+	}
+
 	cmd, ok := pyexec.Command(ctx, path)
 	if !ok {
 		// No interpreter on this host. Say so instead of exec'ing a name that
@@ -454,8 +553,10 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		}
 	}
 	cmd.Stdin = bytes.NewReader(reqJSON)
-	var stdout executil.Capture
+	var stdout activityWriter
+	stdout.onActivity = touch
 	var stderr progressWriter
+	stderr.onActivity = touch
 	if sink, ok := ctx.Value(progressKey{}).(ProgressFunc); ok {
 		stderr.sink = sink
 	}
@@ -464,6 +565,12 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	security.NewSandbox(cwd).Apply(cmd, env...)
 
 	if err := cmd.Run(); err != nil {
+		actMu.Lock()
+		wasStalled := stalled
+		actMu.Unlock()
+		if wasStalled {
+			return AgentResult{OK: false, Result: fmt.Sprintf("adapter stalled: no progress or output received for %v (silence timeout)", silenceLimit), ExitCode: 124}
+		}
 		if ctx.Err() == context.DeadlineExceeded {
 			return AgentResult{OK: false, Result: "adapter timed out (hard limit)", ExitCode: 124}
 		}

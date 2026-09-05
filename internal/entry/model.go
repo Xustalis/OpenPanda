@@ -87,6 +87,8 @@ type Client struct {
 	noAuth bool
 	// contextWindow is the advertised context length in tokens; 0 when unknown.
 	contextWindow int
+	// pricing is the cost structure per 1M tokens.
+	pricing providers.Pricing
 }
 
 // NewClient builds a client from the model config. A zero baseURL/model falls
@@ -168,6 +170,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 	if isDeepSeekModel(name) || isDeepSeekEndpoint(base) {
 		c.passback.Store(true)
 	}
+	c.pricing = providers.LookupPricing(model.Provider, name)
 	return c, nil
 }
 
@@ -237,6 +240,17 @@ func (c *Client) Provider() string { return c.provider }
 
 // ContextWindow returns the advertised context length in tokens, or 0 when unknown.
 func (c *Client) ContextWindow() int { return c.contextWindow }
+
+// Pricing returns the configured pricing structure.
+func (c *Client) Pricing() providers.Pricing { return c.pricing }
+
+// SetPricing updates the client's pricing model.
+func (c *Client) SetPricing(p providers.Pricing) { c.pricing = p }
+
+// EstimateCost calculates the estimated USD cost for the given input and output tokens.
+func (c *Client) EstimateCost(in, out int64) float64 {
+	return c.pricing.Cost(in, out)
+}
 
 // Usage is the provider-reported token consumption of one or more calls.
 type Usage struct {

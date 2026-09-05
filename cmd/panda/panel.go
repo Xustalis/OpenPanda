@@ -692,7 +692,7 @@ func runMetrics(args []string) {
 
 	if *asCSV {
 		w := csv.NewWriter(os.Stdout)
-		_ = w.Write([]string{"id", "task_id", "delegator", "executor", "abilities", "success", "latency_ms", "tokens", "created_at"})
+		_ = w.Write([]string{"id", "task_id", "delegator", "executor", "abilities", "success", "latency_ms", "tokens", "cost", "created_at"})
 		for _, m := range metrics {
 			abilities := ""
 			if m.AbilitiesJSON != "" {
@@ -707,6 +707,10 @@ func runMetrics(args []string) {
 			if m.Tokens.Valid {
 				tokens = strconv.FormatInt(m.Tokens.Int64, 10)
 			}
+			cost := ""
+			if m.Cost.Valid {
+				cost = strconv.FormatFloat(m.Cost.Float64, 'f', 6, 64)
+			}
 			_ = w.Write([]string{
 				strconv.FormatInt(m.ID, 10),
 				m.TaskID,
@@ -716,6 +720,7 @@ func runMetrics(args []string) {
 				strconv.FormatBool(m.Success),
 				strconv.FormatInt(m.LatencyMs, 10),
 				tokens,
+				cost,
 				ts(m.CreatedAt),
 			})
 		}
@@ -768,6 +773,9 @@ func printMetricsTable(loc i18n.Locale, metrics []core.DelegationMetric) {
 		tokens := "-"
 		if m.Tokens.Valid {
 			tokens = cliui.HumanCount(m.Tokens.Int64)
+			if m.Cost.Valid && m.Cost.Float64 > 0 {
+				tokens += fmt.Sprintf(" ($%.4f)", m.Cost.Float64)
+			}
 		}
 		fmt.Println(row(
 			cell(time.Unix(m.CreatedAt, 0).Format("01-02 15:04:05"), whenW),
@@ -796,6 +804,7 @@ func metricsSummary(loc i18n.Locale, metrics []core.DelegationMetric) string {
 	lat := make([]int64, 0, len(metrics))
 	var ok int
 	var tokens int64
+	var totalCost float64
 	for _, m := range metrics {
 		if m.Success {
 			ok++
@@ -803,16 +812,23 @@ func metricsSummary(loc i18n.Locale, metrics []core.DelegationMetric) string {
 		if m.Tokens.Valid {
 			tokens += m.Tokens.Int64
 		}
+		if m.Cost.Valid {
+			totalCost += m.Cost.Float64
+		}
 		lat = append(lat, m.LatencyMs)
 	}
 	sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
 	ms := func(v int64) string { return cliui.HumanDuration(time.Duration(v) * time.Millisecond) }
-	return i18n.Tf(loc, "cli.metrics.summary",
+	summary := i18n.Tf(loc, "cli.metrics.summary",
 		"n", strconv.Itoa(len(metrics)),
 		"ok", strconv.Itoa(ok),
 		"p50", ms(percentile(lat, 50)),
 		"p95", ms(percentile(lat, 95)),
 		"tokens", cliui.HumanCount(tokens))
+	if totalCost > 0 {
+		summary += fmt.Sprintf(" · $%.4f", totalCost)
+	}
+	return summary
 }
 
 // percentile returns the p-th percentile of a sorted slice (nearest-rank), 0 for

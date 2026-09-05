@@ -74,7 +74,11 @@ func progressNote(loc i18n.Locale, p askengine.Progress) string {
 	case askengine.ProgressPlan:
 		note = i18n.Tf(loc, "cli.progress.plan", "goal", p.Name)
 	case askengine.ProgressTool:
-		note = i18n.Tf(loc, "cli.progress.tool", "name", p.Name)
+		if strings.Contains(p.Name, ":") {
+			note = p.Name
+		} else {
+			note = i18n.Tf(loc, "cli.progress.tool", "name", p.Name)
+		}
 	case askengine.ProgressRoute:
 		// A locally-executed task carries the scheduler's "local" action as its
 		// target; phrase it as the user's own node instead of leaking jargon.
@@ -84,7 +88,11 @@ func progressNote(loc i18n.Locale, p askengine.Progress) string {
 		}
 		note = i18n.Tf(loc, "cli.progress.route", "node", node)
 	case askengine.ProgressExec:
-		note = i18n.Tf(loc, "cli.progress.exec", "agent", p.Name)
+		agentLabel := p.Name
+		if p.Model != "" {
+			agentLabel = fmt.Sprintf("%s (%s)", p.Name, p.Model)
+		}
+		note = i18n.Tf(loc, "cli.progress.exec", "agent", agentLabel)
 	case askengine.ProgressJudge:
 		note = i18n.T(loc, "cli.progress.judge")
 	default:

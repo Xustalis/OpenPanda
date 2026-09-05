@@ -32,6 +32,8 @@ func TestProgressForEvent(t *testing.T) {
 		// Supervision rounds carry their position in the loop; renderers use it
 		// to say "round 2/5" once a task goes multi-round.
 		{"exec carries round and budget", core.EvExecAgentStart, map[string]any{"agent": "claude_code", "round": 2, "budget": 5}, Progress{Kind: ProgressExec, Name: "claude_code", Round: 2, Budget: 5}, true},
+		{"exec carries model", core.EvExecAgentStart, map[string]any{"agent": "claude_code", "model": "deepseek-v4-flash"}, Progress{Kind: ProgressExec, Name: "claude_code", Model: "deepseek-v4-flash"}, true},
+		{"model injection carries model and agent", core.EvModelInjection, map[string]any{"agent": "claude_code", "model": "deepseek-v4-flash"}, Progress{Kind: ProgressExec, Name: "claude_code", Model: "deepseek-v4-flash"}, true},
 		// The round result records its verdict under verdict_status; reading
 		// the wrong key leaves the status line "reviewing result ()…".
 		{"judge carries verdict", core.EvSupervisionRound, map[string]any{"verdict_status": "done", "round": 1, "budget": 5}, Progress{Kind: ProgressJudge, Name: "done", Round: 1, Budget: 5}, true},
@@ -41,7 +43,8 @@ func TestProgressForEvent(t *testing.T) {
 		{"judge start opens the reviewing stage", core.EvJudgeStart, map[string]any{"round": 1, "budget": 3}, Progress{Kind: ProgressJudge, Round: 1, Budget: 3}, true},
 		// The state-transition path marshals event data to JSON first, where
 		// numbers decode as float64 — extraction must survive that too.
-		{"exec round from json", core.EvExecAgentStart, []byte(`{"agent":"claude_code","round":2,"budget":5}`), Progress{Kind: ProgressExec, Name: "claude_code", Round: 2, Budget: 5}, true},
+		{"agent progress notes tool action", core.EvProgress, map[string]any{"note": `Bash: curl -s "https://news.com"`}, Progress{Kind: ProgressTool, Name: `Bash: curl -s "https://news.com"`}, true},
+		{"subagent event notes action", core.EvSubagentEvent, map[string]any{"note": "Task: analyze files"}, Progress{Kind: ProgressTool, Name: "Task: analyze files"}, true},
 		{"unrelated event is silent", core.EvSubmit, map[string]any{}, Progress{}, false},
 	}
 	for _, tc := range cases {
@@ -70,6 +73,10 @@ func TestProgressStatusFallback(t *testing.T) {
 	cb.progress(Progress{Kind: ProgressExec, Name: "claude_code", Round: 2, Budget: 5})
 	if !strings.Contains(got, "2/5") {
 		t.Fatalf("exec status lost the round: %q", got)
+	}
+	cb.progress(Progress{Kind: ProgressExec, Name: "claude_code", Model: "deepseek-v4-flash"})
+	if !strings.Contains(got, "deepseek-v4-flash") {
+		t.Fatalf("exec status lost the model: %q", got)
 	}
 	cb.progress(Progress{Kind: ProgressExec, Name: "claude_code", Round: 1, Budget: 1})
 	if strings.Contains(got, "1/1") {

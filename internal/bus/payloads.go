@@ -204,6 +204,8 @@ type TaskResultPayload struct {
 	// and how long the execution took on the executor's clock.
 	Executor       string `json:"executor,omitempty"`
 	Agent          string `json:"agent,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Injected       bool   `json:"injected,omitempty"`
 	DurationMS     int64  `json:"duration_ms,omitempty"`
 	SessionID      string `json:"session_id,omitempty"`
 	AgentSessionID string `json:"agent_session_id,omitempty"`

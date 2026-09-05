@@ -499,6 +499,18 @@ func TestTUIMouseClickActions(t *testing.T) {
 		if !got.expandThought {
 			t.Fatal("clicking thought button should expand thought")
 		}
+		// Subsequent mouse release must NOT toggle thought back:
+		releaseMsg := tea.MouseMsg{
+			X:      55,
+			Y:      38,
+			Action: tea.MouseActionRelease,
+			Button: tea.MouseButtonLeft,
+		}
+		next2, _ := got.Update(releaseMsg)
+		got2 := next2.(tuiModel)
+		if !got2.expandThought {
+			t.Fatal("mouse release must not revert thought toggle")
+		}
 	}
 
 	// 4. modeApproving: a click answers the card only when it lands on one of
@@ -569,6 +581,54 @@ func TestTUIMouseClickActions(t *testing.T) {
 		got = step(m, tea.MouseMsg{X: yesMid, Y: choiceY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 		if got.mode != modeAsking {
 			t.Fatalf("clicking the [y] cell should approve (modeAsking), got %v", got.mode)
+		}
+	}
+
+	// 5. modeIdle: clicking a slash menu item submits that command
+	{
+		m := newTestTUI(t)
+		m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+		m.mode = modeIdle
+		m.ta.SetValue("/he")
+		m.menu.sync(m.ta.Value(), nil)
+		if !m.menu.active || len(m.menu.items) == 0 {
+			t.Fatal("menu should be active for /he")
+		}
+		menuLines := strings.Split(m.menu.render(m.th, m.textWidth(), m.menuRows()), "\n")
+		targetY := 40 - 1 - len(menuLines)
+		clickMsg := tea.MouseMsg{
+			X:      5,
+			Y:      targetY,
+			Action: tea.MouseActionPress,
+			Button: tea.MouseButtonLeft,
+		}
+		next, cmd := m.Update(clickMsg)
+		got := next.(tuiModel)
+		if got.menu.active {
+			t.Fatal("clicking menu item should dismiss the menu")
+		}
+		if cmd == nil {
+			t.Fatal("clicking menu item should submit command")
+		}
+	}
+
+	// 6. Chinese locale (zh-CN) asking button hit testing
+	{
+		r := &repl{loc: i18n.Locale("zh-CN"), cfg: &config.Config{}, interactive: true}
+		m := newTUIModel(r)
+		m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+		m.mode = modeAsking
+		// Hit stop button at X=8, Y=39
+		if hit := m.askingButtonHit(8, 39); hit != 0 {
+			t.Fatalf("expected Stop button (0), got %d", hit)
+		}
+		// Hit steer button at X=26, Y=39
+		if hit := m.askingButtonHit(26, 39); hit != 1 {
+			t.Fatalf("expected Steer button (1), got %d", hit)
+		}
+		// Hit thought button at X=48, Y=39
+		if hit := m.askingButtonHit(48, 39); hit != 2 {
+			t.Fatalf("expected Thought button (2), got %d", hit)
 		}
 	}
 }

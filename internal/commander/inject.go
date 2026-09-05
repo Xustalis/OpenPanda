@@ -142,6 +142,16 @@ func effectiveModelName(model config.ModelConfig) string {
 	return name
 }
 
+// EffectiveBaseURL returns the endpoint base URL to use for injection.
+func EffectiveBaseURL(model config.ModelConfig) string {
+	return effectiveBaseURL(model)
+}
+
+// EffectiveModelName returns the model name to use for injection.
+func EffectiveModelName(model config.ModelConfig) string {
+	return effectiveModelName(model)
+}
+
 // homeDir is a test seam over os.UserHomeDir so credential-file probes can be
 // pointed at a temp dir.
 var homeDir = os.UserHomeDir
@@ -247,7 +257,7 @@ func jsonFieldNonEmpty(obj map[string]json.RawMessage, path string) bool {
 // sees what was injected and why (no secrets included).
 func InjectionNotice(d InjectionDecision, agent string) string {
 	var b strings.Builder
-	b.WriteString("[panda] 注意：本任务已向 agent「" + agent + "」注入 panda 配置的模型端点")
+	b.WriteString("[panda] 模型调度：已为 agent「" + agent + "」注入模型能力")
 	if d.Model != "" {
 		b.WriteString("（model=" + d.Model)
 		if d.BaseURL != "" {
@@ -256,7 +266,7 @@ func InjectionNotice(d InjectionDecision, agent string) string {
 		b.WriteString("）")
 	}
 	if d.Reason != "" {
-		b.WriteString("，原因：" + d.Reason)
+		b.WriteString("，配置：" + d.Reason)
 	}
 	return b.String()
 }
