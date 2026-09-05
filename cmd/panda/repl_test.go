@@ -123,3 +123,14 @@ func TestCmdLangWithoutConfigStillSwitches(t *testing.T) {
 		t.Fatalf("loc=%q ui.locale=%q, want ja/ja", r.loc, r.cfg.UI.Locale)
 	}
 }
+
+func TestDispatchVersionAndAliases(t *testing.T) {
+	r := &repl{loc: i18n.English}
+	// Neither /version, /ver, nor /v should panic or exit.
+	for _, cmd := range []string{"/version", "/ver", "/v"} {
+		r.dispatch(cmd)
+		if r.quit {
+			t.Fatalf("%s unexpectedly triggered quit", cmd)
+		}
+	}
+}

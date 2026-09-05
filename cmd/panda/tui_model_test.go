@@ -243,13 +243,11 @@ func TestTUIWelcomeWaitsForTheTerminalSize(t *testing.T) {
 	}
 }
 
-// TestTUIWelcomeFitsItsTerminal is the visible half of the same bug. Each banner
-// line is clipped rather than wrapped, so the frame is the same seven rows (two
-// borders, the heading, a blank, three facts) at every width — a wrapping banner
-// grew a row at a time as the terminal narrowed, turning the greeting into most of
-// a small screen.
+// TestTUIWelcomeFitsItsTerminal tests that the welcome banner adapts to the
+// terminal size: narrow terminals (<76 columns) receive the compact header (5
+// rows) while standard/wide terminals (>=76 columns) receive the full ASCII
+// wordmark (11 rows), and no line ever exceeds the terminal width.
 func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
-	const frameRows = 7
 	for _, width := range []int{40, 52, 80, 200} {
 		m := newTestTUI(t)
 		m.r.cfg.Node.Name = "XenithdeMacBook-Pro.local"
@@ -257,8 +255,12 @@ func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
 		m.r.cfg.Model.Model = "deepseek-v4-flash"
 		m = step(m, tea.WindowSizeMsg{Width: width, Height: 30})
 		lines := strings.Split(m.welcome(), "\n")
-		if len(lines) != frameRows {
-			t.Errorf("width %d: banner is %d rows, want %d", width, len(lines), frameRows)
+		wantRows := 11
+		if width < 76 {
+			wantRows = 5
+		}
+		if len(lines) != wantRows {
+			t.Errorf("width %d: banner is %d rows, want %d", width, len(lines), wantRows)
 		}
 		for _, line := range lines {
 			if w := cliui.DisplayWidth(line); w > width {

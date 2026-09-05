@@ -84,7 +84,15 @@ func (r *repl) cmdHelp(arg string) {
 	}
 	fmt.Println()
 	fmt.Println("  " + p.Bold(i18n.T(r.loc, "repl.help.keys")))
-	for _, key := range []string{"repl.help.tab", "repl.help.ctrlr", "repl.help.esc", "repl.help.ctrlc", "repl.help.ctrlc2"} {
+	for _, key := range []string{
+		"repl.help.tab",
+		"repl.help.ctrlr",
+		"repl.help.ctrlj",
+		"repl.help.ctrlo",
+		"repl.help.esc",
+		"repl.help.ctrlc",
+		"repl.help.ctrlc2",
+	} {
 		fmt.Println("    " + i18n.T(r.loc, key))
 	}
 	fmt.Println()

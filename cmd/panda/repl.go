@@ -136,6 +136,7 @@ func init() {
 		{"tasks", "tasks", "cmd.tasks", (*repl).cmdTasks},
 		{"task", "tasks", "cmd.task", (*repl).cmdTask},
 		{"cancel", "tasks", "cmd.cancel", (*repl).cmdCancel},
+		{"delete", "tasks", "cmd.delete", (*repl).cmdDelete},
 		{"approve", "tasks", "cmd.approve", (*repl).cmdApprove},
 		{"reject", "tasks", "cmd.reject", (*repl).cmdReject},
 		{"logs", "tasks", "cmd.logs", (*repl).cmdLogs},
@@ -152,6 +153,7 @@ func init() {
 		{"web", "system", "cmd.web", (*repl).cmdWeb},
 		{"authorize", "system", "cmd.authorize", (*repl).cmdAuthorize},
 		{"lang", "system", "cmd.lang", (*repl).cmdLang},
+		{"version", "system", "cmd.version", (*repl).cmdVersion},
 		{"help", "system", "cmd.help", (*repl).cmdHelp},
 		{"quit", "system", "cmd.quit", (*repl).cmdQuit},
 	}
@@ -337,7 +339,7 @@ var figletFont = map[rune][]string{
 	'n': {"        ", " _ __   ", "| '_ \\  ", "| | | | ", "|_| |_| "},
 	'P': {" ____   ", "|  _ \\  ", "| |_) | ", "| __/   ", "|_|     "},
 	'a': {"        ", "  __ _  ", " / _` | ", "| (_| | ", " \\__,_| "},
-	'd': {"      _ ", " __ _(_)", "/ _` |  ", "| (_| | ", " \\__,_| "},
+	'd': {"     | |", "  __| | ", " / _` | ", "| (_| | ", " \\__,_| "},
 }
 
 // figlet renders word in the 5-row lettering above (unknown runes render as
@@ -358,38 +360,13 @@ func figlet(word string) []string {
 
 // printBanner draws the startup screen: the OpenPanda wordmark in figlet
 // lettering, then node/model/workdir info lines and orientation hints.
-// runRepl already degrades r.loc to English on a bare Linux console, so
-// nothing here renders as a diamond (art is pure ASCII, separators degrade).
 func (r *repl) printBanner() {
-	model := i18n.T(r.loc, "repl.banner.noModel")
-	if r.cfg.Model.BaseURL != "" {
-		model = r.cfg.Model.Model
-		if model == "" {
-			model = r.cfg.Model.BaseURL
-		}
-		// A default base_url with no key looks configured but answers nothing:
-		// say so up front instead of failing on the first ask.
-		if strings.TrimSpace(r.cfg.Model.APIKey) == "" {
-			model += " · " + i18n.T(r.loc, "repl.banner.noKey")
-		}
+	th := newTheme(r.loc)
+	w := termColumns()
+	if w <= 0 {
+		w = 80
 	}
-	p := pal()
-	sep := p.Separator() // hint separator; ASCII fallback for non-unicode terminals
-	fmt.Println()
-	for _, line := range figlet("OpenPanda") {
-		fmt.Println(p.Accent(line)) // brand wordmark, like claude-code's art
-	}
-	fmt.Println(p.Bold(fmt.Sprintf("  %s v%s", i18n.T(r.loc, "repl.banner.title"), version)))
-	fmt.Println(p.Info("  " + i18n.Tf(r.loc, "repl.banner.node", "node", r.cfg.Node.Name, "model", model)))
-	fmt.Println(p.Muted("  " + i18n.Tf(r.loc, "repl.banner.dir", "dir", r.cfg.Storage.WorkPath)))
-	fmt.Println()
-	fmt.Println(p.Muted("  " + i18n.T(r.loc, "repl.banner.hint1") + sep +
-		i18n.T(r.loc, "repl.banner.hint2") + sep + i18n.T(r.loc, "repl.banner.hint3")))
-	if isLinuxConsole() {
-		fmt.Println(p.Warn("  ! bare console font has no CJK glyphs; answers are forced to English."))
-		fmt.Println(p.Warn("    for Chinese on this screen: sudo apt install fbterm fonts-wqy-zenhei && fbterm"))
-	}
-	fmt.Println()
+	fmt.Println(renderWelcomeBanner(r.cfg, r.loc, w, th))
 }
 
 // printFooter prints the status line above the prompt: node name, approval
@@ -457,6 +434,12 @@ func (r *repl) dispatch(line string) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if name == "exit" {
 		name = "quit"
+	}
+	if name == "cls" || name == "claer" {
+		name = "clear"
+	}
+	if name == "ver" || name == "v" {
+		name = "version"
 	}
 	for _, c := range replCommands {
 		if c.name == name {
@@ -877,12 +860,17 @@ func (r *repl) cmdAsk(arg string) {
 }
 
 // cmdTasks lists the queue, optionally filtered by state (/tasks running);
+// "/tasks clear" wipes the whole board (cancel running, delete every record);
 // "/tasks watch" (or "/tasks running watch") opens the live board — the
 // in-place refreshing view of `panda queue --watch`, inside the REPL.
 func (r *repl) cmdTasks(arg string) {
 	state := ""
 	watch := false
 	for _, f := range strings.Fields(arg) {
+		if f == "clear" {
+			r.cmdTasksClear()
+			return
+		}
 		if f == "watch" || f == "-w" {
 			watch = true
 			continue
@@ -905,6 +893,82 @@ func (r *repl) cmdTasks(arg string) {
 		return
 	}
 	printTaskTable(r.loc, tasks)
+}
+
+// cmdTasksClear implements "/tasks clear": confirm, cancel everything still
+// moving, then delete every task record — the REPL twin of `panda queue clear`.
+func (r *repl) cmdTasksClear() {
+	tasks, err := r.store.ListByState(context.Background(), "")
+	if err != nil {
+		r.storeErr(err)
+		return
+	}
+	if len(tasks) == 0 {
+		fmt.Println(i18n.T(r.loc, "cli.queue.clear.empty"))
+		return
+	}
+	p := pal()
+	if !r.confirm(i18n.Tf(r.loc, "cli.queue.clear.confirm", "n", strconv.Itoa(len(tasks)))) {
+		return
+	}
+	if r.engine != nil {
+		for _, t := range tasks {
+			if !core.Terminal(t.State) {
+				_, _ = r.engine.CancelTask(context.Background(), t.TaskID)
+			}
+		}
+	} else {
+		fmt.Println(p.Muted(i18n.T(r.loc, "cli.queue.clear.noEngine")))
+	}
+	cancelled, deleted, err := r.store.ClearQueue(context.Background())
+	if err != nil {
+		r.storeErr(err)
+		return
+	}
+	fmt.Println(p.Success(i18n.Tf(r.loc, "cli.queue.clear.done",
+		"c", strconv.Itoa(cancelled), "d", strconv.Itoa(deleted))))
+}
+
+// confirm asks a yes/no question and reports the answer. It reads through the
+// raw-mode editor when interactive (Esc/Ctrl-C reads as "no") and defaults to
+// "no" everywhere else — a destructive action never fires on ambiguity.
+func (r *repl) confirm(question string) bool {
+	if !r.interactive || r.term == nil {
+		return false
+	}
+	ans, err := r.term.readLine(question, nil)
+	if err != nil {
+		return false
+	}
+	ans = strings.ToLower(strings.TrimSpace(ans))
+	return ans == "y" || ans == "yes"
+}
+
+// cmdDelete removes a task and its subtree from the store (queued or finished
+// only — an active task must be cancelled first, matching `panda task delete`).
+func (r *repl) cmdDelete(arg string) {
+	if arg == "" {
+		fmt.Println("/delete " + i18n.T(r.loc, "cmd.delete"))
+		return
+	}
+	id, ok := r.resolveRef(arg)
+	if !ok {
+		return
+	}
+	n, err := r.store.Delete(context.Background(), id)
+	if err != nil {
+		if errors.Is(err, core.ErrTaskActive) {
+			state := ""
+			if t, gerr := r.store.Get(context.Background(), id); gerr == nil {
+				state = t.State
+			}
+			fmt.Println(pal().Warn(i18n.Tf(r.loc, "cli.task.delete.active", "id", id, "state", state)))
+			return
+		}
+		r.storeErr(err)
+		return
+	}
+	fmt.Println(pal().Success(i18n.Tf(r.loc, "cli.task.delete.done", "n", strconv.Itoa(n))))
 }
 
 // resolveRef resolves a task reference for a REPL command. Same rules as the
