@@ -26,8 +26,12 @@ const (
 )
 
 // consoleCtrlHandlerRoutine is the PHANDLER_ROUTINE signature: it receives
-// the control type and reports whether it handled the event.
-type consoleCtrlHandlerRoutine func(ctrlType uint32) bool
+// the control type and reports whether it handled the event. The return type
+// must be uintptr, not bool — windows.NewCallback rejects any callback whose
+// result is not a single uintptr-sized value, so a bool return panics at
+// startup ("compileCallback: expected function with one uintptr-sized
+// result"). Return 1 to report the event handled, 0 otherwise.
+type consoleCtrlHandlerRoutine func(ctrlType uint32) uintptr
 
 var procSetConsoleCtrlHandler = windows.NewLazySystemDLL("kernel32.dll").NewProc("SetConsoleCtrlHandler")
 
@@ -72,11 +76,11 @@ func shutdownContext() (context.Context, context.CancelFunc) {
 	// Registration failure (no console attached, e.g. a detached service)
 	// degrades to signal-only handling — Ctrl-C via os.Interrupt still works
 	// through the Go runtime's own handler.
-	_ = setConsoleCtrlHandler(func(ctrlType uint32) bool {
+	_ = setConsoleCtrlHandler(func(ctrlType uint32) uintptr {
 		switch ctrlType {
 		case ctrlEventC, ctrlEventBreak:
 			trigger()
-			return true
+			return 1
 		case ctrlEventClose, ctrlEventLogoff, ctrlEventShutdown:
 			// Terminal events: the OS kills the process when this handler
 			// returns (or after its ~5s budget). Trigger the shutdown, then
@@ -84,9 +88,9 @@ func shutdownContext() (context.Context, context.CancelFunc) {
 			// goroutine gets its window before the kill lands.
 			trigger()
 			time.Sleep(closeCleanupWindow)
-			return true
+			return 1
 		}
-		return false
+		return 0
 	}, true)
 
 	return ctx, func() {

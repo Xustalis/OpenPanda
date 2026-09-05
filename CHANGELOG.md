@@ -40,6 +40,12 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
+## [Unreleased]
+
+### Fixed
+
+- **Windows console control handler startup panic** — the `PHANDLER_ROUTINE` callback declared a `bool` return, which `windows.NewCallback` rejects (it requires a single `uintptr`-sized result), so every long-lived command (`panda web`, the REPL, and the daemon) panicked on startup with "compileCallback: expected function with one uintptr-sized result"; the callback now returns `uintptr` (`1` handled / `0` not handled).
+
 ## [0.0.8-preview] - 2026-09-05
 
 The transition to a formal open-source project: OpenPanda evolves from an experimental task router into a unified, production-ready personal agent orchestration operating system. This preview release brings full management tool access to the Ask engine, interactive TUI improvements with mid-turn steering, robust agent fallback and credential-recovery injection, multi-model registry, transparent execution tracking, and project-aware delegation.
