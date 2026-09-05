@@ -1,445 +1,210 @@
 # 🐼 OpenPanda
 
-**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A**ssistant
+**开源、本地优先的个人智能体操作系统与多设备分布式编排中枢**
 
-> 任何设备，任何算力，一个指令。
-> 一个把「个人」放在第一位的任务编排助手——以 P2P 节点网络的方式，运行在你的异构设备之间。
+> 将你的所有设备连成私有点对点协同网络，将孤立的终端 AI Agent（Claude Code、Codex、Grok 等）“雇佣”为一支跨设备协同作战的工程团队。
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-blue)
-![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-blue)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Status](https://img.shields.io/badge/status-pre--release-yellow)
+[![Release: v0.0.8-preview](https://img.shields.io/badge/release-v0.0.8--preview-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
+![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
+![Platforms](https://img.shields.io/badge/平台-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+![Memory](https://img.shields.io/badge/内存常驻-~20MB%20RSS-brightgreen)
+![Local First](https://img.shields.io/badge/云端依赖-零依赖%20(纯本地私有)-success)
 
 ---
 
-## 目录
+## ⚡ 为什么需要 OpenPanda？
 
-- [这是什么](#这是什么)
-- [核心特性](#核心特性)
-- [架构](#架构)
-- [安装](#安装)
-- [快速开始](#快速开始)
-- [使用示例](#使用示例)
-- [CLI 参考](#cli-参考)
-- [配置](#配置)
-- [文档](#文档)
-- [测试](#测试)
-- [部署](#部署)
-- [技术栈](#技术栈)
-- [路线图](#路线图)
-- [参与贡献](#参与贡献)
-- [许可](#许可)
-- [致谢](#致谢)
+如今的终端 AI 编程助手（**Claude Code、OpenAI Codex、Grok Build、OpenCode** 等）十分强大，但它们都有一个共同的物理限制：**被死死困在单台机器的单个终端里**。
 
-## 这是什么
+而现实中，每位开发者的日常硬件资产往往是多元的：
+- 一台随身携带、用来构思需求和审查代码的轻薄 **MacBook**；
+- 一台放在家里或机房、拥有强劲 CPU/GPU 与 Docker 环境的 **Linux 编译工作站 / 服务器**；
+- 一台 24 小时开机、处理常驻脚本或智能家居硬件控制的 **Raspberry Pi / 树莓派 / 香橙派 SBC**。
 
-OpenPanda **不是又一个 Agent CLI**——它是它们**上游**的那一层：你所有设备、所有工具的大管家。
-
-Claude Code、Codex、OpenCode、OpenClaw……每一个都是单机上的强力 Agent。OpenPanda 不与它们竞争，而是**雇佣**它们。你在哪台设备上说话，那台设备就是总指挥：能自己做的直接做；做不了的，就通过网络把任务路由给真正能干的节点——交给那个节点自己的 Agent（Claude Code、Codex……）；而单纯操作设备的任务（比如控制舵机）则直接执行，根本不需要惊动 Agent。
-
-```
-子代理（单机）              Agent 编排（单机）            OpenPanda（多设备）
-┌──────────────┐           ┌──────────────┐            ┌──────────────────────┐
-│ Claude Code  │           │ 多 Agent     │            │ 异构设备集群          │
-│ Codex …      │           │ 编排         │            │ + 各设备的 Agent      │
-│              │           │              │            │ + 裸硬件             │
-└──────────────┘           └──────────────┘            └──────────────────────┘
-                它们所有人的上游：OpenPanda 负责委派，它们负责执行
-```
-
-实际使用中：你只需在任何一台设备上发出一次指令，OpenPanda 就会把任务委派给最适合执行的节点，回传结果，并把学到的经验记住，留待下次使用——同时项目工作与个人记忆严格隔离，你的代码库绝不会因为「助理知道你喜欢暗色主题」而跑偏。
-
-它从设计之初就是**个人**系统：不依赖云端、记忆只留在你的设备上、每个节点之间通过你能掌控的直连 WebSocket 通信。
-
-## 核心特性
-
-- **异构节点网络**——每个节点通过能力卡（capability card）声明真实能力（CPU 等级、shell、Agent 适配器）；网络把任务路由给真正能干活的节点。为笔记本电脑、开发板、台式机以及各种性能层级的设备而设计。
-- **统一入口模型**——一条指令进入，四种意图输出：`answer`（纯 LLM 回答）、`tool_call`（调用你的工具）、`task`（委派到节点执行）、`plan`（跨机器多阶段流水线）。自动意图分类，并带优雅降级。
-- **三层能力执行**——`native`（直接执行 shell 命令）、`agent`（基于适配器的 Agent，例如通过 Anthropic 兼容端点调用 Claude Code）、`manual`（进队列，等你人工审批/手动执行）。
-- **P2P 委派协议**——基于 WebSocket + JSON 的幂等 `task_id` 与每次执行唯一的 `attempt_id`，崩溃重试绝不会重复执行。
-- **自进化 Skill 系统**——程序性记忆以 `SKILL.md` 文件存在：每个 skill 声明适用时机、运行方式，并在每次使用后自我迭代。
-- **日常助手工具**——Agent 能读系统时钟、查实时天气，还能**设置定时提醒**（`reminder.set`）：SQLite 存储、扫描器到点触发、Web Push 推送 + SSE 实时刷新到任何打开的控制台；CLI 侧 `panda reminder list/add/rm` 管理。
-- **MCP 接入**——通过 config.yaml（`mcp.command`）或控制台设置页配置一个 stdio MCP 服务器；其工具**热加载**进 Agent 工具表，无需重启守护进程。
-- **双层记忆**——按用户与按项目隔离的记忆（`USER.md` / `MEMORY.md` 风格），外加隔离墙；后台 **Dreaming** 引擎在节点空闲时把日常日志沉淀为长期记忆。
-- **语音入口**——可选的 sidecar 管线（唤醒词 → 语音识别 → LLM → 语音合成），硬件门控，为嵌入式麦克风准备。
-- **能力卡全界面编辑**——告诉调度器本节点能做什么的能力卡，可在 CLI、REPL/TUI、Web 控制台编辑，热重载进运行中的 daemon 并广播给 peer，无需重启。`panda pair` + `panda nodes add` 让添加第二台设备变成有引导的产品流程，而不是配置文件谜题。
-- **LLM 任务汇报**——每个任务完成后，入口模型会写一份简短的人类可读汇报（做了什么，或为什么失败），在 TUI、REPL、Web 控制台的原始输出之前展示。
-- **交互式 TUI + 内嵌 Web 控制台**——裸运行 `panda` 进入 Bubble Tea TUI，支持内联审批；`panda repl` 是经典操作席：裸输入直达 ask 引擎，斜杠命令驱动面板（`/tasks`、`/approve`、`/projects`、`/nodes`、`/lang`……），`/web` 一键启动内嵌控制台（对话、任务看板、审批、提醒、可编辑的记忆页）。`panda web` 一条命令开箱即用：默认回环绑定 + 临时 token，浏览器自动登录。五种界面语言：English、简体中文、日本語、Español、Deutsch。
-- **自更新**——`panda web`（及 `/web`）在后台检查发布渠道；控制台下载并校验可用更新，待任务队列空闲后一键安装。放弃已下载的更新则不留任何残留。
-- **防御与安全层**——权限 Tier、熔断器、范围漂移与死循环检测；执行侧加固：沙箱、网络白名单、密钥脱敏、审计日志。
-- **极致轻量**——稳态 RSS 约 **21–23 MB**（`make measure` 实测），为资源受限的单板电脑而生。
-- **干净交叉编译**——每个平台一个静态二进制，无需 CGO（纯 Go SQLite，`modernc.org/sqlite`）。
-
-## 架构
-
-```
-                        ┌───────────────────────────┐
-                        │     你：CLI / 语音       │
-                        └─────────────┬─────────────┘
-                                      │
-                 ┌────────────────────▼────────────────────┐
-                 │            entry · panda ask             │
-                 │   分类：answer | tool_call | task        │
-                 └────────────────────┬────────────────────┘
-                                      │  通过 WebSocket + JSON 委派
-                       ┌──────────────┴───────────────┐
-                       │                              │
-          ┌────────────▼────────────┐     ┌────────────▼────────────┐
-          │         工作节点         │     │         工作节点         │
-          │   如 笔记本（Standard）│     │   如 开发板（Micro）     │
-          └─────────────────────────┘     └─────────────────────────┘
-```
-
-每个节点内部：
+**OpenPanda 解决的正是这个断层。** 它不与现有的 Agent 工具竞争，而是**统领并雇佣它们**：
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ cmd/panda      守护进程 + CLI（ask / status / queue / task…） │
+│                       你：发送一条指令                      │
+│             （终端交互 TUI / 网页控制台 / 语音入口）        │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                  ┌────────────▼────────────┐
+                  │     🐼 OpenPanda OS     │
+                  │   意图解析 · 智能路由   │
+                  │   双向监督 · 安全风控   │
+                  └────────────┬────────────┘
+                               │ 点对点直连 WebSocket (无第三方云端)
+     ┌─────────────────────────┼─────────────────────────┐
+     │                         │                         │
+┌────▼──────────────┐   ┌──────▼────────────┐   ┌────────▼────────────┐
+│  MacBook (工作节点)│   │  Linux 编译服务器  │   │  树莓派 / SBC 开发板│
+│  - 快速单测/审查  │   │  - 重型构建编译   │   │  - GPIO 引脚/传感器 │
+│  - Claude Code    │   │  - Codex / Docker │   │  - 7×24h 自动化守护 │
+└───────────────────┘   └───────────────────┘   └─────────────────────┘
+```
+
+你只需在**任意一台设备**上说一句话，OpenPanda 会自动分析任务意图，将其派发到算力或工具最匹配的节点上，驱动该节点上的 Agent 展开执行，全程监督执行过程并校验结果，最后将交付物准确送回你面前。
+
+---
+
+## 🌟 核心特性：它能为你做什么？
+
+### 1. 🌐 异构多设备点对点智能协同
+- **能力卡自动宣告**：每台设备在加入网络时会自动生成硬件与工具画像（CPU 规格、内存、操作系统、可用 Agent 适配器、物理引脚）。
+- **按需精准调度**：重型编译任务自动派往高配服务器，硬件控制任务自动派往开发板，无需手动繁琐切换 SSH。
+- **无云端中继的私有直连**：设备间通过安全认证的 WebSocket 点对点直通，所有代码、指令与记忆永不离开你的个人可信网络。
+
+### 2. 🤖 全能 Agent 雇佣与无感故障转移
+- **主流智能体即插即用**：开箱支持 Claude Code、OpenAI Codex、Grok Build、DeepSeek Harness、OpenCode 及本地 Shell 命令行。
+- **凭据兜底与自动模型注入**：当某个 Agent 遇到 API 余额耗尽或 401 凭据失效时，OpenPanda 自动注入配置的备选模型接力执行，避免半途失败。
+- **全透明执行轨迹**：实时在终端或看板中流式呈现 Agent 运行的 Bash 指令、文件修改与工具调用，清楚知道每一步是谁在调用什么模型完成的。
+
+### 3. 🛡️ 自主安全闭环与人机协作（Human-in-the-Loop）
+- **风险分级审批门**：可逆的安全操作（阅读代码、本地编译、运行单元测试）全自动执行交付。
+- **关键操作人工把关**：不可逆的高风险操作（`git push` 到远程仓库、修改生产数据库、删除关键文件）自动挂起并弹出交互审批卡，支持一键或键盘确认。
+- **防发散与熔断机制**：内置死循环侦测与重试熔断器，防止 Agent 在死胡同里无休止消耗你的 Token。
+
+### 4. 🧠 双层隔离记忆与自进化技能库
+- **记忆物理隔离墙**：用户个人偏好（`USER.md`）与项目代码事实（`MEMORY.md`）严格分层，保证项目工程严谨性。
+- **自进化技能系统（Skills）**：每次成功解决的特定流程都会提炼为结构化的 `SKILL.md`，随着使用次数增加越用越聪明。
+- **上下文随任务漫游**：跨设备委派任务时，工作目录摘要与项目专属记忆同步打包跟随，远端执行节点瞬间理解你的工程背景。
+
+### 5. 🖥️ 三大统一入口，随心切换
+- **现代终端 TUI**：基于 Bubble Tea 构建，支持上下方向键导航、实时多阶段进度、中途随时打断/转向（Mid-turn Steering）。
+- **零配置开箱即用 Web 控制台**：内嵌看板视图（待办 / 进行中 / 待审批 / 已完成），实时 SSE 消息流，自适应移动端抽屉，浏览器自动免密登入。
+- **脚本化 CLI 接口**：支持单行命令（如 `panda ask "构建项目并跑测试"`）直接嵌入你的日常自动化脚本。
+
+### 6. 🪶 极致轻量：常驻内存仅 ~20MB
+- 纯 Go 编写的单静态二进制文件，无额外动态链接依赖（纯 Go SQLite WAL 模式）。
+- 可以在 20 美元的低功耗单板机、旧笔记本乃至高性能集群上长时间静默稳定运行。
+
+---
+
+## 🚀 3 分钟快速上手
+
+### 第 1 步：一键安装
+
+**macOS / Linux：**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh
+```
+
+**macOS (Homebrew)：**
+```bash
+brew tap Xustalis/openpanda
+brew install openpanda
+```
+
+**Windows (PowerShell)：**
+```powershell
+irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 | iex
+```
+
+### 第 2 步：初始化节点
+
+```bash
+panda init
+```
+*交互式引导将配置你的设备名称、大模型提供商（支持 DeepSeek、Claude、OpenAI、Kimi、通义千问、Ollama 等）并生成本机能力卡。*
+
+### 第 3 步：开始使用
+
+- **启动交互式终端 TUI：**
+  ```bash
+  panda
+  ```
+- **启动网页看板控制台（自动调起浏览器）：**
+  ```bash
+  panda web
+  ```
+- **或者直接发起一条指令：**
+  ```bash
+  panda ask "查看当前系统状态并总结待办任务"
+  ```
+
+### 30 秒连接第二台设备
+
+将你的 MacBook 与 Linux 编译机互联：
+1. 在设备 A（如 Linux 机器）上运行：`panda pair` 获取配对码。
+2. 在设备 B（如 MacBook）上运行：`panda nodes add <设备A地址>`。
+*现在两台设备已自动组网，随时协同！*
+
+---
+
+## 📖 典型实战场景
+
+### 场景一：轻薄本发起重型远程编译与测试
+> “我在咖啡馆用 MacBook Air，要求 OpenPanda 编译庞大的 Rust 项目并运行全量单测。”
+- **底层协作**：OpenPanda 识别到本机缺少多核编译资源，自动将编译任务路由到机房的 32 核 Linux 服务器，服务器上的 Codex 或原生 Cargo 极速完成构建，并将单测结果实时流式送回 MacBook 终端。
+
+### 场景二：开发板与智能硬件协同
+> “检测家庭服务器的内存，若超过 80% 则安全重启测试容器，并在明天早上提醒我。”
+- **底层协作**：任务被分配至目标宿主机执行诊断，并在本地 SQLite 调度器中建立长效定时提醒，到期通过浏览器 Web Push 准时推送。
+
+### 场景三：安全的自主多步编程
+> “重构数据库 Schema，执行迁移脚本，并推送到 GitHub 分支。”
+- **底层协作**：Agent 自动生成 SQL 迁移并在本地环境测试通过。当准备执行 `git push origin` 时，安全网关自动捕获不可逆动作并弹出交互提示卡：
+  ```
+  ⚠️  检测到不可逆高危操作：git push origin feature/schema-v2
+  [ 拒绝 (Deny) ]   [ 批准 (Approve) ]
+  ```
+  你在终端或网页看板轻按一次回车或点击，动作才真正提交执行。
+
+---
+
+## 🛠️ 常用命令速查
+
+| 命令 | 用途说明 |
+|---|---|
+| `panda` | 启动完整的交互式 Bubble Tea 终端控制台 |
+| `panda ask "<指令>"` | 快速处理：直接回答、调用本地工具或委派任务 |
+| `panda web` | 启动内嵌网页控制台并自动打开浏览器（带临时免密凭据） |
+| `panda nodes` | 查看当前 P2P 网络中所有在线设备及其能力 |
+| `panda pair` | 生成设备配对码，引导新设备加入网络 |
+| `panda queue` | 查看当前正在排队、执行中或待人工审批的任务 |
+| `panda approve <id>` | 审批放行特定的二级高危操作 |
+| `panda project list` | 管理当前的工作空间项目与工程记忆 |
+| `panda doctor` | 全面体检 PATH 路径、配置文件、适配器与数据库状态 |
+| `panda version` | 输出当前二进制版本号 |
+
+---
+
+## 🏗️ 架构概览
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ cmd/panda      终端交互 TUI · 网页看板 · CLI 快速入口       │
 ├─────────────────────────────────────────────────────────────┤
-│ entry          统一入口模型（answer · tool_call · task）      │
-│ scheduler      委派与路由决策                                │
-│ commander      三层执行：native · agent · manual             │
-│ defense        权限 Tier · 熔断 · 范围漂移 · 循环检测         │
-│ security       沙箱 · 白名单 · 脱敏 · 审计                   │
-│ memory         USER/MEMORY 存储 + Dreaming 引擎              │
-│ skills         SKILL.md 程序性记忆                           │
+│ askengine      意图分类引擎 · 内核管理工具族 · 智能降级     │
+│ scheduler      动态多设备算力评分 · P2P 拓扑路由            │
+│ commander      三层执行架构：原生 Shell · Agent 适配 · 人工 │
+│ defense        三级权限门控 · 熔断器 · 防漂移与防死循环     │
+│ memory         双层隔离记忆（用户/项目） · 自学习 Skills    │
 ├─────────────────────────────────────────────────────────────┤
-│ bus            WebSocket 传输 + 消息信封                     │
-│ ledger         能力目录（能力卡、心跳）                      │
-│ storage        SQLite（WAL）+ 迁移                           │
-│ log / util     结构化 JSON 日志，UUIDv7                     │
+│ bus            点对点 WebSocket 传输与 HMAC 双向身份认证   │
+│ ledger         分布式节点账本与能力卡广播                   │
+│ storage        纯 Go 嵌入式 SQLite（WAL 高并发模式）        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 安装
+---
 
-一行命令获取发布版二进制——支持 macOS、Linux 或 Windows；体验一致，无需 root。安装器会下载对应平台的 release 包、校验 SHA-256、把二进制连同 agent 适配器（`adapters/*.py`）解压到用户前缀，并把 `panda` 链接到你的 `PATH`。
+## 🤝 参与贡献
 
+我们极其欢迎社区的参与与贡献！无论是提交新的 AI CLI 适配器、优化调度器评分算法，还是改进 TUI 组件交互：
 
-| 平台                  | 命令                                                                                                                                         |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS / Linux         | `curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh`                                               |
-| macOS（Homebrew）     | `brew tap Xustalis/openpanda && brew install openpanda`                                                                                      |
-| Windows（PowerShell） | `Set-ExecutionPolicy -Scope Process Bypass` 后执行 `irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 | iex` |
+1. 查阅 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) 了解代码规范与开发流。
+2. 查阅 [SECURITY.md](SECURITY.md) 了解安全边界。
+3. 遵循 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) 社区行为守则。
+4. 提交 PR 前请在本地运行 `make gate` 确保全部校验通过。
 
-用参数覆盖默认行为：
+---
 
-```bash
-sh scripts/install.sh --version 0.0.7           # 指定版本（默认 latest）
-sh scripts/install.sh --prefix /opt/openpanda   # 自定义安装目录
-sh scripts/install.sh --yes                     # 一并注册开机自启，不再询问
-sh scripts/install.sh --no-service              # 完全不碰开机自启
-```
+## 📄 开源许可证
 
-macOS / Linux 下文件装入遵循 XDG 约定的用户前缀：
-
-```
-${XDG_DATA_HOME:-~/.local/share}/openpanda/
-├── bin/panda            # 真实二进制
-├── adapters/*.py        # agent 适配器（daemon 委派任务必需）
-├── config.example.yaml
-└── capabilities.example-*.yaml
-```
-
-`~/.local/bin/panda` 是指向该二进制的软链（已在 `PATH` 中）；若你的 shell 未包含 `~/.local/bin`，脚本会打印需要补充的 `export PATH` 一行。Windows 下文件装入 `%LOCALAPPDATA%\OpenPanda\`，并把其 `bin` 加入用户 `PATH`。安装器还可注册开机自启服务（登录时运行 `panda daemon`）——请先 `panda init` 再开启，否则 daemon 会因缺少配置而无法启动。
-
-安装完成后，初始化并运行：
-
-```bash
-panda init      # 交互式生成 config.yaml 与能力卡
-panda doctor    # 自检：二进制 / PATH / 配置 / 适配器 / agent
-panda repl      # 进入交互式命令行
-panda web       # 打开内嵌 Web 控制台（回环监听、自动登录）
-```
-
-要彻底移除：
-
-- macOS / Linux：`rm -rf ~/.local/share/openpanda ~/.local/bin/panda`（并先停用开机自启）。
-- Windows：删除 `%LOCALAPPDATA%\OpenPanda`，并从用户 `PATH` 移除对应 `bin` 目录。
-
-完整指南与故障排查见 [docs/install.md](docs/install.md)。
-
-## 快速开始
-
-### 前置条件
-
-
-| 工具   | 版本                                 |
-| ------ | ------------------------------------ |
-| Go     | 1.26.5+                              |
-| Python | 3.10+（Agent 适配器 / 语音 sidecar） |
-| make   | 任意较新版本                         |
-
-### 构建
-
-```bash
-make build          # 本机二进制 → bin/panda（release，剥离符号）
-make web            # 构建内嵌 Web 控制台（需 node/npm；跳过则控制台显示提示页）
-make test           # 运行完整测试套件
-make vet            # 静态分析
-```
-
-为你的实际设备交叉编译：
-
-```bash
-make build-linux-arm64   # → bin/panda-linux-arm64  （如香橙派）
-make build-linux-amd64   # → bin/panda-linux-amd64
-make build-darwin-arm64  # → bin/panda-darwin-arm64
-make build-windows-amd64 # → bin/panda-windows-amd64.exe
-```
-
-### 配置
-
-用一条交互式命令完成初始化——模型端点、节点名和能力卡一次生成：
-
-```bash
-./bin/panda init
-```
-
-或者复制示例配置，为每个节点修改b：
-
-```bash
-cp config.example.yaml /etc/openpanda/config.yaml   # 或留在本地，用 --config 指定
-```
-
-配置很精简，注释自解释。最核心的两处：
-
-```yaml
-network:
-  listen_addr: ":7836"        # WebSocket 监听地址
-  shared_secret: "..."        # 节点间 HMAC 鉴权——所有节点必须共享同一值
-  peers:                      # 网络中的其他节点
-    - "worker-1.your-tailnet.ts.net:7836"
-model:
-  base_url: "https://api.deepseek.com/anthropic"  # 支持 OpenAI 与 Anthropic 两类主流格式
-  model: "deepseek-v4-flash"                      # 如 gpt-4o, o3-mini, deepseek-v4-flash, qwen-plus, deepseek-r1 等
-  api_type: "anthropic"                           # anthropic | openai (默认 anthropic)
-  # api_key: ""                                   # 优先使用 OPENPANDA_MODEL_API_KEY 环境变量
-```
-
-支持主流模型服务商（OpenAI、DeepSeek、阿里通义千问、硅基流动 SiliconFlow、月之暗面 Kimi、智谱 GLM、本地 Ollama、OpenRouter 等），详见 `config.example.yaml`。密钥（模型 API key）尽量从 `OPENPANDA_MODEL_API_KEY` 环境变量读取，而非直接明文写入配置文件。
-
-### 运行
-
-最快看到全貌的方式是一条命令起 Web 控制台：回环监听 + 临时 token，浏览器打开即已登录——无需改配置、无需贴 token：
-
-```bash
-./bin/panda web
-```
-
-如果还没配置模型端点，控制台的设置页可以直接管理（Anthropic / OpenAI 兼容）。
-
-常驻多节点部署则运行守护进程本身：
-
-```bash
-./bin/panda daemon --config config.yaml --card config/capabilities.example-desktop.yaml
-```
-
-每个**能执行任务**的节点都应带上自己的能力卡启动。没有能力卡的节点仍参与心跳，但不会被委派任务。
-
-## 使用示例
-
-问任何问题——入口模型自动决定是回答、调用工具、还是委派：
-
-```bash
-./bin/panda ask --card config/capabilities.example-desktop.yaml "总结一下最近一周的 git log"
-```
-
-> `--card` 指向本机能力卡；不带它时 answer/tool_call 照常工作，但委派任务的输出会拒绝执行。
-
-查看网络与队列：
-
-```bash
-./bin/panda status
-./bin/panda queue
-```
-
-查看 / 取消某个任务：
-
-```bash
-./bin/panda task <task-id>
-./bin/panda cancel <task-id>
-./bin/panda logs <task-id>
-```
-
-管理 skills：
-
-```bash
-./bin/panda skill
-```
-
-## CLI 参考
-
-
-| 命令                                                                                                  | 说明                                                                                                                                                                                                                                                                                                                       |
-| ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `panda`（无参数）                                                                                     | 进入 Bubble Tea TUI（带内联审批；经典 REPL 可用`PANDA_CLASSIC_REPL=1`）；守护进程用 `panda daemon` 子命令运行                                                                                                                                                                                                              |
-| `panda daemon [--config PATH] [--card PATH]`                                                          | 运行守护进程：节点注册、心跳、WS 服务、peer 重连                                                                                                                                                                                                                                                                           |
-| `panda ask [--config PATH] [--card PATH] [--authorize] [--output-format json | stream-json] "<问题>"` | 统一入口：分类为 answer / tool_call / task / plan 并执行；`--output-format` 为无头使用输出单个 JSON 对象或 NDJSON 事件流                                                                                                                                                                                                   |
-| `panda plan run <文件.yaml> | show <id> | example`                                                    | 跨设备多阶段流水线：一个阶段就是一个普通任务（排队、按硬件路由、重试、进审批停泊），plan 负责排序并把上一阶段的工作目录交给下一台机器的阶段；`run --dry-run` 只校验并打印路由，不创建任何东西                                                                                                                              |
-| `panda voice [--once] [--mute]`                                                                       | 桌宠入口：唤醒词 → ASR → 同一条入口管线 → TTS，为无键盘设备而生；`--once` 只处理一句话，`--mute` 只打印不朗读                                                                                                                                                                                                           |
-| `panda repl [--config PATH] [--card PATH]`                                                            | 交互式 shell：斜杠命令（tasks/approve/projects/nodes/lang），裸输入走提问引擎，`/web` 一键拉起内嵌控制台                                                                                                                                                                                                                   |
-| `panda web [--config PATH] [--card PATH] [--no-browser]`                                              | 一条命令起 Web 控制台：默认回环监听 + 临时令牌，浏览器打开即已登录                                                                                                                                                                                                                                                         |
-| `panda session list | new | show | rm | ask | diff | merge`                                           | 基于 git worktree 的会话：`new [--title T]` 在仓库中切出一个 worktree，`ask <id> <prompt>` 继续会话，`diff <id>` 查看其变更，`merge <id> [--message M]` 将分支合入 HEAD                                                                                                                                                    |
-| `panda init`                                                                                          | 交互式首次配置：一键生成`config.yaml` + `capabilities.yaml`（模型端点、节点名、硬件扫描默认值）                                                                                                                                                                                                                            |
-| `panda install [--dir PATH] [--no-path]`                                                              | 将`panda` 注册为全局命令（PATH 持久化、重启后仍可用），并自动验证安装副本可运行                                                                                                                                                                                                                                            |
-| `panda uninstall [--config PATH] [--yes] [--no-backup] [--dry-run] [--purge]`                         | 安全卸载：先展示完整计划，需输入`confirm` 二次确认，白名单删除，用户资产（projects/memory/skills）始终保留，生成 zip 备份与清理报告；`--purge` 额外删除用户数据，需第二次确认                                                                                                                                              |
-| `panda doctor [--config PATH]`                                                                        | 自检：安装副本可运行、PATH 解析正常、持久化在重启后有效、配置/数据库可用                                                                                                                                                                                                                                                   |
-| `panda status`                                                                                        | 节点与任务状态（`--running` 只看活跃心跳）                                                                                                                                                                                                                                                                                 |
-| `panda nodes`                                                                                         | 当前与已知节点（与 status 同源数据）                                                                                                                                                                                                                                                                                       |
-| `panda nodes add <host:port>`                                                                         | 添加要拨号的 peer（缺`shared_secret` 时自动生成，打印对端接入指引）——无需重启即时拨号                                                                                                                                                                                                                                    |
-| `panda nodes invite`                                                                                  | 打印接入指引，不改 peer 列表                                                                                                                                                                                                                                                                                               |
-| `panda nodes disconnect <addr>`                                                                       | 从拨号列表移除 peer                                                                                                                                                                                                                                                                                                        |
-| `panda nodes remove <id>`                                                                             | 从节点目录移除已无活跃 peer 支撑的过期行；本机自己的行与在线节点会被拒绝——它们会自行重新注册                                                                                                                                                                                                                             |
-| `panda pair --secret S --peer <host:port>`                                                            | 从新机器加入现有网络：把共享密钥与 peer 写入本节点配置                                                                                                                                                                                                                                                                     |
-| `panda queue`                                                                                         | 列出任务队列                                                                                                                                                                                                                                                                                                               |
-| `panda task [--config PATH] <task-id>`                                                                | 任务详情 + 时间线                                                                                                                                                                                                                                                                                                          |
-| `panda task add --title T [--prompt P] [--priority 等级] [--project p] [--authorize]`                 | 手工入队一个任务（需`--card`）；优先级为 `low | medium | normal | high | critical`                                                                                                                                                                                                                                         |
-| `panda task priority <id> <level>`                                                                    | 修改任务优先级                                                                                                                                                                                                                                                                                                             |
-| `panda task move <id> <seq>`                                                                          | 重排拖拽排序队列                                                                                                                                                                                                                                                                                                           |
-| `panda cancel [--config PATH] <task-id>`                                                              | 取消任务（级联到执行节点）                                                                                                                                                                                                                                                                                                 |
-| `panda approve [--config PATH] <task-id>`                                                             | 批准进入 review 的任务（review → done）                                                                                                                                                                                                                                                                                   |
-| `panda reject [--config PATH] [--reason s] <task-id>`                                                 | 拒绝进入 review 的任务                                                                                                                                                                                                                                                                                                     |
-| `panda logs [--config PATH] <task-id>`                                                                | 任务执行日志                                                                                                                                                                                                                                                                                                               |
-| `panda skill list | approve <name> | reject <name>`                                                   | Skill 存储管理                                                                                                                                                                                                                                                                                                             |
-| `panda reminder list | add | rm`                                                                      | 定时提醒：列出 / 新增（`--after 10m` 或 `--at "2006-01-02 15:04"`）/ 删除                                                                                                                                                                                                                                                  |
-| `panda memory list | get | set | rm`                                                                  | 记忆文件：`user | memory | dreams | topic:<n> | project:<n> | daily:<date>`（`set` 默认读 stdin，也可 `--file F`；dreams 与 daily 只读）                                                                                                                                                                                   |
-| `panda project list | create`                                                                         | 项目记忆                                                                                                                                                                                                                                                                                                                   |
-| `panda config <段> <get | set | test>`                                                                | 查看/编辑`config.yaml`（保留注释）：段为 `model | mcp | limits | routing | injection | approval`；改动在 daemon/面板重启后生效                                                                                                                                                                                             |
-| `panda detect [-o PATH]`                                                                              | 扫描本机硬件（CPU/RAM/GPU/Agent CLI）生成 capabilities.yaml 草稿                                                                                                                                                                                                                                                           |
-| `panda card show | rescan | edit | set`                                                               | 本节点能力卡：查看（含来源文件路径）、重新扫描硬件与已安装的 Agent CLI（`rescan` 先打印差异，`--write` 才写入并保留 `.bak`）、在 `$EDITOR` 中编辑、或用 `set <字段>=<值>` 无编辑器修改。探测得到的硬件字段会被覆盖，人工决定的字段（节点名、resource_class、max_concurrent_tasks、agent tier、native/manual 能力）一律保留 |
-| `panda card native | agent | manual add | remove | set`                                               | CLI 结构化卡片编辑：与编辑器同一条校验器 +`.bak` + 原子写管线，热重载进运行中的 daemon                                                                                                                                                                                                                                     |
-| `panda metrics [--csv]`                                                                               | 导出委派指标                                                                                                                                                                                                                                                                                                               |
-| `panda audit verify | entries [--task <id>]`                                                          | `verify` 校验审计日志（或单任务事件）的 `prev_hash` 链；`entries` 打印审计轨迹行                                                                                                                                                                                                                                           |
-| `panda version` / `panda help`                                                                        | 打印版本号 / 命令总览                                                                                                                                                                                                                                                                                                      |
-
-## 配置
-
-
-| 段          | 键                       | 含义                                                                                                |
-| ----------- | ------------------------ | --------------------------------------------------------------------------------------------------- |
-| `node`      | `name`                   | 唯一节点 ID（全网使用）                                                                             |
-| `node`      | `resource_class`         | `Micro` \| `Standard` \| `Full` → 调度器层级                                                       |
-| `network`   | `listen_addr`            | WebSocket 监听地址                                                                                  |
-| `network`   | `shared_secret`          | 节点间 HMAC 鉴权密钥；WS 监听缺它不启动（所有节点共享同一值）                                       |
-| `network`   | `max_connections`        | 全局并发 WS 连接上限（0 = 不限）                                                                    |
-| `network`   | `max_connections_per_ip` | 单远端 IP 并发 WS 连接上限（0 = 不限）                                                              |
-| `network`   | `panel_addr`             | Web 控制台 HTTP 地址（`panda web` / `/web`）；默认 `127.0.0.1:7840`                                 |
-| `network`   | `panel_token`            | 控制台`/api/*` 的 Bearer 令牌（回环监听时自动生成临时令牌；优先用 `OPENPANDA_PANEL_TOKEN`）         |
-| `network`   | `peers`                  | 要拨号的手动 peer 地址                                                                              |
-| `storage`   | `db_path`                | SQLite 数据库路径                                                                                   |
-| `storage`   | `context_path`           | 上下文快照存储                                                                                      |
-| `storage`   | `memory_path`            | 个人记忆根目录                                                                                      |
-| `storage`   | `projects_path`          | 项目记忆根目录                                                                                      |
-| `storage`   | `skills_path`            | 程序性记忆根目录                                                                                    |
-| `storage`   | `work_path`              | Agent 执行目录；范围漂移在此测量                                                                    |
-| `storage`   | `artifact_path`          | 打包任务工件池（哈希命名；阶段产物经此跨节点流转）                                                  |
-| `log`       | `level`                  | `debug` \| `info` \| `warn` \| `error`                                                              |
-| `model`     | `base_url`               | Anthropic 兼容 Messages API 基地址                                                                  |
-| `model`     | `model`                  | 模型 id（如`deepseek-v4-flash`）                                                                    |
-| `model`     | `api_key`                | 密钥——优先用`OPENPANDA_MODEL_API_KEY`                                                             |
-| `model`     | `api_type`               | `anthropic` \| `openai`（默认 `anthropic`）                                                         |
-| `model`     | `max_tokens`             | 补全 token 上限（默认 4096）                                                                        |
-| `injection` | `model`                  | 向 Agent 子进程注入模型：`auto`（默认——仅当 Agent 自身不带模型凭据时注入） \| `always` \| `never` |
-| `routing`   | `preferred_agents`       | 获得 +0.5 路由评分加成的 Agent 名单                                                                 |
-| `memory`    | `limits.user`            | USER.md 字符上限（默认 5000）                                                                       |
-| `memory`    | `limits.memory`          | MEMORY.md 字符上限（默认 10000）                                                                    |
-| `memory`    | `limits.project`         | 每个项目 MEMORY.md 字符上限（默认 30000）                                                           |
-| `approval`  | `mode`                   | 任务审批门：`always` \| `on-request`（默认——仅模型标记的风险任务） \| `never`                     |
-| `timeouts`  | `task_lease_s`           | 任务单次尝试可持有租约的时长（默认 1200）；必须明显大于`agent_s`                                    |
-| `timeouts`  | `agent_s`                | 一次 Agent 适配器执行的墙钟预算（默认 600）                                                         |
-| `timeouts`  | `supervise_rounds`       | 每个任务的 执行 → 裁判 → 再委派 循环上限（默认 5）                                                |
-| `mcp`       | `command`                | stdio MCP 服务器命令行（空 = 禁用）；工具热加载进 Agent 工具表                                      |
-| `push`      | `enabled`                | 开启`/api/push/*` 与 Web Push 发送（内嵌控制台 + webui 侧车）                                       |
-| `push`      | `vapid_subject`          | VAPID subject（如`mailto:` 地址）                                                                   |
-| `push`      | `vapid_key_path`         | VAPID 密钥路径（首次启动自动生成）                                                                  |
-
-配置加载优先级：`--config` 参数 > 环境变量 > 默认 `/etc/openpanda/config.yaml`。
-
-## 文档
-
-完整文档位于 [`docs/`](docs/) 目录：
-
-- [文档索引](docs/README.md) —— 公开文档入口。
-- [项目现状](docs/status.md) —— 当前能用到什么程度、验证到哪一步、已知限制（当前版本：**v0.0.7**）。
-- [贡献指南](CONTRIBUTING.md) —— 工具链、工程质量门槛、代码规范、PR 清单
-  （译版见 `CONTRIBUTING.zh-CN.md` / `CONTRIBUTING.ja.md` / `CONTRIBUTING.es.md` / `CONTRIBUTING.de.md`）。
-- [桌面端与分发路线图](docs/plans/roadmap-desktop-and-packaging.md) —— 面向桌面客户端、签名安装包、公证与自动更新管道的分阶段规划。
-
-## 测试
-
-```bash
-make test        # 完整套件
-make vet         # go vet
-```
-
-核心协议不变量由真实双节点 WebSocket 测试覆盖（无需 Tailscale）：
-
-```bash
-go test ./internal/core/ -run 'TestTwoNodeProtocol|TestDelegateIdempotent|TestCancelPropagates' -v
-```
-
-## 部署
-
-### 网络安全基线
-
-OpenPanda 节点默认使用明文 WebSocket（`ws://`）。**明文 WebSocket 只允许在可信私有路径上使用：**
-
-- 本机回环（如 `127.0.0.1`、`localhost`）。
-- 你控制的私有覆盖网络，例如 **Tailscale** 或 VPN。
-- 所有设备均受信任的物理隔离局域网。
-
-**只要任一 OpenPanda peer 跨越公网，就必须在 WebSocket 监听器前终结 TLS**（如 nginx、Caddy、Traefik），并在 peer 地址中使用 `wss://`。`shared_secret` 仅用于节点间 hello 的 HMAC 鉴权，**不能替代传输层加密**——请勿将明文 `ws://` 监听直接暴露到公网。
-
-可选的 `panel_addr` 为旧版 PWA 侧车提供纯 HTTP 服务，请保持回环，或同样置于 TLS 反向代理之后。
-
-### 内存占用
-
-OpenPanda 面向低功耗设备。上硬件前请先验证稳态内存——单次 `ps` 采样因 GC 噪声并不可靠，多采几次：
-
-```bash
-make build
-for i in 1 2 3 4 5; do
-  ./bin/panda daemon --config testdata/node-a.yaml >/dev/null 2>&1 &
-  PID=$!; sleep 3
-  ps -o rss= -p $PID | awk '{printf "%d MB\n", $1/1024}'
-  kill -TERM $PID; wait $PID 2>/dev/null
-done
-```
-
-## 技术栈
-
-
-| 层            | 选型                                                                                                                  |
-| ------------- | --------------------------------------------------------------------------------------------------------------------- |
-| 核心守护进程  | Go（modernc.org/sqlite —— 纯 Go，无 CGO）                                                                           |
-| 胶水 / 适配器 | Python 3.10+                                                                                                          |
-| 传输          | WebSocket + JSON 信封                                                                                                 |
-| 状态          | WAL 模式的 SQLite                                                                                                     |
-| 前端          | Web 控制台（Vite + Preact，`go:embed` 单二进制）经 `panda repl` → `/web` 或 `panda web` 启动；独立 `webui/` 侧车并存 |
-| LLM 访问      | Anthropic 兼容`/v1/messages` 或 OpenAI 兼容端点（如 DeepSeek）                                                        |
-
-## 路线图
-
-Phase 0–3（入口模型 · 双节点委派 · 记忆+语音+执行加固 · 内核/控制台/REPL 重建 + 实机双节点验证）已完成。Phase 4（桌面客户端 + 签名安装流水线 + 自动更新机制 + 发布渠道）详见[桌面与分发路线图](docs/plans/roadmap-desktop-and-packaging.md)。
-
-## 参与贡献
-
-欢迎贡献。为保证代码库一致，请在提交 PR 前通过以下工程门槛：
-
-- `make vet && make test` 必须通过。
-- `gofmt -l internal/ cmd/ adapters/` 必须无输出。
-- 核心模块测试覆盖尽量保持在 ~60% 以上。
-
-完整工程规范见 [CONTRIBUTING.md](CONTRIBUTING.md)：错误包装（`%w` / `errors.Is`）、复杂度限制、无死代码、并发规则、i18n 规则与提交信息风格。译版见 [`CONTRIBUTING.zh-CN.md`](CONTRIBUTING.zh-CN.md)、[`CONTRIBUTING.ja.md`](CONTRIBUTING.ja.md)、[`CONTRIBUTING.es.md`](CONTRIBUTING.es.md)、[`CONTRIBUTING.de.md`](CONTRIBUTING.de.md)。
-
-## 许可
-
-本项目基于 [MIT 许可](LICENSE) 发布。
-
-## 致谢
-
-灵感来自分布式多 Agent 调度理论以及 Hermes 与 OpenClaw 的记忆模式。由 Xenith 构建。
+OpenPanda 依据 [MIT License](LICENSE) 协议完全开源。

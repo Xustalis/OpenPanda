@@ -25,6 +25,7 @@ The wire contract, watchdog timeout, process-tree cleanup and stderr
 diagnostics live in _harness.py; this file is only the grok difference:
 the command line and the session naming.
 """
+import os
 import subprocess
 import uuid
 

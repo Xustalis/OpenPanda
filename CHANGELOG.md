@@ -40,17 +40,24 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
-## [Unreleased]
+## [0.0.8-preview] - 2026-09-05
 
-### Fixed
-
-- **`/lang` now actually switches the UI language** — the switch only updated the classic REPL loop's strings; the TUI kept its startup locale snapshot for the menu, status row and help texts, so the console stayed in the old language for everything but the confirmation line. The chosen locale now propagates to the whole interface and persists as `ui.locale` in config.yaml, so it survives restarts (config wins over environment detection).
+The transition to a formal open-source project: OpenPanda evolves from an experimental task router into a unified, production-ready personal agent orchestration operating system. This preview release brings full management tool access to the Ask engine, interactive TUI improvements with mid-turn steering, robust agent fallback and credential-recovery injection, multi-model registry, transparent execution tracking, and project-aware delegation.
 
 ### Added
 
-- **Argument candidates in the slash menu** — commands with enumerated arguments (`/lang`, `/resume`, `/config set`, …) now pop the same arrow-navigable menu the command list uses once a space follows the command; ↑↓ moves, Tab fills, Enter picks and runs, Esc dismisses. Typing the argument by hand still works exactly as before.
-- **Arrow-key selection on the approval card** — the tier-2 approval prompt can now be answered with ↑↓/←→ plus Enter (focus starts on deny, matching the existing default), beside the unchanged y/n/Esc hotkeys.
-- **A multi-model registry for `/model`** — the entry model is no longer a single `model:` slot. A `models:` list holds named models, and `/model <alias>` switches between them (hot-swapping the engine client so the next ask uses it immediately), while `/model` lists them, `/model list` shows the built-in provider catalogue, `/model add <provider> <key>` registers one with just an API key, `/model remove <alias>` drops it, `/model fetch` pulls the provider's model list, and `/model test` runs a one-word connectivity check. Built-in providers — DeepSeek, Claude (Anthropic), ChatGPT (OpenAI), Kimi (月之暗面), 火山引擎 (Ark/豆包), 智谱, 通义千问, 硅基流动, OpenRouter, Ollama, plus a `custom` base-model fallback — supply their endpoint, dialect and per-vendor tuning (thinking passback, prompt cache, reasoning-model token caps, list-models endpoint), so a user only pastes a key.
+- **Management tools family** — the Ask engine can now directly inspect the running fleet via Tier-1 internal tools (`system_status`, `card_list`, `card_show`, task queue queries), answering questions like "what devices are online?" or "show OrangePi's capabilities" with real-time cluster data.
+- **Mid-turn steering and real stop in TUI** — cancel or steer active tasks mid-flight, with mouse support, live-task progress visuals, and responsive Bubble Tea status rendering.
+- **Active failover & credential-recovery model injection** — when an agent CLI encounters quota exhaustion or invalid credentials (401/403), OpenPanda automatically injects configured fallback models to complete the task without disruption.
+- **Transparent execution and progress tracking** — all agent bash commands, file operations, and tool calls are streamed live via `EvProgress` to the TUI and web console, displaying the exact executing agent and underlying model.
+- **A multi-model registry for `/model`** — the entry model is no longer a single slot. A `models:` list holds named models, and `/model <alias>` switches between them, while `/model add`, `/model list`, `/model fetch`, and `/model test` support DeepSeek, Claude, ChatGPT, Kimi, Volcengine Ark, Zhipu, Qwen, SiliconFlow, OpenRouter, and Ollama.
+- **Argument candidates in the slash menu** — commands with enumerated arguments (`/lang`, `/resume`, `/config set`) pop an interactive arrow-navigable menu once space is typed.
+- **Arrow-key selection on the approval card** — Tier-2 approvals support arrow keys (↑↓/←→) and Enter alongside y/n hotkeys.
+
+### Fixed
+
+- **`/lang` UI locale persistence** — language switching now immediately updates the TUI menus, status row, and help text, and persists cleanly to `config.yaml`.
+- **Metadata preservation across injected models** — execution results correctly retain injected model attribution and emit notification events.
 
 ## \[0.0.8-alpha] - 2026-09-03
 
