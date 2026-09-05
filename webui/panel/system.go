@@ -16,15 +16,16 @@ func (h *handler) getVersion(w http.ResponseWriter, r *http.Request) {
 
 // metricJSON is the wire form of a core.DelegationMetric row.
 type metricJSON struct {
-	ID        int64  `json:"id"`
-	TaskID    string `json:"task_id"`
-	Delegator string `json:"delegator"`
-	Executor  string `json:"executor"`
-	Abilities string `json:"abilities"`
-	Success   bool   `json:"success"`
-	LatencyMs int64  `json:"latency_ms"`
-	Tokens    *int64 `json:"tokens"`
-	CreatedAt string `json:"created_at"`
+	ID        int64    `json:"id"`
+	TaskID    string   `json:"task_id"`
+	Delegator string   `json:"delegator"`
+	Executor  string   `json:"executor"`
+	Abilities string   `json:"abilities"`
+	Success   bool     `json:"success"`
+	LatencyMs int64    `json:"latency_ms"`
+	Tokens    *int64   `json:"tokens"`
+	Cost      *float64 `json:"cost,omitempty"`
+	CreatedAt string   `json:"created_at"`
 }
 
 // listMetrics serves GET /api/metrics — delegation outcome rows, newest
@@ -41,6 +42,10 @@ func (h *handler) listMetrics(w http.ResponseWriter, r *http.Request) {
 		if m.Tokens.Valid {
 			tokens = &m.Tokens.Int64
 		}
+		var cost *float64
+		if m.Cost.Valid {
+			cost = &m.Cost.Float64
+		}
 		out = append(out, metricJSON{
 			ID:        m.ID,
 			TaskID:    m.TaskID,
@@ -50,6 +55,7 @@ func (h *handler) listMetrics(w http.ResponseWriter, r *http.Request) {
 			Success:   m.Success,
 			LatencyMs: m.LatencyMs,
 			Tokens:    tokens,
+			Cost:      cost,
 			CreatedAt: time.Unix(m.CreatedAt, 0).Format(time.RFC3339),
 		})
 	}

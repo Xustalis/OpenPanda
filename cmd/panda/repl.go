@@ -87,10 +87,11 @@ type repl struct {
 	// Session cost, accumulated across every ask this run and reported by
 	// /cost. The provider reports zero tokens for endpoints that send no
 	// usage block; the turn count and model time are always meaningful.
-	costTurns int
-	costIn    int64
-	costOut   int64
-	costWall  time.Duration
+	costTurns    int
+	costIn       int64
+	costOut      int64
+	costWall     time.Duration
+	costTotalUSD float64
 	// watcher bookkeeping (repl_watch.go): asking=true suppresses
 	// completion notifications while an inline ask is mid-flight (it prints
 	// its own result); baseline is the last-seen task state fingerprint.
@@ -704,8 +705,18 @@ func (r *repl) ask(text string) {
 			if !delivered() {
 				fmt.Println(r.renderMd(out.Answer))
 			}
-			fmt.Println(pal().Muted(i18n.Tf(r.loc, "repl.ask.taskReport",
-				"id", out.TaskID, "state", out.TaskState)))
+			reportNote := i18n.Tf(r.loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
+			if out.Agent != "" {
+				execNote := out.Agent
+				if out.Model != "" {
+					execNote += fmt.Sprintf(" (%s)", out.Model)
+				}
+				if out.Injected {
+					execNote += " · " + i18n.T(r.loc, "tui.task.injected")
+				}
+				reportNote += " · " + i18n.Tf(r.loc, "tui.task.execBy", "exec", execNote)
+			}
+			fmt.Println(pal().Muted(reportNote))
 			break
 		}
 		// LLM-generated summary: the dedicated "report after execution" call
@@ -745,6 +756,7 @@ func (r *repl) ask(text string) {
 	r.costIn += out.InputTokens
 	r.costOut += out.OutputTokens
 	r.costWall += out.Latency
+	r.costTotalUSD += out.Cost
 	printCost(st, out)
 }
 

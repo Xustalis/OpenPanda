@@ -53,6 +53,22 @@ type Provider struct {
 	// cache_control / OpenAI prompt_cache_key). Most vendors honour them; a
 	// strict legacy relay may not, so it is per-vendor tunable.
 	PromptCache bool
+	// Pricing defines the default token prices in USD per 1M tokens.
+	Pricing Pricing
+}
+
+// Pricing defines token prices in USD per 1M (1,000,000) tokens.
+type Pricing struct {
+	InputPerMillion  float64 `json:"input_per_million" yaml:"input_per_million"`
+	OutputPerMillion float64 `json:"output_per_million" yaml:"output_per_million"`
+}
+
+// Cost calculates the estimated USD cost for the given input and output token counts.
+func (p Pricing) Cost(inputTokens, outputTokens int64) float64 {
+	if p.InputPerMillion <= 0 && p.OutputPerMillion <= 0 {
+		return 0
+	}
+	return (float64(inputTokens)*p.InputPerMillion + float64(outputTokens)*p.OutputPerMillion) / 1_000_000.0
 }
 
 // builtins is the curated catalogue. Order matters: it is the display order of
@@ -72,6 +88,7 @@ var builtins = []Provider{
 		ContextWindow:    128000,
 		ThinkingPassback: true,
 		PromptCache:      true,
+		Pricing:          Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.28},
 	},
 	{
 		ID:               "claude",
@@ -84,6 +101,7 @@ var builtins = []Provider{
 		ContextWindow:    200000,
 		ThinkingPassback: true,
 		PromptCache:      true,
+		Pricing:          Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00},
 	},
 	{
 		ID:               "openai",
@@ -95,6 +113,7 @@ var builtins = []Provider{
 		DefaultMaxTokens: 4096,
 		ContextWindow:    128000,
 		PromptCache:      true,
+		Pricing:          Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60},
 	},
 	{
 		ID:               "kimi",
@@ -106,6 +125,7 @@ var builtins = []Provider{
 		DefaultMaxTokens: 4096,
 		ContextWindow:    128000,
 		PromptCache:      true,
+		Pricing:          Pricing{InputPerMillion: 1.40, OutputPerMillion: 1.40},
 	},
 	{
 		ID:               "volcengine",
@@ -117,6 +137,7 @@ var builtins = []Provider{
 		DefaultMaxTokens: 4096,
 		ContextWindow:    32000,
 		PromptCache:      true,
+		Pricing:          Pricing{InputPerMillion: 0.11, OutputPerMillion: 0.28},
 	},
 	{
 		ID:               "zhipu",
@@ -128,6 +149,7 @@ var builtins = []Provider{
 		DefaultMaxTokens: 4096,
 		ContextWindow:    128000,
 		PromptCache:      true,
+		Pricing:          Pricing{InputPerMillion: 1.40, OutputPerMillion: 1.40},
 	},
 	{
 		ID:               "qwen",
@@ -139,6 +161,7 @@ var builtins = []Provider{
 		DefaultMaxTokens: 4096,
 		ContextWindow:    128000,
 		PromptCache:      true,
+		Pricing:          Pricing{InputPerMillion: 0.11, OutputPerMillion: 0.28},
 	},
 	{
 		ID:               "siliconflow",
@@ -150,6 +173,7 @@ var builtins = []Provider{
 		DefaultMaxTokens: 4096,
 		ContextWindow:    64000,
 		PromptCache:      true,
+		Pricing:          Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.28},
 	},
 	{
 		ID:               "openrouter",
@@ -161,6 +185,7 @@ var builtins = []Provider{
 		DefaultMaxTokens: 4096,
 		ContextWindow:    200000,
 		PromptCache:      true,
+		Pricing:          Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00},
 	},
 	{
 		ID:               "ollama",
@@ -172,6 +197,7 @@ var builtins = []Provider{
 		DefaultModel:     "qwen2.5-coder:14b",
 		DefaultMaxTokens: 4096,
 		PromptCache:      false,
+		Pricing:          Pricing{InputPerMillion: 0, OutputPerMillion: 0},
 	},
 	{
 		ID:          "custom",
@@ -181,6 +207,37 @@ var builtins = []Provider{
 		ModelsPath:  "",
 		PromptCache: true,
 	},
+}
+
+// LookupPricing returns the Pricing for a given provider and model name.
+func LookupPricing(providerID, model string) Pricing {
+	p, ok := Lookup(providerID)
+	if !ok {
+		lower := strings.ToLower(model)
+		switch {
+		case strings.Contains(lower, "deepseek"):
+			return Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.28}
+		case strings.Contains(lower, "claude") && strings.Contains(lower, "haiku"):
+			return Pricing{InputPerMillion: 0.80, OutputPerMillion: 4.00}
+		case strings.Contains(lower, "claude"):
+			return Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00}
+		case strings.Contains(lower, "gpt-4o-mini"):
+			return Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}
+		case strings.Contains(lower, "gpt-4o"):
+			return Pricing{InputPerMillion: 2.50, OutputPerMillion: 10.00}
+		case strings.Contains(lower, "qwen"):
+			return Pricing{InputPerMillion: 0.11, OutputPerMillion: 0.28}
+		}
+		return Pricing{}
+	}
+	lower := strings.ToLower(model)
+	if providerID == "openai" && (strings.Contains(lower, "gpt-4o") && !strings.Contains(lower, "mini")) {
+		return Pricing{InputPerMillion: 2.50, OutputPerMillion: 10.00}
+	}
+	if providerID == "claude" && strings.Contains(lower, "haiku") {
+		return Pricing{InputPerMillion: 0.80, OutputPerMillion: 4.00}
+	}
+	return p.Pricing
 }
 
 // All returns the catalogue in display order.

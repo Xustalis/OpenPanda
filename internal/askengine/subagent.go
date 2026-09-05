@@ -51,6 +51,15 @@ const taskBudgetNote = "本轮对话的子代理任务预算（%d 个）已用�
 func taskObservation(res *Result) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[子代理任务结果] %s（%s）\n状态：%s", res.TaskTitle, res.TaskID, res.TaskState)
+	if res.Agent != "" {
+		fmt.Fprintf(&b, "，执行智能体：%s", res.Agent)
+		if res.Model != "" {
+			fmt.Fprintf(&b, "（模型：%s）", res.Model)
+		}
+		if res.Injected {
+			fmt.Fprintf(&b, "（已注入系统模型）")
+		}
+	}
 	if res.ExitCode != 0 {
 		fmt.Fprintf(&b, "，退出码 %d", res.ExitCode)
 	}
@@ -82,8 +91,10 @@ func excerpt(s string, limit int) string {
 // call produces the report the loop would have converged on. Without tools the
 // model can only answer in text, so the ask ends in a report rather than raw
 // output.
-func (e *Engine) reportTaskOutcome(ctx context.Context, turns []entry.Turn, devices []ledger.Node, conversationMemory string, opts []entry.ClassifyOption, spec *entry.TaskSpec, res *Result) (string, error) {
-	client := e.client.Load()
+func (e *Engine) reportTaskOutcome(ctx context.Context, client *entry.Client, turns []entry.Turn, devices []ledger.Node, conversationMemory string, opts []entry.ClassifyOption, spec *entry.TaskSpec, res *Result) (string, error) {
+	if client == nil {
+		client = e.client.Load()
+	}
 	t := append(append([]entry.Turn{}, turns...),
 		entry.Turn{Role: "assistant", Content: taskDispatchNote(spec)},
 		entry.Turn{Role: "user", Content: taskObservation(res)},

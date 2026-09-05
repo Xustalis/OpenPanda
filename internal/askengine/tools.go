@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -173,6 +174,50 @@ func registerReminderTools(reg *entry.Registry, rem *reminders.Store) {
 					r.ID, time.Unix(r.DueAt, 0).Format("2006-01-02 15:04"), r.Message)
 			}
 			return b.String(), nil
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "reminder_delete",
+		Description: "删除一条已设置的定时提醒。id 填提醒 ID（整数）。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{"type": "integer", "description": "提醒 ID"},
+			},
+			"required": []string{"id"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			rawID, ok := args["id"]
+			if !ok {
+				return "", fmt.Errorf("id 不能为空")
+			}
+			var id int64
+			switch v := rawID.(type) {
+			case float64:
+				id = int64(v)
+			case int64:
+				id = v
+			case int:
+				id = int64(v)
+			case string:
+				parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+				if err != nil {
+					return "", fmt.Errorf("无效的提醒 ID: %w", err)
+				}
+				id = parsed
+			default:
+				return "", fmt.Errorf("无效的提醒 ID 类型")
+			}
+			ok, err := rem.Delete(ctx, id)
+			if err != nil {
+				return "", fmt.Errorf("删除提醒失败：%w", err)
+			}
+			if !ok {
+				return fmt.Sprintf("未找到 ID 为 #%d 的提醒", id), nil
+			}
+			return fmt.Sprintf("已成功删除提醒 #%d", id), nil
 		},
 	})
 }

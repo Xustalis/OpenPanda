@@ -64,3 +64,25 @@ func TestProgressNoteRoundSuffix(t *testing.T) {
 		t.Fatalf("single-round run must stay unadorned: %q", single)
 	}
 }
+
+// TestProgressNoteExecModel verifies that ProgressExec displays the active model
+// when provided so users can track token billing.
+func TestProgressNoteExecModel(t *testing.T) {
+	gotZh := progressNote(i18n.ChineseSimp, askengine.Progress{
+		Kind:  askengine.ProgressExec,
+		Name:  "claude_code",
+		Model: "deepseek-v4-flash",
+	})
+	if !strings.Contains(gotZh, "claude_code (deepseek-v4-flash)") {
+		t.Fatalf("zh exec line should format agent with model: %q", gotZh)
+	}
+
+	gotEn := progressNote(i18n.English, askengine.Progress{
+		Kind:  askengine.ProgressExec,
+		Name:  "claude_code",
+		Model: "deepseek-v4-flash",
+	})
+	if !strings.Contains(gotEn, "claude_code (deepseek-v4-flash)") {
+		t.Fatalf("en exec line should format agent with model: %q", gotEn)
+	}
+}

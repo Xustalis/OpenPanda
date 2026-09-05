@@ -351,6 +351,40 @@ func (m tuiModel) approvalHit(x, y int) int {
 	return -1
 }
 
+// askingButtonHit maps a terminal click to an asking footer button:
+// 0 = Stop, 1 = Steer/Inject, 2 = Thought, -1 = none.
+func (m tuiModel) askingButtonHit(x, y int) int {
+	if m.height <= 0 || x < 0 {
+		return -1
+	}
+	if y < m.height-2 || y >= m.height {
+		return -1
+	}
+
+	hints := m.hintKeys()
+	if len(hints) < 3 {
+		return -1
+	}
+
+	w0 := lipgloss.Width(hints[0])
+	w1 := lipgloss.Width(hints[1])
+	w2 := lipgloss.Width(hints[2])
+
+	stopLimit := max(22, w0)
+	steerLimit := max(45, stopLimit+1+w1)
+	thoughtLimit := max(68, steerLimit+1+w2)
+
+	switch {
+	case x <= stopLimit:
+		return 0
+	case x > stopLimit && x <= steerLimit:
+		return 1
+	case x > steerLimit && x <= thoughtLimit:
+		return 2
+	}
+	return -1
+}
+
 // welcome is the startup banner pushed into scrollback: the wordmark, version,
 // node/model, working directory and orientation tips, framed in brand green.
 func (m tuiModel) welcome() string {

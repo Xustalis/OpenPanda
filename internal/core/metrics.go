@@ -22,6 +22,7 @@ type DelegationMetric struct {
 	Success       bool
 	LatencyMs     int64
 	Tokens        sql.NullInt64
+	Cost          sql.NullFloat64
 	CreatedAt     int64
 }
 
@@ -35,6 +36,7 @@ func (s *TaskStore) RecordDelegationMetric(
 	success bool,
 	latencyMs int64,
 	tokens int,
+	cost ...float64,
 ) error {
 	abilitiesJSON, err := json.Marshal(abilities)
 	if err != nil {
@@ -48,11 +50,18 @@ func (s *TaskStore) RecordDelegationMetric(
 		tokensArg = nil
 	}
 
+	var costArg any
+	if len(cost) > 0 && cost[0] > 0 {
+		costArg = cost[0]
+	} else {
+		costArg = nil
+	}
+
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO delegation_metrics
-			(task_id, delegator, executor, abilities_json, success, latency_ms, tokens, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		taskID, delegator, executor, string(abilitiesJSON), boolToInt(success), latencyMs, tokensArg, storage.Now(),
+			(task_id, delegator, executor, abilities_json, success, latency_ms, tokens, cost, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		taskID, delegator, executor, string(abilitiesJSON), boolToInt(success), latencyMs, tokensArg, costArg, storage.Now(),
 	)
 	return err
 }
@@ -67,8 +76,9 @@ func (c *Core) recordEntryUsage(ctx context.Context, taskID string, client *entr
 	if delta.Total() == 0 {
 		return
 	}
+	cost := client.EstimateCost(delta.InputTokens, delta.OutputTokens)
 	if err := c.store.RecordDelegationMetric(ctx, taskID, string(c.nodeID), "entry:"+client.ModelName(),
-		nil, success, latency.Milliseconds(), int(delta.Total())); err != nil {
+		nil, success, latency.Milliseconds(), int(delta.Total()), cost); err != nil {
 		c.logger.Warn("record entry usage", "task", taskID, "err", err)
 	}
 }
@@ -76,7 +86,7 @@ func (c *Core) recordEntryUsage(ctx context.Context, taskID string, client *entr
 // ListDelegationMetrics returns all recorded delegation metrics, newest first.
 func (s *TaskStore) ListDelegationMetrics(ctx context.Context) ([]DelegationMetric, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, task_id, delegator, executor, abilities_json, success, latency_ms, tokens, created_at
+		`SELECT id, task_id, delegator, executor, abilities_json, success, latency_ms, tokens, cost, created_at
 		 FROM delegation_metrics ORDER BY id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("query delegation metrics: %w", err)
@@ -87,7 +97,7 @@ func (s *TaskStore) ListDelegationMetrics(ctx context.Context) ([]DelegationMetr
 	for rows.Next() {
 		var m DelegationMetric
 		if err := rows.Scan(&m.ID, &m.TaskID, &m.Delegator, &m.Executor, &m.AbilitiesJSON,
-			&m.Success, &m.LatencyMs, &m.Tokens, &m.CreatedAt); err != nil {
+			&m.Success, &m.LatencyMs, &m.Tokens, &m.Cost, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan delegation metric: %w", err)
 		}
 		out = append(out, m)

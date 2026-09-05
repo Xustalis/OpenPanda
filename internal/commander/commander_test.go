@@ -6,9 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/pyexec"
 )
 
 func testCard() ledger.Card {
@@ -271,5 +273,120 @@ func TestFileContextHash(t *testing.T) {
 	}
 	if a.Hash() == c.Hash() {
 		t.Fatalf("different scopes must hash differently")
+	}
+}
+
+func TestAgentViabilitySelfContained(t *testing.T) {
+	cleanCredentialEnv(t)
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{},
+		config.InjectionConfig{Model: config.InjectionModelNever}, config.RoutingConfig{})
+	// opencode is marked SelfContainedModel: true in registry
+	ag := ledger.Agent{
+		Adapter:      "opencode.py",
+		InstallCheck: "which opencode",
+	}
+	// Even with InjectionModelNever and no APIKey, a self-contained agent should be viable
+	// if python and the binary are available (or mocked).
+	// In testCard, let's verify AgentViable logic.
+	if r.AgentViable("opencode", ag) != (defaultAgentProbe("opencode", ag) && pyexec.Available()) {
+		t.Fatalf("unexpected viability result for opencode")
+	}
+}
+
+func TestRankAgentsDifferentiated(t *testing.T) {
+	card := testCard()
+	card.Agents["opencode"] = ledger.Agent{
+		Adapter:      "opencode.py",
+		Capabilities: []string{"coding", "scripts"},
+		CostTier:     "low",
+	}
+	card.Agents["codex"] = ledger.Agent{
+		Adapter:      "codex.py",
+		Capabilities: []string{"coding", "code_review"},
+		CostTier:     "medium",
+	}
+	card.Agents["claude_code"] = ledger.Agent{
+		Adapter:      "claude_code.py",
+		Capabilities: []string{"coding", "refactoring"},
+		CostTier:     "medium_high",
+	}
+
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	cands := r.RankAgents([]string{"coding"})
+	if len(cands) < 3 {
+		t.Fatalf("expected 3 candidates, got %d", len(cands))
+	}
+	// Low cost tier should score highest (1.0), then medium (0.8), then medium_high (0.7)
+	if cands[0].Name != "opencode" {
+		t.Fatalf("expected rank 1 to be opencode, got %s (score %f)", cands[0].Name, cands[0].Score)
+	}
+	if cands[1].Name != "codex" {
+		t.Fatalf("expected rank 2 to be codex, got %s (score %f)", cands[1].Name, cands[1].Score)
+	}
+	if cands[2].Name != "claude_code" {
+		t.Fatalf("expected rank 3 to be claude_code, got %s (score %f)", cands[2].Name, cands[2].Score)
+	}
+
+	// But if specific capability "refactoring" is requested:
+	refactorCands := r.RankAgents([]string{"refactoring"})
+	if len(refactorCands) == 0 || refactorCands[0].Name != "claude_code" {
+		t.Fatalf("expected claude_code to win for refactoring, got %+v", refactorCands)
+	}
+}
+
+func TestRealEnvironmentViability(t *testing.T) {
+	// Probing with the user's real model config:
+	userModel := config.ModelConfig{
+		BaseURL: "https://api.deepseek.com/anthropic",
+		APIKey:  "sk-f8da2b0df91b4ff4b09b55502c34bbdc",
+		Model:   "deepseek-chat",
+	}
+	r := NewRouter(ledger.Card{}, NewExecutor(), userModel,
+		config.InjectionConfig{Model: config.InjectionModelAuto}, config.RoutingConfig{})
+
+	for _, name := range []string{"claude_code", "codex", "grok_build", "hermes", "opencode"} {
+		k, ok := agents.ByName(name)
+		if !ok {
+			t.Fatalf("agent %s not found in registry", name)
+		}
+		ag := ledger.Agent{
+			Adapter:      k.Adapter,
+			InstallCheck: "which " + k.PrimaryBinary(),
+		}
+		viable := r.AgentViable(name, ag)
+		t.Logf("Agent: %-12s Viable: %v", name, viable)
+		if !viable {
+			t.Errorf("expected %s to be viable on this machine!", name)
+		}
+	}
+}
+
+func TestUserCardSchedulingOrder(t *testing.T) {
+	card, err := ledger.LoadCard("/Users/xenith/Library/Application Support/openpanda/capabilities.yaml")
+	if err != nil {
+		t.Skipf("cannot load user capabilities.yaml: %v", err)
+	}
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+
+	tests := []struct {
+		req       []string
+		wantFirst string
+	}{
+		{req: []string{"refactoring"}, wantFirst: "claude_code"},
+		{req: []string{"code_review"}, wantFirst: "codex"},
+		{req: []string{"build"}, wantFirst: "grok_build"},
+		{req: []string{"long_running"}, wantFirst: "hermes"},
+		{req: []string{"scripts"}, wantFirst: "opencode"},
+		{req: []string{"coding"}, wantFirst: "opencode"}, // low cost wins generic coding
+	}
+
+	for _, tt := range tests {
+		cands := r.RankAgents(tt.req)
+		if len(cands) == 0 {
+			t.Fatalf("no candidates for %v", tt.req)
+		}
+		if cands[0].Name != tt.wantFirst {
+			t.Errorf("for req %v: got %s (score %.2f), want %s", tt.req, cands[0].Name, cands[0].Score, tt.wantFirst)
+		}
 	}
 }

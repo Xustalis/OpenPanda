@@ -220,6 +220,17 @@ type TimeoutsConfig struct {
 	AgentByKind map[string]int `yaml:"agent_by_kind"`
 	// SuperviseRounds caps the execute → judge → re-delegate loop per task.
 	SuperviseRounds int `yaml:"supervise_rounds"`
+	// SilenceS is how long execution may produce zero progress notes or output
+	// before the watchdog treats it as stalled and aborts. 0 = disabled.
+	SilenceS int `yaml:"silence_s"`
+}
+
+// SilenceTimeout returns the configured progress silence limit, or 0 (disabled).
+func (t TimeoutsConfig) SilenceTimeout() time.Duration {
+	if t.SilenceS > 0 {
+		return time.Duration(t.SilenceS) * time.Second
+	}
+	return 0
 }
 
 // TaskLease returns the configured task lease, or the default when unset.

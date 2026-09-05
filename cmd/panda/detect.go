@@ -129,14 +129,30 @@ func cardAgents() map[string]ledger.Agent {
 		if bin == "" {
 			continue
 		}
+		caps := k.DefaultCapabilities
+		if len(caps) == 0 {
+			caps = []string{"coding", "shell", "file_edit"}
+		}
+		bestAt := k.DefaultBestAt
+		if len(bestAt) == 0 {
+			bestAt = []string{"multi_file_edits", "code_search", "running_tests"}
+		}
+		costTier := k.DefaultCostTier
+		if costTier == "" {
+			costTier = "medium"
+		}
+		tier := k.DefaultTier
+		if tier == 0 {
+			tier = 2
+		}
 		out[k.Name] = ledger.Agent{
 			Adapter:      k.Adapter,
 			InstallCheck: installCheckFor(bin),
-			Capabilities: []string{"coding", "shell", "file_edit"},
-			BestAt:       []string{"multi_file_edits", "code_search", "running_tests"},
+			Capabilities: caps,
+			BestAt:       bestAt,
 			NotFor:       []string{"hardware_io", "realtime_control"},
-			CostTier:     "high",
-			Tier:         2,
+			CostTier:     costTier,
+			Tier:         tier,
 		}
 	}
 	return out

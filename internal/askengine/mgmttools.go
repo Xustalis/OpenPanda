@@ -8,10 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/cardmut"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/version"
 )
 
@@ -99,6 +101,384 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
 			id, _ := args["task_id"].(string)
 			return e.taskqShow(ctx, strings.TrimSpace(id))
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "taskq_cancel",
+		Description: "取消指定任务及其所有子任务树，立即中止其执行。task_id 填完整任务 ID 或前缀。当任务死循环、卡反爬、超时或不再需要时调用。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"task_id": map[string]any{"type": "string", "description": "要取消的任务 ID 或前缀"},
+			},
+			"required": []string{"task_id"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			id, _ := args["task_id"].(string)
+			return e.taskqCancel(ctx, strings.TrimSpace(id))
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "taskq_priority",
+		Description: "修改任务的排队优先级。priority 可选：high（高）、normal（中/普通）、low（低）。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"task_id":  map[string]any{"type": "string", "description": "任务 ID 或前缀"},
+				"priority": map[string]any{"type": "string", "description": "优先级：high / normal / low"},
+			},
+			"required": []string{"task_id", "priority"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			id, _ := args["task_id"].(string)
+			prio, _ := args["priority"].(string)
+			return e.taskqPriority(ctx, strings.TrimSpace(id), strings.TrimSpace(prio))
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "taskq_move",
+		Description: "调整任务在排队队列中的顺序序号（seq）。调度器按序号升序优先调度。seq 必须为正整数（>= 1）。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"task_id": map[string]any{"type": "string", "description": "任务 ID 或前缀"},
+				"seq":     map[string]any{"type": "integer", "description": "新的顺序序号（正整数）"},
+			},
+			"required": []string{"task_id", "seq"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			id, _ := args["task_id"].(string)
+			var seq int64
+			switch v := args["seq"].(type) {
+			case float64:
+				seq = int64(v)
+			case int64:
+				seq = v
+			case int:
+				seq = int64(v)
+			}
+			return e.taskqMove(ctx, strings.TrimSpace(id), seq)
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "taskq_create",
+		Description: "向任务队列中主动入队一个新任务。title 填任务标题，prompt 填具体执行需求与指令。priority 可选 high/normal/low（默认 normal）。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title":    map[string]any{"type": "string", "description": "任务标题"},
+				"prompt":   map[string]any{"type": "string", "description": "任务具体执行需求/提示词（留空则默认同标题）"},
+				"priority": map[string]any{"type": "string", "description": "优先级：high / normal / low（默认 normal）"},
+				"project":  map[string]any{"type": "string", "description": "所属项目（留空则继承当前激活项目）"},
+				"requires": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "任务所需能力列表（默认 [\"coding\"]）",
+				},
+			},
+			"required": []string{"title"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			title, _ := args["title"].(string)
+			prompt, _ := args["prompt"].(string)
+			prio, _ := args["priority"].(string)
+			proj, _ := args["project"].(string)
+			reqs := toStringSlice(args["requires"])
+			return e.taskqCreate(ctx, title, prompt, prio, proj, reqs)
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "card_native_add",
+		Description: "为本机能力卡（capabilities.yaml）添加一项原生命令行能力，变更后自动热重载。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":          map[string]any{"type": "string", "description": "能力 ID，如 ffmpeg:transcode"},
+				"description": map[string]any{"type": "string", "description": "能力说明"},
+				"command":     map[string]any{"type": "string", "description": "执行命令"},
+				"args":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "默认参数列表"},
+				"tier":        map[string]any{"type": "integer", "description": "操作等级（1=可逆/只读，2=不可逆/需授权，默认 1）"},
+			},
+			"required": []string{"id", "description", "command"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			id, _ := args["id"].(string)
+			desc, _ := args["description"].(string)
+			cmd, _ := args["command"].(string)
+			tier := 1
+			if tVal, ok := args["tier"]; ok {
+				switch t := tVal.(type) {
+				case float64:
+					tier = int(t)
+				case int:
+					tier = t
+				}
+			}
+			return e.cardNativeAdd(ctx, ledger.NativeAbility{
+				ID:          strings.TrimSpace(id),
+				Description: strings.TrimSpace(desc),
+				Command:     strings.TrimSpace(cmd),
+				Args:        toStringSlice(args["args"]),
+				Tier:        tier,
+			})
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "card_native_remove",
+		Description: "从本机能力卡中删除指定 ID 的原生能力，变更后自动热重载。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{"type": "string", "description": "要删除的原生能力 ID"},
+			},
+			"required": []string{"id"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			id, _ := args["id"].(string)
+			return e.cardNativeRemove(ctx, strings.TrimSpace(id))
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "card_agent_add",
+		Description: "为本机能力卡注册一个新的 Agent CLI，变更后自动热重载。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":         map[string]any{"type": "string", "description": "Agent 名称，如 claude_code"},
+				"adapter":      map[string]any{"type": "string", "description": "适配器文件名，如 claude_code.py"},
+				"capabilities": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "能力标识列表"},
+				"best_at":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "擅长领域"},
+				"not_for":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "不适合领域"},
+				"cost_tier":    map[string]any{"type": "string", "description": "成本档位：low / mid / high"},
+				"tier":         map[string]any{"type": "integer", "description": "安全等级（1=可逆，2=不可逆，默认 2）"},
+			},
+			"required": []string{"name", "adapter", "capabilities"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			name, _ := args["name"].(string)
+			adapter, _ := args["adapter"].(string)
+			costTier, _ := args["cost_tier"].(string)
+			tier := 2
+			if tVal, ok := args["tier"]; ok {
+				switch t := tVal.(type) {
+				case float64:
+					tier = int(t)
+				case int:
+					tier = t
+				}
+			}
+			return e.cardAgentAdd(ctx, strings.TrimSpace(name), ledger.Agent{
+				Adapter:      strings.TrimSpace(adapter),
+				Capabilities: toStringSlice(args["capabilities"]),
+				BestAt:       toStringSlice(args["best_at"]),
+				NotFor:       toStringSlice(args["not_for"]),
+				CostTier:     strings.TrimSpace(costTier),
+				Tier:         tier,
+			})
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "card_agent_set",
+		Description: "修改本机能力卡中已有的 Agent CLI 配置属性，变更后自动热重载。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":         map[string]any{"type": "string", "description": "Agent 名称"},
+				"adapter":      map[string]any{"type": "string", "description": "适配器文件名"},
+				"capabilities": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "能力标识列表"},
+				"best_at":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "擅长领域"},
+				"not_for":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "不适合领域"},
+				"cost_tier":    map[string]any{"type": "string", "description": "成本档位：low / mid / high"},
+				"tier":         map[string]any{"type": "integer", "description": "安全等级（1=可逆，2=不可逆）"},
+			},
+			"required": []string{"name"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			name, _ := args["name"].(string)
+			var upd cardmut.AgentUpdate
+			if a, ok := args["adapter"].(string); ok && a != "" {
+				upd.Adapter = &a
+			}
+			if caps := toStringSlice(args["capabilities"]); caps != nil {
+				upd.Capabilities = &caps
+			}
+			if best := toStringSlice(args["best_at"]); best != nil {
+				upd.BestAt = &best
+			}
+			if notFor := toStringSlice(args["not_for"]); notFor != nil {
+				upd.NotFor = &notFor
+			}
+			if ct, ok := args["cost_tier"].(string); ok && ct != "" {
+				upd.CostTier = &ct
+			}
+			if tVal, ok := args["tier"]; ok {
+				switch t := tVal.(type) {
+				case float64:
+					it := int(t)
+					upd.Tier = &it
+				case int:
+					upd.Tier = &t
+				}
+			}
+			return e.cardAgentSet(ctx, strings.TrimSpace(name), upd)
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "card_agent_remove",
+		Description: "从本机能力卡中注销指定的 Agent CLI，变更后自动热重载。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string", "description": "Agent 名称"},
+			},
+			"required": []string{"name"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			name, _ := args["name"].(string)
+			return e.cardAgentRemove(ctx, strings.TrimSpace(name))
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "card_manual_add",
+		Description: "为本机能力卡添加一项人工协同能力，变更后自动热重载。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":     map[string]any{"type": "string", "description": "能力 ID"},
+				"notify": map[string]any{"type": "string", "description": "通知渠道/提示"},
+			},
+			"required": []string{"id"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			id, _ := args["id"].(string)
+			notify, _ := args["notify"].(string)
+			return e.cardManualAdd(ctx, ledger.ManualAbility{
+				ID:     strings.TrimSpace(id),
+				Notify: strings.TrimSpace(notify),
+			})
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "card_manual_remove",
+		Description: "从本机能力卡中删除指定的人工协同能力，变更后自动热重载。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{"type": "string", "description": "人工能力 ID"},
+			},
+			"required": []string{"id"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			id, _ := args["id"].(string)
+			return e.cardManualRemove(ctx, strings.TrimSpace(id))
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "project_list",
+		Description: "查看系统中所有项目列表，以及当前会话正处于哪个激活项目中。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			return e.projectList(ctx)
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "project_create",
+		Description: "创建一个新项目。name 填项目名称，work_dir 为工作目录（可选），description 为项目描述（可选），enter 为是否立即切换进入该项目（默认 true）。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":        map[string]any{"type": "string", "description": "项目名称"},
+				"work_dir":    map[string]any{"type": "string", "description": "工作目录（可选）"},
+				"description": map[string]any{"type": "string", "description": "项目描述（可选）"},
+				"enter":       map[string]any{"type": "boolean", "description": "是否立即切换进入该项目（默认 true）"},
+			},
+			"required": []string{"name"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			name, _ := args["name"].(string)
+			workDir, _ := args["work_dir"].(string)
+			desc, _ := args["description"].(string)
+			enter := true
+			if eVal, ok := args["enter"].(bool); ok {
+				enter = eVal
+			}
+			return e.projectCreate(ctx, strings.TrimSpace(name), strings.TrimSpace(workDir), strings.TrimSpace(desc), enter)
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "project_enter",
+		Description: "切换当前会话所处的目标项目。切换后新建任务默认归属于该项目。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string", "description": "要进入的项目名称"},
+			},
+			"required": []string{"name"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			name, _ := args["name"].(string)
+			return e.projectEnter(ctx, strings.TrimSpace(name))
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "project_exit",
+		Description: "退出当前激活的项目环境，回到全局无项目状态。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			return e.projectExit(ctx)
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "node_remove",
+		Description: "从设备网络目录中移除一个离线或废弃的节点记录。不能删除本机或在线节点。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"node_id": map[string]any{"type": "string", "description": "要移除的节点 ID"},
+			},
+			"required": []string{"node_id"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			id, _ := args["node_id"].(string)
+			return e.nodeRemove(ctx, strings.TrimSpace(id))
 		},
 	})
 }
@@ -539,4 +919,399 @@ func truncSuffix(total, shown int) string {
 		return ""
 	}
 	return fmt.Sprintf("，仅显示前 %d 条", shown)
+}
+
+func orDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "—"
+	}
+	return s
+}
+
+func toStringSlice(val any) []string {
+	if val == nil {
+		return nil
+	}
+	switch v := val.(type) {
+	case []string:
+		return v
+	case []any:
+		res := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				res = append(res, strings.TrimSpace(s))
+			}
+		}
+		return res
+	default:
+		return nil
+	}
+}
+
+func parseTaskPriority(s string) (int, string, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "high", "高":
+		return core.PriorityHigh, "high (高)", true
+	case "normal", "mid", "medium", "中", "普通", "":
+		return core.PriorityNormal, "normal (普通)", true
+	case "low", "低":
+		return core.PriorityLow, "low (低)", true
+	default:
+		return 0, "", false
+	}
+}
+
+func priorityName(p int) string {
+	switch p {
+	case core.PriorityHigh:
+		return "high"
+	case core.PriorityNormal:
+		return "normal"
+	case core.PriorityLow:
+		return "low"
+	default:
+		return fmt.Sprint(p)
+	}
+}
+
+func (e *Engine) taskqCancel(ctx context.Context, taskID string) (string, error) {
+	if taskID == "" {
+		return "", fmt.Errorf("task_id 不能为空")
+	}
+	store := core.NewTaskStore(e.db, e.logger)
+	resolved, err := e.resolveTaskID(ctx, store, taskID)
+	if err != nil {
+		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
+	}
+	ids, err := e.CancelTask(ctx, resolved)
+	if err != nil {
+		return "", fmt.Errorf("取消任务 %s：%w", resolved, err)
+	}
+	if len(ids) == 0 {
+		return fmt.Sprintf("任务 %s 已是终态或已取消", resolved), nil
+	}
+	return fmt.Sprintf("任务 %s 已成功取消（级联中止 %d 个任务：%s）", resolved, len(ids), strings.Join(ids, "、")), nil
+}
+
+func (e *Engine) taskqPriority(ctx context.Context, taskID, priority string) (string, error) {
+	if taskID == "" {
+		return "", fmt.Errorf("task_id 不能为空")
+	}
+	prio, prioName, ok := parseTaskPriority(priority)
+	if !ok {
+		return "", fmt.Errorf("无效的优先级 %q，必须为 high、normal 或 low", priority)
+	}
+	store := core.NewTaskStore(e.db, e.logger)
+	resolved, err := e.resolveTaskID(ctx, store, taskID)
+	if err != nil {
+		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
+	}
+	if err := store.SetPriority(ctx, resolved, prio); err != nil {
+		return "", fmt.Errorf("设置任务优先级：%w", err)
+	}
+	return fmt.Sprintf("已将任务 %s 的排队优先级设置为 %s", resolved, prioName), nil
+}
+
+func (e *Engine) taskqMove(ctx context.Context, taskID string, seq int64) (string, error) {
+	if taskID == "" {
+		return "", fmt.Errorf("task_id 不能为空")
+	}
+	if seq < 1 {
+		return "", fmt.Errorf("seq 必须为正整数（>= 1）")
+	}
+	store := core.NewTaskStore(e.db, e.logger)
+	resolved, err := e.resolveTaskID(ctx, store, taskID)
+	if err != nil {
+		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
+	}
+	if err := store.SetSeq(ctx, resolved, seq); err != nil {
+		return "", fmt.Errorf("设置排队序号：%w", err)
+	}
+	return fmt.Sprintf("已将任务 %s 的排队顺序序号设置为 %d", resolved, seq), nil
+}
+
+func (e *Engine) taskqCreate(ctx context.Context, title, prompt, priority, project string, requires []string) (string, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "", fmt.Errorf("title 不能为空")
+	}
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		prompt = title
+	}
+	prio := core.PriorityNormal
+	if priority != "" {
+		p, _, ok := parseTaskPriority(priority)
+		if !ok {
+			return "", fmt.Errorf("无效的优先级 %q，可选：high / normal / low", priority)
+		}
+		prio = p
+	}
+	if len(requires) == 0 {
+		requires = []string{"coding"}
+	}
+	if project == "" {
+		project, _ = e.Project()
+	}
+	in := core.TaskInput{
+		Title:    title,
+		Project:  project,
+		Intent:   prompt,
+		Requires: requires,
+	}
+	q := core.DefaultQueueSpec()
+	q.Priority = prio
+	t, err := e.EnqueueTask(ctx, in, q)
+	if err != nil {
+		return "", fmt.Errorf("创建任务：%w", err)
+	}
+	return fmt.Sprintf("新任务已成功入队：ID=%s，标题=%s，状态=%s，优先级=%s",
+		t.TaskID, t.Title, zhTaskState(t.State), priorityName(t.Priority)), nil
+}
+
+func (e *Engine) checkCardPath() (string, error) {
+	if e.cardPath == "" {
+		return "", fmt.Errorf("当前会话未加载能力卡文件（未配置 card_path），无法修改能力卡")
+	}
+	return e.cardPath, nil
+}
+
+func (e *Engine) cardNativeAdd(ctx context.Context, ab ledger.NativeAbility) (string, error) {
+	path, err := e.checkCardPath()
+	if err != nil {
+		return "", err
+	}
+	if ab.ID == "" {
+		return "", fmt.Errorf("能力 id 不能为空")
+	}
+	if ab.Command == "" {
+		return "", fmt.Errorf("执行 command 不能为空")
+	}
+	if err := cardmut.NativeAdd(path, ab); err != nil {
+		return "", fmt.Errorf("添加原生能力：%w", err)
+	}
+	if e.sched != nil {
+		_ = e.ReloadCard(path)
+	}
+	return fmt.Sprintf("原生能力 %s 已成功添加并热重载生效", ab.ID), nil
+}
+
+func (e *Engine) cardNativeRemove(ctx context.Context, id string) (string, error) {
+	path, err := e.checkCardPath()
+	if err != nil {
+		return "", err
+	}
+	if id == "" {
+		return "", fmt.Errorf("能力 id 不能为空")
+	}
+	if err := cardmut.NativeRemove(path, id); err != nil {
+		return "", fmt.Errorf("删除原生能力：%w", err)
+	}
+	if e.sched != nil {
+		_ = e.ReloadCard(path)
+	}
+	return fmt.Sprintf("原生能力 %s 已成功删除并热重载生效", id), nil
+}
+
+func (e *Engine) cardAgentAdd(ctx context.Context, name string, ag ledger.Agent) (string, error) {
+	path, err := e.checkCardPath()
+	if err != nil {
+		return "", err
+	}
+	if name == "" {
+		return "", fmt.Errorf("Agent 名称不能为空")
+	}
+	if ag.Adapter == "" {
+		return "", fmt.Errorf("Agent adapter 不能为空")
+	}
+	if len(ag.Capabilities) == 0 {
+		return "", fmt.Errorf("Agent capabilities 不能为空")
+	}
+	if err := cardmut.AgentAdd(path, name, ag); err != nil {
+		return "", fmt.Errorf("注册 Agent：%w", err)
+	}
+	if e.sched != nil {
+		_ = e.ReloadCard(path)
+	}
+	return fmt.Sprintf("Agent %s 已成功注册并热重载生效", name), nil
+}
+
+func (e *Engine) cardAgentSet(ctx context.Context, name string, upd cardmut.AgentUpdate) (string, error) {
+	path, err := e.checkCardPath()
+	if err != nil {
+		return "", err
+	}
+	if name == "" {
+		return "", fmt.Errorf("Agent 名称不能为空")
+	}
+	if err := cardmut.AgentSet(path, name, upd); err != nil {
+		return "", fmt.Errorf("修改 Agent：%w", err)
+	}
+	if e.sched != nil {
+		_ = e.ReloadCard(path)
+	}
+	return fmt.Sprintf("Agent %s 已成功更新并热重载生效", name), nil
+}
+
+func (e *Engine) cardAgentRemove(ctx context.Context, name string) (string, error) {
+	path, err := e.checkCardPath()
+	if err != nil {
+		return "", err
+	}
+	if name == "" {
+		return "", fmt.Errorf("Agent 名称不能为空")
+	}
+	if err := cardmut.AgentRemove(path, name); err != nil {
+		return "", fmt.Errorf("删除 Agent：%w", err)
+	}
+	if e.sched != nil {
+		_ = e.ReloadCard(path)
+	}
+	return fmt.Sprintf("Agent %s 已成功注销并热重载生效", name), nil
+}
+
+func (e *Engine) cardManualAdd(ctx context.Context, ab ledger.ManualAbility) (string, error) {
+	path, err := e.checkCardPath()
+	if err != nil {
+		return "", err
+	}
+	if ab.ID == "" {
+		return "", fmt.Errorf("人工能力 id 不能为空")
+	}
+	if err := cardmut.ManualAdd(path, ab); err != nil {
+		return "", fmt.Errorf("添加人工能力：%w", err)
+	}
+	if e.sched != nil {
+		_ = e.ReloadCard(path)
+	}
+	return fmt.Sprintf("人工能力 %s 已成功添加并热重载生效", ab.ID), nil
+}
+
+func (e *Engine) cardManualRemove(ctx context.Context, id string) (string, error) {
+	path, err := e.checkCardPath()
+	if err != nil {
+		return "", err
+	}
+	if id == "" {
+		return "", fmt.Errorf("人工能力 id 不能为空")
+	}
+	if err := cardmut.ManualRemove(path, id); err != nil {
+		return "", fmt.Errorf("删除人工能力：%w", err)
+	}
+	if e.sched != nil {
+		_ = e.ReloadCard(path)
+	}
+	return fmt.Sprintf("人工能力 %s 已成功删除并热重载生效", id), nil
+}
+
+func (e *Engine) projectList(ctx context.Context) (string, error) {
+	pstore := projectstore.NewStore(e.db)
+	ps, err := pstore.List()
+	if err != nil {
+		return "", fmt.Errorf("查询项目列表：%w", err)
+	}
+	active, _ := pstore.Active()
+	if len(ps) == 0 {
+		return "系统中当前暂无项目记录。", nil
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "系统共 %d 个项目：", len(ps))
+	for _, p := range ps {
+		marker := "  "
+		if p.Name == active {
+			marker = "* "
+		}
+		desc := ""
+		if p.Description != "" {
+			desc = " — " + p.Description
+		}
+		workDir := "默认工作目录"
+		if p.WorkDir != "" {
+			workDir = p.WorkDir
+		}
+		fmt.Fprintf(&b, "\n%s%s（%s）%s", marker, p.Name, workDir, desc)
+	}
+	if active != "" {
+		fmt.Fprintf(&b, "\n\n当前处于激活状态的项目为：%s", active)
+	} else {
+		b.WriteString("\n\n当前处于全局无项目状态。")
+	}
+	return b.String(), nil
+}
+
+func (e *Engine) projectCreate(ctx context.Context, name, workDir, description string, enter bool) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("项目名称不能为空")
+	}
+	pstore := projectstore.NewStore(e.db)
+	p, err := pstore.Create(name, workDir, description)
+	if err != nil {
+		return "", fmt.Errorf("创建项目：%w", err)
+	}
+	if enter {
+		if err := pstore.SetActive(p.Name); err != nil {
+			return "", fmt.Errorf("进入项目：%w", err)
+		}
+		e.SetProject(p.Name, p.WorkDir)
+		return fmt.Sprintf("项目 %s 创建成功，并已切换进入该项目（工作目录：%s）", p.Name, orDash(p.WorkDir)), nil
+	}
+	return fmt.Sprintf("项目 %s 创建成功（工作目录：%s）", p.Name, orDash(p.WorkDir)), nil
+}
+
+func (e *Engine) projectEnter(ctx context.Context, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("项目名称不能为空")
+	}
+	pstore := projectstore.NewStore(e.db)
+	p, err := pstore.Get(name)
+	if err != nil {
+		return "", fmt.Errorf("读取项目 %s：%w", name, err)
+	}
+	if err := pstore.SetActive(p.Name); err != nil {
+		return "", fmt.Errorf("进入项目：%w", err)
+	}
+	e.SetProject(p.Name, p.WorkDir)
+	return fmt.Sprintf("已切换进入项目 %s（工作目录：%s）", p.Name, orDash(p.WorkDir)), nil
+}
+
+func (e *Engine) projectExit(ctx context.Context) (string, error) {
+	pstore := projectstore.NewStore(e.db)
+	if err := pstore.ClearActive(); err != nil {
+		return "", fmt.Errorf("退出项目：%w", err)
+	}
+	e.SetProject("", "")
+	return "已退出项目，当前处于全局无项目状态。", nil
+}
+
+func (e *Engine) nodeRemove(ctx context.Context, nodeID string) (string, error) {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return "", fmt.Errorf("node_id 不能为空")
+	}
+	if e.cfg != nil && nodeID == e.selfNodeID() {
+		return "", fmt.Errorf("不能删除本机节点的记录")
+	}
+	nodes, err := ledger.Query(e.db, "", "")
+	if err != nil {
+		return "", fmt.Errorf("查询节点：%w", err)
+	}
+	found := false
+	for _, n := range nodes {
+		if n.ID == nodeID {
+			found = true
+			if n.Status == "online" {
+				return "", fmt.Errorf("节点 %s 当前在线，请先停止该节点再移除", nodeID)
+			}
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("未找到 ID 为 %s 的节点", nodeID)
+	}
+	if _, err := ledger.Remove(e.db, nodeID); err != nil {
+		return "", fmt.Errorf("移除节点：%w", err)
+	}
+	return fmt.Sprintf("已成功从网络拓扑中移除节点 %s", nodeID), nil
 }

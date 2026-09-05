@@ -107,3 +107,41 @@ func providerDetail(body string) string {
 	}
 	return truncate(strings.TrimSpace(line), 200)
 }
+
+// IsFatalModelError reports whether an error from the model client indicates
+// that the provider or endpoint failed in an unrecoverable manner (unauthorized 401,
+// forbidden/quota 403, not found 404, rate limited 429 after retries, 5xx server outage,
+// or connection unreachable), making fallback to an alternate model candidate desirable.
+// User context cancellation (context.Canceled) is NOT considered a fatal model error.
+func IsFatalModelError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, ErrNoKey) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var se *statusError
+	if errors.As(err, &se) {
+		return se.status == http.StatusUnauthorized ||
+			se.status == http.StatusForbidden ||
+			se.status == http.StatusNotFound ||
+			se.status == http.StatusTooManyRequests ||
+			se.status >= 500
+	}
+	var re *retryableError
+	if errors.As(err, &re) {
+		return true
+	}
+	var te *transientError
+	if errors.As(err, &te) {
+		return true
+	}
+	var ce *ClassifyError
+	if errors.As(err, &ce) {
+		return IsFatalModelError(ce.Err)
+	}
+	return false
+}

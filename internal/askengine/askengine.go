@@ -111,6 +111,38 @@ type Engine struct {
 	// cardPath mirrors Options.CardPath: the capabilities.yaml the engine
 	// loaded its scheduler from, reported by the system_status tool.
 	cardPath string
+
+	fallbacksMu sync.RWMutex
+	fallbacks   []*entry.Client
+}
+
+// getFallbacks returns a snapshot of the configured fallback clients.
+func (e *Engine) getFallbacks() []*entry.Client {
+	e.fallbacksMu.RLock()
+	defer e.fallbacksMu.RUnlock()
+	return append([]*entry.Client(nil), e.fallbacks...)
+}
+
+func (e *Engine) buildFallbacks(primary config.ModelConfig, db *sql.DB) []*entry.Client {
+	if e.cfg == nil {
+		return nil
+	}
+	var fallbacks []*entry.Client
+	for _, m := range e.cfg.Models {
+		if m.APIKey == "" {
+			continue
+		}
+		if m.Model == primary.Model && m.BaseURL == primary.BaseURL {
+			continue
+		}
+		if fc, err := entry.NewClient(m); err == nil {
+			if db != nil {
+				fc.SetDiskCache(entry.NewDiskCache(db))
+			}
+			fallbacks = append(fallbacks, fc)
+		}
+	}
+	return fallbacks
 }
 
 // SetModel hot-swaps the entry model client at runtime (the settings page):
@@ -122,6 +154,10 @@ func (e *Engine) SetModel(mc config.ModelConfig) error {
 	}
 	c.SetDiskCache(entry.NewDiskCache(e.db))
 	e.client.Store(c)
+	e.cfg.Model = mc
+	e.fallbacksMu.Lock()
+	e.fallbacks = e.buildFallbacks(mc, e.db)
+	e.fallbacksMu.Unlock()
 	return nil
 }
 
@@ -170,6 +206,9 @@ type Result struct {
 	Stdout    string
 	Stderr    string
 	ExitCode  int
+	Agent     string
+	Model     string
+	Injected  bool
 	// Report is the LLM-generated summary of the task outcome. It is filled
 	// by SummarizeResult after every inline task (success or failure) so the
 	// user sees a human-readable summary instead of raw stdout/stderr. A
@@ -190,6 +229,7 @@ type Result struct {
 	InputTokens  int64
 	OutputTokens int64
 	Latency      time.Duration
+	Cost         float64
 
 	// NeedsApproval is set on a task Result when execution refused for lack of
 	// tier-2 (irreversible) consent and the caller supplied no OnApproval
@@ -327,6 +367,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		replyASCII: opts.ReplyASCII,
 		cardPath:   opts.CardPath,
 	}
+	e.fallbacks = e.buildFallbacks(cfg.Model, db)
 	// The registry is built with the engine itself: the management tools hold
 	// it and dereference lazily, so a scheduler attached below (or never,
 	// without CardPath) is seen at call time.
@@ -520,6 +561,7 @@ const (
 type Progress struct {
 	Kind   ProgressKind
 	Name   string
+	Model  string
 	Round  int
 	Budget int
 }
@@ -554,7 +596,11 @@ func (cb StreamCallbacks) progress(p Progress) {
 	case ProgressRoute:
 		cb.OnStatus(fmt.Sprintf("routing to %s…", p.Name))
 	case ProgressExec:
-		cb.OnStatus(fmt.Sprintf("running %s%s…", p.Name, roundNote(p)))
+		extra := ""
+		if p.Model != "" {
+			extra = fmt.Sprintf(" (%s)", p.Model)
+		}
+		cb.OnStatus(fmt.Sprintf("running %s%s%s…", p.Name, extra, roundNote(p)))
 	case ProgressJudge:
 		// A judge_start marker arrives with no verdict yet; phrase it without
 		// the empty parens the missing verdict used to leave behind.
@@ -613,6 +659,7 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	// delegations. The record survives the ask's context via WithoutCancel.
 	usageBefore := client.Usage()
 	askStart := time.Now()
+	var fallbackUsed string
 	defer func() {
 		// Same numbers, two consumers: the result carries them back to the
 		// caller (the CLI's closing "1.8s · 1.2k tokens" line) and the metrics
@@ -621,6 +668,10 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 			d := client.Usage().Sub(usageBefore)
 			res.InputTokens, res.OutputTokens = d.InputTokens, d.OutputTokens
 			res.Latency = time.Since(askStart)
+			res.Cost = client.EstimateCost(d.InputTokens, d.OutputTokens)
+			if fallbackUsed != "" && res.Note == "" {
+				res.Note = fmt.Sprintf("主模型不可用，已自动切换至备用模型: %s", fallbackUsed)
+			}
 			// Reasoning backstop (D14): every return path funnels through
 			// here, so one strip covers the Answer this engine hands to
 			// conversation history and the panel, even if a future provider
@@ -740,7 +791,38 @@ rounds:
 			out, err = entry.ClassifyTurnsWithTools(ctx, client, devices, conversationMemory, turns, reg, classifyOpts...)
 		}
 		if err != nil {
-			return nil, err
+			if entry.IsFatalModelError(err) {
+				fallbacks := e.getFallbacks()
+				fallbackSuccess := false
+				for _, fb := range fallbacks {
+					if fb.ModelName() == client.ModelName() {
+						continue
+					}
+					e.logger.Warn("askengine: primary model fatal error, attempting fallback", "primary", client.ModelName(), "fallback", fb.ModelName(), "err", err)
+					cb.progress(Progress{Kind: ProgressRoute, Name: fb.ModelName()})
+					var fbOut entry.Output
+					var fbErr error
+					if cb.OnDelta != nil || cb.OnReasoning != nil {
+						fbOut, fbErr = entry.ClassifyStreamWithTools(ctx, fb, devices, conversationMemory, turns, reg, cb.OnDelta, cb.OnReasoning, classifyOpts...)
+					} else {
+						fbOut, fbErr = entry.ClassifyTurnsWithTools(ctx, fb, devices, conversationMemory, turns, reg, classifyOpts...)
+					}
+					if fbErr == nil {
+						client = fb
+						usageBefore = fb.Usage()
+						fallbackUsed = fb.ModelName()
+						out = fbOut
+						err = nil
+						fallbackSuccess = true
+						break
+					}
+				}
+				if !fallbackSuccess {
+					return nil, err
+				}
+			} else {
+				return nil, err
+			}
 		}
 
 		switch out.Kind {
@@ -828,7 +910,34 @@ rounds:
 		final, ferr = entry.ClassifyTurns(ctx, client, devices, conversationMemory, turns, classifyOpts...)
 	}
 	if ferr != nil {
-		return nil, fmt.Errorf("reached max tool rounds (%d): %w", maxRounds, ferr)
+		if entry.IsFatalModelError(ferr) {
+			fallbacks := e.getFallbacks()
+			for _, fb := range fallbacks {
+				if fb.ModelName() == client.ModelName() {
+					continue
+				}
+				e.logger.Warn("askengine: final round fatal error, attempting fallback", "primary", client.ModelName(), "fallback", fb.ModelName(), "err", ferr)
+				cb.progress(Progress{Kind: ProgressRoute, Name: fb.ModelName()})
+				var fbFinal entry.Output
+				var fbErr error
+				if cb.OnDelta != nil || cb.OnReasoning != nil {
+					fbFinal, fbErr = entry.ClassifyStreamWithTools(ctx, fb, devices, conversationMemory, turns, nil, cb.OnDelta, cb.OnReasoning, classifyOpts...)
+				} else {
+					fbFinal, fbErr = entry.ClassifyTurns(ctx, fb, devices, conversationMemory, turns, classifyOpts...)
+				}
+				if fbErr == nil {
+					client = fb
+					usageBefore = fb.Usage()
+					fallbackUsed = fb.ModelName()
+					final = fbFinal
+					ferr = nil
+					break
+				}
+			}
+		}
+		if ferr != nil {
+			return nil, fmt.Errorf("reached max tool rounds (%d): %w", maxRounds, ferr)
+		}
 	}
 	if final.Kind == entry.KindTask {
 		if e.sched == nil {
@@ -844,7 +953,7 @@ rounds:
 		if !res.NeedsApproval && !e.queueTasks {
 			// No rounds left to converge through, so produce the report in
 			// one shot rather than returning raw output.
-			if report, rerr := e.reportTaskOutcome(ctx, turns, devices, conversationMemory, classifyOpts, final.Task, res); rerr == nil {
+			if report, rerr := e.reportTaskOutcome(ctx, client, turns, devices, conversationMemory, classifyOpts, final.Task, res); rerr == nil {
 				res.Answer = report
 			} else {
 				e.logger.Warn("askengine: task report degraded", "task", res.TaskID, "err", rerr)
@@ -1081,6 +1190,9 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		Stdout:    result.Stdout,
 		Stderr:    result.Stderr,
 		ExitCode:  result.ExitCode,
+		Agent:     result.Agent,
+		Model:     result.Model,
+		Injected:  result.Injected,
 	}
 	// Inline approval closure: a tier-2 task with no standing consent parks in
 	// review with an authorization-refusal reason. Turn that dead end into a
@@ -1127,8 +1239,18 @@ func progressForEvent(typ string, data any) (Progress, bool) {
 		if name == "" {
 			name = eventField(data, "adapter")
 		}
-		return Progress{Kind: ProgressExec, Name: name,
+		model := eventField(data, "model")
+		return Progress{Kind: ProgressExec, Name: name, Model: model,
 			Round: intField(data, "round"), Budget: intField(data, "budget")}, true
+	case core.EvProgress, core.EvSubagentEvent:
+		note := eventField(data, "note")
+		if note != "" {
+			return Progress{Kind: ProgressTool, Name: note}, true
+		}
+	case core.EvModelInjection:
+		name := eventField(data, "agent")
+		model := eventField(data, "model")
+		return Progress{Kind: ProgressExec, Name: name, Model: model}, true
 	case core.EvJudgeStart:
 		// Opening marker for the reviewing stage; the round's result event
 		// below repeats the phase, and the renderer dedupes the second one.
@@ -1264,9 +1386,10 @@ func (e *Engine) recordEntryUsage(ctx context.Context, res *Result, client *entr
 	if res != nil {
 		taskID = res.TaskID
 	}
+	cost := client.EstimateCost(delta.InputTokens, delta.OutputTokens)
 	store := core.NewTaskStore(e.db, e.logger)
 	if err := store.RecordDelegationMetric(ctx, taskID, e.cfg.Node.Name, "entry:"+client.ModelName(),
-		nil, true, latency.Milliseconds(), int(delta.Total())); err != nil {
+		nil, true, latency.Milliseconds(), int(delta.Total()), cost); err != nil {
 		e.logger.Warn("askengine: record entry usage", "err", err)
 	}
 }

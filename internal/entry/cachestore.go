@@ -19,8 +19,9 @@ import (
 // deliberately best-effort: a cache that cannot be read or written degrades
 // to a plain uncached call, never an error for the user.
 type DiskCache struct {
-	db  *sql.DB
-	ttl time.Duration
+	db        *sql.DB
+	ttl       time.Duration
+	lastEvict int64
 }
 
 // defaultCacheTTL is how long a cached decision stays valid. Inputs are
@@ -28,6 +29,9 @@ type DiskCache struct {
 // different model, prompt wording updates); a bounded TTL keeps that window
 // small without any explicit invalidation machinery.
 const defaultCacheTTL = 7 * 24 * time.Hour
+
+// evictThrottleInterval is the minimum interval between table cleanup passes.
+const evictThrottleInterval = 600 // 10 minutes
 
 // NewDiskCache builds a disk cache over an already-migrated database. A nil
 // db yields a disabled cache (all operations are no-ops).
@@ -56,8 +60,8 @@ func (c *DiskCache) Get(ctx context.Context, ns, k1, k2 string, dst any) bool {
 	return json.Unmarshal([]byte(blob), dst) == nil
 }
 
-// Put stores v under (ns, k1, k2) and evicts everything past the TTL. Both
-// statements are best-effort; a failed write only costs a future miss.
+// Put stores v under (ns, k1, k2) and periodically evicts rows past the TTL.
+// Both statements are best-effort; a failed write only costs a future miss.
 func (c *DiskCache) Put(ctx context.Context, ns, k1, k2 string, v any) {
 	if c == nil || c.db == nil {
 		return
@@ -67,9 +71,10 @@ func (c *DiskCache) Put(ctx context.Context, ns, k1, k2 string, v any) {
 		return
 	}
 	now := time.Now().Unix()
-	if _, err := c.db.ExecContext(ctx,
-		`DELETE FROM entry_cache WHERE created_at < ?`, now-int64(c.ttl/time.Second)); err != nil {
-		return
+	if c.ttl <= 0 || now-c.lastEvict >= evictThrottleInterval {
+		c.lastEvict = now
+		_, _ = c.db.ExecContext(ctx,
+			`DELETE FROM entry_cache WHERE created_at < ?`, now-int64(c.ttl/time.Second))
 	}
 	_, _ = c.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO entry_cache (ns, k1, k2, output_json, created_at) VALUES (?, ?, ?, ?, ?)`,

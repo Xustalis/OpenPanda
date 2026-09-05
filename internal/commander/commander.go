@@ -101,6 +101,15 @@ func (r *Router) SetAgentProber(fn func(name string, ag ledger.Agent) bool) {
 	r.probeAgent = fn
 }
 
+// Card returns the router's underlying capability card.
+func (r *Router) Card() ledger.Card { return r.card }
+
+// Agent returns the agent definition by name, or ok=false.
+func (r *Router) Agent(name string) (ledger.Agent, bool) {
+	ag, ok := r.card.Agents[name]
+	return ag, ok
+}
+
 // Plan describes how to execute a task on this node.
 type Plan struct {
 	Kind    string // native | agent | manual
@@ -388,9 +397,17 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 	// available; an unavailable candidate (missing binary / failed probe) is
 	// skipped in favor of the next match. All unavailable fails closed with
 	// an explicit error the upper layer can turn into a manual plan.
-	attempts := append([]string{plan.Agent}, plan.Alternates...)
+	seenAttempts := make(map[string]bool, len(plan.Alternates)+1)
+	var attempts []string
+	for _, name := range append([]string{plan.Agent}, plan.Alternates...) {
+		if !seenAttempts[name] && name != "" {
+			seenAttempts[name] = true
+			attempts = append(attempts, name)
+		}
+	}
 	var unavailable []string
-	for _, name := range attempts {
+	var lastExecRes *Result
+	for i, name := range attempts {
 		ag, ok := r.card.Agents[name]
 		if !ok {
 			unavailable = append(unavailable, name+" (not on card)")
@@ -453,7 +470,10 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 			Agent:     name,
 			Usage:     ar.Usage,
 			SessionID: ar.SessionID,
+			Model:     ar.Model,
+			Injected:  ar.Injected,
 		}
+		lastExecRes = &res
 
 		// If execution succeeded, or if user explicitly cancelled, return immediately.
 		if ar.OK || ctx.Err() != nil {
@@ -464,9 +484,12 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// log and record the failure then continue the loop to try the next alternate agent.
 		unavailable = append(unavailable, fmt.Sprintf("%s (exec failed: %s)", name, strings.TrimSpace(stderr)))
 		// If this was the last attempt, return the failure result
-		if name == attempts[len(attempts)-1] {
+		if i == len(attempts)-1 {
 			return res
 		}
+	}
+	if lastExecRes != nil {
+		return *lastExecRes
 	}
 	return Result{
 		OK:       false,
@@ -493,6 +516,8 @@ type Result struct {
 	// follow-up round can resume (empty when the adapter has none).
 	Usage     *UsageDetail
 	SessionID string
+	Model     string `json:"model,omitempty"`
+	Injected  bool   `json:"injected,omitempty"`
 }
 
 // AgentResult is what an adapter returns.
@@ -505,6 +530,8 @@ type AgentResult struct {
 	Cost      float64
 	Usage     *UsageDetail `json:"usage"`
 	SessionID string       `json:"session_id"`
+	Model     string       `json:"model,omitempty"`
+	Injected  bool         `json:"injected,omitempty"`
 }
 
 // runAdapterDefault shells out to a Python adapter in adapters/, injecting
@@ -528,6 +555,10 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// does not inject its own model. Only adapter-specific keys are forwarded.
 	env = mergeAdapterEnv(adapterCredentialEnv(adapter), env)
 	res := r.runProcess(ctx, adapter, prompt, cwd, env)
+	if dec.Inject {
+		res.Injected = true
+		res.Model = dec.Model
+	}
 	// Dynamic injection fallback (Requirement 5):
 	// If the agent failed with authentication or quota issues (e.g. 401/403/invalid token/insufficient quota)
 	// and PANDA had not injected its model key (because the agent declared its own credentials which failed),
@@ -538,6 +569,8 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 			if len(injectedEnv) > 0 {
 				retryRes := r.runProcess(ctx, adapter, prompt, cwd, injectedEnv)
 				if retryRes.OK || retryRes.ExitCode != res.ExitCode {
+					retryRes.Injected = true
+					retryRes.Model = effectiveModelName(r.model)
 					return retryRes
 				}
 			}
@@ -621,7 +654,11 @@ func (r *Router) AgentViable(name string, ag ledger.Agent) bool {
 	// Unknown adapters keep the legacy "let the adapter try" behavior: their
 	// credential contract is not in the registry, so viability cannot be
 	// judged here.
-	if _, known := agents.ByAdapter(ag.Adapter); !known {
+	k, known := agents.ByAdapter(ag.Adapter)
+	if !known {
+		return true
+	}
+	if k.SelfContainedModel {
 		return true
 	}
 	if own, _ := probeAgentCredentials(ag.Adapter); own {

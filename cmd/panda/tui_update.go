@@ -30,7 +30,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// terminal instead of to a guess (see Init), and the status row can
 			// learn which project this run started in.
 			m.refreshProject()
-			return m, tea.Println(m.welcome())
+			welcome := m.welcome()
+			pad := m.height - (len(strings.Split(welcome, "\n")) + len(strings.Split(m.inputView(), "\n")))
+			if pad > 0 {
+				welcome = strings.Repeat("\n", pad) + welcome
+			}
+			return m, tea.Println(welcome)
 		}
 		return m, nil
 
@@ -227,11 +232,9 @@ func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Only process left mouse button releases or presses
-	if msg.Action != tea.MouseActionRelease && msg.Action != tea.MouseActionPress {
-		return m, nil
-	}
-	if msg.Button != tea.MouseButtonLeft {
+	// Only process left mouse button presses. Ignoring release and motion
+	// prevents double-triggering toggle actions (thought preview, stop double-tap).
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
 		return m, nil
 	}
 
@@ -251,13 +254,11 @@ func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	// 2. In modeAsking: clicking [⏹ 停止], [⏎ 注入], or [⌃O 思考]
 	if m.mode == modeAsking {
-		if m.height > 3 && msg.Y >= m.height-3 && msg.X >= 0 {
-			// Click [ ⏹ 停止 (Esc) ] (first ~22 columns)
-			if msg.X <= 22 {
+		if hit := m.askingButtonHit(msg.X, msg.Y); hit >= 0 {
+			switch hit {
+			case 0: // Stop
 				return m.interrupt()
-			}
-			// Click [ ⏎ 注入 (Enter) ] (columns 23 to 45)
-			if msg.X >= 23 && msg.X <= 45 {
+			case 1: // Steer / Inject
 				text := strings.TrimSpace(m.ta.Value())
 				if text != "" {
 					m.ta.Reset()
@@ -275,9 +276,7 @@ func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					}
 					return m, m.printBlock(blk)
 				}
-			}
-			// Click [ ⌃O 思考 ] (columns 46 to 68)
-			if msg.X >= 46 && msg.X <= 68 {
+			case 2: // Thought
 				m.expandThought = !m.expandThought
 				return m, nil
 			}
@@ -289,12 +288,30 @@ func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	// 3. In modeIdle:
 	if m.mode == modeIdle {
-		// If slash menu is active, clicking on menu rows selects that command
-		if m.menu.active && len(m.menu.items) > 0 && m.height > 3 {
-			if msg.Y >= m.height-3 && msg.X >= 0 {
-				idx := min(len(m.menu.items)-1, max(0, msg.Y-(m.height-len(m.menu.items))))
-				cmd := m.menu.items[idx].name
-				return m.submit("/" + cmd)
+		// If slash menu is active, clicking on menu rows selects that command or argument
+		if m.menu.active && len(m.menu.items) > 0 && m.height > 0 {
+			menuOutput := m.menu.render(m.th, m.textWidth(), m.menuRows())
+			if menuOutput != "" {
+				menuLines := strings.Split(menuOutput, "\n")
+				menuCount := len(menuLines)
+				// The popup renders directly above statusRow (which is at m.height - 1).
+				startRow := m.height - 1 - menuCount
+				if msg.Y >= startRow && msg.Y <= m.height-2 && msg.X >= 0 {
+					lineIdx := msg.Y - startRow
+					start := 0
+					rows := m.menuRows()
+					if m.menu.sel >= rows {
+						start = m.menu.sel - rows + 1
+					}
+					itemIdx := start + lineIdx
+					if itemIdx >= 0 && itemIdx < len(m.menu.items) {
+						m.menu.sel = itemIdx
+						if m.menu.argMode {
+							return m.submit(m.menu.fill())
+						}
+						return m.submit(m.menu.selected())
+					}
+				}
 			}
 		}
 

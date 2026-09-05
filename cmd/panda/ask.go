@@ -175,8 +175,18 @@ func runAsk(args []string) {
 			if !streamed {
 				fmt.Println(renderCliMd(out.Answer))
 			}
-			fmt.Println(pal().Muted(i18n.Tf(loc, "repl.ask.taskReport",
-				"id", out.TaskID, "state", out.TaskState)))
+			reportNote := i18n.Tf(loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
+			if out.Agent != "" {
+				execNote := out.Agent
+				if out.Model != "" {
+					execNote += fmt.Sprintf(" (%s)", out.Model)
+				}
+				if out.Injected {
+					execNote += " · " + i18n.T(loc, "tui.task.injected")
+				}
+				reportNote += " · " + i18n.Tf(loc, "tui.task.execBy", "exec", execNote)
+			}
+			fmt.Println(pal().Muted(reportNote))
 			if !out.OK {
 				os.Exit(1)
 			}
@@ -447,6 +457,9 @@ func printCost(st *cliui.Status, out *askengine.Result) {
 	}
 	st.SetTokens(out.Tokens())
 	if s := st.Stats(); s != "" {
+		if out.Cost > 0 {
+			s += fmt.Sprintf(" ($%.4f)", out.Cost)
+		}
 		fmt.Println(pal().Muted(pal().MarkBullet() + " " + s))
 	}
 }

@@ -579,8 +579,33 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	if plan.Kind == "agent" {
 		breakerKey = "agent:" + plan.Agent
 		if !c.breaker.Allow(breakerKey) {
-			c.audit(ctx, taskID, "agent:spawn", plan.Agent, "open", "circuit open")
-			return bus.TaskResultPayload{}, fmt.Errorf("agent %s circuit open", plan.Agent)
+			// If the primary agent is circuit-open, try to fail over to the first healthy alternate.
+			promoted := false
+			for i, alt := range plan.Alternates {
+				if c.breaker.Allow("agent:" + alt) {
+					if altAg, ok := router.Agent(alt); ok {
+						c.audit(ctx, taskID, "agent:spawn", plan.Agent, "open", "circuit open; failing over to "+alt)
+						plan.Agent = alt
+						plan.Ability = alt
+						plan.Adapter = altAg.Adapter
+						plan.Tier = altAg.Tier
+						if plan.Tier == 0 {
+							plan.Tier = defense.TierReversible
+						}
+						newAlts := make([]string, 0, len(plan.Alternates)-1)
+						newAlts = append(newAlts, plan.Alternates[:i]...)
+						newAlts = append(newAlts, plan.Alternates[i+1:]...)
+						plan.Alternates = newAlts
+						breakerKey = "agent:" + alt
+						promoted = true
+						break
+					}
+				}
+			}
+			if !promoted {
+				c.audit(ctx, taskID, "agent:spawn", plan.Agent, "open", "circuit open")
+				return bus.TaskResultPayload{}, fmt.Errorf("agent %s circuit open", plan.Agent)
+			}
 		}
 		// Drop circuit-open alternates before the fallback chain runs. The
 		// commander's fallback only knows about CLI availability, not breaker
@@ -823,12 +848,17 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// — Trace: exec_agent_start (orbit Step-3 "starting this stage on N").
 		// We report before Execute so the orbit paints the stage bar as
 		// running immediately. Best-effort only.
+		activeModel := ""
+		if injection.Inject {
+			activeModel = injection.Model
+		}
 		c.EvTrace(execCtx, taskID, EvExecAgentStart, map[string]any{
 			"round":      round + 1,
 			"budget":     maxRounds,
 			"plan_kind":  plan.Kind,
 			"agent":      plan.Agent,
 			"adapter":    plan.Adapter,
+			"model":      activeModel,
 			"authorized": task.Authorized,
 			"tier":       plan.Tier,
 		})
@@ -932,6 +962,18 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			// model endpoint, say so at the top of the output, in the audit log,
 			// and in the task event stream the Web task detail replays. Gated on
 			// the adapter actually running (a tier refusal spawns nothing).
+			if res.Injected {
+				injection.Inject = true
+				if res.Model != "" {
+					injection.Model = res.Model
+				}
+				if injection.BaseURL == "" {
+					injection.BaseURL = commander.EffectiveBaseURL(c.model)
+				}
+				if injection.Reason == "" {
+					injection.Reason = "credential rescue fallback"
+				}
+			}
 			if injection.Inject && res.Agent != "" {
 				notice := commander.InjectionNotice(injection, res.Agent)
 				if res.Stdout != "" {
@@ -987,7 +1029,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				trackTask(c, task.Project, required, task.Title, false)
 				return bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: false, ExitCode: 1, Stderr: msg,
-					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent,
+					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}, nil
 			}
 		}
@@ -1009,7 +1051,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			trackTask(c, task.Project, required, task.Title, false)
 			return bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: 0, Stdout: res.Stdout,
-				Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent,
+				Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 			}, nil
 		}
 
@@ -1038,7 +1080,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				trackTask(c, task.Project, required, task.Title, false)
 				return bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: false, ExitCode: res.ExitCode, Stderr: msg,
-					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent,
+					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}, nil
 			}
 			// A tier-2 authorization refusal is deterministic policy, not a failed
@@ -1065,7 +1107,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				trackTask(c, task.Project, required, task.Title, false)
 				return bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
-					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent,
+					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}, nil
 			}
 			if err := c.store.Fail(ctx, taskID, c.nodeID, res.Stderr); err != nil {
@@ -1078,7 +1120,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			trackTask(c, task.Project, required, task.Title, false)
 			return bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateFailed, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
-				Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent,
+				Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 			}, nil
 		}
 
@@ -1184,7 +1226,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		trackTask(c, task.Project, required, task.Title, false)
 		return bus.TaskResultPayload{
 			TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent,
+			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 		}, nil
 	}
 
@@ -1221,7 +1263,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			trackTask(c, task.Project, required, task.Title, true)
 			return bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-				Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent,
+				Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 			}, nil
 		}
 		// Consent already on record: audit the auto-acceptance the way an
@@ -1242,7 +1284,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	trackTask(c, task.Project, required, task.Title, true)
 	return bus.TaskResultPayload{
 		TaskID: taskID, AttemptID: attemptID, State: StateDone, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-		Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent,
+		Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 	}, nil
 }
 
@@ -1782,7 +1824,7 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			latencyMs = (storage.Now() - delegateTs) * 1000
 		}
 		if err := c.store.RecordDelegationMetric(ctx, p.TaskID, string(c.nodeID), env.From,
-			t.Requires, state == StateDone, latencyMs, p.Tokens); err != nil {
+			t.Requires, state == StateDone, latencyMs, p.Tokens, p.Cost); err != nil {
 			c.logger.Warn("record delegation metric", "task", p.TaskID, "err", err)
 		}
 	}

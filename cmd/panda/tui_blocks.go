@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -41,9 +42,12 @@ type block struct {
 	ok bool
 	// Task-block state (kind == blockTask): what was delegated and the lifecycle
 	// trail it went through, so scrollback keeps the evidence the live card showed.
-	title  string
-	stages []string
-	meta   string
+	title    string
+	stages   []string
+	meta     string
+	agent    string
+	model    string
+	injected bool
 }
 
 // render draws the block at the given width using the theme. expandThought
@@ -55,7 +59,11 @@ func (b block) render(t theme, width int, expandThought bool) string {
 	case blockUser:
 		return userText(t, b.body, width)
 	case blockAnswer:
-		return answerText(t, b.body, width)
+		res := answerText(t, b.body, width)
+		if b.meta != "" {
+			res += "\n" + t.muted.Render("  "+b.meta)
+		}
+		return res
 	case blockThought:
 		return b.renderThought(t, expandThought)
 	case blockNote:
@@ -150,6 +158,16 @@ func (b block) renderTask(t theme) string {
 	sb.WriteString(head)
 	for _, st := range b.stages {
 		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+st))
+	}
+	if b.agent != "" {
+		execNote := b.agent
+		if b.model != "" {
+			execNote += fmt.Sprintf(" (%s)", b.model)
+		}
+		if b.injected {
+			execNote += " · " + i18n.T(t.loc, "tui.task.injected")
+		}
+		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+i18n.Tf(t.loc, "tui.task.execBy", "exec", execNote)))
 	}
 	if b.meta != "" {
 		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+b.meta))
