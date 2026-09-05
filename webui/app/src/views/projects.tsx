@@ -133,8 +133,6 @@ export function ProjectsView({ onOpenProject }: { onOpenProject(name: string): v
                 editing={editing === p.name}
                 onEdit={() => setEditing(editing === p.name ? null : p.name)}
                 onOpen={() => onOpenProject(p.name)}
-                onEnter={() => onOpenProject(p.name)}
-                onExit={() => run(() => api.exitProject())}
                 onSave={(body) =>
                   run(async () => {
                     await api.patchProject(p.name, body)
@@ -166,8 +164,6 @@ function ProjectRow({
   editing,
   onEdit,
   onOpen,
-  onEnter,
-  onExit,
   onSave,
   onRemove,
 }: {
@@ -176,8 +172,6 @@ function ProjectRow({
   editing: boolean
   onEdit(): void
   onOpen(): void
-  onEnter(): void
-  onExit(): void
   onSave(body: { name?: string; work_dir?: string; description?: string }): void
   onRemove(keepMemory: boolean, deleteSessions: boolean): void
 }) {
