@@ -36,14 +36,15 @@ type Turn struct {
 // Session is one chat thread. Worktree/Branch are empty when the work path is
 // not a git repository (sessions then run in the shared work dir).
 type Session struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Branch    string    `json:"branch,omitempty"`
-	Worktree  string    `json:"worktree,omitempty"`
-	Project   string    `json:"project,omitempty"`
-	Turns     []Turn    `json:"turns"`
+	ID            string            `json:"id"`
+	Title         string            `json:"title"`
+	CreatedAt     time.Time         `json:"created_at"`
+	UpdatedAt     time.Time         `json:"updated_at"`
+	Branch        string            `json:"branch,omitempty"`
+	Worktree      string            `json:"worktree,omitempty"`
+	Project       string            `json:"project,omitempty"`
+	Turns         []Turn            `json:"turns"`
+	AgentSessions map[string]string `json:"agent_sessions,omitempty"`
 }
 
 // Store persists sessions as JSON files under root (created on demand).
@@ -157,6 +158,33 @@ func (s *Store) SetWorktree(id, path, branch string) error {
 	sess.Branch = branch
 	sess.UpdatedAt = time.Now()
 	return s.save(sess)
+}
+
+// SetAgentSession records an agent's native session id on a session.
+func (s *Store) SetAgentSession(id, agent, agentSessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return err
+	}
+	if sess.AgentSessions == nil {
+		sess.AgentSessions = make(map[string]string)
+	}
+	sess.AgentSessions[agent] = agentSessionID
+	sess.UpdatedAt = time.Now()
+	return s.save(sess)
+}
+
+// GetAgentSession returns an agent's native session id on a session, or empty if none.
+func (s *Store) GetAgentSession(id, agent string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil || sess.AgentSessions == nil {
+		return ""
+	}
+	return sess.AgentSessions[agent]
 }
 
 // SetTitle updates the title of a session.

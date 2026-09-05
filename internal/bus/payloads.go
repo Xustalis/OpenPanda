@@ -54,24 +54,25 @@ type HeartbeatPayload struct {
 //     context (no snapshot transfer).
 //   - context_level "full": context_data carries the inline snapshot (base64).
 type TaskDelegatePayload struct {
-	TaskID        string   `json:"task_id"`
-	ParentID      string   `json:"parent_id,omitempty"`
-	Project       string   `json:"project,omitempty"`
-	Title         string   `json:"title,omitempty"`
-	ContextType   string   `json:"context_type,omitempty"`
-	ContextHash   string   `json:"context_hash,omitempty"`
-	ContextLevel  string   `json:"context_level,omitempty"` // pointer|summary|full
-	ContextData   []byte   `json:"context_data,omitempty"`  // inline full snapshot
-	Intent        string   `json:"intent"`
-	SpecJSON      string   `json:"spec_json,omitempty"`
-	Requires      []string `json:"requires,omitempty"`
-	PreferredNode string   `json:"preferred_node,omitempty"` // user-named node; honored when it matches
-	Chain         []string `json:"chain"`
-	TimeoutMS     int64    `json:"timeout_ms,omitempty"`
-	MaxRetries    int      `json:"max_retries,omitempty"`
-	Complexity    float64  `json:"complexity,omitempty"`
-	Risk          string   `json:"risk,omitempty"`
-	AttemptID     string   `json:"attempt_id,omitempty"`
+	TaskID          string   `json:"task_id"`
+	ParentID        string   `json:"parent_id,omitempty"`
+	Project         string   `json:"project,omitempty"`
+	Title           string   `json:"title,omitempty"`
+	ContextType     string   `json:"context_type,omitempty"`
+	ContextHash     string   `json:"context_hash,omitempty"`
+	ContextLevel    string   `json:"context_level,omitempty"` // pointer|summary|full
+	ContextData     []byte   `json:"context_data,omitempty"`  // inline full snapshot
+	Intent          string   `json:"intent"`
+	SpecJSON        string   `json:"spec_json,omitempty"`
+	Requires        []string `json:"requires,omitempty"`
+	PreferredNode   string   `json:"preferred_node,omitempty"` // user-named node; honored when it matches
+	Chain           []string `json:"chain"`
+	TimeoutMS       int64    `json:"timeout_ms,omitempty"`
+	MaxRetries      int      `json:"max_retries,omitempty"`
+	Complexity      float64  `json:"complexity,omitempty"`
+	Risk            string   `json:"risk,omitempty"`
+	AttemptID       string   `json:"attempt_id,omitempty"`
+	ResumeSessionID string   `json:"resume_session_id,omitempty"`
 	// ResourceJSON is the task's declared hardware requirement (a marshalled
 	// entry.ResourceProfile). It travels with the delegation because the
 	// requirement is a property of the work, not of the node that first saw it:
@@ -201,9 +202,11 @@ type TaskResultPayload struct {
 	// across relay hops where env.From is only the last hop), which agent
 	// actually executed (Agent — the fallback chain may have swapped it),
 	// and how long the execution took on the executor's clock.
-	Executor   string `json:"executor,omitempty"`
-	Agent      string `json:"agent,omitempty"`
-	DurationMS int64  `json:"duration_ms,omitempty"`
+	Executor       string `json:"executor,omitempty"`
+	Agent          string `json:"agent,omitempty"`
+	DurationMS     int64  `json:"duration_ms,omitempty"`
+	SessionID      string `json:"session_id,omitempty"`
+	AgentSessionID string `json:"agent_session_id,omitempty"`
 }
 
 // maxWireText bounds one text field an executor fills from a child process's
