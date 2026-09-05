@@ -423,7 +423,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 				go func(p string) {
 					defer wg.Done()
 					if err := sched.DialPeer(schedCtx, p); err != nil {
-						logger.Warn("peer dial failed", "peer", p, "err", err)
+						logger.Debug("peer dial failed", "peer", p, "err", err)
 					}
 				}(peer)
 			}
@@ -489,6 +489,9 @@ type StreamCallbacks struct {
 	// caller cannot answer synchronously: the engine returns a NeedsApproval
 	// Result instead, for the caller to handle on its own event loop.
 	OnApproval func(ApprovalRequest) bool
+	// GetSteer is polled at the start of each round to consume user steering ideas
+	// injected at runtime, appending them to conversation turns.
+	GetSteer func() string
 }
 
 // ProgressKind names what the engine is about to do.
@@ -627,11 +630,13 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 		e.recordEntryUsage(context.WithoutCancel(ctx), res, client, usageBefore, time.Since(askStart))
 	}()
 
-	// Devices visible to classification: the local capability directory
-	// (populated by the daemon's heartbeats and our own peer dials).
-	devices, err := ledger.Query(e.db, "online", "")
-	if err != nil {
-		devices = nil
+	turns := make([]entry.Turn, 0, len(history)+1)
+	turns = append(turns, history...)
+	turns = append(turns, entry.Turn{Role: "user", Content: prompt})
+
+	var classifyOpts []entry.ClassifyOption
+	if e.replyASCII {
+		classifyOpts = append(classifyOpts, entry.WithASCIIOnly())
 	}
 
 	// Memory wall (design §17.2): Hermes personal memory enters only
@@ -649,13 +654,51 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 		}
 	}
 
-	turns := make([]entry.Turn, 0, len(history)+1)
-	turns = append(turns, history...)
-	turns = append(turns, entry.Turn{Role: "user", Content: prompt})
 	reg := e.currentRegistry()
-	var classifyOpts []entry.ClassifyOption
-	if e.replyASCII {
-		classifyOpts = append(classifyOpts, entry.WithASCIIOnly())
+
+	// Tier 1 Fast-Path Triage: if this is a standalone conceptual/conversational
+	// query without prior task state or action intent, stream directly with a micro-prompt
+	// (including personal memory), bypassing device ledger scanning, MCP tools schemas,
+	// and task JSON rules. The gate is the triage verdict itself, NOT registry
+	// emptiness: New() always registers the built-in tools, so a registry-based
+	// check would make this path unreachable in every real engine (the tests
+	// that hand-build an Engine are the only place a nil registry ever occurs).
+	if len(history) == 0 && workDir == "" {
+		if triage := entry.FastTriage(prompt, history); triage.IsFastPath {
+			fastSystem := entry.FastPathPrompt(e.replyASCII)
+			if conversationMemory != "" {
+				fastSystem += "\n\n═══ 用户记忆 ═══\n" + conversationMemory
+			}
+			var resp entry.Response
+			var rerr error
+			streamedAny := false
+			wrapDelta := func(chunk string) {
+				if chunk != "" {
+					streamedAny = true
+				}
+				if cb.OnDelta != nil {
+					cb.OnDelta(chunk)
+				}
+			}
+			if cb.OnDelta != nil || cb.OnReasoning != nil {
+				resp, rerr = client.StreamTurnsWithTools(ctx, fastSystem, turns, nil, wrapDelta, cb.OnReasoning)
+			} else {
+				resp, rerr = client.CompleteTurnsWithTools(ctx, fastSystem, turns, nil)
+			}
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if rerr == nil && resp.Text != "" {
+				return &Result{Kind: "answer", Answer: resp.Text}, nil
+			}
+			if streamedAny {
+				if rerr != nil {
+					return nil, rerr
+				}
+				return &Result{Kind: "answer", Answer: resp.Text}, nil
+			}
+			// If fast path fails before emitting any token and context is active, fallback seamlessly
+		}
 	}
 	// The tool gate shares the task gate's consent semantics: "never"
 	// auto-consents, an explicit session grant (--authorize / /authorize /
@@ -671,8 +714,24 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	// lastTask keeps the most recent task outcome so the converged Result
 	// carries the task fields (id/state/output) alongside the model's report.
 	var lastTask *Result
+	// Devices visible to classification: the local capability directory
+	// (populated by the daemon's heartbeats and our own peer dials).
+	devices, err := ledger.Query(e.db, "online", "")
+	if err != nil {
+		devices = nil
+	}
+
 rounds:
 	for round := 0; round < maxRounds; round++ {
+		if cb.GetSteer != nil {
+			for {
+				idea := cb.GetSteer()
+				if idea == "" {
+					break
+				}
+				turns = append(turns, entry.Turn{Role: "user", Content: "[补充要求/Steering]: " + idea})
+			}
+		}
 		var out entry.Output
 		var err error
 		if cb.OnDelta != nil || cb.OnReasoning != nil {
@@ -698,7 +757,7 @@ rounds:
 				return nil, fmt.Errorf("task output requires a capability card (engine built without CardPath)")
 			}
 			cb.progress(Progress{Kind: ProgressTask, Name: out.Task.Title})
-			res := e.submitTask(out.Task, prompt, authorize, workDir, cb)
+			res := e.submitTask(ctx, out.Task, prompt, authorize, workDir, cb)
 			if e.queueTasks {
 				// Async mode: the board product. The queued pointer is the
 				// result — the session streams the task's progress and the
@@ -781,7 +840,7 @@ rounds:
 			return lastTask, nil
 		}
 		cb.progress(Progress{Kind: ProgressTask, Name: final.Task.Title})
-		res := e.submitTask(final.Task, prompt, authorize, workDir, cb)
+		res := e.submitTask(ctx, final.Task, prompt, authorize, workDir, cb)
 		if !res.NeedsApproval && !e.queueTasks {
 			// No rounds left to converge through, so produce the report in
 			// one shot rather than returning raw output.
@@ -944,7 +1003,7 @@ func gateAuthorized(mode string, sessionAuthorized bool) bool {
 // session worktree); the configured work path is restored afterwards. The
 // schedMu lock keeps concurrent inline submits from interleaving the
 // work-dir swap.
-func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool, workDir string, cb StreamCallbacks) *Result {
+func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt string, authorized bool, workDir string, cb StreamCallbacks) *Result {
 	in := toTaskInput(spec)
 	// The ambient project fills in what the classifier did not name. A user who
 	// has entered a project expects their next ask to belong to it without saying
@@ -983,7 +1042,7 @@ func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool
 	if e.queueTasks {
 		q := core.DefaultQueueSpec()
 		q.WorkDir = workDir // travels per task; "" falls back to the core's work dir
-		task, err := e.sched.Enqueue(e.schedCtx, in, q)
+		task, err := e.sched.Enqueue(ctx, in, q)
 		if err != nil {
 			return &Result{Kind: "task", TaskState: "failed", Stderr: err.Error(), ExitCode: 1}
 		}
@@ -1009,7 +1068,7 @@ func (e *Engine) submitTask(spec *entry.TaskSpec, prompt string, authorized bool
 		})
 		defer store.SetOnEvent(nil)
 	}
-	task, result, err := e.sched.Submit(e.schedCtx, in)
+	task, result, err := e.sched.Submit(ctx, in)
 	if err != nil {
 		return &Result{Kind: "task", TaskState: "failed", Stderr: err.Error(), ExitCode: 1}
 	}
