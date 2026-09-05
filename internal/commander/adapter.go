@@ -242,16 +242,17 @@ func adapterCandidateDirs(exe string) []string {
 	}
 	var out []string
 	seen := map[string]bool{}
-	for _, base := range []string{exe, real} {
-		for _, p := range []string{
-			filepath.Join(filepath.Dir(base), "adapters"),
-			filepath.Join(filepath.Dir(base), "..", "adapters"),
-		} {
-			if !seen[p] {
-				seen[p] = true
-				out = append(out, p)
-			}
+	add := func(p string) {
+		p = filepath.Clean(p)
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
 		}
+	}
+	for _, base := range []string{exe, real} {
+		add(filepath.Join(filepath.Dir(base), "adapters"))
+		add(filepath.Join(filepath.Dir(base), "..", "adapters"))
+		add(filepath.Join(filepath.Dir(base), "..", "share", "openpanda", "adapters"))
 	}
 	return out
 }
@@ -313,11 +314,16 @@ func modelEnvForAdapter(model config.ModelConfig, adapter string) []string {
 		return nil
 	}
 	k, _ := agents.ByAdapter(adapter)
-	return []string{
+	env := []string{
 		k.ModelEnv.BaseURL + "=" + effectiveBaseURL(model),
 		k.ModelEnv.APIKey + "=" + model.APIKey,
 		k.ModelEnv.Model + "=" + effectiveModelName(model),
+		"OPENPANDA_INJECTED_MODEL=1",
 	}
+	if adapter == "claude_code.py" {
+		env = append(env, "ANTHROPIC_AUTH_TOKEN=")
+	}
+	return env
 }
 
 // adapterCredentialEnv preserves only credentials explicitly belonging to the

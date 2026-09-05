@@ -42,6 +42,8 @@ type Router struct {
 	probeAgent func(name string, ag ledger.Agent) bool
 	// runAdapter is injectable for tests; production uses RunAgent.
 	runAdapter func(ctx context.Context, adapter string, prompt string, cwd string) AgentResult
+	// runProcess runs the adapter process with injected environment.
+	runProcess func(ctx context.Context, adapter string, prompt string, cwd string, env []string) AgentResult
 }
 
 // NewRouter builds a router from this node's capability card. The model
@@ -58,6 +60,7 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 		preferred:      routing.PreferredAgents,
 	}
 	r.runAdapter = r.runAdapterDefault
+	r.runProcess = runAdapterProcess
 	// The production probe is credential-aware (AgentViable), not just a
 	// PATH check: routing to an installed-but-locked-out CLI guarantees a
 	// runtime failure after a long hang.
@@ -284,6 +287,30 @@ func (r *Router) Route(required []string) (Plan, error) {
 		for _, c := range cands[1:] {
 			plan.Alternates = append(plan.Alternates, c.Name)
 		}
+		hasAgentPin := false
+		for _, req := range required {
+			if strings.HasPrefix(req, "agent:") {
+				hasAgentPin = true
+				break
+			}
+		}
+		if hasAgentPin && len(plan.Alternates) == 0 && len(r.card.Agents) > 1 {
+			for _, c := range r.RankAgents([]string{"coding", "shell", "file_edit"}) {
+				if c.Name != top.Name {
+					plan.Alternates = append(plan.Alternates, c.Name)
+				}
+			}
+			if len(plan.Alternates) == 0 {
+				names := make([]string, 0, len(r.card.Agents))
+				for name := range r.card.Agents {
+					if name != top.Name {
+						names = append(names, name)
+					}
+				}
+				sort.Strings(names)
+				plan.Alternates = names
+			}
+		}
 		return plan, nil
 	}
 	if ab, ok := r.MatchManual(required); ok {
@@ -415,7 +442,8 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		if !ar.OK && stderr == "" {
 			stderr = ar.Result
 		}
-		return Result{
+
+		res := Result{
 			OK:        ar.OK,
 			ExitCode:  ar.ExitCode,
 			Stdout:    ar.Result,
@@ -425,6 +453,19 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 			Agent:     name,
 			Usage:     ar.Usage,
 			SessionID: ar.SessionID,
+		}
+
+		// If execution succeeded, or if user explicitly cancelled, return immediately.
+		if ar.OK || ctx.Err() != nil {
+			return res
+		}
+
+		// Active Failover: if this agent failed and there are remaining alternates,
+		// log and record the failure then continue the loop to try the next alternate agent.
+		unavailable = append(unavailable, fmt.Sprintf("%s (exec failed: %s)", name, strings.TrimSpace(stderr)))
+		// If this was the last attempt, return the failure result
+		if name == attempts[len(attempts)-1] {
+			return res
 		}
 	}
 	return Result{
@@ -486,7 +527,45 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// Native Agent credentials must survive the minimal sandbox even when PANDA
 	// does not inject its own model. Only adapter-specific keys are forwarded.
 	env = mergeAdapterEnv(adapterCredentialEnv(adapter), env)
-	return runAdapterProcess(ctx, adapter, prompt, cwd, env)
+	res := r.runProcess(ctx, adapter, prompt, cwd, env)
+	// Dynamic injection fallback (Requirement 5):
+	// If the agent failed with authentication or quota issues (e.g. 401/403/invalid token/insufficient quota)
+	// and PANDA had not injected its model key (because the agent declared its own credentials which failed),
+	// automatically inject PANDA's configured model API key to adapt the harness instead of discarding the task.
+	if !res.OK && !dec.Inject && supportsModelInjection(adapter, r.model) && r.model.APIKey != "" && isAuthOrQuotaFailure(res.Result+" "+res.Stderr) {
+		if r.model.BaseURL == "" || security.NewNetworkGuard(security.EndpointHost(r.model.BaseURL)).CheckURL(r.model.BaseURL) == nil {
+			injectedEnv := modelEnvForAdapter(r.model, adapter)
+			if len(injectedEnv) > 0 {
+				retryRes := r.runProcess(ctx, adapter, prompt, cwd, injectedEnv)
+				if retryRes.OK || retryRes.ExitCode != res.ExitCode {
+					return retryRes
+				}
+			}
+		}
+	}
+	return res
+}
+
+// SetAdapterProcessRunner swaps the process runner (test seam).
+func (r *Router) SetAdapterProcessRunner(fn func(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult) {
+	r.runProcess = fn
+}
+
+func isAuthOrQuotaFailure(text string) bool {
+	low := strings.ToLower(text)
+	patterns := []string{
+		"401", "403", "unauthorized", "forbidden", "invalid token",
+		"invalid api key", "invalid_api_key", "额度不足", "quota",
+		"insufficient_quota", "credit balance", "out of credit",
+		"not logged in", "failed to authenticate", "auth error",
+		"authentication failed", "no api key", "api key missing",
+	}
+	for _, p := range patterns {
+		if strings.Contains(low, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // agentBinary derives the CLI binary for an agent: the card's install_check

@@ -125,6 +125,44 @@ func TestExecAgentFallback(t *testing.T) {
 	}
 }
 
+// TestExecAgentActiveFailoverOnExecutionError: the primary agent's CLI is probed as available,
+// but returns an execution failure (e.g. rate-limit or crash). The router should actively
+// fail over and run the alternate agent instead of giving up immediately.
+func TestExecAgentActiveFailoverOnExecutionError(t *testing.T) {
+	card := scoreCard()
+	card.Agents["cheap"] = ledger.Agent{Adapter: "opencode.py", Capabilities: []string{"code:modify"}, CostTier: "low", Tier: 1}
+	card.Agents["expensive"] = ledger.Agent{Adapter: "claude_code.py", Capabilities: []string{"code:modify"}, CostTier: "high", Tier: 1}
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	// Both CLIs are available
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	var ran []string
+	r.SetAdapterRunner(func(_ context.Context, adapter, _, _ string) AgentResult {
+		ran = append(ran, adapter)
+		if adapter == "opencode.py" {
+			// First agent fails with error (e.g. 429 quota exhausted)
+			return AgentResult{OK: false, Result: "429 rate limit exceeded", ExitCode: 1}
+		}
+		// Alternate agent succeeds
+		return AgentResult{OK: true, Result: "completed via fallback", ExitCode: 0}
+	})
+
+	plan, err := r.Route([]string{"code:modify"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if plan.Agent != "cheap" {
+		t.Fatalf("primary = %q, want cheap", plan.Agent)
+	}
+	res := r.Execute(context.Background(), plan, "fix it", "", false)
+	if !res.OK || res.Agent != "expensive" {
+		t.Fatalf("active failover result = %+v, want ok via expensive", res)
+	}
+	// opencode.py was attempted (and retried on transient error), then failed over to claude_code.py which succeeded.
+	if len(ran) < 2 || ran[0] != "opencode.py" || ran[len(ran)-1] != "claude_code.py" {
+		t.Fatalf("adapter runs = %v, want opencode.py attempts followed by claude_code.py", ran)
+	}
+}
+
 // TestExecAgentPerTaskToolsPolicyWins: a per-task tools policy set on the
 // execution context (task spec override) reaches the adapter request, and the
 // router's global policy must not overwrite it.
@@ -222,5 +260,23 @@ func TestAgentBinaryFromInstallCheck(t *testing.T) {
 	// the adapter try (compatibility with custom adapters).
 	if !defaultAgentProbe("x", ledger.Agent{Adapter: "custom.py"}) {
 		t.Fatalf("unknown CLI should be treated as available")
+	}
+}
+
+// TestRoutePinnedAgentCarriesAlternates verifies that when an agent is pinned
+// by name (e.g. "agent:cheap"), Route still populates Alternates with other
+// agents on the card so active failover can rescue a failed primary.
+func TestRoutePinnedAgentCarriesAlternates(t *testing.T) {
+	card := scoreCard()
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	plan, err := r.Route([]string{"agent:cheap"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if plan.Agent != "cheap" {
+		t.Fatalf("primary = %q, want cheap", plan.Agent)
+	}
+	if len(plan.Alternates) != 2 || plan.Alternates[0] != "expensive" || plan.Alternates[1] != "web" {
+		t.Fatalf("alternates = %v, want [expensive web]", plan.Alternates)
 	}
 }
