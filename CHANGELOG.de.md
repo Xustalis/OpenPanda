@@ -36,16 +36,24 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Jeder Eintrag benennt die Änderung und ihre sichtbare Wirkung in ein bis drei Zeilen; der einführende Commit wird zitiert, wo das der Archäologie hilft.
 - Die englische Datei ist maßgeblich. Die Übersetzungen zh-CN / ja / es / de spiegeln sie und können um ein Release kurz verzögert sein.
 
-## [Unreleased]
+## [0.0.8-preview] - 2026-09-05
 
-### Behoben
-
-- **`/lang` wechselt jetzt wirklich die UI-Sprache** — bisher aktualisierte der Wechsel nur die Texte der klassischen REPL-Schleife; Menü, Statuszeile und Hilfetexte der TUI hielten weiter den Locale-Schnappschuss vom Start, sodass die ganze Konsole außer der Bestätigungszeile in der alten Sprache blieb. Die gewählte Sprache greift jetzt auf die gesamte Oberfläche durch und wird als `ui.locale` in config.yaml persistiert — sie überlebt also Neustarts (Konfiguration schlägt die Umgebungserkennung).
+Übergang zum formellen Open-Source-Projekt: OpenPanda entwickelt sich von einem experimentellen Aufgaben-Router zu einem einheitlichen, produktionsreifen Betriebssystem zur Orchestrierung persönlicher Agenten. Es bringt Management-Tools für die Ask-Engine, interaktive TUI-Steuerung während des Ablaufs, aktives Failover mit Modellinjektion, ein Multi-Modell-Register und transparente Ausführungsverfolgung.
 
 ### Hinzugefügt
 
-- **Argumentkandidaten im Slash-Menü** — Befehle mit aufzählbaren Argumenten (`/lang`, `/resume`, `/config set`, …) öffnen nach einem Leerzeichen hinter dem Befehlsnamen dasselbe pfeilnavigierbare Menü wie die Befehlsliste: ↑↓ bewegt, Tab vervollständigt, Enter wählt und führt aus, Esc schließt. Manuelle Eingabe funktioniert unverändert wie zuvor.
-- **Pfeiltasten-Auswahl auf der Freigabekarte** — die Freigabeaufforderung der Stufe 2 lässt sich jetzt auch mit ↑↓/←→ plus Enter beantworten (Fokus startet auf Ablehnen, konsistent mit dem bisherigen Standard), neben den unveränderten y/n/Esc-Hotkeys.
+- **Management-Werkzeugfamilie** — Die Ask-Engine kann das Cluster nun über Tier-1-Tools (`system_status`, `card_list`, `card_show`, Warteschlangenabfragen) direkt einsehen und Live-Daten zu Geräten und Fähigkeiten liefern.
+- **Mid-turn Steering und echter Stopp in TUI** — Laufende Aufgaben abbrechen oder umleiten, Mausunterstützung und visuelle Fortschrittsdarstellung in Bubble Tea.
+- **Aktives Failover & Modellinjektion bei Kontingenterschoepfung** — Bei Quota- oder Token-Problemen injiziert OpenPanda automatisch konfigurierte Ausweichmodelle.
+- **Transparente Ausführung & Fortschrittsverfolgung** — Alle CLI-Befehle und Werkzeugaufrufe werden über `EvProgress` synchron an TUI und Konsole gestreamt.
+- **Multi-Modell-Register (`/model`)** — Verwaltung und nahtloser Wechsel zwischen mehreren Modellen (DeepSeek, Claude, ChatGPT, Kimi, Ollama usw.).
+- **Argumentkandidaten im Slash-Menü** — Befehle mit aufzählbaren Argumenten zeigen nach einem Leerzeichen ein interaktives Pfeiltasten-Menü.
+- **Pfeiltasten-Auswahl auf der Freigabekarte** — Die Freigabeaufforderung der Stufe 2 lässt sich mit ↑↓/←→ und Enter beantworten.
+
+### Behoben
+
+- **`/lang` wechselt jetzt wirklich die UI-Sprache** — Die gewählte Sprache greift sofort auf die gesamte TUI durch und wird in `config.yaml` persistiert.
+- **Metadaten-Erhalt bei Modellinjektion** — Ausführungsergebnisse behalten die Modellzuordnung und senden Benachrichtigungsereignisse.
 
 ## [0.0.8-alpha] - 2026-09-03
 

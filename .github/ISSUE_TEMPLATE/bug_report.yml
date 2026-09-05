@@ -1,0 +1,52 @@
+name: "Bug Report"
+description: "File a bug report to help us improve OpenPanda"
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue with OpenPanda! Please verify you are running the latest release or build before filing.
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem Description
+      description: A clear and concise description of what the bug is.
+      placeholder: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: How can maintainers reproduce this issue?
+      placeholder: |
+        1. Run `panda ask ...` or launch `panda`
+        2. Execute ...
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment & Version
+      description: Please share output of `panda version` and `panda doctor` if applicable.
+      placeholder: |
+        - OpenPanda Version: (e.g. 0.0.8-preview)
+        - OS & Architecture: (e.g. macOS Sonoma arm64, Ubuntu 24.04 amd64, Windows 11)
+        - Connected Nodes: (if multi-device issue)
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs or Output
+      description: Paste any terminal output, log snippets, or screenshots.
+      render: shell

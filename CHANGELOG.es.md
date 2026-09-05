@@ -36,16 +36,24 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Cada entrada nombra el cambio y su efecto visible en una a tres líneas; se cita el commit que lo introdujo cuando ayuda a la arqueología.
 - Este archivo en inglés es el canónico. Las traducciones zh-CN / ja / es / de lo replican y pueden retrasarse brevemente alrededor de un lanzamiento.
 
-## [Unreleased]
+## [0.0.8-preview] - 2026-09-05
 
-### Corregido
-
-- **`/lang` ahora cambia de verdad el idioma de la interfaz** — antes el cambio solo actualizaba los textos del bucle REPL clásico; el menú, la barra de estado y la ayuda de la TUI conservaban la instantánea del idioma de arranque, así que toda la consola seguía en el idioma anterior salvo la línea de confirmación. El idioma elegido ahora se propaga a toda la interfaz y se persiste como `ui.locale` en config.yaml, de modo que sobrevive a los reinicios (la configuración prevalece sobre la detección del entorno).
+Transición a proyecto de código abierto formal: OpenPanda evoluciona de un enrutador de tareas experimental a un sistema operativo de orquestación de agentes personales unificado y listo para producción. Incluye herramientas de gestión para el motor Ask, dirección interactiva en TUI, conmutación por error activa con inyección de modelos de respaldo, registro multimodelo y seguimiento transparente.
 
 ### Añadido
 
-- **Candidatos de argumentos en el menú de barra** — los comandos con argumentos enumerados (`/lang`, `/resume`, `/config set`, …) muestran ahora el mismo menú navegable con flechas que la lista de comandos al escribir un espacio tras el nombre; ↑↓ mueve, Tab completa, Enter elige y ejecuta, Esc cierra. Escribir el argumento a mano sigue funcionando exactamente como antes.
-- **Selección con flechas en la tarjeta de aprobación** — el prompt de aprobación de nivel 2 se puede responder ahora con ↑↓/←→ más Enter (el foco empieza en denegar, igual que el valor por defecto existente), además de los atajos y/n/Esc sin cambios.
+- **Familia de herramientas de gestión** — el motor Ask ahora inspecciona el clúster con herramientas internas de nivel 1 (`system_status`, `card_list`, `card_show`, colas de tareas) respondiendo en tiempo real sobre el estado de la flota y capacidades de los nodos.
+- **Dirección en curso y parada real en TUI** — cancelación o redirección de tareas en ejecución, soporte de ratón y renderizado visual del progreso en Bubble Tea.
+- **Conmutación por error activa e inyección de modelos** — cuando un agente CLI agota su cuota o fallan sus credenciales, OpenPanda inyecta modelos alternativos para continuar.
+- **Transparencia total de ejecución** — comandos bash y llamadas a herramientas se transmiten vía `EvProgress` a la TUI y consola web, mostrando el agente y modelo exactos.
+- **Registro multimodelo (`/model`)** — gestión y cambio en caliente entre múltiples modelos (DeepSeek, Claude, ChatGPT, Kimi, Ollama, etc.).
+- **Candidatos de argumentos en el menú de barra** — los comandos con argumentos enumerados (`/lang`, `/resume`, `/config set`) muestran menú interactivo con flechas tras escribir un espacio.
+- **Selección con flechas en la tarjeta de aprobación** — el prompt de aprobación de nivel 2 admite ↑↓/←→ y Enter además de las teclas rápidas y/n.
+
+### Corregido
+
+- **`/lang` ahora cambia de verdad el idioma de la interfaz** — se propaga de inmediato a menús, barra de estado y ayuda de la TUI, y se persiste en `config.yaml`.
+- **Preservación de metadatos en modelos inyectados** — los resultados conservan la atribución del modelo inyectado y emiten eventos de notificación.
 
 ## [0.0.8-alpha] - 2026-09-03
 
