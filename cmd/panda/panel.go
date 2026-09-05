@@ -236,19 +236,29 @@ type nodeStatusView struct {
 
 // runQueue implements `panda queue [--state s] [--project p] [--watch]` —
 // the task board, newest activity first (the web listTasks semantics);
-// --watch switches to the in-place refreshing live board.
+// --watch switches to the in-place refreshing live board. `panda queue clear`
+// (with --yes to skip the prompt) empties the board.
 func runQueue(args []string) {
 	fs := flag.NewFlagSet("queue", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
 	state := fs.String("state", "", "filter by state (empty = all)")
 	project := fs.String("project", "", "filter by project (empty = all)")
 	watch := fs.Bool("watch", false, "live view: redraw in place until Ctrl-C")
+	yes := fs.Bool("yes", false, "with `clear`: skip the confirmation prompt")
 	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
 	}
+
+	// `panda queue clear` — the one-shot board wipe. Checked before the state
+	// validation so `clear` is never mistaken for a state filter.
+	if fs.NArg() > 0 && fs.Arg(0) == "clear" {
+		runQueueClear(cfg, *yes)
+		return
+	}
+
 	db, store, err := panelStore(cfg)
 	if err != nil {
 		fatal("open store", err)
@@ -294,6 +304,75 @@ func runQueue(args []string) {
 		return
 	}
 	printTaskTable(loc, filtered)
+}
+
+// runQueueClear implements `panda queue clear [--yes]` — the board's "clear
+// queue": cancel everything still moving, then delete every task row.
+//
+// Cancels travel through the ask engine when one can be built (same contract
+// as `panda cancel`: a remote executor only stops when the task_cancel reaches
+// it over the bus), but a missing engine degrades to the local row update
+// rather than failing — clearing a board of finished tasks needs no engine.
+// The wipe itself always confirms first on a TTY unless --yes is given.
+func runQueueClear(cfg *config.Config, yes bool) {
+	loc := i18n.Detect()
+	db, store, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	tasks, err := store.ListByState(context.Background(), "")
+	if err != nil {
+		fatal("list tasks", err)
+	}
+	if len(tasks) == 0 {
+		fmt.Println(i18n.T(loc, "cli.queue.clear.empty"))
+		return
+	}
+
+	if !yes {
+		if !stdinIsTTY() {
+			fmt.Fprintln(os.Stderr, "panda queue clear: pass --yes to clear non-interactively")
+			os.Exit(2)
+		}
+		fmt.Print(i18n.Tf(loc, "cli.queue.clear.confirm", "n", strconv.Itoa(len(tasks))))
+		var ans string
+		if _, err := fmt.Scanln(&ans); err != nil && ans == "" {
+			return // empty line = the default "no"
+		}
+		ans = strings.ToLower(strings.TrimSpace(ans))
+		if ans != "y" && ans != "yes" {
+			return
+		}
+	}
+
+	// Best-effort engine cancel for the tasks still moving, so a remote
+	// executor is told to stop instead of burning its lease on deleted work.
+	engine, err := askengine.New(context.Background(), cfg, askengine.Options{
+		CardPath: defaultCardPath(),
+	})
+	if err == nil {
+		defer engine.Close()
+		for _, t := range tasks {
+			if !core.Terminal(t.State) {
+				_, _ = engine.CancelTask(context.Background(), t.TaskID)
+			}
+		}
+	} else {
+		fmt.Println(pal().Muted(i18n.T(loc, "cli.queue.clear.noEngine")))
+	}
+
+	cancelled, deleted, err := store.ClearQueue(context.Background())
+	if err != nil {
+		fatal("clear queue", err)
+	}
+	if jsonOutput {
+		emitJSON(map[string]int{"cancelled": cancelled, "deleted": deleted})
+		return
+	}
+	fmt.Println(i18n.Tf(loc, "cli.queue.clear.done",
+		"c", strconv.Itoa(cancelled), "d", strconv.Itoa(deleted)))
 }
 
 // queueListLimit caps the one-shot listing. A queue accumulates: this store had

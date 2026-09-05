@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -126,6 +127,57 @@ func (h *handler) patchTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"id": id, "priority": priorityLabel(priority)})
+}
+
+// deleteTask serves DELETE /api/tasks/{id} — removes a task and its subtree,
+// the web equivalent of `panda task delete`. Deletable states only (queued or
+// finished); a task still moving answers 409 so the board can tell the user to
+// cancel first instead of silently failing.
+func (h *handler) deleteTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	n, err := h.store.Delete(r.Context(), id)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			writeErr(w, http.StatusNotFound, errors.New("no such task"))
+		case errors.Is(err, core.ErrTaskActive):
+			writeErr(w, http.StatusConflict, errors.New("task is active — cancel it first, then delete"))
+		default:
+			writeErr(w, http.StatusInternalServerError, errors.New("delete failed"))
+		}
+		return
+	}
+	writeJSON(w, map[string]any{"id": id, "deleted": n})
+}
+
+// clearTasks serves DELETE /api/tasks — the board's one-click wipe: cancel
+// everything still moving, then delete every task record (the web equivalent
+// of `panda queue clear`). Cancels travel through the ask engine when one is
+// configured so remote executors hear them too; without an engine the rows are
+// still cleared and running work ends on its own lease.
+func (h *handler) clearTasks(w http.ResponseWriter, r *http.Request) {
+	tasks, err := h.store.ListByState(r.Context(), "")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("list tasks failed"))
+		return
+	}
+	if len(tasks) == 0 {
+		writeJSON(w, map[string]int{"cancelled": 0, "deleted": 0})
+		return
+	}
+	if eng := h.currentEngine(); eng != nil {
+		for _, t := range tasks {
+			if !core.Terminal(t.State) {
+				_, _ = eng.CancelTask(r.Context(), t.TaskID)
+			}
+		}
+	}
+	cancelled, deleted, err := h.store.ClearQueue(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("clear queue failed"))
+		return
+	}
+	writeJSON(w, map[string]int{"cancelled": cancelled, "deleted": deleted})
 }
 
 // reorderTasksRequest is the body of POST /api/tasks/reorder.

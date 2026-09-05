@@ -95,6 +95,14 @@ const de: Messages = {
   'queue.dropHere': 'Zum Neuanordnen hier ablegen',
   'queue.openSession': 'Verknüpfte Session öffnen',
   'queue.collapse': 'Einklappen',
+  'queue.deleteTask': 'Aufgabe löschen',
+  'queue.deleteConfirmTitle': 'Diese Aufgabe löschen?',
+  'queue.deleteConfirmMsg': 'Die Aufgabe und ihr gesamtes Teilbaum (Ereignisse, Metriken) werden entfernt. Nicht rückgängig zu machen.',
+  'queue.deleteActive': 'Die Aufgabe läuft noch — erst abbrechen, dann löschen.',
+  'queue.clear': 'Warteschlange leeren',
+  'queue.clearConfirmTitle': 'Die gesamte Warteschlange leeren?',
+  'queue.clearConfirmMsg': 'Laufende Aufgaben werden abgebrochen und alle Aufgabendatensätze gelöscht. Nicht rückgängig zu machen.',
+  'queue.clearDone': 'Warteschlange geleert — {c} abgebrochen, {d} gelöscht.',
 
   // Detail view
   'detail.back': 'Zurück zur Warteschlange',

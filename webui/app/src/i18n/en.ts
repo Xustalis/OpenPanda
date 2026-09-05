@@ -97,6 +97,14 @@ const en: Messages = {
   'queue.dropHere': 'Drop to reorder',
   'queue.openSession': 'Open linked session',
   'queue.collapse': 'Collapse',
+  'queue.deleteTask': 'Delete task',
+  'queue.deleteConfirmTitle': 'Delete this task?',
+  'queue.deleteConfirmMsg': 'The task and its whole subtree (events, metrics) will be removed. This cannot be undone.',
+  'queue.deleteActive': 'Task is still running — cancel it first, then delete.',
+  'queue.clear': 'Clear queue',
+  'queue.clearConfirmTitle': 'Clear the whole queue?',
+  'queue.clearConfirmMsg': 'Running tasks will be cancelled and every task record deleted. This cannot be undone.',
+  'queue.clearDone': 'Queue cleared — {c} cancelled, {d} deleted.',
 
   // Detail view
   'detail.back': 'Back to queue',

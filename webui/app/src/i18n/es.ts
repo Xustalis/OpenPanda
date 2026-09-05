@@ -95,6 +95,14 @@ const es: Messages = {
   'queue.dropHere': 'Suelta aquí para reordenar',
   'queue.openSession': 'Abrir sesión vinculada',
   'queue.collapse': 'Plegar',
+  'queue.deleteTask': 'Eliminar tarea',
+  'queue.deleteConfirmTitle': '¿Eliminar esta tarea?',
+  'queue.deleteConfirmMsg': 'La tarea y todo su subárbol (eventos, métricas) se eliminarán. No se puede deshacer.',
+  'queue.deleteActive': 'La tarea sigue en ejecución — cancélala primero y luego elimínala.',
+  'queue.clear': 'Vaciar cola',
+  'queue.clearConfirmTitle': '¿Vaciar toda la cola?',
+  'queue.clearConfirmMsg': 'Las tareas en curso se cancelarán y se eliminarán todos los registros. No se puede deshacer.',
+  'queue.clearDone': 'Cola vaciada — {c} cancelada(s), {d} eliminada(s).',
 
   // Detail view
   'detail.back': 'Volver a la cola',

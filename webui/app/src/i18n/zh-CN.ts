@@ -94,6 +94,14 @@ const zhCN: Messages = {
   'queue.dropHere': '拖放到此重排顺序',
   'queue.openSession': '打开关联会话',
   'queue.collapse': '收起',
+  'queue.deleteTask': '删除任务',
+  'queue.deleteConfirmTitle': '删除这个任务？',
+  'queue.deleteConfirmMsg': '任务及其整个子树（事件、指标）将被移除，无法恢复。',
+  'queue.deleteActive': '任务仍在运行——请先取消，再删除。',
+  'queue.clear': '清空队列',
+  'queue.clearConfirmTitle': '清空整个队列？',
+  'queue.clearConfirmMsg': '运行中的任务将被取消，所有任务记录将被删除，无法恢复。',
+  'queue.clearDone': '队列已清空——取消 {c} 个，删除 {d} 个。',
 
   // Detail view
   'detail.back': '返回队列',

@@ -404,3 +404,49 @@ func TestAuthRateLimitWindowReset(t *testing.T) {
 		t.Fatalf("status = %d after window reset, want 200", rr.Code)
 	}
 }
+
+func TestDeleteTask(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	task, _ := store.Create(ctx, "", "proj", "deletable task", "node", []string{"node"})
+
+	h := New(Deps{Store: store, StaticDir: t.TempDir(), Token: testToken})
+
+	// Deleting submitted task succeeds
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodDelete, "/api/tasks/"+task.TaskID, nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+
+	// Deleting active task returns 409
+	activeTask := reviewTask(t, store)
+	rr2 := httptest.NewRecorder()
+	h.ServeHTTP(rr2, authedReq(http.MethodDelete, "/api/tasks/"+activeTask.TaskID, nil))
+	if rr2.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 for active task", rr2.Code)
+	}
+}
+
+func TestClearTasks(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	_, _ = store.Create(ctx, "", "proj", "t1", "node", []string{"node"})
+	_, _ = store.Create(ctx, "", "proj", "t2", "node", []string{"node"})
+
+	h := New(Deps{Store: store, StaticDir: t.TempDir(), Token: testToken})
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodDelete, "/api/tasks", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+
+	var res map[string]int
+	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if res["deleted"] != 2 {
+		t.Fatalf("deleted = %d, want 2", res["deleted"])
+	}
+}
