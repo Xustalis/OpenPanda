@@ -207,6 +207,12 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 				return candidates
 			}
 		}
+		if len(args) == 3 && args[0] == "add" {
+			providerID := args[1]
+			if p, ok := providers.Lookup(providerID); ok && p.DefaultModel != "" {
+				return []string{p.DefaultModel}
+			}
+		}
 	}
 	return nil
 }
