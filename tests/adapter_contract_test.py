@@ -177,6 +177,39 @@ print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "resumed")
 
+    def test_claude_injected_model_strips_settings_on_stream_only(self):
+        # Credential rescue: an injected model/base URL disables the user's
+        # settings sources on the stream path…
+        payload, _, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+args = sys.argv[1:]
+assert "--setting-sources" in args
+assert args[args.index("--setting-sources") + 1] == ""
+print(json.dumps({"type":"result", "is_error":False, "result":"rescued",
+                  "session_id":"sess-x", "usage":{"input_tokens":1,"output_tokens":1}}))
+''',
+            env={"OPENPANDA_INJECTED_MODEL": "1"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "rescued")
+        # …but the plain-mode degrade must not resend the flag an old CLI
+        # just rejected — that run would hard-fail with no fallback.
+        payload, _, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+args = sys.argv[1:]
+if "stream-json" in args:
+    sys.stderr.write("error: unknown option --setting-sources\n")
+    sys.exit(1)
+assert "--setting-sources" not in args, args
+print(json.dumps({"is_error": False, "result": "degraded"}))
+''',
+            env={"OPENPANDA_INJECTED_MODEL": "1"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "degraded")
+
     def test_opencode_provider_model_contract(self):
         payload, _, _ = run_adapter(
             "opencode.py", "opencode", r'''
@@ -223,6 +256,10 @@ if "--format" in args:
     sys.stderr.write("error: unknown option --format\n")
     sys.exit(1)
 assert args[:2] == ["run", "--print-logs=false"]
+# The plain path always carries a resolvable model: with no env model set it
+# must be the built-in default, never the empty string.
+assert "--model" in args
+assert args[args.index("--model") + 1] == "opencode/deepseek-v4-flash-free"
 print("plain opencode answer")
 ''',
         )
@@ -294,6 +331,18 @@ print("hermes answer")
         )
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "hermes answer")
+        # Hook auto-approval is opt-in only: the flag rides under the env
+        # switch, never in the default face.
+        payload, _, _ = run_adapter(
+            "hermes.py", "hermes", r'''
+import sys
+assert sys.argv[1:] == ["--cli", "--yolo", "--accept-hooks", "-z", "contract prompt"]
+print("hermes hooks answer")
+''',
+            env={"OPENPANDA_ACCEPT_HOOKS": "1"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "hermes hooks answer")
         payload, _, _ = run_adapter(
             "openclaw.py", "openclaw", r'''
 import sys

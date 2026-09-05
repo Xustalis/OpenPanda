@@ -11,12 +11,17 @@ prompt, auto-approved tools). stdout is returned verbatim and a non-zero exit
 becomes the diagnosis. --yolo rides both tool policies: a headless run cannot
 sit on an interactive permission prompt, and hermes exposes no narrower CLI
 tool whitelist, so resume/tools_policy ride the request but do not change the
-command line. This adapter never prints secrets.
+command line. Hooks are NOT auto-approved by default: a hook is shell the
+workspace or the agent itself can register, so --accept-hooks (which lifts
+that approval) rides only under OPENPANDA_ACCEPT_HOOKS=1 — an explicit
+operator choice, not a default. This adapter never prints secrets.
 
 The wire contract, watchdog timeout, process-tree cleanup and stderr
 diagnostics live in _harness.py; this file is only the hermes difference: the
 command line.
 """
+import os
+
 import _harness as harness
 
 
@@ -26,6 +31,10 @@ def main():
     # --cli: text output mode; --yolo: auto-approve tool calls; -z: one-shot
     # prompt so the agent runs to completion without an interactive session.
     cmd = ["hermes", "--cli", "--yolo", "-z", prompt]
+    # Opt-in hook auto-approval, kept ahead of the prompt so the flag can
+    # never be parsed as part of it.
+    if os.environ.get("OPENPANDA_ACCEPT_HOOKS"):
+        cmd = ["hermes", "--cli", "--yolo", "--accept-hooks", "-z", prompt]
     harness.run_simple(cmd, cwd=cwd, timeout=timeout)
 
 
