@@ -2,6 +2,8 @@ package commander
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
@@ -335,20 +337,34 @@ func TestRankAgentsDifferentiated(t *testing.T) {
 }
 
 func TestRealEnvironmentViability(t *testing.T) {
-	// Probing with the user's real model config:
+	// A dev-machine probe, not a CI assertion: viability requires both the
+	// agent CLI and a reachable model, and a CI runner has neither. The API
+	// key comes from the environment — a real key must never live in the
+	// repository. Set OPENPANDA_TEST_MODEL_KEY on a machine with the agent
+	// CLIs installed to run the probe for real.
+	apiKey := os.Getenv("OPENPANDA_TEST_MODEL_KEY")
+	if apiKey == "" {
+		t.Skip("OPENPANDA_TEST_MODEL_KEY not set — skipping real-environment viability probe")
+	}
 	userModel := config.ModelConfig{
 		BaseURL: "https://api.deepseek.com/anthropic",
-		APIKey:  "sk-f8da2b0df91b4ff4b09b55502c34bbdc",
-		Model:   "deepseek-chat",
+		APIKey:  apiKey,
+		Model:   "deepseek-v4-flash",
 	}
 	r := NewRouter(ledger.Card{}, NewExecutor(), userModel,
 		config.InjectionConfig{Model: config.InjectionModelAuto}, config.RoutingConfig{})
 
+	probed := 0
 	for _, name := range []string{"claude_code", "codex", "grok_build", "hermes", "opencode"} {
 		k, ok := agents.ByName(name)
 		if !ok {
 			t.Fatalf("agent %s not found in registry", name)
 		}
+		if _, err := exec.LookPath(k.PrimaryBinary()); err != nil {
+			t.Logf("Agent: %-12s skipped — CLI not installed on this host", name)
+			continue
+		}
+		probed++
 		ag := ledger.Agent{
 			Adapter:      k.Adapter,
 			InstallCheck: "which " + k.PrimaryBinary(),
@@ -358,6 +374,9 @@ func TestRealEnvironmentViability(t *testing.T) {
 		if !viable {
 			t.Errorf("expected %s to be viable on this machine!", name)
 		}
+	}
+	if probed == 0 {
+		t.Skip("no agent CLIs installed on this host — nothing to probe")
 	}
 }
 

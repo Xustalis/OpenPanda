@@ -336,22 +336,25 @@ func TestTaskqCreate(t *testing.T) {
 func TestCardMutations(t *testing.T) {
 	_, reg := newMgmtTestEngine(t)
 
-	// Native Add & Remove
+	// Native Add & Remove. The command must exist on every host this test
+	// runs on — PruneUnavailableNative drops abilities whose binary is not
+	// on PATH, and CI runners have no ffmpeg. git ships on every platform
+	// this suite gates (ubuntu/macos/windows runners and dev machines).
 	outNative := runMgmtTool(t, reg, "card_native_add", map[string]any{
-		"id":          "test:ffmpeg",
-		"description": "转码视频",
-		"command":     "ffmpeg",
-		"args":        []any{"-i", "in.mp4"},
+		"id":          "test:gitprobe",
+		"description": "探测 Git 版本",
+		"command":     "git",
+		"args":        []any{"--version"},
 	})
 	if !strings.Contains(outNative, "已成功添加") {
 		t.Fatalf("card_native_add output: %s", outNative)
 	}
 	show1 := runMgmtTool(t, reg, "card_show", nil)
-	if !strings.Contains(show1, "test:ffmpeg") {
-		t.Fatalf("card_show missing test:ffmpeg:\n%s", show1)
+	if !strings.Contains(show1, "test:gitprobe") {
+		t.Fatalf("card_show missing test:gitprobe:\n%s", show1)
 	}
 	outNativeRm := runMgmtTool(t, reg, "card_native_remove", map[string]any{
-		"id": "test:ffmpeg",
+		"id": "test:gitprobe",
 	})
 	if !strings.Contains(outNativeRm, "已成功删除") {
 		t.Fatalf("card_native_remove output: %s", outNativeRm)
