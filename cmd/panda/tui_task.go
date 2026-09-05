@@ -80,17 +80,68 @@ func (tp *taskProgress) trail(total time.Duration) []string {
 // screen while a task is in flight — the global status line stands down so the
 // user is not watching two spinners disagree.
 func (tp *taskProgress) renderLive(t theme, loc i18n.Locale, spin string, now time.Time) string {
+	if tp == nil {
+		return ""
+	}
 	arm := t.glyph("⎿", "\\_")
 	tick := t.glyph("✓", "v")
 
+	// Determine milestone progress for pipeline visualizer
+	hasRoute := false
+	hasExec := false
+	hasJudge := false
+	for _, st := range tp.stages {
+		l := strings.ToLower(st.label)
+		if strings.Contains(l, "rout") || strings.Contains(l, "路由") {
+			hasRoute = true
+		}
+		if strings.Contains(l, "run") || strings.Contains(l, "exec") || strings.Contains(l, "运行") {
+			hasExec = true
+		}
+		if strings.Contains(l, "review") || strings.Contains(l, "judge") || strings.Contains(l, "评审") {
+			hasJudge = true
+		}
+	}
+
+	var s1, s2, s3, s4 string
+	circle := t.glyph("○", "-")
+	dot := t.glyph("●", "*")
+	pipeArrow := t.glyph(" ══▶ ", " ==> ")
+
+	if hasJudge {
+		s1 = t.success.Render(tick + " 分流")
+		s2 = t.success.Render(tick + " 调度")
+		s3 = t.success.Render(tick + " 执行")
+		s4 = t.accent.Render(dot + " 评审")
+	} else if hasExec {
+		s1 = t.success.Render(tick + " 分流")
+		s2 = t.success.Render(tick + " 调度")
+		s3 = t.accent.Render(dot + " 执行")
+		s4 = t.muted.Render(circle + " 评审")
+	} else if hasRoute {
+		s1 = t.success.Render(tick + " 分流")
+		s2 = t.accent.Render(dot + " 调度")
+		s3 = t.muted.Render(circle + " 执行")
+		s4 = t.muted.Render(circle + " 评审")
+	} else {
+		s1 = t.accent.Render(dot + " 分流")
+		s2 = t.muted.Render(circle + " 调度")
+		s3 = t.muted.Render(circle + " 执行")
+		s4 = t.muted.Render(circle + " 评审")
+	}
+
+	flow := s1 + pipeArrow + s2 + pipeArrow + s3 + pipeArrow + s4
+
+	total := now.Sub(tp.started)
 	var sb strings.Builder
-	head := t.glyph("●", "*") + " " + i18n.T(loc, "tui.task.head")
-	sb.WriteString(t.accent.Render(head))
+
+	head := t.glyph("⚡", "*") + " " + i18n.T(loc, "tui.task.head")
+	sb.WriteString(t.heading.Render(head))
 	if tp.title != "" {
 		sb.WriteString(" " + t.glyph("·", "-") + " " + tp.title)
 	}
+	sb.WriteString("\n  " + flow)
 
-	total := now.Sub(tp.started)
 	for i, st := range tp.stages {
 		last := i == len(tp.stages)-1
 		end := total

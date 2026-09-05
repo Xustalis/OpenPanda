@@ -340,3 +340,327 @@ func TestAnswerTextMarksAndHangs(t *testing.T) {
 		}
 	}
 }
+
+// TestTUIStreamingMultipleDeltasDoesNotPanic guards against the strings.Builder
+// copied-by-value panic by simulating an in-flight stream that delivers multiple
+// consecutive delta chunks across model updates.
+func TestTUIStreamingMultipleDeltasDoesNotPanic(t *testing.T) {
+	m := newTestTUI(t)
+	m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+	cancelled := false
+	m.mode = modeAsking
+	m.stream = newTestStream(&cancelled)
+
+	chunks := []string{
+		"我是 OpenPanda，",
+		"你所有设备和 agent 的",
+		"大总管。",
+		"简单说，我有四件事",
+		"可以为你处理。",
+	}
+	for _, c := range chunks {
+		m = step(m, deltaMsg(c))
+	}
+	if m.liveAnswer != "我是 OpenPanda，你所有设备和 agent 的大总管。简单说，我有四件事可以为你处理。" {
+		t.Fatalf("unexpected liveAnswer: %q", m.liveAnswer)
+	}
+	v := m.View()
+	if !strings.Contains(v, "大总管") {
+		t.Fatalf("view should contain streamed answer: %q", v)
+	}
+}
+
+// TestTUIRuntimeSteeringInputAndStop tests that while an ask is running (modeAsking),
+// the user can see the input box, type a steering idea and inject it with Enter,
+// and stop the running task immediately with Esc.
+func TestTUIRuntimeSteeringInputAndStop(t *testing.T) {
+	m := newTestTUI(t)
+	m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+	cancelled := false
+	m.mode = modeAsking
+	m.stream = newTestStream(&cancelled)
+	m.pendingPrompt = "Initial question"
+
+	// 1. View should include both the in-flight status and the input box
+	v := m.View()
+	if !strings.Contains(v, "Esc") || !strings.Contains(v, "Enter") {
+		t.Fatalf("runtime view should show Esc stop and Enter steer hints: %q", v)
+	}
+
+	// 2. Type steering ideas into runtime input box
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("also add benchmarks")})
+	if m.ta.Value() != "also add benchmarks" {
+		t.Fatalf("runtime input not captured in textarea: %q", m.ta.Value())
+	}
+	if m.mode != modeAsking {
+		t.Fatalf("typing should not cancel asking mode: got %v", m.mode)
+	}
+
+	// 3. Press Enter to steer in-flight task
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(tuiModel)
+	if m.mode != modeAsking {
+		t.Fatalf("steering with enter should stay in modeAsking: got %v", m.mode)
+	}
+	if m.ta.Value() != "" {
+		t.Fatalf("textarea should reset after steering: %q", m.ta.Value())
+	}
+	if !strings.Contains(m.pendingPrompt, "also add benchmarks") {
+		t.Fatalf("pendingPrompt should contain steering idea: %q", m.pendingPrompt)
+	}
+	if cmd == nil {
+		t.Fatal("steering should emit printBlock cmd")
+	}
+
+	// 4. Press Esc to stop in-flight task
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(tuiModel)
+	if !cancelled {
+		t.Fatal("esc should cancel in-flight stream context")
+	}
+	if m.mode != modeIdle {
+		t.Fatalf("esc should return to modeIdle: got %v", m.mode)
+	}
+}
+
+// TestTUIMouseClickActions verifies mouse click handling across modeAsking and modeApproving.
+func TestTUIMouseClickActions(t *testing.T) {
+	// 1. modeAsking: clicking Stop button (X=10, Y=38) stops in-flight task
+	{
+		m := newTestTUI(t)
+		m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+		cancelled := false
+		m.mode = modeAsking
+		m.stream = newTestStream(&cancelled)
+
+		mouseMsg := tea.MouseMsg{
+			X:      10,
+			Y:      38,
+			Action: tea.MouseActionPress,
+			Button: tea.MouseButtonLeft,
+		}
+		next, _ := m.Update(mouseMsg)
+		got := next.(tuiModel)
+		if !cancelled {
+			t.Fatal("clicking stop button should cancel in-flight stream")
+		}
+		if got.mode != modeIdle {
+			t.Fatalf("mode: got %v want modeIdle after clicking stop", got.mode)
+		}
+	}
+
+	// 2. modeAsking: clicking Inject button (X=30, Y=38) injects steer idea
+	{
+		m := newTestTUI(t)
+		m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+		cancelled := false
+		m.mode = modeAsking
+		m.stream = newTestStream(&cancelled)
+		m.pendingPrompt = "Initial question"
+		m.ta.SetValue("refactor cleanly")
+
+		mouseMsg := tea.MouseMsg{
+			X:      30,
+			Y:      38,
+			Action: tea.MouseActionPress,
+			Button: tea.MouseButtonLeft,
+		}
+		next, cmd := m.Update(mouseMsg)
+		got := next.(tuiModel)
+		if got.mode != modeAsking {
+			t.Fatalf("clicking inject should keep modeAsking, got %v", got.mode)
+		}
+		if !strings.Contains(got.pendingPrompt, "refactor cleanly") {
+			t.Fatalf("pendingPrompt should contain injected steer: %q", got.pendingPrompt)
+		}
+		if got.ta.Value() != "" {
+			t.Fatalf("textarea should clear after steer click: %q", got.ta.Value())
+		}
+		if cmd == nil {
+			t.Fatal("clicking inject should emit printBlock cmd")
+		}
+	}
+
+	// 3. modeAsking: clicking Thought button (X=55, Y=38) toggles expandThought
+	{
+		m := newTestTUI(t)
+		m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+		m.mode = modeAsking
+		m.expandThought = false
+
+		mouseMsg := tea.MouseMsg{
+			X:      55,
+			Y:      38,
+			Action: tea.MouseActionPress,
+			Button: tea.MouseButtonLeft,
+		}
+		next, _ := m.Update(mouseMsg)
+		got := next.(tuiModel)
+		if !got.expandThought {
+			t.Fatal("clicking thought button should expand thought")
+		}
+	}
+
+	// 4. modeApproving: a click answers the card only when it lands on one of
+	// the two option cells of the choice row — anywhere else it is ignored, so
+	// a stray click on the transcript can never approve an irreversible task.
+	{
+		m := newTestTUI(t)
+		m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+		m.mode = modeApproving
+		m.pending = &askengine.Result{Approval: &askengine.ApprovalRequest{TaskID: "task-abc"}}
+
+		// Locate the choice row the way approvalHit does: re-render the framed
+		// card and find the [y]/[n] line from the bottom.
+		lines := strings.Split(m.approvalCard(), "\n")
+		choiceRow := -1
+		for i := len(lines) - 1; i >= 0; i-- {
+			if strings.Contains(lines[i], "[y]") && strings.Contains(lines[i], "[n]") {
+				choiceRow = i
+				break
+			}
+		}
+		if choiceRow < 0 {
+			t.Fatal("approval card did not render a choice row")
+		}
+		choiceY := 40 - len(lines) + choiceRow
+
+		// Option cell midpoints, from the same pieces choice() renders: a
+		// border+padding origin of 2, then per option a 2-col focus prefix,
+		// the [k] badge, a space and the label, with a 3-space gap between.
+		optW := func(key string) int {
+			return 2 + 3 + 1 + cliui.DisplayWidth(i18n.T(m.loc, "tui.approval."+key))
+		}
+		yesMid := 2 + optW("yes")/2
+		noMid := 2 + optW("yes") + 3 + optW("no")/2
+
+		// A click in the transcript area (anywhere off the choice row) is a
+		// no-op — this is the regression the old left-half-of-screen rule
+		// failed: X=10,Y=5 used to approve.
+		got := step(m, tea.MouseMsg{X: 10, Y: 5, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		if got.mode != modeApproving || got.pending == nil {
+			t.Fatalf("click off the choice row must not answer the card: mode=%v pending=%+v", got.mode, got.pending)
+		}
+		// A click on the card body (the head line) is also a no-op, even at an
+		// X that falls inside the yes option's column span.
+		headY := 40 - len(lines) + 1
+		got = step(got, tea.MouseMsg{X: yesMid, Y: headY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		if got.mode != modeApproving || got.pending == nil {
+			t.Fatalf("click on the card body must not answer the card: mode=%v pending=%+v", got.mode, got.pending)
+		}
+		// A click on the choice row but between/beyond the option cells is a
+		// no-op too.
+		gapX := 2 + optW("yes") + 1
+		got = step(got, tea.MouseMsg{X: gapX, Y: choiceY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		if got.mode != modeApproving || got.pending == nil {
+			t.Fatalf("click between the option cells must not answer the card: mode=%v pending=%+v", got.mode, got.pending)
+		}
+
+		// Clicking the [n] cell denies: back to idle, card dismissed.
+		got = step(got, tea.MouseMsg{X: noMid, Y: choiceY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		if got.mode != modeIdle {
+			t.Fatalf("clicking the [n] cell should deny (modeIdle), got %v", got.mode)
+		}
+		if got.pending != nil {
+			t.Fatalf("pending should be cleared on deny, got %+v", got.pending)
+		}
+
+		// Clicking the [y] cell approves: the turn resumes asking.
+		got = step(m, tea.MouseMsg{X: yesMid, Y: choiceY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		if got.mode != modeAsking {
+			t.Fatalf("clicking the [y] cell should approve (modeAsking), got %v", got.mode)
+		}
+	}
+}
+
+// TestTUIVerySmallWindowSize verifies that the model never panics or crashes when
+// rendered into degenerate, tiny, or negative terminal windows (0x0, 1x1, 5x2, -10x-5).
+func TestTUIVerySmallWindowSize(t *testing.T) {
+	sizes := []tea.WindowSizeMsg{
+		{Width: 0, Height: 0},
+		{Width: 1, Height: 1},
+		{Width: 5, Height: 2},
+		{Width: 10, Height: 5},
+		{Width: -10, Height: -5},
+	}
+	for _, sz := range sizes {
+		m := newTestTUI(t)
+		m = step(m, sz)
+		// View in idle
+		v := m.View()
+		if v == "" {
+			t.Fatalf("empty view for size %+v", sz)
+		}
+
+		// View in asking mode with liveAnswer and task
+		m.mode = modeAsking
+		m.liveAnswer = "short answer"
+		m.liveTask = newTaskProgress("building task", time.Now())
+		vAsking := m.View()
+		if vAsking == "" {
+			t.Fatalf("empty asking view for size %+v", sz)
+		}
+	}
+}
+
+// TestTUIOutOfBoundsMouseEvents verifies that strange or negative mouse click coordinates
+// never cause an index panic or crash.
+func TestTUIOutOfBoundsMouseEvents(t *testing.T) {
+	m := newTestTUI(t)
+	m = step(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	weirdClicks := []tea.MouseMsg{
+		{X: -10, Y: -10, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft},
+		{X: 999, Y: 999, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft},
+		{X: 0, Y: 0, Action: tea.MouseActionRelease, Button: tea.MouseButtonNone},
+		{X: 50, Y: 50, Action: tea.MouseActionMotion, Button: tea.MouseButtonRight},
+	}
+
+	for _, click := range weirdClicks {
+		m = step(m, click)
+		m.mode = modeAsking
+		m = step(m, click)
+		m.mode = modeApproving
+		m = step(m, click)
+	}
+}
+
+// TestTUIMultipleSteeringDrains verifies that multiple steering ideas injected during
+// execution are queued and drained safely without blocking or dropping.
+func TestTUIMultipleSteeringDrains(t *testing.T) {
+	s := &askStream{
+		events:  make(chan tea.Msg, 256),
+		cancel:  func() {},
+		dropped: make(chan struct{}),
+		steer:   make(chan string, 32),
+	}
+
+	ideas := []string{
+		"第一点要求：必须添加单元测试",
+		"第二点要求：优化内存开销",
+		"第三点要求：提供完整的中文文档",
+	}
+
+	for _, id := range ideas {
+		s.injectSteer(id)
+	}
+
+	var drained []string
+	for {
+		select {
+		case id := <-s.steer:
+			drained = append(drained, id)
+		default:
+			goto done
+		}
+	}
+done:
+	if len(drained) != len(ideas) {
+		t.Fatalf("expected %d drained ideas, got %d", len(ideas), len(drained))
+	}
+	for i, id := range ideas {
+		if drained[i] != id {
+			t.Errorf("drained[%d] = %q, want %q", i, drained[i], id)
+		}
+	}
+}

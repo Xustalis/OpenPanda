@@ -14,6 +14,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func (m tuiModel) View() string {
@@ -27,19 +28,18 @@ func (m tuiModel) View() string {
 	// than butting against the answer above it.
 	switch m.mode {
 	case modeAsking:
-		// A delegated task's card carries its own spinner, clock and interrupt
-		// hint, so the global status line stands down while one is in flight —
-		// two competing spinners read as a glitch, not as more information.
+		// Render live region (task progress card or streaming answer + spinner)
+		// followed immediately by the interactive input box so the user can type steering
+		// ideas or stop the task at any time.
+		var live string
 		if m.liveTask != nil {
-			return "\n" + m.liveRegion()
+			live = "\n" + m.liveRegion()
+		} else if lr := m.liveRegion(); lr != "" {
+			live = "\n" + lr + "\n" + m.statusLine()
+		} else {
+			live = "\n" + m.statusLine()
 		}
-		// Before the first token there is nothing to show but the spinner, and an
-		// empty live region would still cost a row — leaving a blank line wedged
-		// between the prompt and the only thing moving on screen.
-		if live := m.liveRegion(); live != "" {
-			return "\n" + live + "\n" + m.statusLine()
-		}
-		return "\n" + m.statusLine()
+		return live + "\n" + m.inputView()
 	case modeApproving:
 		return "\n" + m.approvalCard()
 	default:
@@ -53,8 +53,17 @@ func (m tuiModel) View() string {
 // classified as a task. Reasoning is display-only (D14).
 func (m tuiModel) liveRegion() string {
 	var parts []string
-	if ans := m.liveAnswer.String(); strings.TrimSpace(ans) != "" {
-		parts = append(parts, answerText(m.th, ans, m.textWidth()))
+	if ans := m.liveAnswer; strings.TrimSpace(ans) != "" {
+		text := answerText(m.th, ans, m.textWidth())
+		if m.height > 10 {
+			lines := strings.Split(text, "\n")
+			maxLines := max(4, m.height-10)
+			if len(lines) > maxLines {
+				lines = lines[len(lines)-maxLines:]
+				text = strings.Join(lines, "\n")
+			}
+		}
+		parts = append(parts, text)
 	} else if m.liveTask == nil {
 		// Once a task card is up it is the focus; the thought that led to the
 		// delegation has already been committed to scrollback.
@@ -104,22 +113,16 @@ func (m tuiModel) statusLine() string {
 
 // inputView is the rounded input box with one dim status row under it and a blank
 // line above, so the control reads as separate from the transcript instead of
-// abutting the last answer. The state used to have its own row above the box and
-// the key legend another below it, which framed the one thing the user is looking
-// at in chrome on both sides; folded into a single footer row the box stands
-// alone.
-//
-// The slash-command menu opens *below* the box, between it and the footer. Drawn
-// above, the list pushed the box down a row per match as the filter widened and
-// pulled it back up as it narrowed, so the one control the user is typing into
-// hopped around the screen while they typed. Anchored below, the box holds its
-// place directly under the transcript and the list grows into empty space, which
-// is also how the reference front end reads.
+// abutting the last answer.
 func (m tuiModel) inputView() string {
+	boxStyle := m.th.inputBox
+	if m.mode == modeAsking {
+		boxStyle = m.th.inputBoxRunning.BorderForeground(m.th.breathingColor(m.animTick))
+	}
 	rows := []string{
 		"", // the blank line every committed block gets above it
-		m.th.inputBox.Width(m.textWidth() + 2).Render(m.ta.View()),
 	}
+	rows = append(rows, boxStyle.Width(m.textWidth()+2).Render(m.ta.View()))
 	// The list is capped to what the window can spare: an inline renderer repaints
 	// by counting rows back up from the cursor, so a frame taller than the terminal
 	// scrolls its own top away and every later repaint lands in the wrong place.
@@ -151,6 +154,9 @@ func (m tuiModel) statusRow() string {
 	state, hints := m.contextLine(), m.hintLine()
 	switch {
 	case state == "":
+		if m.mode == modeAsking {
+			return hints
+		}
 		return m.th.muted.Render(hints)
 	case hints == "":
 		return m.th.muted.Render(cliui.Truncate(state, w, m.th.unicode))
@@ -158,6 +164,9 @@ func (m tuiModel) statusRow() string {
 	gap := w - cliui.DisplayWidth(hints) - cliui.DisplayWidth(state)
 	if gap < 2 {
 		return m.th.muted.Render(cliui.Truncate(state, w, m.th.unicode))
+	}
+	if m.mode == modeAsking {
+		return hints + strings.Repeat(" ", gap) + state
 	}
 	return m.th.muted.Render(hints + strings.Repeat(" ", gap) + state)
 }
@@ -169,6 +178,15 @@ func (m tuiModel) statusRow() string {
 // footer. It returns plain text; statusRow paints the whole row at once, because
 // the row's width arithmetic has to measure columns, not escape sequences.
 func (m tuiModel) contextLine() string {
+	if m.mode == modeAsking {
+		dur := elapsed(time.Since(m.started))
+		tag := lipgloss.NewStyle().Bold(true).Foreground(m.th.breathingColor(m.animTick)).
+			Render(m.th.glyph("⚡", "[!]") + " " + i18n.T(m.loc, "tui.status.running") + " · " + dur)
+		if m.projName != "" {
+			return tag + "  " + m.th.glyph("·", "|") + "  " + m.th.muted.Render(m.th.glyph("▪", "#")+" "+m.projName)
+		}
+		return tag
+	}
 	if m.r == nil {
 		return ""
 	}
@@ -212,6 +230,9 @@ func (m tuiModel) hintLine() string {
 	}
 	sep := "  " + m.th.glyph("·", "|") + "  "
 	hints := m.hintKeys()
+	if m.mode == modeAsking {
+		return strings.Join(hints, " ")
+	}
 	fits := func() bool {
 		return cliui.DisplayWidth(strings.Join(hints, sep)) <= budget
 	}
@@ -237,6 +258,13 @@ func (m tuiModel) hintLine() string {
 // are ordered action-first and escape-last, and both shed their middle two under
 // the same budget (see hintLine).
 func (m tuiModel) hintKeys() []string {
+	if m.mode == modeAsking {
+		return []string{
+			m.th.stopButton().Render(m.th.glyph("⏹", "[x]") + " Esc " + i18n.T(m.loc, "tui.hint.stop")),
+			m.th.steerButton().Render(m.th.glyph("⏎", "[>]") + " Enter " + i18n.T(m.loc, "tui.hint.steer")),
+			m.th.thoughtButton().Render("⌃O " + i18n.T(m.loc, "tui.hint.thought")),
+		}
+	}
 	if m.menu.active && len(m.menu.items) > 0 {
 		return []string{
 			i18n.T(m.loc, "tui.hint.menuRun"),
@@ -276,6 +304,51 @@ func (m tuiModel) approvalCard() string {
 	sb.WriteString("   " + choice(1, "n", i18n.T(m.loc, "tui.approval.no")))
 	sb.WriteString("\n" + m.th.muted.Render(m.th.glyph("↑↓", "^v")+" "+i18n.T(m.loc, "tui.approval.hint")))
 	return m.th.approval.Width(m.textWidth()).Render(sb.String())
+}
+
+// approvalHit maps a terminal click to an approval choice: 0 = approve,
+// 1 = deny, -1 = not on either option. The ephemeral frame is only
+// bottom-anchored once the transcript has filled the screen (bubbletea paints
+// the view at the cursor and scrollback pushes it down), so the choice row is
+// located by re-rendering the card and finding the [y]/[n] line from the
+// bottom, and the option cells are measured from the same pieces choice()
+// renders. Any click that does not resolve to an option — the transcript, the
+// card body, a stale frame after a resize — is ignored: a mis-aimed click may
+// be useless, but it must never be able to approve an irreversible task. The
+// keyboard path (y/n, arrows + enter) is unaffected.
+func (m tuiModel) approvalHit(x, y int) int {
+	if m.height <= 0 {
+		return -1
+	}
+	lines := strings.Split(m.approvalCard(), "\n")
+	choice := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(lines[i], "[y]") && strings.Contains(lines[i], "[n]") {
+			choice = i
+			break
+		}
+	}
+	if choice < 0 || y != m.height-len(lines)+choice {
+		return -1
+	}
+	// choice() renders: 2-col focus prefix, "[k]" badge, a space, the label —
+	// inside a border+padding frame whose content starts at column 2. The two
+	// options are joined by a 3-space gap.
+	const origin = 2 // border + horizontal padding
+	optW := func(label string) int { return 2 + 3 + 1 + cliui.DisplayWidth(label) }
+	yes := i18n.T(m.loc, "tui.approval.yes")
+	no := i18n.T(m.loc, "tui.approval.no")
+	yesX0 := origin
+	yesX1 := yesX0 + optW(yes) - 1
+	noX0 := yesX1 + 1 + 3
+	noX1 := noX0 + optW(no) - 1
+	switch {
+	case x >= yesX0 && x <= yesX1:
+		return 0
+	case x >= noX0 && x <= noX1:
+		return 1
+	}
+	return -1
 }
 
 // welcome is the startup banner pushed into scrollback: the wordmark, version,
