@@ -37,6 +37,9 @@ type theme struct {
 	warn            lipgloss.Style
 	danger          lipgloss.Style
 	command         lipgloss.Style // a typeable literal (slash command, flag)
+	userPrompt      lipgloss.Style // the user's own words: bold, high contrast — never dim
+	userMarker      lipgloss.Style // the "❯" that leads the user block
+	userPanel       lipgloss.Style // the user block's background band
 	inputBox        lipgloss.Style // the bottom rounded input frame
 	inputBoxRunning lipgloss.Style // the in-flight runtime input frame
 	welcome         lipgloss.Style // the startup welcome frame
@@ -60,6 +63,12 @@ func newTheme(loc i18n.Locale) theme {
 	t.warn = lipgloss.NewStyle()
 	t.danger = lipgloss.NewStyle()
 	t.command = lipgloss.NewStyle()
+	// The user block keeps its weight even without colour: bold is the one
+	// attribute every terminal draws, and the user's own words must never
+	// degrade to the faint grey the rest of the chrome tolerates.
+	t.userPrompt = lipgloss.NewStyle().Bold(true)
+	t.userMarker = lipgloss.NewStyle().Bold(true)
+	t.userPanel = lipgloss.NewStyle()
 
 	if t.color {
 		t.accent = t.accent.Foreground(brandGreen)
@@ -70,6 +79,13 @@ func newTheme(loc i18n.Locale) theme {
 		t.warn = t.warn.Foreground(lipgloss.Color("3"))
 		t.danger = t.danger.Foreground(lipgloss.Color("1"))
 		t.command = t.command.Foreground(lipgloss.Color("6")).Bold(true)
+		// The user block: white-on-dark, self-contained. The panel carries both
+		// its own background and its own foreground so it reads identically on
+		// light and dark terminal themes — 236 is the standard 256-colour dark
+		// slate that both themes resolve to on every terminal profile.
+		t.userPrompt = t.userPrompt.Foreground(lipgloss.Color("#FFFFFF"))
+		t.userMarker = t.userMarker.Foreground(lipgloss.Color("6")) // cyan: the asking voice
+		t.userPanel = t.userPanel.Background(lipgloss.Color("236")).Padding(0, 1)
 	}
 
 	// Frames: rounded on a unicode terminal, ASCII elsewhere so a bare Linux

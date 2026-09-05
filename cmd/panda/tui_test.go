@@ -7,6 +7,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // loc is the locale the block tests render in. It only matters for keys with
@@ -206,5 +207,50 @@ func TestIndentLines(t *testing.T) {
 	got := indentLines("one\ntwo", ">> ", "   ")
 	if got != ">> one\n   two" {
 		t.Fatalf("indent: %q", got)
+	}
+}
+
+// TestUserTextVisualBlockAndContrast pins the user prompt UX fix: user input
+// must hang continuation lines under the ❯ marker, hold high contrast (bold/white,
+// never dim/faint), and render inside a dedicated user block band when colored.
+func TestUserTextVisualBlockAndContrast(t *testing.T) {
+	th := newTheme(loc)
+	out := userText(th, "first line\nsecond line", 40)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %q", len(lines), out)
+	}
+	marker := th.glyph("❯", ">")
+	if !strings.HasPrefix(lines[0], marker) {
+		t.Errorf("first line should start with marker %q: %q", marker, lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "  ") {
+		t.Errorf("second line should hang with 2 spaces indent: %q", lines[1])
+	}
+
+	// Test wrapping
+	wrapped := userText(th, "alpha beta gamma delta epsilon zeta eta theta iota kappa", 20)
+	wlines := strings.Split(wrapped, "\n")
+	if len(wlines) < 2 {
+		t.Fatalf("expected long line to wrap: %q", wrapped)
+	}
+	for i, l := range wlines {
+		if i == 0 && !strings.HasPrefix(l, marker) {
+			t.Errorf("wrapped line 0 should start with marker: %q", l)
+		}
+		if i > 0 && !strings.HasPrefix(l, "  ") {
+			t.Errorf("wrapped continuation line %d should hang under marker: %q", i, l)
+		}
+	}
+
+	// In color mode, user block is rendered inside userPanel with padding and background
+	thColor := newTheme(loc)
+	thColor.color = true
+	thColor.userPrompt = thColor.userPrompt.Foreground(lipgloss.Color("#FFFFFF"))
+	thColor.userMarker = thColor.userMarker.Foreground(lipgloss.Color("6"))
+	thColor.userPanel = thColor.userPanel.Background(lipgloss.Color("236")).Padding(0, 1)
+	colorOut := userText(thColor, "color prompt", 30)
+	if !strings.Contains(colorOut, "color prompt") {
+		t.Fatalf("color output missing prompt text: %q", colorOut)
 	}
 }

@@ -78,18 +78,41 @@ func (b block) render(t theme, width int, expandThought bool) string {
 	return b.body
 }
 
-// userText echoes the submitted prompt under a "❯" so scrolling back reads as a
-// dialogue rather than an undifferentiated wall of text. It is dim, and wrapped
-// and hung like the answer beneath it: the user's own words are the one thing in
-// the transcript they do not need to read back, so they recede and the accent
-// colour stays reserved for the app's own voice. Wrapping matters as much as the
-// tint — only the answer half of a turn used to be wrapped, so a pasted prompt
-// ran past the frame while the reply to it stayed inside.
+// userText echoes the submitted prompt as its own visual block: a bold line on
+// a background band under a "❯" marker, so the user's turn and the answer
+// beneath it read as two distinct regions at a glance — the user block is a
+// filled band, the answer is open prose under an accent marker. It used to
+// render dim (the reasoning: the user's own words are the one thing they need
+// not read back), but faint text sat below readable contrast on dark terminal
+// themes and the user's turn all but disappeared between the app's answers;
+// bold white on a dark panel holds full contrast on both light and dark
+// themes, and bold alone survives NO_COLOR. Wrapping still applies — a pasted
+// prompt must not run past the frame the answer honours.
 func userText(t theme, body string, width int) string {
-	if width > 4 {
-		body = wrap(body, width-2)
+	wrapWidth := width
+	if t.color && width > 4 {
+		wrapWidth = width - 4
+	} else if width > 2 {
+		wrapWidth = width - 2
 	}
-	return t.muted.Render(indentLines(body, t.glyph("❯", ">")+" ", "  "))
+	if wrapWidth > 4 {
+		body = wrap(body, wrapWidth)
+	}
+	marker := t.userMarker.Render(t.glyph("❯", ">"))
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	for i, l := range lines {
+		styled := t.userPrompt.Render(l)
+		if i == 0 {
+			lines[i] = marker + " " + styled
+		} else {
+			lines[i] = "  " + styled
+		}
+	}
+	content := strings.Join(lines, "\n")
+	if t.color {
+		return t.userPanel.Width(width).Render(content)
+	}
+	return content
 }
 
 // answerText lays out assistant prose under a marker glyph: wrapped to the
