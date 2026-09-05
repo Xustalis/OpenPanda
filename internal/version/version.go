@@ -7,5 +7,5 @@ package version
 
 // Version is the semantic version of this build.
 //
-// v0.0.8-preview is the version this tree builds.
-var Version = "0.0.8-preview"
+// v0.0.8 is the official release version.
+var Version = "0.0.8"

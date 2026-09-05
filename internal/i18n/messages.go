@@ -276,8 +276,11 @@ var messages = map[Locale]map[string]string{
 		"cli.agents.install.url": "docs: {url}",
 		"cli.agents.installHint": "{count} agent(s) missing — run `panda agents install <name>` for the install command",
 
-		"cli.project.none":    "no projects",
-		"cli.project.created": "project {name} created",
+		"cli.project.none":       "no projects",
+		"cli.project.created":    "project {name} created",
+		"cli.workspace.prompt":   "Allow current directory as workspace? [{path}] (Y/n): ",
+		"cli.workspace.accepted": "workspace set to {path} (project: {name})",
+		"cli.workspace.declined": "workspace binding skipped, running in global mode",
 
 		// Project surface: metadata columns and the enter/exit/rename/remove
 		// messages (cmd/panda/projectcmd.go, internal/projects).
@@ -388,7 +391,7 @@ var messages = map[Locale]map[string]string{
 		"tui.status.running":            "Running",
 		"tui.hint.stop":                 "stop task",
 		"tui.hint.steer":                "inject idea",
-		"tui.welcome.tips":              "type / for commands · @file to attach a file · /help for the full guide",
+		"tui.welcome.tips":              "type / for commands · @file to attach · /web for web console · /help for guide",
 		"tui.replay.folded":             "resumed the previous conversation — the oldest {n} messages are not shown again",
 
 		"init.node.summary":  "node: {name} ({class}/{kind})",
@@ -803,8 +806,11 @@ var messages = map[Locale]map[string]string{
 		"cli.agents.install.url": "文档：{url}",
 		"cli.agents.installHint": "有 {count} 个 agent 未安装 — 运行 `panda agents install <name>` 查看安装命令",
 
-		"cli.project.none":    "暂无项目",
-		"cli.project.created": "项目 {name} 已创建",
+		"cli.project.none":       "暂无项目",
+		"cli.project.created":    "项目 {name} 已创建",
+		"cli.workspace.prompt":   "是否允许将当前文件夹作为工作空间？[{path}] (Y/n): ",
+		"cli.workspace.accepted": "已将当前文件夹设为工作空间：{path}（项目：{name}）",
+		"cli.workspace.declined": "已跳过工作空间绑定，以全局模式运行",
 
 		// Project surface: metadata columns and the enter/exit/rename/remove
 		// messages (cmd/panda/projectcmd.go, internal/projects).
@@ -911,7 +917,7 @@ var messages = map[Locale]map[string]string{
 		"tui.status.running":            "运行中",
 		"tui.hint.stop":                 "停止任务",
 		"tui.hint.steer":                "注入想法",
-		"tui.welcome.tips":              "输入 / 唤出命令 · @文件 附带文件 · /help 查看完整指南",
+		"tui.welcome.tips":              "输入 / 唤出命令 · @文件 附带文件 · /web 启动 Web 界面 · /help 完整指南",
 		"tui.replay.folded":             "已恢复上次对话 · 更早的 {n} 条不再重复显示",
 
 		"init.node.summary":  "节点：{name}（{class}/{kind}）",
@@ -1325,8 +1331,11 @@ var messages = map[Locale]map[string]string{
 		"cli.agents.install.url": "ドキュメント：{url}",
 		"cli.agents.installHint": "{count} 個の agent が未インストールです — `panda agents install <name>` で確認",
 
-		"cli.project.none":    "プロジェクトはありません",
-		"cli.project.created": "プロジェクト {name} を作成しました",
+		"cli.project.none":       "プロジェクトはありません",
+		"cli.project.created":    "プロジェクト {name} を作成しました",
+		"cli.workspace.prompt":   "現在のディレクトリをワークスペースとして許可しますか？[{path}] (Y/n): ",
+		"cli.workspace.accepted": "現在のディレクトリをワークスペースに設定しました: {path} (プロジェクト: {name})",
+		"cli.workspace.declined": "ワークスペースのバインドをスキップし、グローバルモードで実行します",
 
 		// Project surface: metadata columns and the enter/exit/rename/remove
 		// messages (cmd/panda/projectcmd.go, internal/projects).
@@ -1433,7 +1442,7 @@ var messages = map[Locale]map[string]string{
 		"tui.status.running":            "実行中",
 		"tui.hint.stop":                 "タスク停止",
 		"tui.hint.steer":                "アイデア注入",
-		"tui.welcome.tips":              "/ でコマンド一覧 · @ファイル で添付 · /help で全ガイド",
+		"tui.welcome.tips":              "/ でコマンド一覧 · @ファイル で添付 · /web で Web 画面起動 · /help で全ガイド",
 		"tui.replay.folded":             "前回の会話を復元しました · 古い {n} 件は再表示しません",
 
 		"init.node.summary":  "ノード：{name}（{class}/{kind}）",
@@ -1955,7 +1964,7 @@ var messages = map[Locale]map[string]string{
 		"tui.status.running":            "Ejecutando",
 		"tui.hint.stop":                 "detener tarea",
 		"tui.hint.steer":                "inyectar idea",
-		"tui.welcome.tips":              "escribe / para los comandos · @archivo para adjuntar · /help para la guía completa",
+		"tui.welcome.tips":              "escribe / para comandos · @archivo adjuntar · /web consola web · /help guía completa",
 		"tui.replay.folded":             "conversación anterior restaurada — los {n} mensajes más antiguos no se muestran de nuevo",
 
 		"init.node.summary":  "nodo: {name} ({class}/{kind})",
@@ -2478,7 +2487,7 @@ var messages = map[Locale]map[string]string{
 		"tui.status.running":            "Läuft",
 		"tui.hint.stop":                 "Aufgabe stoppen",
 		"tui.hint.steer":                "Idee injizieren",
-		"tui.welcome.tips":              "/ für Befehle · @Datei zum Anhängen · /help für die ganze Anleitung",
+		"tui.welcome.tips":              "/ für Befehle · @Datei zum Anhängen · /web für Web-Konsole · /help für Anleitung",
 		"tui.replay.folded":             "vorherige Unterhaltung wiederhergestellt — die ältesten {n} Nachrichten werden nicht erneut angezeigt",
 
 		"init.node.summary":  "Knoten: {name} ({class}/{kind})",

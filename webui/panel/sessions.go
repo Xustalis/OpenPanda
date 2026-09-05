@@ -91,6 +91,44 @@ func (h *handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"id": id, "status": "deleted"})
 }
 
+type patchSessionRequest struct {
+	Title   *string `json:"title,omitempty"`
+	Project *string `json:"project,omitempty"`
+}
+
+// patchSession serves PATCH /api/sessions/{id} — updates title or project association.
+func (h *handler) patchSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if h.sessions == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("sessions store not configured"))
+		return
+	}
+	var req patchSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	_, err := h.sessions.Get(id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such session"))
+		return
+	}
+	if req.Title != nil {
+		if err := h.sessions.SetTitle(id, *req.Title); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	if req.Project != nil {
+		if err := h.sessions.SetProject(id, *req.Project); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	sess, _ := h.sessions.Get(id)
+	writeJSON(w, sess)
+}
+
 // ---- Worktree diff & merge ----
 
 // sessionDiff serves GET /api/sessions/{id}/diff — the session's worktree
@@ -238,6 +276,12 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	if workDir == "" {
 		workDir = eng.WorkPath()
 	}
+	prevProj, prevDir := eng.Project()
+	if sess.Project != "" {
+		eng.SetProject(sess.Project, workDir)
+	}
+	defer eng.SetProject(prevProj, prevDir)
+
 	out, err := eng.AskTurns(r.Context(), history, req.Prompt, workDir, req.Authorize, cb)
 	if err != nil {
 		send("error", map[string]string{"message": err.Error()})

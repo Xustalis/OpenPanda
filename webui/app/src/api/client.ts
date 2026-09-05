@@ -262,6 +262,21 @@ export interface AskResult {
    *  after every inline task so the UI shows a human-readable summary
    *  instead of raw stdout/stderr. */
   report?: string
+  /** Chain of thought / reasoning accumulated during the turn. */
+  thought?: string
+}
+
+export interface ChooseDirectoryResult {
+  path?: string
+  canceled: boolean
+  error?: string
+}
+
+export interface DirectoryListing {
+  current: string
+  parent: string
+  separator: string
+  entries: { name: string; path: string }[]
 }
 
 /** GET /api/update — the self-update pipeline status snapshot. */
@@ -702,6 +717,19 @@ export const api = {
 
   sessionMerge(id: string, message?: string): Promise<{ merged: boolean; subject: string }> {
     return request('POST', `/api/sessions/${encodeURIComponent(id)}/merge`, message ? { message } : {})
+  },
+
+  patchSession(id: string, body: { title?: string; project?: string }): Promise<Session> {
+    return request('PATCH', `/api/sessions/${encodeURIComponent(id)}`, body)
+  },
+
+  chooseDirectory(default_path?: string): Promise<ChooseDirectoryResult> {
+    return request('POST', '/api/dialog/choose-directory', default_path ? { default_path } : {})
+  },
+
+  listDirectories(path?: string): Promise<DirectoryListing> {
+    const q = path ? `?path=${encodeURIComponent(path)}` : ''
+    return request('GET', `/api/fs/directories${q}`)
   },
 
   // ---- Reminders ----

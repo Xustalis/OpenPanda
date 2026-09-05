@@ -6,7 +6,7 @@ import { StateBadge } from '../components/state-badge'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 import DecisionOrbit from '../components/orbit'
-import { JsonInline } from '../components/json-inline'
+import { EventTimeline } from '../components/event-timeline'
 import { prettifyJson } from '../format/json'
 
 export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
@@ -154,7 +154,7 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
       <div class="detail-block">
         <h2>{t('detail.timeline')}</h2>
         {task.events && task.events.length > 0 ? (
-          <Timeline events={task.events} />
+          <EventTimeline events={task.events} />
         ) : (
           <p class="dim">{t('common.empty')}</p>
         )}
@@ -169,20 +169,6 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
       <span class="dim">{label}</span>
       <span class={mono ? 'mono' : ''}>{value}</span>
     </div>
-  )
-}
-
-function Timeline({ events }: { events: NonNullable<Task['events']> }) {
-  return (
-    <ol class="timeline">
-      {events.map((ev, i) => (
-        <li key={i}>
-          <span class="dim">{new Date(ev.ts * 1000).toLocaleTimeString()}</span>{' '}
-          <code>{ev.type}</code>
-          {ev.data && ev.data !== '{}' && <JsonInline raw={ev.data} />}
-        </li>
-      ))}
-    </ol>
   )
 }
 
