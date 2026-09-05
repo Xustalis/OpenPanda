@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'preact/hooks'
-import { api, type Task } from '../api/client'
+import { api, ApiError, type Task } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { StateBadge } from '../components/state-badge'
 import { ErrorState } from '../components/page'
+import { confirmDialog } from '../components/confirm'
+import { toast, toastError } from '../components/toast'
 
 // The queue is a kanban board (design §11.2): the user never navigates a task
 // tree — they see what is waiting, what is running, what needs their approval,
@@ -15,6 +17,10 @@ const COLUMNS: { key: 'todo' | 'doing' | 'review' | 'done'; states: string[] }[]
   { key: 'review', states: ['review'] },
   { key: 'done', states: ['done', 'failed', 'cancelled', 'expired'] },
 ]
+
+// States the server will delete (`core.Deletable`): not yet claimed or already
+// finished. A moving task shows no × — cancel is its action, not delete.
+const DELETABLE_STATES = new Set(['submitted', 'queued', 'done', 'failed', 'cancelled', 'expired'])
 
 // Cap per column: recent history stays scannable without an endless wall of
 // finished cards (design §11.2 shows "DONE · last 24h"; a count cap is the
@@ -68,6 +74,30 @@ export function QueueView({
     return [...set].sort()
   }, [tasks])
 
+  /** One-click board wipe: confirm first (it cancels running work), then
+   *  DELETE /api/tasks and refresh from server truth. */
+  const [busyClear, setBusyClear] = useState(false)
+  async function clearQueue() {
+    if (!tasks?.length || busyClear) return
+    const ok = await confirmDialog({
+      title: t('queue.clearConfirmTitle'),
+      message: t('queue.clearConfirmMsg'),
+      confirmLabel: t('queue.clear'),
+      danger: true,
+    })
+    if (!ok) return
+    setBusyClear(true)
+    try {
+      const res = await api.clearTasks()
+      toast(t('queue.clearDone', { c: String(res.cancelled), d: String(res.deleted) }))
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusyClear(false)
+    }
+    bump()
+  }
+
   if (error)
     return (
       <ErrorState
@@ -94,7 +124,14 @@ export function QueueView({
       <h1 class="page-title">{t('nav.queue')}</h1>
       <p class="page-sub">{t('queue.subtitle')}</p>
 
-      <NewTaskForm projects={projects} onCreated={bump} />
+      <div class="queue-toolbar">
+        <NewTaskForm projects={projects} onCreated={bump} />
+        {(tasks?.length ?? 0) > 0 && (
+          <button class="btn danger queue-clear" disabled={busyClear} onClick={() => void clearQueue()}>
+            {t('queue.clear')}
+          </button>
+        )}
+      </div>
 
       <div class="filters">
         <select
@@ -406,8 +443,31 @@ function KanbanCard({
     void act(() => api.patchTask(task.id, next))
   }
 
+  /** Delete the card's task (and subtree). The server refuses a moving task
+   *  with 409 — surfaced as the localized "cancel first" hint, not raw JSON. */
+  async function remove() {
+    const ok = await confirmDialog({
+      title: t('queue.deleteConfirmTitle'),
+      message: t('queue.deleteConfirmMsg'),
+      confirmLabel: t('queue.deleteTask'),
+      danger: true,
+    })
+    if (!ok) return
+    try {
+      await api.deleteTask(task.id)
+      onMutated()
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        setError(t('queue.deleteActive'))
+        return
+      }
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   const isReview = task.state === 'review'
   const finished = ['done', 'failed', 'cancelled', 'expired'].includes(task.state)
+  const deletable = DELETABLE_STATES.has(task.state)
   const open = () => (task.session_id ? onOpenSession(task.session_id) : onOpen(task.id))
 
   return (
@@ -445,6 +505,20 @@ function KanbanCard({
     >
       <div class="kanban-card-top">
         <span class="kanban-title">{task.title || task.id}</span>
+        {deletable && (
+          <button
+            class="kanban-del"
+            title={t('queue.deleteTask')}
+            aria-label={t('queue.deleteTask')}
+            disabled={busy}
+            onClick={(e) => {
+              e.stopPropagation()
+              void remove()
+            }}
+          >
+            ×
+          </button>
+        )}
         <StateBadge state={task.state} />
       </div>
       <div class="kanban-meta dim">

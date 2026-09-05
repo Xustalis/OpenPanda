@@ -496,6 +496,18 @@ export const api = {
     return request('POST', `/api/tasks/${id}/cancel`)
   },
 
+  /** Delete one task and its subtree (queued or finished only; the server
+   *  answers 409 for a task still moving — cancel first). */
+  deleteTask(id: string): Promise<{ id: string; deleted: number }> {
+    return request('DELETE', `/api/tasks/${encodeURIComponent(id)}`)
+  },
+
+  /** One-click board wipe: cancel everything still moving, delete every
+   *  task record. */
+  clearTasks(): Promise<{ cancelled: number; deleted: number }> {
+    return request('DELETE', '/api/tasks')
+  },
+
   logs(id: string): Promise<{ id: string; events: TaskEvent[] }> {
     return request('GET', `/api/tasks/${id}/logs`)
   },

@@ -3419,6 +3419,65 @@ label {
   gap: var(--sp-2);
 }
 
+/* Per-card delete (deletable states only): quiet until hovered, then the
+   danger red — the card itself stays the primary click target. */
+.kanban-del {
+  flex: none;
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--fs-body);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+
+.kanban-card:hover .kanban-del,
+.kanban-del:focus-visible,
+.kanban-del:disabled {
+  opacity: 1;
+}
+
+.kanban-del:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.kanban-del:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 1px;
+}
+
+.kanban-del:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+/* The header row: "New task" plus the board-level "Clear queue" — the wipe
+   is the destructive sibling, so it sits at the row's end in danger tones. */
+.queue-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin: var(--sp-2) 0 var(--sp-3);
+}
+
+.queue-clear {
+  flex: none;
+}
+
 .kanban-title {
   font-size: var(--fs-sub);
   font-weight: var(--fw-semibold);

@@ -1327,6 +1327,129 @@ func (s *TaskStore) cancelCascade(ctx context.Context, taskID string, visited ma
 	return nil
 }
 
+// ErrTaskActive reports a delete attempted on a task that is still executing
+// (dispatched / running / waiting_context / review). Those rows must be
+// cancelled first: deleting one out from under a live executor would strand
+// its result handling and lease renewals against a task that no longer exists.
+var ErrTaskActive = errors.New("task is active")
+
+// Deletable reports whether a task in state s may be removed from the store:
+// anything not yet claimed (submitted/queued) and every terminal state. The
+// active states refuse with ErrTaskActive — see Delete.
+func Deletable(s string) bool {
+	switch s {
+	case StateSubmitted, StateQueued,
+		StateDone, StateFailed, StateCancelled, StateExpired:
+		return true
+	}
+	return false
+}
+
+// Delete removes a task and its whole subtree from the store: the tasks rows,
+// their event timelines, delegation metrics and any parked outbox deliveries.
+// Only deletable states go (see Deletable); an active task anywhere in the
+// subtree refuses with ErrTaskActive so a running executor never has its row
+// pulled out from under it — cancel first, then delete. Returns how many task
+// rows were removed.
+func (s *TaskStore) Delete(ctx context.Context, taskID string) (int, error) {
+	var ids []string
+	visited := make(map[string]bool)
+	if err := s.deleteSubtree(ctx, taskID, visited, &ids); err != nil {
+		return 0, err
+	}
+	if err := s.deleteTaskRows(ctx, ids); err != nil {
+		return 0, err
+	}
+	return len(ids), nil
+}
+
+// deleteSubtree walks parent_id links depth-first, collecting the subtree in
+// ids. The visited set guards against a parent_id cycle, exactly like
+// cancelCascade.
+func (s *TaskStore) deleteSubtree(ctx context.Context, taskID string, visited map[string]bool, ids *[]string) error {
+	if visited[taskID] {
+		return nil
+	}
+	visited[taskID] = true
+	cur, err := s.Get(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if !Deletable(cur.State) {
+		return fmt.Errorf("%w: %s is %s — cancel it first", ErrTaskActive, taskID, cur.State)
+	}
+	*ids = append(*ids, taskID)
+	children, err := s.Children(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	for _, c := range children {
+		if err := s.deleteSubtree(ctx, c.TaskID, visited, ids); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ClearQueue empties the board: every non-terminal task is cancelled first
+// (the same local-row semantics as CancelCascade — a remote executor is told
+// through the engine's cancel path, not here), then every task row and its
+// satellites are deleted in one transaction. Returns how many tasks were
+// cancelled and how many rows were deleted.
+func (s *TaskStore) ClearQueue(ctx context.Context) (cancelled, deleted int, err error) {
+	tasks, err := s.ListByState(ctx, "")
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(tasks) == 0 {
+		return 0, 0, nil
+	}
+	for _, t := range tasks {
+		if Terminal(t.State) {
+			continue
+		}
+		// Plain Cancel per task (not CancelCascade): the loop already visits
+		// every row, so the subtree walk would only repeat work. A cancel that
+		// races a concurrent completion is idempotent — terminal states skip.
+		if err := s.Cancel(ctx, t.TaskID); err == nil {
+			cancelled++
+		}
+	}
+	if err := s.deleteTaskRows(ctx, nil); err != nil {
+		return cancelled, 0, err
+	}
+	return cancelled, len(tasks), nil
+}
+
+// deleteTaskRows removes the given task ids (nil = every task) together with
+// their satellite rows: event timeline, delegation metrics and any parked
+// result/cancel outbox deliveries. Artifacts and the audit chain are
+// content-addressed history, not queue state — they stay.
+func (s *TaskStore) deleteTaskRows(ctx context.Context, ids []string) error {
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		if ids == nil {
+			for _, table := range []string{
+				"task_events", "delegation_metrics", "result_outbox", "cancel_outbox", "tasks",
+			} {
+				if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+					return fmt.Errorf("clear %s: %w", table, err)
+				}
+			}
+			return nil
+		}
+		for _, id := range ids {
+			for _, table := range []string{
+				"task_events", "delegation_metrics", "result_outbox", "cancel_outbox", "tasks",
+			} {
+				if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE task_id = ?", id); err != nil {
+					return fmt.Errorf("delete %s from %s: %w", id, table, err)
+				}
+			}
+		}
+		return nil
+	})
+}
+
 // Children lists direct children of taskID.
 func (s *TaskStore) Children(ctx context.Context, parentID string) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx,

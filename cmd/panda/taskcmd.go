@@ -46,6 +46,9 @@ func runTask(args []string) {
 		case "cancel":
 			runCancel(args[1:])
 			return
+		case "delete", "del", "rm":
+			runTaskDelete(args[1:])
+			return
 		case "logs":
 			runLogs(args[1:])
 			return
@@ -67,6 +70,7 @@ func taskUsage() {
 	fmt.Fprintln(os.Stderr, "      [--project p] [--authorize] [--card PATH]   enqueue a task")
 	fmt.Fprintln(os.Stderr, "  priority <id> <level>                   change a task's priority")
 	fmt.Fprintln(os.Stderr, "  move <id> <seq>                         reorder the drag-sort queue")
+	fmt.Fprintln(os.Stderr, "  delete <id>                             remove a task and its subtree (queued/finished)")
 	fmt.Fprintln(os.Stderr, "  approve|reject|cancel|logs <id>         same as the bare commands")
 }
 
@@ -474,4 +478,51 @@ func runTaskMove(args []string) {
 		return
 	}
 	fmt.Println(i18n.Tf(i18n.Detect(), "cli.task.move.done", "id", id, "seq", strconv.FormatInt(seq, 10)))
+}
+
+// runTaskDelete implements `panda task delete <id>` — remove one task (and its
+// subtree) from the store. Queued and finished tasks go; a task that is still
+// executing refuses with a pointer at `panda cancel`, because deleting the row
+// under a live executor would strand its result and lease handling.
+func runTaskDelete(args []string) {
+	fs := flag.NewFlagSet("task delete", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	loc := i18n.Detect()
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "usage: panda task delete [--config PATH] <task-id>")
+		os.Exit(2)
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, store, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	id = resolveTaskRef(store, id)
+	n, err := store.Delete(context.Background(), id)
+	if err != nil {
+		if errors.Is(err, core.ErrTaskActive) {
+			t, gerr := store.Get(context.Background(), id)
+			state := ""
+			if gerr == nil {
+				state = t.State
+			}
+			fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.task.delete.active",
+				"id", id, "state", state))
+			os.Exit(1)
+		}
+		taskStoreFatal(err, id)
+	}
+	if jsonOutput {
+		emitJSON(map[string]any{"id": id, "deleted": n})
+		return
+	}
+	fmt.Println(i18n.Tf(loc, "cli.task.delete.done", "n", strconv.Itoa(n)))
 }

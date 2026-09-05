@@ -94,6 +94,14 @@ const ja: Messages = {
   'queue.dropHere': 'ドロップして並べ替え',
   'queue.openSession': '連携セッションを開く',
   'queue.collapse': '折りたたむ',
+  'queue.deleteTask': 'タスクを削除',
+  'queue.deleteConfirmTitle': 'このタスクを削除しますか？',
+  'queue.deleteConfirmMsg': 'タスクとそのサブツリー全体（イベント、指標）が削除されます。元に戻せません。',
+  'queue.deleteActive': 'タスクは実行中です — 先にキャンセルしてから削除してください。',
+  'queue.clear': 'キューを空にする',
+  'queue.clearConfirmTitle': 'キュー全体を空にしますか？',
+  'queue.clearConfirmMsg': '実行中のタスクはキャンセルされ、すべてのタスク記録が削除されます。元に戻せません。',
+  'queue.clearDone': 'キューを空にしました — キャンセル {c} 件、削除 {d} 件。',
 
   // Detail view
   'detail.back': 'キューに戻る',

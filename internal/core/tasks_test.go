@@ -729,3 +729,115 @@ func TestTaskEventChainTamperDetect(t *testing.T) {
 		t.Fatalf("expected tamper detection error, got nil")
 	}
 }
+
+// TestTaskStoreDelete tests single task and subtree deletion:
+// - deleting queued or finished tasks succeeds and cascades to children
+// - deleting active tasks fails with ErrTaskActive
+func TestTaskStoreDelete(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	parent := createTask(t, s, "", "parent task", "root")
+	child := createTask(t, s, parent.TaskID, "child task", "root")
+
+	if err := s.Queue(ctx, parent.TaskID, "root"); err != nil {
+		t.Fatalf("queue parent: %v", err)
+	}
+	if err := s.Queue(ctx, child.TaskID, "root"); err != nil {
+		t.Fatalf("queue child: %v", err)
+	}
+	if err := s.Dispatch(ctx, child.TaskID, "root", "worker"); err != nil {
+		t.Fatalf("dispatch child: %v", err)
+	}
+	if err := s.Accept(ctx, child.TaskID, "worker"); err != nil {
+		t.Fatalf("accept child: %v", err)
+	}
+	if err := s.Complete(ctx, child.TaskID, "worker", nil); err != nil {
+		t.Fatalf("complete child: %v", err)
+	}
+
+	// Active check: dispatch parent so it becomes active
+	if err := s.Dispatch(ctx, parent.TaskID, "root", "worker"); err != nil {
+		t.Fatalf("dispatch parent: %v", err)
+	}
+	_, err := s.Delete(ctx, parent.TaskID)
+	if !errors.Is(err, ErrTaskActive) {
+		t.Fatalf("expected ErrTaskActive when deleting active task, got %v", err)
+	}
+
+	// Cancel parent so it is terminal
+	if err := s.Cancel(ctx, parent.TaskID); err != nil {
+		t.Fatalf("cancel parent: %v", err)
+	}
+
+	// Now delete parent, which should delete parent + child
+	n, err := s.Delete(ctx, parent.TaskID)
+	if err != nil {
+		t.Fatalf("delete parent: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected 2 tasks deleted, got %d", n)
+	}
+
+	// Verify both are gone
+	if _, err := s.Get(ctx, parent.TaskID); err == nil {
+		t.Fatalf("parent task still exists")
+	}
+	if _, err := s.Get(ctx, child.TaskID); err == nil {
+		t.Fatalf("child task still exists")
+	}
+}
+
+// TestTaskStoreClearQueue tests wiping the whole queue:
+// active tasks are cancelled, and all tasks are removed.
+func TestTaskStoreClearQueue(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	t1 := createTask(t, s, "", "task 1 queued", "root")
+	t2 := createTask(t, s, "", "task 2 running", "root")
+	t3 := createTask(t, s, "", "task 3 done", "root")
+
+	if err := s.Queue(ctx, t1.TaskID, "root"); err != nil {
+		t.Fatalf("queue t1: %v", err)
+	}
+
+	if err := s.Queue(ctx, t2.TaskID, "root"); err != nil {
+		t.Fatalf("queue t2: %v", err)
+	}
+	if err := s.Dispatch(ctx, t2.TaskID, "root", "worker"); err != nil {
+		t.Fatalf("dispatch t2: %v", err)
+	}
+
+	if err := s.Queue(ctx, t3.TaskID, "root"); err != nil {
+		t.Fatalf("queue t3: %v", err)
+	}
+	if err := s.Dispatch(ctx, t3.TaskID, "root", "worker"); err != nil {
+		t.Fatalf("dispatch t3: %v", err)
+	}
+	if err := s.Accept(ctx, t3.TaskID, "worker"); err != nil {
+		t.Fatalf("accept t3: %v", err)
+	}
+	if err := s.Complete(ctx, t3.TaskID, "worker", nil); err != nil {
+		t.Fatalf("complete t3: %v", err)
+	}
+
+	cancelled, deleted, err := s.ClearQueue(ctx)
+	if err != nil {
+		t.Fatalf("ClearQueue: %v", err)
+	}
+	if cancelled != 2 {
+		t.Fatalf("expected 2 tasks cancelled, got %d", cancelled)
+	}
+	if deleted != 3 {
+		t.Fatalf("expected 3 tasks deleted, got %d", deleted)
+	}
+
+	remaining, err := s.ListByState(ctx, "")
+	if err != nil {
+		t.Fatalf("ListByState: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("expected queue to be empty, found %d tasks", len(remaining))
+	}
+}
