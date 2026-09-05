@@ -21,7 +21,7 @@ export CGO_ENABLED
 
 .PHONY: all build web web-test build-webui build-darwin-amd64 build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
-        dev test vet fmt fmt-check race race-focused gate gate-all run run-local measure clean icons release package release-local
+        dev test adapter-test vet fmt fmt-check race race-focused gate gate-all run run-local measure clean icons release package release-local
 
 all: build
 
@@ -107,7 +107,14 @@ release-windows-arm64:
 package:
 	./scripts/package.sh $(VERSION)
 
-test:
+# The bundled Python adapters get a black-box leg of their own: fake CLIs on
+# PATH assert the argv/env/progress/timeout contracts, so an adapter flag
+# change has to be a deliberate contract edit (needs python3; CI runs it as
+# its own gate leg).
+adapter-test:
+	python3 tests/adapter_contract_test.py
+
+test: adapter-test
 	$(GO) test ./...
 
 vet:
@@ -160,7 +167,7 @@ race-focused:
 #   - 版本号从 internal/version/version.go 提取，禁止在 Makefile 中
 #     写死 VERSION 默认值，避免版本漂移。
 # ============================================================================
-gate: fmt-check vet build test race
+gate: fmt-check vet build adapter-test test race
 
 # gate-all is gate + the node/web pipeline (typecheck + ui build + web
 # tests). CI uses gate-all; a backend-only feature branch can use gate.

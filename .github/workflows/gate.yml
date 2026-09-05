@@ -58,6 +58,22 @@ jobs:
       - name: Test
         run: go test ./...
 
+  # The bundled Python adapters have a Go-invisible surface: their subprocess
+  # argv, env, progress stream and timeout behavior are pinned by the
+  # black-box contract suite (fake CLIs first on PATH, no network). Without
+  # this leg an adapter regression — e.g. a silently dropped CLI flag — ships
+  # green.
+  adapters:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Adapter contract tests
+        run: make adapter-test
+
   race:
     runs-on: ubuntu-latest
     timeout-minutes: 20
