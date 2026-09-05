@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
@@ -721,6 +723,110 @@ done:
 	for i, id := range ideas {
 		if drained[i] != id {
 			t.Errorf("drained[%d] = %q, want %q", i, drained[i], id)
+		}
+	}
+}
+
+// TestTUIStartupIsNotBottomPadded pins the layout fix: the welcome frame is
+// committed where the cursor already is — the top of a fresh terminal — and
+// the transcript grows downward from it. The frame used to be preceded by
+// blank lines computed to push it to the bottom edge, which stranded the
+// greeting under a screenful of dead space on anything taller than the frame
+// and put the only interactive row where the eye is not.
+func TestTUIStartupIsNotBottomPadded(t *testing.T) {
+	m := newTestTUI(t)
+	prints := m.startupPrints()
+	if len(prints) == 0 {
+		t.Fatal("startup must print the welcome frame")
+	}
+	if strings.HasPrefix(prints[0], "\n") {
+		t.Fatal("the welcome frame must print at the cursor, not be padded down to the bottom edge")
+	}
+}
+
+// TestTUIStartupReplaysRestoredConversation pins the visibility fix for a
+// resumed bare chat: runTUI restores r.convo silently, and the replay has to
+// re-commit those turns to scrollback — otherwise the previous context exists
+// nowhere the user can read, because the wheel belongs to the terminal and
+// nothing was printed above the banner this run. Three banked pairs must come
+// back as three ❯/⏺ block pairs behind the banner, and the first
+// WindowSizeMsg must hand Bubble Tea exactly that many Println commands.
+func TestTUIStartupReplaysRestoredConversation(t *testing.T) {
+	m := newTestTUI(t)
+	m.r.convo = []entry.Turn{
+		{Role: "user", Content: "what port does the daemon use?"},
+		{Role: "assistant", Content: "8787 by default."},
+		{Role: "user", Content: "and the web console?"},
+		{Role: "assistant", Content: "Same port, /web path."},
+		{Role: "user", Content: "thanks"},
+		{Role: "assistant", Content: "Any time."},
+	}
+	prints := m.startupPrints()
+	if len(prints) != 1+6 {
+		t.Fatalf("expected banner + 6 replayed blocks, got %d prints", len(prints))
+	}
+	if prints[0] != m.welcome() {
+		t.Fatal("the banner must come first, unpadded")
+	}
+	joined := strings.Join(prints, "\n")
+	for _, want := range []string{
+		"what port does the daemon use?",
+		"8787 by default.",
+		"Same port, /web path.",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("replay lost a restored turn: %q not in transcript", want)
+		}
+	}
+
+	next, cmd := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	if !next.(tuiModel).ready {
+		t.Fatal("first WindowSizeMsg must mark the model ready")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("first WindowSizeMsg must batch the startup prints, got %T", cmd())
+	}
+	if len(batch) != 1+6 {
+		t.Fatalf("expected %d Println commands, got %d", 1+6, len(batch))
+	}
+}
+
+// TestTUIStartupReplayFoldsOldTurns bounds the replay: its job is orientation,
+// not a verbatim wall, so a long banked conversation shows only the most
+// recent ten pairs, behind a note counting what was folded away.
+func TestTUIStartupReplayFoldsOldTurns(t *testing.T) {
+	m := newTestTUI(t)
+	for i := 0; i < 12; i++ {
+		// Zero-padded labels so no kept turn ("question 10", "question 11")
+		// contains a folded turn's text as a substring.
+		label := strconv.Itoa(i)
+		if len(label) < 2 {
+			label = "0" + label
+		}
+		m.r.convo = append(m.r.convo,
+			entry.Turn{Role: "user", Content: "question " + label},
+			entry.Turn{Role: "assistant", Content: "answer " + label},
+		)
+	}
+	prints := m.startupPrints()
+	// Banner + fold note + 10 pairs.
+	if len(prints) != 1+1+20 {
+		t.Fatalf("expected banner + fold note + 20 blocks, got %d prints", len(prints))
+	}
+	note := prints[1]
+	if strings.Contains(note, "question") || strings.Contains(note, "answer") {
+		t.Fatalf("prints[1] must be the fold note, got %q", note)
+	}
+	joined := strings.Join(prints, "\n")
+	for _, gone := range []string{"question 00", "answer 00", "question 01"} {
+		if strings.Contains(joined, gone) {
+			t.Fatalf("folded turn leaked into the replay: %q", gone)
+		}
+	}
+	for _, kept := range []string{"question 02", "answer 11"} {
+		if !strings.Contains(joined, kept) {
+			t.Fatalf("kept turn missing from the replay: %q", kept)
 		}
 	}
 }

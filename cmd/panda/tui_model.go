@@ -10,6 +10,8 @@ package main
 // tui_msgs.go) into screen updates and keystrokes into asks.
 
 import (
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -193,6 +195,45 @@ func (m tuiModel) printBlock(b block) tea.Cmd {
 	// belongs here rather than in render() because it is a property of committing
 	// to scrollback — the live region draws the same blocks and supplies its own.
 	return tea.Println("\n" + b.render(m.th, m.textWidth(), m.expandThought))
+}
+
+// startupPrints is what the first WindowSizeMsg commits to scrollback: the
+// welcome banner, then — when a previous run left a conversation behind — that
+// conversation replayed as transcript blocks. A restored thread used to come
+// back completely invisible: its turns existed only in the model's memory, so
+// the screen showed a banner and an empty prompt no matter how many turns had
+// been banked, and with the wheel belonging to the terminal there was nothing
+// above the banner to scroll to either. The replay caps itself to the most
+// recent turns — its job is orientation, not a verbatim wall — and says so when
+// it folds. Each entry carries the same leading blank line printBlock uses, so
+// the replay reads as part of the transcript's rhythm; the banner does not,
+// because it is the frame the transcript hangs from.
+func (m tuiModel) startupPrints() []string {
+	prints := []string{m.welcome()}
+	if m.r == nil || len(m.r.convo) == 0 {
+		return prints
+	}
+	turns := m.r.convo
+	const maxTurns = 10 // user+assistant pairs, taken from the tail
+	add := func(b block) {
+		prints = append(prints, "\n"+b.render(m.th, m.textWidth(), m.expandThought))
+	}
+	if n := len(turns) / 2; n > maxTurns {
+		add(block{
+			kind: blockNote,
+			body: i18n.Tf(m.loc, "tui.replay.folded", "n", strconv.Itoa(len(turns)-maxTurns*2)),
+		})
+		turns = turns[len(turns)-maxTurns*2:]
+	}
+	for _, t := range turns {
+		switch {
+		case t.Role == "user":
+			add(block{kind: blockUser, body: t.Content})
+		case t.Role == "assistant" && strings.TrimSpace(t.Content) != "":
+			add(block{kind: blockAnswer, body: t.Content})
+		}
+	}
+	return prints
 }
 
 // refreshProject re-reads the active project pointer into the model; see the

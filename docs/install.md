@@ -2,11 +2,11 @@
 
 三条路径都能在 macOS / Linux / Windows 上得到**一致的体验**：一个 `panda` 可执行文件 + 智能体适配器（`adapters/*.py`），装在用户目录、免 root。
 
-| 平台 | 方式 |
-|---|---|
-| macOS | `curl … \| sh`（或 Homebrew） |
-| Linux | `curl … \| sh` |
-| Windows | PowerShell 一键脚本 |
+| 平台      | 方式                         |
+| ------- | -------------------------- |
+| macOS   | `curl … \| sh`（或 Homebrew） |
+| Linux   | `curl … \| sh`             |
+| Windows | PowerShell 一键脚本            |
 
 安装器会做四件事：**下载**对应平台/架构的 release 包 → **SHA-256 校验** → **解压到前缀目录** → **软链/加入 PATH**；随后（交互式）询问是否**注册开机自启服务**。
 
@@ -85,16 +85,21 @@ panda doctor    # 自检：二进制 / PATH / 配置 / 适配器 / agent 是否�
 ## 开机自启：手动控制
 
 - **macOS**（LaunchAgent，用户级，免 sudo）：
+
   ```bash
   launchctl unload ~/Library/LaunchAgents/com.openpanda.node.plist   # 停用
   launchctl load   ~/Library/LaunchAgents/com.openpanda.node.plist   # 启用
   ```
+
 - **Linux**（systemd 用户单元）：
+
   ```bash
   systemctl --user disable --now openpanda.service   # 停用
   systemctl --user enable  --now openpanda.service   # 启用
   ```
+
 - **Windows**（登录计划任务）：
+
   ```powershell
   schtasks /Delete /TN OpenPandaNode /F        # 停用并删除
   ```
@@ -108,7 +113,9 @@ panda uninstall             # 扫描 → 列出删除/保留清单 → 输入 co
 ```
 
 - **白名单删除**：只删 OpenPanda 自有产物（二进制、PATH 标记块、config.yaml、数据库与运行数据）；`memory/`、`projects/`、`skills/` 等用户资产默认**保留**并在清单中标注。一键脚本/self-update 安装的发行目录（`bin/`、`adapters/`、示例配置）也会一并清扫——Linux 上与存储同根时只动发行文件、保留数据；Homebrew 安装则提示用 `brew uninstall openpanda`，源码 checkout（有 `go.mod`/`.git`）不会被误删。
+
 - **自动备份**：删除前把配置与数据打包成 `~/openpanda-backup-<时间戳>.zip`，可回滚（`--no-backup` 跳过）。
+
 - **`--dry-run`**：只打印计划，不删任何东西；**`--yes`**：脚本化运行跳过确认。
 
 ### 连用户数据一起删：`--purge`
@@ -134,12 +141,18 @@ panda uninstall --backup-only
 1. 变更合入 `main`，打标签：`git tag v0.0.8-preview && git push origin v0.0.8-preview`（注意：CHANGELOG 必须先有该版本章节，否则 release 流水线会拒绝发布）
 2. `.github/workflows/release.yml` 自动跨平台构建 → 打包 `.tar.gz`/`.zip` → 生成 `checksums.txt` → 发布 GitHub Release。
 3. 落地后可用：
+
    - 项目 README / `docs/install.md` 里的一键脚本直接装到最新版；
+
    - Homebrew 用户 `brew upgrade openpanda`；发布流程会生成带固定 SHA-256 的配方并同步到 tap。
 
 ## 疑难排查
 
 - **`panda not found`**：新开终端使 PATH 生效，或手动 `export PATH="$HOME/.local/bin:$PATH"`。
+
 - **校验失败**：可能是下载被代理/断点续传破坏，重跑即可（脚本会用全新临时目录）。
+
 - **不支持的系统/架构**：脚本会明确报错；目前发布 `darwin/linux/windows` 的 `amd64` 与 `arm64`。
+
 - **daemon 起不来**：先 `panda doctor` 与 `panda init`；回环监听会自动生成临时 token，但对外监听且未配置 `shared_secret` 会拒绝启动（安全约束）。
+

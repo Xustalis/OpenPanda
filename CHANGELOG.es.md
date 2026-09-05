@@ -36,6 +36,16 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Cada entrada nombra el cambio y su efecto visible en una a tres líneas; se cita el commit que lo introdujo cuando ayuda a la arqueología.
 - Este archivo en inglés es el canónico. Las traducciones zh-CN / ja / es / de lo replican y pueden retrasarse brevemente alrededor de un lanzamiento.
 
+## [Unreleased]
+
+### Corregido
+
+- **Pánico al iniciar por el controlador de consola de Windows** — la retrollamada `PHANDLER_ROUTINE` declaraba un retorno `bool`, que `windows.NewCallback` rechaza (exige un único resultado del tamaño de un puntero), por lo que los comandos de larga vida que la registran (`panda daemon`, `panda web`) caían al arrancar con "compileCallback: expected function with one uintptr-sized result"; la retrollamada ahora devuelve `uintptr` (`1` manejado / `0` no manejado) (#2).
+- **TUI: una conversación reanudada vuelve a ser visible** — al reabrir un chat directo, los turnos guardados se reproducen en el scrollback tras el banner de bienvenida (limitado a los diez pares más recientes, con una nota que cuenta lo plegado).
+- **TUI: el banner de bienvenida se imprime en el cursor** — el saludo ya no se rellena hasta el borde inferior en terminales altas, lo que lo dejaba bajo una pantalla de espacio muerto y ponía la fila de entrada fuera de la vista.
+- **TUI: la rueda vuelve a pertenecer al terminal** — el programa ya no captura el movimiento de celdas del ratón; la rueda, la barra de desplazamiento y PageUp/PageDown alcanzan el scrollback propio de la transcripción. Las superficies clicables conservan sus rutas de teclado (y/n, Esc/Enter).
+- **Instalador de Windows: el autoarranque lee la configuración real** — la tarea de inicio de sesión ya no fija `--config`/`--card` en rutas del prefijo que nunca existen allí; el demonio descubre la configuración de usuario escrita por `panda init` (mismo orden que LaunchAgent y systemd).
+
 ## [0.0.8-preview] - 2026-09-05
 
 Transición a proyecto de código abierto formal: OpenPanda evoluciona de un enrutador de tareas experimental a un sistema operativo de orquestación de agentes personales unificado y listo para producción. Incluye herramientas de gestión para el motor Ask, dirección interactiva en TUI, conmutación por error activa con inyección de modelos de respaldo, registro multimodelo y seguimiento transparente.

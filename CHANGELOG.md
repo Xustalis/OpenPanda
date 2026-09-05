@@ -44,7 +44,11 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
-- **Windows console control handler startup panic** — the `PHANDLER_ROUTINE` callback declared a `bool` return, which `windows.NewCallback` rejects (it requires a single `uintptr`-sized result), so every long-lived command (`panda web`, the REPL, and the daemon) panicked on startup with "compileCallback: expected function with one uintptr-sized result"; the callback now returns `uintptr` (`1` handled / `0` not handled).
+- **Windows console control handler startup panic** — the `PHANDLER_ROUTINE` callback declared a `bool` return, which `windows.NewCallback` rejects (it requires a single `uintptr`-sized result), so the long-lived commands that register it (`panda daemon`, `panda web`) panicked on startup with "compileCallback: expected function with one uintptr-sized result"; the callback now returns `uintptr` (`1` handled / `0` not handled) (#2).
+- **TUI: a resumed conversation is visible again** — reopening a bare chat replays the banked turns into the scrollback behind the welcome banner (capped to the ten most recent pairs, with a note counting what was folded), instead of showing a banner and an empty prompt no matter how much context existed.
+- **TUI: the welcome banner prints at the cursor** — the greeting no longer pads itself down to the bottom edge of tall terminals, which stranded it under a screenful of dead space and put the input row where the eye is not.
+- **TUI: the wheel belongs to the terminal again** — the program no longer captures mouse cell motion, so wheel scrolling, the scrollbar and PageUp/PageDown reach the transcript's own scrollback — the one buffer an application can never scroll itself. Clickable surfaces keep their keyboard paths (y/n, Esc/Enter).
+- **Windows installer: auto-start picks up the real config** — the logon task no longer pins `--config`/`--card` at install-prefix paths that never exist there; the daemon discovers the user-level config written by `panda init` (same order as the LaunchAgent and systemd units) instead of silently running on defaults.
 
 ## [0.0.8-preview] - 2026-09-05
 
