@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
@@ -36,7 +37,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.onKey(msg)
 
+	case tea.MouseMsg:
+		return m.onMouse(msg)
+
 	case spinner.TickMsg:
+		m.animTick++
 		if m.mode != modeAsking {
 			return m, nil
 		}
@@ -108,7 +113,30 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if msg.Type == tea.KeyEsc {
 			return m.interrupt()
 		}
-		return m, nil
+		if msg.Type == tea.KeyEnter {
+			text := strings.TrimSpace(m.ta.Value())
+			if text == "" {
+				return m, nil
+			}
+			m.ta.Reset()
+			m.ta.SetHeight(1)
+			m.pendingPrompt += "\n[补充想法/Steering]: " + text
+			if m.stream != nil {
+				m.stream.injectSteer(text)
+			}
+			if m.r != nil {
+				m.r.convo = append(m.r.convo, entry.Turn{Role: "user", Content: "[补充想法/Steering]: " + text})
+			}
+			blk := block{
+				kind: blockNote,
+				body: m.th.accent.Render("💡 ") + i18n.Tf(m.loc, "tui.turn.steered", "idea", text),
+			}
+			return m, m.printBlock(blk)
+		}
+		var cmd tea.Cmd
+		m.ta, cmd = m.ta.Update(msg)
+		m.ta.SetHeight(min(8, max(1, m.ta.LineCount())))
+		return m, cmd
 	case modeApproving:
 		return m.onApprovalKey(msg)
 	default:
@@ -117,12 +145,7 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // interrupt answers Esc/Ctrl-C during a turn. It releases this front end from
-// the ask; it does not stop the work. Once the engine hands a task to the core,
-// the core owns that task's lifetime — submitTask runs under the engine's own
-// context, not the ask's — so the task runs to completion and the out-of-band
-// watcher announces it here when it lands. That is why the late doneMsg is
-// dropped rather than committed (see onDone) and why the note says the task
-// keeps going instead of claiming it stopped.
+// the ask and signals cancellation.
 //
 // Pressing twice inside interruptWindow quits. That is the escape hatch for the
 // case where nothing can be released at all, and it is what keeps a wedged
@@ -148,7 +171,10 @@ func (m tuiModel) interrupt() (tea.Model, tea.Cmd) {
 	m.mode = modeIdle
 	m.stream = nil
 	m.resetLive()
-	note := block{kind: blockNote, body: i18n.T(m.loc, "tui.turn.detached")}
+	m.ta.Reset()
+	m.ta.SetHeight(1)
+	m.ta.Placeholder = i18n.T(m.loc, "tui.input.placeholder")
+	note := block{kind: blockNote, body: m.th.warn.Render("⏹ ") + i18n.T(m.loc, "tui.turn.stopped")}
 	return m, tea.Batch(
 		m.turnEnded(),
 		m.printBlock(note),
@@ -182,6 +208,7 @@ func (m tuiModel) onIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	}
+
 	var cmd tea.Cmd
 	m.ta, cmd = m.ta.Update(msg)
 	// Grow the input box with its content up to the cap, so multi-line prompts
@@ -192,6 +219,91 @@ func (m tuiModel) onIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// token under the cursor filters them — and closes on a non-slash line.
 	m.menu.sync(m.ta.Value(), m.argResolve())
 	return m, cmd
+}
+
+// onMouse handles terminal mouse events (clicks) across all modes.
+func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.mode == modeExec || m.quitting {
+		return m, nil
+	}
+
+	// Only process left mouse button releases or presses
+	if msg.Action != tea.MouseActionRelease && msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+	if msg.Button != tea.MouseButtonLeft {
+		return m, nil
+	}
+
+	// 1. In modeApproving: a click answers the card only when it lands on one
+	// of the two options of the choice row. Clicks anywhere else — the
+	// transcript above, the card body, the frame — are ignored, so a stray
+	// click can never approve an irreversible task.
+	if m.mode == modeApproving && m.pending != nil {
+		switch m.approvalHit(msg.X, msg.Y) {
+		case 0:
+			return m.approvePending()
+		case 1:
+			return m.denyPending()
+		}
+		return m, nil
+	}
+
+	// 2. In modeAsking: clicking [⏹ 停止], [⏎ 注入], or [⌃O 思考]
+	if m.mode == modeAsking {
+		if m.height > 3 && msg.Y >= m.height-3 && msg.X >= 0 {
+			// Click [ ⏹ 停止 (Esc) ] (first ~22 columns)
+			if msg.X <= 22 {
+				return m.interrupt()
+			}
+			// Click [ ⏎ 注入 (Enter) ] (columns 23 to 45)
+			if msg.X >= 23 && msg.X <= 45 {
+				text := strings.TrimSpace(m.ta.Value())
+				if text != "" {
+					m.ta.Reset()
+					m.ta.SetHeight(1)
+					m.pendingPrompt += "\n[补充想法/Steering]: " + text
+					if m.stream != nil {
+						m.stream.injectSteer(text)
+					}
+					if m.r != nil {
+						m.r.convo = append(m.r.convo, entry.Turn{Role: "user", Content: "[补充想法/Steering]: " + text})
+					}
+					blk := block{
+						kind: blockNote,
+						body: m.th.accent.Render("💡 ") + i18n.Tf(m.loc, "tui.turn.steered", "idea", text),
+					}
+					return m, m.printBlock(blk)
+				}
+			}
+			// Click [ ⌃O 思考 ] (columns 46 to 68)
+			if msg.X >= 46 && msg.X <= 68 {
+				m.expandThought = !m.expandThought
+				return m, nil
+			}
+		}
+		var cmd tea.Cmd
+		m.ta, cmd = m.ta.Update(msg)
+		return m, cmd
+	}
+
+	// 3. In modeIdle:
+	if m.mode == modeIdle {
+		// If slash menu is active, clicking on menu rows selects that command
+		if m.menu.active && len(m.menu.items) > 0 && m.height > 3 {
+			if msg.Y >= m.height-3 && msg.X >= 0 {
+				idx := min(len(m.menu.items)-1, max(0, msg.Y-(m.height-len(m.menu.items))))
+				cmd := m.menu.items[idx].name
+				return m.submit("/" + cmd)
+			}
+		}
+
+		var cmd tea.Cmd
+		m.ta, cmd = m.ta.Update(msg)
+		return m, cmd
+	}
+
+	return m, nil
 }
 
 // argResolve adapts the repl's argument resolver for the popup. nil repl (some
@@ -289,9 +401,12 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 	m.pendingPrompt = prompt
 	m.turnWorkDir = workDir
 	m.mode = modeAsking
+	m.ta.Reset()
+	m.ta.SetHeight(1)
+	m.ta.Placeholder = i18n.T(m.loc, "tui.input.placeholder.running")
 	m.started = time.Now()
 	m.lastInterrupt = time.Time{} // each turn gets a fresh double-tap window
-	m.liveAnswer.Reset()
+	m.liveAnswer = ""
 	m.thought = nil
 	m.thoughtDone = false
 	m.note = ""

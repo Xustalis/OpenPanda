@@ -29,17 +29,18 @@ type theme struct {
 	unicode bool
 	loc     i18n.Locale
 
-	accent   lipgloss.Style // brand green, for the wordmark and active accents
-	heading  lipgloss.Style // bold accent section titles
-	muted    lipgloss.Style // dim secondary text (thoughts, hints, meta)
-	italic   lipgloss.Style // reasoning preview
-	success  lipgloss.Style
-	warn     lipgloss.Style
-	danger   lipgloss.Style
-	command  lipgloss.Style // a typeable literal (slash command, flag)
-	inputBox lipgloss.Style // the bottom rounded input frame
-	welcome  lipgloss.Style // the startup welcome frame
-	approval lipgloss.Style // the tier-2 approval card frame
+	accent          lipgloss.Style // brand green, for the wordmark and active accents
+	heading         lipgloss.Style // bold accent section titles
+	muted           lipgloss.Style // dim secondary text (thoughts, hints, meta)
+	italic          lipgloss.Style // reasoning preview
+	success         lipgloss.Style
+	warn            lipgloss.Style
+	danger          lipgloss.Style
+	command         lipgloss.Style // a typeable literal (slash command, flag)
+	inputBox        lipgloss.Style // the bottom rounded input frame
+	inputBoxRunning lipgloss.Style // the in-flight runtime input frame
+	welcome         lipgloss.Style // the startup welcome frame
+	approval        lipgloss.Style // the tier-2 approval card frame
 }
 
 // newTheme resolves the TUI styles from the shared palette. It reads pal() (the
@@ -79,10 +80,12 @@ func newTheme(loc i18n.Locale) theme {
 	}
 	frame := lipgloss.NewStyle().Border(border).Padding(0, 1)
 	t.inputBox = frame
+	t.inputBoxRunning = frame
 	t.welcome = frame
 	t.approval = frame
 	if t.color {
 		t.inputBox = t.inputBox.BorderForeground(brandGreen)
+		t.inputBoxRunning = t.inputBoxRunning.BorderForeground(lipgloss.Color("#E5C07B"))
 		t.welcome = t.welcome.BorderForeground(brandGreen)
 		t.approval = t.approval.BorderForeground(lipgloss.Color("3"))
 	}
@@ -110,4 +113,54 @@ func (t theme) glyph(uni, ascii string) string {
 		return uni
 	}
 	return ascii
+}
+
+// stopButton renders a prominent red capsule button for stopping in-flight tasks.
+func (t theme) stopButton() lipgloss.Style {
+	st := lipgloss.NewStyle().Padding(0, 1).Bold(true)
+	if t.color {
+		st = st.Foreground(lipgloss.Color("#FFFFFF")).
+			Background(lipgloss.Color("#D32F2F"))
+	}
+	return st
+}
+
+// steerButton renders a prominent brand green capsule button for injecting ideas.
+func (t theme) steerButton() lipgloss.Style {
+	st := lipgloss.NewStyle().Padding(0, 1).Bold(true)
+	if t.color {
+		st = st.Foreground(lipgloss.Color("#000000")).
+			Background(brandGreen)
+	}
+	return st
+}
+
+// thoughtButton renders a subtle capsule button for toggling thought preview.
+func (t theme) thoughtButton() lipgloss.Style {
+	st := lipgloss.NewStyle().Padding(0, 1)
+	if t.color {
+		st = st.Foreground(lipgloss.Color("#E5C07B")).
+			Background(lipgloss.Color("236"))
+	}
+	return st
+}
+
+// breathingColor returns a pulsing color that smoothly transitions between
+// golden amber, neon cyan, and brand green to represent live activity.
+func (t theme) breathingColor(tick int) lipgloss.TerminalColor {
+	if !t.color {
+		return lipgloss.NoColor{}
+	}
+	palette := []string{
+		"#E5C07B",
+		"#F39C12",
+		"#00D7AF",
+		"#3DDC97",
+		"#2ECC71",
+		"#3DDC97",
+		"#00D7AF",
+		"#F39C12",
+	}
+	idx := (tick / 2) % len(palette)
+	return lipgloss.Color(palette[idx])
 }

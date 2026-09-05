@@ -10,7 +10,6 @@ package main
 // tui_msgs.go) into screen updates and keystrokes into asks.
 
 import (
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -96,7 +95,7 @@ type tuiModel struct {
 	// in the ephemeral region, committed to scrollback when the turn ends);
 	// thought holds chain-of-thought lines (display-only, D14); note is the
 	// current lifecycle phase note (routing/running/…).
-	liveAnswer    strings.Builder
+	liveAnswer    string
 	thought       []string
 	thoughtDone   bool
 	expandThought bool
@@ -117,6 +116,7 @@ type tuiModel struct {
 	// for the y/n hotkeys (which keep working).
 	approvalSel int
 
+	animTick int
 	quitting bool
 }
 

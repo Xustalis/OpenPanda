@@ -30,7 +30,7 @@ func (m tuiModel) onDelta(chunk string) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.printBlock(tb))
 		}
 	}
-	m.liveAnswer.WriteString(chunk)
+	m.liveAnswer += chunk
 	cmds = append(cmds, waitForActivity(m.stream))
 	return m, tea.Batch(cmds...)
 }
@@ -141,7 +141,7 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 	if m.r != nil {
 		m.r.recordOutcome(context.Background(), m.pendingPrompt, out)
 	}
-	blk := resultBlock(out, m.liveAnswer.String(), m.loc)
+	blk := resultBlock(out, m.liveAnswer, m.loc)
 	// A delegated turn carries its card's title and stage trail into scrollback,
 	// so the committed block records the same route/exec/judge evidence the live
 	// card showed rather than just the final output.
@@ -277,12 +277,13 @@ func (m tuiModel) denyPending() (tea.Model, tea.Cmd) {
 
 // resetLive clears the in-flight turn state after a turn commits.
 func (m *tuiModel) resetLive() {
-	m.liveAnswer.Reset()
+	m.liveAnswer = ""
 	m.thought = nil
 	m.thoughtDone = false
 	m.note = ""
 	m.pendingPrompt = ""
 	m.liveTask = nil
+	m.ta.Placeholder = i18n.T(m.loc, "tui.input.placeholder")
 }
 
 // appendReasoning folds a reasoning chunk into the running thought lines: it

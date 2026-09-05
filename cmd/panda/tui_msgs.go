@@ -51,6 +51,7 @@ type (
 type askStream struct {
 	events chan tea.Msg
 	cancel context.CancelFunc
+	steer  chan string
 
 	// detached records that the user stopped waiting on this ask (Esc/Ctrl+C).
 	// It never stops the work: once the engine has handed a task to the core,
@@ -64,6 +65,17 @@ type askStream struct {
 	// only ever closed, never sent on, so releasing an ask can never race an
 	// engine send into a closed channel.
 	dropped chan struct{}
+}
+
+// injectSteer pushes a user steering idea to the in-flight engine ask loop.
+func (s *askStream) injectSteer(idea string) {
+	if s == nil || idea == "" {
+		return
+	}
+	select {
+	case s.steer <- idea:
+	default:
+	}
 }
 
 // drop releases an ask: it cancels the engine's context (which unblocks any
@@ -101,12 +113,21 @@ func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir st
 		events:  make(chan tea.Msg, 256),
 		cancel:  cancel,
 		dropped: make(chan struct{}),
+		steer:   make(chan string, 32),
 	}
 
 	cb := askengine.StreamCallbacks{
 		OnDelta:     func(text string) { s.send(ctx, deltaMsg(text)) },
 		OnReasoning: func(text string) { s.send(ctx, reasoningMsg(text)) },
 		OnProgress:  func(p askengine.Progress) { s.send(ctx, progressMsg(p)) },
+		GetSteer: func() string {
+			select {
+			case idea := <-s.steer:
+				return idea
+			default:
+				return ""
+			}
+		},
 		// OnApproval stays nil: a synchronous yes/no from a Bubble Tea card is not
 		// answerable from this goroutine, so we take the NeedsApproval Result path
 		// (the engine parks the task and returns it) and prompt on the model loop,
