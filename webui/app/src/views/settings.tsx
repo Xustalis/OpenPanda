@@ -12,6 +12,11 @@ import { t } from '../i18n'
 import { locale, localeNames, locales, setLocale } from '../i18n'
 import { notifyModelSaved } from './onboarding'
 import { onThemeChange, setTheme, theme } from '../theme'
+import { NodesView } from './nodes'
+import { MemoryView } from './memory'
+import { SkillsView } from './skills'
+import { RemindersView } from './reminders'
+import { SystemView } from './system'
 
 type ApiType = 'anthropic' | 'openai'
 
@@ -20,62 +25,104 @@ const EXAMPLES: Record<ApiType, { base: string; model: string }> = {
   openai: { base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
 }
 
-/** Settings sections: the left rail groups the page Codex-style instead of
- *  dumping every form on one scroll. "memory" and "devices" are jumps, not
- *  sections — they already live on their own pages. */
-type Section = 'general' | 'config' | 'memory' | 'devices' | 'agents'
+export type Section =
+  | 'general'
+  | 'models'
+  | 'policy'
+  | 'agents'
+  | 'mcp'
+  | 'nodes'
+  | 'memory'
+  | 'skills'
+  | 'reminders'
+  | 'system'
 
-const SECTIONS: Array<{ id: Section; label: string; jump?: string }> = [
-  { id: 'general', label: 'settings.group.general' },
-  { id: 'config', label: 'settings.group.config' },
-  { id: 'memory', label: 'settings.group.memory', jump: '#/memory' },
-  { id: 'devices', label: 'settings.group.devices', jump: '#/nodes' },
-  { id: 'agents', label: 'settings.group.agents' },
+const SECTIONS: Array<{ id: Section; label: string; icon: string }> = [
+  { id: 'general', label: 'settings.group.general', icon: '⚙️' },
+  { id: 'models', label: 'settings.model', icon: '🧠' },
+  { id: 'policy', label: 'settings.policy', icon: '🛡️' },
+  { id: 'agents', label: 'settings.group.agents', icon: '🤖' },
+  { id: 'mcp', label: 'settings.mcp', icon: '🔌' },
+  { id: 'nodes', label: 'nav.nodes', icon: '🖥️' },
+  { id: 'memory', label: 'nav.memory', icon: '💾' },
+  { id: 'skills', label: 'nav.skills', icon: '⚡' },
+  { id: 'reminders', label: 'nav.reminders', icon: '⏰' },
+  { id: 'system', label: 'nav.system', icon: '📊' },
 ]
 
-/** The settings page (C1): grouped behind a left rail — general (language +
- *  appearance theme), config (model, MCP, and the four app policies:
- *  injection, routing preference, memory caps, approval gate), plus jumps to
- *  the memory console and the devices page, and the agent CLI roster. */
-export function SettingsView() {
+function normalizeSection(raw?: string): Section {
+  if (!raw) return 'general'
+  if (raw === 'config' || raw === 'model') return 'models'
+  if (raw === 'devices') return 'nodes'
+  const valid: Section[] = [
+    'general',
+    'models',
+    'policy',
+    'agents',
+    'mcp',
+    'nodes',
+    'memory',
+    'skills',
+    'reminders',
+    'system',
+  ]
+  return valid.includes(raw as Section) ? (raw as Section) : 'general'
+}
+
+/** The unified settings & management center: everything relating to device
+ *  clustering, memory, skills, automated reminders, system governance, and
+ *  model configurations lives here as controlled tabs. */
+export function SettingsView(props: {
+  initialSection?: string
+  onSelectTab?: (tab: Section) => void
+}) {
   useLocaleRerender()
-  const [section, setSection] = useState<Section>('general')
+  const [section, setSection] = useState<Section>(() => normalizeSection(props.initialSection))
+
+  useEffect(() => {
+    if (props.initialSection) {
+      setSection(normalizeSection(props.initialSection))
+    }
+  }, [props.initialSection])
+
+  const handleSelect = (s: Section) => {
+    setSection(s)
+    props.onSelectTab?.(s)
+  }
 
   return (
-    <section>
-      <h1 class="page-title">{t('settings.title')}</h1>
-      <p class="page-sub">{t('settings.subtitle')}</p>
+    <section class="settings-page">
+      <div class="settings-head">
+        <h1 class="page-title">{t('settings.title')}</h1>
+        <p class="page-sub">{t('settings.subtitle')}</p>
+      </div>
 
       <div class="settings-layout">
         <nav class="settings-nav" aria-label={t('settings.title')}>
-          {SECTIONS.map((s) =>
-            s.jump ? (
-              <a key={s.id} href={s.jump} class="settings-nav-item">
-                {t(s.label)}
-              </a>
-            ) : (
-              <button
-                key={s.id}
-                type="button"
-                class={`settings-nav-item${section === s.id ? ' active' : ''}`}
-                onClick={() => setSection(s.id)}
-              >
-                {t(s.label)}
-              </button>
-            ),
-          )}
+          {SECTIONS.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              class={`settings-nav-item${section === s.id ? ' active' : ''}`}
+              onClick={() => handleSelect(s.id)}
+            >
+              <span class="settings-nav-icon" aria-hidden="true">{s.icon}</span>
+              <span class="settings-nav-text">{t(s.label)}</span>
+            </button>
+          ))}
         </nav>
 
         <div class="settings-body">
           {section === 'general' && <GeneralSection />}
-          {section === 'config' && (
-            <>
-              <ModelSection />
-              <MCPSection />
-              <PolicySection />
-            </>
-          )}
+          {section === 'models' && <ModelSection />}
+          {section === 'policy' && <PolicySection />}
           {section === 'agents' && <AgentsSection />}
+          {section === 'mcp' && <MCPSection />}
+          {section === 'nodes' && <NodesView />}
+          {section === 'memory' && <MemoryView />}
+          {section === 'skills' && <SkillsView />}
+          {section === 'reminders' && <RemindersView />}
+          {section === 'system' && <SystemView />}
         </div>
       </div>
     </section>

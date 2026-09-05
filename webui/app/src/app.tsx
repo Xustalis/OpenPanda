@@ -3,18 +3,13 @@ import { PandaAscii, PandaWordmark } from './brand/panda'
 import { api, clearToken, getToken, onUnauthorized, setToken, type UpdateStatus } from './api/client'
 import { onLocaleChange, t } from './i18n'
 import { useAsync } from './hooks'
-import { defaultCollapsed, navGroups, navigate, parseHash, type Route } from './nav'
+import { navigate, parseHash, primaryNav, type Route } from './nav'
 import { QueueView } from './views/queue'
 import { DetailView } from './views/detail'
 import { SessionsView } from './views/sessions'
 import { ProjectsView } from './views/projects'
-import { NodesView } from './views/nodes'
 import { SettingsView } from './views/settings'
 import { OnboardingBanner } from './views/onboarding'
-import { SkillsView } from './views/skills'
-import { SystemView } from './views/system'
-import { RemindersView } from './views/reminders'
-import { MemoryView } from './views/memory'
 import { ToastHost } from './components/toast'
 import { ConfirmHost } from './components/confirm'
 import { PaletteHost, openPalette } from './components/palette'
@@ -36,39 +31,11 @@ function useRoute(): Route {
   return route
 }
 
-/** True while the shell is in its narrow layout, where the sidebar is a
- *  horizontal strip rather than a column.
- *
- *  The strip shows every destination flattened into one scrolling row, because
- *  a collapsible group head is a disclosure control for a *column* and there
- *  is no column here to disclose. That in turn means the groups have to be
- *  open in the strip whatever the user folded on the desktop layout —
- *  otherwise hiding the heads would leave Nodes, Skills, Reminders, Memory and
- *  System with nothing anywhere that reaches them. Kept in JS rather than CSS
- *  for exactly that reason: the collapse is state, not presentation.
- *
- *  Matches the `max-width: 720px` breakpoint in styles.css. */
-function useNarrow(): boolean {
-  const query = '(max-width: 720px)'
-  const [narrow, setNarrow] = useState(() => matchMedia(query).matches)
-  useEffect(() => {
-    const mq = matchMedia(query)
-    const on = () => setNarrow(mq.matches)
-    mq.addEventListener('change', on)
-    return () => mq.removeEventListener('change', on)
-  }, [])
-  return narrow
-}
-
 export function App() {
   useLocaleRerender()
   const route = useRoute()
-  const narrow = useNarrow()
   const [authed, setAuthed] = useState<boolean>(getToken() !== '')
   const [gateError, setGateError] = useState('')
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(defaultCollapsed)
-
-  const toggleGroup = (id: string) => setCollapsed((c) => ({ ...c, [id]: !c[id] }))
 
   useEffect(() => onUnauthorized(() => setAuthed(false)), [])
 
@@ -100,47 +67,23 @@ export function App() {
         <a href="#/chat" class="wordmark-link">
           <PandaWordmark />
         </a>
-        {/* The palette's trigger is a visible button, not just a shortcut: a
-            keystroke nobody is told about is a feature nobody has. */}
         <button class="palette-trigger" onClick={openPalette}>
           <span>{t('palette.trigger')}</span>
           <kbd>{modKeyLabel()}K</kbd>
         </button>
-        <a href="#/chat" class={`nav-item${active === 'sessions' ? ' active' : ''}`}>
-          {t('nav.sessions')}
-        </a>
-        {navGroups.map((group) => {
-          const containsActive = group.items.some(([v]) => v === active)
-          // A group holding the current view always stays open, even if the
-          // user folded it, so the active item is never hidden. In the narrow
-          // strip every group is open — see useNarrow.
-          const open = narrow || containsActive || !collapsed[group.id]
-          return (
-            <div class="nav-group" key={group.id}>
-              <button
-                class="nav-group-head"
-                onClick={() => toggleGroup(group.id)}
-                aria-expanded={open}
-              >
-                <span>{t(group.label)}</span>
-                <span class={`nav-chevron${open ? ' open' : ''}`} aria-hidden="true">
-                  ▾
-                </span>
-              </button>
-              {open &&
-                group.items.map(([v, key]) => (
-                  <a key={v} href={`#/${v}`} class={`nav-item${active === v ? ' active' : ''}`}>
-                    {t(key)}
-                  </a>
-                ))}
-            </div>
-          )
-        })}
-        {/* The footer holds only what is not a page of its own. Language and
-            appearance used to sit here as well, which meant the console
-            shipped two controls for one setting and neither told you the
-            other existed — they live on the settings page now, and ⌘K
-            switches them without leaving the current view. */}
+
+        <nav class="primary-nav" aria-label="Primary Navigation">
+          {primaryNav.map(([v, key]) => (
+            <a
+              key={v}
+              href={`#/${v === 'sessions' ? 'chat' : v}`}
+              class={`nav-item${active === v ? ' active' : ''}`}
+            >
+              {t(key)}
+            </a>
+          ))}
+        </nav>
+
         <div class="sidebar-footer">
           <a href="#/settings" class={`nav-item${active === 'settings' ? ' active' : ''}`}>
             {t('nav.settings')}
@@ -163,7 +106,7 @@ export function App() {
               navigate({ view: 'sessions', id: null, project: null })
             }}
             onOpenTask={(id) => navigate({ view: 'detail', id })}
-            onOpenNodes={() => navigate({ view: 'nodes' })}
+            onOpenNodes={() => navigate({ view: 'settings', tab: 'nodes' })}
             onLogout={logout}
           />
         )}
@@ -184,12 +127,12 @@ export function App() {
             }}
           />
         )}
-        {route.view === 'nodes' && <NodesView />}
-        {route.view === 'skills' && <SkillsView />}
-        {route.view === 'reminders' && <RemindersView />}
-        {route.view === 'memory' && <MemoryView />}
-        {route.view === 'system' && <SystemView />}
-        {route.view === 'settings' && <SettingsView />}
+        {route.view === 'settings' && (
+          <SettingsView
+            initialSection={route.tab ?? undefined}
+            onSelectTab={(tab) => navigate({ view: 'settings', tab })}
+          />
+        )}
       </main>
     </div>
   )
