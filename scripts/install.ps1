@@ -177,13 +177,22 @@ try {
 }
 
 # Auto-start (logon scheduled task)
-$hasConfig = Test-Path (Join-Path $Prefix "config.yaml")
+# The config check follows the same discovery order the daemon uses
+# (config.ResolvePath: user config dir first), not the install prefix —
+# `panda init` writes to %APPDATA%\openpanda\config.yaml, and the prefix only
+# ever holds the example files.
+$userConfig = Join-Path $env:APPDATA "openpanda\config.yaml"
+$hasConfig = (Test-Path $userConfig) -or ($env:OPENPANDA_CONFIG_PATH -and (Test-Path $env:OPENPANDA_CONFIG_PATH))
 
 function Register-AutoStart {
-    $config = Join-Path $Prefix "config.yaml"
-    $card   = Join-Path $Prefix "capabilities.yaml"
+    # No --config/--card flags: the daemon auto-discovers the user-level config
+    # written by `panda init` (config.ResolvePath order), exactly like the
+    # LaunchAgent / systemd units the shell installer writes. Pinning the prefix
+    # paths here used to point the task at config files that never exist in the
+    # prefix — and because an explicit flag wins over discovery, the daemon
+    # silently ran on defaults even after `panda init`.
     # /RL LIMITED runs without elevation; /SC ONLOGON fires at user logon.
-    $tr = '"' + $Exe + '" daemon --config "' + $config + '" --card "' + $card + '"'
+    $tr = '"' + $Exe + '" daemon'
     schtasks.exe /Create /TN "OpenPandaNode" /SC ONLOGON /RL LIMITED /TR $tr /F | Out-Null
     Ok "Registered logon task OpenPandaNode. Remove with: schtasks /Delete /TN OpenPandaNode /F"
     if (-not $hasConfig) {

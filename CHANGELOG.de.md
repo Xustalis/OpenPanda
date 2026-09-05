@@ -36,6 +36,16 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Jeder Eintrag benennt die Änderung und ihre sichtbare Wirkung in ein bis drei Zeilen; der einführende Commit wird zitiert, wo das der Archäologie hilft.
 - Die englische Datei ist maßgeblich. Die Übersetzungen zh-CN / ja / es / de spiegeln sie und können um ein Release kurz verzögert sein.
 
+## [Unreleased]
+
+### Behoben
+
+- **Windows-Konsolensteuerung: Start-Panik** — die `PHANDLER_ROUTINE`-Callback deklarierte einen `bool`-Rückgabewert, den `windows.NewCallback` zurückweist (erforderlich ist genau ein zeigergroßes Ergebnis), sodass die langlebigen Befehle, die sie registrieren (`panda daemon`, `panda web`), beim Start mit "compileCallback: expected function with one uintptr-sized result" abstürzten; die Callback gibt jetzt `uintptr` zurück (`1` behandelt / `0` nicht behandelt) (#2).
+- **TUI: eine fortgesetzte Unterhaltung ist wieder sichtbar** — beim erneuten Öffnen eines nackten Chats werden die gespeicherten Runden in den Scrollback hinter dem Willkommensbanner eingespielt (auf die letzten zehn Paare begrenzt, mit einem Hinweis, was gefaltet wurde).
+- **TUI: das Willkommensbanner druckt am Cursor** — die Begrüßung wird nicht mehr bis zur Unterkante hoher Terminals aufgefüllt, wo sie unter einem Bildschirm toten Raums saß und die Eingabezeile außerhalb des Blickfelds lag.
+- **TUI: das Mausrad gehört wieder dem Terminal** — das Programm fängt die Mauszellenbewegung nicht mehr ab; Mausrad, Scrollbar und PageUp/PageDown erreichen den eigenen Scrollback der Transkripts. Klickbare Flächen behalten ihre Tastaturpfade (y/n, Esc/Enter).
+- **Windows-Installer: Autostart liest die echte Konfiguration** — die Logon-Aufgabe pinnt `--config`/`--card` nicht mehr auf Präfix-Pfade, die dort nie existieren; der Daemon entdeckt die von `panda init` geschriebene Benutzerkonfiguration (gleiche Reihenfolge wie LaunchAgent und systemd).
+
 ## [0.0.8-preview] - 2026-09-05
 
 Übergang zum formellen Open-Source-Projekt: OpenPanda entwickelt sich von einem experimentellen Aufgaben-Router zu einem einheitlichen, produktionsreifen Betriebssystem zur Orchestrierung persönlicher Agenten. Es bringt Management-Tools für die Ask-Engine, interaktive TUI-Steuerung während des Ablaufs, aktives Failover mit Modellinjektion, ein Multi-Modell-Register und transparente Ausführungsverfolgung.

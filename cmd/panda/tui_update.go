@@ -30,12 +30,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// terminal instead of to a guess (see Init), and the status row can
 			// learn which project this run started in.
 			m.refreshProject()
-			welcome := m.welcome()
-			pad := m.height - (len(strings.Split(welcome, "\n")) + len(strings.Split(m.inputView(), "\n")))
-			if pad > 0 {
-				welcome = strings.Repeat("\n", pad) + welcome
+			prints := m.startupPrints()
+			cmds := make([]tea.Cmd, len(prints))
+			for i, p := range prints {
+				cmds[i] = tea.Println(p)
 			}
-			return m, tea.Println(welcome)
+			return m, tea.Batch(cmds...)
 		}
 		return m, nil
 
@@ -227,6 +227,15 @@ func (m tuiModel) onIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // onMouse handles terminal mouse events (clicks) across all modes.
+//
+// Reachable only while the program captures the mouse, which runTUI
+// deliberately does not: capture hands the wheel to the application, and the
+// transcript lives in the terminal's own scrollback — the one buffer an
+// application can never scroll itself, so with capture on the user had no way
+// to read back at all. The click paths below (approval options, asking-mode
+// footer buttons, slash-menu rows) are kept intact so a future capture mode
+// does not regress them; today every one of those surfaces answers its
+// keyboard path (y/n, Esc/Enter, arrows+Tab).
 func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeExec || m.quitting {
 		return m, nil

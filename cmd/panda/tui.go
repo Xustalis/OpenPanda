@@ -27,15 +27,26 @@ func shouldUseTUI(r *repl) bool {
 
 // runTUI runs the Bubble Tea program to completion, then leaves the closing line
 // the classic loop also prints. It resumes the bare conversation silently (the
-// welcome frame reports the session), and does not start the classic task
+// welcome frame reports the session; the restored turns are replayed into the
+// transcript — see startupPrints), and does not start the classic task
 // watcher — that watcher prints straight to stdout and would corrupt the managed
 // display; out-of-band completions are polled as a Bubble Tea command instead
 // (tui_watch.go) and committed as transcript notes.
+//
+// The program deliberately captures no mouse: mouse reporting hands the wheel
+// to the application, and this front end keeps its transcript in the
+// terminal's own scrollback — the one buffer an application can never scroll
+// programmatically. With capture on, every wheel event was parsed and dropped
+// and the user had no way to read back; with it off, the wheel, scrollbar and
+// PageUp/PageDown all behave the way the rest of the terminal does. Clickable
+// surfaces (approval options, footer buttons) lose their pointer path and keep
+// their keyboard paths (y/n, Esc/Enter); onMouse stays wired for a future
+// capture mode.
 func runTUI(r *repl) {
 	if c := loadConvo(); len(c) > 0 {
 		r.convo = c
 	}
-	p := tea.NewProgram(newTUIModel(r), tea.WithMouseCellMotion())
+	p := tea.NewProgram(newTUIModel(r))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 	}

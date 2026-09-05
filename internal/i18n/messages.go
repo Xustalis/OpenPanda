@@ -382,6 +382,7 @@ var messages = map[Locale]map[string]string{
 		"tui.hint.stop":                 "stop task",
 		"tui.hint.steer":                "inject idea",
 		"tui.welcome.tips":              "type / for commands · @file to attach a file · /help for the full guide",
+		"tui.replay.folded":             "resumed the previous conversation — the oldest {n} messages are not shown again",
 
 		"init.node.summary":  "node: {name} ({class}/{kind})",
 		"init.node.vm":       "vm detected — identity: {identity}",
@@ -894,6 +895,7 @@ var messages = map[Locale]map[string]string{
 		"tui.hint.stop":                 "停止任务",
 		"tui.hint.steer":                "注入想法",
 		"tui.welcome.tips":              "输入 / 唤出命令 · @文件 附带文件 · /help 查看完整指南",
+		"tui.replay.folded":             "已恢复上次对话 · 更早的 {n} 条不再重复显示",
 
 		"init.node.summary":  "节点：{name}（{class}/{kind}）",
 		"init.node.vm":       "检测到虚拟机 — identity：{identity}",
@@ -1405,6 +1407,7 @@ var messages = map[Locale]map[string]string{
 		"tui.hint.stop":                 "タスク停止",
 		"tui.hint.steer":                "アイデア注入",
 		"tui.welcome.tips":              "/ でコマンド一覧 · @ファイル で添付 · /help で全ガイド",
+		"tui.replay.folded":             "前回の会話を復元しました · 古い {n} 件は再表示しません",
 
 		"init.node.summary":  "ノード：{name}（{class}/{kind}）",
 		"init.node.vm":       "VM を検出 — identity：{identity}",
@@ -1916,6 +1919,7 @@ var messages = map[Locale]map[string]string{
 		"tui.hint.stop":                 "detener tarea",
 		"tui.hint.steer":                "inyectar idea",
 		"tui.welcome.tips":              "escribe / para los comandos · @archivo para adjuntar · /help para la guía completa",
+		"tui.replay.folded":             "conversación anterior restaurada — los {n} mensajes más antiguos no se muestran de nuevo",
 
 		"init.node.summary":  "nodo: {name} ({class}/{kind})",
 		"init.node.vm":       "VM detectada — identity: {identity}",
@@ -2428,6 +2432,7 @@ var messages = map[Locale]map[string]string{
 		"tui.hint.stop":                 "Aufgabe stoppen",
 		"tui.hint.steer":                "Idee injizieren",
 		"tui.welcome.tips":              "/ für Befehle · @Datei zum Anhängen · /help für die ganze Anleitung",
+		"tui.replay.folded":             "vorherige Unterhaltung wiederhergestellt — die ältesten {n} Nachrichten werden nicht erneut angezeigt",
 
 		"init.node.summary":  "Knoten: {name} ({class}/{kind})",
 		"init.node.vm":       "VM erkannt — identity: {identity}",

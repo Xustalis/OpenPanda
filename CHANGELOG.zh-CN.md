@@ -36,6 +36,16 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 每条记录以一至三行写明变更内容与用户可见的影响；必要时标注引入该变更的提交，便于追溯。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
+## [Unreleased]
+
+### 修复
+
+- **Windows 控制台控制处理器启动崩溃** —— `PHANDLER_ROUTINE` 回调声明了 `bool` 返回值，而 `windows.NewCallback` 要求结果必须是指针尺寸（`uintptr`），导致注册它的长驻命令（`panda daemon`、`panda web`）启动即崩溃，报 "compileCallback: expected function with one uintptr-sized result"；回调现在返回 `uintptr`（`1` 已处理 / `0` 未处理）（#2）。
+- **TUI：恢复的对话重新可见** —— 再次打开裸聊时，已存的回合会重放到欢迎横幅之后的回滚区（最多回放最近十组，被折叠的条数有提示说明），而不是无论存了多少上下文都只显示横幅和空输入框。
+- **TUI：欢迎横幅从光标处打印** —— 问候语不再把自己垫到高终端的底边，此前它会被压在一整屏空白之下，输入行落在视线之外。
+- **TUI：滚轮归还给终端** —— 程序不再捕获鼠标单元格事件，滚轮、滚动条与 PageUp/PageDown 重新作用于转录自身的回滚区——那是应用永远无法自己滚动的缓冲区。可点击表面保留键盘路径（y/n、Esc/Enter）。
+- **Windows 安装器：开机自启读到真实配置** —— 登录计划任务不再把 `--config`/`--card` 钉死在安装前缀里从未存在的路径上；守护进程按与 LaunchAgent、systemd 单元一致的顺序发现 `panda init` 写入的用户级配置，而不是静默跑在默认值上。
+
 ## [0.0.8-preview] - 2026-09-05
 
 向正式开源项目转变的里程碑版本：OpenPanda 从实验性任务路由内核全面蜕变为正式、生产可用的分布式个人智能体编排操作系统。本版本带来完整的集群管理工具族（Ask 引擎实时查探集群与能力）、交互式 TUI 增强与运行中转向（mid-turn steering）、Agent 主动故障转移与凭证兜底模型注入、多模型注册中心、执行全透明化跟踪，以及项目上下文感知委派。
