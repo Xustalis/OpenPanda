@@ -306,11 +306,16 @@ export function SessionsView({
     if (id === activeId) onOpenSession('')
   }
 
-  /** Abort the in-flight reply. The partial text stays on screen — it is a
-   *  real partial answer, and the server-side transcript refresh in send()'s
-   *  finally block reconciles whatever was actually persisted. */
+  /** Abort the in-flight reply and cancel any active task linked to the thread. */
   function stop() {
     inflight.current?.abort()
+    const runningTask = msgs
+      .slice()
+      .reverse()
+      .find((m) => m.kind === 'task' && m.ref)
+    if (runningTask?.ref) {
+      api.cancel(runningTask.ref).catch(() => {})
+    }
   }
 
   function handleFolderPick(e: Event) {
@@ -659,7 +664,7 @@ export function SessionsView({
               onChange={handleFolderPick}
             />
           </div>
-          <div class="composer-box">
+          <div class={`composer-box${busy ? ' composer-running' : ''}`}>
             {completeShown.length > 0 && (
               <div class="complete-menu" role="listbox" aria-label={t('palette.title')}>
                 {completeShown.map((c, i) => (
@@ -682,7 +687,7 @@ export function SessionsView({
               ref={composer}
               class="composer-input"
               rows={2}
-              placeholder={t('sessions.placeholder')}
+              placeholder={busy ? '⚡ ' + (t('sessions.placeholderRunning') || 'Agent 正在执行... 可点击停止或调整指令') : t('sessions.placeholder')}
               value={input}
               onInput={(e) => {
                 const el = e.target as HTMLTextAreaElement
@@ -963,21 +968,75 @@ function TaskChain({ taskId }: { taskId: string }) {
 
 /** Chain-of-thought, shown apart from the answer.
  *
- *  Reasoning arrives on its own stream and is display-only (D14): it never
- *  enters the answer text, the stored turn, or a task result. That is why it
- *  gets its own block rather than being prepended to the reply — and why a
- *  thread reloaded from disk comes back without it.
- *
- *  While the model is reasoning it is the only thing happening, so the block
- *  starts open; the caller folds it once prose arrives. */
+ *  Reasoning arrives on its own stream and is display-only (D14).
+ *  User-controlled toggle state ensures user's expansion choice is preserved
+ *  across stream deltas without snapping shut. */
 function ThoughtBlock({ text, live }: { text: string; live: boolean }) {
+  const [userExpanded, setUserExpanded] = useState<boolean | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const lines = useMemo(() => text.trim().split('\n'), [text])
+  const summary = useMemo(() => {
+    const first = lines.find((l) => l.trim().length > 0) || ''
+    return first.length > 70 ? first.slice(0, 70) + '…' : first
+  }, [lines])
+
+  const isOpen = userExpanded !== null ? userExpanded : live
+
+  const toggle = (e: Event) => {
+    e.preventDefault()
+    setUserExpanded(!isOpen)
+  }
+
+  const copy = (e: Event) => {
+    e.stopPropagation()
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
   return (
-    <details class="thought-block" open={live}>
-      <summary class="u-color-tert">
-        {t('sessions.thought')}
-        {live && <span class="spinner" aria-hidden="true" />}
-      </summary>
-      <div class="thought-body">{text}</div>
-    </details>
+    <div class={`thought-card ${isOpen ? 'open' : 'closed'}`}>
+      <div
+        class="thought-head"
+        onClick={toggle}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isOpen}
+      >
+        <span class="thought-badge">
+          {live ? <span class="spinner spinner-inline" aria-hidden="true" /> : <span class="thought-sparkle">✻</span>}
+          <span class="thought-label">
+            {live ? t('sessions.thinking') : t('sessions.thought')}
+          </span>
+        </span>
+        {!isOpen && summary && (
+          <span class="thought-summary-preview dim mono" title={summary}>
+            {summary}
+          </span>
+        )}
+        <span class="grow" />
+        <span class="thought-meta dim">
+          {lines.length} {t('common.lines') || '行'}
+        </span>
+        <button
+          type="button"
+          class="thought-copy-btn"
+          onClick={copy}
+          title="复制思维链"
+        >
+          {copied ? '✓' : '⧉'}
+        </button>
+        <span class={`thought-chevron ${isOpen ? 'open' : ''}`} aria-hidden="true">
+          {isOpen ? '▴' : '▾'}
+        </span>
+      </div>
+      {isOpen && (
+        <div class="thought-body mono">
+          {text}
+        </div>
+      )}
+    </div>
   )
 }

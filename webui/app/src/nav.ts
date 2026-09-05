@@ -8,50 +8,21 @@ export type Route =
   | { view: 'sessions'; id: string | null; project?: string | null }
   | { view: 'queue'; project?: string | null }
   | { view: 'projects' }
-  | { view: 'nodes' }
-  | { view: 'skills' }
-  | { view: 'reminders' }
-  | { view: 'memory' }
-  | { view: 'system' }
-  | { view: 'settings' }
+  | { view: 'settings'; tab?: string | null }
   | { view: 'detail'; id: string }
 
-/** Sidebar groups: primary Chat stays standalone up top; the rest are folded
- *  into labeled sections so first-time users see a short menu, not eight
- *  competing concepts. Each group collapses to further reduce noise. */
-export interface NavGroup {
-  id: string
-  label: string
-  items: Array<[view: string, key: string]>
-}
-
-export const navGroups: NavGroup[] = [
-  { id: 'tasks', label: 'nav.group.tasks', items: [['queue', 'nav.queue'], ['projects', 'nav.projects']] },
-  { id: 'orchestrate', label: 'nav.group.orchestrate', items: [['nodes', 'nav.nodes'], ['skills', 'nav.skills']] },
-  { id: 'personal', label: 'nav.group.personal', items: [['reminders', 'nav.reminders'], ['memory', 'nav.memory']] },
-  { id: 'system', label: 'nav.group.system', items: [['system', 'nav.system']] },
+/** The three primary workspace views on the main sidebar rail. */
+export const primaryNav: Array<[view: string, key: string]> = [
+  ['sessions', 'nav.sessions'],
+  ['queue', 'nav.queue'],
+  ['projects', 'nav.projects'],
 ]
 
-// Advanced groups start folded; the two everyday sections stay open.
-/** Which groups start folded. Nothing does: the whole console is nine
- *  destinations, and folding six of them left the sidebar showing three
- *  headings with no items under them — which reads as a broken list, not as a
- *  tidy one, and hides most of the product from a first-time user. The groups
- *  stay collapsible for people who want a shorter rail; they just do not
- *  start that way. */
-export const defaultCollapsed: Record<string, boolean> = {
-  tasks: false,
-  orchestrate: false,
-  personal: false,
-  system: false,
-}
-
-/** Every reachable view paired with its label key, in sidebar order: Chat,
- *  then each group's items, then Settings. The palette lists exactly this, so
- *  adding a view to navGroups adds it to the palette too. */
+/** Palette views: includes primary workspaces plus direct jumps to settings sections. */
 export const navViews: Array<[view: string, key: string]> = [
   ['sessions', 'nav.sessions'],
-  ...navGroups.flatMap((g) => g.items),
+  ['queue', 'nav.queue'],
+  ['projects', 'nav.projects'],
   ['settings', 'nav.settings'],
 ]
 
@@ -60,6 +31,7 @@ export function parseHash(): Route {
   const [path = '', queryStr = ''] = raw.split('?', 2)
   const query = new URLSearchParams(queryStr)
   const projectParam = query.get('project') || null
+  const tabParam = query.get('tab') || null
 
   if (path.startsWith('task/')) return { view: 'detail', id: decodeURIComponent(path.slice(5)) }
   if (path.startsWith('chat/')) return { view: 'sessions', id: decodeURIComponent(path.slice(5)), project: projectParam }
@@ -69,12 +41,18 @@ export function parseHash(): Route {
   }
   if (path === 'queue') return { view: 'queue', project: projectParam }
   if (path === 'projects') return { view: 'projects' }
-  if (path === 'nodes') return { view: 'nodes' }
-  if (path === 'skills') return { view: 'skills' }
-  if (path === 'reminders') return { view: 'reminders' }
-  if (path === 'memory') return { view: 'memory' }
-  if (path === 'system') return { view: 'system' }
-  if (path === 'settings') return { view: 'settings' }
+  if (path.startsWith('settings/')) {
+    return { view: 'settings', tab: decodeURIComponent(path.slice(9)) }
+  }
+  if (path === 'settings') return { view: 'settings', tab: tabParam }
+
+  // Graceful redirects for legacy URLs: map old external views straight into Settings sub-tabs
+  if (path === 'nodes') return { view: 'settings', tab: 'nodes' }
+  if (path === 'skills') return { view: 'settings', tab: 'skills' }
+  if (path === 'reminders') return { view: 'settings', tab: 'reminders' }
+  if (path === 'memory') return { view: 'settings', tab: 'memory' }
+  if (path === 'system') return { view: 'settings', tab: 'system' }
+
   return { view: 'sessions', id: null, project: projectParam }
 }
 
@@ -93,13 +71,21 @@ export function navigate(route: Route): void {
       base += `?project=${encodeURIComponent(route.project)}`
     }
     location.hash = base
+  } else if (route.view === 'settings') {
+    location.hash = route.tab ? `#/settings?tab=${encodeURIComponent(route.tab)}` : '#/settings'
   } else {
     location.hash = `#/${route.view}`
   }
 }
 
-/** Navigate by bare view name — the palette's vocabulary, where a session or
- *  task id is never part of the choice. */
+/** Navigate by bare view name — supports settings:tab syntax for palette jumps. */
 export function navigateView(view: string): void {
-  navigate(view === 'sessions' ? { view: 'sessions', id: null } : ({ view } as Route))
+  if (view.startsWith('settings:')) {
+    navigate({ view: 'settings', tab: view.slice(9) })
+  } else if (view === 'sessions') {
+    navigate({ view: 'sessions', id: null })
+  } else {
+    navigate({ view } as Route)
+  }
 }
+

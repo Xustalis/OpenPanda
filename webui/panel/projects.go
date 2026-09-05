@@ -249,6 +249,11 @@ func (h *handler) deleteProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, errors.New("no such project"))
 		return
 	}
+	active, _ := store.Active()
+	if active == name {
+		_ = store.ClearActive()
+		h.bindEngineProject(store, "")
+	}
 	if err := store.Delete(name); err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("remove failed"))
 		return

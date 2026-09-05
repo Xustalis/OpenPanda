@@ -602,12 +602,19 @@ button {
   transform: rotate(180deg);
 }
 
-.sidebar-footer {
-  margin-top: auto;
-  padding: 10px 4px 0;
+.primary-nav {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 3px;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 12px 4px 0;
+  border-top: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .main {
@@ -1561,53 +1568,107 @@ label {
   font-size: var(--fs-small);
 }
 
-/* ---- Chat thought block (sessions) ----
-   Reasoning is display-only (D14) and sits apart from the answer: dimmed and
-   italic so it reads as working rather than as reply. */
+/* ---- Chat thought block (sessions) — collapsible with CLI-grade metrics ---- */
 
-.thought-block {
+.thought-card {
   margin-bottom: var(--sp-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  background: var(--surface-alpha-xs);
+  overflow: hidden;
+  transition: border-color var(--dur-normal) var(--ease-standard),
+              background var(--dur-normal) var(--ease-standard);
 }
 
-.thought-block > summary {
-  cursor: pointer;
+.thought-card.open {
+  border-color: var(--border);
+  background: var(--surface-alpha-sm);
+}
+
+.thought-head {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  padding: 6px 10px;
   font-size: var(--fs-small);
-  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  background: transparent;
+  transition: background var(--dur-fast) ease;
 }
 
-.thought-block > summary::-webkit-details-marker {
-  display: none;
+.thought-head:hover {
+  background: var(--surface-alpha-sm);
 }
 
-.thought-block > summary::before {
-  content: '▸';
-  font-size: 0.8em;
-  transition: transform var(--dur-fast) ease;
-}
-
-.thought-block[open] > summary::before {
-  content: '▾';
-}
-
-.thought-block > summary:hover {
+.thought-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: var(--fw-medium);
   color: var(--text-secondary);
 }
 
-.thought-body {
-  margin-top: var(--sp-2);
-  padding-left: var(--sp-3);
-  border-left: 2px solid var(--hairline-xs);
-  font-size: var(--fs-small);
-  font-style: italic;
+.thought-sparkle {
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.thought-label {
+  font-size: 12.5px;
+}
+
+.thought-summary-preview {
+  font-size: 12px;
   color: var(--text-tertiary);
-  /* Reasoning is one long unbroken stream; without wrapping it would run off
-     the bubble instead of into it. */
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thought-meta {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+.thought-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--dur-fast) ease;
+}
+
+.thought-copy-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.thought-chevron {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  transition: transform var(--dur-fast) ease;
+}
+
+.thought-body {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--hairline-xs);
+  font-size: var(--fs-mono);
+  line-height: 1.55;
+  color: var(--text-secondary);
+  background: var(--bg-inset);
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 320px;
+  max-height: 380px;
   overflow-y: auto;
 }
 
@@ -2355,6 +2416,23 @@ label {
 .composer-box:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.composer-box.composer-running {
+  border-color: rgba(16, 185, 129, 0.45);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.12);
+  animation: composer-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes composer-pulse {
+  0%, 100% {
+    border-color: rgba(16, 185, 129, 0.35);
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.1);
+  }
+  50% {
+    border-color: rgba(16, 185, 129, 0.7);
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.22);
+  }
 }
 
 /* `/` completion menu: anchored to the composer box and opening upward, so
@@ -3621,21 +3699,27 @@ label {
 
 .settings-layout {
   display: grid;
-  grid-template-columns: 190px minmax(0, 1fr);
-  gap: 20px;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 24px;
   align-items: start;
 }
 
 .settings-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   position: sticky;
   top: 16px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 6px;
 }
 
 .settings-nav-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   text-align: left;
   padding: 8px 12px;
@@ -3647,6 +3731,13 @@ label {
   font-size: 13.5px;
   cursor: pointer;
   text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.settings-nav-icon {
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .settings-nav-item:hover {

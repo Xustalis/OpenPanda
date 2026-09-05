@@ -1,9 +1,10 @@
-import { useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { api, type ProjectDetail } from '../api/client'
 import { useAsync, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { ErrorState, PageHeader } from '../components/page'
 import { toast, toastError } from '../components/toast'
+import { confirmDialog } from '../components/confirm'
 
 // The projects view. It used to be a name list with a create box, because a
 // project was a memory file and a name was all there was to show. A project now
@@ -48,6 +49,7 @@ export function ProjectsView({ onOpenProject }: { onOpenProject(name: string): v
       setName('')
       setDir('')
       setDesc('')
+      toast(t('projects.create') + ': ' + trimmed, 'success')
     })
   }
 
@@ -136,6 +138,9 @@ export function ProjectsView({ onOpenProject }: { onOpenProject(name: string): v
                 }
                 onRemove={(keepMemory, deleteSessions) =>
                   run(async () => {
+                    if (p.active) {
+                      await api.exitProject().catch(() => {})
+                    }
                     await api.deleteProject(p.name, keepMemory, deleteSessions ? 'delete' : 'keep')
                     toast(t('projects.remove'), 'success')
                   })
@@ -176,6 +181,24 @@ function ProjectRow({
   const [keepMemory, setKeepMemory] = useState(false)
   const [deleteSessions, setDeleteSessions] = useState(false)
 
+  // Keep form fields synchronized whenever the project changes or edit toggles
+  useEffect(() => {
+    setName(project.name)
+    setDir(project.work_dir ?? '')
+    setDesc(project.description ?? '')
+  }, [project.name, project.work_dir, project.description, editing])
+
+  const handleDirectRemove = async () => {
+    const ok = await confirmDialog({
+      title: t('projects.confirmRemove').replace('{name}', project.name),
+      message: `${project.name} (${project.work_dir || t('projects.noDir')}) - 本地目录与源码文件将完整保留。`,
+      confirmLabel: t('projects.remove'),
+      danger: true,
+    })
+    if (!ok) return
+    onRemove(keepMemory, deleteSessions)
+  }
+
   return (
     <div class={`card project-item${project.active ? ' project-active' : ''}`}>
       <div class="project-head">
@@ -194,7 +217,10 @@ function ProjectRow({
           </button>
         )}
         <button class="btn" onClick={onEdit} disabled={busy}>
-          {t('projects.rename')}
+          {editing ? t('common.cancel') : t('projects.rename')}
+        </button>
+        <button class="btn danger" onClick={handleDirectRemove} disabled={busy} title={t('projects.remove')}>
+          {t('projects.remove')}
         </button>
       </div>
 
@@ -263,19 +289,6 @@ function ProjectRow({
                 {t('projects.deleteSessions')}
               </label>
             )}
-            <button
-              class="btn danger"
-              disabled={busy}
-              onClick={() => {
-                // The work directory is the user's own tree and is never touched
-                // by a remove; the confirm says so, because "remove project" is
-                // otherwise easy to read as "delete my files".
-                if (confirm(t('projects.confirmRemove').replace('{name}', project.name)))
-                  onRemove(keepMemory, deleteSessions)
-              }}
-            >
-              {t('projects.remove')}
-            </button>
           </div>
         </div>
       )}
