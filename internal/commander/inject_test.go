@@ -1,6 +1,7 @@
 package commander
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -503,5 +504,43 @@ func TestOpenAIModelInjectionForCodexAndHermes(t *testing.T) {
 	dClaude := r.InjectionDecision("claude_code.py")
 	if dClaude.Inject {
 		t.Fatalf("Claude Code must not receive OpenAI model injection: %+v", dClaude)
+	}
+}
+
+// TestDynamicModelInjectionFallbackOnAuthError verifies Requirement 5:
+// When an agent fails with an authentication or quota error (e.g. 403 用户额度不足 / 401 invalid token),
+// and the router has a configured model API key, runAdapterDefault dynamically retries with injected
+// model credentials rather than discarding the task.
+func TestDynamicModelInjectionFallbackOnAuthError(t *testing.T) {
+	cleanCredentialEnv(t)
+	// Agent declares own key in environment
+	t.Setenv("ANTHROPIC_API_KEY", "stale-key-that-will-403")
+
+	r := injectionRouter(flashModel, config.InjectionModelAuto)
+	// First call with native env fails with 403, second call with injected key succeeds
+	attempts := 0
+
+	r.SetAdapterProcessRunner(func(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult {
+		attempts++
+		if attempts == 1 {
+			return AgentResult{OK: false, Result: "API Error: 403 用户额度不足", ExitCode: 1}
+		}
+		// Second attempt should carry the injected key
+		found := false
+		for _, kv := range env {
+			if strings.HasPrefix(kv, "ANTHROPIC_API_KEY=sk-flash-test") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return AgentResult{OK: false, Result: "injected key missing in retry env", ExitCode: 1}
+		}
+		return AgentResult{OK: true, Result: "completed via injected key", ExitCode: 0}
+	})
+
+	res := r.runAdapterDefault(context.Background(), "claude_code.py", "test prompt", "")
+	if !res.OK || attempts != 2 {
+		t.Fatalf("expected dynamic injection retry to succeed in 2 attempts: ok=%v attempts=%d res=%+v", res.OK, attempts, res)
 	}
 }
