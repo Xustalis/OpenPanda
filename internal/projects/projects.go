@@ -133,6 +133,31 @@ func (s *Store) Get(name string) (Project, error) {
 	return p, nil
 }
 
+// FindByWorkDir looks up the first project pointing at the given work directory.
+func (s *Store) FindByWorkDir(dir string) (Project, error) {
+	if dir == "" {
+		return Project{}, ErrNotFound
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return Project{}, err
+	}
+	var p Project
+	var created, updated int64
+	err = s.db.QueryRow(
+		`SELECT name, work_dir, description, created_at, updated_at FROM projects WHERE work_dir = ? ORDER BY updated_at DESC LIMIT 1`,
+		abs).Scan(&p.Name, &p.WorkDir, &p.Description, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Project{}, fmt.Errorf("%w: workdir %s", ErrNotFound, abs)
+	}
+	if err != nil {
+		return Project{}, err
+	}
+	p.CreatedAt = time.Unix(created, 0)
+	p.UpdatedAt = time.Unix(updated, 0)
+	return p, nil
+}
+
 // List returns every project, newest activity first.
 func (s *Store) List() ([]Project, error) {
 	rows, err := s.db.Query(

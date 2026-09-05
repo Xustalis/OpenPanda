@@ -35,7 +35,8 @@ type askResult struct {
 	// Report is the LLM-generated summary of the task outcome. It is filled
 	// by SummarizeResult after every inline task so the web UI shows a
 	// human-readable summary instead of raw stdout/stderr.
-	Report string `json:"report,omitempty"`
+	Report  string `json:"report,omitempty"`
+	Thought string `json:"thought,omitempty"`
 	// Plan fields (kind == "plan"): a multi-stage pipeline has no single task id
 	// and no result yet — its stages are queued and run on other machines — so the
 	// client follows it by plan id and shows the stage ids it was decomposed into.
@@ -50,6 +51,7 @@ func planResultOf(out *askengine.Result) askResult {
 	res := askResult{
 		Kind:      out.Kind,
 		Answer:    out.Answer,
+		Thought:   out.Thought,
 		TaskID:    out.TaskID,
 		TaskState: out.TaskState,
 		OK:        out.OK,

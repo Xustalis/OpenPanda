@@ -5,6 +5,7 @@ import { t } from '../i18n'
 import { ErrorState, PageHeader } from '../components/page'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
+import { DirPicker } from '../components/dir-picker'
 
 // The projects view. It used to be a name list with a create box, because a
 // project was a memory file and a name was all there was to show. A project now
@@ -83,31 +84,36 @@ export function ProjectsView({ onOpenProject }: { onOpenProject(name: string): v
     <section>
       <PageHeader title={t('nav.projects')} sub={t('projects.subtitle')} />
 
-      <form class="card project-create" onSubmit={create}>
-        <input
-          class="input"
-          placeholder={t('projects.namePlaceholder')}
-          value={name}
-          onInput={(e) => setName((e.target as HTMLInputElement).value)}
-          aria-label={t('projects.namePlaceholder')}
-        />
-        <input
-          class="input"
-          placeholder={t('projects.dirPlaceholder')}
-          value={dir}
-          onInput={(e) => setDir((e.target as HTMLInputElement).value)}
-          aria-label={t('projects.dirPlaceholder')}
-        />
-        <input
-          class="input"
-          placeholder={t('projects.descPlaceholder')}
-          value={desc}
-          onInput={(e) => setDesc((e.target as HTMLInputElement).value)}
-          aria-label={t('projects.descPlaceholder')}
-        />
-        <button class="btn primary" type="submit" disabled={busy || !name.trim()}>
-          {t('projects.create')}
-        </button>
+      <form class="card project-create-card" onSubmit={create}>
+        <div class="project-create-row dir-selection">
+          <DirPicker
+            value={dir}
+            onChange={(selected) => setDir(selected)}
+            onSuggestName={(suggested) => {
+              if (!name.trim()) setName(suggested)
+            }}
+            placeholder={t('projects.dirPickerPlaceholder')}
+          />
+        </div>
+        <div class="project-create-row details">
+          <input
+            class="input project-name-input"
+            placeholder={t('projects.namePlaceholder')}
+            value={name}
+            onInput={(e) => setName((e.target as HTMLInputElement).value)}
+            aria-label={t('projects.namePlaceholder')}
+          />
+          <input
+            class="input project-desc-input"
+            placeholder={t('projects.descPlaceholder')}
+            value={desc}
+            onInput={(e) => setDesc((e.target as HTMLInputElement).value)}
+            aria-label={t('projects.descPlaceholder')}
+          />
+          <button class="btn primary" type="submit" disabled={busy || !name.trim()}>
+            + {t('projects.create')}
+          </button>
+        </div>
       </form>
 
       {data === null ? (
@@ -202,20 +208,15 @@ function ProjectRow({
   return (
     <div class={`card project-item${project.active ? ' project-active' : ''}`}>
       <div class="project-head">
-        <button class="project-name-btn" onClick={onOpen} title={t('projects.enter')}>
+        <button class="project-name-btn" onClick={onOpen} title={t('projects.openChat')}>
+          <span class="project-name-icon">📁</span>
           <span class="project-name">{project.name}</span>
         </button>
         {project.active && <span class="badge">{t('projects.current')}</span>}
         <span class="grow" />
-        {project.active ? (
-          <button class="btn" onClick={onExit} disabled={busy}>
-            {t('projects.exit')}
-          </button>
-        ) : (
-          <button class="btn primary" onClick={onEnter} disabled={busy}>
-            {t('projects.enter')}
-          </button>
-        )}
+        <button class="btn primary project-chat-btn" onClick={onOpen} disabled={busy} title={t('projects.openChat')}>
+          💬 {t('projects.openChat')}
+        </button>
         <button class="btn" onClick={onEdit} disabled={busy}>
           {editing ? t('common.cancel') : t('projects.rename')}
         </button>
@@ -225,7 +226,23 @@ function ProjectRow({
       </div>
 
       <div class="project-meta dim">
-        <span>{project.work_dir ? project.work_dir : t('projects.noDir')}</span>
+        <span class="project-dir-tag">
+          📁 {project.work_dir ? project.work_dir : t('projects.noDir')}
+          {project.work_dir && (
+            <button
+              type="button"
+              class="copy-dir-btn"
+              title={t('projects.copyDir')}
+              onClick={(e) => {
+                e.stopPropagation()
+                navigator.clipboard.writeText(project.work_dir!)
+                toast(t('projects.copiedDir'), 'info')
+              }}
+            >
+              📋
+            </button>
+          )}
+        </span>
         {project.description && <span> · {project.description}</span>}
         <span>
           {' · '}
@@ -249,13 +266,13 @@ function ProjectRow({
             onInput={(e) => setName((e.target as HTMLInputElement).value)}
             aria-label={t('projects.namePlaceholder')}
           />
-          <input
-            class="input"
-            placeholder={t('projects.dirPlaceholder')}
-            value={dir}
-            onInput={(e) => setDir((e.target as HTMLInputElement).value)}
-            aria-label={t('projects.dirPlaceholder')}
-          />
+          <div class="project-edit-dir">
+            <DirPicker
+              value={dir}
+              onChange={(p) => setDir(p)}
+              placeholder={t('projects.dirPickerPlaceholder')}
+            />
+          </div>
           <input
             class="input"
             placeholder={t('projects.descPlaceholder')}

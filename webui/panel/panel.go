@@ -170,10 +170,13 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("DELETE /api/card/agents/{name}", h.removeAgent)
 	mux.HandleFunc("POST /api/card/manual", h.addManual)
 	mux.HandleFunc("DELETE /api/card/manual/{id}", h.removeManual)
+	mux.HandleFunc("POST /api/dialog/choose-directory", h.chooseDirectoryDialog)
+	mux.HandleFunc("GET /api/fs/directories", h.listDirectories)
 	if d.Sessions != nil {
 		mux.HandleFunc("GET /api/sessions", h.listSessions)
 		mux.HandleFunc("POST /api/sessions", h.createSession)
 		mux.HandleFunc("GET /api/sessions/{id}", h.getSession)
+		mux.HandleFunc("PATCH /api/sessions/{id}", h.patchSession)
 		mux.HandleFunc("DELETE /api/sessions/{id}", h.deleteSession)
 		mux.HandleFunc("POST /api/sessions/{id}/ask", h.sessionAsk)
 		if d.Worktrees != nil {
@@ -563,6 +566,7 @@ func (h *handler) listTasks(w http.ResponseWriter, r *http.Request) {
 // Mirrors the map in events.go (same package, kept here so getTask's filter
 // is obvious without chasing a separate file).
 var visibleTraceTypes = map[string]bool{
+	"reasoning":          true,
 	"classify_result":    true,
 	"route_decision":     true,
 	"delegation_hop":     true,

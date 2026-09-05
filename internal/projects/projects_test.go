@@ -223,3 +223,30 @@ func TestValidateName(t *testing.T) {
 		}
 	}
 }
+
+func TestFindByWorkDir(t *testing.T) {
+	s := newTestStore(t)
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+
+	if _, err := s.Create("proj1", dir1, "desc 1"); err != nil {
+		t.Fatalf("create proj1: %v", err)
+	}
+	if _, err := s.Create("proj2", dir2, "desc 2"); err != nil {
+		t.Fatalf("create proj2: %v", err)
+	}
+
+	p1, err := s.FindByWorkDir(dir1)
+	if err != nil || p1.Name != "proj1" {
+		t.Fatalf("FindByWorkDir(dir1) = %+v, err %v", p1, err)
+	}
+
+	p2, err := s.FindByWorkDir(dir2)
+	if err != nil || p2.Name != "proj2" {
+		t.Fatalf("FindByWorkDir(dir2) = %+v, err %v", p2, err)
+	}
+
+	if _, err := s.FindByWorkDir(t.TempDir()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("FindByWorkDir unknown = %v, want ErrNotFound", err)
+	}
+}

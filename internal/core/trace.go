@@ -13,6 +13,7 @@ import (
 // Best-effort only: a write failure is logged and otherwise ignored. The
 // scheduling/delegation/supervision machines must never stall on visibility.
 const (
+	EvReasoning        = "reasoning"         // model thought/reasoning chain → thought
 	EvClassifyResult   = "classify_result"   // entry.Classify success → kind/note/stages
 	EvRouteDecision    = "route_decision"    // scheduler.Route → action/target/reason/score_breakdown/candidates
 	EvDelegationHop    = "delegation_hop"    // handleTaskAccept/Result → from/to/via/chain/attempt_id

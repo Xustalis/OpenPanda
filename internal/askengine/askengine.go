@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -197,6 +198,8 @@ type Result struct {
 	Answer string
 	// Note is an incidental model note emitted alongside a tool call.
 	Note string
+	// Thought is the model's reasoning/thinking chain before producing the result.
+	Thought string
 
 	// Task fields, valid when Kind == "task".
 	TaskID    string
@@ -765,6 +768,7 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	// lastTask keeps the most recent task outcome so the converged Result
 	// carries the task fields (id/state/output) alongside the model's report.
 	var lastTask *Result
+	var accumulatedReasoning strings.Builder
 	// Devices visible to classification: the local capability directory
 	// (populated by the daemon's heartbeats and our own peer dials).
 	devices, err := ledger.Query(e.db, "online", "")
@@ -783,10 +787,16 @@ rounds:
 				turns = append(turns, entry.Turn{Role: "user", Content: "[补充要求/Steering]: " + idea})
 			}
 		}
+		trackReasoning := func(chunk string) {
+			accumulatedReasoning.WriteString(chunk)
+			if cb.OnReasoning != nil {
+				cb.OnReasoning(chunk)
+			}
+		}
 		var out entry.Output
 		var err error
 		if cb.OnDelta != nil || cb.OnReasoning != nil {
-			out, err = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, reg, cb.OnDelta, cb.OnReasoning, classifyOpts...)
+			out, err = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, reg, cb.OnDelta, trackReasoning, classifyOpts...)
 		} else {
 			out, err = entry.ClassifyTurnsWithTools(ctx, client, devices, conversationMemory, turns, reg, classifyOpts...)
 		}
@@ -803,7 +813,7 @@ rounds:
 					var fbOut entry.Output
 					var fbErr error
 					if cb.OnDelta != nil || cb.OnReasoning != nil {
-						fbOut, fbErr = entry.ClassifyStreamWithTools(ctx, fb, devices, conversationMemory, turns, reg, cb.OnDelta, cb.OnReasoning, classifyOpts...)
+						fbOut, fbErr = entry.ClassifyStreamWithTools(ctx, fb, devices, conversationMemory, turns, reg, cb.OnDelta, trackReasoning, classifyOpts...)
 					} else {
 						fbOut, fbErr = entry.ClassifyTurnsWithTools(ctx, fb, devices, conversationMemory, turns, reg, classifyOpts...)
 					}
@@ -831,15 +841,18 @@ rounds:
 				// The model has seen the task's outcome and is reporting it:
 				// the report is the answer, the task fields ride along.
 				lastTask.Answer = out.Answer
+				if lastTask.Thought == "" {
+					lastTask.Thought = accumulatedReasoning.String()
+				}
 				return lastTask, nil
 			}
-			return &Result{Kind: "answer", Answer: out.Answer}, nil
+			return &Result{Kind: "answer", Answer: out.Answer, Thought: accumulatedReasoning.String()}, nil
 		case entry.KindTask:
 			if e.sched == nil {
 				return nil, fmt.Errorf("task output requires a capability card (engine built without CardPath)")
 			}
 			cb.progress(Progress{Kind: ProgressTask, Name: out.Task.Title})
-			res := e.submitTask(ctx, out.Task, prompt, authorize, workDir, cb)
+			res := e.submitTask(ctx, out.Task, prompt, authorize, workDir, accumulatedReasoning.String(), cb)
 			if e.queueTasks {
 				// Async mode: the board product. The queued pointer is the
 				// result — the session streams the task's progress and the
@@ -949,7 +962,7 @@ rounds:
 			return lastTask, nil
 		}
 		cb.progress(Progress{Kind: ProgressTask, Name: final.Task.Title})
-		res := e.submitTask(ctx, final.Task, prompt, authorize, workDir, cb)
+		res := e.submitTask(ctx, final.Task, prompt, authorize, workDir, accumulatedReasoning.String(), cb)
 		if !res.NeedsApproval && !e.queueTasks {
 			// No rounds left to converge through, so produce the report in
 			// one shot rather than returning raw output.
@@ -1112,7 +1125,7 @@ func gateAuthorized(mode string, sessionAuthorized bool) bool {
 // session worktree); the configured work path is restored afterwards. The
 // schedMu lock keeps concurrent inline submits from interleaving the
 // work-dir swap.
-func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt string, authorized bool, workDir string, cb StreamCallbacks) *Result {
+func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt string, authorized bool, workDir string, reasoning string, cb StreamCallbacks) *Result {
 	in := toTaskInput(spec)
 	// The ambient project fills in what the classifier did not name. A user who
 	// has entered a project expects their next ask to belong to it without saying
@@ -1155,7 +1168,10 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		if err != nil {
 			return &Result{Kind: "task", TaskState: "failed", Stderr: err.Error(), ExitCode: 1}
 		}
-		return &Result{Kind: "task", TaskID: task.TaskID, TaskTitle: task.Title, TaskState: task.State}
+		if reasoning != "" {
+			e.sched.EvTrace(ctx, task.TaskID, core.EvReasoning, map[string]any{"thought": reasoning})
+		}
+		return &Result{Kind: "task", TaskID: task.TaskID, TaskTitle: task.Title, TaskState: task.State, Thought: reasoning}
 	}
 	e.schedMu.Lock()
 	defer e.schedMu.Unlock()
@@ -1181,8 +1197,12 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	if err != nil {
 		return &Result{Kind: "task", TaskState: "failed", Stderr: err.Error(), ExitCode: 1}
 	}
+	if reasoning != "" {
+		e.sched.EvTrace(ctx, task.TaskID, core.EvReasoning, map[string]any{"thought": reasoning})
+	}
 	res := &Result{
 		Kind:      "task",
+		Thought:   reasoning,
 		TaskID:    task.TaskID,
 		TaskTitle: task.Title,
 		TaskState: task.State,

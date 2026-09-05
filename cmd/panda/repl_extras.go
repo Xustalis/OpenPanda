@@ -286,18 +286,19 @@ func (r *repl) bindProject() {
 	if r.engine == nil {
 		return
 	}
-	if r.projStore == nil {
-		r.engine.SetProject("", "")
-		return
+	name := r.activeProj
+	if name == "" && r.projStore != nil {
+		name, _ = r.projStore.Active()
 	}
-	name, err := r.projStore.Active()
-	if err != nil || name == "" {
+	if name == "" {
 		r.engine.SetProject("", "")
 		return
 	}
 	dir := ""
-	if pr, gerr := r.projStore.Get(name); gerr == nil {
-		dir = pr.WorkDir
+	if r.projStore != nil {
+		if pr, gerr := r.projStore.Get(name); gerr == nil {
+			dir = pr.WorkDir
+		}
 	}
 	r.engine.SetProject(name, dir)
 }
@@ -305,6 +306,9 @@ func (r *repl) bindProject() {
 // activeProjectName is the project the REPL is in, for the footer and the TUI
 // context line. Empty when the store is absent or nothing was entered.
 func (r *repl) activeProjectName() string {
+	if r.activeProj != "" {
+		return r.activeProj
+	}
 	if r.projStore == nil {
 		return ""
 	}
@@ -338,6 +342,7 @@ func (r *repl) cmdProjectEnter(arg string) {
 			r.storeErr(err)
 			return
 		}
+		r.activeProj = ""
 		r.bindProject()
 		r.convo = loadConvo()
 		fmt.Println(i18n.T(r.loc, "cli.project.noActive"))
@@ -366,6 +371,7 @@ func (r *repl) cmdProjectEnter(arg string) {
 		r.storeErr(err)
 		return
 	}
+	r.activeProj = name
 	if created {
 		fmt.Println(i18n.Tf(r.loc, "repl.project.created", "name", name))
 	}

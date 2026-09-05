@@ -22,7 +22,7 @@ import { patchStreaming, slashQuery } from '../components/chatstate'
 import { isLiveSession } from '../components/session-guard'
 import DecisionOrbit from '../components/orbit'
 import FleetTopologyCard from '../components/fleet'
-import { JsonInline } from '../components/json-inline'
+import { EventTimeline } from '../components/event-timeline'
 
 /** Grow the composer with its content up to a ceiling, then scroll inside.
  *  A fixed two-row box makes pasting a paragraph feel like typing into a
@@ -91,9 +91,9 @@ export function SessionsView({
   const [authorize, setAuthorize] = useState(false)
   const [busy, setBusy] = useState(false)
   const [loadError, setLoadError] = useState('')
-  const [selectedProject, setSelectedProject] = useState('')
+  const [selectedProject, setSelectedProject] = useState(project || '')
   const [projects, setProjects] = useState<string[]>([])
-  const folderInputRef = useRef<HTMLInputElement>(null)
+  const activeProject = project || selectedProject || ''
   // True only while a thread's transcript is in flight, so the pane can show
   // its shape instead of an empty box (or worse, the "new chat" hero).
   const [loading, setLoading] = useState(false)
@@ -126,14 +126,22 @@ export function SessionsView({
   // delta is right while you are watching the reply arrive and wrong the
   // moment you scroll up to re-read something, so follow only when pinned.
   const pinned = useRef(true)
+  const [isPinned, setIsPinned] = useState(true)
+  const [isEditingTitle, setIsEditingTitle] = useState(false)
+  const [titleInput, setTitleInput] = useState('')
+
+  useEffect(() => {
+    if (session) setTitleInput(session.title || '')
+    setIsEditingTitle(false)
+  }, [session?.id])
 
   // Session list (refresh when the active thread changes — its title may, or when project changes).
   useEffect(() => {
     api
-      .sessions(project || undefined)
+      .sessions(activeProject || undefined)
       .then(setSessions)
       .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)))
-  }, [activeId, project])
+  }, [activeId, activeProject])
 
   // Load projects for the folder/project picker
   useEffect(() => {
@@ -147,17 +155,15 @@ export function SessionsView({
   useEffect(() => {
     if (project) {
       setSelectedProject(project)
-    } else {
-      setSelectedProject('')
     }
   }, [project])
 
   // Boundary guard: if a session is active but does not belong to the newly entered project, unselect it.
   useEffect(() => {
-    if (activeId && session && project && session.project !== project) {
+    if (activeId && session && activeProject && session.project && session.project !== activeProject) {
       onOpenSession('')
     }
-  }, [project, session, activeId])
+  }, [activeProject, session, activeId])
 
   // Live node directory + change signal → re-fetch on SSE changes so the
   // fleet card and single-node orbit collapse both always show current net.
@@ -215,6 +221,7 @@ export function SessionsView({
   // Opening a thread always starts at its newest message.
   useEffect(() => {
     pinned.current = true
+    setIsPinned(true)
   }, [activeId])
 
   // Picking a thread on a phone should reveal the transcript, not leave the
@@ -318,26 +325,6 @@ export function SessionsView({
     }
   }
 
-  function handleFolderPick(e: Event) {
-    const files = (e.target as HTMLInputElement).files
-    if (!files || files.length === 0) return
-    // Build a readable summary of the picked folder contents
-    const paths: string[] = []
-    for (let i = 0; i < Math.min(files.length, 50); i++) {
-      const f = files[i] as File & { webkitRelativePath?: string }
-      if (f.webkitRelativePath) paths.push(f.webkitRelativePath)
-      else paths.push(f.name)
-    }
-    const folderSummary =
-      t('sessions.folderSelected', { n: String(files.length) }) + '\n' +
-      paths.map((p) => `  - ${p}`).join('\n') +
-      (files.length > 50 ? '\n' + t('sessions.folderTruncated', { n: String(files.length - 50) }) : '') +
-      '\n\n' + t('sessions.folderFollowUp')
-    setInput((prev) => (prev ? `${prev}\n\n${folderSummary}` : folderSummary))
-    // Reset so picking the same folder twice still fires change
-    if (folderInputRef.current) folderInputRef.current.value = ''
-  }
-
   async function send(e?: Event) {
     e?.preventDefault()
     let prompt = input.trim()
@@ -371,6 +358,7 @@ export function SessionsView({
         setInput('')
         // Sending is an explicit "show me the answer", so re-pin the view.
         pinned.current = true
+        setIsPinned(true)
         setMsgs((ms) => [
           ...ms,
           { role: 'user', text: prompt, k: localMsgId() },
@@ -470,39 +458,54 @@ export function SessionsView({
   return (
     <section class={`chat${railOpen ? ' rail-open' : ''}`}>
       <aside class="thread-rail">
-        {project && (
-          <div
-            class="project-scope-banner"
-            style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; margin-bottom: 8px; background: var(--bg-hover, #f0f0f0); border-radius: 6px; font-size: 0.85rem;"
+        <div class="thread-rail-project-picker">
+          <select
+            class="input thread-project-select"
+            value={activeProject}
+            onChange={(e) => {
+              const val = (e.target as HTMLSelectElement).value
+              setSelectedProject(val)
+              const hash = val ? `#/chat?project=${encodeURIComponent(val)}` : `#/chat`
+              location.hash = hash
+            }}
+            title={t('sessions.activeProject')}
           >
-            <span style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-              📁 {project}
+            <option value="">📂 {t('sessions.allProjects')}</option>
+            {projects.map((p) => (
+              <option key={p} value={p}>
+                📁 {p}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {activeProject && (
+          <div class="project-scope-banner">
+            <span class="project-scope-label">
+              📁 {activeProject}
             </span>
-            {onExitProject && (
-              <button
-                class="btn small"
-                type="button"
-                onClick={onExitProject}
-                title={t('projects.exit')}
-                style="padding: 2px 6px; font-size: 0.75rem; margin-left: 6px;"
-              >
-                ✕
-              </button>
-            )}
+            <button
+              class="btn-icon project-scope-clear"
+              type="button"
+              onClick={() => {
+                setSelectedProject('')
+                if (onExitProject) onExitProject()
+                else location.hash = `#/chat`
+              }}
+              title={t('projects.exit')}
+            >
+              ✕
+            </button>
           </div>
         )}
-        {/* Not `.primary`: a filled accent slab is the loudest thing on the
-            page, and the loudest thing on the page should be the reply you are
-            reading, not the button that starts a different conversation. */}
+
         <button class="btn thread-new" onClick={newChat}>
           <span aria-hidden="true">+</span> {t('sessions.new')}
         </button>
+
         <div class="thread-list">
           {sessions.length === 0 && <p class="thread-empty">{t('sessions.railEmpty')}</p>}
           {sessions.map((s) => (
-            // A row, not a <button>, because it contains its own delete button
-            // and nesting buttons is invalid — so the keyboard contract is
-            // spelled out by hand instead of inherited.
             <div
               key={s.id}
               class={`thread-item${s.id === activeId ? ' active' : ''}`}
@@ -517,7 +520,12 @@ export function SessionsView({
                 }
               }}
             >
-              <span class="thread-title">{s.title || t('sessions.untitled')}</span>
+              <div class="thread-item-main">
+                <span class="thread-title">{s.title || t('sessions.untitled')}</span>
+                {s.project && !activeProject && (
+                  <span class="thread-project-pill">📁 {s.project}</span>
+                )}
+              </div>
               <button
                 class="thread-del"
                 title={t('sessions.delete')}
@@ -550,9 +558,82 @@ export function SessionsView({
           >
             ☰
           </button>
-          <h1 class="chat-title">
-            {session ? session.title || t('sessions.untitled') : t('sessions.new')}
-          </h1>
+          <div class="chat-title-group">
+            {isEditingTitle && session ? (
+              <form
+                class="chat-title-form"
+                onSubmit={async (e) => {
+                  e.preventDefault()
+                  const trimmed = titleInput.trim()
+                  if (!trimmed || trimmed === session.title) {
+                    setIsEditingTitle(false)
+                    return
+                  }
+                  try {
+                    const updated = await api.patchSession(session.id, { title: trimmed })
+                    setSession(updated)
+                    setSessions((ls) => ls.map((item) => (item.id === updated.id ? updated : item)))
+                    setIsEditingTitle(false)
+                  } catch (err) {
+                    toastError(err)
+                  }
+                }}
+              >
+                <input
+                  class="input chat-title-input"
+                  value={titleInput}
+                  autoFocus
+                  onInput={(e) => setTitleInput((e.target as HTMLInputElement).value)}
+                  onBlur={() => setIsEditingTitle(false)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setIsEditingTitle(false)
+                  }}
+                  placeholder={t('sessions.untitled')}
+                />
+              </form>
+            ) : (
+              <h1
+                class={`chat-title${session ? ' editable' : ''}`}
+                title={session ? t('sessions.editTitle') : undefined}
+                onClick={() => {
+                  if (session) {
+                    setTitleInput(session.title || '')
+                    setIsEditingTitle(true)
+                  }
+                }}
+              >
+                <span class="chat-title-text">{session ? session.title || t('sessions.untitled') : t('sessions.new')}</span>
+                {session && <span class="chat-title-edit-icon" aria-hidden="true">✎</span>}
+              </h1>
+            )}
+            {session && (
+              <div class="session-project-assigner">
+                <span class="dim" aria-hidden="true">📁</span>
+                <select
+                  class="session-project-badge"
+                  value={session.project || ''}
+                  onChange={async (e) => {
+                    const newProj = (e.target as HTMLSelectElement).value
+                    try {
+                      const updated = await api.patchSession(session.id, { project: newProj })
+                      setSession(updated)
+                      setSessions((ls) => ls.map((item) => item.id === updated.id ? updated : item))
+                    } catch (err) {
+                      toastError(err)
+                    }
+                  }}
+                  title={t('sessions.assignProject')}
+                >
+                  <option value="">{t('sessions.noProject')}</option>
+                  {projects.map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
           {session?.branch && (
             <span class="badge green mono" title={session.worktree}>
               ⎇ {session.branch}
@@ -602,7 +683,9 @@ export function SessionsView({
             const el = e.currentTarget as HTMLDivElement
             // 48px of slack: "close enough to the bottom" survives the last
             // line of a reply arriving between two scroll events.
-            pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+            const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+            pinned.current = atBottom
+            setIsPinned(atBottom)
           }}
         >
           {msgs.length === 0 && loading && <ChatSkeleton />}
@@ -625,44 +708,30 @@ export function SessionsView({
           ))}
         </div>
 
+        {!isPinned && (
+          <button
+            type="button"
+            class="scroll-bottom-btn"
+            title={t('sessions.jumpBottom')}
+            onClick={() => {
+              pinned.current = true
+              setIsPinned(true)
+              scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'smooth' })
+            }}
+          >
+            <span class="scroll-bottom-icon" aria-hidden="true">↓</span>
+            <span>{t('sessions.jumpBottom')}</span>
+          </button>
+        )}
+
         {/* Textarea and actions share one bordered box so the composer reads
             as a single control rather than a field with a toolbar loose
             underneath it — the focus ring belongs to the whole thing. */}
         <form class="composer" onSubmit={send}>
           <div class="composer-toolbar">
-            {!project && (
-              <select
-                class="input project-picker"
-                value={selectedProject}
-                onChange={(e) => setSelectedProject((e.target as HTMLSelectElement).value)}
-                title={t('queue.allProjects')}
-              >
-                <option value="">📂 {t('queue.allProjects')}</option>
-                {projects.map((p) => (
-                  <option key={p} value={p}>
-                    📁 {p}
-                  </option>
-                ))}
-              </select>
-            )}
-            <button
-              class="btn small folder-btn"
-              type="button"
-              title={t('sessions.folderPick')}
-              onClick={() => folderInputRef.current?.click()}
-            >
-              📁 {t('sessions.folderPick')}
-            </button>
-            <input
-              ref={folderInputRef}
-              type="file"
-              // @ts-expect-error non-standard attrs for folder picking
-              webkitdirectory=""
-              directory=""
-              multiple
-              style="display:none"
-              onChange={handleFolderPick}
-            />
+            <div class="composer-project-pill dim" title={session?.project || activeProject ? `项目: ${session?.project || activeProject}` : t('sessions.noProject')}>
+              <span>📁 {session?.project || activeProject || t('sessions.noProject')}</span>
+            </div>
           </div>
           <div class={`composer-box${busy ? ' composer-running' : ''}`}>
             {completeShown.length > 0 && (
@@ -721,13 +790,16 @@ export function SessionsView({
                     return
                   }
                 }
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if ((e.key === 'Enter' && !e.shiftKey) || ((e.metaKey || e.ctrlKey) && e.key === 'Enter')) {
                   e.preventDefault()
                   send()
                 }
               }}
             />
             <div class="composer-actions">
+              <span class="composer-shortcut-hint">
+                {t('sessions.sendShortcut')}
+              </span>
               <label class="ask-authorize">
                 <input
                   type="checkbox"
@@ -954,16 +1026,7 @@ function TaskChain({ taskId }: { taskId: string }) {
   if (error) return <p class="dim chain-empty">{t('common.error')} ({error})</p>
   const events = data?.events ?? []
   if (events.length === 0) return <p class="dim chain-empty">{t('sessions.chainEmpty')}</p>
-  return (
-    <ol class="timeline chain">
-      {events.map((ev, i) => (
-        <li key={i}>
-          <span class="dim">{new Date(ev.ts * 1000).toLocaleTimeString()}</span> <code>{ev.type}</code>
-          {ev.data && ev.data !== '{}' && <JsonInline raw={ev.data} />}
-        </li>
-      ))}
-    </ol>
-  )
+  return <EventTimeline events={events} className="task-chain-timeline" />
 }
 
 /** Chain-of-thought, shown apart from the answer.

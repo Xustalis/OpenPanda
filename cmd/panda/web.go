@@ -15,8 +15,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
+	stdlog "log"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -43,6 +48,8 @@ func runWeb(args []string) {
 	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered; enables task execution in /api/ask)")
 	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated)")
 	noBrowser := fs.Bool("no-browser", false, "print the URL instead of opening a browser")
+	daemon := fs.Bool("daemon", false, "run web console quietly in the background")
+	fs.BoolVar(daemon, "d", false, "alias for -daemon")
 	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
@@ -50,6 +57,44 @@ func runWeb(args []string) {
 		fatal("load config", err)
 	}
 	loc := i18n.Detect()
+
+	// Ensure background log directory and file
+	logDir := filepath.Join(cliStateDir(), "logs")
+	_ = os.MkdirAll(logDir, 0o755)
+	logFile := filepath.Join(logDir, "web.log")
+
+	// Daemon mode: spawn detached background process and return immediately
+	if *daemon {
+		exe, err := os.Executable()
+		if err != nil {
+			fatal("daemon start", err)
+		}
+		var childArgs []string
+		for _, a := range args {
+			if a == "-d" || a == "--daemon" || a == "-daemon" {
+				continue
+			}
+			childArgs = append(childArgs, a)
+		}
+		subArgs := append([]string{"web"}, childArgs...)
+		lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			fatal("open web log", err)
+		}
+		cmd := exec.Command(exe, subArgs...)
+		cmd.Stdout = lf
+		cmd.Stderr = lf
+		cmd.Stdin = nil
+		if err := cmd.Start(); err != nil {
+			fatal("start background web", err)
+		}
+		targetAddr := cfg.Network.PanelAddr
+		if targetAddr == "" {
+			targetAddr = "127.0.0.1:7840"
+		}
+		fmt.Printf("Panda Web 已在后台静默运行 [PID: %d]\n访问地址: %s\n运行日志: %s\n", cmd.Process.Pid, panelURL(targetAddr), logFile)
+		return
+	}
 
 	// The shutdown context is created up front (not at the end of the
 	// function) so the background reminder scanner and the updater's
@@ -79,7 +124,14 @@ func runWeb(args []string) {
 	}
 	defer db.Close()
 
-	logger := log.From(context.Background())
+	// Redirect logger to file to prevent console spam
+	var logWriter io.Writer = io.Discard
+	if lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+		defer lf.Close()
+		logWriter = lf
+	}
+	log.Setup(cfg.Log.Level, logWriter)
+	logger := slog.New(slog.NewJSONHandler(logWriter, &slog.HandlerOptions{Level: log.ParseLevel(cfg.Log.Level)}))
 
 	// Optional ask engine behind a reloadable holder — same contract as the
 	// REPL: without a model endpoint the console still serves
@@ -161,6 +213,7 @@ func runWeb(args []string) {
 			Token:        token,
 			Updater:      updateMgr,
 		}),
+		ErrorLog: stdlog.New(logWriter, "", 0),
 	}
 	// Bind synchronously so a taken port surfaces as an error, not a
 	// silent goroutine death. A taken port falls forward to a nearby one

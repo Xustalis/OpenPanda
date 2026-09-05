@@ -21,6 +21,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	stdlog "log"
 	"net"
 	"net/http"
 	"os"
@@ -75,6 +77,7 @@ type repl struct {
 	webToken    string
 	term        *termSession
 	activeSess  string
+	activeProj  string
 	push        *push.Service
 
 	// Conversation memory for bare (session-less) mode: every ask's prompt
@@ -168,6 +171,8 @@ func runRepl(args []string) {
 	configPath := fs.String("config", "", "path to config.yaml")
 	cardPath := fs.String("card", defaultCardPath(), fmt.Sprintf("path to capabilities.yaml (default: discovered ./capabilities.yaml or %s)", systemCardPath()))
 	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated)")
+	yesFlag := fs.Bool("yes", false, "accept workspace confirmation without prompting")
+	fs.BoolVar(yesFlag, "y", false, "accept workspace confirmation without prompting (shorthand)")
 	fs.Parse(args)
 
 	cfg, err := loadConfigQuietly(*configPath)
@@ -193,6 +198,72 @@ func runRepl(args []string) {
 	if isLinuxConsole() {
 		detected = "en" // console font has no CJK glyphs; keep every UI line readable
 	}
+
+	cwd, _ := os.Getwd()
+	workspaceAllowed := false
+	if *yesFlag || !interactive {
+		workspaceAllowed = true
+	} else if cwd != "" {
+		fmt.Print(i18n.Tf(detected, "cli.workspace.prompt", "path", cwd))
+		var ans string
+		if _, err := fmt.Scanln(&ans); err != nil && ans == "" {
+			// empty line = default Yes (Y/n)
+			workspaceAllowed = true
+		} else {
+			ans = strings.ToLower(strings.TrimSpace(ans))
+			if ans == "" || ans == "y" || ans == "yes" {
+				workspaceAllowed = true
+			}
+		}
+	}
+
+	projStore := projectstore.NewStore(db)
+	var activeProjectName string
+	if workspaceAllowed && cwd != "" {
+		cfg.Storage.WorkPath = cwd
+		if existing, err := projStore.FindByWorkDir(cwd); err == nil {
+			activeProjectName = existing.Name
+		} else {
+			base := filepath.Base(cwd)
+			if base == "/" || base == "." || base == "" {
+				base = "workspace"
+			}
+			cleanBase := ""
+			for _, ch := range base {
+				if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' {
+					cleanBase += string(ch)
+				}
+			}
+			if cleanBase == "" {
+				cleanBase = "workspace"
+			}
+			candidate := cleanBase
+			for i := 1; i <= 100; i++ {
+				if pr, err := projStore.Get(candidate); err == nil {
+					if pr.WorkDir == "" {
+						_, _ = projStore.Update(candidate, cwd, "Workspace at "+cwd)
+						activeProjectName = candidate
+						break
+					}
+					candidate = fmt.Sprintf("%s-%d", cleanBase, i+1)
+				} else {
+					if created, err := projStore.Create(candidate, cwd, "Workspace at "+cwd); err == nil {
+						activeProjectName = created.Name
+						break
+					}
+				}
+			}
+		}
+		if activeProjectName != "" {
+			_ = projStore.SetActive(activeProjectName)
+			if interactive && !*yesFlag {
+				fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.Tf(detected, "cli.workspace.accepted", "path", cwd, "name", activeProjectName)))
+			}
+		}
+	} else if !workspaceAllowed && cwd != "" && interactive {
+		fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.T(detected, "cli.workspace.declined")))
+	}
+
 	r := &repl{
 		loc:         detected,
 		cfg:         cfg,
@@ -200,12 +271,17 @@ func runRepl(args []string) {
 		db:          db,
 		store:       store,
 		projects:    memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memoryLimits(cfg)),
+		projStore:   projStore,
+		activeProj:  activeProjectName,
 		hermes:      memory.NewHermesWithLimits(cfg.Storage.MemoryPath, memoryLimits(cfg)),
 		sessionsSt:  sessions.NewStore(sessionStoreRoot(cfg)),
 		worktrees:   openWorktreesBestEffort(cfg.Storage.WorkPath),
 		cardPath:    *cardPath,
 		hasCard:     *cardPath != "",
 		interactive: interactive,
+	}
+	if activeProjectName != "" && r.projects != nil {
+		_ = r.projects.Save(activeProjectName, memory.MemFile{Limit: r.projects.Limit()})
 	}
 	if interactive {
 		r.term = newTermSession()
@@ -246,7 +322,6 @@ func runRepl(args []string) {
 		r.engine = engine
 		// The REPL inherits the project the user entered, so the first ask of a
 		// sitting already belongs to it. /project switches it mid-session.
-		r.projStore = projectstore.NewStore(db)
 		r.bindProject()
 	}
 
@@ -1518,7 +1593,18 @@ func (r *repl) cmdWeb(arg string) {
 		Token:        token,
 		Updater:      updateMgr,
 	})
-	srv := &http.Server{Addr: addr, Handler: handler}
+	logDir := filepath.Join(cliStateDir(), "logs")
+	_ = os.MkdirAll(logDir, 0o755)
+	var logWriter io.Writer = io.Discard
+	if lf, err := os.OpenFile(filepath.Join(logDir, "web.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+		defer lf.Close()
+		logWriter = lf
+	}
+	srv := &http.Server{
+		Addr:     addr,
+		Handler:  handler,
+		ErrorLog: stdlog.New(logWriter, "", 0),
+	}
 	// Bind synchronously so a taken port surfaces as an error, not a silent
 	// goroutine death. A taken port falls forward to a nearby one instead of
 	// failing — /web must always end with a usable console.
