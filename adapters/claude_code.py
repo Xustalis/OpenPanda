@@ -63,9 +63,15 @@ def main():
     # survives instead of cold-starting on the bare follow-up instruction.
     if req.resume:
         base += ["--resume", req.resume]
+    # Injected-model runs (credential rescue) strip every settings source so
+    # the user's own settings.json cannot override the injected base URL or
+    # model. The flag rides the stream command only: an older CLI that
+    # rejects it degrades to plain mode, and plain must not resend the very
+    # flag the CLI just rejected — correctness outranks the override there.
+    injected = bool(os.environ.get("OPENPANDA_INJECTED_MODEL") or os.environ.get("ANTHROPIC_BASE_URL"))
 
     try:
-        out = _run_stream(base, model, cwd, timeout)
+        out = _run_stream(base, model, cwd, timeout, disable_settings=injected)
     except Unsupported:
         # Older CLI: stream-json not available — degrade to one-shot JSON.
         try:
@@ -88,9 +94,11 @@ def main():
                  usage=out.get("usage"), session_id=out.get("session_id"))
 
 
-def _run_stream(base, model, cwd, timeout):
+def _run_stream(base, model, cwd, timeout, disable_settings=False):
     """Stream mode: parse event lines, emit progress, return the result event."""
     cmd = base + ["--output-format", "stream-json", "--verbose"]
+    if disable_settings:
+        cmd += ["--setting-sources", ""]
     if model:
         cmd += ["--model", model]
 

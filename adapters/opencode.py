@@ -15,12 +15,13 @@ usage, the cost and the session id a follow-up round resumes with
 conversation instead of cold-starting). CLIs too old for --format json
 degrade to the plain text mode. This adapter never prints secrets.
 
-OpenCode is model-agnostic. By default it runs opencode's built-in free
-model, which needs no API key or provider configuration; set OPENCODE_MODEL
-(or ANTHROPIC_MODEL) to a provider/model id (e.g. deepseek/deepseek-chat)
-to use a custom provider. tools_policy is noted but not enforced: opencode
-gates tools through its own permission config, not a CLI whitelist, so both
-policies run with the agent's configured tool face.
+OpenCode is model-agnostic. The stream path runs `--auto` (opencode picks its
+own model, which needs no API key or provider configuration); the plain-mode
+degrade path passes the built-in free model instead. Set OPENCODE_MODEL (or
+ANTHROPIC_MODEL) to a provider/model id (e.g. deepseek/deepseek-chat) to pin
+a custom provider on both paths. tools_policy is noted but not enforced:
+opencode gates tools through its own permission config, not a CLI whitelist,
+so both policies run with the agent's configured tool face.
 
 The wire contract, watchdog timeout, process-tree cleanup and stderr
 diagnostics live in _harness.py; this file is only the opencode difference:
@@ -50,11 +51,10 @@ def main():
     # model, which needs no API key. stdin is /dev/null so opencode never waits
     # on an inherited pipe for the prompt.
     model = os.environ.get("OPENCODE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
-    if "/" not in model:
-        model = DEFAULT_MODEL
-
     cmd = ["opencode", "run", "--print-logs=false",
-           "--format", "json", "--model", model]
+           "--format", "json", "--auto"]
+    if model and "/" in model:
+        cmd += ["--model", model]
     # A follow-up round resumes the agent's own session: its reasoning trail
     # survives instead of cold-starting on the bare follow-up instruction.
     if req.resume:
@@ -66,8 +66,11 @@ def main():
     except Unsupported:
         # Older CLI without --format json: one-shot plain text run. The
         # plain command is rebuilt from scratch (never token-filtered out
-        # of cmd — the prompt itself could match a filtered token).
-        plain = ["opencode", "run", "--print-logs=false", "--model", model]
+        # of cmd — the prompt itself could match a filtered token). The
+        # default model rides here too: the stream path may have omitted
+        # --model in favor of --auto — which an old CLI just rejected — so
+        # a bare "--model ''" would fail resolution outright.
+        plain = ["opencode", "run", "--print-logs=false", "--model", model or DEFAULT_MODEL]
         if req.resume:
             plain += ["--session", req.resume]
         plain.append(prompt)

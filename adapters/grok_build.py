@@ -39,6 +39,8 @@ def main():
     # TUI, so the prompt must ride --single/-p ("print the response to stdout
     # and exit"); --always-approve runs tool calls without an interactive
     # permission prompt, and --output-format plain keeps the result as text.
+    # First runs self-name the session with the panda- prefix (the documented
+    # and contract-tested marker that the session belongs to PANDA).
     session = req.resume or "panda-" + uuid.uuid4().hex[:12]
     cmd = ["grok", "-s", session, "--single", prompt,
            "--output-format", "plain", "--always-approve"]
