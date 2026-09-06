@@ -446,6 +446,9 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 	// it and dereference lazily, so a scheduler attached below (or never,
 	// without CardPath) is seen at call time.
 	e.registry = buildToolRegistry(e, hermes, projects, remind)
+	if e.skills != nil {
+		registerSkillTools(e.registry, e)
+	}
 	e.client.Store(client)
 
 	mcpCmd := opts.MCPCommand

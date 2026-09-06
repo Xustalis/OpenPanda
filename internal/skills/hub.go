@@ -615,4 +615,3 @@ func (s *Store) DiscoverAndInstall(ctx context.Context, hubURL string, query str
 	}
 	return installed, true, nil
 }
-
