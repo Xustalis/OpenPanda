@@ -76,3 +76,35 @@ func TestNowIsEpochSeconds(t *testing.T) {
 		t.Fatalf("Now() = %d, outside plausible epoch range", now)
 	}
 }
+
+func TestCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir + "/test.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	if err := Checkpoint(t.Context(), db, "PASSIVE"); err != nil {
+		t.Fatalf("checkpoint passive: %v", err)
+	}
+	if err := Checkpoint(t.Context(), db, "TRUNCATE"); err != nil {
+		t.Fatalf("checkpoint truncate: %v", err)
+	}
+}
+
+func TestForeignKeys(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	var enabled int
+	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&enabled); err != nil {
+		t.Fatalf("query foreign_keys: %v", err)
+	}
+	if enabled != 1 {
+		t.Fatalf("expected foreign_keys == 1, got %d", enabled)
+	}
+}

@@ -21,6 +21,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/install"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/pyexec"
 )
 
@@ -165,7 +166,9 @@ func doctorReport(loc i18n.Locale, configPath string) int {
 		} else {
 			fail("doctor.db.no", "path", cfg.Storage.DBPath)
 		}
-		if cfg.Model.APIKey != "" {
+		p, ok := providers.Lookup(cfg.Model.Provider)
+		noAuth := cfg.Model.NoAuth || (ok && p.NoAuth)
+		if cfg.Model.APIKey != "" || noAuth {
 			pass("doctor.modelkey.ok")
 		} else {
 			fail("doctor.modelkey.no")

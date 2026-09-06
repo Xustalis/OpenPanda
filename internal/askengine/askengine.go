@@ -29,6 +29,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/plan"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -115,6 +116,70 @@ type Engine struct {
 
 	fallbacksMu sync.RWMutex
 	fallbacks   []*entry.Client
+
+	breakerMu sync.Mutex
+	breaker   map[string]time.Time // modelName -> cooldown until
+}
+
+func (e *Engine) isModelHealthy(name string) bool {
+	if name == "" {
+		return true
+	}
+	e.breakerMu.Lock()
+	defer e.breakerMu.Unlock()
+	if e.breaker == nil {
+		return true
+	}
+	until, ok := e.breaker[name]
+	if !ok {
+		return true
+	}
+	if time.Now().After(until) {
+		delete(e.breaker, name)
+		return true
+	}
+	return false
+}
+
+func (e *Engine) recordModelFailure(name string) {
+	if name == "" {
+		return
+	}
+	e.breakerMu.Lock()
+	defer e.breakerMu.Unlock()
+	if e.breaker == nil {
+		e.breaker = make(map[string]time.Time)
+	}
+	e.breaker[name] = time.Now().Add(30 * time.Second)
+}
+
+func (e *Engine) recordModelSuccess(name string) {
+	if name == "" {
+		return
+	}
+	e.breakerMu.Lock()
+	defer e.breakerMu.Unlock()
+	if e.breaker != nil {
+		delete(e.breaker, name)
+	}
+}
+
+// healthyClient returns an active client: the primary if healthy, or the first
+// healthy fallback when the primary is in circuit-breaker cooldown.
+func (e *Engine) healthyClient() (*entry.Client, string) {
+	client := e.client.Load()
+	if client == nil || e.isModelHealthy(client.ModelName()) {
+		return client, ""
+	}
+	for _, fb := range e.getFallbacks() {
+		if fb.ModelName() == client.ModelName() {
+			continue
+		}
+		if e.isModelHealthy(fb.ModelName()) {
+			return fb, fb.ModelName()
+		}
+	}
+	return client, ""
 }
 
 // getFallbacks returns a snapshot of the configured fallback clients.
@@ -130,7 +195,8 @@ func (e *Engine) buildFallbacks(primary config.ModelConfig, db *sql.DB) []*entry
 	}
 	var fallbacks []*entry.Client
 	for _, m := range e.cfg.Models {
-		if m.APIKey == "" {
+		p, hasProvider := providers.Lookup(m.Provider)
+		if m.APIKey == "" && !m.NoAuth && (!hasProvider || !p.NoAuth) {
 			continue
 		}
 		if m.Model == primary.Model && m.BaseURL == primary.BaseURL {
@@ -422,7 +488,9 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		sched := core.NewCore(db, core.EphemeralNodeID(stableID), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 		sched.SetRouterPolicy(cfg.Injection, cfg.Routing)
 		sched.AttachSupervisor(cfg.Model)
-		sched.SetMemoryStores(injector, memory.NewDaily(hermes.WarmDir()), skills.NewStore(cfg.Storage.SkillsPath))
+		skillStore := skills.NewStore(cfg.Storage.SkillsPath)
+		_ = skillStore.EnsureBuiltins()
+		sched.SetMemoryStores(injector, memory.NewDaily(hermes.WarmDir()), skillStore)
 		// The project plane: what a delegated project task carries with it. Wired
 		// here as well as in the daemon, because an interactive ask delegates too.
 		sched.SetProjectStores(projectstore.NewStore(db), cfg.Storage.ProjectsPath)
@@ -654,7 +722,11 @@ func (e *Engine) Project() (string, string) {
 // task executes (a session's git worktree), and the callbacks stream live
 // progress. A nil OnDelta still streams internally — it just is not forwarded.
 func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, workDir string, authorize bool, cb StreamCallbacks) (res *Result, err error) {
-	client := e.client.Load()
+	client, fallbackUsed := e.healthyClient()
+	if fallbackUsed != "" {
+		e.logger.Info("askengine: primary model in circuit breaker cooldown, routing directly to fallback", "primary", e.client.Load().ModelName(), "fallback", fallbackUsed)
+		cb.progress(Progress{Kind: ProgressRoute, Name: fallbackUsed})
+	}
 
 	// Bill the commander model's own token consumption for this ask into the
 	// delegation metrics once it finishes (whatever the outcome), so the
@@ -662,7 +734,6 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	// delegations. The record survives the ask's context via WithoutCancel.
 	usageBefore := client.Usage()
 	askStart := time.Now()
-	var fallbackUsed string
 	defer func() {
 		// Same numbers, two consumers: the result carries them back to the
 		// caller (the CLI's closing "1.8s · 1.2k tokens" line) and the metrics
@@ -802,6 +873,7 @@ rounds:
 		}
 		if err != nil {
 			if entry.IsFatalModelError(err) {
+				e.recordModelFailure(client.ModelName())
 				fallbacks := e.getFallbacks()
 				fallbackSuccess := false
 				for _, fb := range fallbacks {
@@ -818,6 +890,7 @@ rounds:
 						fbOut, fbErr = entry.ClassifyTurnsWithTools(ctx, fb, devices, conversationMemory, turns, reg, classifyOpts...)
 					}
 					if fbErr == nil {
+						e.recordModelSuccess(fb.ModelName())
 						client = fb
 						usageBefore = fb.Usage()
 						fallbackUsed = fb.ModelName()
@@ -825,6 +898,8 @@ rounds:
 						err = nil
 						fallbackSuccess = true
 						break
+					} else if entry.IsFatalModelError(fbErr) {
+						e.recordModelFailure(fb.ModelName())
 					}
 				}
 				if !fallbackSuccess {
@@ -833,6 +908,8 @@ rounds:
 			} else {
 				return nil, err
 			}
+		} else {
+			e.recordModelSuccess(client.ModelName())
 		}
 
 		switch out.Kind {
@@ -924,6 +1001,7 @@ rounds:
 	}
 	if ferr != nil {
 		if entry.IsFatalModelError(ferr) {
+			e.recordModelFailure(client.ModelName())
 			fallbacks := e.getFallbacks()
 			for _, fb := range fallbacks {
 				if fb.ModelName() == client.ModelName() {
@@ -939,18 +1017,23 @@ rounds:
 					fbFinal, fbErr = entry.ClassifyTurns(ctx, fb, devices, conversationMemory, turns, classifyOpts...)
 				}
 				if fbErr == nil {
+					e.recordModelSuccess(fb.ModelName())
 					client = fb
 					usageBefore = fb.Usage()
 					fallbackUsed = fb.ModelName()
 					final = fbFinal
 					ferr = nil
 					break
+				} else if entry.IsFatalModelError(fbErr) {
+					e.recordModelFailure(fb.ModelName())
 				}
 			}
 		}
 		if ferr != nil {
 			return nil, fmt.Errorf("reached max tool rounds (%d): %w", maxRounds, ferr)
 		}
+	} else {
+		e.recordModelSuccess(client.ModelName())
 	}
 	if final.Kind == entry.KindTask {
 		if e.sched == nil {
@@ -1229,9 +1312,8 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		}
 		if cb.OnApproval(req) {
 			resumed := e.resumeLocked(req.TaskID)
-			// Summarize the resumed task outcome so the user sees a report
-			// instead of raw output, matching the inline submit path.
-			if report, rerr := entry.SummarizeResult(e.schedCtx, e.client.Load(), resumed.TaskTitle, in.Intent, resumed.OK, resumed.ExitCode, resumed.Stdout, resumed.Stderr); rerr == nil {
+			sumClient, _ := e.healthyClient()
+			if report, rerr := entry.SummarizeResult(e.schedCtx, sumClient, resumed.TaskTitle, in.Intent, resumed.OK, resumed.ExitCode, resumed.Stdout, resumed.Stderr); rerr == nil {
 				resumed.Report = report
 			}
 			return resumed
@@ -1383,10 +1465,8 @@ func (e *Engine) ResumeApproved(taskID, workDir string) *Result {
 		defer e.sched.SetWorkDir(e.cfg.Storage.WorkPath)
 	}
 	res := e.resumeLocked(taskID)
-	// Summarize the resumed task outcome so the user sees a report instead of
-	// raw output, matching the inline submit path. Use a background context
-	// since this is a synchronous call from the REPL/TUI.
-	if report, rerr := entry.SummarizeResult(context.Background(), e.client.Load(), res.TaskTitle, "", res.OK, res.ExitCode, res.Stdout, res.Stderr); rerr == nil {
+	sumClient, _ := e.healthyClient()
+	if report, rerr := entry.SummarizeResult(context.Background(), sumClient, res.TaskTitle, "", res.OK, res.ExitCode, res.Stdout, res.Stderr); rerr == nil {
 		res.Report = report
 	}
 	return res
