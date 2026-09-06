@@ -54,6 +54,7 @@ type Skill struct {
 	UseCount     int       `yaml:"use_count"`
 	SuccessCount int       `yaml:"success_count"`
 	LastUsed     time.Time `yaml:"last_used,omitempty"`
+	Builtin      bool      `yaml:"builtin,omitempty"`
 	Body         string    `yaml:"-"`
 }
 
