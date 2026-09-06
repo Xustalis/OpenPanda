@@ -48,6 +48,8 @@ func runSkill(args []string) {
 		approveSkill(store, positional[0], cmd == "approve")
 	case "reset":
 		skillReset(store, positional)
+	case "find", "discover":
+		skillFind(cfg, store, positional)
 	case "import":
 		skillImport(store, positional)
 	case "hub":
@@ -62,7 +64,7 @@ func runSkill(args []string) {
 }
 
 func printSkillUsage() {
-	fmt.Println("usage: panda skill [--config PATH] <list | approve <name> | reject <name> | reset <name|all> | import <path|url> | hub <list|search|install|info> | install/add <target>>")
+	fmt.Println("usage: panda skill [--config PATH] <list | approve <name> | reject <name> | reset <name|all> | find/discover <query> | import <path|url> | hub <list|search|install|info> | install/add <target>>")
 }
 
 // splitConfig pulls an optional --config PATH (or --config=PATH) out of args in
@@ -144,6 +146,45 @@ func skillReset(store *skills.Store, args []string) {
 		return
 	}
 	fmt.Printf("已将内置技能 %q 重置为默认版本 (Reset built-in skill %q to factory default).\n", sk.Name, sk.Name)
+}
+
+// skillFind autonomously searches the Skills Hub for the best-matching skill and auto-installs it.
+func skillFind(cfg *config.Config, store *skills.Store, args []string) {
+	_, posArgs := separateFlags(args)
+	if len(posArgs) == 0 {
+		fatalf("缺少搜索关键词 (Missing search query): panda skill find <query>")
+	}
+	query := strings.Join(posArgs, " ")
+	ctx := context.Background()
+
+	hubURL := cfg.Skills.HubURL
+	if !jsonOutput {
+		fmt.Printf("🔍 正在自主检索并匹配技能: %q ...\n", query)
+	}
+	sk, isNew, err := store.DiscoverAndInstall(ctx, hubURL, query)
+	if err != nil {
+		fatal("discover skill", err)
+	}
+
+	if jsonOutput {
+		emitJSON(map[string]any{
+			"ok":          true,
+			"name":        sk.Name,
+			"description": sk.Description,
+			"status":      sk.Status,
+			"is_new":      isNew,
+		})
+		return
+	}
+
+	if isNew {
+		fmt.Printf("✅ 找到并自动安装激活技能: %s\n", sk.Name)
+		fmt.Printf("   描述: %s\n", sk.Description)
+		fmt.Printf("   状态: %s (已就绪)\n", sk.Status)
+	} else {
+		fmt.Printf("ℹ️  匹配到技能 %s，该技能已处于激活就绪状态。\n", sk.Name)
+		fmt.Printf("   描述: %s\n", sk.Description)
+	}
 }
 
 // approveSkill approves or rejects a pending skill, resolved by its unique name.
@@ -424,6 +465,7 @@ func skillInstall(cfg *config.Config, store *skills.Store, args []string) {
 		fmt.Println("内置标准技能已全部就绪生效 (All built-in skills are active by default).")
 		fmt.Println()
 		fmt.Println("用法 (Usage):")
+		fmt.Println("  panda skill find <query>                 智能自主检索并一键安装最匹配技能")
 		fmt.Println("  panda skill add <url | file | archive>   从链接或本地文件导入自定义技能")
 		fmt.Println("  panda skill hub search <query>           从技能集市搜索社区扩展技能")
 		fmt.Println("  panda skill hub install <name>           从技能集市安装扩展技能")

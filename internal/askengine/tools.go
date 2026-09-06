@@ -104,6 +104,9 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 	// Management tools (v1): the read half of openpanda 调用 openpanda.
 	registerMgmtTools(reg, e)
 
+	// Procedural skills tools: AI autonomous discovery, installation, and inspection of skills.
+	registerSkillTools(reg, e)
+
 	if rem != nil {
 		registerReminderTools(reg, rem)
 	}
