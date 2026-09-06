@@ -87,9 +87,10 @@ type tuiModel struct {
 	// projName caches the active project for the status row.
 	projName string
 
-	mode    tuiMode
-	stream  *askStream
-	started time.Time
+	mode        tuiMode
+	stream      *askStream
+	started     time.Time
+	chatHistory *chatHistory
 
 	// Navigation lists and panels
 	listKind      listKind
@@ -145,6 +146,11 @@ var pulseStar = spinner.Spinner{
 	FPS:    time.Second / 10,
 }
 
+// chatHistory holds committed transcript blocks in memory for AltScreen rendering.
+type chatHistory struct {
+	blocks []block
+}
+
 // newTUIModel builds the model from a constructed repl (its engine, locale and
 // stores are already wired by runRepl). The input starts focused; the spinner
 // uses the unicode star pulse or an ASCII fallback so a bare console still
@@ -172,15 +178,38 @@ func newTUIModel(r *repl) tuiModel {
 	}
 	sp.Style = th.accent
 
+	cHist := &chatHistory{}
+	if r != nil && len(r.convo) > 0 {
+		turns := r.convo
+		const maxTurns = 10
+		if len(turns)/2 > maxTurns {
+			cHist.blocks = append(cHist.blocks, block{
+				kind: blockNote,
+				body: i18n.Tf(r.loc, "tui.replay.folded", "n", strconv.Itoa(len(turns)-maxTurns*2)),
+			})
+			turns = turns[len(turns)-maxTurns*2:]
+		}
+		for _, t := range turns {
+			switch {
+			case t.Role == "user":
+				cHist.blocks = append(cHist.blocks, block{kind: blockUser, body: t.Content})
+			case t.Role == "assistant" && strings.TrimSpace(t.Content) != "":
+				cHist.blocks = append(cHist.blocks, block{kind: blockAnswer, body: t.Content})
+			}
+		}
+	}
+
 	return tuiModel{
-		r:      r,
-		th:     th,
-		loc:    r.loc,
-		engine: r.engine,
-		ta:     ta,
-		sp:     sp,
-		menu:   newSlashMenu(r.loc),
-		mode:   modeSplash,
+		r:           r,
+		th:          th,
+		loc:         r.loc,
+		engine:      r.engine,
+		ta:          ta,
+		sp:          sp,
+		menu:        newSlashMenu(r.loc),
+		mode:        modeSplash,
+		started:     time.Now(),
+		chatHistory: cHist,
 	}
 }
 
@@ -204,6 +233,9 @@ func (m tuiModel) Init() tea.Cmd {
 // content width is decided once: the same width the live region lays out to, so
 // a streamed answer does not reflow the instant the turn commits.
 func (m tuiModel) printBlock(b block) tea.Cmd {
+	if m.chatHistory != nil {
+		m.chatHistory.blocks = append(m.chatHistory.blocks, b)
+	}
 	// The leading blank line is the transcript's spacing: one per block, so turns
 	// separate into paragraphs instead of stacking into a wall of markers. It
 	// belongs here rather than in render() because it is a property of committing
