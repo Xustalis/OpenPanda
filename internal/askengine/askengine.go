@@ -425,8 +425,11 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 	// inputs skip the LLM call entirely. Best-effort by design.
 	client.SetDiskCache(entry.NewDiskCache(db))
 
-	skillStore := skills.NewStore(cfg.Storage.SkillsPath)
-	_ = skillStore.EnsureBuiltins()
+	var skillStore *skills.Store
+	if cfg != nil && strings.TrimSpace(cfg.Storage.SkillsPath) != "" {
+		skillStore = skills.NewStore(cfg.Storage.SkillsPath)
+		_ = skillStore.EnsureBuiltins()
+	}
 
 	e := &Engine{
 		cfg:        cfg,
@@ -496,9 +499,9 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		sched := core.NewCore(db, core.EphemeralNodeID(stableID), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 		sched.SetRouterPolicy(cfg.Injection, cfg.Routing)
 		sched.AttachSupervisor(cfg.Model)
-		skillStore := skills.NewStore(cfg.Storage.SkillsPath)
-		_ = skillStore.EnsureBuiltins()
-		sched.SetMemoryStores(injector, memory.NewDaily(hermes.WarmDir()), skillStore)
+		if skillStore != nil {
+			sched.SetMemoryStores(injector, memory.NewDaily(hermes.WarmDir()), skillStore)
+		}
 		// The project plane: what a delegated project task carries with it. Wired
 		// here as well as in the daemon, because an interactive ask delegates too.
 		sched.SetProjectStores(projectstore.NewStore(db), cfg.Storage.ProjectsPath)
