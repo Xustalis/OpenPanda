@@ -80,6 +80,7 @@ type Engine struct {
 	hermes   *memory.Hermes
 	projects *memory.Projects
 	remind   *reminders.Store
+	skills   *skills.Store
 
 	mcp        *mcp.Client
 	mcpCommand string
@@ -424,6 +425,9 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 	// inputs skip the LLM call entirely. Best-effort by design.
 	client.SetDiskCache(entry.NewDiskCache(db))
 
+	skillStore := skills.NewStore(cfg.Storage.SkillsPath)
+	_ = skillStore.EnsureBuiltins()
+
 	e := &Engine{
 		cfg:        cfg,
 		db:         db,
@@ -431,6 +435,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		hermes:     hermes,
 		projects:   projects,
 		remind:     remind,
+		skills:     skillStore,
 		logger:     logger,
 		queueTasks: opts.QueueTasks,
 		replyASCII: opts.ReplyASCII,

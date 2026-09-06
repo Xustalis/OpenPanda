@@ -23,31 +23,50 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
-// tuiMode is the model's top-level state. Keystrokes and incoming messages mean
-// different things in each: idle waits for input, asking streams a reply,
-// approving holds a tier-2 card until the user answers y/n, and exec has handed
-// the terminal to a classic command handler.
+// tuiMode is the model's top-level state.
 type tuiMode int
 
 const (
-	modeIdle tuiMode = iota
+	modeSplash tuiMode = iota // Startup full-screen centered overlay
+	modeIdle
 	modeAsking
 	modeApproving
-	// modeExec is the window where a slash or "!" command owns the terminal, and
-	// it exists to render nothing. tea.Exec releases the tty by stopping the
-	// renderer, and stopping only erases the row the cursor sits on — everything
-	// the last frame drew above that row stays behind. The idle frame is five rows,
-	// so the blank line, the whole rounded box and the state row were stranded in
-	// scrollback, the command's output printed under them, and a fresh box
-	// repainted below that: two input bars for one command. An empty view first
-	// lets the renderer's own flush clear the region (it erases below the cursor
-	// whenever a frame shrinks), so the output lands where the box was.
 	modeExec
+	modeList        // Keyboard navigable list (/sessions, /projects, /resume)
+	modeModelPanel  // Model management panel
+	modeModelWizard // Model add/setup onboarding wizard
+	modeOnboarding  // First-time use onboarding wizard
+)
+
+type listKind int
+
+const (
+	listNone listKind = iota
+	listSessions
+	listProjects
+	listResume
+)
+
+type wizardStep int
+
+const (
+	wizardStepProvider  wizardStep = iota // Choose provider
+	wizardStepAPIKey                      // Enter API Key
+	wizardStepModelName                   // Enter Model Name
+)
+
+type onboardingStep int
+
+const (
+	onboardingStepLanguage    onboardingStep = iota // Choose UI language (default English)
+	onboardingStepTerms                             // Terms of service & license agreement
+	onboardingStepApproval                          // Command execution approval mode
+	onboardingStepModelChoice                       // Configure model now or skip
+	onboardingStepModelWizard                       // Interactive provider/key/model setup
 )
 
 // tuiModel is the Bubble Tea model. It borrows the live REPL (r) for its engine,
-// conversation memory and — in later slices — slash-command handlers, so the TUI
-// is a new front end over the same business logic rather than a fork of it.
+// conversation memory and slash-command handlers.
 type tuiModel struct {
 	r      *repl
 	th     theme
@@ -65,57 +84,52 @@ type tuiModel struct {
 	height int
 	ready  bool
 
-	// projName caches the active project for the status row. The row is part of
-	// the ephemeral frame, so reading the pointer at render time meant one SQLite
-	// query per keystroke and per cursor blink; it is pushed instead — at startup
-	// and after a foreground command (refreshProject), and off the Update loop by
-	// the task watcher's poll, which is what catches a project entered elsewhere.
+	// projName caches the active project for the status row.
 	projName string
 
 	mode    tuiMode
 	stream  *askStream
 	started time.Time
 
-	// lastInterrupt timestamps the previous Esc/Ctrl-C of a turn. A second one
-	// inside interruptWindow quits outright, so an ask that cannot actually be
-	// released — the core owns a delegated task's lifetime, not this front end
-	// — can never trap the user in the program. It is the same double-tap the
-	// classic loop uses, so both front ends feel alike.
+	// Navigation lists and panels
+	listKind      listKind
+	selectionList SelectionList
+
+	// Onboarding state
+	onboardingStep onboardingStep
+	termsCursor    int // 0 = Agree [Y], 1 = Decline [N]
+
+	// Model wizard state
+	wizardStep     wizardStep
+	wizardProvider string
+	wizardKey      string
+	wizardModel    string
+	wizardInput    string
+
+	// lastInterrupt timestamps the previous Esc/Ctrl-C of a turn.
 	lastInterrupt time.Time
 
 	// pendingPrompt is the user text of the in-flight ask, kept so the turn can
 	// be recorded into conversation memory when it completes.
 	pendingPrompt string
 
-	// turnWorkDir is the worktree this turn runs in — the session's when a
-	// session is bound, empty for a bare chat. A tier-2 task parked for
-	// approval has to resume in the same tree, so it is kept until the turn
-	// commits rather than re-derived at approval time.
+	// turnWorkDir is the worktree this turn runs in.
 	turnWorkDir string
 
-	// In-flight turn state. liveAnswer accumulates streamed answer text (shown
-	// in the ephemeral region, committed to scrollback when the turn ends);
-	// thought holds chain-of-thought lines (display-only, D14); note is the
-	// current lifecycle phase note (routing/running/…).
+	// In-flight turn state.
 	liveAnswer    string
 	thought       []string
 	thoughtDone   bool
 	expandThought bool
 	note          string
 
-	// liveTask is the delegated-task card for this turn, opened when the engine
-	// reports it submitting a task and closed when the turn commits. nil for a
-	// plain answer turn.
+	// liveTask is the delegated-task card for this turn.
 	liveTask *taskProgress
 
-	// pending holds a task the engine parked for tier-2 approval; the model
-	// shows its card and, on a yes, resumes it authorized.
+	// pending holds a task the engine parked for tier-2 approval.
 	pending *askengine.Result
 
-	// approvalSel is the focused choice on the approval card: 0 = approve,
-	// 1 = deny. It starts on deny — the same safe default as the classic
-	// [y/N] prompt — so arrows + Enter answer the card without reaching
-	// for the y/n hotkeys (which keep working).
+	// approvalSel is the focused choice on the approval card: 0 = approve, 1 = deny.
 	approvalSel int
 
 	animTick int
@@ -166,7 +180,7 @@ func newTUIModel(r *repl) tuiModel {
 		ta:     ta,
 		sp:     sp,
 		menu:   newSlashMenu(r.loc),
-		mode:   modeIdle,
+		mode:   modeSplash,
 	}
 }
 

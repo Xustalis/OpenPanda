@@ -36,6 +36,37 @@ func UpdateSectionFieldInt(path string, section []string, key string, value int)
 	return writeDoc(path, root)
 }
 
+// UpdateSectionFieldBool is UpdateSectionField for boolean fields: the value
+// lands with an !!bool tag.
+func UpdateSectionFieldBool(path string, section []string, key string, value bool) error {
+	m, root, err := locateSection(path, section)
+	if err != nil {
+		return err
+	}
+	setMapBoolField(m, key, value)
+	return writeDoc(path, root)
+}
+
+// setMapBoolField upserts key: <bool> in mapping node m.
+func setMapBoolField(m *yaml.Node, key string, value bool) {
+	valStr := "false"
+	if value {
+		valStr = "true"
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content[i+1].Value = valStr
+			m.Content[i+1].Tag = "!!bool"
+			m.Content[i+1].Style = 0
+			return
+		}
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: valStr},
+	)
+}
+
 // setMapIntField upserts key: <int> in mapping node m (removing the key when
 // value is zero is NOT implied — callers pass the concrete number; use
 // setMapField with "" to remove).

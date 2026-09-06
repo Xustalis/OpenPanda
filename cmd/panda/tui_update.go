@@ -6,6 +6,7 @@ package main
 // the live region and the input box.
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -26,16 +27,16 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The input spans the width minus the frame's border+padding (2+2).
 		m.ta.SetWidth(max(20, msg.Width-4))
 		if first {
-			// First size report: now the welcome frame can be drawn to the real
-			// terminal instead of to a guess (see Init), and the status row can
-			// learn which project this run started in.
 			m.refreshProject()
-			prints := m.startupPrints()
-			cmds := make([]tea.Cmd, len(prints))
-			for i, p := range prints {
-				cmds[i] = tea.Println(p)
+			if m.mode != modeSplash {
+				prints := m.startupPrints()
+				cmds := make([]tea.Cmd, len(prints))
+				for i, p := range prints {
+					cmds[i] = tea.Println(p)
+				}
+				return m, tea.Batch(cmds...)
 			}
-			return m, tea.Batch(cmds...)
+			return m, nil
 		}
 		return m, nil
 
@@ -69,12 +70,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onWatch(msg)
 	case execDoneMsg:
 		// A slash/shell command finished in the foreground; the terminal is
-		// restored and its output already sits in scrollback. The prompt comes
-		// back (the view was blank while the command held the terminal) and the
-		// status row re-reads what a command may have just changed — /project,
-		// /resume — instead of asking the store on every frame.
+		// restored and its output already sits in scrollback.
 		m.mode = modeIdle
-		m.applyLocale() // /lang may have switched the session language mid-run
+		m.applyLocale()
 		m.refreshProject()
 		if msg.err != nil {
 			blk := block{kind: blockError, body: msg.err.Error()}
@@ -82,22 +80,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case droppedMsg:
-		// The pump's ask was released while it was parked. There is nothing to
-		// fold in and the pump is not re-armed, which is what ends it.
 		return m, nil
 	}
 	return m, nil
 }
 
 // interruptWindow is how long a second Esc/Ctrl-C during a turn counts as
-// "quit" rather than a second cancel. It mirrors the classic loop's window so
-// the two front ends answer the same keystrokes the same way.
+// "quit" rather than a second cancel.
 const interruptWindow = time.Second
 
 // onKey dispatches a keystroke according to the current mode.
 func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// A foreground command owns the terminal and the view is blank; Bubble Tea is
-	// not reading input, so anything that reaches us here is not ours to act on.
 	if m.mode == modeExec {
 		return m, nil
 	}
@@ -114,6 +107,16 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.mode {
+	case modeSplash:
+		return m.onSplashKey(msg)
+	case modeOnboarding:
+		return m.handleOnboardingKey(msg)
+	case modeList:
+		return m.handleListKey(msg)
+	case modeModelPanel:
+		return m.handleModelPanelKey(msg)
+	case modeModelWizard:
+		return m.handleModelWizardKey(msg)
 	case modeAsking:
 		if msg.Type == tea.KeyEsc {
 			return m.interrupt()
@@ -147,6 +150,52 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m.onIdleKey(msg)
 	}
+}
+
+// onSplashKey handles keys on the splash screen overlay.
+func (m tuiModel) onSplashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC, tea.KeyEsc:
+		m.quitting = true
+		return m, tea.Quit
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "q", "Q":
+			m.quitting = true
+			return m, tea.Quit
+		case " ":
+			return m.startFromSplash()
+		}
+	case tea.KeyEnter:
+		return m.startFromSplash()
+	}
+	return m, nil
+}
+
+// startFromSplash transitions from splash to the model onboarding guide or main idle chat.
+func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
+	if m.r != nil && m.r.cfg != nil && !m.r.cfg.UI.Onboarded {
+		return m.startOnboarding()
+	}
+
+	hasModel := false
+	if m.r != nil && m.r.cfg != nil {
+		if m.r.cfg.Model.BaseURL != "" || m.r.cfg.Model.Provider != "" || len(m.r.cfg.Models) > 0 {
+			hasModel = true
+		}
+	}
+
+	if !hasModel {
+		return m.startModelWizard()
+	}
+
+	m.mode = modeIdle
+	prints := m.startupPrints()
+	cmds := make([]tea.Cmd, len(prints))
+	for i, p := range prints {
+		cmds[i] = tea.Println(p)
+	}
+	return m, tea.Batch(cmds...)
 }
 
 // interrupt answers Esc/Ctrl-C during a turn. It releases this front end from
@@ -397,14 +446,61 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	}
+
+	// Interactive commands rendered in full-screen TUI (Requirement 2, 4, 5)
+	switch {
+	case text == "/sessions" || strings.HasPrefix(text, "/sessions "):
+		return m.openSessionsList()
+	case text == "/projects" || strings.HasPrefix(text, "/projects "):
+		return m.openProjectsList()
+	case text == "/resume" || text == "/resume ":
+		return m.openResumeList()
+	case strings.HasPrefix(text, "/resume "):
+		arg := strings.TrimSpace(strings.TrimPrefix(text, "/resume"))
+		if arg == "-" {
+			if m.r != nil {
+				m.r.activeSess = ""
+			}
+			note := block{kind: blockNote, body: i18n.T(m.loc, "repl.resume.detached")}
+			return m, m.printBlock(note)
+		}
+		if m.r != nil && m.r.sessionsSt != nil {
+			if sess, err := m.r.sessionsSt.Get(arg); err == nil {
+				m.r.activeSess = arg
+				if len(sess.Turns) > 0 {
+					var convo []entry.Turn
+					for _, t := range sess.Turns {
+						convo = append(convo, entry.Turn{Role: t.Role, Content: t.Text})
+					}
+					m.r.convo = convo
+				}
+				note := block{kind: blockNote, body: fmt.Sprintf("已恢复会话: %s (%s)", shortID(arg), sess.Title)}
+				return m, m.printBlock(note)
+			}
+		}
+		note := block{kind: blockError, body: fmt.Sprintf("未找到会话: %s", arg)}
+		return m, m.printBlock(note)
+	case text == "/model" || strings.HasPrefix(text, "/model"):
+		return m.openModelPanel()
+	}
+
 	if isBareCommand(text) {
-		// Slash/shell commands reuse the repl handlers verbatim; their output
-		// flows to scrollback while Bubble Tea has the terminal released. The mode
-		// blanks the frame in the same event-loop pass that queues the exec, which
-		// is what stops the released terminal from stranding a copy of the input
-		// box above the command's output (see modeExec).
+		// Other slash/shell commands reuse the repl handlers verbatim; their output
+		// flows to scrollback while Bubble Tea has the terminal released.
 		m.mode = modeExec
 		return m, m.runSlash(text)
+	}
+
+	if m.engine == nil {
+		if m.r != nil && m.r.engine != nil {
+			m.engine = m.r.engine
+		} else {
+			note := block{
+				kind: blockError,
+				body: "未配置模型，请使用 /model 添加并启用模型。",
+			}
+			return m, m.printBlock(note)
+		}
 	}
 	// Echo the prompt into scrollback so the committed transcript reads as a
 	// dialogue, then start the ask.
