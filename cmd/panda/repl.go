@@ -147,6 +147,8 @@ func init() {
 		{"projects", "memory", "cmd.projects", (*repl).cmdProjects},
 		{"project", "memory", "cmd.project", (*repl).cmdProjectEnter},
 		{"context", "memory", "cmd.context", (*repl).cmdContext},
+		{"skills", "memory", "cmd.skills", (*repl).cmdSkills},
+		{"skill", "memory", "cmd.skills", (*repl).cmdSkills},
 		{"nodes", "system", "cmd.nodes", (*repl).cmdNodes},
 		{"card", "system", "cmd.card", (*repl).cmdCard},
 		{"agents", "system", "cmd.agents", (*repl).cmdAgents},
@@ -1362,6 +1364,164 @@ func (r *repl) cmdProject(arg string) {
 		return
 	}
 	fmt.Println(i18n.Tf(r.loc, "repl.project.created", "name", name))
+}
+
+// cmdSkills manages procedural skills from inside the REPL.
+func (r *repl) cmdSkills(arg string) {
+	fields := strings.Fields(arg)
+	sub := "list"
+	if len(fields) > 0 {
+		sub = fields[0]
+		fields = fields[1:]
+	}
+
+	skillsPath := ""
+	if r.cfg != nil {
+		skillsPath = r.cfg.Storage.SkillsPath
+	}
+	store := skills.NewStore(skillsPath)
+	_ = store.EnsureBuiltins()
+
+	switch sub {
+	case "list":
+		skillList(store)
+	case "find", "discover":
+		if len(fields) == 0 {
+			fmt.Println("用法: /skill find <关键词>")
+			return
+		}
+		query := strings.Join(fields, " ")
+		hubURL := ""
+		if r.cfg != nil {
+			hubURL = r.cfg.Skills.HubURL
+		}
+		fmt.Printf("🔍 正在自主检索并匹配技能: %q ...\n", query)
+		sk, isNew, err := store.DiscoverAndInstall(context.Background(), hubURL, query)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "panda: %v\n", err)
+			return
+		}
+		if isNew {
+			fmt.Printf("✅ 找到并自动安装激活技能: %s\n   描述: %s\n   状态: %s (已就绪)\n", sk.Name, sk.Description, sk.Status)
+		} else {
+			fmt.Printf("ℹ️  匹配到技能 %s，该技能已处于激活就绪状态。\n   描述: %s\n", sk.Name, sk.Description)
+		}
+	case "reset":
+		if len(fields) == 0 {
+			fmt.Println("用法: /skill reset <名称|all>")
+			return
+		}
+		target := fields[0]
+		if strings.EqualFold(target, "all") {
+			for _, b := range skills.BuiltinSkills() {
+				_, _ = store.ResetBuiltin(b.Name)
+			}
+			fmt.Println("所有内置技能已重置为出厂默认设置。")
+			return
+		}
+		sk, err := store.ResetBuiltin(target)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "panda: %v\n", err)
+			return
+		}
+		fmt.Printf("已将内置技能 %q 重置为默认版本。\n", sk.Name)
+	case "add", "install":
+		if len(fields) == 0 {
+			fmt.Println("用法: /skill add <链接|文件路径|Hub技能名>")
+			return
+		}
+		target := fields[0]
+		if skills.IsBuiltinSkill(target) {
+			fmt.Printf("技能 %q 是内置标准技能且已激活生效。\n", target)
+			return
+		}
+		ctx := context.Background()
+		opts := skills.ImportOptions{Scope: skills.ScopeGlobal, Status: skills.StatusActive}
+		hubURL := ""
+		if r.cfg != nil {
+			hubURL = r.cfg.Skills.HubURL
+		}
+		if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") || strings.Contains(target, "/") || strings.Contains(target, "\\") {
+			res, err := store.ImportSource(ctx, target, opts)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "panda: %v\n", err)
+				return
+			}
+			var names []string
+			for _, s := range res {
+				names = append(names, s.Name)
+			}
+			fmt.Printf("成功导入 %d 个技能: %s\n", len(res), strings.Join(names, ", "))
+			return
+		}
+		sk, err := skills.InstallFromHub(ctx, store, hubURL, target, opts)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "panda: %v\n", err)
+			return
+		}
+		fmt.Printf("成功从 Skills Hub 安装技能 %s (%s)。\n", sk.Name, sk.Description)
+	case "hub":
+		action := "list"
+		if len(fields) > 0 {
+			action = fields[0]
+			fields = fields[1:]
+		}
+		ctx := context.Background()
+		hubURL := ""
+		if r.cfg != nil {
+			hubURL = r.cfg.Skills.HubURL
+		}
+		idx, err := skills.FetchHubIndex(ctx, hubURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "获取 Hub 失败: %v\n", err)
+			return
+		}
+		switch action {
+		case "list":
+			for _, s := range idx.Skills {
+				installed := false
+				if sk, _ := store.Load(skills.ScopeGlobal, "", s.Name); sk != nil {
+					installed = true
+				}
+				tagStr := ""
+				if installed {
+					tagStr = " [已安装]"
+				}
+				fmt.Printf("  %-20s %s%s\n", s.Name, s.Description, tagStr)
+			}
+		case "search":
+			if len(fields) == 0 {
+				fmt.Println("用法: /skill hub search <关键词>")
+				return
+			}
+			q := strings.Join(fields, " ")
+			res := skills.SearchHub(idx, q)
+			if len(res) == 0 {
+				fmt.Printf("未找到与 %q 匹配的技能。\n", q)
+				return
+			}
+			for _, s := range res {
+				fmt.Printf("  %-20s %s\n", s.Name, s.Description)
+			}
+		case "install":
+			if len(fields) == 0 {
+				fmt.Println("用法: /skill hub install <技能名>")
+				return
+			}
+			name := fields[0]
+			opts := skills.ImportOptions{Scope: skills.ScopeGlobal, Status: skills.StatusActive}
+			sk, err := skills.InstallFromHub(ctx, store, hubURL, name, opts)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "panda: %v\n", err)
+				return
+			}
+			fmt.Printf("已成功安装技能: %s\n", sk.Name)
+		default:
+			fmt.Printf("未知 hub 子命令: %s (可选 list, search, install)\n", action)
+		}
+	default:
+		fmt.Println("用法: /skill [list | find <关键词> | add <目标> | reset <名称|all> | hub <list|search|install>]")
+	}
 }
 
 // cmdNodes lists the local capability directory, and carries the pairing

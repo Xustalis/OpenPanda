@@ -264,6 +264,10 @@ const zhCN: Messages = {
   'skills.resetConfirmMsg': '确定将技能 {name} 恢复为系统默认出厂定义？任何自定义修改将被覆盖。',
   'skills.resetSuccess': '技能 {name} 已恢复为默认版本。',
   'skills.resetTooltip': '恢复为系统出厂默认版本',
+  'skills.discoverBtn': '智能检索安装',
+  'skills.discoverTooltip': '根据关键词自动从技能集市检索最匹配的技能并一键安装激活',
+  'skills.discoverSuccess': '已自动找到并安装技能 {name}。',
+  'skills.discoverAlreadyActive': '技能 {name} 已处于就绪生效状态。',
 
   // System view
   'system.title': '系统',

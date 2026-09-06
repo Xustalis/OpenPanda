@@ -641,7 +641,7 @@ func printUsage(w *os.File) {
 	line("                                            view/edit config.yaml (comments kept)")
 	line("  agents [test <name>]                      probe installed agent CLIs")
 	line("  reminder list|add|rm                      scheduled reminders")
-	line("  skill list|approve|reject                 agent skill management")
+	line("  skill list|find|hub|add|reset             procedural skill & hub management")
 	line("")
 	line("observability:")
 	line("  status                                    node identity + capability directory")

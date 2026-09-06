@@ -273,6 +273,10 @@ const en: Messages = {
     'Restore skill {name} to its factory default definition? Any custom changes will be overwritten.',
   'skills.resetSuccess': 'Skill {name} reset to factory default.',
   'skills.resetTooltip': 'Restore to factory default definition',
+  'skills.discoverBtn': 'Auto Discover & Install',
+  'skills.discoverTooltip': 'Automatically search the skills hub for the best match and install it',
+  'skills.discoverSuccess': 'Discovered and installed skill {name}.',
+  'skills.discoverAlreadyActive': 'Skill {name} is already active.',
 
   // System view
   'system.title': 'System',

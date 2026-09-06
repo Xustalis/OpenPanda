@@ -905,6 +905,10 @@ export const api = {
   installRecommendedSkills(): Promise<{ count: number; names: string[]; status: string }> {
     return request('POST', '/api/skills/hub/install-recommended')
   },
+
+  discoverSkill(query: string): Promise<{ name: string; description: string; status: string; is_new: boolean }> {
+    return request('POST', '/api/skills/discover', { query })
+  },
 }
 
 export interface SessionDiff {
