@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/skills"
 )
@@ -308,4 +309,42 @@ func (h *handler) importSkill(w http.ResponseWriter, r *http.Request) {
 		names = append(names, s.Name)
 	}
 	writeJSON(w, map[string]any{"names": names, "count": len(imported), "status": "imported"})
+}
+
+// discoverSkillRequest is the payload of POST /api/skills/discover.
+type discoverSkillRequest struct {
+	Query string `json:"query"`
+}
+
+// discoverSkill serves POST /api/skills/discover — autonomously finds and installs the best matching skill.
+func (h *handler) discoverSkill(w http.ResponseWriter, r *http.Request) {
+	if h.skillStore == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("skill store not configured"))
+		return
+	}
+	var req discoverSkillRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("query must not be empty"))
+		return
+	}
+	hubURL := ""
+	if h.cfg != nil {
+		hubURL = h.cfg.Skills.HubURL
+	}
+	sk, isNew, err := h.skillStore.DiscoverAndInstall(r.Context(), hubURL, query)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"name":        sk.Name,
+		"description": sk.Description,
+		"status":      sk.Status,
+		"is_new":      isNew,
+	})
 }

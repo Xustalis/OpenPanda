@@ -212,6 +212,7 @@ function SkillsHubPanel({ onInstalled }: { onInstalled(): void }) {
   const [tick, setTick] = useState(0)
   const { data: hubSkills, error } = useAsync(() => api.hubSkills(query), [query, tick])
   const [installing, setInstalling] = useState('')
+  const [discovering, setDiscovering] = useState(false)
 
   async function install(name: string, force = false) {
     if (installing) return
@@ -228,20 +229,74 @@ function SkillsHubPanel({ onInstalled }: { onInstalled(): void }) {
     }
   }
 
+  async function discover() {
+    const q = query.trim()
+    if (!q || discovering) return
+    setDiscovering(true)
+    try {
+      const res = await api.discoverSkill(q)
+      if (res.is_new) {
+        toast(t('skills.discoverSuccess', { name: res.name }), 'success')
+      } else {
+        toast(t('skills.discoverAlreadyActive', { name: res.name }), 'info')
+      }
+      setTick((v) => v + 1)
+      onInstalled()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setDiscovering(false)
+    }
+  }
+
   return (
     <div class="card">
-      <input
-        type="text"
-        class="skills-search-bar"
-        placeholder={t('skills.hubSearchPlaceholder')}
-        value={query}
-        onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
-      />
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+        <input
+          type="text"
+          class="skills-search-bar"
+          style={{ flex: 1, margin: 0 }}
+          placeholder={t('skills.hubSearchPlaceholder')}
+          value={query}
+          onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && query.trim()) {
+              e.preventDefault()
+              discover()
+            }
+          }}
+        />
+        {query.trim() && (
+          <button
+            type="button"
+            class="btn primary"
+            disabled={discovering}
+            onClick={discover}
+            title={t('skills.discoverTooltip')}
+            style={{ whiteSpace: 'nowrap' }}
+          >
+            {discovering ? '...' : `✨ ${t('skills.discoverBtn')}`}
+          </button>
+        )}
+      </div>
 
       {error ? (
         <p class="dim">{error}</p>
       ) : !hubSkills || hubSkills.length === 0 ? (
-        <p class="dim">{t('skills.hubEmpty')}</p>
+        <div style={{ padding: '16px 0', textAlign: 'center' }}>
+          <p class="dim">{t('skills.hubEmpty')}</p>
+          {query.trim() && (
+            <button
+              type="button"
+              class="btn primary"
+              style={{ marginTop: '8px' }}
+              disabled={discovering}
+              onClick={discover}
+            >
+              {discovering ? '...' : `✨ ${t('skills.discoverBtn')}: "${query.trim()}"`}
+            </button>
+          )}
+        </div>
       ) : (
         hubSkills.map((s) => (
           <HubSkillRow

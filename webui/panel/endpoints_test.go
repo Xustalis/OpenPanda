@@ -565,6 +565,12 @@ func TestSkillsHubAndImportAPI(t *testing.T) {
 	if !found {
 		t.Fatalf("api-skill not found in GET /api/skills")
 	}
+
+	// 6. POST /api/skills/discover
+	code, out = doJSON(t, h, jsonReq(http.MethodPost, "/api/skills/discover", `{"query":"docker"}`))
+	if code != http.StatusOK || out["name"] != "docker-compose" {
+		t.Fatalf("discover skill failed: %d %v", code, out)
+	}
 }
 
 // ---- reminders ----

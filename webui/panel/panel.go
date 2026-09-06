@@ -150,6 +150,7 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("POST /api/skills/hub/install", h.installHubSkill)
 		mux.HandleFunc("POST /api/skills/hub/install-recommended", h.installRecommendedSkills)
 		mux.HandleFunc("POST /api/skills/import", h.importSkill)
+		mux.HandleFunc("POST /api/skills/discover", h.discoverSkill)
 	}
 	if d.Reminders != nil {
 		mux.HandleFunc("GET /api/reminders", h.listReminders)
