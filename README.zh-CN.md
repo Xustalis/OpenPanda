@@ -4,7 +4,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
-[![Release: v0.0.8-preview](https://img.shields.io/badge/release-v0.0.8--preview-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
+[![Release: v0.0.8](https://img.shields.io/badge/release-v0.0.8-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
@@ -69,6 +69,8 @@ OpenPanda 将终端 AI 编程助手（Claude Code、OpenAI Codex、Grok Build、
 
 - **自进化技能** —— 成功流程沉淀为 `SKILL.md`，随使用积累。
 
+- **技能中心与自主发现** —— 离线精选技能目录（`panda skill hub`）、从路径/URL/压缩包导入（`panda skill import`），助手还能在任务执行中自主找到并安装所需技能。
+
 - **上下文漫游** —— 跨设备委派任务时，项目记忆与工作目录摘要随任务同行。
 
 ### 多设备协同（预览）
@@ -81,9 +83,9 @@ OpenPanda 将终端 AI 编程助手（Claude Code、OpenAI Codex、Grok Build、
 
 ### 接口与运行时
 
-- **终端 TUI**（Bubble Tea）：方向键导航、实时进度、中途打断与转向。
+- **终端 TUI**（Bubble Tea）：全屏 alternate-screen 模式与键盘导航、首次运行引导向导、实时进度、中途打断与转向。
 
-- **Web 控制台**：零配置、任务看板、实时 SSE 消息流、浏览器自动登录。
+- **Web 控制台**：零配置、任务看板、实时 SSE 消息流、技能管理、会话取消、浏览器自动登录。
 
 - **脚本化 CLI**：`panda ask` 单行命令嵌入自动化脚本。
 
@@ -146,6 +148,7 @@ panda ask "查看系统状态并总结待办任务"  # 直接发一条指令
 | `panda queue`        | 查看排队中、执行中或待审批的任务（`--watch` 实时刷新） |
 | `panda approve <id>` | 审批放行二级高危操作                       |
 | `panda project list` | 管理工作空间项目与工程记忆                    |
+| `panda skill`        | 浏览、导入并安装工作流技能（技能中心/URL/文件）        |
 | `panda doctor`       | 体检 PATH、配置、适配器与数据库               |
 | `panda version`      | 输出版本号                            |
 

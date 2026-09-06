@@ -42,6 +42,25 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-09-06
+
+The official 0.0.8: the skills system learns to serve itself — a curated offline hub, importing from anywhere, and an assistant that discovers and installs the workflow a task needs while it runs. The TUI grows into a full-screen application with a first-run wizard, the web console gains skills management, session cancellation and an execution timeline, and the engine routes around failing models instead of dying with them.
+
+### Added
+
+- **Skills Hub with a curated offline catalog** — `panda skill hub list|search|info|install` (and `/skill hub …` in the REPL) browse and install production-grade skills; a first set of built-in playbooks ships inside the binary and initializes on first use, so a fresh node is never empty (668ddcd).
+- **Skill import from paths, URLs, and archives** — `panda skill import` takes a local path or a URL, a single markdown file or a tar.gz/zip bundle, with scope/name/status/force overrides; downloads are capped at 10 MiB and the frontmatter is validated before anything lands on disk (668ddcd).
+- **Autonomous skill discovery and installation as agent tools** — the Ask engine can search the hub and install a skill mid-task, so work that needs a workflow can equip itself instead of failing for the lack of one (a5fa093).
+- **The `panda skill` command family and `/skill` REPL commands** — `list`, `approve`, `reject`, `reset`, `find`/`discover`, `import`, `hub`, and `install`/`add`, with JSON output for scripts (a5fa093, f5b6884).
+- **Skills management in the web console** — a skills panel browses installed skills, searches the hub, and installs or toggles skills from the browser, backed by the same store as the CLI (35e282b, f5b6884).
+- **Full-screen TUI with first-run onboarding** — the terminal UI moves to the alternate screen with keyboard navigation, and a first-run wizard walks a fresh install through setup before the first prompt (ef82d6f).
+- **Model-health circuit breaker with fallback routing** — a model that keeps failing enters a cooldown and the engine re-routes the work to a healthy fallback instead of hammering a dead endpoint for the whole round budget (7c5c643).
+- **Session cancellation in the web console** — a running session can be stopped from the browser, and the cancellation travels the same command path as every other control (35e282b).
+- **A keepalive retry client for the console** — the web client retries dropped connections with backoff, so a network blip no longer strands the UI on a dead stream (35e282b).
+- **noauth model support** — a registry entry can declare that its endpoint takes no `Authorization` header, covering local servers that reject one (7c5c643).
+- **Task queues can be cleared and deleted** — the same verbs from the CLI, the API, and the web console (d5df3d3).
+- **Console: a directory picker and an execution event timeline** — work directories are chosen from a browser dialog instead of a typed path, and agent commands, file edits and tool calls render as a chronological timeline on the session detail view (291dc76).
+
 ### Fixed
 
 - **Windows console control handler startup panic** — the `PHANDLER_ROUTINE` callback declared a `bool` return, which `windows.NewCallback` rejects (it requires a single `uintptr`-sized result), so the long-lived commands that register it (`panda daemon`, `panda web`) panicked on startup with "compileCallback: expected function with one uintptr-sized result"; the callback now returns `uintptr` (`1` handled / `0` not handled) (#2).
@@ -49,6 +68,15 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **TUI: the welcome banner prints at the cursor** — the greeting no longer pads itself down to the bottom edge of tall terminals, which stranded it under a screenful of dead space and put the input row where the eye is not.
 - **TUI: the wheel belongs to the terminal again** — the program no longer captures mouse cell motion, so wheel scrolling, the scrollbar and PageUp/PageDown reach the transcript's own scrollback — the one buffer an application can never scroll itself. Clickable surfaces keep their keyboard paths (y/n, Esc/Enter).
 - **Windows installer: auto-start picks up the real config** — the logon task no longer pins `--config`/`--card` at install-prefix paths that never exist there; the daemon discovers the user-level config written by `panda init` (same order as the LaunchAgent and systemd units) instead of silently running on defaults.
+- **The Ask engine starts with an empty skills path** — a config without `storage.skills_path` no longer breaks engine initialization; the skill store simply starts empty (3f28486).
+- **SQLite enforces foreign keys** — the store now opens with `foreign_keys=ON`, so rows referencing deleted parents can no longer accumulate (7c5c643).
+- **TUI: the alt-screen view keeps its banner, tips, and chat** — the alternate-screen rework had left the ASCII logo, the tips row and the conversation view behind; all three are back in the full-screen layout (e2be53e).
+
+### Changed
+
+- **One welcome banner everywhere, with sharper REPL ergonomics** — the bare REPL, the help and the error paths share the same ASCII-logo greeting, and the TUI view layer got a matching pass (0d44ee4).
+- **TUI: distinct visual blocks and a high-contrast prompt panel** — user input, assistant output and system notices occupy clearly separated blocks, and the user prompt stands out on any theme (b0979cc).
+- **Web console workflow polish** — the sessions and projects views were reworked around the workflow architecture, with consistent action placement and state rendering (291dc76).
 
 ## [0.0.8-preview] - 2026-09-05
 

@@ -29,7 +29,10 @@ for f in $files; do
 done
 
 # ── 2. install.md version vs latest tag ─────────────────────────────────────
-latest=$(git tag --list 'v*' --sort=-v:refname 2>/dev/null | head -n 1 | sed 's/^v//')
+# Pre-release tags (v0.0.8-preview, v0.0.8-alpha) sort above the plain release
+# under -v:refname, so filter to bare vX.Y.Z tags before taking the newest —
+# the docs track the latest *release*, not the latest pre-release.
+latest=$(git tag --list 'v*' --sort=-v:refname 2>/dev/null | grep -E '^v[0-9]+(\.[0-9]+)*$' | head -n 1 | sed 's/^v//')
 if [ -z "$latest" ]; then
 	# Shallow / tag-less checkout (some CI fetch modes): skip rather than guess.
 	echo "SKIP: no release tags in this checkout; install.md version check skipped"

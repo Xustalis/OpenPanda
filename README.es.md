@@ -6,7 +6,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
-[![Release: v0.0.8-preview](https://img.shields.io/badge/release-v0.0.8--preview-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
+[![Release: v0.0.8](https://img.shields.io/badge/release-v0.0.8-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
@@ -72,11 +72,12 @@ Das una instrucción desde **cualquier** dispositivo. OpenPanda analiza la tarea
 ### 4. 🧠 Memoria de doble capa y habilidades evolutivas
 - **Aislamiento estricto**: Las preferencias personales (`USER.md`) están separadas del contexto del proyecto (`MEMORY.md`).
 - **Habilidades en automejora**: Crea y refina guías de procedimientos `SKILL.md` que se vuelven más inteligentes con el uso.
+- **Skills Hub y descubrimiento autónomo**: Un catálogo curado sin conexión (`panda skill hub`), importación desde ruta, URL o archivo (`panda skill import`), y un asistente que encuentra e instala la habilidad que una tarea necesita mientras se ejecuta.
 - **Delegación contextual**: Al transferir una tarea entre máquinas, la memoria del proyecto viaja con ella.
 
 ### 5. 🖥️ Tres interfaces unificadas
-- **TUI interactiva de terminal**: Construida con Bubble Tea, con navegación por flechas, progreso en vivo y redirección en marcha.
-- **Consola Web integrada**: Tablero Kanban, streaming en tiempo real vía SSE, diseño adaptable para móviles y login automático.
+- **TUI interactiva de terminal**: Construida con Bubble Tea, con modo de pantalla alternativa a pantalla completa, navegación por teclado, asistente de primer arranque, progreso en vivo y redirección en marcha.
+- **Consola Web integrada**: Tablero Kanban, streaming en tiempo real vía SSE, gestión de habilidades, cancelación de sesiones y login automático.
 - **CLI para scripts**: Comandos rápidos como `panda ask` para integrar en scripts y pipelines.
 
 ### 6. 🪶 Ultraligero (~20MB de memoria)
@@ -147,6 +148,7 @@ panda init
 | `panda queue` | Ver tareas pendientes, en ejecución y en revisión |
 | `panda approve <id>` | Aprobar una acción irreversible de nivel 2 |
 | `panda project list` | Gestionar proyectos y contexto del espacio de trabajo |
+| `panda skill` | Explorar, importar e instalar habilidades de flujo de trabajo (Hub, URL o archivo) |
 | `panda doctor` | Diagnóstico de PATH, configuración, adaptadores y base de datos |
 | `panda version` | Mostrar la versión del binario |
 

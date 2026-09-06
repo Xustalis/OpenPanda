@@ -6,7 +6,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
-[![Release: v0.0.8-preview](https://img.shields.io/badge/release-v0.0.8--preview-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
+[![Release: v0.0.8](https://img.shields.io/badge/release-v0.0.8-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
@@ -72,11 +72,12 @@
 ### 4. 🧠 2層分離メモリ ＆ 自己進化型スキル
 - **メモリの物理分離**: ユーザー個人設定（`USER.md`）とプロジェクト文脈（`MEMORY.md`）を厳格に分離。
 - **自己改善型スキル**: 成功した作業手順を構造化された `SKILL.md` に蓄積し、使えば使うほど賢くなります。
+- **Skills Hub と自律的ディスカバリー**: 厳選オフラインカタログ（`panda skill hub`）、パス・URL・アーカイブからのインポート（`panda skill import`）に加え、タスクに必要なスキルを実行中に自ら発見・インストールします。
 - **文脈付きタスク移送**: マシン間でタスクを委譲する際、プロジェクト記憶と作業ツリーの要約が自動で同伴します。
 
 ### 5. 🖥️ 3 つの統一インターフェース
-- **対話型ターミナル TUI**: Bubble Tea 製。矢印キー操作、リアルタイム進捗、実行中の方向転換（Mid-turn Steering）に対応。
-- **ゼロ構成の Web コンソール**: タスクカンバン、リアルタイム SSE、モバイル対応ドロワー、自動ログイン。
+- **対話型ターミナル TUI**: Bubble Tea 製。フルスクリーンのオルタネートスクリーンとキーボードナビゲーション、初回起動ウィザード、リアルタイム進捗、実行中の方向転換（Mid-turn Steering）に対応。
+- **ゼロ構成の Web コンソール**: タスクカンバン、リアルタイム SSE、スキル管理、セッションキャンセル、自動ログイン。
 - **スクリプト可能な CLI**: `panda ask "..."` など、シェルスクリプトや CI から直接呼び出し可能。
 
 ### 6. 🪶 超軽量（常駐メモリ約 20MB）
@@ -148,6 +149,7 @@ MacBook と Linux ワークステーションを連携させる場合：
 | `panda queue` | 待機中・実行中・承認待ちのタスクを表示 |
 | `panda approve <id>` | 保留中の第 2 層高リスク操作を承認 |
 | `panda project list` | ワークスペースプロジェクトと記憶の管理 |
+| `panda skill` | ワークフロースキルの閲覧・インポート・インストール（Hub / URL / ファイル） |
 | `panda doctor` | PATH、設定、アダプター、データベースのヘルスチェック |
 | `panda version` | 現在のバイナリバージョンを表示 |
 

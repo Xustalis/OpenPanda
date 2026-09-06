@@ -39,7 +39,7 @@ body:
       label: Environment & Version
       description: Please share output of `panda version` and `panda doctor` if applicable.
       placeholder: |
-        - OpenPanda Version: (e.g. 0.0.8-preview)
+        - OpenPanda Version: (e.g. 0.0.8)
         - OS & Architecture: (e.g. macOS Sonoma arm64, Ubuntu 24.04 amd64, Windows 11)
         - Connected Nodes: (if multi-device issue)
     validations:
