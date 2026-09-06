@@ -359,7 +359,7 @@ func (a *anthAccumulator) result() Response {
 }
 
 func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
-	if c.apiKey == "" {
+	if c.apiKey == "" && !c.noAuth {
 		return Response{}, ErrNoKey
 	}
 	msgs := turnsToMessages(turns)
@@ -455,7 +455,9 @@ func (c *Client) sendOAIStream(ctx context.Context, system string, msgs []oaiMes
 	}
 	httpReq.Header.Set("content-type", "application/json")
 	httpReq.Header.Set("accept", "text/event-stream")
-	httpReq.Header.Set("authorization", "Bearer "+c.apiKey)
+	if c.apiKey != "" {
+		httpReq.Header.Set("authorization", "Bearer "+c.apiKey)
+	}
 
 	resp, err := c.hcStream.Do(httpReq)
 	if err != nil {
@@ -501,7 +503,9 @@ func (c *Client) sendAnthropicStream(ctx context.Context, system string, msgs []
 	}
 	httpReq.Header.Set("content-type", "application/json")
 	httpReq.Header.Set("accept", "text/event-stream")
-	httpReq.Header.Set("x-api-key", c.apiKey)
+	if c.apiKey != "" {
+		httpReq.Header.Set("x-api-key", c.apiKey)
+	}
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
 
 	resp, err := c.hcStream.Do(httpReq)
@@ -529,7 +533,7 @@ func (c *Client) sendAnthropicStream(ctx context.Context, system string, msgs []
 // ---- OpenAI Chat Completions SSE streaming ----
 
 func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
-	if c.apiKey == "" {
+	if c.apiKey == "" && !c.noAuth {
 		return Response{}, ErrNoKey
 	}
 	msgs := turnsToOpenAI(system, turns)

@@ -166,6 +166,9 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 			c.passback.Store(true)
 		}
 	}
+	if model.NoAuth {
+		c.noAuth = true
+	}
 	// Legacy heuristics stay as a backstop for configs without a provider id.
 	if isDeepSeekModel(name) || isDeepSeekEndpoint(base) {
 		c.passback.Store(true)
@@ -217,7 +220,8 @@ func streamTransport() *http.Transport {
 		ExpectContinueTimeout: 1 * time.Second,
 		IdleConnTimeout:       90 * time.Second,
 		ForceAttemptHTTP2:     true,
-		MaxIdleConnsPerHost:   2,
+		MaxIdleConns:          50,
+		MaxIdleConnsPerHost:   10,
 	}
 }
 
@@ -489,7 +493,7 @@ func (c *Client) CompleteTurns(ctx context.Context, system string, turns []Turn)
 // Anthropic endpoint rejects the string "auto" (it wants the internally-tagged
 // object form). Omitting it is simpler and correct.
 func (c *Client) CompleteTurnsWithTools(ctx context.Context, system string, turns []Turn, tools []ToolSpec) (Response, error) {
-	if c.apiKey == "" {
+	if c.apiKey == "" && !c.noAuth {
 		// Same guard as the streaming and OpenAI paths: an empty key would
 		// otherwise hit the provider and come back as a misleading 401
 		// "invalid key" instead of "not configured".
@@ -552,7 +556,7 @@ func normalizeTurns(turns []Turn) []Turn {
 // thinking-passback probe mirrors completeWithRetry: a rejection sets the
 // sticky flag and retries the corrected payload off the transport budget.
 func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn, tools []ToolSpec) (Response, error) {
-	if c.apiKey == "" {
+	if c.apiKey == "" && !c.noAuth {
 		return Response{}, ErrNoKey
 	}
 	msgs := turnsToOpenAI(system, turns)
@@ -580,7 +584,7 @@ func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn
 			continue
 		}
 		if !retryable(err) {
-			break
+			return Response{}, err
 		}
 	}
 	return Response{}, lastErr
@@ -600,7 +604,9 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []o
 		return Response{}, err
 	}
 	httpReq.Header.Set("content-type", "application/json")
-	httpReq.Header.Set("authorization", "Bearer "+c.apiKey)
+	if c.apiKey != "" {
+		httpReq.Header.Set("authorization", "Bearer "+c.apiKey)
+	}
 
 	resp, err := c.hc.Do(httpReq)
 	if err != nil {
@@ -777,7 +783,9 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 		return Response{}, err
 	}
 	httpReq.Header.Set("content-type", "application/json")
-	httpReq.Header.Set("x-api-key", c.apiKey)
+	if c.apiKey != "" {
+		httpReq.Header.Set("x-api-key", c.apiKey)
+	}
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
 
 	resp, err := c.hc.Do(httpReq)
@@ -923,9 +931,13 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 		return nil, err
 	}
 	if bearer {
-		req.Header.Set("authorization", "Bearer "+c.apiKey)
+		if c.apiKey != "" {
+			req.Header.Set("authorization", "Bearer "+c.apiKey)
+		}
 	} else {
-		req.Header.Set("x-api-key", c.apiKey)
+		if c.apiKey != "" {
+			req.Header.Set("x-api-key", c.apiKey)
+		}
 		req.Header.Set("anthropic-version", anthropicVersion)
 	}
 
