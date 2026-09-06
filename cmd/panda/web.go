@@ -36,6 +36,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/updater"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"github.com/Xustalis/OpenPanda/webui/panel"
@@ -195,7 +196,9 @@ func runWeb(args []string) {
 	updateMgr.StartAutoCheck(ctx, 0)
 
 	srv := &http.Server{
-		Addr: addr,
+		Addr:              addr,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 		Handler: panel.New(panel.Deps{
 			Store:        store,
 			EngineHolder: engines,
@@ -204,14 +207,18 @@ func runWeb(args []string) {
 			ProjectStore: projectstore.NewStore(db),
 			Sessions:     sessions.NewStore(filepath.Join(filepath.Dir(cfg.Storage.DBPath), "sessions")),
 			Worktrees:    openWorktreesBestEffort(cfg.Storage.WorkPath),
-			SkillStore:   skills.NewStore(cfg.Storage.SkillsPath),
-			Reminders:    reminderStore,
-			Push:         pushSvc,
-			Cfg:          cfg,
-			ConfigPath:   resolvedConfigPath(*configPath),
-			CardPath:     *cardPath,
-			Token:        token,
-			Updater:      updateMgr,
+			SkillStore: func() *skills.Store {
+				st := skills.NewStore(cfg.Storage.SkillsPath)
+				_ = st.EnsureBuiltins()
+				return st
+			}(),
+			Reminders:  reminderStore,
+			Push:       pushSvc,
+			Cfg:        cfg,
+			ConfigPath: resolvedConfigPath(*configPath),
+			CardPath:   *cardPath,
+			Token:      token,
+			Updater:    updateMgr,
 		}),
 		ErrorLog: stdlog.New(logWriter, "", 0),
 	}
@@ -243,7 +250,10 @@ func runWeb(args []string) {
 
 	<-ctx.Done()
 	fmt.Println(i18n.T(loc, "web.stopped"))
-	_ = srv.Shutdown(context.Background())
+	sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer scancel()
+	_ = srv.Shutdown(sctx)
+	_ = storage.Checkpoint(sctx, db, "TRUNCATE")
 }
 
 // listenPanel binds the panel address, falling forward through a few nearby

@@ -79,21 +79,40 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (token) headers.Authorization = `Bearer ${token}`
   if (body !== undefined) headers['Content-Type'] = 'application/json'
 
-  const res = await fetch(path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(60_000),
-  })
-  if (!res.ok) {
-    if (res.status === 401) {
-      clearToken()
-      unauthorizedListeners.forEach((fn) => fn())
+  const isGet = method.toUpperCase() === 'GET'
+  const maxAttempts = isGet ? 3 : 1
+  let lastErr: unknown
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch(path, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(60_000),
+      })
+      if (!res.ok) {
+        if (res.status === 401) {
+          clearToken()
+          unauthorizedListeners.forEach((fn) => fn())
+        }
+        const text = await res.text().catch(() => '')
+        throw new ApiError(res.status, text || res.statusText)
+      }
+      return (await res.json()) as T
+    } catch (err) {
+      lastErr = err
+      // Fail fast on client errors (4xx) or non-retryable requests
+      if (err instanceof ApiError && err.status < 500) {
+        throw err
+      }
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 200))
+        continue
+      }
     }
-    const text = await res.text().catch(() => '')
-    throw new ApiError(res.status, text || res.statusText)
   }
-  return (await res.json()) as T
+  throw lastErr
 }
 
 // ---- Wire types (mirror webui/panel JSON) ----
@@ -449,10 +468,21 @@ export interface ProjectList {
   active: string
 }
 
+export interface HealthStatus {
+  status: 'ok' | 'degraded'
+  database: string
+  uptime: string
+  version: string
+  timestamp: string
+}
 
 // ---- Endpoints ----
 
 export const api = {
+  health(): Promise<HealthStatus> {
+    return request('GET', '/api/healthz')
+  },
+
   tasks(params?: { state?: string; project?: string }): Promise<Task[]> {
     const q = new URLSearchParams()
     if (params?.state) q.set('state', params.state)
@@ -723,6 +753,10 @@ export const api = {
     return request('PATCH', `/api/sessions/${encodeURIComponent(id)}`, body)
   },
 
+  cancelSession(id: string): Promise<{ id: string; cancelled: boolean }> {
+    return request('POST', `/api/sessions/${encodeURIComponent(id)}/cancel`)
+  },
+
   chooseDirectory(default_path?: string): Promise<ChooseDirectoryResult> {
     return request('POST', '/api/dialog/choose-directory', default_path ? { default_path } : {})
   },
@@ -850,6 +884,27 @@ export const api = {
   rejectSkill(name: string): Promise<void> {
     return request('POST', '/api/skills/reject', { name })
   },
+
+  resetSkill(name: string): Promise<{ ok: boolean; name: string }> {
+    return request('POST', '/api/skills/reset', { name })
+  },
+
+  hubSkills(query?: string): Promise<HubSkillEntry[]> {
+    const p = query ? `?q=${encodeURIComponent(query)}` : ''
+    return request('GET', `/api/skills/hub${p}`)
+  },
+
+  installHubSkill(name: string, scope?: string, force?: boolean): Promise<{ name: string; status: string }> {
+    return request('POST', '/api/skills/hub/install', { name, scope, force })
+  },
+
+  importSkill(req: ImportSkillRequest): Promise<{ names?: string[]; name?: string; count: number; status: string }> {
+    return request('POST', '/api/skills/import', req)
+  },
+
+  installRecommendedSkills(): Promise<{ count: number; names: string[]; status: string }> {
+    return request('POST', '/api/skills/hub/install-recommended')
+  },
 }
 
 export interface SessionDiff {
@@ -887,6 +942,32 @@ export interface SkillEntry {
   key?: string
   status: string
   use_count: number
+  builtin?: boolean
+}
+
+export interface HubSkillEntry {
+  name: string
+  description: string
+  scope: string
+  author?: string
+  version?: string
+  tags?: string[]
+  url?: string
+  doc_url?: string
+  recommended?: boolean
+  alias?: string
+  installed: boolean
+}
+
+export interface ImportSkillRequest {
+  source?: string
+  content?: string
+  name?: string
+  scope?: string
+  project?: string
+  device?: string
+  pending?: boolean
+  force?: boolean
 }
 
 export interface ModelSettings {

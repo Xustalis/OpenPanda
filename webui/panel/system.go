@@ -1,6 +1,8 @@
 package panel
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -8,6 +10,49 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/security"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 )
+
+var panelStartTime = time.Now()
+
+type healthJSON struct {
+	Status    string `json:"status"` // "ok" or "degraded"
+	Database  string `json:"database"`
+	Uptime    string `json:"uptime"`
+	Version   string `json:"version"`
+	Timestamp string `json:"timestamp"`
+}
+
+// healthz serves GET /healthz and GET /api/healthz — unauthenticated liveness and readiness probe.
+func (h *handler) healthz(w http.ResponseWriter, r *http.Request) {
+	dbStatus := "ok"
+	healthy := true
+	if h.db != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := h.db.PingContext(ctx); err != nil {
+			dbStatus = "error: " + err.Error()
+			healthy = false
+		}
+	} else {
+		dbStatus = "not configured"
+	}
+
+	status := "ok"
+	statusCode := http.StatusOK
+	if !healthy {
+		status = "degraded"
+		statusCode = http.StatusServiceUnavailable
+	}
+
+	w.Header().Set("content-type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(healthJSON{
+		Status:    status,
+		Database:  dbStatus,
+		Uptime:    time.Since(panelStartTime).Truncate(time.Second).String(),
+		Version:   versionpkg.Version,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+}
 
 // getVersion serves GET /api/version — the web equivalent of `panda version`.
 func (h *handler) getVersion(w http.ResponseWriter, r *http.Request) {

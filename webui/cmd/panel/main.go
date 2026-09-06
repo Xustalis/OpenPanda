@@ -144,7 +144,9 @@ func main() {
 	go reminderScan.Run(ctx)
 
 	srv := &http.Server{
-		Addr: cfg.Network.PanelAddr,
+		Addr:              cfg.Network.PanelAddr,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 		Handler: panel.New(panel.Deps{
 			Store:  store,
 			Engine: engine,
@@ -174,7 +176,10 @@ func main() {
 	select {
 	case <-ctx.Done():
 		logger.Info("openpanda webui sidecar shutting down")
-		_ = srv.Shutdown(context.Background())
+		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer scancel()
+		_ = srv.Shutdown(sctx)
+		_ = storage.Checkpoint(sctx, db, "TRUNCATE")
 	case err := <-errCh:
 		if err != nil && err != http.ErrServerClosed {
 			fatal("panel server", err)

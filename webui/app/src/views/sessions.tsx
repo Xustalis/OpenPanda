@@ -23,6 +23,7 @@ import { isLiveSession } from '../components/session-guard'
 import DecisionOrbit from '../components/orbit'
 import FleetTopologyCard from '../components/fleet'
 import { EventTimeline } from '../components/event-timeline'
+import { acquireKeepAlive } from '../utils/keepalive'
 
 /** Grow the composer with its content up to a ceiling, then scroll inside.
  *  A fixed two-row box makes pasting a paragraph feel like typing into a
@@ -215,6 +216,33 @@ export function SessionsView({
       .finally(() => setLoading(false))
   }, [activeId])
 
+  // When the window regains focus or tab becomes visible, reconcile the active thread
+  // in case the server completed a background turn while the tab was hidden or blurred.
+  useEffect(() => {
+    const onWake = () => {
+      if (!activeId || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return
+      api
+        .session(activeId)
+        .then((s) => {
+          if (activeIdRef.current !== activeId) return
+          const turns = s.turns ?? []
+          const last = turns[turns.length - 1]
+          if (last?.role === 'assistant') {
+            setSession(s)
+            setMsgs(turns.map((turn, i) => ({ ...turn, k: `srv-${i}` })))
+            setBusy(false)
+          }
+        })
+        .catch(() => {})
+    }
+    addEventListener('visibilitychange', onWake)
+    addEventListener('focus', onWake)
+    return () => {
+      removeEventListener('visibilitychange', onWake)
+      removeEventListener('focus', onWake)
+    }
+  }, [activeId])
+
   // Unmount: nothing should keep streaming into a dead pane.
   useEffect(() => () => inflight.current?.abort(), [])
 
@@ -316,6 +344,10 @@ export function SessionsView({
   /** Abort the in-flight reply and cancel any active task linked to the thread. */
   function stop() {
     inflight.current?.abort()
+    const targetSid = inflightSid.current || activeId
+    if (targetSid) {
+      api.cancelSession(targetSid).catch(() => {})
+    }
     const runningTask = msgs
       .slice()
       .reverse()
@@ -332,6 +364,8 @@ export function SessionsView({
     let id = activeId
     const ctrl = new AbortController()
     inflight.current = ctrl
+    const keepAlive = acquireKeepAlive()
+    let patch: (fn: (m: ChatMsg) => ChatMsg) => void = () => {}
     try {
       // No thread yet: create one titled after the first prompt.
       if (!id) {
@@ -370,7 +404,7 @@ export function SessionsView({
       // the stream can leave a stale message at the tail; patching the tail
       // blindly used to write replies into the user's own message. The
       // session guard rides along: a backgrounded reply patches nothing.
-      const patch = (fn: (m: ChatMsg) => ChatMsg) => {
+      patch = (fn: (m: ChatMsg) => ChatMsg) => {
         if (!live()) return
         setMsgs((ms) => patchStreaming(ms, fn))
       }
@@ -404,17 +438,42 @@ export function SessionsView({
             })),
           )
         } else {
-          const message = err instanceof Error ? err.message : String(err)
-          setMsgs((ms) => [
-            ...ms.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
-            { role: 'assistant', kind: 'error', text: `⚠ ${message}`, k: localMsgId() },
-          ])
+          // If the stream dropped unexpectedly (e.g. socket idle reset or network hiccup),
+          // the server-side turn is decoupled and keeps running to completion.
+          // Give it a brief window to reconcile the completed turn before reporting failure.
+          let resolved = false
+          if (id) {
+            patch((m) => ({ ...m, status: t('sessions.syncing') }))
+            for (let attempt = 0; attempt < 8; attempt++) {
+              await new Promise((r) => setTimeout(r, 1500))
+              if (ctrl.signal.aborted || !isLiveSession(id, activeIdRef.current)) break
+              try {
+                const s = await api.session(id)
+                const turns = s.turns ?? []
+                const last = turns[turns.length - 1]
+                if (last && last.role === 'assistant') {
+                  setSession(s)
+                  setMsgs(turns.map((t, i) => ({ ...t, k: `srv-${i}` })))
+                  resolved = true
+                  break
+                }
+              } catch {}
+            }
+          }
+          if (!resolved && isLiveSession(id, activeIdRef.current) && !ctrl.signal.aborted) {
+            const message = err instanceof Error ? err.message : String(err)
+            setMsgs((ms) => [
+              ...ms.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
+              { role: 'assistant', kind: 'error', text: `⚠ ${message}`, k: localMsgId() },
+            ])
+          }
         }
       }
       // Else the user switched threads mid-turn: the pane already belongs to
       // the transcript loader of the new thread, so this reply's failure
       // (or stop) has nowhere to render. The persisted transcript stands.
     } finally {
+      keepAlive.release()
       if (inflight.current === ctrl) {
         inflight.current = null
         inflightSid.current = null
