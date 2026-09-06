@@ -201,7 +201,8 @@ func runRepl(args []string) {
 
 	cwd, _ := os.Getwd()
 	workspaceAllowed := false
-	if *yesFlag || !interactive {
+	isTUI := interactive && stdoutIsTTY() && os.Getenv("PANDA_CLASSIC_REPL") == ""
+	if *yesFlag || !interactive || isTUI {
 		workspaceAllowed = true
 	} else if cwd != "" {
 		fmt.Print(i18n.Tf(detected, "cli.workspace.prompt", "path", cwd))
@@ -256,7 +257,7 @@ func runRepl(args []string) {
 		}
 		if activeProjectName != "" {
 			_ = projStore.SetActive(activeProjectName)
-			if interactive && !*yesFlag {
+			if interactive && !*yesFlag && !isTUI {
 				fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.Tf(detected, "cli.workspace.accepted", "path", cwd, "name", activeProjectName)))
 			}
 		}
@@ -331,7 +332,10 @@ func runRepl(args []string) {
 	if shouldUseTUI(r) {
 		runTUI(r)
 		if r.webSrv != nil {
-			_ = r.webSrv.Close()
+			sctx, scancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = r.webSrv.Shutdown(sctx)
+			scancel()
+			r.webSrv = nil
 		}
 		return
 	}
@@ -390,7 +394,10 @@ func runRepl(args []string) {
 		r.term.restore()
 	}
 	if r.webSrv != nil {
-		_ = r.webSrv.Close()
+		sctx, scancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = r.webSrv.Shutdown(sctx)
+		scancel()
+		r.webSrv = nil
 	}
 }
 
@@ -1584,14 +1591,18 @@ func (r *repl) cmdWeb(arg string) {
 		ProjectStore: r.projStore,
 		Sessions:     r.sessionsSt,
 		Worktrees:    r.worktrees,
-		SkillStore:   skills.NewStore(r.cfg.Storage.SkillsPath),
-		Reminders:    reminders.NewStore(r.db),
-		Push:         r.push,
-		Cfg:          r.cfg,
-		ConfigPath:   r.configPath,
-		CardPath:     r.cardPath,
-		Token:        token,
-		Updater:      updateMgr,
+		SkillStore: func() *skills.Store {
+			st := skills.NewStore(r.cfg.Storage.SkillsPath)
+			_ = st.EnsureBuiltins()
+			return st
+		}(),
+		Reminders:  reminders.NewStore(r.db),
+		Push:       r.push,
+		Cfg:        r.cfg,
+		ConfigPath: r.configPath,
+		CardPath:   r.cardPath,
+		Token:      token,
+		Updater:    updateMgr,
 	})
 	logDir := filepath.Join(cliStateDir(), "logs")
 	_ = os.MkdirAll(logDir, 0o755)
@@ -1601,9 +1612,11 @@ func (r *repl) cmdWeb(arg string) {
 		logWriter = lf
 	}
 	srv := &http.Server{
-		Addr:     addr,
-		Handler:  handler,
-		ErrorLog: stdlog.New(logWriter, "", 0),
+		Addr:              addr,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		Handler:           handler,
+		ErrorLog:          stdlog.New(logWriter, "", 0),
 	}
 	// Bind synchronously so a taken port surfaces as an error, not a silent
 	// goroutine death. A taken port falls forward to a nearby one instead of

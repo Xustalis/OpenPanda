@@ -8,6 +8,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -24,10 +26,17 @@ func (m tuiModel) View() string {
 	if m.quitting || m.mode == modeExec {
 		return ""
 	}
-	// The leading blank line is the same breathing room printBlock gives every
-	// committed block, so the live region sits in the transcript's rhythm rather
-	// than butting against the answer above it.
 	switch m.mode {
+	case modeSplash:
+		return m.splashView()
+	case modeList:
+		return m.listView()
+	case modeModelPanel:
+		return m.modelPanelView()
+	case modeModelWizard:
+		return m.modelWizardView()
+	case modeOnboarding:
+		return m.onboardingView()
 	case modeAsking:
 		// Render live region (task progress card or streaming answer + spinner)
 		// followed immediately by the interactive input box so the user can type steering
@@ -46,6 +55,242 @@ func (m tuiModel) View() string {
 	default:
 		return m.inputView()
 	}
+}
+
+// splashView renders the centered full-screen startup overlay.
+func (m tuiModel) splashView() string {
+	w := m.width
+	h := m.height
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 24
+	}
+
+	var blockLines []string
+	if w >= 76 {
+		for _, line := range figlet("OpenPanda") {
+			blockLines = append(blockLines, m.th.accent.Render(line))
+		}
+	} else {
+		blockLines = append(blockLines, m.th.accent.Render("=== OpenPanda ==="))
+	}
+	blockLines = append(blockLines, "")
+	blockLines = append(blockLines, m.th.heading.Render("  v"+version))
+
+	workPath := ""
+	if m.r != nil && m.r.cfg != nil && m.r.cfg.Storage.WorkPath != "" {
+		workPath = m.r.cfg.Storage.WorkPath
+	} else {
+		workPath, _ = os.Getwd()
+	}
+	dirLabel := "  工作目录: " + workPath
+	blockLines = append(blockLines, m.th.muted.Render(cliui.Truncate(dirLabel, max(20, w-8), m.th.unicode)))
+
+	centerContent := strings.Join(blockLines, "\n")
+	bottomPrompt := m.th.muted.Render("Enter 开始 · Q 退出")
+
+	centerRendered := lipgloss.PlaceHorizontal(w, lipgloss.Center, centerContent)
+	centerLines := strings.Split(centerRendered, "\n")
+
+	padTop := max(0, (h-len(centerLines)-3)/2)
+	var out []string
+	for i := 0; i < padTop; i++ {
+		out = append(out, "")
+	}
+	out = append(out, centerLines...)
+	for len(out) < h-2 {
+		out = append(out, "")
+	}
+	out = append(out, lipgloss.PlaceHorizontal(w, lipgloss.Center, bottomPrompt))
+	for len(out) < h {
+		out = append(out, "")
+	}
+	return strings.Join(out, "\n")
+}
+
+// listView renders the full-screen selection list for /sessions, /projects, /resume.
+func (m tuiModel) listView() string {
+	return m.selectionList.Render(m.th, m.width, m.height)
+}
+
+// modelPanelView renders the boxed model management panel.
+func (m tuiModel) modelPanelView() string {
+	return m.selectionList.Render(m.th, m.width, m.height)
+}
+
+// modelWizardView renders the step-by-step model setup guide.
+func (m tuiModel) modelWizardView() string {
+	w := m.width
+	h := m.height
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 24
+	}
+
+	if m.wizardStep == wizardStepProvider {
+		return m.selectionList.Render(m.th, w, h)
+	}
+
+	var lines []string
+	provLabel := m.wizardProvider
+	if p, ok := providers.Lookup(m.wizardProvider); ok {
+		provLabel = p.Label
+	}
+
+	lines = append(lines, m.th.heading.Render(fmt.Sprintf("添加模型 - %s", provLabel)))
+	lines = append(lines, "")
+
+	if m.wizardStep == wizardStepAPIKey {
+		lines = append(lines, "请输入 API Key:")
+		inputDisplay := m.wizardInput
+		lines = append(lines, m.th.accent.Render("> ")+inputDisplay+m.th.accent.Render("█"))
+		lines = append(lines, "")
+		lines = append(lines, m.th.muted.Render("Enter 确认 · Esc 返回"))
+	} else if m.wizardStep == wizardStepModelName {
+		defModel := ""
+		if p, ok := providers.Lookup(m.wizardProvider); ok {
+			defModel = p.DefaultModel
+		}
+		prompt := "请输入模型名称:"
+		if defModel != "" {
+			prompt = fmt.Sprintf("请输入模型名称 (默认: %s):", defModel)
+		}
+		lines = append(lines, prompt)
+		inputDisplay := m.wizardInput
+		lines = append(lines, m.th.accent.Render("> ")+inputDisplay+m.th.accent.Render("█"))
+		lines = append(lines, "")
+		lines = append(lines, m.th.muted.Render("Enter 确认 · Esc 返回"))
+	}
+
+	content := strings.Join(lines, "\n")
+	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, content)
+}
+
+// onboardingView renders the initial first-run onboarding steps.
+func (m tuiModel) onboardingView() string {
+	w := m.width
+	h := m.height
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 24
+	}
+
+	switch m.onboardingStep {
+	case onboardingStepLanguage:
+		return m.selectionList.Render(m.th, w, h)
+	case onboardingStepTerms:
+		return m.onboardingTermsView(w, h)
+	case onboardingStepApproval:
+		return m.selectionList.Render(m.th, w, h)
+	case onboardingStepModelChoice:
+		return m.selectionList.Render(m.th, w, h)
+	case onboardingStepModelWizard:
+		return m.modelWizardView()
+	default:
+		return m.selectionList.Render(m.th, w, h)
+	}
+}
+
+// onboardingTermsView renders the rich terms of service & license agreement card.
+func (m tuiModel) onboardingTermsView(w, h int) string {
+	boxWidth := min(max(50, w-4), 86)
+
+	var lines []string
+	isZh := m.loc == i18n.ChineseSimp
+
+	if isZh {
+		lines = append(lines, m.th.heading.Render("⚖️  OpenPanda 开源许可与服务条款协议"))
+		lines = append(lines, m.th.muted.Render(strings.Repeat("─", boxWidth-4)))
+		lines = append(lines, "")
+		lines = append(lines, m.th.accent.Bold(true).Render("1. MIT 开源许可证声明 (MIT Open Source License)"))
+		lines = append(lines, "   OpenPanda 遵循 MIT 协议开源发布。您拥有完全且自由的权利在个人、")
+		lines = append(lines, "   学术或商业项目中运行、复制、修改、分发及二次开发本软件。")
+		lines = append(lines, "")
+		lines = append(lines, m.th.accent.Bold(true).Render("2. 本地优先与数据自治原则 (Local-First & Privacy Autonomy)"))
+		lines = append(lines, "   开发者的隐私与数据主权是我们的根本基石。OpenPanda 恪守本地优先原则，")
+		lines = append(lines, "   您的源代码、工作区文件、对话历史与 API 密钥均严格保存于本地设备。")
+		lines = append(lines, "   绝无任何未经授权的遥测、用户追踪或窃取私有资产的代码逻辑。")
+		lines = append(lines, "")
+		lines = append(lines, m.th.accent.Bold(true).Render("3. AI 生成内容免责声明 (AI Generation Disclaimer)"))
+		lines = append(lines, "   大语言模型生成的所有代码变更、终端命令及分析均基于概率生成，")
+		lines = append(lines, "   可能包含逻辑缺陷、幻觉或安全隐患。在应用于生产环境或关键系统前，")
+		lines = append(lines, "   请务必进行充分的人工审查与测试验证。运行生成结果的一切风险由使用者承担。")
+		lines = append(lines, "")
+		lines = append(lines, m.th.accent.Bold(true).Render("4. 命令执行与系统安全须知 (Execution & System Safety)"))
+		lines = append(lines, "   OpenPanda 具备通过终端执行系统命令及修改磁盘文件的能力。虽然系统提供")
+		lines = append(lines, "   多层级确认机制，在执行不可逆的破坏性命令或修改前，请务必审慎核验。")
+		lines = append(lines, "")
+		lines = append(lines, m.th.muted.Render(strings.Repeat("─", boxWidth-4)))
+
+		// Options
+		var optAgree, optDecline string
+		if m.termsCursor == 0 {
+			optAgree = m.th.accent.Bold(true).Render("> [Y] 同意并继续 (Agree and Continue)")
+			optDecline = m.th.muted.Render("  [N] 拒绝并退出 (Decline and Exit)")
+		} else {
+			optAgree = m.th.muted.Render("  [Y] 同意并继续 (Agree and Continue)")
+			optDecline = m.th.warn.Bold(true).Render("> [N] 拒绝并退出 (Decline and Exit)")
+		}
+		lines = append(lines, fmt.Sprintf("  %s      %s", optAgree, optDecline))
+		lines = append(lines, "")
+		lines = append(lines, m.th.muted.Render("  Y 同意 · N/Esc 拒绝 · ↑↓/←→ 选择 · Enter 确认"))
+	} else {
+		lines = append(lines, m.th.heading.Render("⚖️  OpenPanda Terms of Service & License Agreement"))
+		lines = append(lines, m.th.muted.Render(strings.Repeat("─", boxWidth-4)))
+		lines = append(lines, "")
+		lines = append(lines, m.th.accent.Bold(true).Render("1. MIT Open Source License"))
+		lines = append(lines, "   OpenPanda is free software licensed under the MIT License. You have")
+		lines = append(lines, "   full rights to run, modify, distribute, and build on it for personal,")
+		lines = append(lines, "   academic, or commercial use without royalty fees.")
+		lines = append(lines, "")
+		lines = append(lines, m.th.accent.Bold(true).Render("2. Local-First Architecture & Privacy Autonomy"))
+		lines = append(lines, "   Your privacy and source code confidentiality are foundational. OpenPanda")
+		lines = append(lines, "   operates strictly locally. Your source code, workspace contexts, chat")
+		lines = append(lines, "   history, and API credentials remain on your device with no unauthorized")
+		lines = append(lines, "   telemetry or data exfiltration.")
+		lines = append(lines, "")
+		lines = append(lines, m.th.accent.Bold(true).Render("3. AI Generation Advisory & Risk Disclaimer"))
+		lines = append(lines, "   All code edits, shell commands, and suggestions are probabilistically")
+		lines = append(lines, "   generated by AI models and may contain hallucinations, bugs, or flaws.")
+		lines = append(lines, "   Always inspect and test generated actions before running them in")
+		lines = append(lines, "   production. You assume full responsibility for running AI suggestions.")
+		lines = append(lines, "")
+		lines = append(lines, m.th.accent.Bold(true).Render("4. System Execution & Operational Safety"))
+		lines = append(lines, "   OpenPanda has capabilities to execute terminal commands and modify files.")
+		lines = append(lines, "   While approval guardrails are provided, always exercise discretion and")
+		lines = append(lines, "   review destructive operations (such as file deletion or system calls).")
+		lines = append(lines, "")
+		lines = append(lines, m.th.muted.Render(strings.Repeat("─", boxWidth-4)))
+
+		// Options
+		var optAgree, optDecline string
+		if m.termsCursor == 0 {
+			optAgree = m.th.accent.Bold(true).Render("> [Y] Agree and Continue")
+			optDecline = m.th.muted.Render("  [N] Decline and Exit")
+		} else {
+			optAgree = m.th.muted.Render("  [Y] Agree and Continue")
+			optDecline = m.th.warn.Bold(true).Render("> [N] Decline and Exit")
+		}
+		lines = append(lines, fmt.Sprintf("  %s      %s", optAgree, optDecline))
+		lines = append(lines, "")
+		lines = append(lines, m.th.muted.Render("  Y Agree · N/Esc Decline · ↑↓/←→ Select · Enter Confirm"))
+	}
+
+	cardContent := strings.Join(lines, "\n")
+	boxed := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("35")).
+		Padding(0, 1).
+		Width(boxWidth).
+		Render(cardContent)
+
+	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, boxed)
 }
 
 // liveRegion is what the in-flight turn shows: the streaming answer once prose

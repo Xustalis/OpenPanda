@@ -18,6 +18,12 @@ const (
 	Japanese    Locale = "ja"
 	Spanish     Locale = "es"
 	German      Locale = "de"
+
+	LocaleEn   = English
+	LocaleZhCN = ChineseSimp
+	LocaleJa   = Japanese
+	LocaleEs   = Spanish
+	LocaleDe   = German
 )
 
 // Locales lists the supported languages in display order.

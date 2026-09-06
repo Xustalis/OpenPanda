@@ -28,6 +28,7 @@ type theme struct {
 	color   bool
 	unicode bool
 	loc     i18n.Locale
+	border  lipgloss.TerminalColor
 
 	accent          lipgloss.Style // brand green, for the wordmark and active accents
 	heading         lipgloss.Style // bold accent section titles
@@ -104,6 +105,9 @@ func newTheme(loc i18n.Locale) theme {
 		t.inputBoxRunning = t.inputBoxRunning.BorderForeground(lipgloss.Color("#E5C07B"))
 		t.welcome = t.welcome.BorderForeground(brandGreen)
 		t.approval = t.approval.BorderForeground(lipgloss.Color("3"))
+		t.border = lipgloss.Color("238")
+	} else {
+		t.border = lipgloss.NoColor{}
 	}
 	return t
 }

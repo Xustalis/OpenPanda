@@ -21,7 +21,9 @@ import (
 func newTestTUI(t *testing.T) tuiModel {
 	t.Helper()
 	r := &repl{loc: i18n.Locale("en"), cfg: &config.Config{}, interactive: true}
-	return newTUIModel(r)
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	return m
 }
 
 // step runs one Update and returns the concrete model, discarding the command —

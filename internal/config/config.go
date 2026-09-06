@@ -35,13 +35,21 @@ type Config struct {
 	Approval  ApprovalConfig  `yaml:"approval"`
 	Timeouts  TimeoutsConfig  `yaml:"timeouts"`
 	UI        UIConfig        `yaml:"ui"`
+	Skills    SkillsConfig    `yaml:"skills"`
+}
+
+// SkillsConfig controls procedural memory and skills hub settings.
+type SkillsConfig struct {
+	HubURL string `yaml:"hub_url"`
 }
 
 // UIConfig holds front-end preferences. Locale is the language /lang last
 // switched to (en | zh-CN | ja | es | de); empty means "detect from the
 // environment", which keeps a fresh install following the terminal's LANG.
 type UIConfig struct {
-	Locale string `yaml:"locale"`
+	Locale        string `yaml:"locale"`
+	TermsAccepted bool   `yaml:"terms_accepted,omitempty"`
+	Onboarded     bool   `yaml:"onboarded,omitempty"`
 }
 
 // Injection model strategies (injection.model).
@@ -147,8 +155,10 @@ type ApprovalConfig struct {
 // on-request when unset.
 func (a ApprovalConfig) NormalizedMode() string {
 	switch a.Mode {
-	case ApprovalModeAlways, ApprovalModeNever:
-		return a.Mode
+	case ApprovalModeAlways, "strict":
+		return ApprovalModeAlways
+	case ApprovalModeNever, "auto":
+		return ApprovalModeNever
 	default:
 		return ApprovalModeOnRequest
 	}
@@ -299,6 +309,7 @@ type ModelConfig struct {
 	Model         string `yaml:"model"`                    // e.g. deepseek-chat | gpt-4o-mini — fully user-defined
 	MaxTokens     int    `yaml:"max_tokens"`               // completion cap; 0 = provider/entry default
 	ContextWindow int    `yaml:"context_window,omitempty"` // advertised context length; 0 = unknown
+	NoAuth        bool   `yaml:"no_auth,omitempty"`        // true for local models that need no API key
 }
 
 // NormalizedAPIType returns the validated api type, defaulting to Anthropic.
@@ -497,7 +508,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: injection.model %q is invalid (want auto, always, or never)", c.Injection.Model)
 	}
 	switch c.Approval.Mode {
-	case "", ApprovalModeAlways, ApprovalModeOnRequest, ApprovalModeNever:
+	case "", ApprovalModeAlways, ApprovalModeOnRequest, ApprovalModeNever, "prompt", "strict", "auto":
 	default:
 		return fmt.Errorf("config: approval.mode %q is invalid (want always, on-request, or never)", c.Approval.Mode)
 	}
@@ -530,7 +541,14 @@ func (c *Config) normalize() {
 	if c.Injection.Model == "" {
 		c.Injection.Model = InjectionModelAuto
 	}
-	if c.Approval.Mode == "" {
+	switch c.Approval.Mode {
+	case "prompt":
+		c.Approval.Mode = ApprovalModeOnRequest
+	case "strict":
+		c.Approval.Mode = ApprovalModeAlways
+	case "auto":
+		c.Approval.Mode = ApprovalModeNever
+	case "":
 		c.Approval.Mode = ApprovalModeOnRequest
 	}
 	if c.Memory.Limits.User <= 0 {
@@ -886,6 +904,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("OPENPANDA_SKILLS_PATH"); v != "" {
 		c.Storage.SkillsPath = v
+	}
+	if v := os.Getenv("OPENPANDA_SKILLS_HUB_URL"); v != "" {
+		c.Skills.HubURL = v
 	}
 	if v := os.Getenv("OPENPANDA_WORK_PATH"); v != "" {
 		c.Storage.WorkPath = v
