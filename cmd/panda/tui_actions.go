@@ -252,13 +252,38 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		m.mode = modeIdle
 		switch m.listKind {
-		case listSessions:
+		case listSessions, listResume:
 			if m.r != nil {
 				m.r.activeSess = item.ID
+				if m.r.sessionsSt != nil {
+					if sess, err := m.r.sessionsSt.Get(item.ID); err == nil && len(sess.Turns) > 0 {
+						// Load turns into convo
+						var convo []entry.Turn
+						for _, t := range sess.Turns {
+							convo = append(convo, entry.Turn{Role: t.Role, Content: t.Text})
+						}
+						m.r.convo = convo
+						if m.chatHistory != nil {
+							m.chatHistory.blocks = nil
+							for _, t := range sess.Turns {
+								switch t.Role {
+								case "user":
+									m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: t.Text})
+								case "assistant":
+									m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockAnswer, body: t.Text})
+								}
+							}
+						}
+					}
+				}
+			}
+			actionLabel := "已切换到会话"
+			if m.listKind == listResume {
+				actionLabel = "已恢复会话"
 			}
 			note := block{
 				kind: blockNote,
-				body: fmt.Sprintf("已切换到会话: %s (%s)", shortID(item.ID), item.Snippet),
+				body: fmt.Sprintf("%s: %s (%s)", actionLabel, shortID(item.ID), item.Snippet),
 			}
 			return m, m.printBlock(note)
 
@@ -274,26 +299,6 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			note := block{
 				kind: blockNote,
 				body: fmt.Sprintf("已切换到项目: %s", item.Title),
-			}
-			return m, m.printBlock(note)
-
-		case listResume:
-			if m.r != nil {
-				m.r.activeSess = item.ID
-				if m.r.sessionsSt != nil {
-					if sess, err := m.r.sessionsSt.Get(item.ID); err == nil && len(sess.Turns) > 0 {
-						// Load turns into convo
-						var convo []entry.Turn
-						for _, t := range sess.Turns {
-							convo = append(convo, entry.Turn{Role: t.Role, Content: t.Text})
-						}
-						m.r.convo = convo
-					}
-				}
-			}
-			note := block{
-				kind: blockNote,
-				body: fmt.Sprintf("已恢复会话: %s (%s)", shortID(item.ID), item.Snippet),
 			}
 			return m, m.printBlock(note)
 		}

@@ -449,6 +449,14 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 
 	// Interactive commands rendered in full-screen TUI (Requirement 2, 4, 5)
 	switch {
+	case text == "/clear":
+		if m.chatHistory != nil {
+			m.chatHistory.blocks = nil
+		}
+		if m.r != nil {
+			m.r.convo = nil
+		}
+		return m, nil
 	case text == "/sessions" || strings.HasPrefix(text, "/sessions "):
 		return m.openSessionsList()
 	case text == "/projects" || strings.HasPrefix(text, "/projects "):
@@ -473,6 +481,17 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 						convo = append(convo, entry.Turn{Role: t.Role, Content: t.Text})
 					}
 					m.r.convo = convo
+					if m.chatHistory != nil {
+						m.chatHistory.blocks = nil
+						for _, t := range sess.Turns {
+							switch t.Role {
+							case "user":
+								m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: t.Text})
+							case "assistant":
+								m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockAnswer, body: t.Text})
+							}
+						}
+					}
 				}
 				note := block{kind: blockNote, body: fmt.Sprintf("已恢复会话: %s (%s)", shortID(arg), sess.Title)}
 				return m, m.printBlock(note)

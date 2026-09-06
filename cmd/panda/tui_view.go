@@ -49,12 +49,78 @@ func (m tuiModel) View() string {
 		} else {
 			live = "\n" + m.statusLine()
 		}
-		return live + "\n" + m.inputView()
+		return m.mainChatView(live)
 	case modeApproving:
-		return "\n" + m.approvalCard()
+		return m.mainChatView("\n" + m.approvalCard())
 	default:
-		return m.inputView()
+		return m.mainChatView("")
 	}
+}
+
+// mainChatView renders the full-screen chat interface in AltScreen mode:
+//   - The welcome banner (OpenPanda ASCII art wordmark, version, node/model, workdir, tips)
+//   - Committed conversation history blocks
+//   - In-flight live output (streaming response, reasoning, task progress card, spinner)
+//   - Vertical padding so the input box stays anchored at the bottom of the screen
+//   - Interactive rounded input box and status row
+func (m tuiModel) mainChatView(live string) string {
+	w := m.width
+	h := m.height
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 24
+	}
+
+	inputView := m.inputView()
+	inputLines := strings.Split(inputView, "\n")
+	inputHeight := len(inputLines)
+	availHeight := h - inputHeight
+	if availHeight < 0 {
+		availHeight = 0
+	}
+
+	var contentLines []string
+
+	// 1. Welcome banner at top
+	banner := m.welcome()
+	if banner != "" {
+		contentLines = append(contentLines, strings.Split(banner, "\n")...)
+	}
+
+	// 2. Committed conversation turns
+	if m.chatHistory != nil && len(m.chatHistory.blocks) > 0 {
+		for _, b := range m.chatHistory.blocks {
+			rendered := b.render(m.th, m.textWidth(), m.expandThought)
+			contentLines = append(contentLines, "")
+			contentLines = append(contentLines, strings.Split(rendered, "\n")...)
+		}
+	}
+
+	// 3. In-flight live region (streaming answer, reasoning preview, task progress card, spinner)
+	if strings.TrimSpace(live) != "" {
+		contentLines = append(contentLines, strings.Split(live, "\n")...)
+	}
+
+	// 4. Pad blank lines so inputView stays anchored at the bottom of the screen
+	if len(contentLines) <= availHeight {
+		pad := availHeight - len(contentLines)
+		var out []string
+		out = append(out, contentLines...)
+		for i := 0; i < pad; i++ {
+			out = append(out, "")
+		}
+		out = append(out, inputLines...)
+		return strings.Join(out, "\n")
+	}
+
+	// 5. If content exceeds available height, scroll to show the latest turns above the input box
+	contentLines = contentLines[len(contentLines)-availHeight:]
+	var out []string
+	out = append(out, contentLines...)
+	out = append(out, inputLines...)
+	return strings.Join(out, "\n")
 }
 
 // splashView renders the centered full-screen startup overlay.
@@ -79,14 +145,32 @@ func (m tuiModel) splashView() string {
 	blockLines = append(blockLines, "")
 	blockLines = append(blockLines, m.th.heading.Render("  v"+version))
 
+	model := ""
+	nodeName := ""
 	workPath := ""
-	if m.r != nil && m.r.cfg != nil && m.r.cfg.Storage.WorkPath != "" {
+	if m.r != nil && m.r.cfg != nil {
+		nodeName = m.r.cfg.Node.Name
 		workPath = m.r.cfg.Storage.WorkPath
+		if m.r.cfg.Model.BaseURL != "" {
+			model = m.r.cfg.Model.Model
+			if model == "" {
+				model = m.r.cfg.Model.BaseURL
+			}
+		}
 	} else {
 		workPath, _ = os.Getwd()
 	}
-	dirLabel := "  工作目录: " + workPath
-	blockLines = append(blockLines, m.th.muted.Render(cliui.Truncate(dirLabel, max(20, w-8), m.th.unicode)))
+
+	if nodeName != "" || model != "" {
+		nodeLabel := "  " + m.th.glyph("▪", "#") + " " + i18n.Tf(m.loc, "repl.banner.node", "node", nodeName, "model", model)
+		blockLines = append(blockLines, m.th.muted.Render(cliui.Truncate(nodeLabel, max(20, w-8), m.th.unicode)))
+	}
+
+	dirLabel := "  " + m.th.glyph("▫", "-") + " 工作目录: " + workPath
+	blockLines = append(blockLines, m.th.muted.Render(cliui.TruncateTail(dirLabel, max(20, w-8), m.th.unicode)))
+
+	blockLines = append(blockLines, "")
+	blockLines = append(blockLines, m.th.muted.Render(cliui.Truncate(i18n.T(m.loc, "tui.welcome.tips"), max(20, w-8), m.th.unicode)))
 
 	centerContent := strings.Join(blockLines, "\n")
 	bottomPrompt := m.th.muted.Render("Enter 开始 · Q 退出")
