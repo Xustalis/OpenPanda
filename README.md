@@ -4,7 +4,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
-[![Release: v0.0.8-preview](https://img.shields.io/badge/release-v0.0.8--preview-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
+[![Release: v0.0.8](https://img.shields.io/badge/release-v0.0.8-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
@@ -62,6 +62,7 @@ The project evolves along two tracks:
 
 - **Dual-layer memory** — user preferences (`USER.md`) and project facts (`MEMORY.md`) are strictly separated.
 - **Self-evolving skills** — successful workflows are distilled into `SKILL.md` playbooks that accumulate over time.
+- **Skills Hub & autonomous discovery** — a curated offline catalog (`panda skill hub`), importing from a path, URL, or archive (`panda skill import`), and an assistant that finds and installs the skill a task needs mid-flight.
 - **Traveling context** — delegated tasks carry project memory and a workspace digest to the executing node.
 
 ### Multi-Device Collaboration (Preview)
@@ -72,8 +73,8 @@ The project evolves along two tracks:
 
 ### Interfaces & Runtime
 
-- **Terminal TUI** (Bubble Tea): arrow-key navigation, live progress, mid-turn steering.
-- **Web console**: zero-config kanban, real-time SSE streaming, automatic browser login.
+- **Terminal TUI** (Bubble Tea): full-screen alternate-screen mode with keyboard navigation, first-run onboarding wizard, live progress, mid-turn steering.
+- **Web console**: zero-config kanban, real-time SSE streaming, skills management, session cancellation, automatic browser login.
 - **Scriptable CLI**: `panda ask` drops straight into automation scripts.
 - **Featherweight**: single static Go binary, ~20MB RSS, no external runtime dependencies.
 
@@ -131,6 +132,7 @@ To connect a second device (preview capability): run `panda pair` on device A to
 | `panda queue` | Inspect pending, running, and review tasks (`--watch` for live updates) |
 | `panda approve <id>` | Approve a pending Tier-2 task |
 | `panda project list` | Manage workspace projects and context |
+| `panda skill` | Browse, import, and install workflow skills (Hub, URL, or file) |
 | `panda doctor` | Diagnose PATH, config, adapters, and database health |
 | `panda version` | Print the current version |
 

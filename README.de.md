@@ -6,7 +6,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
-[![Release: v0.0.8-preview](https://img.shields.io/badge/release-v0.0.8--preview-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
+[![Release: v0.0.8](https://img.shields.io/badge/release-v0.0.8-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
@@ -72,11 +72,12 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 ### 4. 🧠 Zweischichtiger Speicher & lernende Fähigkeiten
 - **Strikte Speichertrennung**: Persönliche Präferenzen (`USER.md`) sind strikt vom Projektkontext (`MEMORY.md`) isoliert.
 - **Selbstverbessernde Fähigkeiten**: Erfolgreiche Abläufe werden in `SKILL.md`-Leitfäden gespeichert und mit jeder Nutzung präziser.
+- **Skills Hub & autonome Erkennung**: Ein kuratierter Offline-Katalog (`panda skill hub`), Import aus Pfad, URL oder Archiv (`panda skill import`), und ein Assistent, der den Skill, den eine Aufgabe braucht, während des Laufs selbst findet und installiert.
 - **Projektkontext-Roaming**: Bei der Aufgabenübergabe reisen Projektspeicher und Arbeitsbaum-Zusammenfassungen automatisch mit.
 
 ### 5. 🖥️ Drei einheitliche Schnittstellen
-- **Interaktive Terminal-TUI**: Bubble Tea mit Pfeiltastennavigation, Live-Fortschritt und Richtungswechsel während der Ausführung.
-- **Integrierte Web-Konsole**: Kanban-Board, Echtzeit-SSE-Streaming, responsive mobile Ansicht und automatische Anmeldung.
+- **Interaktive Terminal-TUI**: Bubble Tea mit Vollbild-Alternate-Screen-Modus, Tastaturnavigation, Erststarts-Assistent, Live-Fortschritt und Richtungswechsel während der Ausführung.
+- **Integrierte Web-Konsole**: Kanban-Board, Echtzeit-SSE-Streaming, Skills-Verwaltung, Sitzungsabbruch und automatische Anmeldung.
 - **Skriptfähige CLI**: Schnelle Befehle wie `panda ask` zur nahtlosen Einbindung in eigene Skripte.
 
 ### 6. 🪶 Extrem leichtgewichtig (~20MB Speicher)
@@ -147,6 +148,7 @@ panda init
 | `panda queue` | Wartende, laufende und zu genehmigende Aufgaben anzeigen |
 | `panda approve <id>` | Ausstehende irreversible Stufe-2-Aktion freigeben |
 | `panda project list` | Workspace-Projekte und Kontext verwalten |
+| `panda skill` | Workflow-Fähigkeiten durchsuchen, importieren und installieren (Hub, URL oder Datei) |
 | `panda doctor` | PATH, Konfiguration, Adapter und Datenbank prüfen |
 | `panda version` | Aktuelle Binärversion ausgeben |
 

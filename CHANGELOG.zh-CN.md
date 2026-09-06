@@ -38,6 +38,25 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-09-06
+
+正式版 0.0.8：技能系统学会自我服务——一个离线精选技能中心、随处导入，以及一个会在任务执行中自主发现并安装所需工作流的助手。TUI 成长为带首次运行向导的全屏应用，Web 控制台新增技能管理、会话取消与执行时间线，引擎学会绕开故障模型，而不是随之一起倒下。
+
+### 新增
+
+- **自带离线精选目录的技能中心（Skills Hub）** —— `panda skill hub list|search|info|install`（REPL 中为 `/skill hub …`）可浏览并安装生产级技能；首批内置技能手册随二进制发布、首次使用时初始化，新节点不再空手起步（668ddcd）。
+- **从路径、URL 与压缩包导入技能** —— `panda skill import` 接受本地路径或 URL、单个 markdown 文件或 tar.gz/zip 归档，支持 scope/name/status/force 覆盖；下载上限 10 MiB，frontmatter 校验通过后才落盘（668ddcd）。
+- **自主技能发现与安装（Agent 工具）** —— Ask 引擎可以在任务执行中途搜索技能中心并安装技能，缺工作流的任务自己把自己装备起来，而不是因为缺一步就失败（a5fa093）。
+- **`panda skill` 命令族与 `/skill` REPL 命令** —— `list`、`approve`、`reject`、`reset`、`find`/`discover`、`import`、`hub`、`install`/`add`，支持 JSON 输出便于脚本化（a5fa093、f5b6884）。
+- **Web 控制台技能管理** —— 技能面板可浏览已装技能、搜索技能中心、在浏览器里安装或启停技能，与 CLI 背后是同一套存储（35e282b、f5b6884）。
+- **全屏 TUI 与首次运行引导** —— 终端界面迁入 alternate screen 并支持键盘导航，首次运行向导带着新装节点走完配置，再见到第一个输入提示（ef82d6f）。
+- **模型健康熔断与回退路由** —— 持续失败的模型进入冷却期，引擎把工作改路由到健康备选，而不是对着死掉的端点把整个回合预算打完（7c5c643）。
+- **Web 控制台会话取消** —— 运行中的会话可以从浏览器停止，取消指令与其余控制走同一条命令路径（35e282b）。
+- **控制台 keepalive 重试客户端** —— Web 客户端对掉线连接做退避重试，一次网络抖动不再把界面挂在死流上（35e282b）。
+- **noauth 模型支持** —— 模型注册项可声明端点不接受 `Authorization` 头，覆盖拒绝该头的本地服务（7c5c643）。
+- **任务队列可清空、可删除** —— CLI、API 与 Web 控制台提供同一组动词（d5df3d3）。
+- **控制台：目录选择器与执行事件时间线** —— 工作目录改为浏览器对话框选择而非手敲路径；Agent 命令、文件编辑与工具调用在会话详情页按时间顺序渲染成时间线（291dc76）。
+
 ### 修复
 
 - **Windows 控制台控制处理器启动崩溃** —— `PHANDLER_ROUTINE` 回调声明了 `bool` 返回值，而 `windows.NewCallback` 要求结果必须是指针尺寸（`uintptr`），导致注册它的长驻命令（`panda daemon`、`panda web`）启动即崩溃，报 "compileCallback: expected function with one uintptr-sized result"；回调现在返回 `uintptr`（`1` 已处理 / `0` 未处理）（#2）。
@@ -45,6 +64,15 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **TUI：欢迎横幅从光标处打印** —— 问候语不再把自己垫到高终端的底边，此前它会被压在一整屏空白之下，输入行落在视线之外。
 - **TUI：滚轮归还给终端** —— 程序不再捕获鼠标单元格事件，滚轮、滚动条与 PageUp/PageDown 重新作用于转录自身的回滚区——那是应用永远无法自己滚动的缓冲区。可点击表面保留键盘路径（y/n、Esc/Enter）。
 - **Windows 安装器：开机自启读到真实配置** —— 登录计划任务不再把 `--config`/`--card` 钉死在安装前缀里从未存在的路径上；守护进程按与 LaunchAgent、systemd 单元一致的顺序发现 `panda init` 写入的用户级配置，而不是静默跑在默认值上。
+- **Ask 引擎可在技能路径为空时启动** —— 未配置 `storage.skills_path` 不再破坏引擎初始化；技能存储从空开始即可（3f28486）。
+- **SQLite 开启外键约束** —— 存储层以 `foreign_keys=ON` 打开，引用已删除父行的记录无法再累积（7c5c643）。
+- **TUI：全屏视图保留横幅、提示与聊天** —— alternate screen 重构曾把 ASCII logo、提示行与对话视图落下；三者已回到全屏布局中（e2be53e）。
+
+### 变更
+
+- **欢迎横幅全局统一，REPL 手感更顺** —— 裸 REPL、帮助与错误路径共用同一个 ASCII logo 问候，TUI 视图层同步打磨（0d44ee4）。
+- **TUI：视觉块分离与高对比输入面板** —— 用户输入、助手输出与系统通知占据清晰分离的块，用户提示行在任何主题下都醒目（b0979cc）。
+- **Web 控制台工作流打磨** —— 会话与项目视图围绕工作流架构重做，动作与状态渲染保持一致（291dc76）。
 
 ## [0.0.8-preview] - 2026-09-05
 

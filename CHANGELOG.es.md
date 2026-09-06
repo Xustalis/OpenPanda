@@ -38,6 +38,25 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-09-06
+
+El 0.0.8 oficial: el sistema de habilidades aprende a servirse a sí mismo — un hub curado sin conexión, importación desde cualquier parte, y un asistente que descubre e instala el flujo de trabajo que una tarea necesita mientras se ejecuta. La TUI crece hasta convertirse en una aplicación de pantalla completa con un asistente de primer arranque, la consola web gana gestión de habilidades, cancelación de sesiones y una línea de tiempo de ejecución, y el motor sortea los modelos que fallan en lugar de morir con ellos.
+
+### Añadido
+
+- **Skills Hub con catálogo curado sin conexión** — `panda skill hub list|search|info|install` (y `/skill hub …` en el REPL) navega e instala habilidades de calidad de producción; un primer conjunto de playbooks integrados viaja dentro del binario y se inicializa en el primer uso, así que un nodo recién instalado nunca empieza vacío (668ddcd).
+- **Importación de habilidades desde rutas, URL y archivos** — `panda skill import` acepta una ruta local o una URL, un único markdown o un paquete tar.gz/zip, con sobrescritura de scope/name/status/force; las descargas se limitan a 10 MiB y el frontmatter se valida antes de que nada llegue al disco (668ddcd).
+- **Descubrimiento e instalación autónomos de habilidades como herramientas de agente** — el motor Ask puede buscar en el hub e instalar una habilidad a mitad de tarea, así que el trabajo que necesita un flujo de trabajo se equipa solo en lugar de fallar por no tenerlo (a5fa093).
+- **La familia de comandos `panda skill` y los comandos `/skill` del REPL** — `list`, `approve`, `reject`, `reset`, `find`/`discover`, `import`, `hub` e `install`/`add`, con salida JSON para scripts (a5fa093, f5b6884).
+- **Gestión de habilidades en la consola web** — un panel de habilidades navega por las instaladas, busca en el hub e instala o alterna habilidades desde el navegador, respaldado por el mismo almacén que la CLI (35e282b, f5b6884).
+- **TUI de pantalla completa con onboarding de primer arranque** — la interfaz de terminal se muda a la pantalla alternativa con navegación por teclado, y un asistente de primer arranque acompaña una instalación nueva hasta el primer prompt (ef82d6f).
+- **Cortacircuito de salud de modelos con enrutado de respaldo** — un modelo que falla repetidamente entra en enfriamiento y el motor re-enruta el trabajo hacia un respaldo sano en lugar de martillar un extremo muerto durante todo el presupuesto de rondas (7c5c643).
+- **Cancelación de sesiones en la consola web** — una sesión en ejecución puede detenerse desde el navegador, y la cancelación viaja por la misma ruta de comandos que cualquier otro control (35e282b).
+- **Cliente de reintentos con keepalive para la consola** — el cliente web reintenta las conexiones caídas con retroceso, así que un fallo puntual de red ya no deja la UI atascada en un flujo muerto (35e282b).
+- **Soporte de modelos noauth** — una entrada del registro puede declarar que su extremo no acepta cabecera `Authorization`, cubriendo servidores locales que la rechazan (7c5c643).
+- **Las colas de tareas se pueden vaciar y borrar** — los mismos verbos desde la CLI, la API y la consola web (d5df3d3).
+- **Consola: selector de directorios y línea de tiempo de ejecución** — los directorios de trabajo se eligen desde un diálogo del navegador en vez de escribirse a mano, y los comandos del agente, ediciones de archivos y llamadas a herramientas se dibujan como una línea de tiempo cronológica en la vista de detalle de sesión (291dc76).
+
 ### Corregido
 
 - **Pánico al iniciar por el controlador de consola de Windows** — la retrollamada `PHANDLER_ROUTINE` declaraba un retorno `bool`, que `windows.NewCallback` rechaza (exige un único resultado del tamaño de un puntero), por lo que los comandos de larga vida que la registran (`panda daemon`, `panda web`) caían al arrancar con "compileCallback: expected function with one uintptr-sized result"; la retrollamada ahora devuelve `uintptr` (`1` manejado / `0` no manejado) (#2).
@@ -45,6 +64,15 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **TUI: el banner de bienvenida se imprime en el cursor** — el saludo ya no se rellena hasta el borde inferior en terminales altas, lo que lo dejaba bajo una pantalla de espacio muerto y ponía la fila de entrada fuera de la vista.
 - **TUI: la rueda vuelve a pertenecer al terminal** — el programa ya no captura el movimiento de celdas del ratón; la rueda, la barra de desplazamiento y PageUp/PageDown alcanzan el scrollback propio de la transcripción. Las superficies clicables conservan sus rutas de teclado (y/n, Esc/Enter).
 - **Instalador de Windows: el autoarranque lee la configuración real** — la tarea de inicio de sesión ya no fija `--config`/`--card` en rutas del prefijo que nunca existen allí; el demonio descubre la configuración de usuario escrita por `panda init` (mismo orden que LaunchAgent y systemd).
+- **El motor Ask arranca con una ruta de habilidades vacía** — una configuración sin `storage.skills_path` ya no rompe la inicialización del motor; el almacén de habilidades simplemente empieza vacío (3f28486).
+- **SQLite aplica claves foráneas** — el almacén ahora se abre con `foreign_keys=ON`, así que las filas que referencian padres borrados ya no se acumulan (7c5c643).
+- **TUI: la vista de pantalla alternativa conserva banner, consejos y chat** — la rework de pantalla alternativa había dejado atrás el logo ASCII, la fila de consejos y la vista de conversación; los tres vuelven al diseño de pantalla completa (e2be53e).
+
+### Mejorado
+
+- **Un solo banner de bienvenida en todas partes, con mejor ergonomía del REPL** — el REPL directo, la ayuda y las rutas de error comparten el mismo saludo con logo ASCII, y la capa de vistas de la TUI recibió un pulido equivalente (0d44ee4).
+- **TUI: bloques visuales diferenciados y panel de prompt de alto contraste** — la entrada del usuario, la salida del asistente y los avisos del sistema ocupan bloques claramente separados, y el prompt del usuario destaca en cualquier tema (b0979cc).
+- **Pulido del flujo de trabajo en la consola web** — las vistas de sesiones y proyectos se rehicieron en torno a la arquitectura de flujo de trabajo, con colocación de acciones y renderizado de estados consistentes (291dc76).
 
 ## [0.0.8-preview] - 2026-09-05
 

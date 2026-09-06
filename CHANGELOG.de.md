@@ -38,6 +38,25 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-09-06
+
+Das offizielle 0.0.8: das Skills-System lernt, sich selbst zu bedienen — ein kuratierter Offline-Hub, Import von überallher, und ein Assistent, der den Workflow, den eine Aufgabe braucht, während des Laufs selbst entdeckt und installiert. Die TUI wächst zu einer Vollbild-Anwendung mit Erststarts-Assistent heran, die Web-Konsole bekommt Skills-Verwaltung, Sitzungsabbruch und eine Ausführungs-Timeline, und die Engine routet um fehlernde Modelle herum, statt mit ihnen zu sterben.
+
+### Hinzugefügt
+
+- **Skills Hub mit kuratiertem Offline-Katalog** — `panda skill hub list|search|info|install` (und `/skill hub …` im REPL) durchsucht und installiert produktionsreife Skills; ein erster Satz eingebauter Playbooks reist im Binary mit und initialisiert sich bei der ersten Nutzung, sodass ein frischer Knoten nie leer startet (668ddcd).
+- **Skill-Import aus Pfaden, URLs und Archiven** — `panda skill import` nimmt einen lokalen Pfad oder eine URL, eine einzelne Markdown-Datei oder ein tar.gz/zip-Bündel, mit Overrides für scope/name/status/force; Downloads sind auf 10 MiB begrenzt und das Frontmatter wird geprüft, bevor etwas auf die Platte gelangt (668ddcd).
+- **Autonome Skill-Erkennung und -Installation als Agent-Tools** — die Ask-Engine kann den Hub durchsuchen und mitten in der Aufgabe einen Skill installieren; Arbeit, die einen Workflow braucht, rüstet sich selbst aus, statt an dessen Fehlen zu scheitern (a5fa093).
+- **Die `panda skill`-Befehlsfamilie und `/skill`-REPL-Befehle** — `list`, `approve`, `reject`, `reset`, `find`/`discover`, `import`, `hub` und `install`/`add`, mit JSON-Ausgabe für Skripte (a5fa093, f5b6884).
+- **Skills-Verwaltung in der Web-Konsole** — ein Skills-Panel durchsucht installierte Skills, durchsucht den Hub und installiert oder schaltet Skills aus dem Browser um, gestützt auf denselben Speicher wie die CLI (35e282b, f5b6884).
+- **Vollbild-TUI mit Erststarts-Onboarding** — die Terminal-UI zieht auf den Alternate Screen mit Tastaturnavigation um, und ein Erststarts-Assistent führt eine frische Installation bis zum ersten Prompt durch das Setup (ef82d6f).
+- **Modell-Gesundheits-Schutzschalter mit Fallback-Routing** — ein Modell, das wiederholt scheitert, tritt in eine Abklingzeit, und die Engine routet die Arbeit auf einen gesunden Fallback um, statt den ganzen Rundenbudget auf einen toten Endpunkt zu hämmern (7c5c643).
+- **Sitzungsabbruch in der Web-Konsole** — eine laufende Sitzung lässt sich aus dem Browser stoppen, und der Abbruch reist denselben Befehlspfad wie jede andere Steuerung (35e282b).
+- **Keepalive-Retry-Client für die Konsole** — der Web-Client wiederholt abgebrochene Verbindungen mit Backoff, sodass ein Netzwerkzittern die UI nicht mehr auf einem toten Stream zurücklässt (35e282b).
+- **noauth-Modellunterstützung** — ein Registereintrag kann deklarieren, dass sein Endpunkt keinen `Authorization`-Header annimmt; das deckt lokale Server ab, die ihn zurückweisen (7c5c643).
+- **Task-Warteschlangen lassen sich leeren und löschen** — dieselben Verben aus der CLI, der API und der Web-Konsole (d5df3d3).
+- **Konsole: Verzeichniswähler und Ausführungs-Event-Timeline** — Arbeitsverzeichnisse werden aus einem Browser-Dialog gewählt statt getippt, und Agenten-Befehle, Dateiänderungen und Tool-Aufrufe rendern in der Sitzungsdetailansicht als chronologische Timeline (291dc76).
+
 ### Behoben
 
 - **Windows-Konsolensteuerung: Start-Panik** — die `PHANDLER_ROUTINE`-Callback deklarierte einen `bool`-Rückgabewert, den `windows.NewCallback` zurückweist (erforderlich ist genau ein zeigergroßes Ergebnis), sodass die langlebigen Befehle, die sie registrieren (`panda daemon`, `panda web`), beim Start mit "compileCallback: expected function with one uintptr-sized result" abstürzten; die Callback gibt jetzt `uintptr` zurück (`1` behandelt / `0` nicht behandelt) (#2).
@@ -45,6 +64,15 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **TUI: das Willkommensbanner druckt am Cursor** — die Begrüßung wird nicht mehr bis zur Unterkante hoher Terminals aufgefüllt, wo sie unter einem Bildschirm toten Raums saß und die Eingabezeile außerhalb des Blickfelds lag.
 - **TUI: das Mausrad gehört wieder dem Terminal** — das Programm fängt die Mauszellenbewegung nicht mehr ab; Mausrad, Scrollbar und PageUp/PageDown erreichen den eigenen Scrollback der Transkripts. Klickbare Flächen behalten ihre Tastaturpfade (y/n, Esc/Enter).
 - **Windows-Installer: Autostart liest die echte Konfiguration** — die Logon-Aufgabe pinnt `--config`/`--card` nicht mehr auf Präfix-Pfade, die dort nie existieren; der Daemon entdeckt die von `panda init` geschriebene Benutzerkonfiguration (gleiche Reihenfolge wie LaunchAgent und systemd).
+- **Die Ask-Engine startet mit leerem Skills-Pfad** — eine Konfiguration ohne `storage.skills_path` bricht die Engine-Initialisierung nicht mehr; der Skills-Speicher startet schlicht leer (3f28486).
+- **SQLite erzwingt Fremdschlüssel** — der Speicher öffnet jetzt mit `foreign_keys=ON`, sodass Zeilen, die auf gelöschte Eltern verweisen, sich nicht mehr ansammeln (7c5c643).
+- **TUI: die Alt-Screen-Ansicht behält Banner, Tipps und Chat** — beim Umbau auf den Alternate Screen waren ASCII-Logo, Tipps-Zeile und Unterhaltungsansicht zurückgeblieben; alle drei sind im Vollbild-Layout wieder da (e2be53e).
+
+### Verbessert
+
+- **Ein Willkommensbanner überall, mit geschärfter REPL-Ergonomie** — nacktes REPL, Hilfe und Fehlerpfade teilen sich dieselbe Begrüßung mit ASCII-Logo, und die TUI-Viewschicht bekam den passenden Schliff (0d44ee4).
+- **TUI: unterscheidbare visuelle Blöcke und kontrastreiches Prompt-Panel** — Nutzereingabe, Assistentenausgabe und Systemhinweise belegen klar getrennte Blöcke, und der Nutzerprompt hebt sich in jedem Theme ab (b0979cc).
+- **Web-Konsolen-Workflow-Politur** — die Sitzungs- und Projektansichten wurden um die Workflow-Architektur herum neu gebaut, mit konsistenter Aktionsplatzierung und Zustandsdarstellung (291dc76).
 
 ## [0.0.8-preview] - 2026-09-05
 
