@@ -108,4 +108,14 @@ Second steps`
 	if err != nil || resetCr == nil {
 		t.Fatalf("failed to load code-review after reset: %v", err)
 	}
+
+	// 6. Test skillFind
+	skillFind(cfg, store, []string{"docker"})
+	dk, err := store.Load(skills.ScopeGlobal, "", "docker-compose")
+	if err != nil || dk == nil {
+		t.Fatalf("failed to find and install docker-compose skill: %v", err)
+	}
+	if dk.Status != skills.StatusActive {
+		t.Errorf("status = %s, want active", dk.Status)
+	}
 }
