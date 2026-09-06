@@ -350,10 +350,12 @@ func runDaemon(args []string) {
 	hermes := memory.NewHermesWithLimits(cfg.Storage.MemoryPath, limits)
 	projects := memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, limits)
 	daily := memory.NewDaily(hermes.WarmDir())
+	skillStore := skills.NewStore(cfg.Storage.SkillsPath)
+	_ = skillStore.EnsureBuiltins()
 	coreNode.SetMemoryStores(
 		memory.NewInjector(hermes, projects),
 		daily,
-		skills.NewStore(cfg.Storage.SkillsPath),
+		skillStore,
 	)
 	// The project plane: the daemon is the node that receives delegations, so it
 	// needs both halves — the table (to find a project's tree) and the memory root

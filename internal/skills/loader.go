@@ -20,6 +20,7 @@ type IndexEntry struct {
 	Key         string // project/device name for scoped skills, else ""
 	Status      Status
 	UseCount    int
+	Builtin     bool
 }
 
 // Index scans the skills root and returns lightweight entries, dropping skills
@@ -49,6 +50,7 @@ func (s *Store) Index() ([]IndexEntry, error) {
 			Key:         sk.keyForScope(),
 			Status:      sk.Status,
 			UseCount:    sk.UseCount,
+			Builtin:     sk.Builtin || IsBuiltinSkill(sk.Name),
 		})
 		return nil
 	})
