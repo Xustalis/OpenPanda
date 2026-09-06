@@ -507,6 +507,66 @@ func TestSkillsUnconfigured(t *testing.T) {
 	}
 }
 
+func TestSkillsHubAndImportAPI(t *testing.T) {
+	store := skills.NewStore(t.TempDir())
+	h := New(Deps{Store: newTestStore(t), SkillStore: store, StaticDir: t.TempDir(), Token: testToken})
+
+	// 1. GET /api/skills/hub
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/skills/hub?q=git", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /api/skills/hub code = %d", rr.Code)
+	}
+	var hubList []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &hubList); err != nil {
+		t.Fatalf("unmarshal hub list: %v", err)
+	}
+	if len(hubList) == 0 {
+		t.Fatalf("expected at least 1 matching hub skill for 'git'")
+	}
+	if hubList[0]["installed"].(bool) {
+		t.Errorf("expected installed to be false initially")
+	}
+
+	// 2. POST /api/skills/hub/install
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/skills/hub/install", `{"name":"git-workflow"}`))
+	if code != http.StatusOK || out["status"] != "installed" {
+		t.Fatalf("install hub skill failed: %d %v", code, out)
+	}
+
+	// 3. Verify installed status in hub listing
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/skills/hub?q=git-workflow", nil))
+	hubList = nil
+	_ = json.Unmarshal(rr.Body.Bytes(), &hubList)
+	if len(hubList) == 0 || !hubList[0]["installed"].(bool) {
+		t.Fatalf("expected installed=true after install, got %+v", hubList)
+	}
+
+	// 4. POST /api/skills/import with raw content
+	content := `{"content":"---\nname: api-skill\ndescription: imported via api\n---\nBody"}`
+	code, out = doJSON(t, h, jsonReq(http.MethodPost, "/api/skills/import", content))
+	if code != http.StatusOK || out["status"] != "imported" {
+		t.Fatalf("import skill failed: %d %v", code, out)
+	}
+
+	// 5. Check GET /api/skills
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/skills", nil))
+	var localList []map[string]any
+	_ = json.Unmarshal(rr.Body.Bytes(), &localList)
+	found := false
+	for _, item := range localList {
+		if item["name"] == "api-skill" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("api-skill not found in GET /api/skills")
+	}
+}
+
 // ---- reminders ----
 
 func TestRemindersCRUD(t *testing.T) {

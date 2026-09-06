@@ -2816,6 +2816,135 @@ label {
   gap: 6px;
 }
 
+.skills-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.skills-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.skills-presets-card {
+  border-left: 3px solid var(--primary);
+  margin-bottom: 16px;
+}
+
+.skills-presets-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+
+.skills-preset-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm, 6px);
+}
+
+.skills-search-bar {
+  width: 100%;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.skills-search-bar:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.skill-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.skill-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-soft, rgba(128, 128, 128, 0.15));
+  color: var(--text-secondary);
+}
+
+.skill-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.skill-modal {
+  background: var(--bg-surface, #1e1e24);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md, 8px);
+  width: 100%;
+  max-width: 540px;
+  padding: 20px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-sizing: border-box;
+}
+
+.skill-modal h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.skill-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skill-form-group label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.skill-form-group input[type="text"],
+.skill-form-group textarea,
+.skill-form-group select {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.skill-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
 /* ---- System ---- */
 
 .system-head {

@@ -1,10 +1,13 @@
 package panel
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/entry"
@@ -183,6 +186,47 @@ func (h *handler) sessionMerge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"id": id, "merged": true, "subject": subject})
 }
 
+// ---- Active session asks & cancellation ----
+
+func (h *handler) registerSessionAsk(id string, cancel context.CancelFunc) {
+	h.askMu.Lock()
+	defer h.askMu.Unlock()
+	if h.activeAsks == nil {
+		h.activeAsks = make(map[string]context.CancelFunc)
+	}
+	if old, exists := h.activeAsks[id]; exists && old != nil {
+		old()
+	}
+	h.activeAsks[id] = cancel
+}
+
+func (h *handler) unregisterSessionAsk(id string) {
+	h.askMu.Lock()
+	defer h.askMu.Unlock()
+	delete(h.activeAsks, id)
+}
+
+func (h *handler) cancelSessionAsk(id string) bool {
+	h.askMu.Lock()
+	cancel, ok := h.activeAsks[id]
+	if ok {
+		delete(h.activeAsks, id)
+	}
+	h.askMu.Unlock()
+	if ok && cancel != nil {
+		cancel()
+		return true
+	}
+	return false
+}
+
+// sessionCancel serves POST /api/sessions/{id}/cancel and /stop.
+func (h *handler) sessionCancel(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	cancelled := h.cancelSessionAsk(id)
+	writeJSON(w, map[string]any{"id": id, "cancelled": cancelled})
+}
+
 // ---- Streaming session ask ----
 
 // sessionAskRequest is the body of POST /api/sessions/{id}/ask.
@@ -231,17 +275,57 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	// Flush headers immediately so the browser and reverse proxies establish the
+	// live SSE stream right away rather than buffering until the first delta.
+	flusher.Flush()
+
+	var mu sync.Mutex
 	send := func(event string, v any) bool {
 		data, err := json.Marshal(v)
 		if err != nil {
 			return false
 		}
+		mu.Lock()
+		defer mu.Unlock()
 		if _, err := w.Write([]byte("event: " + event + "\ndata: " + string(data) + "\n\n")); err != nil {
 			return false
 		}
 		flusher.Flush()
 		return true
 	}
+	sendKeepAlive := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if _, err := w.Write([]byte(": keep-alive\n\n")); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	// SSE keep-alive heartbeat comment every 5s keeps reverse proxies,
+	// browsers, and OS power management from dropping an idle connection
+	// while the model is thinking or waiting for sub-tasks.
+	heartbeat := time.NewTicker(5 * time.Second)
+	defer heartbeat.Stop()
+	heartbeatDone := make(chan struct{})
+	defer close(heartbeatDone)
+
+	go func() {
+		for {
+			select {
+			case <-heartbeat.C:
+				if !sendKeepAlive() {
+					return
+				}
+			case <-r.Context().Done():
+				return
+			case <-heartbeatDone:
+				return
+			}
+		}
+	}()
 
 	// History is the thread as it stands. The user turn is persisted first
 	// (a failed ask still leaves the question in the thread, like codex/claude
@@ -282,10 +366,23 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	defer eng.SetProject(prevProj, prevDir)
 
-	out, err := eng.AskTurns(r.Context(), history, req.Prompt, workDir, req.Authorize, cb)
+	// Decouple model and task execution from the transient HTTP request
+	// context so that browser tab switches, window blur, or socket drop
+	// does not abort the model turn. Explicit cancellation is handled via
+	// POST /api/sessions/{id}/cancel (registerSessionAsk).
+	execCtx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
+	defer cancel()
+	h.registerSessionAsk(sess.ID, cancel)
+	defer h.unregisterSessionAsk(sess.ID)
+
+	out, err := eng.AskTurns(execCtx, history, req.Prompt, workDir, req.Authorize, cb)
 	if err != nil {
-		send("error", map[string]string{"message": err.Error()})
-		_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "assistant", Text: "⚠ " + err.Error(), Kind: "error"})
+		msg := err.Error()
+		if errors.Is(err, context.Canceled) || execCtx.Err() != nil {
+			msg = "任务已被用户取消"
+		}
+		send("error", map[string]string{"message": msg})
+		_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "assistant", Text: "⚠ " + msg, Kind: "error"})
 		return
 	}
 
@@ -296,7 +393,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// card can jump into it and the session streams the task's progress.
 	if out.Kind == "task" && out.TaskID != "" {
 		// Bookkeeping only; the result already streamed to the client.
-		_ = h.store.SetSessionID(r.Context(), out.TaskID, sess.ID)
+		_ = h.store.SetSessionID(context.WithoutCancel(r.Context()), out.TaskID, sess.ID)
 	}
 
 	turn := sessions.Turn{Role: "assistant", Kind: out.Kind}

@@ -85,12 +85,15 @@ func New(d Deps) http.Handler {
 		configPath:   d.ConfigPath,
 		cardFilePath: d.CardPath,
 		updater:      d.Updater,
+		activeAsks:   make(map[string]context.CancelFunc),
 	}
 	// Session summary finalizer (queue redesign §5): finished tasks fold
 	// their result into the linked chat as an assistant turn. Runs for the
 	// process lifetime; no-op without the sessions store.
 	h.startSessionFinalizer(context.Background())
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", h.healthz)
+	mux.HandleFunc("GET /api/healthz", h.healthz)
 	mux.HandleFunc("GET /api/tasks", h.listTasks)
 	mux.HandleFunc("POST /api/tasks", h.createTask)
 	mux.HandleFunc("DELETE /api/tasks", h.clearTasks)
@@ -142,6 +145,11 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("GET /api/skills", h.listSkills)
 		mux.HandleFunc("POST /api/skills/approve", h.skillAction(true))
 		mux.HandleFunc("POST /api/skills/reject", h.skillAction(false))
+		mux.HandleFunc("POST /api/skills/reset", h.resetSkill)
+		mux.HandleFunc("GET /api/skills/hub", h.listHubSkills)
+		mux.HandleFunc("POST /api/skills/hub/install", h.installHubSkill)
+		mux.HandleFunc("POST /api/skills/hub/install-recommended", h.installRecommendedSkills)
+		mux.HandleFunc("POST /api/skills/import", h.importSkill)
 	}
 	if d.Reminders != nil {
 		mux.HandleFunc("GET /api/reminders", h.listReminders)
@@ -179,6 +187,8 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("PATCH /api/sessions/{id}", h.patchSession)
 		mux.HandleFunc("DELETE /api/sessions/{id}", h.deleteSession)
 		mux.HandleFunc("POST /api/sessions/{id}/ask", h.sessionAsk)
+		mux.HandleFunc("POST /api/sessions/{id}/cancel", h.sessionCancel)
+		mux.HandleFunc("POST /api/sessions/{id}/stop", h.sessionCancel)
 		if d.Worktrees != nil {
 			mux.HandleFunc("GET /api/sessions/{id}/diff", h.sessionDiff)
 			mux.HandleFunc("POST /api/sessions/{id}/merge", h.sessionMerge)
@@ -219,6 +229,10 @@ func authMiddleware(token string, next http.Handler) http.Handler {
 	limiter := &authLimiter{failures: map[string]*authFailure{}}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
+			if r.URL.Path == "/api/healthz" {
+				next.ServeHTTP(w, r)
+				return
+			}
 			ip := clientIP(r)
 			// A correct token clears the failure budget and passes without
 			// consulting the limiter — checked first, before any lockout.
@@ -335,6 +349,9 @@ type handler struct {
 	// means "ask the live engine which card it was built from".
 	cardFilePath string
 	updater      *updater.Manager
+
+	askMu      sync.Mutex
+	activeAsks map[string]context.CancelFunc
 }
 
 // taskJSON is the wire form of a task row, with stable snake_case names so the
