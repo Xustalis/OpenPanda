@@ -12,7 +12,7 @@ import (
 func TestToTaskInput(t *testing.T) {
 	spec := &entry.TaskSpec{
 		Title:       "重构导航栏",
-		Project:     "117club",
+		Project:     "demo-portal",
 		ContextType: "file",
 		Requires:    entry.Requires{Abilities: []string{"code:modify"}},
 		Spec: entry.TaskSpecDetail{
@@ -28,7 +28,7 @@ func TestToTaskInput(t *testing.T) {
 
 	in := toTaskInput(spec)
 
-	if in.Title != "重构导航栏" || in.Project != "117club" || in.ContextType != "file" {
+	if in.Title != "重构导航栏" || in.Project != "demo-portal" || in.ContextType != "file" {
 		t.Fatalf("identity fields wrong: %+v", in)
 	}
 	if in.Complexity != 0.6 || in.Risk != "medium" {

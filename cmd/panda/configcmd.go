@@ -79,7 +79,18 @@ func configUsage() {
 	fmt.Fprintln(os.Stderr, "writes preserve YAML comments; changes apply after the daemon/panel restarts")
 }
 
-func configWritePath(flagPath string) string { return config.ResolvePath(flagPath) }
+func configWritePath(flagPath string) string {
+	if flagPath != "" && flagPath != config.DefaultPath {
+		return flagPath
+	}
+	if env := os.Getenv("OPENPANDA_CONFIG_PATH"); env != "" {
+		return env
+	}
+	if p, err := config.UserConfigPath(); err == nil {
+		return p
+	}
+	return config.ResolvePath(flagPath)
+}
 
 func runConfigGet(section string, args []string) {
 	fs := flag.NewFlagSet("config "+section+" get", flag.ExitOnError)

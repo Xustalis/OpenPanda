@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -217,8 +219,9 @@ func TestTUIModelManagement(t *testing.T) {
 		},
 	}
 	r := &repl{
-		loc: i18n.Locale("zh"),
-		cfg: cfg,
+		loc:        i18n.Locale("zh"),
+		cfg:        cfg,
+		configPath: filepath.Join(t.TempDir(), "config.yaml"),
 	}
 	m := newTUIModel(r)
 	m.mode = modeIdle
@@ -274,7 +277,7 @@ func TestTUIModelManagement(t *testing.T) {
 // TestTUIModelWizardStepFlow tests the multi-step model creation wizard for Ollama.
 func TestTUIModelWizardStepFlow(t *testing.T) {
 	cfg := &config.Config{}
-	r := &repl{loc: i18n.Locale("zh"), cfg: cfg}
+	r := &repl{loc: i18n.Locale("zh"), cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width = 100
@@ -310,7 +313,7 @@ func TestTUIModelWizardStepFlow(t *testing.T) {
 func TestTUIFirstRunOnboardingFlow(t *testing.T) {
 	// 1. English default flow with Skip Model
 	cfg := &config.Config{}
-	r := &repl{loc: i18n.Locale("en"), cfg: cfg}
+	r := &repl{loc: i18n.Locale("en"), cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
 	m := newTUIModel(r)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = next.(tuiModel)
@@ -421,7 +424,7 @@ func TestTUIFirstRunOnboardingFlow(t *testing.T) {
 	}
 
 	// 2. Terms Rejection test: pressing N declines and quits
-	mDecline := newTUIModel(&repl{cfg: &config.Config{}})
+	mDecline := newTUIModel(&repl{cfg: &config.Config{}, configPath: filepath.Join(t.TempDir(), "config.yaml")})
 	mDecline.mode = modeOnboarding
 	mDecline.onboardingStep = onboardingStepTerms
 	mDecline.termsCursor = 1 // Pointing to Decline [N]
@@ -432,7 +435,7 @@ func TestTUIFirstRunOnboardingFlow(t *testing.T) {
 
 	// 3. Chinese Selection flow
 	cfgZh := &config.Config{}
-	rZh := &repl{cfg: cfgZh}
+	rZh := &repl{cfg: cfgZh, configPath: filepath.Join(t.TempDir(), "config.yaml")}
 	mZh := newTUIModel(rZh)
 	mZh.mode = modeOnboarding
 	mZh.onboardingStep = onboardingStepLanguage
@@ -460,5 +463,145 @@ func TestTUIFirstRunOnboardingFlow(t *testing.T) {
 		if !strings.Contains(zhTermsView, expectedText) {
 			t.Fatalf("Chinese terms view missing '%s':\n%s", expectedText, zhTermsView)
 		}
+	}
+}
+
+// TestTUISlashCommandExecutionAndOutputPersisted verifies that slash commands
+// (such as /help, /status) capture stdout and persist their output in chatHistory
+// rather than disappearing and refreshing the view in AltScreen mode.
+func TestTUISlashCommandExecutionAndOutputPersisted(t *testing.T) {
+	r := &repl{
+		loc:         i18n.ChineseSimp,
+		cfg:         &config.Config{},
+		interactive: true,
+	}
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width = 100
+	m.height = 30
+
+	// 1. Submit /help
+	next, cmd := m.submit("/help")
+	m = next.(tuiModel)
+	if m.mode != modeExec {
+		t.Fatalf("expected modeExec during slash dispatch, got %v", m.mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd for slash execution")
+	}
+
+	// Run the tea.Cmd to simulate background execution and capture
+	msg := cmd()
+	doneMsg, ok := msg.(execDoneMsg)
+	if !ok {
+		t.Fatalf("expected execDoneMsg, got %T", msg)
+	}
+	if doneMsg.text != "/help" {
+		t.Fatalf("expected text '/help', got %q", doneMsg.text)
+	}
+	if !strings.Contains(doneMsg.output, "/help") || !strings.Contains(doneMsg.output, "/skills") {
+		t.Fatalf("expected captured output to contain help info, got %q", doneMsg.output)
+	}
+
+	// Update with execDoneMsg
+	next, _ = m.Update(doneMsg)
+	m = next.(tuiModel)
+
+	if m.mode != modeIdle {
+		t.Fatalf("expected modeIdle after command finish, got %v", m.mode)
+	}
+	if m.chatHistory == nil || len(m.chatHistory.blocks) < 2 {
+		t.Fatalf("expected at least 2 blocks (user + output), got %d", len(m.chatHistory.blocks))
+	}
+	if m.chatHistory.blocks[0].body != "/help" {
+		t.Fatalf("expected first block to be user command /help, got %q", m.chatHistory.blocks[0].body)
+	}
+	if !strings.Contains(m.chatHistory.blocks[1].body, "/skills") {
+		t.Fatalf("expected second block to contain help text, got %q", m.chatHistory.blocks[1].body)
+	}
+
+	// Verify View() renders command and output at bottom, and scrolling up reveals earlier items
+	view := m.View()
+	if !strings.Contains(view, "/doctor") {
+		t.Fatalf("View() should render /doctor from help output: %s", view)
+	}
+
+	// Pressing PgUp scrolls up to reveal /skills from earlier in the help text
+	mUp, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	viewUp := mUp.(tuiModel).View()
+	if !strings.Contains(viewUp, "/skills") {
+		t.Fatalf("Scrolled View() should render /skills from earlier in help output: %s", viewUp)
+	}
+
+	// 2. Clear history
+	next, _ = m.submit("/clear")
+	m = next.(tuiModel)
+	if m.chatHistory != nil && len(m.chatHistory.blocks) != 0 {
+		t.Fatalf("expected /clear to wipe chatHistory blocks, got %d", len(m.chatHistory.blocks))
+	}
+}
+
+// TestTUIChatHistoryScrolling verifies that PgUp, PgDown, and mouse wheel
+// scroll chatHistory and display a scroll indicator when scrolled up.
+func TestTUIChatHistoryScrolling(t *testing.T) {
+	r := &repl{
+		loc:         i18n.ChineseSimp,
+		cfg:         &config.Config{},
+		interactive: true,
+	}
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width = 100
+	m.height = 20
+
+	// Add 30 blocks to exceed available height
+	for i := 0; i < 30; i++ {
+		m.chatHistory.blocks = append(m.chatHistory.blocks, block{
+			kind: blockUser,
+			body: fmt.Sprintf("Turn user message number %02d", i),
+		})
+	}
+
+	// Initial view is anchored at bottom (scrollOffset = 0)
+	if m.scrollOffset != 0 {
+		t.Fatalf("initial scrollOffset should be 0, got %d", m.scrollOffset)
+	}
+	viewBottom := m.View()
+	if !strings.Contains(viewBottom, "Turn user message number 29") {
+		t.Fatalf("bottom view should show the latest message: %s", viewBottom)
+	}
+
+	// Press PgUp to scroll up
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = next.(tuiModel)
+	if m.scrollOffset <= 0 {
+		t.Fatalf("expected scrollOffset > 0 after PgUp, got %d", m.scrollOffset)
+	}
+
+	viewScrolled := m.View()
+	if !strings.Contains(viewScrolled, "浏览历史") && !strings.Contains(viewScrolled, "偏移") {
+		t.Fatalf("scrolled view should display scroll indicator: %s", viewScrolled)
+	}
+
+	// Mouse wheel up scrolls further up
+	prevOffset := m.scrollOffset
+	next, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelUp})
+	m = next.(tuiModel)
+	if m.scrollOffset != prevOffset+3 {
+		t.Fatalf("expected scrollOffset to increase by 3, got %d (was %d)", m.scrollOffset, prevOffset)
+	}
+
+	// Mouse wheel down scrolls back down
+	next, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelDown})
+	m = next.(tuiModel)
+	if m.scrollOffset != prevOffset {
+		t.Fatalf("expected scrollOffset to decrease by 3, got %d", m.scrollOffset)
+	}
+
+	// Esc returns to bottom
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(tuiModel)
+	if m.scrollOffset != 0 {
+		t.Fatalf("expected scrollOffset to reset to 0 after Esc, got %d", m.scrollOffset)
 	}
 }

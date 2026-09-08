@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 )
@@ -21,18 +22,25 @@ import (
 var jsonOutput bool
 
 // defaultCardPath discovers a capability card without --card: next to the
-// auto-discovered config file first — where `panda init` writes the card (the
-// user config dir, or /etc/openpanda for system installs; this is what daemon
-// services without explicit flags rely on) — then ./capabilities.yaml (repo
-// dev flow: when the cwd also holds the config, both candidates are the same
-// file, so the order only matters when they diverge, and the init-written
-// card is the node's real identity), then /etc/openpanda/capabilities.yaml
-// directly. Empty means no card — answer and tool_call still work, task
-// execution stays off.
+// auto-discovered config file first, then ./capabilities.yaml, then system
+// config dir. If none of the files exist on disk, it falls back to the
+// configured card path or the default canonical target path so callers know
+// where the card belongs.
 func defaultCardPath() string {
+	cfgPath := config.ResolvePath("")
+	if cfgPath != "" && cfgPath != config.DefaultPath {
+		if cfg, err := config.Load(cfgPath); err == nil {
+			if p := cfg.EffectiveCardPath(); p != "" {
+				return p
+			}
+		}
+	}
 	candidates := []string{}
-	if cfgPath := config.ResolvePath(""); cfgPath != "" {
+	if cfgPath != "" && cfgPath != config.DefaultPath {
 		candidates = append(candidates, filepath.Join(filepath.Dir(cfgPath), "capabilities.yaml"))
+	}
+	if userCfg, err := config.UserConfigPath(); err == nil && userCfg != "" {
+		candidates = append(candidates, filepath.Join(filepath.Dir(userCfg), "capabilities.yaml"))
 	}
 	candidates = append(candidates, "capabilities.yaml", filepath.Join(config.SystemConfigDir(), "capabilities.yaml"))
 	for _, p := range candidates {
@@ -40,7 +48,20 @@ func defaultCardPath() string {
 			return p
 		}
 	}
-	return ""
+	if cfgPath != "" && cfgPath != config.DefaultPath {
+		return filepath.Join(filepath.Dir(cfgPath), "capabilities.yaml")
+	}
+	return config.DefaultCardTarget("")
+}
+
+// ensureDefaultCardPath resolves defaultCardPath() and guarantees the file exists
+// on disk by auto-detecting host hardware and agents if missing.
+func ensureDefaultCardPath() string {
+	p := defaultCardPath()
+	if p != "" {
+		_, _, _ = carddetect.EnsureCard(p)
+	}
+	return p
 }
 
 // systemCardPath is the machine-wide capability card location, derived from

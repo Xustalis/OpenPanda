@@ -206,12 +206,12 @@ def kill_tree(proc):
     proc.kill()
 
 
-def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None):
+def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=None):
     """Stream-mode runtime shared by the JSONL / stream-json adapters.
 
     Spawns cmd with pipes, forwards every stdout line to on_line(line), drains
-    stderr on a background thread, and enforces the timeout over the WHOLE run
-    with a watchdog that kills the process tree.
+    stderr on a background thread (forwarding to on_stderr if provided), and enforces
+    the timeout over the WHOLE run with a watchdog that kills the process tree.
 
     Returns (returncode, stderr_text, timed_out). Raises FileNotFoundError
     when the CLI binary is missing; a timeout is reported via timed_out=True
@@ -223,10 +223,18 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None):
         **GROUP_KW,
     )
     err_chunks = []
+    drain_exc = []
 
     def drain():
         for chunk in iter(proc.stderr.readline, ""):
             err_chunks.append(chunk)
+            if on_stderr is not None:
+                try:
+                    on_stderr(chunk)
+                except Exception as ex:
+                    drain_exc.append(ex)
+                    kill_tree(proc)
+                    break
         proc.stderr.close()
 
     t = threading.Thread(target=drain, daemon=True)
@@ -246,13 +254,21 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None):
     timed_out = False
     try:
         for line in proc.stdout:
+            if drain_exc:
+                raise drain_exc[0]
             if on_line is not None:
                 on_line(line)
+        if drain_exc:
+            raise drain_exc[0]
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         kill_tree(proc)
         proc.wait()
         timed_out = True
+    except Exception:
+        kill_tree(proc)
+        proc.wait()
+        raise
     finally:
         finished.set()
         t.join(timeout=2)

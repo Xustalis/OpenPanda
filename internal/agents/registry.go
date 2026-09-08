@@ -129,7 +129,7 @@ var known = []Known{
 	{
 		Name:        "claude_code",
 		Adapter:     "claude_code.py",
-		Binaries:    []string{"claude"},
+		Binaries:    []string{"claude", "claude-code"},
 		DisplayName: "Claude Code",
 		InstallHint: "npm install -g @anthropic-ai/claude-code",
 		InstallURL:  "https://docs.anthropic.com/en/docs/claude-code/setup",
@@ -176,7 +176,12 @@ var known = []Known{
 		InstallURL:         "https://opencode.ai/docs",
 		SelfContainedModel: true,
 		CredentialEnvVars:  []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
-		CredentialFiles:    []string{".config/opencode/opencode.json", ".config/opencode/opencode.jsonc", ".config/opencode/auth.json"},
+		CredentialFiles:    []string{".local/share/opencode/auth.json", ".config/opencode/opencode.json", ".config/opencode/opencode.jsonc"},
+		CredentialFileFields: map[string][]string{
+			".config/opencode/opencode.json":  {"model", "provider", "apiKey", "providers"},
+			".config/opencode/opencode.jsonc": {"model", "provider", "apiKey", "providers"},
+			".local/share/opencode/auth.json": {"apiKey", "token", "access_token"},
+		},
 		ModelEnv: &ModelEnvMapping{
 			APIType: "openai",
 			BaseURL: "OPENAI_BASE_URL",
@@ -212,7 +217,7 @@ var known = []Known{
 	{
 		Name:              "grok_build",
 		Adapter:           "grok_build.py",
-		Binaries:          []string{"grok"},
+		Binaries:          []string{"grok", "grok-build"},
 		DisplayName:       "Grok Build (xAI)",
 		InstallHint:       "curl -fsSL https://x.ai/cli/install.sh | bash",
 		InstallURL:        "https://docs.x.ai/build/overview",
@@ -232,7 +237,7 @@ var known = []Known{
 	{
 		Name:              "deepseek_harness",
 		Adapter:           "deepseek_harness.py",
-		Binaries:          []string{"dsh"},
+		Binaries:          []string{"dsh", "deepseek-harness"},
 		DisplayName:       "DeepSeek Harness (dsh)",
 		InstallHint:       "npm install -g @deepseek-ai/dsh",
 		InstallURL:        "https://github.com/deepseek-ai/deepseek-harness",
@@ -272,7 +277,7 @@ var known = []Known{
 	{
 		Name:              "hermes",
 		Adapter:           "hermes.py",
-		Binaries:          []string{"hermes"},
+		Binaries:          []string{"hermes", "hermes-agent"},
 		DisplayName:       "Hermes",
 		InstallHint:       "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
 		InstallURL:        "https://hermes-agent.nousresearch.com/docs/getting-started/installation",

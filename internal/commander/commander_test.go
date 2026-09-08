@@ -118,6 +118,24 @@ func TestRouteAgentByName(t *testing.T) {
 	if plan.Kind != "agent" || plan.Agent != "claude_code" {
 		t.Fatalf("plan = %+v, want agent claude_code", plan)
 	}
+
+	// Bare agent name without "agent:" prefix also matches
+	planBare, err := r.Route([]string{"claude_code"})
+	if err != nil {
+		t.Fatalf("route bare: %v", err)
+	}
+	if planBare.Kind != "agent" || planBare.Agent != "claude_code" {
+		t.Fatalf("planBare = %+v, want agent claude_code", planBare)
+	}
+
+	// Empty required abilities defaults to general agent execution
+	planEmpty, err := r.Route([]string{})
+	if err != nil {
+		t.Fatalf("route empty: %v", err)
+	}
+	if planEmpty.Kind != "agent" {
+		t.Fatalf("planEmpty = %+v, want agent", planEmpty)
+	}
 }
 
 func TestRouteNormalizedMatch(t *testing.T) {

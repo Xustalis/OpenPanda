@@ -53,12 +53,23 @@ func (r *repl) cmdCard(arg string) {
 	}
 }
 
+func (r *repl) ensureCard() string {
+	if r.cardPath == "" {
+		r.cardPath = ensureDefaultCardPath()
+		r.hasCard = r.cardPath != ""
+		if r.engine != nil && r.cardPath != "" {
+			_ = r.engine.ReloadCard(r.cardPath)
+		}
+	}
+	return r.cardPath
+}
+
 // cardSummary prints the one-glance view of the card: what this machine is,
 // what it can run, and where the file lives. Counts, not the full YAML — the
 // full file is `panda card show` (or /card edit via the CLI); what a /card
 // user needs mid-conversation is "did my edit land and what's on there now".
 func (r *repl) cardSummary() {
-	path := r.cardPath
+	path := r.ensureCard()
 	if path == "" {
 		fmt.Println(i18n.T(r.loc, "repl.card.none"))
 		return
@@ -109,7 +120,7 @@ func (r *repl) cardNative(rest []string) {
 		fmt.Println(err)
 		return
 	}
-	if r.cardPath == "" {
+	if r.ensureCard() == "" {
 		fmt.Println(i18n.T(r.loc, "repl.card.none"))
 		return
 	}
@@ -172,7 +183,7 @@ func (r *repl) cardAgent(rest []string) {
 		fmt.Println(err)
 		return
 	}
-	if r.cardPath == "" {
+	if r.ensureCard() == "" {
 		fmt.Println(i18n.T(r.loc, "repl.card.none"))
 		return
 	}
@@ -248,7 +259,7 @@ func (r *repl) cardManual(rest []string) {
 		fmt.Println(err)
 		return
 	}
-	if r.cardPath == "" {
+	if r.ensureCard() == "" {
 		fmt.Println(i18n.T(r.loc, "repl.card.none"))
 		return
 	}

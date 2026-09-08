@@ -66,6 +66,12 @@ func cachedClassification(ctx context.Context, c *Client, turns []Turn, memory s
 	if !dc.Get(ctx, classificationCacheNS, k1, k2, &out) {
 		return Output{}, false
 	}
+	// Never serve a cached answer that carries DSML tool-call markup: such rows
+	// predate the recover/reject path (resolveDSML) and would re-leak the raw
+	// protocol text to the user on every identical ask.
+	if out.Kind == KindAnswer && ContainsDSMLToolCall(out.Answer) {
+		return Output{}, false
+	}
 	return out, true
 }
 
@@ -102,7 +108,7 @@ func ClassifyTurnsWithTools(ctx context.Context, c *Client, devices []ledger.Nod
 	if err != nil {
 		return Output{}, WrapAPIError(err)
 	}
-	out, err := resolveResponse(resp)
+	out, err := resolveResponse(resp, len(specs) > 0)
 	if err != nil {
 		return Output{}, err
 	}
@@ -137,7 +143,7 @@ func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.No
 	if err != nil {
 		return Output{}, WrapAPIError(err)
 	}
-	out, err := resolveResponse(resp)
+	out, err := resolveResponse(resp, len(specs) > 0)
 	if err != nil {
 		return Output{}, err
 	}
@@ -146,9 +152,13 @@ func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.No
 }
 
 // resolveResponse routes one completed model response: a native tool_use is
-// authoritative (route to the registry); text falls through to the JSON/prose
-// parser (answer/task).
-func resolveResponse(resp Response) (Output, error) {
+// authoritative (route to the registry); text falls through to the DSML
+// recover/reject path (compatible endpoints that emit tool calls as markup in
+// the content field) and then to the JSON/prose parser (answer/task).
+// toolsOffered tells the DSML path whether this call carried a tool roster —
+// a recovered call may only run when the model could legitimately have made
+// one.
+func resolveResponse(resp Response, toolsOffered bool) (Output, error) {
 	// A tool_use is authoritative: the model chose a controlled tool, so route to
 	// the registry rather than the text parser.
 	if len(resp.ToolUses) > 0 {
@@ -158,6 +168,9 @@ func resolveResponse(resp Response) (Output, error) {
 			out.Note = note
 		}
 		return out, nil
+	}
+	if ContainsDSMLToolCall(resp.Text) {
+		return resolveDSML(resp, toolsOffered)
 	}
 	out, err := ParseOutput(resp.Text)
 	if err != nil {

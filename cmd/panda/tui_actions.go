@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -776,27 +778,35 @@ func (m tuiModel) finalizeOnboarding() (tuiModel, tea.Cmd) {
 		m.r.cfg.UI.Locale = string(m.loc)
 
 		cfgPath := configWritePath(m.r.configPath)
+		m.r.configPath = cfgPath
 		_ = config.UpdateSectionField(cfgPath, []string{"ui"}, "locale", string(m.loc))
 		_ = config.UpdateSectionFieldBool(cfgPath, []string{"ui"}, "terms_accepted", true)
 		_ = config.UpdateSectionFieldBool(cfgPath, []string{"ui"}, "onboarded", true)
 		if m.r.cfg.Approval.Mode != "" {
 			_ = config.UpdateSectionField(cfgPath, []string{"approval"}, "mode", m.r.cfg.Approval.Mode)
 		}
+
+		// Ensure capability card exists
+		cardPath := m.r.cardPath
+		if cardPath == "" {
+			cardPath = filepath.Join(filepath.Dir(cfgPath), "capabilities.yaml")
+		}
+		if _, _, err := carddetect.EnsureCard(cardPath); err == nil {
+			m.r.cardPath = cardPath
+			m.r.hasCard = true
+			if m.r.engine != nil {
+				_ = m.r.engine.ReloadCard(cardPath)
+			}
+		}
 	}
 
 	m.mode = modeIdle
+	m.scrollOffset = 0
 	note := block{
 		kind: blockNote,
 		body: "保存配置至 config.yaml，初始化已完成",
 	}
-
-	prints := m.startupPrints()
-	cmds := make([]tea.Cmd, 0, len(prints)+1)
-	for _, p := range prints {
-		cmds = append(cmds, tea.Println(p))
-	}
-	cmds = append(cmds, m.printBlock(note))
-	return m, tea.Batch(cmds...)
+	return m, m.printBlock(note)
 }
 
 // handleOnboardingKey routes key messages across onboarding steps.

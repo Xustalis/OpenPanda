@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
@@ -267,6 +268,13 @@ func runRepl(args []string) {
 		fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.T(detected, "cli.workspace.declined")))
 	}
 
+	effectiveCardPath := *cardPath
+	if effectiveCardPath == "" {
+		effectiveCardPath = ensureDefaultCardPath()
+	} else {
+		_, _, _ = carddetect.EnsureCard(effectiveCardPath)
+	}
+
 	r := &repl{
 		loc:         detected,
 		cfg:         cfg,
@@ -279,8 +287,8 @@ func runRepl(args []string) {
 		hermes:      memory.NewHermesWithLimits(cfg.Storage.MemoryPath, memoryLimits(cfg)),
 		sessionsSt:  sessions.NewStore(sessionStoreRoot(cfg)),
 		worktrees:   openWorktreesBestEffort(cfg.Storage.WorkPath),
-		cardPath:    *cardPath,
-		hasCard:     *cardPath != "",
+		cardPath:    effectiveCardPath,
+		hasCard:     effectiveCardPath != "",
 		interactive: interactive,
 	}
 	if activeProjectName != "" && r.projects != nil {
@@ -310,7 +318,7 @@ func runRepl(args []string) {
 	// serves every panel command, and asks explain themselves.
 	if cfg.Model.BaseURL != "" {
 		engine, err := askengine.New(context.Background(), cfg, askengine.Options{
-			CardPath:   *cardPath,
+			CardPath:   effectiveCardPath,
 			MCPCommand: *mcpCmd,
 			ReplyASCII: isLinuxConsole(),
 			// The session is long-lived and interactive: peers dial in the

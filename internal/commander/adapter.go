@@ -352,13 +352,13 @@ func modelEnvForAdapter(model config.ModelConfig, adapter string) []string {
 	}
 	var env []string
 	if k.ModelEnv.BaseURL != "" {
-		env = append(env, k.ModelEnv.BaseURL+"="+effectiveBaseURL(model))
+		env = append(env, k.ModelEnv.BaseURL+"="+effectiveBaseURLFor(adapter, model))
 	}
 	if k.ModelEnv.APIKey != "" {
 		env = append(env, k.ModelEnv.APIKey+"="+model.APIKey)
 	}
 	if k.ModelEnv.Model != "" {
-		env = append(env, k.ModelEnv.Model+"="+effectiveModelName(model))
+		env = append(env, k.ModelEnv.Model+"="+effectiveModelNameFor(adapter, model))
 	}
 	env = append(env, "OPENPANDA_INJECTED_MODEL=1")
 	if adapter == "claude_code.py" {

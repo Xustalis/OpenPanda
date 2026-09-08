@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/cardmut"
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
@@ -164,35 +165,6 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 				seq = int64(v)
 			}
 			return e.taskqMove(ctx, strings.TrimSpace(id), seq)
-		},
-	})
-
-	reg.Register(entry.Tool{
-		Name:        "taskq_create",
-		Description: "向任务队列中主动入队一个新任务。title 填任务标题，prompt 填具体执行需求与指令。priority 可选 high/normal/low（默认 normal）。",
-		Tier:        defense.TierReversible,
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"title":    map[string]any{"type": "string", "description": "任务标题"},
-				"prompt":   map[string]any{"type": "string", "description": "任务具体执行需求/提示词（留空则默认同标题）"},
-				"priority": map[string]any{"type": "string", "description": "优先级：high / normal / low（默认 normal）"},
-				"project":  map[string]any{"type": "string", "description": "所属项目（留空则继承当前激活项目）"},
-				"requires": map[string]any{
-					"type":        "array",
-					"items":       map[string]any{"type": "string"},
-					"description": "任务所需能力列表（默认 [\"coding\"]）",
-				},
-			},
-			"required": []string{"title"},
-		},
-		Run: func(ctx context.Context, args map[string]any) (string, error) {
-			title, _ := args["title"].(string)
-			prompt, _ := args["prompt"].(string)
-			prio, _ := args["priority"].(string)
-			proj, _ := args["project"].(string)
-			reqs := toStringSlice(args["requires"])
-			return e.taskqCreate(ctx, title, prompt, prio, proj, reqs)
 		},
 	})
 
@@ -573,6 +545,19 @@ func (e *Engine) cardShow(ctx context.Context, name string) (string, error) {
 			if n.ID == selfID {
 				target = n
 				break
+			}
+		}
+		if target.ID == "" {
+			if path, err := e.checkCardPath(); err == nil {
+				_ = e.ReloadCard(path)
+				if reloadedNodes, rErr := ledger.Query(e.db, "", ""); rErr == nil {
+					for _, n := range reloadedNodes {
+						if n.ID == selfID {
+							target = n
+							break
+						}
+					}
+				}
 			}
 		}
 		if target.ID == "" {
@@ -1030,50 +1015,20 @@ func (e *Engine) taskqMove(ctx context.Context, taskID string, seq int64) (strin
 	return fmt.Sprintf("已将任务 %s 的排队顺序序号设置为 %d", resolved, seq), nil
 }
 
-func (e *Engine) taskqCreate(ctx context.Context, title, prompt, priority, project string, requires []string) (string, error) {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return "", fmt.Errorf("title 不能为空")
-	}
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		prompt = title
-	}
-	prio := core.PriorityNormal
-	if priority != "" {
-		p, _, ok := parseTaskPriority(priority)
-		if !ok {
-			return "", fmt.Errorf("无效的优先级 %q，可选：high / normal / low", priority)
-		}
-		prio = p
-	}
-	if len(requires) == 0 {
-		requires = []string{"coding"}
-	}
-	if project == "" {
-		project, _ = e.Project()
-	}
-	in := core.TaskInput{
-		Title:    title,
-		Project:  project,
-		Intent:   prompt,
-		Requires: requires,
-	}
-	q := core.DefaultQueueSpec()
-	q.Priority = prio
-	t, err := e.EnqueueTask(ctx, in, q)
-	if err != nil {
-		return "", fmt.Errorf("创建任务：%w", err)
-	}
-	return fmt.Sprintf("新任务已成功入队：ID=%s，标题=%s，状态=%s，优先级=%s",
-		t.TaskID, t.Title, zhTaskState(t.State), priorityName(t.Priority)), nil
-}
-
 func (e *Engine) checkCardPath() (string, error) {
-	if e.cardPath == "" {
-		return "", fmt.Errorf("当前会话未加载能力卡文件（未配置 card_path），无法修改能力卡")
+	if e.cardPath != "" {
+		return e.cardPath, nil
 	}
-	return e.cardPath, nil
+	if e.cfg != nil && e.cfg.EffectiveCardPath() != "" {
+		e.cardPath = e.cfg.EffectiveCardPath()
+		return e.cardPath, nil
+	}
+	target := config.DefaultCardTarget("")
+	if target != "" {
+		e.cardPath = target
+		return e.cardPath, nil
+	}
+	return "", fmt.Errorf("当前会话未加载能力卡文件且无法推导默认路径")
 }
 
 func (e *Engine) cardNativeAdd(ctx context.Context, ab ledger.NativeAbility) (string, error) {
@@ -1088,11 +1043,13 @@ func (e *Engine) cardNativeAdd(ctx context.Context, ab ledger.NativeAbility) (st
 		return "", fmt.Errorf("执行 command 不能为空")
 	}
 	if err := cardmut.NativeAdd(path, ab); err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			_ = e.ReloadCard(path)
+			return fmt.Sprintf("原生能力 %s 已存在并生效", ab.ID), nil
+		}
 		return "", fmt.Errorf("添加原生能力：%w", err)
 	}
-	if e.sched != nil {
-		_ = e.ReloadCard(path)
-	}
+	_ = e.ReloadCard(path)
 	return fmt.Sprintf("原生能力 %s 已成功添加并热重载生效", ab.ID), nil
 }
 
@@ -1107,9 +1064,7 @@ func (e *Engine) cardNativeRemove(ctx context.Context, id string) (string, error
 	if err := cardmut.NativeRemove(path, id); err != nil {
 		return "", fmt.Errorf("删除原生能力：%w", err)
 	}
-	if e.sched != nil {
-		_ = e.ReloadCard(path)
-	}
+	_ = e.ReloadCard(path)
 	return fmt.Sprintf("原生能力 %s 已成功删除并热重载生效", id), nil
 }
 
@@ -1128,11 +1083,34 @@ func (e *Engine) cardAgentAdd(ctx context.Context, name string, ag ledger.Agent)
 		return "", fmt.Errorf("Agent capabilities 不能为空")
 	}
 	if err := cardmut.AgentAdd(path, name, ag); err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			upd := cardmut.AgentUpdate{
+				Adapter:      &ag.Adapter,
+				Capabilities: &ag.Capabilities,
+			}
+			if ag.InstallCheck != "" {
+				upd.InstallCheck = &ag.InstallCheck
+			}
+			if len(ag.BestAt) > 0 {
+				upd.BestAt = &ag.BestAt
+			}
+			if len(ag.NotFor) > 0 {
+				upd.NotFor = &ag.NotFor
+			}
+			if ag.CostTier != "" {
+				upd.CostTier = &ag.CostTier
+			}
+			if ag.Tier != 0 {
+				upd.Tier = &ag.Tier
+			}
+			if setErr := cardmut.AgentSet(path, name, upd); setErr == nil {
+				_ = e.ReloadCard(path)
+				return fmt.Sprintf("Agent %s 已存在，已更新配置并热重载生效", name), nil
+			}
+		}
 		return "", fmt.Errorf("注册 Agent：%w", err)
 	}
-	if e.sched != nil {
-		_ = e.ReloadCard(path)
-	}
+	_ = e.ReloadCard(path)
 	return fmt.Sprintf("Agent %s 已成功注册并热重载生效", name), nil
 }
 
@@ -1147,9 +1125,7 @@ func (e *Engine) cardAgentSet(ctx context.Context, name string, upd cardmut.Agen
 	if err := cardmut.AgentSet(path, name, upd); err != nil {
 		return "", fmt.Errorf("修改 Agent：%w", err)
 	}
-	if e.sched != nil {
-		_ = e.ReloadCard(path)
-	}
+	_ = e.ReloadCard(path)
 	return fmt.Sprintf("Agent %s 已成功更新并热重载生效", name), nil
 }
 
@@ -1164,9 +1140,7 @@ func (e *Engine) cardAgentRemove(ctx context.Context, name string) (string, erro
 	if err := cardmut.AgentRemove(path, name); err != nil {
 		return "", fmt.Errorf("删除 Agent：%w", err)
 	}
-	if e.sched != nil {
-		_ = e.ReloadCard(path)
-	}
+	_ = e.ReloadCard(path)
 	return fmt.Sprintf("Agent %s 已成功注销并热重载生效", name), nil
 }
 
@@ -1179,11 +1153,13 @@ func (e *Engine) cardManualAdd(ctx context.Context, ab ledger.ManualAbility) (st
 		return "", fmt.Errorf("人工能力 id 不能为空")
 	}
 	if err := cardmut.ManualAdd(path, ab); err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			_ = e.ReloadCard(path)
+			return fmt.Sprintf("人工能力 %s 已存在并生效", ab.ID), nil
+		}
 		return "", fmt.Errorf("添加人工能力：%w", err)
 	}
-	if e.sched != nil {
-		_ = e.ReloadCard(path)
-	}
+	_ = e.ReloadCard(path)
 	return fmt.Sprintf("人工能力 %s 已成功添加并热重载生效", ab.ID), nil
 }
 
@@ -1198,9 +1174,7 @@ func (e *Engine) cardManualRemove(ctx context.Context, id string) (string, error
 	if err := cardmut.ManualRemove(path, id); err != nil {
 		return "", fmt.Errorf("删除人工能力：%w", err)
 	}
-	if e.sched != nil {
-		_ = e.ReloadCard(path)
-	}
+	_ = e.ReloadCard(path)
 	return fmt.Sprintf("人工能力 %s 已成功删除并热重载生效", id), nil
 }
 

@@ -63,3 +63,13 @@ func (r *Registry) Specs() []ToolSpec {
 	}
 	return specs
 }
+
+// Copy returns a shallow copy of the registry (same Tool values), so a caller
+// can attach per-request tools without mutating the shared registry.
+func (r *Registry) Copy() *Registry {
+	out := NewRegistry()
+	for name, t := range r.tools {
+		out.tools[name] = t
+	}
+	return out
+}

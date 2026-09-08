@@ -177,16 +177,53 @@ func costMultiplier(tier string) float64 {
 // the candidates sorted by descending score (ties broken by name, so the
 // choice stays deterministic across map iteration orders).
 //
+// resolveAgentName resolves an agent requirement (e.g. "agent:claude_code", "claude",
+// "claude-code", "grok") to the registered agent on the card, accounting for
+// name variations and CLI binary aliases.
+func (r *Router) resolveAgentName(req string) (string, ledger.Agent, bool) {
+	name := req
+	if stripped, ok := strings.CutPrefix(req, "agent:"); ok {
+		name = stripped
+	}
+	if ag, exists := r.card.Agents[name]; exists {
+		return name, ag, true
+	}
+	norm := strings.ReplaceAll(strings.ToLower(name), "-", "_")
+	if ag, exists := r.card.Agents[norm]; exists {
+		return norm, ag, true
+	}
+	if norm == "claude" {
+		if ag, exists := r.card.Agents["claude_code"]; exists {
+			return "claude_code", ag, true
+		}
+	}
+	for agentName, ag := range r.card.Agents {
+		if k, ok := agents.ByAdapter(ag.Adapter); ok {
+			if strings.EqualFold(k.Name, name) || strings.EqualFold(k.DisplayName, name) {
+				return agentName, ag, true
+			}
+			for _, b := range k.Binaries {
+				if strings.EqualFold(b, name) {
+					return agentName, ag, true
+				}
+			}
+		}
+	}
+	return "", ledger.Agent{}, false
+}
+
+// RankAgents scores every agent that satisfies any of required and returns
+// the candidates sorted by descending score (ties broken by name, so the
+// choice stays deterministic across map iteration orders).
+//
 // Score = capability match (1.0 exact / 0.9 token-subset) × cost_tier
 // discount + preferred-agents bonus. A requirement of the form
 // "agent:<name>" pins that exact agent — an explicit user choice never fans
 // out to substitutes.
 func (r *Router) RankAgents(required []string) []AgentCandidate {
 	for _, req := range required {
-		if name, ok := strings.CutPrefix(req, "agent:"); ok {
-			if ag, exists := r.card.Agents[name]; exists {
-				return []AgentCandidate{{Name: name, Agent: ag, Score: 1 + r.bonus(name)}}
-			}
+		if name, ag, ok := r.resolveAgentName(req); ok {
+			return []AgentCandidate{{Name: name, Agent: ag, Score: 1 + r.bonus(name)}}
 		}
 	}
 
@@ -266,7 +303,7 @@ func (r *Router) MatchManual(required []string) (ledger.ManualAbility, bool) {
 	return ledger.ManualAbility{}, false
 }
 
-// Route decides how to execute a task with the given required abilities.
+// Route picks the best way to execute required capabilities on this node.
 // Priority: native > agent > manual (design doc §6.4).
 func (r *Router) Route(required []string) (Plan, error) {
 	if ab, ok := r.MatchNative(required); ok {
@@ -276,7 +313,17 @@ func (r *Router) Route(required []string) (Plan, error) {
 		}
 		return Plan{Kind: "native", Ability: ab.ID, Command: ab.Command, Args: ab.Args, Tier: tier}, nil
 	}
-	if cands := r.RankAgents(required); len(cands) > 0 {
+	cands := r.RankAgents(required)
+	if len(cands) == 0 && len(required) == 0 {
+		cands = r.RankAgents([]string{"coding", "shell", "file_edit"})
+		if len(cands) == 0 && len(r.card.Agents) > 0 {
+			for name, ag := range r.card.Agents {
+				cands = append(cands, AgentCandidate{Name: name, Agent: ag, Score: 1.0})
+			}
+			sort.Slice(cands, func(i, j int) bool { return cands[i].Name < cands[j].Name })
+		}
+	}
+	if len(cands) > 0 {
 		top := cands[0]
 		// Agent plans carry a tier like native ones, and an undeclared tier now
 		// defaults to 1 — delegating to an agent is auto-approved.
@@ -560,10 +607,10 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 		res.Model = dec.Model
 	}
 	// Dynamic injection fallback (Requirement 5):
-	// If the agent failed with authentication or quota issues (e.g. 401/403/invalid token/insufficient quota)
+	// If the agent failed with authentication, quota, provider errors, or timeouts
 	// and PANDA had not injected its model key (because the agent declared its own credentials which failed),
 	// automatically inject PANDA's configured model API key to adapt the harness instead of discarding the task.
-	if !res.OK && !dec.Inject && supportsModelInjection(adapter, r.model) && r.model.APIKey != "" && isAuthOrQuotaFailure(res.Result+" "+res.Stderr) {
+	if !res.OK && !dec.Inject && supportsModelInjection(adapter, r.model) && r.model.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
 		if r.model.BaseURL == "" || security.NewNetworkGuard(security.EndpointHost(r.model.BaseURL)).CheckURL(r.model.BaseURL) == nil {
 			injectedEnv := modelEnvForAdapter(r.model, adapter)
 			if len(injectedEnv) > 0 {
@@ -584,14 +631,21 @@ func (r *Router) SetAdapterProcessRunner(fn func(ctx context.Context, adapter, p
 	r.runProcess = fn
 }
 
-func isAuthOrQuotaFailure(text string) bool {
+func isProviderFailureOrAuth(text string) bool {
 	low := strings.ToLower(text)
 	patterns := []string{
-		"401", "403", "unauthorized", "forbidden", "invalid token",
+		"401", "402", "403", "unauthorized", "forbidden", "invalid token",
+		"payment required", "payment_required", "budget pool", "exhausted",
 		"invalid api key", "invalid_api_key", "额度不足", "quota",
 		"insufficient_quota", "credit balance", "out of credit",
 		"not logged in", "failed to authenticate", "auth error",
 		"authentication failed", "no api key", "api key missing",
+		"500", "502", "503", "504", "server_error", "internal server error",
+		"service unavailable", "bad gateway", "overloaded", "rate limit",
+		"rate_limit", "429", "connection refused", "connection reset",
+		"connect error", "failed to connect", "timed out", "timeout",
+		"unrecognized_model", "model_not_found", "model not found",
+		"api_retry", "api_error", "provider failure",
 	}
 	for _, p := range patterns {
 		if strings.Contains(low, p) {

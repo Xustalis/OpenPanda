@@ -38,6 +38,10 @@ import _harness as harness
 DEFAULT_MODEL = "opencode/deepseek-v4-flash-free"
 
 
+class ProviderFailure(Exception):
+    """Provider or upstream API failure (e.g. rate limit, auth, server_error)."""
+
+
 class Unsupported(Exception):
     """The CLI rejected --format json — degrade to plain text mode."""
 
@@ -46,15 +50,26 @@ def main():
     req = harness.read_request()
     prompt, timeout, cwd = req
 
-    # opencode resolves --model as provider/model; a bare model name fails. A
-    # provider/model id from env wins; otherwise default to the built-in free
-    # model, which needs no API key. stdin is /dev/null so opencode never waits
-    # on an inherited pipe for the prompt.
-    model = os.environ.get("OPENCODE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
-    cmd = ["opencode", "run", "--print-logs=false",
-           "--format", "json", "--auto"]
-    if model and "/" in model:
-        cmd += ["--model", model]
+    # Model resolution:
+    # If PANDA model injection is active, pass the injected model.
+    cmd = ["opencode", "run", "--print-logs=true",
+           "--format", "json"]
+    if os.environ.get("OPENPANDA_INJECTED_MODEL") == "1":
+        model = os.environ.get("OPENCODE_MODEL") or os.environ.get("OPENAI_MODEL", "")
+        if model:
+            if "/" in model:
+                cmd += ["--model", model]
+            else:
+                cmd += ["--model", f"openai/{model}"]
+        else:
+            cmd.append("--auto")
+    else:
+        model = os.environ.get("OPENCODE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
+        if model and "/" in model:
+            cmd += ["--model", model]
+        else:
+            cmd.append("--auto")
+
     # A follow-up round resumes the agent's own session: its reasoning trail
     # survives instead of cold-starting on the bare follow-up instruction.
     if req.resume:
@@ -63,6 +78,9 @@ def main():
 
     try:
         out = _run_events(cmd, cwd, timeout)
+    except ProviderFailure as e:
+        harness.emit(False, f"provider failure: {e}", 1)
+        return
     except Unsupported:
         # Older CLI without --format json: one-shot plain text run. The
         # plain command is rebuilt from scratch (never token-filtered out
@@ -101,12 +119,11 @@ def _run_events(cmd, cwd, timeout):
     state = {
         "saw_event": False,
         "session_id": "",
-        # part id -> text; message.part.updated re-sends the part's full text
-        # as it grows, so keying by id keeps each part exactly once.
         "texts": {},
         "order": [],
         "usage": {"input_tokens": 0, "output_tokens": 0},
         "cost": None,
+        "error": "",
     }
 
     def on_line(line):
@@ -114,15 +131,30 @@ def _run_events(cmd, cwd, timeout):
         if ev is None:
             return
         state["saw_event"] = True
+        et = ev.get("type") or ""
+        if et == "error":
+            err_obj = ev.get("error") if isinstance(ev.get("error"), dict) else {}
+            err_msg = ""
+            if isinstance(err_obj.get("data"), dict):
+                err_msg = err_obj["data"].get("message", "")
+            if not err_msg:
+                err_msg = str(err_obj.get("message") or "")
+            state["error"] = err_msg or "opencode error"
+            raise ProviderFailure(state["error"])
         _fold(ev, state)
 
+    def on_stderr(chunk):
+        low = chunk.lower()
+        if "rate limit exceeded" in low or "ai_retryerror" in low or "ai_apicallerror" in low or "stream error" in low:
+            raise ProviderFailure(chunk.strip())
+
     returncode, err, timed_out = harness.run_stream(
-        cmd, cwd=cwd, timeout=timeout, on_line=on_line)
+        cmd, cwd=cwd, timeout=timeout, on_line=on_line, on_stderr=on_stderr)
     if timed_out:
         raise subprocess.TimeoutExpired(cmd, timeout)
 
     if not state["saw_event"]:
-        # Nothing parse came out: either the CLI rejects --format json
+        # Nothing parsed came out: either the CLI rejects --format json
         # (older version — degrade) or it failed outright (surface stderr).
         low = err.lower()
         if returncode != 0 and ("unknown option" in low or "unrecognized" in low
@@ -135,8 +167,8 @@ def _run_events(cmd, cwd, timeout):
     usage = state["usage"]
     tokens = usage["input_tokens"] + usage["output_tokens"] or None
     return {
-        "ok": returncode == 0,
-        "result": text or err.strip(),
+        "ok": returncode == 0 and not state["error"],
+        "result": text or state["error"] or err.strip(),
         "exit_code": returncode,
         "tokens": tokens,
         "cost": state["cost"],

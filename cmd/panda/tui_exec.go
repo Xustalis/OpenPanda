@@ -1,62 +1,73 @@
 package main
 
-// Running the existing slash commands from the TUI. The classic REPL's ~30
-// handlers print straight to stdout with fmt/pal(); rewriting every one to an
-// injected writer would churn 150+ call sites for no behavioural gain. Instead
-// we lean on Bubble Tea's Exec: it releases the terminal, runs our command in
-// the foreground with stdout restored to the real tty, then repaints. The
-// handler's output lands in scrollback exactly as it does in the classic loop —
-// consistent with the TUI's inline model, where committed output already lives
-// in the terminal's own history — and the dispatch table stays the single source
-// of truth for what every command does.
-
 import (
-	"fmt"
 	"io"
+	"os"
 	"strings"
+	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// execDoneMsg reports that an Exec'd slash command finished. dispatch never
-// returns an error, so err is reserved for a future handler that might.
-type execDoneMsg struct{ err error }
-
-// replExecCmd adapts a repl slash-command line to Bubble Tea's ExecCommand. Run
-// executes with the terminal released, so the handlers' fmt.Println output goes
-// to the real screen (and thus scrollback). The Set* methods are no-ops: the
-// handlers write to the process stdout directly, not to an injected writer.
-type replExecCmd struct {
-	r    *repl
-	line string
-	echo string // the rendered "❯ /cmd" line, printed above the output
+// execDoneMsg reports that an executed slash or shell command finished.
+type execDoneMsg struct {
+	text   string
+	output string
 }
 
-func (c replExecCmd) Run() error {
-	if c.echo != "" {
-		fmt.Println(c.echo)
+var captureMu sync.Mutex
+
+// captureOutput intercepts stdout and stderr produced by fn, returning the
+// combined captured text. This allows the classic REPL's handlers (which print
+// straight to stdout with fmt/pal) to execute cleanly inside the full-screen AltScreen TUI
+// without releasing the terminal or discarding output.
+func captureOutput(fn func()) string {
+	captureMu.Lock()
+	defer captureMu.Unlock()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		fn()
+		return ""
 	}
-	c.r.dispatch(c.line)
-	return nil
+
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	os.Stdout = w
+	os.Stderr = w
+
+	outC := make(chan string, 1)
+	go func() {
+		var buf strings.Builder
+		_, _ = io.Copy(&buf, r)
+		outC <- buf.String()
+	}()
+
+	fn()
+
+	_ = w.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+
+	out := <-outC
+	_ = r.Close()
+	return out
 }
 
-func (replExecCmd) SetStdin(io.Reader)  {}
-func (replExecCmd) SetStdout(io.Writer) {}
-func (replExecCmd) SetStderr(io.Writer) {}
-
-// runSlash builds the command to run a slash line in the foreground and report
-// completion. The echo mirrors the classic prompt so the transcript reads as a
-// dialogue; it is printed inside Run (after the terminal is released) rather
-// than via tea.Println, which sidesteps any ordering race between the managed
-// renderer and the released-terminal write.
+// runSlash builds the command to execute a slash line or shell command in the background
+// and deliver its captured output to the model loop without exiting AltScreen.
 func (m tuiModel) runSlash(text string) tea.Cmd {
-	// The leading blank line is the same spacing printBlock gives a committed
-	// block: a command's echo is a transcript entry like any other, and without it
-	// the echo abutted whatever the previous turn left on screen.
-	echo := "\n" + block{kind: blockUser, body: text}.render(m.th, m.textWidth(), m.expandThought)
-	return tea.Exec(replExecCmd{r: m.r, line: text, echo: echo}, func(err error) tea.Msg {
-		return execDoneMsg{err: err}
-	})
+	return func() tea.Msg {
+		out := captureOutput(func() {
+			if m.r != nil {
+				m.r.dispatch(text)
+			}
+		})
+		return execDoneMsg{
+			text:   text,
+			output: out,
+		}
+	}
 }
 
 // isBareCommand reports whether a submitted line should run through the repl
