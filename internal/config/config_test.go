@@ -311,3 +311,37 @@ func TestArtifactPathResolution(t *testing.T) {
 		t.Fatalf("artifact_path = %q, want the absolute %q", cfg.Storage.ArtifactPath, abs)
 	}
 }
+
+func TestResolvePathAndCardTargetFallback(t *testing.T) {
+	os.Unsetenv("OPENPANDA_CONFIG_PATH")
+
+	// Explicit path wins
+	if got := ResolvePath("/custom/config.yaml"); got != "/custom/config.yaml" {
+		t.Errorf("ResolvePath(explicit) = %q, want /custom/config.yaml", got)
+	}
+
+	// OPENPANDA_CONFIG_PATH wins over defaults
+	os.Setenv("OPENPANDA_CONFIG_PATH", "/env/config.yaml")
+	if got := ResolvePath(""); got != "/env/config.yaml" {
+		t.Errorf("ResolvePath(env) = %q, want /env/config.yaml", got)
+	}
+	os.Unsetenv("OPENPANDA_CONFIG_PATH")
+
+	// Missing files on disk: must NOT return system /etc/openpanda if user config is available
+	resolved := ResolvePath("")
+	userCfg, err := UserConfigPath()
+	if err == nil && userCfg != "" {
+		if resolved == DefaultPath && resolved != userCfg {
+			t.Errorf("ResolvePath(\"\") = %q (system DefaultPath), should have fallen back to user config %q", resolved, userCfg)
+		}
+	}
+
+	// DefaultCardTarget must target user dir when no system config exists
+	cardTarget := DefaultCardTarget("")
+	if userCfg, err := UserConfigPath(); err == nil && userCfg != "" {
+		wantCard := filepath.Join(filepath.Dir(userCfg), "capabilities.yaml")
+		if cardTarget != wantCard && cardTarget == filepath.Join(SystemConfigDir(), "capabilities.yaml") {
+			t.Errorf("DefaultCardTarget(\"\") = %q, want user target %q", cardTarget, wantCard)
+		}
+	}
+}

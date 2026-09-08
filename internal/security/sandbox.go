@@ -40,7 +40,12 @@ func NewSandbox(dir string) *Sandbox { return &Sandbox{dir: dir} }
 
 // posixEnvKeys are the variables a POSIX adapter needs to function at all.
 // HOME is here on purpose — agent CLIs read their own config and auth from it.
-var posixEnvKeys = []string{"PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "TMPDIR"}
+// Proxy variables are included so CLIs can reach model providers behind proxies.
+var posixEnvKeys = []string{
+	"PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "TMPDIR",
+	"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+	"http_proxy", "https_proxy", "all_proxy", "no_proxy",
+}
 
 // windowsEnvKeys are the Windows equivalents. This list is not cosmetic: a
 // process started with only PATH set on Windows is broken in ways that look like
@@ -58,6 +63,8 @@ var windowsEnvKeys = []string{
 	"APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
 	"USERNAME", "USERDOMAIN", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
 	"LANG",
+	"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+	"http_proxy", "https_proxy", "all_proxy", "no_proxy",
 }
 
 // Env returns the subprocess environment: a fixed allow-list of the variables an

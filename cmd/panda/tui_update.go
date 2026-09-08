@@ -32,7 +32,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				prints := m.startupPrints()
 				cmds := make([]tea.Cmd, len(prints))
 				for i, p := range prints {
-					cmds[i] = tea.Println(p)
+					text := p
+					cmds[i] = func() tea.Msg { return blockCommitMsg{text: text} }
 				}
 				return m, tea.Batch(cmds...)
 			}
@@ -69,15 +70,27 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case watchMsg:
 		return m.onWatch(msg)
 	case execDoneMsg:
-		// A slash/shell command finished in the foreground; the terminal is
-		// restored and its output already sits in scrollback.
+		// A slash/shell command finished; commit its user echo and captured output
+		// to chatHistory and return to modeIdle.
 		m.mode = modeIdle
 		m.applyLocale()
 		m.refreshProject()
-		if msg.err != nil {
-			blk := block{kind: blockError, body: msg.err.Error()}
-			return m, m.printBlock(blk)
+		if m.chatHistory != nil {
+			if msg.text == "/new" {
+				m.chatHistory.blocks = nil
+			} else if msg.text != "" {
+				m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: msg.text})
+			}
+			if strings.TrimSpace(msg.output) != "" {
+				m.chatHistory.blocks = append(m.chatHistory.blocks, block{
+					kind: blockInfo,
+					body: strings.TrimRight(msg.output, "\n"),
+				})
+			}
 		}
+		m.scrollOffset = 0
+		return m, nil
+	case blockCommitMsg:
 		return m, nil
 	case droppedMsg:
 		return m, nil
@@ -163,13 +176,11 @@ func (m tuiModel) onSplashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "q", "Q":
 			m.quitting = true
 			return m, tea.Quit
-		case " ":
-			return m.startFromSplash()
 		}
-	case tea.KeyEnter:
+		return m.startFromSplash()
+	default:
 		return m.startFromSplash()
 	}
-	return m, nil
 }
 
 // startFromSplash transitions from splash to the model onboarding guide or main idle chat.
@@ -190,12 +201,8 @@ func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
 	}
 
 	m.mode = modeIdle
-	prints := m.startupPrints()
-	cmds := make([]tea.Cmd, len(prints))
-	for i, p := range prints {
-		cmds[i] = tea.Println(p)
-	}
-	return m, tea.Batch(cmds...)
+	m.scrollOffset = 0
+	return m, nil
 }
 
 // interrupt answers Esc/Ctrl-C during a turn. It releases this front end from
@@ -246,13 +253,35 @@ func (m tuiModel) onIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch msg.Type {
+	case tea.KeyPgUp:
+		avail := m.height - 4
+		if avail <= 0 {
+			avail = 10
+		}
+		m.scrollOffset += max(1, avail/2)
+		return m, nil
+	case tea.KeyPgDown:
+		avail := m.height - 4
+		if avail <= 0 {
+			avail = 10
+		}
+		m.scrollOffset -= max(1, avail/2)
+		if m.scrollOffset < 0 {
+			m.scrollOffset = 0
+		}
+		return m, nil
 	case tea.KeyEnter:
+		m.scrollOffset = 0
 		text := strings.TrimSpace(m.ta.Value())
 		if text == "" {
 			return m, nil
 		}
 		return m.submit(text)
 	case tea.KeyEsc:
+		if m.scrollOffset > 0 {
+			m.scrollOffset = 0
+			return m, nil
+		}
 		m.ta.Reset()
 		m.menu.close()
 		return m, nil
@@ -263,6 +292,7 @@ func (m tuiModel) onIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	m.scrollOffset = 0
 	var cmd tea.Cmd
 	m.ta, cmd = m.ta.Update(msg)
 	// Grow the input box with its content up to the cap, so multi-line prompts
@@ -287,6 +317,18 @@ func (m tuiModel) onIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // keyboard path (y/n, Esc/Enter, arrows+Tab).
 func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeExec || m.quitting {
+		return m, nil
+	}
+
+	switch msg.Type {
+	case tea.MouseWheelUp:
+		m.scrollOffset += 3
+		return m, nil
+	case tea.MouseWheelDown:
+		m.scrollOffset -= 3
+		if m.scrollOffset < 0 {
+			m.scrollOffset = 0
+		}
 		return m, nil
 	}
 
@@ -442,6 +484,7 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 	m.ta.Reset()
 	m.ta.SetHeight(1)
 	m.menu.close()
+	m.scrollOffset = 0
 	if text == "/exit" || text == "/quit" {
 		m.quitting = true
 		return m, tea.Quit
@@ -449,13 +492,14 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 
 	// Interactive commands rendered in full-screen TUI (Requirement 2, 4, 5)
 	switch {
-	case text == "/clear":
+	case text == "/clear" || text == "/cls":
 		if m.chatHistory != nil {
 			m.chatHistory.blocks = nil
 		}
 		if m.r != nil {
 			m.r.convo = nil
 		}
+		m.scrollOffset = 0
 		return m, nil
 	case text == "/sessions" || strings.HasPrefix(text, "/sessions "):
 		return m.openSessionsList()
@@ -504,8 +548,8 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 	}
 
 	if isBareCommand(text) {
-		// Other slash/shell commands reuse the repl handlers verbatim; their output
-		// flows to scrollback while Bubble Tea has the terminal released.
+		// Other slash/shell commands reuse the repl handlers verbatim; their
+		// output is captured and flows into scrollback without leaving AltScreen.
 		m.mode = modeExec
 		return m, m.runSlash(text)
 	}

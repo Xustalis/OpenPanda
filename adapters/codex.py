@@ -32,6 +32,10 @@ import os
 import _harness as harness
 
 
+class ProviderFailure(Exception):
+    """Provider or upstream API failure (e.g. 402, 5xx, quota exhausted, rate limit)."""
+
+
 def main():
     req = harness.read_request()
     prompt, timeout, cwd = req
@@ -55,11 +59,27 @@ def main():
         # A resumed run continues an existing session; --ephemeral would
         # discard exactly what the resume is meant to keep.
         cmd.append("--ephemeral")
-    # Model selection is Codex-specific; Anthropic variables must not leak
-    # into this provider contract.
-    model = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL", "")
-    if model:
-        cmd += ["--model", model]
+
+    # If PANDA model injection is active, override Codex's provider and model
+    # dynamically on the CLI so fallback/injected keys take effect over ~/.codex/config.toml.
+    if os.environ.get("OPENPANDA_INJECTED_MODEL") == "1":
+        base_url = os.environ.get("OPENAI_BASE_URL", "")
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        inj_model = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL", "")
+        if base_url:
+            cmd += [
+                "-c", 'model_provider="custom"',
+                "-c", f'model_providers.custom.base_url="{base_url}"',
+                "-c", f'model_providers.custom.experimental_bearer_token="{api_key}"',
+            ]
+        if inj_model:
+            cmd += ["-c", f'model="{inj_model}"']
+    else:
+        # Model selection is Codex-specific; Anthropic variables must not leak
+        # into this provider contract.
+        model = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL", "")
+        if model:
+            cmd += ["--model", model]
     cmd.append(prompt)
 
     # Stream the JSONL output live: tool/command items become progress
@@ -77,9 +97,26 @@ def main():
         if note:
             harness.progress(note)
 
+        # Fast provider failure detection: if the turn failed with 402/quota/server error,
+        # raise ProviderFailure so PANDA's dynamic model injection can rescue immediately.
+        obj = harness.parse_json_line(line)
+        if obj:
+            if obj.get("type") == "turn.failed":
+                err_dict = obj.get("error") if isinstance(obj.get("error"), dict) else {}
+                err_msg = err_dict.get("message", "")
+                raise ProviderFailure(err_msg or "turn failed")
+            if obj.get("type") == "error":
+                msg = str(obj.get("message") or "")
+                low = msg.lower()
+                if "402" in low or "quota" in low or "payment required" in low or "rate limit" in low:
+                    raise ProviderFailure(msg)
+
     try:
         returncode, err, timed_out = harness.run_stream(
             cmd, cwd=cwd, timeout=timeout, on_line=on_line)
+    except ProviderFailure as e:
+        harness.emit(False, f"provider failure: {e}", 1)
+        return
     except FileNotFoundError:
         harness.emit(False, "codex binary not found", 127)
         return

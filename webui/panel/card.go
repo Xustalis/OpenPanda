@@ -329,8 +329,11 @@ func (h *handler) cardPath() string {
 	if h.cardFilePath != "" {
 		return h.cardFilePath
 	}
-	if eng := h.currentEngine(); eng != nil {
+	if eng := h.currentEngine(); eng != nil && eng.CardPath() != "" {
 		return eng.CardPath()
+	}
+	if h.cfg != nil && h.cfg.EffectiveCardPath() != "" {
+		return h.cfg.EffectiveCardPath()
 	}
 	return ""
 }

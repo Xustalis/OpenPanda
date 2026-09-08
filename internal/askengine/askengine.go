@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
@@ -37,9 +38,10 @@ import (
 
 // Options tunes how the engine is built.
 type Options struct {
-	// CardPath points at capabilities.yaml. Only when set can classified
-	// tasks actually execute (the card powers the local scheduler core);
-	// without it the engine answers and runs memory tools only.
+	// CardPath points at capabilities.yaml. When empty, the engine derives the
+	// path from config or the default location and lazily initializes the
+	// scheduler on the first task dispatch or card mutation, so a missing
+	// CardPath no longer restricts the engine to answers and memory tools.
 	CardPath string
 	// MCPCommand is an optional space-separated stdio MCP server command
 	// whose tools are imported into the registry.
@@ -86,10 +88,11 @@ type Engine struct {
 	mcpCommand string
 	logger     *slog.Logger
 
-	// sched is non-nil exactly when Options.CardPath was set. schedMu
-	// serializes task submission: a submit may temporarily pin the core's
-	// work dir to a session worktree, which must not interleave. (Queue
-	// mode never swaps the global work dir — it travels per task.)
+	// sched powers task execution once initialized — either eagerly from
+	// Options.CardPath/config or lazily on first use (tryAutoInitScheduler).
+	// schedMu serializes task submission: a submit may temporarily pin the
+	// core's work dir to a session worktree, which must not interleave.
+	// (Queue mode never swaps the global work dir — it travels per task.)
 	sched       *core.Core
 	schedMu     sync.Mutex
 	schedCtx    context.Context
@@ -109,6 +112,8 @@ type Engine struct {
 	projectDir string
 	// queueTasks mirrors Options.QueueTasks.
 	queueTasks bool
+	// asyncPeers mirrors Options.AsyncPeers.
+	asyncPeers bool
 	// replyASCII mirrors Options.ReplyASCII (per-engine classify option).
 	replyASCII bool
 	// cardPath mirrors Options.CardPath: the capabilities.yaml the engine
@@ -441,6 +446,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		skills:     skillStore,
 		logger:     logger,
 		queueTasks: opts.QueueTasks,
+		asyncPeers: opts.AsyncPeers,
 		replyASCII: opts.ReplyASCII,
 		cardPath:   opts.CardPath,
 	}
@@ -465,99 +471,149 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		}
 	}
 
-	if opts.CardPath != "" {
-		card, err := ledger.LoadCard(opts.CardPath)
-		if err != nil {
-			e.Close()
-			return nil, fmt.Errorf("askengine: load capabilities: %w", err)
-		}
-		// Same pruning the daemon does: a native ability whose command is not
-		// installed here would win the native plan and fail at exec.
-		if dropped := card.PruneUnavailableNative(); len(dropped) > 0 {
-			logger.Warn("native abilities dropped: command not found on this host", "ids", dropped)
-		}
-		// Mirror the daemon's card enrichment: kind/identity come from the
-		// config (the card file may omit them), and the node is registered
-		// under the same stable runtime ID the daemon uses. Without this, a
-		// fresh database shows an empty device list to the entry model —
-		// every ask degrades to "no devices available" even though this
-		// process can execute the card's tasks locally. The upsert is
-		// idempotent with the daemon's own registration.
-		card.NodeKind = cfg.Node.Kind
-		card.NodeIdentity = cfg.Node.EffectiveIdentity()
-		stableID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, card.NodeIdentity)
-		if err := ledger.Register(db, card, stableID, schedulerTier(cfg.Node.ResourceClass)); err != nil {
-			logger.Warn("self-register failed", "node", stableID, "err", err)
-		}
-		// The engine's scheduler is a short-lived/ephemeral participant: its
-		// node id never collides with the concurrently running daemon on the
-		// same node (the daemon owns the stable identity and listener). The
-		// ephemeral id derives from the *stable* runtime id, not the bare
-		// config name, so a VM ask session still trims back to the same
-		// "name@vm-…" row the daemon registered and routing sees its own
-		// capacity (scheduler.IsSelfRow strips the 8-hex suffix).
-		sched := core.NewCore(db, core.EphemeralNodeID(stableID), card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
-		sched.SetRouterPolicy(cfg.Injection, cfg.Routing)
-		sched.AttachSupervisor(cfg.Model)
-		if skillStore != nil {
-			sched.SetMemoryStores(injector, memory.NewDaily(hermes.WarmDir()), skillStore)
-		}
-		// The project plane: what a delegated project task carries with it. Wired
-		// here as well as in the daemon, because an interactive ask delegates too.
-		sched.SetProjectStores(projectstore.NewStore(db), cfg.Storage.ProjectsPath)
-		sched.SetWorkDir(cfg.Storage.WorkPath)
-		sched.SetHostStatePaths(hostStatePaths(cfg))
-		sched.SetSharedSecret(cfg.Network.SharedSecret)
-		schedCtx, cancel := context.WithCancel(context.Background())
-		e.sched = sched
-		e.schedCtx = schedCtx
-		e.schedCancel = cancel
-
-		// Queue mode runs the node-local queue scheduler so enqueued tasks
-		// execute here even if the kernel daemon is down (ClaimLocal's CAS
-		// keeps the two instances from double-running a task).
-		if opts.QueueTasks {
-			sched.StartQueueScheduler(schedCtx)
-		}
-
-		if opts.AsyncPeers {
-			// Interactive surfaces: dial in the background and never hold the
-			// first prompt — an offline peer can burn the dialer's full 10s
-			// timeout, and it used to (serially, before the banner). The conns
-			// land in the registry whenever they land; a delegation arriving
-			// before that sees the same state as a peer that is offline. Dial
-			// failures log at debug: an offline peer is routine in a
-			// long-lived session, and a WARN on stderr would land mid-keystroke
-			// on the line editor.
-			for _, peer := range cfg.Network.Peers {
-				go func(p string) {
-					if err := sched.DialPeer(schedCtx, p); err != nil {
-						logger.Debug("peer dial failed", "peer", p, "err", err)
-					}
-				}(peer)
+	cardTarget := opts.CardPath
+	explicitCard := opts.CardPath != ""
+	if cardTarget == "" && cfg != nil {
+		cardTarget = cfg.EffectiveCardPath()
+	}
+	if cardTarget == "" {
+		cardTarget = config.DefaultCardTarget("")
+	}
+	if cardTarget != "" {
+		if _, _, err := carddetect.EnsureCard(cardTarget); err != nil {
+			if fallback := config.DefaultCardTarget(""); fallback != "" && fallback != cardTarget {
+				if _, _, fbErr := carddetect.EnsureCard(fallback); fbErr == nil {
+					cardTarget = fallback
+					_ = e.initSchedulerLocked(cardTarget)
+				}
+			}
+			if e.sched == nil && explicitCard {
+				e.Close()
+				return nil, fmt.Errorf("askengine: load capabilities: %w", err)
 			}
 		} else {
-			// One-shot callers need the conns before the first routing
-			// decision, but not one at a time: dials run concurrently so an
-			// unreachable peer's timeout does not gate a reachable one.
-			var wg sync.WaitGroup
-			for _, peer := range cfg.Network.Peers {
-				wg.Add(1)
-				go func(p string) {
-					defer wg.Done()
-					if err := sched.DialPeer(schedCtx, p); err != nil {
-						logger.Debug("peer dial failed", "peer", p, "err", err)
-					}
-				}(peer)
-			}
-			wg.Wait()
-			if len(cfg.Network.Peers) > 0 {
-				waitForPeers(schedCtx, db, 2*time.Second)
+			if err := e.initSchedulerLocked(cardTarget); err != nil {
+				if explicitCard {
+					e.Close()
+					return nil, fmt.Errorf("askengine: init scheduler: %w", err)
+				}
+				logger.Warn("init scheduler failed", "card", cardTarget, "err", err)
 			}
 		}
 	}
 
 	return e, nil
+}
+
+// tryAutoInitScheduler attempts to dynamically ensure a capability card and
+// initialize the scheduler if it has not yet been started.
+func (e *Engine) tryAutoInitScheduler() {
+	e.schedMu.Lock()
+	defer e.schedMu.Unlock()
+	if e.sched != nil {
+		return
+	}
+	target := e.cardPath
+	if target == "" && e.cfg != nil {
+		target = e.cfg.EffectiveCardPath()
+	}
+	if target == "" {
+		target = config.DefaultCardTarget("")
+	}
+	if target == "" {
+		return
+	}
+	if _, _, err := carddetect.EnsureCard(target); err == nil {
+		if err := e.initSchedulerLocked(target); err != nil {
+			e.logger.Warn("askengine: auto-init scheduler failed", "card", target, "err", err)
+		}
+	} else if fallback := config.DefaultCardTarget(""); fallback != "" && fallback != target {
+		if _, _, err2 := carddetect.EnsureCard(fallback); err2 == nil {
+			if err := e.initSchedulerLocked(fallback); err != nil {
+				e.logger.Warn("askengine: auto-init scheduler failed", "card", fallback, "err", err)
+			}
+		}
+	}
+}
+
+func (e *Engine) initSchedulerLocked(cardPath string) error {
+	card, err := ledger.LoadCard(cardPath)
+	if err != nil {
+		return fmt.Errorf("askengine: load capabilities: %w", err)
+	}
+	// Same pruning the daemon does: a native ability whose command is not
+	// installed here would win the native plan and fail at exec.
+	if dropped := card.PruneUnavailableNative(); len(dropped) > 0 {
+		e.logger.Warn("native abilities dropped: command not found on this host", "ids", dropped)
+	}
+	// Mirror the daemon's card enrichment: kind/identity come from the
+	// config (the card file may omit them), and the node is registered
+	// under the same stable runtime ID the daemon uses. Without this, a
+	// fresh database shows an empty device list to the entry model —
+	// every ask degrades to "no devices available" even though this
+	// process can execute the card's tasks locally. The upsert is
+	// idempotent with the daemon's own registration.
+	card.NodeKind = e.cfg.Node.Kind
+	card.NodeIdentity = e.cfg.Node.EffectiveIdentity()
+	stableID := core.RuntimeNodeID(e.cfg.Node.Name, e.cfg.Node.Kind, card.NodeIdentity)
+	if err := ledger.Register(e.db, card, stableID, schedulerTier(e.cfg.Node.ResourceClass)); err != nil {
+		e.logger.Warn("self-register failed", "node", stableID, "err", err)
+	}
+	// The engine's scheduler is a short-lived/ephemeral participant: its
+	// node id never collides with the concurrently running daemon on the
+	// same node (the daemon owns the stable identity and listener).
+	sched := core.NewCore(e.db, core.EphemeralNodeID(stableID), card, schedulerTier(e.cfg.Node.ResourceClass), e.logger, e.cfg.Model)
+	sched.SetRouterPolicy(e.cfg.Injection, e.cfg.Routing)
+	sched.AttachSupervisor(e.cfg.Model)
+	if e.skills != nil {
+		sched.SetMemoryStores(e.injector, memory.NewDaily(e.hermes.WarmDir()), e.skills)
+	}
+	sched.SetProjectStores(projectstore.NewStore(e.db), e.cfg.Storage.ProjectsPath)
+	sched.SetWorkDir(e.cfg.Storage.WorkPath)
+	sched.SetHostStatePaths(hostStatePaths(e.cfg))
+	sched.SetSharedSecret(e.cfg.Network.SharedSecret)
+	sched.SetTimeouts(e.cfg.Timeouts)
+
+	if e.schedCancel != nil {
+		e.schedCancel()
+	}
+	schedCtx, cancel := context.WithCancel(context.Background())
+	e.sched = sched
+	e.schedCtx = schedCtx
+	e.schedCancel = cancel
+	e.cardPath = cardPath
+
+	// Only queue-mode surfaces own a background consumer. One-shot ask/REPL
+	// engines submit inline and must not unexpectedly drain persisted work.
+	if e.queueTasks {
+		sched.StartQueueScheduler(schedCtx)
+	}
+
+	if e.asyncPeers {
+		for _, peer := range e.cfg.Network.Peers {
+			go func(p string) {
+				if err := sched.DialPeer(schedCtx, p); err != nil {
+					e.logger.Debug("peer dial failed", "peer", p, "err", err)
+				}
+			}(peer)
+		}
+	} else {
+		var wg sync.WaitGroup
+		for _, peer := range e.cfg.Network.Peers {
+			wg.Add(1)
+			go func(p string) {
+				defer wg.Done()
+				if err := sched.DialPeer(schedCtx, p); err != nil {
+					e.logger.Debug("peer dial failed", "peer", p, "err", err)
+				}
+			}(peer)
+		}
+		wg.Wait()
+		if len(e.cfg.Network.Peers) > 0 {
+			waitForPeers(schedCtx, e.db, 2*time.Second)
+		}
+	}
+	return nil
 }
 
 // MaintainPeers keeps redialing configured peers in the background until ctx
@@ -803,7 +859,7 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 		if triage := entry.FastTriage(prompt, history); triage.IsFastPath {
 			fastSystem := entry.FastPathPrompt(e.replyASCII)
 			if conversationMemory != "" {
-				fastSystem += "\n\n═══ 用户记忆 ═══\n" + conversationMemory
+				fastSystem += "\n\n═══ User Memory ═══\n" + conversationMemory
 			}
 			var resp entry.Response
 			var rerr error
@@ -824,16 +880,21 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			if rerr == nil && resp.Text != "" {
+			if rerr == nil && resp.Text != "" && !entry.ContainsDSMLToolCall(resp.Text) {
 				return &Result{Kind: "answer", Answer: resp.Text}, nil
 			}
 			if streamedAny {
 				if rerr != nil {
 					return nil, rerr
 				}
-				return &Result{Kind: "answer", Answer: resp.Text}, nil
+				// The stream guard withheld DSML markup from the user's view;
+				// hand back the prose around it, never the raw tags.
+				return &Result{Kind: "answer", Answer: entry.StripDSMLToolCalls(resp.Text)}, nil
 			}
-			// If fast path fails before emitting any token and context is active, fallback seamlessly
+			// If fast path fails before emitting any token — or answered with
+			// textual tool-call markup the stream guard suppressed — fall
+			// through to the full pipeline, whose tool roster lets the model
+			// make a real call.
 		}
 	}
 	// The tool gate shares the task gate's consent semantics: "never"
@@ -856,6 +917,20 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	devices, err := ledger.Query(e.db, "online", "")
 	if err != nil {
 		devices = nil
+	}
+
+	// Per-ask registry copy carrying task_submit: the dispatch bridge for
+	// entry models behind compatible endpoints that drive everything through
+	// tool calls and never emit the task JSON directive (the observed failure:
+	// six rounds of taskq_list poking, zero tasks). Registered for every ask —
+	// intent-keyword gating was tried and abandoned: any phrasing the gate
+	// missed left tool-call-only models with no legal way to create a task.
+	// The tool closes over this ask's prompt/workDir/consent, and submission
+	// goes through the same submitTask path (scheduler, approval gate) as a
+	// KindTask directive.
+	if reg != nil {
+		reg = reg.Copy()
+		reg.Register(e.dispatchTaskTool(prompt, workDir, authorize, cb))
 	}
 
 rounds:
@@ -937,7 +1012,10 @@ rounds:
 			return &Result{Kind: "answer", Answer: out.Answer, Thought: accumulatedReasoning.String()}, nil
 		case entry.KindTask:
 			if e.sched == nil {
-				return nil, fmt.Errorf("task output requires a capability card (engine built without CardPath)")
+				e.tryAutoInitScheduler()
+			}
+			if e.sched == nil {
+				return nil, fmt.Errorf("task output requires a capability card (scheduler initialization failed)")
 			}
 			cb.progress(Progress{Kind: ProgressTask, Name: out.Task.Title})
 			res := e.submitTask(ctx, out.Task, prompt, authorize, workDir, accumulatedReasoning.String(), cb)
@@ -1048,6 +1126,9 @@ rounds:
 	}
 	if final.Kind == entry.KindTask {
 		if e.sched == nil {
+			e.tryAutoInitScheduler()
+		}
+		if e.sched == nil {
 			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议任务「%s」，但当前未加载能力卡片，无法提交。", maxRounds, final.Task.Title)}, nil
 		}
 		if lastTask != nil && taskRounds >= maxTasks {
@@ -1069,6 +1150,9 @@ rounds:
 		return res, nil
 	}
 	if final.Kind == entry.KindPlan {
+		if e.sched == nil {
+			e.tryAutoInitScheduler()
+		}
 		if e.sched == nil {
 			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议多阶段计划「%s」，但当前未加载能力卡片，无法启动。", maxRounds, final.Plan.Goal)}, nil
 		}
@@ -1097,8 +1181,10 @@ func (e *Engine) CardPath() string { return e.cardPath }
 // reports, so it moves too. Errors when the engine runs cardless — there is
 // nothing to reload.
 func (e *Engine) ReloadCard(path string) error {
+	e.schedMu.Lock()
+	defer e.schedMu.Unlock()
 	if e.sched == nil {
-		return fmt.Errorf("askengine: no scheduler (engine built without CardPath)")
+		return e.initSchedulerLocked(path)
 	}
 	if err := e.sched.ReloadCard(e.schedCtx, path); err != nil {
 		return err
@@ -1113,7 +1199,7 @@ func (e *Engine) ReloadCard(path string) error {
 // on success; the caller decides whether to wait or dial in the background.
 func (e *Engine) DialPeer(ctx context.Context, addr string) error {
 	if e.sched == nil {
-		return fmt.Errorf("askengine: no scheduler (engine built without CardPath)")
+		return fmt.Errorf("askengine: no scheduler (card missing or scheduler initialization failed)")
 	}
 	return e.sched.DialPeer(ctx, addr)
 }
@@ -1123,7 +1209,7 @@ func (e *Engine) DialPeer(ctx context.Context, addr string) error {
 // it when resources allow. Needs a capability card, like task submission.
 func (e *Engine) EnqueueTask(ctx context.Context, in core.TaskInput, q core.QueueSpec) (core.Task, error) {
 	if e.sched == nil {
-		return core.Task{}, fmt.Errorf("task creation requires a capability card (engine built without CardPath)")
+		return core.Task{}, fmt.Errorf("task creation requires a capability card (scheduler initialization failed)")
 	}
 	return e.sched.Enqueue(ctx, in, q)
 }
@@ -1137,7 +1223,7 @@ func (e *Engine) EnqueueTask(ctx context.Context, in core.TaskInput, q core.Queu
 // stages cannot be routed is a plan that cannot start.
 func (e *Engine) StartPlan(ctx context.Context, p plan.Plan, q core.QueueSpec) (string, error) {
 	if e.sched == nil {
-		return "", fmt.Errorf("starting a plan requires a capability card (engine built without CardPath)")
+		return "", fmt.Errorf("starting a plan requires a capability card (scheduler initialization failed)")
 	}
 	return e.sched.StartPlan(ctx, p, q)
 }
@@ -1145,7 +1231,7 @@ func (e *Engine) StartPlan(ctx context.Context, p plan.Plan, q core.QueueSpec) (
 // PlanStages returns every stage of one plan, for following a run.
 func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, error) {
 	if e.sched == nil {
-		return nil, fmt.Errorf("reading a plan requires a capability card (engine built without CardPath)")
+		return nil, fmt.Errorf("reading a plan requires a capability card (scheduler initialization failed)")
 	}
 	return e.sched.TaskStore().PlanStages(ctx, planID)
 }
@@ -1162,7 +1248,7 @@ func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, er
 // Consent for one shell command is not consent for a three-machine pipeline.
 func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, _ bool) (*Result, error) {
 	if e.sched == nil {
-		return nil, fmt.Errorf("plan output requires a capability card (engine built without CardPath)")
+		return nil, fmt.Errorf("plan output requires a capability card (scheduler initialization failed)")
 	}
 	p, err := plan.FromSpec(*spec)
 	if err != nil {

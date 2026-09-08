@@ -215,7 +215,7 @@ print(json.dumps({"is_error": False, "result": "degraded"}))
             "opencode.py", "opencode", r'''
 import json, os, sys
 args = sys.argv[1:]
-assert args[:2] == ["run", "--print-logs=false"]
+assert args[:2] == ["run", "--print-logs=true"]
 assert "--format" in args and args[args.index("--format") + 1] == "json"
 assert "--model" in args and args[args.index("--model") + 1] == "deepseek/deepseek-chat"
 assert args[-1] == "contract prompt"

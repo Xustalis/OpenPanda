@@ -46,6 +46,10 @@ class Unsupported(Exception):
     """The CLI rejected a streaming flag — degrade to plain JSON mode."""
 
 
+class ProviderFailure(Exception):
+    """The agent CLI's model provider failed with a server or auth error."""
+
+
 def main():
     req = harness.read_request()
     prompt, timeout, cwd = req
@@ -72,6 +76,9 @@ def main():
 
     try:
         out = _run_stream(base, model, cwd, timeout, disable_settings=injected)
+    except ProviderFailure as e:
+        harness.emit(False, str(e), 1)
+        return
     except Unsupported:
         # Older CLI: stream-json not available — degrade to one-shot JSON.
         try:
@@ -99,7 +106,11 @@ def _run_stream(base, model, cwd, timeout, disable_settings=False):
     cmd = base + ["--output-format", "stream-json", "--verbose"]
     if disable_settings:
         cmd += ["--setting-sources", ""]
-    if model:
+    # Claude Code CLI only accepts Anthropic model names. When a third-party
+    # provider (such as DeepSeek Anthropic API) is injected, foreign model names
+    # like 'deepseek-v4-flash' cause the CLI to exit with unrecognized_model.
+    # Leaving it to default lets Claude Code negotiate with the provider endpoint.
+    if model and not any(model.lower().startswith(p) for p in ("deepseek", "openai", "gpt")):
         cmd += ["--model", model]
 
     state = {"final": None, "saw_event": False}
@@ -114,6 +125,20 @@ def _run_stream(base, model, cwd, timeout, disable_settings=False):
             _emit_tool_events(ev)
         elif et == "result":
             state["final"] = ev
+        elif et == "system":
+            subtype = ev.get("subtype")
+            if subtype == "thinking_tokens":
+                delta = ev.get("estimated_tokens_delta", 0)
+                if delta and delta > 0:
+                    harness.progress("Claude: thinking…")
+            elif subtype == "api_retry":
+                attempt = ev.get("attempt", 1)
+                status = ev.get("error_status", "")
+                harness.progress(f"Claude: API retry {attempt} ({status})…")
+                # Fast failover: if provider returns 5xx or auth error on retries,
+                # abort quickly so PANDA dynamic injection or fallback chain can rescue the task.
+                if attempt >= 2 and status in (401, 403, 500, 502, 503, 504):
+                    raise ProviderFailure(f"api_retry error {status}: server_error")
 
     returncode, err, timed_out = harness.run_stream(
         cmd, cwd=cwd, timeout=timeout, on_line=on_line)

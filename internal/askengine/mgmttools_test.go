@@ -138,7 +138,7 @@ func TestMgmtToolsRegistered(t *testing.T) {
 	_, reg := newMgmtTestEngine(t)
 	allTools := []string{
 		"system_status", "card_list", "card_show", "taskq_list", "taskq_show",
-		"taskq_cancel", "taskq_priority", "taskq_move", "taskq_create",
+		"taskq_cancel", "taskq_priority", "taskq_move",
 		"card_native_add", "card_native_remove", "card_agent_add", "card_agent_set", "card_agent_remove",
 		"card_manual_add", "card_manual_remove",
 		"project_list", "project_create", "project_enter", "project_exit",
@@ -321,18 +321,6 @@ func TestTaskqPriorityAndMove(t *testing.T) {
 	}
 }
 
-func TestTaskqCreate(t *testing.T) {
-	_, reg := newMgmtTestEngine(t)
-	res := runMgmtTool(t, reg, "taskq_create", map[string]any{
-		"title":    "测试新增任务",
-		"prompt":   "写一个测试函数",
-		"priority": "high",
-	})
-	if !strings.Contains(res, "新任务已成功入队") || !strings.Contains(res, "测试新增任务") {
-		t.Fatalf("taskq_create failed: %s", res)
-	}
-}
-
 func TestCardMutations(t *testing.T) {
 	_, reg := newMgmtTestEngine(t)
 
@@ -486,5 +474,84 @@ func TestReminderDelete(t *testing.T) {
 	resDel2 := runMgmtTool(t, reg, "reminder_delete", map[string]any{"id": 1})
 	if !strings.Contains(resDel2, "未找到 ID 为 #1 的提醒") {
 		t.Fatalf("reminder_delete not found: %s", resDel2)
+	}
+}
+
+func TestCardAgentAddAutoInit(t *testing.T) {
+	root := t.TempDir()
+	db, err := storage.Open(filepath.Join(root, "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	cfg := &config.Config{}
+	cfg.Node.Name = "test-auto-node"
+	cfg.Node.Kind = "physical"
+	cfg.Node.CardPath = filepath.Join(root, "auto", "capabilities.yaml")
+	cfg.Model.Model = "test-model"
+
+	rem := reminders.NewStore(db)
+	e := &Engine{
+		cfg:      cfg,
+		db:       db,
+		cardPath: cfg.Node.CardPath,
+		schedCtx: context.Background(),
+		remind:   rem,
+	}
+	e.registry = buildToolRegistry(e, memory.NewHermes(t.TempDir()), nil, rem)
+
+	// Ensure the file does not exist initially
+	if _, err := os.Stat(cfg.Node.CardPath); !os.IsNotExist(err) {
+		t.Fatalf("card file should not exist yet")
+	}
+
+	// Calling card_agent_add with no pre-existing card should auto-initialize and succeed
+	outAgent := runMgmtTool(t, e.registry, "card_agent_add", map[string]any{
+		"name":         "brand_new_agent",
+		"adapter":      "brand_new_agent.py",
+		"capabilities": []any{"coding", "cli", "shell"},
+		"cost_tier":    "high",
+	})
+	if !strings.Contains(outAgent, "已成功注册") {
+		t.Fatalf("card_agent_add new agent failed: %s", outAgent)
+	}
+
+	// Calling card_agent_add again with the same name should update without error
+	outAgentUpdate := runMgmtTool(t, e.registry, "card_agent_add", map[string]any{
+		"name":         "brand_new_agent",
+		"adapter":      "brand_new_agent.py",
+		"capabilities": []any{"coding", "cli", "shell", "review"},
+		"cost_tier":    "low",
+	})
+	if !strings.Contains(outAgentUpdate, "已更新配置") {
+		t.Fatalf("card_agent_add update failed: %s", outAgentUpdate)
+	}
+
+	// card_show should now successfully show brand_new_agent and the node
+	showOut := runMgmtTool(t, e.registry, "card_show", nil)
+	if !strings.Contains(showOut, "brand_new_agent") {
+		t.Fatalf("card_show output missing brand_new_agent: %s", showOut)
+	}
+
+	// Verify scheduler was dynamically initialized and holds the agent
+	if e.sched == nil {
+		t.Fatalf("expected scheduler to be dynamically initialized after card_agent_add")
+	}
+	if _, ok := e.sched.Card().Agents["brand_new_agent"]; !ok {
+		t.Fatalf("brand_new_agent not found in scheduler card: %v", e.sched.Card().Agents)
+	}
+
+	// Verify tryAutoInitScheduler works if scheduler is cleared
+	e.sched = nil
+	e.tryAutoInitScheduler()
+	if e.sched == nil {
+		t.Fatalf("expected tryAutoInitScheduler to recreate scheduler")
+	}
+	if _, ok := e.sched.Card().Agents["brand_new_agent"]; !ok {
+		t.Fatalf("brand_new_agent missing after tryAutoInitScheduler: %v", e.sched.Card().Agents)
 	}
 }

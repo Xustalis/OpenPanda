@@ -125,6 +125,17 @@ func (g *deltaGuard) deliver(text string) {
 		if trimmed == "" {
 			return // nothing visible yet; keep buffering
 		}
+		if dsmlStartIndex(trimmed) == 0 {
+			// The response opens with DSML tool-call markup: withhold it like
+			// any other structured output; resolveDSML recovers or rejects it.
+			g.decided = true
+			g.structured = true
+			g.buffered = nil
+			return
+		}
+		if dsmlMarkerPrefix(trimmed) {
+			return // a DSML marker split across deltas is still undecidable
+		}
 		g.decided = true
 		g.structured = trimmed[0] == '{' || trimmed[0] == '`'
 		if g.structured {
@@ -140,18 +151,31 @@ func (g *deltaGuard) deliver(text string) {
 	// so a structured block may still appear mid-stream (e.g. a reasoning
 	// preamble before the task JSON). Watch for a line-initial '{' or a
 	// ``` fence — including one split across deltas — and suppress from
-	// there; the parsed Output renders the directive at the end.
+	// there; the parsed Output renders the directive at the end. DSML tool-call
+	// markup gets the same treatment, anywhere in the text: it is a protocol
+	// artifact, never answer prose.
 	g.pending.WriteString(text)
 	s := g.pending.String()
-	if i := structuredStartIndex(s); i >= 0 {
+	di, ji := dsmlStartIndex(s), structuredStartIndex(s)
+	switch {
+	case di >= 0 && (ji < 0 || di < ji):
+		g.forward(s[:di])
+		g.structured = true
+		g.pending.Reset()
+		return
+	case ji >= 0:
 		// Keep the directive's own leading newline with the prose so the
 		// lead-in ends on its blank line; everything from '{' on is dropped.
-		g.forward(s[:i+1])
+		g.forward(s[:ji+1])
 		g.structured = true
 		g.pending.Reset()
 		return
 	}
-	safe := len(s) - holdbackLen(s)
+	hold := holdbackLen(s)
+	if d := dsmlHoldbackLen(s); d > hold {
+		hold = d
+	}
+	safe := len(s) - hold
 	if safe > 0 {
 		g.forward(s[:safe])
 		rest := s[safe:]
@@ -167,7 +191,15 @@ func (g *deltaGuard) flush() {
 	if tail := g.think.flush(); tail != "" {
 		g.deliver(tail)
 	}
-	if g.decided && !g.structured {
+	if !g.decided {
+		// The stream ended before the shape decision — e.g. a lone "<"
+		// withheld as a possible DSML marker prefix that never completed.
+		// Withheld bytes are plain prose: deliver them rather than drop them.
+		g.forward(strings.Join(g.buffered, ""))
+		g.buffered = nil
+		return
+	}
+	if !g.structured {
 		g.forward(g.pending.String())
 		g.pending.Reset()
 	}

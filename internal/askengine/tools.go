@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/mcp"
@@ -276,6 +277,88 @@ func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall,
 		return "工具执行失败：" + err.Error()
 	}
 	return result
+}
+
+// dispatchTaskTool builds task_submit — the dispatch bridge for entry models
+// behind compatible endpoints that drive everything through tool calls and
+// never emit the task JSON directive (the observed failure: six rounds of
+// taskq_list poking, zero tasks). It is registered on a per-ask copy of the
+// registry because Run closes over the ask's prompt, workDir, consent and
+// progress callbacks; submission goes through the same submitTask path
+// (scheduler, approval gate) as a KindTask directive, and an inline-mode
+// completion folds its output into the tool result so the model can report it.
+func (e *Engine) dispatchTaskTool(prompt, workDir string, authorize bool, cb StreamCallbacks) entry.Tool {
+	return entry.Tool{
+		Name:        "task_submit",
+		Description: "把任务派发给 agent 执行。当用户要求调度某个 agent 干活时必须调用它（或输出 task JSON），而不是只口头答应。title 填任务标题，target 填要完成的目标，abilities 按 Connected Devices 摘要填能力 ID（如 agent:codex）。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title":              map[string]any{"type": "string", "description": "任务标题（必填）"},
+				"target":             map[string]any{"type": "string", "description": "要达成的目标（必填）"},
+				"abilities":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "能力 ID 列表，如 agent:codex（必填）"},
+				"node":               map[string]any{"type": "string", "description": "目标节点名（可选，留空由调度器选择）"},
+				"scope":              map[string]any{"type": "string", "description": "允许修改的相对路径，逗号分隔（可选）"},
+				"constraints":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "约束/禁令（可选）"},
+				"success_definition": map[string]any{"type": "string", "description": "如何验证完成（可选）"},
+			},
+			"required": []string{"title", "target", "abilities"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			title, _ := args["title"].(string)
+			target, _ := args["target"].(string)
+			if strings.TrimSpace(title) == "" || strings.TrimSpace(target) == "" {
+				return "", fmt.Errorf("title 和 target 不能为空")
+			}
+			abilities := toStringSlice(args["abilities"])
+			if len(abilities) == 0 {
+				return "", fmt.Errorf("abilities 不能为空：按 Connected Devices 能力摘要填写，如 agent:codex")
+			}
+			node, _ := args["node"].(string)
+			scope, _ := args["scope"].(string)
+			successDef, _ := args["success_definition"].(string)
+			spec := &entry.TaskSpec{
+				Title:       strings.TrimSpace(title),
+				ContextType: "command",
+				Requires:    entry.Requires{Abilities: abilities},
+				Spec: entry.TaskSpecDetail{
+					Target:            strings.TrimSpace(target),
+					Node:              strings.TrimSpace(node),
+					Scope:             strings.TrimSpace(scope),
+					Constraints:       toStringSlice(args["constraints"]),
+					SuccessDefinition: strings.TrimSpace(successDef),
+				},
+				Complexity: 0.5,
+				Risk:       "low",
+			}
+			if err := entry.ValidateTaskSpec(spec); err != nil {
+				return "", err
+			}
+			if e.sched == nil {
+				e.tryAutoInitScheduler()
+			}
+			if e.sched == nil {
+				return "", fmt.Errorf("未加载能力卡片，无法派发任务")
+			}
+			cb.progress(Progress{Kind: ProgressTask, Name: spec.Title})
+			res := e.submitTask(ctx, spec, prompt, authorize, workDir, "", cb)
+			switch {
+			case res.NeedsApproval:
+				return fmt.Sprintf("任务「%s」已创建（ID %s），等待用户批准后执行（REPL 输入 /approve，或 panda task approve %s）。", spec.Title, res.TaskID, res.TaskID), nil
+			case res.TaskID == "":
+				return "", fmt.Errorf("任务派发失败：%s", strings.TrimSpace(res.Stderr))
+			}
+			msg := fmt.Sprintf("任务「%s」已派发：ID %s，状态 %s。", spec.Title, res.TaskID, zhTaskState(res.TaskState))
+			if out := strings.TrimSpace(res.Stdout); out != "" {
+				msg += "\n执行结果：\n" + excerpt(out, 2000)
+			}
+			if res.TaskState == core.StateFailed && strings.TrimSpace(res.Stderr) != "" {
+				msg += "\n失败信息：\n" + excerpt(strings.TrimSpace(res.Stderr), 1000)
+			}
+			return msg, nil
+		},
+	}
 }
 
 // toolConsentHint tells the model — so it can tell the user — how to grant the

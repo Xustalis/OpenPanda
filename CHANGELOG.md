@@ -42,6 +42,29 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Added
+
+- **Capability card auto-detection and one-step setup** — host probing (hardware, installed agent CLIs, resource class) now lives in a shared `internal/carddetect` package used by `panda detect`, `panda card rescan/edit`, onboarding and the web panel; a node without a card gets one assembled automatically instead of failing at first use.
+- **Lazy scheduler initialization** — the ask engine no longer requires `CardPath` up front: it derives the card location from config or the default path and brings the scheduler up on the first task dispatch or card mutation, so answers and memory tools work before any card exists.
+- **Structured card edits from every surface** — agent entries gain field-level `card_agent_set` updates and the web panel, REPL/TUI and CLI all mutate `capabilities.yaml` through one shared, validating path (`internal/cardmut`) that keeps hand-written comments intact.
+- **Proxy-aware sandbox** — the execution sandbox now passes standard proxy environment variables (upper- and lowercase) through to child processes, so routed installs and downloads work behind a proxy.
+- **Wider agent discovery** — the registry recognizes more binary aliases (`claude-code`, `grok-build`, `deepseek-harness`, `hermes-agent`) and probes the usual install dirs (`~/.local/bin`, `/opt/homebrew/bin`, …) in addition to `PATH`; OpenCode credential discovery follows its current config layout.
+
+### Changed
+
+- **System prompt rewritten in English with firmer task routing** — the entry model is now explicitly required to answer execution or agent-dispatch requests by emitting task JSON immediately, instead of passively chatting; dispatch-related trigger words (`调度`, `派发`, `dispatch`, `schedule`, …) are recognized in every language the prompt uses.
+- **Slash and shell commands stay inside the TUI** — `/…` and `!…` lines no longer release the terminal: their output is captured straight into the scrollback, and the chat view gains PgUp/PgDn and mouse-wheel scrolling to revisit it.
+- **Faster, more accurate provider failure handling** — adapters report auth/quota/5xx/provider failures with deterministic exit codes, the commander normalizes agent names and endpoint/model pairs per adapter (including DeepSeek's dual endpoints), and routing falls back to a general-purpose agent when a task names no specific requirement, so failed injections recover instead of retrying a dead endpoint.
+
+### Fixed
+
+- **Config resolution without a config file** — path resolution falls back to the user directory instead of `/etc`, and config writes create parent directories first; `node.card_path` is honored as the card location.
+- **Card edits no longer silently no-op** — adding an existing id or removing a missing one is an error everywhere, and the engine reloads the card after every mutation so changes take effect immediately.
+
+### Breaking changes
+
+- **The `taskq_create` management tool is removed** — task creation is now exclusively the entry model's job (task JSON output, executed immediately by the scheduler) or comes from the board/external tools; the queue tools (`taskq_list/show/cancel/priority/move`) remain for managing the backlog. Agents scripted to call `taskq_create` should emit a task or use the board instead.
+
 ## [0.0.8] - 2026-09-06
 
 The official 0.0.8: the skills system learns to serve itself — a curated offline hub, importing from anywhere, and an assistant that discovers and installs the workflow a task needs while it runs. The TUI grows into a full-screen application with a first-run wizard, the web console gains skills management, session cancellation and an execution timeline, and the engine routes around failing models instead of dying with them.

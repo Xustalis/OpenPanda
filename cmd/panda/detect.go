@@ -9,20 +9,19 @@ package main
 //	panda detect                # print draft to stdout
 //	panda detect -o capabilities.yaml
 //
-// The probing itself lives in internal/hwinfo, shared with `panda card rescan`
-// and the panel's /api/self, so the numbers a node advertises cannot depend on
-// which surface produced them.
+// The probing itself lives in internal/carddetect (hardware details in
+// internal/hwinfo), shared with `panda card rescan`, `panda card edit`'s
+// draft and the panel's /api/self, so the numbers a node advertises cannot
+// depend on which surface produced them.
 
 import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
-	"github.com/Xustalis/OpenPanda/internal/hwinfo"
+	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"gopkg.in/yaml.v3"
@@ -55,121 +54,11 @@ func runDetect(args []string) {
 
 // detectCard probes the host and assembles a Card draft.
 func detectCard() ledger.Card {
-	cores := runtime.NumCPU()
-	ramGB := hwinfo.RAMGB()
-	vram := hwinfo.GPUVRAMGB()
-
-	// Resource class from RAM: <8GB = Micro, <32GB = Standard, else Full.
-	class := "Standard"
-	switch {
-	case ramGB > 0 && ramGB < 8:
-		class = "Micro"
-	case ramGB >= 32:
-		class = "Full"
-	}
-	maxConcurrent := 2
-	if cores >= 8 {
-		maxConcurrent = 4
-	}
-
-	card := ledger.Card{
-		Device:        hwinfo.Hostname(),
-		ResourceClass: class,
-		Chip:          hwinfo.CPUModel(),
-		Capacity: ledger.Capacity{
-			CPUCores:      cores,
-			RAMGB:         ramGB,
-			MaxConcurrent: maxConcurrent,
-		},
-		ResourceProfile: ledger.ResourceProfile{
-			CPU:          cores,
-			RAMGB:        ramGB,
-			GPUVRAMGB:    vram,
-			DurationHint: durationHint(cores, ramGB, vram),
-		},
-	}
-
-	// Agents: probe every known agent CLI from the registry (internal/agents)
-	// and prewire the ones present. The registry is the single source of truth
-	// shared with `panda agents`, the web settings API, and the commander's
-	// availability probe, so the draft stays in lock-step with them.
-	card.Agents = cardAgents()
-	return card
+	return carddetect.DetectCard()
 }
 
-// durationHint classifies what this machine is *for*, which is what the hint
-// means on a card: a box with a GPU or a wide CPU is where long training runs
-// belong, an SBC is where short interactive work belongs. It used to be
-// hardcoded "short", which described the Orange Pi and mislabelled every
-// workstation the network ever joined.
-func durationHint(cores, ramGB, vram int) string {
-	if vram > 0 || vram == ledger.GPUVRAMUnknown || cores >= 8 || ramGB >= 32 {
-		return "long"
-	}
-	return "short"
-}
-
-// installCheckFor renders the shell one-liner a card carries so a human (or a
-// remote node reading the card) can verify the CLI is really installed.
-// `which` does not exist on Windows; `where` is its equivalent.
-func installCheckFor(bin string) string {
-	if runtime.GOOS == "windows" {
-		return "where " + bin
-	}
-	return "which " + bin
-}
-
-// cardAgents scans the agent registry and returns a card.Agents map with one
-// entry per installed CLI. Adapter names come from the registry (not the key),
-// so a generated draft resolves to the real adapters/*.py script.
-func cardAgents() map[string]ledger.Agent {
-	out := map[string]ledger.Agent{}
-	for _, k := range agents.Registry() {
-		bin := installedBinary(k)
-		if bin == "" {
-			continue
-		}
-		caps := k.DefaultCapabilities
-		if len(caps) == 0 {
-			caps = []string{"coding", "shell", "file_edit"}
-		}
-		bestAt := k.DefaultBestAt
-		if len(bestAt) == 0 {
-			bestAt = []string{"multi_file_edits", "code_search", "running_tests"}
-		}
-		costTier := k.DefaultCostTier
-		if costTier == "" {
-			costTier = "medium"
-		}
-		tier := k.DefaultTier
-		if tier == 0 {
-			tier = 2
-		}
-		out[k.Name] = ledger.Agent{
-			Adapter:      k.Adapter,
-			InstallCheck: installCheckFor(bin),
-			Capabilities: caps,
-			BestAt:       bestAt,
-			NotFor:       []string{"hardware_io", "realtime_control"},
-			CostTier:     costTier,
-			Tier:         tier,
-		}
-	}
-	return out
-}
-
-// installedBinary returns the first of an agent's known binary names that is on
-// PATH, or "". Every alias is tried, not just the primary one: a CLI installed
-// under its alternate name (claude-code vs claude) is installed either way, and
-// probing only the primary name is how a present agent goes unadvertised.
+// installedBinary returns the first of an agent's known binary names found on
+// PATH or in the usual install dirs (~/.local/bin, /opt/homebrew/bin, …).
 func installedBinary(k agents.Known) string {
-	for _, bin := range k.Binaries {
-		if bin == "" {
-			continue
-		}
-		if _, err := exec.LookPath(bin); err == nil {
-			return bin
-		}
-	}
-	return ""
+	return carddetect.InstalledBinary(k)
 }

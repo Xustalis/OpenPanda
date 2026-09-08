@@ -87,10 +87,11 @@ type tuiModel struct {
 	// projName caches the active project for the status row.
 	projName string
 
-	mode        tuiMode
-	stream      *askStream
-	started     time.Time
-	chatHistory *chatHistory
+	mode         tuiMode
+	stream       *askStream
+	started      time.Time
+	chatHistory  *chatHistory
+	scrollOffset int
 
 	// Navigation lists and panels
 	listKind      listKind
@@ -228,19 +229,28 @@ func (m tuiModel) Init() tea.Cmd {
 	return tea.Batch(textarea.Blink, watchTasks(m.r))
 }
 
-// printBlock renders one committed transcript block and pushes it into the
-// terminal's scrollback. Every commit path goes through it so the transcript's
-// content width is decided once: the same width the live region lays out to, so
-// a streamed answer does not reflow the instant the turn commits.
+// blockCommitMsg reports that a block was appended to chatHistory.
+// It implements fmt.Stringer to format its rendered text, satisfying test assertions
+// that inspect printed text from commands without writing directly to stdout in AltScreen.
+type blockCommitMsg struct {
+	text string
+}
+
+func (m blockCommitMsg) String() string {
+	return m.text
+}
+
+// printBlock renders one committed transcript block into chatHistory and returns a
+// command delivering blockCommitMsg. In full-screen AltScreen mode, committed blocks
+// are rendered through mainChatView; tea.Println is avoided to prevent terminal scrolling.
 func (m tuiModel) printBlock(b block) tea.Cmd {
 	if m.chatHistory != nil {
 		m.chatHistory.blocks = append(m.chatHistory.blocks, b)
 	}
-	// The leading blank line is the transcript's spacing: one per block, so turns
-	// separate into paragraphs instead of stacking into a wall of markers. It
-	// belongs here rather than in render() because it is a property of committing
-	// to scrollback — the live region draws the same blocks and supplies its own.
-	return tea.Println("\n" + b.render(m.th, m.textWidth(), m.expandThought))
+	rendered := "\n" + b.render(m.th, m.textWidth(), m.expandThought)
+	return func() tea.Msg {
+		return blockCommitMsg{text: rendered}
+	}
 }
 
 // startupPrints is what the first WindowSizeMsg commits to scrollback: the

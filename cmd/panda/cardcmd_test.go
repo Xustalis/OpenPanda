@@ -116,3 +116,17 @@ func TestWriteCardValidatesBacksUpAndRoundTrips(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultCardPathNeverTargetsSystemDirWhenMissing(t *testing.T) {
+	// Without any config file or capability card, defaultCardPath must NEVER return /etc/openpanda/...
+	p := defaultCardPath()
+	if p == "" {
+		t.Fatalf("expected non-empty default card path")
+	}
+	sysDir := systemCardPath()
+	if _, err := os.Stat(sysDir); os.IsNotExist(err) {
+		if p == sysDir {
+			t.Errorf("defaultCardPath() returned system path %q when it does not exist; want user path", p)
+		}
+	}
+}

@@ -449,6 +449,7 @@ var messages = map[Locale]map[string]string{
 		"repl.footer.authz.on":  "ON",
 		"repl.footer.authz.off": "off",
 		"repl.footer.session":   "session",
+		"tui.scroll.hint":       "▲ browsing history (offset {offset} lines) · press PgDn/Esc to return to the bottom",
 
 		"repl.sessions.none":   "no sessions",
 		"repl.sessions.head":   "sessions",
@@ -982,6 +983,7 @@ var messages = map[Locale]map[string]string{
 		"repl.footer.authz.on":  "开",
 		"repl.footer.authz.off": "关",
 		"repl.footer.session":   "会话",
+		"tui.scroll.hint":       "▲ 浏览历史 (偏移 {offset} 行) · 按 PgDn/Esc 返回底部",
 
 		"repl.sessions.none":   "暂无会话",
 		"repl.sessions.head":   "会话",
@@ -1514,6 +1516,7 @@ var messages = map[Locale]map[string]string{
 		"repl.footer.authz.on":  "ON",
 		"repl.footer.authz.off": "off",
 		"repl.footer.session":   "セッション",
+		"tui.scroll.hint":       "▲ 履歴を閲覧中（オフセット {offset} 行）· PgDn/Esc で一番下へ戻る",
 
 		"repl.sessions.none":   "セッションはありません",
 		"repl.sessions.head":   "セッション",
@@ -2043,6 +2046,7 @@ var messages = map[Locale]map[string]string{
 		"repl.footer.authz.on":  "ON",
 		"repl.footer.authz.off": "off",
 		"repl.footer.session":   "sesión",
+		"tui.scroll.hint":       "▲ navegando el historial (desfase de {offset} líneas) · pulsa PgDn/Esc para volver abajo",
 
 		"repl.sessions.none":   "sin sesiones",
 		"repl.sessions.head":   "sesiones",
@@ -2573,6 +2577,7 @@ var messages = map[Locale]map[string]string{
 		"repl.footer.authz.on":  "AN",
 		"repl.footer.authz.off": "aus",
 		"repl.footer.session":   "Sitzung",
+		"tui.scroll.hint":       "▲ Verlauf wird angezeigt (Offset {offset} Zeilen) · PgDn/Esc drücken, um nach unten zurückzukehren",
 
 		"repl.sessions.none":   "keine Sitzungen",
 		"repl.sessions.head":   "Sitzungen",

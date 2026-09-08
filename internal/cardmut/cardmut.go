@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"gopkg.in/yaml.v3"
 )
@@ -229,17 +230,23 @@ func mutate(path string, edit func(top *yaml.Node) error) error {
 	return installDoc(path, root)
 }
 
-// loadDoc reads the card into its document node. A missing card is an error
-// rather than a fresh document: this package edits a card that exists, and
-// inventing device/chip/capacity out of thin air is `panda card rescan
-// --write`'s job, not a mutation's.
+// loadDoc reads the card into its document node. If the card file does not
+// exist yet, it is automatically initialized with detected hardware and agents
+// so mutations never fail due to a missing base file.
 func loadDoc(path string) (*yaml.Node, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no capability card at %s — create one first with `panda card rescan --write`", path)
+			if _, _, eErr := carddetect.EnsureCard(path); eErr == nil {
+				data, err = os.ReadFile(path)
+			}
 		}
-		return nil, err
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("no capability card at %s — create one first with `panda card rescan --write`", path)
+			}
+			return nil, err
+		}
 	}
 	var root yaml.Node
 	if err := yaml.Unmarshal(data, &root); err != nil {

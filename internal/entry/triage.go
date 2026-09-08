@@ -18,11 +18,13 @@ type TriageResult struct {
 var actionKeywords = []string{
 	"运行", "执行", "创建", "删除", "修改", "部署", "编译", "测试", "重构",
 	"写入", "保存", "下载", "克隆", "配置", "排查", "修复", "安装",
+	"调度", "派发", "唤起", "呼叫", "启动", "委派",
 }
 var actionWords = []string{
 	"run", "exec", "create", "delete", "remove", "modify", "edit",
 	"deploy", "build", "test", "refactor", "write", "save", "clone",
 	"fix", "install", "git", "bash", "curl", "docker", "make",
+	"dispatch", "schedule", "launch", "start",
 }
 
 var actionWordsRe = regexp.MustCompile(`\b(?:` + strings.Join(actionWords, "|") + `)\b`)

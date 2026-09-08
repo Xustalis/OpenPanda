@@ -390,23 +390,23 @@ func TestChooseLayers(t *testing.T) {
 
 func TestBuildPromptLayerInjection(t *testing.T) {
 	base := BuildPrompt(PromptOptions{})
-	if !strings.Contains(base, "类型 3") {
+	if !strings.Contains(base, "Kind 3: task") {
 		t.Fatal("resident core (routing rules) missing from the prompt")
 	}
-	if strings.Contains(base, "记忆治理规则") {
+	if strings.Contains(base, "Memory Governance Rules") {
 		t.Fatal("memory rules must not attach without memory-tool history")
 	}
-	if strings.Contains(base, "task 完整示例") {
+	if strings.Contains(base, "task Full Example") {
 		t.Fatal("task example must not attach without recent task history")
 	}
 
 	mem := BuildPrompt(PromptOptions{History: []Turn{{Role: "assistant", Blocks: []ContentBlock{{Type: "tool_use", Name: "memory_add"}}}}})
-	if !strings.Contains(mem, "记忆治理规则") {
+	if !strings.Contains(mem, "Memory Governance Rules") {
 		t.Fatal("memory rules missing after memory-tool use")
 	}
 
 	task := BuildPrompt(PromptOptions{History: []Turn{{Role: "assistant", Content: "[任务 t-1 done] ok"}}})
-	if !strings.Contains(task, "task 完整示例") {
+	if !strings.Contains(task, "task Full Example") {
 		t.Fatal("task example missing after a recent task turn")
 	}
 }

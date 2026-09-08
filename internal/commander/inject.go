@@ -43,8 +43,8 @@ func (r *Router) InjectionDecision(adapter string) InjectionDecision {
 		return InjectionDecision{
 			Inject:  true,
 			Reason:  "injection.model=always",
-			Model:   effectiveModelName(r.model),
-			BaseURL: effectiveBaseURL(r.model),
+			Model:   effectiveModelNameFor(adapter, r.model),
+			BaseURL: effectiveBaseURLFor(adapter, r.model),
 		}
 	}
 	// auto: agent-native credentials win.
@@ -69,8 +69,8 @@ func (r *Router) InjectionDecision(adapter string) InjectionDecision {
 	return InjectionDecision{
 		Inject:  true,
 		Reason:  "agent has no own model credentials and panda has a model configured",
-		Model:   effectiveModelName(r.model),
-		BaseURL: effectiveBaseURL(r.model),
+		Model:   effectiveModelNameFor(adapter, r.model),
+		BaseURL: effectiveBaseURLFor(adapter, r.model),
 	}
 }
 
@@ -115,6 +115,42 @@ const (
 	deepseekProModel   = "deepseek-v4-pro"
 	deepseekFlashModel = "deepseek-v4-flash"
 )
+
+// effectiveBaseURLFor returns the target-appropriate endpoint URL for an adapter.
+// DeepSeek supports both Anthropic and OpenAI endpoints.
+func effectiveBaseURLFor(adapter string, model config.ModelConfig) string {
+	k, _ := agents.ByAdapter(adapter)
+	targetAPIType := config.APITypeAnthropic
+	if k.ModelEnv != nil && k.ModelEnv.APIType != "" {
+		targetAPIType = k.ModelEnv.APIType
+	}
+	if isDeepSeekEndpoint(model.BaseURL) {
+		if targetAPIType == config.APITypeOpenAI {
+			return "https://api.deepseek.com/v1"
+		}
+		return "https://api.deepseek.com/anthropic"
+	}
+	if model.BaseURL == "" {
+		if targetAPIType == config.APITypeOpenAI {
+			return "https://api.openai.com/v1"
+		}
+		return "https://api.deepseek.com/anthropic"
+	}
+	return model.BaseURL
+}
+
+// effectiveModelNameFor returns the target-appropriate model name for an adapter.
+func effectiveModelNameFor(adapter string, model config.ModelConfig) string {
+	k, _ := agents.ByAdapter(adapter)
+	targetAPIType := config.APITypeAnthropic
+	if k.ModelEnv != nil && k.ModelEnv.APIType != "" {
+		targetAPIType = k.ModelEnv.APIType
+	}
+	if isDeepSeekEndpoint(model.BaseURL) && targetAPIType == config.APITypeOpenAI {
+		return "deepseek-chat"
+	}
+	return effectiveModelName(model)
+}
 
 // effectiveBaseURL/effectiveModelName mirror the defaults modelEnv applies, so
 // the announcement and the injected env never diverge.

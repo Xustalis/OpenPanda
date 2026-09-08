@@ -103,9 +103,11 @@ func (m tuiModel) mainChatView(live string) string {
 		contentLines = append(contentLines, strings.Split(live, "\n")...)
 	}
 
+	totalContent := len(contentLines)
+
 	// 4. Pad blank lines so inputView stays anchored at the bottom of the screen
-	if len(contentLines) <= availHeight {
-		pad := availHeight - len(contentLines)
+	if totalContent <= availHeight {
+		pad := availHeight - totalContent
 		var out []string
 		out = append(out, contentLines...)
 		for i := 0; i < pad; i++ {
@@ -115,10 +117,25 @@ func (m tuiModel) mainChatView(live string) string {
 		return strings.Join(out, "\n")
 	}
 
-	// 5. If content exceeds available height, scroll to show the latest turns above the input box
-	contentLines = contentLines[len(contentLines)-availHeight:]
+	// 5. If content exceeds available height, apply scrollOffset (0 means anchored at bottom)
+	maxScroll := totalContent - availHeight
+	scroll := m.scrollOffset
+	if scroll < 0 {
+		scroll = 0
+	}
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+
+	end := totalContent - scroll
+	start := end - availHeight
+	if start < 0 {
+		start = 0
+	}
+	visibleLines := contentLines[start:end]
+
 	var out []string
-	out = append(out, contentLines...)
+	out = append(out, visibleLines...)
 	out = append(out, inputLines...)
 	return strings.Join(out, "\n")
 }
@@ -551,6 +568,9 @@ func (m tuiModel) contextLine() string {
 // any of it, and below a floor the legend yields the row entirely: a squeezed
 // hint is worth less than the project the next prompt would land in.
 func (m tuiModel) hintLine() string {
+	if m.scrollOffset > 0 {
+		return m.th.warn.Bold(true).Render(i18n.Tf(m.loc, "tui.scroll.hint", "offset", strconv.Itoa(m.scrollOffset)))
+	}
 	budget := m.textWidth()
 	if state := m.contextLine(); state != "" {
 		budget -= cliui.DisplayWidth(state) + 2

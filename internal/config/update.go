@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"gopkg.in/yaml.v3"
@@ -162,6 +163,9 @@ func loadDocForUpdate(path string) (root *yaml.Node, top *yaml.Node, err error) 
 		if merr != nil {
 			return nil, nil, merr
 		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return nil, nil, err
+		}
 		if werr := os.WriteFile(path, out, 0o600); werr != nil {
 			return nil, nil, werr
 		}
@@ -180,6 +184,9 @@ func loadDocForUpdate(path string) (root *yaml.Node, top *yaml.Node, err error) 
 func writeDoc(path string, root *yaml.Node) error {
 	out, err := yaml.Marshal(root)
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	if err := os.WriteFile(path, out, 0o600); err != nil {

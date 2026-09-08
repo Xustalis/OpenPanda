@@ -21,6 +21,7 @@ import (
 
 // Config is the top-level node configuration.
 type Config struct {
+	CardPath  string          `yaml:"card_path,omitempty"`
 	Node      NodeConfig      `yaml:"node"`
 	Network   NetworkConfig   `yaml:"network"`
 	Storage   StorageConfig   `yaml:"storage"`
@@ -167,9 +168,10 @@ func (a ApprovalConfig) NormalizedMode() string {
 // NodeConfig identifies this node.
 type NodeConfig struct {
 	Name          string `yaml:"name"`
-	ResourceClass string `yaml:"resource_class"`     // Micro | Standard | Full
-	Kind          string `yaml:"kind"`               // physical | vm (default physical)
-	Identity      string `yaml:"identity,omitempty"` // stable VM identity; physical nodes use host fingerprint
+	ResourceClass string `yaml:"resource_class"`      // Micro | Standard | Full
+	Kind          string `yaml:"kind"`                // physical | vm (default physical)
+	Identity      string `yaml:"identity,omitempty"`  // stable VM identity; physical nodes use host fingerprint
+	CardPath      string `yaml:"card_path,omitempty"` // path to capabilities.yaml
 }
 
 // NetworkConfig controls the WebSocket listener and manual peers. PanelAddr and
@@ -784,6 +786,12 @@ func ResolvePath(explicit string) string {
 			return user
 		}
 	}
+	if _, err := os.Stat(DefaultPath); err == nil {
+		return DefaultPath
+	}
+	if user, err := UserConfigPath(); err == nil && user != "" {
+		return user
+	}
 	return DefaultPath
 }
 
@@ -820,6 +828,37 @@ func (c *Config) resolveRelativePaths(baseDir string) {
 	if !filepath.IsAbs(c.Push.VAPIDKeyPath) {
 		c.Push.VAPIDKeyPath = filepath.Join(baseDir, c.Push.VAPIDKeyPath)
 	}
+	if c.Node.CardPath != "" && !filepath.IsAbs(c.Node.CardPath) {
+		c.Node.CardPath = filepath.Join(baseDir, c.Node.CardPath)
+	}
+	if c.CardPath != "" && !filepath.IsAbs(c.CardPath) {
+		c.CardPath = filepath.Join(baseDir, c.CardPath)
+	}
+}
+
+// EffectiveCardPath returns the configured card path, checking Node.CardPath then top-level CardPath.
+func (c *Config) EffectiveCardPath() string {
+	if c == nil {
+		return ""
+	}
+	if c.Node.CardPath != "" {
+		return c.Node.CardPath
+	}
+	return c.CardPath
+}
+
+// DefaultCardTarget returns the canonical path where capabilities.yaml belongs.
+// It prioritizes next to the resolved config file, then user config dir,
+// then system config dir.
+func DefaultCardTarget(explicitConfig string) string {
+	cfgPath := ResolvePath(explicitConfig)
+	if cfgPath != "" && cfgPath != DefaultPath {
+		return filepath.Join(filepath.Dir(cfgPath), "capabilities.yaml")
+	}
+	if userCfg, err := UserConfigPath(); err == nil && userCfg != "" {
+		return filepath.Join(filepath.Dir(userCfg), "capabilities.yaml")
+	}
+	return filepath.Join(SystemConfigDir(), "capabilities.yaml")
 }
 
 // Load reads the config from path. If path is empty, the OPENPANDA_CONFIG_PATH env
@@ -963,6 +1002,9 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 		doc.Model = mc
 		out, err := yaml.Marshal(doc)
 		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
 		return os.WriteFile(path, out, 0o600)
