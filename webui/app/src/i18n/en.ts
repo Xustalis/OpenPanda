@@ -607,6 +607,32 @@ const en: Messages = {
   'ui.update.available.title': 'Update available: v{version}',
   'ui.update.available.sub': 'A new release is ready with fixes and improvements.',
   'ui.update.available.cta': 'View update →',
+
+  // Task Event Parser
+  'events.reasoning': 'Model Reasoning',
+  'events.classify_result': 'Intent Classification',
+  'events.route_decision': 'Routing Decision',
+  'events.exec_agent_start': 'Agent Execution Started',
+  'events.supervision_round': 'Supervision Evaluation',
+  'events.judge_start': 'Judge Review Started',
+  'events.tier2_triggered': 'Approval Required',
+  'events.tier2_summary': 'Task involves sensitive operations, waiting for authorization',
+  'events.state_change': 'State Transition',
+  'events.task_complete': 'Task Completed',
+  'events.task_failed': 'Task Failed',
+  'events.task_cancel': 'Task Cancelled',
+  'events.delegation_hop': 'Delegation Hop',
+  'events.project_sync': 'Project Sync',
+  'events.tag.type': 'Type',
+  'events.tag.target': 'Target Node',
+  'events.tag.action': 'Action',
+  'events.tag.adapter': 'Adapter',
+  'events.tag.round': 'Round',
+  'events.tag.verdict': 'Verdict',
+  'events.tag.state': 'State',
+  'events.tag.hop': 'Hop',
+  'events.tag.path': 'Path',
+  'sessions.copyThought': 'Copy thought chain',
 }
 
 export default en

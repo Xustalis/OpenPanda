@@ -2,6 +2,8 @@
 // Replaces raw JSON walls with clear structured information and formats
 // Chain-of-Thought (reasoning) into readable thinking blocks.
 
+import { t } from '../i18n/index.ts'
+
 export interface FormattedEvent {
   type: string
   label: string
@@ -57,7 +59,7 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
     const thought = extractThought(data || rawData)
     return {
       type,
-      label: '模型思考过程',
+      label: t('events.reasoning'),
       badgeClass: 'accent',
       thought: thought || rawData,
       tags: [],
@@ -72,10 +74,10 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
       const note = String(data?.note ?? '')
       return {
         type,
-        label: '意图识别',
+        label: t('events.classify_result'),
         badgeClass: 'info',
         summary: note || undefined,
-        tags: kind ? [{ key: '类型', value: kind }] : [],
+        tags: kind ? [{ key: t('events.tag.type'), value: kind }] : [],
         rawJson,
       }
     }
@@ -83,11 +85,11 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
       const target = String(data?.target ?? '')
       const action = String(data?.action ?? '')
       const reason = String(data?.reason ?? '')
-      if (target) tags.push({ key: '目标节点', value: target })
-      if (action) tags.push({ key: '动作', value: action })
+      if (target) tags.push({ key: t('events.tag.target'), value: target })
+      if (action) tags.push({ key: t('events.tag.action'), value: action })
       return {
         type,
-        label: '路由决策',
+        label: t('events.route_decision'),
         badgeClass: 'accent',
         summary: reason || undefined,
         tags,
@@ -98,10 +100,10 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
       const agent = String(data?.agent ?? '')
       const adapter = String(data?.adapter ?? '')
       if (agent) tags.push({ key: 'Agent', value: agent })
-      if (adapter) tags.push({ key: '适配器', value: adapter })
+      if (adapter) tags.push({ key: t('events.tag.adapter'), value: adapter })
       return {
         type,
-        label: 'Agent 执行启动',
+        label: t('events.exec_agent_start'),
         badgeClass: 'info',
         tags,
         rawJson,
@@ -111,11 +113,11 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
       const round = data?.round !== undefined ? String(data.round) : ''
       const verdict = String(data?.verdict ?? '')
       const summary = String(data?.judge_summary ?? data?.summary ?? '')
-      if (round) tags.push({ key: '轮次', value: round })
-      if (verdict) tags.push({ key: '裁决', value: verdict })
+      if (round) tags.push({ key: t('events.tag.round'), value: round })
+      if (verdict) tags.push({ key: t('events.tag.verdict'), value: verdict })
       return {
         type,
-        label: '结果监督评估',
+        label: t('events.supervision_round'),
         badgeClass: verdict === 'pass' || verdict === 'ok' ? 'accent' : 'warn',
         summary: summary || undefined,
         tags,
@@ -124,10 +126,10 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
     }
     case 'judge_start': {
       const round = data?.round !== undefined ? String(data.round) : ''
-      if (round) tags.push({ key: '轮次', value: round })
+      if (round) tags.push({ key: t('events.tag.round'), value: round })
       return {
         type,
-        label: '监督评审开始',
+        label: t('events.judge_start'),
         badgeClass: 'info',
         tags,
         rawJson,
@@ -136,9 +138,9 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
     case 'tier2_triggered': {
       return {
         type,
-        label: '需要审批',
+        label: t('events.tier2_triggered'),
         badgeClass: 'warn',
-        summary: '任务涉及高风险操作，正在等待人工授权',
+        summary: t('events.tier2_summary'),
         tags,
         rawJson,
       }
@@ -146,10 +148,10 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
     case 'state_change': {
       const from = String(data?.from ?? '')
       const to = String(data?.to ?? '')
-      if (from || to) tags.push({ key: '状态', value: `${from} ➔ ${to}` })
+      if (from || to) tags.push({ key: t('events.tag.state'), value: `${from} ➔ ${to}` })
       return {
         type,
-        label: '状态流转',
+        label: t('events.state_change'),
         badgeClass: to === 'completed' ? 'accent' : to === 'failed' ? 'danger' : 'info',
         tags,
         rawJson,
@@ -159,7 +161,7 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
     case 'completed': {
       return {
         type,
-        label: '任务完成',
+        label: t('events.task_complete'),
         badgeClass: 'accent',
         tags,
         rawJson,
@@ -170,7 +172,7 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
       const err = String(data?.error ?? '')
       return {
         type,
-        label: '任务失败',
+        label: t('events.task_failed'),
         badgeClass: 'danger',
         summary: err || undefined,
         tags,
@@ -181,7 +183,7 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
     case 'cancelled': {
       return {
         type,
-        label: '任务取消',
+        label: t('events.task_cancel'),
         badgeClass: 'dim',
         tags,
         rawJson,
@@ -190,10 +192,10 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
     case 'delegation_hop': {
       const from = String(data?.from ?? '')
       const to = String(data?.to ?? '')
-      if (from || to) tags.push({ key: '跳点', value: `${from} ➔ ${to}` })
+      if (from || to) tags.push({ key: t('events.tag.hop'), value: `${from} ➔ ${to}` })
       return {
         type,
-        label: '跨设备委派',
+        label: t('events.delegation_hop'),
         badgeClass: 'info',
         tags,
         rawJson,
@@ -201,10 +203,10 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
     }
     case 'project_sync': {
       const path = String(data?.path ?? '')
-      if (path) tags.push({ key: '路径', value: path })
+      if (path) tags.push({ key: t('events.tag.path'), value: path })
       return {
         type,
-        label: '项目文件同步',
+        label: t('events.project_sync'),
         badgeClass: 'accent',
         tags,
         rawJson,

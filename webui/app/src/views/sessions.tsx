@@ -114,6 +114,9 @@ export function SessionsView({
   // abort an ask that is painting the very thread it is about to load (the
   // create-then-send path), and send()'s finally guard keys on it too.
   const inflightSid = useRef<string | null>(null)
+  // Exact server-issued operation identity for the current ask. Stop is scoped
+  // to this id; it never scans old transcript task references.
+  const inflightOperation = useRef<string | null>(null)
   // Mirror of the activeId prop for send()'s async callbacks: a reply's
   // deltas may only write to the thread that started them. Kept in sync by
   // the effect below; send() fast-forwards it through the create flow.
@@ -205,6 +208,7 @@ export function SessionsView({
     inflight.current?.abort()
     inflight.current = null
     inflightSid.current = null
+    inflightOperation.current = null
     setLoading(true)
     api
       .session(activeId)
@@ -341,19 +345,14 @@ export function SessionsView({
     if (id === activeId) onOpenSession('')
   }
 
-  /** Abort the in-flight reply and cancel any active task linked to the thread. */
+  /** Abort local rendering and cancel only the exact active server operation. */
   function stop() {
-    inflight.current?.abort()
-    const targetSid = inflightSid.current || activeId
-    if (targetSid) {
-      api.cancelSession(targetSid).catch(() => {})
-    }
-    const runningTask = msgs
-      .slice()
-      .reverse()
-      .find((m) => m.kind === 'task' && m.ref)
-    if (runningTask?.ref) {
-      api.cancel(runningTask.ref).catch(() => {})
+    const ctrl = inflight.current
+    const targetSid = inflightSid.current
+    const operationID = inflightOperation.current
+    ctrl?.abort()
+    if (targetSid && operationID) {
+      api.cancelSession(targetSid, operationID).catch(() => {})
     }
   }
 
@@ -417,6 +416,11 @@ export function SessionsView({
           onReasoning: (text) => patch((m) => ({ ...m, thought: (m.thought ?? '') + text })),
           onDelta: (text) => patch((m) => ({ ...m, text: m.text + text })),
           onStatus: (text) => patch((m) => ({ ...m, status: text })),
+          onOperation: (operationID) => {
+            if (inflight.current === ctrl && inflightSid.current === sid) {
+              inflightOperation.current = operationID
+            }
+          },
           onResult: (r) => patch((m) => ({ ...m, result: r, status: undefined })),
           onError: (message) => patch((m) => ({ ...m, status: undefined, kind: 'error', text: m.text || `⚠ ${message}` })),
         },
@@ -438,26 +442,26 @@ export function SessionsView({
             })),
           )
         } else {
-          // If the stream dropped unexpectedly (e.g. socket idle reset or network hiccup),
-          // the server-side turn is decoupled and keeps running to completion.
-          // Give it a brief window to reconcile the completed turn before reporting failure.
+          // The operation snapshot is durable in the session. Follow that
+          // exact generation until it terminalizes instead of guessing from a
+          // fixed number of transcript polls.
           let resolved = false
           if (id) {
             patch((m) => ({ ...m, status: t('sessions.syncing') }))
-            for (let attempt = 0; attempt < 8; attempt++) {
-              await new Promise((r) => setTimeout(r, 1500))
-              if (ctrl.signal.aborted || !isLiveSession(id, activeIdRef.current)) break
+            let delay = 500
+            while (!ctrl.signal.aborted && isLiveSession(id, activeIdRef.current)) {
               try {
                 const s = await api.session(id)
-                const turns = s.turns ?? []
-                const last = turns[turns.length - 1]
-                if (last && last.role === 'assistant') {
+                const operationID = inflightOperation.current
+                if (operationID && s.operation?.id === operationID && s.operation.status !== 'running') {
                   setSession(s)
-                  setMsgs(turns.map((t, i) => ({ ...t, k: `srv-${i}` })))
+                  setMsgs((s.turns ?? []).map((turn, i) => ({ ...turn, k: `srv-${i}` })))
                   resolved = true
                   break
                 }
               } catch {}
+              await new Promise((r) => setTimeout(r, delay))
+              delay = Math.min(delay * 2, 5000)
             }
           }
           if (!resolved && isLiveSession(id, activeIdRef.current) && !ctrl.signal.aborted) {
@@ -731,7 +735,7 @@ export function SessionsView({
                 </li>
               ))}
             </ul>
-            {diff.patch && <pre class="diff-patch">{diff.patch}</pre>}
+            {diff.patch && <DiffViewer patch={diff.patch} />}
           </div>
         )}
 
@@ -1140,13 +1144,13 @@ function ThoughtBlock({ text, live }: { text: string; live: boolean }) {
         )}
         <span class="grow" />
         <span class="thought-meta dim">
-          {lines.length} {t('common.lines') || '行'}
+          {lines.length} {t('common.lines')}
         </span>
         <button
           type="button"
           class="thought-copy-btn"
           onClick={copy}
-          title="复制思维链"
+          title={t('sessions.copyThought')}
         >
           {copied ? '✓' : '⧉'}
         </button>
@@ -1160,5 +1164,32 @@ function ThoughtBlock({ text, live }: { text: string; live: boolean }) {
         </div>
       )}
     </div>
+  )
+}
+
+/** DiffViewer renders git patch lines with syntax coloring for added/deleted lines and hunks. */
+function DiffViewer({ patch }: { patch: string }) {
+  if (!patch) return null
+  const lines = patch.split('\n')
+  return (
+    <pre class="diff-patch diff-patch-view mono">
+      {lines.map((line, idx) => {
+        let cls = 'diff-line'
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          cls += ' diff-line-add'
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          cls += ' diff-line-del'
+        } else if (line.startsWith('@@')) {
+          cls += ' diff-line-hunk'
+        } else if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
+          cls += ' diff-line-meta'
+        }
+        return (
+          <div key={idx} class={cls}>
+            <span class="diff-line-content">{line || ' '}</span>
+          </div>
+        )
+      })}
+    </pre>
   )
 }

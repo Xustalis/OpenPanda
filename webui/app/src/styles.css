@@ -3091,7 +3091,41 @@ label {
 .diff-patch {
   margin: 0;
   font-size: 12px;
-  max-height: 260px;
+  max-height: 280px;
+  overflow-y: auto;
+  overflow-x: auto;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 8px 0;
+  line-height: 1.45;
+  user-select: text;
+}
+
+.diff-line {
+  padding: 0 12px;
+  white-space: pre;
+}
+
+.diff-line-add {
+  background: rgba(46, 160, 67, 0.15);
+  color: #3fb950;
+}
+
+.diff-line-del {
+  background: rgba(248, 81, 73, 0.15);
+  color: #f85149;
+}
+
+.diff-line-hunk {
+  background: rgba(56, 139, 253, 0.12);
+  color: #58a6ff;
+  font-weight: 500;
+}
+
+.diff-line-meta {
+  color: var(--text-dim);
+  font-weight: 500;
 }
 
 /* ---- Nodes ---- */
@@ -3944,6 +3978,10 @@ label {
   flex-direction: column;
   gap: 16px;
   min-width: 0;
+}
+
+.settings-body .page-header {
+  display: none;
 }
 
 @media (max-width: 860px) {
