@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
@@ -24,8 +23,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		first := !m.ready
 		m.width, m.height = msg.Width, msg.Height
 		m.ready = true
-		// The input spans the width minus the frame's border+padding (2+2).
-		m.ta.SetWidth(max(20, msg.Width-4))
+		// Clamp to the actual available width; a tiny terminal must shed
+		// decoration rather than creating a component wider than the screen.
+		m.ta.SetWidth(max(1, msg.Width-4))
 		if first {
 			m.refreshProject()
 			if m.mode != modeSplash {
@@ -57,22 +57,42 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case deltaMsg:
-		return m.onDelta(string(msg))
+		if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
+			return m, nil
+		}
+		return m.onDelta(msg)
 	case reasoningMsg:
-		m.thought = appendReasoning(m.thought, string(msg))
-		return m, waitForActivity(m.stream)
+		if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
+			return m, nil
+		}
+		m.thought = appendReasoning(m.thought, msg.text)
+		return m, waitForActivity(msg.stream)
 	case progressMsg:
-		return m.onProgress(askengine.Progress(msg))
+		if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
+			return m, nil
+		}
+		return m.onProgress(msg)
 	case doneMsg:
 		return m.onDone(msg)
 	case resumedMsg:
 		return m.onResumed(msg)
 	case watchMsg:
 		return m.onWatch(msg)
+	case execOutputMsg:
+		if msg.exec == nil || msg.exec != m.exec || msg.generation != m.execGen {
+			return m, nil
+		}
+		m.execText.WriteString(msg.text)
+		return m, waitForExec(msg.exec)
 	case execDoneMsg:
+		if msg.exec == nil || msg.exec != m.exec || msg.generation != m.execGen {
+			return m, nil
+		}
 		// A slash/shell command finished; commit its user echo and captured output
 		// to chatHistory and return to modeIdle.
 		m.mode = modeIdle
+		m.exec = nil
+		m.execText.Reset()
 		m.applyLocale()
 		m.refreshProject()
 		if m.chatHistory != nil {
@@ -105,7 +125,21 @@ const interruptWindow = time.Second
 // onKey dispatches a keystroke according to the current mode.
 func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeExec {
-		return m, nil
+		switch msg.Type {
+		case tea.KeyCtrlC, tea.KeyEsc:
+			if m.exec != nil {
+				m.exec.cancel()
+			}
+			return m, nil
+		case tea.KeyPgUp:
+			m.scrollOffset += max(1, max(1, m.height-4)/2)
+			return m, nil
+		case tea.KeyPgDown:
+			m.scrollOffset = max(0, m.scrollOffset-max(1, max(1, m.height-4)/2))
+			return m, nil
+		default:
+			return m, nil
+		}
 	}
 	switch msg.Type {
 	case tea.KeyCtrlC:
@@ -131,7 +165,22 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeModelWizard:
 		return m.handleModelWizardKey(msg)
 	case modeAsking:
+		if msg.Type == tea.KeyPgUp {
+			avail := max(1, (m.height-4)/2)
+			m.scrollOffset += avail
+			return m, nil
+		}
+		if msg.Type == tea.KeyPgDown {
+			avail := max(1, (m.height-4)/2)
+			m.scrollOffset = max(0, m.scrollOffset-avail)
+			return m, nil
+		}
 		if msg.Type == tea.KeyEsc {
+			if strings.TrimSpace(m.ta.Value()) != "" {
+				m.ta.Reset()
+				m.ta.SetHeight(1)
+				return m, nil
+			}
 			return m.interrupt()
 		}
 		if msg.Type == tea.KeyEnter {
@@ -139,14 +188,16 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if text == "" {
 				return m, nil
 			}
+			if m.stream == nil || !m.stream.injectSteer(text) {
+				note := block{kind: blockError, body: i18n.T(m.loc, "tui.steer.full")}
+				return m, m.printBlock(note)
+			}
 			m.ta.Reset()
 			m.ta.SetHeight(1)
-			m.pendingPrompt += "\n[补充想法/Steering]: " + text
-			if m.stream != nil {
-				m.stream.injectSteer(text)
-			}
+			steerPrefix := i18n.T(m.loc, "tui.turn.steerPrefix")
+			m.pendingPrompt += "\n" + steerPrefix + text
 			if m.r != nil {
-				m.r.convo = append(m.r.convo, entry.Turn{Role: "user", Content: "[补充想法/Steering]: " + text})
+				m.r.convo = append(m.r.convo, entry.Turn{Role: "user", Content: steerPrefix + text})
 			}
 			blk := block{
 				kind: blockNote,
@@ -177,7 +228,13 @@ func (m tuiModel) onSplashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		}
-		return m.startFromSplash()
+		newM, cmd := m.startFromSplash()
+		if tm, ok := newM.(tuiModel); ok && tm.mode == modeIdle {
+			var taCmd tea.Cmd
+			tm.ta, taCmd = tm.ta.Update(msg)
+			return tm, tea.Batch(cmd, taCmd)
+		}
+		return newM, cmd
 	default:
 		return m.startFromSplash()
 	}
@@ -220,10 +277,6 @@ func (m tuiModel) interrupt() (tea.Model, tea.Cmd) {
 	m.lastInterrupt = now
 
 	if m.stream == nil {
-		// A ResumeApproved re-run is in flight. It has no stream to release and
-		// the engine runs it under its own context, so stay in the turn and say
-		// plainly what the key did not do — leaving the spinner up is more
-		// honest than returning to a prompt while work continues.
 		note := block{kind: blockNote, body: i18n.T(m.loc, "tui.turn.busy")}
 		return m, m.printBlock(note)
 	}
@@ -361,14 +414,16 @@ func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			case 1: // Steer / Inject
 				text := strings.TrimSpace(m.ta.Value())
 				if text != "" {
+					if m.stream == nil || !m.stream.injectSteer(text) {
+						note := block{kind: blockError, body: i18n.T(m.loc, "tui.steer.full")}
+						return m, m.printBlock(note)
+					}
 					m.ta.Reset()
 					m.ta.SetHeight(1)
-					m.pendingPrompt += "\n[补充想法/Steering]: " + text
-					if m.stream != nil {
-						m.stream.injectSteer(text)
-					}
+					steerPrefix := i18n.T(m.loc, "tui.turn.steerPrefix")
+					m.pendingPrompt += "\n" + steerPrefix + text
 					if m.r != nil {
-						m.r.convo = append(m.r.convo, entry.Turn{Role: "user", Content: "[补充想法/Steering]: " + text})
+						m.r.convo = append(m.r.convo, entry.Turn{Role: "user", Content: steerPrefix + text})
 					}
 					blk := block{
 						kind: blockNote,
@@ -548,10 +603,15 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 	}
 
 	if isBareCommand(text) {
-		// Other slash/shell commands reuse the repl handlers verbatim; their
-		// output is captured and flows into scrollback without leaving AltScreen.
+		// Other slash/shell commands reuse the repl handlers with request-scoped
+		// streams. Output arrives incrementally and this generation alone owns the
+		// completion; Esc/Ctrl+C cancels its context without quitting the TUI.
 		m.mode = modeExec
-		return m, m.runSlash(text)
+		m.execGen++
+		m.execText.Reset()
+		exec, cmd := startCommandExec(m.r, text, m.execGen)
+		m.exec = exec
+		return m, cmd
 	}
 
 	if m.engine == nil {
@@ -591,7 +651,8 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 	m.ta.Placeholder = i18n.T(m.loc, "tui.input.placeholder.running")
 	m.started = time.Now()
 	m.lastInterrupt = time.Time{} // each turn gets a fresh double-tap window
-	m.liveAnswer = ""
+	m.liveAnswerChunks = nil
+	m.liveAnswerBytes = 0
 	m.thought = nil
 	m.thoughtDone = false
 	m.note = ""

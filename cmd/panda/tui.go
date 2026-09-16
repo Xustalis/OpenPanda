@@ -30,7 +30,7 @@ func runTUI(r *repl) {
 	if c := loadConvo(); len(c) > 0 {
 		r.convo = c
 	}
-	p := tea.NewProgram(newTUIModel(r), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(newTUIModel(r), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 	}

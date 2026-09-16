@@ -23,7 +23,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"slices"
 	"strings"
@@ -49,7 +48,7 @@ func (r *repl) cmdCard(arg string) {
 	case "manual":
 		r.cardManual(fields[1:])
 	default:
-		fmt.Println(i18n.T(r.loc, "repl.card.usage"))
+		r.outln(i18n.T(r.loc, "repl.card.usage"))
 	}
 }
 
@@ -71,20 +70,20 @@ func (r *repl) ensureCard() string {
 func (r *repl) cardSummary() {
 	path := r.ensureCard()
 	if path == "" {
-		fmt.Println(i18n.T(r.loc, "repl.card.none"))
+		r.outln(i18n.T(r.loc, "repl.card.none"))
 		return
 	}
 	card, err := ledger.LoadCard(path)
 	if err != nil {
-		fmt.Println(i18n.Tf(r.loc, "repl.card.loadFail", "err", err.Error()))
+		r.outln(i18n.Tf(r.loc, "repl.card.loadFail", "err", err.Error()))
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.card.head", "path", path))
-	fmt.Printf("  %s · %s · %s\n", orDash(card.Device), orDash(card.ResourceClass), orDash(card.Chip))
+	r.outln(i18n.Tf(r.loc, "repl.card.head", "path", path))
+	r.outf("  %s · %s · %s\n", orDash(card.Device), orDash(card.ResourceClass), orDash(card.Chip))
 	if ids := nativeIDs(card); len(ids) > 0 {
-		fmt.Printf("  native (%d): %s\n", len(ids), strings.Join(ids, ", "))
+		r.outf("  native (%d): %s\n", len(ids), strings.Join(ids, ", "))
 	} else {
-		fmt.Printf("  native (0)\n")
+		r.outf("  native (0)\n")
 	}
 	if len(card.Agents) > 0 {
 		names := make([]string, 0, len(card.Agents))
@@ -92,48 +91,48 @@ func (r *repl) cardSummary() {
 			names = append(names, name)
 		}
 		slices.Sort(names)
-		fmt.Printf("  agents (%d): %s\n", len(names), strings.Join(names, ", "))
+		r.outf("  agents (%d): %s\n", len(names), strings.Join(names, ", "))
 	} else {
-		fmt.Printf("  agents (0)\n")
+		r.outf("  agents (0)\n")
 	}
 	if len(card.Manual) > 0 {
 		ids := make([]string, 0, len(card.Manual))
 		for _, ab := range card.Manual {
 			ids = append(ids, ab.ID)
 		}
-		fmt.Printf("  manual (%d): %s\n", len(ids), strings.Join(ids, ", "))
+		r.outf("  manual (%d): %s\n", len(ids), strings.Join(ids, ", "))
 	} else {
-		fmt.Printf("  manual (0)\n")
+		r.outf("  manual (0)\n")
 	}
-	fmt.Printf("  %s\n", i18n.T(r.loc, "repl.card.editHint"))
+	r.outf("  %s\n", i18n.T(r.loc, "repl.card.editHint"))
 }
 
 // cardNative runs /card native add|remove — one command ability at a time.
 func (r *repl) cardNative(rest []string) {
 	if len(rest) == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.card.native.usage"))
+		r.outln(i18n.T(r.loc, "repl.card.native.usage"))
 		return
 	}
 	verb, tokens := rest[0], rest[1:]
 	pos, fl, err := parseCardFlags(tokens)
 	if err != nil {
-		fmt.Println(err)
+		r.outln(err)
 		return
 	}
 	if r.ensureCard() == "" {
-		fmt.Println(i18n.T(r.loc, "repl.card.none"))
+		r.outln(i18n.T(r.loc, "repl.card.none"))
 		return
 	}
 	switch verb {
 	case "add":
 		if len(pos) != 1 {
-			fmt.Println(i18n.T(r.loc, "repl.card.native.usage"))
+			r.outln(i18n.T(r.loc, "repl.card.native.usage"))
 			return
 		}
 		tier := 1
 		if v, ok := fl["tier"]; ok {
 			if tier, err = parseAgentTier(v); err != nil {
-				fmt.Println(err)
+				r.outln(err)
 				return
 			}
 		}
@@ -145,28 +144,28 @@ func (r *repl) cardNative(rest []string) {
 			Description: fl["description"],
 		}
 		if ab.Command == "" {
-			fmt.Println(i18n.T(r.loc, "repl.card.native.usage"))
+			r.outln(i18n.T(r.loc, "repl.card.native.usage"))
 			return
 		}
 		if err := cardmut.NativeAdd(r.cardPath, ab); err != nil {
-			fmt.Println(err)
+			r.outln(err)
 			return
 		}
-		fmt.Println(i18n.Tf(r.loc, "repl.card.done", "id", ab.ID))
+		r.outln(i18n.Tf(r.loc, "repl.card.done", "id", ab.ID))
 		r.reloadCardLive()
 	case "remove", "rm":
 		if len(pos) != 1 {
-			fmt.Println(i18n.T(r.loc, "repl.card.native.usage"))
+			r.outln(i18n.T(r.loc, "repl.card.native.usage"))
 			return
 		}
 		if err := cardmut.NativeRemove(r.cardPath, pos[0]); err != nil {
-			fmt.Println(err)
+			r.outln(err)
 			return
 		}
-		fmt.Println(i18n.Tf(r.loc, "repl.card.done", "id", pos[0]))
+		r.outln(i18n.Tf(r.loc, "repl.card.done", "id", pos[0]))
 		r.reloadCardLive()
 	default:
-		fmt.Println(i18n.T(r.loc, "repl.card.native.usage"))
+		r.outln(i18n.T(r.loc, "repl.card.native.usage"))
 	}
 }
 
@@ -174,29 +173,29 @@ func (r *repl) cardNative(rest []string) {
 // delegates to.
 func (r *repl) cardAgent(rest []string) {
 	if len(rest) == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.card.agent.usage"))
+		r.outln(i18n.T(r.loc, "repl.card.agent.usage"))
 		return
 	}
 	verb, tokens := rest[0], rest[1:]
 	pos, fl, err := parseCardFlags(tokens)
 	if err != nil {
-		fmt.Println(err)
+		r.outln(err)
 		return
 	}
 	if r.ensureCard() == "" {
-		fmt.Println(i18n.T(r.loc, "repl.card.none"))
+		r.outln(i18n.T(r.loc, "repl.card.none"))
 		return
 	}
 	switch verb {
 	case "add":
 		if len(pos) != 1 || fl["adapter"] == "" {
-			fmt.Println(i18n.T(r.loc, "repl.card.agent.usage"))
+			r.outln(i18n.T(r.loc, "repl.card.agent.usage"))
 			return
 		}
 		tier := 2 // fail-closed default, same as the loader's zero value
 		if v, ok := fl["tier"]; ok {
 			if tier, err = parseAgentTier(v); err != nil {
-				fmt.Println(err)
+				r.outln(err)
 				return
 			}
 		}
@@ -210,85 +209,85 @@ func (r *repl) cardAgent(rest []string) {
 			Tier:         tier,
 		}
 		if err := cardmut.AgentAdd(r.cardPath, pos[0], ag); err != nil {
-			fmt.Println(err)
+			r.outln(err)
 			return
 		}
-		fmt.Println(i18n.Tf(r.loc, "repl.card.done", "id", pos[0]))
+		r.outln(i18n.Tf(r.loc, "repl.card.done", "id", pos[0]))
 		r.reloadCardLive()
 	case "remove", "rm":
 		if len(pos) != 1 {
-			fmt.Println(i18n.T(r.loc, "repl.card.agent.usage"))
+			r.outln(i18n.T(r.loc, "repl.card.agent.usage"))
 			return
 		}
 		if err := cardmut.AgentRemove(r.cardPath, pos[0]); err != nil {
-			fmt.Println(err)
+			r.outln(err)
 			return
 		}
-		fmt.Println(i18n.Tf(r.loc, "repl.card.done", "id", pos[0]))
+		r.outln(i18n.Tf(r.loc, "repl.card.done", "id", pos[0]))
 		r.reloadCardLive()
 	case "set":
 		if len(pos) < 2 {
-			fmt.Println(i18n.T(r.loc, "repl.card.agent.usage"))
+			r.outln(i18n.T(r.loc, "repl.card.agent.usage"))
 			return
 		}
 		upd, err := parseAgentUpdate(pos[1:])
 		if err != nil {
-			fmt.Println(err)
+			r.outln(err)
 			return
 		}
 		if err := cardmut.AgentSet(r.cardPath, pos[0], upd); err != nil {
-			fmt.Println(err)
+			r.outln(err)
 			return
 		}
-		fmt.Println(i18n.Tf(r.loc, "repl.card.done", "id", pos[0]))
+		r.outln(i18n.Tf(r.loc, "repl.card.done", "id", pos[0]))
 		r.reloadCardLive()
 	default:
-		fmt.Println(i18n.T(r.loc, "repl.card.agent.usage"))
+		r.outln(i18n.T(r.loc, "repl.card.agent.usage"))
 	}
 }
 
 // cardManual runs /card manual add|remove — the human-performed abilities.
 func (r *repl) cardManual(rest []string) {
 	if len(rest) == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.card.manual.usage"))
+		r.outln(i18n.T(r.loc, "repl.card.manual.usage"))
 		return
 	}
 	verb, tokens := rest[0], rest[1:]
 	pos, fl, err := parseCardFlags(tokens)
 	if err != nil {
-		fmt.Println(err)
+		r.outln(err)
 		return
 	}
 	if r.ensureCard() == "" {
-		fmt.Println(i18n.T(r.loc, "repl.card.none"))
+		r.outln(i18n.T(r.loc, "repl.card.none"))
 		return
 	}
 	switch verb {
 	case "add":
 		if len(pos) != 1 || fl["notify"] == "" {
-			fmt.Println(i18n.T(r.loc, "repl.card.manual.usage"))
+			r.outln(i18n.T(r.loc, "repl.card.manual.usage"))
 			return
 		}
 		ab := ledger.ManualAbility{ID: pos[0], Notify: fl["notify"]}
 		if err := cardmut.ManualAdd(r.cardPath, ab); err != nil {
-			fmt.Println(err)
+			r.outln(err)
 			return
 		}
-		fmt.Println(i18n.Tf(r.loc, "repl.card.done", "id", ab.ID))
+		r.outln(i18n.Tf(r.loc, "repl.card.done", "id", ab.ID))
 		r.reloadCardLive()
 	case "remove", "rm":
 		if len(pos) != 1 {
-			fmt.Println(i18n.T(r.loc, "repl.card.manual.usage"))
+			r.outln(i18n.T(r.loc, "repl.card.manual.usage"))
 			return
 		}
 		if err := cardmut.ManualRemove(r.cardPath, pos[0]); err != nil {
-			fmt.Println(err)
+			r.outln(err)
 			return
 		}
-		fmt.Println(i18n.Tf(r.loc, "repl.card.done", "id", pos[0]))
+		r.outln(i18n.Tf(r.loc, "repl.card.done", "id", pos[0]))
 		r.reloadCardLive()
 	default:
-		fmt.Println(i18n.T(r.loc, "repl.card.manual.usage"))
+		r.outln(i18n.T(r.loc, "repl.card.manual.usage"))
 	}
 }
 
@@ -298,15 +297,15 @@ func (r *repl) cardManual(rest []string) {
 // fallback is the CLI's daemon-side flow, and the line says which path ran.
 func (r *repl) reloadCardLive() {
 	if r.engine == nil {
-		fmt.Println(i18n.T(r.loc, "repl.card.noEngine"))
+		r.outln(i18n.T(r.loc, "repl.card.noEngine"))
 		notifyDaemonReload()
 		return
 	}
 	if err := r.engine.ReloadCard(r.cardPath); err != nil {
-		fmt.Println(i18n.Tf(r.loc, "repl.card.reloadFail", "err", err.Error()))
+		r.outln(i18n.Tf(r.loc, "repl.card.reloadFail", "err", err.Error()))
 		return
 	}
-	fmt.Println(i18n.T(r.loc, "repl.card.live"))
+	r.outln(i18n.T(r.loc, "repl.card.live"))
 }
 
 // parseCardFlags splits a tokenized /card argument tail into positionals and
@@ -349,24 +348,24 @@ func parseCardFlags(tokens []string) ([]string, map[string]string, error) {
 func (r *repl) cmdNodesAdd(addr string) {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
-		fmt.Println(i18n.T(r.loc, "repl.nodes.add.usage"))
+		r.outln(i18n.T(r.loc, "repl.nodes.add.usage"))
 		return
 	}
 	if _, _, err := net.SplitHostPort(addr); err != nil {
-		fmt.Println(i18n.Tf(r.loc, "cli.nodes.badaddr", "addr", addr))
+		r.outln(i18n.Tf(r.loc, "cli.nodes.badaddr", "addr", addr))
 		return
 	}
 	if r.cfg.Network.SharedSecret == "" {
 		secret, err := generateSharedSecret()
 		if err != nil {
-			fmt.Println(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
+			r.outln(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
 			return
 		}
 		r.cfg.Network.SharedSecret = secret
-		fmt.Println(i18n.T(r.loc, "cli.nodes.secret.gen"))
+		r.outln(i18n.T(r.loc, "cli.nodes.secret.gen"))
 	}
 	if slices.Contains(r.cfg.Network.Peers, addr) {
-		fmt.Println(i18n.Tf(r.loc, "cli.nodes.add.exists", "addr", addr))
+		r.outln(i18n.Tf(r.loc, "cli.nodes.add.exists", "addr", addr))
 		return
 	}
 	r.cfg.Network.Peers = append(r.cfg.Network.Peers, addr)
@@ -375,24 +374,24 @@ func (r *repl) cmdNodesAdd(addr string) {
 		SharedSecret: r.cfg.Network.SharedSecret,
 		Peers:        r.cfg.Network.Peers,
 	}); err != nil {
-		fmt.Println(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
+		r.outln(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "cli.nodes.add.done", "addr", addr))
+	r.outln(i18n.Tf(r.loc, "cli.nodes.add.done", "addr", addr))
 
 	// Live dial: async, because the dialer's timeout would otherwise freeze
 	// the prompt on an offline peer — the same reasoning as startup dials.
 	if r.engine != nil {
 		go func() {
 			if err := r.engine.DialPeer(context.Background(), addr); err != nil {
-				fmt.Println(i18n.Tf(r.loc, "repl.nodes.dialFail", "addr", addr))
+				r.outln(i18n.Tf(r.loc, "repl.nodes.dialFail", "addr", addr))
 				return
 			}
-			fmt.Println(i18n.Tf(r.loc, "repl.nodes.dialed", "addr", addr))
+			r.outln(i18n.Tf(r.loc, "repl.nodes.dialed", "addr", addr))
 		}()
 		return
 	}
-	fmt.Println(i18n.T(r.loc, "repl.nodes.noEngine"))
+	r.outln(i18n.T(r.loc, "repl.nodes.noEngine"))
 	printJoinGuide(r.loc, r.cfg)
 }
 
@@ -402,7 +401,7 @@ func (r *repl) cmdNodesAdd(addr string) {
 func (r *repl) cmdNodesDisconnect(addr string) {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
-		fmt.Println(i18n.T(r.loc, "repl.nodes.add.usage"))
+		r.outln(i18n.T(r.loc, "repl.nodes.add.usage"))
 		return
 	}
 	remaining := make([]string, 0, len(r.cfg.Network.Peers))
@@ -412,18 +411,18 @@ func (r *repl) cmdNodesDisconnect(addr string) {
 		}
 	}
 	if len(remaining) == len(r.cfg.Network.Peers) {
-		fmt.Println(i18n.Tf(r.loc, "cli.nodes.disconnect.none", "addr", addr))
+		r.outln(i18n.Tf(r.loc, "cli.nodes.disconnect.none", "addr", addr))
 		return
 	}
 	r.cfg.Network.Peers = remaining
 	if err := config.UpdateNetworkSection(configWritePath(r.configPath), config.NetworkConfig{
 		Peers: remaining,
 	}); err != nil {
-		fmt.Println(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
+		r.outln(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "cli.nodes.disconnect.done", "addr", addr))
-	fmt.Println(i18n.T(r.loc, "cli.nodes.restart"))
+	r.outln(i18n.Tf(r.loc, "cli.nodes.disconnect.done", "addr", addr))
+	r.outln(i18n.T(r.loc, "cli.nodes.restart"))
 }
 
 // cmdNodesInvite implements /nodes invite — the join guide, no config change.
@@ -431,7 +430,7 @@ func (r *repl) cmdNodesInvite() {
 	if r.cfg.Network.SharedSecret == "" {
 		secret, err := generateSharedSecret()
 		if err != nil {
-			fmt.Println(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
+			r.outln(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
 			return
 		}
 		r.cfg.Network.SharedSecret = secret
@@ -439,10 +438,10 @@ func (r *repl) cmdNodesInvite() {
 			ListenAddr:   r.cfg.Network.ListenAddr,
 			SharedSecret: secret,
 		}); err != nil {
-			fmt.Println(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
+			r.outln(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
 			return
 		}
-		fmt.Println(i18n.T(r.loc, "cli.nodes.secret.gen"))
+		r.outln(i18n.T(r.loc, "cli.nodes.secret.gen"))
 	}
 	printJoinGuide(r.loc, r.cfg)
 }

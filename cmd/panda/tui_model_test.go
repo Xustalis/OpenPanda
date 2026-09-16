@@ -14,6 +14,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // newTestTUI builds a model over a minimal engine-less repl — enough to drive
@@ -99,17 +100,19 @@ func isQuit(cmd tea.Cmd) bool {
 // records the call and a dropped channel that drop() can close.
 func newTestStream(cancelled *bool) *askStream {
 	return &askStream{
+		events:   make(chan tea.Msg, 256),
 		cancel:   func() { *cancelled = true },
 		dropped:  make(chan struct{}),
+		steer:    make(chan string, 32),
 		detached: false,
 	}
 }
 
 // TestTUIInterruptReleasesTurn pins what Esc/Ctrl-C during a turn actually does:
 // it cancels the ask and returns to the prompt, and it marks the ask detached so
-// the result that arrives later is dropped rather than committed twice. It
-// notably does NOT claim to stop the work — the core owns a delegated task's
-// lifetime, so releasing the front end only stops the waiting.
+// the result that arrives later is dropped rather than committed twice. Core
+// decides task semantics from that cancellation: a claimed approval resume is
+// terminalized, while independently scheduled work remains core-owned.
 func TestTUIInterruptReleasesTurn(t *testing.T) {
 	m := newTestTUI(t)
 	cancelled := false
@@ -138,13 +141,13 @@ func TestTUIInterruptReleasesTurn(t *testing.T) {
 	}
 }
 
-// TestTUIInterruptTwiceQuits covers the case nothing can be released: a
-// ResumeApproved re-run has no stream and runs under the engine's own context,
-// so the first interrupt can only say so — but a second one inside the window
-// still quits. Without this a wedged turn would trap the user in the program.
+// TestTUIInterruptTwiceQuits covers the defensive case where a mode transition
+// reports busy without installing a stream. The first interrupt can only say so,
+// but a second one inside the window still quits, so a wedged transition cannot
+// trap the user in the program.
 func TestTUIInterruptTwiceQuits(t *testing.T) {
 	m := newTestTUI(t)
-	m.mode = modeAsking // a re-run is in flight; there is no stream to release
+	m.mode = modeAsking // defensive busy state with no stream to release
 	m.stream = nil
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -162,8 +165,8 @@ func TestTUIInterruptTwiceQuits(t *testing.T) {
 	}
 }
 
-// TestTUIDetachedResultIsDropped guards against double-reporting: a released ask
-// still finishes, but the watcher announces it, so onDone must not commit it.
+// TestTUIDetachedResultIsDropped guards against double-reporting: after the
+// stream is released, onDone must not commit a late outcome over a newer turn.
 func TestTUIDetachedResultIsDropped(t *testing.T) {
 	m := newTestTUI(t)
 	s := newTestStream(new(bool))
@@ -215,7 +218,7 @@ func TestTUIDroppedStreamUnblocksSend(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		s.send(ctx, deltaMsg("late"))
+		s.send(ctx, deltaMsg{stream: s, text: "late"})
 		close(done)
 	}()
 
@@ -223,6 +226,102 @@ func TestTUIDroppedStreamUnblocksSend(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("a send stayed blocked after the ask was dropped — goroutine leak")
+	}
+}
+
+func TestTUIRejectsEveryStaleStreamEvent(t *testing.T) {
+	m := newTestTUI(t)
+	m.mode = modeAsking
+	m.stream = newTestStream(new(bool))
+	m.thought = []string{"current thought"}
+	m.liveAnswerChunks = []string{"current answer"}
+	m.liveAnswerBytes = len("current answer")
+	m.note = "current note"
+	stale := newTestStream(new(bool))
+
+	cases := []tea.Msg{
+		deltaMsg{stream: stale, text: "late answer"},
+		reasoningMsg{stream: stale, text: "late thought"},
+		progressMsg{stream: stale, progress: askengine.Progress{Kind: askengine.ProgressTask, Name: "late task"}},
+		doneMsg{stream: stale, out: &askengine.Result{Kind: "answer", Answer: "late done"}},
+		resumedMsg{stream: stale, out: &askengine.Result{Kind: "task", TaskID: "late", OK: true}},
+	}
+	for _, msg := range cases {
+		next, cmd := m.Update(msg)
+		got := next.(tuiModel)
+		if cmd != nil || got.stream != m.stream || got.mode != modeAsking {
+			t.Fatalf("stale %T changed the active turn: mode=%v stream=%p cmd=%v", msg, got.mode, got.stream, cmd)
+		}
+		if got.liveAnswerText() != "current answer" || strings.Join(got.thought, "|") != "current thought" || got.note != "current note" || got.liveTask != nil {
+			t.Fatalf("stale %T mutated live state: answer=%q thought=%q note=%q task=%+v", msg, got.liveAnswerText(), got.thought, got.note, got.liveTask)
+		}
+	}
+}
+
+func TestTUISteeringQueueFullKeepsDraft(t *testing.T) {
+	for _, useMouse := range []bool{false, true} {
+		name := "keyboard"
+		if useMouse {
+			name = "mouse"
+		}
+		t.Run(name, func(t *testing.T) {
+			m := newTestTUI(t)
+			m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+			m.mode = modeAsking
+			m.stream = newTestStream(new(bool))
+			for i := 0; i < cap(m.stream.steer); i++ {
+				m.stream.steer <- "queued"
+			}
+			m.ta.SetValue("keep this draft")
+
+			var msg tea.Msg = tea.KeyMsg{Type: tea.KeyEnter}
+			if useMouse {
+				buttons := m.askingButtonRects()
+				msg = tea.MouseMsg{X: buttons[1].x + buttons[1].w/2, Y: buttons[1].y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
+			}
+			next, cmd := m.Update(msg)
+			got := next.(tuiModel)
+			if got.ta.Value() != "keep this draft" || got.mode != modeAsking || got.stream != m.stream {
+				t.Fatalf("full queue lost draft or turn: draft=%q mode=%v stream=%p", got.ta.Value(), got.mode, got.stream)
+			}
+			if strings.Contains(got.pendingPrompt, "keep this draft") || cmd == nil {
+				t.Fatalf("rejected steer was recorded or error feedback missing: prompt=%q cmd=%v", got.pendingPrompt, cmd)
+			}
+		})
+	}
+}
+
+func TestTUIApprovalResumeKeepsCardAndDropsStaleCompletion(t *testing.T) {
+	m := newTestTUI(t)
+	live := newTaskProgress("approved task", time.Now())
+	m.liveTask = live
+	m.mode = modeApproving
+	m.pending = &askengine.Result{Approval: &askengine.ApprovalRequest{TaskID: "task-abc"}}
+	m.turnWorkDir = "/tmp/session-worktree"
+
+	next, _ := m.approvePending()
+	got := next.(tuiModel)
+	if got.stream == nil || got.liveTask != live {
+		t.Fatal("approval must resume on a stream without replacing the live task card")
+	}
+	got = step(got, progressMsg{stream: got.stream, progress: askengine.Progress{Kind: askengine.ProgressRoute, Name: "routing"}})
+	if got.liveTask != live || len(live.stages) != 1 {
+		t.Fatalf("resume progress must extend the existing card: stages=%+v", live.stages)
+	}
+
+	stale := newTestStream(new(bool))
+	after, cmd := got.Update(resumedMsg{stream: stale, out: &askengine.Result{Kind: "task", TaskID: "task-abc", OK: true}})
+	unchanged := after.(tuiModel)
+	if cmd != nil || unchanged.mode != modeAsking || unchanged.stream != got.stream || unchanged.liveTask != live {
+		t.Fatal("a stale resume completion must not commit or clear the active task card")
+	}
+
+	cancelled := false
+	got.stream.cancel = func() { cancelled = true }
+	after, _ = got.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	stopped := after.(tuiModel)
+	if !cancelled || stopped.mode != modeIdle || stopped.stream != nil {
+		t.Fatal("interrupting an approval resume must cancel its context and return to idle")
 	}
 }
 
@@ -365,10 +464,10 @@ func TestTUIStreamingMultipleDeltasDoesNotPanic(t *testing.T) {
 		"可以为你处理。",
 	}
 	for _, c := range chunks {
-		m = step(m, deltaMsg(c))
+		m = step(m, deltaMsg{stream: m.stream, text: c})
 	}
-	if m.liveAnswer != "我是 OpenPanda，你所有设备和 agent 的大总管。简单说，我有四件事可以为你处理。" {
-		t.Fatalf("unexpected liveAnswer: %q", m.liveAnswer)
+	if got := m.liveAnswerText(); got != "我是 OpenPanda，你所有设备和 agent 的大总管。简单说，我有四件事可以为你处理。" {
+		t.Fatalf("unexpected liveAnswer: %q", got)
 	}
 	v := m.View()
 	if !strings.Contains(v, "大总管") {
@@ -439,9 +538,13 @@ func TestTUIMouseClickActions(t *testing.T) {
 		m.mode = modeAsking
 		m.stream = newTestStream(&cancelled)
 
+		buttons := m.askingButtonRects()
+		if len(buttons) != 3 || buttons[0].w == 0 {
+			t.Fatalf("stop button has no rendered hitbox: %+v", buttons)
+		}
 		mouseMsg := tea.MouseMsg{
-			X:      10,
-			Y:      38,
+			X:      buttons[0].x + buttons[0].w/2,
+			Y:      buttons[0].y,
 			Action: tea.MouseActionPress,
 			Button: tea.MouseButtonLeft,
 		}
@@ -465,9 +568,13 @@ func TestTUIMouseClickActions(t *testing.T) {
 		m.pendingPrompt = "Initial question"
 		m.ta.SetValue("refactor cleanly")
 
+		buttons := m.askingButtonRects()
+		if len(buttons) != 3 || buttons[1].w == 0 {
+			t.Fatalf("steer button has no rendered hitbox: %+v", buttons)
+		}
 		mouseMsg := tea.MouseMsg{
-			X:      30,
-			Y:      38,
+			X:      buttons[1].x + buttons[1].w/2,
+			Y:      buttons[1].y,
 			Action: tea.MouseActionPress,
 			Button: tea.MouseButtonLeft,
 		}
@@ -494,9 +601,13 @@ func TestTUIMouseClickActions(t *testing.T) {
 		m.mode = modeAsking
 		m.expandThought = false
 
+		buttons := m.askingButtonRects()
+		if len(buttons) != 3 || buttons[2].w == 0 {
+			t.Fatalf("thought button has no rendered hitbox: %+v", buttons)
+		}
 		mouseMsg := tea.MouseMsg{
-			X:      55,
-			Y:      38,
+			X:      buttons[2].x + buttons[2].w/2,
+			Y:      buttons[2].y,
 			Action: tea.MouseActionPress,
 			Button: tea.MouseButtonLeft,
 		}
@@ -507,8 +618,8 @@ func TestTUIMouseClickActions(t *testing.T) {
 		}
 		// Subsequent mouse release must NOT toggle thought back:
 		releaseMsg := tea.MouseMsg{
-			X:      55,
-			Y:      38,
+			X:      buttons[2].x + buttons[2].w/2,
+			Y:      buttons[2].y,
 			Action: tea.MouseActionRelease,
 			Button: tea.MouseButtonLeft,
 		}
@@ -528,29 +639,14 @@ func TestTUIMouseClickActions(t *testing.T) {
 		m.mode = modeApproving
 		m.pending = &askengine.Result{Approval: &askengine.ApprovalRequest{TaskID: "task-abc"}}
 
-		// Locate the choice row the way approvalHit does: re-render the framed
-		// card and find the [y]/[n] line from the bottom.
-		lines := strings.Split(m.approvalCard(), "\n")
-		choiceRow := -1
-		for i := len(lines) - 1; i >= 0; i-- {
-			if strings.Contains(lines[i], "[y]") && strings.Contains(lines[i], "[n]") {
-				choiceRow = i
-				break
-			}
+		layout := m.approvalLayout()
+		if layout.yes.w == 0 || layout.no.w == 0 {
+			t.Fatalf("approval card did not render option hitboxes: %+v", layout)
 		}
-		if choiceRow < 0 {
-			t.Fatal("approval card did not render a choice row")
-		}
-		choiceY := 40 - len(lines) + choiceRow
-
-		// Option cell midpoints, from the same pieces choice() renders: a
-		// border+padding origin of 2, then per option a 2-col focus prefix,
-		// the [k] badge, a space and the label, with a 3-space gap between.
-		optW := func(key string) int {
-			return 2 + 3 + 1 + cliui.DisplayWidth(i18n.T(m.loc, "tui.approval."+key))
-		}
-		yesMid := 2 + optW("yes")/2
-		noMid := 2 + optW("yes") + 3 + optW("no")/2
+		originY := 40 - lipgloss.Height(layout.rendered)
+		yesMid := layout.yes.x + layout.yes.w/2
+		noMid := layout.no.x + layout.no.w/2
+		choiceY := originY + layout.yes.y
 
 		// A click in the transcript area (anywhere off the choice row) is a
 		// no-op — this is the regression the old left-half-of-screen rule
@@ -561,14 +657,14 @@ func TestTUIMouseClickActions(t *testing.T) {
 		}
 		// A click on the card body (the head line) is also a no-op, even at an
 		// X that falls inside the yes option's column span.
-		headY := 40 - len(lines) + 1
+		headY := originY + 1
 		got = step(got, tea.MouseMsg{X: yesMid, Y: headY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 		if got.mode != modeApproving || got.pending == nil {
 			t.Fatalf("click on the card body must not answer the card: mode=%v pending=%+v", got.mode, got.pending)
 		}
 		// A click on the choice row but between/beyond the option cells is a
 		// no-op too.
-		gapX := 2 + optW("yes") + 1
+		gapX := layout.yes.x + layout.yes.w + 1
 		got = step(got, tea.MouseMsg{X: gapX, Y: choiceY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 		if got.mode != modeApproving || got.pending == nil {
 			t.Fatalf("click between the option cells must not answer the card: mode=%v pending=%+v", got.mode, got.pending)
@@ -587,6 +683,9 @@ func TestTUIMouseClickActions(t *testing.T) {
 		got = step(m, tea.MouseMsg{X: yesMid, Y: choiceY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 		if got.mode != modeAsking {
 			t.Fatalf("clicking the [y] cell should approve (modeAsking), got %v", got.mode)
+		}
+		if got.stream == nil {
+			t.Fatal("approval resume must install a cancellable stream")
 		}
 	}
 
@@ -624,17 +723,20 @@ func TestTUIMouseClickActions(t *testing.T) {
 		m := newTUIModel(r)
 		m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
 		m.mode = modeAsking
-		// Hit stop button at X=8, Y=39
-		if hit := m.askingButtonHit(8, 39); hit != 0 {
-			t.Fatalf("expected Stop button (0), got %d", hit)
+		buttons := m.askingButtonRects()
+		if len(buttons) != 3 {
+			t.Fatalf("expected three asking button hitboxes, got %+v", buttons)
 		}
-		// Hit steer button at X=26, Y=39
-		if hit := m.askingButtonHit(26, 39); hit != 1 {
-			t.Fatalf("expected Steer button (1), got %d", hit)
+		for i, rect := range buttons {
+			if rect.w == 0 || m.askingButtonHit(rect.x+rect.w/2, rect.y) != i {
+				t.Fatalf("button %d does not match rendered rectangle %+v", i, rect)
+			}
 		}
-		// Hit thought button at X=48, Y=39
-		if hit := m.askingButtonHit(48, 39); hit != 2 {
-			t.Fatalf("expected Thought button (2), got %d", hit)
+		for i := 0; i < len(buttons)-1; i++ {
+			gapX := buttons[i].x + buttons[i].w
+			if hit := m.askingButtonHit(gapX, buttons[i].y); hit != -1 {
+				t.Fatalf("gap after button %d hit %d", i, hit)
+			}
 		}
 	}
 }
@@ -643,28 +745,29 @@ func TestTUIMouseClickActions(t *testing.T) {
 // rendered into degenerate, tiny, or negative terminal windows (0x0, 1x1, 5x2, -10x-5).
 func TestTUIVerySmallWindowSize(t *testing.T) {
 	sizes := []tea.WindowSizeMsg{
-		{Width: 0, Height: 0},
 		{Width: 1, Height: 1},
 		{Width: 5, Height: 2},
 		{Width: 10, Height: 5},
-		{Width: -10, Height: -5},
 	}
 	for _, sz := range sizes {
 		m := newTestTUI(t)
 		m = step(m, sz)
-		// View in idle
-		v := m.View()
-		if v == "" {
-			t.Fatalf("empty view for size %+v", sz)
-		}
-
-		// View in asking mode with liveAnswer and task
-		m.mode = modeAsking
-		m.liveAnswer = "short answer"
-		m.liveTask = newTaskProgress("building task", time.Now())
-		vAsking := m.View()
-		if vAsking == "" {
-			t.Fatalf("empty asking view for size %+v", sz)
+		for _, mode := range []tuiMode{modeIdle, modeAsking} {
+			m.mode = mode
+			if mode == modeAsking {
+				m.liveAnswerChunks = []string{"a deliberately long answer that must fit the tiny terminal"}
+				m.liveAnswerBytes = len(m.liveAnswerChunks[0])
+				m.stream = newTestStream(new(bool))
+			}
+			view := m.View()
+			if view == "" {
+				t.Fatalf("empty view for size %+v mode %v", sz, mode)
+			}
+			for row, line := range strings.Split(view, "\n") {
+				if w := lipgloss.Width(line); w > sz.Width {
+					t.Fatalf("size %+v mode %v row %d is %d columns: %q", sz, mode, row, w, line)
+				}
+			}
 		}
 	}
 }

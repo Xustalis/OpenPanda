@@ -49,7 +49,7 @@ func (r *repl) cmdModel(arg string) {
 	case "test":
 		r.modelTest(fields[1:])
 	case "help", "-h", "--help":
-		fmt.Println(i18n.T(r.loc, "repl.model.usage"))
+		r.outln(i18n.T(r.loc, "repl.model.usage"))
 	default:
 		r.modelSwitch(fields[0])
 	}
@@ -169,12 +169,12 @@ func (r *repl) modelStatus() {
 	p := pal()
 	active := r.cfg.Model
 	if active.BaseURL == "" && active.Provider == "" && len(r.cfg.Models) == 0 {
-		fmt.Println(p.Muted("  " + i18n.T(r.loc, "repl.model.none")))
-		fmt.Println(p.Muted("  " + i18n.T(r.loc, "repl.model.hint")))
+		r.outln(p.Muted("  " + i18n.T(r.loc, "repl.model.none")))
+		r.outln(p.Muted("  " + i18n.T(r.loc, "repl.model.hint")))
 		return
 	}
 
-	fmt.Println(p.Heading(i18n.T(r.loc, "repl.model.head") + ":"))
+	r.outln(p.Heading(i18n.T(r.loc, "repl.model.head") + ":"))
 	aliasW, modelW, provW, ctxW := 12, 16, 12, 7
 	aliasW = max(aliasW, cliui.DisplayWidth(active.Alias()))
 	modelW = max(modelW, cliui.DisplayWidth(effectiveModel(active)))
@@ -191,7 +191,7 @@ func (r *repl) modelStatus() {
 	}
 	mark := p.Success(p.MarkOK())
 	activeBadge := p.Success("[active]")
-	fmt.Printf("  %s %s  %s  %s  %s  %s  %s\n",
+	r.outf("  %s %s  %s  %s  %s  %s  %s\n",
 		mark,
 		p.Accent(cell(active.Alias(), aliasW)),
 		cell(effectiveModel(active), modelW),
@@ -209,7 +209,7 @@ func (r *repl) modelStatus() {
 		if cw := effectiveContextWindow(m); cw > 0 {
 			mCtx = fmt.Sprintf("%dk", cw/1000)
 		}
-		fmt.Printf("    %s  %s  %s  %s  %s  %s\n",
+		r.outf("    %s  %s  %s  %s  %s  %s\n",
 			cell(m.Alias(), aliasW),
 			cell(effectiveModel(m), modelW),
 			p.Muted(cell(effectiveProvider(m), provW)),
@@ -219,8 +219,8 @@ func (r *repl) modelStatus() {
 		)
 	}
 
-	fmt.Println()
-	fmt.Println(p.Muted("  " + i18n.T(r.loc, "repl.model.hint")))
+	r.outln()
+	r.outln(p.Muted("  " + i18n.T(r.loc, "repl.model.hint")))
 }
 
 // locActiveMark returns the "active" marker glyph. It is localised via the
@@ -232,7 +232,7 @@ func (r *repl) locActiveMark() string {
 // modelSwitch selects a registered model by alias or model id.
 func (r *repl) modelSwitch(name string) {
 	if r.cfg.Model.Alias() == name && (r.cfg.Model.Model != "" || r.cfg.Model.Provider != "") {
-		fmt.Println(i18n.Tf(r.loc, "repl.model.set", "alias", r.cfg.Model.Alias(), "model", effectiveModel(r.cfg.Model)))
+		r.outln(i18n.Tf(r.loc, "repl.model.set", "alias", r.cfg.Model.Alias(), "model", effectiveModel(r.cfg.Model)))
 		return
 	}
 	for _, m := range r.cfg.Models {
@@ -241,7 +241,7 @@ func (r *repl) modelSwitch(name string) {
 				r.storeErr(err)
 				return
 			}
-			fmt.Println(i18n.Tf(r.loc, "repl.model.set", "alias", m.Alias(), "model", effectiveModel(m)))
+			r.outln(i18n.Tf(r.loc, "repl.model.set", "alias", m.Alias(), "model", effectiveModel(m)))
 			return
 		}
 	}
@@ -251,22 +251,22 @@ func (r *repl) modelSwitch(name string) {
 				r.storeErr(err)
 				return
 			}
-			fmt.Println(i18n.Tf(r.loc, "repl.model.set", "alias", m.Alias(), "model", effectiveModel(m)))
+			r.outln(i18n.Tf(r.loc, "repl.model.set", "alias", m.Alias(), "model", effectiveModel(m)))
 			return
 		}
 	}
 	if r.cfg.Model.Model == name && (r.cfg.Model.Model != "" || r.cfg.Model.Provider != "") {
-		fmt.Println(i18n.Tf(r.loc, "repl.model.set", "alias", r.cfg.Model.Alias(), "model", effectiveModel(r.cfg.Model)))
+		r.outln(i18n.Tf(r.loc, "repl.model.set", "alias", r.cfg.Model.Alias(), "model", effectiveModel(r.cfg.Model)))
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.model.switch.none", "name", name))
+	r.outln(i18n.Tf(r.loc, "repl.model.switch.none", "name", name))
 }
 
 // modelListProviders prints the built-in provider catalogue with width-aware
 // alignment (CJK-safe) and auth status indicators.
 func (r *repl) modelListProviders() {
 	p := pal()
-	fmt.Println(p.Heading(i18n.T(r.loc, "repl.model.providers.head") + ":"))
+	r.outln(p.Heading(i18n.T(r.loc, "repl.model.providers.head") + ":"))
 
 	all := providers.All()
 	idW, labelW, modelW, authW := 12, 22, 26, 12
@@ -286,7 +286,7 @@ func (r *repl) modelListProviders() {
 			authText = "key saved"
 			authStyle = p.Success
 		}
-		fmt.Printf("  %s  %s  %s  %s  %s\n",
+		r.outf("  %s  %s  %s  %s  %s\n",
 			p.Accent(cell(prov.ID, idW)),
 			cell(prov.Label, labelW),
 			cell(prov.DefaultModel, modelW),
@@ -294,8 +294,8 @@ func (r *repl) modelListProviders() {
 			p.Muted(prov.BaseURL),
 		)
 	}
-	fmt.Println()
-	fmt.Println(p.Muted("  " + i18n.T(r.loc, "repl.model.add.usage")))
+	r.outln()
+	r.outln(p.Muted("  " + i18n.T(r.loc, "repl.model.add.usage")))
 }
 
 // modelAdd registers a built-in provider, needing only its API key (or no key
@@ -305,13 +305,13 @@ func (r *repl) modelListProviders() {
 // is already known for the provider, it can be reused automatically.
 func (r *repl) modelAdd(args []string) {
 	if len(args) == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.model.add.usage"))
+		r.outln(i18n.T(r.loc, "repl.model.add.usage"))
 		return
 	}
 	id := args[0]
 	p, ok := providers.Lookup(id)
 	if !ok {
-		fmt.Println(i18n.Tf(r.loc, "repl.model.add.badprovider", "provider", id))
+		r.outln(i18n.Tf(r.loc, "repl.model.add.badprovider", "provider", id))
 		return
 	}
 	var model, key, alias string
@@ -328,7 +328,7 @@ func (r *repl) modelAdd(args []string) {
 			if existingKey := r.findProviderKey(id); existingKey != "" {
 				key = existingKey
 			} else {
-				fmt.Println(i18n.Tf(r.loc, "repl.model.add.nokey", "provider", id))
+				r.outln(i18n.Tf(r.loc, "repl.model.add.nokey", "provider", id))
 				return
 			}
 		case 2:
@@ -396,13 +396,13 @@ func (r *repl) modelAdd(args []string) {
 	if r.cfg.Model.BaseURL == "" && r.cfg.Model.Provider == "" && r.cfg.Model.Model == "" {
 		_ = r.applyModel(mc)
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.model.add.done", "alias", alias, "model", mc.Model))
+	r.outln(i18n.Tf(r.loc, "repl.model.add.done", "alias", alias, "model", mc.Model))
 }
 
 // modelRemove drops a registered model by alias or model id.
 func (r *repl) modelRemove(args []string) {
 	if len(args) == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.model.remove.usage"))
+		r.outln(i18n.T(r.loc, "repl.model.remove.usage"))
 		return
 	}
 	name := args[0]
@@ -411,7 +411,7 @@ func (r *repl) modelRemove(args []string) {
 			continue
 		}
 		if m.Alias() == r.cfg.Model.Alias() {
-			fmt.Println(i18n.Tf(r.loc, "repl.model.remove.active", "alias", name))
+			r.outln(i18n.Tf(r.loc, "repl.model.remove.active", "alias", name))
 			return
 		}
 		r.cfg.Models = append(r.cfg.Models[:i], r.cfg.Models[i+1:]...)
@@ -419,10 +419,10 @@ func (r *repl) modelRemove(args []string) {
 			r.storeErr(err)
 			return
 		}
-		fmt.Println(i18n.Tf(r.loc, "repl.model.remove.done", "alias", name))
+		r.outln(i18n.Tf(r.loc, "repl.model.remove.done", "alias", name))
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.model.remove.none", "alias", name))
+	r.outln(i18n.Tf(r.loc, "repl.model.remove.none", "alias", name))
 }
 
 // modelFetch pulls the model catalogue for the active model, a registered
@@ -434,23 +434,23 @@ func (r *repl) modelFetch(args []string) {
 	}
 	client, err := entry.NewClient(mc)
 	if err != nil {
-		fmt.Println(i18n.Tf(r.loc, "repl.model.fetch.err", "err", err.Error()))
+		r.outln(i18n.Tf(r.loc, "repl.model.fetch.err", "err", err.Error()))
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	models, err := client.ListModels(ctx)
 	if err != nil {
-		fmt.Println(i18n.Tf(r.loc, "repl.model.fetch.err", "err", err.Error()))
+		r.outln(i18n.Tf(r.loc, "repl.model.fetch.err", "err", err.Error()))
 		return
 	}
 	if len(models) == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.model.fetch.empty"))
+		r.outln(i18n.T(r.loc, "repl.model.fetch.empty"))
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.model.fetch.head", "alias", alias))
+	r.outln(i18n.Tf(r.loc, "repl.model.fetch.head", "alias", alias))
 	for _, m := range models {
-		fmt.Println("  " + m.ID)
+		r.outln("  " + m.ID)
 	}
 }
 
@@ -463,17 +463,17 @@ func (r *repl) modelTest(args []string) {
 	}
 	client, err := entry.NewClient(mc)
 	if err != nil {
-		fmt.Println(i18n.Tf(r.loc, "repl.model.test.fail", "err", err.Error()))
+		r.outln(i18n.Tf(r.loc, "repl.model.test.fail", "err", err.Error()))
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	answer, err := client.Complete(ctx, "You are a connectivity test.", "Reply with exactly: OK")
 	if err != nil {
-		fmt.Println(i18n.Tf(r.loc, "repl.model.test.fail", "err", err.Error()))
+		r.outln(i18n.Tf(r.loc, "repl.model.test.fail", "err", err.Error()))
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.model.test.ok", "alias", mc.Alias(), "reply", answer))
+	r.outln(i18n.Tf(r.loc, "repl.model.test.ok", "alias", mc.Alias(), "reply", answer))
 }
 
 // resolveModel maps fetch/test arguments onto a ModelConfig. With no argument
@@ -496,7 +496,7 @@ func (r *repl) resolveModel(args []string, verb string) (config.ModelConfig, str
 	}
 	p, ok := providers.Lookup(name)
 	if !ok {
-		fmt.Println(i18n.Tf(r.loc, "repl.model.switch.none", "name", name))
+		r.outln(i18n.Tf(r.loc, "repl.model.switch.none", "name", name))
 		return config.ModelConfig{}, "", false
 	}
 	var key string
@@ -505,7 +505,7 @@ func (r *repl) resolveModel(args []string, verb string) (config.ModelConfig, str
 	} else if existingKey := r.findProviderKey(p.ID); existingKey != "" {
 		key = existingKey
 	} else if !p.NoAuth {
-		fmt.Println(i18n.Tf(r.loc, "repl.model.add.nokey", "provider", name))
+		r.outln(i18n.Tf(r.loc, "repl.model.add.nokey", "provider", name))
 		return config.ModelConfig{}, "", false
 	}
 	mc, _ := providers.ModelConfig(name, "", key)

@@ -20,12 +20,20 @@ import (
 
 // TUI event messages. Each is a tea.Msg the root model folds into its state.
 type (
-	// deltaMsg is a chunk of streamed answer text.
-	deltaMsg string
-	// reasoningMsg is a chunk of chain-of-thought (display-only, D14).
-	reasoningMsg string
-	// progressMsg is one lifecycle phase update (route/exec/judge/tool/task).
-	progressMsg askengine.Progress
+	// Every streamed event carries its source. Delayed callbacks from an
+	// interrupted ask can then be discarded without touching a newer turn.
+	deltaMsg struct {
+		stream *askStream
+		text   string
+	}
+	reasoningMsg struct {
+		stream *askStream
+		text   string
+	}
+	progressMsg struct {
+		stream   *askStream
+		progress askengine.Progress
+	}
 	// doneMsg is the terminal outcome of one ask: the result (or error).
 	// stream identifies which ask finished, so a turn the user already stopped
 	// waiting on can be told apart from the one on screen.
@@ -37,7 +45,8 @@ type (
 	// resumedMsg is the outcome of a ResumeApproved re-run after the user
 	// approved a parked tier-2 task.
 	resumedMsg struct {
-		out *askengine.Result
+		stream *askStream
+		out    *askengine.Result
 	}
 	// droppedMsg reports that a pump's ask was released while it was parked.
 	// It carries no data: there is nothing to fold into the model, and the
@@ -53,11 +62,11 @@ type askStream struct {
 	cancel context.CancelFunc
 	steer  chan string
 
-	// detached records that the user stopped waiting on this ask (Esc/Ctrl+C).
-	// It never stops the work: once the engine has handed a task to the core,
-	// the core owns the task's lifetime, so it runs to completion and the
-	// out-of-band watcher announces it. The flag exists so the late doneMsg
-	// is dropped rather than committed over whatever the user is doing now.
+	// detached records that the user stopped waiting on this ask (Esc/Ctrl+C),
+	// and prevents its late completion from being committed over a newer turn.
+	// Dropping cancels the caller context; a task not yet owned by the core stops
+	// immediately, while a claimed foreground approval resume is terminalized by
+	// Core.ResumeApproved. Independently scheduled work keeps core ownership.
 	detached bool
 
 	// dropped is closed when the ask is detached. It wakes a pump that is
@@ -67,14 +76,18 @@ type askStream struct {
 	dropped chan struct{}
 }
 
-// injectSteer pushes a user steering idea to the in-flight engine ask loop.
-func (s *askStream) injectSteer(idea string) {
-	if s == nil || idea == "" {
-		return
+// injectSteer pushes a user steering idea to the in-flight engine ask loop and
+// reports whether the bounded queue accepted it. A full queue must remain
+// visible to the caller so it can preserve the draft instead of claiming success.
+func (s *askStream) injectSteer(idea string) bool {
+	if s == nil || idea == "" || s.detached {
+		return false
 	}
 	select {
 	case s.steer <- idea:
+		return true
 	default:
+		return false
 	}
 }
 
@@ -117,9 +130,9 @@ func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir st
 	}
 
 	cb := askengine.StreamCallbacks{
-		OnDelta:     func(text string) { s.send(ctx, deltaMsg(text)) },
-		OnReasoning: func(text string) { s.send(ctx, reasoningMsg(text)) },
-		OnProgress:  func(p askengine.Progress) { s.send(ctx, progressMsg(p)) },
+		OnDelta:     func(text string) { s.send(ctx, deltaMsg{stream: s, text: text}) },
+		OnReasoning: func(text string) { s.send(ctx, reasoningMsg{stream: s, text: text}) },
+		OnProgress:  func(p askengine.Progress) { s.send(ctx, progressMsg{stream: s, progress: p}) },
 		GetSteer: func() string {
 			select {
 			case idea := <-s.steer:
@@ -168,9 +181,25 @@ func waitForActivity(s *askStream) tea.Cmd {
 	}
 }
 
-// resumeApproved re-runs a parked tier-2 task with consent, off the model loop.
-func resumeApproved(engine *askengine.Engine, taskID, workDir string) tea.Cmd {
-	return func() tea.Msg {
-		return resumedMsg{out: engine.ResumeApproved(taskID, workDir)}
+// startResume re-runs a parked task through the same cancellable progress pump
+// as an ask, so its route/exec/tool/judge phases extend the existing task card.
+func startResume(engine *askengine.Engine, taskID, workDir string) (*askStream, tea.Cmd) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &askStream{
+		events:  make(chan tea.Msg, 256),
+		cancel:  cancel,
+		dropped: make(chan struct{}),
+		steer:   make(chan string, 1),
 	}
+	cb := askengine.StreamCallbacks{
+		OnProgress: func(p askengine.Progress) {
+			s.send(ctx, progressMsg{stream: s, progress: p})
+		},
+	}
+	go func() {
+		defer cancel()
+		out := engine.ResumeApproved(ctx, taskID, workDir, cb)
+		s.send(ctx, resumedMsg{stream: s, out: out})
+	}()
+	return s, waitForActivity(s)
 }

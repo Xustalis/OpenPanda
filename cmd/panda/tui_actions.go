@@ -41,7 +41,7 @@ func (m tuiModel) buildSessionItems() []SelectionItem {
 
 		badge := ""
 		if s.ID == m.r.activeSess {
-			badge = "[当前]"
+			badge = i18n.T(m.loc, "tui.badge.current")
 		}
 
 		timeStr := s.UpdatedAt.Format("2006-01-02 15:04")
@@ -77,7 +77,7 @@ func (m tuiModel) buildProjectItems() []SelectionItem {
 	for i, pr := range list {
 		badge := ""
 		if pr.Name == active {
-			badge = "[当前]"
+			badge = i18n.T(m.loc, "tui.badge.current")
 		}
 		items = append(items, SelectionItem{
 			ID:      pr.Name,
@@ -109,7 +109,7 @@ func (m tuiModel) buildModelItems() []SelectionItem {
 		items = append(items, SelectionItem{
 			ID:    alias,
 			Title: alias,
-			Badge: "[当前]",
+			Badge: i18n.T(m.loc, "tui.badge.current"),
 			Value: active,
 		})
 	}
@@ -145,9 +145,9 @@ func buildProviderItems() []SelectionItem {
 // openSessionsList switches to the interactive sessions view.
 func (m tuiModel) openSessionsList() (tuiModel, tea.Cmd) {
 	items := m.buildSessionItems()
-	sl := NewSelectionList("会话列表", items)
-	sl.EmptyText = "暂无历史会话。输入消息直接开始新对话。"
-	sl.FooterHints = "↑↓ 选择 · Enter 确认 · Esc 返回"
+	sl := NewSelectionList(i18n.T(m.loc, "tui.list.sessionsTitle"), items)
+	sl.EmptyText = i18n.T(m.loc, "tui.list.sessionsEmpty")
+	sl.FooterHints = i18n.T(m.loc, "tui.list.footerHints")
 
 	m.mode = modeList
 	m.listKind = listSessions
@@ -158,9 +158,9 @@ func (m tuiModel) openSessionsList() (tuiModel, tea.Cmd) {
 // openProjectsList switches to the interactive projects view.
 func (m tuiModel) openProjectsList() (tuiModel, tea.Cmd) {
 	items := m.buildProjectItems()
-	sl := NewSelectionList("项目列表", items)
-	sl.EmptyText = "暂无已保存的项目。可使用 /project <name> 创建新项目。"
-	sl.FooterHints = "↑↓ 选择 · Enter 确认 · Esc 返回"
+	sl := NewSelectionList(i18n.T(m.loc, "tui.list.projectsTitle"), items)
+	sl.EmptyText = i18n.T(m.loc, "tui.list.projectsEmpty")
+	sl.FooterHints = i18n.T(m.loc, "tui.list.footerHints")
 
 	m.mode = modeList
 	m.listKind = listProjects
@@ -171,9 +171,9 @@ func (m tuiModel) openProjectsList() (tuiModel, tea.Cmd) {
 // openResumeList switches to the interactive resume view.
 func (m tuiModel) openResumeList() (tuiModel, tea.Cmd) {
 	items := m.buildSessionItems()
-	sl := NewSelectionList("恢复会话", items)
-	sl.EmptyText = "暂无历史会话可供恢复。"
-	sl.FooterHints = "↑↓ 选择 · Enter 确认 · Esc 返回"
+	sl := NewSelectionList(i18n.T(m.loc, "tui.list.resumeTitle"), items)
+	sl.EmptyText = i18n.T(m.loc, "tui.list.resumeEmpty")
+	sl.FooterHints = i18n.T(m.loc, "tui.list.footerHints")
 
 	m.mode = modeList
 	m.listKind = listResume
@@ -195,10 +195,10 @@ func (m tuiModel) openModelPanel() (tuiModel, tea.Cmd) {
 	}
 
 	items := m.buildModelItems()
-	sl := NewSelectionList("模型管理", items)
+	sl := NewSelectionList(i18n.T(m.loc, "tui.model.panelTitle"), items)
 	sl.Boxed = true
-	sl.ActionHints = "[A] 添加  [D] 删除  [E] 编辑"
-	sl.FooterHints = "↑↓ 选择 · Enter 切换 · Esc 返回"
+	sl.ActionHints = i18n.T(m.loc, "tui.model.actionHints")
+	sl.FooterHints = i18n.T(m.loc, "tui.model.footerHints")
 
 	m.mode = modeModelPanel
 	m.selectionList = sl
@@ -208,8 +208,8 @@ func (m tuiModel) openModelPanel() (tuiModel, tea.Cmd) {
 // startModelWizard starts the step-by-step model setup guide.
 func (m tuiModel) startModelWizard() (tuiModel, tea.Cmd) {
 	items := buildProviderItems()
-	sl := NewSelectionList("未配置模型，请选择提供商开始添加：", items)
-	sl.FooterHints = "↑↓ 选择 · Enter 确认 · Esc 返回"
+	sl := NewSelectionList(i18n.T(m.loc, "tui.wizard.noModelPrompt"), items)
+	sl.FooterHints = i18n.T(m.loc, "tui.wizard.confirmBack")
 
 	m.mode = modeModelWizard
 	m.wizardStep = wizardStepProvider
@@ -279,9 +279,9 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			actionLabel := "已切换到会话"
+			actionLabel := i18n.T(m.loc, "tui.list.switchedSession")
 			if m.listKind == listResume {
-				actionLabel = "已恢复会话"
+				actionLabel = i18n.T(m.loc, "tui.list.resumedSession")
 			}
 			note := block{
 				kind: blockNote,
@@ -300,7 +300,7 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			note := block{
 				kind: blockNote,
-				body: fmt.Sprintf("已切换到项目: %s", item.Title),
+				body: fmt.Sprintf("%s: %s", i18n.T(m.loc, "tui.list.projectsTitle"), item.Title),
 			}
 			return m, m.printBlock(note)
 		}
@@ -310,6 +310,28 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleModelPanelKey routes keys inside the Boxed Model Management panel.
 func (m tuiModel) handleModelPanelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.confirmDeleteModel {
+		switch msg.Type {
+		case tea.KeyEsc:
+			m.confirmDeleteModel = false
+			m.pendingDeleteModel = ""
+			return m.openModelPanel()
+		case tea.KeyRunes:
+			switch string(msg.Runes) {
+			case "y", "Y":
+				alias := m.pendingDeleteModel
+				m.confirmDeleteModel = false
+				m.pendingDeleteModel = ""
+				return m.executeDeleteModel(alias)
+			case "n", "N":
+				m.confirmDeleteModel = false
+				m.pendingDeleteModel = ""
+				return m.openModelPanel()
+			}
+		}
+		return m, nil
+	}
+
 	switch msg.Type {
 	case tea.KeyUp, tea.KeyCtrlP:
 		m.selectionList.MoveUp()
@@ -370,7 +392,7 @@ func (m tuiModel) switchSelectedModel() (tuiModel, tea.Cmd) {
 		m.mode = modeIdle
 		note := block{
 			kind: blockNote,
-			body: fmt.Sprintf("已切换到模型: %s (%s)", targetMC.Alias(), effectiveModel(*targetMC)),
+			body: i18n.Tf(m.loc, "tui.model.switched", "alias", targetMC.Alias(), "model", effectiveModel(*targetMC)),
 		}
 		return m, m.printBlock(note)
 	}
@@ -379,14 +401,24 @@ func (m tuiModel) switchSelectedModel() (tuiModel, tea.Cmd) {
 	return m, nil
 }
 
-// deleteSelectedModel removes the highlighted model.
+// deleteSelectedModel prompts for confirmation before removing the model.
 func (m tuiModel) deleteSelectedModel() (tuiModel, tea.Cmd) {
 	item, ok := m.selectionList.Selected()
 	if !ok || m.r == nil || m.r.cfg == nil {
 		return m, nil
 	}
 
-	alias := item.ID
+	m.confirmDeleteModel = true
+	m.pendingDeleteModel = item.ID
+	return m.openModelPanel()
+}
+
+// executeDeleteModel removes the highlighted model after confirmation.
+func (m tuiModel) executeDeleteModel(alias string) (tuiModel, tea.Cmd) {
+	if m.r == nil || m.r.cfg == nil {
+		return m, nil
+	}
+
 	newModels := make([]config.ModelConfig, 0, len(m.r.cfg.Models))
 	for _, mod := range m.r.cfg.Models {
 		if mod.Alias() != alias && mod.Model != alias {
@@ -511,8 +543,9 @@ func (m tuiModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.wizardInput = defModel
 			return m, nil
 		case tea.KeyBackspace, tea.KeyCtrlH:
-			if len(m.wizardInput) > 0 {
-				m.wizardInput = m.wizardInput[:len(m.wizardInput)-1]
+			runes := []rune(m.wizardInput)
+			if len(runes) > 0 {
+				m.wizardInput = string(runes[:len(runes)-1])
 			}
 			return m, nil
 		case tea.KeyRunes:
@@ -539,8 +572,9 @@ func (m tuiModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.wizardModel = modelName
 			return m.finalizeWizard()
 		case tea.KeyBackspace, tea.KeyCtrlH:
-			if len(m.wizardInput) > 0 {
-				m.wizardInput = m.wizardInput[:len(m.wizardInput)-1]
+			runes := []rune(m.wizardInput)
+			if len(runes) > 0 {
+				m.wizardInput = string(runes[:len(runes)-1])
 			}
 			return m, nil
 		case tea.KeyRunes:
@@ -560,7 +594,7 @@ func (m tuiModel) finalizeWizard() (tuiModel, tea.Cmd) {
 
 	mc, ok := providers.ModelConfig(m.wizardProvider, m.wizardModel, m.wizardKey)
 	if !ok {
-		note := block{kind: blockError, body: "未知模型提供商: " + m.wizardProvider}
+		note := block{kind: blockError, body: i18n.Tf(m.loc, "tui.wizard.unknownProvider", "provider", m.wizardProvider)}
 		m.mode = modeIdle
 		return m, m.printBlock(note)
 	}

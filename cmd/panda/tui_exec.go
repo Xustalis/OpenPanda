@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"os"
 	"strings"
@@ -9,70 +10,101 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// execDoneMsg reports that an executed slash or shell command finished.
+// execOutputMsg is one progressive stdout/stderr chunk from a slash or shell
+// command. exec and generation bind it to the exact execution that produced it.
+type execOutputMsg struct {
+	exec       *commandExec
+	generation uint64
+	text       string
+}
+
+// execDoneMsg is the terminal event for one slash or shell execution.
 type execDoneMsg struct {
-	text   string
-	output string
+	exec       *commandExec
+	generation uint64
+	text       string
+	output     string
+	err        error
 }
 
-var captureMu sync.Mutex
+// commandExec owns one command's cancellation and event stream. Unlike the old
+// capture path, it never swaps process-global stdout/stderr.
+type commandExec struct {
+	generation uint64
+	ctx        context.Context
+	cancel     context.CancelFunc
+	events     chan tea.Msg
 
-// captureOutput intercepts stdout and stderr produced by fn, returning the
-// combined captured text. This allows the classic REPL's handlers (which print
-// straight to stdout with fmt/pal) to execute cleanly inside the full-screen AltScreen TUI
-// without releasing the terminal or discarding output.
-func captureOutput(fn func()) string {
-	captureMu.Lock()
-	defer captureMu.Unlock()
+	mu     sync.Mutex
+	output strings.Builder
+}
 
-	r, w, err := os.Pipe()
-	if err != nil {
-		fn()
-		return ""
+func newCommandExec(generation uint64) *commandExec {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &commandExec{
+		generation: generation,
+		ctx:        ctx,
+		cancel:     cancel,
+		events:     make(chan tea.Msg, 256),
 	}
-
-	oldStdout := os.Stdout
-	oldStderr := os.Stderr
-	os.Stdout = w
-	os.Stderr = w
-
-	outC := make(chan string, 1)
-	go func() {
-		var buf strings.Builder
-		_, _ = io.Copy(&buf, r)
-		outC <- buf.String()
-	}()
-
-	fn()
-
-	_ = w.Close()
-	os.Stdout = oldStdout
-	os.Stderr = oldStderr
-
-	out := <-outC
-	_ = r.Close()
-	return out
 }
 
-// runSlash builds the command to execute a slash line or shell command in the background
-// and deliver its captured output to the model loop without exiting AltScreen.
-func (m tuiModel) runSlash(text string) tea.Cmd {
-	return func() tea.Msg {
-		out := captureOutput(func() {
-			if m.r != nil {
-				m.r.dispatch(text)
-			}
-		})
-		return execDoneMsg{
-			text:   text,
-			output: out,
+func (e *commandExec) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	chunk := string(append([]byte(nil), p...))
+	e.mu.Lock()
+	_, _ = e.output.WriteString(chunk)
+	e.mu.Unlock()
+	select {
+	case e.events <- execOutputMsg{exec: e, generation: e.generation, text: chunk}:
+		return len(p), nil
+	case <-e.ctx.Done():
+		return 0, e.ctx.Err()
+	}
+}
+
+func (e *commandExec) text() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.output.String()
+}
+
+func startCommandExec(r *repl, text string, generation uint64) (*commandExec, tea.Cmd) {
+	e := newCommandExec(generation)
+	go func() {
+		var err error
+		if r != nil {
+			r.dispatchWithIO(e.ctx, text, os.Stdin, e, e)
+			err = e.ctx.Err()
+		} else {
+			err = context.Canceled
 		}
+		e.events <- execDoneMsg{
+			exec:       e,
+			generation: generation,
+			text:       text,
+			output:     e.text(),
+			err:        err,
+		}
+	}()
+	return e, waitForExec(e)
+}
+
+func waitForExec(e *commandExec) tea.Cmd {
+	return func() tea.Msg {
+		if e == nil {
+			return execDoneMsg{err: context.Canceled}
+		}
+		return <-e.events
 	}
 }
 
 // isBareCommand reports whether a submitted line should run through the repl
-// dispatch (a slash command or a shell escape) rather than the ask engine. The
-// quit shortcuts are handled before this — they end the program, not a handler.
+// dispatch rather than the ask engine.
 func isBareCommand(text string) bool {
 	return strings.HasPrefix(text, "/") || strings.HasPrefix(text, "!")
 }
+
+var _ io.Writer = (*commandExec)(nil)

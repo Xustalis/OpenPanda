@@ -22,7 +22,7 @@ import (
 // the thought: reasoning precedes the answer on reasoning models, so once prose
 // starts, the thought block is committed to scrollback (folded or expanded per
 // the current Ctrl+O state) and the answer streams live below it.
-func (m tuiModel) onDelta(chunk string) (tea.Model, tea.Cmd) {
+func (m tuiModel) onDelta(msg deltaMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	if !m.thoughtDone {
 		m.thoughtDone = true
@@ -31,8 +31,11 @@ func (m tuiModel) onDelta(chunk string) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.printBlock(tb))
 		}
 	}
-	m.liveAnswer += chunk
-	cmds = append(cmds, waitForActivity(m.stream))
+	if msg.text != "" {
+		m.liveAnswerChunks = append(m.liveAnswerChunks, msg.text)
+		m.liveAnswerBytes += len(msg.text)
+	}
+	cmds = append(cmds, waitForActivity(msg.stream))
 	return m, tea.Batch(cmds...)
 }
 
@@ -41,7 +44,8 @@ func (m tuiModel) onDelta(chunk string) (tea.Model, tea.Cmd) {
 // the first answer delta does); the routing/exec/judge milestones that follow
 // advance that card's trail. The note is kept either way, for the status line on
 // turns that never delegate.
-func (m tuiModel) onProgress(p askengine.Progress) (tea.Model, tea.Cmd) {
+func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
+	p := msg.progress
 	label := progressNote(m.loc, p)
 	m.note = label
 	now := time.Now()
@@ -62,7 +66,7 @@ func (m tuiModel) onProgress(p askengine.Progress) (tea.Model, tea.Cmd) {
 			m.liveTask.advance(label, now)
 		}
 	}
-	cmds = append(cmds, waitForActivity(m.stream))
+	cmds = append(cmds, waitForActivity(msg.stream))
 	return m, tea.Batch(cmds...)
 }
 
@@ -75,7 +79,7 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 	// end never stopped the work. The watcher announces that outcome, since
 	// turnEnded re-armed it when the turn was detached; committing here as
 	// well would print the same result twice.
-	if msg.stream != nil && msg.stream.detached {
+	if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
 		return m, nil
 	}
 	m.mode = modeIdle
@@ -113,7 +117,11 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 
 // onResumed commits the outcome of a ResumeApproved re-run.
 func (m tuiModel) onResumed(msg resumedMsg) (tea.Model, tea.Cmd) {
+	if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
+		return m, nil
+	}
 	m.mode = modeIdle
+	m.stream = nil
 	m.pending = nil
 	return m.commit(msg.out)
 }
@@ -142,7 +150,7 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 	if m.r != nil {
 		m.r.recordOutcome(context.Background(), m.pendingPrompt, out)
 	}
-	blk := resultBlock(out, m.liveAnswer, m.loc)
+	blk := resultBlock(out, m.liveAnswerText(), m.loc)
 	// A delegated turn carries its card's title and stage trail into scrollback,
 	// so the committed block records the same route/exec/judge evidence the live
 	// card showed rather than just the final output.
@@ -177,11 +185,6 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 			}
 			return base + " · " + cm
 		}
-		// Sub-agent round: the converged report is the reply — it streamed
-		// live into this turn's answer region, so the committed body is the
-		// model's report with the raw agent output demoted to a pointer
-		// line. Without a report (queue-parked, budget-cut, report
-		// degraded) the raw output remains the body, as before.
 		if report := strings.TrimSpace(out.Answer); report != "" {
 			body := report
 			if !out.OK {
@@ -192,11 +195,12 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 			}
 			return block{kind: blockTask, ok: out.OK, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
 		}
-		// LLM-generated summary: the dedicated "report after execution" call
-		// fills Report so the user sees a human-readable summary instead of
-		// raw stdout/stderr.
 		if summary := strings.TrimSpace(out.Report); summary != "" {
-			return block{kind: blockTask, ok: out.OK, body: summary, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
+			body := summary
+			if out.OK && strings.TrimSpace(out.Stdout) != "" && !strings.Contains(summary, strings.TrimSpace(out.Stdout)) {
+				body = summary + "\n\n" + strings.TrimRight(out.Stdout, "\n")
+			}
+			return block{kind: blockTask, ok: out.OK, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
 		}
 		if out.OK {
 			return block{kind: blockTask, ok: true, body: strings.TrimRight(out.Stdout, "\n"), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
@@ -293,7 +297,9 @@ func (m tuiModel) approvePending() (tea.Model, tea.Cmd) {
 	// /resume'd session must not silently re-run under the engine's default
 	// work path — for an irreversible task that is the wrong directory, not
 	// merely a cosmetic difference.
-	return m, tea.Batch(m.sp.Tick, resumeApproved(m.engine, req.TaskID, m.turnWorkDir))
+	stream, pump := startResume(m.engine, req.TaskID, m.turnWorkDir)
+	m.stream = stream
+	return m, tea.Batch(m.sp.Tick, pump)
 }
 
 // denyPending answers the approval card with no: the task stays in review and
@@ -307,9 +313,25 @@ func (m tuiModel) denyPending() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(done, m.printBlock(note))
 }
 
+// liveAnswerText materializes the streamed answer only at render/commit boundaries.
+// Chunks make appending O(1) amortized instead of copying the complete answer for
+// every delta.
+func (m tuiModel) liveAnswerText() string {
+	if len(m.liveAnswerChunks) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(m.liveAnswerBytes)
+	for _, chunk := range m.liveAnswerChunks {
+		b.WriteString(chunk)
+	}
+	return b.String()
+}
+
 // resetLive clears the in-flight turn state after a turn commits.
 func (m *tuiModel) resetLive() {
-	m.liveAnswer = ""
+	m.liveAnswerChunks = nil
+	m.liveAnswerBytes = 0
 	m.thought = nil
 	m.thoughtDone = false
 	m.note = ""

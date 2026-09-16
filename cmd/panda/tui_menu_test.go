@@ -109,14 +109,11 @@ func TestMenuOpensWhileTyping(t *testing.T) {
 	}
 }
 
-// TestSubmitSlashBlanksTheFrameBeforeExec is the regression test for the two
-// input boxes a slash command used to leave behind. tea.Exec hands the terminal
-// over by stopping the renderer, and stopping erases only the row the cursor sits
-// on — so every row the last frame drew above it stays in scrollback, and the
-// command's output printed under a stranded copy of the input box with a fresh
-// one repainting below. The frame therefore has to be empty before the terminal
-// is released, and the prompt has to come back when the command finishes.
-func TestSubmitSlashBlanksTheFrameBeforeExec(t *testing.T) {
+// TestSubmitSlashShowsProgressDuringExec is the regression test for long slash
+// commands looking like a frozen blank screen. The command runs asynchronously
+// while the TUI keeps a visible execution state, then the prompt returns when it
+// finishes.
+func TestSubmitSlashShowsProgressDuringExec(t *testing.T) {
 	m := newTestTUI(t)
 	m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
 	next, cmd := m.submit("/help")
@@ -130,14 +127,17 @@ func TestSubmitSlashBlanksTheFrameBeforeExec(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("slash command should return an exec command")
 	}
-	if v := nm.View(); v != "" {
-		t.Fatalf("the frame must be empty before the terminal is released, got %q", v)
+	if v := nm.View(); !strings.Contains(v, i18n.T(nm.loc, "tui.exec.running")) ||
+		!strings.Contains(v, i18n.T(nm.loc, "tui.exec.cancel")) {
+		t.Fatalf("the frame must show command progress and cancellation, got %q", v)
 	}
 	// While the command owns the terminal the keys are its own, not the model's.
 	if after, _ := nm.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); after.(tuiModel).quitting {
 		t.Fatal("ctrl+c during a foreground command must not quit the program")
 	}
-	back := step(nm, execDoneMsg{})
+	back := step(nm, execDoneMsg{
+		exec: nm.exec, generation: nm.execGen, text: "/help",
+	})
 	if back.mode != modeIdle {
 		t.Fatalf("the prompt should return when the command finishes, mode=%v", back.mode)
 	}
@@ -327,7 +327,11 @@ func TestApplyLocaleAfterLangCommand(t *testing.T) {
 		t.Fatal("test starts in English")
 	}
 	m.r.loc = i18n.ChineseSimp // what cmdLang does while the command runs
-	back := step(m, execDoneMsg{})
+	exec := newCommandExec(1)
+	m.mode = modeExec
+	m.exec = exec
+	m.execGen = exec.generation
+	back := step(m, execDoneMsg{exec: exec, generation: exec.generation})
 	if back.loc != i18n.ChineseSimp {
 		t.Fatalf("the model should adopt the repl's locale, got %q", back.loc)
 	}

@@ -18,13 +18,24 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func (m tuiModel) View() string {
-	// modeExec draws nothing on purpose: a foreground command is about to own the
-	// terminal, and whatever this frame drew would be stranded above its output.
-	if m.quitting || m.mode == modeExec {
+	if m.quitting {
 		return ""
+	}
+	if m.mode == modeExec {
+		var live strings.Builder
+		live.WriteString("\n")
+		live.WriteString(m.th.accent.Render(i18n.T(m.loc, "tui.exec.running")))
+		if output := m.execText.String(); strings.TrimSpace(output) != "" {
+			live.WriteString("\n")
+			live.WriteString(output)
+		}
+		live.WriteString("\n")
+		live.WriteString(m.th.muted.Render(i18n.T(m.loc, "tui.exec.cancel")))
+		return m.mainChatView(live.String())
 	}
 	switch m.mode {
 	case modeSplash:
@@ -114,7 +125,7 @@ func (m tuiModel) mainChatView(live string) string {
 			out = append(out, "")
 		}
 		out = append(out, inputLines...)
-		return strings.Join(out, "\n")
+		return clipRendered(strings.Join(out, "\n"), w)
 	}
 
 	// 5. If content exceeds available height, apply scrollOffset (0 means anchored at bottom)
@@ -137,7 +148,7 @@ func (m tuiModel) mainChatView(live string) string {
 	var out []string
 	out = append(out, visibleLines...)
 	out = append(out, inputLines...)
-	return strings.Join(out, "\n")
+	return clipRendered(strings.Join(out, "\n"), w)
 }
 
 // splashView renders the centered full-screen startup overlay.
@@ -183,14 +194,14 @@ func (m tuiModel) splashView() string {
 		blockLines = append(blockLines, m.th.muted.Render(cliui.Truncate(nodeLabel, max(20, w-8), m.th.unicode)))
 	}
 
-	dirLabel := "  " + m.th.glyph("▫", "-") + " 工作目录: " + workPath
+	dirLabel := "  " + m.th.glyph("▫", "-") + " " + i18n.Tf(m.loc, "tui.banner.workdir", "dir", workPath)
 	blockLines = append(blockLines, m.th.muted.Render(cliui.TruncateTail(dirLabel, max(20, w-8), m.th.unicode)))
 
 	blockLines = append(blockLines, "")
 	blockLines = append(blockLines, m.th.muted.Render(cliui.Truncate(i18n.T(m.loc, "tui.welcome.tips"), max(20, w-8), m.th.unicode)))
 
 	centerContent := strings.Join(blockLines, "\n")
-	bottomPrompt := m.th.muted.Render("Enter 开始 · Q 退出")
+	bottomPrompt := m.th.muted.Render(i18n.T(m.loc, "tui.splash.prompt"))
 
 	centerRendered := lipgloss.PlaceHorizontal(w, lipgloss.Center, centerContent)
 	centerLines := strings.Split(centerRendered, "\n")
@@ -218,6 +229,10 @@ func (m tuiModel) listView() string {
 
 // modelPanelView renders the boxed model management panel.
 func (m tuiModel) modelPanelView() string {
+	if m.confirmDeleteModel && m.pendingDeleteModel != "" {
+		m.selectionList.ActionHints = m.th.warn.Bold(true).Render("⚠️  " + i18n.Tf(m.loc, "tui.model.deleteConfirm", "alias", m.pendingDeleteModel))
+		m.selectionList.FooterHints = "Y / N / Esc"
+	}
 	return m.selectionList.Render(m.th, m.width, m.height)
 }
 
@@ -242,29 +257,31 @@ func (m tuiModel) modelWizardView() string {
 		provLabel = p.Label
 	}
 
-	lines = append(lines, m.th.heading.Render(fmt.Sprintf("添加模型 - %s", provLabel)))
+	lines = append(lines, m.th.heading.Render(i18n.Tf(m.loc, "tui.wizard.addModelTitle", "provider", provLabel)))
 	lines = append(lines, "")
 
 	if m.wizardStep == wizardStepAPIKey {
-		lines = append(lines, "请输入 API Key:")
-		inputDisplay := m.wizardInput
+		lines = append(lines, i18n.T(m.loc, "tui.wizard.inputAPIKey"))
+		inputDisplay := strings.Repeat("•", len([]rune(m.wizardInput)))
 		lines = append(lines, m.th.accent.Render("> ")+inputDisplay+m.th.accent.Render("█"))
 		lines = append(lines, "")
-		lines = append(lines, m.th.muted.Render("Enter 确认 · Esc 返回"))
+		lines = append(lines, m.th.muted.Render(i18n.T(m.loc, "tui.wizard.confirmBack")))
 	} else if m.wizardStep == wizardStepModelName {
 		defModel := ""
 		if p, ok := providers.Lookup(m.wizardProvider); ok {
 			defModel = p.DefaultModel
 		}
-		prompt := "请输入模型名称:"
+		var prompt string
 		if defModel != "" {
-			prompt = fmt.Sprintf("请输入模型名称 (默认: %s):", defModel)
+			prompt = i18n.Tf(m.loc, "tui.wizard.inputModelNameDef", "def", defModel)
+		} else {
+			prompt = i18n.T(m.loc, "tui.wizard.inputModelName")
 		}
 		lines = append(lines, prompt)
 		inputDisplay := m.wizardInput
 		lines = append(lines, m.th.accent.Render("> ")+inputDisplay+m.th.accent.Render("█"))
 		lines = append(lines, "")
-		lines = append(lines, m.th.muted.Render("Enter 确认 · Esc 返回"))
+		lines = append(lines, m.th.muted.Render(i18n.T(m.loc, "tui.wizard.confirmBack")))
 	}
 
 	content := strings.Join(lines, "\n")
@@ -400,7 +417,7 @@ func (m tuiModel) onboardingTermsView(w, h int) string {
 // classified as a task. Reasoning is display-only (D14).
 func (m tuiModel) liveRegion() string {
 	var parts []string
-	if ans := m.liveAnswer; strings.TrimSpace(ans) != "" {
+	if ans := m.liveAnswerText(); strings.TrimSpace(ans) != "" {
 		text := answerText(m.th, ans, m.textWidth())
 		if m.height > 10 {
 			lines := strings.Split(text, "\n")
@@ -466,10 +483,17 @@ func (m tuiModel) inputView() string {
 	if m.mode == modeAsking {
 		boxStyle = m.th.inputBoxRunning.BorderForeground(m.th.breathingColor(m.animTick))
 	}
+	// A border plus horizontal padding needs at least five cells. Below that,
+	// render a clipped bare editor and footer: terminal geometry is authoritative.
+	if m.textWidth() < 5 {
+		return clipRendered(m.ta.View(), m.textWidth()) + "\n" + clipRendered(m.statusRow(), m.textWidth())
+	}
 	rows := []string{
 		"", // the blank line every committed block gets above it
 	}
-	rows = append(rows, boxStyle.Width(m.textWidth()+2).Render(m.ta.View()))
+	// Lip Gloss Width includes padding but adds borders afterward. textWidth is the
+	// actual terminal-bounded frame width, so reserve the two border cells here.
+	rows = append(rows, boxStyle.Width(max(1, m.textWidth()-2)).Render(m.ta.View()))
 	// The list is capped to what the window can spare: an inline renderer repaints
 	// by counting rows back up from the cursor, so a frame taller than the terminal
 	// scrolls its own top away and every later repaint lands in the wrong place.
@@ -635,7 +659,16 @@ func (m tuiModel) hintKeys() []string {
 // wants to do, why the executor refused, and the y/n choice. The focused
 // choice is accented and marker-prefixed so arrows + Enter read as a picker
 // while the [y]/[n] labels keep the hotkeys discoverable.
-func (m tuiModel) approvalCard() string {
+// approvalCardLayout is the final rendered card plus the exact terminal cells
+// occupied by its two choices. Rendering and hit testing consume this one layout,
+// so localization, resize, padding, or border changes cannot leave stale hitboxes.
+type approvalCardLayout struct {
+	rendered string
+	yes      tuiRect
+	no       tuiRect
+}
+
+func (m tuiModel) approvalLayout() approvalCardLayout {
 	req := m.pending.Approval
 	var sb strings.Builder
 	sb.WriteString(m.th.warn.Render(m.th.glyph("⚠", "!") + " " + i18n.T(m.loc, "repl.approval.head")))
@@ -650,87 +683,121 @@ func (m tuiModel) approvalCard() string {
 		}
 		return "  " + s
 	}
-	sb.WriteString("\n\n" + choice(0, "y", i18n.T(m.loc, "tui.approval.yes")))
-	sb.WriteString("   " + choice(1, "n", i18n.T(m.loc, "tui.approval.no")))
+	yesLabel := i18n.T(m.loc, "tui.approval.yes")
+	noLabel := i18n.T(m.loc, "tui.approval.no")
+	yesText := choice(0, "y", yesLabel)
+	noText := choice(1, "n", noLabel)
+	sb.WriteString("\n\n" + yesText)
+	sb.WriteString("   " + noText)
 	sb.WriteString("\n" + m.th.muted.Render(m.th.glyph("↑↓", "^v")+" "+i18n.T(m.loc, "tui.approval.hint")))
-	return m.th.approval.Width(m.textWidth()).Render(sb.String())
-}
 
-// approvalHit maps a terminal click to an approval choice: 0 = approve,
-// 1 = deny, -1 = not on either option. The ephemeral frame is only
-// bottom-anchored once the transcript has filled the screen (bubbletea paints
-// the view at the cursor and scrollback pushes it down), so the choice row is
-// located by re-rendering the card and finding the [y]/[n] line from the
-// bottom, and the option cells are measured from the same pieces choice()
-// renders. Any click that does not resolve to an option — the transcript, the
-// card body, a stale frame after a resize — is ignored: a mis-aimed click may
-// be useless, but it must never be able to approve an irreversible task. The
-// keyboard path (y/n, arrows + enter) is unaffected.
-func (m tuiModel) approvalHit(x, y int) int {
-	if m.height <= 0 {
-		return -1
-	}
-	lines := strings.Split(m.approvalCard(), "\n")
-	choice := -1
+	rendered := m.th.approval.Width(max(1, m.textWidth()-2)).Render(sb.String())
+	lines := strings.Split(rendered, "\n")
+	choiceRow := -1
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.Contains(lines[i], "[y]") && strings.Contains(lines[i], "[n]") {
-			choice = i
+			choiceRow = i
 			break
 		}
 	}
-	if choice < 0 || y != m.height-len(lines)+choice {
+	layout := approvalCardLayout{rendered: rendered}
+	if choiceRow < 0 {
+		return layout
+	}
+	// Border + horizontal padding precede the rendered choice content. The
+	// choices themselves are measured from the exact strings rendered above.
+	const origin = 2
+	yesWidth := lipgloss.Width(yesText)
+	noWidth := lipgloss.Width(noText)
+	layout.yes = tuiRect{x: origin, y: choiceRow, w: yesWidth, h: 1}
+	layout.no = tuiRect{x: origin + yesWidth + 3, y: choiceRow, w: noWidth, h: 1}
+	return layout
+}
+
+func (m tuiModel) approvalCard() string {
+	if m.pending == nil || m.pending.Approval == nil {
+		return ""
+	}
+	return m.approvalLayout().rendered
+}
+
+// tuiRect is a half-open rectangle in terminal cells.
+type tuiRect struct {
+	x, y int
+	w, h int
+}
+
+func (r tuiRect) contains(x, y int) bool {
+	return r.w > 0 && r.h > 0 && x >= r.x && x < r.x+r.w && y >= r.y && y < r.y+r.h
+}
+
+// approvalHit maps a terminal click to an approval choice: 0 = approve,
+// 1 = deny, -1 = not on either option. The card is bottom-anchored by
+// mainChatView; approvalLayout supplies option cells relative to the rendered
+// card, and this function only translates them into screen coordinates.
+func (m tuiModel) approvalHit(x, y int) int {
+	if m.height <= 0 || m.pending == nil || m.pending.Approval == nil {
 		return -1
 	}
-	// choice() renders: 2-col focus prefix, "[k]" badge, a space, the label —
-	// inside a border+padding frame whose content starts at column 2. The two
-	// options are joined by a 3-space gap.
-	const origin = 2 // border + horizontal padding
-	optW := func(label string) int { return 2 + 3 + 1 + cliui.DisplayWidth(label) }
-	yes := i18n.T(m.loc, "tui.approval.yes")
-	no := i18n.T(m.loc, "tui.approval.no")
-	yesX0 := origin
-	yesX1 := yesX0 + optW(yes) - 1
-	noX0 := yesX1 + 1 + 3
-	noX1 := noX0 + optW(no) - 1
+	layout := m.approvalLayout()
+	cardHeight := lipgloss.Height(layout.rendered)
+	originY := max(0, m.height-cardHeight)
+	yes := layout.yes
+	no := layout.no
+	yes.y += originY
+	no.y += originY
 	switch {
-	case x >= yesX0 && x <= yesX1:
+	case yes.contains(x, y):
 		return 0
-	case x >= noX0 && x <= noX1:
+	case no.contains(x, y):
 		return 1
+	default:
+		return -1
 	}
-	return -1
+}
+
+// askingButtonRects derives each clickable footer cell from the final status row
+// rendered by inputView. Missing or truncated buttons have no rectangle.
+func (m tuiModel) askingButtonRects() []tuiRect {
+	if m.mode != modeAsking || m.height <= 0 {
+		return nil
+	}
+	hints := m.hintKeys()
+	if len(hints) < 3 {
+		return nil
+	}
+	row := m.statusRow()
+	rowWidth := lipgloss.Width(row)
+	if rowWidth == 0 {
+		return nil
+	}
+	plain := ansi.Strip(row)
+	buttons := make([]tuiRect, 3)
+	searchByte := 0
+	searchCol := 0
+	for i, hint := range hints[:3] {
+		needle := ansi.Strip(hint)
+		rel := strings.Index(plain[searchByte:], needle)
+		if rel < 0 {
+			continue
+		}
+		prefix := plain[searchByte : searchByte+rel]
+		x := searchCol + lipgloss.Width(prefix)
+		w := lipgloss.Width(needle)
+		buttons[i] = tuiRect{x: x, y: m.height - 1, w: w, h: 1}
+		searchByte += rel + len(needle)
+		searchCol = x + w
+	}
+	return buttons
 }
 
 // askingButtonHit maps a terminal click to an asking footer button:
 // 0 = Stop, 1 = Steer/Inject, 2 = Thought, -1 = none.
 func (m tuiModel) askingButtonHit(x, y int) int {
-	if m.height <= 0 || x < 0 {
-		return -1
-	}
-	if y < m.height-2 || y >= m.height {
-		return -1
-	}
-
-	hints := m.hintKeys()
-	if len(hints) < 3 {
-		return -1
-	}
-
-	w0 := lipgloss.Width(hints[0])
-	w1 := lipgloss.Width(hints[1])
-	w2 := lipgloss.Width(hints[2])
-
-	stopLimit := max(22, w0)
-	steerLimit := max(45, stopLimit+1+w1)
-	thoughtLimit := max(68, steerLimit+1+w2)
-
-	switch {
-	case x <= stopLimit:
-		return 0
-	case x > stopLimit && x <= steerLimit:
-		return 1
-	case x > steerLimit && x <= thoughtLimit:
-		return 2
+	for i, rect := range m.askingButtonRects() {
+		if rect.contains(x, y) {
+			return i
+		}
 	}
 	return -1
 }
@@ -812,13 +879,25 @@ func (m tuiModel) welcome() string {
 	return renderWelcomeBanner(cfg, m.loc, w, m.th)
 }
 
-// textWidth is the usable content width inside the frame (terminal minus the
-// border+padding), floored so a very narrow terminal still renders.
+// textWidth is the terminal-bounded width available to top-level TUI rows. A
+// reported tiny width is authoritative: decoration must shed or clip rather than
+// inventing columns beyond the physical screen.
 func (m tuiModel) textWidth() int {
 	if m.width <= 0 {
 		return 76
 	}
-	return max(20, m.width-4)
+	return max(1, m.width)
+}
+
+func clipRendered(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = ansi.Truncate(lines[i], width, "")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // elapsed formats a duration as a compact clock for the status line. A

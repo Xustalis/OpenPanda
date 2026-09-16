@@ -11,7 +11,6 @@ package main
 // otherwise invisible: @file, !command, !!, Ctrl-R.
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/cliui"
@@ -36,15 +35,15 @@ func (r *repl) cmdHelp(arg string) {
 	if name := strings.TrimPrefix(strings.TrimSpace(arg), "/"); name != "" {
 		for _, c := range replCommands {
 			if c.name == name {
-				fmt.Println("  " + p.Command("/"+c.name) + "  " + i18n.T(r.loc, c.help))
+				r.outln("  " + p.Command("/"+c.name) + "  " + i18n.T(r.loc, c.help))
 				return
 			}
 		}
 		if s := suggest(name, commandNames()); s != "" {
-			fmt.Println(i18n.Tf(r.loc, "repl.didyoumean", "cmd", "/"+s))
+			r.outln(i18n.Tf(r.loc, "repl.didyoumean", "cmd", "/"+s))
 			return
 		}
-		fmt.Println(i18n.Tf(r.loc, "repl.unknown", "cmd", "/"+name))
+		r.outln(i18n.Tf(r.loc, "repl.unknown", "cmd", "/"+name))
 		return
 	}
 
@@ -57,8 +56,8 @@ func (r *repl) cmdHelp(arg string) {
 			width = n
 		}
 	}
-	fmt.Println()
-	fmt.Println(p.Heading(i18n.T(r.loc, "repl.help") + ":"))
+	r.outln()
+	r.outln(p.Heading(i18n.T(r.loc, "repl.help") + ":"))
 	for i, g := range helpGroups {
 		last := i == len(helpGroups)-1
 		var lines []string
@@ -70,20 +69,20 @@ func (r *repl) cmdHelp(arg string) {
 		if len(lines) == 0 {
 			continue
 		}
-		fmt.Println()
-		fmt.Println("  " + p.Bold(i18n.T(r.loc, g.key)))
+		r.outln()
+		r.outln("  " + p.Bold(i18n.T(r.loc, g.key)))
 		for _, l := range lines {
-			fmt.Println(l)
+			r.outln(l)
 		}
 	}
 
-	fmt.Println()
-	fmt.Println("  " + p.Bold(i18n.T(r.loc, "repl.help.shortcuts")))
+	r.outln()
+	r.outln("  " + p.Bold(i18n.T(r.loc, "repl.help.shortcuts")))
 	for _, key := range []string{"repl.help.at", "repl.help.bang", "repl.help.bangbang"} {
-		fmt.Println("    " + i18n.T(r.loc, key))
+		r.outln("    " + i18n.T(r.loc, key))
 	}
-	fmt.Println()
-	fmt.Println("  " + p.Bold(i18n.T(r.loc, "repl.help.keys")))
+	r.outln()
+	r.outln("  " + p.Bold(i18n.T(r.loc, "repl.help.keys")))
 	for _, key := range []string{
 		"repl.help.tab",
 		"repl.help.ctrlr",
@@ -93,9 +92,9 @@ func (r *repl) cmdHelp(arg string) {
 		"repl.help.ctrlc",
 		"repl.help.ctrlc2",
 	} {
-		fmt.Println("    " + i18n.T(r.loc, key))
+		r.outln("    " + i18n.T(r.loc, key))
 	}
-	fmt.Println()
+	r.outln()
 }
 
 // knownHelpGroup reports whether g is one of the declared groups.

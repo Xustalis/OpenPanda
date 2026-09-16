@@ -11,6 +11,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,7 +105,7 @@ func runDoctor(args []string) {
 	fs.Parse(args)
 
 	loc := i18n.Detect()
-	if problems := doctorReport(loc, *configPath); problems > 0 {
+	if problems := doctorReport(loc, *configPath, os.Stdout); problems > 0 {
 		fmt.Println(i18n.Tf(loc, "doctor.fail", "n", fmt.Sprint(problems)))
 		os.Exit(1)
 	}
@@ -115,16 +116,19 @@ func runDoctor(args []string) {
 // checks. The ✓/✗ marks degrade to +/x on a terminal without the glyphs and
 // are tinted on a colour one — a page of checks is read by scanning for the
 // failures, so they have to stand out.
-func doctorReport(loc i18n.Locale, configPath string) int {
+func doctorReport(loc i18n.Locale, configPath string, out io.Writer) int {
+	if out == nil {
+		out = io.Discard
+	}
 	p := pal()
-	fmt.Println(p.Heading(i18n.T(loc, "doctor.title")))
+	_, _ = fmt.Fprintln(out, p.Heading(i18n.T(loc, "doctor.title")))
 	problems := 0
 	fail := func(key string, pairs ...string) {
 		problems++
-		fmt.Println("  " + p.Danger(p.MarkFail()) + " " + i18n.Tf(loc, key, pairs...))
+		_, _ = fmt.Fprintln(out, "  "+p.Danger(p.MarkFail())+" "+i18n.Tf(loc, key, pairs...))
 	}
 	pass := func(key string, pairs ...string) {
-		fmt.Println("  " + p.Success(p.MarkOK()) + " " + i18n.Tf(loc, key, pairs...))
+		_, _ = fmt.Fprintln(out, "  "+p.Success(p.MarkOK())+" "+i18n.Tf(loc, key, pairs...))
 	}
 
 	exe, _ := os.Executable()

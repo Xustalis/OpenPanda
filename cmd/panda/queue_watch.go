@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"sort"
@@ -27,20 +28,36 @@ const watchInterval = 2 * time.Second
 // watchQueue renders the task board in place until ctx ends or SIGINT.
 // state/project filter as in the one-shot listing.
 func watchQueue(ctx context.Context, store *core.TaskStore, state, project string) {
+	watchQueueTo(ctx, store, state, project, os.Stdout, true)
+}
+
+func watchQueueTo(
+	ctx context.Context,
+	store *core.TaskStore,
+	state, project string,
+	out io.Writer,
+	trapSignals bool,
+) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if out == nil {
+		out = io.Discard
+	}
 
-	// Intercept Ctrl-C: exiting the board is not exiting the REPL.
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sig)
-	go func() {
-		select {
-		case <-sig:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	if trapSignals {
+		// The standalone board owns terminal signals; embedded callers cancel the
+		// request context instead, so they never install a process-global handler.
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		defer signal.Stop(sig)
+		go func() {
+			select {
+			case <-sig:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
 
 	loc := i18n.Detect()
 	first := true
@@ -58,32 +75,32 @@ func watchQueue(ctx context.Context, store *core.TaskStore, state, project strin
 				rows = rows[:50] // the board shows activity, not the archive
 			}
 			if first {
-				fmt.Print("\x1b[2J\x1b[H") // full clear on entry
+				_, _ = fmt.Fprint(out, "\x1b[2J\x1b[H") // full clear on entry
 				first = false
 			} else {
-				fmt.Print("\x1b[H") // repaint from the top
+				_, _ = fmt.Fprint(out, "\x1b[H") // repaint from the top
 			}
 			p := pal()
-			fmt.Printf("%s  %s  (%s)\r\n",
+			_, _ = fmt.Fprintf(out, "%s  %s  (%s)\r\n",
 				p.Bold(i18n.T(loc, "cli.watch.head")), time.Now().Format("15:04:05"),
 				p.Muted(i18n.Tf(loc, "cli.watch.hint", "key", "^C")))
 			if len(rows) == 0 {
-				fmt.Print("  " + i18n.T(loc, "cli.queue.none") + "\r\n")
+				_, _ = fmt.Fprint(out, "  "+i18n.T(loc, "cli.queue.none")+"\r\n")
 			}
 			// Same column plan and same row renderer as the one-shot listing, so
 			// the two boards stay one board. The indent is the board's own, and
 			// it is charged against the width so a row still fits the terminal.
 			cols := planTaskTable(loc, rows, listWidth()-2)
-			fmt.Print("  " + taskTableHeader(loc, cols) + "\r\n")
+			_, _ = fmt.Fprint(out, "  "+taskTableHeader(loc, cols)+"\r\n")
 			for _, t := range rows {
-				fmt.Print("  " + taskTableRow(t, cols) + "\r\n")
+				_, _ = fmt.Fprint(out, "  "+taskTableRow(t, cols)+"\r\n")
 			}
-			fmt.Print("\x1b[J") // clear stale rows below (shrunk lists)
+			_, _ = fmt.Fprint(out, "\x1b[J") // clear stale rows below (shrunk lists)
 		}
 		select {
 		case <-ctx.Done():
-			fmt.Print("\x1b[0m\x1b[H\x1b[J") // leave a clean screen behind
-			fmt.Println(i18n.T(loc, "cli.watch.exited"))
+			_, _ = fmt.Fprint(out, "\x1b[0m\x1b[H\x1b[J") // leave a clean screen behind
+			_, _ = fmt.Fprintln(out, i18n.T(loc, "cli.watch.exited"))
 			return
 		case <-time.After(watchInterval):
 		}
