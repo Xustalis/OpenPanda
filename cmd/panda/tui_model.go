@@ -89,6 +89,9 @@ type tuiModel struct {
 
 	mode         tuiMode
 	stream       *askStream
+	exec         *commandExec
+	execGen      uint64
+	execText     strings.Builder
 	started      time.Time
 	chatHistory  *chatHistory
 	scrollOffset int
@@ -102,11 +105,13 @@ type tuiModel struct {
 	termsCursor    int // 0 = Agree [Y], 1 = Decline [N]
 
 	// Model wizard state
-	wizardStep     wizardStep
-	wizardProvider string
-	wizardKey      string
-	wizardModel    string
-	wizardInput    string
+	wizardStep         wizardStep
+	wizardProvider     string
+	wizardKey          string
+	wizardModel        string
+	wizardInput        string
+	confirmDeleteModel bool
+	pendingDeleteModel string
 
 	// lastInterrupt timestamps the previous Esc/Ctrl-C of a turn.
 	lastInterrupt time.Time
@@ -118,12 +123,14 @@ type tuiModel struct {
 	// turnWorkDir is the worktree this turn runs in.
 	turnWorkDir string
 
-	// In-flight turn state.
-	liveAnswer    string
-	thought       []string
-	thoughtDone   bool
-	expandThought bool
-	note          string
+	// In-flight turn state. Chunks avoid repeatedly copying the complete answer
+	// as streaming output grows; liveAnswer is materialized only for rendering.
+	liveAnswerChunks []string
+	liveAnswerBytes  int
+	thought          []string
+	thoughtDone      bool
+	expandThought    bool
+	note             string
 
 	// liveTask is the delegated-task card for this turn.
 	liveTask *taskProgress

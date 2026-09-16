@@ -108,26 +108,31 @@ func (tp *taskProgress) renderLive(t theme, loc i18n.Locale, spin string, now ti
 	dot := t.glyph("●", "*")
 	pipeArrow := t.glyph(" ══▶ ", " ==> ")
 
+	l1 := " " + i18n.T(loc, "tui.pipeline.triage")
+	l2 := " " + i18n.T(loc, "tui.pipeline.route")
+	l3 := " " + i18n.T(loc, "tui.pipeline.exec")
+	l4 := " " + i18n.T(loc, "tui.pipeline.judge")
+
 	if hasJudge {
-		s1 = t.success.Render(tick + " 分流")
-		s2 = t.success.Render(tick + " 调度")
-		s3 = t.success.Render(tick + " 执行")
-		s4 = t.accent.Render(dot + " 评审")
+		s1 = t.success.Render(tick + l1)
+		s2 = t.success.Render(tick + l2)
+		s3 = t.success.Render(tick + l3)
+		s4 = t.accent.Render(dot + l4)
 	} else if hasExec {
-		s1 = t.success.Render(tick + " 分流")
-		s2 = t.success.Render(tick + " 调度")
-		s3 = t.accent.Render(dot + " 执行")
-		s4 = t.muted.Render(circle + " 评审")
+		s1 = t.success.Render(tick + l1)
+		s2 = t.success.Render(tick + l2)
+		s3 = t.accent.Render(dot + l3)
+		s4 = t.muted.Render(circle + l4)
 	} else if hasRoute {
-		s1 = t.success.Render(tick + " 分流")
-		s2 = t.accent.Render(dot + " 调度")
-		s3 = t.muted.Render(circle + " 执行")
-		s4 = t.muted.Render(circle + " 评审")
+		s1 = t.success.Render(tick + l1)
+		s2 = t.accent.Render(dot + l2)
+		s3 = t.muted.Render(circle + l3)
+		s4 = t.muted.Render(circle + l4)
 	} else {
-		s1 = t.accent.Render(dot + " 分流")
-		s2 = t.muted.Render(circle + " 调度")
-		s3 = t.muted.Render(circle + " 执行")
-		s4 = t.muted.Render(circle + " 评审")
+		s1 = t.accent.Render(dot + l1)
+		s2 = t.muted.Render(circle + l2)
+		s3 = t.muted.Render(circle + l3)
+		s4 = t.muted.Render(circle + l4)
 	}
 
 	flow := s1 + pipeArrow + s2 + pipeArrow + s3 + pipeArrow + s4

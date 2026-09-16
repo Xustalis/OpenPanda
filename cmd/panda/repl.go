@@ -103,6 +103,16 @@ type repl struct {
 	asking   bool
 	baseline map[string]string
 
+	// commandMu serializes classic slash/shell dispatch and scopes its context
+	// and explicit streams. The TUI supplies a cancellable context and a writer
+	// that emits Bubble Tea messages; the classic loop uses the process streams.
+	// No command ever swaps process-global stdout or stderr.
+	commandMu     sync.Mutex
+	commandCtx    context.Context
+	commandIn     io.Reader
+	commandOut    io.Writer
+	commandErrOut io.Writer
+
 	// Tab-completion caches (repl_complete.go). The line editor recomputes
 	// its candidate menu on every keystroke, so the state lookups behind
 	// argument completion are memoized for a couple of seconds.
@@ -458,7 +468,7 @@ func (r *repl) printBanner() {
 	if w <= 0 {
 		w = 80
 	}
-	fmt.Println(renderWelcomeBanner(r.cfg, r.loc, w, th))
+	r.outln(renderWelcomeBanner(r.cfg, r.loc, w, th))
 }
 
 // printFooter prints the status line above the prompt: node name, approval
@@ -498,7 +508,7 @@ func (r *repl) printFooter() {
 		return
 	}
 	r.lastFooter = line
-	fmt.Println(line)
+	r.outln(line)
 }
 
 // dispatch routes one input line: slash commands to the table, `!!` repeats
@@ -506,6 +516,37 @@ func (r *repl) printFooter() {
 // dir, anything else goes to the ask engine (with @file references expanded
 // first). Unknown commands name the closest real one, never exit.
 func (r *repl) dispatch(line string) {
+	r.dispatchWithIO(context.Background(), line, os.Stdin, os.Stdout, os.Stderr)
+}
+
+// dispatchWithIO runs one classic command with request-scoped cancellation and
+// streams. Handlers still use the familiar fmt.Print calls, but those calls are
+// redirected through package-local writers rather than by mutating os.Stdout or
+// os.Stderr. commandMu prevents overlapping dispatches from sharing this scoped
+// state; asks have their own streaming path and do not run through the TUI's
+// slash-command executor.
+func (r *repl) dispatchWithIO(ctx context.Context, line string, in io.Reader, out, errOut io.Writer) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if in == nil {
+		in = os.Stdin
+	}
+	if out == nil {
+		out = io.Discard
+	}
+	if errOut == nil {
+		errOut = out
+	}
+
+	r.commandMu.Lock()
+	defer r.commandMu.Unlock()
+	prevCtx, prevIn, prevOut, prevErr := r.commandCtx, r.commandIn, r.commandOut, r.commandErrOut
+	r.commandCtx, r.commandIn, r.commandOut, r.commandErrOut = ctx, in, out, errOut
+	defer func() {
+		r.commandCtx, r.commandIn, r.commandOut, r.commandErrOut = prevCtx, prevIn, prevOut, prevErr
+	}()
+
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return
@@ -539,10 +580,50 @@ func (r *repl) dispatch(line string) {
 			return
 		}
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.unknown", "cmd", "/"+name))
+	r.outln(i18n.Tf(r.loc, "repl.unknown", "cmd", "/"+name))
 	if s := suggest(name, commandNames()); s != "" {
-		fmt.Println("  " + i18n.Tf(r.loc, "repl.didyoumean", "cmd", "/"+s))
+		r.outln("  " + i18n.Tf(r.loc, "repl.didyoumean", "cmd", "/"+s))
 	}
+}
+
+func (r *repl) commandContext() context.Context {
+	if r != nil && r.commandCtx != nil {
+		return r.commandCtx
+	}
+	return context.Background()
+}
+
+func (r *repl) commandInput() io.Reader {
+	if r != nil && r.commandIn != nil {
+		return r.commandIn
+	}
+	return os.Stdin
+}
+
+func (r *repl) commandOutput() io.Writer {
+	if r != nil && r.commandOut != nil {
+		return r.commandOut
+	}
+	return os.Stdout
+}
+
+func (r *repl) commandError() io.Writer {
+	if r != nil && r.commandErrOut != nil {
+		return r.commandErrOut
+	}
+	return os.Stderr
+}
+
+func (r *repl) outf(format string, args ...any) {
+	_, _ = fmt.Fprintf(r.commandOutput(), format, args...)
+}
+
+func (r *repl) errf(format string, args ...any) {
+	_, _ = fmt.Fprintf(r.commandError(), format, args...)
+}
+
+func (r *repl) outln(args ...any) {
+	_, _ = fmt.Fprintln(r.commandOutput(), args...)
 }
 
 // askContext derives the conversation history and working directory for one
@@ -634,7 +715,7 @@ func (r *repl) recordErrorTurn(err error) {
 // Ctrl-C exits.
 func (r *repl) ask(text string) {
 	if r.engine == nil {
-		fmt.Println(i18n.T(r.loc, "repl.ask.noEngine"))
+		r.outln(i18n.T(r.loc, "repl.ask.noEngine"))
 		return
 	}
 	// @path references become inline file blocks before the prompt leaves the
@@ -737,7 +818,7 @@ func (r *repl) ask(text string) {
 	r.resetWatchBaseline()
 
 	if res.err != nil {
-		fmt.Fprintln(os.Stderr, "panda: "+res.err.Error())
+		r.errf("%s\n", "panda: "+res.err.Error())
 		// A cancelled ask leaves no dangling turn worth pairing (the user
 		// aborted it); every other failure records one so the thread keeps
 		// its user/assistant alternation.
@@ -766,9 +847,9 @@ func (r *repl) ask(text string) {
 			break
 		}
 		if out.Note != "" {
-			fmt.Println(r.renderMd(out.Note))
+			r.outln(r.renderMd(out.Note))
 		}
-		fmt.Println(r.renderMd(out.Answer))
+		r.outln(r.renderMd(out.Answer))
 	case "task":
 		// Sub-agent round: the converged report is the reply. It streamed
 		// live like an answer's text, so print it only when nothing was
@@ -778,7 +859,7 @@ func (r *repl) ask(text string) {
 		// report degraded) the raw output stays the primary display.
 		if strings.TrimSpace(out.Answer) != "" {
 			if !delivered() {
-				fmt.Println(r.renderMd(out.Answer))
+				r.outln(r.renderMd(out.Answer))
 			}
 			reportNote := i18n.Tf(r.loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
 			if out.Agent != "" {
@@ -791,37 +872,37 @@ func (r *repl) ask(text string) {
 				}
 				reportNote += " · " + i18n.Tf(r.loc, "tui.task.execBy", "exec", execNote)
 			}
-			fmt.Println(pal().Muted(reportNote))
+			r.outln(pal().Muted(reportNote))
 			break
 		}
 		// LLM-generated summary: the dedicated "report after execution" call
 		// fills Report so the user sees a human-readable summary instead of
 		// raw stdout/stderr. Render it before the raw output.
 		if strings.TrimSpace(out.Report) != "" {
-			fmt.Println(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
-			fmt.Println(r.renderMd(out.Report))
+			r.outln(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
+			r.outln(r.renderMd(out.Report))
 			break
 		}
-		fmt.Println(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
+		r.outln(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
 		if out.OK {
-			fmt.Print(r.renderMd(out.Stdout))
+			r.outf("%s", r.renderMd(out.Stdout))
 			if s := strings.TrimRight(out.Stdout, "\n"); s != "" && !strings.HasSuffix(out.Stdout, "\n") {
-				fmt.Println()
+				r.outln()
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
+			r.errf("exit %d: %s\n", out.ExitCode, out.Stderr)
 		}
 	case "plan":
 		// A plan does not finish inside the ask: its stages are queued and will
 		// run on other machines. Print the board and how to follow it.
 		if !out.OK {
-			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(r.loc, "cli.plan.failed", "err", out.Stderr))
+			r.errf("%s\n", "panda: "+i18n.Tf(r.loc, "cli.plan.failed", "err", out.Stderr))
 			break
 		}
-		fmt.Println(i18n.Tf(r.loc, "cli.plan.started",
+		r.outln(i18n.Tf(r.loc, "cli.plan.started",
 			"id", out.PlanID, "n", strconv.Itoa(len(out.PlanStages)), "goal", out.PlanGoal))
-		printPlanStages(out.PlanStages)
-		fmt.Println(i18n.Tf(r.loc, "cli.plan.follow", "id", out.PlanID))
+		printPlanStagesTo(r.commandOutput(), out.PlanStages)
+		r.outln(i18n.Tf(r.loc, "cli.plan.follow", "id", out.PlanID))
 	}
 
 	// The closing line: what this turn cost (elapsed, and tokens when the
@@ -841,7 +922,7 @@ func (r *repl) repeatLast() {
 	if r.activeSess == "" {
 		for i := len(r.convo) - 1; i >= 0; i-- {
 			if r.convo[i].Role == "user" {
-				fmt.Println("!! " + r.convo[i].Content)
+				r.outln("!! " + r.convo[i].Content)
 				r.ask(r.convo[i].Content)
 				return
 			}
@@ -851,13 +932,13 @@ func (r *repl) repeatLast() {
 		for i := len(r.term.history) - 1; i >= 0; i-- {
 			l := strings.TrimSpace(r.term.history[i])
 			if l != "" && !strings.HasPrefix(l, "/") && l != "!!" {
-				fmt.Println("!! " + l)
+				r.outln("!! " + l)
 				r.ask(l)
 				return
 			}
 		}
 	}
-	fmt.Println(i18n.T(r.loc, "repl.bang.none"))
+	r.outln(i18n.T(r.loc, "repl.bang.none"))
 }
 
 // rememberTurn records one bare-mode exchange through the shared convo
@@ -872,27 +953,27 @@ func (r *repl) rememberTurn(text string, out *askengine.Result) {
 // chat app. Bound sessions keep their own history and are unaffected.
 func (r *repl) cmdNew(arg string) {
 	if r.activeSess != "" {
-		fmt.Println(i18n.T(r.loc, "repl.new.session"))
+		r.outln(i18n.T(r.loc, "repl.new.session"))
 		return
 	}
 	n := len(r.convo)
 	r.convo = nil
 	clearConvo()
-	fmt.Println(i18n.Tf(r.loc, "repl.new.cleared", "n", fmt.Sprint(n/2)))
+	r.outln(i18n.Tf(r.loc, "repl.new.cleared", "n", fmt.Sprint(n/2)))
 }
 
 // cmdHistory prints the recent bare-mode conversation compactly — the
 // "scroll up" of a chat app when the terminal has moved on.
 func (r *repl) cmdHistory(arg string) {
 	if r.activeSess != "" {
-		fmt.Println(i18n.T(r.loc, "repl.new.session"))
+		r.outln(i18n.T(r.loc, "repl.new.session"))
 		return
 	}
 	if len(r.convo) == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.history.empty"))
+		r.outln(i18n.T(r.loc, "repl.history.empty"))
 		return
 	}
-	fmt.Println(i18n.T(r.loc, "repl.history.head"))
+	r.outln(i18n.T(r.loc, "repl.history.head"))
 	// newest last, like a chat transcript; cap the listing, the window
 	// itself may hold far more.
 	turns := r.convo
@@ -904,7 +985,7 @@ func (r *repl) cmdHistory(arg string) {
 		if t.Role != "user" {
 			who = i18n.T(r.loc, "repl.history.panda")
 		}
-		fmt.Printf("  %s: %s\n", who, head(t.Content, 200))
+		r.outf("  %s: %s\n", who, head(t.Content, 200))
 	}
 }
 
@@ -945,7 +1026,7 @@ func shortID(id string) string {
 // cmdAsk is the explicit /ask form; bare input is the shortcut.
 func (r *repl) cmdAsk(arg string) {
 	if arg == "" {
-		fmt.Println("/ask " + i18n.T(r.loc, "cmd.ask"))
+		r.outln("/ask " + i18n.T(r.loc, "cmd.ask"))
 		return
 	}
 	r.ask(arg)
@@ -972,7 +1053,7 @@ func (r *repl) cmdTasks(arg string) {
 		}
 	}
 	if watch {
-		watchQueue(context.Background(), r.store, state, "")
+		watchQueueTo(r.commandContext(), r.store, state, "", r.commandOutput(), false)
 		return
 	}
 	tasks, err := r.store.ListByState(context.Background(), state)
@@ -981,10 +1062,10 @@ func (r *repl) cmdTasks(arg string) {
 		return
 	}
 	if len(tasks) == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.tasks.none"))
+		r.outln(i18n.T(r.loc, "repl.tasks.none"))
 		return
 	}
-	printTaskTable(r.loc, tasks)
+	printTaskTableTo(r.commandOutput(), r.loc, tasks)
 }
 
 // cmdTasksClear implements "/tasks clear": confirm, cancel everything still
@@ -996,7 +1077,7 @@ func (r *repl) cmdTasksClear() {
 		return
 	}
 	if len(tasks) == 0 {
-		fmt.Println(i18n.T(r.loc, "cli.queue.clear.empty"))
+		r.outln(i18n.T(r.loc, "cli.queue.clear.empty"))
 		return
 	}
 	p := pal()
@@ -1010,14 +1091,14 @@ func (r *repl) cmdTasksClear() {
 			}
 		}
 	} else {
-		fmt.Println(p.Muted(i18n.T(r.loc, "cli.queue.clear.noEngine")))
+		r.outln(p.Muted(i18n.T(r.loc, "cli.queue.clear.noEngine")))
 	}
 	cancelled, deleted, err := r.store.ClearQueue(context.Background())
 	if err != nil {
 		r.storeErr(err)
 		return
 	}
-	fmt.Println(p.Success(i18n.Tf(r.loc, "cli.queue.clear.done",
+	r.outln(p.Success(i18n.Tf(r.loc, "cli.queue.clear.done",
 		"c", strconv.Itoa(cancelled), "d", strconv.Itoa(deleted))))
 }
 
@@ -1040,7 +1121,7 @@ func (r *repl) confirm(question string) bool {
 // only — an active task must be cancelled first, matching `panda task delete`).
 func (r *repl) cmdDelete(arg string) {
 	if arg == "" {
-		fmt.Println("/delete " + i18n.T(r.loc, "cmd.delete"))
+		r.outln("/delete " + i18n.T(r.loc, "cmd.delete"))
 		return
 	}
 	id, ok := r.resolveRef(arg)
@@ -1054,13 +1135,13 @@ func (r *repl) cmdDelete(arg string) {
 			if t, gerr := r.store.Get(context.Background(), id); gerr == nil {
 				state = t.State
 			}
-			fmt.Println(pal().Warn(i18n.Tf(r.loc, "cli.task.delete.active", "id", id, "state", state)))
+			r.outln(pal().Warn(i18n.Tf(r.loc, "cli.task.delete.active", "id", id, "state", state)))
 			return
 		}
 		r.storeErr(err)
 		return
 	}
-	fmt.Println(pal().Success(i18n.Tf(r.loc, "cli.task.delete.done", "n", strconv.Itoa(n))))
+	r.outln(pal().Success(i18n.Tf(r.loc, "cli.task.delete.done", "n", strconv.Itoa(n))))
 }
 
 // resolveRef resolves a task reference for a REPL command. Same rules as the
@@ -1073,11 +1154,11 @@ func (r *repl) resolveRef(ref string) (string, bool) {
 	case err == nil:
 		return id, true
 	case errors.Is(err, sql.ErrNoRows):
-		fmt.Println(i18n.Tf(r.loc, "repl.task.none", "id", ref))
+		r.outln(i18n.Tf(r.loc, "repl.task.none", "id", ref))
 	default:
 		var amb *core.AmbiguousTaskIDError
 		if errors.As(err, &amb) {
-			fmt.Println(ambiguousTaskMsg(r.loc, amb))
+			r.outln(ambiguousTaskMsg(r.loc, amb))
 			return "", false
 		}
 		r.storeErr(err)
@@ -1088,7 +1169,7 @@ func (r *repl) resolveRef(ref string) (string, bool) {
 // cmdTask shows one task's row and event timeline.
 func (r *repl) cmdTask(arg string) {
 	if arg == "" {
-		fmt.Println("/task " + i18n.T(r.loc, "cmd.task"))
+		r.outln("/task " + i18n.T(r.loc, "cmd.task"))
 		return
 	}
 	id, ok := r.resolveRef(arg)
@@ -1100,21 +1181,21 @@ func (r *repl) cmdTask(arg string) {
 		r.storeErr(err)
 		return
 	}
-	fmt.Printf("  id:      %s\n", t.TaskID)
-	fmt.Printf("  project: %s\n", orDash(t.Project))
-	fmt.Printf("  title:   %s\n", t.Title)
-	fmt.Printf("  state:   %s\n", t.State)
-	fmt.Printf("  prio:    %s\n", priorityName(t.Priority))
-	fmt.Printf("  owner:   %s\n", orDash(t.OwnerNode))
-	fmt.Printf("  created: %s\n", ts(t.CreatedAt))
-	fmt.Printf("  updated: %s\n", ts(t.UpdatedAt))
+	r.outf("  id:      %s\n", t.TaskID)
+	r.outf("  project: %s\n", orDash(t.Project))
+	r.outf("  title:   %s\n", t.Title)
+	r.outf("  state:   %s\n", t.State)
+	r.outf("  prio:    %s\n", priorityName(t.Priority))
+	r.outf("  owner:   %s\n", orDash(t.OwnerNode))
+	r.outf("  created: %s\n", ts(t.CreatedAt))
+	r.outf("  updated: %s\n", ts(t.UpdatedAt))
 	r.printEvents(t.TaskID)
 }
 
 // cmdCancel cancels a task and its subtree.
 func (r *repl) cmdCancel(arg string) {
 	if arg == "" {
-		fmt.Println("/cancel " + i18n.T(r.loc, "cmd.cancel"))
+		r.outln("/cancel " + i18n.T(r.loc, "cmd.cancel"))
 		return
 	}
 	id, ok := r.resolveRef(arg)
@@ -1126,7 +1207,7 @@ func (r *repl) cmdCancel(arg string) {
 		r.storeErr(err)
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.cancel.done", "n", fmt.Sprint(len(ids))))
+	r.outln(i18n.Tf(r.loc, "repl.cancel.done", "n", fmt.Sprint(len(ids))))
 }
 
 // approveInline renders the tier-2 approval card for a task the engine parked
@@ -1138,10 +1219,10 @@ func (r *repl) cmdCancel(arg string) {
 func (r *repl) approveInline(out *askengine.Result, workDir string) *askengine.Result {
 	req := out.Approval
 	p := pal()
-	fmt.Println(p.Warn(p.MarkBullet() + " " + i18n.T(r.loc, "repl.approval.head")))
-	fmt.Println(p.Muted("  " + i18n.Tf(r.loc, "repl.approval.task", "title", req.Title)))
+	r.outln(p.Warn(p.MarkBullet() + " " + i18n.T(r.loc, "repl.approval.head")))
+	r.outln(p.Muted("  " + i18n.Tf(r.loc, "repl.approval.task", "title", req.Title)))
 	if reason := strings.TrimSpace(req.Reason); reason != "" {
-		fmt.Println(p.Muted("  " + i18n.Tf(r.loc, "repl.approval.reason", "reason", reason)))
+		r.outln(p.Muted("  " + i18n.Tf(r.loc, "repl.approval.reason", "reason", reason)))
 	}
 	approved := false
 	if r.interactive && r.term != nil {
@@ -1152,28 +1233,45 @@ func (r *repl) approveInline(out *askengine.Result, workDir string) *askengine.R
 		}
 	}
 	if !approved {
-		fmt.Println(p.Muted(i18n.Tf(r.loc, "repl.approval.denied", "id", req.TaskID)))
+		r.outln(p.Muted(i18n.Tf(r.loc, "repl.approval.denied", "id", req.TaskID)))
 		return out
 	}
-	fmt.Println(p.Success(i18n.T(r.loc, "repl.approval.approved")))
-	return r.engine.ResumeApproved(req.TaskID, workDir)
+	r.outln(p.Success(i18n.T(r.loc, "repl.approval.approved")))
+	cb := askengine.StreamCallbacks{}
+	if stdoutIsTTY() {
+		cb.OnProgress = func(p askengine.Progress) {
+			r.outf("%s %s\n", pal().MarkBullet(), progressNote(r.loc, p))
+		}
+	}
+	return r.engine.ResumeApproved(context.Background(), req.TaskID, workDir, cb)
 }
 
-// cmdApprove approves a reviewed task (review -> done).
+// cmdApprove accepts completed reviewed work or resumes a task that parked
+// before execution. Detached approval relies on the task's persisted workdir.
 func (r *repl) cmdApprove(arg string) {
 	if arg == "" {
-		fmt.Println("/approve " + i18n.T(r.loc, "cmd.approve"))
+		r.outln("/approve " + i18n.T(r.loc, "cmd.approve"))
 		return
 	}
 	id, ok := r.resolveRef(arg)
 	if !ok {
 		return
 	}
-	if err := r.store.Approve(context.Background(), id); err != nil {
-		r.storeErr(err)
+	cb := askengine.StreamCallbacks{}
+	if stdoutIsTTY() {
+		cb.OnProgress = func(p askengine.Progress) {
+			r.outf("%s %s\n", pal().MarkBullet(), progressNote(r.loc, p))
+		}
+	}
+	out := r.engine.ResumeApproved(context.Background(), id, "", cb)
+	r.outln(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
+	if out.OK {
+		if stdout := strings.TrimRight(out.Stdout, "\n"); stdout != "" {
+			r.outln(renderCliMd(stdout))
+		}
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.approve.done", "id", id))
+	r.errf("exit %d: %s\n", out.ExitCode, out.Stderr)
 }
 
 // cmdReject rejects a reviewed task (review -> failed); the reason is the
@@ -1181,7 +1279,7 @@ func (r *repl) cmdApprove(arg string) {
 func (r *repl) cmdReject(arg string) {
 	ref, reason, _ := strings.Cut(arg, " ")
 	if ref == "" {
-		fmt.Println("/reject " + i18n.T(r.loc, "cmd.reject"))
+		r.outln("/reject " + i18n.T(r.loc, "cmd.reject"))
 		return
 	}
 	id, ok := r.resolveRef(ref)
@@ -1192,13 +1290,13 @@ func (r *repl) cmdReject(arg string) {
 		r.storeErr(err)
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.reject.done", "id", id))
+	r.outln(i18n.Tf(r.loc, "repl.reject.done", "id", id))
 }
 
 // cmdLogs shows one task's event timeline only.
 func (r *repl) cmdLogs(arg string) {
 	if arg == "" {
-		fmt.Println("/logs " + i18n.T(r.loc, "cmd.logs"))
+		r.outln("/logs " + i18n.T(r.loc, "cmd.logs"))
 		return
 	}
 	id, ok := r.resolveRef(arg)
@@ -1216,16 +1314,16 @@ func (r *repl) printEvents(id string) {
 		return
 	}
 	if len(events) == 0 {
-		fmt.Println(i18n.Tf(r.loc, "repl.logs.none", "id", id))
+		r.outln(i18n.Tf(r.loc, "repl.logs.none", "id", id))
 		return
 	}
-	printEventTimeline(events, "  ")
+	printEventTimelineTo(r.commandOutput(), events, "  ")
 }
 
 // cmdSessions lists chat sessions (the web console's session rail).
 func (r *repl) cmdSessions(arg string) {
 	if r.sessionsSt == nil {
-		fmt.Println(i18n.T(r.loc, "repl.sessions.none"))
+		r.outln(i18n.T(r.loc, "repl.sessions.none"))
 		return
 	}
 	list, err := r.sessionsSt.List()
@@ -1234,17 +1332,17 @@ func (r *repl) cmdSessions(arg string) {
 		return
 	}
 	if len(list) == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.sessions.none"))
+		r.outln(i18n.T(r.loc, "repl.sessions.none"))
 		return
 	}
-	fmt.Println(i18n.T(r.loc, "repl.sessions.head"))
+	r.outln(i18n.T(r.loc, "repl.sessions.head"))
 	for _, s := range list {
 		mark := " "
 		if s.ID == r.activeSess {
 			mark = "*"
 		}
 		branch := orDash(s.Branch)
-		fmt.Printf("  %s %-16s %-18s turns=%-3d %s (%s)\n", mark, s.ID, s.UpdatedAt.Format("2006-01-02 15:04"), len(s.Turns), s.Title, branch)
+		r.outf("  %s %-16s %-18s turns=%-3d %s (%s)\n", mark, s.ID, s.UpdatedAt.Format("2006-01-02 15:04"), len(s.Turns), s.Title, branch)
 	}
 }
 
@@ -1253,29 +1351,29 @@ func (r *repl) cmdSessions(arg string) {
 // current attachment; `/resume -` detaches.
 func (r *repl) cmdResume(arg string) {
 	if r.sessionsSt == nil {
-		fmt.Println(i18n.T(r.loc, "repl.sessions.none"))
+		r.outln(i18n.T(r.loc, "repl.sessions.none"))
 		return
 	}
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
 		if r.activeSess == "" {
-			fmt.Println(i18n.T(r.loc, "repl.resume.none"))
+			r.outln(i18n.T(r.loc, "repl.resume.none"))
 		} else {
-			fmt.Println(i18n.Tf(r.loc, "repl.resume.current", "id", r.activeSess))
+			r.outln(i18n.Tf(r.loc, "repl.resume.current", "id", r.activeSess))
 		}
 		return
 	}
 	if arg == "-" {
 		r.activeSess = ""
-		fmt.Println(i18n.T(r.loc, "repl.resume.detached"))
+		r.outln(i18n.T(r.loc, "repl.resume.detached"))
 		return
 	}
 	if _, err := r.sessionsSt.Get(arg); err != nil {
-		fmt.Println(i18n.Tf(r.loc, "repl.resume.bad", "id", arg))
+		r.outln(i18n.Tf(r.loc, "repl.resume.bad", "id", arg))
 		return
 	}
 	r.activeSess = arg
-	fmt.Println(i18n.Tf(r.loc, "repl.resume.done", "id", arg))
+	r.outln(i18n.Tf(r.loc, "repl.resume.done", "id", arg))
 }
 
 // cmdMemory inspects the memory layer: bare `/memory` lists the selective-
@@ -1294,10 +1392,10 @@ func (r *repl) cmdMemory(arg string) {
 			return
 		}
 		if len(files) == 0 && len(names) == 0 {
-			fmt.Println(i18n.T(r.loc, "repl.memory.none"))
+			r.outln(i18n.T(r.loc, "repl.memory.none"))
 			return
 		}
-		fmt.Println(i18n.T(r.loc, "repl.memory.head"))
+		r.outln(i18n.T(r.loc, "repl.memory.head"))
 		for _, f := range files {
 			name := f.Name
 			switch name {
@@ -1308,37 +1406,37 @@ func (r *repl) cmdMemory(arg string) {
 			default:
 				name = "topic:" + strings.TrimSuffix(strings.TrimPrefix(name, "topics/"), ".md")
 			}
-			fmt.Printf("  %-20s entries=%-4d chars=%-6d %s\n", name, f.Entries, f.Chars, f.Summary)
+			r.outf("  %-20s entries=%-4d chars=%-6d %s\n", name, f.Entries, f.Chars, f.Summary)
 		}
 		for _, n := range names {
 			if m, err := r.projects.Load(n); err == nil {
-				fmt.Printf("  %-20s entries=%-4d chars=%-6d\n", "project:"+n, len(m.Entries), m.Chars())
+				r.outf("  %-20s entries=%-4d chars=%-6d\n", "project:"+n, len(m.Entries), m.Chars())
 			}
 		}
-		fmt.Println(i18n.T(r.loc, "repl.memory.hint"))
+		r.outln(i18n.T(r.loc, "repl.memory.hint"))
 		return
 	}
 	if fields[0] != "get" || len(fields) != 2 {
-		fmt.Println(i18n.T(r.loc, "repl.memory.usage"))
+		r.outln(i18n.T(r.loc, "repl.memory.usage"))
 		return
 	}
 	target, err := resolveMemoryTarget(r.cfg, fields[1])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
+		r.errf("%s\n", "panda: "+err.Error())
 		return
 	}
 	data, err := os.ReadFile(target.path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Println(i18n.Tf(r.loc, "repl.memory.empty", "name", target.name))
+			r.outln(i18n.Tf(r.loc, "repl.memory.empty", "name", target.name))
 			return
 		}
 		r.storeErr(err)
 		return
 	}
-	os.Stdout.Write(data)
+	_, _ = r.commandOutput().Write(data)
 	if len(data) > 0 && data[len(data)-1] != '\n' {
-		fmt.Println()
+		r.outln()
 	}
 }
 
@@ -1350,12 +1448,12 @@ func (r *repl) cmdProjects(arg string) {
 		return
 	}
 	if len(names) == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.projects.none"))
+		r.outln(i18n.T(r.loc, "repl.projects.none"))
 		return
 	}
-	fmt.Println(i18n.T(r.loc, "repl.projects.head"))
+	r.outln(i18n.T(r.loc, "repl.projects.head"))
 	for _, n := range names {
-		fmt.Println("  " + n)
+		r.outln("  " + n)
 	}
 }
 
@@ -1364,14 +1462,14 @@ func (r *repl) cmdProjects(arg string) {
 func (r *repl) cmdProject(arg string) {
 	name := strings.TrimSpace(arg)
 	if err := memory.ValidateName(name); err != nil {
-		fmt.Println(i18n.T(r.loc, "repl.project.bad"))
+		r.outln(i18n.T(r.loc, "repl.project.bad"))
 		return
 	}
 	if err := r.projects.Save(name, memory.MemFile{Limit: r.projects.Limit()}); err != nil {
 		r.storeErr(err)
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.project.created", "name", name))
+	r.outln(i18n.Tf(r.loc, "repl.project.created", "name", name))
 }
 
 // cmdSkills manages procedural skills from inside the REPL.
@@ -1395,7 +1493,7 @@ func (r *repl) cmdSkills(arg string) {
 		skillList(store)
 	case "find", "discover":
 		if len(fields) == 0 {
-			fmt.Println("用法: /skill find <关键词>")
+			r.outln("用法: /skill find <关键词>")
 			return
 		}
 		query := strings.Join(fields, " ")
@@ -1403,20 +1501,20 @@ func (r *repl) cmdSkills(arg string) {
 		if r.cfg != nil {
 			hubURL = r.cfg.Skills.HubURL
 		}
-		fmt.Printf("🔍 正在自主检索并匹配技能: %q ...\n", query)
+		r.outf("🔍 正在自主检索并匹配技能: %q ...\n", query)
 		sk, isNew, err := store.DiscoverAndInstall(context.Background(), hubURL, query)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "panda: %v\n", err)
+			r.errf("panda: %v\n", err)
 			return
 		}
 		if isNew {
-			fmt.Printf("✅ 找到并自动安装激活技能: %s\n   描述: %s\n   状态: %s (已就绪)\n", sk.Name, sk.Description, sk.Status)
+			r.outf("✅ 找到并自动安装激活技能: %s\n   描述: %s\n   状态: %s (已就绪)\n", sk.Name, sk.Description, sk.Status)
 		} else {
-			fmt.Printf("ℹ️  匹配到技能 %s，该技能已处于激活就绪状态。\n   描述: %s\n", sk.Name, sk.Description)
+			r.outf("ℹ️  匹配到技能 %s，该技能已处于激活就绪状态。\n   描述: %s\n", sk.Name, sk.Description)
 		}
 	case "reset":
 		if len(fields) == 0 {
-			fmt.Println("用法: /skill reset <名称|all>")
+			r.outln("用法: /skill reset <名称|all>")
 			return
 		}
 		target := fields[0]
@@ -1424,23 +1522,23 @@ func (r *repl) cmdSkills(arg string) {
 			for _, b := range skills.BuiltinSkills() {
 				_, _ = store.ResetBuiltin(b.Name)
 			}
-			fmt.Println("所有内置技能已重置为出厂默认设置。")
+			r.outln("所有内置技能已重置为出厂默认设置。")
 			return
 		}
 		sk, err := store.ResetBuiltin(target)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "panda: %v\n", err)
+			r.errf("panda: %v\n", err)
 			return
 		}
-		fmt.Printf("已将内置技能 %q 重置为默认版本。\n", sk.Name)
+		r.outf("已将内置技能 %q 重置为默认版本。\n", sk.Name)
 	case "add", "install":
 		if len(fields) == 0 {
-			fmt.Println("用法: /skill add <链接|文件路径|Hub技能名>")
+			r.outln("用法: /skill add <链接|文件路径|Hub技能名>")
 			return
 		}
 		target := fields[0]
 		if skills.IsBuiltinSkill(target) {
-			fmt.Printf("技能 %q 是内置标准技能且已激活生效。\n", target)
+			r.outf("技能 %q 是内置标准技能且已激活生效。\n", target)
 			return
 		}
 		ctx := context.Background()
@@ -1452,22 +1550,22 @@ func (r *repl) cmdSkills(arg string) {
 		if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") || strings.Contains(target, "/") || strings.Contains(target, "\\") {
 			res, err := store.ImportSource(ctx, target, opts)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "panda: %v\n", err)
+				r.errf("panda: %v\n", err)
 				return
 			}
 			var names []string
 			for _, s := range res {
 				names = append(names, s.Name)
 			}
-			fmt.Printf("成功导入 %d 个技能: %s\n", len(res), strings.Join(names, ", "))
+			r.outf("成功导入 %d 个技能: %s\n", len(res), strings.Join(names, ", "))
 			return
 		}
 		sk, err := skills.InstallFromHub(ctx, store, hubURL, target, opts)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "panda: %v\n", err)
+			r.errf("panda: %v\n", err)
 			return
 		}
-		fmt.Printf("成功从 Skills Hub 安装技能 %s (%s)。\n", sk.Name, sk.Description)
+		r.outf("成功从 Skills Hub 安装技能 %s (%s)。\n", sk.Name, sk.Description)
 	case "hub":
 		action := "list"
 		if len(fields) > 0 {
@@ -1481,7 +1579,7 @@ func (r *repl) cmdSkills(arg string) {
 		}
 		idx, err := skills.FetchHubIndex(ctx, hubURL)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "获取 Hub 失败: %v\n", err)
+			r.errf("获取 Hub 失败: %v\n", err)
 			return
 		}
 		switch action {
@@ -1495,40 +1593,40 @@ func (r *repl) cmdSkills(arg string) {
 				if installed {
 					tagStr = " [已安装]"
 				}
-				fmt.Printf("  %-20s %s%s\n", s.Name, s.Description, tagStr)
+				r.outf("  %-20s %s%s\n", s.Name, s.Description, tagStr)
 			}
 		case "search":
 			if len(fields) == 0 {
-				fmt.Println("用法: /skill hub search <关键词>")
+				r.outln("用法: /skill hub search <关键词>")
 				return
 			}
 			q := strings.Join(fields, " ")
 			res := skills.SearchHub(idx, q)
 			if len(res) == 0 {
-				fmt.Printf("未找到与 %q 匹配的技能。\n", q)
+				r.outf("未找到与 %q 匹配的技能。\n", q)
 				return
 			}
 			for _, s := range res {
-				fmt.Printf("  %-20s %s\n", s.Name, s.Description)
+				r.outf("  %-20s %s\n", s.Name, s.Description)
 			}
 		case "install":
 			if len(fields) == 0 {
-				fmt.Println("用法: /skill hub install <技能名>")
+				r.outln("用法: /skill hub install <技能名>")
 				return
 			}
 			name := fields[0]
 			opts := skills.ImportOptions{Scope: skills.ScopeGlobal, Status: skills.StatusActive}
 			sk, err := skills.InstallFromHub(ctx, store, hubURL, name, opts)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "panda: %v\n", err)
+				r.errf("panda: %v\n", err)
 				return
 			}
-			fmt.Printf("已成功安装技能: %s\n", sk.Name)
+			r.outf("已成功安装技能: %s\n", sk.Name)
 		default:
-			fmt.Printf("未知 hub 子命令: %s (可选 list, search, install)\n", action)
+			r.outf("未知 hub 子命令: %s (可选 list, search, install)\n", action)
 		}
 	default:
-		fmt.Println("用法: /skill [list | find <关键词> | add <目标> | reset <名称|all> | hub <list|search|install>]")
+		r.outln("用法: /skill [list | find <关键词> | add <目标> | reset <名称|all> | hub <list|search|install>]")
 	}
 }
 
@@ -1556,17 +1654,17 @@ func (r *repl) cmdNodes(arg string) {
 		return
 	}
 	if len(nodes) == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.nodes.none"))
+		r.outln(i18n.T(r.loc, "repl.nodes.none"))
 		return
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
-	fmt.Println(i18n.T(r.loc, "repl.nodes.head"))
+	r.outln(i18n.T(r.loc, "repl.nodes.head"))
 	for _, n := range nodes {
 		seen := time.Unix(n.LastSeen, 0).Format(time.RFC3339)
 		if n.LastSeen == 0 {
 			seen = "never"
 		}
-		fmt.Printf("  %-16s %-8s %-8s %-30s %s\n", n.ID, n.NodeKind, n.Status, n.Chip, seen)
+		r.outf("  %-16s %-8s %-8s %-30s %s\n", n.ID, n.NodeKind, n.Status, n.Chip, seen)
 	}
 }
 
@@ -1574,13 +1672,13 @@ func (r *repl) cmdNodes(arg string) {
 // `panda agents`, driven by the agent registry).
 func (r *repl) cmdAgents(arg string) {
 	statuses := probeAgentStatuses()
-	fmt.Println(i18n.T(r.loc, "repl.agents.head"))
+	r.outln(i18n.T(r.loc, "repl.agents.head"))
 	for _, a := range statuses {
 		mark := " "
 		if a.Installed {
 			mark = "*"
 		}
-		fmt.Printf("  %s %-12s %-8s %s\n", mark, a.Name, a.Binary, orDash(a.Path))
+		r.outf("  %s %-12s %-8s %s\n", mark, a.Name, a.Binary, orDash(a.Path))
 	}
 }
 
@@ -1590,18 +1688,18 @@ func (r *repl) cmdAgents(arg string) {
 func (r *repl) cmdConfig(arg string) {
 	fields := strings.Fields(arg)
 	if len(fields) == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.config.head"))
-		fmt.Printf("  model:      %s @ %s\n", orDash(r.cfg.Model.Model), orDash(r.cfg.Model.BaseURL))
-		fmt.Printf("  mcp:        %s\n", orDash(r.cfg.MCP.Command))
-		fmt.Printf("  limits:     user=%d memory=%d project=%d\n",
+		r.outln(i18n.T(r.loc, "repl.config.head"))
+		r.outf("  model:      %s @ %s\n", orDash(r.cfg.Model.Model), orDash(r.cfg.Model.BaseURL))
+		r.outf("  mcp:        %s\n", orDash(r.cfg.MCP.Command))
+		r.outf("  limits:     user=%d memory=%d project=%d\n",
 			r.cfg.Memory.Limits.User, r.cfg.Memory.Limits.Memory, r.cfg.Memory.Limits.Project)
-		fmt.Printf("  routing:    %s\n", orDash(strings.Join(r.cfg.Routing.PreferredAgents, ",")))
-		fmt.Printf("  injection:  %s\n", r.cfg.Injection.NormalizedModel())
-		fmt.Printf("  approval:   %s\n", r.cfg.Approval.NormalizedMode())
+		r.outf("  routing:    %s\n", orDash(strings.Join(r.cfg.Routing.PreferredAgents, ",")))
+		r.outf("  injection:  %s\n", r.cfg.Injection.NormalizedModel())
+		r.outf("  approval:   %s\n", r.cfg.Approval.NormalizedMode())
 		return
 	}
 	if fields[0] != "set" || len(fields) < 3 {
-		fmt.Println(i18n.T(r.loc, "repl.config.usage"))
+		r.outln(i18n.T(r.loc, "repl.config.usage"))
 		return
 	}
 	section, rest := fields[1], fields[2:]
@@ -1615,7 +1713,7 @@ func (r *repl) cmdConfig(arg string) {
 				r.cfg.Injection.Model = rest[0]
 			}
 		default:
-			fmt.Println(i18n.T(r.loc, "repl.config.badValue"))
+			r.outln(i18n.T(r.loc, "repl.config.badValue"))
 			return
 		}
 	case "approval":
@@ -1626,17 +1724,17 @@ func (r *repl) cmdConfig(arg string) {
 				r.cfg.Approval.Mode = rest[0]
 			}
 		default:
-			fmt.Println(i18n.T(r.loc, "repl.config.badValue"))
+			r.outln(i18n.T(r.loc, "repl.config.badValue"))
 			return
 		}
 	case "limits":
 		if len(rest) != 2 {
-			fmt.Println(i18n.T(r.loc, "repl.config.usage"))
+			r.outln(i18n.T(r.loc, "repl.config.usage"))
 			return
 		}
 		value, aerr := strconv.Atoi(rest[1])
 		if aerr != nil || value <= 0 || (rest[0] != "user" && rest[0] != "memory" && rest[0] != "project") {
-			fmt.Println(i18n.T(r.loc, "repl.config.badValue"))
+			r.outln(i18n.T(r.loc, "repl.config.badValue"))
 			return
 		}
 		err = config.UpdateSectionFieldInt(r.configPath, []string{"memory", "limits"}, rest[0], value)
@@ -1668,29 +1766,29 @@ func (r *repl) cmdConfig(arg string) {
 			r.cfg.MCP.Command = command
 		}
 	default:
-		fmt.Println(i18n.T(r.loc, "repl.config.usage"))
+		r.outln(i18n.T(r.loc, "repl.config.usage"))
 		return
 	}
 	if err != nil {
 		r.storeErr(err)
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "cli.config.saved", "section", section))
-	fmt.Println(i18n.T(r.loc, "cli.config.restart"))
+	r.outln(i18n.Tf(r.loc, "cli.config.saved", "section", section))
+	r.outln(i18n.T(r.loc, "cli.config.restart"))
 }
 
 // cmdContext summarizes what the next ask will run with: model, work dir,
 // memory manifest size, active session, and authorization.
 func (r *repl) cmdContext(arg string) {
-	fmt.Println(i18n.T(r.loc, "repl.context.head"))
+	r.outln(i18n.T(r.loc, "repl.context.head"))
 	model := i18n.T(r.loc, "repl.banner.noModel")
 	if r.cfg.Model.BaseURL != "" {
 		model = r.cfg.Model.Model + " @ " + r.cfg.Model.BaseURL
 	}
-	fmt.Printf("  model:    %s\n", model)
-	fmt.Printf("  workdir:  %s\n", r.cfg.Storage.WorkPath)
+	r.outf("  model:    %s\n", model)
+	r.outf("  workdir:  %s\n", r.cfg.Storage.WorkPath)
 	files, _ := r.hermes.Files()
-	fmt.Printf("  memory:   %d file(s) in the selective-load manifest\n", len(files))
+	r.outf("  memory:   %d file(s) in the selective-load manifest\n", len(files))
 	sess := "-"
 	if r.activeSess != "" {
 		sess = r.activeSess
@@ -1698,19 +1796,19 @@ func (r *repl) cmdContext(arg string) {
 			sess = fmt.Sprintf("%s (turns=%d branch=%s)", s.ID, len(s.Turns), orDash(s.Branch))
 		}
 	}
-	fmt.Printf("  session:  %s\n", sess)
-	fmt.Printf("  authz:    %v\n", r.authorize)
-	fmt.Printf("  card:     %v\n", r.hasCard)
+	r.outf("  session:  %s\n", sess)
+	r.outf("  authz:    %v\n", r.authorize)
+	r.outf("  card:     %v\n", r.hasCard)
 }
 
 // cmdPolicy shows the four app-policy groups (the web console's Settings →
 // app policy page, read form).
 func (r *repl) cmdPolicy(arg string) {
-	fmt.Println(i18n.T(r.loc, "repl.policy.head"))
-	fmt.Printf("  injection_model: %s\n", r.cfg.Injection.NormalizedModel())
-	fmt.Printf("  approval_mode:   %s\n", r.cfg.Approval.NormalizedMode())
-	fmt.Printf("  preferred_agents: %s\n", orDash(strings.Join(r.cfg.Routing.PreferredAgents, ", ")))
-	fmt.Printf("  memory_limits:   user=%d memory=%d project=%d\n",
+	r.outln(i18n.T(r.loc, "repl.policy.head"))
+	r.outf("  injection_model: %s\n", r.cfg.Injection.NormalizedModel())
+	r.outf("  approval_mode:   %s\n", r.cfg.Approval.NormalizedMode())
+	r.outf("  preferred_agents: %s\n", orDash(strings.Join(r.cfg.Routing.PreferredAgents, ", ")))
+	r.outf("  memory_limits:   user=%d memory=%d project=%d\n",
 		r.cfg.Memory.Limits.User, r.cfg.Memory.Limits.Memory, r.cfg.Memory.Limits.Project)
 }
 
@@ -1729,17 +1827,17 @@ func (r *repl) cmdWeb(arg string) {
 	token := r.cfg.Network.PanelToken
 	if token == "" {
 		if !panel.IsLoopbackAddr(addr) {
-			fmt.Println(i18n.T(r.loc, "repl.web.noToken"))
+			r.outln(i18n.T(r.loc, "repl.web.noToken"))
 			return
 		}
 		token = panel.NewToken()
-		fmt.Println(i18n.T(r.loc, "repl.web.ephemeral"))
+		r.outln(i18n.T(r.loc, "repl.web.ephemeral"))
 	}
 	if r.webSrv != nil {
 		// Already serving: re-open the browser logged in with the token the
 		// running panel was started with (a fresh ephemeral would not match
 		// the server). The user typed /web because they want the console.
-		fmt.Println(i18n.Tf(r.loc, "repl.web.running", "url", r.webURL))
+		r.outln(i18n.Tf(r.loc, "repl.web.running", "url", r.webURL))
 		openBrowser(panel.AppendToken(r.webURL, r.webToken))
 		return
 	}
@@ -1791,11 +1889,11 @@ func (r *repl) cmdWeb(arg string) {
 	// failing — /web must always end with a usable console.
 	ln, bound, err := listenPanel(addr)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
+		r.errf("%s\n", "panda: "+err.Error())
 		return
 	}
 	if bound != addr {
-		fmt.Println(i18n.Tf(r.loc, "web.portfallback", "orig", addr, "actual", bound))
+		r.outln(i18n.Tf(r.loc, "web.portfallback", "orig", addr, "actual", bound))
 	}
 	go func() { _ = srv.Serve(ln) }()
 	r.webSrv = srv
@@ -1803,7 +1901,7 @@ func (r *repl) cmdWeb(arg string) {
 	r.webToken = token
 	// The token is never shown to the user: the browser opens already
 	// authenticated. The URL printed is the clean one.
-	fmt.Println(i18n.Tf(r.loc, "repl.web.started", "url", r.webURL))
+	r.outln(i18n.Tf(r.loc, "repl.web.started", "url", r.webURL))
 	openBrowser(panel.AppendToken(r.webURL, token))
 }
 
@@ -1812,9 +1910,9 @@ func (r *repl) cmdWeb(arg string) {
 func (r *repl) cmdAuthorize(arg string) {
 	r.authorize = !r.authorize
 	if r.authorize {
-		fmt.Println(i18n.T(r.loc, "repl.auth.on"))
+		r.outln(i18n.T(r.loc, "repl.auth.on"))
 	} else {
-		fmt.Println(i18n.T(r.loc, "repl.auth.off"))
+		r.outln(i18n.T(r.loc, "repl.auth.off"))
 	}
 }
 
@@ -1827,7 +1925,7 @@ func (r *repl) cmdLang(arg string) {
 			if loc == r.loc {
 				mark = "*"
 			}
-			fmt.Printf("  %s %-6s %s\n", mark, loc, i18n.LocaleNames[loc])
+			r.outf("  %s %-6s %s\n", mark, loc, i18n.LocaleNames[loc])
 		}
 		return
 	}
@@ -1837,12 +1935,12 @@ func (r *repl) cmdLang(arg string) {
 			if r.term != nil {
 				r.term.loc = loc
 			}
-			fmt.Println(i18n.Tf(r.loc, "repl.lang.set", "lang", i18n.LocaleNames[loc]))
+			r.outln(i18n.Tf(r.loc, "repl.lang.set", "lang", i18n.LocaleNames[loc]))
 			r.persistLocale(loc)
 			return
 		}
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.lang.bad", "lang", arg, "list", localeCodes()))
+	r.outln(i18n.Tf(r.loc, "repl.lang.bad", "lang", arg, "list", localeCodes()))
 }
 
 // persistLocale records the /lang choice as ui.locale in config.yaml so the
@@ -1855,7 +1953,7 @@ func (r *repl) persistLocale(loc i18n.Locale) {
 	}
 	if r.configPath != "" {
 		if err := config.UpdateSectionField(r.configPath, []string{"ui"}, "locale", string(loc)); err != nil {
-			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(r.loc, "repl.lang.persistFail", "err", err.Error()))
+			r.errf("%s\n", "panda: "+i18n.Tf(r.loc, "repl.lang.persistFail", "err", err.Error()))
 			return
 		}
 	}
@@ -1869,7 +1967,7 @@ func (r *repl) cmdQuit(arg string) {
 
 // storeErr reports a store failure through the localized template.
 func (r *repl) storeErr(err error) {
-	fmt.Fprintln(os.Stderr, i18n.Tf(r.loc, "repl.err.store", "err", err.Error()))
+	r.errf("%s\n", i18n.Tf(r.loc, "repl.err.store", "err", err.Error()))
 }
 
 // localeCodes joins the supported locale codes for error messages.

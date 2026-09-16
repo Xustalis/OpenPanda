@@ -95,14 +95,17 @@ func TestTaskProgressRenderLive(t *testing.T) {
 func TestOnProgressOpensAndAdvancesCard(t *testing.T) {
 	m := newTestTUI(t)
 
+	stream := newTestStream(new(bool))
+	m.stream = stream
+
 	// A tool event on a turn with no task must not fabricate a card.
-	next, _ := m.onProgress(askengine.Progress{Kind: askengine.ProgressTool, Name: "grep"})
+	next, _ := m.onProgress(progressMsg{stream: stream, progress: askengine.Progress{Kind: askengine.ProgressTool, Name: "grep"}})
 	m = next.(tuiModel)
 	if m.liveTask != nil {
 		t.Fatal("a tool event alone should not open a task card")
 	}
 
-	next, _ = m.onProgress(askengine.Progress{Kind: askengine.ProgressTask, Name: "Explain PPO"})
+	next, _ = m.onProgress(progressMsg{stream: stream, progress: askengine.Progress{Kind: askengine.ProgressTask, Name: "Explain PPO"}})
 	m = next.(tuiModel)
 	if m.liveTask == nil {
 		t.Fatal("a task event should open the card")
@@ -111,9 +114,9 @@ func TestOnProgressOpensAndAdvancesCard(t *testing.T) {
 		t.Fatalf("card title = %q", m.liveTask.title)
 	}
 
-	next, _ = m.onProgress(askengine.Progress{Kind: askengine.ProgressRoute, Name: "node-a"})
+	next, _ = m.onProgress(progressMsg{stream: stream, progress: askengine.Progress{Kind: askengine.ProgressRoute, Name: "node-a"}})
 	m = next.(tuiModel)
-	next, _ = m.onProgress(askengine.Progress{Kind: askengine.ProgressExec, Name: "claude_code"})
+	next, _ = m.onProgress(progressMsg{stream: stream, progress: askengine.Progress{Kind: askengine.ProgressExec, Name: "claude_code"}})
 	m = next.(tuiModel)
 	if len(m.liveTask.stages) != 2 {
 		t.Fatalf("route+exec should add 2 stages, got %d", len(m.liveTask.stages))
@@ -127,9 +130,11 @@ func TestOnProgressOpensAndAdvancesCard(t *testing.T) {
 // the card's title and stage trail, so scrollback records the whole run.
 func TestCommitAttachesTaskTrail(t *testing.T) {
 	m := newTestTUI(t)
-	next, _ := m.onProgress(askengine.Progress{Kind: askengine.ProgressTask, Name: "build docs"})
+	stream := newTestStream(new(bool))
+	m.stream = stream
+	next, _ := m.onProgress(progressMsg{stream: stream, progress: askengine.Progress{Kind: askengine.ProgressTask, Name: "build docs"}})
 	m = next.(tuiModel)
-	next, _ = m.onProgress(askengine.Progress{Kind: askengine.ProgressExec, Name: "claude_code"})
+	next, _ = m.onProgress(progressMsg{stream: stream, progress: askengine.Progress{Kind: askengine.ProgressExec, Name: "claude_code"}})
 	m = next.(tuiModel)
 
 	// Drop the repl so commit skips conversation persistence: this test is about

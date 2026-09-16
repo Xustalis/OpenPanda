@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -19,7 +22,7 @@ func TestTUISplashScreen(t *testing.T) {
 	cfg := &config.Config{
 		Storage: config.StorageConfig{WorkPath: "/test/workspace/path"},
 	}
-	r := &repl{loc: i18n.Locale("zh"), cfg: cfg, interactive: true}
+	r := &repl{loc: i18n.ChineseSimp, cfg: cfg, interactive: true}
 	m := newTUIModel(r)
 
 	if m.mode != modeSplash {
@@ -124,7 +127,7 @@ func TestTUIListCommands(t *testing.T) {
 	_ = projStore.SetActive("OpenPanda")
 
 	r := &repl{
-		loc:        i18n.Locale("zh"),
+		loc:        i18n.ChineseSimp,
 		cfg:        &config.Config{},
 		sessionsSt: sessStore,
 		projStore:  projStore,
@@ -219,7 +222,7 @@ func TestTUIModelManagement(t *testing.T) {
 		},
 	}
 	r := &repl{
-		loc:        i18n.Locale("zh"),
+		loc:        i18n.ChineseSimp,
 		cfg:        cfg,
 		configPath: filepath.Join(t.TempDir(), "config.yaml"),
 	}
@@ -265,6 +268,31 @@ func TestTUIModelManagement(t *testing.T) {
 		t.Fatalf("expected active model to switch to gpt-4o, got %+v", r.cfg.Model)
 	}
 
+	// Reopen panel, test 'd' deletion confirmation
+	next, _ = m.submit("/model")
+	m = next.(tuiModel)
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // select gpt-4o or claude
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	if !m.confirmDeleteModel {
+		t.Fatalf("pressing 'd' should prompt for deletion confirmation")
+	}
+	delView := m.View()
+	if !strings.Contains(delView, "确认删除") {
+		t.Fatalf("expected deletion confirmation prompt in view: %s", delView)
+	}
+	// Cancel deletion with 'n'
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if m.confirmDeleteModel {
+		t.Fatalf("pressing 'n' should cancel deletion prompt")
+	}
+	// Trigger deletion again and confirm with 'y'
+	initialModelCount := len(r.cfg.Models)
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if len(r.cfg.Models) != initialModelCount-1 {
+		t.Fatalf("expected model to be deleted after 'y', remaining count: %d", len(r.cfg.Models))
+	}
+
 	// Reopen panel, test 'a' shortcut to enter wizard
 	next, _ = m.submit("/model")
 	m = next.(tuiModel)
@@ -277,7 +305,7 @@ func TestTUIModelManagement(t *testing.T) {
 // TestTUIModelWizardStepFlow tests the multi-step model creation wizard for Ollama.
 func TestTUIModelWizardStepFlow(t *testing.T) {
 	cfg := &config.Config{}
-	r := &repl{loc: i18n.Locale("zh"), cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	r := &repl{loc: i18n.ChineseSimp, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width = 100
@@ -306,6 +334,52 @@ func TestTUIModelWizardStepFlow(t *testing.T) {
 	}
 	if r.cfg.Model.Provider != "ollama" && r.cfg.Model.Model != "llama3" {
 		t.Fatalf("expected ollama model configured, got %+v", r.cfg.Model)
+	}
+}
+
+// TestTUIModelWizardAPIKeyMasking verifies that API Key input is masked with dots in the view and handled correctly.
+func TestTUIModelWizardAPIKeyMasking(t *testing.T) {
+	cfg := &config.Config{}
+	r := &repl{loc: i18n.ChineseSimp, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width = 100
+	m.height = 30
+
+	// Launch wizard
+	next, _ := m.startModelWizard()
+	m = next
+
+	// Step 0: Choose provider (index 0 is deepseek, requires auth)
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.wizardStep != wizardStepAPIKey {
+		t.Fatalf("expected wizardStepAPIKey for deepseek, got %v", m.wizardStep)
+	}
+
+	// Type secret API key
+	secret := "sk-supersecret123"
+	for _, ch := range secret {
+		m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+
+	if m.wizardInput != secret {
+		t.Fatalf("expected wizardInput to hold raw secret, got %q", m.wizardInput)
+	}
+
+	// Verify view masks API key and does not leak plaintext
+	view := m.View()
+	if strings.Contains(view, secret) {
+		t.Fatalf("view leaked raw API key plaintext: %s", view)
+	}
+	expectedMask := strings.Repeat("•", len(secret))
+	if !strings.Contains(view, expectedMask) {
+		t.Fatalf("expected masked dots %s in view: %s", expectedMask, view)
+	}
+
+	// Test backspace removes last character
+	m = step(m, tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.wizardInput != "sk-supersecret12" {
+		t.Fatalf("expected backspace to remove one rune, got %q", m.wizardInput)
 	}
 }
 
@@ -490,11 +564,27 @@ func TestTUISlashCommandExecutionAndOutputPersisted(t *testing.T) {
 		t.Fatal("expected non-nil cmd for slash execution")
 	}
 
-	// Run the tea.Cmd to simulate background execution and capture
-	msg := cmd()
-	doneMsg, ok := msg.(execDoneMsg)
-	if !ok {
-		t.Fatalf("expected execDoneMsg, got %T", msg)
+	// Pump progressive output until the execution's matching terminal event.
+	var doneMsg execDoneMsg
+	for i := 0; i < 1024; i++ {
+		msg := cmd()
+		switch msg := msg.(type) {
+		case execOutputMsg:
+			next, cmd = m.Update(msg)
+			m = next.(tuiModel)
+			if cmd == nil {
+				t.Fatal("progressive output should re-arm the command event pump")
+			}
+		case execDoneMsg:
+			doneMsg = msg
+			cmd = nil
+		}
+		if cmd == nil {
+			break
+		}
+	}
+	if doneMsg.exec == nil {
+		t.Fatal("command did not produce a terminal event")
 	}
 	if doneMsg.text != "/help" {
 		t.Fatalf("expected text '/help', got %q", doneMsg.text)
@@ -503,7 +593,7 @@ func TestTUISlashCommandExecutionAndOutputPersisted(t *testing.T) {
 		t.Fatalf("expected captured output to contain help info, got %q", doneMsg.output)
 	}
 
-	// Update with execDoneMsg
+	// Update with execDoneMsg.
 	next, _ = m.Update(doneMsg)
 	m = next.(tuiModel)
 
@@ -538,6 +628,86 @@ func TestTUISlashCommandExecutionAndOutputPersisted(t *testing.T) {
 	m = next.(tuiModel)
 	if m.chatHistory != nil && len(m.chatHistory.blocks) != 0 {
 		t.Fatalf("expected /clear to wipe chatHistory blocks, got %d", len(m.chatHistory.blocks))
+	}
+}
+
+func TestTUICommandExecutionCancellationAndGenerationIsolation(t *testing.T) {
+	m := newTestTUI(t)
+	m.mode = modeExec
+	m.execGen = 2
+	m.exec = newCommandExec(m.execGen)
+	current := m.exec
+	stale := newCommandExec(1)
+
+	for _, msg := range []tea.Msg{
+		execOutputMsg{exec: stale, generation: 1, text: "stale output"},
+		execDoneMsg{exec: stale, generation: 1, text: "!stale", output: "stale done"},
+	} {
+		next, cmd := m.Update(msg)
+		got := next.(tuiModel)
+		if cmd != nil || got.mode != modeExec || got.exec != current || got.execText.Len() != 0 {
+			t.Fatalf("stale %T changed current execution: mode=%v exec=%p text=%q cmd=%v", msg, got.mode, got.exec, got.execText.String(), cmd)
+		}
+		m = got
+	}
+
+	m = step(m, tea.KeyMsg{Type: tea.KeyEsc})
+	select {
+	case <-current.ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Esc did not cancel the current command context")
+	}
+	if m.mode != modeExec || m.exec != current {
+		t.Fatalf("cancel must wait for the matching terminal event: mode=%v exec=%p", m.mode, m.exec)
+	}
+	m = step(m, execDoneMsg{exec: current, generation: 2, text: "!sleep", err: context.Canceled})
+	if m.mode != modeIdle || m.exec != nil {
+		t.Fatalf("matching cancellation did not terminalize execution: mode=%v exec=%p", m.mode, m.exec)
+	}
+}
+
+func TestTUIShellCommandStreamsProgressAndLongOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture uses POSIX printf")
+	}
+	r := &repl{loc: i18n.Locale("en"), cfg: &config.Config{}, interactive: true}
+	r.cfg.Storage.WorkPath = t.TempDir()
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width, m.height = 80, 24
+	payload := strings.Repeat("x", 128*1024)
+
+	next, cmd := m.submit("!printf first; sleep 0.05; printf ' second'; printf '" + payload + "'")
+	m = next.(tuiModel)
+	if m.mode != modeExec || cmd == nil {
+		t.Fatal("shell command did not enter progressive execution mode")
+	}
+	seenProgress := false
+	for i := 0; i < 4096; i++ {
+		msg := cmd()
+		switch msg := msg.(type) {
+		case execOutputMsg:
+			seenProgress = true
+			next, cmd = m.Update(msg)
+			m = next.(tuiModel)
+			if !strings.Contains(m.execText.String(), "first") {
+				t.Fatal("progressive shell output was not folded into the live view")
+			}
+		case execDoneMsg:
+			next, _ = m.Update(msg)
+			m = next.(tuiModel)
+			cmd = nil
+		}
+		if cmd == nil {
+			break
+		}
+	}
+	if !seenProgress || m.mode != modeIdle || len(m.chatHistory.blocks) < 2 {
+		t.Fatalf("shell execution did not complete progressively: progress=%v mode=%v blocks=%d", seenProgress, m.mode, len(m.chatHistory.blocks))
+	}
+	out := m.chatHistory.blocks[len(m.chatHistory.blocks)-1].body
+	if !strings.HasPrefix(out, "first second") || len(out) < len(payload) {
+		t.Fatalf("long shell output was truncated or reordered: len=%d prefix=%q", len(out), out[:min(20, len(out))])
 	}
 }
 

@@ -289,7 +289,7 @@ func (mn *slashMenu) render(t theme, width, rows int) string {
 		row := marker + name + strings.Repeat(" ", gutter-len([]rune(it.name)))
 		// Fit the help text into whatever the marker and gutter leave; drop it
 		// entirely on a very narrow terminal rather than force a wrap.
-		budget := max(20, width) - 2 - gutter - 2
+		budget := max(1, width) - 2 - gutter - 2
 		if desc := strings.TrimSpace(it.desc); desc != "" && budget > 4 {
 			row += "  " + t.muted.Render(truncate(desc, budget))
 		}

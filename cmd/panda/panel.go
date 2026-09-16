@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"sort"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
@@ -388,6 +390,10 @@ const queueListLimit = 25
 // `panda queue --watch` renders the same rows through the same helpers, so the
 // live board and the one-shot listing cannot drift apart.
 func printTaskTable(loc i18n.Locale, tasks []core.Task) {
+	printTaskTableTo(os.Stdout, loc, tasks)
+}
+
+func printTaskTableTo(out io.Writer, loc i18n.Locale, tasks []core.Task) {
 	p := pal()
 	shown := tasks
 	if len(shown) > queueListLimit {
@@ -395,16 +401,16 @@ func printTaskTable(loc i18n.Locale, tasks []core.Task) {
 	}
 	cols := planTaskTable(loc, shown, listWidth())
 
-	fmt.Println(taskTableHeader(loc, cols))
+	_, _ = fmt.Fprintln(out, taskTableHeader(loc, cols))
 	for _, t := range shown {
-		fmt.Println(taskTableRow(t, cols))
+		_, _ = fmt.Fprintln(out, taskTableRow(t, cols))
 	}
 	if hidden := len(tasks) - len(shown); hidden > 0 {
-		fmt.Println(p.Muted(i18n.Tf(loc, "cli.queue.more", "n", strconv.Itoa(hidden))))
+		_, _ = fmt.Fprintln(out, p.Muted(i18n.Tf(loc, "cli.queue.more", "n", strconv.Itoa(hidden))))
 	}
-	fmt.Println(p.Muted(i18n.Tf(loc, "cli.queue.summary",
-		"shown", strconv.Itoa(len(shown)), "total", strconv.Itoa(len(tasks)))) +
-		p.Separator() + stateTally(tasks))
+	_, _ = fmt.Fprintln(out, p.Muted(i18n.Tf(loc, "cli.queue.summary",
+		"shown", strconv.Itoa(len(shown)), "total", strconv.Itoa(len(tasks))))+
+		p.Separator()+stateTally(tasks))
 }
 
 // taskTableCols is the column plan for a task listing: fixed budgets for the
@@ -517,8 +523,8 @@ func runCancel(args []string) {
 	fmt.Println(i18n.Tf(i18n.Detect(), "cli.cancel.done", "n", fmt.Sprint(len(ids))))
 }
 
-// runApprove implements `panda approve <id>` — approves a reviewed task
-// (review -> done). Kernel-form replacement for the web panel's approve action.
+// runApprove implements `panda approve <id>` — accepts completed reviewed work
+// or resumes a task that parked before execution.
 func runApprove(args []string) {
 	fs := flag.NewFlagSet("approve", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
@@ -540,14 +546,65 @@ func runApprove(args []string) {
 	defer db.Close()
 
 	id = resolveTaskRef(store, id)
-	if err := store.Approve(context.Background(), id); err != nil {
-		fatal("approve", err)
+	disposition, err := store.ApprovalDisposition(context.Background(), id)
+	if err != nil {
+		fatal("approval disposition", err)
+	}
+	if disposition == core.ApprovalNeedsChangedInput {
+		fatal("approve", core.ErrApprovalNeedsChangedInput)
+	}
+
+	var out *askengine.Result
+	if disposition == core.ApprovalAcceptWork {
+		if err := store.Approve(context.Background(), id); err != nil {
+			fatal("approve", err)
+		}
+		final, err := store.Get(context.Background(), id)
+		if err != nil {
+			fatal("get task", err)
+		}
+		result := bus.TaskResultPayload{OK: true}
+		if final.ResultJSON != "" {
+			_ = json.Unmarshal([]byte(final.ResultJSON), &result)
+		}
+		out = &askengine.Result{
+			Kind:      "task",
+			TaskID:    final.TaskID,
+			TaskTitle: final.Title,
+			TaskState: final.State,
+			OK:        result.OK,
+			Stdout:    result.Stdout,
+			Stderr:    result.Stderr,
+			ExitCode:  result.ExitCode,
+			Agent:     result.Agent,
+			Model:     result.Model,
+			Injected:  result.Injected,
+		}
+	} else {
+		engine, err := askengine.New(context.Background(), cfg, askengine.Options{
+			CardPath: defaultCardPath(),
+		})
+		if err != nil {
+			fatal("ask engine", err)
+		}
+		defer engine.Close()
+		out = engine.ResumeApproved(context.Background(), id, "", askengine.StreamCallbacks{})
 	}
 	if jsonOutput {
-		emitJSON(map[string]string{"id": id, "status": "approved"})
+		emitJSON(resultToJSON(out))
+		if !out.OK {
+			os.Exit(1)
+		}
 		return
 	}
-	fmt.Println(i18n.Tf(i18n.Detect(), "cli.approve.done", "id", id))
+	fmt.Println(i18n.Tf(i18n.Detect(), "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
+	if !out.OK {
+		fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
+		os.Exit(1)
+	}
+	if stdout := strings.TrimRight(out.Stdout, "\n"); stdout != "" {
+		fmt.Println(renderCliMd(stdout))
+	}
 }
 
 // runReject implements `panda reject <id> [--reason s]` — rejects a reviewed

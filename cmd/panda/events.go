@@ -16,6 +16,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -132,7 +134,11 @@ func trimFloat(f float64) string {
 
 // printEventTimeline writes a task's events under an indent, newest last.
 func printEventTimeline(events []core.Event, indent string) {
+	printEventTimelineTo(os.Stdout, events, indent)
+}
+
+func printEventTimelineTo(out io.Writer, events []core.Event, indent string) {
 	for _, e := range events {
-		fmt.Println(eventLine(e, indent))
+		_, _ = fmt.Fprintln(out, eventLine(e, indent))
 	}
 }

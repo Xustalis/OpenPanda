@@ -129,9 +129,10 @@ func runAsk(args []string) {
 		}
 	}
 
+	cwd, _ := os.Getwd()
 	switch *outputFormat {
 	case "json":
-		out, err := engine.AskTurns(context.Background(), history, prompt, "", *authorize, askengine.StreamCallbacks{})
+		out, err := engine.AskTurns(context.Background(), history, prompt, cwd, *authorize, askengine.StreamCallbacks{})
 		if err != nil {
 			emitJSON(map[string]string{"error": err.Error()})
 			os.Exit(1)
@@ -143,11 +144,11 @@ func runAsk(args []string) {
 		}
 		return
 	case "stream-json":
-		runAskStreamJSON(engine, history, prompt, *authorize, recordConvo)
+		runAskStreamJSON(engine, history, prompt, cwd, *authorize, recordConvo)
 		return
 	}
 
-	out, streamed, st, err := askStreaming(engine, history, prompt, *authorize, loc)
+	out, streamed, st, err := askStreaming(engine, history, prompt, cwd, *authorize, loc)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 		os.Exit(1)
@@ -167,39 +168,42 @@ func runAsk(args []string) {
 			fmt.Println(renderCliMd(out.Answer))
 		}
 	case "task":
-		// Sub-agent round: the converged report is the reply (it streamed
-		// live when the terminal supports it), with the raw agent output
-		// demoted to a pointer line. Without a report the raw output is the
-		// display, as before.
-		if strings.TrimSpace(out.Answer) != "" {
-			if !streamed {
-				fmt.Println(renderCliMd(out.Answer))
+		reportNote := i18n.Tf(loc, "cli.ask.task", "id", out.TaskID, "state", out.TaskState)
+		if out.Agent != "" {
+			execNote := out.Agent
+			if out.Model != "" {
+				execNote += fmt.Sprintf(" (%s)", out.Model)
 			}
-			reportNote := i18n.Tf(loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
-			if out.Agent != "" {
-				execNote := out.Agent
-				if out.Model != "" {
-					execNote += fmt.Sprintf(" (%s)", out.Model)
-				}
-				if out.Injected {
-					execNote += " · " + i18n.T(loc, "tui.task.injected")
-				}
-				reportNote += " · " + i18n.Tf(loc, "tui.task.execBy", "exec", execNote)
+			if out.Injected {
+				execNote += " · " + i18n.T(loc, "tui.task.injected")
 			}
-			fmt.Println(pal().Muted(reportNote))
-			if !out.OK {
-				os.Exit(1)
-			}
-			break
+			reportNote += " · " + i18n.Tf(loc, "tui.task.execBy", "exec", execNote)
 		}
-		fmt.Println(i18n.Tf(loc, "cli.ask.task", "id", out.TaskID, "state", out.TaskState))
+		fmt.Println(pal().Muted(reportNote))
+
+		answerText := strings.TrimSpace(out.Answer)
+		if answerText == "" {
+			answerText = strings.TrimSpace(out.Report)
+		}
+		stdoutText := strings.TrimSpace(out.Stdout)
+
+		if answerText != "" && !streamed {
+			fmt.Println(renderCliMd(answerText))
+		}
 		if out.OK {
-			fmt.Print(renderCliMd(out.Stdout))
-			if s := strings.TrimRight(out.Stdout, "\n"); s != "" && !strings.HasSuffix(out.Stdout, "\n") {
-				fmt.Println()
+			if stdoutText != "" && !strings.Contains(answerText, stdoutText) {
+				if answerText != "" && !streamed {
+					fmt.Println()
+				}
+				fmt.Print(renderCliMd(out.Stdout))
+				if !strings.HasSuffix(out.Stdout, "\n") {
+					fmt.Println()
+				}
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
+			if out.Stderr != "" {
+				fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
+			}
 			os.Exit(1)
 		}
 	case "plan":
@@ -302,7 +306,7 @@ func (l *streamLineRenderer) pending() string { return l.buf.String() }
 
 // runAskStreamJSON is the headless streaming mode: one NDJSON event per line
 // (status / delta / result / error), consumable by scripts and other tools.
-func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt string, authorize bool, record func(*askengine.Result)) {
+func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, authorize bool, record func(*askengine.Result)) {
 	write := func(v map[string]any) {
 		line, err := json.Marshal(v)
 		if err != nil {
@@ -315,7 +319,7 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt str
 		OnReasoning: func(text string) { write(map[string]any{"type": "reasoning", "text": text}) },
 		OnStatus:    func(text string) { write(map[string]any{"type": "status", "text": text}) },
 	}
-	out, err := engine.AskTurns(context.Background(), history, prompt, "", authorize, cb)
+	out, err := engine.AskTurns(context.Background(), history, prompt, workDir, authorize, cb)
 	if err != nil {
 		write(map[string]any{"type": "error", "message": err.Error()})
 		os.Exit(1)
@@ -341,10 +345,10 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt str
 // attached, nothing is animated, and the full answer prints once at the end.
 // The streamed marker tells the caller to skip the duplicate final print; the
 // returned status line carries the run's numbers for a closing cost line.
-func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt string, authorize bool, loc i18n.Locale) (*askengine.Result, bool, *cliui.Status, error) {
+func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, authorize bool, loc i18n.Locale) (*askengine.Result, bool, *cliui.Status, error) {
 	st := newStatusLine(loc)
 	if !stdoutIsTTY() {
-		out, err := engine.AskTurns(context.Background(), history, prompt, "", authorize, askengine.StreamCallbacks{})
+		out, err := engine.AskTurns(context.Background(), history, prompt, workDir, authorize, askengine.StreamCallbacks{})
 		return out, false, st, err
 	}
 	lr := newStreamLineRenderer()
@@ -400,7 +404,7 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt string,
 	}
 	st.Start(statusVerb(loc))
 	st.Phase("classify", "classifying")
-	out, err := engine.AskTurns(context.Background(), history, prompt, "", authorize, cb)
+	out, err := engine.AskTurns(context.Background(), history, prompt, workDir, authorize, cb)
 	if err == nil {
 		// A tool-less answer emits no progress events, so nudge it into exec for
 		// the closing chain. A task/plan already advanced through route/exec/judge
@@ -445,7 +449,12 @@ func confirmApprovalCLI(engine *askengine.Engine, out *askengine.Result, loc i18
 		return out
 	}
 	fmt.Println(p.Success(i18n.T(loc, "repl.approval.approved")))
-	return engine.ResumeApproved(req.TaskID, "")
+	cb := askengine.StreamCallbacks{
+		OnProgress: func(p askengine.Progress) {
+			fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(loc, p))
+		},
+	}
+	return engine.ResumeApproved(context.Background(), req.TaskID, "", cb)
 }
 
 // printCost closes an interactive ask with what it cost: elapsed time, and the

@@ -12,6 +12,8 @@ package main
 // meant quitting the REPL. Learning cost is mostly the cost of leaving.
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -43,21 +45,21 @@ func (r *repl) cmdClear(arg string) {
 // no usage still gets a meaningful turn count and clock.
 func (r *repl) cmdCost(arg string) {
 	if r.costTurns == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.cost.none"))
+		r.outln(i18n.T(r.loc, "repl.cost.none"))
 		return
 	}
 	p := pal()
-	fmt.Println(p.Heading(i18n.T(r.loc, "repl.cost.head") + ":"))
-	fmt.Printf("  %-14s %d\n", i18n.T(r.loc, "repl.cost.turns"), r.costTurns)
-	fmt.Printf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.wall"), cliui.HumanDuration(r.costWall))
+	r.outln(p.Heading(i18n.T(r.loc, "repl.cost.head") + ":"))
+	r.outf("  %-14s %d\n", i18n.T(r.loc, "repl.cost.turns"), r.costTurns)
+	r.outf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.wall"), cliui.HumanDuration(r.costWall))
 	if r.costIn+r.costOut == 0 {
-		fmt.Println("  " + p.Muted(i18n.T(r.loc, "repl.cost.noTokens")))
+		r.outln("  " + p.Muted(i18n.T(r.loc, "repl.cost.noTokens")))
 		return
 	}
-	fmt.Printf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.in"), cliui.HumanCount(r.costIn))
-	fmt.Printf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.out"), cliui.HumanCount(r.costOut))
+	r.outf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.in"), cliui.HumanCount(r.costIn))
+	r.outf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.out"), cliui.HumanCount(r.costOut))
 	if r.costTotalUSD > 0 {
-		fmt.Printf("  %-14s $%.4f\n", i18n.T(r.loc, "repl.cost.est"), r.costTotalUSD)
+		r.outf("  %-14s $%.4f\n", i18n.T(r.loc, "repl.cost.est"), r.costTotalUSD)
 	}
 }
 
@@ -81,7 +83,7 @@ func (r *repl) cmdExport(arg string) {
 		}
 	}
 	if len(turns) == 0 {
-		fmt.Println(i18n.T(r.loc, "repl.export.empty"))
+		r.outln(i18n.T(r.loc, "repl.export.empty"))
 		return
 	}
 	path := strings.TrimSpace(arg)
@@ -103,21 +105,21 @@ func (r *repl) cmdExport(arg string) {
 		fmt.Fprintf(&b, "\n## %s\n\n%s\n", who, strings.TrimSpace(t.Content))
 	}
 	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
-		fmt.Println(i18n.Tf(r.loc, "repl.export.fail", "path", path, "err", err.Error()))
+		r.outln(i18n.Tf(r.loc, "repl.export.fail", "path", path, "err", err.Error()))
 		return
 	}
-	fmt.Println(i18n.Tf(r.loc, "repl.export.done", "path", path, "n", fmt.Sprint(len(turns))))
+	r.outln(i18n.Tf(r.loc, "repl.export.done", "path", path, "n", fmt.Sprint(len(turns))))
 }
 
 // cmdDoctor runs the same self-check as `panda doctor`, inline. The standalone
 // command exits non-zero for scripts; here the report is the whole point, so
 // the shared checker returns the problem count instead of exiting.
 func (r *repl) cmdDoctor(arg string) {
-	if n := doctorReport(r.loc, r.configPath); n > 0 {
-		fmt.Println(i18n.Tf(r.loc, "doctor.fail", "n", fmt.Sprint(n)))
+	if n := doctorReport(r.loc, r.configPath, r.commandOutput()); n > 0 {
+		r.outln(i18n.Tf(r.loc, "doctor.fail", "n", fmt.Sprint(n)))
 		return
 	}
-	fmt.Println(i18n.T(r.loc, "doctor.pass"))
+	r.outln(i18n.T(r.loc, "doctor.pass"))
 }
 
 // runShell runs `!cmd` through the user's shell in the work dir and streams the
@@ -127,21 +129,19 @@ func (r *repl) cmdDoctor(arg string) {
 // the user typed it. The ask engine's sandbox is unrelated and unaffected.
 func (r *repl) runShell(cmdline string) {
 	if cmdline == "" {
-		fmt.Println(i18n.T(r.loc, "repl.bash.usage"))
+		r.outln(i18n.T(r.loc, "repl.bash.usage"))
 		return
 	}
 	shell, flag := userShell()
-	// Leave raw mode for the duration: a child that prints progress or reads a
-	// password needs the terminal's own line discipline back.
-	if r.term != nil {
-		r.term.restore()
+	cmd := exec.CommandContext(r.commandContext(), shell, flag, cmdline)
+	if r.cfg != nil {
+		cmd.Dir = r.cfg.Storage.WorkPath
 	}
-	cmd := exec.Command(shell, flag, cmdline)
-	cmd.Dir = r.cfg.Storage.WorkPath
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	err := cmd.Run()
-	if err != nil {
-		fmt.Println(pal().Danger(i18n.Tf(r.loc, "repl.bash.fail", "err", err.Error())))
+	cmd.Stdin = r.commandInput()
+	cmd.Stdout = r.commandOutput()
+	cmd.Stderr = r.commandError()
+	if err := cmd.Run(); err != nil && !errors.Is(err, context.Canceled) {
+		r.outln(pal().Danger(i18n.Tf(r.loc, "repl.bash.fail", "err", err.Error())))
 	}
 }
 
@@ -177,7 +177,7 @@ const maxRefBytes = 32 * 1024
 func (r *repl) expandFileRefs(text string) string {
 	prompt, notes := r.expandFileRefsNotes(text)
 	for _, n := range notes {
-		fmt.Println(n)
+		r.outln(n)
 	}
 	return prompt
 }
@@ -324,15 +324,15 @@ func (r *repl) activeProjectName() string {
 // project entered in the REPL is still current in the next one-shot `panda ask`.
 func (r *repl) cmdProjectEnter(arg string) {
 	if r.projStore == nil {
-		fmt.Println(i18n.T(r.loc, "cli.project.none"))
+		r.outln(i18n.T(r.loc, "cli.project.none"))
 		return
 	}
 	name := strings.TrimSpace(arg)
 	if name == "" {
 		if cur := r.activeProjectName(); cur != "" {
-			fmt.Println(i18n.Tf(r.loc, "cli.project.isActiveNamed", "name", cur))
+			r.outln(i18n.Tf(r.loc, "cli.project.isActiveNamed", "name", cur))
 		} else {
-			fmt.Println(i18n.T(r.loc, "cli.project.noActive"))
+			r.outln(i18n.T(r.loc, "cli.project.noActive"))
 		}
 		return
 	}
@@ -345,11 +345,11 @@ func (r *repl) cmdProjectEnter(arg string) {
 		r.activeProj = ""
 		r.bindProject()
 		r.convo = loadConvo()
-		fmt.Println(i18n.T(r.loc, "cli.project.noActive"))
+		r.outln(i18n.T(r.loc, "cli.project.noActive"))
 		return
 	}
 	if err := projectstore.ValidateName(name); err != nil {
-		fmt.Println(i18n.T(r.loc, "repl.project.bad"))
+		r.outln(i18n.T(r.loc, "repl.project.bad"))
 		return
 	}
 	// Create-then-enter. /project used to only create, so entering a name that
@@ -373,23 +373,23 @@ func (r *repl) cmdProjectEnter(arg string) {
 	}
 	r.activeProj = name
 	if created {
-		fmt.Println(i18n.Tf(r.loc, "repl.project.created", "name", name))
+		r.outln(i18n.Tf(r.loc, "repl.project.created", "name", name))
 	}
 	r.bindProject()
 	r.convo = loadConvo()
-	fmt.Println(i18n.Tf(r.loc, "cli.project.entered", "name", name))
+	r.outln(i18n.Tf(r.loc, "cli.project.entered", "name", name))
 }
 
 // cmdVersion reports the current OpenPanda version and runtime environment.
 func (r *repl) cmdVersion(arg string) {
 	p := pal()
-	fmt.Printf("%s v%s (%s/%s)\n", p.Bold("OpenPanda"), version, runtime.GOOS, runtime.GOARCH)
+	r.outf("%s v%s (%s/%s)\n", p.Bold("OpenPanda"), version, runtime.GOOS, runtime.GOARCH)
 	if r.cfg != nil {
 		if r.cfg.Node.Name != "" {
-			fmt.Printf("  %-10s %s\n", i18n.T(r.loc, "repl.footer.node")+":", r.cfg.Node.Name)
+			r.outf("  %-10s %s\n", i18n.T(r.loc, "repl.footer.node")+":", r.cfg.Node.Name)
 		}
 		if r.cfg.Model.Name != "" {
-			fmt.Printf("  %-10s %s\n", "model:", r.cfg.Model.Name)
+			r.outf("  %-10s %s\n", "model:", r.cfg.Model.Name)
 		}
 	}
 }

@@ -187,16 +187,19 @@ func runPlanShow(args []string) {
 // where it ran, and whether it handed anything on. The artifact column is the one
 // that answers "did the training stage actually get the script?".
 func printPlanStages(stages []core.Task) {
+	printPlanStagesTo(os.Stdout, stages)
+}
+
+func printPlanStagesTo(out io.Writer, stages []core.Task) {
 	for _, t := range stages {
-		fmt.Printf("  %-14s %-12s owner=%-16s needs=%s\n",
+		_, _ = fmt.Fprintf(out, "  %-14s %-12s owner=%-16s needs=%s\n",
 			t.StageID, t.State, orDash(t.OwnerNode), orDash(strings.Join(t.Needs, ",")))
-		if len(t.Inputs) > 0 {
-			for _, in := range t.Inputs {
-				fmt.Printf("      in   <- %s %s from %s\n", in.Stage, shortHash(in.Hash), in.Source)
-			}
+		for _, in := range t.Inputs {
+			_, _ = fmt.Fprintf(out, "      in   <- %s %s from %s\n",
+				in.Stage, shortHash(in.Hash), in.Source)
 		}
 		if t.OutputArtifact != "" {
-			fmt.Printf("      out  -> %s\n", shortHash(t.OutputArtifact))
+			_, _ = fmt.Fprintf(out, "      out  -> %s\n", shortHash(t.OutputArtifact))
 		}
 	}
 }

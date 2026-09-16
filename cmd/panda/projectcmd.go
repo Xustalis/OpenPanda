@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
@@ -528,19 +529,41 @@ func runProjectRemove(args []string) {
 // is answered in one place; a missing table (a database from before the projects
 // migration) reads as "no project" rather than as a failure.
 func activeProject(cfg *config.Config) (name, workDir string) {
+	cwd, _ := os.Getwd()
 	db, _, err := panelStore(cfg)
 	if err != nil {
-		return "", ""
+		return "", cwd
 	}
 	defer db.Close()
 	store := projects.NewStore(db)
+
+	// Prefer project matching current working directory.
+	if cwd != "" {
+		if list, err := store.List(); err == nil {
+			for _, p := range list {
+				if filepath.Clean(p.WorkDir) == filepath.Clean(cwd) {
+					return p.Name, p.WorkDir
+				}
+			}
+		}
+	}
+
 	name, err = store.Active()
 	if err != nil || name == "" {
-		return "", ""
+		return "", cwd
 	}
 	pr, err := store.Get(name)
 	if err != nil {
-		return name, ""
+		return name, cwd
+	}
+	// If the ambient project's directory is completely different from current working directory,
+	// do NOT hijack the user's cwd unless cwd is within pr.WorkDir.
+	if cwd != "" && pr.WorkDir != "" {
+		cleanCwd := filepath.Clean(cwd)
+		cleanPrDir := filepath.Clean(pr.WorkDir)
+		if cleanCwd != cleanPrDir && !strings.HasPrefix(cleanCwd, cleanPrDir+string(filepath.Separator)) {
+			return "", cwd
+		}
 	}
 	return pr.Name, pr.WorkDir
 }
