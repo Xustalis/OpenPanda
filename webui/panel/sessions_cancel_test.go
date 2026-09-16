@@ -2,7 +2,6 @@ package panel
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -24,32 +23,24 @@ func TestSessionCancelEndpoint(t *testing.T) {
 		Token:    testToken,
 	})
 
-	// When no ask is in flight, cancel returns cancelled: false
+	// Missing operation identity is rejected instead of cancelling whichever
+	// generation happens to be current.
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/sessions/"+s.ID+"/cancel", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rr.Code)
-	}
-	var res map[string]any
-	if err := json.NewDecoder(rr.Body).Decode(&res); err != nil {
-		t.Fatal(err)
-	}
-	if res["cancelled"] != false {
-		t.Fatalf("expected cancelled: false, got %v", res["cancelled"])
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
 	}
 
-	// Verify /stop alias also works
+	// The /stop alias has the same identity requirement.
 	rrStop := httptest.NewRecorder()
 	h.ServeHTTP(rrStop, authedReq(http.MethodPost, "/api/sessions/"+s.ID+"/stop", nil))
-	if rrStop.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rrStop.Code)
+	if rrStop.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rrStop.Code)
 	}
 }
 
 func TestSessionCancelActiveAsk(t *testing.T) {
-	h := &handler{
-		activeAsks: make(map[string]context.CancelFunc),
-	}
+	h := &handler{activeAsks: make(map[string]sessionOperation)}
 	cancelled := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -57,21 +48,55 @@ func TestSessionCancelActiveAsk(t *testing.T) {
 		close(cancelled)
 	}()
 
-	h.registerSessionAsk("s1", cancel)
-
-	if !h.cancelSessionAsk("s1") {
-		t.Fatal("expected cancelSessionAsk to return true")
+	op, err := h.registerSessionAsk("s1", cancel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.cancelSessionAsk("s1", "stale-operation") {
+		t.Fatal("stale operation must not cancel the current ask")
+	}
+	if !h.cancelSessionAsk("s1", op.operationID) {
+		t.Fatal("expected matching operation to cancel")
 	}
 
 	select {
 	case <-cancelled:
-		// success
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected cancel func to be called")
 	}
+	if h.cancelSessionAsk("s1", op.operationID) {
+		t.Fatal("expected second cancel to return false")
+	}
+}
 
-	// Double cancel returns false
-	if h.cancelSessionAsk("s1") {
-		t.Fatal("expected second cancelSessionAsk to return false")
+func TestSessionStaleUnregisterPreservesNewGeneration(t *testing.T) {
+	h := &handler{activeAsks: make(map[string]sessionOperation)}
+	oldCtx, oldCancel := context.WithCancel(context.Background())
+	old, err := h.registerSessionAsk("s1", oldCancel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCtx, newCancel := context.WithCancel(context.Background())
+	newer, err := h.registerSessionAsk("s1", newCancel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-oldCtx.Done():
+	default:
+		t.Fatal("replacement must cancel the old generation")
+	}
+
+	h.unregisterSessionAsk("s1", old)
+	if h.cancelSessionAsk("s1", old.operationID) {
+		t.Fatal("old operation ID must not cancel the replacement")
+	}
+	if !h.cancelSessionAsk("s1", newer.operationID) {
+		t.Fatal("stale unregister deleted the newer generation")
+	}
+	select {
+	case <-newCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("new generation was not cancelled")
 	}
 }

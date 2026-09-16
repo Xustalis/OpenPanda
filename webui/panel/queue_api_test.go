@@ -3,6 +3,7 @@ package panel
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -10,10 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
@@ -62,6 +65,126 @@ func newQueueEngine(t *testing.T) *askengine.Engine {
 	}
 	t.Cleanup(engine.Close)
 	return engine
+}
+
+func newApprovalQueueEngine(t *testing.T) (*askengine.Engine, string) {
+	t.Helper()
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "runs.txt")
+	script := filepath.Join(dir, "run-once.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'x\\n' >> \"$1\"\n"), 0o755); err != nil {
+		t.Fatalf("write command: %v", err)
+	}
+	card := fmt.Sprintf(`
+device: panel-approval-test
+resource_class: Standard
+native:
+  - id: test:once
+    command: sh
+    args: [%q, %q]
+    tier: 2
+capacity:
+  cpu_cores: 4
+  ram_gb: 8
+  max_concurrent_tasks: 2
+`, script, counter)
+	cardPath := filepath.Join(dir, "capabilities.yaml")
+	if err := os.WriteFile(cardPath, []byte(card), 0o644); err != nil {
+		t.Fatalf("write card: %v", err)
+	}
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
+	}))
+	t.Cleanup(model.Close)
+	cfg := &config.Config{
+		Node: config.NodeConfig{Name: "panel-approval-test", ResourceClass: "Standard"},
+		Storage: config.StorageConfig{
+			DBPath: filepath.Join(dir, "panda.db"), MemoryPath: filepath.Join(dir, "memory"),
+			ProjectsPath: filepath.Join(dir, "projects"), SkillsPath: filepath.Join(dir, "skills"), WorkPath: dir,
+		},
+		Model: config.ModelConfig{BaseURL: model.URL, APIKey: "test", Model: "test"},
+	}
+	engine, err := askengine.New(context.Background(), cfg, askengine.Options{
+		CardPath: cardPath, QueueTasks: true, Logger: slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatalf("new approval engine: %v", err)
+	}
+	t.Cleanup(engine.Close)
+	return engine, counter
+}
+
+func TestApproveAuthorizationReviewExecutesOnce(t *testing.T) {
+	engine, counter := newApprovalQueueEngine(t)
+	store := engine.TaskStore()
+	h := New(Deps{Store: store, Engine: engine, StaticDir: t.TempDir(), Token: testToken})
+
+	body := strings.NewReader(`{"title":"run once","prompt":"run once","requires":["test:once"],"authorize":false}`)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks", body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create task: %d %s", rr.Code, rr.Body.String())
+	}
+	var created struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil || created.TaskID == "" {
+		t.Fatalf("decode create result: %+v, %v", created, err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		task, err := store.Get(context.Background(), created.TaskID)
+		if err == nil && task.State == core.StateReview {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("task did not reach review: %+v, %v", task, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if data, err := os.ReadFile(counter); err == nil && len(data) != 0 {
+		t.Fatalf("command ran before approval: %q", data)
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read counter before approval: %v", err)
+	}
+
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks/"+created.TaskID+"/approve", nil))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("approve task: %d %s", rr.Code, rr.Body.String())
+	}
+	var op approvalOperation
+	if err := json.Unmarshal(rr.Body.Bytes(), &op); err != nil || op.ID == "" || op.Status != core.StateRunning {
+		t.Fatalf("decode approve operation: %+v, %v", op, err)
+	}
+
+	deadline = time.Now().Add(5 * time.Second)
+	var (
+		task core.Task
+		err  error
+	)
+	for {
+		task, err = store.Get(context.Background(), created.TaskID)
+		if err == nil && task.State == core.StateDone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("approved task did not reach done: %+v, %v", task, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !task.Authorized {
+		t.Fatalf("approved task = %+v, want authorized", task)
+	}
+	data, err := os.ReadFile(counter)
+	if err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+	if string(data) != "x\n" {
+		t.Fatalf("command executions = %q, want exactly one", data)
+	}
 }
 
 // TestCreateTaskEnqueuesWithSession covers the board's "new task" path end to

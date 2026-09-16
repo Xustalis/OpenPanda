@@ -16,7 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/webui/push"
 )
@@ -60,10 +62,38 @@ func reviewTask(t *testing.T, store *core.TaskStore) core.Task {
 		func() error { return store.Queue(ctx, task.TaskID, "node") },
 		func() error { return store.Dispatch(ctx, task.TaskID, "node", "node") },
 		func() error { return store.Accept(ctx, task.TaskID, "node") },
-		func() error { return store.Pause(ctx, task.TaskID, "node", "scope drift") },
+		func() error {
+			return store.PauseWithResult(ctx, task.TaskID, "node", map[string]any{
+				"ok": true, "stdout": "reviewed output",
+			})
+		},
 	} {
 		if err := step(); err != nil {
 			t.Fatalf("drive to review: %v", err)
+		}
+	}
+	return task
+}
+
+func authorizationReviewTask(t *testing.T, store *core.TaskStore) core.Task {
+	t.Helper()
+	ctx := context.Background()
+	task, err := store.Create(ctx, "", "proj", "tier-2 task", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	reason := defense.ErrNotAuthorized.Error()
+	for _, step := range []func() error{
+		func() error { return store.Queue(ctx, task.TaskID, "node") },
+		func() error { return store.Dispatch(ctx, task.TaskID, "node", "node") },
+		func() error { return store.Accept(ctx, task.TaskID, "node") },
+		func() error { return store.Fail(ctx, task.TaskID, "node", reason) },
+		func() error {
+			return store.ReviewWithDisposition(ctx, task.TaskID, "node", reason, core.ApprovalResumeExecution)
+		},
+	} {
+		if err := step(); err != nil {
+			t.Fatalf("drive to authorization review: %v", err)
 		}
 	}
 	return task
@@ -130,6 +160,92 @@ func TestApproveReview(t *testing.T) {
 	got, _ := store.Get(context.Background(), task.TaskID)
 	if got.State != core.StateDone {
 		t.Fatalf("state = %s, want done", got.State)
+	}
+}
+
+func TestApproveChangedInputReturnsConflict(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	task, err := store.Create(ctx, "", "proj", "scope drift", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, step := range []func() error{
+		func() error { return store.Queue(ctx, task.TaskID, "node") },
+		func() error { return store.Dispatch(ctx, task.TaskID, "node", "node") },
+		func() error { return store.Accept(ctx, task.TaskID, "node") },
+		func() error { return store.Pause(ctx, task.TaskID, "node", "scope drift") },
+	} {
+		if err := step(); err != nil {
+			t.Fatalf("drive to review: %v", err)
+		}
+	}
+
+	h := New(Deps{Store: store, StaticDir: t.TempDir(), Token: testToken})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks/"+task.TaskID+"/approve", nil))
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body %s; want 409", rr.Code, rr.Body.String())
+	}
+	got, err := store.Get(ctx, task.TaskID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if got.State != core.StateReview || got.ApprovalDisposition != core.ApprovalNeedsChangedInput {
+		t.Fatalf("task after conflict = state %s disposition %q", got.State, got.ApprovalDisposition)
+	}
+}
+
+func TestApproveAuthorizationReviewWithoutEngine(t *testing.T) {
+	store := newTestStore(t)
+	task := authorizationReviewTask(t, store)
+
+	h := New(Deps{Store: store, StaticDir: t.TempDir(), Token: testToken})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks/"+task.TaskID+"/approve", nil))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, body %s; want 503", rr.Code, rr.Body.String())
+	}
+	got, err := store.Get(context.Background(), task.TaskID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if got.State != core.StateReview || got.Authorized {
+		t.Fatalf("task after 503 = state %s authorized=%v, want unchanged review", got.State, got.Authorized)
+	}
+}
+
+func TestWriteApprovalResultReportsExecutionStates(t *testing.T) {
+	cases := []struct {
+		name  string
+		state string
+		code  int
+	}{
+		{name: "failed", state: core.StateFailed, code: http.StatusOK},
+		{name: "cancelled", state: core.StateCancelled, code: http.StatusOK},
+		{name: "review", state: core.StateReview, code: http.StatusOK},
+		{name: "conflict", state: core.StateQueued, code: http.StatusConflict},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			writeApprovalResult(rr, "task-1", &askengine.Result{
+				Kind: "task", TaskID: "task-1", TaskState: tc.state,
+				Stderr: "execution outcome", ExitCode: 1,
+			})
+			if rr.Code != tc.code {
+				t.Fatalf("status = %d, body %s; want %d", rr.Code, rr.Body.String(), tc.code)
+			}
+			if tc.code == http.StatusOK {
+				var got map[string]any
+				if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+					t.Fatalf("decode: %v", err)
+				}
+				if got["status"] != tc.state || got["error"] != "execution outcome" {
+					t.Fatalf("body = %v", got)
+				}
+			}
+		})
 	}
 }
 

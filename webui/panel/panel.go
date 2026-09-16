@@ -27,6 +27,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/updater"
+	"github.com/Xustalis/OpenPanda/internal/util"
 	"github.com/Xustalis/OpenPanda/webui/push"
 )
 
@@ -70,22 +71,24 @@ type Deps struct {
 // closed: /api/* rejects every request until a token is configured.
 func New(d Deps) http.Handler {
 	h := &handler{
-		store:        d.Store,
-		engine:       d.Engine,
-		engines:      d.EngineHolder,
-		db:           d.DB,
-		projects:     d.Projects,
-		projectStore: d.ProjectStore,
-		push:         d.Push,
-		sessions:     d.Sessions,
-		worktrees:    d.Worktrees,
-		skillStore:   d.SkillStore,
-		reminders:    d.Reminders,
-		cfg:          d.Cfg,
-		configPath:   d.ConfigPath,
-		cardFilePath: d.CardPath,
-		updater:      d.Updater,
-		activeAsks:   make(map[string]context.CancelFunc),
+		store:              d.Store,
+		engine:             d.Engine,
+		engines:            d.EngineHolder,
+		db:                 d.DB,
+		projects:           d.Projects,
+		projectStore:       d.ProjectStore,
+		push:               d.Push,
+		sessions:           d.Sessions,
+		worktrees:          d.Worktrees,
+		skillStore:         d.SkillStore,
+		reminders:          d.Reminders,
+		cfg:                d.Cfg,
+		configPath:         d.ConfigPath,
+		cardFilePath:       d.CardPath,
+		updater:            d.Updater,
+		activeAsks:         make(map[string]sessionOperation),
+		approvalOperations: make(map[string]approvalOperation),
+		serviceCtx:         context.Background(),
 	}
 	// Session summary finalizer (queue redesign §5): finished tasks fold
 	// their result into the linked chat as an assistant turn. Runs for the
@@ -104,6 +107,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/approve", h.approveTask)
 	mux.HandleFunc("POST /api/tasks/{id}/reject", h.rejectTask)
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", h.cancelTask)
+	mux.HandleFunc("GET /api/tasks/{id}/operations/{operation}", h.getApprovalOperation)
 	mux.HandleFunc("GET /api/tasks/{id}/logs", h.taskLogs)
 	// The plan plane: read-only views over the tasks that already carry a
 	// plan_id. Starting a plan stays on /api/ask, which classifies and returns
@@ -351,8 +355,13 @@ type handler struct {
 	cardFilePath string
 	updater      *updater.Manager
 
-	askMu      sync.Mutex
-	activeAsks map[string]context.CancelFunc
+	askMu         sync.Mutex
+	askGeneration uint64
+	activeAsks    map[string]sessionOperation
+
+	approvalMu         sync.Mutex
+	approvalOperations map[string]approvalOperation
+	serviceCtx         context.Context
 }
 
 // taskJSON is the wire form of a task row, with stable snake_case names so the
@@ -758,10 +767,24 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-// approveTask accepts a reviewed task (review -> done).
+// approvalOperation is the in-memory live handle for a durable approval
+// operation. The status itself is also appended to task_events, so reconnecting
+// clients can observe it even after this live cancellation handle is gone.
+type approvalOperation struct {
+	ID     string `json:"operation_id"`
+	TaskID string `json:"task_id"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+	cancel context.CancelFunc
+}
+
+// approveTask accepts completed reviewed work or starts a detached execution
+// for a task that parked before execution. Detached execution returns 202 as
+// soon as its durable operation-start event has committed.
 func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := h.store.Approve(r.Context(), id); err != nil {
+	disposition, err := h.store.ApprovalDisposition(r.Context(), id)
+	if err != nil {
 		if errors.Is(err, core.ErrConflict) || errors.Is(err, core.ErrIllegal) {
 			writeErr(w, http.StatusConflict, errors.New("task is not awaiting approval"))
 			return
@@ -769,7 +792,150 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, errors.New("approve failed"))
 		return
 	}
-	writeJSON(w, map[string]string{"id": id, "status": "approved"})
+	if disposition == core.ApprovalNeedsChangedInput {
+		writeErr(w, http.StatusConflict, core.ErrApprovalNeedsChangedInput)
+		return
+	}
+	if disposition == core.ApprovalAcceptWork {
+		if err := h.store.Approve(r.Context(), id); err != nil {
+			if errors.Is(err, core.ErrConflict) || errors.Is(err, core.ErrIllegal) {
+				writeErr(w, http.StatusConflict, errors.New("task is not awaiting approval"))
+				return
+			}
+			writeErr(w, http.StatusInternalServerError, errors.New("approve failed"))
+			return
+		}
+		writeJSON(w, map[string]string{"id": id, "status": string(core.StateDone)})
+		return
+	}
+	eng := h.currentEngine()
+	if eng == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("task execution engine is unavailable"))
+		return
+	}
+	operationID, err := util.UUIDv7()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("create approval operation failed"))
+		return
+	}
+	baseCtx := h.serviceCtx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	execCtx, cancel := context.WithCancel(baseCtx)
+	op := approvalOperation{ID: operationID, TaskID: id, Status: core.StateRunning, cancel: cancel}
+	h.approvalMu.Lock()
+	if current, exists := h.approvalOperations[id]; exists && current.Status == core.StateRunning {
+		h.approvalMu.Unlock()
+		cancel()
+		writeErr(w, http.StatusConflict, errors.New("approval execution already running"))
+		return
+	}
+	h.approvalOperations[id] = op
+	h.approvalMu.Unlock()
+	if err := h.store.RecordEvent(context.WithoutCancel(execCtx), id, "approval_operation", map[string]string{
+		"operation_id": operationID, "status": core.StateRunning,
+	}); err != nil {
+		h.approvalMu.Lock()
+		delete(h.approvalOperations, id)
+		h.approvalMu.Unlock()
+		cancel()
+		writeErr(w, http.StatusInternalServerError, errors.New("persist approval operation failed"))
+		return
+	}
+	go h.runApprovalOperation(execCtx, eng, op)
+	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, op)
+}
+
+func (h *handler) runApprovalOperation(ctx context.Context, eng *askengine.Engine, op approvalOperation) {
+	defer op.cancel()
+	out := eng.ResumeApproved(ctx, op.TaskID, "", askengine.StreamCallbacks{})
+	status, message := approvalResultState(out)
+	completed := approvalOperation{ID: op.ID, TaskID: op.TaskID, Status: status, Error: message}
+	_ = h.store.RecordEvent(context.WithoutCancel(ctx), op.TaskID, "approval_operation", map[string]string{
+		"operation_id": op.ID, "status": status, "error": message,
+	})
+	h.approvalMu.Lock()
+	if current, ok := h.approvalOperations[op.TaskID]; ok && current.ID == op.ID {
+		h.approvalOperations[op.TaskID] = completed
+	}
+	h.approvalMu.Unlock()
+}
+
+func approvalResultState(out *askengine.Result) (string, string) {
+	if out == nil {
+		return core.StateFailed, "approve failed"
+	}
+	status := out.TaskState
+	if status == "" {
+		status = core.StateFailed
+	}
+	return status, out.Stderr
+}
+
+func (h *handler) getApprovalOperation(w http.ResponseWriter, r *http.Request) {
+	taskID, operationID := r.PathValue("id"), r.PathValue("operation")
+	h.approvalMu.Lock()
+	op, ok := h.approvalOperations[taskID]
+	h.approvalMu.Unlock()
+	if ok && op.ID == operationID {
+		writeJSON(w, op)
+		return
+	}
+	for _, event := range mustTaskEvents(h.store, r.Context(), taskID) {
+		if event.Type != "approval_operation" {
+			continue
+		}
+		var durable approvalOperation
+		if json.Unmarshal([]byte(event.DataJSON), &durable) == nil && durable.ID == operationID {
+			durable.TaskID = taskID
+			writeJSON(w, durable)
+			return
+		}
+	}
+	writeErr(w, http.StatusNotFound, errors.New("no such approval operation"))
+}
+
+func mustTaskEvents(store *core.TaskStore, ctx context.Context, taskID string) []core.Event {
+	events, err := store.Events(ctx, taskID)
+	if err != nil {
+		return nil
+	}
+	return events
+}
+
+// writeApprovalResult separates approval conflicts from execution outcomes. A
+// valid approval can still finish failed/cancelled or return to review; those
+// are successful API operations with a typed terminal/current task state, not
+// competing approval writes.
+func writeApprovalResult(w http.ResponseWriter, id string, out *askengine.Result) {
+	if out == nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("approve failed"))
+		return
+	}
+	if out.OK && out.TaskState == core.StateDone {
+		writeJSON(w, map[string]string{"id": id, "status": string(out.TaskState)})
+		return
+	}
+	message := out.Stderr
+	if message == "" {
+		message = "approved task did not complete"
+	}
+	switch out.TaskState {
+	case core.StateReview:
+		// Approval was valid, but execution or supervision returned the task for
+		// another human decision. Keep that state visible instead of describing
+		// the approval itself as a conflict.
+		writeJSON(w, map[string]string{"id": id, "status": string(out.TaskState), "error": message})
+	case core.StateFailed, core.StateCancelled, core.StateExpired:
+		writeJSON(w, map[string]any{
+			"id": id, "status": out.TaskState, "error": message,
+			"exit_code": out.ExitCode,
+		})
+	default:
+		writeErr(w, http.StatusConflict, errors.New(message))
+	}
 }
 
 // rejectTask rejects a reviewed task (review -> failed). The reason is
