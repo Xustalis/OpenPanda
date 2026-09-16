@@ -279,6 +279,20 @@ func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall,
 	return result
 }
 
+// taskDispatchCapture carries a typed task result beside task_submit's string
+// tool_result. One capture belongs to one synchronous AskTurns invocation.
+type taskDispatchCapture struct {
+	result *Result
+}
+
+func (c *taskDispatchCapture) set(result *Result) { c.result = result }
+
+func (c *taskDispatchCapture) take() *Result {
+	result := c.result
+	c.result = nil
+	return result
+}
+
 // dispatchTaskTool builds task_submit — the dispatch bridge for entry models
 // behind compatible endpoints that drive everything through tool calls and
 // never emit the task JSON directive (the observed failure: six rounds of
@@ -287,7 +301,7 @@ func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall,
 // progress callbacks; submission goes through the same submitTask path
 // (scheduler, approval gate) as a KindTask directive, and an inline-mode
 // completion folds its output into the tool result so the model can report it.
-func (e *Engine) dispatchTaskTool(prompt, workDir string, authorize bool, cb StreamCallbacks) entry.Tool {
+func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool, cb StreamCallbacks, capture *taskDispatchCapture) entry.Tool {
 	return entry.Tool{
 		Name:        "task_submit",
 		Description: "把任务派发给 agent 执行。当用户要求调度某个 agent 干活时必须调用它（或输出 task JSON），而不是只口头答应。title 填任务标题，target 填要完成的目标，abilities 按 Connected Devices 摘要填能力 ID（如 agent:codex）。",
@@ -316,7 +330,7 @@ func (e *Engine) dispatchTaskTool(prompt, workDir string, authorize bool, cb Str
 				return "", fmt.Errorf("abilities 不能为空：按 Connected Devices 能力摘要填写，如 agent:codex")
 			}
 			node, _ := args["node"].(string)
-			scope, _ := args["scope"].(string)
+			taskScope, _ := args["scope"].(string)
 			successDef, _ := args["success_definition"].(string)
 			spec := &entry.TaskSpec{
 				Title:       strings.TrimSpace(title),
@@ -325,7 +339,7 @@ func (e *Engine) dispatchTaskTool(prompt, workDir string, authorize bool, cb Str
 				Spec: entry.TaskSpecDetail{
 					Target:            strings.TrimSpace(target),
 					Node:              strings.TrimSpace(node),
-					Scope:             strings.TrimSpace(scope),
+					Scope:             strings.TrimSpace(taskScope),
 					Constraints:       toStringSlice(args["constraints"]),
 					SuccessDefinition: strings.TrimSpace(successDef),
 				},
@@ -342,7 +356,8 @@ func (e *Engine) dispatchTaskTool(prompt, workDir string, authorize bool, cb Str
 				return "", fmt.Errorf("未加载能力卡片，无法派发任务")
 			}
 			cb.progress(Progress{Kind: ProgressTask, Name: spec.Title})
-			res := e.submitTask(ctx, spec, prompt, authorize, workDir, "", cb)
+			res := e.submitTask(ctx, spec, prompt, authorize, scope, "", cb)
+			capture.set(res)
 			switch {
 			case res.NeedsApproval:
 				return fmt.Sprintf("任务「%s」已创建（ID %s），等待用户批准后执行（REPL 输入 /approve，或 panda task approve %s）。", spec.Title, res.TaskID, res.TaskID), nil

@@ -345,3 +345,30 @@ func TestResolvePathAndCardTargetFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestAmbiguousEphemeralNodeNameRejected(t *testing.T) {
+	cfg := Default()
+	cfg.Node.Name = "builder-deadbeef"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected builder-deadbeef to be rejected as ambiguous ephemeral suffix")
+	}
+
+	cfg = Default()
+	cfg.Node.Name = "builder-12345678"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected builder-12345678 to be rejected")
+	}
+
+	cfg = Default()
+	cfg.Node.Name = "builder-normal"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+
+	cfg = Default()
+	cfg.Node.Kind = NodeKindVM
+	cfg.Node.Identity = "vm-deadbeef"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected vm-deadbeef to be rejected for node.identity")
+	}
+}

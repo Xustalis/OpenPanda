@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,6 +49,9 @@ func TestRemoteReviewStatePropagates(t *testing.T) {
 		entryTask, entryErr := entry.store.Get(ctx, "review-wire-task")
 		workerTask, workerErr := worker.store.Get(ctx, "review-wire-task")
 		if entryErr == nil && workerErr == nil && entryTask.State == StateReview && workerTask.State == StateReview {
+			if entryTask.ApprovalDisposition != ApprovalAcceptWork || workerTask.ApprovalDisposition != ApprovalAcceptWork {
+				t.Fatalf("review disposition = entry %q worker %q, want %q", entryTask.ApprovalDisposition, workerTask.ApprovalDisposition, ApprovalAcceptWork)
+			}
 			if calls.Load() != 1 {
 				t.Fatalf("worker ran %d rounds, want 1", calls.Load())
 			}
@@ -125,6 +130,108 @@ func TestRemoteResumeApprovedReRunsOnExecutor(t *testing.T) {
 	}
 }
 
+func TestRemoteResumeAfterDelegatorRestart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entryA := newCore(t, "entry-restart-11111111", "127.0.0.1:17945")
+	worker := newSuperviseCore(t, "worker-restart-wire", 2)
+	worker.SetWorkDir(t.TempDir())
+	var calls atomic.Int32
+	worker.router.SetAdapterRunner(agentRunner(&calls))
+	startPair(t, ctx, entryA, worker, "127.0.0.1:17945", "127.0.0.1:17946")
+
+	task, _, err := entryA.Submit(ctx, TaskInput{
+		Title: "restart remote approval", Intent: "edit files", Requires: []string{"code:modify"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if task.State != StateReview || calls.Load() != 0 {
+		t.Fatalf("pre-approval task = state %s calls %d", task.State, calls.Load())
+	}
+
+	entryB := NewCore(entryA.db, "entry-restart-22222222", entryA.card, 5, verboseTestLogger(), config.ModelConfig{})
+	entryB.SetSharedSecret(testSharedSecret)
+	if err := entryB.DialPeer(ctx, "127.0.0.1:17946"); err != nil {
+		t.Fatalf("replacement dial worker: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	final, result, err := entryB.ResumeApproved(ctx, task.TaskID)
+	if err != nil {
+		t.Fatalf("replacement resume: %v", err)
+	}
+	if final.State != StateDone || !result.OK || calls.Load() != 1 {
+		t.Fatalf("replacement final = state %s ok=%v calls=%d stderr=%q", final.State, result.OK, calls.Load(), result.Stderr)
+	}
+	if final.OwnerNode != "entry-restart-22222222" {
+		t.Fatalf("replacement owner = %q", final.OwnerNode)
+	}
+	workerTask, err := worker.store.Get(ctx, task.TaskID)
+	if err != nil || workerTask.State != StateDone || !workerTask.Authorized {
+		t.Fatalf("worker task = %+v, %v", workerTask, err)
+	}
+}
+
+// TestRemoteResumeCancellationConvergesBothCopies verifies that abandoning a
+// foreground remote approval cancels both the delegator row and executor work.
+func TestRemoteResumeCancellationConvergesBothCopies(t *testing.T) {
+	rootCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
+	defer stop()
+
+	entry := newCore(t, "entry-resume-cancel", "127.0.0.1:17943")
+	worker := newSuperviseCore(t, "worker-resume-cancel", 2)
+	worker.SetWorkDir(t.TempDir())
+	started := make(chan struct{})
+	var once sync.Once
+	worker.router.SetAdapterRunner(func(ctx context.Context, _, _, _ string) commander.AgentResult {
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		return commander.AgentResult{OK: false, Stderr: ctx.Err().Error(), ExitCode: 1}
+	})
+	startPair(t, rootCtx, entry, worker, "127.0.0.1:17943", "127.0.0.1:17944")
+
+	task, _, err := entry.Submit(rootCtx, TaskInput{
+		Title: "cancel resumed task", Intent: "edit files", Requires: []string{"code:modify"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	resumeCtx, cancel := context.WithCancel(rootCtx)
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := entry.ResumeApproved(resumeCtx, task.TaskID)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("remote approved agent did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("resume error = %v, want context canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled remote approval did not return")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		origin, originErr := entry.store.Get(rootCtx, task.TaskID)
+		executor, executorErr := worker.store.Get(rootCtx, task.TaskID)
+		if originErr == nil && executorErr == nil && origin.State == StateCancelled && executor.State == StateCancelled {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	origin, _ := entry.store.Get(rootCtx, task.TaskID)
+	executor, _ := worker.store.Get(rootCtx, task.TaskID)
+	t.Fatalf("cancelled copies = origin %s executor %s, want both cancelled", origin.State, executor.State)
+}
+
 // TestRemoteResumeRejectedFromNonDelegator guards the resume authorization:
 // only the task's delegator (the chain predecessor) may grant tier-2 consent.
 // A resume from any other authenticated peer is dropped, and the task stays
@@ -182,6 +289,57 @@ func TestRemoteResumeRejectedFromNonDelegator(t *testing.T) {
 	}
 }
 
+func TestSubmitCancellationConvergesBothCopies(t *testing.T) {
+	rootCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
+	defer stop()
+
+	entry := newCore(t, "entry-submit-cancel", "127.0.0.1:17987")
+	worker := newCoreWithNative(t, "worker-submit-cancel", "127.0.0.1:17988", ledger.NativeAbility{
+		ID: "sys:sleep", Command: "sleep", Args: []string{"60"},
+	})
+	startPair(t, rootCtx, entry, worker, "127.0.0.1:17987", "127.0.0.1:17988")
+
+	submitCtx, cancel := context.WithCancel(rootCtx)
+	type outcome struct {
+		task Task
+		err  error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		task, _, err := entry.Submit(submitCtx, TaskInput{
+			Title: "cancel ordinary submit", Intent: "sleep", Requires: []string{"sys:sleep"},
+		})
+		done <- outcome{task: task, err: err}
+	}()
+
+	taskID := awaitRunning(t, worker)
+	cancel()
+	select {
+	case got := <-done:
+		if !errors.Is(got.err, context.Canceled) {
+			t.Fatalf("submit error = %v, want context canceled", got.err)
+		}
+		if got.task.State != StateCancelled {
+			t.Fatalf("returned task state = %s, want cancelled", got.task.State)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled submit did not return")
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		origin, originErr := entry.store.Get(rootCtx, taskID)
+		executor, executorErr := worker.store.Get(rootCtx, taskID)
+		if originErr == nil && executorErr == nil && origin.State == StateCancelled && executor.State == StateCancelled {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	origin, _ := entry.store.Get(rootCtx, taskID)
+	executor, _ := worker.store.Get(rootCtx, taskID)
+	t.Fatalf("cancelled copies = origin %s executor %s, want both cancelled", origin.State, executor.State)
+}
+
 func TestRemoteReviewRejectsLateDone(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -192,7 +350,7 @@ func TestRemoteReviewRejectsLateDone(t *testing.T) {
 	if err := s.Dispatch(ctx, tk.TaskID, "entry", "worker"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ReviewFromRemote(ctx, tk.TaskID, "entry", map[string]any{"state": StateReview}); err != nil {
+	if err := s.ReviewFromRemote(ctx, tk.TaskID, "entry", map[string]any{"state": StateReview}, ApprovalAcceptWork); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.CompleteFromRemote(ctx, tk.TaskID, "entry", map[string]any{"state": StateDone}); err != nil {

@@ -184,14 +184,18 @@ type TaskResultPayload struct {
 	// receiver derives done/failed from OK. New nodes must preserve review so a
 	// supervisor that did not accept the work cannot be promoted to done by a
 	// parent node.
-	State     string  `json:"state,omitempty"`
-	OK        bool    `json:"ok"`
-	ExitCode  int     `json:"exit_code"`
-	Stdout    string  `json:"stdout,omitempty"`
-	Stderr    string  `json:"stderr,omitempty"`
-	Artifacts string  `json:"artifacts,omitempty"`
-	Tokens    int     `json:"tokens,omitempty"`
-	Cost      float64 `json:"cost,omitempty"`
+	State string `json:"state,omitempty"`
+	// ApprovalDisposition tells the delegator what approving a review means.
+	// It is optional for wire compatibility; receivers classify legacy review
+	// results conservatively from explicit authorization-refusal evidence only.
+	ApprovalDisposition string  `json:"approval_disposition,omitempty"`
+	OK                  bool    `json:"ok"`
+	ExitCode            int     `json:"exit_code"`
+	Stdout              string  `json:"stdout,omitempty"`
+	Stderr              string  `json:"stderr,omitempty"`
+	Artifacts           string  `json:"artifacts,omitempty"`
+	Tokens              int     `json:"tokens,omitempty"`
+	Cost                float64 `json:"cost,omitempty"`
 	// OutputArtifact is the hash of the tree this stage produced, packed into the
 	// executor's artifact pool. The node orchestrating the plan records it and
 	// hands it to the successor stages as their input; the executor stays the

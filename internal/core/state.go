@@ -17,6 +17,9 @@ var (
 	// ErrCancelled reports that execution finished after the task was
 	// cancelled; callers should not report a result for a cancelled task.
 	ErrCancelled = errors.New("task cancelled")
+	// ErrApprovalNeedsChangedInput reports that a reviewed task cannot be
+	// approved as-is. Its input, scope, or context must change before a new run.
+	ErrApprovalNeedsChangedInput = errors.New("approval requires changed input")
 )
 
 // Task states. These strings are part of the wire protocol across nodes,
@@ -133,6 +136,14 @@ type Task struct {
 	Complexity   float64
 	Risk         string
 	ResourceJSON string
+	// ApprovalDisposition is persisted whenever the task enters review. Empty is
+	// reserved for legacy rows and is classified conservatively from their audit
+	// trail; new rows use one of the stable Approval* protocol strings.
+	ApprovalDisposition ApprovalDisposition
+	// OperationDecisionJSON carries the concrete pre-operation decision/evidence
+	// that caused a review. V17 reserves the durable field; the typed arbitration
+	// layer populates it when an adapter can report the operation before execution.
+	OperationDecisionJSON string
 	// Authorized records whether the user consented to executing tier-2
 	// (irreversible) commands. It is server-side state (design §16 / P0-1), not
 	// wire-carried, so a delegated task cannot forge authorization.

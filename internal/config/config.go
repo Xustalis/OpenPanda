@@ -473,6 +473,21 @@ func ValidResourceClass(s string) bool {
 	return validResourceClasses[s]
 }
 
+// hasEphemeralSuffix reports whether s ends with -<8 hex digits>, which is
+// reserved for runtime ephemeral node instance identifiers.
+func hasEphemeralSuffix(s string) bool {
+	i := strings.LastIndex(s, "-")
+	if i <= 0 || len(s)-i-1 != 8 {
+		return false
+	}
+	for _, c := range s[i+1:] {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
 // Validate reports statically invalid configuration before the node starts:
 // an unknown resource_class (a typo silently downgrades the scheduler tier),
 // malformed peer addresses (must be host:port), or a listen/panel address that
@@ -487,6 +502,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Node.Kind == NodeKindVM && strings.TrimSpace(c.Node.Identity) == "" {
 		return fmt.Errorf("config: node.identity is required for vm nodes")
+	}
+	if hasEphemeralSuffix(c.Node.Name) {
+		return fmt.Errorf("config: node.name %q ends with an ambiguous ephemeral suffix (-<8 hex digits>); please use a stable name without this suffix", c.Node.Name)
+	}
+	if hasEphemeralSuffix(c.Node.Identity) {
+		return fmt.Errorf("config: node.identity %q ends with an ambiguous ephemeral suffix (-<8 hex digits>); please use a stable identity without this suffix", c.Node.Identity)
 	}
 	for _, addr := range []struct{ name, value string }{
 		{"network.listen_addr", c.Network.ListenAddr},

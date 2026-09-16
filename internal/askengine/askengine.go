@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -784,11 +785,25 @@ func (e *Engine) Project() (string, string) {
 	return e.project, e.projectDir
 }
 
-// AskTurns is the session-aware ask: history carries the conversation so far
-// (plain user/assistant turns), workDir optionally pins where a classified
-// task executes (a session's git worktree), and the callbacks stream live
-// progress. A nil OnDelta still streams internally — it just is not forwarded.
+// AskScope is immutable context attached to one ask. Project and WorkDir are
+// threaded through every classified and tool-call task path instead of mutating
+// the Engine's ambient project or the scheduler Core's default directory.
+type AskScope struct {
+	Project string
+	WorkDir string
+
+	ambientProjectFallback bool
+}
+
+// AskTurns is the backward-compatible session-aware entry point. Callers that
+// own explicit project context should use AskTurnsScoped.
 func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, workDir string, authorize bool, cb StreamCallbacks) (res *Result, err error) {
+	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, ambientProjectFallback: true}, authorize, cb)
+}
+
+// AskTurnsScoped is the session-aware ask with request-scoped project/workspace.
+func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, prompt string, scope AskScope, authorize bool, cb StreamCallbacks) (res *Result, err error) {
+	workDir := scope.WorkDir
 	client, fallbackUsed := e.healthyClient()
 	if fallbackUsed != "" {
 		e.logger.Info("askengine: primary model in circuit breaker cooldown, routing directly to fallback", "primary", e.client.Load().ModelName(), "fallback", fallbackUsed)
@@ -928,9 +943,10 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	// The tool closes over this ask's prompt/workDir/consent, and submission
 	// goes through the same submitTask path (scheduler, approval gate) as a
 	// KindTask directive.
+	var taskCapture taskDispatchCapture
 	if reg != nil {
 		reg = reg.Copy()
-		reg.Register(e.dispatchTaskTool(prompt, workDir, authorize, cb))
+		reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture))
 	}
 
 rounds:
@@ -1011,6 +1027,15 @@ rounds:
 			}
 			return &Result{Kind: "answer", Answer: out.Answer, Thought: accumulatedReasoning.String()}, nil
 		case entry.KindTask:
+			if taskRounds >= maxTasks {
+				// Refuse before submitTask: the budget limits actual task
+				// execution, not merely how many outcomes are replayed.
+				turns = append(turns,
+					entry.Turn{Role: "assistant", Content: taskDispatchNote(out.Task)},
+					entry.Turn{Role: "user", Content: fmt.Sprintf(taskBudgetNote, maxTasks)},
+				)
+				break rounds
+			}
 			if e.sched == nil {
 				e.tryAutoInitScheduler()
 			}
@@ -1018,7 +1043,7 @@ rounds:
 				return nil, fmt.Errorf("task output requires a capability card (scheduler initialization failed)")
 			}
 			cb.progress(Progress{Kind: ProgressTask, Name: out.Task.Title})
-			res := e.submitTask(ctx, out.Task, prompt, authorize, workDir, accumulatedReasoning.String(), cb)
+			res := e.submitTask(ctx, out.Task, prompt, authorize, scope, accumulatedReasoning.String(), cb)
 			if e.queueTasks {
 				// Async mode: the board product. The queued pointer is the
 				// result — the session streams the task's progress and the
@@ -1040,17 +1065,6 @@ rounds:
 			} else {
 				e.logger.Warn("askengine: task summary degraded", "task", res.TaskID, "err", rerr)
 			}
-			if taskRounds >= maxTasks {
-				// Budget spent: stop delegating and converge on what ran.
-				// Record the refused dispatch so the final tool-free call
-				// explains itself instead of silently dropping the model's
-				// latest intent.
-				turns = append(turns,
-					entry.Turn{Role: "assistant", Content: taskDispatchNote(out.Task)},
-					entry.Turn{Role: "user", Content: fmt.Sprintf(taskBudgetNote, maxTasks)},
-				)
-				break rounds
-			}
 			taskRounds++
 			lastTask = res
 			// The sub-agent round: the task is one step of this conversation,
@@ -1066,11 +1080,25 @@ rounds:
 			return e.startClassifiedPlan(ctx, out.Plan, authorize)
 		case entry.KindToolCall:
 			cb.progress(Progress{Kind: ProgressTool, Name: out.Tool.Tool})
+			if out.Tool.Tool == "task_submit" && taskRounds >= maxTasks {
+				// task_submit is a real delegation hidden behind the native
+				// tool protocol. Refuse it before executeTool for the same
+				// hard execution budget as a classified task directive.
+				turns = appendToolTurns(turns, out.Tool, out.Note, fmt.Sprintf(taskBudgetNote, maxTasks))
+				break rounds
+			}
 			// Execute against the same registry snapshot classification saw:
 			// a mid-ask SetMCPCommand swap would otherwise make the model's
 			// tool call hit a registry that no longer knows it.
 			result := executeTool(ctx, reg, out.Tool, toolAuthorized)
 			turns = appendToolTurns(turns, out.Tool, out.Note, result)
+			if dispatched := taskCapture.take(); dispatched != nil {
+				if e.queueTasks || dispatched.NeedsApproval || dispatched.TaskID == "" {
+					return dispatched, nil
+				}
+				taskRounds++
+				lastTask = dispatched
+			}
 		default:
 			return &Result{Kind: "answer", Answer: out.Answer}, nil
 		}
@@ -1132,12 +1160,12 @@ rounds:
 			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议任务「%s」，但当前未加载能力卡片，无法提交。", maxRounds, final.Task.Title)}, nil
 		}
 		if lastTask != nil && taskRounds >= maxTasks {
-			// The loop was cut for budget and the model still wants another
-			// delegation: surface what ran instead of quietly exceeding it.
+			// The loop exhausted the task budget and the model still wants
+			// another delegation: surface what ran instead of exceeding it.
 			return lastTask, nil
 		}
 		cb.progress(Progress{Kind: ProgressTask, Name: final.Task.Title})
-		res := e.submitTask(ctx, final.Task, prompt, authorize, workDir, accumulatedReasoning.String(), cb)
+		res := e.submitTask(ctx, final.Task, prompt, authorize, scope, accumulatedReasoning.String(), cb)
 		if !res.NeedsApproval && !e.queueTasks {
 			// No rounds left to converge through, so produce the report in
 			// one shot rather than returning raw output.
@@ -1301,23 +1329,28 @@ func gateAuthorized(mode string, sessionAuthorized bool) bool {
 // maps the outcome to a Result. In queue mode the task is Enqueued and the
 // call returns immediately (TaskState "queued"); the queue scheduler starts
 // it when resources allow and the session streams its progress. In inline
-// mode workDir, when set, temporarily pins the core's execution directory (a
-// session worktree); the configured work path is restored afterwards. The
-// schedMu lock keeps concurrent inline submits from interleaving the
-// work-dir swap.
-func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt string, authorized bool, workDir string, reasoning string, cb StreamCallbacks) *Result {
+// mode a per-task WorkDir is persisted before routing and execution, avoiding
+// process-wide scheduler directory swaps between concurrent asks.
+func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt string, authorized bool, scope AskScope, reasoning string, cb StreamCallbacks) *Result {
 	in := toTaskInput(spec)
-	// The ambient project fills in what the classifier did not name. A user who
-	// has entered a project expects their next ask to belong to it without saying
-	// so again — that is what entering a project means — and the project's tree is
-	// where the work happens unless the caller pinned a more specific directory
-	// (a session worktree).
-	if project, dir := e.Project(); project != "" {
+	workDir := scope.WorkDir
+	// Explicit per-request scope wins. Existing CLI callers that omit a project
+	// retain the entered ambient project as a compatibility default.
+	project, projectDir := scope.Project, ""
+	if scope.ambientProjectFallback {
+		project, projectDir = e.Project()
+	}
+	if project != "" {
 		if in.Project == "" {
 			in.Project = project
 		}
-		if workDir == "" && dir != "" {
-			workDir = dir
+		if workDir == "" && projectDir != "" {
+			workDir = projectDir
+		}
+	}
+	if workDir == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			workDir = cwd
 		}
 	}
 	if in.RepoPath == "" && workDir != "" {
@@ -1330,6 +1363,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	// and always satisfies the gate regardless of mode.
 	authorized = gateAuthorized(e.cfg.Approval.NormalizedMode(), authorized)
 	in.Authorized = authorized
+	in.WorkDir = workDir
 	// classify_result is traced inside core's createTask — before routing,
 	// before the queue claims the task — so no emission happens here.
 	in.ClassifyKind = "task"
@@ -1355,10 +1389,6 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	}
 	e.schedMu.Lock()
 	defer e.schedMu.Unlock()
-	if workDir != "" {
-		e.sched.SetWorkDir(workDir)
-		defer e.sched.SetWorkDir(e.cfg.Storage.WorkPath)
-	}
 	// Bridge the core's lifecycle trace events to the caller's progress feed for
 	// the duration of this synchronous run, so a blocking agent execution shows
 	// routing → executing → judging instead of a frozen spinner. schedMu already
@@ -1408,9 +1438,9 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 			return res
 		}
 		if cb.OnApproval(req) {
-			resumed := e.resumeLocked(req.TaskID)
+			resumed := e.resumeLocked(ctx, req.TaskID)
 			sumClient, _ := e.healthyClient()
-			if report, rerr := entry.SummarizeResult(e.schedCtx, sumClient, resumed.TaskTitle, in.Intent, resumed.OK, resumed.ExitCode, resumed.Stdout, resumed.Stderr); rerr == nil {
+			if report, rerr := entry.SummarizeResult(ctx, sumClient, resumed.TaskTitle, in.Intent, resumed.OK, resumed.ExitCode, resumed.Stdout, resumed.Stderr); rerr == nil {
 				resumed.Report = report
 			}
 			return resumed
@@ -1525,14 +1555,10 @@ func numberField(v any) int {
 	return 0
 }
 
-// resumeLocked re-runs an approved review-parked task synchronously and maps
-// the outcome to a Result. The caller must hold schedMu (submitTask does), so
-// any pinned session work dir is still in effect for the re-run.
-func (e *Engine) resumeLocked(taskID string) *Result {
-	task, result, err := e.sched.ResumeApproved(e.schedCtx, taskID)
-	if err != nil {
-		return &Result{Kind: "task", TaskID: taskID, TaskState: "review", Stderr: err.Error(), ExitCode: 1}
-	}
+// resultFromTask maps one persisted task/result pair into the typed result used
+// by every interactive surface. Accepting reviewed work may run without a
+// scheduler, so this mapping deliberately depends only on storage.
+func resultFromTask(task core.Task, result bus.TaskResultPayload) *Result {
 	return &Result{
 		Kind:      "task",
 		TaskID:    task.TaskID,
@@ -1542,28 +1568,106 @@ func (e *Engine) resumeLocked(taskID string) *Result {
 		Stdout:    result.Stdout,
 		Stderr:    result.Stderr,
 		ExitCode:  result.ExitCode,
+		Agent:     result.Agent,
+		Model:     result.Model,
+		Injected:  result.Injected,
 	}
 }
 
-// ResumeApproved re-runs a task the user approved out-of-band (a NeedsApproval
-// Result the caller surfaced and confirmed) with tier-2 consent, on this node,
-// synchronously. It is the counterpart to submitTask's inline OnApproval path
-// for callers — the termios REPL — that prompt after the ask returns rather
-// than from within a callback. workDir pins the re-run's execution directory
-// (the session worktree), matching the original submission.
-func (e *Engine) ResumeApproved(taskID, workDir string) *Result {
+func (e *Engine) acceptReviewedWork(ctx context.Context, taskID string) *Result {
+	store := e.TaskStore()
+	task, err := store.Get(ctx, taskID)
+	if err != nil {
+		return &Result{Kind: "task", TaskID: taskID, TaskState: core.StateReview, Stderr: err.Error(), ExitCode: 1}
+	}
+	result := bus.TaskResultPayload{OK: true}
+	if task.ResultJSON != "" {
+		if err := json.Unmarshal([]byte(task.ResultJSON), &result); err != nil {
+			return &Result{Kind: "task", TaskID: taskID, TaskTitle: task.Title, TaskState: task.State, Stderr: err.Error(), ExitCode: 1}
+		}
+	}
+	if err := store.Approve(ctx, taskID); err != nil {
+		return &Result{Kind: "task", TaskID: taskID, TaskTitle: task.Title, TaskState: task.State, Stderr: err.Error(), ExitCode: 1}
+	}
+	final, err := store.Get(ctx, taskID)
+	if err != nil {
+		return &Result{Kind: "task", TaskID: taskID, TaskTitle: task.Title, TaskState: task.State, Stderr: err.Error(), ExitCode: 1}
+	}
+	result.TaskID = final.TaskID
+	result.AttemptID = final.AttemptID
+	result.State = final.State
+	return resultFromTask(final, result)
+}
+
+// resumeLocked re-runs an approved review-parked task synchronously and maps
+// the outcome to a Result. The caller must hold schedMu (submitTask does), so
+// any pinned session work dir is still in effect for the re-run.
+func (e *Engine) resumeLocked(ctx context.Context, taskID string) *Result {
+	task, result, err := e.sched.ResumeApproved(ctx, taskID)
+	if err != nil {
+		state := core.StateReview
+		if current, getErr := e.sched.TaskStore().Get(context.WithoutCancel(ctx), taskID); getErr == nil {
+			state = current.State
+		}
+		return &Result{Kind: "task", TaskID: taskID, TaskState: state, Stderr: err.Error(), ExitCode: 1}
+	}
+	return resultFromTask(task, result)
+}
+
+// ResumeApproved accepts or re-runs a reviewed task under the caller's context.
+// workDir optionally overrides the persisted task directory for an active
+// originating session; progress is bridged from the same core event stream as
+// initial foreground submission.
+func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb StreamCallbacks) *Result {
+	if e == nil || e.db == nil {
+		return &Result{Kind: "task", TaskID: taskID, TaskState: core.StateFailed, Stderr: "task approval requires an initialized engine", ExitCode: 1}
+	}
+	disposition, err := e.TaskStore().ApprovalDisposition(ctx, taskID)
+	if err != nil {
+		state := core.StateReview
+		if task, getErr := e.TaskStore().Get(context.WithoutCancel(ctx), taskID); getErr == nil {
+			state = task.State
+		}
+		return &Result{Kind: "task", TaskID: taskID, TaskState: state, Stderr: err.Error(), ExitCode: 1}
+	}
+	switch disposition {
+	case core.ApprovalAcceptWork:
+		return e.acceptReviewedWork(ctx, taskID)
+	case core.ApprovalNeedsChangedInput:
+		return &Result{Kind: "task", TaskID: taskID, TaskState: core.StateReview, Stderr: core.ErrApprovalNeedsChangedInput.Error(), ExitCode: 1}
+	case core.ApprovalResumeExecution:
+		// Continue below and execute exactly once under the approval claim.
+	default:
+		return &Result{Kind: "task", TaskID: taskID, TaskState: core.StateReview, Stderr: "unknown approval disposition", ExitCode: 1}
+	}
 	if e.sched == nil {
-		return &Result{Kind: "task", TaskState: "failed", Stderr: "task execution requires a capability card", ExitCode: 1}
+		return &Result{Kind: "task", TaskID: taskID, TaskState: core.StateReview, Stderr: "task execution requires a capability card", ExitCode: 1}
 	}
 	e.schedMu.Lock()
 	defer e.schedMu.Unlock()
 	if workDir != "" {
-		e.sched.SetWorkDir(workDir)
-		defer e.sched.SetWorkDir(e.cfg.Storage.WorkPath)
+		if err := e.sched.TaskStore().SetWorkDir(ctx, taskID, workDir); err != nil {
+			return &Result{Kind: "task", TaskID: taskID, TaskState: "review", Stderr: err.Error(), ExitCode: 1}
+		}
 	}
-	res := e.resumeLocked(taskID)
+	if cb.OnProgress != nil || cb.OnStatus != nil {
+		store := e.sched.TaskStore()
+		store.SetOnEvent(func(id, typ string, data any) {
+			if id != taskID {
+				return
+			}
+			if p, ok := progressForEvent(typ, data); ok {
+				cb.progress(p)
+			}
+		})
+		defer store.SetOnEvent(nil)
+	}
+	res := e.resumeLocked(ctx, taskID)
+	if ctx.Err() != nil {
+		return res
+	}
 	sumClient, _ := e.healthyClient()
-	if report, rerr := entry.SummarizeResult(context.Background(), sumClient, res.TaskTitle, "", res.OK, res.ExitCode, res.Stdout, res.Stderr); rerr == nil {
+	if report, rerr := entry.SummarizeResult(ctx, sumClient, res.TaskTitle, "", res.OK, res.ExitCode, res.Stdout, res.Stderr); rerr == nil {
 		res.Report = report
 	}
 	return res

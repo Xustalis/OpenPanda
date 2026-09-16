@@ -3,6 +3,7 @@ package askengine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -176,6 +177,162 @@ func TestTaskSubmitToolCallQueued(t *testing.T) {
 	_ = res
 }
 
+func TestTaskSubmitTier2ReturnsApprovalAndPersistsWorkDir(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		w.Header().Set("content-type", "application/json")
+		var resp map[string]any
+		if n == 1 {
+			resp = map[string]any{
+				"content": []map[string]any{{
+					"type": "tool_use", "id": "toolu_tier2", "name": "task_submit",
+					"input": map[string]any{"title": "push", "target": "push branch", "abilities": []string{"git:push"}},
+				}},
+				"usage": map[string]int{"input_tokens": 8, "output_tokens": 6},
+			}
+		} else {
+			resp = anthropicText("needs approval")
+		}
+		b, _ := json.Marshal(resp)
+		_, _ = w.Write(b)
+	})
+	e.queueTasks = false
+	workDir := t.TempDir()
+	res, err := e.AskTurns(context.Background(), nil, "push this branch", workDir, false, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	if res.Kind != "task" || res.TaskID == "" || res.TaskState != core.StateReview || !res.NeedsApproval || res.Approval == nil {
+		t.Fatalf("res = %+v, want typed review approval", res)
+	}
+	if res.Approval.TaskID != res.TaskID {
+		t.Fatalf("approval task = %q, want %q", res.Approval.TaskID, res.TaskID)
+	}
+	stored, err := e.TaskStore().Get(context.Background(), res.TaskID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if stored.WorkDir != workDir {
+		t.Fatalf("stored workdir = %q, want %q", stored.WorkDir, workDir)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("model calls = %d, want approval returned before prose convergence", calls)
+	}
+}
+
+func TestCompletedNativeTaskSubmitPreservesTaskKindAfterConvergence(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		w.Header().Set("content-type", "application/json")
+		var resp map[string]any
+		if n == 1 {
+			resp = map[string]any{
+				"content": []map[string]any{{
+					"type": "tool_use", "id": "toolu_native", "name": "task_submit",
+					"input": map[string]any{"title": "system info", "target": "read system info", "abilities": []string{"sys:info"}},
+				}},
+				"usage": map[string]int{"input_tokens": 8, "output_tokens": 6},
+			}
+		} else {
+			resp = anthropicText("system information read")
+		}
+		b, _ := json.Marshal(resp)
+		_, _ = w.Write(b)
+	})
+	e.queueTasks = false
+	res, err := e.Ask(context.Background(), "read system info", false)
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	if res.Kind != "task" || res.TaskID == "" || res.TaskState != core.StateDone || !res.OK {
+		t.Fatalf("res = %+v, want completed typed task", res)
+	}
+	if res.Answer != "system information read" {
+		t.Fatalf("answer = %q", res.Answer)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("model calls = %d, want submit plus convergence", calls)
+	}
+}
+
+func TestResumeApprovedAcceptsCompletedWorkWithoutScheduler(t *testing.T) {
+	e, _ := newMgmtTestEngine(t)
+	store := e.TaskStore()
+	ctx := context.Background()
+	task, err := store.Create(ctx, "", "proj", "review completed work", "test-node", []string{"test-node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, step := range []func() error{
+		func() error { return store.Queue(ctx, task.TaskID, "test-node") },
+		func() error { return store.Dispatch(ctx, task.TaskID, "test-node", "test-node") },
+		func() error { return store.Accept(ctx, task.TaskID, "test-node") },
+	} {
+		if err := step(); err != nil {
+			t.Fatalf("drive task: %v", err)
+		}
+	}
+	if err := store.PauseWithResult(ctx, task.TaskID, "test-node", map[string]any{
+		"task_id": task.TaskID, "state": core.StateReview, "ok": true,
+		"stdout": "kept output", "stderr": "kept warning", "exit_code": 7,
+		"agent": "codex", "model": "model-x", "injected": true,
+	}); err != nil {
+		t.Fatalf("pause with result: %v", err)
+	}
+	e.sched = nil
+
+	res := e.ResumeApproved(ctx, task.TaskID, "", StreamCallbacks{})
+	if res.TaskState != core.StateDone || !res.OK {
+		t.Fatalf("res = %+v, want accepted done task", res)
+	}
+	if res.Stdout != "kept output" || res.Stderr != "kept warning" || res.ExitCode != 7 ||
+		res.Agent != "codex" || res.Model != "model-x" || !res.Injected {
+		t.Fatalf("stored result attribution lost: %+v", res)
+	}
+}
+
+func TestResumeApprovedAcceptsCompletedWorkWithEmptyResultJSON(t *testing.T) {
+	e, _ := newMgmtTestEngine(t)
+	store := e.TaskStore()
+	ctx := context.Background()
+	task, err := store.Create(ctx, "", "proj", "legacy review task", "test-node", []string{"test-node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, step := range []func() error{
+		func() error { return store.Queue(ctx, task.TaskID, "test-node") },
+		func() error { return store.Dispatch(ctx, task.TaskID, "test-node", "test-node") },
+		func() error { return store.Accept(ctx, task.TaskID, "test-node") },
+		func() error {
+			return store.PauseWithDisposition(ctx, task.TaskID, "test-node", "manual signoff", core.ApprovalAcceptWork)
+		},
+	} {
+		if err := step(); err != nil {
+			t.Fatalf("drive task: %v", err)
+		}
+	}
+	e.sched = nil
+
+	res := e.ResumeApproved(ctx, task.TaskID, "", StreamCallbacks{})
+	if res.TaskState != core.StateDone || !res.OK {
+		t.Fatalf("res = %+v, want accepted done task with OK=true on empty result", res)
+	}
+}
+
 // TestQueueAskKeepsQueueTools guards the roster's other side: a queue
 // question must still see the taskq_* family — and task_submit stays offered
 // there too (no intent gating anywhere).
@@ -289,5 +446,85 @@ func TestDSMLToolFreeRoundStripped(t *testing.T) {
 	}
 	if res.Answer == "" {
 		t.Fatal("empty result")
+	}
+}
+
+func countTasksWithTitlePrefix(t *testing.T, e *Engine, prefix string) int {
+	t.Helper()
+	var count int
+	if err := e.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM tasks WHERE title LIKE ?`, prefix+"%").Scan(&count); err != nil {
+		t.Fatalf("count tasks: %v", err)
+	}
+	return count
+}
+
+func TestTaskSubmitBudgetRefusesFourthBeforeExecution(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		w.Header().Set("content-type", "application/json")
+		var resp map[string]any
+		if n <= 4 {
+			resp = map[string]any{
+				"content": []map[string]any{{
+					"type": "tool_use", "id": fmt.Sprintf("toolu_budget_%d", n), "name": "task_submit",
+					"input": map[string]any{"title": fmt.Sprintf("tool-budget-%d", n), "target": "read system info", "abilities": []string{"sys:info"}},
+				}},
+				"usage": map[string]int{"input_tokens": 8, "output_tokens": 6},
+			}
+		} else {
+			resp = anthropicText("budget reached")
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+	e.queueTasks = false
+	res, err := e.Ask(context.Background(), "run several checks", true)
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	if got := countTasksWithTitlePrefix(t, e, "tool-budget-"); got != 3 {
+		t.Fatalf("executed tasks = %d, want exactly 3", got)
+	}
+	if res.Kind != "task" || res.TaskID == "" {
+		t.Fatalf("res = %+v, want latest completed task", res)
+	}
+}
+
+func TestTaskDirectiveBudgetRefusesFourthBeforeExecution(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("content-type", "application/json")
+		if !strings.Contains(string(body), `"tools"`) {
+			_ = json.NewEncoder(w).Encode(anthropicText("task summary"))
+			return
+		}
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n <= 4 {
+			taskJSON := fmt.Sprintf(`{"kind":"task","task":{"title":"directive-budget-%d","context_type":"command","requires":{"abilities":["sys:info"]},"spec":{"scope":"","target":"read system info","constraints":[],"success_definition":"done"},"complexity":0.1,"risk":"low","resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short"}}}`, n)
+			_ = json.NewEncoder(w).Encode(anthropicText(taskJSON))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(anthropicText("budget reached"))
+	})
+	e.queueTasks = false
+	res, err := e.Ask(context.Background(), "run several checks", true)
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	if got := countTasksWithTitlePrefix(t, e, "directive-budget-"); got != 3 {
+		t.Fatalf("executed tasks = %d, want exactly 3", got)
+	}
+	if res.Kind != "task" || res.TaskID == "" {
+		t.Fatalf("res = %+v, want latest completed task", res)
 	}
 }
