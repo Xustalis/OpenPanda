@@ -1028,7 +1028,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				c.logTask(task.Title, false)
 				trackTask(c, task.Project, required, task.Title, false)
 				return bus.TaskResultPayload{
-					TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: false, ExitCode: 1, Stderr: msg,
+					TaskID: taskID, AttemptID: attemptID, State: StateReview,
+					ApprovalDisposition: string(ApprovalNeedsChangedInput),
+					OK:                  false, ExitCode: 1, Stderr: msg,
 					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}, nil
 			}
@@ -1050,7 +1052,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			c.logTask(task.Title, false)
 			trackTask(c, task.Project, required, task.Title, false)
 			return bus.TaskResultPayload{
-				TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: 0, Stdout: res.Stdout,
+				TaskID: taskID, AttemptID: attemptID, State: StateReview,
+				ApprovalDisposition: string(ApprovalAcceptWork),
+				OK:                  true, ExitCode: 0, Stdout: res.Stdout,
 				Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 			}, nil
 		}
@@ -1079,7 +1083,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				c.logTask(task.Title, false)
 				trackTask(c, task.Project, required, task.Title, false)
 				return bus.TaskResultPayload{
-					TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: false, ExitCode: res.ExitCode, Stderr: msg,
+					TaskID: taskID, AttemptID: attemptID, State: StateReview,
+					ApprovalDisposition: string(ApprovalNeedsChangedInput),
+					OK:                  false, ExitCode: res.ExitCode, Stderr: msg,
 					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}, nil
 			}
@@ -1097,7 +1103,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 					}
 					return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
 				}
-				if err := c.store.Review(ctx, taskID, c.nodeID, res.Stderr); err != nil {
+				if err := c.store.ReviewWithDisposition(ctx, taskID, c.nodeID, res.Stderr, ApprovalResumeExecution); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 						return bus.TaskResultPayload{}, ErrCancelled
 					}
@@ -1106,7 +1112,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				c.logTask(task.Title, false)
 				trackTask(c, task.Project, required, task.Title, false)
 				return bus.TaskResultPayload{
-					TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
+					TaskID: taskID, AttemptID: attemptID, State: StateReview,
+					ApprovalDisposition: string(ApprovalResumeExecution),
+					OK:                  false, ExitCode: res.ExitCode, Stderr: res.Stderr,
 					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}, nil
 			}
@@ -1225,15 +1233,16 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		c.logTask(task.Title, false)
 		trackTask(c, task.Project, required, task.Title, false)
 		return bus.TaskResultPayload{
-			TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
+			TaskID: taskID, AttemptID: attemptID, State: StateReview,
+			ApprovalDisposition: string(ApprovalAcceptWork),
+			OK:                  true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 		}, nil
 	}
 
 	// Terminal routing. An accepted irreversible (Tier-2) agent task whose run
-	// was already consented to — via --authorize at submit, or by approving the
-	// refusal's review, which re-queues the task carrying consent — completes
-	// directly: that consent is the single explicit approval, and a second
+	// was already consented to — via --authorize at submit, or by approving and
+	// resuming the refusal's review — completes directly: that consent is the single explicit approval, and a second
 	// sign-off on the finished result would add friction without adding
 	// information, since the side effects already happened under it. Only the
 	// anomalous case — a Tier-2 agent result that reached this branch without
@@ -1262,7 +1271,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			c.logTask(task.Title, true)
 			trackTask(c, task.Project, required, task.Title, true)
 			return bus.TaskResultPayload{
-				TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
+				TaskID: taskID, AttemptID: attemptID, State: StateReview,
+				ApprovalDisposition: string(ApprovalAcceptWork),
+				OK:                  true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 				Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 			}, nil
 		}
@@ -1336,9 +1347,8 @@ func taskToolsPolicy(specJSON string) string {
 // degrading skills into index lines.
 const agentPromptBudget = 128000
 
-// agentOutputRider tells the agent its final message is user-facing (and may
-// be spoken), so it must read as a direct answer, not an exploration log.
-const agentOutputRider = "\n\n输出要求：最后用简洁的自然语言直接给出结果（做了什么、答案是什么）。不要罗列你的执行步骤、中间输出或思考过程；不要使用表情符号；标题/表格/代码块仅在内容确有需要时使用。"
+// agentOutputRider instructs the agent to produce substantive, well-structured results.
+const agentOutputRider = "\n\n输出要求：请直接给出详实明确的执行或分析结果。对分析/梳理类任务，请提供清晰结构化的结论与待办清单；对操作类任务，说明具体修改与产出；不要使用不必要的表情符号。"
 
 // buildAgentPrompt assembles the full agent execution prompt — the memory
 // file manifest (A3 selective loading) plus the task intent plus any matched
@@ -1785,7 +1795,7 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			c.logger.Warn("complete from result", "task", p.TaskID, "err", err)
 		}
 	case StateReview:
-		if err := c.store.ReviewFromRemote(ctx, p.TaskID, c.nodeID, p); err != nil {
+		if err := c.store.ReviewFromRemote(ctx, p.TaskID, c.nodeID, p, parseApprovalDisposition(p.ApprovalDisposition)); err != nil {
 			c.logger.Warn("review from result", "task", p.TaskID, "err", err)
 		}
 	case StateFailed:
@@ -1981,7 +1991,8 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 		c.logger.Debug("resume for unknown task", "task", p.TaskID, "from", env.From)
 		return
 	}
-	if parent := scheduler.Predecessor(t.Chain, c.nodeID); env.From != parent {
+	parent := scheduler.Predecessor(t.Chain, c.nodeID)
+	if !scheduler.SameRuntimeIdentity(env.From, parent) {
 		c.logger.Warn("resume from non-delegator ignored", "task", p.TaskID,
 			"from", env.From, "parent", parent)
 		return
@@ -1997,11 +2008,12 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 		// re-run) cannot take the consent, and a failed result is the one
 		// state every delegator path already renders.
 		c.logger.Warn("resume for task not in review", "task", p.TaskID, "state", t.State)
-		c.relayToParent(ctx, bus.MsgTaskResult, t.Chain, bus.TaskResultPayload{
+		result := bus.TaskResultPayload{
 			TaskID: t.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,
 			Stderr: "resume: task state is " + t.State,
 			Chain:  t.Chain,
-		})
+		}
+		c.replyResult(ctx, env, result)
 		return
 	}
 	// Re-run asynchronously so the message loop stays responsive to
@@ -2029,8 +2041,21 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 				Chain:  t.Chain,
 			}
 		}
-		c.relayToParent(ctx, bus.MsgTaskResult, t.Chain, result)
+		c.replyResult(context.WithoutCancel(ctx), env, result)
 	}()
+}
+
+// replyResult returns a task_resume outcome to the authenticated requester that
+// sent this specific request, not to the historical predecessor in the task's
+// chain. That predecessor may be a dead ephemeral participant after restart.
+// Failed delivery uses the normal result outbox keyed by the live requester.
+func (c *Core) replyResult(ctx context.Context, env bus.Envelope, result bus.TaskResultPayload) {
+	if err := c.reply(ctx, env, bus.MsgTaskResult, result); err != nil {
+		c.logger.Warn("reply task result", "task", result.TaskID, "to", env.From, "err", err)
+		c.outboxPersist(ctx, env.From, result)
+		return
+	}
+	c.outboxDrop(ctx, env.From, result.TaskID)
 }
 
 // reply sends a message back to the sender of env.

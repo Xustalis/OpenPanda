@@ -36,6 +36,9 @@ func TestManualTaskParksForReview(t *testing.T) {
 	if payload.State != StateReview {
 		t.Fatalf("result payload state = %s, want %s", payload.State, StateReview)
 	}
+	if payload.ApprovalDisposition != string(ApprovalAcceptWork) {
+		t.Fatalf("result disposition = %q, want %q", payload.ApprovalDisposition, ApprovalAcceptWork)
+	}
 
 	got, err := c.store.Get(ctx, tk.TaskID)
 	if err != nil {

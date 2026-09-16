@@ -19,6 +19,19 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
+func TestTaskDispatchCaptureTakeClears(t *testing.T) {
+	want := &Result{Kind: "task", TaskID: "task-1"}
+	var capture taskDispatchCapture
+	capture.set(want)
+
+	if got := capture.take(); got != want {
+		t.Fatalf("first take = %p, want %p", got, want)
+	}
+	if got := capture.take(); got != nil {
+		t.Fatalf("second take = %+v, want nil after capture was cleared", got)
+	}
+}
+
 func TestSplitCommand(t *testing.T) {
 	cases := []struct {
 		in   string

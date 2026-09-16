@@ -45,6 +45,18 @@ type Session struct {
 	Project       string            `json:"project,omitempty"`
 	Turns         []Turn            `json:"turns"`
 	AgentSessions map[string]string `json:"agent_sessions,omitempty"`
+	Operation     *Operation        `json:"operation,omitempty"`
+}
+
+// Operation is the latest durable ask operation for a session. It lets a
+// client reconnect after its SSE response disappears and observe the exact
+// generation it started instead of inferring completion from transcript shape.
+type Operation struct {
+	ID        string    `json:"id"`
+	Status    string    `json:"status"`
+	TaskID    string    `json:"task_id,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Store persists sessions as JSON files under root (created on demand).
@@ -144,6 +156,43 @@ func (s *Store) AppendTurn(id string, turn Turn) (*Session, error) {
 		return nil, err
 	}
 	return sess, nil
+}
+
+// SetOperation replaces the session's current durable operation snapshot.
+// Callers must pass the exact operation id when updating an existing snapshot;
+// a stale completion can therefore never overwrite a newer generation.
+func (s *Store) SetOperation(id string, op Operation) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return false, err
+	}
+	if sess.Operation != nil && sess.Operation.ID != op.ID {
+		return false, nil
+	}
+	op.UpdatedAt = time.Now()
+	sess.Operation = &op
+	sess.UpdatedAt = op.UpdatedAt
+	if err := s.save(sess); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// StartOperation installs a new operation generation unconditionally. A later
+// SetOperation must carry this id, which gives durable compare-and-set behavior.
+func (s *Store) StartOperation(id string, op Operation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return err
+	}
+	op.UpdatedAt = time.Now()
+	sess.Operation = &op
+	sess.UpdatedAt = op.UpdatedAt
+	return s.save(sess)
 }
 
 // SetWorktree records the worktree path/branch on a session.

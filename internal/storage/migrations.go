@@ -39,6 +39,22 @@ var migrations = []Migration{
 	{Version: 14, Name: "add_cancel_outbox", Apply: migrateV14},
 	{Version: 15, Name: "add_projects_and_settings", Apply: migrateV15},
 	{Version: 16, Name: "add_delegation_metrics_cost", Apply: migrateV16},
+	{Version: 17, Name: "add_task_approval_disposition", Apply: migrateV17},
+}
+
+// migrateV17 persists why a task entered review. Approval behavior must survive
+// restarts and cannot be reconstructed safely from free-form event text: only
+// an explicit authorization refusal may be resumed, while completed work may
+// be accepted and deterministic failures require changed input.
+func migrateV17(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	if err := addColumnIfMissingTx(tx, "tasks", "approval_disposition", "TEXT"); err != nil {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "tasks", "operation_decision_json", "TEXT")
 }
 
 // migrateV16 adds cost to delegation_metrics for token-cost accounting.

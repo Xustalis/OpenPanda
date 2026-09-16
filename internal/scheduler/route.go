@@ -48,16 +48,45 @@ func IsSelfRow(id, self string) bool {
 	if id == self {
 		return true
 	}
-	i := strings.LastIndex(self, "-")
-	if i <= 0 || len(self)-i-1 != 8 {
+	base, ok := EphemeralBase(self)
+	return ok && id == base
+}
+
+// SameRuntimeIdentity reports whether two authenticated routing participants
+// belong to the same configured runtime node. Unlike IsSelfRow, it is symmetric
+// and accepts two ephemeral siblings; it is intentionally reserved for narrow
+// restart-continuity checks such as approval ownership and task_resume.
+func SameRuntimeIdentity(a, b string) bool {
+	if a == b {
+		return true
+	}
+	aBase, aEphemeral := EphemeralBase(a)
+	bBase, bEphemeral := EphemeralBase(b)
+	switch {
+	case aEphemeral && bEphemeral:
+		return aBase == bBase
+	case aEphemeral:
+		return aBase == b
+	case bEphemeral:
+		return bBase == a
+	default:
 		return false
 	}
-	for _, c := range self[i+1:] {
+}
+
+// EphemeralBase validates and strips the random suffix produced by
+// core.EphemeralNodeID. Stable names are returned unchanged with ok=false.
+func EphemeralBase(id string) (base string, ok bool) {
+	i := strings.LastIndex(id, "-")
+	if i <= 0 || len(id)-i-1 != 8 {
+		return id, false
+	}
+	for _, c := range id[i+1:] {
 		if !isHexDigit(c) {
-			return false
+			return id, false
 		}
 	}
-	return id == self[:i]
+	return id[:i], true
 }
 
 func isHexDigit(c rune) bool {

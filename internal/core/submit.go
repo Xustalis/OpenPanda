@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -31,12 +32,15 @@ const maxPersistedRetries = 5
 // mirrors the wire TaskDelegatePayload but originates locally rather than over
 // the bus. The caller (cmd/panda) owns the translation from entry.TaskSpec.
 type TaskInput struct {
-	Title         string
-	Project       string
-	ContextType   string
-	ContextHash   string // pre-packed snapshot hash; empty means "pack if applicable"
-	ContextLevel  string // pointer|summary|full; empty is derived by packContext
-	RepoPath      string // file-type repo root for auto-packing (MVP: CLI not yet wired)
+	Title        string
+	Project      string
+	ContextType  string
+	ContextHash  string // pre-packed snapshot hash; empty means "pack if applicable"
+	ContextLevel string // pointer|summary|full; empty is derived by packContext
+	RepoPath     string // file-type repo root for auto-packing (MVP: CLI not yet wired)
+	// WorkDir pins execution to the originating workspace. It is persisted before
+	// routing/execution so concurrent callers never swap the Core's ambient work dir.
+	WorkDir       string
 	Intent        string
 	SpecJSON      string
 	Requires      []string
@@ -232,10 +236,17 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			c.forwardCancelDownstream(ctx, t.TaskID)
 			return t, bus.TaskResultPayload{}, fmt.Errorf("delegation timeout waiting for %s", decision.Target)
 		case <-ctx.Done():
-			// The caller walked away: the downstream copy must not keep running
-			// unattended. The cancel send cannot use the done ctx.
-			c.forwardCancelDownstream(context.WithoutCancel(ctx), t.TaskID)
-			return t, bus.TaskResultPayload{}, ctx.Err()
+			// The caller walked away: terminalize the origin and propagate the same
+			// cancellation through every downstream copy under a live cleanup context.
+			cleanup := context.WithoutCancel(ctx)
+			if _, cancelErr := c.CancelTree(cleanup, t.TaskID); cancelErr != nil {
+				c.logger.Warn("cancel delegated task", "task", t.TaskID, "err", cancelErr)
+			}
+			final, getErr := c.store.Get(cleanup, t.TaskID)
+			if getErr != nil {
+				return t, bus.TaskResultPayload{}, getErr
+			}
+			return final, bus.TaskResultPayload{TaskID: final.TaskID, AttemptID: final.AttemptID, State: final.State}, ctx.Err()
 		}
 	default:
 		return t, bus.TaskResultPayload{}, fmt.Errorf("no capability: %s", decision.Reason)
@@ -254,6 +265,12 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 	// execute/run read it from the DB, so the wire payload never needs to carry it.
 	if err := c.store.SetAuthorized(ctx, t.TaskID, in.Authorized); err != nil {
 		return Task{}, "", "", fmt.Errorf("set authorized: %w", err)
+	}
+	if in.WorkDir != "" {
+		if err := c.store.SetWorkDir(ctx, t.TaskID, in.WorkDir); err != nil {
+			return Task{}, "", "", fmt.Errorf("set work dir: %w", err)
+		}
+		t.WorkDir = in.WorkDir
 	}
 	hash, level, err := c.packContext(ctx, in)
 	if err != nil {
@@ -302,39 +319,78 @@ func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.Ta
 //
 // The task must be in review; its intent and requirements are read from the
 // persisted row (the entry model's distilled intent, plus the appended user
-// prompt, both stored at submit). A concurrent scheduler claiming the
-// just-approved task is tolerated: Dispatch loses the CAS and we report the
-// current row rather than double-running.
+// prompt, both stored at submit). Approval and dispatch are guarded state
+// transitions: one concurrent approver wins, while every other caller gets a
+// conflict instead of starting the agent a second time.
 func (c *Core) ResumeApproved(ctx context.Context, taskID string) (Task, bus.TaskResultPayload, error) {
 	cur, err := c.store.Get(ctx, taskID)
 	if err != nil {
 		return Task{}, bus.TaskResultPayload{}, err
 	}
-	if cur.State != StateReview {
-		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume approved: task %s state=%s, want %s", taskID, cur.State, StateReview)
+	disposition, err := c.store.ApprovalDisposition(ctx, taskID)
+	if err != nil {
+		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume approved: %w", err)
+	}
+	switch disposition {
+	case ApprovalAcceptWork:
+		result := bus.TaskResultPayload{OK: true}
+		if cur.ResultJSON != "" {
+			if err := json.Unmarshal([]byte(cur.ResultJSON), &result); err != nil {
+				return cur, bus.TaskResultPayload{}, fmt.Errorf("approve: decode stored result: %w", err)
+			}
+		}
+		if err := c.store.Approve(ctx, taskID); err != nil {
+			return cur, bus.TaskResultPayload{}, fmt.Errorf("approve: %w", err)
+		}
+		final, err := c.store.Get(ctx, taskID)
+		result.TaskID = final.TaskID
+		result.AttemptID = final.AttemptID
+		result.State = final.State
+		return final, result, err
+	case ApprovalNeedsChangedInput:
+		return cur, bus.TaskResultPayload{TaskID: cur.TaskID, AttemptID: cur.AttemptID, State: cur.State},
+			fmt.Errorf("resume approved: %w", ErrApprovalNeedsChangedInput)
+	case ApprovalResumeExecution:
+		// Continue below and claim the execution exactly once.
+	default:
+		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume approved: unknown disposition %q", disposition)
 	}
 	// A remote executor's refusal parks both copies in review; the consent —
 	// and therefore the re-run — belongs to the executor.
 	if target, terr := c.store.DispatchTarget(ctx, taskID); terr == nil &&
-		target != "" && !scheduler.IsSelfRow(target, c.nodeID) {
+		target != "" && !scheduler.SameRuntimeIdentity(target, c.nodeID) {
 		return c.resumeRemote(ctx, cur, target)
 	}
-	// Approve grants consent (authorized=1) and moves review -> queued.
-	if err := c.store.Approve(ctx, taskID); err != nil {
-		return cur, bus.TaskResultPayload{}, fmt.Errorf("approve: %w", err)
+	// Claim consent and foreground execution atomically. The persisted owner may
+	// be an earlier ephemeral participant of this runtime node after a restart;
+	// no other logical node may take it over.
+	if !scheduler.SameRuntimeIdentity(cur.OwnerNode, c.nodeID) {
+		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume approved: task owner %s does not match node %s", cur.OwnerNode, c.nodeID)
 	}
-	// The parking already reset the retry budget; keep it fresh for this run.
-	c.reviewReset(taskID)
-	if err := c.store.Dispatch(ctx, taskID, c.nodeID, c.nodeID); err != nil {
-		// A queue scheduler sharing this store may have claimed the queued row
-		// first; leave the run to it and report the current state.
+	if err := c.store.ClaimApproved(ctx, taskID, cur.OwnerNode, c.nodeID, c.nodeID); err != nil {
 		final, gerr := c.store.Get(ctx, taskID)
 		if gerr != nil {
 			return cur, bus.TaskResultPayload{}, gerr
 		}
-		return final, bus.TaskResultPayload{}, nil
+		return final, bus.TaskResultPayload{}, fmt.Errorf("resume approved: claim task: %w", err)
 	}
+	// The parking already reset the retry budget; keep it fresh for this run.
+	c.reviewReset(taskID)
 	result, err := c.run(ctx, taskID, cur.Intent, cur.Requires)
+	if ctx.Err() != nil {
+		// Cancelling the foreground approval must terminate the task, not leave
+		// the already-claimed row running after its caller and TUI stream are gone.
+		// Use a live cleanup context because the caller context is already done.
+		cleanup := context.WithoutCancel(ctx)
+		if _, cancelErr := c.CancelTree(cleanup, taskID); cancelErr != nil {
+			c.logger.Warn("cancel approved task", "task", taskID, "err", cancelErr)
+		}
+		final, getErr := c.store.Get(cleanup, taskID)
+		if getErr != nil {
+			return cur, result, getErr
+		}
+		return final, result, ctx.Err()
+	}
 	return c.retryLoop(ctx, taskID, cur.Intent, cur.Requires, result, err)
 }
 
@@ -348,21 +404,19 @@ func (c *Core) ResumeApproved(ctx context.Context, taskID string) (Task, bus.Tas
 // not by the timeout alone.
 func (c *Core) resumeRemote(ctx context.Context, cur Task, target string) (Task, bus.TaskResultPayload, error) {
 	taskID := cur.TaskID
-	// Approve's resume branch: review -> queued carrying authorized=1. The
-	// refusal-sentinel detection in reviewFromFailure recognizes the remote
-	// park; without it Approve would accept the never-executed work as done.
-	if err := c.store.Approve(ctx, taskID); err != nil {
-		return cur, bus.TaskResultPayload{}, fmt.Errorf("approve: %w", err)
+	// Claim consent and the remote dispatch atomically so the origin cannot be
+	// stranded in an unscheduled queued state between approval and forwarding.
+	// A restarted engine may replace an earlier ephemeral sibling, but a different
+	// logical node cannot claim the persisted origin copy.
+	if !scheduler.SameRuntimeIdentity(cur.OwnerNode, c.nodeID) {
+		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume approved: task owner %s does not match node %s", cur.OwnerNode, c.nodeID)
 	}
-	if err := c.store.Dispatch(ctx, taskID, c.nodeID, target); err != nil {
-		// A queue scheduler sharing this store may have claimed the queued row
-		// first (Approve re-arms scheduled=1); leave the run to it — it
-		// re-routes the task, carrying the consent just granted.
+	if err := c.store.ClaimApproved(ctx, taskID, cur.OwnerNode, c.nodeID, target); err != nil {
 		final, gerr := c.store.Get(ctx, taskID)
 		if gerr != nil {
 			return cur, bus.TaskResultPayload{}, gerr
 		}
-		return final, bus.TaskResultPayload{}, nil
+		return final, bus.TaskResultPayload{}, fmt.Errorf("resume approved: claim remote task: %w", err)
 	}
 	// Refresh the lease so the timeout monitor bounds the wait on a silent
 	// executor, and register a waiter so the inbound task_result unblocks it.
@@ -407,8 +461,15 @@ func (c *Core) resumeRemote(ctx context.Context, cur Task, target string) (Task,
 		c.forwardCancelDownstream(ctx, taskID)
 		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume timeout waiting for %s", target)
 	case <-ctx.Done():
-		c.forwardCancelDownstream(context.WithoutCancel(ctx), taskID)
-		return cur, bus.TaskResultPayload{}, ctx.Err()
+		cleanup := context.WithoutCancel(ctx)
+		if _, cancelErr := c.CancelTree(cleanup, taskID); cancelErr != nil {
+			c.logger.Warn("cancel remote approved task", "task", taskID, "err", cancelErr)
+		}
+		final, getErr := c.store.Get(cleanup, taskID)
+		if getErr != nil {
+			return cur, bus.TaskResultPayload{}, getErr
+		}
+		return final, bus.TaskResultPayload{}, ctx.Err()
 	}
 }
 
@@ -446,7 +507,7 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 		// straight to review with the actionable reason instead of burning
 		// the retry budget (and re-spawning nothing) first.
 		if commander.IsAuthorizationRefusal(result.Stderr) {
-			if rerr := c.store.Review(ctx, taskID, c.nodeID, result.Stderr); rerr != nil {
+			if rerr := c.store.ReviewWithDisposition(ctx, taskID, c.nodeID, result.Stderr, ApprovalResumeExecution); rerr != nil {
 				c.logger.Warn("review task", "task", taskID, "err", rerr)
 			}
 			c.reviewReset(taskID)

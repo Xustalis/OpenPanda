@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/util"
@@ -126,6 +127,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	var intent, spec, result sql.NullString
 	var lease sql.NullInt64
 	var contextType, contextHash, risk, resource, requiresJSON sql.NullString
+	var approvalDisposition, operationDecision sql.NullString
 	var complexity sql.NullFloat64
 	var sessionID, resourceKeysJSON, workDir sql.NullString
 	var scheduled int
@@ -135,7 +137,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 		Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State, &t.OwnerNode,
 			&t.AttemptID, &t.StateVersion, &chainJSON, &intent, &spec,
 			&result, &contextType, &contextHash, &complexity, &risk, &resource,
-			&requiresJSON, &lease,
+			&requiresJSON, &approvalDisposition, &operationDecision, &lease,
 			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt)
@@ -155,6 +157,8 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	t.Complexity = complexity.Float64
 	t.Risk = risk.String
 	t.ResourceJSON = resource.String
+	t.ApprovalDisposition = parseApprovalDisposition(approvalDisposition.String)
+	t.OperationDecisionJSON = operationDecision.String
 	t.LeaseExpires = lease.Int64
 	t.SessionID = sessionID.String
 	t.WorkDir = workDir.String
@@ -170,6 +174,13 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 // Returns ErrConflict on state/version/owner mismatch, ErrInvalid on an
 // illegal transition.
 func (s *TaskStore) transition(ctx context.Context, taskID, from, to, owner, event string, data any) error {
+	return s.transitionToReview(ctx, taskID, from, to, owner, event, data, "")
+}
+
+// transitionToReview is transition with an explicit review disposition. Every
+// new transition into review must provide one; an empty value remains reserved
+// for legacy rows that predate the typed review protocol.
+func (s *TaskStore) transitionToReview(ctx context.Context, taskID, from, to, owner, event string, data any, disposition ApprovalDisposition) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
@@ -183,22 +194,23 @@ func (s *TaskStore) transition(ctx context.Context, taskID, from, to, owner, eve
 	if !CanTransition(from, to) {
 		return fmt.Errorf("%w: %s -> %s", ErrIllegal, from, to)
 	}
-	if err := s.applyCAS(ctx, taskID, from, to, owner, cur.AttemptID, event, data, nil); err != nil {
-		return err
-	}
 	if to == StateReview {
-		// A task paused for human review has no lease pressure: clear the
-		// deadline so a stale timestamp can never fire later (P1-8).
-		if _, err := s.db.ExecContext(ctx,
-			`UPDATE tasks SET lease_expires_at=NULL WHERE task_id=?`, taskID); err != nil {
-			s.logger.Warn("clear lease on review", "task", taskID, "err", err)
+		if !validApprovalDisposition(disposition) {
+			return fmt.Errorf("invalid approval disposition %q", disposition)
 		}
+		if err := s.applyReviewCAS(ctx, taskID, from, owner, cur.AttemptID, event, data, nil, disposition); err != nil {
+			return err
+		}
+	} else if err := s.applyCAS(ctx, taskID, from, to, owner, cur.AttemptID, event, data, nil); err != nil {
+		return err
 	}
 	s.logger.Debug("task transition", "task", taskID, "from", from, "to", to, "owner", owner)
 	if to == StateReview {
-		cur.State = StateReview
-		cur.UpdatedAt = s.now()
-		s.notifyReview(cur)
+		updated, err := s.Get(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		s.notifyReview(updated)
 	}
 	return nil
 }
@@ -348,6 +360,59 @@ func (s *TaskStore) applyState(ctx context.Context, taskID, from, to, owner, att
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return fmt.Errorf("%w: task %s state=%s", ErrConflict, taskID, from)
+		}
+		return s.recordEventTx(ctx, tx, taskID, event, dataJSON)
+	})
+}
+
+func validApprovalDisposition(disposition ApprovalDisposition) bool {
+	switch disposition {
+	case ApprovalAcceptWork, ApprovalResumeExecution, ApprovalNeedsChangedInput:
+		return true
+	default:
+		return false
+	}
+}
+
+// applyReviewCAS atomically parks locally-owned work in review, persists how a
+// later approval must behave, clears lease pressure, stores any produced result,
+// and appends the review event.
+func (s *TaskStore) applyReviewCAS(ctx context.Context, taskID, from, owner, attemptID, event string, data, result any, disposition ApprovalDisposition) error {
+	return s.applyReview(ctx, taskID, from, owner, attemptID, event, data, result, disposition, true)
+}
+
+// applyReviewState is the remote-result counterpart: ownership may move back to
+// the delegator, but the source state is still guarded against terminal races.
+func (s *TaskStore) applyReviewState(ctx context.Context, taskID, from, owner, attemptID, event string, data, result any, disposition ApprovalDisposition) error {
+	return s.applyReview(ctx, taskID, from, owner, attemptID, event, data, result, disposition, false)
+}
+
+func (s *TaskStore) applyReview(ctx context.Context, taskID, from, owner, attemptID, event string, data, result any, disposition ApprovalDisposition, checkOwner bool) error {
+	if !validApprovalDisposition(disposition) {
+		return fmt.Errorf("invalid approval disposition %q", disposition)
+	}
+	now := s.now()
+	dataJSON, _ := json.Marshal(data)
+	var resultJSON any
+	if result != nil {
+		b, _ := json.Marshal(result)
+		resultJSON = string(b)
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		query := `UPDATE tasks SET state=?, owner_node=?, attempt_id=?, state_version=state_version+1,
+			result_json=COALESCE(?, result_json), approval_disposition=?, lease_expires_at=NULL, updated_at=?
+			WHERE task_id=? AND state=?`
+		args := []any{StateReview, owner, attemptID, resultJSON, string(disposition), now, taskID, from}
+		if checkOwner {
+			query += " AND owner_node=?"
+			args = append(args, owner)
+		}
+		res, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("park task for review: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: task %s state=%s owner=%s", ErrConflict, taskID, from, owner)
 		}
 		return s.recordEventTx(ctx, tx, taskID, event, dataJSON)
 	})
@@ -611,7 +676,7 @@ func (s *TaskStore) CompleteFromRemote(ctx context.Context, taskID, owner string
 // a remote result may arrive while the delegator's copy is submitted, queued,
 // dispatched, or running. The state is still guarded so a concurrent terminal
 // transition wins and cannot be overwritten by a late result.
-func (s *TaskStore) ReviewFromRemote(ctx context.Context, taskID, owner string, result any) error {
+func (s *TaskStore) ReviewFromRemote(ctx context.Context, taskID, owner string, result any, disposition ApprovalDisposition) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
@@ -622,22 +687,41 @@ func (s *TaskStore) ReviewFromRemote(ctx context.Context, taskID, owner string, 
 	if cur.State == StateReview {
 		return nil // do not let a late failure overwrite a human-review pause
 	}
-	if err := s.applyState(ctx, taskID, cur.State, StateReview, owner, cur.AttemptID, EvReview, result, result); err != nil {
+	if !validApprovalDisposition(disposition) {
+		// Old peers did not carry the typed field. Preserve compatibility, but
+		// resume only from explicit pre-execution authorization evidence.
+		disposition = ApprovalAcceptWork
+		if commander.IsAuthorizationRefusal(reviewEvidence(result)) {
+			disposition = ApprovalResumeExecution
+		}
+	}
+	if err := s.applyReviewState(ctx, taskID, cur.State, owner, cur.AttemptID, EvReview, result, result, disposition); err != nil {
 		if errors.Is(err, ErrConflict) {
 			return nil
 		}
 		return err
 	}
-	// Review has no lease pressure. Keep this behavior identical to local
-	// Pause/PauseWithResult and notify any panel/review hook.
-	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET lease_expires_at=NULL WHERE task_id=?`, taskID); err != nil {
-		s.logger.Warn("clear remote review lease", "task", taskID, "err", err)
+	updated, err := s.Get(ctx, taskID)
+	if err != nil {
+		return err
 	}
-	cur.State = StateReview
-	cur.OwnerNode = owner
-	cur.UpdatedAt = s.now()
-	s.notifyReview(cur)
+	s.notifyReview(updated)
 	return nil
+}
+
+func reviewEvidence(result any) string {
+	switch v := result.(type) {
+	case bus.TaskResultPayload:
+		return v.Stderr
+	case *bus.TaskResultPayload:
+		if v != nil {
+			return v.Stderr
+		}
+	case string:
+		return v
+	}
+	b, _ := json.Marshal(result)
+	return string(b)
 }
 
 // Fail transitions a task to failed. Allowed from running/dispatched/
@@ -669,8 +753,12 @@ func (s *TaskStore) Requeue(ctx context.Context, taskID, owner string) error {
 // retry budget for human analysis (design §14.2 "pause → analyze"). A reviewer
 // may later send it back to queued, mark it done, or fail it.
 func (s *TaskStore) Review(ctx context.Context, taskID, owner, reason string) error {
-	return s.transition(ctx, taskID, StateFailed, StateReview, owner, EvReview,
-		map[string]any{"reason": reason})
+	return s.ReviewWithDisposition(ctx, taskID, owner, reason, ApprovalNeedsChangedInput)
+}
+
+func (s *TaskStore) ReviewWithDisposition(ctx context.Context, taskID, owner, reason string, disposition ApprovalDisposition) error {
+	return s.transitionToReview(ctx, taskID, StateFailed, StateReview, owner, EvReview,
+		map[string]any{"reason": reason}, disposition)
 }
 
 // Pause transitions a running task to review, pausing it for human analysis
@@ -679,8 +767,12 @@ func (s *TaskStore) Review(ctx context.Context, taskID, owner, reason string) er
 // failed task after its retry budget is spent) and never enters the retry loop,
 // because a deterministic intercept will not improve on retry.
 func (s *TaskStore) Pause(ctx context.Context, taskID, owner, reason string) error {
-	return s.transition(ctx, taskID, StateRunning, StateReview, owner, EvReview,
-		map[string]any{"reason": reason})
+	return s.PauseWithDisposition(ctx, taskID, owner, reason, ApprovalNeedsChangedInput)
+}
+
+func (s *TaskStore) PauseWithDisposition(ctx context.Context, taskID, owner, reason string, disposition ApprovalDisposition) error {
+	return s.transitionToReview(ctx, taskID, StateRunning, StateReview, owner, EvReview,
+		map[string]any{"reason": reason}, disposition)
 }
 
 // PauseWithResult transitions a running task to review while preserving the
@@ -695,50 +787,78 @@ func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, r
 	if cur.State != StateRunning {
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateRunning)
 	}
-	return s.applyCAS(ctx, taskID, StateRunning, StateReview, owner, cur.AttemptID, EvReview,
-		map[string]any{"reason": "awaiting approval"}, result)
-}
-
-// Approve accepts a reviewed task. What "accept" means depends on how the
-// task parked:
-//
-//   - A review parked from failed — a tier-2 authorization refusal or an
-//     exhausted retry budget, both of which Fail before parking — has no
-//     executed work to accept. Approval is the human consenting to the run:
-//     the task re-enters queued carrying the tier-2 authorization, its
-//     scheduled flag re-armed so the queue scheduler (daemon/panel) adopts it
-//     on its next pass. An inline caller (ask/repl) that runs the task itself
-//     uses ResumeApproved instead, which re-executes in the same round-trip.
-//   - Every other review entry parks from running with work already done —
-//     a manual step performed, a supervision round awaiting sign-off, an
-//     unauthorized tier-2 backstop park, or a scope-drift intercept. Approval
-//     accepts that work into done (review -> done).
-//
-// Either way approval is a human override (design §14.2 Layer 4), so — like
-// Cancel — it requires only that the task be in review, not that the caller
-// hold the lease.
-func (s *TaskStore) Approve(ctx context.Context, taskID string) error {
-	cur, err := s.Get(ctx, taskID)
+	if err := s.applyReviewCAS(ctx, taskID, StateRunning, owner, cur.AttemptID, EvReview,
+		map[string]any{"reason": "awaiting approval"}, result, ApprovalAcceptWork); err != nil {
+		return err
+	}
+	updated, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	if cur.State != StateReview {
-		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateReview)
+	s.notifyReview(updated)
+	return nil
+}
+
+// ApprovalDisposition describes what approving a reviewed task must do.
+// AcceptWork accepts work that already ran; ResumeExecution grants consent to
+// a task that parked before producing work and must be executed exactly once.
+type ApprovalDisposition string
+
+const (
+	ApprovalAcceptWork        ApprovalDisposition = "accept_work"
+	ApprovalResumeExecution   ApprovalDisposition = "resume_execution"
+	ApprovalNeedsChangedInput ApprovalDisposition = "needs_changed_input"
+)
+
+func parseApprovalDisposition(raw string) ApprovalDisposition {
+	switch ApprovalDisposition(raw) {
+	case ApprovalAcceptWork, ApprovalResumeExecution, ApprovalNeedsChangedInput:
+		return ApprovalDisposition(raw)
+	default:
+		return ""
 	}
-	resume := s.reviewFromFailure(ctx, taskID)
+}
+
+// ApprovalDisposition classifies the latest review parking without exposing
+// the audit-event encoding to callers.
+func (s *TaskStore) ApprovalDisposition(ctx context.Context, taskID string) (ApprovalDisposition, error) {
+	cur, err := s.Get(ctx, taskID)
+	if err != nil {
+		return ApprovalAcceptWork, err
+	}
+	if cur.State != StateReview {
+		return ApprovalAcceptWork, fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateReview)
+	}
+	if cur.ApprovalDisposition != "" {
+		return cur.ApprovalDisposition, nil
+	}
+	if s.reviewFromAuthorizationRefusal(ctx, taskID) {
+		return ApprovalResumeExecution, nil
+	}
+	return ApprovalAcceptWork, nil
+}
+
+// Approve accepts a reviewed task. A task that parked before execution moves
+// to an unscheduled queued state carrying consent; Core.ResumeApproved claims
+// it immediately. Work that already ran is accepted directly into done.
+func (s *TaskStore) Approve(ctx context.Context, taskID string) error {
+	disposition, err := s.ApprovalDisposition(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if disposition == ApprovalNeedsChangedInput {
+		return fmt.Errorf("%w: task %s", ErrApprovalNeedsChangedInput, taskID)
+	}
+	resume := disposition == ApprovalResumeExecution
 	// Guarded UPDATE (P2-8): a concurrent reject/approve must not both win.
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		var res sql.Result
 		if resume {
-			// Grant the tier-2 consent the refusal was waiting for; the
-			// lease is already clear (entering review cleared it). Re-arm the
-			// scheduled flag: an inline-submitted task (ask/repl) parked with
-			// scheduled=0, so without this the daemon/panel queue scheduler —
-			// which only claims scheduled=1 rows — would never re-adopt the
-			// approved task and it would sit queued forever. Setting it is
-			// harmless for a task that was already scheduled.
+			// Approval itself does not assign queue ownership. The foreground
+			// resume path claims the row below; queue ownership is established
+			// only by Enqueue/SetQueueMeta.
 			res, err = tx.ExecContext(ctx, `
-				UPDATE tasks SET state=?, authorized=1, scheduled=1, state_version=state_version+1, updated_at=?
+				UPDATE tasks SET state=?, authorized=1, scheduled=0, state_version=state_version+1, updated_at=?
 				WHERE task_id=? AND state=?`,
 				StateQueued, s.now(), taskID, StateReview)
 		} else {
@@ -760,57 +880,61 @@ func (s *TaskStore) Approve(ctx context.Context, taskID string) error {
 	})
 }
 
-// reviewFromFailure reports whether the task's latest review parking has no
-// executed work to accept, so Approve should re-run it (review -> queued,
-// carrying consent) instead of accepting it into done. Two shapes qualify:
-//
-//   - A local park: Fail directly followed by the review event — a tier-2
-//     authorization refusal or a spent retry budget, both of which Fail
-//     before parking.
-//   - A remote park: this is the delegator's copy, parked by ReviewFromRemote
-//     with the executor's result. A tier-2 refusal on the executor reaches
-//     here as a review whose own event data carries the refusal (the agent
-//     never spawned), so the same no-executed-work rule applies.
-//
-// Every other review entry — manual, supervision sign-off, an unauthorized
-// tier-2 backstop park, scope drift, a remote review with real work attached —
-// follows execution events, and Approve treats those as finished work. Read
-// failures are conservative (false): accepting existing work is the safer
-// default for an unreadable audit chain.
-func (s *TaskStore) reviewFromFailure(ctx context.Context, taskID string) bool {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT type, data_json FROM task_events
-		WHERE task_id=? AND id <= (SELECT COALESCE(MAX(id), 0) FROM task_events WHERE task_id=? AND type=?)
-		ORDER BY id DESC LIMIT 2`,
-		taskID, taskID, EvReview)
+// ClaimApproved atomically grants consent and claims a resume-required review
+// for foreground execution. expectedOwner is the exact persisted owner used by
+// the SQL compare-and-swap; newOwner is the current participant taking the
+// lease. Keeping those identities separate permits an authorized restart to
+// transfer ownership without weakening the exactly-once guard.
+func (s *TaskStore) ClaimApproved(ctx context.Context, taskID, expectedOwner, newOwner, target string) error {
+	disposition, err := s.ApprovalDisposition(ctx, taskID)
 	if err != nil {
-		s.logger.Warn("review origin: read events", "task", taskID, "err", err)
+		return err
+	}
+	if disposition == ApprovalNeedsChangedInput {
+		return fmt.Errorf("%w: task %s", ErrApprovalNeedsChangedInput, taskID)
+	}
+	if disposition != ApprovalResumeExecution {
+		return fmt.Errorf("%w: task %s disposition=%s", ErrConflict, taskID, disposition)
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state=?, owner_node=?, authorized=1, scheduled=0,
+				state_version=state_version+2, updated_at=?
+			WHERE task_id=? AND state=? AND owner_node=?
+				AND (approval_disposition=? OR approval_disposition IS NULL OR approval_disposition='')`,
+			StateDispatched, newOwner, s.now(), taskID, StateReview, expectedOwner, string(ApprovalResumeExecution))
+		if err != nil {
+			return fmt.Errorf("claim approved task: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: task %s approval claimed concurrently", ErrConflict, taskID)
+		}
+		if err := s.recordEventTx(ctx, tx, taskID, EvReview, map[string]any{
+			"approved": true,
+			"resumed":  true,
+		}); err != nil {
+			return err
+		}
+		return s.recordEventTx(ctx, tx, taskID, EvDelegate, map[string]any{"target": target})
+	})
+}
+
+// reviewFromAuthorizationRefusal is the legacy-row compatibility path. Only a
+// review event that itself contains the explicit authorization-refusal sentinel
+// may resume. Generic failed events are not evidence that execution never began:
+// input, scope and context failures require changed input and must not be replayed.
+func (s *TaskStore) reviewFromAuthorizationRefusal(ctx context.Context, taskID string) bool {
+	var data string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT data_json FROM task_events
+		WHERE task_id=? AND type=? ORDER BY id DESC LIMIT 1`, taskID, EvReview).Scan(&data)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.Warn("review origin: read event", "task", taskID, "err", err)
+		}
 		return false
 	}
-	defer rows.Close()
-	var prevTyp, prevData string
-	seenReview := false
-	for rows.Next() {
-		var typ, data string
-		if err := rows.Scan(&typ, &data); err != nil {
-			s.logger.Warn("review origin: scan event", "task", taskID, "err", err)
-			return false
-		}
-		if !seenReview {
-			// The latest EvReview event itself. Both park shapes carry the
-			// refusal where a local park's Review writes it as "reason" and a
-			// remote park's ReviewFromRemote embeds the executor's result —
-			// the sentinel survives either embedding.
-			seenReview = true
-			if commander.IsAuthorizationRefusal(data) {
-				return true
-			}
-			continue
-		}
-		prevTyp, prevData = typ, data
-	}
-	// Fail records its outcome as an EvResult event carrying a "failed" key.
-	return prevTyp == EvResult && strings.Contains(prevData, `"failed"`)
+	return commander.IsAuthorizationRefusal(data)
 }
 
 // Reject fails a reviewed task, moving it review -> failed. Like Approve, it is
@@ -982,6 +1106,23 @@ func (s *TaskStore) CountScheduledActive(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("count scheduled active: %w", err)
 	}
 	return n, nil
+}
+
+// SetWorkDir pins a task to its originating workspace without assigning queue
+// ownership. Inline asks use it before returning a review result so detached
+// approval can resume in the same session worktree.
+func (s *TaskStore) SetWorkDir(ctx context.Context, taskID, workDir string) error {
+	workDir = strings.TrimSpace(workDir)
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET work_dir=?, state_version=state_version+1, updated_at=?
+		WHERE task_id=?`, workDir, s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("set work dir: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // SetQueueMeta stamps the queue-scheduling metadata on a task and marks it
@@ -1654,7 +1795,7 @@ func (s *TaskStore) RotateAttempt(ctx context.Context, taskID, owner string) (st
 const taskColumns = `task_id, parent_id, project, title, state, owner_node, attempt_id,
 	state_version, chain_json, intent, spec_json, result_json,
 	context_type, context_hash, complexity, risk, resource_json, requires_json,
-	lease_expires_at, created_at, updated_at, authorized,
+	approval_disposition, operation_decision_json, lease_expires_at, created_at, updated_at, authorized,
 	priority, seq, session_id, resource_keys_json, work_dir, scheduled,
 	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact`
 
@@ -1666,6 +1807,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var intent, spec, result sql.NullString
 		var lease sql.NullInt64
 		var contextType, contextHash, risk, resource, requiresJSON sql.NullString
+		var approvalDisposition, operationDecision sql.NullString
 		var sessionID, resourceKeysJSON, workDir sql.NullString
 		var complexity sql.NullFloat64
 		var scheduled int
@@ -1673,7 +1815,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		if err := rows.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State,
 			&t.OwnerNode, &t.AttemptID, &t.StateVersion, &chainJSON, &intent,
 			&spec, &result, &contextType, &contextHash, &complexity, &risk, &resource,
-			&requiresJSON, &lease,
+			&requiresJSON, &approvalDisposition, &operationDecision, &lease,
 			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt); err != nil {
@@ -1692,6 +1834,8 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		t.Complexity = complexity.Float64
 		t.Risk = risk.String
 		t.ResourceJSON = resource.String
+		t.ApprovalDisposition = parseApprovalDisposition(approvalDisposition.String)
+		t.OperationDecisionJSON = operationDecision.String
 		t.LeaseExpires = lease.Int64
 		t.SessionID = sessionID.String
 		t.WorkDir = workDir.String

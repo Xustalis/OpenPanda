@@ -255,8 +255,8 @@ func TestApproveRejectGuarded(t *testing.T) {
 	if err := s.Accept(ctx, tk.TaskID, "owner"); err != nil {
 		t.Fatalf("accept: %v", err)
 	}
-	if err := s.Pause(ctx, tk.TaskID, "owner", "drift"); err != nil {
-		t.Fatalf("pause: %v", err)
+	if err := s.PauseWithResult(ctx, tk.TaskID, "owner", map[string]any{"ok": true}); err != nil {
+		t.Fatalf("pause with result: %v", err)
 	}
 	if err := s.Approve(ctx, tk.TaskID); err != nil {
 		t.Fatalf("approve: %v", err)
@@ -271,9 +271,9 @@ func TestApproveRejectGuarded(t *testing.T) {
 }
 
 // TestApproveResumesFailedReview pins P0-1: a review parked from failed — the
-// tier-2 authorization-refusal path (Fail, then Review) — approves into a
-// re-queued, authorized task the scheduler executes again, not into done. The
-// command never ran; approving it must not fabricate a completion.
+// tier-2 authorization-refusal path (Fail, then Review) — approves into an
+// authorized, execution-ready task rather than done. The command never ran;
+// approving it must not fabricate a completion or assign queue ownership.
 func TestApproveResumesFailedReview(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
@@ -291,7 +291,7 @@ func TestApproveResumesFailedReview(t *testing.T) {
 	if err := s.Fail(ctx, tk.TaskID, "owner", "tier-2 refusal: push requires authorization"); err != nil {
 		t.Fatalf("fail: %v", err)
 	}
-	if err := s.Review(ctx, tk.TaskID, "owner", "tier-2 refusal"); err != nil {
+	if err := s.ReviewWithDisposition(ctx, tk.TaskID, "owner", "defense: tier-2 command requires authorization", ApprovalResumeExecution); err != nil {
 		t.Fatalf("review: %v", err)
 	}
 	if err := s.Approve(ctx, tk.TaskID); err != nil {
@@ -302,13 +302,13 @@ func TestApproveResumesFailedReview(t *testing.T) {
 		t.Fatalf("get: %v", err)
 	}
 	if got.State != StateQueued {
-		t.Fatalf("approved failed-review task state = %s, want %s (re-scheduled for execution)", got.State, StateQueued)
+		t.Fatalf("approved failed-review task state = %s, want %s (ready for foreground execution)", got.State, StateQueued)
 	}
 	if !got.Authorized {
 		t.Fatal("approved failed-review task must carry the tier-2 consent (authorized)")
 	}
-	if !got.Scheduled {
-		t.Fatal("approved failed-review task must be re-armed for the queue scheduler (scheduled): an inline-submitted task parks with scheduled=0, so without this the daemon/panel never re-adopts it")
+	if got.Scheduled {
+		t.Fatal("foreground approval must not assign queue ownership (scheduled)")
 	}
 }
 

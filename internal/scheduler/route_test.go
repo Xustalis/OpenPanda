@@ -64,6 +64,30 @@ func TestIsSelfRow(t *testing.T) {
 	}
 }
 
+func TestSameRuntimeIdentity(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"macbook", "macbook", true},
+		{"macbook", "macbook-1f3a2b4c", true},
+		{"macbook-1f3a2b4c", "macbook", true},
+		{"macbook-1f3a2b4c", "macbook-9d8c7b6a", true},
+		{"macbook@vm-ab12cd34ef56-1f3a2b4c", "macbook@vm-ab12cd34ef56-9d8c7b6a", true},
+		{"my-mac-book-1f3a2b4c", "my-mac-book-9d8c7b6a", true},
+		{"macbook", "imac-1f3a2b4c", false},
+		{"macbook-1f3a2b4c", "imac-1f3a2b4c", false},
+		{"macbook-1f3a2b4", "macbook-9d8c7b6a", false},
+		{"macbook-1f3a2b4c0", "macbook-9d8c7b6a", false},
+		{"macbook-zzzzzzzz", "macbook-9d8c7b6a", false},
+	}
+	for _, tc := range cases {
+		if got := SameRuntimeIdentity(tc.a, tc.b); got != tc.want {
+			t.Fatalf("SameRuntimeIdentity(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
 func matchAny(required []string) bool { return len(required) > 0 && required[0] == "local:ok" }
 
 func TestRouteLocalWins(t *testing.T) {

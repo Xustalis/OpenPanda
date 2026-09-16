@@ -62,6 +62,7 @@ func stripThinkingBlock(s string) string {
 	if !strings.Contains(low, thinkTagPrefix) && !strings.Contains(low, "<reasoning") {
 		return s
 	}
+	original := s
 	s = thinkBlockRE.ReplaceAllString(s, "")
 	// An unterminated opening tag (e.g. a stream cut at max_tokens mid-think)
 	// leaves the remainder as reasoning: drop it rather than leak a partial
@@ -69,7 +70,15 @@ func stripThinkingBlock(s string) string {
 	if i := openThinkIndex(s); i >= 0 {
 		s = s[:i]
 	}
-	return strings.TrimSpace(s)
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		// If all text was inside think tags, strip only the tags so model content
+		// is preserved instead of crashing with "empty model output".
+		content := thinkOpenRE.ReplaceAllString(original, "")
+		content = thinkCloseRE.ReplaceAllString(content, "")
+		return strings.TrimSpace(content)
+	}
+	return trimmed
 }
 
 // StripThinking is the exported form of stripThinkingBlock for callers

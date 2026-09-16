@@ -35,6 +35,13 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=5, extra_request=Non
         work.mkdir()
         write_executable(tmp / cli_name, cli_body)
         merged = os.environ.copy()
+        # Adapter contracts must not inherit the developer machine's model
+        # routing. Individual cases opt into overrides through env below.
+        for key in (
+            "OPENCODE_MODEL", "ANTHROPIC_MODEL", "OPENAI_MODEL",
+            "OPENPANDA_INJECTED_MODEL",
+        ):
+            merged.pop(key, None)
         merged["PATH"] = str(tmp) + os.pathsep + merged.get("PATH", "")
         if env:
             merged.update(env)
