@@ -268,6 +268,17 @@ export type CreateTaskResult = {
   state: string
 }
 
+export interface ApprovalOperation {
+  operation_id: string
+  task_id: string
+  status: 'running' | 'done' | 'review' | 'failed' | 'cancelled' | 'expired' | string
+  error?: string
+}
+
+export type ApprovalResult =
+  | { id: string; status: 'done' }
+  | ApprovalOperation
+
 export interface AskResult {
   kind: 'answer' | 'task'
   answer?: string
@@ -529,8 +540,12 @@ export const api = {
     return request('GET', `/api/tasks/${id}`)
   },
 
-  approve(id: string): Promise<void> {
+  approve(id: string): Promise<ApprovalResult> {
     return request('POST', `/api/tasks/${id}/approve`)
+  },
+
+  approvalOperation(id: string, operationID: string): Promise<ApprovalOperation> {
+    return request('GET', `/api/tasks/${encodeURIComponent(id)}/operations/${encodeURIComponent(operationID)}`)
   },
 
   reject(id: string, reason?: string): Promise<void> {
@@ -753,8 +768,8 @@ export const api = {
     return request('PATCH', `/api/sessions/${encodeURIComponent(id)}`, body)
   },
 
-  cancelSession(id: string): Promise<{ id: string; cancelled: boolean }> {
-    return request('POST', `/api/sessions/${encodeURIComponent(id)}/cancel`)
+  cancelSession(id: string, operationID: string): Promise<{ id: string; operation_id: string; cancelled: boolean }> {
+    return request('POST', `/api/sessions/${encodeURIComponent(id)}/cancel`, { operation_id: operationID })
   },
 
   chooseDirectory(default_path?: string): Promise<ChooseDirectoryResult> {
@@ -1017,6 +1032,14 @@ export interface SessionTurn {
   ref?: string
 }
 
+export interface SessionOperation {
+  id: string
+  status: 'running' | 'done' | 'review' | 'failed' | 'cancelled' | 'expired' | string
+  task_id?: string
+  error?: string
+  updated_at: string
+}
+
 export interface Session {
   id: string
   title: string
@@ -1026,6 +1049,7 @@ export interface Session {
   worktree?: string
   project?: string
   turns: SessionTurn[]
+  operation?: SessionOperation
 }
 
 // ---- SSE transport ---------------------------------------------------------
@@ -1145,6 +1169,7 @@ export interface AskStreamHandlers {
   onReasoning(text: string): void
   onDelta(text: string): void
   onStatus(text: string): void
+  onOperation(operationID: string): void
   onResult(r: AskResult): void
   onError(message: string): void
 }
@@ -1178,6 +1203,7 @@ export async function askSessionStream(
       if (event === 'reasoning') h.onReasoning(payload.text ?? '')
       else if (event === 'delta') h.onDelta(payload.text ?? '')
       else if (event === 'status') h.onStatus(payload.text ?? '')
+      else if (event === 'operation') h.onOperation(payload.operation_id ?? '')
       else if (event === 'result') h.onResult(payload as AskResult)
       else if (event === 'error') h.onError(payload.message ?? 'unknown error')
     },

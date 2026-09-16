@@ -574,6 +574,32 @@ const ja: Messages = {
   'ui.update.available.title': 'アップデート: v{version}',
   'ui.update.available.sub': '修正と改善を含む新しいリリースがあります。',
   'ui.update.available.cta': 'アップデートを見る →',
+
+  // Task Event Parser
+  'events.reasoning': 'モデル思考プロセス',
+  'events.classify_result': '意図認識',
+  'events.route_decision': 'ルーティング判断',
+  'events.exec_agent_start': 'Agent 実行開始',
+  'events.supervision_round': '監督評価',
+  'events.judge_start': '監督レビュー開始',
+  'events.tier2_triggered': '承認が必要です',
+  'events.tier2_summary': 'タスクに機密操作が含まれるため、手動承認を待機しています',
+  'events.state_change': '状態遷移',
+  'events.task_complete': 'タスク完了',
+  'events.task_failed': 'タスク失敗',
+  'events.task_cancel': 'タスクキャンセル',
+  'events.delegation_hop': '委譲ホップ',
+  'events.project_sync': 'プロジェクトファイル同期',
+  'events.tag.type': 'タイプ',
+  'events.tag.target': '対象ノード',
+  'events.tag.action': 'アクション',
+  'events.tag.adapter': 'アダプター',
+  'events.tag.round': 'ラウンド',
+  'events.tag.verdict': '判定',
+  'events.tag.state': '状態',
+  'events.tag.hop': 'ホップ',
+  'events.tag.path': 'パス',
+  'sessions.copyThought': '思考チェーンをコピー',
 }
 
 export default ja

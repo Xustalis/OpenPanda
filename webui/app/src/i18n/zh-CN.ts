@@ -598,6 +598,32 @@ const zhCN: Messages = {
   'ui.update.available.title': '可升级到 v{version}',
   'ui.update.available.sub': '新版本已发布，包含若干修复与改进。',
   'ui.update.available.cta': '查看更新 →',
+
+  // Task Event Parser
+  'events.reasoning': '模型思考过程',
+  'events.classify_result': '意图识别',
+  'events.route_decision': '路由决策',
+  'events.exec_agent_start': 'Agent 执行启动',
+  'events.supervision_round': '结果监督评估',
+  'events.judge_start': '监督评审开始',
+  'events.tier2_triggered': '需要审批',
+  'events.tier2_summary': '任务涉及高风险操作，正在等待人工授权',
+  'events.state_change': '状态流转',
+  'events.task_complete': '任务完成',
+  'events.task_failed': '任务失败',
+  'events.task_cancel': '任务取消',
+  'events.delegation_hop': '跨设备委派',
+  'events.project_sync': '项目文件同步',
+  'events.tag.type': '类型',
+  'events.tag.target': '目标节点',
+  'events.tag.action': '动作',
+  'events.tag.adapter': '适配器',
+  'events.tag.round': '轮次',
+  'events.tag.verdict': '裁决',
+  'events.tag.state': '状态',
+  'events.tag.hop': '跳点',
+  'events.tag.path': '路径',
+  'sessions.copyThought': '复制思维链',
 }
 
 export default zhCN

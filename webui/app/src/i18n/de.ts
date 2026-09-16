@@ -581,6 +581,32 @@ const de: Messages = {
   'ui.update.available.title': 'Update verfügbar: v{version}',
   'ui.update.available.sub': 'Neue Version mit Korrekturen und Verbesserungen bereit.',
   'ui.update.available.cta': 'Update ansehen →',
+
+  // Task Event Parser
+  'events.reasoning': 'Modell-Denkprozess',
+  'events.classify_result': 'Absichtserkennung',
+  'events.route_decision': 'Routing-Entscheidung',
+  'events.exec_agent_start': 'Agent-Ausführung gestartet',
+  'events.supervision_round': 'Überwachungsbewertung',
+  'events.judge_start': 'Beurteilungsprüfung gestartet',
+  'events.tier2_triggered': 'Genehmigung erforderlich',
+  'events.tier2_summary': 'Aufgabe beinhaltet sensible Vorgänge, wartet auf Autorisierung',
+  'events.state_change': 'Statusübergang',
+  'events.task_complete': 'Aufgabe abgeschlossen',
+  'events.task_failed': 'Aufgabe fehlgeschlagen',
+  'events.task_cancel': 'Aufgabe abgebrochen',
+  'events.delegation_hop': 'Delegierungssprung',
+  'events.project_sync': 'Projektdateisynchronisierung',
+  'events.tag.type': 'Typ',
+  'events.tag.target': 'Zielknoten',
+  'events.tag.action': 'Aktion',
+  'events.tag.adapter': 'Adapter',
+  'events.tag.round': 'Runde',
+  'events.tag.verdict': 'Urteil',
+  'events.tag.state': 'Status',
+  'events.tag.hop': 'Hop',
+  'events.tag.path': 'Pfad',
+  'sessions.copyThought': 'Gedankenkette kopieren',
 }
 
 export default de

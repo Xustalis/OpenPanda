@@ -84,7 +84,9 @@ export function setLocale(l: Locale): void {
   } catch {
     // storage unavailable — locale just won't persist
   }
-  document.documentElement.lang = l
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang = l
+  }
   listeners.forEach((fn) => fn())
 }
 

@@ -189,6 +189,27 @@ export function buildCommands(onLogout: () => void): Command[] {
     run: () => navigateView(view),
   }))
 
+  const settingsTabs: Array<{ tab: string; key: string; alias: string }> = [
+    { tab: 'models', key: 'settings.model', alias: 'models model llm config ai' },
+    { tab: 'policy', key: 'settings.policy', alias: 'policy security rules permissions' },
+    { tab: 'agents', key: 'settings.group.agents', alias: 'agents subagents roles' },
+    { tab: 'mcp', key: 'settings.mcp', alias: 'mcp tools servers integrations' },
+    { tab: 'nodes', key: 'nav.nodes', alias: 'nodes devices fleet cluster hardware' },
+    { tab: 'memory', key: 'nav.memory', alias: 'memory memory-bank knowledge store' },
+    { tab: 'skills', key: 'nav.skills', alias: 'skills capabilities plugins tools' },
+    { tab: 'reminders', key: 'nav.reminders', alias: 'reminders cron schedule timer jobs' },
+    { tab: 'system', key: 'nav.system', alias: 'system status health audit metrics telemetry' },
+  ]
+  for (const s of settingsTabs) {
+    cmds.push({
+      id: `settings:${s.tab}`,
+      group: t('nav.settings'),
+      label: t(s.key),
+      alias: s.alias,
+      run: () => navigateView(`settings:${s.tab}`),
+    })
+  }
+
   const themes: Array<[Theme, string]> = [
     ['light', 'settings.theme.light'],
     ['dark', 'settings.theme.dark'],

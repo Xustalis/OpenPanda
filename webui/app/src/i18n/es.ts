@@ -581,6 +581,32 @@ const es: Messages = {
   'ui.update.available.title': 'Actualización disponible: v{version}',
   'ui.update.available.sub': 'Nueva versión lista con correcciones y mejoras.',
   'ui.update.available.cta': 'Ver actualización →',
+
+  // Task Event Parser
+  'events.reasoning': 'Razonamiento del modelo',
+  'events.classify_result': 'Clasificación de intención',
+  'events.route_decision': 'Decisión de enrutamiento',
+  'events.exec_agent_start': 'Ejecución de agente iniciada',
+  'events.supervision_round': 'Evaluación de supervisión',
+  'events.judge_start': 'Revisión de juez iniciada',
+  'events.tier2_triggered': 'Aprobación requerida',
+  'events.tier2_summary': 'La tarea implica operaciones sensibles, esperando autorización manual',
+  'events.state_change': 'Transición de estado',
+  'events.task_complete': 'Tarea completada',
+  'events.task_failed': 'Tarea fallida',
+  'events.task_cancel': 'Tarea cancelada',
+  'events.delegation_hop': 'Salto de delegación',
+  'events.project_sync': 'Sincronización de proyecto',
+  'events.tag.type': 'Tipo',
+  'events.tag.target': 'Nodo de destino',
+  'events.tag.action': 'Acción',
+  'events.tag.adapter': 'Adaptador',
+  'events.tag.round': 'Ronda',
+  'events.tag.verdict': 'Veredicto',
+  'events.tag.state': 'Estado',
+  'events.tag.hop': 'Salto',
+  'events.tag.path': 'Ruta',
+  'sessions.copyThought': 'Copiar cadena de pensamiento',
 }
 
 export default es
