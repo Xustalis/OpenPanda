@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // ---- Session CRUD ----
@@ -188,33 +190,52 @@ func (h *handler) sessionMerge(w http.ResponseWriter, r *http.Request) {
 
 // ---- Active session asks & cancellation ----
 
-func (h *handler) registerSessionAsk(id string, cancel context.CancelFunc) {
+type sessionOperation struct {
+	generation  uint64
+	operationID string
+	cancel      context.CancelFunc
+}
+
+func (h *handler) registerSessionAsk(id string, cancel context.CancelFunc) (sessionOperation, error) {
+	operationID, err := util.UUIDv7()
+	if err != nil {
+		return sessionOperation{}, err
+	}
 	h.askMu.Lock()
-	defer h.askMu.Unlock()
 	if h.activeAsks == nil {
-		h.activeAsks = make(map[string]context.CancelFunc)
+		h.activeAsks = make(map[string]sessionOperation)
 	}
-	if old, exists := h.activeAsks[id]; exists && old != nil {
-		old()
+	h.askGeneration++
+	op := sessionOperation{generation: h.askGeneration, operationID: operationID, cancel: cancel}
+	old, exists := h.activeAsks[id]
+	h.activeAsks[id] = op
+	h.askMu.Unlock()
+	if exists && old.cancel != nil {
+		old.cancel()
 	}
-	h.activeAsks[id] = cancel
+	return op, nil
 }
 
-func (h *handler) unregisterSessionAsk(id string) {
+func (h *handler) unregisterSessionAsk(id string, op sessionOperation) {
 	h.askMu.Lock()
 	defer h.askMu.Unlock()
-	delete(h.activeAsks, id)
-}
-
-func (h *handler) cancelSessionAsk(id string) bool {
-	h.askMu.Lock()
-	cancel, ok := h.activeAsks[id]
-	if ok {
+	current, ok := h.activeAsks[id]
+	if ok && current.generation == op.generation && current.operationID == op.operationID {
 		delete(h.activeAsks, id)
 	}
+}
+
+func (h *handler) cancelSessionAsk(id, operationID string) bool {
+	h.askMu.Lock()
+	op, ok := h.activeAsks[id]
+	if ok && operationID != "" && op.operationID == operationID {
+		delete(h.activeAsks, id)
+	} else {
+		ok = false
+	}
 	h.askMu.Unlock()
-	if ok && cancel != nil {
-		cancel()
+	if ok && op.cancel != nil {
+		op.cancel()
 		return true
 	}
 	return false
@@ -223,8 +244,21 @@ func (h *handler) cancelSessionAsk(id string) bool {
 // sessionCancel serves POST /api/sessions/{id}/cancel and /stop.
 func (h *handler) sessionCancel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	cancelled := h.cancelSessionAsk(id)
-	writeJSON(w, map[string]any{"id": id, "cancelled": cancelled})
+	var req struct {
+		OperationID string `json:"operation_id"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+			return
+		}
+	}
+	if strings.TrimSpace(req.OperationID) == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("operation_id is required"))
+		return
+	}
+	cancelled := h.cancelSessionAsk(id, req.OperationID)
+	writeJSON(w, map[string]any{"id": id, "operation_id": req.OperationID, "cancelled": cancelled})
 }
 
 // ---- Streaming session ask ----
@@ -360,33 +394,58 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	if workDir == "" {
 		workDir = eng.WorkPath()
 	}
-	prevProj, prevDir := eng.Project()
-	if sess.Project != "" {
-		eng.SetProject(sess.Project, workDir)
+	// Run under the panel lifetime, not the HTTP connection. Only the matching
+	// operation ID can cancel this generation through the explicit stop API.
+	baseCtx := h.serviceCtx
+	if baseCtx == nil {
+		baseCtx = context.Background()
 	}
-	defer eng.SetProject(prevProj, prevDir)
-
-	// Decouple model and task execution from the transient HTTP request
-	// context so that browser tab switches, window blur, or socket drop
-	// does not abort the model turn. Explicit cancellation is handled via
-	// POST /api/sessions/{id}/cancel (registerSessionAsk).
-	execCtx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
+	execCtx, cancel := context.WithCancel(baseCtx)
 	defer cancel()
-	h.registerSessionAsk(sess.ID, cancel)
-	defer h.unregisterSessionAsk(sess.ID)
+	op, err := h.registerSessionAsk(sess.ID, cancel)
+	if err != nil {
+		send("error", map[string]string{"message": "create operation failed"})
+		return
+	}
+	defer h.unregisterSessionAsk(sess.ID, op)
+	if !send("operation", map[string]string{"operation_id": op.operationID}) {
+		// The operation remains detached from the failed response writer and
+		// continues to persist its final task/session result.
+	}
+	if err := h.sessions.StartOperation(sess.ID, sessions.Operation{
+		ID: op.operationID, Status: core.StateRunning,
+	}); err != nil {
+		send("error", map[string]string{"message": "save operation failed"})
+		return
+	}
 
-	out, err := eng.AskTurns(execCtx, history, req.Prompt, workDir, req.Authorize, cb)
+	out, err := eng.AskTurnsScoped(execCtx, history, req.Prompt, askengine.AskScope{
+		Project: sess.Project,
+		WorkDir: workDir,
+	}, req.Authorize, cb)
 	if err != nil {
 		msg := err.Error()
+		status := core.StateFailed
 		if errors.Is(err, context.Canceled) || execCtx.Err() != nil {
 			msg = "任务已被用户取消"
+			status = core.StateCancelled
 		}
+		_, _ = h.sessions.SetOperation(sess.ID, sessions.Operation{
+			ID: op.operationID, Status: status, Error: msg,
+		})
 		send("error", map[string]string{"message": msg})
 		_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "assistant", Text: "⚠ " + msg, Kind: "error"})
 		return
 	}
 
 	res := planResultOf(out)
+	operationStatus := core.StateDone
+	if out.Kind == "task" && out.TaskState != "" {
+		operationStatus = out.TaskState
+	}
+	_, _ = h.sessions.SetOperation(sess.ID, sessions.Operation{
+		ID: op.operationID, Status: operationStatus, TaskID: out.TaskID, Error: out.Stderr,
+	})
 	send("result", res)
 
 	// Queue redesign: bind a spawned task back to this session so the board
