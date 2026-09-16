@@ -527,6 +527,26 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 			return res
 		}
 
+		// Active Failover guard:
+		// Do not failover if the agent already completed substantial work and produced substantive output.
+		// Failing over after a long run discards the output and forces another agent to restart from scratch,
+		// multiplying latency and losing user visibility.
+		isLaunchFailure := ar.ExitCode == 127 || ar.ExitCode == 124 || ar.ExitCode == 2 ||
+			strings.Contains(strings.ToLower(stderr), "not found") ||
+			strings.Contains(strings.ToLower(stderr), "command not found") ||
+			strings.Contains(strings.ToLower(stderr), "unrecognized") ||
+			strings.Contains(strings.ToLower(stderr), "unsupported") ||
+			strings.Contains(strings.ToLower(stderr), "unknown option") ||
+			strings.Contains(strings.ToLower(stderr), "unknown flag")
+
+		hasSubstantiveOutput := len(strings.TrimSpace(ar.Result)) >= 300 &&
+			!strings.HasPrefix(strings.TrimSpace(ar.Result), "Traceback (most recent call last)")
+
+		if !isLaunchFailure && hasSubstantiveOutput {
+			res.OK = true
+			return res
+		}
+
 		// Active Failover: if this agent failed and there are remaining alternates,
 		// log and record the failure then continue the loop to try the next alternate agent.
 		unavailable = append(unavailable, fmt.Sprintf("%s (exec failed: %s)", name, strings.TrimSpace(stderr)))

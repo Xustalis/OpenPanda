@@ -1347,8 +1347,8 @@ func taskToolsPolicy(specJSON string) string {
 // degrading skills into index lines.
 const agentPromptBudget = 128000
 
-// agentOutputRider instructs the agent to produce substantive, well-structured results.
-const agentOutputRider = "\n\n输出要求：请直接给出详实明确的执行或分析结果。对分析/梳理类任务，请提供清晰结构化的结论与待办清单；对操作类任务，说明具体修改与产出；不要使用不必要的表情符号。"
+// agentOutputRider instructs the agent to produce substantive, well-structured results promptly.
+const agentOutputRider = "\n\n输出与执行要求：请高效聚焦核心目标，在控制轮次内迅速完成关键信息采集或必要操作，并直接给出详实明确的最终执行/分析结果；对分析梳理类任务，务必输出完整结构化的中文报告、核心结论与待办清单，不要仅罗列日志；不要使用不必要的表情符号。"
 
 // buildAgentPrompt assembles the full agent execution prompt — the memory
 // file manifest (A3 selective loading) plus the task intent plus any matched
