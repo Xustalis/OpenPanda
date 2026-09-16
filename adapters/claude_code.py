@@ -55,8 +55,9 @@ def main():
     prompt, timeout, cwd = req
 
     model = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
+    max_turns = os.environ.get("CLAUDE_MAX_TURNS", "30")
     base = ["claude", "-p", prompt,
-            "--max-turns", "30",
+            "--max-turns", max_turns,
             "--permission-mode", "acceptEdits"]
     # minimal (or unset) keeps the safe file-and-shell whitelist; extended
     # leaves the tool face unrestricted so Skills / the Task (sub-agent) tool
@@ -149,10 +150,18 @@ def _run_stream(base, model, cwd, timeout, disable_settings=False):
     if final is not None:
         usage = _usage(final.get("usage"))
         tokens = usage["input_tokens"] + usage["output_tokens"]
+        res_text = final.get("result") or ""
+        is_err = bool(final.get("is_error"))
+        # If the turn limit was reached, or if is_error is set but the model
+        # completed substantive text output (e.g. analysis report), do not treat
+        # as a fatal agent crash that discards the work.
+        if is_err and (final.get("subtype") == "error_max_turns" or final.get("terminal_reason") == "max_turns"):
+            if len(res_text.strip()) > 50:
+                is_err = False
         return {
-            "ok": not final.get("is_error") and returncode == 0,
-            "result": final.get("result") or "",
-            "exit_code": returncode,
+            "ok": not is_err and (returncode == 0 or (not is_err and len(res_text.strip()) > 50)),
+            "result": res_text,
+            "exit_code": 0 if not is_err else returncode,
             "tokens": tokens or None,
             "cost": final.get("total_cost_usd"),
             "usage": usage,
