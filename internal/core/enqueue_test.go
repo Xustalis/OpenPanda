@@ -175,8 +175,8 @@ func TestEnqueueRoutesToPeer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	root := newCore(t, "queue-root", "127.0.0.1:17941")
-	leaf := newCoreWithNative(t, "queue-leaf", "127.0.0.1:17942", ledger.NativeAbility{
+	root := newCore(t, "queue-root", "127.0.0.1:17881")
+	leaf := newCoreWithNative(t, "queue-leaf", "127.0.0.1:17882", ledger.NativeAbility{
 		ID: "gpio:read", Command: "echo", Args: []string{"queue-gpio-ok"},
 	})
 	if err := root.Register(ctx); err != nil {
@@ -185,10 +185,10 @@ func TestEnqueueRoutesToPeer(t *testing.T) {
 	if err := leaf.Register(ctx); err != nil {
 		t.Fatalf("leaf register: %v", err)
 	}
-	go func() { _ = root.Listen(ctx, "127.0.0.1:17941") }()
-	go func() { _ = leaf.Listen(ctx, "127.0.0.1:17942") }()
+	go func() { _ = root.Listen(ctx, "127.0.0.1:17881") }()
+	go func() { _ = leaf.Listen(ctx, "127.0.0.1:17882") }()
 	time.Sleep(200 * time.Millisecond)
-	if err := root.DialPeer(ctx, "127.0.0.1:17942"); err != nil {
+	if err := root.DialPeer(ctx, "127.0.0.1:17882"); err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)

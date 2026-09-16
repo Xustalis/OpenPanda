@@ -63,13 +63,17 @@ func taskObservation(res *Result) string {
 	if res.ExitCode != 0 {
 		fmt.Fprintf(&b, "，退出码 %d", res.ExitCode)
 	}
-	if out := excerpt(res.Stdout, 4000); out != "" {
+	if out := excerpt(res.Stdout, 12000); out != "" {
 		fmt.Fprintf(&b, "\n输出摘录：\n%s", out)
 	}
-	if errText := excerpt(res.Stderr, 2000); errText != "" {
+	if errText := excerpt(res.Stderr, 3000); errText != "" {
 		fmt.Fprintf(&b, "\n错误摘录：\n%s", errText)
 	}
-	b.WriteString("\n请基于以上结果继续本轮对话：向用户汇报，或决定下一步。")
+	if res.OK && (res.TaskState == "done" || res.ExitCode == 0) {
+		b.WriteString("\n\n【核心指示】：该子任务已成功执行完成，底层完整输出已由系统全量保存并将完整展示给用户。请直接基于上述结果向用户做精炼的总结与最终答复，切勿再次派发子任务重复执行或尝试'补齐'内容。")
+	} else {
+		b.WriteString("\n\n请基于以上结果继续本轮对话：向用户汇报，或决定下一步。")
+	}
 	return b.String()
 }
 
@@ -82,7 +86,7 @@ func excerpt(s string, limit int) string {
 	}
 	head := limit * 2 / 3
 	tail := limit / 3
-	return string(runes[:head]) + "\n…（中间输出已省略）…\n" + string(runes[len(runes)-tail:])
+	return string(runes[:head]) + "\n…（中间输出在提示词中略去，完整结果已全量保存并直接展示给用户，无需重新采集）…\n" + string(runes[len(runes)-tail:])
 }
 
 // reportTaskOutcome converges on the model's report when the round budget
