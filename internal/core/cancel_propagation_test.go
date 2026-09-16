@@ -21,8 +21,8 @@ func TestCancelPropagatesDownstream(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	root := newCore(t, "root", "127.0.0.1:17961")
-	leaf := newCoreWithNative(t, "leaf", "127.0.0.1:17962", slowNativeAbility())
+	root := newCore(t, "root", "127.0.0.1:17871")
+	leaf := newCoreWithNative(t, "leaf", "127.0.0.1:17872", slowNativeAbility())
 
 	must := func(err error) {
 		t.Helper()
@@ -32,10 +32,10 @@ func TestCancelPropagatesDownstream(t *testing.T) {
 	}
 	must(root.Register(ctx))
 	must(leaf.Register(ctx))
-	go func() { _ = root.Listen(ctx, "127.0.0.1:17961") }()
-	go func() { _ = leaf.Listen(ctx, "127.0.0.1:17962") }()
+	go func() { _ = root.Listen(ctx, "127.0.0.1:17871") }()
+	go func() { _ = leaf.Listen(ctx, "127.0.0.1:17872") }()
 	time.Sleep(200 * time.Millisecond)
-	must(root.DialPeer(ctx, "127.0.0.1:17962"))
+	must(root.DialPeer(ctx, "127.0.0.1:17872"))
 	time.Sleep(300 * time.Millisecond)
 
 	// Submit blocks until a result arrives; run it in the background so the
