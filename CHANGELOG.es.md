@@ -38,6 +38,12 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Corregido
+
+- **La instalación ya no se aborta en un host Linux sin sesión de escritorio** — `scripts/install.sh --yes` leía `$USER`, que no existe en contenedores, ejecutores de CI ni sesiones SSH simples: justo las máquinas para las que existe el flag. Bajo `set -u` eso abortaba el script justo después de que el binario, la entrada de PATH y la autocomprobación hubieran funcionado, así que una instalación correcta se reportaba como fallo y sin mensaje de finalización. Ahora el nombre se deduce.
+- **La desinstalación en Windows elimina la tarea de inicio de sesión** — `panda uninstall` detenía un nombre de servicio que el instalador dejó de crear cuando el autoarranque pasó a una tarea programada, así que `OpenPandaNode` sobrevivía a la desinstalación y relanzaba en cada inicio de sesión un daemon cuyo binario acababa de borrarse, informando del error a quien ya había desinstalado el producto. Ahora se elimina la tarea.
+- **Fórmula de Homebrew fijada a un lanzamiento que ya no existe** — la fórmula del tap apuntaba a `v0.0.8`, cuya etiqueta y lanzamiento se habían borrado, así que `brew install Xustalis/openpanda/openpanda` descargaba un archivo que da 404. El tap vuelve a la etiqueta publicada más reciente y una comprobación contrasta la versión y el SHA-256 de la fórmula con el artefacto publicado.
+
 ## [0.0.8-preview] - 2026-09-19
 
 ### Añadido

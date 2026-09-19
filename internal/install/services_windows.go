@@ -4,6 +4,17 @@ package install
 
 import "os/exec"
 
+// nodeTaskName is the scheduled task scripts/install.ps1 registers, and the
+// name its own closing instructions tell the user to remove by hand.
+//
+// It is a cross-artifact contract, not an internal detail, and that is exactly
+// how the bug described below happened: the name lived in three files, the
+// registration moved to schtasks, and this one kept deleting something else.
+// The value is a var rather than a const so the windows test can point
+// StopServices at a scratch task instead of the real one — a test that deleted
+// a developer's actual logon task would be worse than no test.
+var nodeTaskName = "OpenPandaNode"
+
 // StopServices best-effort removes the logon task that scripts/install.ps1
 // registers, so `panda uninstall` leaves no auto-start behind.
 //
@@ -19,5 +30,5 @@ import "os/exec"
 // Failures stay ignored: no task registered is the normal case, and the task
 // itself belongs to whoever created it.
 func StopServices() {
-	_ = exec.Command("schtasks.exe", "/Delete", "/TN", "OpenPandaNode", "/F").Run()
+	_ = exec.Command("schtasks.exe", "/Delete", "/TN", nodeTaskName, "/F").Run()
 }

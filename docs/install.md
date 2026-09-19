@@ -134,7 +134,9 @@ panda uninstall --backup-only
 
 只执行备份（写 `~/openpanda-backup-<时间戳>.zip`），不删除任何文件，适合升级前留档。
 
-卸载后可用 `panda doctor` 复核环境（应提示 `panda` 不再可用）。开机自启如需彻底移除，参考上文「手动控制」的停用命令。
+卸载后可用 `panda doctor` 复核环境（应提示 `panda` 不再可用）。
+
+`panda uninstall` 会**顺带停用开机自启**：macOS 注销 LaunchAgent（`launchctl bootout`）、Linux 停用用户 systemd 单元（`systemctl --user disable --now`）、Windows 删除 `OpenPandaNode` 登录计划任务（`schtasks /Delete`）。若自启是你按上文手动注册的（例如换了服务名），它不在清理范围内，此时再用「手动控制」里的停用命令删一次。
 
 ## 发布一个新版本
 

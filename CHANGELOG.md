@@ -42,6 +42,12 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Fixed
+
+- **Installer no longer aborts a successful install on a headless Linux host** — `scripts/install.sh --yes` read `$USER`, which is unset in containers, CI runners and plain SSH sessions — exactly the hosts the flag exists for. Under `set -u` that aborted the script right after the binary, PATH entry and self-check had all succeeded, so a good install was reported as a failure and printed no completion message. The user name is now derived instead.
+- **Windows uninstall removes the logon task** — `panda uninstall` stopped a service name the installer had stopped creating when auto-start moved to a scheduled task, so `OpenPandaNode` survived the uninstall and relaunched a daemon whose binary had just been deleted, at every logon, while reporting the failure to someone who had already uninstalled the product. It now deletes the task.
+- **Homebrew formula pinned to a release that no longer exists** — the tap's formula pointed at `v0.0.8`, whose tag and release had been deleted, so `brew install Xustalis/openpanda/openpanda` fetched an archive that 404s. The tap is back on the newest published tag, and a guard asserts the formula's version and SHA-256 against the released asset.
+
 ## [0.0.8-preview] - 2026-09-19
 
 The transition to a formal open-source project: OpenPanda evolves from an experimental task router into a unified, production-ready personal agent orchestration operating system. This comprehensive preview release introduces an offline Skills Hub, first-class project-aware delegation, capability card auto-detection and multi-surface editing, an interactive full-screen TUI with mid-turn steering and native terminal mouse selection, active failover with credential-recovery model injection, multi-model registry, transparent execution tracking, and web console workflows.
