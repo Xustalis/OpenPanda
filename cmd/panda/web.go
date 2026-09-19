@@ -93,7 +93,10 @@ func runWeb(args []string) {
 		if targetAddr == "" {
 			targetAddr = "127.0.0.1:7840"
 		}
-		fmt.Printf("Panda Web 已在后台静默运行 [PID: %d]\n访问地址: %s\n运行日志: %s\n", cmd.Process.Pid, panelURL(targetAddr), logFile)
+		fmt.Println(i18n.Tf(loc, "web.background",
+			"pid", strconv.Itoa(cmd.Process.Pid),
+			"url", panelURL(targetAddr),
+			"log", logFile))
 		return
 	}
 

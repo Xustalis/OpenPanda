@@ -28,7 +28,7 @@ def write_executable(path, body):
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def run_adapter(name, cli_name, cli_body, env=None, timeout=5, extra_request=None):
+def run_adapter(name, cli_name, cli_body, env=None, timeout=10, extra_request=None):
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
         work = tmp / "work"
@@ -45,7 +45,7 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=5, extra_request=Non
         merged["PATH"] = str(tmp) + os.pathsep + merged.get("PATH", "")
         if env:
             merged.update(env)
-        req = {"prompt": "contract prompt", "timeout_s": 2, "cwd": str(work)}
+        req = {"prompt": "contract prompt", "timeout_s": 3, "cwd": str(work)}
         if extra_request:
             req.update(extra_request)
         proc = subprocess.run(
@@ -241,6 +241,56 @@ print(json.dumps({"type":"message.updated","properties":{"info":{"tokens":{"inpu
         self.assertEqual(payload["tokens"], 12)
         self.assertEqual(payload["cost"], 0.02)
 
+    def test_opencode_current_stream_shape_contract(self):
+        """The shipped 1.18.x CLI puts the payload on the event, not under
+        "properties".
+
+        Every field the adapter needs — part, sessionID, tokens, cost — sits at
+        the top level (captured verbatim from `opencode run --format json`). The
+        nested fixture above pins the older shape, which is why the adapter's
+        property-only lookup stayed green in CI while producing nothing against
+        the real CLI: no text was extracted, and the result fell through to the
+        stderr log wall.
+        """
+        payload, progress, _ = run_adapter(
+            "opencode.py", "opencode", r'''
+import json
+print(json.dumps({"type":"step_start","timestamp":1789547927287,"sessionID":"ses_real","part":{"id":"prt_s","messageID":"msg_1","sessionID":"ses_real","type":"step-start"}}))
+print(json.dumps({"type":"tool_use","timestamp":1789548046933,"sessionID":"ses_real","part":{"id":"prt_t","messageID":"msg_1","sessionID":"ses_real","type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"uname -m"},"output":"arm64\n","title":"uname -m"}}}))
+print(json.dumps({"type":"step_finish","timestamp":1789548046939,"sessionID":"ses_real","part":{"id":"prt_f1","messageID":"msg_1","sessionID":"ses_real","type":"step-finish","reason":"tool-calls","tokens":{"total":9667,"input":25,"output":42,"reasoning":0,"cache":{"write":0,"read":9600}},"cost":0}}))
+print(json.dumps({"type":"text","timestamp":1789547927591,"sessionID":"ses_real","part":{"id":"prt_x","messageID":"msg_1","sessionID":"ses_real","type":"text","text":"`arm64`"}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "`arm64`")
+        self.assertEqual(payload["session_id"], "ses_real")
+        self.assertEqual(payload["usage"], {"input_tokens": 25, "output_tokens": 42})
+        self.assertEqual(payload["tokens"], 67)
+        self.assertTrue(
+            any("bash" in line for line in progress),
+            "a completed tool call must surface as a progress note: %r" % (progress,),
+        )
+
+    def test_opencode_textless_stream_fails_instead_of_reporting_success(self):
+        """Events with no assistant text must be a failure, not a green result.
+
+        Returning the stderr log wall as "ok" is what turned one broken run into
+        a task that could never finish: the supervisor judge saw no answer, kept
+        re-running the agent until the budget was spent, and parked the task in
+        review. A failure hands the work to the next adapter in the chain.
+        """
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode", r'''
+import json, sys
+print(json.dumps({"type":"step_start","sessionID":"ses_x","part":{"id":"p","type":"step-start"}}))
+sys.stderr.write("timestamp=2026-01-01T00:00:00Z level=INFO message=noise\n")
+''',
+        )
+        self.assertFalse(payload["ok"], payload)
+        self.assertIn("no assistant text", payload["result"])
+        # The stderr tail is bounded diagnostics, never the whole log.
+        self.assertLessEqual(len(payload["result"].splitlines()), 2, payload["result"])
+
     def test_opencode_resume_and_plain_fallback_contract(self):
         # Resume threads --session through to the CLI.
         payload, _, _ = run_adapter(
@@ -366,7 +416,7 @@ print("openclaw answer")
 import time
 time.sleep(10)
 ''',
-            timeout=5,
+            timeout=8,
         )
         self.assertFalse(payload["ok"], payload)
         self.assertEqual(payload["exit_code"], 124)

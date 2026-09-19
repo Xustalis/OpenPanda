@@ -169,8 +169,16 @@ func dsmlParamValue(attrs, raw string) any {
 // registry's unknown-tool result the model can correct. In a tool-free round
 // the call cannot run: the markup is stripped and any prose the model emitted
 // alongside is kept as the answer, and a markup-only response is REJECTED
-// with an actionable error. Unparsable markup is always rejected — never
-// shown to the user as if it were an answer.
+// with an actionable error.
+//
+// Markup that carries no usable invoke is not an automatic failure. A stray or
+// half-emitted marker can sit next to a perfectly good answer ("… done.
+// <||DSML||tool_calls>" with nothing after it), and rejecting the whole turn
+// for it cost the user the entire ask — the tool loop retried the same
+// deterministic response until its budget ran out. So the markup is stripped
+// and the remainder is handed to the ordinary JSON/prose parser; the error only
+// stands when nothing usable is left. What never happens either way is raw
+// markup reaching the user as an answer.
 func resolveDSML(resp Response, toolsOffered bool) (Output, error) {
 	uses, preamble, ok := parseDSMLToolCalls(resp.Text)
 	if ok && toolsOffered {
@@ -189,8 +197,39 @@ func resolveDSML(resp Response, toolsOffered bool) (Output, error) {
 			Err:     fmt.Errorf("entry: DSML tool call %q in a tool-free round", uses[0].Name),
 		}
 	}
+	// Unparsable markup: strip it and let the normal parser try the rest.
+	if stripped := strings.TrimSpace(StripDSMLToolCalls(resp.Text)); stripped != "" {
+		if out, err := ParseOutput(stripped); err == nil {
+			const note = "（已忽略模型输出中无法解析的工具调用标记）"
+			if out.Note == "" {
+				out.Note = note
+			} else {
+				out.Note += " " + note
+			}
+			return out, nil
+		}
+	}
 	return Output{}, &ClassifyError{
 		UserMsg: "模型以 DSML 文本形式返回了工具调用，但无法解析为有效调用（接入点协议不兼容）。请重试，或更换支持原生工具调用的入口模型/接入点。",
-		Err:     fmt.Errorf("entry: unparsable DSML tool-call markup"),
+		// The offending markup goes into the wrapped cause, not the user message:
+		// it is the only evidence of what the endpoint actually emitted, and an
+		// "unparsable" error with no sample is undiagnosable. Bounded and
+		// collapsed to one line so a runaway response cannot flood the log.
+		Err: fmt.Errorf("entry: unparsable DSML tool-call markup: %s", dsmlSample(resp.Text)),
 	}
+}
+
+// dsmlSample renders a bounded, single-line preview of markup that failed to
+// parse, for the log. This is what turns "unparsable" into a fixable report: the
+// delimiters and the attribute order are exactly what the parser needs to match.
+func dsmlSample(text string) string {
+	const limit = 300
+	s := strings.Join(strings.Fields(text), " ")
+	if s == "" {
+		return "(empty)"
+	}
+	if len(s) > limit {
+		s = s[:limit] + "…"
+	}
+	return s
 }

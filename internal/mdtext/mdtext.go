@@ -16,9 +16,16 @@
 package mdtext
 
 import (
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/ansi"
+	"github.com/charmbracelet/glamour/styles"
+	"golang.org/x/term"
 )
 
 // inline patterns shared by both renderers. Ordering matters when applying:
@@ -206,4 +213,87 @@ func stripInline(s string) string {
 	s = reItalic.ReplaceAllString(s, "$1")
 	s = reCode.ReplaceAllString(s, "$1")
 	return s
+}
+
+// isDarkBackground reports whether the terminal is expected to have a dark
+// background without querying the terminal via escape sequences (OSC 11), which
+// would leak into stdin during raw-mode TUI input loops.
+func isDarkBackground() bool {
+	if s := os.Getenv("COLORFGBG"); s != "" {
+		parts := strings.Split(s, ";")
+		if len(parts) >= 2 {
+			bg, err := strconv.Atoi(parts[len(parts)-1])
+			if err == nil {
+				return bg < 7 || bg == 8
+			}
+		}
+	}
+	return true
+}
+
+func defaultStyle() ansi.StyleConfig {
+	var cfg ansi.StyleConfig
+	if isDarkBackground() {
+		cfg = styles.DarkStyleConfig
+	} else {
+		cfg = styles.LightStyleConfig
+	}
+	zero := uint(0)
+	cfg.Document.Margin = &zero
+	cfg.Document.BlockPrefix = ""
+	cfg.Document.BlockSuffix = ""
+	return cfg
+}
+
+// Render formats s into rich terminal Markdown using Glamour with automatic
+// dark/light styling and word wrap to width columns. If width <= 0, word wrap
+// is disabled. If Glamour fails or cannot format, it gracefully falls back to ANSI(s).
+func Render(s string, width int) (string, error) {
+	if strings.TrimSpace(s) == "" {
+		return "", nil
+	}
+	var opts []glamour.TermRendererOption
+	opts = append(opts, glamour.WithStyles(defaultStyle()))
+	if width > 0 {
+		opts = append(opts, glamour.WithWordWrap(width))
+	}
+	r, err := glamour.NewTermRenderer(opts...)
+	if err != nil {
+		return ANSI(s), err
+	}
+	out, err := r.Render(s)
+	if err != nil {
+		return ANSI(s), err
+	}
+	return strings.Trim(out, "\n"), nil
+}
+
+// RenderTerminal formats s for terminal display. If NO_COLOR is set, it falls
+// back to Plain(s). Otherwise it renders via Glamour with word wrapping fitted
+// to the terminal width (default 80, capped at 120 cols for reading comfort).
+func RenderTerminal(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return ""
+	}
+	if os.Getenv("NO_COLOR") != "" {
+		return Plain(s)
+	}
+
+	width := 80
+	if fi, err := os.Stdout.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+		if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
+			width = w
+		}
+	}
+	if width > 120 {
+		width = 120
+	} else if width > 4 {
+		width -= 2
+	}
+
+	out, err := Render(s, width)
+	if err != nil {
+		return ANSI(s)
+	}
+	return out
 }

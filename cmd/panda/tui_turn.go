@@ -8,10 +8,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/cliui"
@@ -61,6 +63,10 @@ func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.liveTask = newTaskProgress(p.Name, now)
+	case askengine.ProgressTool:
+		if m.liveTask != nil {
+			m.liveTask.recordTool(label, now)
+		}
 	default:
 		if m.liveTask != nil {
 			m.liveTask.advance(label, now)
@@ -196,16 +202,27 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 			return block{kind: blockTask, ok: out.OK, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
 		}
 		if summary := strings.TrimSpace(out.Report); summary != "" {
-			body := summary
-			if out.OK && strings.TrimSpace(out.Stdout) != "" && !strings.Contains(summary, strings.TrimSpace(out.Stdout)) {
-				body = summary + "\n\n" + strings.TrimRight(out.Stdout, "\n")
-			}
-			return block{kind: blockTask, ok: out.OK, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
+			// The LLM summary is the whole display, matching the classic REPL:
+			// it prints the summary and stops. Appending the raw stdout here
+			// buried the readable report under a wall of execution log.
+			return block{kind: blockTask, ok: out.OK, body: summary, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
 		}
 		if out.OK {
-			return block{kind: blockTask, ok: true, body: strings.TrimRight(out.Stdout, "\n"), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
+			// When no LLM summary was generated (queue-parked, budget-cut, summarizer
+			// degraded), fall back to the cleaned agent output so the user sees the
+			// actual work result rather than a blank note.
+			if log := cleanedTaskLog(loc, out.Stdout); log != "" {
+				return block{kind: blockTask, ok: true, body: log, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
+			}
+			body := i18n.T(loc, "tui.task.noSummary")
+			if out.TaskID != "" {
+				body += " " + i18n.Tf(loc, "tui.task.rawLogHint", "id", out.TaskID)
+			}
+			return block{kind: blockTask, ok: true, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
 		}
-		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, out.Stderr), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
+		// Failure keeps its exit evidence, with a runaway stderr tail-capped
+		// so a noisy command cannot flood the transcript.
+		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, cleanedTaskLog(loc, out.Stderr)), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
 	case "plan":
 		// A plan that failed to start has no board to follow and no stages, so
 		// its summary line would read "plan  · 0 stages" — a failure rendered
@@ -225,6 +242,30 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 		}
 		return block{kind: blockAnswer, body: body, meta: resultCostMeta(out)}
 	}
+}
+
+// taskLogMaxLines caps the degraded raw-output fallback: without an LLM
+// summary the transcript shows the log's tail, which is where the outcome
+// lands, rather than every line the agent ever printed.
+const taskLogMaxLines = 40
+
+// cleanedTaskLog makes a raw agent log presentable for the transcript: ANSI
+// artefacts stripped, trailing blank lines dropped, and an over-long log cut
+// to its last taskLogMaxLines lines behind a note counting the elided ones.
+// The note is localized, so it takes the turn's locale.
+func cleanedTaskLog(loc i18n.Locale, stdout string) string {
+	text := ansi.Strip(strings.TrimRight(stdout, "\n"))
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) <= taskLogMaxLines {
+		return text
+	}
+	elided := len(lines) - taskLogMaxLines
+	note := i18n.Tf(loc, "tui.task.logElided",
+		"total", strconv.Itoa(len(lines)), "shown", strconv.Itoa(taskLogMaxLines))
+	return note + "\n" + strings.Join(lines[elided:], "\n")
 }
 
 func resultCostMeta(out *askengine.Result) string {

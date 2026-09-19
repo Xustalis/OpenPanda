@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/ins
 等效的显式写法：
 
 ```bash
-sh scripts/install.sh --version 0.0.8   # 安装指定版本（默认 latest）
+sh scripts/install.sh --version 0.0.8   # 安装指定版本（如 0.0.7 或 0.0.8，默认 latest）
 sh scripts/install.sh --prefix /opt/openpanda  # 自定义安装目录
 sh scripts/install.sh --yes                    # 额外注册开机自启（不询问）
 sh scripts/install.sh --no-service             # 不碰开机自启
@@ -138,13 +138,14 @@ panda uninstall --backup-only
 
 ## 发布一个新版本
 
-1. 变更合入 `main`，打标签：`git tag v0.0.8 && git push origin v0.0.8`（注意：CHANGELOG 必须先有该版本章节，否则 release 流水线会拒绝发布）
+1. 变更合入 `main`，确认该 commit 的 **Gate 已经跑绿**，再打标签：`git tag v0.0.8 && git push origin v0.0.8`（注意两点：CHANGELOG 必须先有该版本章节，否则 release 流水线会拒绝发布；release 流水线会向 Gate 查验**同一个 commit** 的结论，没有 push 触发的 Gate 运行记录、或结论不是 success，都会直接拒绝发布并报错）。
 2. `.github/workflows/release.yml` 自动跨平台构建 → 打包 `.tar.gz`/`.zip` → 生成 `checksums.txt` → 发布 GitHub Release。
-3. 落地后可用：
+3. 预发布（带连字符的标签，如 `v0.0.8-preview`、`v0.0.8-alpha`、`v1.0.0-rc1`）会自动标记为 **pre-release**：它不会成为仓库的 Latest，`releases/latest` 仍指向最后一个稳定版，一键安装脚本也只装稳定版；同时**不会**同步 Homebrew tap。
+4. 落地后可用：
 
-   - 项目 README / `docs/install.md` 里的一键脚本直接装到最新版；
+   - 项目 README / `docs/install.md` 里的一键脚本直接装到最新**稳定**版（要装预发布版请显式指定，例如 `--version 0.0.8-preview`）；
 
-   - Homebrew 用户 `brew upgrade openpanda`；发布流程会生成带固定 SHA-256 的配方并同步到 tap。
+   - Homebrew 用户 `brew upgrade openpanda`；仅**正式版**会生成带固定 SHA-256 的配方并同步到 tap。
 
 ## 疑难排查
 

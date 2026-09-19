@@ -10,6 +10,7 @@ package main
 // tui_msgs.go) into screen updates and keystrokes into asks.
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -87,14 +88,34 @@ type tuiModel struct {
 	// projName caches the active project for the status row.
 	projName string
 
-	mode         tuiMode
-	stream       *askStream
-	exec         *commandExec
-	execGen      uint64
-	execText     strings.Builder
-	started      time.Time
-	chatHistory  *chatHistory
+	mode        tuiMode
+	mouse       mouseMode
+	stream      *askStream
+	exec        *commandExec
+	execGen     uint64
+	execText    strings.Builder
+	started     time.Time
+	chatHistory *chatHistory
+
+	// scrollOffset is how many lines the transcript is scrolled back from the
+	// live bottom; 0 means anchored at the bottom. It is clamped on BOTH ends:
+	// the lower end here, and the upper end against scrollLimit.
 	scrollOffset int
+	// scrollLimit is the largest scrollOffset that still shows content — the
+	// content height minus the viewport, republished by View on every render.
+	//
+	// It has to be shared through a pointer because View is a value method, as
+	// the rest of the model is: it can read scrollOffset but cannot write it
+	// back. Clamping only inside View (the obvious fix, and where maxScroll is
+	// computed) would leave this field free to grow past the top, and every
+	// scroll-down after an overshoot would then do nothing visible until the
+	// phantom offset unwound. Holding a wheel for a moment is enough to build
+	// one: 100 notches made the next ~62 notches of scrolling inert.
+	//
+	// It starts at MaxInt — "unbounded until the first render publishes a real
+	// limit" — so a scroll that somehow arrives before the first frame is not
+	// clamped against a limit of zero.
+	scrollLimit *int
 
 	// Navigation lists and panels
 	listKind      listKind
@@ -216,9 +237,19 @@ func newTUIModel(r *repl) tuiModel {
 		sp:          sp,
 		menu:        newSlashMenu(r.loc),
 		mode:        modeSplash,
+		mouse:       resolveMouseMode(r.cfg),
 		started:     time.Now(),
 		chatHistory: cHist,
+		scrollLimit: newScrollLimit(),
 	}
+}
+
+// newScrollLimit allocates the shared scroll ceiling. It begins unbounded: the
+// first View replaces it with the real content height, and until then nothing
+// should be clamped away (see tuiModel.scrollLimit).
+func newScrollLimit() *int {
+	limit := math.MaxInt
+	return &limit
 }
 
 // Init focuses the input, starts the cursor blink, prints the welcome banner
@@ -233,7 +264,7 @@ func (m tuiModel) Init() tea.Cmd {
 	// width — an 80-column box in a 52-column window. The first WindowSizeMsg
 	// prints it (see Update), which is the earliest moment the frame can match
 	// the terminal it is sitting in.
-	return tea.Batch(textarea.Blink, watchTasks(m.r))
+	return tea.Batch(textarea.Blink, watchTasks(m.r), altScrollCmd(m.mouse))
 }
 
 // blockCommitMsg reports that a block was appended to chatHistory.

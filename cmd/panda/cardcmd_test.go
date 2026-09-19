@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -128,5 +129,41 @@ func TestDefaultCardPathNeverTargetsSystemDirWhenMissing(t *testing.T) {
 		if p == sysDir {
 			t.Errorf("defaultCardPath() returned system path %q when it does not exist; want user path", p)
 		}
+	}
+}
+
+// TestCardVerbReadsPastGlobalFlagValues pins the argv contract the level-2 card
+// verbs (native/agent/manual) depend on. reorderFlags hoists every flag — and
+// the value of a value-taking flag — ahead of the positionals, so cardVerb
+// really receives ["--card", <path>, <verb>, …]. It used to consult the
+// dash-less flag table, which does not list --card/--config, so it read the
+// *path* as the verb and every `panda card agent set --card <path> …` fell
+// through to the usage line instead of editing the card.
+func TestCardVerbReadsPastGlobalFlagValues(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		wantVerb string
+	}{
+		{"global --card before the verb", []string{"--card", "/tmp/capabilities.yaml", "remove", "deepseek_harness"}, "remove"},
+		{"global --config before the verb", []string{"--config", "/tmp/config.yaml", "set", "opencode", "tier=1"}, "set"},
+		{"value flag before the verb", []string{"--tier", "1", "add", "opencode"}, "add"},
+		{"verb first, flags after", []string{"remove", "opencode", "--card", "/tmp/c.yaml"}, "remove"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			verb, rest := cardVerb(tc.args)
+			if verb != tc.wantVerb {
+				t.Fatalf("cardVerb(%v) verb = %q, want %q", tc.args, verb, tc.wantVerb)
+			}
+			// The flags have to survive the split: the caller's fs.Parse is what
+			// reads them, so dropping them would silently edit the wrong card.
+			if strings.Contains(strings.Join(tc.args, " "), "--") {
+				for _, want := range []string{"--card", "--config", "--tier"} {
+					if strings.Contains(strings.Join(tc.args, " "), want) && !slices.Contains(rest, want) {
+						t.Errorf("cardVerb(%v) dropped %s from rest %v", tc.args, want, rest)
+					}
+				}
+			}
+		})
 	}
 }

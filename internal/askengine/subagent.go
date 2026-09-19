@@ -26,6 +26,18 @@ import (
 func taskDispatchNote(spec *entry.TaskSpec) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "已派发子代理任务：%s", spec.Title)
+	var subagentTypes []string
+	if spec.Spec.Node != "" {
+		subagentTypes = append(subagentTypes, fmt.Sprintf("设备节点: %s", spec.Spec.Node))
+	}
+	for _, ab := range spec.Requires.Abilities {
+		if strings.HasPrefix(ab, "agent:") {
+			subagentTypes = append(subagentTypes, fmt.Sprintf("Harness: %s", strings.TrimPrefix(ab, "agent:")))
+		}
+	}
+	if len(subagentTypes) > 0 {
+		fmt.Fprintf(&b, "【Subagent: %s】", strings.Join(subagentTypes, " · "))
+	}
 	if len(spec.Requires.Abilities) > 0 {
 		fmt.Fprintf(&b, "（需要能力：%s）", strings.Join(spec.Requires.Abilities, "、"))
 	}
@@ -33,7 +45,7 @@ func taskDispatchNote(spec *entry.TaskSpec) string {
 		fmt.Fprintf(&b, "\n目标：%s", spec.Spec.Target)
 	}
 	if spec.Spec.Node != "" {
-		fmt.Fprintf(&b, "\n指定节点：%s", spec.Spec.Node)
+		fmt.Fprintf(&b, "\n指定设备：%s", spec.Spec.Node)
 	}
 	return b.String()
 }
@@ -52,7 +64,7 @@ func taskObservation(res *Result) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[子代理任务结果] %s（%s）\n状态：%s", res.TaskTitle, res.TaskID, res.TaskState)
 	if res.Agent != "" {
-		fmt.Fprintf(&b, "，执行智能体：%s", res.Agent)
+		fmt.Fprintf(&b, "，执行智能体/Harness：%s", res.Agent)
 		if res.Model != "" {
 			fmt.Fprintf(&b, "（模型：%s）", res.Model)
 		}
@@ -63,14 +75,15 @@ func taskObservation(res *Result) string {
 	if res.ExitCode != 0 {
 		fmt.Fprintf(&b, "，退出码 %d", res.ExitCode)
 	}
-	if out := excerpt(res.Stdout, 12000); out != "" {
+	// Adaptive excerpting: 6000 runes for stdout and 2500 for stderr to bound prompt token growth
+	if out := excerpt(res.Stdout, 6000); out != "" {
 		fmt.Fprintf(&b, "\n输出摘录：\n%s", out)
 	}
-	if errText := excerpt(res.Stderr, 3000); errText != "" {
+	if errText := excerpt(res.Stderr, 2500); errText != "" {
 		fmt.Fprintf(&b, "\n错误摘录：\n%s", errText)
 	}
 	if res.OK && (res.TaskState == "done" || res.ExitCode == 0) {
-		b.WriteString("\n\n【核心指示】：该子任务已成功执行完成，底层完整输出已由系统全量保存并将完整展示给用户。请直接基于上述结果向用户做精炼的总结与最终答复，切勿再次派发子任务重复执行或尝试'补齐'内容。")
+		b.WriteString("\n\n【核心指示】：该子代理已成功执行完成。请直接基于上述执行结果与输出，向用户做完整、清晰、结构化的总结汇报与最终答复（如为分析任务，请提供核心发现与结论；如为操作任务，说明具体修改与结果），切勿再次派发子任务重复执行。")
 	} else {
 		b.WriteString("\n\n请基于以上结果继续本轮对话：向用户汇报，或决定下一步。")
 	}

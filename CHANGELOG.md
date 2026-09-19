@@ -42,51 +42,62 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+## [0.0.8-preview] - 2026-09-19
+
+The transition to a formal open-source project: OpenPanda evolves from an experimental task router into a unified, production-ready personal agent orchestration operating system. This comprehensive preview release introduces an offline Skills Hub, first-class project-aware delegation, capability card auto-detection and multi-surface editing, an interactive full-screen TUI with mid-turn steering and native terminal mouse selection, active failover with credential-recovery model injection, multi-model registry, transparent execution tracking, and web console workflows.
+
 ### Added
 
 - **Capability card auto-detection and one-step setup** — host probing (hardware, installed agent CLIs, resource class) now lives in a shared `internal/carddetect` package used by `panda detect`, `panda card rescan/edit`, onboarding and the web panel; a node without a card gets one assembled automatically instead of failing at first use.
 - **Lazy scheduler initialization** — the ask engine no longer requires `CardPath` up front: it derives the card location from config or the default path and brings the scheduler up on the first task dispatch or card mutation, so answers and memory tools work before any card exists.
 - **Structured card edits from every surface** — agent entries gain field-level `card_agent_set` updates and the web panel, REPL/TUI and CLI all mutate `capabilities.yaml` through one shared, validating path (`internal/cardmut`) that keeps hand-written comments intact.
-- **Proxy-aware sandbox** — the execution sandbox now passes standard proxy environment variables (upper- and lowercase) through to child processes, so routed installs and downloads work behind a proxy.
-- **Wider agent discovery** — the registry recognizes more binary aliases (`claude-code`, `grok-build`, `deepseek-harness`, `hermes-agent`) and probes the usual install dirs (`~/.local/bin`, `/opt/homebrew/bin`, …) in addition to `PATH`; OpenCode credential discovery follows its current config layout.
-
-### Changed
-
-- **System prompt rewritten in English with firmer task routing** — the entry model is now explicitly required to answer execution or agent-dispatch requests by emitting task JSON immediately, instead of passively chatting; dispatch-related trigger words (`调度`, `派发`, `dispatch`, `schedule`, …) are recognized in every language the prompt uses.
-- **Slash and shell commands stay inside the TUI** — `/…` and `!…` lines no longer release the terminal: their output is captured straight into the scrollback, and the chat view gains PgUp/PgDn and mouse-wheel scrolling to revisit it.
-- **Faster, more accurate provider failure handling** — adapters report auth/quota/5xx/provider failures with deterministic exit codes, the commander normalizes agent names and endpoint/model pairs per adapter (including DeepSeek's dual endpoints), and routing falls back to a general-purpose agent when a task names no specific requirement, so failed injections recover instead of retrying a dead endpoint.
-
-### Fixed
-
-- **Config resolution without a config file** — path resolution falls back to the user directory instead of `/etc`, and config writes create parent directories first; `node.card_path` is honored as the card location.
-- **Card edits no longer silently no-op** — adding an existing id or removing a missing one is an error everywhere, and the engine reloads the card after every mutation so changes take effect immediately.
-
-### Breaking changes
-
-- **The `taskq_create` management tool is removed** — task creation is now exclusively the entry model's job (task JSON output, executed immediately by the scheduler) or comes from the board/external tools; the queue tools (`taskq_list/show/cancel/priority/move`) remain for managing the backlog. Agents scripted to call `taskq_create` should emit a task or use the board instead.
-
-## [0.0.8] - 2026-09-06
-
-The official 0.0.8: the skills system learns to serve itself — a curated offline hub, importing from anywhere, and an assistant that discovers and installs the workflow a task needs while it runs. The TUI grows into a full-screen application with a first-run wizard, the web console gains skills management, session cancellation and an execution timeline, and the engine routes around failing models instead of dying with them.
-
-### Added
-
 - **Skills Hub with a curated offline catalog** — `panda skill hub list|search|info|install` (and `/skill hub …` in the REPL) browse and install production-grade skills; a first set of built-in playbooks ships inside the binary and initializes on first use, so a fresh node is never empty (668ddcd).
 - **Skill import from paths, URLs, and archives** — `panda skill import` takes a local path or a URL, a single markdown file or a tar.gz/zip bundle, with scope/name/status/force overrides; downloads are capped at 10 MiB and the frontmatter is validated before anything lands on disk (668ddcd).
 - **Autonomous skill discovery and installation as agent tools** — the Ask engine can search the hub and install a skill mid-task, so work that needs a workflow can equip itself instead of failing for the lack of one (a5fa093).
 - **The `panda skill` command family and `/skill` REPL commands** — `list`, `approve`, `reject`, `reset`, `find`/`discover`, `import`, `hub`, and `install`/`add`, with JSON output for scripts (a5fa093, f5b6884).
 - **Skills management in the web console** — a skills panel browses installed skills, searches the hub, and installs or toggles skills from the browser, backed by the same store as the CLI (35e282b, f5b6884).
+- **Projects as first-class citizens** — a projects table (work dir, description, timestamps) plus a settings-backed current-project pointer that survives one-shot processes (`panda ask` is not a daemon); the full CLI surface `panda project list | new --dir --desc | show | rename | remove | enter | exit`, with `list` marking the current one (a9fa471, 1260cb9).
+- **Tasks inherit the entered project** — the engine carries an ambient project that fills in what the classifier did not name, and a task in a project knows its work dir and description — before, it knew less than a task that belonged to no project (8c82c5e).
+- **A delegated task carries its project** — project memory is packed into the delegation payload (size-capped), the work tree travels as a chunked artifact reference reusing the plan plane's machinery, and the executor re-derives the work dir under its own root, rejecting project names with path characters (a name from the bus is untrusted input). Finished output is adopted back into the local project directory, overwrite-style — two machines editing one project is a real conflict and is never silently merged (a1f1d19).
+- **Console: projects and settings** — project CRUD, enter/exit and metadata in the console API (7cda886); project rows carrying work dir, current-project state and the verbs that change them (146c1ba); and approval, routing, memory-limit and injection settings — the approval gate is the setting a user most wants to change after watching the queue for an afternoon, and it no longer requires leaving the console. All four join the settings API the console already had rather than a second endpoint (7a60a80, 0736c2f).
+- **Plan board endpoints** — `GET /api/plans` (which plans exist, how far along) and `GET /api/plans/{id}` (one plan's stages with the artifact wiring between them — the view that answers "did the training stage actually get the script?"). Starting a plan stays on `/api/ask`, where it already worked (932442a).
+- **Management tools family** — the Ask engine can now directly inspect the running fleet via Tier-1 internal tools (`system_status`, `card_list`, `card_show`, task queue queries), answering questions like "what devices are online?" or "show OrangePi's capabilities" with real-time cluster data.
+- **Mid-turn steering and real stop in TUI** — cancel or steer active tasks mid-flight, with mouse support, live-task progress visuals, and responsive Bubble Tea status rendering.
+- **Active failover & credential-recovery model injection** — when an agent CLI encounters quota exhaustion or invalid credentials (401/403), OpenPanda automatically injects configured fallback models to complete the task without disruption.
+- **Transparent execution and progress tracking** — all agent bash commands, file operations, and tool calls are streamed live via `EvProgress` to the TUI and web console, displaying the exact executing agent and underlying model.
+- **A multi-model registry for `/model`** — the entry model is no longer a single slot. A `models:` list holds named models, and `/model <alias>` switches between them, while `/model add`, `/model list`, `/model fetch`, and `/model test` support DeepSeek, Claude, ChatGPT, Kimi, Volcengine Ark, Zhipu, Qwen, SiliconFlow, OpenRouter, and Ollama (08ede13).
+- **Argument candidates in the slash menu** — commands with enumerated arguments (`/lang`, `/resume`, `/config set`) pop an interactive arrow-navigable menu once space is typed.
+- **Arrow-key selection on the approval card** — Tier-2 approvals support arrow keys (↑↓/←→) and Enter alongside y/n hotkeys.
 - **Full-screen TUI with first-run onboarding** — the terminal UI moves to the alternate screen with keyboard navigation, and a first-run wizard walks a fresh install through setup before the first prompt (ef82d6f).
 - **Model-health circuit breaker with fallback routing** — a model that keeps failing enters a cooldown and the engine re-routes the work to a healthy fallback instead of hammering a dead endpoint for the whole round budget (7c5c643).
 - **Session cancellation in the web console** — a running session can be stopped from the browser, and the cancellation travels the same command path as every other control (35e282b).
 - **A keepalive retry client for the console** — the web client retries dropped connections with backoff, so a network blip no longer strands the UI on a dead stream (35e282b).
+- **Proxy-aware sandbox** — the execution sandbox now passes standard proxy environment variables (upper- and lowercase) through to child processes, so routed installs and downloads work behind a proxy.
+- **Wider agent discovery** — the registry recognizes more binary aliases (`claude-code`, `grok-build`, `deepseek-harness`, `hermes-agent`) and probes the usual install dirs (`~/.local/bin`, `/opt/homebrew/bin`, …) in addition to `PATH`; OpenCode credential discovery follows its current config layout.
 - **noauth model support** — a registry entry can declare that its endpoint takes no `Authorization` header, covering local servers that reject one (7c5c643).
 - **Task queues can be cleared and deleted** — the same verbs from the CLI, the API, and the web console (d5df3d3).
 - **Console: a directory picker and an execution event timeline** — work directories are chosen from a browser dialog instead of a typed path, and agent commands, file edits and tool calls render as a chronological timeline on the session detail view (291dc76).
+- **`panda read` command** — view markdown documents and text directly in the terminal with syntax-highlighted rendering and pipe preservation.
+
+### Changed
+
+- **The TUI hands the mouse back to the terminal** — the full-screen front end no longer captures the mouse by default, so drag-select, double-click and the terminal's own copy shortcut work again. Scrolling survives without it: alternate scroll turns a wheel notch into an arrow key, PageUp/PageDown always work, and `ctrl+t` swaps to the old capture mode live (`ui.mouse: scroll` / `PANDA_MOUSE=scroll` make it permanent). Worth knowing in *either* mode: capture never cost copy outright, only copy-without-a-modifier — iTerm2 still selects while you hold `Option` (and copies on release), Terminal.app while you hold `Fn`.
+- **The approval gate covers only irreversible work** — Tier 2 now means "no later command can put it back": deletion, disk/partition/firmware state, power state, privilege escalation, and the argument forms that lose work (`git push --force`, `rsync --delete`, `sed -i`, `find -delete`). curl, wget, make, ssh, systemctl, mount, docker, kubectl, terraform, the package managers, chmod/chown/mv/cp/tee and friends run unattended, and `bash scripts/build.sh` no longer prompts — a node that cannot run its own build cannot do the work it exists for (e593470).
+- **Download-to-file fetches stay gated** — a curl/wget that saves its bytes to a path (`-o`, `-O`, `--output`) is Tier 2: the bytes are opaque to the classifier and the next step is usually to run them, and `curl -o x …; bash x` graded Tier 1 end to end before this change. Fetches to stdout or `/dev/null` — the reachability-probe spellings — are unaffected (review 2026-09-02, P1).
+- **System prompt rewritten in English with firmer task routing** — the entry model is now explicitly required to answer execution or agent-dispatch requests by emitting task JSON immediately, instead of passively chatting; dispatch-related trigger words (`调度`, `派发`, `dispatch`, `schedule`, …) are recognized in every language the prompt uses.
+- **Slash and shell commands stay inside the TUI** — `/…` and `!…` lines no longer release the terminal: their output is captured straight into the scrollback, and the chat view gains PgUp/PgDn and mouse-wheel scrolling to revisit it.
+- **Faster, more accurate provider failure handling** — adapters report auth/quota/5xx/provider failures with deterministic exit codes, the commander normalizes agent names and endpoint/model pairs per adapter (including DeepSeek's dual endpoints), and routing falls back to a general-purpose agent when a task names no specific requirement, so failed injections recover instead of retrying a dead endpoint.
+- **One welcome banner everywhere, with sharper REPL ergonomics** — the bare REPL, the help and the error paths share the same ASCII-logo greeting, and the TUI view layer got a matching pass (0d44ee4).
+- **TUI: distinct visual blocks and a high-contrast prompt panel** — user input, assistant output and system notices occupy clearly separated blocks, and the user prompt stands out on any theme (b0979cc).
+- **Console: "Panda Paper" visual redesign & workflow polish** — a warm-paper light theme and warm-ink dark theme, bamboo-green accents, serif display type, and reworked session and project views (291dc76).
 
 ### Fixed
 
+- **TUI: terminal input escape sequence residue leakage** — severed or unparsed ANSI escape sequences (such as SGR mouse tracking packets, cursor position reports, Kitty keys, Alt-bracket prefixes) split across read boundaries or generated by uncaptured mouse movement are now strictly filtered and will never leak as invalid characters into the input bar.
 - **Windows console control handler startup panic** — the `PHANDLER_ROUTINE` callback declared a `bool` return, which `windows.NewCallback` rejects (it requires a single `uintptr`-sized result), so the long-lived commands that register it (`panda daemon`, `panda web`) panicked on startup with "compileCallback: expected function with one uintptr-sized result"; the callback now returns `uintptr` (`1` handled / `0` not handled) (#2).
+- **Config resolution without a config file** — path resolution falls back to the user directory instead of `/etc`, and config writes create parent directories first; `node.card_path` is honored as the card location.
+- **Card edits no longer silently no-op** — adding an existing id or removing a missing one is an error everywhere, and the engine reloads the card after every mutation so changes take effect immediately.
+- **The wheel keeps working after `ctrl+t`, and during `exec`** — switching back to select mode now re-requests alternate scroll (Bubble Tea never emits DECSET 1007 itself, so the flag has to follow the mode by hand), and wheel events are handled before the mode gate so reading back a long-running task no longer requires PageUp. Clicks stay ignored while exec runs.
 - **TUI: a resumed conversation is visible again** — reopening a bare chat replays the banked turns into the scrollback behind the welcome banner (capped to the ten most recent pairs, with a note counting what was folded), instead of showing a banner and an empty prompt no matter how much context existed.
 - **TUI: the welcome banner prints at the cursor** — the greeting no longer pads itself down to the bottom edge of tall terminals, which stranded it under a screenful of dead space and put the input row where the eye is not.
 - **TUI: the wheel belongs to the terminal again** — the program no longer captures mouse cell motion, so wheel scrolling, the scrollbar and PageUp/PageDown reach the transcript's own scrollback — the one buffer an application can never scroll itself. Clickable surfaces keep their keyboard paths (y/n, Esc/Enter).
@@ -94,71 +105,19 @@ The official 0.0.8: the skills system learns to serve itself — a curated offli
 - **The Ask engine starts with an empty skills path** — a config without `storage.skills_path` no longer breaks engine initialization; the skill store simply starts empty (3f28486).
 - **SQLite enforces foreign keys** — the store now opens with `foreign_keys=ON`, so rows referencing deleted parents can no longer accumulate (7c5c643).
 - **TUI: the alt-screen view keeps its banner, tips, and chat** — the alternate-screen rework had left the ASCII logo, the tips row and the conversation view behind; all three are back in the full-screen layout (e2be53e).
-
-### Changed
-
-- **One welcome banner everywhere, with sharper REPL ergonomics** — the bare REPL, the help and the error paths share the same ASCII-logo greeting, and the TUI view layer got a matching pass (0d44ee4).
-- **TUI: distinct visual blocks and a high-contrast prompt panel** — user input, assistant output and system notices occupy clearly separated blocks, and the user prompt stands out on any theme (b0979cc).
-- **Web console workflow polish** — the sessions and projects views were reworked around the workflow architecture, with consistent action placement and state rendering (291dc76).
-
-## [0.0.8-preview] - 2026-09-05
-
-The transition to a formal open-source project: OpenPanda evolves from an experimental task router into a unified, production-ready personal agent orchestration operating system. This preview release brings full management tool access to the Ask engine, interactive TUI improvements with mid-turn steering, robust agent fallback and credential-recovery injection, multi-model registry, transparent execution tracking, and project-aware delegation.
-
-### Added
-
-- **Management tools family** — the Ask engine can now directly inspect the running fleet via Tier-1 internal tools (`system_status`, `card_list`, `card_show`, task queue queries), answering questions like "what devices are online?" or "show OrangePi's capabilities" with real-time cluster data.
-- **Mid-turn steering and real stop in TUI** — cancel or steer active tasks mid-flight, with mouse support, live-task progress visuals, and responsive Bubble Tea status rendering.
-- **Active failover & credential-recovery model injection** — when an agent CLI encounters quota exhaustion or invalid credentials (401/403), OpenPanda automatically injects configured fallback models to complete the task without disruption.
-- **Transparent execution and progress tracking** — all agent bash commands, file operations, and tool calls are streamed live via `EvProgress` to the TUI and web console, displaying the exact executing agent and underlying model.
-- **A multi-model registry for `/model`** — the entry model is no longer a single slot. A `models:` list holds named models, and `/model <alias>` switches between them, while `/model add`, `/model list`, `/model fetch`, and `/model test` support DeepSeek, Claude, ChatGPT, Kimi, Volcengine Ark, Zhipu, Qwen, SiliconFlow, OpenRouter, and Ollama.
-- **Argument candidates in the slash menu** — commands with enumerated arguments (`/lang`, `/resume`, `/config set`) pop an interactive arrow-navigable menu once space is typed.
-- **Arrow-key selection on the approval card** — Tier-2 approvals support arrow keys (↑↓/←→) and Enter alongside y/n hotkeys.
-
-### Fixed
-
 - **`/lang` UI locale persistence** — language switching now immediately updates the TUI menus, status row, and help text, and persists cleanly to `config.yaml`.
 - **Metadata preservation across injected models** — execution results correctly retain injected model attribution and emit notification events.
-
-## \[0.0.8-alpha] - 2026-09-03
-
-The project release: a project is no longer a name on a task — it has a work directory, a description and a persistent current-one pointer, tasks launched from inside it inherit it, and a delegated task carries the whole project to the executor, so the machine that runs it knows what it is working on. The approval gate is re-scoped to irreversible work only (with the download-to-file vector re-gated after review), the console gained surfaces for following plans and changing settings, and the console wears a new "Panda Paper" skin. Cut as an alpha: the line is feature-complete for this scope, but it has seen less soak time than a numbered release.
-
-### Added
-
-- **Projects as first-class citizens** — a projects table (work dir, description, timestamps) plus a settings-backed current-project pointer that survives one-shot processes (`panda ask` is not a daemon); the full CLI surface `panda project list | new --dir --desc | show | rename | remove | enter | exit`, with `list` marking the current one (a9fa471, 1260cb9).
-
-- **Tasks inherit the entered project** — the engine carries an ambient project that fills in what the classifier did not name, and a task in a project knows its work dir and description — before, it knew less than a task that belonged to no project (8c82c5e).
-
-- **A delegated task carries its project** — project memory is packed into the delegation payload (size-capped), the work tree travels as a chunked artifact reference reusing the plan plane's machinery, and the executor re-derives the work dir under its own root, rejecting project names with path characters (a name from the bus is untrusted input). Finished output is adopted back into the local project directory, overwrite-style — two machines editing one project is a real conflict and is never silently merged (a1f1d19).
-
-- **Console: projects and settings** — project CRUD, enter/exit and metadata in the console API (7cda886); project rows carrying work dir, current-project state and the verbs that change them (146c1ba); and approval, routing, memory-limit and injection settings — the approval gate is the setting a user most wants to change after watching the queue for an afternoon, and it no longer requires leaving the console. All four join the settings API the console already had rather than a second endpoint (7a60a80, 0736c2f).
-
-- **Plan board endpoints** — `GET /api/plans` (which plans exist, how far along) and `GET /api/plans/{id}` (one plan's stages with the artifact wiring between them — the view that answers "did the training stage actually get the script?"). Starting a plan stays on `/api/ask`, where it already worked (932442a).
-
-- **Multi-model support** — smart base-URL normalization (trailing slashes, missing version prefixes, provider quirks), reasoning fields for thinking-mode models, and OpenAI provider presets (08ede13).
-
-### Fixed
-
+- **Queued tasks can route across devices (CLI and board)** — removed redundant node-level working directory pinning so tasks specifying capability requirements route to matching peers.
 - **SSE fingerprint cache propagates load failures** — callers that piled up behind a failed store scan now get the same error instead of an empty value with a nil error; a persistent store failure no longer fans a false change event out to every connected stream while only the loader's own stream drops (review 2026-09-02, P2).
-
 - **TUI: one input box per slash command** — the exec path now clears the frame in the same event-loop pass that queues the command, so the state row and rounded box no longer linger in scrollback as a second input bar (6a77bf7).
-
 - **TUI stage timing, task card formatting, DeepSeek thinking passback** — judge runtime is no longer billed to the executing stage, task cards render uniformly, and thinking-mode conversations no longer fail with 400 on passback (6d6e2e4).
-
 - **CLI tables align by display width** — `%-Ns` padding counted bytes, so a CJK title (two columns per rune) or a tinted state cell pushed every later column out of line; tables now pad by display width, task ids print short where unambiguous, and a round of TUI layout fixes lands with them (8740c04).
-
 - **Darwin builds are codesigned automatically** — ad-hoc codesigning at build time keeps macOS from SIGKILLing a freshly built binary on first run (3b86987).
-
 - **Docs: the OpenAI-compatible example drops the retired DeepSeek chat alias** (cbe52cb).
 
-### Changed
+### Breaking changes
 
-- **The approval gate covers only irreversible work** — Tier 2 now means "no later command can put it back": deletion, disk/partition/firmware state, power state, privilege escalation, and the argument forms that lose work (`git push --force`, `rsync --delete`, `sed -i`, `find -delete`). curl, wget, make, ssh, systemctl, mount, docker, kubectl, terraform, the package managers, chmod/chown/mv/cp/tee and friends run unattended, and `bash scripts/build.sh` no longer prompts — a node that cannot run its own build cannot do the work it exists for (e593470).
-
-- **Download-to-file fetches stay gated** — a curl/wget that saves its bytes to a path (`-o`, `-O`, `--output`) is Tier 2: the bytes are opaque to the classifier and the next step is usually to run them, and `curl -o x …; bash x` graded Tier 1 end to end before this change. Fetches to stdout or `/dev/null` — the reachability-probe spellings — are unaffected (review 2026-09-02, P1).
-
-- **Console: "Panda Paper" visual redesign** — a re-skin appended over the console's existing styles: warm-paper light theme and warm-ink dark theme (no pure black, no cold gray), the bamboo-green brand accent deepened a step with blue reserved for the decision-orbit path, serif display type on headings only, radii one step larger, softer warm-brown shadows, and the "AI-feel" decorations (gradient heading text, gradient underlines, button highlight overlays) removed. The layer redefines the same tokens and cascades over the old rules — component markup, class names and logic are untouched (this release).
+- **The `taskq_create` management tool is removed** — task creation is now exclusively the entry model's job (task JSON output, executed immediately by the scheduler) or comes from the board/external tools; the queue tools (`taskq_list/show/cancel/priority/move`) remain for managing the backlog. Agents scripted to call `taskq_create` should emit a task or use the board instead.
 
 ## \[0.0.7] - 2026-08-31
 

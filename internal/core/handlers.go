@@ -541,6 +541,12 @@ func (c *Core) prepare(ctx context.Context, taskID string) error {
 	return nil
 }
 
+// storeWriteCtx returns a context bounded to 5 seconds that survives cancellation
+// of ctx, ensuring task terminal status and event writes are committed to SQLite.
+func (c *Core) storeWriteCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+}
+
 // run accepts (or resumes) a dispatched task into running, executes it, and
 // records the outcome. The task may already be running (a context-fetch resume
 // moved it there), dispatched (the normal path), or waiting_context (resumed
@@ -559,6 +565,14 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			out.Executor = c.nodeID
 			if len(out.Chain) == 0 {
 				out.Chain = taskChain
+			}
+		} else if rerr != nil {
+			// If run failed or cancelled before reaching a terminal state,
+			// fail the task in the store so it never lingers stranded in 'running'.
+			wCtx, cancel := c.storeWriteCtx(ctx)
+			defer cancel()
+			if t, err := c.store.Get(wCtx, taskID); err == nil && t.State == StateRunning {
+				_ = c.store.Fail(wCtx, taskID, c.nodeID, rerr.Error())
 			}
 		}
 	}()
@@ -825,6 +839,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// full re-orientation cost every round). Adapters without session
 	// support leave it empty and every round starts fresh, as before.
 	var sessionID string
+	var lastAgent, lastOutput, lastStderr string
 	verdict := entry.SuperviseVerdict{Status: entry.VerdictDone}
 	for round := 0; round < maxRounds; round++ {
 		// emitRound traces one supervision_round with the round's final verdict.
@@ -1065,16 +1080,18 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			// it rather than burning rounds on a re-run that cannot succeed.
 			if plan.Kind == "agent" && commander.ContextOverflow(res.Stderr) {
 				msg := "agent context window overflow: " + res.Stderr
-				c.EvTrace(ctx, taskID, EvContextOverflow, map[string]any{
+				c.EvTrace(context.WithoutCancel(ctx), taskID, EvContextOverflow, map[string]any{
 					"agent": res.Agent, "round": round, "detail": res.Stderr,
 				})
-				if err := c.store.Fail(ctx, taskID, c.nodeID, msg); err != nil {
+				wCtx, cancel := c.storeWriteCtx(ctx)
+				defer cancel()
+				if err := c.store.Fail(wCtx, taskID, c.nodeID, msg); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 						return bus.TaskResultPayload{}, ErrCancelled
 					}
 					return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
 				}
-				if err := c.store.Review(ctx, taskID, c.nodeID, msg); err != nil {
+				if err := c.store.Review(wCtx, taskID, c.nodeID, msg); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 						return bus.TaskResultPayload{}, ErrCancelled
 					}
@@ -1097,13 +1114,15 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			// here instead would strand the refusal as a dead-end failure on the
 			// delegator: it surfaces the reason but offers no way to resolve it.
 			if commander.IsAuthorizationRefusal(res.Stderr) {
-				if err := c.store.Fail(ctx, taskID, c.nodeID, res.Stderr); err != nil {
+				wCtx, cancel := c.storeWriteCtx(ctx)
+				defer cancel()
+				if err := c.store.Fail(wCtx, taskID, c.nodeID, res.Stderr); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 						return bus.TaskResultPayload{}, ErrCancelled
 					}
 					return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
 				}
-				if err := c.store.ReviewWithDisposition(ctx, taskID, c.nodeID, res.Stderr, ApprovalResumeExecution); err != nil {
+				if err := c.store.ReviewWithDisposition(wCtx, taskID, c.nodeID, res.Stderr, ApprovalResumeExecution); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 						return bus.TaskResultPayload{}, ErrCancelled
 					}
@@ -1118,7 +1137,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}, nil
 			}
-			if err := c.store.Fail(ctx, taskID, c.nodeID, res.Stderr); err != nil {
+			wCtx, cancel := c.storeWriteCtx(ctx)
+			defer cancel()
+			if err := c.store.Fail(wCtx, taskID, c.nodeID, res.Stderr); err != nil {
 				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 					return bus.TaskResultPayload{}, ErrCancelled
 				}
@@ -1179,6 +1200,49 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			// below hand the result to a human.
 			break
 		}
+
+		// Stagnation detection: if this agent repeated identical output across rounds on a continue verdict,
+		// it is stuck in a loop. Failover to an alternate agent if available, or stop early.
+		if round > 0 && res.Agent == lastAgent && isOutputStagnant(res.Stdout, lastOutput, res.Stderr, lastStderr) {
+			promoted := false
+			for i, alt := range plan.Alternates {
+				if c.breaker.Allow("agent:" + alt) {
+					if altAg, ok := router.Agent(alt); ok {
+						c.audit(ctx, taskID, "agent:stagnation_failover", lastAgent, "failover", "agent "+lastAgent+" stagnated across rounds; failing over to "+alt)
+						if recErr := c.store.RecordEvent(context.WithoutCancel(ctx), taskID, EvAgentFallback, map[string]any{
+							"from": lastAgent, "to": alt, "reason": "stagnation",
+						}); recErr != nil {
+							c.logger.Warn("record agent stagnation fallback event", "task", taskID, "err", recErr)
+						}
+						plan.Agent = alt
+						plan.Ability = alt
+						plan.Adapter = altAg.Adapter
+						plan.Tier = altAg.Tier
+						if plan.Tier == 0 {
+							plan.Tier = defense.TierReversible
+						}
+						newAlts := make([]string, 0, len(plan.Alternates)-1)
+						newAlts = append(newAlts, plan.Alternates[:i]...)
+						newAlts = append(newAlts, plan.Alternates[i+1:]...)
+						plan.Alternates = newAlts
+						sessionID = ""
+						promoted = true
+						break
+					}
+				}
+			}
+			if !promoted {
+				c.audit(ctx, taskID, "agent:stalled", res.Agent, "stalled", "no progress across rounds and no alternate agents available")
+				verdict.Status = entry.VerdictReview
+				verdict.Reason = fmt.Sprintf("agent %s stalled: identical output across consecutive rounds with no alternate agents", res.Agent)
+				break
+			}
+		}
+
+		lastAgent = res.Agent
+		lastOutput = res.Stdout
+		lastStderr = res.Stderr
+
 		if strings.TrimSpace(v.Followup) == "" {
 			currentIntent = currentIntent + "\n\n上一轮未能完整完成，请继续完成剩余工作，并汇报最终结果。"
 		} else {
@@ -1220,7 +1284,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// unverified work.
 	if plan.Kind == "agent" && c.supervisor != nil &&
 		(verdict.Status == entry.VerdictContinue || verdict.Status == entry.VerdictReview) {
-		if err := c.store.PauseWithResult(ctx, taskID, c.nodeID, map[string]any{
+		wCtx, cancel := c.storeWriteCtx(ctx)
+		defer cancel()
+		if err := c.store.PauseWithResult(wCtx, taskID, c.nodeID, map[string]any{
 			"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
 			"needs_followup": verdict.Status == entry.VerdictContinue,
 			"verdict":        verdict.Status, "verdict_reason": verdict.Reason,
@@ -1252,7 +1318,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		parked := !task.Authorized
 		// — Trace: the terminal Tier-2 agent outcome. Wire shape matches
 		// design doc §3.1.1: operations: [{op,target,risk}].
-		c.EvTrace(ctx, taskID, EvTier2Triggered, map[string]any{
+		c.EvTrace(context.WithoutCancel(ctx), taskID, EvTier2Triggered, map[string]any{
 			"operations":       []map[string]any{{"op": plan.Agent, "target": "", "risk": "medium"}},
 			"kind":             plan.Kind,
 			"tier":             plan.Tier,
@@ -1260,7 +1326,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			"parked_in_review": parked,
 		})
 		if parked {
-			if err := c.store.PauseWithResult(ctx, taskID, c.nodeID, map[string]any{
+			wCtx, cancel := c.storeWriteCtx(ctx)
+			defer cancel()
+			if err := c.store.PauseWithResult(wCtx, taskID, c.nodeID, map[string]any{
 				"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
 			}); err != nil {
 				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
@@ -1280,10 +1348,12 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// Consent already on record: audit the auto-acceptance the way an
 		// authorized native Tier-2 run is audited, then fall through to
 		// Complete.
-		c.audit(ctx, taskID, "agent:tier2", plan.Agent, "authorized", "completed under submit-time consent")
+		c.audit(context.WithoutCancel(ctx), taskID, "agent:tier2", plan.Agent, "authorized", "completed under submit-time consent")
 	}
 
-	if err := c.store.Complete(ctx, taskID, c.nodeID, map[string]any{
+	wCtx, cancel := c.storeWriteCtx(ctx)
+	defer cancel()
+	if err := c.store.Complete(wCtx, taskID, c.nodeID, map[string]any{
 		"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout,
 	}); err != nil {
 		if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
@@ -1348,7 +1418,7 @@ func taskToolsPolicy(specJSON string) string {
 const agentPromptBudget = 128000
 
 // agentOutputRider instructs the agent to produce substantive, well-structured results promptly.
-const agentOutputRider = "\n\n输出与执行要求：请高效聚焦核心目标，在控制轮次内迅速完成关键信息采集或必要操作，并直接给出详实明确的最终执行/分析结果；对分析梳理类任务，务必输出完整结构化的中文报告、核心结论与待办清单，不要仅罗列日志；不要使用不必要的表情符号。"
+const agentOutputRider = "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；在获取到充分证据后直接输出清晰结构化的中文报告与最终结论；不要使用不必要的表情符号。"
 
 // buildAgentPrompt assembles the full agent execution prompt — the memory
 // file manifest (A3 selective loading) plus the task intent plus any matched
@@ -2077,4 +2147,23 @@ func (c *Core) reply(ctx context.Context, env bus.Envelope, typ string, payload 
 		return errors.New("no peer")
 	}
 	return conn.Send(envOut)
+}
+
+// isOutputStagnant reports whether an agent's output across consecutive supervision rounds
+// has made no substantive progress (identical stdout or identical error/stdout).
+func isOutputStagnant(currOut, prevOut, currErr, prevErr string) bool {
+	cOut := strings.TrimSpace(currOut)
+	pOut := strings.TrimSpace(prevOut)
+	cErr := strings.TrimSpace(currErr)
+	pErr := strings.TrimSpace(prevErr)
+	if cOut == pOut && cErr == pErr {
+		return true
+	}
+	if cOut != "" && cOut == pOut {
+		return true
+	}
+	if cErr != "" && cErr == pErr && cOut == pOut {
+		return true
+	}
+	return false
 }

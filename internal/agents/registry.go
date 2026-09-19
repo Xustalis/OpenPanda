@@ -11,7 +11,23 @@
 // change.
 package agents
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/Xustalis/OpenPanda/internal/defense"
+)
+
+// TierAutoApproved is the tier a generated capability card declares for an
+// agent. It equals defense.TierReversible on purpose: delegating to an agent is
+// the product's purpose, so a detected node runs unattended. An operator who
+// wants an agent to ask before it acts declares `tier: 2` on that agent in
+// capabilities.yaml, and commander.Route lets that declaration win.
+//
+// It is bound to the defense constant rather than written as 1 so the two
+// cannot drift: carddetect used to write a literal 2 here, which silently
+// contradicted commander.Route's documented "undeclared defaults to 1" and
+// parked every agent task in review on every detected node.
+const TierAutoApproved = defense.TierReversible
 
 // Known describes one agent CLI PANDA recognises. It is deliberately static
 // data with no I/O: probes, adapter names and guidance are derived from it by
@@ -84,7 +100,11 @@ type Known struct {
 	DefaultBestAt []string
 	// DefaultCostTier is the routing cost tier ("low", "low_medium", "medium", "medium_high", "high").
 	DefaultCostTier string
-	// DefaultTier is the capability tier (default: 2).
+	// DefaultTier is the capability tier written into a generated card.
+	// It is TierAutoApproved: delegating to an agent is what the product is
+	// for, so a detected node must run unattended. An operator who wants an
+	// agent to ask first sets `tier: 2` on it in capabilities.yaml, and that
+	// declaration still wins in commander.Route.
 	DefaultTier int
 }
 
@@ -165,7 +185,7 @@ var known = []Known{
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "refactoring"},
 		DefaultBestAt:       []string{"multi_file_edits", "code_search", "refactoring", "complex_reasoning"},
 		DefaultCostTier:     "medium_high",
-		DefaultTier:         2,
+		DefaultTier:         TierAutoApproved,
 	},
 	{
 		Name:               "opencode",
@@ -191,7 +211,7 @@ var known = []Known{
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "scripts"},
 		DefaultBestAt:       []string{"fast_scripts", "quick_edits", "code_search"},
 		DefaultCostTier:     "low",
-		DefaultTier:         2,
+		DefaultTier:         TierAutoApproved,
 	},
 	{
 		Name:              "codex",
@@ -212,7 +232,7 @@ var known = []Known{
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "code_review"},
 		DefaultBestAt:       []string{"code_review", "running_tests", "multi_file_edits"},
 		DefaultCostTier:     "medium",
-		DefaultTier:         2,
+		DefaultTier:         TierAutoApproved,
 	},
 	{
 		Name:              "grok_build",
@@ -232,7 +252,7 @@ var known = []Known{
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "build"},
 		DefaultBestAt:       []string{"build_diagnostics", "code_search", "refactoring"},
 		DefaultCostTier:     "medium",
-		DefaultTier:         2,
+		DefaultTier:         TierAutoApproved,
 	},
 	{
 		Name:              "deepseek_harness",
@@ -252,7 +272,7 @@ var known = []Known{
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "deepseek"},
 		DefaultBestAt:       []string{"code_generation", "code_explanation"},
 		DefaultCostTier:     "low",
-		DefaultTier:         2,
+		DefaultTier:         TierAutoApproved,
 	},
 	{
 		Name:              "openclaw",
@@ -272,7 +292,7 @@ var known = []Known{
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "automation"},
 		DefaultBestAt:       []string{"automation", "shell_execution"},
 		DefaultCostTier:     "medium",
-		DefaultTier:         2,
+		DefaultTier:         TierAutoApproved,
 	},
 	{
 		Name:              "hermes",
@@ -292,7 +312,7 @@ var known = []Known{
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "long_running"},
 		DefaultBestAt:       []string{"long_running_tasks", "shell_execution", "multi_file_edits"},
 		DefaultCostTier:     "low_medium",
-		DefaultTier:         2,
+		DefaultTier:         TierAutoApproved,
 	},
 }
 

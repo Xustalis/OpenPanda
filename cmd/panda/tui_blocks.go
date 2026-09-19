@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/mdtext"
 )
 
 // A transcript is a list of blocks — the committed conversation history the TUI
@@ -69,7 +70,7 @@ func (b block) render(t theme, width int, expandThought bool) string {
 	case blockNote:
 		return t.muted.Render(t.glyph("•", "*") + " " + b.body)
 	case blockTask:
-		return b.renderTask(t)
+		return b.renderTask(t, width)
 	case blockError:
 		return t.danger.Render(t.glyph("✗", "x") + " " + b.body)
 	case blockInfo:
@@ -122,9 +123,24 @@ func userText(t theme, body string, width int) string {
 // indistinguishable from a stray line of terminal output. The live region uses
 // this same function, so a streaming answer does not shift when it commits.
 func answerText(t theme, body string, width int) string {
-	if width > 4 {
-		body = wrap(body, width-2)
+	renderWidth := width
+	if renderWidth > 4 {
+		renderWidth -= 2
 	}
+	if t.color {
+		if rendered, err := mdtext.Render(body, renderWidth); err == nil && strings.TrimSpace(rendered) != "" {
+			body = rendered
+		} else if renderWidth > 0 {
+			body = wrap(body, renderWidth)
+		}
+	} else if renderWidth > 0 {
+		body = wrap(body, renderWidth)
+	}
+	lines := strings.Split(body, "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimRight(l, " ")
+	}
+	body = strings.Join(lines, "\n")
 	return indentLines(body, t.accent.Render(t.glyph("⏺", "*"))+" ", "  ")
 }
 
@@ -166,7 +182,7 @@ func (b block) renderThought(t theme, expand bool) string {
 // outcome, one arm per lifecycle stage it went through, and a final arm holding
 // the task state pointer. Substantive answer/report prose is separated from the
 // task subtree and rendered in clean, normal prose below the card.
-func (b block) renderTask(t theme) string {
+func (b block) renderTask(t theme, width int) string {
 	arm := t.glyph("⎿", "\\_")
 	head := t.glyph("●", "*") + " " + i18n.T(t.loc, "tui.task.head")
 	if b.ok {
@@ -196,10 +212,20 @@ func (b block) renderTask(t theme) string {
 		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+b.meta))
 	}
 	if b.body != "" {
+		taskBody := b.body
+		if t.color {
+			renderWidth := width
+			if renderWidth > 4 {
+				renderWidth -= 2
+			}
+			if rendered, err := mdtext.Render(taskBody, renderWidth); err == nil && strings.TrimSpace(rendered) != "" {
+				taskBody = rendered
+			}
+		}
 		if b.ok {
-			sb.WriteString("\n\n" + b.body)
+			sb.WriteString("\n\n" + taskBody)
 		} else {
-			sb.WriteString("\n\n" + t.danger.Render(b.body))
+			sb.WriteString("\n\n" + t.danger.Render(taskBody))
 		}
 	}
 	return sb.String()

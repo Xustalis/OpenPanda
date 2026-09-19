@@ -141,7 +141,7 @@ func runMemory(args []string) {
 func memoryUsage() {
 	fmt.Fprintln(os.Stderr, "usage: panda memory <verb>")
 	fmt.Fprintln(os.Stderr, "  list                    index of every memory file (selective-load manifest)")
-	fmt.Fprintln(os.Stderr, "  get <name>              print a file's raw content")
+	fmt.Fprintln(os.Stderr, "  get <name> [--raw]      print a file's content (renders Markdown automatically on TTY)")
 	fmt.Fprintln(os.Stderr, "  set <name> [--file F]   replace a file (stdin by default; § separates entries)")
 	fmt.Fprintln(os.Stderr, "  rm topic:<name>         delete a topic file")
 	fmt.Fprintln(os.Stderr, "names: user | memory | dreams | topic:<n> | project:<n> | daily:<date>")
@@ -241,9 +241,10 @@ func summarizeFirst(entries []string) string {
 func runMemoryGet(args []string) {
 	fs := flag.NewFlagSet("memory get", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
+	raw := fs.Bool("raw", false, "output raw unrendered text")
 	fs.Parse(args)
 	if fs.Arg(0) == "" {
-		fmt.Fprintln(os.Stderr, "usage: panda memory get <name>")
+		fmt.Fprintln(os.Stderr, "usage: panda memory get [--raw] <name>")
 		os.Exit(2)
 	}
 	cfg, err := config.Load(*configPath)
@@ -266,10 +267,14 @@ func runMemoryGet(args []string) {
 		emitJSON(map[string]string{"name": target.name, "path": target.path, "content": string(data)})
 		return
 	}
-	os.Stdout.Write(data)
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		fmt.Println()
+	if *raw || !stdoutIsTTY() {
+		os.Stdout.Write(data)
+		if len(data) > 0 && data[len(data)-1] != '\n' {
+			fmt.Println()
+		}
+		return
 	}
+	renderAndPrintMd(string(data), 0)
 }
 
 func runMemorySet(args []string) {

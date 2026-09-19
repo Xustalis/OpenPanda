@@ -378,12 +378,12 @@ func TestApprovalArrowSelection(t *testing.T) {
 func TestMenuModelGlosses(t *testing.T) {
 	verbs := []string{"list", "add", "remove", "fetch", "test"}
 	for _, v := range verbs {
-		desc := argItemDesc("model", v)
+		desc := argItemDesc(i18n.Locale("en"), "model", v)
 		if desc == "" {
 			t.Errorf("expected non-empty gloss for /model %s", v)
 		}
 	}
-	provDesc := argItemDesc("model", "deepseek")
+	provDesc := argItemDesc(i18n.Locale("en"), "model", "deepseek")
 	if !strings.Contains(provDesc, "DeepSeek") {
 		t.Errorf("expected deepseek provider gloss, got %q", provDesc)
 	}

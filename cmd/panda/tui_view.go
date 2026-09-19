@@ -118,6 +118,10 @@ func (m tuiModel) mainChatView(live string) string {
 
 	// 4. Pad blank lines so inputView stays anchored at the bottom of the screen
 	if totalContent <= availHeight {
+		// Nothing overflows, so there is nothing to scroll: republish 0 rather
+		// than leaving a taller frame's ceiling behind, which would let a stale
+		// limit admit an offset this content cannot honour.
+		m.publishScrollLimit(0)
 		pad := availHeight - totalContent
 		var out []string
 		out = append(out, contentLines...)
@@ -130,6 +134,7 @@ func (m tuiModel) mainChatView(live string) string {
 
 	// 5. If content exceeds available height, apply scrollOffset (0 means anchored at bottom)
 	maxScroll := totalContent - availHeight
+	m.publishScrollLimit(maxScroll)
 	scroll := m.scrollOffset
 	if scroll < 0 {
 		scroll = 0
@@ -146,9 +151,51 @@ func (m tuiModel) mainChatView(live string) string {
 	visibleLines := contentLines[start:end]
 
 	var out []string
-	out = append(out, visibleLines...)
+	if w > 10 {
+		// Attach a visual vertical scrollbar on the right boundary so users clearly see
+		// that history exists and can gauge their scroll position.
+		thumbHeight := max(1, availHeight*availHeight/totalContent)
+		thumbTop := 0
+		if maxScroll > 0 {
+			thumbTop = (start * (availHeight - thumbHeight)) / maxScroll
+		}
+		thumbBottom := thumbTop + thumbHeight
+		contentWidth := w - 1
+		for i, line := range visibleLines {
+			lw := ansi.StringWidth(line)
+			if lw > contentWidth {
+				line = ansi.Truncate(line, contentWidth, "")
+				lw = ansi.StringWidth(line)
+			}
+			pad := contentWidth - lw
+			if pad < 0 {
+				pad = 0
+			}
+			var barChar string
+			if i >= thumbTop && i < thumbBottom {
+				barChar = m.th.accent.Render(m.th.glyph("█", "#"))
+			} else {
+				barChar = m.th.muted.Render(m.th.glyph("│", "|"))
+			}
+			out = append(out, line+strings.Repeat(" ", pad)+barChar)
+		}
+	} else {
+		out = append(out, visibleLines...)
+	}
 	out = append(out, inputLines...)
 	return clipRendered(strings.Join(out, "\n"), w)
+}
+
+// publishScrollLimit records the largest useful scroll offset for the frame just
+// rendered. View is the only place that knows the content's real height, and it
+// is a value method that cannot write the model's offset back — so the ceiling
+// travels through a pointer, and scrollTranscript clamps against it. Without
+// this the offset grows without bound past the top and the next scroll-downs do
+// nothing visible until it unwinds.
+func (m tuiModel) publishScrollLimit(maxScroll int) {
+	if m.scrollLimit != nil {
+		*m.scrollLimit = max(0, maxScroll)
+	}
 }
 
 // splashView renders the centered full-screen startup overlay.
@@ -586,7 +633,13 @@ func (m tuiModel) contextLine() string {
 // rather than wrapping: the legend used to be printed whole, so a narrow terminal
 // cut it mid-word ("… ctrl+o 思维链  ·  ctr") and spent a second screen row doing
 // it. Submit and quit are the two a user cannot afford to lose — how to send, how
-// to leave — so the middle two go first, in reverse order of usefulness.
+// to leave — so the others go first, most expendable first: the thought fold,
+// then the newline, then the mouse toggle.
+//
+// The mouse hint outlives the other two not because it matters more but because
+// it is the one a user cannot rediscover by guessing: /help lists commands, not
+// input devices. The mode change is also announced in the transcript, so the
+// hint is a convenience rather than the only way to learn the key.
 //
 // The state half of the row is measured out of the budget before the legend gets
 // any of it, and below a floor the legend yields the row entirely: a squeezed
@@ -605,54 +658,115 @@ func (m tuiModel) hintLine() string {
 	sep := "  " + m.th.glyph("·", "|") + "  "
 	hints := m.hintKeys()
 	if m.mode == modeAsking {
-		return strings.Join(hints, " ")
+		return strings.Join(hintTexts(hints), " ")
 	}
-	fits := func() bool {
-		return cliui.DisplayWidth(strings.Join(hints, sep)) <= budget
-	}
-	for _, drop := range []int{2, 1} { // thought, then newline
-		if fits() {
-			break
-		}
-		hints = append(hints[:drop], hints[drop+1:]...)
-	}
-	line := strings.Join(hints, sep)
-	if !fits() {
-		// Two hints and still too narrow: clip, so the legend can never claim a
-		// second row from the input box.
+	hints = shedHints(hints, sep, budget)
+	line := strings.Join(hintTexts(hints), sep)
+	if cliui.DisplayWidth(line) > budget {
+		// Only the protected entries are left and they still do not fit: clip,
+		// so the legend can never claim a second row from the input box.
 		line = cliui.Truncate(line, budget, m.th.unicode)
 	}
 	return line
+}
+
+// shedHints drops the most expendable entries until the joined legend fits
+// budget, never dropping one marked shed 0 (submit and quit — how to send and
+// how to leave).
+//
+// Selection is by priority rather than by position, so the same call describes
+// every legend regardless of length. The loop it replaced dropped fixed indices
+// sized for the five-entry chat legend; on the four-entry slash-menu legend its
+// third drop was skipped by a bounds guard, so the two lists silently ran
+// different policies than the comment claimed.
+func shedHints(hints []hint, sep string, budget int) []hint {
+	fits := func(hs []hint) bool {
+		return cliui.DisplayWidth(strings.Join(hintTexts(hs), sep)) <= budget
+	}
+	for !fits(hints) {
+		worst := -1
+		for i, h := range hints {
+			if h.shed == 0 {
+				continue
+			}
+			if worst < 0 || h.shed > hints[worst].shed {
+				worst = i
+			}
+		}
+		if worst < 0 {
+			break // only the protected entries remain
+		}
+		hints = append(hints[:worst], hints[worst+1:]...)
+	}
+	return hints
+}
+
+// hint is one legend entry. shed orders the entries under pressure: the highest
+// shed value is dropped first, and 0 means "never drop" — submit and quit are
+// the two a user cannot afford to lose.
+//
+// Ordering by a per-entry priority rather than by list position is what keeps
+// the policy honest across legends of different lengths: the chat legend has
+// five entries and the slash-menu legend four, so one shared list of indices
+// could not describe both (the old loop's third drop was silently skipped for
+// the shorter one, leaving the two lists on different policies than the comment
+// claimed).
+type hint struct {
+	text string
+	shed int
+}
+
+// hintTexts strips the shedding priorities, for callers that only lay the
+// entries out.
+func hintTexts(hints []hint) []string {
+	out := make([]string, len(hints))
+	for i, h := range hints {
+		out[i] = h.text
+	}
+	return out
 }
 
 // hintKeys is the legend's content: what the keys do at this moment. The slash
 // menu rebinds enter, tab, the arrows and esc while it is open, so it brings its
 // own legend — leaving "ctrl+j 换行" over a list where enter runs the highlighted
 // command would describe a keyboard the user does not currently have. Both lists
-// are ordered action-first and escape-last, and both shed their middle two under
-// the same budget (see hintLine).
-func (m tuiModel) hintKeys() []string {
+// are ordered action-first and escape-last, and both shed their most expendable
+// entries first under the same budget (see hintLine).
+func (m tuiModel) hintKeys() []hint {
 	if m.mode == modeAsking {
-		return []string{
-			m.th.stopButton().Render(m.th.glyph("⏹", "[x]") + " Esc " + i18n.T(m.loc, "tui.hint.stop")),
-			m.th.steerButton().Render(m.th.glyph("⏎", "[>]") + " Enter " + i18n.T(m.loc, "tui.hint.steer")),
-			m.th.thoughtButton().Render("⌃O " + i18n.T(m.loc, "tui.hint.thought")),
+		return []hint{
+			{text: m.th.stopButton().Render(m.th.glyph("⏹", "[x]") + " Esc " + i18n.T(m.loc, "tui.hint.stop"))},
+			{text: m.th.steerButton().Render(m.th.glyph("⏎", "[>]") + " Enter " + i18n.T(m.loc, "tui.hint.steer"))},
+			{text: m.th.thoughtButton().Render("⌃O " + i18n.T(m.loc, "tui.hint.thought"))},
 		}
 	}
 	if m.menu.active && len(m.menu.items) > 0 {
-		return []string{
-			i18n.T(m.loc, "tui.hint.menuRun"),
-			m.th.glyph("↑↓", "^v") + " " + i18n.T(m.loc, "tui.hint.menuSelect"),
-			i18n.T(m.loc, "tui.hint.menuComplete"),
-			i18n.T(m.loc, "tui.hint.menuCancel"),
+		return []hint{
+			{text: i18n.T(m.loc, "tui.hint.menuRun")},
+			{text: m.th.glyph("↑↓", "^v") + " " + i18n.T(m.loc, "tui.hint.menuSelect"), shed: 1},
+			{text: i18n.T(m.loc, "tui.hint.menuComplete"), shed: 2},
+			{text: i18n.T(m.loc, "tui.hint.menuCancel")},
 		}
 	}
-	return []string{
-		i18n.T(m.loc, "tui.hint.submit"),
-		i18n.T(m.loc, "tui.hint.newline"),
-		i18n.T(m.loc, "tui.hint.thought"),
-		i18n.T(m.loc, "tui.hint.quit"),
+	return []hint{
+		{text: i18n.T(m.loc, "tui.hint.submit")},
+		{text: i18n.T(m.loc, "tui.hint.newline"), shed: 2},
+		{text: i18n.T(m.loc, "tui.hint.thought"), shed: 3},
+		{text: m.mouseHint(), shed: 1},
+		{text: i18n.T(m.loc, "tui.hint.quit")},
 	}
+}
+
+// mouseHint is the legend entry for ctrl+t. It names what the key does *from
+// here*, not what the modes are called: in mouseScroll it offers selection, and
+// in mouseSelect (the default) it is the way back to clicking the buttons. It
+// sits next to quit because it is the one hint a user cannot find again by
+// guessing — /help lists commands, not input devices.
+func (m tuiModel) mouseHint() string {
+	if m.mouse.captured() {
+		return i18n.T(m.loc, "tui.hint.mouseScroll")
+	}
+	return i18n.T(m.loc, "tui.hint.mouseSelect")
 }
 
 // approvalCard renders the tier-2 consent prompt for a parked task: what it
@@ -762,7 +876,7 @@ func (m tuiModel) askingButtonRects() []tuiRect {
 	if m.mode != modeAsking || m.height <= 0 {
 		return nil
 	}
-	hints := m.hintKeys()
+	hints := hintTexts(m.hintKeys())
 	if len(hints) < 3 {
 		return nil
 	}

@@ -51,9 +51,10 @@ def main():
     prompt, timeout, cwd = req
 
     # Model resolution:
-    # If PANDA model injection is active, pass the injected model.
+    # Always pass --auto so non-interactive runs auto-approve tool permissions.
+    # Keep print-logs=false to avoid polluting stdout with internal runtime diagnostics.
     cmd = ["opencode", "run", "--print-logs=true",
-           "--format", "json"]
+           "--format", "json", "--auto"]
     if os.environ.get("OPENPANDA_INJECTED_MODEL") == "1":
         model = os.environ.get("OPENCODE_MODEL") or os.environ.get("OPENAI_MODEL", "")
         if model:
@@ -61,14 +62,10 @@ def main():
                 cmd += ["--model", model]
             else:
                 cmd += ["--model", f"openai/{model}"]
-        else:
-            cmd.append("--auto")
     else:
         model = os.environ.get("OPENCODE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
         if model and "/" in model:
             cmd += ["--model", model]
-        else:
-            cmd.append("--auto")
 
     # A follow-up round resumes the agent's own session: its reasoning trail
     # survives instead of cold-starting on the bare follow-up instruction.
@@ -88,7 +85,7 @@ def main():
         # default model rides here too: the stream path may have omitted
         # --model in favor of --auto — which an old CLI just rejected — so
         # a bare "--model ''" would fail resolution outright.
-        plain = ["opencode", "run", "--print-logs=false", "--model", model or DEFAULT_MODEL]
+        plain = ["opencode", "run", "--print-logs=false", "--auto", "--model", model or DEFAULT_MODEL]
         if req.resume:
             plain += ["--session", req.resume]
         plain.append(prompt)
@@ -121,6 +118,8 @@ def _run_events(cmd, cwd, timeout):
         "session_id": "",
         "texts": {},
         "order": [],
+        "tool_outputs": [],
+        "counted": set(),
         "usage": {"input_tokens": 0, "output_tokens": 0},
         "cost": None,
         "error": "",
@@ -164,11 +163,29 @@ def _run_events(cmd, cwd, timeout):
         return {"ok": False, "result": msg, "exit_code": returncode or 1}
 
     text = "\n\n".join(state["texts"][pid] for pid in state["order"] if state["texts"].get(pid))
+    if not text and state["tool_outputs"]:
+        text = "\n\n".join(state["tool_outputs"])
+    if not text:
+        # Events streamed but no assistant text came out of them. Reporting this
+        # as success (which is what returning `err` here used to do) is worse than
+        # failing: the caller records a "✓ ok" task whose result is a wall of
+        # stderr logs, the supervisor judge never sees an answer and re-runs the
+        # agent until its budget is spent, and the task parks in review forever.
+        # A failure instead hands the work to the next adapter in the chain.
+        detail = err.strip().splitlines()
+        tail = " / ".join(detail[-2:]) if detail else "no stderr"
+        return {
+            "ok": False,
+            "result": ("opencode streamed events but no assistant text was extracted "
+                       f"(unrecognized event schema); stderr tail: {tail}"),
+            "exit_code": returncode or 1,
+            "session_id": state["session_id"],
+        }
     usage = state["usage"]
     tokens = usage["input_tokens"] + usage["output_tokens"] or None
     return {
         "ok": returncode == 0 and not state["error"],
-        "result": text or state["error"] or err.strip(),
+        "result": text,
         "exit_code": returncode,
         "tokens": tokens,
         "cost": state["cost"],
@@ -180,20 +197,28 @@ def _run_events(cmd, cwd, timeout):
 def _fold(ev, state):
     """Fold one opencode event into the running state (defensively: the
     event schema drifts between versions, so every access is shape-checked
-    and unknown shapes are ignored, never fatal)."""
-    et = ev.get("type") or ""
-    props = ev.get("properties") if isinstance(ev.get("properties"), dict) else {}
+    and unknown shapes are ignored, never fatal).
 
-    # Session id: most events carry it as properties.sessionID; a
-    # session.created envelope may nest it under info/id instead.
+    Two envelope shapes are in the wild and both must work. Older builds nest
+    the payload under "properties"; current builds (1.18.x, verified against a
+    real stream) put `part`, `sessionID` and the rest directly on the event.
+    Reading only "properties" is what silently produced no text at all: the
+    parts were there, one level up, and the result fell through to stderr."""
+    props = ev.get("properties") if isinstance(ev.get("properties"), dict) else ev
+    et = ev.get("type") or ""
+
+    # Session id: carried as sessionID on the envelope (current builds) or on
+    # the part; a session.created envelope may nest it under info/id instead.
+    part = props.get("part") if isinstance(props.get("part"), dict) else None
     sid = props.get("sessionID") or props.get("session_id") or ""
+    if not sid and part is not None:
+        sid = part.get("sessionID") or part.get("session_id") or ""
     if not sid:
         info = props.get("info") if isinstance(props.get("info"), dict) else {}
         sid = info.get("id") or props.get("id") or ""
     if sid and not state["session_id"]:
         state["session_id"] = str(sid)
 
-    part = props.get("part") if isinstance(props.get("part"), dict) else None
     if part is not None:
         pid = str(part.get("id") or len(state["order"]))
         ptype = part.get("type")
@@ -201,18 +226,38 @@ def _fold(ev, state):
             if pid not in state["texts"]:
                 state["order"].append(pid)
             state["texts"][pid] = part["text"]
-        elif ptype == "tool" and et.endswith("updated"):
-            tool = str(part.get("tool") or "tool")
-            st = part.get("state") if isinstance(part.get("state"), dict) else {}
-            arg = str(st.get("title") or st.get("input") or "")[:80]
-            # A completed tool call is the useful timeline entry; started
-            # calls churn too much to be worth a note each.
-            if st.get("status") in ("completed", "error") or "completed" in str(st):
-                harness.progress(f"{tool}: {arg}" if arg else tool)
+        elif ptype == "tool":
+            # The event that carries a tool part is "tool_use" on current builds
+            # and "message.part.updated" (or similar …updated) on older ones.
+            if et == "tool_use" or et.endswith("updated"):
+                tool = str(part.get("tool") or "tool")
+                st = part.get("state") if isinstance(part.get("state"), dict) else {}
+                arg = str(st.get("title") or st.get("input") or "")[:80]
+                # A completed tool call is the useful timeline entry; started
+                # calls churn too much to be worth a note each.
+                if st.get("status") in ("completed", "error") or "completed" in str(st):
+                    harness.progress(f"{tool}: {arg}" if arg else tool)
+                    out = st.get("output")
+                    if isinstance(out, str) and out.strip():
+                        state["tool_outputs"].append(out.strip())
+        # Usage rides the step_finish part on current builds: each step reports
+        # the tokens that call spent, so they accumulate (keyed by part id, so a
+        # re-emitted part never double counts).
+        self_tokens = part.get("tokens") if isinstance(part.get("tokens"), dict) else None
+        if self_tokens and pid not in state["counted"]:
+            state["counted"].add(pid)
+            try:
+                state["usage"]["input_tokens"] += int(self_tokens.get("input", 0) or 0)
+                state["usage"]["output_tokens"] += int(self_tokens.get("output", 0) or 0)
+            except (TypeError, ValueError):
+                pass
+        part_cost = part.get("cost")
+        if isinstance(part_cost, (int, float)) and part_cost:
+            state["cost"] = max(state["cost"] or 0, float(part_cost))
         return
 
-    # Usage/cost ride the message envelope on newer CLIs (cumulative per
-    # message; keep the max so re-emits never double count).
+    # Older builds hang usage/cost off the message envelope instead (cumulative
+    # per message; keep the max so re-emits never double count).
     info = props.get("info") if isinstance(props.get("info"), dict) else props
     toks = info.get("tokens") if isinstance(info.get("tokens"), dict) else None
     if toks:

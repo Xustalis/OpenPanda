@@ -25,14 +25,13 @@ const superviseCacheNS = "supervise"
 
 // superviseSystemPrompt instructs the entry model to act as the reviewing
 // superior ("上级"): it judges an agent's result against the task's success
-// criteria and emits a strict JSON verdict. It must fail toward "continue"
-// whenever completion is in doubt, so an under-done task is never silently
-// accepted.
-const superviseSystemPrompt = `你是执行结果审核员（上级）。一个智能体刚刚执行了一项任务，下面是任务要求（其中包含成功标准）与它的最终回报。请判断任务是否已【完整】完成。
+// criteria and emits a strict JSON verdict.
+const superviseSystemPrompt = `你是执行结果审核员（上级）。一个智能体刚刚执行了一项任务，下面是任务要求与它的最终汇报。请务实、客观地判断任务是否已实质性完成。
 
 判断规则：
-- 只有成功标准全部满足、且回报明确表明已完成，才判为 done。
-- 部分完成、含糊其辞、质量不足、或需要继续，都判为 continue，并在 followup 里用简洁中文写明【还差什么、下一步该做什么】。
+- 实质完成即判 done：智能体针对任务核心目标开展了实质工作，并给出了明确、结构化的结论、分析报告或修改产出，即使存在客套前言、小幅格式差异或细节润色空间，均应判为 done。
+- 对调研、排查、体检、分析类任务：只要核心发现、关键证据与结论已呈现，即判为 done。严禁因要求“删除前言”、“重新排版”、“提供更多衍生建议”等次要要求而苛刻判为 continue。
+- 仅当核心目标严重缺失、智能体执行中断/崩溃、或智能体明确说明工作未完成且确有关键必要步骤未执行时，才判为 continue，并在 followup 中简明写清下一步核心指令。
 
 只输出一个 JSON 对象，不要输出任何其他文字或解释：
 {"status":"done"|"continue","reason":"一句话结论","followup":"continue 时必填：剩余工作与下一步指令"}`
@@ -83,7 +82,9 @@ func Supervise(ctx context.Context, c *Client, intent, result string) (Supervise
 		// shape. The reason records the defect.
 		return SuperviseVerdict{Status: VerdictReview, Reason: "verdict unparsable: " + err.Error()}, nil
 	}
-	if dc != nil {
+	// Only cache completed (done) verdicts: a continue or review verdict is
+	// transient and must not trap subsequent runs into deterministic repeat loops.
+	if dc != nil && v.Status == VerdictDone {
 		dc.Put(ctx, superviseCacheNS, k1, k2, v)
 	}
 	return v, nil

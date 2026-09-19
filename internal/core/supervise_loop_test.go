@@ -448,7 +448,9 @@ func TestResumeApprovedAfterEphemeralRestart(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 	second := NewCore(first.db, "entry-22222222", first.card, 5, testLogger(), config.ModelConfig{})
+	second.router.SetAgentProber(func(string, ledger.Agent) bool { return true })
 	second.router.SetAdapterRunner(agentRunner(&calls))
+	second.SetSharedSecret(testSharedSecret)
 	final, _, err := second.ResumeApproved(ctx, task.TaskID)
 	if err != nil {
 		t.Fatalf("resume from replacement core: %v", err)
@@ -768,5 +770,74 @@ func TestSuperviseLoopPreservesOriginalIntentAndStderr(t *testing.T) {
 	}
 	if !result.OK {
 		t.Fatalf("result OK = false, want true")
+	}
+}
+
+func TestSuperviseStagnationFailoverToAlternate(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	card := ledger.Card{
+		Device:        "node-1",
+		ResourceClass: "Standard",
+		Agents: map[string]ledger.Agent{
+			"opencode":    {Adapter: "opencode.py", Capabilities: []string{"coding"}, CostTier: "low", Tier: 1},
+			"claude_code": {Adapter: "claude_code.py", Capabilities: []string{"coding"}, CostTier: "medium", Tier: 1},
+		},
+		Capacity: ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
+	}
+	c := NewCore(db, "node-1", card, 5, testLogger(), config.ModelConfig{})
+	c.router.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	c.SetSharedSecret(testSharedSecret)
+
+	// Supervisor: calls 1 and 2 return continue (since opencode didn't follow instructions), call 3 returns done.
+	c.SetSupervisor(newFakeSupervisor(t, func(call int) string {
+		if call <= 2 {
+			return `{"status":"continue","reason":"missing file content","followup":"read the file"}`
+		}
+		return `{"status":"done","reason":"all complete"}`
+	}))
+
+	var ranAdapters []string
+	var ranMu sync.Mutex
+	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
+		ranMu.Lock()
+		ranAdapters = append(ranAdapters, adapter)
+		ranMu.Unlock()
+		if adapter == "opencode.py" {
+			// Repeated identical output across rounds -> stagnation
+			return commander.AgentResult{OK: true, Result: "cannot write to /tmp", ExitCode: 0}
+		}
+		// claude_code succeeds
+		return commander.AgentResult{OK: true, Result: "file created and read successfully", ExitCode: 0}
+	})
+
+	task, result, err := c.SubmitLocal(ctx, TaskInput{
+		Title:       "write and read file",
+		ContextType: "command",
+		Intent:      "create file and read it",
+		Requires:    []string{"coding"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if task.State != StateDone {
+		t.Fatalf("state = %s, want done (reason=%s)", task.State, task.ResultJSON)
+	}
+	ranMu.Lock()
+	defer ranMu.Unlock()
+	// Round 0: opencode.py ran.
+	// Round 1: opencode.py ran with identical output -> stagnation detected -> failover to claude_code.py!
+	// Round 2: claude_code.py ran -> supervisor judged done!
+	if len(ranAdapters) < 3 {
+		t.Fatalf("expected at least 3 agent invocations (opencode x2, claude_code x1), got: %v", ranAdapters)
+	}
+	if ranAdapters[0] != "opencode.py" || ranAdapters[1] != "opencode.py" {
+		t.Fatalf("expected initial runs by opencode.py, got: %v", ranAdapters)
+	}
+	if ranAdapters[2] != "claude_code.py" {
+		t.Fatalf("expected failover to claude_code.py, got: %v", ranAdapters)
+	}
+	if !result.OK {
+		t.Fatalf("expected result.OK = true, got false")
 	}
 }

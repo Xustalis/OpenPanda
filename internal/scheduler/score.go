@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"math"
+	"strings"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -83,7 +84,7 @@ func tierSignal(n ledger.Node) float64 {
 // named node is on the chain or missing the ability: there it still loses to
 // nodes that can actually run the task, which is the intended fall-through.
 func userPriority(n ledger.Node, preferred string) float64 {
-	if preferred != "" && (preferred == n.ID || preferred == n.Name) {
+	if preferred != "" && (preferred == n.ID || preferred == n.Name || strings.EqualFold(preferred, n.ID) || strings.EqualFold(preferred, n.Name)) {
 		return 1
 	}
 	return 0

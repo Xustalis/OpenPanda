@@ -166,10 +166,20 @@ func main() {
 		case "version":
 			fmt.Printf("panda %s\n", version)
 			return
+		case "read", "view", "cat", "md", "markdown":
+			runRead(args)
+			return
 		case "help", "-h", "--help":
 			printUsage(os.Stdout)
 			return
 		default:
+			// If the argument points to an existing file on disk (e.g. `panda README.md`),
+			// automatically read and render it without requiring a subcommand.
+			if fi, err := os.Stat(sub); err == nil && !fi.IsDir() {
+				runRead(append([]string{sub}, args...))
+				return
+			}
+
 			// A bare unknown word must not silently fall through (P1-25):
 			// "panda statsu" (a typo) should neither start the REPL nor a
 			// resident daemon — name the fix instead. When the word is one
@@ -206,7 +216,8 @@ func subcommandNames() []string {
 		"install", "uninstall", "doctor", "status", "nodes", "pair", "queue",
 		"task", "plan", "cancel", "approve", "reject", "logs", "skill",
 		"reminder", "detect", "card", "init", "metrics", "audit", "session",
-		"sessions", "memory", "config", "model", "models", "agents", "project", "version", "help",
+		"sessions", "memory", "config", "model", "models", "agents", "project",
+		"read", "view", "cat", "md", "markdown", "version", "help",
 	}
 }
 
@@ -613,6 +624,7 @@ func printUsage(w *os.File) {
 	line("  web                    start the web console (browser opens, auto-login)")
 	line("  voice [--once] [--mute] hands-free entry: wake word → ask → spoken reply")
 	line("                         (needs extensions/voice sidecars)")
+	line("  read <file> | <file.md> view file or document (renders Markdown automatically)")
 	line("")
 	line("sessions:")
 	line("  session list|new|show|rm|ask|diff|merge   chat sessions over git worktrees")

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
@@ -36,6 +37,24 @@ func DefaultQueueSpec() QueueSpec {
 func (c *Core) Enqueue(ctx context.Context, in TaskInput, q QueueSpec) (Task, error) {
 	if q.Priority < PriorityHigh || q.Priority > PriorityLow {
 		return Task{}, fmt.Errorf("queue priority %d out of range", q.Priority)
+	}
+	if len(q.ResourceKeys) == 0 {
+		if in.Project != "" {
+			q.ResourceKeys = []string{"project:" + in.Project}
+		} else {
+			var derived []string
+			if in.PreferredNode != "" {
+				derived = append(derived, "node:"+in.PreferredNode)
+			}
+			for _, req := range in.Requires {
+				if strings.HasPrefix(req, "agent:") || strings.HasPrefix(req, "node:") {
+					derived = append(derived, req)
+				}
+			}
+			if len(derived) > 0 {
+				q.ResourceKeys = derived
+			}
+		}
 	}
 	t, _, _, err := c.createTask(ctx, in)
 	if err != nil {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -372,7 +373,8 @@ func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
 }
 
 // TestTUIHintLineShedsHintsWhenNarrow: the legend must never wrap or be cut
-// mid-word, and submit/quit are the two hints it may not drop.
+// mid-word, and submit/quit are the two hints it may not drop. The other three
+// go in reverse order of usefulness — thought, newline, then the mouse toggle.
 func TestTUIHintLineShedsHintsWhenNarrow(t *testing.T) {
 	full := newTestTUI(t)
 	full = step(full, tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -382,8 +384,8 @@ func TestTUIHintLineShedsHintsWhenNarrow(t *testing.T) {
 	// (a GUI-launched terminal, most CI images): the hints were all there, only
 	// the separator had fallen back to ASCII.
 	sep := full.th.glyph("·", "|")
-	if n := strings.Count(full.hintLine(), sep); n != 3 {
-		t.Fatalf("a wide terminal should show all four hints, separators=%d in %q", n, full.hintLine())
+	if n := strings.Count(full.hintLine(), sep); n != 4 {
+		t.Fatalf("a wide terminal should show all five hints, separators=%d in %q", n, full.hintLine())
 	}
 
 	narrow := newTestTUI(t)
@@ -394,6 +396,9 @@ func TestTUIHintLineShedsHintsWhenNarrow(t *testing.T) {
 	}
 	if !strings.Contains(line, "enter") || !strings.Contains(line, "ctrl+c") {
 		t.Fatalf("submit and quit must survive: %q", line)
+	}
+	if strings.Contains(line, "ctrl+t") {
+		t.Fatalf("the mouse toggle should be shed before submit/quit: %q", line)
 	}
 }
 
@@ -935,5 +940,59 @@ func TestTUIStartupReplayFoldsOldTurns(t *testing.T) {
 		if !strings.Contains(joined, kept) {
 			t.Fatalf("kept turn missing from the replay: %q", kept)
 		}
+	}
+}
+
+// TestShedHintsDropsByPriorityInEveryLegend pins the fix for a positional drop
+// list. The old loop dropped fixed indices sized for the five-entry chat legend,
+// so on the four-entry slash-menu legend its third drop was skipped by a bounds
+// guard and the two legends silently ran different shedding policies. Shedding
+// now follows each entry's priority, which describes a legend of any length.
+func TestShedHintsDropsByPriorityInEveryLegend(t *testing.T) {
+	chat := newTestTUI(t)
+	menu := newTestTUI(t)
+	menu.menu.active = true
+	menu.menu.items = []menuItem{{name: "/model"}}
+
+	cases := []struct {
+		name string
+		m    tuiModel
+		keep []string // entries that must survive every budget
+		gone string   // the most expendable entry, shed first
+	}{
+		{
+			name: "chat legend",
+			m:    chat,
+			keep: []string{i18n.T(chat.loc, "tui.hint.submit"), i18n.T(chat.loc, "tui.hint.quit")},
+			gone: i18n.T(chat.loc, "tui.hint.thought"),
+		},
+		{
+			name: "slash-menu legend",
+			m:    menu,
+			keep: []string{i18n.T(menu.loc, "tui.hint.menuRun"), i18n.T(menu.loc, "tui.hint.menuCancel")},
+			gone: i18n.T(menu.loc, "tui.hint.menuComplete"),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			all := tc.m.hintKeys()
+			if len(all) < 4 {
+				t.Fatalf("setup wrong: legend has only %d entries", len(all))
+			}
+			// A zero budget forces the loop to shed everything it is allowed to,
+			// which is exactly the set of protected entries.
+			got := hintTexts(shedHints(all, "  ·  ", 0))
+			if len(got) != len(tc.keep) {
+				t.Fatalf("only the protected entries should survive, got %v", got)
+			}
+			for _, k := range tc.keep {
+				if !slices.Contains(got, k) {
+					t.Errorf("protected entry %q was shed: %v", k, got)
+				}
+			}
+			if slices.Contains(got, tc.gone) {
+				t.Errorf("most expendable entry %q survived a zero budget: %v", tc.gone, got)
+			}
+		})
 	}
 }

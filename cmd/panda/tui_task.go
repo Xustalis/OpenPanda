@@ -17,20 +17,25 @@ import (
 )
 
 // taskStage is one lifecycle milestone. label is already localised (progressNote
+// taskStage is one lifecycle milestone. label is already localised (progressNote
 // phrases it); at is the offset from the task's start, so the trail can show how
 // long each stage took without storing wall-clock times.
 type taskStage struct {
-	label string
-	at    time.Duration
+	label     string
+	at        time.Duration
+	toolCount int
 }
 
 // taskProgress is the in-flight delegated task. It is created when the engine
 // reports it submitting a task and closed when the turn commits; the committed
 // block keeps the finished trail so scrollback records what actually happened.
 type taskProgress struct {
-	title   string
-	started time.Time
-	stages  []taskStage
+	title      string
+	started    time.Time
+	stages     []taskStage
+	activeTool string
+	activeAt   time.Duration
+	curTools   int
 }
 
 // newTaskProgress opens a card for a task the engine just submitted.
@@ -49,7 +54,24 @@ func (tp *taskProgress) advance(label string, now time.Time) {
 	if n := len(tp.stages); n > 0 && tp.stages[n-1].label == label {
 		return
 	}
+	if n := len(tp.stages); n > 0 && tp.curTools > 0 {
+		tp.stages[n-1].toolCount = tp.curTools
+	}
+	tp.curTools = 0
+	tp.activeTool = ""
 	tp.stages = append(tp.stages, taskStage{label: label, at: now.Sub(tp.started)})
+}
+
+// recordTool records a micro-tool execution under the current stage, updating the
+// active tool and operation count without appending an overwhelming series of stage lines.
+func (tp *taskProgress) recordTool(label string, now time.Time) {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return
+	}
+	tp.curTools++
+	tp.activeTool = label
+	tp.activeAt = now.Sub(tp.started)
 }
 
 // trail renders the finished stages as transcript lines, each with the time it
@@ -65,11 +87,19 @@ func (tp *taskProgress) trail(total time.Duration) []string {
 		if i+1 < len(tp.stages) {
 			end = tp.stages[i+1].at
 		}
+		lbl := st.label
+		tc := st.toolCount
+		if i == len(tp.stages)-1 && tp.curTools > 0 {
+			tc = tp.curTools
+		}
+		if tc > 0 {
+			lbl += fmt.Sprintf(" (%d 项操作)", tc)
+		}
 		if d := end - st.at; d > 0 {
-			out = append(out, fmt.Sprintf("%s · %s", st.label, elapsed(d)))
+			out = append(out, fmt.Sprintf("%s · %s", lbl, elapsed(d)))
 			continue
 		}
-		out = append(out, st.label)
+		out = append(out, lbl)
 	}
 	return out
 }
@@ -157,16 +187,37 @@ func (tp *taskProgress) renderLive(t theme, loc i18n.Locale, spin string, now ti
 		if last {
 			mark = spin // the stage still running owns the spinner
 		}
-		line := fmt.Sprintf("  %s  %s %s", arm, mark, st.label)
+		lbl := st.label
+		tc := st.toolCount
+		if last && tp.curTools > 0 {
+			tc = tp.curTools
+		}
+		if tc > 0 {
+			lbl += t.muted.Render(fmt.Sprintf(" (%d 项操作)", tc))
+		}
+		line := fmt.Sprintf("  %s  %s %s", arm, mark, lbl)
 		if d := end - st.at; d > 0 {
 			line += t.muted.Render(" · " + elapsed(d))
 		}
 		sb.WriteString("\n" + line)
+
+		if last && tp.activeTool != "" {
+			toolElapsed := total - tp.activeAt
+			toolLine := fmt.Sprintf("     %s  %s 当前操作: %s", arm, spin, truncate(tp.activeTool, 60))
+			if toolElapsed > 0 {
+				toolLine += t.muted.Render(" · " + elapsed(toolElapsed))
+			}
+			sb.WriteString("\n" + toolLine)
+		}
 	}
 	if len(tp.stages) == 0 {
 		// Submitted but not yet routed: show the spinner on the header's arm so
 		// the card never sits inert waiting for the first milestone.
-		sb.WriteString(fmt.Sprintf("\n  %s  %s %s", arm, spin, i18n.T(loc, "tui.task.starting")))
+		label := i18n.T(loc, "tui.task.starting")
+		if tp.activeTool != "" {
+			label = tp.activeTool
+		}
+		sb.WriteString(fmt.Sprintf("\n  %s  %s %s", arm, spin, label))
 	}
 	sb.WriteString("\n" + t.muted.Render(fmt.Sprintf("  (%s · %s)",
 		elapsed(total), i18n.T(loc, "cli.status.interrupt"))))

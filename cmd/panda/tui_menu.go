@@ -47,6 +47,10 @@ type slashMenu struct {
 	all     []menuItem
 	items   []menuItem
 	sel     int
+	// loc is the session locale. The static command list resolves its help text
+	// once in newSlashMenu, but the argument glosses are rebuilt on every
+	// keystroke in sync, so they need the locale carried here.
+	loc i18n.Locale
 }
 
 // newSlashMenu builds the menu's static command list from the dispatch table,
@@ -57,7 +61,7 @@ func newSlashMenu(loc i18n.Locale) slashMenu {
 	for _, c := range replCommands {
 		items = append(items, menuItem{name: "/" + c.name, desc: i18n.T(loc, c.help)})
 	}
-	return slashMenu{all: items}
+	return slashMenu{all: items, loc: loc}
 }
 
 // menuTrigger reports whether an input line should open the menu: a leading "/"
@@ -134,7 +138,7 @@ func (mn *slashMenu) sync(input string, resolve argResolver) {
 			mn.argMode = true
 			mn.prefix = input[:len(input)-len(token)]
 			for _, c := range cands {
-				mn.items = append(mn.items, menuItem{name: c, desc: argItemDesc(cmd, c)})
+				mn.items = append(mn.items, menuItem{name: c, desc: argItemDesc(mn.loc, cmd, c)})
 			}
 		}
 	}
@@ -155,25 +159,27 @@ func (mn *slashMenu) sync(input string, resolve argResolver) {
 // argItemDesc glosses one argument candidate where a gloss helps: a locale
 // code gets its endonym, model subcommands get explanations, providers get
 // their human labels, and registered models show their model ID & context size.
-func argItemDesc(cmd, cand string) string {
+// The glosses are localized like every other line in the menu; they used to be
+// hardcoded Chinese-first pairs, which read as Chinese on an English console.
+func argItemDesc(loc i18n.Locale, cmd, cand string) string {
 	if cmd == "lang" {
 		return i18n.LocaleNames[i18n.Locale(cand)]
 	}
 	if cmd == "model" {
 		switch cand {
 		case "list":
-			return "查看内置供应商 · list providers"
+			return i18n.T(loc, "tui.menu.modelList")
 		case "add":
-			return "注册供应商或模型 · register provider/model"
+			return i18n.T(loc, "tui.menu.modelAdd")
 		case "remove", "rm", "del":
-			return "移除注册模型 · drop model"
+			return i18n.T(loc, "tui.menu.modelRemove")
 		case "fetch", "models":
-			return "拉取远端模型列表 · list remote models"
+			return i18n.T(loc, "tui.menu.modelFetch")
 		case "test":
-			return "测试连通性 · test connectivity"
+			return i18n.T(loc, "tui.menu.modelTest")
 		}
 		if p, ok := providers.Lookup(cand); ok {
-			return p.Label + " · 默认: " + p.DefaultModel
+			return p.Label + " · " + i18n.Tf(loc, "tui.menu.modelDefault", "model", p.DefaultModel)
 		}
 		if cfg, _ := config.Load(""); cfg != nil {
 			for _, m := range cfg.Models {

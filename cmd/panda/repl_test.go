@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -132,5 +133,26 @@ func TestDispatchVersionAndAliases(t *testing.T) {
 		if r.quit {
 			t.Fatalf("%s unexpectedly triggered quit", cmd)
 		}
+	}
+}
+
+func TestDispatchReadCommand(t *testing.T) {
+	r := &repl{loc: i18n.English}
+	dir := t.TempDir()
+	docPath := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(docPath, []byte("# Notes\n\nContent here"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, cmd := range []string{"/read " + docPath, "/view " + docPath, "/cat " + docPath, "/md " + docPath} {
+		r.dispatch(cmd)
+		if r.quit {
+			t.Fatalf("%s unexpectedly triggered quit", cmd)
+		}
+	}
+	r.dispatch("/read")
+	r.dispatch("/read non-existent-file-123.md")
+	if r.quit {
+		t.Fatal("/read should not quit on error")
 	}
 }

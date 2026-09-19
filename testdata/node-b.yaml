@@ -9,9 +9,10 @@ node:
 network:
   listen_addr: "127.0.0.1:17936"
   shared_secret: ""               # 经环境变量注入；禁止写入此文件
-  panel:
-    addr: "127.0.0.1:17937"
-    token: ""                     # 经 OPENPANDA_PANEL_TOKEN 注入
+  # Panel keys are flat — network.panel_addr / network.panel_token. The older
+  # nested "panel: {addr, token}" form is not read, and was being ignored here.
+  panel_addr: "127.0.0.1:17937"
+  panel_token: ""                 # 经 OPENPANDA_PANEL_TOKEN 注入
   peers:
     - "127.0.0.1:17836"          # 对应 node-a 的 listen_addr
 
@@ -24,5 +25,5 @@ storage:
   work_path: "testdata/node-b"
 
 log:
+  # The logger always emits structured JSON; there is no log.format key.
   level: "debug"
-  format: "json"

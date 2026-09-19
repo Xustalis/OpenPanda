@@ -132,13 +132,15 @@ func (m tuiModel) buildModelItems() []SelectionItem {
 	return items
 }
 
-// buildProviderItems returns the core 4 providers for onboarding/adding.
-func buildProviderItems() []SelectionItem {
+// buildProviderItems returns the core 4 providers for onboarding/adding. Only
+// Ollama carries a gloss — the other three are the vendors' own names — and it
+// is localized, like every other label in this list.
+func buildProviderItems(loc i18n.Locale) []SelectionItem {
 	return []SelectionItem{
 		{ID: "deepseek", Title: "DeepSeek"},
 		{ID: "openai", Title: "OpenAI"},
 		{ID: "anthropic", Title: "Anthropic"},
-		{ID: "ollama", Title: "Ollama (本地)"},
+		{ID: "ollama", Title: i18n.T(loc, "tui.model.ollamaLocal")},
 	}
 }
 
@@ -207,7 +209,7 @@ func (m tuiModel) openModelPanel() (tuiModel, tea.Cmd) {
 
 // startModelWizard starts the step-by-step model setup guide.
 func (m tuiModel) startModelWizard() (tuiModel, tea.Cmd) {
-	items := buildProviderItems()
+	items := buildProviderItems(m.loc)
 	sl := NewSelectionList(i18n.T(m.loc, "tui.wizard.noModelPrompt"), items)
 	sl.FooterHints = i18n.T(m.loc, "tui.wizard.confirmBack")
 
@@ -221,6 +223,26 @@ func (m tuiModel) startModelWizard() (tuiModel, tea.Cmd) {
 	return m, nil
 }
 
+// listPageRows is the page size for the plain full-screen lists: the same
+// viewport budget MoveDown and renderPlain agree on.
+func (m tuiModel) listPageRows() int {
+	return max(3, m.height-6)
+}
+
+// selectionPageRows is the viewport budget of whichever selection list is on
+// screen, so wheel paging (MovePage) and row stepping (MoveDown) keep the
+// highlight inside the rendered window in every list mode.
+func (m tuiModel) selectionPageRows() int {
+	switch m.mode {
+	case modeModelPanel:
+		return 8
+	case modeModelWizard:
+		return 4
+	default:
+		return m.listPageRows()
+	}
+}
+
 // handleListKey routes keys in modeList (sessions, projects, resume).
 func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
@@ -228,7 +250,13 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selectionList.MoveUp()
 		return m, nil
 	case tea.KeyDown, tea.KeyCtrlN:
-		m.selectionList.MoveDown(max(3, m.height-6))
+		m.selectionList.MoveDown(m.listPageRows())
+		return m, nil
+	case tea.KeyPgUp:
+		m.selectionList.MovePage(-m.listPageRows(), m.listPageRows())
+		return m, nil
+	case tea.KeyPgDown:
+		m.selectionList.MovePage(m.listPageRows(), m.listPageRows())
 		return m, nil
 	case tea.KeyEsc:
 		m.mode = modeIdle
@@ -338,6 +366,12 @@ func (m tuiModel) handleModelPanelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyDown, tea.KeyCtrlN:
 		m.selectionList.MoveDown(8)
+		return m, nil
+	case tea.KeyPgUp:
+		m.selectionList.MovePage(-8, 8)
+		return m, nil
+	case tea.KeyPgDown:
+		m.selectionList.MovePage(8, 8)
 		return m, nil
 	case tea.KeyEsc:
 		m.mode = modeIdle
@@ -497,6 +531,12 @@ func (m tuiModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case tea.KeyDown, tea.KeyCtrlN:
 			m.selectionList.MoveDown(4)
 			return m, nil
+		case tea.KeyPgUp:
+			m.selectionList.MovePage(-4, 4)
+			return m, nil
+		case tea.KeyPgDown:
+			m.selectionList.MovePage(4, 4)
+			return m, nil
 		case tea.KeyEsc:
 			m.mode = modeIdle
 			return m, nil
@@ -644,7 +684,7 @@ func (m tuiModel) finalizeWizard() (tuiModel, tea.Cmd) {
 	m.mode = modeIdle
 	note := block{
 		kind: blockNote,
-		body: fmt.Sprintf("已成功添加并启用模型: %s (%s) [当前]", alias, mc.Model),
+		body: i18n.Tf(m.loc, "tui.model.added", "alias", alias, "model", mc.Model),
 	}
 	return m, m.printBlock(note)
 }
@@ -838,7 +878,7 @@ func (m tuiModel) finalizeOnboarding() (tuiModel, tea.Cmd) {
 	m.scrollOffset = 0
 	note := block{
 		kind: blockNote,
-		body: "保存配置至 config.yaml，初始化已完成",
+		body: i18n.T(m.loc, "tui.onboard.done"),
 	}
 	return m, m.printBlock(note)
 }
@@ -852,7 +892,13 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectionList.MoveUp()
 			return m, nil
 		case tea.KeyDown, tea.KeyCtrlN:
-			m.selectionList.MoveDown(max(3, m.height-6))
+			m.selectionList.MoveDown(m.listPageRows())
+			return m, nil
+		case tea.KeyPgUp:
+			m.selectionList.MovePage(-m.listPageRows(), m.listPageRows())
+			return m, nil
+		case tea.KeyPgDown:
+			m.selectionList.MovePage(m.listPageRows(), m.listPageRows())
 			return m, nil
 		case tea.KeyEsc:
 			m.quitting = true
@@ -930,7 +976,13 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectionList.MoveUp()
 			return m, nil
 		case tea.KeyDown, tea.KeyCtrlN:
-			m.selectionList.MoveDown(max(3, m.height-6))
+			m.selectionList.MoveDown(m.listPageRows())
+			return m, nil
+		case tea.KeyPgUp:
+			m.selectionList.MovePage(-m.listPageRows(), m.listPageRows())
+			return m, nil
+		case tea.KeyPgDown:
+			m.selectionList.MovePage(m.listPageRows(), m.listPageRows())
 			return m, nil
 		case tea.KeyEsc:
 			m.onboardingStep = onboardingStepTerms
@@ -973,7 +1025,13 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectionList.MoveUp()
 			return m, nil
 		case tea.KeyDown, tea.KeyCtrlN:
-			m.selectionList.MoveDown(max(3, m.height-6))
+			m.selectionList.MoveDown(m.listPageRows())
+			return m, nil
+		case tea.KeyPgUp:
+			m.selectionList.MovePage(-m.listPageRows(), m.listPageRows())
+			return m, nil
+		case tea.KeyPgDown:
+			m.selectionList.MovePage(m.listPageRows(), m.listPageRows())
 			return m, nil
 		case tea.KeyEsc:
 			return m.advanceFromTerms()
@@ -1004,7 +1062,7 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					title = "选择模型提供商开始添加："
 					hints = "↑↓ 选择 · Enter 确认 · Esc 返回"
 				}
-				sl := NewSelectionList(title, buildProviderItems())
+				sl := NewSelectionList(title, buildProviderItems(m.loc))
 				sl.Boxed = true
 				sl.FooterHints = hints
 				m.selectionList = sl

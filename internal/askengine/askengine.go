@@ -560,10 +560,10 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	if err := ledger.Register(e.db, card, stableID, schedulerTier(e.cfg.Node.ResourceClass)); err != nil {
 		e.logger.Warn("self-register failed", "node", stableID, "err", err)
 	}
-	// The engine's scheduler is a short-lived/ephemeral participant: its
-	// node id never collides with the concurrently running daemon on the
-	// same node (the daemon owns the stable identity and listener).
-	sched := core.NewCore(e.db, core.EphemeralNodeID(stableID), card, schedulerTier(e.cfg.Node.ResourceClass), e.logger, e.cfg.Model)
+	// The engine's scheduler uses stableID so tasks created, claimed and queued
+	// belong to this machine's stable identity rather than a fleeting hash
+	// that leaves tasks stranded when the process exits.
+	sched := core.NewCore(e.db, stableID, card, schedulerTier(e.cfg.Node.ResourceClass), e.logger, e.cfg.Model)
 	sched.SetRouterPolicy(e.cfg.Injection, e.cfg.Routing)
 	sched.AttachSupervisor(e.cfg.Model)
 	if e.skills != nil {
@@ -583,6 +583,15 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	e.schedCtx = schedCtx
 	e.schedCancel = cancel
 	e.cardPath = cardPath
+
+	// Clean up stale leases from interrupted runs so tasks aren't stranded in running.
+	if sched.TaskStore() != nil {
+		if expired, err := sched.TaskStore().ExpireTasks(context.Background()); err != nil {
+			e.logger.Debug("expire stale tasks at startup", "err", err)
+		} else if len(expired) > 0 {
+			e.logger.Info("expired stale tasks from previous run", "count", len(expired), "tasks", expired)
+		}
+	}
 
 	// Only queue-mode surfaces own a background consumer. One-shot ask/REPL
 	// engines submit inline and must not unexpectedly drain persisted work.
@@ -853,7 +862,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// memory, so nothing is loaded at all. Project memory never enters this
 	// prompt either; the execution path loads it selectively (A1), not here.
 	conversationMemory := ""
-	if workDir == "" {
+	if workDir == "" && e.injector != nil {
 		var merr error
 		conversationMemory, merr = e.injector.Conversation(prompt)
 		if merr != nil {
@@ -870,7 +879,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// emptiness: New() always registers the built-in tools, so a registry-based
 	// check would make this path unreachable in every real engine (the tests
 	// that hand-build an Engine are the only place a nil registry ever occurs).
-	if len(history) == 0 && workDir == "" {
+	if len(history) == 0 {
 		if triage := entry.FastTriage(prompt, history); triage.IsFastPath {
 			fastSystem := entry.FastPathPrompt(e.replyASCII)
 			if conversationMemory != "" {
@@ -926,6 +935,14 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// lastTask keeps the most recent task outcome so the converged Result
 	// carries the task fields (id/state/output) alongside the model's report.
 	var lastTask *Result
+	finalizeLastTask := func(t *Result) *Result {
+		if t != nil && strings.TrimSpace(t.Answer) == "" && strings.TrimSpace(t.Report) == "" {
+			if report, rerr := entry.SummarizeResult(ctx, client, t.TaskTitle, "", t.OK, t.ExitCode, t.Stdout, t.Stderr); rerr == nil {
+				t.Report = report
+			}
+		}
+		return t
+	}
 	var accumulatedReasoning strings.Builder
 	// Devices visible to classification: the local capability directory
 	// (populated by the daemon's heartbeats and our own peer dials).
@@ -1023,7 +1040,7 @@ rounds:
 				if lastTask.Thought == "" {
 					lastTask.Thought = accumulatedReasoning.String()
 				}
-				return lastTask, nil
+				return finalizeLastTask(lastTask), nil
 			}
 			return &Result{Kind: "answer", Answer: out.Answer, Thought: accumulatedReasoning.String()}, nil
 		case entry.KindTask:
@@ -1056,21 +1073,14 @@ rounds:
 				// own event loop and resumes via ResumeApprovedReport.
 				return res, nil
 			}
-			// Inline task completed: generate a human-readable summary so the
-			// user sees what happened instead of raw stdout/stderr. A model
-			// failure degrades gracefully (Report stays empty), so the summary
-			// never blocks result delivery.
-			if report, rerr := entry.SummarizeResult(ctx, client, res.TaskTitle, out.Task.Spec.Target, res.OK, res.ExitCode, res.Stdout, res.Stderr); rerr == nil {
-				res.Report = report
-			} else {
-				e.logger.Warn("askengine: task summary degraded", "task", res.TaskID, "err", rerr)
-			}
 			taskRounds++
 			lastTask = res
 			// The sub-agent round: the task is one step of this conversation,
 			// not its end. Replay the dispatch as the model's own words, feed
 			// the outcome back as the observation it reports on, and let the
 			// loop converge — to a report, a follow-up task, or a question.
+			// Dedicated SummarizeResult is deferred as a lazy fallback if the loop
+			// does not converge on an answer, eliminating redundant LLM latency.
 			turns = append(turns,
 				entry.Turn{Role: "assistant", Content: taskDispatchNote(out.Task)},
 				entry.Turn{Role: "user", Content: taskObservation(res)},
@@ -1162,7 +1172,7 @@ rounds:
 		if lastTask != nil && taskRounds >= maxTasks {
 			// The loop exhausted the task budget and the model still wants
 			// another delegation: surface what ran instead of exceeding it.
-			return lastTask, nil
+			return finalizeLastTask(lastTask), nil
 		}
 		cb.progress(Progress{Kind: ProgressTask, Name: final.Task.Title})
 		res := e.submitTask(ctx, final.Task, prompt, authorize, scope, accumulatedReasoning.String(), cb)
@@ -1189,7 +1199,7 @@ rounds:
 	}
 	if lastTask != nil {
 		lastTask.Answer = final.Answer
-		return lastTask, nil
+		return finalizeLastTask(lastTask), nil
 	}
 	return &Result{Kind: "answer", Answer: final.Answer}, nil
 }
@@ -1387,21 +1397,19 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		}
 		return &Result{Kind: "task", TaskID: task.TaskID, TaskTitle: task.Title, TaskState: task.State, Thought: reasoning}
 	}
-	e.schedMu.Lock()
-	defer e.schedMu.Unlock()
 	// Bridge the core's lifecycle trace events to the caller's progress feed for
 	// the duration of this synchronous run, so a blocking agent execution shows
-	// routing → executing → judging instead of a frozen spinner. schedMu already
-	// serializes runs, so the observer sees only this ask's events; it is cleared
-	// on return. A caller with no progress sink installs nothing.
+	// routing → executing → judging instead of a frozen spinner. AddOnEvent
+	// allows concurrent subagent runs without serializing submissions.
+	// A caller with no progress sink installs nothing.
 	if cb.OnProgress != nil || cb.OnStatus != nil {
 		store := e.sched.TaskStore()
-		store.SetOnEvent(func(_, typ string, data any) {
+		unsub := store.AddOnEvent(func(_, typ string, data any) {
 			if p, ok := progressForEvent(typ, data); ok {
 				cb.progress(p)
 			}
 		})
-		defer store.SetOnEvent(nil)
+		defer unsub()
 	}
 	task, result, err := e.sched.Submit(ctx, in)
 	if err != nil {
@@ -1643,8 +1651,6 @@ func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb 
 	if e.sched == nil {
 		return &Result{Kind: "task", TaskID: taskID, TaskState: core.StateReview, Stderr: "task execution requires a capability card", ExitCode: 1}
 	}
-	e.schedMu.Lock()
-	defer e.schedMu.Unlock()
 	if workDir != "" {
 		if err := e.sched.TaskStore().SetWorkDir(ctx, taskID, workDir); err != nil {
 			return &Result{Kind: "task", TaskID: taskID, TaskState: "review", Stderr: err.Error(), ExitCode: 1}
@@ -1652,7 +1658,7 @@ func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb 
 	}
 	if cb.OnProgress != nil || cb.OnStatus != nil {
 		store := e.sched.TaskStore()
-		store.SetOnEvent(func(id, typ string, data any) {
+		unsub := store.AddOnEvent(func(id, typ string, data any) {
 			if id != taskID {
 				return
 			}
@@ -1660,7 +1666,7 @@ func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb 
 				cb.progress(p)
 			}
 		})
-		defer store.SetOnEvent(nil)
+		defer unsub()
 	}
 	res := e.resumeLocked(ctx, taskID)
 	if ctx.Err() != nil {

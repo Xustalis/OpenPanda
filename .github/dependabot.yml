@@ -1,0 +1,37 @@
+version: 2
+
+# Grouped updates on purpose. The point of Dependabot here is to keep the
+# module graph current enough that govulncheck stays quiet, not to open one
+# pull request per transitive dependency: every PR this repo gets has to clear
+# the full gate, so an ungrouped weekly burst would cost more CI than the
+# currency is worth.
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      go-modules:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /webui/app
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      web-dependencies:
+        patterns: ['*']
+
+  # Actions versions rot silently — `actions/checkout@v4` keeps working long
+  # after v5 exists, and nothing in the gate ever notices.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']
