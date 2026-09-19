@@ -64,35 +64,71 @@ for f in $changelogs; do
 done
 
 if [ "$missing_file" -eq 0 ]; then
-	# (a) heading sets. awk records the version headings of each file; the first
-	# file defines the reference set and the rest are compared against it.
-	heading_drift=$(
-		awk '
-			FNR == 1 { file++ }
-			/^## \[/ {
-				v = $0
-				sub(/^## \[/, "", v); sub(/\].*/, "", v)
-				if (!seen[file, v]++) print file, v
-			}
-		' $changelogs |
-			awk '
-				{ if ($1 == 1) { ref[$2] = 1; next } else { got[$2] = 1 } }
-				END {
-					for (v in ref) if (!(v in got)) print "missing: " v
-					for (v in got) if (!(v in ref)) print "extra: " v
-				}
-			'
-	)
+	# (a) heading sets. Every file is compared against the canonical one
+	# individually, not against the union of the others: with a union, a file
+	# can drop a heading that any single other file still carries and the leg
+	# stays quiet — which is precisely the drift it exists to catch.
+	ref_versions=$(grep '^## \[' CHANGELOG.md | sed 's/^## \[\([^]]*\)\].*/\1/' | sort -u)
+	heading_drift=""
+	for f in $changelogs; do
+		[ "$f" = "CHANGELOG.md" ] && continue
+		got_versions=$(grep '^## \[' "$f" | sed 's/^## \[\([^]]*\)\].*/\1/' | sort -u)
+		for v in $ref_versions; do
+			printf '%s\n' "$got_versions" | grep -qxF "$v" ||
+				heading_drift="$heading_drift\n  $f missing: $v"
+		done
+		for v in $got_versions; do
+			printf '%s\n' "$ref_versions" | grep -qxF "$v" ||
+				heading_drift="$heading_drift\n  $f extra: $v"
+		done
+	done
 	if [ -n "$heading_drift" ]; then
 		echo "FAIL: translated changelogs have version headings CHANGELOG.md does not (or vice versa):"
-		echo "$heading_drift" | sed 's/^/  /'
+		# Entries are accumulated with a leading \n for the common case of
+		# several; drop the blank line that leaves when printing.
+		printf '%b\n' "$heading_drift" | sed '/^$/d'
 		fail=1
 	fi
 
-	# (b) the newest released version section's bullet count. `[Unreleased]` sits
-	# first in every file and legitimately holds no entries, so it is skipped —
-	# otherwise every file would compare 0 against 0 and the check would pass
-	# without looking at anything.
+	# (b) entry counts, per version section, must agree across all five files.
+	#
+	# `[Unreleased]` sat empty in every file when this leg was written, so it
+	# was skipped: comparing 0 against 0 would have passed without looking at
+	# anything. That premise only holds while it is empty, so it is now skipped
+	# only in that case — the moment entries land there, a translation that
+	# misses one is exactly the drift worth catching, and it is the drift that
+	# reaches users first (the installer fixes below are user-visible).
+	section_entries() { # <version> → "<file> <count>" per changelog
+		for f in $changelogs; do
+			awk -v want="$1" '
+				$0 ~ "^## \\[" want "\\]" { insec = 1; next }
+				insec && /^## \[/ { insec = 0 }
+				insec && /^- / { n++ }
+				END { printf "%s %d\n", FILENAME, n + 0 }
+			' "$f"
+		done
+	}
+
+	check_counts() { # <version> — fail when the files disagree
+		counts=$(section_entries "$1")
+		distinct=$(echo "$counts" | awk '{ print $2 }' | sort -u | wc -l | tr -d ' ')
+		if [ "$distinct" != "1" ]; then
+			echo "FAIL: [$1] has a different number of entries per changelog:"
+			echo "$counts" | sed 's/^/  /'
+			fail=1
+		fi
+	}
+
+	unreleased_count=$(awk '
+		$0 ~ "^## \\[Unreleased\\]" { insec = 1; next }
+		insec && /^## \[/ { insec = 0 }
+		insec && /^- / { n++ }
+		END { print n + 0 }
+	' CHANGELOG.md)
+	if [ "$unreleased_count" != "0" ]; then
+		check_counts "Unreleased"
+	fi
+
 	newest=$(awk '
 		/^## \[/ {
 			v = $0; sub(/^## \[/, "", v); sub(/\].*/, "", v)
@@ -100,22 +136,7 @@ if [ "$missing_file" -eq 0 ]; then
 		}
 	' CHANGELOG.md)
 	if [ -n "$newest" ]; then
-		counts=$(
-			for f in $changelogs; do
-				awk -v want="$newest" '
-					$0 ~ "^## \\[" want "\\]" { insec = 1; next }
-					insec && /^## \[/ { insec = 0 }
-					insec && /^- / { n++ }
-					END { printf "%s %d\n", FILENAME, n + 0 }
-				' "$f"
-			done
-		)
-		distinct=$(echo "$counts" | awk '{ print $2 }' | sort -u | wc -l | tr -d ' ')
-		if [ "$distinct" != "1" ]; then
-			echo "FAIL: [${newest}] has a different number of entries per changelog:"
-			echo "$counts" | sed 's/^/  /'
-			fail=1
-		fi
+		check_counts "$newest"
 	fi
 fi
 
