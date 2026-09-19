@@ -27,6 +27,7 @@ import atexit
 import fcntl
 import os
 import pty
+import re
 import select
 import shutil
 import signal
@@ -159,6 +160,37 @@ def run(env_overrides, keys):
     return b"".join(out)
 
 
+# The prompt is marked with a heavy right angle bracket, and everything the
+# burst check below needs to know is what got drawn after it.
+ANSI_RE = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[()][A-Z0-9]")
+PROMPT = "\u276f".encode()
+
+
+def prompt_body(blob):
+    """The text the TUI drew after its prompt, from the last frame that had any."""
+    text = ANSI_RE.sub(b"", blob)
+    body = ""
+    for line in text.split(b"\n"):
+        i = line.find(PROMPT)
+        if i < 0:
+            continue
+        drawn = line[i + len(PROMPT):].decode("utf-8", "replace")
+        drawn = drawn.replace("\u2502", "").replace("\r", "").strip()
+        if drawn:
+            body = drawn
+    return body
+
+
+def prompt_is_clean(blob):
+    """True when the prompt holds nothing but its placeholder.
+
+    Coordinates reaching the prompt at all is the bug, so anything on that line
+    other than the placeholder means they were typed.
+    """
+    body = prompt_body(blob)
+    return body == "" or "Ask anything" in body
+
+
 def report(title, checks, failures):
     print("== %s ==" % title)
     for name, ok in checks:
@@ -210,6 +242,27 @@ def main():
         ("re-arms alternate scroll on the way back (a second 1007h)",
          blob.count(b"\x1b[?1007h") >= 2),
     ], failures)
+
+    # A terminal without SGR mouse support reports the wheel in X10, whose
+    # coordinates travel as bare bytes rather than decimal text. Bubble Tea
+    # reads into a fixed 256-byte buffer, so a burst long enough to fill it ends
+    # mid-event — and the tail is then ordinary text as far as the key parser is
+    # concerned. It used to be typed into the prompt.
+    #
+    # Two sizes, because they exercise different halves of the guard. 60 notches
+    # (360 bytes) is the smallest realistic flick that crosses the boundary, and
+    # it leaves the truncated prefix as the last thing in the buffer. 120 (720
+    # bytes) makes the *next* read fill the buffer again, overwriting the
+    # prefix's three bytes in place — so the guard has to recognise the prefix
+    # without reading them. 43 notches is the first burst that crosses at all; a
+    # trackpad flick is hundreds.
+    for notches in (60, 120):
+        burst = b"\x1b[M\x60\x5b\x2d" * notches
+        blob = run({"PANDA_MOUSE": "scroll"}, [enter, (burst, 2.5)])
+        report(f"X10 wheel burst of {notches} notches crosses the input read buffer", [
+            ("no coordinate bytes are typed into the prompt", prompt_is_clean(blob)),
+            ("the wheel still scrolls the transcript", b"browsing history" in blob),
+        ], failures)
 
     if failures:
         print("\nFAILED: " + "; ".join(failures))

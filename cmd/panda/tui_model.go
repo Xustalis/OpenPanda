@@ -88,8 +88,16 @@ type tuiModel struct {
 	// projName caches the active project for the status row.
 	projName string
 
-	mode        tuiMode
-	mouse       mouseMode
+	mode  tuiMode
+	mouse mouseMode
+
+	// x10Payload counts bytes of a split X10 mouse event that are still owed to
+	// a message nobody will ever parse. X10 carries its coordinates as bare
+	// bytes rather than decimal text, so those bytes arrive as ordinary
+	// characters and would be typed into the prompt. See isX10MousePrelude in
+	// tui_mouse.go.
+	x10Payload int
+
 	stream      *askStream
 	exec        *commandExec
 	execGen     uint64
