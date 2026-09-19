@@ -71,6 +71,13 @@ printf '# user content\n' > "$HOME_DIR/.bashrc"
 PREFIX="$WORK/prefix"
 
 run_installer() { # <extra args...>
+    # env -i is deliberate, and do not "fix" it by adding the usual variables
+    # back: the point is the minimal environment installers actually meet —
+    # containers, CI runners, ssh sessions and systemd units — and a variable
+    # this script happens to export is exactly the one an installer cannot
+    # assume. It has already paid for itself: with USER absent, install.sh
+    # aborted inside its own systemd warning path (`set -u`, "USER: parameter
+    # not set") on the very branch that exists to warn and continue.
     env -i \
         PATH="${PATH:-/usr/bin:/bin}" \
         HOME="$HOME_DIR" \

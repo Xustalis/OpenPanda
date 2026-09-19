@@ -189,6 +189,64 @@ try {
         Bad "a failed run left a binary behind"
     }
 
+    # ── 6. Logon-task registration (-Yes) ───────────────────────────────────
+    # The path that keeps a Windows node alive across logons — and the task
+    # name is a contract, not a detail: `panda uninstall` deletes
+    # OpenPandaNode, so a rename here would leave the task registered forever,
+    # relaunching a daemon whose binary is gone at every logon.
+    #
+    # Registering an ONLOGON task for the current user needs no elevation, but
+    # a hardened runner can still refuse. That is reported as a skip with the
+    # reason rather than a failure, because install.ps1 itself warns instead of
+    # failing there — the suite must not be stricter than the thing it tests.
+    Write-Host "-> install (-Yes, logon task registration)"
+    $SvcPrefix = Join-Path $Work "prefix-service"
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts/install.ps1") `
+        -Prefix $SvcPrefix -Version $Version -Yes 2>&1 |
+        Tee-Object -FilePath (Join-Path $Work "run6.log") | Out-Null
+    if ($LASTEXITCODE -eq 0) { Ok "install with -Yes exited 0" } else {
+        Bad "install with -Yes exited $LASTEXITCODE"
+        Get-Content (Join-Path $Work "run6.log") -Tail 20 | ForEach-Object { Write-Host "        $_" }
+    }
+
+    # Read the task back. Both calls are defensive on purpose: schtasks writes
+    # its "task does not exist" complaint to stderr, and this script runs with
+    # $ErrorActionPreference = "Stop" — so a redirected native stderr can
+    # surface as a terminating error (NativeCommandError) instead of the skip
+    # this branch is trying to report, aborting the whole suite on the one path
+    # that is supposed to degrade gracefully. stderr therefore goes to $null,
+    # and $LASTEXITCODE carries the verdict.
+    $taskXml = ""
+    $registered = $false
+    try {
+        $taskXml = (& schtasks.exe /Query /TN "OpenPandaNode" /XML 2>$null | Out-String)
+        $registered = ($LASTEXITCODE -eq 0)
+    } catch { $registered = $false }
+
+    if (-not $registered) {
+        Write-Host "  skip  logon task not registered (install.ps1 warns rather than fails here)" -ForegroundColor Yellow
+    } else {
+        Ok "logon task OpenPandaNode registered"
+        # The task has to point at *this* prefix: a task left over from an
+        # earlier install keeps launching the old binary after an upgrade, and
+        # nothing else in the suite would notice. Two normalisations are not
+        # cosmetic — schtasks can emit UTF-16, which decodes to NUL-interleaved
+        # text if the console encoding is single-byte (that would fail the
+        # match on a perfectly healthy task), and Windows paths are
+        # case-insensitive.
+        $flat = ($taskXml -replace "`0", "").ToLowerInvariant()
+        $expectedExe = (Join-Path $SvcPrefix "bin\panda.exe").ToLowerInvariant()
+        if ($flat.Contains($expectedExe)) {
+            Ok "logon task starts the installed binary"
+        } else {
+            Bad "logon task does not reference $SvcPrefix\bin\panda.exe"
+        }
+    }
+
+    # Clean up the way the product's own uninstall does — the task points inside
+    # $Work, which the finally block deletes.
+    try { & schtasks.exe /Delete /TN "OpenPandaNode" /F 2>$null | Out-Null } catch {}
+
     # ── Summary ────────────────────────────────────────────────────────────
     Write-Host ""
     if ($Fail -ne 0) {
@@ -196,8 +254,20 @@ try {
         exit 1
     }
     Write-Host "test-installers: OK ($Pass checks passed on windows/$arch)" -ForegroundColor Green
+    # Exit explicitly. `pwsh -Command ". script.ps1"` hands the process the
+    # script's $LASTEXITCODE when the script does not exit on its own, and
+    # section 5 deliberately leaves it non-zero (it asserts the installer
+    # fails), so a passing suite reported success and then failed the step.
+    exit 0
 }
 finally {
+    # The logon task points inside $Work, which is about to be deleted: if the
+    # run threw before section 6's own cleanup, the task would survive pointing
+    # at a binary that no longer exists — the exact residue this suite exists
+    # to prove the product does not leave behind. Wrapped because
+    # $ErrorActionPreference is "Stop", which turns a missing schtasks.exe into
+    # a terminating error that 2>&1 alone would not absorb.
+    try { & schtasks.exe /Delete /TN "OpenPandaNode" /F 2>&1 | Out-Null } catch {}
     # Best effort: the test added $Prefix\bin to the *user* PATH. On a
     # disposable runner that is harmless, but on a developer's machine it must
     # not survive the test.
