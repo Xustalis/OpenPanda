@@ -1,6 +1,7 @@
 package entry
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -235,5 +236,56 @@ func TestRegistryCopy(t *testing.T) {
 	}
 	if len(dup.Specs()) != len(reg.Specs())+1 {
 		t.Error("copy and original specs diverged unexpectedly")
+	}
+}
+
+// TestUnparsableDSMLFallsBackToTheProse pins the recovery added after a real
+// failure: an endpoint emitted a stray DSML marker next to a perfectly good
+// answer, the parser found no invoke, and the whole ask was thrown away — the
+// tool loop then retried the same deterministic response until its budget ran
+// out. Stripping the marker and parsing the remainder keeps the answer.
+func TestUnparsableDSMLFallsBackToTheProse(t *testing.T) {
+	resp := Response{Text: "已经配置完成，dsh 现在会接简单长程任务。\n<||DSML||tool_calls>\n"}
+	out, err := resolveDSML(resp, true)
+	if err != nil {
+		t.Fatalf("a stray marker next to prose must not fail the turn: %v", err)
+	}
+	if out.Kind != KindAnswer {
+		t.Fatalf("kind = %v, want answer", out.Kind)
+	}
+	if !strings.Contains(out.Answer, "dsh") {
+		t.Errorf("prose was lost: %q", out.Answer)
+	}
+	if ContainsDSMLToolCall(out.Answer) {
+		t.Errorf("markup leaked into the answer: %q", out.Answer)
+	}
+	if out.Note == "" {
+		t.Error("the dropped marker should be noted, not hidden")
+	}
+}
+
+// TestUnparsableDSMLAloneStillFails keeps the other half: markup with nothing
+// usable around it is rejected, and the wrapped cause carries a bounded sample
+// of what the endpoint actually sent — without it the report is undiagnosable.
+func TestUnparsableDSMLAloneStillFails(t *testing.T) {
+	resp := Response{Text: "<||DSML||tool_calls>\n<||DSML||something-else>\n"}
+	_, err := resolveDSML(resp, true)
+	if err == nil {
+		t.Fatal("markup with no usable content must still be rejected")
+	}
+	var ce *ClassifyError
+	if !errors.As(err, &ce) {
+		t.Fatalf("err = %T, want *ClassifyError", err)
+	}
+	if ce.Err == nil || !strings.Contains(ce.Err.Error(), "something-else") {
+		t.Errorf("the cause should sample the offending markup, got %v", ce.Err)
+	}
+	if strings.Contains(ce.UserMsg, "something-else") {
+		t.Error("the raw markup must not reach the user-facing message")
+	}
+	// The sample is bounded so a runaway response cannot flood the log.
+	long := "<||DSML||tool_calls>" + strings.Repeat("x", 5000)
+	if got := dsmlSample(long); len(got) > 320 {
+		t.Errorf("sample is %d bytes, want it bounded", len(got))
 	}
 }

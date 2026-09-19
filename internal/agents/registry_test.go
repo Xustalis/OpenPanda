@@ -50,3 +50,22 @@ func TestInjectedAgentsDeclareProbeVars(t *testing.T) {
 		}
 	}
 }
+
+// TestDetectedAgentsAreAutoApproved pins the tier a registry entry contributes
+// to a generated capability card. commander.Route defaults an agent's tier to 1
+// ("delegating to an agent is auto-approved") and lets a card declaration win —
+// so a registry default of 2 pre-selects the approval gate on every detected
+// node and makes unattended work impossible. That is not hypothetical: it is
+// what shipped, and it parked every agent task in review.
+func TestDetectedAgentsAreAutoApproved(t *testing.T) {
+	reg := Registry()
+	if len(reg) == 0 {
+		t.Fatal("empty registry")
+	}
+	for _, k := range reg {
+		if k.DefaultTier != TierAutoApproved {
+			t.Errorf("agent %q declares DefaultTier %d; a generated card must declare %d",
+				k.Name, k.DefaultTier, TierAutoApproved)
+		}
+	}
+}

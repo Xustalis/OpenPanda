@@ -170,6 +170,10 @@ func init() {
 		{"authorize", "system", "cmd.authorize", (*repl).cmdAuthorize},
 		{"lang", "system", "cmd.lang", (*repl).cmdLang},
 		{"version", "system", "cmd.version", (*repl).cmdVersion},
+		{"read", "system", "cmd.read", (*repl).cmdRead},
+		{"view", "system", "cmd.read", (*repl).cmdRead},
+		{"cat", "system", "cmd.read", (*repl).cmdRead},
+		{"md", "system", "cmd.read", (*repl).cmdRead},
 		{"help", "system", "cmd.help", (*repl).cmdHelp},
 		{"quit", "system", "cmd.quit", (*repl).cmdQuit},
 	}
@@ -770,7 +774,7 @@ func (r *repl) ask(text string) {
 			// (it explains a long wait); once the answer is streaming, the same
 			// note would interrupt it, so it stays ephemeral in the status line.
 			note := progressNote(r.loc, p)
-			if lr.printed {
+			if p.Kind == askengine.ProgressTool || lr.printed {
 				st.Note(note)
 				return
 			}
@@ -1434,10 +1438,7 @@ func (r *repl) cmdMemory(arg string) {
 		r.storeErr(err)
 		return
 	}
-	_, _ = r.commandOutput().Write(data)
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		r.outln()
-	}
+	r.outln(r.renderMd(string(data)))
 }
 
 // cmdProjects lists existing project memories.

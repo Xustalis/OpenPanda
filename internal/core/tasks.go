@@ -37,8 +37,10 @@ type TaskStore struct {
 	// bridges it to the CLI status line during a synchronous Submit). The callback
 	// MUST NOT touch the store and MUST NOT block: it runs on the goroutine that
 	// recorded the event, inside its transaction.
-	onEvent   func(taskID, typ string, data any)
-	onEventMu sync.RWMutex
+	onEvent        func(taskID, typ string, data any)
+	eventListeners map[uint64]func(taskID, typ string, data any)
+	nextListenerID uint64
+	onEventMu      sync.RWMutex
 }
 
 // NewTaskStore wraps a DB. now may be nil (defaults to Unix time).
@@ -46,7 +48,12 @@ func NewTaskStore(db *sql.DB, logger *slog.Logger) *TaskStore {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &TaskStore{db: db, logger: logger, now: storage.Now}
+	return &TaskStore{
+		db:             db,
+		logger:         logger,
+		now:            storage.Now,
+		eventListeners: make(map[uint64]func(taskID, typ string, data any)),
+	}
 }
 
 // SetOnReview installs the callback fired when a task transitions into review.
@@ -67,6 +74,28 @@ func (s *TaskStore) SetOnEvent(fn func(taskID, typ string, data any)) {
 	s.onEventMu.Lock()
 	s.onEvent = fn
 	s.onEventMu.Unlock()
+}
+
+// AddOnEvent registers a concurrent-safe per-event observer fired after every task
+// event is appended. Returns an unsubscribe function that removes the listener.
+func (s *TaskStore) AddOnEvent(fn func(taskID, typ string, data any)) func() {
+	if fn == nil {
+		return func() {}
+	}
+	s.onEventMu.Lock()
+	if s.eventListeners == nil {
+		s.eventListeners = make(map[uint64]func(taskID, typ string, data any))
+	}
+	s.nextListenerID++
+	id := s.nextListenerID
+	s.eventListeners[id] = fn
+	s.onEventMu.Unlock()
+
+	return func() {
+		s.onEventMu.Lock()
+		delete(s.eventListeners, id)
+		s.onEventMu.Unlock()
+	}
 }
 
 // Create inserts a new task in submitted state with a fresh UUIDv7 id.
@@ -299,9 +328,19 @@ func (s *TaskStore) recordEventTx(ctx context.Context, tx *sql.Tx, taskID, typ s
 	// from touching the store or blocking, so this cannot deadlock the connection.
 	s.onEventMu.RLock()
 	fn := s.onEvent
+	var extraListeners []func(taskID, typ string, data any)
+	if len(s.eventListeners) > 0 {
+		extraListeners = make([]func(taskID, typ string, data any), 0, len(s.eventListeners))
+		for _, l := range s.eventListeners {
+			extraListeners = append(extraListeners, l)
+		}
+	}
 	s.onEventMu.RUnlock()
 	if fn != nil {
 		fn(taskID, typ, data)
+	}
+	for _, l := range extraListeners {
+		l(taskID, typ, data)
 	}
 	return nil
 }

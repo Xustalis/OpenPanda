@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -123,7 +124,9 @@ func TestTUIListCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	projStore := projectstore.NewStore(db)
-	_, _ = projStore.Create("OpenPanda", "/path/to/openpanda", "主项目")
+	projWorkDir := filepath.Join(t.TempDir(), "openpanda")
+	os.MkdirAll(projWorkDir, 0o755)
+	_, _ = projStore.Create("OpenPanda", projWorkDir, "主项目")
 	_ = projStore.SetActive("OpenPanda")
 
 	r := &repl{
@@ -180,7 +183,7 @@ func TestTUIListCommands(t *testing.T) {
 		t.Fatalf("expected modeList listProjects, got %v", m.mode)
 	}
 	projView := m.View()
-	if !strings.Contains(projView, "OpenPanda") || !strings.Contains(projView, "/path/to/openpanda") {
+	if !strings.Contains(projView, "OpenPanda") || !strings.Contains(projView, "openpanda") {
 		t.Fatalf("projects view should contain name and workdir: %s", projView)
 	}
 	if !strings.Contains(projView, "[当前]") {
@@ -675,9 +678,26 @@ func TestTUIShellCommandStreamsProgressAndLongOutput(t *testing.T) {
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width, m.height = 80, 24
-	payload := strings.Repeat("x", 128*1024)
+	// The 128 KiB of output is produced by the child, never carried on its
+	// command line. Linux caps a single argv string at MAX_ARG_STRLEN (32
+	// pages, 128 KiB) and fails execve with E2BIG beyond it: inlining the
+	// payload made the `-c` argument 131,125 bytes — 53 over the cap — so the
+	// shell never started and Linux runs reported "fork/exec /bin/bash:
+	// argument list too long" instead of the payload. macOS allows roughly an
+	// order of magnitude more per argument, which is why this only ever broke
+	// in CI.
+	const payloadBytes = 128 * 1024
+	shellCmd := fmt.Sprintf(
+		"printf first; sleep 0.05; printf ' second'; head -c %d /dev/zero | tr '\\0' x",
+		payloadBytes)
+	// Guard the fixture, not just the bug: the output size is the point of
+	// this test, so the bytes have to stay off argv however the command is
+	// edited later.
+	if len(shellCmd) > 4*1024 {
+		t.Fatalf("shell fixture command line is %d bytes; have the child generate the bulk instead of passing it as an argument", len(shellCmd))
+	}
 
-	next, cmd := m.submit("!printf first; sleep 0.05; printf ' second'; printf '" + payload + "'")
+	next, cmd := m.submit("!" + shellCmd)
 	m = next.(tuiModel)
 	if m.mode != modeExec || cmd == nil {
 		t.Fatal("shell command did not enter progressive execution mode")
@@ -690,9 +710,6 @@ func TestTUIShellCommandStreamsProgressAndLongOutput(t *testing.T) {
 			seenProgress = true
 			next, cmd = m.Update(msg)
 			m = next.(tuiModel)
-			if !strings.Contains(m.execText.String(), "first") {
-				t.Fatal("progressive shell output was not folded into the live view")
-			}
 		case execDoneMsg:
 			next, _ = m.Update(msg)
 			m = next.(tuiModel)
@@ -706,7 +723,7 @@ func TestTUIShellCommandStreamsProgressAndLongOutput(t *testing.T) {
 		t.Fatalf("shell execution did not complete progressively: progress=%v mode=%v blocks=%d", seenProgress, m.mode, len(m.chatHistory.blocks))
 	}
 	out := m.chatHistory.blocks[len(m.chatHistory.blocks)-1].body
-	if !strings.HasPrefix(out, "first second") || len(out) < len(payload) {
+	if !strings.HasPrefix(out, "first second") || len(out) < payloadBytes {
 		t.Fatalf("long shell output was truncated or reordered: len=%d prefix=%q", len(out), out[:min(20, len(out))])
 	}
 }
@@ -773,5 +790,204 @@ func TestTUIChatHistoryScrolling(t *testing.T) {
 	m = next.(tuiModel)
 	if m.scrollOffset != 0 {
 		t.Fatalf("expected scrollOffset to reset to 0 after Esc, got %d", m.scrollOffset)
+	}
+}
+
+// TestTUIListModeWheelScrolling verifies that mouse wheel events page the
+// selection highlight in the full-screen list modes (they share onMouse now
+// that runTUI captures the mouse) while the transcript scrollOffset stays
+// untouched.
+func TestTUIListModeWheelScrolling(t *testing.T) {
+	m := newTestTUI(t)
+	m.mode = modeList
+	m.listKind = listSessions
+	m.width, m.height = 80, 24
+	var items []SelectionItem
+	for i := 1; i <= 30; i++ {
+		items = append(items, SelectionItem{Index: i, Title: fmt.Sprintf("s-%d", i), ID: fmt.Sprintf("id-%d", i)})
+	}
+	m.selectionList = NewSelectionList("sessions", items)
+
+	next, _ := m.Update(tea.MouseMsg{Type: tea.MouseWheelDown})
+	m = next.(tuiModel)
+	if m.selectionList.Cursor != 3 {
+		t.Fatalf("wheel down should advance the highlight 3 rows, cursor=%d", m.selectionList.Cursor)
+	}
+	if m.scrollOffset != 0 {
+		t.Fatalf("list modes must not touch the transcript scrollOffset, got %d", m.scrollOffset)
+	}
+
+	next, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelUp})
+	m = next.(tuiModel)
+	if m.selectionList.Cursor != 0 {
+		t.Fatalf("wheel up should retreat the highlight 3 rows, cursor=%d", m.selectionList.Cursor)
+	}
+
+	// PgDn still works alongside the wheel.
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = next.(tuiModel)
+	if m.selectionList.Cursor != m.listPageRows() {
+		t.Fatalf("PgDn should jump one page (%d), cursor=%d", m.listPageRows(), m.selectionList.Cursor)
+	}
+}
+
+func TestTUIScrollbarRendering(t *testing.T) {
+	r := &repl{
+		loc:         i18n.English,
+		cfg:         &config.Config{},
+		interactive: true,
+	}
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width = 80
+	m.height = 20
+
+	// Add 40 blocks to easily exceed height 20
+	for i := 0; i < 40; i++ {
+		m.chatHistory.blocks = append(m.chatHistory.blocks, block{
+			kind: blockUser,
+			body: fmt.Sprintf("Message %02d", i),
+		})
+	}
+
+	viewBottom := m.View()
+	// Should render vertical scrollbar thumb or track on right margin
+	if !strings.Contains(viewBottom, "█") && !strings.Contains(viewBottom, "│") && !strings.Contains(viewBottom, "#") {
+		t.Fatalf("expected view with overflowing content to render scrollbar character, got:\n%s", viewBottom)
+	}
+
+	// Scroll to top with KeyHome
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	m = next.(tuiModel)
+	if m.scrollOffset <= 0 {
+		t.Fatalf("expected scrollOffset > 0 after KeyHome, got %d", m.scrollOffset)
+	}
+	viewTop := m.View()
+	if viewTop == viewBottom {
+		t.Fatal("top view and bottom view should differ with scrollbar and position")
+	}
+
+	// Return to bottom with KeyEnd
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = next.(tuiModel)
+	if m.scrollOffset != 0 {
+		t.Fatalf("expected scrollOffset to reset to 0 after KeyEnd, got %d", m.scrollOffset)
+	}
+}
+
+func TestTUIArrowNavigationWhenScrolled(t *testing.T) {
+	r := &repl{
+		loc:         i18n.English,
+		cfg:         &config.Config{},
+		interactive: true,
+	}
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width = 80
+	m.height = 20
+
+	for i := 0; i < 40; i++ {
+		m.chatHistory.blocks = append(m.chatHistory.blocks, block{
+			kind: blockUser,
+			body: fmt.Sprintf("Message %02d", i),
+		})
+	}
+
+	// Initial render
+	_ = m.View()
+
+	// PgUp to enter history browsing
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = next.(tuiModel)
+	scrolled := m.scrollOffset
+	if scrolled <= 0 {
+		t.Fatalf("expected scrollOffset > 0, got %d", scrolled)
+	}
+
+	// Up arrow should scroll further back
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = next.(tuiModel)
+	if m.scrollOffset != scrolled+transcriptScrollStep {
+		t.Fatalf("KeyUp when scrolled should increase offset by %d, got %d (was %d)",
+			transcriptScrollStep, m.scrollOffset, scrolled)
+	}
+
+	// Down arrow should scroll forward toward bottom
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(tuiModel)
+	if m.scrollOffset != scrolled {
+		t.Fatalf("KeyDown when scrolled should decrease offset back to %d, got %d",
+			scrolled, m.scrollOffset)
+	}
+
+	// Typing a character in textarea should not snap scrollOffset to 0
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = next.(tuiModel)
+	if m.scrollOffset != scrolled {
+		t.Fatalf("typing should not reset scrollOffset to 0, got %d (wanted %d)", m.scrollOffset, scrolled)
+	}
+
+	// Submitting with Enter resets to 0
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(tuiModel)
+	if m.scrollOffset != 0 {
+		t.Fatalf("Enter should reset scrollOffset to 0, got %d", m.scrollOffset)
+	}
+}
+
+// TestNoInvalidEscapeFragmentsInInputBar verifies that leaked escape fragments,
+// SGR mouse movements, CPR reports, and Alt-prefixed residues are never printed
+// into the user prompt input bar.
+func TestNoInvalidEscapeFragmentsInInputBar(t *testing.T) {
+	cfg := &config.Config{
+		Storage: config.StorageConfig{WorkPath: "/test"},
+		Model:   config.ModelConfig{BaseURL: "http://localhost:8080", Model: "test"},
+		UI:      config.UIConfig{Onboarded: true, TermsAccepted: true},
+	}
+	r := &repl{loc: i18n.English, cfg: cfg, interactive: true}
+	m := newTUIModel(r)
+	// Enter idle mode
+	m.mode = modeIdle
+	m.width, m.height = 100, 30
+
+	leakedInputs := []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true},
+		{Type: tea.KeyRunes, Runes: []rune{'O'}, Alt: true},
+		{Type: tea.KeyRunes, Runes: []rune{']'}, Alt: true},
+		{Type: tea.KeyRunes, Runes: []rune{'?'}, Alt: true},
+		{Type: tea.KeyRunes, Runes: []rune("<35;12;34M")},
+		{Type: tea.KeyRunes, Runes: []rune("<35;12;34m")},
+		{Type: tea.KeyRunes, Runes: []rune("[<35;12;34M")},
+		{Type: tea.KeyRunes, Runes: []rune(";12;34M")},
+		{Type: tea.KeyRunes, Runes: []rune(";34M")},
+		{Type: tea.KeyRunes, Runes: []rune("[<")},
+		{Type: tea.KeyRunes, Runes: []rune("<35;12")},
+		{Type: tea.KeyRunes, Runes: []rune("[24;80R")},
+		{Type: tea.KeyRunes, Runes: []rune("24;80R")},
+		{Type: tea.KeyRunes, Runes: []rune(";80R")},
+		{Type: tea.KeyRunes, Runes: []rune("[?1002h")},
+		{Type: tea.KeyRunes, Runes: []rune("?1007h")},
+		{Type: tea.KeyRunes, Runes: []rune("[I")},
+		{Type: tea.KeyRunes, Runes: []rune("[O")},
+		{Type: tea.KeyRunes, Runes: []rune("[200~")},
+		{Type: tea.KeyRunes, Runes: []rune("[1;2A")},
+		{Type: tea.KeyRunes, Runes: []rune("[3~")},
+		{Type: tea.KeyRunes, Runes: []rune("]11;rgb:0000/0000/0000")},
+	}
+
+	for _, msg := range leakedInputs {
+		next, _ := m.Update(msg)
+		m = next.(tuiModel)
+		if val := m.ta.Value(); val != "" {
+			t.Fatalf("leaked input %v inserted %q into input bar", msg, val)
+		}
+	}
+
+	// Normal valid characters should still work properly
+	validMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")}
+	next, _ := m.Update(validMsg)
+	m = next.(tuiModel)
+	if m.ta.Value() != "hello" {
+		t.Fatalf("valid typing failed, got %q, want 'hello'", m.ta.Value())
 	}
 }

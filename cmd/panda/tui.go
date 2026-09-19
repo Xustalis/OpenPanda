@@ -25,13 +25,28 @@ func shouldUseTUI(r *repl) bool {
 	return r.interactive && stdoutIsTTY()
 }
 
-// runTUI runs the Bubble Tea program to completion in the alternate screen buffer.
+// runTUI runs the Bubble Tea program to completion in the alternate screen
+// buffer. By default the terminal retains mouse ownership (mouseSelect) so
+// drag-select, double-click, and terminal copy work out of the box, with wheel
+// scrolling handled via alternate scroll (DECSET 1007). Mouse cell motion is
+// enabled only when mouseScroll is active (via config, PANDA_MOUSE, or ctrl+t).
 func runTUI(r *repl) {
 	if c := loadConvo(); len(c) > 0 {
 		r.convo = c
 	}
-	p := tea.NewProgram(newTUIModel(r), tea.WithAltScreen())
+	model := newTUIModel(r)
+
+	opts := []tea.ProgramOption{
+		tea.WithAltScreen(),
+	}
+	if model.mouse.captured() {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	p := tea.NewProgram(model, opts...)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 	}
+	// Leave the flag as we found it; it is inert outside the alt screen, but a
+	// terminal we hand back to the shell should not keep our leftovers.
+	fmt.Fprint(os.Stdout, altScrollOff)
 }

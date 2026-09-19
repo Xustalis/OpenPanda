@@ -185,11 +185,11 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 	// on either the node id (the routing key) or its display name, since the
 	// entry model sees the latter in the device summary.
 	if preferred != "" {
-		if canLocal && (preferred == self || (haveSelf && preferred == selfNode.Name)) {
+		if canLocal && (preferred == self || strings.EqualFold(preferred, self) || (haveSelf && (preferred == selfNode.Name || strings.EqualFold(preferred, selfNode.Name)))) {
 			return Decision{Action: ActionLocal}
 		}
 		for _, n := range matching {
-			if n.ID == preferred || n.Name == preferred {
+			if n.ID == preferred || n.Name == preferred || strings.EqualFold(n.ID, preferred) || strings.EqualFold(n.Name, preferred) {
 				return Decision{Action: ActionForward, Target: n.ID}
 			}
 		}

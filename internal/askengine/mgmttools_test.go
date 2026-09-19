@@ -4,9 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/Xustalis/OpenPanda/internal/agents"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
@@ -140,7 +143,7 @@ func TestMgmtToolsRegistered(t *testing.T) {
 		"system_status", "card_list", "card_show", "taskq_list", "taskq_show",
 		"taskq_cancel", "taskq_priority", "taskq_move",
 		"card_native_add", "card_native_remove", "card_agent_add", "card_agent_set", "card_agent_remove",
-		"card_manual_add", "card_manual_remove",
+		"card_rescan", "card_manual_add", "card_manual_remove",
 		"project_list", "project_create", "project_enter", "project_exit",
 		"node_remove", "reminder_delete",
 	}
@@ -351,7 +354,7 @@ func TestCardMutations(t *testing.T) {
 	// Agent Add, Set & Remove
 	outAgent := runMgmtTool(t, reg, "card_agent_add", map[string]any{
 		"name":         "test_agent",
-		"adapter":      "test_agent.py",
+		"adapter":      "opencode.py",
 		"capabilities": []any{"code:modify", "code:review"},
 		"cost_tier":    "mid",
 	})
@@ -512,7 +515,7 @@ func TestCardAgentAddAutoInit(t *testing.T) {
 	// Calling card_agent_add with no pre-existing card should auto-initialize and succeed
 	outAgent := runMgmtTool(t, e.registry, "card_agent_add", map[string]any{
 		"name":         "brand_new_agent",
-		"adapter":      "brand_new_agent.py",
+		"adapter":      "opencode.py",
 		"capabilities": []any{"coding", "cli", "shell"},
 		"cost_tier":    "high",
 	})
@@ -523,7 +526,7 @@ func TestCardAgentAddAutoInit(t *testing.T) {
 	// Calling card_agent_add again with the same name should update without error
 	outAgentUpdate := runMgmtTool(t, e.registry, "card_agent_add", map[string]any{
 		"name":         "brand_new_agent",
-		"adapter":      "brand_new_agent.py",
+		"adapter":      "opencode.py",
 		"capabilities": []any{"coding", "cli", "shell", "review"},
 		"cost_tier":    "low",
 	})
@@ -553,5 +556,150 @@ func TestCardAgentAddAutoInit(t *testing.T) {
 	}
 	if _, ok := e.sched.Card().Agents["brand_new_agent"]; !ok {
 		t.Fatalf("brand_new_agent missing after tryAutoInitScheduler: %v", e.sched.Card().Agents)
+	}
+}
+
+// TestRegistryResolvesAgentAdapter is the regression for the failure that made
+// "配置 dsh" impossible: asked to register a CLI it had no facts about, the
+// entry model invented an adapter filename and wrote a card entry pointing at a
+// file that does not exist, then reported success. The registry holds the real
+// mapping (binary dsh → agent deepseek_harness → adapter deepseek_harness.py) and
+// is now consulted.
+func TestRegistryResolvesAgentAdapter(t *testing.T) {
+	name := "dsh"
+	ag := ledger.Agent{Adapter: "dsh.py", Capabilities: []string{"coding"}}
+	if err := resolveAgentFromRegistry(&name, &ag); err != nil {
+		t.Fatalf("resolveAgentFromRegistry(dsh) = %v, want nil", err)
+	}
+	if name != "deepseek_harness" {
+		t.Errorf("name = %q, want deepseek_harness (the registry key routing and `panda agents` agree on)", name)
+	}
+	if ag.Adapter != "deepseek_harness.py" {
+		t.Errorf("adapter = %q, want deepseek_harness.py (the invented dsh.py must not survive)", ag.Adapter)
+	}
+	if ag.Tier != agents.TierAutoApproved {
+		t.Errorf("tier = %d, want %d", ag.Tier, agents.TierAutoApproved)
+	}
+	if len(ag.Capabilities) == 0 {
+		t.Error("capabilities should be carried over from the registry")
+	}
+	// The filler must not overwrite a deliberate choice.
+	name2, ag2 := "dsh", ledger.Agent{Capabilities: []string{"only-this"}}
+	if err := resolveAgentFromRegistry(&name2, &ag2); err != nil {
+		t.Fatalf("second resolve: %v", err)
+	}
+	if len(ag2.Capabilities) != 1 || ag2.Capabilities[0] != "only-this" {
+		t.Errorf("caller-supplied capabilities were overwritten: %v", ag2.Capabilities)
+	}
+}
+
+// TestUnknownAgentNeedsARealAdapter guards the other half: an agent the registry
+// does not know is only accepted with an adapter that actually exists.
+func TestUnknownAgentNeedsARealAdapter(t *testing.T) {
+	name := "mystery_cli"
+	ag := ledger.Agent{}
+	if err := resolveAgentFromRegistry(&name, &ag); err == nil {
+		t.Fatal("an unknown agent with no adapter must be rejected")
+	} else if !strings.Contains(err.Error(), "内置注册表") {
+		t.Errorf("the rejection should point at the registry: %v", err)
+	}
+
+	ag = ledger.Agent{Adapter: "opencode.py"}
+	if err := resolveAgentFromRegistry(&name, &ag); err != nil {
+		t.Fatalf("a real adapter must be accepted: %v", err)
+	}
+}
+
+// TestCheckAdapterExistsRejectsMissingFile pins why the card write is guarded:
+// an entry pointing at a missing script advertises an agent that can never
+// start, so routing sends work to it and the task dies at spawn time.
+func TestCheckAdapterExistsRejectsMissingFile(t *testing.T) {
+	if err := checkAdapterExists("dsh.py"); err == nil {
+		t.Fatal("a non-existent adapter must be rejected")
+	} else if !strings.Contains(err.Error(), "不存在") {
+		t.Errorf("error should say the adapter is missing: %v", err)
+	}
+	if err := checkAdapterExists("opencode.py"); err != nil {
+		t.Errorf("a shipped adapter must be accepted: %v", err)
+	}
+	if err := checkAdapterExists(""); err == nil {
+		t.Error("an empty adapter must be rejected")
+	}
+}
+
+// TestCardRescanRegistersInstalledAgents covers the tool that gives
+// "帮我配置 dsh" a correct action: detect what is installed and add only what the
+// card is missing, leaving existing entries (and their tier) untouched.
+func TestCardRescanRegistersInstalledAgents(t *testing.T) {
+	dir := t.TempDir()
+	cardPath := filepath.Join(dir, "capabilities.yaml")
+	// Seed a card that already declares one agent, with a tier the scan must not
+	// widen.
+	if err := os.WriteFile(cardPath, []byte("device: test-node\nagents:\n    opencode:\n        adapter: opencode.py\n        tier: 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Provide a fake "claude" binary on PATH so the rescan detects at least one
+	// new agent even on CI runners where no real agent CLIs are installed.
+	fakeBin := t.TempDir()
+	stubName := "claude"
+	if runtime.GOOS == "windows" {
+		stubName = "claude.exe"
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, stubName), []byte("#!/bin/sh\necho stub\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBin+string(filepath.ListSeparator)+os.Getenv("PATH"))
+	// The rescan hot-reloads the card, so the engine needs the store the
+	// scheduler is built from — the same setup TestCardAgentAddAutoInit uses.
+	db, err := storage.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	cfg := &config.Config{}
+	cfg.Node.Name = "test-rescan-node"
+	cfg.Node.Kind = "physical"
+	cfg.Node.CardPath = cardPath
+	cfg.Model.Model = "test-model"
+	rem := reminders.NewStore(db)
+	e := &Engine{
+		cfg:      cfg,
+		db:       db,
+		cardPath: cardPath,
+		schedCtx: context.Background(),
+		remind:   rem,
+	}
+	e.registry = buildToolRegistry(e, memory.NewHermes(t.TempDir()), nil, rem)
+
+	out, err := e.cardRescan(context.Background())
+	if err != nil {
+		t.Fatalf("cardRescan: %v", err)
+	}
+	card, err := ledger.LoadCard(cardPath)
+	if err != nil {
+		t.Fatalf("load card: %v", err)
+	}
+	if len(card.Agents) <= 1 {
+		t.Fatalf("rescan added nothing (%q); installed agents were not registered", out)
+	}
+	if ag, ok := card.Agents["opencode"]; !ok || ag.Tier != 2 {
+		t.Errorf("an existing entry must keep its tier: %+v", ag)
+	}
+	for _, ag := range card.Agents {
+		if _, err := os.Stat(filepath.Join(commander.AdapterDir(), ag.Adapter)); err != nil {
+			t.Errorf("rescan wrote an entry whose adapter is missing: %q", ag.Adapter)
+		}
+	}
+
+	// Idempotent: a second scan has nothing left to add.
+	out2, err := e.cardRescan(context.Background())
+	if err != nil {
+		t.Fatalf("second cardRescan: %v", err)
+	}
+	if !strings.Contains(out2, "没有新增") {
+		t.Errorf("a second rescan should be a no-op, got %q", out2)
 	}
 }

@@ -38,9 +38,13 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-## [0.0.8] - 2026-09-06
+## [0.0.8-preview] - 2026-09-19
 
 Das offizielle 0.0.8: das Skills-System lernt, sich selbst zu bedienen — ein kuratierter Offline-Hub, Import von überallher, und ein Assistent, der den Workflow, den eine Aufgabe braucht, während des Laufs selbst entdeckt und installiert. Die TUI wächst zu einer Vollbild-Anwendung mit Erststarts-Assistent heran, die Web-Konsole bekommt Skills-Verwaltung, Sitzungsabbruch und eine Ausführungs-Timeline, und die Engine routet um fehlernde Modelle herum, statt mit ihnen zu sterben.
+
+Übergang zum formellen Open-Source-Projekt: OpenPanda entwickelt sich von einem experimentellen Aufgaben-Router zu einem einheitlichen, produktionsreifen Betriebssystem zur Orchestrierung persönlicher Agenten. Es bringt Management-Tools für die Ask-Engine, interaktive TUI-Steuerung während des Ablaufs, aktives Failover mit Modellinjektion, ein Multi-Modell-Register und transparente Ausführungsverfolgung.
+
+Das Projekt-Release: Ein Projekt ist nicht mehr nur ein Name an einer Aufgabe — es hat ein Arbeitsverzeichnis, eine Beschreibung und einen persistenten „aktuelles Projekt“-Zeiger, Aufgaben aus seinem Inneren erben es, und eine delegierte Aufgabe trägt das ganze Projekt zum Executor, sodass die ausführende Maschine weiß, woran sie arbeitet. Die Freigabepforte wird auf rein irreversible Arbeit neu gefasst (mit dem Download-in-Datei-Vektor nach dem Review erneut gegated), die Konsole bekam Flächen zum Verfolgen von Plänen und Ändern von Einstellungen und trägt den neuen „Panda Paper“-Look. Als Alpha geschnitten: Die Linie ist für diesen Umfang feature-complete, hatte aber weniger Einschwungzeit als eine nummerierte Version.
 
 ### Hinzugefügt
 
@@ -56,6 +60,19 @@ Das offizielle 0.0.8: das Skills-System lernt, sich selbst zu bedienen — ein k
 - **noauth-Modellunterstützung** — ein Registereintrag kann deklarieren, dass sein Endpunkt keinen `Authorization`-Header annimmt; das deckt lokale Server ab, die ihn zurückweisen (7c5c643).
 - **Task-Warteschlangen lassen sich leeren und löschen** — dieselben Verben aus der CLI, der API und der Web-Konsole (d5df3d3).
 - **Konsole: Verzeichniswähler und Ausführungs-Event-Timeline** — Arbeitsverzeichnisse werden aus einem Browser-Dialog gewählt statt getippt, und Agenten-Befehle, Dateiänderungen und Tool-Aufrufe rendern in der Sitzungsdetailansicht als chronologische Timeline (291dc76).
+- **Management-Werkzeugfamilie** — Die Ask-Engine kann das Cluster nun über Tier-1-Tools (`system_status`, `card_list`, `card_show`, Warteschlangenabfragen) direkt einsehen und Live-Daten zu Geräten und Fähigkeiten liefern.
+- **Mid-turn Steering und echter Stopp in TUI** — Laufende Aufgaben abbrechen oder umleiten, Mausunterstützung und visuelle Fortschrittsdarstellung in Bubble Tea.
+- **Aktives Failover & Modellinjektion bei Kontingenterschoepfung** — Bei Quota- oder Token-Problemen injiziert OpenPanda automatisch konfigurierte Ausweichmodelle.
+- **Transparente Ausführung & Fortschrittsverfolgung** — Alle CLI-Befehle und Werkzeugaufrufe werden über `EvProgress` synchron an TUI und Konsole gestreamt.
+- **Multi-Modell-Register (`/model`)** — Verwaltung und nahtloser Wechsel zwischen mehreren Modellen (DeepSeek, Claude, ChatGPT, Kimi, Ollama usw.).
+- **Argumentkandidaten im Slash-Menü** — Befehle mit aufzählbaren Argumenten zeigen nach einem Leerzeichen ein interaktives Pfeiltasten-Menü.
+- **Pfeiltasten-Auswahl auf der Freigabekarte** — Die Freigabeaufforderung der Stufe 2 lässt sich mit ↑↓/←→ und Enter beantworten.
+- **Projekte als Bürger erster Klasse** — eine projects-Tabelle (Arbeitsverzeichnis, Beschreibung, Zeitstempel) plus ein über die settings getragener aktueller-Projekt-Zeiger, der Einmalprozesse überlebt (`panda ask` ist kein Daemon); die komplette CLI-Fläche `panda project list | new --dir --desc | show | rename | remove | enter | exit`, wobei `list` das aktuelle markiert (a9fa471, 1260cb9).
+- **Aufgaben erben das betretene Projekt** — die Engine trägt ein Umgebungsprojekt, das ausfüllt, was der Klassifikator nicht benannt hat, und eine Aufgabe in einem Projekt kennt ihr Arbeitsverzeichnis und ihre Beschreibung — vorher wusste sie weniger als eine Aufgabe ohne Projekt (8c82c5e).
+- **Eine delegierte Aufgabe nimmt ihr Projekt mit** — der Projektspeicher wird (größenbeschränkt) in die Delegations-Payload gepackt, der Arbeitsbaum reist als gechunkte Artefakt-Referenz unter Wiederverwendung der Maschinerie der Plan-Ebene, und der Executor leitet das Arbeitsverzeichnis unter seiner eigenen Wurzel neu ab und lehnt Projektnamen mit Pfadzeichen ab (ein Name vom Bus ist nicht vertrauenswürdige Eingabe). Die fertige Ausgabe wird überschreibend ins lokale Projektverzeichnis übernommen — zwei Maschinen, die ein Projekt bearbeiten, sind ein echter Konflikt und werden nie still fusioniert (a1f1d19).
+- **Konsole: Projekte und Einstellungen** — Projekt-CRUD, Betreten/Verlassen und Metadaten in der Konsolen-API (7cda886); Projektzeilen mit Arbeitsverzeichnis, aktuellem-Projekt-Zustand und den Verben, die ihn ändern (146c1ba); sowie Freigabe-, Routing-, Speicherlimit- und Injektionseinstellungen — die Freigabepforte ist die Einstellung, die ein Nutzer nach einem Nachmittag Warteschlange am ehesten ändern will, und dafür muss er die Konsole nicht mehr verlassen. Alle vier gehen in die Einstellungs-API, die die Konsole schon hatte, statt in einen zweiten Endpunkt (7a60a80, 0736c2f).
+- **Plan-Tafel-Endpunkte** — `GET /api/plans` (welche Pläne existieren, wie weit fortgeschritten) und `GET /api/plans/{id}` (die Stufen eines Plans samt Artefakt-Verkabelung dazwischen — die Sicht, die „hat die Trainingsstufe das Skript wirklich bekommen?“ beantwortet). Ein Plan starten bleibt bei `/api/ask`, wo es schon funktionierte (932442a).
+- **Multi-Modell-Unterstützung** — kluge base_url-Normalisierung (Abschluss-Slashes, fehlende Versionspräfixe, Anbieter-Sonderfälle), Reasoning-Felder für Thinking-Modelle und OpenAI-Anbieter-Voreinstellungen (08ede13).
 
 ### Behoben
 
@@ -67,47 +84,8 @@ Das offizielle 0.0.8: das Skills-System lernt, sich selbst zu bedienen — ein k
 - **Die Ask-Engine startet mit leerem Skills-Pfad** — eine Konfiguration ohne `storage.skills_path` bricht die Engine-Initialisierung nicht mehr; der Skills-Speicher startet schlicht leer (3f28486).
 - **SQLite erzwingt Fremdschlüssel** — der Speicher öffnet jetzt mit `foreign_keys=ON`, sodass Zeilen, die auf gelöschte Eltern verweisen, sich nicht mehr ansammeln (7c5c643).
 - **TUI: die Alt-Screen-Ansicht behält Banner, Tipps und Chat** — beim Umbau auf den Alternate Screen waren ASCII-Logo, Tipps-Zeile und Unterhaltungsansicht zurückgeblieben; alle drei sind im Vollbild-Layout wieder da (e2be53e).
-
-### Verbessert
-
-- **Ein Willkommensbanner überall, mit geschärfter REPL-Ergonomie** — nacktes REPL, Hilfe und Fehlerpfade teilen sich dieselbe Begrüßung mit ASCII-Logo, und die TUI-Viewschicht bekam den passenden Schliff (0d44ee4).
-- **TUI: unterscheidbare visuelle Blöcke und kontrastreiches Prompt-Panel** — Nutzereingabe, Assistentenausgabe und Systemhinweise belegen klar getrennte Blöcke, und der Nutzerprompt hebt sich in jedem Theme ab (b0979cc).
-- **Web-Konsolen-Workflow-Politur** — die Sitzungs- und Projektansichten wurden um die Workflow-Architektur herum neu gebaut, mit konsistenter Aktionsplatzierung und Zustandsdarstellung (291dc76).
-
-## [0.0.8-preview] - 2026-09-05
-
-Übergang zum formellen Open-Source-Projekt: OpenPanda entwickelt sich von einem experimentellen Aufgaben-Router zu einem einheitlichen, produktionsreifen Betriebssystem zur Orchestrierung persönlicher Agenten. Es bringt Management-Tools für die Ask-Engine, interaktive TUI-Steuerung während des Ablaufs, aktives Failover mit Modellinjektion, ein Multi-Modell-Register und transparente Ausführungsverfolgung.
-
-### Hinzugefügt
-
-- **Management-Werkzeugfamilie** — Die Ask-Engine kann das Cluster nun über Tier-1-Tools (`system_status`, `card_list`, `card_show`, Warteschlangenabfragen) direkt einsehen und Live-Daten zu Geräten und Fähigkeiten liefern.
-- **Mid-turn Steering und echter Stopp in TUI** — Laufende Aufgaben abbrechen oder umleiten, Mausunterstützung und visuelle Fortschrittsdarstellung in Bubble Tea.
-- **Aktives Failover & Modellinjektion bei Kontingenterschoepfung** — Bei Quota- oder Token-Problemen injiziert OpenPanda automatisch konfigurierte Ausweichmodelle.
-- **Transparente Ausführung & Fortschrittsverfolgung** — Alle CLI-Befehle und Werkzeugaufrufe werden über `EvProgress` synchron an TUI und Konsole gestreamt.
-- **Multi-Modell-Register (`/model`)** — Verwaltung und nahtloser Wechsel zwischen mehreren Modellen (DeepSeek, Claude, ChatGPT, Kimi, Ollama usw.).
-- **Argumentkandidaten im Slash-Menü** — Befehle mit aufzählbaren Argumenten zeigen nach einem Leerzeichen ein interaktives Pfeiltasten-Menü.
-- **Pfeiltasten-Auswahl auf der Freigabekarte** — Die Freigabeaufforderung der Stufe 2 lässt sich mit ↑↓/←→ und Enter beantworten.
-
-### Behoben
-
 - **`/lang` wechselt jetzt wirklich die UI-Sprache** — Die gewählte Sprache greift sofort auf die gesamte TUI durch und wird in `config.yaml` persistiert.
 - **Metadaten-Erhalt bei Modellinjektion** — Ausführungsergebnisse behalten die Modellzuordnung und senden Benachrichtigungsereignisse.
-
-## [0.0.8-alpha] - 2026-09-03
-
-Das Projekt-Release: Ein Projekt ist nicht mehr nur ein Name an einer Aufgabe — es hat ein Arbeitsverzeichnis, eine Beschreibung und einen persistenten „aktuelles Projekt“-Zeiger, Aufgaben aus seinem Inneren erben es, und eine delegierte Aufgabe trägt das ganze Projekt zum Executor, sodass die ausführende Maschine weiß, woran sie arbeitet. Die Freigabepforte wird auf rein irreversible Arbeit neu gefasst (mit dem Download-in-Datei-Vektor nach dem Review erneut gegated), die Konsole bekam Flächen zum Verfolgen von Plänen und Ändern von Einstellungen und trägt den neuen „Panda Paper“-Look. Als Alpha geschnitten: Die Linie ist für diesen Umfang feature-complete, hatte aber weniger Einschwungzeit als eine nummerierte Version.
-
-### Hinzugefügt
-
-- **Projekte als Bürger erster Klasse** — eine projects-Tabelle (Arbeitsverzeichnis, Beschreibung, Zeitstempel) plus ein über die settings getragener aktueller-Projekt-Zeiger, der Einmalprozesse überlebt (`panda ask` ist kein Daemon); die komplette CLI-Fläche `panda project list | new --dir --desc | show | rename | remove | enter | exit`, wobei `list` das aktuelle markiert (a9fa471, 1260cb9).
-- **Aufgaben erben das betretene Projekt** — die Engine trägt ein Umgebungsprojekt, das ausfüllt, was der Klassifikator nicht benannt hat, und eine Aufgabe in einem Projekt kennt ihr Arbeitsverzeichnis und ihre Beschreibung — vorher wusste sie weniger als eine Aufgabe ohne Projekt (8c82c5e).
-- **Eine delegierte Aufgabe nimmt ihr Projekt mit** — der Projektspeicher wird (größenbeschränkt) in die Delegations-Payload gepackt, der Arbeitsbaum reist als gechunkte Artefakt-Referenz unter Wiederverwendung der Maschinerie der Plan-Ebene, und der Executor leitet das Arbeitsverzeichnis unter seiner eigenen Wurzel neu ab und lehnt Projektnamen mit Pfadzeichen ab (ein Name vom Bus ist nicht vertrauenswürdige Eingabe). Die fertige Ausgabe wird überschreibend ins lokale Projektverzeichnis übernommen — zwei Maschinen, die ein Projekt bearbeiten, sind ein echter Konflikt und werden nie still fusioniert (a1f1d19).
-- **Konsole: Projekte und Einstellungen** — Projekt-CRUD, Betreten/Verlassen und Metadaten in der Konsolen-API (7cda886); Projektzeilen mit Arbeitsverzeichnis, aktuellem-Projekt-Zustand und den Verben, die ihn ändern (146c1ba); sowie Freigabe-, Routing-, Speicherlimit- und Injektionseinstellungen — die Freigabepforte ist die Einstellung, die ein Nutzer nach einem Nachmittag Warteschlange am ehesten ändern will, und dafür muss er die Konsole nicht mehr verlassen. Alle vier gehen in die Einstellungs-API, die die Konsole schon hatte, statt in einen zweiten Endpunkt (7a60a80, 0736c2f).
-- **Plan-Tafel-Endpunkte** — `GET /api/plans` (welche Pläne existieren, wie weit fortgeschritten) und `GET /api/plans/{id}` (die Stufen eines Plans samt Artefakt-Verkabelung dazwischen — die Sicht, die „hat die Trainingsstufe das Skript wirklich bekommen?“ beantwortet). Ein Plan starten bleibt bei `/api/ask`, wo es schon funktionierte (932442a).
-- **Multi-Modell-Unterstützung** — kluge base_url-Normalisierung (Abschluss-Slashes, fehlende Versionspräfixe, Anbieter-Sonderfälle), Reasoning-Felder für Thinking-Modelle und OpenAI-Anbieter-Voreinstellungen (08ede13).
-
-### Behoben
-
 - **Queue-Aufgaben routen wieder geräteübergreifend (CLI und Board)** — `panda task add` und das POST des Boards pinnten jede eingereihte Aufgabe auf das knotenweite Arbeitsverzeichnis, und seit v0.0.6 behandelt forwardScheduled eine gepinnte Aufgabe per Definition als rein lokale Arbeit — also scheiterte `--requires pi.uptime` auf einem Knoten ohne diese Fähigkeit mit `route: no capability matches`, statt den Peer zu erreichen, der sie hat: exakt die Fix von v0.0.5, eine Version später still rückgängig gemacht. Das Pinning war redundant (der Executor fällt ohnehin auf dasselbe knotenweite Standardverzeichnis zurück) und ist entfernt; nur eine Aufgabe mit eigenem Verzeichnis (der Worktree einer Panel-Sitzung) bleibt lokal (dieses Release).
 - **Der SSE-Fingerprint-Cache gibt Ladefehler weiter** — Aufrufer, die sich hinter einem gescheiterten Store-Scan aufstauten, bekommen jetzt denselben Fehler statt eines leeren Werts mit nil-error; ein dauerhaft scheiternder Store fächert kein falsches Änderungsereignis mehr auf jeden verbundenen Stream aus, während nur der Stream des Loaders abbricht (Review 2026-09-02, P2).
 - **TUI: ein Eingabefeld pro Slash-Befehl** — der Exec-Pfad räumt den Frame im selben Event-Loop-Durchlauf ab, der den Befehl einreiht, sodass Statuszeile und abgerundete Box nicht mehr als zweite Eingabeleiste im Scrollback zurückbleiben (6a77bf7).
@@ -118,6 +96,9 @@ Das Projekt-Release: Ein Projekt ist nicht mehr nur ein Name an einer Aufgabe �
 
 ### Verbessert
 
+- **Ein Willkommensbanner überall, mit geschärfter REPL-Ergonomie** — nacktes REPL, Hilfe und Fehlerpfade teilen sich dieselbe Begrüßung mit ASCII-Logo, und die TUI-Viewschicht bekam den passenden Schliff (0d44ee4).
+- **TUI: unterscheidbare visuelle Blöcke und kontrastreiches Prompt-Panel** — Nutzereingabe, Assistentenausgabe und Systemhinweise belegen klar getrennte Blöcke, und der Nutzerprompt hebt sich in jedem Theme ab (b0979cc).
+- **Web-Konsolen-Workflow-Politur** — die Sitzungs- und Projektansichten wurden um die Workflow-Architektur herum neu gebaut, mit konsistenter Aktionsplatzierung und Zustandsdarstellung (291dc76).
 - **Die Freigabepforte deckt nur irreversible Arbeit ab** — Tier 2 heißt jetzt „kein späterer Befehl kann es zurückholen“: Löschen, Disk-/Partitions-/Firmware-Zustand, Energiezustand, Rechteausweitung und die Argumentformen, die Arbeit verlieren (`git push --force`, `rsync --delete`, `sed -i`, `find -delete`). curl, wget, make, ssh, systemctl, mount, docker, kubectl, terraform, die Paketmanager, chmod/chown/mv/cp/tee und Verwandte laufen unbeaufsichtigt, und `bash scripts/build.sh` fragt nicht mehr nach — ein Knoten, der seinen eigenen Build nicht laufen lassen kann, kann die Arbeit nicht tun, für die er existiert (e593470).
 - **Downloads in Dateien bleiben gegated** — ein curl/wget, das seine Bytes in einen Pfad schreibt (`-o`, `-O`, `--output`), ist Tier 2: Die Bytes sind für den Klassifikator opak, und der nächste Schritt ist meist, sie auszuführen — vor dieser Änderung wurde `curl -o x …; bash x` von Anfang bis Ende als Tier 1 eingestuft. Abrufe nach stdout oder `/dev/null` — die Erreichbarkeits-Probe-Schreibweisen — sind unberührt (Review 2026-09-02, P1).
 - **Konsole: visuelles Redesign „Panda Paper“** — eine Re-Skin-Schicht über den bestehenden Konsolenstilen: warmes Papier-Hellthema und warme Tinte-Dunkelthema (kein reines Schwarz, kein kaltes Grau), der bambusgrüne Markenakzent um eine Stufe vertieft mit Blau reserviert für den Entscheidungs-Orbit, Serifen-Schrift nur auf der Überschriftenebene, Radien eine Stufe größer, weichere warmbraune Schatten, und die „KI-artigen“ Dekorationen (Gradienten-Überschriftentext, Gradienten-Unterstreichungen, Button-Highlight-Overlays) entfernt. Die Schicht definiert dieselben Tokens neu und kaskadiert über die alten Regeln — Markup, Klassennamen und Logik der Komponenten bleiben unangetastet (dieses Release).

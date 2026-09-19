@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/cliui"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -35,13 +36,18 @@ type SelectionList struct {
 }
 
 // NewSelectionList creates an initialized SelectionList.
+//
+// FooterHints is left empty: the renderers localize the legend through the
+// theme's locale when the caller does not set one. It used to hold a hardcoded
+// Chinese legend here and again as a fallback in each renderer, which meant an
+// English or Japanese list showed Chinese unless every call site remembered to
+// override it.
 func NewSelectionList(title string, items []SelectionItem) SelectionList {
 	return SelectionList{
-		Title:       title,
-		Items:       items,
-		Cursor:      0,
-		Top:         0,
-		FooterHints: "↑↓ 选择 · Enter 确认 · Esc 返回",
+		Title:  title,
+		Items:  items,
+		Cursor: 0,
+		Top:    0,
 	}
 }
 
@@ -68,6 +74,34 @@ func (s *SelectionList) MoveDown(visibleRows int) {
 		if visibleRows > 0 && s.Cursor >= s.Top+visibleRows {
 			s.Top = s.Cursor - visibleRows + 1
 		}
+	}
+}
+
+// MovePage moves the highlight by delta rows and re-glues the viewport window to
+// it, clamped to the list ends. visibleRows is the caller's render budget (the
+// same value it passes to MoveDown), so the window always keeps the cursor on
+// screen.
+//
+// delta is a plain row count, not a fixed page: PgUp/PgDn pass one full page
+// (delta == visibleRows) while a wheel notch passes a few rows, so one clamping
+// and re-gluing path serves both. The name comes from the paging case, which is
+// where it started.
+func (s *SelectionList) MovePage(delta, visibleRows int) {
+	if len(s.Items) == 0 || visibleRows <= 0 {
+		return
+	}
+	s.Cursor += delta
+	if s.Cursor < 0 {
+		s.Cursor = 0
+	}
+	if maxCursor := len(s.Items) - 1; s.Cursor > maxCursor {
+		s.Cursor = maxCursor
+	}
+	if s.Cursor < s.Top {
+		s.Top = s.Cursor
+	}
+	if s.Cursor >= s.Top+visibleRows {
+		s.Top = s.Cursor - visibleRows + 1
 	}
 }
 
@@ -131,7 +165,7 @@ func (s SelectionList) renderPlain(th theme, width, height int) string {
 	if len(s.Items) == 0 {
 		emptyMsg := s.EmptyText
 		if emptyMsg == "" {
-			emptyMsg = "暂无数据"
+			emptyMsg = i18n.T(th.loc, "tui.list.empty")
 		}
 		lines = append(lines, "  "+th.muted.Render(emptyMsg))
 	} else {
@@ -161,7 +195,7 @@ func (s SelectionList) renderPlain(th theme, width, height int) string {
 	lines = append(lines, "")
 	footer := s.FooterHints
 	if footer == "" {
-		footer = "↑↓ 选择 · Enter 确认 · Esc 返回"
+		footer = i18n.T(th.loc, "tui.list.footerHints")
 	}
 	lines = append(lines, th.muted.Render("  "+footer))
 
@@ -179,7 +213,7 @@ func (s SelectionList) renderBoxed(th theme, width, height int) string {
 	if len(s.Items) == 0 {
 		emptyMsg := s.EmptyText
 		if emptyMsg == "" {
-			emptyMsg = "暂无数据"
+			emptyMsg = i18n.T(th.loc, "tui.list.empty")
 		}
 		innerLines = append(innerLines, "  "+th.muted.Render(emptyMsg))
 	} else {
@@ -213,7 +247,7 @@ func (s SelectionList) renderBoxed(th theme, width, height int) string {
 
 	footer := s.FooterHints
 	if footer == "" {
-		footer = "↑↓ 选择 · Enter 切换 · Esc 返回"
+		footer = i18n.T(th.loc, "tui.model.footerHints")
 	}
 	innerLines = append(innerLines, "  "+th.muted.Render(footer))
 	innerLines = append(innerLines, "")

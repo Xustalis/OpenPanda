@@ -2,6 +2,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -47,8 +48,22 @@ type SkillsConfig struct {
 // UIConfig holds front-end preferences. Locale is the language /lang last
 // switched to (en | zh-CN | ja | es | de); empty means "detect from the
 // environment", which keeps a fresh install following the terminal's LANG.
+//
+// Mouse picks who owns the terminal mouse in the full-screen TUI:
+//
+//	"select" (default) — the terminal keeps it, so drag-select and the
+//	                     terminal's copy shortcut work; wheel gestures arrive
+//	                     as arrow keys via alternate scroll and still scroll
+//	                     the transcript.
+//	"scroll"           — the app captures it, so the wheel pages the transcript
+//	                     and clicks answer the approval/asking buttons, at the
+//	                     cost of terminal-native selection.
+//
+// Empty means "use the default (select)". PANDA_MOUSE overrides this per run,
+// and ctrl+t flips it live.
 type UIConfig struct {
 	Locale        string `yaml:"locale"`
+	Mouse         string `yaml:"mouse,omitempty"`
 	TermsAccepted bool   `yaml:"terms_accepted,omitempty"`
 	Onboarded     bool   `yaml:"onboarded,omitempty"`
 }
@@ -882,6 +897,23 @@ func DefaultCardTarget(explicitConfig string) string {
 	return filepath.Join(SystemConfigDir(), "capabilities.yaml")
 }
 
+// decodeStrict parses config YAML with unknown fields rejected, matching what
+// the plan loader already does (internal/plan/yaml.go).
+//
+// Without this a misspelled key is silently dropped, and the failure mode is
+// never "the setting I wrote did nothing" — it is the default quietly taking
+// over. `storage: db_path` typo'd starts the daemon against an empty database
+// and reads as "all my tasks vanished"; `timeouts: silence_s` typo'd leaves 0,
+// which means the watchdog is disabled; `network: shared_secrett` typo'd turns
+// the node local-only with just a log line. A rejected key names itself and the
+// line it is on, which is the difference between a five-second fix and a
+// mystery.
+func decodeStrict(data []byte, cfg *Config) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	return dec.Decode(cfg)
+}
+
 // Load reads the config from path. If path is empty, the OPENPANDA_CONFIG_PATH env
 // var (if set) or DefaultPath is used. A missing file is not an error; defaults
 // apply. An unreadable or malformed file is an error so a bad deployment
@@ -905,7 +937,7 @@ func Load(path string) (*Config, error) {
 		}
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	if err := decodeStrict(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	hardenSecretPerms(path, data)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -71,12 +72,19 @@ func TestResultBlockCostMeta(t *testing.T) {
 	}
 }
 
-// TestResultBlockTask distinguishes a succeeded task (its stdout, success tint)
-// from a failed one (exit code + stderr).
+// TestResultBlockTask distinguishes a succeeded task (summary-only note, no
+// raw log, success tint) from a failed one (exit code + stderr evidence).
 func TestResultBlockTask(t *testing.T) {
 	ok := resultBlock(&askengine.Result{Kind: "task", OK: true, Stdout: "done\n"}, "", loc)
-	if ok.kind != blockTask || !ok.ok || ok.body != "done" {
+	if ok.kind != blockTask || !ok.ok {
 		t.Fatalf("ok task: %+v", ok)
+	}
+	if !strings.Contains(ok.body, "done") {
+		t.Fatalf("cleaned stdout should be the body when summary is missing: %q", ok.body)
+	}
+	noOut := resultBlock(&askengine.Result{Kind: "task", OK: true}, "", loc)
+	if !strings.Contains(noOut.body, i18n.T(loc, "tui.task.noSummary")) {
+		t.Fatalf("degraded task with no stdout should say no summary was generated: %q", noOut.body)
 	}
 	bad := resultBlock(&askengine.Result{Kind: "task", OK: false, ExitCode: 2, Stderr: "boom"}, "", loc)
 	if bad.kind != blockTask || bad.ok || !strings.Contains(bad.body, "exit 2") || !strings.Contains(bad.body, "boom") {
@@ -252,5 +260,73 @@ func TestUserTextVisualBlockAndContrast(t *testing.T) {
 	colorOut := userText(thColor, "color prompt", 30)
 	if !strings.Contains(colorOut, "color prompt") {
 		t.Fatalf("color output missing prompt text: %q", colorOut)
+	}
+}
+
+// TestResultBlockTaskSummaryClean pins the "工作日志" display contract: when an
+// LLM summary exists it IS the whole body — the raw agent log must not be
+// appended after it (that regression buried the readable report under raw
+// output). The degraded no-summary path never shows the log either: a short
+// note points at `panda task show` instead.
+func TestResultBlockTaskSummaryClean(t *testing.T) {
+	// Summary present: body is the summary alone.
+	out := &askengine.Result{
+		Kind: "task", OK: true, TaskID: "t-2", TaskState: "done",
+		Report: "已完成两处修复并全部通过测试", Stdout: "wall of raw agent log",
+	}
+	b := resultBlock(out, "", loc)
+	if b.kind != blockTask || !b.ok {
+		t.Fatalf("kind/ok: %+v", b)
+	}
+	if b.body != "已完成两处修复并全部通过测试" {
+		t.Fatalf("summary should be the whole body: %q", b.body)
+	}
+
+	// Degraded with stdout: ANSI stripped, body contains the cleaned log.
+	degradedWithLog := &askengine.Result{
+		Kind: "task", OK: true, TaskID: "t-3", TaskState: "done",
+		Stdout: "\x1b[32mraw agent log\x1b[0m\n",
+	}
+	b = resultBlock(degradedWithLog, "", loc)
+	if !strings.Contains(b.body, "raw agent log") || strings.Contains(b.body, "\x1b") {
+		t.Fatalf("cleaned stdout should be present without ANSI escapes: %q", b.body)
+	}
+
+	// Degraded without stdout: note naming the store command.
+	degradedEmpty := &askengine.Result{
+		Kind: "task", OK: true, TaskID: "t-4", TaskState: "done",
+	}
+	b = resultBlock(degradedEmpty, "", loc)
+	if !strings.Contains(b.body, i18n.T(loc, "tui.task.noSummary")) || !strings.Contains(b.body, "panda task show t-4") {
+		t.Fatalf("degraded path should note the missing summary and point at the task: %q", b.body)
+	}
+}
+
+// TestResultBlockTaskDegradedIsLocalized pins the i18n fix for the degraded task
+// card. The "no summary" line and the log-elision note used to be hardcoded
+// Chinese, so an English (or ja/es/de) console printed Chinese; both now come
+// from internal/i18n and follow the turn's locale.
+func TestResultBlockTaskDegradedIsLocalized(t *testing.T) {
+	for _, l := range i18n.Locales {
+		b := resultBlock(&askengine.Result{Kind: "task", OK: true, TaskID: "t-9"}, "", l)
+		if want := i18n.T(l, "tui.task.noSummary"); !strings.Contains(b.body, want) {
+			t.Errorf("%s: degraded body must carry the localized line, got %q", l, b.body)
+		}
+		if l != i18n.ChineseSimp && strings.Contains(b.body, "未生成可读摘要") {
+			t.Errorf("%s: degraded body leaked the Chinese literal: %q", l, b.body)
+		}
+	}
+
+	// The elision note interpolates the real counts: taskLogMaxLines+5 lines
+	// capped to the last taskLogMaxLines.
+	body := resultBlock(&askengine.Result{
+		Kind: "task", OK: false, ExitCode: 1,
+		Stderr: strings.Repeat("line\n", taskLogMaxLines+5),
+	}, "", i18n.English).body
+	if !strings.Contains(body, strconv.Itoa(taskLogMaxLines+5)) || !strings.Contains(body, strconv.Itoa(taskLogMaxLines)) {
+		t.Fatalf("elision note must interpolate the line counts: %q", body)
+	}
+	if strings.Contains(body, "原始输出共") {
+		t.Fatalf("English output leaked the Chinese literal: %q", body)
 	}
 }

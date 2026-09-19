@@ -1,0 +1,42 @@
+name: Security
+
+# The dependency surface the merge gate does not look at. govulncheck reports
+# only vulnerabilities that are actually reachable from this code, which is
+# what makes it worth running at all — but it is deliberately kept out of the
+# pull-request gate: its findings move with a remote database, so an unrelated
+# morning could turn main red without a commit.
+#
+# Weekly plus on demand is the compromise that keeps the signal without making
+# the gate answer to something nobody in the repo controls.
+#
+# Status at the time this workflow was added: 8 reachable vulnerabilities in
+# golang.org/x/net (fixed in v0.55.0) and the net/http of Go 1.26.5 (fixed in
+# 1.26.6). It therefore starts red, and that is the honest reading — the
+# remedy is a dependency bump plus a `go` directive bump in go.mod, not a
+# looser scan.
+
+on:
+  schedule:
+    # Mondays 03:17 UTC — before the European workday, clear of the top-of-hour
+    # congestion that makes scheduled runs late.
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # @latest is intentional: the scan itself is a thin client for a
+      # vulnerability database fetched at run time, and a pinned scanner would
+      # report yesterday's world.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

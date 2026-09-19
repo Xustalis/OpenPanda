@@ -183,7 +183,13 @@ func CardAgents() map[string]ledger.Agent {
 		}
 		tier := k.DefaultTier
 		if tier == 0 {
-			tier = 2
+			// A generated card must not silently opt every agent into the
+			// approval gate: commander.Route defaults an undeclared tier to 1
+			// ("delegating to an agent is auto-approved"), and the shipped
+			// example cards say tier: 1 too. Writing 2 here would win over that
+			// default and make unattended work impossible on every detected
+			// node — which is exactly what it did.
+			tier = agents.TierAutoApproved
 		}
 		out[k.Name] = ledger.Agent{
 			Adapter:      k.Adapter,

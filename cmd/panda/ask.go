@@ -187,12 +187,12 @@ func runAsk(args []string) {
 		}
 		stdoutText := strings.TrimSpace(out.Stdout)
 
-		if answerText != "" && !streamed {
+		if answerText != "" {
 			fmt.Println(renderCliMd(answerText))
 		}
 		if out.OK {
 			if stdoutText != "" && !strings.Contains(answerText, stdoutText) {
-				if answerText != "" && !streamed {
+				if answerText != "" {
 					fmt.Println()
 				}
 				fmt.Print(renderCliMd(out.Stdout))
@@ -213,9 +213,9 @@ func runAsk(args []string) {
 }
 
 // printAskPlan renders a plan the entry model just started. A plan is
-// asynchronous — its stages are queued and will run on other machines — so the
-// useful output is the board plus how to follow it, not a result that does not
-// exist yet.
+// a multi-stage, multi-device workflow whose stages have not all run
+// yet; ask reports the plan ID and the stages that were planned so the
+// user can follow along.
 func printAskPlan(loc i18n.Locale, out *askengine.Result) {
 	if !out.OK {
 		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(loc, "cli.plan.failed", "err", out.Stderr))
@@ -235,10 +235,10 @@ func renderCliMd(s string) string {
 	if s == "" {
 		return ""
 	}
-	if stdoutIsTTY() && termSupportsUnicode() && !isLinuxConsole() {
-		return mdtext.ANSI(s)
+	if os.Getenv("NO_COLOR") != "" || isLinuxConsole() {
+		return mdtext.Plain(s)
 	}
-	return mdtext.Plain(s)
+	return mdtext.RenderTerminal(s)
 }
 
 // streamLineRenderer renders streaming answer deltas line by line instead
@@ -254,7 +254,7 @@ type streamLineRenderer struct {
 }
 
 func newStreamLineRenderer() *streamLineRenderer {
-	return &streamLineRenderer{ansi: stdoutIsTTY() && termSupportsUnicode() && !isLinuxConsole()}
+	return &streamLineRenderer{ansi: stdoutIsTTY() && os.Getenv("NO_COLOR") == "" && !isLinuxConsole()}
 }
 
 // delta consumes one streamed chunk, printing every completed line.
@@ -395,8 +395,8 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDi
 			case askengine.ProgressTool:
 				st.Phase("exec", "executing")
 			}
-			if lr.printed {
-				st.Note(note) // mid-answer: ephemeral, never interrupts the text
+			if p.Kind == askengine.ProgressTool || lr.printed {
+				st.Note(note) // tool execution or mid-answer: ephemeral, never interrupts the text
 				return
 			}
 			st.Log(pal().Muted(pal().MarkBullet() + " " + note))

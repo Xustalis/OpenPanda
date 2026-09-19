@@ -89,3 +89,35 @@ func TestPlainLeavesPlainTextAlone(t *testing.T) {
 		t.Errorf("Plain modified plain text: %q", got)
 	}
 }
+
+func TestRenderMarkdown(t *testing.T) {
+	in := "# Title\n\nSome **bold** text.\n\n```go\nfunc main() {}\n```"
+	got, err := Render(in, 80)
+	if err != nil {
+		t.Fatalf("Render error: %v", err)
+	}
+	if !strings.Contains(got, "Title") || !strings.Contains(got, "bold") || !strings.Contains(got, "main") {
+		t.Errorf("Render output missing expected content: %q", got)
+	}
+}
+
+func TestTableRender(t *testing.T) {
+	in := "| 指标 | 数值 |\n|---|---|\n| Go 实现文件 | 233 |\n| Go 测试文件 | 188 |"
+	got, err := Render(in, 80)
+	if err != nil {
+		t.Fatalf("Render error: %v", err)
+	}
+	if !strings.Contains(got, "指标") || !strings.Contains(got, "233") {
+		t.Errorf("Render table missing content: %q", got)
+	}
+	gotTerm := RenderTerminal(in)
+	if !strings.Contains(gotTerm, "指标") || !strings.Contains(gotTerm, "233") {
+		t.Errorf("RenderTerminal table missing content: %q", gotTerm)
+	}
+}
+
+func TestRenderTerminalEmpty(t *testing.T) {
+	if got := RenderTerminal(""); got != "" {
+		t.Errorf("RenderTerminal empty string got %q, want empty", got)
+	}
+}

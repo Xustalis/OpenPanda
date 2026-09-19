@@ -227,4 +227,10 @@ func TestRoutePreferredMatchesName(t *testing.T) {
 	if d.Action != ActionForward || d.Target != "mac-1" {
 		t.Fatalf("decision = %+v, want forward to mac-1 by display name", d)
 	}
+
+	// Verify case-insensitive match for device subagent (e.g. "orange pi" -> "opi")
+	dOpi := Route("self", []string{"self"}, employees, neverLocal, []string{"build"}, ledger.ResourceProfile{}, "orange pi")
+	if dOpi.Action != ActionForward || dOpi.Target != "opi" {
+		t.Fatalf("decision = %+v, want forward to opi by lowercase name", dOpi)
+	}
 }

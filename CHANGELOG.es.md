@@ -38,9 +38,13 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-## [0.0.8] - 2026-09-06
+## [0.0.8-preview] - 2026-09-19
 
 El 0.0.8 oficial: el sistema de habilidades aprende a servirse a sí mismo — un hub curado sin conexión, importación desde cualquier parte, y un asistente que descubre e instala el flujo de trabajo que una tarea necesita mientras se ejecuta. La TUI crece hasta convertirse en una aplicación de pantalla completa con un asistente de primer arranque, la consola web gana gestión de habilidades, cancelación de sesiones y una línea de tiempo de ejecución, y el motor sortea los modelos que fallan en lugar de morir con ellos.
+
+Transición a proyecto de código abierto formal: OpenPanda evoluciona de un enrutador de tareas experimental a un sistema operativo de orquestación de agentes personales unificado y listo para producción. Incluye herramientas de gestión para el motor Ask, dirección interactiva en TUI, conmutación por error activa con inyección de modelos de respaldo, registro multimodelo y seguimiento transparente.
+
+La versión de los proyectos: un proyecto ya no es solo un nombre en una tarea — tiene directorio de trabajo, descripción y un puntero persistente de «proyecto actual»; las tareas lanzadas desde dentro lo heredan, y una tarea delegada lleva el proyecto entero al ejecutor, de modo que la máquina que la ejecuta sabe en qué está trabajando. La puerta de aprobación se reencuadra a solo lo irreversible (con el vector de descarga-a-archivo regateado tras la revisión), la consola gana superficies para seguir planes y cambiar ajustes, y estrena la nueva piel «Panda Paper». Cortada como alpha: la línea está completa en su alcance, pero ha tenido menos tiempo de reposo que una versión numerada.
 
 ### Añadido
 
@@ -56,6 +60,19 @@ El 0.0.8 oficial: el sistema de habilidades aprende a servirse a sí mismo — u
 - **Soporte de modelos noauth** — una entrada del registro puede declarar que su extremo no acepta cabecera `Authorization`, cubriendo servidores locales que la rechazan (7c5c643).
 - **Las colas de tareas se pueden vaciar y borrar** — los mismos verbos desde la CLI, la API y la consola web (d5df3d3).
 - **Consola: selector de directorios y línea de tiempo de ejecución** — los directorios de trabajo se eligen desde un diálogo del navegador en vez de escribirse a mano, y los comandos del agente, ediciones de archivos y llamadas a herramientas se dibujan como una línea de tiempo cronológica en la vista de detalle de sesión (291dc76).
+- **Familia de herramientas de gestión** — el motor Ask ahora inspecciona el clúster con herramientas internas de nivel 1 (`system_status`, `card_list`, `card_show`, colas de tareas) respondiendo en tiempo real sobre el estado de la flota y capacidades de los nodos.
+- **Dirección en curso y parada real en TUI** — cancelación o redirección de tareas en ejecución, soporte de ratón y renderizado visual del progreso en Bubble Tea.
+- **Conmutación por error activa e inyección de modelos** — cuando un agente CLI agota su cuota o fallan sus credenciales, OpenPanda inyecta modelos alternativos para continuar.
+- **Transparencia total de ejecución** — comandos bash y llamadas a herramientas se transmiten vía `EvProgress` a la TUI y consola web, mostrando el agente y modelo exactos.
+- **Registro multimodelo (`/model`)** — gestión y cambio en caliente entre múltiples modelos (DeepSeek, Claude, ChatGPT, Kimi, Ollama, etc.).
+- **Candidatos de argumentos en el menú de barra** — los comandos con argumentos enumerados (`/lang`, `/resume`, `/config set`) muestran menú interactivo con flechas tras escribir un espacio.
+- **Selección con flechas en la tarjeta de aprobación** — el prompt de aprobación de nivel 2 admite ↑↓/←→ y Enter además de las teclas rápidas y/n.
+- **Los proyectos como ciudadanos de primera clase** — una tabla de proyectos (directorio de trabajo, descripción, marcas de tiempo) más un puntero de proyecto actual respaldado por ajustes que sobrevive a los procesos de un solo uso (`panda ask` no es un demonio); la superficie CLI completa `panda project list | new --dir --desc | show | rename | remove | enter | exit`, con `list` marcando el actual (a9fa471, 1260cb9).
+- **Las tareas heredan el proyecto en el que entraste** — el motor lleva un proyecto ambiental que rellena lo que el clasificador no nombró, y una tarea en un proyecto conoce su directorio de trabajo y su descripción — antes sabía menos que una tarea que no pertenecía a ninguno (8c82c5e).
+- **Una tarea delegada lleva consigo su proyecto** — la memoria del proyecto viaja empaquetada en la carga de delegación (con límite de tamaño), el árbol de trabajo viaja como referencia de artefacto troceado reutilizando la maquinaria del plano de planes, y el ejecutor rederiva el directorio de trabajo bajo su propia raíz, rechazando nombres de proyecto con caracteres de ruta (un nombre que llega por el bus es entrada no confiable). El resultado terminado se adopta de vuelta al directorio local del proyecto, en modo sobrescritura — dos máquinas editando un proyecto es un conflicto real y nunca se fusiona en silencio (a1f1d19).
+- **Consola: proyectos y ajustes** — CRUD de proyectos, entrar/salir y metadatos en la API de la consola (7cda886); filas de proyecto con directorio de trabajo, estado de proyecto actual y los verbos que los cambian (146c1ba); y los ajustes de aprobación, enrutado, límite de memoria e inyección — la puerta de aprobación es el ajuste que un usuario más quiere cambiar tras mirar la cola una tarde, y ya no requiere salir de la consola. Los cuatro se unen a la API de ajustes que la consola ya tenía en vez de un segundo endpoint (7a60a80, 0736c2f).
+- **Endpoints del tablero de planes** — `GET /api/plans` (qué planes existen y cómo van) y `GET /api/plans/{id}` (las etapas de un plan con el cableado de artefactos entre ellas — la vista que responde a «¿la etapa de entrenamiento recibió de verdad el script?»). Iniciar un plan sigue en `/api/ask`, donde ya funcionaba (932442a).
+- **Soporte multimodelo** — normalización inteligente de base_url (barras finales, prefijos de versión ausentes, rarezas por proveedor), campos de razonamiento para modelos con modo de pensamiento, y preajustes del proveedor OpenAI (08ede13).
 
 ### Corregido
 
@@ -67,47 +84,8 @@ El 0.0.8 oficial: el sistema de habilidades aprende a servirse a sí mismo — u
 - **El motor Ask arranca con una ruta de habilidades vacía** — una configuración sin `storage.skills_path` ya no rompe la inicialización del motor; el almacén de habilidades simplemente empieza vacío (3f28486).
 - **SQLite aplica claves foráneas** — el almacén ahora se abre con `foreign_keys=ON`, así que las filas que referencian padres borrados ya no se acumulan (7c5c643).
 - **TUI: la vista de pantalla alternativa conserva banner, consejos y chat** — la rework de pantalla alternativa había dejado atrás el logo ASCII, la fila de consejos y la vista de conversación; los tres vuelven al diseño de pantalla completa (e2be53e).
-
-### Mejorado
-
-- **Un solo banner de bienvenida en todas partes, con mejor ergonomía del REPL** — el REPL directo, la ayuda y las rutas de error comparten el mismo saludo con logo ASCII, y la capa de vistas de la TUI recibió un pulido equivalente (0d44ee4).
-- **TUI: bloques visuales diferenciados y panel de prompt de alto contraste** — la entrada del usuario, la salida del asistente y los avisos del sistema ocupan bloques claramente separados, y el prompt del usuario destaca en cualquier tema (b0979cc).
-- **Pulido del flujo de trabajo en la consola web** — las vistas de sesiones y proyectos se rehicieron en torno a la arquitectura de flujo de trabajo, con colocación de acciones y renderizado de estados consistentes (291dc76).
-
-## [0.0.8-preview] - 2026-09-05
-
-Transición a proyecto de código abierto formal: OpenPanda evoluciona de un enrutador de tareas experimental a un sistema operativo de orquestación de agentes personales unificado y listo para producción. Incluye herramientas de gestión para el motor Ask, dirección interactiva en TUI, conmutación por error activa con inyección de modelos de respaldo, registro multimodelo y seguimiento transparente.
-
-### Añadido
-
-- **Familia de herramientas de gestión** — el motor Ask ahora inspecciona el clúster con herramientas internas de nivel 1 (`system_status`, `card_list`, `card_show`, colas de tareas) respondiendo en tiempo real sobre el estado de la flota y capacidades de los nodos.
-- **Dirección en curso y parada real en TUI** — cancelación o redirección de tareas en ejecución, soporte de ratón y renderizado visual del progreso en Bubble Tea.
-- **Conmutación por error activa e inyección de modelos** — cuando un agente CLI agota su cuota o fallan sus credenciales, OpenPanda inyecta modelos alternativos para continuar.
-- **Transparencia total de ejecución** — comandos bash y llamadas a herramientas se transmiten vía `EvProgress` a la TUI y consola web, mostrando el agente y modelo exactos.
-- **Registro multimodelo (`/model`)** — gestión y cambio en caliente entre múltiples modelos (DeepSeek, Claude, ChatGPT, Kimi, Ollama, etc.).
-- **Candidatos de argumentos en el menú de barra** — los comandos con argumentos enumerados (`/lang`, `/resume`, `/config set`) muestran menú interactivo con flechas tras escribir un espacio.
-- **Selección con flechas en la tarjeta de aprobación** — el prompt de aprobación de nivel 2 admite ↑↓/←→ y Enter además de las teclas rápidas y/n.
-
-### Corregido
-
 - **`/lang` ahora cambia de verdad el idioma de la interfaz** — se propaga de inmediato a menús, barra de estado y ayuda de la TUI, y se persiste en `config.yaml`.
 - **Preservación de metadatos en modelos inyectados** — los resultados conservan la atribución del modelo inyectado y emiten eventos de notificación.
-
-## [0.0.8-alpha] - 2026-09-03
-
-La versión de los proyectos: un proyecto ya no es solo un nombre en una tarea — tiene directorio de trabajo, descripción y un puntero persistente de «proyecto actual»; las tareas lanzadas desde dentro lo heredan, y una tarea delegada lleva el proyecto entero al ejecutor, de modo que la máquina que la ejecuta sabe en qué está trabajando. La puerta de aprobación se reencuadra a solo lo irreversible (con el vector de descarga-a-archivo regateado tras la revisión), la consola gana superficies para seguir planes y cambiar ajustes, y estrena la nueva piel «Panda Paper». Cortada como alpha: la línea está completa en su alcance, pero ha tenido menos tiempo de reposo que una versión numerada.
-
-### Añadido
-
-- **Los proyectos como ciudadanos de primera clase** — una tabla de proyectos (directorio de trabajo, descripción, marcas de tiempo) más un puntero de proyecto actual respaldado por ajustes que sobrevive a los procesos de un solo uso (`panda ask` no es un demonio); la superficie CLI completa `panda project list | new --dir --desc | show | rename | remove | enter | exit`, con `list` marcando el actual (a9fa471, 1260cb9).
-- **Las tareas heredan el proyecto en el que entraste** — el motor lleva un proyecto ambiental que rellena lo que el clasificador no nombró, y una tarea en un proyecto conoce su directorio de trabajo y su descripción — antes sabía menos que una tarea que no pertenecía a ninguno (8c82c5e).
-- **Una tarea delegada lleva consigo su proyecto** — la memoria del proyecto viaja empaquetada en la carga de delegación (con límite de tamaño), el árbol de trabajo viaja como referencia de artefacto troceado reutilizando la maquinaria del plano de planes, y el ejecutor rederiva el directorio de trabajo bajo su propia raíz, rechazando nombres de proyecto con caracteres de ruta (un nombre que llega por el bus es entrada no confiable). El resultado terminado se adopta de vuelta al directorio local del proyecto, en modo sobrescritura — dos máquinas editando un proyecto es un conflicto real y nunca se fusiona en silencio (a1f1d19).
-- **Consola: proyectos y ajustes** — CRUD de proyectos, entrar/salir y metadatos en la API de la consola (7cda886); filas de proyecto con directorio de trabajo, estado de proyecto actual y los verbos que los cambian (146c1ba); y los ajustes de aprobación, enrutado, límite de memoria e inyección — la puerta de aprobación es el ajuste que un usuario más quiere cambiar tras mirar la cola una tarde, y ya no requiere salir de la consola. Los cuatro se unen a la API de ajustes que la consola ya tenía en vez de un segundo endpoint (7a60a80, 0736c2f).
-- **Endpoints del tablero de planes** — `GET /api/plans` (qué planes existen y cómo van) y `GET /api/plans/{id}` (las etapas de un plan con el cableado de artefactos entre ellas — la vista que responde a «¿la etapa de entrenamiento recibió de verdad el script?»). Iniciar un plan sigue en `/api/ask`, donde ya funcionaba (932442a).
-- **Soporte multimodelo** — normalización inteligente de base_url (barras finales, prefijos de versión ausentes, rarezas por proveedor), campos de razonamiento para modelos con modo de pensamiento, y preajustes del proveedor OpenAI (08ede13).
-
-### Corregido
-
 - **Las tareas en cola vuelven a rutear entre dispositivos (CLI y tablero)** — `panda task add` y el POST del tablero fijaban cada tarea encola al directorio de trabajo del nodo, y desde v0.0.6 forwardScheduled trata una tarea fijada como trabajo estrictamente local, así que `--requires pi.uptime` en un nodo sin esa habilidad fallaba con `route: no capability matches` en lugar de llegar al peer que la tiene — exactamente lo que v0.0.5 arregló, deshecho en silencio una versión después. El fijado era redundante (el ejecutor ya cae al mismo directorio por defecto del nodo) y se eliminó; solo una tarea con directorio propio (el worktree de una sesión del panel) se queda local (esta versión).
 - **La caché de huellas SSE propaga los fallos de carga** — las llamadas que se apilaron tras un escaneo fallido del almacén ahora reciben el mismo error en vez de un valor vacío con error nil; un almacén que falla de forma persistente ya no difunde un evento de cambio falso a cada flujo conectado mientras solo cae el flujo del cargador (revisión 2026-09-02, P2).
 - **TUI: un cuadro de entrada por comando de barra** — la ruta de ejecución ahora limpia el marco en el mismo ciclo de eventos que encola el comando, de modo que la fila de estado y la caja redondeada ya no quedan en el historial como una segunda barra de entrada (6a77bf7).
@@ -118,6 +96,9 @@ La versión de los proyectos: un proyecto ya no es solo un nombre en una tarea �
 
 ### Mejorado
 
+- **Un solo banner de bienvenida en todas partes, con mejor ergonomía del REPL** — el REPL directo, la ayuda y las rutas de error comparten el mismo saludo con logo ASCII, y la capa de vistas de la TUI recibió un pulido equivalente (0d44ee4).
+- **TUI: bloques visuales diferenciados y panel de prompt de alto contraste** — la entrada del usuario, la salida del asistente y los avisos del sistema ocupan bloques claramente separados, y el prompt del usuario destaca en cualquier tema (b0979cc).
+- **Pulido del flujo de trabajo en la consola web** — las vistas de sesiones y proyectos se rehicieron en torno a la arquitectura de flujo de trabajo, con colocación de acciones y renderizado de estados consistentes (291dc76).
 - **La puerta de aprobación cubre solo lo irreversible** — Tier 2 ahora significa «ningún comando posterior puede deshacerlo»: borrado, estado de disco/partición/firmware, estado de energía, escalada de privilegios, y las formas de argumento que pierden trabajo (`git push --force`, `rsync --delete`, `sed -i`, `find -delete`). curl, wget, make, ssh, systemctl, mount, docker, kubectl, terraform, los gestores de paquetes, chmod/chown/mv/cp/tee y similares se ejecutan sin supervisión, y `bash scripts/build.sh` ya no pide confirmación — un nodo que no puede ejecutar su propio build no puede hacer el trabajo para el que existe (e593470).
 - **Las descargas a archivo siguen bloqueadas** — un curl/wget que guarda sus bytes en una ruta (`-o`, `-O`, `--output`) es Tier 2: los bytes son opacos al clasificador y el siguiente paso suele ser ejecutarlos, y antes de este cambio `curl -o x …; bash x` se calificaba Tier 1 de principio a fin. Las descargas a stdout o `/dev/null` — las formas de sonda de alcanzabilidad — no se ven afectadas (revisión 2026-09-02, P1).
 - **Consola: rediseño visual «Panda Paper»** — una capa de re-skin añadida sobre los estilos existentes de la consola: tema claro de papel cálido y tema oscuro de tinta cálida (sin negro puro ni gris frío), el acento de marca verde bambú profundizado un paso con el azul reservado para la órbita de decisión, tipografía serif de exhibición solo en los títulos, radios un paso más grandes, sombras marrón-cálidas más suaves, y retiradas las decoraciones «de IA» (texto degradado en títulos, subrayados degradados, capas de brillo en botones). La capa redefine los mismos tokens y se aplica en cascada sobre las reglas antiguas — el marcado de los componentes, los nombres de clase y la lógica quedan intactos (esta versión).

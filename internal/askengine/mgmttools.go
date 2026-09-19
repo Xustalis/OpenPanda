@@ -4,11 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/agents"
+	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/cardmut"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/defense"
@@ -225,26 +231,26 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "card_agent_add",
-		Description: "为本机能力卡注册一个新的 Agent CLI，变更后自动热重载。",
+		Description: "为本机能力卡注册一个新的 Agent CLI，变更后自动热重载。adapter 可留空——按 name 从内置注册表（panda agents）解析，dsh 这类已知 CLI 会自动映射到正确适配器。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":         map[string]any{"type": "string", "description": "Agent 名称，如 claude_code"},
-				"adapter":      map[string]any{"type": "string", "description": "适配器文件名，如 claude_code.py"},
+				"name":         map[string]any{"type": "string", "description": "Agent 名称或 CLI 命令名，如 claude_code / dsh"},
+				"adapter":      map[string]any{"type": "string", "description": "适配器文件名，如 claude_code.py；已知 CLI 可留空由注册表解析"},
 				"capabilities": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "能力标识列表"},
 				"best_at":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "擅长领域"},
 				"not_for":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "不适合领域"},
 				"cost_tier":    map[string]any{"type": "string", "description": "成本档位：low / mid / high"},
-				"tier":         map[string]any{"type": "integer", "description": "安全等级（1=可逆，2=不可逆，默认 2）"},
+				"tier":         map[string]any{"type": "integer", "description": "安全等级（1=可逆，默认 1；2=不可逆、每次需人工授权）"},
 			},
-			"required": []string{"name", "adapter", "capabilities"},
+			"required": []string{"name"},
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
 			name, _ := args["name"].(string)
 			adapter, _ := args["adapter"].(string)
 			costTier, _ := args["cost_tier"].(string)
-			tier := 2
+			tier := agents.TierAutoApproved
 			if tVal, ok := args["tier"]; ok {
 				switch t := tVal.(type) {
 				case float64:
@@ -261,6 +267,19 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 				CostTier:     strings.TrimSpace(costTier),
 				Tier:         tier,
 			})
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "card_rescan",
+		Description: "扫描本机已安装的 Agent CLI，把尚未注册的补进能力卡（panda card rescan 的等价操作）。用户要求“配置/注册某个 CLI”“让它以后能接任务”时用这个，不要手工猜适配器文件名。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			return e.cardRescan(ctx)
 		},
 	})
 
@@ -1076,11 +1095,14 @@ func (e *Engine) cardAgentAdd(ctx context.Context, name string, ag ledger.Agent)
 	if name == "" {
 		return "", fmt.Errorf("Agent 名称不能为空")
 	}
-	if ag.Adapter == "" {
-		return "", fmt.Errorf("Agent adapter 不能为空")
+	if err := resolveAgentFromRegistry(&name, &ag); err != nil {
+		return "", err
 	}
 	if len(ag.Capabilities) == 0 {
 		return "", fmt.Errorf("Agent capabilities 不能为空")
+	}
+	if err := checkAdapterExists(ag.Adapter); err != nil {
+		return "", err
 	}
 	if err := cardmut.AgentAdd(path, name, ag); err != nil {
 		if strings.Contains(err.Error(), "already exists") {
@@ -1114,6 +1136,191 @@ func (e *Engine) cardAgentAdd(ctx context.Context, name string, ag ledger.Agent)
 	return fmt.Sprintf("Agent %s 已成功注册并热重载生效", name), nil
 }
 
+// resolveAgentFromRegistry fills an agent entry from the built-in registry
+// (internal/agents) when the caller names something the registry already knows.
+//
+// This is the fix for the failure mode that made "配置 dsh" unreachable: the
+// model was asked to register a CLI it had no facts about, so it invented an
+// adapter filename (`dsh.py`) and wrote a card entry pointing at a file that
+// does not exist — then reported success. The registry knew the whole mapping
+// (name deepseek_harness, binary dsh, adapter deepseek_harness.py) and was never
+// consulted, because card_agent_add took `adapter` as free text.
+//
+// A caller-supplied adapter is never silently replaced: it wins when it names a
+// real file. The registry only fills gaps, and may rename the entry to the
+// registry key so routing and `panda agents` agree on one name.
+func resolveAgentFromRegistry(name *string, ag *ledger.Agent) error {
+	if *name == "" {
+		return fmt.Errorf("Agent 名称不能为空")
+	}
+	known, ok := lookupKnownAgent(*name)
+	if !ok {
+		if strings.TrimSpace(ag.Adapter) == "" {
+			return fmt.Errorf("未知的 Agent %q：内置注册表里没有它，请通过 adapter 明确指定适配器文件名（可参考 %s）", *name, knownAgentList())
+		}
+		return nil
+	}
+	// The registry key is the canonical name: an operator (or model) asking for
+	// "dsh" must end up with the same entry `panda card rescan` would write.
+	*name = known.Name
+	if strings.TrimSpace(ag.Adapter) == "" || !adapterFileExists(strings.TrimSpace(ag.Adapter)) {
+		if known.Adapter != "" {
+			ag.Adapter = known.Adapter
+		}
+	}
+	if len(ag.Capabilities) == 0 {
+		ag.Capabilities = append([]string(nil), known.DefaultCapabilities...)
+	}
+	if len(ag.BestAt) == 0 {
+		ag.BestAt = append([]string(nil), known.DefaultBestAt...)
+	}
+	if len(ag.NotFor) == 0 {
+		ag.NotFor = []string{"hardware_io", "realtime_control"}
+	}
+	if ag.CostTier == "" {
+		ag.CostTier = known.DefaultCostTier
+	}
+	if ag.Tier == 0 {
+		ag.Tier = known.DefaultTier
+	}
+	if ag.InstallCheck == "" {
+		for _, bin := range known.Binaries {
+			if p, err := exec.LookPath(bin); err == nil {
+				ag.InstallCheck = p + " --version"
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// lookupKnownAgent matches a registry entry by its key, by one of the CLI binary
+// names it is probed by (so "dsh" finds "deepseek_harness"), or by adapter file.
+func lookupKnownAgent(name string) (agents.Known, bool) {
+	want := strings.ToLower(strings.TrimSpace(name))
+	for _, k := range agents.Registry() {
+		if strings.ToLower(k.Name) == want || strings.ToLower(k.Adapter) == want {
+			return k, true
+		}
+		for _, bin := range k.Binaries {
+			if strings.ToLower(bin) == want {
+				return k, true
+			}
+		}
+	}
+	return agents.Known{}, false
+}
+
+// knownAgentList renders the registry's installable agents as one line, so a
+// rejected add tells the caller exactly which names are valid.
+func knownAgentList() string {
+	reg := agents.Registry()
+	parts := make([]string, 0, len(reg))
+	for _, k := range reg {
+		if k.Adapter == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s→%s", k.Name, k.Adapter))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ", ")
+}
+
+// adapterFileExists reports whether the adapter script is present in the
+// adapters directory the commander will spawn from.
+func adapterFileExists(adapter string) bool {
+	if adapter == "" {
+		return false
+	}
+	dir := commander.AdapterDir()
+	if dir == "" {
+		return false
+	}
+	st, err := os.Stat(filepath.Join(dir, adapter))
+	return err == nil && !st.IsDir()
+}
+
+// checkAdapterExists refuses to register an agent whose adapter script is not on
+// disk. An entry that points at a missing file is worse than a rejected write:
+// the card advertises the agent, routing sends work to it, and the task fails at
+// spawn time on a node that looks correctly configured.
+func checkAdapterExists(adapter string) error {
+	adapter = strings.TrimSpace(adapter)
+	if adapter == "" {
+		return fmt.Errorf("Agent adapter 不能为空：请给出适配器文件名，或使用注册表里已有的名字（%s）", knownAgentList())
+	}
+	if adapterFileExists(adapter) {
+		return nil
+	}
+	return fmt.Errorf("适配器 %q 不存在于 %s，拒绝写入能力卡（否则路由会把任务派给一个无法启动的 Agent）。可用适配器：%s",
+		adapter, commander.AdapterDir(), adapterList())
+}
+
+// adapterList lists the adapter scripts actually present on disk.
+func adapterList() string {
+	entries, err := os.ReadDir(commander.AdapterDir())
+	if err != nil {
+		return "（无法读取适配器目录）"
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".py") && !strings.HasPrefix(e.Name(), "_") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+// cardRescan detects the agent CLIs installed on this host and adds the ones the
+// card does not declare yet, reusing the same registry + detection layer as
+// `panda card rescan`. It exists so "帮我配置 dsh / 把这个 CLI 接进来" has a
+// correct action to take: without it the only path was a hand-written
+// card_agent_add, which is what produced the invented `dsh.py` entry.
+//
+// The merge is additive on purpose — an existing entry is left exactly as it is,
+// tier included, because that field is the operator's authorization decision and
+// a scan must never silently widen it.
+func (e *Engine) cardRescan(ctx context.Context) (string, error) {
+	path, err := e.checkCardPath()
+	if err != nil {
+		return "", err
+	}
+	existing := map[string]bool{}
+	if card, err := ledger.LoadCard(path); err == nil {
+		for name := range card.Agents {
+			existing[name] = true
+		}
+	}
+	detected := carddetect.CardAgents()
+	var added []string
+	for _, name := range sortedAgentNames(detected) {
+		if existing[name] {
+			continue
+		}
+		if err := cardmut.AgentAdd(path, name, detected[name]); err != nil {
+			return "", fmt.Errorf("注册已安装的 %s：%w", name, err)
+		}
+		added = append(added, name)
+	}
+	if len(added) > 0 {
+		_ = e.ReloadCard(path)
+		return fmt.Sprintf("已检测本机安装的 Agent CLI 并注册：%s（共 %d 个，已热重载生效）",
+			strings.Join(added, ", "), len(added)), nil
+	}
+	return fmt.Sprintf("本机已安装的 Agent CLI 都已在能力卡中（检测到 %d 个），没有新增。", len(detected)), nil
+}
+
+// sortedAgentNames keeps the rescan output and write order stable between runs.
+func sortedAgentNames(m map[string]ledger.Agent) []string {
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func (e *Engine) cardAgentSet(ctx context.Context, name string, upd cardmut.AgentUpdate) (string, error) {
 	path, err := e.checkCardPath()
 	if err != nil {
@@ -1121,6 +1328,13 @@ func (e *Engine) cardAgentSet(ctx context.Context, name string, upd cardmut.Agen
 	}
 	if name == "" {
 		return "", fmt.Errorf("Agent 名称不能为空")
+	}
+	// Same invariant as the add path: an entry must never point at a script that
+	// is not on disk, whether it got there by add or by set.
+	if upd.Adapter != nil {
+		if err := checkAdapterExists(*upd.Adapter); err != nil {
+			return "", err
+		}
 	}
 	if err := cardmut.AgentSet(path, name, upd); err != nil {
 		return "", fmt.Errorf("修改 Agent：%w", err)

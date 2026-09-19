@@ -393,3 +393,34 @@ func (r *repl) cmdVersion(arg string) {
 		}
 	}
 }
+
+// cmdRead views a file in the workspace or memory, automatically rendering
+// Markdown on TTY when appropriate.
+func (r *repl) cmdRead(arg string) {
+	path := strings.TrimSpace(arg)
+	if path == "" {
+		r.outln("usage: /read <file>")
+		return
+	}
+	// Check if user is referencing a memory file (e.g. user, memory, dreams, topic:x)
+	if r.cfg != nil {
+		if target, err := resolveMemoryTarget(r.cfg, path); err == nil {
+			if data, err := os.ReadFile(target.path); err == nil {
+				r.outln(r.renderMd(string(data)))
+				return
+			}
+		}
+	}
+	// Otherwise read relative to current working directory / filesystem
+	targetPath := filepath.Clean(path)
+	data, err := os.ReadFile(targetPath)
+	if err != nil {
+		r.errf("read file: %v\n", err)
+		return
+	}
+	if isMarkdownFile(path, data) {
+		r.outln(r.renderMd(string(data)))
+		return
+	}
+	r.outln(string(data))
+}

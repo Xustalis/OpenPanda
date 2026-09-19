@@ -8,7 +8,12 @@ node:
   # identity: "vm-macbook-dev"
 
 network:
-  listen_addr: ":7836"           # WebSocket listener (kernel daemon)
+  # Loopback by default, matching config.Default(): a fresh copy of this file
+  # must not put an unencrypted listener on every interface. To reach peers on
+  # other machines, either point this at the specific interface you mean
+  # (e.g. "192.168.1.10:7836") or widen it deliberately to ":7836" — and read
+  # the transport notes below first.
+  listen_addr: "127.0.0.1:7836"  # WebSocket listener (kernel daemon)
   # ── Transport security: plain ws:// is NOT encrypted ──
   # Only use plain WebSocket over loopback, Tailscale/VPN, or a trusted LAN.
   # If any peer crosses the public Internet, terminate TLS in a reverse proxy
@@ -206,5 +211,16 @@ push:
 # Front-end preferences. `locale` is the language /lang last switched to in
 # the REPL/TUI; empty (or omitted) follows the terminal's LANG/OPENPANDA_LANG.
 # OPENPANDA_LANG still wins over this setting when set.
+#
+# `mouse` decides who owns the terminal mouse in the full-screen TUI:
+#   "select" (default) — the terminal keeps it, so drag-select, double-click and
+#                        the terminal's own copy shortcut work; the wheel still
+#                        scrolls the transcript through alternate scroll.
+#   "scroll"           — the app captures it, so the wheel pages the transcript
+#                        and clicks answer the approval buttons, at the cost of
+#                        terminal-native selection.
+# Either way PageUp/PageDown scroll, ctrl+t switches the mode live, and
+# PANDA_MOUSE=select|scroll overrides this setting for a single run.
 # ui:
 #   locale: "zh-CN"               # en | zh-CN | ja | es | de
+#   mouse: "select"               # select | scroll

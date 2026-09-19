@@ -157,8 +157,9 @@ func TestCommitAttachesTaskTrail(t *testing.T) {
 	if !strings.Contains(printed, "claude_code") {
 		t.Errorf("committed block should keep the stage trail: %q", printed)
 	}
+	// When no summary was generated, the cleaned agent output reaches the committed block.
 	if !strings.Contains(printed, "done") {
-		t.Errorf("committed block should keep the output: %q", printed)
+		t.Errorf("cleaned output should reach the committed block: %q", printed)
 	}
 }
 
@@ -170,4 +171,164 @@ func printedText(cmd tea.Cmd) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprintf("%v", cmd()))
+}
+
+func TestAnswerTextMarkdown(t *testing.T) {
+	th := newTheme(i18n.Locale("en"))
+	th.color = true
+	in := "# Heading\n\nSome **bold** prose.\n\n| ColA | ColB |\n|---|---|\n| 1 | 2 |"
+	out := answerText(th, in, 80)
+	if !strings.Contains(out, "Heading") || !strings.Contains(out, "bold") || !strings.Contains(out, "ColA") {
+		t.Fatalf("answerText did not render markdown: %q", out)
+	}
+	if !strings.HasPrefix(out, th.accent.Render(th.glyph("⏺", "*"))+" ") {
+		t.Fatalf("answerText lost its marker: %q", out)
+	}
+}
+
+func TestRenderTaskMarkdown(t *testing.T) {
+	th := newTheme(i18n.Locale("en"))
+	th.color = true
+	blk := block{
+		kind:  blockTask,
+		ok:    true,
+		title: "test task",
+		body:  "## Summary\n\n| Item | Count |\n|---|---|\n| Files | 42 |",
+	}
+	out := blk.render(th, 80, false)
+	if !strings.Contains(out, "Summary") || !strings.Contains(out, "Files") || !strings.Contains(out, "42") {
+		t.Fatalf("renderTask did not render markdown table: %q", out)
+	}
+}
+
+// TestTaskProgressCompressesTools confirms that micro-tool steps do not bloat
+// stages list into dozens of lines, but are aggregated into an operation count
+// while showing the single active tool dynamically.
+func TestTaskProgressCompressesTools(t *testing.T) {
+	th := newTheme(i18n.Locale("zh-CN"))
+	t0 := time.Now()
+	tp := newTaskProgress("Deep Analysis", t0)
+
+	// Advance milestone 1: route
+	tp.advance("路由至 本地节点", t0.Add(1*time.Second))
+	// Advance milestone 2: exec agent
+	tp.advance("正在运行 claude_code...", t0.Add(2*time.Second))
+
+	if len(tp.stages) != 2 {
+		t.Fatalf("expected 2 milestone stages, got %d", len(tp.stages))
+	}
+
+	// Receive 15 micro tool events
+	for i := 1; i <= 15; i++ {
+		tp.recordTool(fmt.Sprintf("Bash: grep -rn item_%d", i), t0.Add(time.Duration(2+i)*time.Second))
+	}
+
+	// Stages count must STAY at 2! Micro tools do not create separate stages!
+	if len(tp.stages) != 2 {
+		t.Fatalf("micro tools must not inflate stages slice, got %d", len(tp.stages))
+	}
+	if tp.curTools != 15 {
+		t.Fatalf("expected 15 curTools, got %d", tp.curTools)
+	}
+
+	// Live rendering should show operation count and current active tool
+	live := tp.renderLive(th, "zh-CN", "SPIN", t0.Add(20*time.Second))
+	if !strings.Contains(live, "15 项操作") {
+		t.Errorf("live render should show (15 项操作): %q", live)
+	}
+	if !strings.Contains(live, "当前操作: Bash: grep -rn item_15") {
+		t.Errorf("live render should show active tool: %q", live)
+	}
+
+	// Advance to judge
+	tp.advance("正在评审执行结果...", t0.Add(21*time.Second))
+	if len(tp.stages) != 3 {
+		t.Fatalf("expected 3 milestone stages after judge, got %d", len(tp.stages))
+	}
+	// Stage 1 (exec) must have sealed toolCount=15
+	if tp.stages[1].toolCount != 15 {
+		t.Fatalf("exec stage should have sealed 15 tools, got %d", tp.stages[1].toolCount)
+	}
+
+	// Trail should show compact summary with (15 项操作)
+	trail := tp.trail(25 * time.Second)
+	if len(trail) != 3 {
+		t.Fatalf("trail should contain exactly 3 lines, got %d: %v", len(trail), trail)
+	}
+	if !strings.Contains(trail[1], "15 项操作") {
+		t.Errorf("trail exec stage should carry (15 项操作): %q", trail[1])
+	}
+}
+
+// TestIsLeakedEscapeFragment verifies detection of leaked terminal SGR mouse and
+// escape codes without false-positive matching on regular text.
+func TestIsLeakedEscapeFragment(t *testing.T) {
+	leakedCases := []string{
+		";20M",
+		"[<65;123;20M",
+		"<65;123;20M",
+		"65;123;20M",
+		"[<65;123;20M[<65;123;20M",
+		";123;20M",
+		";20m",
+		"[<35;10;5m",
+		"[<35;10",
+		"[<",
+		"<35;10;5m<35;10;5m",
+		"<35;10",
+		"<35;",
+		"[24;80R",
+		"24;80R",
+		";80R",
+		"[?1002h",
+		"[?1006l",
+		"?1002h",
+		"?1007h",
+		"?1;2c",
+		"[I",
+		"[O",
+		"[200~",
+		"[201~",
+		"[1;2A",
+		"[1;5C",
+		"[1~",
+		"[3~",
+		"[8;24;80t",
+		"]11;rgb:0000/0000/0000",
+	}
+	for _, c := range leakedCases {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(c)}
+		if !isLeakedEscapeFragment(msg) {
+			t.Errorf("isLeakedEscapeFragment(%q) = false, want true", c)
+		}
+	}
+
+	altLeakedRunes := []rune{'[', 'O', ']', '?', '<', ';', '~', '\x1b'}
+	for _, r := range altLeakedRunes {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: true}
+		if !isLeakedEscapeFragment(msg) {
+			t.Errorf("isLeakedEscapeFragment(Alt+%q) = false, want true", string(r))
+		}
+	}
+
+	validCases := []string{
+		"a",
+		"hello",
+		"10m",
+		"5MB",
+		"500M",
+		"git commit -m \"fix\"",
+		"你好世界",
+		"cd /Users/xenith",
+		"make build",
+		"if x < 10 { y = 20; }",
+		"cat < file.txt",
+		"<tag>hello</tag>",
+	}
+	for _, c := range validCases {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(c)}
+		if isLeakedEscapeFragment(msg) {
+			t.Errorf("isLeakedEscapeFragment(%q) = true, want false (false positive)", c)
+		}
+	}
 }

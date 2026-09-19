@@ -117,6 +117,10 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 		if len(args) == 1 {
 			return r.projectNames()
 		}
+	case "read", "view", "cat", "md":
+		if len(args) == 1 {
+			return r.memoryTargets()
+		}
 	case "memory":
 		switch len(args) {
 		case 1:

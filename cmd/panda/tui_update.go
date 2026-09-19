@@ -7,6 +7,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,6 +17,108 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
+
+var (
+	// SGR mouse full or partial sequence: "<35;20;10M", "[<35;20;10M", "35;20;10M", "20;10M"
+	sgrMouseRe = regexp.MustCompile(`^(?:\[?<)?\d+;\d+(?:;\d+)?[Mm]$`)
+	// Severed SGR tail starting with semicolon: ";20M", ";123;20M", ";20", ";123;20;"
+	sgrMouseTailRe = regexp.MustCompile(`^;\d+(?:;\d+)*(?:[Mm]|;)?$`)
+	// Severed SGR head starting with `<` or `[<`: "<35;10", "<35;", "[<35;10", "[<35;", "[<"
+	sgrMouseHeadRe = regexp.MustCompile(`^(?:\[?<|<)\d*(?:;\d*)*[Mm]?$`)
+	// Concatenated SGR mouse stream: e.g. "<35;1;2M<35;1;3M" or "[<35;1;2M[<35;1;3M"
+	sgrMouseStreamRe = regexp.MustCompile(`^(?:\[?<\d+;\d+;\d+[Mm])+$`)
+
+	// Cursor Position Report (CPR): "24;80R", "[24;80R", ";80R"
+	cprReportRe = regexp.MustCompile(`^(?:\[\d+|\d+|);\d+R$`)
+
+	// Private mode reports (DECSET/DECRST/DA): "[?1002h", "?1002h", "[?1;2c", "?1;2c", "?1007h"
+	privateModeRe = regexp.MustCompile(`^\[?\?\d+(?:;\d+)*[a-zA-Z]$`)
+
+	// Function key / keypad / bracketed paste / tilde residues:
+	// "[1~", "1~", "[3~", "3~", "[200~", "200~", "[201~", "201~"
+	tildeKeyRe = regexp.MustCompile(`^\[?\d+(?:;\d+)*~$`)
+	// Modifier cursor keys: "[1;2A", "1;2A", "[1;5C", "1;5D"
+	csiModifierRe = regexp.MustCompile(`^\[?1;\d+[A-Za-z]$`)
+	// Window size report: "[8;24;80t", "8;24;80t"
+	winSizeReportRe = regexp.MustCompile(`^\[?8;\d+;\d+t$`)
+	// Kitty keyboard protocol: "[97u", "97;1u"
+	kittyKeyRe = regexp.MustCompile(`^\[?\d+(?:;\d+)*u$`)
+	// SS3 function keys: "[OP]", "OP", "OQ", "OR", "OS"
+	ss3KeyRe = regexp.MustCompile(`^(?:\[O|O)[P-S]$`)
+	// OSC responses: "]11;rgb:...", "]10;..."
+	oscResponseRe = regexp.MustCompile(`^\]?\d+;.*$`)
+)
+
+// isLeakedEscapeFragment reports whether a KeyMsg is an unparsed or split terminal escape
+// sequence (e.g. SGR mouse tracking events like "[<65;123;20M" or residues like ";20M",
+// cursor position reports like "24;80R", focus reports like "[I", or mode control markers)
+// that should be dropped rather than appended into the user input prompt.
+func isLeakedEscapeFragment(msg tea.KeyMsg) bool {
+	// 1. Check for Alt-prefixed escape starters.
+	// When Bubble Tea encounters an unparsed ESC sequence starting with \x1b[, \x1bO, \x1b],
+	// it parses \x1b as Alt: true and emits the next byte as a single rune with Alt: true.
+	if msg.Alt && len(msg.Runes) == 1 {
+		switch msg.Runes[0] {
+		case '[', 'O', ']', '?', '<', ';', '~', '\x1b':
+			return true
+		}
+	}
+
+	if msg.Type != tea.KeyRunes {
+		return false
+	}
+	s := string(msg.Runes)
+	if len(s) == 0 {
+		return false
+	}
+
+	// Raw escape character embedded
+	if strings.ContainsRune(s, '\x1b') {
+		return true
+	}
+
+	// Focus reports: "[I", "[O"
+	if s == "[I" || s == "[O" {
+		return true
+	}
+
+	// Any fragment containing "[<" (SGR mouse prefix)
+	if strings.Contains(s, "[<") {
+		return true
+	}
+
+	// SGR mouse full, severed, or stream sequences
+	if sgrMouseRe.MatchString(s) || sgrMouseTailRe.MatchString(s) || sgrMouseHeadRe.MatchString(s) || sgrMouseStreamRe.MatchString(s) {
+		return true
+	}
+
+	// Cursor Position Reports
+	if cprReportRe.MatchString(s) {
+		return true
+	}
+
+	// Private mode reports (e.g. "[?1002h", "?1007h", "?1;2c")
+	if strings.HasPrefix(s, "[?") || privateModeRe.MatchString(s) {
+		return true
+	}
+
+	// Bracketed paste & tilde function keys
+	if tildeKeyRe.MatchString(s) {
+		return true
+	}
+
+	// CSI modifier keys
+	if csiModifierRe.MatchString(s) {
+		return true
+	}
+
+	// Window reports, Kitty keys, SS3 keys, OSC responses
+	if winSizeReportRe.MatchString(s) || kittyKeyRe.MatchString(s) || ss3KeyRe.MatchString(s) || oscResponseRe.MatchString(s) {
+		return true
+	}
+
+	return false
+}
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -42,6 +145,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if isLeakedEscapeFragment(msg) {
+			return m, nil
+		}
 		return m.onKey(msg)
 
 	case tea.MouseMsg:
@@ -122,9 +228,85 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // "quit" rather than a second cancel.
 const interruptWindow = time.Second
 
+// transcriptScrollStep is how far one wheel notch — or the arrow key a wheel
+// notch becomes under alternate scroll — moves the transcript. Both paths share
+// it so scrolling feels identical whether or not the app owns the mouse.
+const transcriptScrollStep = 3
+
+// scrollTranscript moves the transcript viewport: positive reads back toward
+// older output, negative returns toward the live bottom. Offset 0 is the bottom
+// anchor; the far end is clamped here against the content height View last
+// published, so an overshoot cannot leave a phantom offset behind that makes the
+// next few scroll-downs do nothing (see tuiModel.scrollLimit).
+func (m *tuiModel) scrollTranscript(lines int) {
+	offset := max(0, m.scrollOffset+lines)
+	if m.scrollLimit != nil {
+		offset = min(offset, max(0, *m.scrollLimit))
+	}
+	m.scrollOffset = offset
+}
+
+// pageLines is the jump PageUp/PageDown make: half a screen, at least one line,
+// with a sane floor for a terminal too short to do arithmetic on.
+func (m tuiModel) pageLines() int {
+	avail := m.height - 4
+	if avail <= 0 {
+		avail = 10
+	}
+	return max(1, avail/2)
+}
+
+// arrowScrollLines maps an arrow key to the transcript movement it performs.
+// When scrolled up into history (scrollOffset > 0), Up/Down arrows always navigate history.
+// When at bottom, select mode maps Up/Down to history scroll.
+func (m tuiModel) arrowScrollLines(msg tea.KeyMsg) (int, bool) {
+	if m.scrollOffset > 0 {
+		switch msg.Type {
+		case tea.KeyUp:
+			return transcriptScrollStep, true
+		case tea.KeyDown:
+			return -transcriptScrollStep, true
+		}
+	}
+	if m.mouse.captured() {
+		return 0, false
+	}
+	switch msg.Type {
+	case tea.KeyUp:
+		return transcriptScrollStep, true
+	case tea.KeyDown:
+		return -transcriptScrollStep, true
+	}
+	return 0, false
+}
+
+// arrowsScrollHere reports whether the transcript should take Up/Down in the
+// chat modes. When scrolled up into history (scrollOffset > 0), arrows always navigate
+// history. When at bottom, a single-line draft in select mode gives Up/Down to transcript.
+func (m tuiModel) arrowsScrollHere() bool {
+	if m.scrollOffset > 0 {
+		return true
+	}
+	if m.mouse.captured() {
+		return false
+	}
+	return m.ta.LineCount() <= 1
+}
+
 // onKey dispatches a keystroke according to the current mode.
 func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// ctrl+t/F2 switch who owns the mouse. That is a device toggle rather than an
+	// editing key, so it answers in every mode — including mid-turn and while a
+	// slash command is running, which is exactly when a user notices that a drag
+	// cannot select anything.
+	if isMouseToggleKey(msg) {
+		return m.toggleMouse()
+	}
 	if m.mode == modeExec {
+		if lines, ok := m.arrowScrollLines(msg); ok { // the input box is frozen here
+			m.scrollTranscript(lines)
+			return m, nil
+		}
 		switch msg.Type {
 		case tea.KeyCtrlC, tea.KeyEsc:
 			if m.exec != nil {
@@ -132,10 +314,18 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case tea.KeyPgUp:
-			m.scrollOffset += max(1, max(1, m.height-4)/2)
+			m.scrollTranscript(m.pageLines())
 			return m, nil
 		case tea.KeyPgDown:
-			m.scrollOffset = max(0, m.scrollOffset-max(1, max(1, m.height-4)/2))
+			m.scrollTranscript(-m.pageLines())
+			return m, nil
+		case tea.KeyHome:
+			if m.scrollLimit != nil {
+				m.scrollTranscript(*m.scrollLimit)
+			}
+			return m, nil
+		case tea.KeyEnd:
+			m.scrollOffset = 0
 			return m, nil
 		default:
 			return m, nil
@@ -165,14 +355,28 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeModelWizard:
 		return m.handleModelWizardKey(msg)
 	case modeAsking:
+		if m.arrowsScrollHere() {
+			if lines, ok := m.arrowScrollLines(msg); ok {
+				m.scrollTranscript(lines)
+				return m, nil
+			}
+		}
 		if msg.Type == tea.KeyPgUp {
-			avail := max(1, (m.height-4)/2)
-			m.scrollOffset += avail
+			m.scrollTranscript(m.pageLines())
 			return m, nil
 		}
 		if msg.Type == tea.KeyPgDown {
-			avail := max(1, (m.height-4)/2)
-			m.scrollOffset = max(0, m.scrollOffset-avail)
+			m.scrollTranscript(-m.pageLines())
+			return m, nil
+		}
+		if msg.Type == tea.KeyHome {
+			if m.scrollLimit != nil {
+				m.scrollTranscript(*m.scrollLimit)
+			}
+			return m, nil
+		}
+		if msg.Type == tea.KeyEnd {
+			m.scrollOffset = 0
 			return m, nil
 		}
 		if msg.Type == tea.KeyEsc {
@@ -305,23 +509,28 @@ func (m tuiModel) onIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return next, cmd
 		}
 	}
+	// While the terminal owns the mouse, alternate scroll turns a wheel notch
+	// into Up/Down, so the transcript takes them whenever the input box cannot.
+	if m.arrowsScrollHere() {
+		if lines, ok := m.arrowScrollLines(msg); ok {
+			m.scrollTranscript(lines)
+			return m, nil
+		}
+	}
 	switch msg.Type {
 	case tea.KeyPgUp:
-		avail := m.height - 4
-		if avail <= 0 {
-			avail = 10
-		}
-		m.scrollOffset += max(1, avail/2)
+		m.scrollTranscript(m.pageLines())
 		return m, nil
 	case tea.KeyPgDown:
-		avail := m.height - 4
-		if avail <= 0 {
-			avail = 10
+		m.scrollTranscript(-m.pageLines())
+		return m, nil
+	case tea.KeyHome:
+		if m.scrollLimit != nil {
+			m.scrollTranscript(*m.scrollLimit)
 		}
-		m.scrollOffset -= max(1, avail/2)
-		if m.scrollOffset < 0 {
-			m.scrollOffset = 0
-		}
+		return m, nil
+	case tea.KeyEnd:
+		m.scrollOffset = 0
 		return m, nil
 	case tea.KeyEnter:
 		m.scrollOffset = 0
@@ -345,7 +554,6 @@ func (m tuiModel) onIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	m.scrollOffset = 0
 	var cmd tea.Cmd
 	m.ta, cmd = m.ta.Update(msg)
 	// Grow the input box with its content up to the cap, so multi-line prompts
@@ -358,30 +566,47 @@ func (m tuiModel) onIdleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// onMouse handles terminal mouse events (clicks) across all modes.
-//
-// Reachable only while the program captures the mouse, which runTUI
-// deliberately does not: capture hands the wheel to the application, and the
-// transcript lives in the terminal's own scrollback — the one buffer an
-// application can never scroll itself, so with capture on the user had no way
-// to read back at all. The click paths below (approval options, asking-mode
-// footer buttons, slash-menu rows) are kept intact so a future capture mode
-// does not regress them; today every one of those surfaces answers its
-// keyboard path (y/n, Esc/Enter, arrows+Tab).
+// onMouse handles terminal mouse events across all modes. It only fires while
+// the app owns the mouse (mouseScroll — see tui_mouse.go); in the default
+// mouseSelect the terminal keeps the mouse, so a wheel notch reaches us as an
+// arrow key instead and is handled by arrowScrollLines. Wheel gestures here
+// scroll the transcript in the chat modes and page the selection in the list
+// modes, where scrollOffset has no meaning. Clicks reach the approval options,
+// the asking-mode footer buttons, and the slash-menu rows; every one of those
+// surfaces also answers its keyboard path (y/n, Esc/Enter, arrows+Tab).
 func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if m.mode == modeExec || m.quitting {
+	if m.quitting {
 		return m, nil
 	}
 
+	// The wheel is handled before the mode gate below, so it stays live even
+	// mid-exec. Reading back is exactly what one wants while a long task runs,
+	// and the mode's other paths already allow it there: mouseSelect scrolls
+	// with Up/Down once the input box is frozen, and PageUp/PageDown work
+	// everywhere. Only *clicks* are gated — during exec there is no button on
+	// screen to answer, and a stray click must not cancel a running task.
 	switch msg.Type {
-	case tea.MouseWheelUp:
-		m.scrollOffset += 3
-		return m, nil
-	case tea.MouseWheelDown:
-		m.scrollOffset -= 3
-		if m.scrollOffset < 0 {
-			m.scrollOffset = 0
+	case tea.MouseWheelUp, tea.MouseWheelDown:
+		// delta is the direction of travel: wheel up reads back, so the chat
+		// scroll offset grows and the list highlight moves toward the top.
+		delta := transcriptScrollStep
+		if msg.Type == tea.MouseWheelUp {
+			delta = -transcriptScrollStep
 		}
+		switch m.mode {
+		case modeList, modeModelPanel, modeModelWizard, modeOnboarding:
+			// A wheel notch pages the highlight through the list (MovePage
+			// clamps at both ends); the terms step has no list to move.
+			if len(m.selectionList.Items) > 0 {
+				m.selectionList.MovePage(delta, m.selectionPageRows())
+			}
+		default:
+			m.scrollTranscript(-delta)
+		}
+		return m, nil
+	}
+
+	if m.mode == modeExec {
 		return m, nil
 	}
 

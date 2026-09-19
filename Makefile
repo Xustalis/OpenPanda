@@ -19,7 +19,19 @@ LDFLAGS_DEV := -s -w
 CGO_ENABLED ?= 0
 export CGO_ENABLED
 
-.PHONY: all build web web-test build-webui build-darwin-amd64 build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
+# Web dependency install for the gate targets. `npm ci` against the committed
+# package-lock.json, not `npm install`: the gate is supposed to answer "does
+# this tree build", and `npm install` is free to resolve — and rewrite — a
+# different dependency tree than the lockfile every other run and the CI cache
+# are pinned to. A dependency change is a deliberate `npm install` plus a
+# lockfile commit.
+#
+# `npm ci` always wipes node_modules and re-downloads, so the gate targets need
+# a reachable registry. For offline or metered local work, override it:
+#   make web NPM_INSTALL="npm install --no-fund --no-audit"
+NPM_INSTALL ?= npm ci --no-fund --no-audit
+
+.PHONY: all build web web-test web-gate build-webui build-darwin-amd64 build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
         dev test adapter-test vet fmt fmt-check race race-focused gate gate-all run run-local measure clean icons release package release-local
 
@@ -38,7 +50,7 @@ build: fmt-check vet
 # folds it into the panel binary. Requires node/npm. The committed
 # dist/index.html placeholder is never touched (vite empties only dist/app).
 web:
-	cd webui/app && npm install --no-fund --no-audit && npm run typecheck && npm run build
+	cd webui/app && $(NPM_INSTALL) && npm run typecheck && npm run build
 	@if [ ! -f webui/panel/dist/app/index.html ]; then \
 		echo "make web: dist/app/index.html missing — the build did not land"; exit 1; fi
 
@@ -46,7 +58,16 @@ web:
 # installed). Separate from `make test` because it needs node, which the Go
 # gate does not: CI runs it wherever `make web` runs.
 web-test:
-	cd webui/app && npm install --no-fund --no-audit && npm run typecheck && npm test
+	cd webui/app && $(NPM_INSTALL) && npm run typecheck && npm test
+
+# The web leg exactly as the CI gate runs it: one install, then typecheck,
+# unit tests and the production build. `web-test` and `web` remain available on
+# their own, but running those two back to back installs twice and typechecks
+# twice for the same answer.
+web-gate:
+	cd webui/app && $(NPM_INSTALL) && npm run typecheck && npm test && npm run build
+	@if [ ! -f webui/panel/dist/app/index.html ]; then \
+		echo "web-gate: dist/app/index.html missing — the build did not land"; exit 1; fi
 
 # Web panel sidecar with the embedded console. `make web` first for a real UI;
 # without it the binary embeds the committed placeholder.
@@ -114,6 +135,19 @@ package:
 adapter-test:
 	python3 tests/adapter_contract_test.py
 
+# TUI mouse-ownership check. It needs its own leg because the regression it
+# catches is invisible to unit tests: it is about the bytes the binary writes to
+# the tty (whether it asks for cell-motion reporting, which is what silently
+# kills drag-select / double-click / copy). Drives the real binary in a pty, so
+# it is skipped where there is no pty — loud, not silent, and CI runs it for
+# real on Linux.
+tui-pty-test: build
+	@if [ "$$(uname -s)" = "Darwin" ] || [ "$$(uname -s)" = "Linux" ]; then \
+		PANDA_BIN=$(BIN) python3 scripts/tui-mouse-pty-check.py; \
+	else \
+		echo "tui-pty-test: skipped — this platform has no pty (run it on macOS/Linux)"; \
+	fi
+
 test: adapter-test
 	$(GO) test ./...
 
@@ -126,6 +160,7 @@ fmt:
 	$(GO) fmt ./...
 
 fmt-check:
+	@git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "fmt-check: not a git worktree, so 'git ls-files' has nothing to check"; exit 1; }
 	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
 	if [ -n "$$unformatted" ]; then \
 		echo "gofmt needed:"; echo "$$unformatted"; exit 1; \
@@ -149,29 +184,38 @@ race-focused:
 # 反馈，避免把机器时间浪费在明知会失败的昂贵步骤上。
 #
 # gate  — Go-only pipeline（后端特性分支使用）
-#   1. fmt-check   (go fmt 格式校验，毫秒级，成本最低)
-#   2. vet         (go vet 静态语义检查，秒级)
-#   3. build       (实际编译 go build ./...，验证编译通过)
-#   4. test        (go test ./... 单元测试，十秒级)
-#   5. race        (-race 竞态检测，分钟级，最昂贵，最后才跑)
+#   1. fmt-check    (go fmt 格式校验，毫秒级，成本最低)
+#   2. vet          (go vet 静态语义检查，秒级)
+#   3. build        (实际编译 go build ./...，验证编译通过)
+#   4. adapter-test (Python adapter 黑盒契约，秒级)
+#   5. test         (go test ./... 单元测试，十秒级)
+#   6. race-focused (-race 竞态检测，只覆盖并发热点包，最昂贵，最后才跑)
 #
-# gate-all — 全栈 pipeline（CI / 前端改动 / 合并前使用）
+# gate-all — 全栈 pipeline（前端改动 / 合并前自检）
 #   在 gate 之上追加：
-#   6. web-test    (npm typecheck + npm test，TS 类型 + 前端单测)
-#   7. web         (npm build，vite 生产构建，验证 embed 产物完整)
+#   7. web-gate     (npm ci + typecheck + 前端单测 + vite 生产构建，验证 embed 产物)
+#   8. tui-pty-test (真实 pty 下的鼠标所有权契约)
+#
+# 与 CI 的对应关系：
+#   gate.yml 的每个 job 都必须能在这里跑出来，否则一个只在 CI 里存在的
+#   检查就成了本地不可复现的黑盒。race 腿两边都必须是 race-focused —
+#   全量 `make race` 是发版前的超集检查，不是合并门禁（它把绝大部分时间
+#   花在本来就不共享状态的包上，换不来任何额外检出）。
 #
 # 说明：
 #   - fmt-check 在 build 目标中也被前置依赖，所以 `make build` 本身
-#     就不会放过未格式化的代码；这里单独列出是为 CI 报告更清晰。
+#     就不会放过未格式化的代码；这里单独列出是为报告更清晰。
 #   - CGO_ENABLED=0 默认静态化，避免发布二进制出现 libc 依赖。
 #   - 版本号从 internal/version/version.go 提取，禁止在 Makefile 中
 #     写死 VERSION 默认值，避免版本漂移。
 # ============================================================================
-gate: fmt-check vet build adapter-test test race
+gate: fmt-check vet build adapter-test test race-focused
 
-# gate-all is gate + the node/web pipeline (typecheck + ui build + web
-# tests). CI uses gate-all; a backend-only feature branch can use gate.
-gate-all: gate web-test web
+# gate-all is gate + the web pipeline (one install, then typecheck + ui build +
+# web tests) + the TUI pty check. CI runs these as separate jobs (see
+# .github/workflows/gate.yml); gate-all is the local equivalent for a pre-merge
+# pass.
+gate-all: gate web-gate tui-pty-test
 
 # Regenerate the PWA icon set (webui/app/public/icons/) from the stdlib-only generator.
 icons:

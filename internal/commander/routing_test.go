@@ -163,6 +163,44 @@ func TestExecAgentActiveFailoverOnExecutionError(t *testing.T) {
 	}
 }
 
+// TestExecAgentActiveFailoverOnLongErrorOutput ensures an agent that fails with a long
+// error or crash log (>= 300 bytes) does not falsely masquerade as OK, and instead
+// triggers active failover to the next available agent.
+func TestExecAgentActiveFailoverOnLongErrorOutput(t *testing.T) {
+	card := ledger.Card{
+		Device:        "test-node",
+		ResourceClass: "Standard",
+		Agents: map[string]ledger.Agent{
+			"primary": {Adapter: "opencode.py", Capabilities: []string{"code:modify"}, CostTier: "low", Tier: 1},
+			"backup":  {Adapter: "claude_code.py", Capabilities: []string{"code:modify"}, CostTier: "high", Tier: 1},
+		},
+	}
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+
+	longCrashDump := strings.Repeat("Error: certificate verification error at TLSSocket.onConnectSecure\n", 10)
+	var ran []string
+	r.SetAdapterRunner(func(_ context.Context, adapter, _, _ string) AgentResult {
+		ran = append(ran, adapter)
+		if adapter == "opencode.py" {
+			return AgentResult{OK: false, Result: longCrashDump, ExitCode: 1}
+		}
+		return AgentResult{OK: true, Result: "recovered via backup agent", ExitCode: 0}
+	})
+
+	plan, err := r.Route([]string{"code:modify"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	res := r.Execute(context.Background(), plan, "fix SSL", "", false)
+	if !res.OK || res.Agent != "backup" {
+		t.Fatalf("failover on long crash dump result = %+v, want ok via backup", res)
+	}
+	if len(ran) != 2 || ran[0] != "opencode.py" || ran[1] != "claude_code.py" {
+		t.Fatalf("ran = %v, want [opencode.py claude_code.py]", ran)
+	}
+}
+
 // TestExecAgentPerTaskToolsPolicyWins: a per-task tools policy set on the
 // execution context (task spec override) reaches the adapter request, and the
 // router's global policy must not overwrite it.

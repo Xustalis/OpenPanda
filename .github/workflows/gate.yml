@@ -6,19 +6,35 @@ name: Gate
 # without ever building. This is the enforcement half of that promise.
 #
 # The checks run as independent parallel jobs instead of one serial `make
-# gate`: feedback lands as fast as the slowest single leg instead of the sum
+# gate-all`: feedback lands as fast as the slowest single leg instead of the sum
 # of all of them, and a fmt failure no longer waits behind a compile. The
 # race leg is scoped to the concurrency-hot packages (`make race-focused`) —
 # the full-suite race was the cost driver of the old serial gate while every
 # goroutine the detector exists for lives in core/commander/bus/storage.
+#
+# Every leg here is also reachable locally through `make gate-all`; keep the two
+# in step, or a check that only ever runs in CI becomes unreproducible.
+#
+# Deliberately no `paths-ignore` on the pull_request trigger. Skipping a
+# workflow on a docs-only diff is only safe while this gate stays advisory: the
+# moment a skipped job is listed as a required status check, GitHub leaves it
+# "Expected" forever and the pull request can never be merged. A three-minute
+# gate on a README change is cheaper than that failure mode, so the gate always
+# runs.
 
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
-  group: gate-${{ github.ref }}
+  # Keyed by event as well as ref so a manual re-run cannot cancel the
+  # push-triggered run for the same commit: a cancelled Gate is not a green
+  # Gate, and the release preflight reads this workflow's conclusion for that
+  # exact commit. Push runs still supersede each other, which is the point of
+  # cancel-in-progress.
+  group: gate-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:
@@ -32,10 +48,20 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.x'
+          # The toolchain is declared once, in go.mod. A floating '1.26.x' here
+          # resolved to whatever patch release the runner happened to fetch, so
+          # CI and every local build could compile the same commit with
+          # different compilers — and the stdlib's own vulnerability status
+          # changed underneath the project without a commit.
+          go-version-file: go.mod
           cache: true
       - name: gofmt
         run: make fmt-check
+      # go.mod/go.sum must be exactly what `go mod tidy` produces: an untidy
+      # module graph is how a dependency enters the build without ever
+      # appearing in a reviewed diff.
+      - name: Module tidiness
+        run: go mod tidy -diff
       - name: go vet
         run: make vet
       # Doc-drift guard: the retired deepseek-chat alias must not linger in
@@ -51,10 +77,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.x'
+          go-version-file: go.mod
           cache: true
-      - name: Build
-        run: go build ./...
+      # No separate `go build ./...` step: `go test ./...` compiles the same
+      # package graph before it runs anything, so the build was a second full
+      # compile per run that could only ever report what the test step was
+      # about to report anyway.
       - name: Test
         run: go test ./...
 
@@ -74,6 +102,27 @@ jobs:
       - name: Adapter contract tests
         run: make adapter-test
 
+  # The TUI's mouse-ownership contract lives in the bytes the binary writes to
+  # the tty, which no unit test can see: whether it asks the terminal for
+  # cell-motion reporting (that is what silently kills drag-select, double-click
+  # and copy) and whether the alternate-scroll flag follows a ctrl+t round trip
+  # (miss the re-arm and the wheel is dead after the switch back). Drives the
+  # real binary in a pty. Needs both Go and python3, so it is its own leg.
+  tui-pty:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: TUI mouse ownership (pty)
+        run: make tui-pty-test
+
   race:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -81,7 +130,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.x'
+          go-version-file: go.mod
           cache: true
       # The race detector over the packages that actually share state across
       # goroutines and connections. `make race` (full suite) stays available
@@ -106,6 +155,9 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: webui/app/package-lock.json
+      # npm ci, not npm install: this leg answers "does this tree build", and
+      # `npm install` is free to resolve a different dependency tree than the
+      # lockfile everything else is pinned to.
       - name: Install
         run: npm ci --no-fund --no-audit
       - name: Typecheck
@@ -132,8 +184,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.x'
+          go-version-file: go.mod
           cache: true
+      # Kept as its own step here, unlike in the Linux `test` job: on these two
+      # OSes a compile-only break is worth separating from a test failure,
+      # because the failure output that follows it is otherwise easy to
+      # misread as a flaky test rather than a platform-specific build error.
       - name: Build
         run: go build ./...
       - name: Test

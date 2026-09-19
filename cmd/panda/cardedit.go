@@ -27,6 +27,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/cardmut"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
@@ -55,13 +56,21 @@ var cardMutDashFlags = func() map[string]bool {
 // cardVerb splits `card native add id --command x` into the level-2 verb
 // ("add") and the rest of argv with flags hoisted ahead of positionals — the
 // same contract cardSubcommand provides one level up.
+//
+// The flag table here must be cardMutDashFlags, not cardMutValueFlags: it is
+// the one keyed by the tokens reorderFlags emits (with dashes), and it includes
+// the global --config/--card. Looking up the dash-less table left "--card" and
+// its path value unrecognised, so hoisted argv read as ["--card", <path>,
+// <verb>, …] and the *path* was taken for the verb — every
+// `panda card agent|native|manual <verb> --card <path>` landed on the usage
+// line instead of doing the work.
 func cardVerb(args []string) (string, []string) {
 	verb := ""
 	verbIdx := -1
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if strings.HasPrefix(a, "-") {
-			if !strings.Contains(a, "=") && cardMutValueFlags[strings.TrimLeft(a, "-")] {
+			if !strings.Contains(a, "=") && cardMutDashFlags[a] {
 				i++ // this flag's value is not the verb
 			}
 			continue
@@ -138,7 +147,10 @@ func runCardAgent(args []string) {
 	bestAt := fs.String("best-at", "", "comma-separated descriptions of what it is best at")
 	notFor := fs.String("not-for", "", "comma-separated things it should not be routed")
 	costTier := fs.String("cost-tier", "", "cost tier hint (e.g. low|medium|high)")
-	tier := fs.Int("tier", 2, "1=reversible | 2=irreversible, needs approval (default)")
+	// tier defaults to auto-approved, matching what a generated card declares
+	// (agents.TierAutoApproved) and what commander.Route does for an undeclared
+	// tier. The gate is opt-in: pass --tier 2 for an agent that must ask first.
+	tier := fs.Int("tier", agents.TierAutoApproved, "1=reversible (default) | 2=irreversible, needs approval")
 	fs.Parse(rest)
 	positional := fs.Args()
 	path := cardTargetPath(*cardFlag)

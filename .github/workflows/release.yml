@@ -11,9 +11,65 @@ concurrency:
 
 permissions:
   contents: write
+  # Needed by the preflight job to read the Gate workflow's runs for this
+  # commit. Declaring `contents` alone would set everything else to none.
+  actions: read
 
 jobs:
+  # A tag push and a main-branch push are two independent events with no
+  # ordering between them, so nothing stopped a tag on a red tree from
+  # publishing. The previous shape closed that hole by re-running the whole
+  # gate here — build plus the full Go test suite — which was both a second
+  # full CI run per release and a weaker promise than it looked: a release
+  # could still ship if the duplicate run happened to pass while the real gate
+  # failed, and the two could disagree because nothing tied them together.
+  #
+  # Asking Gate for its verdict on this exact commit is strictly stronger and
+  # nearly free: the release either waits for that run to finish green or
+  # refuses to publish.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Require a green Gate for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="$GITHUB_SHA"
+          deadline=$(( SECONDS + 900 ))
+          while :; do
+            read -r status conclusion <<<"$(
+              gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/gate.yml/runs?head_sha=${sha}&event=push&per_page=1" \
+                --jq '(.workflow_runs[0] // {}) | "\(.status // "missing") \(.conclusion // "-")"'
+            )"
+            case "$status" in
+              completed)
+                if [ "$conclusion" = "success" ]; then
+                  echo "Gate is green for ${sha}"
+                  exit 0
+                fi
+                echo "Gate concluded '${conclusion}' for ${sha} — refusing to publish" >&2
+                exit 1
+                ;;
+              missing)
+                echo "No push-triggered Gate run exists for ${sha}." >&2
+                echo "The tag must point at a commit whose Gate run on main is still within the runs retention window." >&2
+                exit 1
+                ;;
+              *)
+                echo "Gate for ${sha} is ${status}; waiting for it to finish"
+                ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "Timed out after 15m waiting for the Gate run of ${sha}" >&2
+              exit 1
+            fi
+            sleep 20
+          done
+
   release:
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -25,7 +81,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.x'
+          go-version-file: go.mod
           cache: true
 
       - name: Set up Node
@@ -35,15 +91,9 @@ jobs:
           cache: npm
           cache-dependency-path: webui/app/package-lock.json
 
-      # A tag push triggers this workflow independently of the Gate workflow,
-      # so without this leg a tag on a red tree would still publish. Building
-      # and testing here closes that hole: the release refuses to package
-      # unless the exact tagged commit compiles and passes its test suite.
-      - name: Verify the tagged commit (build + test)
-        run: |
-          go build ./...
-          go test ./...
-
+      # Nothing here re-compiles or re-tests the tagged commit: preflight
+      # already established that Gate built and tested precisely this SHA, and
+      # `make package` cross-compiles it anyway.
       - name: Build web console (embedded into binary)
         run: make web
 
@@ -123,14 +173,31 @@ jobs:
           # changelog body — the body carries the narrative, this carries the
           # commit-by-commit archaeology and the contributor list.
           generate_release_notes: true
+          # A hyphenated tag is a pre-release (v0.0.8-preview, v0.0.8-alpha,
+          # v1.0.0-rc1); a bare vX.Y.Z is not. This has to be explicit: the
+          # action does not infer it from the tag name, and a release that is
+          # *not* marked pre-release becomes the repository's "Latest" — which
+          # is the release `api.github.com/repos/.../releases/latest` returns,
+          # i.e. what scripts/install.sh and install.ps1 hand to every new
+          # user. Shipping a preview there would move the whole install
+          # channel onto an untested build. Marking it pre-release keeps
+          # /releases/latest on the last stable tag while the preview stays
+          # downloadable by explicit version.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             dist/panda-*.tar.gz
             dist/panda-*.zip
             dist/checksums.txt
             dist/openpanda.rb
 
+      # Homebrew has no pre-release concept: the tap is one formula, so
+      # whatever lands in Formula/openpanda.rb is what `brew install
+      # Xustalis/openpanda/openpanda` installs. Writing a preview version there
+      # would move the brew channel off stable even though the GitHub release
+      # is correctly marked pre-release, so the tap only ever tracks bare
+      # vX.Y.Z tags.
       - name: Update Homebrew tap
-        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' && !contains(github.ref_name, '-') }}
         env:
           GH_TOKEN: ${{ env.HOMEBREW_TAP_TOKEN }}
         run: |
