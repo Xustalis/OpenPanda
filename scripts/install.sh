@@ -3,7 +3,7 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh
-#   sh install.sh --version 0.0.3            # pin a release
+#   sh install.sh --version 0.0.7            # pin a release (default: newest stable)
 #   sh install.sh --prefix /opt/openpanda    # custom install dir
 #   sh install.sh --yes                      # also register auto-start (no prompt)
 #   sh install.sh --no-service               # never touch auto-start
@@ -11,6 +11,11 @@
 # Env:
 #   GITHUB_TOKEN      optional; sent as `Authorization: Bearer` on GitHub API /
 #                     release-download requests (avoids the 60 req/h anonymous limit)
+#   OPENPANDA_VERSION      default version when --version is not given
+#   OPENPANDA_PREFIX       default install dir when --prefix is not given
+#   OPENPANDA_REPO_URL     override the source repository
+#   OPENPANDA_RELEASE_API  override the "latest release" API endpoint
+#   OPENPANDA_RELEASE_BASE override the release download base URL
 #
 # Installs the `panda` binary and its agent adapters (adapters/*.py) into
 #   $OPENPANDA_PREFIX  (default: ${XDG_DATA_HOME:-~/.local/share}/openpanda)
@@ -43,6 +48,17 @@ usage() {
 VERSION="${OPENPANDA_VERSION:-latest}"
 PREFIX="${OPENPANDA_PREFIX:-}"
 SERVICE_MODE="ask"
+
+# Fail here, not three functions later: without a downloader the version
+# lookup below simply returns nothing and the user sees "cannot resolve the
+# latest version (network problem?)", which sends them debugging the wrong
+# thing.
+if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    die "需要 curl 或 wget 才能下载安装包"
+fi
+if ! command -v tar >/dev/null 2>&1; then
+    die "需要 tar 才能解包"
+fi
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -134,7 +150,12 @@ case "$ARCH" in
 esac
 
 REPO="${OPENPANDA_REPO_URL:-https://github.com/Xustalis/OpenPanda}"
-API="${OPENPANDA_RELEASE_API:-https://api.github.com/repos/Xustalis/OpenPanda/releases/latest}"
+# The API endpoint has to follow OPENPANDA_REPO_URL: overriding the repository
+# to a fork or a mirror while the version lookup still queried upstream would
+# resolve a tag that the download base does not serve.
+REPO_SLUG="${REPO#https://github.com/}"
+REPO_SLUG="${REPO_SLUG%/}"
+API="${OPENPANDA_RELEASE_API:-https://api.github.com/repos/${REPO_SLUG}/releases/latest}"
 
 # ── Resolve version ─────────────────────────────────────────────────────────
 if [ "$VERSION" = "latest" ]; then
@@ -290,9 +311,17 @@ register_service() {
 </dict>
 </plist>
 EOF
+        # Activation is best effort. `launchctl load` legitimately fails on a
+        # headless/CI host and inside some SSH sessions; the plist is written
+        # either way, so aborting here (`set -e`) would report a failed install
+        # for an install that actually succeeded — and would do it after the
+        # binary, symlink and PATH block were already in place.
         launchctl unload "$launch_agent" 2>/dev/null || true
-        launchctl load "$launch_agent"
-        ok "已注册登录自启（LaunchAgent）。手动控制：\n     launchctl unload ~/Library/LaunchAgents/com.openpanda.node.plist   # 停用\n     launchctl load   ~/Library/LaunchAgents/com.openpanda.node.plist   # 启用"
+        if launchctl load "$launch_agent" 2>/dev/null; then
+            ok "已注册登录自启（LaunchAgent）。手动控制：\n     launchctl unload ~/Library/LaunchAgents/com.openpanda.node.plist   # 停用\n     launchctl load   ~/Library/LaunchAgents/com.openpanda.node.plist   # 启用"
+        else
+            warn "已写入 $launch_agent，但 launchctl 未能加载它（无图形会话或权限不足）。\n     手动启用： launchctl load ~/Library/LaunchAgents/com.openpanda.node.plist"
+        fi
     else
         unit_dir="$HOME/.config/systemd/user"
         mkdir -p "$unit_dir"
@@ -312,12 +341,20 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 EOF
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl --user daemon-reload
-            systemctl --user enable --now openpanda.service
+        # Enabling is best effort. `systemctl --user` needs a user D-Bus
+        # session, which a headless server (plain SSH, no lingering session)
+        # does not have: it fails with "Failed to connect to bus". The unit
+        # file is written regardless, so this must warn rather than abort —
+        # otherwise `--yes` on exactly the machines this node is built for
+        # ends in a non-zero exit and no "安装完成", right after a successful
+        # install.
+        if ! command -v systemctl >/dev/null 2>&1; then
+            warn "未找到 systemctl，已写入 $unit_dir/openpanda.service（请手动启用）"
+        elif systemctl --user daemon-reload 2>/dev/null \
+            && systemctl --user enable --now openpanda.service 2>/dev/null; then
             ok "已注册登录自启（systemd --user）。手动控制：\n     systemctl --user disable --now openpanda.service   # 停用\n     systemctl --user enable  --now openpanda.service   # 启用"
         else
-            warn "未找到 systemctl，已写入 $unit_dir/openpanda.service（请手动启用）"
+            warn "已写入 $unit_dir/openpanda.service，但 systemctl --user 无法启用它\n     （当前会话没有用户 D-Bus；无桌面/纯 SSH 服务器上属正常）。\n     手动启用： systemctl --user enable --now openpanda.service\n     免登录常驻： loginctl enable-linger $USER"
         fi
     fi
     if [ "$HAVE_CONFIG" = 0 ]; then

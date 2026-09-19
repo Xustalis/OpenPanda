@@ -12,17 +12,26 @@
 #
 # Run `make web` first so the embedded web console is baked in.
 #
-# Usage: scripts/package.sh [version]   (default: $VERSION or 0.0.3)
+# Usage: scripts/package.sh [version]   (default: $VERSION or 0.0.7)
+#
+# Env:
+#   OPENPANDA_PACKAGE_TARGETS  space-separated "os-arch" list to build instead
+#                              of all six (e.g. "linux-amd64"). Used by the
+#                              installer tests, which only need the host's own
+#                              archive and should not pay for five cross
+#                              compiles they will never execute.
 
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${1:-${VERSION:-0.0.3}}"
+VERSION="${1:-${VERSION:-0.0.7}}"
 VERSION="${VERSION#v}"
 VERSION_PKG="github.com/Xustalis/OpenPanda/internal/version"
 LDFLAGS="-s -w -X ${VERSION_PKG}.Version=${VERSION}"
+
+TARGETS="${OPENPANDA_PACKAGE_TARGETS:-darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-arm64}"
 
 DIST="${OPENPANDA_DIST_DIR:-$ROOT/dist}"
 STAGE="$DIST/package"
@@ -66,15 +75,35 @@ build() {
     cp LICENSE "$dir/"
 }
 
-build darwin amd64 panda
-build darwin arm64 panda
-build linux  amd64 panda
-build linux  arm64 panda
-build windows amd64 panda.exe
-build windows arm64 panda.exe
+# Build only the requested targets. Filtering here rather than at the archive
+# step is the whole point of OPENPANDA_PACKAGE_TARGETS: skipping a compile is
+# where the time is saved.
+wanted() {
+    for t in $TARGETS; do
+        [ "$t" = "$1" ] && return 0
+    done
+    return 1
+}
 
-for osarch in darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-arm64; do
+want_build() { # <os> <arch> <exe>
+    wanted "$1-$2" && build "$1" "$2" "$3"
+    return 0
+}
+
+want_build darwin amd64 panda
+want_build darwin arm64 panda
+want_build linux  amd64 panda
+want_build linux  arm64 panda
+want_build windows amd64 panda.exe
+want_build windows arm64 panda.exe
+
+for osarch in $TARGETS; do
+    case "$osarch" in
+        darwin-amd64|darwin-arm64|linux-amd64|linux-arm64|windows-amd64|windows-arm64) ;;
+        *) echo "package.sh: unsupported target '$osarch'" >&2; exit 1 ;;
+    esac
     src="$STAGE/$osarch/openpanda"
+    [ -d "$src" ] || { echo "package.sh: $osarch was not staged" >&2; exit 1; }
     rel="panda-$VERSION-$osarch"
     case "$osarch" in
     windows-*)

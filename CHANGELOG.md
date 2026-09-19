@@ -119,7 +119,7 @@ The transition to a formal open-source project: OpenPanda evolves from an experi
 
 - **The `taskq_create` management tool is removed** — task creation is now exclusively the entry model's job (task JSON output, executed immediately by the scheduler) or comes from the board/external tools; the queue tools (`taskq_list/show/cancel/priority/move`) remain for managing the backlog. Agents scripted to call `taskq_create` should emit a task or use the board instead.
 
-## \[0.0.7] - 2026-08-31
+## [0.0.7] - 2026-08-31
 
 The usability release: the capability card — the file that tells the scheduler what this node can do — is now editable from every surface (CLI, REPL, TUI, and the web console) without restarting the daemon; adding a second device is a product flow instead of a config-file puzzle; and every task outcome now gets a human-readable summary so the user sees what happened instead of a wall of raw stdout.
 
@@ -205,7 +205,7 @@ The usability release: the capability card — the file that tells the scheduler
 
 - **Per-agent adapter tuning** — the remaining agent adapters each gained CLI-specific invocation handling instead of one generic path (24df1c1).
 
-## \[0.0.6] - 2026-08-27
+## [0.0.6] - 2026-08-27
 
 The cross-device compute release takes shape: a request that needs different machines for different steps is now a first-class plan whose stages run where the hardware is, and both surfaces — the CLI and the web console — gained the presentation layer they lacked: live feedback while an ask converges, real Markdown in the browser, and the input editor a daily driver needs.
 
@@ -243,7 +243,7 @@ The cross-device compute release takes shape: a request that needs different mac
 
 - **The REPL opens in under a second, not after the peer dial timeout** — interactive startup dialed every configured peer serially before the banner and then waited for them to settle: an offline peer burned the dialer's full 10s timeout as dead air before the first prompt. The REPL, `panda session`, and `panda voice` now dial peers in the background (an offline peer is routine in a long-lived session, and its failure no longer prints WARN lines mid-keystroke), and one-shot `panda ask` dials peers concurrently so an unreachable peer stops gating a reachable one.
 
-## \[0.0.5] - 2026-08-25
+## [0.0.5] - 2026-08-25
 
 The three-device lab patch: the first real macOS + OrangePi + Windows cluster — installed from the public installers, linked over LAN, driven end-to-end — exposed that queued tasks never left their origin node, tier-2 consent died at the delegation boundary, and a locked-out agent CLI could attract routing and hang for minutes. Five commits, all verified on that hardware.
 
@@ -271,7 +271,7 @@ The three-device lab patch: the first real macOS + OrangePi + Windows cluster �
 
 - **Homebrew tap push authenticated** — the release workflow's tap-update step failed with `could not read Username` when the job token lacked the grant; the push URL now embeds the token (6868a63).
 
-## \[0.0.4] - 2026-08-25
+## [0.0.4] - 2026-08-25
 
 The distributed-node release, GA. The engine models physical vs VM nodes, guards
 singleton identity per host, ships hardening + contract tests for the adapter
@@ -417,7 +417,7 @@ working directory** and the first public release with end-to-end docs.
   node config table, and a `panda nodes` command mention to surface the new
   visibility surface.
 
-## \[0.0.3] - 2026-08-23
+## [0.0.3] - 2026-08-23
 
 ### Added
 
@@ -443,7 +443,7 @@ working directory** and the first public release with end-to-end docs.
 
 - **Multi-line** **`--version`** **banner** (e.g. Hermes) no longer pollutes the one-line agent table — version output is truncated to its first line in both the CLI and the web settings API.
 
-## \[0.0.2] - 2026-08-22
+## [0.0.2] - 2026-08-22
 
 The CLI-first release: the kernel redesign lands (stages A–C) — every web capability gains a CLI peer, the REPL becomes the product's front door, and the CLI gains conversation memory, live task reporting, and per-sink Markdown rendering.
 
@@ -521,7 +521,7 @@ The CLI-first release: the kernel redesign lands (stages A–C) — every web ca
 
 - **Bare** **`panda`** **now opens the interactive REPL** instead of the headless daemon; the kernel moved to an explicit `panda daemon` subcommand. The systemd unit, LaunchAgent, Windows launchers, and Makefile run targets were updated — deployments invoking `panda` directly must switch to `panda daemon` (f0a1b9f).
 
-## \[0.0.1] - 2026-08-19
+## [0.0.1] - 2026-08-19
 
 Initial open-source pre-release: the full kernel feature set (daemon, CLI, P2P delegation, audit chain, migrations, scheduler, SSE panel, embedded web console, interactive REPL, cross-platform install lifecycle) plus the assistant layer (agent senses, reminders, MCP, worktree chat sessions, kanban queue board). All gates green throughout: build / vet / full tests / `-race` / cross-compile.
 

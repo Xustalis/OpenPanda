@@ -4,7 +4,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
-[![Release: v0.0.8](https://img.shields.io/badge/release-v0.0.8-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
+[![Release](https://img.shields.io/github/v/release/Xustalis/OpenPanda?label=release&color=blue)](https://github.com/Xustalis/OpenPanda/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
@@ -93,7 +93,7 @@ OpenPanda 将终端 AI 编程助手（Claude Code、OpenAI Codex、Grok Build、
 
 ***
 
-## � 安装
+## 📦 安装
 
 **macOS / Linux：**
 
@@ -178,7 +178,7 @@ panda ask "查看系统状态并总结待办任务"  # 直接发一条指令
 
 | 版本               | 主题                                        |
 | ---------------- | ----------------------------------------- |
-| **v0.0.8**（当前基线） | 单机多 Agent 协同完整可用：意图分类、任务派发、监督循环、故障转移、分级审批 |
+| **v0.0.8-preview**（当前基线） | 单机多 Agent 协同完整可用：意图分类、任务派发、监督循环、故障转移、分级审批 |
 | **v0.0.9**       | 调优 Agent 控制能力：监督判定、Agent 路由稳定性、执行轨迹透明度    |
 | **v0.0.10**      | 重点完成多设备协同控制：跨节点委派、租约保护、断点续跑的全面打磨与实测       |
 | **v0.0.x（后续）**   | 稳定性、性能与边缘场景调优                             |
