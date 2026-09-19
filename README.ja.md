@@ -6,7 +6,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
-[![Release: v0.0.8](https://img.shields.io/badge/release-v0.0.8-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
+[![Release](https://img.shields.io/github/v/release/Xustalis/OpenPanda?label=release&color=blue)](https://github.com/Xustalis/OpenPanda/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
@@ -152,6 +152,26 @@ MacBook と Linux ワークステーションを連携させる場合：
 | `panda skill` | ワークフロースキルの閲覧・インポート・インストール（Hub / URL / ファイル） |
 | `panda doctor` | PATH、設定、アダプター、データベースのヘルスチェック |
 | `panda version` | 現在のバイナリバージョンを表示 |
+
+---
+
+## 🗺️ ロードマップ
+
+| バージョン | テーマ |
+|---|---|
+| **v0.0.8-preview**（現在のベースライン） | 単一マシンでのマルチエージェント協調が完全に実用可能：意図分類、タスク派遣、監督ループ、フェイルオーバー、段階的承認 |
+| **v0.0.9** | エージェント制御の精度向上：監督判定、エージェントルーティングの安定性、実行の透明性 |
+| **v0.0.10** | マルチデバイス協調を主役に：クロスノード委譲、リース保護、再開可能な実行——堅牢化と実機検証まで |
+| **v0.0.x（以降）** | 安定性・性能・エッジケースの調整 |
+| **v0.1.0** | デスクトップ能力と、より強力な操作・管理機能——商用品質 |
+
+---
+
+## 🔭 ビジョン
+
+OpenPanda のアーキテクチャは、大規模な異種クラスタのために設計されています。ドローン群の制御、深宇宙衛星コンステレーションの通信スケジューリング、自動運転車隊の協調。これらのシナリオに共通する根本的な問題は一つです——**各ノードの計算能力も機能も担当する仕事も異なるのに、それらすべてをまとめて調整し、スケジューリングし、監督する必要がある。**
+
+現在の OpenPanda は、開発者のデバイスとエージェントのために動きます。長期的な目標は、同じオーケストレーション・カーネルをクラスタ規模の自律ノードへ広げることです。
 
 ---
 

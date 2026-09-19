@@ -4,7 +4,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
-[![Release: v0.0.8](https://img.shields.io/badge/release-v0.0.8-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
+[![Release](https://img.shields.io/github/v/release/Xustalis/OpenPanda?label=release&color=blue)](https://github.com/Xustalis/OpenPanda/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
@@ -162,7 +162,7 @@ To connect a second device (preview capability): run `panda pair` on device A to
 
 | Version | Theme |
 |---|---|
-| **v0.0.8** (current baseline) | Single-machine multi-agent orchestration, fully usable: intent classification, dispatch, supervision loop, failover, tiered approval |
+| **v0.0.8-preview** (current baseline) | Single-machine multi-agent orchestration, fully usable: intent classification, dispatch, supervision loop, failover, tiered approval |
 | **v0.0.9** | Sharper agent control: supervision verdicts, agent routing stability, execution transparency |
 | **v0.0.10** | Multi-device collaboration as the headline: cross-node delegation, lease protection, resumable execution — hardened and field-tested |
 | **v0.0.x (beyond)** | Stability, performance, and edge-case tuning |

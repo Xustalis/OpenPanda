@@ -170,6 +170,40 @@ jobs:
       - name: Verify embed output
         run: test -f ../panel/dist/app/index.html
 
+  # The installers were the last untested surface. installers.yml builds and
+  # checksum-verifies the archives but never *runs* install.sh / install.ps1,
+  # and the cross-platform job only compiles and tests Go — so every
+  # platform-only branch in an installer (arch mapping, rc-file / registry
+  # PATH persistence, service-registration failure handling, checksum refusal)
+  # shipped unexecuted, and a PowerShell parse error would have been found by
+  # the first user rather than by CI.
+  #
+  # The tests stage a release archive locally and address it through file://
+  # URLs, so they need no published release and no network, and run on both
+  # platforms they cover. They deliberately do not build the web console: the
+  # installer only ever runs `panda version`, and `go build` already succeeds
+  # against the committed dist placeholder.
+  installers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Installer end-to-end (POSIX)
+        if: runner.os != 'Windows'
+        run: sh scripts/test-installers.sh
+      - name: Installer end-to-end (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-installers.ps1
+
   # The daemon is expected to run on Windows and macOS nodes, so the test suite
   # has to pass there too — a Windows-only path breaking is exactly the class of
   # bug a Linux-only gate cannot see.

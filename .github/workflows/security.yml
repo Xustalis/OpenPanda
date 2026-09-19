@@ -40,3 +40,20 @@ jobs:
       # report yesterday's world.
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # The two channels that point outside this repository and can therefore rot
+  # without a commit: the Homebrew tap (a separate repo, pinned by version and
+  # sha256) and nothing else — the installers resolve /releases/latest at run
+  # time, so they cannot go stale the same way.
+  #
+  # This is here rather than in the gate for the same reason govulncheck is:
+  # it answers to remote state. It also exits 0 with a SKIP line when the
+  # GitHub API is rate-limited, so a scheduled run does not go red for a
+  # reason that has nothing to do with the project.
+  published-channels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Homebrew tap still points at a real release
+        run: sh scripts/check-homebrew-tap.sh

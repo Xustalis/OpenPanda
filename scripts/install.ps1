@@ -4,22 +4,46 @@
 #   Set-ExecutionPolicy -Scope Process Bypass
 #   irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 | iex
 # or download and run:
-#   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.0.3 -Yes
+#   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.0.7 -Yes
+#   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Prefix D:\openpanda
+#
+# Env:
+#   OPENPANDA_VERSION      default version when -Version is not given
+#   OPENPANDA_PREFIX       default install dir when -Prefix is not given
+#   OPENPANDA_REPO_URL     override the source repository
+#   OPENPANDA_RELEASE_API  override the "latest release" API endpoint
+#   OPENPANDA_RELEASE_BASE override the release download base URL
 #
 # Installs panda.exe + adapters into %LOCALAPPDATA%\OpenPanda, adds its bin
 # dir to the user PATH (persistent), and when run interactively asks
 # whether to register a logon scheduled task that runs `panda daemon` in the
-# background. Mirrors the UNIX installer (scripts/install.sh).
+# background. Mirrors the UNIX installer (scripts/install.sh) option for
+# option, including the environment-variable defaults.
 
 [CmdletBinding()]
 param(
-    [string]$Version = "latest",
+    [string]$Version = "",
     [string]$Prefix = "",
     [switch]$Yes,
     [switch]$NoService
 )
 
 $ErrorActionPreference = "Stop"
+
+# Windows PowerShell 5.1 renders a progress bar for every Invoke-WebRequest
+# byte unless this is off; on a ~30 MB archive that is the difference between
+# seconds and minutes, and it floods the console the script is also trying to
+# print into.
+$ProgressPreference = "SilentlyContinue"
+
+# Environment defaults, matching scripts/install.sh's OPENPANDA_VERSION /
+# OPENPANDA_PREFIX. A parameter always wins over the variable.
+if (-not $Version) {
+    $Version = if ($env:OPENPANDA_VERSION) { $env:OPENPANDA_VERSION } else { "latest" }
+}
+if (-not $Prefix -and $env:OPENPANDA_PREFIX) {
+    $Prefix = $env:OPENPANDA_PREFIX
+}
 
 # Windows PowerShell 5.1 may default to TLS 1.0/1.1, which GitHub rejects.
 try {
@@ -53,7 +77,11 @@ function Get-Json([string]$Url) {
         & $script:CurlExe -fsSL --retry 3 --connect-timeout 20 -o $tmp $Url
         if ($LASTEXITCODE -eq 0) {
             try { return (Get-Content -Raw $tmp | ConvertFrom-Json) }
-            finally { Remove-Item -f $tmp -ErrorAction SilentlyContinue }
+            # -Force, not -f: Remove-Item has both -Filter and -Force, so the
+            # one-letter form is an ambiguous parameter prefix and fails to
+            # bind — which with $ErrorActionPreference = "Stop" set above
+            # would abort the install at its first API call.
+            finally { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
         }
         Warn "curl.exe exited $LASTEXITCODE for $Url, retrying with Invoke-RestMethod..."
     }
@@ -178,11 +206,13 @@ try {
 
 # Auto-start (logon scheduled task)
 # The config check follows the same discovery order the daemon uses
-# (config.ResolvePath: user config dir first), not the install prefix —
-# `panda init` writes to %APPDATA%\openpanda\config.yaml, and the prefix only
-# ever holds the example files.
-$userConfig = Join-Path $env:APPDATA "openpanda\config.yaml"
-$hasConfig = (Test-Path $userConfig) -or ($env:OPENPANDA_CONFIG_PATH -and (Test-Path $env:OPENPANDA_CONFIG_PATH))
+# (config.ResolvePath: OPENPANDA_CONFIG_PATH, then the user config dir, then
+# the machine-wide default), not the install prefix — `panda init` writes to
+# %APPDATA%\openpanda\config.yaml, and the prefix only ever holds the example
+# files.
+$userConfig   = Join-Path $env:APPDATA "openpanda\config.yaml"
+$systemConfig = Join-Path $env:ProgramData "OpenPanda\config.yaml"
+$hasConfig = (Test-Path $userConfig) -or (Test-Path $systemConfig) -or ($env:OPENPANDA_CONFIG_PATH -and (Test-Path $env:OPENPANDA_CONFIG_PATH))
 
 function Register-AutoStart {
     # No --config/--card flags: the daemon auto-discovers the user-level config
@@ -194,6 +224,15 @@ function Register-AutoStart {
     # /RL LIMITED runs without elevation; /SC ONLOGON fires at user logon.
     $tr = '"' + $Exe + '" daemon'
     schtasks.exe /Create /TN "OpenPandaNode" /SC ONLOGON /RL LIMITED /TR $tr /F | Out-Null
+    # A native command's non-zero exit is not an exception, so
+    # $ErrorActionPreference does not notice it: without this check the script
+    # printed "Registered logon task" even when schtasks refused (policy-blocked
+    # hosts, an existing task owned by another user, a locked-down task folder).
+    if ($LASTEXITCODE -ne 0) {
+        Warn "schtasks exited $LASTEXITCODE; the logon task was NOT registered."
+        Warn "Register it manually: schtasks /Create /TN OpenPandaNode /SC ONLOGON /RL LIMITED /TR '$tr' /F"
+        return
+    }
     Ok "Registered logon task OpenPandaNode. Remove with: schtasks /Delete /TN OpenPandaNode /F"
     if (-not $hasConfig) {
         Warn "No config exists yet. Run 'panda init' before starting the daemon."
@@ -219,7 +258,11 @@ if ($NoService) {
 Write-Host ""
 Ok "Installation complete"
 Write-Host "Quick start:" -ForegroundColor DarkGray
-Write-Host "      panda init"
-Write-Host "      panda repl"
-Write-Host "      panda web"
-Write-Host "Uninstall: remove $Prefix and remove $BinDir from the user PATH"
+Write-Host "      panda init      # generate config + capability cards"
+Write-Host "      panda repl      # interactive command line"
+Write-Host "      panda web       # embedded web console (auto-login)"
+Write-Host "Self-check: panda doctor"
+Write-Host "Uninstall:  panda uninstall  (whitelist sweep + automatic backup;"
+Write-Host "            --purge also removes user data, --backup-only backs up first)"
+Write-Host "            Logon task removal: schtasks /Delete /TN OpenPandaNode /F"
+Write-Host "See docs/install.md for the full guide."

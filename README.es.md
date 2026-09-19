@@ -6,7 +6,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
-[![Release: v0.0.8](https://img.shields.io/badge/release-v0.0.8-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
+[![Release](https://img.shields.io/github/v/release/Xustalis/OpenPanda?label=release&color=blue)](https://github.com/Xustalis/OpenPanda/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
@@ -151,6 +151,26 @@ panda init
 | `panda skill` | Explorar, importar e instalar habilidades de flujo de trabajo (Hub, URL o archivo) |
 | `panda doctor` | Diagnóstico de PATH, configuración, adaptadores y base de datos |
 | `panda version` | Mostrar la versión del binario |
+
+---
+
+## 🗺️ Hoja de ruta
+
+| Versión | Tema |
+|---|---|
+| **v0.0.8-preview** (base actual) | Orquestación multiagente en una sola máquina, plenamente utilizable: clasificación de intención, despacho, bucle de supervisión, failover, aprobación por niveles |
+| **v0.0.9** | Control de agentes más preciso: veredictos de supervisión, estabilidad del enrutado de agentes, transparencia de ejecución |
+| **v0.0.10** | La colaboración multidispositivo como protagonista: delegación entre nodos, protección por lease, ejecución reanudable — endurecida y probada en campo |
+| **v0.0.x (más allá)** | Estabilidad, rendimiento y ajuste de casos límite |
+| **v0.1.0** | Capacidades de escritorio y un control y una gestión más potentes — calidad comercial |
+
+---
+
+## 🔭 Visión
+
+La arquitectura de OpenPanda está diseñada para clústeres heterogéneos a gran escala: control de enjambres de drones, planificación de comunicaciones para constelaciones de satélites en el espacio profundo y flotas coordinadas de vehículos autónomos. Estos escenarios comparten un problema fundamental: **cada nodo tiene distinta capacidad de cómputo, distintas capacidades y distintas tareas, y aun así todos deben coordinarse, planificarse y supervisarse en conjunto.**
+
+Hoy OpenPanda sirve a los dispositivos y agentes de un desarrollador. El objetivo a largo plazo es extender el mismo núcleo de orquestación a nodos autónomos a escala de clúster.
 
 ---
 

@@ -6,7 +6,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
-[![Release: v0.0.8](https://img.shields.io/badge/release-v0.0.8-blue.svg)](https://github.com/Xustalis/OpenPanda/releases)
+[![Release](https://img.shields.io/github/v/release/Xustalis/OpenPanda?label=release&color=blue)](https://github.com/Xustalis/OpenPanda/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
@@ -151,6 +151,26 @@ panda init
 | `panda skill` | Workflow-Fähigkeiten durchsuchen, importieren und installieren (Hub, URL oder Datei) |
 | `panda doctor` | PATH, Konfiguration, Adapter und Datenbank prüfen |
 | `panda version` | Aktuelle Binärversion ausgeben |
+
+---
+
+## 🗺️ Fahrplan
+
+| Version | Thema |
+|---|---|
+| **v0.0.8-preview** (aktuelle Basis) | Multi-Agenten-Orchestrierung auf einer Maschine, voll nutzbar: Absichtsklassifikation, Dispatch, Überwachungsschleife, Failover, gestufte Freigabe |
+| **v0.0.9** | Präzisere Agentensteuerung: Überwachungsurteile, Stabilität des Agenten-Routings, Ausführungstransparenz |
+| **v0.0.10** | Geräteübergreifende Zusammenarbeit als Hauptthema: knotenübergreifende Delegation, Lease-Schutz, wiederaufnehmbare Ausführung — gehärtet und im Feld getestet |
+| **v0.0.x (darüber hinaus)** | Stabilität, Performance und Feinschliff für Randfälle |
+| **v0.1.0** | Desktop-Fähigkeiten und stärkere Steuerung und Verwaltung — kommerzielle Qualität |
+
+---
+
+## 🔭 Vision
+
+Die Architektur von OpenPanda ist für große heterogene Cluster ausgelegt: Steuerung von Drohnenschwärmen, Kommunikationsplanung für Satellitenkonstellationen im tiefen Raum und koordinierte Flotten autonomer Fahrzeuge. Diese Szenarien teilen ein grundlegendes Problem — **jeder Knoten hat andere Rechenleistung, andere Fähigkeiten und andere Aufgaben, und trotzdem müssen alle gemeinsam koordiniert, geplant und überwacht werden.**
+
+Heute dient OpenPanda den Geräten und Agenten eines Entwicklers. Das langfristige Ziel ist, denselben Orchestrierungskern auf autonome Knoten in Cluster-Größe auszuweiten.
 
 ---
 
