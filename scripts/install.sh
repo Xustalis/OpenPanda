@@ -354,7 +354,19 @@ EOF
             && systemctl --user enable --now openpanda.service 2>/dev/null; then
             ok "已注册登录自启（systemd --user）。手动控制：\n     systemctl --user disable --now openpanda.service   # 停用\n     systemctl --user enable  --now openpanda.service   # 启用"
         else
-            warn "已写入 $unit_dir/openpanda.service，但 systemctl --user 无法启用它\n     （当前会话没有用户 D-Bus；无桌面/纯 SSH 服务器上属正常）。\n     手动启用： systemctl --user enable --now openpanda.service\n     免登录常驻： loginctl enable-linger $USER"
+            # $USER is not guaranteed to exist: a container, a CI runner and a
+            # systemd unit can all run without it, and this script sets -u, so
+            # a bare $USER aborted the install with "parameter not set" — on
+            # exactly the branch that exists to warn and carry on. Derive the
+            # name instead of trusting the environment to supply it.
+            linger_user="${USER:-}"
+            if [ -z "$linger_user" ]; then
+                linger_user="$(id -un 2>/dev/null)"
+            fi
+            if [ -z "$linger_user" ]; then
+                linger_user="<your-user>"
+            fi
+            warn "已写入 $unit_dir/openpanda.service，但 systemctl --user 无法启用它\n     （当前会话没有用户 D-Bus；无桌面/纯 SSH 服务器上属正常）。\n     手动启用： systemctl --user enable --now openpanda.service\n     免登录常驻： loginctl enable-linger $linger_user"
         fi
     fi
     if [ "$HAVE_CONFIG" = 0 ]; then
