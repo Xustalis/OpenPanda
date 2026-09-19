@@ -121,6 +121,42 @@ func isLeakedEscapeFragment(msg tea.KeyMsg) bool {
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// A terminal without SGR mouse support answers in X10, whose coordinates
+	// travel as bare bytes rather than decimal text. Bubble Tea reads into a
+	// fixed 256-byte buffer and treats a short read as an event boundary, so a
+	// burst of wheel notches — a trackpad flick is dozens — can end mid-event
+	// and strand those bytes in the prompt as literal text. One position comes
+	// out as `[- and another as 13M; by shape they are indistinguishable from
+	// typing, which is why isLeakedEscapeFragment cannot catch them.
+	//
+	// The prefix does surface, as an unrecognised CSI, and it is the only handle
+	// we get on the event. It says how many bytes the event still owes; swallow
+	// exactly those and the coordinates never reach the prompt.
+	if m.x10Payload > 0 {
+		n, ok := x10PayloadBytes(msg)
+		switch {
+		case !ok:
+			// The event was not split after all, or the stream has moved on.
+			// Drop the expectation rather than eat a later keystroke.
+			m.x10Payload = 0
+		case n <= m.x10Payload:
+			m.x10Payload -= n
+			return m, nil
+		default:
+			// More bytes than the event owed: the rest is real typing. Only a
+			// KeyRunes message can carry more than one byte, so this is the
+			// only shape that gets here.
+			k := msg.(tea.KeyMsg)
+			k.Runes = k.Runes[m.x10Payload:]
+			m.x10Payload = 0
+			msg = k
+		}
+	}
+	if m.mouse.captured() && isX10MousePrelude(msg) {
+		m.x10Payload = x10PayloadLen
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		first := !m.ready
