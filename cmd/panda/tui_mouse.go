@@ -45,6 +45,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -108,9 +109,10 @@ func parseMouseMode(v string) (mouseMode, bool) {
 }
 
 // resolveMouseMode picks the startup mode: PANDA_MOUSE wins, then ui.mouse, then
-// the default. mouseScroll is the default so trackpad gestures, wheel scrolling,
-// and clickable buttons work out of the box across all terminals. Selecting text
-// remains native via modifier keys (⌥ on macOS, Shift on Linux) or ctrl+t.
+// mouseSelect. The default leaves the mouse with the terminal so drag-select and
+// ⌘C keep working, and the wheel still reaches the transcript as Up/Down through
+// alternate scroll; ctrl+t swaps in mouseScroll for users who would rather click
+// the approval buttons than type y/n.
 func resolveMouseMode(cfg *config.Config) mouseMode {
 	if m, ok := parseMouseMode(os.Getenv(MouseEnvVar)); ok {
 		return m
@@ -189,4 +191,86 @@ func (m mouseMode) noteKey() string {
 // same action for terminals that swallow ctrl+t.
 func isMouseToggleKey(msg tea.KeyMsg) bool {
 	return msg.Type == tea.KeyCtrlT || msg.Type == tea.KeyF2
+}
+
+// x10PayloadLen is the payload of an X10 mouse event: Cb, Cx and Cy, one byte
+// each. It is also the length of the "\x1b[M" prefix Bubble Tea reports in their
+// place when a read boundary cuts the event in two.
+const x10PayloadLen = 3
+
+// Names of the two unexported Bubble Tea messages that carry raw input bytes.
+// Neither can be named from outside the package, so they are matched on their
+// type name.
+const (
+	unknownCSIMsgName       = "tea.unknownCSISequenceMsg"
+	unknownInputByteMsgName = "tea.unknownInputByteMsg"
+)
+
+// isX10MousePrelude reports whether msg is the unrecognised CSI sequence Bubble
+// Tea emits for a truncated X10 mouse event — the signal that the event's three
+// coordinate bytes are about to arrive as ordinary characters.
+//
+// Only the type and the length are inspected; the bytes are left alone, and that
+// is deliberate. Bubble Tea slices this message straight out of its 256-byte read
+// buffer and refills that buffer as soon as the message is handed to the event
+// loop, so by the time Update runs the contents are whatever the *next* read put
+// there. A guard that read them would fire or not fire according to what the
+// terminal happened to send next. (Measured: a burst long enough that the next
+// read refills the whole buffer leaves `5b 2d 1b` in the prefix — a later event's
+// coordinates, not the "\x1b[M" that started it. A shorter burst still reads
+// intact, which makes it a coin flip rather than a rule.)
+//
+// Three bytes is the whole discriminator, and it is enough. The prefix of an X10
+// event is exactly "\x1b[M", and Bubble Tea only reports it in this shape when it
+// is all it managed to read: an event cut any earlier is held back and
+// reassembled into a MouseMsg, and an intact event arrives as a MouseMsg anyway.
+// An event cut exactly after the prefix is the one case that cannot be repaired,
+// which is why it is the one case that needs this.
+//
+// Callers pair it with mouseMode.captured(), since a terminal only speaks X10
+// while the app holds the mouse; that is what keeps a stray three-byte CSI from
+// being swallowed.
+func isX10MousePrelude(msg tea.Msg) bool {
+	n, ok := unknownCSILen(msg)
+	return ok && n == x10PayloadLen
+}
+
+// unknownCSILen reports the length of bubbletea's unknownCSISequenceMsg, a named
+// []byte with no exported accessor. Only the slice header is touched, never the
+// bytes — see isX10MousePrelude for why that distinction matters.
+func unknownCSILen(msg tea.Msg) (int, bool) {
+	if bubbleteaMsgName(msg) != unknownCSIMsgName {
+		return 0, false
+	}
+	return reflect.ValueOf(msg).Len(), true
+}
+
+// bubbleteaMsgName reports the type name of msg, the only way to tell apart the
+// unexported message kinds Bubble Tea builds out of raw input bytes.
+func bubbleteaMsgName(msg tea.Msg) string {
+	if t := reflect.TypeOf(msg); t != nil {
+		return t.String()
+	}
+	return ""
+}
+
+// x10PayloadBytes reports how many raw input bytes msg carries, for the messages
+// Bubble Tea builds out of plain bytes. ok is false for everything else, which
+// means an X10 event was not actually split and no bytes are outstanding.
+//
+// Three shapes turn up inside an X10 payload: ordinary characters, several of
+// which share one KeyRunes message; a space, which is button 0's Cb; and a byte
+// that is not valid UTF-8 on its own, which is any coordinate past column 95.
+func x10PayloadBytes(msg tea.Msg) (int, bool) {
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch k.Type {
+		case tea.KeyRunes, tea.KeySpace:
+			return len(k.Runes), true
+		}
+		return 0, false
+	}
+	if bubbleteaMsgName(msg) == unknownInputByteMsgName {
+		return 1, true
+	}
+	return 0, false
 }
