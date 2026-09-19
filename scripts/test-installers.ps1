@@ -201,6 +201,11 @@ try {
     # failing there — the suite must not be stricter than the thing it tests.
     Write-Host "-> install (-Yes, logon task registration)"
     $SvcPrefix = Join-Path $Work "prefix-service"
+    # Sections 4 and 5 pointed the download base at a tampered tree and at an
+    # empty directory on purpose. -Version only skips the API lookup, so
+    # without this the archive 404s and section 6 fails for a reason that has
+    # nothing to do with the logon task it is here to test.
+    $env:OPENPANDA_RELEASE_BASE = $Base
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts/install.ps1") `
         -Prefix $SvcPrefix -Version $Version -Yes 2>&1 |
         Tee-Object -FilePath (Join-Path $Work "run6.log") | Out-Null
