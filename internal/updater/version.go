@@ -266,6 +266,20 @@ func Latest(ctx context.Context, repo string) (Release, error) {
 
 var githubAPIBase = "https://api.github.com"
 
+// SetAPIBaseForTest overrides the GitHub API base URL for testing and returns
+// a cleanup function that restores the previous value.
+func SetAPIBaseForTest(base string) func() {
+	orig := githubAPIBase
+	if base == "" {
+		githubAPIBase = "https://api.github.com"
+	} else {
+		githubAPIBase = base
+	}
+	return func() {
+		githubAPIBase = orig
+	}
+}
+
 // FindLatest queries GitHub releases for repo. If includePrerelease is true,
 // pre-release versions are considered alongside stable releases; otherwise
 // only stable releases are considered. If current contains a pre-release suffix
