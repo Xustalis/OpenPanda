@@ -16,6 +16,14 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 )
 
+// GeoRegion designates the model provider's geographical origin.
+type GeoRegion string
+
+const (
+	RegionChina  GeoRegion = "cn"
+	RegionGlobal GeoRegion = "global"
+)
+
 // Provider describes one built-in LLM vendor.
 type Provider struct {
 	// ID is the stable key the user types: "deepseek", "claude", "openai",
@@ -55,6 +63,18 @@ type Provider struct {
 	PromptCache bool
 	// Pricing defines the default token prices in USD per 1M tokens.
 	Pricing Pricing
+	// GeographicOrigin designates the vendor's regional provenance for prompt routing.
+	GeographicOrigin GeoRegion
+}
+
+// IsChineseModel returns true if the provider's geographic origin is China.
+func (p Provider) IsChineseModel() bool {
+	return p.GeographicOrigin == RegionChina
+}
+
+// IsGlobalModel returns true if the provider's geographic origin is Global.
+func (p Provider) IsGlobalModel() bool {
+	return p.GeographicOrigin == RegionGlobal
 }
 
 // Pricing defines token prices in USD per 1M (1,000,000) tokens.
@@ -89,6 +109,7 @@ var builtins = []Provider{
 		ThinkingPassback: true,
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.28},
+		GeographicOrigin: RegionChina,
 	},
 	{
 		ID:               "claude",
@@ -102,6 +123,7 @@ var builtins = []Provider{
 		ThinkingPassback: true,
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00},
+		GeographicOrigin: RegionGlobal,
 	},
 	{
 		ID:               "openai",
@@ -114,6 +136,7 @@ var builtins = []Provider{
 		ContextWindow:    128000,
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60},
+		GeographicOrigin: RegionGlobal,
 	},
 	{
 		ID:               "kimi",
@@ -126,6 +149,7 @@ var builtins = []Provider{
 		ContextWindow:    128000,
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 1.40, OutputPerMillion: 1.40},
+		GeographicOrigin: RegionChina,
 	},
 	{
 		ID:               "volcengine",
@@ -138,6 +162,7 @@ var builtins = []Provider{
 		ContextWindow:    32000,
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 0.11, OutputPerMillion: 0.28},
+		GeographicOrigin: RegionChina,
 	},
 	{
 		ID:               "zhipu",
@@ -150,6 +175,7 @@ var builtins = []Provider{
 		ContextWindow:    128000,
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 1.40, OutputPerMillion: 1.40},
+		GeographicOrigin: RegionChina,
 	},
 	{
 		ID:               "qwen",
@@ -162,6 +188,7 @@ var builtins = []Provider{
 		ContextWindow:    128000,
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 0.11, OutputPerMillion: 0.28},
+		GeographicOrigin: RegionChina,
 	},
 	{
 		ID:               "siliconflow",
@@ -174,6 +201,7 @@ var builtins = []Provider{
 		ContextWindow:    64000,
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.28},
+		GeographicOrigin: RegionChina,
 	},
 	{
 		ID:               "openrouter",
@@ -186,6 +214,7 @@ var builtins = []Provider{
 		ContextWindow:    200000,
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00},
+		GeographicOrigin: RegionGlobal,
 	},
 	{
 		ID:               "ollama",
@@ -198,14 +227,16 @@ var builtins = []Provider{
 		DefaultMaxTokens: 4096,
 		PromptCache:      false,
 		Pricing:          Pricing{InputPerMillion: 0, OutputPerMillion: 0},
+		GeographicOrigin: RegionGlobal,
 	},
 	{
-		ID:          "custom",
-		Label:       "自定义 (base model)",
-		APIType:     config.APITypeOpenAI,
-		BaseURL:     "",
-		ModelsPath:  "",
-		PromptCache: true,
+		ID:               "custom",
+		Label:            "自定义 (base model)",
+		APIType:          config.APITypeOpenAI,
+		BaseURL:          "",
+		ModelsPath:       "",
+		PromptCache:      true,
+		GeographicOrigin: RegionGlobal,
 	},
 }
 
@@ -298,4 +329,78 @@ func ModelConfig(id, model, key string) (config.ModelConfig, bool) {
 		ContextWindow: p.ContextWindow,
 	}
 	return mc, true
+}
+
+// DetectRegion determines the geographic region (RegionChina or RegionGlobal)
+// from a provider ID, model name, or agent descriptor string (e.g., "deepseek-chat",
+// "claude-sonnet-4-5", "qwen-max", "doubao-pro", "agent:claude_code", etc.).
+func DetectRegion(modelOrProvider string) GeoRegion {
+	s := strings.ToLower(strings.TrimSpace(modelOrProvider))
+	if s == "" {
+		return RegionGlobal
+	}
+
+	// 1. Direct provider match if it's a known provider ID
+	if p, ok := Lookup(s); ok && p.GeographicOrigin != "" {
+		return p.GeographicOrigin
+	}
+
+	// 2. Known Chinese models / providers keywords
+	chineseKeywords := []string{
+		"deepseek",
+		"qwen",
+		"kimi",
+		"moonshot",
+		"zhipu",
+		"glm",
+		"doubao",
+		"volcengine",
+		"baichuan",
+		"minimax",
+		"internlm",
+		"hunyuan",
+		"ernie",
+		"wenxin",
+		"spark",
+		"siliconflow",
+		"stepfun",
+		"step-",
+		"yi-",
+		"01-ai",
+		"lingyi",
+	}
+
+	for _, kw := range chineseKeywords {
+		if strings.Contains(s, kw) {
+			return RegionChina
+		}
+	}
+
+	// 3. Known Global models / providers keywords
+	globalKeywords := []string{
+		"claude",
+		"anthropic",
+		"openai",
+		"gpt",
+		"o1-",
+		"o3-",
+		"o4-",
+		"codex",
+		"gemini",
+		"google",
+		"llama",
+		"meta",
+		"mistral",
+		"cohere",
+		"openrouter",
+		"groq",
+	}
+
+	for _, kw := range globalKeywords {
+		if strings.Contains(s, kw) {
+			return RegionGlobal
+		}
+	}
+
+	return RegionGlobal
 }
