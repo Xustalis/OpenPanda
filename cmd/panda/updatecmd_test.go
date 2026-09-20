@@ -25,6 +25,9 @@ func TestUpdateCheckFlow(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	cleanup := updater.SetAPIBaseForTest(srv.URL)
+	defer cleanup()
+
 	// Direct test of updater Manager with current = "0.0.8-preview"
 	m := updater.New(updater.Options{
 		Current: "0.0.8-preview",
