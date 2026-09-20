@@ -14,10 +14,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Stage is the updater's position in the check → download → apply pipeline.
@@ -66,29 +68,39 @@ type Options struct {
 	// surface an update notice. The web panel needs no callback: it polls
 	// GET /api/update.
 	OnAvailable func(version string)
+	// IncludePrerelease enables checking for prereleases even if Current is stable.
+	IncludePrerelease bool
+	// NoRestart prevents delayedRestart from running, for one-shot CLI commands.
+	NoRestart bool
 }
 
 // DefaultRepo is where release archives and the checksums file live.
 const DefaultRepo = "Xustalis/OpenPanda"
 
-// CompareVersion orders two semantic versions (a leading "v" is ignored).
-// Returns -1, 0, or 1 as a<b, a==b, a>b. Comparison is numeric over the
-// dot-separated segments; a pre-release/build suffix ("-rc1", "-beta") makes
-// that segment sort no higher than the numeric prefix it carries.
+// CompareVersion orders two semantic versions (a leading "v" or "V" is ignored).
+// Returns -1, 0, or 1 as a<b, a==b, a>b.
+// Comparison follows SemVer 2.0:
+//  1. Major, minor, and patch numbers are compared numerically (e.g. 0.0.10 > 0.0.3).
+//  2. When major, minor, and patch are equal, a normal release has higher precedence
+//     than a pre-release (e.g. 0.0.8 > 0.0.8-preview).
+//  3. Precedence between two pre-releases is determined by comparing each dot-separated
+//     identifier (numeric vs numeric numerically, non-numeric ASCII, numeric < non-numeric).
+//  4. Build metadata (suffix starting with "+") is ignored.
 func CompareVersion(a, b string) int {
-	av := numericParts(a)
-	bv := numericParts(b)
-	n := len(av)
-	if len(bv) > n {
-		n = len(bv)
+	coreA, preA := splitSemVer(a)
+	coreB, preB := splitSemVer(b)
+
+	n := len(coreA)
+	if len(coreB) > n {
+		n = len(coreB)
 	}
 	for i := 0; i < n; i++ {
 		var x, y int
-		if i < len(av) {
-			x = av[i]
+		if i < len(coreA) {
+			x = coreA[i]
 		}
-		if i < len(bv) {
-			y = bv[i]
+		if i < len(coreB) {
+			y = coreB[i]
 		}
 		switch {
 		case x < y:
@@ -97,23 +109,112 @@ func CompareVersion(a, b string) int {
 			return 1
 		}
 	}
-	return 0
+
+	switch {
+	case preA == "" && preB == "":
+		return 0
+	case preA == "" && preB != "":
+		return 1
+	case preA != "" && preB == "":
+		return -1
+	default:
+		return comparePrerelease(preA, preB)
+	}
 }
 
-func numericParts(v string) []int {
-	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
-	var out []int
-	for _, seg := range strings.Split(v, ".") {
-		n := 0
-		for _, r := range seg {
-			if r < '0' || r > '9' {
-				break // stop at a pre-release/build suffix
-			}
-			n = n*10 + int(r-'0')
-		}
-		out = append(out, n)
+func splitSemVer(v string) ([]int, string) {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	v = strings.TrimPrefix(v, "V")
+
+	if idx := strings.Index(v, "+"); idx >= 0 {
+		v = v[:idx]
 	}
-	return out
+
+	pre := ""
+	if idx := strings.Index(v, "-"); idx >= 0 {
+		pre = v[idx+1:]
+		v = v[:idx]
+	}
+
+	var nums []int
+	for _, seg := range strings.Split(v, ".") {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			nums = append(nums, 0)
+			continue
+		}
+		n, err := strconv.Atoi(seg)
+		if err != nil {
+			d := 0
+			for _, r := range seg {
+				if r < '0' || r > '9' {
+					break
+				}
+				d = d*10 + int(r-'0')
+			}
+			nums = append(nums, d)
+		} else {
+			nums = append(nums, n)
+		}
+	}
+	return nums, pre
+}
+
+func comparePrerelease(preA, preB string) int {
+	segsA := strings.Split(preA, ".")
+	segsB := strings.Split(preB, ".")
+	n := len(segsA)
+	if len(segsB) < n {
+		n = len(segsB)
+	}
+	for i := 0; i < n; i++ {
+		sA, sB := segsA[i], segsB[i]
+		numA, isNumA := parseUint(sA)
+		numB, isNumB := parseUint(sB)
+
+		switch {
+		case isNumA && isNumB:
+			if numA < numB {
+				return -1
+			}
+			if numA > numB {
+				return 1
+			}
+		case isNumA && !isNumB:
+			return -1
+		case !isNumA && isNumB:
+			return 1
+		default:
+			if sA < sB {
+				return -1
+			}
+			if sA > sB {
+				return 1
+			}
+		}
+	}
+	switch {
+	case len(segsA) < len(segsB):
+		return -1
+	case len(segsA) > len(segsB):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func parseUint(s string) (uint64, bool) {
+	if s == "" {
+		return 0, false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	u, err := strconv.ParseUint(s, 10, 64)
+	return u, err == nil
 }
 
 // Release is the latest GitHub release: its version tag (leading "v"
@@ -122,6 +223,13 @@ func numericParts(v string) []int {
 type Release struct {
 	Version string
 	Notes   string
+}
+
+type githubRelease struct {
+	TagName    string `json:"tag_name"`
+	Body       string `json:"body"`
+	Draft      bool   `json:"draft"`
+	Prerelease bool   `json:"prerelease"`
 }
 
 // RateLimitExceeded is returned when GitHub's REST API enforces a cap: 60
@@ -150,71 +258,162 @@ type AccessDenied struct {
 
 func (e *AccessDenied) Error() string { return "release lookup: access denied — " + e.Hint }
 
-// Latest queries the GitHub "latest" release for repo. It reads
-// PANDA_GITHUB_TOKEN (GITHUB_TOKEN works too) to authenticate — required on
-// private repos and useful to lift the anonymous 60/hr cap.
-//
-// Returns typed sentinels for 403 / 429 so callers can gracefully degrade
-// rather than show a raw HTTP error in the console.
+// Latest queries the GitHub "latest" release for repo. It defaults to stable
+// releases.
 func Latest(ctx context.Context, repo string) (Release, error) {
+	return FindLatest(ctx, repo, false, "")
+}
+
+var githubAPIBase = "https://api.github.com"
+
+// FindLatest queries GitHub releases for repo. If includePrerelease is true,
+// pre-release versions are considered alongside stable releases; otherwise
+// only stable releases are considered. If current contains a pre-release suffix
+// (e.g. "-preview"), pre-releases are automatically considered.
+func FindLatest(ctx context.Context, repo string, includePrerelease bool, current string) (Release, error) {
 	if repo == "" {
 		repo = DefaultRepo
 	}
-	url := "https://api.github.com/repos/" + repo + "/releases/latest"
+	if strings.Contains(current, "-") {
+		includePrerelease = true
+	}
+
+	token := gitHubToken(ctx)
+
+	// First attempt: query recent releases list to discover both stable and pre-releases.
+	url := githubAPIBase + "/repos/" + repo + "/releases?per_page=15"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err == nil {
+		setGitHubHeaders(req, token)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			defer resp.Body.Close()
+			if checkErr := checkGitHubStatus(resp, repo); checkErr != nil {
+				if _, ok := checkErr.(*RateLimitExceeded); ok {
+					return Release{}, checkErr
+				}
+				if _, ok := checkErr.(*AccessDenied); ok {
+					return Release{}, checkErr
+				}
+			} else if resp.StatusCode == http.StatusOK {
+				var releases []githubRelease
+				if err := json.NewDecoder(resp.Body).Decode(&releases); err == nil && len(releases) > 0 {
+					var best *githubRelease
+					for i := range releases {
+						r := &releases[i]
+						if r.Draft || r.TagName == "" {
+							continue
+						}
+						if !includePrerelease && r.Prerelease {
+							continue
+						}
+						ver := strings.TrimPrefix(strings.TrimPrefix(r.TagName, "v"), "V")
+						if best == nil || CompareVersion(ver, strings.TrimPrefix(strings.TrimPrefix(best.TagName, "v"), "V")) > 0 {
+							best = r
+						}
+					}
+					// If no non-prerelease was found but includePrerelease was false,
+					// fall back to considering any non-draft release.
+					if best == nil && !includePrerelease {
+						for i := range releases {
+							r := &releases[i]
+							if r.Draft || r.TagName == "" {
+								continue
+							}
+							ver := strings.TrimPrefix(strings.TrimPrefix(r.TagName, "v"), "V")
+							if best == nil || CompareVersion(ver, strings.TrimPrefix(strings.TrimPrefix(best.TagName, "v"), "V")) > 0 {
+								best = r
+							}
+						}
+					}
+					if best != nil {
+						v := strings.TrimPrefix(strings.TrimPrefix(best.TagName, "v"), "V")
+						return Release{Version: v, Notes: best.Body}, nil
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback to /releases/latest endpoint
+	return latestSingle(ctx, repo, token)
+}
+
+func latestSingle(ctx context.Context, repo, token string) (Release, error) {
+	url := githubAPIBase + "/repos/" + repo + "/releases/latest"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return Release{}, err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "OpenPanda-updater")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	// Token: PANDA_GITHUB_TOKEN > GITHUB_TOKEN. We keep both for users who
-	// already have GITHUB_TOKEN wired in their shell (the common pattern).
-	if tok := strings.TrimSpace(os.Getenv("PANDA_GITHUB_TOKEN")); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	} else if tok := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
+	setGitHubHeaders(req, token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return Release{}, fmt.Errorf("release lookup: %w", err)
 	}
 	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-		// fall through
-	case http.StatusForbidden:
-		// GitHub distinguishes rate-limit 403 (X-RateLimit-Remaining: 0) from
-		// an auth/IP-rule 403 via the remaining header. Treat the two cases
-		// so the UI can show the right fix.
-		if remain := resp.Header.Get("X-RateLimit-Remaining"); remain == "0" {
-			r, _ := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64)
-			return Release{}, &RateLimitExceeded{Reset: r}
-		}
-		hint := "如果这是私有仓库，先 export PANDA_GITHUB_TOKEN=github_pat_… 再启动；如果仓库公开，稍等一会儿或配置 token 提升 60/小时上限"
-		return Release{}, &AccessDenied{Hint: hint}
-	case http.StatusUnauthorized:
-		return Release{}, &AccessDenied{Hint: "GitHub token 已失效或权限不足，请检查 PANDA_GITHUB_TOKEN / GITHUB_TOKEN"}
-	case http.StatusNotFound:
-		return Release{}, &AccessDenied{Hint: "仓库 " + repo + " 不存在，或 token 无内容读取权限（需 repo/public_repo scope）"}
-	case http.StatusTooManyRequests:
-		r, _ := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64)
-		return Release{}, &RateLimitExceeded{Reset: r}
-	default:
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return Release{}, fmt.Errorf("release lookup returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	if err := checkGitHubStatus(resp, repo); err != nil {
+		return Release{}, err
 	}
-	var rel struct {
-		TagName string `json:"tag_name"`
-		Body    string `json:"body"`
-	}
+	var rel githubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
 		return Release{}, fmt.Errorf("release lookup: %w", err)
 	}
 	if rel.TagName == "" {
 		return Release{}, fmt.Errorf("release has no tag_name")
 	}
-	return Release{Version: strings.TrimPrefix(rel.TagName, "v"), Notes: rel.Body}, nil
+	v := strings.TrimPrefix(strings.TrimPrefix(rel.TagName, "v"), "V")
+	return Release{Version: v, Notes: rel.Body}, nil
+}
+
+func gitHubToken(ctx context.Context) string {
+	if tok := strings.TrimSpace(os.Getenv("PANDA_GITHUB_TOKEN")); tok != "" {
+		return tok
+	}
+	if tok := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); tok != "" {
+		return tok
+	}
+	ghCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ghCtx, "gh", "auth", "token")
+	if out, err := cmd.Output(); err == nil {
+		if t := strings.TrimSpace(string(out)); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+func setGitHubHeaders(req *http.Request, token string) {
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "OpenPanda-updater")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+}
+
+func checkGitHubStatus(resp *http.Response, repo string) error {
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusForbidden:
+		if remain := resp.Header.Get("X-RateLimit-Remaining"); remain == "0" {
+			r, _ := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64)
+			return &RateLimitExceeded{Reset: r}
+		}
+		hint := "如果这是私有仓库，先 export PANDA_GITHUB_TOKEN=github_pat_… 再启动；如果仓库公开，稍等一会儿或配置 token 提升 60/小时上限"
+		return &AccessDenied{Hint: hint}
+	case http.StatusUnauthorized:
+		return &AccessDenied{Hint: "GitHub token 已失效或权限不足，请检查 PANDA_GITHUB_TOKEN / GITHUB_TOKEN"}
+	case http.StatusNotFound:
+		return &AccessDenied{Hint: "仓库 " + repo + " 不存在，或 token 无内容读取权限（需 repo/public_repo scope）"}
+	case http.StatusTooManyRequests:
+		r, _ := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64)
+		return &RateLimitExceeded{Reset: r}
+	default:
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("release lookup returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
 }
 
 // summarizeNotes trims a release-notes body to the short changelog digest

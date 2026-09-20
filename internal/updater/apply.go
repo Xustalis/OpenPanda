@@ -44,8 +44,11 @@ func applyRelease(ctx context.Context, m *Manager, s *stagedRelease) error {
 	}
 
 	// Restart on a slight delay so the HTTP apply response can flush before
-	// the process image is replaced.
-	go delayedRestart(m)
+	// the process image is replaced. If NoRestart is requested (CLI one-shot),
+	// skip restarting.
+	if !m.opts.NoRestart {
+		go delayedRestart(m)
+	}
 	return nil
 }
 
