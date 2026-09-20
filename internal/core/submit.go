@@ -9,6 +9,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
@@ -54,18 +55,36 @@ type TaskInput struct {
 	// direct CLI submission, a delegated peer task): no classify_result event
 	// fires for those, matching the pre-trace behavior.
 	ClassifyKind string
+	// UserLocale records the user's language preference ("en", "zh-CN", etc.).
+	UserLocale i18n.Locale
 }
 
 // detail folds the input into the persisted detail columns.
 func (in TaskInput) detail() TaskDetail {
+	specJSON := in.SpecJSON
+	if in.UserLocale != "" {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(specJSON), &m); err == nil && m != nil {
+			m["user_locale"] = string(in.UserLocale)
+			if b, err := json.Marshal(m); err == nil {
+				specJSON = string(b)
+			}
+		} else if specJSON == "" {
+			m = map[string]any{"user_locale": string(in.UserLocale)}
+			if b, err := json.Marshal(m); err == nil {
+				specJSON = string(b)
+			}
+		}
+	}
 	return TaskDetail{
 		ContextType:  in.ContextType,
 		Intent:       in.Intent,
-		SpecJSON:     in.SpecJSON,
+		SpecJSON:     specJSON,
 		Complexity:   in.Complexity,
 		Risk:         in.Risk,
 		ResourceJSON: in.ResourceJSON,
 		Requires:     in.Requires,
+		UserLocale:   string(in.UserLocale),
 	}
 }
 
@@ -278,6 +297,8 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 	}
 	d := in.detail()
 	d.ContextHash = hash
+	t.UserLocale = string(in.UserLocale)
+	t.SpecJSON = d.SpecJSON
 	if err := c.store.SetDetail(ctx, t.TaskID, d); err != nil {
 		return Task{}, "", "", fmt.Errorf("set detail: %w", err)
 	}
@@ -507,8 +528,11 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 		// straight to review with the actionable reason instead of burning
 		// the retry budget (and re-spawning nothing) first.
 		if commander.IsAuthorizationRefusal(result.Stderr) {
+			// Recorded at error level, but not fatal: the refusal is real
+			// regardless, and the task still has to be settled below instead of
+			// being abandoned mid-flight.
 			if rerr := c.store.ReviewWithDisposition(ctx, taskID, c.nodeID, result.Stderr, ApprovalResumeExecution); rerr != nil {
-				c.logger.Warn("review task", "task", taskID, "err", rerr)
+				c.logger.Error("review with disposition failed for authorization refusal", "task", taskID, "err", rerr)
 			}
 			c.reviewReset(taskID)
 			final, err = c.store.Get(ctx, taskID)
@@ -519,7 +543,7 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 		}
 		if !c.loop.Allow(taskID) || c.retriesExhausted(ctx, taskID) {
 			if rerr := c.store.Review(ctx, taskID, c.nodeID, result.Stderr); rerr != nil {
-				c.logger.Warn("review task", "task", taskID, "err", rerr)
+				c.logger.Error("failed to transition task to review", "task", taskID, "err", rerr)
 			}
 			c.reviewReset(taskID)
 			// Re-fetch so the returned row reflects the review transition.

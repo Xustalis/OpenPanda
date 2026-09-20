@@ -2,9 +2,11 @@
 package core
 
 import (
+	"encoding/json"
 	"errors"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
 // State-machine errors. Callers should wrap them with %w to preserve
@@ -180,6 +182,30 @@ type Task struct {
 	Needs          []string
 	Inputs         []bus.ArtifactRef
 	OutputArtifact string
+
+	// UserLocale is the user's language preference ("en", "zh-CN", etc.).
+	UserLocale string
+}
+
+// GetUserLocale returns the task's language preference as an i18n.Locale,
+// checking UserLocale first, then parsing SpecJSON, falling back to English.
+func (t Task) GetUserLocale() i18n.Locale {
+	if t.UserLocale != "" {
+		if loc := i18n.Parse(t.UserLocale); loc != "" {
+			return loc
+		}
+	}
+	if t.SpecJSON != "" {
+		var m struct {
+			UserLocale string `json:"user_locale,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(t.SpecJSON), &m); err == nil && m.UserLocale != "" {
+			if loc := i18n.Parse(m.UserLocale); loc != "" {
+				return loc
+			}
+		}
+	}
+	return i18n.English
 }
 
 // TaskDetail is the entry-model-derived task metadata (design doc §6.1 tasks
@@ -199,6 +225,8 @@ type TaskDetail struct {
 	// Requires carries the routing capability set so it survives past the
 	// original delegate payload (decline re-routing, P1-5).
 	Requires []string
+	// UserLocale carries the user's language preference.
+	UserLocale string
 }
 
 // Terminal reports whether s has no valid outgoing transition.

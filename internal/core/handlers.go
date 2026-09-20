@@ -17,9 +17,11 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/plan"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -113,13 +115,19 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	// is the trust boundary; see TaskDelegatePayload.Authorized).
 	if p.Authorized {
 		if err := c.store.SetAuthorized(ctx, t.TaskID, true); err != nil {
-			c.logger.Warn("adopt authorization", "task", t.TaskID, "err", err)
+			// Recorded, not fatal. The task row already exists, so returning
+			// here would strand it: nothing would ever answer the delegator.
+			// An unstamped row is the safe failure — it fails closed at the
+			// executor's defense gate rather than running unauthorized.
+			c.logger.Error("adopt authorization failed", "task", t.TaskID, "err", err)
 		}
 	}
 	// Persist the entry-model detail carried on the wire so the local queue
 	// shows intent/context/complexity/risk even before execution starts.
 	if err := c.store.SetDetail(ctx, t.TaskID, delegateDetail(p)); err != nil {
-		c.logger.Warn("set detail", "task", t.TaskID, "err", err)
+		// As above: losing the detail costs queue readability, not correctness.
+		// Dropping the task costs both.
+		c.logger.Error("set task detail failed", "task", t.TaskID, "err", err)
 	}
 	// A delegated stage of a plan keeps its place in that plan and the artifacts
 	// it must start from. Both are needed locally before execution: run() derives
@@ -128,32 +136,37 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	// carried: only the node orchestrating the plan decides what runs next.
 	if p.PlanID != "" || p.StageID != "" {
 		if err := c.store.SetStage(ctx, t.TaskID, p.PlanID, p.StageID, nil); err != nil {
-			c.logger.Warn("set stage", "task", t.TaskID, "err", err)
+			c.logger.Error("set stage metadata failed", "task", t.TaskID, "err", err)
 		}
 		if len(p.Inputs) > 0 {
 			if err := c.store.SetStageInputs(ctx, t.TaskID, p.Inputs); err != nil {
-				c.logger.Warn("set stage inputs", "task", t.TaskID, "err", err)
+				c.logger.Error("set stage inputs failed", "task", t.TaskID, "err", err)
 			}
 		}
 	} else if len(p.Inputs) > 0 {
 		// A standalone task's inputs are its project tree. The column is the same
 		// one a stage uses; run() pulls from it either way.
 		if err := c.store.SetStageInputs(ctx, t.TaskID, p.Inputs); err != nil {
-			c.logger.Warn("set project inputs", "task", t.TaskID, "err", err)
+			c.logger.Error("set project inputs failed", "task", t.TaskID, "err", err)
 		}
 	}
 	// The project's memory lands before anything runs, so the agent reads it from
 	// the same path a local task would.
 	if err := c.landProjectPack(p.Project, p.ProjectPack); err != nil {
+		// Degraded, not fatal: the task runs without the project's memory, and
+		// the gap is recorded so the operator can see why context was thin.
 		if c.store != nil {
-			_ = c.store.RecordEvent(ctx, t.TaskID, EvContextDegraded, map[string]any{
+			if recordErr := c.store.RecordEvent(ctx, t.TaskID, EvContextDegraded, map[string]any{
 				"stage": "land_memory", "project": p.Project, "err": err.Error(),
-			})
+			}); recordErr != nil {
+				c.logger.Error("record context degraded event failed", "err", recordErr)
+			}
 		}
 	}
 	if p.TimeoutMS > 0 {
 		if err := c.store.SetLease(ctx, t.TaskID, p.TimeoutMS); err != nil {
-			c.logger.Warn("set lease", "task", t.TaskID, "err", err)
+			// The default lease still applies, so this is a warning, not a fail.
+			c.logger.Warn("set lease failed, using default", "task", t.TaskID, "err", err)
 		}
 	}
 
@@ -501,19 +514,33 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 // TaskDetail. resource_json is not present on the Phase 1 wire format, so it is
 // left empty until a later phase adds it.
 func delegateDetail(p bus.TaskDelegatePayload) TaskDetail {
+	specJSON := p.SpecJSON
+	if p.UserLocale != "" {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(specJSON), &m); err == nil && m != nil {
+			if _, ok := m["user_locale"]; !ok {
+				m["user_locale"] = p.UserLocale
+				if b, err := json.Marshal(m); err == nil {
+					specJSON = string(b)
+				}
+			}
+		} else if specJSON == "" {
+			m = map[string]any{"user_locale": p.UserLocale}
+			if b, err := json.Marshal(m); err == nil {
+				specJSON = string(b)
+			}
+		}
+	}
 	return TaskDetail{
-		ContextType: p.ContextType,
-		ContextHash: p.ContextHash,
-		Intent:      p.Intent,
-		SpecJSON:    p.SpecJSON,
-		Complexity:  p.Complexity,
-		Risk:        p.Risk,
-		// The hardware requirement is persisted, not just consulted in passing:
-		// this node may re-route the task later (a decline, a re-queue), and the
-		// wire payload is gone by then. Without it a training task would lose its
-		// GPU requirement at the second hop.
+		ContextType:  p.ContextType,
+		ContextHash:  p.ContextHash,
+		Intent:       p.Intent,
+		SpecJSON:     specJSON,
+		Complexity:   p.Complexity,
+		Risk:         p.Risk,
 		ResourceJSON: p.ResourceJSON,
 		Requires:     delegateRequired(p),
+		UserLocale:   p.UserLocale,
 	}
 }
 
@@ -857,16 +884,34 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				"verdict_status": status,
 			})
 		}
-		prompt, skillsUsed := buildAgentPrompt(c, currentIntent, task.Project, task.Title, workDir)
+		activeModel := ""
+		if injection.Inject {
+			activeModel = injection.Model
+		}
+		if activeModel == "" {
+			activeModel = plan.Agent
+		}
+		if activeModel == "" {
+			activeModel = c.model.Model
+		}
+		if activeModel == "" {
+			activeModel = c.model.Provider
+		}
+
+		geo := providers.DetectRegion(activeModel)
+		policy := PromptLanguagePolicy{
+			UserLocale:     task.GetUserLocale(),
+			ModelGeoRegion: geo,
+		}
+		promptLang := policy.RecommendedPromptLang()
+		outputLang := policy.RecommendedOutputLang()
+
+		prompt, skillsUsed := buildAgentPrompt(c, currentIntent, task.Project, task.Title, workDir, promptLang, outputLang)
 		usedSkills = skillsUsed
 
 		// — Trace: exec_agent_start (orbit Step-3 "starting this stage on N").
 		// We report before Execute so the orbit paints the stage bar as
 		// running immediately. Best-effort only.
-		activeModel := ""
-		if injection.Inject {
-			activeModel = injection.Model
-		}
 		c.EvTrace(execCtx, taskID, EvExecAgentStart, map[string]any{
 			"round":      round + 1,
 			"budget":     maxRounds,
@@ -1417,8 +1462,51 @@ func taskToolsPolicy(specJSON string) string {
 // degrading skills into index lines.
 const agentPromptBudget = 128000
 
-// agentOutputRider instructs the agent to produce substantive, well-structured results promptly.
-const agentOutputRider = "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；在获取到充分证据后直接输出清晰结构化的中文报告与最终结论；不要使用不必要的表情符号。"
+func getAgentOutputRider(locs ...i18n.Locale) string {
+	promptLang := i18n.English
+	outputLang := i18n.English
+	if len(locs) == 1 {
+		if locs[0] != "" {
+			promptLang = locs[0]
+			outputLang = locs[0]
+		}
+	} else if len(locs) >= 2 {
+		if locs[0] != "" {
+			promptLang = locs[0]
+		}
+		if locs[1] != "" {
+			outputLang = locs[1]
+		}
+	}
+
+	if promptLang == i18n.ChineseSimp {
+		switch outputLang {
+		case i18n.English:
+			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；无论推理过程如何，请在获取到充分证据后直接输出清晰结构化的英文报告与最终结论；不要使用不必要的表情符号。"
+		case i18n.Japanese:
+			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；无论推理过程如何，请在获取到充分证据后直接输出清晰结构化的日文报告与最终结论；不要使用不必要的表情符号。"
+		case i18n.Spanish:
+			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；无论推理过程如何，请在获取到充分证据后直接输出清晰结构化的西班牙文报告与最终结论；不要使用不必要的表情符号。"
+		case i18n.German:
+			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；无论推理过程如何，请在获取到充分证据后直接输出清晰结构化的德文报告与最终结论；不要使用不必要的表情符号。"
+		default:
+			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；在获取到充分证据后直接输出清晰结构化的中文报告与最终结论；不要使用不必要的表情符号。"
+		}
+	}
+
+	switch outputLang {
+	case i18n.ChineseSimp:
+		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Regardless of reasoning language, output a clear, structured Simplified Chinese report and final conclusions directly. Do not use unnecessary emojis."
+	case i18n.Japanese:
+		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Regardless of reasoning language, output a clear, structured Japanese report and final conclusions directly. Do not use unnecessary emojis."
+	case i18n.Spanish:
+		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Regardless of reasoning language, output a clear, structured Spanish report and final conclusions directly. Do not use unnecessary emojis."
+	case i18n.German:
+		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Regardless of reasoning language, output a clear, structured German report and final conclusions directly. Do not use unnecessary emojis."
+	default:
+		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Upon gathering sufficient evidence, output a clear, structured English report and final conclusions directly. Do not use unnecessary emojis."
+	}
+}
 
 // buildAgentPrompt assembles the full agent execution prompt — the memory
 // file manifest (A3 selective loading) plus the task intent plus any matched
@@ -1427,18 +1515,22 @@ const agentOutputRider = "\n\n输出与执行要求：请高效聚焦核心目�
 // not the full intent, so a long instruction does not over-match on common
 // words. The assembly stays under agentPromptBudget by degrading skills to
 // index lines when the budget is tight.
-//
-// Memory is injected as a manifest rather than as content (A1 decision): project
-// memory used to be prepended wholesale here, burning tokens on every task. What
-// the agent gets is a pointer it can follow with its own file tools.
-//
-// Which manifest depends on where the task runs, and the isolation wall (D3)
-// decides: outside a project, the index of personal memory files; inside one, the
-// project's own memory and its work directory, never Hermes. Inside a project used
-// to mean *no* manifest at all, which left a project task with strictly less
-// context than a loose one — and a project task delegated to another machine
-// arrived unable to tell what it was working on.
-func buildAgentPrompt(c *Core, intent, project, title, workDir string) (string, []*skills.Skill) {
+func buildAgentPrompt(c *Core, intent, project, title, workDir string, loc ...i18n.Locale) (string, []*skills.Skill) {
+	promptLang := i18n.ChineseSimp
+	outputLang := i18n.ChineseSimp
+	if len(loc) == 1 && loc[0] != "" {
+		promptLang = loc[0]
+		outputLang = loc[0]
+	} else if len(loc) >= 2 {
+		if loc[0] != "" {
+			promptLang = loc[0]
+		}
+		if loc[1] != "" {
+			outputLang = loc[1]
+		}
+	}
+	rider := getAgentOutputRider(promptLang, outputLang)
+
 	manifest := ""
 	if c.memory != nil {
 		if project == "" {
@@ -1452,8 +1544,8 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string) (string, 
 	// The intent, the manifest and the output rider are non-negotiable; only
 	// the skills section degrades. A negative remainder (a huge intent) still
 	// runs — withSkills treats it as "no room for skill bodies".
-	budget := agentPromptBudget - len(intent) - len(manifest) - len(agentOutputRider)
-	prompt, used := withSkills(c, intent, project, title, budget)
+	budget := agentPromptBudget - len(intent) - len(manifest) - len(rider)
+	prompt, used := withSkills(c, intent, project, title, budget, promptLang)
 	if manifest != "" {
 		prompt = manifest + "\n\n" + prompt
 	}
@@ -1462,7 +1554,7 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string) (string, 
 	// pipeline, so it must read as a direct answer — not a transcript of
 	// the agent's exploration. Execution details stay in the task's event
 	// stream (panda task <id>) for anyone who wants the full trail.
-	prompt += agentOutputRider
+	prompt += rider
 	return prompt, used
 }
 
@@ -1473,7 +1565,11 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string) (string, 
 // a body that does not fit degrades to an index line (name + description) so
 // the agent still knows the skill exists without the prompt overflowing the
 // agent's window. The returned slice is the set actually loaded.
-func withSkills(c *Core, intent, project, query string, budget int) (string, []*skills.Skill) {
+func withSkills(c *Core, intent, project, query string, budget int, loc ...i18n.Locale) (string, []*skills.Skill) {
+	targetLoc := i18n.ChineseSimp
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
 	if c.skills == nil {
 		return intent, nil
 	}
@@ -1494,7 +1590,8 @@ func withSkills(c *Core, intent, project, query string, budget int) (string, []*
 		return intent, nil
 	}
 	var b strings.Builder
-	b.WriteString("可用技能（按需参考）：\n")
+	availableKey := i18n.T(targetLoc, "prompt.skills.available")
+	b.WriteString(availableKey + "\n")
 	remaining := budget - b.Len()
 	var used []*skills.Skill
 	for _, e := range matched {
@@ -1511,7 +1608,8 @@ func withSkills(c *Core, intent, project, query string, budget int) (string, []*
 		}
 		// Budget exhausted: degrade to an index line — the agent sees the
 		// skill exists (and what it is for) without the full body.
-		line := fmt.Sprintf("## %s\n（正文超出本次提示词预算已省略，描述：%s）\n", sk.Name, sk.Description)
+		omittedMsg := i18n.Tf(targetLoc, "prompt.skills.omitted", "desc", sk.Description)
+		line := fmt.Sprintf("## %s\n%s\n", sk.Name, omittedMsg)
 		b.WriteString(line)
 		c.logger.Warn("agent prompt budget: skill degraded to index line",
 			"skill", sk.Name, "budget", budget)
@@ -1519,27 +1617,27 @@ func withSkills(c *Core, intent, project, query string, budget int) (string, []*
 	if len(used) == 0 {
 		return intent, nil
 	}
-	return b.String() + "\n任务指令：\n" + intent, used
+	intentHeader := i18n.T(targetLoc, "prompt.task.intent_header")
+	return b.String() + "\n" + intentHeader + "\n" + intent, used
 }
 
 // logTask appends one daily-log line recording a task outcome. The daily log is
 // the warm layer the Dreaming engine (design §17.3) consolidates from, so this
 // is the point where task history becomes candidate long-term memory.
-//
-// The title originates from user/entry-model text, so the line goes through
-// AppendExternal: its provenance is tainted and the Dreaming provenance gate
-// will never promote it into MEMORY.md (P1-22) — otherwise instruction-shaped
-// task text appearing 3 times in 3 days would be "consolidated" into the
-// long-term memory that every future system prompt injects.
-func (c *Core) logTask(title string, ok bool) {
+func (c *Core) logTask(title string, ok bool, loc ...i18n.Locale) {
 	if c.daily == nil {
 		return
 	}
-	status := "成功"
-	if !ok {
-		status = "失败"
+	targetLoc := i18n.ChineseSimp
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
 	}
-	if err := c.daily.AppendExternal(time.Now(), fmt.Sprintf("任务「%s」%s", title, status)); err != nil {
+	status := i18n.T(targetLoc, "prompt.task.status.success")
+	if !ok {
+		status = i18n.T(targetLoc, "prompt.task.status.fail")
+	}
+	line := i18n.Tf(targetLoc, "prompt.task.log_format", "title", title, "status", status)
+	if err := c.daily.AppendExternal(time.Now(), line); err != nil {
 		c.logger.Warn("append daily log", "err", err)
 	}
 }
