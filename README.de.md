@@ -158,7 +158,7 @@ panda init
 
 | Version | Thema |
 |---|---|
-| **v0.0.8-preview** (aktuelle Basis) | Multi-Agenten-Orchestrierung auf einer Maschine, voll nutzbar: Absichtsklassifikation, Dispatch, Überwachungsschleife, Failover, gestufte Freigabe |
+| **v0.0.8** (aktuelle Basis) | Multi-Agenten-Orchestrierung auf einer Maschine, voll nutzbar: Absichtsklassifikation, Dispatch, Überwachungsschleife, Failover, gestufte Freigabe, Richtlinien für Prompt-Sprachen |
 | **v0.0.9** | Präzisere Agentensteuerung: Überwachungsurteile, Stabilität des Agenten-Routings, Ausführungstransparenz |
 | **v0.0.10** | Geräteübergreifende Zusammenarbeit als Hauptthema: knotenübergreifende Delegation, Lease-Schutz, wiederaufnehmbare Ausführung — gehärtet und im Feld getestet |
 | **v0.0.x (darüber hinaus)** | Stabilität, Performance und Feinschliff für Randfälle |
