@@ -158,7 +158,7 @@ panda init
 
 | Versión | Tema |
 |---|---|
-| **v0.0.8-preview** (base actual) | Orquestación multiagente en una sola máquina, plenamente utilizable: clasificación de intención, despacho, bucle de supervisión, failover, aprobación por niveles |
+| **v0.0.8** (base actual) | Orquestación multiagente en una sola máquina, plenamente utilizable: clasificación de intención, despacho, bucle de supervisión, failover, aprobación por niveles, política de idioma en prompts |
 | **v0.0.9** | Control de agentes más preciso: veredictos de supervisión, estabilidad del enrutado de agentes, transparencia de ejecución |
 | **v0.0.10** | La colaboración multidispositivo como protagonista: delegación entre nodos, protección por lease, ejecución reanudable — endurecida y probada en campo |
 | **v0.0.x (más allá)** | Estabilidad, rendimiento y ajuste de casos límite |

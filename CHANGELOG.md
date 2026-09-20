@@ -42,8 +42,21 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-09-20
+
+The official v0.0.8 release: OpenPanda transitions from preview to stable release baseline, introducing prompt language policies and end-to-end multi-language localization, geographic provider classification, automatic credential sanitization, SQLite WAL concurrency optimizations, capability tier floor hardening, and installer and terminal fixes.
+
+### Added
+
+- **Prompt language policy and decoupled output localization** — `PromptLanguagePolicy` in `internal/core` injects user language requirements into agent and execution prompts with context propagation, while keeping raw instructions clean (b4ef8a6).
+- **Localized engine workflow and CLI language selector** — device summaries, fast triage, task submission, subagent progress notes, and result summarization now support Chinese, English, Japanese, Spanish, and German; accessible via `--lang` in `panda ask`, REPL, and Bubble Tea TUI (6ac309d, fc96d8c, 8d6ce28).
+- **Geographic provider classification** — provider origin detection and `DetectRegion` inference in `internal/providers` dynamically route tasks based on provider host regions and compliance requirements (35443bc).
+- **Automatic credential sanitization** — `internal/core/sanitize.go` automatically scans and redacts API keys, private keys, and authorization tokens in project packaging, task payloads, and execution logs (d91a4bf).
+
 ### Fixed
 
+- **SQLite WAL concurrency and lock tuning** — optimized SQLite connection pragmas (`journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`) to eliminate writer starvation under high concurrent node traffic (d91a4bf).
+- **Capability tier floor hardening** — tightened defense permission evaluation so high-impact operations strictly require elevated confirmation (d91a4bf).
 - **Installer no longer aborts a successful install on a headless Linux host** — `scripts/install.sh --yes` read `$USER`, which is unset in containers, CI runners and plain SSH sessions — exactly the hosts the flag exists for. Under `set -u` that aborted the script right after the binary, PATH entry and self-check had all succeeded, so a good install was reported as a failure and printed no completion message. The user name is now derived instead.
 - **Windows uninstall removes the logon task** — `panda uninstall` stopped a service name the installer had stopped creating when auto-start moved to a scheduled task, so `OpenPandaNode` survived the uninstall and relaunched a daemon whose binary had just been deleted, at every logon, while reporting the failure to someone who had already uninstalled the product. It now deletes the task.
 - **Homebrew formula pinned to a release that no longer exists** — the tap's formula pointed at `v0.0.8`, whose tag and release had been deleted, so `brew install Xustalis/openpanda/openpanda` fetched an archive that 404s. The tap is back on the newest published tag, and a guard asserts the formula's version and SHA-256 against the released asset.
