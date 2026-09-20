@@ -38,6 +38,14 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
+### 修正
+
+- **Windows のクラシックコンソールが生のエスケープシーケンスではなく色を正しく表示** —— パレットは Windows の TTY では常に SGR コードを出力していましたが、従来型コンソールホスト（cmd.exe、Windows PowerShell 5.1、ダブルクリック起動のバイナリ）はプロセスが VT 処理を有効化するまでそれを解釈しません。`internal/cliui` は初回使用時に stdout の `ENABLE_VIRTUAL_TERMINAL_PROCESSING` を有効化し、すべての ANSI 出力をそれにゲートするため、VT を有効化できない環境では `[31m` の文字化けではなくきれいなプレーンテキストを出力します。
+- **Windows のクラシック REPL に本物のラインエディタを搭載** —— 従来は裸のスキャナ読み取りで、カーソル移動・履歴・Tab 補完がなく、実行中の ask で Ctrl-C を押すとコンソール制御ハンドラに当たり REPL 全体が終了していました。新しいコンソール API ベースのエディタにより、行内編集、永続化履歴（`%LOCALAPPDATA%\openpanda` に保存）、スラッシュコマンドと引数位置の補完、実行中 ask の Esc/Ctrl-C キャンセル（二度押しで終了、unix と同様）、および実際の端末幅の取得が可能になります。
+- **`panda uninstall` が既定位置の設定と能力カードを削除** —— ユーザー既定ディレクトリ（例 `%APPDATA%\openpanda\config.yaml`）にある設定は「custom location — kept」と判定され、API キーや共有シークレットがディスクに残っていました。能力カードは計画に含まれることすらありませんでした。どちらも標準のユーザー/システム設定ディレクトリ内にある場合は削除対象になります（Linux の `~/.config/openpanda` も同様に修正）。
+- **Windows のブラウザ起動が URL の特殊文字で壊れない** —— `cmd /c start <url>` は `&`・`^`・括弧をシェル構文として解釈していました。`panda web` はトークン付き URL を `rundll32 url.dll,FileProtocolHandler` で開くようになりました。
+- **Windows のインストール/アンインストールの堅牢性強化** —— インストーラーの自己チェックはゼロ以外の終了コードで失敗するようになり、壊れたバイナリでも成功と報告されることはなくなりました。PATH 比較は `%VAR%` エントリを展開して重複追加を防止。`taskkill` によるキャンセルでコンソールウィンドウが表示されなくなり、ハードウェアプローブは `pwsh` を優先して `powershell` にフォールバック。`ProgramData` 未設定時は `SystemConfigDir` が `C:\ProgramData` にフォールバックし、REPL 履歴は unix 風の `~/.local/state` から `%LOCALAPPDATA%\openpanda` に移動しました。
+
 ## [0.0.8] - 2026-09-20
 
 公式 v0.0.8 リリース：OpenPanda はプレビューから安定版の公式ベースラインへと移行し、プロンプト多言語ポリシーとエンドツーエンドの多言語ローカライズ、プロバイダー地理分類、認証情報の自動サニタイズ、SQLite WAL 並行性最適化、権限階層の下限強化、インストーラーと端末対話の修正を包括的に導入します。
