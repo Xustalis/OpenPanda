@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/Xustalis/OpenPanda/internal/config"
 )
 
 // commandOutput runs bin with args and returns its trimmed combined output.
@@ -83,11 +85,15 @@ func InPATH(dir string) bool {
 	return false
 }
 
-// samePath compares two cleaned paths; case-insensitive on Windows.
+// samePath compares two cleaned paths; case-insensitive on Windows, where
+// registry PATH entries may still hold unexpanded variables (the typical
+// REG_EXPAND_SZ keeps %LOCALAPPDATA%\OpenPanda\bin verbatim). The comparison
+// expands those first so a re-install recognises the entry it wrote before
+// and does not append a duplicate.
 func samePath(a, b string) bool {
 	a, b = filepath.Clean(a), filepath.Clean(b)
 	if runtime.GOOS == "windows" {
-		return strings.EqualFold(a, b)
+		return strings.EqualFold(os.ExpandEnv(a), os.ExpandEnv(b))
 	}
 	return a == b
 }
@@ -177,10 +183,11 @@ type Target struct {
 // PlanInput collects everything Scan derives deletions from. Storage may be
 // nil (config unreadable) — the binary and PATH entries are still actionable.
 type PlanInput struct {
-	Storage        *StoragePaths
-	ConfigFileUsed string // the config file the run resolved to (may not exist)
-	ExePath        string
-	InstallDir     string
+	Storage            *StoragePaths
+	ConfigFileUsed     string // the config file the run resolved to (may not exist)
+	CapabilityCardUsed string // the capability card the run resolved to (may not exist)
+	ExePath            string
+	InstallDir         string
 }
 
 // StoragePaths mirrors the subset of config.StorageConfig the uninstall
@@ -222,8 +229,18 @@ func (s *StoragePaths) assetDirs() []struct{ path, kind, reason string } {
 // ownedConfigRoots are the directories a config file may live in for the
 // uninstall to claim it. A config at a custom location (a repo checkout, a
 // dotfiles manager) belongs to the user, not to us.
+//
+// The per-user config dir (os.UserConfigDir/openpanda — ~/.config/openpanda
+// on Linux, %APPDATA%\openpanda on Windows, ~/Library/Application
+// Support/openpanda on macOS) is where `panda init` writes by default, so it
+// is an owned root on every platform. It used to be missing here, which left
+// a default install's config.yaml — API keys and the network shared secret
+// included — behind after uninstall, reported as "custom location — kept".
 func ownedConfigRoots(installDir string) []string {
-	roots := []string{"/etc/openpanda"}
+	roots := []string{config.SystemConfigDir()}
+	if ucd, err := os.UserConfigDir(); err == nil && ucd != "" {
+		roots = append(roots, filepath.Join(ucd, "openpanda"))
+	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		roots = append(roots, filepath.Join(home, ".openpanda"))
 	}
@@ -396,27 +413,38 @@ func Scan(in PlanInput) []Target {
 	}
 
 	// The config file is only ours inside an owned root; also resolve the
-	// default location so a standard install's config is swept with the rest.
+	// default locations so a standard install's config is swept with the rest
+	// even when the run happened to resolve a custom one.
 	cfgFile := in.ConfigFileUsed
 	if cfgFile == "" {
 		if env := os.Getenv("OPENPANDA_CONFIG_PATH"); env != "" {
 			cfgFile = env
 		} else {
-			cfgFile = "/etc/openpanda/config.yaml"
+			cfgFile = config.SystemConfigPath()
 		}
 	}
-	if cfgFile != "" {
-		cfgFile = cleanAbs(cfgFile)
+	addConfig := func(file string) {
+		if file == "" {
+			return
+		}
+		file = cleanAbs(file)
 		owned := false
 		for _, root := range ownedConfigRoots(in.InstallDir) {
-			if within(cfgFile, cleanAbs(root)) {
+			if within(file, cleanAbs(root)) {
 				owned = true
 				break
 			}
 		}
-		targets = append(targets, mkTarget(cfgFile, KindConfig, owned,
+		targets = append(targets, mkTarget(file, KindConfig, owned,
 			tern(!owned, "custom location — kept", "")))
 	}
+	addConfig(cfgFile)
+	if user, err := config.UserConfigPath(); err == nil && user != "" && cleanAbs(user) != cleanAbs(cfgFile) {
+		addConfig(user)
+	}
+	// The capability card defaults beside the config; it is ours inside an
+	// owned root and stays anywhere else.
+	addConfig(in.CapabilityCardUsed)
 
 	// 4. User assets: always kept, listed so the report shows what survived.
 	if s != nil {

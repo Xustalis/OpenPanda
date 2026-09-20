@@ -54,8 +54,15 @@ func probe(name string, args ...string) string {
 }
 
 // powershell runs a PowerShell expression with profile loading disabled (a
-// user profile can print a banner and slow startup by seconds).
+// user profile can print a banner and slow startup by seconds). pwsh is tried
+// first: it is the version actively maintained, it ships on Server Core, and
+// Windows PowerShell 5.1 is absent on some stripped installs — falling back
+// there keeps RAM/GPU/VRAM/display probes working instead of silently
+// reporting unknown hardware.
 func powershell(expr string) string {
+	if out := probe("pwsh", "-NoProfile", "-NonInteractive", "-Command", expr); out != "" {
+		return out
+	}
 	return probe("powershell", "-NoProfile", "-NonInteractive", "-Command", expr)
 }
 

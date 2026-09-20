@@ -776,7 +776,14 @@ func Default() *Config {
 // for machine-scoped application state.
 func SystemConfigDir() string {
 	if runtime.GOOS == "windows" {
-		return filepath.Join(os.Getenv("ProgramData"), "OpenPanda")
+		base := os.Getenv("ProgramData")
+		if base == "" {
+			// ProgramData is set on every real Windows install, but a broken
+			// environment (service account without a profile) must not turn
+			// this into the relative path "OpenPanda" relative to the cwd.
+			base = `C:\ProgramData`
+		}
+		return filepath.Join(base, "OpenPanda")
 	}
 	return "/etc/openpanda"
 }
@@ -795,8 +802,10 @@ var DefaultPath = SystemConfigPath()
 // UserConfigPath returns a user-writable config location —
 // ~/.config/openpanda/config.yaml on Linux,
 // ~/Library/Application Support/openpanda/config.yaml on macOS,
-// %LOCALAPPDATA%\openpanda\config.yaml on Windows. It is where `panda init`
-// writes by default, so a first run never needs root to place its config.
+// %APPDATA%\openpanda\config.yaml on Windows (os.UserConfigDir resolves to
+// the roaming AppData profile there — the same directory scripts/install.ps1
+// checks). It is where `panda init` writes by default, so a first run never
+// needs root to place its config.
 func UserConfigPath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
@@ -96,10 +97,17 @@ func termSupportsUnicode() bool {
 }
 
 // cliStateDir is where CLI state (REPL history) lives: XDG_STATE_HOME when
-// set, else ~/.local/state (the stdlib has no UserStateDir).
+// set (unix convention), %LOCALAPPDATA%\openpanda on Windows — creating
+// ~/.local/state there is unix leakage and scatters hidden folders through a
+// Windows home — else ~/.local/state (the stdlib has no UserStateDir).
 func cliStateDir() string {
 	if d := os.Getenv("XDG_STATE_HOME"); d != "" {
 		return filepath.Join(d, "openpanda")
+	}
+	if runtime.GOOS == "windows" {
+		if base := os.Getenv("LOCALAPPDATA"); base != "" {
+			return filepath.Join(base, "openpanda")
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
