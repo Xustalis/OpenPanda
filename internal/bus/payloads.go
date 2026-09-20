@@ -127,6 +127,8 @@ type TaskDelegatePayload struct {
 	// executor derives its own directory (see Core.projectWorkDir).
 	ProjectPack []byte `json:"project_pack,omitempty"`
 	ProjectDir  string `json:"project_dir,omitempty"`
+	// UserLocale carries the origin user's language preference across nodes.
+	UserLocale string `json:"user_locale,omitempty"`
 }
 
 // MaxProjectPackBytes bounds the inline project pack. Project memory is capped
