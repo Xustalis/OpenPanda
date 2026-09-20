@@ -105,6 +105,16 @@ func (c *Core) packProjectMemory(project string) ([]byte, error) {
 	if st, serr := os.Stat(dir); serr != nil || !st.IsDir() {
 		return nil, nil // no memory directory yet: nothing to carry
 	}
+	// Report credentials before the memory leaves the node. The scan reads the
+	// files, never the packed archive: a regex over compressed bytes matches at
+	// random, and "redacting" the archive in place would corrupt the stream the
+	// peer has to unpack. Detection only — stripping a value has to happen in
+	// the memory file itself.
+	for _, file := range scanProjectMemoryCredentials(dir) {
+		c.logger.Warn("project memory may carry a credential",
+			"project", project, "file", file)
+	}
+
 	var buf bytes.Buffer
 	if _, err := artifact.Pack(dir, &buf); err != nil {
 		return nil, err
@@ -157,6 +167,7 @@ func (c *Core) landProjectPack(project string, pack []byte) error {
 		c.logger.Warn("land project pack: create dir", "project", project, "err", err)
 		return err
 	}
+
 	if _, err := artifact.Unpack(bytes.NewReader(pack), dir); err != nil {
 		c.logger.Warn("land project pack: unpack", "project", project, "err", err)
 		return err

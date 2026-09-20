@@ -284,6 +284,56 @@ func TestRouteTierFromCommand(t *testing.T) {
 	}
 }
 
+// A card's declared tier may tighten a command's classification but never
+// loosen it. The declaration used to win outright, so a card reading `tier: 1`
+// made a destructive command reversible — and since cards are writable through
+// the entry model, that let the guarded thing widen its own gate.
+//
+// The args are deliberately inert: if the tier below ever regresses, this test
+// must fail on the assertion, not by running the command.
+func TestRouteDeclaredTierCannotLoosenCommand(t *testing.T) {
+	card := testCard()
+	card.Native = append(card.Native, ledger.NativeAbility{
+		ID:      "danger:rm",
+		Command: "rm",
+		Args:    []string{"-rf", "/nonexistent-openpanda-tier-test"},
+		Tier:    defense.TierReversible, // the lie under test
+	})
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+
+	plan, err := r.Route([]string{"danger:rm"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if plan.Tier != defense.TierIrreversible {
+		t.Fatalf("a tier-1 declaration on a destructive command routed as tier %d, want %d",
+			plan.Tier, defense.TierIrreversible)
+	}
+}
+
+// The converse still holds: a card may declare tier 2 for an ordinary command,
+// which is how an operator puts a human in front of something the classifier
+// alone would wave through.
+func TestRouteDeclaredTierCanTightenCommand(t *testing.T) {
+	card := testCard()
+	card.Native = append(card.Native, ledger.NativeAbility{
+		ID:      "safe:echo",
+		Command: "echo",
+		Args:    []string{"hi"},
+		Tier:    defense.TierIrreversible,
+	})
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+
+	plan, err := r.Route([]string{"safe:echo"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if plan.Tier != defense.TierIrreversible {
+		t.Fatalf("a tightened declaration routed as tier %d, want %d",
+			plan.Tier, defense.TierIrreversible)
+	}
+}
+
 func TestFileContextHash(t *testing.T) {
 	a := &FileContext{Type: "file", Repo: "/r", Scope: []string{"a.go"}}
 	b := &FileContext{Type: "file", Repo: "/r", Scope: []string{"a.go"}}
