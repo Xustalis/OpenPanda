@@ -38,8 +38,21 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-09-20
+
+Offizielles Release v0.0.8: OpenPanda wechselt von der Vorschau zur stabilen offiziellen Release-Basis und führt Richtlinien für Prompt-Sprachen, durchgängige Lokalisierung, geografische Provider-Klassifizierung, automatische Bereinigung von Anmeldedaten, SQLite WAL-Parallelitätsoptimierungen, Härtung der minimalen Berechtigungsstufe sowie Installer- und Terminal-Korrekturen ein.
+
+### Hinzugefügt
+
+- **Richtlinie für Prompt-Sprachen und entkoppelte Ausgabelokalisierung** — `internal/core` implementiert `PromptLanguagePolicy`, um Sprachanforderungen des Benutzers unter Beibehaltung sauberer Originalanweisungen mit Kontextweitergabe in Agent- und Ausführungsprompts einzubinden (b4ef8a6).
+- **Lokalisierter Engine-Workflow und CLI-Sprachauswahl** — Geräteübersichten, Schnell-Triage, Aufgabenübermittlung, Fortschrittshinweise für Subagenten und Ergebnisberichte unterstützen jetzt Chinesisch, Englisch, Japanisch, Spanisch und Deutsch; zugänglich über `--lang` in `panda ask`, REPL und Bubble Tea TUI (6ac309d, fc96d8c, 8d6ce28).
+- **Geografische Provider-Klassifizierung** — Herkunftserkennung für Provider und `DetectRegion`-Inferenz in `internal/providers` zur dynamischen Aufgabenweiterleitung basierend auf Host-Regionen und Compliance-Anforderungen (35443bc).
+- **Automatische Bereinigung von Anmeldedaten** — `internal/core/sanitize.go` scannt und schwärzt automatisch API-Schlüssel, private Schlüssel und Autorisierungstoken in Projektpaketen, Aufgaben-Payloads und Ausführungsprotokollen (d91a4bf).
+
 ### Behoben
 
+- **SQLite WAL-Parallelität und Sperrabstimmung** — optimierte SQLite-Verbindungspragmas (`journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`), um Schreibengpässe bei hohem gleichzeitigem Knotendatenverkehr zu beseitigen (d91a4bf).
+- **Härtung der minimalen Berechtigungsstufe** — strengere Auswertung von Sicherheitsberechtigungen, sodass Vorgänge mit hoher Auswirkung oder irreversible Aktionen strikt eine manuelle Genehmigung erfordern (d91a4bf).
 - **Die Installation bricht auf einem Linux-Host ohne Desktop-Sitzung nicht mehr ab** — `scripts/install.sh --yes` las `$USER`, das in Containern, CI-Runnern und einfachen SSH-Sitzungen nicht gesetzt ist — genau die Hosts, für die das Flag gedacht ist. Unter `set -u` brach das das Skript ab, nachdem Binary, PATH-Eintrag und Selbsttest bereits erfolgreich waren: eine gelungene Installation wurde als Fehler gemeldet, ohne Abschlussmeldung. Der Name wird jetzt selbst ermittelt.
 - **Die Deinstallation unter Windows entfernt die Anmeldeaufgabe** — `panda uninstall` stoppte einen Dienstnamen, den der Installer nicht mehr anlegte, seit der Autostart auf eine geplante Aufgabe umgestellt wurde; `OpenPandaNode` überlebte die Deinstallation und startete bei jeder Anmeldung einen Daemon, dessen Binary gerade gelöscht worden war, und meldete den Fehler jemandem, der das Produkt bereits entfernt hatte. Die Aufgabe wird jetzt gelöscht.
 - **Homebrew-Formel auf ein nicht mehr existierendes Release festgelegt** — die Formel im Tap zeigte auf `v0.0.8`, dessen Tag und Release gelöscht waren, sodass `brew install Xustalis/openpanda/openpanda` ein Archiv lud, das 404 liefert. Der Tap steht wieder auf dem neuesten veröffentlichten Tag, und eine Prüfung vergleicht Version und SHA-256 der Formel mit dem veröffentlichten Artefakt.

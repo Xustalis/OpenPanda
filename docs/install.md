@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/ins
 等效的显式写法：
 
 ```bash
-sh scripts/install.sh --version 0.0.7   # 安装指定版本（如稳定版 0.0.7、预发布版 0.0.8-preview；默认 latest，即最新稳定版）
+sh scripts/install.sh --version 0.0.8   # 安装指定版本（如稳定版 0.0.8、预发布版 0.0.8-preview；默认 latest，即最新稳定版）
 sh scripts/install.sh --prefix /opt/openpanda  # 自定义安装目录
 sh scripts/install.sh --yes                    # 额外注册开机自启（不询问）
 sh scripts/install.sh --no-service             # 不碰开机自启

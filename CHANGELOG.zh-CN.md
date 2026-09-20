@@ -38,8 +38,21 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-09-20
+
+v0.0.8 正式版：OpenPanda 正式由预览版迈入稳定发布基线，全面引入多语言提示词策略与全链路本地化、Provider 地理归属分类、敏感凭据自动脱敏、SQLite WAL 并发性能调优、权限分级底线加固，以及安装器与终端交互深度修复。
+
+### 新增
+
+- **提示词多语言策略与解耦输出本地化** —— `internal/core` 实现 `PromptLanguagePolicy`，在保持原始指令纯净的前提下，将用户语言诉求注入 Agent 与执行提示词，支持全链路上下文传播（b4ef8a6）。
+- **引擎工作流全链路本地化与 CLI 语言开关** —— 设备摘要、快速分流、任务提交、子 Agent 进度说明与结果汇报全面支持中文、英文、日文、西班牙文和德文；`panda ask`、REPL 与 Bubble Tea TUI 统一接入 `--lang` 语言开关（6ac309d、fc96d8c、8d6ce28）。
+- **Provider 地理归属分类** —— `internal/providers` 增加地理来源分类与 `DetectRegion` 推断能力，根据 Provider 所在地域与合规要求动态路由任务（35443bc）。
+- **敏感凭据自动脱敏过滤** —— `internal/core/sanitize.go` 在项目打包、任务载荷与日志输出中自动扫描并遮蔽 API 密钥、私钥与访问 Token，杜绝机密信息泄漏（d91a4bf）。
+
 ### 修复
 
+- **SQLite WAL 并发与锁优化** —— 优化 SQLite 连接配置参数（`journal_mode=WAL`、`synchronous=NORMAL`、`busy_timeout=5000`），彻底解决高并发节点访问下的写入饥饿与锁冲突（d91a4bf）。
+- **权限分级底线严格化** —— 收紧安全防御权限判定逻辑，高影响与不可逆操作严格进入人工审批队列（d91a4bf）。
 - **无头 Linux 主机上的安装不再被中断** —— `scripts/install.sh --yes` 读取了 `$USER`，而容器、CI runner、纯 SSH 会话里这个变量通常不存在（恰恰是 `--yes` 要服务的那些机器）。在 `set -u` 下，脚本会在二进制、PATH 条目与自检都成功之后中断，把一个成功的安装报成失败，且不打印完成提示。现在改为自行推导用户名。
 - **Windows 卸载会移除登录计划任务** —— `panda uninstall` 停用的那个服务名，在自启方式改为计划任务之后安装器就不再创建了，于是 `OpenPandaNode` 在卸载后继续存在，并在每次登录时拉起一个刚被删掉二进制的 daemon，向已经卸载了产品的用户报错。现在改为删除该任务。
 - **Homebrew 配方指向了已不存在的发行版** —— tap 的配方指向 `v0.0.8`，而该 tag 与 release 均已被删除，`brew install Xustalis/openpanda/openpanda` 因此取到一个 404 的归档。tap 已回到最新的已发布 tag，并新增守卫比对配方版本与 SHA-256 是否与发行产物一致。
