@@ -4,14 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -63,11 +64,28 @@ func waitForPeers(ctx context.Context, db *sql.DB, timeout time.Duration) {
 // receives one actionable natural-language instruction (design doc §7.3: the
 // refined intent is the spec from the same call — no separate refinement step
 // in MVP).
-func toTaskInput(spec *entry.TaskSpec) core.TaskInput {
+func toTaskInput(spec *entry.TaskSpec, loc ...i18n.Locale) core.TaskInput {
+	targetLoc := i18n.Locale("")
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
+	if targetLoc == "" {
+		if containsHan(spec.Title) || containsHan(spec.Spec.Target) {
+			targetLoc = i18n.ChineseSimp
+		} else {
+			targetLoc = i18n.Detect()
+		}
+	}
+
+	delim := i18n.T(targetLoc, "prompt.task.delimiter")
+	if delim == "prompt.task.delimiter" {
+		delim = "; "
+	}
+
 	var constraints strings.Builder
 	for i, c := range spec.Spec.Constraints {
 		if i > 0 {
-			constraints.WriteString("；")
+			constraints.WriteString(delim)
 		}
 		constraints.WriteString(c)
 	}
@@ -75,16 +93,16 @@ func toTaskInput(spec *entry.TaskSpec) core.TaskInput {
 	var intent strings.Builder
 	intent.WriteString(spec.Title)
 	if spec.Spec.Target != "" {
-		fmt.Fprintf(&intent, "\n目标：%s", spec.Spec.Target)
+		intent.WriteString("\n" + i18n.Tf(targetLoc, "prompt.task.target", "target", spec.Spec.Target))
 	}
 	if spec.Spec.Scope != "" {
-		fmt.Fprintf(&intent, "\n范围：%s", spec.Spec.Scope)
+		intent.WriteString("\n" + i18n.Tf(targetLoc, "prompt.task.scope", "scope", spec.Spec.Scope))
 	}
 	if constraints.Len() > 0 {
-		fmt.Fprintf(&intent, "\n约束：%s", constraints.String())
+		intent.WriteString("\n" + i18n.Tf(targetLoc, "prompt.task.constraints", "constraints", constraints.String()))
 	}
 	if spec.Spec.SuccessDefinition != "" {
-		fmt.Fprintf(&intent, "\n成功标准：%s", spec.Spec.SuccessDefinition)
+		intent.WriteString("\n" + i18n.Tf(targetLoc, "prompt.task.success_definition", "def", spec.Spec.SuccessDefinition))
 	}
 
 	specJSON, _ := json.Marshal(spec.Spec)
@@ -101,5 +119,15 @@ func toTaskInput(spec *entry.TaskSpec) core.TaskInput {
 		Complexity:    spec.Complexity,
 		Risk:          spec.Risk,
 		ResourceJSON:  string(resourceJSON),
+		UserLocale:    targetLoc,
 	}
+}
+
+func containsHan(s string) bool {
+	for _, r := range s {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
 }

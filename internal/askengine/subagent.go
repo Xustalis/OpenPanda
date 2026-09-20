@@ -3,9 +3,11 @@ package askengine
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -23,29 +25,45 @@ import (
 // observation, and the following call reports on it. Feeding the dispatch
 // back this way (rather than a synthetic "task submitted" note) keeps the
 // model's authorship of the plan visible to itself when it converges.
-func taskDispatchNote(spec *entry.TaskSpec) string {
+func taskDispatchNote(spec *entry.TaskSpec, loc ...i18n.Locale) string {
+	targetLoc := i18n.Locale("")
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
+	if targetLoc == "" {
+		if containsHan(spec.Title) || containsHan(spec.Spec.Target) {
+			targetLoc = i18n.ChineseSimp
+		} else {
+			targetLoc = i18n.Detect()
+		}
+	}
+
 	var b strings.Builder
-	fmt.Fprintf(&b, "已派发子代理任务：%s", spec.Title)
+	b.WriteString(i18n.Tf(targetLoc, "prompt.subagent.dispatch", "title", spec.Title))
 	var subagentTypes []string
 	if spec.Spec.Node != "" {
-		subagentTypes = append(subagentTypes, fmt.Sprintf("设备节点: %s", spec.Spec.Node))
+		subagentTypes = append(subagentTypes, i18n.Tf(targetLoc, "prompt.subagent.dispatch_node", "node", spec.Spec.Node))
 	}
 	for _, ab := range spec.Requires.Abilities {
 		if strings.HasPrefix(ab, "agent:") {
-			subagentTypes = append(subagentTypes, fmt.Sprintf("Harness: %s", strings.TrimPrefix(ab, "agent:")))
+			subagentTypes = append(subagentTypes, i18n.Tf(targetLoc, "prompt.subagent.dispatch_harness", "harness", strings.TrimPrefix(ab, "agent:")))
 		}
 	}
 	if len(subagentTypes) > 0 {
-		fmt.Fprintf(&b, "【Subagent: %s】", strings.Join(subagentTypes, " · "))
+		fmt.Fprintf(&b, " 【Subagent: %s】", strings.Join(subagentTypes, " · "))
 	}
 	if len(spec.Requires.Abilities) > 0 {
-		fmt.Fprintf(&b, "（需要能力：%s）", strings.Join(spec.Requires.Abilities, "、"))
+		sep := "、"
+		if targetLoc == i18n.English {
+			sep = ", "
+		}
+		b.WriteString(i18n.Tf(targetLoc, "prompt.subagent.dispatch_abilities", "abilities", strings.Join(spec.Requires.Abilities, sep)))
 	}
 	if spec.Spec.Target != "" {
-		fmt.Fprintf(&b, "\n目标：%s", spec.Spec.Target)
+		b.WriteString(i18n.Tf(targetLoc, "prompt.subagent.dispatch_target", "target", spec.Spec.Target))
 	}
 	if spec.Spec.Node != "" {
-		fmt.Fprintf(&b, "\n指定设备：%s", spec.Spec.Node)
+		b.WriteString(i18n.Tf(targetLoc, "prompt.subagent.dispatch_assigned_node", "node", spec.Spec.Node))
 	}
 	return b.String()
 }
@@ -53,53 +71,80 @@ func taskDispatchNote(spec *entry.TaskSpec) string {
 // taskBudgetNote is appended as a user turn when the loop refuses the model's
 // latest dispatch because the task budget is spent: the final tool-free call
 // then explains itself instead of silently dropping the model's intent.
-const taskBudgetNote = "本轮对话的子代理任务预算（%d 个）已用完，不再派发新任务。请基于已执行任务的结果直接向用户汇报。"
+func taskBudgetNote(maxTasks int, loc ...i18n.Locale) string {
+	targetLoc := i18n.Detect()
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
+	return i18n.Tf(targetLoc, "prompt.subagent.budget_note", "n", strconv.Itoa(maxTasks))
+}
 
 // taskObservation formats one executed task's outcome as the observation the
 // entry model reports on: state, exit code, and excerpts of the output. The
 // agent transcript behind a task can be tens of thousands of tokens, so the
 // observation carries an excerpt only — the full output travels in the Result
 // (Stdout/Stderr) for the caller to surface on demand.
-func taskObservation(res *Result) string {
+func taskObservation(res *Result, loc ...i18n.Locale) string {
+	targetLoc := i18n.Locale("")
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
+	if targetLoc == "" {
+		if containsHan(res.TaskTitle) || containsHan(res.Stdout) {
+			targetLoc = i18n.ChineseSimp
+		} else {
+			targetLoc = i18n.Detect()
+		}
+	}
+
 	var b strings.Builder
-	fmt.Fprintf(&b, "[子代理任务结果] %s（%s）\n状态：%s", res.TaskTitle, res.TaskID, res.TaskState)
+	b.WriteString(i18n.Tf(targetLoc, "prompt.subagent.header",
+		"title", res.TaskTitle,
+		"id", res.TaskID,
+		"state", res.TaskState,
+	))
 	if res.Agent != "" {
-		fmt.Fprintf(&b, "，执行智能体/Harness：%s", res.Agent)
+		b.WriteString(i18n.Tf(targetLoc, "prompt.subagent.agent", "agent", res.Agent))
 		if res.Model != "" {
-			fmt.Fprintf(&b, "（模型：%s）", res.Model)
+			b.WriteString(i18n.Tf(targetLoc, "prompt.subagent.model", "model", res.Model))
 		}
 		if res.Injected {
-			fmt.Fprintf(&b, "（已注入系统模型）")
+			b.WriteString(i18n.T(targetLoc, "prompt.subagent.injected"))
 		}
 	}
 	if res.ExitCode != 0 {
-		fmt.Fprintf(&b, "，退出码 %d", res.ExitCode)
+		b.WriteString(i18n.Tf(targetLoc, "prompt.subagent.exit_code", "code", strconv.Itoa(res.ExitCode)))
 	}
 	// Adaptive excerpting: 6000 runes for stdout and 2500 for stderr to bound prompt token growth
-	if out := excerpt(res.Stdout, 6000); out != "" {
-		fmt.Fprintf(&b, "\n输出摘录：\n%s", out)
+	if out := excerpt(res.Stdout, 6000, targetLoc); out != "" {
+		fmt.Fprintf(&b, "\n%s\n%s", i18n.T(targetLoc, "prompt.subagent.stdout"), out)
 	}
-	if errText := excerpt(res.Stderr, 2500); errText != "" {
-		fmt.Fprintf(&b, "\n错误摘录：\n%s", errText)
+	if errText := excerpt(res.Stderr, 2500, targetLoc); errText != "" {
+		fmt.Fprintf(&b, "\n%s\n%s", i18n.T(targetLoc, "prompt.subagent.stderr"), errText)
 	}
 	if res.OK && (res.TaskState == "done" || res.ExitCode == 0) {
-		b.WriteString("\n\n【核心指示】：该子代理已成功执行完成。请直接基于上述执行结果与输出，向用户做完整、清晰、结构化的总结汇报与最终答复（如为分析任务，请提供核心发现与结论；如为操作任务，说明具体修改与结果），切勿再次派发子任务重复执行。")
+		b.WriteString(i18n.T(targetLoc, "prompt.subagent.done_core_instruction"))
 	} else {
-		b.WriteString("\n\n请基于以上结果继续本轮对话：向用户汇报，或决定下一步。")
+		b.WriteString(i18n.T(targetLoc, "prompt.subagent.continue_instruction"))
 	}
 	return b.String()
 }
 
 // excerpt trims a log to at most limit runes keeping head and tail — the
 // beginning says what was attempted, the end says how it finished.
-func excerpt(s string, limit int) string {
+func excerpt(s string, limit int, loc ...i18n.Locale) string {
 	runes := []rune(strings.TrimSpace(s))
 	if len(runes) <= limit {
 		return string(runes)
 	}
+	targetLoc := i18n.Detect()
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
+	omitted := i18n.T(targetLoc, "prompt.subagent.excerpt_omitted")
 	head := limit * 2 / 3
 	tail := limit / 3
-	return string(runes[:head]) + "\n…（中间输出在提示词中略去，完整结果已全量保存并直接展示给用户，无需重新采集）…\n" + string(runes[len(runes)-tail:])
+	return string(runes[:head]) + omitted + string(runes[len(runes)-tail:])
 }
 
 // reportTaskOutcome converges on the model's report when the round budget
@@ -113,8 +158,8 @@ func (e *Engine) reportTaskOutcome(ctx context.Context, client *entry.Client, tu
 		client = e.client.Load()
 	}
 	t := append(append([]entry.Turn{}, turns...),
-		entry.Turn{Role: "assistant", Content: taskDispatchNote(spec)},
-		entry.Turn{Role: "user", Content: taskObservation(res)},
+		entry.Turn{Role: "assistant", Content: taskDispatchNote(spec, e.locale)},
+		entry.Turn{Role: "user", Content: taskObservation(res, e.locale)},
 	)
 	out, err := entry.ClassifyTurns(ctx, client, devices, conversationMemory, t, opts...)
 	if err != nil {
