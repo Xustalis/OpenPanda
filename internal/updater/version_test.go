@@ -105,9 +105,8 @@ func TestCheckPreviewToRelease(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	origBase := githubAPIBase
-	githubAPIBase = srv.URL
-	defer func() { githubAPIBase = origBase }()
+	cleanup := SetAPIBaseForTest(srv.URL)
+	defer cleanup()
 
 	m := New(Options{Current: "0.0.8-preview"})
 	if err := m.Check(context.Background()); err != nil {
@@ -132,9 +131,8 @@ func TestCheckPrereleaseFiltering(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	origBase := githubAPIBase
-	githubAPIBase = srv.URL
-	defer func() { githubAPIBase = origBase }()
+	cleanup := SetAPIBaseForTest(srv.URL)
+	defer cleanup()
 
 	// Case 1: stable user (0.0.8) without --pre should not see 0.0.9-rc.1
 	m1 := New(Options{Current: "0.0.8", IncludePrerelease: false})
