@@ -11,6 +11,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/mcp"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
@@ -32,7 +33,7 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 
 	reg.Register(entry.Tool{
 		Name:        memory.ToolRead,
-		Description: "列出当前记忆条目（合并/删除前先读）。target 可选：user / memory / project。",
+		Description: "List memory entries (read before merge/delete) / 列出当前记忆条目（合并/删除前先读）。target: user / memory / project。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type":       "object",
@@ -45,13 +46,13 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 
 	reg.Register(entry.Tool{
 		Name:        memory.ToolAdd,
-		Description: "记住一条新记忆。target：user（用户偏好/沟通风格）、memory（环境事实/全局约定/纠正）、project（项目约定）。",
+		Description: "Remember a new memory / 记住一条新记忆。target: user (preferences/styles), memory (facts/conventions/corrections), project (project conventions)。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":  targetEnum,
-				"entry":   map[string]any{"type": "string", "description": "要记住的内容"},
+				"entry":   map[string]any{"type": "string", "description": "Content to remember / 要记住的内容"},
 				"project": projectArg,
 			},
 			"required": []string{"target", "entry"},
@@ -63,14 +64,14 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 
 	reg.Register(entry.Tool{
 		Name:        memory.ToolReplace,
-		Description: "替换一条已有记忆。old 用能唯一匹配该条目的子串（匹配到多条会报错，需给更具体子串）。",
+		Description: "Replace an existing memory / 替换一条已有记忆。old: unique substring matching entry / 能唯一匹配待替换条目的子串。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":  targetEnum,
-				"old":     map[string]any{"type": "string", "description": "能唯一匹配待替换条目的子串"},
-				"new":     map[string]any{"type": "string", "description": "替换后的内容"},
+				"old":     map[string]any{"type": "string", "description": "Unique substring to match / 能唯一匹配待替换条目的子串"},
+				"new":     map[string]any{"type": "string", "description": "Replacement content / 替换后的内容"},
 				"project": projectArg,
 			},
 			"required": []string{"target", "old", "new"},
@@ -82,13 +83,13 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 
 	reg.Register(entry.Tool{
 		Name:        memory.ToolRemove,
-		Description: "删除一条记忆。old 用能唯一匹配该条目的子串。",
+		Description: "Delete a memory entry / 删除一条记忆。old: unique substring matching entry / 能唯一匹配待删除条目的子串。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":  targetEnum,
-				"old":     map[string]any{"type": "string", "description": "能唯一匹配待删除条目的子串"},
+				"old":     map[string]any{"type": "string", "description": "Unique substring to match / 能唯一匹配待删除条目的子串"},
 				"project": projectArg,
 			},
 			"required": []string{"target", "old"},
@@ -125,14 +126,14 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 func registerReminderTools(reg *entry.Registry, rem *reminders.Store) {
 	reg.Register(entry.Tool{
 		Name:        "reminder_set",
-		Description: "设置一个定时提醒。after_minutes 填“多少分钟后提醒”；at 填绝对时间（RFC3339，如 2026-08-18T15:00:00+08:00，或不带时区则按本地时间）。两个参数二选一。",
+		Description: "Set a scheduled reminder / 设置一个定时提醒。after_minutes: minutes from now / 多少分钟后提醒; at: absolute time RFC3339 / 绝对时间。Choose one / 二选一。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"message":       map[string]any{"type": "string", "description": "提醒内容，如“开会”"},
-				"after_minutes": map[string]any{"type": "number", "description": "多少分钟后提醒（与 at 二选一）"},
-				"at":            map[string]any{"type": "string", "description": "提醒的绝对时间，RFC3339 或 \"2006-01-02 15:04\"（与 after_minutes 二选一）"},
+				"message":       map[string]any{"type": "string", "description": "Reminder content / 提醒内容"},
+				"after_minutes": map[string]any{"type": "number", "description": "Minutes from now (choose one with at) / 多少分钟后提醒"},
+				"at":            map[string]any{"type": "string", "description": "Absolute time RFC3339 or '2006-01-02 15:04' / 提醒的绝对时间"},
 			},
 			"required": []string{"message"},
 		},
@@ -157,7 +158,7 @@ func registerReminderTools(reg *entry.Registry, rem *reminders.Store) {
 
 	reg.Register(entry.Tool{
 		Name:        "reminder_list",
-		Description: "列出当前所有未触发的提醒。",
+		Description: "List all active pending reminders / 列出当前所有未触发的提醒。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type":       "object",
@@ -183,15 +184,16 @@ func registerReminderTools(reg *entry.Registry, rem *reminders.Store) {
 
 	reg.Register(entry.Tool{
 		Name:        "reminder_delete",
-		Description: "删除一条已设置的定时提醒。id 填提醒 ID（整数）。",
+		Description: "Delete a scheduled reminder by ID / 删除一条已设置的定时提醒。id: integer reminder ID / 提醒 ID（整数）。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id": map[string]any{"type": "integer", "description": "提醒 ID"},
+				"id": map[string]any{"type": "integer", "description": "Reminder ID / 提醒 ID"},
 			},
 			"required": []string{"id"},
 		},
+
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
 			rawID, ok := args["id"]
 			if !ok {
@@ -264,16 +266,29 @@ func reminderDueTime(args map[string]any) (time.Time, error) {
 // with the consent instructions for the current surface — becomes the
 // tool_result the model relays to the user (design §16: the same fail-closed
 // gate native and agent plans pass through in commander.Router.Execute).
-func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall, authorized bool) string {
+func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall, authorized bool, loc ...i18n.Locale) string {
+	targetLoc := i18n.ChineseSimp
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
 	t, ok := reg.Lookup(call.Tool)
 	if !ok {
+		if targetLoc == i18n.English {
+			return "Tool execution failed: unknown tool " + call.Tool
+		}
 		return "工具执行失败：未知工具 " + call.Tool
 	}
 	if err := defense.Authorize(t.Tier, authorized); err != nil {
-		return "工具执行被拒（tier-2 需授权）：" + toolConsentHint(t)
+		if targetLoc == i18n.English {
+			return "Tool execution refused (tier-2 requires authorization): " + toolConsentHint(t, targetLoc)
+		}
+		return "工具执行被拒（tier-2 需授权）：" + toolConsentHint(t, targetLoc)
 	}
 	result, err := t.Run(ctx, call.Arguments)
 	if err != nil {
+		if targetLoc == i18n.English {
+			return "Tool execution failed: " + err.Error()
+		}
 		return "工具执行失败：" + err.Error()
 	}
 	return result
@@ -301,32 +316,56 @@ func (c *taskDispatchCapture) take() *Result {
 // progress callbacks; submission goes through the same submitTask path
 // (scheduler, approval gate) as a KindTask directive, and an inline-mode
 // completion folds its output into the tool result so the model can report it.
-func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool, cb StreamCallbacks, capture *taskDispatchCapture) entry.Tool {
+func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool, cb StreamCallbacks, capture *taskDispatchCapture, loc ...i18n.Locale) entry.Tool {
+	targetLoc := i18n.ChineseSimp
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
+	desc := "把任务派发给 agent 执行。当用户要求调度某个 agent 干活时必须调用它（或输出 task JSON），而不是只口头答应。title 填任务标题，target 填要完成的目标，abilities 按 Connected Devices 摘要填能力 ID（如 agent:codex）。"
+	props := map[string]any{
+		"title":              map[string]any{"type": "string", "description": "任务标题（必填）"},
+		"target":             map[string]any{"type": "string", "description": "要达成的目标（必填）"},
+		"abilities":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "能力 ID 列表，如 agent:codex（必填）"},
+		"node":               map[string]any{"type": "string", "description": "目标节点名（可选，留空由调度器选择）"},
+		"scope":              map[string]any{"type": "string", "description": "允许修改的相对路径，逗号分隔（可选）"},
+		"constraints":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "约束/禁令（可选）"},
+		"success_definition": map[string]any{"type": "string", "description": "如何验证完成（可选）"},
+	}
+	if targetLoc == i18n.English {
+		desc = "Dispatch a task to an agent for execution. Must be called when the user asks to schedule an agent to do work (or output a task JSON directive). title: task title, target: goal to achieve, abilities: capability IDs from Connected Devices (e.g. agent:codex)."
+		props = map[string]any{
+			"title":              map[string]any{"type": "string", "description": "Task title (required)"},
+			"target":             map[string]any{"type": "string", "description": "Goal to achieve (required)"},
+			"abilities":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Capability IDs, e.g. agent:codex (required)"},
+			"node":               map[string]any{"type": "string", "description": "Target node name (optional, empty for scheduler selection)"},
+			"scope":              map[string]any{"type": "string", "description": "Allowed relative paths to modify, comma-separated (optional)"},
+			"constraints":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Constraints or prohibited actions (optional)"},
+			"success_definition": map[string]any{"type": "string", "description": "How to verify completion (optional)"},
+		}
+	}
 	return entry.Tool{
 		Name:        "task_submit",
-		Description: "把任务派发给 agent 执行。当用户要求调度某个 agent 干活时必须调用它（或输出 task JSON），而不是只口头答应。title 填任务标题，target 填要完成的目标，abilities 按 Connected Devices 摘要填能力 ID（如 agent:codex）。",
+		Description: desc,
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"title":              map[string]any{"type": "string", "description": "任务标题（必填）"},
-				"target":             map[string]any{"type": "string", "description": "要达成的目标（必填）"},
-				"abilities":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "能力 ID 列表，如 agent:codex（必填）"},
-				"node":               map[string]any{"type": "string", "description": "目标节点名（可选，留空由调度器选择）"},
-				"scope":              map[string]any{"type": "string", "description": "允许修改的相对路径，逗号分隔（可选）"},
-				"constraints":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "约束/禁令（可选）"},
-				"success_definition": map[string]any{"type": "string", "description": "如何验证完成（可选）"},
-			},
-			"required": []string{"title", "target", "abilities"},
+			"type":       "object",
+			"properties": props,
+			"required":   []string{"title", "target", "abilities"},
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
 			title, _ := args["title"].(string)
 			target, _ := args["target"].(string)
 			if strings.TrimSpace(title) == "" || strings.TrimSpace(target) == "" {
+				if targetLoc == i18n.English {
+					return "", fmt.Errorf("title and target must not be empty")
+				}
 				return "", fmt.Errorf("title 和 target 不能为空")
 			}
 			abilities := toStringSlice(args["abilities"])
 			if len(abilities) == 0 {
+				if targetLoc == i18n.English {
+					return "", fmt.Errorf("abilities must not be empty: specify capability IDs like agent:codex from Connected Devices")
+				}
 				return "", fmt.Errorf("abilities 不能为空：按 Connected Devices 能力摘要填写，如 agent:codex")
 			}
 			node, _ := args["node"].(string)
@@ -353,6 +392,9 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 				e.tryAutoInitScheduler()
 			}
 			if e.sched == nil {
+				if targetLoc == i18n.English {
+					return "", fmt.Errorf("no capability cards loaded, unable to dispatch task")
+				}
 				return "", fmt.Errorf("未加载能力卡片，无法派发任务")
 			}
 			cb.progress(Progress{Kind: ProgressTask, Name: spec.Title})
@@ -360,16 +402,33 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 			capture.set(res)
 			switch {
 			case res.NeedsApproval:
+				if targetLoc == i18n.English {
+					return fmt.Sprintf("Task \"%s\" created (ID %s), waiting for user approval before execution (type /approve in REPL, or run panda task approve %s).", spec.Title, res.TaskID, res.TaskID), nil
+				}
 				return fmt.Sprintf("任务「%s」已创建（ID %s），等待用户批准后执行（REPL 输入 /approve，或 panda task approve %s）。", spec.Title, res.TaskID, res.TaskID), nil
 			case res.TaskID == "":
+				if targetLoc == i18n.English {
+					return "", fmt.Errorf("task dispatch failed: %s", strings.TrimSpace(res.Stderr))
+				}
 				return "", fmt.Errorf("任务派发失败：%s", strings.TrimSpace(res.Stderr))
 			}
-			msg := fmt.Sprintf("任务「%s」已派发：ID %s，状态 %s。", spec.Title, res.TaskID, zhTaskState(res.TaskState))
-			if out := strings.TrimSpace(res.Stdout); out != "" {
-				msg += "\n执行结果：\n" + excerpt(out, 2000)
-			}
-			if res.TaskState == core.StateFailed && strings.TrimSpace(res.Stderr) != "" {
-				msg += "\n失败信息：\n" + excerpt(strings.TrimSpace(res.Stderr), 1000)
+			var msg string
+			if targetLoc == i18n.English {
+				msg = fmt.Sprintf("Task \"%s\" dispatched: ID %s, status %s.", spec.Title, res.TaskID, res.TaskState)
+				if out := strings.TrimSpace(res.Stdout); out != "" {
+					msg += "\nExecution result:\n" + excerpt(out, 2000)
+				}
+				if res.TaskState == core.StateFailed && strings.TrimSpace(res.Stderr) != "" {
+					msg += "\nFailure details:\n" + excerpt(strings.TrimSpace(res.Stderr), 1000)
+				}
+			} else {
+				msg = fmt.Sprintf("任务「%s」已派发：ID %s，状态 %s。", spec.Title, res.TaskID, zhTaskState(res.TaskState))
+				if out := strings.TrimSpace(res.Stdout); out != "" {
+					msg += "\n执行结果：\n" + excerpt(out, 2000)
+				}
+				if res.TaskState == core.StateFailed && strings.TrimSpace(res.Stderr) != "" {
+					msg += "\n失败信息：\n" + excerpt(strings.TrimSpace(res.Stderr), 1000)
+				}
 			}
 			return msg, nil
 		},
@@ -380,7 +439,14 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 // consent a refused tool needs: one standing grant per surface (the /authorize
 // toggle in the REPL, --authorize for one-shot asks, the authorize checkbox in
 // the web console). It is phrased as data for the model, not as an instruction.
-func toolConsentHint(t entry.Tool) string {
+func toolConsentHint(t entry.Tool, loc ...i18n.Locale) string {
+	targetLoc := i18n.ChineseSimp
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
+	if targetLoc == i18n.English {
+		return fmt.Sprintf("Tool %s is a tier-2 (irreversible) operation, which was not authorized for this session. Please ask user to grant authorization and retry (/authorize in REPL, --authorize flag, or check 'Authorize' in web panel).", t.Name)
+	}
 	return fmt.Sprintf("工具 %s 属 tier-2（不可逆）操作，本次会话未开启授权。请让用户开启授权后重试（REPL 输入 /authorize，一次性调用加 --authorize，Web 面板勾选“授权”）。", t.Name)
 }
 
@@ -390,7 +456,11 @@ func toolConsentHint(t entry.Tool) string {
 // tool_result blocks (the Anthropic Messages API contract); the text-JSON
 // fallback (no tool_use id) is carried as prose, preserving the pre-tool_use
 // behavior.
-func appendToolTurns(turns []entry.Turn, call *entry.ToolCall, note, result string) []entry.Turn {
+func appendToolTurns(turns []entry.Turn, call *entry.ToolCall, note, result string, loc ...i18n.Locale) []entry.Turn {
+	targetLoc := i18n.ChineseSimp
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
 	if call.ID != "" {
 		assistant := entry.Turn{Role: "assistant"}
 		if note != "" {
@@ -409,9 +479,13 @@ func appendToolTurns(turns []entry.Turn, call *entry.ToolCall, note, result stri
 	if note != "" {
 		msg = note + "\n" + msg
 	}
+	prefix := "工具结果："
+	if targetLoc == i18n.English {
+		prefix = "Tool result: "
+	}
 	return append(turns,
 		entry.Turn{Role: "assistant", Content: msg},
-		entry.Turn{Role: "user", Content: "工具结果：" + result},
+		entry.Turn{Role: "user", Content: prefix + result},
 	)
 }
 

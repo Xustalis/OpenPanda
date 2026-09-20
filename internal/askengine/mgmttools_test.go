@@ -12,6 +12,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -139,24 +140,43 @@ func runMgmtTool(t *testing.T, reg *entry.Registry, name string, args map[string
 
 func TestMgmtToolsRegistered(t *testing.T) {
 	_, reg := newMgmtTestEngine(t)
-	allTools := []string{
+
+	// Reads tell the model what is true, and stay Tier 1. Anything that edits a
+	// capability card is Tier 2: a card entry carries both a command and its
+	// tier, so writing one is editing the authorization basis itself. This list
+	// used to assert tier 1 across all twenty-two tools — which is exactly how
+	// the hole stayed pinned in place, since widening a card let the model
+	// widen the gate it was about to walk through.
+	tier1 := []string{
 		"system_status", "card_list", "card_show", "taskq_list", "taskq_show",
-		"taskq_cancel", "taskq_priority", "taskq_move",
-		"card_native_add", "card_native_remove", "card_agent_add", "card_agent_set", "card_agent_remove",
-		"card_rescan", "card_manual_add", "card_manual_remove",
+		"taskq_cancel", "taskq_priority", "taskq_move", "card_rescan",
 		"project_list", "project_create", "project_enter", "project_exit",
 		"node_remove", "reminder_delete",
 	}
-	for _, name := range allTools {
-		tool, ok := reg.Lookup(name)
-		if !ok {
-			t.Fatalf("management tool %s not registered", name)
-		}
-		if tool.Tier != 1 {
-			t.Errorf("tool %s tier = %d, want 1 (reversible/unrestricted)", name, tool.Tier)
-		}
-		if tool.Description == "" {
-			t.Errorf("tool %s has no description", name)
+	tier2 := []string{
+		"card_native_add", "card_native_remove",
+		"card_agent_add", "card_agent_set", "card_agent_remove",
+		"card_manual_add", "card_manual_remove",
+	}
+
+	for _, group := range []struct {
+		want  int
+		names []string
+	}{
+		{defense.TierReversible, tier1},
+		{defense.TierIrreversible, tier2},
+	} {
+		for _, name := range group.names {
+			tool, ok := reg.Lookup(name)
+			if !ok {
+				t.Fatalf("management tool %s not registered", name)
+			}
+			if tool.Tier != group.want {
+				t.Errorf("tool %s tier = %d, want %d", name, tool.Tier, group.want)
+			}
+			if tool.Description == "" {
+				t.Errorf("tool %s has no description", name)
+			}
 		}
 	}
 }

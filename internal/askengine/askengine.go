@@ -26,6 +26,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/mcp"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -56,6 +57,9 @@ type Options struct {
 	// the client runs on a bare Linux console whose font has no CJK glyphs
 	// (Chinese replies would otherwise render as diamonds).
 	ReplyASCII bool
+	// Locale specifies the user's preferred language (en, zh-CN, etc.).
+	// When empty, it is detected from the environment or config.
+	Locale i18n.Locale
 	// AsyncPeers dials configured peers in the background instead of waiting
 	// for the dials (and a settle window) before New returns. Interactive
 	// surfaces (the REPL) want this: an offline peer's dial timeout is
@@ -120,6 +124,9 @@ type Engine struct {
 	// cardPath mirrors Options.CardPath: the capabilities.yaml the engine
 	// loaded its scheduler from, reported by the system_status tool.
 	cardPath string
+	// locale is the user's active UI/prompt locale.
+	locale         i18n.Locale
+	explicitLocale bool
 
 	fallbacksMu sync.RWMutex
 	fallbacks   []*entry.Client
@@ -261,6 +268,22 @@ func (e *Engine) Config() *config.Config { return e.cfg }
 // need read-level access (reference resolution) without a scheduler core.
 func (e *Engine) TaskStore() *core.TaskStore {
 	return core.NewTaskStore(e.db, e.logger)
+}
+
+// SetLocale updates the active user locale for this engine.
+func (e *Engine) SetLocale(loc i18n.Locale) {
+	if loc != "" {
+		e.locale = loc
+		e.explicitLocale = true
+	}
+}
+
+// Locale returns the active user locale for this engine.
+func (e *Engine) Locale() i18n.Locale {
+	if e.locale != "" {
+		return e.locale
+	}
+	return i18n.Detect()
 }
 
 // Result is the outcome of one Ask call.
@@ -437,19 +460,35 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		_ = skillStore.EnsureBuiltins()
 	}
 
+	var explicitLocale bool
+	loc := opts.Locale
+	if loc != "" {
+		explicitLocale = true
+	} else if cfg != nil && cfg.UI.Locale != "" {
+		loc = i18n.Parse(cfg.UI.Locale)
+		if loc != "" {
+			explicitLocale = true
+		}
+	}
+	if loc == "" {
+		loc = i18n.Detect()
+	}
+
 	e := &Engine{
-		cfg:        cfg,
-		db:         db,
-		injector:   injector,
-		hermes:     hermes,
-		projects:   projects,
-		remind:     remind,
-		skills:     skillStore,
-		logger:     logger,
-		queueTasks: opts.QueueTasks,
-		asyncPeers: opts.AsyncPeers,
-		replyASCII: opts.ReplyASCII,
-		cardPath:   opts.CardPath,
+		cfg:            cfg,
+		db:             db,
+		injector:       injector,
+		hermes:         hermes,
+		projects:       projects,
+		remind:         remind,
+		skills:         skillStore,
+		logger:         logger,
+		queueTasks:     opts.QueueTasks,
+		asyncPeers:     opts.AsyncPeers,
+		replyASCII:     opts.ReplyASCII,
+		cardPath:       opts.CardPath,
+		locale:         loc,
+		explicitLocale: explicitLocale,
 	}
 	e.fallbacks = e.buildFallbacks(cfg.Model, db)
 	// The registry is built with the engine itself: the management tools hold
@@ -850,9 +889,19 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	turns = append(turns, history...)
 	turns = append(turns, entry.Turn{Role: "user", Content: prompt})
 
+	effectiveLocale := e.locale
+	if !e.explicitLocale && !e.replyASCII {
+		if containsHan(prompt) {
+			effectiveLocale = i18n.ChineseSimp
+		}
+	}
+
 	var classifyOpts []entry.ClassifyOption
 	if e.replyASCII {
 		classifyOpts = append(classifyOpts, entry.WithASCIIOnly())
+	}
+	if effectiveLocale != "" {
+		classifyOpts = append(classifyOpts, entry.WithLocale(effectiveLocale))
 	}
 
 	// Memory wall (design §17.2): Hermes personal memory enters only
@@ -881,7 +930,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// that hand-build an Engine are the only place a nil registry ever occurs).
 	if len(history) == 0 {
 		if triage := entry.FastTriage(prompt, history); triage.IsFastPath {
-			fastSystem := entry.FastPathPrompt(e.replyASCII)
+			fastSystem := entry.FastPathPrompt(e.replyASCII, effectiveLocale)
 			if conversationMemory != "" {
 				fastSystem += "\n\n═══ User Memory ═══\n" + conversationMemory
 			}
@@ -937,7 +986,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	var lastTask *Result
 	finalizeLastTask := func(t *Result) *Result {
 		if t != nil && strings.TrimSpace(t.Answer) == "" && strings.TrimSpace(t.Report) == "" {
-			if report, rerr := entry.SummarizeResult(ctx, client, t.TaskTitle, "", t.OK, t.ExitCode, t.Stdout, t.Stderr); rerr == nil {
+			if report, rerr := entry.SummarizeResult(ctx, client, t.TaskTitle, "", t.OK, t.ExitCode, t.Stdout, t.Stderr, effectiveLocale); rerr == nil {
 				t.Report = report
 			}
 		}
@@ -963,7 +1012,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	var taskCapture taskDispatchCapture
 	if reg != nil {
 		reg = reg.Copy()
-		reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture))
+		reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture, effectiveLocale))
 	}
 
 rounds:
@@ -974,7 +1023,11 @@ rounds:
 				if idea == "" {
 					break
 				}
-				turns = append(turns, entry.Turn{Role: "user", Content: "[补充要求/Steering]: " + idea})
+				steerPrefix := i18n.T(effectiveLocale, "tui.turn.steerPrefix")
+				if steerPrefix == "tui.turn.steerPrefix" {
+					steerPrefix = "[Steering]: "
+				}
+				turns = append(turns, entry.Turn{Role: "user", Content: steerPrefix + idea})
 			}
 		}
 		trackReasoning := func(chunk string) {
@@ -1048,8 +1101,8 @@ rounds:
 				// Refuse before submitTask: the budget limits actual task
 				// execution, not merely how many outcomes are replayed.
 				turns = append(turns,
-					entry.Turn{Role: "assistant", Content: taskDispatchNote(out.Task)},
-					entry.Turn{Role: "user", Content: fmt.Sprintf(taskBudgetNote, maxTasks)},
+					entry.Turn{Role: "assistant", Content: taskDispatchNote(out.Task, effectiveLocale)},
+					entry.Turn{Role: "user", Content: taskBudgetNote(maxTasks, effectiveLocale)},
 				)
 				break rounds
 			}
@@ -1060,7 +1113,7 @@ rounds:
 				return nil, fmt.Errorf("task output requires a capability card (scheduler initialization failed)")
 			}
 			cb.progress(Progress{Kind: ProgressTask, Name: out.Task.Title})
-			res := e.submitTask(ctx, out.Task, prompt, authorize, scope, accumulatedReasoning.String(), cb)
+			res := e.submitTask(ctx, out.Task, prompt, authorize, scope, accumulatedReasoning.String(), cb, effectiveLocale)
 			if e.queueTasks {
 				// Async mode: the board product. The queued pointer is the
 				// result — the session streams the task's progress and the
@@ -1082,8 +1135,8 @@ rounds:
 			// Dedicated SummarizeResult is deferred as a lazy fallback if the loop
 			// does not converge on an answer, eliminating redundant LLM latency.
 			turns = append(turns,
-				entry.Turn{Role: "assistant", Content: taskDispatchNote(out.Task)},
-				entry.Turn{Role: "user", Content: taskObservation(res)},
+				entry.Turn{Role: "assistant", Content: taskDispatchNote(out.Task, effectiveLocale)},
+				entry.Turn{Role: "user", Content: taskObservation(res, effectiveLocale)},
 			)
 		case entry.KindPlan:
 			cb.progress(Progress{Kind: ProgressPlan, Name: out.Plan.Goal})
@@ -1094,14 +1147,15 @@ rounds:
 				// task_submit is a real delegation hidden behind the native
 				// tool protocol. Refuse it before executeTool for the same
 				// hard execution budget as a classified task directive.
-				turns = appendToolTurns(turns, out.Tool, out.Note, fmt.Sprintf(taskBudgetNote, maxTasks))
+				turns = appendToolTurns(turns, out.Tool, out.Note, taskBudgetNote(maxTasks, effectiveLocale), effectiveLocale)
 				break rounds
 			}
 			// Execute against the same registry snapshot classification saw:
 			// a mid-ask SetMCPCommand swap would otherwise make the model's
 			// tool call hit a registry that no longer knows it.
-			result := executeTool(ctx, reg, out.Tool, toolAuthorized)
-			turns = appendToolTurns(turns, out.Tool, out.Note, result)
+			result := executeTool(ctx, reg, out.Tool, toolAuthorized, effectiveLocale)
+			turns = appendToolTurns(turns, out.Tool, out.Note, result, effectiveLocale)
+
 			if dispatched := taskCapture.take(); dispatched != nil {
 				if e.queueTasks || dispatched.NeedsApproval || dispatched.TaskID == "" {
 					return dispatched, nil
@@ -1341,8 +1395,14 @@ func gateAuthorized(mode string, sessionAuthorized bool) bool {
 // it when resources allow and the session streams its progress. In inline
 // mode a per-task WorkDir is persisted before routing and execution, avoiding
 // process-wide scheduler directory swaps between concurrent asks.
-func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt string, authorized bool, scope AskScope, reasoning string, cb StreamCallbacks) *Result {
-	in := toTaskInput(spec)
+func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt string, authorized bool, scope AskScope, reasoning string, cb StreamCallbacks, loc ...i18n.Locale) *Result {
+	targetLoc := e.locale
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	} else if !e.explicitLocale && !e.replyASCII && (containsHan(prompt) || containsHan(spec.Title)) {
+		targetLoc = i18n.ChineseSimp
+	}
+	in := toTaskInput(spec, targetLoc)
 	workDir := scope.WorkDir
 	// Explicit per-request scope wins. Existing CLI callers that omit a project
 	// retain the entered ambient project as a compatibility default.
@@ -1383,7 +1443,8 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		// can drop detail. The raw query lets the agent recover it, and it
 		// travels with the intent (persisted + delegated), so retries and
 		// peers that pick up the task also see it.
-		in.Intent += "\n\n用户原始请求（上下文参考，以任务指令为准）：\n" + prompt
+		rawLabel := i18n.T(targetLoc, "prompt.task.user_raw_request")
+		in.Intent += "\n\n" + rawLabel + "\n" + prompt
 	}
 	if e.queueTasks {
 		q := core.DefaultQueueSpec()
@@ -1448,7 +1509,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		if cb.OnApproval(req) {
 			resumed := e.resumeLocked(ctx, req.TaskID)
 			sumClient, _ := e.healthyClient()
-			if report, rerr := entry.SummarizeResult(ctx, sumClient, resumed.TaskTitle, in.Intent, resumed.OK, resumed.ExitCode, resumed.Stdout, resumed.Stderr); rerr == nil {
+			if report, rerr := entry.SummarizeResult(ctx, sumClient, resumed.TaskTitle, in.Intent, resumed.OK, resumed.ExitCode, resumed.Stdout, resumed.Stderr, targetLoc); rerr == nil {
 				resumed.Report = report
 			}
 			return resumed
@@ -1673,7 +1734,7 @@ func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb 
 		return res
 	}
 	sumClient, _ := e.healthyClient()
-	if report, rerr := entry.SummarizeResult(ctx, sumClient, res.TaskTitle, "", res.OK, res.ExitCode, res.Stdout, res.Stderr); rerr == nil {
+	if report, rerr := entry.SummarizeResult(ctx, sumClient, res.TaskTitle, "", res.OK, res.ExitCode, res.Stdout, res.Stderr, e.locale); rerr == nil {
 		res.Report = report
 	}
 	return res
