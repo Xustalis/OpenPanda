@@ -58,3 +58,78 @@ func TestModelConfigUnknown(t *testing.T) {
 		t.Fatal("expected unknown provider to miss")
 	}
 }
+
+func TestGeographicOrigin(t *testing.T) {
+	tests := []struct {
+		id       string
+		wantGeo  GeoRegion
+		isCN     bool
+		isGlobal bool
+	}{
+		{"deepseek", RegionChina, true, false},
+		{"kimi", RegionChina, true, false},
+		{"volcengine", RegionChina, true, false},
+		{"zhipu", RegionChina, true, false},
+		{"qwen", RegionChina, true, false},
+		{"siliconflow", RegionChina, true, false},
+		{"claude", RegionGlobal, false, true},
+		{"openai", RegionGlobal, false, true},
+		{"openrouter", RegionGlobal, false, true},
+		{"ollama", RegionGlobal, false, true},
+		{"custom", RegionGlobal, false, true},
+	}
+
+	for _, tt := range tests {
+		p, ok := Lookup(tt.id)
+		if !ok {
+			t.Fatalf("provider %q not found", tt.id)
+		}
+		if p.GeographicOrigin != tt.wantGeo {
+			t.Errorf("provider %q GeographicOrigin = %v, want %v", tt.id, p.GeographicOrigin, tt.wantGeo)
+		}
+		if p.IsChineseModel() != tt.isCN {
+			t.Errorf("provider %q IsChineseModel() = %v, want %v", tt.id, p.IsChineseModel(), tt.isCN)
+		}
+		if p.IsGlobalModel() != tt.isGlobal {
+			t.Errorf("provider %q IsGlobalModel() = %v, want %v", tt.id, p.IsGlobalModel(), tt.isGlobal)
+		}
+	}
+}
+
+func TestDetectRegion(t *testing.T) {
+	tests := []struct {
+		input   string
+		wantGeo GeoRegion
+	}{
+		{"deepseek", RegionChina},
+		{"deepseek-chat", RegionChina},
+		{"deepseek-v4-flash", RegionChina},
+		{"qwen", RegionChina},
+		{"qwen-max", RegionChina},
+		{"qwen2.5-coder:14b", RegionChina},
+		{"kimi", RegionChina},
+		{"moonshot-v1-8k", RegionChina},
+		{"doubao", RegionChina},
+		{"doubao-1-5-pro-32k", RegionChina},
+		{"zhipu", RegionChina},
+		{"glm-4-plus", RegionChina},
+		{"siliconflow", RegionChina},
+		{"claude", RegionGlobal},
+		{"claude-sonnet-4-5", RegionGlobal},
+		{"agent:claude_code", RegionGlobal},
+		{"openai", RegionGlobal},
+		{"gpt-4o", RegionGlobal},
+		{"agent:codex", RegionGlobal},
+		{"openrouter", RegionGlobal},
+		{"ollama", RegionGlobal},
+		{"custom", RegionGlobal},
+		{"", RegionGlobal},
+		{"unknown-model", RegionGlobal},
+	}
+
+	for _, tt := range tests {
+		if got := DetectRegion(tt.input); got != tt.wantGeo {
+			t.Errorf("DetectRegion(%q) = %v, want %v", tt.input, got, tt.wantGeo)
+		}
+	}
+}
