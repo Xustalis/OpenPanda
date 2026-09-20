@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -83,6 +84,13 @@ func (m *Manager) statusLocked(ctx context.Context) Status {
 	return st
 }
 
+// SetIncludePrerelease dynamically toggles prerelease checking.
+func (m *Manager) SetIncludePrerelease(include bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.opts.IncludePrerelease = include
+}
+
 // Check queries GitHub for the latest release and updates the stage to
 // available (newer) or idle (up to date). A network or GitHub error leaves the
 // manager in the error stage with the message recorded; the auto-check loop
@@ -94,9 +102,12 @@ func (m *Manager) Check(ctx context.Context) error {
 	m.errMsg = ""
 	m.latest = ""
 	m.notes = ""
+	includePre := m.opts.IncludePrerelease || strings.Contains(m.opts.Current, "-")
+	repo := m.opts.Repo
+	current := m.opts.Current
 	m.mu.Unlock()
 
-	rel, err := Latest(ctx, m.opts.Repo)
+	rel, err := FindLatest(ctx, repo, includePre, current)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -140,9 +151,15 @@ func (m *Manager) Check(ctx context.Context) error {
 // previously staged release is discarded first. On error the staging dir is
 // removed and the manager moves to the error stage.
 func (m *Manager) Download(ctx context.Context) error {
+	return m.DownloadForce(ctx, false)
+}
+
+// DownloadForce fetches and verifies the latest release, staging it for Apply.
+// If force is true, it skips the check requiring version to be newer than current.
+func (m *Manager) DownloadForce(ctx context.Context, force bool) error {
 	m.mu.Lock()
 	version := m.latest
-	if version == "" || CompareVersion(version, m.opts.Current) <= 0 {
+	if version == "" || (!force && CompareVersion(version, m.opts.Current) <= 0) {
 		m.mu.Unlock()
 		return fmt.Errorf("no newer release is known; run a check first")
 	}

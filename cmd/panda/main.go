@@ -73,6 +73,12 @@ func main() {
 		case "uninstall":
 			runUninstall(args)
 			return
+		case "update":
+			runUpdate(args)
+			return
+		case "upgrade":
+			runUpgrade(args)
+			return
 		case "doctor":
 			runDoctor(args)
 			return
@@ -213,7 +219,7 @@ func main() {
 func subcommandNames() []string {
 	return []string{
 		"daemon", "serve", "ask", "repl", "chat", "web", "voice",
-		"install", "uninstall", "doctor", "status", "nodes", "pair", "queue",
+		"install", "uninstall", "update", "upgrade", "doctor", "status", "nodes", "pair", "queue",
 		"task", "plan", "cancel", "approve", "reject", "logs", "skill",
 		"reminder", "detect", "card", "init", "metrics", "audit", "session",
 		"sessions", "memory", "config", "model", "models", "agents", "project",
@@ -663,6 +669,7 @@ func printUsage(w *os.File) {
 	line("")
 	line("setup:")
 	line("  install|uninstall                         put panda on PATH / remove it")
+	line("  update [check|apply] | upgrade            check for updates or self-update")
 	line("  init [--defaults|--non-interactive]      first-run setup (one question; flags = zero prompts)")
 	line("  doctor                                    post-install self-check")
 	line("  detect                                    scan hardware → capabilities.yaml draft")
