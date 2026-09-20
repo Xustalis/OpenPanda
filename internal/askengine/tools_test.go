@@ -14,7 +14,9 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
@@ -231,5 +233,60 @@ func TestAskTurnsMaxRoundsConverges(t *testing.T) {
 	}
 	if plainCalls != 1 {
 		t.Fatalf("final tool-free calls = %d, want 1", plainCalls)
+	}
+}
+
+func TestDispatchTaskTool_MultiLanguage(t *testing.T) {
+	e := &Engine{}
+
+	// 1. Chinese (default)
+	toolZh := e.dispatchTaskTool("test", AskScope{}, false, StreamCallbacks{}, &taskDispatchCapture{}, i18n.ChineseSimp)
+	if !strings.Contains(toolZh.Description, "把任务派发给 agent 执行") {
+		t.Errorf("expected Chinese description, got: %s", toolZh.Description)
+	}
+	propsZh := toolZh.Schema["properties"].(map[string]any)
+	titleZh := propsZh["title"].(map[string]any)["description"].(string)
+	if !strings.Contains(titleZh, "任务标题") {
+		t.Errorf("expected Chinese title description, got: %s", titleZh)
+	}
+
+	// 2. English
+	toolEn := e.dispatchTaskTool("test", AskScope{}, false, StreamCallbacks{}, &taskDispatchCapture{}, i18n.English)
+	if !strings.Contains(toolEn.Description, "Dispatch a task to an agent") {
+		t.Errorf("expected English description, got: %s", toolEn.Description)
+	}
+	propsEn := toolEn.Schema["properties"].(map[string]any)
+	titleEn := propsEn["title"].(map[string]any)["description"].(string)
+	if !strings.Contains(titleEn, "Task title") {
+		t.Errorf("expected English title description, got: %s", titleEn)
+	}
+}
+
+func TestExecuteTool_MultiLanguage(t *testing.T) {
+	reg := entry.NewRegistry()
+	reg.Register(entry.Tool{
+		Name: "test_tool",
+		Tier: defense.TierIrreversible,
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			return "done", nil
+		},
+	})
+
+	// Unauthorized refusal in English
+	resEn := executeTool(context.Background(), reg, &entry.ToolCall{Tool: "test_tool"}, false, i18n.English)
+	if !strings.Contains(resEn, "Tool execution refused") || !strings.Contains(resEn, "requires authorization") {
+		t.Errorf("expected English refusal message, got: %s", resEn)
+	}
+
+	// Unknown tool in English
+	unknownEn := executeTool(context.Background(), reg, &entry.ToolCall{Tool: "nonexistent"}, true, i18n.English)
+	if !strings.Contains(unknownEn, "Tool execution failed: unknown tool") {
+		t.Errorf("expected English unknown tool error, got: %s", unknownEn)
+	}
+
+	// Unknown tool in Chinese
+	unknownZh := executeTool(context.Background(), reg, &entry.ToolCall{Tool: "nonexistent"}, true, i18n.ChineseSimp)
+	if !strings.Contains(unknownZh, "工具执行失败：未知工具") {
+		t.Errorf("expected Chinese unknown tool error, got: %s", unknownZh)
 	}
 }

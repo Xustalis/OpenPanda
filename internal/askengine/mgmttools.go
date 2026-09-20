@@ -24,12 +24,19 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/version"
 )
 
-// registerMgmtTools adds the management tool family v1 — the read half of
-// "openpanda 调用 openpanda": every surface the user can reach (panda status,
-// the capability-card directory, the queue board) the entry model can reach
-// too, so a plain-language "现在什么情况" resolves to live data instead of
-// guesses. All five tools are queries and Tier 1 by construction; anything
-// that mutates node/card/task state stays behind its tier-2 gate.
+// registerMgmtTools adds the management tool family — "openpanda 调用
+// openpanda": every surface the user can reach (panda status, the
+// capability-card directory, the queue board) the entry model can reach too,
+// so a plain-language "现在什么情况" resolves to live data instead of guesses.
+//
+// Tier here is a security boundary, not bookkeeping. Reading — status, the
+// list/show pairs, rescan, the queue operations — stays Tier 1. Anything that
+// edits a capability card is Tier 2, because a card edit *is* an edit to the
+// authorization basis: a card entry carries both a command and its tier, so a
+// Tier-1 write tool let the model widen the gate it was about to walk through.
+// (This comment used to claim "all five tools are queries"; the family grew to
+// twenty-one and the invariant went with it. When adding a tool, set the tier
+// for what the tool can cause, not for what it mostly does.)
 //
 // The tools take the Engine and dereference it lazily inside Run: New builds
 // the registry before the scheduler exists (and an engine without CardPath
@@ -177,7 +184,11 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "card_native_add",
 		Description: "为本机能力卡（capabilities.yaml）添加一项原生命令行能力，变更后自动热重载。",
-		Tier:        defense.TierReversible,
+		// Tier 2 by necessity: this tool decides what the node is allowed to
+		// run. Leaving it at Tier 1 let the model write its own authorization
+		// basis — add a card entry (with its own `tier`) for the command it
+		// wants, then run it through the very gate it just widened.
+		Tier: defense.TierIrreversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -215,7 +226,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "card_native_remove",
 		Description: "从本机能力卡中删除指定 ID 的原生能力，变更后自动热重载。",
-		Tier:        defense.TierReversible,
+		Tier:        defense.TierIrreversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -232,7 +243,9 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "card_agent_add",
 		Description: "为本机能力卡注册一个新的 Agent CLI，变更后自动热重载。adapter 可留空——按 name 从内置注册表（panda agents）解析，dsh 这类已知 CLI 会自动映射到正确适配器。",
-		Tier:        defense.TierReversible,
+		// Tier 2 for the same reason as card_native_add: registering an agent
+		// is adding a way to run code on this node.
+		Tier: defense.TierIrreversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -286,7 +299,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "card_agent_set",
 		Description: "修改本机能力卡中已有的 Agent CLI 配置属性，变更后自动热重载。",
-		Tier:        defense.TierReversible,
+		Tier:        defense.TierIrreversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -334,7 +347,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "card_agent_remove",
 		Description: "从本机能力卡中注销指定的 Agent CLI，变更后自动热重载。",
-		Tier:        defense.TierReversible,
+		Tier:        defense.TierIrreversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -351,7 +364,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "card_manual_add",
 		Description: "为本机能力卡添加一项人工协同能力，变更后自动热重载。",
-		Tier:        defense.TierReversible,
+		Tier:        defense.TierIrreversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -373,7 +386,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "card_manual_remove",
 		Description: "从本机能力卡中删除指定的人工协同能力，变更后自动热重载。",
-		Tier:        defense.TierReversible,
+		Tier:        defense.TierIrreversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
