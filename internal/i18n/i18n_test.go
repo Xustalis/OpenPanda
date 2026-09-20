@@ -129,3 +129,37 @@ func TestAllLocalesHaveModelKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestPromptMessages(t *testing.T) {
+	promptKeys := []string{
+		"prompt.device.summary.none",
+		"prompt.device.hardware.cpu",
+		"prompt.device.hardware.ram",
+		"prompt.device.hardware.gpu",
+		"prompt.skills.available",
+		"prompt.task.intent_header",
+		"prompt.summarize.system",
+		"prompt.summarize.title",
+		"prompt.subagent.header",
+		"prompt.task.target",
+	}
+
+	for _, loc := range []Locale{English, ChineseSimp} {
+		for _, k := range promptKeys {
+			got := T(loc, k)
+			if got == "" || got == k {
+				t.Errorf("locale %s missing prompt message for key %s", loc, k)
+			}
+		}
+	}
+
+	// Verify interpolation
+	cpuZh := Tf(ChineseSimp, "prompt.device.hardware.cpu", "n", "8")
+	if cpuZh != "cpu 8 核" {
+		t.Errorf("cpuZh = %q, want 'cpu 8 核'", cpuZh)
+	}
+	cpuEn := Tf(English, "prompt.device.hardware.cpu", "n", "8")
+	if cpuEn != "cpu 8 cores" {
+		t.Errorf("cpuEn = %q, want 'cpu 8 cores'", cpuEn)
+	}
+}

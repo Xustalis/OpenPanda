@@ -371,6 +371,16 @@ func TestChooseLayers(t *testing.T) {
 		t.Fatalf("task turn = %+v, want TaskExample only", l)
 	}
 
+	// Multilingual and subagent turn markers attach TaskExample
+	enTaskTurn := Turn{Role: "assistant", Content: "[task t-2 done] build succeeded"}
+	if l := ChooseLayers([]Turn{enTaskTurn}); !l.TaskExample {
+		t.Fatalf("en task turn = %+v, want TaskExample", l)
+	}
+	subagentTurn := Turn{Role: "assistant", Content: "[Subagent #1 done] analyzed logs"}
+	if l := ChooseLayers([]Turn{subagentTurn}); !l.TaskExample {
+		t.Fatalf("subagent turn = %+v, want TaskExample", l)
+	}
+
 	// A task marker from a user turn does not (only assistant turns record
 	// task outcomes).
 	if l := ChooseLayers([]Turn{{Role: "user", Content: "[任务 t-1 done]"}}); l.TaskExample {

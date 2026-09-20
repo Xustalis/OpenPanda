@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -70,5 +71,48 @@ func TestCoreRulesExplainResourceProfile(t *testing.T) {
 		if !strings.Contains(coreRules, want) {
 			t.Errorf("coreRules does not mention %q", want)
 		}
+	}
+}
+
+func TestSummarizeDevices_MultiLanguage(t *testing.T) {
+	nodes := []ledger.Node{
+		{
+			Name:            "test-node",
+			Chip:            "M1",
+			Native:          []ledger.NativeAbility{{ID: "code:edit"}},
+			ResourceProfile: ledger.ResourceProfile{CPU: 8, RAMGB: 16, GPUVRAMGB: 0},
+			Agents: map[string]ledger.Agent{
+				"codex": {Capabilities: []string{"edit", "test"}, BestAt: []string{"unit test", "fix bug"}},
+			},
+		},
+	}
+
+	// English test: must not contain Chinese characters
+	enSummary := summarizeDevices(nodes, i18n.English)
+	if strings.Contains(enSummary, "硬件") || strings.Contains(enSummary, "最擅长") || strings.Contains(enSummary, "未声明") {
+		t.Errorf("English summary contains Chinese text:\n%s", enSummary)
+	}
+	if !strings.Contains(enSummary, "Hardware: cpu 8 cores, RAM 16 GiB, undeclared VRAM") {
+		t.Errorf("English hardware missing or wrong:\n%s", enSummary)
+	}
+	if !strings.Contains(enSummary, "best at: unit test, fix bug") {
+		t.Errorf("English best at missing:\n%s", enSummary)
+	}
+
+	// Chinese test: must contain Chinese characters
+	zhSummary := summarizeDevices(nodes, i18n.ChineseSimp)
+	if !strings.Contains(zhSummary, "硬件: cpu 8 核，内存 16 GiB，未声明显存") {
+		t.Errorf("Chinese hardware missing or wrong:\n%s", zhSummary)
+	}
+	if !strings.Contains(zhSummary, "最擅长：unit test、fix bug") {
+		t.Errorf("Chinese best at missing:\n%s", zhSummary)
+	}
+
+	// Empty nodes
+	if got := summarizeDevices(nil, i18n.English); got != "(No device capability summary)" {
+		t.Errorf("Empty English summary = %q", got)
+	}
+	if got := summarizeDevices(nil, i18n.ChineseSimp); got != "（暂无设备能力摘要）" {
+		t.Errorf("Empty Chinese summary = %q", got)
 	}
 }
