@@ -335,6 +335,7 @@ func runRepl(args []string) {
 			CardPath:   effectiveCardPath,
 			MCPCommand: *mcpCmd,
 			ReplyASCII: isLinuxConsole(),
+			Locale:     detected,
 			// The session is long-lived and interactive: peers dial in the
 			// background instead of gating the banner (an offline peer's dial
 			// timeout is routine, not 10s of dead air before the first prompt).
@@ -1935,6 +1936,9 @@ func (r *repl) cmdLang(arg string) {
 			r.loc = loc
 			if r.term != nil {
 				r.term.loc = loc
+			}
+			if r.engine != nil {
+				r.engine.SetLocale(loc)
 			}
 			r.outln(i18n.Tf(r.loc, "repl.lang.set", "lang", i18n.LocaleNames[loc]))
 			r.persistLocale(loc)

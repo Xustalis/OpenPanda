@@ -666,6 +666,7 @@ func (m tuiModel) finalizeWizard() (tuiModel, tea.Cmd) {
 		eng, err := askengine.New(context.Background(), m.r.cfg, askengine.Options{
 			CardPath:   m.r.cardPath,
 			ReplyASCII: isLinuxConsole(),
+			Locale:     m.r.loc,
 			AsyncPeers: true,
 		})
 		if err == nil {
