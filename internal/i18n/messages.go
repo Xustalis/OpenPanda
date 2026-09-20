@@ -592,6 +592,64 @@ var messages = map[Locale]map[string]string{
 
 		"repl.err.store":  "store: {err}",
 		"repl.err.config": "config: {err}",
+
+		// Prompt and hardware descriptions
+		"prompt.device.summary.none":            "(No device capability summary)",
+		"prompt.device.hardware.label":          "Hardware",
+		"prompt.device.hardware.cpu":            "cpu {n} cores",
+		"prompt.device.hardware.ram":            "RAM {n} GiB",
+		"prompt.device.hardware.gpu":            "VRAM {n} GiB",
+		"prompt.device.hardware.undeclared":     "undeclared VRAM",
+		"prompt.device.hardware.no_profile":     "undeclared (node lacks resource_profile; scheduler will not disqualify for VRAM)",
+		"prompt.device.hardware.max_concurrent": "max concurrency {n}",
+		"prompt.device.agent.best_at":           "(best at: {skills})",
+
+		// Skills and task prompts
+		"prompt.skills.available":      "Available skills (refer as needed):",
+		"prompt.skills.omitted":        "(Body omitted due to prompt budget; description: {desc})",
+		"prompt.task.intent_header":    "Task Intent:",
+		"prompt.task.user_raw_request": "Original user request (context reference only, follow task instruction):",
+		"prompt.task.status.success":   "success",
+		"prompt.task.status.fail":      "fail",
+		"prompt.task.log_format":       "Task '{title}' {status}",
+
+		// Fast triage
+		"prompt.fast_triage.prompt": "You are OpenPanda, a helpful, concise AI technical assistant. Answer the user's question directly, accurately, and concisely in clean Markdown format without unnecessary pleasantries.",
+
+		// Task summarization
+		"prompt.summarize.system":         "You are the dispatch result reporter. A task has just finished executing. Below are the task title, intent, and execution results. Please provide a concise summary to the user in English:\n\n- On success: State what was done and the key output (one or two sentences, do not repeat all stdout).\n- On failure: Explain the reason for failure and provide specific next steps the user can take (e.g. how to approve, retry, or adjust config).\n- Output only the report body; do not output JSON, tags, or extra formatting.\n- Keep it within 3 sentences.",
+		"prompt.summarize.title":          "Task Title: {title}",
+		"prompt.summarize.intent":         "Task Intent: {intent}",
+		"prompt.summarize.success":        "Execution Result: Success",
+		"prompt.summarize.failure":        "Execution Result: Failed (exit code {code})",
+		"prompt.summarize.stdout_excerpt": "Output Excerpt:",
+		"prompt.summarize.stderr_excerpt": "Error Excerpt:",
+
+		// Subagent results
+		"prompt.subagent.header":                 "[Subagent Result] {title} ({id})\nStatus: {state}",
+		"prompt.subagent.agent":                  ", Agent/Harness: {agent}",
+		"prompt.subagent.model":                  " (Model: {model})",
+		"prompt.subagent.injected":               " (System model injected)",
+		"prompt.subagent.exit_code":              ", Exit code {code}",
+		"prompt.subagent.stdout":                 "Output Excerpt:",
+		"prompt.subagent.stderr":                 "Error Excerpt:",
+		"prompt.subagent.done_core_instruction":  "\n\n[Core Instruction]: This subagent has successfully completed execution. Based directly on the execution results and output above, provide a comprehensive, clear, structured summary and final answer to the user (provide key findings for analysis tasks; explain concrete edits/results for operational tasks). Do NOT re-dispatch another subtask to repeat this work.",
+		"prompt.subagent.continue_instruction":   "\n\nBased on the above result, please proceed with the conversation: report to the user or decide on the next step.",
+		"prompt.subagent.dispatch":               "Dispatched subagent task: {title}",
+		"prompt.subagent.dispatch_node":          "Device node: {node}",
+		"prompt.subagent.dispatch_harness":       "Harness: {harness}",
+		"prompt.subagent.dispatch_abilities":     " (Required abilities: {abilities})",
+		"prompt.subagent.dispatch_target":        "\nTarget: {target}",
+		"prompt.subagent.dispatch_assigned_node": "\nAssigned device: {node}",
+		"prompt.subagent.budget_note":            "The subagent task budget for this conversation round ({n}) has been exhausted; no new tasks will be dispatched. Please report directly to the user based on the results of executed tasks.",
+		"prompt.subagent.excerpt_omitted":        "\n...(Intermediate output omitted from prompt; full output has been saved and presented to user)...\n",
+
+		// Task input formatting
+		"prompt.task.target":             "Target: {target}",
+		"prompt.task.scope":              "Scope: {scope}",
+		"prompt.task.constraints":        "Constraints: {constraints}",
+		"prompt.task.success_definition": "Success Definition: {def}",
+		"prompt.task.delimiter":          "; ",
 	},
 	ChineseSimp: {
 		"repl.welcome":          "OpenPanda REPL — 输入 /help 查看命令，其他内容直接交给提问引擎。",
@@ -1177,6 +1235,64 @@ var messages = map[Locale]map[string]string{
 
 		"repl.err.store":  "存储：{err}",
 		"repl.err.config": "配置：{err}",
+
+		// Prompt and hardware descriptions
+		"prompt.device.summary.none":            "（暂无设备能力摘要）",
+		"prompt.device.hardware.label":          "硬件",
+		"prompt.device.hardware.cpu":            "cpu {n} 核",
+		"prompt.device.hardware.ram":            "内存 {n} GiB",
+		"prompt.device.hardware.gpu":            "显存 {n} GiB",
+		"prompt.device.hardware.undeclared":     "未声明显存",
+		"prompt.device.hardware.no_profile":     "未声明（该节点未填 resource_profile，调度器不会因显存要求排除它）",
+		"prompt.device.hardware.max_concurrent": "并发上限 {n}",
+		"prompt.device.agent.best_at":           "（最擅长：{skills}）",
+
+		// Skills and task prompts
+		"prompt.skills.available":      "可用技能（按需参考）：",
+		"prompt.skills.omitted":        "（正文超出本次提示词预算已省略，描述：{desc}）",
+		"prompt.task.intent_header":    "任务指令：",
+		"prompt.task.user_raw_request": "用户原始请求（上下文参考，以任务指令为准）：",
+		"prompt.task.status.success":   "成功",
+		"prompt.task.status.fail":      "失败",
+		"prompt.task.log_format":       "任务「{title}」{status}",
+
+		// Fast triage
+		"prompt.fast_triage.prompt": "你是 OpenPanda 智能技术助手。请直接、准确、精炼地用优雅清晰的 Markdown 回答用户的问题，不罗嗦，直奔核心。",
+
+		// Task summarization
+		"prompt.summarize.system":         "你是调度结果汇报员。一个任务刚刚执行完毕，下面是任务标题、意图和它的执行结果。请用简洁的中文向用户汇报：\n\n- 成功时：说明做了什么、关键输出是什么（一两句话即可，不要复述全部 stdout）。\n- 失败时：说明失败原因，并给出用户可以执行的具体下一步操作（例如如何批准、如何重试、如何修改配置）。\n- 只输出汇报正文，不要输出 JSON、标签或其他格式。\n- 控制在 3 句话以内。",
+		"prompt.summarize.title":          "任务标题：{title}",
+		"prompt.summarize.intent":         "任务意图：{intent}",
+		"prompt.summarize.success":        "执行结果：成功",
+		"prompt.summarize.failure":        "执行结果：失败（退出码 {code}）",
+		"prompt.summarize.stdout_excerpt": "输出摘录：",
+		"prompt.summarize.stderr_excerpt": "错误摘录：",
+
+		// Subagent results
+		"prompt.subagent.header":                 "[子代理任务结果] {title} ({id})\n状态：{state}",
+		"prompt.subagent.agent":                  "，执行智能体/Harness：{agent}",
+		"prompt.subagent.model":                  "（模型：{model}）",
+		"prompt.subagent.injected":               "（已注入系统模型）",
+		"prompt.subagent.exit_code":              "，退出码 {code}",
+		"prompt.subagent.stdout":                 "输出摘录：",
+		"prompt.subagent.stderr":                 "错误摘录：",
+		"prompt.subagent.done_core_instruction":  "\n\n【核心指示】：该子代理已成功执行完成。请直接基于上述执行结果与输出，向用户做完整、清晰、结构化的总结汇报与最终答复（如为分析任务，请提供核心发现与结论；如为操作任务，说明具体修改与结果），切勿再次派发子任务重复执行。",
+		"prompt.subagent.continue_instruction":   "\n\n请基于以上结果继续本轮对话：向用户汇报，或决定下一步。",
+		"prompt.subagent.dispatch":               "已派发子代理任务：{title}",
+		"prompt.subagent.dispatch_node":          "设备节点: {node}",
+		"prompt.subagent.dispatch_harness":       "Harness: {harness}",
+		"prompt.subagent.dispatch_abilities":     "（需要能力：{abilities}）",
+		"prompt.subagent.dispatch_target":        "\n目标：{target}",
+		"prompt.subagent.dispatch_assigned_node": "\n指定设备：{node}",
+		"prompt.subagent.budget_note":            "本轮对话的子代理任务预算（{n} 个）已用完，不再派发新任务。请基于已执行任务的结果直接向用户汇报。",
+		"prompt.subagent.excerpt_omitted":        "\n…（中间输出在提示词中略去，完整结果已全量保存并直接展示给用户，无需重新采集）…\n",
+
+		// Task input formatting
+		"prompt.task.target":             "目标：{target}",
+		"prompt.task.scope":              "范围：{scope}",
+		"prompt.task.constraints":        "约束：{constraints}",
+		"prompt.task.success_definition": "成功标准：{def}",
+		"prompt.task.delimiter":          "；",
 	},
 	Japanese: {
 		"repl.welcome":  "OpenPanda REPL — /help でコマンド一覧、それ以外は質問エンジンへ。",
