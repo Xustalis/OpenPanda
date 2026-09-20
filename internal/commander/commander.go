@@ -307,9 +307,16 @@ func (r *Router) MatchManual(required []string) (ledger.ManualAbility, bool) {
 // Priority: native > agent > manual (design doc §6.4).
 func (r *Router) Route(required []string) (Plan, error) {
 	if ab, ok := r.MatchNative(required); ok {
-		tier := ab.Tier
-		if tier == 0 {
-			tier = defense.TierFromCommand(ab.Command, ab.Args...)
+		// A card's declared tier may only tighten the command's own
+		// classification, never loosen it. Taking the declaration outright
+		// meant a card reading `tier: 1` made `rm -rf` reversible — and since
+		// cards are writable through the entry model, the gate was only ever as
+		// strong as the thing it guards. TierFromCommand (which fails closed on
+		// destructive forms and stays Tier 1 otherwise) is the floor; a
+		// declaration still wins when it is *more* cautious than the command.
+		tier := defense.TierFromCommand(ab.Command, ab.Args...)
+		if ab.Tier > tier {
+			tier = ab.Tier
 		}
 		return Plan{Kind: "native", Ability: ab.ID, Command: ab.Command, Args: ab.Args, Tier: tier}, nil
 	}

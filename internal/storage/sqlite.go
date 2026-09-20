@@ -30,7 +30,14 @@ func Open(path string) (*sql.DB, error) {
 			}
 		}
 	}
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", escapeDBPath(path))
+	// 优化 WAL 模式配置：
+	// - wal_autocheckpoint=1000: 每 1000 页触发 checkpoint，避免 WAL 文件过大
+	// - busy_timeout=5000: 写入超时 5 秒，避免瞬时冲突
+	// - synchronous=NORMAL: 平衡性能与安全性
+	// - foreign_keys=ON: 启用外键约束
+	// - cache_size=-64000: 使用 64MB 缓存 (负数表示 KB)
+	// - temp_store=MEMORY: 临时表存于内存
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=wal_autocheckpoint(1000)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=cache_size(-64000)&_pragma=temp_store(MEMORY)", escapeDBPath(path))
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
