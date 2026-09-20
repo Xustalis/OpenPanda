@@ -25,9 +25,31 @@ updates:
     groups:
       web-dependencies:
         patterns: ['*']
+    # Majors are held back on purpose. The console has three dev dependencies,
+    # and a major in any of them is a migration rather than a routine bump:
+    # typescript 7 is the native-compiler line, vite 8 moved config, and
+    # @types/node's major is meant to track the Node the project actually runs
+    # on — CI pins Node 24, so "26" is the wrong number rather than a newer
+    # one, and Dependabot has no way to know that. It proposed all three at
+    # once and the web gate failed on the first of them. A major gets taken as
+    # its own change with the gate behind it, not as a drive-by in a patch
+    # release. Minors and patches still arrive weekly.
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
 
   # Actions versions rot silently — `actions/checkout@v4` keeps working long
   # after v5 exists, and nothing in the gate ever notices.
+  #
+  # Majors are deliberately *not* held back here, unlike npm above. The gate
+  # exercises checkout, setup-go, setup-python and setup-node on every pull
+  # request, so a bad major fails where it can be seen; and standing still is
+  # its own hazard, since v4 of checkout and setup-node still declare the
+  # Node 20 runtime that GitHub already forces onto Node 24 with a deprecation
+  # warning. Three actions only run off the pull-request path — upload- and
+  # download-artifact in installers.yml, and action-gh-release in release.yml
+  # — so when a batch like this lands, read the new major's `action.yml` for
+  # the inputs the workflows pass before tagging a release: nothing else will.
   - package-ecosystem: github-actions
     directory: /
     schedule:
