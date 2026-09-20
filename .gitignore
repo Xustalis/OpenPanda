@@ -74,6 +74,11 @@ logs/
 # The rest of docs/ is versioned normally (index, roadmap, user guides...).
 /PANDA-*.md
 /docs/author/
+# Author's reference reports parked at the repo root. Same class as docs/author/
+# above: local working material, never versioned. This one needs its own entry
+# because only /docs/author/ was ignored — a root-level author/ would otherwise
+# have been swept into the next `git add -A`.
+/author/
 
 # Local personal configs and per-device capability cards:
 # keep them on disk so `panda` keeps working, but never push them upstream.

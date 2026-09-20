@@ -31,10 +31,14 @@ func Authorize(tier int, authorized bool) error {
 	return nil
 }
 
-// TierFromCommand infers a tier from a command and its args, used as a
-// backstop when a capability card does not declare one. Privilege-escalating
-// or destructive verbs default to Tier 2; everything else is Tier 1. An
-// explicit card tier always wins over this inference.
+// TierFromCommand infers a tier from a command and its args. Privilege-
+// escalating or destructive verbs default to Tier 2; everything else is
+// Tier 1.
+//
+// Note what this is relative to a capability card: the *floor* under the
+// card's declared tier, not a fallback for a missing one. commander.Route
+// takes the higher of the two, so a card may mark an ordinary command as
+// irreversible but may not mark a destructive one as safe.
 //
 // The inference unwraps the common forms that first-word matching would
 // otherwise miss: "sudo"/"doas"/"su" force Tier 2 on their own, and an
