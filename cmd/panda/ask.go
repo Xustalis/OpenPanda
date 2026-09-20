@@ -104,6 +104,7 @@ func runAsk(args []string) {
 		CardPath:   *cardPath,
 		MCPCommand: *mcpCmd,
 		ReplyASCII: isLinuxConsole(),
+		Locale:     loc,
 	})
 	if err != nil {
 		fatal("ask engine", err)
