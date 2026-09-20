@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -166,12 +168,13 @@ const layersWindow = 8
 const memoryToolPrefix = "memory_"
 
 // taskTurnMarkers are the assistant-turn shapes that mean "a task ran": the
-// CLI conversation summarizes a task outcome as "[任务<id> <state>] …", and a
-// replayed task directive carries the kind tag. A started plan counts too — its
-// stages are tasks, and the follow-up question ("跑到哪了") is about them.
+// CLI conversation summarizes a task outcome as "[任务<id> <state>] …" or "[task <id> <state>] …",
+// and a replayed task directive carries the kind tag. A started plan or subagent counts too — its
+// stages are tasks, and the follow-up question is about them.
 var taskTurnMarkers = []string{
-	"[任务", `"kind":"task"`, `"kind": "task"`,
-	"[计划", `"kind":"plan"`, `"kind": "plan"`,
+	"[任务", "[task", `"kind":"task"`, `"kind": "task"`,
+	"[计划", "[plan", `"kind":"plan"`, `"kind": "plan"`,
+	"[Subagent", "[subagent", "[子代理",
 }
 
 // ChooseLayers is the pure injection decision: given the conversation turns
@@ -231,6 +234,8 @@ type PromptOptions struct {
 	// client is a bare Linux console: its PSF font has no CJK glyphs, so any
 	// Chinese in the reply renders as replacement diamonds.
 	ASCIIOnly bool
+	// UserLocale indicates the target UI/prompt language preference.
+	UserLocale i18n.Locale
 }
 
 // ClassifyOption tweaks the system prompt the Classify* entry points build.
@@ -242,13 +247,26 @@ func WithASCIIOnly() ClassifyOption {
 	return func(p *PromptOptions) { p.ASCIIOnly = true }
 }
 
+// WithLocale sets the user language preference for prompt construction.
+func WithLocale(loc i18n.Locale) ClassifyOption {
+	return func(p *PromptOptions) { p.UserLocale = loc }
+}
+
 // BuildPrompt assembles the layered system prompt: the resident routing core,
 // the optional layers ChooseLayers picks from the history, then the device
 // capability summary (stable prefix end) and the user-memory wall (volatile
 // tail).
 func BuildPrompt(opts PromptOptions) string {
 	layers := ChooseLayers(opts.History)
-	devices := summarizeDevicesCached(opts.Devices)
+	loc := opts.UserLocale
+	if loc == "" {
+		if opts.ASCIIOnly {
+			loc = i18n.English
+		} else {
+			loc = i18n.Detect()
+		}
+	}
+	devices := summarizeDevicesCached(opts.Devices, loc)
 	memory := opts.Memory
 	if memory == "" {
 		memory = "(None)"
@@ -298,15 +316,19 @@ func deviceSnapshotKey(nodes []ledger.Node) string {
 }
 
 // summarizeDevicesCached returns the device summary, reusing the previous
-// rendering when the snapshot hash is unchanged.
-func summarizeDevicesCached(nodes []ledger.Node) string {
-	key := deviceSnapshotKey(nodes)
+// rendering when the snapshot hash and locale are unchanged.
+func summarizeDevicesCached(nodes []ledger.Node, loc ...i18n.Locale) string {
+	targetLoc := i18n.English
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
+	key := deviceSnapshotKey(nodes) + ":" + string(targetLoc)
 	deviceSummaryCache.mu.Lock()
 	defer deviceSummaryCache.mu.Unlock()
 	if key == deviceSummaryCache.key && deviceSummaryCache.result != "" {
 		return deviceSummaryCache.result
 	}
-	s := summarizeDevices(nodes)
+	s := summarizeDevices(nodes, targetLoc)
 	deviceSummaryCache.key = key
 	deviceSummaryCache.result = s
 	return s
@@ -323,9 +345,13 @@ func summarizeDevicesCached(nodes []ledger.Node) string {
 // any machine has is asking it to guess, and both guesses are bad — too high
 // makes the task unroutable, too low sends a training run to the Pi. So each node
 // states its numbers, and the rule below tells the model to size against them.
-func summarizeDevices(nodes []ledger.Node) string {
+func summarizeDevices(nodes []ledger.Node, loc ...i18n.Locale) string {
+	targetLoc := i18n.ChineseSimp
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
 	if len(nodes) == 0 {
-		return "（暂无设备能力摘要）"
+		return i18n.T(targetLoc, "prompt.device.summary.none")
 	}
 	var b strings.Builder
 	for _, n := range nodes {
@@ -334,8 +360,9 @@ func summarizeDevices(nodes []ledger.Node) string {
 			native = append(native, a.ID)
 		}
 		fmt.Fprintf(&b, "- %s (%s) native: %s\n", n.Name, n.Chip, strings.Join(native, ", "))
-		if hw := describeHardware(n); hw != "" {
-			fmt.Fprintf(&b, "    硬件: %s\n", hw)
+		if hw := describeHardware(n, targetLoc); hw != "" {
+			hwLabel := i18n.T(targetLoc, "prompt.device.hardware.label")
+			fmt.Fprintf(&b, "    %s: %s\n", hwLabel, hw)
 		}
 		names := make([]string, 0, len(n.Agents))
 		for name := range n.Agents {
@@ -346,7 +373,13 @@ func summarizeDevices(nodes []ledger.Node) string {
 			ag := n.Agents[name]
 			desc := strings.Join(ag.Capabilities, "/")
 			if len(ag.BestAt) > 0 {
-				desc += "（最擅长：" + strings.Join(ag.BestAt, "、") + "）"
+				bestSep := ", "
+				if targetLoc == i18n.ChineseSimp {
+					bestSep = "、"
+				}
+				bestAtStr := strings.Join(ag.BestAt, bestSep)
+				bestAtText := i18n.Tf(targetLoc, "prompt.device.agent.best_at", "skills", bestAtStr)
+				desc += " " + bestAtText
 			}
 			fmt.Fprintf(&b, "    agent:%s — %s\n", name, desc)
 		}
@@ -358,34 +391,37 @@ func summarizeDevices(nodes []ledger.Node) string {
 // declared. An undeclared profile is silence, not a claim of zero — every card
 // written before v0.0.6 is all-zero — so it prints nothing rather than "0 GiB
 // VRAM", which would read as "this machine has no GPU" and is a different claim.
-func describeHardware(n ledger.Node) string {
+func describeHardware(n ledger.Node, loc ...i18n.Locale) string {
+	targetLoc := i18n.ChineseSimp
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
 	var parts []string
 	r := n.ResourceProfile
 	if r.CPU > 0 {
-		parts = append(parts, fmt.Sprintf("cpu %d 核", r.CPU))
+		parts = append(parts, i18n.Tf(targetLoc, "prompt.device.hardware.cpu", "n", strconv.Itoa(r.CPU)))
 	} else if n.Capacity.CPUCores > 0 {
-		parts = append(parts, fmt.Sprintf("cpu %d 核", n.Capacity.CPUCores))
+		parts = append(parts, i18n.Tf(targetLoc, "prompt.device.hardware.cpu", "n", strconv.Itoa(n.Capacity.CPUCores)))
 	}
 	if r.RAMGB > 0 {
-		parts = append(parts, fmt.Sprintf("内存 %d GiB", r.RAMGB))
+		parts = append(parts, i18n.Tf(targetLoc, "prompt.device.hardware.ram", "n", strconv.Itoa(r.RAMGB)))
 	} else if n.Capacity.RAMGB > 0 {
-		parts = append(parts, fmt.Sprintf("内存 %d GiB", n.Capacity.RAMGB))
+		parts = append(parts, i18n.Tf(targetLoc, "prompt.device.hardware.ram", "n", strconv.Itoa(n.Capacity.RAMGB)))
 	}
 	if r.GPUVRAMGB > 0 {
-		parts = append(parts, fmt.Sprintf("显存 %d GiB", r.GPUVRAMGB))
+		parts = append(parts, i18n.Tf(targetLoc, "prompt.device.hardware.gpu", "n", strconv.Itoa(r.GPUVRAMGB)))
 	} else if r.Declared() {
-		// The card describes its hardware but names no VRAM. Say "undeclared",
-		// never "0": zero would read as "this machine has no GPU", a claim the
-		// card never made and one the scheduler does not make either — Fits lets
-		// an undeclared node through rather than declining every GPU task.
-		parts = append(parts, "未声明显存")
+		parts = append(parts, i18n.T(targetLoc, "prompt.device.hardware.undeclared"))
 	}
 	if !r.Declared() && len(parts) == 0 {
-		// A card written before v0.0.6 says nothing about hardware at all.
-		return "未声明（该节点未填 resource_profile，调度器不会因显存要求排除它）"
+		return i18n.T(targetLoc, "prompt.device.hardware.no_profile")
 	}
 	if n.Capacity.MaxConcurrent > 0 {
-		parts = append(parts, fmt.Sprintf("并发上限 %d", n.Capacity.MaxConcurrent))
+		parts = append(parts, i18n.Tf(targetLoc, "prompt.device.hardware.max_concurrent", "n", strconv.Itoa(n.Capacity.MaxConcurrent)))
 	}
-	return strings.Join(parts, "，")
+	sep := ", "
+	if targetLoc == i18n.ChineseSimp {
+		sep = "，"
+	}
+	return strings.Join(parts, sep)
 }

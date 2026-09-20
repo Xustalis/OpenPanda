@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
 // TriageResult indicates whether a prompt should take the fast conversational path.
@@ -118,9 +120,13 @@ func containsAny(s string, needles []string) bool {
 }
 
 // FastPathPrompt returns a minimal system prompt for pure conversation & conceptual answering.
-func FastPathPrompt(asciiOnly bool) string {
+func FastPathPrompt(asciiOnly bool, loc ...i18n.Locale) string {
 	if asciiOnly {
-		return "You are OpenPanda, a helpful, concise AI technical assistant. Answer the user's question directly, accurately, and concisely in clean Markdown format without unnecessary pleasantries."
+		return i18n.T(i18n.English, "prompt.fast_triage.prompt")
 	}
-	return "你是 OpenPanda 智能技术助手。请直接、准确、精炼地用优雅清晰的 Markdown 回答用户的问题，不罗嗦，直奔核心。"
+	targetLoc := i18n.ChineseSimp
+	if len(loc) > 0 && loc[0] != "" {
+		targetLoc = loc[0]
+	}
+	return i18n.T(targetLoc, "prompt.fast_triage.prompt")
 }
