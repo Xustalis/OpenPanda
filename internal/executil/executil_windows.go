@@ -26,7 +26,12 @@ func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd 
 		if cmd.Process == nil {
 			return os.ErrProcessDone
 		}
-		err := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+		// taskkill gets the same hidden-console treatment: the daemon runs
+		// headless, and a cancellation must not flash a console window at the
+		// user mid-task.
+		tk := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid))
+		tk.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		err := tk.Run()
 		if err != nil {
 			// taskkill fails when the process already exited; fall back to a
 			// plain kill so cancellation still guarantees the child is gone.

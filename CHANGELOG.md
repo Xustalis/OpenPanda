@@ -42,6 +42,14 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows classic consoles now render colour instead of raw escape sequences** — the palette emitted SGR codes on any Windows TTY, but the legacy console host (cmd.exe, Windows PowerShell 5.1, double-clicked binaries) does not interpret them until the process enables VT processing. `internal/cliui` now turns `ENABLE_VIRTUAL_TERMINAL_PROCESSING` on for stdout at first use and gates colour on it, so `panda ask` / `doctor` / the classic REPL print clean plain text where VT cannot be enabled instead of `[31m` garbage.
+- **Windows classic REPL got a real line editor** — the fallback was a plain scanner line read: no cursor movement, no history, no Tab completion, and Ctrl-C during a running ask hit the console control handler and killed the whole REPL. A new console-API editor adds in-line editing, persisted history, slash-command and argument-position completion, real terminal-width reporting, and Esc/Ctrl-C cancellation of the running ask (double-tap exits, as on unix).
+- **`panda uninstall` now sweeps default-location config and the capability card** — a config at the per-user default (e.g. `%APPDATA%\openpanda\config.yaml`) was judged "custom location — kept", leaving the API key and shared secret on disk, and the capability card was never part of the plan. Both are now owned when they live in the standard per-user or system config directories.
+- **Windows browser open no longer breaks on URL special characters** — `cmd /c start <url>` parses `&`, `^` and parentheses as shell syntax; `panda web` now opens the token-carrying URL through `rundll32 url.dll,FileProtocolHandler`.
+- **Windows install/uninstall hardening** — the installer's self-check now fails on a non-zero exit instead of reporting success for a broken binary; PATH comparisons expand `%VAR%` entries so re-installs do not append duplicates; cancellation via `taskkill` no longer flashes a console window; hardware probes prefer `pwsh` and fall back to `powershell`; `SystemConfigDir` falls back to `C:\ProgramData` when `ProgramData` is unset; REPL history now lives in `%LOCALAPPDATA%\openpanda` instead of a unix-style `~/.local/state`.
+
 ## [0.0.8] - 2026-09-20
 
 The official v0.0.8 release: OpenPanda transitions from preview to stable release baseline, introducing prompt language policies and end-to-end multi-language localization, geographic provider classification, automatic credential sanitization, SQLite WAL concurrency optimizations, capability tier floor hardening, and installer and terminal fixes.

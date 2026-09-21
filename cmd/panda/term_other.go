@@ -1,9 +1,11 @@
-//go:build !linux && !darwin
+//go:build !linux && !darwin && !windows
 
 package main
 
-// Non-unix fallback (Windows): the REPL degrades to plain line reading —
-// no raw-mode editing, Tab completion, or Esc/Ctrl-C interception.
+// Non-unix, non-Windows fallback (other platforms the Go toolchain can
+// target): the REPL degrades to plain line reading — no raw-mode editing, Tab
+// completion, or Esc/Ctrl-C interception. Windows has its own full editor in
+// term_windows.go; this file is the remaining catch-all.
 
 import (
 	"bufio"

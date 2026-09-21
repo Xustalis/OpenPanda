@@ -81,10 +81,11 @@ func runUninstall(args []string) {
 	// binary is gone, EvalSymlinks can no longer find it.
 	sweepPrefix, sweepable := install.SweepablePrefix(exe)
 	targets := install.Scan(install.PlanInput{
-		Storage:        storage,
-		ConfigFileUsed: cfgFile,
-		ExePath:        exe,
-		InstallDir:     dir,
+		Storage:            storage,
+		ConfigFileUsed:     cfgFile,
+		CapabilityCardUsed: defaultCardPath(),
+		ExePath:            exe,
+		InstallDir:         dir,
 	})
 
 	// ---- print the plan ----
