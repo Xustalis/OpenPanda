@@ -29,6 +29,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/updater"
@@ -326,6 +327,14 @@ func runDaemon(args []string) {
 	card.NodeIdentity = effectiveIdentity
 
 	runtimeNodeID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, effectiveIdentity)
+	// A stable id must not look ephemeral: scheduler.EphemeralBase strips ANY
+	// trailing "-"+8hex, so a node named e.g. "build-deadbeef" would register
+	// its row under the full name yet be recognized by peers as "build" —
+	// IsSelfRow/SameRuntimeIdentity then alias it onto a different node.
+	// Rejecting at startup beats aliasing silently at route time (D-collision).
+	if base, ok := scheduler.EphemeralBase(runtimeNodeID); ok {
+		fatal("node id", fmt.Errorf("%q ends in an ephemeral-style -8hex suffix; it would alias onto %q — rename the node", runtimeNodeID, base))
+	}
 	coreNode := core.NewCore(db, runtimeNodeID, card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 	coreNode.SetRouterPolicy(cfg.Injection, cfg.Routing)
 	// Extended-policy agent runs expose the node's MCP server to the

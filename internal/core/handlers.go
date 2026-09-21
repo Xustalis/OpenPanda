@@ -1217,7 +1217,14 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if strings.TrimSpace(res.Stderr) != "" {
 			judgeResult = judgeResult + "\n\n错误输出（stderr）：\n" + res.Stderr
 		}
-		v, serr := entry.Supervise(ctx, c.supervisor, currentIntent, judgeResult)
+		// Supervise under execCtx, not the handler's ctx: the judge call is part
+		// of this execution, so it must honor the task's cancel (cancelRunning
+		// kills execCtx on force-fail/cancel) — and must NOT die with the
+		// delegator's websocket read loop, which is what the bare handler ctx is
+		// scoped to. Using ctx here meant a dropped peer link aborted the judge
+		// mid-call, parking work for review that a live judge would have
+		// accepted (or rejected with a real verdict).
+		v, serr := entry.Supervise(execCtx, c.supervisor, currentIntent, judgeResult)
 		c.recordEntryUsage(context.WithoutCancel(ctx), taskID, c.supervisor, usageBefore,
 			v.Status == entry.VerdictDone, time.Since(judgeStart))
 		if serr != nil {
@@ -2186,9 +2193,14 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 	}
 	// Re-run asynchronously so the message loop stays responsive to
 	// task_cancel while the (potentially long) agent run proceeds. The
-	// outcome travels back over the normal task_result path.
+	// outcome travels back over the normal task_result path. The re-run ctx is
+	// detached from the handler's ctx for the same reason as the context-ack
+	// resume path: that ctx dies with the requester's websocket read loop, so
+	// inheriting it would kill the resumed agent the moment the requester's
+	// link drops. Explicit cancels still land via the running map's CancelFunc.
+	runCtx := context.WithoutCancel(ctx)
 	go func() {
-		final, result, rerr := c.ResumeApproved(ctx, p.TaskID)
+		final, result, rerr := c.ResumeApproved(runCtx, p.TaskID)
 		if rerr != nil {
 			result = bus.TaskResultPayload{
 				TaskID: p.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,

@@ -295,6 +295,17 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 	}
 	env.To = target
 	if err := c.sendTo(target, env); err != nil {
+		// The send failed, so the peer never received the task — but the audit
+		// trail already records IT as the delegation target. Leaving that in
+		// place makes DispatchTarget authenticate a non-executor and makes the
+		// task look remotely-owned to the orphan sweep, when in fact this node
+		// still holds it (dispatched-to-self, lease ours). Write a corrective
+		// delegate event pointing back at ourselves so the last EvDelegate
+		// reflects the actual executor; the task stays queued for the next
+		// scheduling pass instead of being orphaned on paper.
+		if rerr := c.store.RetargetDelegation(ctx, taskID, c.nodeID); rerr != nil {
+			c.logger.Warn("queue: corrective retarget failed", "task", taskID, "err", rerr)
+		}
 		return fmt.Errorf("send: %w", err)
 	}
 	// — Trace: queue re-route hop (from=here, to=target), same shape as

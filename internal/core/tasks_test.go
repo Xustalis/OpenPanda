@@ -521,6 +521,62 @@ func TestRotateAttemptOwnerGuarded(t *testing.T) {
 	}
 }
 
+// TestRequeueForRetryAtomic verifies the retry loop's one-shot move: a failed
+// task lands in dispatched with a fresh attempt_id and BOTH audit events
+// (EvRetry + EvDelegate to self) in a single transaction — and a non-owner or
+// a non-failed task gets nothing written at all.
+func TestRequeueForRetryAtomic(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "t", "root")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	must(s.Queue(ctx, tk.TaskID, "root"))
+	must(s.Dispatch(ctx, tk.TaskID, "root", "root"))
+	must(s.Accept(ctx, tk.TaskID, "root"))
+	must(s.Fail(ctx, tk.TaskID, "root", "boom"))
+
+	// Wrong owner: conflict, and the row stays failed with its old attempt.
+	if _, err := s.RequeueForRetry(ctx, tk.TaskID, "intruder"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict for non-owner, got %v", err)
+	}
+	cur, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if cur.State != StateFailed || cur.AttemptID != tk.AttemptID {
+		t.Fatalf("conflict wrote state=%s attempt=%s", cur.State, cur.AttemptID)
+	}
+
+	aid, err := s.RequeueForRetry(ctx, tk.TaskID, "root")
+	if err != nil {
+		t.Fatalf("requeue for retry: %v", err)
+	}
+	if aid == "" || aid == tk.AttemptID {
+		t.Fatalf("attempt not rotated: %q", aid)
+	}
+	cur, err = s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if cur.State != StateDispatched || cur.AttemptID != aid {
+		t.Fatalf("state=%s attempt=%s, want dispatched/%s", cur.State, cur.AttemptID, aid)
+	}
+	// Both audit events landed: DispatchTarget (latest EvDelegate) points back
+	// at the owner, and RetryCount saw the EvRetry.
+	if tgt, err := s.DispatchTarget(ctx, tk.TaskID); err != nil || tgt != "root" {
+		t.Fatalf("dispatch target = %q err=%v, want root", tgt, err)
+	}
+	if n, err := s.RetryCount(ctx, tk.TaskID); err != nil || n != 1 {
+		t.Fatalf("retry count = %d err=%v, want 1", n, err)
+	}
+}
+
 func TestAttemptRotationRejectsOldResult(t *testing.T) {
 	s := newTestStore(t)
 	tk := createTask(t, s, "", "t", "root")
