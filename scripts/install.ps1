@@ -187,7 +187,7 @@ finally {
 
 # Persistent user PATH
 $cur = [Environment]::GetEnvironmentVariable("Path", "User")
-if (-not ($cur -split ";" | Where-Object { $_ -eq $BinDir })) {
+if (-not ($cur -split ";" | Where-Object { ([Environment]::ExpandEnvironmentVariables($_)) -eq $BinDir })) {
     $new = if ($cur) { "$cur;$BinDir" } else { $BinDir }
     [Environment]::SetEnvironmentVariable("Path", $new, "User")
     $env:Path = "$env:Path;$BinDir"
@@ -199,6 +199,12 @@ if (-not ($cur -split ";" | Where-Object { $_ -eq $BinDir })) {
 # Self-verify
 try {
     $v = & $Exe version
+    # A native command's non-zero exit is not an exception: check it
+    # explicitly, or a broken binary (missing runtime DLL, AV-quarantined)
+    # would still report "Self-check passed".
+    if ($LASTEXITCODE -ne 0) {
+        Fail "Self-check failed (exit $LASTEXITCODE); run '$Exe version' for details"
+    }
     Ok "Self-check passed: $v"
 } catch {
     Fail "Self-check failed; run '$Exe version' for details"

@@ -38,6 +38,14 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
+### 修复
+
+- **Windows 经典控制台现在正常渲染颜色而非原始转义序列** —— 调色板在任何 Windows TTY 上都会输出 SGR 码，但传统控制台主机（cmd.exe、Windows PowerShell 5.1、双击启动的二进制）在进程主动启用 VT 处理之前不会解析它们。`internal/cliui` 现在会在首次使用时为 stdout 打开 `ENABLE_VIRTUAL_TERMINAL_PROCESSING` 并据此决定是否输出颜色，因此 `panda ask` / `doctor` / 经典 REPL 在无法启用 VT 时会输出干净的纯文本，而不是满屏 `[31m` 乱码。
+- **Windows 经典 REPL 获得真正的行编辑器** —— 此前的回退实现只是裸行读取：没有光标移动、没有历史记录、没有 Tab 补全，而且运行中的 ask 按下 Ctrl-C 会命中控制台控制处理器、直接杀死整个 REPL。新的基于控制台 API 的编辑器补齐了行内编辑、持久化历史、斜杠命令与参数位补全、真实终端宽度探测，并支持 Esc/Ctrl-C 取消运行中的 ask（连按两次退出进程，与 unix 行为一致）。
+- **`panda uninstall` 现在会清理默认位置的配置与能力卡** —— 位于用户默认目录（如 `%APPDATA%\openpanda\config.yaml`）的配置此前被判定为"custom location — kept"而遗留，API 密钥与共享密钥因此残留在磁盘上；能力卡更是从未进入卸载计划。现在二者只要位于标准的用户级或系统级配置目录内，就会被正常纳入清理。
+- **Windows 打开浏览器不再被 URL 特殊字符破坏** —— `cmd /c start <url>` 会把 `&`、`^` 与括号当作 shell 语法解析；`panda web` 现在改用 `rundll32 url.dll,FileProtocolHandler` 打开携带 token 的 URL。
+- **Windows 安装/卸载健壮性加固** —— 安装器自检现在会在非零退出码时报错，而不是对损坏的二进制报告成功；PATH 比较会先展开 `%VAR%` 条目，避免重复安装产生重复项；`taskkill` 取消路径不再闪现控制台窗口；硬件探测优先使用 `pwsh`、失败再回退 `powershell`；`ProgramData` 为空时 `SystemConfigDir` 回退到 `C:\ProgramData`；REPL 历史改存 `%LOCALAPPDATA%\openpanda`，不再使用 unix 风格的 `~/.local/state`。
+
 ## [0.0.8] - 2026-09-20
 
 v0.0.8 正式版：OpenPanda 正式由预览版迈入稳定发布基线，全面引入多语言提示词策略与全链路本地化、Provider 地理归属分类、敏感凭据自动脱敏、SQLite WAL 并发性能调优、权限分级底线加固，以及安装器与终端交互深度修复。

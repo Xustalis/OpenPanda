@@ -41,6 +41,14 @@ type Palette struct {
 func New(tty, unicode bool) Palette {
 	p := Palette{unicode: unicode}
 	p.color = colorEnabled(tty)
+	if p.color {
+		// The final gate: a Windows classic console (cmd.exe, PowerShell 5.1,
+		// double-clicked binary) only renders SGR sequences once the process
+		// turns VT processing on — WindowsVTReady does exactly that, lazily,
+		// and answers false when stdout is not a console at all. Without this
+		// a conhost session got raw "[31m" garbage instead of colour.
+		p.color = WindowsVTReady()
+	}
 	p.rgb = p.color && truecolor()
 	return p
 }
@@ -52,7 +60,9 @@ func Plain() Palette { return Palette{} }
 // colorEnabled resolves the colour question in the order the ecosystem has
 // settled on: NO_COLOR wins over everything (no-color.org: any value, even
 // "0"), then the explicit FORCE_COLOR/CLICOLOR_FORCE overrides, then TERM,
-// then whether we are actually talking to a terminal.
+// then whether we are actually talking to a terminal. The Windows VT gate
+// (see New) is applied by the caller, not here, so the environment-precedence
+// logic stays pure and testable.
 func colorEnabled(tty bool) bool {
 	if _, ok := os.LookupEnv("NO_COLOR"); ok {
 		return false

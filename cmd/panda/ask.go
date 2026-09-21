@@ -236,7 +236,7 @@ func renderCliMd(s string) string {
 	if s == "" {
 		return ""
 	}
-	if os.Getenv("NO_COLOR") != "" || isLinuxConsole() {
+	if os.Getenv("NO_COLOR") != "" || isLinuxConsole() || !cliui.WindowsVTReady() {
 		return mdtext.Plain(s)
 	}
 	return mdtext.RenderTerminal(s)
@@ -255,7 +255,10 @@ type streamLineRenderer struct {
 }
 
 func newStreamLineRenderer() *streamLineRenderer {
-	return &streamLineRenderer{ansi: stdoutIsTTY() && os.Getenv("NO_COLOR") == "" && !isLinuxConsole()}
+	// WindowsVTReady doubles as the enabler: on a classic console host it
+	// turns VT processing on for this process, so the ANSI path below renders
+	// instead of printing raw escape sequences.
+	return &streamLineRenderer{ansi: stdoutIsTTY() && os.Getenv("NO_COLOR") == "" && !isLinuxConsole() && cliui.WindowsVTReady()}
 }
 
 // delta consumes one streamed chunk, printing every completed line.

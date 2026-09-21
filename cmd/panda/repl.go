@@ -2025,7 +2025,13 @@ func openBrowser(url string) {
 	case "darwin":
 		cmd = exec.Command("open", url)
 	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", url)
+		// rundll32 + FileProtocolHandler, not `cmd /c start <url>`: cmd parses
+		// `&`, `^` and parentheses in the URL as command syntax, and `start`
+		// treats a quoted argument as a window title — either one silently
+		// opens the wrong page for any URL carrying a query string. rundll32
+		// takes the URL as a plain argument, so the token-carrying panel URL
+		// arrives intact.
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 	default:
 		cmd = exec.Command("xdg-open", url)
 	}
