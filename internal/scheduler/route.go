@@ -188,7 +188,14 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 	// on either the node id (the routing key) or its display name, since the
 	// entry model sees the latter in the device summary.
 	if preferred != "" {
-		if canLocal && (preferred == self || strings.EqualFold(preferred, self) || (haveSelf && (preferred == selfNode.Name || strings.EqualFold(preferred, selfNode.Name)))) {
+		// Match the participant id (self) AND the directory row id
+		// (selfNode.ID): the two differ when self is an ephemeral ask-session
+		// identity ("macbook-1f3a2b4c") while the row — and the node name the
+		// user actually names — carries the stable id ("macbook"). Naming the
+		// stable id must still land the task at home.
+		if canLocal && (preferred == self || strings.EqualFold(preferred, self) ||
+			(haveSelf && (preferred == selfNode.ID || strings.EqualFold(preferred, selfNode.ID) ||
+				preferred == selfNode.Name || strings.EqualFold(preferred, selfNode.Name)))) {
 			return Decision{Action: ActionLocal}
 		}
 		for _, n := range matching {

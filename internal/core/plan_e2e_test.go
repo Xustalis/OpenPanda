@@ -212,3 +212,57 @@ func stageByID(t *testing.T, stages []Task, id string) Task {
 	t.Fatalf("plan has no stage %q", id)
 	return Task{}
 }
+
+func TestAdvancePlanPropagatesFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pi := newCoreWithNative(t, "pi", "127.0.0.1:17999", ledger.NativeAbility{
+		ID: "sys:report", Command: "echo", Args: []string{"ok"}, Tier: 1,
+	})
+	if err := pi.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	p := plan.Plan{
+		Goal: "sequential stages",
+		Stages: []plan.Stage{
+			{ID: "st1", Title: "first", Intent: "do first", Requires: []string{"sys:report"}},
+			{ID: "st2", Title: "second", Intent: "do second", Needs: []string{"st1"}, Requires: []string{"sys:report"}},
+			{ID: "st3", Title: "third", Intent: "do third", Needs: []string{"st2"}, Requires: []string{"sys:report"}},
+		},
+	}
+	planID, err := pi.StartPlan(ctx, p, DefaultQueueSpec())
+	if err != nil {
+		t.Fatalf("start plan: %v", err)
+	}
+
+	stages, err := pi.store.PlanStages(ctx, planID)
+	if err != nil {
+		t.Fatalf("plan stages: %v", err)
+	}
+	st1 := stageByID(t, stages, "st1")
+	st2 := stageByID(t, stages, "st2")
+	st3 := stageByID(t, stages, "st3")
+
+	// Fail stage 1 directly
+	if err := pi.store.ForceFail(ctx, st1.TaskID, "simulated error"); err != nil {
+		t.Fatalf("fail stage 1: %v", err)
+	}
+
+	// Advance plan: failure of st1 should propagate to st2, and transitively to st3
+	if err := pi.AdvancePlan(ctx, planID); err != nil {
+		t.Fatalf("advance plan: %v", err)
+	}
+
+	g2, _ := pi.store.Get(ctx, st2.TaskID)
+	g3, _ := pi.store.Get(ctx, st3.TaskID)
+
+	if g2.State != StateCancelled {
+		t.Fatalf("st2 state = %s, want %s", g2.State, StateCancelled)
+	}
+	if g3.State != StateCancelled {
+		t.Fatalf("st3 state = %s, want %s (transitive failure)", g3.State, StateCancelled)
+	}
+}
+

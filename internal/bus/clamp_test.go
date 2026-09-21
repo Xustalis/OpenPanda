@@ -95,3 +95,53 @@ func TestNonClampedPayloadRoundTrips(t *testing.T) {
 		t.Fatalf("payload is not a JSON object: %v", err)
 	}
 }
+
+func TestTaskDelegatePayloadClamped(t *testing.T) {
+	huge := make([]byte, MaxContextDataBytes+100)
+	hugeProject := make([]byte, MaxProjectPackBytes+100)
+	env, err := NewEnvelope(MsgTaskDelegate, "sender", "m5", TaskDelegatePayload{
+		TaskID:       "t5",
+		ContextLevel: "full",
+		ContextData:  huge,
+		ProjectPack:  hugeProject,
+	})
+	if err != nil {
+		t.Fatalf("new envelope: %v", err)
+	}
+	var got TaskDelegatePayload
+	if err := env.PayloadInto(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.ContextData) != 0 {
+		t.Errorf("expected oversized ContextData to be dropped, got %d bytes", len(got.ContextData))
+	}
+	if got.ContextLevel != "pointer" {
+		t.Errorf("expected ContextLevel demoted to pointer, got %q", got.ContextLevel)
+	}
+	if len(got.ProjectPack) != 0 {
+		t.Errorf("expected oversized ProjectPack to be dropped, got %d bytes", len(got.ProjectPack))
+	}
+}
+
+func TestContextAckPayloadClamped(t *testing.T) {
+	huge := make([]byte, MaxContextDataBytes+100)
+	env, err := NewEnvelope(MsgContextAck, "sender", "m6", ContextAckPayload{
+		TaskID: "t6",
+		OK:     true,
+		Data:   huge,
+	})
+	if err != nil {
+		t.Fatalf("new envelope: %v", err)
+	}
+	var got ContextAckPayload
+	if err := env.PayloadInto(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Data) != 0 {
+		t.Errorf("expected oversized Data to be dropped, got %d bytes", len(got.Data))
+	}
+	if got.OK {
+		t.Errorf("expected OK to become false on oversized Data")
+	}
+}
+

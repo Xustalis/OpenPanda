@@ -59,6 +59,10 @@ func (e *Executor) Run(ctx context.Context, command string, args ...string) Nati
 	var stdout, stderr executil.Capture
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// Custom writers spawn copy goroutines Wait blocks on; a detached
+	// grandchild inheriting the pipes would otherwise hold them open and
+	// wedge Wait forever after the command itself exits (or is killed).
+	cmd.WaitDelay = 5 * time.Second
 
 	err := cmd.Run()
 	res := NativeResult{

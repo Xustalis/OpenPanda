@@ -324,7 +324,7 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 // runLocal executes a task on this node and returns the final row + result.
 // It is the shared local branch for both SubmitLocal and Submit's local route.
 func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.TaskResultPayload, error) {
-	result, err := c.execute(ctx, t.TaskID, in.Intent, in.Requires)
+	result, err := c.execute(ctx, t.TaskID, in.Intent, in.Requires, nil)
 	return c.retryLoop(ctx, t.TaskID, in.Intent, in.Requires, result, err)
 }
 
@@ -401,7 +401,7 @@ func (c *Core) ResumeApproved(ctx context.Context, taskID string) (Task, bus.Tas
 	}
 	// The parking already reset the retry budget; keep it fresh for this run.
 	c.reviewReset(taskID)
-	result, err := c.run(ctx, taskID, cur.Intent, cur.Requires)
+	result, err := c.run(ctx, taskID, cur.Intent, cur.Requires, nil)
 	if ctx.Err() != nil {
 		// Cancelling the foreground approval must terminate the task, not leave
 		// the already-claimed row running after its caller and TUI stream are gone.
@@ -569,7 +569,7 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 		}
 		retries++
 		c.logger.Info("retrying task", "task", taskID)
-		result, err = c.run(ctx, taskID, intent, required)
+		result, err = c.run(ctx, taskID, intent, required, nil)
 		if err != nil && !errors.Is(err, ErrCancelled) {
 			c.failLocal(ctx, taskID, err)
 			final, gerr := c.store.Get(ctx, taskID)

@@ -10,6 +10,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -496,6 +497,12 @@ func runDaemon(args []string) {
 	for _, peer := range cfg.Network.Peers {
 		guard.Go(logger, "daemon: peer keepalive "+peer, cancel, func() {
 			backoff := 1 * time.Second
+			// jitter spreads a fleet-wide reconnect over a window instead of
+			// having every node redial in lockstep the second the peer returns —
+			// the classic thundering herd after a shared outage.
+			jitter := func(d time.Duration) time.Duration {
+				return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
+			}
 			for {
 				err := coreNode.MaintainPeer(ctx, peer)
 				if err != nil {
@@ -505,7 +512,7 @@ func runDaemon(args []string) {
 					select {
 					case <-ctx.Done():
 						return
-					case <-time.After(backoff):
+					case <-time.After(jitter(backoff)):
 					}
 					backoff = min(backoff*2, 30*time.Second)
 					continue
@@ -516,7 +523,7 @@ func runDaemon(args []string) {
 				select {
 				case <-ctx.Done():
 					return
-				case <-time.After(backoff):
+				case <-time.After(jitter(backoff)):
 				}
 			}
 		})

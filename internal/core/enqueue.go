@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -77,6 +78,25 @@ func (c *Core) Enqueue(ctx context.Context, in TaskInput, q QueueSpec) (Task, er
 	return t, nil
 }
 
+// preferredNodeOf recovers the user-named node an enqueued task carries. The
+// route hint is not a column of its own — it lives in the persisted spec
+// (askengine marshals TaskSpecDetail into spec_json, and spec.node is its
+// "preferred node" field) — so it has to be parsed back out. Specs written by
+// other paths may omit it or carry the spec at another shape; a miss simply
+// means no preference, never an error worth surfacing.
+func preferredNodeOf(t Task) string {
+	if t.SpecJSON == "" {
+		return ""
+	}
+	var spec struct {
+		Node string `json:"node"`
+	}
+	if err := json.Unmarshal([]byte(t.SpecJSON), &spec); err != nil {
+		return ""
+	}
+	return spec.Node
+}
+
 // queueWake nudges the queue scheduler if one is running.
 func (c *Core) queueWake() {
 	c.mu.RLock()
@@ -138,7 +158,7 @@ func (a queueStoreAdapter) ListReady(ctx context.Context) ([]queue.ReadyTask, er
 }
 
 func (a queueStoreAdapter) CountActive(ctx context.Context) (int, error) {
-	return a.c.store.CountScheduledActive(ctx)
+	return a.c.store.CountScheduledActive(ctx, a.c.nodeID)
 }
 
 func (a queueStoreAdapter) Claim(ctx context.Context, taskID string) error {
@@ -172,7 +192,7 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 	if c.forwardScheduled(ctx, t) {
 		return
 	}
-	result, err := c.run(ctx, taskID, t.Intent, t.Requires)
+	result, err := c.run(ctx, taskID, t.Intent, t.Requires, nil)
 	final, _, rerr := c.retryLoop(ctx, taskID, t.Intent, t.Requires, result, err)
 	if rerr != nil && !errors.Is(rerr, ErrCancelled) {
 		c.logger.Warn("queue: task run error", "task", taskID, "err", rerr)
@@ -221,7 +241,7 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 	}
 	seenChain := append(slices.Clone(chain), excluded...)
 	decision := scheduler.Route(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
-		resourceRequirement(t.ResourceJSON), "")
+		resourceRequirement(t.ResourceJSON), preferredNodeOf(t))
 	if decision.Action != scheduler.ActionForward {
 		c.logger.Info("queue: no peer for task", "task", t.TaskID,
 			"action", string(decision.Action), "reason", decision.Reason)

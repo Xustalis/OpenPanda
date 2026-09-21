@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/artifact"
@@ -134,6 +136,14 @@ type Core struct {
 	// arrives.
 	pendingCtx sync.Map // string -> *pendingContext
 
+	// execSlots reserves execution slots between the capacity check and the
+	// moment the task's row actually claims one (running/waiting_context). A
+	// bare count-then-spawn over-counts: N concurrent delegates that all read
+	// "active < max" before any of them transitions would all accept and
+	// over-commit the node (M14). The counter is in-memory because the check
+	// it protects is advisory — a restart recounts from the rows.
+	execSlots atomic.Int64
+
 	// projects is the project metadata table, and projectsRoot the directory the
 	// per-project memory trees live under. Set together by SetProjectStores; nil
 	// means this node does not participate in project-aware delegation (it still
@@ -168,6 +178,26 @@ type Core struct {
 	// ability set and weigh failure history into candidate selection.
 	// Guarded by mu; entries die with the peer's connection.
 	peerBlocked map[string][]string
+
+	// helloSeen maps nodeID|ts|sig|msg_id -> the time the hello was verified,
+	// making each signed hello frame single-use within its validity window.
+	// Without it a captured hello can be replayed on a second connection for
+	// maxHelloAge — the timestamp only expires the replay, it does not prevent
+	// it. The msg_id distinguishes an honest reconnect (fresh id, possibly the
+	// same second) from a verbatim replay (same id). Guarded by mu; entries
+	// age out with the window they close.
+	helloSeen map[string]time.Time
+
+	// msgSeen maps from|msg_id -> arrival time of the last message seen under
+	// that id, the receive-side dedup the envelope's MsgID exists for (design
+	// §10.3: "used for dedup at the receiving end"). A WS frame delivered twice
+	// — a peer's retry after a timeout, a capture replayed inside the conn —
+	// must not run its handler a second time: task_delegate would adopt the
+	// task twice, artifact_fetch would restart a transfer. Keyed by sender so
+	// two peers minting the same id cannot block each other. Guarded by mu;
+	// entries age out of a bounded window and the map is hard-capped so a peer
+	// minting ids forever cannot grow memory without bound.
+	msgSeen map[string]time.Time
 
 	// leaseTimeout is how long one task attempt may hold its lease before the
 	// monitor treats its executor as dead. Renewed on a heartbeat during
@@ -217,6 +247,8 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		greetedConns: make(map[*bus.Conn]bool),
 		orphanSeen:   make(map[string]time.Time),
 		peerBlocked:  make(map[string][]string),
+		helloSeen:    make(map[string]time.Time),
+		msgSeen:      make(map[string]time.Time),
 		breaker:      defense.NewCircuitBreaker(0, 0),
 		loop:         defense.NewLoopDetector(2),
 		auditLog:     security.NewAudit(db),
@@ -544,6 +576,61 @@ func (c *Core) broadcastHeartbeat(ctx context.Context) {
 	}
 }
 
+// clampCapacity sanitizes a peer-advertised capacity blob before it reaches the
+// directory: a negative count or limit would otherwise be stored verbatim and
+// leak into scoring, where waitSignal reads negative depth as "better than
+// idle". Zero is what such a field means; the positive values pass through.
+func clampCapacity(capJSON string) string {
+	if capJSON == "" {
+		return capJSON
+	}
+	var cap ledger.Capacity
+	if err := json.Unmarshal([]byte(capJSON), &cap); err != nil {
+		return capJSON // malformed input stays for Heartbeat's own handling
+	}
+	if cap.CPUCores < 0 {
+		cap.CPUCores = 0
+	}
+	if cap.RAMGB < 0 {
+		cap.RAMGB = 0
+	}
+	if cap.MaxConcurrent < 0 {
+		cap.MaxConcurrent = 0
+	}
+	if cap.CurrentTasks < 0 {
+		cap.CurrentTasks = 0
+	}
+	b, err := json.Marshal(cap)
+	if err != nil {
+		return capJSON
+	}
+	return string(b)
+}
+
+// sanitizeSummary applies the same negative-field clamp to a capability card a
+// peer sent in a hello or a heartbeat. The fields here route work and gate
+// hardware fits, so a negative figure is never data — it is either a bug or a
+// lie, and zero is its honest form.
+func sanitizeSummary(s ledger.CapabilitySummary) ledger.CapabilitySummary {
+	c := &s.Capacity
+	if c.CPUCores < 0 {
+		c.CPUCores = 0
+	}
+	if c.RAMGB < 0 {
+		c.RAMGB = 0
+	}
+	if c.MaxConcurrent < 0 {
+		c.MaxConcurrent = 0
+	}
+	if c.CurrentTasks < 0 {
+		c.CurrentTasks = 0
+	}
+	if s.SchedulerTier < 0 {
+		s.SchedulerTier = 0
+	}
+	return s
+}
+
 // handleHeartbeat refreshes the sender's directory row (last_seen + capacity).
 // This is the TMB "new message overwrites the slot" mapping: each heartbeat
 // upserts the sender's slot wholesale, and Route's freshness weight — not the
@@ -558,7 +645,7 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 	if status == "" {
 		status = "online"
 	}
-	if err := ledger.Heartbeat(c.db, env.From, status, p.Capacity); err != nil {
+	if err := ledger.Heartbeat(c.db, env.From, status, clampCapacity(p.Capacity)); err != nil {
 		c.logger.Warn("apply heartbeat", "from", env.From, "err", err)
 	}
 	// Heartbeats also publish the sender's circuit-open agents so this node's
@@ -580,7 +667,7 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 		var sum ledger.CapabilitySummary
 		if err := json.Unmarshal(p.Card, &sum); err != nil {
 			c.logger.Warn("bad capability card in heartbeat", "peer", env.From, "err", err)
-		} else if err := ledger.UpsertRemote(c.db, env.From, sum); err != nil {
+		} else if err := ledger.UpsertRemote(c.db, env.From, sanitizeSummary(sum)); err != nil {
 			c.logger.Warn("upsert remote card from heartbeat", "peer", env.From, "err", err)
 		} else {
 			c.logger.Info("peer card updated", "peer", env.From)
@@ -640,8 +727,9 @@ func (c *Core) RunMonitor(ctx context.Context) {
 					// local execution for real.
 					c.cancelRunning(id)
 					// A task that timed out while paused in waiting_context would
-					// otherwise leak its entry in pendingCtx (P2-7).
-					c.pendingCtx.Delete(id)
+					// otherwise leak its entry in pendingCtx (P2-7) — and with the
+					// entry, the capacity reservation it carries.
+					c.dropPendingContext(id)
 					// The lease expired on a task this node dispatched to a remote
 					// executor: tell that executor to stop (review P1-4). Without
 					// this the remote agent keeps burning tokens and writing files
@@ -705,8 +793,14 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 		conn.Close()
 	}()
 	go conn.StartPingLoop(ctx, 30*time.Second)
-	helloSeen := false
+	firstRead := true
 	for {
+		// A cancelled ctx (shutdown, conn teardown ordered elsewhere) ends the
+		// loop even when ReadJSON is still blocked: the peer's ping/close will
+		// unblock it, and the deadline keeps a wedged read bounded.
+		if ctx.Err() != nil {
+			return
+		}
 		var env bus.Envelope
 		if err := conn.ReadJSON(&env); err != nil {
 			c.logger.Debug("inbound read closed", "err", err)
@@ -726,10 +820,11 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 			return
 		}
 		c.dispatch(ctx, conn, env)
-		if !helloSeen {
-			helloSeen = true
-			// Hello completed: switch from the short server-side hello deadline
-			// to the normal pong/keepalive deadline.
+		if firstRead {
+			firstRead = false
+			// First frame processed (the hello, or whatever the binding rules
+			// above let through): switch from the short server-side hello
+			// deadline to the normal pong/keepalive deadline.
 			_ = conn.ResetReadDeadline()
 		}
 	}
@@ -836,12 +931,18 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 		return nil, err
 	}
 	ts := time.Now().Unix()
+	nonce, err := newUUID()
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
 	env, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, bus.HelloPayload{
 		NodeID: c.nodeID,
 		Ver:    version.Version,
 		Card:   card,
 		Ts:     ts,
-		Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
+		Nonce:  nonce,
+		Sig:    bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
 	})
 	if err != nil {
 		conn.Close()
@@ -915,10 +1016,32 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
 	return true
 }
 
+// msgDedupWindow is how long a received message id is remembered. It must
+// comfortably outlive the resend patterns it guards against — a peer's send
+// retry, an outbox flush across a reconnect — without turning msgSeen into a
+// second unbounded ledger. Ten minutes matches the hello replay window's
+// order of magnitude while keeping pruning cheap.
+const msgDedupWindow = 10 * time.Minute
+
+// msgSeenMax hard-caps the dedup map: a peer free to mint arbitrary ids could
+// otherwise grow it without bound. At capacity the oldest entries are evicted
+// — a replay arriving after its eviction window re-executes once, which is
+// the same behaviour as having no dedup, never worse.
+const msgSeenMax = 8192
+
 // dispatch routes an envelope to its handler. conn is the connection the
 // message arrived on, needed so the hello handler can bind the authenticated
 // peer identity to it.
 func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
+	// Hello frames skip the msgSeen dedup: they have their own replay
+	// protection in helloSeen (keyed on signed fields, below), and claiming
+	// their ids here would run before authentication — an unauthenticated
+	// peer could then burn a victim's hello msg_id into msgSeen and get the
+	// real hello dropped when it arrived.
+	if env.Type != bus.MsgHello && !c.claimMsgID(env) {
+		c.logger.Info("duplicate message dropped", "type", env.Type, "from", env.From, "msg", env.MsgID)
+		return
+	}
 	switch env.Type {
 	case bus.MsgHello:
 		c.handleHello(ctx, conn, env)
@@ -951,6 +1074,47 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 	}
 }
 
+// claimMsgID reports whether this envelope's message id is new and, when it
+// is, records it so a later replay of the same (from, msg_id) is dropped.
+// An empty id claims nothing — a peer that never fills MsgID (pre-dedup
+// firmware on the fleet) keeps exactly the at-most-once semantics it always
+// had, and a sender that omits ids is not penalised. The keyed-by-sender map
+// is pruned on every claim and hard-capped; both walks are cheap against the
+// message rate a single daemon sees.
+func (c *Core) claimMsgID(env bus.Envelope) bool {
+	if env.MsgID == "" {
+		return true
+	}
+	now := time.Now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := env.From + "|" + env.MsgID
+	if _, dup := c.msgSeen[key]; dup {
+		return false
+	}
+	for k, t := range c.msgSeen {
+		if now.Sub(t) > msgDedupWindow {
+			delete(c.msgSeen, k)
+		}
+	}
+	if len(c.msgSeen) >= msgSeenMax {
+		// Drop a quarter of the entries so the next burst does not pay this
+		// shrink on every claim. Which quarter does not matter — entries are
+		// already pruned to msgDedupWindow, and evicting a still-live id at
+		// worst re-admits one replay; map iteration order is arbitrary, which
+		// is good enough.
+		evict := msgSeenMax / 4
+		for k := range c.msgSeen {
+			delete(c.msgSeen, k)
+			if evict--; evict <= 0 {
+				break
+			}
+		}
+	}
+	c.msgSeen[key] = now
+	return true
+}
+
 func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 	var p bus.HelloPayload
 	if err := env.PayloadInto(&p); err != nil {
@@ -960,16 +1124,48 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// Verify the transport signature before trusting the claimed identity
 	// (design §16 / P0-1). Fail closed: an unauthenticated or stale hello
 	// registers nothing and receives no reply.
-	if !bus.VerifyHello(c.sharedSecret, p.NodeID, p.Ts, p.Sig, time.Now()) {
+	if !bus.VerifyHelloP(c.sharedSecret, p, time.Now()) {
 		c.logger.Warn("rejected hello: bad signature", "peer", p.NodeID)
 		return
 	}
 	// The claimed identity must match the envelope's from field; both become the
 	// identity bound to this conn, so later messages may only carry this id.
+	// Checked before the replay claim below: a forged-from hello that burned a
+	// valid sig into helloSeen would then keep the honest sender's real hello —
+	// the same signature — out until the window closed.
 	if env.From != p.NodeID {
 		c.logger.Warn("rejected hello: from mismatch", "from", env.From, "peer", p.NodeID)
 		return
 	}
+	// Replay check (M24): within MaxHelloAge a captured hello still verifies,
+	// so a signature must be single-use — accept each one once, reject it
+	// until its freshness window closes. The key is the signed fields only:
+	// anything unsigned (msg_id, nonce-tampered variants) a replay can
+	// rewrite, so keying on it would let the same signature authenticate
+	// twice. Uniqueness for honest dials comes from HelloSigN's per-dial
+	// nonce — two same-second reconnects mint different signatures, so the
+	// second is admitted on its own key rather than rejected as a replay. A
+	// peer old enough to send no nonce gets the two-field verification and a
+	// same-second reconnect of theirs is rejected once, which its backoff
+	// retry clears.
+	c.mu.Lock()
+	key := p.NodeID + "|" + strconv.FormatInt(p.Ts, 10) + "|" + p.Sig
+	if _, dup := c.helloSeen[key]; dup {
+		c.mu.Unlock()
+		c.logger.Warn("rejected hello: replayed signature", "peer", p.NodeID)
+		return
+	}
+	now := time.Now()
+	c.helloSeen[key] = now
+	// Prune entries whose replay window has closed: a signature older than
+	// MaxHelloAge would fail VerifyHello anyway, so remembering it buys nothing
+	// and the map would otherwise grow one entry per reconnect forever.
+	for k, t := range c.helloSeen {
+		if now.Sub(t) > bus.MaxHelloAge {
+			delete(c.helloSeen, k)
+		}
+	}
+	c.mu.Unlock()
 	conn.SetPeerID(p.NodeID)
 
 	// Send our hello reply BEFORE registering the conn, and directly on the
@@ -1010,7 +1206,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		var sum ledger.CapabilitySummary
 		if err := json.Unmarshal(p.Card, &sum); err != nil {
 			c.logger.Warn("bad capability card in hello", "peer", p.NodeID, "err", err)
-		} else if err := ledger.UpsertRemote(c.db, p.NodeID, sum); err != nil {
+		} else if err := ledger.UpsertRemote(c.db, p.NodeID, sanitizeSummary(sum)); err != nil {
 			c.logger.Warn("upsert remote card", "peer", p.NodeID, "err", err)
 		}
 	}
@@ -1035,12 +1231,17 @@ func (c *Core) sendHelloReply(conn *bus.Conn, to string) {
 	if err != nil {
 		return
 	}
+	nonce, err := newUUID()
+	if err != nil {
+		return
+	}
 	envOut, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, bus.HelloPayload{
 		NodeID: c.nodeID,
 		Ver:    version.Version,
 		Card:   card,
 		Ts:     ts,
-		Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
+		Nonce:  nonce,
+		Sig:    bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
 	})
 	if err != nil {
 		return

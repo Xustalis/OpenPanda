@@ -234,3 +234,20 @@ func TestRoutePreferredMatchesName(t *testing.T) {
 		t.Fatalf("decision = %+v, want forward to opi by lowercase name", dOpi)
 	}
 }
+
+func TestRoutePreferredMatchesSelfNodeIDForEphemeralSelf(t *testing.T) {
+	// When self is an ephemeral ask session ("macbook-1f3a2b4c"), the local node
+	// row in employees has stable id "macbook". A preference naming "macbook"
+	// must match self and choose ActionLocal.
+	employees := []ledger.Node{
+		{ID: "macbook", Name: "MacBook Pro", Status: "online", SchedulerTier: 2, Native: []ledger.NativeAbility{{ID: "build"}}},
+		{ID: "worker-1", Name: "Worker", Status: "online", SchedulerTier: 2, Native: []ledger.NativeAbility{{ID: "build"}}},
+	}
+	canLocal := func([]string) bool { return true }
+
+	d := Route("macbook-1f3a2b4c", []string{"macbook-1f3a2b4c"}, employees, canLocal, []string{"build"}, ledger.ResourceProfile{}, "macbook")
+	if d.Action != ActionLocal {
+		t.Fatalf("decision = %+v, want ActionLocal when naming stable ID of ephemeral self", d)
+	}
+}
+

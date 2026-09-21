@@ -10,11 +10,13 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/ctxstore"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -73,9 +75,22 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	// routing loop, which we reject instead of echoing around forever; a chain
 	// that has reached the depth cap is rejected too, so sub-schedulers cannot
 	// hand work onward indefinitely (S2-5).
+	//
+	// A chain that is present but does not end at the sender is forged — the
+	// last hop is always the node that dispatched this envelope, and anything
+	// else means a peer is laundering a task through a chain it never walked
+	// (M11). An explicitly empty chain (nil or []) predates the field and is
+	// rebuilt from the authenticated sender.
 	chain := p.Chain
-	if chain == nil {
+	if len(chain) == 0 {
 		chain = []string{env.From}
+	} else if chain[len(chain)-1] != env.From {
+		c.logger.Warn("delegation chain last hop mismatch", "task", p.TaskID,
+			"from", env.From, "last", chain[len(chain)-1])
+		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
+			TaskID: p.TaskID, Reason: "delegation chain does not end at sender",
+		})
+		return
 	}
 	chain, err := scheduler.AppendChain(chain, c.nodeID)
 	if err != nil {
@@ -231,17 +246,36 @@ func (c *Core) terminalizeDeclined(ctx context.Context, taskID, reason string) {
 // whose execution slots are full declines instead of silently queueing, so the
 // delegator learns immediately and can re-route to a peer with free capacity.
 func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID string, p bus.TaskDelegatePayload, required []string, chain []string) {
-	if !c.hasCapacity(ctx) {
+	release, ok := c.reserveCapacity(ctx)
+	if !ok {
 		c.logger.Info("declining delegated task: capacity full", "task", taskID)
 		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: "capacity full"})
 		c.terminalizeDeclined(ctx, taskID, "capacity full")
 		return
 	}
+	// The reservation is held until the task's row claims the slot for real —
+	// SetWaitingContext/Rename-to-running happens inside the goroutine, so the
+	// release fires there. Any early return before the goroutine spawns must
+	// release immediately or the slot leaks.
 	level := p.ContextLevel
 	hash := p.ContextHash
 
 	if level == "full" && len(p.ContextData) > 0 {
-		// Inline snapshot: cache it and proceed without a round-trip.
+		// Inline snapshot: cache it and proceed without a round-trip — but only
+		// after the same integrity check handleContextAck applies. Put keys the
+		// entry on the caller-supplied hash without verifying it, so an
+		// unchecked blob would be cached under a name its bytes do not hash to
+		// (M1): a later pointer fetch for that hash would then hand the
+		// executor attacker-chosen context that verifies "correctly".
+		if hash == "" || ctxstore.Hash(p.ContextData) != hash {
+			c.logger.Warn("inline context hash mismatch", "task", taskID, "hash", hash)
+			c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
+				TaskID: taskID, Reason: "inline context hash mismatch",
+			})
+			c.terminalizeDeclined(ctx, taskID, "inline context hash mismatch")
+			release()
+			return
+		}
 		if err := c.ctx.Put(ctx, hash, p.ContextType, p.ContextData, nil); err != nil {
 			c.logger.Warn("store inline context", "task", taskID, "err", err)
 		}
@@ -249,10 +283,12 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 		if ok, _ := c.ctx.Contains(ctx, hash); !ok {
 			if err := c.prepare(ctx, taskID); err != nil {
 				c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: err.Error()})
+				release()
 				return
 			}
 			if err := c.store.SetWaitingContext(ctx, taskID, c.nodeID); err != nil {
 				c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: err.Error()})
+				release()
 				return
 			}
 			// A task parked in waiting_context must carry a lease (P1-6):
@@ -267,7 +303,7 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 			if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
 				c.logger.Warn("lease waiting-context task", "task", taskID, "err", err)
 			}
-			c.pendingCtx.Store(taskID, &pendingContext{intent: p.Intent, required: required, ctxType: p.ContextType, source: chain[0]})
+			c.pendingCtx.Store(taskID, &pendingContext{intent: p.Intent, required: required, ctxType: p.ContextType, source: chain[0], release: release})
 			c.sendContextFetch(ctx, chain[0], taskID, hash, p.ContextType)
 			return
 		}
@@ -277,7 +313,7 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 	// task_cancel while a long native/agent command runs. The result (or a
 	// decline) is reported back via the env captured here.
 	go func() {
-		result, err := c.execute(ctx, taskID, p.Intent, required)
+		result, err := c.execute(ctx, taskID, p.Intent, required, release)
 		if err != nil {
 			if errors.Is(err, ErrCancelled) {
 				c.logger.Info("task cancelled during execution", "task", taskID)
@@ -306,23 +342,36 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 	}()
 }
 
-// hasCapacity reports whether this node can accept one more delegated task
+// reserveCapacity claims one execution slot for an incoming delegated task
 // (DCPS capacity-driven accept/decline, design §2.4): true unless the
-// capability card declares a MaxConcurrent limit and the active-task count has
-// reached it. A node with no declared limit always accepts (unknown capacity is
-// not a limit); a load-count failure fails closed (declining is recoverable —
-// the delegator re-routes — while over-committing a saturated node is not).
-func (c *Core) hasCapacity(ctx context.Context) bool {
+// capability card declares a MaxConcurrent limit and the active-task count —
+// plus the reservations already handed out — has reached it. A node with no
+// declared limit always accepts (unknown capacity is not a limit); a
+// load-count failure fails closed (declining is recoverable — the delegator
+// re-routes — while over-committing a saturated node is not).
+//
+// The returned release must be called exactly once. The reservation is a
+// promise: the row does not occupy a countable slot until it reaches
+// running/waiting_context, and without the in-memory counter every delegate
+// that arrived in the gap would read the same "active < max" and all accept
+// (M14).
+func (c *Core) reserveCapacity(ctx context.Context) (release func(), ok bool) {
 	maxConcurrent := c.Card().Capacity.MaxConcurrent
 	if maxConcurrent <= 0 {
-		return true
+		return func() {}, true
 	}
 	active, err := c.store.CountActive(ctx, c.nodeID)
 	if err != nil {
 		c.logger.Warn("count active tasks", "err", err)
-		return false
+		return nil, false
 	}
-	return active < maxConcurrent
+	reserved := c.execSlots.Add(1)
+	if active+int(reserved) > maxConcurrent {
+		c.execSlots.Add(-1)
+		return nil, false
+	}
+	var once sync.Once
+	return func() { once.Do(func() { c.execSlots.Add(-1) }) }, true
 }
 
 // delegateRequired resolves the abilities a delegated task needs, defaulting
@@ -549,11 +598,18 @@ func delegateDetail(p bus.TaskDelegatePayload) TaskDetail {
 // the local entry path (SubmitLocal/Submit) funnel through here so there is
 // exactly one execution implementation. The task must already be persisted
 // (with detail) by the caller.
-func (c *Core) execute(ctx context.Context, taskID, intent string, required []string) (bus.TaskResultPayload, error) {
+//
+// releaseSlot, when non-nil, frees the capacity reservation the delegator
+// admission took for this task; run consumes it the moment the row claims a
+// countable slot of its own. Local submissions pass nil — they never reserved.
+func (c *Core) execute(ctx context.Context, taskID, intent string, required []string, releaseSlot func()) (bus.TaskResultPayload, error) {
 	if err := c.prepare(ctx, taskID); err != nil {
+		if releaseSlot != nil {
+			releaseSlot()
+		}
 		return bus.TaskResultPayload{}, err
 	}
-	return c.run(ctx, taskID, intent, required)
+	return c.run(ctx, taskID, intent, required, releaseSlot)
 }
 
 // prepare records a freshly-created task in the local queue and dispatches it
@@ -578,7 +634,17 @@ func (c *Core) storeWriteCtx(ctx context.Context) (context.Context, context.Canc
 // records the outcome. The task may already be running (a context-fetch resume
 // moved it there), dispatched (the normal path), or waiting_context (resumed
 // here after the snapshot arrived).
-func (c *Core) run(ctx context.Context, taskID, intent string, required []string) (out bus.TaskResultPayload, rerr error) {
+//
+// releaseSlot frees the delegated-admission capacity reservation. It fires the
+// moment the row occupies a countable slot (running) — from then on CountActive
+// accounts for it and holding the reservation too would double-count. On any
+// early exit the defer releases it instead, so a run that never reaches running
+// still frees its slot.
+func (c *Core) run(ctx context.Context, taskID, intent string, required []string, releaseSlot func()) (out bus.TaskResultPayload, rerr error) {
+	if releaseSlot == nil {
+		releaseSlot = func() {}
+	}
+	defer releaseSlot()
 	// Structured attribution: every result payload constructed below is
 	// stamped on the way out with who executed it, under which delegation
 	// chain, and how long it took on this node's clock. Relay hops rewrite
@@ -682,7 +748,13 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			if errors.Is(err, ErrConflict) {
 				fresh, gerr := c.store.Get(ctx, taskID)
 				if gerr == nil && fresh.State == StateRunning {
-					break // duplicate accept raced ahead; fall through to execution
+					// The row is verifiably in a countable state: the
+					// reservation is redundant from here on — free it now
+					// rather than at run end (double-count). Reachable by
+					// fall-through alone, so release before the break.
+					releaseSlot()
+					releaseSlot = func() {}
+					break
 				}
 				if gerr == nil && Terminal(fresh.State) {
 					return bus.TaskResultPayload{}, ErrCancelled
@@ -694,8 +766,16 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if err := c.store.Resume(ctx, taskID, c.nodeID); err != nil {
 			return bus.TaskResultPayload{}, fmt.Errorf("resume: %w", err)
 		}
+		// Resume succeeded: the row is running and countable, so the
+		// reservation is freed now — holding it through execution would
+		// double-count the slot.
+		releaseSlot()
+		releaseSlot = func() {}
 	case StateRunning:
-		// Already running (a duplicate context_ack raced ahead).
+		// Already running (a duplicate context_ack raced ahead): the slot is
+		// countable, so the reservation is redundant — free it now.
+		releaseSlot()
+		releaseSlot = func() {}
 	default:
 		return bus.TaskResultPayload{}, fmt.Errorf("cannot run task in state %s", task.State)
 	}
@@ -1051,6 +1131,13 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			}
 			if res.OK {
 				c.breaker.RecordSuccess(breakerKey)
+			} else if ctx.Err() != nil || execCtx.Err() != nil {
+				// A failure born of a cancelled/expired context is the caller's
+				// deadline or an operator cancel, not the agent's fault — feeding
+				// it to the breaker would trip a healthy agent's circuit on
+				// someone else's timeout (M18).
+				c.logger.Debug("breaker: failure attributed to context, not agent",
+					"agent", breakerKey, "task", taskID)
 			} else if c.breaker.RecordFailure(breakerKey) {
 				c.audit(ctx, taskID, "circuit:open", plan.Agent, "failed", "agent failure threshold reached")
 			}
@@ -1881,6 +1968,13 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 		ContextHash:  t.ContextHash,
 		AttemptID:    t.AttemptID,
 		Authorized:   t.Authorized,
+		// A stage re-routed after a decline must keep its plan identity and its
+		// inputs: without them the executor cannot fetch the trees its
+		// predecessors produced, and its output artifact is never adopted back —
+		// the plan stalls on a stage that ran to completion as an orphan.
+		PlanID:  t.PlanID,
+		StageID: t.StageID,
+		Inputs:  t.Inputs,
 	}
 	// Hop-limited consent (S2-8): a re-route is one direct dispatch, so the
 	// consent on record covers exactly the receiving hop and must not walk
@@ -1960,6 +2054,7 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			state = StateFailed
 		}
 	}
+	transitionOK := true
 	switch state {
 	case StateDone:
 		if !p.OK {
@@ -1968,32 +2063,46 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 		}
 		if err := c.store.CompleteFromRemote(ctx, p.TaskID, c.nodeID, p); err != nil {
 			c.logger.Warn("complete from result", "task", p.TaskID, "err", err)
+			transitionOK = false
 		}
 	case StateReview:
 		if err := c.store.ReviewFromRemote(ctx, p.TaskID, c.nodeID, p, parseApprovalDisposition(p.ApprovalDisposition)); err != nil {
 			c.logger.Warn("review from result", "task", p.TaskID, "err", err)
+			transitionOK = false
 		}
 	case StateFailed:
 		if err := c.store.FailFromRemote(ctx, p.TaskID, c.nodeID, p.Stderr); err != nil {
 			c.logger.Warn("fail from result", "task", p.TaskID, "err", err)
+			transitionOK = false
 		}
 	case StateCancelled:
 		if err := c.store.Cancel(ctx, p.TaskID); err != nil && !errors.Is(err, ErrConflict) {
 			c.logger.Warn("cancel from result", "task", p.TaskID, "err", err)
+			transitionOK = false
 		}
 	default:
 		c.logger.Warn("unknown task_result state ignored", "task", p.TaskID, "state", state)
 		return
 	}
 
-	// Plan plane: the executor's artifact is the successors' input, so it is
-	// adopted into this node's pool and recorded on the local row before deciding
-	// what became ready. It is recorded for a review result too — the tree exists
-	// either way, and the hash would otherwise be lost by the time a human
-	// approves the stage.
-	if t.PlanID != "" {
-		c.adoptStageOutput(ctx, t, env.From, p.OutputArtifact)
-	} else if t.Project != "" && p.OutputArtifact != "" {
+	// Plan plane: only a stage that produced output (done, or parked in review)
+	// donates its artifact — the successors' input — and only after it was
+	// adopted into this node's pool does the graph decide what became ready.
+	// It is recorded for a review result too: the tree exists either way, and
+	// the hash would otherwise be lost by the time a human approves the stage.
+	// A failed or cancelled stage instead goes straight to AdvancePlan, which
+	// fails every dependent waiting on it. A failed transition means the row is
+	// terminal or contested (e.g. the stage was cancelled while the result was
+	// in flight): advancing then would emit a spurious stage event on a plan
+	// that already moved on.
+	if transitionOK && t.PlanID != "" {
+		if state == StateDone || state == StateReview {
+			c.adoptStageOutput(ctx, t, env.From, p.OutputArtifact)
+		} else {
+			c.advanceStagePlan(ctx, t)
+		}
+	} else if transitionOK && t.Project != "" && p.OutputArtifact != "" &&
+		(state == StateDone || state == StateReview) {
 		c.adoptProjectOutput(ctx, t, env.From, p.OutputArtifact)
 	}
 
@@ -2094,12 +2203,13 @@ func (c *Core) handleCancel(ctx context.Context, env bus.Envelope) {
 // finishCancel runs the post-cascade cleanup for a cancelled task set: abort the
 // local execution so a cancelled task stops doing work instead of only losing
 // its database row, drop paused-context entries so a waiting_context task
-// cancelled mid-fetch does not leak in pendingCtx (P2-7), and propagate the
-// cancel to any remote executors holding dispatch leases (P2-3).
+// cancelled mid-fetch does not leak in pendingCtx (P2-7) — or strand the
+// capacity reservation the entry carries — and propagate the cancel to any
+// remote executors holding dispatch leases (P2-3).
 func (c *Core) finishCancel(ctx context.Context, cancelled []string) {
 	for _, id := range cancelled {
 		c.cancelRunning(id)
-		c.pendingCtx.Delete(id)
+		c.dropPendingContext(id)
 		c.forwardCancelDownstream(ctx, id)
 	}
 }

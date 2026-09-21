@@ -51,10 +51,49 @@ func TestVerifyHelloRejectsStale(t *testing.T) {
 	if !VerifyHello(secret, "node-a", ts, sig, now) {
 		t.Fatalf("fresh hello must verify")
 	}
-	if VerifyHello(secret, "node-a", ts, sig, now.Add(maxHelloAge+time.Second)) {
+	if VerifyHello(secret, "node-a", ts, sig, now.Add(MaxHelloAge+time.Second)) {
 		t.Fatalf("stale hello must be rejected")
 	}
-	if VerifyHello(secret, "node-a", ts, sig, now.Add(-maxHelloAge-time.Second)) {
+	if VerifyHello(secret, "node-a", ts, sig, now.Add(-MaxHelloAge-time.Second)) {
 		t.Fatalf("future-dated hello must be rejected")
 	}
 }
+
+func TestVerifyHelloPWithNonce(t *testing.T) {
+	const secret = "s3cret"
+	now := time.Unix(1_700_000_000, 0)
+	ts := now.Unix()
+	const nonce = "nonce-123"
+	sigN := HelloSigN(secret, "node-a", ts, nonce)
+	sigLegacy := HelloSig(secret, "node-a", ts)
+
+	// Nonce-bound hello verifies.
+	pValid := HelloPayload{NodeID: "node-a", Ts: ts, Nonce: nonce, Sig: sigN}
+	if !VerifyHelloP(secret, pValid, now) {
+		t.Fatalf("valid nonce-bound hello must verify")
+	}
+
+	// Tampered nonce fails.
+	pBadNonce := HelloPayload{NodeID: "node-a", Ts: ts, Nonce: "other-nonce", Sig: sigN}
+	if VerifyHelloP(secret, pBadNonce, now) {
+		t.Fatalf("tampered nonce must be rejected")
+	}
+
+	// Legacy hello without nonce falls back to HelloSig.
+	pLegacy := HelloPayload{NodeID: "node-a", Ts: ts, Sig: sigLegacy}
+	if !VerifyHelloP(secret, pLegacy, now) {
+		t.Fatalf("legacy hello without nonce must verify against HelloSig")
+	}
+
+	// Legacy hello with tampered sig fails.
+	pLegacyBad := HelloPayload{NodeID: "node-a", Ts: ts, Sig: "badsig"}
+	if VerifyHelloP(secret, pLegacyBad, now) {
+		t.Fatalf("bad signature must be rejected")
+	}
+
+	// Stale nonce-bound hello fails.
+	if VerifyHelloP(secret, pValid, now.Add(MaxHelloAge+time.Second)) {
+		t.Fatalf("stale nonce-bound hello must be rejected")
+	}
+}
+

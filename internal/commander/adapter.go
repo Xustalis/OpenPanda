@@ -173,7 +173,9 @@ func (w *progressWriter) line(b []byte) {
 			note = string([]rune(note)[:300]) + "\u2026"
 		}
 		if w.sink != nil {
-			w.sink(note, probe.Kind)
+			// The note lands in the task event stream and logs: scrub
+			// anything secret-shaped the adapter echoed into it.
+			w.sink(security.Redact(note), probe.Kind)
 		}
 		return
 	}
@@ -425,10 +427,13 @@ func mergeAdapterEnv(native, injected []string) []string {
 const defaultAdapterTimeoutS = 600
 
 // hardTimeoutGrace is how far past the advertised budget the enforced deadline
-// sits, giving a well-behaved adapter room to wind down and report.
-const hardTimeoutGrace = 30 * time.Second
-
+// sits, giving a well-behaved adapter room to wind down and report. It is a
+// var for the same reason the two budgets are: tests shrink it alongside
+// adapterTimeoutS — the enforced limit is max(adapterHardTimeout,
+// timeout_s+grace), so a grace left at its real 30s would dominate every
+// shrunken test budget and keep the "hard" deadline far away.
 var (
+	hardTimeoutGrace   = 30 * time.Second
 	adapterTimeoutS    = defaultAdapterTimeoutS
 	adapterHardTimeout = defaultAdapterTimeoutS*time.Second + hardTimeoutGrace
 	silenceTimeout     time.Duration
@@ -493,7 +498,15 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	if err != nil {
 		return AgentResult{OK: false, Result: security.Redact(err.Error()), ExitCode: 1}
 	}
-	ctx, cancel := context.WithTimeout(ctx, adapterHardTimeout)
+	// The enforced wall-clock limit is the advertised budget plus the wind-down
+	// grace. A per-task override larger than the global default must push the
+	// hard limit out with it — otherwise a training stage given two hours via
+	// WithAgentTimeout would still be killed at the default deadline.
+	hardLimit := adapterHardTimeout
+	if perTask := time.Duration(timeout)*time.Second + hardTimeoutGrace; perTask > hardLimit {
+		hardLimit = perTask
+	}
+	ctx, cancel := context.WithTimeout(ctx, hardLimit)
 	defer cancel()
 
 	var (
@@ -562,6 +575,12 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// Custom writers spawn copy goroutines Wait blocks on; a detached
+	// grandchild inheriting the pipes would otherwise hold them open and
+	// wedge Wait forever after the adapter itself exits (or is killed).
+	// WaitDelay bounds that wait: the goroutines are abandoned, and since
+	// executil kills the whole process group the pipes close anyway.
+	cmd.WaitDelay = 5 * time.Second
 	security.NewSandbox(cwd).Apply(cmd, env...)
 
 	if err := cmd.Run(); err != nil {
