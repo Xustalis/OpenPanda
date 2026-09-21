@@ -5,6 +5,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/erikgeiser/coninput"
 )
 
 // The editing primitives are pure functions so the Windows editor's logic can
@@ -164,4 +166,36 @@ func TestCompleteForFiltersCaseInsensitively(t *testing.T) {
 	if strings.Join(matches, "|") != "/task|/tasks" {
 		t.Fatalf("matches = %v, want [/task /tasks]", matches)
 	}
+}
+
+// TestEvtRunesFiltersControlCharacters guards the buffer against raw control
+// bytes: combinations the editor does not handle (Ctrl-R, Ctrl-Z, …) must be
+// dropped instead of spliced into the line — the handled ones are consumed by
+// readLine's switch before evtRunes ever sees them.
+func TestEvtRunesFiltersControlCharacters(t *testing.T) {
+	ts := &termSession{}
+	for _, r := range []rune{0x01, 0x04, 0x12, 0x1a, 0x03, 0x1b, '\r', '\t', 0x7f} {
+		if rs := ts.evtRunes(coninput.KeyEventRecord{Char: r}); rs != nil {
+			t.Errorf("control char 0x%02X leaked into the buffer: %v", r, rs)
+		}
+	}
+	if rs := ts.evtRunes(coninput.KeyEventRecord{Char: 'a'}); len(rs) != 1 || rs[0] != 'a' {
+		t.Errorf("printable char changed: %v", rs)
+	}
+	// UTF-16 surrogate pairing still works after the filter.
+	ts.pendingHigh = 0xD83D
+	if rs := ts.evtRunes(coninput.KeyEventRecord{Char: 0xDE00}); len(rs) != 1 || rs[0] != '😀' {
+		t.Errorf("surrogate pair after filter = %v, want U+1F600", rs)
+	}
+}
+
+func TestDrainKeyCh(t *testing.T) {
+	ch := make(chan coninput.KeyEventRecord, 4)
+	ch <- coninput.KeyEventRecord{Char: 'x'}
+	ch <- coninput.KeyEventRecord{Char: 'y'}
+	drainKeyCh(ch)
+	if len(ch) != 0 {
+		t.Fatalf("drainKeyCh left %d records behind", len(ch))
+	}
+	drainKeyCh(ch) // an empty channel must not block
 }

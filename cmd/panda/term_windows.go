@@ -292,6 +292,14 @@ func (t *termSession) evtRunes(ke coninput.KeyEventRecord) []rune {
 		}
 		return rs
 	}
+	// Control characters must never become buffer content. The combinations
+	// the editor does understand (Ctrl-A/B/D/E/F/K/U/W, Enter, Tab, Esc,
+	// Backspace) are consumed by readLine's switch before evtRunes runs; any
+	// other control byte reaching this point (Ctrl-R, Ctrl-Z, …) is dropped
+	// rather than spliced in as a raw control rune.
+	if ke.Char < 0x20 || ke.Char == 0x7f {
+		return nil
+	}
 	if ke.Char == 0 {
 		return nil
 	}
@@ -555,6 +563,20 @@ func (t *termSession) readLinePlain(prompt string) (string, error) {
 	return "", io.EOF
 }
 
+// drainKeyCh empties ch without blocking. A raw-mode consumer calls it on the
+// way out: the input pump may have buffered stray keystrokes (channel
+// capacity 16) that FlushConsoleInputBuffer cannot reach, and they must not
+// replay at the next prompt. Pure so tests can pin it.
+func drainKeyCh(ch chan coninput.KeyEventRecord) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
 // watchInterrupt monitors Esc / Ctrl-C while a long-running ask executes:
 // the first press cancels the running context, a second within one second
 // exits the process (double-tap, same contract as the unix editor). The
@@ -571,6 +593,10 @@ func (t *termSession) watchInterrupt(ctx context.Context, cancel context.CancelF
 	}
 	defer func() {
 		_ = windows.FlushConsoleInputBuffer(t.in)
+		// The flush above clears the OS-level input queue; the pump may
+		// already have pulled keys into keyCh, so drain that too — keys typed
+		// during the ask must not replay at the next prompt.
+		drainKeyCh(t.keyCh)
 		t.restore()
 	}()
 	var first time.Time

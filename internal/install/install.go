@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -85,15 +86,39 @@ func InPATH(dir string) bool {
 	return false
 }
 
+// expandPathEnv expands Windows-style %VAR% references in a PATH entry the
+// way the OS itself does when launching a process. os.ExpandEnv only speaks
+// $var / ${var}, so a REG_EXPAND_SZ entry that still stores
+// %LOCALAPPDATA%\OpenPanda\bin verbatim would never compare equal to the
+// literal install dir and every reinstall would append a duplicate. Names
+// that are not set stay untouched — the same behavior as the
+// ExpandEnvironmentStrings call the shell uses for PATH.
+var pathEnvVarRe = regexp.MustCompile(`%([^%]+)%`)
+
+func expandPathEnv(s string) string {
+	if !strings.ContainsRune(s, '%') {
+		return s
+	}
+	return pathEnvVarRe.ReplaceAllStringFunc(s, func(match string) string {
+		if v, ok := os.LookupEnv(match[1 : len(match)-1]); ok {
+			return v
+		}
+		return match
+	})
+}
+
 // samePath compares two cleaned paths; case-insensitive on Windows, where
 // registry PATH entries may still hold unexpanded variables (the typical
 // REG_EXPAND_SZ keeps %LOCALAPPDATA%\OpenPanda\bin verbatim). The comparison
-// expands those first so a re-install recognises the entry it wrote before
-// and does not append a duplicate.
+// expands those %VAR% references first so a re-install recognises the entry
+// it wrote before and does not append a duplicate.
 func samePath(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		a, b = expandPathEnv(a), expandPathEnv(b)
+	}
 	a, b = filepath.Clean(a), filepath.Clean(b)
 	if runtime.GOOS == "windows" {
-		return strings.EqualFold(os.ExpandEnv(a), os.ExpandEnv(b))
+		return strings.EqualFold(a, b)
 	}
 	return a == b
 }
