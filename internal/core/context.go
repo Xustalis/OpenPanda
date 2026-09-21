@@ -15,11 +15,18 @@ import (
 // waiting_context to fetch its full snapshot. handleContextAck uses it to
 // resume execution. source is the node the fetch was sent to (chain[0]);
 // a context_ack from any other node is rejected (P1-11).
+//
+// release frees the capacity reservation handleLocalDelegate took for this
+// task. The parked row already occupies a CountActive slot (waiting_context),
+// so the reservation is redundant while parked — but it must still be freed
+// exactly once, either when the ack arrives (the row stays countable from
+// there on) or when the fetch fails and the task dies.
 type pendingContext struct {
 	intent   string
 	required []string
 	ctxType  string
 	source   string
+	release  func()
 }
 
 // packContext builds and stores the full context snapshot for a local-origin
@@ -84,11 +91,29 @@ func (c *Core) sendContextFetch(ctx context.Context, source, taskID, hash, ctxTy
 
 // failPendingContext removes a pending entry and fails the task.
 func (c *Core) failPendingContext(ctx context.Context, taskID, reason string) {
-	if _, ok := c.pendingCtx.LoadAndDelete(taskID); ok {
+	if c.dropPendingContext(taskID) {
 		if err := c.store.ForceFail(ctx, taskID, reason); err != nil {
 			c.logger.Warn("fail pending context task", "task", taskID, "err", err)
 		}
 	}
+}
+
+// dropPendingContext removes a parked entry and frees the capacity reservation
+// it was holding, reporting whether an entry existed. Every site that drops an
+// entry without resuming its run — a failed fetch, a cancel, an expiry sweep —
+// must go through here: a bare Delete strands the reservation and slowly eats
+// the node's MaxConcurrent budget (the row never reaches a countable state, so
+// nothing else ever releases it). The release is sync.Once-guarded, so firing
+// it here and again from a racing resume is still exactly-once.
+func (c *Core) dropPendingContext(taskID string) bool {
+	v, ok := c.pendingCtx.LoadAndDelete(taskID)
+	if !ok {
+		return false
+	}
+	if pc, ok := v.(*pendingContext); ok && pc.release != nil {
+		pc.release()
+	}
+	return true
 }
 
 // handleContextFetch serves a peer's request for a full snapshot. If this node
@@ -154,21 +179,34 @@ func (c *Core) handleContextAck(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	c.pendingCtx.Delete(p.TaskID)
+	release := pc.release
+	if release == nil {
+		release = func() {}
+	}
 	if !p.OK {
 		c.logger.Warn("context fetch declined", "task", p.TaskID)
+		release()
 		_ = c.store.ForceFail(ctx, p.TaskID, "context unavailable")
 		return
 	}
 	if ctxstore.Hash(p.Data) != p.Hash {
 		c.logger.Warn("context hash mismatch", "task", p.TaskID)
+		release()
 		_ = c.store.ForceFail(ctx, p.TaskID, "context hash mismatch")
 		return
 	}
 	if err := c.ctx.Put(ctx, p.Hash, pc.ctxType, p.Data, p.Refs); err != nil {
 		c.logger.Warn("store fetched context", "task", p.TaskID, "err", err)
+		release()
 		_ = c.store.ForceFail(ctx, p.TaskID, "store context: "+err.Error())
 		return
 	}
+	// The parked row has been occupying a CountActive slot since
+	// SetWaitingContext, so the reservation is redundant now — free it before
+	// the resume, not inside run(): in the gap between this ack and Resume the
+	// slot would otherwise be double-counted (row + reservation) against
+	// MaxConcurrent, shrinking real capacity by one for every parked fetch.
+	release()
 	// Resume the paused task. Its result (or decline) must reach the parent so
 	// the root scheduler is unblocked, exactly as the synchronous execute path
 	// reports back via reply(). The execution ctx is detached from the handler's
@@ -179,7 +217,7 @@ func (c *Core) handleContextAck(ctx context.Context, env bus.Envelope) {
 	// still reach it via the running map's CancelFunc.
 	runCtx := context.WithoutCancel(ctx)
 	go func() {
-		result, err := c.run(runCtx, p.TaskID, pc.intent, pc.required)
+		result, err := c.run(runCtx, p.TaskID, pc.intent, pc.required, nil)
 		if err != nil {
 			if errors.Is(err, ErrCancelled) {
 				c.logger.Info("task cancelled during execution", "task", p.TaskID)

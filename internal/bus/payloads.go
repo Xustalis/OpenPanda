@@ -14,14 +14,20 @@ func unixNow() int64 { return time.Now().Unix() }
 // HelloPayload is sent when a node connects to declare its identity. Card is
 // the node's capability summary (a compact JSON object); it is carried as raw
 // JSON so the transport stays decoupled from the ledger package that owns the
-// CapabilitySummary type. Sig is the HMAC-SHA256 (hex) of NodeID and Ts under
-// the shared secret, proving the identity was minted by a node that holds the
-// secret and bounding replay to maxHelloAge (design §16 / P0-1).
+// CapabilitySummary type. Sig is the HMAC-SHA256 (hex) of NodeID, Ts, and —
+// when present — Nonce under the shared secret, proving the identity was
+// minted by a node that holds the secret and bounding replay to MaxHelloAge
+// (design §16 / P0-1). Nonce makes every dial's signature unique even when two
+// hellos land inside the same second: the receiver's single-use replay cache
+// keys on signed fields only, so without it an honest same-second reconnect is
+// indistinguishable from a replay. Old peers send none and are verified
+// against the two-field form.
 type HelloPayload struct {
 	NodeID string          `json:"node_id"`
 	Ver    string          `json:"ver"`
 	Card   json.RawMessage `json:"card,omitempty"`
-	Ts     int64           `json:"ts,omitempty"` // unix seconds, bound into Sig
+	Ts     int64           `json:"ts,omitempty"`   // unix seconds, bound into Sig
+	Nonce  string          `json:"nonce,omitempty"` // per-dial random, bound into Sig when present
 	Sig    string          `json:"sig"`
 }
 
@@ -131,6 +137,25 @@ type TaskDelegatePayload struct {
 	UserLocale string `json:"user_locale,omitempty"`
 }
 
+// clampForWire bounds the inline blobs a delegate can carry. An oversized
+// ContextData or ProjectPack is not merely wasteful: it can push the frame past
+// readLimit and get the link closed at the far end, taking the task with it.
+// Dropping the inline data degrades the delegation to a fetchable context (the
+// hash still travels, and handleContextFetch will serve it in chunks), which is
+// strictly better than a message that never lands.
+func (p TaskDelegatePayload) clampForWire() any {
+	if len(p.ContextData) > MaxContextDataBytes {
+		p.ContextData = nil
+		if p.ContextLevel == "full" {
+			p.ContextLevel = "pointer" // fetch it instead of carrying it
+		}
+	}
+	if len(p.ProjectPack) > MaxProjectPackBytes {
+		p.ProjectPack = nil
+	}
+	return p
+}
+
 // MaxProjectPackBytes bounds the inline project pack. Project memory is capped
 // at a few thousand characters and a skill is a Markdown file, so a real pack is
 // kilobytes; the cap is what keeps a project directory that has accumulated
@@ -236,6 +261,16 @@ func (p TaskResultPayload) clampForWire() any {
 	return p
 }
 
+// MaxContextDataBytes bounds one inline context snapshot — whether it travels
+// as ContextAckPayload.Data or TaskDelegatePayload.ContextData. A snapshot is
+// bounded by the packing side's context store (entry cap, not byte cap), so a
+// peer that let its store grow could ship a blob whose base64 encoding pushes
+// the frame past readLimit: the message would send fine and the receiver's
+// read limit would close the connection instead of delivering it. The cap sits
+// under what a 4 MiB frame can base64-hold so a single context message still
+// lands.
+const MaxContextDataBytes = 2 << 20 // 2 MiB
+
 // clampText shortens s to at most max bytes, keeping its head and its tail. A
 // long log's useful parts are its beginning (what it set out to do) and its end
 // (how it turned out, the final accuracy line); the middle is the part nobody
@@ -318,6 +353,18 @@ type ContextAckPayload struct {
 	OK     bool     `json:"ok"`
 	Data   []byte   `json:"data,omitempty"`
 	Refs   []string `json:"refs,omitempty"`
+}
+
+// clampForWire refuses to carry a snapshot the frame cannot hold: rather than
+// send a blob that would push the message past readLimit and get the connection
+// closed on receipt, the ack degrades to OK=false — the executor fails the task
+// with a legible reason instead of losing the link.
+func (p ContextAckPayload) clampForWire() any {
+	if len(p.Data) > MaxContextDataBytes {
+		p.Data = nil
+		p.OK = false
+	}
+	return p
 }
 
 // ArtifactFetchPayload asks a peer for one chunk of a task artifact, starting at

@@ -58,6 +58,13 @@ type Envelope struct {
 // message is built means a completed task cannot lose its result — and take the
 // peer link with it — because its log was long.
 func NewEnvelope(typ, from, msgID string, payload any) (Envelope, error) {
+	// The id is the receiver's dedup key (see the Envelope doc): a message
+	// sent without one arrives unreplayable-proof — the same frame delivered
+	// twice executes its handler twice. Failing here, at construction, turns
+	// a forgotten id into a visible error instead of silent idempotency loss.
+	if msgID == "" {
+		return Envelope{}, fmt.Errorf("message id required for %s", typ)
+	}
 	var raw json.RawMessage
 	if payload != nil {
 		if c, ok := payload.(wireClamper); ok {

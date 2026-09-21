@@ -196,9 +196,23 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 	if err != nil {
 		return "", fmt.Errorf("mint plan id: %w", err)
 	}
+	// The stages are created one row at a time, so a mid-loop failure would
+	// leave the earlier ones parked in submitted under a plan id nobody
+	// holds — and PendingPlans would sweep that id into a run nobody asked
+	// for. Cancel the strays on the way out so the plan either starts whole
+	// or not at all.
+	var created []string
+	abandon := func() {
+		for _, id := range created {
+			if cerr := c.store.Cancel(ctx, id); cerr != nil {
+				c.logger.Warn("plan: abandon unstarted stage", "task", id, "err", cerr)
+			}
+		}
+	}
 	for _, st := range p.Stages {
 		resourceJSON, err := json.Marshal(st.Resources)
 		if err != nil {
+			abandon()
 			return "", fmt.Errorf("marshal stage %s resources: %w", st.ID, err)
 		}
 		title := st.Title
@@ -212,8 +226,10 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 			ResourceJSON: string(resourceJSON),
 		})
 		if err != nil {
+			abandon()
 			return "", fmt.Errorf("create stage %s: %w", st.ID, err)
 		}
+		created = append(created, t.TaskID)
 		// No work dir: the executor derives one per stage. Resource keys are the
 		// plan's when the caller named any, so two plans that touch the same
 		// resource still serialize; otherwise each stage gets a key of its own.
@@ -230,9 +246,11 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 			keys = []string{"plan:" + planID + ":" + st.ID}
 		}
 		if err := c.store.SetQueueMeta(ctx, t.TaskID, q.Priority, q.SessionID, "", keys); err != nil {
+			abandon()
 			return "", fmt.Errorf("queue meta for stage %s: %w", st.ID, err)
 		}
 		if err := c.store.SetStage(ctx, t.TaskID, planID, st.ID, st.Needs); err != nil {
+			abandon()
 			return "", fmt.Errorf("stamp stage %s: %w", st.ID, err)
 		}
 		// — Trace: the entry model classified this sentence as a plan, one
@@ -249,6 +267,9 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 	}
 	c.logger.Info("plan started", "plan", planID, "stages", len(p.Stages), "goal", p.Goal)
 	if err := c.AdvancePlan(ctx, planID); err != nil {
+		// The plan id is still returned: the stages exist and stay submitted, so
+		// the PendingPlans sweep retries the release and the caller can inspect
+		// what happened instead of losing track of a half-born plan.
 		return planID, fmt.Errorf("release first stages: %w", err)
 	}
 	return planID, nil
@@ -278,15 +299,69 @@ func (c *Core) AdvancePlan(ctx context.Context, planID string) error {
 	}
 	byStage := make(map[string]Task, len(stages))
 	done := make(map[string]bool, len(stages))
+	failed := make(map[string]bool, len(stages))
 	for _, t := range stages {
 		byStage[t.StageID] = t
-		if t.State == StateDone {
+		switch t.State {
+		case StateDone:
 			done[t.StageID] = true
+		case StateFailed, StateCancelled, StateExpired:
+			failed[t.StageID] = true
 		}
 	}
 	p := planFromStages(stages)
 	released := 0
 	var firstErr error
+	// Failure propagation: a stage whose dependency chain contains a failed or
+	// cancelled stage can never legitimately run — its inputs either do not
+	// exist or rest on work that was abandoned. Without this pass such a stage
+	// would park in submitted forever (PendingPlans re-sweeps it every tick to
+	// no effect). We fail the dependents instead of cancelling them so the
+	// terminal state records why the plan stopped, and we propagate transitively:
+	// stage C needing failed B needing failed A fails on both counts.
+	//
+	// A stage parked in review is NOT a failure — a human may still approve it,
+	// releasing its dependents on the next pass. Only hard-terminal non-done
+	// states propagate.
+	for _, st := range p.Stages {
+		if done[st.ID] || failed[st.ID] {
+			continue
+		}
+		t := byStage[st.ID]
+		if t.State != StateSubmitted {
+			continue // already released — its own terminal outcome decides it
+		}
+		var failedDep string
+		for _, need := range st.Needs {
+			if failed[need] {
+				failedDep = need
+				break
+			}
+		}
+		if failedDep == "" {
+			continue
+		}
+		reason := fmt.Sprintf("dependency %s did not complete", failedDep)
+		c.logger.Warn("plan: stage fails on failed dependency", "plan", planID,
+			"stage", st.ID, "dep", failedDep)
+		c.EvTrace(ctx, t.TaskID, EvPlanStageChanged, map[string]any{
+			"plan_id":          planID,
+			"stage_id":         st.ID,
+			"stage_title":      t.Title,
+			"stage_count":      len(stages),
+			"transition":       "failed",
+			"needs_satisfied":  []string{},
+			"transition_error": reason,
+		})
+		// Submitted rows cannot transition to failed directly (state machine:
+		// submitted -> queued|cancelled only), so they go through cancelled.
+		// The audit event above already records the real reason.
+		if ferr := c.store.Cancel(ctx, t.TaskID); ferr != nil {
+			c.logger.Warn("plan: cancel dependent stage", "task", t.TaskID, "err", ferr)
+			continue
+		}
+		failed[st.ID] = true // propagate transitively within this pass
+	}
 	for _, st := range plan.Ready(p, done) {
 		t := byStage[st.ID]
 		if t.State != StateSubmitted {
@@ -404,10 +479,10 @@ func (c *Core) planStageInputs(ctx context.Context, byStage map[string]Task, nee
 			}
 		}
 		if source == "" {
-			// The adoption pull failed or this node has no pool. Naming the
-			// executor is the only remaining chance: it works when the consumer
-			// is a node that predecessor can authenticate, and fails loudly with
-			// the hash in the message when it is not.
+			// This node has no pool. Naming the executor is the only remaining
+			// chance: it works when the consumer is a node that predecessor can
+			// authenticate, and fails loudly with the hash in the message when it
+			// is not.
 			if target, err := c.store.DispatchTarget(ctx, dep.TaskID); err == nil && target != "" {
 				source = target
 			} else {
@@ -462,11 +537,25 @@ func (c *Core) adoptStageOutput(ctx context.Context, t Task, from, hash string) 
 				if _, err := c.FetchArtifact(ctx, from, t.TaskID, hash); err != nil {
 					c.logger.Warn("plan: adopt stage artifact", "task", t.TaskID,
 						"stage", t.StageID, "hash", hash, "from", from, "err", err)
+					// The hash does not enter output_artifact: planStageInputs
+					// would hand it to successors as a fetchable input, and with
+					// no pool holding it their best source would be the producer
+					// — which artifactPeerAuthorized correctly refuses them
+					// (they are not on its task's chain). Failing them here with
+					// "no node known to hold" is the truth and lets the plan
+					// surface the broken hop instead of wedging on a phantom.
+					c.advanceStagePlan(ctx, t)
+					return
 				}
 			}
 		}
 		if err := c.store.SetOutputArtifact(ctx, t.TaskID, hash); err != nil {
 			c.logger.Warn("record stage output", "task", t.TaskID, "err", err)
+			// Same reasoning: without a recorded holder the hash is an unfetchable
+			// input for every successor. Do not propagate a hash that cannot be
+			// resolved.
+			c.advanceStagePlan(ctx, t)
+			return
 		}
 		t.OutputArtifact = hash
 		c.advanceStagePlan(ctx, t)
@@ -567,19 +656,30 @@ func (c *Core) advanceStagePlan(ctx context.Context, t Task) {
 	if t.PlanID == "" {
 		return
 	}
-	// — Trace: stage reached the completed transition. Emitted exactly once
-	// per stage (AdvancePlan is idempotent, but this guard prevents the same
+	// — Trace: stage reached a terminal transition. Emitted exactly once per
+	// stage (AdvancePlan is idempotent, but this guard prevents the same
 	// terminal stage id from being emitted twice from the adopt call path).
-	// Guard by state: any terminal means done.
+	// The transition label mirrors the row's outcome: reporting a failed stage
+	// as "completed" would lie to the orbit and to anything consuming the
+	// event stream, and the failure-propagation pass in AdvancePlan already
+	// emits the dependent-side "failed" events with their reasons.
+	transition := ""
 	switch t.State {
-	case StateDone, StateReview, StateCancelled, StateFailed:
+	case StateDone, StateReview:
+		transition = "completed"
+	case StateCancelled:
+		transition = "cancelled"
+	case StateFailed, StateExpired:
+		transition = "failed"
+	}
+	if transition != "" {
 		sibs, _ := c.store.PlanStages(ctx, t.PlanID)
 		c.EvTrace(ctx, t.TaskID, EvPlanStageChanged, map[string]any{
 			"plan_id":         t.PlanID,
 			"stage_id":        t.StageID,
 			"stage_title":     t.Title,
 			"stage_count":     len(sibs),
-			"transition":      "completed",
+			"transition":      transition,
 			"needs_satisfied": []string{},
 			"artifact_hash":   t.OutputArtifact,
 		})

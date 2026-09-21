@@ -1171,11 +1171,29 @@ func (s *TaskStore) CountActive(ctx context.Context, owner string) (int, error) 
 // behind by another process instance (e.g. a restarted panel sidecar), so its
 // concurrency budget must count what is actually running, not just rows that
 // already carry its own node id.
-func (s *TaskStore) CountScheduledActive(ctx context.Context) (int, error) {
+//
+// A dispatched row occupies a LOCAL slot only while its dispatch target is
+// this node: forwardScheduled re-targets the claim to a peer (RetargetDelegation
+// records the new EvDelegate target) and the peer then runs it, so the row sits
+// 'dispatched' while the work happens elsewhere. Counting it anyway double-books
+// capacity — the executor charges the slot on its own CountActive, and this node
+// would refuse fresh claims on a budget the peer is spending. running and
+// waiting_context are unambiguous (only the executor ever reaches them), so the
+// exclusion applies to 'dispatched' alone. The latest delegate event is the
+// authority: a corrective retarget back to self after a failed send restores
+// the row to locally-claimed, which is exactly what it is.
+func (s *TaskStore) CountScheduledActive(ctx context.Context, self string) (int, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM tasks WHERE scheduled=1 AND state IN ('dispatched','running','waiting_context')`).
-		Scan(&n)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM tasks t
+		WHERE t.scheduled=1
+		  AND (t.state IN ('running','waiting_context')
+		       OR (t.state = 'dispatched' AND COALESCE(
+		           (SELECT json_extract(e.data_json, '$.target')
+		            FROM task_events e
+		            WHERE e.task_id = t.task_id AND e.type = ?
+		            ORDER BY e.id DESC LIMIT 1), ?) = ?))`,
+		EvDelegate, self, self).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("count scheduled active: %w", err)
 	}
@@ -1383,11 +1401,23 @@ func (s *TaskStore) Recover(ctx context.Context) (int, error) {
 			return fmt.Errorf("recover active tasks: %w", err)
 		}
 		failed = n
-		n, err = s.recoverBatchTx(ctx, tx, []string{StateDispatched, StateSubmitted}, StateQueued, "requeued")
+		n, err = s.recoverBatchTx(ctx, tx, []string{StateDispatched}, StateQueued, "requeued")
 		if err != nil {
 			return fmt.Errorf("recover dispatched tasks: %w", err)
 		}
-		requeued = n
+		requeued += n
+		// An unreleased plan stage also sits in submitted, but it is scheduled
+		// and held back by its dependency graph: moving it to queued would hand
+		// it to ListReady (queued + scheduled=1), which runs it immediately on
+		// NULL inputs ahead of its predecessors. Its plan stays in PendingPlans
+		// and the sweep releases it — or fails it — exactly as if the restart
+		// never happened. Non-plan submitted rows are unscheduled asks awaiting
+		// a first dispatch, so they requeue safely.
+		n, err = s.recoverBatchTx(ctx, tx, []string{StateSubmitted}, StateQueued, "requeued")
+		if err != nil {
+			return fmt.Errorf("recover submitted tasks: %w", err)
+		}
+		requeued += n
 		return nil
 	})
 	if err != nil {
@@ -1407,8 +1437,19 @@ func (s *TaskStore) recoverBatchTx(ctx context.Context, tx *sql.Tx, from []strin
 		ph[i] = "?"
 		args = append(args, st)
 	}
-	rows, err := tx.QueryContext(ctx,
-		`SELECT task_id, state FROM tasks WHERE state IN (`+strings.Join(ph, ",")+`)`, args...)
+	// Plan-stage rows are excluded only on the submitted requeue pass: an
+	// unreleased stage parked in submitted must stay there — queued +
+	// scheduled=1 makes it a ListReady candidate that would run before its
+	// dependencies (H1). Its plan stays pending and the sweep releases or fails
+	// it. A dispatched stage was already released and is mid-flight, so it
+	// requeues normally — keying on the from-states, not the target, is what
+	// keeps the two batches apart.
+	excludePlan := len(from) == 1 && from[0] == StateSubmitted
+	query := `SELECT task_id, state FROM tasks WHERE state IN (` + strings.Join(ph, ",") + `)`
+	if excludePlan {
+		query += ` AND (plan_id IS NULL OR plan_id = '')`
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -1500,9 +1541,13 @@ func (s *TaskStore) Cancel(ctx context.Context, taskID string) error {
 
 // CancelCascade cancels taskID and every descendant. Descendants are found by
 // parent_id links; the walk recurses so multi-level trees behave. A visited set
-// guards against a parent_id cycle, which would otherwise recurse forever. The
-// returned slice lists the tasks actually transitioned to cancelled — already-
-// terminal tasks are skipped, not included.
+// guards against a parent_id cycle, which would otherwise recurse forever. When
+// the cancelled row is a plan stage, its sibling stages are cancelled too —
+// stages carry no parent_id, so without the plan sweep a stage cancel would
+// strand the rest of the plan mid-flight, blocked stages waiting forever on
+// predecessors that can now never complete. The returned slice lists the tasks
+// actually transitioned to cancelled — already-terminal tasks are skipped, not
+// included.
 func (s *TaskStore) CancelCascade(ctx context.Context, taskID string) ([]string, error) {
 	var cancelled []string
 	visited := make(map[string]bool)
@@ -1537,6 +1582,26 @@ func (s *TaskStore) cancelCascade(ctx context.Context, taskID string, visited ma
 		}
 		if err := s.cancelCascade(ctx, c.TaskID, visited, cancelled); err != nil {
 			return err
+		}
+	}
+	// Plan siblings: a stage is the unit of cancellation for its plan — the
+	// surviving stages' dependency graph can never resolve once one stage is
+	// gone, so they are cancelled wholesale rather than left to linger in
+	// submitted until a sweep notices (they never would: the sweep only
+	// releases, it does not reap). Only the orchestrating node's local rows are
+	// touched; a stage executing remotely unwinds through forwardCancelDownstream.
+	if cur.PlanID != "" {
+		siblings, err := s.PlanStages(ctx, cur.PlanID)
+		if err != nil {
+			return err
+		}
+		for _, sib := range siblings {
+			if Terminal(sib.State) || visited[sib.TaskID] {
+				continue
+			}
+			if err := s.cancelCascade(ctx, sib.TaskID, visited, cancelled); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

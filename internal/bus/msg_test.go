@@ -65,3 +65,11 @@ func TestHeartbeatPayloadCompact(t *testing.T) {
 		t.Fatalf("heartbeat too large: %d bytes", len(raw))
 	}
 }
+
+func TestEnvelopeRequiresMsgID(t *testing.T) {
+	_, err := NewEnvelope(MsgTaskAccept, "opi", "", nil)
+	if err == nil {
+		t.Fatalf("expected error when msgID is empty, got nil")
+	}
+}
+

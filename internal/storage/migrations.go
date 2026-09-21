@@ -412,7 +412,15 @@ func migrateV7(tx MigrationExec) error {
 }
 
 func backfillAuditChain(tx MigrationExec) error {
-	rows, err := tx.Query(`SELECT id, COALESCE(prev_hash, ''), ts, who, what, target, result, detail FROM audit_log ORDER BY id ASC`)
+	// Every scanned column is COALESCE'd: the schema declares all of them plain
+	// TEXT (nullable), and a NULL anywhere — a hand-edited row, an import —
+	// fails the whole scan with "converting NULL to string", which aborts the
+	// migration and leaves the store unopenable. Hashing treats NULL as the
+	// empty string, matching how the writers' empty fields hash.
+	rows, err := tx.Query(`SELECT id, COALESCE(prev_hash, ''), ts,
+		COALESCE(who, ''), COALESCE(what, ''), COALESCE(target, ''),
+		COALESCE(result, ''), COALESCE(detail, '')
+		FROM audit_log ORDER BY id ASC`)
 	if err != nil {
 		return err
 	}
@@ -453,7 +461,10 @@ func backfillAuditChain(tx MigrationExec) error {
 }
 
 func backfillTaskEventChain(tx MigrationExec) error {
-	rows, err := tx.Query(`SELECT id, task_id, COALESCE(prev_hash, ''), ts, type, data_json FROM task_events ORDER BY task_id, id ASC`)
+	// Same NULL-safety as backfillAuditChain: every column is nullable TEXT.
+	rows, err := tx.Query(`SELECT id, COALESCE(task_id, ''), COALESCE(prev_hash, ''), ts,
+		COALESCE(type, ''), COALESCE(data_json, '')
+		FROM task_events ORDER BY task_id, id ASC`)
 	if err != nil {
 		return err
 	}
