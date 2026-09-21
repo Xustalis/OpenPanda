@@ -788,6 +788,41 @@ func (s *TaskStore) Requeue(ctx context.Context, taskID, owner string) error {
 	return s.transition(ctx, taskID, StateFailed, StateQueued, owner, EvRetry, nil)
 }
 
+// RequeueForRetry is the atomic form of the retry loop's three-step move
+// (RotateAttempt -> Requeue -> Dispatch to self): mint a fresh attempt_id, move
+// the task failed -> dispatched, and append both the EvRetry and EvDelegate
+// audit events in ONE transaction. Splitting those steps (the old retryOnce)
+// left the row in queued or carried the stale attempt_id if the node crashed or
+// lost the owner guard mid-sequence — a half-retry the audit trail could not
+// distinguish from a completed one. The state+owner guard keeps the same
+// exactly-once semantics as the separate calls; on conflict nothing is written.
+// Returns the new attempt id.
+func (s *TaskStore) RequeueForRetry(ctx context.Context, taskID, owner string) (string, error) {
+	aid, err := util.UUIDv7()
+	if err != nil {
+		return "", fmt.Errorf("uuid: %w", err)
+	}
+	if err := s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state=?, attempt_id=?, state_version=state_version+1, updated_at=?
+			WHERE task_id=? AND state=? AND owner_node=?`,
+			StateDispatched, aid, s.now(), taskID, StateFailed, owner)
+		if err != nil {
+			return fmt.Errorf("requeue for retry: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: task %s owner=%s not in failed state", ErrConflict, taskID, owner)
+		}
+		if err := s.recordEventTx(ctx, tx, taskID, EvRetry, nil); err != nil {
+			return err
+		}
+		return s.recordEventTx(ctx, tx, taskID, EvDelegate, map[string]any{"target": owner})
+	}); err != nil {
+		return "", err
+	}
+	return aid, nil
+}
+
 // Review transitions a failed task to review, pausing a task that has spent its
 // retry budget for human analysis (design §14.2 "pause → analyze"). A reviewer
 // may later send it back to queued, mark it done, or fail it.

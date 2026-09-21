@@ -465,6 +465,17 @@ func tokenizeAbility(s string) []string {
 // category-prefixed form of the other — e.g. required "code:lint" against a card
 // id "lint". Tokens are compared whole, so a required "lint" never matches an
 // unrelated "glint", and "build" never matches "rebuild".
+//
+// The subset check is deliberately SYMMETRIC and fuzzy: the declared side is
+// the card's claim and the required side is the model's phrasing, and neither
+// is authoritative about granularity. That trades precision for reach — a node
+// declaring the broad ability "build" is treated as able to serve a task
+// requiring the narrower "build:macos" it may not actually have. The safety
+// margin is structural rather than in this predicate: routing prefers exact-id
+// and richer matches upstream in the score, the executor fails loudly on a
+// capability it lacks, and the supervision layer judges the result. Tightening
+// this to a directional (required ⊆ declared) match would strand every card
+// written at the broad granularity, so the fuzz is kept and documented.
 func AbilityMatches(declared, required string) bool {
 	if declared == required {
 		return true

@@ -76,6 +76,9 @@ func SameRuntimeIdentity(a, b string) bool {
 
 // EphemeralBase validates and strips the random suffix produced by
 // core.EphemeralNodeID. Stable names are returned unchanged with ok=false.
+// The strip is purely syntactic — a stable id that itself ends in "-"+8hex
+// would be mistaken for an ephemeral sibling of its own base, so the daemon
+// refuses such a node name at startup (cmd/panda main.go).
 func EphemeralBase(id string) (base string, ok bool) {
 	i := strings.LastIndex(id, "-")
 	if i <= 0 || len(id)-i-1 != 8 {

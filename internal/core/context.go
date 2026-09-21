@@ -171,9 +171,15 @@ func (c *Core) handleContextAck(ctx context.Context, env bus.Envelope) {
 	}
 	// Resume the paused task. Its result (or decline) must reach the parent so
 	// the root scheduler is unblocked, exactly as the synchronous execute path
-	// reports back via reply().
+	// reports back via reply(). The execution ctx is detached from the handler's
+	// ctx: that ctx dies with the peer's websocket connection (the ack reader
+	// loop), and cancelling it mid-run would kill the resumed agent subprocess
+	// the moment the sender closes or drops the link — an executor-side failure
+	// no caller asked for. WithoutCancel keeps the run alive; explicit cancels
+	// still reach it via the running map's CancelFunc.
+	runCtx := context.WithoutCancel(ctx)
 	go func() {
-		result, err := c.run(ctx, p.TaskID, pc.intent, pc.required)
+		result, err := c.run(runCtx, p.TaskID, pc.intent, pc.required)
 		if err != nil {
 			if errors.Is(err, ErrCancelled) {
 				c.logger.Info("task cancelled during execution", "task", p.TaskID)
