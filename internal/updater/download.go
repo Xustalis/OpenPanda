@@ -113,12 +113,14 @@ func downloadFile(ctx context.Context, url, destDir string) (string, error) {
 	return dst, nil
 }
 
-// checksumFor parses checksums.txt ("<hash>  <name>", one per line) and
-// returns the lowercase hex hash for name, or "" if the file has no entry.
+// checksumFor parses checksums.txt ("<hash>  <name>" or "<hash> *<name>",
+// one per line) and returns the lowercase hex hash for name, or "" if the
+// file has no entry. The "*" is sha256sum's binary-mode marker — the release
+// pipeline writes text mode, but a re-generated file must still parse.
 func checksumFor(data, name string) string {
 	for _, line := range strings.Split(data, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[1] == name {
+		if len(fields) >= 2 && strings.TrimPrefix(fields[1], "*") == name {
 			return strings.ToLower(fields[0])
 		}
 	}
@@ -164,24 +166,33 @@ func extractRelease(archive, destDir string) (string, error) {
 	return root, nil
 }
 
-// sanitizeEntry strips the leading "openpanda/" component, rejects absolute
-// paths and ".." traversal (returns ok=false), and returns the relative path
-// to materialize inside root.
-func sanitizeEntry(name string) (string, bool) {
-	name = strings.TrimPrefix(name, "./")
-	name = filepath.ToSlash(name)
-	if name == "" || name == "openpanda" || strings.HasPrefix(name, "/") {
-		return "", false
+// sanitizeEntry strips the leading "openpanda/" component and returns the
+// relative path to materialize inside root. The empty string means "skip" —
+// only the top-level openpanda dir entry itself or a bare "./" earns that.
+// Anything else outside the release layout is an error: absolute paths,
+// ".." traversal, and foreign top-level entries would install a partial or
+// unexpected tree, so they refuse the archive outright rather than being
+// skipped (the same contract artifact.Unpack enforces).
+func sanitizeEntry(name string) (string, error) {
+	raw := filepath.ToSlash(strings.TrimPrefix(name, "./"))
+	if raw == "" || raw == "openpanda" {
+		return "", nil
 	}
-	name = strings.TrimPrefix(name, "openpanda/")
-	if name == "" {
-		return "", false // the openpanda/ dir entry itself
+	if strings.HasPrefix(raw, "/") {
+		return "", fmt.Errorf("release archive entry %q is absolute; refusing", name)
 	}
-	clean := filepath.Clean(filepath.FromSlash(name))
+	rel := strings.TrimPrefix(raw, "openpanda/")
+	if rel == "" {
+		return "", nil // the openpanda/ dir entry itself
+	}
+	if rel == raw {
+		return "", fmt.Errorf("release archive entry %q is outside the openpanda/ tree; refusing", name)
+	}
+	clean := filepath.Clean(filepath.FromSlash(rel))
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", false
+		return "", fmt.Errorf("release archive entry %q traverses out of the extraction root; refusing", name)
 	}
-	return clean, true
+	return clean, nil
 }
 
 func directoryTraversal(name string) bool {
@@ -209,6 +220,15 @@ func safeLinkTarget(root, rel, linkname string) error {
 	return nil
 }
 
+// Release archives bound their decompressed footprint: the checksum verifies
+// the archive is the published one, not that the published one is sane, and a
+// malformed or hostile release must not fill the disk. The real payload is a
+// binary plus small adapter scripts, so these ceilings are generous.
+const (
+	maxReleaseEntries = 4096
+	maxReleaseBytes   = 512 << 20
+)
+
 func untargz(archive, root string) error {
 	f, err := os.Open(archive)
 	if err != nil {
@@ -221,6 +241,7 @@ func untargz(archive, root string) error {
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
+	var entries, written int64
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -229,9 +250,25 @@ func untargz(archive, root string) error {
 		if err != nil {
 			return err
 		}
-		rel, ok := sanitizeEntry(hdr.Name)
-		if !ok {
+		// Only types that materialize a filesystem object need a sane
+		// in-tree name; everything else (pax/GNU metadata and unknown
+		// vendor headers) writes nothing, so its name is not a path.
+		switch hdr.Typeflag {
+		case tar.TypeReg, tar.TypeDir, tar.TypeSymlink, tar.TypeLink,
+			tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
+		default:
 			continue
+		}
+		rel, err := sanitizeEntry(hdr.Name)
+		if err != nil {
+			return err
+		}
+		if rel == "" {
+			continue
+		}
+		entries++
+		if entries > maxReleaseEntries {
+			return fmt.Errorf("release archive exceeds %d entries; refusing", maxReleaseEntries)
 		}
 		target := filepath.Join(root, rel)
 		switch hdr.Typeflag {
@@ -247,7 +284,9 @@ func untargz(archive, root string) error {
 			if mode == 0 {
 				mode = 0o644
 			}
-			if err := writeFile(tr, target, mode); err != nil {
+			n, err := writeFile(tr, target, mode, maxReleaseBytes-written)
+			written += n
+			if err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
@@ -293,17 +332,32 @@ func unzip(archive, root string) error {
 		return err
 	}
 	defer zr.Close()
+	var entries, written int64
 	for _, f := range zr.File {
-		rel, ok := sanitizeEntry(f.Name)
-		if !ok {
+		rel, err := sanitizeEntry(f.Name)
+		if err != nil {
+			return err
+		}
+		if rel == "" {
 			continue
 		}
+		entries++
+		if entries > maxReleaseEntries {
+			return fmt.Errorf("release archive exceeds %d entries; refusing", maxReleaseEntries)
+		}
 		target := filepath.Join(root, rel)
-		if f.FileInfo().IsDir() {
+		fi := f.FileInfo()
+		if fi.IsDir() {
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return err
 			}
 			continue
+		}
+		if !fi.Mode().IsRegular() {
+			// Zip carries Unix type bits in external attrs: symlinks, devices
+			// and FIFOs get the same verdict their tar forms get — a release
+			// installs regular files only.
+			return fmt.Errorf("release archive entry %s has unsupported file type %s; refusing", rel, fi.Mode().Type())
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
@@ -316,31 +370,38 @@ func unzip(archive, root string) error {
 		if mode == 0 {
 			mode = 0o644
 		}
-		err = writeFile(rc, target, mode)
+		n, werr := writeFile(rc, target, mode, maxReleaseBytes-written)
 		rc.Close()
-		if err != nil {
-			return err
+		written += n
+		if werr != nil {
+			return werr
 		}
 	}
 	return nil
 }
 
 // writeFile streams r into path with mode, via a temp file + atomic rename so
-// a partially-extracted file never appears at the final path.
-func writeFile(r io.Reader, path string, mode os.FileMode) error {
+// a partially-extracted file never appears at the final path. It writes at
+// most budget bytes and returns the count so callers can enforce a whole-
+// archive ceiling; exceeding the budget is an error.
+func writeFile(r io.Reader, path string, mode os.FileMode, budget int64) (int64, error) {
 	tmp := path + ".extract"
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if _, err := io.Copy(f, r); err != nil {
+	n, err := io.Copy(f, io.LimitReader(r, budget+1))
+	if err == nil && n > budget {
+		err = fmt.Errorf("release archive exceeds %d decompressed bytes; refusing", maxReleaseBytes)
+	}
+	if err != nil {
 		f.Close()
 		os.Remove(tmp)
-		return err
+		return n, err
 	}
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
-		return err
+		return n, err
 	}
-	return os.Rename(tmp, path)
+	return n, os.Rename(tmp, path)
 }
