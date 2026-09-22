@@ -191,14 +191,41 @@ func (c *Core) negoDropHolderLocked(holder string) {
 }
 
 // negoRelease drops all locks and wait-for edges held by holder — called when
-// a local task finishes (its agent cedes every scope it took) or when a yield
-// lands from the network.
+// a yield lands from the network and the preempted principal must cede every
+// scope it took.
 func (c *Core) negoRelease(holder string) {
 	c.negoMu.Lock()
 	defer c.negoMu.Unlock()
 	for k, l := range c.nego {
 		if l.holder == holder {
 			delete(c.nego, k)
+		}
+	}
+	c.negoDropHolderLocked(holder)
+}
+
+// negoReleaseTask drops only the locks recorded under one local task. Two
+// concurrent tasks driven by the same agent share the node|agent principal —
+// releasing by principal would let one task's exit silently unlock scopes the
+// other is still editing. The principal's wait-for edges die with its last
+// lock; while any same-principal task still holds, the edges stay so cycle
+// detection keeps seeing the real waiter set.
+func (c *Core) negoReleaseTask(taskID string) {
+	c.negoMu.Lock()
+	defer c.negoMu.Unlock()
+	var holder string
+	for k, l := range c.nego {
+		if l.holderTask == taskID {
+			holder = l.holder
+			delete(c.nego, k)
+		}
+	}
+	if holder == "" {
+		return
+	}
+	for _, l := range c.nego {
+		if l.holder == holder {
+			return
 		}
 	}
 	c.negoDropHolderLocked(holder)
@@ -215,7 +242,7 @@ func (c *Core) negoYieldTo(ctx context.Context, holder string, scope bus.TargetS
 		c.EvTrace(ctx, "", "agent_yield_local", map[string]any{
 			"holder": holder, "scope": scope.File, "to": requester,
 		})
-		c.negoInterruptLocal(holder, negoScopeKey(scope))
+		c.negoInterruptLocal(ctx, holder, negoScopeKey(scope))
 		return
 	}
 	p := bus.AgentYieldPayload{FromAgent: requester, Scope: scope, Reason: "preempted by higher weight"}
@@ -231,10 +258,14 @@ func (c *Core) negoYieldTo(ctx context.Context, holder string, scope bus.TargetS
 	_ = c.sendTo(node, env) // best-effort: the lease expiry frees the lock anyway
 }
 
-// negoInterruptLocal cancels the local task holding a lock for scope. Yield
-// enforcement depth ends at task cancellation; finer "halt at checkpoint"
-// semantics need adapter-level breakpoints and are future work.
-func (c *Core) negoInterruptLocal(holder, scopeFile string) {
+// negoInterruptLocal parks the local task holding a lock for scope. §5.2:
+// before the cancel lands, the task's scoped files are copied into a shadow
+// work copy (defense.SaveShadow) so its interrupted edits survive the
+// preemption — the next run merges them back instead of restarting the work
+// from scratch. The cancel itself stays the enforcement depth the current
+// adapters support; finer "halt at checkpoint" semantics need adapter-level
+// breakpoints.
+func (c *Core) negoInterruptLocal(ctx context.Context, holder, scopeFile string) {
 	c.negoMu.Lock()
 	var taskID string
 	for k, l := range c.nego {
@@ -245,11 +276,63 @@ func (c *Core) negoInterruptLocal(holder, scopeFile string) {
 	}
 	c.negoMu.Unlock()
 	if taskID != "" {
+		c.shadowForYield(ctx, taskID)
 		if cancel, ok := c.running.Load(taskID); ok {
 			cancel.(context.CancelFunc)()
 		}
+		// Drop only the interrupted task's remaining locks: a sibling task of
+		// the same agent keeps its own grants.
+		c.negoReleaseTask(taskID)
+		return
 	}
 	c.negoRelease(holder)
+}
+
+// taskWorkDir mirrors the workDir derivation in run(): the stage's own dir,
+// the project tree for an input-carrying project task, the task's pinned
+// dir, else the node-wide execution directory.
+func (c *Core) taskWorkDir(t Task) string {
+	if t.PlanID != "" {
+		if wd, err := c.stageWorkDir(t.PlanID, t.StageID); err == nil {
+			return wd
+		}
+	}
+	if projectInputs(t) {
+		if wd, err := c.projectWorkDir(t.Project); err == nil {
+			return wd
+		}
+	}
+	if t.WorkDir != "" {
+		return t.WorkDir
+	}
+	return c.workDir
+}
+
+// shadowForYield snapshots the preempted task's scoped files into its shadow
+// dir (§5.2). The copy races the still-unwinding agent by a hair — cancel
+// lands after it, not before — which is the right ordering: whatever the
+// agent wrote before the interrupt is captured, torn lines and all, and the
+// resumed run's conflict note tells it to re-verify contested files. A
+// task with no declared scope owns nothing arbitration could fight over, so
+// nothing is parked.
+func (c *Core) shadowForYield(ctx context.Context, taskID string) {
+	t, err := c.store.Get(ctx, taskID)
+	if err != nil {
+		return
+	}
+	scope := defense.NewScope(taskScope(t.SpecJSON))
+	roots := scope.Roots()
+	if len(roots) == 0 {
+		return
+	}
+	workDir := c.taskWorkDir(t)
+	if err := defense.SaveShadow(workDir, taskID, roots); err != nil {
+		c.logger.Warn("yield shadow save", "task", taskID, "err", err)
+		return
+	}
+	c.EvTrace(ctx, taskID, "shadow_saved", map[string]any{
+		"scope_roots": roots, "work_dir": workDir,
+	})
 }
 
 // negotiateTaskScope runs §5.1 arbitration for every declared scope root —
@@ -270,6 +353,7 @@ func (c *Core) negotiateTaskScope(ctx context.Context, task Task, scope *defense
 			c.negoYieldTo(ctx, h, ts, holder)
 		}
 		if !dec.granted {
+			c.negoReleaseTask(task.TaskID)
 			return fmt.Errorf("scope %s: %s", root, dec.reason)
 		}
 		for _, peer := range c.livePeerIDs() {
@@ -284,6 +368,7 @@ func (c *Core) negotiateTaskScope(ctx context.Context, task Task, scope *defense
 				continue
 			}
 			if grant.Denied {
+				c.negoReleaseTask(task.TaskID)
 				return fmt.Errorf("scope %s: denied by %s: %s", root, peer, grant.Reason)
 			}
 		}
