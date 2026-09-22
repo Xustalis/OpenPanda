@@ -135,6 +135,9 @@ func main() {
 		case "skill":
 			runSkill(args)
 			return
+		case "mcp":
+			runMCP(args)
+			return
 		case "reminder":
 			runReminder(args)
 			return
@@ -222,7 +225,7 @@ func subcommandNames() []string {
 	return []string{
 		"daemon", "serve", "ask", "repl", "chat", "web", "voice",
 		"install", "uninstall", "update", "upgrade", "doctor", "status", "nodes", "pair", "queue",
-		"task", "plan", "cancel", "approve", "reject", "logs", "skill",
+		"task", "plan", "cancel", "approve", "reject", "logs", "skill", "mcp",
 		"reminder", "detect", "card", "init", "metrics", "audit", "session",
 		"sessions", "memory", "config", "model", "models", "agents", "project",
 		"read", "view", "cat", "md", "markdown", "version", "help",
@@ -348,6 +351,9 @@ func runDaemon(args []string) {
 	// Extended-policy agent runs expose the node's MCP server to the
 	// delegated agent CLI (work-dir .mcp.json); minimal policy ignores it.
 	coreNode.SetAgentMCPPassthrough(cfg.MCP.Command)
+	// The self-tools MCP server spawned from .mcp.json inherits the daemon's
+	// --config choice; empty means its own default discovery.
+	coreNode.SetSelfConfigPath(*configPath)
 	// Supervision (上级完成度判定): judge agent results against the task's
 	// success criteria and re-delegate work that isn't complete. A model-less
 	// node skips this — agent tasks finish in one shot as before.
@@ -367,7 +373,10 @@ func runDaemon(args []string) {
 	// hash, that a later stage on another node pulls over the bus. Without it a
 	// delegated task can only carry a path, which means nothing on the node that
 	// receives it.
-	coreNode.SetArtifactStore(artifact.NewStore(cfg.Storage.ArtifactPath))
+	artifactStore := artifact.NewStore(cfg.Storage.ArtifactPath, cfg.Storage.ArtifactExtraPaths...)
+	artifactStore.SetMaxBytes(cfg.Storage.ArtifactMaxBytes)
+	artifactStore.SetMinFreeBytes(cfg.Storage.ArtifactMinFreeBytes)
+	coreNode.SetArtifactStore(artifactStore)
 	coreNode.SetLimits(cfg.Network.MaxConnections, cfg.Network.MaxConnectionsPerIP)
 	// Execution timeouts (timeouts.*): the agent budget and the task lease. A
 	// deep-learning stage runs far longer than a code edit, so both are operator
@@ -683,6 +692,7 @@ func printUsage(w *os.File) {
 	line("  agents [test <name>]                      probe installed agent CLIs")
 	line("  reminder list|add|rm                      scheduled reminders")
 	line("  skill list|find|hub|add|reset             procedural skill & hub management")
+	line("  mcp                                       run the node's self-tools as an MCP stdio server")
 	line("")
 	line("observability:")
 	line("  status                                    node identity + capability directory")
