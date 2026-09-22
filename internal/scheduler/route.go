@@ -327,6 +327,77 @@ func graphFirstHop(self ledger.Node, employees []ledger.Node, seen map[string]bo
 	}
 }
 
+// DTNNextHop picks the first hop of the cheapest advertised path toward a
+// specific destination for store-and-forward custody (§8.3). It differs from
+// graphFirstHop in three ways that all follow from the DTN setting: the
+// target is a fixed node rather than "anyone capable"; that node may be
+// offline — the normal case, since the bundle only needs to reach the online
+// neighbor closest to it and wait for the contact window — so dest is exempt
+// from the online rule while every intermediate still must be online to hold
+// custody; and exclude names nodes that must not be the FIRST hop (the peer
+// the bundle arrived from: forwarding straight back is an echo, not
+// progress). Excluding a node only at the first hop keeps legitimate paths
+// that pass through it deeper in the graph.
+func DTNNextHop(self ledger.Node, employees []ledger.Node, dest string, exclude map[string]bool) string {
+	if dest == "" || dest == self.ID {
+		return ""
+	}
+	byID := make(map[string]ledger.Node, len(employees))
+	for _, n := range employees {
+		byID[n.ID] = n
+	}
+	dist := map[string]int64{self.ID: 0}
+	first := make(map[string]string) // node -> first hop from self
+	visited := map[string]bool{}
+	for {
+		var cur string
+		curDist := int64(math.MaxInt64)
+		for id, d := range dist {
+			if !visited[id] && d < curDist {
+				cur, curDist = id, d
+			}
+		}
+		if cur == "" {
+			return ""
+		}
+		visited[cur] = true
+		if cur == dest {
+			return first[dest]
+		}
+		curNode := self
+		if cur != self.ID {
+			n, ok := byID[cur]
+			if !ok {
+				continue
+			}
+			curNode = n
+		}
+		for _, nb := range curNode.Neighbors {
+			if visited[nb] {
+				continue
+			}
+			if cur == self.ID && exclude[nb] {
+				continue // first hop back to the sender is an echo
+			}
+			if nb != dest {
+				n, ok := byID[nb]
+				if !ok || n.Status != "online" {
+					continue // intermediates must be able to hold custody
+				}
+			}
+			nd := curDist + linkCost(curNode, nb)
+			if old, ok := dist[nb]; !ok || nd < old {
+				dist[nb] = nd
+				if cur == self.ID {
+					first[nb] = nb
+				} else {
+					first[nb] = first[cur]
+				}
+			}
+		}
+	}
+}
+
 // declineReason distinguishes "nobody has this ability" from "nobody has this
 // much hardware". The two have different fixes — install a tool versus add a
 // node — and the reason string is what the user reads on a declined task.

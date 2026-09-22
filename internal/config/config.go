@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/executil"
+	"github.com/Xustalis/OpenPanda/internal/util"
 	"gopkg.in/yaml.v3"
 )
 
@@ -109,6 +110,13 @@ type RoutingConfig struct {
 	// servers configured for the work directory are reachable. Widening the
 	// tool face is an explicit operator choice, never a default.
 	ToolsPolicy string `yaml:"tools_policy"`
+	// PandaTools gates the self-management surface agents get under the
+	// extended tools policy: the openpanda MCP server (panda mcp) injected
+	// into MCP-capable CLIs plus the prompt hint pointing shell-capable
+	// agents at the panda binary on PATH. Nil means enabled — the extended
+	// policy already opted into a wider tool face — and an explicit false
+	// keeps extended tools while closing the self-management path.
+	PandaTools *bool `yaml:"panda_tools"`
 }
 
 // Agent tool policies (routing.tools_policy).
@@ -127,6 +135,13 @@ func (r RoutingConfig) NormalizedToolsPolicy() string {
 		return ToolsPolicyExtended
 	}
 	return ToolsPolicyMinimal
+}
+
+// NormalizedPandaTools reports whether the self-management tool surface is
+// enabled (routing.panda_tools, default true). The caller still gates it on
+// the extended tools policy — the flag is an opt-out, not an opt-in.
+func (r RoutingConfig) NormalizedPandaTools() bool {
+	return r.PandaTools == nil || *r.PandaTools
 }
 
 // Default memory size limits (characters). They override the compile-time
@@ -211,6 +226,21 @@ type StorageConfig struct {
 	SkillsPath   string `yaml:"skills_path"`   // procedural-memory root (skills/)
 	WorkPath     string `yaml:"work_path"`     // agents execute here; scope drift is measured against it
 	ArtifactPath string `yaml:"artifact_path"` // packed task artifacts (artifacts/), named by hash
+	// ArtifactExtraPaths are additional pool volumes (other disks, mounted
+	// media). A write lands on the volume with the most usable space that
+	// fits it — extra paths add capacity, they do not replicate.
+	ArtifactExtraPaths []string `yaml:"artifact_extra_paths"`
+	// ArtifactMaxBytes bounds a single artifact, packed or unpacked. Zero —
+	// the default — accepts whatever a volume can hold: the transport streams
+	// in 1 MiB chunks, so size never translates into memory pressure, and
+	// free space is the honest bound. Set it on nodes where artifacts share
+	// a disk with more delicate state.
+	ArtifactMaxBytes int64 `yaml:"artifact_max_bytes"`
+	// ArtifactMinFreeBytes is the headroom every volume keeps between the
+	// pool's last byte and a full disk — a full filesystem wedges SQLite's
+	// WAL, so an artifact may fill a volume only down to this mark. The
+	// default is 256 MiB; 0 disables the watermark.
+	ArtifactMinFreeBytes int64 `yaml:"artifact_min_free_bytes"`
 }
 
 // LogConfig controls structured logging.
@@ -729,6 +759,10 @@ func Default() *Config {
 			// config file that moves storage next to itself but predates
 			// artifact_path would otherwise keep the per-user default and
 			// scatter a node's state across two roots.
+			// The free-space watermark defaults to a quarter GiB — enough to
+			// keep a filled artifact volume from taking SQLite down with it —
+			// and an explicit 0 in the file disables it.
+			ArtifactMinFreeBytes: 256 << 20,
 		},
 		Log: LogConfig{
 			Level: "info",
@@ -869,6 +903,11 @@ func (c *Config) resolveRelativePaths(baseDir string) {
 	// archives next to the YAML. normalize() derives it instead.
 	if c.Storage.ArtifactPath != "" && !filepath.IsAbs(c.Storage.ArtifactPath) {
 		c.Storage.ArtifactPath = filepath.Join(baseDir, c.Storage.ArtifactPath)
+	}
+	for i, p := range c.Storage.ArtifactExtraPaths {
+		if p != "" && !filepath.IsAbs(p) {
+			c.Storage.ArtifactExtraPaths[i] = filepath.Join(baseDir, p)
+		}
 	}
 	if !filepath.IsAbs(c.Push.VAPIDKeyPath) {
 		c.Push.VAPIDKeyPath = filepath.Join(baseDir, c.Push.VAPIDKeyPath)
@@ -1015,6 +1054,19 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("OPENPANDA_ARTIFACT_PATH"); v != "" {
 		c.Storage.ArtifactPath = v
 	}
+	if v := os.Getenv("OPENPANDA_ARTIFACT_MAX_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.Storage.ArtifactMaxBytes = n
+		}
+	}
+	if v := os.Getenv("OPENPANDA_ARTIFACT_EXTRA_PATHS"); v != "" {
+		c.Storage.ArtifactExtraPaths = append(c.Storage.ArtifactExtraPaths, filepath.SplitList(v)...)
+	}
+	if v := os.Getenv("OPENPANDA_ARTIFACT_MIN_FREE_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.Storage.ArtifactMinFreeBytes = n
+		}
+	}
 	if v := os.Getenv("OPENPANDA_MODEL_API_TYPE"); v != "" {
 		c.Model.APIType = v
 	}
@@ -1069,7 +1121,7 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
-		return os.WriteFile(path, out, 0o600)
+		return util.WriteFileAtomic(path, out, 0o600)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -1107,7 +1159,7 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, out, 0o600); err != nil {
+	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)
@@ -1141,7 +1193,7 @@ func UpdateModelsSection(path string, models []ModelConfig) error {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(path, out, 0o600)
+		return util.WriteFileAtomic(path, out, 0o600)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -1171,7 +1223,7 @@ func UpdateModelsSection(path string, models []ModelConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, out, 0o600); err != nil {
+	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)
@@ -1225,7 +1277,7 @@ func UpdateMCPSection(path string, command string) error {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(path, out, 0o600)
+		return util.WriteFileAtomic(path, out, 0o600)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -1249,7 +1301,7 @@ func UpdateMCPSection(path string, command string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, out, 0o600); err != nil {
+	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)
@@ -1284,7 +1336,7 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(path, out, 0o600)
+		return util.WriteFileAtomic(path, out, 0o600)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -1308,7 +1360,7 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, out, 0o600); err != nil {
+	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)

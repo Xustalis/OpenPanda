@@ -34,6 +34,16 @@ const (
 	// artifact is a build tree or a trained model.
 	MsgArtifactFetch = "artifact_fetch"
 	MsgArtifactChunk = "artifact_chunk"
+	// Artifact push is the proactive half of the data plane (whitepaper §8.3
+	// fat-push): instead of waiting for the consumer to pull, the holder
+	// streams chunks out of a persisted outbox. The receiver stages them on
+	// disk and reports contiguous progress (status) plus the terminal
+	// verification verdict (done) — the custody signals that let a transfer
+	// resume from the receiver's own offset after a reconnect instead of
+	// restarting a multi-hundred-MiB archive.
+	MsgArtifactPush       = "artifact_push"
+	MsgArtifactPushStatus = "artifact_push_status"
+	MsgArtifactPushDone   = "artifact_push_done"
 	// Agent horizontal negotiation signaling (whitepaper §5.1).
 	MsgAgentNegotiate = "agent_negotiate"
 	MsgAgentGrant     = "agent_grant"
