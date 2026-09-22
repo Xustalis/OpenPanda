@@ -937,6 +937,25 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 	}
 
+	// §5.2 shadow resume: a task preempted mid-edit parked its scoped files
+	// before the cancel landed (negoInterruptLocal). Merging happens before
+	// the drift snapshot so restored paths count as pre-existing state, not
+	// agent writes — and before anything runs, so the agent resumes on top
+	// of its interrupted work instead of an empty tree. Contested paths stay
+	// with the winner's bytes and are named for the agent below.
+	var shadowConflicts []string
+	if restored, conflicts, serr := defense.MergeShadow(workDir, taskID); serr != nil {
+		c.logger.Warn("shadow merge", "task", taskID, "err", serr)
+	} else if len(restored)+len(conflicts) > 0 {
+		shadowConflicts = conflicts
+		c.EvTrace(execCtx, taskID, "shadow_merge", map[string]any{
+			"restored":  len(restored),
+			"conflicts": conflicts,
+		})
+		c.audit(ctx, taskID, "shadow:merge", "", "merged",
+			fmt.Sprintf("restored %d preempted files; %d contested", len(restored), len(conflicts)))
+	}
+
 	// §6.2 monotonic-progress bookkeeping: the oscillation window is keyed by
 	// the project or plan whose tree this task works on — the unit a mesh of
 	// agents "revisits". Anonymous tasks share the node-wide workDir, so
@@ -958,7 +977,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if err := c.negotiateTaskScope(execCtx, task, scope, plan.Agent); err != nil {
 			return bus.TaskResultPayload{}, fmt.Errorf("scope negotiation: %w", err)
 		}
-		defer c.negoRelease(negoHolder(c.nodeID, plan.Agent))
+		defer c.negoReleaseTask(task.TaskID)
 	}
 	var before defense.Snapshot
 	if plan.Kind == "agent" && !scope.Empty() {
@@ -1034,6 +1053,14 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	}
 
 	currentIntent := intent
+	if shadowConflicts != nil {
+		// The winner's bytes won on these paths: tell the resumed agent
+		// exactly which of its preempted edits died so it re-applies them
+		// deliberately instead of assuming the shadow restored everything.
+		currentIntent += "\n\n[system] this task was preempted and resumed from a shadow work copy; " +
+			"the files it edited that the preempting task also changed kept the OTHER version — " +
+			"re-apply your intended edits to: " + strings.Join(shadowConflicts, ", ")
+	}
 	var res commander.Result
 	var usedSkills []*skills.Skill
 	// sessionID threads the agent's own conversation across supervision
@@ -2558,9 +2585,10 @@ func (c *Core) handleAgentNegotiate(ctx context.Context, env bus.Envelope) {
 		"granted":    dec.granted,
 		"reason":     dec.reason,
 	})
-	for _, h := range dec.preempted {
-		c.negoYieldTo(ctx, h, p.TargetScope, negoHolder(p.FromNode, p.FromAgent))
-	}
+	// Answer first: the requester waits on a 4s timeout while a yield to a
+	// remote preempted holder can block up to the write deadline — delivering
+	// the verdict first keeps a slow yield from turning a grant into a
+	// phantom lock the requester never knew it held.
 	grant := bus.AgentGrantPayload{
 		LockID:    env.MsgID,
 		GrantedTo: p.FromAgent,
@@ -2569,6 +2597,9 @@ func (c *Core) handleAgentNegotiate(ctx context.Context, env bus.Envelope) {
 		Reason:    dec.reason,
 	}
 	_ = c.reply(ctx, env, bus.MsgAgentGrant, grant)
+	for _, h := range dec.preempted {
+		c.negoYieldTo(ctx, h, p.TargetScope, negoHolder(p.FromNode, p.FromAgent))
+	}
 }
 
 func (c *Core) handleAgentGrant(ctx context.Context, env bus.Envelope) {
@@ -2626,7 +2657,7 @@ func (c *Core) handleAgentYield(ctx context.Context, env bus.Envelope) {
 	c.negoMu.Unlock()
 	for _, h := range victims {
 		if node, _, _ := strings.Cut(h, "|"); node == c.nodeID {
-			c.negoInterruptLocal(h, key)
+			c.negoInterruptLocal(ctx, h, key)
 		} else {
 			c.negoRelease(h)
 		}

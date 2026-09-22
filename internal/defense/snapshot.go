@@ -39,6 +39,10 @@ var snapshotPruneDirs = map[string]bool{
 	"__pycache__":  true,
 	".venv":        true,
 	"venv":         true,
+	// .panda-shadow holds the §5.2 preemption copies SaveShadow parks inside
+	// the work tree. Hashing them would double-count the agent's own work,
+	// and diffing them would flag bookkeeping as drift.
+	".panda-shadow": true,
 }
 
 // SnapshotDir walks root and records every regular file under it. Directories
