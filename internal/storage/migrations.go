@@ -43,6 +43,68 @@ var migrations = []Migration{
 	{Version: 18, Name: "add_task_outbox", Apply: migrateV18},
 	{Version: 19, Name: "add_dtn_mesh_columns", Apply: migrateV19},
 	{Version: 20, Name: "add_token_budget_and_link_metrics", Apply: migrateV20},
+	{Version: 21, Name: "add_artifact_push_outbox", Apply: migrateV21},
+	{Version: 22, Name: "add_task_outbox_via", Apply: migrateV22},
+	{Version: 23, Name: "add_task_agent_session", Apply: migrateV23},
+}
+
+// migrateV23 adds tasks.agent_session_id and tasks.agent_session_node: the
+// adapter's own conversation handle and the node that minted it (whitepaper
+// §5.2's "breakpoint mooring" — the round boundary is the checkpoint the
+// current adapters support). A task interrupted by yield/restart/redelegation
+// resumes that session instead of cold-starting on the shadow copy alone.
+// The node column is what keeps the handle honest: a session id only means
+// something to the adapter store on the node that created it, so a delegator
+// may only offer it back to that node (as resume_session_id on the wire) —
+// never adopt it for itself or hand it to a different executor.
+func migrateV23(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	if err := addColumnIfMissingTx(tx, "tasks", "agent_session_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "tasks", "agent_session_node", "TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateV22 adds task_outbox.via: the peer a relayed bundle arrived from
+// (whitepaper §8.3 multi-hop). A signed bundle cannot carry a hop list — a
+// relay must not re-wrap it — so the no-echo rule is kept as row state: when
+// a flush recomputes the next hop it excludes via, and a bundle can only
+// ever be parked back toward its sender, never sent.
+func migrateV22(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "task_outbox")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "task_outbox", "via", "TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateV21 adds artifact_push_outbox: the durable custody record for
+// chunked proactive artifact delivery (whitepaper §8.3 fat-push). The
+// receiver reports contiguous progress (acked_through); the sender streams
+// forward from that waterline and only retires a row on the receiver's done
+// verdict — so an artifact outlives process restarts and link drops the same
+// way a DTN bundle does, instead of restarting a large archive from zero.
+// ttl is the shared absolute deadline (the task's deadline_unix when set,
+// else mint+24h): a row that outlives it is swept like an expired bundle.
+func migrateV21(tx MigrationExec) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS artifact_push_outbox (
+		peer TEXT NOT NULL,
+		hash TEXT NOT NULL,
+		task_id TEXT NOT NULL,
+		total INTEGER NOT NULL,
+		sent_through INTEGER NOT NULL DEFAULT 0,
+		acked_through INTEGER NOT NULL DEFAULT 0,
+		ttl INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY (peer, hash)
+	)`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_artifact_push_outbox_peer ON artifact_push_outbox(peer)`)
+	return err
 }
 
 // migrateV20 completes the mesh-budget and weighted-routing persistence

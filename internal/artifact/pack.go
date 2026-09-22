@@ -36,18 +36,33 @@ import (
 	"time"
 )
 
-// MaxBytes caps both the compressed archive and the total decompressed payload.
-// An artifact is a build output or a trained model, not a disk image; the cap is
-// what stands between a peer and a zip bomb that fills this node's disk.
+// MaxBytes is the historical per-artifact bound (512 MiB), kept as the
+// reference value for tests and for operators who set artifact_max_bytes.
+// Stores created by NewStore are unbounded by default — the filesystem's
+// free space is the limit — so this constant no longer gates any transfer
+// unless a limit is configured back on.
 const MaxBytes int64 = 512 << 20 // 512 MiB
 
 // maxEntries caps the entry count so an archive of a million empty files cannot
-// exhaust memory through the manifest alone.
+// exhaust memory through the manifest alone. Unlike the byte cap this is not
+// configurable: it bounds memory, not disk, and memory has no free-space
+// probe to fall back on.
 const maxEntries = 200_000
 
 // ErrTooLarge is returned when an archive or its decompressed content exceeds
-// MaxBytes, or when it holds more than maxEntries entries.
+// the configured byte limit, or when it holds more than maxEntries entries.
 var ErrTooLarge = errors.New("artifact: exceeds size limit")
+
+// ErrNoSpace is returned when a transfer is refused because the filesystem
+// that would hold it reports less free space than the bytes advertised — the
+// bound that replaces a fixed cap on unbounded pools.
+var ErrNoSpace = errors.New("artifact: insufficient disk space")
+
+// ErrInvalid marks an advertisement no honest sender would make — a total of
+// zero or less, a negative offset. Distinct from ErrTooLarge: nothing was too
+// big, the request itself is malformed, and like the size refusals it can
+// never complete, so callers that fail-fast on either treat it the same way.
+var ErrInvalid = errors.New("artifact: invalid advertisement")
 
 // EntryMeta describes one file in an artifact. Paths are slash-separated and
 // relative to the artifact root, so a manifest reads the same on every OS.
@@ -83,11 +98,24 @@ var epoch = time.Unix(0, 0).UTC()
 // pinned. Change any of them and previously stored artifacts stop matching
 // their hashes.
 func Pack(root string, w io.Writer) (Manifest, error) {
-	entries, err := walk(root)
+	return pack(root, w, 0)
+}
+
+// pack is Pack with an explicit byte limit: 0 leaves the archive bounded only
+// by the filesystem that holds it, a positive limit rejects trees (and
+// streams) larger than limit.
+func pack(root string, w io.Writer, limit int64) (Manifest, error) {
+	entries, err := walk(root, limit)
 	if err != nil {
 		return Manifest{}, err
 	}
+	return packEntries(entries, root, w, limit)
+}
 
+// packEntries packs a pre-walked entry list — PackDir walks once so its
+// volume placement can budget against the same total the archive is built
+// from, instead of walking the tree twice.
+func packEntries(entries []entry, root string, w io.Writer, limit int64) (Manifest, error) {
 	// Hash what we write, as we write it: one pass, and the hash covers exactly
 	// the bytes the receiver will verify.
 	h := sha256.New()
@@ -114,7 +142,7 @@ func Pack(root string, w io.Writer) (Manifest, error) {
 	if err := gz.Close(); err != nil {
 		return Manifest{}, fmt.Errorf("artifact: close gzip: %w", err)
 	}
-	if counter.n > MaxBytes {
+	if limit > 0 && counter.n > limit {
 		return Manifest{}, fmt.Errorf("%w: packed %d bytes", ErrTooLarge, counter.n)
 	}
 	return Manifest{
@@ -136,8 +164,9 @@ type entry struct {
 // walk collects root's regular files and directories in sorted path order.
 // Irregular entries (symlinks, sockets, devices) are skipped: an artifact is
 // content, and a link is a reference to content that may not exist on the node
-// the artifact travels to.
-func walk(root string) ([]entry, error) {
+// the artifact travels to. limit bounds the total regular-file bytes; 0
+// accepts whatever the source tree holds.
+func walk(root string, limit int64) ([]entry, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, fmt.Errorf("artifact: stat root: %w", err)
@@ -165,8 +194,8 @@ func walk(root string) ([]entry, error) {
 			out = append(out, entry{rel: rel, abs: path, mode: fi.Mode().Perm(), dir: true})
 		case fi.Mode().IsRegular():
 			total += fi.Size()
-			if total > MaxBytes {
-				return fmt.Errorf("%w: %s exceeds %d bytes of content", ErrTooLarge, root, MaxBytes)
+			if limit > 0 && total > limit {
+				return fmt.Errorf("%w: %s exceeds %d bytes of content", ErrTooLarge, root, limit)
 			}
 			out = append(out, entry{rel: rel, abs: path, mode: fi.Mode().Perm(), size: fi.Size()})
 		default:
