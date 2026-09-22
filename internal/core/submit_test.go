@@ -178,4 +178,3 @@ func TestSubmitFallsBackToDTNWhenTargetNonLive(t *testing.T) {
 		t.Fatalf("result state = %s, want %s", result.State, StateQueued)
 	}
 }
-

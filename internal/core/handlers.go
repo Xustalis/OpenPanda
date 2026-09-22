@@ -105,6 +105,18 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		return
 	}
 
+	// A bundle that outlived its TTL in transit must not start executing
+	// (§8.2): the deadline is the mesh-wide bound every hop shares, and
+	// declining lets the delegator's own deadline sweep close its copy too.
+	if p.DeadlineUnix > 0 && time.Now().Unix() > p.DeadlineUnix {
+		c.logger.Warn("task_delegate arrived past deadline", "task", p.TaskID,
+			"from", env.From, "deadline", p.DeadlineUnix)
+		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
+			TaskID: p.TaskID, Reason: "bundle expired in transit",
+		})
+		return
+	}
+
 	t, err := c.store.CreateWithID(ctx, p.TaskID, p.ParentID, p.Project, p.TitleOrDefault(), c.nodeID, chain)
 	if err != nil {
 		c.logger.Error("create task from delegate", "err", err)
@@ -143,6 +155,14 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		// As above: losing the detail costs queue readability, not correctness.
 		// Dropping the task costs both.
 		c.logger.Error("set task detail failed", "task", t.TaskID, "err", err)
+	}
+	// Adopt the mesh budget the payload carries (§6.1): the row's remaining
+	// delegation quota must reflect what the wire declared, or this node —
+	// and every restart after it — would spend budget the mesh already used.
+	if p.DelegationBudget > 0 {
+		if err := c.store.SetDelegationBudget(ctx, t.TaskID, p.DelegationBudget); err != nil {
+			c.logger.Warn("adopt delegation budget", "task", t.TaskID, "err", err)
+		}
 	}
 	// A delegated stage of a plan keeps its place in that plan and the artifacts
 	// it must start from. Both are needed locally before execution: run() derives
@@ -520,23 +540,67 @@ func (c *Core) forwardDelegated(ctx context.Context, taskID, target string, p bu
 	return c.dispatchDelegated(ctx, taskID, target, p, chain)
 }
 
+// defaultDTNTTL bounds how long a parked DTN task stays deliverable when the
+// task itself declares no deadline (§8.2). Store-and-forward is measured in
+// hours, not lease seconds.
+const defaultDTNTTL = 24 * time.Hour
+
+// delegationBudget resolves the remaining §6.1 forward budget for taskID and
+// spends one hop, returning what the wire should carry. The persisted row is
+// authoritative — a received task's row was seeded from the wire on arrival —
+// with the caller's payload as fallback for a row that has no record yet. An
+// origin row (chain of self only, budget unset) seeds the default; a
+// mid-chain task whose budget is spent is refused: decrementing a zero would
+// launder the bound, since the receiver seeds its row from the wire.
+func (c *Core) delegationBudget(ctx context.Context, taskID string, wireBudget int) (int, error) {
+	if t, err := c.store.Get(ctx, taskID); err == nil {
+		switch {
+		case t.DelegationBudget > 0:
+			wireBudget = t.DelegationBudget
+		case len(t.Chain) <= 1 && wireBudget <= 0:
+			wireBudget = scheduler.MaxDelegationBudget
+		}
+	}
+	if wireBudget <= 0 {
+		return 0, scheduler.ErrBudgetExceeded
+	}
+	return wireBudget - 1, nil
+}
+
 // dispatchDelegated is forwardDelegated for a task already in queued state —
 // e.g. a declined task being re-routed (P1-5), where Decline already moved it
 // dispatched -> queued and a second queue transition would conflict.
 func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p bus.TaskDelegatePayload, chain []string) error {
+	// §6.1 mesh budget: every forward hop spends one delegation, on the wire
+	// and in the row, so the mesh-wide bound survives restarts and relays.
+	remaining, err := c.delegationBudget(ctx, taskID, p.DelegationBudget)
+	if err != nil {
+		return err
+	}
+	p.DelegationBudget = remaining
 	if err := c.store.Dispatch(ctx, taskID, c.nodeID, target); err != nil {
 		return fmt.Errorf("dispatch: %w", err)
 	}
+	if err := c.store.SetDelegationBudget(ctx, taskID, p.DelegationBudget); err != nil {
+		c.logger.Warn("persist delegation budget", "task", taskID, "err", err)
+	}
+	dtn := p.Transport == "dtn"
 	// Stamp a lease on the local copy so a dead executor is detected and the
 	// failure propagated, instead of leaving this copy dispatched forever (D3).
-	// The timeout is carried on the wire so every hop inherits the same deadline.
+	// The timeout is carried on the wire so every hop inherits the same
+	// deadline. A DTN task is exempt (§8.2): a store-and-forward path has no
+	// heartbeat to renew against, so the absolute DeadlineUnix is its bound.
 	timeoutMS := p.TimeoutMS
-	if timeoutMS <= 0 {
-		timeoutMS = c.lease().Milliseconds()
-		p.TimeoutMS = timeoutMS
-	}
-	if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
-		return fmt.Errorf("set lease: %w", err)
+	if !dtn {
+		if timeoutMS <= 0 {
+			timeoutMS = c.lease().Milliseconds()
+			p.TimeoutMS = timeoutMS
+		}
+		if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
+			return fmt.Errorf("set lease: %w", err)
+		}
+	} else {
+		c.attachFatBundle(ctx, &p)
 	}
 	p.Chain = chain
 	msgID, err := newUUID()
@@ -549,9 +613,13 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 	}
 	env.To = target
 	if err := c.sendTo(target, env); err != nil {
+		deadline := p.DeadlineUnix
+		if deadline <= 0 {
+			deadline = time.Now().Add(defaultDTNTTL).Unix()
+		}
 		c.logger.Info("delegation send failed or target offline; parking in task_outbox for DTN relay",
 			"target", target, "task", taskID, "err", err)
-		c.taskOutboxPersist(ctx, target, p, "dtn", timeoutMS)
+		c.taskOutboxPersist(ctx, target, p, "dtn", deadline)
 	} else {
 		c.logger.Info("forwarded delegated task", "task", taskID, "to", target)
 	}
@@ -600,6 +668,7 @@ func delegateDetail(p bus.TaskDelegatePayload) TaskDetail {
 		Requires:     delegateRequired(p),
 		UserLocale:   p.UserLocale,
 		Transport:    p.Transport,
+		DeadlineUnix: p.DeadlineUnix,
 	}
 }
 
@@ -868,11 +937,29 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 	}
 
+	// §6.2 monotonic-progress bookkeeping: the oscillation window is keyed by
+	// the project or plan whose tree this task works on — the unit a mesh of
+	// agents "revisits". Anonymous tasks share the node-wide workDir, so
+	// keying them by directory would conflate unrelated work; they are exempt.
+	oscKey := task.Project
+	if oscKey == "" {
+		oscKey = task.PlanID
+	}
+
 	// Scope drift (design §14.2 signal A): for an agent task that declares a
 	// scope, snapshot the working directory before execution so changes outside
 	// the scope can be intercepted rather than silently committed. The snapshot
 	// is taken once and reused across supervision rounds.
 	scope := defense.NewScope(taskScope(task.SpecJSON))
+	if plan.Kind == "agent" && !scope.Empty() {
+		// §5.1 conflict negotiation: before the agent touches the declared
+		// scope, arbitrate it against every peer's lock table. A denial fails
+		// the run and the retry loop re-negotiates later — the mesh's "wait".
+		if err := c.negotiateTaskScope(execCtx, task, scope, plan.Agent); err != nil {
+			return bus.TaskResultPayload{}, fmt.Errorf("scope negotiation: %w", err)
+		}
+		defer c.negoRelease(negoHolder(c.nodeID, plan.Agent))
+	}
 	var before defense.Snapshot
 	if plan.Kind == "agent" && !scope.Empty() {
 		var err error
@@ -958,7 +1045,32 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	var sessionID string
 	var lastAgent, lastOutput, lastStderr string
 	verdict := entry.SuperviseVerdict{Status: entry.VerdictDone}
+	// delegations bounds how many PANDA_DELEGATE promotions one task may make
+	// (§4.2). Each re-runs the round with the child's result folded into the
+	// intent, so the counter — not the judge budget — is the guard against a
+	// marker-happy agent; the mesh budget bounds the spawned tree itself.
+	const maxDelegateRequests = 4
+	delegations := 0
 	for round := 0; round < maxRounds; round++ {
+		// §6.2 monotonic progress: hashing the work tree at each round's head
+		// means a later round that regresses to a state an earlier round (or
+		// an earlier task on this project) already produced is caught before
+		// more tokens are spent — agent B silently undoing agent A's fix can
+		// never converge, so it fails fast with a trace event instead.
+		if oscKey != "" {
+			if h, n, herr := defense.HashDir(workDir, stateHashMaxFiles); herr == nil && n <= stateHashMaxFiles && n > 0 {
+				if c.stateOscillates(oscKey, h) {
+					c.EvTrace(execCtx, taskID, "state_oscillation", map[string]any{
+						"key":   oscKey,
+						"hash":  h,
+						"round": round + 1,
+					})
+					return bus.TaskResultPayload{}, fmt.Errorf(
+						"state oscillation on %s: work tree regressed to a previously seen state (round %d)",
+						oscKey, round+1)
+				}
+			}
+		}
 		// emitRound traces one supervision_round with the round's final verdict.
 		// Callers fire it only once the verdict actually exists — after the judge
 		// pass, or immediately for rounds that never reach a judge (a failed run,
@@ -1020,6 +1132,30 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		res = router.Execute(runCtx, plan, prompt, workDir, task.Authorized)
 		if res.SessionID != "" {
 			sessionID = res.SessionID
+		}
+
+		// §4.2 Sub-MainAgent promotion: an agent that hits a resource it lacks
+		// (GPU, tool, hardware actuator) may emit a PANDA_DELEGATE line. This
+		// node — now acting as the child's Sub-Main — spawns the causal child,
+		// waits for its result, and re-runs the round with the product folded
+		// into the intent. The delegation never reaches a judge: the round is
+		// re-driven, not verified.
+		if plan.Kind == "agent" {
+			if dr, cleaned, ok := parseDelegateRequest(res.Stdout); ok {
+				res.Stdout = cleaned
+				if delegations < maxDelegateRequests {
+					delegations++
+					note, derr := c.delegateChild(execCtx, task, dr)
+					if derr != nil {
+						note = "delegation failed: " + derr.Error()
+					}
+					currentIntent += "\n\n[delegated child result]\n" + note
+				} else {
+					currentIntent += "\n\n[system] delegation budget for this task is exhausted; finish with local resources and report."
+				}
+				round--
+				continue
+			}
 		}
 
 		// — Trace: the Tier-2 gate outcome. A refusal is deterministic policy
@@ -1659,6 +1795,9 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string, loc ...i1
 	// the agent's exploration. Execution details stay in the task's event
 	// stream (panda task <id>) for anyone who wants the full trail.
 	prompt += rider
+	// §4.2 Sub-MainAgent protocol hint: the marker format the run loop
+	// parses. Kept terse — it rides every agent round.
+	prompt += i18n.T(promptLang, "prompt.delegate.hint")
 	return prompt, used
 }
 
@@ -2404,20 +2543,30 @@ func (c *Core) handleAgentNegotiate(ctx context.Context, env bus.Envelope) {
 		c.logger.Warn("agent negotiate: decode payload", "from", env.From, "err", err)
 		return
 	}
+	// The claim is attributed to the authenticated sender, never to whatever
+	// node name the payload asserts (same fail-closed posture as task auth).
+	p.FromNode = env.From
 	c.logger.Info("received agent negotiation signal",
 		"from_node", p.FromNode, "agent", p.FromAgent, "scope", p.TargetScope.File, "weight", p.Weight)
+	dec := c.negoDecide(time.Now(), p, "")
 	c.EvTrace(ctx, "", "agent_negotiate", map[string]any{
 		"from_node":  p.FromNode,
 		"from_agent": p.FromAgent,
 		"weight":     p.Weight,
 		"scope":      p.TargetScope,
 		"intent":     p.Intent,
+		"granted":    dec.granted,
+		"reason":     dec.reason,
 	})
-	// Auto-grant lease authorization (§5.2)
+	for _, h := range dec.preempted {
+		c.negoYieldTo(ctx, h, p.TargetScope, negoHolder(p.FromNode, p.FromAgent))
+	}
 	grant := bus.AgentGrantPayload{
 		LockID:    env.MsgID,
 		GrantedTo: p.FromAgent,
-		LeaseMS:   15000,
+		LeaseMS:   dec.leaseMS,
+		Denied:    !dec.granted,
+		Reason:    dec.reason,
 	}
 	_ = c.reply(ctx, env, bus.MsgAgentGrant, grant)
 }
@@ -2428,11 +2577,23 @@ func (c *Core) handleAgentGrant(ctx context.Context, env bus.Envelope) {
 		c.logger.Warn("agent grant: decode payload", "from", env.From, "err", err)
 		return
 	}
-	c.logger.Info("received agent lock grant", "lock_id", p.LockID, "granted_to", p.GrantedTo, "lease_ms", p.LeaseMS)
+	c.logger.Info("received agent lock grant", "lock_id", p.LockID, "granted_to", p.GrantedTo,
+		"lease_ms", p.LeaseMS, "denied", p.Denied, "reason", p.Reason)
+	c.negoMu.Lock()
+	ch := c.negoWaiters[p.LockID]
+	c.negoMu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- p:
+		default:
+		}
+		return
+	}
 	c.EvTrace(ctx, "", "agent_grant", map[string]any{
 		"lock_id":    p.LockID,
 		"granted_to": p.GrantedTo,
 		"lease_ms":   p.LeaseMS,
+		"denied":     p.Denied,
 	})
 }
 
@@ -2442,12 +2603,34 @@ func (c *Core) handleAgentYield(ctx context.Context, env bus.Envelope) {
 		c.logger.Warn("agent yield: decode payload", "from", env.From, "err", err)
 		return
 	}
-	c.logger.Info("agent yielded breakpoint", "agent", p.FromAgent, "scope", p.Scope.File)
+	c.logger.Info("agent yield received", "from_agent", p.FromAgent, "scope", p.Scope.File, "reason", p.Reason)
 	c.EvTrace(ctx, "", "agent_yield", map[string]any{
 		"from_agent": p.FromAgent,
 		"scope":      p.Scope,
 		"reason":     p.Reason,
 	})
+	// A yield revokes grants on the named scope: drop matching locks whose
+	// holder lives on this node and interrupt the local task that held them,
+	// so the preempting agent's edit does not race a zombie grant. Payload
+	// FromAgent is informational (the winner's identity); matching by scope
+	// key, not claimed name, keeps the revoke unforgeable.
+	key := negoScopeKey(p.Scope)
+	c.negoMu.Lock()
+	var victims []string
+	for k, l := range c.nego {
+		if k == key {
+			victims = append(victims, l.holder)
+			delete(c.nego, k)
+		}
+	}
+	c.negoMu.Unlock()
+	for _, h := range victims {
+		if node, _, _ := strings.Cut(h, "|"); node == c.nodeID {
+			c.negoInterruptLocal(h, key)
+		} else {
+			c.negoRelease(h)
+		}
+	}
 }
 
 // SendNegotiation sends a horizontal conflict negotiation signal to target peer (whitepaper §5.1).
@@ -2463,4 +2646,3 @@ func (c *Core) SendNegotiation(ctx context.Context, target string, p bus.AgentNe
 	env.To = target
 	return c.sendTo(target, env)
 }
-

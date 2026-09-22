@@ -250,4 +250,3 @@ func TestRoutePreferredMatchesSelfNodeIDForEphemeralSelf(t *testing.T) {
 		t.Fatalf("decision = %+v, want ActionLocal when naming stable ID of ephemeral self", d)
 	}
 }
-

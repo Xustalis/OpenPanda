@@ -52,3 +52,78 @@ func TestAgentNegotiationSignaling(t *testing.T) {
 	// Give a moment for b to receive and process
 	time.Sleep(200 * time.Millisecond)
 }
+
+func negoReq(node, agent string, weight int, file string) bus.AgentNegotiatePayload {
+	return bus.AgentNegotiatePayload{
+		FromNode: node, FromAgent: agent, Weight: weight,
+		TargetScope: bus.TargetScope{Repo: "r", File: file},
+	}
+}
+
+func TestNegoDecideGrantRenewPreempt(t *testing.T) {
+	c := &Core{nodeID: "node-x"}
+	now := time.Now()
+	// Uncontended scope → granted.
+	d := c.negoDecide(now, negoReq("node-a", "claude", 100, "f.go"), "")
+	if !d.granted {
+		t.Fatal("uncontended scope denied")
+	}
+	// Same principal → renewed, still granted.
+	d = c.negoDecide(now, negoReq("node-a", "claude", 100, "f.go"), "")
+	if !d.granted {
+		t.Fatal("renewal denied")
+	}
+	// Lower weight does not displace the holder.
+	d = c.negoDecide(now, negoReq("node-b", "codex", 50, "f.go"), "")
+	if d.granted {
+		t.Fatal("lower weight preempted")
+	}
+	// Higher weight preempts and names the old holder for yield.
+	d = c.negoDecide(now, negoReq("node-b", "codex", 200, "f.go"), "")
+	if !d.granted || len(d.preempted) != 1 || d.preempted[0] != "node-a|claude" {
+		t.Fatalf("preempt: %+v", d)
+	}
+}
+
+func TestNegoDecideLeaseExpiry(t *testing.T) {
+	c := &Core{nodeID: "node-x"}
+	now := time.Now()
+	c.negoDecide(now, negoReq("node-a", "claude", 100, "f.go"), "")
+	// Past the lease, a weaker requester wins: the dead holder frees the scope.
+	d := c.negoDecide(now.Add(2*negoLease), negoReq("node-b", "codex", 1, "f.go"), "")
+	if !d.granted {
+		t.Fatal("expired lock still held")
+	}
+}
+
+func TestNegoDecideDeadlockBreak(t *testing.T) {
+	c := &Core{nodeID: "node-x"}
+	now := time.Now()
+	// A strict weight order can never cycle — every denied edge runs lighter
+	// to heavier — so the deadlock case is equal weights: A holds s1, B holds
+	// s2, each then asks for the other's scope and waits.
+	c.negoDecide(now, negoReq("node-a", "claude", 100, "s1"), "")
+	c.negoDecide(now, negoReq("node-b", "codex", 100, "s2"), "")
+	if d := c.negoDecide(now, negoReq("node-a", "claude", 100, "s2"), ""); d.granted {
+		t.Fatal("A should wait on B's lock")
+	}
+	d := c.negoDecide(now, negoReq("node-b", "codex", 100, "s1"), "")
+	if len(d.preempted) == 0 {
+		t.Fatalf("cycle not broken: %+v", d)
+	}
+	// Breaking the cycle yields one holder; whichever lock freed, the mesh
+	// must still answer a fresh request without the dead state lingering.
+	c.negoDecide(now, negoReq("node-c", "gemini", 50, "s1"), "")
+	c.negoDecide(now, negoReq("node-c", "gemini", 50, "s2"), "")
+}
+
+func TestNegoRelease(t *testing.T) {
+	c := &Core{nodeID: "node-x"}
+	now := time.Now()
+	c.negoDecide(now, negoReq("node-a", "claude", 100, "f.go"), "")
+	c.negoRelease("node-a|claude")
+	d := c.negoDecide(now, negoReq("node-b", "codex", 1, "f.go"), "")
+	if !d.granted {
+		t.Fatal("released lock still held")
+	}
+}

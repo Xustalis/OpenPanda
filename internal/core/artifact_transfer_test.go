@@ -310,4 +310,3 @@ func TestImportFatBundleArtifacts(t *testing.T) {
 		t.Fatalf("artifact not present or size mismatch: ok=%v, size=%d, want %d", ok, size, manifest.Size)
 	}
 }
-

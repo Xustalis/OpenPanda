@@ -96,4 +96,3 @@ func TestVerifyHelloPWithNonce(t *testing.T) {
 		t.Fatalf("stale nonce-bound hello must be rejected")
 	}
 }
-

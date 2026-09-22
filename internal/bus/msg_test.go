@@ -72,4 +72,3 @@ func TestEnvelopeRequiresMsgID(t *testing.T) {
 		t.Fatalf("expected error when msgID is empty, got nil")
 	}
 }
-

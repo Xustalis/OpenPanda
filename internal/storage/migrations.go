@@ -41,6 +41,39 @@ var migrations = []Migration{
 	{Version: 16, Name: "add_delegation_metrics_cost", Apply: migrateV16},
 	{Version: 17, Name: "add_task_approval_disposition", Apply: migrateV17},
 	{Version: 18, Name: "add_task_outbox", Apply: migrateV18},
+	{Version: 19, Name: "add_dtn_mesh_columns", Apply: migrateV19},
+}
+
+// migrateV19 gives the mesh/DTN machinery its durable fields (whitepaper
+// §6.1, §8.2, §8.3, §4.1):
+//   - tasks.transport / deadline_unix / delegation_budget: the DTN mode flag,
+//     the absolute bundle TTL, and the remaining mesh-wide delegation budget
+//     were previously wire-only/struct-only — a restart forgot them.
+//   - task_outbox.payload_blob: the CBOR-encoded fat bundle, kept beside the
+//     JSON payload so older peers still decode the row.
+//   - employee_cache.neighbors_json: the link-state advertisement a node
+//     gossips in hello — the peer ids it can currently reach — which is what
+//     turns the directory from a star into a routable graph.
+func migrateV19(tx MigrationExec) error {
+	for _, c := range []struct{ table, column, decl string }{
+		{"tasks", "transport", "TEXT NOT NULL DEFAULT 'live'"},
+		{"tasks", "deadline_unix", "INTEGER NOT NULL DEFAULT 0"},
+		{"tasks", "delegation_budget", "INTEGER NOT NULL DEFAULT 0"},
+		{"task_outbox", "payload_blob", "BLOB"},
+		{"employee_cache", "neighbors_json", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		exists, err := tableExistsTx(tx, c.table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if err := addColumnIfMissingTx(tx, c.table, c.column, c.decl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV18 adds task_outbox: universal relay outbox for DTN and store-and-forward tasks (whitepaper §8.2).

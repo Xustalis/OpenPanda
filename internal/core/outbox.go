@@ -13,6 +13,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -122,16 +123,18 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 	type taskEntry struct {
 		taskID string
 		raw    string
+		blob   []byte
+		ttl    int64
 	}
 	var taskEntries []taskEntry
 	trows, err := c.db.QueryContext(ctx,
-		`SELECT task_id, payload_json FROM task_outbox WHERE peer = ?`, peer)
+		`SELECT task_id, payload_json, payload_blob, ttl FROM task_outbox WHERE peer = ?`, peer)
 	if err != nil {
 		c.logger.Warn("outbox: query tasks", "peer", peer, "err", err)
 	} else {
 		for trows.Next() {
 			var e taskEntry
-			if err := trows.Scan(&e.taskID, &e.raw); err != nil {
+			if err := trows.Scan(&e.taskID, &e.raw, &e.blob, &e.ttl); err != nil {
 				trows.Close()
 				c.logger.Warn("outbox: scan tasks", "peer", peer, "err", err)
 				return
@@ -147,8 +150,42 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 	go func() {
 		flushCtx := context.WithoutCancel(ctx)
 		for _, e := range taskEntries {
+			// §8.2 TTL: a bundle parked past its deadline is dead — delivering
+			// it now would run work whose result the mesh already abandoned.
+			// Drop the entry and expire the local copy so it stops occupying
+			// the dispatched slot it was parked under.
+			if e.ttl > 0 && time.Now().Unix() > e.ttl {
+				c.logger.Info("outbox: parked task past TTL, expiring", "task", e.taskID, "peer", peer)
+				c.taskOutboxDrop(flushCtx, peer, e.taskID)
+				if err := c.store.MarkExpired(flushCtx, e.taskID, "dtn TTL expired"); err != nil {
+					c.logger.Warn("outbox: mark expired", "task", e.taskID, "err", err)
+				}
+				continue
+			}
+			// The CBOR bundle is the authoritative record when present
+			// (§8.3): it carries its own TTL and signature, so a row that was
+			// tampered while parked fails closed here instead of executing
+			// forged work on delivery. payload_json is the legacy fallback.
+			raw := e.raw
+			if len(e.blob) > 0 {
+				bnd, berr := bus.UnmarshalBundle(e.blob)
+				if berr != nil {
+					c.logger.Warn("outbox: corrupt bundle, dropping", "task", e.taskID, "peer", peer, "err", berr)
+					c.taskOutboxDrop(flushCtx, peer, e.taskID)
+					continue
+				}
+				if verr := bnd.Verify([]byte(c.sharedSecret), time.Now().Unix()); verr != nil {
+					c.logger.Warn("outbox: bundle verify failed, dropping", "task", e.taskID, "peer", peer, "err", verr)
+					c.taskOutboxDrop(flushCtx, peer, e.taskID)
+					if err := c.store.MarkExpired(flushCtx, e.taskID, "bundle verify failed"); err != nil {
+						c.logger.Warn("outbox: mark expired", "task", e.taskID, "err", err)
+					}
+					continue
+				}
+				raw = string(bnd.Payload)
+			}
 			var p bus.TaskDelegatePayload
-			if err := json.Unmarshal([]byte(e.raw), &p); err != nil {
+			if err := json.Unmarshal([]byte(raw), &p); err != nil {
 				c.logger.Warn("outbox: bad parked task payload, dropping", "task", e.taskID, "peer", peer, "err", err)
 				c.taskOutboxDrop(flushCtx, peer, e.taskID)
 				continue
@@ -261,6 +298,9 @@ func (c *Core) deliverCancel(ctx context.Context, peer, taskID, reason string) b
 
 // taskOutboxPersist stores a forward task that could not be delivered immediately,
 // implementing the universal DTN store-and-forward relay outbox (whitepaper §8.2, §9.1).
+// The task is parked both as its JSON payload (legacy decode path) and as a
+// CBOR-signed DTN bundle (§8.3): EID addressing, absolute TTL and an HMAC that
+// keeps a parked row tamper-evident for as long as it waits.
 func (c *Core) taskOutboxPersist(ctx context.Context, peer string, p bus.TaskDelegatePayload, transportType string, ttl int64) {
 	if c.db == nil || peer == "" {
 		return
@@ -273,11 +313,19 @@ func (c *Core) taskOutboxPersist(ctx context.Context, peer string, p bus.TaskDel
 	if transportType == "" {
 		transportType = "dtn"
 	}
+	var blob []byte
+	if b, berr := bus.NewBundle(p.TaskID, bus.EID(c.nodeID), bus.EID(peer),
+		bus.MsgTaskDelegate, ttl, raw, []byte(c.sharedSecret)); berr == nil {
+		blob = b.Marshal()
+	} else {
+		c.logger.Warn("task_outbox: bundle wrap", "task", p.TaskID, "err", berr)
+	}
 	_, err = c.db.ExecContext(ctx,
-		`INSERT INTO task_outbox (peer, task_id, payload_json, transport_type, ttl, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(peer, task_id) DO UPDATE SET payload_json = excluded.payload_json, ttl = excluded.ttl`,
-		peer, p.TaskID, string(raw), transportType, ttl, storage.Now())
+		`INSERT INTO task_outbox (peer, task_id, payload_json, payload_blob, transport_type, ttl, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(peer, task_id) DO UPDATE SET payload_json = excluded.payload_json,
+			payload_blob = excluded.payload_blob, ttl = excluded.ttl`,
+		peer, p.TaskID, string(raw), blob, transportType, ttl, storage.Now())
 	if err != nil {
 		c.logger.Warn("task_outbox: persist task", "task", p.TaskID, "peer", peer, "err", err)
 		return
@@ -315,4 +363,3 @@ func (c *Core) deliverTask(ctx context.Context, peer string, p bus.TaskDelegateP
 	}
 	return true
 }
-
