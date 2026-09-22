@@ -66,6 +66,16 @@ func WithResume(ctx context.Context, sessionID string) context.Context {
 	return context.WithValue(ctx, resumeKey{}, sessionID)
 }
 
+// ResumeID reads the session id WithResume attached — "" when none. The
+// adapter runner and tests use it to observe what the supervision loop
+// threaded through.
+func ResumeID(ctx context.Context) string {
+	if v, ok := ctx.Value(resumeKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
 // toolsPolicyKey carries the router's agent tools policy (minimal |
 // extended) down to the adapter request without widening the runAdapter
 // test seam's signature.

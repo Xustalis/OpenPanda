@@ -439,6 +439,44 @@ type ArtifactChunkPayload struct {
 // wire — comfortably under the cap even with the envelope around it.
 const ArtifactChunkBytes = 1 << 20
 
+// ArtifactPushPayload is one proactively-pushed artifact chunk (§8.3
+// fat-push). It mirrors the pull-side chunk shape minus the answer fields:
+// Offset positions the bytes inside the archive named by Hash, and Total is
+// the archive's full size so the receiver can bound and complete the staged
+// copy. Chunks are sent in order on an ordered lane, but the receiver
+// tolerates duplicates and gaps — its contiguous-progress status reply is
+// the authoritative resume point.
+type ArtifactPushPayload struct {
+	TaskID string `json:"task_id"`
+	Hash   string `json:"hash"`
+	Offset int64  `json:"offset"`
+	Data   []byte `json:"data"`
+	Total  int64  `json:"total"`
+}
+
+// ArtifactPushStatusPayload is the receiver's custody report: how many
+// contiguous bytes of Hash it holds, counted from offset 0. The sender-side
+// outbox retires rows only as this number covers them, which is what makes a
+// send-then-crash recoverable — an unacknowledged chunk is resent on the
+// next flush rather than leaving a permanent gap in the staged copy.
+type ArtifactPushStatusPayload struct {
+	TaskID          string `json:"task_id"`
+	Hash            string `json:"hash"`
+	ReceivedThrough int64  `json:"received_through"`
+}
+
+// ArtifactPushDonePayload ends one push: the staged archive verified against
+// its content hash and entered the receiver's pool (OK), or staging failed
+// and the sender should stop spending bandwidth on it. A receiver that
+// already holds the artifact answers OK immediately, which is also how a
+// sender learns it can retire rows for a peer that finished long ago.
+type ArtifactPushDonePayload struct {
+	TaskID string `json:"task_id"`
+	Hash   string `json:"hash"`
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
+}
+
 // FatBundleArtifact carries an inline artifact payload for proactive push-based DTN delivery (whitepaper §8.3).
 type FatBundleArtifact struct {
 	Hash string `json:"hash"`

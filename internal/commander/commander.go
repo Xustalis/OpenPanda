@@ -36,6 +36,15 @@ type Router struct {
 	// .mcp.json in the agent's work directory before the run, so agents that
 	// discover project MCP configs can reach the node's server. Empty = none.
 	mcpCommand string
+	// pandaTools gates the openpanda self-management server in the same
+	// .mcp.json (routing.panda_tools, default on). It only ever applies
+	// under the extended tools policy — minimal-policy runs get neither
+	// server.
+	pandaTools bool
+	// selfConfigPath is forwarded to `panda mcp --config` inside the
+	// generated .mcp.json so the self-tools server resolves the same
+	// config the daemon loaded. Empty = the server's own default discovery.
+	selfConfigPath string
 	// preferred lists agent names that receive a score bonus during routing.
 	preferred []string
 	// probeAgent reports whether an agent's CLI is usable on this machine.
@@ -58,6 +67,7 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 		model:          model,
 		injectionModel: injection.NormalizedModel(),
 		toolsPolicy:    routing.NormalizedToolsPolicy(),
+		pandaTools:     routing.NormalizedPandaTools(),
 		preferred:      routing.PreferredAgents,
 	}
 	r.runAdapter = r.runAdapterDefault
@@ -74,6 +84,7 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 func (r *Router) SetPolicy(injection config.InjectionConfig, routing config.RoutingConfig) {
 	r.injectionModel = injection.NormalizedModel()
 	r.toolsPolicy = routing.NormalizedToolsPolicy()
+	r.pandaTools = routing.NormalizedPandaTools()
 	r.preferred = routing.PreferredAgents
 }
 
@@ -85,9 +96,21 @@ func (r *Router) SetMCPPassthrough(command string) {
 	r.mcpCommand = strings.TrimSpace(command)
 }
 
+// SetSelfConfigPath records the daemon's --config path so the generated
+// .mcp.json can pass it to `panda mcp`. Empty means the self-tools server
+// falls back to the same default discovery every CLI command uses.
+func (r *Router) SetSelfConfigPath(path string) {
+	r.selfConfigPath = strings.TrimSpace(path)
+}
+
 // ToolsPolicy reports the normalized agent tools policy the router runs
 // adapters under (config routing.tools_policy).
 func (r *Router) ToolsPolicy() string { return r.toolsPolicy }
+
+// PandaTools reports whether the openpanda self-management server is
+// enabled (routing.panda_tools). Still gated on the extended tools policy
+// by the caller.
+func (r *Router) PandaTools() bool { return r.pandaTools }
 
 // SetAdapterRunner overrides the agent adapter invocation. It is a test seam:
 // suites that need to exercise agent execution without spawning a real LLM CLI

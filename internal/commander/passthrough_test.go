@@ -138,6 +138,85 @@ func TestMaterializeMCPPassthrough(t *testing.T) {
 	}
 }
 
+// TestMaterializeSelfTools covers the openpanda self-management server the
+// router adds under the extended policy: it appears next to the configured
+// passthrough by default, carries `mcp --config <path>` when the daemon ran
+// with --config, and disappears under routing.panda_tools=false — leaving
+// the configured server, or no file at all if none is set.
+func TestMaterializeSelfTools(t *testing.T) {
+	read := func(t *testing.T, dir string) map[string]struct {
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	} {
+		t.Helper()
+		blob, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
+		if err != nil {
+			t.Fatalf("read .mcp.json: %v", err)
+		}
+		var cfg struct {
+			MCPServers map[string]struct {
+				Command string   `json:"command"`
+				Args    []string `json:"args"`
+			} `json:"mcpServers"`
+		}
+		if err := json.Unmarshal(blob, &cfg); err != nil {
+			t.Fatalf(".mcp.json not JSON: %v", err)
+		}
+		return cfg.MCPServers
+	}
+
+	// Extended default (panda_tools unset): openpanda rides alongside the
+	// configured server, its command is this binary running `mcp`.
+	dir := t.TempDir()
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{},
+		config.InjectionConfig{}, config.RoutingConfig{ToolsPolicy: "extended"})
+	r.SetMCPPassthrough("npx server-x")
+	r.SetSelfConfigPath("/etc/panda/config.yaml")
+	cleanup := r.materializeMCPPassthrough("claude_code.py", dir)
+	servers := read(t, dir)
+	self, ok := servers["openpanda"]
+	if !ok {
+		t.Fatalf("openpanda server missing under extended default: %+v", servers)
+	}
+	if exe, _ := os.Executable(); self.Command != exe {
+		t.Fatalf("openpanda command = %q, want test binary %q", self.Command, exe)
+	}
+	if got := strings.Join(self.Args, " "); got != "mcp --config /etc/panda/config.yaml" {
+		t.Fatalf("openpanda args = %q, want %q", got, "mcp --config /etc/panda/config.yaml")
+	}
+	if _, ok := servers["panda"]; !ok {
+		t.Fatalf("configured passthrough server missing: %+v", servers)
+	}
+	cleanup()
+
+	// Opt-out: panda_tools=false drops openpanda but keeps the configured
+	// passthrough server — extended tools stay, self-management closes.
+	dir = t.TempDir()
+	off := false
+	r = NewRouter(testCard(), NewExecutor(), config.ModelConfig{},
+		config.InjectionConfig{}, config.RoutingConfig{ToolsPolicy: "extended", PandaTools: &off})
+	r.SetMCPPassthrough("npx server-x")
+	cleanup = r.materializeMCPPassthrough("claude_code.py", dir)
+	servers = read(t, dir)
+	if _, ok := servers["openpanda"]; ok {
+		t.Fatalf("openpanda must be absent with panda_tools=false: %+v", servers)
+	}
+	if _, ok := servers["panda"]; !ok {
+		t.Fatalf("configured server must survive panda_tools=false: %+v", servers)
+	}
+	cleanup()
+
+	// Opt-out + nothing configured: no file at all.
+	dir = t.TempDir()
+	r2 := NewRouter(testCard(), NewExecutor(), config.ModelConfig{},
+		config.InjectionConfig{}, config.RoutingConfig{ToolsPolicy: "extended", PandaTools: &off})
+	cleanup = r2.materializeMCPPassthrough("claude_code.py", dir)
+	if _, err := os.Stat(filepath.Join(dir, ".mcp.json")); !os.IsNotExist(err) {
+		t.Fatalf("no servers configured and panda_tools off must not write .mcp.json")
+	}
+	cleanup()
+}
+
 // TestExtendedRunThreadsRequestAndMCP drives the REAL process path with the
 // extended policy: the stub adapter reads the request JSON (resume +
 // tools_policy must arrive), sees the .mcp.json present during the run, and
