@@ -25,6 +25,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/projects"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -172,6 +173,24 @@ type Core struct {
 	// queued after a restart, so the rescue sweep gives it a grace window to
 	// find a new route before failing it (S1-1). Guarded by mu.
 	orphanSeen map[string]time.Time
+
+	// stateWin is the per-project/plan sliding window of recent work-tree
+	// content hashes backing the §6.2 monotonic-progress check (see
+	// stateOscillates). In-memory by design: the window bounds the lifetime
+	// of the checking process, and a restart rebuilding it from live trees
+	// costs nothing but a slightly younger window.
+	stateMu  sync.Mutex
+	stateWin map[string][]string
+
+	// nego is the §5/§6.3 peer-negotiation state: nego is the scope lock
+	// table, negoWait the wait-for edges (waiter -> holders) whose cycles the
+	// arbitrator breaks, and negoWaiters the synchronous outbound negotiate
+	// calls awaiting a grant reply (lock id -> result chan). All lazily
+	// initialized under negoMu.
+	negoMu      sync.Mutex
+	nego        map[string]*negoLock
+	negoWait    map[string]map[string]bool
+	negoWaiters map[string]chan bus.AgentGrantPayload
 
 	// peerBlocked maps peer node id -> agent names that peer's heartbeats
 	// report as circuit-open, so routing can strip them from the peer's
@@ -741,8 +760,18 @@ func (c *Core) RunMonitor(ctx context.Context) {
 					// scheduler blocked in Submit unblocks (D3). relayToParent is
 					// a no-op for a root task; signalResult no-ops without a waiter.
 					if tk, err := c.store.Get(ctx, id); err == nil {
+						// Report the state the row actually reached: a lease
+						// expiry is a failure, a deadline is 'expired' — the
+						// delegator renders them differently and only the row
+						// knows which sweep fired.
+						state, stderr := tk.State, "lease expired"
+						if state == StateExpired {
+							stderr = "deadline exceeded"
+						} else {
+							state = StateFailed
+						}
 						res := bus.TaskResultPayload{
-							TaskID: id, AttemptID: tk.AttemptID, State: StateFailed, OK: false, ExitCode: 1, Stderr: "lease expired",
+							TaskID: id, AttemptID: tk.AttemptID, State: state, OK: false, ExitCode: 1, Stderr: stderr,
 							Chain: tk.Chain,
 						}
 						c.relayToParent(ctx, bus.MsgTaskResult, tk.Chain, res)
@@ -854,6 +883,9 @@ func (c *Core) removePeerForConn(conn *bus.Conn) {
 		if err := ledger.MarkOffline(c.db, id); err != nil {
 			c.logger.Warn("mark peer offline", "peer", id, "err", err)
 		}
+	}
+	if len(gone) > 0 {
+		c.refreshSelfNeighbors(context.Background())
 	}
 }
 
@@ -1013,7 +1045,30 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
 		old.conn.Close()
 	}
 	c.logger.Info("peer registered", "peer", id, "active", n)
+	c.refreshSelfNeighbors(context.Background())
 	return true
+}
+
+// refreshSelfNeighbors writes this node's live peer set into its own
+// directory row's neighbors_json — the self-edge of the link-state graph the
+// routing layer's multi-hop search reads (§9.3). Best-effort: a failed write
+// just leaves the last advertisement in place.
+func (c *Core) refreshSelfNeighbors(ctx context.Context) {
+	if c.db == nil {
+		return
+	}
+	raw, err := json.Marshal(c.livePeerIDs())
+	if err != nil {
+		return
+	}
+	row := c.nodeID
+	if base, ok := scheduler.EphemeralBase(c.nodeID); ok {
+		row = base
+	}
+	if _, err := c.db.ExecContext(ctx,
+		`UPDATE employee_cache SET neighbors_json=? WHERE id=?`, string(raw), row); err != nil {
+		c.logger.Debug("refresh self neighbors", "err", err)
+	}
 }
 
 // msgDedupWindow is how long a received message id is remembered. It must
@@ -1268,6 +1323,49 @@ func (c *Core) connFor(from string) *bus.Conn {
 	return nil
 }
 
+// stateWindowCap is the sliding window of recent tree states kept per
+// project/plan for the §6.2 monotonic-progress check. Five is the doc's
+// window: long enough to catch A→B→A regressions, short enough that a slow
+// legitimate convergence never trips it.
+const stateWindowCap = 5
+
+// stateHashMaxFiles bounds the per-round tree hash: a work dir larger than
+// this skips the oscillation check rather than paying an unbounded hash walk
+// every supervision round.
+const stateHashMaxFiles = 20000
+
+// stateOscillates records the content hash of a task's work tree and reports
+// whether the tree regressed to an earlier state — agent B undoing agent A's
+// fix — which is the "logical oscillation" the check exists to kill (§6.2).
+// A repeat of the *latest* state means the tree did not move at all: that is
+// stagnation, which the supervision loop's own detector adjudicates, so it is
+// deliberately not flagged here. key is per project or plan.
+func (c *Core) stateOscillates(key, hash string) bool {
+	if key == "" || hash == "" {
+		return false
+	}
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.stateWin == nil {
+		c.stateWin = make(map[string][]string)
+	}
+	w := c.stateWin[key]
+	if n := len(w); n > 0 && w[n-1] == hash {
+		return false // no movement
+	}
+	for _, h := range w {
+		if h == hash {
+			return true // regressed to a state this window already saw
+		}
+	}
+	w = append(w, hash)
+	if len(w) > stateWindowCap {
+		w = w[len(w)-stateWindowCap:]
+	}
+	c.stateWin[key] = w
+	return false
+}
+
 // sendTo sends env to peer id. Returns ErrNoPeer if unknown.
 func (c *Core) sendTo(id string, env bus.Envelope) error {
 	conn := c.connFor(id)
@@ -1332,6 +1430,13 @@ func (c *Core) summary() ledger.CapabilitySummary {
 	for _, m := range card.Manual {
 		s.ManualIDs = append(s.ManualIDs, m.ID)
 	}
+	for _, a := range card.Actuators {
+		s.ActuatorIDs = append(s.ActuatorIDs, a.ID)
+	}
+	// §9.3 link-state advertisement: the live peer set is this node's edge
+	// list in the mesh routing graph. Published in the hello so every peer's
+	// directory learns the topology, not just this node's abilities.
+	s.Neighbors = c.livePeerIDs()
 	return s
 }
 

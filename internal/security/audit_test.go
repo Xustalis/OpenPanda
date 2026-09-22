@@ -143,4 +143,3 @@ func TestAuditRecordConcurrentNoFork(t *testing.T) {
 		t.Fatalf("verify chain after concurrent records: %v", err)
 	}
 }
-

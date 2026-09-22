@@ -190,6 +190,10 @@ type Task struct {
 	Transport string
 	// DeadlineUnix is the absolute TTL expiration timestamp for DTN tasks (§8.2).
 	DeadlineUnix int64
+	// DelegationBudget is the remaining mesh-wide delegation quota (§6.1):
+	// each forward hop decrements it, and a task that runs out may no longer
+	// be delegated — the mesh-wide convergence bound alongside MaxChainDepth.
+	DelegationBudget int
 }
 
 // GetUserLocale returns the task's language preference as an i18n.Locale,

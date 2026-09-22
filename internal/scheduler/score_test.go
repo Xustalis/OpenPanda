@@ -105,4 +105,3 @@ func TestWaitSignalClampsNegative(t *testing.T) {
 		t.Fatalf("waitSignal must not exceed 1.0, got %v", scoreNeg)
 	}
 }
-

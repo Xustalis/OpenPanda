@@ -319,4 +319,3 @@ func TestTierFromCommandSubVerbsAndPowerGating(t *testing.T) {
 		}
 	}
 }
-

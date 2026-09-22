@@ -94,6 +94,17 @@ func hasCJK(s string) bool {
 // Empty reports whether the scope declares no restriction.
 func (s *Scope) Empty() bool { return s == nil || len(s.roots) == 0 }
 
+// Roots returns the declared scope roots — the path set peer negotiation
+// (whitepaper §5.1) locks against.
+func (s *Scope) Roots() []string {
+	if s == nil {
+		return nil
+	}
+	out := make([]string, len(s.roots))
+	copy(out, s.roots)
+	return out
+}
+
 // Contains reports whether relPath (a slash-separated path relative to the
 // working directory) is within any declared root. A root matches either the
 // exact path or, when it names a directory, every descendant.

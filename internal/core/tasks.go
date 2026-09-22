@@ -169,7 +169,8 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 			&requiresJSON, &approvalDisposition, &operationDecision, &lease,
 			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
-			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt)
+			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
+			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget)
 	if err != nil {
 		return Task{}, err
 	}
@@ -1140,13 +1141,26 @@ func (s *TaskStore) SetDetail(ctx context.Context, taskID string, d TaskDetail) 
 	}
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE tasks SET context_type=?, context_hash=?, intent=?, spec_json=?, complexity=?,
-			risk=?, resource_json=?, requires_json=?, updated_at=?
+			risk=?, resource_json=?, requires_json=?, transport=?, deadline_unix=?, updated_at=?
 		WHERE task_id=?`,
 		d.ContextType, d.ContextHash, d.Intent, d.SpecJSON, d.Complexity, d.Risk, d.ResourceJSON,
-		string(requiresJSON),
+		string(requiresJSON), d.Transport, d.DeadlineUnix,
 		s.now(), taskID)
 	if err != nil {
 		return fmt.Errorf("set detail: %w", err)
+	}
+	return nil
+}
+
+// SetDelegationBudget persists the remaining mesh-wide delegation budget the
+// task carries (whitepaper §6.1). Stamped on creation — locally at submit,
+// remotely when a delegate envelope adopts the payload's budget — so a
+// restarted node cannot re-mint budget the mesh already spent.
+func (s *TaskStore) SetDelegationBudget(ctx context.Context, taskID string, budget int) error {
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET delegation_budget=?, updated_at=? WHERE task_id=?`,
+		budget, s.now(), taskID); err != nil {
+		return fmt.Errorf("set delegation budget: %w", err)
 	}
 	return nil
 }
@@ -1351,7 +1365,60 @@ func (s *TaskStore) ExpireTasks(ctx context.Context) ([]string, error) {
 		failed = append(failed, id)
 		s.logger.Info("task failed by timeout", "task", id)
 	}
+	// §8.2 absolute deadline: a DTN task has no lease to expire — its bound is
+	// deadline_unix, shared verbatim across hops. Running tasks fail like a
+	// lease (the monitor cancels the subprocess); anything not yet running is
+	// marked expired outright — the bundle simply outlived its lifetime.
+	drows, err := s.db.QueryContext(ctx,
+		`SELECT task_id, state FROM tasks
+		 WHERE deadline_unix > 0 AND deadline_unix < ?
+		   AND state IN ('submitted','queued','dispatched','waiting_context','running','failed')`, now)
+	if err != nil {
+		return failed, fmt.Errorf("scan deadlines: %w", err)
+	}
+	type dexp struct{ id, state string }
+	var dexpired []dexp
+	for drows.Next() {
+		var e dexp
+		if err := drows.Scan(&e.id, &e.state); err != nil {
+			drows.Close()
+			return failed, err
+		}
+		dexpired = append(dexpired, e)
+	}
+	drows.Close()
+	for _, e := range dexpired {
+		if e.state == StateRunning {
+			if err := s.ForceFail(ctx, e.id, "deadline exceeded"); err != nil {
+				s.logger.Warn("expire task by deadline", "task", e.id, "err", err)
+				continue
+			}
+		} else if err := s.MarkExpired(ctx, e.id, "deadline exceeded"); err != nil {
+			s.logger.Warn("expire task by deadline", "task", e.id, "err", err)
+			continue
+		}
+		failed = append(failed, e.id)
+		s.logger.Info("task expired by deadline", "task", e.id)
+	}
 	return failed, nil
+}
+
+// MarkExpired moves a non-terminal task straight to expired, bypassing the
+// ordinary transition table: a deadline reached while dispatched or queued is
+// not a failure of the work, it is the bundle's lifetime ending — the
+// distinction the 'expired' state exists to carry.
+func (s *TaskStore) MarkExpired(ctx context.Context, taskID, reason string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET state='expired', lease_expires_at=NULL, updated_at=?
+		 WHERE task_id=? AND state NOT IN ('done','cancelled','expired')`,
+		s.now(), taskID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil
+	}
+	return s.recordEvent(ctx, taskID, "expired", map[string]any{"reason": reason})
 }
 
 // ForceFail fails an active task regardless of owner. Used by the timeout
@@ -1936,7 +2003,8 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	context_type, context_hash, complexity, risk, resource_json, requires_json,
 	approval_disposition, operation_decision_json, lease_expires_at, created_at, updated_at, authorized,
 	priority, seq, session_id, resource_keys_json, work_dir, scheduled,
-	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact`
+	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact,
+	transport, deadline_unix, delegation_budget`
 
 func scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task
@@ -1957,7 +2025,8 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 			&requiresJSON, &approvalDisposition, &operationDecision, &lease,
 			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
-			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt); err != nil {
+			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
+			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)

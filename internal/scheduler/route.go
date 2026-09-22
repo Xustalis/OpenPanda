@@ -220,6 +220,18 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 	if target != "" {
 		return Decision{Action: ActionForward, Target: target}
 	}
+	// §9.3 graph routing: no capable direct peer — walk the link-state graph
+	// the nodes' neighbor advertisements build (G=(V,E)) and forward to the
+	// first hop of the shortest path that reaches a capable node. The forward
+	// is an ordinary delegation: the receiving node runs its own Route and
+	// picks the next hop, so the path is computed hop-by-hop from the same
+	// directory view — which is also what keeps it loop-safe (AppendChain
+	// refuses revisits along the way).
+	if haveSelf {
+		if hop := graphFirstHop(selfNode, employees, seen, required, req); hop != "" {
+			return Decision{Action: ActionForward, Target: hop}
+		}
+	}
 	if sub, _ := pickBestScored(subs, now, preferred); sub != "" {
 		return Decision{Action: ActionForward, Target: sub}
 	}
@@ -227,6 +239,52 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 		Action: ActionDecline,
 		Reason: declineReason(required, req),
 	}
+}
+
+// graphFirstHop BFS-searches the link-state graph from self toward the
+// nearest online node that can run the task (ability match + hardware fit),
+// returning the first hop of that shortest path — the only hop this node
+// needs, since every relay re-runs Route on arrival. Edges are the nodes'
+// advertised Neighbors, restricted to rows that are online right now: a
+// stale advertisement names a dead link, and routing a task onto it parks it
+// in an outbox whose flush never comes.
+func graphFirstHop(self ledger.Node, employees []ledger.Node, seen map[string]bool, required []string, req ledger.ResourceProfile) string {
+	online := make(map[string]ledger.Node, len(employees))
+	for _, n := range employees {
+		online[n.ID] = n
+	}
+	type item struct{ id, first string }
+	visited := map[string]bool{self.ID: true}
+	var queue []item
+	for _, nb := range self.Neighbors {
+		if seen[nb] || visited[nb] {
+			continue
+		}
+		if _, ok := online[nb]; !ok {
+			continue
+		}
+		visited[nb] = true
+		queue = append(queue, item{id: nb, first: nb})
+	}
+	for len(queue) > 0 {
+		it := queue[0]
+		queue = queue[1:]
+		n := online[it.id]
+		if (len(required) == 0 || n.Matches(required)) && n.Fits(req) {
+			return it.first
+		}
+		for _, nb := range n.Neighbors {
+			if seen[nb] || visited[nb] {
+				continue
+			}
+			if _, ok := online[nb]; !ok {
+				continue
+			}
+			visited[nb] = true
+			queue = append(queue, item{id: nb, first: it.first})
+		}
+	}
+	return ""
 }
 
 // declineReason distinguishes "nobody has this ability" from "nobody has this

@@ -26,7 +26,7 @@ type HelloPayload struct {
 	NodeID string          `json:"node_id"`
 	Ver    string          `json:"ver"`
 	Card   json.RawMessage `json:"card,omitempty"`
-	Ts     int64           `json:"ts,omitempty"`   // unix seconds, bound into Sig
+	Ts     int64           `json:"ts,omitempty"`    // unix seconds, bound into Sig
 	Nonce  string          `json:"nonce,omitempty"` // per-dial random, bound into Sig when present
 	Sig    string          `json:"sig"`
 }
@@ -139,6 +139,19 @@ type TaskDelegatePayload struct {
 	BundledArtifacts []FatBundleArtifact `json:"bundled_artifacts,omitempty"`
 	// Transport specifies whether the delegation travels via live streaming or DTN ("live" or "dtn").
 	Transport string `json:"transport,omitempty"`
+	// DeadlineUnix is the absolute bundle TTL for DTN tasks (§8.2): past it
+	// the task is expired rather than lease-killed, because a store-and-forward
+	// path has no heartbeat to renew against.
+	DeadlineUnix int64 `json:"deadline_unix,omitempty"`
+	// Causal-depth and budget fields (§6.1). Depth is Parent.Depth+1 at every
+	// spawn hop, hard-capped by scheduler.MaxChainDepth. DelegationBudget is
+	// the remaining mesh-wide delegation quota: each forward decrements it,
+	// and a task that reaches zero may only execute or decline — never route
+	// onward. TokenBudget is the remaining LLM token quota the task may
+	// consume across the mesh; zero means unbounded (legacy peers).
+	Depth            int   `json:"depth,omitempty"`
+	DelegationBudget int   `json:"delegation_budget,omitempty"`
+	TokenBudget      int64 `json:"token_budget,omitempty"`
 }
 
 // clampForWire bounds the inline blobs a delegate can carry. An oversized
@@ -432,10 +445,14 @@ type AgentNegotiatePayload struct {
 }
 
 // AgentGrantPayload carries lease-based lock authorization or yield acknowledgement (whitepaper §5.2).
+// Denied/Reason make an explicit negative verdict distinguishable from a
+// missing reply — older peers that always grant simply leave them zero.
 type AgentGrantPayload struct {
 	LockID    string `json:"lock_id"`
 	GrantedTo string `json:"granted_to"`
 	LeaseMS   int64  `json:"lease_ms"`
+	Denied    bool   `json:"denied,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 // AgentYieldPayload indicates an agent has halted at an AST checkpoint and ceded execution.

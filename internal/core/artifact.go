@@ -98,6 +98,50 @@ func (c *Core) ImportFatBundleArtifacts(ctx context.Context, artifacts []bus.Fat
 	return manifests, nil
 }
 
+// fatBundleCap bounds the total bytes one delegate's BundledArtifacts may
+// carry (§8.3). JSON base64 inflates a byte to 4/3 on the wire and a frame
+// must stay under readLimit, so 2 MiB of raw artifact stays comfortably
+// deliverable inside one envelope.
+const fatBundleCap = 2 << 20
+
+// attachFatBundle populates p.BundledArtifacts with the artifacts the payload
+// already references — the context snapshot and every declared input — so a
+// DTN delegate arrives self-contained and the executor can start with zero
+// network round trips (§8.3). Hashes this node does not hold are skipped:
+// content addressing means the receiver can still pull them later from any
+// node that does, and a missing bundle entry degrades to the fetch path
+// rather than failing the delegation.
+func (c *Core) attachFatBundle(ctx context.Context, p *bus.TaskDelegatePayload) {
+	if c.artifacts == nil {
+		return
+	}
+	total := 0
+	add := func(hash string) {
+		if hash == "" || total >= fatBundleCap {
+			return
+		}
+		for _, b := range p.BundledArtifacts {
+			if b.Hash == hash {
+				return // already bundled by an earlier step
+			}
+		}
+		f, err := c.artifacts.Open(hash)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		data, err := io.ReadAll(io.LimitReader(f, int64(fatBundleCap-total)+1))
+		if err != nil || len(data) == 0 || len(data) > fatBundleCap-total {
+			return
+		}
+		p.BundledArtifacts = append(p.BundledArtifacts, bus.FatBundleArtifact{Hash: hash, Data: data})
+		total += len(data)
+	}
+	add(p.ContextHash)
+	for _, in := range p.Inputs {
+		add(in.Hash)
+	}
+}
 
 // artifactKey names an in-flight transfer. The pair is the key, not the hash
 // alone: two stages of different plans may legitimately pull the same artifact,

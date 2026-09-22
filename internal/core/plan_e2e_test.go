@@ -302,5 +302,3 @@ func TestSpawnChildTaskSubMain(t *testing.T) {
 		t.Fatalf("expected non-empty chain on child task")
 	}
 }
-
-

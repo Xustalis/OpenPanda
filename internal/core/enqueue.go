@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
@@ -268,6 +269,12 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		PlanID:  t.PlanID,
 		StageID: t.StageID,
 		Inputs:  t.Inputs,
+		// §6.1/§8.2: the queue path carries the same mesh contract as the
+		// synchronous dispatch — depth, remaining budget, transport, deadline.
+		Transport:        t.Transport,
+		DeadlineUnix:     t.DeadlineUnix,
+		Depth:            len(chain),
+		DelegationBudget: t.DelegationBudget,
 	}
 	// Same project carriage as the synchronous path: a queued task delegated to a
 	// peer must arrive with its project context or the peer cannot use it.
@@ -294,16 +301,32 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 // authenticates the peer's result/decline) and stamps a lease so a dead
 // executor is detected (D3).
 func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p bus.TaskDelegatePayload) error {
+	// §6.1: a queue forward spends the same budget a synchronous dispatch does
+	// — the paths are interchangeable, so the bound must be too.
+	remaining, err := c.delegationBudget(ctx, taskID, p.DelegationBudget)
+	if err != nil {
+		return err
+	}
+	p.DelegationBudget = remaining
+	if err := c.store.SetDelegationBudget(ctx, taskID, remaining); err != nil {
+		c.logger.Warn("persist delegation budget", "task", taskID, "err", err)
+	}
 	if err := c.store.RetargetDelegation(ctx, taskID, target); err != nil {
 		return fmt.Errorf("retarget: %w", err)
 	}
-	timeoutMS := p.TimeoutMS
-	if timeoutMS <= 0 {
-		timeoutMS = c.lease().Milliseconds()
-		p.TimeoutMS = timeoutMS
-	}
-	if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
-		return fmt.Errorf("set lease: %w", err)
+	dtn := p.Transport == "dtn"
+	if !dtn {
+		// A DTN task is lease-exempt (§8.2): the absolute deadline is its bound.
+		timeoutMS := p.TimeoutMS
+		if timeoutMS <= 0 {
+			timeoutMS = c.lease().Milliseconds()
+			p.TimeoutMS = timeoutMS
+		}
+		if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
+			return fmt.Errorf("set lease: %w", err)
+		}
+	} else {
+		c.attachFatBundle(ctx, &p)
 	}
 	msgID, err := newUUID()
 	if err != nil {
@@ -315,6 +338,21 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 	}
 	env.To = target
 	if err := c.sendTo(target, env); err != nil {
+		if dtn {
+			// §8.2 store-and-forward: an undeliverable DTN task parks in the
+			// outbox for the peer's next reconnect instead of falling back to
+			// local execution — the task chose delay-tolerant delivery, and
+			// the retarget pointing at the peer stays true: the outbox flush
+			// IS this node holding the task for that peer.
+			deadline := p.DeadlineUnix
+			if deadline <= 0 {
+				deadline = time.Now().Add(defaultDTNTTL).Unix()
+			}
+			c.taskOutboxPersist(ctx, target, p, "dtn", deadline)
+			c.logger.Info("queue: task parked in task_outbox for DTN relay",
+				"task", taskID, "target", target, "err", err)
+			return nil
+		}
 		// The send failed, so the peer never received the task — but the audit
 		// trail already records IT as the delegation target. Leaving that in
 		// place makes DispatchTarget authenticate a non-executor and makes the

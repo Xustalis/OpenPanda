@@ -34,6 +34,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/plan"
@@ -736,17 +737,21 @@ func (c *Core) sweepPlans(ctx context.Context) {
 // SpawnChildTask creates a child task under parentID, implementing the Sub-MainAgent
 // recursive delegation model (whitepaper §4.2). The executing node promotes itself to
 // Sub-MainAgent, spawning child causal tasks with bounded depth.
+//
+// The child inherits the parent's causal chain verbatim — the chain records
+// the delegation path, and its tail is already this node (the Sub-MainAgent
+// that received the parent). Appending self again would forge an immediate
+// self-loop; resetting it would launder the mesh-wide loop history. The next
+// hop is appended by whoever forwards the child, and the parent's remaining
+// mesh budget carries over (§6.1): the budget is spent at dispatchDelegated,
+// not here, so a locally-run child costs nothing.
 func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput) (Task, error) {
 	parent, err := c.store.Get(ctx, parentID)
 	if err != nil {
 		return Task{}, fmt.Errorf("load parent task %s: %w", parentID, err)
 	}
-	if len(parent.Chain) >= scheduler.MaxChainDepth {
-		return Task{}, scheduler.ErrChainTooDeep
-	}
-	// Inherit chain and append current node as local Sub-Main delegator
-	newChain, err := scheduler.AppendChain(parent.Chain, c.nodeID)
-	if err != nil {
+	newChain := append([]string(nil), parent.Chain...)
+	if len(newChain) == 0 {
 		newChain = []string{c.nodeID}
 	}
 	t, err := c.store.Create(ctx, parentID, in.Project, in.Title, c.nodeID, newChain)
@@ -758,11 +763,172 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 	}
 	_ = c.store.SetAuthorized(ctx, t.TaskID, in.Authorized)
 	_ = c.store.SetDetail(ctx, t.TaskID, in.detail())
+	// A pre-budget parent (delegation_budget=0, e.g. a row minted before v19)
+	// carries the default; its child's dispatch still decrements normally.
+	budget := parent.DelegationBudget
+	if budget <= 0 {
+		budget = scheduler.MaxDelegationBudget
+	}
+	if err := c.store.SetDelegationBudget(ctx, t.TaskID, budget); err != nil {
+		c.logger.Warn("persist child delegation budget", "task", t.TaskID, "err", err)
+	}
 	c.EvTrace(ctx, t.TaskID, "spawn_child_task", map[string]any{
 		"parent_id": parentID,
 		"sub_main":  c.nodeID,
 		"chain":     newChain,
+		"budget":    budget,
 	})
 	return t, nil
 }
 
+// DispatchChild routes a spawned child the way Submit routes a root task
+// (§4.2): the best-scored capable peer wins, with this node as an ordinary
+// candidate. A forwarded child is a normal delegation — its result returns
+// here via handleResult, where it both completes the local copy and unblocks
+// whatever spawned it. A local/declined child lands on the queue scheduler,
+// which runs it here (or re-routes via forwardScheduled on the next pass).
+func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) error {
+	decision := scheduler.Route(c.nodeID, child.Chain, c.onlineEmployees(ctx), c.localMatch(),
+		in.Requires, resourceRequirement(in.ResourceJSON), in.PreferredNode)
+	if decision.Action == scheduler.ActionForward {
+		payload := bus.TaskDelegatePayload{
+			TaskID:           child.TaskID,
+			ParentID:         child.ParentID,
+			Project:          in.Project,
+			Title:            child.Title,
+			ContextType:      in.ContextType,
+			ContextHash:      in.ContextHash,
+			Intent:           in.Intent,
+			SpecJSON:         in.SpecJSON,
+			Requires:         in.Requires,
+			Chain:            child.Chain,
+			PreferredNode:    in.PreferredNode,
+			Complexity:       in.Complexity,
+			Risk:             in.Risk,
+			ResourceJSON:     in.ResourceJSON,
+			AttemptID:        child.AttemptID,
+			Authorized:       in.Authorized,
+			Transport:        in.Transport,
+			DeadlineUnix:     in.DeadlineUnix,
+			Depth:            len(child.Chain),
+			DelegationBudget: child.DelegationBudget,
+		}
+		if in.Authorized {
+			payload.AuthHops = defaultConsentHops
+		}
+		if err := c.forwardDelegated(ctx, child.TaskID, decision.Target, payload, child.Chain); err != nil {
+			return fmt.Errorf("forward child to %s: %w", decision.Target, err)
+		}
+		c.logger.Info("child task delegated", "task", child.TaskID, "target", decision.Target, "parent", child.ParentID)
+		return nil
+	}
+	// Local path (or nobody capable): the queue scheduler adopts it and
+	// forwardScheduled re-routes on later passes — the same semantics an
+	// enqueued root task already has.
+	if err := c.store.SetQueueMeta(ctx, child.TaskID, PriorityNormal, "", "", nil); err != nil {
+		return fmt.Errorf("queue meta for child: %w", err)
+	}
+	if err := c.store.Queue(ctx, child.TaskID, c.nodeID); err != nil {
+		return fmt.Errorf("queue child: %w", err)
+	}
+	c.queueWake()
+	return nil
+}
+
+// delegateMarker is the wire-level protocol an agent uses to ask its
+// Sub-MainAgent runtime for a delegated sub-task (whitepaper §4.2). It is a
+// line prefix rather than a structured channel because the only medium every
+// adapter shares is the agent's own stdout: claude_code, codex and any future
+// harness can all emit a plain line without adapter support.
+const delegateMarker = "PANDA_DELEGATE "
+
+// delegateRequest is the parsed PANDA_DELEGATE payload.
+type delegateRequest struct {
+	Intent   string   `json:"intent"`
+	Requires []string `json:"requires,omitempty"`
+	Title    string   `json:"title,omitempty"`
+	Node     string   `json:"node,omitempty"`
+}
+
+// parseDelegateRequest extracts the first well-formed PANDA_DELEGATE line
+// from agent output and returns the output with marker lines removed, so the
+// protocol envelope never reaches the user-facing result. A malformed marker
+// line is left in place — silently eating an agent's words is worse than
+// showing a stray protocol line.
+func parseDelegateRequest(stdout string) (delegateRequest, string, bool) {
+	var dr delegateRequest
+	found := false
+	var kept []string
+	for _, line := range strings.Split(stdout, "\n") {
+		trim := strings.TrimSpace(line)
+		if !found && strings.HasPrefix(trim, delegateMarker) {
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(trim, delegateMarker)), &dr); err == nil && dr.Intent != "" {
+				found = true
+				continue
+			}
+		}
+		kept = append(kept, line)
+	}
+	return dr, strings.Join(kept, "\n"), found
+}
+
+// delegateChild is the run()-time half of the promotion protocol (§4.2): it
+// spawns the requested causal child, dispatches it to the best node, and
+// waits for the result so the caller can fold the product into the agent's
+// next prompt. The waiter is registered before dispatch so a fast local
+// child cannot signal into the void. The wait is bounded — a timeout does
+// not kill the child; it completes detached and its result still lands on
+// this node's copy and relays upstream by the chain.
+func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateRequest) (string, error) {
+	in := TaskInput{
+		Title:         dr.Title,
+		Intent:        dr.Intent,
+		Requires:      dr.Requires,
+		PreferredNode: dr.Node,
+		Project:       parent.Project,
+		Authorized:    parent.Authorized,
+		Transport:     parent.Transport,
+		DeadlineUnix:  parent.DeadlineUnix,
+		UserLocale:    parent.GetUserLocale(),
+	}
+	if in.Title == "" {
+		in.Title = dr.Intent
+		if len(in.Title) > 60 {
+			in.Title = in.Title[:60]
+		}
+	}
+	child, err := c.SpawnChildTask(ctx, parent.TaskID, in)
+	if err != nil {
+		return "", err
+	}
+	waiter := make(chan bus.TaskResultPayload, 1)
+	c.waiters.Store(child.TaskID, waiter)
+	defer c.waiters.Delete(child.TaskID)
+	if err := c.DispatchChild(ctx, child, in); err != nil {
+		return "", err
+	}
+	c.EvTrace(ctx, parent.TaskID, "delegate_request", map[string]any{
+		"child":    child.TaskID,
+		"requires": dr.Requires,
+		"node":     dr.Node,
+		"chain":    child.Chain,
+	})
+	timeout := c.lease()
+	if parent.DeadlineUnix > 0 {
+		if d := time.Until(time.Unix(parent.DeadlineUnix, 0)); d > 0 && d < timeout {
+			timeout = d
+		}
+	}
+	select {
+	case r := <-waiter:
+		out := r.Stdout
+		if s := strings.TrimSpace(r.Stderr); s != "" {
+			out += "\nstderr: " + s
+		}
+		return fmt.Sprintf("child task %s finished (state %s):\n%s", child.TaskID, r.State, out), nil
+	case <-time.After(timeout):
+		return fmt.Sprintf("child task %s is still running past the wait window; its result will arrive asynchronously.", child.TaskID), nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}

@@ -183,7 +183,7 @@ func (c *Core) EvaluateLinkState(ctx context.Context, targetNode string) LinkSta
 	conn := c.connFor(targetNode)
 	var lastSeen int64
 	if c.db != nil {
-		_ = c.db.QueryRowContext(ctx, `SELECT last_seen FROM employee_directory WHERE node_id = ?`, targetNode).Scan(&lastSeen)
+		_ = c.db.QueryRowContext(ctx, `SELECT last_seen FROM employee_cache WHERE id = ?`, targetNode).Scan(&lastSeen)
 	}
 	freshness := scheduler.Freshness(lastSeen, time.Now().Unix())
 	if conn != nil && freshness >= 0.5 {
@@ -194,4 +194,3 @@ func (c *Core) EvaluateLinkState(ctx context.Context, targetNode string) LinkSta
 	}
 	return LinkOffline
 }
-
