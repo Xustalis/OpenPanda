@@ -38,6 +38,12 @@ const (
 	MsgAgentNegotiate = "agent_negotiate"
 	MsgAgentGrant     = "agent_grant"
 	MsgAgentYield     = "agent_yield"
+	// MsgDTNBundle carries a signed CBOR DTN bundle (§8.3) on the wire: the
+	// bundle — not a plain task_delegate — is the canonical form a
+	// store-and-forward task takes once it leaves the origin, so a parked
+	// row redelivers byte-identical signed data and a live DTN dispatch is
+	// the same object as its outboxed copy.
+	MsgDTNBundle = "dtn_bundle"
 )
 
 // Envelope is the JSON wire format (design doc §10.3). MsgID is a UUIDv7

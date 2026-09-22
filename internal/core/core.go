@@ -240,6 +240,11 @@ type Core struct {
 	// running several agents must not multiply its event writes.
 	progressMu   sync.Mutex
 	lastProgress time.Time
+
+	// outboxFlushing marks peers whose outbox flush is currently running so
+	// the monitor tick's sweep cannot stack a second flush on top of it.
+	// Guarded by mu.
+	outboxFlushing map[string]bool
 }
 
 // defaultSuperviseRounds is the maximum number of execute → judge →
@@ -347,6 +352,9 @@ func (c *Core) ReloadCard(ctx context.Context, path string) error {
 	}
 	if dropped := card.PruneUnavailableNative(); len(dropped) > 0 {
 		c.logger.Warn("reloaded card: native abilities dropped: command not found on this host", "ids", strings.Join(dropped, ","))
+	}
+	if dropped := card.PruneUnavailableActuators(); len(dropped) > 0 {
+		c.logger.Warn("reloaded card: actuators dropped: command not found on this host", "ids", strings.Join(dropped, ","))
 	}
 	// Node kind/identity live in config, not the card file; carry them over
 	// exactly as the daemon's startup path does, or the re-registered row
@@ -580,9 +588,15 @@ func (c *Core) broadcastHeartbeat(ctx context.Context) {
 			c.logger.Warn("mint heartbeat id", "err", err)
 			return
 		}
+		lms := c.linkMetrics()
+		wireLinks := make([]bus.LinkMetric, len(lms))
+		for i, l := range lms {
+			wireLinks[i] = bus.LinkMetric{Peer: l.Peer, RTTms: l.RTTms}
+		}
 		env, err := bus.NewEnvelope(bus.MsgHeartbeat, c.nodeID, msgID, bus.HeartbeatPayload{
 			Status: "online", Load: load, Capacity: capJSON,
 			BlockedAgents: c.blockedAgents(),
+			Neighbors:     c.livePeerIDs(), Links: wireLinks,
 		})
 		if err != nil {
 			c.logger.Warn("build heartbeat", "err", err)
@@ -678,6 +692,25 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 		delete(c.peerBlocked, env.From)
 	}
 	c.mu.Unlock()
+	// Adjacency gossip (§4.1): the sender's edge set and its measured weights
+	// ride every beat so the directory's view of the link-state graph tracks
+	// the live topology instead of freezing at hello time.
+	if p.Neighbors != nil || p.Links != nil {
+		var nbJSON, linksJSON string
+		if p.Neighbors != nil {
+			if b, err := json.Marshal(p.Neighbors); err == nil {
+				nbJSON = string(b)
+			}
+		}
+		if p.Links != nil {
+			if b, err := json.Marshal(p.Links); err == nil {
+				linksJSON = string(b)
+			}
+		}
+		if err := ledger.UpdateAdjacency(c.db, env.From, nbJSON, linksJSON); err != nil {
+			c.logger.Warn("update adjacency", "from", env.From, "err", err)
+		}
+	}
 	// A card-carrying heartbeat is the peer announcing a hot reload: adopt
 	// its new capability summary right away instead of routing against the
 	// hello-time card until the next reconnect. Absent on ordinary beats —
@@ -732,6 +765,12 @@ func (c *Core) RunMonitor(ctx context.Context) {
 			// S1-4: directory rows for silently-dead peers stay online forever
 			// without a liveness sweep, and routing keeps aiming ghosts.
 			c.sweepStalePeers(ctx)
+			// §4.1: RTT samples land after the connect-time refresh, so the
+			// self row's link metrics need the periodic re-publish the tick
+			// provides; and any outbox entry whose peer reconnected between
+			// hellos is flushed here rather than waiting on a greeting.
+			c.refreshSelfNeighbors(ctx)
+			c.sweepOutboxes(ctx)
 			expired, err := c.store.ExpireTasks(ctx)
 			if err != nil {
 				c.logger.Warn("expire tasks", "err", err)
@@ -1049,10 +1088,11 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
 	return true
 }
 
-// refreshSelfNeighbors writes this node's live peer set into its own
-// directory row's neighbors_json — the self-edge of the link-state graph the
-// routing layer's multi-hop search reads (§9.3). Best-effort: a failed write
-// just leaves the last advertisement in place.
+// refreshSelfNeighbors writes this node's live peer set — and the measured
+// cost of each edge — into its own directory row's neighbors_json/links_json:
+// the self-edge of the weighted link-state graph the routing layer's
+// multi-hop search reads (§4.1, §9.3). Best-effort: a failed write just
+// leaves the last advertisement in place.
 func (c *Core) refreshSelfNeighbors(ctx context.Context) {
 	if c.db == nil {
 		return
@@ -1061,12 +1101,16 @@ func (c *Core) refreshSelfNeighbors(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	links, err := json.Marshal(c.linkMetrics())
+	if err != nil {
+		return
+	}
 	row := c.nodeID
 	if base, ok := scheduler.EphemeralBase(c.nodeID); ok {
 		row = base
 	}
 	if _, err := c.db.ExecContext(ctx,
-		`UPDATE employee_cache SET neighbors_json=? WHERE id=?`, string(raw), row); err != nil {
+		`UPDATE employee_cache SET neighbors_json=?, links_json=? WHERE id=?`, string(raw), string(links), row); err != nil {
 		c.logger.Debug("refresh self neighbors", "err", err)
 	}
 }
@@ -1130,6 +1174,8 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 		c.handleAgentGrant(ctx, env)
 	case bus.MsgAgentYield:
 		c.handleAgentYield(ctx, env)
+	case bus.MsgDTNBundle:
+		c.handleDTNBundle(ctx, env)
 	default:
 		c.logger.Warn("unhandled message type", "type", env.Type, "from", env.From)
 	}
@@ -1437,7 +1483,27 @@ func (c *Core) summary() ledger.CapabilitySummary {
 	// list in the mesh routing graph. Published in the hello so every peer's
 	// directory learns the topology, not just this node's abilities.
 	s.Neighbors = c.livePeerIDs()
+	s.Links = c.linkMetrics()
 	return s
+}
+
+// linkMetrics reports the measured edge weight (ping/pong RTT) to each live
+// peer (§4.1). Peers without a sample yet are omitted — the weighted router
+// prices an absent metric at the unknown-link default instead of recording
+// a fake zero, which would make an unmeasured link look free.
+func (c *Core) linkMetrics() []ledger.LinkMetric {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]ledger.LinkMetric, 0, len(c.peers))
+	for id, p := range c.peers {
+		if p.conn == nil {
+			continue
+		}
+		if rtt := p.conn.RTT(); rtt > 0 {
+			out = append(out, ledger.LinkMetric{Peer: id, RTTms: rtt.Milliseconds()})
+		}
+	}
+	return out
 }
 
 // helloCard marshals the capability summary for the hello payload.

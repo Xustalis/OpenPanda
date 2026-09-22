@@ -3,12 +3,14 @@ package bus
 import (
 	"context"
 	"crypto/tls"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/guard"
@@ -60,7 +62,8 @@ func qosForType(typ string) int {
 		return QoSControl
 	case MsgTaskDelegate, MsgTaskAccept, MsgTaskResult, MsgTaskProgress,
 		MsgTaskRetry, MsgTaskTransfer, MsgTaskResume,
-		MsgContextFetch, MsgContextAck, MsgAgentNegotiate, MsgJoin:
+		MsgContextFetch, MsgContextAck, MsgAgentNegotiate, MsgJoin,
+		MsgDTNBundle:
 		return QoSSignal
 	case MsgArtifactChunk, MsgArtifactFetch:
 		return QoSData
@@ -95,6 +98,9 @@ type Conn struct {
 	wake     chan struct{}
 	done     chan struct{}
 	doneOnce sync.Once
+	// rttNanos is the last measured ping/pong round trip (§4.1 link metric):
+	// nanoseconds, zero until the first pong answers a timestamped ping.
+	rttNanos atomic.Int64
 }
 
 // SetPeerID binds the authenticated node id to this connection (set once, at
@@ -128,12 +134,21 @@ func (c *Conn) Outbound() bool {
 
 func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
 	ws.SetReadLimit(readLimit)
-	ws.SetPongHandler(func(string) error {
+	c := &Conn{ws: ws, logger: logger, wake: make(chan struct{}, 1), done: make(chan struct{})}
+	ws.SetPongHandler(func(data string) error {
+		// A ping written by writeLoop carries its send time as 8 bytes of
+		// big-endian nanos; answering it gives the link its RTT sample.
+		if len(data) == 8 {
+			if sent := int64(binary.BigEndian.Uint64([]byte(data))); sent > 0 {
+				if rtt := time.Since(time.Unix(0, sent)); rtt > 0 {
+					c.rttNanos.Store(int64(rtt))
+				}
+			}
+		}
 		return ws.SetReadDeadline(time.Now().Add(pongWait))
 	})
 	// Initial deadline so a peer that never responds is detected promptly.
 	_ = ws.SetReadDeadline(time.Now().Add(pongWait))
-	c := &Conn{ws: ws, logger: logger, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	for i := range c.lanes {
 		c.lanes[i] = make(chan queuedWrite, qosLaneCap)
 	}
@@ -190,7 +205,9 @@ func (c *Conn) writeLoop() {
 		_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
 		var err error
 		if m.data == nil {
-			err = c.ws.WriteMessage(websocket.PingMessage, nil)
+			var ping [8]byte
+			binary.BigEndian.PutUint64(ping[:], uint64(time.Now().UnixNano()))
+			err = c.ws.WriteMessage(websocket.PingMessage, ping[:])
 		} else {
 			err = c.ws.WriteMessage(websocket.TextMessage, m.data)
 		}
@@ -269,6 +286,13 @@ func (c *Conn) Send(v any) error {
 // if they want a timeout.
 func (c *Conn) ReadJSON(v any) error {
 	return c.ws.ReadJSON(v)
+}
+
+// RTT returns the last measured ping/pong round trip on this link, or 0
+// before the first sample. It is the edge weight the mesh's weighted
+// shortest-path routing consumes (§4.1).
+func (c *Conn) RTT() time.Duration {
+	return time.Duration(c.rttNanos.Load())
 }
 
 // Close closes the underlying socket and fails the writer loop so queued

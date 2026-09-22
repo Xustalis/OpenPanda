@@ -117,6 +117,19 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		return
 	}
 
+	// §6.1 token budget: a task that arrives with its quota already spent is
+	// declined before any local resource goes to it. The budget is mesh-wide
+	// — accepting an exhausted one here would launder the bound into a fresh
+	// local quota.
+	if p.TokenBudget < 0 {
+		c.logger.Warn("task_delegate arrived with exhausted token budget",
+			"task", p.TaskID, "from", env.From)
+		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
+			TaskID: p.TaskID, Reason: "token budget exhausted",
+		})
+		return
+	}
+
 	t, err := c.store.CreateWithID(ctx, p.TaskID, p.ParentID, p.Project, p.TitleOrDefault(), c.nodeID, chain)
 	if err != nil {
 		c.logger.Error("create task from delegate", "err", err)
@@ -159,9 +172,22 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	// Adopt the mesh budget the payload carries (§6.1): the row's remaining
 	// delegation quota must reflect what the wire declared, or this node —
 	// and every restart after it — would spend budget the mesh already used.
-	if p.DelegationBudget > 0 {
-		if err := c.store.SetDelegationBudget(ctx, t.TaskID, p.DelegationBudget); err != nil {
-			c.logger.Warn("adopt delegation budget", "task", t.TaskID, "err", err)
+	// A nil budget marks a pre-budget peer: seed the default rather than
+	// persisting an exhaustion marker the sender never meant.
+	budget := scheduler.MaxDelegationBudget
+	if p.DelegationBudget != nil {
+		budget = *p.DelegationBudget
+	}
+	if err := c.store.SetDelegationBudget(ctx, t.TaskID, budget); err != nil {
+		c.logger.Warn("adopt delegation budget", "task", t.TaskID, "err", err)
+	}
+	// Same adoption for the token quota (§6.1): zero is the legacy/unbounded
+	// default the column already carries, so only a declared remainder needs
+	// persisting — and a negative wire value never reaches here (declined
+	// above).
+	if p.TokenBudget > 0 {
+		if err := c.store.SetTokenBudget(ctx, t.TaskID, p.TokenBudget); err != nil {
+			c.logger.Warn("adopt token budget", "task", t.TaskID, "err", err)
 		}
 	}
 	// A delegated stage of a plan keeps its place in that plan and the artifacts
@@ -567,22 +593,47 @@ func (c *Core) delegationBudget(ctx context.Context, taskID string, wireBudget i
 	return wireBudget - 1, nil
 }
 
+// derefBudget reads the wire's optional budget field (nil = pre-budget peer).
+func derefBudget(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// tokenBudgetWire resolves the §6.1 token quota the wire should carry for
+// taskID. The persisted row is authoritative — local execution spend has
+// already been deducted from it — so a stored non-zero value replaces the
+// payload's. An exhausted row (-1) refuses the hop outright: forwarding it
+// would let the next node spend quota the mesh already declared gone.
+func (c *Core) tokenBudgetWire(ctx context.Context, taskID string, wireBudget int64) (int64, error) {
+	if t, err := c.store.Get(ctx, taskID); err == nil && t.TokenBudget != 0 {
+		wireBudget = t.TokenBudget
+	}
+	if wireBudget < 0 {
+		return 0, scheduler.ErrBudgetExceeded
+	}
+	return wireBudget, nil
+}
+
 // dispatchDelegated is forwardDelegated for a task already in queued state —
 // e.g. a declined task being re-routed (P1-5), where Decline already moved it
 // dispatched -> queued and a second queue transition would conflict.
 func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p bus.TaskDelegatePayload, chain []string) error {
 	// §6.1 mesh budget: every forward hop spends one delegation, on the wire
 	// and in the row, so the mesh-wide bound survives restarts and relays.
-	remaining, err := c.delegationBudget(ctx, taskID, p.DelegationBudget)
+	remaining, err := c.delegationBudget(ctx, taskID, derefBudget(p.DelegationBudget))
 	if err != nil {
 		return err
 	}
-	p.DelegationBudget = remaining
+	p.DelegationBudget = &remaining
+	tokens, err := c.tokenBudgetWire(ctx, taskID, p.TokenBudget)
+	if err != nil {
+		return err
+	}
+	p.TokenBudget = tokens
 	if err := c.store.Dispatch(ctx, taskID, c.nodeID, target); err != nil {
 		return fmt.Errorf("dispatch: %w", err)
-	}
-	if err := c.store.SetDelegationBudget(ctx, taskID, p.DelegationBudget); err != nil {
-		c.logger.Warn("persist delegation budget", "task", taskID, "err", err)
 	}
 	dtn := p.Transport == "dtn"
 	// Stamp a lease on the local copy so a dead executor is detected and the
@@ -622,6 +673,12 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 		c.taskOutboxPersist(ctx, target, p, "dtn", deadline)
 	} else {
 		c.logger.Info("forwarded delegated task", "task", taskID, "to", target)
+	}
+	// Persist the spent budget only once the hop is committed — sent or
+	// parked. A build/lookup failure above leaves the row untouched so a
+	// retry does not burn a second hop.
+	if err := c.store.SetDelegationBudget(ctx, taskID, remaining); err != nil {
+		c.logger.Warn("persist delegation budget", "task", taskID, "err", err)
 	}
 	// — Trace: this node handed the task one hop downstream (from=here,
 	// to=target). Recorded on this node's copy so the origin's task detail
@@ -757,7 +814,6 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	if err != nil {
 		return bus.TaskResultPayload{}, fmt.Errorf("route: %w", err)
 	}
-
 	// Circuit breaker (P2-27): refuse to run an agent that has been failing
 	// repeatedly, before the task leaves its dispatched state, so the parent
 	// can re-route it elsewhere instead of it stalling in running.
@@ -1092,6 +1148,29 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	const maxDelegateRequests = 4
 	delegations := 0
 	for round := 0; round < maxRounds; round++ {
+		// §6.1 token budget: a task whose quota is already spent — by an
+		// earlier round's judge charge, or before it ever reached this
+		// executor — must not run another metered round. The check reads the
+		// persisted row because the task snapshot predates any spend, and it
+		// parks for every plan kind: a human tops up the quota or closes the
+		// task out, the way a scope-drift pause already works.
+		if left, serr := c.store.SpendTokens(ctx, taskID, 0); serr == nil && left < 0 {
+			msg := "token budget exhausted"
+			if err := c.store.Pause(ctx, taskID, c.nodeID, msg); err != nil {
+				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+					return bus.TaskResultPayload{}, ErrCancelled
+				}
+				return bus.TaskResultPayload{}, fmt.Errorf("pause on token exhaustion: %w", err)
+			}
+			c.logTask(task.Title, false)
+			trackTask(c, task.Project, required, task.Title, false)
+			return bus.TaskResultPayload{
+				TaskID: taskID, AttemptID: attemptID, State: StateReview,
+				ApprovalDisposition: string(ApprovalNeedsChangedInput),
+				OK:                  false, ExitCode: 1, Stderr: msg,
+				Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+			}, nil
+		}
 		// §6.2 monotonic progress: hashing the work tree at each round's head
 		// means a later round that regresses to a state an earlier round (or
 		// an earlier task on this project) already produced is caught before
@@ -1174,6 +1253,22 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			sessionID = res.SessionID
 		}
 
+		// §6.1 token budget: the adapter's reported usage is billed against
+		// the task's mesh-wide quota as soon as the round lands. The spend is
+		// atomic in the row, so this charge and a judge charge cannot both
+		// draw on the same remainder. An exhausted task stops spending — the
+		// judge call below is itself metered, so it must not run either; the
+		// result parks in review for a human to top up or close out.
+		tokenExhausted := false
+		if res.Tokens > 0 {
+			left, serr := c.store.SpendTokens(context.WithoutCancel(ctx), taskID, int64(res.Tokens))
+			if serr != nil {
+				c.logger.Warn("spend task tokens", "task", taskID, "err", serr)
+			} else if left < 0 {
+				tokenExhausted = true
+			}
+		}
+
 		// §4.2 Sub-MainAgent promotion: an agent that hits a resource it lacks
 		// (GPU, tool, hardware actuator) may emit a PANDA_DELEGATE line. This
 		// node — now acting as the child's Sub-Main — spawns the causal child,
@@ -1190,11 +1285,13 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 						note = "delegation failed: " + derr.Error()
 					}
 					currentIntent += "\n\n[delegated child result]\n" + note
-				} else {
-					currentIntent += "\n\n[system] delegation budget for this task is exhausted; finish with local resources and report."
+					// Only a delegation that actually happened re-drives the
+					// round; an exhausted budget falls through to the judge so
+					// a marker-happy agent cannot loop forever past the cap.
+					round--
+					continue
 				}
-				round--
-				continue
+				currentIntent += "\n\n[system] delegation budget for this task is exhausted; finish with local resources and report."
 			}
 		}
 
@@ -1473,6 +1570,13 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 
 		// Supervision applies only to agent tasks under a configured supervisor.
 		if plan.Kind != "agent" || c.supervisor == nil {
+			break
+		}
+		if tokenExhausted {
+			// The metered spend above drained the quota: park what the round
+			// produced rather than paying a judge call on top of it (§6.1).
+			verdict.Status = entry.VerdictReview
+			verdict.Reason = "token budget exhausted"
 			break
 		}
 		usageBefore := c.supervisor.Usage()

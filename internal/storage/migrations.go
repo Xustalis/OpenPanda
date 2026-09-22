@@ -42,6 +42,38 @@ var migrations = []Migration{
 	{Version: 17, Name: "add_task_approval_disposition", Apply: migrateV17},
 	{Version: 18, Name: "add_task_outbox", Apply: migrateV18},
 	{Version: 19, Name: "add_dtn_mesh_columns", Apply: migrateV19},
+	{Version: 20, Name: "add_token_budget_and_link_metrics", Apply: migrateV20},
+}
+
+// migrateV20 completes the mesh-budget and weighted-routing persistence
+// (whitepaper §4.1, §6.1):
+//   - tasks.token_budget: the remaining LLM token quota a task may spend
+//     across the mesh. >0 is the remaining allowance, 0 means unbounded
+//     (every pre-v20 task and every task minted without a budget), and -1
+//     marks the budget spent — the exhaustion marker has to be distinct
+//     from unbounded or an exhausted task would re-mint quota at the next
+//     hop.
+//   - employee_cache.links_json: per-edge link metrics (peer → RTT ms)
+//     gossiped in the capability summary beside neighbors_json, which is
+//     what turns the graph's BFS shortest-hop search into a weighted
+//     shortest-path one.
+func migrateV20(tx MigrationExec) error {
+	for _, c := range []struct{ table, column, decl string }{
+		{"tasks", "token_budget", "INTEGER NOT NULL DEFAULT 0"},
+		{"employee_cache", "links_json", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		exists, err := tableExistsTx(tx, c.table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if err := addColumnIfMissingTx(tx, c.table, c.column, c.decl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV19 gives the mesh/DTN machinery its durable fields (whitepaper

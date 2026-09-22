@@ -170,7 +170,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
-			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget)
+			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget)
 	if err != nil {
 		return Task{}, err
 	}
@@ -1165,6 +1165,51 @@ func (s *TaskStore) SetDelegationBudget(ctx context.Context, taskID string, budg
 	return nil
 }
 
+// SetTokenBudget persists the remaining mesh-wide token quota the task
+// carries (whitepaper §6.1). Stamped on creation — locally at submit when the
+// caller declared one, remotely when a delegate envelope adopts the wire's
+// remainder — so a restarted node cannot re-mint quota the mesh already spent.
+func (s *TaskStore) SetTokenBudget(ctx context.Context, taskID string, budget int64) error {
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET token_budget=?, updated_at=? WHERE task_id=?`,
+		budget, s.now(), taskID); err != nil {
+		return fmt.Errorf("set token budget: %w", err)
+	}
+	return nil
+}
+
+// SpendTokens atomically bills n tokens against the task's remaining quota
+// and returns what is left: 0 means the task is unbounded (legacy), a
+// positive value is the spendable remainder, and -1 marks exhaustion. The
+// decrement is a single UPDATE so a concurrent judge charge and adapter
+// charge cannot both spend the same remainder; crossing zero lands on the
+// -1 sentinel instead of wrapping back to "unbounded".
+func (s *TaskStore) SpendTokens(ctx context.Context, taskID string, n int64) (int64, error) {
+	if n <= 0 {
+		var cur int64
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT token_budget FROM tasks WHERE task_id=?`, taskID).Scan(&cur); err != nil {
+			return 0, fmt.Errorf("read token budget: %w", err)
+		}
+		return cur, nil
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET token_budget = CASE
+			WHEN token_budget = 0 THEN 0
+			WHEN token_budget - ? <= 0 THEN -1
+			ELSE token_budget - ? END,
+			updated_at=? WHERE task_id=?`,
+		n, n, s.now(), taskID); err != nil {
+		return 0, fmt.Errorf("spend token budget: %w", err)
+	}
+	var cur int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT token_budget FROM tasks WHERE task_id=?`, taskID).Scan(&cur); err != nil {
+		return 0, fmt.Errorf("read token budget: %w", err)
+	}
+	return cur, nil
+}
+
 // CountActive returns the number of this node's tasks currently occupying an
 // execution slot (running or waiting_context). The capacity-driven
 // accept/decline check (DCPS τ_adp mapping, design §2.4) compares it against
@@ -1369,10 +1414,12 @@ func (s *TaskStore) ExpireTasks(ctx context.Context) ([]string, error) {
 	// deadline_unix, shared verbatim across hops. Running tasks fail like a
 	// lease (the monitor cancels the subprocess); anything not yet running is
 	// marked expired outright — the bundle simply outlived its lifetime.
+	// Terminal rows (failed included) are skipped: relabeling a finished task
+	// would erase the verdict its delegator already saw.
 	drows, err := s.db.QueryContext(ctx,
 		`SELECT task_id, state FROM tasks
 		 WHERE deadline_unix > 0 AND deadline_unix < ?
-		   AND state IN ('submitted','queued','dispatched','waiting_context','running','failed')`, now)
+		   AND state IN ('submitted','queued','dispatched','waiting_context','running')`, now)
 	if err != nil {
 		return failed, fmt.Errorf("scan deadlines: %w", err)
 	}
@@ -1410,7 +1457,7 @@ func (s *TaskStore) ExpireTasks(ctx context.Context) ([]string, error) {
 func (s *TaskStore) MarkExpired(ctx context.Context, taskID, reason string) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE tasks SET state='expired', lease_expires_at=NULL, updated_at=?
-		 WHERE task_id=? AND state NOT IN ('done','cancelled','expired')`,
+		 WHERE task_id=? AND state NOT IN ('done','failed','cancelled','expired')`,
 		s.now(), taskID)
 	if err != nil {
 		return err
@@ -2004,7 +2051,7 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	approval_disposition, operation_decision_json, lease_expires_at, created_at, updated_at, authorized,
 	priority, seq, session_id, resource_keys_json, work_dir, scheduled,
 	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact,
-	transport, deadline_unix, delegation_budget`
+	transport, deadline_unix, delegation_budget, token_budget`
 
 func scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task
@@ -2026,7 +2073,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
-			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget); err != nil {
+			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)

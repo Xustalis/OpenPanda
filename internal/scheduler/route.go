@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"math"
 	"strings"
 	"time"
 
@@ -241,50 +242,89 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 	}
 }
 
-// graphFirstHop BFS-searches the link-state graph from self toward the
-// nearest online node that can run the task (ability match + hardware fit),
-// returning the first hop of that shortest path — the only hop this node
+// unknownLinkCost is the edge weight (ms) assigned to an advertised neighbor
+// that has no measured RTT (§4.1). It sits deliberately far above a healthy
+// LAN link's few milliseconds so a measured cheap path always beats an
+// unmeasured one, while staying finite so an unmeasured path still beats
+// no path at all.
+const unknownLinkCost int64 = 1000
+
+// linkCost reads the edge weight u advertises for its link to v: the RTT
+// sample u published in its link metrics, or the unknown-link default when
+// the measurement never arrived (a peer that predates §4.1, or a link too
+// young to have a pong back).
+func linkCost(u ledger.Node, v string) int64 {
+	if w, ok := u.LinkMetrics[v]; ok && w > 0 {
+		return w
+	}
+	return unknownLinkCost
+}
+
+// graphFirstHop runs Dijkstra over the link-state graph from self toward the
+// cheapest online node that can run the task (ability match + hardware fit),
+// returning the first hop of that minimum-cost path — the only hop this node
 // needs, since every relay re-runs Route on arrival. Edges are the nodes'
-// advertised Neighbors, restricted to rows that are online right now: a
-// stale advertisement names a dead link, and routing a task onto it parks it
-// in an outbox whose flush never comes.
+// advertised Neighbors weighted by their advertised link metrics (§4.1):
+// hop count used to be the implicit metric, which preferred a two-hop path
+// over a three-hop one regardless of what each hop actually costs; with RTT
+// on the edges a long-but-fast path now wins, as the whitepaper's weighted
+// graph intends. Only online rows are traversed: a stale advertisement names
+// a dead link, and routing a task onto it parks it in an outbox whose flush
+// never comes.
 func graphFirstHop(self ledger.Node, employees []ledger.Node, seen map[string]bool, required []string, req ledger.ResourceProfile) string {
 	online := make(map[string]ledger.Node, len(employees))
 	for _, n := range employees {
-		online[n.ID] = n
+		if n.Status == "online" {
+			online[n.ID] = n
+		}
 	}
-	type item struct{ id, first string }
-	visited := map[string]bool{self.ID: true}
-	var queue []item
-	for _, nb := range self.Neighbors {
-		if seen[nb] || visited[nb] {
-			continue
+	dist := map[string]int64{self.ID: 0}
+	first := make(map[string]string) // node -> first hop from self
+	visited := map[string]bool{}
+	for {
+		// Extract the unvisited node with the smallest tentative cost. The
+		// mesh's directory is a handful of rows, so a linear scan beats the
+		// heap bookkeeping.
+		var cur string
+		curDist := int64(math.MaxInt64)
+		for id, d := range dist {
+			if !visited[id] && d < curDist {
+				cur, curDist = id, d
+			}
 		}
-		if _, ok := online[nb]; !ok {
-			continue
+		if cur == "" {
+			return ""
 		}
-		visited[nb] = true
-		queue = append(queue, item{id: nb, first: nb})
-	}
-	for len(queue) > 0 {
-		it := queue[0]
-		queue = queue[1:]
-		n := online[it.id]
-		if (len(required) == 0 || n.Matches(required)) && n.Fits(req) {
-			return it.first
+		visited[cur] = true
+		curNode := self
+		if cur != self.ID {
+			n, ok := online[cur]
+			if !ok {
+				continue
+			}
+			curNode = n
+			if (len(required) == 0 || n.Matches(required)) && n.Fits(req) {
+				return first[cur]
+			}
 		}
-		for _, nb := range n.Neighbors {
+		for _, nb := range curNode.Neighbors {
 			if seen[nb] || visited[nb] {
 				continue
 			}
 			if _, ok := online[nb]; !ok {
 				continue
 			}
-			visited[nb] = true
-			queue = append(queue, item{id: nb, first: it.first})
+			nd := curDist + linkCost(curNode, nb)
+			if old, ok := dist[nb]; !ok || nd < old {
+				dist[nb] = nd
+				if cur == self.ID {
+					first[nb] = nb
+				} else {
+					first[nb] = first[cur]
+				}
+			}
 		}
 	}
-	return ""
 }
 
 // declineReason distinguishes "nobody has this ability" from "nobody has this

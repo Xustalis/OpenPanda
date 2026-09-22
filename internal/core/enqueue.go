@@ -274,7 +274,8 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		Transport:        t.Transport,
 		DeadlineUnix:     t.DeadlineUnix,
 		Depth:            len(chain),
-		DelegationBudget: t.DelegationBudget,
+		DelegationBudget: &t.DelegationBudget,
+		TokenBudget:      t.TokenBudget,
 	}
 	// Same project carriage as the synchronous path: a queued task delegated to a
 	// peer must arrive with its project context or the peer cannot use it.
@@ -303,14 +304,16 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p bus.TaskDelegatePayload) error {
 	// §6.1: a queue forward spends the same budget a synchronous dispatch does
 	// — the paths are interchangeable, so the bound must be too.
-	remaining, err := c.delegationBudget(ctx, taskID, p.DelegationBudget)
+	remaining, err := c.delegationBudget(ctx, taskID, derefBudget(p.DelegationBudget))
 	if err != nil {
 		return err
 	}
-	p.DelegationBudget = remaining
-	if err := c.store.SetDelegationBudget(ctx, taskID, remaining); err != nil {
-		c.logger.Warn("persist delegation budget", "task", taskID, "err", err)
+	p.DelegationBudget = &remaining
+	tokens, err := c.tokenBudgetWire(ctx, taskID, p.TokenBudget)
+	if err != nil {
+		return err
 	}
+	p.TokenBudget = tokens
 	if err := c.store.RetargetDelegation(ctx, taskID, target); err != nil {
 		return fmt.Errorf("retarget: %w", err)
 	}
@@ -351,6 +354,11 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 			c.taskOutboxPersist(ctx, target, p, "dtn", deadline)
 			c.logger.Info("queue: task parked in task_outbox for DTN relay",
 				"task", taskID, "target", target, "err", err)
+			// The parked bundle owns this hop — the budget is spent even
+			// though no frame left the socket.
+			if err := c.store.SetDelegationBudget(ctx, taskID, remaining); err != nil {
+				c.logger.Warn("persist delegation budget", "task", taskID, "err", err)
+			}
 			return nil
 		}
 		// The send failed, so the peer never received the task — but the audit
@@ -365,6 +373,12 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 			c.logger.Warn("queue: corrective retarget failed", "task", taskID, "err", rerr)
 		}
 		return fmt.Errorf("send: %w", err)
+	}
+	// The hop landed on the wire — now the budget is spent. Persisting only
+	// here (and in the DTN park above) keeps a failed retarget or dead socket
+	// from burning a delegation the mesh never took.
+	if err := c.store.SetDelegationBudget(ctx, taskID, remaining); err != nil {
+		c.logger.Warn("persist delegation budget", "task", taskID, "err", err)
 	}
 	// — Trace: queue re-route hop (from=here, to=target), same shape as
 	// dispatchDelegated's so the orbit treats both alike.

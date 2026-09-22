@@ -49,6 +49,22 @@ type HeartbeatPayload struct {
 	// nodes and when nothing is blocked; receivers treat absent as "drop
 	// any previously published list".
 	BlockedAgents []string `json:"blocked_agents,omitempty"`
+	// Neighbors/Links refresh the sender's adjacency in the receiver's
+	// directory every beat (§4.1): hellos only arrive at dial time and card
+	// beats only at reload, but the link-state graph's edge set AND its
+	// measured weights have to track the live topology continuously.
+	Neighbors []string     `json:"neighbors,omitempty"`
+	Links     []LinkMetric `json:"links,omitempty"`
+}
+
+// LinkMetric is the wire form of one measured edge weight (§4.1): the round-
+// trip time in milliseconds toward a directly connected neighbor, sampled by
+// the transport's ping/pong. It duplicates ledger.LinkMetric's JSON shape so
+// the transport package stays decoupled from the capability directory — the
+// same rule that keeps Card a raw JSON blob above.
+type LinkMetric struct {
+	Peer  string `json:"peer"`
+	RTTms int64  `json:"rtt_ms"`
 }
 
 // TaskDelegatePayload is the task handoff (design doc §10.3 example). The
@@ -147,10 +163,13 @@ type TaskDelegatePayload struct {
 	// spawn hop, hard-capped by scheduler.MaxChainDepth. DelegationBudget is
 	// the remaining mesh-wide delegation quota: each forward decrements it,
 	// and a task that reaches zero may only execute or decline — never route
-	// onward. TokenBudget is the remaining LLM token quota the task may
+	// onward. The pointer distinguishes an absent field (a pre-budget peer —
+	// the receiver seeds the default) from an explicit zero (a new-protocol
+	// peer reporting the quota spent — the task must not route onward).
+	// TokenBudget is the remaining LLM token quota the task may
 	// consume across the mesh; zero means unbounded (legacy peers).
 	Depth            int   `json:"depth,omitempty"`
-	DelegationBudget int   `json:"delegation_budget,omitempty"`
+	DelegationBudget *int  `json:"delegation_budget,omitempty"`
 	TokenBudget      int64 `json:"token_budget,omitempty"`
 }
 
@@ -460,4 +479,12 @@ type AgentYieldPayload struct {
 	FromAgent string      `json:"from_agent"`
 	Scope     TargetScope `json:"scope"`
 	Reason    string      `json:"reason,omitempty"`
+}
+
+// DTNBundlePayload carries one CBOR-encoded DTN bundle (§8.3) verbatim. The
+// receiver unmarshals, verifies signature+TTL, then feeds the inner payload
+// back through the normal message path — the bundle is a signed transport
+// container, not a second task protocol.
+type DTNBundlePayload struct {
+	Blob []byte `json:"blob"`
 }

@@ -3,7 +3,9 @@ package core
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
 
@@ -79,5 +81,55 @@ func TestDelegationBudgetResolution(t *testing.T) {
 	dead := mkTask([]string{"node-a", "node-x"}, 0)
 	if _, err := c.delegationBudget(ctx, dead.TaskID, 0); err == nil {
 		t.Fatal("exhausted budget not refused")
+	}
+}
+
+// A delegate payload without a budget field comes from a pre-budget peer:
+// the receiver must seed the default rather than persisting a zero that would
+// refuse every onward hop. An explicit zero is the opposite — a new-protocol
+// peer reporting the quota spent, which must persist as exhaustion.
+func TestDelegateBudgetWireCompat(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-budget", "127.0.0.1:17848")
+	worker := newCore(t, "worker-budget", "127.0.0.1:17849")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17848", "127.0.0.1:17849")
+
+	// Legacy shape: no delegation_budget key on the wire at all.
+	env, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-budget", "m-legacy", bus.TaskDelegatePayload{
+		TaskID: "legacy-task", Title: "t", Intent: "x", Requires: []string{"sys:info"},
+		Chain: []string{"entry-budget"},
+	})
+	if err := entry.sendTo("worker-budget", env); err != nil {
+		t.Fatalf("send legacy: %v", err)
+	}
+	// New-protocol shape: the field present and explicitly exhausted.
+	zero := 0
+	env2, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-budget", "m-zero", bus.TaskDelegatePayload{
+		TaskID: "zero-task", Title: "t", Intent: "x", Requires: []string{"sys:info"},
+		Chain: []string{"entry-budget"}, DelegationBudget: &zero,
+	})
+	if err := entry.sendTo("worker-budget", env2); err != nil {
+		t.Fatalf("send zero: %v", err)
+	}
+	time.Sleep(400 * time.Millisecond)
+
+	legacy, err := worker.store.Get(ctx, "legacy-task")
+	if err != nil {
+		t.Fatalf("legacy row: %v", err)
+	}
+	if legacy.DelegationBudget != scheduler.MaxDelegationBudget {
+		t.Fatalf("legacy wire seeded %d, want %d", legacy.DelegationBudget, scheduler.MaxDelegationBudget)
+	}
+	zeroed, err := worker.store.Get(ctx, "zero-task")
+	if err != nil {
+		t.Fatalf("zero row: %v", err)
+	}
+	if zeroed.DelegationBudget != 0 {
+		t.Fatalf("explicit zero laundered to %d", zeroed.DelegationBudget)
+	}
+	if _, err := worker.delegationBudget(ctx, "zero-task", 0); err == nil {
+		t.Fatal("explicit-zero task allowed to route onward")
 	}
 }
