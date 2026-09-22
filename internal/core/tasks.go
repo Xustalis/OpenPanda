@@ -159,6 +159,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	var approvalDisposition, operationDecision sql.NullString
 	var complexity sql.NullFloat64
 	var sessionID, resourceKeysJSON, workDir sql.NullString
+	var agentSession, agentSessionNode sql.NullString
 	var scheduled int
 	var planID, stageID, needsJSON, inputsJSON, outputArt sql.NullString
 	err := s.db.QueryRowContext(ctx,
@@ -170,7 +171,8 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
-			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget)
+			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
+			&agentSession, &agentSessionNode)
 	if err != nil {
 		return Task{}, err
 	}
@@ -196,6 +198,8 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	t.PlanID = planID.String
 	t.StageID = stageID.String
 	t.OutputArtifact = outputArt.String
+	t.AgentSessionID = agentSession.String
+	t.AgentSessionNode = agentSessionNode.String
 	return t, nil
 }
 
@@ -1336,6 +1340,29 @@ func (s *TaskStore) SetSessionID(ctx context.Context, taskID, sessionID string) 
 	return nil
 }
 
+// SetAgentSessionID persists the adapter conversation handle for the task
+// (§5.2 breakpoint mooring). Written every round as the session evolves and
+// cleared when the run ends, so a task that is interrupted mid-flight
+// resumes its agent session while a finished one never drags a dead handle
+// into a re-run.
+func (s *TaskStore) SetAgentSessionID(ctx context.Context, taskID, sessionID string) error {
+	return s.SetAgentSession(ctx, taskID, sessionID, "")
+}
+
+// SetAgentSession writes the handle together with the node that minted it.
+// The executor passes its own id; a delegator learning a remote session from
+// a task_result passes the executor's — which is what lets a later
+// re-dispatch offer ResumeSessionID only to the node it belongs to.
+func (s *TaskStore) SetAgentSession(ctx context.Context, taskID, sessionID, node string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET agent_session_id=?, agent_session_node=?, updated_at=? WHERE task_id=?`,
+		sessionID, node, s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("set agent session: %w", err)
+	}
+	return nil
+}
+
 // ListReady returns every task waiting for the local queue scheduler: queued
 // and marked scheduled. Ordering happens in the scheduler's policy, not here.
 func (s *TaskStore) ListReady(ctx context.Context) ([]Task, error) {
@@ -2051,7 +2078,7 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	approval_disposition, operation_decision_json, lease_expires_at, created_at, updated_at, authorized,
 	priority, seq, session_id, resource_keys_json, work_dir, scheduled,
 	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact,
-	transport, deadline_unix, delegation_budget, token_budget`
+	transport, deadline_unix, delegation_budget, token_budget, agent_session_id, agent_session_node`
 
 func scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task
@@ -2063,6 +2090,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var contextType, contextHash, risk, resource, requiresJSON sql.NullString
 		var approvalDisposition, operationDecision sql.NullString
 		var sessionID, resourceKeysJSON, workDir sql.NullString
+		var agentSession, agentSessionNode sql.NullString
 		var complexity sql.NullFloat64
 		var scheduled int
 		var planID, stageID, needsJSON, inputsJSON, outputArt sql.NullString
@@ -2073,7 +2101,8 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
-			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget); err != nil {
+			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
+			&agentSession, &agentSessionNode); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
@@ -2098,6 +2127,8 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		t.PlanID = planID.String
 		t.StageID = stageID.String
 		t.OutputArtifact = outputArt.String
+		t.AgentSessionID = agentSession.String
+		t.AgentSessionNode = agentSessionNode.String
 		out = append(out, t)
 	}
 	return out, rows.Err()

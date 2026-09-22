@@ -277,6 +277,11 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		DelegationBudget: &t.DelegationBudget,
 		TokenBudget:      t.TokenBudget,
 	}
+	// Session resume hint (§5.2): the handle only means something to the node
+	// that minted it, so it is offered only when the route leads back there.
+	if t.AgentSessionID != "" && t.AgentSessionNode == decision.Target {
+		p.ResumeSessionID = t.AgentSessionID
+	}
 	// Same project carriage as the synchronous path: a queued task delegated to a
 	// peer must arrive with its project context or the peer cannot use it.
 	c.attachProject(ctx, &p, t.Project)
@@ -318,6 +323,10 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 		return fmt.Errorf("retarget: %w", err)
 	}
 	dtn := p.Transport == "dtn"
+	pushDeadline := p.DeadlineUnix
+	if pushDeadline <= 0 {
+		pushDeadline = time.Now().Add(defaultDTNTTL).Unix()
+	}
 	if !dtn {
 		// A DTN task is lease-exempt (§8.2): the absolute deadline is its bound.
 		timeoutMS := p.TimeoutMS
@@ -329,7 +338,11 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 			return fmt.Errorf("set lease: %w", err)
 		}
 	} else {
-		c.attachFatBundle(ctx, &p)
+		// Same fat-push split as dispatchDelegated: small artifacts ride the
+		// envelope, larger ones become durable push custody for the flush.
+		for _, h := range c.attachFatBundle(ctx, &p) {
+			c.artifactPushEnqueue(ctx, target, taskID, h, pushDeadline)
+		}
 	}
 	msgID, err := newUUID()
 	if err != nil {
@@ -347,11 +360,7 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 			// local execution — the task chose delay-tolerant delivery, and
 			// the retarget pointing at the peer stays true: the outbox flush
 			// IS this node holding the task for that peer.
-			deadline := p.DeadlineUnix
-			if deadline <= 0 {
-				deadline = time.Now().Add(defaultDTNTTL).Unix()
-			}
-			c.taskOutboxPersist(ctx, target, p, "dtn", deadline)
+			c.taskOutboxPersist(ctx, target, p, "dtn", pushDeadline)
 			c.logger.Info("queue: task parked in task_outbox for DTN relay",
 				"task", taskID, "target", target, "err", err)
 			// The parked bundle owns this hop — the budget is spent even
@@ -379,6 +388,11 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 	// from burning a delegation the mesh never took.
 	if err := c.store.SetDelegationBudget(ctx, taskID, remaining); err != nil {
 		c.logger.Warn("persist delegation budget", "task", taskID, "err", err)
+	}
+	if dtn {
+		// Drain deferred push custody into the same contact window that just
+		// carried the delegate (see dispatchDelegated).
+		go c.outboxFlush(context.WithoutCancel(ctx), target)
 	}
 	// — Trace: queue re-route hop (from=here, to=target), same shape as
 	// dispatchDelegated's so the orbit treats both alike.

@@ -111,13 +111,20 @@ const fatBundleCap = 2 << 20
 // content addressing means the receiver can still pull them later from any
 // node that does, and a missing bundle entry degrades to the fetch path
 // rather than failing the delegation.
-func (c *Core) attachFatBundle(ctx context.Context, p *bus.TaskDelegatePayload) {
+//
+// The inline cap makes anything past fatBundleCap a deferred push candidate:
+// the returned hashes are artifacts this node holds that did not fit the
+// envelope and should stream to the peer on the push lane instead. The
+// caller enqueues one custody row per hash — small inputs still ride the
+// delegate for free while a multi-hundred-MiB pack follows in chunks.
+func (c *Core) attachFatBundle(ctx context.Context, p *bus.TaskDelegatePayload) []string {
 	if c.artifacts == nil {
-		return
+		return nil
 	}
 	total := 0
+	var deferred []string
 	add := func(hash string) {
-		if hash == "" || total >= fatBundleCap {
+		if hash == "" {
 			return
 		}
 		for _, b := range p.BundledArtifacts {
@@ -125,13 +132,24 @@ func (c *Core) attachFatBundle(ctx context.Context, p *bus.TaskDelegatePayload) 
 				return // already bundled by an earlier step
 			}
 		}
+		for _, d := range deferred {
+			if d == hash {
+				return
+			}
+		}
 		f, err := c.artifacts.Open(hash)
 		if err != nil {
-			return
+			return // not held: nothing to inline or push
 		}
 		defer f.Close()
 		data, err := io.ReadAll(io.LimitReader(f, int64(fatBundleCap-total)+1))
-		if err != nil || len(data) == 0 || len(data) > fatBundleCap-total {
+		if err != nil || len(data) == 0 {
+			return
+		}
+		if len(data) > fatBundleCap-total {
+			// Held but does not fit the envelope: custody for the chunked
+			// push lane rather than silence.
+			deferred = append(deferred, hash)
 			return
 		}
 		p.BundledArtifacts = append(p.BundledArtifacts, bus.FatBundleArtifact{Hash: hash, Data: data})
@@ -141,6 +159,7 @@ func (c *Core) attachFatBundle(ctx context.Context, p *bus.TaskDelegatePayload) 
 	for _, in := range p.Inputs {
 		add(in.Hash)
 	}
+	return deferred
 }
 
 // artifactKey names an in-flight transfer. The pair is the key, not the hash
@@ -273,8 +292,16 @@ func (c *Core) fetchArtifact(ctx context.Context, source, taskID, hash string) (
 			return abort(fmt.Errorf("core: no chunk of artifact %s at offset %d after %d attempts", hash, off, artifactChunkRetries+1))
 		}
 
-		if chunk.Total > artifact.MaxBytes {
+		if lim := c.artifacts.Limit(); lim > 0 && chunk.Total > lim {
 			return abort(fmt.Errorf("%w: %s advertises %d bytes", artifact.ErrTooLarge, hash, chunk.Total))
+		}
+		if lim := c.artifacts.Limit(); lim <= 0 {
+			// Unbounded pool: the advertised total is still attacker input,
+			// and the volumes are the bound — refuse before the first byte
+			// lands when no pool root could hold the archive.
+			if room, ok := c.artifacts.MaxStorable(); ok && chunk.Total > room {
+				return abort(fmt.Errorf("%w: %s advertises %d bytes with %d usable", artifact.ErrNoSpace, hash, chunk.Total, room))
+			}
 		}
 		if total < 0 {
 			total = chunk.Total
@@ -354,9 +381,11 @@ func (c *Core) handleArtifactFetch(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	// The pool holds other tasks' outputs, so participation in *this* task is
-	// what authorizes the read. Without the check any authenticated peer could
-	// enumerate and download every artifact this node has ever produced.
-	if !c.artifactPeerAuthorized(ctx, p.TaskID, env.From) {
+	// what authorizes the read — and the hash must belong to that task, or one
+	// known task id would open the whole pool. Without the check any
+	// authenticated peer could enumerate and download every artifact this node
+	// has ever produced.
+	if !c.artifactPeerAuthorized(ctx, p.TaskID, p.Hash, env.From) {
 		c.logger.Warn("artifact_fetch from non-participant", "task", p.TaskID, "from", env.From)
 		deny("not a participant in this task")
 		return
@@ -417,11 +446,16 @@ func (c *Core) handleArtifactChunk(ctx context.Context, env bus.Envelope) {
 	}
 }
 
-// artifactPeerAuthorized reports whether from may pull artifacts belonging to
-// taskID from this node. The delegation chain is the participant list: the task's
-// owner, any node the task travelled through, and the node it is currently
-// dispatched to. An unknown task authorizes nobody.
-func (c *Core) artifactPeerAuthorized(ctx context.Context, taskID, from string) bool {
+// artifactPeerAuthorized reports whether from may pull the artifact named by
+// hash under taskID from this node. Two conditions must both hold: from is a
+// participant in the task (the delegation chain is the participant list —
+// owner, any node the task travelled through, or the node it is currently
+// dispatched to), and the hash legitimately belongs to that task (its context
+// snapshot, a declared input, its produced output, or an artifact this node
+// indexed under it). Without the binding, one task's participant could
+// enumerate and download every artifact the pool holds by quoting a single
+// task id it belongs to. An unknown task authorizes nobody.
+func (c *Core) artifactPeerAuthorized(ctx context.Context, taskID, hash, from string) bool {
 	if from == "" || taskID == "" {
 		return false
 	}
@@ -429,12 +463,36 @@ func (c *Core) artifactPeerAuthorized(ctx context.Context, taskID, from string) 
 	if err != nil {
 		return false
 	}
-	if from == t.OwnerNode || slices.Contains(t.Chain, from) {
-		return true
+	participant := from == t.OwnerNode || slices.Contains(t.Chain, from)
+	if !participant {
+		target, terr := c.store.DispatchTarget(ctx, taskID)
+		participant = terr == nil && target != "" && from == target
 	}
-	target, err := c.store.DispatchTarget(ctx, taskID)
-	if err != nil {
+	return participant && c.artifactBoundToTask(ctx, t, hash)
+}
+
+// artifactBoundToTask reports whether hash legitimately belongs to task t on
+// this node: its context snapshot, one of its declared inputs, the tree it
+// produced, or an entry this node indexed under the task when packing it for
+// the delegation or pulling it as a consumer.
+func (c *Core) artifactBoundToTask(ctx context.Context, t Task, hash string) bool {
+	if hash == "" {
 		return false
 	}
-	return from != "" && from == target
+	if t.ContextHash == hash || t.OutputArtifact == hash {
+		return true
+	}
+	for _, in := range t.Inputs {
+		if in.Hash == hash {
+			return true
+		}
+	}
+	indexed, err := c.store.ArtifactIndexedFor(ctx, hash, t.TaskID)
+	if err != nil {
+		// Fail closed: a lost index lookup must not widen authorization back
+		// to "any participant pulls anything".
+		c.logger.Warn("artifact index lookup", "hash", hash, "task", t.TaskID, "err", err)
+		return false
+	}
+	return indexed
 }

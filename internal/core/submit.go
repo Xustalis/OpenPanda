@@ -533,6 +533,16 @@ func (c *Core) resumeRemote(ctx context.Context, cur Task, target string) (Task,
 // left in failed or retried forever (design §14.2 signal C, plan P2-18). It is
 // shared by the synchronous Submit paths and the queue scheduler's runner.
 func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []string, result bus.TaskResultPayload, err error) (Task, bus.TaskResultPayload, error) {
+	// A second runner already owns this task: report the row untouched and
+	// propagate the sentinel (ErrCancelled-compatible) so callers neither
+	// fail the live row nor signal a result the owner will deliver itself.
+	if errors.Is(err, ErrAlreadyRunning) {
+		final, gerr := c.store.Get(ctx, taskID)
+		if gerr != nil {
+			return Task{}, result, gerr
+		}
+		return final, result, err
+	}
 	if err != nil && !errors.Is(err, ErrCancelled) {
 		c.failLocal(ctx, taskID, err)
 		final, gerr := c.store.Get(ctx, taskID)

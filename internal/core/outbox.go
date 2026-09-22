@@ -13,9 +13,12 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
@@ -147,7 +150,14 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 		trows.Close()
 	}
 
-	if len(entries) == 0 && len(cancels) == 0 && len(taskEntries) == 0 {
+	// Deferred artifact pushes are custody too: a peer whose only pending
+	// work is chunked payload must still get its flush, or a large transfer
+	// would stall until some unrelated row arrived.
+	var pushPending int
+	_ = c.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM artifact_push_outbox WHERE peer = ?`, peer).Scan(&pushPending)
+
+	if len(entries) == 0 && len(cancels) == 0 && len(taskEntries) == 0 && pushPending == 0 {
 		c.outboxFlushDone(peer)
 		return
 	}
@@ -208,6 +218,16 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 			c.taskOutboxDrop(flushCtx, peer, e.taskID)
 			c.logger.Info("outbox: redelivered forward task", "task", e.taskID, "peer", peer)
 		}
+		// §8.3 chunked push rides the same custody model as the parked
+		// bundles above: rows retire on the receiver's acked waterline, and
+		// the stream resumes — not restarts — after a reconnect. Ordering
+		// matters: delegates go first so the task row exists when the chunks
+		// arrive and the receiver's authorization check can bind them to it.
+		c.streamArtifactPushes(flushCtx, peer)
+		// Multi-hop custody: a peer that just connected may be the best next
+		// hop for bundles keyed to some third, still-offline destination.
+		// Rows keyed to this peer itself were handled above.
+		c.relayParked(flushCtx, peer)
 		for _, e := range entries {
 			var p bus.TaskResultPayload
 			if err := json.Unmarshal([]byte(e.raw), &p); err != nil {
@@ -431,6 +451,120 @@ func (c *Core) sweepOutboxes(ctx context.Context) {
 			continue
 		}
 		c.outboxFlush(ctx, peer) // claims internally; skips if one is running
+	}
+	// §8.3 multi-hop: rows keyed to a destination that never connects
+	// directly would wait out their TTL parked. Recompute a live next hop
+	// for each signed bundle and move custody closer.
+	c.relayParked(ctx, "")
+}
+
+// relayParked re-routes parked task_outbox bundles through the link-state
+// graph: for every signed row whose final destination is unreachable, the
+// first hop of the cheapest advertised path is tried instead (§8.3). Rows
+// stay keyed by destination — custody moves, addressing does not. via on the
+// row is excluded as a next hop so a flush can never echo a bundle back the
+// way it arrived, and relayForwardOK bounds how often this node will carry
+// the same bundle, which is what a signed hop-less bundle needs for loop
+// safety. onlyHop narrows the pass to rows whose best hop is that peer (the
+// hello-flush case); "" (the sweep case) considers every row.
+func (c *Core) relayParked(ctx context.Context, onlyHop string) {
+	if c.db == nil {
+		return
+	}
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT peer, task_id, payload_blob, ttl, via FROM task_outbox WHERE payload_blob IS NOT NULL`)
+	if err != nil {
+		c.logger.Warn("outbox: relay scan", "err", err)
+		return
+	}
+	type parked struct {
+		peer, taskID, via string
+		blob              []byte
+		ttl               int64
+	}
+	var entries []parked
+	for rows.Next() {
+		var e parked
+		var blob []byte
+		if err := rows.Scan(&e.peer, &e.taskID, &blob, &e.ttl, &e.via); err != nil {
+			rows.Close()
+			c.logger.Warn("outbox: relay scan row", "err", err)
+			return
+		}
+		e.blob = blob
+		entries = append(entries, e)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		c.logger.Warn("outbox: relay rows", "err", err)
+		return
+	}
+	now := time.Now().Unix()
+	// The directory is loaded lazily on the first row that reaches routing —
+	// a pass whose rows are all expired or self-addressed never queries it —
+	// and shared across every row after: re-running ledger.Query per bundle
+	// would make a sweep cost rows × directory size.
+	var self ledger.Node
+	var nodes []ledger.Node
+	dirLoaded := false
+	for _, e := range entries {
+		// A row keyed to a connected peer is the ordinary flush's job; in
+		// the hello-triggered pass the flush already handled its own rows.
+		if e.peer == onlyHop || (onlyHop == "" && c.connFor(e.peer) != nil) {
+			continue
+		}
+		if e.ttl > 0 && now > e.ttl {
+			c.logger.Info("outbox: parked bundle past TTL, expiring", "task", e.taskID, "peer", e.peer)
+			c.taskOutboxDrop(ctx, e.peer, e.taskID)
+			if err := c.store.MarkExpired(ctx, e.taskID, "dtn TTL expired"); err != nil {
+				c.logger.Warn("outbox: mark expired", "task", e.taskID, "err", err)
+			}
+			continue
+		}
+		bnd, err := bus.UnmarshalBundle(e.blob)
+		if err != nil {
+			c.logger.Warn("outbox: corrupt parked bundle, dropping", "task", e.taskID, "peer", e.peer, "err", err)
+			c.taskOutboxDrop(ctx, e.peer, e.taskID)
+			continue
+		}
+		if verr := bnd.Verify([]byte(c.sharedSecret), now); verr != nil {
+			c.logger.Warn("outbox: parked bundle verify failed, dropping", "task", e.taskID, "peer", e.peer, "err", verr)
+			c.taskOutboxDrop(ctx, e.peer, e.taskID)
+			if err := c.store.MarkExpired(ctx, e.taskID, "bundle verify failed"); err != nil {
+				c.logger.Warn("outbox: mark expired", "task", e.taskID, "err", err)
+			}
+			continue
+		}
+		dest := strings.TrimPrefix(bnd.DestEID, "panda://")
+		if dest == "" || dest == c.nodeID {
+			continue
+		}
+		if !dirLoaded {
+			var derr error
+			self, nodes, derr = c.dtnDirectory()
+			if derr != nil {
+				c.logger.Warn("outbox: relay directory", "err", derr)
+				return
+			}
+			dirLoaded = true
+		}
+		exclude := map[string]bool{}
+		if e.via != "" {
+			exclude[e.via] = true
+		}
+		hop := scheduler.DTNNextHop(self, nodes, dest, exclude)
+		if hop == "" || (onlyHop != "" && hop != onlyHop) || c.connFor(hop) == nil {
+			continue
+		}
+		if !c.relayForwardOK(bnd.BundleID, bnd.DeadlineUnix) {
+			continue // loop bound spent: hold custody for a direct contact
+		}
+		if !c.deliverBundle(ctx, hop, e.blob) {
+			continue
+		}
+		c.taskOutboxDrop(ctx, e.peer, e.taskID)
+		c.logger.Info("outbox: custody moved toward dest", "bundle", bnd.BundleID,
+			"hop", hop, "dest", dest)
 	}
 }
 

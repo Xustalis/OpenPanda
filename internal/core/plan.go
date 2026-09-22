@@ -178,6 +178,21 @@ func (s *TaskStore) RecordArtifact(ctx context.Context, hash string, size int64,
 	return nil
 }
 
+// ArtifactIndexedFor reports whether the local pool's index ties hash to
+// taskID — i.e. this node recorded the artifact while packing it for, or
+// pulling it under, that task. artifactPeerAuthorized consults it so a peer
+// can only fetch artifacts the task it quotes actually owns: participation
+// alone must not open the whole pool to one known hash.
+func (s *TaskStore) ArtifactIndexedFor(ctx context.Context, hash, taskID string) (bool, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM artifacts WHERE hash=? AND task_id=?`,
+		hash, taskID).Scan(&n); err != nil {
+		return false, fmt.Errorf("artifact index lookup: %w", err)
+	}
+	return n > 0, nil
+}
+
 // StartPlan validates a plan, creates one task per stage, and releases the
 // stages that have no dependencies. It returns the plan id, which is how the
 // caller follows the whole run (PlanStages) rather than one task at a time.
