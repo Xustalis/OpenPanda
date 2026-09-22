@@ -383,6 +383,37 @@ func TestMigrateV11EntryCache(t *testing.T) {
 	}
 }
 
+// V20 lands the mesh-budget and weighted-routing columns (§4.1/§6.1) on both
+// paths: a fresh database and a v19-era file migrated forward.
+func TestMigrateV20Columns(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	for _, tc := range []struct{ table, col string }{
+		{"tasks", "token_budget"},
+		{"employee_cache", "links_json"},
+	} {
+		if !columnExists(t, db, tc.table, tc.col) {
+			t.Fatalf("column %s.%s missing on fresh schema", tc.table, tc.col)
+		}
+	}
+	// Legacy rows see the documented defaults: token_budget=0 (unbounded),
+	// links_json='' (no metrics yet — the unknown-link cost applies).
+	var budget int64
+	var links string
+	if err := db.QueryRow(`SELECT token_budget FROM tasks LIMIT 1`).Scan(&budget); err == nil && budget != 0 {
+		t.Fatalf("fresh task token_budget = %d, want 0", budget)
+	}
+	if err := db.QueryRow(`SELECT links_json FROM employee_cache LIMIT 1`).Scan(&links); err == nil && links != "" {
+		t.Fatalf("fresh links_json = %q, want ''", links)
+	}
+}
+
 func columnExists(t *testing.T, db *sql.DB, table, col string) bool {
 	t.Helper()
 	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))

@@ -194,6 +194,13 @@ type Task struct {
 	// each forward hop decrements it, and a task that runs out may no longer
 	// be delegated — the mesh-wide convergence bound alongside MaxChainDepth.
 	DelegationBudget int
+	// TokenBudget is the remaining LLM token quota the task may spend across
+	// the mesh (§6.1): 0 means unbounded (a legacy wire or a pre-budget row),
+	// a positive value is the spendable remainder, and -1 is the persisted
+	// exhaustion marker — an exhausted task may neither execute another
+	// metered round nor be delegated onward, since either would launder the
+	// bound into fresh budget on the next hop.
+	TokenBudget int64
 }
 
 // GetUserLocale returns the task's language preference as an i18n.Locale,

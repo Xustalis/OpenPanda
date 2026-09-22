@@ -70,6 +70,9 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 	if c.db == nil || peer == "" {
 		return
 	}
+	if !c.outboxFlushClaim(peer) {
+		return // a flush for this peer is already running (hello or sweep)
+	}
 	type entry struct {
 		taskID string
 		raw    string
@@ -145,9 +148,11 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 	}
 
 	if len(entries) == 0 && len(cancels) == 0 && len(taskEntries) == 0 {
+		c.outboxFlushDone(peer)
 		return
 	}
 	go func() {
+		defer c.outboxFlushDone(peer)
 		flushCtx := context.WithoutCancel(ctx)
 		for _, e := range taskEntries {
 			// §8.2 TTL: a bundle parked past its deadline is dead — delivering
@@ -162,11 +167,11 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 				}
 				continue
 			}
-			// The CBOR bundle is the authoritative record when present
-			// (§8.3): it carries its own TTL and signature, so a row that was
-			// tampered while parked fails closed here instead of executing
-			// forged work on delivery. payload_json is the legacy fallback.
-			raw := e.raw
+			// The CBOR bundle is the authoritative record AND the wire form
+			// (§8.3): verified on our side, then delivered verbatim as a
+			// dtn_bundle so the receiver checks the same signature. A row
+			// that was tampered while parked fails closed here instead of
+			// executing forged work on delivery.
 			if len(e.blob) > 0 {
 				bnd, berr := bus.UnmarshalBundle(e.blob)
 				if berr != nil {
@@ -182,10 +187,17 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 					}
 					continue
 				}
-				raw = string(bnd.Payload)
+				if !c.deliverBundle(flushCtx, peer, e.blob) {
+					continue
+				}
+				c.taskOutboxDrop(flushCtx, peer, e.taskID)
+				c.logger.Info("outbox: redelivered forward task", "task", e.taskID, "peer", peer)
+				continue
 			}
+			// Legacy row (pre-bundle or a bundle wrap that failed): deliver
+			// the JSON payload as an ordinary task_delegate.
 			var p bus.TaskDelegatePayload
-			if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			if err := json.Unmarshal([]byte(e.raw), &p); err != nil {
 				c.logger.Warn("outbox: bad parked task payload, dropping", "task", e.taskID, "peer", peer, "err", err)
 				c.taskOutboxDrop(flushCtx, peer, e.taskID)
 				continue
@@ -362,4 +374,85 @@ func (c *Core) deliverTask(ctx context.Context, peer string, p bus.TaskDelegateP
 		return false
 	}
 	return true
+}
+
+// deliverBundle places a dtn_bundle envelope carrying a verbatim signed CBOR
+// bundle on the wire (§8.3). It is the flush path's send for a parked row:
+// the stored blob IS the signed object, so redelivery is byte-identical to
+// the dispatch that parked it.
+func (c *Core) deliverBundle(ctx context.Context, peer string, blob []byte) bool {
+	msgID, err := newUUID()
+	if err != nil {
+		c.logger.Warn("task_outbox: mint message id", "err", err)
+		return false
+	}
+	env, err := bus.NewEnvelope(bus.MsgDTNBundle, c.nodeID, msgID, bus.DTNBundlePayload{Blob: blob})
+	if err != nil {
+		c.logger.Warn("task_outbox: build bundle envelope", "err", err)
+		return false
+	}
+	env.To = peer
+	if err := c.sendTo(peer, env); err != nil {
+		c.logger.Warn("task_outbox: send bundle", "peer", peer, "err", err)
+		return false
+	}
+	return true
+}
+
+// sweepOutboxes is the monitor tick's periodic redelivery pass (§9.1): parked
+// entries only flushed on the peer's hello before, which meant a peer that
+// stayed CONNECTED but briefly dropped a send (a transient write error, a
+// lane that was full for a beat) kept its parked work until the next
+// reconnect. The sweep walks every peer with a pending row and flushes the
+// ones that are reachable right now — idempotent because the receiver dedups
+// on the task/result id, not on the frame.
+func (c *Core) sweepOutboxes(ctx context.Context) {
+	if c.db == nil {
+		return
+	}
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT DISTINCT peer FROM result_outbox
+		UNION SELECT DISTINCT peer FROM cancel_outbox
+		UNION SELECT DISTINCT peer FROM task_outbox`)
+	if err != nil {
+		c.logger.Warn("outbox: sweep query", "err", err)
+		return
+	}
+	var peers []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err == nil {
+			peers = append(peers, p)
+		}
+	}
+	rows.Close()
+	for _, peer := range peers {
+		if c.connFor(peer) == nil {
+			continue
+		}
+		c.outboxFlush(ctx, peer) // claims internally; skips if one is running
+	}
+}
+
+// outboxFlushClaim marks a peer's flush as in-flight so the periodic sweep
+// cannot stack concurrent flush goroutines on the same destination (artifact
+// chunk redelivery inside one flush can legitimately outlive a tick).
+func (c *Core) outboxFlushClaim(peer string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.outboxFlushing == nil {
+		c.outboxFlushing = make(map[string]bool)
+	}
+	if c.outboxFlushing[peer] {
+		return false
+	}
+	c.outboxFlushing[peer] = true
+	return true
+}
+
+// outboxFlushDone releases a peer's in-flight flush marker.
+func (c *Core) outboxFlushDone(peer string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.outboxFlushing, peer)
 }

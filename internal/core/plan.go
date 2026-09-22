@@ -772,6 +772,14 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 	if err := c.store.SetDelegationBudget(ctx, t.TaskID, budget); err != nil {
 		c.logger.Warn("persist child delegation budget", "task", t.TaskID, "err", err)
 	}
+	// The token quota is mesh-wide too (§6.1): the child draws from the same
+	// remainder the parent carries — zero stays unbounded, an exhausted
+	// parent spawns an already-exhausted child that declines on dispatch.
+	if parent.TokenBudget != 0 {
+		if err := c.store.SetTokenBudget(ctx, t.TaskID, parent.TokenBudget); err != nil {
+			c.logger.Warn("persist child token budget", "task", t.TaskID, "err", err)
+		}
+	}
 	c.EvTrace(ctx, t.TaskID, "spawn_child_task", map[string]any{
 		"parent_id": parentID,
 		"sub_main":  c.nodeID,
@@ -811,7 +819,8 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 			Transport:        in.Transport,
 			DeadlineUnix:     in.DeadlineUnix,
 			Depth:            len(child.Chain),
-			DelegationBudget: child.DelegationBudget,
+			DelegationBudget: &child.DelegationBudget,
+			TokenBudget:      child.TokenBudget,
 		}
 		if in.Authorized {
 			payload.AuthHops = defaultConsentHops
