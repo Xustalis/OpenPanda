@@ -135,6 +135,10 @@ type TaskDelegatePayload struct {
 	ProjectDir  string `json:"project_dir,omitempty"`
 	// UserLocale carries the origin user's language preference across nodes.
 	UserLocale string `json:"user_locale,omitempty"`
+	// BundledArtifacts carries self-contained input artifacts for proactive push (whitepaper §8.3).
+	BundledArtifacts []FatBundleArtifact `json:"bundled_artifacts,omitempty"`
+	// Transport specifies whether the delegation travels via live streaming or DTN ("live" or "dtn").
+	Transport string `json:"transport,omitempty"`
 }
 
 // clampForWire bounds the inline blobs a delegate can carry. An oversized
@@ -402,3 +406,41 @@ type ArtifactChunkPayload struct {
 // JSON (a 4/3 expansion), so 1 MiB of artifact becomes roughly 1.4 MiB on the
 // wire — comfortably under the cap even with the envelope around it.
 const ArtifactChunkBytes = 1 << 20
+
+// FatBundleArtifact carries an inline artifact payload for proactive push-based DTN delivery (whitepaper §8.3).
+type FatBundleArtifact struct {
+	Hash string `json:"hash"`
+	Data []byte `json:"data"`
+}
+
+// TargetScope defines the repository, file, and symbol scope for peer conflict negotiation (whitepaper §5.1).
+type TargetScope struct {
+	Repo   string `json:"repo,omitempty"`
+	File   string `json:"file"`
+	Symbol string `json:"symbol,omitempty"`
+}
+
+// AgentNegotiatePayload carries horizontal peer-to-peer conflict negotiation signaling (whitepaper §5.1).
+type AgentNegotiatePayload struct {
+	FromNode      string      `json:"from_node"`
+	FromAgent     string      `json:"from_agent"`
+	Timestamp     int64       `json:"timestamp"`
+	Weight        int         `json:"weight"`
+	TargetScope   TargetScope `json:"target_scope"`
+	Intent        string      `json:"intent"`
+	ActionPreview string      `json:"action_preview,omitempty"`
+}
+
+// AgentGrantPayload carries lease-based lock authorization or yield acknowledgement (whitepaper §5.2).
+type AgentGrantPayload struct {
+	LockID    string `json:"lock_id"`
+	GrantedTo string `json:"granted_to"`
+	LeaseMS   int64  `json:"lease_ms"`
+}
+
+// AgentYieldPayload indicates an agent has halted at an AST checkpoint and ceded execution.
+type AgentYieldPayload struct {
+	FromAgent string      `json:"from_agent"`
+	Scope     TargetScope `json:"scope"`
+	Reason    string      `json:"reason,omitempty"`
+}

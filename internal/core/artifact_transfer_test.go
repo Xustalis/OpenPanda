@@ -270,3 +270,44 @@ func TestArtifactFetchFromUnreachableSourceFails(t *testing.T) {
 		t.Fatalf("the failed transfer was left registered, blocking a retry")
 	}
 }
+
+func TestImportFatBundleArtifacts(t *testing.T) {
+	ctx := context.Background()
+	tree := artifactTree(t, 2048)
+
+	sourcePool := artifact.NewStore(filepath.Join(t.TempDir(), "source-artifacts"))
+	manifest, err := sourcePool.PackDir(tree)
+	if err != nil {
+		t.Fatalf("pack tree: %v", err)
+	}
+
+	data, err := os.ReadFile(sourcePool.Path(manifest.Hash))
+	if err != nil {
+		t.Fatalf("read packed artifact: %v", err)
+	}
+
+	receiver := newCore(t, "receiver", "127.0.0.1:17967")
+	recPool := withArtifactPool(t, receiver)
+
+	// Before import, receiver does not have it
+	if _, ok := recPool.Has(manifest.Hash); ok {
+		t.Fatalf("receiver should not have artifact before import")
+	}
+
+	// Push-based import (Fat Bundle)
+	imported, err := receiver.ImportFatBundleArtifacts(ctx, []bus.FatBundleArtifact{
+		{Hash: manifest.Hash, Data: data},
+	})
+	if err != nil {
+		t.Fatalf("import fat bundle: %v", err)
+	}
+	if len(imported) != 1 || imported[0].Hash != manifest.Hash {
+		t.Fatalf("unexpected imported manifests: %v", imported)
+	}
+
+	// Now receiver has it directly in the pool without any network pull
+	if size, ok := recPool.Has(manifest.Hash); !ok || size != manifest.Size {
+		t.Fatalf("artifact not present or size mismatch: ok=%v, size=%d, want %d", ok, size, manifest.Size)
+	}
+}
+

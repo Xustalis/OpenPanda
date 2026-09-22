@@ -185,6 +185,11 @@ type Task struct {
 
 	// UserLocale is the user's language preference ("en", "zh-CN", etc.).
 	UserLocale string
+
+	// Transport marks the transport mode for this task ("live" or "dtn").
+	Transport string
+	// DeadlineUnix is the absolute TTL expiration timestamp for DTN tasks (§8.2).
+	DeadlineUnix int64
 }
 
 // GetUserLocale returns the task's language preference as an i18n.Locale,
@@ -227,6 +232,10 @@ type TaskDetail struct {
 	Requires []string
 	// UserLocale carries the user's language preference.
 	UserLocale string
+	// Transport carries the preferred transport mode ("live" or "dtn").
+	Transport string
+	// DeadlineUnix carries the absolute TTL expiration timestamp for DTN tasks.
+	DeadlineUnix int64
 }
 
 // Terminal reports whether s has no valid outgoing transition.

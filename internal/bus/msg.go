@@ -34,6 +34,10 @@ const (
 	// artifact is a build tree or a trained model.
 	MsgArtifactFetch = "artifact_fetch"
 	MsgArtifactChunk = "artifact_chunk"
+	// Agent horizontal negotiation signaling (whitepaper §5.1).
+	MsgAgentNegotiate = "agent_negotiate"
+	MsgAgentGrant     = "agent_grant"
+	MsgAgentYield     = "agent_yield"
 )
 
 // Envelope is the JSON wire format (design doc §10.3). MsgID is a UUIDv7

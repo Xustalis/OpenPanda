@@ -1069,6 +1069,12 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 		c.handleArtifactChunk(ctx, env)
 	case bus.MsgHeartbeat:
 		c.handleHeartbeat(ctx, env)
+	case bus.MsgAgentNegotiate:
+		c.handleAgentNegotiate(ctx, env)
+	case bus.MsgAgentGrant:
+		c.handleAgentGrant(ctx, env)
+	case bus.MsgAgentYield:
+		c.handleAgentYield(ctx, env)
 	default:
 		c.logger.Warn("unhandled message type", "type", env.Type, "from", env.From)
 	}

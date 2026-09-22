@@ -266,3 +266,41 @@ func TestAdvancePlanPropagatesFailure(t *testing.T) {
 	}
 }
 
+func TestSpawnChildTaskSubMain(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	core := newCoreWithNative(t, "mac", "127.0.0.1:17994", ledger.NativeAbility{
+		ID: "dev:code", Command: "true", Tier: 1,
+	})
+	if err := core.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// Create root parent task
+	root, _, _, err := core.createTask(ctx, TaskInput{
+		Title:  "root task",
+		Intent: "orchestrate work",
+	})
+	if err != nil {
+		t.Fatalf("create root task: %v", err)
+	}
+
+	// Sub-MainAgent creates child task under root
+	child, err := core.SpawnChildTask(ctx, root.TaskID, TaskInput{
+		Title:  "sub task",
+		Intent: "subordinate work",
+	})
+	if err != nil {
+		t.Fatalf("spawn child task: %v", err)
+	}
+
+	if child.ParentID != root.TaskID {
+		t.Fatalf("expected child.ParentID = %s, got %s", root.TaskID, child.ParentID)
+	}
+	if len(child.Chain) == 0 {
+		t.Fatalf("expected non-empty chain on child task")
+	}
+}
+
+

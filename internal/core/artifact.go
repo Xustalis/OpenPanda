@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -66,6 +67,37 @@ func (c *Core) SetArtifactStore(s *artifact.Store) { c.artifacts = s }
 
 // Artifacts returns the node's artifact pool, or nil if none is configured.
 func (c *Core) Artifacts() *artifact.Store { return c.artifacts }
+
+// ImportFatBundleArtifacts imports an array of proactive bundled artifacts directly into the node's
+// local artifact pool, verifying SHA256 integrity and eliminating round-trip pulls (whitepaper §8.3).
+func (c *Core) ImportFatBundleArtifacts(ctx context.Context, artifacts []bus.FatBundleArtifact) ([]artifact.Manifest, error) {
+	if c.artifacts == nil {
+		return nil, errors.New("core: no artifact pool configured")
+	}
+	var manifests []artifact.Manifest
+	for _, a := range artifacts {
+		if size, ok := c.artifacts.Has(a.Hash); ok {
+			manifests = append(manifests, artifact.Manifest{Hash: a.Hash, Size: size})
+			continue
+		}
+		r := bytes.NewReader(a.Data)
+		m, err := c.artifacts.Put(a.Hash, r)
+		if err != nil {
+			return nil, fmt.Errorf("import fat bundle artifact %s: %w", a.Hash, err)
+		}
+		manifests = append(manifests, m)
+		c.EvTrace(ctx, "", EvArtifactTransfer, map[string]any{
+			"from_node":  "fat_bundle_push",
+			"to_node":    c.nodeID,
+			"hash":       a.Hash,
+			"ok":         true,
+			"size_bytes": m.Size,
+			"mode":       "push",
+		})
+	}
+	return manifests, nil
+}
+
 
 // artifactKey names an in-flight transfer. The pair is the key, not the hash
 // alone: two stages of different plans may legitimately pull the same artifact,
