@@ -41,6 +41,14 @@ type ActuatorProfile struct {
 	Capabilities []string `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
 	CostTier     string   `yaml:"cost_tier,omitempty" json:"cost_tier,omitempty"`
 	Tier         int      `yaml:"tier" json:"tier"` // 1=reversible (default), 2=irreversible (needs auth)
+	// Command/Args are the actuator's driver invocation (§7.2): the program
+	// that turns an intent or ActionSpec into a physical/software action —
+	// e.g. a GPIO control script on an Orange Pi. Placeholders {intent},
+	// {action} and {param:<name>} are substituted at execution. An actuator
+	// without a command stays a routing advertisement only: tasks matching it
+	// fall through to the agent tier, which figures the hardware out itself.
+	Command string   `yaml:"command,omitempty" json:"command,omitempty"`
+	Args    []string `yaml:"args,omitempty" json:"args,omitempty"`
 }
 
 // ActionSpec defines a uniform action dispatch across both software harnesses and hardware actuators (whitepaper §7.2).
@@ -157,9 +165,18 @@ type CapabilitySummary struct {
 func Register(db *sql.DB, c Card, id string, tier int) error {
 	nativeList := append([]NativeAbility{}, c.Native...)
 	for _, act := range c.Actuators {
+		// An actuator's driver command (when declared) is the executable its
+		// folded native ability carries — falling back to the interface name
+		// keeps the row honest about there being nothing to run rather than
+		// recording a literal "gpio" as if it were a binary.
+		cmd := act.Command
+		if cmd == "" {
+			cmd = act.Interface
+		}
 		nativeList = append(nativeList, NativeAbility{
 			ID:          act.ID,
-			Command:     act.Interface,
+			Command:     cmd,
+			Args:        act.Args,
 			Tier:        act.Tier,
 			Description: act.Category,
 		})

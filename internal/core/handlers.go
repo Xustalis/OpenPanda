@@ -813,6 +813,19 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	if err != nil {
 		return bus.TaskResultPayload{}, fmt.Errorf("load task: %w", err)
 	}
+	// §7.2: an actuator plan's argv is a template — fill {intent}/{action}/
+	// {param:<name>} from the task's action_spec before anything runs. A
+	// substitution failure means the spec and the card disagree, which no
+	// retry fixes: fail at the gate, not inside the driver.
+	if plan.ActuatorID != "" {
+		spec, serr := commander.ParseActionSpec(task.SpecJSON)
+		if serr != nil {
+			return bus.TaskResultPayload{}, fmt.Errorf("route actuator: %w", serr)
+		}
+		if err := commander.SubstituteActionSpec(&plan, spec, intent); err != nil {
+			return bus.TaskResultPayload{}, fmt.Errorf("route actuator: %w", err)
+		}
+	}
 	taskChain = task.Chain
 	switch task.State {
 	case StateDispatched:
