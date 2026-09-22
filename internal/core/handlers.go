@@ -165,6 +165,12 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 			c.logger.Error("set project inputs failed", "task", t.TaskID, "err", err)
 		}
 	}
+	// Import any bundled artifacts carried in Fat Bundle (whitepaper §8.3)
+	if len(p.BundledArtifacts) > 0 && c.artifacts != nil {
+		if _, err := c.ImportFatBundleArtifacts(ctx, p.BundledArtifacts); err != nil {
+			c.logger.Warn("import bundled artifacts", "task", t.TaskID, "err", err)
+		}
+	}
 	// The project's memory lands before anything runs, so the agent reads it from
 	// the same path a local task would.
 	if err := c.landProjectPack(p.Project, p.ProjectPack); err != nil {
@@ -543,7 +549,11 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 	}
 	env.To = target
 	if err := c.sendTo(target, env); err != nil {
-		return fmt.Errorf("send: %w", err)
+		c.logger.Info("delegation send failed or target offline; parking in task_outbox for DTN relay",
+			"target", target, "task", taskID, "err", err)
+		c.taskOutboxPersist(ctx, target, p, "dtn", timeoutMS)
+	} else {
+		c.logger.Info("forwarded delegated task", "task", taskID, "to", target)
 	}
 	// — Trace: this node handed the task one hop downstream (from=here,
 	// to=target). Recorded on this node's copy so the origin's task detail
@@ -555,7 +565,6 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 		"chain":      chain,
 		"attempt_id": p.AttemptID,
 	})
-	c.logger.Info("forwarded delegated task", "task", taskID, "to", target)
 	return nil
 }
 
@@ -590,6 +599,7 @@ func delegateDetail(p bus.TaskDelegatePayload) TaskDetail {
 		ResourceJSON: p.ResourceJSON,
 		Requires:     delegateRequired(p),
 		UserLocale:   p.UserLocale,
+		Transport:    p.Transport,
 	}
 }
 
@@ -2387,3 +2397,70 @@ func isOutputStagnant(currOut, prevOut, currErr, prevErr string) bool {
 	}
 	return false
 }
+
+func (c *Core) handleAgentNegotiate(ctx context.Context, env bus.Envelope) {
+	var p bus.AgentNegotiatePayload
+	if err := env.PayloadInto(&p); err != nil {
+		c.logger.Warn("agent negotiate: decode payload", "from", env.From, "err", err)
+		return
+	}
+	c.logger.Info("received agent negotiation signal",
+		"from_node", p.FromNode, "agent", p.FromAgent, "scope", p.TargetScope.File, "weight", p.Weight)
+	c.EvTrace(ctx, "", "agent_negotiate", map[string]any{
+		"from_node":  p.FromNode,
+		"from_agent": p.FromAgent,
+		"weight":     p.Weight,
+		"scope":      p.TargetScope,
+		"intent":     p.Intent,
+	})
+	// Auto-grant lease authorization (§5.2)
+	grant := bus.AgentGrantPayload{
+		LockID:    env.MsgID,
+		GrantedTo: p.FromAgent,
+		LeaseMS:   15000,
+	}
+	_ = c.reply(ctx, env, bus.MsgAgentGrant, grant)
+}
+
+func (c *Core) handleAgentGrant(ctx context.Context, env bus.Envelope) {
+	var p bus.AgentGrantPayload
+	if err := env.PayloadInto(&p); err != nil {
+		c.logger.Warn("agent grant: decode payload", "from", env.From, "err", err)
+		return
+	}
+	c.logger.Info("received agent lock grant", "lock_id", p.LockID, "granted_to", p.GrantedTo, "lease_ms", p.LeaseMS)
+	c.EvTrace(ctx, "", "agent_grant", map[string]any{
+		"lock_id":    p.LockID,
+		"granted_to": p.GrantedTo,
+		"lease_ms":   p.LeaseMS,
+	})
+}
+
+func (c *Core) handleAgentYield(ctx context.Context, env bus.Envelope) {
+	var p bus.AgentYieldPayload
+	if err := env.PayloadInto(&p); err != nil {
+		c.logger.Warn("agent yield: decode payload", "from", env.From, "err", err)
+		return
+	}
+	c.logger.Info("agent yielded breakpoint", "agent", p.FromAgent, "scope", p.Scope.File)
+	c.EvTrace(ctx, "", "agent_yield", map[string]any{
+		"from_agent": p.FromAgent,
+		"scope":      p.Scope,
+		"reason":     p.Reason,
+	})
+}
+
+// SendNegotiation sends a horizontal conflict negotiation signal to target peer (whitepaper §5.1).
+func (c *Core) SendNegotiation(ctx context.Context, target string, p bus.AgentNegotiatePayload) error {
+	msgID, err := newUUID()
+	if err != nil {
+		return err
+	}
+	env, err := bus.NewEnvelope(bus.MsgAgentNegotiate, c.nodeID, msgID, p)
+	if err != nil {
+		return err
+	}
+	env.To = target
+	return c.sendTo(target, env)
+}
+

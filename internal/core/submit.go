@@ -57,6 +57,10 @@ type TaskInput struct {
 	ClassifyKind string
 	// UserLocale records the user's language preference ("en", "zh-CN", etc.).
 	UserLocale i18n.Locale
+	// Transport specifies the transport mode ("live" or "dtn", whitepaper §8.2).
+	Transport string
+	// DeadlineUnix is an optional absolute deadline timestamp for DTN tasks.
+	DeadlineUnix int64
 }
 
 // detail folds the input into the persisted detail columns.
@@ -85,6 +89,8 @@ func (in TaskInput) detail() TaskDetail {
 		ResourceJSON: in.ResourceJSON,
 		Requires:     in.Requires,
 		UserLocale:   string(in.UserLocale),
+		Transport:    in.Transport,
+		DeadlineUnix: in.DeadlineUnix,
 	}
 }
 
@@ -205,6 +211,29 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 	case scheduler.ActionLocal:
 		return c.runLocal(ctx, t, in)
 	case scheduler.ActionForward:
+		linkState := c.EvaluateLinkState(ctx, decision.Target)
+		if in.Transport == "dtn" || linkState != LinkLive {
+			c.logger.Info("target link non-live or dtn requested; queueing asynchronously",
+				"target", decision.Target, "link", linkState, "task", t.TaskID)
+			qSpec := DefaultQueueSpec()
+			qSpec.WorkDir = in.WorkDir
+			if err := c.store.SetQueueMeta(ctx, t.TaskID, qSpec.Priority, qSpec.SessionID, qSpec.WorkDir, qSpec.ResourceKeys); err != nil {
+				return t, bus.TaskResultPayload{}, fmt.Errorf("set queue meta: %w", err)
+			}
+			if err := c.store.Queue(ctx, t.TaskID, c.nodeID); err != nil {
+				return t, bus.TaskResultPayload{}, fmt.Errorf("queue dtn task: %w", err)
+			}
+			t.State = StateQueued
+			t.Scheduled = true
+			c.queueWake()
+			return t, bus.TaskResultPayload{
+				TaskID:    t.TaskID,
+				AttemptID: t.AttemptID,
+				State:     StateQueued,
+				Stdout:    fmt.Sprintf("dispatched to asynchronous DTN queue (target link: %s)", linkState),
+			}, nil
+		}
+
 		payload := bus.TaskDelegatePayload{
 			TaskID:        t.TaskID,
 			Project:       in.Project,

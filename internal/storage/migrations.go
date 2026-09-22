@@ -40,6 +40,26 @@ var migrations = []Migration{
 	{Version: 15, Name: "add_projects_and_settings", Apply: migrateV15},
 	{Version: 16, Name: "add_delegation_metrics_cost", Apply: migrateV16},
 	{Version: 17, Name: "add_task_approval_disposition", Apply: migrateV17},
+	{Version: 18, Name: "add_task_outbox", Apply: migrateV18},
+}
+
+// migrateV18 adds task_outbox: universal relay outbox for DTN and store-and-forward tasks (whitepaper §8.2).
+// Unlike result_outbox which only holds terminal results, task_outbox buffers forward
+// delegation envelopes for non-live peers or opportunistic DTN relay.
+func migrateV18(tx MigrationExec) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS task_outbox (
+		peer TEXT NOT NULL,
+		task_id TEXT NOT NULL,
+		payload_json TEXT NOT NULL,
+		transport_type TEXT NOT NULL DEFAULT 'dtn',
+		ttl INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY (peer, task_id)
+	)`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_task_outbox_peer ON task_outbox(peer)`)
+	return err
 }
 
 // migrateV17 persists why a task entered review. Approval behavior must survive

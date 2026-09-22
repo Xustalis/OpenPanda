@@ -37,6 +37,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/plan"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
 
 // SetStage stamps a task's place in a plan: the plan it belongs to, its stage id
@@ -497,13 +498,16 @@ func (c *Core) planStageInputs(ctx context.Context, byStage map[string]Task, nee
 	return out, nil
 }
 
-// orchestratesAny reports whether this node created any of these stage rows, and
-// is therefore the node that owns the plan's graph. createTask stamps the chain
-// with this node as its origin, while a delegated copy of a stage arrives with
-// the plan node already at the head of its chain.
+// orchestratesAny reports whether this node has orchestration authority over
+// these stages. In the decentralized mesh (whitepaper §4.2), a node that
+// originated the plan or owns a child stage as a Sub-MainAgent can advance
+// dependencies.
 func (c *Core) orchestratesAny(stages []Task) bool {
 	for _, t := range stages {
 		if len(t.Chain) > 0 && t.Chain[0] == c.nodeID {
+			return true
+		}
+		if t.ParentID != "" && (t.OwnerNode == c.nodeID || (len(t.Chain) > 0 && t.Chain[0] == c.nodeID)) {
 			return true
 		}
 	}
@@ -728,3 +732,37 @@ func (c *Core) sweepPlans(ctx context.Context) {
 		}
 	}
 }
+
+// SpawnChildTask creates a child task under parentID, implementing the Sub-MainAgent
+// recursive delegation model (whitepaper §4.2). The executing node promotes itself to
+// Sub-MainAgent, spawning child causal tasks with bounded depth.
+func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput) (Task, error) {
+	parent, err := c.store.Get(ctx, parentID)
+	if err != nil {
+		return Task{}, fmt.Errorf("load parent task %s: %w", parentID, err)
+	}
+	if len(parent.Chain) >= scheduler.MaxChainDepth {
+		return Task{}, scheduler.ErrChainTooDeep
+	}
+	// Inherit chain and append current node as local Sub-Main delegator
+	newChain, err := scheduler.AppendChain(parent.Chain, c.nodeID)
+	if err != nil {
+		newChain = []string{c.nodeID}
+	}
+	t, err := c.store.Create(ctx, parentID, in.Project, in.Title, c.nodeID, newChain)
+	if err != nil {
+		return Task{}, fmt.Errorf("create child task: %w", err)
+	}
+	if in.WorkDir != "" {
+		_ = c.store.SetWorkDir(ctx, t.TaskID, in.WorkDir)
+	}
+	_ = c.store.SetAuthorized(ctx, t.TaskID, in.Authorized)
+	_ = c.store.SetDetail(ctx, t.TaskID, in.detail())
+	c.EvTrace(ctx, t.TaskID, "spawn_child_task", map[string]any{
+		"parent_id": parentID,
+		"sub_main":  c.nodeID,
+		"chain":     newChain,
+	})
+	return t, nil
+}
+

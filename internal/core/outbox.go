@@ -119,11 +119,46 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 			return
 		}
 	}
-	if len(entries) == 0 && len(cancels) == 0 {
+	type taskEntry struct {
+		taskID string
+		raw    string
+	}
+	var taskEntries []taskEntry
+	trows, err := c.db.QueryContext(ctx,
+		`SELECT task_id, payload_json FROM task_outbox WHERE peer = ?`, peer)
+	if err != nil {
+		c.logger.Warn("outbox: query tasks", "peer", peer, "err", err)
+	} else {
+		for trows.Next() {
+			var e taskEntry
+			if err := trows.Scan(&e.taskID, &e.raw); err != nil {
+				trows.Close()
+				c.logger.Warn("outbox: scan tasks", "peer", peer, "err", err)
+				return
+			}
+			taskEntries = append(taskEntries, e)
+		}
+		trows.Close()
+	}
+
+	if len(entries) == 0 && len(cancels) == 0 && len(taskEntries) == 0 {
 		return
 	}
 	go func() {
 		flushCtx := context.WithoutCancel(ctx)
+		for _, e := range taskEntries {
+			var p bus.TaskDelegatePayload
+			if err := json.Unmarshal([]byte(e.raw), &p); err != nil {
+				c.logger.Warn("outbox: bad parked task payload, dropping", "task", e.taskID, "peer", peer, "err", err)
+				c.taskOutboxDrop(flushCtx, peer, e.taskID)
+				continue
+			}
+			if !c.deliverTask(flushCtx, peer, p) {
+				continue
+			}
+			c.taskOutboxDrop(flushCtx, peer, e.taskID)
+			c.logger.Info("outbox: redelivered forward task", "task", e.taskID, "peer", peer)
+		}
 		for _, e := range entries {
 			var p bus.TaskResultPayload
 			if err := json.Unmarshal([]byte(e.raw), &p); err != nil {
@@ -223,3 +258,61 @@ func (c *Core) deliverCancel(ctx context.Context, peer, taskID, reason string) b
 	}
 	return true
 }
+
+// taskOutboxPersist stores a forward task that could not be delivered immediately,
+// implementing the universal DTN store-and-forward relay outbox (whitepaper §8.2, §9.1).
+func (c *Core) taskOutboxPersist(ctx context.Context, peer string, p bus.TaskDelegatePayload, transportType string, ttl int64) {
+	if c.db == nil || peer == "" {
+		return
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		c.logger.Warn("task_outbox: marshal task", "task", p.TaskID, "err", err)
+		return
+	}
+	if transportType == "" {
+		transportType = "dtn"
+	}
+	_, err = c.db.ExecContext(ctx,
+		`INSERT INTO task_outbox (peer, task_id, payload_json, transport_type, ttl, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(peer, task_id) DO UPDATE SET payload_json = excluded.payload_json, ttl = excluded.ttl`,
+		peer, p.TaskID, string(raw), transportType, ttl, storage.Now())
+	if err != nil {
+		c.logger.Warn("task_outbox: persist task", "task", p.TaskID, "peer", peer, "err", err)
+		return
+	}
+	c.logger.Info("task_outbox: task parked for DTN redelivery", "task", p.TaskID, "peer", peer)
+}
+
+// taskOutboxDrop removes a delivered task so it is not resent.
+func (c *Core) taskOutboxDrop(ctx context.Context, peer, taskID string) {
+	if c.db == nil || peer == "" || taskID == "" {
+		return
+	}
+	if _, err := c.db.ExecContext(ctx,
+		`DELETE FROM task_outbox WHERE peer = ? AND task_id = ?`, peer, taskID); err != nil {
+		c.logger.Warn("task_outbox: drop delivered task", "task", taskID, "peer", peer, "err", err)
+	}
+}
+
+// deliverTask places a task_delegate envelope on the wire to peer.
+func (c *Core) deliverTask(ctx context.Context, peer string, p bus.TaskDelegatePayload) bool {
+	msgID, err := newUUID()
+	if err != nil {
+		c.logger.Warn("task_outbox: mint message id", "task", p.TaskID, "err", err)
+		return false
+	}
+	env, err := bus.NewEnvelope(bus.MsgTaskDelegate, c.nodeID, msgID, p)
+	if err != nil {
+		c.logger.Warn("task_outbox: build envelope", "task", p.TaskID, "err", err)
+		return false
+	}
+	env.To = peer
+	if err := c.sendTo(peer, env); err != nil {
+		c.logger.Warn("task_outbox: send", "task", p.TaskID, "peer", peer, "err", err)
+		return false
+	}
+	return true
+}
+

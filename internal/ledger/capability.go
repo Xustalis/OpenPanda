@@ -23,11 +23,31 @@ type Card struct {
 	NodeKind        string           `yaml:"node_kind,omitempty" json:"node_kind,omitempty"`
 	NodeIdentity    string           `yaml:"node_identity,omitempty" json:"node_identity,omitempty"`
 	Chip            string           `yaml:"chip" json:"chip"`
-	Native          []NativeAbility  `yaml:"native" json:"native"`
-	Agents          map[string]Agent `yaml:"agents" json:"agents"`
-	Manual          []ManualAbility  `yaml:"manual" json:"manual"`
-	Capacity        Capacity         `yaml:"capacity" json:"capacity"`
-	ResourceProfile ResourceProfile  `yaml:"resource_profile" json:"resource_profile"`
+	Native          []NativeAbility   `yaml:"native" json:"native"`
+	Agents          map[string]Agent  `yaml:"agents" json:"agents"`
+	Manual          []ManualAbility   `yaml:"manual" json:"manual"`
+	Actuators       []ActuatorProfile `yaml:"actuators,omitempty" json:"actuators,omitempty"`
+	Capacity        Capacity          `yaml:"capacity" json:"capacity"`
+	ResourceProfile ResourceProfile   `yaml:"resource_profile" json:"resource_profile"`
+}
+
+// ActuatorProfile is the unified model equalizing software cognitive agents and hardware peripherals (whitepaper §7.1).
+type ActuatorProfile struct {
+	ID           string   `yaml:"id" json:"id"`
+	Type         string   `yaml:"type" json:"type"` // "software" or "hardware"
+	Category     string   `yaml:"category" json:"category"` // "coding", "motor_control", "audio_sensing", etc.
+	Interface    string   `yaml:"interface,omitempty" json:"interface,omitempty"` // "gpio", "usb_audio", "cli", etc.
+	PinMapping   []int    `yaml:"pin_mapping,omitempty" json:"pin_mapping,omitempty"`
+	Capabilities []string `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+	CostTier     string   `yaml:"cost_tier,omitempty" json:"cost_tier,omitempty"`
+	Tier         int      `yaml:"tier" json:"tier"` // 1=reversible (default), 2=irreversible (needs auth)
+}
+
+// ActionSpec defines a uniform action dispatch across both software harnesses and hardware actuators (whitepaper §7.2).
+type ActionSpec struct {
+	TargetActuator string         `json:"target_actuator"`
+	Action         string         `json:"action"`
+	Parameters     map[string]any `json:"parameters,omitempty"`
 }
 
 // NativeAbility is a deterministic command this node can run.
@@ -126,7 +146,16 @@ type CapabilitySummary struct {
 // directory. In Phase 0 each node is its own directory; a remote employee
 // table arrives in a later phase.
 func Register(db *sql.DB, c Card, id string, tier int) error {
-	native, err := json.Marshal(c.Native)
+	nativeList := append([]NativeAbility{}, c.Native...)
+	for _, act := range c.Actuators {
+		nativeList = append(nativeList, NativeAbility{
+			ID:          act.ID,
+			Command:     act.Interface,
+			Tier:        act.Tier,
+			Description: act.Category,
+		})
+	}
+	native, err := json.Marshal(nativeList)
 	if err != nil {
 		return fmt.Errorf("marshal native: %w", err)
 	}
@@ -329,49 +358,46 @@ func UpsertRemote(db *sql.DB, id string, s CapabilitySummary) error {
 
 // Node is a single employee_cache row, decoded.
 type Node struct {
-	ID              string           `json:"id"`
-	Name            string           `json:"name"`
-	Chip            string           `json:"chip,omitempty"`
-	NodeKind        string           `json:"node_kind"`
-	NodeIdentity    string           `json:"node_identity,omitempty"`
-	Status          string           `json:"status"`
-	LastSeen        int64            `json:"last_seen"`
-	SchedulerTier   int              `json:"scheduler_tier"`
-	Native          []NativeAbility  `json:"native,omitempty"`
-	Agents          map[string]Agent `json:"agents,omitempty"`
-	Manual          []ManualAbility  `json:"manual,omitempty"`
-	Capacity        Capacity         `json:"capacity"`
-	ResourceProfile ResourceProfile  `json:"resource_profile"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Chip            string            `json:"chip,omitempty"`
+	NodeKind        string            `json:"node_kind"`
+	NodeIdentity    string            `json:"node_identity,omitempty"`
+	Status          string            `json:"status"`
+	LastSeen        int64             `json:"last_seen"`
+	SchedulerTier   int               `json:"scheduler_tier"`
+	Native          []NativeAbility   `json:"native,omitempty"`
+	Agents          map[string]Agent  `json:"agents,omitempty"`
+	Manual          []ManualAbility   `json:"manual,omitempty"`
+	Actuators       []ActuatorProfile `json:"actuators,omitempty"`
+	Capacity        Capacity          `json:"capacity"`
+	ResourceProfile ResourceProfile   `json:"resource_profile"`
 }
 
-// Abilities returns this node's displayable ability list — native IDs plus an
-// "agent:<name>" entry per configured agent — sorted for deterministic output.
-// It is the single shared form used by the CLI status panel and the entry-model
-// device summary, so the two stay in lock-step as new ability kinds appear.
+// Abilities returns this node's displayable ability list — native IDs,
+// actuator IDs, plus an "agent:<name>" entry per configured agent — sorted
+// for deterministic output.
 func (n Node) Abilities() []string {
-	out := make([]string, 0, len(n.Native)+len(n.Agents))
+	out := make([]string, 0, len(n.Native)+len(n.Agents)+len(n.Actuators))
 	for _, a := range n.Native {
 		out = append(out, a.ID)
 	}
 	for name := range n.Agents {
 		out = append(out, "agent:"+name)
 	}
+	for _, act := range n.Actuators {
+		out = append(out, act.ID)
+	}
 	sort.Strings(out)
 	return out
 }
 
 // Matches reports whether this node declares any of required, across the
-// three ability layers (native / agent / manual). Mirrors commander.Router's
-// per-kind matching so network-level and local routing agree on semantics.
-//
-// A required id of the form "agent:<name>" refers to a configured agent by
-// name (the form advertised in the device summary); any other id matches a
-// declared native/manual id or an agent capability, with token-subset matching
-// that bridges separator/category-prefix differences (see AbilityMatches).
+// four ability layers (native / agent / manual / actuators).
 func (n Node) Matches(required []string) bool {
 	// Pre-tokenize the declared ids once; otherwise each required id would
 	// re-tokenize the whole declared set (O(R×A) allocations instead of O(A)).
-	native, agentCaps, manual := n.tokenizedAbilities()
+	native, agentCaps, manual, actuators := n.tokenizedAbilities()
 	for _, req := range required {
 		if name, ok := strings.CutPrefix(req, "agent:"); ok {
 			if _, exists := n.Agents[name]; exists {
@@ -380,7 +406,7 @@ func (n Node) Matches(required []string) bool {
 			continue
 		}
 		r := tokenizeAbility(req)
-		if matchTokens(native, r) || matchTokens(agentCaps, r) || matchTokens(manual, r) {
+		if matchTokens(native, r) || matchTokens(agentCaps, r) || matchTokens(manual, r) || matchTokens(actuators, r) {
 			return true
 		}
 	}
@@ -416,10 +442,10 @@ func (n Node) Fits(req ResourceProfile) bool {
 	return true
 }
 
-// tokenizedAbilities returns the declared native/agent/manual ability ids as
+// tokenizedAbilities returns the node's native, agent and manual abilities as
 // case-folded token sets, computed once so Matches does not re-tokenize them
 // per required id.
-func (n Node) tokenizedAbilities() (native, agentCaps, manual [][]string) {
+func (n Node) tokenizedAbilities() (native, agentCaps, manual, actuators [][]string) {
 	native = make([][]string, 0, len(n.Native))
 	for _, ab := range n.Native {
 		native = append(native, tokenizeAbility(ab.ID))
@@ -433,7 +459,14 @@ func (n Node) tokenizedAbilities() (native, agentCaps, manual [][]string) {
 	for _, ab := range n.Manual {
 		manual = append(manual, tokenizeAbility(ab.ID))
 	}
-	return native, agentCaps, manual
+	actuators = make([][]string, 0, len(n.Actuators))
+	for _, act := range n.Actuators {
+		actuators = append(actuators, tokenizeAbility(act.ID))
+		for _, cap := range act.Capabilities {
+			actuators = append(actuators, tokenizeAbility(cap))
+		}
+	}
+	return native, agentCaps, manual, actuators
 }
 
 // matchTokens reports whether any declared token set matches the required set.
