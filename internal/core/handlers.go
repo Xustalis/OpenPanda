@@ -140,6 +140,15 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	if err := c.store.AdoptAttempt(ctx, t.TaskID, p.AttemptID); err != nil {
 		c.logger.Warn("adopt attempt", "task", t.TaskID, "err", err)
 	}
+	// Resume hint (§5.2): the delegator only sends ResumeSessionID when it
+	// believes this node minted the session — adopt it so the run loop picks
+	// the conversation back up. A wrong hint costs one cold start, nothing
+	// more; it names no capability and grants no privilege.
+	if p.ResumeSessionID != "" {
+		if err := c.store.SetAgentSession(ctx, t.TaskID, p.ResumeSessionID, c.nodeID); err != nil {
+			c.logger.Warn("adopt resume session", "task", t.TaskID, "err", err)
+		}
+	}
 	// — Trace: this node accepted a delegation hop (from=upstream delegator,
 	// to=here). The orbit's delegation-chain reconstruction flattens these in
 	// arrival order; best-effort only.
@@ -230,6 +239,15 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 			}
 		}
 	}
+	// The wire-supplied timeout becomes this node's own lease on the task —
+	// including the parked waiting_context state — so it must not exceed the
+	// silence bound this node would grant itself. An unbounded value would let
+	// a dead delegator's orphan squat an execution slot for as long as the
+	// sender named; a live task never notices the cap because renewLease
+	// extends the lease for as long as execution actually runs.
+	if max := c.lease().Milliseconds(); p.TimeoutMS > max {
+		p.TimeoutMS = max
+	}
 	if p.TimeoutMS > 0 {
 		if err := c.store.SetLease(ctx, t.TaskID, p.TimeoutMS); err != nil {
 			// The default lease still applies, so this is a warning, not a fail.
@@ -305,10 +323,16 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 		c.terminalizeDeclined(ctx, taskID, "capacity full")
 		return
 	}
-	// The reservation is held until the task's row claims the slot for real —
-	// SetWaitingContext/Rename-to-running happens inside the goroutine, so the
-	// release fires there. Any early return before the goroutine spawns must
-	// release immediately or the slot leaks.
+	c.proceedLocalDelegate(ctx, env, taskID, p, required, chain, release)
+}
+
+// proceedLocalDelegate is the post-admission body of handleLocalDelegate,
+// split out so a task resumed from an artifact-push park re-enters the same
+// context-resolution and execution path without taking a second capacity
+// reservation (its parked row was countable the whole wait). The release
+// contract is unchanged: held until the row claims a countable slot, fired
+// on every early return instead.
+func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskID string, p bus.TaskDelegatePayload, required []string, chain []string, release func()) {
 	level := p.ContextLevel
 	hash := p.ContextHash
 
@@ -331,7 +355,21 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 		if err := c.ctx.Put(ctx, hash, p.ContextType, p.ContextData, nil); err != nil {
 			c.logger.Warn("store inline context", "task", taskID, "err", err)
 		}
-	} else if level == "pointer" && hash != "" {
+	}
+
+	// §8.3 fat-push: a dtn task's payload may still be on the wire behind the
+	// delegate. Failing now — the old outcome — would defeat the push; the
+	// task parks in waiting_context until every missing input verifies or the
+	// bundle's own deadline expires. Live-transport tasks keep the pull path
+	// inside run(), which fails fast as before.
+	if p.Transport == "dtn" {
+		if missing := c.missingPushInputs(p); len(missing) > 0 {
+			c.parkForArtifactPush(ctx, env, taskID, p, required, missing, release)
+			return
+		}
+	}
+
+	if level == "pointer" && hash != "" {
 		if ok, _ := c.ctx.Contains(ctx, hash); !ok {
 			if err := c.prepare(ctx, taskID); err != nil {
 				c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: err.Error()})
@@ -636,6 +674,13 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 		return fmt.Errorf("dispatch: %w", err)
 	}
 	dtn := p.Transport == "dtn"
+	// The deadline a parked bundle or a deferred push lives under: the wire's
+	// absolute TTL, else the default DTN lifetime. Computed once here because
+	// both the fat-bundle attachment below and the send-failure park use it.
+	pushDeadline := p.DeadlineUnix
+	if pushDeadline <= 0 {
+		pushDeadline = time.Now().Add(defaultDTNTTL).Unix()
+	}
 	// Stamp a lease on the local copy so a dead executor is detected and the
 	// failure propagated, instead of leaving this copy dispatched forever (D3).
 	// The timeout is carried on the wire so every hop inherits the same
@@ -651,7 +696,11 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 			return fmt.Errorf("set lease: %w", err)
 		}
 	} else {
-		c.attachFatBundle(ctx, &p)
+		// Inline what fits the envelope; everything else becomes a chunked
+		// push obligation the flush drains once the link carries the delegate.
+		for _, h := range c.attachFatBundle(ctx, &p) {
+			c.artifactPushEnqueue(ctx, target, taskID, h, pushDeadline)
+		}
 	}
 	p.Chain = chain
 	msgID, err := newUUID()
@@ -664,15 +713,17 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 	}
 	env.To = target
 	if err := c.sendTo(target, env); err != nil {
-		deadline := p.DeadlineUnix
-		if deadline <= 0 {
-			deadline = time.Now().Add(defaultDTNTTL).Unix()
-		}
 		c.logger.Info("delegation send failed or target offline; parking in task_outbox for DTN relay",
 			"target", target, "task", taskID, "err", err)
-		c.taskOutboxPersist(ctx, target, p, "dtn", deadline)
+		c.taskOutboxPersist(ctx, target, p, "dtn", pushDeadline)
 	} else {
 		c.logger.Info("forwarded delegated task", "task", taskID, "to", target)
+		if dtn {
+			// The delegate is on the wire — drain the push custody now rather
+			// than waiting for the next sweep, so chunks follow the task into
+			// the same contact window.
+			go c.outboxFlush(context.WithoutCancel(ctx), target)
+		}
 	}
 	// Persist the spent budget only once the hop is committed — sent or
 	// parked. A build/lookup failure above leaves the row untouched so a
@@ -795,9 +846,12 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			if len(out.Chain) == 0 {
 				out.Chain = taskChain
 			}
-		} else if rerr != nil {
+		} else if rerr != nil && !errors.Is(rerr, ErrAlreadyRunning) {
 			// If run failed or cancelled before reaching a terminal state,
-			// fail the task in the store so it never lingers stranded in 'running'.
+			// fail the task in the store so it never lingers stranded in
+			// 'running'. ErrAlreadyRunning is excluded: the row is legitimately
+			// running under another goroutine, and failing it here would kill
+			// that owner's work mid-flight.
 			wCtx, cancel := c.storeWriteCtx(ctx)
 			defer cancel()
 			if t, err := c.store.Get(wCtx, taskID); err == nil && t.State == StateRunning {
@@ -886,23 +940,23 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	switch task.State {
 	case StateDispatched:
 		if err := c.store.Accept(ctx, taskID, c.nodeID); err != nil {
-			// The accept can lose the race with a cancel landing between the
-			// pre-check above and the guarded write. Reporting a plain error
-			// here would turn into a task_decline, bouncing a task that is
-			// already closed back into re-routing; re-read and distinguish:
-			// running means a duplicate context_ack raced ahead (execute on),
-			// terminal means the task was closed under us (cancelled/expired —
-			// execution acknowledges, no result is reported).
+			// The accept can lose the race with a concurrent transition landing
+			// between the pre-check above and the guarded write. Reporting a
+			// plain error here would turn into a task_decline, bouncing a task
+			// that is already owned back into re-routing; re-read and
+			// distinguish: running means another runner claimed it first (yield
+			// the task to that owner), terminal means the task was closed under
+			// us (cancelled/expired — execution acknowledges, no result is
+			// reported).
 			if errors.Is(err, ErrConflict) {
 				fresh, gerr := c.store.Get(ctx, taskID)
 				if gerr == nil && fresh.State == StateRunning {
-					// The row is verifiably in a countable state: the
-					// reservation is redundant from here on — free it now
-					// rather than at run end (double-count). Reachable by
-					// fall-through alone, so release before the break.
-					releaseSlot()
-					releaseSlot = func() {}
-					break
+					// The row is running because another runner claimed it
+					// first (a duplicated resume/context_ack raced ahead of
+					// this invocation). Falling through would spawn a second
+					// executor on the same task: bail out quietly and let the
+					// owner report the outcome.
+					return bus.TaskResultPayload{}, ErrAlreadyRunning
 				}
 				if gerr == nil && Terminal(fresh.State) {
 					return bus.TaskResultPayload{}, ErrCancelled
@@ -920,10 +974,10 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		releaseSlot()
 		releaseSlot = func() {}
 	case StateRunning:
-		// Already running (a duplicate context_ack raced ahead): the slot is
-		// countable, so the reservation is redundant — free it now.
-		releaseSlot()
-		releaseSlot = func() {}
+		// Already running: another run() invocation owns this task. Executing
+		// here would spawn a duplicate executor racing the first one's
+		// subprocess on the same work dir.
+		return bus.TaskResultPayload{}, ErrAlreadyRunning
 	default:
 		return bus.TaskResultPayload{}, fmt.Errorf("cannot run task in state %s", task.State)
 	}
@@ -1138,7 +1192,18 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// keeps its reasoning trail; multi-round supervision stops paying the
 	// full re-orientation cost every round). Adapters without session
 	// support leave it empty and every round starts fresh, as before.
-	var sessionID string
+	// The session id is also the task's resume checkpoint (§5.2): the row
+	// carries the last round's handle, so a run that comes back after a
+	// yield/restart/redelegation continues the same agent conversation rather
+	// than cold-starting on the shadow copy. The shadow path still runs —
+	// adapters without session support leave the field empty and behave
+	// exactly as before.
+	sessionID := task.AgentSessionID
+	if sessionID != "" {
+		c.EvTrace(execCtx, taskID, "adapter_session_resume", map[string]any{
+			"session": sessionID, "agent": plan.Agent,
+		})
+	}
 	var lastAgent, lastOutput, lastStderr string
 	verdict := entry.SuperviseVerdict{Status: entry.VerdictDone}
 	// delegations bounds how many PANDA_DELEGATE promotions one task may make
@@ -1249,8 +1314,15 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			runCtx = commander.WithResume(execCtx, sessionID)
 		}
 		res = router.Execute(runCtx, plan, prompt, workDir, task.Authorized)
-		if res.SessionID != "" {
+		if res.SessionID != "" && res.SessionID != sessionID {
 			sessionID = res.SessionID
+			// Persist immediately — not at the loop's end — because the
+			// interruption this exists for (a yield cancel, a crash) does
+			// not wait for a tidy exit. WithoutCancel rides past the very
+			// cancellation that makes the row worth writing.
+			if err := c.store.SetAgentSession(context.WithoutCancel(execCtx), taskID, sessionID, c.nodeID); err != nil {
+				c.logger.Warn("persist agent session", "task", taskID, "err", err)
+			}
 		}
 
 		// §6.1 token budget: the adapter's reported usage is billed against
@@ -1565,6 +1637,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			return bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateFailed, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
 				Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+				AgentSessionID: sessionID,
 			}, nil
 		}
 
@@ -1655,6 +1728,10 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 						newAlts = append(newAlts, plan.Alternates[i+1:]...)
 						plan.Alternates = newAlts
 						sessionID = ""
+						// A different agent owns no handle to the old one's
+						// conversation; leaving it persisted would resume the
+						// wrong adapter's session on the next interruption.
+						_ = c.store.SetAgentSession(context.WithoutCancel(execCtx), taskID, "", "")
 						promoted = true
 						break
 					}
@@ -1732,6 +1809,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			ApprovalDisposition: string(ApprovalAcceptWork),
 			OK:                  true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+			AgentSessionID: sessionID,
 		}, nil
 	}
 
@@ -1772,6 +1850,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				ApprovalDisposition: string(ApprovalAcceptWork),
 				OK:                  true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 				Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+				AgentSessionID: sessionID,
 			}, nil
 		}
 		// Consent already on record: audit the auto-acceptance the way an
@@ -1790,11 +1869,17 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 		return bus.TaskResultPayload{}, fmt.Errorf("complete: %w", err)
 	}
+	// A finished run's session handle is dead weight: the adapter may purge
+	// it, and a later re-run must start fresh rather than resume a stale id.
+	_ = c.store.SetAgentSessionID(wCtx, taskID, "")
 	c.logTask(task.Title, true)
 	trackTask(c, task.Project, required, task.Title, true)
 	return bus.TaskResultPayload{
 		TaskID: taskID, AttemptID: attemptID, State: StateDone, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 		Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+		// Reported even though the local row cleared it: the delegator keeps
+		// the handle so a re-dispatch back here can offer ResumeSessionID.
+		AgentSessionID: sessionID,
 	}, nil
 }
 
@@ -1942,6 +2027,14 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string, loc ...i1
 	// §4.2 Sub-MainAgent protocol hint: the marker format the run loop
 	// parses. Kept terse — it rides every agent round.
 	prompt += i18n.T(promptLang, "prompt.delegate.hint")
+	// Self-management hint: under the extended tools policy the agent may
+	// reach the node's own surface — MCP-capable CLIs see the openpanda
+	// server from the materialized .mcp.json, shell-capable agents can run
+	// the panda binary already on PATH. Minimal policy keeps the tool face
+	// closed, so the hint only rides extended runs.
+	if c.router != nil && c.router.ToolsPolicy() == "extended" && c.router.PandaTools() {
+		prompt += i18n.T(promptLang, "prompt.selftools.hint")
+	}
 	return prompt, used
 }
 
@@ -2269,6 +2362,11 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 		StageID: t.StageID,
 		Inputs:  t.Inputs,
 	}
+	// Session resume hint (§5.2): only the node that minted the handle can
+	// use it, so it rides the wire only when the route leads back there.
+	if t.AgentSessionID != "" && t.AgentSessionNode == decision.Target {
+		payload.ResumeSessionID = t.AgentSessionID
+	}
 	// Hop-limited consent (S2-8): a re-route is one direct dispatch, so the
 	// consent on record covers exactly the receiving hop and must not walk
 	// further through a forwarding sub-scheduler.
@@ -2315,11 +2413,25 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 		chain := p.Chain
 		if len(chain) == 0 {
 			chain = []string{c.nodeID, env.From}
+		} else if chain[len(chain)-1] != env.From {
+			// The chain the executor echoes must end at the authenticated
+			// sender — the same rule handleDelegate enforces on dispatch.
+			// Without it, the row being reconstructed here would adopt a
+			// fabricated history (any upstream the sender names) instead of
+			// the path the result actually travelled.
+			c.logger.Warn("result chain does not end at sender", "task", p.TaskID,
+				"from", env.From, "chain_tail", chain[len(chain)-1])
+			return
 		}
 		if _, err := c.store.CreateFromRemote(ctx, p.TaskID, p.TaskID, c.nodeID, p.AttemptID, chain); err != nil {
 			c.logger.Warn("create task from result", "task", p.TaskID, "err", err)
 			return
 		}
+		// A row built from a bare result is not a delegation record: mark it
+		// in the audit trail so the origin of this task's history stays
+		// distinguishable from one the wire actually delivered.
+		c.audit(ctx, p.TaskID, "task:reconstruct", env.From, "warn",
+			"task row reconstructed from an inbound result; no local delegation record existed")
 		t, _ = c.store.Get(ctx, p.TaskID)
 	} else if err != nil {
 		c.logger.Warn("load task for result", "task", p.TaskID, "err", err)
@@ -2376,6 +2488,16 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 	default:
 		c.logger.Warn("unknown task_result state ignored", "task", p.TaskID, "state", state)
 		return
+	}
+
+	// Record the executor's adapter session against our copy of the task
+	// (§5.2): the handle belongs to the reporting node's adapter store, which
+	// is why it is keyed by env.From — a later re-dispatch offers it back as
+	// ResumeSessionID only when the target is that same node.
+	if p.AgentSessionID != "" {
+		if err := c.store.SetAgentSession(ctx, p.TaskID, p.AgentSessionID, env.From); err != nil {
+			c.logger.Warn("record agent session", "task", p.TaskID, "err", err)
+		}
 	}
 
 	// Plan plane: only a stage that produced output (done, or parked in review)
@@ -2690,6 +2812,15 @@ func (c *Core) handleAgentNegotiate(ctx context.Context, env bus.Envelope) {
 	// The claim is attributed to the authenticated sender, never to whatever
 	// node name the payload asserts (same fail-closed posture as task auth).
 	p.FromNode = env.From
+	// Weight is wire-supplied like the rest of the claim: bound it to what a
+	// priority-derived weight can legitimately be (negoWeightOf, §5.2), or a
+	// peer could bid an arbitrary value and preempt every lock in the mesh.
+	if p.Weight < 0 {
+		p.Weight = 0
+	}
+	if p.Weight > maxNegoWeight {
+		p.Weight = maxNegoWeight
+	}
 	c.logger.Info("received agent negotiation signal",
 		"from_node", p.FromNode, "agent", p.FromAgent, "scope", p.TargetScope.File, "weight", p.Weight)
 	dec := c.negoDecide(time.Now(), p, "")
@@ -2757,28 +2888,36 @@ func (c *Core) handleAgentYield(ctx context.Context, env bus.Envelope) {
 		"scope":      p.Scope,
 		"reason":     p.Reason,
 	})
-	// A yield revokes grants on the named scope: drop matching locks whose
-	// holder lives on this node and interrupt the local task that held them,
-	// so the preempting agent's edit does not race a zombie grant. Payload
-	// FromAgent is informational (the winner's identity); matching by scope
-	// key, not claimed name, keeps the revoke unforgeable.
+	// A yield revokes the grant on the named scope — but only when the sender
+	// actually arbitrated it. negotiateTaskScope records every peer whose
+	// table granted this lock; a yield from anywhere else is a peer that was
+	// never consulted claiming a preemption it could not have decided, and
+	// honoring it would let any authenticated node cancel local tasks at will.
+	// Payload FromAgent stays informational (the winner's identity).
 	key := negoScopeKey(p.Scope)
 	c.negoMu.Lock()
-	var victims []string
-	for k, l := range c.nego {
-		if k == key {
-			victims = append(victims, l.holder)
-			delete(c.nego, k)
+	l, held := c.nego[key]
+	if !held || !l.grantors[env.From] {
+		c.negoMu.Unlock()
+		if held {
+			c.logger.Warn("agent yield from non-arbitrator ignored",
+				"from", env.From, "scope", p.Scope.File, "holder", l.holder)
 		}
+		return
 	}
+	victim := l.holder
 	c.negoMu.Unlock()
-	for _, h := range victims {
-		if node, _, _ := strings.Cut(h, "|"); node == c.nodeID {
-			c.negoInterruptLocal(ctx, h, key)
-		} else {
-			c.negoRelease(h)
-		}
+	if node, _, _ := strings.Cut(victim, "|"); node == c.nodeID {
+		// The interrupt must find the lock row itself: deleting it first
+		// loses holderTask with the row and the running task survives as a
+		// zombie holding no grant at all.
+		c.negoInterruptLocal(ctx, victim, key)
+		return
 	}
+	c.negoMu.Lock()
+	delete(c.nego, key)
+	c.negoMu.Unlock()
+	c.negoRelease(victim)
 }
 
 // SendNegotiation sends a horizontal conflict negotiation signal to target peer (whitepaper §5.1).

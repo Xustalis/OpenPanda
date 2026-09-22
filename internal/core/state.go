@@ -4,6 +4,7 @@ package core
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -19,6 +20,12 @@ var (
 	// ErrCancelled reports that execution finished after the task was
 	// cancelled; callers should not report a result for a cancelled task.
 	ErrCancelled = errors.New("task cancelled")
+	// ErrAlreadyRunning reports that run() found the task already executing
+	// under another goroutine (a duplicated resume/context_ack raced in). It
+	// wraps ErrCancelled so every caller treats it as a quiet non-error: the
+	// first runner owns execution and reports the outcome, and this
+	// invocation must neither re-execute nor disturb the live row.
+	ErrAlreadyRunning = fmt.Errorf("%w: already running on this node", ErrCancelled)
 	// ErrApprovalNeedsChangedInput reports that a reviewed task cannot be
 	// approved as-is. Its input, scope, or context must change before a new run.
 	ErrApprovalNeedsChangedInput = errors.New("approval requires changed input")
@@ -170,6 +177,14 @@ type Task struct {
 	ResourceKeys []string
 	WorkDir      string
 	Scheduled    bool
+	// AgentSessionID is the adapter's own conversation handle, persisted each
+	// round so an interrupted run (yield, restart, redelegation back here)
+	// resumes the agent's session instead of cold-starting (§5.2). The handle
+	// only means something to the node that minted it — AgentSessionNode —
+	// so a delegator may offer it back to that node (ResumeSessionID on the
+	// wire) but must never adopt it for its own adapter or hand it onward.
+	AgentSessionID   string
+	AgentSessionNode string
 
 	// Plan-plane metadata (v0.0.6). A stage of a plan is an ordinary task, so
 	// these are the only things it carries beyond one: PlanID/StageID name its

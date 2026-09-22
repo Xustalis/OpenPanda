@@ -37,6 +37,12 @@ type negoLock struct {
 	// holderTask is the local task holding the lock, when the holder is this
 	// node — what a yield must actually interrupt. Empty for remote holders.
 	holderTask string
+	// grantors are the peer nodes whose own tables granted this lock while the
+	// holder is local. A wire yield for the scope is only honored from one of
+	// them: a node that never arbitrated the grant cannot plausibly preempt it,
+	// so accepting its say-so would let any authenticated peer cancel tasks at
+	// will. Nil until negotiateTaskScope records the first granting peer.
+	grantors map[string]bool
 }
 
 // negoHolder builds the principal id a lock is attributed to: node|agent.
@@ -59,6 +65,12 @@ func negoWeightOf(priority int) int {
 	}
 	return w
 }
+
+// maxNegoWeight bounds the arbitration weight a remote request may claim.
+// Legitimate weights are negoWeightOf(priority) for a queue priority, so the
+// largest honest value is negoWeightOf(PriorityHigh). A wire-supplied weight
+// beyond it is a peer bidding for preemption rights no task can hold.
+const maxNegoWeight = (PriorityLow - PriorityHigh + 1) * 100
 
 // negoDecision is the outcome of arbitrating one negotiate request.
 type negoDecision struct {
@@ -187,6 +199,23 @@ func (c *Core) negoDropHolderLocked(holder string) {
 	delete(c.negoWait, holder)
 	for _, set := range c.negoWait {
 		delete(set, holder)
+	}
+}
+
+// negoRecordGrantor marks peer as an arbitrator of the local lock on scope:
+// its table granted this task the lock, so a later yield naming the scope can
+// legitimately come from that peer — and only from a peer so recorded.
+// Recording is conditional on the lock still belonging to taskID: a
+// re-arbitration in between must not inherit stale grantors.
+func (c *Core) negoRecordGrantor(scope bus.TargetScope, taskID, peer string) {
+	key := negoScopeKey(scope)
+	c.negoMu.Lock()
+	defer c.negoMu.Unlock()
+	if l, ok := c.nego[key]; ok && l.holderTask == taskID {
+		if l.grantors == nil {
+			l.grantors = make(map[string]bool)
+		}
+		l.grantors[peer] = true
 	}
 }
 
@@ -371,6 +400,11 @@ func (c *Core) negotiateTaskScope(ctx context.Context, task Task, scope *defense
 				c.negoReleaseTask(task.TaskID)
 				return fmt.Errorf("scope %s: denied by %s: %s", root, peer, grant.Reason)
 			}
+			// The peer's table now holds this grant, which makes it the one
+			// node that can later tell us the grant was preempted. Recording
+			// it is what lets handleAgentYield distinguish a real arbitration
+			// outcome from a yield forged by a peer that was never consulted.
+			c.negoRecordGrantor(ts, task.TaskID, peer)
 		}
 	}
 	return nil

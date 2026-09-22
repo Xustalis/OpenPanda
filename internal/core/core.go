@@ -65,6 +65,9 @@ type Core struct {
 	// so ReloadCard's router rebuild re-applies the extended-policy
 	// passthrough; guarded by cardMu like the router policy above.
 	mcpPassthrough string
+	// selfConfigPath is the daemon's --config path forwarded into generated
+	// .mcp.json files for `panda mcp`; remembered for the same rebuild.
+	selfConfigPath string
 	// memory injects project memory into agent execution context (design §17.2
 	// isolation wall). Nil disables injection; tests and minimal nodes leave it
 	// nil and are unaffected.
@@ -162,6 +165,13 @@ type Core struct {
 	// and reject one from any other node.
 	pendingArt sync.Map // string -> *artifactTransfer
 
+	// pushAck maps peer|hash -> the receiver's latest reported contiguous
+	// waterline for an outbound push (§8.3). It lives beside the persisted
+	// artifact_push_outbox.acked_through because status replies can outpace
+	// SQL mid-stream: the stream loop consults this live value to skip bytes
+	// the receiver already holds rather than resending them on every flap.
+	pushAck sync.Map // string -> *atomic.Int64
+
 	// running maps task_id -> the CancelFunc of the context its execution runs
 	// under, so a lease expiry, a cancel message or a shutdown can actually stop
 	// the work instead of only rewriting the database row. Without it a task
@@ -245,7 +255,27 @@ type Core struct {
 	// the monitor tick's sweep cannot stack a second flush on top of it.
 	// Guarded by mu.
 	outboxFlushing map[string]bool
+
+	// relayLog bounds how many times this node forwards the same DTN bundle
+	// (§8.3 loop bound). A bundle cannot carry a hop list — the signature is
+	// the origin's and a relay must not re-wrap — so the bound lives in
+	// relay memory, keyed by bundle id, expiring with the bundle's deadline.
+	// Guarded by mu.
+	relayLog map[string]dtnRelay
 }
+
+// dtnRelay is one bundle's forwarding record on this node.
+type dtnRelay struct {
+	hops  int   // forwards performed
+	until int64 // bundle deadline; the entry expires with it
+}
+
+// dtnRelayMaxHops caps a node's forwards of one bundle. Combined with the
+// no-echo rule (never first-hop to the arriving peer) this bounds every
+// residual loop — a triangle that slips past the via check can spend at most
+// this many sends per node before the bundle must park and wait for a real
+// contact with its destination.
+const dtnRelayMaxHops = 3
 
 // defaultSuperviseRounds is the maximum number of execute → judge →
 // re-delegate rounds an agent task is allowed before it is parked in review
@@ -324,6 +354,19 @@ func (c *Core) SetAgentMCPPassthrough(command string) {
 	}
 }
 
+// SetSelfConfigPath forwards the daemon's --config path to the router so the
+// .mcp.json it materializes can pass it to `panda mcp`. Remembered like the
+// passthrough so a ReloadCard rebuild re-applies it.
+func (c *Core) SetSelfConfigPath(path string) {
+	c.cardMu.Lock()
+	c.selfConfigPath = path
+	router := c.router
+	c.cardMu.Unlock()
+	if router != nil {
+		router.SetSelfConfigPath(path)
+	}
+}
+
 // Card snapshots the current capability card (guarding the swap a reload may
 // be performing concurrently).
 func (c *Core) Card() ledger.Card {
@@ -369,6 +412,7 @@ func (c *Core) ReloadCard(ctx context.Context, path string) error {
 	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 {
 		c.router = commander.NewRouter(card, commander.NewExecutor(), c.model, c.routerInjection, c.routerRouting)
 		c.router.SetMCPPassthrough(c.mcpPassthrough)
+		c.router.SetSelfConfigPath(c.selfConfigPath)
 	} else {
 		c.router = nil
 	}
@@ -771,6 +815,11 @@ func (c *Core) RunMonitor(ctx context.Context) {
 			// hellos is flushed here rather than waiting on a greeting.
 			c.refreshSelfNeighbors(ctx)
 			c.sweepOutboxes(ctx)
+			// §8.3: a parked push-waiter's inputs can also land via the pull
+			// path or a fat-bundle import — neither calls the wake directly —
+			// and a staging dir whose sender died needs periodic reclamation.
+			c.wakeSatisfiedArtifactWaiters(ctx)
+			c.pruneStagedArtifacts(ctx)
 			expired, err := c.store.ExpireTasks(ctx)
 			if err != nil {
 				c.logger.Warn("expire tasks", "err", err)
@@ -1166,6 +1215,12 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 		c.handleArtifactFetch(ctx, env)
 	case bus.MsgArtifactChunk:
 		c.handleArtifactChunk(ctx, env)
+	case bus.MsgArtifactPush:
+		c.handleArtifactPush(ctx, env)
+	case bus.MsgArtifactPushStatus:
+		c.handleArtifactPushStatus(ctx, env)
+	case bus.MsgArtifactPushDone:
+		c.handleArtifactPushDone(ctx, env)
 	case bus.MsgHeartbeat:
 		c.handleHeartbeat(ctx, env)
 	case bus.MsgAgentNegotiate:

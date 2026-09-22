@@ -663,7 +663,8 @@ var messages = map[Locale]map[string]string{
 		"prompt.task.delimiter":          "; ",
 
 		// Sub-MainAgent delegation protocol (whitepaper §4.2)
-		"prompt.delegate.hint": "\n\n[Delegation protocol] If this node lacks a resource essential to the task (GPU compute, a specific tool, or a hardware peripheral), emit one line exactly:\nPANDA_DELEGATE {\"intent\":\"what the sub-task must do\",\"requires\":[\"capability-id\"],\"title\":\"short title\",\"node\":\"optional node name\"}\nThe runtime will spawn a causal child task on the best-suited node and fold its result back to you. Use only when an external resource is genuinely required.",
+		"prompt.delegate.hint":  "\n\n[Delegation protocol] If this node lacks a resource essential to the task (GPU compute, a specific tool, or a hardware peripheral), emit one line exactly:\nPANDA_DELEGATE {\"intent\":\"what the sub-task must do\",\"requires\":[\"capability-id\"],\"title\":\"short title\",\"node\":\"optional node name\"}\nThe runtime will spawn a causal child task on the best-suited node and fold its result back to you. Use only when an external resource is genuinely required.",
+		"prompt.selftools.hint": "\n\n[OpenPanda self-tools] This node runs OpenPanda and you may manage it: if an \"openpanda\" MCP server is connected, prefer its tools (panda_skill_install, panda_task_submit, panda_task_status, panda_queue, panda_nodes, panda_card). Otherwise the `panda` binary is on PATH — `panda skill ...`, `panda task add ...`, `panda queue` work directly. Use these instead of hand-rolling what the node already provides.",
 	},
 	ChineseSimp: {
 		"repl.welcome":          "OpenPanda REPL — 输入 /help 查看命令，其他内容直接交给提问引擎。",
@@ -1320,7 +1321,8 @@ var messages = map[Locale]map[string]string{
 		"prompt.task.delimiter":          "；",
 
 		// Sub-MainAgent delegation protocol (whitepaper §4.2)
-		"prompt.delegate.hint": "\n\n[委派协议] 若本机缺少完成任务必需的资源（GPU 算力、特定工具或硬件外设），请单独输出一行，格式严格如下：\nPANDA_DELEGATE {\"intent\":\"子任务要做什么\",\"requires\":[\"所需能力id\"],\"title\":\"可选短标题\",\"node\":\"可选指定节点\"}\n系统会将子因果任务派发到最合适的节点执行，并把结果回注给你继续。仅在确实需要外部资源时使用。",
+		"prompt.delegate.hint":  "\n\n[委派协议] 若本机缺少完成任务必需的资源（GPU 算力、特定工具或硬件外设），请单独输出一行，格式严格如下：\nPANDA_DELEGATE {\"intent\":\"子任务要做什么\",\"requires\":[\"所需能力id\"],\"title\":\"可选短标题\",\"node\":\"可选指定节点\"}\n系统会将子因果任务派发到最合适的节点执行，并把结果回注给你继续。仅在确实需要外部资源时使用。",
+		"prompt.selftools.hint": "\n\n[OpenPanda 自管理工具] 本机运行 OpenPanda，你可以直接管理它：若已连接 \"openpanda\" MCP 服务，优先使用其工具（panda_skill_install、panda_task_submit、panda_task_status、panda_queue、panda_nodes、panda_card）；否则 PATH 上的 `panda` 二进制可直接使用 —— `panda skill ...`、`panda task add ...`、`panda queue` 均可用。节点已有能力请优先调用，不要重复手工实现。",
 	},
 	Japanese: {
 		"repl.welcome":  "OpenPanda REPL — /help でコマンド一覧、それ以外は質問エンジンへ。",
