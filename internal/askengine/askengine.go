@@ -586,6 +586,9 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	if dropped := card.PruneUnavailableNative(); len(dropped) > 0 {
 		e.logger.Warn("native abilities dropped: command not found on this host", "ids", dropped)
 	}
+	if dropped := card.PruneUnavailableActuators(); len(dropped) > 0 {
+		e.logger.Warn("actuators dropped: command not found on this host", "ids", dropped)
+	}
 	// Mirror the daemon's card enrichment: kind/identity come from the
 	// config (the card file may omit them), and the node is registered
 	// under the same stable runtime ID the daemon uses. Without this, a

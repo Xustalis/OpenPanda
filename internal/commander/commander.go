@@ -125,6 +125,11 @@ type Plan struct {
 	// the primary agent's CLI is unavailable at execution time, execAgent
 	// falls back through this chain.
 	Alternates []string
+	// ActuatorID is set when the plan resolves to a card actuator (§7.2):
+	// the command is that actuator's driver invocation, and the run path
+	// substitutes its {intent}/{action}/{param:<name>} placeholders from the
+	// task's action_spec before execution. Empty for ordinary plans.
+	ActuatorID string
 }
 
 // Match finds the first native ability whose id matches any of required.
@@ -137,6 +142,21 @@ func (r *Router) MatchNative(required []string) (ledger.NativeAbility, bool) {
 		}
 	}
 	return ledger.NativeAbility{}, false
+}
+
+// MatchActuator finds a card actuator whose id satisfies any of required
+// (§7.1). Actuators live on the card's own list — not in card.Native — so
+// they need their own matcher; the ability namespace is shared, which is
+// what makes a required "hardware:gpio_servo" route here at all.
+func (r *Router) MatchActuator(required []string) (ledger.ActuatorProfile, bool) {
+	for _, req := range required {
+		for _, act := range r.card.Actuators {
+			if ledger.AbilityMatches(act.ID, req) {
+				return act, true
+			}
+		}
+	}
+	return ledger.ActuatorProfile{}, false
 }
 
 // preferredBonus is the score bonus an agent listed in
@@ -320,6 +340,19 @@ func (r *Router) Route(required []string) (Plan, error) {
 			tier = ab.Tier
 		}
 		return Plan{Kind: "native", Ability: ab.ID, Command: ab.Command, Args: ab.Args, Tier: tier}, nil
+	}
+	// §7.1/§7.2: an actuator with a declared driver command executes through
+	// the same native path — its args are ActionSpec templates the run path
+	// substitutes before exec. One without a command stays a routing
+	// advertisement only and falls through to the agent tier, which scripts
+	// the hardware itself.
+	if act, ok := r.MatchActuator(required); ok && act.Command != "" {
+		tier := defense.TierFromCommand(act.Command, act.Args...)
+		if act.Tier > tier {
+			tier = act.Tier
+		}
+		return Plan{Kind: "native", Ability: act.ID, Command: act.Command,
+			Args: act.Args, Tier: tier, ActuatorID: act.ID}, nil
 	}
 	cands := r.RankAgents(required)
 	if len(cands) == 0 && len(required) == 0 {

@@ -323,6 +323,13 @@ func runDaemon(args []string) {
 			logger.Warn("native abilities dropped: command not found on this host",
 				"ids", strings.Join(dropped, ","))
 		}
+		// Same phantom-ability rule for §7.1 actuators: a declared driver
+		// that does not resolve would win the plan and fail at exec, so it
+		// leaves the card before peers ever see it.
+		if dropped := card.PruneUnavailableActuators(); len(dropped) > 0 {
+			logger.Warn("actuators dropped: command not found on this host",
+				"ids", strings.Join(dropped, ","))
+		}
 	}
 	card.NodeKind = cfg.Node.Kind
 	card.NodeIdentity = effectiveIdentity
