@@ -28,6 +28,15 @@ type oaiRequest struct {
 	Tools               []oaiTool         `json:"tools,omitempty"`
 	PromptCacheKey      string            `json:"prompt_cache_key,omitempty"`
 	StreamOptions       *oaiStreamOptions `json:"stream_options,omitempty"`
+	// Thinking dialects — exactly one is populated per request, chosen by the
+	// provider's ThinkingStyle (providers.ThinkingStyleFor):
+	//   Thinking        → Ark/DeepSeek/GLM object: {"type":"enabled"|"disabled"|"auto"}
+	//   EnableThinking+ThinkingBudget → DashScope/Qwen flag form
+	//   ReasoningEffort → OpenAI/OpenRouter: "low"|"medium"|"high"
+	Thinking        map[string]any `json:"thinking,omitempty"`
+	EnableThinking  *bool          `json:"enable_thinking,omitempty"`
+	ThinkingBudget  int            `json:"thinking_budget,omitempty"`
+	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
 }
 
 // buildOAIRequest constructs an oaiRequest, automatically choosing between
@@ -57,6 +66,45 @@ func buildOAIRequest(model string, maxTokens int, stream bool, msgs []oaiMessage
 func isOpenAIReasoningModel(model string) bool {
 	lower := strings.ToLower(model)
 	return strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") || strings.Contains(lower, "gpt-4.5")
+}
+
+// applyThinking attaches the configured thinking mode to req in the dialect
+// the provider speaks (Client.thinkingStyle). An empty mode sends nothing —
+// the provider's native default applies — and a provider that once rejected
+// the field with a 400 gets nothing either (thinkingDenied is sticky).
+func (c *Client) applyThinking(req *oaiRequest) {
+	if c.thinkingDenied.Load() || c.thinking == "" {
+		return
+	}
+	on := c.thinking == "on" || c.thinking == "auto"
+	switch c.thinkingStyle {
+	case "flag":
+		req.EnableThinking = &on
+		if on && c.thinkingBudget > 0 {
+			req.ThinkingBudget = c.thinkingBudget
+		}
+	case "effort":
+		switch c.thinking {
+		case "on":
+			req.ReasoningEffort = "high"
+		case "off":
+			req.ReasoningEffort = "low"
+		default: // auto
+			req.ReasoningEffort = "medium"
+		}
+	case "object", "anthropic":
+		typ := "auto"
+		switch c.thinking {
+		case "on":
+			typ = "enabled"
+		case "off":
+			typ = "disabled"
+		}
+		req.Thinking = map[string]any{"type": typ}
+		if on && c.thinkingBudget > 0 {
+			req.Thinking["budget_tokens"] = c.thinkingBudget
+		}
+	}
 }
 
 // oaiStreamOptions asks OpenAI-compatible providers to include a final usage

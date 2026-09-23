@@ -14,14 +14,20 @@ func unixNow() int64 { return time.Now().Unix() }
 // HelloPayload is sent when a node connects to declare its identity. Card is
 // the node's capability summary (a compact JSON object); it is carried as raw
 // JSON so the transport stays decoupled from the ledger package that owns the
-// CapabilitySummary type. Sig is the HMAC-SHA256 (hex) of NodeID and Ts under
-// the shared secret, proving the identity was minted by a node that holds the
-// secret and bounding replay to maxHelloAge (design §16 / P0-1).
+// CapabilitySummary type. Sig is the HMAC-SHA256 (hex) of NodeID, Ts, and —
+// when present — Nonce under the shared secret, proving the identity was
+// minted by a node that holds the secret and bounding replay to MaxHelloAge
+// (design §16 / P0-1). Nonce makes every dial's signature unique even when two
+// hellos land inside the same second: the receiver's single-use replay cache
+// keys on signed fields only, so without it an honest same-second reconnect is
+// indistinguishable from a replay. Old peers send none and are verified
+// against the two-field form.
 type HelloPayload struct {
 	NodeID string          `json:"node_id"`
 	Ver    string          `json:"ver"`
 	Card   json.RawMessage `json:"card,omitempty"`
-	Ts     int64           `json:"ts,omitempty"` // unix seconds, bound into Sig
+	Ts     int64           `json:"ts,omitempty"`    // unix seconds, bound into Sig
+	Nonce  string          `json:"nonce,omitempty"` // per-dial random, bound into Sig when present
 	Sig    string          `json:"sig"`
 }
 
@@ -43,6 +49,22 @@ type HeartbeatPayload struct {
 	// nodes and when nothing is blocked; receivers treat absent as "drop
 	// any previously published list".
 	BlockedAgents []string `json:"blocked_agents,omitempty"`
+	// Neighbors/Links refresh the sender's adjacency in the receiver's
+	// directory every beat (§4.1): hellos only arrive at dial time and card
+	// beats only at reload, but the link-state graph's edge set AND its
+	// measured weights have to track the live topology continuously.
+	Neighbors []string     `json:"neighbors,omitempty"`
+	Links     []LinkMetric `json:"links,omitempty"`
+}
+
+// LinkMetric is the wire form of one measured edge weight (§4.1): the round-
+// trip time in milliseconds toward a directly connected neighbor, sampled by
+// the transport's ping/pong. It duplicates ledger.LinkMetric's JSON shape so
+// the transport package stays decoupled from the capability directory — the
+// same rule that keeps Card a raw JSON blob above.
+type LinkMetric struct {
+	Peer  string `json:"peer"`
+	RTTms int64  `json:"rtt_ms"`
 }
 
 // TaskDelegatePayload is the task handoff (design doc §10.3 example). The
@@ -129,6 +151,45 @@ type TaskDelegatePayload struct {
 	ProjectDir  string `json:"project_dir,omitempty"`
 	// UserLocale carries the origin user's language preference across nodes.
 	UserLocale string `json:"user_locale,omitempty"`
+	// BundledArtifacts carries self-contained input artifacts for proactive push (whitepaper §8.3).
+	BundledArtifacts []FatBundleArtifact `json:"bundled_artifacts,omitempty"`
+	// Transport specifies whether the delegation travels via live streaming or DTN ("live" or "dtn").
+	Transport string `json:"transport,omitempty"`
+	// DeadlineUnix is the absolute bundle TTL for DTN tasks (§8.2): past it
+	// the task is expired rather than lease-killed, because a store-and-forward
+	// path has no heartbeat to renew against.
+	DeadlineUnix int64 `json:"deadline_unix,omitempty"`
+	// Causal-depth and budget fields (§6.1). Depth is Parent.Depth+1 at every
+	// spawn hop, hard-capped by scheduler.MaxChainDepth. DelegationBudget is
+	// the remaining mesh-wide delegation quota: each forward decrements it,
+	// and a task that reaches zero may only execute or decline — never route
+	// onward. The pointer distinguishes an absent field (a pre-budget peer —
+	// the receiver seeds the default) from an explicit zero (a new-protocol
+	// peer reporting the quota spent — the task must not route onward).
+	// TokenBudget is the remaining LLM token quota the task may
+	// consume across the mesh; zero means unbounded (legacy peers).
+	Depth            int   `json:"depth,omitempty"`
+	DelegationBudget *int  `json:"delegation_budget,omitempty"`
+	TokenBudget      int64 `json:"token_budget,omitempty"`
+}
+
+// clampForWire bounds the inline blobs a delegate can carry. An oversized
+// ContextData or ProjectPack is not merely wasteful: it can push the frame past
+// readLimit and get the link closed at the far end, taking the task with it.
+// Dropping the inline data degrades the delegation to a fetchable context (the
+// hash still travels, and handleContextFetch will serve it in chunks), which is
+// strictly better than a message that never lands.
+func (p TaskDelegatePayload) clampForWire() any {
+	if len(p.ContextData) > MaxContextDataBytes {
+		p.ContextData = nil
+		if p.ContextLevel == "full" {
+			p.ContextLevel = "pointer" // fetch it instead of carrying it
+		}
+	}
+	if len(p.ProjectPack) > MaxProjectPackBytes {
+		p.ProjectPack = nil
+	}
+	return p
 }
 
 // MaxProjectPackBytes bounds the inline project pack. Project memory is capped
@@ -236,6 +297,16 @@ func (p TaskResultPayload) clampForWire() any {
 	return p
 }
 
+// MaxContextDataBytes bounds one inline context snapshot — whether it travels
+// as ContextAckPayload.Data or TaskDelegatePayload.ContextData. A snapshot is
+// bounded by the packing side's context store (entry cap, not byte cap), so a
+// peer that let its store grow could ship a blob whose base64 encoding pushes
+// the frame past readLimit: the message would send fine and the receiver's
+// read limit would close the connection instead of delivering it. The cap sits
+// under what a 4 MiB frame can base64-hold so a single context message still
+// lands.
+const MaxContextDataBytes = 2 << 20 // 2 MiB
+
 // clampText shortens s to at most max bytes, keeping its head and its tail. A
 // long log's useful parts are its beginning (what it set out to do) and its end
 // (how it turned out, the final accuracy line); the middle is the part nobody
@@ -320,6 +391,18 @@ type ContextAckPayload struct {
 	Refs   []string `json:"refs,omitempty"`
 }
 
+// clampForWire refuses to carry a snapshot the frame cannot hold: rather than
+// send a blob that would push the message past readLimit and get the connection
+// closed on receipt, the ack degrades to OK=false — the executor fails the task
+// with a legible reason instead of losing the link.
+func (p ContextAckPayload) clampForWire() any {
+	if len(p.Data) > MaxContextDataBytes {
+		p.Data = nil
+		p.OK = false
+	}
+	return p
+}
+
 // ArtifactFetchPayload asks a peer for one chunk of a task artifact, starting at
 // Offset. The requester drives the transfer: it asks for the next offset only
 // after the previous chunk landed, which makes a dropped or corrupt chunk a
@@ -355,3 +438,91 @@ type ArtifactChunkPayload struct {
 // JSON (a 4/3 expansion), so 1 MiB of artifact becomes roughly 1.4 MiB on the
 // wire — comfortably under the cap even with the envelope around it.
 const ArtifactChunkBytes = 1 << 20
+
+// ArtifactPushPayload is one proactively-pushed artifact chunk (§8.3
+// fat-push). It mirrors the pull-side chunk shape minus the answer fields:
+// Offset positions the bytes inside the archive named by Hash, and Total is
+// the archive's full size so the receiver can bound and complete the staged
+// copy. Chunks are sent in order on an ordered lane, but the receiver
+// tolerates duplicates and gaps — its contiguous-progress status reply is
+// the authoritative resume point.
+type ArtifactPushPayload struct {
+	TaskID string `json:"task_id"`
+	Hash   string `json:"hash"`
+	Offset int64  `json:"offset"`
+	Data   []byte `json:"data"`
+	Total  int64  `json:"total"`
+}
+
+// ArtifactPushStatusPayload is the receiver's custody report: how many
+// contiguous bytes of Hash it holds, counted from offset 0. The sender-side
+// outbox retires rows only as this number covers them, which is what makes a
+// send-then-crash recoverable — an unacknowledged chunk is resent on the
+// next flush rather than leaving a permanent gap in the staged copy.
+type ArtifactPushStatusPayload struct {
+	TaskID          string `json:"task_id"`
+	Hash            string `json:"hash"`
+	ReceivedThrough int64  `json:"received_through"`
+}
+
+// ArtifactPushDonePayload ends one push: the staged archive verified against
+// its content hash and entered the receiver's pool (OK), or staging failed
+// and the sender should stop spending bandwidth on it. A receiver that
+// already holds the artifact answers OK immediately, which is also how a
+// sender learns it can retire rows for a peer that finished long ago.
+type ArtifactPushDonePayload struct {
+	TaskID string `json:"task_id"`
+	Hash   string `json:"hash"`
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// FatBundleArtifact carries an inline artifact payload for proactive push-based DTN delivery (whitepaper §8.3).
+type FatBundleArtifact struct {
+	Hash string `json:"hash"`
+	Data []byte `json:"data"`
+}
+
+// TargetScope defines the repository, file, and symbol scope for peer conflict negotiation (whitepaper §5.1).
+type TargetScope struct {
+	Repo   string `json:"repo,omitempty"`
+	File   string `json:"file"`
+	Symbol string `json:"symbol,omitempty"`
+}
+
+// AgentNegotiatePayload carries horizontal peer-to-peer conflict negotiation signaling (whitepaper §5.1).
+type AgentNegotiatePayload struct {
+	FromNode      string      `json:"from_node"`
+	FromAgent     string      `json:"from_agent"`
+	Timestamp     int64       `json:"timestamp"`
+	Weight        int         `json:"weight"`
+	TargetScope   TargetScope `json:"target_scope"`
+	Intent        string      `json:"intent"`
+	ActionPreview string      `json:"action_preview,omitempty"`
+}
+
+// AgentGrantPayload carries lease-based lock authorization or yield acknowledgement (whitepaper §5.2).
+// Denied/Reason make an explicit negative verdict distinguishable from a
+// missing reply — older peers that always grant simply leave them zero.
+type AgentGrantPayload struct {
+	LockID    string `json:"lock_id"`
+	GrantedTo string `json:"granted_to"`
+	LeaseMS   int64  `json:"lease_ms"`
+	Denied    bool   `json:"denied,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// AgentYieldPayload indicates an agent has halted at an AST checkpoint and ceded execution.
+type AgentYieldPayload struct {
+	FromAgent string      `json:"from_agent"`
+	Scope     TargetScope `json:"scope"`
+	Reason    string      `json:"reason,omitempty"`
+}
+
+// DTNBundlePayload carries one CBOR-encoded DTN bundle (§8.3) verbatim. The
+// receiver unmarshals, verifies signature+TTL, then feeds the inner payload
+// back through the normal message path — the bundle is a signed transport
+// container, not a second task protocol.
+type DTNBundlePayload struct {
+	Blob []byte `json:"blob"`
+}

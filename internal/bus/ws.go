@@ -3,10 +3,14 @@ package bus
 import (
 	"context"
 	"crypto/tls"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/guard"
@@ -34,10 +38,52 @@ const (
 // hello before the server drops it. This bounds slow-/never-handshake DoS.
 const defaultHelloTimeout = 10 * time.Second
 
-// Conn wraps one websocket.Conn with a send mutex (one writer goroutine).
+// QoS lanes (whitepaper §5.3): control beats signal beats data beats bulk.
+// The lanes exist so a task_cancel or a negotiation yield jumps ahead of the
+// artifact stream that would otherwise hold the write slot — the mesh's
+// "control plane can always speak" guarantee.
+const (
+	QoSControl = iota // cancels, declines, grants, yields, hello/heartbeat
+	QoSSignal         // task lifecycle: delegate/result/resume/context
+	QoSData           // artifact chunks — the bandwidth-heavy plane
+	QoSBulk           // everything else
+	qosLanes
+)
+
+// qosLaneCap bounds each lane's backlog; a full lane back-pressures the
+// sender exactly the way the old write mutex did.
+const qosLaneCap = 64
+
+// qosForType classifies an envelope by its message type.
+func qosForType(typ string) int {
+	switch typ {
+	case MsgHello, MsgHeartbeat, MsgTaskCancel, MsgTaskDecline,
+		MsgAgentGrant, MsgAgentYield, MsgArtifactPushStatus, MsgArtifactPushDone:
+		return QoSControl
+	case MsgTaskDelegate, MsgTaskAccept, MsgTaskResult, MsgTaskProgress,
+		MsgTaskRetry, MsgTaskTransfer, MsgTaskResume,
+		MsgContextFetch, MsgContextAck, MsgAgentNegotiate, MsgJoin,
+		MsgDTNBundle:
+		return QoSSignal
+	case MsgArtifactChunk, MsgArtifactFetch, MsgArtifactPush:
+		return QoSData
+	default:
+		return QoSBulk
+	}
+}
+
+// queuedWrite is one frame awaiting the writer goroutine. res carries the
+// real write result back to the sender — Send stays synchronous, only the
+// ORDER of writes is prioritized.
+type queuedWrite struct {
+	data []byte
+	res  chan error
+}
+
+// Conn wraps one websocket.Conn with a prioritized writer goroutine (the
+// single writer goroutine; reads happen on the caller's side).
 type Conn struct {
 	ws     *websocket.Conn
-	mu     sync.Mutex // serializes writes
 	idMu   sync.RWMutex
 	peerID string // authenticated node id, bound once at hello
 	// outbound marks a locally-initiated connection (we dialed); inbound
@@ -45,6 +91,16 @@ type Conn struct {
 	// deterministic winner between simultaneous mutual dials.
 	outbound bool
 	logger   *slog.Logger
+	// lanes hold pending writes by QoS class; wake nudges the writer that a
+	// lane gained work; done closes the writer on Close. doneOnce guards the
+	// close: the writer, Close() and the write-error path all converge here.
+	lanes    [qosLanes]chan queuedWrite
+	wake     chan struct{}
+	done     chan struct{}
+	doneOnce sync.Once
+	// rttNanos is the last measured ping/pong round trip (§4.1 link metric):
+	// nanoseconds, zero until the first pong answers a timestamped ping.
+	rttNanos atomic.Int64
 }
 
 // SetPeerID binds the authenticated node id to this connection (set once, at
@@ -78,18 +134,32 @@ func (c *Conn) Outbound() bool {
 
 func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
 	ws.SetReadLimit(readLimit)
-	ws.SetPongHandler(func(string) error {
+	c := &Conn{ws: ws, logger: logger, wake: make(chan struct{}, 1), done: make(chan struct{})}
+	ws.SetPongHandler(func(data string) error {
+		// A ping written by writeLoop carries its send time as 8 bytes of
+		// big-endian nanos; answering it gives the link its RTT sample.
+		if len(data) == 8 {
+			if sent := int64(binary.BigEndian.Uint64([]byte(data))); sent > 0 {
+				if rtt := time.Since(time.Unix(0, sent)); rtt > 0 {
+					c.rttNanos.Store(int64(rtt))
+				}
+			}
+		}
 		return ws.SetReadDeadline(time.Now().Add(pongWait))
 	})
 	// Initial deadline so a peer that never responds is detected promptly.
 	_ = ws.SetReadDeadline(time.Now().Add(pongWait))
-	return &Conn{ws: ws, logger: logger}
+	for i := range c.lanes {
+		c.lanes[i] = make(chan queuedWrite, qosLaneCap)
+	}
+	go c.writeLoop()
+	return c
 }
 
 // StartPingLoop sends a ping every pingPeriod and refreshes the read
 // deadline, keeping the connection alive and letting the peer's pong reset
-// our deadline. It returns when ctx is done. Runs on the single-writer
-// mutex so it cannot race data messages.
+// our deadline. It returns when ctx is done. Pings ride the control lane so
+// keepalives are never stuck behind a data backlog.
 func (c *Conn) StartPingLoop(ctx context.Context, pingPeriod time.Duration) {
 	t := time.NewTicker(pingPeriod)
 	defer t.Stop()
@@ -98,27 +168,118 @@ func (c *Conn) StartPingLoop(ctx context.Context, pingPeriod time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			c.mu.Lock()
-			// Refreshing the write deadline protects against a wedged peer.
-			_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := c.ws.WriteMessage(websocket.PingMessage, nil); err != nil {
-				c.mu.Unlock()
+			if err := c.enqueue(nil, QoSControl); err != nil {
 				c.logger.Debug("ping failed", "err", err)
 				return
 			}
-			c.mu.Unlock()
 		}
 	}
 }
 
-// Send marshals v to JSON and writes it to the peer.
+// writeLoop is the conn's single writer: it drains the QoS lanes in priority
+// order, so a control message queued behind a data backlog is written first.
+// Senders block on their own result channel — delivery errors still reach
+// the caller that asked, so the outbox's failure semantics are unchanged.
+func (c *Conn) writeLoop() {
+	for {
+		var m queuedWrite
+		var ok bool
+		for l := 0; l < qosLanes && !ok; l++ {
+			select {
+			case m = <-c.lanes[l]:
+				ok = true
+			default:
+			}
+		}
+		if !ok {
+			select {
+			case <-c.wake:
+				continue
+			case <-c.done:
+				c.failQueued()
+				return
+			}
+		}
+		// Bound the write so a wedged peer cannot stall the writer (and
+		// thereby every queued sender) forever.
+		_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
+		var err error
+		if m.data == nil {
+			var ping [8]byte
+			binary.BigEndian.PutUint64(ping[:], uint64(time.Now().UnixNano()))
+			err = c.ws.WriteMessage(websocket.PingMessage, ping[:])
+		} else {
+			err = c.ws.WriteMessage(websocket.TextMessage, m.data)
+		}
+		m.res <- err
+		if err != nil {
+			// A dead socket makes every subsequent write fail too; close so
+			// pending senders get their error instead of queueing forever.
+			_ = c.ws.Close()
+			c.failQueued()
+			return
+		}
+	}
+}
+
+// failQueued answers every sender still parked in a lane, then closes done
+// so late arrivals fail fast instead of queueing behind a dead writer.
+func (c *Conn) failQueued() {
+	for l := 0; l < qosLanes; l++ {
+	drain:
+		for {
+			select {
+			case m := <-c.lanes[l]:
+				m.res <- errors.New("bus: connection closed")
+			default:
+				break drain
+			}
+		}
+	}
+	c.doneOnce.Do(func() { close(c.done) })
+}
+
+// enqueue marshals v, parks it on its QoS lane and blocks until the writer
+// reports the real write result — the same synchronous contract the old
+// send-mutex version had. A nil data payload writes a ping frame.
+func (c *Conn) enqueue(data []byte, lane int) error {
+	m := queuedWrite{data: data, res: make(chan error, 1)}
+	select {
+	case c.lanes[lane] <- m:
+	case <-c.done:
+		return errors.New("bus: connection closed")
+	}
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+	select {
+	case err := <-m.res:
+		return err
+	case <-c.done:
+		// done raced the writer's answer — prefer the real result if it
+		// already landed, so a delivered frame is not reported lost.
+		select {
+		case err := <-m.res:
+			return err
+		default:
+		}
+		return errors.New("bus: connection closed")
+	}
+}
+
+// Send marshals v to JSON and queues it on its QoS lane — an Envelope's own
+// type picks the lane, so callers get §5.3 priority without any change.
 func (c *Conn) Send(v any) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	// Bound the write so a wedged peer cannot block this (and, via the write
-	// mutex, every other) writer forever.
-	_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
-	return c.ws.WriteJSON(v)
+	lane := QoSBulk
+	if env, ok := v.(Envelope); ok {
+		lane = qosForType(env.Type)
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return c.enqueue(data, lane)
 }
 
 // ReadJSON reads one JSON message into v. Callers must set a read deadline
@@ -127,10 +288,17 @@ func (c *Conn) ReadJSON(v any) error {
 	return c.ws.ReadJSON(v)
 }
 
-// Close closes the underlying socket.
+// RTT returns the last measured ping/pong round trip on this link, or 0
+// before the first sample. It is the edge weight the mesh's weighted
+// shortest-path routing consumes (§4.1).
+func (c *Conn) RTT() time.Duration {
+	return time.Duration(c.rttNanos.Load())
+}
+
+// Close closes the underlying socket and fails the writer loop so queued
+// senders unblock with an error instead of waiting forever.
 func (c *Conn) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.failQueued()
 	return c.ws.Close()
 }
 

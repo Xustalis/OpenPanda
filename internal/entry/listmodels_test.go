@@ -11,8 +11,8 @@ import (
 
 func TestListModelsOpenAI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/models" {
-			t.Errorf("path = %q, want /models", r.URL.Path)
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("path = %q, want /v1/models", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer sk-test" {
 			t.Errorf("auth = %q, want Bearer sk-test", got)
@@ -21,16 +21,20 @@ func TestListModelsOpenAI(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, err := NewClient(config.ModelConfig{APIType: config.APITypeOpenAI, BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
-	if err != nil {
-		t.Fatalf("new client: %v", err)
-	}
-	models, err := c.ListModels(context.Background())
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(models) != 2 || models[0].ID != "gpt-4o" || models[1].ID != "o3-mini" {
-		t.Fatalf("models = %+v", models)
+	// A versioned base keeps its /v1; a bare host gains it, matching where
+	// openAIURL sends completions (/v1/chat/completions).
+	for _, base := range []string{srv.URL + "/v1", srv.URL} {
+		c, err := NewClient(config.ModelConfig{APIType: config.APITypeOpenAI, BaseURL: base, APIKey: "sk-test", Model: "m"})
+		if err != nil {
+			t.Fatalf("new client: %v", err)
+		}
+		models, err := c.ListModels(context.Background())
+		if err != nil {
+			t.Fatalf("list (base %q): %v", base, err)
+		}
+		if len(models) != 2 || models[0].ID != "gpt-4o" || models[1].ID != "o3-mini" {
+			t.Fatalf("models = %+v", models)
+		}
 	}
 }
 

@@ -91,6 +91,13 @@ func TestCheckpoint(t *testing.T) {
 	if err := Checkpoint(t.Context(), db, "TRUNCATE"); err != nil {
 		t.Fatalf("checkpoint truncate: %v", err)
 	}
+	// The mode reaches a PRAGMA string unquoted, so anything outside the four
+	// names SQLite defines is refused before it can inject.
+	for _, bad := range []string{"TRUNCATE); DROP TABLE tasks; --", "truncate", "passive"} {
+		if err := Checkpoint(t.Context(), db, bad); err == nil {
+			t.Fatalf("checkpoint mode %q accepted", bad)
+		}
+	}
 }
 
 func TestForeignKeys(t *testing.T) {

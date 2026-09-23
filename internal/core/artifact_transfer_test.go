@@ -84,6 +84,11 @@ func TestArtifactTransferRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pack: %v", err)
 	}
+	// A real producer indexes the artifact under its task before serving it
+	// (packStageOutput); the authorization binding requires that link.
+	if err := producer.store.RecordArtifact(ctx, m.Hash, m.Size, taskID, ""); err != nil {
+		t.Fatalf("index artifact: %v", err)
+	}
 	if m.Size <= 3<<20 {
 		t.Fatalf("packed to %d bytes: too small to span four chunks", m.Size)
 	}
@@ -147,6 +152,9 @@ func TestArtifactTransferRejectsTamperedChunk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pack: %v", err)
 	}
+	if err := producer.store.RecordArtifact(ctx, m.Hash, m.Size, taskID, ""); err != nil {
+		t.Fatalf("index artifact: %v", err)
+	}
 
 	// Damage a byte inside the second chunk, leaving the archive's length — and
 	// therefore every offset and the EOF boundary — exactly as advertised. Only
@@ -189,21 +197,31 @@ func TestArtifactFetchFromNonParticipantRefused(t *testing.T) {
 		t.Fatalf("pack: %v", err)
 	}
 	participantTask(t, c, "t-authz", "owner-node", []string{"owner-node", c.nodeID})
+	// The pool index ties the artifact to the task — the same record a real
+	// producer writes before serving it.
+	if err := c.store.RecordArtifact(ctx, m.Hash, m.Size, "t-authz", ""); err != nil {
+		t.Fatalf("index artifact: %v", err)
+	}
 
 	// reply() needs a connection to the requester; there is none here, so the
 	// refusal is observed as "nothing was read" rather than as a chunk. What
 	// matters is that the authorization decision, not the transport, is what
 	// stops it.
-	if c.artifactPeerAuthorized(ctx, "t-authz", "mallory") {
+	if c.artifactPeerAuthorized(ctx, "t-authz", m.Hash, "mallory") {
 		t.Fatalf("a node outside the chain was authorized to pull artifacts")
 	}
-	if !c.artifactPeerAuthorized(ctx, "t-authz", "owner-node") {
+	if !c.artifactPeerAuthorized(ctx, "t-authz", m.Hash, "owner-node") {
 		t.Fatalf("the task owner was refused its own artifact")
 	}
 	// An unknown task authorizes nobody: a peer must not be able to probe the
 	// pool by inventing a task id.
-	if c.artifactPeerAuthorized(ctx, "t-does-not-exist", "owner-node") {
+	if c.artifactPeerAuthorized(ctx, "t-does-not-exist", m.Hash, "owner-node") {
 		t.Fatalf("an unknown task authorized a pull")
+	}
+	// Participation alone is not enough: the hash must belong to the task, or
+	// one task's participant could enumerate every artifact the pool holds.
+	if c.artifactPeerAuthorized(ctx, "t-authz", strings.Repeat("ef", 32), "owner-node") {
+		t.Fatalf("a participant was authorized for an artifact the task does not own")
 	}
 	if _, ok := pool.Has(m.Hash); !ok {
 		t.Fatalf("test artifact missing from the pool")
@@ -268,5 +286,45 @@ func TestArtifactFetchFromUnreachableSourceFails(t *testing.T) {
 	}
 	if _, busy := c.pendingArt.Load(artifactKey("t-missing-source", hash)); busy {
 		t.Fatalf("the failed transfer was left registered, blocking a retry")
+	}
+}
+
+func TestImportFatBundleArtifacts(t *testing.T) {
+	ctx := context.Background()
+	tree := artifactTree(t, 2048)
+
+	sourcePool := artifact.NewStore(filepath.Join(t.TempDir(), "source-artifacts"))
+	manifest, err := sourcePool.PackDir(tree)
+	if err != nil {
+		t.Fatalf("pack tree: %v", err)
+	}
+
+	data, err := os.ReadFile(sourcePool.Path(manifest.Hash))
+	if err != nil {
+		t.Fatalf("read packed artifact: %v", err)
+	}
+
+	receiver := newCore(t, "receiver", "127.0.0.1:17967")
+	recPool := withArtifactPool(t, receiver)
+
+	// Before import, receiver does not have it
+	if _, ok := recPool.Has(manifest.Hash); ok {
+		t.Fatalf("receiver should not have artifact before import")
+	}
+
+	// Push-based import (Fat Bundle)
+	imported, err := receiver.ImportFatBundleArtifacts(ctx, []bus.FatBundleArtifact{
+		{Hash: manifest.Hash, Data: data},
+	})
+	if err != nil {
+		t.Fatalf("import fat bundle: %v", err)
+	}
+	if len(imported) != 1 || imported[0].Hash != manifest.Hash {
+		t.Fatalf("unexpected imported manifests: %v", imported)
+	}
+
+	// Now receiver has it directly in the pool without any network pull
+	if size, ok := recPool.Has(manifest.Hash); !ok || size != manifest.Size {
+		t.Fatalf("artifact not present or size mismatch: ok=%v, size=%d, want %d", ok, size, manifest.Size)
 	}
 }

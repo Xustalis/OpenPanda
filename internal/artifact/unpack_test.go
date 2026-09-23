@@ -183,12 +183,32 @@ func TestUnpackRejectsOversizedContent(t *testing.T) {
 	_ = gz.Close()
 
 	dst := filepath.Join(t.TempDir(), "out")
-	_, err := Unpack(bytes.NewReader(buf.Bytes()), dst)
+	_, err := unpack(bytes.NewReader(buf.Bytes()), dst, MaxBytes, 0)
 	if err == nil {
 		t.Fatalf("unpack accepted an archive declaring more than %d bytes", MaxBytes)
 	}
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("error = %v, want ErrTooLarge", err)
+	}
+
+	// Unbounded mode refuses the same shape against the disk instead: no real
+	// filesystem has 1 EiB free, so the declared size is refused outright.
+	buf2 := func() *bytes.Buffer {
+		var b bytes.Buffer
+		gz := gzip.NewWriter(&b)
+		tw := tar.NewWriter(gz)
+		if err := tw.WriteHeader(&tar.Header{
+			Name: "absurd.bin", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1 << 60, Format: tar.FormatPAX,
+		}); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		_, _ = tw.Write(bytes.Repeat([]byte("x"), 4096))
+		_ = tw.Close()
+		_ = gz.Close()
+		return &b
+	}()
+	if _, err = unpack(buf2, filepath.Join(t.TempDir(), "out3"), 0, 0); !errors.Is(err, ErrNoSpace) {
+		t.Fatalf("unbounded unpack error = %v, want ErrNoSpace", err)
 	}
 }
 

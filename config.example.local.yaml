@@ -30,6 +30,15 @@ storage:
   # 任务产物池：跨节点搬运的打包产物按哈希命名存放在此。
   # 不用 ctxstore（Micro 节点 LRU 只留 5 条，会被静默淘汰），也不入 SQLite（产物按 GB 计）。
   artifact_path: "artifacts"
+  # 额外的产物卷：写盘时自动落到「可用空间−水位线」余量最大的卷——扩容量，不是做副本。
+  artifact_extra_paths: []
+  # 单个产物字节上限。0（缺省）= 不限：传输按 1MiB 分片流式进行，大小不占内存，
+  # 边界就是磁盘剩余空间——声明总量超过可用空间的推送会在第一字节落地前被拒。
+  # 仅在产物与关键状态共享小磁盘时才需要设限。
+  artifact_max_bytes: 0
+  # 每个卷保留的最小剩余空间：产物可以任意大，但不能把卷写到这条线以下——
+  # 写满的文件系统会拖垮 SQLite 的 WAL。缺省 256MiB，显式 0 关闭。
+  artifact_min_free_bytes: 268435456
 
 model:
   api_type: ""       # anthropic | openai（缺省 anthropic）
@@ -46,8 +55,12 @@ injection:
   model: "auto"
 
 # 路由偏好：列出的 agent 在评分时获得 +0.5 加权；首选 agent 不可用时自动顺延下一个
+# tools_policy: minimal(默认，安全白名单) | extended(放开 agent 原生工具/MCP)
+# panda_tools: extended 策略下是否向 agent 暴露 OpenPanda 自管理工具（panda mcp），默认 true
 # routing:
 #   preferred_agents: []
+#   tools_policy: minimal
+#   panda_tools: true
 
 # 记忆文件字符上限（缺省即使用默认值）
 # memory:

@@ -51,15 +51,22 @@ func Open(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Checkpoint executes PRAGMA wal_checkpoint with the given mode ("PASSIVE", "FULL", "RESTART", "TRUNCATE").
-// Calling Checkpoint with "TRUNCATE" or "PASSIVE" flushes uncommitted and committed WAL pages into the database
-// file, preventing unbounded WAL log file growth and ensuring durability before graceful shutdown.
+// Checkpoint executes PRAGMA wal_checkpoint with the given mode ("PASSIVE",
+// "FULL", "RESTART", "TRUNCATE"). "TRUNCATE" or "PASSIVE" flush committed WAL
+// pages into the database file, preventing unbounded WAL growth and ensuring
+// durability before graceful shutdown. PRAGMA arguments cannot be bound
+// parameters, so the mode is whitelisted rather than quoted — only the four
+// names SQLite defines may reach the string.
 func Checkpoint(ctx context.Context, db *sql.DB, mode string) error {
 	if db == nil {
 		return nil
 	}
-	if mode == "" {
+	switch mode {
+	case "", "PASSIVE":
 		mode = "PASSIVE"
+	case "FULL", "RESTART", "TRUNCATE":
+	default:
+		return fmt.Errorf("storage: unknown wal_checkpoint mode %q", mode)
 	}
 	_, err := db.ExecContext(ctx, fmt.Sprintf("PRAGMA wal_checkpoint(%s)", mode))
 	return err

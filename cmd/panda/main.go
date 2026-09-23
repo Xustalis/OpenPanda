@@ -10,6 +10,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -29,6 +30,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/updater"
@@ -133,6 +135,9 @@ func main() {
 		case "skill":
 			runSkill(args)
 			return
+		case "mcp":
+			runMCP(args)
+			return
 		case "reminder":
 			runReminder(args)
 			return
@@ -220,7 +225,7 @@ func subcommandNames() []string {
 	return []string{
 		"daemon", "serve", "ask", "repl", "chat", "web", "voice",
 		"install", "uninstall", "update", "upgrade", "doctor", "status", "nodes", "pair", "queue",
-		"task", "plan", "cancel", "approve", "reject", "logs", "skill",
+		"task", "plan", "cancel", "approve", "reject", "logs", "skill", "mcp",
 		"reminder", "detect", "card", "init", "metrics", "audit", "session",
 		"sessions", "memory", "config", "model", "models", "agents", "project",
 		"read", "view", "cat", "md", "markdown", "version", "help",
@@ -321,16 +326,34 @@ func runDaemon(args []string) {
 			logger.Warn("native abilities dropped: command not found on this host",
 				"ids", strings.Join(dropped, ","))
 		}
+		// Same phantom-ability rule for §7.1 actuators: a declared driver
+		// that does not resolve would win the plan and fail at exec, so it
+		// leaves the card before peers ever see it.
+		if dropped := card.PruneUnavailableActuators(); len(dropped) > 0 {
+			logger.Warn("actuators dropped: command not found on this host",
+				"ids", strings.Join(dropped, ","))
+		}
 	}
 	card.NodeKind = cfg.Node.Kind
 	card.NodeIdentity = effectiveIdentity
 
 	runtimeNodeID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, effectiveIdentity)
+	// A stable id must not look ephemeral: scheduler.EphemeralBase strips ANY
+	// trailing "-"+8hex, so a node named e.g. "build-deadbeef" would register
+	// its row under the full name yet be recognized by peers as "build" —
+	// IsSelfRow/SameRuntimeIdentity then alias it onto a different node.
+	// Rejecting at startup beats aliasing silently at route time (D-collision).
+	if base, ok := scheduler.EphemeralBase(runtimeNodeID); ok {
+		fatal("node id", fmt.Errorf("%q ends in an ephemeral-style -8hex suffix; it would alias onto %q — rename the node", runtimeNodeID, base))
+	}
 	coreNode := core.NewCore(db, runtimeNodeID, card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
 	coreNode.SetRouterPolicy(cfg.Injection, cfg.Routing)
 	// Extended-policy agent runs expose the node's MCP server to the
 	// delegated agent CLI (work-dir .mcp.json); minimal policy ignores it.
 	coreNode.SetAgentMCPPassthrough(cfg.MCP.Command)
+	// The self-tools MCP server spawned from .mcp.json inherits the daemon's
+	// --config choice; empty means its own default discovery.
+	coreNode.SetSelfConfigPath(*configPath)
 	// Supervision (上级完成度判定): judge agent results against the task's
 	// success criteria and re-delegate work that isn't complete. A model-less
 	// node skips this — agent tasks finish in one shot as before.
@@ -350,7 +373,10 @@ func runDaemon(args []string) {
 	// hash, that a later stage on another node pulls over the bus. Without it a
 	// delegated task can only carry a path, which means nothing on the node that
 	// receives it.
-	coreNode.SetArtifactStore(artifact.NewStore(cfg.Storage.ArtifactPath))
+	artifactStore := artifact.NewStore(cfg.Storage.ArtifactPath, cfg.Storage.ArtifactExtraPaths...)
+	artifactStore.SetMaxBytes(cfg.Storage.ArtifactMaxBytes)
+	artifactStore.SetMinFreeBytes(cfg.Storage.ArtifactMinFreeBytes)
+	coreNode.SetArtifactStore(artifactStore)
 	coreNode.SetLimits(cfg.Network.MaxConnections, cfg.Network.MaxConnectionsPerIP)
 	// Execution timeouts (timeouts.*): the agent budget and the task lease. A
 	// deep-learning stage runs far longer than a code edit, so both are operator
@@ -487,6 +513,12 @@ func runDaemon(args []string) {
 	for _, peer := range cfg.Network.Peers {
 		guard.Go(logger, "daemon: peer keepalive "+peer, cancel, func() {
 			backoff := 1 * time.Second
+			// jitter spreads a fleet-wide reconnect over a window instead of
+			// having every node redial in lockstep the second the peer returns —
+			// the classic thundering herd after a shared outage.
+			jitter := func(d time.Duration) time.Duration {
+				return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
+			}
 			for {
 				err := coreNode.MaintainPeer(ctx, peer)
 				if err != nil {
@@ -496,7 +528,7 @@ func runDaemon(args []string) {
 					select {
 					case <-ctx.Done():
 						return
-					case <-time.After(backoff):
+					case <-time.After(jitter(backoff)):
 					}
 					backoff = min(backoff*2, 30*time.Second)
 					continue
@@ -507,7 +539,7 @@ func runDaemon(args []string) {
 				select {
 				case <-ctx.Done():
 					return
-				case <-time.After(backoff):
+				case <-time.After(jitter(backoff)):
 				}
 			}
 		})
@@ -660,6 +692,7 @@ func printUsage(w *os.File) {
 	line("  agents [test <name>]                      probe installed agent CLIs")
 	line("  reminder list|add|rm                      scheduled reminders")
 	line("  skill list|find|hub|add|reset             procedural skill & hub management")
+	line("  mcp                                       run the node's self-tools as an MCP stdio server")
 	line("")
 	line("observability:")
 	line("  status                                    node identity + capability directory")

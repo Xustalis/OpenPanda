@@ -280,3 +280,42 @@ func TestTierFromCommandDownloadWrites(t *testing.T) {
 		}
 	}
 }
+
+func TestTierFromCommandSubVerbsAndPowerGating(t *testing.T) {
+	cases := []struct {
+		command string
+		args    []string
+		want    int
+	}{
+		// Wholesale power-state and bus/seat control verbs are Tier 2.
+		{"loginctl", nil, TierIrreversible},
+		{"busctl", nil, TierIrreversible},
+		{"loginctl", []string{"terminate-user", "alice"}, TierIrreversible},
+		{"busctl", []string{"call", "org.freedesktop.login1"}, TierIrreversible},
+
+		// systemctl routine subcommands are Tier 1.
+		{"systemctl", nil, TierReversible},
+		{"systemctl", []string{"status", "nginx"}, TierReversible},
+		{"systemctl", []string{"restart", "panda"}, TierReversible},
+		{"systemctl", []string{"is-active", "db"}, TierReversible},
+
+		// systemctl poweroff / halt / kexec subcommands are Tier 2.
+		{"systemctl", []string{"poweroff"}, TierIrreversible},
+		{"systemctl", []string{"halt"}, TierIrreversible},
+		{"systemctl", []string{"kexec"}, TierIrreversible},
+		{"systemctl", []string{"--now", "poweroff"}, TierIrreversible},
+		{"systemctl", []string{"-M", "mycontainer", "poweroff"}, TierIrreversible},
+		{"systemctl", []string{"--", "poweroff"}, TierIrreversible},
+
+		// Value-taking flags consume their argument so the value isn't mistaken for the subcommand.
+		// e.g., `systemctl --signal halt restart` restarts a unit (Tier 1), not halt the host.
+		{"systemctl", []string{"--signal", "halt", "restart", "daemon"}, TierReversible},
+		{"systemctl", []string{"-s", "halt", "restart", "daemon"}, TierReversible},
+		{"systemctl", []string{"--signal=halt", "restart", "daemon"}, TierReversible},
+	}
+	for _, tc := range cases {
+		if got := TierFromCommand(tc.command, tc.args...); got != tc.want {
+			t.Errorf("TierFromCommand(%q, %v)=%d, want %d", tc.command, tc.args, got, tc.want)
+		}
+	}
+}

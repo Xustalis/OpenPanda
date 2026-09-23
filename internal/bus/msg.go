@@ -34,6 +34,26 @@ const (
 	// artifact is a build tree or a trained model.
 	MsgArtifactFetch = "artifact_fetch"
 	MsgArtifactChunk = "artifact_chunk"
+	// Artifact push is the proactive half of the data plane (whitepaper §8.3
+	// fat-push): instead of waiting for the consumer to pull, the holder
+	// streams chunks out of a persisted outbox. The receiver stages them on
+	// disk and reports contiguous progress (status) plus the terminal
+	// verification verdict (done) — the custody signals that let a transfer
+	// resume from the receiver's own offset after a reconnect instead of
+	// restarting a multi-hundred-MiB archive.
+	MsgArtifactPush       = "artifact_push"
+	MsgArtifactPushStatus = "artifact_push_status"
+	MsgArtifactPushDone   = "artifact_push_done"
+	// Agent horizontal negotiation signaling (whitepaper §5.1).
+	MsgAgentNegotiate = "agent_negotiate"
+	MsgAgentGrant     = "agent_grant"
+	MsgAgentYield     = "agent_yield"
+	// MsgDTNBundle carries a signed CBOR DTN bundle (§8.3) on the wire: the
+	// bundle — not a plain task_delegate — is the canonical form a
+	// store-and-forward task takes once it leaves the origin, so a parked
+	// row redelivers byte-identical signed data and a live DTN dispatch is
+	// the same object as its outboxed copy.
+	MsgDTNBundle = "dtn_bundle"
 )
 
 // Envelope is the JSON wire format (design doc §10.3). MsgID is a UUIDv7
@@ -58,6 +78,13 @@ type Envelope struct {
 // message is built means a completed task cannot lose its result — and take the
 // peer link with it — because its log was long.
 func NewEnvelope(typ, from, msgID string, payload any) (Envelope, error) {
+	// The id is the receiver's dedup key (see the Envelope doc): a message
+	// sent without one arrives unreplayable-proof — the same frame delivered
+	// twice executes its handler twice. Failing here, at construction, turns
+	// a forgotten id into a visible error instead of silent idempotency loss.
+	if msgID == "" {
+		return Envelope{}, fmt.Errorf("message id required for %s", typ)
+	}
 	var raw json.RawMessage
 	if payload != nil {
 		if c, ok := payload.(wireClamper); ok {

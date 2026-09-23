@@ -139,6 +139,9 @@ var replCommands []replCmd
 func init() {
 	replCommands = []replCmd{
 		{"ask", "chat", "cmd.ask", (*repl).cmdAsk},
+		{"goal", "chat", "cmd.goal", (*repl).cmdModeGoal},
+		{"plan", "chat", "cmd.planMode", (*repl).cmdModePlan},
+		{"spec", "chat", "cmd.spec", (*repl).cmdModeSpec},
 		{"new", "chat", "cmd.new", (*repl).cmdNew},
 		{"history", "chat", "cmd.history", (*repl).cmdHistory},
 		{"export", "chat", "cmd.export", (*repl).cmdExport},
@@ -718,7 +721,12 @@ func (r *repl) recordErrorTurn(err error) {
 // with this REPL run's accumulated conversation (r.convo) so follow-ups
 // keep context; /new clears it. Esc / Ctrl-C interrupts the run; a double
 // Ctrl-C exits.
-func (r *repl) ask(text string) {
+// ask is askMode with the classifier choosing the lens itself.
+func (r *repl) ask(text string) { r.askMode(text, "") }
+
+// askMode runs one prompt under a slash-mode directive: "goal", "plan",
+// "spec", or "" for the default classification path.
+func (r *repl) askMode(text, mode string) {
 	if r.engine == nil {
 		r.outln(i18n.T(r.loc, "repl.ask.noEngine"))
 		return
@@ -806,7 +814,7 @@ func (r *repl) ask(text string) {
 	}
 	ch := make(chan outcome, 1)
 	go func() {
-		out, err := r.engine.AskTurns(ctx, history, text, workDir, r.authorize, cb)
+		out, err := r.engine.AskTurnsMode(ctx, history, text, workDir, mode, r.authorize, cb)
 		ch <- outcome{out, err}
 	}()
 	got := make(chan struct{})
@@ -1034,7 +1042,35 @@ func (r *repl) cmdAsk(arg string) {
 		r.outln("/ask " + i18n.T(r.loc, "cmd.ask"))
 		return
 	}
-	r.ask(arg)
+	r.askMode(arg, "")
+}
+
+// cmdModeGoal/cmdModePlan/cmdModeSpec run one ask under a slash-mode lens:
+// /goal refines the goal, /plan requests a staged plan, /spec writes a
+// specification. Empty arguments print the mode's usage line instead of
+// sending an empty prompt.
+func (r *repl) cmdModeGoal(arg string) {
+	if arg == "" {
+		r.outln(i18n.Tf(r.loc, "tui.mode.usage", "cmd", "/goal"))
+		return
+	}
+	r.askMode(arg, "goal")
+}
+
+func (r *repl) cmdModePlan(arg string) {
+	if arg == "" {
+		r.outln(i18n.Tf(r.loc, "tui.mode.usage", "cmd", "/plan"))
+		return
+	}
+	r.askMode(arg, "plan")
+}
+
+func (r *repl) cmdModeSpec(arg string) {
+	if arg == "" {
+		r.outln(i18n.Tf(r.loc, "tui.mode.usage", "cmd", "/spec"))
+		return
+	}
+	r.askMode(arg, "spec")
 }
 
 // cmdTasks lists the queue, optionally filtered by state (/tasks running);
@@ -1495,7 +1531,7 @@ func (r *repl) cmdSkills(arg string) {
 		skillList(store)
 	case "find", "discover":
 		if len(fields) == 0 {
-			r.outln("用法: /skill find <关键词>")
+			r.outln(i18n.T(r.loc, "repl.skill.find.usage"))
 			return
 		}
 		query := strings.Join(fields, " ")
@@ -1503,20 +1539,20 @@ func (r *repl) cmdSkills(arg string) {
 		if r.cfg != nil {
 			hubURL = r.cfg.Skills.HubURL
 		}
-		r.outf("🔍 正在自主检索并匹配技能: %q ...\n", query)
+		r.outln(i18n.Tf(r.loc, "repl.skill.find.searching", "q", query))
 		sk, isNew, err := store.DiscoverAndInstall(context.Background(), hubURL, query)
 		if err != nil {
 			r.errf("panda: %v\n", err)
 			return
 		}
 		if isNew {
-			r.outf("✅ 找到并自动安装激活技能: %s\n   描述: %s\n   状态: %s (已就绪)\n", sk.Name, sk.Description, sk.Status)
+			r.outln(i18n.Tf(r.loc, "repl.skill.find.installed", "name", sk.Name, "desc", sk.Description, "status", string(sk.Status)))
 		} else {
-			r.outf("ℹ️  匹配到技能 %s，该技能已处于激活就绪状态。\n   描述: %s\n", sk.Name, sk.Description)
+			r.outln(i18n.Tf(r.loc, "repl.skill.find.matched", "name", sk.Name, "desc", sk.Description))
 		}
 	case "reset":
 		if len(fields) == 0 {
-			r.outln("用法: /skill reset <名称|all>")
+			r.outln(i18n.T(r.loc, "repl.skill.reset.usage"))
 			return
 		}
 		target := fields[0]
@@ -1524,7 +1560,7 @@ func (r *repl) cmdSkills(arg string) {
 			for _, b := range skills.BuiltinSkills() {
 				_, _ = store.ResetBuiltin(b.Name)
 			}
-			r.outln("所有内置技能已重置为出厂默认设置。")
+			r.outln(i18n.T(r.loc, "repl.skill.reset.all"))
 			return
 		}
 		sk, err := store.ResetBuiltin(target)
@@ -1532,15 +1568,15 @@ func (r *repl) cmdSkills(arg string) {
 			r.errf("panda: %v\n", err)
 			return
 		}
-		r.outf("已将内置技能 %q 重置为默认版本。\n", sk.Name)
+		r.outln(i18n.Tf(r.loc, "repl.skill.reset.done", "name", sk.Name))
 	case "add", "install":
 		if len(fields) == 0 {
-			r.outln("用法: /skill add <链接|文件路径|Hub技能名>")
+			r.outln(i18n.T(r.loc, "repl.skill.add.usage"))
 			return
 		}
 		target := fields[0]
 		if skills.IsBuiltinSkill(target) {
-			r.outf("技能 %q 是内置标准技能且已激活生效。\n", target)
+			r.outln(i18n.Tf(r.loc, "repl.skill.add.builtin", "name", target))
 			return
 		}
 		ctx := context.Background()
@@ -1559,7 +1595,7 @@ func (r *repl) cmdSkills(arg string) {
 			for _, s := range res {
 				names = append(names, s.Name)
 			}
-			r.outf("成功导入 %d 个技能: %s\n", len(res), strings.Join(names, ", "))
+			r.outln(i18n.Tf(r.loc, "repl.skill.add.imported", "n", strconv.Itoa(len(res)), "names", strings.Join(names, ", ")))
 			return
 		}
 		sk, err := skills.InstallFromHub(ctx, store, hubURL, target, opts)
@@ -1567,7 +1603,7 @@ func (r *repl) cmdSkills(arg string) {
 			r.errf("panda: %v\n", err)
 			return
 		}
-		r.outf("成功从 Skills Hub 安装技能 %s (%s)。\n", sk.Name, sk.Description)
+		r.outln(i18n.Tf(r.loc, "repl.skill.add.installed", "name", sk.Name, "desc", sk.Description))
 	case "hub":
 		action := "list"
 		if len(fields) > 0 {
@@ -1581,7 +1617,7 @@ func (r *repl) cmdSkills(arg string) {
 		}
 		idx, err := skills.FetchHubIndex(ctx, hubURL)
 		if err != nil {
-			r.errf("获取 Hub 失败: %v\n", err)
+			r.errf("panda: %s\n", i18n.Tf(r.loc, "repl.skill.hub.fetchFail", "err", err.Error()))
 			return
 		}
 		switch action {
@@ -1593,19 +1629,19 @@ func (r *repl) cmdSkills(arg string) {
 				}
 				tagStr := ""
 				if installed {
-					tagStr = " [已安装]"
+					tagStr = i18n.T(r.loc, "repl.skill.hub.installedTag")
 				}
 				r.outf("  %-20s %s%s\n", s.Name, s.Description, tagStr)
 			}
 		case "search":
 			if len(fields) == 0 {
-				r.outln("用法: /skill hub search <关键词>")
+				r.outln(i18n.T(r.loc, "repl.skill.hub.search.usage"))
 				return
 			}
 			q := strings.Join(fields, " ")
 			res := skills.SearchHub(idx, q)
 			if len(res) == 0 {
-				r.outf("未找到与 %q 匹配的技能。\n", q)
+				r.outln(i18n.Tf(r.loc, "repl.skill.hub.search.none", "q", q))
 				return
 			}
 			for _, s := range res {
@@ -1613,7 +1649,7 @@ func (r *repl) cmdSkills(arg string) {
 			}
 		case "install":
 			if len(fields) == 0 {
-				r.outln("用法: /skill hub install <技能名>")
+				r.outln(i18n.T(r.loc, "repl.skill.hub.install.usage"))
 				return
 			}
 			name := fields[0]
@@ -1623,12 +1659,12 @@ func (r *repl) cmdSkills(arg string) {
 				r.errf("panda: %v\n", err)
 				return
 			}
-			r.outf("已成功安装技能: %s\n", sk.Name)
+			r.outln(i18n.Tf(r.loc, "repl.skill.hub.installedOK", "name", sk.Name))
 		default:
-			r.outf("未知 hub 子命令: %s (可选 list, search, install)\n", action)
+			r.outln(i18n.Tf(r.loc, "repl.skill.hub.unknown", "action", action))
 		}
 	default:
-		r.outln("用法: /skill [list | find <关键词> | add <目标> | reset <名称|all> | hub <list|search|install>]")
+		r.outln(i18n.T(r.loc, "repl.skill.usage"))
 	}
 }
 

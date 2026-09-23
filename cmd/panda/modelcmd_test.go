@@ -1,8 +1,14 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -131,8 +137,9 @@ func TestModelAddKeyAndAlias(t *testing.T) {
 		configPath: cfgPath,
 	}
 
-	// 3 args: provider, key, alias (omitting model)
-	r.modelAdd([]string{"deepseek", "sk-test-00000000000000000000000000", "my-alias"})
+	// 3 args: provider, key, alias (omitting model); --force skips the
+	// connectivity probe so the test needs no network.
+	r.modelAdd([]string{"deepseek", "sk-test-00000000000000000000000000", "my-alias", "--force"})
 	if len(r.cfg.Models) != 1 {
 		t.Fatalf("expected 1 model, got %d", len(r.cfg.Models))
 	}
@@ -192,5 +199,80 @@ func TestModelSwitchPrefersAliasMatch(t *testing.T) {
 	}
 	if r.cfg.Model.BaseURL != "https://my-relay.com/anthropic" {
 		t.Fatalf("expected relay baseURL, got %q", r.cfg.Model.BaseURL)
+	}
+}
+
+// TestModelAddCustomVerifies exercises the connectivity probe: a custom relay
+// entry is only persisted when the endpoint actually answers. The httptest
+// server speaks the OpenAI dialect; the second half proves a dead endpoint is
+// rejected (and --force bypasses the probe).
+func TestModelAddCustomVerifies(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfg := &config.Config{Node: config.NodeConfig{Name: "test"}}
+	r := &repl{cfg: cfg, configPath: cfgPath}
+
+	// Live endpoint: one-shot OpenAI-style completion.
+	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"OK"}}]}`)
+	}))
+	defer live.Close()
+
+	r.modelAdd([]string{"custom", live.URL, "gpt-relay", "sk-anything"})
+	if len(r.cfg.Models) != 1 {
+		t.Fatalf("verified custom model should persist, got %d entries", len(r.cfg.Models))
+	}
+	m := r.cfg.Models[0]
+	if m.Provider != "custom" || m.BaseURL != live.URL || m.Model != "gpt-relay" {
+		t.Fatalf("unexpected stored config: %+v", m)
+	}
+	if m.NormalizedAPIType() != config.APITypeOpenAI {
+		t.Fatalf("custom default should be openai dialect, got %q", m.APIType)
+	}
+
+	// Dead endpoint: nothing is persisted without --force.
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	dead.Close() // connection refused — the probe must fail fast
+
+	before := len(r.cfg.Models)
+	r.modelAdd([]string{"custom", dead.URL, "x", "sk-anything"})
+	if len(r.cfg.Models) != before {
+		t.Fatalf("failed probe must not add a model, got %d entries", len(r.cfg.Models))
+	}
+
+	// --force bypasses the probe and stores the entry.
+	r.modelAdd([]string{"custom", dead.URL, "x", "sk-anything", "--force"})
+	if len(r.cfg.Models) != before+1 {
+		t.Fatalf("--force should persist despite the failed probe, got %d", len(r.cfg.Models))
+	}
+}
+
+// TestModelTestCustomEmptyModel: `model test custom <url>` with no model name
+// must probe the first advertised model rather than submit an empty model.
+func TestModelTestCustomEmptyModel(t *testing.T) {
+	dir := t.TempDir()
+	r := &repl{cfg: &config.Config{Node: config.NodeConfig{Name: "test"}}, configPath: filepath.Join(dir, "config.yaml")}
+
+	var gotModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		if strings.HasSuffix(req.URL.Path, "/models") {
+			fmt.Fprint(w, `{"data":[{"id":"picked-model"}]}`)
+			return
+		}
+		body, _ := io.ReadAll(req.Body)
+		var reqMap map[string]any
+		_ = json.Unmarshal(body, &reqMap)
+		gotModel, _ = reqMap["model"].(string)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"OK"}}]}`)
+	}))
+	defer srv.Close()
+
+	r.modelTest([]string{"custom", srv.URL})
+	if gotModel != "picked-model" {
+		t.Fatalf("expected the probe to use the advertised model, got %q", gotModel)
 	}
 }

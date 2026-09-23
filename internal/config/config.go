@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/executil"
+	"github.com/Xustalis/OpenPanda/internal/util"
 	"gopkg.in/yaml.v3"
 )
 
@@ -109,6 +110,13 @@ type RoutingConfig struct {
 	// servers configured for the work directory are reachable. Widening the
 	// tool face is an explicit operator choice, never a default.
 	ToolsPolicy string `yaml:"tools_policy"`
+	// PandaTools gates the self-management surface agents get under the
+	// extended tools policy: the openpanda MCP server (panda mcp) injected
+	// into MCP-capable CLIs plus the prompt hint pointing shell-capable
+	// agents at the panda binary on PATH. Nil means enabled — the extended
+	// policy already opted into a wider tool face — and an explicit false
+	// keeps extended tools while closing the self-management path.
+	PandaTools *bool `yaml:"panda_tools"`
 }
 
 // Agent tool policies (routing.tools_policy).
@@ -127,6 +135,13 @@ func (r RoutingConfig) NormalizedToolsPolicy() string {
 		return ToolsPolicyExtended
 	}
 	return ToolsPolicyMinimal
+}
+
+// NormalizedPandaTools reports whether the self-management tool surface is
+// enabled (routing.panda_tools, default true). The caller still gates it on
+// the extended tools policy — the flag is an opt-out, not an opt-in.
+func (r RoutingConfig) NormalizedPandaTools() bool {
+	return r.PandaTools == nil || *r.PandaTools
 }
 
 // Default memory size limits (characters). They override the compile-time
@@ -211,6 +226,21 @@ type StorageConfig struct {
 	SkillsPath   string `yaml:"skills_path"`   // procedural-memory root (skills/)
 	WorkPath     string `yaml:"work_path"`     // agents execute here; scope drift is measured against it
 	ArtifactPath string `yaml:"artifact_path"` // packed task artifacts (artifacts/), named by hash
+	// ArtifactExtraPaths are additional pool volumes (other disks, mounted
+	// media). A write lands on the volume with the most usable space that
+	// fits it — extra paths add capacity, they do not replicate.
+	ArtifactExtraPaths []string `yaml:"artifact_extra_paths"`
+	// ArtifactMaxBytes bounds a single artifact, packed or unpacked. Zero —
+	// the default — accepts whatever a volume can hold: the transport streams
+	// in 1 MiB chunks, so size never translates into memory pressure, and
+	// free space is the honest bound. Set it on nodes where artifacts share
+	// a disk with more delicate state.
+	ArtifactMaxBytes int64 `yaml:"artifact_max_bytes"`
+	// ArtifactMinFreeBytes is the headroom every volume keeps between the
+	// pool's last byte and a full disk — a full filesystem wedges SQLite's
+	// WAL, so an artifact may fill a volume only down to this mark. The
+	// default is 256 MiB; 0 disables the watermark.
+	ArtifactMinFreeBytes int64 `yaml:"artifact_min_free_bytes"`
 }
 
 // LogConfig controls structured logging.
@@ -327,6 +357,25 @@ type ModelConfig struct {
 	MaxTokens     int    `yaml:"max_tokens"`               // completion cap; 0 = provider/entry default
 	ContextWindow int    `yaml:"context_window,omitempty"` // advertised context length; 0 = unknown
 	NoAuth        bool   `yaml:"no_auth,omitempty"`        // true for local models that need no API key
+	// Thinking selects the reasoning mode: "on" requests the provider's
+	// thinking/reasoning pass, "off" suppresses it, empty leaves the
+	// provider default. The wire shape is chosen per provider dialect
+	// (Anthropic budget object, DashScope enable_thinking flag, Ark
+	// thinking object, OpenAI reasoning_effort).
+	Thinking string `yaml:"thinking,omitempty"` // "on" | "off" | "" (provider default)
+	// ThinkingBudget caps the reasoning budget in tokens where the dialect
+	// supports it (Anthropic budget_tokens, DashScope thinking_budget). 0 =
+	// provider default.
+	ThinkingBudget int `yaml:"thinking_budget,omitempty"`
+	// Params are extra request-body fields merged into every call — the
+	// escape hatch for relay-specific knobs a first-class field does not
+	// cover (temperature, top_p, enable_search, …). Top-level fields win
+	// over Params on conflict, so a key cannot override model/messages.
+	Params map[string]any `yaml:"params,omitempty"`
+	// Headers are extra HTTP headers sent with every request — custom auth
+	// schemes or relay routing headers (e.g. "X-Tenant: blue"). They never
+	// replace the built-in auth/content-type headers.
+	Headers map[string]string `yaml:"headers,omitempty"`
 }
 
 // NormalizedAPIType returns the validated api type, defaulting to Anthropic.
@@ -729,6 +778,10 @@ func Default() *Config {
 			// config file that moves storage next to itself but predates
 			// artifact_path would otherwise keep the per-user default and
 			// scatter a node's state across two roots.
+			// The free-space watermark defaults to a quarter GiB — enough to
+			// keep a filled artifact volume from taking SQLite down with it —
+			// and an explicit 0 in the file disables it.
+			ArtifactMinFreeBytes: 256 << 20,
 		},
 		Log: LogConfig{
 			Level: "info",
@@ -869,6 +922,11 @@ func (c *Config) resolveRelativePaths(baseDir string) {
 	// archives next to the YAML. normalize() derives it instead.
 	if c.Storage.ArtifactPath != "" && !filepath.IsAbs(c.Storage.ArtifactPath) {
 		c.Storage.ArtifactPath = filepath.Join(baseDir, c.Storage.ArtifactPath)
+	}
+	for i, p := range c.Storage.ArtifactExtraPaths {
+		if p != "" && !filepath.IsAbs(p) {
+			c.Storage.ArtifactExtraPaths[i] = filepath.Join(baseDir, p)
+		}
 	}
 	if !filepath.IsAbs(c.Push.VAPIDKeyPath) {
 		c.Push.VAPIDKeyPath = filepath.Join(baseDir, c.Push.VAPIDKeyPath)
@@ -1015,6 +1073,19 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("OPENPANDA_ARTIFACT_PATH"); v != "" {
 		c.Storage.ArtifactPath = v
 	}
+	if v := os.Getenv("OPENPANDA_ARTIFACT_MAX_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.Storage.ArtifactMaxBytes = n
+		}
+	}
+	if v := os.Getenv("OPENPANDA_ARTIFACT_EXTRA_PATHS"); v != "" {
+		c.Storage.ArtifactExtraPaths = append(c.Storage.ArtifactExtraPaths, filepath.SplitList(v)...)
+	}
+	if v := os.Getenv("OPENPANDA_ARTIFACT_MIN_FREE_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.Storage.ArtifactMinFreeBytes = n
+		}
+	}
 	if v := os.Getenv("OPENPANDA_MODEL_API_TYPE"); v != "" {
 		c.Model.APIType = v
 	}
@@ -1069,7 +1140,7 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
-		return os.WriteFile(path, out, 0o600)
+		return util.WriteFileAtomic(path, out, 0o600)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -1102,12 +1173,16 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 	}
 	setMapFieldInt(model, "max_tokens", mc.MaxTokens)
 	setMapFieldInt(model, "context_window", mc.ContextWindow)
+	setMapField(model, "thinking", mc.Thinking)
+	setMapFieldInt(model, "thinking_budget", mc.ThinkingBudget)
+	setMapFieldAnyMap(model, "params", mc.Params)
+	setMapFieldStringMap(model, "headers", mc.Headers)
 
 	out, err := yaml.Marshal(&root)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, out, 0o600); err != nil {
+	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)
@@ -1141,7 +1216,7 @@ func UpdateModelsSection(path string, models []ModelConfig) error {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(path, out, 0o600)
+		return util.WriteFileAtomic(path, out, 0o600)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -1171,7 +1246,7 @@ func UpdateModelsSection(path string, models []ModelConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, out, 0o600); err != nil {
+	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)
@@ -1225,7 +1300,7 @@ func UpdateMCPSection(path string, command string) error {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(path, out, 0o600)
+		return util.WriteFileAtomic(path, out, 0o600)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -1249,7 +1324,7 @@ func UpdateMCPSection(path string, command string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, out, 0o600); err != nil {
+	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)
@@ -1284,7 +1359,7 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(path, out, 0o600)
+		return util.WriteFileAtomic(path, out, 0o600)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -1308,7 +1383,7 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, out, 0o600); err != nil {
+	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)
@@ -1420,6 +1495,56 @@ func setMapFieldInt(m *yaml.Node, key string, value int) {
 	m.Content = append(m.Content,
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(value)},
+	)
+}
+
+// setMapFieldAnyMap upserts key: {…} in mapping node m from a
+// map[string]any, round-tripping through the marshaller so nested values keep
+// their natural YAML types. An empty map removes the key.
+func setMapFieldAnyMap(m *yaml.Node, key string, value map[string]any) {
+	setMapFieldNode(m, key, value)
+}
+
+// setMapFieldStringMap upserts key: {…} in mapping node m from a
+// map[string]string. An empty map removes the key.
+func setMapFieldStringMap(m *yaml.Node, key string, value map[string]string) {
+	setMapFieldNode(m, key, value)
+}
+
+// setMapFieldNode is the shared upsert: the value is marshalled to a yaml.Node
+// so arbitrary maps slot into the round-tripped document; a nil/empty value
+// removes the key.
+func setMapFieldNode(m *yaml.Node, key string, value any) {
+	var node *yaml.Node
+	if value != nil {
+		b, err := yaml.Marshal(value)
+		if err == nil {
+			var doc yaml.Node
+			if err := yaml.Unmarshal(b, &doc); err == nil && len(doc.Content) > 0 {
+				node = doc.Content[0]
+			}
+		}
+	}
+	// Marshal of an empty map yields "{}\n" — treat that as absent.
+	if node != nil && node.Kind == yaml.MappingNode && len(node.Content) == 0 {
+		node = nil
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			if node == nil {
+				m.Content = append(m.Content[:i], m.Content[i+2:]...)
+				return
+			}
+			m.Content[i+1] = node
+			return
+		}
+	}
+	if node == nil {
+		return
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		node,
 	)
 }
 

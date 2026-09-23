@@ -96,6 +96,44 @@ func TestChangedNoDiff(t *testing.T) {
 	}
 }
 
+// TestSnapshotPrunesVendoredDirs verifies that dependency/generated trees are
+// skipped wholesale: an agent vendoring or refreshing node_modules mid-run
+// produces no drift entries, while drift in real source still registers.
+func TestSnapshotPrunesVendoredDirs(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"src/app.js":                "code",
+		"node_modules/dep/index.js": "vendored-1",
+		"vendor/lib/x.go":           "vendored-2",
+		"__pycache__/m.pyc":         "bytecode",
+		".git/HEAD":                 "ref: refs/heads/main",
+	})
+
+	before, err := SnapshotDir(dir)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if _, ok := before.files["node_modules/dep/index.js"]; ok {
+		t.Fatalf("node_modules file recorded in snapshot; pruned dirs must be skipped")
+	}
+	// .git is deliberately NOT pruned — history rewrites are drift worth flagging.
+	if _, ok := before.files[".git/HEAD"]; !ok {
+		t.Fatalf(".git file missing from snapshot; .git must not be pruned")
+	}
+
+	// Rewriting vendored content mid-run registers nothing.
+	if err := os.WriteFile(filepath.Join(dir, "node_modules/dep/index.js"), []byte("vendored-2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := SnapshotDir(dir)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if got := before.Changed(after); len(got) != 0 {
+		t.Errorf("vendored-dir change read as drift: %v, want none", got)
+	}
+}
+
 // TestSnapshotIgnoresSQLiteJournal verifies that SQLite journal files (-wal/-shm)
 // are excluded from the snapshot: they are transient host machine state written
 // by any live SQLite connection, so a changing WAL must not read as agent drift.

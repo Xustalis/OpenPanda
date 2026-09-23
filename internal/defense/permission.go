@@ -55,6 +55,14 @@ func TierFromCommand(command string, args ...string) int {
 	if strings.HasPrefix(command, "mkfs.") || strings.HasPrefix(command, "newfs_") {
 		return TierIrreversible
 	}
+	// A command that is routine for most subcommands but irreversible for a
+	// few — `systemctl restart` versus `systemctl poweroff` — gates on the
+	// subcommand its arguments carry.
+	if subs := irreversibleSubVerbs[command]; subs != nil {
+		if pos := positionalArgs(command, args); len(pos) > 0 && subs[pos[0]] {
+			return TierIrreversible
+		}
+	}
 	// Pass-through wrappers run a later argument as the real command (env VAR=x
 	// cmd, timeout 5 cmd, busybox cmd, …). Classify the inner command, not the
 	// wrapper's name, so a destructive payload cannot hide behind the wrapper.
@@ -253,14 +261,68 @@ var irreversibleVerbs = map[string]bool{
 	// machine unable to boot, which no later command can fix from inside it.
 	"fdisk": true, "parted": true, "sfdisk": true, "swapoff": true,
 	"diskutil": true, "hdiutil": true, "tmutil": true, "asr": true,
-	// Power state: the task's own machine stops answering.
+	// Power state: the task's own machine stops answering. loginctl terminates
+	// sessions and powers off through the same seat; busctl reaches every
+	// method on the system bus, including the power verbs — neither has a
+	// safe-subcommand list worth the evasion surface, so both gate wholesale.
 	"shutdown": true, "reboot": true, "poweroff": true, "halt": true,
+	"loginctl": true, "busctl": true,
 	// Windows equivalents of everything above. cmd builtins are not reachable as
 	// executables, but codeEscalates scans `cmd /c "…"` against this table, so
 	// listing them is what classifies the payload.
 	"del": true, "erase": true, "rd": true, "rmdir": true,
 	"format": true, "diskpart": true, "bcdedit": true,
 	"vssadmin": true, "cipher": true, "fsutil": true,
+}
+
+// irreversibleSubVerbs gates a command only when its subcommand is one of the
+// listed verbs: `systemctl restart` is routine node work, but `systemctl
+// poweroff`/`halt`/`kexec` stops the machine the task is running on, which is
+// exactly the power-state loss the verb table exists to catch. Checked with
+// the flags stripped (positionalArgs), so "systemctl --now poweroff" resolves
+// the same as "systemctl poweroff".
+var irreversibleSubVerbs = map[string]map[string]bool{
+	"systemctl": {"poweroff": true, "halt": true, "kexec": true},
+}
+
+// subVerbValueFlags lists, per gated command, the option spellings that consume
+// the next argument. That argument is the option's value — `systemctl --signal
+// halt restart` restarts a unit and never touches the machine — so it must be
+// skipped, not mistaken for the subcommand.
+var subVerbValueFlags = map[string][]string{
+	"systemctl": {
+		"--signal", "-s", "--host", "-H", "--machine", "-M", "--root",
+		"--image", "--image-policy", "--unit", "-u", "--type", "-t",
+		"--state", "--property", "-p", "--value", "--job-mode", "--kill-what",
+		"--kill-whom", "--preset-mode", "--message", "--with-dependencies",
+		"--boot-loader-entry", "--boot-loader-menu", "--firmware-setup",
+		"--timestamp",
+	},
+}
+
+// positionalArgs returns the arguments that are not flags and not the value of
+// a value-taking flag — the subcommand first, then whatever follows it (unit
+// names, for systemctl). "--flag=value" spellings are not arguments at all, so
+// they drop out for free. A bare "--" is itself skipped; the argument after it
+// is still a value positionally, which is the reading `systemctl -- poweroff`
+// needs (the verb is gated either way).
+func positionalArgs(command string, args []string) []string {
+	valueFlags := subVerbValueFlags[command]
+	out := make([]string, 0, 2)
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "" || a == "--" {
+			continue
+		}
+		if a[0] == '-' {
+			if !strings.Contains(a, "=") && takesValue(a, valueFlags) && i+1 < len(args) {
+				i++ // skip the flag's value argument
+			}
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // interpreterCodeFlags maps an interpreter executable to the flags that mean

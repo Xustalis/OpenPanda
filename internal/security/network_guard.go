@@ -2,6 +2,7 @@ package security
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 )
@@ -31,16 +32,16 @@ func NewNetworkGuard(hosts ...string) *NetworkGuard {
 }
 
 // CheckURL validates a URL against the guard: it must be https and its host
-// must be in the allowlist. localhost/127.0.0.1 is exempt from the https
-// requirement (plaintext is fine for a local dev model), but is still subject
-// to the host allowlist — so a guard pinned to a remote endpoint (D7) rejects
-// localhost too.
+// must be in the allowlist. Loopback endpoints (localhost, 127.0.0.0/8, ::1)
+// are exempt from the https requirement (plaintext is fine for a local dev
+// model), but are still subject to the host allowlist — so a guard pinned to
+// a remote endpoint (D7) rejects loopback too.
 func (g *NetworkGuard) CheckURL(rawurl string) error {
 	u, err := url.Parse(rawurl)
 	if err != nil {
 		return fmt.Errorf("network guard: parse endpoint: %w", err)
 	}
-	if u.Scheme != "https" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" {
+	if u.Scheme != "https" && u.Hostname() != "localhost" && !isLoopback(u.Hostname()) {
 		return fmt.Errorf("network guard: model endpoint must be https (got %q)", u.Scheme)
 	}
 	host := strings.ToLower(u.Host)
@@ -53,6 +54,13 @@ func (g *NetworkGuard) CheckURL(rawurl string) error {
 		return nil
 	}
 	return fmt.Errorf("network guard: host %q not in allowlist", u.Host)
+}
+
+// isLoopback reports whether host parses as a loopback IP — covering ::1 and
+// the whole 127.0.0.0/8, which the old literal check for "127.0.0.1" missed.
+func isLoopback(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // EndpointHost returns the lowercased host (host:port) of a URL, or "" when the

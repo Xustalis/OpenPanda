@@ -16,7 +16,6 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
-	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -48,6 +47,8 @@ func (m tuiModel) View() string {
 		return m.modelWizardView()
 	case modeOnboarding:
 		return m.onboardingView()
+	case modeSkillsHub:
+		return m.skillsHubView()
 	case modeAsking:
 		// Render live region (task progress card or streaming answer + spinner)
 		// followed immediately by the interactive input box so the user can type steering
@@ -274,16 +275,9 @@ func (m tuiModel) listView() string {
 	return m.selectionList.Render(m.th, m.width, m.height)
 }
 
-// modelPanelView renders the boxed model management panel.
-func (m tuiModel) modelPanelView() string {
-	if m.confirmDeleteModel && m.pendingDeleteModel != "" {
-		m.selectionList.ActionHints = m.th.warn.Bold(true).Render("⚠️  " + i18n.Tf(m.loc, "tui.model.deleteConfirm", "alias", m.pendingDeleteModel))
-		m.selectionList.FooterHints = "Y / N / Esc"
-	}
-	return m.selectionList.Render(m.th, m.width, m.height)
-}
-
-// modelWizardView renders the step-by-step model setup guide.
+// modelWizardView routes the model setup screens: the provider pick stays a
+// SelectionList; everything past it is the single-screen form editor (or its
+// fetched-models picker overlay) in tui_modelcfg.go.
 func (m tuiModel) modelWizardView() string {
 	w := m.width
 	h := m.height
@@ -293,46 +287,10 @@ func (m tuiModel) modelWizardView() string {
 	if h <= 0 {
 		h = 24
 	}
-
-	if m.wizardStep == wizardStepProvider {
+	if m.wizardStep == wizardStepProvider || m.formPicking {
 		return m.selectionList.Render(m.th, w, h)
 	}
-
-	var lines []string
-	provLabel := m.wizardProvider
-	if p, ok := providers.Lookup(m.wizardProvider); ok {
-		provLabel = p.Label
-	}
-
-	lines = append(lines, m.th.heading.Render(i18n.Tf(m.loc, "tui.wizard.addModelTitle", "provider", provLabel)))
-	lines = append(lines, "")
-
-	if m.wizardStep == wizardStepAPIKey {
-		lines = append(lines, i18n.T(m.loc, "tui.wizard.inputAPIKey"))
-		inputDisplay := strings.Repeat("•", len([]rune(m.wizardInput)))
-		lines = append(lines, m.th.accent.Render("> ")+inputDisplay+m.th.accent.Render("█"))
-		lines = append(lines, "")
-		lines = append(lines, m.th.muted.Render(i18n.T(m.loc, "tui.wizard.confirmBack")))
-	} else if m.wizardStep == wizardStepModelName {
-		defModel := ""
-		if p, ok := providers.Lookup(m.wizardProvider); ok {
-			defModel = p.DefaultModel
-		}
-		var prompt string
-		if defModel != "" {
-			prompt = i18n.Tf(m.loc, "tui.wizard.inputModelNameDef", "def", defModel)
-		} else {
-			prompt = i18n.T(m.loc, "tui.wizard.inputModelName")
-		}
-		lines = append(lines, prompt)
-		inputDisplay := m.wizardInput
-		lines = append(lines, m.th.accent.Render("> ")+inputDisplay+m.th.accent.Render("█"))
-		lines = append(lines, "")
-		lines = append(lines, m.th.muted.Render(i18n.T(m.loc, "tui.wizard.confirmBack")))
-	}
-
-	content := strings.Join(lines, "\n")
-	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, content)
+	return m.modelFormView()
 }
 
 // onboardingView renders the initial first-run onboarding steps.
@@ -514,6 +472,11 @@ func (m tuiModel) statusLine() string {
 	// The spinner frames carry no trailing space of their own, so the space
 	// belongs here — without it the line renders as "⠙思考中".
 	parts := []string{m.sp.View() + " " + m.th.accent.Render(statusVerb(m.loc))}
+	// A slash-mode turn announces its lens next to the verb — "goal mode"
+	// makes it obvious why the model is refining rather than doing.
+	if m.turnMode != "" {
+		parts = append(parts, m.th.warn.Render("["+i18n.T(m.loc, "tui.mode.badge."+m.turnMode)+"]"))
+	}
 	if m.note != "" {
 		parts = append(parts, m.th.muted.Render("· "+m.note))
 	}
