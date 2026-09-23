@@ -124,6 +124,40 @@ func (s *SelectionList) SetItems(items []SelectionItem) {
 	}
 }
 
+// boxedVisibleCap bounds the item window inside the rounded box. The box
+// exists to focus a small choice, but provider/model catalogues run a dozen
+// rows — capping lower would force scrolling on every terminal.
+const boxedVisibleCap = 12
+
+// VisibleRows is how many item rows Render draws at the given terminal
+// height. Navigation (MoveDown / MovePage callers) MUST budget with the same
+// value: when the two disagree the cursor walks past the rendered window and
+// the list appears frozen — the bug this exists to prevent. Keep the two
+// branch formulas in sync with renderPlain's and renderBoxed's chrome.
+func (s SelectionList) VisibleRows(height int) int {
+	if height <= 0 {
+		height = 24
+	}
+	if s.Boxed {
+		return max(3, min(boxedVisibleCap, height-10))
+	}
+	headerH := 0
+	if s.Title != "" {
+		headerH++
+	}
+	if s.Header != "" {
+		headerH++
+	}
+	if headerH > 0 {
+		headerH++ // blank separator line
+	}
+	footerH := 3 // blank + footer hints + bottom margin
+	if s.ActionHints != "" {
+		footerH += 2
+	}
+	return max(3, height-headerH-footerH)
+}
+
 // Render draws the selection list to the given width and height.
 func (s SelectionList) Render(th theme, width, height int) string {
 	if width <= 0 {
@@ -154,13 +188,12 @@ func (s SelectionList) renderPlain(th theme, width, height int) string {
 		lines = append(lines, "")
 	}
 
-	// Calculate visible items budget
-	headerHeight := len(lines)
+	// Visible item budget shared with navigation via VisibleRows.
+	visibleRows := s.VisibleRows(height)
 	footerHeight := 3 // blank line + footer hints + bottom margin
 	if s.ActionHints != "" {
 		footerHeight += 2
 	}
-	visibleRows := max(3, height-headerHeight-footerHeight)
 
 	if len(s.Items) == 0 {
 		emptyMsg := s.EmptyText
@@ -209,7 +242,7 @@ func (s SelectionList) renderBoxed(th theme, width, height int) string {
 	var innerLines []string
 	innerLines = append(innerLines, "") // breathing room
 
-	visibleRows := max(3, min(8, height-10))
+	visibleRows := s.VisibleRows(height)
 	if len(s.Items) == 0 {
 		emptyMsg := s.EmptyText
 		if emptyMsg == "" {
@@ -222,6 +255,7 @@ func (s SelectionList) renderBoxed(th theme, width, height int) string {
 			top = 0
 		}
 		end := min(len(s.Items), top+visibleRows)
+		innerW := boxWidth - 6 // borders + padding + row prefix
 		for i := top; i < end; i++ {
 			item := s.Items[i]
 			isCursor := i == s.Cursor
@@ -234,8 +268,14 @@ func (s SelectionList) renderBoxed(th theme, width, height int) string {
 			if item.Badge != "" {
 				badge = " " + th.accent.Render(item.Badge)
 			}
-			totalText := prefix + title + badge
-			innerLines = append(innerLines, totalText)
+			line := prefix + title + badge
+			if item.Snippet != "" {
+				used := cliui.DisplayWidth(item.Title) + cliui.DisplayWidth(item.Badge)
+				if snipW := innerW - used - 2; snipW >= 8 {
+					line += "  " + th.muted.Render(cliui.Truncate(item.Snippet, snipW, th.unicode))
+				}
+			}
+			innerLines = append(innerLines, line)
 		}
 	}
 
@@ -248,6 +288,11 @@ func (s SelectionList) renderBoxed(th theme, width, height int) string {
 	footer := s.FooterHints
 	if footer == "" {
 		footer = i18n.T(th.loc, "tui.model.footerHints")
+	}
+	// Overflowing lists get a position counter so a scrolled window is
+	// obviously a window, not the whole catalogue.
+	if len(s.Items) > visibleRows {
+		footer += fmt.Sprintf("   %d/%d", s.Cursor+1, len(s.Items))
 	}
 	innerLines = append(innerLines, "  "+th.muted.Render(footer))
 	innerLines = append(innerLines, "")

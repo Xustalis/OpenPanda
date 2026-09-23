@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
@@ -206,7 +205,8 @@ func (m tuiModel) openResumeList() (tuiModel, tea.Cmd) {
 	return m, nil
 }
 
-// openModelPanel opens the model management box or the onboarding guide.
+// openModelPanel opens the model register or, with nothing configured, the
+// setup guide that puts the first entry in.
 func (m tuiModel) openModelPanel() (tuiModel, tea.Cmd) {
 	hasModels := false
 	if m.r != nil && m.r.cfg != nil {
@@ -221,16 +221,22 @@ func (m tuiModel) openModelPanel() (tuiModel, tea.Cmd) {
 
 	items := m.buildModelItems()
 	sl := NewSelectionList(i18n.T(m.loc, "tui.model.panelTitle"), items)
-	sl.Boxed = true
-	sl.ActionHints = i18n.T(m.loc, "tui.model.actionHints")
-	sl.FooterHints = i18n.T(m.loc, "tui.model.footerHints")
+	// Reopens (after add/edit/delete) keep the highlight where it was instead
+	// of snapping back to the first row.
+	if prev := m.selectionList.Cursor; len(items) > 0 {
+		sl.Cursor = min(prev, len(items)-1)
+		if rows := m.panelListRows(); sl.Cursor >= sl.Top+rows {
+			sl.Top = sl.Cursor - rows + 1
+		}
+	}
 
 	m.mode = modeModelPanel
 	m.selectionList = sl
 	return m, nil
 }
 
-// startModelWizard starts the step-by-step model setup guide.
+// startModelWizard opens the provider picker; choosing one lands on the
+// single-screen form (buildModelForm).
 func (m tuiModel) startModelWizard() (tuiModel, tea.Cmd) {
 	items := buildProviderItems(m.loc)
 	sl := NewSelectionList(i18n.T(m.loc, "tui.wizard.noModelPrompt"), items)
@@ -246,32 +252,36 @@ func (m tuiModel) startModelWizard() (tuiModel, tea.Cmd) {
 	m.wizardAPIType = ""
 	m.wizardThinking = ""
 	m.wizardContext = ""
-	m.wizardInput = ""
-	m.wizardTestErr = ""
-	m.wizardTesting = false
+	m.wizardAlias = ""
 	m.wizardEditAlias = ""
+	m.form = nil
+	m.formFocus = 0
+	m.formErr = ""
+	m.formTesting = false
+	m.formTestErr = ""
+	m.formFetching = false
+	m.formFetchErr = ""
+	m.formPicking = false
 	m.selectionList = sl
 	return m, nil
 }
 
 // listPageRows is the page size for the plain full-screen lists: the same
-// viewport budget MoveDown and renderPlain agree on.
+// viewport budget renderPlain draws, via the list's own VisibleRows.
 func (m tuiModel) listPageRows() int {
-	return max(3, m.height-6)
+	return m.selectionList.VisibleRows(m.height)
 }
 
 // selectionPageRows is the viewport budget of whichever selection list is on
 // screen, so wheel paging (MovePage) and row stepping (MoveDown) keep the
-// highlight inside the rendered window in every list mode.
+// highlight inside the rendered window in every list mode. It asks the list
+// itself — a boxed picker shows far fewer rows than a plain full-screen one,
+// and the two must never disagree or the cursor scrolls off the window.
 func (m tuiModel) selectionPageRows() int {
-	switch m.mode {
-	case modeModelPanel:
-		return 8
-	case modeModelWizard:
-		return m.listPageRows() // the catalogue is a dozen rows — page like a list
-	default:
-		return m.listPageRows()
+	if m.mode == modeModelPanel {
+		return m.panelListRows() // the panel has its own row budget, not Render's
 	}
+	return m.selectionList.VisibleRows(m.height)
 }
 
 // handleListKey routes keys in modeList (sessions, projects, resume).
@@ -298,7 +308,7 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectionList.MoveUp()
 			return m, nil
 		case "j", "J":
-			m.selectionList.MoveDown(max(3, m.height-6))
+			m.selectionList.MoveDown(m.listPageRows())
 			return m, nil
 		case "q", "Q":
 			m.mode = modeIdle
@@ -391,18 +401,19 @@ func (m tuiModel) handleModelPanelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	rows := m.panelListRows()
 	switch msg.Type {
 	case tea.KeyUp, tea.KeyCtrlP:
 		m.selectionList.MoveUp()
 		return m, nil
 	case tea.KeyDown, tea.KeyCtrlN:
-		m.selectionList.MoveDown(8)
+		m.selectionList.MoveDown(rows)
 		return m, nil
 	case tea.KeyPgUp:
-		m.selectionList.MovePage(-8, 8)
+		m.selectionList.MovePage(-rows, rows)
 		return m, nil
 	case tea.KeyPgDown:
-		m.selectionList.MovePage(8, 8)
+		m.selectionList.MovePage(rows, rows)
 		return m, nil
 	case tea.KeyEsc:
 		m.mode = modeIdle
@@ -413,7 +424,7 @@ func (m tuiModel) handleModelPanelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectionList.MoveUp()
 			return m, nil
 		case "j", "J":
-			m.selectionList.MoveDown(8)
+			m.selectionList.MoveDown(rows)
 			return m, nil
 		case "q", "Q":
 			m.mode = modeIdle
@@ -424,6 +435,8 @@ func (m tuiModel) handleModelPanelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.deleteSelectedModel()
 		case "e", "E":
 			return m.editSelectedModel()
+		case "t", "T":
+			return m.testSelectedModel()
 		}
 	case tea.KeyEnter:
 		return m.switchSelectedModel()
@@ -506,7 +519,7 @@ func (m tuiModel) executeDeleteModel(alias string) (tuiModel, tea.Cmd) {
 	return m.openModelPanel()
 }
 
-// editSelectedModel starts editing the chosen model.
+// editSelectedModel opens the form prefilled with the highlighted entry.
 func (m tuiModel) editSelectedModel() (tuiModel, tea.Cmd) {
 	item, ok := m.selectionList.Selected()
 	if !ok || m.r == nil {
@@ -548,160 +561,16 @@ func (m tuiModel) editSelectedModel() (tuiModel, tea.Cmd) {
 	m.wizardBaseURL = curMC.BaseURL
 	m.wizardAPIType = curMC.NormalizedAPIType()
 	m.wizardThinking = curMC.Thinking
-	if m.wizardThinking == "" {
-		m.wizardThinking = "auto"
-	}
 	if curMC.ContextWindow > 0 {
 		m.wizardContext = strconv.Itoa(curMC.ContextWindow)
 	} else {
 		m.wizardContext = ""
 	}
-	m.wizardTestErr = ""
-	m.wizardTesting = false
+	m.wizardAlias = curMC.Alias()
 	m.wizardEditAlias = curMC.Alias()
-	if p, ok := providers.Lookup(prov); ok && p.NoAuth {
-		m.wizardStep = wizardStepModelName
-		m.wizardInput = curMC.Model
-	} else {
-		m.wizardStep = wizardStepAPIKey
-		m.wizardInput = curMC.APIKey
-	}
+	m.wizardStep = wizardStepForm
+	m.buildModelForm()
 	return m, nil
-}
-
-// wizardNext advances the wizard to step s, loading that step's value into
-// the shared wizardInput buffer (or building its selection list for the pick
-// steps). wizardBack is the Esc path — the previous step in the sequence for
-// the chosen provider.
-func (m tuiModel) wizardNext(s wizardStep) (tuiModel, tea.Cmd) {
-	m.wizardStep = s
-	switch s {
-	case wizardStepBaseURL:
-		m.wizardInput = m.wizardBaseURL
-	case wizardStepAPIType:
-		items := []SelectionItem{
-			{Index: 1, ID: config.APITypeOpenAI, Title: "OpenAI", Snippet: i18n.T(m.loc, "tui.wizard.apiTypeOpenAIHint")},
-			{Index: 2, ID: config.APITypeAnthropic, Title: "Anthropic", Snippet: i18n.T(m.loc, "tui.wizard.apiTypeAnthropicHint")},
-		}
-		sl := NewSelectionList(i18n.T(m.loc, "tui.wizard.apiTypeTitle"), items)
-		sl.Boxed = true
-		sl.FooterHints = i18n.T(m.loc, "tui.wizard.confirmBack")
-		if m.wizardAPIType == config.APITypeAnthropic {
-			sl.Cursor = 1
-		}
-		m.selectionList = sl
-	case wizardStepAPIKey:
-		m.wizardInput = m.wizardKey
-	case wizardStepModelName:
-		m.wizardInput = m.wizardModel
-	case wizardStepThinking:
-		items := []SelectionItem{
-			{Index: 1, ID: "auto", Title: i18n.T(m.loc, "tui.wizard.thinkingAuto"), Snippet: i18n.T(m.loc, "tui.wizard.thinkingAutoHint")},
-			{Index: 2, ID: "on", Title: i18n.T(m.loc, "tui.wizard.thinkingOn"), Snippet: i18n.T(m.loc, "tui.wizard.thinkingOnHint")},
-			{Index: 3, ID: "off", Title: i18n.T(m.loc, "tui.wizard.thinkingOff"), Snippet: i18n.T(m.loc, "tui.wizard.thinkingOffHint")},
-		}
-		sl := NewSelectionList(i18n.T(m.loc, "tui.wizard.thinkingTitle"), items)
-		sl.Boxed = true
-		sl.FooterHints = i18n.T(m.loc, "tui.wizard.confirmBack")
-		switch m.wizardThinking {
-		case "on":
-			sl.Cursor = 1
-		case "off":
-			sl.Cursor = 2
-		}
-		m.selectionList = sl
-	case wizardStepContext:
-		m.wizardInput = m.wizardContext
-	case wizardStepTest:
-		m.wizardTesting = true
-		m.wizardTestErr = ""
-		return m, m.wizardTestCmd()
-	}
-	return m, nil
-}
-
-// wizardBack walks one step backwards, honouring the branches that the
-// forward path skips (custom providers own the URL/dialect steps; no-auth
-// providers skip the key step).
-func (m tuiModel) wizardBack() (tuiModel, tea.Cmd) {
-	switch m.wizardStep {
-	case wizardStepBaseURL:
-		return m.wizardNext(wizardStepProvider)
-	case wizardStepAPIType:
-		return m.wizardNext(wizardStepBaseURL)
-	case wizardStepAPIKey:
-		if m.wizardProvider == "custom" {
-			return m.wizardNext(wizardStepAPIType)
-		}
-		return m.wizardNext(wizardStepProvider)
-	case wizardStepModelName:
-		if p, ok := providers.Lookup(m.wizardProvider); ok && p.NoAuth {
-			if m.wizardProvider == "custom" {
-				return m.wizardNext(wizardStepAPIType)
-			}
-			return m.wizardNext(wizardStepProvider)
-		}
-		return m.wizardNext(wizardStepAPIKey)
-	case wizardStepThinking:
-		return m.wizardNext(wizardStepModelName)
-	case wizardStepContext:
-		return m.wizardNext(wizardStepThinking)
-	case wizardStepTest:
-		return m.wizardNext(wizardStepContext)
-	}
-	return m.startModelWizard()
-}
-
-// wizardEdit edits one text-input step's buffer with a keystroke — runes
-// append, Backspace/Ctrl+H delete. It is shared by every input step.
-func (m *tuiModel) wizardEdit(msg tea.KeyMsg) {
-	switch msg.Type {
-	case tea.KeyBackspace, tea.KeyCtrlH:
-		runes := []rune(m.wizardInput)
-		if len(runes) > 0 {
-			m.wizardInput = string(runes[:len(runes)-1])
-		}
-	case tea.KeyRunes:
-		m.wizardInput += string(msg.Runes)
-	case tea.KeySpace:
-		m.wizardInput += " "
-	case tea.KeyCtrlV, tea.KeyCtrlU:
-		// Ctrl+U clears the field; Ctrl+V has no clipboard bridge — ignore.
-		if msg.Type == tea.KeyCtrlU {
-			m.wizardInput = ""
-		}
-	}
-}
-
-// wizardSelectionKey handles arrows/enter/esc on the pick steps (provider,
-// apiType, thinking). It returns the selected item ID when Enter lands.
-func (m tuiModel) wizardSelectionKey(msg tea.KeyMsg, rows int) (sel string, next tuiModel, cmd tea.Cmd, done bool) {
-	switch msg.Type {
-	case tea.KeyUp, tea.KeyCtrlP:
-		m.selectionList.MoveUp()
-	case tea.KeyDown, tea.KeyCtrlN:
-		m.selectionList.MoveDown(rows)
-	case tea.KeyPgUp:
-		m.selectionList.MovePage(-rows, rows)
-	case tea.KeyPgDown:
-		m.selectionList.MovePage(rows, rows)
-	case tea.KeyRunes:
-		switch string(msg.Runes) {
-		case "k", "K":
-			m.selectionList.MoveUp()
-		case "j", "J":
-			m.selectionList.MoveDown(rows)
-		case "q", "Q":
-			return "", m, nil, true // caller treats as Esc
-		}
-	case tea.KeyEnter:
-		item, ok := m.selectionList.Selected()
-		if !ok {
-			return "", m, nil, true
-		}
-		return item.ID, m, nil, true
-	}
-	return "", m, nil, false
 }
 
 // wizardTestCmd runs the connectivity probe off the UI goroutine: one-word
@@ -710,14 +579,7 @@ func (m tuiModel) wizardSelectionKey(msg tea.KeyMsg, rows int) (sel string, next
 func (m tuiModel) wizardTestCmd() tea.Cmd {
 	mc := m.wizardConfig()
 	return func() tea.Msg {
-		client, err := entry.NewClient(mc)
-		if err != nil {
-			return wizardTestMsg{err: err}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		_, err = client.Complete(ctx, "You are a connectivity test.", "Reply with exactly: OK")
-		return wizardTestMsg{err: err}
+		return wizardTestMsg{err: probeModel(mc)}
 	}
 }
 
@@ -739,6 +601,11 @@ func (m tuiModel) wizardConfig() config.ModelConfig {
 		}
 	} else {
 		mc, _ = providers.ModelConfig(m.wizardProvider, m.wizardModel, m.wizardKey)
+		// The base URL field is editable for builtins too: a relay standing
+		// in for the vendor's endpoint overrides the catalogue URL here.
+		if m.wizardBaseURL != "" {
+			mc.BaseURL = m.wizardBaseURL
+		}
 	}
 	if m.wizardThinking != "" && m.wizardThinking != "auto" {
 		mc.Thinking = m.wizardThinking
@@ -749,170 +616,52 @@ func (m tuiModel) wizardConfig() config.ModelConfig {
 	return mc
 }
 
-// handleModelWizardKey handles keystrokes in the onboarding/add guide.
+// handleModelWizardKey routes keys in the add/edit flow: the provider picker
+// on the first step, the single-screen form on the second.
 func (m tuiModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.wizardStep {
+	case wizardStepForm:
+		return m.handleFormKey(msg)
 	case wizardStepProvider:
 		if msg.Type == tea.KeyEsc {
-			m.mode = modeIdle
-			return m, nil
+			return m.wizardBack()
 		}
-		sel, next, _, done := m.wizardSelectionKey(msg, m.selectionPageRows())
-		m = next
-		if !done {
-			return m, nil
-		}
-		if sel == "" { // q/Q or empty list
-			m.mode = modeIdle
-			return m, nil
-		}
-		m.wizardProvider = sel
-		m.wizardTestErr = ""
-		switch {
-		case sel == "custom":
-			return m.wizardNext(wizardStepBaseURL)
-		default:
-			p, _ := providers.Lookup(sel)
-			if p.NoAuth {
-				m.wizardModel = p.DefaultModel
-				return m.wizardNext(wizardStepModelName)
-			}
-			return m.wizardNext(wizardStepAPIKey)
-		}
-
-	case wizardStepBaseURL:
+		rows := m.selectionPageRows()
 		switch msg.Type {
-		case tea.KeyEsc:
-			return m.wizardBack()
-		case tea.KeyEnter:
-			base := strings.TrimSpace(m.wizardInput)
-			if base == "" {
-				return m, nil // the URL is required — no default exists
-			}
-			if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
-				base = "https://" + base
-			}
-			m.wizardBaseURL = base
-			return m.wizardNext(wizardStepAPIType)
-		default:
-			m.wizardEdit(msg)
+		case tea.KeyUp, tea.KeyCtrlP:
+			m.selectionList.MoveUp()
 			return m, nil
-		}
-
-	case wizardStepAPIType:
-		if msg.Type == tea.KeyEsc {
-			return m.wizardBack()
-		}
-		sel, next, _, done := m.wizardSelectionKey(msg, m.selectionPageRows())
-		m = next
-		if !done {
+		case tea.KeyDown, tea.KeyCtrlN:
+			m.selectionList.MoveDown(rows)
 			return m, nil
-		}
-		if sel == "" {
-			return m.wizardBack()
-		}
-		m.wizardAPIType = sel
-		if m.wizardKey == "" && m.wizardProvider == "custom" {
-			// Relays usually need a key, but a keyless internal gateway is
-			// legitimate — the key step stays optional for custom.
-			return m.wizardNext(wizardStepAPIKey)
-		}
-		return m.wizardNext(wizardStepAPIKey)
-
-	case wizardStepAPIKey:
-		switch msg.Type {
-		case tea.KeyEsc:
-			return m.wizardBack()
-		case tea.KeyEnter:
-			m.wizardKey = strings.TrimSpace(m.wizardInput)
-			if m.wizardKey == "" {
-				p, ok := providers.Lookup(m.wizardProvider)
-				if ok && !p.NoAuth && m.wizardProvider != "custom" {
-					return m, nil // a key is required for auth providers
-				}
-			}
-			if m.wizardModel == "" {
-				if p, ok := providers.Lookup(m.wizardProvider); ok {
-					m.wizardModel = p.DefaultModel
-				}
-			}
-			return m.wizardNext(wizardStepModelName)
-		default:
-			m.wizardEdit(msg)
+		case tea.KeyPgUp:
+			m.selectionList.MovePage(-rows, rows)
 			return m, nil
-		}
-
-	case wizardStepModelName:
-		switch msg.Type {
-		case tea.KeyEsc:
-			return m.wizardBack()
-		case tea.KeyEnter:
-			modelName := strings.TrimSpace(m.wizardInput)
-			if modelName == "" {
-				if p, ok := providers.Lookup(m.wizardProvider); ok {
-					modelName = p.DefaultModel
-				}
-			}
-			if modelName == "" {
-				return m, nil // required for custom
-			}
-			m.wizardModel = modelName
-			return m.wizardNext(wizardStepThinking)
-		default:
-			m.wizardEdit(msg)
+		case tea.KeyPgDown:
+			m.selectionList.MovePage(rows, rows)
 			return m, nil
-		}
-
-	case wizardStepThinking:
-		if msg.Type == tea.KeyEsc {
-			return m.wizardBack()
-		}
-		sel, next, _, done := m.wizardSelectionKey(msg, m.selectionPageRows())
-		m = next
-		if !done {
-			return m, nil
-		}
-		if sel == "" {
-			return m.wizardBack()
-		}
-		m.wizardThinking = sel
-		return m.wizardNext(wizardStepContext)
-
-	case wizardStepContext:
-		switch msg.Type {
-		case tea.KeyEsc:
-			return m.wizardBack()
-		case tea.KeyEnter:
-			m.wizardContext = strings.TrimSpace(m.wizardInput)
-			return m.wizardNext(wizardStepTest)
-		default:
-			m.wizardEdit(msg)
-			return m, nil
-		}
-
-	case wizardStepTest:
-		if m.wizardTesting {
-			if msg.Type == tea.KeyEsc {
-				m.wizardTesting = false
+		case tea.KeyRunes:
+			switch string(msg.Runes) {
+			case "k", "K":
+				m.selectionList.MoveUp()
+				return m, nil
+			case "j", "J":
+				m.selectionList.MoveDown(rows)
+				return m, nil
+			case "q", "Q":
 				return m.wizardBack()
 			}
 			return m, nil
-		}
-		switch msg.Type {
-		case tea.KeyEsc:
-			return m.wizardBack()
-		case tea.KeyRunes:
-			switch string(msg.Runes) {
-			case "r", "R":
-				return m.wizardNext(wizardStepTest)
-			case "s", "S":
-				return m.finalizeWizard()
-			}
 		case tea.KeyEnter:
-			if m.wizardTestErr == "" {
-				return m.finalizeWizard()
+			item, ok := m.selectionList.Selected()
+			if !ok {
+				return m, nil
 			}
-			return m.wizardNext(wizardStepTest)
+			m.wizardProvider = item.ID
+			m.wizardEditAlias = ""
+			m.buildModelForm()
+			m.wizardStep = wizardStepForm
+			return m, nil
 		}
 	}
 	return m, nil
@@ -937,19 +686,24 @@ func (m tuiModel) finalizeWizard() (tuiModel, tea.Cmd) {
 	}
 
 	alias := mc.Provider
-	if m.wizardEditAlias != "" {
-		alias = m.wizardEditAlias // keep the entry's stable name
-	} else if m.wizardModel != "" && m.wizardModel != alias {
+	switch {
+	case m.wizardEditAlias != "" && m.wizardAlias == m.wizardEditAlias:
+		alias = m.wizardEditAlias // unchanged name: in-place edit
+	case m.wizardAlias != "":
+		alias = m.wizardAlias // the form's alias field wins
+	case m.wizardModel != "" && m.wizardModel != alias:
 		alias = m.wizardModel
 	}
 	// A collision on a different config needs a distinct alias rather than a
 	// silent overwrite: two providers can legitimately serve the same model
 	// name (e.g. a relay and OpenAI both offering "gpt-4o"), so keep
-	// deriving a fresh alias until it no longer clashes.
-	if m.wizardEditAlias == "" {
+	// deriving a fresh alias until it no longer clashes. An edit that renamed
+	// the entry dedupes too — only the untouched original alias replaces in
+	// place.
+	if m.wizardEditAlias == "" || alias != m.wizardEditAlias {
 		collides := func(a string) bool {
 			for _, existing := range m.r.cfg.Models {
-				if existing.Alias() == a &&
+				if existing.Alias() == a && existing.Alias() != m.wizardEditAlias &&
 					(existing.Model != mc.Model || existing.BaseURL != mc.BaseURL || existing.Provider != mc.Provider) {
 					return true
 				}
@@ -1191,7 +945,7 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.selectionList.MoveUp()
 				return m, nil
 			case "j", "J":
-				m.selectionList.MoveDown(max(3, m.height-6))
+				m.selectionList.MoveDown(m.listPageRows())
 				return m, nil
 			case "q", "Q":
 				m.quitting = true
@@ -1276,7 +1030,7 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.selectionList.MoveUp()
 				return m, nil
 			case "j", "J":
-				m.selectionList.MoveDown(max(3, m.height-6))
+				m.selectionList.MoveDown(m.listPageRows())
 				return m, nil
 			}
 		case tea.KeyEnter:
@@ -1317,7 +1071,7 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.selectionList.MoveUp()
 				return m, nil
 			case "j", "J":
-				m.selectionList.MoveDown(max(3, m.height-6))
+				m.selectionList.MoveDown(m.listPageRows())
 				return m, nil
 			}
 		case tea.KeyEnter:
@@ -1326,16 +1080,14 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if item.ID == "now" {
+				// Reuse the wizard's reset path, then swap back into the
+				// onboarding step that hosts it.
+				next, _ := m.startModelWizard()
+				m = next
+				m.mode = modeOnboarding
 				m.onboardingStep = onboardingStepModelWizard
-				m.wizardStep = wizardStepProvider
-				m.wizardProvider = ""
-				m.wizardKey = ""
-				m.wizardModel = ""
-				m.wizardInput = ""
-				sl := NewSelectionList(i18n.T(m.loc, "tui.onboard.providerTitle"), buildProviderItems(m.loc))
-				sl.Boxed = true
-				sl.FooterHints = i18n.T(m.loc, "tui.onboard.hintsBack")
-				m.selectionList = sl
+				m.selectionList.Title = i18n.T(m.loc, "tui.onboard.providerTitle")
+				m.selectionList.FooterHints = i18n.T(m.loc, "tui.onboard.hintsBack")
 				return m, nil
 			}
 			return m.finalizeOnboarding()

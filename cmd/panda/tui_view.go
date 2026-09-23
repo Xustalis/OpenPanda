@@ -16,7 +16,6 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
-	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -276,18 +275,9 @@ func (m tuiModel) listView() string {
 	return m.selectionList.Render(m.th, m.width, m.height)
 }
 
-// modelPanelView renders the boxed model management panel.
-func (m tuiModel) modelPanelView() string {
-	if m.confirmDeleteModel && m.pendingDeleteModel != "" {
-		m.selectionList.ActionHints = m.th.warn.Bold(true).Render("⚠️  " + i18n.Tf(m.loc, "tui.model.deleteConfirm", "alias", m.pendingDeleteModel))
-		m.selectionList.FooterHints = "Y / N / Esc"
-	}
-	return m.selectionList.Render(m.th, m.width, m.height)
-}
-
-// modelWizardView renders the step-by-step model setup guide: pick steps draw
-// their SelectionList, text steps draw a prompt + echo field, and the test
-// step shows the probe spinner or its outcome.
+// modelWizardView routes the model setup screens: the provider pick stays a
+// SelectionList; everything past it is the single-screen form editor (or its
+// fetched-models picker overlay) in tui_modelcfg.go.
 func (m tuiModel) modelWizardView() string {
 	w := m.width
 	h := m.height
@@ -297,102 +287,10 @@ func (m tuiModel) modelWizardView() string {
 	if h <= 0 {
 		h = 24
 	}
-
-	switch m.wizardStep {
-	case wizardStepProvider, wizardStepAPIType, wizardStepThinking:
+	if m.wizardStep == wizardStepProvider || m.formPicking {
 		return m.selectionList.Render(m.th, w, h)
 	}
-
-	var lines []string
-	provLabel := m.wizardProvider
-	if p, ok := providers.Lookup(m.wizardProvider); ok {
-		provLabel = p.Label
-	}
-
-	lines = append(lines, m.th.heading.Render(i18n.Tf(m.loc, "tui.wizard.addModelTitle", "provider", provLabel)))
-	lines = append(lines, "")
-
-	// The step trail keeps the user's place in the flow: completed answers
-	// print dimmed above the active prompt, so Esc never feels like falling
-	// off a cliff.
-	trail := func(label, value string) {
-		if value != "" {
-			lines = append(lines, m.th.muted.Render("  "+label+": ")+value)
-		}
-	}
-	if m.wizardProvider == "custom" {
-		trail(i18n.T(m.loc, "tui.wizard.baseURLLabel"), m.wizardBaseURL)
-		if m.wizardStep > wizardStepAPIType && m.wizardAPIType != "" {
-			trail(i18n.T(m.loc, "tui.wizard.apiTypeLabel"), m.wizardAPIType)
-		}
-	}
-	if m.wizardStep > wizardStepAPIKey && m.wizardKey != "" {
-		trail(i18n.T(m.loc, "tui.wizard.apiKeyLabel"), strings.Repeat("•", min(8, len([]rune(m.wizardKey)))))
-	}
-	if m.wizardStep > wizardStepModelName && m.wizardModel != "" {
-		trail(i18n.T(m.loc, "tui.wizard.modelLabel"), m.wizardModel)
-	}
-	if len(lines) > 2 {
-		lines = append(lines, "")
-	}
-
-	input := func(prompt string, masked bool) {
-		lines = append(lines, prompt)
-		display := m.wizardInput
-		if masked {
-			display = strings.Repeat("•", len([]rune(m.wizardInput)))
-		}
-		lines = append(lines, m.th.accent.Render("> ")+display+m.th.accent.Render("█"))
-		lines = append(lines, "")
-		lines = append(lines, m.th.muted.Render(i18n.T(m.loc, "tui.wizard.confirmBack")))
-	}
-
-	switch m.wizardStep {
-	case wizardStepBaseURL:
-		input(i18n.T(m.loc, "tui.wizard.inputBaseURL"), false)
-	case wizardStepAPIKey:
-		input(i18n.T(m.loc, "tui.wizard.inputAPIKey"), true)
-	case wizardStepModelName:
-		defModel := ""
-		if p, ok := providers.Lookup(m.wizardProvider); ok {
-			defModel = p.DefaultModel
-		}
-		var prompt string
-		if defModel != "" {
-			prompt = i18n.Tf(m.loc, "tui.wizard.inputModelNameDef", "def", defModel)
-		} else {
-			prompt = i18n.T(m.loc, "tui.wizard.inputModelName")
-		}
-		input(prompt, false)
-	case wizardStepContext:
-		defCtx := ""
-		if p, ok := providers.Lookup(m.wizardProvider); ok && p.ContextWindow > 0 {
-			defCtx = strconv.Itoa(p.ContextWindow)
-		}
-		var prompt string
-		if defCtx != "" {
-			prompt = i18n.Tf(m.loc, "tui.wizard.inputContextDef", "def", defCtx)
-		} else {
-			prompt = i18n.T(m.loc, "tui.wizard.inputContext")
-		}
-		input(prompt, false)
-	case wizardStepTest:
-		mc := m.wizardConfig()
-		lines = append(lines, m.th.muted.Render(cliui.Truncate(effectiveBaseURL(mc), w-8, m.th.unicode)))
-		lines = append(lines, "")
-		if m.wizardTesting {
-			lines = append(lines, m.sp.View()+" "+i18n.T(m.loc, "tui.wizard.testing"))
-			lines = append(lines, "")
-			lines = append(lines, m.th.muted.Render(i18n.T(m.loc, "tui.wizard.testWait")))
-		} else if m.wizardTestErr != "" {
-			lines = append(lines, m.th.warn.Render("✗ ")+i18n.Tf(m.loc, "tui.wizard.testFail", "err", m.wizardTestErr))
-			lines = append(lines, "")
-			lines = append(lines, m.th.muted.Render(i18n.T(m.loc, "tui.wizard.testFailHints")))
-		}
-	}
-
-	content := strings.Join(lines, "\n")
-	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, content)
+	return m.modelFormView()
 }
 
 // onboardingView renders the initial first-run onboarding steps.
