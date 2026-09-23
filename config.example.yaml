@@ -33,8 +33,25 @@ network:
   # it behind a TLS reverse proxy.
   panel_addr: "127.0.0.1:7840"
   # panel_token: ""              # Bearer token guarding /api/* (prefer env OPENPANDA_PANEL_TOKEN)
+  # ── UDP datagram plane (Periapsis): NAT traversal + AEAD-sealed delivery ──
+  # The UDP socket carries sealed envelopes between nodes that cannot hold a
+  # WebSocket open — e.g. both sides behind NAT. Every datagram is sealed with
+  # AES-256-GCM keyed from shared_secret, so a wildcard bind is safe.
+  #   ""   (default/omitted) — bind UDP on the same port as listen_addr
+  #   "off"                  — disable the datagram plane entirely
+  #   ":7837" / "0.0.0.0:7837" — explicit address
+  # udp_listen: ""
+  # STUN servers used to discover the public reflexive address for hole
+  # punching. Empty (default) relies on peer-observed addresses from the WS
+  # hello, which is enough for most home/office NATs; add a server only if
+  # you run your own or trust a public one (they learn your IP, nothing else).
+  # stun_servers:
+  #   - "stun.l.google.com:19302"
   peers:                         # manual peers
     # - "worker-1.your-tailnet.ts.net:7836"
+    # - "punch:laptop-home"      # node behind NAT — coordinate UDP hole
+    #                            # punching through the mesh; needs no
+    #                            # reachable listen_addr on either side
 
 storage:
   db_path: "./data/openpanda.db"

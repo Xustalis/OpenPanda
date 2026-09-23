@@ -54,6 +54,14 @@ const (
 	// row redelivers byte-identical signed data and a live DTN dispatch is
 	// the same object as its outboxed copy.
 	MsgDTNBundle = "dtn_bundle"
+	// Punch coordination (farsky §9.2). The offer/ready pair are control
+	// envelopes routed through the mesh (direct conn or link-state next hop)
+	// to arrange a UDP pinhole between two NAT-bound nodes; the actual
+	// punching is raw punch/ack datagrams, not envelopes. TTL inside the
+	// payload bounds the relay hops, and the receiver's msg-id dedup kills
+	// any residual loop.
+	MsgPunchOffer = "punch_offer"
+	MsgPunchReady = "punch_ready"
 )
 
 // Envelope is the JSON wire format (design doc §10.3). MsgID is a UUIDv7

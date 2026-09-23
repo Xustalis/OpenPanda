@@ -29,6 +29,19 @@ type HelloPayload struct {
 	Ts     int64           `json:"ts,omitempty"`    // unix seconds, bound into Sig
 	Nonce  string          `json:"nonce,omitempty"` // per-dial random, bound into Sig when present
 	Sig    string          `json:"sig"`
+	// UDPPort advertises the sender's datagram-plane listener (farsky). A
+	// peer that cannot hold a TCP session to us can still be reached by a
+	// punch: combine this port with the IP we observe its connection coming
+	// from and the reflexive addresses its punch offer carries. Zero means
+	// the node runs no UDP plane; old peers send nothing.
+	UDPPort int `json:"udp_port,omitempty"`
+	// You is set only on the hello REPLY: the IP this peer's connection
+	// arrived from, as our listener observed it. It is free reflexive
+	// discovery — a node behind NAT learns its public IP without a STUN
+	// server, and punches at <You>:<own UDP port>. Unsigned (the sig covers
+	// NodeID/Ts/Nonce only): a tampered You costs the attacker nothing but a
+	// wrong candidate list, which the punch handshake detects anyway.
+	You string `json:"you,omitempty"`
 }
 
 // HeartbeatPayload carries status + capacity. Card is an optional capability
@@ -526,3 +539,41 @@ type AgentYieldPayload struct {
 type DTNBundlePayload struct {
 	Blob []byte `json:"blob"`
 }
+
+// PunchOfferPayload arranges a UDP pinhole between two NAT-bound nodes
+// (farsky §9.2). It travels as an envelope through the mesh — direct conn
+// when one exists, link-state next-hop relay otherwise — carrying everything
+// the responder needs to start punching: the session nonce (which becomes
+// the pinhole proof inside every punch datagram) and the initiator's
+// candidate endpoints. Hosts mixes every address form the initiator knows:
+// its local interface addresses, the reflexive IP peers have observed for it
+// (HelloPayload.You), and any STUN-discovered mapping — all at its UDP
+// listener port, because the punch is always sprayed FROM the shared socket
+// so the mapping a NAT opens is the listener's.
+//
+// TTL bounds relay hops. PunchMaxTTL is the starting value; each forwarder
+// decrements it and a spent offer drops, so a routed offer cannot orbit the
+// mesh forever between dedup evictions.
+//
+// Src is the initiator's node id. It must live in the payload, not the
+// envelope: a relay forwards the envelope as ITSELF (env.From = last hop,
+// like dtn_bundle) because the receiving conn authenticates envelopes by
+// their bound peer id — a relayed envelope that kept the origin's From
+// would trip the conn's spoof check. Receivers read Src, falling back to
+// env.From for a direct (unrelayed) arrival.
+type PunchOfferPayload struct {
+	Nonce string   `json:"nonce"`
+	Src   string   `json:"src"`   // origin node id — survives relay re-enveloping
+	Hosts []string `json:"hosts"` // candidate host:port UDP endpoints
+	TTL   int      `json:"ttl"`
+}
+
+// PunchReadyPayload answers an offer: the responder accepts the session and
+// reports its own candidates so both sides can spray at once. Nonce echoes
+// the offer's — the session key both sides already hold.
+type PunchReadyPayload = PunchOfferPayload
+
+// PunchMaxTTL bounds the relays a punch coordination envelope may take. The
+// mesh's own relay bound is 3; punch adds headroom because coordination is
+// cheap and a failed punch costs a real reachability path.
+const PunchMaxTTL = 8

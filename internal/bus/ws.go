@@ -132,6 +132,13 @@ func (c *Conn) Outbound() bool {
 	return c.outbound
 }
 
+// RemoteAddr returns the peer's transport address as our socket observed it
+// — the reflexive-IP hint the hello reply hands back so a NAT-bound peer can
+// learn its public address without a STUN server (HelloPayload.You).
+func (c *Conn) RemoteAddr() string {
+	return c.ws.RemoteAddr().String()
+}
+
 func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
 	ws.SetReadLimit(readLimit)
 	c := &Conn{ws: ws, logger: logger, wake: make(chan struct{}, 1), done: make(chan struct{})}
