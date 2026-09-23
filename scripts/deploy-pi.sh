@@ -30,11 +30,19 @@ TARGET="${USER_}@${HOST}"
 REMOTE_DIR="/home/${USER_}/openpanda"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "==> 交叉编译 linux-arm64"
-(cd "$HERE" && make build-linux-arm64)
+# Pi 类设备默认上 lite 构建：内嵌控制台与 TUI 在这些设备上不会打开，
+# 省内存也省传输体积。要完整构建（本机要看 TUI/控制台）用 FULL=1。
+if [ "${FULL:-0}" = "1" ]; then
+  BIN="panda-linux-arm64";  BUILD="build-linux-arm64"
+else
+  BIN="panda-lite-linux-arm64"; BUILD="build-lite-linux-arm64"
+fi
+
+echo "==> 交叉编译 $BIN"
+(cd "$HERE" && make "$BUILD")
 
 echo "==> 上传二进制与 unit 文件"
-scp -q "$HERE/bin/panda-linux-arm64" "$TARGET:/tmp/panda.new"
+scp -q "$HERE/bin/$BIN" "$TARGET:/tmp/panda.new"
 scp -q "$HERE/testdata/run/openpanda.service" "$TARGET:/tmp/openpanda.service"
 
 echo "==> 替换二进制并安装 systemd 服务"

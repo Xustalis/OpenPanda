@@ -118,6 +118,11 @@ func TestPunchRelayedOffer(t *testing.T) {
 	if err := b.ListenUDP(ctx, ":0", nil); err != nil {
 		t.Fatal(err)
 	}
+	// The offer advertises non-loopback interface candidates; a stripped
+	// container with only lo has nothing to advertise and nothing to hit.
+	if len(a.udpCandidates()) == 0 {
+		t.Skip("no non-loopback interface address — nothing to punch toward")
+	}
 
 	// The link-state graph A and B consult: R advertises both as neighbors.
 	// In production this lands via heartbeat gossip; here it is injected

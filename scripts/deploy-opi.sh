@@ -9,15 +9,22 @@ REMOTE_DIR="${REMOTE_DIR:-/opt/openpanda}"
 REMOTE_USER="${REMOTE_USER:-openpanda}"
 TARGET="${REMOTE_USER}@${HOST}"
 
-echo "==> 交叉编译 linux-arm64"
-make build-linux-arm64
+# 嵌入式节点默认 lite 构建（无内嵌控制台/TUI）；FULL=1 切回完整构建。
+if [ "${FULL:-0}" = "1" ]; then
+  BIN="panda-linux-arm64";  BUILD="build-linux-arm64"
+else
+  BIN="panda-lite-linux-arm64"; BUILD="build-lite-linux-arm64"
+fi
+
+echo "==> 交叉编译 $BIN"
+make "$BUILD"
 
 echo "==> 停止服务（释放正在运行的二进制）"
 ssh "$TARGET" "sudo -n systemctl stop openpanda 2>/dev/null || true"
 
 echo "==> 上传到 $TARGET:$REMOTE_DIR"
 ssh "$TARGET" "sudo -n mkdir -p $REMOTE_DIR/data $REMOTE_DIR/memory $REMOTE_DIR/projects $REMOTE_DIR/skills && sudo -n chown -R ${REMOTE_USER}:${REMOTE_USER} $REMOTE_DIR"
-scp bin/panda-linux-arm64 "$TARGET:$REMOTE_DIR/panda"
+scp "bin/$BIN" "$TARGET:$REMOTE_DIR/panda"
 scp config/capabilities.example-edge.yaml "$TARGET:$REMOTE_DIR/capabilities.yaml"
 scp testdata/deploy-opi.yaml "$TARGET:$REMOTE_DIR/config.yaml"
 ssh "$TARGET" "chmod +x $REMOTE_DIR/panda"
