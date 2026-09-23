@@ -134,6 +134,22 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/settings/model", h.getModelSettings)
 	mux.HandleFunc("PUT /api/settings/model", h.putModelSettings)
 	mux.HandleFunc("POST /api/settings/model/test", h.testModelSettings)
+	// The multi-model registry (`/model` in the TUI): list, add from the
+	// provider catalogue, switch, remove, remote fetch, connectivity test.
+	mux.HandleFunc("GET /api/models", h.listModels)
+	mux.HandleFunc("POST /api/models", h.addModel)
+	mux.HandleFunc("POST /api/models/{alias}/use", h.useModel)
+	mux.HandleFunc("DELETE /api/models/{alias}", h.removeModel)
+	mux.HandleFunc("POST /api/models/fetch", h.fetchModels)
+	mux.HandleFunc("POST /api/models/test", h.testModel)
+	// `/doctor`, `/context`, `/cost` and `/read` parity endpoints.
+	mux.HandleFunc("GET /api/onboarding", h.getOnboarding)
+	mux.HandleFunc("POST /api/onboarding", h.postOnboarding)
+	mux.HandleFunc("GET /api/doctor", h.getDoctor)
+	mux.HandleFunc("GET /api/context", h.getContext)
+	mux.HandleFunc("GET /api/cost", h.getCost)
+	mux.HandleFunc("GET /api/fs/read", h.readFile)
+	mux.HandleFunc("GET /api/fs/files", h.listFiles)
 	mux.HandleFunc("GET /api/version", h.getVersion)
 	mux.HandleFunc("GET /api/metrics", h.listMetrics)
 	mux.HandleFunc("GET /api/audit", h.verifyAudit)

@@ -7,14 +7,16 @@
 export type Route =
   | { view: 'sessions'; id: string | null; project?: string | null }
   | { view: 'queue'; project?: string | null }
+  | { view: 'plans' }
   | { view: 'projects' }
   | { view: 'settings'; tab?: string | null }
   | { view: 'detail'; id: string }
 
-/** The three primary workspace views on the main sidebar rail. */
+/** The primary workspace views on the main sidebar rail. */
 export const primaryNav: Array<[view: string, key: string]> = [
   ['sessions', 'nav.sessions'],
   ['queue', 'nav.queue'],
+  ['plans', 'nav.plans'],
   ['projects', 'nav.projects'],
 ]
 
@@ -22,6 +24,7 @@ export const primaryNav: Array<[view: string, key: string]> = [
 export const navViews: Array<[view: string, key: string]> = [
   ['sessions', 'nav.sessions'],
   ['queue', 'nav.queue'],
+  ['plans', 'nav.plans'],
   ['projects', 'nav.projects'],
   ['settings', 'nav.settings'],
 ]
@@ -40,6 +43,7 @@ export function parseHash(): Route {
     return { view: 'sessions', id: null, project: decodeURIComponent(path.slice(9)) }
   }
   if (path === 'queue') return { view: 'queue', project: projectParam }
+  if (path === 'plans') return { view: 'plans' }
   if (path === 'projects') return { view: 'projects' }
   if (path.startsWith('settings/')) {
     return { view: 'settings', tab: decodeURIComponent(path.slice(9)) }
