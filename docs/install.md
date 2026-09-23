@@ -21,6 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/ins
 ```bash
 sh scripts/install.sh --version 0.0.9-beta   # 安装指定版本（如预发布版 0.0.9-beta、稳定版 0.0.8；默认 latest，即最新稳定版）
 sh scripts/install.sh --prefix /opt/openpanda  # 自定义安装目录
+sh scripts/install.sh --lite                   # lite 构建：无内嵌 Web 控制台/TUI（仅 Linux）
 sh scripts/install.sh --yes                    # 额外注册开机自启（不询问）
 sh scripts/install.sh --no-service             # 不碰开机自启
 ```
@@ -36,6 +37,14 @@ ${XDG_DATA_HOME:-~/.local/share}/openpanda/
 ```
 
 `~/.local/bin/panda` 是指向真实二进制的软链。若当前 shell 的 PATH 里还没有 `~/.local/bin`，脚本会像 `panda install` 一样把带标记的 `export PATH` 块写进 shell 启动文件（`~/.zshrc`、`~/.bashrc` 等；无任何 rc 文件时创建 `~/.profile`），新开终端即生效；`panda uninstall` 会精确移除这个标记块。
+
+### Lite 构建：树莓派与纯命令行设备
+
+```bash
+sh scripts/install.sh --lite                  # linux-amd64/arm64/armv7
+```
+
+lite 包（`panda-<ver>-lite-linux-<arch>.tar.gz`）去掉了内嵌 Web 控制台与 Bubble Tea TUI，保留 daemon、mesh、DTN、队列与 `panda ask`/`repl`（经典行界面）——二进制更小、无前端依赖链，适合树莓派、armv7 老派（32 位 ARM 仅此目标）与跑不起/不需要 Web 界面的命令行机器。在 lite 节点上打开 `panda web` 会得到一个提示页；管理界面由网络中任一台完整构建的节点提供即可。源码构建对应 `make build-lite` 与 `build-lite-linux-{amd64,arm64,armv7}`。
 
 ## 2. macOS Homebrew
 
@@ -155,7 +164,9 @@ panda uninstall --backup-only
 
 - **校验失败**：可能是下载被代理/断点续传破坏，重跑即可（脚本会用全新临时目录）。
 
-- **不支持的系统/架构**：脚本会明确报错；目前发布 `darwin/linux/windows` 的 `amd64` 与 `arm64`。
+- **不支持的系统/架构**：脚本会明确报错；目前发布 `darwin/linux/windows` 的 `amd64` 与 `arm64`，另有 lite 构建的 `linux-amd64/arm64/armv7`（32 位 ARM 仅 lite）。
 
 - **daemon 起不来**：先 `panda doctor` 与 `panda init`；回环监听会自动生成临时 token，但对外监听且未配置 `shared_secret` 会拒绝启动（安全约束）。
+
+- **跨公网/NAT 的对端连不上**：双方都拨不通对方时，在 `network.peers` 里配置 `punch:<node-id>`（对端节点名）——打洞协调经 mesh 内已连通的节点中继，双方 UDP 端口需能出站（无需入站映射）；对称 NAT 等极端场景打不通时会持续重试，日志里有 `punch offer failed`/`udp:` 前缀可查。`network.udp_listen: "off"` 可整体关闭数据报平面。
 

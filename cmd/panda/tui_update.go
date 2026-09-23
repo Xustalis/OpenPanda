@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // Update: the model's event loop. It routes keystrokes by mode and folds engine

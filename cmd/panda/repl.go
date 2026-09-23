@@ -157,6 +157,7 @@ func init() {
 		{"approve", "tasks", "cmd.approve", (*repl).cmdApprove},
 		{"reject", "tasks", "cmd.reject", (*repl).cmdReject},
 		{"logs", "tasks", "cmd.logs", (*repl).cmdLogs},
+		{"heatmap", "tasks", "cmd.heatmap", (*repl).cmdHeatmap},
 		{"memory", "memory", "cmd.memory", (*repl).cmdMemory},
 		{"projects", "memory", "cmd.projects", (*repl).cmdProjects},
 		{"project", "memory", "cmd.project", (*repl).cmdProjectEnter},
@@ -470,14 +471,8 @@ func figlet(word string) []string {
 
 // printBanner draws the startup screen: the OpenPanda wordmark in figlet
 // lettering, then node/model/workdir info lines and orientation hints.
-func (r *repl) printBanner() {
-	th := newTheme(r.loc)
-	w := termColumns()
-	if w <= 0 {
-		w = 80
-	}
-	r.outln(renderWelcomeBanner(r.cfg, r.loc, w, th))
-}
+// Implementation lives behind the lite split: banner_full.go renders the
+// themed banner in a full build, tui_lite.go a one-line greeting.
 
 // printFooter prints the status line above the prompt: node name, approval
 // mode (color-coded), authorization state, and the active session.

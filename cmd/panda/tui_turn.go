@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // Turn handlers: how the model folds streamed events into the in-flight turn and

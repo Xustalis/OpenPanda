@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // The delegated-task card. A task classified out of a prompt runs on an agent

@@ -73,6 +73,41 @@ func TestDelegationMetricRecorded(t *testing.T) {
 	}
 }
 
+// TestTaskActivityByDay buckets task creation timestamps into local calendar
+// days — the exact map the /heatmap grid shades itself from. Two tasks on the
+// same day must land in one bucket, and days must split at local midnight.
+func TestTaskActivityByDay(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Pin the store clock so each task lands on a known day.
+	var cur int64
+	s.now = func() int64 { return cur }
+	day1 := time.Date(2026, 9, 20, 10, 0, 0, 0, time.Local)
+	day2 := day1.AddDate(0, 0, 1)
+
+	cur = day1.Unix()
+	createTask(t, s, "", "a", "node")
+	cur = day1.Add(2 * time.Hour).Unix()
+	createTask(t, s, "", "b", "node")
+	cur = day2.Unix()
+	createTask(t, s, "", "c", "node")
+
+	counts, err := s.TaskActivityByDay(ctx)
+	if err != nil {
+		t.Fatalf("TaskActivityByDay: %v", err)
+	}
+	if got := counts[day1.Format("2006-01-02")]; got != 2 {
+		t.Fatalf("day1 count = %d, want 2 (map: %v)", got, counts)
+	}
+	if got := counts[day2.Format("2006-01-02")]; got != 1 {
+		t.Fatalf("day2 count = %d, want 1 (map: %v)", got, counts)
+	}
+	if len(counts) != 2 {
+		t.Fatalf("expected 2 active days, got %d (%v)", len(counts), counts)
+	}
+}
+
 // TestDelegationMetricRecordsFailure verifies that a failed remote execution
 // still writes a metric row with success=false.
 func TestDelegationMetricRecordsFailure(t *testing.T) {

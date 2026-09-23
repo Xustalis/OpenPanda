@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // Splitting an X10 mouse event is not something Update can be handed by

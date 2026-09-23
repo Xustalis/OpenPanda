@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // View renders the ephemeral region: the live turn (streaming answer or thought
@@ -884,7 +886,10 @@ func (m tuiModel) askingButtonHit(x, y int) int {
 //   - If width < 76: compact single-line heading (✻ OpenPanda v...)
 //   - Version, Node & Model, Working Directory
 //   - Interactive tips (commands, file attach, help guide)
-func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th theme) string {
+//   - A year of task activity as a heatmap, when a store was reachable —
+//     the empty screen is the one place a grid can sit without competing
+//     with a conversation. nil activity skips the section entirely.
+func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th theme, activity map[string]int) string {
 	if width <= 0 {
 		width = 80
 	}
@@ -934,6 +939,15 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 	sb.WriteString(th.muted.Render("  " + cliui.Truncate(
 		i18n.T(loc, "tui.welcome.tips"), contentWidth, uni)))
 
+	if activity != nil {
+		var hb strings.Builder
+		renderTaskHeatmap(&hb, loc, activity, time.Now(), heatmapMaxWeek, contentWidth, pal())
+		sb.WriteString("\n")
+		for _, line := range strings.Split(strings.TrimRight(hb.String(), "\n"), "\n") {
+			sb.WriteString("\n  " + line)
+		}
+	}
+
 	if isLinuxConsole() {
 		sb.WriteString("\n" + th.warn.Render("  ! bare console font has no CJK glyphs; answers are forced to English."))
 		sb.WriteString("\n" + th.warn.Render("    for Chinese on this screen: sudo apt install fbterm fonts-wqy-zenhei && fbterm"))
@@ -950,10 +964,12 @@ func (m tuiModel) welcome() string {
 		w = 80
 	}
 	cfg := (*config.Config)(nil)
+	var activity map[string]int
 	if m.r != nil {
 		cfg = m.r.cfg
+		activity = m.activity.get(m.r)
 	}
-	return renderWelcomeBanner(cfg, m.loc, w, m.th)
+	return renderWelcomeBanner(cfg, m.loc, w, m.th, activity)
 }
 
 // textWidth is the terminal-bounded width available to top-level TUI rows. A
@@ -975,20 +991,6 @@ func clipRendered(s string, width int) string {
 		lines[i] = ansi.Truncate(lines[i], width, "")
 	}
 	return strings.Join(lines, "\n")
-}
-
-// elapsed formats a duration as a compact clock for the status line. A
-// sub-second duration prints "<1s" rather than "0s": routing decisions finish
-// in milliseconds, and "0s" reads as a broken timer instead of a fast stage.
-func elapsed(d time.Duration) string {
-	s := int(d.Seconds())
-	if s < 1 {
-		return "<1s"
-	}
-	if s < 60 {
-		return fmt.Sprintf("%ds", s)
-	}
-	return fmt.Sprintf("%dm%02ds", s/60, s%60)
 }
 
 // firstNonEmptyTail returns the last non-empty thought line — the thought still

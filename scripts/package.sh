@@ -31,7 +31,7 @@ VERSION="${VERSION#v}"
 VERSION_PKG="github.com/Xustalis/OpenPanda/internal/version"
 LDFLAGS="-s -w -X ${VERSION_PKG}.Version=${VERSION}"
 
-TARGETS="${OPENPANDA_PACKAGE_TARGETS:-darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-arm64}"
+TARGETS="${OPENPANDA_PACKAGE_TARGETS:-darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-arm64 lite-linux-amd64 lite-linux-arm64 lite-linux-armv7}"
 
 DIST="${OPENPANDA_DIST_DIR:-$ROOT/dist}"
 STAGE="$DIST/package"
@@ -59,13 +59,34 @@ make_zip() {
     fi
 }
 
-# build <os> <arch> <exe-name>
+# build <os> <arch> <exe-name> [goarch-goarm] — cross-compiles ./cmd/panda.
+# build_lite does the same with -tags lite (no embedded console, no TUI) into
+# a lite-<os>-<arch> stage, for constrained nodes.
 build() {
     os="$1"; arch="$2"; exe="$3"
     dir="$STAGE/$os-$arch/openpanda"
     mkdir -p "$dir/bin"
     echo "→ build $os/$arch"
     GOOS="$os" GOARCH="$arch" go build -ldflags "$LDFLAGS" -o "$dir/bin/$exe" ./cmd/panda
+    mkdir -p "$dir/adapters"
+    find adapters -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/adapters/" \;
+    cp config.example.yaml "$dir/"
+    for c in config/capabilities.example-*.yaml; do
+        [ -e "$c" ] && cp "$c" "$dir/"
+    done
+    cp LICENSE "$dir/"
+}
+
+build_lite() {
+    os="$1"; arch="$2"; goarm="${3:-}"
+    # The archive/arch name is "armv7" but Go's GOARCH for 32-bit ARM is
+    # "arm" + a GOARM level; keep the two vocabularies apart.
+    goarch="$arch"; [ "$goarch" = armv7 ] && goarch=arm
+    dir="$STAGE/lite-$os-$arch/openpanda"
+    mkdir -p "$dir/bin"
+    echo "→ build lite $os/$arch"
+    env GOOS="$os" GOARCH="$goarch" ${goarm:+GOARM="$goarm"} \
+        go build -tags lite -ldflags "$LDFLAGS" -o "$dir/bin/panda" ./cmd/panda
     mkdir -p "$dir/adapters"
     find adapters -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/adapters/" \;
     cp config.example.yaml "$dir/"
@@ -90,16 +111,25 @@ want_build() { # <os> <arch> <exe>
     return 0
 }
 
+want_build_lite() { # <os> <arch> [goarm]
+    wanted "lite-$1-$2" && build_lite "$1" "$2" "${3:-}"
+    return 0
+}
+
 want_build darwin amd64 panda
 want_build darwin arm64 panda
 want_build linux  amd64 panda
 want_build linux  arm64 panda
 want_build windows amd64 panda.exe
 want_build windows arm64 panda.exe
+want_build_lite linux amd64
+want_build_lite linux arm64
+want_build_lite linux armv7 7
 
 for osarch in $TARGETS; do
     case "$osarch" in
         darwin-amd64|darwin-arm64|linux-amd64|linux-arm64|windows-amd64|windows-arm64) ;;
+        lite-linux-amd64|lite-linux-arm64|lite-linux-armv7) ;;
         *) echo "package.sh: unsupported target '$osarch'" >&2; exit 1 ;;
     esac
     src="$STAGE/$osarch/openpanda"

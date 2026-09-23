@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"math/rand/v2"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -41,7 +42,7 @@ var version = versionpkg.Version
 
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
-		fmt.Printf("panda %s\n", version)
+		fmt.Printf("panda %s (%s)\n", version, versionpkg.Codename)
 		return
 	}
 	// `panda --help` / `panda -h` must show the main help, not be swallowed
@@ -153,6 +154,9 @@ func main() {
 		case "metrics":
 			runMetrics(args)
 			return
+		case "heatmap":
+			runHeatmap(args)
+			return
 		case "audit":
 			runAudit(args)
 			return
@@ -175,7 +179,7 @@ func main() {
 			runProject(args)
 			return
 		case "version":
-			fmt.Printf("panda %s\n", version)
+			fmt.Printf("panda %s (%s)\n", version, versionpkg.Codename)
 			return
 		case "read", "view", "cat", "md", "markdown":
 			runRead(args)
@@ -226,7 +230,7 @@ func subcommandNames() []string {
 		"daemon", "serve", "ask", "repl", "chat", "web", "voice",
 		"install", "uninstall", "update", "upgrade", "doctor", "status", "nodes", "pair", "queue",
 		"task", "plan", "cancel", "approve", "reject", "logs", "skill", "mcp",
-		"reminder", "detect", "card", "init", "metrics", "audit", "session",
+		"reminder", "detect", "card", "init", "metrics", "heatmap", "audit", "session",
 		"sessions", "memory", "config", "model", "models", "agents", "project",
 		"read", "view", "cat", "md", "markdown", "version", "help",
 	}
@@ -510,7 +514,53 @@ func runDaemon(args []string) {
 		logger.Info("recovered tasks from previous run", "count", n)
 	}
 
+	// Farsky datagram plane (UDP + NAT punching). "" follows listen_addr's
+	// port but binds the wildcard interface: every datagram is AEAD-sealed or
+	// HMAC-signed, so an any-interface bind exposes nothing the LAN could not
+	// already see — and it is what makes a default loopback-WS node punchable
+	// without extra config. "off" disables the socket outright. Started before
+	// the peer loops so a "punch:<id>" entry finds the plane already up.
+	if udpAddr := cfg.Network.UDPListen; udpAddr != "off" {
+		if udpAddr == "" {
+			if _, port, err := net.SplitHostPort(cfg.Network.ListenAddr); err == nil {
+				udpAddr = ":" + port
+			}
+		}
+		if udpAddr != "" {
+			if err := coreNode.ListenUDP(ctx, udpAddr, cfg.Network.STUNServers); err != nil {
+				logger.Warn("udp: datagram plane failed to start", "addr", udpAddr, "err", err)
+			}
+		}
+	}
+
 	for _, peer := range cfg.Network.Peers {
+		if strings.HasPrefix(peer, "punch:") {
+			// A punch entry names a node id, not an address: the peer is
+			// NAT-bound and reachable only through the farsky pinhole
+			// handshake. Keep retrying until a UDP route exists; the
+			// keepalive loop then holds the mapping, and a lost mapping is
+			// re-punched on the next tick.
+			id := strings.TrimPrefix(peer, "punch:")
+			guard.Go(logger, "daemon: punch "+peer, cancel, func() {
+				for {
+					if coreNode.UDPPort() == 0 {
+						logger.Warn("punch peer configured but the datagram plane is off (network.udp_listen)", "peer", id)
+						return
+					}
+					if coreNode.UDPRoute(id) == nil {
+						if err := coreNode.PunchPeer(ctx, id); err != nil {
+							logger.Warn("punch offer failed", "peer", id, "err", err)
+						}
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(30 * time.Second):
+					}
+				}
+			})
+			continue
+		}
 		guard.Go(logger, "daemon: peer keepalive "+peer, cancel, func() {
 			backoff := 1 * time.Second
 			// jitter spreads a fleet-wide reconnect over a window instead of
@@ -697,6 +747,7 @@ func printUsage(w *os.File) {
 	line("observability:")
 	line("  status                                    node identity + capability directory")
 	line("  metrics [--csv]                           delegation metrics")
+	line("  heatmap [--weeks N]                       task-activity heatmap, last year (also /heatmap)")
 	line("  audit verify [--task id]                  verify the hash chain")
 	line("  audit entries [--task id]                 print audit trail rows")
 	line("")

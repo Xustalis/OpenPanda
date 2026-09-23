@@ -41,6 +41,7 @@ export function SystemView() {
         <div class="card version-card">
           <span class="dim">{t('system.version')}</span>
           <span class="version-num mono">{version?.version ?? '…'}</span>
+          {version?.codename && <span class="dim">“{version.codename}”</span>}
         </div>
         <div class="card audit-card">
           <div class="audit-head">

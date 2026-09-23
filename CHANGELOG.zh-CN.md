@@ -36,6 +36,33 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 每条记录以一至三行写明变更内容与用户可见的影响；必要时标注引入该变更的提交，便于追溯。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
+## [Unreleased]
+
+v0.0.9 版本线继续推进，代号 **Periapsis**：为无法保持 WebSocket 的对端带来数据报平面与 NAT 打洞，DTN 载荷加密，面向受限设备的 lite 构建，以及一轮覆盖模型驱动队列方式的任务管线可靠性修复。
+
+### 新增
+
+- **UDP 数据报平面（farsky 轨道）** —— `internal/bus/udp.go` 增加第二条传输：共享 UDP socket 上的 AES-256-GCM 密封信封与 HMAC 签名打洞帧，密钥在域名分隔符下派生自 mesh 共享密钥，单个数据报限 1400 字节。`network.udp_listen` 默认跟随 `listen_addr` 的端口并绑定通配接口（每个数据报都经过认证，通配绑定不暴露局域网之外的任何内容）；`"off"` 完全关闭该平面。`sendTo` 仍优先 WebSocket 连接，无连接时回退到已确认的 UDP 路由。
+- **经 mesh 协调的 NAT 打洞** —— `network.peers` 接受 `punch:<node-id>` 条目，用于无法直连拨号的对端。`punch_offer`/`punch_ready` 协调对经在线连接送达，或沿链路状态图中继（TTL 限界，每跳重封装 envelope、源节点保留在载荷 `Src` 中），随后双方互向交换来的候选地址喷射签名 punch 帧，直到 ack 确认针孔打通。绑定端点成为 UDP 路由，25 秒 keepalive 维持映射，丢失后自动重打。
+- **无外部依赖的反射地址发现** —— 同一 UDP socket 应答 RFC 5389 binding 请求：任何一个拥有公网地址的 mesh 成员就是全队的 STUN 服务器（`internal/bus/stun.go`，零依赖）；`network.stun_servers` 仅为运行或信任外部服务器的部署准备。hello 回包还携带 `you`（监听器观测到的来源 IP），NAT 后的节点零成本得知自己的公网地址。
+- **DTN bundle 载荷加密（v2）** —— `bus.Bundle.Seal` 用 bundle 域密钥（派生自 mesh 共享密钥）对载荷做 AES-256-GCM 加密，签名头作为关联数据绑定；`Open` 解封 v2、校验 v1 明文 bundle，混合版本 mesh 继续可用。中继保管只存密封 blob——中间跳转发的是它读不到的密文。
+- **面向受限设备的 lite 构建** —— `go build -tags lite` / `make build-lite-linux-{amd64,arm64,armv7}` 去掉内嵌 Web 控制台（面板端点改服一个精简提示页）与 Bubble Tea TUI，保留 daemon、mesh、DTN、队列、ask 与经典行 REPL——为树莓派与纯命令行设备提供更小、不含前端依赖链的二进制。`install.sh --lite` 选择 `panda-<ver>-lite-<os>-<arch>` 包并接受 32 位 ARM。
+- **版本代号** —— `internal/version.Codename` 将本版本线命名为 "Periapsis"；`panda version`、`panda --version`、`/api/version` 与系统视图均会展示。
+- **ask 引擎的队列管理工具族** —— `taskq_approve`（Tier-2，防止模型拓宽自己将要经过的闸门）、`taskq_reject`、`taskq_clear`（history/review/all 三档范围）与 `taskq_cancel` 的批量 `task_ids`；`taskq_list`/`taskq_show` 标注每个任务的审批处置，`taskq_priority`/`taskq_move` 拒绝对非排队任务静默改序。
+
+### 变更
+
+- **hello 广告数据报平面** —— `HelloPayload` 携带 `udp_port`，回包携带 `you`（对端观测到的来源 IP）：监听器借此获得每个已连 peer 的打洞线索，节点也无需配置便得知自己的公网地址。
+
+### 修复
+
+- **一次响应中的全部工具调用现在当轮执行** —— 引擎此前每轮只执行第一个 `tool_use`、其余记为备注，模型连续发出多个队列操作时会烧光整个工具预算反复重发（即用户报告的「清理任务队列」故障）。原生响应现在执行全部调用，并按 Anthropic 协议回放为单条 assistant `tool_use[]` 加单条 user `tool_result[]`；DSML invoke 按序执行并以散文形式回放。
+- **DSML 解析器接受 DeepSeek 真实产出的格式** —— 单/双管道符 `<｜DSML｜>` 变体、宽松引号的 invoke 名与 JSON 参数体不再把协议标记泄漏进回复。
+- **审批状态暴露真实语义** —— `approval_disposition`（accept_work / resume_execution / needs_changed_input）在 `taskq_list`/`taskq_show`、任务 API 载荷与队列/详情视图中透出，需修改输入的任务禁用批准按钮；已产出成果的任务与等待授权执行的任务不再无法区分。
+- **对 resume_execution 任务的 `Approve` 可被调度收养** —— resume 分支现在把行标记为 `scheduled=1`，`ListReady` 能够认领；直接调用 Approve 不再产出任何调度器都选不中的 `queued` 孤儿行。
+- **工具循环预算耗尽时降级为摘要** —— 预算烧光时返回已执行调用的摘要，而不是干巴巴的 "max tool rounds" 报错。
+- **DTN 中继记账跨重启存活** —— 按 bundle 的中继跳数预算改为持久化在 `dtn_relay_log`（迁移 V25）而非内存；`parkBundle` 的 upsert 更新 `via`，重投递 bundle 的防回传规则跟随其最新来路。
+
 ## [0.0.9-beta] - 2026-09-23
 
 v0.0.9 beta 完成了混合传输/DTN 架构：mesh 路由现在按延迟加权，DTN bundle 真正在在线链路上传输、对离线链路暂存待命，委派令牌预算有了真实记账，被抢占的工作通过影子副本得以保留，硬件执行器获得了执行通路。此外，被委派的 agent 获得了回到本节点工具链的受管通道，模型配置面完整落地，模型管理 TUI 围绕全宽注册表加单屏表单编辑器重建。

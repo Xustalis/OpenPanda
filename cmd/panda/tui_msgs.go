@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // The bridge from the ask engine's push callbacks to Bubble Tea's pull-based

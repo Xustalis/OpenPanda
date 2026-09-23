@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // The Skills Hub panel ("/skills hub" or "/skills") browses the curated plus

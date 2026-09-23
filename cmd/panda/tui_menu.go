@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // The filterable slash-command menu. When the user starts a line with "/" the
