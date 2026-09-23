@@ -357,6 +357,25 @@ type ModelConfig struct {
 	MaxTokens     int    `yaml:"max_tokens"`               // completion cap; 0 = provider/entry default
 	ContextWindow int    `yaml:"context_window,omitempty"` // advertised context length; 0 = unknown
 	NoAuth        bool   `yaml:"no_auth,omitempty"`        // true for local models that need no API key
+	// Thinking selects the reasoning mode: "on" requests the provider's
+	// thinking/reasoning pass, "off" suppresses it, empty leaves the
+	// provider default. The wire shape is chosen per provider dialect
+	// (Anthropic budget object, DashScope enable_thinking flag, Ark
+	// thinking object, OpenAI reasoning_effort).
+	Thinking string `yaml:"thinking,omitempty"` // "on" | "off" | "" (provider default)
+	// ThinkingBudget caps the reasoning budget in tokens where the dialect
+	// supports it (Anthropic budget_tokens, DashScope thinking_budget). 0 =
+	// provider default.
+	ThinkingBudget int `yaml:"thinking_budget,omitempty"`
+	// Params are extra request-body fields merged into every call — the
+	// escape hatch for relay-specific knobs a first-class field does not
+	// cover (temperature, top_p, enable_search, …). Top-level fields win
+	// over Params on conflict, so a key cannot override model/messages.
+	Params map[string]any `yaml:"params,omitempty"`
+	// Headers are extra HTTP headers sent with every request — custom auth
+	// schemes or relay routing headers (e.g. "X-Tenant: blue"). They never
+	// replace the built-in auth/content-type headers.
+	Headers map[string]string `yaml:"headers,omitempty"`
 }
 
 // NormalizedAPIType returns the validated api type, defaulting to Anthropic.
@@ -1154,6 +1173,10 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 	}
 	setMapFieldInt(model, "max_tokens", mc.MaxTokens)
 	setMapFieldInt(model, "context_window", mc.ContextWindow)
+	setMapField(model, "thinking", mc.Thinking)
+	setMapFieldInt(model, "thinking_budget", mc.ThinkingBudget)
+	setMapFieldAnyMap(model, "params", mc.Params)
+	setMapFieldStringMap(model, "headers", mc.Headers)
 
 	out, err := yaml.Marshal(&root)
 	if err != nil {
@@ -1472,6 +1495,56 @@ func setMapFieldInt(m *yaml.Node, key string, value int) {
 	m.Content = append(m.Content,
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(value)},
+	)
+}
+
+// setMapFieldAnyMap upserts key: {…} in mapping node m from a
+// map[string]any, round-tripping through the marshaller so nested values keep
+// their natural YAML types. An empty map removes the key.
+func setMapFieldAnyMap(m *yaml.Node, key string, value map[string]any) {
+	setMapFieldNode(m, key, value)
+}
+
+// setMapFieldStringMap upserts key: {…} in mapping node m from a
+// map[string]string. An empty map removes the key.
+func setMapFieldStringMap(m *yaml.Node, key string, value map[string]string) {
+	setMapFieldNode(m, key, value)
+}
+
+// setMapFieldNode is the shared upsert: the value is marshalled to a yaml.Node
+// so arbitrary maps slot into the round-tripped document; a nil/empty value
+// removes the key.
+func setMapFieldNode(m *yaml.Node, key string, value any) {
+	var node *yaml.Node
+	if value != nil {
+		b, err := yaml.Marshal(value)
+		if err == nil {
+			var doc yaml.Node
+			if err := yaml.Unmarshal(b, &doc); err == nil && len(doc.Content) > 0 {
+				node = doc.Content[0]
+			}
+		}
+	}
+	// Marshal of an empty map yields "{}\n" — treat that as absent.
+	if node != nil && node.Kind == yaml.MappingNode && len(node.Content) == 0 {
+		node = nil
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			if node == nil {
+				m.Content = append(m.Content[:i], m.Content[i+2:]...)
+				return
+			}
+			m.Content[i+1] = node
+			return
+		}
+	}
+	if node == nil {
+		return
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		node,
 	)
 }
 
