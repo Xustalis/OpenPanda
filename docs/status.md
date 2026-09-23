@@ -60,7 +60,7 @@ P0 安全发现（路径穿越、结果送达、TUI 退出）已关闭，P1 安�
 | **项目随任务跨设备**（v0.0.8-preview） | ✅ 代码落地 | `panda project` 命令族 + settings 指针；委派载荷内联项目记忆、工作树走分块 artifact、产出覆盖式收回（`internal/projects` / `internal/core/project.go`） |
 | **Plan 看板端点**（v0.0.8-preview） | ✅ 代码落地 | `GET /api/plans`、`GET /api/plans/{id}`（阶段 + artifact 接线）；前端视图未接 |
 | 引脚驱动舵机（香橙派） | ❌ 未实现 | `gpio` 目前只是能力卡上的字符串：能把阶段路由到派，但没有执行通路 |
-| 最短路径多跳中继 | 🟡 只有贪心 | 逐跳打分 + 跳数惩罚（`internal/scheduler/route.go`）；**无链路时延度量、无拓扑传播、无图最短路** |
+| 最短路径多跳中继 | ✅ 图路由已落地 | 邻居广告构建链路状态图，边权取 `LinkMetrics` 的 RTT 采样（无测量走 `unknownLinkCost`），`graphFirstHop` 跑 Dijkstra 取全局最便宜路径的第一跳（`internal/scheduler/route.go`） |
 
 ## 两条入口都可达
 
@@ -131,8 +131,9 @@ token 扫描看不到 `>`）、`bash <(curl …)`（进程替换）、以及执�
 
 **GPIO / 舵机没有执行通路。** 要在派上驱动舵机，目前得自己提供脚本或 adapter。
 
-**多跳只是贪心。** 每一跳取局部最优 + 跳数惩罚，够用于当前三台机器；深空集群设想里
-的「按链路时延求全局最短路」需要链路度量与拓扑传播，都还不在。
+**多跳已是加权最短路。** 邻居广告传播拓扑、`LinkMetrics` 携带链路 RTT，
+`graphFirstHop`/`DTNNextHop` 在其上跑 Dijkstra。仍缺的深空级能力：链路度量
+只有 RTT（无带宽/丢包维度）、拓扑广告未签名、路径在每一跳重算而非源路由固定。
 
 ## 下一步
 
@@ -143,4 +144,4 @@ token 扫描看不到 `>`）、`bash <(curl …)`（进程替换）、以及执�
 3. 真机验证项目跨设备旅行（记忆内联 + 工作树 artifact + 产出收回）与 plan 看板
    端点。
 4. 定 P2-8 的方向（per-node 密钥还是签名授权），P2-9 随之落地。
-5. i18n 收尾、GPIO 执行通路、链路时延最短路，按需排期。
+5. i18n 收尾、GPIO 执行通路、链路度量增强（带宽/丢包维度），按需排期。
