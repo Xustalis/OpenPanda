@@ -54,11 +54,19 @@ func (c *Core) handleDTNBundle(ctx context.Context, env bus.Envelope) {
 	// row can legitimately arrive twice (hello flush + sweep flush racing),
 	// and the inner task dedup would catch it — but only after paying the
 	// handler. Replaying under a fresh outer msg_id is the whole point of the
-	// check.
+	// check. The payload is opened here, not at the relay: version-2 bundles
+	// carry ciphertext whose AAD is the signed header, so an opened payload
+	// is bound to exactly this destination and lifetime.
+	payload, err := bnd.Open([]byte(c.sharedSecret))
+	if err != nil {
+		c.logger.Warn("dtn_bundle: open payload failed", "from", env.From,
+			"bundle", bnd.BundleID, "err", err)
+		return
+	}
 	inner := bus.Envelope{
 		V: 1, Type: bnd.Kind, MsgID: bnd.BundleID,
 		From: src, To: c.nodeID, TS: bnd.CreatedUnix,
-		Payload: json.RawMessage(bnd.Payload),
+		Payload: json.RawMessage(payload),
 	}
 	if !c.claimMsgID(inner) {
 		c.logger.Debug("dtn_bundle: duplicate bundle dropped", "bundle", bnd.BundleID, "src", src)
@@ -92,7 +100,7 @@ func (c *Core) relayBundle(ctx context.Context, via, dest string, bnd *bus.Bundl
 		return
 	}
 	if hop := c.dtnNextHop(ctx, dest, map[string]bool{via: true}); hop != "" &&
-		c.connFor(hop) != nil && c.relayForwardOK(bnd.BundleID, bnd.DeadlineUnix) {
+		c.connFor(hop) != nil && c.relayForwardOK(ctx, bnd.BundleID, bnd.DeadlineUnix) {
 		if c.deliverBundle(ctx, hop, blob) {
 			c.logger.Info("dtn_bundle: relayed toward", "bundle", bnd.BundleID,
 				"via", via, "hop", hop, "dest", dest)
@@ -110,16 +118,30 @@ func (c *Core) parkBundle(ctx context.Context, via, dest string, bnd *bus.Bundle
 	var probe struct {
 		TaskID string `json:"task_id"`
 	}
-	_ = json.Unmarshal(bnd.Payload, &probe)
+	// task_id lives in the opened payload. A relay holds the mesh secret so
+	// opening is always possible; a payload that will not open fails closed
+	// rather than parking a row keyed wrong.
+	payload, err := bnd.Open([]byte(c.sharedSecret))
+	if err != nil {
+		c.logger.Warn("dtn_bundle: relay park open failed", "bundle", bnd.BundleID, "err", err)
+		return
+	}
+	_ = json.Unmarshal(payload, &probe)
 	taskID := probe.TaskID
 	if taskID == "" {
 		taskID = bnd.BundleID
 	}
+	// The upsert carries via too: the same bundle may arrive again over a
+	// different path (a relay parked it, the topology shifted, it bounced
+	// back) and the no-echo rule must exclude the peer it came from LAST,
+	// not the first sender on record. payload_json stays empty: the blob is
+	// the authority, and a relay's disk should not keep a plaintext copy of
+	// work it only holds in custody.
 	if _, err := c.db.ExecContext(ctx,
 		`INSERT INTO task_outbox (peer, task_id, payload_json, payload_blob, transport_type, ttl, via, created_at)
-		 VALUES (?, ?, ?, ?, 'dtn-relay', ?, ?, ?)
-		 ON CONFLICT(peer, task_id) DO UPDATE SET payload_blob = excluded.payload_blob, ttl = excluded.ttl`,
-		dest, taskID, string(bnd.Payload), blob, bnd.DeadlineUnix, via, storage.Now()); err != nil {
+		 VALUES (?, ?, '', ?, 'dtn-relay', ?, ?, ?)
+		 ON CONFLICT(peer, task_id) DO UPDATE SET payload_blob = excluded.payload_blob, ttl = excluded.ttl, via = excluded.via`,
+		dest, taskID, blob, bnd.DeadlineUnix, via, storage.Now()); err != nil {
 		c.logger.Warn("dtn_bundle: relay park", "bundle", bnd.BundleID, "dest", dest, "err", err)
 		return
 	}
@@ -166,16 +188,22 @@ func (c *Core) dtnDirectory() (ledger.Node, []ledger.Node, error) {
 }
 
 // relayForwardOK bounds a node's forwards of one bundle to dtnRelayMaxHops —
-// the in-memory loop bound that substitutes for the hop list a signed bundle
-// cannot carry. Entries expire with the bundle's deadline so the map does
-// not grow past the fleet's live custody set.
-func (c *Core) relayForwardOK(bundleID string, deadline int64) bool {
+// the loop bound that substitutes for the hop list a signed bundle cannot
+// carry. The count lives in dtn_relay_log so a restart cannot re-arm it: a
+// rebooted node that forgot its spends could otherwise be ping-ponged by a
+// pair of peers until the TTL, which is exactly the loop the bound exists to
+// kill. Entries expire with the bundle's deadline. The in-memory map remains
+// only as the no-database fallback.
+func (c *Core) relayForwardOK(ctx context.Context, bundleID string, deadline int64) bool {
+	now := time.Now().Unix()
+	if c.db != nil {
+		return c.relayForwardOKDB(ctx, bundleID, deadline, now)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.relayLog == nil {
 		c.relayLog = make(map[string]dtnRelay)
 	}
-	now := time.Now().Unix()
 	for id, e := range c.relayLog {
 		if e.until > 0 && now > e.until {
 			delete(c.relayLog, id)
@@ -198,4 +226,49 @@ func (c *Core) relayForwardOK(bundleID string, deadline int64) bool {
 	e.hops++
 	c.relayLog[bundleID] = e
 	return true
+}
+
+// relayForwardOKDB spends one forward of bundleID atomically against the
+// persisted bound. Two statements cover every case: the UPDATE spends a hop
+// only on a live row that still has budget; the INSERT seeds a fresh record —
+// or, on conflict, resurrects a dead one — only when no live record exists.
+// A live row at the bound fails both writes and the bundle must park. A DB
+// error fails closed: a node whose bound ledger is unreadable must not
+// forward, same posture as an unverifiable bundle.
+func (c *Core) relayForwardOKDB(ctx context.Context, bundleID string, deadline, now int64) bool {
+	if deadline <= 0 {
+		deadline = now + int64(defaultDTNTTL.Seconds())
+	}
+	// Opportunistic expiry keeps the table no larger than the live custody
+	// set; the per-call cost is one indexed delete on a tiny table.
+	if _, err := c.db.ExecContext(ctx,
+		`DELETE FROM dtn_relay_log WHERE until < ?`, now); err != nil {
+		c.logger.Warn("dtn: relay log expiry", "err", err)
+	}
+	res, err := c.db.ExecContext(ctx,
+		`UPDATE dtn_relay_log SET hops = hops + 1 WHERE bundle_id = ? AND hops < ? AND until >= ?`,
+		bundleID, dtnRelayMaxHops, now)
+	if err != nil {
+		c.logger.Warn("dtn: relay bound spend", "bundle", bundleID, "err", err)
+		return false
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return true
+	}
+	res, err = c.db.ExecContext(ctx,
+		`INSERT INTO dtn_relay_log (bundle_id, hops, until) VALUES (?, 1, ?)
+		 ON CONFLICT(bundle_id) DO UPDATE SET hops = 1, until = excluded.until
+		 WHERE dtn_relay_log.until < ?`,
+		bundleID, deadline, now)
+	if err != nil {
+		c.logger.Warn("dtn: relay bound seed", "bundle", bundleID, "err", err)
+		return false
+	}
+	// Rows affected is the verdict: a fresh insert or a resurrected dead row
+	// writes 1; a live row already at the bound makes the conflict-update's
+	// WHERE false and writes 0 — that is the refusal.
+	if n, _ := res.RowsAffected(); n > 0 {
+		return true
+	}
+	return false
 }

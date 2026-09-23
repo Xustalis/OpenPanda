@@ -193,20 +193,47 @@ func TestDTNRelaySweepMovesParkedCustody(t *testing.T) {
 
 // relayForwardOK is the per-node loop bound: a bundle may be forwarded at
 // most dtnRelayMaxHops times before the node must hold it for direct contact.
+// The bound is persisted — a restart must not re-arm it, or a rebooted relay
+// can be ping-ponged until the TTL.
 func TestRelayForwardOKBoundsLoops(t *testing.T) {
+	ctx := context.Background()
 	c := newCoreWithNative(t, "dtn-bound", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
 	deadline := time.Now().Add(time.Hour).Unix()
 	for i := 0; i < dtnRelayMaxHops; i++ {
-		if !c.relayForwardOK("b-loop", deadline) {
+		if !c.relayForwardOK(ctx, "b-loop", deadline) {
 			t.Fatalf("forward %d refused before bound", i)
 		}
 	}
-	if c.relayForwardOK("b-loop", deadline) {
+	if c.relayForwardOK(ctx, "b-loop", deadline) {
 		t.Fatal("forward past the bound allowed")
 	}
 	// A different bundle is unaffected.
-	if !c.relayForwardOK("b-other", deadline) {
+	if !c.relayForwardOK(ctx, "b-other", deadline) {
 		t.Fatal("fresh bundle refused")
+	}
+	// The bound lives in the DB, not the process: wiping the in-memory
+	// fallback must not re-arm the bound.
+	c.mu.Lock()
+	c.relayLog = nil
+	c.mu.Unlock()
+	if c.relayForwardOK(ctx, "b-loop", deadline) {
+		t.Fatal("bound re-armed after restart simulation")
+	}
+	var hops int
+	if err := c.db.QueryRow(`SELECT hops FROM dtn_relay_log WHERE bundle_id = 'b-loop'`).Scan(&hops); err != nil {
+		t.Fatalf("relay bound not persisted: %v", err)
+	}
+	if hops != dtnRelayMaxHops {
+		t.Fatalf("persisted hops = %d, want %d", hops, dtnRelayMaxHops)
+	}
+	// An expired record resurrects: a bundle whose deadline passed gets a
+	// fresh bound under its new clock.
+	past := time.Now().Add(-time.Hour).Unix()
+	if !c.relayForwardOK(ctx, "b-expired", past) {
+		t.Fatal("unseen bundle refused")
+	}
+	if !c.relayForwardOK(ctx, "b-expired", deadline) {
+		t.Fatal("resurrected record lost its remaining budget")
 	}
 }
 
@@ -215,13 +242,32 @@ func TestRelayForwardOKBoundsLoops(t *testing.T) {
 // origin never set one.
 func TestRelayForwardOKBoundsDeadlinelessBundles(t *testing.T) {
 	c := newCoreWithNative(t, "dtn-bound", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
-	if !c.relayForwardOK("b-nodeadline", 0) {
+	if !c.relayForwardOK(context.Background(), "b-nodeadline", 0) {
 		t.Fatal("deadline-less bundle refused")
 	}
-	c.mu.Lock()
-	e := c.relayLog["b-nodeadline"]
-	c.mu.Unlock()
-	if e.until <= time.Now().Unix() {
-		t.Fatalf("deadline-less bundle recorded no expiry: until=%d", e.until)
+	var until int64
+	if err := c.db.QueryRow(`SELECT until FROM dtn_relay_log WHERE bundle_id = 'b-nodeadline'`).Scan(&until); err != nil {
+		t.Fatalf("deadline-less bundle recorded nothing: %v", err)
+	}
+	if until <= time.Now().Unix() {
+		t.Fatalf("deadline-less bundle recorded no expiry: until=%d", until)
+	}
+}
+
+// A bundle parked once may legitimately arrive again over a different path —
+// and the no-echo rule must follow the LAST inbound peer, not the first on
+// record. The park upsert updates via.
+func TestParkBundleUpdatesVia(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreWithNative(t, "dtn-via", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
+	bnd, blob := mkTestBundle(t, c, "bnd-via-1", "t-via-1", "dtn-d")
+
+	c.parkBundle(ctx, "peer-a", "dtn-d", bnd, blob)
+	if via, ok := parkedRow(t, c, "dtn-d", "t-via-1"); !ok || via != "peer-a" {
+		t.Fatalf("first park via = %q ok=%v, want peer-a", via, ok)
+	}
+	c.parkBundle(ctx, "peer-b", "dtn-d", bnd, blob)
+	if via, ok := parkedRow(t, c, "dtn-d", "t-via-1"); !ok || via != "peer-b" {
+		t.Fatalf("re-park via = %q ok=%v, want peer-b", via, ok)
 	}
 }
