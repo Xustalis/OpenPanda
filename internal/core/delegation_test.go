@@ -41,6 +41,10 @@ func startChain(t *testing.T, ctx context.Context, rootAddr, midAddr, leafAddr s
 	// root → mid and mid → leaf, so the chain is linear.
 	must(root.DialPeer(ctx, midAddr))
 	must(mid.DialPeer(ctx, leafAddr))
+	waitPeer(t, root, "mac")
+	waitPeer(t, mid, "opi3b")
+	waitPeer(t, mid, "windows")
+	waitPeer(t, leaf, "mac")
 	time.Sleep(300 * time.Millisecond)
 	return root, mid, leaf
 }
@@ -141,9 +145,12 @@ func TestLoopGuard(t *testing.T) {
 	}
 
 	// A delegate whose chain already contains the worker is a routing loop.
+	// The chain must end at the sender (the M11 binding): the worker visited
+	// earlier in the chain and handed the task back to entry, which is now
+	// trying to send it to the worker again.
 	env, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-loop", "m1", bus.TaskDelegatePayload{
 		TaskID: tk.TaskID, Title: "loop", Intent: "x", Requires: []string{"sys:info"},
-		Chain: []string{"entry-loop", "worker-loop"},
+		Chain: []string{"worker-loop", "entry-loop"},
 	})
 	if err := entry.sendTo("worker-loop", env); err != nil {
 		t.Fatalf("send: %v", err)

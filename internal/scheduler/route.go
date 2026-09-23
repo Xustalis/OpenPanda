@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"math"
 	"strings"
 	"time"
 
@@ -76,6 +77,9 @@ func SameRuntimeIdentity(a, b string) bool {
 
 // EphemeralBase validates and strips the random suffix produced by
 // core.EphemeralNodeID. Stable names are returned unchanged with ok=false.
+// The strip is purely syntactic — a stable id that itself ends in "-"+8hex
+// would be mistaken for an ephemeral sibling of its own base, so the daemon
+// refuses such a node name at startup (cmd/panda main.go).
 func EphemeralBase(id string) (base string, ok bool) {
 	i := strings.LastIndex(id, "-")
 	if i <= 0 || len(id)-i-1 != 8 {
@@ -185,7 +189,14 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 	// on either the node id (the routing key) or its display name, since the
 	// entry model sees the latter in the device summary.
 	if preferred != "" {
-		if canLocal && (preferred == self || strings.EqualFold(preferred, self) || (haveSelf && (preferred == selfNode.Name || strings.EqualFold(preferred, selfNode.Name)))) {
+		// Match the participant id (self) AND the directory row id
+		// (selfNode.ID): the two differ when self is an ephemeral ask-session
+		// identity ("macbook-1f3a2b4c") while the row — and the node name the
+		// user actually names — carries the stable id ("macbook"). Naming the
+		// stable id must still land the task at home.
+		if canLocal && (preferred == self || strings.EqualFold(preferred, self) ||
+			(haveSelf && (preferred == selfNode.ID || strings.EqualFold(preferred, selfNode.ID) ||
+				preferred == selfNode.Name || strings.EqualFold(preferred, selfNode.Name)))) {
 			return Decision{Action: ActionLocal}
 		}
 		for _, n := range matching {
@@ -210,12 +221,180 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 	if target != "" {
 		return Decision{Action: ActionForward, Target: target}
 	}
+	// §9.3 graph routing: no capable direct peer — walk the link-state graph
+	// the nodes' neighbor advertisements build (G=(V,E)) and forward to the
+	// first hop of the shortest path that reaches a capable node. The forward
+	// is an ordinary delegation: the receiving node runs its own Route and
+	// picks the next hop, so the path is computed hop-by-hop from the same
+	// directory view — which is also what keeps it loop-safe (AppendChain
+	// refuses revisits along the way).
+	if haveSelf {
+		if hop := graphFirstHop(selfNode, employees, seen, required, req); hop != "" {
+			return Decision{Action: ActionForward, Target: hop}
+		}
+	}
 	if sub, _ := pickBestScored(subs, now, preferred); sub != "" {
 		return Decision{Action: ActionForward, Target: sub}
 	}
 	return Decision{
 		Action: ActionDecline,
 		Reason: declineReason(required, req),
+	}
+}
+
+// unknownLinkCost is the edge weight (ms) assigned to an advertised neighbor
+// that has no measured RTT (§4.1). It sits deliberately far above a healthy
+// LAN link's few milliseconds so a measured cheap path always beats an
+// unmeasured one, while staying finite so an unmeasured path still beats
+// no path at all.
+const unknownLinkCost int64 = 1000
+
+// linkCost reads the edge weight u advertises for its link to v: the RTT
+// sample u published in its link metrics, or the unknown-link default when
+// the measurement never arrived (a peer that predates §4.1, or a link too
+// young to have a pong back).
+func linkCost(u ledger.Node, v string) int64 {
+	if w, ok := u.LinkMetrics[v]; ok && w > 0 {
+		return w
+	}
+	return unknownLinkCost
+}
+
+// graphFirstHop runs Dijkstra over the link-state graph from self toward the
+// cheapest online node that can run the task (ability match + hardware fit),
+// returning the first hop of that minimum-cost path — the only hop this node
+// needs, since every relay re-runs Route on arrival. Edges are the nodes'
+// advertised Neighbors weighted by their advertised link metrics (§4.1):
+// hop count used to be the implicit metric, which preferred a two-hop path
+// over a three-hop one regardless of what each hop actually costs; with RTT
+// on the edges a long-but-fast path now wins, as the whitepaper's weighted
+// graph intends. Only online rows are traversed: a stale advertisement names
+// a dead link, and routing a task onto it parks it in an outbox whose flush
+// never comes.
+func graphFirstHop(self ledger.Node, employees []ledger.Node, seen map[string]bool, required []string, req ledger.ResourceProfile) string {
+	online := make(map[string]ledger.Node, len(employees))
+	for _, n := range employees {
+		if n.Status == "online" {
+			online[n.ID] = n
+		}
+	}
+	dist := map[string]int64{self.ID: 0}
+	first := make(map[string]string) // node -> first hop from self
+	visited := map[string]bool{}
+	for {
+		// Extract the unvisited node with the smallest tentative cost. The
+		// mesh's directory is a handful of rows, so a linear scan beats the
+		// heap bookkeeping.
+		var cur string
+		curDist := int64(math.MaxInt64)
+		for id, d := range dist {
+			if !visited[id] && d < curDist {
+				cur, curDist = id, d
+			}
+		}
+		if cur == "" {
+			return ""
+		}
+		visited[cur] = true
+		curNode := self
+		if cur != self.ID {
+			n, ok := online[cur]
+			if !ok {
+				continue
+			}
+			curNode = n
+			if (len(required) == 0 || n.Matches(required)) && n.Fits(req) {
+				return first[cur]
+			}
+		}
+		for _, nb := range curNode.Neighbors {
+			if seen[nb] || visited[nb] {
+				continue
+			}
+			if _, ok := online[nb]; !ok {
+				continue
+			}
+			nd := curDist + linkCost(curNode, nb)
+			if old, ok := dist[nb]; !ok || nd < old {
+				dist[nb] = nd
+				if cur == self.ID {
+					first[nb] = nb
+				} else {
+					first[nb] = first[cur]
+				}
+			}
+		}
+	}
+}
+
+// DTNNextHop picks the first hop of the cheapest advertised path toward a
+// specific destination for store-and-forward custody (§8.3). It differs from
+// graphFirstHop in three ways that all follow from the DTN setting: the
+// target is a fixed node rather than "anyone capable"; that node may be
+// offline — the normal case, since the bundle only needs to reach the online
+// neighbor closest to it and wait for the contact window — so dest is exempt
+// from the online rule while every intermediate still must be online to hold
+// custody; and exclude names nodes that must not be the FIRST hop (the peer
+// the bundle arrived from: forwarding straight back is an echo, not
+// progress). Excluding a node only at the first hop keeps legitimate paths
+// that pass through it deeper in the graph.
+func DTNNextHop(self ledger.Node, employees []ledger.Node, dest string, exclude map[string]bool) string {
+	if dest == "" || dest == self.ID {
+		return ""
+	}
+	byID := make(map[string]ledger.Node, len(employees))
+	for _, n := range employees {
+		byID[n.ID] = n
+	}
+	dist := map[string]int64{self.ID: 0}
+	first := make(map[string]string) // node -> first hop from self
+	visited := map[string]bool{}
+	for {
+		var cur string
+		curDist := int64(math.MaxInt64)
+		for id, d := range dist {
+			if !visited[id] && d < curDist {
+				cur, curDist = id, d
+			}
+		}
+		if cur == "" {
+			return ""
+		}
+		visited[cur] = true
+		if cur == dest {
+			return first[dest]
+		}
+		curNode := self
+		if cur != self.ID {
+			n, ok := byID[cur]
+			if !ok {
+				continue
+			}
+			curNode = n
+		}
+		for _, nb := range curNode.Neighbors {
+			if visited[nb] {
+				continue
+			}
+			if cur == self.ID && exclude[nb] {
+				continue // first hop back to the sender is an echo
+			}
+			if nb != dest {
+				n, ok := byID[nb]
+				if !ok || n.Status != "online" {
+					continue // intermediates must be able to hold custody
+				}
+			}
+			nd := curDist + linkCost(curNode, nb)
+			if old, ok := dist[nb]; !ok || nd < old {
+				dist[nb] = nd
+				if cur == self.ID {
+					first[nb] = nb
+				} else {
+					first[nb] = first[cur]
+				}
+			}
+		}
 	}
 }
 

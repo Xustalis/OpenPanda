@@ -434,6 +434,22 @@ export interface NodesAddResult {
   install_command: string
 }
 
+/** GET/POST /api/onboarding — the first-run wizard's persisted state. */
+export interface OnboardingState {
+  locale: string
+  terms_accepted: boolean
+  onboarded: boolean
+  approval_mode: 'always' | 'on-request' | 'never'
+  model_configured: boolean
+}
+
+export interface OnboardingPatch {
+  locale?: string
+  terms_accepted?: boolean
+  onboarded?: boolean
+  approval_mode?: 'always' | 'on-request' | 'never'
+}
+
 /** GET/PUT /api/settings/app — the four app policy groups (C1). */
 export interface AppSettings {
   injection_model: 'auto' | 'always' | 'never'
@@ -713,6 +729,16 @@ export const api = {
     return request('GET', '/api/self')
   },
 
+  // ---- First-run onboarding wizard ----
+
+  getOnboarding(): Promise<OnboardingState> {
+    return request('GET', '/api/onboarding')
+  },
+
+  postOnboarding(patch: OnboardingPatch): Promise<OnboardingState> {
+    return request('POST', '/api/onboarding', patch)
+  },
+
   // ---- App policy settings (injection / routing / memory caps / approval) ----
 
   getAppSettings(): Promise<AppSettings> {
@@ -787,7 +813,7 @@ export const api = {
     return request('GET', '/api/reminders')
   },
 
-  createReminder(body: { message: string; after_minutes?: number; due_at?: string }): Promise<Reminder> {
+  createReminder(body: { message: string; after_minutes?: number; due_at?: string; repeat_seconds?: number }): Promise<Reminder> {
     return request('POST', '/api/reminders', body)
   },
 
@@ -924,6 +950,220 @@ export const api = {
   discoverSkill(query: string): Promise<{ name: string; description: string; status: string; is_new: boolean }> {
     return request('POST', '/api/skills/discover', { query })
   },
+
+  // ---- Multi-model registry (TUI /model parity) ----
+
+  models(): Promise<ModelsResponse> {
+    return request('GET', '/api/models')
+  },
+
+  addModel(req: AddModelRequest): Promise<ModelEntry> {
+    return request('POST', '/api/models', req)
+  },
+
+  useModel(alias: string): Promise<ModelEntry> {
+    return request('POST', `/api/models/${encodeURIComponent(alias)}/use`)
+  },
+
+  removeModel(alias: string): Promise<{ removed: string }> {
+    return request('DELETE', `/api/models/${encodeURIComponent(alias)}`)
+  },
+
+  fetchModels(req: ModelRefRequest): Promise<{ ok: boolean; alias?: string; models?: string[]; error?: string }> {
+    return request('POST', '/api/models/fetch', req)
+  },
+
+  testModelRef(req: ModelRefRequest): Promise<{ ok: boolean; alias?: string; reply?: string; error?: string }> {
+    return request('POST', '/api/models/test', req)
+  },
+
+  // ---- Plans (TUI /plans parity) ----
+
+  plans(): Promise<PlanSummary[]> {
+    return request('GET', '/api/plans')
+  },
+
+  plan(id: string): Promise<PlanDetail> {
+    return request('GET', `/api/plans/${encodeURIComponent(id)}`)
+  },
+
+  // ---- Diagnostics & parity extras ----
+
+  doctor(): Promise<DoctorReport> {
+    return request('GET', '/api/doctor')
+  },
+
+  contextInfo(): Promise<ContextInfo> {
+    return request('GET', '/api/context')
+  },
+
+  cost(): Promise<CostReport> {
+    return request('GET', '/api/cost')
+  },
+
+  fsRead(path: string): Promise<FsReadResult> {
+    return request('GET', `/api/fs/read?path=${encodeURIComponent(path)}`)
+  },
+
+  fsFiles(path?: string): Promise<FsFilesResult> {
+    const q = path ? `?path=${encodeURIComponent(path)}` : ''
+    return request('GET', `/api/fs/files${q}`)
+  },
+}
+
+// ---- Multi-model registry wire types ----
+
+export interface ModelEntry {
+  alias: string
+  provider?: string
+  provider_label?: string
+  api_type: string
+  base_url: string
+  model: string
+  max_tokens?: number
+  context_window?: number
+  no_auth?: boolean
+  active: boolean
+  key_set: boolean
+  key_hint?: string
+}
+
+export interface ProviderInfo {
+  id: string
+  label: string
+  api_type: string
+  base_url: string
+  default_model: string
+  context_window?: number
+  no_auth: boolean
+  key_saved: boolean
+  region: string
+}
+
+export interface ModelsResponse {
+  active: ModelEntry
+  models: ModelEntry[]
+  providers: ProviderInfo[]
+}
+
+export interface AddModelRequest {
+  provider: string
+  model?: string
+  api_key?: string
+  alias?: string
+  api_type?: string
+  base_url?: string
+  max_tokens?: number
+}
+
+export interface ModelRefRequest {
+  alias?: string
+  provider?: string
+  api_key?: string
+  model?: string
+  api_type?: string
+  base_url?: string
+}
+
+// ---- Plan wire types ----
+
+export interface PlanSummary {
+  plan_id: string
+  stages: number
+  done: number
+  failed: number
+  running: number
+  review: number
+  goal?: string
+  stage_ids?: string[]
+  created_at: number
+  updated_at: number
+}
+
+export interface PlanArtifact {
+  stage?: string
+  hash: string
+  source?: string
+}
+
+export interface PlanStage {
+  stage: string
+  task_id: string
+  title?: string
+  state: string
+  owner?: string
+  needs?: string[]
+  inputs?: PlanArtifact[]
+  output_artifact?: string
+  created_at: number
+  updated_at: number
+  priority?: string
+}
+
+export interface PlanDetail {
+  plan_id: string
+  stages: PlanStage[]
+}
+
+// ---- Diagnostics wire types ----
+
+export interface DoctorCheck {
+  key: string
+  ok: boolean
+  pairs?: string[]
+}
+
+export interface DoctorReport {
+  checks: DoctorCheck[]
+  problems: number
+}
+
+export interface ContextInfo {
+  work_dir?: string
+  node_name?: string
+  model?: ModelEntry
+  memory_files?: number
+  project?: string
+  project_work_dir?: string
+  has_card?: boolean
+}
+
+export interface CostExecutor {
+  executor: string
+  calls: number
+  tokens: number
+  cost_usd: number
+  successes: number
+}
+
+export interface CostReport {
+  total_tokens: number
+  total_cost_usd: number
+  calls: number
+  success_rate: number
+  by_executor: CostExecutor[]
+  since: number
+  unavailable?: boolean
+}
+
+export interface FsFileEntry {
+  name: string
+  path: string
+  dir: boolean
+  size?: number
+  mod_ts?: number
+}
+
+export interface FsFilesResult {
+  current: string
+  entries: FsFileEntry[]
+}
+
+export interface FsReadResult {
+  path: string
+  content: string
+  size: number
+  truncated: boolean
 }
 
 export interface SessionDiff {
@@ -1007,10 +1247,11 @@ export interface MCPSettings {
 export interface Reminder {
   id: number
   message: string
-  due_at: number // Unix seconds
+  due_at: number // Unix seconds — for recurring rows this is the NEXT occurrence
   created_at: number
-  fired_at: number // 0 = pending
+  fired_at: number // 0 = never fired; for recurring rows it is the LAST fire time
   source: string // "tool" | "cli" | "web"
+  repeat_seconds: number // >0 = recurring; the row stays pending between fires
 }
 
 export interface MemoryFiles {

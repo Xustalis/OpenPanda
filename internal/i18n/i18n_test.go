@@ -163,3 +163,25 @@ func TestPromptMessages(t *testing.T) {
 		t.Errorf("cpuEn = %q, want 'cpu 8 cores'", cpuEn)
 	}
 }
+
+// TestKeyParity guards against translations drifting out of sync: every key
+// defined for English must exist in every other locale. Missing keys fall back
+// to English at runtime, which silently breaks the "fully localized" promise —
+// this test makes the drift loud.
+func TestKeyParity(t *testing.T) {
+	en := messages[English]
+	for _, loc := range Locales {
+		if loc == English {
+			continue
+		}
+		var missing []string
+		for k := range en {
+			if _, ok := messages[loc][k]; !ok {
+				missing = append(missing, k)
+			}
+		}
+		if len(missing) > 0 {
+			t.Errorf("locale %s is missing %d keys, e.g. %v", loc, len(missing), missing[:min(10, len(missing))])
+		}
+	}
+}

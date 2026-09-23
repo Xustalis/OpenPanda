@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
@@ -135,13 +136,34 @@ func (m tuiModel) buildModelItems() []SelectionItem {
 // buildProviderItems returns the core 4 providers for onboarding/adding. Only
 // Ollama carries a gloss — the other three are the vendors' own names — and it
 // is localized, like every other label in this list.
+// buildProviderItems renders the wizard's provider picker from the built-in
+// catalogue (internal/providers), so the TUI and `/model add` can never
+// diverge: every registered vendor — OpenAI, Anthropic, DeepSeek, Qwen, Kimi,
+// 火山引擎, relays (custom) — appears with its endpoint and auth requirement.
 func buildProviderItems(loc i18n.Locale) []SelectionItem {
-	return []SelectionItem{
-		{ID: "deepseek", Title: "DeepSeek"},
-		{ID: "openai", Title: "OpenAI"},
-		{ID: "anthropic", Title: "Anthropic"},
-		{ID: "ollama", Title: i18n.T(loc, "tui.model.ollamaLocal")},
+	var items []SelectionItem
+	for i, p := range providers.All() {
+		snippet := p.BaseURL
+		if snippet == "" {
+			snippet = i18n.T(loc, "tui.wizard.customURLHint")
+		}
+		badge := ""
+		if p.NoAuth {
+			badge = i18n.T(loc, "tui.wizard.noKeyBadge")
+		} else if p.APIType == config.APITypeAnthropic {
+			badge = "anthropic"
+		} else {
+			badge = "openai"
+		}
+		items = append(items, SelectionItem{
+			Index:   i + 1,
+			ID:      p.ID,
+			Title:   p.Label,
+			Snippet: snippet,
+			Badge:   badge,
+		})
 	}
+	return items
 }
 
 // openSessionsList switches to the interactive sessions view.
@@ -183,7 +205,8 @@ func (m tuiModel) openResumeList() (tuiModel, tea.Cmd) {
 	return m, nil
 }
 
-// openModelPanel opens the model management box or the onboarding guide.
+// openModelPanel opens the model register or, with nothing configured, the
+// setup guide that puts the first entry in.
 func (m tuiModel) openModelPanel() (tuiModel, tea.Cmd) {
 	hasModels := false
 	if m.r != nil && m.r.cfg != nil {
@@ -198,19 +221,26 @@ func (m tuiModel) openModelPanel() (tuiModel, tea.Cmd) {
 
 	items := m.buildModelItems()
 	sl := NewSelectionList(i18n.T(m.loc, "tui.model.panelTitle"), items)
-	sl.Boxed = true
-	sl.ActionHints = i18n.T(m.loc, "tui.model.actionHints")
-	sl.FooterHints = i18n.T(m.loc, "tui.model.footerHints")
+	// Reopens (after add/edit/delete) keep the highlight where it was instead
+	// of snapping back to the first row.
+	if prev := m.selectionList.Cursor; len(items) > 0 {
+		sl.Cursor = min(prev, len(items)-1)
+		if rows := m.panelListRows(); sl.Cursor >= sl.Top+rows {
+			sl.Top = sl.Cursor - rows + 1
+		}
+	}
 
 	m.mode = modeModelPanel
 	m.selectionList = sl
 	return m, nil
 }
 
-// startModelWizard starts the step-by-step model setup guide.
+// startModelWizard opens the provider picker; choosing one lands on the
+// single-screen form (buildModelForm).
 func (m tuiModel) startModelWizard() (tuiModel, tea.Cmd) {
 	items := buildProviderItems(m.loc)
 	sl := NewSelectionList(i18n.T(m.loc, "tui.wizard.noModelPrompt"), items)
+	sl.Boxed = true
 	sl.FooterHints = i18n.T(m.loc, "tui.wizard.confirmBack")
 
 	m.mode = modeModelWizard
@@ -218,29 +248,40 @@ func (m tuiModel) startModelWizard() (tuiModel, tea.Cmd) {
 	m.wizardProvider = ""
 	m.wizardKey = ""
 	m.wizardModel = ""
-	m.wizardInput = ""
+	m.wizardBaseURL = ""
+	m.wizardAPIType = ""
+	m.wizardThinking = ""
+	m.wizardContext = ""
+	m.wizardAlias = ""
+	m.wizardEditAlias = ""
+	m.form = nil
+	m.formFocus = 0
+	m.formErr = ""
+	m.formTesting = false
+	m.formTestErr = ""
+	m.formFetching = false
+	m.formFetchErr = ""
+	m.formPicking = false
 	m.selectionList = sl
 	return m, nil
 }
 
 // listPageRows is the page size for the plain full-screen lists: the same
-// viewport budget MoveDown and renderPlain agree on.
+// viewport budget renderPlain draws, via the list's own VisibleRows.
 func (m tuiModel) listPageRows() int {
-	return max(3, m.height-6)
+	return m.selectionList.VisibleRows(m.height)
 }
 
 // selectionPageRows is the viewport budget of whichever selection list is on
 // screen, so wheel paging (MovePage) and row stepping (MoveDown) keep the
-// highlight inside the rendered window in every list mode.
+// highlight inside the rendered window in every list mode. It asks the list
+// itself — a boxed picker shows far fewer rows than a plain full-screen one,
+// and the two must never disagree or the cursor scrolls off the window.
 func (m tuiModel) selectionPageRows() int {
-	switch m.mode {
-	case modeModelPanel:
-		return 8
-	case modeModelWizard:
-		return 4
-	default:
-		return m.listPageRows()
+	if m.mode == modeModelPanel {
+		return m.panelListRows() // the panel has its own row budget, not Render's
 	}
+	return m.selectionList.VisibleRows(m.height)
 }
 
 // handleListKey routes keys in modeList (sessions, projects, resume).
@@ -267,7 +308,7 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectionList.MoveUp()
 			return m, nil
 		case "j", "J":
-			m.selectionList.MoveDown(max(3, m.height-6))
+			m.selectionList.MoveDown(m.listPageRows())
 			return m, nil
 		case "q", "Q":
 			m.mode = modeIdle
@@ -360,18 +401,19 @@ func (m tuiModel) handleModelPanelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	rows := m.panelListRows()
 	switch msg.Type {
 	case tea.KeyUp, tea.KeyCtrlP:
 		m.selectionList.MoveUp()
 		return m, nil
 	case tea.KeyDown, tea.KeyCtrlN:
-		m.selectionList.MoveDown(8)
+		m.selectionList.MoveDown(rows)
 		return m, nil
 	case tea.KeyPgUp:
-		m.selectionList.MovePage(-8, 8)
+		m.selectionList.MovePage(-rows, rows)
 		return m, nil
 	case tea.KeyPgDown:
-		m.selectionList.MovePage(8, 8)
+		m.selectionList.MovePage(rows, rows)
 		return m, nil
 	case tea.KeyEsc:
 		m.mode = modeIdle
@@ -382,7 +424,7 @@ func (m tuiModel) handleModelPanelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectionList.MoveUp()
 			return m, nil
 		case "j", "J":
-			m.selectionList.MoveDown(8)
+			m.selectionList.MoveDown(rows)
 			return m, nil
 		case "q", "Q":
 			m.mode = modeIdle
@@ -393,6 +435,8 @@ func (m tuiModel) handleModelPanelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.deleteSelectedModel()
 		case "e", "E":
 			return m.editSelectedModel()
+		case "t", "T":
+			return m.testSelectedModel()
 		}
 	case tea.KeyEnter:
 		return m.switchSelectedModel()
@@ -475,7 +519,7 @@ func (m tuiModel) executeDeleteModel(alias string) (tuiModel, tea.Cmd) {
 	return m.openModelPanel()
 }
 
-// editSelectedModel starts editing the chosen model.
+// editSelectedModel opens the form prefilled with the highlighted entry.
 func (m tuiModel) editSelectedModel() (tuiModel, tea.Cmd) {
 	item, ok := m.selectionList.Selected()
 	if !ok || m.r == nil {
@@ -504,41 +548,97 @@ func (m tuiModel) editSelectedModel() (tuiModel, tea.Cmd) {
 
 	prov := effectiveProvider(curMC)
 	if prov == "-" {
-		prov = "openai"
+		if curMC.BaseURL != "" {
+			prov = "custom"
+		} else {
+			prov = "openai"
+		}
 	}
 	m.mode = modeModelWizard
 	m.wizardProvider = prov
 	m.wizardKey = curMC.APIKey
 	m.wizardModel = curMC.Model
-	m.wizardInput = curMC.APIKey
-	if p, ok := providers.Lookup(prov); ok && p.NoAuth {
-		m.wizardStep = wizardStepModelName
-		m.wizardInput = curMC.Model
+	m.wizardBaseURL = curMC.BaseURL
+	m.wizardAPIType = curMC.NormalizedAPIType()
+	m.wizardThinking = curMC.Thinking
+	if curMC.ContextWindow > 0 {
+		m.wizardContext = strconv.Itoa(curMC.ContextWindow)
 	} else {
-		m.wizardStep = wizardStepAPIKey
+		m.wizardContext = ""
 	}
+	m.wizardAlias = curMC.Alias()
+	m.wizardEditAlias = curMC.Alias()
+	m.wizardStep = wizardStepForm
+	m.buildModelForm()
 	return m, nil
 }
 
-// handleModelWizardKey handles keystrokes in the onboarding/add guide.
+// wizardTestCmd runs the connectivity probe off the UI goroutine: one-word
+// completion against the assembled config. The result arrives as
+// wizardTestMsg.
+func (m tuiModel) wizardTestCmd() tea.Cmd {
+	mc := m.wizardConfig()
+	return func() tea.Msg {
+		return wizardTestMsg{err: probeModel(mc)}
+	}
+}
+
+// wizardConfig assembles the ModelConfig the current wizard state describes —
+// the single place every wizard step's value becomes a config field.
+func (m tuiModel) wizardConfig() config.ModelConfig {
+	var mc config.ModelConfig
+	if m.wizardProvider == "custom" {
+		mc = config.ModelConfig{
+			Provider: "custom",
+			APIType:  m.wizardAPIType,
+			BaseURL:  m.wizardBaseURL,
+			APIKey:   m.wizardKey,
+			Model:    m.wizardModel,
+			NoAuth:   m.wizardKey == "",
+		}
+		if mc.APIType == "" {
+			mc.APIType = config.APITypeOpenAI
+		}
+	} else {
+		mc, _ = providers.ModelConfig(m.wizardProvider, m.wizardModel, m.wizardKey)
+		// The base URL field is editable for builtins too: a relay standing
+		// in for the vendor's endpoint overrides the catalogue URL here.
+		if m.wizardBaseURL != "" {
+			mc.BaseURL = m.wizardBaseURL
+		}
+	}
+	if m.wizardThinking != "" && m.wizardThinking != "auto" {
+		mc.Thinking = m.wizardThinking
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(m.wizardContext)); err == nil && n > 0 {
+		mc.ContextWindow = n
+	}
+	return mc
+}
+
+// handleModelWizardKey routes keys in the add/edit flow: the provider picker
+// on the first step, the single-screen form on the second.
 func (m tuiModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.wizardStep {
+	case wizardStepForm:
+		return m.handleFormKey(msg)
 	case wizardStepProvider:
+		if msg.Type == tea.KeyEsc {
+			return m.wizardBack()
+		}
+		rows := m.selectionPageRows()
 		switch msg.Type {
 		case tea.KeyUp, tea.KeyCtrlP:
 			m.selectionList.MoveUp()
 			return m, nil
 		case tea.KeyDown, tea.KeyCtrlN:
-			m.selectionList.MoveDown(4)
+			m.selectionList.MoveDown(rows)
 			return m, nil
 		case tea.KeyPgUp:
-			m.selectionList.MovePage(-4, 4)
+			m.selectionList.MovePage(-rows, rows)
 			return m, nil
 		case tea.KeyPgDown:
-			m.selectionList.MovePage(4, 4)
-			return m, nil
-		case tea.KeyEsc:
-			m.mode = modeIdle
+			m.selectionList.MovePage(rows, rows)
 			return m, nil
 		case tea.KeyRunes:
 			switch string(msg.Runes) {
@@ -546,79 +646,21 @@ func (m tuiModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.selectionList.MoveUp()
 				return m, nil
 			case "j", "J":
-				m.selectionList.MoveDown(4)
+				m.selectionList.MoveDown(rows)
 				return m, nil
 			case "q", "Q":
-				m.mode = modeIdle
-				return m, nil
+				return m.wizardBack()
 			}
+			return m, nil
 		case tea.KeyEnter:
 			item, ok := m.selectionList.Selected()
 			if !ok {
-				m.mode = modeIdle
 				return m, nil
 			}
 			m.wizardProvider = item.ID
-			if p, ok := providers.Lookup(item.ID); ok && p.NoAuth {
-				m.wizardStep = wizardStepModelName
-				m.wizardInput = p.DefaultModel
-			} else {
-				m.wizardStep = wizardStepAPIKey
-				m.wizardInput = ""
-			}
-			return m, nil
-		}
-
-	case wizardStepAPIKey:
-		switch msg.Type {
-		case tea.KeyEsc:
-			return m.startModelWizard()
-		case tea.KeyEnter:
-			m.wizardKey = strings.TrimSpace(m.wizardInput)
-			m.wizardStep = wizardStepModelName
-			defModel := ""
-			if p, ok := providers.Lookup(m.wizardProvider); ok {
-				defModel = p.DefaultModel
-			}
-			m.wizardInput = defModel
-			return m, nil
-		case tea.KeyBackspace, tea.KeyCtrlH:
-			runes := []rune(m.wizardInput)
-			if len(runes) > 0 {
-				m.wizardInput = string(runes[:len(runes)-1])
-			}
-			return m, nil
-		case tea.KeyRunes:
-			m.wizardInput += string(msg.Runes)
-			return m, nil
-		}
-
-	case wizardStepModelName:
-		switch msg.Type {
-		case tea.KeyEsc:
-			if p, ok := providers.Lookup(m.wizardProvider); ok && p.NoAuth {
-				return m.startModelWizard()
-			}
-			m.wizardStep = wizardStepAPIKey
-			m.wizardInput = m.wizardKey
-			return m, nil
-		case tea.KeyEnter:
-			modelName := strings.TrimSpace(m.wizardInput)
-			if modelName == "" {
-				if p, ok := providers.Lookup(m.wizardProvider); ok {
-					modelName = p.DefaultModel
-				}
-			}
-			m.wizardModel = modelName
-			return m.finalizeWizard()
-		case tea.KeyBackspace, tea.KeyCtrlH:
-			runes := []rune(m.wizardInput)
-			if len(runes) > 0 {
-				m.wizardInput = string(runes[:len(runes)-1])
-			}
-			return m, nil
-		case tea.KeyRunes:
-			m.wizardInput += string(msg.Runes)
+			m.wizardEditAlias = ""
+			m.buildModelForm()
+			m.wizardStep = wizardStepForm
 			return m, nil
 		}
 	}
@@ -626,29 +668,68 @@ func (m tuiModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // finalizeWizard completes adding/updating model, sets as active, and returns to chat.
+// finalizeWizard persists the assembled model, switches the active model to
+// it, and returns to chat. When the wizard ran an edit (wizardEditAlias set),
+// the edited entry is replaced in place — the registry never grows a stale
+// duplicate under the old alias.
 func (m tuiModel) finalizeWizard() (tuiModel, tea.Cmd) {
 	if m.r == nil || m.r.cfg == nil {
 		m.mode = modeIdle
 		return m, nil
 	}
 
-	mc, ok := providers.ModelConfig(m.wizardProvider, m.wizardModel, m.wizardKey)
-	if !ok {
+	mc := m.wizardConfig()
+	if mc.Provider == "" {
 		note := block{kind: blockError, body: i18n.Tf(m.loc, "tui.wizard.unknownProvider", "provider", m.wizardProvider)}
 		m.mode = modeIdle
 		return m, m.printBlock(note)
 	}
 
-	alias := m.wizardProvider
-	if m.wizardModel != "" && m.wizardModel != alias {
+	alias := mc.Provider
+	switch {
+	case m.wizardEditAlias != "" && m.wizardAlias == m.wizardEditAlias:
+		alias = m.wizardEditAlias // unchanged name: in-place edit
+	case m.wizardAlias != "":
+		alias = m.wizardAlias // the form's alias field wins
+	case m.wizardModel != "" && m.wizardModel != alias:
 		alias = m.wizardModel
+	}
+	// A collision on a different config needs a distinct alias rather than a
+	// silent overwrite: two providers can legitimately serve the same model
+	// name (e.g. a relay and OpenAI both offering "gpt-4o"), so keep
+	// deriving a fresh alias until it no longer clashes. An edit that renamed
+	// the entry dedupes too — only the untouched original alias replaces in
+	// place.
+	if m.wizardEditAlias == "" || alias != m.wizardEditAlias {
+		collides := func(a string) bool {
+			for _, existing := range m.r.cfg.Models {
+				if existing.Alias() == a && existing.Alias() != m.wizardEditAlias &&
+					(existing.Model != mc.Model || existing.BaseURL != mc.BaseURL || existing.Provider != mc.Provider) {
+					return true
+				}
+			}
+			return false
+		}
+		for i := 2; collides(alias); i++ {
+			alias = fmt.Sprintf("%s-%d", mc.Model, i)
+		}
 	}
 	mc.Name = alias
 
-	// Add to cfg.Models
+	// Upsert into cfg.Models. When editing, drop the stale alias first so a
+	// renamed endpoint cannot leave two rows behind.
+	if m.wizardEditAlias != "" && m.wizardEditAlias != alias {
+		kept := m.r.cfg.Models[:0]
+		for _, e := range m.r.cfg.Models {
+			if e.Alias() != m.wizardEditAlias {
+				kept = append(kept, e)
+			}
+		}
+		m.r.cfg.Models = kept
+	}
 	replaced := false
 	for i := range m.r.cfg.Models {
-		if m.r.cfg.Models[i].Alias() == alias || m.r.cfg.Models[i].Model == mc.Model {
+		if m.r.cfg.Models[i].Alias() == alias {
 			m.r.cfg.Models[i] = mc
 			replaced = true
 			break
@@ -699,7 +780,7 @@ func (m tuiModel) startOnboarding() (tuiModel, tea.Cmd) {
 	title := "Welcome to OpenPanda · Please select your language / 请选择语言:"
 	sl := NewSelectionList(title, buildLanguageItems())
 	sl.Boxed = true
-	sl.FooterHints = "↑↓ / KJ Move · Enter Confirm · Esc Exit"
+	sl.FooterHints = i18n.T(m.loc, "tui.onboard.hintsExit")
 	sl.Cursor = 0 // Default English
 	m.selectionList = sl
 	return m, nil
@@ -744,84 +825,44 @@ func buildLanguageItems() []SelectionItem {
 
 // buildApprovalModeItems returns execution approval safety options.
 func buildApprovalModeItems(loc i18n.Locale) []SelectionItem {
-	if loc == i18n.ChineseSimp {
-		return []SelectionItem{
-			{
-				Index:   1,
-				ID:      "prompt",
-				Title:   "交互确认模式 (推荐)",
-				Snippet: "对文件修改与系统命令提示确认，安全平衡",
-				Badge:   "[推荐]",
-			},
-			{
-				Index:   2,
-				ID:      "auto",
-				Title:   "只读自动放行模式",
-				Snippet: "只读检索自动执行，写操作与高危命令需确认",
-			},
-			{
-				Index:   3,
-				ID:      "strict",
-				Title:   "严格审查模式",
-				Snippet: "所有工具调用与执行操作均需手动逐项确认",
-			},
-		}
-	}
 	return []SelectionItem{
 		{
 			Index:   1,
 			ID:      "prompt",
-			Title:   "Interactive Approval (Recommended)",
-			Snippet: "Prompts for confirmation on file edits and shell commands",
-			Badge:   "[Recommended]",
+			Title:   i18n.T(loc, "tui.onboard.approve.prompt.title"),
+			Snippet: i18n.T(loc, "tui.onboard.approve.prompt.snippet"),
+			Badge:   i18n.T(loc, "tui.onboard.approve.prompt.badge"),
 		},
 		{
 			Index:   2,
 			ID:      "auto",
-			Title:   "Auto-Approve Read-Only",
-			Snippet: "Read-only inspection runs automatically; writes prompt",
+			Title:   i18n.T(loc, "tui.onboard.approve.auto.title"),
+			Snippet: i18n.T(loc, "tui.onboard.approve.auto.snippet"),
 		},
 		{
 			Index:   3,
 			ID:      "strict",
-			Title:   "Strict Approval",
-			Snippet: "Prompt and review every single tool call and command",
+			Title:   i18n.T(loc, "tui.onboard.approve.strict.title"),
+			Snippet: i18n.T(loc, "tui.onboard.approve.strict.snippet"),
 		},
 	}
 }
 
 // buildModelChoiceItems returns the model configuration choice options.
 func buildModelChoiceItems(loc i18n.Locale) []SelectionItem {
-	if loc == i18n.ChineseSimp {
-		return []SelectionItem{
-			{
-				Index:   1,
-				ID:      "now",
-				Title:   "立即配置大模型",
-				Snippet: "设置 DeepSeek / OpenAI / Anthropic / Ollama 等提供商",
-				Badge:   "[快速开始]",
-			},
-			{
-				Index:   2,
-				ID:      "skip",
-				Title:   "稍后再配置 (跳过)",
-				Snippet: "先进入主界面，随时可通过输入 /model 进行配置",
-			},
-		}
-	}
 	return []SelectionItem{
 		{
 			Index:   1,
 			ID:      "now",
-			Title:   "Configure Model Now",
-			Snippet: "Set up DeepSeek, OpenAI, Anthropic, Ollama, etc.",
-			Badge:   "[Quickstart]",
+			Title:   i18n.T(loc, "tui.onboard.modelNow.title"),
+			Snippet: i18n.T(loc, "tui.onboard.modelNow.snippet"),
+			Badge:   i18n.T(loc, "tui.onboard.modelNow.badge"),
 		},
 		{
 			Index:   2,
 			ID:      "skip",
-			Title:   "Skip for Now",
-			Snippet: "Proceed to main screen; configure anytime via /model",
+			Title:   i18n.T(loc, "tui.onboard.modelSkip.title"),
+			Snippet: i18n.T(loc, "tui.onboard.modelSkip.snippet"),
 		},
 	}
 }
@@ -832,15 +873,9 @@ func (m tuiModel) advanceFromTerms() (tuiModel, tea.Cmd) {
 		m.r.cfg.UI.TermsAccepted = true
 	}
 	m.onboardingStep = onboardingStepApproval
-	title := "Choose Execution Safety & Approval Mode:"
-	hints := "↑↓ / KJ Move · Enter Confirm · Esc Back"
-	if m.loc == i18n.ChineseSimp {
-		title = "请选择智能体执行安全策略 (Approval Mode):"
-		hints = "↑↓ 选择 · Enter 确认 · Esc 返回"
-	}
-	sl := NewSelectionList(title, buildApprovalModeItems(m.loc))
+	sl := NewSelectionList(i18n.T(m.loc, "tui.onboard.approvalTitle"), buildApprovalModeItems(m.loc))
 	sl.Boxed = true
-	sl.FooterHints = hints
+	sl.FooterHints = i18n.T(m.loc, "tui.onboard.hintsBack")
 	m.selectionList = sl
 	return m, nil
 }
@@ -910,7 +945,7 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.selectionList.MoveUp()
 				return m, nil
 			case "j", "J":
-				m.selectionList.MoveDown(max(3, m.height-6))
+				m.selectionList.MoveDown(m.listPageRows())
 				return m, nil
 			case "q", "Q":
 				m.quitting = true
@@ -995,7 +1030,7 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.selectionList.MoveUp()
 				return m, nil
 			case "j", "J":
-				m.selectionList.MoveDown(max(3, m.height-6))
+				m.selectionList.MoveDown(m.listPageRows())
 				return m, nil
 			}
 		case tea.KeyEnter:
@@ -1007,15 +1042,9 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.r.cfg.Approval.Mode = item.ID
 			}
 			m.onboardingStep = onboardingStepModelChoice
-			title := "Configure Large Language Model (LLM Setup):"
-			hints := "↑↓ / KJ Move · Enter Confirm · Esc Back"
-			if m.loc == i18n.ChineseSimp {
-				title = "配置大语言模型 (LLM Provider Setup):"
-				hints = "↑↓ 选择 · Enter 确认 · Esc 返回"
-			}
-			sl := NewSelectionList(title, buildModelChoiceItems(m.loc))
+			sl := NewSelectionList(i18n.T(m.loc, "tui.onboard.modelChoiceTitle"), buildModelChoiceItems(m.loc))
 			sl.Boxed = true
-			sl.FooterHints = hints
+			sl.FooterHints = i18n.T(m.loc, "tui.onboard.hintsBack")
 			m.selectionList = sl
 			return m, nil
 		}
@@ -1042,7 +1071,7 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.selectionList.MoveUp()
 				return m, nil
 			case "j", "J":
-				m.selectionList.MoveDown(max(3, m.height-6))
+				m.selectionList.MoveDown(m.listPageRows())
 				return m, nil
 			}
 		case tea.KeyEnter:
@@ -1051,22 +1080,14 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if item.ID == "now" {
+				// Reuse the wizard's reset path, then swap back into the
+				// onboarding step that hosts it.
+				next, _ := m.startModelWizard()
+				m = next
+				m.mode = modeOnboarding
 				m.onboardingStep = onboardingStepModelWizard
-				m.wizardStep = wizardStepProvider
-				m.wizardProvider = ""
-				m.wizardKey = ""
-				m.wizardModel = ""
-				m.wizardInput = ""
-				title := "Select Model Provider:"
-				hints := "↑↓ / KJ Move · Enter Confirm · Esc Back"
-				if m.loc == i18n.ChineseSimp {
-					title = "选择模型提供商开始添加："
-					hints = "↑↓ 选择 · Enter 确认 · Esc 返回"
-				}
-				sl := NewSelectionList(title, buildProviderItems(m.loc))
-				sl.Boxed = true
-				sl.FooterHints = hints
-				m.selectionList = sl
+				m.selectionList.Title = i18n.T(m.loc, "tui.onboard.providerTitle")
+				m.selectionList.FooterHints = i18n.T(m.loc, "tui.onboard.hintsBack")
 				return m, nil
 			}
 			return m.finalizeOnboarding()
@@ -1082,15 +1103,9 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m tuiModel) handleOnboardingModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.wizardStep == wizardStepProvider && (msg.Type == tea.KeyEsc || (msg.Type == tea.KeyRunes && (string(msg.Runes) == "q" || string(msg.Runes) == "Q"))) {
 		m.onboardingStep = onboardingStepModelChoice
-		title := "Configure Large Language Model (LLM Setup):"
-		hints := "↑↓ / KJ Move · Enter Confirm · Esc Back"
-		if m.loc == i18n.ChineseSimp {
-			title = "配置大语言模型 (LLM Provider Setup):"
-			hints = "↑↓ 选择 · Enter 确认 · Esc 返回"
-		}
-		sl := NewSelectionList(title, buildModelChoiceItems(m.loc))
+		sl := NewSelectionList(i18n.T(m.loc, "tui.onboard.modelChoiceTitle"), buildModelChoiceItems(m.loc))
 		sl.Boxed = true
-		sl.FooterHints = hints
+		sl.FooterHints = i18n.T(m.loc, "tui.onboard.hintsBack")
 		m.selectionList = sl
 		return m, nil
 	}

@@ -30,9 +30,20 @@ import (
 //   - hard links are rejected outright — their target is an inode, so a hard
 //     link to a file outside dst hands over write access to it;
 //   - devices, FIFOs and sockets are rejected: an artifact is content;
-//   - the decompressed total is capped at MaxBytes (a gzip bomb is a few KiB
-//     that expands to terabytes).
+//   - the decompressed total is bounded: by the configured limit when one is
+//     set, else by the destination filesystem's free space (a gzip bomb is a
+//     few KiB that expands to terabytes, and "unlimited" must still stop
+//     before the disk does).
 func Unpack(r io.Reader, dst string) (Manifest, error) {
+	return unpack(r, dst, 0, 0)
+}
+
+// unpack is Unpack with an explicit byte limit and free-space watermark: a
+// positive limit rejects archives whose compressed or decompressed size
+// exceeds it; 0 instead refuses entries that would push the destination's
+// free space below minFree — the honest bound when no fixed cap is
+// configured.
+func unpack(r io.Reader, dst string, limit, minFree int64) (Manifest, error) {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return Manifest{}, fmt.Errorf("artifact: create dst: %w", err)
 	}
@@ -48,9 +59,14 @@ func Unpack(r io.Reader, dst string) (Manifest, error) {
 
 	h := sha256.New()
 	counter := &countingWriter{w: io.Discard}
-	// Cap the compressed side too, so a stream that never ends cannot be read
-	// forever; the decompressed cap below is the one a bomb hits first.
-	src := io.TeeReader(io.LimitReader(r, MaxBytes+1), io.MultiWriter(h, counter))
+	// Cap the compressed side when a limit is configured, so a stream that
+	// never ends cannot be read forever; the decompressed bound below is the
+	// one a bomb hits first either way.
+	var clipped io.Reader = r
+	if limit > 0 {
+		clipped = io.LimitReader(r, limit+1)
+	}
+	src := io.TeeReader(clipped, io.MultiWriter(h, counter))
 
 	gz, err := gzip.NewReader(src)
 	if err != nil {
@@ -85,8 +101,18 @@ func Unpack(r io.Reader, dst string) (Manifest, error) {
 			}
 		case tar.TypeReg:
 			written += hdr.Size
-			if written > MaxBytes {
-				return Manifest{}, fmt.Errorf("%w: decompressed content exceeds %d bytes", ErrTooLarge, MaxBytes)
+			if limit > 0 && written > limit {
+				return Manifest{}, fmt.Errorf("%w: decompressed content exceeds %d bytes", ErrTooLarge, limit)
+			}
+			if limit <= 0 {
+				// Unbounded mode's bound is the volume itself: refuse the
+				// entry that cannot fit inside the watermark rather than
+				// writing until ENOSPC — a filesystem driven to zero takes
+				// SQLite's WAL down with it, which is a much worse failure
+				// than a rejected artifact.
+				if avail, ok := FreeBytes(root); ok && hdr.Size > avail-minFree {
+					return Manifest{}, fmt.Errorf("%w: entry %s declares %d bytes with %d free (min %d)", ErrNoSpace, rel, hdr.Size, avail, minFree)
+				}
 			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return Manifest{}, fmt.Errorf("artifact: mkdir %s: %w", filepath.Dir(rel), err)
@@ -119,8 +145,8 @@ func Unpack(r io.Reader, dst string) (Manifest, error) {
 	if _, err := io.Copy(io.Discard, src); err != nil {
 		return Manifest{}, fmt.Errorf("artifact: drain stream: %w", err)
 	}
-	if counter.n > MaxBytes {
-		return Manifest{}, fmt.Errorf("%w: archive is larger than %d bytes", ErrTooLarge, MaxBytes)
+	if limit > 0 && counter.n > limit {
+		return Manifest{}, fmt.Errorf("%w: archive is larger than %d bytes", ErrTooLarge, limit)
 	}
 	return Manifest{Hash: hex.EncodeToString(h.Sum(nil)), Size: counter.n, Entries: meta}, nil
 }

@@ -6,7 +6,6 @@ package main
 // the live region and the input box.
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -43,6 +42,12 @@ var (
 	winSizeReportRe = regexp.MustCompile(`^\[?8;\d+;\d+t$`)
 	// Kitty keyboard protocol: "[97u", "97;1u"
 	kittyKeyRe = regexp.MustCompile(`^\[?\d+(?:;\d+)*u$`)
+	// A modified Enter under the kitty keyboard protocol: CSI 13;mod u, where
+	// mod > 1 carries shift(1)/alt(2)/ctrl(4) — "[13;2u" is Shift+Enter. We
+	// push the disambiguate flag at startup (see runTUI); terminals that
+	// answer send these instead of a bare CR, and any modifier on Enter means
+	// "newline, not submit" by the same convention editors use.
+	kittyEnterRe = regexp.MustCompile(`^\[?13;\d+u$`)
 	// SS3 function keys: "[OP]", "OP", "OQ", "OR", "OS"
 	ss3KeyRe = regexp.MustCompile(`^(?:\[O|O)[P-S]$`)
 	// OSC responses: "]11;rgb:...", "]10;..."
@@ -120,6 +125,32 @@ func isLeakedEscapeFragment(msg tea.KeyMsg) bool {
 	return false
 }
 
+// isModifiedEnter reports whether the keystroke is an Enter carrying a
+// modifier — the universal "newline, not submit" gesture:
+//   - kitty CSI-u: "[13;2u" (shift), "[13;4u" (ctrl), "[13;6u" (shift+ctrl)…
+//     — delivered as KeyRunes because bubbletea v1 does not parse CSI-u keys
+//   - ESC CR: Alt+Enter, parsed as KeyEnter{Alt:true}
+//   - Ctrl+J (LF): the classic fallback, works on every terminal
+//
+// Plain Enter keeps its "submit" meaning everywhere.
+func isModifiedEnter(msg tea.KeyMsg) bool {
+	if msg.Type == tea.KeyEnter && msg.Alt {
+		return true
+	}
+	if msg.Type == tea.KeyCtrlJ {
+		return true
+	}
+	return msg.Type == tea.KeyRunes && kittyEnterRe.MatchString(string(msg.Runes))
+}
+
+// insertNewline feeds a line break into the prompt textarea and grows the box
+// to fit, honouring the 8-row cap used everywhere else the height is set.
+func (m *tuiModel) insertNewline() {
+	m.ta.InsertString("\n")
+	m.ta.SetHeight(min(8, max(1, m.ta.LineCount())))
+	m.menu.sync(m.ta.Value(), m.argResolve())
+}
+
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// A terminal without SGR mouse support answers in X10, whose coordinates
 	// travel as bare bytes rather than decimal text. Bubble Tea reads into a
@@ -181,6 +212,22 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if isModifiedEnter(msg) {
+			switch m.mode {
+			case modeIdle, modeAsking:
+				m.insertNewline()
+				return m, nil
+			}
+			// Everywhere else — pickers, wizard fields, confirmations — a
+			// newline is meaningless. A modifier on the Enter key itself
+			// (Alt+Enter, kitty CSI-u) degrades to plain Enter; Ctrl+J is not
+			// an Enter at all and stays inert outside the text modes (vim
+			// muscle memory expects it to move the cursor, not to confirm).
+			if msg.Type == tea.KeyCtrlJ {
+				return m, nil
+			}
+			return m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+		}
 		if isLeakedEscapeFragment(msg) {
 			return m, nil
 		}
@@ -191,7 +238,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinner.TickMsg:
 		m.animTick++
-		if m.mode != modeAsking {
+		// Outside a turn the spinner still has work to do while a model
+		// probe or catalogue fetch is in flight in the config surfaces.
+		if m.mode != modeAsking && !m.formTesting && !m.formFetching && !m.panelTesting {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -256,8 +305,89 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case droppedMsg:
 		return m, nil
+	case wizardTestMsg:
+		if m.mode != modeModelWizard && !(m.mode == modeOnboarding && m.onboardingStep == onboardingStepModelWizard) {
+			return m, nil // the user navigated away mid-probe
+		}
+		m.formTesting = false
+		if msg.err == nil {
+			// Connectivity proven — persist and activate immediately.
+			return m.finalizeWizard()
+		}
+		m.formTestErr = msg.err.Error()
+		return m, nil
+	case modelListMsg:
+		if m.mode != modeModelWizard && !(m.mode == modeOnboarding && m.onboardingStep == onboardingStepModelWizard) {
+			return m, nil // stale fetch — the user moved on
+		}
+		m.formFetching = false
+		if msg.err != nil {
+			m.formFetchErr = msg.err.Error()
+			return m, nil
+		}
+		if len(msg.models) == 0 {
+			m.formFetchErr = i18n.T(m.loc, "tui.mform.fetchEmpty")
+			return m, nil
+		}
+		items := make([]SelectionItem, len(msg.models))
+		for i, id := range msg.models {
+			items[i] = SelectionItem{Index: i + 1, ID: id, Title: id}
+		}
+		sl := NewSelectionList(i18n.T(m.loc, "tui.mform.pickTitle"), items)
+		sl.Boxed = true
+		sl.FooterHints = i18n.T(m.loc, "tui.wizard.confirmBack")
+		// Pre-highlight the current model value when it appears in the list.
+		for i, it := range items {
+			if it.ID == m.wizardModel {
+				sl.Cursor = i
+				break
+			}
+		}
+		m.selectionList = sl
+		m.formPicking = true
+		return m, nil
+	case panelTestMsg:
+		m.panelTesting = false
+		m.panelTestName = msg.alias
+		m.panelTestDur = msg.dur
+		m.panelTestOK = msg.err == nil
+		if msg.err != nil {
+			m.panelTestErr = msg.err.Error()
+		} else {
+			m.panelTestErr = ""
+		}
+		return m, nil
+	case skillsHubIndexMsg:
+		if m.mode != modeSkillsHub {
+			return m, nil // stale fetch — user left the panel
+		}
+		return m.onSkillsHubIndex(msg)
+	case skillsHubInstallMsg:
+		// The install toast commits even if the user navigated away — the
+		// skill landed (or failed) either way.
+		return m.onSkillsHubInstall(msg)
 	}
 	return m, nil
+}
+
+// wizardTestMsg carries the model form's connectivity probe result back to
+// the Update loop (nil error = the endpoint answered).
+type wizardTestMsg struct {
+	err error
+}
+
+// modelListMsg carries a fetched /models catalogue back to the form's picker.
+type modelListMsg struct {
+	models []string
+	err    error
+}
+
+// panelTestMsg is the result of the model panel's inline connectivity probe:
+// which alias was probed, the outcome, and how long it took.
+type panelTestMsg struct {
+	alias string
+	err   error
+	dur   time.Duration
 }
 
 // interruptWindow is how long a second Esc/Ctrl-C during a turn counts as
@@ -390,6 +520,8 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleModelPanelKey(msg)
 	case modeModelWizard:
 		return m.handleModelWizardKey(msg)
+	case modeSkillsHub:
+		return m.handleSkillsHubKey(msg)
 	case modeAsking:
 		if m.arrowsScrollHere() {
 			if lines, ok := m.arrowScrollLines(msg); ok {
@@ -630,7 +762,7 @@ func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			delta = -transcriptScrollStep
 		}
 		switch m.mode {
-		case modeList, modeModelPanel, modeModelWizard, modeOnboarding:
+		case modeList, modeModelPanel, modeModelWizard, modeOnboarding, modeSkillsHub:
 			// A wheel notch pages the highlight through the list (MovePage
 			// clamps at both ends); the terms step has no list to move.
 			if len(m.selectionList.Items) > 0 {
@@ -853,14 +985,30 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
-				note := block{kind: blockNote, body: fmt.Sprintf("已恢复会话: %s (%s)", shortID(arg), sess.Title)}
+				note := block{kind: blockNote, body: i18n.Tf(m.loc, "tui.resume.ok", "id", shortID(arg), "title", sess.Title)}
 				return m, m.printBlock(note)
 			}
 		}
-		note := block{kind: blockError, body: fmt.Sprintf("未找到会话: %s", arg)}
+		note := block{kind: blockError, body: i18n.Tf(m.loc, "tui.resume.notFound", "id", arg)}
 		return m, m.printBlock(note)
 	case text == "/model" || strings.HasPrefix(text, "/model"):
 		return m.openModelPanel()
+	case isSkillsHubInvite(text):
+		// "/skills", "/skill", or "... hub" opens the browsable plaza; the
+		// verb subcommands (list/find/add/reset/install) keep running through
+		// the exec path below.
+		return m.openSkillsHub()
+	}
+
+	// Slash-mode prefixes pick the turn's interaction mode before the slash
+	// dispatcher claims them: "/goal <text>", "/plan <text>", "/spec <text>".
+	// A bare mode word just prints its usage line.
+	if mode, rest, ok := parseModePrefix(text); ok {
+		if rest == "" {
+			note := block{kind: blockNote, body: i18n.Tf(m.loc, "tui.mode.usage", "cmd", "/"+mode)}
+			return m, m.printBlock(note)
+		}
+		return m.askTurn(rest, mode)
 	}
 
 	if isBareCommand(text) {
@@ -875,20 +1023,62 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	return m.askTurn(text, "")
+}
+
+// isSkillsHubInvite reports whether the line should open the Skills Hub panel
+// rather than exec the /skill repl handler.
+func isSkillsHubInvite(text string) bool {
+	switch text {
+	case "/skills", "/skill", "/skills hub", "/skill hub":
+		return true
+	}
+	return false
+}
+
+// parseModePrefix splits a "/goal|/plan|/spec <text>" line into its mode and
+// remaining text. The slash-mode commands share a prefix rule with the rest of
+// the command table: the mode word followed by a space or a line break (so a
+// multiline draft can carry a mode). Bare "/goal" et al. also match — rest is
+// "" and the caller prints the usage hint.
+func parseModePrefix(text string) (mode, rest string, ok bool) {
+	for _, p := range []string{"/goal", "/plan", "/spec"} {
+		if text == p {
+			return p[1:], "", true
+		}
+		if strings.HasPrefix(text, p+" ") || strings.HasPrefix(text, p+"\n") {
+			return p[1:], strings.TrimSpace(text[len(p):]), true
+		}
+	}
+	return "", "", false
+}
+
+// askTurn launches one engine turn for prompt with the slash-mode directive
+// attached ("" = the classifier decides). It owns every piece of per-turn
+// state: transcript echo, file-ref expansion, textarea reset, asking flag.
+func (m tuiModel) askTurn(text, mode string) (tea.Model, tea.Cmd) {
 	if m.engine == nil {
 		if m.r != nil && m.r.engine != nil {
 			m.engine = m.r.engine
 		} else {
 			note := block{
 				kind: blockError,
-				body: "未配置模型，请使用 /model 添加并启用模型。",
+				body: i18n.T(m.loc, "tui.error.noModel"),
 			}
 			return m, m.printBlock(note)
 		}
 	}
+
+	m.turnMode = mode
+
 	// Echo the prompt into scrollback so the committed transcript reads as a
-	// dialogue, then start the ask.
-	cmds := []tea.Cmd{m.printBlock(block{kind: blockUser, body: text})}
+	// dialogue, then start the ask. The mode banner rides ahead of the echo so
+	// scrollback records which lens the answer was produced under.
+	cmds := []tea.Cmd{}
+	if mode != "" {
+		cmds = append(cmds, m.printBlock(block{kind: blockNote, body: i18n.Tf(m.loc, "tui.mode.banner", "mode", mode)}))
+	}
+	cmds = append(cmds, m.printBlock(block{kind: blockUser, body: text}))
 
 	// @path references become inline file blocks before the prompt leaves the
 	// front end, so "explain @main.go" works without pasting the file. The
@@ -928,7 +1118,7 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 	}
 	authorize := m.r != nil && m.r.authorize
 
-	stream, pump := startAsk(m.engine, history, prompt, workDir, authorize)
+	stream, pump := startAsk(m.engine, history, prompt, workDir, authorize, mode)
 	m.stream = stream
 	return m, tea.Batch(append(cmds, m.sp.Tick, pump)...)
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
@@ -164,4 +165,32 @@ func (n *Node) Shutdown(ctx context.Context) {
 // ("" matches all).
 func (n *Node) List(status, name string) ([]ledger.Node, error) {
 	return ledger.Query(n.db, status, name)
+}
+
+// LinkState represents the 3-state link classification (whitepaper §8.1):
+// Live, Opportunistic, or Offline.
+type LinkState string
+
+const (
+	LinkLive          LinkState = "live"
+	LinkOpportunistic LinkState = "opportunistic"
+	LinkOffline       LinkState = "offline"
+)
+
+// EvaluateLinkState calculates the link state towards targetNode based on
+// live connection status and heartbeat exponential freshness discount (whitepaper §8.1).
+func (c *Core) EvaluateLinkState(ctx context.Context, targetNode string) LinkState {
+	conn := c.connFor(targetNode)
+	var lastSeen int64
+	if c.db != nil {
+		_ = c.db.QueryRowContext(ctx, `SELECT last_seen FROM employee_cache WHERE id = ?`, targetNode).Scan(&lastSeen)
+	}
+	freshness := scheduler.Freshness(lastSeen, time.Now().Unix())
+	if conn != nil && freshness >= 0.5 {
+		return LinkLive
+	}
+	if freshness >= 0.5 || conn != nil {
+		return LinkOpportunistic
+	}
+	return LinkOffline
 }

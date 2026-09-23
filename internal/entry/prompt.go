@@ -236,6 +236,11 @@ type PromptOptions struct {
 	ASCIIOnly bool
 	// UserLocale indicates the target UI/prompt language preference.
 	UserLocale i18n.Locale
+	// RequestMode is the interaction mode the user picked for this turn with
+	// a slash prefix: "goal" (refine the goal before acting), "plan" (emit a
+	// staged plan), or "spec" (write a detailed specification). Empty means
+	// the classifier decides on its own.
+	RequestMode string
 }
 
 // ClassifyOption tweaks the system prompt the Classify* entry points build.
@@ -250,6 +255,41 @@ func WithASCIIOnly() ClassifyOption {
 // WithLocale sets the user language preference for prompt construction.
 func WithLocale(loc i18n.Locale) ClassifyOption {
 	return func(p *PromptOptions) { p.UserLocale = loc }
+}
+
+// WithRequestMode records the slash-prefix mode the user chose for the turn
+// (/goal, /plan, /spec). Unknown values are ignored.
+func WithRequestMode(mode string) ClassifyOption {
+	return func(p *PromptOptions) {
+		switch mode {
+		case "goal", "plan", "spec":
+			p.RequestMode = mode
+		}
+	}
+}
+
+// requestModeSection renders the slash-mode directive. It goes after the user
+// memory block (volatile tail) so it cannot poison the cached prefix, and it
+// is deliberately imperative: a mode the user typed must not be overruled by
+// the default "classify at your own discretion" framing above.
+var requestModeSections = map[string]string{
+	"goal": "\n\n═══ Request Mode: GOAL ═══\n" +
+		"The user invoked /goal. Treat this turn as goal refinement, not execution: " +
+		"restate the goal in one precise sentence, list the assumptions you are making, " +
+		"name the success criteria and constraints, and ask only the clarifying questions " +
+		"that genuinely block progress. Answer with plain prose (kind answer) — do not " +
+		"delegate a task or emit a plan yet.",
+	"plan": "\n\n═══ Request Mode: PLAN ═══\n" +
+		"The user invoked /plan. Produce a staged execution plan: if the request is concrete " +
+		"enough to act on, respond with kind plan and a complete stages spec; if critical " +
+		"details are missing, answer with the short list of blocking questions instead of " +
+		"guessing. Do not respond with a bare answer once the requirements are clear.",
+	"spec": "\n\n═══ Request Mode: SPEC ═══\n" +
+		"The user invoked /spec. Write a detailed specification document as your answer " +
+		"(kind answer): purpose and scope, functional requirements, interfaces and data " +
+		"shapes, edge cases and failure modes, and acceptance criteria. Be precise and " +
+		"complete enough that an implementer could start from it without a follow-up " +
+		"question. Do not delegate execution.",
 }
 
 // BuildPrompt assembles the layered system prompt: the resident routing core,
@@ -283,6 +323,9 @@ func BuildPrompt(opts PromptOptions) string {
 	b.WriteString(devices)
 	b.WriteString("\n\n═══ User Memory (Context Reference Only) ═══\n")
 	b.WriteString(memory)
+	if section, ok := requestModeSections[opts.RequestMode]; ok {
+		b.WriteString(section)
+	}
 	if opts.ASCIIOnly {
 		b.WriteString("\n\n═══ Output Environment Constraints ═══\n" +
 			"The user's active terminal is a bare console that cannot render CJK characters. " +

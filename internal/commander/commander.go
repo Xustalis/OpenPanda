@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -35,6 +36,15 @@ type Router struct {
 	// .mcp.json in the agent's work directory before the run, so agents that
 	// discover project MCP configs can reach the node's server. Empty = none.
 	mcpCommand string
+	// pandaTools gates the openpanda self-management server in the same
+	// .mcp.json (routing.panda_tools, default on). It only ever applies
+	// under the extended tools policy — minimal-policy runs get neither
+	// server.
+	pandaTools bool
+	// selfConfigPath is forwarded to `panda mcp --config` inside the
+	// generated .mcp.json so the self-tools server resolves the same
+	// config the daemon loaded. Empty = the server's own default discovery.
+	selfConfigPath string
 	// preferred lists agent names that receive a score bonus during routing.
 	preferred []string
 	// probeAgent reports whether an agent's CLI is usable on this machine.
@@ -57,6 +67,7 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 		model:          model,
 		injectionModel: injection.NormalizedModel(),
 		toolsPolicy:    routing.NormalizedToolsPolicy(),
+		pandaTools:     routing.NormalizedPandaTools(),
 		preferred:      routing.PreferredAgents,
 	}
 	r.runAdapter = r.runAdapterDefault
@@ -73,6 +84,7 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 func (r *Router) SetPolicy(injection config.InjectionConfig, routing config.RoutingConfig) {
 	r.injectionModel = injection.NormalizedModel()
 	r.toolsPolicy = routing.NormalizedToolsPolicy()
+	r.pandaTools = routing.NormalizedPandaTools()
 	r.preferred = routing.PreferredAgents
 }
 
@@ -84,9 +96,21 @@ func (r *Router) SetMCPPassthrough(command string) {
 	r.mcpCommand = strings.TrimSpace(command)
 }
 
+// SetSelfConfigPath records the daemon's --config path so the generated
+// .mcp.json can pass it to `panda mcp`. Empty means the self-tools server
+// falls back to the same default discovery every CLI command uses.
+func (r *Router) SetSelfConfigPath(path string) {
+	r.selfConfigPath = strings.TrimSpace(path)
+}
+
 // ToolsPolicy reports the normalized agent tools policy the router runs
 // adapters under (config routing.tools_policy).
 func (r *Router) ToolsPolicy() string { return r.toolsPolicy }
+
+// PandaTools reports whether the openpanda self-management server is
+// enabled (routing.panda_tools). Still gated on the extended tools policy
+// by the caller.
+func (r *Router) PandaTools() bool { return r.pandaTools }
 
 // SetAdapterRunner overrides the agent adapter invocation. It is a test seam:
 // suites that need to exercise agent execution without spawning a real LLM CLI
@@ -124,6 +148,11 @@ type Plan struct {
 	// the primary agent's CLI is unavailable at execution time, execAgent
 	// falls back through this chain.
 	Alternates []string
+	// ActuatorID is set when the plan resolves to a card actuator (§7.2):
+	// the command is that actuator's driver invocation, and the run path
+	// substitutes its {intent}/{action}/{param:<name>} placeholders from the
+	// task's action_spec before execution. Empty for ordinary plans.
+	ActuatorID string
 }
 
 // Match finds the first native ability whose id matches any of required.
@@ -136,6 +165,21 @@ func (r *Router) MatchNative(required []string) (ledger.NativeAbility, bool) {
 		}
 	}
 	return ledger.NativeAbility{}, false
+}
+
+// MatchActuator finds a card actuator whose id satisfies any of required
+// (§7.1). Actuators live on the card's own list — not in card.Native — so
+// they need their own matcher; the ability namespace is shared, which is
+// what makes a required "hardware:gpio_servo" route here at all.
+func (r *Router) MatchActuator(required []string) (ledger.ActuatorProfile, bool) {
+	for _, req := range required {
+		for _, act := range r.card.Actuators {
+			if ledger.AbilityMatches(act.ID, req) {
+				return act, true
+			}
+		}
+	}
+	return ledger.ActuatorProfile{}, false
 }
 
 // preferredBonus is the score bonus an agent listed in
@@ -320,6 +364,19 @@ func (r *Router) Route(required []string) (Plan, error) {
 		}
 		return Plan{Kind: "native", Ability: ab.ID, Command: ab.Command, Args: ab.Args, Tier: tier}, nil
 	}
+	// §7.1/§7.2: an actuator with a declared driver command executes through
+	// the same native path — its args are ActionSpec templates the run path
+	// substitutes before exec. One without a command stays a routing
+	// advertisement only and falls through to the agent tier, which scripts
+	// the hardware itself.
+	if act, ok := r.MatchActuator(required); ok && act.Command != "" {
+		tier := defense.TierFromCommand(act.Command, act.Args...)
+		if act.Tier > tier {
+			tier = act.Tier
+		}
+		return Plan{Kind: "native", Ability: act.ID, Command: act.Command,
+			Args: act.Args, Tier: tier, ActuatorID: act.ID}, nil
+	}
 	cands := r.RankAgents(required)
 	if len(cands) == 0 && len(required) == 0 {
 		cands = r.RankAgents([]string{"coding", "shell", "file_edit"})
@@ -484,11 +541,13 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		}
 		cleanupMCP := r.materializeMCPPassthrough(ag.Adapter, cwd)
 		ar := r.runAdapter(runCtx, ag.Adapter, prompt, cwd)
-		cleanupMCP()
 		// One bounded retry on provider-side turbulence (rate limit /
 		// overload / 5xx): these resolve in seconds, and the narrow
 		// transientAgentFailure patterns keep real task failures — and
-		// their side effects — from ever being re-run.
+		// their side effects — from ever being re-run. cleanupMCP is deferred
+		// past this block so the retried run gets the same .mcp.json the first
+		// attempt had; removing it between attempts would silently strip the
+		// task's MCP tools from exactly the run that decides the outcome.
 		if !ar.OK && transientAgentFailure(ar) {
 			timer := time.NewTimer(retryBackoff)
 			select {
@@ -506,6 +565,7 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 				}
 			}
 		}
+		cleanupMCP()
 		// On failure the adapter's diagnosis lives in ar.Result (Stdout);
 		// mirroring it into Stderr keeps store.Fail and the task-result
 		// payload from recording an empty reason.
@@ -617,12 +677,16 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// If the agent failed with authentication, quota, provider errors, or timeouts
 	// and PANDA had not injected its model key (because the agent declared its own credentials which failed),
 	// automatically inject PANDA's configured model API key to adapt the harness instead of discarding the task.
+	// The retried result REPLACES the original only when it succeeded: a
+	// different failure under injection is not more informative than the
+	// original failure — swapping it in would mask the real reason the task
+	// failed (e.g. report exit-code noise instead of "quota exhausted").
 	if !res.OK && !dec.Inject && supportsModelInjection(adapter, r.model) && r.model.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
 		if r.model.BaseURL == "" || security.NewNetworkGuard(security.EndpointHost(r.model.BaseURL)).CheckURL(r.model.BaseURL) == nil {
 			injectedEnv := modelEnvForAdapter(r.model, adapter)
 			if len(injectedEnv) > 0 {
 				retryRes := r.runProcess(ctx, adapter, prompt, cwd, injectedEnv)
-				if retryRes.OK || retryRes.ExitCode != res.ExitCode {
+				if retryRes.OK {
 					retryRes.Injected = true
 					retryRes.Model = effectiveModelName(r.model)
 					return retryRes
@@ -638,19 +702,34 @@ func (r *Router) SetAdapterProcessRunner(fn func(ctx context.Context, adapter, p
 	r.runProcess = fn
 }
 
+// providerStatusRE matches a bare HTTP status token relevant to the injection
+// fallback. Word boundaries keep it from matching digits glued into a larger
+// token — a task that fails mentioning "port 5030" or "errno 4291" is not a
+// provider error, and falling back to injection on it would re-run the task
+// with different credentials for no reason (same reasoning as
+// transientStatusRE in adapter.go).
+var providerStatusRE = regexp.MustCompile(`\b(?:401|402|403|429|500|502|503|504)\b`)
+
+// providerTimeoutRE matches timeout phrasing as a word, so a real task failure
+// mentioning e.g. "session timeout file lock" still qualifies, but substring
+// accidents ("timeouts5400", a hex blob) do not.
+var providerTimeoutRE = regexp.MustCompile(`\b(?:timed out|timeout)\b`)
+
 func isProviderFailureOrAuth(text string) bool {
 	low := strings.ToLower(text)
+	// Phrase patterns are substrings by design — they are long enough to be
+	// unambiguous ("invalid api key" cannot appear by accident).
 	patterns := []string{
-		"401", "402", "403", "unauthorized", "forbidden", "invalid token",
+		"unauthorized", "forbidden", "invalid token",
 		"payment required", "payment_required", "budget pool", "exhausted",
 		"invalid api key", "invalid_api_key", "额度不足", "quota",
 		"insufficient_quota", "credit balance", "out of credit",
 		"not logged in", "failed to authenticate", "auth error",
 		"authentication failed", "no api key", "api key missing",
-		"500", "502", "503", "504", "server_error", "internal server error",
+		"server_error", "internal server error",
 		"service unavailable", "bad gateway", "overloaded", "rate limit",
-		"rate_limit", "429", "connection refused", "connection reset",
-		"connect error", "failed to connect", "timed out", "timeout",
+		"rate_limit", "connection refused", "connection reset",
+		"connect error", "failed to connect",
 		"unrecognized_model", "model_not_found", "model not found",
 		"api_retry", "api_error", "provider failure",
 	}
@@ -659,7 +738,9 @@ func isProviderFailureOrAuth(text string) bool {
 			return true
 		}
 	}
-	return false
+	// Bare numeric statuses and timeout wording need word boundaries: "403"
+	// inside "port 4030" or "error-14031" is not a provider failure.
+	return providerStatusRE.MatchString(low) || providerTimeoutRE.MatchString(low)
 }
 
 // agentBinary derives the CLI binary for an agent: the card's install_check

@@ -414,6 +414,15 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 				return resp.Body, nil
 			}
 		}
+		// A provider that rejects the thinking field gets one retry without
+		// it; the denial is sticky for the client's lifetime.
+		if thinkingRejected(err) && !c.thinkingDenied.Load() {
+			c.thinkingDenied.Store(true)
+			resp, err = c.sendAnthropicStream(ctx, system, msgs, tools)
+			if err == nil {
+				return resp.Body, nil
+			}
+		}
 		return nil, err
 	}()
 	if err != nil {
@@ -477,9 +486,10 @@ func (c *Client) sendOAIStream(ctx context.Context, system string, msgs []oaiMes
 	if !c.promptCache.Load() {
 		req.StreamOptions = nil
 	}
-	payload, err := json.Marshal(req)
+	c.applyThinking(&req)
+	payload, err := c.marshalWithParams(req)
 	if err != nil {
-		return nil, fmt.Errorf("entry: marshal request: %w", err)
+		return nil, err
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIURL(c.baseURL), bytes.NewReader(payload))
 	if err != nil {
@@ -490,6 +500,7 @@ func (c *Client) sendOAIStream(ctx context.Context, system string, msgs []oaiMes
 	if c.apiKey != "" {
 		httpReq.Header.Set("authorization", "Bearer "+c.apiKey)
 	}
+	c.applyExtraHeaders(httpReq)
 
 	resp, err := c.hcStream.Do(httpReq)
 	if err != nil {
@@ -525,9 +536,15 @@ func (c *Client) sendAnthropicStream(ctx context.Context, system string, msgs []
 	if len(tools) > 0 {
 		req.Tools = tools
 	}
-	payload, err := json.Marshal(req)
+	if th, budget := c.anthropicThinking(); th != nil {
+		req.Thinking = th
+		if req.MaxTokens <= budget {
+			req.MaxTokens = budget + 4096
+		}
+	}
+	payload, err := c.marshalWithParams(req)
 	if err != nil {
-		return nil, fmt.Errorf("entry: marshal request: %w", err)
+		return nil, err
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicURL(c.baseURL), bytes.NewReader(payload))
 	if err != nil {
@@ -539,6 +556,7 @@ func (c *Client) sendAnthropicStream(ctx context.Context, system string, msgs []
 		httpReq.Header.Set("x-api-key", c.apiKey)
 	}
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
+	c.applyExtraHeaders(httpReq)
 
 	resp, err := c.hcStream.Do(httpReq)
 	if err != nil {
@@ -582,6 +600,13 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 		if passbackRequired(err) && !c.passback.Load() {
 			c.passback.Store(true)
 			msgs = injectReasoningPassback(msgs)
+			resp, err = c.sendOAIStream(ctx, system, msgs, tools)
+			if err == nil {
+				return resp.Body, nil
+			}
+		}
+		if thinkingRejected(err) && !c.thinkingDenied.Load() {
+			c.thinkingDenied.Store(true)
 			resp, err = c.sendOAIStream(ctx, system, msgs, tools)
 			if err == nil {
 				return resp.Body, nil

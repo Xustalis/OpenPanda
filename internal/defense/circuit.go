@@ -31,11 +31,15 @@ type CircuitBreaker struct {
 }
 
 // circuitState tracks one key. failures counts consecutive failures since the
-// last success; openedAt is set when the circuit goes open (zero otherwise).
+// last success; openedAt is set when the circuit goes open (zero otherwise);
+// halfOpenAt marks when the single half-open trial was admitted, so a trial
+// whose caller never reports back (crashed goroutine, abandoned task) does not
+// wedge the circuit half-open forever.
 type circuitState struct {
-	state    CircuitState
-	failures int
-	openedAt time.Time
+	state      CircuitState
+	failures   int
+	openedAt   time.Time
+	halfOpenAt time.Time
 }
 
 // NewCircuitBreaker builds a breaker. A non-positive threshold defaults to 3
@@ -64,11 +68,21 @@ func (b *CircuitBreaker) Allow(key string) bool {
 	if st.state == CircuitOpen {
 		if time.Since(st.openedAt) >= b.cooldown {
 			st.state = CircuitHalfOpen
+			st.halfOpenAt = time.Now()
 			return true
 		}
 		return false
 	}
-	// Half-open: a trial is already in flight; admit no others until it resolves.
+	// Half-open: a trial is already in flight; admit no others until it
+	// resolves. A trial that has been "in flight" longer than the cooldown
+	// almost certainly belongs to a caller that died or abandoned the task
+	// before reporting — treating the abandoned trial as a failure and
+	// re-opening is what keeps one lost goroutine from wedging the key out of
+	// the candidate set forever (the circuit had no other way back to open).
+	if time.Since(st.halfOpenAt) >= b.cooldown {
+		st.state = CircuitOpen
+		st.openedAt = time.Now()
+	}
 	return false
 }
 

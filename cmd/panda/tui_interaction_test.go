@@ -13,6 +13,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	tea "github.com/charmbracelet/bubbletea"
@@ -84,8 +85,16 @@ func TestTUISplashScreen(t *testing.T) {
 	if !strings.Contains(wizardView, "未配置模型，请选择提供商开始添加：") {
 		t.Fatalf("expected onboarding prompt in view: %s", wizardView)
 	}
-	if !strings.Contains(wizardView, "DeepSeek") || !strings.Contains(wizardView, "Ollama") {
-		t.Fatalf("expected providers in wizard view: %s", wizardView)
+	// The whole catalogue is offered — including the custom/relay entry — even
+	// if the rendered window only shows the first rows.
+	var sawOllama, sawCustom, sawDeepSeek bool
+	for _, it := range mWiz.selectionList.Items {
+		sawOllama = sawOllama || it.ID == "ollama"
+		sawCustom = sawCustom || it.ID == "custom"
+		sawDeepSeek = sawDeepSeek || it.ID == "deepseek"
+	}
+	if !sawDeepSeek || !sawOllama || !sawCustom {
+		t.Fatalf("wizard provider list missing entries (ds=%v ollama=%v custom=%v)", sawDeepSeek, sawOllama, sawCustom)
 	}
 
 	// Pressing Enter when a model is configured transitions to modeIdle
@@ -252,7 +261,7 @@ func TestTUIModelManagement(t *testing.T) {
 	if !strings.Contains(view, "gpt-4o") || !strings.Contains(view, "claude-3-5-sonnet") {
 		t.Fatalf("expected other models in view: %s", view)
 	}
-	if !strings.Contains(view, "[A] 添加") || !strings.Contains(view, "[D] 删除") || !strings.Contains(view, "[E] 编辑") {
+	if !strings.Contains(view, "a 添加") || !strings.Contains(view, "d 删除") || !strings.Contains(view, "e 编辑") || !strings.Contains(view, "t 测试") {
 		t.Fatalf("expected action hints in view: %s", view)
 	}
 	if !strings.Contains(view, "Enter 切换") {
@@ -305,7 +314,40 @@ func TestTUIModelManagement(t *testing.T) {
 	}
 }
 
-// TestTUIModelWizardStepFlow tests the multi-step model creation wizard for Ollama.
+// wizardSelect moves the provider picker's highlight onto id, so the tests
+// stay independent of the catalogue's ordering.
+func wizardSelect(m tuiModel, id string) tuiModel {
+	for i, it := range m.selectionList.Items {
+		if it.ID == id {
+			m.selectionList.Cursor = i
+			return m
+		}
+	}
+	panic("provider not in wizard list: " + id)
+}
+
+// formFocusID moves the form editor's focus onto the named field, so tests do
+// not depend on field order.
+func formFocusID(m tuiModel, id string) tuiModel {
+	for i, f := range m.form {
+		if f.id == id {
+			m.formFocus = i
+			return m
+		}
+	}
+	panic("field not in form: " + id)
+}
+
+// formTypes types s into the focused field one rune at a time.
+func formTypes(m tuiModel, s string) tuiModel {
+	for _, ch := range s {
+		m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+	return m
+}
+
+// TestTUIModelWizardStepFlow tests the single-screen model form for Ollama —
+// a NoAuth provider whose form has no key field.
 func TestTUIModelWizardStepFlow(t *testing.T) {
 	cfg := &config.Config{}
 	r := &repl{loc: i18n.ChineseSimp, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
@@ -318,25 +360,124 @@ func TestTUIModelWizardStepFlow(t *testing.T) {
 	next, _ := m.startModelWizard()
 	m = next
 
-	// Step 0: Choose provider (select Ollama with 'j' 3 times)
-	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	// Press Enter on Ollama -> Ollama has NoAuth, skips directly to model name
+	// Choose provider — lands on the form with the catalogue defaults filled.
+	m = wizardSelect(m, "ollama")
 	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
 
-	if m.wizardStep != wizardStepModelName || m.wizardProvider != "ollama" {
-		t.Fatalf("expected wizardStepModelName for ollama, got step %v prov %v", m.wizardStep, m.wizardProvider)
+	if m.wizardStep != wizardStepForm || m.wizardProvider != "ollama" {
+		t.Fatalf("expected wizardStepForm for ollama, got step %v prov %v", m.wizardStep, m.wizardProvider)
+	}
+	p, _ := providers.Lookup("ollama")
+	if m.wizardModel != p.DefaultModel {
+		t.Fatalf("expected prefilled default model %q, got %q", p.DefaultModel, m.wizardModel)
+	}
+	// NoAuth provider: no API key row.
+	for _, f := range m.form {
+		if f.id == "api_key" {
+			t.Fatal("ollama form should not carry an api_key field")
+		}
 	}
 
-	// Press Enter to accept default model name (llama3)
+	// Focus the action row and confirm "test & save".
+	m = formFocusID(m, "save")
 	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.formTesting {
+		t.Fatal("Enter on the action row should start the connectivity probe")
+	}
 
+	// A successful probe finalizes: model persisted + activated.
+	m = step(m, wizardTestMsg{err: nil})
 	if m.mode != modeIdle {
 		t.Fatalf("expected return to idle after completing wizard, got %v", m.mode)
 	}
-	if r.cfg.Model.Provider != "ollama" && r.cfg.Model.Model != "llama3" {
+	if r.cfg.Model.Provider != "ollama" || r.cfg.Model.Model != p.DefaultModel {
 		t.Fatalf("expected ollama model configured, got %+v", r.cfg.Model)
+	}
+}
+
+// TestTUIModelWizardCustomRelay walks the custom/relay branch end to end on
+// the single-screen form: URL fixup, dialect cycle, optional key, model,
+// thinking, context — then a failed probe stays unsaved until the user picks
+// the plain "save" action.
+func TestTUIModelWizardCustomRelay(t *testing.T) {
+	cfg := &config.Config{}
+	r := &repl{loc: i18n.English, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width = 100
+	m.height = 30
+
+	next, _ := m.startModelWizard()
+	m = next
+
+	m = wizardSelect(m, "custom")
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.wizardStep != wizardStepForm {
+		t.Fatalf("custom should land on the form, got step %v", m.wizardStep)
+	}
+	// Custom forms carry the dialect choice row.
+	hasAPIType := false
+	for _, f := range m.form {
+		if f.id == "api_type" {
+			hasAPIType = true
+		}
+	}
+	if !hasAPIType {
+		t.Fatal("custom form must include the api_type choice")
+	}
+
+	// URL without scheme gets https:// prepended at validation.
+	m = formFocusID(m, "base_url")
+	m = formTypes(m, "relay.example.com/v1")
+
+	// Anthropic dialect via the choice row's right-arrow cycle.
+	m = formFocusID(m, "api_type")
+	m = step(m, tea.KeyMsg{Type: tea.KeyRight})
+	if m.wizardAPIType != config.APITypeAnthropic {
+		t.Fatalf("expected anthropic dialect, got %q", m.wizardAPIType)
+	}
+
+	// Blank key stays allowed for custom; fill model/thinking/context.
+	m = formFocusID(m, "model")
+	m = formTypes(m, "claude-3-7-sonnet")
+	m = formFocusID(m, "thinking")
+	m = step(m, tea.KeyMsg{Type: tea.KeyRight})
+	if m.wizardThinking != "on" {
+		t.Fatalf("expected thinking=on, got %q", m.wizardThinking)
+	}
+	m = formFocusID(m, "context")
+	m = formTypes(m, "180000")
+
+	mc := m.wizardConfig()
+	if mc.APIType != config.APITypeAnthropic || mc.Thinking != "on" || mc.ContextWindow != 180000 || !mc.NoAuth {
+		t.Fatalf("wizardConfig assembled wrong ModelConfig: %+v", mc)
+	}
+
+	// Test & Save on the action row starts the probe.
+	m = formFocusID(m, "save")
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.formTesting {
+		t.Fatal("the action row should start the probe")
+	}
+
+	// A failed probe must NOT persist the entry; the form stays up to fix.
+	m = step(m, wizardTestMsg{err: fmt.Errorf("dial tcp: connection refused")})
+	if m.formTestErr == "" || m.formTesting {
+		t.Fatalf("probe failure not surfaced: err=%q testing=%v", m.formTestErr, m.formTesting)
+	}
+	if len(r.cfg.Models) != 0 {
+		t.Fatalf("failed probe must not persist a model, got %d", len(r.cfg.Models))
+	}
+
+	// Move the action row to the plain "save" button and commit anyway.
+	m = step(m, tea.KeyMsg{Type: tea.KeyRight})
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.mode != modeIdle || len(r.cfg.Models) != 1 {
+		t.Fatalf("save-anyway should persist the entry, mode=%v models=%d", m.mode, len(r.cfg.Models))
+	}
+	saved := r.cfg.Models[0]
+	if saved.BaseURL != "https://relay.example.com/v1" || saved.Model != "claude-3-7-sonnet" {
+		t.Fatalf("saved entry carries wrong fields: %+v", saved)
 	}
 }
 
@@ -353,20 +494,19 @@ func TestTUIModelWizardAPIKeyMasking(t *testing.T) {
 	next, _ := m.startModelWizard()
 	m = next
 
-	// Step 0: Choose provider (index 0 is deepseek, requires auth)
+	// DeepSeek (index 0) requires auth — the form carries a key field.
 	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.wizardStep != wizardStepAPIKey {
-		t.Fatalf("expected wizardStepAPIKey for deepseek, got %v", m.wizardStep)
+	if m.wizardStep != wizardStepForm {
+		t.Fatalf("expected the form for deepseek, got %v", m.wizardStep)
 	}
+	m = formFocusID(m, "api_key")
 
 	// Type secret API key
 	secret := "sk-supersecret123"
-	for _, ch := range secret {
-		m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
-	}
+	m = formTypes(m, secret)
 
-	if m.wizardInput != secret {
-		t.Fatalf("expected wizardInput to hold raw secret, got %q", m.wizardInput)
+	if m.wizardKey != secret {
+		t.Fatalf("expected wizardKey to hold raw secret, got %q", m.wizardKey)
 	}
 
 	// Verify view masks API key and does not leak plaintext
@@ -374,15 +514,194 @@ func TestTUIModelWizardAPIKeyMasking(t *testing.T) {
 	if strings.Contains(view, secret) {
 		t.Fatalf("view leaked raw API key plaintext: %s", view)
 	}
-	expectedMask := strings.Repeat("•", len(secret))
-	if !strings.Contains(view, expectedMask) {
-		t.Fatalf("expected masked dots %s in view: %s", expectedMask, view)
+	if !strings.Contains(view, "•••") {
+		t.Fatalf("expected masked bullets in view: %s", view)
 	}
 
-	// Test backspace removes last character
+	// Backspace removes the character left of the cursor.
 	m = step(m, tea.KeyMsg{Type: tea.KeyBackspace})
-	if m.wizardInput != "sk-supersecret12" {
-		t.Fatalf("expected backspace to remove one rune, got %q", m.wizardInput)
+	if m.wizardKey != "sk-supersecret12" {
+		t.Fatalf("expected backspace to remove one rune, got %q", m.wizardKey)
+	}
+
+	// Cursor editing: Left then insert lands mid-string.
+	m = step(m, tea.KeyMsg{Type: tea.KeyLeft})
+	m = step(m, tea.KeyMsg{Type: tea.KeyLeft})
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	if m.wizardKey != "sk-supersecretX12" {
+		t.Fatalf("expected mid-string insert, got %q", m.wizardKey)
+	}
+}
+
+// TestTUIModelPanelDetailAndTest covers the redesigned register: the detail
+// card shows the highlighted entry's real config, and 't' runs an inline
+// connectivity probe whose result lands on the status row.
+func TestTUIModelPanelDetailAndTest(t *testing.T) {
+	cfg := &config.Config{
+		Model: config.ModelConfig{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/anthropic", APIKey: "sk-abcd1234"},
+		Models: []config.ModelConfig{
+			{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/anthropic", APIKey: "sk-abcd1234"},
+		},
+	}
+	r := &repl{loc: i18n.English, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width = 110
+	m.height = 30
+
+	next, _ := m.openModelPanel()
+	m = next
+	if m.mode != modeModelPanel {
+		t.Fatalf("expected modeModelPanel, got %v", m.mode)
+	}
+	view := m.View()
+	for _, want := range []string{"deepseek-chat", "DeepSeek", "api.deepseek.com", "anthropic", "••••1234"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("panel view missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "sk-abcd1234") {
+		t.Fatalf("panel leaked the raw API key: %s", view)
+	}
+
+	// 't' starts a probe; the arriving panelTestMsg fills the status line.
+	next, _ = m.testSelectedModel()
+	m = next
+	if !m.panelTesting || m.panelTestName != "ds" {
+		t.Fatalf("probe not armed: testing=%v name=%q", m.panelTesting, m.panelTestName)
+	}
+	m = step(m, panelTestMsg{alias: "ds", err: nil, dur: 800 * time.Millisecond})
+	if !m.panelTestOK || m.panelTesting {
+		t.Fatalf("probe result not recorded: ok=%v testing=%v", m.panelTestOK, m.panelTesting)
+	}
+	if v := m.View(); !strings.Contains(v, "connected") {
+		t.Fatalf("panel should show the probe outcome: %s", v)
+	}
+}
+
+// TestTUIModelFormFetchPicker covers ^L pulling the endpoint's catalogue into
+// a picker and Enter writing the pick into the model field.
+func TestTUIModelFormFetchPicker(t *testing.T) {
+	cfg := &config.Config{}
+	r := &repl{loc: i18n.English, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width = 100
+	m.height = 30
+
+	next, _ := m.startModelWizard()
+	m = next
+	m = wizardSelect(m, "openai")
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.wizardStep != wizardStepForm {
+		t.Fatalf("expected form after provider pick, got %v", m.wizardStep)
+	}
+
+	// The fetch command runs async; inject its result.
+	m = step(m, modelListMsg{models: []string{"gpt-4o", "gpt-4o-mini", "o3-mini"}})
+	if !m.formPicking || len(m.selectionList.Items) != 3 {
+		t.Fatalf("picker not open with fetched models: picking=%v items=%d", m.formPicking, len(m.selectionList.Items))
+	}
+	// The current model value is pre-highlighted.
+	if m.selectionList.Cursor != 1 {
+		t.Fatalf("expected cursor on gpt-4o-mini (index 1), got %d", m.selectionList.Cursor)
+	}
+	m = step(m, tea.KeyMsg{Type: tea.KeyDown}) // -> o3-mini
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.formPicking {
+		t.Fatal("Enter should close the picker")
+	}
+	if m.wizardModel != "o3-mini" {
+		t.Fatalf("picked model not written into the form, got %q", m.wizardModel)
+	}
+
+	// Fetch errors surface inline instead of opening an empty picker.
+	m = step(m, modelListMsg{err: fmt.Errorf("401 unauthorized")})
+	if m.formPicking || m.formFetchErr == "" {
+		t.Fatalf("fetch error not surfaced: picking=%v err=%q", m.formPicking, m.formFetchErr)
+	}
+}
+
+// TestTUIModelFormValidation covers required-field and context validation on
+// the save path.
+func TestTUIModelFormValidation(t *testing.T) {
+	cfg := &config.Config{}
+	r := &repl{loc: i18n.English, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width = 100
+	m.height = 30
+
+	next, _ := m.startModelWizard()
+	m = next
+	m = wizardSelect(m, "deepseek")
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// No key: validation refuses the save and focuses the field.
+	m = formFocusID(m, "save")
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.formErr == "" || m.formTesting {
+		t.Fatalf("missing key must block the probe: err=%q testing=%v", m.formErr, m.formTesting)
+	}
+	if f := m.focusedField(); f == nil || f.id != "api_key" {
+		t.Fatalf("validation should focus api_key, focused %v", f)
+	}
+
+	// Fill the key, then a non-numeric context is refused the same way.
+	m = formFocusID(m, "api_key")
+	m = formTypes(m, "sk-test")
+	m = formFocusID(m, "context")
+	m = step(m, tea.KeyMsg{Type: tea.KeyCtrlU}) // clear prefilled default
+	m = formTypes(m, "lots")
+	m = formFocusID(m, "save")
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.formErr == "" || m.formTesting {
+		t.Fatalf("non-numeric context must block the probe: err=%q testing=%v", m.formErr, m.formTesting)
+	}
+	if f := m.focusedField(); f == nil || f.id != "context" {
+		t.Fatalf("validation should focus context, focused %v", f)
+	}
+}
+
+// TestTUIModelFormEscape covers the form's back navigation: Esc on an add
+// returns to the provider picker; Esc on an edit returns to the register.
+func TestTUIModelFormEscape(t *testing.T) {
+	cfg := &config.Config{
+		Model:  config.ModelConfig{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/anthropic", APIKey: "sk-x"},
+		Models: []config.ModelConfig{{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/anthropic", APIKey: "sk-x"}},
+	}
+	r := &repl{loc: i18n.English, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width = 100
+	m.height = 30
+
+	// Edit flow: 'e' on the panel opens the prefilled form; Esc returns to it.
+	next, _ := m.openModelPanel()
+	m = next
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if m.mode != modeModelWizard || m.wizardStep != wizardStepForm || m.wizardEditAlias != "ds" {
+		t.Fatalf("edit did not open the prefilled form: mode=%v step=%v alias=%q", m.mode, m.wizardStep, m.wizardEditAlias)
+	}
+	if m.wizardKey != "sk-x" || m.wizardModel != "deepseek-chat" {
+		t.Fatalf("form not prefilled: key=%q model=%q", m.wizardKey, m.wizardModel)
+	}
+	m = step(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != modeModelPanel {
+		t.Fatalf("Esc on an edit should return to the panel, got %v", m.mode)
+	}
+
+	// Add flow: 'a' -> provider pick -> Esc on the form returns to the picker.
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = wizardSelect(m, "openai")
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = step(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.wizardStep != wizardStepProvider {
+		t.Fatalf("Esc on an add form should return to the provider picker, got %v", m.wizardStep)
+	}
+	m = step(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != modeModelPanel {
+		t.Fatalf("Esc on the picker should return to the panel, got %v", m.mode)
 	}
 }
 
@@ -473,11 +792,11 @@ func TestTUIFirstRunOnboardingFlow(t *testing.T) {
 	if !strings.Contains(modelChoiceView, "Configure Large Language Model") {
 		t.Fatalf("expected model choice title in view: %s", modelChoiceView)
 	}
-	if !strings.Contains(modelChoiceView, "Skip for Now") {
+	if !strings.Contains(modelChoiceView, "Configure Later (Skip)") {
 		t.Fatalf("expected skip option in view: %s", modelChoiceView)
 	}
 
-	// Navigate down to "Skip for Now" using 'j'
+	// Navigate down to "Configure Later (Skip)" using 'j'
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	m = next.(tuiModel)
 

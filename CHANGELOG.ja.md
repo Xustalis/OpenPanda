@@ -36,7 +36,28 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 各項目は変更内容とユーザーから見える影響を 1〜3 行で書き、必要に応じて導入コミットを付記して遡りやすくする。
 - 英語版（CHANGELOG.md）が正。zh-CN / ja / es / de の翻訳はそのミラーで、リリース前後は一時的に遅れることがある。
 
-## [Unreleased]
+## [0.0.9-beta] - 2026-09-23
+
+v0.0.9 beta はハイブリッド転送/DTN アーキテクチャを完成させました：メッシュルーティングは遅延加重になり、DTN バンドルはオンラインのリンク上を実際に移動しオフラインのリンクでは待機（park）され、委任トークン予算は実際の計量で強制され、プリエンプトされた作業はシャドウコピーで存続し、ハードウェアアクチュエータに実行経路が加わりました。さらに、委任されたエージェントにノード自身のツール群への管理された経路を提供し、モデル設定面を完全に実装し、モデル管理 TUI を全幅レジストリと単一画面フォームエディタで再構築しました。
+
+### 追加
+
+- **遅延加重メッシュルーティング** —— 近隣ノードがハートビートでリンクごとの RTT サンプルを gossip し（`HeartbeatPayload.Links`、`employee_cache.links_json` に永続化）、`graphFirstHop` はホップ数 BFS ではなく実測リンクコスト上の Dijkstra を実行します。未測定のエッジは `unknownLinkCost` で計算されるため、実証済みのマルチホップ経路が高コストの直リンクを上回ることがあります（§4.1）。
+- **ワイヤ上の DTN バンドル** —— park された委任タスクは署名付き CBOR バンドル（HMAC-SHA256、EID、TTL）に包まれ `task_outbox.payload_blob` に格納され、`dtn_bundle` エンベロープでバイト単位そのまま転送されます。受信側は完全性と期限を検証し、宛先 EID に届けるか、次のホップのために転送/park します（§8.3、§9.1）。
+- **定期的な outbox スイープ** —— `sweepOutboxes` は peer hello 時だけでなくタイマーで result/cancel/task の各 outbox をリトライし、ピア単位の flush クレームにより並行 flush がインターリーブしないようにします。期限切れバンドルはクリーンに破棄され、タスクは expired とマークされます。
+- **メッシュ全体のトークン予算** —— マイグレーション V20 が `tasks.token_budget` を追加（0 = 無制限/レガシー、正 = 残りクォータ、-1 = 枯渇センチネル）。`SpendTokens` がアトミックに減算し、エージェントと supervisor/judge の使用量はモデル呼び出しごとに課金され、枯渇したタスクは死んだクォータを消費し続ける代わりに review に収束します（§6.1）。
+- **yield 時のシャドウ作業コピー** —— yield を求められたタスクはキャンセル前に宣言スコープを `.panda-shadow` にスナップショットし、再開タスクは競合しないファイルをマージして戻します（競合は勝者のバイトを保持し、システムノートで報告）。従来の全損キャンセルを置き換えます（§5.2）。
+- **アクチュエータ実行経路** —— ケイパビリティカードのアクチュエータが `command`/`args`/`tier` を宣言でき、commander は一致するタスクをネイティブエグゼキュータ経由で `ActionSpec` プレースホルダ置換付きでルーティングします。`panda card invoke <actuator-id> [action] [name=value ...]` で `--dry-run`/`--authorize` 付きのローカルテストが可能です（§7）。
+- **エージェント自己管理面（`panda mcp`）** —— ノードは独自の MCP stdio サーバーを同梱し、OpenPanda の管理面を第一級のエージェントツールとして公開します：`panda_status`、`panda_nodes`、`panda_queue`、`panda_task_status`、`panda_task_submit`（`panda task add` へのシェルアウト、セッションあたり最大 8 件）、`panda_skill_list`、`panda_skill_install`（hub 名または http(s) URL）、`panda_skill_import`（生の SKILL.md）、`panda_card`。`routing.tools_policy: extended` では、commander が作業ディレクトリの `.mcp.json` に、設定済みの `mcp.command` パススルーの隣へ `openpanda` エントリを実体化するため、MCP 対応エージェント CLI が自動で発見します。シェル実行可能なエージェントには PATH 上の `panda` バイナリを指すプロンプトヒントが渡ります。`routing.panda_tools: false` で拡張ツール面を維持したまま自己管理面をオプトアウトできます。
+- **チャンク分割・再開可能な artifact プッシュ（`artifact_push`）** —— インライン上限を超える大きなバンドルペイロードは pull 経路に任せず 1 MiB フレームでストリーム送信されます。マイグレーション V21 の `artifact_push_outbox` が送信側のカストディを再起動を跨いで永続化し、受信側は `<pool>/.staging/` 配下にチャンクをステージして連続したウォーターラインを報告します。再接続時は再送ではなく確認済みオフセットから再開します。入力が未着の dtn タスクは失敗せず `waiting_context` に park され、転送したリレーは artifact が到着し次第先へプッシュします（チェーンカストディ、§8.3）。
+- **無制限の artifact 転送** —— 512 MiB の `artifact.MaxBytes` 上限を撤廃：プールは既定で無制限、ファイルシステムの空き容量が上限です。ボリュームが収容できない `total` の宣言は最初のバイトが届く前に拒否されます（`ErrNoSpace`）。`storage.artifact_max_bytes` / `OPENPANDA_ARTIFACT_MAX_BYTES` で小容量ディスクのノードに固定上限を再設定できます。
+- **マルチボリューム artifact プール** —— `storage.artifact_extra_paths` / `OPENPANDA_ARTIFACT_EXTRA_PATHS` がプールにボリュームを追加：書き込みは使用可能容量が最大のボリュームを選び（`free − storage.artifact_min_free_bytes`、既定 256 MiB の余裕。明示的な 0 でウォーターマーク無効）、読み取りは全ルートを検索し、ステージ済みチャンクは選択したボリュームに置かれるためコミットの rename がアトミックのまま保たれます。追加パスは容量を増やすだけで artifact を複製しません。入站データの置き場は受信ノードだけが決めます。
+- **DTN マルチホップリレー** —— `relayBundle` は宛先への直リンクを待ちません。`scheduler.DTNNextHop` が gossip トポロジー上で宛先対応の加重経路を走らせ（中間ホップはオンライン必須、宛先はオフライン可）、署名済みバンドルをそのままより近い接続済み次ホップへ転送し、受信ピアへエコーバックしません（`task_outbox.via`、マイグレーション V22）。outbox flush のたびに次ホップを再計算します。バンドル単位のリレーログが転送を `dtnRelayMaxHops` に制限し、バンドル期限とともに失効します。
+- **エージェントセッションのチェックポイント** —— マイグレーション V23 が `tasks.agent_session_id`/`agent_session_node` を追加：アダプタの会話ハンドルは各ラウンド後に永続化され（`context.WithoutCancel` のため yield キャンセルでも失われない）、result ワイヤで委任元に報告され（`agent_session_id`）、再ディスパッチ時には生成したノードにのみ `resume_session_id` として提供されます。中断したタスクは冷起動ではなくエージェント自身の会話を再開します。セッション非対応のアダプタはフィールドを空のままにし、シャドウコピーのフォールバックを維持します（§5.2）。
+
+### 変更
+
+- **ハートビート gossip が隣接関係とリンクメトリクスを運搬** —— `Core.broadcastHeartbeat` が稼働中の近隣と実測 RTT を配信し、`handleHeartbeat` がそれらをディレクトリに折り込むため、ルーティング決定は RTT サンプル到着のたびに更新される実際のリンクコストを反映します。
 
 ### 修正
 

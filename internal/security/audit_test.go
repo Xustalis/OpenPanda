@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -100,5 +101,45 @@ func TestAuditChainTamperDetect(t *testing.T) {
 
 	if err := a.VerifyChain(ctx); err == nil {
 		t.Fatalf("expected tamper detection error, got nil")
+	}
+}
+
+func TestAuditRecordConcurrentNoFork(t *testing.T) {
+	db := openAuditTestDB(t)
+	a := NewAudit(db)
+	ctx := context.Background()
+
+	const workers = 10
+	const perWorker = 5
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers*perWorker)
+
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for i := 0; i < perWorker; i++ {
+				err := a.Record(ctx, Entry{
+					Who:    fmt.Sprintf("node-%d", workerID),
+					What:   "native:tier2",
+					Target: fmt.Sprintf("task-%d-%d", workerID, i),
+					Result: "authorized",
+					Detail: "ok",
+				})
+				if err != nil {
+					errCh <- fmt.Errorf("worker %d item %d: %w", workerID, i, err)
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Fatalf("concurrent record failed: %v", err)
+	}
+
+	if err := a.VerifyChain(ctx); err != nil {
+		t.Fatalf("verify chain after concurrent records: %v", err)
 	}
 }

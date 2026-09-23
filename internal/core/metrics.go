@@ -81,6 +81,12 @@ func (c *Core) recordEntryUsage(ctx context.Context, taskID string, client *entr
 		nil, success, latency.Milliseconds(), int(delta.Total()), cost); err != nil {
 		c.logger.Warn("record entry usage", "task", taskID, "err", err)
 	}
+	// §6.1: the judge's own spend comes out of the same mesh-wide token quota
+	// the executing agent draws on — a budget that ignored supervision would
+	// leak a full round's cost per verdict.
+	if _, err := c.store.SpendTokens(ctx, taskID, delta.Total()); err != nil {
+		c.logger.Warn("spend judge tokens", "task", taskID, "err", err)
+	}
 }
 
 // ListDelegationMetrics returns all recorded delegation metrics, newest first.

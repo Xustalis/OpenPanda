@@ -57,6 +57,19 @@ type Provider struct {
 	// supplier-level default; the entry client still probes at runtime, so a
 	// flag here only skips a rejected round-trip on the first call.
 	ThinkingPassback bool
+	// ThinkingStyle names the wire shape the client emits when the user turns
+	// thinking on (config.ModelConfig.Thinking). Anthropic-dialect providers
+	// always use the Anthropic thinking object regardless of this field; for
+	// OpenAI-dialect providers the choice is per vendor:
+	//   "object" → thinking:{type:"enabled"|"disabled"|"auto"} (Ark, GLM,
+	//              DeepSeek OpenAI surface, most CN relays)
+	//   "flag"   → enable_thinking:bool + thinking_budget:int (DashScope/Qwen)
+	//   "effort" → reasoning_effort:"low"|"medium"|"high" (OpenAI, OpenRouter)
+	//   ""       → send nothing; the model's native behaviour applies
+	// Unknown values are treated as "". A 400 that names the thinking field
+	// triggers one automatic retry without it, so a wrong guess degrades to
+	// the provider default rather than failing the turn.
+	ThinkingStyle string
 	// PromptCache toggles provider-native prompt-cache markers (Anthropic
 	// cache_control / OpenAI prompt_cache_key). Most vendors honour them; a
 	// strict legacy relay may not, so it is per-vendor tunable.
@@ -107,6 +120,7 @@ var builtins = []Provider{
 		DefaultMaxTokens: 4096,
 		ContextWindow:    128000,
 		ThinkingPassback: true,
+		ThinkingStyle:    "object",
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.28},
 		GeographicOrigin: RegionChina,
@@ -134,6 +148,7 @@ var builtins = []Provider{
 		DefaultModel:     "gpt-4o-mini",
 		DefaultMaxTokens: 4096,
 		ContextWindow:    128000,
+		ThinkingStyle:    "effort",
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60},
 		GeographicOrigin: RegionGlobal,
@@ -160,6 +175,7 @@ var builtins = []Provider{
 		DefaultModel:     "doubao-1-5-pro-32k-250115",
 		DefaultMaxTokens: 4096,
 		ContextWindow:    32000,
+		ThinkingStyle:    "object",
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 0.11, OutputPerMillion: 0.28},
 		GeographicOrigin: RegionChina,
@@ -173,6 +189,7 @@ var builtins = []Provider{
 		DefaultModel:     "glm-4-plus",
 		DefaultMaxTokens: 4096,
 		ContextWindow:    128000,
+		ThinkingStyle:    "object",
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 1.40, OutputPerMillion: 1.40},
 		GeographicOrigin: RegionChina,
@@ -186,6 +203,7 @@ var builtins = []Provider{
 		DefaultModel:     "qwen-plus",
 		DefaultMaxTokens: 4096,
 		ContextWindow:    128000,
+		ThinkingStyle:    "flag",
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 0.11, OutputPerMillion: 0.28},
 		GeographicOrigin: RegionChina,
@@ -212,6 +230,7 @@ var builtins = []Provider{
 		DefaultModel:     "anthropic/claude-3.5-sonnet",
 		DefaultMaxTokens: 4096,
 		ContextWindow:    200000,
+		ThinkingStyle:    "effort",
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00},
 		GeographicOrigin: RegionGlobal,
@@ -230,14 +249,34 @@ var builtins = []Provider{
 		GeographicOrigin: RegionGlobal,
 	},
 	{
+		// Relay stations / self-hosted gateways: the user supplies base_url,
+		// picks the wire dialect (openai | anthropic) and key. ThinkingStyle is
+		// resolved at request time from the chosen api_type (anthropic →
+		// Anthropic object; openai → object), and a 400 naming the thinking
+		// field retries once without it.
 		ID:               "custom",
-		Label:            "自定义 (base model)",
+		Label:            "自定义 / 中转站 (custom base_url)",
 		APIType:          config.APITypeOpenAI,
 		BaseURL:          "",
 		ModelsPath:       "",
+		ThinkingStyle:    "object",
 		PromptCache:      true,
 		GeographicOrigin: RegionGlobal,
 	},
+}
+
+// ThinkingStyleFor resolves the wire shape used to request thinking on a
+// ModelConfig: the provider's declared style wins; a bare custom endpoint
+// falls back to the dialect default (anthropic → "anthropic" object, openai →
+// "object"). The entry client consults this at request-build time.
+func ThinkingStyleFor(mc config.ModelConfig) string {
+	if mc.NormalizedAPIType() == config.APITypeAnthropic {
+		return "anthropic"
+	}
+	if p, ok := Lookup(mc.Provider); ok && p.ThinkingStyle != "" {
+		return p.ThinkingStyle
+	}
+	return "object"
 }
 
 // LookupPricing returns the Pricing for a given provider and model name.

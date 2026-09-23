@@ -71,7 +71,7 @@ make measure
 The codebase is a Go 1.26+ monorepo with pure-Go SQLite (no CGO).
 
 ### Entry Points
-- `cmd/panda/` — CLI entry point with subcommands: `daemon`/`serve`, `ask`, `repl`/`chat`, `web`, `voice`, `install`, `uninstall`, `doctor`, `status`, `nodes` (`add`/`invite`/`disconnect`/`remove`), `pair`, `queue`, `task` (`add`/`priority`/`move`), `plan`, `cancel`, `approve`, `reject`, `logs`, `skill`, `reminder`, `detect`, `card` (`show`/`rescan`/`edit`/`set` + `native`/`agent`/`manual`), `init`, `metrics`, `audit` (`verify`/`entries`), `session`/`sessions`, `memory`, `config`, `agents`, `project`, `version`, `help`
+- `cmd/panda/` — CLI entry point with subcommands: `daemon`/`serve`, `ask`, `repl`/`chat`, `web`, `voice`, `install`, `uninstall`, `doctor`, `status`, `nodes` (`add`/`invite`/`disconnect`/`remove`), `pair`, `queue`, `task` (`add`/`priority`/`move`), `plan`, `cancel`, `approve`, `reject`, `logs`, `skill`, `reminder`, `detect`, `card` (`show`/`rescan`/`edit`/`set` + `native`/`agent`/`manual`), `init`, `metrics`, `audit` (`verify`/`entries`), `session`/`sessions`, `memory`, `config`, `agents`, `project`, `mcp` (self-tools MCP stdio server), `version`, `help`
 - `webui/cmd/panel/` — Web console sidecar (embeds the Preact app via go:embed)
 
 ### Core Packages (`internal/`)

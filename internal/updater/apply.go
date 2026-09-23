@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/commander"
@@ -65,6 +67,12 @@ func runningBinary() string {
 	return exe
 }
 
+// adapterManifest records the adapter filenames the last update installed.
+// A file in the old manifest but absent from the new release was dropped
+// upstream and gets removed; files never listed (user-added scripts) are
+// left alone — the manifest is what makes deletion safe.
+const adapterManifest = ".adapters.manifest"
+
 // installAdapters copies the release's adapters/*.py over the adapter dir the
 // running process resolves scripts from, so the updated binary and its adapters
 // stay in lock-step. A missing release adapters dir (or an unresolvable target)
@@ -85,15 +93,38 @@ func installAdapters(s *stagedRelease) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
+	keep := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".py" {
 			continue
 		}
+		keep[e.Name()] = true
 		if err := copyFile(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), 0o644); err != nil {
 			return err
 		}
 	}
-	return nil
+	// Reconcile against the previous manifest before writing the new one: a
+	// release that drops an adapter must not leave the old script answering
+	// requests forever.
+	if old, err := os.ReadFile(filepath.Join(dst, adapterManifest)); err == nil {
+		for _, name := range strings.Split(strings.TrimSpace(string(old)), "\n") {
+			// The manifest is ours, but only ever holds bare filenames —
+			// refuse anything pathlike so a corrupted list cannot remove
+			// files outside the adapter dir.
+			if name == "" || filepath.Base(name) != name {
+				continue
+			}
+			if !keep[name] {
+				_ = os.Remove(filepath.Join(dst, name))
+			}
+		}
+	}
+	names := make([]string, 0, len(keep))
+	for name := range keep {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return os.WriteFile(filepath.Join(dst, adapterManifest), []byte(strings.Join(names, "\n")+"\n"), 0o644)
 }
 
 // copyFile streams src to dst via a temp file + rename so a partial copy never

@@ -75,6 +75,44 @@ func TestCircuitBreakerHalfOpenFailureReopens(t *testing.T) {
 	}
 }
 
+func TestCircuitBreakerHalfOpenAbandonedTrialReopens(t *testing.T) {
+	// A trial admitted in half-open that is never reported (caller crashed or
+	// abandoned the task) must not wedge the key half-open forever: after one
+	// cooldown the stale trial is counted as a failure and the circuit returns
+	// to open, from where it can try again.
+	b := NewCircuitBreaker(1, 20*time.Millisecond)
+
+	b.Allow("agent:claude")
+	b.RecordFailure("agent:claude")
+	time.Sleep(25 * time.Millisecond)
+
+	if !b.Allow("agent:claude") {
+		t.Fatalf("first call after cooldown must admit a half-open trial")
+	}
+	// Never report the trial. During the trial window the key stays blocked.
+	if b.Allow("agent:claude") {
+		t.Fatalf("half-open circuit must admit only one trial")
+	}
+	// Past the cooldown with no verdict, the abandoned trial re-opens the
+	// circuit instead of leaving it wedged.
+	time.Sleep(25 * time.Millisecond)
+	if b.Allow("agent:claude") {
+		t.Fatalf("stale half-open trial must re-open the circuit, not admit another")
+	}
+	if st := b.State("agent:claude"); st != CircuitOpen {
+		t.Fatalf("state after abandoned trial = %s, want open", st)
+	}
+	// And the re-opened circuit can still work its way back to closed.
+	time.Sleep(25 * time.Millisecond)
+	if !b.Allow("agent:claude") {
+		t.Fatalf("recovered circuit must admit a fresh trial")
+	}
+	b.RecordSuccess("agent:claude")
+	if st := b.State("agent:claude"); st != CircuitClosed {
+		t.Fatalf("state after recovery = %s, want closed", st)
+	}
+}
+
 func TestCircuitBreakerKeysAreIndependent(t *testing.T) {
 	b := NewCircuitBreaker(1, time.Second)
 

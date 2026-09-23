@@ -191,6 +191,8 @@ func TestEnqueueRoutesToPeer(t *testing.T) {
 	if err := root.DialPeer(ctx, "127.0.0.1:17882"); err != nil {
 		t.Fatalf("dial: %v", err)
 	}
+	waitPeer(t, root, "queue-leaf")
+	waitPeer(t, leaf, "queue-root")
 	time.Sleep(300 * time.Millisecond)
 
 	root.StartQueueScheduler(ctx)

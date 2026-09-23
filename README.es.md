@@ -158,8 +158,8 @@ panda init
 
 | Versión | Tema |
 |---|---|
-| **v0.0.8** (base actual) | Orquestación multiagente en una sola máquina, plenamente utilizable: clasificación de intención, despacho, bucle de supervisión, failover, aprobación por niveles, política de idioma en prompts |
-| **v0.0.9** | Control de agentes más preciso: veredictos de supervisión, estabilidad del enrutado de agentes, transparencia de ejecución |
+| **v0.0.8** (base estable) | Orquestación multiagente en una sola máquina, plenamente utilizable: clasificación de intención, despacho, bucle de supervisión, failover, aprobación por niveles, política de idioma en prompts |
+| **v0.0.9-beta** (actual) | Arquitectura de transporte híbrido/DTN completa: enrutado mesh ponderado por latencia, bundles DTN sobre el cable, presupuestos de tokens, copias sombra, ruta de actuadores — además de toda la superficie de configuración de modelos y un TUI de gestión de modelos reconstruido |
 | **v0.0.10** | La colaboración multidispositivo como protagonista: delegación entre nodos, protección por lease, ejecución reanudable — endurecida y probada en campo |
 | **v0.0.x (más allá)** | Estabilidad, rendimiento y ajuste de casos límite |
 | **v0.1.0** | Capacidades de escritorio y un control y una gestión más potentes — calidad comercial |
