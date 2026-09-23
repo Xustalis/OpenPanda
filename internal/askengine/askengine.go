@@ -842,6 +842,9 @@ func (e *Engine) Project() (string, string) {
 type AskScope struct {
 	Project string
 	WorkDir string
+	// Mode is the slash-prefix interaction mode the user picked for this turn
+	// ("goal", "plan", "spec"); empty leaves classification to the model.
+	Mode string
 
 	ambientProjectFallback bool
 }
@@ -850,6 +853,12 @@ type AskScope struct {
 // own explicit project context should use AskTurnsScoped.
 func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, workDir string, authorize bool, cb StreamCallbacks) (res *Result, err error) {
 	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, ambientProjectFallback: true}, authorize, cb)
+}
+
+// AskTurnsMode is AskTurns plus the slash-prefix interaction mode the user
+// picked (/goal, /plan, /spec). "" is exactly AskTurns.
+func (e *Engine) AskTurnsMode(ctx context.Context, history []entry.Turn, prompt, workDir, mode string, authorize bool, cb StreamCallbacks) (res *Result, err error) {
+	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, Mode: mode, ambientProjectFallback: true}, authorize, cb)
 }
 
 // AskTurnsScoped is the session-aware ask with request-scoped project/workspace.
@@ -905,6 +914,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	}
 	if effectiveLocale != "" {
 		classifyOpts = append(classifyOpts, entry.WithLocale(effectiveLocale))
+	}
+	if scope.Mode != "" {
+		classifyOpts = append(classifyOpts, entry.WithRequestMode(scope.Mode))
 	}
 
 	// Memory wall (design §17.2): Hermes personal memory enters only
