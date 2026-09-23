@@ -40,8 +40,13 @@ func TestStoreMultiVolumeReadsAcrossRoots(t *testing.T) {
 	if _, ok := s.Has(m.Hash); !ok {
 		t.Fatal("Has misses an artifact on the extra volume")
 	}
-	if _, err := s.Open(m.Hash); err != nil {
+	f, err := s.Open(m.Hash)
+	if err != nil {
 		t.Fatalf("Open misses the extra volume: %v", err)
+	}
+	// Windows cannot Remove an artifact while a handle is still open.
+	if err := f.Close(); err != nil {
+		t.Fatalf("close artifact handle: %v", err)
 	}
 	dst := t.TempDir()
 	got, err := s.Extract(m.Hash, dst)

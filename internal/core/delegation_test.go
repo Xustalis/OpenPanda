@@ -41,6 +41,10 @@ func startChain(t *testing.T, ctx context.Context, rootAddr, midAddr, leafAddr s
 	// root → mid and mid → leaf, so the chain is linear.
 	must(root.DialPeer(ctx, midAddr))
 	must(mid.DialPeer(ctx, leafAddr))
+	waitPeer(t, root, "mac")
+	waitPeer(t, mid, "opi3b")
+	waitPeer(t, mid, "windows")
+	waitPeer(t, leaf, "mac")
 	time.Sleep(300 * time.Millisecond)
 	return root, mid, leaf
 }
