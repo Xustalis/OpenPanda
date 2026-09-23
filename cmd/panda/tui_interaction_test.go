@@ -13,6 +13,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	tea "github.com/charmbracelet/bubbletea"
@@ -84,8 +85,16 @@ func TestTUISplashScreen(t *testing.T) {
 	if !strings.Contains(wizardView, "未配置模型，请选择提供商开始添加：") {
 		t.Fatalf("expected onboarding prompt in view: %s", wizardView)
 	}
-	if !strings.Contains(wizardView, "DeepSeek") || !strings.Contains(wizardView, "Ollama") {
-		t.Fatalf("expected providers in wizard view: %s", wizardView)
+	// The whole catalogue is offered — including the custom/relay entry — even
+	// if the rendered window only shows the first rows.
+	var sawOllama, sawCustom, sawDeepSeek bool
+	for _, it := range mWiz.selectionList.Items {
+		sawOllama = sawOllama || it.ID == "ollama"
+		sawCustom = sawCustom || it.ID == "custom"
+		sawDeepSeek = sawDeepSeek || it.ID == "deepseek"
+	}
+	if !sawDeepSeek || !sawOllama || !sawCustom {
+		t.Fatalf("wizard provider list missing entries (ds=%v ollama=%v custom=%v)", sawDeepSeek, sawOllama, sawCustom)
 	}
 
 	// Pressing Enter when a model is configured transitions to modeIdle
@@ -305,6 +314,18 @@ func TestTUIModelManagement(t *testing.T) {
 	}
 }
 
+// wizardSelect moves the provider picker's highlight onto id, so the tests
+// stay independent of the catalogue's ordering.
+func wizardSelect(m tuiModel, id string) tuiModel {
+	for i, it := range m.selectionList.Items {
+		if it.ID == id {
+			m.selectionList.Cursor = i
+			return m
+		}
+	}
+	panic("provider not in wizard list: " + id)
+}
+
 // TestTUIModelWizardStepFlow tests the multi-step model creation wizard for Ollama.
 func TestTUIModelWizardStepFlow(t *testing.T) {
 	cfg := &config.Config{}
@@ -318,25 +339,122 @@ func TestTUIModelWizardStepFlow(t *testing.T) {
 	next, _ := m.startModelWizard()
 	m = next
 
-	// Step 0: Choose provider (select Ollama with 'j' 3 times)
-	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	// Press Enter on Ollama -> Ollama has NoAuth, skips directly to model name
+	// Step 0: Choose provider — Ollama is a NoAuth local provider, so it skips
+	// the key step and lands on the model name.
+	m = wizardSelect(m, "ollama")
 	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
 
 	if m.wizardStep != wizardStepModelName || m.wizardProvider != "ollama" {
 		t.Fatalf("expected wizardStepModelName for ollama, got step %v prov %v", m.wizardStep, m.wizardProvider)
 	}
 
-	// Press Enter to accept default model name (llama3)
+	// Accept the default model name -> thinking mode picker.
 	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.wizardStep != wizardStepThinking {
+		t.Fatalf("expected thinking step, got %v", m.wizardStep)
+	}
 
+	// Accept "auto" -> context window.
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.wizardStep != wizardStepContext {
+		t.Fatalf("expected context step, got %v", m.wizardStep)
+	}
+
+	// Blank context -> connectivity probe step; the async cmd is discarded by
+	// step(), so the wizard waits in testing state until we inject the result.
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.wizardStep != wizardStepTest || !m.wizardTesting {
+		t.Fatalf("expected test step in flight, got step=%v testing=%v", m.wizardStep, m.wizardTesting)
+	}
+
+	// A successful probe finalizes: model persisted + activated.
+	m = step(m, wizardTestMsg{err: nil})
 	if m.mode != modeIdle {
 		t.Fatalf("expected return to idle after completing wizard, got %v", m.mode)
 	}
-	if r.cfg.Model.Provider != "ollama" && r.cfg.Model.Model != "llama3" {
+	if p, _ := providers.Lookup("ollama"); r.cfg.Model.Provider != "ollama" || r.cfg.Model.Model != p.DefaultModel {
 		t.Fatalf("expected ollama model configured, got %+v", r.cfg.Model)
+	}
+}
+
+// TestTUIModelWizardCustomRelay walks the custom/relay branch end to end:
+// provider pick → base URL → dialect → optional key → model → thinking →
+// context → probe. A failed probe keeps the entry unsaved until the user
+// picks "save anyway".
+func TestTUIModelWizardCustomRelay(t *testing.T) {
+	cfg := &config.Config{}
+	r := &repl{loc: i18n.English, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width = 100
+	m.height = 30
+
+	next, _ := m.startModelWizard()
+	m = next
+
+	m = wizardSelect(m, "custom")
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.wizardStep != wizardStepBaseURL {
+		t.Fatalf("custom should ask for base URL, got step %v", m.wizardStep)
+	}
+
+	// URL without scheme gets https:// prepended.
+	for _, ch := range "relay.example.com/v1" {
+		m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.wizardBaseURL != "https://relay.example.com/v1" || m.wizardStep != wizardStepAPIType {
+		t.Fatalf("base URL not captured: %q step %v", m.wizardBaseURL, m.wizardStep)
+	}
+
+	// Pick Anthropic dialect (cursor 1).
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.wizardAPIType != config.APITypeAnthropic || m.wizardStep != wizardStepAPIKey {
+		t.Fatalf("expected anthropic dialect then key step, got %q / %v", m.wizardAPIType, m.wizardStep)
+	}
+
+	// Blank key is allowed for custom (keyless internal relay) -> model step.
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.wizardStep != wizardStepModelName {
+		t.Fatalf("custom blank key should still reach model step, got %v", m.wizardStep)
+	}
+	for _, ch := range "claude-3-7-sonnet" {
+		m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Thinking "on" -> context step.
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.wizardStep != wizardStepContext || m.wizardThinking != "on" {
+		t.Fatalf("expected context step with thinking=on, got %v / %q", m.wizardStep, m.wizardThinking)
+	}
+	for _, ch := range "180000" {
+		m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.wizardStep != wizardStepTest {
+		t.Fatalf("expected test step, got %v", m.wizardStep)
+	}
+
+	mc := m.wizardConfig()
+	if mc.BaseURL != "https://relay.example.com/v1" || mc.APIType != config.APITypeAnthropic ||
+		mc.Thinking != "on" || mc.ContextWindow != 180000 || !mc.NoAuth {
+		t.Fatalf("wizardConfig assembled wrong ModelConfig: %+v", mc)
+	}
+
+	// A failed probe must NOT persist the entry; Enter retries, 's' saves anyway.
+	m = step(m, wizardTestMsg{err: fmt.Errorf("dial tcp: connection refused")})
+	if m.wizardTestErr == "" || m.wizardTesting {
+		t.Fatalf("probe failure not surfaced: err=%q testing=%v", m.wizardTestErr, m.wizardTesting)
+	}
+	if len(r.cfg.Models) != 0 {
+		t.Fatalf("failed probe must not persist a model, got %d", len(r.cfg.Models))
+	}
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if m.mode != modeIdle || len(r.cfg.Models) != 1 {
+		t.Fatalf("'s' should save anyway after failure, mode=%v models=%d", m.mode, len(r.cfg.Models))
 	}
 }
 
@@ -473,11 +591,11 @@ func TestTUIFirstRunOnboardingFlow(t *testing.T) {
 	if !strings.Contains(modelChoiceView, "Configure Large Language Model") {
 		t.Fatalf("expected model choice title in view: %s", modelChoiceView)
 	}
-	if !strings.Contains(modelChoiceView, "Skip for Now") {
+	if !strings.Contains(modelChoiceView, "Configure Later (Skip)") {
 		t.Fatalf("expected skip option in view: %s", modelChoiceView)
 	}
 
-	// Navigate down to "Skip for Now" using 'j'
+	// Navigate down to "Configure Later (Skip)" using 'j'
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	m = next.(tuiModel)
 

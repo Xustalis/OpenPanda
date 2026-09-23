@@ -35,6 +35,50 @@ func step(m tuiModel, msg tea.Msg) tuiModel {
 	return next.(tuiModel)
 }
 
+// TestTUIModifiedEnter covers the "newline, not submit" gestures: kitty CSI-u
+// Shift+Enter, Alt+Enter (ESC CR), and the Ctrl+J fallback — all must grow the
+// textarea instead of submitting.
+func TestTUIModifiedEnter(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  tea.KeyMsg
+	}{
+		{"kitty shift+enter", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[13;2u")}},
+		{"kitty ctrl+enter", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[13;4u")}},
+		{"alt+enter", tea.KeyMsg{Type: tea.KeyEnter, Alt: true}},
+		{"ctrl+j", tea.KeyMsg{Type: tea.KeyCtrlJ}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestTUI(t)
+			m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+			m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("first")})
+			m = step(m, tc.msg)
+			if m.ta.Value() != "first\n" {
+				t.Fatalf("%s should insert a newline, got %q", tc.name, m.ta.Value())
+			}
+			if m.ta.LineCount() != 2 {
+				t.Fatalf("expected 2 lines after %s, got %d", tc.name, m.ta.LineCount())
+			}
+			// Box grew with the content.
+			if got := m.ta.Height(); got != 2 {
+				t.Fatalf("expected textarea height 2, got %d", got)
+			}
+		})
+	}
+
+	// A bare Enter still submits: with no model configured the submission is
+	// swallowed into the wizard, but the buffer must clear rather than gain a
+	// newline.
+	m := newTestTUI(t)
+	m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if strings.HasSuffix(m.ta.Value(), "\n") {
+		t.Fatalf("plain Enter must not insert a newline, got %q", m.ta.Value())
+	}
+}
+
 // TestTUISizingAndInput drives the idle path: a window size sets the layout, and
 // typed runes land in the input without leaving idle mode.
 func TestTUISizingAndInput(t *testing.T) {
@@ -294,7 +338,7 @@ func TestTUISteeringQueueFullKeepsDraft(t *testing.T) {
 
 func TestTUIApprovalResumeKeepsCardAndDropsStaleCompletion(t *testing.T) {
 	m := newTestTUI(t)
-	live := newTaskProgress("approved task", time.Now())
+	live := newTaskProgress("approved task", time.Now(), i18n.English)
 	m.liveTask = live
 	m.mode = modeApproving
 	m.pending = &askengine.Result{Approval: &askengine.ApprovalRequest{TaskID: "task-abc"}}

@@ -114,7 +114,7 @@ func runInit(args []string) {
 	}
 	fmt.Println(i18n.Tf(loc, "init.card.written", "path", cardOut))
 
-	fmt.Println(i18n.Tf(loc, "init.next", "config", target, "card", cardOut))
+	fmt.Println(i18n.T(loc, "init.next"))
 }
 
 // askYes prints question with a [y/N] hint and reports whether the answer

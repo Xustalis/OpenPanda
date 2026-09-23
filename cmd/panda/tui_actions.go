@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
@@ -135,13 +137,34 @@ func (m tuiModel) buildModelItems() []SelectionItem {
 // buildProviderItems returns the core 4 providers for onboarding/adding. Only
 // Ollama carries a gloss — the other three are the vendors' own names — and it
 // is localized, like every other label in this list.
+// buildProviderItems renders the wizard's provider picker from the built-in
+// catalogue (internal/providers), so the TUI and `/model add` can never
+// diverge: every registered vendor — OpenAI, Anthropic, DeepSeek, Qwen, Kimi,
+// 火山引擎, relays (custom) — appears with its endpoint and auth requirement.
 func buildProviderItems(loc i18n.Locale) []SelectionItem {
-	return []SelectionItem{
-		{ID: "deepseek", Title: "DeepSeek"},
-		{ID: "openai", Title: "OpenAI"},
-		{ID: "anthropic", Title: "Anthropic"},
-		{ID: "ollama", Title: i18n.T(loc, "tui.model.ollamaLocal")},
+	var items []SelectionItem
+	for i, p := range providers.All() {
+		snippet := p.BaseURL
+		if snippet == "" {
+			snippet = i18n.T(loc, "tui.wizard.customURLHint")
+		}
+		badge := ""
+		if p.NoAuth {
+			badge = i18n.T(loc, "tui.wizard.noKeyBadge")
+		} else if p.APIType == config.APITypeAnthropic {
+			badge = "anthropic"
+		} else {
+			badge = "openai"
+		}
+		items = append(items, SelectionItem{
+			Index:   i + 1,
+			ID:      p.ID,
+			Title:   p.Label,
+			Snippet: snippet,
+			Badge:   badge,
+		})
 	}
+	return items
 }
 
 // openSessionsList switches to the interactive sessions view.
@@ -211,6 +234,7 @@ func (m tuiModel) openModelPanel() (tuiModel, tea.Cmd) {
 func (m tuiModel) startModelWizard() (tuiModel, tea.Cmd) {
 	items := buildProviderItems(m.loc)
 	sl := NewSelectionList(i18n.T(m.loc, "tui.wizard.noModelPrompt"), items)
+	sl.Boxed = true
 	sl.FooterHints = i18n.T(m.loc, "tui.wizard.confirmBack")
 
 	m.mode = modeModelWizard
@@ -218,7 +242,14 @@ func (m tuiModel) startModelWizard() (tuiModel, tea.Cmd) {
 	m.wizardProvider = ""
 	m.wizardKey = ""
 	m.wizardModel = ""
+	m.wizardBaseURL = ""
+	m.wizardAPIType = ""
+	m.wizardThinking = ""
+	m.wizardContext = ""
 	m.wizardInput = ""
+	m.wizardTestErr = ""
+	m.wizardTesting = false
+	m.wizardEditAlias = ""
 	m.selectionList = sl
 	return m, nil
 }
@@ -237,7 +268,7 @@ func (m tuiModel) selectionPageRows() int {
 	case modeModelPanel:
 		return 8
 	case modeModelWizard:
-		return 4
+		return m.listPageRows() // the catalogue is a dozen rows — page like a list
 	default:
 		return m.listPageRows()
 	}
@@ -504,104 +535,317 @@ func (m tuiModel) editSelectedModel() (tuiModel, tea.Cmd) {
 
 	prov := effectiveProvider(curMC)
 	if prov == "-" {
-		prov = "openai"
+		if curMC.BaseURL != "" {
+			prov = "custom"
+		} else {
+			prov = "openai"
+		}
 	}
 	m.mode = modeModelWizard
 	m.wizardProvider = prov
 	m.wizardKey = curMC.APIKey
 	m.wizardModel = curMC.Model
-	m.wizardInput = curMC.APIKey
+	m.wizardBaseURL = curMC.BaseURL
+	m.wizardAPIType = curMC.NormalizedAPIType()
+	m.wizardThinking = curMC.Thinking
+	if m.wizardThinking == "" {
+		m.wizardThinking = "auto"
+	}
+	if curMC.ContextWindow > 0 {
+		m.wizardContext = strconv.Itoa(curMC.ContextWindow)
+	} else {
+		m.wizardContext = ""
+	}
+	m.wizardTestErr = ""
+	m.wizardTesting = false
+	m.wizardEditAlias = curMC.Alias()
 	if p, ok := providers.Lookup(prov); ok && p.NoAuth {
 		m.wizardStep = wizardStepModelName
 		m.wizardInput = curMC.Model
 	} else {
 		m.wizardStep = wizardStepAPIKey
+		m.wizardInput = curMC.APIKey
 	}
 	return m, nil
+}
+
+// wizardNext advances the wizard to step s, loading that step's value into
+// the shared wizardInput buffer (or building its selection list for the pick
+// steps). wizardBack is the Esc path — the previous step in the sequence for
+// the chosen provider.
+func (m tuiModel) wizardNext(s wizardStep) (tuiModel, tea.Cmd) {
+	m.wizardStep = s
+	switch s {
+	case wizardStepBaseURL:
+		m.wizardInput = m.wizardBaseURL
+	case wizardStepAPIType:
+		items := []SelectionItem{
+			{Index: 1, ID: config.APITypeOpenAI, Title: "OpenAI", Snippet: i18n.T(m.loc, "tui.wizard.apiTypeOpenAIHint")},
+			{Index: 2, ID: config.APITypeAnthropic, Title: "Anthropic", Snippet: i18n.T(m.loc, "tui.wizard.apiTypeAnthropicHint")},
+		}
+		sl := NewSelectionList(i18n.T(m.loc, "tui.wizard.apiTypeTitle"), items)
+		sl.Boxed = true
+		sl.FooterHints = i18n.T(m.loc, "tui.wizard.confirmBack")
+		if m.wizardAPIType == config.APITypeAnthropic {
+			sl.Cursor = 1
+		}
+		m.selectionList = sl
+	case wizardStepAPIKey:
+		m.wizardInput = m.wizardKey
+	case wizardStepModelName:
+		m.wizardInput = m.wizardModel
+	case wizardStepThinking:
+		items := []SelectionItem{
+			{Index: 1, ID: "auto", Title: i18n.T(m.loc, "tui.wizard.thinkingAuto"), Snippet: i18n.T(m.loc, "tui.wizard.thinkingAutoHint")},
+			{Index: 2, ID: "on", Title: i18n.T(m.loc, "tui.wizard.thinkingOn"), Snippet: i18n.T(m.loc, "tui.wizard.thinkingOnHint")},
+			{Index: 3, ID: "off", Title: i18n.T(m.loc, "tui.wizard.thinkingOff"), Snippet: i18n.T(m.loc, "tui.wizard.thinkingOffHint")},
+		}
+		sl := NewSelectionList(i18n.T(m.loc, "tui.wizard.thinkingTitle"), items)
+		sl.Boxed = true
+		sl.FooterHints = i18n.T(m.loc, "tui.wizard.confirmBack")
+		switch m.wizardThinking {
+		case "on":
+			sl.Cursor = 1
+		case "off":
+			sl.Cursor = 2
+		}
+		m.selectionList = sl
+	case wizardStepContext:
+		m.wizardInput = m.wizardContext
+	case wizardStepTest:
+		m.wizardTesting = true
+		m.wizardTestErr = ""
+		return m, m.wizardTestCmd()
+	}
+	return m, nil
+}
+
+// wizardBack walks one step backwards, honouring the branches that the
+// forward path skips (custom providers own the URL/dialect steps; no-auth
+// providers skip the key step).
+func (m tuiModel) wizardBack() (tuiModel, tea.Cmd) {
+	switch m.wizardStep {
+	case wizardStepBaseURL:
+		return m.wizardNext(wizardStepProvider)
+	case wizardStepAPIType:
+		return m.wizardNext(wizardStepBaseURL)
+	case wizardStepAPIKey:
+		if m.wizardProvider == "custom" {
+			return m.wizardNext(wizardStepAPIType)
+		}
+		return m.wizardNext(wizardStepProvider)
+	case wizardStepModelName:
+		if p, ok := providers.Lookup(m.wizardProvider); ok && p.NoAuth {
+			if m.wizardProvider == "custom" {
+				return m.wizardNext(wizardStepAPIType)
+			}
+			return m.wizardNext(wizardStepProvider)
+		}
+		return m.wizardNext(wizardStepAPIKey)
+	case wizardStepThinking:
+		return m.wizardNext(wizardStepModelName)
+	case wizardStepContext:
+		return m.wizardNext(wizardStepThinking)
+	case wizardStepTest:
+		return m.wizardNext(wizardStepContext)
+	}
+	return m.startModelWizard()
+}
+
+// wizardEdit edits one text-input step's buffer with a keystroke — runes
+// append, Backspace/Ctrl+H delete. It is shared by every input step.
+func (m *tuiModel) wizardEdit(msg tea.KeyMsg) {
+	switch msg.Type {
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		runes := []rune(m.wizardInput)
+		if len(runes) > 0 {
+			m.wizardInput = string(runes[:len(runes)-1])
+		}
+	case tea.KeyRunes:
+		m.wizardInput += string(msg.Runes)
+	case tea.KeySpace:
+		m.wizardInput += " "
+	case tea.KeyCtrlV, tea.KeyCtrlU:
+		// Ctrl+U clears the field; Ctrl+V has no clipboard bridge — ignore.
+		if msg.Type == tea.KeyCtrlU {
+			m.wizardInput = ""
+		}
+	}
+}
+
+// wizardSelectionKey handles arrows/enter/esc on the pick steps (provider,
+// apiType, thinking). It returns the selected item ID when Enter lands.
+func (m tuiModel) wizardSelectionKey(msg tea.KeyMsg, rows int) (sel string, next tuiModel, cmd tea.Cmd, done bool) {
+	switch msg.Type {
+	case tea.KeyUp, tea.KeyCtrlP:
+		m.selectionList.MoveUp()
+	case tea.KeyDown, tea.KeyCtrlN:
+		m.selectionList.MoveDown(rows)
+	case tea.KeyPgUp:
+		m.selectionList.MovePage(-rows, rows)
+	case tea.KeyPgDown:
+		m.selectionList.MovePage(rows, rows)
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "k", "K":
+			m.selectionList.MoveUp()
+		case "j", "J":
+			m.selectionList.MoveDown(rows)
+		case "q", "Q":
+			return "", m, nil, true // caller treats as Esc
+		}
+	case tea.KeyEnter:
+		item, ok := m.selectionList.Selected()
+		if !ok {
+			return "", m, nil, true
+		}
+		return item.ID, m, nil, true
+	}
+	return "", m, nil, false
+}
+
+// wizardTestCmd runs the connectivity probe off the UI goroutine: one-word
+// completion against the assembled config. The result arrives as
+// wizardTestMsg.
+func (m tuiModel) wizardTestCmd() tea.Cmd {
+	mc := m.wizardConfig()
+	return func() tea.Msg {
+		client, err := entry.NewClient(mc)
+		if err != nil {
+			return wizardTestMsg{err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_, err = client.Complete(ctx, "You are a connectivity test.", "Reply with exactly: OK")
+		return wizardTestMsg{err: err}
+	}
+}
+
+// wizardConfig assembles the ModelConfig the current wizard state describes —
+// the single place every wizard step's value becomes a config field.
+func (m tuiModel) wizardConfig() config.ModelConfig {
+	var mc config.ModelConfig
+	if m.wizardProvider == "custom" {
+		mc = config.ModelConfig{
+			Provider: "custom",
+			APIType:  m.wizardAPIType,
+			BaseURL:  m.wizardBaseURL,
+			APIKey:   m.wizardKey,
+			Model:    m.wizardModel,
+			NoAuth:   m.wizardKey == "",
+		}
+		if mc.APIType == "" {
+			mc.APIType = config.APITypeOpenAI
+		}
+	} else {
+		mc, _ = providers.ModelConfig(m.wizardProvider, m.wizardModel, m.wizardKey)
+	}
+	if m.wizardThinking != "" && m.wizardThinking != "auto" {
+		mc.Thinking = m.wizardThinking
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(m.wizardContext)); err == nil && n > 0 {
+		mc.ContextWindow = n
+	}
+	return mc
 }
 
 // handleModelWizardKey handles keystrokes in the onboarding/add guide.
 func (m tuiModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.wizardStep {
 	case wizardStepProvider:
-		switch msg.Type {
-		case tea.KeyUp, tea.KeyCtrlP:
-			m.selectionList.MoveUp()
-			return m, nil
-		case tea.KeyDown, tea.KeyCtrlN:
-			m.selectionList.MoveDown(4)
-			return m, nil
-		case tea.KeyPgUp:
-			m.selectionList.MovePage(-4, 4)
-			return m, nil
-		case tea.KeyPgDown:
-			m.selectionList.MovePage(4, 4)
-			return m, nil
-		case tea.KeyEsc:
+		if msg.Type == tea.KeyEsc {
 			m.mode = modeIdle
 			return m, nil
-		case tea.KeyRunes:
-			switch string(msg.Runes) {
-			case "k", "K":
-				m.selectionList.MoveUp()
-				return m, nil
-			case "j", "J":
-				m.selectionList.MoveDown(4)
-				return m, nil
-			case "q", "Q":
-				m.mode = modeIdle
-				return m, nil
-			}
-		case tea.KeyEnter:
-			item, ok := m.selectionList.Selected()
-			if !ok {
-				m.mode = modeIdle
-				return m, nil
-			}
-			m.wizardProvider = item.ID
-			if p, ok := providers.Lookup(item.ID); ok && p.NoAuth {
-				m.wizardStep = wizardStepModelName
-				m.wizardInput = p.DefaultModel
-			} else {
-				m.wizardStep = wizardStepAPIKey
-				m.wizardInput = ""
-			}
+		}
+		sel, next, _, done := m.wizardSelectionKey(msg, m.selectionPageRows())
+		m = next
+		if !done {
 			return m, nil
 		}
+		if sel == "" { // q/Q or empty list
+			m.mode = modeIdle
+			return m, nil
+		}
+		m.wizardProvider = sel
+		m.wizardTestErr = ""
+		switch {
+		case sel == "custom":
+			return m.wizardNext(wizardStepBaseURL)
+		default:
+			p, _ := providers.Lookup(sel)
+			if p.NoAuth {
+				m.wizardModel = p.DefaultModel
+				return m.wizardNext(wizardStepModelName)
+			}
+			return m.wizardNext(wizardStepAPIKey)
+		}
+
+	case wizardStepBaseURL:
+		switch msg.Type {
+		case tea.KeyEsc:
+			return m.wizardBack()
+		case tea.KeyEnter:
+			base := strings.TrimSpace(m.wizardInput)
+			if base == "" {
+				return m, nil // the URL is required — no default exists
+			}
+			if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+				base = "https://" + base
+			}
+			m.wizardBaseURL = base
+			return m.wizardNext(wizardStepAPIType)
+		default:
+			m.wizardEdit(msg)
+			return m, nil
+		}
+
+	case wizardStepAPIType:
+		if msg.Type == tea.KeyEsc {
+			return m.wizardBack()
+		}
+		sel, next, _, done := m.wizardSelectionKey(msg, m.selectionPageRows())
+		m = next
+		if !done {
+			return m, nil
+		}
+		if sel == "" {
+			return m.wizardBack()
+		}
+		m.wizardAPIType = sel
+		if m.wizardKey == "" && m.wizardProvider == "custom" {
+			// Relays usually need a key, but a keyless internal gateway is
+			// legitimate — the key step stays optional for custom.
+			return m.wizardNext(wizardStepAPIKey)
+		}
+		return m.wizardNext(wizardStepAPIKey)
 
 	case wizardStepAPIKey:
 		switch msg.Type {
 		case tea.KeyEsc:
-			return m.startModelWizard()
+			return m.wizardBack()
 		case tea.KeyEnter:
 			m.wizardKey = strings.TrimSpace(m.wizardInput)
-			m.wizardStep = wizardStepModelName
-			defModel := ""
-			if p, ok := providers.Lookup(m.wizardProvider); ok {
-				defModel = p.DefaultModel
+			if m.wizardKey == "" {
+				p, ok := providers.Lookup(m.wizardProvider)
+				if ok && !p.NoAuth && m.wizardProvider != "custom" {
+					return m, nil // a key is required for auth providers
+				}
 			}
-			m.wizardInput = defModel
-			return m, nil
-		case tea.KeyBackspace, tea.KeyCtrlH:
-			runes := []rune(m.wizardInput)
-			if len(runes) > 0 {
-				m.wizardInput = string(runes[:len(runes)-1])
+			if m.wizardModel == "" {
+				if p, ok := providers.Lookup(m.wizardProvider); ok {
+					m.wizardModel = p.DefaultModel
+				}
 			}
-			return m, nil
-		case tea.KeyRunes:
-			m.wizardInput += string(msg.Runes)
+			return m.wizardNext(wizardStepModelName)
+		default:
+			m.wizardEdit(msg)
 			return m, nil
 		}
 
 	case wizardStepModelName:
 		switch msg.Type {
 		case tea.KeyEsc:
-			if p, ok := providers.Lookup(m.wizardProvider); ok && p.NoAuth {
-				return m.startModelWizard()
-			}
-			m.wizardStep = wizardStepAPIKey
-			m.wizardInput = m.wizardKey
-			return m, nil
+			return m.wizardBack()
 		case tea.KeyEnter:
 			modelName := strings.TrimSpace(m.wizardInput)
 			if modelName == "" {
@@ -609,46 +853,129 @@ func (m tuiModel) handleModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					modelName = p.DefaultModel
 				}
 			}
+			if modelName == "" {
+				return m, nil // required for custom
+			}
 			m.wizardModel = modelName
-			return m.finalizeWizard()
-		case tea.KeyBackspace, tea.KeyCtrlH:
-			runes := []rune(m.wizardInput)
-			if len(runes) > 0 {
-				m.wizardInput = string(runes[:len(runes)-1])
+			return m.wizardNext(wizardStepThinking)
+		default:
+			m.wizardEdit(msg)
+			return m, nil
+		}
+
+	case wizardStepThinking:
+		if msg.Type == tea.KeyEsc {
+			return m.wizardBack()
+		}
+		sel, next, _, done := m.wizardSelectionKey(msg, m.selectionPageRows())
+		m = next
+		if !done {
+			return m, nil
+		}
+		if sel == "" {
+			return m.wizardBack()
+		}
+		m.wizardThinking = sel
+		return m.wizardNext(wizardStepContext)
+
+	case wizardStepContext:
+		switch msg.Type {
+		case tea.KeyEsc:
+			return m.wizardBack()
+		case tea.KeyEnter:
+			m.wizardContext = strings.TrimSpace(m.wizardInput)
+			return m.wizardNext(wizardStepTest)
+		default:
+			m.wizardEdit(msg)
+			return m, nil
+		}
+
+	case wizardStepTest:
+		if m.wizardTesting {
+			if msg.Type == tea.KeyEsc {
+				m.wizardTesting = false
+				return m.wizardBack()
 			}
 			return m, nil
+		}
+		switch msg.Type {
+		case tea.KeyEsc:
+			return m.wizardBack()
 		case tea.KeyRunes:
-			m.wizardInput += string(msg.Runes)
-			return m, nil
+			switch string(msg.Runes) {
+			case "r", "R":
+				return m.wizardNext(wizardStepTest)
+			case "s", "S":
+				return m.finalizeWizard()
+			}
+		case tea.KeyEnter:
+			if m.wizardTestErr == "" {
+				return m.finalizeWizard()
+			}
+			return m.wizardNext(wizardStepTest)
 		}
 	}
 	return m, nil
 }
 
 // finalizeWizard completes adding/updating model, sets as active, and returns to chat.
+// finalizeWizard persists the assembled model, switches the active model to
+// it, and returns to chat. When the wizard ran an edit (wizardEditAlias set),
+// the edited entry is replaced in place — the registry never grows a stale
+// duplicate under the old alias.
 func (m tuiModel) finalizeWizard() (tuiModel, tea.Cmd) {
 	if m.r == nil || m.r.cfg == nil {
 		m.mode = modeIdle
 		return m, nil
 	}
 
-	mc, ok := providers.ModelConfig(m.wizardProvider, m.wizardModel, m.wizardKey)
-	if !ok {
+	mc := m.wizardConfig()
+	if mc.Provider == "" {
 		note := block{kind: blockError, body: i18n.Tf(m.loc, "tui.wizard.unknownProvider", "provider", m.wizardProvider)}
 		m.mode = modeIdle
 		return m, m.printBlock(note)
 	}
 
-	alias := m.wizardProvider
-	if m.wizardModel != "" && m.wizardModel != alias {
+	alias := mc.Provider
+	if m.wizardEditAlias != "" {
+		alias = m.wizardEditAlias // keep the entry's stable name
+	} else if m.wizardModel != "" && m.wizardModel != alias {
 		alias = m.wizardModel
+	}
+	// A collision on a different config needs a distinct alias rather than a
+	// silent overwrite: two providers can legitimately serve the same model
+	// name (e.g. a relay and OpenAI both offering "gpt-4o"), so keep
+	// deriving a fresh alias until it no longer clashes.
+	if m.wizardEditAlias == "" {
+		collides := func(a string) bool {
+			for _, existing := range m.r.cfg.Models {
+				if existing.Alias() == a &&
+					(existing.Model != mc.Model || existing.BaseURL != mc.BaseURL || existing.Provider != mc.Provider) {
+					return true
+				}
+			}
+			return false
+		}
+		for i := 2; collides(alias); i++ {
+			alias = fmt.Sprintf("%s-%d", mc.Model, i)
+		}
 	}
 	mc.Name = alias
 
-	// Add to cfg.Models
+	// Upsert into cfg.Models. When editing, drop the stale alias first so a
+	// renamed endpoint cannot leave two rows behind.
+	if m.wizardEditAlias != "" && m.wizardEditAlias != alias {
+		kept := m.r.cfg.Models[:0]
+		for _, e := range m.r.cfg.Models {
+			if e.Alias() != m.wizardEditAlias {
+				kept = append(kept, e)
+			}
+		}
+		m.r.cfg.Models = kept
+	}
 	replaced := false
 	for i := range m.r.cfg.Models {
-		if m.r.cfg.Models[i].Alias() == alias || m.r.cfg.Models[i].Model == mc.Model {
+		if m.r.cfg.Models[i].Alias() == alias {
 			m.r.cfg.Models[i] = mc
 			replaced = true
 			break
@@ -699,7 +1026,7 @@ func (m tuiModel) startOnboarding() (tuiModel, tea.Cmd) {
 	title := "Welcome to OpenPanda · Please select your language / 请选择语言:"
 	sl := NewSelectionList(title, buildLanguageItems())
 	sl.Boxed = true
-	sl.FooterHints = "↑↓ / KJ Move · Enter Confirm · Esc Exit"
+	sl.FooterHints = i18n.T(m.loc, "tui.onboard.hintsExit")
 	sl.Cursor = 0 // Default English
 	m.selectionList = sl
 	return m, nil
@@ -744,84 +1071,44 @@ func buildLanguageItems() []SelectionItem {
 
 // buildApprovalModeItems returns execution approval safety options.
 func buildApprovalModeItems(loc i18n.Locale) []SelectionItem {
-	if loc == i18n.ChineseSimp {
-		return []SelectionItem{
-			{
-				Index:   1,
-				ID:      "prompt",
-				Title:   "交互确认模式 (推荐)",
-				Snippet: "对文件修改与系统命令提示确认，安全平衡",
-				Badge:   "[推荐]",
-			},
-			{
-				Index:   2,
-				ID:      "auto",
-				Title:   "只读自动放行模式",
-				Snippet: "只读检索自动执行，写操作与高危命令需确认",
-			},
-			{
-				Index:   3,
-				ID:      "strict",
-				Title:   "严格审查模式",
-				Snippet: "所有工具调用与执行操作均需手动逐项确认",
-			},
-		}
-	}
 	return []SelectionItem{
 		{
 			Index:   1,
 			ID:      "prompt",
-			Title:   "Interactive Approval (Recommended)",
-			Snippet: "Prompts for confirmation on file edits and shell commands",
-			Badge:   "[Recommended]",
+			Title:   i18n.T(loc, "tui.onboard.approve.prompt.title"),
+			Snippet: i18n.T(loc, "tui.onboard.approve.prompt.snippet"),
+			Badge:   i18n.T(loc, "tui.onboard.approve.prompt.badge"),
 		},
 		{
 			Index:   2,
 			ID:      "auto",
-			Title:   "Auto-Approve Read-Only",
-			Snippet: "Read-only inspection runs automatically; writes prompt",
+			Title:   i18n.T(loc, "tui.onboard.approve.auto.title"),
+			Snippet: i18n.T(loc, "tui.onboard.approve.auto.snippet"),
 		},
 		{
 			Index:   3,
 			ID:      "strict",
-			Title:   "Strict Approval",
-			Snippet: "Prompt and review every single tool call and command",
+			Title:   i18n.T(loc, "tui.onboard.approve.strict.title"),
+			Snippet: i18n.T(loc, "tui.onboard.approve.strict.snippet"),
 		},
 	}
 }
 
 // buildModelChoiceItems returns the model configuration choice options.
 func buildModelChoiceItems(loc i18n.Locale) []SelectionItem {
-	if loc == i18n.ChineseSimp {
-		return []SelectionItem{
-			{
-				Index:   1,
-				ID:      "now",
-				Title:   "立即配置大模型",
-				Snippet: "设置 DeepSeek / OpenAI / Anthropic / Ollama 等提供商",
-				Badge:   "[快速开始]",
-			},
-			{
-				Index:   2,
-				ID:      "skip",
-				Title:   "稍后再配置 (跳过)",
-				Snippet: "先进入主界面，随时可通过输入 /model 进行配置",
-			},
-		}
-	}
 	return []SelectionItem{
 		{
 			Index:   1,
 			ID:      "now",
-			Title:   "Configure Model Now",
-			Snippet: "Set up DeepSeek, OpenAI, Anthropic, Ollama, etc.",
-			Badge:   "[Quickstart]",
+			Title:   i18n.T(loc, "tui.onboard.modelNow.title"),
+			Snippet: i18n.T(loc, "tui.onboard.modelNow.snippet"),
+			Badge:   i18n.T(loc, "tui.onboard.modelNow.badge"),
 		},
 		{
 			Index:   2,
 			ID:      "skip",
-			Title:   "Skip for Now",
-			Snippet: "Proceed to main screen; configure anytime via /model",
+			Title:   i18n.T(loc, "tui.onboard.modelSkip.title"),
+			Snippet: i18n.T(loc, "tui.onboard.modelSkip.snippet"),
 		},
 	}
 }
@@ -832,15 +1119,9 @@ func (m tuiModel) advanceFromTerms() (tuiModel, tea.Cmd) {
 		m.r.cfg.UI.TermsAccepted = true
 	}
 	m.onboardingStep = onboardingStepApproval
-	title := "Choose Execution Safety & Approval Mode:"
-	hints := "↑↓ / KJ Move · Enter Confirm · Esc Back"
-	if m.loc == i18n.ChineseSimp {
-		title = "请选择智能体执行安全策略 (Approval Mode):"
-		hints = "↑↓ 选择 · Enter 确认 · Esc 返回"
-	}
-	sl := NewSelectionList(title, buildApprovalModeItems(m.loc))
+	sl := NewSelectionList(i18n.T(m.loc, "tui.onboard.approvalTitle"), buildApprovalModeItems(m.loc))
 	sl.Boxed = true
-	sl.FooterHints = hints
+	sl.FooterHints = i18n.T(m.loc, "tui.onboard.hintsBack")
 	m.selectionList = sl
 	return m, nil
 }
@@ -1007,15 +1288,9 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.r.cfg.Approval.Mode = item.ID
 			}
 			m.onboardingStep = onboardingStepModelChoice
-			title := "Configure Large Language Model (LLM Setup):"
-			hints := "↑↓ / KJ Move · Enter Confirm · Esc Back"
-			if m.loc == i18n.ChineseSimp {
-				title = "配置大语言模型 (LLM Provider Setup):"
-				hints = "↑↓ 选择 · Enter 确认 · Esc 返回"
-			}
-			sl := NewSelectionList(title, buildModelChoiceItems(m.loc))
+			sl := NewSelectionList(i18n.T(m.loc, "tui.onboard.modelChoiceTitle"), buildModelChoiceItems(m.loc))
 			sl.Boxed = true
-			sl.FooterHints = hints
+			sl.FooterHints = i18n.T(m.loc, "tui.onboard.hintsBack")
 			m.selectionList = sl
 			return m, nil
 		}
@@ -1057,15 +1332,9 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.wizardKey = ""
 				m.wizardModel = ""
 				m.wizardInput = ""
-				title := "Select Model Provider:"
-				hints := "↑↓ / KJ Move · Enter Confirm · Esc Back"
-				if m.loc == i18n.ChineseSimp {
-					title = "选择模型提供商开始添加："
-					hints = "↑↓ 选择 · Enter 确认 · Esc 返回"
-				}
-				sl := NewSelectionList(title, buildProviderItems(m.loc))
+				sl := NewSelectionList(i18n.T(m.loc, "tui.onboard.providerTitle"), buildProviderItems(m.loc))
 				sl.Boxed = true
-				sl.FooterHints = hints
+				sl.FooterHints = i18n.T(m.loc, "tui.onboard.hintsBack")
 				m.selectionList = sl
 				return m, nil
 			}
@@ -1082,15 +1351,9 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m tuiModel) handleOnboardingModelWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.wizardStep == wizardStepProvider && (msg.Type == tea.KeyEsc || (msg.Type == tea.KeyRunes && (string(msg.Runes) == "q" || string(msg.Runes) == "Q"))) {
 		m.onboardingStep = onboardingStepModelChoice
-		title := "Configure Large Language Model (LLM Setup):"
-		hints := "↑↓ / KJ Move · Enter Confirm · Esc Back"
-		if m.loc == i18n.ChineseSimp {
-			title = "配置大语言模型 (LLM Provider Setup):"
-			hints = "↑↓ 选择 · Enter 确认 · Esc 返回"
-		}
-		sl := NewSelectionList(title, buildModelChoiceItems(m.loc))
+		sl := NewSelectionList(i18n.T(m.loc, "tui.onboard.modelChoiceTitle"), buildModelChoiceItems(m.loc))
 		sl.Boxed = true
-		sl.FooterHints = hints
+		sl.FooterHints = i18n.T(m.loc, "tui.onboard.hintsBack")
 		m.selectionList = sl
 		return m, nil
 	}

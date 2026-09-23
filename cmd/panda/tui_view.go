@@ -48,6 +48,8 @@ func (m tuiModel) View() string {
 		return m.modelWizardView()
 	case modeOnboarding:
 		return m.onboardingView()
+	case modeSkillsHub:
+		return m.skillsHubView()
 	case modeAsking:
 		// Render live region (task progress card or streaming answer + spinner)
 		// followed immediately by the interactive input box so the user can type steering
@@ -283,7 +285,9 @@ func (m tuiModel) modelPanelView() string {
 	return m.selectionList.Render(m.th, m.width, m.height)
 }
 
-// modelWizardView renders the step-by-step model setup guide.
+// modelWizardView renders the step-by-step model setup guide: pick steps draw
+// their SelectionList, text steps draw a prompt + echo field, and the test
+// step shows the probe spinner or its outcome.
 func (m tuiModel) modelWizardView() string {
 	w := m.width
 	h := m.height
@@ -294,7 +298,8 @@ func (m tuiModel) modelWizardView() string {
 		h = 24
 	}
 
-	if m.wizardStep == wizardStepProvider {
+	switch m.wizardStep {
+	case wizardStepProvider, wizardStepAPIType, wizardStepThinking:
 		return m.selectionList.Render(m.th, w, h)
 	}
 
@@ -307,13 +312,47 @@ func (m tuiModel) modelWizardView() string {
 	lines = append(lines, m.th.heading.Render(i18n.Tf(m.loc, "tui.wizard.addModelTitle", "provider", provLabel)))
 	lines = append(lines, "")
 
-	if m.wizardStep == wizardStepAPIKey {
-		lines = append(lines, i18n.T(m.loc, "tui.wizard.inputAPIKey"))
-		inputDisplay := strings.Repeat("•", len([]rune(m.wizardInput)))
-		lines = append(lines, m.th.accent.Render("> ")+inputDisplay+m.th.accent.Render("█"))
+	// The step trail keeps the user's place in the flow: completed answers
+	// print dimmed above the active prompt, so Esc never feels like falling
+	// off a cliff.
+	trail := func(label, value string) {
+		if value != "" {
+			lines = append(lines, m.th.muted.Render("  "+label+": ")+value)
+		}
+	}
+	if m.wizardProvider == "custom" {
+		trail(i18n.T(m.loc, "tui.wizard.baseURLLabel"), m.wizardBaseURL)
+		if m.wizardStep > wizardStepAPIType && m.wizardAPIType != "" {
+			trail(i18n.T(m.loc, "tui.wizard.apiTypeLabel"), m.wizardAPIType)
+		}
+	}
+	if m.wizardStep > wizardStepAPIKey && m.wizardKey != "" {
+		trail(i18n.T(m.loc, "tui.wizard.apiKeyLabel"), strings.Repeat("•", min(8, len([]rune(m.wizardKey)))))
+	}
+	if m.wizardStep > wizardStepModelName && m.wizardModel != "" {
+		trail(i18n.T(m.loc, "tui.wizard.modelLabel"), m.wizardModel)
+	}
+	if len(lines) > 2 {
+		lines = append(lines, "")
+	}
+
+	input := func(prompt string, masked bool) {
+		lines = append(lines, prompt)
+		display := m.wizardInput
+		if masked {
+			display = strings.Repeat("•", len([]rune(m.wizardInput)))
+		}
+		lines = append(lines, m.th.accent.Render("> ")+display+m.th.accent.Render("█"))
 		lines = append(lines, "")
 		lines = append(lines, m.th.muted.Render(i18n.T(m.loc, "tui.wizard.confirmBack")))
-	} else if m.wizardStep == wizardStepModelName {
+	}
+
+	switch m.wizardStep {
+	case wizardStepBaseURL:
+		input(i18n.T(m.loc, "tui.wizard.inputBaseURL"), false)
+	case wizardStepAPIKey:
+		input(i18n.T(m.loc, "tui.wizard.inputAPIKey"), true)
+	case wizardStepModelName:
 		defModel := ""
 		if p, ok := providers.Lookup(m.wizardProvider); ok {
 			defModel = p.DefaultModel
@@ -324,11 +363,32 @@ func (m tuiModel) modelWizardView() string {
 		} else {
 			prompt = i18n.T(m.loc, "tui.wizard.inputModelName")
 		}
-		lines = append(lines, prompt)
-		inputDisplay := m.wizardInput
-		lines = append(lines, m.th.accent.Render("> ")+inputDisplay+m.th.accent.Render("█"))
+		input(prompt, false)
+	case wizardStepContext:
+		defCtx := ""
+		if p, ok := providers.Lookup(m.wizardProvider); ok && p.ContextWindow > 0 {
+			defCtx = strconv.Itoa(p.ContextWindow)
+		}
+		var prompt string
+		if defCtx != "" {
+			prompt = i18n.Tf(m.loc, "tui.wizard.inputContextDef", "def", defCtx)
+		} else {
+			prompt = i18n.T(m.loc, "tui.wizard.inputContext")
+		}
+		input(prompt, false)
+	case wizardStepTest:
+		mc := m.wizardConfig()
+		lines = append(lines, m.th.muted.Render(cliui.Truncate(effectiveBaseURL(mc), w-8, m.th.unicode)))
 		lines = append(lines, "")
-		lines = append(lines, m.th.muted.Render(i18n.T(m.loc, "tui.wizard.confirmBack")))
+		if m.wizardTesting {
+			lines = append(lines, m.sp.View()+" "+i18n.T(m.loc, "tui.wizard.testing"))
+			lines = append(lines, "")
+			lines = append(lines, m.th.muted.Render(i18n.T(m.loc, "tui.wizard.testWait")))
+		} else if m.wizardTestErr != "" {
+			lines = append(lines, m.th.warn.Render("✗ ")+i18n.Tf(m.loc, "tui.wizard.testFail", "err", m.wizardTestErr))
+			lines = append(lines, "")
+			lines = append(lines, m.th.muted.Render(i18n.T(m.loc, "tui.wizard.testFailHints")))
+		}
 	}
 
 	content := strings.Join(lines, "\n")
@@ -514,6 +574,11 @@ func (m tuiModel) statusLine() string {
 	// The spinner frames carry no trailing space of their own, so the space
 	// belongs here — without it the line renders as "⠙思考中".
 	parts := []string{m.sp.View() + " " + m.th.accent.Render(statusVerb(m.loc))}
+	// A slash-mode turn announces its lens next to the verb — "goal mode"
+	// makes it obvious why the model is refining rather than doing.
+	if m.turnMode != "" {
+		parts = append(parts, m.th.warn.Render("["+i18n.T(m.loc, "tui.mode.badge."+m.turnMode)+"]"))
+	}
 	if m.note != "" {
 		parts = append(parts, m.th.muted.Render("· "+m.note))
 	}
