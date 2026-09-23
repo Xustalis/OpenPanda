@@ -57,6 +57,10 @@ type TaskInput struct {
 	ClassifyKind string
 	// UserLocale records the user's language preference ("en", "zh-CN", etc.).
 	UserLocale i18n.Locale
+	// Transport specifies the transport mode ("live" or "dtn", whitepaper §8.2).
+	Transport string
+	// DeadlineUnix is an optional absolute deadline timestamp for DTN tasks.
+	DeadlineUnix int64
 }
 
 // detail folds the input into the persisted detail columns.
@@ -85,6 +89,8 @@ func (in TaskInput) detail() TaskDetail {
 		ResourceJSON: in.ResourceJSON,
 		Requires:     in.Requires,
 		UserLocale:   string(in.UserLocale),
+		Transport:    in.Transport,
+		DeadlineUnix: in.DeadlineUnix,
 	}
 }
 
@@ -122,10 +128,22 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 	decision := scheduler.Route(c.nodeID, chain, employees, localMatch, in.Requires,
 		resourceRequirement(in.ResourceJSON), in.PreferredNode)
 
+	// When this node is capable of executing the task, and the task has local file context
+	// without a distributed project, keep it local: the delegate payload carries no project tree,
+	// so a forwarded copy would run against an empty directory on the remote peer (matching
+	// the guard in forwardScheduled / enqueue.go:189).
+	if decision.Action == scheduler.ActionForward && in.Project == "" && in.PreferredNode == "" &&
+		in.ContextType == "file" && c.localMatch()(in.Requires) {
+		c.logger.Info("keeping file task local: no project tree to forward", "task", t.TaskID)
+		decision.Action = scheduler.ActionLocal
+	}
+
 	// — Trace: route decision with per-candidate score breakdown (orbit Step-2).
 	// Build the same candidate set RouteAt uses (online + hardware fit +
 	// capability match). Best-effort; any error is logged and the execution
-	// path is unaffected.
+	// path is unaffected. The trace is recorded AFTER the file-task-local
+	// override above so the audit trail shows the decision actually acted on,
+	// not the pre-override forward that was vetoed.
 	{
 		req := resourceRequirement(in.ResourceJSON)
 		seen := make(map[string]bool, len(chain))
@@ -189,20 +207,33 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 		})
 	}
 
-	// When this node is capable of executing the task, and the task has local file context
-	// without a distributed project, keep it local: the delegate payload carries no project tree,
-	// so a forwarded copy would run against an empty directory on the remote peer (matching
-	// the guard in forwardScheduled / enqueue.go:189).
-	if decision.Action == scheduler.ActionForward && in.Project == "" && in.PreferredNode == "" &&
-		in.ContextType == "file" && c.localMatch()(in.Requires) {
-		c.logger.Info("keeping file task local: no project tree to forward", "task", t.TaskID)
-		decision.Action = scheduler.ActionLocal
-	}
-
 	switch decision.Action {
 	case scheduler.ActionLocal:
 		return c.runLocal(ctx, t, in)
 	case scheduler.ActionForward:
+		linkState := c.EvaluateLinkState(ctx, decision.Target)
+		if in.Transport == "dtn" || linkState != LinkLive {
+			c.logger.Info("target link non-live or dtn requested; queueing asynchronously",
+				"target", decision.Target, "link", linkState, "task", t.TaskID)
+			qSpec := DefaultQueueSpec()
+			qSpec.WorkDir = in.WorkDir
+			if err := c.store.SetQueueMeta(ctx, t.TaskID, qSpec.Priority, qSpec.SessionID, qSpec.WorkDir, qSpec.ResourceKeys); err != nil {
+				return t, bus.TaskResultPayload{}, fmt.Errorf("set queue meta: %w", err)
+			}
+			if err := c.store.Queue(ctx, t.TaskID, c.nodeID); err != nil {
+				return t, bus.TaskResultPayload{}, fmt.Errorf("queue dtn task: %w", err)
+			}
+			t.State = StateQueued
+			t.Scheduled = true
+			c.queueWake()
+			return t, bus.TaskResultPayload{
+				TaskID:    t.TaskID,
+				AttemptID: t.AttemptID,
+				State:     StateQueued,
+				Stdout:    fmt.Sprintf("dispatched to asynchronous DTN queue (target link: %s)", linkState),
+			}, nil
+		}
+
 		payload := bus.TaskDelegatePayload{
 			TaskID:        t.TaskID,
 			Project:       in.Project,
@@ -245,10 +276,12 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 				return t, res, err
 			}
 			return final, res, nil
-		case <-time.After(defaultDelegateTimeout):
-			// A dead target must not leave Submit blocked forever (D3): the same
-			// default deadline forwardDelegated stamps on the lease bounds the
-			// wait, after which the task is failed and an error returned.
+		case <-time.After(c.lease()):
+			// A dead target must not leave Submit blocked forever (D3): the wait
+			// is bounded by the same lease forwardDelegated stamps on the task,
+			// after which the task is failed and an error returned. The lease —
+			// not the 20-minute default constant — is the bound, because
+			// SetTimeouts can raise it past that default for long agent runs.
 			c.failLocal(ctx, t.TaskID, errors.New("delegation timeout"))
 			// S1-2: give up locally, but the executor may still be running the
 			// work — push the cancellation downstream so it stops there too.
@@ -320,7 +353,7 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 // runLocal executes a task on this node and returns the final row + result.
 // It is the shared local branch for both SubmitLocal and Submit's local route.
 func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.TaskResultPayload, error) {
-	result, err := c.execute(ctx, t.TaskID, in.Intent, in.Requires)
+	result, err := c.execute(ctx, t.TaskID, in.Intent, in.Requires, nil)
 	return c.retryLoop(ctx, t.TaskID, in.Intent, in.Requires, result, err)
 }
 
@@ -397,7 +430,7 @@ func (c *Core) ResumeApproved(ctx context.Context, taskID string) (Task, bus.Tas
 	}
 	// The parking already reset the retry budget; keep it fresh for this run.
 	c.reviewReset(taskID)
-	result, err := c.run(ctx, taskID, cur.Intent, cur.Requires)
+	result, err := c.run(ctx, taskID, cur.Intent, cur.Requires, nil)
 	if ctx.Err() != nil {
 		// Cancelling the foreground approval must terminate the task, not leave
 		// the already-claimed row running after its caller and TUI stream are gone.
@@ -500,6 +533,16 @@ func (c *Core) resumeRemote(ctx context.Context, cur Task, target string) (Task,
 // left in failed or retried forever (design §14.2 signal C, plan P2-18). It is
 // shared by the synchronous Submit paths and the queue scheduler's runner.
 func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []string, result bus.TaskResultPayload, err error) (Task, bus.TaskResultPayload, error) {
+	// A second runner already owns this task: report the row untouched and
+	// propagate the sentinel (ErrCancelled-compatible) so callers neither
+	// fail the live row nor signal a result the owner will deliver itself.
+	if errors.Is(err, ErrAlreadyRunning) {
+		final, gerr := c.store.Get(ctx, taskID)
+		if gerr != nil {
+			return Task{}, result, gerr
+		}
+		return final, result, err
+	}
 	if err != nil && !errors.Is(err, ErrCancelled) {
 		c.failLocal(ctx, taskID, err)
 		final, gerr := c.store.Get(ctx, taskID)
@@ -565,7 +608,7 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 		}
 		retries++
 		c.logger.Info("retrying task", "task", taskID)
-		result, err = c.run(ctx, taskID, intent, required)
+		result, err = c.run(ctx, taskID, intent, required, nil)
 		if err != nil && !errors.Is(err, ErrCancelled) {
 			c.failLocal(ctx, taskID, err)
 			final, gerr := c.store.Get(ctx, taskID)
@@ -604,16 +647,13 @@ func (c *Core) retriesExhausted(ctx context.Context, taskID string) bool {
 // accumulating for as long as the loop actually runs.
 func (c *Core) reviewReset(taskID string) { c.loop.Reset(taskID) }
 
-// retryOnce rotates the attempt and returns a failed task to the queue,
-// dispatched back to this node, so run() can accept and re-execute it.
+// retryOnce returns a failed task to this node for re-execution: a fresh
+// attempt_id plus the failed -> dispatched move and both audit events land in
+// one transaction (RequeueForRetry), so a crash or owner-guard conflict mid-way
+// cannot leave a half-rotated row the audit trail misreads.
 func (c *Core) retryOnce(ctx context.Context, taskID string) error {
-	if _, err := c.store.RotateAttempt(ctx, taskID, c.nodeID); err != nil {
-		return fmt.Errorf("rotate attempt: %w", err)
-	}
-	if err := c.store.Requeue(ctx, taskID, c.nodeID); err != nil {
-		return fmt.Errorf("requeue: %w", err)
-	}
-	return c.store.Dispatch(ctx, taskID, c.nodeID, c.nodeID)
+	_, err := c.store.RequeueForRetry(ctx, taskID, c.nodeID)
+	return err
 }
 
 // failLocal force-fails a task left in a non-terminal state by a routing or

@@ -18,16 +18,44 @@ import (
 
 // Card is the parsed form of capabilities.yaml for this node.
 type Card struct {
-	Device          string           `yaml:"device" json:"device"`
-	ResourceClass   string           `yaml:"resource_class" json:"resource_class"`
-	NodeKind        string           `yaml:"node_kind,omitempty" json:"node_kind,omitempty"`
-	NodeIdentity    string           `yaml:"node_identity,omitempty" json:"node_identity,omitempty"`
-	Chip            string           `yaml:"chip" json:"chip"`
-	Native          []NativeAbility  `yaml:"native" json:"native"`
-	Agents          map[string]Agent `yaml:"agents" json:"agents"`
-	Manual          []ManualAbility  `yaml:"manual" json:"manual"`
-	Capacity        Capacity         `yaml:"capacity" json:"capacity"`
-	ResourceProfile ResourceProfile  `yaml:"resource_profile" json:"resource_profile"`
+	Device          string            `yaml:"device" json:"device"`
+	ResourceClass   string            `yaml:"resource_class" json:"resource_class"`
+	NodeKind        string            `yaml:"node_kind,omitempty" json:"node_kind,omitempty"`
+	NodeIdentity    string            `yaml:"node_identity,omitempty" json:"node_identity,omitempty"`
+	Chip            string            `yaml:"chip" json:"chip"`
+	Native          []NativeAbility   `yaml:"native" json:"native"`
+	Agents          map[string]Agent  `yaml:"agents" json:"agents"`
+	Manual          []ManualAbility   `yaml:"manual" json:"manual"`
+	Actuators       []ActuatorProfile `yaml:"actuators,omitempty" json:"actuators,omitempty"`
+	Capacity        Capacity          `yaml:"capacity" json:"capacity"`
+	ResourceProfile ResourceProfile   `yaml:"resource_profile" json:"resource_profile"`
+}
+
+// ActuatorProfile is the unified model equalizing software cognitive agents and hardware peripherals (whitepaper §7.1).
+type ActuatorProfile struct {
+	ID           string   `yaml:"id" json:"id"`
+	Type         string   `yaml:"type" json:"type"`                               // "software" or "hardware"
+	Category     string   `yaml:"category" json:"category"`                       // "coding", "motor_control", "audio_sensing", etc.
+	Interface    string   `yaml:"interface,omitempty" json:"interface,omitempty"` // "gpio", "usb_audio", "cli", etc.
+	PinMapping   []int    `yaml:"pin_mapping,omitempty" json:"pin_mapping,omitempty"`
+	Capabilities []string `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+	CostTier     string   `yaml:"cost_tier,omitempty" json:"cost_tier,omitempty"`
+	Tier         int      `yaml:"tier" json:"tier"` // 1=reversible (default), 2=irreversible (needs auth)
+	// Command/Args are the actuator's driver invocation (§7.2): the program
+	// that turns an intent or ActionSpec into a physical/software action —
+	// e.g. a GPIO control script on an Orange Pi. Placeholders {intent},
+	// {action} and {param:<name>} are substituted at execution. An actuator
+	// without a command stays a routing advertisement only: tasks matching it
+	// fall through to the agent tier, which figures the hardware out itself.
+	Command string   `yaml:"command,omitempty" json:"command,omitempty"`
+	Args    []string `yaml:"args,omitempty" json:"args,omitempty"`
+}
+
+// ActionSpec defines a uniform action dispatch across both software harnesses and hardware actuators (whitepaper §7.2).
+type ActionSpec struct {
+	TargetActuator string         `json:"target_actuator"`
+	Action         string         `json:"action"`
+	Parameters     map[string]any `json:"parameters,omitempty"`
 }
 
 // NativeAbility is a deterministic command this node can run.
@@ -114,7 +142,21 @@ type CapabilitySummary struct {
 	NativeIDs     []string            `json:"native_ids,omitempty"`
 	AgentCaps     map[string][]string `json:"agent_caps,omitempty"`
 	ManualIDs     []string            `json:"manual_ids,omitempty"`
-	Capacity      Capacity            `json:"capacity"`
+	// ActuatorIDs advertises the unified actuator set (§7.1) so remote routing
+	// can see this node's hardware "hands" — a GPIO servo on a Pi is a routing
+	// target exactly like an agent capability, and invisible if unadvertised.
+	ActuatorIDs []string `json:"actuator_ids,omitempty"`
+	// Neighbors is the link-state advertisement: the peer node ids this node
+	// currently holds a live connection to. The mesh builds its routing graph
+	// G=(V,E) from these edges, which is what makes multi-hop shortest-path
+	// forwarding (§9.3) computable off the directory.
+	Neighbors []string `json:"neighbors,omitempty"`
+	// Links carries the measured edge metrics for the same adjacency (§4.1):
+	// one entry per peer this node has an RTT sample for. Weighted shortest
+	// path reads these as edge costs; an advertised neighbor with no metric
+	// gets the unknown-link default.
+	Links    []LinkMetric `json:"links,omitempty"`
+	Capacity Capacity     `json:"capacity"`
 	// ResourceProfile is what makes "this node cannot run that" decidable off the
 	// network instead of only locally: a task declaring 8 GiB of VRAM must not be
 	// forwarded to a node with none, and before v0.0.6 the peer half of this
@@ -122,11 +164,37 @@ type CapabilitySummary struct {
 	ResourceProfile ResourceProfile `json:"resource_profile,omitempty"`
 }
 
+// LinkMetric is one measured edge of the link-state graph (§4.1): the
+// advertised cost of reaching Peer over this node's live connection. RTTms
+// is milliseconds; zero means the link exists but has no sample yet.
+type LinkMetric struct {
+	Peer  string `json:"peer"`
+	RTTms int64  `json:"rtt_ms,omitempty"`
+}
+
 // Register inserts (or upserts) this node's card into the local capability
 // directory. In Phase 0 each node is its own directory; a remote employee
 // table arrives in a later phase.
 func Register(db *sql.DB, c Card, id string, tier int) error {
-	native, err := json.Marshal(c.Native)
+	nativeList := append([]NativeAbility{}, c.Native...)
+	for _, act := range c.Actuators {
+		// An actuator's driver command (when declared) is the executable its
+		// folded native ability carries — falling back to the interface name
+		// keeps the row honest about there being nothing to run rather than
+		// recording a literal "gpio" as if it were a binary.
+		cmd := act.Command
+		if cmd == "" {
+			cmd = act.Interface
+		}
+		nativeList = append(nativeList, NativeAbility{
+			ID:          act.ID,
+			Command:     cmd,
+			Args:        act.Args,
+			Tier:        act.Tier,
+			Description: act.Category,
+		})
+	}
+	native, err := json.Marshal(nativeList)
 	if err != nil {
 		return fmt.Errorf("marshal native: %w", err)
 	}
@@ -154,25 +222,26 @@ func Register(db *sql.DB, c Card, id string, tier int) error {
 	if identity == "" {
 		identity = id
 	}
-	return upsertNode(db, id, c.Device, c.Chip, kind, identity, string(native), string(agents), string(manual), string(capJSON), string(resJSON), tier)
+	return upsertNode(db, id, c.Device, c.Chip, kind, identity, string(native), string(agents), string(manual), string(capJSON), string(resJSON), "", "", tier)
 }
 
 // upsertNode writes one directory row — native/agents/manual/capacity/resource
-// profile already marshalled to JSON — and marks it online. Shared by Register
-// (self, full card) and UpsertRemote (peer, ID-only summary) so the upsert SQL
-// lives in one place.
-func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON string, tier int) error {
+// profile/neighbors/link metrics already marshalled to JSON — and marks it
+// online. Shared by Register (self, full card) and UpsertRemote (peer,
+// ID-only summary) so the upsert SQL lives in one place.
+func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON string, tier int) error {
 	_, err := db.Exec(`
-		INSERT INTO employee_cache (id, name, department, chip, node_kind, node_identity, native_json, agents_json, manual_json, capacity_json, resource_profile_json, status, last_seen, scheduler_tier)
-		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
+		INSERT INTO employee_cache (id, name, department, chip, node_kind, node_identity, native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, status, last_seen, scheduler_tier)
+		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name=excluded.name, chip=excluded.chip,
 			node_kind=excluded.node_kind, node_identity=excluded.node_identity,
 			native_json=excluded.native_json, agents_json=excluded.agents_json,
 			manual_json=excluded.manual_json, capacity_json=excluded.capacity_json,
 			resource_profile_json=excluded.resource_profile_json,
+			neighbors_json=excluded.neighbors_json, links_json=excluded.links_json,
 			status='online', last_seen=excluded.last_seen, scheduler_tier=excluded.scheduler_tier`,
-		id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, storage.Now(), tier,
+		id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON, storage.Now(), tier,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert %s: %w", id, err)
@@ -193,6 +262,24 @@ func Heartbeat(db *sql.DB, id, status string, capJSON string) error {
 		status, capJSON, storage.Now(), id)
 	if err != nil {
 		return fmt.Errorf("heartbeat %s: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateAdjacency refreshes a node's advertised edge set and measured link
+// weights (§4.1) without touching the rest of its row — the gossip channel
+// heartbeats drive between full card updates. Empty inputs leave that column
+// alone, so a sender that only publishes one side does not blank the other.
+func UpdateAdjacency(db *sql.DB, id, neighborsJSON, linksJSON string) error {
+	if neighborsJSON != "" {
+		if _, err := db.Exec(`UPDATE employee_cache SET neighbors_json=? WHERE id=?`, neighborsJSON, id); err != nil {
+			return fmt.Errorf("update neighbors %s: %w", id, err)
+		}
+	}
+	if linksJSON != "" {
+		if _, err := db.Exec(`UPDATE employee_cache SET links_json=? WHERE id=?`, linksJSON, id); err != nil {
+			return fmt.Errorf("update links %s: %w", id, err)
+		}
 	}
 	return nil
 }
@@ -283,9 +370,14 @@ func Remove(db *sql.DB, id string) (int64, error) {
 // executable commands) since this node never runs their commands directly —
 // it forwards to them. Mirrors Register's ON CONFLICT upsert.
 func UpsertRemote(db *sql.DB, id string, s CapabilitySummary) error {
-	native := make([]NativeAbility, 0, len(s.NativeIDs))
+	native := make([]NativeAbility, 0, len(s.NativeIDs)+len(s.ActuatorIDs))
 	for _, nid := range s.NativeIDs {
 		native = append(native, NativeAbility{ID: nid})
+	}
+	// Remote actuators fold into the remote native set: from this side they
+	// are abilities the peer owns, which is exactly what Matches consults.
+	for _, aid := range s.ActuatorIDs {
+		native = append(native, NativeAbility{ID: aid})
 	}
 	agents := make(map[string]Agent, len(s.AgentCaps))
 	for name, caps := range s.AgentCaps {
@@ -316,6 +408,14 @@ func UpsertRemote(db *sql.DB, id string, s CapabilitySummary) error {
 	if err != nil {
 		return fmt.Errorf("marshal remote resource profile: %w", err)
 	}
+	neighborsJSON, err := json.Marshal(s.Neighbors)
+	if err != nil {
+		return fmt.Errorf("marshal remote neighbors: %w", err)
+	}
+	linksJSON, err := json.Marshal(s.Links)
+	if err != nil {
+		return fmt.Errorf("marshal remote link metrics: %w", err)
+	}
 
 	kind, identity := s.NodeKind, s.NodeIdentity
 	if kind == "" {
@@ -324,54 +424,59 @@ func UpsertRemote(db *sql.DB, id string, s CapabilitySummary) error {
 	if identity == "" {
 		identity = id
 	}
-	return upsertNode(db, id, s.Device, s.Chip, kind, identity, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), string(resJSON), s.SchedulerTier)
+	return upsertNode(db, id, s.Device, s.Chip, kind, identity, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), string(resJSON), string(neighborsJSON), string(linksJSON), s.SchedulerTier)
 }
 
 // Node is a single employee_cache row, decoded.
 type Node struct {
-	ID              string           `json:"id"`
-	Name            string           `json:"name"`
-	Chip            string           `json:"chip,omitempty"`
-	NodeKind        string           `json:"node_kind"`
-	NodeIdentity    string           `json:"node_identity,omitempty"`
-	Status          string           `json:"status"`
-	LastSeen        int64            `json:"last_seen"`
-	SchedulerTier   int              `json:"scheduler_tier"`
-	Native          []NativeAbility  `json:"native,omitempty"`
-	Agents          map[string]Agent `json:"agents,omitempty"`
-	Manual          []ManualAbility  `json:"manual,omitempty"`
-	Capacity        Capacity         `json:"capacity"`
-	ResourceProfile ResourceProfile  `json:"resource_profile"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Chip            string            `json:"chip,omitempty"`
+	NodeKind        string            `json:"node_kind"`
+	NodeIdentity    string            `json:"node_identity,omitempty"`
+	Status          string            `json:"status"`
+	LastSeen        int64             `json:"last_seen"`
+	SchedulerTier   int               `json:"scheduler_tier"`
+	Native          []NativeAbility   `json:"native,omitempty"`
+	Agents          map[string]Agent  `json:"agents,omitempty"`
+	Manual          []ManualAbility   `json:"manual,omitempty"`
+	Actuators       []ActuatorProfile `json:"actuators,omitempty"`
+	Capacity        Capacity          `json:"capacity"`
+	ResourceProfile ResourceProfile   `json:"resource_profile"`
+	// Neighbors is this node's link-state advertisement — the peers it holds
+	// live connections to — learned from its capability summary and stored in
+	// neighbors_json. It is the edge set E of the mesh routing graph.
+	Neighbors []string `json:"neighbors,omitempty"`
+	// LinkMetrics is the edge weight table for the same adjacency (§4.1):
+	// peer id → RTT in milliseconds, decoded from links_json. A neighbor
+	// with no entry costs the unknown-link default in weighted routing.
+	LinkMetrics map[string]int64 `json:"link_metrics,omitempty"`
 }
 
-// Abilities returns this node's displayable ability list — native IDs plus an
-// "agent:<name>" entry per configured agent — sorted for deterministic output.
-// It is the single shared form used by the CLI status panel and the entry-model
-// device summary, so the two stay in lock-step as new ability kinds appear.
+// Abilities returns this node's displayable ability list — native IDs,
+// actuator IDs, plus an "agent:<name>" entry per configured agent — sorted
+// for deterministic output.
 func (n Node) Abilities() []string {
-	out := make([]string, 0, len(n.Native)+len(n.Agents))
+	out := make([]string, 0, len(n.Native)+len(n.Agents)+len(n.Actuators))
 	for _, a := range n.Native {
 		out = append(out, a.ID)
 	}
 	for name := range n.Agents {
 		out = append(out, "agent:"+name)
 	}
+	for _, act := range n.Actuators {
+		out = append(out, act.ID)
+	}
 	sort.Strings(out)
 	return out
 }
 
 // Matches reports whether this node declares any of required, across the
-// three ability layers (native / agent / manual). Mirrors commander.Router's
-// per-kind matching so network-level and local routing agree on semantics.
-//
-// A required id of the form "agent:<name>" refers to a configured agent by
-// name (the form advertised in the device summary); any other id matches a
-// declared native/manual id or an agent capability, with token-subset matching
-// that bridges separator/category-prefix differences (see AbilityMatches).
+// four ability layers (native / agent / manual / actuators).
 func (n Node) Matches(required []string) bool {
 	// Pre-tokenize the declared ids once; otherwise each required id would
 	// re-tokenize the whole declared set (O(R×A) allocations instead of O(A)).
-	native, agentCaps, manual := n.tokenizedAbilities()
+	native, agentCaps, manual, actuators := n.tokenizedAbilities()
 	for _, req := range required {
 		if name, ok := strings.CutPrefix(req, "agent:"); ok {
 			if _, exists := n.Agents[name]; exists {
@@ -380,7 +485,7 @@ func (n Node) Matches(required []string) bool {
 			continue
 		}
 		r := tokenizeAbility(req)
-		if matchTokens(native, r) || matchTokens(agentCaps, r) || matchTokens(manual, r) {
+		if matchTokens(native, r) || matchTokens(agentCaps, r) || matchTokens(manual, r) || matchTokens(actuators, r) {
 			return true
 		}
 	}
@@ -416,10 +521,10 @@ func (n Node) Fits(req ResourceProfile) bool {
 	return true
 }
 
-// tokenizedAbilities returns the declared native/agent/manual ability ids as
+// tokenizedAbilities returns the node's native, agent and manual abilities as
 // case-folded token sets, computed once so Matches does not re-tokenize them
 // per required id.
-func (n Node) tokenizedAbilities() (native, agentCaps, manual [][]string) {
+func (n Node) tokenizedAbilities() (native, agentCaps, manual, actuators [][]string) {
 	native = make([][]string, 0, len(n.Native))
 	for _, ab := range n.Native {
 		native = append(native, tokenizeAbility(ab.ID))
@@ -433,7 +538,14 @@ func (n Node) tokenizedAbilities() (native, agentCaps, manual [][]string) {
 	for _, ab := range n.Manual {
 		manual = append(manual, tokenizeAbility(ab.ID))
 	}
-	return native, agentCaps, manual
+	actuators = make([][]string, 0, len(n.Actuators))
+	for _, act := range n.Actuators {
+		actuators = append(actuators, tokenizeAbility(act.ID))
+		for _, cap := range act.Capabilities {
+			actuators = append(actuators, tokenizeAbility(cap))
+		}
+	}
+	return native, agentCaps, manual, actuators
 }
 
 // matchTokens reports whether any declared token set matches the required set.
@@ -465,6 +577,17 @@ func tokenizeAbility(s string) []string {
 // category-prefixed form of the other — e.g. required "code:lint" against a card
 // id "lint". Tokens are compared whole, so a required "lint" never matches an
 // unrelated "glint", and "build" never matches "rebuild".
+//
+// The subset check is deliberately SYMMETRIC and fuzzy: the declared side is
+// the card's claim and the required side is the model's phrasing, and neither
+// is authoritative about granularity. That trades precision for reach — a node
+// declaring the broad ability "build" is treated as able to serve a task
+// requiring the narrower "build:macos" it may not actually have. The safety
+// margin is structural rather than in this predicate: routing prefers exact-id
+// and richer matches upstream in the score, the executor fails loudly on a
+// capability it lacks, and the supervision layer judges the result. Tightening
+// this to a directional (required ⊆ declared) match would strand every card
+// written at the broad granularity, so the fuzz is kept and documented.
 func AbilityMatches(declared, required string) bool {
 	if declared == required {
 		return true
@@ -497,7 +620,7 @@ func tokenSubset(a, b []string) bool {
 
 // Query returns nodes matching filters. Empty status or name matches all.
 func Query(db *sql.DB, status, name string) ([]Node, error) {
-	q := `SELECT id, name, chip, COALESCE(node_kind, 'physical'), COALESCE(node_identity, ''), status, last_seen, scheduler_tier, native_json, agents_json, manual_json, capacity_json, resource_profile_json
+	q := `SELECT id, name, chip, COALESCE(node_kind, 'physical'), COALESCE(node_identity, ''), status, last_seen, scheduler_tier, native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json
 	      FROM employee_cache WHERE 1=1`
 	var args []any
 	if status != "" {
@@ -521,9 +644,9 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 		// later by a migration (legacy rows are NULL until re-upserted), and a
 		// partial insert leaves the others NULL too. Scan all of them as nullable
 		// so a single such row does not fail the whole directory query.
-		var native, agents, manual, capJSON, resJSON sql.NullString
+		var native, agents, manual, capJSON, resJSON, neighborsJSON, linksJSON sql.NullString
 		if err := rows.Scan(&n.ID, &n.Name, &n.Chip, &n.NodeKind, &n.NodeIdentity, &n.Status, &n.LastSeen, &n.SchedulerTier,
-			&native, &agents, &manual, &capJSON, &resJSON); err != nil {
+			&native, &agents, &manual, &capJSON, &resJSON, &neighborsJSON, &linksJSON); err != nil {
 			return nil, err
 		}
 		if native.Valid && native.String != "" {
@@ -540,6 +663,20 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 		}
 		if resJSON.Valid && resJSON.String != "" {
 			_ = json.Unmarshal([]byte(resJSON.String), &n.ResourceProfile)
+		}
+		if neighborsJSON.Valid && neighborsJSON.String != "" {
+			_ = json.Unmarshal([]byte(neighborsJSON.String), &n.Neighbors)
+		}
+		if linksJSON.Valid && linksJSON.String != "" {
+			var links []LinkMetric
+			if err := json.Unmarshal([]byte(linksJSON.String), &links); err == nil {
+				for _, l := range links {
+					if n.LinkMetrics == nil {
+						n.LinkMetrics = make(map[string]int64)
+					}
+					n.LinkMetrics[l.Peer] = l.RTTms
+				}
+			}
 		}
 		out = append(out, n)
 	}

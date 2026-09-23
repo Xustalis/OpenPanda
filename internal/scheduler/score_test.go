@@ -90,3 +90,18 @@ func TestPreferredStillAuthoritative(t *testing.T) {
 		t.Fatalf("preferred node: %+v, want forward to named", d)
 	}
 }
+
+func TestWaitSignalClampsNegative(t *testing.T) {
+	nodeZero := ledger.Node{Capacity: ledger.Capacity{CurrentTasks: 0}}
+	nodeNeg := ledger.Node{Capacity: ledger.Capacity{CurrentTasks: -5}}
+
+	scoreZero := waitSignal(nodeZero)
+	scoreNeg := waitSignal(nodeNeg)
+
+	if scoreNeg != scoreZero {
+		t.Fatalf("waitSignal for negative tasks (%v) must equal zero tasks (%v)", scoreNeg, scoreZero)
+	}
+	if scoreNeg > 1.0 {
+		t.Fatalf("waitSignal must not exceed 1.0, got %v", scoreNeg)
+	}
+}

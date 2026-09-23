@@ -13,6 +13,17 @@ func TestNetworkGuardRequiresHTTPS(t *testing.T) {
 	if err := g.CheckURL("http://localhost:8080/v1"); err != nil {
 		t.Fatalf("localhost dev endpoint should pass: %v", err)
 	}
+	// Every loopback form is exempt, not just the two literals: IPv6 ::1 and
+	// any 127/8 address are the same "plaintext stays on this host" case.
+	for _, u := range []string{"http://127.0.0.1:11434/v1", "http://127.0.0.2:11434/v1", "http://[::1]:11434/v1"} {
+		if err := g.CheckURL(u); err != nil {
+			t.Fatalf("loopback endpoint %s should pass: %v", u, err)
+		}
+	}
+	// A non-loopback literal IP still requires https.
+	if err := g.CheckURL("http://192.168.1.10:11434/v1"); err == nil {
+		t.Fatalf("cleartext non-loopback endpoint must be rejected")
+	}
 }
 
 func TestNetworkGuardAllowlist(t *testing.T) {

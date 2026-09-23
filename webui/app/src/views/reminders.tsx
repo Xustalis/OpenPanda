@@ -18,6 +18,7 @@ export function RemindersView() {
   const [message, setMessage] = useState('')
   const [minutes, setMinutes] = useState('')
   const [dueAt, setDueAt] = useState('')
+  const [everyMin, setEveryMin] = useState('')
   const [adding, setAdding] = useState(false)
   const [notifyState, setNotifyState] = useState<'idle' | 'on' | 'unsupported' | 'denied' | 'error'>('idle')
 
@@ -26,16 +27,20 @@ export function RemindersView() {
     if (adding || !message.trim()) return
     setAdding(true)
     try {
+      // repeat_seconds rides along whichever due-time form was used.
+      const rep = Number(everyMin)
+      const repeat_seconds = rep > 0 ? Math.round(rep * 60) : undefined
       if (dueAt) {
         // datetime-local has no timezone; interpret it in the browser's zone.
-        await api.createReminder({ message: message.trim(), due_at: new Date(dueAt).toISOString() })
+        await api.createReminder({ message: message.trim(), due_at: new Date(dueAt).toISOString(), repeat_seconds })
       } else {
         const n = Number(minutes)
-        await api.createReminder({ message: message.trim(), after_minutes: n > 0 ? n : 1 })
+        await api.createReminder({ message: message.trim(), after_minutes: n > 0 ? n : 1, repeat_seconds })
       }
       setMessage('')
       setMinutes('')
       setDueAt('')
+      setEveryMin('')
     } catch (err) {
       toastError(err)
     } finally {
@@ -95,8 +100,10 @@ export function RemindersView() {
       />
     )
 
-  const pending = (reminders ?? []).filter((r) => r.fired_at === 0)
-  const fired = (reminders ?? []).filter((r) => r.fired_at !== 0)
+  // A recurring row keeps a non-zero fired_at between occurrences — it is the
+  // LAST fire, not a retirement — so "pending" means unfired OR repeating.
+  const pending = (reminders ?? []).filter((r) => r.fired_at === 0 || r.repeat_seconds > 0)
+  const fired = (reminders ?? []).filter((r) => r.fired_at !== 0 && !r.repeat_seconds)
 
   return (
     <section>
@@ -130,6 +137,16 @@ export function RemindersView() {
           value={dueAt}
           onInput={(e) => setDueAt((e.target as HTMLInputElement).value)}
         />
+        <input
+          class="input reminder-every"
+          type="number"
+          min={1}
+          step={1}
+          placeholder={t('reminders.everyMin')}
+          title={t('reminders.everyMinTitle')}
+          value={everyMin}
+          onInput={(e) => setEveryMin((e.target as HTMLInputElement).value)}
+        />
         <button class="btn primary" type="submit" disabled={adding || !message.trim()}>
           {t('reminders.add')}
         </button>
@@ -161,7 +178,7 @@ export function RemindersView() {
 
 function ReminderRow({ r, onDelete }: { r: Reminder; onDelete(id: number): void }) {
   const due = new Date(r.due_at * 1000)
-  const pending = r.fired_at === 0
+  const pending = r.fired_at === 0 || r.repeat_seconds > 0
   const left = r.due_at * 1000 - Date.now()
   let when: string
   if (pending) {
@@ -172,12 +189,17 @@ function ReminderRow({ r, onDelete }: { r: Reminder; onDelete(id: number): void 
   } else {
     when = new Date(r.fired_at * 1000).toLocaleString()
   }
+  const repeat =
+    r.repeat_seconds > 0
+      ? ' · ' + t('reminders.repeats', { d: formatDuration(r.repeat_seconds * 1000) })
+      : ''
   return (
     <div class={`reminder-row${pending ? '' : ' fired'}`}>
       <div class="reminder-info">
         <span class="reminder-msg">{r.message}</span>
         <span class="reminder-meta dim">
-          {pending ? due.toLocaleString() : t('reminders.firedAt') + ' ' + when} · {r.source}
+          {pending ? due.toLocaleString() : t('reminders.firedAt') + ' ' + when}
+          {repeat} · {r.source}
         </span>
       </div>
       <div class="reminder-side">

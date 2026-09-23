@@ -1,0 +1,354 @@
+/* Design tokens — one source of truth for colour, space, radius, elevation.
+   Dark-first; `html[data-theme]` overrides auto (prefers-color-scheme). */
+
+:root {
+  color-scheme: dark;
+
+  /* — Surfaces. Elevation is expressed by lightness steps + hairlines; no
+     tinted washes. Page < chrome < raised < overlay < inset wells. */
+  --bg: #0a0b0d;
+  --bg-chrome: #0d0f12;
+  --bg-raised: #121418;
+  --bg-overlay: #181b21;
+  --bg-inset: #07080a;
+  --bg-hover: rgba(255, 255, 255, 0.045);
+  --bg-active: rgba(255, 255, 255, 0.08);
+
+  /* — Hairlines. Soft = card interiors, base = card edges, strong = inputs. */
+  --border: rgba(255, 255, 255, 0.08);
+  --border-soft: rgba(255, 255, 255, 0.05);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  /* — Text tiers. */
+  --text: #e9ebee;
+  --text-primary: var(--text);
+  --text-secondary: #98a0a9;
+  --text-tertiary: #5f6670;
+  --text-disabled: #434a53;
+  --text-dim: var(--text-secondary);
+
+  /* — Accent: refined bamboo/emerald. -ink is text on a filled accent. */
+  --accent: #3ddc97;
+  --accent-strong: #2bc584;
+  --accent-ink: #04160e;
+  --accent-soft: rgba(61, 220, 151, 0.11);
+  --accent-border: rgba(61, 220, 151, 0.32);
+  --accent-1: #7debc0;
+  --accent-2: #7cc7ff;
+  --accent-2-soft: rgba(124, 199, 255, 0.09);
+  --accent-2-border: rgba(124, 199, 255, 0.3);
+
+  /* — Semantic. */
+  --danger: #ef6d6d;
+  --warn: #eab549;
+  --info: #6ea8fe;
+  --good: #3ddc97;
+  --danger-soft: rgba(239, 109, 109, 0.12);
+  --warn-soft: rgba(234, 181, 73, 0.12);
+  --info-soft: rgba(110, 168, 254, 0.12);
+  --good-soft: var(--accent-soft);
+
+  --semantic-good: #6fe3ae;
+  --semantic-good-soft: rgba(111, 227, 174, 0.09);
+  --semantic-good-border: rgba(111, 227, 174, 0.3);
+  --semantic-info: #a8b8ff;
+  --semantic-info-soft: rgba(168, 184, 255, 0.09);
+  --semantic-info-border: rgba(168, 184, 255, 0.3);
+  --semantic-warn: #f0c97b;
+  --semantic-warn-soft: rgba(240, 201, 123, 0.09);
+  --semantic-warn-border: rgba(240, 201, 123, 0.3);
+  --semantic-danger: #ff9b9b;
+  --semantic-danger-soft: rgba(255, 155, 155, 0.09);
+  --semantic-danger-border: rgba(255, 155, 155, 0.3);
+
+  /* — Radius scale. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+  --radius: var(--radius-md);
+
+  /* — Elevation: soft, layered, never heavy. */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.16);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.24), 0 8px 24px rgba(0, 0, 0, 0.28);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.32), 0 16px 48px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 8px 24px rgba(0, 0, 0, 0.4), 0 24px 72px rgba(0, 0, 0, 0.48);
+  --shadow-accent: 0 0 0 1px rgba(61, 220, 151, 0.18), 0 4px 20px rgba(61, 220, 151, 0.14);
+  --shadow-glow-1: 0 0 24px rgba(61, 220, 151, 0.1);
+  --shadow-glow-2: 0 0 28px rgba(124, 199, 255, 0.12);
+  --shadow: var(--shadow-md);
+
+  /* — Focus ring. */
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px rgba(61, 220, 151, 0.55);
+
+  /* — 8px-base spacing grid. */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 28px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+
+  /* — Type. */
+  --font-ui: ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", Inter,
+    "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12.5px;
+  --text-md: 13.5px;
+  --text-lg: 15px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.55;
+
+  /* — Motion. */
+  --dur-fast: 110ms;
+  --dur-med: 180ms;
+  --ease: cubic-bezier(0.25, 0.6, 0.3, 1);
+
+  /* — Shell metrics. */
+  --sidebar-w: 240px;
+  --rail-w: 264px;
+  --content-max: 1080px;
+}
+
+/* Forced light theme. */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f5f6f7;
+  --bg-chrome: #eceef0;
+  --bg-raised: #ffffff;
+  --bg-overlay: #ffffff;
+  --bg-inset: #eef0f2;
+  --bg-hover: rgba(15, 23, 32, 0.045);
+  --bg-active: rgba(15, 23, 32, 0.08);
+
+  --border: rgba(15, 23, 32, 0.1);
+  --border-soft: rgba(15, 23, 32, 0.06);
+  --border-strong: rgba(15, 23, 32, 0.2);
+
+  --text: #16191d;
+  --text-secondary: #57606a;
+  --text-tertiary: #8a929b;
+  --text-disabled: #b0b7bf;
+
+  --accent: #0d9f6e;
+  --accent-strong: #0b8a5f;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(13, 159, 110, 0.1);
+  --accent-border: rgba(13, 159, 110, 0.36);
+  --accent-1: #0d9f6e;
+  --accent-2: #1a74d1;
+  --accent-2-soft: rgba(26, 116, 209, 0.08);
+  --accent-2-border: rgba(26, 116, 209, 0.3);
+
+  --danger: #d64545;
+  --warn: #ad7c14;
+  --info: #1a74d1;
+  --good: #0d9f6e;
+  --danger-soft: rgba(214, 69, 69, 0.1);
+  --warn-soft: rgba(173, 124, 20, 0.1);
+  --info-soft: rgba(26, 116, 209, 0.1);
+  --good-soft: rgba(13, 159, 110, 0.1);
+
+  --semantic-good: #0b8a5f;
+  --semantic-good-soft: rgba(13, 159, 110, 0.08);
+  --semantic-good-border: rgba(13, 159, 110, 0.3);
+  --semantic-info: #5a5fd0;
+  --semantic-info-soft: rgba(90, 95, 208, 0.08);
+  --semantic-info-border: rgba(90, 95, 208, 0.3);
+  --semantic-warn: #96710f;
+  --semantic-warn-soft: rgba(150, 113, 15, 0.08);
+  --semantic-warn-border: rgba(150, 113, 15, 0.3);
+  --semantic-danger: #c93c3c;
+  --semantic-danger-soft: rgba(201, 60, 60, 0.08);
+  --semantic-danger-border: rgba(201, 60, 60, 0.3);
+
+  --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06), 0 2px 8px rgba(16, 24, 40, 0.05);
+  --shadow-md: 0 2px 6px rgba(16, 24, 40, 0.07), 0 8px 24px rgba(16, 24, 40, 0.08);
+  --shadow-lg: 0 4px 12px rgba(16, 24, 40, 0.09), 0 16px 48px rgba(16, 24, 40, 0.12);
+  --shadow-xl: 0 8px 24px rgba(16, 24, 40, 0.12), 0 24px 72px rgba(16, 24, 40, 0.16);
+  --shadow-accent: 0 0 0 1px rgba(13, 159, 110, 0.15), 0 4px 20px rgba(13, 159, 110, 0.12);
+  --shadow-glow-1: none;
+  --shadow-glow-2: none;
+
+  --ring: 0 0 0 2px #fff, 0 0 0 4px rgba(13, 159, 110, 0.45);
+}
+
+/* Auto = follow the OS. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    --bg: #f5f6f7;
+    --bg-chrome: #eceef0;
+    --bg-raised: #ffffff;
+    --bg-overlay: #ffffff;
+    --bg-inset: #eef0f2;
+    --bg-hover: rgba(15, 23, 32, 0.045);
+    --bg-active: rgba(15, 23, 32, 0.08);
+    --border: rgba(15, 23, 32, 0.1);
+    --border-soft: rgba(15, 23, 32, 0.06);
+    --border-strong: rgba(15, 23, 32, 0.2);
+    --text: #16191d;
+    --text-secondary: #57606a;
+    --text-tertiary: #8a929b;
+    --text-disabled: #b0b7bf;
+    --accent: #0d9f6e;
+    --accent-strong: #0b8a5f;
+    --accent-ink: #ffffff;
+    --accent-soft: rgba(13, 159, 110, 0.1);
+    --accent-border: rgba(13, 159, 110, 0.36);
+    --accent-1: #0d9f6e;
+    --accent-2: #1a74d1;
+    --accent-2-soft: rgba(26, 116, 209, 0.08);
+    --accent-2-border: rgba(26, 116, 209, 0.3);
+    --danger: #d64545;
+    --warn: #ad7c14;
+    --info: #1a74d1;
+    --good: #0d9f6e;
+    --danger-soft: rgba(214, 69, 69, 0.1);
+    --warn-soft: rgba(173, 124, 20, 0.1);
+    --info-soft: rgba(26, 116, 209, 0.1);
+    --good-soft: rgba(13, 159, 110, 0.1);
+    --semantic-good: #0b8a5f;
+    --semantic-good-soft: rgba(13, 159, 110, 0.08);
+    --semantic-good-border: rgba(13, 159, 110, 0.3);
+    --semantic-info: #5a5fd0;
+    --semantic-info-soft: rgba(90, 95, 208, 0.08);
+    --semantic-info-border: rgba(90, 95, 208, 0.3);
+    --semantic-warn: #96710f;
+    --semantic-warn-soft: rgba(150, 113, 15, 0.08);
+    --semantic-warn-border: rgba(150, 113, 15, 0.3);
+    --semantic-danger: #c93c3c;
+    --semantic-danger-soft: rgba(201, 60, 60, 0.08);
+    --semantic-danger-border: rgba(201, 60, 60, 0.3);
+    --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.05);
+    --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06), 0 2px 8px rgba(16, 24, 40, 0.05);
+    --shadow-md: 0 2px 6px rgba(16, 24, 40, 0.07), 0 8px 24px rgba(16, 24, 40, 0.08);
+    --shadow-lg: 0 4px 12px rgba(16, 24, 40, 0.09), 0 16px 48px rgba(16, 24, 40, 0.12);
+    --shadow-xl: 0 8px 24px rgba(16, 24, 40, 0.12), 0 24px 72px rgba(16, 24, 40, 0.16);
+    --shadow-accent: 0 0 0 1px rgba(13, 159, 110, 0.15), 0 4px 20px rgba(13, 159, 110, 0.12);
+    --shadow-glow-1: none;
+    --shadow-glow-2: none;
+    --ring: 0 0 0 2px #fff, 0 0 0 4px rgba(13, 159, 110, 0.45);
+  }
+}
+
+/* — Legacy aliases. The carried view styles speak the old token vocabulary;
+   these map it onto the new palette so the reskin happens for free. New code
+   should use the canonical names above. */
+:root {
+  --primary: var(--accent);
+  --prog: var(--accent);
+  --dim: var(--text-secondary);
+  --muted: var(--text-tertiary);
+  --mono: var(--font-mono);
+  --ff-mono: var(--font-mono);
+  --font-display: var(--font-ui);
+
+  --bg-card: var(--bg-raised);
+  --bg-soft: var(--bg-chrome);
+  --bg-surface: var(--bg-raised);
+
+  --accent-1-rgb: 125, 235, 192;
+  --accent-1-tint-xs: rgba(var(--accent-1-rgb), 0.08);
+  --accent-2-tint-xs: var(--accent-2-soft);
+  --accent-2-tint-md: rgba(124, 199, 255, 0.16);
+  --accent-2-strong-soft: rgba(124, 199, 255, 0.2);
+  --accent-2-glow: var(--shadow-glow-2);
+
+  --hairline-xs: var(--border-soft);
+  --hairline-sm: var(--border);
+  --hairline-md: var(--border-strong);
+
+  --fs-caption: var(--text-xs);
+  --fs-small: var(--text-sm);
+  --fs-body: var(--text-md);
+  --fs-sub: var(--text-sm);
+  --fs-heading: var(--text-lg);
+  --fs-display: var(--text-2xl);
+  --fs-mono: var(--text-sm);
+  --lh-default: var(--leading-normal);
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  --dur-normal: var(--dur-med);
+  --dur-slow: 320ms;
+  --ease-standard: var(--ease);
+  --ease-emphasized: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.4, 0.44, 1);
+
+  --warn-border: var(--semantic-warn-border);
+  --semantic-warn-strong-soft: rgba(240, 201, 123, 0.2);
+
+  --surface-alpha-xs: rgba(255, 255, 255, 0.03);
+  --surface-alpha-sm: rgba(255, 255, 255, 0.05);
+  --surface-alpha-md: rgba(255, 255, 255, 0.08);
+
+  --grad-accent-2: linear-gradient(180deg, var(--accent-2-soft), transparent);
+  --grad-card: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 40%);
+  --grad-hero: radial-gradient(560px 260px at 50% 0%, var(--accent-soft), transparent 70%);
+}
+:root[data-theme='light'] {
+  --accent-1-rgb: 13, 159, 110;
+  --accent-2-tint-md: rgba(26, 116, 209, 0.14);
+  --accent-2-strong-soft: rgba(26, 116, 209, 0.18);
+  --semantic-warn-strong-soft: rgba(150, 113, 15, 0.18);
+  --surface-alpha-xs: rgba(15, 23, 32, 0.03);
+  --surface-alpha-sm: rgba(15, 23, 32, 0.05);
+  --surface-alpha-md: rgba(15, 23, 32, 0.08);
+  --grad-accent-2: linear-gradient(180deg, var(--accent-2-soft), transparent);
+  --grad-card: none;
+  --grad-hero: radial-gradient(560px 260px at 50% 0%, var(--accent-soft), transparent 70%);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --accent-1-rgb: 13, 159, 110;
+    --accent-2-tint-md: rgba(26, 116, 209, 0.14);
+    --accent-2-strong-soft: rgba(26, 116, 209, 0.18);
+    --semantic-warn-strong-soft: rgba(150, 113, 15, 0.18);
+    --surface-alpha-xs: rgba(15, 23, 32, 0.03);
+    --surface-alpha-sm: rgba(15, 23, 32, 0.05);
+    --surface-alpha-md: rgba(15, 23, 32, 0.08);
+    --grad-card: none;
+  }
+}
+
+/* Thin scrollbars everywhere. */
+:root {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(140, 150, 160, 0.32) transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(140, 150, 160, 0.28);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(140, 150, 160, 0.45);
+  background-clip: content-box;
+  border: 2px solid transparent;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

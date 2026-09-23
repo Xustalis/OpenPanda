@@ -62,7 +62,7 @@ func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.printBlock(tb))
 			}
 		}
-		m.liveTask = newTaskProgress(p.Name, now)
+		m.liveTask = newTaskProgress(p.Name, now, m.loc)
 	case askengine.ProgressTool:
 		if m.liveTask != nil {
 			m.liveTask.recordTool(label, now)
@@ -377,6 +377,7 @@ func (m *tuiModel) resetLive() {
 	m.thoughtDone = false
 	m.note = ""
 	m.pendingPrompt = ""
+	m.turnMode = "" // the slash-mode lens is per-turn, never sticky
 	m.liveTask = nil
 	m.ta.Placeholder = i18n.T(m.loc, "tui.input.placeholder")
 }

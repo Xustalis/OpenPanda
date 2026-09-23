@@ -271,10 +271,37 @@ func startPair(t *testing.T, ctx context.Context, entry, worker *Core, entryAddr
 	wd := make(chan error, 1)
 	go func() { ed <- entry.Listen(ctx, entryAddr) }()
 	go func() { wd <- worker.Listen(ctx, workerAddr) }()
-	time.Sleep(200 * time.Millisecond)
 
-	must(entry.DialPeer(ctx, workerAddr))
-	time.Sleep(200 * time.Millisecond)
+	// Listeners bind inside Listen; retry the dial until both are up instead
+	// of sleeping a fixed 200ms — loaded CI runners can exceed that.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if err := entry.DialPeer(ctx, workerAddr); err == nil {
+			break
+		} else if time.Now().After(deadline) {
+			must(err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Peer registration lands asynchronously: DialPeer returns once our hello
+	// went out, but peers[id] is only populated once handleInbound reads the
+	// reply. A fixed sleep raced slow runners (send → "peer not connected"),
+	// so wait until both directions see a live conn.
+	waitPeer(t, entry, worker.node.id)
+	waitPeer(t, worker, entry.node.id)
+}
+
+// waitPeer polls until core c has a live conn to the given peer id.
+func waitPeer(t *testing.T, c *Core, id string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for c.connFor(id) == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("peer %s never connected", id)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // newCoreWithNative builds a Core whose card has the given native ability.

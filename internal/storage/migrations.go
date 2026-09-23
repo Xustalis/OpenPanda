@@ -40,6 +40,154 @@ var migrations = []Migration{
 	{Version: 15, Name: "add_projects_and_settings", Apply: migrateV15},
 	{Version: 16, Name: "add_delegation_metrics_cost", Apply: migrateV16},
 	{Version: 17, Name: "add_task_approval_disposition", Apply: migrateV17},
+	{Version: 18, Name: "add_task_outbox", Apply: migrateV18},
+	{Version: 19, Name: "add_dtn_mesh_columns", Apply: migrateV19},
+	{Version: 20, Name: "add_token_budget_and_link_metrics", Apply: migrateV20},
+	{Version: 21, Name: "add_artifact_push_outbox", Apply: migrateV21},
+	{Version: 22, Name: "add_task_outbox_via", Apply: migrateV22},
+	{Version: 23, Name: "add_task_agent_session", Apply: migrateV23},
+	{Version: 24, Name: "add_reminders_repeat", Apply: migrateV24},
+}
+
+// migrateV23 adds tasks.agent_session_id and tasks.agent_session_node: the
+// adapter's own conversation handle and the node that minted it (whitepaper
+// §5.2's "breakpoint mooring" — the round boundary is the checkpoint the
+// current adapters support). A task interrupted by yield/restart/redelegation
+// resumes that session instead of cold-starting on the shadow copy alone.
+// The node column is what keeps the handle honest: a session id only means
+// something to the adapter store on the node that created it, so a delegator
+// may only offer it back to that node (as resume_session_id on the wire) —
+// never adopt it for itself or hand it to a different executor.
+func migrateV23(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	if err := addColumnIfMissingTx(tx, "tasks", "agent_session_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "tasks", "agent_session_node", "TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateV22 adds task_outbox.via: the peer a relayed bundle arrived from
+// (whitepaper §8.3 multi-hop). A signed bundle cannot carry a hop list — a
+// relay must not re-wrap it — so the no-echo rule is kept as row state: when
+// a flush recomputes the next hop it excludes via, and a bundle can only
+// ever be parked back toward its sender, never sent.
+func migrateV22(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "task_outbox")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "task_outbox", "via", "TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateV21 adds artifact_push_outbox: the durable custody record for
+// chunked proactive artifact delivery (whitepaper §8.3 fat-push). The
+// receiver reports contiguous progress (acked_through); the sender streams
+// forward from that waterline and only retires a row on the receiver's done
+// verdict — so an artifact outlives process restarts and link drops the same
+// way a DTN bundle does, instead of restarting a large archive from zero.
+// ttl is the shared absolute deadline (the task's deadline_unix when set,
+// else mint+24h): a row that outlives it is swept like an expired bundle.
+func migrateV21(tx MigrationExec) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS artifact_push_outbox (
+		peer TEXT NOT NULL,
+		hash TEXT NOT NULL,
+		task_id TEXT NOT NULL,
+		total INTEGER NOT NULL,
+		sent_through INTEGER NOT NULL DEFAULT 0,
+		acked_through INTEGER NOT NULL DEFAULT 0,
+		ttl INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY (peer, hash)
+	)`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_artifact_push_outbox_peer ON artifact_push_outbox(peer)`)
+	return err
+}
+
+// migrateV20 completes the mesh-budget and weighted-routing persistence
+// (whitepaper §4.1, §6.1):
+//   - tasks.token_budget: the remaining LLM token quota a task may spend
+//     across the mesh. >0 is the remaining allowance, 0 means unbounded
+//     (every pre-v20 task and every task minted without a budget), and -1
+//     marks the budget spent — the exhaustion marker has to be distinct
+//     from unbounded or an exhausted task would re-mint quota at the next
+//     hop.
+//   - employee_cache.links_json: per-edge link metrics (peer → RTT ms)
+//     gossiped in the capability summary beside neighbors_json, which is
+//     what turns the graph's BFS shortest-hop search into a weighted
+//     shortest-path one.
+func migrateV20(tx MigrationExec) error {
+	for _, c := range []struct{ table, column, decl string }{
+		{"tasks", "token_budget", "INTEGER NOT NULL DEFAULT 0"},
+		{"employee_cache", "links_json", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		exists, err := tableExistsTx(tx, c.table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if err := addColumnIfMissingTx(tx, c.table, c.column, c.decl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV19 gives the mesh/DTN machinery its durable fields (whitepaper
+// §6.1, §8.2, §8.3, §4.1):
+//   - tasks.transport / deadline_unix / delegation_budget: the DTN mode flag,
+//     the absolute bundle TTL, and the remaining mesh-wide delegation budget
+//     were previously wire-only/struct-only — a restart forgot them.
+//   - task_outbox.payload_blob: the CBOR-encoded fat bundle, kept beside the
+//     JSON payload so older peers still decode the row.
+//   - employee_cache.neighbors_json: the link-state advertisement a node
+//     gossips in hello — the peer ids it can currently reach — which is what
+//     turns the directory from a star into a routable graph.
+func migrateV19(tx MigrationExec) error {
+	for _, c := range []struct{ table, column, decl string }{
+		{"tasks", "transport", "TEXT NOT NULL DEFAULT 'live'"},
+		{"tasks", "deadline_unix", "INTEGER NOT NULL DEFAULT 0"},
+		{"tasks", "delegation_budget", "INTEGER NOT NULL DEFAULT 0"},
+		{"task_outbox", "payload_blob", "BLOB"},
+		{"employee_cache", "neighbors_json", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		exists, err := tableExistsTx(tx, c.table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if err := addColumnIfMissingTx(tx, c.table, c.column, c.decl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV18 adds task_outbox: universal relay outbox for DTN and store-and-forward tasks (whitepaper §8.2).
+// Unlike result_outbox which only holds terminal results, task_outbox buffers forward
+// delegation envelopes for non-live peers or opportunistic DTN relay.
+func migrateV18(tx MigrationExec) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS task_outbox (
+		peer TEXT NOT NULL,
+		task_id TEXT NOT NULL,
+		payload_json TEXT NOT NULL,
+		transport_type TEXT NOT NULL DEFAULT 'dtn',
+		ttl INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY (peer, task_id)
+	)`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_task_outbox_peer ON task_outbox(peer)`)
+	return err
 }
 
 // migrateV17 persists why a task entered review. Approval behavior must survive
@@ -396,6 +544,19 @@ func migrateV8(tx MigrationExec) error {
 	return err
 }
 
+// migrateV24 adds repeat_seconds to reminders: 0 keeps the one-shot
+// semantics; >0 reschedules the row on every claim instead of retiring it.
+// A database created between v8's introduction and any wipe may predate the
+// table entirely, so the ALTER only runs when it exists.
+func migrateV24(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "reminders")
+	if err != nil || !exists {
+		return err
+	}
+	_, err = tx.Exec(`ALTER TABLE reminders ADD COLUMN repeat_seconds INTEGER NOT NULL DEFAULT 0`)
+	return err
+}
+
 // migrateV7 backfills empty/NULL prev_hash values for rows that predate the hash
 // chain (V6). This makes existing audit and event chains verifiable instead of
 // failing on every NULL scan. The chain content is not altered — only the link
@@ -412,7 +573,15 @@ func migrateV7(tx MigrationExec) error {
 }
 
 func backfillAuditChain(tx MigrationExec) error {
-	rows, err := tx.Query(`SELECT id, COALESCE(prev_hash, ''), ts, who, what, target, result, detail FROM audit_log ORDER BY id ASC`)
+	// Every scanned column is COALESCE'd: the schema declares all of them plain
+	// TEXT (nullable), and a NULL anywhere — a hand-edited row, an import —
+	// fails the whole scan with "converting NULL to string", which aborts the
+	// migration and leaves the store unopenable. Hashing treats NULL as the
+	// empty string, matching how the writers' empty fields hash.
+	rows, err := tx.Query(`SELECT id, COALESCE(prev_hash, ''), ts,
+		COALESCE(who, ''), COALESCE(what, ''), COALESCE(target, ''),
+		COALESCE(result, ''), COALESCE(detail, '')
+		FROM audit_log ORDER BY id ASC`)
 	if err != nil {
 		return err
 	}
@@ -453,7 +622,10 @@ func backfillAuditChain(tx MigrationExec) error {
 }
 
 func backfillTaskEventChain(tx MigrationExec) error {
-	rows, err := tx.Query(`SELECT id, task_id, COALESCE(prev_hash, ''), ts, type, data_json FROM task_events ORDER BY task_id, id ASC`)
+	// Same NULL-safety as backfillAuditChain: every column is nullable TEXT.
+	rows, err := tx.Query(`SELECT id, COALESCE(task_id, ''), COALESCE(prev_hash, ''), ts,
+		COALESCE(type, ''), COALESCE(data_json, '')
+		FROM task_events ORDER BY task_id, id ASC`)
 	if err != nil {
 		return err
 	}

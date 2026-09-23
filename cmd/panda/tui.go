@@ -43,10 +43,23 @@ func runTUI(r *repl) {
 		opts = append(opts, tea.WithMouseCellMotion())
 	}
 	p := tea.NewProgram(model, opts...)
+	// Ask the terminal to disambiguate Enter from modified Enter (kitty
+	// keyboard protocol, flag 1): Terminals that support it send Shift+Enter as
+	// CSI 13;2u, which Update maps to a newline. Terminals that do not ignore
+	// the push, and Alt+Enter / Ctrl+J still reach us the classic ways.
+	if stdoutIsTTY() {
+		fmt.Fprint(os.Stdout, "\x1b[>1u")
+	}
+	// Leave the terminal as we found it — even if Run panics: pop the keyboard
+	// flags and release alternate scroll, so the shell does not inherit our
+	// leftovers.
+	defer func() {
+		if stdoutIsTTY() {
+			fmt.Fprint(os.Stdout, "\x1b[<u")
+		}
+		fmt.Fprint(os.Stdout, altScrollOff)
+	}()
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 	}
-	// Leave the flag as we found it; it is inert outside the alt screen, but a
-	// terminal we hand back to the shell should not keep our leftovers.
-	fmt.Fprint(os.Stdout, altScrollOff)
 }

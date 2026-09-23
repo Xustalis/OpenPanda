@@ -29,22 +29,35 @@ type Audit struct{ db *sql.DB }
 func NewAudit(db *sql.DB) *Audit { return &Audit{db: db} }
 
 // Record writes one entry, linking it to the global audit hash chain (A3).
+// The read of the chain head and the insert must live in one transaction:
+// two concurrent Records that each read the same head would both link to it,
+// forking the chain and failing VerifyChain on one of them (M2). The store's
+// single connection serializes the tx bodies, so the second writer always sees
+// the first writer's row as the head.
 func (a *Audit) Record(ctx context.Context, e Entry) error {
 	ts := time.Now().Unix()
-	prevHash, err := a.lastHash(ctx)
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin audit tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	prevHash, err := lastHash(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("read prev audit hash: %w", err)
 	}
-	_, err = a.db.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO audit_log (ts, who, what, target, result, detail, prev_hash)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		ts, e.Who, e.What, e.Target, e.Result, e.Detail, prevHash)
-	return err
+		ts, e.Who, e.What, e.Target, e.Result, e.Detail, prevHash); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // lastHash returns the hash of the most recent audit_log entry, or "" for the
-// genesis entry.
-func (a *Audit) lastHash(ctx context.Context) (string, error) {
+// genesis entry. It runs inside the caller's transaction so the head it reads
+// is the head the insert links to.
+func lastHash(ctx context.Context, tx *sql.Tx) (string, error) {
 	var prev struct {
 		PrevHash string
 		TS       int64
@@ -54,7 +67,7 @@ func (a *Audit) lastHash(ctx context.Context) (string, error) {
 		Result   string
 		Detail   string
 	}
-	err := a.db.QueryRowContext(ctx,
+	err := tx.QueryRowContext(ctx,
 		`SELECT COALESCE(prev_hash, ''), ts, who, what, target, result, detail FROM audit_log
 		 ORDER BY id DESC LIMIT 1`).Scan(
 		&prev.PrevHash, &prev.TS, &prev.Who, &prev.What, &prev.Target, &prev.Result, &prev.Detail)

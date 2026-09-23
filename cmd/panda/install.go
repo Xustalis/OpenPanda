@@ -13,17 +13,14 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 
-	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/doctor"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/install"
-	"github.com/Xustalis/OpenPanda/internal/providers"
-	"github.com/Xustalis/OpenPanda/internal/pyexec"
 )
 
 func runInstall(args []string) {
@@ -113,144 +110,32 @@ func runDoctor(args []string) {
 }
 
 // doctorReport prints the self-check report and returns the number of failed
-// checks. The ✓/✗ marks degrade to +/x on a terminal without the glyphs and
-// are tinted on a colour one — a page of checks is read by scanning for the
-// failures, so they have to stand out.
+// checks. The checks themselves live in internal/doctor, shared with the
+// panel's /api/doctor, so the terminal and the console can never drift on
+// what is checked. The ✓/✗ marks degrade to +/x on a terminal without the
+// glyphs and are tinted on a colour one — a page of checks is read by
+// scanning for the failures, so they have to stand out.
 func doctorReport(loc i18n.Locale, configPath string, out io.Writer) int {
 	if out == nil {
 		out = io.Discard
 	}
 	p := pal()
 	_, _ = fmt.Fprintln(out, p.Heading(i18n.T(loc, "doctor.title")))
-	problems := 0
-	fail := func(key string, pairs ...string) {
-		problems++
-		_, _ = fmt.Fprintln(out, "  "+p.Danger(p.MarkFail())+" "+i18n.Tf(loc, key, pairs...))
-	}
-	pass := func(key string, pairs ...string) {
-		_, _ = fmt.Fprintln(out, "  "+p.Success(p.MarkOK())+" "+i18n.Tf(loc, key, pairs...))
-	}
-
-	exe, _ := os.Executable()
-	pass("doctor.exe", "path", exe)
-
-	dir, err := install.Dir()
-	if err == nil {
-		bin := filepath.Join(dir, install.ExeName())
-		if _, err := os.Stat(bin); err == nil {
-			if out, err := install.Verify(bin); err == nil {
-				pass("doctor.installed", "path", bin, "out", out)
-			} else {
-				fail("doctor.installed.fail", "path", bin, "err", err.Error())
-			}
+	checks := doctor.Run(configPath)
+	for _, c := range checks {
+		if c.OK {
+			_, _ = fmt.Fprintln(out, "  "+p.Success(p.MarkOK())+" "+i18n.Tf(loc, c.Key, c.Pairs...))
 		} else {
-			fail("doctor.notinstalled", "path", bin)
-		}
-		if lp, err := exec.LookPath(install.ExeName()); err == nil {
-			pass("doctor.path.ok", "path", lp)
-			if where := install.PathPersistedAt(dir); len(where) > 0 {
-				pass("doctor.persist.ok", "where", joinPaths(where))
-			} else if filepath.Clean(filepath.Dir(lp)) == filepath.Clean(dir) || strings.Contains(os.Getenv("PATH"), dir) {
-				pass("doctor.persist.ok", "where", "$PATH environment")
-			} else {
-				fail("doctor.persist.no")
-			}
-		} else {
-			fail("doctor.path.no")
-			fail("doctor.persist.no")
-		}
-	} else {
-		fail("doctor.persist.no")
-	}
-
-	if cfg, err := config.Load(configPath); err == nil {
-		pass("doctor.config.ok", "path", configFileUsed(configPath), "name", cfg.Node.Name)
-		if st, err := os.Stat(cfg.Storage.DBPath); err == nil {
-			pass("doctor.db.ok", "path", cfg.Storage.DBPath, "size", fmt.Sprintf("%d B", st.Size()))
-		} else {
-			fail("doctor.db.no", "path", cfg.Storage.DBPath)
-		}
-		p, ok := providers.Lookup(cfg.Model.Provider)
-		noAuth := cfg.Model.NoAuth || (ok && p.NoAuth)
-		if cfg.Model.APIKey != "" || noAuth {
-			pass("doctor.modelkey.ok")
-		} else {
-			fail("doctor.modelkey.no")
-		}
-	} else {
-		fail("doctor.config.no", "err", err.Error())
-	}
-
-	// Adapter runtime: the agent adapters are Python scripts next to the
-	// daemon's working directory, driven by the resolved interpreter (pyexec —
-	// "python3" is not a portable name; Windows ships `py` instead), and they
-	// wrap the agent CLIs. Each is reported; only "no agent CLI at all" counts
-	// as a problem — native-only nodes stay valid.
-	if py := pyexec.Describe(); py != "" {
-		pass("doctor.python3.ok", "path", py)
-	} else {
-		fail("doctor.python3.no")
-	}
-	if dir := findAdaptersDir(); dir != "" {
-		pass("doctor.adapters.ok", "path", dir)
-	} else {
-		fail("doctor.adapters.no")
-	}
-	// The registry, not a hand-written list: an agent added to internal/agents
-	// was invisible to doctor until it was also remembered here.
-	agentsFound := 0
-	for _, k := range agents.Registry() {
-		if bin := installedBinary(k); bin != "" {
-			agentsFound++
-			lp, _ := exec.LookPath(bin)
-			pass("doctor.agent.ok", "name", bin, "path", lp)
-		} else {
-			pass("doctor.agent.no", "name", k.PrimaryBinary())
+			_, _ = fmt.Fprintln(out, "  "+p.Danger(p.MarkFail())+" "+i18n.Tf(loc, c.Key, c.Pairs...))
 		}
 	}
-	if agentsFound == 0 {
-		fail("doctor.agent.none")
-	}
-
-	return problems
+	return doctor.Problems(checks)
 }
 
-// findAdaptersDir locates the adapters/ directory — relative to the working
-// directory first (the documented run-from-repo-root layout), then next to
-// the executable (a relocated install). A packaged install (Homebrew or the
-// one-click script) symlinks the binary onto PATH, so we follow the link to
-// the real binary and probe beside it too. Empty when not found.
+// findAdaptersDir locates the adapters/ directory; the search itself moved to
+// internal/doctor so `panda doctor` and /api/doctor probe the same places.
 func findAdaptersDir() string {
-	candidates := []string{"adapters"}
-	if exe, err := os.Executable(); err == nil {
-		real := exe
-		if r, err := filepath.EvalSymlinks(exe); err == nil {
-			real = r
-		}
-		for _, base := range []string{exe, real} {
-			candidates = append(candidates,
-				filepath.Join(filepath.Dir(base), "adapters"),
-				filepath.Join(filepath.Dir(base), "..", "adapters"),
-				filepath.Join(filepath.Dir(base), "..", "share", "openpanda", "adapters"),
-			)
-		}
-	}
-	if ucd, err := os.UserConfigDir(); err == nil && ucd != "" {
-		candidates = append(candidates, filepath.Join(ucd, "openpanda", "adapters"))
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		candidates = append(candidates,
-			filepath.Join(home, ".local", "adapters"),
-			filepath.Join(home, ".local", "share", "openpanda", "adapters"),
-			filepath.Join(home, ".openpanda", "adapters"),
-		)
-	}
-	for _, dir := range candidates {
-		if st, err := os.Stat(filepath.Join(dir, "claude_code.py")); err == nil && !st.IsDir() {
-			return dir
-		}
-	}
-	return ""
+	return doctor.AdaptersDir()
 }
 
 func copyAdaptersDir(src, dst string) error {

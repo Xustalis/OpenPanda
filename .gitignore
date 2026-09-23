@@ -122,3 +122,7 @@ fetch_emails.py
 /.lab/
 
 .gocache-tmp
+/.gocache/
+
+/assets
+

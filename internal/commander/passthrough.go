@@ -19,43 +19,56 @@ var mcpPassthroughAdapters = map[string]bool{
 // auto-discover in their cwd.
 const mcpProjectFile = ".mcp.json"
 
-// materializeMCPPassthrough writes the node's configured MCP server into the
-// agent's work directory as a project .mcp.json for the duration of one run,
-// and returns the cleanup that removes it again. It is a no-op (returning a
-// no-op cleanup) unless the extended tools policy is active, a server is
-// configured, and the adapter's CLI actually discovers project MCP configs —
-// the default minimal policy never widens the agent's tool face.
+// materializeMCPPassthrough writes the agent's MCP servers into its work
+// directory as a project .mcp.json for the duration of one run, and returns
+// the cleanup that removes it again. Under the extended tools policy two
+// servers may land there: "openpanda", the node's own self-management
+// surface (`panda mcp` — skill install, task submission, queue/mesh status),
+// and "panda", the operator-configured stdio server (mcp.command). It is a
+// no-op unless the policy is extended, at least one server is enabled, and
+// the adapter's CLI actually discovers project MCP configs — the default
+// minimal policy never widens the agent's tool face.
 //
 // The file is removed after the run rather than left behind: a plan stage's
 // work directory becomes a content-addressed artifact for its successors,
 // and a panda-owned MCP config has no business riding inside that tree.
 func (r *Router) materializeMCPPassthrough(adapter, cwd string) func() {
 	noop := func() {}
-	if r.toolsPolicy != "extended" || r.mcpCommand == "" || cwd == "" {
+	if r.toolsPolicy != "extended" || cwd == "" || !mcpPassthroughAdapters[adapter] {
 		return noop
 	}
-	if !mcpPassthroughAdapters[adapter] {
-		return noop
-	}
-	parts := splitArgv(r.mcpCommand)
-	if len(parts) == 0 {
-		return noop
-	}
-	var args []string
-	if len(parts) > 1 {
-		args = parts[1:]
-	}
-	cfg := struct {
-		MCPServers map[string]struct {
-			Command string   `json:"command"`
-			Args    []string `json:"args"`
-		} `json:"mcpServers"`
-	}{MCPServers: map[string]struct {
+	type serverSpec struct {
 		Command string   `json:"command"`
 		Args    []string `json:"args"`
-	}{
-		"panda": {Command: parts[0], Args: args},
-	}}
+	}
+	servers := map[string]serverSpec{}
+	// The node's own tool surface rides the extended policy unless the
+	// operator opted out — the agent can reach skills, queue and task
+	// submission as MCP tools instead of scraping raw `panda` CLI output.
+	if r.pandaTools {
+		if exe, err := os.Executable(); err == nil && exe != "" {
+			args := []string{"mcp"}
+			if r.selfConfigPath != "" {
+				args = append(args, "--config", r.selfConfigPath)
+			}
+			servers["openpanda"] = serverSpec{Command: exe, Args: args}
+		}
+	}
+	if r.mcpCommand != "" {
+		if parts := splitArgv(r.mcpCommand); len(parts) > 0 {
+			var args []string
+			if len(parts) > 1 {
+				args = parts[1:]
+			}
+			servers["panda"] = serverSpec{Command: parts[0], Args: args}
+		}
+	}
+	if len(servers) == 0 {
+		return noop
+	}
+	cfg := struct {
+		MCPServers map[string]serverSpec `json:"mcpServers"`
+	}{MCPServers: servers}
 	blob, err := json.MarshalIndent(&cfg, "", "  ")
 	if err != nil {
 		return noop
@@ -69,7 +82,9 @@ func (r *Router) materializeMCPPassthrough(adapter, cwd string) func() {
 	if !strings.HasPrefix(path, filepath.Clean(cwd)+string(os.PathSeparator)) {
 		return noop
 	}
-	if _, err := os.Stat(path); err == nil {
+	// Lstat, not Stat: a dangling symlink would fail Stat and then pass the
+	// write straight through to its target outside the work dir.
+	if _, err := os.Lstat(path); err == nil {
 		return noop
 	}
 	if err := os.WriteFile(path, blob, 0o600); err != nil {

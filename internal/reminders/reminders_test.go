@@ -261,3 +261,133 @@ func TestScanner_RunFiresDueReminders(t *testing.T) {
 		t.Errorf("expected 'scanner test', got %q", fired[0].Message)
 	}
 }
+
+func TestClaimDue_RecurringReschedules(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	s := NewStore(db)
+	ctx := context.Background()
+
+	base := time.Now().Add(-time.Minute).Unix()
+	r, err := s.AddEvery(ctx, "standup", time.Unix(base, 0), 30*time.Second, "cli")
+	if err != nil {
+		t.Fatalf("add recurring: %v", err)
+	}
+	if r.RepeatSeconds != 30 {
+		t.Fatalf("expected repeat_seconds=30, got %d", r.RepeatSeconds)
+	}
+
+	// First claim fires once and pushes due_at to the next slot after now.
+	claimed, err := s.ClaimDue(ctx, time.Now(), 50)
+	if err != nil {
+		t.Fatalf("claim recurring: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("expected 1 claimed, got %d", len(claimed))
+	}
+	if claimed[0].DueAt != base {
+		t.Fatalf("claim should report the occurrence that fired (%d), got %d", base, claimed[0].DueAt)
+	}
+
+	// The row is still pending with a future due_at — not retired.
+	pending, err := s.List(ctx, false)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(pending) != 1 || pending[0].RepeatSeconds != 30 {
+		t.Fatalf("recurring row should stay pending, got %+v", pending)
+	}
+	if pending[0].DueAt <= time.Now().Unix() {
+		t.Fatalf("due_at should be rescheduled into the future, got %d", pending[0].DueAt)
+	}
+	if pending[0].FiredAt == 0 {
+		t.Fatal("fired_at should record the last fire time")
+	}
+
+	// Nothing is due right now — the next claim finds it empty.
+	claimed2, err := s.ClaimDue(ctx, time.Now(), 50)
+	if err != nil {
+		t.Fatalf("second claim: %v", err)
+	}
+	if len(claimed2) != 0 {
+		t.Fatalf("expected no immediate refire, got %d", len(claimed2))
+	}
+}
+
+func TestClaimDue_RecurringConcurrentDisjoint(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	s := NewStore(db)
+	ctx := context.Background()
+
+	_, _ = s.AddEvery(ctx, "recurring", time.Now().Add(-time.Minute), time.Minute, "cli")
+
+	var mu sync.Mutex
+	total := 0
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			claimed, err := s.ClaimDue(ctx, time.Now(), 50)
+			if err != nil {
+				t.Errorf("claim: %v", err)
+				return
+			}
+			mu.Lock()
+			total += len(claimed)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	if total != 1 {
+		t.Fatalf("a recurring reminder must fire exactly once across scanners, got %d", total)
+	}
+}
+
+func TestNextDue(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	s := NewStore(db)
+	ctx := context.Background()
+
+	if _, ok := s.NextDue(ctx); ok {
+		t.Fatal("empty board should report no next due")
+	}
+
+	future := time.Now().Add(time.Hour)
+	_, _ = s.Add(ctx, "later", future, "cli")
+	next, ok := s.NextDue(ctx)
+	if !ok || !next.Equal(future.Truncate(time.Second)) {
+		t.Fatalf("expected next due %v, got %v (ok=%v)", future, next, ok)
+	}
+
+	// A recurring row always has a next occurrence.
+	past := time.Now().Add(-time.Minute)
+	_, _ = s.AddEvery(ctx, "recurring", past, time.Minute, "cli")
+	next2, ok := s.NextDue(ctx)
+	if !ok || !next2.Before(future) {
+		t.Fatalf("recurring next due should precede the far one-shot, got %v", next2)
+	}
+}
+
+func TestScanner_SleepForAdaptive(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	s := NewStore(db)
+	ctx := context.Background()
+
+	sc := NewScanner(s, time.Minute, nil, nil)
+
+	// Empty board → the polling ceiling.
+	if d := sc.sleepFor(ctx); d != time.Minute {
+		t.Fatalf("empty board should sleep the full cadence, got %v", d)
+	}
+
+	// A near-future reminder shrinks the sleep to its due time.
+	_, _ = s.Add(ctx, "soon", time.Now().Add(5*time.Second), "cli")
+	d := sc.sleepFor(ctx)
+	if d < 4*time.Second || d > 6*time.Second {
+		t.Fatalf("expected ~5s sleep for near reminder, got %v", d)
+	}
+}

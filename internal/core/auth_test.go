@@ -90,6 +90,71 @@ func TestRejectBadHelloSig(t *testing.T) {
 	}
 }
 
+// TestRejectReplayedHello verifies the M24 single-use rule: a captured hello —
+// one with a still-valid signature inside MaxHelloAge — must not authenticate a
+// second connection. Two replay shapes are exercised: the verbatim frame, and
+// the same signed payload under a fresh msg_id. The second is the important
+// one: msg_id is not covered by HelloSig's HMAC, so a dedup key that included
+// it would let a replay dodge detection by rewriting an unsigned field.
+func TestRejectReplayedHello(t *testing.T) {
+	worker := newCoreWithNative(t, "worker", "127.0.0.1:17972", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	if err := worker.Register(context.Background()); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	startListener(t, worker, "127.0.0.1:17972")
+
+	mkHello := func(msgID string) bus.Envelope {
+		ts := replayHelloTS
+		env, err := bus.NewEnvelope(bus.MsgHello, "attacker", msgID, bus.HelloPayload{
+			NodeID: "attacker", Ver: "t", Ts: ts, Sig: bus.HelloSig(testSharedSecret, "attacker", ts),
+		})
+		if err != nil {
+			t.Fatalf("build hello: %v", err)
+		}
+		return env
+	}
+
+	// First presentation: the signature is valid and unused, so it authenticates
+	// and earns a hello reply.
+	ws1 := rawDial(t, "127.0.0.1:17972")
+	if err := ws1.WriteJSON(mkHello("h-1")); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+	_ = ws1.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var reply bus.Envelope
+	if err := ws1.ReadJSON(&reply); err != nil {
+		t.Fatalf("read hello reply: %v", err)
+	}
+	if reply.Type != bus.MsgHello {
+		t.Fatalf("expected hello reply, got %q", reply.Type)
+	}
+
+	// Replay verbatim on a second connection: same signature, same msg_id.
+	ws2 := rawDial(t, "127.0.0.1:17972")
+	if err := ws2.WriteJSON(mkHello("h-1")); err != nil {
+		t.Fatalf("write verbatim replay: %v", err)
+	}
+	_ = ws2.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, _, err := ws2.ReadMessage(); !isTimeout(err) {
+		t.Fatalf("verbatim replay got a reply, err=%v", err)
+	}
+
+	// Replay under a rewritten msg_id: the unsigned field must not matter.
+	ws3 := rawDial(t, "127.0.0.1:17972")
+	if err := ws3.WriteJSON(mkHello("h-2-different")); err != nil {
+		t.Fatalf("write msgid-rewritten replay: %v", err)
+	}
+	_ = ws3.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, _, err := ws3.ReadMessage(); !isTimeout(err) {
+		t.Fatalf("msgid-rewritten replay got a reply — dedup key must not include msg_id, err=%v", err)
+	}
+}
+
+// replayHelloTS is the fixed timestamp the replay test signs with. A fixed ts
+// keeps the two replay frames byte-identical to the original presentation;
+// VerifyHello only needs it inside MaxHelloAge of the check, which "now" is.
+var replayHelloTS = time.Now().Unix()
+
 // TestRejectSpoofedSender verifies that once a connection is authenticated as
 // one node id, a message claiming a different sender is dropped and the
 // connection is closed (design §16 / P0-1 identity binding).

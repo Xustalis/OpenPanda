@@ -24,10 +24,33 @@ type fileStamp struct {
 	modNano int64
 }
 
+// snapshotPruneDirs names directories skipped entirely during a snapshot walk.
+// These hold vendored or machine-generated content that dwarfs the agent's own
+// work — node_modules routinely carries tens of thousands of files — so walking
+// them makes every supervision round pay an O(vendored-tree) tax for drift
+// signal that is not actionable anyway: an agent that rewrites node_modules
+// during a code task is a nuance this heuristic layer was never precise enough
+// to adjudicate. Keeping the set conservative (dependency trees and Python
+// caches only, NOT .git or build output) preserves the meaningful signals —
+// an agent rewriting git history or build artifacts IS drift worth flagging.
+var snapshotPruneDirs = map[string]bool{
+	"node_modules": true,
+	"vendor":       true,
+	"__pycache__":  true,
+	".venv":        true,
+	"venv":         true,
+	// .panda-shadow holds the §5.2 preemption copies SaveShadow parks inside
+	// the work tree. Hashing them would double-count the agent's own work,
+	// and diffing them would flag bookkeeping as drift.
+	".panda-shadow": true,
+}
+
 // SnapshotDir walks root and records every regular file under it. Directories
 // and the root itself are not recorded — only files can drift. A missing root
 // is treated as empty (nothing to change), not an error, so an agent that has
 // not created its working directory yet simply starts from an empty tree.
+// Directories named in snapshotPruneDirs are skipped wholesale: their contents
+// are vendored/generated state, not agent work product.
 func SnapshotDir(root string) (Snapshot, error) {
 	s := Snapshot{files: make(map[string]fileStamp)}
 	info, err := os.Stat(root)
@@ -45,6 +68,9 @@ func SnapshotDir(root string) (Snapshot, error) {
 			return err
 		}
 		if d.IsDir() {
+			if snapshotPruneDirs[d.Name()] {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		// SQLite transient files (-wal/-shm/-journal) are host machine state: any

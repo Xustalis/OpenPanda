@@ -36,7 +36,28 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 每条记录以一至三行写明变更内容与用户可见的影响；必要时标注引入该变更的提交，便于追溯。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
-## [Unreleased]
+## [0.0.9-beta] - 2026-09-23
+
+v0.0.9 beta 完成了混合传输/DTN 架构：mesh 路由现在按延迟加权，DTN bundle 真正在在线链路上传输、对离线链路暂存待命，委派令牌预算有了真实记账，被抢占的工作通过影子副本得以保留，硬件执行器获得了执行通路。此外，被委派的 agent 获得了回到本节点工具链的受管通道，模型配置面完整落地，模型管理 TUI 围绕全宽注册表加单屏表单编辑器重建。
+
+### 新增
+
+- **延迟加权 mesh 路由** —— 邻居在心跳中 gossip 每条链路的 RTT 采样（`HeartbeatPayload.Links`，持久化到 `employee_cache.links_json`），`graphFirstHop` 改为在实测链路代价上跑 Dijkstra，而非跳数 BFS；未测量的边按 `unknownLinkCost` 计价，因此一条已证实可行的多跳路径可以击败昂贵的直连链路（§4.1）。
+- **DTN bundle 上线传输** —— 暂存的委派任务被封装为签名的 CBOR bundle（HMAC-SHA256、EID、TTL），存于 `task_outbox.payload_blob`，并以 `dtn_bundle` 信封逐字节传输；接收方校验完整性与期限，投递到目标 EID，或为下一跳转发/暂存（§8.3、§9.1）。
+- **周期性 outbox 清扫** —— `sweepOutboxes` 改为按定时器重试 result、cancel、task 三类 outbox，而不再只在 peer hello 时触发；按 peer 维度的 flush 认领保证并发 flush 不会交错；过期 bundle 干净地丢弃并把任务标记为过期。
+- **全 mesh 令牌预算** —— 迁移 V20 新增 `tasks.token_budget`（0 = 无上限/旧行为，正数 = 剩余额度，-1 = 耗尽哨兵）；`SpendTokens` 原子递减，agent 与 supervisor/judge 的用量在每次模型调用后计费，预算耗尽的任务收敛到 review 而不是花光一个死额度（§6.1）。
+- **让位时的影子工作副本** —— 被要求 yield 的任务在取消前把已声明范围快照进 `.panda-shadow`，恢复的任务把无冲突文件合并回来（冲突保留胜方字节并在系统说明中报告），替代了此前一取消就全丢的行为（§5.2）。
+- **执行器执行通路** —— 能力卡的 actuator 可声明 `command`/`args`/`tier`；commander 把匹配任务经原生执行器路由，并做 `ActionSpec` 占位符替换；`panda card invoke <actuator-id> [action] [name=value ...]` 支持本地测试，带 `--dry-run`/`--authorize`（§7）。
+- **Agent 自管理面（`panda mcp`）** —— 节点现在自带 MCP stdio server，把 OpenPanda 的管理面暴露为一等 agent 工具：`panda_status`、`panda_nodes`、`panda_queue`、`panda_task_status`、`panda_task_submit`（内部调用 `panda task add`，每会话上限 8 次）、`panda_skill_list`、`panda_skill_install`（hub 名称或 http(s) URL）、`panda_skill_import`（原始 SKILL.md）、`panda_card`。在 `routing.tools_policy: extended` 下，commander 会在工作目录的 `.mcp.json` 里、于已配置的 `mcp.command` 透传旁物化一个 `openpanda` 条目，支持 MCP 的 agent CLI 会自动发现它；具备 shell 能力的 agent 会得到指向 PATH 上 `panda` 二进制的提示。`routing.panda_tools: false` 可关闭自管理面同时保留扩展工具面。
+- **分块、可续传的 artifact 推送（`artifact_push`）** —— 超过内联上限的胖 bundle 载荷改为以 1 MiB 帧流式推送，不再留给拉取路径：迁移 V21 的 `artifact_push_outbox` 让发送方的保管责任跨重启持久化，接收方把块落盘到 `<pool>/.staging/` 并上报连续水位线，重连后从已确认的偏移继续而非重头来过。输入 artifact 未落地的 dtn 任务会停在 `waiting_context` 而非直接失败；转发过该任务的中继在 artifact 到达后继续下推（链式保管，§8.3）。
+- **无上限 artifact 传输** —— 移除 512 MiB 的 `artifact.MaxBytes` 上限：池默认无界、以文件系统剩余空间为界，因此声明的 `total` 超出卷容量时在第一字节落地前就被拒绝（`ErrNoSpace`）。`storage.artifact_max_bytes` / `OPENPANDA_ARTIFACT_MAX_BYTES` 可为磁盘吃紧的节点重新加上固定上限。
+- **多卷 artifact 池** —— `storage.artifact_extra_paths` / `OPENPANDA_ARTIFACT_EXTRA_PATHS` 为池增加卷：写入选择可用空间最大的卷（`free − storage.artifact_min_free_bytes`，默认预留 256 MiB；显式设为 0 关闭水位线），读取搜索所有根目录，暂存块与提交在同一卷上以保证 rename 原子性。额外路径只扩容量——不复制 artifact，接收节点自己决定入站数据落在哪。
+- **DTN 多跳中继** —— `relayBundle` 不再等待到目的地的直连链路：`scheduler.DTNNextHop` 在 gossip 拓扑上跑目的地感知的加权寻路（中间跳必须在线，目的地可以离线），把签名 bundle 原样转发给更近的已连通下一跳，绝不回传给来路 peer（`task_outbox.via`，迁移 V22），并在每次 outbox flush 时重算下一跳。按 bundle 记录的中继日志把转发限制在 `dtnRelayMaxHops` 内，并随 bundle 期限过期。
+- **Agent 会话检查点** —— 迁移 V23 新增 `tasks.agent_session_id`/`agent_session_node`：adapter 的会话句柄在每轮后持久化（`context.WithoutCancel`，yield-取消也丢不掉），通过 result 线路回报给委派方（`agent_session_id`），并在重新派发时仅以 `resume_session_id` 提供给当初生成它的节点。中断的任务恢复的是 agent 自己的会话而不是冷启动；不支持会话的 adapter 把字段留空并保留影子副本兜底（§5.2）。
+
+### 变更
+
+- **心跳 gossip 现在携带邻接关系 + 链路指标** —— `Core.broadcastHeartbeat` 发布在线邻居与实测 RTT；`handleHeartbeat` 把它们并入目录，路由决策反映真实链路代价，随 RTT 采样到达持续刷新。
 
 ### 修复
 

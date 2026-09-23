@@ -8,6 +8,7 @@ import { QueueView } from './views/queue'
 import { DetailView } from './views/detail'
 import { SessionsView } from './views/sessions'
 import { ProjectsView } from './views/projects'
+import { PlansView } from './views/plans'
 import { SettingsView } from './views/settings'
 import { OnboardingBanner } from './views/onboarding'
 import { ToastHost } from './components/toast'
@@ -119,6 +120,7 @@ export function App() {
         {route.view === 'detail' && (
           <DetailView id={route.id} onBack={() => navigate({ view: 'queue' })} />
         )}
+        {route.view === 'plans' && <PlansView />}
         {route.view === 'projects' && (
           <ProjectsView
             onOpenProject={(name) => {

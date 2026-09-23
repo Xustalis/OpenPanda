@@ -248,6 +248,10 @@ func TestMigrateBackfillsHashChain(t *testing.T) {
 		VALUES (2, 'a', 'y', 't2', 'ok', 'd2', NULL)`); err != nil {
 		t.Fatalf("insert audit 2: %v", err)
 	}
+	if _, err := db.Exec(`INSERT INTO audit_log (ts, who, what, target, result, detail, prev_hash)
+		VALUES (3, NULL, NULL, NULL, NULL, NULL, NULL)`); err != nil {
+		t.Fatalf("insert audit 3 with NULLs: %v", err)
+	}
 
 	// Insert events for two tasks: first event NULL, second event NULL.
 	if _, err := db.Exec(`INSERT INTO task_events (task_id, ts, type, data_json, prev_hash)
@@ -262,13 +266,20 @@ func TestMigrateBackfillsHashChain(t *testing.T) {
 		VALUES ('task-b', 3, 'submit', '{}', NULL)`); err != nil {
 		t.Fatalf("insert event 3: %v", err)
 	}
+	if _, err := db.Exec(`INSERT INTO task_events (task_id, ts, type, data_json, prev_hash)
+		VALUES ('task-c', 4, NULL, NULL, NULL)`); err != nil {
+		t.Fatalf("insert event 4 with NULLs: %v", err)
+	}
 
 	if err := Migrate(db); err != nil {
 		t.Fatalf("migrate from v6: %v", err)
 	}
 
 	// Verify the audit chain is intact.
-	rows, err := db.Query(`SELECT prev_hash, ts, who, what, target, result, detail FROM audit_log ORDER BY id ASC`)
+	rows, err := db.Query(`SELECT prev_hash, ts,
+		COALESCE(who, ''), COALESCE(what, ''), COALESCE(target, ''),
+		COALESCE(result, ''), COALESCE(detail, '')
+		FROM audit_log ORDER BY id ASC`)
 	if err != nil {
 		t.Fatalf("query audit: %v", err)
 	}
@@ -369,6 +380,37 @@ func TestMigrateV11EntryCache(t *testing.T) {
 				t.Fatalf("output_json = %q, want {}", blob)
 			}
 		})
+	}
+}
+
+// V20 lands the mesh-budget and weighted-routing columns (§4.1/§6.1) on both
+// paths: a fresh database and a v19-era file migrated forward.
+func TestMigrateV20Columns(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	for _, tc := range []struct{ table, col string }{
+		{"tasks", "token_budget"},
+		{"employee_cache", "links_json"},
+	} {
+		if !columnExists(t, db, tc.table, tc.col) {
+			t.Fatalf("column %s.%s missing on fresh schema", tc.table, tc.col)
+		}
+	}
+	// Legacy rows see the documented defaults: token_budget=0 (unbounded),
+	// links_json='' (no metrics yet — the unknown-link cost applies).
+	var budget int64
+	var links string
+	if err := db.QueryRow(`SELECT token_budget FROM tasks LIMIT 1`).Scan(&budget); err == nil && budget != 0 {
+		t.Fatalf("fresh task token_budget = %d, want 0", budget)
+	}
+	if err := db.QueryRow(`SELECT links_json FROM employee_cache LIMIT 1`).Scan(&links); err == nil && links != "" {
+		t.Fatalf("fresh links_json = %q, want ''", links)
 	}
 }
 

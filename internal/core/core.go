@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/artifact"
@@ -23,6 +25,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/projects"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -62,6 +65,9 @@ type Core struct {
 	// so ReloadCard's router rebuild re-applies the extended-policy
 	// passthrough; guarded by cardMu like the router policy above.
 	mcpPassthrough string
+	// selfConfigPath is the daemon's --config path forwarded into generated
+	// .mcp.json files for `panda mcp`; remembered for the same rebuild.
+	selfConfigPath string
 	// memory injects project memory into agent execution context (design §17.2
 	// isolation wall). Nil disables injection; tests and minimal nodes leave it
 	// nil and are unaffected.
@@ -134,6 +140,14 @@ type Core struct {
 	// arrives.
 	pendingCtx sync.Map // string -> *pendingContext
 
+	// execSlots reserves execution slots between the capacity check and the
+	// moment the task's row actually claims one (running/waiting_context). A
+	// bare count-then-spawn over-counts: N concurrent delegates that all read
+	// "active < max" before any of them transitions would all accept and
+	// over-commit the node (M14). The counter is in-memory because the check
+	// it protects is advisory — a restart recounts from the rows.
+	execSlots atomic.Int64
+
 	// projects is the project metadata table, and projectsRoot the directory the
 	// per-project memory trees live under. Set together by SetProjectStores; nil
 	// means this node does not participate in project-aware delegation (it still
@@ -151,6 +165,13 @@ type Core struct {
 	// and reject one from any other node.
 	pendingArt sync.Map // string -> *artifactTransfer
 
+	// pushAck maps peer|hash -> the receiver's latest reported contiguous
+	// waterline for an outbound push (§8.3). It lives beside the persisted
+	// artifact_push_outbox.acked_through because status replies can outpace
+	// SQL mid-stream: the stream loop consults this live value to skip bytes
+	// the receiver already holds rather than resending them on every flap.
+	pushAck sync.Map // string -> *atomic.Int64
+
 	// running maps task_id -> the CancelFunc of the context its execution runs
 	// under, so a lease expiry, a cancel message or a shutdown can actually stop
 	// the work instead of only rewriting the database row. Without it a task
@@ -163,11 +184,49 @@ type Core struct {
 	// find a new route before failing it (S1-1). Guarded by mu.
 	orphanSeen map[string]time.Time
 
+	// stateWin is the per-project/plan sliding window of recent work-tree
+	// content hashes backing the §6.2 monotonic-progress check (see
+	// stateOscillates). In-memory by design: the window bounds the lifetime
+	// of the checking process, and a restart rebuilding it from live trees
+	// costs nothing but a slightly younger window.
+	stateMu  sync.Mutex
+	stateWin map[string][]string
+
+	// nego is the §5/§6.3 peer-negotiation state: nego is the scope lock
+	// table, negoWait the wait-for edges (waiter -> holders) whose cycles the
+	// arbitrator breaks, and negoWaiters the synchronous outbound negotiate
+	// calls awaiting a grant reply (lock id -> result chan). All lazily
+	// initialized under negoMu.
+	negoMu      sync.Mutex
+	nego        map[string]*negoLock
+	negoWait    map[string]map[string]bool
+	negoWaiters map[string]chan bus.AgentGrantPayload
+
 	// peerBlocked maps peer node id -> agent names that peer's heartbeats
 	// report as circuit-open, so routing can strip them from the peer's
 	// ability set and weigh failure history into candidate selection.
 	// Guarded by mu; entries die with the peer's connection.
 	peerBlocked map[string][]string
+
+	// helloSeen maps nodeID|ts|sig|msg_id -> the time the hello was verified,
+	// making each signed hello frame single-use within its validity window.
+	// Without it a captured hello can be replayed on a second connection for
+	// maxHelloAge — the timestamp only expires the replay, it does not prevent
+	// it. The msg_id distinguishes an honest reconnect (fresh id, possibly the
+	// same second) from a verbatim replay (same id). Guarded by mu; entries
+	// age out with the window they close.
+	helloSeen map[string]time.Time
+
+	// msgSeen maps from|msg_id -> arrival time of the last message seen under
+	// that id, the receive-side dedup the envelope's MsgID exists for (design
+	// §10.3: "used for dedup at the receiving end"). A WS frame delivered twice
+	// — a peer's retry after a timeout, a capture replayed inside the conn —
+	// must not run its handler a second time: task_delegate would adopt the
+	// task twice, artifact_fetch would restart a transfer. Keyed by sender so
+	// two peers minting the same id cannot block each other. Guarded by mu;
+	// entries age out of a bounded window and the map is hard-capped so a peer
+	// minting ids forever cannot grow memory without bound.
+	msgSeen map[string]time.Time
 
 	// leaseTimeout is how long one task attempt may hold its lease before the
 	// monitor treats its executor as dead. Renewed on a heartbeat during
@@ -191,7 +250,32 @@ type Core struct {
 	// running several agents must not multiply its event writes.
 	progressMu   sync.Mutex
 	lastProgress time.Time
+
+	// outboxFlushing marks peers whose outbox flush is currently running so
+	// the monitor tick's sweep cannot stack a second flush on top of it.
+	// Guarded by mu.
+	outboxFlushing map[string]bool
+
+	// relayLog bounds how many times this node forwards the same DTN bundle
+	// (§8.3 loop bound). A bundle cannot carry a hop list — the signature is
+	// the origin's and a relay must not re-wrap — so the bound lives in
+	// relay memory, keyed by bundle id, expiring with the bundle's deadline.
+	// Guarded by mu.
+	relayLog map[string]dtnRelay
 }
+
+// dtnRelay is one bundle's forwarding record on this node.
+type dtnRelay struct {
+	hops  int   // forwards performed
+	until int64 // bundle deadline; the entry expires with it
+}
+
+// dtnRelayMaxHops caps a node's forwards of one bundle. Combined with the
+// no-echo rule (never first-hop to the arriving peer) this bounds every
+// residual loop — a triangle that slips past the via check can spend at most
+// this many sends per node before the bundle must park and wait for a real
+// contact with its destination.
+const dtnRelayMaxHops = 3
 
 // defaultSuperviseRounds is the maximum number of execute → judge →
 // re-delegate rounds an agent task is allowed before it is parked in review
@@ -217,6 +301,8 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		greetedConns: make(map[*bus.Conn]bool),
 		orphanSeen:   make(map[string]time.Time),
 		peerBlocked:  make(map[string][]string),
+		helloSeen:    make(map[string]time.Time),
+		msgSeen:      make(map[string]time.Time),
 		breaker:      defense.NewCircuitBreaker(0, 0),
 		loop:         defense.NewLoopDetector(2),
 		auditLog:     security.NewAudit(db),
@@ -268,6 +354,19 @@ func (c *Core) SetAgentMCPPassthrough(command string) {
 	}
 }
 
+// SetSelfConfigPath forwards the daemon's --config path to the router so the
+// .mcp.json it materializes can pass it to `panda mcp`. Remembered like the
+// passthrough so a ReloadCard rebuild re-applies it.
+func (c *Core) SetSelfConfigPath(path string) {
+	c.cardMu.Lock()
+	c.selfConfigPath = path
+	router := c.router
+	c.cardMu.Unlock()
+	if router != nil {
+		router.SetSelfConfigPath(path)
+	}
+}
+
 // Card snapshots the current capability card (guarding the swap a reload may
 // be performing concurrently).
 func (c *Core) Card() ledger.Card {
@@ -297,6 +396,9 @@ func (c *Core) ReloadCard(ctx context.Context, path string) error {
 	if dropped := card.PruneUnavailableNative(); len(dropped) > 0 {
 		c.logger.Warn("reloaded card: native abilities dropped: command not found on this host", "ids", strings.Join(dropped, ","))
 	}
+	if dropped := card.PruneUnavailableActuators(); len(dropped) > 0 {
+		c.logger.Warn("reloaded card: actuators dropped: command not found on this host", "ids", strings.Join(dropped, ","))
+	}
 	// Node kind/identity live in config, not the card file; carry them over
 	// exactly as the daemon's startup path does, or the re-registered row
 	// would silently flip to the defaults.
@@ -310,6 +412,7 @@ func (c *Core) ReloadCard(ctx context.Context, path string) error {
 	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 {
 		c.router = commander.NewRouter(card, commander.NewExecutor(), c.model, c.routerInjection, c.routerRouting)
 		c.router.SetMCPPassthrough(c.mcpPassthrough)
+		c.router.SetSelfConfigPath(c.selfConfigPath)
 	} else {
 		c.router = nil
 	}
@@ -529,9 +632,15 @@ func (c *Core) broadcastHeartbeat(ctx context.Context) {
 			c.logger.Warn("mint heartbeat id", "err", err)
 			return
 		}
+		lms := c.linkMetrics()
+		wireLinks := make([]bus.LinkMetric, len(lms))
+		for i, l := range lms {
+			wireLinks[i] = bus.LinkMetric{Peer: l.Peer, RTTms: l.RTTms}
+		}
 		env, err := bus.NewEnvelope(bus.MsgHeartbeat, c.nodeID, msgID, bus.HeartbeatPayload{
 			Status: "online", Load: load, Capacity: capJSON,
 			BlockedAgents: c.blockedAgents(),
+			Neighbors:     c.livePeerIDs(), Links: wireLinks,
 		})
 		if err != nil {
 			c.logger.Warn("build heartbeat", "err", err)
@@ -542,6 +651,61 @@ func (c *Core) broadcastHeartbeat(ctx context.Context) {
 			c.logger.Debug("heartbeat send", "peer", id, "err", err)
 		}
 	}
+}
+
+// clampCapacity sanitizes a peer-advertised capacity blob before it reaches the
+// directory: a negative count or limit would otherwise be stored verbatim and
+// leak into scoring, where waitSignal reads negative depth as "better than
+// idle". Zero is what such a field means; the positive values pass through.
+func clampCapacity(capJSON string) string {
+	if capJSON == "" {
+		return capJSON
+	}
+	var cap ledger.Capacity
+	if err := json.Unmarshal([]byte(capJSON), &cap); err != nil {
+		return capJSON // malformed input stays for Heartbeat's own handling
+	}
+	if cap.CPUCores < 0 {
+		cap.CPUCores = 0
+	}
+	if cap.RAMGB < 0 {
+		cap.RAMGB = 0
+	}
+	if cap.MaxConcurrent < 0 {
+		cap.MaxConcurrent = 0
+	}
+	if cap.CurrentTasks < 0 {
+		cap.CurrentTasks = 0
+	}
+	b, err := json.Marshal(cap)
+	if err != nil {
+		return capJSON
+	}
+	return string(b)
+}
+
+// sanitizeSummary applies the same negative-field clamp to a capability card a
+// peer sent in a hello or a heartbeat. The fields here route work and gate
+// hardware fits, so a negative figure is never data — it is either a bug or a
+// lie, and zero is its honest form.
+func sanitizeSummary(s ledger.CapabilitySummary) ledger.CapabilitySummary {
+	c := &s.Capacity
+	if c.CPUCores < 0 {
+		c.CPUCores = 0
+	}
+	if c.RAMGB < 0 {
+		c.RAMGB = 0
+	}
+	if c.MaxConcurrent < 0 {
+		c.MaxConcurrent = 0
+	}
+	if c.CurrentTasks < 0 {
+		c.CurrentTasks = 0
+	}
+	if s.SchedulerTier < 0 {
+		s.SchedulerTier = 0
+	}
+	return s
 }
 
 // handleHeartbeat refreshes the sender's directory row (last_seen + capacity).
@@ -558,7 +722,7 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 	if status == "" {
 		status = "online"
 	}
-	if err := ledger.Heartbeat(c.db, env.From, status, p.Capacity); err != nil {
+	if err := ledger.Heartbeat(c.db, env.From, status, clampCapacity(p.Capacity)); err != nil {
 		c.logger.Warn("apply heartbeat", "from", env.From, "err", err)
 	}
 	// Heartbeats also publish the sender's circuit-open agents so this node's
@@ -572,6 +736,25 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 		delete(c.peerBlocked, env.From)
 	}
 	c.mu.Unlock()
+	// Adjacency gossip (§4.1): the sender's edge set and its measured weights
+	// ride every beat so the directory's view of the link-state graph tracks
+	// the live topology instead of freezing at hello time.
+	if p.Neighbors != nil || p.Links != nil {
+		var nbJSON, linksJSON string
+		if p.Neighbors != nil {
+			if b, err := json.Marshal(p.Neighbors); err == nil {
+				nbJSON = string(b)
+			}
+		}
+		if p.Links != nil {
+			if b, err := json.Marshal(p.Links); err == nil {
+				linksJSON = string(b)
+			}
+		}
+		if err := ledger.UpdateAdjacency(c.db, env.From, nbJSON, linksJSON); err != nil {
+			c.logger.Warn("update adjacency", "from", env.From, "err", err)
+		}
+	}
 	// A card-carrying heartbeat is the peer announcing a hot reload: adopt
 	// its new capability summary right away instead of routing against the
 	// hello-time card until the next reconnect. Absent on ordinary beats —
@@ -580,7 +763,7 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 		var sum ledger.CapabilitySummary
 		if err := json.Unmarshal(p.Card, &sum); err != nil {
 			c.logger.Warn("bad capability card in heartbeat", "peer", env.From, "err", err)
-		} else if err := ledger.UpsertRemote(c.db, env.From, sum); err != nil {
+		} else if err := ledger.UpsertRemote(c.db, env.From, sanitizeSummary(sum)); err != nil {
 			c.logger.Warn("upsert remote card from heartbeat", "peer", env.From, "err", err)
 		} else {
 			c.logger.Info("peer card updated", "peer", env.From)
@@ -626,6 +809,17 @@ func (c *Core) RunMonitor(ctx context.Context) {
 			// S1-4: directory rows for silently-dead peers stay online forever
 			// without a liveness sweep, and routing keeps aiming ghosts.
 			c.sweepStalePeers(ctx)
+			// §4.1: RTT samples land after the connect-time refresh, so the
+			// self row's link metrics need the periodic re-publish the tick
+			// provides; and any outbox entry whose peer reconnected between
+			// hellos is flushed here rather than waiting on a greeting.
+			c.refreshSelfNeighbors(ctx)
+			c.sweepOutboxes(ctx)
+			// §8.3: a parked push-waiter's inputs can also land via the pull
+			// path or a fat-bundle import — neither calls the wake directly —
+			// and a staging dir whose sender died needs periodic reclamation.
+			c.wakeSatisfiedArtifactWaiters(ctx)
+			c.pruneStagedArtifacts(ctx)
 			expired, err := c.store.ExpireTasks(ctx)
 			if err != nil {
 				c.logger.Warn("expire tasks", "err", err)
@@ -640,8 +834,9 @@ func (c *Core) RunMonitor(ctx context.Context) {
 					// local execution for real.
 					c.cancelRunning(id)
 					// A task that timed out while paused in waiting_context would
-					// otherwise leak its entry in pendingCtx (P2-7).
-					c.pendingCtx.Delete(id)
+					// otherwise leak its entry in pendingCtx (P2-7) — and with the
+					// entry, the capacity reservation it carries.
+					c.dropPendingContext(id)
 					// The lease expired on a task this node dispatched to a remote
 					// executor: tell that executor to stop (review P1-4). Without
 					// this the remote agent keeps burning tokens and writing files
@@ -653,8 +848,18 @@ func (c *Core) RunMonitor(ctx context.Context) {
 					// scheduler blocked in Submit unblocks (D3). relayToParent is
 					// a no-op for a root task; signalResult no-ops without a waiter.
 					if tk, err := c.store.Get(ctx, id); err == nil {
+						// Report the state the row actually reached: a lease
+						// expiry is a failure, a deadline is 'expired' — the
+						// delegator renders them differently and only the row
+						// knows which sweep fired.
+						state, stderr := tk.State, "lease expired"
+						if state == StateExpired {
+							stderr = "deadline exceeded"
+						} else {
+							state = StateFailed
+						}
 						res := bus.TaskResultPayload{
-							TaskID: id, AttemptID: tk.AttemptID, State: StateFailed, OK: false, ExitCode: 1, Stderr: "lease expired",
+							TaskID: id, AttemptID: tk.AttemptID, State: state, OK: false, ExitCode: 1, Stderr: stderr,
 							Chain: tk.Chain,
 						}
 						c.relayToParent(ctx, bus.MsgTaskResult, tk.Chain, res)
@@ -705,8 +910,14 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 		conn.Close()
 	}()
 	go conn.StartPingLoop(ctx, 30*time.Second)
-	helloSeen := false
+	firstRead := true
 	for {
+		// A cancelled ctx (shutdown, conn teardown ordered elsewhere) ends the
+		// loop even when ReadJSON is still blocked: the peer's ping/close will
+		// unblock it, and the deadline keeps a wedged read bounded.
+		if ctx.Err() != nil {
+			return
+		}
 		var env bus.Envelope
 		if err := conn.ReadJSON(&env); err != nil {
 			c.logger.Debug("inbound read closed", "err", err)
@@ -726,10 +937,11 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 			return
 		}
 		c.dispatch(ctx, conn, env)
-		if !helloSeen {
-			helloSeen = true
-			// Hello completed: switch from the short server-side hello deadline
-			// to the normal pong/keepalive deadline.
+		if firstRead {
+			firstRead = false
+			// First frame processed (the hello, or whatever the binding rules
+			// above let through): switch from the short server-side hello
+			// deadline to the normal pong/keepalive deadline.
 			_ = conn.ResetReadDeadline()
 		}
 	}
@@ -759,6 +971,9 @@ func (c *Core) removePeerForConn(conn *bus.Conn) {
 		if err := ledger.MarkOffline(c.db, id); err != nil {
 			c.logger.Warn("mark peer offline", "peer", id, "err", err)
 		}
+	}
+	if len(gone) > 0 {
+		c.refreshSelfNeighbors(context.Background())
 	}
 }
 
@@ -836,12 +1051,18 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 		return nil, err
 	}
 	ts := time.Now().Unix()
+	nonce, err := newUUID()
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
 	env, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, bus.HelloPayload{
 		NodeID: c.nodeID,
 		Ver:    version.Version,
 		Card:   card,
 		Ts:     ts,
-		Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
+		Nonce:  nonce,
+		Sig:    bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
 	})
 	if err != nil {
 		conn.Close()
@@ -912,13 +1133,63 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
 		old.conn.Close()
 	}
 	c.logger.Info("peer registered", "peer", id, "active", n)
+	c.refreshSelfNeighbors(context.Background())
 	return true
 }
+
+// refreshSelfNeighbors writes this node's live peer set — and the measured
+// cost of each edge — into its own directory row's neighbors_json/links_json:
+// the self-edge of the weighted link-state graph the routing layer's
+// multi-hop search reads (§4.1, §9.3). Best-effort: a failed write just
+// leaves the last advertisement in place.
+func (c *Core) refreshSelfNeighbors(ctx context.Context) {
+	if c.db == nil {
+		return
+	}
+	raw, err := json.Marshal(c.livePeerIDs())
+	if err != nil {
+		return
+	}
+	links, err := json.Marshal(c.linkMetrics())
+	if err != nil {
+		return
+	}
+	row := c.nodeID
+	if base, ok := scheduler.EphemeralBase(c.nodeID); ok {
+		row = base
+	}
+	if _, err := c.db.ExecContext(ctx,
+		`UPDATE employee_cache SET neighbors_json=?, links_json=? WHERE id=?`, string(raw), string(links), row); err != nil {
+		c.logger.Debug("refresh self neighbors", "err", err)
+	}
+}
+
+// msgDedupWindow is how long a received message id is remembered. It must
+// comfortably outlive the resend patterns it guards against — a peer's send
+// retry, an outbox flush across a reconnect — without turning msgSeen into a
+// second unbounded ledger. Ten minutes matches the hello replay window's
+// order of magnitude while keeping pruning cheap.
+const msgDedupWindow = 10 * time.Minute
+
+// msgSeenMax hard-caps the dedup map: a peer free to mint arbitrary ids could
+// otherwise grow it without bound. At capacity the oldest entries are evicted
+// — a replay arriving after its eviction window re-executes once, which is
+// the same behaviour as having no dedup, never worse.
+const msgSeenMax = 8192
 
 // dispatch routes an envelope to its handler. conn is the connection the
 // message arrived on, needed so the hello handler can bind the authenticated
 // peer identity to it.
 func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
+	// Hello frames skip the msgSeen dedup: they have their own replay
+	// protection in helloSeen (keyed on signed fields, below), and claiming
+	// their ids here would run before authentication — an unauthenticated
+	// peer could then burn a victim's hello msg_id into msgSeen and get the
+	// real hello dropped when it arrived.
+	if env.Type != bus.MsgHello && !c.claimMsgID(env) {
+		c.logger.Info("duplicate message dropped", "type", env.Type, "from", env.From, "msg", env.MsgID)
+		return
+	}
 	switch env.Type {
 	case bus.MsgHello:
 		c.handleHello(ctx, conn, env)
@@ -944,11 +1215,66 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 		c.handleArtifactFetch(ctx, env)
 	case bus.MsgArtifactChunk:
 		c.handleArtifactChunk(ctx, env)
+	case bus.MsgArtifactPush:
+		c.handleArtifactPush(ctx, env)
+	case bus.MsgArtifactPushStatus:
+		c.handleArtifactPushStatus(ctx, env)
+	case bus.MsgArtifactPushDone:
+		c.handleArtifactPushDone(ctx, env)
 	case bus.MsgHeartbeat:
 		c.handleHeartbeat(ctx, env)
+	case bus.MsgAgentNegotiate:
+		c.handleAgentNegotiate(ctx, env)
+	case bus.MsgAgentGrant:
+		c.handleAgentGrant(ctx, env)
+	case bus.MsgAgentYield:
+		c.handleAgentYield(ctx, env)
+	case bus.MsgDTNBundle:
+		c.handleDTNBundle(ctx, env)
 	default:
 		c.logger.Warn("unhandled message type", "type", env.Type, "from", env.From)
 	}
+}
+
+// claimMsgID reports whether this envelope's message id is new and, when it
+// is, records it so a later replay of the same (from, msg_id) is dropped.
+// An empty id claims nothing — a peer that never fills MsgID (pre-dedup
+// firmware on the fleet) keeps exactly the at-most-once semantics it always
+// had, and a sender that omits ids is not penalised. The keyed-by-sender map
+// is pruned on every claim and hard-capped; both walks are cheap against the
+// message rate a single daemon sees.
+func (c *Core) claimMsgID(env bus.Envelope) bool {
+	if env.MsgID == "" {
+		return true
+	}
+	now := time.Now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := env.From + "|" + env.MsgID
+	if _, dup := c.msgSeen[key]; dup {
+		return false
+	}
+	for k, t := range c.msgSeen {
+		if now.Sub(t) > msgDedupWindow {
+			delete(c.msgSeen, k)
+		}
+	}
+	if len(c.msgSeen) >= msgSeenMax {
+		// Drop a quarter of the entries so the next burst does not pay this
+		// shrink on every claim. Which quarter does not matter — entries are
+		// already pruned to msgDedupWindow, and evicting a still-live id at
+		// worst re-admits one replay; map iteration order is arbitrary, which
+		// is good enough.
+		evict := msgSeenMax / 4
+		for k := range c.msgSeen {
+			delete(c.msgSeen, k)
+			if evict--; evict <= 0 {
+				break
+			}
+		}
+	}
+	c.msgSeen[key] = now
+	return true
 }
 
 func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
@@ -960,16 +1286,48 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// Verify the transport signature before trusting the claimed identity
 	// (design §16 / P0-1). Fail closed: an unauthenticated or stale hello
 	// registers nothing and receives no reply.
-	if !bus.VerifyHello(c.sharedSecret, p.NodeID, p.Ts, p.Sig, time.Now()) {
+	if !bus.VerifyHelloP(c.sharedSecret, p, time.Now()) {
 		c.logger.Warn("rejected hello: bad signature", "peer", p.NodeID)
 		return
 	}
 	// The claimed identity must match the envelope's from field; both become the
 	// identity bound to this conn, so later messages may only carry this id.
+	// Checked before the replay claim below: a forged-from hello that burned a
+	// valid sig into helloSeen would then keep the honest sender's real hello —
+	// the same signature — out until the window closed.
 	if env.From != p.NodeID {
 		c.logger.Warn("rejected hello: from mismatch", "from", env.From, "peer", p.NodeID)
 		return
 	}
+	// Replay check (M24): within MaxHelloAge a captured hello still verifies,
+	// so a signature must be single-use — accept each one once, reject it
+	// until its freshness window closes. The key is the signed fields only:
+	// anything unsigned (msg_id, nonce-tampered variants) a replay can
+	// rewrite, so keying on it would let the same signature authenticate
+	// twice. Uniqueness for honest dials comes from HelloSigN's per-dial
+	// nonce — two same-second reconnects mint different signatures, so the
+	// second is admitted on its own key rather than rejected as a replay. A
+	// peer old enough to send no nonce gets the two-field verification and a
+	// same-second reconnect of theirs is rejected once, which its backoff
+	// retry clears.
+	c.mu.Lock()
+	key := p.NodeID + "|" + strconv.FormatInt(p.Ts, 10) + "|" + p.Sig
+	if _, dup := c.helloSeen[key]; dup {
+		c.mu.Unlock()
+		c.logger.Warn("rejected hello: replayed signature", "peer", p.NodeID)
+		return
+	}
+	now := time.Now()
+	c.helloSeen[key] = now
+	// Prune entries whose replay window has closed: a signature older than
+	// MaxHelloAge would fail VerifyHello anyway, so remembering it buys nothing
+	// and the map would otherwise grow one entry per reconnect forever.
+	for k, t := range c.helloSeen {
+		if now.Sub(t) > bus.MaxHelloAge {
+			delete(c.helloSeen, k)
+		}
+	}
+	c.mu.Unlock()
 	conn.SetPeerID(p.NodeID)
 
 	// Send our hello reply BEFORE registering the conn, and directly on the
@@ -1010,7 +1368,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		var sum ledger.CapabilitySummary
 		if err := json.Unmarshal(p.Card, &sum); err != nil {
 			c.logger.Warn("bad capability card in hello", "peer", p.NodeID, "err", err)
-		} else if err := ledger.UpsertRemote(c.db, p.NodeID, sum); err != nil {
+		} else if err := ledger.UpsertRemote(c.db, p.NodeID, sanitizeSummary(sum)); err != nil {
 			c.logger.Warn("upsert remote card", "peer", p.NodeID, "err", err)
 		}
 	}
@@ -1035,12 +1393,17 @@ func (c *Core) sendHelloReply(conn *bus.Conn, to string) {
 	if err != nil {
 		return
 	}
+	nonce, err := newUUID()
+	if err != nil {
+		return
+	}
 	envOut, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, bus.HelloPayload{
 		NodeID: c.nodeID,
 		Ver:    version.Version,
 		Card:   card,
 		Ts:     ts,
-		Sig:    bus.HelloSig(c.sharedSecret, c.nodeID, ts),
+		Nonce:  nonce,
+		Sig:    bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
 	})
 	if err != nil {
 		return
@@ -1059,6 +1422,49 @@ func (c *Core) connFor(from string) *bus.Conn {
 		return p.conn
 	}
 	return nil
+}
+
+// stateWindowCap is the sliding window of recent tree states kept per
+// project/plan for the §6.2 monotonic-progress check. Five is the doc's
+// window: long enough to catch A→B→A regressions, short enough that a slow
+// legitimate convergence never trips it.
+const stateWindowCap = 5
+
+// stateHashMaxFiles bounds the per-round tree hash: a work dir larger than
+// this skips the oscillation check rather than paying an unbounded hash walk
+// every supervision round.
+const stateHashMaxFiles = 20000
+
+// stateOscillates records the content hash of a task's work tree and reports
+// whether the tree regressed to an earlier state — agent B undoing agent A's
+// fix — which is the "logical oscillation" the check exists to kill (§6.2).
+// A repeat of the *latest* state means the tree did not move at all: that is
+// stagnation, which the supervision loop's own detector adjudicates, so it is
+// deliberately not flagged here. key is per project or plan.
+func (c *Core) stateOscillates(key, hash string) bool {
+	if key == "" || hash == "" {
+		return false
+	}
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.stateWin == nil {
+		c.stateWin = make(map[string][]string)
+	}
+	w := c.stateWin[key]
+	if n := len(w); n > 0 && w[n-1] == hash {
+		return false // no movement
+	}
+	for _, h := range w {
+		if h == hash {
+			return true // regressed to a state this window already saw
+		}
+	}
+	w = append(w, hash)
+	if len(w) > stateWindowCap {
+		w = w[len(w)-stateWindowCap:]
+	}
+	c.stateWin[key] = w
+	return false
 }
 
 // sendTo sends env to peer id. Returns ErrNoPeer if unknown.
@@ -1125,7 +1531,34 @@ func (c *Core) summary() ledger.CapabilitySummary {
 	for _, m := range card.Manual {
 		s.ManualIDs = append(s.ManualIDs, m.ID)
 	}
+	for _, a := range card.Actuators {
+		s.ActuatorIDs = append(s.ActuatorIDs, a.ID)
+	}
+	// §9.3 link-state advertisement: the live peer set is this node's edge
+	// list in the mesh routing graph. Published in the hello so every peer's
+	// directory learns the topology, not just this node's abilities.
+	s.Neighbors = c.livePeerIDs()
+	s.Links = c.linkMetrics()
 	return s
+}
+
+// linkMetrics reports the measured edge weight (ping/pong RTT) to each live
+// peer (§4.1). Peers without a sample yet are omitted — the weighted router
+// prices an absent metric at the unknown-link default instead of recording
+// a fake zero, which would make an unmeasured link look free.
+func (c *Core) linkMetrics() []ledger.LinkMetric {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]ledger.LinkMetric, 0, len(c.peers))
+	for id, p := range c.peers {
+		if p.conn == nil {
+			continue
+		}
+		if rtt := p.conn.RTT(); rtt > 0 {
+			out = append(out, ledger.LinkMetric{Peer: id, RTTms: rtt.Milliseconds()})
+		}
+	}
+	return out
 }
 
 // helloCard marshals the capability summary for the hello payload.

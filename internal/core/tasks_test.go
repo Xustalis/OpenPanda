@@ -521,6 +521,62 @@ func TestRotateAttemptOwnerGuarded(t *testing.T) {
 	}
 }
 
+// TestRequeueForRetryAtomic verifies the retry loop's one-shot move: a failed
+// task lands in dispatched with a fresh attempt_id and BOTH audit events
+// (EvRetry + EvDelegate to self) in a single transaction — and a non-owner or
+// a non-failed task gets nothing written at all.
+func TestRequeueForRetryAtomic(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "t", "root")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	must(s.Queue(ctx, tk.TaskID, "root"))
+	must(s.Dispatch(ctx, tk.TaskID, "root", "root"))
+	must(s.Accept(ctx, tk.TaskID, "root"))
+	must(s.Fail(ctx, tk.TaskID, "root", "boom"))
+
+	// Wrong owner: conflict, and the row stays failed with its old attempt.
+	if _, err := s.RequeueForRetry(ctx, tk.TaskID, "intruder"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict for non-owner, got %v", err)
+	}
+	cur, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if cur.State != StateFailed || cur.AttemptID != tk.AttemptID {
+		t.Fatalf("conflict wrote state=%s attempt=%s", cur.State, cur.AttemptID)
+	}
+
+	aid, err := s.RequeueForRetry(ctx, tk.TaskID, "root")
+	if err != nil {
+		t.Fatalf("requeue for retry: %v", err)
+	}
+	if aid == "" || aid == tk.AttemptID {
+		t.Fatalf("attempt not rotated: %q", aid)
+	}
+	cur, err = s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if cur.State != StateDispatched || cur.AttemptID != aid {
+		t.Fatalf("state=%s attempt=%s, want dispatched/%s", cur.State, cur.AttemptID, aid)
+	}
+	// Both audit events landed: DispatchTarget (latest EvDelegate) points back
+	// at the owner, and RetryCount saw the EvRetry.
+	if tgt, err := s.DispatchTarget(ctx, tk.TaskID); err != nil || tgt != "root" {
+		t.Fatalf("dispatch target = %q err=%v, want root", tgt, err)
+	}
+	if n, err := s.RetryCount(ctx, tk.TaskID); err != nil || n != 1 {
+		t.Fatalf("retry count = %d err=%v, want 1", n, err)
+	}
+}
+
 func TestAttemptRotationRejectsOldResult(t *testing.T) {
 	s := newTestStore(t)
 	tk := createTask(t, s, "", "t", "root")
@@ -839,5 +895,166 @@ func TestTaskStoreClearQueue(t *testing.T) {
 	}
 	if len(remaining) != 0 {
 		t.Fatalf("expected queue to be empty, found %d tasks", len(remaining))
+	}
+}
+
+func TestCountScheduledActiveLocalOnly(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Task 1: scheduled, dispatched to remote peer "worker"
+	t1 := createTask(t, s, "", "task 1", "root")
+	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET scheduled=1 WHERE task_id=?`, t1.TaskID); err != nil {
+		t.Fatalf("set scheduled: %v", err)
+	}
+	if err := s.Queue(ctx, t1.TaskID, "root"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := s.Dispatch(ctx, t1.TaskID, "root", "worker"); err != nil {
+		t.Fatalf("dispatch to worker: %v", err)
+	}
+
+	// Task 2: scheduled, running locally on "root"
+	t2 := createTask(t, s, "", "task 2", "root")
+	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET scheduled=1 WHERE task_id=?`, t2.TaskID); err != nil {
+		t.Fatalf("set scheduled: %v", err)
+	}
+	if err := s.Queue(ctx, t2.TaskID, "root"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := s.Dispatch(ctx, t2.TaskID, "root", "root"); err != nil {
+		t.Fatalf("dispatch to root: %v", err)
+	}
+	if err := s.Accept(ctx, t2.TaskID, "root"); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+
+	// For root: only task 2 is counted (task 1 is dispatched to worker).
+	cntRoot, err := s.CountScheduledActive(ctx, "root")
+	if err != nil {
+		t.Fatalf("count root: %v", err)
+	}
+	if cntRoot != 1 {
+		t.Fatalf("count root = %d, want 1", cntRoot)
+	}
+
+	// When task 1 is retargeted back to root (e.g. after sendTo failure),
+	// root counts both tasks (dispatched-to-self + running).
+	if err := s.RetargetDelegation(ctx, t1.TaskID, "root"); err != nil {
+		t.Fatalf("retarget to root: %v", err)
+	}
+	cntRootRetargeted, err := s.CountScheduledActive(ctx, "root")
+	if err != nil {
+		t.Fatalf("count root after retarget: %v", err)
+	}
+	if cntRootRetargeted != 2 {
+		t.Fatalf("count root after retarget = %d, want 2", cntRootRetargeted)
+	}
+}
+
+func TestRecoverPreservesUnreleasedPlanStages(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Task 1: regular ask, submitted
+	t1 := createTask(t, s, "", "regular submitted", "root")
+
+	// Task 2: plan stage, unreleased (submitted)
+	t2 := createTask(t, s, "", "plan stage unreleased", "root")
+	if err := s.SetStage(ctx, t2.TaskID, "plan-1", "stage-2", nil); err != nil {
+		t.Fatalf("set stage: %v", err)
+	}
+
+	// Task 3: plan stage, released and dispatched
+	t3 := createTask(t, s, "", "plan stage dispatched", "root")
+	if err := s.SetStage(ctx, t3.TaskID, "plan-1", "stage-1", nil); err != nil {
+		t.Fatalf("set stage: %v", err)
+	}
+	if err := s.Queue(ctx, t3.TaskID, "root"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := s.Dispatch(ctx, t3.TaskID, "root", "root"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	if _, err := s.Recover(ctx); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+
+	g1, _ := s.Get(ctx, t1.TaskID)
+	if g1.State != StateQueued {
+		t.Fatalf("t1 state = %s, want %s", g1.State, StateQueued)
+	}
+
+	g2, _ := s.Get(ctx, t2.TaskID)
+	if g2.State != StateSubmitted {
+		t.Fatalf("t2 state = %s, want %s (unreleased plan stage must stay submitted)", g2.State, StateSubmitted)
+	}
+
+	g3, _ := s.Get(ctx, t3.TaskID)
+	if g3.State != StateQueued {
+		t.Fatalf("t3 state = %s, want %s (released plan stage should requeue)", g3.State, StateQueued)
+	}
+}
+
+func TestCancelCascadePlanSiblings(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	s1 := createTask(t, s, "", "stage 1", "root")
+	if err := s.SetStage(ctx, s1.TaskID, "plan-99", "st-1", nil); err != nil {
+		t.Fatalf("set stage 1: %v", err)
+	}
+	if err := s.Queue(ctx, s1.TaskID, "root"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := s.Dispatch(ctx, s1.TaskID, "root", "root"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if err := s.Accept(ctx, s1.TaskID, "root"); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+
+	s2 := createTask(t, s, "", "stage 2", "root")
+	if err := s.SetStage(ctx, s2.TaskID, "plan-99", "st-2", []string{"st-1"}); err != nil {
+		t.Fatalf("set stage 2: %v", err)
+	}
+
+	s3 := createTask(t, s, "", "stage 3", "root")
+	if err := s.SetStage(ctx, s3.TaskID, "plan-99", "st-3", nil); err != nil {
+		t.Fatalf("set stage 3: %v", err)
+	}
+	if err := s.Queue(ctx, s3.TaskID, "root"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := s.Dispatch(ctx, s3.TaskID, "root", "root"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if err := s.Accept(ctx, s3.TaskID, "root"); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if err := s.Complete(ctx, s3.TaskID, "root", nil); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	cancelled, err := s.CancelCascade(ctx, s1.TaskID)
+	if err != nil {
+		t.Fatalf("cancel cascade: %v", err)
+	}
+
+	// s1 and s2 should be cancelled; s3 was already complete, so not cancelled.
+	if len(cancelled) != 2 {
+		t.Fatalf("cancelled = %v, want 2 tasks", cancelled)
+	}
+
+	g1, _ := s.Get(ctx, s1.TaskID)
+	g2, _ := s.Get(ctx, s2.TaskID)
+	g3, _ := s.Get(ctx, s3.TaskID)
+
+	if g1.State != StateCancelled || g2.State != StateCancelled {
+		t.Fatalf("states: s1=%s, s2=%s; want both cancelled", g1.State, g2.State)
+	}
+	if g3.State != StateDone {
+		t.Fatalf("state: s3=%s; want done", g3.State)
 	}
 }

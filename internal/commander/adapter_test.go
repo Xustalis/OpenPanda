@@ -199,6 +199,16 @@ func TestAdapterHardTimeout(t *testing.T) {
 	oldTimeout := adapterHardTimeout
 	adapterHardTimeout = 300 * time.Millisecond
 	defer func() { adapterHardTimeout = oldTimeout }()
+	// The enforced limit is max(adapterHardTimeout, advertised+grace), so the
+	// advertised budget AND the grace must shrink with it — otherwise the
+	// default 600s timeout_s (or the 30s grace under a shrunken timeout_s)
+	// wins the max and the "hard" deadline sits tens of seconds out.
+	oldAdvertised := adapterTimeoutS
+	adapterTimeoutS = 1
+	defer func() { adapterTimeoutS = oldAdvertised }()
+	oldGrace := hardTimeoutGrace
+	hardTimeoutGrace = 100 * time.Millisecond
+	defer func() { hardTimeoutGrace = oldGrace }()
 
 	start := time.Now()
 	res := runAdapterProcess(context.Background(), "slow.py", "x", "", nil)

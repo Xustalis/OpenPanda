@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"strings"
@@ -89,6 +90,27 @@ type Client struct {
 	contextWindow int
 	// pricing is the cost structure per 1M tokens.
 	pricing providers.Pricing
+
+	// thinking is the user-selected reasoning mode: "on" | "off" | "auto" |
+	// "" (provider default — no thinking field is sent at all).
+	thinking string
+	// thinkingBudget caps the reasoning token budget where the dialect
+	// supports it (Anthropic budget_tokens, DashScope thinking_budget).
+	thinkingBudget int
+	// thinkingStyle is the resolved wire shape for the thinking request:
+	// "anthropic" | "object" | "flag" | "effort" | "" (providers.ThinkingStyleFor).
+	thinkingStyle string
+	// thinkingDenied is set when a provider rejects the thinking field with a
+	// 400 ("unknown parameter"). Like passback it is sticky for the client's
+	// lifetime: a wrong guess degrades to the provider default once instead
+	// of spending a rejected round-trip on every call.
+	thinkingDenied atomic.Bool
+	// extraParams are user-supplied request-body fields merged into every
+	// call underneath the struct's own fields (config.ModelConfig.Params).
+	extraParams map[string]any
+	// extraHeaders are user-supplied HTTP headers attached to every request
+	// (config.ModelConfig.Headers); they never replace built-in auth headers.
+	extraHeaders map[string]string
 }
 
 // NewClient builds a client from the model config. A zero baseURL/model falls
@@ -137,16 +159,21 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		apiType = config.APITypeAnthropic
 	}
 	c := &Client{
-		apiType:       apiType,
-		baseURL:       strings.TrimRight(base, "/"),
-		apiKey:        model.APIKey,
-		model:         name,
-		maxTokens:     maxTokens,
-		contextWindow: contextWindow,
-		hc:            &http.Client{Timeout: 30 * time.Second},
-		hcStream:      &http.Client{Transport: streamTransport()},
-		maxRetry:      2,
-		retryBase:     500 * time.Millisecond,
+		apiType:        apiType,
+		baseURL:        strings.TrimRight(base, "/"),
+		apiKey:         model.APIKey,
+		model:          name,
+		maxTokens:      maxTokens,
+		contextWindow:  contextWindow,
+		hc:             &http.Client{Timeout: 30 * time.Second},
+		hcStream:       &http.Client{Transport: streamTransport()},
+		maxRetry:       2,
+		retryBase:      500 * time.Millisecond,
+		thinking:       normalizeThinking(model.Thinking),
+		thinkingBudget: model.ThinkingBudget,
+		thinkingStyle:  providers.ThinkingStyleFor(model),
+		extraParams:    maps.Clone(model.Params),
+		extraHeaders:   maps.Clone(model.Headers),
 	}
 	c.promptCache.Store(true)
 	if hasProvider {
@@ -175,6 +202,110 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 	}
 	c.pricing = providers.LookupPricing(model.Provider, name)
 	return c, nil
+}
+
+// normalizeThinking reduces the configured thinking value to the supported
+// vocabulary: "on" | "off" | "auto" | "" (provider default).
+func normalizeThinking(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "enabled", "true", "yes", "1":
+		return "on"
+	case "off", "disabled", "false", "no", "0":
+		return "off"
+	case "auto":
+		return "auto"
+	}
+	return ""
+}
+
+// marshalWithParams renders req to JSON and merges c.extraParams underneath
+// the struct's own fields: a param adds a field the wire type does not model
+// (temperature, top_p, enable_search…), but never replaces model/messages/
+// tools — the top-level fields always win.
+func (c *Client) marshalWithParams(req any) ([]byte, error) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("entry: marshal request: %w", err)
+	}
+	if len(c.extraParams) == 0 {
+		return payload, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(payload, &m); err != nil {
+		return payload, nil
+	}
+	for k, v := range c.extraParams {
+		if k == "" {
+			continue
+		}
+		if _, exists := m[k]; !exists {
+			m[k] = v
+		}
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return payload, nil
+	}
+	return out, nil
+}
+
+// applyExtraHeaders attaches user-supplied headers to httpReq. Headers the
+// caller already set (content-type, authorization, x-api-key,
+// anthropic-version, accept) are never replaced — a config typo must not
+// break auth.
+func (c *Client) applyExtraHeaders(httpReq *http.Request) {
+	for k, v := range c.extraHeaders {
+		if k == "" || httpReq.Header.Get(k) != "" {
+			continue
+		}
+		httpReq.Header.Set(k, v)
+	}
+}
+
+// anthropicThinking returns the Messages API thinking object for the
+// configured mode plus the budget it carries (0 when the mode sends none).
+// Anthropic requires budget_tokens >= 1024 and max_tokens > budget_tokens;
+// the caller lifts max_tokens when needed.
+func (c *Client) anthropicThinking() (map[string]any, int) {
+	if c.thinkingDenied.Load() {
+		return nil, 0
+	}
+	switch c.thinking {
+	case "on", "auto":
+		budget := c.thinkingBudget
+		if budget <= 0 {
+			budget = 4096
+		}
+		if budget < 1024 {
+			budget = 1024
+		}
+		return map[string]any{"type": "enabled", "budget_tokens": budget}, budget
+	case "off":
+		return map[string]any{"type": "disabled"}, 0
+	}
+	return nil, 0
+}
+
+// thinkingRejected reports whether err is a 400 that names the thinking field
+// — "unrecognized/unknown/unsupported parameter: thinking", "enable_thinking",
+// "reasoning_effort", "thinking_budget" — meaning the provider does not take
+// the field and it should be dropped, once. passbackRequired is checked first
+// in the retry loops, so a passback demand is never misread as a rejection.
+func thinkingRejected(err error) bool {
+	var se *statusError
+	if !errors.As(err, &se) || se.status != http.StatusBadRequest {
+		return false
+	}
+	body := strings.ToLower(se.body)
+	if !strings.Contains(body, "thinking") && !strings.Contains(body, "reasoning_effort") && !strings.Contains(body, "reasoning") {
+		return false
+	}
+	for _, marker := range []string{"unknown", "unrecognized", "unsupported", "unexpected", "invalid", "not supported", "extra fields", "extra_forbidden"} {
+		if strings.Contains(body, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveModelsURL turns a provider's list-models path into a concrete URL:
@@ -295,12 +426,13 @@ func (c *Client) addUsage(in, out int64) {
 // either a plain string or a []systemBlock when prompt-cache markers are on
 // (see systemPayload).
 type messagesRequest struct {
-	Model     string     `json:"model"`
-	MaxTokens int        `json:"max_tokens"`
-	Stream    bool       `json:"stream,omitempty"`
-	System    any        `json:"system,omitempty"`
-	Messages  []message  `json:"messages"`
-	Tools     []ToolSpec `json:"tools,omitempty"`
+	Model     string         `json:"model"`
+	MaxTokens int            `json:"max_tokens"`
+	Stream    bool           `json:"stream,omitempty"`
+	System    any            `json:"system,omitempty"`
+	Messages  []message      `json:"messages"`
+	Tools     []ToolSpec     `json:"tools,omitempty"`
+	Thinking  map[string]any `json:"thinking,omitempty"` // extended-thinking object ({"type","budget_tokens"})
 }
 
 // systemBlock is one Anthropic system content block. cache_control marks a
@@ -565,6 +697,7 @@ func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn
 	}
 	var lastErr error
 	probed := false
+	thinkingProbed := false
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 {
 			if err := sleepCtx(ctx, c.retryBase<<uint(attempt-1)); err != nil {
@@ -583,6 +716,12 @@ func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn
 			attempt-- // the correction retries at once, off the transport budget
 			continue
 		}
+		if !thinkingProbed && thinkingRejected(err) {
+			thinkingProbed = true
+			c.thinkingDenied.Store(true)
+			attempt-- // drop the thinking field and retry off the transport budget
+			continue
+		}
 		if !retryable(err) {
 			return Response{}, err
 		}
@@ -595,9 +734,10 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []o
 	if c.promptCache.Load() {
 		req.PromptCacheKey = c.oaiPromptCacheKey(system)
 	}
-	payload, err := json.Marshal(req)
+	c.applyThinking(&req)
+	payload, err := c.marshalWithParams(req)
 	if err != nil {
-		return Response{}, fmt.Errorf("entry: marshal request: %w", err)
+		return Response{}, err
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIURL(c.baseURL), bytes.NewReader(payload))
 	if err != nil {
@@ -607,6 +747,7 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []o
 	if c.apiKey != "" {
 		httpReq.Header.Set("authorization", "Bearer "+c.apiKey)
 	}
+	c.applyExtraHeaders(httpReq)
 
 	resp, err := c.hc.Do(httpReq)
 	if err != nil {
@@ -747,6 +888,7 @@ func (c *Client) completeWithRetry(ctx context.Context, req messagesRequest) (Re
 	}
 	var lastErr error
 	probed := false
+	thinkingProbed := false
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 {
 			if err := sleepCtx(ctx, c.retryBase<<uint(attempt-1)); err != nil {
@@ -765,6 +907,12 @@ func (c *Client) completeWithRetry(ctx context.Context, req messagesRequest) (Re
 			attempt-- // the correction retries at once, off the transport budget
 			continue
 		}
+		if !thinkingProbed && thinkingRejected(err) {
+			thinkingProbed = true
+			c.thinkingDenied.Store(true)
+			attempt-- // drop the thinking field and retry off the transport budget
+			continue
+		}
 		if !retryable(err) {
 			break
 		}
@@ -774,9 +922,19 @@ func (c *Client) completeWithRetry(ctx context.Context, req messagesRequest) (Re
 
 // completeOnce performs a single request and parses the response.
 func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Response, error) {
-	payload, err := json.Marshal(req)
+	if th, budget := c.anthropicThinking(); th != nil {
+		req.Thinking = th
+		if req.MaxTokens <= budget {
+			// The Messages API requires max_tokens > budget_tokens; the
+			// configured cap wins when it already clears the budget.
+			req.MaxTokens = budget + 4096
+		}
+	} else {
+		req.Thinking = nil
+	}
+	payload, err := c.marshalWithParams(req)
 	if err != nil {
-		return Response{}, fmt.Errorf("entry: marshal request: %w", err)
+		return Response{}, err
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicURL(c.baseURL), bytes.NewReader(payload))
 	if err != nil {
@@ -787,6 +945,7 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 		httpReq.Header.Set("x-api-key", c.apiKey)
 	}
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
+	c.applyExtraHeaders(httpReq)
 
 	resp, err := c.hc.Do(httpReq)
 	if err != nil {
@@ -940,6 +1099,7 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 		}
 		req.Header.Set("anthropic-version", anthropicVersion)
 	}
+	c.applyExtraHeaders(req)
 
 	resp, err := c.hc.Do(req)
 	if err != nil {
@@ -980,7 +1140,16 @@ func (c *Client) listModelsEndpoint() (string, bool) {
 		return c.modelsURL, isBearer
 	}
 	if c.apiType == config.APITypeOpenAI {
-		return strings.TrimRight(c.baseURL, "/") + "/models", true
+		// Mirror openAIURL's normalization: a base that already carries /vN
+		// keeps it, a bare host gains /v1, and an explicit /chat/completions
+		// tail is swapped for the models route.
+		base := strings.TrimRight(c.baseURL, "/")
+		base = strings.TrimSuffix(base, "/chat/completions")
+		if strings.HasSuffix(base, "/v1") || strings.HasSuffix(base, "/v2") ||
+			strings.HasSuffix(base, "/v3") || strings.HasSuffix(base, "/v4") {
+			return base + "/models", true
+		}
+		return base + "/v1/models", true
 	}
 	// Anthropic dialect. DeepSeek's Anthropic endpoint has no list route, so
 	// fall through to its OpenAI surface even without a provider id.

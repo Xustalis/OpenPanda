@@ -34,9 +34,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/plan"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
 
 // SetStage stamps a task's place in a plan: the plan it belongs to, its stage id
@@ -176,6 +178,21 @@ func (s *TaskStore) RecordArtifact(ctx context.Context, hash string, size int64,
 	return nil
 }
 
+// ArtifactIndexedFor reports whether the local pool's index ties hash to
+// taskID — i.e. this node recorded the artifact while packing it for, or
+// pulling it under, that task. artifactPeerAuthorized consults it so a peer
+// can only fetch artifacts the task it quotes actually owns: participation
+// alone must not open the whole pool to one known hash.
+func (s *TaskStore) ArtifactIndexedFor(ctx context.Context, hash, taskID string) (bool, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM artifacts WHERE hash=? AND task_id=?`,
+		hash, taskID).Scan(&n); err != nil {
+		return false, fmt.Errorf("artifact index lookup: %w", err)
+	}
+	return n > 0, nil
+}
+
 // StartPlan validates a plan, creates one task per stage, and releases the
 // stages that have no dependencies. It returns the plan id, which is how the
 // caller follows the whole run (PlanStages) rather than one task at a time.
@@ -196,9 +213,23 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 	if err != nil {
 		return "", fmt.Errorf("mint plan id: %w", err)
 	}
+	// The stages are created one row at a time, so a mid-loop failure would
+	// leave the earlier ones parked in submitted under a plan id nobody
+	// holds — and PendingPlans would sweep that id into a run nobody asked
+	// for. Cancel the strays on the way out so the plan either starts whole
+	// or not at all.
+	var created []string
+	abandon := func() {
+		for _, id := range created {
+			if cerr := c.store.Cancel(ctx, id); cerr != nil {
+				c.logger.Warn("plan: abandon unstarted stage", "task", id, "err", cerr)
+			}
+		}
+	}
 	for _, st := range p.Stages {
 		resourceJSON, err := json.Marshal(st.Resources)
 		if err != nil {
+			abandon()
 			return "", fmt.Errorf("marshal stage %s resources: %w", st.ID, err)
 		}
 		title := st.Title
@@ -212,8 +243,10 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 			ResourceJSON: string(resourceJSON),
 		})
 		if err != nil {
+			abandon()
 			return "", fmt.Errorf("create stage %s: %w", st.ID, err)
 		}
+		created = append(created, t.TaskID)
 		// No work dir: the executor derives one per stage. Resource keys are the
 		// plan's when the caller named any, so two plans that touch the same
 		// resource still serialize; otherwise each stage gets a key of its own.
@@ -230,9 +263,11 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 			keys = []string{"plan:" + planID + ":" + st.ID}
 		}
 		if err := c.store.SetQueueMeta(ctx, t.TaskID, q.Priority, q.SessionID, "", keys); err != nil {
+			abandon()
 			return "", fmt.Errorf("queue meta for stage %s: %w", st.ID, err)
 		}
 		if err := c.store.SetStage(ctx, t.TaskID, planID, st.ID, st.Needs); err != nil {
+			abandon()
 			return "", fmt.Errorf("stamp stage %s: %w", st.ID, err)
 		}
 		// — Trace: the entry model classified this sentence as a plan, one
@@ -249,6 +284,9 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 	}
 	c.logger.Info("plan started", "plan", planID, "stages", len(p.Stages), "goal", p.Goal)
 	if err := c.AdvancePlan(ctx, planID); err != nil {
+		// The plan id is still returned: the stages exist and stay submitted, so
+		// the PendingPlans sweep retries the release and the caller can inspect
+		// what happened instead of losing track of a half-born plan.
 		return planID, fmt.Errorf("release first stages: %w", err)
 	}
 	return planID, nil
@@ -278,15 +316,69 @@ func (c *Core) AdvancePlan(ctx context.Context, planID string) error {
 	}
 	byStage := make(map[string]Task, len(stages))
 	done := make(map[string]bool, len(stages))
+	failed := make(map[string]bool, len(stages))
 	for _, t := range stages {
 		byStage[t.StageID] = t
-		if t.State == StateDone {
+		switch t.State {
+		case StateDone:
 			done[t.StageID] = true
+		case StateFailed, StateCancelled, StateExpired:
+			failed[t.StageID] = true
 		}
 	}
 	p := planFromStages(stages)
 	released := 0
 	var firstErr error
+	// Failure propagation: a stage whose dependency chain contains a failed or
+	// cancelled stage can never legitimately run — its inputs either do not
+	// exist or rest on work that was abandoned. Without this pass such a stage
+	// would park in submitted forever (PendingPlans re-sweeps it every tick to
+	// no effect). We fail the dependents instead of cancelling them so the
+	// terminal state records why the plan stopped, and we propagate transitively:
+	// stage C needing failed B needing failed A fails on both counts.
+	//
+	// A stage parked in review is NOT a failure — a human may still approve it,
+	// releasing its dependents on the next pass. Only hard-terminal non-done
+	// states propagate.
+	for _, st := range p.Stages {
+		if done[st.ID] || failed[st.ID] {
+			continue
+		}
+		t := byStage[st.ID]
+		if t.State != StateSubmitted {
+			continue // already released — its own terminal outcome decides it
+		}
+		var failedDep string
+		for _, need := range st.Needs {
+			if failed[need] {
+				failedDep = need
+				break
+			}
+		}
+		if failedDep == "" {
+			continue
+		}
+		reason := fmt.Sprintf("dependency %s did not complete", failedDep)
+		c.logger.Warn("plan: stage fails on failed dependency", "plan", planID,
+			"stage", st.ID, "dep", failedDep)
+		c.EvTrace(ctx, t.TaskID, EvPlanStageChanged, map[string]any{
+			"plan_id":          planID,
+			"stage_id":         st.ID,
+			"stage_title":      t.Title,
+			"stage_count":      len(stages),
+			"transition":       "failed",
+			"needs_satisfied":  []string{},
+			"transition_error": reason,
+		})
+		// Submitted rows cannot transition to failed directly (state machine:
+		// submitted -> queued|cancelled only), so they go through cancelled.
+		// The audit event above already records the real reason.
+		if ferr := c.store.Cancel(ctx, t.TaskID); ferr != nil {
+			c.logger.Warn("plan: cancel dependent stage", "task", t.TaskID, "err", ferr)
+			continue
+		}
+		failed[st.ID] = true // propagate transitively within this pass
+	}
 	for _, st := range plan.Ready(p, done) {
 		t := byStage[st.ID]
 		if t.State != StateSubmitted {
@@ -404,10 +496,10 @@ func (c *Core) planStageInputs(ctx context.Context, byStage map[string]Task, nee
 			}
 		}
 		if source == "" {
-			// The adoption pull failed or this node has no pool. Naming the
-			// executor is the only remaining chance: it works when the consumer
-			// is a node that predecessor can authenticate, and fails loudly with
-			// the hash in the message when it is not.
+			// This node has no pool. Naming the executor is the only remaining
+			// chance: it works when the consumer is a node that predecessor can
+			// authenticate, and fails loudly with the hash in the message when it
+			// is not.
 			if target, err := c.store.DispatchTarget(ctx, dep.TaskID); err == nil && target != "" {
 				source = target
 			} else {
@@ -422,13 +514,16 @@ func (c *Core) planStageInputs(ctx context.Context, byStage map[string]Task, nee
 	return out, nil
 }
 
-// orchestratesAny reports whether this node created any of these stage rows, and
-// is therefore the node that owns the plan's graph. createTask stamps the chain
-// with this node as its origin, while a delegated copy of a stage arrives with
-// the plan node already at the head of its chain.
+// orchestratesAny reports whether this node has orchestration authority over
+// these stages. In the decentralized mesh (whitepaper §4.2), a node that
+// originated the plan or owns a child stage as a Sub-MainAgent can advance
+// dependencies.
 func (c *Core) orchestratesAny(stages []Task) bool {
 	for _, t := range stages {
 		if len(t.Chain) > 0 && t.Chain[0] == c.nodeID {
+			return true
+		}
+		if t.ParentID != "" && (t.OwnerNode == c.nodeID || (len(t.Chain) > 0 && t.Chain[0] == c.nodeID)) {
 			return true
 		}
 	}
@@ -462,11 +557,25 @@ func (c *Core) adoptStageOutput(ctx context.Context, t Task, from, hash string) 
 				if _, err := c.FetchArtifact(ctx, from, t.TaskID, hash); err != nil {
 					c.logger.Warn("plan: adopt stage artifact", "task", t.TaskID,
 						"stage", t.StageID, "hash", hash, "from", from, "err", err)
+					// The hash does not enter output_artifact: planStageInputs
+					// would hand it to successors as a fetchable input, and with
+					// no pool holding it their best source would be the producer
+					// — which artifactPeerAuthorized correctly refuses them
+					// (they are not on its task's chain). Failing them here with
+					// "no node known to hold" is the truth and lets the plan
+					// surface the broken hop instead of wedging on a phantom.
+					c.advanceStagePlan(ctx, t)
+					return
 				}
 			}
 		}
 		if err := c.store.SetOutputArtifact(ctx, t.TaskID, hash); err != nil {
 			c.logger.Warn("record stage output", "task", t.TaskID, "err", err)
+			// Same reasoning: without a recorded holder the hash is an unfetchable
+			// input for every successor. Do not propagate a hash that cannot be
+			// resolved.
+			c.advanceStagePlan(ctx, t)
+			return
 		}
 		t.OutputArtifact = hash
 		c.advanceStagePlan(ctx, t)
@@ -567,19 +676,30 @@ func (c *Core) advanceStagePlan(ctx context.Context, t Task) {
 	if t.PlanID == "" {
 		return
 	}
-	// — Trace: stage reached the completed transition. Emitted exactly once
-	// per stage (AdvancePlan is idempotent, but this guard prevents the same
+	// — Trace: stage reached a terminal transition. Emitted exactly once per
+	// stage (AdvancePlan is idempotent, but this guard prevents the same
 	// terminal stage id from being emitted twice from the adopt call path).
-	// Guard by state: any terminal means done.
+	// The transition label mirrors the row's outcome: reporting a failed stage
+	// as "completed" would lie to the orbit and to anything consuming the
+	// event stream, and the failure-propagation pass in AdvancePlan already
+	// emits the dependent-side "failed" events with their reasons.
+	transition := ""
 	switch t.State {
-	case StateDone, StateReview, StateCancelled, StateFailed:
+	case StateDone, StateReview:
+		transition = "completed"
+	case StateCancelled:
+		transition = "cancelled"
+	case StateFailed, StateExpired:
+		transition = "failed"
+	}
+	if transition != "" {
 		sibs, _ := c.store.PlanStages(ctx, t.PlanID)
 		c.EvTrace(ctx, t.TaskID, EvPlanStageChanged, map[string]any{
 			"plan_id":         t.PlanID,
 			"stage_id":        t.StageID,
 			"stage_title":     t.Title,
 			"stage_count":     len(sibs),
-			"transition":      "completed",
+			"transition":      transition,
 			"needs_satisfied": []string{},
 			"artifact_hash":   t.OutputArtifact,
 		})
@@ -626,5 +746,213 @@ func (c *Core) sweepPlans(ctx context.Context) {
 		if err := c.AdvancePlan(ctx, id); err != nil {
 			c.logger.Warn("sweep plan", "plan", id, "err", err)
 		}
+	}
+}
+
+// SpawnChildTask creates a child task under parentID, implementing the Sub-MainAgent
+// recursive delegation model (whitepaper §4.2). The executing node promotes itself to
+// Sub-MainAgent, spawning child causal tasks with bounded depth.
+//
+// The child inherits the parent's causal chain verbatim — the chain records
+// the delegation path, and its tail is already this node (the Sub-MainAgent
+// that received the parent). Appending self again would forge an immediate
+// self-loop; resetting it would launder the mesh-wide loop history. The next
+// hop is appended by whoever forwards the child, and the parent's remaining
+// mesh budget carries over (§6.1): the budget is spent at dispatchDelegated,
+// not here, so a locally-run child costs nothing.
+func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput) (Task, error) {
+	parent, err := c.store.Get(ctx, parentID)
+	if err != nil {
+		return Task{}, fmt.Errorf("load parent task %s: %w", parentID, err)
+	}
+	newChain := append([]string(nil), parent.Chain...)
+	if len(newChain) == 0 {
+		newChain = []string{c.nodeID}
+	}
+	t, err := c.store.Create(ctx, parentID, in.Project, in.Title, c.nodeID, newChain)
+	if err != nil {
+		return Task{}, fmt.Errorf("create child task: %w", err)
+	}
+	if in.WorkDir != "" {
+		_ = c.store.SetWorkDir(ctx, t.TaskID, in.WorkDir)
+	}
+	_ = c.store.SetAuthorized(ctx, t.TaskID, in.Authorized)
+	_ = c.store.SetDetail(ctx, t.TaskID, in.detail())
+	// A pre-budget parent (delegation_budget=0, e.g. a row minted before v19)
+	// carries the default; its child's dispatch still decrements normally.
+	budget := parent.DelegationBudget
+	if budget <= 0 {
+		budget = scheduler.MaxDelegationBudget
+	}
+	if err := c.store.SetDelegationBudget(ctx, t.TaskID, budget); err != nil {
+		c.logger.Warn("persist child delegation budget", "task", t.TaskID, "err", err)
+	}
+	// The token quota is mesh-wide too (§6.1): the child draws from the same
+	// remainder the parent carries — zero stays unbounded, an exhausted
+	// parent spawns an already-exhausted child that declines on dispatch.
+	if parent.TokenBudget != 0 {
+		if err := c.store.SetTokenBudget(ctx, t.TaskID, parent.TokenBudget); err != nil {
+			c.logger.Warn("persist child token budget", "task", t.TaskID, "err", err)
+		}
+	}
+	c.EvTrace(ctx, t.TaskID, "spawn_child_task", map[string]any{
+		"parent_id": parentID,
+		"sub_main":  c.nodeID,
+		"chain":     newChain,
+		"budget":    budget,
+	})
+	return t, nil
+}
+
+// DispatchChild routes a spawned child the way Submit routes a root task
+// (§4.2): the best-scored capable peer wins, with this node as an ordinary
+// candidate. A forwarded child is a normal delegation — its result returns
+// here via handleResult, where it both completes the local copy and unblocks
+// whatever spawned it. A local/declined child lands on the queue scheduler,
+// which runs it here (or re-routes via forwardScheduled on the next pass).
+func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) error {
+	decision := scheduler.Route(c.nodeID, child.Chain, c.onlineEmployees(ctx), c.localMatch(),
+		in.Requires, resourceRequirement(in.ResourceJSON), in.PreferredNode)
+	if decision.Action == scheduler.ActionForward {
+		payload := bus.TaskDelegatePayload{
+			TaskID:           child.TaskID,
+			ParentID:         child.ParentID,
+			Project:          in.Project,
+			Title:            child.Title,
+			ContextType:      in.ContextType,
+			ContextHash:      in.ContextHash,
+			Intent:           in.Intent,
+			SpecJSON:         in.SpecJSON,
+			Requires:         in.Requires,
+			Chain:            child.Chain,
+			PreferredNode:    in.PreferredNode,
+			Complexity:       in.Complexity,
+			Risk:             in.Risk,
+			ResourceJSON:     in.ResourceJSON,
+			AttemptID:        child.AttemptID,
+			Authorized:       in.Authorized,
+			Transport:        in.Transport,
+			DeadlineUnix:     in.DeadlineUnix,
+			Depth:            len(child.Chain),
+			DelegationBudget: &child.DelegationBudget,
+			TokenBudget:      child.TokenBudget,
+		}
+		if in.Authorized {
+			payload.AuthHops = defaultConsentHops
+		}
+		if err := c.forwardDelegated(ctx, child.TaskID, decision.Target, payload, child.Chain); err != nil {
+			return fmt.Errorf("forward child to %s: %w", decision.Target, err)
+		}
+		c.logger.Info("child task delegated", "task", child.TaskID, "target", decision.Target, "parent", child.ParentID)
+		return nil
+	}
+	// Local path (or nobody capable): the queue scheduler adopts it and
+	// forwardScheduled re-routes on later passes — the same semantics an
+	// enqueued root task already has.
+	if err := c.store.SetQueueMeta(ctx, child.TaskID, PriorityNormal, "", "", nil); err != nil {
+		return fmt.Errorf("queue meta for child: %w", err)
+	}
+	if err := c.store.Queue(ctx, child.TaskID, c.nodeID); err != nil {
+		return fmt.Errorf("queue child: %w", err)
+	}
+	c.queueWake()
+	return nil
+}
+
+// delegateMarker is the wire-level protocol an agent uses to ask its
+// Sub-MainAgent runtime for a delegated sub-task (whitepaper §4.2). It is a
+// line prefix rather than a structured channel because the only medium every
+// adapter shares is the agent's own stdout: claude_code, codex and any future
+// harness can all emit a plain line without adapter support.
+const delegateMarker = "PANDA_DELEGATE "
+
+// delegateRequest is the parsed PANDA_DELEGATE payload.
+type delegateRequest struct {
+	Intent   string   `json:"intent"`
+	Requires []string `json:"requires,omitempty"`
+	Title    string   `json:"title,omitempty"`
+	Node     string   `json:"node,omitempty"`
+}
+
+// parseDelegateRequest extracts the first well-formed PANDA_DELEGATE line
+// from agent output and returns the output with marker lines removed, so the
+// protocol envelope never reaches the user-facing result. A malformed marker
+// line is left in place — silently eating an agent's words is worse than
+// showing a stray protocol line.
+func parseDelegateRequest(stdout string) (delegateRequest, string, bool) {
+	var dr delegateRequest
+	found := false
+	var kept []string
+	for _, line := range strings.Split(stdout, "\n") {
+		trim := strings.TrimSpace(line)
+		if !found && strings.HasPrefix(trim, delegateMarker) {
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(trim, delegateMarker)), &dr); err == nil && dr.Intent != "" {
+				found = true
+				continue
+			}
+		}
+		kept = append(kept, line)
+	}
+	return dr, strings.Join(kept, "\n"), found
+}
+
+// delegateChild is the run()-time half of the promotion protocol (§4.2): it
+// spawns the requested causal child, dispatches it to the best node, and
+// waits for the result so the caller can fold the product into the agent's
+// next prompt. The waiter is registered before dispatch so a fast local
+// child cannot signal into the void. The wait is bounded — a timeout does
+// not kill the child; it completes detached and its result still lands on
+// this node's copy and relays upstream by the chain.
+func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateRequest) (string, error) {
+	in := TaskInput{
+		Title:         dr.Title,
+		Intent:        dr.Intent,
+		Requires:      dr.Requires,
+		PreferredNode: dr.Node,
+		Project:       parent.Project,
+		Authorized:    parent.Authorized,
+		Transport:     parent.Transport,
+		DeadlineUnix:  parent.DeadlineUnix,
+		UserLocale:    parent.GetUserLocale(),
+	}
+	if in.Title == "" {
+		in.Title = dr.Intent
+		if len(in.Title) > 60 {
+			in.Title = in.Title[:60]
+		}
+	}
+	child, err := c.SpawnChildTask(ctx, parent.TaskID, in)
+	if err != nil {
+		return "", err
+	}
+	waiter := make(chan bus.TaskResultPayload, 1)
+	c.waiters.Store(child.TaskID, waiter)
+	defer c.waiters.Delete(child.TaskID)
+	if err := c.DispatchChild(ctx, child, in); err != nil {
+		return "", err
+	}
+	c.EvTrace(ctx, parent.TaskID, "delegate_request", map[string]any{
+		"child":    child.TaskID,
+		"requires": dr.Requires,
+		"node":     dr.Node,
+		"chain":    child.Chain,
+	})
+	timeout := c.lease()
+	if parent.DeadlineUnix > 0 {
+		if d := time.Until(time.Unix(parent.DeadlineUnix, 0)); d > 0 && d < timeout {
+			timeout = d
+		}
+	}
+	select {
+	case r := <-waiter:
+		out := r.Stdout
+		if s := strings.TrimSpace(r.Stderr); s != "" {
+			out += "\nstderr: " + s
+		}
+		return fmt.Sprintf("child task %s finished (state %s):\n%s", child.TaskID, r.State, out), nil
+	case <-time.After(timeout):
+		return fmt.Sprintf("child task %s is still running past the wait window; its result will arrive asynchronously.", child.TaskID), nil
+	case <-ctx.Done():
+		return "", ctx.Err()
 	}
 }

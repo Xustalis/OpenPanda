@@ -27,6 +27,9 @@ func (h *handler) createReminder(w http.ResponseWriter, r *http.Request) {
 		Message      string  `json:"message"`
 		AfterMinutes float64 `json:"after_minutes"`
 		DueAt        string  `json:"due_at"`
+		// RepeatSeconds > 0 makes the reminder recurring: every claim pushes
+		// due_at forward by the interval instead of retiring the row.
+		RepeatSeconds float64 `json:"repeat_seconds"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
@@ -53,7 +56,8 @@ func (h *handler) createReminder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rem, err := h.reminders.Add(r.Context(), req.Message, due, "web")
+	rem, err := h.reminders.AddEvery(r.Context(), req.Message, due,
+		time.Duration(req.RepeatSeconds*float64(time.Second)), "web")
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

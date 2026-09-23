@@ -25,6 +25,7 @@ package main
 // mistyped duration_hint fails here rather than at daemon start).
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -35,7 +36,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"gopkg.in/yaml.v3"
@@ -58,11 +61,13 @@ func runCard(args []string) {
 		runCardAgent(rest)
 	case "manual":
 		runCardManual(rest)
+	case "invoke":
+		runCardInvoke(rest)
 	case "path":
 		fmt.Println(orDash(cardTargetPath("")))
 	default:
 		fmt.Fprintf(os.Stderr, "panda: unknown card subcommand %q\n", sub)
-		fmt.Fprintln(os.Stderr, "usage: panda card [show|rescan|edit|set|native|agent|manual|path]")
+		fmt.Fprintln(os.Stderr, "usage: panda card [show|rescan|edit|set|native|agent|manual|invoke|path]")
 		os.Exit(2)
 	}
 }
@@ -557,4 +562,104 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// runCardInvoke test-fires an actuator's declared driver command on this
+// host: `panda card invoke <actuator-id> [action] [name=value ...]`. It walks
+// the same path the daemon does when a task requiring the actuator lands —
+// plan resolution, action_spec placeholder substitution, tier gate, sandboxed
+// exec — so a hardware card is verifiable before the mesh starts routing
+// real work to it.
+func runCardInvoke(args []string) {
+	fs := flag.NewFlagSet("card invoke", flag.ExitOnError)
+	cardFlag := fs.String("card", "", "path to capabilities.yaml (default: discovered)")
+	intentFlag := fs.String("intent", "", "text substituted into {intent} placeholders")
+	authFlag := fs.Bool("authorize", false, "consent to a tier-2 (irreversible) actuator command")
+	dryFlag := fs.Bool("dry-run", false, "print the resolved argv without executing")
+	fs.Parse(args)
+	pos := fs.Args()
+	if len(pos) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: panda card invoke <actuator-id> [action] [name=value ...] [--intent text] [--authorize] [--dry-run]")
+		os.Exit(2)
+	}
+	path := cardTargetPath(*cardFlag)
+	card, err := ledger.LoadCard(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "panda: %v\n", err)
+		os.Exit(1)
+	}
+	var act *ledger.ActuatorProfile
+	for i := range card.Actuators {
+		if card.Actuators[i].ID == pos[0] || ledger.AbilityMatches(card.Actuators[i].ID, pos[0]) {
+			act = &card.Actuators[i]
+			break
+		}
+	}
+	if act == nil {
+		ids := make([]string, 0, len(card.Actuators))
+		for _, a := range card.Actuators {
+			ids = append(ids, a.ID)
+		}
+		fmt.Fprintf(os.Stderr, "panda: no actuator %q on card (have: %s)\n", pos[0], orDash(strings.Join(ids, ", ")))
+		os.Exit(1)
+	}
+	if act.Command == "" {
+		fmt.Fprintf(os.Stderr, "panda: actuator %q declares no command — it is a routing advertisement only\n", act.ID)
+		os.Exit(1)
+	}
+	action := ""
+	if len(pos) > 1 {
+		action = pos[1]
+	}
+	params := map[string]any{}
+	for _, kv := range pos[2:] {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			fmt.Fprintf(os.Stderr, "panda: bad parameter %q (want name=value)\n", kv)
+			os.Exit(2)
+		}
+		params[k] = parseInvokeScalar(v)
+	}
+	spec := &ledger.ActionSpec{TargetActuator: act.ID, Action: action, Parameters: params}
+	tier := defense.TierFromCommand(act.Command, act.Args...)
+	if act.Tier > tier {
+		tier = act.Tier
+	}
+	plan := commander.Plan{Kind: "native", Ability: act.ID, Command: act.Command,
+		Args: act.Args, Tier: tier, ActuatorID: act.ID}
+	if err := commander.SubstituteActionSpec(&plan, spec, *intentFlag); err != nil {
+		fmt.Fprintf(os.Stderr, "panda: %v\n", err)
+		os.Exit(1)
+	}
+	if *dryFlag {
+		fmt.Printf("%s %s\n", plan.Command, strings.Join(plan.Args, " "))
+		return
+	}
+	if err := defense.Authorize(plan.Tier, *authFlag); err != nil {
+		fmt.Fprintf(os.Stderr, "panda: %v (re-run with --authorize to consent)\n", err)
+		os.Exit(1)
+	}
+	res := commander.NewExecutor().Run(context.Background(), plan.Command, plan.Args...)
+	if res.Stdout != "" {
+		fmt.Print(res.Stdout)
+	}
+	if res.Stderr != "" {
+		fmt.Fprint(os.Stderr, res.Stderr)
+	}
+	if !res.OK {
+		os.Exit(res.ExitCode)
+	}
+}
+
+// parseInvokeScalar interprets a name=value parameter the way the task-side
+// action_spec would carry it: bare numbers and booleans become JSON scalars,
+// everything else stays a string.
+func parseInvokeScalar(s string) any {
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f
+	}
+	if b, err := strconv.ParseBool(s); err == nil {
+		return b
+	}
+	return s
 }

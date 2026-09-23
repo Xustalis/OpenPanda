@@ -10,30 +10,68 @@ import "errors"
 // node that already saw the task — a routing cycle.
 var ErrLoop = errors.New("delegation loop")
 
-// ErrChainTooDeep reports that the delegation chain has reached MaxChainDepth:
-// the task may not revisit any node (ErrLoop already guarantees that), but an
-// ever-growing simple path would still bound away — each hop is another copy
-// of the task, another lease to renew, another relay for every result.
+// ErrChainTooDeep reports that the delegation chain has reached MaxChainDepth.
 var ErrChainTooDeep = errors.New("delegation chain too deep")
 
-// MaxChainDepth bounds how many nodes one delegation may traverse. Loop
-// detection already terminates cycles; this caps the acyclic depth so a
-// misbehaving forward chain (sub-schedulers handing work onward indefinitely)
-// cannot grow without bound. 8 hops is far beyond any real network diameter.
+// ErrBudgetExceeded reports that the task delegation budget has been exhausted.
+var ErrBudgetExceeded = errors.New("delegation budget exceeded")
+
+// MaxChainDepth bounds how many nodes one delegation may traverse.
 const MaxChainDepth = 8
 
-// AppendChain returns chain with node appended, or ErrLoop if node is already
-// present (a routing cycle), or ErrChainTooDeep if the chain is already at
-// MaxChainDepth. A task must never revisit a node; rejecting the append bounds
-// the delegation depth and prevents message loops.
+// MaxVisitsPerNode bounds how many times any single node may appear in a delegation chain.
+const MaxVisitsPerNode = 2
+
+// MaxDelegationBudget is the default global maximum budget of total delegations across the mesh.
+const MaxDelegationBudget = 20
+
+// Budget tracks the remaining delegation and resource budgets for a task in the mesh.
+type Budget struct {
+	MaxDelegations int   `json:"max_delegations"`
+	TokenBudget    int64 `json:"token_budget,omitempty"`
+	DeadlineUnix   int64 `json:"deadline_unix,omitempty"`
+}
+
+// DefaultBudget returns standard initial budget constraints.
+func DefaultBudget() Budget {
+	return Budget{
+		MaxDelegations: MaxDelegationBudget,
+	}
+}
+
+// DecrementDelegation checks and deducts one delegation hop from the budget.
+func (b *Budget) DecrementDelegation() error {
+	if b.MaxDelegations <= 0 {
+		return ErrBudgetExceeded
+	}
+	b.MaxDelegations--
+	return nil
+}
+
+// AppendChain returns chain with node appended, or ErrLoop if appending node
+// creates an immediate self-hop, direct 2-node ping-pong, or exceeds
+// MaxVisitsPerNode. It returns ErrChainTooDeep if the chain is already at
+// MaxChainDepth. Legitimate multi-node revisits across the graph DAG are allowed.
 func AppendChain(chain []string, node string) ([]string, error) {
 	if len(chain) >= MaxChainDepth {
 		return nil, ErrChainTooDeep
 	}
+	// Immediate self-loop: a node delegating directly to itself.
+	if len(chain) > 0 && chain[len(chain)-1] == node {
+		return nil, ErrLoop
+	}
+	// Immediate 2-node ping-pong: delegating straight back to immediate sender.
+	if len(chain) >= 2 && chain[len(chain)-2] == node {
+		return nil, ErrLoop
+	}
+	visits := 0
 	for _, n := range chain {
 		if n == node {
-			return nil, ErrLoop
+			visits++
 		}
+	}
+	if visits >= MaxVisitsPerNode {
+		return nil, ErrLoop
 	}
 	return append(chain, node), nil
 }

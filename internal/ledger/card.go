@@ -71,6 +71,32 @@ func (c *Card) PruneUnavailableNative() []string {
 	return dropped
 }
 
+// PruneUnavailableActuators is PruneUnavailableNative for the §7.1 actuator
+// set: an actuator whose declared driver command does not resolve on this
+// host is dropped entirely. An actuator with NO command survives — it is a
+// routing advertisement that intentionally falls through to the agent tier —
+// but one promising a binary the host lacks would win the plan over an agent
+// and die at exec with 127, the exact phantom-ability failure mode above.
+func (c *Card) PruneUnavailableActuators() []string {
+	if len(c.Actuators) == 0 {
+		return nil
+	}
+	kept := make([]ActuatorProfile, 0, len(c.Actuators))
+	var dropped []string
+	for _, act := range c.Actuators {
+		if act.Command == "" || lookPath(act.Command) {
+			kept = append(kept, act)
+			continue
+		}
+		dropped = append(dropped, act.ID)
+	}
+	if len(dropped) == 0 {
+		return nil
+	}
+	c.Actuators = kept
+	return dropped
+}
+
 // validateResourceProfile sanity-checks a hand-declared resource profile. A zero
 // profile is allowed (the field is optional in MVP); a declared one must not
 // contain negative resource counts or an unknown duration hint. The sole

@@ -16,7 +16,7 @@ import (
 // — a chatty executor repeating the same milestone must not pad the card.
 func TestTaskProgressAdvanceDedups(t *testing.T) {
 	t0 := time.Now()
-	tp := newTaskProgress("Explain PPO", t0)
+	tp := newTaskProgress("Explain PPO", t0, i18n.English)
 	if tp.title != "Explain PPO" {
 		t.Fatalf("title = %q", tp.title)
 	}
@@ -36,7 +36,7 @@ func TestTaskProgressAdvanceDedups(t *testing.T) {
 // stage took: the gap to the next milestone, or the remaining total for the last.
 func TestTaskProgressTrail(t *testing.T) {
 	t0 := time.Now()
-	tp := newTaskProgress("build", t0)
+	tp := newTaskProgress("build", t0, i18n.English)
 	tp.advance("routed", t0.Add(2*time.Second))
 	tp.advance("running", t0.Add(5*time.Second))
 
@@ -56,7 +56,7 @@ func TestTaskProgressTrail(t *testing.T) {
 	if got := nilTP.trail(time.Second); got != nil {
 		t.Errorf("nil trail = %v, want nil", got)
 	}
-	if got := newTaskProgress("x", t0).trail(time.Second); got != nil {
+	if got := newTaskProgress("x", t0, i18n.English).trail(time.Second); got != nil {
 		t.Errorf("empty trail = %v, want nil", got)
 	}
 }
@@ -66,7 +66,7 @@ func TestTaskProgressTrail(t *testing.T) {
 func TestTaskProgressRenderLive(t *testing.T) {
 	th := newTheme(i18n.Locale("en"))
 	t0 := time.Now()
-	tp := newTaskProgress("Explain PPO", t0)
+	tp := newTaskProgress("Explain PPO", t0, i18n.English)
 
 	// Before any milestone: the spinner sits on a "submitting" arm, never inert.
 	out := tp.renderLive(th, "en", "SPIN", t0.Add(time.Second))
@@ -207,7 +207,7 @@ func TestRenderTaskMarkdown(t *testing.T) {
 func TestTaskProgressCompressesTools(t *testing.T) {
 	th := newTheme(i18n.Locale("zh-CN"))
 	t0 := time.Now()
-	tp := newTaskProgress("Deep Analysis", t0)
+	tp := newTaskProgress("Deep Analysis", t0, i18n.ChineseSimp)
 
 	// Advance milestone 1: route
 	tp.advance("路由至 本地节点", t0.Add(1*time.Second))
@@ -234,7 +234,7 @@ func TestTaskProgressCompressesTools(t *testing.T) {
 	// Live rendering should show operation count and current active tool
 	live := tp.renderLive(th, "zh-CN", "SPIN", t0.Add(20*time.Second))
 	if !strings.Contains(live, "15 项操作") {
-		t.Errorf("live render should show (15 项操作): %q", live)
+		t.Errorf("live render should show (15 ops): %q", live)
 	}
 	if !strings.Contains(live, "当前操作: Bash: grep -rn item_15") {
 		t.Errorf("live render should show active tool: %q", live)
@@ -250,13 +250,13 @@ func TestTaskProgressCompressesTools(t *testing.T) {
 		t.Fatalf("exec stage should have sealed 15 tools, got %d", tp.stages[1].toolCount)
 	}
 
-	// Trail should show compact summary with (15 项操作)
+	// Trail should show compact summary with (15 ops)
 	trail := tp.trail(25 * time.Second)
 	if len(trail) != 3 {
 		t.Fatalf("trail should contain exactly 3 lines, got %d: %v", len(trail), trail)
 	}
 	if !strings.Contains(trail[1], "15 项操作") {
-		t.Errorf("trail exec stage should carry (15 项操作): %q", trail[1])
+		t.Errorf("trail exec stage should carry (15 ops): %q", trail[1])
 	}
 }
 

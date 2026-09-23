@@ -141,3 +141,40 @@ func TestSubmitKeepsFileTaskLocalWhenCapable(t *testing.T) {
 		t.Fatalf("expected local execution, got stdout: %q", result.Stdout)
 	}
 }
+
+func TestSubmitFallsBackToDTNWhenTargetNonLive(t *testing.T) {
+	ctx := context.Background()
+	c := newCore(t, "local-node", "")
+
+	peerCard := ledger.Card{
+		Device:        "remote-worker",
+		ResourceClass: "Full",
+		Native: []ledger.NativeAbility{
+			{ID: "gpu:train", Command: "true"},
+		},
+		Capacity: ledger.Capacity{CPUCores: 64, RAMGB: 256, MaxConcurrent: 10},
+	}
+	if err := ledger.Register(c.db, peerCard, "remote-worker", 1); err != nil {
+		t.Fatalf("register peer: %v", err)
+	}
+	capJSON, _ := json.Marshal(peerCard.Capacity)
+	if err := ledger.Heartbeat(c.db, "remote-worker", "online", string(capJSON)); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+
+	// Submit task requiring gpu:train - target has no live WebSocket connection
+	task, result, err := c.Submit(ctx, TaskInput{
+		Title:    "train model",
+		Intent:   "train",
+		Requires: []string{"gpu:train"},
+	})
+	if err != nil {
+		t.Fatalf("submit should succeed with async DTN queueing, got: %v", err)
+	}
+	if task.State != StateQueued {
+		t.Fatalf("task state = %s, want %s (queued for DTN)", task.State, StateQueued)
+	}
+	if result.State != StateQueued {
+		t.Fatalf("result state = %s, want %s", result.State, StateQueued)
+	}
+}

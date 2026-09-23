@@ -60,7 +60,15 @@ func resourceEfficiency(n ledger.Node) float64 {
 // node half-full score the same efficiency, but the narrow node's single queued
 // task still blocks longer in absolute terms.
 func waitSignal(n ledger.Node) float64 {
-	return 1 / (1 + float64(n.Capacity.CurrentTasks))
+	// The count is remote-advertised data and can arrive negative — handleHeartbeat
+	// clamps it before it lands in the directory, but a hand-built or legacy row
+	// still reaches this formula. A negative depth would score >1 (busier than
+	// idle looks better than idle), rewarding exactly the broken rows.
+	cur := n.Capacity.CurrentTasks
+	if cur < 0 {
+		cur = 0
+	}
+	return 1 / (1 + float64(cur))
 }
 
 // tierSignal normalizes the scheduler tier (Micro=1, Standard=5, Full=10) to
