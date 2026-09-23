@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from 'preact/hooks'
-import { api, type AuditEntry, type DelegationMetric, type UpdateStatus } from '../api/client'
+import {
+  api,
+  type AuditEntry,
+  type DelegationMetric,
+  type DoctorReport,
+  type UpdateStatus,
+} from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
 import { t } from '../i18n'
 
@@ -53,6 +59,10 @@ export function SystemView() {
         </div>
         <UpdateCard />
       </div>
+
+      <DoctorCard />
+      <CostCard />
+      <ContextCard />
 
       <div class="detail-block">
         <h2 class="block-title">{t('system.metrics')}</h2>
@@ -235,6 +245,162 @@ function UpdateNotes({ notes }: { notes?: string }) {
       <pre>{notes}</pre>
     </details>
   )
+}
+
+/** The `/doctor` self-check suite: each check renders its i18n key label with
+ *  the k=v evidence pairs inline, failures first. */
+function DoctorCard() {
+  const [report, setReport] = useState<DoctorReport | null>(null)
+  const [error, setError] = useState('')
+  const [running, setRunning] = useState(false)
+
+  const run = useCallback(async () => {
+    setRunning(true)
+    setError('')
+    try {
+      setReport(await api.doctor())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRunning(false)
+    }
+  }, [])
+  useEffect(() => {
+    void run()
+  }, [run])
+
+  const checks = report ? [...report.checks].sort((a, b) => Number(a.ok) - Number(b.ok)) : []
+
+  return (
+    <div class="detail-block">
+      <div class="doctor-head">
+        <h2 class="block-title">{t('system.doctor')}</h2>
+        {report && (
+          <span class={`badge ${report.problems === 0 ? 'green' : 'red'}`}>
+            {report.problems === 0
+              ? t('system.doctorOk')
+              : t('system.doctorProblems', { n: report.problems })}
+          </span>
+        )}
+        <button class="btn small" disabled={running} onClick={() => void run()}>
+          {running ? t('system.doctorRunning') : t('system.doctorRerun')}
+        </button>
+      </div>
+      {error && <p class="gate-error">{error}</p>}
+      {!error && !report && <p class="dim">{t('common.loading')}</p>}
+      {report && (
+        <ul class="doctor-list">
+          {checks.map((c, i) => (
+            <li key={i} class={`doctor-check ${c.ok ? 'ok' : 'bad'}`}>
+              <span class={`doctor-mark ${c.ok ? 'ok' : 'bad'}`} aria-hidden="true">
+                {c.ok ? '✓' : '✗'}
+              </span>
+              <span class="doctor-label">{t(c.key, c.key)}</span>
+              {c.pairs && c.pairs.length > 0 && (
+                <span class="doctor-pairs dim mono">
+                  {c.pairs.filter((_, i) => i % 2 === 1).join(' · ')}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** The `/cost` rollup: total spend, calls, success rate, per-executor split. */
+function CostCard() {
+  const { data: cost, error } = useAsync(() => api.cost(), [])
+  return (
+    <div class="detail-block">
+      <h2 class="block-title">{t('system.cost')}</h2>
+      {error && <p class="gate-error">{error}</p>}
+      {!error && !cost && <p class="dim">{t('common.loading')}</p>}
+      {cost && cost.calls === 0 && <p class="dim">{t('system.noCost')}</p>}
+      {cost && cost.calls > 0 && (
+        <>
+          <div class="cost-stats">
+            <Stat label={t('system.costTotal')} value={`$${cost.total_cost_usd.toFixed(4)}`} />
+            <Stat label={t('system.costTokens')} value={fmtNum(cost.total_tokens)} />
+            <Stat label={t('system.costCalls')} value={String(cost.calls)} />
+            <Stat label={t('system.costRate')} value={`${Math.round(cost.success_rate * 100)}%`} />
+            {cost.since > 0 && (
+              <Stat label={t('system.costSince')} value={new Date(cost.since * 1000).toLocaleDateString()} />
+            )}
+          </div>
+          <table class="table">
+            <thead>
+              <tr>
+                <th>{t('system.mExecutor')}</th>
+                <th>{t('system.costCalls')}</th>
+                <th>{t('system.mTokens')}</th>
+                <th>{t('system.costUsd')}</th>
+                <th>{t('system.mSuccess')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cost.by_executor.map((e) => (
+                <tr key={e.executor}>
+                  <td class="mono">{e.executor}</td>
+                  <td class="dim">{e.calls}</td>
+                  <td class="dim">{fmtNum(e.tokens)}</td>
+                  <td class="dim">${e.cost_usd.toFixed(4)}</td>
+                  <td class="dim">
+                    {e.calls > 0 ? `${Math.round((e.successes / e.calls) * 100)}%` : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** The `/context` snapshot: what the next ask will run with. */
+function ContextCard() {
+  const { data: ctx, error } = useAsync(() => api.contextInfo(), [])
+  if (error) return null
+  if (!ctx) return null
+  const rows: Array<[string, string]> = []
+  if (ctx.node_name) rows.push([t('system.ctxNode'), ctx.node_name])
+  if (ctx.model?.model) rows.push([t('system.ctxModel'), `${ctx.model.alias} · ${ctx.model.model}`])
+  if (ctx.work_dir) rows.push([t('system.ctxWorkDir'), ctx.work_dir])
+  if (ctx.project) rows.push([t('system.ctxProject'), ctx.project])
+  if (ctx.project_work_dir) rows.push([t('system.ctxProjectDir'), ctx.project_work_dir])
+  if (ctx.memory_files !== undefined) rows.push([t('system.ctxMemory'), String(ctx.memory_files)])
+  rows.push([t('system.ctxCard'), ctx.has_card ? t('common.yes') : t('common.no')])
+  return (
+    <div class="detail-block">
+      <h2 class="block-title">{t('system.context')}</h2>
+      <p class="hint">{t('system.contextHelp')}</p>
+      <dl class="ctx-grid">
+        {rows.map(([k, v]) => (
+          <div key={k} class="ctx-row">
+            <dt class="dim">{k}</dt>
+            <dd class="mono ctx-val">{v}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  )
+}
+
+function Stat(props: { label: string; value: string }) {
+  return (
+    <div class="stat">
+      <div class="stat-value">{props.value}</div>
+      <div class="stat-label dim">{props.label}</div>
+    </div>
+  )
+}
+
+function fmtNum(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`
+  return n.toLocaleString()
 }
 
 function MetricRow({ m }: { m: DelegationMetric }) {

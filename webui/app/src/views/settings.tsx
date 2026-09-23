@@ -17,6 +17,7 @@ import { MemoryView } from './memory'
 import { SkillsView } from './skills'
 import { RemindersView } from './reminders'
 import { SystemView } from './system'
+import { ModelsSection } from './models'
 
 type ApiType = 'anthropic' | 'openai'
 
@@ -114,7 +115,15 @@ export function SettingsView(props: {
 
         <div class="settings-body">
           {section === 'general' && <GeneralSection />}
-          {section === 'models' && <ModelSection />}
+          {section === 'models' && (
+            <>
+              <ModelsSection />
+              <details class="raw-toggle settings-advanced">
+                <summary>{t('settings.advancedModel')}</summary>
+                <ModelSection />
+              </details>
+            </>
+          )}
           {section === 'policy' && <PolicySection />}
           {section === 'agents' && <AgentsSection />}
           {section === 'mcp' && <MCPSection />}

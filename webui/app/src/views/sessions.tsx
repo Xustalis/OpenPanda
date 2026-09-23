@@ -4,6 +4,7 @@ import {
   askSessionStream,
   isAbort,
   type AskResult,
+  type FsFileEntry,
   type NodeInfo,
   type Session,
   type SessionDiff,
@@ -13,12 +14,14 @@ import {
 import { PandaAscii, PandaMark } from '../brand/panda'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
+import { navigateView } from '../nav'
 import { Markdown } from '../md/render'
 import { toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
-import { buildCommands } from '../components/palette'
+import { buildCommands, type Command } from '../components/palette'
 import { rank } from '../components/fuzzy'
 import { patchStreaming, slashQuery } from '../components/chatstate'
+import { atQuery, expandFileRefs, exportMarkdown, exportFilename } from '../components/attach'
 import { isLiveSession } from '../components/session-guard'
 import DecisionOrbit from '../components/orbit'
 import FleetTopologyCard from '../components/fleet'
@@ -58,6 +61,27 @@ interface ChatMsg extends SessionTurn {
    *  persisted with the turn, so a thread reloaded from disk comes back
    *  without it. */
   thought?: string
+  /** @file paths that were expanded into fenced blocks for this prompt —
+   *  shown as attachment chips on the user's bubble. */
+  files?: string[]
+}
+
+/** One row in the composer's completion menu — a slash command, a palette
+ *  destination, or a filesystem path. Palette `Command`s satisfy the shape:
+ *  a run() that ignores the argument is still a valid (arg?) => void. */
+interface CompletionItem {
+  id: string
+  label: string
+  hint?: string
+  group?: string
+  run(arg?: string): void
+}
+
+function fmtSize(n?: number): string {
+  if (n === undefined) return ''
+  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)}M`
+  if (n >= 1024) return `${(n / 1024).toFixed(1)}k`
+  return `${n}B`
 }
 
 /** The sessions view: a thread rail on the left (codex / claude code style)
@@ -126,6 +150,11 @@ export function SessionsView({
   // The input as of the last Escape: Escape hides the menu until the text
   // changes again, so the slash prefix alone cannot force it back open.
   const [completeDismissed, setCompleteDismissed] = useState('')
+  // Caret position in the composer — @file completion is caret-scoped, not
+  // tail-scoped, so editing mid-line still completes the token under it.
+  const [caret, setCaret] = useState(0)
+  // Filesystem rows for the @file completion menu (debounced query).
+  const [atFiles, setAtFiles] = useState<FsFileEntry[]>([])
   // Whether the transcript is parked at the bottom. Autoscrolling on every
   // delta is right while you are watching the reply arrive and wrong the
   // moment you scroll up to re-read something, so follow only when pinned.
@@ -358,14 +387,30 @@ export function SessionsView({
 
   async function send(e?: Event) {
     e?.preventDefault()
-    let prompt = input.trim()
-    if (!prompt || busy) return
-    let id = activeId
+    const raw = input.trim()
+    if (!raw || busy || inflight.current) return
+    // A slash line is a command, never a prompt — the REPL's rule.
+    if (raw.startsWith('/') && dispatchSlash(raw)) {
+      setInput('')
+      setCompleteDismissed('')
+      return
+    }
+    // Claim the slot before the async file expansion — a second Enter during
+    // the /api/fs/read round-trips must not start a parallel ask.
     const ctrl = new AbortController()
     inflight.current = ctrl
+    let id = activeId
     const keepAlive = acquireKeepAlive()
     let patch: (fn: (m: ChatMsg) => ChatMsg) => void = () => {}
+    let prompt = raw
+    let attached: string[] = []
     try {
+      // @file references become inline fenced blocks before the prompt
+      // leaves the composer — "explain @main.go" works without pasting the
+      // file. Inside try so a rejected expansion still clears inflight.
+      const expanded = await expandFileRefs(raw, (p) => api.fsRead(p))
+      prompt = expanded.prompt
+      attached = expanded.attached
       // No thread yet: create one titled after the first prompt.
       if (!id) {
         const s = await api.createSession(prompt.slice(0, 48), project || selectedProject || undefined)
@@ -394,7 +439,7 @@ export function SessionsView({
         setIsPinned(true)
         setMsgs((ms) => [
           ...ms,
-          { role: 'user', text: prompt, k: localMsgId() },
+          { role: 'user', text: raw, files: attached.length ? attached : undefined, k: localMsgId() },
           { role: 'assistant', text: '', streaming: true, k: localMsgId() },
         ])
       }
@@ -496,26 +541,154 @@ export function SessionsView({
     }
   }
 
-  // `/` completion (parity with the CLI REPL's Tab completion): the composer
-  // borrows the ⌘K palette's command list — one slash and a few letters open
-  // a view, flip the theme, or log out without leaving the keyboard.
+  // TUI-parity slash commands: the ones that act inside this view (new
+  // thread, export, clear) plus short hops to the views backing the REPL's
+  // informational verbs (/cost → system, /model → models registry…). Not
+  // memoized: several run()s close over live render state (msgs for /export,
+  // the thread list for /new) and a stale closure is a menu item that
+  // silently does the wrong thing. A dozen small objects — free to rebuild.
+  const chatCommands: CompletionItem[] = (() => {
+    const grp = t('sessions.cmdGroup')
+    const go = (view: string) => () => navigateView(view)
+    return [
+      { id: 'cmd:new', group: grp, label: '/new', hint: t('sessions.cmdNew'), run: () => void newChat() },
+      { id: 'cmd:export', group: grp, label: '/export', hint: t('sessions.cmdExport'), run: exportSession },
+      { id: 'cmd:clear', group: grp, label: '/clear', hint: t('sessions.cmdClear'), run: () => setInput('') },
+      { id: 'cmd:cost', group: grp, label: '/cost', hint: t('sessions.cmdCost'), run: go('settings:system') },
+      { id: 'cmd:context', group: grp, label: '/context', hint: t('sessions.cmdContext'), run: go('settings:system') },
+      { id: 'cmd:doctor', group: grp, label: '/doctor', hint: t('sessions.cmdDoctor'), run: go('settings:system') },
+      { id: 'cmd:model', group: grp, label: '/model', hint: t('sessions.cmdModel'), run: go('settings:models') },
+      { id: 'cmd:tasks', group: grp, label: '/tasks', hint: t('sessions.cmdTasks'), run: go('queue') },
+      { id: 'cmd:plans', group: grp, label: '/plans', hint: t('sessions.cmdPlans'), run: go('plans') },
+      { id: 'cmd:sessions', group: grp, label: '/sessions', hint: t('sessions.cmdSessions'), run: () => setRailOpen((v) => !v) },
+      {
+        id: 'cmd:read',
+        group: grp,
+        label: '/read',
+        hint: t('sessions.cmdRead'),
+        run: (arg) => setInput(arg ? `@${arg} ` : '@'),
+      },
+    ]
+  })()
+
+  // `/` completion (parity with the CLI REPL's Tab completion): TUI verbs
+  // first, then the ⌘K palette's destinations — one slash and a few letters
+  // run an action, open a view, flip the theme, or log out.
   const slashToken = slashQuery(input)
-  const commands = useMemo(() => buildCommands(onLogout), [onLogout])
-  const completeShown = useMemo(
-    () =>
-      slashToken === null || input === completeDismissed
-        ? []
-        : rank(commands, slashToken, (c) => [c.label, c.alias ?? '', c.id.replace(':', ' ')]),
-    [commands, slashToken, input, completeDismissed],
-  )
+  const commands: CompletionItem[] = [
+    ...chatCommands,
+    ...(buildCommands(onLogout) as CompletionItem[]),
+  ]
+
+  // @file completion: the caret sits on an @token → list matching paths.
+  const atTok = atQuery(input, caret)
+  useEffect(() => {
+    if (!atTok) {
+      setAtFiles([])
+      return
+    }
+    let alive = true
+    const timer = setTimeout(() => {
+      api
+        .fsFiles(atTok.token)
+        .then((r) => alive && setAtFiles(r.entries.slice(0, 12)))
+        .catch(() => alive && setAtFiles([]))
+    }, 120)
+    return () => {
+      alive = false
+      clearTimeout(timer)
+    }
+  }, [atTok?.token])
+
+  // Not memoized for the same reason as chatCommands — insertAtRef splices
+  // the token against the live input/caret, and a memoized item captures
+  // whichever render produced it.
+  const fileItems: CompletionItem[] = atFiles.map((f) => ({
+    id: `file:${f.path}`,
+    label: f.name + (f.dir ? '/' : ''),
+    hint: f.dir ? 'dir' : fmtSize(f.size),
+    run: () => insertAtRef(f),
+  }))
+
+  const completeShown: CompletionItem[] = (() => {
+    if (input === completeDismissed) return []
+    if (slashToken !== null) {
+      return rank(commands, slashToken, (c) => [c.label, c.id.replace(':', ' '), 'alias' in c ? (c as Command).alias ?? '' : ''])
+    }
+    if (atTok) return fileItems
+    return []
+  })()
   // Ranking reorders on every keystroke; clamp instead of trusting the old
   // index still points at a row.
   const completeIdx = Math.min(completeCursor, Math.max(completeShown.length - 1, 0))
 
-  function acceptCompletion(run: () => void) {
+  /** Replace the @token under the caret with the picked path; directories
+   *  keep the token open so the menu refetches one level deeper. */
+  function insertAtRef(f: FsFileEntry) {
+    if (!atTok) return
+    const next = `${input.slice(0, atTok.start)}@${f.path}${f.dir ? '/' : ' '}${input.slice(caret)}`
+    const newCaret = atTok.start + f.path.length + (f.dir ? 2 : 2)
+    setInput(next)
+    setCaret(newCaret)
+    setCompleteDismissed('')
+    requestAnimationFrame(() => {
+      composer.current?.focus()
+      composer.current?.setSelectionRange(newCaret, newCaret)
+    })
+  }
+
+  function acceptCompletion(item: CompletionItem) {
+    if (item.id.startsWith('file:')) {
+      item.run()
+      return
+    }
+    // Text already typed after the command name is its argument: `/read
+    // foo.go` + Enter runs /read with "foo.go", not a bare menu pick that
+    // would silently drop the path.
+    const arg = /^\/\S+\s+(.+)$/.exec(input)?.[1]?.trim() || undefined
     setInput('')
     setCompleteDismissed('')
-    run()
+    item.run(arg)
+  }
+
+  /** `/export`: serialize the live transcript to Markdown and download it —
+   *  the web equivalent of the REPL writing chat-<ts>.md to disk. */
+  function exportSession() {
+    if (msgs.length === 0) return
+    const blob = new Blob(
+      [exportMarkdown(msgs, { project: session?.project ?? activeProject, title: session?.title })],
+      { type: 'text/markdown' },
+    )
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = exportFilename(session?.title)
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  /** `/cmd args` typed straight into the box and submitted: run the matching
+   *  chat command instead of sending it as a prompt (the REPL's rule — a
+   *  slash line is a command, never a question). Returns false when nothing
+   *  matched, so send() can fall through to a normal ask. */
+  function dispatchSlash(text: string): boolean {
+    const m = /^\/(\S+)\s*(.*)$/.exec(text)
+    if (!m) return false
+    const [, name, arg = ''] = m
+    const cmd = chatCommands.find((c) => c.label === `/${name}`)
+    if (cmd) {
+      cmd.run(arg.trim())
+      return true
+    }
+    // Palette destinations count too — `/queue` navigates like the palette.
+    const pal = (buildCommands(onLogout) as CompletionItem[]).find(
+      (c) => c.id === `go:${name}` || c.id === `settings:${name}`,
+    )
+    if (pal) {
+      pal.run()
+      return true
+    }
+    return false
   }
 
   return (
@@ -707,6 +880,17 @@ export function SessionsView({
               ± {diff.changes.length} {t('sessions.changes')}
             </button>
           )}
+          <CostChip />
+          {session && msgs.length > 0 && (
+            <button
+              class="icon-btn"
+              onClick={exportSession}
+              data-tip={t('sessions.export')}
+              aria-label={t('sessions.export')}
+            >
+              ⤓
+            </button>
+          )}
         </header>
 
         {diffOpen && diff && (
@@ -807,7 +991,7 @@ export function SessionsView({
                     aria-selected={i === completeIdx}
                     class={`complete-item${i === completeIdx ? ' active' : ''}`}
                     onMouseMove={() => setCompleteCursor(i)}
-                    onClick={() => acceptCompletion(c.run)}
+                    onClick={() => acceptCompletion(c)}
                   >
                     <span class="complete-label">{c.label}</span>
                     <span class="complete-hint">{c.hint ?? c.group}</span>
@@ -824,8 +1008,11 @@ export function SessionsView({
               onInput={(e) => {
                 const el = e.target as HTMLTextAreaElement
                 setInput(el.value)
+                setCaret(el.selectionStart)
                 autoGrow(el)
               }}
+              onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart)}
+              onClick={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart)}
               onKeyDown={(e) => {
                 if (completeShown.length > 0) {
                   // While the menu is open the navigation keys belong to it:
@@ -834,7 +1021,7 @@ export function SessionsView({
                   if (e.key === 'Tab' || e.key === 'Enter') {
                     e.preventDefault()
                     const cmd = completeShown[completeIdx]
-                    if (cmd) acceptCompletion(cmd.run)
+                    if (cmd) acceptCompletion(cmd)
                     return
                   }
                   if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) {
@@ -942,6 +1129,28 @@ function ChatEmpty(props: {
   )
 }
 
+/** Session-cost chip in the chat header — the `/cost` rollup, condensed to
+ *  the two numbers that matter mid-conversation. Click through to System. */
+function CostChip() {
+  const { data: cost } = useAsync(() => api.cost().catch(() => null), [])
+  if (!cost || cost.calls === 0) return null
+  return (
+    <a
+      class="badge cost-chip mono"
+      href="#/settings?tab=system"
+      data-tip={t('sessions.costTip')}
+    >
+      ${cost.total_cost_usd.toFixed(3)} · {fmtSizeTokens(cost.total_tokens)}
+    </a>
+  )
+}
+
+function fmtSizeTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M tok`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k tok`
+  return `${n} tok`
+}
+
 function ChatBubble(props: {
   msg: ChatMsg
   onOpenTask(id: string): void
@@ -962,7 +1171,15 @@ function ChatBubble(props: {
           <div class="bubble-slot-row slot-chat">
             <p class="msg-text u-m-0 u-w-100">{msg.text}</p>
           </div>
-          <div class="bubble-slot-row slot-meta" />
+          {msg.files && msg.files.length > 0 && (
+            <div class="bubble-slot-row slot-meta msg-files">
+              {msg.files.map((f) => (
+                <span key={f} class="attach-chip mono" title={f}>
+                  📎 {f.split('/').pop()}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     )
