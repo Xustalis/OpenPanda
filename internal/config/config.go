@@ -212,9 +212,21 @@ type NetworkConfig struct {
 	PanelAddr           string   `yaml:"panel_addr"`             // webui sidecar HTTP listener; loopback by default (P1-24)
 	PanelToken          string   `yaml:"panel_token"`            // Bearer token guarding /api/* in the webui sidecar
 	SharedSecret        string   `yaml:"shared_secret"`          // HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it
-	Peers               []string `yaml:"peers"`                  // e.g. "worker-1.your-tailnet.ts.net:7836"
+	Peers               []string `yaml:"peers"`                  // e.g. "worker-1.your-tailnet.ts.net:7836", or "punch:<node-id>" for a NAT-bound peer reachable only via hole punching
 	MaxConnections      int      `yaml:"max_connections"`        // global concurrent WS connection limit (0 = unlimited)
 	MaxConnectionsPerIP int      `yaml:"max_connections_per_ip"` // per-remote-IP concurrent WS connection limit (0 = unlimited)
+	// UDPListen is the farsky datagram-plane bind (encrypted AEAD envelopes +
+	// NAT-punch frames). "" follows listen_addr's port on the same host —
+	// the default keeps punching available whenever the WS listener is
+	// reachable-shaped. "off" disables the plane (constrained nodes that
+	// must not open a second socket).
+	UDPListen string `yaml:"udp_listen"`
+	// STUNServers optionally adds external reflexive-address discovery
+	// (RFC 5389 binding). Empty is the privacy-preserving default: nodes
+	// answer binding requests for each other, and a hello reply already
+	// reports the peer's observed IP, so most meshes never need a public
+	// STUN server.
+	STUNServers []string `yaml:"stun_servers"`
 }
 
 // StorageConfig controls local persistence.
@@ -573,6 +585,11 @@ func (c *Config) Validate() error {
 	if hasEphemeralSuffix(c.Node.Identity) {
 		return fmt.Errorf("config: node.identity %q ends with an ambiguous ephemeral suffix (-<8 hex digits>); please use a stable identity without this suffix", c.Node.Identity)
 	}
+	if c.Network.UDPListen != "" && c.Network.UDPListen != "off" {
+		if _, _, err := net.SplitHostPort(c.Network.UDPListen); err != nil {
+			return fmt.Errorf("config: network.udp_listen %q is not host:port or \"off\": %w", c.Network.UDPListen, err)
+		}
+	}
 	for _, addr := range []struct{ name, value string }{
 		{"network.listen_addr", c.Network.ListenAddr},
 		{"network.panel_addr", c.Network.PanelAddr},
@@ -585,8 +602,17 @@ func (c *Config) Validate() error {
 		}
 	}
 	for i, peer := range c.Network.Peers {
+		if strings.HasPrefix(peer, "punch:") {
+			// A NAT-bound peer entry names a node id, not an address — the
+			// daemon reaches it through the punch handshake instead of a
+			// TCP dial.
+			if strings.TrimPrefix(peer, "punch:") == "" {
+				return fmt.Errorf("config: network.peers[%d] %q has an empty node id after punch:", i, peer)
+			}
+			continue
+		}
 		if _, _, err := net.SplitHostPort(peer); err != nil {
-			return fmt.Errorf("config: network.peers[%d] %q is not host:port: %w", i, peer, err)
+			return fmt.Errorf("config: network.peers[%d] %q is not host:port (or punch:<node-id>): %w", i, peer, err)
 		}
 	}
 	switch c.Injection.Model {
@@ -1051,6 +1077,12 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("OPENPANDA_SHARED_SECRET"); v != "" {
 		c.Network.SharedSecret = v
+	}
+	if v := os.Getenv("OPENPANDA_UDP_LISTEN"); v != "" {
+		c.Network.UDPListen = v
+	}
+	if v := os.Getenv("OPENPANDA_STUN_SERVERS"); v != "" {
+		c.Network.STUNServers = strings.Split(v, ",")
 	}
 	if v := os.Getenv("OPENPANDA_DB_PATH"); v != "" {
 		c.Storage.DBPath = v

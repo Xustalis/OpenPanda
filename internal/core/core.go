@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"path/filepath"
 	"strconv"
@@ -262,6 +263,27 @@ type Core struct {
 	// relay memory, keyed by bundle id, expiring with the bundle's deadline.
 	// Guarded by mu.
 	relayLog map[string]dtnRelay
+
+	// Farsky datagram plane (§9.2). udp is the shared socket; udpPort its
+	// bound port (advertised in hello). udpRoutes maps peer id -> confirmed
+	// endpoint (a punch/ack or sealed envelope binds it; sendTo falls back
+	// to it when no WS conn exists). udpCands/udpPeerPort/udpPeerIP hold the
+	// raw reachability hints a peer has published: candidate strings, its
+	// listener port, and the IP we observed its conn from. udpReflexive and
+	// observedIP are OUR OWN public hints (STUN answer / peer's You field).
+	// All guarded by udpMu; punching is the session table, guarded by
+	// punchMu and keyed by session nonce.
+	udpMu        sync.Mutex
+	udp          *bus.UDPConn
+	udpPort      int
+	udpRoutes    map[string]*net.UDPAddr
+	udpCands     map[string][]string
+	udpPeerPort  map[string]int
+	udpPeerIP    map[string]string
+	udpReflexive string
+	observedIP   string
+	punchMu      sync.Mutex
+	punching     map[string]*punchSession
 }
 
 // dtnRelay is one bundle's forwarding record on this node.
@@ -886,6 +908,12 @@ func (c *Core) Shutdown(ctx context.Context) {
 		delete(c.peers, id)
 	}
 	c.mu.Unlock()
+	c.udpMu.Lock()
+	if c.udp != nil {
+		_ = c.udp.Close()
+		c.udp = nil
+	}
+	c.udpMu.Unlock()
 	c.node.Shutdown(ctx)
 }
 
@@ -1057,12 +1085,13 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 		return nil, err
 	}
 	env, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, bus.HelloPayload{
-		NodeID: c.nodeID,
-		Ver:    version.Version,
-		Card:   card,
-		Ts:     ts,
-		Nonce:  nonce,
-		Sig:    bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
+		NodeID:  c.nodeID,
+		Ver:     version.Version,
+		Card:    card,
+		Ts:      ts,
+		Nonce:   nonce,
+		Sig:     bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
+		UDPPort: c.UDPPort(),
 	})
 	if err != nil {
 		conn.Close()
@@ -1231,6 +1260,19 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 		c.handleAgentYield(ctx, env)
 	case bus.MsgDTNBundle:
 		c.handleDTNBundle(ctx, env)
+	case bus.MsgPunchOffer, bus.MsgPunchReady:
+		// Coordination envelopes are relayable: To names the node that must
+		// punch, and an intermediate hop forwards rather than handling. The
+		// payload TTL bounds the relays; msg-id dedup kills the residual loop.
+		if env.To != "" && env.To != c.nodeID {
+			c.forwardPunch(ctx, env)
+			return
+		}
+		if env.Type == bus.MsgPunchOffer {
+			c.handlePunchOffer(ctx, env)
+		} else {
+			c.handlePunchReady(ctx, env)
+		}
 	default:
 		c.logger.Warn("unhandled message type", "type", env.Type, "from", env.From)
 	}
@@ -1372,6 +1414,19 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 			c.logger.Warn("upsert remote card", "peer", p.NodeID, "err", err)
 		}
 	}
+	// Farsky reachability hints: the peer's datagram port plus the IP its
+	// conn arrived from give us the punch candidate <observed>:<port>; the
+	// reply's You teaches us our own public IP for the offers we send.
+	observed := ""
+	if host, _, err := net.SplitHostPort(conn.RemoteAddr()); err == nil {
+		observed = host
+	}
+	c.learnPeerUDP(p.NodeID, p.UDPPort, nil, observed)
+	if p.You != "" {
+		c.udpMu.Lock()
+		c.observedIP = p.You
+		c.udpMu.Unlock()
+	}
 	c.logger.Info("peer hello", "peer", p.NodeID, "ver", p.Ver)
 	// A return channel to this peer exists again: redeliver any terminal
 	// results parked while it was disconnected (review P0-2). This is the
@@ -1397,13 +1452,24 @@ func (c *Core) sendHelloReply(conn *bus.Conn, to string) {
 	if err != nil {
 		return
 	}
+	// The reply carries what the far end needs to reach us without TCP:
+	// our datagram port for punching, and You — the IP its own conn arrived
+	// from, which for a NAT-bound peer is its public address (free reflexive
+	// discovery, no STUN needed). You is transport-observed, not signed: a
+	// forged one only buys the forger a wrong candidate list.
+	observed := ""
+	if host, _, err := net.SplitHostPort(conn.RemoteAddr()); err == nil {
+		observed = host
+	}
 	envOut, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, bus.HelloPayload{
-		NodeID: c.nodeID,
-		Ver:    version.Version,
-		Card:   card,
-		Ts:     ts,
-		Nonce:  nonce,
-		Sig:    bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
+		NodeID:  c.nodeID,
+		Ver:     version.Version,
+		Card:    card,
+		Ts:      ts,
+		Nonce:   nonce,
+		Sig:     bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
+		UDPPort: c.UDPPort(),
+		You:     observed,
 	})
 	if err != nil {
 		return
@@ -1467,13 +1533,23 @@ func (c *Core) stateOscillates(key, hash string) bool {
 	return false
 }
 
-// sendTo sends env to peer id. Returns ErrNoPeer if unknown.
+// sendTo sends env to peer id over whichever track is up: the WS conn first
+// (ordered, frame-sized), then the datagram route a punch established. A
+// datagram that cannot carry the frame fails the same way a missing peer
+// does — the caller's outbox parking is the next hop for both.
 func (c *Core) sendTo(id string, env bus.Envelope) error {
 	conn := c.connFor(id)
-	if conn == nil {
-		return errors.New("peer not connected: " + id)
+	if conn != nil {
+		return conn.Send(env)
 	}
-	return conn.Send(env)
+	c.udpMu.Lock()
+	u := c.udp
+	addr := c.udpRoutes[id]
+	c.udpMu.Unlock()
+	if u != nil && addr != nil {
+		return u.SendEnvelope(env, addr)
+	}
+	return errors.New("peer not connected: " + id)
 }
 
 // newUUID mints a fresh message id. It returns an error rather than panicking
