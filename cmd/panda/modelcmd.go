@@ -19,8 +19,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -298,12 +300,117 @@ func (r *repl) modelListProviders() {
 	r.outln(p.Muted("  " + i18n.T(r.loc, "repl.model.add.usage")))
 }
 
-// modelAdd registers a built-in provider, needing only its API key (or no key
-// at all for local providers). `model` is optional and overrides the
-// provider's default; `alias` is optional (defaults to provider id or model id
-// when the provider id is already registered with another model). If a key
-// is already known for the provider, it can be reused automatically.
+// modelAddArgs is the parsed form of `/model add`: positional args plus the
+// flag set that tailors a registration — wire dialect, custom endpoint,
+// context window, thinking mode, extra params/headers, and whether the
+// connectivity probe runs before the entry is persisted.
+type modelAddArgs struct {
+	positional []string
+	apiType    string // --type openai|anthropic
+	baseURL    string // --url
+	ctxWindow  int    // --ctx
+	thinking   string // --thinking on|off|auto
+	budget     int    // --budget
+	verify     bool   // default; --force/--no-test disables
+	params     map[string]any
+	headers    map[string]string
+}
+
+// parseModelAddArgs lifts the "--flag [value]" switches out of args, leaving
+// the positional provider/model/key/alias list behind. Values may be given
+// as --flag=value or --flag value; --param and --header repeat.
+func parseModelAddArgs(args []string) modelAddArgs {
+	a := modelAddArgs{verify: true}
+	for i := 0; i < len(args); i++ {
+		s := args[i]
+		if !strings.HasPrefix(s, "-") || s == "-" {
+			a.positional = append(a.positional, s)
+			continue
+		}
+		name := strings.TrimLeft(s, "-")
+		val := ""
+		hasVal := false
+		if j := strings.IndexByte(name, '='); j >= 0 {
+			name, val, hasVal = name[:j], name[j+1:], true
+		}
+		take := func() string {
+			if hasVal {
+				return val
+			}
+			if i+1 < len(args) {
+				i++
+				return args[i]
+			}
+			return ""
+		}
+		switch strings.ToLower(name) {
+		case "t", "type", "api-type", "apitype":
+			a.apiType = strings.ToLower(take())
+		case "url", "base-url", "base_url", "baseurl":
+			a.baseURL = take()
+		case "ctx", "context", "context-window", "context_window":
+			a.ctxWindow, _ = strconv.Atoi(take())
+		case "thinking":
+			a.thinking = take()
+		case "budget", "thinking-budget":
+			a.budget, _ = strconv.Atoi(take())
+		case "param", "params": // --param temperature=0.7 (repeatable)
+			if kv := take(); kv != "" {
+				if k, v, ok := strings.Cut(kv, "="); ok {
+					if a.params == nil {
+						a.params = map[string]any{}
+					}
+					a.params[k] = scalarOrString(v)
+				}
+			}
+		case "header", "headers": // --header X-Tenant=blue (repeatable)
+			if kv := take(); kv != "" {
+				if k, v, ok := strings.Cut(kv, "="); ok {
+					if a.headers == nil {
+						a.headers = map[string]string{}
+					}
+					a.headers[k] = v
+				}
+			}
+		case "force", "f", "no-test", "no-verify", "skip-test":
+			a.verify = false
+		default:
+			a.positional = append(a.positional, s)
+		}
+	}
+	return a
+}
+
+// scalarOrString parses a --param value into its natural JSON type — numbers
+// and booleans — falling back to a plain string so `temperature=0.2` lands as
+// a float rather than "0.2".
+func scalarOrString(v string) any {
+	var out any
+	if err := json.Unmarshal([]byte(v), &out); err == nil {
+		return out
+	}
+	return v
+}
+
+// isBaseURL reports whether s looks like an endpoint URL the custom provider
+// expects as its first positional argument.
+func isBaseURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// modelAdd registers a model — a built-in provider (key only) or a custom
+// relay endpoint (base_url + wire dialect + key). The entry is probed with a
+// one-word completion before it is persisted so a typo'd URL or wrong key
+// never lands in the registry; --force skips the probe (offline, batch).
+//
+//	/model add <provider> [model] <key> [alias]
+//	/model add custom <baseURL> [model] <key> [alias] [--type anthropic]
+//	/model add ollama [model]                    (no key)
+//	flags: --type, --url, --ctx N, --thinking on|off|auto, --budget N,
+//	       --param k=v, --header k=v, --force
 func (r *repl) modelAdd(args []string) {
+	pa := parseModelAddArgs(args)
+	args = pa.positional
 	if len(args) == 0 {
 		r.outln(i18n.T(r.loc, "repl.model.add.usage"))
 		return
@@ -314,67 +421,108 @@ func (r *repl) modelAdd(args []string) {
 		r.outln(i18n.Tf(r.loc, "repl.model.add.badprovider", "provider", id))
 		return
 	}
+	rest := args[1:]
+	var mc config.ModelConfig
 	var model, key, alias string
-	if p.NoAuth {
-		if len(args) >= 2 {
-			model = args[1]
+	if id == "custom" {
+		// Relay stations take their endpoint first: `custom <baseURL>
+		// [model] <key> [alias]`. The URL may also come from --url.
+		base := pa.baseURL
+		if base == "" && len(rest) > 0 && isBaseURL(rest[0]) {
+			base = rest[0]
+			rest = rest[1:]
 		}
-		if len(args) >= 3 {
-			alias = args[2]
+		if base == "" {
+			r.outln(i18n.T(r.loc, "repl.model.add.nourl"))
+			return
+		}
+		model, key, alias = splitModelKeyAlias(rest)
+		mc = config.ModelConfig{
+			Provider: "custom",
+			APIType:  config.APITypeOpenAI,
+			BaseURL:  base,
+			APIKey:   key,
+			Model:    model,
+			// A keyless relay is a local-style endpoint: mark it no-auth so
+			// the client does not hard-fail with ErrNoKey before the probe.
+			NoAuth: key == "",
 		}
 	} else {
-		switch len(args) {
-		case 1:
-			if existingKey := r.findProviderKey(id); existingKey != "" {
-				key = existingKey
-			} else {
-				r.outln(i18n.Tf(r.loc, "repl.model.add.nokey", "provider", id))
-				return
-			}
-		case 2:
-			// If args[1] does not look like an API key and a key is already known,
-			// treat args[1] as the model name.
-			if existingKey := r.findProviderKey(id); existingKey != "" && !looksLikeAPIKey(args[1]) {
-				model = args[1]
-				key = existingKey
-			} else {
-				key = args[1]
-			}
-		case 3:
-			if looksLikeAPIKey(args[1]) {
-				key, alias = args[1], args[2]
-			} else if looksLikeAPIKey(args[2]) {
-				model, key = args[1], args[2]
-			} else if existingKey := r.findProviderKey(id); existingKey != "" {
-				model, alias, key = args[1], args[2], existingKey
-			} else {
-				model, key = args[1], args[2]
-			}
+		model, key, alias = r.splitProviderArgs(p, rest)
+		if key == "" && !p.NoAuth {
+			r.outln(i18n.Tf(r.loc, "repl.model.add.nokey", "provider", id))
+			return
+		}
+		mc, _ = providers.ModelConfig(id, model, key)
+	}
+	// Flag overrides apply to both paths: --url rebases a built-in provider
+	// onto a relay, --type switches the wire dialect, --ctx/--thinking/--budget
+	// tune the model entry, --param/--header extend the request.
+	if pa.baseURL != "" {
+		mc.BaseURL = pa.baseURL
+	}
+	if pa.apiType != "" {
+		if pa.apiType != config.APITypeOpenAI && pa.apiType != config.APITypeAnthropic {
+			r.outln(i18n.Tf(r.loc, "repl.model.add.badtype", "type", pa.apiType))
+			return
+		}
+		mc.APIType = pa.apiType
+	}
+	if pa.ctxWindow > 0 {
+		mc.ContextWindow = pa.ctxWindow
+	}
+	if pa.thinking != "" {
+		switch strings.ToLower(pa.thinking) {
+		case "on", "off", "auto":
+			mc.Thinking = strings.ToLower(pa.thinking)
 		default:
-			if looksLikeAPIKey(args[1]) {
-				key, alias = args[1], args[2]
-			} else {
-				model, key, alias = args[1], args[2], args[3]
-			}
+			r.outln(i18n.Tf(r.loc, "repl.model.add.badthinking", "value", pa.thinking))
+			return
 		}
 	}
-	mc, _ := providers.ModelConfig(id, model, key)
+	if pa.budget > 0 {
+		mc.ThinkingBudget = pa.budget
+	}
+	mc.Params = pa.params
+	mc.Headers = pa.headers
+	if mc.Model == "" {
+		r.outln(i18n.T(r.loc, "repl.model.add.nomodel"))
+		return
+	}
 
 	if alias == "" {
 		alias = id
 		// If an existing model already uses the provider id as alias but
-		// points to a different model, derive a distinct alias to avoid
-		// silent overwriting.
-		if model != "" {
+		// points to a different endpoint, derive a distinct alias — keep
+		// suffixing until nothing clashes, so a third relay serving the same
+		// model name never silently overwrites the second.
+		collides := func(a string) bool {
 			for _, existing := range r.cfg.Models {
-				if existing.Alias() == id && existing.Model != mc.Model {
-					alias = model
-					break
+				if existing.Alias() == a &&
+					(existing.Model != mc.Model || existing.BaseURL != mc.BaseURL || existing.Provider != mc.Provider) {
+					return true
 				}
 			}
+			return false
+		}
+		if collides(alias) && mc.Model != "" {
+			alias = mc.Model
+		}
+		base := alias
+		for i := 2; collides(alias); i++ {
+			alias = fmt.Sprintf("%s-%d", base, i)
 		}
 	}
 	mc.Name = alias
+
+	// Verify before persist: a one-word completion proves the endpoint,
+	// dialect and key actually work, so a broken entry never reaches the
+	// registry. --force skips the probe (offline shells, batch setup).
+	if pa.verify {
+		if !r.verifyModel(mc) {
+			return
+		}
+	}
 
 	// Upsert into the registry, then persist.
 	replaced := false
@@ -397,6 +545,108 @@ func (r *repl) modelAdd(args []string) {
 		_ = r.applyModel(mc)
 	}
 	r.outln(i18n.Tf(r.loc, "repl.model.add.done", "alias", alias, "model", mc.Model))
+}
+
+// verifyModel probes mc with a one-word completion and reports the outcome.
+// A reachable endpoint that answers proves the base URL, wire dialect, key
+// and model id all line up — the strongest check an add can run.
+func (r *repl) verifyModel(mc config.ModelConfig) bool {
+	client, err := entry.NewClient(mc)
+	if err != nil {
+		r.outln(i18n.Tf(r.loc, "repl.model.add.verifyfail", "err", err.Error()))
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_, err = client.Complete(ctx, "You are a connectivity test.", "Reply with exactly: OK")
+	if err != nil {
+		r.outln(i18n.Tf(r.loc, "repl.model.add.verifyfail", "err", err.Error()))
+		r.outln(i18n.T(r.loc, "repl.model.add.verifyhint"))
+		return false
+	}
+	r.outln(i18n.T(r.loc, "repl.model.add.verified"))
+	return true
+}
+
+// splitModelKeyAlias separates [model] <key> [alias] positionals using the
+// API-key heuristic: the token that looks like a secret is the key, tokens
+// before it are the model, tokens after the alias.
+func splitModelKeyAlias(args []string) (model, key, alias string) {
+	var pos []string
+	for _, a := range args {
+		if looksLikeAPIKey(a) && key == "" {
+			key = a
+			continue
+		}
+		pos = append(pos, a)
+	}
+	if key != "" {
+		// A token was recognised as the key; the rest are model/alias.
+		switch len(pos) {
+		case 1:
+			model = pos[0]
+		default:
+			model, alias = pos[0], pos[1]
+		}
+		return model, key, alias
+	}
+	// No token looked like a key: with two+ positionals the last is the key
+	// and the first the model; a single positional is the model alone.
+	switch len(pos) {
+	case 1:
+		model = pos[0]
+	case 2:
+		model, key = pos[0], pos[1]
+	default:
+		model, key = pos[0], pos[len(pos)-1]
+		if len(pos) >= 3 {
+			alias = pos[1]
+		}
+	}
+	return model, key, alias
+}
+
+// splitProviderArgs resolves the built-in provider's [model] <key> [alias]
+// positionals, reusing a stored key when the provider already has one.
+func (r *repl) splitProviderArgs(p providers.Provider, args []string) (model, key, alias string) {
+	if p.NoAuth {
+		if len(args) >= 1 {
+			model = args[0]
+		}
+		if len(args) >= 2 {
+			alias = args[1]
+		}
+		return model, key, alias
+	}
+	switch len(args) {
+	case 0:
+		key = r.findProviderKey(p.ID)
+	case 1:
+		// If args[0] does not look like an API key and a key is already known,
+		// treat args[0] as the model name.
+		if existingKey := r.findProviderKey(p.ID); existingKey != "" && !looksLikeAPIKey(args[0]) {
+			model, key = args[0], existingKey
+		} else {
+			key = args[0]
+		}
+	case 2:
+		if looksLikeAPIKey(args[0]) {
+			key, alias = args[0], args[1]
+		} else if looksLikeAPIKey(args[1]) {
+			model, key = args[0], args[1]
+		} else if existingKey := r.findProviderKey(p.ID); existingKey != "" {
+			model, alias, key = args[0], args[1], existingKey
+		} else {
+			model, key = args[0], args[1]
+		}
+	default:
+		if looksLikeAPIKey(args[0]) {
+			key, alias = args[0], args[1]
+		} else {
+			model, key, alias = args[0], args[1], args[2]
+		}
+	}
+	return model, key, alias
 }
 
 // modelRemove drops a registered model by alias or model id.
@@ -468,6 +718,22 @@ func (r *repl) modelTest(args []string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	if mc.Model == "" {
+		// A bare custom endpoint carries no default model — pick the first
+		// advertised model so `model test custom <url> <key>` still probes
+		// something real instead of submitting an empty model field.
+		models, lerr := client.ListModels(ctx)
+		if lerr != nil || len(models) == 0 {
+			r.outln(i18n.Tf(r.loc, "repl.model.test.fail", "err", i18n.T(r.loc, "repl.model.add.nomodel")))
+			return
+		}
+		mc.Model = models[0].ID
+		client, err = entry.NewClient(mc)
+		if err != nil {
+			r.outln(i18n.Tf(r.loc, "repl.model.test.fail", "err", err.Error()))
+			return
+		}
+	}
 	answer, err := client.Complete(ctx, "You are a connectivity test.", "Reply with exactly: OK")
 	if err != nil {
 		r.outln(i18n.Tf(r.loc, "repl.model.test.fail", "err", err.Error()))
@@ -499,16 +765,41 @@ func (r *repl) resolveModel(args []string, verb string) (config.ModelConfig, str
 		r.outln(i18n.Tf(r.loc, "repl.model.switch.none", "name", name))
 		return config.ModelConfig{}, "", false
 	}
+	rest := args[1:]
+	var base, model string
+	if p.ID == "custom" {
+		if len(rest) > 0 && isBaseURL(rest[0]) {
+			base = rest[0]
+			rest = rest[1:]
+		}
+		// custom <url> [model] <key>: a bare custom endpoint has no default
+		// model, so the name is taken from the positionals — without it the
+		// probe would send an empty model field and always fail.
+		if len(rest) >= 2 {
+			model = rest[0]
+			rest = rest[1:]
+		}
+	}
 	var key string
-	if len(args) >= 2 {
-		key = args[1]
+	if len(rest) >= 1 {
+		key = rest[0]
 	} else if existingKey := r.findProviderKey(p.ID); existingKey != "" {
 		key = existingKey
-	} else if !p.NoAuth {
+	} else if !p.NoAuth && p.ID != "custom" {
+		// A keyless custom endpoint is legitimate (local gateways), so the
+		// probe decides whether auth was needed — not the argument check.
 		r.outln(i18n.Tf(r.loc, "repl.model.add.nokey", "provider", name))
 		return config.ModelConfig{}, "", false
 	}
-	mc, _ := providers.ModelConfig(name, "", key)
+	mc, _ := providers.ModelConfig(name, model, key)
+	if base != "" {
+		mc.BaseURL = base
+		mc.NoAuth = key == ""
+	}
+	if p.ID == "custom" && mc.BaseURL == "" {
+		r.outln(i18n.T(r.loc, "repl.model.add.nourl"))
+		return config.ModelConfig{}, "", false
+	}
 	return mc, name, true
 }
 
