@@ -1,7 +1,7 @@
 {
   "name": "openpanda-web",
   "private": true,
-  "version": "0.0.8",
+  "version": "0.0.9-beta",
   "type": "module",
   "description": "OpenPanda web console — Vite + Preact + TypeScript, embedded into the panel binary at build time",
   "scripts": {

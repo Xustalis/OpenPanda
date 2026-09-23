@@ -162,8 +162,8 @@ To connect a second device (preview capability): run `panda pair` on device A to
 
 | Version | Theme |
 |---|---|
-| **v0.0.8** (current baseline) | Single-machine multi-agent orchestration, fully usable: intent classification, dispatch, supervision loop, failover, tiered approval, prompt language policy |
-| **v0.0.9** | Sharper agent control: supervision verdicts, agent routing stability, execution transparency |
+| **v0.0.8** (stable baseline) | Single-machine multi-agent orchestration, fully usable: intent classification, dispatch, supervision loop, failover, tiered approval, prompt language policy |
+| **v0.0.9-beta** (current) | Hybrid transport/DTN architecture complete: latency-weighted mesh routing, on-wire DTN bundles, token budgets, shadow copies, actuator path — plus the full model-configuration surface and a rebuilt model-management TUI |
 | **v0.0.10** | Multi-device collaboration as the headline: cross-node delegation, lease protection, resumable execution — hardened and field-tested |
 | **v0.0.x (beyond)** | Stability, performance, and edge-case tuning |
 | **v0.1.0** | Desktop capabilities and stronger control & management — commercial-grade quality |

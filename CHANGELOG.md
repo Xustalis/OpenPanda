@@ -40,7 +40,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
-## [Unreleased]
+## [0.0.9-beta] - 2026-09-23
+
+The v0.0.9 beta completes the hybrid transport/DTN architecture: mesh routing is now latency-weighted, DTN bundles actually move over live links and park for offline ones, delegation token budgets are enforced with real accounting, preempted work survives via shadow copies, and hardware actuators gained an execution path. It additionally gives delegated agents a managed path back into the node's own tooling, lands the full model-configuration surface, and rebuilds the model-management TUI around a full-width registry plus a single-screen form editor.
 
 ### Added
 
