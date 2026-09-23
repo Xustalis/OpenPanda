@@ -46,6 +46,7 @@ var migrations = []Migration{
 	{Version: 21, Name: "add_artifact_push_outbox", Apply: migrateV21},
 	{Version: 22, Name: "add_task_outbox_via", Apply: migrateV22},
 	{Version: 23, Name: "add_task_agent_session", Apply: migrateV23},
+	{Version: 24, Name: "add_reminders_repeat", Apply: migrateV24},
 }
 
 // migrateV23 adds tasks.agent_session_id and tasks.agent_session_node: the
@@ -540,6 +541,19 @@ func migrateV8(tx MigrationExec) error {
 		return err
 	}
 	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(fired_at, due_at)`)
+	return err
+}
+
+// migrateV24 adds repeat_seconds to reminders: 0 keeps the one-shot
+// semantics; >0 reschedules the row on every claim instead of retiring it.
+// A database created between v8's introduction and any wipe may predate the
+// table entirely, so the ALTER only runs when it exists.
+func migrateV24(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "reminders")
+	if err != nil || !exists {
+		return err
+	}
+	_, err = tx.Exec(`ALTER TABLE reminders ADD COLUMN repeat_seconds INTEGER NOT NULL DEFAULT 0`)
 	return err
 }
 

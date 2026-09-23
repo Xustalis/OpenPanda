@@ -98,10 +98,12 @@ func reminderList(args []string) {
 	}
 	for _, r := range list {
 		status := "pending"
-		if r.FiredAt != 0 {
+		if r.RepeatSeconds > 0 {
+			status = fmt.Sprintf("every %s", time.Duration(r.RepeatSeconds)*time.Second)
+		} else if r.FiredAt != 0 {
 			status = "fired"
 		}
-		fmt.Printf("#%-4d %-16s %-8s %s\n",
+		fmt.Printf("#%-4d %-16s %-12s %s\n",
 			r.ID, time.Unix(r.DueAt, 0).Format("2006-01-02 15:04"), status, r.Message)
 	}
 }
@@ -111,6 +113,7 @@ func reminderAdd(args []string) {
 	configPath := fs.String("config", "", "path to config.yaml")
 	after := fs.String("after", "", "relative delay, e.g. 30s / 10m / 2h / 1h30m")
 	at := fs.String("at", "", `absolute local time, e.g. "2026-08-18 15:00"`)
+	every := fs.String("every", "", "repeat interval, e.g. 30m / 1h — refires until removed")
 	fs.Parse(args)
 
 	message := strings.TrimSpace(strings.Join(fs.Args(), " "))
@@ -147,6 +150,16 @@ func reminderAdd(args []string) {
 		}
 	}
 
+	var repeat time.Duration
+	if *every != "" {
+		d, derr := time.ParseDuration(*every)
+		if derr != nil || d <= 0 {
+			fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.reminder.badEvery", "value", *every))
+			os.Exit(2)
+		}
+		repeat = d
+	}
+
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
@@ -157,7 +170,7 @@ func reminderAdd(args []string) {
 	}
 	defer done()
 
-	r, err := store.Add(context.Background(), message, due, "cli")
+	r, err := store.AddEvery(context.Background(), message, due, repeat, "cli")
 	if err != nil {
 		fatal("add reminder", err)
 	}
@@ -166,6 +179,9 @@ func reminderAdd(args []string) {
 		return
 	}
 	fmt.Println(i18n.Tf(i18n.Detect(), "cli.reminder.added", "id", strconv.FormatInt(r.ID, 10), "due", due.Format("2006-01-02 15:04:05")))
+	if repeat > 0 {
+		fmt.Println(i18n.Tf(i18n.Detect(), "cli.reminder.repeats", "every", repeat.String()))
+	}
 	fmt.Printf("  %s\n", message)
 }
 
