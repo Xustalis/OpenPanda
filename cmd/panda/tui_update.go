@@ -238,7 +238,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinner.TickMsg:
 		m.animTick++
-		if m.mode != modeAsking {
+		// Outside a turn the spinner still has work to do while a model
+		// probe or catalogue fetch is in flight in the config surfaces.
+		if m.mode != modeAsking && !m.formTesting && !m.formFetching && !m.panelTesting {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -307,12 +309,53 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode != modeModelWizard && !(m.mode == modeOnboarding && m.onboardingStep == onboardingStepModelWizard) {
 			return m, nil // the user navigated away mid-probe
 		}
-		m.wizardTesting = false
+		m.formTesting = false
 		if msg.err == nil {
 			// Connectivity proven — persist and activate immediately.
 			return m.finalizeWizard()
 		}
-		m.wizardTestErr = msg.err.Error()
+		m.formTestErr = msg.err.Error()
+		return m, nil
+	case modelListMsg:
+		if m.mode != modeModelWizard && !(m.mode == modeOnboarding && m.onboardingStep == onboardingStepModelWizard) {
+			return m, nil // stale fetch — the user moved on
+		}
+		m.formFetching = false
+		if msg.err != nil {
+			m.formFetchErr = msg.err.Error()
+			return m, nil
+		}
+		if len(msg.models) == 0 {
+			m.formFetchErr = i18n.T(m.loc, "tui.mform.fetchEmpty")
+			return m, nil
+		}
+		items := make([]SelectionItem, len(msg.models))
+		for i, id := range msg.models {
+			items[i] = SelectionItem{Index: i + 1, ID: id, Title: id}
+		}
+		sl := NewSelectionList(i18n.T(m.loc, "tui.mform.pickTitle"), items)
+		sl.Boxed = true
+		sl.FooterHints = i18n.T(m.loc, "tui.wizard.confirmBack")
+		// Pre-highlight the current model value when it appears in the list.
+		for i, it := range items {
+			if it.ID == m.wizardModel {
+				sl.Cursor = i
+				break
+			}
+		}
+		m.selectionList = sl
+		m.formPicking = true
+		return m, nil
+	case panelTestMsg:
+		m.panelTesting = false
+		m.panelTestName = msg.alias
+		m.panelTestDur = msg.dur
+		m.panelTestOK = msg.err == nil
+		if msg.err != nil {
+			m.panelTestErr = msg.err.Error()
+		} else {
+			m.panelTestErr = ""
+		}
 		return m, nil
 	case skillsHubIndexMsg:
 		if m.mode != modeSkillsHub {
@@ -327,10 +370,24 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// wizardTestMsg carries the model wizard's connectivity probe result back to
+// wizardTestMsg carries the model form's connectivity probe result back to
 // the Update loop (nil error = the endpoint answered).
 type wizardTestMsg struct {
 	err error
+}
+
+// modelListMsg carries a fetched /models catalogue back to the form's picker.
+type modelListMsg struct {
+	models []string
+	err    error
+}
+
+// panelTestMsg is the result of the model panel's inline connectivity probe:
+// which alias was probed, the outcome, and how long it took.
+type panelTestMsg struct {
+	alias string
+	err   error
+	dur   time.Duration
 }
 
 // interruptWindow is how long a second Esc/Ctrl-C during a turn counts as

@@ -53,14 +53,8 @@ const (
 type wizardStep int
 
 const (
-	wizardStepProvider  wizardStep = iota // Choose provider
-	wizardStepBaseURL                     // Enter base URL (custom/relay only)
-	wizardStepAPIType                     // Choose wire dialect (custom/relay only)
-	wizardStepAPIKey                      // Enter API Key
-	wizardStepModelName                   // Enter Model Name
-	wizardStepThinking                    // Choose thinking mode (auto/on/off)
-	wizardStepContext                     // Enter context window (blank = default)
-	wizardStepTest                        // Connectivity probe → save
+	wizardStepProvider wizardStep = iota // Choose provider
+	wizardStepForm                       // Single-screen field editor (tui_modelcfg.go)
 )
 
 type onboardingStep int
@@ -140,21 +134,36 @@ type tuiModel struct {
 	onboardingStep onboardingStep
 	termsCursor    int // 0 = Agree [Y], 1 = Decline [N]
 
-	// Model wizard state. wizardInput is the shared edit buffer for the text
-	// steps; each step loads its own value into it on entry and saves it back
-	// on advance.
-	wizardStep         wizardStep
-	wizardProvider     string
-	wizardKey          string
-	wizardModel        string
-	wizardBaseURL      string // custom/relay endpoint
-	wizardAPIType      string // "openai" | "anthropic" (custom/relay)
-	wizardThinking     string // "auto" | "on" | "off"
-	wizardContext      string // context window, raw text
-	wizardInput        string
-	wizardTestErr      string // non-empty once the connectivity probe failed
-	wizardTesting      bool   // probe in flight (wizardStepTest)
-	wizardEditAlias    string // alias being edited ("" = adding a new entry)
+	// Model wizard/form state. The wizard* fields are the canonical values the
+	// form edits (via mfieldGet/mfieldSet) and wizardConfig assembles; the
+	// form* fields drive the editor's focus, cursor positions, picker overlay
+	// and probe/fetch status.
+	wizardStep      wizardStep
+	wizardProvider  string
+	wizardKey       string
+	wizardModel     string
+	wizardBaseURL   string // endpoint (prefilled from catalogue; editable)
+	wizardAPIType   string // "openai" | "anthropic" (custom/relay)
+	wizardThinking  string // "auto" | "on" | "off"
+	wizardContext   string // context window, raw text
+	wizardAlias     string // display name in the register
+	wizardEditAlias string // alias being edited ("" = adding a new entry)
+
+	form         []mfield // the single-screen editor's rows
+	formFocus    int      // focused row
+	formErr      string   // validation error shown under the form
+	formTesting  bool     // connectivity probe in flight
+	formTestErr  string   // non-empty once the probe failed
+	formFetching bool     // /models catalogue fetch in flight
+	formFetchErr string   // fetch failure shown under the form
+	formPicking  bool     // fetched-models picker overlay is up
+
+	// Panel state: the inline connectivity probe on the highlighted entry.
+	panelTesting       bool
+	panelTestName      string // alias the last probe ran against
+	panelTestOK        bool
+	panelTestErr       string
+	panelTestDur       time.Duration
 	confirmDeleteModel bool
 	pendingDeleteModel string
 
