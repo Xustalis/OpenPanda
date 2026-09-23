@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // The root Bubble Tea model for the full-screen interactive `panda` front end.
@@ -125,6 +127,12 @@ type tuiModel struct {
 	// limit" — so a scroll that somehow arrives before the first frame is not
 	// clamped against a limit of zero.
 	scrollLimit *int
+
+	// activity caches the per-day task counts behind the welcome banner's
+	// heatmap. The banner renders inside the value-receiver View on every
+	// frame, so the store read lives behind a TTL'd pointer every model copy
+	// shares — the same trick scrollLimit uses.
+	activity *activityCache
 
 	// Navigation lists and panels
 	listKind      listKind
@@ -294,6 +302,7 @@ func newTUIModel(r *repl) tuiModel {
 		started:     time.Now(),
 		chatHistory: cHist,
 		scrollLimit: newScrollLimit(),
+		activity:    &activityCache{},
 	}
 }
 

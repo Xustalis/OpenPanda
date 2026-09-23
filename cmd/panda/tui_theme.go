@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // The TUI's lipgloss theme. It derives every colour from the same brand facts

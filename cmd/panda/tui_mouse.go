@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // Mouse ownership for the full-screen front end.

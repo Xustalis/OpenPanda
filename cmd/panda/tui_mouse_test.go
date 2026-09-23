@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // Regression cover for the mouse-ownership fix (docs/confirmed-issues-fix-report.md

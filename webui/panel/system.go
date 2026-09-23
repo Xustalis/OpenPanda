@@ -56,7 +56,7 @@ func (h *handler) healthz(w http.ResponseWriter, r *http.Request) {
 
 // getVersion serves GET /api/version — the web equivalent of `panda version`.
 func (h *handler) getVersion(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]string{"version": versionpkg.Version})
+	writeJSON(w, map[string]string{"version": versionpkg.Version, "codename": versionpkg.Codename})
 }
 
 // metricJSON is the wire form of a core.DelegationMetric row.

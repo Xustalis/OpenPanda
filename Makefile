@@ -93,6 +93,23 @@ build-windows-amd64: fmt-check vet
 build-windows-arm64: fmt-check vet
 	GOOS=windows GOARCH=arm64 $(GO) build -ldflags "-s -w" -o $(BIN)-windows-arm64.exe ./cmd/panda
 
+# Lite build (farsky): no embedded web console, no Bubble Tea TUI — the
+# smallest resident footprint for Raspberry Pi, embedded Linux, and pure
+# CLI nodes. Everything else is identical: daemon, mesh, DTN, queue, ask.
+build-lite: fmt-check vet
+	$(GO) build -tags lite -ldflags "$(LDFLAGS_DEV)" -o $(BIN)-lite ./cmd/panda
+
+# Cross-compiled lite variants for the devices lite exists for. linux-armv7
+# targets 32-bit Pi OS; the 64-bit pair covers Pi 4/5 64-bit and SBCs.
+build-lite-linux-amd64: fmt-check vet
+	GOOS=linux GOARCH=amd64 $(GO) build -tags lite -ldflags "-s -w" -o $(BIN)-lite-linux-amd64 ./cmd/panda
+
+build-lite-linux-arm64: fmt-check vet
+	GOOS=linux GOARCH=arm64 $(GO) build -tags lite -ldflags "-s -w" -o $(BIN)-lite-linux-arm64 ./cmd/panda
+
+build-lite-linux-armv7: fmt-check vet
+	GOOS=linux GOARCH=arm GOARM=7 $(GO) build -tags lite -ldflags "-s -w" -o $(BIN)-lite-linux-armv7 ./cmd/panda
+
 # Release: version-tagged binaries for every target platform into dist/.
 # One `make web` up front — the embedded console is platform-independent.
 release: web fmt-check vet release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64

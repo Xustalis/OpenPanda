@@ -40,6 +40,33 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
+## [Unreleased]
+
+The v0.0.9 line continues under the codename **Periapsis**: a datagram plane and NAT traversal for peers that cannot hold a WebSocket, encrypted DTN payloads, a lite build for constrained nodes, and a task-pipeline reliability pass covering how the model drives the queue.
+
+### Added
+
+- **UDP datagram plane (farsky track)** — `internal/bus/udp.go` adds a second transport: AES-256-GCM-sealed envelopes and HMAC-signed punch frames on a shared UDP socket, keyed from the mesh secret under a domain separator and bounded to one 1400-byte datagram. `network.udp_listen` defaults to the `listen_addr` port on the wildcard interface (every datagram is authenticated, so the any-interface bind exposes nothing a LAN could not already see); `"off"` disables the plane. `sendTo` still prefers the WebSocket conn and falls back to a confirmed UDP route when none exists.
+- **NAT hole punching coordinated through the mesh** — `network.peers` accepts `punch:<node-id>` entries for peers that cannot be dialed. A `punch_offer`/`punch_ready` pair travels over the live conn or is relayed along the link-state graph (TTL-bounded, re-enveloped at each hop with the origin preserved in the payload's `Src`), then both sides spray signed punch frames at the exchanged candidates until an ack confirms the pinhole. The bound endpoint becomes a UDP route refreshed by 25 s keepalives and re-punched when lost.
+- **Reflexive-address discovery without an external dependency** — the same UDP socket answers RFC 5389 binding requests, so any mesh member with a public address is the fleet's STUN server (`internal/bus/stun.go`, zero dependencies); `network.stun_servers` adds external servers only for deployments that run or trust them. Hello replies also carry `you` — the IP the listener observed — so a NAT-bound node learns its public address for free.
+- **Encrypted DTN bundle payloads (v2)** — `bus.Bundle.Seal` encrypts the payload with AES-256-GCM under a bundle-domain key derived from the mesh secret, binding the signed header as associated data; `Open` unseals v2 and verifies v1 cleartext bundles, so mixed-version meshes keep working. Relay custody stores only the sealed blob — intermediate hops forward ciphertext they cannot read.
+- **Lite build for constrained nodes** — `go build -tags lite` / `make build-lite-linux-{amd64,arm64,armv7}` drops the embedded web console (the panel endpoint serves a small notice instead) and the Bubble Tea TUI while keeping the daemon, mesh, DTN, queue, ask and the classic line REPL — a slimmer binary without the frontend dependency chain for Raspberry Pi and CLI-only devices. `install.sh --lite` selects the `panda-<ver>-lite-<os>-<arch>` archive and accepts 32-bit ARM.
+- **Release codename** — `internal/version.Codename` names this line "Periapsis"; `panda version`, `panda --version`, `/api/version` and the system view display it.
+- **Queue-management tool family for the ask engine** — `taskq_approve` (Tier-2, so the model cannot widen a gate it is about to walk through), `taskq_reject`, `taskq_clear` (history/review/all scopes) and batch `task_ids` on `taskq_cancel`; `taskq_list`/`taskq_show` annotate each task's approval disposition, and `taskq_priority`/`taskq_move` refuse to silently reorder tasks that are not queued.
+
+### Changed
+
+- **Hello advertises the datagram plane** — `HelloPayload` carries `udp_port` and the reply carries `you` (the peer-observed source IP): the listener learns every connected peer's punch hint, and each node learns its own public address without configuration.
+
+### Fixed
+
+- **All tool calls in one model response now execute in that round** — the engine ran only the first `tool_use` per turn and noted the rest, so a model issuing several queue operations burned the whole tool budget re-sending them (the reported "clean up the task queue" failure). Native responses execute every call and replay as one assistant `tool_use[]` plus one user `tool_result[]` turn per the Anthropic protocol; DSML invokes execute in order and replay as prose.
+- **DSML parser accepts the formats DeepSeek actually emits** — single- and double-pipe `<｜DSML｜>` variants, loosely quoted invoke names and JSON argument bodies no longer leak protocol markup into the reply.
+- **Approval states now expose their real semantics** — `approval_disposition` (accept_work / resume_execution / needs_changed_input) is surfaced in `taskq_list`/`taskq_show`, the task API payload and the queue/detail views, which disable Approve where the input must change; tasks that already produced output are no longer indistinguishable from tasks awaiting authorization.
+- **`Approve` on a resume_execution task re-queues adoptably** — the resume branch marks the row `scheduled=1` so `ListReady` can claim it; a direct Approve no longer produces a `queued` row no scheduler will ever pick up.
+- **Tool-loop exhaustion degrades to a digest** — a burned-out tool budget returns a summary of the calls that did execute instead of a bare "max tool rounds" error.
+- **DTN relay accounting survives restarts** — the per-bundle relay hop budget lives in `dtn_relay_log` (migration V25) instead of memory, and `parkBundle`'s upsert updates `via`, so a redelivered bundle's no-echo rule follows its latest inbound path.
+
 ## [0.0.9-beta] - 2026-09-23
 
 The v0.0.9 beta completes the hybrid transport/DTN architecture: mesh routing is now latency-weighted, DTN bundles actually move over live links and park for offline ones, delegation token budgets are enforced with real accounting, preempted work survives via shadow copies, and hardware actuators gained an execution path. It additionally gives delegated agents a managed path back into the node's own tooling, lands the full model-configuration surface, and rebuilds the model-management TUI around a full-width registry plus a single-screen form editor.

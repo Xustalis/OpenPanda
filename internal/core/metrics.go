@@ -114,6 +114,35 @@ func (s *TaskStore) ListDelegationMetrics(ctx context.Context) ([]DelegationMetr
 	return out, nil
 }
 
+// TaskActivityByDay counts tasks per local calendar day, keyed "2006-01-02".
+// It backs the /heatmap usage view: one point per day a task entered the
+// system, no matter how the task ended. The 'localtime' modifier keeps day
+// boundaries where the operator perceives them — a task created at 23:58
+// belongs to today, not to tomorrow's UTC.
+func (s *TaskStore) TaskActivityByDay(ctx context.Context) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT date(created_at, 'unixepoch', 'localtime') AS day, COUNT(*)
+		 FROM tasks WHERE created_at > 0 GROUP BY day`)
+	if err != nil {
+		return nil, fmt.Errorf("query task activity: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]int)
+	for rows.Next() {
+		var day string
+		var n int
+		if err := rows.Scan(&day, &n); err != nil {
+			return nil, fmt.Errorf("scan task activity: %w", err)
+		}
+		out[day] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("task activity rows: %w", err)
+	}
+	return out, nil
+}
+
 // LastDelegateTime returns the timestamp (Unix seconds) of the most recent
 // EvDelegate event for a task. It is used to compute delegation latency.
 func (s *TaskStore) LastDelegateTime(ctx context.Context, taskID string) (int64, error) {

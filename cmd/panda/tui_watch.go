@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // Out-of-band task notifications for the TUI. Tasks can reach a terminal state

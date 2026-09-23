@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // The redesigned model configuration surface.

@@ -5,6 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh
 #   sh install.sh --version 0.0.9-beta       # pin a release (default: newest stable)
 #   sh install.sh --prefix /opt/openpanda    # custom install dir
+#   sh install.sh --lite                     # lite build (no web console/TUI; Pi & CLI nodes)
 #   sh install.sh --yes                      # also register auto-start (no prompt)
 #   sh install.sh --no-service               # never touch auto-start
 #
@@ -48,6 +49,7 @@ usage() {
 VERSION="${OPENPANDA_VERSION:-latest}"
 PREFIX="${OPENPANDA_PREFIX:-}"
 SERVICE_MODE="ask"
+LITE=""
 
 # Fail here, not three functions later: without a downloader the version
 # lookup below simply returns nothing and the user sees "cannot resolve the
@@ -64,6 +66,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --version|-v) [ $# -gt 1 ] || die "--version 需要一个值"; VERSION="$2"; shift 2 ;;
         --prefix|-p)  [ $# -gt 1 ] || die "--prefix 需要一个值"; PREFIX="$2"; shift 2 ;;
+        --lite)       LITE=1; shift ;;
         --yes|-y)     SERVICE_MODE="yes"; shift ;;
         --no-service) SERVICE_MODE="no"; shift  ;;
         --help|-h)    usage ;;
@@ -146,8 +149,16 @@ esac
 case "$ARCH" in
     x86_64|amd64) ARCH=amd64 ;;
     aarch64|arm64) ARCH=arm64 ;;
-    *) die "不支持的架构: $ARCH（仅提供 amd64 与 arm64）" ;;
+    armv7l|armv6l|armhf)
+        # 32-bit ARM is served by the lite build only (Pi OS on older Pi).
+        [ -n "$LITE" ] || die "检测到 32 位 ARM：请加 --lite（lite 构建提供 linux-armv7 目标）"
+        ARCH=armv7 ;;
+    *) die "不支持的架构: $ARCH（仅提供 amd64、arm64，32 位 ARM 请用 --lite）" ;;
 esac
+
+if [ -n "$LITE" ] && [ "$OS" != "linux" ]; then
+    die "lite 构建目前只发布 Linux 目标（amd64/arm64/armv7）"
+fi
 
 REPO="${OPENPANDA_REPO_URL:-https://github.com/Xustalis/OpenPanda}"
 # The API endpoint has to follow OPENPANDA_REPO_URL: overriding the repository
@@ -176,7 +187,11 @@ else
     VERSION="${VERSION#v}"
 fi
 
-ARCHIVE="panda-$VERSION-$OS-$ARCH.tar.gz"
+if [ -n "$LITE" ]; then
+    ARCHIVE="panda-$VERSION-lite-$OS-$ARCH.tar.gz"
+else
+    ARCHIVE="panda-$VERSION-$OS-$ARCH.tar.gz"
+fi
 BASE="${OPENPANDA_RELEASE_BASE:-$REPO/releases/download/v$VERSION}"
 
 # ── Install prefix (aligns with Go os.UserConfigDir / XDG) ───────────────────

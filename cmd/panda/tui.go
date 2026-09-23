@@ -1,3 +1,5 @@
+//go:build !lite
+
 package main
 
 // Launch glue for the full-screen interactive front end. runTUI builds the
