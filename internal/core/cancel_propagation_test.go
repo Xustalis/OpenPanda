@@ -36,6 +36,8 @@ func TestCancelPropagatesDownstream(t *testing.T) {
 	go func() { _ = leaf.Listen(ctx, "127.0.0.1:17872") }()
 	time.Sleep(200 * time.Millisecond)
 	must(root.DialPeer(ctx, "127.0.0.1:17872"))
+	waitPeer(t, root, "leaf")
+	waitPeer(t, leaf, "root")
 	time.Sleep(300 * time.Millisecond)
 
 	// Submit blocks until a result arrives; run it in the background so the

@@ -152,8 +152,10 @@ func TestFsFilesConfined(t *testing.T) {
 	}
 
 	// Outside the roots the listing is refused — it would only advertise
-	// paths /api/fs/read rejects anyway.
-	code, _ = doJSON(t, h, authedReq(http.MethodGet, "/api/fs/files?path=/etc", nil))
+	// paths /api/fs/read rejects anyway. A second TempDir is absolute on
+	// every platform and outside the work/memory roots; a bare "/etc" is
+	// not absolute on Windows and would resolve inside the workspace.
+	code, _ = doJSON(t, h, authedReq(http.MethodGet, "/api/fs/files?path="+t.TempDir(), nil))
 	if code != http.StatusForbidden {
 		t.Fatalf("outside list status = %d", code)
 	}

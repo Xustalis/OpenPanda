@@ -76,6 +76,8 @@ func TestTaskOutboxFlushOnHello(t *testing.T) {
 
 	// Now connect a -> b
 	must(a.DialPeer(ctx, "127.0.0.1:17962"))
+	waitPeer(t, a, "node-b")
+	waitPeer(t, b, "node-a")
 	time.Sleep(300 * time.Millisecond)
 
 	// Verify task_outbox row in a was flushed and dropped
