@@ -1008,6 +1008,21 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		return t
 	}
 	var accumulatedReasoning strings.Builder
+	// toolDigest records each executed tool call's result so a late model
+	// failure degrades to an honest summary of work already done rather than a
+	// bare loop error (the "reached max tool rounds" report that hid six
+	// successfully-executed queue operations).
+	var toolDigest []string
+	digestOrErr := func(err error) (*Result, error) {
+		if digest := toolResultsDigest(toolDigest, effectiveLocale); digest != "" {
+			if lastTask != nil {
+				lastTask.Answer = digest
+				return finalizeLastTask(lastTask), nil
+			}
+			return &Result{Kind: "answer", Answer: digest}, nil
+		}
+		return nil, err
+	}
 	// Devices visible to classification: the local capability directory
 	// (populated by the daemon's heartbeats and our own peer dials).
 	devices, err := ledger.Query(e.db, "online", "")
@@ -1090,10 +1105,10 @@ rounds:
 					}
 				}
 				if !fallbackSuccess {
-					return nil, err
+					return digestOrErr(err)
 				}
 			} else {
-				return nil, err
+				return digestOrErr(err)
 			}
 		} else {
 			e.recordModelSuccess(client.ModelName())
@@ -1157,26 +1172,46 @@ rounds:
 			cb.progress(Progress{Kind: ProgressPlan, Name: out.Plan.Goal})
 			return e.startClassifiedPlan(ctx, out.Plan, authorize)
 		case entry.KindToolCall:
-			cb.progress(Progress{Kind: ProgressTool, Name: out.Tool.Tool})
-			if out.Tool.Tool == "task_submit" && taskRounds >= maxTasks {
-				// task_submit is a real delegation hidden behind the native
-				// tool protocol. Refuse it before executeTool for the same
-				// hard execution budget as a classified task directive.
-				turns = appendToolTurns(turns, out.Tool, out.Note, taskBudgetNote(maxTasks, effectiveLocale), effectiveLocale)
+			calls := out.ToolCalls()
+			if len(calls) == 0 {
 				break rounds
 			}
-			// Execute against the same registry snapshot classification saw:
-			// a mid-ask SetMCPCommand swap would otherwise make the model's
-			// tool call hit a registry that no longer knows it.
-			result := executeTool(ctx, reg, out.Tool, toolAuthorized, effectiveLocale)
-			turns = appendToolTurns(turns, out.Tool, out.Note, result, effectiveLocale)
-
-			if dispatched := taskCapture.take(); dispatched != nil {
-				if e.queueTasks || dispatched.NeedsApproval || dispatched.TaskID == "" {
-					return dispatched, nil
+			// Execute EVERY call the model emitted this round. Running only the
+			// first forced the model to re-emit the rest on later turns — one
+			// round trip per call — until a batch intent like "clean the queue"
+			// exhausted the round budget on work that was fully specified up
+			// front (and the final tool-free round then failed on the DSML
+			// markup the model fell back to).
+			results := make([]string, len(calls))
+			var dispatched []*Result
+			for i, call := range calls {
+				cb.progress(Progress{Kind: ProgressTool, Name: call.Tool})
+				if call.Tool == "task_submit" && taskRounds >= maxTasks {
+					// task_submit is a real delegation hidden behind the native
+					// tool protocol. Refuse it before executeTool for the same
+					// hard execution budget as a classified task directive.
+					results[i] = taskBudgetNote(maxTasks, effectiveLocale)
+					continue
 				}
-				taskRounds++
-				lastTask = dispatched
+				// Execute against the same registry snapshot classification
+				// saw: a mid-ask SetMCPCommand swap would otherwise make the
+				// model's tool call hit a registry that no longer knows it.
+				results[i] = executeTool(ctx, reg, call, toolAuthorized, effectiveLocale)
+				toolDigest = append(toolDigest, call.Tool+": "+results[i])
+				for _, d := range taskCapture.takeAll() {
+					dispatched = append(dispatched, d)
+					if !d.NeedsApproval && d.TaskID != "" {
+						taskRounds++
+					}
+				}
+			}
+			turns = appendToolCalls(turns, calls, out.Note, results, effectiveLocale)
+
+			for _, d := range dispatched {
+				if e.queueTasks || d.NeedsApproval || d.TaskID == "" {
+					return d, nil
+				}
+				lastTask = d
 			}
 		default:
 			return &Result{Kind: "answer", Answer: out.Answer}, nil
@@ -1226,7 +1261,10 @@ rounds:
 			}
 		}
 		if ferr != nil {
-			return nil, fmt.Errorf("reached max tool rounds (%d): %w", maxRounds, ferr)
+			// The tools already ran — report what they did rather than a bare
+			// loop error. toolDigest is empty only when nothing ever executed,
+			// in which case the wrapped error stands.
+			return digestOrErr(fmt.Errorf("reached max tool rounds (%d): %w", maxRounds, ferr))
 		}
 	} else {
 		e.recordModelSuccess(client.ModelName())

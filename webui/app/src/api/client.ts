@@ -228,6 +228,11 @@ export interface Task {
   session_id?: string
   resource_keys?: string[]
   scheduled?: boolean
+  /** Set only on state=review: what approving the task would do —
+   *  accept_work (work already produced, approve accepts it as done),
+   *  resume_execution (parked before running, approve re-runs it), or
+   *  needs_changed_input (approve alone cannot help). */
+  approval_disposition?: 'accept_work' | 'resume_execution' | 'needs_changed_input'
   created_at: string
   updated_at: string
   events?: TaskEvent[]
@@ -875,7 +880,7 @@ export const api = {
 
   // ---- System (version / metrics / audit / skills) ----
 
-  version(): Promise<{ version: string }> {
+  version(): Promise<{ version: string; codename?: string }> {
     return request('GET', '/api/version')
   },
 

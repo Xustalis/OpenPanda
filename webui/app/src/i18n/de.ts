@@ -107,6 +107,9 @@ const de: Messages = {
   // Detail view
   'detail.back': 'Zurück zur Warteschlange',
   'detail.approve': 'Genehmigen',
+  'detail.reviewKind.accept_work': 'Ergebnis liegt vor — Genehmigen akzeptiert es als erledigt',
+  'detail.reviewKind.resume_execution': 'Noch nicht ausgeführt — Genehmigen setzt die Ausführung fort',
+  'detail.reviewKind.needs_changed_input': 'Erfordert geänderte Eingabe, um fortzufahren',
   'detail.reject': 'Ablehnen',
   'detail.rejectReason': 'Grund (optional, wird im Aufgabenlog erfasst)',
   'detail.rejectConfirm': 'Ablehnen bestätigen',

@@ -294,18 +294,20 @@ func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall,
 	return result
 }
 
-// taskDispatchCapture carries a typed task result beside task_submit's string
-// tool_result. One capture belongs to one synchronous AskTurns invocation.
+// taskDispatchCapture carries typed task results beside task_submit's string
+// tool_results — one slot per dispatched task, since a single model response
+// may emit several task_submit calls. One capture belongs to one synchronous
+// AskTurns invocation.
 type taskDispatchCapture struct {
-	result *Result
+	results []*Result
 }
 
-func (c *taskDispatchCapture) set(result *Result) { c.result = result }
+func (c *taskDispatchCapture) add(result *Result) { c.results = append(c.results, result) }
 
-func (c *taskDispatchCapture) take() *Result {
-	result := c.result
-	c.result = nil
-	return result
+func (c *taskDispatchCapture) takeAll() []*Result {
+	results := c.results
+	c.results = nil
+	return results
 }
 
 // dispatchTaskTool builds task_submit — the dispatch bridge for entry models
@@ -399,7 +401,7 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 			}
 			cb.progress(Progress{Kind: ProgressTask, Name: spec.Title})
 			res := e.submitTask(ctx, spec, prompt, authorize, scope, "", cb)
-			capture.set(res)
+			capture.add(res)
 			switch {
 			case res.NeedsApproval:
 				if targetLoc == i18n.English {
@@ -450,43 +452,82 @@ func toolConsentHint(t entry.Tool, loc ...i18n.Locale) string {
 	return fmt.Sprintf("工具 %s 属 tier-2（不可逆）操作，本次会话未开启授权。请让用户开启授权后重试（REPL 输入 /authorize，一次性调用加 --authorize，Web 面板勾选“授权”）。", t.Name)
 }
 
-// appendToolTurns records a tool call, its accompanying note (text the model
-// emitted alongside the call or extra tool_use the executor skipped), and its
-// result in the conversation. A native tool_use call is replayed as tool_use +
-// tool_result blocks (the Anthropic Messages API contract); the text-JSON
-// fallback (no tool_use id) is carried as prose, preserving the pre-tool_use
-// behavior.
-func appendToolTurns(turns []entry.Turn, call *entry.ToolCall, note, result string, loc ...i18n.Locale) []entry.Turn {
+// appendToolCalls records one round of tool calls — every call the model
+// emitted, its accompanying note (text emitted alongside the calls), and each
+// result — in the conversation. Calls carrying a tool_use id are replayed as a
+// single assistant turn of tool_use blocks followed by one user turn holding
+// every matching tool_result (the Anthropic Messages API contract requires all
+// tool_uses of an assistant turn to be answered in the next user message);
+// id-less calls (DSML / text-JSON fallback) are carried as prose pairs,
+// preserving the pre-tool_use behavior.
+func appendToolCalls(turns []entry.Turn, calls []*entry.ToolCall, note string, results []string, loc ...i18n.Locale) []entry.Turn {
 	targetLoc := i18n.ChineseSimp
 	if len(loc) > 0 && loc[0] != "" {
 		targetLoc = loc[0]
 	}
-	if call.ID != "" {
+	blocks := false
+	for _, call := range calls {
+		if call != nil && call.ID != "" {
+			blocks = true
+			break
+		}
+	}
+	if blocks {
 		assistant := entry.Turn{Role: "assistant"}
 		if note != "" {
 			assistant.Blocks = append(assistant.Blocks, entry.ContentBlock{Type: "text", Text: note})
 		}
-		assistant.Blocks = append(assistant.Blocks, entry.ContentBlock{Type: "tool_use", ID: call.ID, Name: call.Tool, Input: call.Arguments})
-		return append(turns,
-			assistant,
-			entry.Turn{Role: "user", Blocks: []entry.ContentBlock{
-				{Type: "tool_result", ToolUseID: call.ID, Content: result},
-			}},
-		)
-	}
-	assistant, _ := json.Marshal(call)
-	msg := "tool_call: " + string(assistant)
-	if note != "" {
-		msg = note + "\n" + msg
+		user := entry.Turn{Role: "user"}
+		for i, call := range calls {
+			if call.ID == "" {
+				continue
+			}
+			assistant.Blocks = append(assistant.Blocks, entry.ContentBlock{Type: "tool_use", ID: call.ID, Name: call.Tool, Input: call.Arguments})
+			user.Blocks = append(user.Blocks, entry.ContentBlock{Type: "tool_result", ToolUseID: call.ID, Content: results[i]})
+		}
+		turns = append(turns, assistant, user)
+		note = ""
 	}
 	prefix := "工具结果："
 	if targetLoc == i18n.English {
 		prefix = "Tool result: "
 	}
-	return append(turns,
-		entry.Turn{Role: "assistant", Content: msg},
-		entry.Turn{Role: "user", Content: prefix + result},
-	)
+	for i, call := range calls {
+		if call.ID != "" {
+			continue
+		}
+		blob, _ := json.Marshal(call)
+		msg := "tool_call: " + string(blob)
+		if note != "" {
+			msg = note + "\n" + msg
+			note = ""
+		}
+		turns = append(turns,
+			entry.Turn{Role: "assistant", Content: msg},
+			entry.Turn{Role: "user", Content: prefix + results[i]},
+		)
+	}
+	return turns
+}
+
+// toolResultsDigest renders the "tool: result" lines collected across the
+// rounds when the model fails mid-loop or on the final convergence call: the
+// operations already happened, so the honest answer is what they did, plus a
+// note that the final summary never came back. Empty when nothing ran.
+func toolResultsDigest(digest []string, loc i18n.Locale) string {
+	if len(digest) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	if loc == i18n.English {
+		fmt.Fprintf(&b, "Model stopped responding after %d tool operation(s); all of them did execute. Results:\n", len(digest))
+	} else {
+		fmt.Fprintf(&b, "模型在完成 %d 项工具操作后停止响应；这些操作均已实际执行。执行结果：\n", len(digest))
+	}
+	for _, line := range digest {
+		b.WriteString("- " + excerpt(line, 300, loc) + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // registerMCPTools lists the tools a stdio MCP server advertises and registers

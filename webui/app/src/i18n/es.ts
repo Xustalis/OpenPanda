@@ -107,6 +107,9 @@ const es: Messages = {
   // Detail view
   'detail.back': 'Volver a la cola',
   'detail.approve': 'Aprobar',
+  'detail.reviewKind.accept_work': 'Ya produjo trabajo — aprobar lo acepta como hecho',
+  'detail.reviewKind.resume_execution': 'Aún no se ejecutó — aprobar reanuda la ejecución',
+  'detail.reviewKind.needs_changed_input': 'Requiere una entrada modificada para continuar',
   'detail.reject': 'Rechazar',
   'detail.rejectReason': 'Motivo (opcional, queda en el registro de la tarea)',
   'detail.rejectConfirm': 'Confirmar rechazo',

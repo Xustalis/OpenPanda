@@ -395,9 +395,10 @@ func TestClassifyToolUse(t *testing.T) {
 	}
 }
 
-// TestClassifyToolUseDropsExtra verifies that text emitted alongside a tool
-// call and any tool_use after the first are preserved in Output.Note instead
-// of being silently dropped (P2-21).
+// TestClassifyToolUseDropsExtra verifies that text emitted alongside tool
+// calls is preserved in Output.Note and that EVERY tool_use the model sent
+// comes back in Output.Tools — executing only the first serialized a batch
+// intent into one model round per call until the round budget ran out.
 func TestClassifyToolUseDropsExtra(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
@@ -428,8 +429,9 @@ func TestClassifyToolUseDropsExtra(t *testing.T) {
 	if !strings.Contains(out.Note, "先读记忆再合并") {
 		t.Fatalf("note missing accompanying text: %q", out.Note)
 	}
-	if !strings.Contains(out.Note, "memory_add") {
-		t.Fatalf("note missing extra tool_use: %q", out.Note)
+	calls := out.ToolCalls()
+	if len(calls) != 2 || calls[1].Tool != "memory_add" || calls[1].ID != "toolu_2" {
+		t.Fatalf("extra tool_use dropped instead of returned: %+v", calls)
 	}
 }
 

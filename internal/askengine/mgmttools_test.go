@@ -149,7 +149,8 @@ func TestMgmtToolsRegistered(t *testing.T) {
 	// widen the gate it was about to walk through.
 	tier1 := []string{
 		"system_status", "card_list", "card_show", "taskq_list", "taskq_show",
-		"taskq_cancel", "taskq_priority", "taskq_move", "card_rescan",
+		"taskq_cancel", "taskq_priority", "taskq_move", "taskq_reject",
+		"card_rescan",
 		"project_list", "project_create", "project_enter", "project_exit",
 		"node_remove", "reminder_delete",
 	}
@@ -157,6 +158,9 @@ func TestMgmtToolsRegistered(t *testing.T) {
 		"card_native_add", "card_native_remove",
 		"card_agent_add", "card_agent_set", "card_agent_remove",
 		"card_manual_add", "card_manual_remove",
+		// Approving grants the consent the task was parked for; clearing
+		// deletes audit history. Both are irreversible-class operations.
+		"taskq_approve", "taskq_clear",
 	}
 
 	for _, group := range []struct {
@@ -341,6 +345,258 @@ func TestTaskqPriorityAndMove(t *testing.T) {
 	})
 	if !strings.Contains(resMove, "排队顺序序号设置为 3") {
 		t.Errorf("taskq_move result: %s", resMove)
+	}
+}
+
+// seedReviewTask drives a fresh task into review with the given approval
+// disposition — the fixture row the approval-tool tests act on.
+func seedReviewTask(t *testing.T, store *core.TaskStore, title string, disposition core.ApprovalDisposition) core.Task {
+	t.Helper()
+	ctx := context.Background()
+	task, err := store.Create(ctx, "", "proj", title, "test-node", nil)
+	if err != nil {
+		t.Fatalf("create %s: %v", title, err)
+	}
+	for _, step := range []func() error{
+		func() error { return store.Queue(ctx, task.TaskID, "test-node") },
+		func() error { return store.Dispatch(ctx, task.TaskID, "test-node", "test-node") },
+		func() error { return store.Accept(ctx, task.TaskID, "test-node") },
+	} {
+		if err := step(); err != nil {
+			t.Fatalf("drive %s: %v", title, err)
+		}
+	}
+	var err2 error
+	if disposition == core.ApprovalAcceptWork {
+		err2 = store.PauseWithResult(ctx, task.TaskID, "test-node", map[string]any{
+			"ok": true, "result": "成果已产出", "exit_code": 0,
+		})
+	} else {
+		err2 = store.PauseWithDisposition(ctx, task.TaskID, "test-node", "parked", disposition)
+	}
+	if err2 != nil {
+		t.Fatalf("pause %s: %v", title, err2)
+	}
+	return task
+}
+
+// TestTaskqApproveAcceptsCompletedWork is the incident's approval half: a
+// task that already executed parks in review with accept_work, and the model
+// had no way to accept it. taskq_approve must take it to done.
+func TestTaskqApproveAcceptsCompletedWork(t *testing.T) {
+	e, reg := newMgmtTestEngine(t)
+	store := core.NewTaskStore(e.db, nil)
+	review := seedReviewTask(t, store, "待验收的已执行任务", core.ApprovalAcceptWork)
+
+	out := runMgmtTool(t, reg, "taskq_approve", map[string]any{"task_id": review.TaskID})
+	if !strings.Contains(out, "验收") {
+		t.Fatalf("taskq_approve output: %s", out)
+	}
+	got, err := store.Get(context.Background(), review.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != core.StateDone {
+		t.Fatalf("state = %s, want done", got.State)
+	}
+}
+
+// TestTaskqApproveNeedsChangedInputRefuses guards the other disposition:
+// approval alone cannot fix bad input, so the tool must refuse with guidance
+// and leave the task parked.
+func TestTaskqApproveNeedsChangedInputRefuses(t *testing.T) {
+	e, reg := newMgmtTestEngine(t)
+	store := core.NewTaskStore(e.db, nil)
+	review := seedReviewTask(t, store, "输入有误的待审批任务", core.ApprovalNeedsChangedInput)
+
+	out := runMgmtTool(t, reg, "taskq_approve", map[string]any{"task_id": review.TaskID})
+	if !strings.Contains(out, "不能仅靠批准继续") {
+		t.Fatalf("taskq_approve output: %s", out)
+	}
+	got, err := store.Get(context.Background(), review.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != core.StateReview {
+		t.Fatalf("state = %s, want still review", got.State)
+	}
+}
+
+func TestTaskqApproveNonReviewErrors(t *testing.T) {
+	_, reg := newMgmtTestEngine(t)
+	list := runMgmtTool(t, reg, "taskq_list", map[string]any{"filter": "queued"})
+	var queuedID string
+	for _, line := range strings.Split(list, "\n") {
+		if strings.Contains(line, "还在排队的任务") {
+			queuedID = strings.Fields(strings.TrimPrefix(strings.TrimSpace(line), "- "))[0]
+		}
+	}
+	if queuedID == "" {
+		t.Fatal("no queued task in fixture")
+	}
+	tool, _ := reg.Lookup("taskq_approve")
+	if _, err := tool.Run(context.Background(), map[string]any{"task_id": queuedID}); err == nil ||
+		!strings.Contains(err.Error(), "不在待审批") {
+		t.Fatalf("taskq_approve(queued) err = %v, want 不在待审批", err)
+	}
+}
+
+func TestTaskqReject(t *testing.T) {
+	e, reg := newMgmtTestEngine(t)
+	store := core.NewTaskStore(e.db, nil)
+	review := seedReviewTask(t, store, "成果不合格的待审批任务", core.ApprovalAcceptWork)
+
+	out := runMgmtTool(t, reg, "taskq_reject", map[string]any{
+		"task_id": review.TaskID, "reason": "成果不合格",
+	})
+	if !strings.Contains(out, "已拒绝") || !strings.Contains(out, "成果不合格") {
+		t.Fatalf("taskq_reject output: %s", out)
+	}
+	got, err := store.Get(context.Background(), review.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != core.StateFailed {
+		t.Fatalf("state = %s, want failed", got.State)
+	}
+}
+
+// TestTaskqListShowsDisposition is the visibility half of the incident:
+// "待审批" alone hid that approving would ACCEPT finished work, so the model
+// cancelled it instead. Review rows must carry the disposition label.
+func TestTaskqListShowsDisposition(t *testing.T) {
+	e, reg := newMgmtTestEngine(t)
+	store := core.NewTaskStore(e.db, nil)
+	seedReviewTask(t, store, "待验收的已执行任务", core.ApprovalAcceptWork)
+
+	list := runMgmtTool(t, reg, "taskq_list", map[string]any{"filter": "review"})
+	if !strings.Contains(list, "批准=验收已有成果→完成") {
+		t.Fatalf("review list missing disposition label:\n%s", list)
+	}
+	show := runMgmtTool(t, reg, "taskq_show", map[string]any{"task_id": storeTaskID(t, store, "待验收的已执行任务")})
+	if !strings.Contains(show, "审批处置：批准=验收已有成果→完成") {
+		t.Fatalf("taskq_show missing disposition line:\n%s", show)
+	}
+}
+
+func storeTaskID(t *testing.T, store *core.TaskStore, title string) string {
+	t.Helper()
+	ts, err := store.ListByState(context.Background(), core.StateReview)
+	if err != nil {
+		t.Fatalf("list review: %v", err)
+	}
+	for _, task := range ts {
+		if task.Title == title {
+			return task.TaskID
+		}
+	}
+	t.Fatalf("no review task titled %q", title)
+	return ""
+}
+
+// TestTaskqCancelBatch covers the cleanup shape that burned the round budget:
+// one call cancelling several ids must cancel them all.
+func TestTaskqCancelBatch(t *testing.T) {
+	e, reg := newMgmtTestEngine(t)
+	store := core.NewTaskStore(e.db, nil)
+	ctx := context.Background()
+	var ids []string
+	for _, title := range []string{"批量取消甲", "批量取消乙"} {
+		task, err := store.Create(ctx, "", "proj", title, "test-node", nil)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if err := store.Queue(ctx, task.TaskID, "test-node"); err != nil {
+			t.Fatalf("queue: %v", err)
+		}
+		ids = append(ids, task.TaskID)
+	}
+	out := runMgmtTool(t, reg, "taskq_cancel", map[string]any{
+		"task_ids": []any{ids[0], ids[1], "task-nonexistent"},
+	})
+	if !strings.Contains(out, "2 个成功取消") || !strings.Contains(out, "解析失败") {
+		t.Fatalf("batch cancel output: %s", out)
+	}
+	for _, id := range ids {
+		got, err := store.Get(ctx, id)
+		if err != nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+		if got.State != core.StateCancelled {
+			t.Fatalf("task %s state = %s, want cancelled", id, got.State)
+		}
+	}
+}
+
+// TestTaskqMoveRejectsNonQueued guards the reorder tools: mutating seq on a
+// finished task used to succeed silently.
+func TestTaskqMoveRejectsNonQueued(t *testing.T) {
+	_, reg := newMgmtTestEngine(t)
+	list := runMgmtTool(t, reg, "taskq_list", map[string]any{"filter": "done"})
+	var doneID string
+	for _, line := range strings.Split(list, "\n") {
+		if strings.Contains(line, "已完成的任务") {
+			doneID = strings.Fields(strings.TrimPrefix(strings.TrimSpace(line), "- "))[0]
+		}
+	}
+	if doneID == "" {
+		t.Fatal("no done task in fixture")
+	}
+	for _, name := range []string{"taskq_move", "taskq_priority"} {
+		tool, _ := reg.Lookup(name)
+		args := map[string]any{"task_id": doneID}
+		if name == "taskq_move" {
+			args["seq"] = 1
+		} else {
+			args["priority"] = "high"
+		}
+		if _, err := tool.Run(context.Background(), args); err == nil ||
+			!strings.Contains(err.Error(), "只有排队中的任务") {
+			t.Fatalf("%s(done task) err = %v, want reorder guard", name, err)
+		}
+	}
+}
+
+// TestTaskqClear covers all three scopes: history deletes only terminal rows,
+// review cancels then deletes parked rows, and an invalid scope errors.
+func TestTaskqClear(t *testing.T) {
+	e, reg := newMgmtTestEngine(t)
+	store := core.NewTaskStore(e.db, nil)
+	ctx := context.Background()
+
+	out := runMgmtTool(t, reg, "taskq_clear", map[string]any{"scope": "history"})
+	if !strings.Contains(out, "已删除 2 条终态任务记录") {
+		t.Fatalf("clear history output: %s", out)
+	}
+	// The queued row survives a history clear.
+	if n := countTasksWithTitlePrefix(t, e, "还在排队的任务"); n != 1 {
+		t.Fatalf("queued task lost to history clear")
+	}
+
+	review := seedReviewTask(t, store, "待审批清理对象", core.ApprovalAcceptWork)
+	out = runMgmtTool(t, reg, "taskq_clear", map[string]any{"scope": "review"})
+	if !strings.Contains(out, "已清理待审批队列") {
+		t.Fatalf("clear review output: %s", out)
+	}
+	if _, err := store.Get(ctx, review.TaskID); err == nil {
+		t.Fatal("review row survived clear review")
+	}
+
+	tool, _ := reg.Lookup("taskq_clear")
+	if _, err := tool.Run(context.Background(), map[string]any{"scope": "bogus"}); err == nil {
+		t.Fatal("taskq_clear(bogus scope) must error")
+	}
+
+	out = runMgmtTool(t, reg, "taskq_clear", map[string]any{"scope": "all"})
+	if !strings.Contains(out, "已清空队列") {
+		t.Fatalf("clear all output: %s", out)
+	}
+	remaining, err := store.ListByState(ctx, "")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("clear all left %d rows", len(remaining))
 	}
 }
 

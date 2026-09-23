@@ -106,6 +106,9 @@ const ja: Messages = {
   // Detail view
   'detail.back': 'キューに戻る',
   'detail.approve': '承認',
+  'detail.reviewKind.accept_work': '実行済みの成果あり——承認で完了として受理',
+  'detail.reviewKind.resume_execution': '未実行——承認で実行を再開',
+  'detail.reviewKind.needs_changed_input': '入力の変更が必要',
   'detail.reject': '却下',
   'detail.rejectReason': '理由（任意、タスクログに記録）',
   'detail.rejectConfirm': '却下を確定',

@@ -398,14 +398,18 @@ type taskJSON struct {
 	Risk      string `json:"risk,omitempty"`
 	// Queue redesign fields: the board sorts by priority, then seq (drag
 	// order, 0 = not dragged), and jumps into session_id when set.
-	Priority     string      `json:"priority"`
-	Seq          int64       `json:"seq"`
-	SessionID    string      `json:"session_id,omitempty"`
-	ResourceKeys []string    `json:"resource_keys,omitempty"`
-	Scheduled    bool        `json:"scheduled"`
-	CreatedAt    string      `json:"created_at"`
-	UpdatedAt    string      `json:"updated_at"`
-	Events       []eventJSON `json:"events,omitempty"`
+	Priority     string   `json:"priority"`
+	Seq          int64    `json:"seq"`
+	SessionID    string   `json:"session_id,omitempty"`
+	ResourceKeys []string `json:"resource_keys,omitempty"`
+	Scheduled    bool     `json:"scheduled"`
+	// ApprovalDisposition says what approving a reviewed task would do —
+	// accept_work / resume_execution / needs_changed_input — so the board can
+	// label the pending decision instead of a bare "awaiting approval".
+	ApprovalDisposition string      `json:"approval_disposition,omitempty"`
+	CreatedAt           string      `json:"created_at"`
+	UpdatedAt           string      `json:"updated_at"`
+	Events              []eventJSON `json:"events,omitempty"`
 
 	// — Decision-orbit visibility (§5.2). traces are the subset of Events
 	// that belong to the 8-track set, decoded so the client avoids a second
@@ -506,6 +510,9 @@ func toTaskJSON(t core.Task) taskJSON {
 		Scheduled:    t.Scheduled,
 		CreatedAt:    ts(t.CreatedAt),
 		UpdatedAt:    ts(t.UpdatedAt),
+	}
+	if t.State == core.StateReview {
+		out.ApprovalDisposition = string(t.ApprovalDisposition)
 	}
 	if t.PlanID != "" || t.StageID != "" || t.OutputArtifact != "" {
 		// StageCount/StageLabels are intentionally NOT derived here: Needs is

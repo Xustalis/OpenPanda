@@ -2,7 +2,9 @@ package askengine
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -120,16 +122,20 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "taskq_cancel",
-		Description: "取消指定任务及其所有子任务树，立即中止其执行。task_id 填完整任务 ID 或前缀。当任务死循环、卡反爬、超时或不再需要时调用。",
+		Description: "取消任务及其所有子任务树，立即中止执行。task_id 填单个任务 ID 或前缀；task_ids 填 ID 数组可一次取消多个（清理队列时优先用它，比逐个调用省轮次）。当任务死循环、卡反爬、超时或不再需要时调用。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"task_id": map[string]any{"type": "string", "description": "要取消的任务 ID 或前缀"},
+				"task_id":  map[string]any{"type": "string", "description": "要取消的任务 ID 或前缀"},
+				"task_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "批量取消的任务 ID 列表（与 task_id 二选一）"},
 			},
-			"required": []string{"task_id"},
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			ids := toStringSlice(args["task_ids"])
+			if len(ids) > 0 {
+				return e.taskqCancelBatch(ctx, ids)
+			}
 			id, _ := args["task_id"].(string)
 			return e.taskqCancel(ctx, strings.TrimSpace(id))
 		},
@@ -178,6 +184,64 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 				seq = int64(v)
 			}
 			return e.taskqMove(ctx, strings.TrimSpace(id), seq)
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "taskq_approve",
+		Description: "批准一个待审批（review）任务，task_id 填任务 ID 或前缀。批准语义按任务实际进度自动区分：已产出成果的→验收为完成；停在执行前的→授权并立即重新执行（同步等待结果，可能耗时较长）；需要修改输入的→无法批准，会提示改用 taskq_reject 或重新派发。",
+		// Tier 2: approving grants the very consent the task was parked for.
+		// At Tier 1 the model could self-approve its own refused dispatch —
+		// the human gate would be decorative. The refusal carries the consent
+		// hint so the model asks the user to authorize first.
+		Tier: defense.TierIrreversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"task_id": map[string]any{"type": "string", "description": "要批准的任务 ID 或前缀"},
+			},
+			"required": []string{"task_id"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			id, _ := args["task_id"].(string)
+			return e.taskqApprove(ctx, strings.TrimSpace(id))
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "taskq_reject",
+		Description: "拒绝一个待审批（review）任务，将其标记为失败并结束。reason 可选，记入任务日志。适用于成果不合格、不再需要、或需要修改输入后重新派发的任务。",
+		Tier:        defense.TierReversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"task_id": map[string]any{"type": "string", "description": "要拒绝的任务 ID 或前缀"},
+				"reason":  map[string]any{"type": "string", "description": "拒绝原因（可选）"},
+			},
+			"required": []string{"task_id"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			id, _ := args["task_id"].(string)
+			reason, _ := args["reason"].(string)
+			return e.taskqReject(ctx, strings.TrimSpace(id), strings.TrimSpace(reason))
+		},
+	})
+
+	reg.Register(entry.Tool{
+		Name:        "taskq_clear",
+		Description: "清理任务队列记录。scope 必填：history=删除所有终态任务记录（已完成/失败/已取消/已过期）；review=取消并删除所有待审批任务；all=取消所有未完成任务并删除全部任务记录（等同面板「清空队列」）。删除不可恢复，任务事件时间线一并移除。",
+		// Tier 2: this deletes audit-visible history, not just moves states.
+		Tier: defense.TierIrreversible,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"scope": map[string]any{"type": "string", "enum": []string{"history", "review", "all"}, "description": "清理范围：history / review / all"},
+			},
+			"required": []string{"scope"},
+		},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			scope, _ := args["scope"].(string)
+			return e.taskqClear(ctx, strings.ToLower(strings.TrimSpace(scope)))
 		},
 	})
 
@@ -722,6 +786,12 @@ func (e *Engine) taskqList(ctx context.Context, filter string) (string, error) {
 		// (the id's leading segment is a timestamp).
 		fmt.Fprintf(&b, "\n- %s %s — %s（负责节点 %s）",
 			t.TaskID, t.Title, zhTaskState(t.State), t.OwnerNode)
+		if t.State == core.StateReview {
+			// "待审批" alone hides what approving would DO — the model kept
+			// cancelling executed work it could have accepted. Label the
+			// disposition so the row itself tells the right action.
+			fmt.Fprintf(&b, "［%s］", zhDisposition(store, ctx, t.TaskID))
+		}
 	}
 	return b.String(), nil
 }
@@ -757,6 +827,9 @@ func (e *Engine) taskqShow(ctx context.Context, taskID string) (string, error) {
 	}
 	if t.Authorized {
 		b.WriteString("\n授权：已获用户授权（tier-2）")
+	}
+	if t.State == core.StateReview {
+		fmt.Fprintf(&b, "\n审批处置：%s", zhDisposition(store, ctx, t.TaskID))
 	}
 	if t.ParentID != "" {
 		fmt.Fprintf(&b, "\n父任务：%s", t.ParentID)
@@ -853,6 +926,25 @@ func taskqStates(filter string) ([]string, string) {
 	default:
 		return []string{filter}, filter
 	}
+}
+
+// zhDisposition renders what approving a review task would DO — accept the
+// work it already produced, resume an execution that never ran, or refuse
+// until the input changes. Plain "待审批" hid all three behind one word.
+func zhDisposition(store *core.TaskStore, ctx context.Context, taskID string) string {
+	d, err := store.ApprovalDisposition(ctx, taskID)
+	if err != nil {
+		return "审批处置未知"
+	}
+	switch d {
+	case core.ApprovalAcceptWork:
+		return "批准=验收已有成果→完成"
+	case core.ApprovalResumeExecution:
+		return "批准=授权并重新执行"
+	case core.ApprovalNeedsChangedInput:
+		return "需修改输入，不能直接批准"
+	}
+	return "待人工处理"
 }
 
 // zhTaskState renders a wire state as the Chinese label the panels use.
@@ -1023,6 +1115,9 @@ func (e *Engine) taskqPriority(ctx context.Context, taskID, priority string) (st
 	if err != nil {
 		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
 	}
+	if err := e.guardReorderable(ctx, store, resolved); err != nil {
+		return "", err
+	}
 	if err := store.SetPriority(ctx, resolved, prio); err != nil {
 		return "", fmt.Errorf("设置任务优先级：%w", err)
 	}
@@ -1041,10 +1136,201 @@ func (e *Engine) taskqMove(ctx context.Context, taskID string, seq int64) (strin
 	if err != nil {
 		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
 	}
+	if err := e.guardReorderable(ctx, store, resolved); err != nil {
+		return "", err
+	}
 	if err := store.SetSeq(ctx, resolved, seq); err != nil {
 		return "", fmt.Errorf("设置排队序号：%w", err)
 	}
 	return fmt.Sprintf("已将任务 %s 的排队顺序序号设置为 %d", resolved, seq), nil
+}
+
+// guardReorderable confines queue-order edits to tasks the scheduler can
+// still order. Setting seq/priority on a running or finished row used to
+// succeed silently and misreported the operation as meaningful.
+func (e *Engine) guardReorderable(ctx context.Context, store *core.TaskStore, taskID string) error {
+	t, err := store.Get(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("读取任务 %s：%w", taskID, err)
+	}
+	switch t.State {
+	case core.StateSubmitted, core.StateQueued:
+		return nil
+	default:
+		return fmt.Errorf("任务 %s 当前状态为「%s」，只有排队中的任务才能调整顺序/优先级", taskID, zhTaskState(t.State))
+	}
+}
+
+// taskqCancelBatch cancels each id through the engine path (remote executors
+// are notified, not just the local row). A batch cleanup reports per-id
+// outcomes instead of aborting on the first failure.
+func (e *Engine) taskqCancelBatch(ctx context.Context, ids []string) (string, error) {
+	store := core.NewTaskStore(e.db, e.logger)
+	var b strings.Builder
+	fmt.Fprintf(&b, "批量取消 %d 个任务：", len(ids))
+	ok := 0
+	for _, raw := range ids {
+		resolved, err := e.resolveTaskID(ctx, store, strings.TrimSpace(raw))
+		if err != nil {
+			fmt.Fprintf(&b, "\n- %s：解析失败（%v）", raw, err)
+			continue
+		}
+		cancelled, err := e.CancelTask(ctx, resolved)
+		if err != nil {
+			fmt.Fprintf(&b, "\n- %s：取消失败（%v）", resolved, err)
+			continue
+		}
+		if len(cancelled) == 0 {
+			fmt.Fprintf(&b, "\n- %s：已是终态", resolved)
+			continue
+		}
+		ok++
+		fmt.Fprintf(&b, "\n- %s：已取消（级联 %d 个）", resolved, len(cancelled))
+	}
+	fmt.Fprintf(&b, "\n合计：%d 个成功取消", ok)
+	return b.String(), nil
+}
+
+// taskqApprove approves a review-parked task through the disposition-aware
+// engine path: completed work is accepted into done, a task parked before
+// execution re-runs under the granted consent (synchronously — the tool
+// result carries the final state), and a needs-changed-input parking refuses
+// with guidance instead of silently resuming bad input.
+func (e *Engine) taskqApprove(ctx context.Context, taskID string) (string, error) {
+	if taskID == "" {
+		return "", fmt.Errorf("task_id 不能为空")
+	}
+	store := core.NewTaskStore(e.db, e.logger)
+	resolved, err := e.resolveTaskID(ctx, store, taskID)
+	if err != nil {
+		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
+	}
+	t, err := store.Get(ctx, resolved)
+	if err != nil {
+		return "", fmt.Errorf("读取任务 %s：%w", resolved, err)
+	}
+	if t.State != core.StateReview {
+		return "", fmt.Errorf("任务 %s 当前状态为「%s」，不在待审批中", resolved, zhTaskState(t.State))
+	}
+	disposition, err := store.ApprovalDisposition(ctx, resolved)
+	if err != nil {
+		return "", fmt.Errorf("读取任务 %s 的审批处置：%w", resolved, err)
+	}
+	if disposition == core.ApprovalNeedsChangedInput {
+		return fmt.Sprintf("任务 %s 不能仅靠批准继续：它因输入/范围问题停在待审批。请改用 taskq_reject 拒绝，或修正输入后重新派发。", resolved), nil
+	}
+	if e.sched == nil {
+		e.tryAutoInitScheduler()
+	}
+	if e.sched == nil && disposition == core.ApprovalResumeExecution {
+		return fmt.Sprintf("任务 %s 需要授权后继续执行，但当前会话未加载能力卡无法执行。请在面板点「批准」或运行 panda task approve %s。", resolved, resolved), nil
+	}
+	res := e.ResumeApproved(ctx, resolved, "", StreamCallbacks{})
+	switch {
+	case res.TaskState == core.StateDone:
+		if disposition == core.ApprovalAcceptWork {
+			return fmt.Sprintf("已验收任务 %s 的已有成果，任务完成。", resolved), nil
+		}
+		return fmt.Sprintf("已批准任务 %s 并重新执行完成。", resolved), nil
+	case res.TaskState == core.StateReview && strings.TrimSpace(res.Stderr) != "":
+		return fmt.Sprintf("任务 %s 批准未完成：%s", resolved, strings.TrimSpace(res.Stderr)), nil
+	default:
+		msg := fmt.Sprintf("任务 %s 已批准，最终状态「%s」", resolved, zhTaskState(res.TaskState))
+		if strings.TrimSpace(res.Stderr) != "" {
+			msg += "：" + excerpt(strings.TrimSpace(res.Stderr), 300)
+		}
+		return msg, nil
+	}
+}
+
+// taskqReject rejects a review-parked task (review -> failed), the model-side
+// counterpart of the panel's reject button.
+func (e *Engine) taskqReject(ctx context.Context, taskID, reason string) (string, error) {
+	if taskID == "" {
+		return "", fmt.Errorf("task_id 不能为空")
+	}
+	store := core.NewTaskStore(e.db, e.logger)
+	resolved, err := e.resolveTaskID(ctx, store, taskID)
+	if err != nil {
+		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
+	}
+	if err := store.Reject(ctx, resolved, reason); err != nil {
+		return "", fmt.Errorf("拒绝任务 %s：%w", resolved, err)
+	}
+	if reason != "" {
+		return fmt.Sprintf("已拒绝任务 %s（原因：%s），任务标记为失败。", resolved, reason), nil
+	}
+	return fmt.Sprintf("已拒绝任务 %s，任务标记为失败。", resolved), nil
+}
+
+// taskqClear wipes queue records by scope. "history" deletes only terminal
+// rows; "review" cancels then deletes every review task; "all" mirrors the
+// board's clear button — cancel everything still moving through the engine
+// path (remote executors hear it), then delete all rows.
+func (e *Engine) taskqClear(ctx context.Context, scope string) (string, error) {
+	store := core.NewTaskStore(e.db, e.logger)
+	switch scope {
+	case "history":
+		deleted := 0
+		for _, st := range []string{core.StateDone, core.StateFailed, core.StateCancelled, core.StateExpired} {
+			ts, err := store.ListByState(ctx, st)
+			if err != nil {
+				return "", fmt.Errorf("查询任务：%w", err)
+			}
+			for _, t := range ts {
+				n, err := store.Delete(ctx, t.TaskID)
+				if err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						continue // subtree row already removed with its parent
+					}
+					return "", fmt.Errorf("删除任务 %s：%w", t.TaskID, err)
+				}
+				deleted += n
+			}
+		}
+		return fmt.Sprintf("已删除 %d 条终态任务记录。", deleted), nil
+	case "review":
+		ts, err := store.ListByState(ctx, core.StateReview)
+		if err != nil {
+			return "", fmt.Errorf("查询任务：%w", err)
+		}
+		if len(ts) == 0 {
+			return "待审批队列已为空。", nil
+		}
+		cancelled, deleted := 0, 0
+		for _, t := range ts {
+			// The engine path so a remote executor hears the cancel.
+			if ids, err := e.CancelTask(ctx, t.TaskID); err == nil {
+				cancelled += len(ids)
+			}
+			if n, err := store.Delete(ctx, t.TaskID); err == nil {
+				deleted += n
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return "", fmt.Errorf("删除任务 %s：%w", t.TaskID, err)
+			}
+		}
+		return fmt.Sprintf("已清理待审批队列：取消 %d 个，删除 %d 条记录。", cancelled, deleted), nil
+	case "all":
+		ts, err := store.ListByState(ctx, "")
+		if err != nil {
+			return "", fmt.Errorf("查询任务：%w", err)
+		}
+		if len(ts) == 0 {
+			return "任务队列已为空。", nil
+		}
+		for _, t := range ts {
+			if !core.Terminal(t.State) {
+				_, _ = e.CancelTask(ctx, t.TaskID)
+			}
+		}
+		cancelled, deleted, err := store.ClearQueue(ctx)
+		if err != nil {
+			return "", fmt.Errorf("清空队列：%w", err)
+		}
+		return fmt.Sprintf("已清空队列：取消 %d 个，删除 %d 条记录。", cancelled, deleted), nil
+	default:
+		return "", fmt.Errorf("无效的 scope %q，必须为 history、review 或 all", scope)
+	}
 }
 
 func (e *Engine) checkCardPath() (string, error) {

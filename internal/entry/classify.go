@@ -3,8 +3,6 @@ package entry
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -159,11 +157,17 @@ func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.No
 // a recovered call may only run when the model could legitimately have made
 // one.
 func resolveResponse(resp Response, toolsOffered bool) (Output, error) {
-	// A tool_use is authoritative: the model chose a controlled tool, so route to
-	// the registry rather than the text parser.
+	// A tool_use is authoritative: the model chose controlled tools, so route
+	// every call to the registry rather than the text parser. All of them are
+	// returned in Tools — executing just the first made one round trip per
+	// call, which burned the whole round budget on a single batch intent
+	// ("clean the queue" cancelling N tasks = N rounds).
 	if len(resp.ToolUses) > 0 {
-		tu := resp.ToolUses[0]
-		out := Output{Kind: KindToolCall, Tool: &ToolCall{ID: tu.ID, Tool: tu.Name, Arguments: tu.Input}}
+		out := Output{Kind: KindToolCall}
+		for _, tu := range resp.ToolUses {
+			out.Tools = append(out.Tools, &ToolCall{ID: tu.ID, Tool: tu.Name, Arguments: tu.Input})
+		}
+		out.Tool = out.Tools[0]
 		if note := droppedToolNote(resp); note != "" {
 			out.Note = note
 		}
@@ -189,26 +193,10 @@ func resolveResponse(resp Response, toolsOffered bool) (Output, error) {
 	return out, nil
 }
 
-// droppedToolNote captures the content the executor will not act on — text the
-// model emitted alongside a tool call, and any tool_use after the first — so
-// the ask loop can surface it to the user and replay it to the model instead of
-// silently discarding it.
+// droppedToolNote captures the text the model emitted alongside its tool
+// call(s) so the ask loop can surface it to the user and replay it to the
+// model instead of silently discarding it. The calls themselves are no longer
+// part of the note — every one is executed in the same round.
 func droppedToolNote(resp Response) string {
-	var parts []string
-	if resp.Text != "" {
-		parts = append(parts, resp.Text)
-	}
-	for _, extra := range resp.ToolUses[1:] {
-		keys := make([]string, 0, len(extra.Input))
-		for k := range extra.Input {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		var args []string
-		for _, k := range keys {
-			args = append(args, fmt.Sprintf("%s=%v", k, extra.Input[k]))
-		}
-		parts = append(parts, fmt.Sprintf("tool %s(%s)", extra.Name, strings.Join(args, ", ")))
-	}
-	return strings.Join(parts, "\n")
+	return strings.TrimSpace(resp.Text)
 }

@@ -420,6 +420,245 @@ func TestDSMLToolCallRecovered(t *testing.T) {
 	}
 }
 
+// TestMultiToolCallsExecuteInOneRound is the incident's root regression: a
+// queue-cleanup answer emits several taskq_cancel calls in ONE response.
+// Every call must execute in that round — previously only the first ran and
+// the rest were dropped into the note, so the model re-emitted them round
+// after round until the tool budget burned down to the DSML failure.
+func TestMultiToolCallsExecuteInOneRound(t *testing.T) {
+	e, _ := newMgmtTestEngine(t)
+
+	store := core.NewTaskStore(e.db, nil)
+	ctx := context.Background()
+	var ids []string
+	for _, title := range []string{"清理目标甲", "清理目标乙", "清理目标丙"} {
+		task, err := store.Create(ctx, "", "proj", title, "test-node", nil)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if err := store.Queue(ctx, task.TaskID, "test-node"); err != nil {
+			t.Fatalf("queue: %v", err)
+		}
+		ids = append(ids, task.TaskID)
+	}
+
+	var mu sync.Mutex
+	calls := 0
+	var sawBatchTurn bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		calls++
+		n := calls
+		// The tool-result turn must carry every result in ONE user message —
+		// Anthropic requires a tool_result for every tool_use of the previous
+		// assistant turn.
+		if n == 2 {
+			var req struct {
+				Messages []struct {
+					Role    string          `json:"role"`
+					Content json.RawMessage `json:"content"`
+				} `json:"messages"`
+			}
+			if json.Unmarshal(body, &req) == nil {
+				for _, m := range req.Messages {
+					if m.Role != "user" || len(m.Content) == 0 || m.Content[0] != '[' {
+						continue
+					}
+					var blocks []struct {
+						Type string `json:"type"`
+					}
+					if json.Unmarshal(m.Content, &blocks) != nil {
+						continue
+					}
+					results := 0
+					for _, c := range blocks {
+						if c.Type == "tool_result" {
+							results++
+						}
+					}
+					if results == 3 {
+						sawBatchTurn = true
+					}
+				}
+			}
+		}
+		mu.Unlock()
+		w.Header().Set("content-type", "application/json")
+		var resp map[string]any
+		if n == 1 {
+			blocks := []map[string]any{}
+			for i, id := range ids {
+				blocks = append(blocks, map[string]any{
+					"type": "tool_use", "id": fmt.Sprintf("toolu_cancel_%d", i),
+					"name": "taskq_cancel", "input": map[string]any{"task_id": id},
+				})
+			}
+			resp = map[string]any{
+				"content": blocks,
+				"usage":   map[string]int{"input_tokens": 8, "output_tokens": 6},
+			}
+		} else {
+			resp = anthropicText("三个排队任务已全部取消。")
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+	client, err := entry.NewClient(config.ModelConfig{BaseURL: srv.URL, Model: "test-model", APIKey: "test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.injector = memory.NewInjector(memory.NewHermes(t.TempDir()), nil)
+	e.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	e.client.Store(client)
+	e.queueTasks = true
+
+	res, err := e.Ask(ctx, "把队列里这几个任务都取消掉", false)
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("model calls = %d, want 2 (batched tool round + convergence)", calls)
+	}
+	if !sawBatchTurn {
+		t.Fatal("tool results were not batched into one user turn")
+	}
+	if res.Kind != "answer" || res.Answer != "三个排队任务已全部取消。" {
+		t.Fatalf("res = %+v", res)
+	}
+	for _, id := range ids {
+		got, err := store.Get(ctx, id)
+		if err != nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+		if got.State != core.StateCancelled {
+			t.Fatalf("task %s state = %s, want cancelled", id, got.State)
+		}
+	}
+}
+
+// TestDSMLBatchInvokesExecuteAll covers the same batch regression on the
+// text-protocol path: a DSML tool_calls block carries several invokes and
+// every one must run in the round — there are no native ids, so the replay
+// is prose.
+func TestDSMLBatchInvokesExecuteAll(t *testing.T) {
+	e, _ := newMgmtTestEngine(t)
+	store := core.NewTaskStore(e.db, nil)
+	ctx := context.Background()
+	var ids []string
+	for _, title := range []string{"dsml清理甲", "dsml清理乙"} {
+		task, err := store.Create(ctx, "", "proj", title, "test-node", nil)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if err := store.Queue(ctx, task.TaskID, "test-node"); err != nil {
+			t.Fatalf("queue: %v", err)
+		}
+		ids = append(ids, task.TaskID)
+	}
+
+	var mu sync.Mutex
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		w.Header().Set("content-type", "application/json")
+		var text string
+		if n == 1 {
+			// Single full-width pipe — the DeepSeek real wire form.
+			text = "我来逐个取消。\n<｜DSML｜tool_calls>\n" +
+				"<｜DSML｜invoke name=\"taskq_cancel\">\n" +
+				"<｜DSML｜parameter name=\"task_id\" string=\"true\">" + ids[0] + "</｜DSML｜parameter>\n" +
+				"</｜DSML｜invoke>\n" +
+				"<｜DSML｜invoke name=\"taskq_cancel\">\n" +
+				"<｜DSML｜parameter name=\"task_id\" string=\"true\">" + ids[1] + "</｜DSML｜parameter>\n" +
+				"</｜DSML｜invoke>\n</｜DSML｜tool_calls>"
+		} else {
+			text = "两个任务已取消。"
+		}
+		_ = json.NewEncoder(w).Encode(anthropicText(text))
+	}))
+	t.Cleanup(srv.Close)
+	client, err := entry.NewClient(config.ModelConfig{BaseURL: srv.URL, Model: "test-model", APIKey: "test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.injector = memory.NewInjector(memory.NewHermes(t.TempDir()), nil)
+	e.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	e.client.Store(client)
+	e.queueTasks = true
+
+	res, err := e.Ask(ctx, "取消队列里的任务", false)
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("model calls = %d, want 2 (DSML batch round + convergence)", calls)
+	}
+	if res.Answer != "两个任务已取消。" {
+		t.Fatalf("res = %+v", res)
+	}
+	for _, id := range ids {
+		got, err := store.Get(ctx, id)
+		if err != nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+		if got.State != core.StateCancelled {
+			t.Fatalf("task %s state = %s, want cancelled", id, got.State)
+		}
+	}
+}
+
+// TestAskDigestAfterToolLoopFailure covers the incident's tail: every tool
+// round executed real work, then the tool-free round returned unusable DSML.
+// The answer must summarize what the tools did — the operations DID happen —
+// instead of surfacing the bare round/protocol error.
+func TestAskDigestAfterToolLoopFailure(t *testing.T) {
+	var mu sync.Mutex
+	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("content-type", "application/json")
+		if !strings.Contains(string(body), `"tools"`) {
+			// Tool-free final round: unusable DSML-only markup — the exact
+			// failure the user saw, now degraded into a truthful digest.
+			_ = json.NewEncoder(w).Encode(anthropicText("<||DSML||tool_calls>\n<||DSML||invoke>\n</||DSML||tool_calls>"))
+			return
+		}
+		// Every tool round re-emits a cancel that resolves to nothing — the
+		// result is recorded, so the digest has something to report.
+		resp := map[string]any{
+			"content": []map[string]any{{
+				"type": "tool_use", "id": "toolu_spin", "name": "taskq_cancel",
+				"input": map[string]any{"task_id": "task-nonexistent"},
+			}},
+			"usage": map[string]int{"input_tokens": 8, "output_tokens": 6},
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+
+	res, err := e.Ask(context.Background(), "清理一下任务队列", false)
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	if res.Kind != "answer" {
+		t.Fatalf("res = %+v, want digest answer", res)
+	}
+	if !strings.Contains(res.Answer, "taskq_cancel") {
+		t.Fatalf("digest missing executed tool names: %q", res.Answer)
+	}
+	if strings.Contains(res.Answer, "DSML") || strings.Contains(res.Answer, "接入点协议不兼容") {
+		t.Fatalf("raw protocol error leaked into the digest: %q", res.Answer)
+	}
+}
+
 // TestDSMLToolFreeRoundStripped covers the incident's final shape: the
 // tool-free convergence round answers with DSML markup. The markup must be
 // stripped and the prose kept, never shown raw.
