@@ -22,6 +22,8 @@ network:
   # The HMAC secret authenticates node-to-node hellos; every node in the P2P
   # network must share the same value. Prefer env OPENPANDA_SHARED_SECRET.
   # NOTE: shared_secret authenticates peers but does NOT encrypt payloads.
+  # `panda init` generates one automatically; `panda pair`/`nodes invite` fill
+  # it when missing.
   shared_secret: ""              # e.g. openssl rand -hex 32; keep out of public repos
   # ── Connection limits (slow-DoS protection) ──
   # max_connections: 64            # global concurrent WS connections (0 = unlimited)

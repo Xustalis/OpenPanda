@@ -2,7 +2,11 @@
 
 package main
 
-import "fmt"
+import (
+	"fmt"
+
+	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
+)
 
 // Lite build: the Bubble Tea front end (tui_*.go — the charmbracelet stack,
 // the binary's largest optional dependency chain) is compiled out entirely
@@ -17,5 +21,5 @@ func runTUI(r *repl) {}
 // the banner carried. (In the full build this method lives on repl.go's
 // TUI-adjacent helpers.)
 func (r *repl) printBanner() {
-	fmt.Printf("OpenPanda %s — node %s (lite build)\n", version, r.cfg.Node.Name)
+	fmt.Printf("OpenPanda %s (%s) — node %s (lite build)\n", version, versionpkg.Codename, r.cfg.Node.Name)
 }
