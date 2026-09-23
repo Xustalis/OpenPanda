@@ -22,6 +22,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/skills"
 )
 
 // tuiMode is the model's top-level state.
@@ -37,6 +38,7 @@ const (
 	modeModelPanel  // Model management panel
 	modeModelWizard // Model add/setup onboarding wizard
 	modeOnboarding  // First-time use onboarding wizard
+	modeSkillsHub   // Skills Hub browse/search/install panel
 )
 
 type listKind int
@@ -52,8 +54,13 @@ type wizardStep int
 
 const (
 	wizardStepProvider  wizardStep = iota // Choose provider
+	wizardStepBaseURL                     // Enter base URL (custom/relay only)
+	wizardStepAPIType                     // Choose wire dialect (custom/relay only)
 	wizardStepAPIKey                      // Enter API Key
 	wizardStepModelName                   // Enter Model Name
+	wizardStepThinking                    // Choose thinking mode (auto/on/off)
+	wizardStepContext                     // Enter context window (blank = default)
+	wizardStepTest                        // Connectivity probe → save
 )
 
 type onboardingStep int
@@ -133,17 +140,42 @@ type tuiModel struct {
 	onboardingStep onboardingStep
 	termsCursor    int // 0 = Agree [Y], 1 = Decline [N]
 
-	// Model wizard state
+	// Model wizard state. wizardInput is the shared edit buffer for the text
+	// steps; each step loads its own value into it on entry and saves it back
+	// on advance.
 	wizardStep         wizardStep
 	wizardProvider     string
 	wizardKey          string
 	wizardModel        string
+	wizardBaseURL      string // custom/relay endpoint
+	wizardAPIType      string // "openai" | "anthropic" (custom/relay)
+	wizardThinking     string // "auto" | "on" | "off"
+	wizardContext      string // context window, raw text
 	wizardInput        string
+	wizardTestErr      string // non-empty once the connectivity probe failed
+	wizardTesting      bool   // probe in flight (wizardStepTest)
+	wizardEditAlias    string // alias being edited ("" = adding a new entry)
 	confirmDeleteModel bool
 	pendingDeleteModel string
 
 	// lastInterrupt timestamps the previous Esc/Ctrl-C of a turn.
 	lastInterrupt time.Time
+	// turnMode is the slash-prefix mode this turn runs under ("goal", "plan",
+	// "spec"; "" = normal). It drives the status badge and the classify
+	// directive for the in-flight ask.
+	turnMode string
+
+	// Skills Hub panel state: the fetched catalogue, the "/" filter line, and
+	// the async fetch/install status.
+	hubIndex     *skills.HubIndex
+	hubQuery     string
+	hubSearching bool
+	hubLoading   bool
+	hubErr       string
+	// hubInstalled caches the names already present in the global store. It is
+	// refreshed when the panel opens, when an index lands, and after each
+	// install — never inside hubRebuildList, which runs per search keystroke.
+	hubInstalled map[string]bool
 
 	// pendingPrompt is the user text of the in-flight ask, kept so the turn can
 	// be recorded into conversation memory when it completes.
@@ -203,6 +235,10 @@ func newTUIModel(r *repl) tuiModel {
 	ta.MaxHeight = 8
 	ta.SetHeight(1)
 	ta.Focus()
+	// "enter" in the default binding never fires — the outer handler submits on
+	// Enter before the textarea sees it — so it is free to stay; ctrl+j is the
+	// portable newline fallback alongside shift+enter / alt+enter.
+	ta.KeyMap.InsertNewline.SetKeys("enter", "ctrl+m", "ctrl+j")
 	// The bordered input frame supplies the visual box; the textarea itself must
 	// not draw its own cursor-line background over it.
 	ta.FocusedStyle.CursorLine = lipglossNoStyle()

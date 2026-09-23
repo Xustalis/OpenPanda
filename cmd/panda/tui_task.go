@@ -10,6 +10,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +33,7 @@ type taskStage struct {
 type taskProgress struct {
 	title      string
 	started    time.Time
+	loc        i18n.Locale
 	stages     []taskStage
 	activeTool string
 	activeAt   time.Duration
@@ -39,8 +41,8 @@ type taskProgress struct {
 }
 
 // newTaskProgress opens a card for a task the engine just submitted.
-func newTaskProgress(title string, now time.Time) *taskProgress {
-	return &taskProgress{title: strings.TrimSpace(title), started: now}
+func newTaskProgress(title string, now time.Time, loc i18n.Locale) *taskProgress {
+	return &taskProgress{title: strings.TrimSpace(title), started: now, loc: loc}
 }
 
 // advance records a new stage. A repeat of the current stage's label is dropped
@@ -93,7 +95,7 @@ func (tp *taskProgress) trail(total time.Duration) []string {
 			tc = tp.curTools
 		}
 		if tc > 0 {
-			lbl += fmt.Sprintf(" (%d 项操作)", tc)
+			lbl += i18n.Tf(tp.loc, "tui.task.ops", "n", strconv.Itoa(tc))
 		}
 		if d := end - st.at; d > 0 {
 			out = append(out, fmt.Sprintf("%s · %s", lbl, elapsed(d)))
@@ -193,7 +195,7 @@ func (tp *taskProgress) renderLive(t theme, loc i18n.Locale, spin string, now ti
 			tc = tp.curTools
 		}
 		if tc > 0 {
-			lbl += t.muted.Render(fmt.Sprintf(" (%d 项操作)", tc))
+			lbl += t.muted.Render(i18n.Tf(loc, "tui.task.ops", "n", strconv.Itoa(tc)))
 		}
 		line := fmt.Sprintf("  %s  %s %s", arm, mark, lbl)
 		if d := end - st.at; d > 0 {
@@ -203,7 +205,7 @@ func (tp *taskProgress) renderLive(t theme, loc i18n.Locale, spin string, now ti
 
 		if last && tp.activeTool != "" {
 			toolElapsed := total - tp.activeAt
-			toolLine := fmt.Sprintf("     %s  %s 当前操作: %s", arm, spin, truncate(tp.activeTool, 60))
+			toolLine := fmt.Sprintf("     %s  %s %s%s", arm, spin, i18n.T(loc, "tui.task.activeOp"), truncate(tp.activeTool, 60))
 			if toolElapsed > 0 {
 				toolLine += t.muted.Render(" · " + elapsed(toolElapsed))
 			}
