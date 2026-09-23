@@ -30,6 +30,8 @@ func TestAgentNegotiationSignaling(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	must(a.DialPeer(ctx, "127.0.0.1:17972"))
+	waitPeer(t, a, "node-b")
+	waitPeer(t, b, "node-a")
 	time.Sleep(200 * time.Millisecond)
 
 	// Send negotiation signal from node-a to node-b

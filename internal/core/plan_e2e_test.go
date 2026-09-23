@@ -75,6 +75,10 @@ func TestPlanThreeStagesThreeNodes(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	must(pi.DialPeer(ctx, "127.0.0.1:17992"))
 	must(pi.DialPeer(ctx, "127.0.0.1:17993"))
+	waitPeer(t, pi, "mac")
+	waitPeer(t, pi, "win")
+	waitPeer(t, mac, "pi")
+	waitPeer(t, win, "pi")
 	time.Sleep(300 * time.Millisecond)
 
 	pi.StartQueueScheduler(ctx)
