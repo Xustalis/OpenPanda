@@ -556,7 +556,7 @@ func (c *Core) relayParked(ctx context.Context, onlyHop string) {
 		if hop == "" || (onlyHop != "" && hop != onlyHop) || c.connFor(hop) == nil {
 			continue
 		}
-		if !c.relayForwardOK(bnd.BundleID, bnd.DeadlineUnix) {
+		if !c.relayForwardOK(ctx, bnd.BundleID, bnd.DeadlineUnix) {
 			continue // loop bound spent: hold custody for a direct contact
 		}
 		if !c.deliverBundle(ctx, hop, e.blob) {

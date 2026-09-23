@@ -47,6 +47,7 @@ var migrations = []Migration{
 	{Version: 22, Name: "add_task_outbox_via", Apply: migrateV22},
 	{Version: 23, Name: "add_task_agent_session", Apply: migrateV23},
 	{Version: 24, Name: "add_reminders_repeat", Apply: migrateV24},
+	{Version: 25, Name: "add_dtn_relay_log", Apply: migrateV25},
 }
 
 // migrateV23 adds tasks.agent_session_id and tasks.agent_session_node: the
@@ -554,6 +555,22 @@ func migrateV24(tx MigrationExec) error {
 		return err
 	}
 	_, err = tx.Exec(`ALTER TABLE reminders ADD COLUMN repeat_seconds INTEGER NOT NULL DEFAULT 0`)
+	return err
+}
+
+// migrateV25 adds dtn_relay_log: the durable form of the per-node loop bound
+// for store-and-forward custody (whitepaper §8.3). A signed bundle cannot
+// carry a hop list, so each relay counts its own forwards of a bundle id —
+// and that count must survive a restart, or a rebooted node re-arms the bound
+// and a triangle of restarts can ping-pong a bundle until its TTL. until is
+// the bundle's deadline (defaulted when the origin set none): the row expires
+// with the bundle it bounds.
+func migrateV25(tx MigrationExec) error {
+	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS dtn_relay_log (
+		bundle_id TEXT PRIMARY KEY,
+		hops INTEGER NOT NULL DEFAULT 0,
+		until INTEGER NOT NULL DEFAULT 0
+	)`)
 	return err
 }
 
