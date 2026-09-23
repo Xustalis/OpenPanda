@@ -106,6 +106,9 @@ const zhCN: Messages = {
   // Detail view
   'detail.back': '返回队列',
   'detail.approve': '批准',
+  'detail.reviewKind.accept_work': '已有执行成果——批准即验收为完成',
+  'detail.reviewKind.resume_execution': '尚未执行——批准后将继续执行',
+  'detail.reviewKind.needs_changed_input': '需修改输入/范围后才能继续',
   'detail.reject': '拒绝',
   'detail.rejectReason': '原因（可选，记录进任务日志）',
   'detail.rejectConfirm': '确认拒绝',

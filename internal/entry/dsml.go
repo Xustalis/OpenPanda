@@ -16,11 +16,14 @@ import (
 // call the model intended never happens.
 
 // dsmlOpenMarkers are the opening delimiters of any DSML tag (tool_calls,
-// invoke, parameter), in both pipe variants. dsmlCloseMarkers are the closing
+// invoke, parameter). DeepSeek's own template uses single full-width pipes
+// ("<｜DSML｜…", same convention as its "<｜begin▁of▁sentence｜>" tokens); relays
+// and lookalike models emit the other three half/full × single/double
+// combinations, so all four are markers. dsmlCloseMarkers are the closing
 // forms; they only widen detection (a response carrying just a stray closing
 // tag is still markup, never an answer).
-var dsmlOpenMarkers = []string{"<||DSML||", "<｜｜DSML｜｜"}
-var dsmlCloseMarkers = []string{"</||DSML||", "</｜｜DSML｜｜"}
+var dsmlOpenMarkers = []string{"<||DSML||", "<|DSML|", "<｜｜DSML｜｜", "<｜DSML｜"}
+var dsmlCloseMarkers = []string{"</||DSML||", "</|DSML|", "</｜｜DSML｜｜", "</｜DSML｜"}
 
 // ContainsDSMLToolCall reports whether s carries DSML tool-call markup in
 // either pipe variant, opening or closing.
@@ -48,15 +51,24 @@ func StripDSMLToolCalls(text string) string {
 		return text
 	}
 	out := strings.TrimSpace(text[:start])
-	for _, closer := range []string{"</||DSML||tool_calls>", "</｜｜DSML｜｜tool_calls>", "</||DSML||invoke>", "</｜｜DSML｜｜invoke>"} {
-		if i := strings.LastIndex(text, closer); i >= 0 {
-			suffix := strings.TrimSpace(text[i+len(closer):])
-			if suffix != "" && out != "" {
+	// Keep whatever prose follows the LAST closing tag of any variant — taking
+	// the maximum end position so a truncated document whose final tag is an
+	// invoke (or a different pipe variant) still strips everything markup-side.
+	end := -1
+	for _, m := range dsmlCloseMarkers {
+		for _, tag := range []string{m + "tool_calls>", m + "invoke>", m + "parameter>"} {
+			if i := strings.LastIndex(text, tag); i >= 0 && i+len(tag) > end {
+				end = i + len(tag)
+			}
+		}
+	}
+	if end >= 0 {
+		if suffix := strings.TrimSpace(text[end:]); suffix != "" {
+			if out != "" {
 				out += "\n" + suffix
-			} else if suffix != "" {
+			} else {
 				out = suffix
 			}
-			break
 		}
 	}
 	return out
@@ -105,12 +117,15 @@ func dsmlHoldbackLen(s string) int {
 	return n
 }
 
-// dsmlInvokeRe matches one invoke block on the pipe-normalized text; the
-// closing tag is optional for a truncated final invoke. dsmlParamRe matches
-// one parameter inside an invoke body.
+// dsmlInvokeRe matches one invoke block on the pipe-normalized text (full-
+// width ｜ is folded to | first, so \|{1,2} covers all four delimiter
+// variants); the closing tag is optional for a truncated final invoke. The
+// name attribute tolerates double quotes, single quotes, and no quotes —
+// relays rewrite attributes on the way through. dsmlParamRe does the same
+// for one parameter inside an invoke body.
 var (
-	dsmlInvokeRe = regexp.MustCompile(`(?s)<\|\|DSML\|\|invoke\s+name="([^"]+)"[^>]*>(.*?)(?:</\|\|DSML\|\|invoke>|$)`)
-	dsmlParamRe  = regexp.MustCompile(`(?s)<\|\|DSML\|\|parameter\s+name="([^"]+)"([^>]*)>(.*?)</\|\|DSML\|\|parameter>`)
+	dsmlInvokeRe = regexp.MustCompile(`(?s)<\|{1,2}DSML\|{1,2}invoke\s+name=(?:"([^"]*)"|'([^']*)'|([^\s>/]+))[^>]*>(.*?)(?:<\/\|{1,2}DSML\|{1,2}invoke>|$)`)
+	dsmlParamRe  = regexp.MustCompile(`(?s)<\|{1,2}DSML\|{1,2}parameter\s+name=(?:"([^"]*)"|'([^']*)'|([^\s>/]+))([^>]*)>(.*?)<\/\|{1,2}DSML\|{1,2}parameter>`)
 )
 
 // parseDSMLToolCalls extracts the invoke blocks from text carrying DSML
@@ -126,21 +141,44 @@ func parseDSMLToolCalls(text string) (uses []ToolUse, preamble string, ok bool) 
 	preamble = strings.TrimSpace(text[:start])
 	norm := strings.ReplaceAll(text[start:], "｜", "|")
 	for _, m := range dsmlInvokeRe.FindAllStringSubmatch(norm, -1) {
-		name := strings.TrimSpace(m[1])
+		name := strings.TrimSpace(firstNonEmpty(m[1], m[2], m[3]))
 		if name == "" {
 			continue
 		}
+		body := m[4]
 		params := map[string]any{}
-		for _, pm := range dsmlParamRe.FindAllStringSubmatch(m[2], -1) {
-			key := strings.TrimSpace(pm[1])
+		for _, pm := range dsmlParamRe.FindAllStringSubmatch(body, -1) {
+			key := strings.TrimSpace(firstNonEmpty(pm[1], pm[2], pm[3]))
 			if key == "" {
 				continue
 			}
-			params[key] = dsmlParamValue(pm[2], pm[3])
+			params[key] = dsmlParamValue(pm[4], pm[5])
+		}
+		if len(params) == 0 {
+			// Some relays emit the invoke body as a bare JSON object instead of
+			// parameter tags; accept it rather than dropping a clean call.
+			if js := strings.TrimSpace(body); strings.HasPrefix(js, "{") {
+				var obj map[string]any
+				if json.Unmarshal([]byte(js), &obj) == nil {
+					params = obj
+				}
+			}
 		}
 		uses = append(uses, ToolUse{Name: name, Input: params})
 	}
 	return uses, preamble, len(uses) > 0
+}
+
+// firstNonEmpty returns the first non-empty alternative — the invoke/parameter
+// name regexes offer three capture groups (double-quoted, single-quoted,
+// bare) of which at most one is populated.
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // dsmlParamValue types one parameter value: an explicit string="true" stays a
@@ -149,7 +187,7 @@ func parseDSMLToolCalls(text string) (uses []ToolUse, preamble string, ok bool) 
 // plain string.
 func dsmlParamValue(attrs, raw string) any {
 	v := strings.TrimSpace(raw)
-	if strings.Contains(attrs, `string="true"`) {
+	if strings.Contains(attrs, `string="true"`) || strings.Contains(attrs, `string='true'`) || strings.Contains(attrs, `string=true`) {
 		return v
 	}
 	var parsed any
@@ -182,10 +220,14 @@ func dsmlParamValue(attrs, raw string) any {
 func resolveDSML(resp Response, toolsOffered bool) (Output, error) {
 	uses, preamble, ok := parseDSMLToolCalls(resp.Text)
 	if ok && toolsOffered {
-		out := Output{Kind: KindToolCall, Tool: &ToolCall{Tool: uses[0].Name, Arguments: uses[0].Input}}
-		if note := droppedToolNote(Response{Text: preamble, ToolUses: uses}); note != "" {
-			out.Note = note
+		// Every invoke becomes a call the loop executes this round — a batch
+		// request ("clean the queue") emits one invoke per target and must not
+		// be serialized into one round per call.
+		out := Output{Kind: KindToolCall, Note: preamble}
+		for _, u := range uses {
+			out.Tools = append(out.Tools, &ToolCall{Tool: u.Name, Arguments: u.Input})
 		}
+		out.Tool = out.Tools[0]
 		return out, nil
 	}
 	if ok {

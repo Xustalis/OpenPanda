@@ -933,11 +933,14 @@ func (s *TaskStore) Approve(ctx context.Context, taskID string) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		var res sql.Result
 		if resume {
-			// Approval itself does not assign queue ownership. The foreground
-			// resume path claims the row below; queue ownership is established
-			// only by Enqueue/SetQueueMeta.
+			// Approval itself does not assign queue ownership, but it MUST stay
+			// schedulable: callers that stop here (rather than following with
+			// ResumeApproved's claim) would otherwise leave a queued row with
+			// scheduled=0 — a state ListReady never selects, stranding the task
+			// invisibly. With scheduled=1 the queue scheduler adopts it like any
+			// other queued row.
 			res, err = tx.ExecContext(ctx, `
-				UPDATE tasks SET state=?, authorized=1, scheduled=0, state_version=state_version+1, updated_at=?
+				UPDATE tasks SET state=?, authorized=1, scheduled=1, state_version=state_version+1, updated_at=?
 				WHERE task_id=? AND state=?`,
 				StateQueued, s.now(), taskID, StateReview)
 		} else {

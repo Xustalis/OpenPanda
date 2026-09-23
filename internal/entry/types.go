@@ -24,15 +24,31 @@ const (
 
 // Output is the parsed result of one entry-model call. Exactly one of
 // Answer/Tool/Task/Plan is populated, matching Kind. Note carries content the
-// executor does not act on — text emitted alongside a tool call and any
-// tool_use after the first — so callers can surface it rather than drop it.
+// executor does not act on — text emitted alongside a tool call — so callers
+// can surface it rather than drop it.
 type Output struct {
 	Kind   Kind
-	Answer string    // KindAnswer
-	Tool   *ToolCall // KindToolCall
-	Task   *TaskSpec // KindTask
-	Plan   *PlanSpec // KindPlan
-	Note   string    // dropped text / extra tool_use (KindToolCall)
+	Answer string      // KindAnswer
+	Tool   *ToolCall   // KindToolCall — the first call (kept for simple consumers)
+	Tools  []*ToolCall // KindToolCall — every call the model emitted this round
+	Task   *TaskSpec   // KindTask
+	Plan   *PlanSpec   // KindPlan
+	Note   string      // text emitted alongside the tool call(s) (KindToolCall)
+}
+
+// ToolCalls returns every call the model emitted this round. Models emit
+// several tool_use blocks per response for batch operations ("cancel these 5
+// tasks"), and the loop must honour all of them in one round: executing only
+// the first burns one round per call until the round budget runs out on work
+// that was fully specified up front.
+func (o Output) ToolCalls() []*ToolCall {
+	if len(o.Tools) > 0 {
+		return o.Tools
+	}
+	if o.Tool != nil {
+		return []*ToolCall{o.Tool}
+	}
+	return nil
 }
 
 // ToolCall is a validated tool invocation request. ID carries the tool_use id

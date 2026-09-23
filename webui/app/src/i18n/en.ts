@@ -109,6 +109,9 @@ const en: Messages = {
   // Detail view
   'detail.back': 'Back to queue',
   'detail.approve': 'Approve',
+  'detail.reviewKind.accept_work': 'Work already produced — approve accepts it as done',
+  'detail.reviewKind.resume_execution': 'Not run yet — approve resumes execution',
+  'detail.reviewKind.needs_changed_input': 'Needs changed input before it can continue',
   'detail.reject': 'Reject',
   'detail.rejectReason': 'Reason (optional, recorded in the task log)',
   'detail.rejectConfirm': 'Confirm reject',

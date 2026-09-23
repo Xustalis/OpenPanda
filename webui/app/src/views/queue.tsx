@@ -544,9 +544,19 @@ function KanbanCard({
       </div>
       {isReview && (
         // Approval is the whole point of the review column (design §11.2):
-        // act on the card itself, no detour into the detail page.
+        // act on the card itself, no detour into the detail page. The
+        // disposition line says what approve will DO — accept finished work,
+        // resume a parked run, or refuse until the input changes — instead of
+        // a bare "awaiting approval" that used to cover all three.
         <div class="kanban-actions" onClick={(e) => e.stopPropagation()}>
-          <button class="btn primary small" disabled={busy} onClick={() => act(() => api.approve(task.id))}>
+          {task.approval_disposition && (
+            <span class="dim review-kind">{t(`detail.reviewKind.${task.approval_disposition}`)}</span>
+          )}
+          <button
+            class="btn primary small"
+            disabled={busy || task.approval_disposition === 'needs_changed_input'}
+            onClick={() => act(() => api.approve(task.id))}
+          >
             {t('detail.approve')}
           </button>
           <button

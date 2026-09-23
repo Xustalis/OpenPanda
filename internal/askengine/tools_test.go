@@ -22,15 +22,18 @@ import (
 )
 
 func TestTaskDispatchCaptureTakeClears(t *testing.T) {
-	want := &Result{Kind: "task", TaskID: "task-1"}
+	first := &Result{Kind: "task", TaskID: "task-1"}
+	second := &Result{Kind: "task", TaskID: "task-2"}
 	var capture taskDispatchCapture
-	capture.set(want)
+	capture.add(first)
+	capture.add(second)
 
-	if got := capture.take(); got != want {
-		t.Fatalf("first take = %p, want %p", got, want)
+	got := capture.takeAll()
+	if len(got) != 2 || got[0] != first || got[1] != second {
+		t.Fatalf("takeAll = %+v, want both captured results in order", got)
 	}
-	if got := capture.take(); got != nil {
-		t.Fatalf("second take = %+v, want nil after capture was cleared", got)
+	if got := capture.takeAll(); len(got) != 0 {
+		t.Fatalf("second takeAll = %+v, want empty after drain", got)
 	}
 }
 
@@ -111,7 +114,7 @@ func TestExecuteToolTierGate(t *testing.T) {
 func TestAppendToolTurnsNative(t *testing.T) {
 	turns := []entry.Turn{{Role: "user", Content: "记住我偏好暗色主题"}}
 	call := &entry.ToolCall{ID: "toolu_1", Tool: "memory_add", Arguments: map[string]any{"entry": "x"}}
-	turns = appendToolTurns(turns, call, "", "已记住")
+	turns = appendToolCalls(turns, []*entry.ToolCall{call}, "", []string{"已记住"})
 
 	if len(turns) != 3 {
 		t.Fatalf("turns = %d, want 3", len(turns))
@@ -128,12 +131,43 @@ func TestAppendToolTurnsNative(t *testing.T) {
 	}
 }
 
+// A batch response replays as ONE assistant turn carrying every tool_use
+// block and ONE user turn answering all of them — the Anthropic Messages API
+// contract requires all tool_uses of an assistant turn to be answered in the
+// next user message.
+func TestAppendToolCallsNativeBatch(t *testing.T) {
+	turns := []entry.Turn{{Role: "user", Content: "清理队列"}}
+	calls := []*entry.ToolCall{
+		{ID: "toolu_1", Tool: "taskq_cancel", Arguments: map[string]any{"task_id": "a1"}},
+		{ID: "toolu_2", Tool: "taskq_cancel", Arguments: map[string]any{"task_id": "a2"}},
+		{ID: "toolu_3", Tool: "taskq_cancel", Arguments: map[string]any{"task_id": "a3"}},
+	}
+	turns = appendToolCalls(turns, calls, "把这三个停掉。", []string{"ok a1", "ok a2", "ok a3"})
+
+	if len(turns) != 3 {
+		t.Fatalf("turns = %d, want 3", len(turns))
+	}
+	assistant := turns[1]
+	if len(assistant.Blocks) != 4 || assistant.Blocks[0].Type != "text" {
+		t.Fatalf("assistant blocks = %+v, want [text, tool_use ×3]", assistant.Blocks)
+	}
+	user := turns[2]
+	if len(user.Blocks) != 3 {
+		t.Fatalf("user blocks = %+v, want 3 tool_results", user.Blocks)
+	}
+	for i, id := range []string{"toolu_1", "toolu_2", "toolu_3"} {
+		if assistant.Blocks[i+1].ID != id || user.Blocks[i].ToolUseID != id {
+			t.Fatalf("call %d not paired: %+v / %+v", i, assistant.Blocks[i+1], user.Blocks[i])
+		}
+	}
+}
+
 func TestAppendToolTurnsNativeWithNote(t *testing.T) {
 	turns := []entry.Turn{{Role: "user", Content: "合并记忆"}}
 	call := &entry.ToolCall{ID: "toolu_1", Tool: "memory_read", Arguments: map[string]any{"target": "user"}}
-	// Accompanying text and an extra tool_use are replayed as an assistant text
-	// block ahead of the executed tool_use, so the model sees them next round.
-	turns = appendToolTurns(turns, call, "先读记忆再合并\n工具 memory_add(target=memory)", "已读")
+	// Accompanying text is replayed as an assistant text block ahead of the
+	// executed tool_use, so the model sees it next round.
+	turns = appendToolCalls(turns, []*entry.ToolCall{call}, "先读记忆再合并", []string{"已读"})
 
 	if len(turns) != 3 {
 		t.Fatalf("turns = %d, want 3", len(turns))
@@ -153,7 +187,7 @@ func TestAppendToolTurnsTextFallback(t *testing.T) {
 	// No tool_use id: the pre-tool_use text fallback must carry the call and
 	// result as prose.
 	call := &entry.ToolCall{Tool: "memory_add", Arguments: map[string]any{"entry": "x"}}
-	turns = appendToolTurns(turns, call, "", "已记住")
+	turns = appendToolCalls(turns, []*entry.ToolCall{call}, "", []string{"已记住"})
 
 	if len(turns) != 3 {
 		t.Fatalf("turns = %d, want 3", len(turns))
@@ -163,6 +197,24 @@ func TestAppendToolTurnsTextFallback(t *testing.T) {
 	}
 	if len(turns[2].Blocks) != 0 || !strings.Contains(turns[2].Content, "已记住") {
 		t.Fatalf("user fallback = %+v, want prose carrying the result", turns[2])
+	}
+}
+
+// Id-less calls (DSML / text-JSON fallback) replay as prose pairs; several of
+// them keep their call order.
+func TestAppendToolCallsProseBatch(t *testing.T) {
+	turns := []entry.Turn{{Role: "user", Content: "清理队列"}}
+	calls := []*entry.ToolCall{
+		{Tool: "taskq_cancel", Arguments: map[string]any{"task_id": "a1"}},
+		{Tool: "taskq_cancel", Arguments: map[string]any{"task_id": "a2"}},
+	}
+	turns = appendToolCalls(turns, calls, "", []string{"ok a1", "ok a2"})
+	if len(turns) != 5 {
+		t.Fatalf("turns = %d, want 5 (2 prose pairs)", len(turns))
+	}
+	if !strings.Contains(turns[1].Content, "a1") || !strings.Contains(turns[2].Content, "ok a1") ||
+		!strings.Contains(turns[3].Content, "a2") || !strings.Contains(turns[4].Content, "ok a2") {
+		t.Fatalf("prose pairs out of order: %+v", turns[1:])
 	}
 }
 

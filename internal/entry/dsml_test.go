@@ -23,13 +23,33 @@ const dsmlASCII = `<||DSML||tool_calls>
 </||DSML||invoke>
 </||DSML||tool_calls>`
 
+// The delimiter DeepSeek itself emits — single full-width pipes, matching its
+// other special tokens (<｜begin▁of▁sentence｜>). This is the shape the Anthropic
+// -compatible endpoint put in the text field when the tool loop broke.
+const dsmlSingleFullWidth = `<｜DSML｜tool_calls>
+<｜DSML｜invoke name="taskq_cancel">
+<｜DSML｜parameter name="task_id" string="true">01a0a836</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>`
+
+// …and its half-width twin some relays normalize to.
+const dsmlSinglePipe = `<|DSML|tool_calls>
+<|DSML|invoke name="taskq_list">
+<|DSML|parameter name="filter" string="true">all</|DSML|parameter>
+</|DSML|invoke>
+</|DSML|tool_calls>`
+
 func TestContainsDSMLToolCall(t *testing.T) {
-	for _, s := range []string{dsmlFullWidth, dsmlASCII, "trailing </||DSML||invoke>", "<｜｜DSML｜｜invoke name=\"x\">"} {
+	for _, s := range []string{
+		dsmlFullWidth, dsmlASCII, dsmlSinglePipe, dsmlSingleFullWidth,
+		"trailing </||DSML||invoke>", "<｜｜DSML｜｜invoke name=\"x\">",
+		"trailing </｜DSML｜invoke>", "<|DSML|invoke name=\"x\">",
+	} {
 		if !ContainsDSMLToolCall(s) {
 			t.Errorf("ContainsDSMLToolCall(%q) = false, want true", s)
 		}
 	}
-	for _, s := range []string{"", "普通回答，没有标记", "<|DSML|> 不是完整标记", "DSML 单独出现不算"} {
+	for _, s := range []string{"", "普通回答，没有标记", "<|DSL|> 拼写错误不算标记", "DSML 单独出现不算", "<DSML> 缺管道符不算"} {
 		if ContainsDSMLToolCall(s) {
 			t.Errorf("ContainsDSMLToolCall(%q) = true, want false", s)
 		}
@@ -71,6 +91,79 @@ func TestParseDSMLToolCallsTypesAndMultiple(t *testing.T) {
 func TestParseDSMLToolCallsUnparsable(t *testing.T) {
 	if _, _, ok := parseDSMLToolCalls("<||DSML||tool_calls>\n(no invoke here)\n</||DSML||tool_calls>"); ok {
 		t.Error("ok = true for markup without invoke, want false")
+	}
+}
+
+// The single-pipe delimiters are the ones DeepSeek actually emits; a parser
+// that only knew the double-pipe forms is what produced the "unparsable DSML"
+// failure on api.deepseek.com/anthropic.
+func TestParseDSMLToolCallsSinglePipeVariants(t *testing.T) {
+	for name, src := range map[string]string{
+		"full-width": dsmlSingleFullWidth,
+		"half-width": dsmlSinglePipe,
+	} {
+		uses, _, ok := parseDSMLToolCalls(src)
+		if !ok || len(uses) != 1 {
+			t.Fatalf("%s: uses = %+v ok=%v", name, uses, ok)
+		}
+	}
+	uses, _, _ := parseDSMLToolCalls(dsmlSingleFullWidth)
+	if uses[0].Name != "taskq_cancel" || uses[0].Input["task_id"] != "01a0a836" {
+		t.Errorf("single full-width invoke = %+v", uses[0])
+	}
+	uses, _, _ = parseDSMLToolCalls(dsmlSinglePipe)
+	if uses[0].Name != "taskq_list" || uses[0].Input["filter"] != "all" {
+		t.Errorf("single half-width invoke = %+v", uses[0])
+	}
+}
+
+// Relays rewrite attributes on the way through: single-quoted or bare names
+// and a bare-JSON invoke body must still parse rather than strand the call.
+func TestParseDSMLToolCallsTolerantAttributes(t *testing.T) {
+	single := `<||DSML||invoke name='taskq_cancel'><||DSML||parameter name='task_id' string='true'>abc</||DSML||parameter></||DSML||invoke>`
+	uses, _, ok := parseDSMLToolCalls(single)
+	if !ok || len(uses) != 1 || uses[0].Name != "taskq_cancel" || uses[0].Input["task_id"] != "abc" {
+		t.Fatalf("single-quoted: uses = %+v ok=%v", uses, ok)
+	}
+	bare := `<||DSML||invoke name=taskq_list><||DSML||parameter name=filter string=true>all</||DSML||parameter></||DSML||invoke>`
+	uses, _, ok = parseDSMLToolCalls(bare)
+	if !ok || len(uses) != 1 || uses[0].Input["filter"] != "all" {
+		t.Fatalf("bare attrs: uses = %+v ok=%v", uses, ok)
+	}
+	jsonBody := `<||DSML||invoke name="taskq_move">{"task_id": "abc", "seq": 2}</||DSML||invoke>`
+	uses, _, ok = parseDSMLToolCalls(jsonBody)
+	if !ok || len(uses) != 1 || uses[0].Input["task_id"] != "abc" || uses[0].Input["seq"] != float64(2) {
+		t.Fatalf("json body: uses = %+v ok=%v", uses, ok)
+	}
+}
+
+// A batch response carries one invoke per target; all of them must come back,
+// not just the first — that one-call-per-round drop is what burned the tool
+// budget on "clean the queue".
+func TestResolveDSMLReturnsAllInvokes(t *testing.T) {
+	text := "把这三个停掉。\n<｜DSML｜tool_calls>\n" +
+		`<｜DSML｜invoke name="taskq_cancel"><｜DSML｜parameter name="task_id" string="true">a1</｜DSML｜parameter></｜DSML｜invoke>` +
+		`<｜DSML｜invoke name="taskq_cancel"><｜DSML｜parameter name="task_id" string="true">a2</｜DSML｜parameter></｜DSML｜invoke>` +
+		`<｜DSML｜invoke name="taskq_cancel"><｜DSML｜parameter name="task_id" string="true">a3</｜DSML｜parameter></｜DSML｜invoke>` +
+		"\n</｜DSML｜tool_calls>"
+	out, err := resolveDSML(Response{Text: text}, true)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	calls := out.ToolCalls()
+	if len(calls) != 3 {
+		t.Fatalf("calls = %d, want 3", len(calls))
+	}
+	for i, id := range []string{"a1", "a2", "a3"} {
+		if calls[i].Tool != "taskq_cancel" || calls[i].Arguments["task_id"] != id {
+			t.Errorf("call %d = %+v", i, calls[i])
+		}
+	}
+	if out.Tool != calls[0] {
+		t.Error("Tool must alias Tools[0] for single-call consumers")
+	}
+	if !strings.Contains(out.Note, "把这三个停掉") {
+		t.Errorf("preamble lost: %q", out.Note)
 	}
 }
 

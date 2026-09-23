@@ -74,11 +74,14 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
           <StateBadge state={task.state} />
         </div>
         <div class="detail-actions">
+          {task.state === 'review' && task.approval_disposition && (
+            <span class="dim review-kind">{t(`detail.reviewKind.${task.approval_disposition}`)}</span>
+          )}
           {task.state === 'review' && !rejecting && (
             <>
               <button
                 class="btn primary"
-                disabled={busy}
+                disabled={busy || task.approval_disposition === 'needs_changed_input'}
                 onClick={() => act(() => api.approve(task.id), t('detail.approvedToast'))}
               >
                 {t('detail.approve')}

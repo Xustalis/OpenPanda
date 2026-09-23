@@ -307,8 +307,25 @@ func TestApproveResumesFailedReview(t *testing.T) {
 	if !got.Authorized {
 		t.Fatal("approved failed-review task must carry the tier-2 consent (authorized)")
 	}
-	if got.Scheduled {
-		t.Fatal("foreground approval must not assign queue ownership (scheduled)")
+	// scheduled=1 on purpose: a caller that stops after Approve (rather than
+	// following with ResumeApproved's claim) must still leave the row where
+	// the queue scheduler can see it. scheduled=0 produced an invisible
+	// orphan — queued, but ListReady never selected it.
+	if !got.Scheduled {
+		t.Fatal("approved resume task must stay schedulable (scheduled=1) so the queue scheduler can adopt it")
+	}
+	ready, err := s.ListReady(ctx)
+	if err != nil {
+		t.Fatalf("list ready: %v", err)
+	}
+	found := false
+	for _, r := range ready {
+		if r.TaskID == tk.TaskID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("approved resume task must be selectable by ListReady")
 	}
 }
 
