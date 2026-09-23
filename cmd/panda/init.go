@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/term"
@@ -26,6 +27,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/hwinfo"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 	"gopkg.in/yaml.v3"
 )
 
@@ -62,6 +64,18 @@ func runInit(args []string) {
 		"class", def.Node.ResourceClass, "kind", def.Node.Kind))
 	if def.Node.Kind == config.NodeKindVM {
 		fmt.Println(i18n.Tf(loc, "init.node.vm", "identity", def.Node.Identity))
+	}
+
+	// Seed the mesh secret up front: without it the WS listener refuses
+	// inbound peers, and previously it only appeared when the user first ran
+	// `panda pair`/`nodes add`. Generating here costs nothing — a node that
+	// later joins an existing mesh adopts the inviter's secret via pair,
+	// overwriting this one.
+	if secret, err := generateSharedSecret(); err == nil {
+		def.Network.SharedSecret = secret
+		fmt.Println(i18n.T(loc, "init.secret.gen"))
+	} else {
+		fatal("generate shared secret", err)
 	}
 
 	// Model setup is the single question. --defaults, --non-interactive, and
@@ -230,69 +244,68 @@ func orDefault(v, fallback string) string {
 	return v
 }
 
+// interactiveModelSetup is init's one question. The provider list comes from
+// the providers registry — the same catalogue `panda model add` and the web
+// settings page offer — so init can never drift onto a retired endpoint or
+// model id again. Enter keeps the catalogue's first entry (DeepSeek).
 func interactiveModelSetup(in *bufio.Reader, def *config.Config, loc i18n.Locale) bool {
 	if !askYes(in, i18n.T(loc, "init.model.ask")) {
 		return false
 	}
+	all := providers.All()
 	fmt.Println()
-	fmt.Println("请选择模型供应商 / Select Model Provider:")
-	fmt.Println("  1) DeepSeek (https://api.deepseek.com/v1) [推荐 / Recommended]")
-	fmt.Println("  2) Anthropic / Claude (https://api.anthropic.com)")
-	fmt.Println("  3) OpenAI (https://api.openai.com/v1)")
-	fmt.Println("  4) Ollama 本地模型 (http://localhost:11434/v1)")
-	fmt.Println("  5) 自定义 / Custom Endpoint")
-	fmt.Printf("输入选择 / Choice [1]: ")
+	fmt.Println(i18n.T(loc, "init.model.pick"))
+	for i, p := range all {
+		label := p.Label
+		if p.BaseURL != "" {
+			label += " (" + p.BaseURL + ")"
+		}
+		mark := "  "
+		if i == 0 {
+			mark = "* " // the catalogue's recommended first entry
+		}
+		fmt.Printf(" %s%d) %s\n", mark, i+1, label)
+	}
+	fmt.Printf("%s [1]: ", i18n.T(loc, "init.model.choice"))
 	choice, _ := in.ReadString('\n')
 	choice = strings.TrimSpace(choice)
-	if choice == "" {
-		choice = "1"
+
+	sel := all[0]
+	if choice != "" {
+		if n, err := strconv.Atoi(choice); err == nil && n >= 1 && n <= len(all) {
+			sel = all[n-1]
+		} else if p, ok := providers.Lookup(strings.ToLower(choice)); ok {
+			sel = p
+		} else {
+			fmt.Println(i18n.T(loc, "init.invalid"))
+			sel = all[0]
+		}
 	}
 
-	var apiType, baseURL, defaultModel string
-	var needsAuth bool = true
-
-	switch choice {
-	case "2":
-		apiType = config.APITypeAnthropic
-		baseURL = "https://api.anthropic.com"
-		defaultModel = "claude-3-5-sonnet-20241022"
-	case "3":
-		apiType = config.APITypeOpenAI
-		baseURL = "https://api.openai.com/v1"
-		defaultModel = "gpt-4o"
-	case "4":
-		apiType = config.APITypeOpenAI
-		baseURL = "http://localhost:11434/v1"
-		defaultModel = "qwen2.5-coder:14b"
-		needsAuth = false
-	case "5":
+	if sel.ID == "custom" {
+		// No catalogue values: ask for the wire dialect and endpoint.
 		fmt.Printf("API Type (openai/anthropic) [openai]: ")
 		t, _ := in.ReadString('\n')
-		t = strings.TrimSpace(t)
-		if t == "anthropic" {
-			apiType = config.APITypeAnthropic
+		if strings.TrimSpace(t) == "anthropic" {
+			sel.APIType = config.APITypeAnthropic
 		} else {
-			apiType = config.APITypeOpenAI
+			sel.APIType = config.APITypeOpenAI
 		}
 		fmt.Printf("Base URL: ")
 		u, _ := in.ReadString('\n')
-		baseURL = strings.TrimSpace(u)
-		defaultModel = "default"
-	default: // "1"
-		apiType = config.APITypeOpenAI
-		baseURL = "https://api.deepseek.com/v1"
-		defaultModel = "deepseek-chat"
+		sel.BaseURL = strings.TrimSpace(u)
+		sel.DefaultModel = "default"
 	}
 
-	fmt.Printf("Model Name [%s]: ", defaultModel)
+	fmt.Printf("Model Name [%s]: ", sel.DefaultModel)
 	modelName, _ := in.ReadString('\n')
 	modelName = strings.TrimSpace(modelName)
 	if modelName == "" {
-		modelName = defaultModel
+		modelName = sel.DefaultModel
 	}
 
 	var apiKey string
-	if needsAuth {
+	if !sel.NoAuth {
 		fmt.Print("API Key (输入隐藏 / input hidden): ")
 		if stdinIsTTY() {
 			pw, err := term.ReadPassword(os.Stdin.Fd())
@@ -307,9 +320,17 @@ func interactiveModelSetup(in *bufio.Reader, def *config.Config, loc i18n.Locale
 		}
 	}
 
-	def.Model.APIType = apiType
-	def.Model.BaseURL = baseURL
+	def.Model.Provider = sel.ID
+	def.Model.APIType = sel.APIType
+	def.Model.BaseURL = sel.BaseURL
 	def.Model.Model = modelName
 	def.Model.APIKey = apiKey
+	def.Model.NoAuth = sel.NoAuth
+	if sel.ContextWindow > 0 {
+		def.Model.ContextWindow = sel.ContextWindow
+	}
+	if sel.DefaultMaxTokens > 0 {
+		def.Model.MaxTokens = sel.DefaultMaxTokens
+	}
 	return true
 }

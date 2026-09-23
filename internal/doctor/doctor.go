@@ -7,6 +7,7 @@ package doctor
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,6 +85,28 @@ func Run(configPath string) []Check {
 			add(pass("doctor.modelkey.ok"))
 		} else {
 			add(fail("doctor.modelkey.no"))
+		}
+
+		// Network planes. Validate() already guarantees listen_addr and
+		// udp_listen parse, so what remains silent is an empty shared_secret
+		// — the WS listener then refuses every inbound peer and the daemon
+		// only warns once at startup — and an explicit udp_listen=off, which
+		// is deliberate but worth surfacing since it disables punching.
+		if cfg.Network.SharedSecret == "" {
+			add(fail("doctor.network.nosecret"))
+		} else {
+			add(pass("doctor.network.ok", "addr", cfg.Network.ListenAddr))
+		}
+		switch cfg.Network.UDPListen {
+		case "off":
+			add(pass("doctor.udp.off"))
+		case "":
+			// "" follows listen_addr's port on the wildcard interface.
+			if _, port, err := net.SplitHostPort(cfg.Network.ListenAddr); err == nil {
+				add(pass("doctor.udp.ok", "addr", ":"+port))
+			}
+		default:
+			add(pass("doctor.udp.ok", "addr", cfg.Network.UDPListen))
 		}
 	} else {
 		add(fail("doctor.config.no", "err", err.Error()))

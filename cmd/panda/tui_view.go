@@ -18,6 +18,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -923,10 +924,10 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 			sb.WriteString(th.accent.Render(line))
 		}
 		sb.WriteString("\n\n")
-		sb.WriteString(th.heading.Render("  " + i18n.T(loc, "repl.banner.title") + " v" + version))
+		sb.WriteString(th.heading.Render("  " + i18n.T(loc, "repl.banner.title") + " v" + version + " (" + versionpkg.Codename + ")"))
 	} else {
 		sb.WriteString(th.heading.Render(cliui.Truncate(
-			"  "+th.glyph("✻", "*")+" "+i18n.T(loc, "repl.banner.title")+" v"+version, width, uni)))
+			"  "+th.glyph("✻", "*")+" "+i18n.T(loc, "repl.banner.title")+" v"+version+" ("+versionpkg.Codename+")", width, uni)))
 	}
 
 	sb.WriteString("\n")
