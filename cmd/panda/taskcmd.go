@@ -67,7 +67,7 @@ func taskUsage() {
 	fmt.Fprintln(os.Stderr, "usage: panda task <verb|task-id>")
 	fmt.Fprintln(os.Stderr, "  <id>                                    show one task and its timeline")
 	fmt.Fprintln(os.Stderr, "  add --title T [--prompt P] [--priority "+cliPriorities+"]")
-	fmt.Fprintln(os.Stderr, "      [--project p] [--authorize] [--card PATH]   enqueue a task")
+	fmt.Fprintln(os.Stderr, "      [--project p] [--parent-id ID] [--preferred NODE] [--authorize] [--card PATH]   enqueue a task")
 	fmt.Fprintln(os.Stderr, "  priority <id> <level>                   change a task's priority")
 	fmt.Fprintln(os.Stderr, "  move <id> <seq>                         reorder the drag-sort queue")
 	fmt.Fprintln(os.Stderr, "  delete <id>                             remove a task and its subtree (queued/finished)")
@@ -324,6 +324,8 @@ func runTaskAdd(args []string) {
 	project := fs.String("project", "", "project to attach the task to")
 	authorize := fs.Bool("authorize", false, "authorize tier-2 (irreversible) commands")
 	requires := fs.String("requires", "coding", "comma-separated ability ids the task needs (routed cross-device)")
+	parentID := fs.String("parent-id", "", "parent task id (defaults to PANDA_TASK_ID environment variable)")
+	preferred := fs.String("preferred", "", "preferred node id")
 	fs.Parse(args)
 
 	loc := i18n.Detect()
@@ -341,6 +343,12 @@ func runTaskAdd(args []string) {
 		fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.task.add.badPriority", "level", *priority, "list", cliPriorities))
 		os.Exit(2)
 	}
+
+	pID := strings.TrimSpace(*parentID)
+	if pID == "" {
+		pID = os.Getenv("PANDA_TASK_ID")
+	}
+	pref := strings.TrimSpace(*preferred)
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -365,11 +373,13 @@ func runTaskAdd(args []string) {
 		requiresList = []string{"coding"}
 	}
 	in := core.TaskInput{
-		Title:      *title,
-		Project:    *project,
-		Intent:     *prompt,
-		Requires:   requiresList,
-		Authorized: *authorize,
+		Title:         *title,
+		ParentID:      pID,
+		Project:       *project,
+		Intent:        *prompt,
+		Requires:      requiresList,
+		PreferredNode: pref,
+		Authorized:    *authorize,
 	}
 	q := core.DefaultQueueSpec()
 	q.Priority = prio

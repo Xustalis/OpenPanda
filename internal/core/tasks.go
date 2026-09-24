@@ -172,7 +172,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
-			&agentSession, &agentSessionNode)
+			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs)
 	if err != nil {
 		return Task{}, err
 	}
@@ -1137,6 +1137,20 @@ func (s *TaskStore) SetAuthorized(ctx context.Context, taskID string, authorized
 	return nil
 }
 
+// SetAuthorizedGrant is SetAuthorized plus the signed consent the delegate
+// carried: the grant persists so a later re-dispatch (queue forward, decline
+// re-route) re-emits the origin's Ed25519 signature instead of degrading the
+// consent to the bare flag on the next hop (P2-8).
+func (s *TaskStore) SetAuthorizedGrant(ctx context.Context, taskID, sig, pub string, ts int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET authorized=1, auth_sig=?, auth_pub=?, auth_ts=?, updated_at=? WHERE task_id=?`,
+		sig, pub, ts, s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("set authorized grant: %w", err)
+	}
+	return nil
+}
+
 // SetDetail persists the entry-model-derived task metadata (design doc §6.1
 // tasks schema): context type, intent, spec, complexity, risk, and resource
 // profile. Called once after creation; the fields default to zero/empty until
@@ -2081,7 +2095,8 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	approval_disposition, operation_decision_json, lease_expires_at, created_at, updated_at, authorized,
 	priority, seq, session_id, resource_keys_json, work_dir, scheduled,
 	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact,
-	transport, deadline_unix, delegation_budget, token_budget, agent_session_id, agent_session_node`
+	transport, deadline_unix, delegation_budget, token_budget, agent_session_id, agent_session_node,
+	auth_sig, auth_pub, auth_ts`
 
 func scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task
@@ -2105,7 +2120,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
-			&agentSession, &agentSessionNode); err != nil {
+			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)

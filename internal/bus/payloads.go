@@ -29,6 +29,8 @@ type HelloPayload struct {
 	Ts     int64           `json:"ts,omitempty"`    // unix seconds, bound into Sig
 	Nonce  string          `json:"nonce,omitempty"` // per-dial random, bound into Sig when present
 	Sig    string          `json:"sig"`
+	PubKey string          `json:"pub_key,omitempty"` // Ed25519 public key hex (cryptographic identity)
+	EdSig  string          `json:"ed_sig,omitempty"`  // Ed25519 signature over NodeID:Ts:Nonce
 	// UDPPort advertises the sender's datagram-plane listener (farsky). A
 	// peer that cannot hold a TCP session to us can still be reached by a
 	// punch: combine this port with the IP we observe its connection coming
@@ -142,7 +144,10 @@ type TaskDelegatePayload struct {
 	// HMAC is what makes this unforgeable by non-peers, and the origin node
 	// only sets it after the user explicitly authorized (task add
 	// --authorize / ask --authorize).
-	Authorized bool `json:"authorized,omitempty"`
+	Authorized bool   `json:"authorized,omitempty"`
+	AuthSig    string `json:"auth_sig,omitempty"` // Ed25519 signature over TaskID:Authorized:TS (tamper-proof approval)
+	AuthPub    string `json:"auth_pub,omitempty"` // Ed25519 public key hex of the authorizing node
+	AuthTs     int64  `json:"auth_ts,omitempty"`  // unix seconds the consent was minted, bound into AuthSig
 	// AuthHops bounds how far Authorized may travel (hop-limited consent):
 	// each relay decrements it before forwarding onward, and a payload whose
 	// hops are spent has its consent cleared, so the executor's defense layer
@@ -247,6 +252,18 @@ type ArtifactRef struct {
 	Stage  string `json:"stage,omitempty"`
 	Hash   string `json:"hash"`
 	Source string `json:"source"`
+	// OfTask names the producing stage's task id on the holder — the row the
+	// serving node can actually resolve for authorization. The fetching
+	// stage's own id cannot serve that purpose: a producer holds only its own
+	// stage's row, never its siblings'.
+	OfTask string `json:"of_task,omitempty"`
+	// Grant is the orchestrator's Ed25519 signature over
+	// (plan, consumer task, producer task, hash): capability proof that this
+	// input was legitimately issued, so the producer need not know the
+	// consumer's row to serve it. Issuer is the orchestrator's node id, used
+	// to look up the signing key in the peer directory.
+	Grant  string `json:"grant,omitempty"`
+	Issuer string `json:"issuer,omitempty"`
 }
 
 // TitleOrDefault returns the explicit title, falling back to the intent.
@@ -448,6 +465,14 @@ type ArtifactFetchPayload struct {
 	TaskID string `json:"task_id"`
 	Hash   string `json:"hash"`
 	Offset int64  `json:"offset"`
+	// OfTask/Grant/Issuer ride along when the fetch is a direct stage-to-stage
+	// pull: OfTask is the producing task's id as named by the orchestrator's
+	// input ref, Grant is the orchestrator-signed authorization, and Issuer is
+	// the orchestrator's node id. All three are absent on legacy fetches,
+	// which keep the participant-based authorization path.
+	OfTask string `json:"of_task,omitempty"`
+	Grant  string `json:"grant,omitempty"`
+	Issuer string `json:"issuer,omitempty"`
 }
 
 // ArtifactChunkPayload answers an artifact_fetch. Data holds at most
