@@ -143,6 +143,14 @@ type Engine struct {
 
 	breakerMu sync.Mutex
 	breaker   map[string]time.Time // modelName -> cooldown until
+
+	// projStore reads the per-project approval policy (mode/scope/decision)
+	// the tier-2 gate resolves against; decisions holds the session-scoped
+	// remembered answers, keyed by decisionKey(sessionID, project) so one
+	// conversation's remember never leaks into another's.
+	projStore   *projectstore.Store
+	decisionsMu sync.RWMutex
+	decisions   map[string]string
 }
 
 func (e *Engine) isModelHealthy(name string) bool {
@@ -375,6 +383,15 @@ type Result struct {
 	// this stays false.
 	NeedsApproval bool
 	Approval      *ApprovalRequest
+
+	// Denied is set when a remembered "deny" answered the tier-2 gate before
+	// the task existed: nothing was created and no prompt was shown. Kind
+	// stays "task" so the refusal renders where a task card would have been.
+	Denied bool
+	// ConsentSource records which remembered scope supplied the consent when
+	// one did ("session" or "project"), so surfaces can show the task ran on
+	// a standing answer rather than a fresh prompt.
+	ConsentSource string
 }
 
 // ApprovalRequest describes a tier-2 (irreversible) action awaiting the user's
@@ -382,10 +399,12 @@ type Result struct {
 // executor's refusal reason. It is what an OnApproval callback renders and what
 // a NeedsApproval Result carries back for a caller that prompts out-of-band.
 type ApprovalRequest struct {
-	TaskID string
-	Title  string
-	Intent string
-	Reason string // the executor's authorization-refusal message
+	TaskID  string
+	Title   string
+	Intent  string
+	Reason  string // the executor's authorization-refusal message
+	Project string // the task's project — the scope a project-level "remember" writes to
+	Scope   string // the resolved default remember scope (once|session|project)
 }
 
 // Tokens is the ask's total token count (input + output), 0 when the provider
@@ -524,6 +543,11 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		cardPath:       opts.CardPath,
 		locale:         loc,
 		explicitLocale: explicitLocale,
+	}
+	if db != nil {
+		// The gate fails closed without the store: approvalFor just reads
+		// no project policy, so remembered/session answers still resolve.
+		e.projStore = projectstore.NewStore(db)
 	}
 	e.fallbacks = e.buildFallbacks(cfg.Model, db)
 	// The registry is built with the engine itself: the management tools hold
@@ -897,20 +921,35 @@ type AskScope struct {
 	// Mode is the slash-prefix interaction mode the user picked for this turn
 	// ("goal", "plan", "spec"); empty leaves classification to the model.
 	Mode string
+	// SessionID keys the conversation a remembered "session" approval belongs
+	// to — the REPL's active session, a panel chat's id. Empty means the
+	// session-less bucket (a bare REPL, `panda ask`), whose decisions live and
+	// die with the process.
+	SessionID string
 
-	ambientProjectFallback bool
+	// AmbientProject falls back to the engine's ambient (entered) project
+	// when Project is empty — the compatibility default for CLI callers that
+	// do not pin a project per ask. Exported so scoped callers outside this
+	// package (panel sessions) can make the same choice explicitly.
+	AmbientProject bool
 }
 
 // AskTurns is the backward-compatible session-aware entry point. Callers that
 // own explicit project context should use AskTurnsScoped.
 func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, workDir string, authorize bool, cb StreamCallbacks) (res *Result, err error) {
-	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, ambientProjectFallback: true}, authorize, cb)
+	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, AmbientProject: true}, authorize, cb)
 }
 
 // AskTurnsMode is AskTurns plus the slash-prefix interaction mode the user
 // picked (/goal, /plan, /spec). "" is exactly AskTurns.
 func (e *Engine) AskTurnsMode(ctx context.Context, history []entry.Turn, prompt, workDir, mode string, authorize bool, cb StreamCallbacks) (res *Result, err error) {
-	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, Mode: mode, ambientProjectFallback: true}, authorize, cb)
+	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, Mode: mode, AmbientProject: true}, authorize, cb)
+}
+
+// AskTurnsSession is AskTurnsMode plus the session id a remembered "session"
+// approval binds to. "" degrades to AskTurnsMode's session-less bucket.
+func (e *Engine) AskTurnsSession(ctx context.Context, history []entry.Turn, prompt, workDir, mode, sessionID string, authorize bool, cb StreamCallbacks) (res *Result, err error) {
+	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, Mode: mode, SessionID: sessionID, AmbientProject: true}, authorize, cb)
 }
 
 // AskTurnsScoped is the session-aware ask with request-scoped project/workspace.
@@ -1038,12 +1077,16 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			// make a real call.
 		}
 	}
-	// The tool gate shares the task gate's consent semantics: "never"
-	// auto-consents, an explicit session grant (--authorize / /authorize /
-	// the panel's authorize field) satisfies on-request, and "always"
-	// withholds consent at submission no matter the grant — every tier-2
-	// operation is decided per-action in the foreground.
-	toolAuthorized := gateAuthorized(e.cfg.Approval.NormalizedMode(), authorize)
+	// The tool gate shares the task gate's consent semantics, resolved through
+	// the same verdict: "never" auto-consents, a remembered session/project
+	// answer is replayed, an explicit session grant (--authorize / /authorize
+	// / the panel's authorize field) satisfies on-request, and "always"
+	// withholds consent no matter the grant — every tier-2 operation is
+	// decided per-action in the foreground.
+	scopeProj, _ := e.scopeProject(scope)
+	verdict := e.approvalFor(scope.SessionID, scopeProj)
+	toolAuthorized, toolDenied := verdict.gate(authorize)
+	approvalMode := verdict.mode
 	const maxRounds = 6
 	// maxTasks bounds how many sub-agent rounds one ask may run. A task round
 	// is minutes of work and a full agent transcript of tokens, so its budget
@@ -1251,7 +1294,7 @@ rounds:
 				// Execute against the same registry snapshot classification
 				// saw: a mid-ask SetMCPCommand swap would otherwise make the
 				// model's tool call hit a registry that no longer knows it.
-				results[i] = executeTool(ctx, reg, call, toolAuthorized, e.cfg.Approval.NormalizedMode(), effectiveLocale)
+				results[i] = executeTool(ctx, reg, call, toolAuthorized, toolDenied, approvalMode, effectiveLocale)
 				toolDigest = append(toolDigest, call.Tool+": "+results[i])
 				for _, d := range taskCapture.takeAll() {
 					dispatched = append(dispatched, d)
@@ -1405,12 +1448,26 @@ func (e *Engine) DialPeer(ctx context.Context, addr string) error {
 }
 
 // EnqueueTask routes a directly-created task (the panel's board "new task"
-// form) through the async queue: it lands in queued and the scheduler starts
-// it when resources allow. Needs a capability card, like task submission.
+// form, `panda task add`) through the async queue: it lands in queued and the
+// scheduler starts it when resources allow. Needs a capability card, like
+// task submission.
+//
+// The same tier-2 verdict the ask loop resolves applies here: the task's own
+// project supplies the effective mode, a remembered project approve supplies
+// consent without a prompt, a remembered deny refuses before the row exists,
+// "always" still parks every tier-2 task for a foreground decision. Session
+// remembers cannot apply — the linked session does not exist yet (the board
+// creates it after a successful enqueue).
 func (e *Engine) EnqueueTask(ctx context.Context, in core.TaskInput, q core.QueueSpec) (core.Task, error) {
 	if e.sched == nil {
 		return core.Task{}, fmt.Errorf("task creation requires a capability card (scheduler initialization failed)")
 	}
+	verdict := e.approvalFor("", in.Project)
+	authorized, denied := verdict.gate(in.Authorized)
+	if denied {
+		return core.Task{}, fmt.Errorf("%w (scope: %s)", ErrApprovalDenied, verdict.decisionScope)
+	}
+	in.Authorized = authorized
 	return e.sched.Enqueue(ctx, in, q)
 }
 
@@ -1519,10 +1576,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	workDir := scope.WorkDir
 	// Explicit per-request scope wins. Existing CLI callers that omit a project
 	// retain the entered ambient project as a compatibility default.
-	project, projectDir := scope.Project, ""
-	if scope.ambientProjectFallback {
-		project, projectDir = e.Project()
-	}
+	project, projectDir := e.scopeProject(scope)
 	if project != "" {
 		if in.Project == "" {
 			in.Project = project
@@ -1539,13 +1593,34 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	if in.RepoPath == "" && workDir != "" {
 		in.RepoPath = workDir
 	}
-	// Approval mode is the real tier-2 gate (design §16): "never" auto-consents
-	// so an irreversible task runs as classified; "on-request" withholds consent
-	// until the user approves at the inline gate below, with a session-level
-	// authorization (/authorize on, --authorize) as the standing consent it
-	// honors. "always" withholds regardless: every tier-2 task parks in review
-	// and is decided per-task in the foreground.
-	authorized = gateAuthorized(e.cfg.Approval.NormalizedMode(), authorized)
+	// Approval mode is the real tier-2 gate (design §16), resolved against the
+	// task's own project: a project approval_mode overrides the global mode;
+	// a remembered session/project decision answers before any prompt; an
+	// explicit session grant (/authorize on, --authorize) is the standing
+	// consent on-request honors; "always" withholds regardless so every tier-2
+	// task is decided per-task in the foreground.
+	verdict := e.approvalFor(scope.SessionID, in.Project)
+	authorized, denied := verdict.gate(authorized)
+	consentSrc := ""
+	if authorized && verdict.decisionScope != "" && verdict.decision == projectstore.DecisionApprove {
+		consentSrc = verdict.decisionScope
+	}
+	if denied {
+		// A remembered "deny" answers the gate before a task row exists:
+		// nothing is created, nothing runs, and the model loop sees the
+		// standing refusal through the denied Result (or the task_submit
+		// tool's refusal string) instead of re-prompting forever.
+		return &Result{
+			Kind:      "task",
+			Thought:   reasoning,
+			TaskTitle: in.Title,
+			TaskState: "denied",
+			Denied:    true,
+			OK:        false,
+			ExitCode:  1,
+			Stderr:    i18n.Tf(targetLoc, "repl.approval.autoDenied", "scope", scopeLabel(verdict.decisionScope)),
+		}
+	}
 	in.Authorized = authorized
 	in.WorkDir = workDir
 	// classify_result is traced inside core's createTask — before routing,
@@ -1570,7 +1645,10 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		if reasoning != "" {
 			e.sched.EvTrace(ctx, task.TaskID, core.EvReasoning, map[string]any{"thought": reasoning})
 		}
-		return &Result{Kind: "task", TaskID: task.TaskID, TaskTitle: task.Title, TaskState: task.State, Thought: reasoning}
+		if consentSrc != "" {
+			e.sched.EvTrace(ctx, task.TaskID, "approval_auto", map[string]any{"scope": consentSrc})
+		}
+		return &Result{Kind: "task", TaskID: task.TaskID, TaskTitle: task.Title, TaskState: task.State, Thought: reasoning, ConsentSource: consentSrc}
 	}
 	// Bridge the core's lifecycle trace events to the caller's progress feed for
 	// the duration of this synchronous run, so a blocking agent execution shows
@@ -1608,6 +1686,10 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		Injected:  result.Injected,
 		Executor:  result.Executor,
 	}
+	res.ConsentSource = consentSrc
+	if consentSrc != "" {
+		e.sched.EvTrace(ctx, task.TaskID, "approval_auto", map[string]any{"scope": consentSrc})
+	}
 	// Inline approval closure: a tier-2 task with no standing consent parks in
 	// review with an authorization-refusal reason. Turn that dead end into a
 	// decision — consult the caller's OnApproval, and on a yes re-run the same
@@ -1615,7 +1697,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	// background scheduler). A caller with no synchronous callback gets a
 	// NeedsApproval Result to handle on its own event loop.
 	if !authorized && task.State == core.StateReview && commander.IsAuthorizationRefusal(result.Stderr) {
-		req := ApprovalRequest{TaskID: task.TaskID, Title: task.Title, Intent: in.Intent, Reason: result.Stderr}
+		req := ApprovalRequest{TaskID: task.TaskID, Title: task.Title, Intent: in.Intent, Reason: result.Stderr, Project: in.Project, Scope: verdict.scope}
 		if cb.OnApproval == nil {
 			res.NeedsApproval = true
 			res.Approval = &req

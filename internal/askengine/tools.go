@@ -267,7 +267,9 @@ func reminderDueTime(args map[string]any) (time.Time, error) {
 // with the consent instructions for the current surface — becomes the
 // tool_result the model relays to the user (design §16: the same fail-closed
 // gate native and agent plans pass through in commander.Router.Execute).
-func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall, authorized bool, approvalMode string, loc ...i18n.Locale) string {
+// denied reports a remembered "deny" for the scope: the refusal then names the
+// standing decision instead of asking for a grant the user already declined.
+func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall, authorized, denied bool, approvalMode string, loc ...i18n.Locale) string {
 	targetLoc := i18n.ChineseSimp
 	if len(loc) > 0 && loc[0] != "" {
 		targetLoc = loc[0]
@@ -278,6 +280,12 @@ func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall,
 			return "Tool execution failed: unknown tool " + call.Tool
 		}
 		return "工具执行失败：未知工具 " + call.Tool
+	}
+	if denied {
+		if targetLoc == i18n.English {
+			return "Tool execution refused: the user previously denied tier-2 operations for this scope. Ask the user to clear the remembered denial before retrying."
+		}
+		return "工具执行被拒：该范围内已有 tier-2 操作的拒绝记录。请先让用户清除已记住的拒绝再重试。"
 	}
 	if err := defense.Authorize(t.Tier, authorized); err != nil {
 		if targetLoc == i18n.English {
@@ -409,6 +417,11 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 					return fmt.Sprintf("Task \"%s\" created (ID %s), waiting for user approval before execution (type /approve in REPL, or run panda task approve %s).", spec.Title, res.TaskID, res.TaskID), nil
 				}
 				return fmt.Sprintf("任务「%s」已创建（ID %s），等待用户批准后执行（REPL 输入 /approve，或 panda task approve %s）。", spec.Title, res.TaskID, res.TaskID), nil
+			case res.Denied:
+				if targetLoc == i18n.English {
+					return "", fmt.Errorf("task dispatch refused: %s", strings.TrimSpace(res.Stderr))
+				}
+				return "", fmt.Errorf("任务派发被拒：%s", strings.TrimSpace(res.Stderr))
 			case res.TaskID == "":
 				if targetLoc == i18n.English {
 					return "", fmt.Errorf("task dispatch failed: %s", strings.TrimSpace(res.Stderr))

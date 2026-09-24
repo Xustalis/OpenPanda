@@ -41,6 +41,20 @@ var ErrNotFound = errors.New("projects: no such project")
 // ErrExists reports a create/rename onto a name already taken.
 var ErrExists = errors.New("projects: project already exists")
 
+// Approval remember scopes: where an approval card's "remember" writes the
+// answer it was given. Once applies the answer to that prompt only.
+const (
+	ScopeOnce    = "once"
+	ScopeSession = "session"
+	ScopeProject = "project"
+)
+
+// Approval decision values: the remembered answer the tier-2 gate replays.
+const (
+	DecisionApprove = "approve"
+	DecisionDeny    = "deny"
+)
+
 // Project is one project's metadata. WorkDir is absolute when set; empty means
 // the project has no tree of its own and its tasks run in the node's work
 // directory, which is how a memory-only project (every project that existed
@@ -51,6 +65,62 @@ type Project struct {
 	Description string    `json:"description,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// ApprovalMode is a project-scoped override of the node's approval.mode
+	// gate (always|on-request|never); empty inherits the global policy.
+	ApprovalMode string `json:"approval_mode,omitempty"`
+	// ApprovalScope picks where the "remember" choice on an approval card
+	// writes its answer by default (once|session|project); empty reads as
+	// session — narrower than the project row itself.
+	ApprovalScope string `json:"approval_scope,omitempty"`
+	// ApprovalDecision is the remembered project-level answer (approve|deny)
+	// the gate replays instead of prompting again; empty remembers nothing.
+	ApprovalDecision string `json:"approval_decision,omitempty"`
+}
+
+// NormalizedScope reads the configured remember-scope, defaulting to session:
+// a project that never picked one remembers approvals for the conversation it
+// was granted in — a default narrower than persisting onto the project row.
+func (p Project) NormalizedScope() string {
+	switch p.ApprovalScope {
+	case ScopeOnce, ScopeSession, ScopeProject:
+		return p.ApprovalScope
+	default:
+		return ScopeSession
+	}
+}
+
+// ValidateApprovalMode rejects a project approval mode outside the understood
+// set. "" means "inherit the global gate" and is always legal; the alias words
+// config accepts (strict/auto) are legal here too so a policy can be written in
+// the vocabulary the config file already uses — the engine normalizes either
+// way. Anything else is a typo that must not silently degrade to on-request.
+func ValidateApprovalMode(mode string) error {
+	switch mode {
+	case "", "always", "on-request", "never", "strict", "auto", "prompt":
+		return nil
+	default:
+		return fmt.Errorf("projects: approval mode %q is invalid (want always, on-request, or never)", mode)
+	}
+}
+
+// ValidateApprovalScope rejects a remember-scope outside once|session|project.
+func ValidateApprovalScope(scope string) error {
+	switch scope {
+	case "", ScopeOnce, ScopeSession, ScopeProject:
+		return nil
+	default:
+		return fmt.Errorf("projects: approval scope %q is invalid (want once, session, or project)", scope)
+	}
+}
+
+// ValidateApprovalDecision rejects a remembered answer outside approve|deny.
+func ValidateApprovalDecision(decision string) error {
+	switch decision {
+	case "", DecisionApprove, DecisionDeny:
+		return nil
+	default:
+		return fmt.Errorf("projects: approval decision %q is invalid (want approve or deny)", decision)
+	}
 }
 
 // Store is the projects table plus the settings row that names the active one.
@@ -115,22 +185,33 @@ func (s *Store) Create(name, workDir, description string) (Project, error) {
 	return s.Get(name)
 }
 
-// Get reads one project.
-func (s *Store) Get(name string) (Project, error) {
+// projectColumns is the SELECT list every project read shares, so the approval
+// columns cannot drift out of one query while the others keep working.
+const projectColumns = `name, work_dir, description, created_at, updated_at,
+	approval_mode, approval_scope, approval_decision`
+
+// scanProject reads one row of projectColumns into a Project.
+func scanProject(row interface{ Scan(...any) error }) (Project, error) {
 	var p Project
 	var created, updated int64
-	err := s.db.QueryRow(
-		`SELECT name, work_dir, description, created_at, updated_at FROM projects WHERE name = ?`,
-		name).Scan(&p.Name, &p.WorkDir, &p.Description, &created, &updated)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Project{}, fmt.Errorf("%w: %s", ErrNotFound, name)
-	}
+	err := row.Scan(&p.Name, &p.WorkDir, &p.Description, &created, &updated,
+		&p.ApprovalMode, &p.ApprovalScope, &p.ApprovalDecision)
 	if err != nil {
 		return Project{}, err
 	}
 	p.CreatedAt = time.Unix(created, 0)
 	p.UpdatedAt = time.Unix(updated, 0)
 	return p, nil
+}
+
+// Get reads one project.
+func (s *Store) Get(name string) (Project, error) {
+	p, err := scanProject(s.db.QueryRow(
+		`SELECT `+projectColumns+` FROM projects WHERE name = ?`, name))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Project{}, fmt.Errorf("%w: %s", ErrNotFound, name)
+	}
+	return p, err
 }
 
 // FindByWorkDir looks up the first project pointing at the given work directory.
@@ -142,26 +223,19 @@ func (s *Store) FindByWorkDir(dir string) (Project, error) {
 	if err != nil {
 		return Project{}, err
 	}
-	var p Project
-	var created, updated int64
-	err = s.db.QueryRow(
-		`SELECT name, work_dir, description, created_at, updated_at FROM projects WHERE work_dir = ? ORDER BY updated_at DESC LIMIT 1`,
-		abs).Scan(&p.Name, &p.WorkDir, &p.Description, &created, &updated)
+	p, err := scanProject(s.db.QueryRow(
+		`SELECT `+projectColumns+` FROM projects WHERE work_dir = ? ORDER BY updated_at DESC LIMIT 1`,
+		abs))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Project{}, fmt.Errorf("%w: workdir %s", ErrNotFound, abs)
 	}
-	if err != nil {
-		return Project{}, err
-	}
-	p.CreatedAt = time.Unix(created, 0)
-	p.UpdatedAt = time.Unix(updated, 0)
-	return p, nil
+	return p, err
 }
 
 // List returns every project, newest activity first.
 func (s *Store) List() ([]Project, error) {
 	rows, err := s.db.Query(
-		`SELECT name, work_dir, description, created_at, updated_at FROM projects
+		`SELECT ` + projectColumns + ` FROM projects
 		 ORDER BY updated_at DESC, name ASC`)
 	if err != nil {
 		return nil, err
@@ -169,13 +243,10 @@ func (s *Store) List() ([]Project, error) {
 	defer rows.Close()
 	var out []Project
 	for rows.Next() {
-		var p Project
-		var created, updated int64
-		if err := rows.Scan(&p.Name, &p.WorkDir, &p.Description, &created, &updated); err != nil {
+		p, err := scanProject(rows)
+		if err != nil {
 			return nil, err
 		}
-		p.CreatedAt = time.Unix(created, 0)
-		p.UpdatedAt = time.Unix(updated, 0)
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -201,6 +272,45 @@ func (s *Store) Update(name, workDir, description string) (Project, error) {
 		return Project{}, fmt.Errorf("%w: %s", ErrNotFound, name)
 	}
 	return s.Get(name)
+}
+
+// SetApprovalPolicy writes a project's approval overrides. mode is
+// always|on-request|never (or the config's alias spellings); "" inherits the
+// global gate. scope is once|session|project; "" restores the session default.
+// Unknown values are rejected rather than normalized away — a typo'd policy
+// silently reading as a different mode is how gates open by accident. The
+// project is adopted when it only exists as a memory file, matching every
+// other path that resolves a name to a project.
+func (s *Store) SetApprovalPolicy(name, mode, scope string) error {
+	if err := ValidateApprovalMode(mode); err != nil {
+		return err
+	}
+	if err := ValidateApprovalScope(scope); err != nil {
+		return err
+	}
+	if _, err := s.EnsureFromName(name); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(
+		`UPDATE projects SET approval_mode = ?, approval_scope = ?, updated_at = ? WHERE name = ?`,
+		mode, scope, s.now(), name)
+	return err
+}
+
+// SetApprovalDecision writes the remembered project-level approval answer —
+// approve|deny, or "" to forget. This is the write the "remember" choice on an
+// approval card lands when its scope is project.
+func (s *Store) SetApprovalDecision(name, decision string) error {
+	if err := ValidateApprovalDecision(decision); err != nil {
+		return err
+	}
+	if _, err := s.EnsureFromName(name); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(
+		`UPDATE projects SET approval_decision = ?, updated_at = ? WHERE name = ?`,
+		decision, s.now(), name)
+	return err
 }
 
 // Rename moves a project to a new name, carrying the active pointer with it. The
