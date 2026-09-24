@@ -69,6 +69,33 @@ func (c *Core) packContext(ctx context.Context, in TaskInput) (hash, level strin
 		}
 		return hash, "pointer", nil
 	}
+
+	// Normal task workspace packaging: if repo, workdir or project is present,
+	// pack workspace context so the remote node does not run blind without project/repo baseline.
+	repo := in.RepoPath
+	if repo == "" && in.WorkDir != "" {
+		repo = in.WorkDir
+	}
+	if repo == "" && c.workDir != "" && c.workDir != "." {
+		repo = c.workDir
+	}
+	if repo != "" || in.Project != "" {
+		wc := map[string]string{
+			"repo":    repo,
+			"project": in.Project,
+			"intent":  in.Intent,
+		}
+		data, err := json.Marshal(wc)
+		if err == nil {
+			snap := ctxstore.Snapshot{Type: "workspace", Data: data}
+			if h, blob, err := ctxstore.Pack(snap); err == nil {
+				if err := c.ctx.Put(ctx, h, "workspace", blob, nil); err == nil {
+					return h, "pointer", nil
+				}
+			}
+		}
+	}
+
 	return "", "summary", nil
 }
 

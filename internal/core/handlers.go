@@ -161,9 +161,18 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	})
 	// Adopt the origin user's tier-2 consent so the executor's defense layer
 	// honors what the delegating user already approved (the authenticated bus
-	// is the trust boundary; see TaskDelegatePayload.Authorized).
+	// is the trust boundary; see TaskDelegatePayload.Authorized). When the
+	// payload carries a signed consent grant it must verify against the
+	// origin node's recorded key — a relay minting another node's consent is
+	// the P2-8 hole the grant exists to close, so an unverifiable signature
+	// drops the consent rather than laundering it.
 	if p.Authorized {
-		if err := c.store.SetAuthorized(ctx, t.TaskID, true); err != nil {
+		if !c.consentGrantValid(p, env.From) {
+			c.logger.Warn("delegate consent grant failed verification; dropping authorized flag",
+				"task", t.TaskID, "from", env.From)
+			c.audit(ctx, t.TaskID, "consent:forged", "", "rejected",
+				"invalid Ed25519 consent grant on delegate")
+		} else if err := c.store.SetAuthorizedGrant(ctx, t.TaskID, p.AuthSig, p.AuthPub, p.AuthTs); err != nil {
 			// Recorded, not fatal. The task row already exists, so returning
 			// here would strand it: nothing would ever answer the delegator.
 			// An unstamped row is the safe failure — it fails closed at the
@@ -1020,6 +1029,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	defer cancelExec()
 	defer c.registerRunning(taskID, cancelExec)()
 	defer c.renewLease(execCtx, taskID, task.Chain, attemptID)()
+	execCtx = commander.WithTaskID(execCtx, taskID)
 
 	// Model-injection policy check (A1): decided once before the supervision
 	// loop — the adapter (and therefore the plan) is identical across rounds,
@@ -1087,13 +1097,25 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	if restored, conflicts, serr := defense.MergeShadow(workDir, taskID); serr != nil {
 		c.logger.Warn("shadow merge", "task", taskID, "err", serr)
 	} else if len(restored)+len(conflicts) > 0 {
-		shadowConflicts = conflicts
+		shadowConflicts = append(shadowConflicts, conflicts...)
 		c.EvTrace(execCtx, taskID, "shadow_merge", map[string]any{
 			"restored":  len(restored),
 			"conflicts": conflicts,
 		})
 		c.audit(ctx, taskID, "shadow:merge", "", "merged",
 			fmt.Sprintf("restored %d preempted files; %d contested", len(restored), len(conflicts)))
+	}
+
+	if gitRestored, gitConflicts, gerr := defense.MergeGitShadow(workDir, taskID); gerr != nil {
+		c.logger.Warn("git shadow merge", "task", taskID, "err", gerr)
+	} else if len(gitRestored)+len(gitConflicts) > 0 {
+		shadowConflicts = append(shadowConflicts, gitConflicts...)
+		c.EvTrace(execCtx, taskID, "git_shadow_merge", map[string]any{
+			"restored":  len(gitRestored),
+			"conflicts": gitConflicts,
+		})
+		c.audit(ctx, taskID, "git_shadow:merge", "", "merged",
+			fmt.Sprintf("restored %d preempted git files; %d contested", len(gitRestored), len(gitConflicts)))
 	}
 
 	// §6.2 monotonic-progress bookkeeping: the oscillation window is keyed by
@@ -2386,9 +2408,11 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	}
 	// Hop-limited consent (S2-8): a re-route is one direct dispatch, so the
 	// consent on record covers exactly the receiving hop and must not walk
-	// further through a forwarding sub-scheduler.
+	// further through a forwarding sub-scheduler. The stored grant rides along
+	// so the consent the origin signed reaches the executor verifiably intact.
 	if t.Authorized {
 		payload.AuthHops = 1
+		payload.AuthSig, payload.AuthPub, payload.AuthTs = t.AuthSig, t.AuthPub, t.AuthTs
 	}
 	// A re-routed project task needs its context as much as the first attempt did.
 	c.attachProject(ctx, &payload, t.Project)

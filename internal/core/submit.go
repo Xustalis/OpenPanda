@@ -34,6 +34,7 @@ const maxPersistedRetries = 5
 // the bus. The caller (cmd/panda) owns the translation from entry.TaskSpec.
 type TaskInput struct {
 	Title        string
+	ParentID     string // causal parent task ID for subtasks / sub-DAGs
 	Project      string
 	ContextType  string
 	ContextHash  string // pre-packed snapshot hash; empty means "pack if applicable"
@@ -75,6 +76,25 @@ func (in TaskInput) detail() TaskDetail {
 			}
 		} else if specJSON == "" {
 			m = map[string]any{"user_locale": string(in.UserLocale)}
+			if b, err := json.Marshal(m); err == nil {
+				specJSON = string(b)
+			}
+		}
+	}
+	if in.PreferredNode != "" {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(specJSON), &m); err == nil && m != nil {
+			if _, ok := m["node"]; !ok {
+				m["node"] = in.PreferredNode
+				if b, err := json.Marshal(m); err == nil {
+					specJSON = string(b)
+				}
+			}
+		} else if specJSON == "" {
+			m = map[string]any{"node": in.PreferredNode}
+			if in.UserLocale != "" {
+				m["user_locale"] = string(in.UserLocale)
+			}
 			if b, err := json.Marshal(m); err == nil {
 				specJSON = string(b)
 			}
@@ -253,9 +273,12 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			Authorized:    in.Authorized,
 		}
 		// Hop-limited consent (S2-8): the origin mints its consent with a
-		// bounded hop count so it decays as the task is relayed onward.
+		// bounded hop count so it decays as the task is relayed onward. The
+		// Ed25519 grant travels beside it so the flag a relay cannot mint for
+		// another node verifies at the executor (P2-8).
 		if in.Authorized {
 			payload.AuthHops = defaultConsentHops
+			c.signConsentGrant(&payload)
 		}
 		// The project travels with the task: its memory inline, its tree as an
 		// artifact reference. Without this the executor gets a bare name it cannot
@@ -309,7 +332,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 // packs its context snapshot. It returns the task plus the wire context fields
 // (hash + level) so Submit can carry them on a forwarded delegate.
 func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, string, error) {
-	t, err := c.store.Create(ctx, "", in.Project, in.Title, c.nodeID, []string{c.nodeID})
+	t, err := c.store.Create(ctx, in.ParentID, in.Project, in.Title, c.nodeID, []string{c.nodeID})
 	if err != nil {
 		return Task{}, "", "", err
 	}

@@ -81,6 +81,27 @@ func WithToolsPolicy(ctx context.Context, policy string) context.Context {
 	return context.WithValue(ctx, toolsPolicyKey{}, policy)
 }
 
+// taskIDKey carries the OpenPanda task ID down to the adapter subprocess.
+type taskIDKey struct{}
+
+// WithTaskID attaches an OpenPanda task ID to the execution context;
+// runAdapterProcess injects PANDA_TASK_ID into the spawned process environment
+// and sets task_id in the adapter request JSON.
+func WithTaskID(ctx context.Context, taskID string) context.Context {
+	if taskID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, taskIDKey{}, taskID)
+}
+
+// TaskID reads the task ID WithTaskID attached — "" when none.
+func TaskID(ctx context.Context) string {
+	if v, ok := ctx.Value(taskIDKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
 // ProgressFunc receives one adapter progress note (a short human-readable
 // line, e.g. "Bash: du -ah | sort -rh") as the agent works. The kind
 // parameter tags typed events: "" for ordinary tool notes, "subagent" when
@@ -315,6 +336,9 @@ type AdapterRequest struct {
 	// agent's native skills, sub-agent tooling and project MCP servers are
 	// reachable. Set by the Router from routing.tools_policy.
 	ToolsPolicy string `json:"tools_policy,omitempty"`
+	// TaskID carries the OpenPanda task ID that this process executes for.
+	// Used for causal subagent tree linkage and subtask dispatch.
+	TaskID string `json:"task_id,omitempty"`
 }
 
 // UsageDetail is the structured token breakdown an adapter reports alongside
@@ -483,6 +507,10 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	}
 	if policy, ok := ctx.Value(toolsPolicyKey{}).(string); ok {
 		req.ToolsPolicy = policy
+	}
+	if tid := TaskID(ctx); tid != "" {
+		req.TaskID = tid
+		env = append(env, "PANDA_TASK_ID="+tid)
 	}
 	reqJSON, err := json.Marshal(req)
 	if err != nil {

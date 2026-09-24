@@ -595,7 +595,7 @@ func (c *Core) pullForeignPushInputs(ctx context.Context, sender, taskID string,
 		if _, ok := c.artifacts.Has(in.Hash); ok {
 			continue
 		}
-		if _, err := c.FetchArtifact(ctx, source, taskID, in.Hash); err != nil {
+		if _, err := c.FetchArtifactRef(ctx, source, taskID, in); err != nil {
 			c.logger.Debug("foreign input pull failed", "task", taskID, "hash", in.Hash,
 				"source", source, "err", err)
 			continue

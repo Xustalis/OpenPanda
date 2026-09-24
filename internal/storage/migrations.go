@@ -50,6 +50,43 @@ var migrations = []Migration{
 	{Version: 25, Name: "add_dtn_relay_log", Apply: migrateV25},
 	{Version: 26, Name: "add_projects_approval", Apply: migrateV26},
 	{Version: 27, Name: "add_employee_contacts_json", Apply: migrateV27},
+	{Version: 28, Name: "add_employee_pub_key", Apply: migrateV28},
+	{Version: 29, Name: "add_tasks_auth_grant", Apply: migrateV29},
+}
+
+// migrateV28 adds employee_cache.pub_key: the peer's advertised Ed25519
+// public key (hex), learned from signed hellos. It is the directory entry the
+// mesh resolves when it must verify something that node signed — a tier-2
+// consent grant on a delegate, or a stage artifact handoff grant — without
+// trusting the payload's own claim about which key signed it.
+func migrateV28(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "employee_cache")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "employee_cache", "pub_key", "TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateV29 persists the tier-2 consent grant (auth_sig/auth_pub/auth_ts)
+// on the task row. A relay re-dispatching an authorized task — queue
+// forward, decline re-route — re-emits the origin's signed consent instead of
+// degrading it to the bare Authorized flag, so the executor's verification
+// survives every hop the consent legitimately travels.
+func migrateV29(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	for _, col := range []struct{ name, ddl string }{
+		{"auth_sig", "TEXT NOT NULL DEFAULT ''"},
+		{"auth_pub", "TEXT NOT NULL DEFAULT ''"},
+		{"auth_ts", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := addColumnIfMissingTx(tx, "tasks", col.name, col.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV27 adds employee_cache.contacts_json: the node's advertised DTN

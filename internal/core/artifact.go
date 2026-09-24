@@ -176,12 +176,21 @@ func artifactKey(taskID, hash string) string { return taskID + "|" + hash }
 // abort inside the transfer loop, and success — lands one artifact_transfer
 // trace event without sprinkling emissions through the loop.
 func (c *Core) FetchArtifact(ctx context.Context, source, taskID, hash string) (artifact.Manifest, error) {
+	return c.FetchArtifactRef(ctx, source, taskID, bus.ArtifactRef{Hash: hash})
+}
+
+// FetchArtifactRef is FetchArtifact with the full input reference: a ref that
+// carries the orchestrator's OfTask/Grant/Issuer asks the producer to serve on
+// the strength of the signed grant rather than on the consumer's own task row
+// — the difference that makes direct stage-to-stage handoff possible when the
+// producer never saw the consumer's task.
+func (c *Core) FetchArtifactRef(ctx context.Context, source, taskID string, ref bus.ArtifactRef) (artifact.Manifest, error) {
 	start := time.Now()
-	m, err := c.fetchArtifact(ctx, source, taskID, hash)
+	m, err := c.fetchArtifact(ctx, source, taskID, ref)
 	ev := map[string]any{
 		"from_node":  source,
 		"to_node":    c.nodeID,
-		"hash":       hash,
+		"hash":       ref.Hash,
 		"ok":         err == nil,
 		"elapsed_ms": time.Since(start).Milliseconds(),
 	}
@@ -194,7 +203,8 @@ func (c *Core) FetchArtifact(ctx context.Context, source, taskID, hash string) (
 	return m, err
 }
 
-func (c *Core) fetchArtifact(ctx context.Context, source, taskID, hash string) (artifact.Manifest, error) {
+func (c *Core) fetchArtifact(ctx context.Context, source, taskID string, ref bus.ArtifactRef) (artifact.Manifest, error) {
+	hash := ref.Hash
 	if c.artifacts == nil {
 		return artifact.Manifest{}, errors.New("core: no artifact pool configured")
 	}
@@ -243,7 +253,7 @@ func (c *Core) fetchArtifact(ctx context.Context, source, taskID, hash string) (
 		var chunk bus.ArtifactChunkPayload
 		got := false
 		for try := 0; try <= artifactChunkRetries && !got; try++ {
-			if err := c.sendArtifactFetch(source, taskID, hash, off); err != nil {
+			if err := c.sendArtifactFetch(source, taskID, ref, off); err != nil {
 				return abort(fmt.Errorf("core: request artifact %s at %d: %w", hash, off, err))
 			}
 			wait := time.NewTimer(artifactChunkTimeout)
@@ -345,14 +355,18 @@ func (c *Core) fetchArtifact(ctx context.Context, source, taskID, hash string) (
 	return res.m, nil
 }
 
-// sendArtifactFetch asks source for the chunk of hash starting at off.
-func (c *Core) sendArtifactFetch(source, taskID, hash string, off int64) error {
+// sendArtifactFetch asks source for the chunk of the ref's hash starting at
+// off. The ref's OfTask/Grant/Issuer ride along: a producer that cannot resolve
+// the consumer's task id (it holds only its own stage's row) falls back to
+// verifying the orchestrator-signed grant before serving.
+func (c *Core) sendArtifactFetch(source, taskID string, ref bus.ArtifactRef, off int64) error {
 	msgID, err := newUUID()
 	if err != nil {
 		return err
 	}
 	env, err := bus.NewEnvelope(bus.MsgArtifactFetch, c.nodeID, msgID, bus.ArtifactFetchPayload{
-		TaskID: taskID, Hash: hash, Offset: off,
+		TaskID: taskID, Hash: ref.Hash, Offset: off,
+		OfTask: ref.OfTask, Grant: ref.Grant, Issuer: ref.Issuer,
 	})
 	if err != nil {
 		return err
@@ -385,7 +399,16 @@ func (c *Core) handleArtifactFetch(ctx context.Context, env bus.Envelope) {
 	// known task id would open the whole pool. Without the check any
 	// authenticated peer could enumerate and download every artifact this node
 	// has ever produced.
-	if !c.artifactPeerAuthorized(ctx, p.TaskID, p.Hash, env.From) {
+	//
+	// The grant path is the direct stage-to-stage handoff: the consumer's task
+	// id resolves to nothing here (this node produced a sibling stage and never
+	// saw the consumer's row), but the orchestrator's signed grant attests the
+	// pull was issued for this plan, this consumer, this hash.
+	authorized := c.artifactPeerAuthorized(ctx, p.TaskID, p.Hash, env.From)
+	if !authorized && p.OfTask != "" && p.Grant != "" && p.Issuer != "" {
+		authorized = c.artifactGrantAuthorized(ctx, p)
+	}
+	if !authorized {
 		c.logger.Warn("artifact_fetch from non-participant", "task", p.TaskID, "from", env.From)
 		deny("not a participant in this task")
 		return
@@ -468,7 +491,49 @@ func (c *Core) artifactPeerAuthorized(ctx context.Context, taskID, hash, from st
 		target, terr := c.store.DispatchTarget(ctx, taskID)
 		participant = terr == nil && target != "" && from == target
 	}
+	// Direct Stage P2P Handoff: if the requesting peer participates in any stage of the same plan,
+	// authorize direct artifact transfer without routing back through the plan root.
+	if !participant && t.PlanID != "" {
+		if stages, err := c.store.PlanStages(ctx, t.PlanID); err == nil {
+			for _, st := range stages {
+				if st.OwnerNode == from || slices.Contains(st.Chain, from) {
+					participant = true
+					break
+				}
+			}
+		}
+	}
 	return participant && c.artifactBoundToTask(ctx, t, hash)
+}
+
+// artifactGrantAuthorized serves a fetch the participant check could not
+// resolve: the consumer's task id means nothing on a producer that only holds
+// its own stage's row. Instead the fetch names the producing task (OfTask — a
+// row this node owns) plus the orchestrator's Ed25519 grant. The grant is
+// valid only when the issuer is the orchestrator of record on the producing
+// task's chain, the issuer's key is on file from its signed hello, and the
+// signature binds this plan, this consumer task, this producing task and this
+// hash — so a grant minted for one input can open exactly one artifact.
+func (c *Core) artifactGrantAuthorized(ctx context.Context, p bus.ArtifactFetchPayload) bool {
+	t, err := c.store.Get(ctx, p.OfTask)
+	if err != nil || t.PlanID == "" {
+		return false
+	}
+	issuer := t.OwnerNode
+	if len(t.Chain) > 0 && t.Chain[0] != "" {
+		issuer = t.Chain[0]
+	}
+	if issuer == "" || issuer != p.Issuer {
+		return false
+	}
+	pub, ok := c.peerPubKey(issuer)
+	if !ok {
+		return false
+	}
+	if !bus.VerifyArtifactGrant(pub, t.PlanID, p.TaskID, p.OfTask, p.Hash, p.Grant) {
+		return false
+	}
+	return c.artifactBoundToTask(ctx, t, p.Hash)
 }
 
 // artifactBoundToTask reports whether hash legitimately belongs to task t on

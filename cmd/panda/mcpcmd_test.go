@@ -131,3 +131,68 @@ func TestSelfToolsNodes(t *testing.T) {
 		t.Fatalf("nodes not a JSON array: %v (%q)", err, text)
 	}
 }
+
+// TestSelfToolsSubtaskSpawnGuards verifies validation guards for subtask spawn.
+func TestSelfToolsSubtaskSpawnGuards(t *testing.T) {
+	d := selfDeps(t)
+	d.exe = "/nonexistent/panda"
+	if _, err := d.toolSubtaskSpawn(context.Background(), map[string]any{}); err == nil {
+		t.Fatalf("empty title must be refused")
+	}
+	d.submits.Store(maxSelfTaskSubmits)
+	_, err := d.toolSubtaskSpawn(context.Background(), map[string]any{"title": "x"})
+	if err == nil || !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("session cap must refuse, got %v", err)
+	}
+}
+
+// TestSelfToolsSubtaskAwait verifies subtask await behavior on terminal state and error.
+func TestSelfToolsSubtaskAwait(t *testing.T) {
+	d := selfDeps(t)
+	// Missing task_id
+	if _, err := d.toolSubtaskAwait(context.Background(), map[string]any{}); err == nil {
+		t.Fatalf("empty task_id must be refused")
+	}
+	// Nonexistent task
+	if _, err := d.toolSubtaskAwait(context.Background(), map[string]any{"task_id": "nonexistent"}); err == nil {
+		t.Fatalf("nonexistent task must fail")
+	}
+
+	// Create a completed task directly in store and await it
+	task, err := d.tasks.Create(context.Background(), "parent-1", "test-proj", "child subtask", "test-node", []string{"test-node"})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if err := d.tasks.Queue(context.Background(), task.TaskID, "test-node"); err != nil {
+		t.Fatalf("queue task: %v", err)
+	}
+	if err := d.tasks.Dispatch(context.Background(), task.TaskID, "test-node", "test-node"); err != nil {
+		t.Fatalf("dispatch task: %v", err)
+	}
+	if err := d.tasks.Accept(context.Background(), task.TaskID, "test-node"); err != nil {
+		t.Fatalf("accept task: %v", err)
+	}
+	if err := d.tasks.Complete(context.Background(), task.TaskID, "test-node", "test result output"); err != nil {
+		t.Fatalf("complete task: %v", err)
+	}
+
+	text, err := d.toolSubtaskAwait(context.Background(), map[string]any{"task_id": task.TaskID, "timeout_s": 2})
+	if err != nil {
+		t.Fatalf("toolSubtaskAwait failed: %v", err)
+	}
+	var out struct {
+		TaskID   string `json:"task_id"`
+		ParentID string `json:"parent_id"`
+		State    string `json:"state"`
+		Result   string `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		t.Fatalf("await output not json: %v (%s)", err, text)
+	}
+	if out.TaskID != task.TaskID || out.ParentID != "parent-1" || out.State != core.StateDone {
+		t.Fatalf("unexpected await result: %+v", out)
+	}
+	if !strings.Contains(out.Result, "test result output") {
+		t.Fatalf("missing result content in: %s", out.Result)
+	}
+}

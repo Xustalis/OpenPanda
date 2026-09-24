@@ -57,14 +57,21 @@ func VerifyHello(secret, nodeID string, ts int64, sig string, now time.Time) boo
 }
 
 // VerifyHelloP verifies a hello the way the receiver does: freshness first,
-// then the signature against whichever form the payload claims. A payload with
-// a Nonce is checked against HelloSigN; one without falls back to HelloSig so
-// old peers still authenticate. The nonce is part of what is verified, never
-// trusted on its own — an attacker replaying a captured hello cannot dodge the
-// replay cache by rewriting it, because a changed nonce changes the signature
-// the HMAC must match.
+// then the signature. If the payload carries an Ed25519 public key and signature
+// (p.PubKey, p.EdSig), cryptographic asymmetric verification is performed.
+// Otherwise, it falls back to HMAC under the mesh shared secret.
 func VerifyHelloP(secret string, p HelloPayload, now time.Time) bool {
-	if secret == "" || p.Sig == "" || !helloFresh(p.Ts, now) {
+	if !helloFresh(p.Ts, now) {
+		return false
+	}
+	if p.PubKey != "" && p.EdSig != "" {
+		if pubBytes, err := hex.DecodeString(p.PubKey); err == nil {
+			if VerifyHelloEd(pubBytes, p.NodeID, p.Ts, p.Nonce, p.EdSig) {
+				return true
+			}
+		}
+	}
+	if secret == "" || p.Sig == "" {
 		return false
 	}
 	if p.Nonce != "" {
