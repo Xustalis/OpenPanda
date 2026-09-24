@@ -22,12 +22,14 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/install"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 func runInstall(args []string) {
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
 	dirFlag := fs.String("dir", "", "install directory (default: ~/.local/bin on unix, %LOCALAPPDATA%\\OpenPanda\\bin on Windows)")
 	noPath := fs.Bool("no-path", false, "copy the binary but do not register it on PATH")
+	forceFlag := fs.Bool("force", false, "install even when this binary's schema is older than the data directory's")
 	fs.Parse(args)
 
 	loc := i18n.Detect()
@@ -40,6 +42,15 @@ func runInstall(args []string) {
 		}
 	}
 	bin := filepath.Join(dir, install.ExeName())
+
+	// Installing an older-schema binary strands the data directory: the next
+	// launch dies with "schema version newer than binary". Refuse the copy
+	// unless --force is given (deliberate downgrade + DB rollback).
+	if !*forceFlag {
+		if floor, err := currentSchemaFloor(); err == nil && floor > storage.LatestVersion() {
+			fatal("install", fmt.Errorf("this binary supports schema v%d but the data directory is already at v%d — install a newer build or pass --force", storage.LatestVersion(), floor))
+		}
+	}
 
 	if err := install.CopySelf(bin); err != nil {
 		fatal("install", err)

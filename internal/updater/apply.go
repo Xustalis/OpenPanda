@@ -2,9 +2,11 @@ package updater
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -34,6 +36,9 @@ func applyRelease(ctx context.Context, m *Manager, s *stagedRelease) error {
 	newBin := filepath.Join(s.root, "bin", exeName())
 	if _, err := os.Stat(newBin); err != nil {
 		return fmt.Errorf("release missing binary: %w", err)
+	}
+	if err := checkStagedSchema(ctx, m, newBin); err != nil {
+		return err
 	}
 	if err := replaceBinary(newBin, dst); err != nil {
 		return fmt.Errorf("replace binary: %w", err)
@@ -70,6 +75,50 @@ func runningBinary() string {
 		return resolved
 	}
 	return exe
+}
+
+// checkStagedSchema guards the swap: the staged binary must support at least
+// the schema version the data directory already carries, or the freshly
+// installed binary dies at startup with "schema version newer than binary"
+// and the update looks like it bricked the install. The probe runs
+// `panda version --json` on the staged file; a release that predates the flag
+// cannot prove compatibility and is refused whenever the floor is non-zero —
+// Options.Force overrides for deliberate downgrades.
+func checkStagedSchema(ctx context.Context, m *Manager, newBin string) error {
+	if m.opts.SchemaFloor == nil || m.opts.Force {
+		return nil
+	}
+	floor, err := m.opts.SchemaFloor(ctx)
+	if err != nil {
+		m.opts.Logger.Warn("update: schema floor unavailable; skipping compatibility check", "err", err)
+		return nil
+	}
+	if floor <= 0 {
+		return nil
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(probeCtx, newBin, "version", "--json").Output()
+	if err != nil {
+		return fmt.Errorf("probe staged binary: %w", err)
+	}
+	var info struct {
+		Schema   int `json:"schema"`
+		DBSchema int `json:"db_schema"`
+	}
+	parseErr := json.Unmarshal(out, &info)
+	if parseErr == nil && info.DBSchema > floor {
+		// A staged binary new enough to report db_schema read the data
+		// directory itself — trust its observation over the caller's floor.
+		floor = info.DBSchema
+	}
+	if parseErr != nil || info.Schema <= 0 {
+		return fmt.Errorf("staged release cannot report its schema ceiling but the data directory is already at schema v%d — refusing to install a binary that may be unable to open it (use --force to override)", floor)
+	}
+	if info.Schema < floor {
+		return fmt.Errorf("staged release supports schema v%d but the data directory is already at v%d — it would fail to start (use --force to override)", info.Schema, floor)
+	}
+	return nil
 }
 
 // adapterManifest records the adapter filenames the last update installed.

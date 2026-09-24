@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/updater"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 )
@@ -120,11 +122,17 @@ func executeApply(includePre, force bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	m := updater.New(updater.Options{
+	opts := updater.Options{
 		Current:           versionpkg.Version,
 		IncludePrerelease: includePre,
 		NoRestart:         true,
-	})
+		Force:             force,
+	}
+	if floor, err := currentSchemaFloor(); err == nil {
+		opts.SchemaFloor = func(context.Context) (int, error) { return floor, nil }
+	}
+
+	m := updater.New(opts)
 
 	if !jsonOutput {
 		fmt.Println(p.Muted(i18n.T(loc, "cli.update.checking")))
@@ -190,4 +198,43 @@ func executeApply(includePre, force bool) {
 		fmt.Println(p.Success(i18n.Tf(loc, "cli.update.success", "version", "v"+targetVersion)))
 		fmt.Println(p.Muted(i18n.T(loc, "cli.update.restartHint")))
 	}
+}
+
+// schemaFloorFunc adapts an open store handle to Options.SchemaFloor — the
+// updater reads the data directory's schema version through it before
+// swapping in a staged release.
+func schemaFloorFunc(db *sql.DB) func(context.Context) (int, error) {
+	return func(ctx context.Context) (int, error) {
+		var v int
+		if err := db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&v); err != nil {
+			return 0, fmt.Errorf("read user_version: %w", err)
+		}
+		return v, nil
+	}
+}
+
+// currentSchemaFloor reads the configured database's user_version for the
+// CLI apply path, which has no store open otherwise. Best-effort: a
+// config/DB read failure returns an error and the caller leaves
+// Options.SchemaFloor unset; storage.Open never migrates, so this is a
+// read-only probe. A missing DB file is skipped rather than created — the
+// probe must not leave an empty database behind on a fresh machine.
+func currentSchemaFloor() (int, error) {
+	cfg, err := loadConfigQuietly(cliConfigPath)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := os.Stat(cfg.Storage.DBPath); err != nil {
+		return 0, err
+	}
+	db, err := storage.Open(cfg.Storage.DBPath)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var v int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+		return 0, err
+	}
+	return v, nil
 }

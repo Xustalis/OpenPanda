@@ -72,6 +72,17 @@ type Options struct {
 	IncludePrerelease bool
 	// NoRestart prevents delayedRestart from running, for one-shot CLI commands.
 	NoRestart bool
+	// SchemaFloor, when set, reports the data directory's current schema
+	// version (PRAGMA user_version). Apply probes the staged binary's
+	// migration ceiling via `panda version --json` and refuses the swap when
+	// it sits below the floor — installing such a binary would strand the
+	// database behind a "schema version newer than binary" startup error.
+	// A staged binary too old to report its schema is treated as
+	// incompatible whenever the floor is non-zero. Nil disables the guard;
+	// Force bypasses it.
+	SchemaFloor func(context.Context) (int, error)
+	// Force skips the schema-floor guard (CLI --force).
+	Force bool
 }
 
 // DefaultRepo is where release archives and the checksums file live.

@@ -34,6 +34,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/updater"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 )
@@ -192,7 +193,7 @@ func main() {
 			runProject(args)
 			return
 		case "version":
-			fmt.Printf("panda v%s %s\n", version, versionpkg.Codename)
+			printVersion(args)
 			return
 		case "read", "view", "cat", "md", "markdown":
 			runRead(args)
@@ -692,6 +693,32 @@ func fatal(step string, err error) {
 func fatalMsg(msg string) {
 	fmt.Fprintf(os.Stderr, "panda: %s\n", msg)
 	os.Exit(2)
+}
+
+// printVersion implements `panda version [--json]`. The JSON form reports the
+// schema ceiling (storage.LatestVersion) alongside the build version — the
+// self-updater probes a staged binary with it before swapping, so a release
+// that cannot open the current database is refused instead of installed.
+// --json is a global flag (extractGlobalFlags strips it into jsonOutput
+// before args reach here), so the check reads the global, not args.
+func printVersion(_ []string) {
+	if jsonOutput {
+		info := map[string]any{
+			"version":  versionpkg.Version,
+			"codename": versionpkg.Codename,
+			"schema":   storage.LatestVersion(),
+		}
+		// db_schema lets a probe (self-updater, install.sh) learn the data
+		// directory's current schema from this binary alone — the value that
+		// decides whether a staged downgrade would still open the store.
+		// Best-effort: absent when the config/DB is unreadable or absent.
+		if floor, err := currentSchemaFloor(); err == nil {
+			info["db_schema"] = floor
+		}
+		emitJSON(info)
+		return
+	}
+	fmt.Printf("panda v%s %s\n", version, versionpkg.Codename)
 }
 
 // printUsage lists the subcommands as a grouped command tree — `panda help`

@@ -220,9 +220,10 @@ func runWeb(args []string) {
 	// runs, so a newer CLI is discovered during normal use rather than only on
 	// demand. Apply gates on task-queue idle so an update never interrupts work.
 	updateMgr := updater.New(updater.Options{
-		Current: versionpkg.Version,
-		Logger:  logger,
-		Idle:    store.Idle,
+		Current:     versionpkg.Version,
+		Logger:      logger,
+		Idle:        store.Idle,
+		SchemaFloor: schemaFloorFunc(db),
 	})
 	// StartAutoCheck spawns its loop internally; it is wired to ctx here so it
 	// stops with the process, but a panic inside it is not guard-wrapped
