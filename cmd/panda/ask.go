@@ -21,8 +21,8 @@ import (
 // reorderFlags (see global.go): hoisted ahead of the positional prompt so
 // `panda ask "question" --config x` parses the way users type it.
 var askValueFlags = map[string]bool{
-	"--config": true, "--card": true, "--mcp": true, "--output-format": true,
-	"--project": true,
+	"config": true, "card": true, "mcp": true, "output-format": true,
+	"project": true,
 }
 
 // askJSON is the headless wire form of one ask result (shared by
@@ -36,6 +36,14 @@ type askJSON struct {
 	Stdout    string `json:"stdout,omitempty"`
 	Stderr    string `json:"stderr,omitempty"`
 	ExitCode  int    `json:"exit_code,omitempty"`
+	// Execution attribution: which agent harness ran the task, on which node,
+	// with which model (and whether that model was injected by panda), plus
+	// the entry model that served the ask's own classify/answer calls.
+	Agent      string `json:"agent,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Injected   bool   `json:"injected,omitempty"`
+	Executor   string `json:"executor,omitempty"`
+	EntryModel string `json:"entry_model,omitempty"`
 	// Plan fields (kind == "plan"): the stage list is what makes the routing
 	// decision auditable from a script — which stage went where, and what it is
 	// waiting for.
@@ -48,6 +56,8 @@ func resultToJSON(out *askengine.Result) askJSON {
 	j := askJSON{
 		Kind: out.Kind, Answer: out.Answer, TaskID: out.TaskID, TaskState: out.TaskState,
 		OK: out.OK, Stdout: out.Stdout, Stderr: out.Stderr, ExitCode: out.ExitCode,
+		Agent: out.Agent, Model: out.Model, Injected: out.Injected,
+		Executor: out.Executor, EntryModel: out.EntryModel,
 		PlanID: out.PlanID, PlanGoal: out.PlanGoal,
 	}
 	for _, t := range out.PlanStages {
@@ -66,11 +76,11 @@ func resultToJSON(out *askengine.Result) askJSON {
 // to headless machine output (no TTY streaming, stable NDJSON/JSON).
 func runAsk(args []string) {
 	fs := flag.NewFlagSet("ask", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", defaultCardPath(), fmt.Sprintf("path to capabilities.yaml (default: discovered ./capabilities.yaml or %s)", systemCardPath()))
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	cardPath := fs.String("card", cardFlagDefault(), fmt.Sprintf("path to capabilities.yaml (default: discovered ./capabilities.yaml or %s)", systemCardPath()))
 	authorize := fs.Bool("authorize", false, "authorize tier-2 (irreversible) commands")
 	continueConvo := fs.Bool("continue", false, "continue the persisted conversation (the REPL's thread)")
-	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated), e.g. \"npx -y @modelcontextprotocol/server-filesystem /tmp\"")
+	mcpCmd := fs.String("mcp", cliMCP, "MCP server command (space-separated), e.g. \"npx -y @modelcontextprotocol/server-filesystem /tmp\"")
 	outputFormat := fs.String("output-format", "", "headless output: json (one object) or stream-json (NDJSON events)")
 	project := fs.String("project", "", "run this ask inside a project (default: the one you entered)")
 	fs.Parse(reorderFlags(args, askValueFlags))
@@ -170,13 +180,23 @@ func runAsk(args []string) {
 		}
 	case "task":
 		reportNote := i18n.Tf(loc, "cli.ask.task", "id", out.TaskID, "state", out.TaskState)
-		if out.Agent != "" {
+		if out.Agent != "" || out.Executor != "" {
 			execNote := out.Agent
 			if out.Model != "" {
 				execNote += fmt.Sprintf(" (%s)", out.Model)
 			}
 			if out.Injected {
 				execNote += " · " + i18n.T(loc, "tui.task.injected")
+			}
+			// Which machine actually ran it matters as much as which harness:
+			// a task forwarded to a peer reports that peer's node id, never the
+			// local one — so the line doubles as proof of where the work went.
+			// A native (no-agent) task carries no harness name, just the node.
+			if out.Executor != "" {
+				if execNote != "" {
+					execNote += " @ "
+				}
+				execNote += out.Executor
 			}
 			reportNote += " · " + i18n.Tf(loc, "tui.task.execBy", "exec", execNote)
 		}
@@ -236,7 +256,7 @@ func renderCliMd(s string) string {
 	if s == "" {
 		return ""
 	}
-	if os.Getenv("NO_COLOR") != "" || isLinuxConsole() || !cliui.WindowsVTReady() {
+	if os.Getenv("NO_COLOR") != "" || !stdoutIsTTY() || isLinuxConsole() || !cliui.WindowsVTReady() {
 		return mdtext.Plain(s)
 	}
 	return mdtext.RenderTerminal(s)
@@ -470,6 +490,11 @@ func printCost(st *cliui.Status, out *askengine.Result) {
 	}
 	st.SetTokens(out.Tokens())
 	if s := st.Stats(); s != "" {
+		// The closing line is also the model attribution: entry model first,
+		// then elapsed/tokens, so "which model answered" is never implicit.
+		if out.EntryModel != "" {
+			s = out.EntryModel + " " + pal().Separator() + " " + s
+		}
 		if out.Cost > 0 {
 			s += fmt.Sprintf(" ($%.4f)", out.Cost)
 		}
