@@ -56,7 +56,7 @@ var migrations = []Migration{
 // contact plan — scheduled transmission windows (open/close/rate/period)
 // gossiped beside neighbors_json and links_json so custody routing can ask
 // "which path delivers earliest" over scheduled links, not just "which
-// online neighbor is cheapest" over live ones (whitepaper §8.x).
+// online neighbor is cheapest" over live ones (whitepaper §8.4).
 func migrateV27(tx MigrationExec) error {
 	exists, err := tableExistsTx(tx, "employee_cache")
 	if err != nil {

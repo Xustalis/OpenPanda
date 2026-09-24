@@ -227,7 +227,7 @@ type NetworkConfig struct {
 	// reports the peer's observed IP, so most meshes never need a public
 	// STUN server.
 	STUNServers []string `yaml:"stun_servers"`
-	// Contacts is this node's DTN contact plan (whitepaper §8.x): scheduled
+	// Contacts is this node's DTN contact plan (whitepaper §8.4): scheduled
 	// transmission windows toward peers that custody routing plans around.
 	// Nodes with only always-on links leave it empty — the plan is gossiped
 	// in heartbeats like the live adjacency.

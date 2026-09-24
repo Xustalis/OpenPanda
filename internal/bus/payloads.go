@@ -68,12 +68,15 @@ type HeartbeatPayload struct {
 	// measured weights have to track the live topology continuously.
 	Neighbors []string     `json:"neighbors,omitempty"`
 	Links     []LinkMetric `json:"links,omitempty"`
-	// Contacts carries the sender's advertised contact plan (§8.x): the
+	// Contacts carries the sender's advertised contact plan (§8.4): the
 	// scheduled transmission windows custody routing plans custody moves
 	// around. Semi-static — it changes on config reload, not per beat — but
 	// rides the same gossip channel so a peer's plan arrives without waiting
-	// for a card refresh.
-	Contacts []Contact `json:"contacts,omitempty"`
+	// for a card refresh. Deliberately NOT omitempty: a new node always emits
+	// the field (empty array = "no plan"), so removing a plan clears the
+	// peer directory's copy; a field absent outright is an old node's beat
+	// and leaves the stored plan alone.
+	Contacts []Contact `json:"contacts"`
 }
 
 // LinkMetric is the wire form of one measured edge weight (§4.1): the round-
@@ -86,7 +89,7 @@ type LinkMetric struct {
 	RTTms int64  `json:"rtt_ms"`
 }
 
-// Contact is the wire form of one scheduled transmission window (§8.x),
+// Contact is the wire form of one scheduled transmission window (§8.4),
 // duplicating ledger.Contact's JSON shape for the same decoupling reason as
 // LinkMetric above. [Start, End) is the first window in unix seconds;
 // Period > 0 repeats it.
