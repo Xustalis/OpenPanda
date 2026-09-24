@@ -164,10 +164,10 @@ func TestDispatchReadCommand(t *testing.T) {
 // remember than the user asked for).
 func TestParseApprovalAnswer(t *testing.T) {
 	cases := []struct {
-		name     string
-		ans      string
-		defScope string
-		wantOK   bool
+		name      string
+		ans       string
+		defScope  string
+		wantOK    bool
 		wantScope string
 	}{
 		{"bare yes keeps default scope", "y", "session", true, "session"},
