@@ -373,6 +373,22 @@ func runDaemon(args []string) {
 	artifactStore.SetMinFreeBytes(cfg.Storage.ArtifactMinFreeBytes)
 	coreNode.SetArtifactStore(artifactStore)
 	coreNode.SetLimits(cfg.Network.MaxConnections, cfg.Network.MaxConnectionsPerIP)
+	// DTN contact plan (network.contacts): the scheduled windows custody
+	// routing plans around. A malformed window fails startup outright —
+	// silently dropping it would strand bundles the operator scheduled.
+	if len(cfg.Network.Contacts) > 0 {
+		plan := make([]ledger.Contact, 0, len(cfg.Network.Contacts))
+		for i, cc := range cfg.Network.Contacts {
+			e, err := cc.Resolve()
+			if err != nil {
+				fatal("network.contacts", fmt.Errorf("entry %d: %w", i, err))
+			}
+			plan = append(plan, ledger.Contact{
+				Peer: e.Peer, Start: e.Start, End: e.End, Period: e.Period, RateBps: e.RateBps,
+			})
+		}
+		coreNode.SetContacts(plan)
+	}
 	// Execution timeouts (timeouts.*): the agent budget and the task lease. A
 	// deep-learning stage runs far longer than a code edit, so both are operator
 	// knobs; SetTimeouts also keeps the lease above the agent's hard limit.

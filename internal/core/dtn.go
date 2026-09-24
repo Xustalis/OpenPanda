@@ -95,12 +95,14 @@ func (c *Core) relayBundle(ctx context.Context, via, dest string, bnd *bus.Bundl
 	if dest == "" || dest == c.nodeID {
 		return
 	}
-	if c.connFor(dest) != nil && c.deliverBundle(ctx, dest, blob) {
+	if c.sendableTo(dest) && c.deliverBundle(ctx, dest, blob) {
 		c.logger.Info("dtn_bundle: relayed direct", "bundle", bnd.BundleID, "via", via, "dest", dest)
 		return
 	}
-	if hop := c.dtnNextHop(ctx, dest, map[string]bool{via: true}); hop != "" &&
-		c.connFor(hop) != nil && c.relayForwardOK(ctx, bnd.BundleID, bnd.LocalExpiry(time.Now().Unix())) {
+	now := time.Now().Unix()
+	expiresAt := bnd.LocalExpiry(now)
+	if hop, _ := c.dtnNextHop(ctx, dest, map[string]bool{via: true}, int64(len(blob)), expiresAt); hop != "" &&
+		c.sendableTo(hop) && c.relayForwardOK(ctx, bnd.BundleID, expiresAt) {
 		if c.deliverBundle(ctx, hop, blob) {
 			c.logger.Info("dtn_bundle: relayed toward", "bundle", bnd.BundleID,
 				"via", via, "hop", hop, "dest", dest)
@@ -136,7 +138,8 @@ func (c *Core) parkBundle(ctx context.Context, via, dest string, bnd *bus.Bundle
 	// back) and the no-echo rule must exclude the peer it came from LAST,
 	// not the first sender on record. payload_json stays empty: the blob is
 	// the authority, and a relay's disk should not keep a plaintext copy of
-	// work it only holds in custody.
+	// work it only holds in custody. The ttl column is this node's own
+	// expiry — custody runs on the holder's clock, not the origin's.
 	if _, err := c.db.ExecContext(ctx,
 		`INSERT INTO task_outbox (peer, task_id, payload_json, payload_blob, transport_type, ttl, via, created_at)
 		 VALUES (?, ?, '', ?, 'dtn-relay', ?, ?, ?)
@@ -148,22 +151,55 @@ func (c *Core) parkBundle(ctx context.Context, via, dest string, bnd *bus.Bundle
 	c.logger.Info("dtn_bundle: custody parked for relay", "bundle", bnd.BundleID, "via", via, "dest", dest)
 }
 
-// dtnNextHop answers the store-and-forward routing question: which online
-// neighbor's advertised path reaches closest to dest. The graph is the whole
-// directory — offline rows too, because their last neighbor advertisement is
-// still topology — while the hop itself must be online-and-connected, which
-// the caller verifies through connFor. exclude is consulted at the first hop
-// only, which is what makes it a no-echo rule rather than a path constraint.
-func (c *Core) dtnNextHop(ctx context.Context, dest string, exclude map[string]bool) string {
+// dtnNextHop answers the store-and-forward routing question: which neighbor's
+// advertised path delivers a bundle to dest earliest, and when. When any row
+// advertises a contact plan — or this node has one configured — the
+// schedule-aware search runs: a sleeping node that published windows is a
+// valid custody hop even while offline, and the ETA bounds how long a
+// forward can still wait. With no plan anywhere the live-topology search
+// answers exactly as before (eta 0). sizeBytes feeds each window's fit
+// check; expiresAt prunes paths that would arrive after the bundle's
+// lifetime lapses. exclude applies at the first hop only — the no-echo rule.
+func (c *Core) dtnNextHop(ctx context.Context, dest string, exclude map[string]bool, sizeBytes, expiresAt int64) (string, int64) {
 	if c.db == nil {
-		return ""
+		return "", 0
 	}
 	self, nodes, err := c.dtnDirectory()
 	if err != nil {
 		c.logger.Warn("dtn: query directory", "err", err)
-		return ""
+		return "", 0
 	}
-	return scheduler.DTNNextHop(self, nodes, dest, exclude)
+	if !c.dtnPlanActive(nodes) {
+		return scheduler.DTNNextHop(self, nodes, dest, exclude), 0
+	}
+	// The local config is authoritative for this node's own windows — the
+	// directory row lags until refreshSelfNeighbors lands it.
+	if len(c.contacts) > 0 {
+		self.Contacts = c.contacts
+	}
+	return scheduler.ContactNextHop(self, nodes, dest, exclude, time.Now().Unix(), sizeBytes, expiresAt)
+}
+
+// dtnPlanActive reports whether the contact graph has any plan to route by:
+// this node's configured windows, or any directory row's advertisement.
+func (c *Core) dtnPlanActive(nodes []ledger.Node) bool {
+	if len(c.contacts) > 0 {
+		return true
+	}
+	for _, n := range nodes {
+		if len(n.Contacts) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// sendableTo reports whether any track can carry an envelope to peer right
+// now: a WS conn, or a punched datagram route. The second case is what lets
+// a peer that only exists inside a contact window still collect its parked
+// bundles while the window is up.
+func (c *Core) sendableTo(peer string) bool {
+	return c.connFor(peer) != nil || c.udpRouteFor(peer) != nil
 }
 
 // dtnDirectory loads the mesh directory and resolves this node's row in one

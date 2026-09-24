@@ -49,6 +49,23 @@ var migrations = []Migration{
 	{Version: 24, Name: "add_reminders_repeat", Apply: migrateV24},
 	{Version: 25, Name: "add_dtn_relay_log", Apply: migrateV25},
 	{Version: 26, Name: "add_projects_approval", Apply: migrateV26},
+	{Version: 27, Name: "add_employee_contacts_json", Apply: migrateV27},
+}
+
+// migrateV27 adds employee_cache.contacts_json: the node's advertised DTN
+// contact plan — scheduled transmission windows (open/close/rate/period)
+// gossiped beside neighbors_json and links_json so custody routing can ask
+// "which path delivers earliest" over scheduled links, not just "which
+// online neighbor is cheapest" over live ones (whitepaper §8.x).
+func migrateV27(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "employee_cache")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	return addColumnIfMissingTx(tx, "employee_cache", "contacts_json", "TEXT NOT NULL DEFAULT ''")
 }
 
 // migrateV26 adds the per-project approval policy columns. approval_mode is a

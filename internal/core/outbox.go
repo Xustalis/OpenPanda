@@ -456,7 +456,7 @@ func (c *Core) sweepOutboxes(ctx context.Context) {
 	}
 	rows.Close()
 	for _, peer := range peers {
-		if c.connFor(peer) == nil {
+		if !c.sendableTo(peer) {
 			continue
 		}
 		c.outboxFlush(ctx, peer) // claims internally; skips if one is running
@@ -517,9 +517,9 @@ func (c *Core) relayParked(ctx context.Context, onlyHop string) {
 	var nodes []ledger.Node
 	dirLoaded := false
 	for _, e := range entries {
-		// A row keyed to a connected peer is the ordinary flush's job; in
+		// A row keyed to a sendable peer is the ordinary flush's job; in
 		// the hello-triggered pass the flush already handled its own rows.
-		if e.peer == onlyHop || (onlyHop == "" && c.connFor(e.peer) != nil) {
+		if e.peer == onlyHop || (onlyHop == "" && c.sendableTo(e.peer)) {
 			continue
 		}
 		if e.ttl > 0 && now > e.ttl {
@@ -561,8 +561,16 @@ func (c *Core) relayParked(ctx context.Context, onlyHop string) {
 		if e.via != "" {
 			exclude[e.via] = true
 		}
-		hop := scheduler.DTNNextHop(self, nodes, dest, exclude)
-		if hop == "" || (onlyHop != "" && hop != onlyHop) || c.connFor(hop) == nil {
+		if len(self.Contacts) == 0 {
+			self.Contacts = c.contacts // local config is authoritative for self
+		}
+		var hop string
+		if c.dtnPlanActive(nodes) {
+			hop, _ = scheduler.ContactNextHop(self, nodes, dest, exclude, now, int64(len(e.blob)), e.ttl)
+		} else {
+			hop = scheduler.DTNNextHop(self, nodes, dest, exclude)
+		}
+		if hop == "" || (onlyHop != "" && hop != onlyHop) || !c.sendableTo(hop) {
 			continue
 		}
 		if !c.relayForwardOK(ctx, bnd.BundleID, bnd.LocalExpiry(now)) {

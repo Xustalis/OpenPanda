@@ -157,6 +157,11 @@ type CapabilitySummary struct {
 	// gets the unknown-link default.
 	Links    []LinkMetric `json:"links,omitempty"`
 	Capacity Capacity     `json:"capacity"`
+	// Contacts is the node's advertised contact plan (§8.x): scheduled
+	// transmission windows toward peers that custody routing evaluates
+	// alongside live adjacency. A node with no scheduled links advertises
+	// nothing, and its row reads identically to a pre-contacts peer.
+	Contacts []Contact `json:"contacts,omitempty"`
 	// ResourceProfile is what makes "this node cannot run that" decidable off the
 	// network instead of only locally: a task declaring 8 GiB of VRAM must not be
 	// forwarded to a node with none, and before v0.0.6 the peer half of this
@@ -222,17 +227,17 @@ func Register(db *sql.DB, c Card, id string, tier int) error {
 	if identity == "" {
 		identity = id
 	}
-	return upsertNode(db, id, c.Device, c.Chip, kind, identity, string(native), string(agents), string(manual), string(capJSON), string(resJSON), "", "", tier)
+	return upsertNode(db, id, c.Device, c.Chip, kind, identity, string(native), string(agents), string(manual), string(capJSON), string(resJSON), "", "", "", tier)
 }
 
 // upsertNode writes one directory row — native/agents/manual/capacity/resource
-// profile/neighbors/link metrics already marshalled to JSON — and marks it
-// online. Shared by Register (self, full card) and UpsertRemote (peer,
-// ID-only summary) so the upsert SQL lives in one place.
-func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON string, tier int) error {
+// profile/neighbors/link metrics/contacts already marshalled to JSON — and
+// marks it online. Shared by Register (self, full card) and UpsertRemote
+// (peer, ID-only summary) so the upsert SQL lives in one place.
+func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON string, tier int) error {
 	_, err := db.Exec(`
-		INSERT INTO employee_cache (id, name, department, chip, node_kind, node_identity, native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, status, last_seen, scheduler_tier)
-		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
+		INSERT INTO employee_cache (id, name, department, chip, node_kind, node_identity, native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json, status, last_seen, scheduler_tier)
+		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name=excluded.name, chip=excluded.chip,
 			node_kind=excluded.node_kind, node_identity=excluded.node_identity,
@@ -240,8 +245,9 @@ func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agents
 			manual_json=excluded.manual_json, capacity_json=excluded.capacity_json,
 			resource_profile_json=excluded.resource_profile_json,
 			neighbors_json=excluded.neighbors_json, links_json=excluded.links_json,
+			contacts_json=excluded.contacts_json,
 			status='online', last_seen=excluded.last_seen, scheduler_tier=excluded.scheduler_tier`,
-		id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON, storage.Now(), tier,
+		id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON, storage.Now(), tier,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert %s: %w", id, err)
@@ -266,11 +272,12 @@ func Heartbeat(db *sql.DB, id, status string, capJSON string) error {
 	return nil
 }
 
-// UpdateAdjacency refreshes a node's advertised edge set and measured link
-// weights (§4.1) without touching the rest of its row — the gossip channel
-// heartbeats drive between full card updates. Empty inputs leave that column
-// alone, so a sender that only publishes one side does not blank the other.
-func UpdateAdjacency(db *sql.DB, id, neighborsJSON, linksJSON string) error {
+// UpdateAdjacency refreshes a node's advertised edge set, measured link
+// weights (§4.1) and contact plan (§8.x) without touching the rest of its
+// row — the gossip channel heartbeats drive between full card updates.
+// Empty inputs leave that column alone, so a sender that only publishes one
+// side does not blank the others.
+func UpdateAdjacency(db *sql.DB, id, neighborsJSON, linksJSON, contactsJSON string) error {
 	if neighborsJSON != "" {
 		if _, err := db.Exec(`UPDATE employee_cache SET neighbors_json=? WHERE id=?`, neighborsJSON, id); err != nil {
 			return fmt.Errorf("update neighbors %s: %w", id, err)
@@ -279,6 +286,11 @@ func UpdateAdjacency(db *sql.DB, id, neighborsJSON, linksJSON string) error {
 	if linksJSON != "" {
 		if _, err := db.Exec(`UPDATE employee_cache SET links_json=? WHERE id=?`, linksJSON, id); err != nil {
 			return fmt.Errorf("update links %s: %w", id, err)
+		}
+	}
+	if contactsJSON != "" {
+		if _, err := db.Exec(`UPDATE employee_cache SET contacts_json=? WHERE id=?`, contactsJSON, id); err != nil {
+			return fmt.Errorf("update contacts %s: %w", id, err)
 		}
 	}
 	return nil
@@ -416,6 +428,10 @@ func UpsertRemote(db *sql.DB, id string, s CapabilitySummary) error {
 	if err != nil {
 		return fmt.Errorf("marshal remote link metrics: %w", err)
 	}
+	contactsJSON, err := json.Marshal(s.Contacts)
+	if err != nil {
+		return fmt.Errorf("marshal remote contacts: %w", err)
+	}
 
 	kind, identity := s.NodeKind, s.NodeIdentity
 	if kind == "" {
@@ -424,7 +440,7 @@ func UpsertRemote(db *sql.DB, id string, s CapabilitySummary) error {
 	if identity == "" {
 		identity = id
 	}
-	return upsertNode(db, id, s.Device, s.Chip, kind, identity, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), string(resJSON), string(neighborsJSON), string(linksJSON), s.SchedulerTier)
+	return upsertNode(db, id, s.Device, s.Chip, kind, identity, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), string(resJSON), string(neighborsJSON), string(linksJSON), string(contactsJSON), s.SchedulerTier)
 }
 
 // Node is a single employee_cache row, decoded.
@@ -451,6 +467,11 @@ type Node struct {
 	// peer id → RTT in milliseconds, decoded from links_json. A neighbor
 	// with no entry costs the unknown-link default in weighted routing.
 	LinkMetrics map[string]int64 `json:"link_metrics,omitempty"`
+	// Contacts is the advertised contact plan, decoded from contacts_json:
+	// the scheduled windows this node can transmit on. Contact-graph routing
+	// (scheduler.ContactNextHop) treats them as edges that open at a known
+	// time, alongside the always-on live adjacency above.
+	Contacts []Contact `json:"contacts,omitempty"`
 }
 
 // Abilities returns this node's displayable ability list — native IDs,
@@ -620,7 +641,7 @@ func tokenSubset(a, b []string) bool {
 
 // Query returns nodes matching filters. Empty status or name matches all.
 func Query(db *sql.DB, status, name string) ([]Node, error) {
-	q := `SELECT id, name, chip, COALESCE(node_kind, 'physical'), COALESCE(node_identity, ''), status, last_seen, scheduler_tier, native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json
+	q := `SELECT id, name, chip, COALESCE(node_kind, 'physical'), COALESCE(node_identity, ''), status, last_seen, scheduler_tier, native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json
 	      FROM employee_cache WHERE 1=1`
 	var args []any
 	if status != "" {
@@ -644,9 +665,9 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 		// later by a migration (legacy rows are NULL until re-upserted), and a
 		// partial insert leaves the others NULL too. Scan all of them as nullable
 		// so a single such row does not fail the whole directory query.
-		var native, agents, manual, capJSON, resJSON, neighborsJSON, linksJSON sql.NullString
+		var native, agents, manual, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON sql.NullString
 		if err := rows.Scan(&n.ID, &n.Name, &n.Chip, &n.NodeKind, &n.NodeIdentity, &n.Status, &n.LastSeen, &n.SchedulerTier,
-			&native, &agents, &manual, &capJSON, &resJSON, &neighborsJSON, &linksJSON); err != nil {
+			&native, &agents, &manual, &capJSON, &resJSON, &neighborsJSON, &linksJSON, &contactsJSON); err != nil {
 			return nil, err
 		}
 		if native.Valid && native.String != "" {
@@ -677,6 +698,9 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 					n.LinkMetrics[l.Peer] = l.RTTms
 				}
 			}
+		}
+		if contactsJSON.Valid && contactsJSON.String != "" {
+			_ = json.Unmarshal([]byte(contactsJSON.String), &n.Contacts)
 		}
 		out = append(out, n)
 	}
