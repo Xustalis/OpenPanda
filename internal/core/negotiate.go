@@ -359,6 +359,13 @@ func (c *Core) shadowForYield(ctx context.Context, taskID string) {
 		c.logger.Warn("yield shadow save", "task", taskID, "err", err)
 		return
 	}
+	if branch, err := defense.SaveGitShadow(workDir, taskID, roots); err != nil {
+		c.logger.Warn("yield git shadow save", "task", taskID, "err", err)
+	} else if branch != "" {
+		c.EvTrace(ctx, taskID, "git_shadow_saved", map[string]any{
+			"branch": branch, "work_dir": workDir,
+		})
+	}
 	c.EvTrace(ctx, taskID, "shadow_saved", map[string]any{
 		"scope_roots": roots, "work_dir": workDir,
 	})

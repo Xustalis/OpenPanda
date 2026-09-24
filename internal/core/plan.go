@@ -384,7 +384,7 @@ func (c *Core) AdvancePlan(ctx context.Context, planID string) error {
 		if t.State != StateSubmitted {
 			continue // already released, running, or terminal
 		}
-		inputs, err := c.planStageInputs(ctx, byStage, plan.Inputs(p, st.ID))
+		inputs, err := c.planStageInputs(ctx, t, byStage, plan.Inputs(p, st.ID))
 		if err != nil {
 			// A missing input is not something waiting longer can fix: the
 			// predecessor is done and produced nothing fetchable, so the stage
@@ -473,11 +473,18 @@ func planFromStages(stages []Task) plan.Plan {
 
 // planStageInputs turns a stage's dependencies into artifact references: what to
 // fetch, and from whom. The hash comes from the predecessor's recorded output.
-// The holder is *this* node whenever it holds the bytes, and only otherwise the
-// node that executed the predecessor — see adoptStageOutput for why the plan node
-// is the hub. needs arrives in plan.Inputs order, which is sorted, so a stage
-// with two inputs extracts them in the same order on every node.
-func (c *Core) planStageInputs(ctx context.Context, byStage map[string]Task, needs []string) ([]bus.ArtifactRef, error) {
+// The holder is *this* node whenever it already holds the bytes (a free local
+// hit, or the replica adoptStageOutput keeps pulling), and otherwise the node
+// that executed the predecessor — which the consumer pulls from directly.
+// needs arrives in plan.Inputs order, which is sorted, so a stage with two
+// inputs extracts them in the same order on every node.
+//
+// Each ref also carries the producing task's id and this node's signed grant:
+// the producer holds only its own stage's row and cannot resolve the
+// consumer's, so the grant is what authorizes the direct pull
+// (artifactGrantAuthorized). Nodes without a key mint no grant — their refs
+// degrade to the hub-relay path that predates the signature.
+func (c *Core) planStageInputs(ctx context.Context, consumer Task, byStage map[string]Task, needs []string) ([]bus.ArtifactRef, error) {
 	out := make([]bus.ArtifactRef, 0, len(needs))
 	for _, need := range needs {
 		dep, ok := byStage[need]
@@ -496,10 +503,8 @@ func (c *Core) planStageInputs(ctx context.Context, byStage map[string]Task, nee
 			}
 		}
 		if source == "" {
-			// This node has no pool. Naming the executor is the only remaining
-			// chance: it works when the consumer is a node that predecessor can
-			// authenticate, and fails loudly with the hash in the message when it
-			// is not.
+			// The producing node is the primary holder: it packed the tree and
+			// serves it under the grant below — no detour through this node.
 			if target, err := c.store.DispatchTarget(ctx, dep.TaskID); err == nil && target != "" {
 				source = target
 			} else {
@@ -509,7 +514,12 @@ func (c *Core) planStageInputs(ctx context.Context, byStage map[string]Task, nee
 		if source == "" {
 			return nil, fmt.Errorf("no node known to hold artifact %s of stage %s", dep.OutputArtifact, need)
 		}
-		out = append(out, bus.ArtifactRef{Stage: need, Hash: dep.OutputArtifact, Source: source})
+		ref := bus.ArtifactRef{Stage: need, Hash: dep.OutputArtifact, Source: source, OfTask: dep.TaskID}
+		if _, priv, ok := c.nodeKeyPair(); ok {
+			ref.Grant = bus.SignArtifactGrant(priv, consumer.PlanID, consumer.TaskID, dep.TaskID, dep.OutputArtifact)
+			ref.Issuer = c.nodeID
+		}
+		out = append(out, ref)
 	}
 	return out, nil
 }
@@ -523,6 +533,9 @@ func (c *Core) orchestratesAny(stages []Task) bool {
 		if len(t.Chain) > 0 && t.Chain[0] == c.nodeID {
 			return true
 		}
+		if t.OwnerNode == c.nodeID {
+			return true
+		}
 		if t.ParentID != "" && (t.OwnerNode == c.nodeID || (len(t.Chain) > 0 && t.Chain[0] == c.nodeID)) {
 			return true
 		}
@@ -530,55 +543,50 @@ func (c *Core) orchestratesAny(stages []Task) bool {
 	return false
 }
 
-// adoptStageOutput brings a remote stage's output into this node's pool, records
-// it on the local row, and then releases whatever it unblocked.
+// adoptStageOutput records a remote stage's output hash on the local row and
+// releases whatever it unblocked. Successors pull the tree straight from the
+// producing node under the orchestrator's signed grant (planStageInputs →
+// artifactGrantAuthorized), so the plan node is off the data-plane critical
+// path: a dead or congested orchestrator no longer stalls the pipeline, and a
+// large artifact never crosses the mesh twice.
 //
-// The plan node is deliberately the hub for a plan's artifacts. The node that
-// will run the next stage is one the *producer* has never heard of: it is absent
-// from the producing task's delegation chain and is not its dispatch target, so
-// artifactPeerAuthorized on the producer would — correctly — refuse it. The plan
-// node, by contrast, is in every stage's chain and is the dispatch target of
-// record for every stage it hands out, so relaying through it needs no new trust
-// machinery. Content addressing keeps the second hop free whenever the next stage
-// lands on a node that already holds the bytes.
+// The plan node still pulls a replica in the background: a producer that goes
+// offline before the successor fetches would otherwise take the input with it.
+// The replica pull is deliberately AFTER the release — it is redundancy, not a
+// precondition, and the successor's own fetch no longer waits on it.
 func (c *Core) adoptStageOutput(ctx context.Context, t Task, from, hash string) {
 	if hash == "" {
 		c.advanceStagePlan(ctx, t)
 		return
 	}
-	// The pull is a multi-chunk round trip, so it must not block the message
-	// handler, and it must outlive the envelope's context. Advancing happens
-	// after it: a successor released first would fetch from a hub that does not
-	// hold the bytes yet.
+	// Both steps must outlive the envelope's context: the result handler's ctx
+	// dies with the peer's connection read loop.
 	ctx = context.WithoutCancel(ctx)
-	go func() {
-		if c.artifacts != nil && from != "" && from != c.nodeID {
-			if _, held := c.artifacts.Has(hash); !held {
-				if _, err := c.FetchArtifact(ctx, from, t.TaskID, hash); err != nil {
-					c.logger.Warn("plan: adopt stage artifact", "task", t.TaskID,
-						"stage", t.StageID, "hash", hash, "from", from, "err", err)
-					// The hash does not enter output_artifact: planStageInputs
-					// would hand it to successors as a fetchable input, and with
-					// no pool holding it their best source would be the producer
-					// — which artifactPeerAuthorized correctly refuses them
-					// (they are not on its task's chain). Failing them here with
-					// "no node known to hold" is the truth and lets the plan
-					// surface the broken hop instead of wedging on a phantom.
-					c.advanceStagePlan(ctx, t)
-					return
-				}
-			}
-		}
-		if err := c.store.SetOutputArtifact(ctx, t.TaskID, hash); err != nil {
-			c.logger.Warn("record stage output", "task", t.TaskID, "err", err)
-			// Same reasoning: without a recorded holder the hash is an unfetchable
-			// input for every successor. Do not propagate a hash that cannot be
-			// resolved.
-			c.advanceStagePlan(ctx, t)
-			return
-		}
-		t.OutputArtifact = hash
+	if err := c.store.SetOutputArtifact(ctx, t.TaskID, hash); err != nil {
+		c.logger.Warn("record stage output", "task", t.TaskID, "err", err)
+		// Without a recorded holder the hash is an unfetchable input for every
+		// successor — advance anyway so the failure surfaces as a stage error
+		// rather than a wedged plan.
 		c.advanceStagePlan(ctx, t)
+		return
+	}
+	t.OutputArtifact = hash
+	c.advanceStagePlan(ctx, t)
+
+	if c.artifacts == nil || from == "" || from == c.nodeID {
+		return
+	}
+	if _, held := c.artifacts.Has(hash); held {
+		return
+	}
+	go func() {
+		// Replica pull for resilience: the producer remains the successor's
+		// primary source, this node's copy is the fallback named by the same
+		// input ref once it lands.
+		if _, err := c.FetchArtifact(ctx, from, t.TaskID, hash); err != nil {
+			c.logger.Warn("plan: adopt stage artifact replica", "task", t.TaskID,
+				"stage", t.StageID, "hash", hash, "from", from, "err", err)
+		}
 	}()
 }
 
@@ -629,8 +637,21 @@ func (c *Core) fetchStageInputs(ctx context.Context, t Task, workDir string) err
 				// ourselves over the bus would only time out.
 				return fmt.Errorf("artifact %s of stage %s is not in the local pool", in.Hash, in.Stage)
 			}
-			if _, err := c.FetchArtifact(ctx, in.Source, t.TaskID, in.Hash); err != nil {
-				return fmt.Errorf("fetch input %s from %s: %w", in.Hash, in.Source, err)
+			if _, err := c.FetchArtifactRef(ctx, in.Source, t.TaskID, in); err != nil {
+				// Hub fallback: the plan node keeps a replica pull in flight
+				// (adoptStageOutput), so when the producer is unreachable the
+				// orchestrator is the second best holder to ask.
+				fallback := ""
+				if len(t.Chain) > 0 {
+					fallback = t.Chain[0]
+				}
+				if fallback == "" || fallback == c.nodeID || fallback == in.Source {
+					return fmt.Errorf("fetch input %s from %s: %w", in.Hash, in.Source, err)
+				}
+				if _, ferr := c.FetchArtifact(ctx, fallback, t.TaskID, in.Hash); ferr != nil {
+					return fmt.Errorf("fetch input %s from %s (hub %s: %v): %w",
+						in.Hash, in.Source, fallback, ferr, err)
+				}
 			}
 		}
 		if _, err := c.artifacts.Extract(in.Hash, workDir); err != nil {
@@ -839,6 +860,7 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 		}
 		if in.Authorized {
 			payload.AuthHops = defaultConsentHops
+			c.signConsentGrant(&payload)
 		}
 		if err := c.forwardDelegated(ctx, child.TaskID, decision.Target, payload, child.Chain); err != nil {
 			return fmt.Errorf("forward child to %s: %w", decision.Target, err)

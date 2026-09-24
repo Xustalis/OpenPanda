@@ -287,9 +287,12 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 	c.attachProject(ctx, &p, t.Project)
 	// Hop-limited consent (S2-8): a queue forward is one direct dispatch, so
 	// the consent on record covers exactly the receiving hop and must not walk
-	// further through a forwarding sub-scheduler.
+	// further through a forwarding sub-scheduler. The stored grant rides along
+	// so the consent the origin signed reaches the executor verifiably intact
+	// rather than degrading to the bare flag (P2-8).
 	if t.Authorized {
 		p.AuthHops = 1
+		p.AuthSig, p.AuthPub, p.AuthTs = t.AuthSig, t.AuthPub, t.AuthTs
 	}
 	if err := c.sendClaimedDelegate(ctx, t.TaskID, decision.Target, p); err != nil {
 		c.logger.Warn("queue: forward to peer failed", "task", t.TaskID,
