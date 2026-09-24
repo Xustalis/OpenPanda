@@ -62,6 +62,11 @@ const ja: Messages = {
   'state.cancelled': 'キャンセル済み',
   'state.expired': '期限切れ',
 
+  // 停滞タスク：非終端の行が自分の期限を超えて動いていない（CLI watcher と同じ規則）。
+  'task.stalled': '停滞中',
+  'task.stalledHint':
+    '長時間進展がありません —— 消費するプロセスがないか、実行側が応答しないか、期限切れを処理する監視がありません',
+
   // Queue view
   'queue.subtitle': 'タスクボード：待機中・実行中・承認待ち・完了がひと目でわかり、リアルタイムに更新されます。',
   'queue.col.todo': '未着手',
@@ -131,6 +136,9 @@ const ja: Messages = {
   'detail.result.failed': '失敗',
   'detail.result.exit': '終了コード {n}',
   'detail.result.agent': 'エージェント {agent}',
+  'detail.result.model': 'モデル {model}',
+  'detail.result.node': 'ノード {node}',
+  'detail.result.injected': 'モデル注入済み',
   'detail.result.verdict': '監督判定：{verdict}',
   'detail.result.stdout': '出力',
   'detail.result.stderr': 'エラー出力',

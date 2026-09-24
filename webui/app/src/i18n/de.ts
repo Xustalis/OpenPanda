@@ -63,6 +63,12 @@ const de: Messages = {
   'state.cancelled': 'abgebrochen',
   'state.expired': 'abgelaufen',
 
+  // Festgefahrene Aufgaben: eine nicht-terminale Zeile, die sich über ihre
+  // eigene Grenze hinaus nicht bewegt hat (gleiche Regel wie der CLI-Watcher).
+  'task.stalled': 'festgefahren',
+  'task.stalledHint':
+    'lange kein Fortschritt — evtl. kein Consumer, der Executor ist weg, oder kein Monitor lässt sie ablaufen',
+
   // Queue view
   'queue.subtitle': 'Ein Kanban deiner Aufgaben: wartend, laufend, wartet auf deine Freigabe, gerade fertig — live.',
   'queue.col.todo': 'Offen',
@@ -132,6 +138,9 @@ const de: Messages = {
   'detail.result.failed': 'Fehlgeschlagen',
   'detail.result.exit': 'Exit-Code {n}',
   'detail.result.agent': 'Agent {agent}',
+  'detail.result.model': 'Modell {model}',
+  'detail.result.node': 'auf {node}',
+  'detail.result.injected': 'Modell injiziert',
   'detail.result.verdict': 'Supervisor-Urteil: {verdict}',
   'detail.result.stdout': 'Ausgabe',
   'detail.result.stderr': 'Fehlerausgabe',

@@ -65,6 +65,12 @@ const en: Messages = {
   'state.cancelled': 'cancelled',
   'state.expired': 'expired',
 
+  // Stalled tasks: a non-terminal row that has not moved past its own bound
+  // (see isTaskStalled in api/client.ts — same rule as the CLI watcher).
+  'task.stalled': 'stalled',
+  'task.stalledHint':
+    'no progress for a long time — the task may have no consumer, its executor may be gone, or no monitor is expiring it',
+
   // Queue view
   'queue.subtitle': 'A kanban of your tasks: waiting, running, awaiting your approval, just finished — live.',
   'queue.col.todo': 'To do',
@@ -134,6 +140,9 @@ const en: Messages = {
   'detail.result.failed': 'Failed',
   'detail.result.exit': 'exit {n}',
   'detail.result.agent': 'agent {agent}',
+  'detail.result.model': 'model {model}',
+  'detail.result.node': 'on {node}',
+  'detail.result.injected': 'model injected',
   'detail.result.verdict': 'supervisor verdict: {verdict}',
   'detail.result.stdout': 'Output',
   'detail.result.stderr': 'Error output',

@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks'
-import { api } from '../api/client'
-import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
+import { api, isTaskStalled } from '../api/client'
+import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
 import { t } from '../i18n'
 import { StateBadge } from '../components/state-badge'
 import { toast, toastError } from '../components/toast'
@@ -14,6 +14,9 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
   const change = useChangeSignal()
   const [tick, setTick] = useState(0)
   const { data: task, error } = useAsync(() => api.task(id), [id], change + tick)
+  // A stalled task emits no SSE event, so the badge can only appear on a
+  // local clock tick.
+  useVisibleInterval(() => setTick((v) => v + 1), 30_000)
   const [busy, setBusy] = useState(false)
   const [rejecting, setRejecting] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
@@ -132,6 +135,16 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
         </div>
       </div>
 
+      {isTaskStalled(task) && (
+        // The row has not moved past its own bound — nothing is consuming,
+        // expiring, or answering for it. Surface that instead of letting the
+        // open state sit silently.
+        <div class="card warn-state u-mt-16">
+          <span class="badge yellow">{t('task.stalled')}</span>
+          <span class="dim">{t('task.stalledHint')}</span>
+        </div>
+      )}
+
       {/* The orbit tails this task's trace stream over SSE by itself, so
           routing, execution and supervision land here as they happen instead
           of waiting for the next poll of the task row. */}
@@ -190,6 +203,9 @@ function ResultView({ raw }: { raw: string }) {
   const ok = r.ok !== false
   const exit = typeof r.exit_code === 'number' ? r.exit_code : null
   const agent = text(r.agent)
+  const model = text(r.model)
+  const executor = text(r.executor)
+  const injected = r.injected === true
   const stdout = text(r.stdout)
   const stderr = text(r.stderr)
   const verdict = text(r.verdict)
@@ -203,6 +219,9 @@ function ResultView({ raw }: { raw: string }) {
         </span>
         {exit !== null && <span class="dim">{t('detail.result.exit', { n: String(exit) })}</span>}
         {agent && <span class="dim">{t('detail.result.agent', { agent })}</span>}
+        {model && <span class="dim">{t('detail.result.model', { model })}</span>}
+        {injected && <span class="dim">{t('detail.result.injected')}</span>}
+        {executor && <span class="dim">{t('detail.result.node', { node: executor })}</span>}
       </div>
 
       {verdict && <p class="dim">{t('detail.result.verdict', { verdict })}</p>}

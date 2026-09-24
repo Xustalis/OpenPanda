@@ -62,6 +62,10 @@ const zhCN: Messages = {
   'state.cancelled': '已取消',
   'state.expired': '已过期',
 
+  // 停滞任务：非终态的行超过自身界限没有动静（与 CLI watcher 同一规则）。
+  'task.stalled': '已停滞',
+  'task.stalledHint': '长时间没有进展 —— 可能没有消费进程、执行端已失联，或没有监控进程在兜底',
+
   // Queue view
   'queue.subtitle': '任务看板：等待的、在做的、等你审批的、刚完成的——一目了然，实时更新。',
   'queue.allStates': '全部状态',
@@ -131,6 +135,9 @@ const zhCN: Messages = {
   'detail.result.failed': '失败',
   'detail.result.exit': '退出码 {n}',
   'detail.result.agent': '智能体 {agent}',
+  'detail.result.model': '模型 {model}',
+  'detail.result.node': '节点 {node}',
+  'detail.result.injected': '已注入模型',
   'detail.result.verdict': '监督判定：{verdict}',
   'detail.result.stdout': '输出',
   'detail.result.stderr': '错误输出',
