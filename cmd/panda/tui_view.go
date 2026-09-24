@@ -222,7 +222,7 @@ func (m tuiModel) splashView() string {
 		blockLines = append(blockLines, m.th.accent.Render("=== OpenPanda ==="))
 	}
 	blockLines = append(blockLines, "")
-	blockLines = append(blockLines, m.th.heading.Render("  v"+version))
+	blockLines = append(blockLines, m.th.heading.Render("  v"+version+" "+versionpkg.Codename))
 
 	model := ""
 	nodeName := ""
@@ -924,10 +924,10 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 			sb.WriteString(th.accent.Render(line))
 		}
 		sb.WriteString("\n\n")
-		sb.WriteString(th.heading.Render("  " + i18n.T(loc, "repl.banner.title") + " v" + version + " (" + versionpkg.Codename + ")"))
+		sb.WriteString(th.heading.Render("  " + i18n.T(loc, "repl.banner.title") + " v" + version + " " + versionpkg.Codename))
 	} else {
 		sb.WriteString(th.heading.Render(cliui.Truncate(
-			"  "+th.glyph("✻", "*")+" "+i18n.T(loc, "repl.banner.title")+" v"+version+" ("+versionpkg.Codename+")", width, uni)))
+			"  "+th.glyph("✻", "*")+" "+i18n.T(loc, "repl.banner.title")+" v"+version+" "+versionpkg.Codename, width, uni)))
 	}
 
 	sb.WriteString("\n")

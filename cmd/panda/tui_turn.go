@@ -114,6 +114,7 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 	out := msg.out
 	if out != nil && out.NeedsApproval && out.Approval != nil {
 		m.pending = out
+		m.pendingWorkDir = m.turnWorkDir
 		m.mode = modeApproving
 		m.approvalSel = 1 // arrows + Enter start on deny, the [y/N] safe default
 		// The watcher stays quiet while the card is up: the parked task's own
@@ -131,6 +132,7 @@ func (m tuiModel) onResumed(msg resumedMsg) (tea.Model, tea.Cmd) {
 	m.mode = modeIdle
 	m.stream = nil
 	m.pending = nil
+	m.pendingWorkDir = ""
 	return m.commit(msg.out)
 }
 
@@ -201,30 +203,30 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 			if out.TaskID != "" && out.TaskState != "" {
 				meta = i18n.Tf(loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
 			}
-			return block{kind: blockTask, ok: out.OK, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
+			return block{kind: blockTask, ok: out.OK, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
 		}
 		if summary := strings.TrimSpace(out.Report); summary != "" {
 			// The LLM summary is the whole display, matching the classic REPL:
 			// it prints the summary and stops. Appending the raw stdout here
 			// buried the readable report under a wall of execution log.
-			return block{kind: blockTask, ok: out.OK, body: summary, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
+			return block{kind: blockTask, ok: out.OK, body: summary, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
 		}
 		if out.OK {
 			// When no LLM summary was generated (queue-parked, budget-cut, summarizer
 			// degraded), fall back to the cleaned agent output so the user sees the
 			// actual work result rather than a blank note.
 			if log := cleanedTaskLog(loc, out.Stdout); log != "" {
-				return block{kind: blockTask, ok: true, body: log, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
+				return block{kind: blockTask, ok: true, body: log, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
 			}
 			body := i18n.T(loc, "tui.task.noSummary")
 			if out.TaskID != "" {
 				body += " " + i18n.Tf(loc, "tui.task.rawLogHint", "id", out.TaskID)
 			}
-			return block{kind: blockTask, ok: true, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
+			return block{kind: blockTask, ok: true, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
 		}
 		// Failure keeps its exit evidence, with a runaway stderr tail-capped
 		// so a noisy command cannot flood the transcript.
-		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, cleanedTaskLog(loc, out.Stderr)), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected}
+		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, cleanedTaskLog(loc, out.Stderr)), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
 	case "plan":
 		// A plan that failed to start has no board to follow and no stages, so
 		// its summary line would read "plan  · 0 stages" — a failure rendered
@@ -275,6 +277,12 @@ func resultCostMeta(out *askengine.Result) string {
 		return ""
 	}
 	var parts []string
+	// The meta line leads with the serving model — on an answer it is the
+	// model that wrote the text; on a task it is the entry model that
+	// classified it (the agent's own model rides the execBy arm instead).
+	if out.EntryModel != "" {
+		parts = append(parts, out.EntryModel)
+	}
 	if out.Latency > 0 {
 		parts = append(parts, cliui.HumanDuration(out.Latency))
 	}
@@ -336,11 +344,12 @@ func (m tuiModel) approvePending() (tea.Model, tea.Cmd) {
 	m.mode = modeAsking
 	m.started = time.Now()
 	m.lastInterrupt = time.Time{} // the re-run gets its own double-tap window
-	// Resume in the tree this turn was running in. A task started inside a
+	// Resume in the tree the card was raised for. A task started inside a
 	// /resume'd session must not silently re-run under the engine's default
 	// work path — for an irreversible task that is the wrong directory, not
-	// merely a cosmetic difference.
-	stream, pump := startResume(m.engine, req.TaskID, m.turnWorkDir)
+	// merely a cosmetic difference. An out-of-band task (watcher-raised card)
+	// carries no session tree, and an empty workDir keeps its persisted one.
+	stream, pump := startResume(m.engine, req.TaskID, m.pendingWorkDir)
 	m.stream = stream
 	return m, tea.Batch(m.sp.Tick, pump)
 }
@@ -350,6 +359,7 @@ func (m tuiModel) approvePending() (tea.Model, tea.Cmd) {
 func (m tuiModel) denyPending() (tea.Model, tea.Cmd) {
 	id := m.pending.Approval.TaskID
 	m.pending = nil
+	m.pendingWorkDir = ""
 	m.mode = modeIdle
 	done := m.turnEnded()
 	note := block{kind: blockNote, body: i18n.Tf(m.loc, "repl.approval.denied", "id", id)}

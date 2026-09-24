@@ -21,5 +21,5 @@ func runTUI(r *repl) {}
 // the banner carried. (In the full build this method lives on repl.go's
 // TUI-adjacent helpers.)
 func (r *repl) printBanner() {
-	fmt.Printf("OpenPanda %s (%s) — node %s (lite build)\n", version, versionpkg.Codename, r.cfg.Node.Name)
+	fmt.Printf("OpenPanda v%s %s — node %s (lite build)\n", version, versionpkg.Codename, r.cfg.Node.Name)
 }

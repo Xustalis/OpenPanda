@@ -51,6 +51,7 @@ type block struct {
 	agent    string
 	model    string
 	injected bool
+	executor string
 }
 
 // render draws the block at the given width using the theme. expandThought
@@ -200,13 +201,19 @@ func (b block) renderTask(t theme, width int) string {
 	for _, st := range b.stages {
 		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+st))
 	}
-	if b.agent != "" {
+	if b.agent != "" || b.executor != "" {
 		execNote := b.agent
 		if b.model != "" {
 			execNote += fmt.Sprintf(" (%s)", b.model)
 		}
 		if b.injected {
 			execNote += " · " + i18n.T(t.loc, "tui.task.injected")
+		}
+		if b.executor != "" {
+			if execNote != "" {
+				execNote += " @ "
+			}
+			execNote += b.executor
 		}
 		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+i18n.Tf(t.loc, "tui.task.execBy", "exec", execNote)))
 	}

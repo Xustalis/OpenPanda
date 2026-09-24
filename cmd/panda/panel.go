@@ -48,7 +48,7 @@ func panelStore(cfg *config.Config) (*sql.DB, *core.TaskStore, error) {
 // capability directory (Phase 0 employees are all local).
 func runStatus(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	runningOnly := fs.Bool("running", false, "show only currently running nodes")
 	fs.Parse(args)
 
@@ -188,8 +188,8 @@ func nodeStateTint(v nodeStatusView) func(string) string {
 // be a no-op wearing a success message.
 func runNodeRemove(args []string) {
 	fs := flag.NewFlagSet("nodes remove", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	rest := fs.Args()
 	if len(rest) != 1 {
 		fatal("usage", fmt.Errorf("panda nodes remove <id>"))
@@ -242,12 +242,12 @@ type nodeStatusView struct {
 // (with --yes to skip the prompt) empties the board.
 func runQueue(args []string) {
 	fs := flag.NewFlagSet("queue", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	state := fs.String("state", "", "filter by state (empty = all)")
 	project := fs.String("project", "", "filter by project (empty = all)")
 	watch := fs.Bool("watch", false, "live view: redraw in place until Ctrl-C")
 	yes := fs.Bool("yes", false, "with `clear`: skip the confirmation prompt")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "state": true, "project": true}))
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -486,7 +486,7 @@ func shortNode(id string) string {
 // runCancel implements `panda cancel <id>` — cancels a task and its subtree.
 func runCancel(args []string) {
 	fs := flag.NewFlagSet("cancel", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
@@ -527,7 +527,7 @@ func runCancel(args []string) {
 // or resumes a task that parked before execution.
 func runApprove(args []string) {
 	fs := flag.NewFlagSet("approve", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
@@ -579,6 +579,7 @@ func runApprove(args []string) {
 			Agent:     result.Agent,
 			Model:     result.Model,
 			Injected:  result.Injected,
+			Executor:  result.Executor,
 		}
 	} else {
 		engine, err := askengine.New(context.Background(), cfg, askengine.Options{
@@ -597,7 +598,24 @@ func runApprove(args []string) {
 		}
 		return
 	}
-	fmt.Println(i18n.Tf(i18n.Detect(), "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
+	reportNote := i18n.Tf(i18n.Detect(), "repl.ask.task", "id", out.TaskID, "state", out.TaskState)
+	if out.Agent != "" || out.Executor != "" {
+		execNote := out.Agent
+		if out.Model != "" {
+			execNote += fmt.Sprintf(" (%s)", out.Model)
+		}
+		if out.Injected {
+			execNote += " · " + i18n.T(i18n.Detect(), "tui.task.injected")
+		}
+		if out.Executor != "" {
+			if execNote != "" {
+				execNote += " @ "
+			}
+			execNote += out.Executor
+		}
+		reportNote += " · " + i18n.Tf(i18n.Detect(), "tui.task.execBy", "exec", execNote)
+	}
+	fmt.Println(pal().Muted(reportNote))
 	if !out.OK {
 		fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
 		os.Exit(1)
@@ -611,9 +629,9 @@ func runApprove(args []string) {
 // task (review -> failed). Kernel-form replacement for the web panel's reject.
 func runReject(args []string) {
 	fs := flag.NewFlagSet("reject", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	reason := fs.String("reason", "", "rejection reason")
-	fs.Parse(reorderFlags(args, map[string]bool{"--config": true, "--reason": true}))
+	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "reason": true}))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda reject [--config PATH] [--reason s] <task-id>")
@@ -644,8 +662,8 @@ func runReject(args []string) {
 // runLogs implements `panda logs <id>` — the event timeline only.
 func runLogs(args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda logs [--config PATH] <task-id>")
@@ -699,13 +717,27 @@ func ts(unix int64) string {
 // prints the rows (optionally one task's event timeline), `verify` checks the
 // chain of either the global audit_log or one task's events.
 func runAudit(args []string) {
+	// The verb is the first bare word — flags may precede it
+	// (`panda audit -task <id> entries`), so scan flag-aware rather than
+	// trusting args[0]: a value flag's payload must never read as the verb.
 	verb := "verify"
-	if len(args) > 0 && (args[0] == "entries" || args[0] == "verify") {
-		verb, args = args[0], args[1:]
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "-") {
+			if !strings.Contains(a, "=") && (strings.TrimLeft(a, "-") == "task" || strings.TrimLeft(a, "-") == "config") {
+				i++ // the flag's value is not the verb
+			}
+			continue
+		}
+		if a == "entries" || a == "verify" {
+			verb = a
+			args = append(append([]string{}, args[:i]...), args[i+1:]...)
+		}
+		break
 	}
 
 	fs := flag.NewFlagSet("audit", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	taskID := fs.String("task", "", "scope the operation to one task (entries: its events; verify: its event chain)")
 	fs.Parse(args)
 
@@ -791,7 +823,7 @@ func runAuditEntries(db *sql.DB, store *core.TaskStore, taskID string) {
 // runMetrics implements `panda metrics [--csv]` — export delegation metrics.
 func runMetrics(args []string) {
 	fs := flag.NewFlagSet("metrics", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	// Opt-in, as `panda help` has always documented it ("metrics [--csv]").
 	// The default was true, which made the human table below dead code — plain
 	// `panda metrics` answered "how is delegation going" with a spreadsheet.

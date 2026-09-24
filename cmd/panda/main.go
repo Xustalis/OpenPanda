@@ -41,8 +41,12 @@ import (
 var version = versionpkg.Version
 
 func main() {
+	// A Windows self-update renames the running image to <exe>.old because the
+	// locked file cannot be replaced in place; the fresh process sweeps that
+	// sidecar here. No-op on unix (the atomic rename-over leaves nothing).
+	updater.SweepResidue()
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
-		fmt.Printf("panda %s (%s)\n", version, versionpkg.Codename)
+		fmt.Printf("panda v%s %s\n", version, versionpkg.Codename)
 		return
 	}
 	// `panda --help` / `panda -h` must show the main help, not be swallowed
@@ -51,8 +55,17 @@ func main() {
 		printUsage(os.Stdout)
 		return
 	}
-	args := stripJSONFlag(os.Args[1:])
+	args := extractGlobalFlags(os.Args[1:])
 	sub, args := parseSubcommand(args)
+	// An explicit --config pointing at a file that isn't there used to fall
+	// back to defaults silently — the typo then surfaced as a misleading
+	// "no API key configured" error. init is exempt: its --config is the
+	// write target and must NOT exist yet.
+	if cliConfigPath != "" && sub != "init" {
+		if _, err := os.Stat(cliConfigPath); err != nil {
+			fmt.Fprintf(os.Stderr, "panda: warning: --config %s: %v — continuing with defaults\n", cliConfigPath, err)
+		}
+	}
 	if sub != "" {
 		switch sub {
 		case "daemon", "serve":
@@ -179,7 +192,7 @@ func main() {
 			runProject(args)
 			return
 		case "version":
-			fmt.Printf("panda %s (%s)\n", version, versionpkg.Codename)
+			fmt.Printf("panda v%s %s\n", version, versionpkg.Codename)
 			return
 		case "read", "view", "cat", "md", "markdown":
 			runRead(args)
@@ -236,50 +249,28 @@ func subcommandNames() []string {
 	}
 }
 
-// stripJSONFlag removes every --json occurrence from args (it may sit before
-// or after the subcommand) and sets jsonOutput so panel-style commands emit
-// their JSON wire form.
-func stripJSONFlag(args []string) []string {
-	out := make([]string, 0, len(args))
-	for _, a := range args {
-		if a == "--json" {
-			jsonOutput = true
-			continue
-		}
-		out = append(out, a)
-	}
-	return out
-}
-
-// parseSubcommand scans args, skips leading global flags and their values,
-// and returns the first non-flag argument (the subcommand) plus everything
-// after it. Global flags like --config may appear before or after the
-// subcommand; this lets users write `panda --config x.yaml status` as well
-// as `panda status --config x.yaml`.
+// parseSubcommand returns the first bare word (the subcommand) plus the rest
+// of argv. Global flags are already gone — extractGlobalFlags lifted them —
+// so any leading dash tokens belong to the subcommand (`panda --watch
+// queue`) and forward to its FlagSet, which either accepts them or errors,
+// instead of being silently dropped here. A value flag before the
+// subcommand can't be resolved (its table belongs to the subcommand), so its
+// value would read as the subcommand — an ambiguity no dispatcher can lift.
 func parseSubcommand(args []string) (string, []string) {
-	valueFlags := map[string]bool{"--config": true, "--card": true, "--mcp": true}
-	var global []string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if strings.HasPrefix(a, "-") {
-			if valueFlags[a] && i+1 < len(args) {
-				global = append(global, a, args[i+1])
-				i++ // skip the flag's value
-			}
-			continue
+	for i, a := range args {
+		if strings.HasPrefix(a, "-") && a != "-" {
+			continue // flag token: belongs to the subcommand (or "--")
 		}
-		return a, append(global, args[i+1:]...)
+		rest := append(append([]string{}, args[:i]...), args[i+1:]...)
+		return a, rest
 	}
-	// No subcommand: args is flags-only (any bare word would have returned
-	// above), so pass them through untouched — the default target (the REPL)
-	// parses --config/--card/--mcp itself.
 	return "", args
 }
 
 func runDaemon(args []string) {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
-	configPath := fs.String("config", "", fmt.Sprintf("path to config.yaml (default %s)", config.SystemConfigPath()))
-	cardPath := fs.String("card", defaultCardPath(), fmt.Sprintf("path to capabilities.yaml (default: discovered — ./capabilities.yaml, next to the resolved config, or %s)", systemCardPath()))
+	configPath := fs.String("config", cliConfigPath, fmt.Sprintf("path to config.yaml (default %s)", config.SystemConfigPath()))
+	cardPath := fs.String("card", cardFlagDefault(), fmt.Sprintf("path to capabilities.yaml (default: discovered — ./capabilities.yaml, next to the resolved config, or %s)", systemCardPath()))
 	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
