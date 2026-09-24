@@ -34,7 +34,10 @@ import (
 // never entered, so the user can still scroll back to what was cleared.
 func (r *repl) cmdClear(arg string) {
 	if stdoutIsTTY() {
-		fmt.Print("\x1b[2J\x1b[3J\x1b[H")
+		// Through the scoped writer, not fmt.Print: under the TUI that writer
+		// is the exec capture, so the bytes get stripped instead of landing on
+		// the frame Bubble Tea is repainting.
+		fmt.Fprint(r.commandOutput(), "\x1b[2J\x1b[3J\x1b[H")
 	}
 	r.printBanner()
 	r.lastFooter = "" // the footer was cleared with everything else; reprint it
@@ -286,7 +289,7 @@ func (r *repl) bindProject() {
 	if r.engine == nil {
 		return
 	}
-	name := r.activeProj
+	name := r.currentProject()
 	if name == "" && r.projStore != nil {
 		name, _ = r.projStore.Active()
 	}
@@ -306,8 +309,8 @@ func (r *repl) bindProject() {
 // activeProjectName is the project the REPL is in, for the footer and the TUI
 // context line. Empty when the store is absent or nothing was entered.
 func (r *repl) activeProjectName() string {
-	if r.activeProj != "" {
-		return r.activeProj
+	if n := r.currentProject(); n != "" {
+		return n
 	}
 	if r.projStore == nil {
 		return ""
@@ -342,7 +345,7 @@ func (r *repl) cmdProjectEnter(arg string) {
 			r.storeErr(err)
 			return
 		}
-		r.activeProj = ""
+		r.setProject("")
 		r.bindProject()
 		r.convo = loadConvo()
 		r.outln(i18n.T(r.loc, "cli.project.noActive"))
@@ -361,9 +364,11 @@ func (r *repl) cmdProjectEnter(arg string) {
 			r.storeErr(cerr)
 			return
 		}
-		if serr := r.projects.Save(name, memory.MemFile{Limit: r.projects.Limit()}); serr != nil {
-			r.storeErr(serr)
-			return
+		if r.projects != nil {
+			if serr := r.projects.Save(name, memory.MemFile{Limit: r.projects.Limit()}); serr != nil {
+				r.storeErr(serr)
+				return
+			}
 		}
 		created = true
 	}
@@ -371,7 +376,7 @@ func (r *repl) cmdProjectEnter(arg string) {
 		r.storeErr(err)
 		return
 	}
-	r.activeProj = name
+	r.setProject(name)
 	if created {
 		r.outln(i18n.Tf(r.loc, "repl.project.created", "name", name))
 	}

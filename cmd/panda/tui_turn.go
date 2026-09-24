@@ -108,7 +108,7 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 		// classic loop): a thread left dangling on a user turn 400s on its
 		// every following ask.
 		if m.r != nil {
-			m.r.recordErrorTurn(msg.err)
+			m.r.recordErrorTurn(m.pendingPrompt, msg.err)
 		}
 		return m, tea.Batch(done, m.printBlock(blk))
 	}

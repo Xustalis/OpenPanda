@@ -23,6 +23,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"slices"
 	"strings"
@@ -381,13 +382,17 @@ func (r *repl) cmdNodesAdd(addr string) {
 
 	// Live dial: async, because the dialer's timeout would otherwise freeze
 	// the prompt on an offline peer — the same reasoning as startup dials.
+	// The writer is captured NOW, while the command's streams are still
+	// scoped: calling r.outln after dispatch returns would fall back to
+	// process stdout and write straight over a repainting TUI frame.
 	if r.engine != nil {
+		w := r.commandOutput()
 		go func() {
 			if err := r.engine.DialPeer(context.Background(), addr); err != nil {
-				r.outln(i18n.Tf(r.loc, "repl.nodes.dialFail", "addr", addr))
+				fmt.Fprintf(w, "%s\n", i18n.Tf(r.loc, "repl.nodes.dialFail", "addr", addr))
 				return
 			}
-			r.outln(i18n.Tf(r.loc, "repl.nodes.dialed", "addr", addr))
+			fmt.Fprintf(w, "%s\n", i18n.Tf(r.loc, "repl.nodes.dialed", "addr", addr))
 		}()
 		return
 	}

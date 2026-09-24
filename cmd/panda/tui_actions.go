@@ -12,9 +12,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/config"
-	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
-	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -326,54 +324,15 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeIdle
 		switch m.listKind {
 		case listSessions, listResume:
-			if m.r != nil {
-				m.r.activeSess = item.ID
-				if m.r.sessionsSt != nil {
-					if sess, err := m.r.sessionsSt.Get(item.ID); err == nil && len(sess.Turns) > 0 {
-						// Load turns into convo
-						var convo []entry.Turn
-						for _, t := range sess.Turns {
-							convo = append(convo, entry.Turn{Role: t.Role, Content: t.Text})
-						}
-						m.r.convo = convo
-						if m.chatHistory != nil {
-							m.chatHistory.blocks = nil
-							for _, t := range sess.Turns {
-								switch t.Role {
-								case "user":
-									m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: t.Text})
-								case "assistant":
-									m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockAnswer, body: t.Text})
-								}
-							}
-						}
-					}
+			if m.r != nil && m.r.sessionsSt != nil {
+				if sess, err := m.r.sessionsSt.Get(item.ID); err == nil {
+					return m.attachSession(sess)
 				}
 			}
-			actionLabel := i18n.T(m.loc, "tui.list.switchedSession")
-			if m.listKind == listResume {
-				actionLabel = i18n.T(m.loc, "tui.list.resumedSession")
-			}
-			note := block{
-				kind: blockNote,
-				body: fmt.Sprintf("%s: %s (%s)", actionLabel, shortID(item.ID), item.Snippet),
-			}
-			return m, m.printBlock(note)
+			return m, nil
 
 		case listProjects:
-			if m.r != nil && m.r.projStore != nil {
-				_ = m.r.projStore.SetActive(item.ID)
-				m.r.activeProj = item.ID
-				m.projName = item.ID
-				if pr, ok := item.Value.(projectstore.Project); ok && pr.WorkDir != "" {
-					m.r.cfg.Storage.WorkPath = pr.WorkDir
-				}
-			}
-			note := block{
-				kind: blockNote,
-				body: fmt.Sprintf("%s: %s", i18n.T(m.loc, "tui.list.projectsTitle"), item.Title),
-			}
-			return m, m.printBlock(note)
+			return m.enterProject(item.ID)
 		}
 	}
 	return m, nil

@@ -4,8 +4,8 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
-	"os"
 	"strings"
 	"sync"
 
@@ -78,8 +78,24 @@ func startCommandExec(r *repl, text string, generation uint64) (*commandExec, te
 	go func() {
 		var err error
 		if r != nil {
-			r.dispatchWithIO(e.ctx, text, os.Stdin, e, e)
-			err = e.ctx.Err()
+			func() {
+				// A panicking handler must neither kill the process nor strand
+				// the pump: surface it as the command's error result so the
+				// Update loop lands back in modeIdle with an error block.
+				defer func() {
+					if p := recover(); p != nil {
+						err = fmt.Errorf("%v", p)
+					}
+				}()
+				// The TUI owns the terminal's input stream, so commands get an
+				// empty stdin: a shell escape that would read keys hits EOF
+				// instantly instead of eating keystrokes out from under the
+				// textarea.
+				r.dispatchWithIO(e.ctx, text, strings.NewReader(""), e, e)
+			}()
+			if err == nil {
+				err = e.ctx.Err()
+			}
 		} else {
 			err = context.Canceled
 		}

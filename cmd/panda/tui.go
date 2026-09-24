@@ -36,6 +36,11 @@ func runTUI(r *repl) {
 	if c := loadConvo(); len(c) > 0 {
 		r.convo = c
 	}
+	// Bubble Tea owns the terminal now: any classic path that still reached the
+	// raw line editor (a y/N confirm, the interrupt watcher, the history list)
+	// would steal keys out from under the input loop and write straight over
+	// the painted frame. Nil the session so those paths decline instead.
+	r.term = nil
 	model := newTUIModel(r)
 
 	opts := []tea.ProgramOption{
