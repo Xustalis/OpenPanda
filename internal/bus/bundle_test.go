@@ -8,7 +8,7 @@ import (
 func TestBundleRoundTrip(t *testing.T) {
 	secret := []byte("mesh-secret")
 	b, err := NewBundle("bundle-1", EID("node-a"), EID("node-b"),
-		MsgTaskDelegate, time.Now().Add(time.Hour).Unix(), []byte(`{"task_id":"t1"}`), secret)
+		MsgTaskDelegate, int64(time.Hour.Seconds()), []byte(`{"task_id":"t1"}`), secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,10 +21,10 @@ func TestBundleRoundTrip(t *testing.T) {
 		got.Kind != MsgTaskDelegate {
 		t.Fatalf("round trip mismatch: %+v", got)
 	}
-	// Version 2: the wire payload is sealed ciphertext, not the plaintext —
+	// Version 3: the wire payload is sealed ciphertext, not the plaintext —
 	// Open is what returns it, bound to the signed header as AAD.
-	if got.Version != 2 {
-		t.Fatalf("version = %d, want 2", got.Version)
+	if got.Version != 3 {
+		t.Fatalf("version = %d, want 3", got.Version)
 	}
 	if string(got.Payload) == `{"task_id":"t1"}` {
 		t.Fatal("wire payload is plaintext — not sealed")
@@ -62,14 +62,66 @@ func TestBundleVerifyTamper(t *testing.T) {
 
 func TestBundleTTLExpiry(t *testing.T) {
 	secret := []byte("s")
-	b, _ := NewBundle("b", EID("a"), EID("b"), MsgTaskDelegate,
-		time.Now().Add(-time.Hour).Unix(), []byte("x"), secret)
+	// NewBundle anchors CreatedUnix to now, so an expired bundle is built by
+	// hand: created two hours ago with a one-hour lifetime.
+	b := &Bundle{
+		BundleID: "b", Version: 3, SourceEID: EID("a"), DestEID: EID("b"),
+		CreatedUnix: time.Now().Add(-2 * time.Hour).Unix(), LifetimeSec: 3600,
+		Kind: MsgTaskDelegate, Payload: []byte("x"),
+	}
+	b.Signature = b.sign(secret)
 	got, err := UnmarshalBundle(b.Marshal())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := got.Verify(secret, time.Now().Unix()); err == nil {
 		t.Fatal("expired bundle verified")
+	}
+}
+
+// TestBundleV2DeadlineCompat covers the version-3 clock-model change: a
+// legacy bundle whose slot carried an absolute deadline must decode with
+// that deadline re-anchored as a lifetime, so a mixed-version mesh still
+// enforces expiry correctly.
+func TestBundleV2DeadlineCompat(t *testing.T) {
+	secret := []byte("s")
+	created := time.Now().Add(-30 * time.Minute).Unix()
+	deadline := time.Now().Add(time.Hour).Unix()
+	b := &Bundle{
+		BundleID: "legacy", Version: 2, SourceEID: EID("a"), DestEID: EID("b"),
+		CreatedUnix: created, LifetimeSec: deadline, // v2 slot: absolute deadline
+		Kind: MsgTaskDelegate, Payload: []byte("x"),
+	}
+	b.Signature = b.sign(secret)
+	got, err := UnmarshalBundle(b.Marshal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// created + (deadline - created) must reproduce the absolute deadline.
+	if got.LifetimeSec != deadline-created {
+		t.Fatalf("converted lifetime = %d, want %d", got.LifetimeSec, deadline-created)
+	}
+	if err := got.Verify(secret, time.Now().Unix()); err != nil {
+		t.Fatal("live legacy bundle failed verify:", err)
+	}
+	// Custody expiry re-anchors to the local clock, bounded by the lifetime.
+	exp := got.LocalExpiry(time.Now().Unix())
+	if exp <= time.Now().Unix() || exp > time.Now().Unix()+got.LifetimeSec {
+		t.Fatalf("local expiry %d outside (now, now+%d]", exp, got.LifetimeSec)
+	}
+	// A legacy bundle already past its deadline stays dead after conversion.
+	dead := &Bundle{
+		BundleID: "dead", Version: 2, SourceEID: EID("a"), DestEID: EID("b"),
+		CreatedUnix: created, LifetimeSec: created - 1, // deadline before creation
+		Kind: MsgTaskDelegate, Payload: []byte("x"),
+	}
+	dead.Signature = dead.sign(secret)
+	gd, err := UnmarshalBundle(dead.Marshal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gd.Verify(secret, time.Now().Unix()); err == nil {
+		t.Fatal("dead legacy bundle verified")
 	}
 }
 

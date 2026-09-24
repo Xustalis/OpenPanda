@@ -100,7 +100,7 @@ func (c *Core) relayBundle(ctx context.Context, via, dest string, bnd *bus.Bundl
 		return
 	}
 	if hop := c.dtnNextHop(ctx, dest, map[string]bool{via: true}); hop != "" &&
-		c.connFor(hop) != nil && c.relayForwardOK(ctx, bnd.BundleID, bnd.DeadlineUnix) {
+		c.connFor(hop) != nil && c.relayForwardOK(ctx, bnd.BundleID, bnd.LocalExpiry(time.Now().Unix())) {
 		if c.deliverBundle(ctx, hop, blob) {
 			c.logger.Info("dtn_bundle: relayed toward", "bundle", bnd.BundleID,
 				"via", via, "hop", hop, "dest", dest)
@@ -141,7 +141,7 @@ func (c *Core) parkBundle(ctx context.Context, via, dest string, bnd *bus.Bundle
 		`INSERT INTO task_outbox (peer, task_id, payload_json, payload_blob, transport_type, ttl, via, created_at)
 		 VALUES (?, ?, '', ?, 'dtn-relay', ?, ?, ?)
 		 ON CONFLICT(peer, task_id) DO UPDATE SET payload_blob = excluded.payload_blob, ttl = excluded.ttl, via = excluded.via`,
-		dest, taskID, blob, bnd.DeadlineUnix, via, storage.Now()); err != nil {
+		dest, taskID, blob, bnd.LocalExpiry(time.Now().Unix()), via, storage.Now()); err != nil {
 		c.logger.Warn("dtn_bundle: relay park", "bundle", bnd.BundleID, "dest", dest, "err", err)
 		return
 	}
@@ -191,13 +191,14 @@ func (c *Core) dtnDirectory() (ledger.Node, []ledger.Node, error) {
 // the loop bound that substitutes for the hop list a signed bundle cannot
 // carry. The count lives in dtn_relay_log so a restart cannot re-arm it: a
 // rebooted node that forgot its spends could otherwise be ping-ponged by a
-// pair of peers until the TTL, which is exactly the loop the bound exists to
-// kill. Entries expire with the bundle's deadline. The in-memory map remains
-// only as the no-database fallback.
-func (c *Core) relayForwardOK(ctx context.Context, bundleID string, deadline int64) bool {
+// pair of peers until the lifetime ran out, which is exactly the loop the
+// bound exists to kill. until is the caller-computed local expiry — relay
+// records live under this node's clock (see Bundle.LocalExpiry). The
+// in-memory map remains only as the no-database fallback.
+func (c *Core) relayForwardOK(ctx context.Context, bundleID string, until int64) bool {
 	now := time.Now().Unix()
 	if c.db != nil {
-		return c.relayForwardOKDB(ctx, bundleID, deadline, now)
+		return c.relayForwardOKDB(ctx, bundleID, until, now)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -211,7 +212,7 @@ func (c *Core) relayForwardOK(ctx context.Context, bundleID string, deadline int
 	}
 	e := c.relayLog[bundleID]
 	if e.until == 0 {
-		e.until = deadline
+		e.until = until
 		if e.until == 0 {
 			// A bundle may carry no deadline (0 = no expiry), but the relay
 			// record still has to die or the map grows with every bundle id
@@ -235,9 +236,9 @@ func (c *Core) relayForwardOK(ctx context.Context, bundleID string, deadline int
 // A live row at the bound fails both writes and the bundle must park. A DB
 // error fails closed: a node whose bound ledger is unreadable must not
 // forward, same posture as an unverifiable bundle.
-func (c *Core) relayForwardOKDB(ctx context.Context, bundleID string, deadline, now int64) bool {
-	if deadline <= 0 {
-		deadline = now + int64(defaultDTNTTL.Seconds())
+func (c *Core) relayForwardOKDB(ctx context.Context, bundleID string, until, now int64) bool {
+	if until <= 0 {
+		until = now + int64(defaultDTNTTL.Seconds())
 	}
 	// Opportunistic expiry keeps the table no larger than the live custody
 	// set; the per-call cost is one indexed delete on a tiny table.
@@ -259,7 +260,7 @@ func (c *Core) relayForwardOKDB(ctx context.Context, bundleID string, deadline, 
 		`INSERT INTO dtn_relay_log (bundle_id, hops, until) VALUES (?, 1, ?)
 		 ON CONFLICT(bundle_id) DO UPDATE SET hops = 1, until = excluded.until
 		 WHERE dtn_relay_log.until < ?`,
-		bundleID, deadline, now)
+		bundleID, until, now)
 	if err != nil {
 		c.logger.Warn("dtn: relay bound seed", "bundle", bundleID, "err", err)
 		return false

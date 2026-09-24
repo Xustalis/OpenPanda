@@ -331,8 +331,10 @@ func (c *Core) deliverCancel(ctx context.Context, peer, taskID, reason string) b
 // taskOutboxPersist stores a forward task that could not be delivered immediately,
 // implementing the universal DTN store-and-forward relay outbox (whitepaper §8.2, §9.1).
 // The task is parked both as its JSON payload (legacy decode path) and as a
-// CBOR-signed DTN bundle (§8.3): EID addressing, absolute TTL and an HMAC that
-// keeps a parked row tamper-evident for as long as it waits.
+// CBOR-signed DTN bundle (§8.3): EID addressing, a relative lifetime, and an
+// HMAC that keeps a parked row tamper-evident for as long as it waits. ttl is
+// this node's local expiry for the row; the bundle converts it to a lifetime
+// so relays downstream re-anchor custody to their own clocks.
 func (c *Core) taskOutboxPersist(ctx context.Context, peer string, p bus.TaskDelegatePayload, transportType string, ttl int64) {
 	if c.db == nil || peer == "" {
 		return
@@ -345,9 +347,16 @@ func (c *Core) taskOutboxPersist(ctx context.Context, peer string, p bus.TaskDel
 	if transportType == "" {
 		transportType = "dtn"
 	}
+	var lifetimeSec int64
+	if ttl > 0 {
+		lifetimeSec = ttl - time.Now().Unix()
+		if lifetimeSec < 1 {
+			lifetimeSec = 1
+		}
+	}
 	var blob []byte
 	if b, berr := bus.NewBundle(p.TaskID, bus.EID(c.nodeID), bus.EID(peer),
-		bus.MsgTaskDelegate, ttl, raw, []byte(c.sharedSecret)); berr == nil {
+		bus.MsgTaskDelegate, lifetimeSec, raw, []byte(c.sharedSecret)); berr == nil {
 		blob = b.Marshal()
 	} else {
 		c.logger.Warn("task_outbox: bundle wrap", "task", p.TaskID, "err", berr)
@@ -556,7 +565,7 @@ func (c *Core) relayParked(ctx context.Context, onlyHop string) {
 		if hop == "" || (onlyHop != "" && hop != onlyHop) || c.connFor(hop) == nil {
 			continue
 		}
-		if !c.relayForwardOK(ctx, bnd.BundleID, bnd.DeadlineUnix) {
+		if !c.relayForwardOK(ctx, bnd.BundleID, bnd.LocalExpiry(now)) {
 			continue // loop bound spent: hold custody for a direct contact
 		}
 		if !c.deliverBundle(ctx, hop, e.blob) {
