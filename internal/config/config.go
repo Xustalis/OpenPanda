@@ -887,14 +887,14 @@ func Default() *Config {
 		Log: LogConfig{
 			Level: "info",
 		},
-		Model: ModelConfig{
-			BaseURL: "https://api.deepseek.com/anthropic",
-			// deepseek-chat/deepseek-reasoner were deprecated aliases retired
-			// by DeepSeek on 2026-07-24; deepseek-v4-flash is the successor
-			// default (deepseek-v4-pro is deliberately never a default).
-			Model:     "deepseek-v4-flash",
-			MaxTokens: 4096,
-		},
+		// Model is deliberately empty: a fresh install has no provider, and
+		// seeding one here would make the author's endpoint choice
+		// indistinguishable from the user's — it would surface on the
+		// startup banner, get materialised into any config file the update
+		// helpers create, and silently route an unconfigured node's prompts
+		// to that vendor. `panda init`, the onboarding wizard and
+		// `panda model add` write a real model section instead.
+		Model: ModelConfig{},
 		Push: PushConfig{
 			Enabled:      false,
 			VAPIDSubject: "mailto:panda@localhost",

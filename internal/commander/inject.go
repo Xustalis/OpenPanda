@@ -9,6 +9,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 )
 
 // InjectionDecision is the outcome of the model-injection policy check for
@@ -37,6 +38,9 @@ func (r *Router) InjectionDecision(adapter string) InjectionDecision {
 	case config.InjectionModelNever:
 		return InjectionDecision{Inject: false, Reason: "injection.model=never"}
 	case config.InjectionModelAlways:
+		if !modelConfigured(r.model) {
+			return InjectionDecision{Inject: false, Reason: "no model configured"}
+		}
 		if !supportsModelInjection(adapter, r.model) {
 			return InjectionDecision{Inject: false, Reason: "model injection is not safely supported for " + adapter}
 		}
@@ -54,7 +58,7 @@ func (r *Router) InjectionDecision(adapter string) InjectionDecision {
 			Reason: "agent carries its own model credentials (" + source + ")",
 		}
 	}
-	if r.model.APIKey == "" {
+	if !modelConfigured(r.model) || r.model.APIKey == "" {
 		return InjectionDecision{
 			Inject: false,
 			Reason: "agent has no own credentials but panda has no model key configured",
@@ -72,6 +76,14 @@ func (r *Router) InjectionDecision(adapter string) InjectionDecision {
 		Model:   effectiveModelNameFor(adapter, r.model),
 		BaseURL: effectiveBaseURLFor(adapter, r.model),
 	}
+}
+
+// modelConfigured reports whether the config names a real endpoint — a
+// built-in provider id or an explicit base_url. An empty ModelConfig is never
+// injected: the historical "empty means DeepSeek" fallbacks would aim the
+// author's vendor choice at a user who never picked one.
+func modelConfigured(model config.ModelConfig) bool {
+	return strings.TrimSpace(model.Provider) != "" || strings.TrimSpace(model.BaseURL) != ""
 }
 
 // supportsModelInjection is registry-driven: an agent is injectable when its
@@ -167,6 +179,9 @@ func effectiveBaseURL(model config.ModelConfig) string {
 func effectiveModelName(model config.ModelConfig) string {
 	name := model.Model
 	if name == "" {
+		if p, ok := providers.Lookup(model.Provider); ok && p.DefaultModel != "" {
+			return p.DefaultModel
+		}
 		if model.NormalizedAPIType() == config.APITypeOpenAI {
 			return "gpt-4o"
 		}

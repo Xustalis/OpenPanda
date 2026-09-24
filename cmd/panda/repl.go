@@ -341,9 +341,9 @@ func runRepl(args []string) {
 		}
 	}
 
-	// The ask engine is optional: without a model endpoint the REPL still
+	// The ask engine is optional: without a configured model the REPL still
 	// serves every panel command, and asks explain themselves.
-	if cfg.Model.BaseURL != "" {
+	if modelConfigured(cfg) {
 		engine, err := askengine.New(context.Background(), cfg, askengine.Options{
 			CardPath:   effectiveCardPath,
 			MCPCommand: *mcpCmd,
@@ -1988,8 +1988,11 @@ func (r *repl) cmdConfig(arg string) {
 func (r *repl) cmdContext(arg string) {
 	r.outln(i18n.T(r.loc, "repl.context.head"))
 	model := i18n.T(r.loc, "repl.banner.noModel")
-	if r.cfg.Model.BaseURL != "" {
+	if modelConfigured(r.cfg) {
 		model = r.cfg.Model.Model + " @ " + r.cfg.Model.BaseURL
+		if r.cfg.Model.BaseURL == "" {
+			model = r.cfg.Model.Model + " @ " + r.cfg.Model.Provider
+		}
 	}
 	r.outf("  model:    %s\n", model)
 	r.outf("  workdir:  %s\n", r.cfg.Storage.WorkPath)

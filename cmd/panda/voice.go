@@ -62,7 +62,7 @@ func runVoice(args []string) {
 		fatal("load config", err)
 	}
 	loc := i18n.Detect()
-	if cfg.Model.BaseURL == "" {
+	if !modelConfigured(cfg) {
 		fmt.Fprintln(os.Stderr, "panda: "+i18n.T(loc, "cli.voice.needModel"))
 		os.Exit(2)
 	}
