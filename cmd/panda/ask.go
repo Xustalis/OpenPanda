@@ -15,6 +15,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/mdtext"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 )
 
 // askValueFlags enumerates `panda ask`'s value-carrying flags for
@@ -169,7 +170,7 @@ func runAsk(args []string) {
 	// authorized in place before recording the turn, so --continue captures the
 	// resolved outcome rather than the transient review.
 	if out.NeedsApproval && out.Approval != nil {
-		out = confirmApprovalCLI(engine, out, loc)
+		out = confirmApprovalCLI(engine, out, loc, "")
 	}
 	recordConvo(out)
 
@@ -449,8 +450,9 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDi
 // re-runs the task authorized in place, returning the resumed Result. On a no,
 // a non-interactive stdin, or a read error it returns the original review
 // Result unchanged. It mirrors the REPL's approveInline for the one-shot
-// `panda ask` path.
-func confirmApprovalCLI(engine *askengine.Engine, out *askengine.Result, loc i18n.Locale) *askengine.Result {
+// `panda ask` path; sessionID binds a session-scoped remember ("" for the
+// bare one-shot bucket).
+func confirmApprovalCLI(engine *askengine.Engine, out *askengine.Result, loc i18n.Locale, sessionID string) *askengine.Result {
 	req := out.Approval
 	p := pal()
 	fmt.Println(p.Warn(p.MarkBullet() + " " + i18n.T(loc, "repl.approval.head")))
@@ -465,10 +467,31 @@ func confirmApprovalCLI(engine *askengine.Engine, out *askengine.Result, loc i18
 		fmt.Println(p.Muted(i18n.Tf(loc, "repl.approval.denied", "id", req.TaskID)))
 		return out
 	}
-	fmt.Print(i18n.T(loc, "repl.approval.prompt"))
+	scope := req.Scope
+	if scope == "" {
+		scope = projectstore.ScopeSession
+	}
+	fmt.Print(i18n.Tf(loc, "repl.approval.promptScope", "scope", scope))
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-	ans := strings.ToLower(strings.TrimSpace(line))
-	if ans != "y" && ans != "yes" {
+	approved, scope := parseApprovalAnswer(line, scope)
+	// The answer stores under the chosen scope: "session" lands in the
+	// engine's in-memory map (a one-shot ask's own lifetime — it answers any
+	// further prompts this run produces), "project" persists onto the project
+	// row where later asks, REPLs, and consoles find it. A project answer
+	// without a project degrades to the session bucket.
+	if scope != projectstore.ScopeOnce {
+		if scope == projectstore.ScopeProject && req.Project == "" {
+			scope = projectstore.ScopeSession
+		}
+		decision := projectstore.DecisionDeny
+		if approved {
+			decision = projectstore.DecisionApprove
+		}
+		if err := engine.RememberApproval(sessionID, req.Project, scope, decision); err == nil {
+			fmt.Println(p.Muted(i18n.Tf(loc, "repl.approval.remembered", "decision", decision, "scope", scope)))
+		}
+	}
+	if !approved {
 		fmt.Println(p.Muted(i18n.Tf(loc, "repl.approval.denied", "id", req.TaskID)))
 		return out
 	}

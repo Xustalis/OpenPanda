@@ -740,12 +740,14 @@ func (m tuiModel) mouseHint() string {
 // choice is accented and marker-prefixed so arrows + Enter read as a picker
 // while the [y]/[n] labels keep the hotkeys discoverable.
 // approvalCardLayout is the final rendered card plus the exact terminal cells
-// occupied by its two choices. Rendering and hit testing consume this one layout,
-// so localization, resize, padding, or border changes cannot leave stale hitboxes.
+// occupied by its choices and scope options. Rendering and hit testing consume
+// this one layout, so localization, resize, padding, or border changes cannot
+// leave stale hitboxes.
 type approvalCardLayout struct {
 	rendered string
 	yes      tuiRect
 	no       tuiRect
+	scopes   [3]tuiRect
 }
 
 func (m tuiModel) approvalLayout() approvalCardLayout {
@@ -767,30 +769,56 @@ func (m tuiModel) approvalLayout() approvalCardLayout {
 	noLabel := i18n.T(m.loc, "tui.approval.no")
 	yesText := choice(0, "y", yesLabel)
 	noText := choice(1, "n", noLabel)
+	scopeLabels := [3]string{
+		i18n.T(m.loc, "tui.approval.scopeOnce"),
+		i18n.T(m.loc, "tui.approval.scopeSession"),
+		i18n.T(m.loc, "tui.approval.scopeProject"),
+	}
+	scopePrefix := i18n.T(m.loc, "tui.approval.scope") + " "
+	var scopeTexts [3]string
+	for i, sc := range approvalScopes {
+		key := fmt.Sprint(i + 1)
+		if m.approvalScope == sc {
+			scopeTexts[i] = m.th.command.Render("["+key+"]") + " " + m.th.accent.Render(scopeLabels[i])
+		} else {
+			scopeTexts[i] = m.th.muted.Render("[" + key + "] " + scopeLabels[i])
+		}
+	}
+	scopeRow := m.th.muted.Render(scopePrefix) + strings.Join(scopeTexts[:], "  ")
 	sb.WriteString("\n\n" + yesText)
 	sb.WriteString("   " + noText)
+	sb.WriteString("\n" + scopeRow)
 	sb.WriteString("\n" + m.th.muted.Render(m.th.glyph("↑↓", "^v")+" "+i18n.T(m.loc, "tui.approval.hint")))
 
 	rendered := m.th.approval.Width(max(1, m.textWidth()-2)).Render(sb.String())
 	lines := strings.Split(rendered, "\n")
-	choiceRow := -1
+	choiceRow, scopeRowIdx := -1, -1
 	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.Contains(lines[i], "[y]") && strings.Contains(lines[i], "[n]") {
+		if choiceRow < 0 && strings.Contains(lines[i], "[y]") && strings.Contains(lines[i], "[n]") {
 			choiceRow = i
-			break
+			continue
+		}
+		if scopeRowIdx < 0 && strings.Contains(lines[i], "[1]") && strings.Contains(lines[i], "[3]") {
+			scopeRowIdx = i
 		}
 	}
 	layout := approvalCardLayout{rendered: rendered}
-	if choiceRow < 0 {
-		return layout
-	}
 	// Border + horizontal padding precede the rendered choice content. The
 	// choices themselves are measured from the exact strings rendered above.
 	const origin = 2
-	yesWidth := lipgloss.Width(yesText)
-	noWidth := lipgloss.Width(noText)
-	layout.yes = tuiRect{x: origin, y: choiceRow, w: yesWidth, h: 1}
-	layout.no = tuiRect{x: origin + yesWidth + 3, y: choiceRow, w: noWidth, h: 1}
+	if choiceRow >= 0 {
+		yesWidth := lipgloss.Width(yesText)
+		noWidth := lipgloss.Width(noText)
+		layout.yes = tuiRect{x: origin, y: choiceRow, w: yesWidth, h: 1}
+		layout.no = tuiRect{x: origin + yesWidth + 3, y: choiceRow, w: noWidth, h: 1}
+	}
+	if scopeRowIdx >= 0 {
+		x := origin + lipgloss.Width(scopePrefix)
+		for i, st := range scopeTexts {
+			layout.scopes[i] = tuiRect{x: x, y: scopeRowIdx, w: lipgloss.Width(st), h: 1}
+			x += lipgloss.Width(st) + 2
+		}
+	}
 	return layout
 }
 
@@ -811,13 +839,15 @@ func (r tuiRect) contains(x, y int) bool {
 	return r.w > 0 && r.h > 0 && x >= r.x && x < r.x+r.w && y >= r.y && y < r.y+r.h
 }
 
-// approvalHit maps a terminal click to an approval choice: 0 = approve,
-// 1 = deny, -1 = not on either option. The card is bottom-anchored by
+// approvalHit maps a terminal click to an approval choice and a scope option:
+// choice is 0 = approve, 1 = deny, -1 = not on either option; scope is the
+// index into approvalScopes or -1. The card is bottom-anchored by
 // mainChatView; approvalLayout supplies option cells relative to the rendered
 // card, and this function only translates them into screen coordinates.
-func (m tuiModel) approvalHit(x, y int) int {
+func (m tuiModel) approvalHit(x, y int) (choice, scope int) {
+	choice, scope = -1, -1
 	if m.height <= 0 || m.pending == nil || m.pending.Approval == nil {
-		return -1
+		return choice, scope
 	}
 	layout := m.approvalLayout()
 	cardHeight := lipgloss.Height(layout.rendered)
@@ -828,12 +858,17 @@ func (m tuiModel) approvalHit(x, y int) int {
 	no.y += originY
 	switch {
 	case yes.contains(x, y):
-		return 0
+		choice = 0
 	case no.contains(x, y):
-		return 1
-	default:
-		return -1
+		choice = 1
 	}
+	for i, sc := range layout.scopes {
+		sc.y += originY
+		if sc.contains(x, y) {
+			scope = i
+		}
+	}
+	return choice, scope
 }
 
 // askingButtonRects derives each clickable footer cell from the final status row

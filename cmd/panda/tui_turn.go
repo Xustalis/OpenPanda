@@ -20,6 +20,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 )
 
 // onDelta appends one streamed answer chunk. The first answer text also closes
@@ -117,6 +118,10 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 		m.pendingWorkDir = m.turnWorkDir
 		m.mode = modeApproving
 		m.approvalSel = 1 // arrows + Enter start on deny, the [y/N] safe default
+		m.approvalScope = out.Approval.Scope
+		if m.approvalScope == "" {
+			m.approvalScope = projectstore.ScopeSession
+		}
 		// The watcher stays quiet while the card is up: the parked task's own
 		// "review" state is what the card is showing.
 		return m, nil // the card renders in View; keys handled by onApprovalKey
@@ -305,10 +310,19 @@ func planSummaryLine(out *askengine.Result) string {
 	return fmt.Sprintf("plan %s · %d stages · %s", out.PlanID, len(out.PlanStages), out.PlanGoal)
 }
 
+// approvalScopes is the card's remember-scope axis in display order: the
+// scope row renders them left to right, and the 1/2/3 hotkeys index it.
+var approvalScopes = []string{
+	projectstore.ScopeOnce,
+	projectstore.ScopeSession,
+	projectstore.ScopeProject,
+}
+
 // onApprovalKey handles the tier-2 approval card: y approves (resume the task
 // authorized), n/Esc denies and commits a note. The arrows move the focus
 // between the two choices and Enter answers the focused one, so the card can
 // be answered without leaving the navigation keys — the y/n hotkeys remain.
+// 1/2/3 (or o/s/p) pick the remember scope the answer is stored under.
 func (m tuiModel) onApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// The card only renders while pending is set, but Update sees every
 	// keystroke, so guard the dereference instead of trusting the mode flag to
@@ -322,6 +336,15 @@ func (m tuiModel) onApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.approvePending()
 	case "n", "esc":
 		return m.denyPending()
+	case "1", "o":
+		m.approvalScope = projectstore.ScopeOnce
+		return m, nil
+	case "2", "s":
+		m.approvalScope = projectstore.ScopeSession
+		return m, nil
+	case "3", "p":
+		m.approvalScope = projectstore.ScopeProject
+		return m, nil
 	case "up", "down", "left", "right":
 		// Two choices: any arrow hops to the other one. Holding a key
 		// toggles between them, which is the honest reading of a
@@ -337,10 +360,44 @@ func (m tuiModel) onApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// rememberApproval writes the card's answer into the selected scope and
+// returns a transcript note when one was stored ("" for "once" or no engine).
+// A project-scope answer without a project context degrades to the session
+// scope rather than silently writing nothing.
+func (m tuiModel) rememberApproval(approved bool) string {
+	if m.engine == nil || m.pending == nil || m.pending.Approval == nil {
+		return ""
+	}
+	req := m.pending.Approval
+	scope := m.approvalScope
+	if scope == "" {
+		scope = projectstore.ScopeSession
+	}
+	if scope == projectstore.ScopeOnce {
+		return ""
+	}
+	if scope == projectstore.ScopeProject && req.Project == "" {
+		scope = projectstore.ScopeSession
+	}
+	decision := projectstore.DecisionDeny
+	if approved {
+		decision = projectstore.DecisionApprove
+	}
+	sess := ""
+	if m.r != nil {
+		sess = m.r.activeSess
+	}
+	if err := m.engine.RememberApproval(sess, req.Project, scope, decision); err != nil {
+		return ""
+	}
+	return i18n.Tf(m.loc, "repl.approval.remembered", "decision", decision, "scope", scope)
+}
+
 // approvePending answers the approval card with yes: the parked task resumes
 // authorized, in the worktree this turn was running in.
 func (m tuiModel) approvePending() (tea.Model, tea.Cmd) {
 	req := m.pending.Approval
+	note := m.rememberApproval(true)
 	m.mode = modeAsking
 	m.started = time.Now()
 	m.lastInterrupt = time.Time{} // the re-run gets its own double-tap window
@@ -351,19 +408,27 @@ func (m tuiModel) approvePending() (tea.Model, tea.Cmd) {
 	// carries no session tree, and an empty workDir keeps its persisted one.
 	stream, pump := startResume(m.engine, req.TaskID, m.pendingWorkDir)
 	m.stream = stream
-	return m, tea.Batch(m.sp.Tick, pump)
+	cmds := []tea.Cmd{m.sp.Tick, pump}
+	if note != "" {
+		cmds = append(cmds, m.printBlock(block{kind: blockNote, body: note}))
+	}
+	return m, tea.Batch(cmds...)
 }
 
 // denyPending answers the approval card with no: the task stays in review and
 // a note says how to run it later.
 func (m tuiModel) denyPending() (tea.Model, tea.Cmd) {
 	id := m.pending.Approval.TaskID
+	note := m.rememberApproval(false)
 	m.pending = nil
 	m.pendingWorkDir = ""
 	m.mode = modeIdle
 	done := m.turnEnded()
-	note := block{kind: blockNote, body: i18n.Tf(m.loc, "repl.approval.denied", "id", id)}
-	return m, tea.Batch(done, m.printBlock(note))
+	cmds := []tea.Cmd{done, m.printBlock(block{kind: blockNote, body: i18n.Tf(m.loc, "repl.approval.denied", "id", id)})}
+	if note != "" {
+		cmds = append(cmds, m.printBlock(block{kind: blockNote, body: note}))
+	}
+	return m, tea.Batch(cmds...)
 }
 
 // liveAnswerText materializes the streamed answer only at render/commit boundaries.

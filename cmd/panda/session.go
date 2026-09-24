@@ -367,11 +367,18 @@ func runSessionAsk(args []string) {
 	}
 
 	streamed := stdoutIsTTY()
-	out, err := askSessionTurns(engine, history, prompt, workDir, *authorize)
+	out, err := askSessionTurns(engine, history, prompt, workDir, sess.ID, *authorize)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 		_, _ = store.AppendTurn(sess.ID, sessions.Turn{Role: "assistant", Text: "⚠ " + err.Error(), Kind: "error"})
 		os.Exit(1)
+	}
+	// A tier-2 task with no standing consent parks in review; on an
+	// interactive terminal prompt for it here so the thread records the
+	// resolved outcome, not the transient park. Session-scoped remembers bind
+	// to this session id.
+	if out.NeedsApproval && out.Approval != nil {
+		out = confirmApprovalCLI(engine, out, loc, sess.ID)
 	}
 
 	if sess.Title == sess.ID || sess.Title == "" {
@@ -423,10 +430,11 @@ func runSessionAsk(args []string) {
 }
 
 // askSessionTurns runs one full-history ask with live streaming on an
-// interactive terminal (same UX as askStreaming, but session-aware).
-func askSessionTurns(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, authorize bool) (*askengine.Result, error) {
+// interactive terminal (same UX as askStreaming, but session-aware). sessionID
+// scopes any remembered approval this turn produces to this session.
+func askSessionTurns(engine *askengine.Engine, history []entry.Turn, prompt, workDir, sessionID string, authorize bool) (*askengine.Result, error) {
 	if !stdoutIsTTY() {
-		return engine.AskTurns(context.Background(), history, prompt, workDir, authorize, askengine.StreamCallbacks{})
+		return engine.AskTurnsSession(context.Background(), history, prompt, workDir, "", sessionID, authorize, askengine.StreamCallbacks{})
 	}
 	lr := newStreamLineRenderer()
 	cb := askengine.StreamCallbacks{
@@ -437,7 +445,7 @@ func askSessionTurns(engine *askengine.Engine, history []entry.Turn, prompt, wor
 			}
 		},
 	}
-	out, err := engine.AskTurns(context.Background(), history, prompt, workDir, authorize, cb)
+	out, err := engine.AskTurnsSession(context.Background(), history, prompt, workDir, "", sessionID, authorize, cb)
 	lr.flush()
 	return out, err
 }

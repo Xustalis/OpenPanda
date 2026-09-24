@@ -156,3 +156,36 @@ func TestDispatchReadCommand(t *testing.T) {
 		t.Fatal("/read should not quit on error")
 	}
 }
+
+// TestParseApprovalAnswer pins the approval card's reply grammar: a bare
+// y/n answers with the preselected scope, an explicit once|session|project
+// overrides it, anything unrecognized fails closed — no answer, remember
+// nothing extra (an unrecognized scope degrades to once, not to a broader
+// remember than the user asked for).
+func TestParseApprovalAnswer(t *testing.T) {
+	cases := []struct {
+		name     string
+		ans      string
+		defScope string
+		wantOK   bool
+		wantScope string
+	}{
+		{"bare yes keeps default scope", "y", "session", true, "session"},
+		{"bare no keeps default scope", "n", "session", false, "session"},
+		{"empty is a no", "", "session", false, "session"},
+		{"yes project", "yes project", "session", true, "project"},
+		{"no once", "n once", "session", false, "once"},
+		{"case-insensitive", "Y Session", "once", true, "session"},
+		{"unknown word is a no", "maybe", "session", false, "session"},
+		{"unknown scope degrades to once", "y sometimes", "project", true, "once"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, scope := parseApprovalAnswer(tc.ans, tc.defScope)
+			if ok != tc.wantOK || scope != tc.wantScope {
+				t.Fatalf("parseApprovalAnswer(%q, %q) = (%v, %q), want (%v, %q)",
+					tc.ans, tc.defScope, ok, scope, tc.wantOK, tc.wantScope)
+			}
+		})
+	}
+}
