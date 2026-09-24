@@ -6,7 +6,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
-// contact.go is the schedule-aware half of DTN routing (whitepaper §8.x —
+// contact.go is the schedule-aware half of DTN routing (whitepaper §8.4 —
 // the CGR/SABR-style path). DTNNextHop asks "which online neighbor sits on
 // the cheapest advertised path"; ContactNextHop asks "which path delivers
 // earliest" over the union of two edge kinds: live links, traversable at the

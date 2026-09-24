@@ -264,7 +264,7 @@ type Core struct {
 	// Guarded by mu.
 	relayLog map[string]dtnRelay
 
-	// contacts is this node's configured contact plan (§8.x): the scheduled
+	// contacts is this node's configured contact plan (§8.4): the scheduled
 	// transmission windows it advertises and routes custody by. Set once via
 	// SetContacts before the serving goroutines start — the field is
 	// immutable thereafter, which is what lets heartbeat/sweep readers go
@@ -353,7 +353,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 	return c
 }
 
-// SetContacts installs this node's advertised contact plan (§8.x). Call it
+// SetContacts installs this node's advertised contact plan (§8.4). Call it
 // after NewCore, before the serving goroutines start — the slice is read
 // unsynchronized afterward. The plan gossips out in every heartbeat and
 // lands in the local directory row via refreshSelfNeighbors.
@@ -361,11 +361,11 @@ func (c *Core) SetContacts(contacts []ledger.Contact) {
 	c.contacts = contacts
 }
 
-// wireContacts converts the configured plan to its wire form.
+// wireContacts converts the configured plan to its wire form. The slice is
+// non-nil even when empty so the heartbeat emits "contacts":[] — a plan
+// deleted from config must clear the directories that cached it, which only
+// happens if the field rides the beat explicitly.
 func (c *Core) wireContacts() []bus.Contact {
-	if len(c.contacts) == 0 {
-		return nil
-	}
 	out := make([]bus.Contact, len(c.contacts))
 	for i, ct := range c.contacts {
 		out[i] = bus.Contact{Peer: ct.Peer, Start: ct.Start, End: ct.End, RateBps: ct.RateBps, Period: ct.Period}
@@ -1322,7 +1322,7 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
 // of each edge, and its configured contact plan into its own directory row's
 // neighbors_json/links_json/contacts_json: the self-edge of the weighted
 // link-state graph the routing layer's multi-hop and earliest-arrival
-// searches read (§4.1, §8.x, §9.3). Best-effort: a failed write just leaves
+// searches read (§4.1, §8.4, §9.3). Best-effort: a failed write just leaves
 // the last advertisement in place.
 func (c *Core) refreshSelfNeighbors(ctx context.Context) {
 	if c.db == nil {

@@ -157,7 +157,7 @@ type CapabilitySummary struct {
 	// gets the unknown-link default.
 	Links    []LinkMetric `json:"links,omitempty"`
 	Capacity Capacity     `json:"capacity"`
-	// Contacts is the node's advertised contact plan (§8.x): scheduled
+	// Contacts is the node's advertised contact plan (§8.4): scheduled
 	// transmission windows toward peers that custody routing evaluates
 	// alongside live adjacency. A node with no scheduled links advertises
 	// nothing, and its row reads identically to a pre-contacts peer.
@@ -273,7 +273,7 @@ func Heartbeat(db *sql.DB, id, status string, capJSON string) error {
 }
 
 // UpdateAdjacency refreshes a node's advertised edge set, measured link
-// weights (§4.1) and contact plan (§8.x) without touching the rest of its
+// weights (§4.1) and contact plan (§8.4) without touching the rest of its
 // row — the gossip channel heartbeats drive between full card updates.
 // Empty inputs leave that column alone, so a sender that only publishes one
 // side does not blank the others.

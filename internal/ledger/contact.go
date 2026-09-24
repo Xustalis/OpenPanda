@@ -1,7 +1,7 @@
 package ledger
 
 // contact.go models the contact plan of delay-tolerant routing (whitepaper
-// §8.x, CCSDS SABR 734.2): a contact is a scheduled transmission window —
+// §8.4, CCSDS SABR 734.2): a contact is a scheduled transmission window —
 // "this node can send to Peer during [Start, End)" — that nodes advertise
 // through the capability directory exactly like their link-state adjacency.
 // Unlike a live link, a contact's availability is known in advance: routing
