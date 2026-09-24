@@ -63,6 +63,12 @@ const es: Messages = {
   'state.cancelled': 'cancelada',
   'state.expired': 'expirada',
 
+  // Tareas estancadas: una fila no terminal que no se movió más allá de su
+  // propio límite (misma regla que el watcher del CLI).
+  'task.stalled': 'estancada',
+  'task.stalledHint':
+    'sin avances desde hace mucho — puede que nadie la consuma, que el ejecutor se haya perdido, o que ningún monitor la expire',
+
   // Queue view
   'queue.subtitle': 'Un tablero de tus tareas: esperando, en curso, pendientes de tu aprobación, recién terminadas — en vivo.',
   'queue.col.todo': 'Pendientes',
@@ -132,6 +138,9 @@ const es: Messages = {
   'detail.result.failed': 'Falló',
   'detail.result.exit': 'código de salida {n}',
   'detail.result.agent': 'agente {agent}',
+  'detail.result.model': 'modelo {model}',
+  'detail.result.node': 'en {node}',
+  'detail.result.injected': 'modelo inyectado',
   'detail.result.verdict': 'veredicto del supervisor: {verdict}',
   'detail.result.stdout': 'Salida',
   'detail.result.stderr': 'Salida de error',

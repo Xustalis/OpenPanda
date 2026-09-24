@@ -209,6 +209,38 @@ export interface Tier2Op {
   risk: 'high' | 'medium' | 'low' | string
 }
 
+// Stall detection mirrors the CLI watcher's rules (cmd/panda/repl_watch.go):
+// a task in a state that should still move on its own, whose row has not been
+// touched past its own bound, is stalled — no scheduler is consuming it, its
+// executor went silent, or no monitor is expiring it. The console must show
+// that instead of letting the card sit forever.
+export const STALL_QUEUED_MS = 10 * 60 * 1000
+export const STALL_ACTIVE_MS = 25 * 60 * 1000
+
+export function isTaskStalled(task: Task, now = Date.now()): boolean {
+  const updated = task.updated_at ? Date.parse(task.updated_at) : 0
+  if (!updated) return false
+  const age = now - updated
+  switch (task.state) {
+    case 'submitted':
+      // An unreleased plan stage waits on its dependency graph by design —
+      // the plan sweep owns that wait and propagates failures.
+      if (task.plan_meta?.plan_id) return false
+      return age > STALL_QUEUED_MS
+    case 'queued':
+      return age > STALL_QUEUED_MS
+    case 'dispatched':
+    case 'waiting_context':
+    case 'running':
+      // Lease renewals bump updated_at every lease/3 (~7min at the default),
+      // so a row frozen this long means the executor is gone and nothing
+      // expired the task.
+      return age > STALL_ACTIVE_MS
+    default:
+      return false
+  }
+}
+
 export interface Task {
   id: string
   parent_id: string
@@ -293,6 +325,14 @@ export interface AskResult {
   stdout?: string
   stderr?: string
   exit_code?: number
+  /** Execution attribution: the agent harness that ran the task, the node it
+   *  ran on, the model it used, and whether panda injected that model. */
+  agent?: string
+  model?: string
+  injected?: boolean
+  executor?: string
+  /** The entry model that served the ask's own classify/answer calls. */
+  entry_model?: string
   /** LLM-generated summary of the task outcome. Filled by SummarizeResult
    *  after every inline task so the UI shows a human-readable summary
    *  instead of raw stdout/stderr. */

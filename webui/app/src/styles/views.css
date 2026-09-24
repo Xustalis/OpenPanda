@@ -594,6 +594,21 @@
   max-height: 180px;
 }
 
+/* Inline approval gate inside a reply's task card: the decision belongs where
+   the user is reading, so it sits above the result with the warning accent
+   rather than hiding among the card's other chrome. */
+.task-approval {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 10px;
+  border: 1px solid var(--warn-border, var(--border-soft));
+  border-left: 3px solid var(--warn, var(--info));
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft, var(--bg-raised));
+}
+
 /* empty-state hero */
 
 

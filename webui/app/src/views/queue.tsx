@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'preact/hooks'
-import { api, ApiError, type Task } from '../api/client'
-import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
+import { api, ApiError, isTaskStalled, type Task } from '../api/client'
+import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
 import { t } from '../i18n'
 import { StateBadge } from '../components/state-badge'
 import { ErrorState } from '../components/page'
@@ -62,6 +62,10 @@ export function QueueView({
   const [refresh, setRefresh] = useState(0)
   const [projectFilter, setProjectFilter] = useState('')
   const bump = () => setRefresh((v) => v + 1)
+  // A stalled task emits no SSE event — nothing changes — so the badge can
+  // only appear on a local clock tick.
+  const [, setStallTick] = useState(0)
+  useVisibleInterval(() => setStallTick((v) => v + 1), 30_000)
 
   const { data: tasks, error } = useAsync(
     () => api.tasks({ project: projectFilter || undefined }),
@@ -541,6 +545,13 @@ function KanbanCard({
           </span>
         )}
         <span>{task.updated_at ? new Date(task.updated_at).toLocaleString() : ''}</span>
+        {isTaskStalled(task) && (
+          // The card is stuck: no consumer, a dead executor, or no monitor.
+          // Saying so on the board is the "no silent stall" rule for the web.
+          <span class="badge yellow" title={t('task.stalledHint')}>
+            {t('task.stalled')}
+          </span>
+        )}
       </div>
       {isReview && (
         // Approval is the whole point of the review column (design §11.2):

@@ -3,6 +3,7 @@ import {
   api,
   askSessionStream,
   isAbort,
+  isTaskStalled,
   type AskResult,
   type FsFileEntry,
   type NodeInfo,
@@ -12,7 +13,7 @@ import {
   type Task,
 } from '../api/client'
 import { PandaAscii, PandaMark } from '../brand/panda'
-import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
+import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
 import { t } from '../i18n'
 import { navigateView } from '../nav'
 import { Markdown } from '../md/render'
@@ -1249,13 +1250,38 @@ function ChatBubble(props: {
               the meta lane so its chrome reads like context, not a separate
               card. */}
         <div class="bubble-slot-row slot-meta">
+          {/* The model that wrote the reply rides the meta lane too — for a
+              task the exec-by line inside the card already says it, so this
+              only shows on plain answers. */}
+          {!isTaskKind && msg.result?.entry_model && (
+            <span class="dim exec-by">{msg.result.entry_model}</span>
+          )}
           {isTaskKind && msg.ref && (
             <div class="task-card u-flex-1 u-min-w-0">
+              {/* A task that needs consent must be decidable where the user is
+                  looking. Without this the conversation only said "review" and
+                  the decision lived on another page — so it waited, or worse,
+                  was never seen. Nothing else may answer it on the user's
+                  behalf: this is the web twin of the TUI's approval card. */}
+              <TaskApproval taskId={msg.ref} />
               <span class="badge blue">
                 {t('state.running') === msg.result?.task_state
                   ? t('sessions.taskCreated')
                   : msg.result?.task_state || t('sessions.taskCreated')}
               </span>
+              {/* Execution attribution — which harness ran it, on which node,
+                  with which model — stays subdued next to the state badge so
+                  who did the work is always legible without competing with
+                  the result itself. */}
+              {(msg.result?.agent || msg.result?.executor) && (
+                <span class="dim exec-by">
+                  {msg.result.agent}
+                  {msg.result.model ? ` (${msg.result.model})` : ''}
+                  {msg.result.injected ? ` · ${t('detail.result.injected')}` : ''}
+                  {msg.result.agent && msg.result.executor ? ' @ ' : ''}
+                  {msg.result.executor}
+                </span>
+              )}
               {msg.result?.report && <Markdown text={msg.result.report} class="task-report" />}
               {msg.result?.stdout && <pre class="task-out">{msg.result.stdout}</pre>}
               <button class="btn small chain-toggle" onClick={() => setChainOpen((v) => !v)}>
@@ -1269,6 +1295,82 @@ function ChatBubble(props: {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/** Inline approval gate for a task referenced by a chat bubble.
+ *
+ *  It re-reads the task on every change signal, so a task that parks in review
+ *  after the turn already finished (a queued run, a peer's delegation landing
+ *  back here) still surfaces its decision in the conversation rather than only
+ *  on the board. Approve/Reject call the same endpoints the queue and detail
+ *  views use; needs_changed_input disables Approve, because consent alone
+ *  cannot continue that task and a button that silently does nothing is worse
+ *  than an honest disabled one. */
+function TaskApproval({ taskId }: { taskId: string }) {
+  const change = useChangeSignal()
+  const { data: task } = useAsync<Task | null>(
+    () => api.task(taskId).catch(() => null),
+    [taskId],
+    change,
+  )
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  // A stalled task emits no SSE event — nothing changes — so the badge can
+  // only appear on a local clock tick.
+  const [, setStallTick] = useState(0)
+  useVisibleInterval(() => setStallTick((v) => v + 1), 30_000)
+
+  if (!task) return null
+  if (task.state !== 'review') {
+    // The other half of "no silent stall": a task the conversation spawned
+    // that stopped moving without reaching a decision shows it right in the
+    // thread, not only on the board.
+    if (!isTaskStalled(task)) return null
+    return (
+      <div class="task-approval" data-testid="chat-task-stalled">
+        <span class="badge yellow">{t('task.stalled')}</span>
+        <span class="dim">{t('task.stalledHint')}</span>
+      </div>
+    )
+  }
+
+  async function act(fn: () => Promise<unknown>) {
+    setBusy(true)
+    setError('')
+    try {
+      await fn()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div class="task-approval" data-testid="chat-task-approval">
+      <span class="badge yellow">{t('state.review')}</span>
+      {task.approval_disposition && (
+        <span class="dim review-kind">
+          {t(`detail.reviewKind.${task.approval_disposition}`)}
+        </span>
+      )}
+      <button
+        class="btn primary small"
+        disabled={busy || task.approval_disposition === 'needs_changed_input'}
+        onClick={() => void act(() => api.approve(task.id))}
+      >
+        {t('detail.approve')}
+      </button>
+      <button
+        class="btn danger small"
+        disabled={busy}
+        onClick={() => void act(() => api.reject(task.id, t('detail.rejectedViaWeb')))}
+      >
+        {t('detail.reject')}
+      </button>
+      {error && <p class="gate-error">{error}</p>}
     </div>
   )
 }
