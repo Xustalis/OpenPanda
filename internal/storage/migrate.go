@@ -49,6 +49,15 @@ func Migrate(db *sql.DB) error {
 	return nil
 }
 
+// LatestVersion returns the highest schema version this binary can migrate
+// to — the value Migrate stamps into user_version after a fully applied run.
+// The self-updater compares a staged release's LatestVersion against the data
+// directory's user_version before swapping binaries, so an update can never
+// install a build that would refuse to open the database at startup.
+func LatestVersion() int {
+	return migrations[len(migrations)-1].Version
+}
+
 // migrationTx adapts a raw *sql.DB to the MigrationExec surface. Safe only
 // because Open pins the pool to one connection, so every statement the Apply
 // body runs lands on the same connection the BEGIN ran on.

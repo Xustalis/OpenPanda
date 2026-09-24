@@ -8,6 +8,7 @@
 #   sh install.sh --lite                     # lite build (no web console/TUI; Pi & CLI nodes)
 #   sh install.sh --yes                      # also register auto-start (no prompt)
 #   sh install.sh --no-service               # never touch auto-start
+#   sh install.sh --force                    # install even if the release is older-schema than the local DB
 #
 # Env:
 #   GITHUB_TOKEN      optional; sent as `Authorization: Bearer` on GitHub API /
@@ -50,6 +51,7 @@ VERSION="${OPENPANDA_VERSION:-latest}"
 PREFIX="${OPENPANDA_PREFIX:-}"
 SERVICE_MODE="ask"
 LITE=""
+FORCE="${OPENPANDA_FORCE:-0}"
 
 # Fail here, not three functions later: without a downloader the version
 # lookup below simply returns nothing and the user sees "cannot resolve the
@@ -69,6 +71,7 @@ while [ $# -gt 0 ]; do
         --lite)       LITE=1; shift ;;
         --yes|-y)     SERVICE_MODE="yes"; shift ;;
         --no-service) SERVICE_MODE="no"; shift  ;;
+        --force|-f)   FORCE=1; shift ;;
         --help|-h)    usage ;;
         *) die "未知参数: $1（用 --help 查看）" ;;
     esac
@@ -219,8 +222,49 @@ if [ -f "$WORK/checksums.txt" ]; then
     ok "SHA-256 校验通过"
 fi
 
-# Unpack: the archive is a single top-level `openpanda/` directory holding
-# bin/panda + adapters/*.py + extensions/voice/*.py + example configs.
+# Unpack into the work dir first so the new binary can be probed before the
+# prefix is touched. The archive is a single top-level `openpanda/` directory
+# holding bin/panda + adapters/*.py + extensions/voice/*.py + example configs.
+mkdir -p "$WORK/pkg"
+tar -xzf "$WORK/$ARCHIVE" -C "$WORK/pkg" --strip-components=1
+NEWBIN="$WORK/pkg/bin/panda"
+[ -x "$NEWBIN" ] || die "安装包缺少可执行的 bin/panda"
+
+# ── Schema-compatibility guard ──────────────────────────────────────────────
+# A binary whose migration ceiling is below the database's user_version dies
+# at startup ("schema version N is newer than this binary's highest
+# migration") — installing it would strand the data directory. Newer binaries
+# self-report via `panda version --json` (schema = ceiling, db_schema = the
+# configured DB's user_version); a release too old to report cannot prove it
+# can open an existing database and is refused. --force / OPENPANDA_FORCE=1
+# overrides for deliberate downgrades.
+json_field() { # <file-of->stdin field name → first integer value
+    sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1
+}
+floor=""
+if newinfo="$("$NEWBIN" version --json 2>/dev/null)"; then
+    floor="$(printf '%s' "$newinfo" | json_field db_schema)"
+fi
+if [ -z "$floor" ]; then
+    for prev in "$BINDIR/panda" "$HOME/.local/bin/panda"; do
+        [ -x "$prev" ] || continue
+        previnfo="$("$prev" version --json 2>/dev/null)" || continue
+        floor="$(printf '%s' "$previnfo" | json_field db_schema)"
+        [ -n "$floor" ] || floor="$(printf '%s' "$previnfo" | json_field schema)"
+        [ -n "$floor" ] && break
+    done
+fi
+new_schema="$(printf '%s' "${newinfo:-}" | json_field schema)"
+floor="${floor:-0}"
+case "$floor" in (*[!0-9]*) floor=0 ;; esac
+if [ "$FORCE" != "1" ] && [ "$floor" -gt 0 ]; then
+    if [ -z "$new_schema" ]; then
+        die "拒绝安装：该 release 过旧，无法上报 schema 上限，而数据目录已在 schema v$floor —— 装完会因版本过旧无法启动。用 --force 强制安装。"
+    elif [ "$new_schema" -lt "$floor" ]; then
+        die "拒绝安装：该 release 最高支持 schema v$new_schema，但数据目录已在 v$floor —— 装完会因版本过旧无法启动。用 --force 强制安装。"
+    fi
+fi
+
 mkdir -p "$PREFIX"
 tar -xzf "$WORK/$ARCHIVE" -C "$PREFIX" --strip-components=1
 [ -x "$BINDIR/panda" ] || die "安装包缺少可执行的 $BINDIR/panda"
