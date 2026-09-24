@@ -1,7 +1,8 @@
 import { useState } from 'preact/hooks'
-import { api, isTaskStalled } from '../api/client'
+import { api, isTaskStalled, type ApprovalScope } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
 import { t } from '../i18n'
+import { ScopeSelect } from '../components/scope-select'
 import { StateBadge } from '../components/state-badge'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
@@ -20,6 +21,9 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
   const [busy, setBusy] = useState(false)
   const [rejecting, setRejecting] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
+  // Where the review answer is remembered — "once" by default; session and
+  // project write a standing gate answer for what comes after.
+  const [scope, setScope] = useState<ApprovalScope>('once')
 
   async function act(fn: () => Promise<unknown>, okMsg?: string) {
     if (busy) return
@@ -82,10 +86,11 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
           )}
           {task.state === 'review' && !rejecting && (
             <>
+              <ScopeSelect value={scope} onChange={setScope} disabled={busy} />
               <button
                 class="btn primary"
                 disabled={busy || task.approval_disposition === 'needs_changed_input'}
-                onClick={() => act(() => api.approve(task.id), t('detail.approvedToast'))}
+                onClick={() => act(() => api.approve(task.id, scope), t('detail.approvedToast'))}
               >
                 {t('detail.approve')}
               </button>
@@ -104,20 +109,21 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
                 onInput={(e) => setRejectReason((e.target as HTMLInputElement).value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
-                    act(() => api.reject(task.id, rejectReason.trim() || t('detail.rejectedViaWeb'))).then(() =>
-                      setRejecting(false),
-                    )
+                    act(() =>
+                      api.reject(task.id, rejectReason.trim() || t('detail.rejectedViaWeb'), scope),
+                    ).then(() => setRejecting(false))
                   }
                   if (e.key === 'Escape') setRejecting(false)
                 }}
               />
+              <ScopeSelect value={scope} onChange={setScope} disabled={busy} />
               <button
                 class="btn danger"
                 disabled={busy}
                 onClick={() =>
-                  act(() => api.reject(task.id, rejectReason.trim() || t('detail.rejectedViaWeb'))).then(() =>
-                    setRejecting(false),
-                  )
+                  act(() =>
+                    api.reject(task.id, rejectReason.trim() || t('detail.rejectedViaWeb'), scope),
+                  ).then(() => setRejecting(false))
                 }
               >
                 {t('detail.rejectConfirm')}

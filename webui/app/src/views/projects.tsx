@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks'
-import { api, type ProjectDetail } from '../api/client'
+import { api, type ApprovalScope, type ProjectDetail } from '../api/client'
 import { useAsync, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { ErrorState, PageHeader } from '../components/page'
@@ -149,6 +149,12 @@ export function ProjectsView({ onOpenProject }: { onOpenProject(name: string): v
                     toast(t('projects.remove'), 'success')
                   })
                 }
+                onForgetApproval={() =>
+                  run(async () => {
+                    await api.clearProjectApproval(p.name)
+                    toast(t('projects.approvalForgot'), 'success')
+                  })
+                }
               />
             </li>
           ))}
@@ -166,18 +172,30 @@ function ProjectRow({
   onOpen,
   onSave,
   onRemove,
+  onForgetApproval,
 }: {
   project: ProjectDetail
   busy: boolean
   editing: boolean
   onEdit(): void
   onOpen(): void
-  onSave(body: { name?: string; work_dir?: string; description?: string }): void
+  onSave(body: {
+    name?: string
+    work_dir?: string
+    description?: string
+    approval_mode?: 'inherit' | 'never' | 'on-request' | 'always' | ''
+    approval_scope?: ApprovalScope
+  }): void
   onRemove(keepMemory: boolean, deleteSessions: boolean): void
+  onForgetApproval(): void
 }) {
   const [name, setName] = useState(project.name)
   const [dir, setDir] = useState(project.work_dir ?? '')
   const [desc, setDesc] = useState(project.description ?? '')
+  const [approvalMode, setApprovalMode] = useState<'inherit' | 'never' | 'on-request' | 'always'>(
+    project.approval_mode || 'inherit',
+  )
+  const [approvalScope, setApprovalScope] = useState<ApprovalScope>(project.approval_scope || 'session')
   const [keepMemory, setKeepMemory] = useState(false)
   const [deleteSessions, setDeleteSessions] = useState(false)
 
@@ -186,7 +204,9 @@ function ProjectRow({
     setName(project.name)
     setDir(project.work_dir ?? '')
     setDesc(project.description ?? '')
-  }, [project.name, project.work_dir, project.description, editing])
+    setApprovalMode(project.approval_mode || 'inherit')
+    setApprovalScope(project.approval_scope || 'session')
+  }, [project.name, project.work_dir, project.description, project.approval_mode, project.approval_scope, editing])
 
   const handleDirectRemove = async () => {
     const ok = await confirmDialog({
@@ -250,6 +270,26 @@ function ProjectRow({
             {t('projects.sessionsCount', { count: String(project.sessions) })}
           </span>
         )}
+        {project.approval_mode && (
+          <span>
+            {' · '}
+            {t('projects.approvalModeShort')}: {t(`settings.approval.${project.approval_mode}`)}
+          </span>
+        )}
+        {project.approval_decision && (
+          // The standing answer a project-scope remember wrote — every new
+          // session inherits it, so it must be visible (and erasable) here.
+          <span>
+            {' · '}
+            {t('projects.approvalRemembered', {
+              decision: t(`approval.decision.${project.approval_decision}`),
+            })}
+            {' '}
+            <button class="link-btn" type="button" disabled={busy} onClick={onForgetApproval}>
+              {t('projects.approvalForget')}
+            </button>
+          </span>
+        )}
       </div>
 
       {editing && (
@@ -274,11 +314,49 @@ function ProjectRow({
             onInput={(e) => setDesc((e.target as HTMLInputElement).value)}
             aria-label={t('projects.descPlaceholder')}
           />
+          {/* The project's own tier-2 policy: an explicit mode overrides the
+              global approval.mode for everything in this project, and the
+              scope is where its approval cards preselect their remember. */}
+          <div class="project-edit-approval">
+            <label class="dim approval-field">
+              {t('projects.approvalMode')}
+              <select
+                class="input"
+                value={approvalMode}
+                onChange={(e) => setApprovalMode((e.target as HTMLSelectElement).value as typeof approvalMode)}
+              >
+                <option value="inherit">{t('projects.approvalInherit')}</option>
+                <option value="never">{t('settings.approval.never')}</option>
+                <option value="on-request">{t('settings.approval.on-request')}</option>
+                <option value="always">{t('settings.approval.always')}</option>
+              </select>
+            </label>
+            <label class="dim approval-field">
+              {t('projects.approvalScope')}
+              <select
+                class="input"
+                value={approvalScope}
+                onChange={(e) => setApprovalScope((e.target as HTMLSelectElement).value as ApprovalScope)}
+              >
+                <option value="once">{t('approval.scopeOnce')}</option>
+                <option value="session">{t('approval.scopeSession')}</option>
+                <option value="project">{t('approval.scopeProject')}</option>
+              </select>
+            </label>
+          </div>
           <div class="project-edit-actions">
             <button
               class="btn primary"
               disabled={busy || !name.trim()}
-              onClick={() => onSave({ name: name.trim(), work_dir: dir.trim(), description: desc.trim() })}
+              onClick={() =>
+                onSave({
+                  name: name.trim(),
+                  work_dir: dir.trim(),
+                  description: desc.trim(),
+                  approval_mode: approvalMode,
+                  approval_scope: approvalScope,
+                })
+              }
             >
               {t('projects.save')}
             </button>

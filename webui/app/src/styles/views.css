@@ -609,6 +609,74 @@
   background: var(--warn-soft, var(--bg-raised));
 }
 
+/* The remember-scope select riding inside approval cards, kanban actions and
+   the detail reject form — caption-sized so it reads as a modifier of the
+   buttons next to it, not a separate control row. */
+.scope-select {
+  font: inherit;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+}
+
+.scope-select:disabled {
+  opacity: 0.6;
+}
+
+/* "approval: always · deny (session) · forget" — the standing gate answer
+   next to the composer's authorize toggle. */
+.approval-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-caption);
+}
+
+.approval-consent {
+  font-size: var(--fs-caption);
+}
+
+/* Bare-text action inside a chip or meta line (the forget links). */
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.link-btn:hover {
+  text-decoration-color: var(--accent);
+}
+
+.link-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* The project edit panel's approval policy row: mode + remember-scope, one
+   line when it fits. */
+.project-edit-approval {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  margin: var(--sp-2) 0;
+}
+
+.approval-field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-caption);
+}
+
 /* empty-state hero */
 
 

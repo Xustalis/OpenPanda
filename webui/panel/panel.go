@@ -124,6 +124,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("DELETE /api/projects/{name}", h.deleteProject)
 	mux.HandleFunc("POST /api/projects/{name}/enter", h.enterProject)
 	mux.HandleFunc("POST /api/projects/exit", h.exitProject)
+	mux.HandleFunc("DELETE /api/projects/{name}/approval", h.clearProjectApproval)
 	mux.HandleFunc("GET /api/projects/{name}/memory", h.getProjectMemory)
 	mux.HandleFunc("PUT /api/projects/{name}/memory", h.putProjectMemory)
 	mux.HandleFunc("GET /api/nodes", h.listNodes)
@@ -208,6 +209,8 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("PATCH /api/sessions/{id}", h.patchSession)
 		mux.HandleFunc("DELETE /api/sessions/{id}", h.deleteSession)
 		mux.HandleFunc("POST /api/sessions/{id}/ask", h.sessionAsk)
+		mux.HandleFunc("GET /api/sessions/{id}/approval", h.getSessionApproval)
+		mux.HandleFunc("DELETE /api/sessions/{id}/approval", h.clearSessionApproval)
 		mux.HandleFunc("POST /api/sessions/{id}/cancel", h.sessionCancel)
 		mux.HandleFunc("POST /api/sessions/{id}/stop", h.sessionCancel)
 		if d.Worktrees != nil {
@@ -803,9 +806,18 @@ type approvalOperation struct {
 
 // approveTask accepts completed reviewed work or starts a detached execution
 // for a task that parked before execution. Detached execution returns 202 as
-// soon as its durable operation-start event has committed.
+// soon as its durable operation-start event has committed. An optional
+// {scope} body ("session"|"project"|"once") remembers the approve decision —
+// the same choice the CLI approval card offers — so the next tier-2 gate in
+// that scope answers without another prompt.
 func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	var body struct {
+		Scope string `json:"scope"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body) // a bare POST approves once
+	}
 	disposition, err := h.store.ApprovalDisposition(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, core.ErrConflict) || errors.Is(err, core.ErrIllegal) {
@@ -817,6 +829,9 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if disposition == core.ApprovalNeedsChangedInput {
 		writeErr(w, http.StatusConflict, core.ErrApprovalNeedsChangedInput)
+		return
+	}
+	if !h.rememberTaskApproval(w, r, id, body.Scope, projectstore.DecisionApprove) {
 		return
 	}
 	if disposition == core.ApprovalAcceptWork {
@@ -961,14 +976,49 @@ func writeApprovalResult(w http.ResponseWriter, id string, out *askengine.Result
 	}
 }
 
+// rememberTaskApproval stores a task approval's answer under the chosen
+// remember scope, keyed by the task's own session and project so the remember
+// lands exactly where the next sibling gate will look. "" and "once" store
+// nothing; a project-scope answer without a project degrades to the session
+// bucket; an absent engine leaves the approval itself to proceed — there is
+// simply nothing to remember into.
+func (h *handler) rememberTaskApproval(w http.ResponseWriter, r *http.Request, id, scope, decision string) bool {
+	if scope == "" || scope == projectstore.ScopeOnce {
+		return true
+	}
+	if err := projectstore.ValidateApprovalScope(scope); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("scope must be once, session or project"))
+		return false
+	}
+	eng := h.currentEngine()
+	if eng == nil {
+		return true
+	}
+	var project, sessionID string
+	if t, err := h.store.Get(r.Context(), id); err == nil {
+		project, sessionID = t.Project, t.SessionID
+	}
+	if scope == projectstore.ScopeProject && project == "" {
+		scope = projectstore.ScopeSession
+	}
+	if err := eng.RememberApproval(sessionID, project, scope, decision); err != nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("remember approval failed"))
+		return false
+	}
+	return true
+}
+
 // rejectTask rejects a reviewed task (review -> failed). The reason is
 // optional and may arrive as a JSON body {reason} (the web form) or the
-// legacy ?reason= query parameter (curl one-liners).
+// legacy ?reason= query parameter (curl one-liners). An optional {scope}
+// remembers the denial — a standing "no" for later tier-2 gates in that
+// scope, the counterpart of the approve card's remember.
 func (h *handler) rejectTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	reason := r.URL.Query().Get("reason")
 	var body struct {
 		Reason string `json:"reason"`
+		Scope  string `json:"scope"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body) // empty/invalid body falls back to the query param
@@ -982,6 +1032,9 @@ func (h *handler) rejectTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeErr(w, http.StatusInternalServerError, errors.New("reject failed"))
+		return
+	}
+	if !h.rememberTaskApproval(w, r, id, body.Scope, projectstore.DecisionDeny) {
 		return
 	}
 	writeJSON(w, map[string]string{"id": id, "status": "rejected"})

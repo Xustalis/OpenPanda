@@ -339,6 +339,39 @@ export interface AskResult {
   report?: string
   /** Chain of thought / reasoning accumulated during the turn. */
   thought?: string
+  /** Approval flow: a parked tier-2 task asks for a foreground decision;
+   *  denied marks a standing remembered "no" that answered first; a set
+   *  consent_scope (session|project) names the remembered scope that supplied
+   *  consent without prompting. */
+  needs_approval?: boolean
+  approval?: AskApproval
+  denied?: boolean
+  consent_scope?: 'session' | 'project' | string
+}
+
+/** The parked tier-2 request inside an ask result — what it is, and the
+ *  remember scope the approval card should preselect. */
+export interface AskApproval {
+  task_id: string
+  title: string
+  reason?: string
+  project?: string
+  scope: ApprovalScope
+}
+
+/** Where a "remember this answer" lands: once = this action only, session =
+ *  this chat, project = every session of the project (persisted). */
+export type ApprovalScope = 'once' | 'session' | 'project'
+
+/** GET /api/sessions/{id}/approval — the policy the session's next tier-2
+ *  gate will apply: resolved mode, the preselected remember scope, and any
+ *  standing remembered decision (and which bucket it lives in). */
+export interface SessionApprovalState {
+  mode: 'never' | 'on-request' | 'always' | string
+  scope: ApprovalScope
+  decision?: 'approve' | 'deny' | ''
+  decision_scope?: '' | 'session' | 'project' | string
+  project?: string
 }
 
 export interface ChooseDirectoryResult {
@@ -532,6 +565,12 @@ export interface ProjectDetail {
   memory_entries: number
   memory_chars: number
   sessions?: number
+  /** Per-project approval policy: '' mode inherits the global approval.mode;
+   *  scope is where the approval card preselects its remember; decision is a
+   *  remembered project-scope answer ('' | approve | deny). */
+  approval_mode?: '' | 'never' | 'on-request' | 'always'
+  approval_scope?: ApprovalScope
+  approval_decision?: '' | 'approve' | 'deny'
 }
 
 export interface ProjectList {
@@ -601,16 +640,19 @@ export const api = {
     return request('GET', `/api/tasks/${id}`)
   },
 
-  approve(id: string): Promise<ApprovalResult> {
-    return request('POST', `/api/tasks/${id}/approve`)
+  approve(id: string, scope?: ApprovalScope): Promise<ApprovalResult> {
+    return request('POST', `/api/tasks/${id}/approve`, scope && scope !== 'once' ? { scope } : undefined)
   },
 
   approvalOperation(id: string, operationID: string): Promise<ApprovalOperation> {
     return request('GET', `/api/tasks/${encodeURIComponent(id)}/operations/${encodeURIComponent(operationID)}`)
   },
 
-  reject(id: string, reason?: string): Promise<void> {
-    return request('POST', `/api/tasks/${id}/reject`, reason ? { reason } : undefined)
+  reject(id: string, reason?: string, scope?: ApprovalScope): Promise<void> {
+    const body: Record<string, string> = {}
+    if (reason) body.reason = reason
+    if (scope && scope !== 'once') body.scope = scope
+    return request('POST', `/api/tasks/${id}/reject`, Object.keys(body).length ? body : undefined)
   },
 
   cancel(id: string): Promise<{ id: string; cancelled: number }> {
@@ -656,7 +698,13 @@ export const api = {
 
   patchProject(
     name: string,
-    body: { name?: string; work_dir?: string; description?: string },
+    body: {
+      name?: string
+      work_dir?: string
+      description?: string
+      approval_mode?: 'inherit' | 'never' | 'on-request' | 'always' | ''
+      approval_scope?: ApprovalScope
+    },
   ): Promise<ProjectDetail> {
     return request('PATCH', `/api/projects/${encodeURIComponent(name)}`, body)
   },
@@ -675,6 +723,12 @@ export const api = {
 
   enterProject(name: string): Promise<ProjectDetail> {
     return request('POST', `/api/projects/${encodeURIComponent(name)}/enter`)
+  },
+
+  /** Forget the project's stored approval decision — the row a project-scope
+   *  "remember this" answer wrote. Returns the refreshed project view. */
+  clearProjectApproval(name: string): Promise<ProjectDetail> {
+    return request('DELETE', `/api/projects/${encodeURIComponent(name)}/approval`)
   },
 
   exitProject(): Promise<{ left: string }> {
@@ -841,6 +895,17 @@ export const api = {
 
   cancelSession(id: string, operationID: string): Promise<{ id: string; operation_id: string; cancelled: boolean }> {
     return request('POST', `/api/sessions/${encodeURIComponent(id)}/cancel`, { operation_id: operationID })
+  },
+
+  /** The approval policy the session's next tier-2 gate will apply. */
+  sessionApproval(id: string): Promise<SessionApprovalState> {
+    return request('GET', `/api/sessions/${encodeURIComponent(id)}/approval`)
+  },
+
+  /** Forget the session's remembered approval answers (session bucket plus
+   *  the project row's stored decision). Returns the now-clean state. */
+  clearSessionApproval(id: string): Promise<SessionApprovalState> {
+    return request('DELETE', `/api/sessions/${encodeURIComponent(id)}/approval`)
   },
 
   chooseDirectory(default_path?: string): Promise<ChooseDirectoryResult> {

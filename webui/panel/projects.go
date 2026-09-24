@@ -134,12 +134,17 @@ func (h *handler) getProject(w http.ResponseWriter, r *http.Request) {
 }
 
 // patchProjectRequest is the body of PATCH /api/projects/{name}: a rename, a work
-// directory, a description, or any combination. Absent fields are left alone;
-// an explicit empty work_dir clears it, which is how a project gives up its tree.
+// directory, a description, the approval policy — or any combination. Absent
+// fields are left alone; an explicit empty work_dir clears it, which is how a
+// project gives up its tree. approval_mode "inherit" (or "") clears the
+// project's mode override back to the global approval.mode; approval_scope
+// picks where the console's approval card preselects its remember.
 type patchProjectRequest struct {
-	Name        *string `json:"name,omitempty"`
-	WorkDir     *string `json:"work_dir,omitempty"`
-	Description *string `json:"description,omitempty"`
+	Name          *string `json:"name,omitempty"`
+	WorkDir       *string `json:"work_dir,omitempty"`
+	Description   *string `json:"description,omitempty"`
+	ApprovalMode  *string `json:"approval_mode,omitempty"`
+	ApprovalScope *string `json:"approval_scope,omitempty"`
 }
 
 // patchProject serves PATCH /api/projects/{name} — rename and/or edit metadata.
@@ -203,6 +208,30 @@ func (h *handler) patchProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.ApprovalMode != nil || req.ApprovalScope != nil {
+		mode, scope := cur.ApprovalMode, cur.ApprovalScope
+		if req.ApprovalMode != nil {
+			mode = strings.TrimSpace(*req.ApprovalMode)
+			if mode == "inherit" {
+				mode = ""
+			}
+		}
+		if req.ApprovalScope != nil {
+			scope = strings.TrimSpace(*req.ApprovalScope)
+		}
+		if verr := projectstore.ValidateApprovalMode(mode); verr != nil {
+			writeErr(w, http.StatusBadRequest, errors.New("approval_mode must be inherit, never, on-request or always"))
+			return
+		}
+		if verr := projectstore.ValidateApprovalScope(scope); verr != nil {
+			writeErr(w, http.StatusBadRequest, errors.New("approval_scope must be once, session or project"))
+			return
+		}
+		if err := store.SetApprovalPolicy(name, mode, scope); err != nil {
+			writeErr(w, http.StatusInternalServerError, errors.New("update approval policy failed"))
+			return
+		}
+	}
 	p, err := store.Get(name)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("reload failed"))
@@ -217,6 +246,38 @@ func (h *handler) patchProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, projectView{Project: p, Active: p.Name == active, Entries: entries, Chars: chars, Sessions: sessionCount})
+}
+
+// clearProjectApproval serves DELETE /api/projects/{name}/approval — drops the
+// project's stored approval decision, the row a project-scope "remember this"
+// answer wrote. Session buckets are in-memory per conversation and die with
+// their chat; the row is what persists, so this is the "forget the standing
+// answer" switch for the whole project.
+func (h *handler) clearProjectApproval(w http.ResponseWriter, r *http.Request) {
+	store, ok := h.projectStoreOrErr(w)
+	if !ok {
+		return
+	}
+	name := r.PathValue("name")
+	p, err := store.Get(name)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such project"))
+		return
+	}
+	if err := store.SetApprovalDecision(name, ""); err != nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("clear approval failed"))
+		return
+	}
+	p.ApprovalDecision = ""
+	active, _ := store.Active()
+	entries, chars := h.projectMemorySize(name)
+	var sessCount int
+	if h.sessions != nil {
+		if sList, err := h.sessions.ListByProject(name); err == nil {
+			sessCount = len(sList)
+		}
+	}
+	writeJSON(w, projectView{Project: p, Active: p.Name == active, Entries: entries, Chars: chars, Sessions: sessCount})
 }
 
 // renameProjectMemory moves a project's memory directory. Copy-then-drop rather
