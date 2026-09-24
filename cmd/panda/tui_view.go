@@ -31,7 +31,10 @@ func (m tuiModel) View() string {
 		var live strings.Builder
 		live.WriteString("\n")
 		live.WriteString(m.th.accent.Render(i18n.T(m.loc, "tui.exec.running")))
-		if output := m.execText.String(); strings.TrimSpace(output) != "" {
+		// Strip terminal control sequences from the live stream: a handler's
+		// clear-screen or color bytes inside the frame would corrupt the paint
+		// Bubble Tea is about to do.
+		if output := ansi.Strip(m.execText.String()); strings.TrimSpace(output) != "" {
 			live.WriteString("\n")
 			live.WriteString(output)
 		}

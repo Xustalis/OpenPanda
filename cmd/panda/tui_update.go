@@ -8,15 +8,21 @@ package main
 // the live region and the input box.
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
-	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/memory"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
 var (
@@ -289,16 +295,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyLocale()
 		m.refreshProject()
 		if m.chatHistory != nil {
-			if msg.text == "/new" {
-				m.chatHistory.blocks = nil
-			} else if msg.text != "" {
+			if msg.text != "" {
 				m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: msg.text})
 			}
-			if strings.TrimSpace(msg.output) != "" {
-				m.chatHistory.blocks = append(m.chatHistory.blocks, block{
-					kind: blockInfo,
-					body: strings.TrimRight(msg.output, "\n"),
-				})
+			// The captured stream can carry terminal control sequences (a
+			// handler's clear-screen, banner colors): strip them so the frame
+			// Bubble Tea repaints is never driven by stray bytes.
+			if out := strings.TrimSpace(ansi.Strip(msg.output)); out != "" {
+				m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockInfo, body: out})
+			}
+			if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
+				m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockError, body: msg.err.Error()})
 			}
 		}
 		m.scrollOffset = 0
@@ -569,10 +576,10 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.ta.Reset()
 			m.ta.SetHeight(1)
 			steerPrefix := i18n.T(m.loc, "tui.turn.steerPrefix")
+			// The steer rides inside pendingPrompt and is persisted as part of
+			// this turn's user side by recordOutcome — appending it to convo
+			// here would leave an unpaired user turn in the replayed history.
 			m.pendingPrompt += "\n" + steerPrefix + text
-			if m.r != nil {
-				m.r.convo = append(m.r.convo, entry.Turn{Role: "user", Content: steerPrefix + text})
-			}
 			blk := block{
 				kind: blockNote,
 				body: m.th.accent.Render("💡 ") + i18n.Tf(m.loc, "tui.turn.steered", "idea", text),
@@ -823,9 +830,6 @@ func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.ta.SetHeight(1)
 					steerPrefix := i18n.T(m.loc, "tui.turn.steerPrefix")
 					m.pendingPrompt += "\n" + steerPrefix + text
-					if m.r != nil {
-						m.r.convo = append(m.r.convo, entry.Turn{Role: "user", Content: steerPrefix + text})
-					}
 					blk := block{
 						kind: blockNote,
 						body: m.th.accent.Render("💡 ") + i18n.Tf(m.loc, "tui.turn.steered", "idea", text),
@@ -933,132 +937,301 @@ func (m tuiModel) onMenuKey(msg tea.KeyMsg) (handled bool, _ tea.Model, _ tea.Cm
 	return false, m, nil
 }
 
-// submit acts on one submitted line. Quit shortcuts end the program; other
-// slash commands and shell escapes ("!cmd") run through the classic dispatch in
-// the foreground (see tui_exec.go); anything else is a prompt for the engine.
+// submit acts on one submitted line. Bare words go to the ask engine; "!!"
+// repeats the last prompt; "/cmd" routes through submitSlash, which keeps
+// state-mutating commands on the Update goroutine (no exec goroutine races the
+// View or the task watcher) and sends only read-only, output-producing work
+// through the exec pump in tui_exec.go.
 func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 	m.ta.Reset()
 	m.ta.SetHeight(1)
 	m.menu.close()
 	m.scrollOffset = 0
-	if text == "/exit" || text == "/quit" {
-		m.quitting = true
-		return m, tea.Quit
-	}
-
-	// Interactive commands rendered in full-screen TUI (Requirement 2, 4, 5)
-	switch {
-	case text == "/clear" || text == "/cls":
-		if m.chatHistory != nil {
-			m.chatHistory.blocks = nil
-		}
-		if m.r != nil {
-			m.r.convo = nil
-		}
-		m.scrollOffset = 0
+	text = strings.TrimSpace(text)
+	if text == "" {
 		return m, nil
-	case text == "/sessions" || strings.HasPrefix(text, "/sessions "):
-		return m.openSessionsList()
-	case text == "/projects" || strings.HasPrefix(text, "/projects "):
-		return m.openProjectsList()
-	case text == "/resume" || text == "/resume ":
-		return m.openResumeList()
-	case strings.HasPrefix(text, "/resume "):
-		arg := strings.TrimSpace(strings.TrimPrefix(text, "/resume"))
-		if arg == "-" {
-			if m.r != nil {
-				m.r.activeSess = ""
-			}
-			note := block{kind: blockNote, body: i18n.T(m.loc, "repl.resume.detached")}
-			return m, m.printBlock(note)
-		}
-		if m.r != nil && m.r.sessionsSt != nil {
-			if sess, err := m.r.sessionsSt.Get(arg); err == nil {
-				m.r.activeSess = arg
-				if len(sess.Turns) > 0 {
-					var convo []entry.Turn
-					for _, t := range sess.Turns {
-						convo = append(convo, entry.Turn{Role: t.Role, Content: t.Text})
-					}
-					m.r.convo = convo
-					if m.chatHistory != nil {
-						m.chatHistory.blocks = nil
-						for _, t := range sess.Turns {
-							switch t.Role {
-							case "user":
-								m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: t.Text})
-							case "assistant":
-								m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockAnswer, body: t.Text})
-							}
-						}
-					}
-				}
-				note := block{kind: blockNote, body: i18n.Tf(m.loc, "tui.resume.ok", "id", shortID(arg), "title", sess.Title)}
-				return m, m.printBlock(note)
-			}
-		}
-		note := block{kind: blockError, body: i18n.Tf(m.loc, "tui.resume.notFound", "id", arg)}
-		return m, m.printBlock(note)
-	case text == "/model" || strings.HasPrefix(text, "/model"):
-		return m.openModelPanel()
-	case isSkillsHubInvite(text):
-		// "/skills", "/skill", or "... hub" opens the browsable plaza; the
-		// verb subcommands (list/find/add/reset/install) keep running through
-		// the exec path below.
-		return m.openSkillsHub()
 	}
-
-	// Slash-mode prefixes pick the turn's interaction mode before the slash
-	// dispatcher claims them: "/goal <text>", "/plan <text>", "/spec <text>".
-	// A bare mode word just prints its usage line.
-	if mode, rest, ok := parseModePrefix(text); ok {
-		if rest == "" {
-			note := block{kind: blockNote, body: i18n.Tf(m.loc, "tui.mode.usage", "cmd", "/"+mode)}
-			return m, m.printBlock(note)
-		}
-		return m.askTurn(rest, mode)
+	if text == "!!" {
+		return m.repeatLastTurn()
 	}
-
-	if isBareCommand(text) {
-		// Other slash/shell commands reuse the repl handlers with request-scoped
-		// streams. Output arrives incrementally and this generation alone owns the
-		// completion; Esc/Ctrl+C cancels its context without quitting the TUI.
-		m.mode = modeExec
-		m.execGen++
-		m.execText.Reset()
-		exec, cmd := startCommandExec(m.r, text, m.execGen)
-		m.exec = exec
-		return m, cmd
+	if strings.HasPrefix(text, "/") {
+		name, arg := slashParts(text)
+		return m.submitSlash(name, arg, text)
 	}
-
+	if strings.HasPrefix(text, "!") {
+		return m.startExec(text)
+	}
 	return m.askTurn(text, "")
 }
 
-// isSkillsHubInvite reports whether the line should open the Skills Hub panel
-// rather than exec the /skill repl handler.
-func isSkillsHubInvite(text string) bool {
-	switch text {
-	case "/skills", "/skill", "/skills hub", "/skill hub":
-		return true
+// slashParts splits "/name arg…" into the command word and its argument. The
+// cut is at the first space OR newline so a multiline draft can still carry a
+// mode line ("/goal\n<text>"), matching the classic dispatcher's first-word
+// rule but forgiving of a Ctrl+J line break.
+func slashParts(text string) (name, arg string) {
+	body := strings.TrimPrefix(text, "/")
+	if i := strings.IndexAny(body, " \n"); i >= 0 {
+		return strings.ToLower(body[:i]), strings.TrimSpace(body[i+1:])
 	}
-	return false
+	return strings.ToLower(body), ""
 }
 
-// parseModePrefix splits a "/goal|/plan|/spec <text>" line into its mode and
-// remaining text. The slash-mode commands share a prefix rule with the rest of
-// the command table: the mode word followed by a space or a line break (so a
-// multiline draft can carry a mode). Bare "/goal" et al. also match — rest is
-// "" and the caller prints the usage hint.
-func parseModePrefix(text string) (mode, rest string, ok bool) {
-	for _, p := range []string{"/goal", "/plan", "/spec"} {
-		if text == p {
-			return p[1:], "", true
+// submitSlash routes one parsed slash command. Anything that mutates repl or
+// terminal state — screen clears, conversation wipes, session binds, project
+// switches, standing consent — runs inline on the Update goroutine so it
+// cannot interleave with a repainting View or a polling watcher. Everything
+// else (listings, reports, one-shot lookups) runs through the exec pump.
+func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
+	switch name {
+	case "quit", "exit":
+		m.quitting = true
+		return m, tea.Quit
+	case "clear", "cls", "claer":
+		// Visual clear only — the conversation survives (/new is the wipe).
+		// Blocks vanish from the next frame; ClearScreen forces a repaint so
+		// no stale cell lingers on the alternate screen.
+		if m.chatHistory != nil {
+			m.chatHistory.blocks = nil
 		}
-		if strings.HasPrefix(text, p+" ") || strings.HasPrefix(text, p+"\n") {
-			return p[1:], strings.TrimSpace(text[len(p):]), true
+		return m, tea.ClearScreen
+	case "new":
+		return m.newChat()
+	case "sessions":
+		return m.openSessionsList()
+	case "projects":
+		return m.openProjectsList()
+	case "resume":
+		return m.resumeSession(arg)
+	case "model":
+		return m.openModelPanel()
+	case "skills", "skill":
+		if arg == "" || arg == "hub" {
+			return m.openSkillsHub()
+		}
+	case "ask":
+		if arg == "" {
+			note := block{kind: blockNote, body: "/ask " + i18n.T(m.loc, "cmd.ask")}
+			return m, m.printBlock(note)
+		}
+		return m.askTurn(arg, "")
+	case "goal", "plan", "spec":
+		if arg == "" {
+			note := block{kind: blockNote, body: i18n.Tf(m.loc, "tui.mode.usage", "cmd", "/"+name)}
+			return m, m.printBlock(note)
+		}
+		return m.askTurn(arg, name)
+	case "project":
+		if arg != "" {
+			return m.enterProject(arg)
+		}
+		// Bare "/project" only reports the active pointer — read-only output.
+	case "authorize":
+		return m.toggleAuthorize()
+	case "tasks":
+		// "watch" would stream a redrawn board through the transcript forever;
+		// "clear" needs a y/N prompt the exec goroutine cannot show. Give both
+		// a sane form instead of a silent no-op.
+		var rest []string
+		watch := false
+		for _, f := range strings.Fields(arg) {
+			switch f {
+			case "clear":
+				note := block{kind: blockNote, body: i18n.T(m.loc, "tui.tasks.clearShell")}
+				return m, m.printBlock(note)
+			case "watch", "-w":
+				watch = true
+			default:
+				rest = append(rest, f)
+			}
+		}
+		if watch {
+			return m.startExec("/tasks " + strings.Join(rest, " "))
 		}
 	}
-	return "", "", false
+	return m.startExec(text)
+}
+
+// startExec sends one line through the classic dispatch on a worker goroutine.
+// Output arrives incrementally and this generation alone owns the completion;
+// Esc/Ctrl+C cancels its context without quitting the TUI.
+func (m tuiModel) startExec(text string) (tea.Model, tea.Cmd) {
+	m.mode = modeExec
+	m.execGen++
+	m.execText.Reset()
+	exec, cmd := startCommandExec(m.r, text, m.execGen)
+	m.exec = exec
+	return m, cmd
+}
+
+// newChat is "/new": wipe the bare-mode conversation — memory AND the
+// persisted file — and clear the screen. A bound session refuses, exactly as
+// the classic handler spells it.
+func (m tuiModel) newChat() (tea.Model, tea.Cmd) {
+	if m.r != nil && m.r.activeSess != "" {
+		note := block{kind: blockNote, body: i18n.T(m.loc, "repl.new.session")}
+		return m, m.printBlock(note)
+	}
+	n := 0
+	if m.r != nil {
+		n = len(m.r.convo)
+		m.r.convo = nil
+	}
+	clearConvo()
+	if m.chatHistory != nil {
+		m.chatHistory.blocks = nil
+	}
+	note := block{kind: blockNote, body: i18n.Tf(m.loc, "repl.new.cleared", "n", fmt.Sprint(n/2))}
+	return m, tea.Batch(tea.ClearScreen, m.printBlock(note))
+}
+
+// resumeSession implements "/resume [id|-]": bare opens the picker, "-"
+// detaches back to the bare conversation, and an id binds the session and
+// replays its thread into the transcript. The bare convo is left alone —
+// binding must not copy session turns into it, or detaching would leak the
+// thread into the next bare ask and its persisted file.
+func (m tuiModel) resumeSession(arg string) (tea.Model, tea.Cmd) {
+	if arg == "" {
+		return m.openResumeList()
+	}
+	if arg == "-" {
+		if m.r != nil {
+			m.r.activeSess = ""
+		}
+		note := block{kind: blockNote, body: i18n.T(m.loc, "repl.resume.detached")}
+		return m, m.printBlock(note)
+	}
+	if m.r != nil && m.r.sessionsSt != nil {
+		if sess, err := m.r.sessionsSt.Get(arg); err == nil {
+			return m.attachSession(sess)
+		}
+	}
+	note := block{kind: blockError, body: i18n.Tf(m.loc, "tui.resume.notFound", "id", arg)}
+	return m, m.printBlock(note)
+}
+
+// attachSession binds a session and reseeds the transcript with its thread.
+func (m tuiModel) attachSession(sess *sessions.Session) (tea.Model, tea.Cmd) {
+	if sess == nil {
+		return m, nil
+	}
+	if m.r != nil {
+		m.r.activeSess = sess.ID
+	}
+	m.mode = modeIdle
+	if m.chatHistory != nil {
+		m.chatHistory.blocks = nil
+		for _, t := range sess.Turns {
+			switch t.Role {
+			case "user":
+				m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: t.Text})
+			case "assistant":
+				m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockAnswer, body: t.Text})
+			}
+		}
+	}
+	title := sess.Title
+	if title == "" {
+		title = shortID(sess.ID)
+	}
+	note := block{kind: blockNote, body: i18n.Tf(m.loc, "tui.resume.ok", "id", shortID(sess.ID), "title", title)}
+	return m, m.printBlock(note)
+}
+
+// enterProject implements "/project <name>" inline: validate, create-then-
+// enter like the classic handler, then rebind the engine and reload the
+// conversation for the project's own scope — synchronously, so the watcher
+// and the context line never see a half-switched pointer.
+func (m tuiModel) enterProject(name string) (tea.Model, tea.Cmd) {
+	r := m.r
+	if r == nil || r.projStore == nil {
+		note := block{kind: blockNote, body: i18n.T(m.loc, "cli.project.none")}
+		return m, m.printBlock(note)
+	}
+	name = strings.TrimSpace(name)
+	fail := func(err error) (tea.Model, tea.Cmd) {
+		return m, m.printBlock(block{kind: blockError, body: err.Error()})
+	}
+	if name == "-" {
+		if err := r.projStore.ClearActive(); err != nil {
+			return fail(err)
+		}
+		r.activeProj = ""
+		r.bindProject()
+		r.convo = loadConvo()
+		m.refreshProject()
+		note := block{kind: blockNote, body: i18n.T(m.loc, "cli.project.noActive")}
+		return m, m.printBlock(note)
+	}
+	if err := projectstore.ValidateName(name); err != nil {
+		note := block{kind: blockNote, body: i18n.T(m.loc, "repl.project.bad")}
+		return m, m.printBlock(note)
+	}
+	created := false
+	if _, err := r.projStore.Get(name); err != nil {
+		if _, cerr := r.projStore.EnsureFromName(name); cerr != nil {
+			return fail(cerr)
+		}
+		if r.projects != nil {
+			if serr := r.projects.Save(name, memory.MemFile{Limit: r.projects.Limit()}); serr != nil {
+				return fail(serr)
+			}
+		}
+		created = true
+	}
+	if err := r.projStore.SetActive(name); err != nil {
+		return fail(err)
+	}
+	r.activeProj = name
+	if pr, err := r.projStore.Get(name); err == nil && pr.WorkDir != "" && r.cfg != nil {
+		r.cfg.Storage.WorkPath = pr.WorkDir
+	}
+	r.bindProject()
+	r.convo = loadConvo()
+	m.refreshProject()
+	body := ""
+	if created {
+		body = i18n.Tf(m.loc, "repl.project.created", "name", name) + "\n"
+	}
+	body += i18n.Tf(m.loc, "cli.project.entered", "name", name)
+	return m, m.printBlock(block{kind: blockNote, body: body})
+}
+
+// repeatLastTurn re-runs the previous user prompt ("!!") through the TUI's own
+// ask path — never through the classic repeatLast, which would grab the raw
+// terminal for its interrupt watcher.
+func (m tuiModel) repeatLastTurn() (tea.Model, tea.Cmd) {
+	if m.r != nil {
+		if m.r.activeSess != "" && m.r.sessionsSt != nil {
+			if s, err := m.r.sessionsSt.Get(m.r.activeSess); err == nil {
+				for i := len(s.Turns) - 1; i >= 0; i-- {
+					if s.Turns[i].Role == "user" {
+						return m.askTurn(s.Turns[i].Text, "")
+					}
+				}
+			}
+		}
+		for i := len(m.r.convo) - 1; i >= 0; i-- {
+			if m.r.convo[i].Role == "user" {
+				return m.askTurn(m.r.convo[i].Content, "")
+			}
+		}
+	}
+	note := block{kind: blockNote, body: i18n.T(m.loc, "repl.bang.none")}
+	return m, m.printBlock(note)
+}
+
+// toggleAuthorize flips the standing-consent flag inline: the exec path would
+// write it on a worker goroutine while contextLine reads it every frame.
+func (m tuiModel) toggleAuthorize() (tea.Model, tea.Cmd) {
+	if m.r == nil {
+		return m, nil
+	}
+	m.r.authorize = !m.r.authorize
+	key := "repl.auth.off"
+	if m.r.authorize {
+		key = "repl.auth.on"
+	}
+	return m, m.printBlock(block{kind: blockNote, body: i18n.T(m.loc, key)})
 }
 
 // askTurn launches one engine turn for prompt with the slash-mode directive

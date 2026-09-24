@@ -78,8 +78,13 @@ type repl struct {
 	webToken    string
 	term        *termSession
 	activeSess  string
-	activeProj  string
 	push        *push.Service
+
+	// activeProj is the in-memory active-project pointer, guarded by projMu:
+	// the task watcher reads it on its own goroutine every poll while the
+	// front end writes it on project switches.
+	projMu     sync.RWMutex
+	activeProj string
 
 	// Conversation memory for bare (session-less) mode: every ask's prompt
 	// and outcome accumulate here so follow-up questions keep context — the
@@ -712,14 +717,41 @@ func (r *repl) recordOutcome(ctx context.Context, text string, out *askengine.Re
 	_, _ = r.sessionsSt.AppendTurn(r.activeSess, turn)
 }
 
-// recordErrorTurn persists a failed turn's assistant side into the active
-// session thread, mirroring the panel and `session ask` error paths. Without
+// currentProject returns the active-project pointer under its lock.
+func (r *repl) currentProject() string {
+	r.projMu.RLock()
+	defer r.projMu.RUnlock()
+	return r.activeProj
+}
+
+// setProject updates the active-project pointer under its lock.
+func (r *repl) setProject(name string) {
+	r.projMu.Lock()
+	r.activeProj = name
+	r.projMu.Unlock()
+}
+
+// recordErrorTurn persists a failed turn. In session mode it appends the
+// assistant side, mirroring the panel and `session ask` error paths: without
 // it the thread ends on a dangling user turn (askContext persists the
-// question before the ask runs): the next ask replays it ahead of its own
-// prompt and the provider sees two consecutive user messages — a 400 that
-// then poisons every following turn of the session.
-func (r *repl) recordErrorTurn(err error) {
-	if err == nil || r.activeSess == "" || r.sessionsSt == nil {
+// question before the ask runs) and the next ask replays two consecutive
+// user messages — a provider 400 that then poisons every following turn.
+// In bare mode the user turn was never persisted either (it waits for the
+// answer pairing), so the whole failed exchange lands here as one pair —
+// otherwise a failed ask leaves no trace in /history or the convo file.
+func (r *repl) recordErrorTurn(text string, err error) {
+	if err == nil {
+		return
+	}
+	if r.activeSess == "" || r.sessionsSt == nil {
+		if strings.TrimSpace(text) != "" {
+			r.convo = append(r.convo,
+				entry.Turn{Role: "user", Content: text},
+				entry.Turn{Role: "assistant", Content: "⚠ " + err.Error()},
+			)
+			r.convo = trimConvo(r.convo)
+			saveConvo(r.convo)
+		}
 		return
 	}
 	_, _ = r.sessionsSt.AppendTurn(r.activeSess, sessions.Turn{Role: "assistant", Text: "⚠ " + err.Error(), Kind: "error"})
@@ -847,7 +879,7 @@ func (r *repl) askMode(text, mode string) {
 		// aborted it); every other failure records one so the thread keeps
 		// its user/assistant alternation.
 		if !errors.Is(res.err, context.Canceled) {
-			r.recordErrorTurn(res.err)
+			r.recordErrorTurn(text, res.err)
 		}
 		return
 	}
@@ -992,21 +1024,32 @@ func (r *repl) cmdNew(arg string) {
 	r.outln(i18n.Tf(r.loc, "repl.new.cleared", "n", fmt.Sprint(n/2)))
 }
 
-// cmdHistory prints the recent bare-mode conversation compactly — the
-// "scroll up" of a chat app when the terminal has moved on.
+// cmdHistory prints the recent conversation compactly — the "scroll up" of a
+// chat app when the terminal has moved on. A bound session lists its thread;
+// bare mode reads the in-memory convo, falling back to the persisted file so
+// a restart or a never-loaded memory cannot report an empty history while
+// exchanges sit on disk.
 func (r *repl) cmdHistory(arg string) {
-	if r.activeSess != "" {
-		r.outln(i18n.T(r.loc, "repl.new.session"))
-		return
+	var turns []entry.Turn
+	if r.activeSess != "" && r.sessionsSt != nil {
+		if s, err := r.sessionsSt.Get(r.activeSess); err == nil {
+			for _, t := range s.Turns {
+				turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
+			}
+		}
+	} else {
+		turns = r.convo
+		if len(turns) == 0 {
+			turns = loadConvo()
+		}
 	}
-	if len(r.convo) == 0 {
+	if len(turns) == 0 {
 		r.outln(i18n.T(r.loc, "repl.history.empty"))
 		return
 	}
 	r.outln(i18n.T(r.loc, "repl.history.head"))
 	// newest last, like a chat transcript; cap the listing, the window
 	// itself may hold far more.
-	turns := r.convo
 	if len(turns) > 20 {
 		turns = turns[len(turns)-20:]
 	}
