@@ -410,6 +410,7 @@ var messages = map[Locale]map[string]string{
 
 		"cli.ask.usage":     "usage: panda ask [--task] [--card <path>] [--output-format json|stream-json] <text>",
 		"cli.ask.badFormat": "invalid --output-format {format} — one of: text, json, stream-json",
+		"cli.ask.noModel":   "no model configured — run `panda init` or `panda model add`",
 		"cli.ask.task":      "task {id} → {state}",
 
 		// A plan is asynchronous: the useful output is the stage board plus how
@@ -1273,6 +1274,7 @@ var messages = map[Locale]map[string]string{
 
 		"cli.ask.usage":     "用法：panda ask [--task] [--card <路径>] [--output-format json|stream-json] <文本>",
 		"cli.ask.badFormat": "无效的 --output-format {format} — 可选：text、json、stream-json",
+		"cli.ask.noModel":   "未配置模型——运行 `panda init` 或 `panda model add`",
 		"cli.ask.task":      "任务 {id} → {state}",
 
 		"cli.plan.failed":  "计划启动失败：{err}",
@@ -2179,6 +2181,7 @@ var messages = map[Locale]map[string]string{
 
 		"cli.ask.usage":     "使い方：panda ask [--task] [--card <パス>] [--output-format json|stream-json] <テキスト>",
 		"cli.ask.badFormat": "無効な --output-format {format} — 選択肢：text、json、stream-json",
+		"cli.ask.noModel":   "モデルが未設定です — `panda init` または `panda model add` を実行してください",
 		"cli.ask.task":      "タスク {id} → {state}",
 
 		"cli.plan.failed":  "計画の開始に失敗しました：{err}",
@@ -3023,6 +3026,7 @@ var messages = map[Locale]map[string]string{
 
 		"cli.ask.usage":     "uso: panda ask [--task] [--card <ruta>] [--output-format json|stream-json] <texto>",
 		"cli.ask.badFormat": "--output-format inválido {format} — opciones: text, json, stream-json",
+		"cli.ask.noModel":   "sin modelo configurado — ejecuta `panda init` o `panda model add`",
 		"cli.ask.task":      "tarea {id} → {state}",
 
 		"cli.plan.failed":  "no se pudo iniciar el plan: {err}",
@@ -3867,6 +3871,7 @@ var messages = map[Locale]map[string]string{
 
 		"cli.ask.usage":     "Aufruf: panda ask [--task] [--card <Pfad>] [--output-format json|stream-json] <Text>",
 		"cli.ask.badFormat": "ungültiges --output-format {format} — Optionen: text, json, stream-json",
+		"cli.ask.noModel":   "kein Modell konfiguriert — `panda init` oder `panda model add` ausführen",
 		"cli.ask.task":      "Aufgabe {id} → {state}",
 
 		"cli.plan.failed":  "Plan konnte nicht gestartet werden: {err}",

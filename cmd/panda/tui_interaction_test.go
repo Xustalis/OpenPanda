@@ -228,11 +228,11 @@ func TestTUIListCommands(t *testing.T) {
 // TestTUIModelManagement verifies existing model panel with [A] [D] [E] shortcuts and Enter switching.
 func TestTUIModelManagement(t *testing.T) {
 	cfg := &config.Config{
-		Model: config.ModelConfig{Name: "deepseek-v4-flash", Model: "deepseek-chat"},
+		Model: config.ModelConfig{Name: "deepseek-v4-flash", Provider: "deepseek", Model: "deepseek-chat"},
 		Models: []config.ModelConfig{
-			{Name: "deepseek-v4-flash", Model: "deepseek-chat"},
-			{Name: "gpt-4o", Model: "gpt-4o"},
-			{Name: "claude-3-5-sonnet", Model: "claude-3-5-sonnet-20241022"},
+			{Name: "deepseek-v4-flash", Provider: "deepseek", Model: "deepseek-chat"},
+			{Name: "gpt-4o", Provider: "openai", Model: "gpt-4o"},
+			{Name: "claude-3-5-sonnet", Provider: "claude", Model: "claude-3-5-sonnet-20241022"},
 		},
 	}
 	r := &repl{

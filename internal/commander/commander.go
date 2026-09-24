@@ -703,7 +703,7 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// different failure under injection is not more informative than the
 	// original failure — swapping it in would mask the real reason the task
 	// failed (e.g. report exit-code noise instead of "quota exhausted").
-	if !res.OK && !dec.Inject && supportsModelInjection(adapter, r.model) && r.model.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
+	if !res.OK && !dec.Inject && modelConfigured(r.model) && supportsModelInjection(adapter, r.model) && r.model.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
 		if r.model.BaseURL == "" || security.NewNetworkGuard(security.EndpointHost(r.model.BaseURL)).CheckURL(r.model.BaseURL) == nil {
 			injectedEnv := modelEnvForAdapter(r.model, adapter)
 			if len(injectedEnv) > 0 {
@@ -834,7 +834,7 @@ func (r *Router) AgentViable(name string, ag ledger.Agent) bool {
 	if r.injectionModel == config.InjectionModelNever {
 		return false
 	}
-	return r.model.APIKey != "" && supportsModelInjection(ag.Adapter, r.model)
+	return modelConfigured(r.model) && r.model.APIKey != "" && supportsModelInjection(ag.Adapter, r.model)
 }
 
 // AgentDispatchable reports whether an agent is ready to receive a task right
@@ -871,6 +871,8 @@ func (r *Router) agentUsable(name string, ag ledger.Agent) (usable bool, reason 
 			switch {
 			case r.injectionModel == config.InjectionModelNever:
 				return false, "no model configured (no own credentials; injection.model=never)"
+			case !modelConfigured(r.model):
+				return false, "no model configured (no own credentials; no panda model endpoint)"
 			case r.model.APIKey == "":
 				return false, "no model configured (no own credentials; no panda model key)"
 			case !supportsModelInjection(ag.Adapter, r.model):

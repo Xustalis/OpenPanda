@@ -94,6 +94,10 @@ func runInit(args []string) {
 		modelConfigured = interactiveModelSetup(in, def, loc)
 	}
 	if !modelConfigured {
+		// No model chosen: write an empty model section rather than the
+		// built-in defaults. A copied-in vendor endpoint would masquerade as
+		// the user's own choice on every surface that reads this file.
+		def.Model = config.ModelConfig{}
 		fmt.Println(i18n.T(loc, "init.model.skipped"))
 	}
 
@@ -144,9 +148,11 @@ func askYes(in *bufio.Reader, question string) bool {
 }
 
 // adoptEnvModel copies the model env vars into the generated config so a
-// --defaults run bakes them into the file. Only the two documented vars are
-// adopted; every other OPENPANDA_MODEL_* override keeps applying live at
-// config load time, exactly as before.
+// --defaults run bakes them into the file. The documented vars are adopted;
+// every other OPENPANDA_MODEL_* override keeps applying live at config load
+// time, exactly as before. Env values that name no endpoint get the provider
+// catalogue's recommended first entry — an explicit env var is a user choice,
+// unlike a silent built-in default.
 func adoptEnvModel(def *config.Config) bool {
 	adopted := false
 	if v := os.Getenv("OPENPANDA_MODEL_API_KEY"); v != "" {
@@ -157,7 +163,36 @@ func adoptEnvModel(def *config.Config) bool {
 		def.Model.Model = v
 		adopted = true
 	}
-	return adopted
+	if v := os.Getenv("OPENPANDA_MODEL_BASE_URL"); v != "" {
+		def.Model.BaseURL = v
+		adopted = true
+	}
+	if v := os.Getenv("OPENPANDA_MODEL_API_TYPE"); v != "" {
+		def.Model.APIType = v
+		adopted = true
+	}
+	if !adopted {
+		return false
+	}
+	if def.Model.Provider == "" && def.Model.BaseURL == "" {
+		if all := providers.All(); len(all) > 0 {
+			sel := all[0]
+			def.Model.Provider = sel.ID
+			def.Model.APIType = sel.APIType
+			def.Model.BaseURL = sel.BaseURL
+			def.Model.NoAuth = sel.NoAuth
+			if def.Model.Model == "" {
+				def.Model.Model = sel.DefaultModel
+			}
+			if sel.ContextWindow > 0 {
+				def.Model.ContextWindow = sel.ContextWindow
+			}
+			if sel.DefaultMaxTokens > 0 {
+				def.Model.MaxTokens = sel.DefaultMaxTokens
+			}
+		}
+	}
+	return true
 }
 
 // vmVendorKeywords are the hypervisor vendor markers probed in platform

@@ -142,13 +142,16 @@ func TestEnvOverrides(t *testing.T) {
 }
 
 func TestModelDefaults(t *testing.T) {
+	// A config file without a model section is genuinely unconfigured: no
+	// vendor endpoint or model id is invented for it — Default() ships an
+	// empty ModelConfig so defaults can never masquerade as user choice.
 	p := writeTemp(t, "node:\n  name: \"n\"\n")
 	cfg, err := Load(p)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.Model.BaseURL == "" || cfg.Model.Model == "" {
-		t.Fatalf("expected model defaults, got %+v", cfg.Model)
+	if cfg.Model.BaseURL != "" || cfg.Model.Model != "" || cfg.Model.Provider != "" {
+		t.Fatalf("expected empty model config, got %+v", cfg.Model)
 	}
 }
 

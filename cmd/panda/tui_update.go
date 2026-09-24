@@ -627,14 +627,7 @@ func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
 		return m.startOnboarding()
 	}
 
-	hasModel := false
-	if m.r != nil && m.r.cfg != nil {
-		if m.r.cfg.Model.BaseURL != "" || m.r.cfg.Model.Provider != "" || len(m.r.cfg.Models) > 0 {
-			hasModel = true
-		}
-	}
-
-	if !hasModel {
+	if m.r == nil || m.r.cfg == nil || !modelConfigured(m.r.cfg) {
 		return m.startModelWizard()
 	}
 

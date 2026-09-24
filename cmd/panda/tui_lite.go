@@ -18,8 +18,9 @@ func shouldUseTUI(r *repl) bool { return false }
 func runTUI(r *repl) {}
 
 // printBanner is the lite greeting: no figlet/lipgloss theme, just the facts
-// the banner carried. (In the full build this method lives on repl.go's
-// TUI-adjacent helpers.)
+// the banner carried. Node name is deliberately omitted — on a fresh install
+// it would be the hostname probe parading as user configuration. (In the
+// full build this method lives on repl.go's TUI-adjacent helpers.)
 func (r *repl) printBanner() {
-	fmt.Printf("OpenPanda v%s %s — node %s (lite build)\n", version, versionpkg.Codename, r.cfg.Node.Name)
+	fmt.Printf("OpenPanda v%s %s (lite build)\n", version, versionpkg.Codename)
 }

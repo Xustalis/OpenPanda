@@ -198,6 +198,18 @@ func loadConfigQuietly(path string) (*config.Config, error) {
 	return config.Load(path)
 }
 
+// modelConfigured reports whether the primary model names a real endpoint —
+// a built-in provider id or an explicit base_url. A zero ModelConfig means
+// "not configured": there is no built-in default vendor, so surfaces must
+// show the unconfigured state rather than an invented one.
+func modelConfigured(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	m := cfg.Model
+	return strings.TrimSpace(m.Provider) != "" || strings.TrimSpace(m.BaseURL) != ""
+}
+
 // emitJSON prints v as indented JSON on stdout; a marshal failure falls back
 // to a plain error line (never worth exiting over).
 func emitJSON(v any) {

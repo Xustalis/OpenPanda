@@ -227,25 +227,15 @@ func (m tuiModel) splashView() string {
 	blockLines = append(blockLines, "")
 	blockLines = append(blockLines, m.th.heading.Render("  v"+version+" "+versionpkg.Codename))
 
-	model := ""
-	nodeName := ""
+	// The splash shows only the session's own facts: version and work dir.
+	// Node name and model are deliberately absent — a fresh install would
+	// display the built-in defaults (or the hostname probe) as if they were
+	// the user's own configuration. /context and the footer carry them.
 	workPath := ""
 	if m.r != nil && m.r.cfg != nil {
-		nodeName = m.r.cfg.Node.Name
 		workPath = m.r.cfg.Storage.WorkPath
-		if m.r.cfg.Model.BaseURL != "" {
-			model = m.r.cfg.Model.Model
-			if model == "" {
-				model = m.r.cfg.Model.BaseURL
-			}
-		}
 	} else {
 		workPath, _ = os.Getwd()
-	}
-
-	if nodeName != "" || model != "" {
-		nodeLabel := "  " + m.th.glyph("▪", "#") + " " + i18n.Tf(m.loc, "repl.banner.node", "node", nodeName, "model", model)
-		blockLines = append(blockLines, m.th.muted.Render(cliui.Truncate(nodeLabel, max(20, w-8), m.th.unicode)))
 	}
 
 	dirLabel := "  " + m.th.glyph("▫", "-") + " " + i18n.Tf(m.loc, "tui.banner.workdir", "dir", workPath)
@@ -923,32 +913,24 @@ func (m tuiModel) askingButtonHit(x, y int) int {
 // renderWelcomeBanner builds the unified startup/clear banner:
 //   - If width >= 76: full 72-col ASCII brand wordmark in brandGreen
 //   - If width < 76: compact single-line heading (✻ OpenPanda v...)
-//   - Version, Node & Model, Working Directory
+//   - Version, Working Directory
 //   - Interactive tips (commands, file attach, help guide)
 //   - A year of task activity as a heatmap, when a store was reachable —
 //     the empty screen is the one place a grid can sit without competing
 //     with a conversation. nil activity skips the section entirely.
+//
+// Node name and model are deliberately not shown: on a fresh install they
+// would be the built-in defaults / hostname probe parading as the user's
+// own configuration. They remain available via /context and the footer.
 func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th theme, activity map[string]int) string {
 	if width <= 0 {
 		width = 80
 	}
 	uni := th.unicode
 
-	model := i18n.T(loc, "repl.banner.noModel")
-	nodeName := ""
 	workPath := ""
 	if cfg != nil {
-		nodeName = cfg.Node.Name
 		workPath = cfg.Storage.WorkPath
-		if cfg.Model.BaseURL != "" {
-			model = cfg.Model.Model
-			if model == "" {
-				model = cfg.Model.BaseURL
-			}
-			if strings.TrimSpace(cfg.Model.APIKey) == "" {
-				model += " · " + i18n.T(loc, "repl.banner.noKey")
-			}
-		}
 	}
 
 	contentWidth := max(20, width-2)
@@ -968,9 +950,6 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 			"  "+th.glyph("✻", "*")+" "+i18n.T(loc, "repl.banner.title")+" v"+version+" "+versionpkg.Codename, width, uni)))
 	}
 
-	sb.WriteString("\n")
-	sb.WriteString(th.muted.Render("  " + cliui.Truncate(
-		i18n.Tf(loc, "repl.banner.node", "node", nodeName, "model", model), contentWidth, uni)))
 	sb.WriteString("\n")
 	sb.WriteString(th.muted.Render("  " + cliui.TruncateTail(
 		i18n.Tf(loc, "repl.banner.dir", "dir", workPath), contentWidth, uni)))
@@ -996,7 +975,7 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 }
 
 // welcome is the startup banner pushed into scrollback: the wordmark, version,
-// node/model, working directory and orientation tips.
+// working directory and orientation tips.
 func (m tuiModel) welcome() string {
 	w := m.width
 	if w <= 0 {

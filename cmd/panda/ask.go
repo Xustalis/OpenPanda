@@ -110,6 +110,10 @@ func runAsk(args []string) {
 	if err != nil {
 		fatal("load config", err)
 	}
+	if !modelConfigured(cfg) {
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.T(loc, "cli.ask.noModel"))
+		os.Exit(2)
+	}
 
 	engine, err := askengine.New(context.Background(), cfg, askengine.Options{
 		CardPath:   *cardPath,
