@@ -264,6 +264,13 @@ type Core struct {
 	// Guarded by mu.
 	relayLog map[string]dtnRelay
 
+	// contacts is this node's configured contact plan (§8.x): the scheduled
+	// transmission windows it advertises and routes custody by. Set once via
+	// SetContacts before the serving goroutines start — the field is
+	// immutable thereafter, which is what lets heartbeat/sweep readers go
+	// lock-free.
+	contacts []ledger.Contact
+
 	// Farsky datagram plane (§9.2). udp is the shared socket; udpPort its
 	// bound port (advertised in hello). udpRoutes maps peer id -> confirmed
 	// endpoint (a punch/ack or sealed envelope binds it; sendTo falls back
@@ -344,6 +351,26 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		c.router = commander.NewRouter(card, commander.NewExecutor(), model, config.InjectionConfig{}, config.RoutingConfig{})
 	}
 	return c
+}
+
+// SetContacts installs this node's advertised contact plan (§8.x). Call it
+// after NewCore, before the serving goroutines start — the slice is read
+// unsynchronized afterward. The plan gossips out in every heartbeat and
+// lands in the local directory row via refreshSelfNeighbors.
+func (c *Core) SetContacts(contacts []ledger.Contact) {
+	c.contacts = contacts
+}
+
+// wireContacts converts the configured plan to its wire form.
+func (c *Core) wireContacts() []bus.Contact {
+	if len(c.contacts) == 0 {
+		return nil
+	}
+	out := make([]bus.Contact, len(c.contacts))
+	for i, ct := range c.contacts {
+		out[i] = bus.Contact{Peer: ct.Peer, Start: ct.Start, End: ct.End, RateBps: ct.RateBps, Period: ct.Period}
+	}
+	return out
 }
 
 // SetRouterPolicy applies the configured injection/routing policy to the
@@ -663,6 +690,7 @@ func (c *Core) broadcastHeartbeat(ctx context.Context) {
 			Status: "online", Load: load, Capacity: capJSON,
 			BlockedAgents: c.blockedAgents(),
 			Neighbors:     c.livePeerIDs(), Links: wireLinks,
+			Contacts: c.wireContacts(),
 		})
 		if err != nil {
 			c.logger.Warn("build heartbeat", "err", err)
@@ -727,6 +755,16 @@ func sanitizeSummary(s ledger.CapabilitySummary) ledger.CapabilitySummary {
 	if s.SchedulerTier < 0 {
 		s.SchedulerTier = 0
 	}
+	// Fail-closed boundary: a peer's malformed window is dropped rather than
+	// routed by — SendAt refuses it anyway, but the directory should not
+	// carry claims that cannot be evaluated.
+	valid := s.Contacts[:0]
+	for _, ct := range s.Contacts {
+		if ct.Valid() {
+			valid = append(valid, ct)
+		}
+	}
+	s.Contacts = valid
 	return s
 }
 
@@ -758,11 +796,12 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 		delete(c.peerBlocked, env.From)
 	}
 	c.mu.Unlock()
-	// Adjacency gossip (§4.1): the sender's edge set and its measured weights
-	// ride every beat so the directory's view of the link-state graph tracks
-	// the live topology instead of freezing at hello time.
-	if p.Neighbors != nil || p.Links != nil {
-		var nbJSON, linksJSON string
+	// Adjacency gossip (§4.1): the sender's edge set, its measured weights
+	// and its contact plan ride every beat so the directory's view of the
+	// link-state graph — and the schedule it opens on — tracks reality
+	// instead of freezing at hello time.
+	if p.Neighbors != nil || p.Links != nil || p.Contacts != nil {
+		var nbJSON, linksJSON, contactsJSON string
 		if p.Neighbors != nil {
 			if b, err := json.Marshal(p.Neighbors); err == nil {
 				nbJSON = string(b)
@@ -773,7 +812,12 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 				linksJSON = string(b)
 			}
 		}
-		if err := ledger.UpdateAdjacency(c.db, env.From, nbJSON, linksJSON); err != nil {
+		if p.Contacts != nil {
+			if b, err := json.Marshal(p.Contacts); err == nil {
+				contactsJSON = string(b)
+			}
+		}
+		if err := ledger.UpdateAdjacency(c.db, env.From, nbJSON, linksJSON, contactsJSON); err != nil {
 			c.logger.Warn("update adjacency", "from", env.From, "err", err)
 		}
 	}
@@ -1274,11 +1318,12 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
 	return true
 }
 
-// refreshSelfNeighbors writes this node's live peer set — and the measured
-// cost of each edge — into its own directory row's neighbors_json/links_json:
-// the self-edge of the weighted link-state graph the routing layer's
-// multi-hop search reads (§4.1, §9.3). Best-effort: a failed write just
-// leaves the last advertisement in place.
+// refreshSelfNeighbors writes this node's live peer set, the measured cost
+// of each edge, and its configured contact plan into its own directory row's
+// neighbors_json/links_json/contacts_json: the self-edge of the weighted
+// link-state graph the routing layer's multi-hop and earliest-arrival
+// searches read (§4.1, §8.x, §9.3). Best-effort: a failed write just leaves
+// the last advertisement in place.
 func (c *Core) refreshSelfNeighbors(ctx context.Context) {
 	if c.db == nil {
 		return
@@ -1291,12 +1336,17 @@ func (c *Core) refreshSelfNeighbors(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	contacts, err := json.Marshal(c.contacts)
+	if err != nil {
+		return
+	}
 	row := c.nodeID
 	if base, ok := scheduler.EphemeralBase(c.nodeID); ok {
 		row = base
 	}
 	if _, err := c.db.ExecContext(ctx,
-		`UPDATE employee_cache SET neighbors_json=?, links_json=? WHERE id=?`, string(raw), string(links), row); err != nil {
+		`UPDATE employee_cache SET neighbors_json=?, links_json=?, contacts_json=? WHERE id=?`,
+		string(raw), string(links), string(contacts), row); err != nil {
 		c.logger.Debug("refresh self neighbors", "err", err)
 	}
 }
@@ -1746,6 +1796,7 @@ func (c *Core) summary() ledger.CapabilitySummary {
 	// directory learns the topology, not just this node's abilities.
 	s.Neighbors = c.livePeerIDs()
 	s.Links = c.linkMetrics()
+	s.Contacts = c.contacts
 	return s
 }
 

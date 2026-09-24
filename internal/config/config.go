@@ -227,6 +227,80 @@ type NetworkConfig struct {
 	// reports the peer's observed IP, so most meshes never need a public
 	// STUN server.
 	STUNServers []string `yaml:"stun_servers"`
+	// Contacts is this node's DTN contact plan (whitepaper §8.x): scheduled
+	// transmission windows toward peers that custody routing plans around.
+	// Nodes with only always-on links leave it empty — the plan is gossiped
+	// in heartbeats like the live adjacency.
+	Contacts []ContactConfig `yaml:"contacts,omitempty"`
+}
+
+// ContactConfig is one scheduled transmission window. start/end accept an
+// RFC3339 timestamp ("2026-09-25T02:00:00Z") or unix seconds; period accepts
+// a Go duration ("24h") or seconds and repeats the window when set;
+// rate_bps is the window's usable bitrate — the custody router refuses a
+// bundle whose transfer cannot finish before close (0 = unknown, size never
+// disqualifies).
+type ContactConfig struct {
+	Peer    string `yaml:"peer"`
+	Start   string `yaml:"start"`
+	End     string `yaml:"end"`
+	Period  string `yaml:"period,omitempty"`
+	RateBps int64  `yaml:"rate_bps,omitempty"`
+}
+
+// ContactPlanEntry is a ContactConfig resolved to absolute unix times.
+type ContactPlanEntry struct {
+	Peer    string
+	Start   int64
+	End     int64
+	Period  int64
+	RateBps int64
+}
+
+// Resolve validates and normalizes the window to unix seconds.
+func (c ContactConfig) Resolve() (ContactPlanEntry, error) {
+	e := ContactPlanEntry{Peer: strings.TrimSpace(c.Peer), RateBps: c.RateBps}
+	if e.Peer == "" {
+		return e, fmt.Errorf("contact: peer is required")
+	}
+	var err error
+	if e.Start, err = parseContactTime(c.Start); err != nil {
+		return e, fmt.Errorf("contact %s: start: %w", e.Peer, err)
+	}
+	if e.End, err = parseContactTime(c.End); err != nil {
+		return e, fmt.Errorf("contact %s: end: %w", e.Peer, err)
+	}
+	if e.End <= e.Start {
+		return e, fmt.Errorf("contact %s: end must be after start", e.Peer)
+	}
+	if s := strings.TrimSpace(c.Period); s != "" {
+		if d, derr := time.ParseDuration(s); derr == nil {
+			e.Period = int64(d.Seconds())
+		} else if v, verr := strconv.ParseInt(s, 10, 64); verr == nil {
+			e.Period = v
+		} else {
+			return e, fmt.Errorf("contact %s: period %q: not a duration or seconds", e.Peer, s)
+		}
+		if e.Period <= 0 {
+			return e, fmt.Errorf("contact %s: period must be positive", e.Peer)
+		}
+	}
+	return e, nil
+}
+
+// parseContactTime reads an RFC3339 timestamp or a unix-seconds integer.
+func parseContactTime(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty timestamp")
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.Unix(), nil
+	}
+	if v, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return v, nil
+	}
+	return 0, fmt.Errorf("%q is neither RFC3339 nor unix seconds", s)
 }
 
 // StorageConfig controls local persistence.
@@ -609,6 +683,11 @@ func (c *Config) Validate() error {
 		}
 		if _, _, err := net.SplitHostPort(peer); err != nil {
 			return fmt.Errorf("config: network.peers[%d] %q is not host:port (or punch:<node-id>): %w", i, peer, err)
+		}
+	}
+	for i, cc := range c.Network.Contacts {
+		if _, err := cc.Resolve(); err != nil {
+			return fmt.Errorf("config: network.contacts[%d]: %w", i, err)
 		}
 	}
 	switch c.Injection.Model {

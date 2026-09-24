@@ -668,7 +668,10 @@ func (c *Core) routeTo(ctx context.Context, peerID string, env bus.Envelope) err
 	if err := c.sendTo(peerID, env); err == nil {
 		return nil
 	}
-	hop := c.dtnNextHop(ctx, peerID, map[string]bool{env.From: true})
+	// Punch envelopes are small and carry no custody lifetime, so the
+	// schedule-aware path gets an unknown size (fits any window) and no
+	// expiry bound.
+	hop, _ := c.dtnNextHop(ctx, peerID, map[string]bool{env.From: true}, 0, 0)
 	if hop == "" {
 		return errNoRoute
 	}
