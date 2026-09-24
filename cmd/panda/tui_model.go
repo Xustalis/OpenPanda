@@ -225,6 +225,11 @@ type tuiModel struct {
 	// approvalSel is the focused choice on the approval card: 0 = approve, 1 = deny.
 	approvalSel int
 
+	// approvalScope is the card's selected remember scope (once|session|
+	// project), preselected from the engine's resolved default when the card
+	// opens and changeable per answer — the answer writes into that scope.
+	approvalScope string
+
 	animTick int
 	quitting bool
 }

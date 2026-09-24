@@ -123,8 +123,9 @@ func (s *askStream) send(ctx context.Context, m tea.Msg) {
 // they select against ctx.Done so a cancelled ask (Esc) never blocks the engine
 // goroutine on a send into a channel the model has stopped draining.
 // mode carries the slash-prefix interaction mode (/goal, /plan, /spec) — ""
-// lets the classifier decide on its own.
-func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, authorize bool, mode string) (*askStream, tea.Cmd) {
+// lets the classifier decide on its own. sessionID binds any session-scoped
+// remembered approval this turn produces to the attached session.
+func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir, sessionID string, authorize bool, mode string) (*askStream, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &askStream{
 		events:  make(chan tea.Msg, 256),
@@ -154,7 +155,7 @@ func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir st
 		defer cancel()
 		// Ambient fallback keeps parity with the classic AskTurns path — a
 		// session-less ask may still bind the daemon's working dir.
-		out, err := engine.AskTurnsMode(ctx, history, prompt, workDir, mode, authorize, cb)
+		out, err := engine.AskTurnsSession(ctx, history, prompt, workDir, mode, sessionID, authorize, cb)
 		// The outcome must reach the model whenever it is still listening, and
 		// must not park this goroutine forever when it is not. send covers
 		// both: ctx is cancelled only (a) by drop(), which means the user

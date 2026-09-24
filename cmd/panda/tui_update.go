@@ -787,11 +787,17 @@ func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// 1. In modeApproving: a click answers the card only when it lands on one
-	// of the two options of the choice row. Clicks anywhere else — the
+	// of the two options of the choice row, and a click on the scope row only
+	// re-picks the remember scope — never answers. Clicks anywhere else — the
 	// transcript above, the card body, the frame — are ignored, so a stray
 	// click can never approve an irreversible task.
 	if m.mode == modeApproving && m.pending != nil {
-		switch m.approvalHit(msg.X, msg.Y) {
+		choice, scopeHit := m.approvalHit(msg.X, msg.Y)
+		if scopeHit >= 0 {
+			m.approvalScope = approvalScopes[scopeHit]
+			return m, nil
+		}
+		switch choice {
 		case 0:
 			return m.approvePending()
 		case 1:
@@ -1119,8 +1125,12 @@ func (m tuiModel) askTurn(text, mode string) (tea.Model, tea.Cmd) {
 		m.r.setAsking(true)
 	}
 	authorize := m.r != nil && m.r.authorize
+	sessID := ""
+	if m.r != nil {
+		sessID = m.r.activeSess
+	}
 
-	stream, pump := startAsk(m.engine, history, prompt, workDir, authorize, mode)
+	stream, pump := startAsk(m.engine, history, prompt, workDir, sessID, authorize, mode)
 	m.stream = stream
 	return m, tea.Batch(append(cmds, m.sp.Tick, pump)...)
 }

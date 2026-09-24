@@ -175,6 +175,7 @@ func init() {
 		{"doctor", "system", "cmd.doctor", (*repl).cmdDoctor},
 		{"web", "system", "cmd.web", (*repl).cmdWeb},
 		{"authorize", "system", "cmd.authorize", (*repl).cmdAuthorize},
+		{"approval", "system", "cmd.approval", (*repl).cmdApproval},
 		{"lang", "system", "cmd.lang", (*repl).cmdLang},
 		{"version", "system", "cmd.version", (*repl).cmdVersion},
 		{"read", "system", "cmd.read", (*repl).cmdRead},
@@ -487,7 +488,19 @@ func figlet(word string) []string {
 func (r *repl) printFooter() {
 	p := pal()
 	mode := r.cfg.Approval.NormalizedMode()
-	switch mode {
+	remembered := ""
+	if r.engine != nil {
+		// The footer reports the EFFECTIVE policy: a project's approval_mode
+		// override and a remembered answer both change what the next tier-2
+		// action does, so both belong in the readout.
+		st := r.engine.ApprovalState(r.activeSess, r.activeProjectName())
+		mode = st.Mode
+		if st.Decision != "" {
+			remembered = "·" + st.Decision + "@" + st.DecisionScope
+		}
+	}
+	mode += remembered
+	switch strings.TrimSuffix(mode, remembered) {
 	case config.ApprovalModeAlways:
 		mode = p.Danger(mode)
 	case config.ApprovalModeOnRequest:
@@ -812,7 +825,7 @@ func (r *repl) askMode(text, mode string) {
 	}
 	ch := make(chan outcome, 1)
 	go func() {
-		out, err := r.engine.AskTurnsMode(ctx, history, text, workDir, mode, r.authorize, cb)
+		out, err := r.engine.AskTurnsSession(ctx, history, text, workDir, mode, r.activeSess, r.authorize, cb)
 		ch <- outcome{out, err}
 	}()
 	got := make(chan struct{})
@@ -1270,13 +1283,17 @@ func (r *repl) approveInline(out *askengine.Result, workDir string) *askengine.R
 		r.outln(p.Muted("  " + i18n.Tf(r.loc, "repl.approval.reason", "reason", reason)))
 	}
 	approved := false
+	scope := req.Scope
+	if scope == "" {
+		scope = projectstore.ScopeSession
+	}
 	if r.interactive && r.term != nil {
-		ans, err := r.term.readLine(i18n.T(r.loc, "repl.approval.prompt"), nil)
+		ans, err := r.term.readLine(i18n.Tf(r.loc, "repl.approval.promptScope", "scope", scope), nil)
 		if err == nil {
-			ans = strings.ToLower(strings.TrimSpace(ans))
-			approved = ans == "y" || ans == "yes"
+			approved, scope = parseApprovalAnswer(ans, scope)
 		}
 	}
+	r.rememberApproval(req, approved, scope)
 	if !approved {
 		r.outln(p.Muted(i18n.Tf(r.loc, "repl.approval.denied", "id", req.TaskID)))
 		return out
@@ -1289,6 +1306,125 @@ func (r *repl) approveInline(out *askengine.Result, workDir string) *askengine.R
 		}
 	}
 	return r.engine.ResumeApproved(context.Background(), req.TaskID, workDir, cb)
+}
+
+// parseApprovalAnswer reads the approval card's reply: "y"/"yes"/"n"/"no"
+// (anything else is a no — the card fails closed) plus an optional remember
+// scope (once|session|project). The scope defaults to the card's preselected
+// one; an unrecognized token degrades to once, since remembering less than
+// the user asked is the safe error.
+func parseApprovalAnswer(ans, defScope string) (approved bool, scope string) {
+	scope = defScope
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(ans)))
+	if len(fields) == 0 {
+		return false, scope
+	}
+	switch fields[0] {
+	case "y", "yes":
+		approved = true
+	case "n", "no":
+	default:
+		return false, scope
+	}
+	if len(fields) > 1 {
+		switch fields[1] {
+		case projectstore.ScopeOnce, projectstore.ScopeSession, projectstore.ScopeProject:
+			scope = fields[1]
+		default:
+			scope = projectstore.ScopeOnce
+		}
+	}
+	return approved, scope
+}
+
+// rememberApproval writes the card's answer into the chosen scope — session
+// into the engine's in-memory map, project onto the project row, once nowhere.
+// A project-scope answer without a project context must not silently persist:
+// it degrades to the session scope instead.
+func (r *repl) rememberApproval(req *askengine.ApprovalRequest, approved bool, scope string) {
+	if r.engine == nil || scope == projectstore.ScopeOnce {
+		return
+	}
+	decision := projectstore.DecisionDeny
+	if approved {
+		decision = projectstore.DecisionApprove
+	}
+	if scope == projectstore.ScopeProject && req.Project == "" {
+		scope = projectstore.ScopeSession
+	}
+	if err := r.engine.RememberApproval(r.activeSess, req.Project, scope, decision); err != nil {
+		r.errf("%s\n", "panda: "+err.Error())
+		return
+	}
+	r.outln(pal().Muted(i18n.Tf(r.loc, "repl.approval.remembered", "decision", decision, "scope", scope)))
+}
+
+// cmdApproval shows or manages the tier-2 approval policy for the current
+// session+project: "/approval" reports the effective state, "/approval clear"
+// forgets remembered answers, "/approval mode inherit|never|on-request|always"
+// and "/approval scope once|session|project" write the project's own policy —
+// the per-project half of "approval logic set per project or per session".
+func (r *repl) cmdApproval(arg string) {
+	if r.engine == nil {
+		r.outln(i18n.T(r.loc, "repl.approval.noEngine"))
+		return
+	}
+	proj := r.activeProjectName()
+	fields := strings.Fields(strings.TrimSpace(arg))
+	if len(fields) == 0 {
+		st := r.engine.ApprovalState(r.activeSess, proj)
+		r.outln(i18n.T(r.loc, "repl.approval.stateHead"))
+		r.outf("  project:  %s\n", orDash(proj))
+		r.outf("  mode:     %s\n", st.Mode)
+		r.outf("  scope:    %s\n", st.Scope)
+		decision := "-"
+		if st.Decision != "" {
+			decision = st.Decision + " (" + st.DecisionScope + ")"
+		}
+		r.outf("  decision: %s\n", decision)
+		return
+	}
+	if len(fields) < 2 {
+		r.outln("/approval [clear | mode inherit|never|on-request|always | scope once|session|project]")
+		return
+	}
+	setPolicy := func(mode, scope string) {
+		if proj == "" {
+			r.outln(i18n.T(r.loc, "repl.approval.needProject"))
+			return
+		}
+		if err := r.engine.SetProjectApprovalPolicy(proj, mode, scope); err != nil {
+			r.errf("%s\n", "panda: "+err.Error())
+			return
+		}
+		r.outln(i18n.T(r.loc, "repl.approval.saved"))
+	}
+	switch fields[0] {
+	case "clear":
+		if err := r.engine.ClearApproval(r.activeSess, proj); err != nil {
+			r.errf("%s\n", "panda: "+err.Error())
+			return
+		}
+		r.outln(i18n.T(r.loc, "repl.approval.cleared"))
+	case "mode":
+		mode := fields[1]
+		if mode == "inherit" {
+			mode = ""
+		}
+		if err := projectstore.ValidateApprovalMode(mode); err != nil {
+			r.errf("%s\n", "panda: "+err.Error())
+			return
+		}
+		setPolicy(mode, "")
+	case "scope":
+		if err := projectstore.ValidateApprovalScope(fields[1]); err != nil {
+			r.errf("%s\n", "panda: "+err.Error())
+			return
+		}
+		setPolicy("", fields[1])
+	default:
+		r.outln("/approval [clear | mode inherit|never|on-request|always | scope once|session|project]")
+	}
 }
 
 // cmdApprove accepts completed reviewed work or resumes a task that parked
@@ -1825,6 +1961,13 @@ func (r *repl) cmdContext(arg string) {
 	}
 	r.outf("  session:  %s\n", sess)
 	r.outf("  authz:    %v\n", r.authorize)
+	if r.engine != nil {
+		st := r.engine.ApprovalState(r.activeSess, r.activeProjectName())
+		r.outf("  approval: %s (scope %s)\n", st.Mode, st.Scope)
+		if st.Decision != "" {
+			r.outf("            remembered %s for %s\n", st.Decision, st.DecisionScope)
+		}
+	}
 	r.outf("  card:     %v\n", r.hasCard)
 }
 

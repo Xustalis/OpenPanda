@@ -48,6 +48,8 @@ func runProject(args []string) {
 		runProjectRename(rest)
 	case "rm", "remove", "delete":
 		runProjectRemove(rest)
+	case "approval":
+		runProjectApproval(rest)
 	case "help", "-h", "--help":
 		projectUsage(os.Stdout)
 	default:
@@ -69,6 +71,7 @@ func projectUsage(w *os.File) {
 	line("  exit                                    leave the current project")
 	line("  rename <old> <new>                      rename the project, its memory and its tasks")
 	line("  rm <name> [--keep-memory]               remove the project (never its work dir)")
+	line("  approval <name> [mode … | scope … | clear]  show or set the project's approval policy")
 }
 
 // projectStores opens the three things a project verb touches: its metadata row,
@@ -276,6 +279,15 @@ func runProjectShow(args []string) {
 	}
 	field(i18n.T(loc, "cli.col.created"), ts(pr.CreatedAt.Unix()))
 	field(i18n.T(loc, "cli.col.updated"), ts(pr.UpdatedAt.Unix()))
+	approval := pr.ApprovalMode
+	if approval == "" {
+		approval = "inherit"
+	}
+	approval += " · scope " + pr.NormalizedScope()
+	if pr.ApprovalDecision != "" {
+		approval += " · remembered " + pr.ApprovalDecision
+	}
+	field(i18n.T(loc, "cli.project.approval"), approval)
 	field(i18n.T(loc, "cli.project.memory"),
 		i18n.Tf(loc, "cli.project.memorySize", "entries", fmt.Sprint(entries), "chars", fmt.Sprint(chars)))
 	printProjectTasks(loc, tasks, pr.Name)
@@ -324,6 +336,74 @@ func printProjectSessions(loc i18n.Locale, configPath, name string) {
 		}
 		fmt.Printf("  %-16s  %s  %s\n", s.ID, s.UpdatedAt.Format("2006-01-02 15:04"), title)
 	}
+}
+
+// runProjectApproval manages a project's tier-2 approval policy: the mode
+// override, the default remember scope, and the remembered decision. It is
+// the CLI half of "approval logic set per project" — the session half lives
+// inside each engine process and clears from inside a session (/approval
+// clear, or the console's session scope).
+func runProjectApproval(args []string) {
+	fs := flag.NewFlagSet("project approval", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+	rest := fs.Args()
+	loc := i18n.Detect()
+	usage := func() {
+		fmt.Fprintln(os.Stderr, "usage: panda project approval <name> [mode inherit|never|on-request|always | scope once|session|project | clear]")
+		os.Exit(2)
+	}
+	if len(rest) == 0 {
+		usage()
+	}
+	name := rest[0]
+	store, _, _, closeDB := projectStores(*configPath)
+	defer closeDB()
+	pr, err := store.Get(name)
+	if err != nil {
+		fatal("get project", err)
+	}
+	if len(rest) == 1 {
+		mode := pr.ApprovalMode
+		if mode == "" {
+			mode = "inherit"
+		}
+		fmt.Printf("mode:     %s\nscope:    %s\ndecision: %s\n", mode, pr.NormalizedScope(), orDash(pr.ApprovalDecision))
+		return
+	}
+	switch rest[1] {
+	case "mode":
+		if len(rest) < 3 {
+			usage()
+		}
+		mode := rest[2]
+		if mode == "inherit" {
+			mode = ""
+		}
+		if err := projects.ValidateApprovalMode(mode); err != nil {
+			fatal("approval mode", err)
+		}
+		if err := store.SetApprovalPolicy(name, mode, pr.ApprovalScope); err != nil {
+			fatal("set approval mode", err)
+		}
+	case "scope":
+		if len(rest) < 3 {
+			usage()
+		}
+		if err := projects.ValidateApprovalScope(rest[2]); err != nil {
+			fatal("approval scope", err)
+		}
+		if err := store.SetApprovalPolicy(name, pr.ApprovalMode, rest[2]); err != nil {
+			fatal("set approval scope", err)
+		}
+	case "clear":
+		if err := store.SetApprovalDecision(name, ""); err != nil {
+			fatal("clear approval", err)
+		}
+	default:
+		usage()
+	}
+	fmt.Println(i18n.T(loc, "repl.approval.saved"))
 }
 
 func runProjectEnter(args []string) {

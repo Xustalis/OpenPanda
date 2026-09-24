@@ -936,8 +936,8 @@ func TestTUISlashCommandExecutionAndOutputPersisted(t *testing.T) {
 
 	// Verify View() renders command and output at bottom, and scrolling up reveals earlier items
 	view := m.View()
-	if !strings.Contains(view, "/doctor") {
-		t.Fatalf("View() should render /doctor from help output: %s", view)
+	if !strings.Contains(view, "/quit") {
+		t.Fatalf("View() should render the tail of the help output: %s", view)
 	}
 
 	// Pressing PgUp scrolls up to reveal /skills from earlier in the help text
