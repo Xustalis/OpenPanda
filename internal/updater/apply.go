@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 )
 
 // exeName is the installed binary's file name for this platform.
@@ -38,11 +39,15 @@ func applyRelease(ctx context.Context, m *Manager, s *stagedRelease) error {
 		return fmt.Errorf("replace binary: %w", err)
 	}
 
-	// Refresh the agent adapters beside the running binary. Adapters are
-	// secondary to the binary, so a failure here is logged, not fatal — the
-	// swap already succeeded (and a bare-binary install legitimately has none).
+	// Refresh the agent adapters and voice sidecars beside the running binary.
+	// They are secondary to the binary, so a failure here is logged, not fatal
+	// — the swap already succeeded (and a bare-binary install legitimately has
+	// none).
 	if err := installAdapters(s); err != nil {
 		m.opts.Logger.Warn("update: adapter install failed", "err", err)
+	}
+	if err := installVoiceScripts(s); err != nil {
+		m.opts.Logger.Warn("update: voice sidecar install failed", "err", err)
 	}
 
 	// Restart on a slight delay so the HTTP apply response can flush before
@@ -73,14 +78,52 @@ func runningBinary() string {
 // left alone — the manifest is what makes deletion safe.
 const adapterManifest = ".adapters.manifest"
 
+// voiceManifest plays the same role for extensions/voice.
+const voiceManifest = ".voice.manifest"
+
 // installAdapters copies the release's adapters/*.py over the adapter dir the
 // running process resolves scripts from, so the updated binary and its adapters
 // stay in lock-step. A missing release adapters dir (or an unresolvable target)
 // is a no-op.
 func installAdapters(s *stagedRelease) error {
-	src := filepath.Join(s.root, "adapters")
-	dst := commander.AdapterDir()
-	if dst == "" || dst == "adapters" {
+	return installResourceDir(s, "adapters", commander.AdapterDir(), "adapters", adapterManifest)
+}
+
+// installVoiceScripts does the same refresh for the release's
+// extensions/voice/*.py, targeting the directory the voice pipeline resolves
+// (see entry.VoiceDir) — a packaged install keeps them at
+// <prefix>/extensions/voice.
+//
+// Unlike adapters, extensions/voice did not ship in older releases, so the
+// resolved dir may legitimately not exist yet: when the running binary sits
+// in a <prefix>/bin layout the target is created there rather than letting a
+// cwd-relative fallback write a stray extensions/ under the daemon's
+// working directory.
+func installVoiceScripts(s *stagedRelease) error {
+	dst := entry.VoiceDir()
+	if st, err := os.Stat(dst); err != nil || !st.IsDir() {
+		dst = ""
+		if exe := runningBinary(); exe != "" && filepath.Base(filepath.Dir(exe)) == "bin" {
+			cand := filepath.Join(filepath.Dir(filepath.Dir(exe)), "extensions", "voice")
+			if st, err := os.Stat(filepath.Dir(cand)); err == nil && st.IsDir() {
+				dst = cand
+			}
+		}
+	}
+	if dst == "" {
+		return nil
+	}
+	return installResourceDir(s, filepath.Join("extensions", "voice"), dst, filepath.Join("extensions", "voice"), voiceManifest)
+}
+
+// installResourceDir syncs one resource dir (adapters/, extensions/voice/)
+// from the staged release over dst, tracking installed filenames in manifest
+// so files a new release dropped are removed instead of lingering.
+// relFallback is the unresolved relative name the resolver returns when no
+// installed dir exists; dst equal to it means "nothing to update".
+func installResourceDir(s *stagedRelease, srcRel, dst, relFallback, manifest string) error {
+	src := filepath.Join(s.root, srcRel)
+	if dst == "" || dst == relFallback {
 		return nil
 	}
 	entries, err := os.ReadDir(src)
@@ -104,13 +147,13 @@ func installAdapters(s *stagedRelease) error {
 		}
 	}
 	// Reconcile against the previous manifest before writing the new one: a
-	// release that drops an adapter must not leave the old script answering
+	// release that drops a script must not leave the old file answering
 	// requests forever.
-	if old, err := os.ReadFile(filepath.Join(dst, adapterManifest)); err == nil {
+	if old, err := os.ReadFile(filepath.Join(dst, manifest)); err == nil {
 		for _, name := range strings.Split(strings.TrimSpace(string(old)), "\n") {
 			// The manifest is ours, but only ever holds bare filenames —
 			// refuse anything pathlike so a corrupted list cannot remove
-			// files outside the adapter dir.
+			// files outside the resource dir.
 			if name == "" || filepath.Base(name) != name {
 				continue
 			}
@@ -124,7 +167,7 @@ func installAdapters(s *stagedRelease) error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return os.WriteFile(filepath.Join(dst, adapterManifest), []byte(strings.Join(names, "\n")+"\n"), 0o644)
+	return os.WriteFile(filepath.Join(dst, manifest), []byte(strings.Join(names, "\n")+"\n"), 0o644)
 }
 
 // copyFile streams src to dst via a temp file + rename so a partial copy never

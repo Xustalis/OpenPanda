@@ -48,6 +48,16 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("ping sqlite %s: %w", path, err)
 	}
+	// The database holds task payloads, session transcripts and memory — the
+	// same secret-adjacent material config.yaml gets hardened to 0600 for.
+	// A driver-created file lands at the umask (typically 0644), so tighten
+	// it here; the WAL/shm sidecars carry the same rows. Best-effort: a
+	// read-only filesystem or a foreign-ownership file must not break Open.
+	if path != ":memory:" {
+		for _, f := range []string{path, path + "-wal", path + "-shm"} {
+			_ = os.Chmod(f, 0o600)
+		}
+	}
 	return db, nil
 }
 

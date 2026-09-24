@@ -231,52 +231,6 @@ func amdSysfsVRAMGB() int {
 	return best
 }
 
-// Displays reports the attached display count (0 when unknown — a headless
-// node and an unprobeable one are indistinguishable here, and neither wants a
-// desk-pet UI started for it).
-func Displays() int {
-	switch runtime.GOOS {
-	case "darwin":
-		return strings.Count(probe("system_profiler", "SPDisplaysDataType"), "Resolution:")
-	case "linux":
-		if paths, _ := filepath.Glob("/sys/class/drm/card*-*/status"); len(paths) > 0 {
-			n := 0
-			for _, p := range paths {
-				if strings.TrimSpace(readFile(p)) == "connected" {
-					n++
-				}
-			}
-			return n
-		}
-	case "windows":
-		return len(parseColumnNames(powershell(
-			"Get-CimInstance Win32_DesktopMonitor | Select-Object -ExpandProperty DeviceID"), "DeviceID"))
-	}
-	return 0
-}
-
-// AudioInput reports whether a capture device exists — the desk-pet voice
-// entry needs one, so a node without it should not advertise voice abilities.
-// Windows is approximate: CIM does not cheaply separate capture endpoints from
-// playback ones, so the answer there is "an audio subsystem is present".
-func AudioInput() bool {
-	switch runtime.GOOS {
-	case "darwin":
-		out := probe("system_profiler", "SPAudioDataType")
-		return strings.Contains(out, "Input Source") || strings.Contains(out, "Microphone")
-	case "linux":
-		// ALSA lists capture devices here without any userspace tool.
-		if strings.Contains(readFile("/proc/asound/pcm"), "capture") {
-			return true
-		}
-		return strings.Contains(probe("sh", "-c", "arecord -l 2>/dev/null || true"), "card ")
-	case "windows":
-		return len(parseColumnNames(powershell(
-			"Get-CimInstance Win32_SoundDevice | Select-Object -ExpandProperty Name"), "Name")) > 0
-	}
-	return false
-}
-
 // readFile returns a file's contents, or "" — used for /proc and /sys, where
 // reading directly beats shelling out to grep.
 func readFile(path string) string {

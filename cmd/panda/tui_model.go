@@ -216,6 +216,12 @@ type tuiModel struct {
 	// pending holds a task the engine parked for tier-2 approval.
 	pending *askengine.Result
 
+	// pendingWorkDir is the tree the pending task resumes in once approved. A
+	// card raised by this turn carries the turn's worktree; a card raised by
+	// the watcher for out-of-band work leaves it empty, so the resume uses the
+	// directory that task was submitted with instead of this session's.
+	pendingWorkDir string
+
 	// approvalSel is the focused choice on the approval card: 0 = approve, 1 = deny.
 	approvalSel int
 

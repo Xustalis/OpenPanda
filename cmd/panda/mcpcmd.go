@@ -44,7 +44,7 @@ const maxSelfToolOut = 8192
 
 func runMCP(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml (default: discovered)")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml (default: discovered)")
 	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
@@ -143,7 +143,7 @@ func selfTools(d *selfToolsDeps) []mcpserve.Tool {
 		},
 		{
 			Name:        "panda_skill_install",
-			Description: "Install a skill by hub name (resolved via the skills hub catalog) or directly from an http(s) URL — GitHub blob URLs are rewritten to raw automatically, zip/tar.gz archives are unpacked.",
+			Description: "Install a skill by hub name (resolved via the skills hub catalog) or directly from an http(s) URL — GitHub blob URLs are rewritten to raw automatically, zip/tar.gz archives are unpacked. Agent-initiated installs land as 'pending': the skill cannot steer future tasks until the user approves it in the foreground (`panda skill approve` or the web skills page).",
 			InputSchema: mcpserve.SchemaObject(map[string]any{
 				"source": mcpserve.StringProp("hub skill name/alias, or an http(s) URL to a SKILL.md or archive"),
 				"scope":  mcpserve.StringProp("global | project | device (default: frontmatter or global)"),
@@ -152,7 +152,7 @@ func selfTools(d *selfToolsDeps) []mcpserve.Tool {
 		},
 		{
 			Name:        "panda_skill_import",
-			Description: "Import a skill from raw markdown (YAML frontmatter + body). Use this to persist a workflow you just developed so future tasks can reuse it.",
+			Description: "Import a skill from raw markdown (YAML frontmatter + body). Use this to persist a workflow you just developed so future tasks can reuse it. Imported skills land as 'pending' and take effect only after the user approves them in the foreground (`panda skill approve` or the web skills page).",
 			InputSchema: mcpserve.SchemaObject(map[string]any{
 				"content": mcpserve.StringProp("full SKILL.md content with YAML frontmatter (required)"),
 				"name":    mcpserve.StringProp("override the frontmatter name"),
@@ -330,7 +330,12 @@ func (d *selfToolsDeps) toolSkillInstall(ctx context.Context, args map[string]an
 	if source == "" {
 		return "", fmt.Errorf("source required")
 	}
-	opts := skills.ImportOptions{Scope: skills.Scope(strings.TrimSpace(mcpserve.Arg(args, "scope")))}
+	// Agent-initiated installs land pending: a skill installed by a model must
+	// not silently arm future tasks — the user approves it in the foreground.
+	opts := skills.ImportOptions{
+		Scope:  skills.Scope(strings.TrimSpace(mcpserve.Arg(args, "scope"))),
+		Status: skills.StatusPending,
+	}
 	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
 		imported, err := d.skills.ImportSource(ctx, source, opts)
 		if err != nil {
@@ -340,13 +345,13 @@ func (d *selfToolsDeps) toolSkillInstall(ctx context.Context, args map[string]an
 		for _, sk := range imported {
 			names = append(names, sk.Name)
 		}
-		return fmt.Sprintf("imported %d skill(s): %s", len(imported), strings.Join(names, ", ")), nil
+		return fmt.Sprintf("imported %d skill(s) as pending (awaiting user approval): %s", len(imported), strings.Join(names, ", ")), nil
 	}
 	sk, err := skills.InstallFromHub(ctx, d.skills, d.cfg.Skills.HubURL, source, opts)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("installed skill %q (scope %s, status %s)", sk.Name, sk.Scope, sk.Status), nil
+	return fmt.Sprintf("installed skill %q as pending (scope %s) — awaiting user approval via `panda skill approve` or the web skills page", sk.Name, sk.Scope), nil
 }
 
 func (d *selfToolsDeps) toolSkillImport(ctx context.Context, args map[string]any) (string, error) {
@@ -355,12 +360,13 @@ func (d *selfToolsDeps) toolSkillImport(ctx context.Context, args map[string]any
 		return "", fmt.Errorf("content required")
 	}
 	sk, err := d.skills.ImportBytes([]byte(content), skills.ImportOptions{
-		Name: strings.TrimSpace(mcpserve.Arg(args, "name")),
+		Name:   strings.TrimSpace(mcpserve.Arg(args, "name")),
+		Status: skills.StatusPending,
 	})
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("imported skill %q (scope %s)", sk.Name, sk.Scope), nil
+	return fmt.Sprintf("imported skill %q as pending (scope %s) — awaiting user approval via `panda skill approve` or the web skills page", sk.Name, sk.Scope), nil
 }
 
 func (d *selfToolsDeps) toolCard(ctx context.Context, _ map[string]any) (string, error) {

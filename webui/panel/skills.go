@@ -336,7 +336,9 @@ func (h *handler) discoverSkill(w http.ResponseWriter, r *http.Request) {
 	if h.cfg != nil {
 		hubURL = h.cfg.Skills.HubURL
 	}
-	sk, isNew, err := h.skillStore.DiscoverAndInstall(r.Context(), hubURL, query)
+	// The discover button is the user's own click — that click is the approval,
+	// so the skill lands active like every other user-initiated install here.
+	sk, isNew, err := h.skillStore.DiscoverAndInstall(r.Context(), hubURL, query, skills.ImportOptions{Status: skills.StatusActive})
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return

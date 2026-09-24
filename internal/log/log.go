@@ -47,11 +47,6 @@ func Setup(level string, w io.Writer) {
 // CtxKey is the key under which a logger may be stored in a context.
 type CtxKey struct{}
 
-// WithLogger returns a context carrying logger.
-func WithLogger(ctx context.Context, logger *slog.Logger) context.Context {
-	return context.WithValue(ctx, CtxKey{}, logger)
-}
-
 // From returns the logger stored in ctx, or the default logger.
 func From(ctx context.Context) *slog.Logger {
 	if l, ok := ctx.Value(CtxKey{}).(*slog.Logger); ok {

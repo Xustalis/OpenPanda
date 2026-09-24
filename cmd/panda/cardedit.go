@@ -33,44 +33,32 @@ import (
 )
 
 // cardMutValueFlags lists every value-carrying flag the structured edits
-// accept, keyed by bare name so -flag and --flag spellings both match during
-// the verb scan (same trick as cardSubcommand's cardValueFlags).
+// accept — including the global config/card — keyed by bare name so -flag
+// and --flag spellings both match during the verb scan and in reorderFlags
+// (same convention as cardSubcommand's cardValueFlags).
 var cardMutValueFlags = map[string]bool{
+	"config": true, "card": true,
 	"command": true, "args": true, "tier": true, "description": true,
 	"notify": true, "adapter": true, "install-check": true, "install_check": true,
 	"capabilities": true, "best-at": true, "best_at": true,
 	"not-for": true, "not_for": true, "cost-tier": true, "cost_tier": true,
 }
 
-// cardMutDashFlags is cardMutValueFlags plus the global --config/--card, keyed
-// by the exact tokens reorderFlags sees (both dash spellings registered).
-var cardMutDashFlags = func() map[string]bool {
-	m := map[string]bool{"--config": true, "--card": true, "-config": true, "-card": true}
-	for name := range cardMutValueFlags {
-		m["--"+name] = true
-		m["-"+name] = true
-	}
-	return m
-}()
-
 // cardVerb splits `card native add id --command x` into the level-2 verb
 // ("add") and the rest of argv with flags hoisted ahead of positionals — the
 // same contract cardSubcommand provides one level up.
 //
-// The flag table here must be cardMutDashFlags, not cardMutValueFlags: it is
-// the one keyed by the tokens reorderFlags emits (with dashes), and it includes
-// the global --config/--card. Looking up the dash-less table left "--card" and
-// its path value unrecognised, so hoisted argv read as ["--card", <path>,
-// <verb>, …] and the *path* was taken for the verb — every
-// `panda card agent|native|manual <verb> --card <path>` landed on the usage
-// line instead of doing the work.
+// The scan must know which flags carry a value: a naive "first word that does
+// not start with -" rule would pick the *path* in `card native add --command
+// x` as the verb. cardMutValueFlags is keyed by bare name so both dash
+// spellings match.
 func cardVerb(args []string) (string, []string) {
 	verb := ""
 	verbIdx := -1
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if strings.HasPrefix(a, "-") {
-			if !strings.Contains(a, "=") && cardMutDashFlags[a] {
+			if !strings.Contains(a, "=") && cardMutValueFlags[strings.TrimLeft(a, "-")] {
 				i++ // this flag's value is not the verb
 			}
 			continue
@@ -82,14 +70,14 @@ func cardVerb(args []string) (string, []string) {
 	if verbIdx >= 0 {
 		rest = append(append([]string{}, args[:verbIdx]...), args[verbIdx+1:]...)
 	}
-	return verb, reorderFlags(rest, cardMutDashFlags)
+	return verb, reorderFlags(rest, cardMutValueFlags)
 }
 
 // runCardNative implements `panda card native …`.
 func runCardNative(args []string) {
 	verb, rest := cardVerb(args)
 	fs := flag.NewFlagSet("card native "+verb, flag.ExitOnError)
-	cardFlag := fs.String("card", "", "path to capabilities.yaml (default: discovered)")
+	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	command := fs.String("command", "", "the command to run (required)")
 	argList := fs.String("args", "", "comma-separated arguments passed to the command")
 	tier := fs.Int("tier", 1, "1=reversible (default) | 2=irreversible, needs approval")
@@ -140,7 +128,7 @@ func runCardNative(args []string) {
 func runCardAgent(args []string) {
 	verb, rest := cardVerb(args)
 	fs := flag.NewFlagSet("card agent "+verb, flag.ExitOnError)
-	cardFlag := fs.String("card", "", "path to capabilities.yaml (default: discovered)")
+	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	adapter := fs.String("adapter", "", "adapter script in adapters/ (required for add)")
 	installCheck := fs.String("install-check", "", "command that proves the CLI is installed (e.g. 'codex --version')")
 	capabilities := fs.String("capabilities", "", "comma-separated capability tags (e.g. shell,files,code)")
@@ -214,7 +202,7 @@ func runCardAgent(args []string) {
 func runCardManual(args []string) {
 	verb, rest := cardVerb(args)
 	fs := flag.NewFlagSet("card manual "+verb, flag.ExitOnError)
-	cardFlag := fs.String("card", "", "path to capabilities.yaml (default: discovered)")
+	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	notify := fs.String("notify", "", "how to reach the human (required for add)")
 	fs.Parse(rest)
 	positional := fs.Args()

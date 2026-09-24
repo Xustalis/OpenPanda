@@ -7,8 +7,8 @@
 #   checksums.txt                         (SHA-256 of each archive, "hash  name")
 #
 # Each archive is a single top-level `openpanda/` directory containing:
-#   bin/panda(.exe)   adapters/*.py   config.example.yaml
-#   capabilities.example-*.yaml        LICENSE
+#   bin/panda(.exe)   adapters/*.py   extensions/voice/*.py
+#   config.example.yaml   capabilities.example-*.yaml   LICENSE
 #
 # Run `make web` first so the embedded web console is baked in.
 #
@@ -70,6 +70,8 @@ build() {
     GOOS="$os" GOARCH="$arch" go build -ldflags "$LDFLAGS" -o "$dir/bin/$exe" ./cmd/panda
     mkdir -p "$dir/adapters"
     find adapters -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/adapters/" \;
+    mkdir -p "$dir/extensions/voice"
+    find extensions/voice -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/extensions/voice/" \;
     cp config.example.yaml "$dir/"
     for c in config/capabilities.example-*.yaml; do
         [ -e "$c" ] && cp "$c" "$dir/"
@@ -89,6 +91,8 @@ build_lite() {
         go build -tags lite -ldflags "$LDFLAGS" -o "$dir/bin/panda" ./cmd/panda
     mkdir -p "$dir/adapters"
     find adapters -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/adapters/" \;
+    mkdir -p "$dir/extensions/voice"
+    find extensions/voice -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/extensions/voice/" \;
     cp config.example.yaml "$dir/"
     for c in config/capabilities.example-*.yaml; do
         [ -e "$c" ] && cp "$c" "$dir/"

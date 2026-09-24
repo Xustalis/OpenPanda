@@ -18,17 +18,88 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/core"
 )
 
-// jsonOutput is set by the global --json flag (stripped in parseSubcommand):
-// panel-style commands then emit their JSON wire form instead of text.
+// jsonOutput is set by the global --json flag (extractGlobalFlags strips it
+// from argv): panel-style commands then emit their JSON wire form instead
+// of text.
 var jsonOutput bool
 
+// cliConfigPath, cliCardPath and cliMCP carry the global --config/--card/--mcp
+// values. extractGlobalFlags lifts them out of argv wherever they sit, so
+// `panda --config x ask q`, `panda ask -config x q` and `panda ask q -config x`
+// are identical — the flag never reaches a subcommand's FlagSet, where Go's
+// "stop at the first positional" rule (or a missing entry in a value-flag
+// table) used to scramble argv silently. Each subcommand still declares the
+// flag — seeded with these as its default — so it documents itself in --help.
+var cliConfigPath, cliCardPath, cliMCP string
+
+// extractGlobalFlags pulls the truly global flags — -config/--config,
+// -card/--card, -mcp/--mcp (each as "-flag value" or "-flag=value") and
+// -json/--json — out of argv wherever they appear, recording them in the
+// package vars above. Everything else passes through in order. A bare "--"
+// ends flag recognition: tokens after it stay positional.
+func extractGlobalFlags(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			out = append(out, a)
+			continue
+		}
+		name := strings.TrimLeft(a, "-")
+		val, hasVal := "", false
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			name, val, hasVal = name[:eq], name[eq+1:], true
+		}
+		switch name {
+		case "config", "card", "mcp":
+			if !hasVal {
+				if i+1 >= len(args) {
+					// No value to claim: pass it through so the subcommand's
+					// FlagSet reports "flag needs an argument" instead of the
+					// token vanishing here.
+					out = append(out, a)
+					continue
+				}
+				val = args[i+1]
+				i++
+			}
+			switch name {
+			case "config":
+				cliConfigPath = val
+			case "card":
+				cliCardPath = val
+			case "mcp":
+				cliMCP = val
+			}
+		case "json":
+			jsonOutput = true
+		default:
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// cardFlagDefault is the -card flag's default: the global --card value when
+// extractGlobalFlags caught one, else the discovered card path.
+func cardFlagDefault() string {
+	if cliCardPath != "" {
+		return cliCardPath
+	}
+	return defaultCardPath()
+}
+
 // defaultCardPath discovers a capability card without --card: next to the
-// auto-discovered config file first, then ./capabilities.yaml, then system
-// config dir. If none of the files exist on disk, it falls back to the
-// configured card path or the default canonical target path so callers know
-// where the card belongs.
+// resolved config file first (an explicit --config counts), then
+// ./capabilities.yaml, then system config dir. If none of the files exist on
+// disk, it falls back to the configured card path or the default canonical
+// target path so callers know where the card belongs.
 func defaultCardPath() string {
-	cfgPath := config.ResolvePath("")
+	cfgPath := config.ResolvePath(cliConfigPath)
 	if cfgPath != "" && cfgPath != config.DefaultPath {
 		if cfg, err := config.Load(cfgPath); err == nil {
 			if p := cfg.EffectiveCardPath(); p != "" {
@@ -172,17 +243,19 @@ const cliPriorities = "low|medium|normal|high|critical"
 // reorderFlags rewrites argv so every "-…" flag (and the value of the
 // known value-carrying ones) precedes the positional words. The std flag
 // package stops parsing at the first non-flag argument, which makes the
-// natural `panda task <id> --config x` silently swallow the trailing flags
+// natural `panda task <id> --reason x` silently swallow the trailing flags
 // into the positional text — a trap users hit constantly. Unknown "-…"
 // tokens are hoisted too; flag.Parse then reports them as errors rather
-// than misinterpreting.
+// than misinterpreting. valueFlags is keyed by the bare flag name so the
+// -name and --name spellings match alike (the flag package treats them
+// identically, so argv must too).
 func reorderFlags(args []string, valueFlags map[string]bool) []string {
 	var flags, positional []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if strings.HasPrefix(a, "-") && a != "-" && a != "--" {
 			flags = append(flags, a)
-			if eq := strings.IndexByte(a, '='); eq < 0 && valueFlags[a] && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			if eq := strings.IndexByte(a, '='); eq < 0 && valueFlags[strings.TrimLeft(a, "-")] && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				i++
 				flags = append(flags, args[i])
 			}
@@ -197,8 +270,10 @@ func reorderFlags(args []string, valueFlags map[string]bool) []string {
 	return append(flags, positional...)
 }
 
-// commonValueFlags are the flags every task-ish subcommand accepts with a
-// value (--config/--card); --json is global (stripped in parseSubcommand).
+// commonValueFlags are the value-carrying flags shared by the task-ish
+// subcommands, keyed by bare name (see reorderFlags). The global
+// --config/--card never reach a FlagSet — extractGlobalFlags lifts them —
+// but listing them here keeps the tables truthful for direct call sites.
 var commonValueFlags = map[string]bool{
-	"--config": true, "--card": true,
+	"config": true, "card": true,
 }

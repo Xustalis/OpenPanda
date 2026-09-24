@@ -31,7 +31,7 @@ import (
 // voiceValueFlags enumerates `panda voice`'s value-carrying flags for
 // reorderFlags (see global.go).
 var voiceValueFlags = map[string]bool{
-	"--config": true, "--card": true, "--mcp": true, "--listen": true,
+	"config": true, "card": true, "mcp": true, "listen": true,
 }
 
 // maxSpeakChars caps what gets read aloud. A long answer spoken in full is worse
@@ -49,9 +49,9 @@ const maxSpeakChars = 700
 // console) is the second factor.
 func runVoice(args []string) {
 	fs := flag.NewFlagSet("voice", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", defaultCardPath(), fmt.Sprintf("path to capabilities.yaml (default: discovered ./capabilities.yaml or %s)", systemCardPath()))
-	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated)")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	cardPath := fs.String("card", cardFlagDefault(), fmt.Sprintf("path to capabilities.yaml (default: discovered ./capabilities.yaml or %s)", systemCardPath()))
+	mcpCmd := fs.String("mcp", cliMCP, "MCP server command (space-separated)")
 	listen := fs.Float64("listen", 0, "seconds to wait for the wake word each round (0 = wait indefinitely)")
 	once := fs.Bool("once", false, "handle a single utterance and exit")
 	mute := fs.Bool("mute", false, "print the reply instead of speaking it (TTS driver not needed)")

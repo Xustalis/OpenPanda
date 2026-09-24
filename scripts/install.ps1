@@ -14,7 +14,7 @@
 #   OPENPANDA_RELEASE_API  override the "latest release" API endpoint
 #   OPENPANDA_RELEASE_BASE override the release download base URL
 #
-# Installs panda.exe + adapters into %LOCALAPPDATA%\OpenPanda, adds its bin
+# Installs panda.exe + adapters + voice sidecars into %LOCALAPPDATA%\OpenPanda, adds its bin
 # dir to the user PATH (persistent), and when run interactively asks
 # whether to register a logon scheduled task that runs `panda daemon` in the
 # background. Mirrors the UNIX installer (scripts/install.sh) option for

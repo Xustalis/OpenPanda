@@ -98,10 +98,13 @@ type repl struct {
 	costTotalUSD float64
 	// watcher bookkeeping (repl_watch.go): asking=true suppresses
 	// completion notifications while an inline ask is mid-flight (it prints
-	// its own result); baseline is the last-seen task state fingerprint.
-	watchMu  sync.Mutex
-	asking   bool
-	baseline map[string]string
+	// its own result); baseline is the last-seen task state fingerprint;
+	// stallNoted remembers which "task id|state" pairs already got a
+	// no-progress warning so a stuck task announces once, not every poll.
+	watchMu    sync.Mutex
+	asking     bool
+	baseline   map[string]string
+	stallNoted map[string]time.Time
 
 	// commandMu serializes classic slash/shell dispatch and scopes its context
 	// and explicit streams. The TUI supplies a cancellable context and a writer
@@ -189,9 +192,9 @@ func init() {
 // `panda ask` (and needs --card for the same reason).
 func runRepl(args []string) {
 	fs := flag.NewFlagSet("repl", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", defaultCardPath(), fmt.Sprintf("path to capabilities.yaml (default: discovered ./capabilities.yaml or %s)", systemCardPath()))
-	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated)")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	cardPath := fs.String("card", cardFlagDefault(), fmt.Sprintf("path to capabilities.yaml (default: discovered ./capabilities.yaml or %s)", systemCardPath()))
+	mcpCmd := fs.String("mcp", cliMCP, "MCP server command (space-separated)")
 	yesFlag := fs.Bool("yes", false, "accept workspace confirmation without prompting")
 	fs.BoolVar(yesFlag, "y", false, "accept workspace confirmation without prompting (shorthand)")
 	fs.Parse(args)
@@ -870,13 +873,19 @@ func (r *repl) askMode(text, mode string) {
 				r.outln(r.renderMd(out.Answer))
 			}
 			reportNote := i18n.Tf(r.loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
-			if out.Agent != "" {
+			if out.Agent != "" || out.Executor != "" {
 				execNote := out.Agent
 				if out.Model != "" {
 					execNote += fmt.Sprintf(" (%s)", out.Model)
 				}
 				if out.Injected {
 					execNote += " · " + i18n.T(r.loc, "tui.task.injected")
+				}
+				if out.Executor != "" {
+					if execNote != "" {
+						execNote += " @ "
+					}
+					execNote += out.Executor
 				}
 				reportNote += " · " + i18n.Tf(r.loc, "tui.task.execBy", "exec", execNote)
 			}
@@ -1490,21 +1499,6 @@ func (r *repl) cmdProjects(arg string) {
 	}
 }
 
-// cmdProject creates a project memory (idempotent empty seed, same as the
-// panel's POST /api/projects).
-func (r *repl) cmdProject(arg string) {
-	name := strings.TrimSpace(arg)
-	if err := memory.ValidateName(name); err != nil {
-		r.outln(i18n.T(r.loc, "repl.project.bad"))
-		return
-	}
-	if err := r.projects.Save(name, memory.MemFile{Limit: r.projects.Limit()}); err != nil {
-		r.storeErr(err)
-		return
-	}
-	r.outln(i18n.Tf(r.loc, "repl.project.created", "name", name))
-}
-
 // cmdSkills manages procedural skills from inside the REPL.
 func (r *repl) cmdSkills(arg string) {
 	fields := strings.Fields(arg)
@@ -1535,7 +1529,7 @@ func (r *repl) cmdSkills(arg string) {
 			hubURL = r.cfg.Skills.HubURL
 		}
 		r.outln(i18n.Tf(r.loc, "repl.skill.find.searching", "q", query))
-		sk, isNew, err := store.DiscoverAndInstall(context.Background(), hubURL, query)
+		sk, isNew, err := store.DiscoverAndInstall(context.Background(), hubURL, query, skills.ImportOptions{Scope: skills.ScopeGlobal, Status: skills.StatusActive})
 		if err != nil {
 			r.errf("panda: %v\n", err)
 			return

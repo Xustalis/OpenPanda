@@ -380,24 +380,24 @@ func seedReviewTask(t *testing.T, store *core.TaskStore, title string, dispositi
 	return task
 }
 
-// TestTaskqApproveAcceptsCompletedWork is the incident's approval half: a
-// task that already executed parks in review with accept_work, and the model
-// had no way to accept it. taskq_approve must take it to done.
+// TestTaskqApproveAcceptsCompletedWork guards the human gate: a review task's
+// outcome is the user's decision, so taskq_approve must NOT transition it —
+// not even to done — it reports the parking and points at the foreground.
 func TestTaskqApproveAcceptsCompletedWork(t *testing.T) {
 	e, reg := newMgmtTestEngine(t)
 	store := core.NewTaskStore(e.db, nil)
 	review := seedReviewTask(t, store, "待验收的已执行任务", core.ApprovalAcceptWork)
 
 	out := runMgmtTool(t, reg, "taskq_approve", map[string]any{"task_id": review.TaskID})
-	if !strings.Contains(out, "验收") {
+	if !strings.Contains(out, "等待用户审批") {
 		t.Fatalf("taskq_approve output: %s", out)
 	}
 	got, err := store.Get(context.Background(), review.TaskID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.State != core.StateDone {
-		t.Fatalf("state = %s, want done", got.State)
+	if got.State != core.StateReview {
+		t.Fatalf("state = %s, want still review — model must not approve", got.State)
 	}
 }
 
@@ -410,7 +410,7 @@ func TestTaskqApproveNeedsChangedInputRefuses(t *testing.T) {
 	review := seedReviewTask(t, store, "输入有误的待审批任务", core.ApprovalNeedsChangedInput)
 
 	out := runMgmtTool(t, reg, "taskq_approve", map[string]any{"task_id": review.TaskID})
-	if !strings.Contains(out, "不能仅靠批准继续") {
+	if !strings.Contains(out, "等待用户审批") {
 		t.Fatalf("taskq_approve output: %s", out)
 	}
 	got, err := store.Get(context.Background(), review.TaskID)
@@ -446,18 +446,46 @@ func TestTaskqReject(t *testing.T) {
 	store := core.NewTaskStore(e.db, nil)
 	review := seedReviewTask(t, store, "成果不合格的待审批任务", core.ApprovalAcceptWork)
 
+	// Rejecting is still disposing of the human's pending decision: the tool
+	// must leave the task parked and point at the foreground surfaces.
 	out := runMgmtTool(t, reg, "taskq_reject", map[string]any{
 		"task_id": review.TaskID, "reason": "成果不合格",
 	})
-	if !strings.Contains(out, "已拒绝") || !strings.Contains(out, "成果不合格") {
+	if !strings.Contains(out, "等待用户审批") {
 		t.Fatalf("taskq_reject output: %s", out)
 	}
 	got, err := store.Get(context.Background(), review.TaskID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.State != core.StateFailed {
-		t.Fatalf("state = %s, want failed", got.State)
+	if got.State != core.StateReview {
+		t.Fatalf("state = %s, want still review — model must not reject", got.State)
+	}
+}
+
+// TestTaskqCancelReviewRefuses guards the last silent disposition: a model
+// must not cancel a task parked for the human either.
+func TestTaskqCancelReviewRefuses(t *testing.T) {
+	e, reg := newMgmtTestEngine(t)
+	store := core.NewTaskStore(e.db, nil)
+	review := seedReviewTask(t, store, "待审批不可取消", core.ApprovalResumeExecution)
+
+	tool, _ := reg.Lookup("taskq_cancel")
+	if _, err := tool.Run(context.Background(), map[string]any{"task_id": review.TaskID}); err == nil {
+		t.Fatal("taskq_cancel(review) must refuse — the decision belongs to the user")
+	}
+	out := runMgmtTool(t, reg, "taskq_cancel", map[string]any{
+		"task_ids": []any{review.TaskID},
+	})
+	if !strings.Contains(out, "等待用户审批") {
+		t.Fatalf("batch cancel on review should report the human gate: %s", out)
+	}
+	got, err := store.Get(context.Background(), review.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != core.StateReview {
+		t.Fatalf("state = %s, want still review", got.State)
 	}
 }
 
@@ -557,8 +585,9 @@ func TestTaskqMoveRejectsNonQueued(t *testing.T) {
 	}
 }
 
-// TestTaskqClear covers all three scopes: history deletes only terminal rows,
-// review cancels then deletes parked rows, and an invalid scope errors.
+// TestTaskqClear covers all three scopes: history deletes only terminal rows;
+// review and all refuse while human approvals are pending — the reviewer must
+// decide each one in the foreground first.
 func TestTaskqClear(t *testing.T) {
 	e, reg := newMgmtTestEngine(t)
 	store := core.NewTaskStore(e.db, nil)
@@ -574,19 +603,25 @@ func TestTaskqClear(t *testing.T) {
 	}
 
 	review := seedReviewTask(t, store, "待审批清理对象", core.ApprovalAcceptWork)
-	out = runMgmtTool(t, reg, "taskq_clear", map[string]any{"scope": "review"})
-	if !strings.Contains(out, "已清理待审批队列") {
-		t.Fatalf("clear review output: %s", out)
-	}
-	if _, err := store.Get(ctx, review.TaskID); err == nil {
-		t.Fatal("review row survived clear review")
-	}
-
 	tool, _ := reg.Lookup("taskq_clear")
+	if _, err := tool.Run(context.Background(), map[string]any{"scope": "review"}); err == nil {
+		t.Fatal("clear review must refuse — pending approvals belong to the user")
+	}
+	if got, err := store.Get(ctx, review.TaskID); err != nil || got.State != core.StateReview {
+		t.Fatalf("review task disturbed by clear review: %v %v", got.State, err)
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"scope": "all"}); err == nil {
+		t.Fatal("clear all must refuse while approvals are pending")
+	}
 	if _, err := tool.Run(context.Background(), map[string]any{"scope": "bogus"}); err == nil {
 		t.Fatal("taskq_clear(bogus scope) must error")
 	}
 
+	// The human decides the parked task (reject via the store path); with no
+	// pending reviews left, clear all proceeds.
+	if err := store.Reject(ctx, review.TaskID, "user decided"); err != nil {
+		t.Fatalf("user reject: %v", err)
+	}
 	out = runMgmtTool(t, reg, "taskq_clear", map[string]any{"scope": "all"})
 	if !strings.Contains(out, "已清空队列") {
 		t.Fatalf("clear all output: %s", out)

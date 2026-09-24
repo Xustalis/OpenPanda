@@ -81,14 +81,14 @@ func TestExecuteTool(t *testing.T) {
 	reg := newTestRegistry()
 	ctx := context.Background()
 
-	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "echo", Arguments: map[string]any{"x": 1}}, true); got != "got 1" {
+	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "echo", Arguments: map[string]any{"x": 1}}, true, ""); got != "got 1" {
 		t.Errorf("executeTool = %q, want success result", got)
 	}
 	// A tool failure is folded into the result, never a hard exit.
-	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "failing"}, true); !strings.Contains(got, "boom") {
+	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "failing"}, true, ""); !strings.Contains(got, "boom") {
 		t.Errorf("executeTool failure = %q, want it to carry the error", got)
 	}
-	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "nope"}, true); !strings.Contains(got, "未知工具") {
+	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "nope"}, true, ""); !strings.Contains(got, "未知工具") {
 		t.Errorf("executeTool unknown = %q, want unknown-tool message", got)
 	}
 }
@@ -102,11 +102,11 @@ func TestExecuteToolTierGate(t *testing.T) {
 
 	// "echo" declares no tier: 0 is fail-closed (graded Tier 2), so an
 	// unauthorized ask is refused before Run.
-	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "echo"}, false); !strings.Contains(got, "被拒") {
+	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "echo"}, false, ""); !strings.Contains(got, "被拒") {
 		t.Errorf("executeTool unauthorized = %q, want the refusal", got)
 	}
 	// The same call runs under consent.
-	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "echo", Arguments: map[string]any{"x": 1}}, true); got != "got 1" {
+	if got := executeTool(ctx, reg, &entry.ToolCall{Tool: "echo", Arguments: map[string]any{"x": 1}}, true, ""); got != "got 1" {
 		t.Errorf("executeTool authorized = %q, want success result", got)
 	}
 }
@@ -325,19 +325,19 @@ func TestExecuteTool_MultiLanguage(t *testing.T) {
 	})
 
 	// Unauthorized refusal in English
-	resEn := executeTool(context.Background(), reg, &entry.ToolCall{Tool: "test_tool"}, false, i18n.English)
+	resEn := executeTool(context.Background(), reg, &entry.ToolCall{Tool: "test_tool"}, false, "", i18n.English)
 	if !strings.Contains(resEn, "Tool execution refused") || !strings.Contains(resEn, "requires authorization") {
 		t.Errorf("expected English refusal message, got: %s", resEn)
 	}
 
 	// Unknown tool in English
-	unknownEn := executeTool(context.Background(), reg, &entry.ToolCall{Tool: "nonexistent"}, true, i18n.English)
+	unknownEn := executeTool(context.Background(), reg, &entry.ToolCall{Tool: "nonexistent"}, true, "", i18n.English)
 	if !strings.Contains(unknownEn, "Tool execution failed: unknown tool") {
 		t.Errorf("expected English unknown tool error, got: %s", unknownEn)
 	}
 
 	// Unknown tool in Chinese
-	unknownZh := executeTool(context.Background(), reg, &entry.ToolCall{Tool: "nonexistent"}, true, i18n.ChineseSimp)
+	unknownZh := executeTool(context.Background(), reg, &entry.ToolCall{Tool: "nonexistent"}, true, "", i18n.ChineseSimp)
 	if !strings.Contains(unknownZh, "工具执行失败：未知工具") {
 		t.Errorf("expected Chinese unknown tool error, got: %s", unknownZh)
 	}

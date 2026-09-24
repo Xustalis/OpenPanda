@@ -77,7 +77,7 @@ func sessionUsage() {
 
 func runSessionList(args []string) {
 	fs := flag.NewFlagSet("session list", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	projectName := fs.String("project", "", "filter sessions by project")
 	fs.Parse(args)
 	cfg, err := config.Load(*configPath)
@@ -143,7 +143,7 @@ func runSessionList(args []string) {
 
 func runSessionNew(args []string) {
 	fs := flag.NewFlagSet("session new", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	title := fs.String("title", "", "session title (default: derived from the first ask)")
 	projectName := fs.String("project", "", "project name (default: active project)")
 	fs.Parse(args)
@@ -182,8 +182,8 @@ func runSessionNew(args []string) {
 
 func runSessionShow(args []string) {
 	fs := flag.NewFlagSet("session show", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(fs.Arg(0))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda session show <id>")
@@ -237,9 +237,9 @@ func runSessionShow(args []string) {
 
 func runSessionMove(args []string) {
 	fs := flag.NewFlagSet("session mv", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	projectName := fs.String("project", "", "target project name (empty to disassociate)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "project": true}))
 	id := strings.TrimSpace(fs.Arg(0))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda session mv <id> --project <name>")
@@ -269,8 +269,8 @@ func runSessionMove(args []string) {
 
 func runSessionRm(args []string) {
 	fs := flag.NewFlagSet("session rm", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(fs.Arg(0))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda session rm <id>")
@@ -300,11 +300,11 @@ func runSessionRm(args []string) {
 // terminal instead of SSE.
 func runSessionAsk(args []string) {
 	fs := flag.NewFlagSet("session ask", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered; required to execute tasks)")
-	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated)")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	cardPath := fs.String("card", cardFlagDefault(), "path to capabilities.yaml (default: discovered; required to execute tasks)")
+	mcpCmd := fs.String("mcp", cliMCP, "MCP server command (space-separated)")
 	authorize := fs.Bool("authorize", false, "authorize tier-2 (irreversible) commands")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(fs.Arg(0))
 	prompt := strings.TrimSpace(strings.Join(fs.Args()[1:], " "))
 	if id == "" || prompt == "" {
@@ -366,6 +366,7 @@ func runSessionAsk(args []string) {
 		engine.SetProject(sess.Project, workDir)
 	}
 
+	streamed := stdoutIsTTY()
 	out, err := askSessionTurns(engine, history, prompt, workDir, *authorize)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
@@ -398,6 +399,13 @@ func runSessionAsk(args []string) {
 	_, _ = store.AppendTurn(sess.ID, turn)
 
 	switch out.Kind {
+	case "answer":
+		// A TTY already streamed these lines live; a pipe saw nothing, and
+		// without this branch `panda session ask <id> q | …` exits 0 with
+		// empty stdout while the answer sits in the store.
+		if !streamed {
+			fmt.Println(renderCliMd(out.Answer))
+		}
 	case "task":
 		fmt.Println(i18n.Tf(loc, "cli.session.task", "id", out.TaskID, "state", out.TaskState))
 		if out.OK {
@@ -436,8 +444,8 @@ func askSessionTurns(engine *askengine.Engine, history []entry.Turn, prompt, wor
 
 func runSessionDiff(args []string) {
 	fs := flag.NewFlagSet("session diff", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(fs.Arg(0))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda session diff <id>")
@@ -484,9 +492,9 @@ func runSessionDiff(args []string) {
 
 func runSessionMerge(args []string) {
 	fs := flag.NewFlagSet("session merge", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	message := fs.String("message", "", "merge commit message (default: generated)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "message": true}))
 	id := strings.TrimSpace(fs.Arg(0))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda session merge <id> [--message M]")

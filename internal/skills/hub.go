@@ -584,7 +584,11 @@ func (s *Store) ResetBuiltin(name string) (*Skill, error) {
 // DiscoverAndInstall searches the Skills Hub for skills matching query, picks the top
 // match, and installs it if not already present. It returns the skill and a boolean
 // indicating whether it was newly installed (true) or was already present (false).
-func (s *Store) DiscoverAndInstall(ctx context.Context, hubURL string, query string) (*Skill, bool, error) {
+// The caller picks the landing status through opts: user-initiated installs pass
+// StatusActive (the explicit click/command is the approval), while autonomous
+// installs (model tools, MCP self-tools) must pass StatusPending so the skill
+// cannot steer future tasks until a human approves it in the foreground.
+func (s *Store) DiscoverAndInstall(ctx context.Context, hubURL string, query string, opts ImportOptions) (*Skill, bool, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, false, fmt.Errorf("skills: search query cannot be empty")
@@ -606,10 +610,10 @@ func (s *Store) DiscoverAndInstall(ctx context.Context, hubURL string, query str
 		return existing, false, nil
 	}
 
-	installed, err := InstallFromHub(ctx, s, hubURL, top.Name, ImportOptions{
-		Scope:  ScopeGlobal,
-		Status: StatusActive,
-	})
+	if opts.Scope == "" {
+		opts.Scope = ScopeGlobal
+	}
+	installed, err := InstallFromHub(ctx, s, hubURL, top.Name, opts)
 	if err != nil {
 		return nil, false, err
 	}

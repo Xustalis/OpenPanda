@@ -106,22 +106,24 @@ Step 1: Check cluster status.`,
 		t.Fatalf("expected redis-cluster-ops in search result, got: %s", searchOut)
 	}
 
-	// 2. skill_discover (autonomous search & install)
+	// 2. skill_discover (autonomous search & install): the model-installed
+	// skill must land pending — it cannot activate without the user's
+	// foreground approval.
 	discOut := runSkillTool(t, reg, "skill_discover", map[string]any{"query": "redis"})
-	if !strings.Contains(discOut, "已自动从技能集市中找到并安装激活新技能") || !strings.Contains(discOut, "redis-cluster-ops") {
+	if !strings.Contains(discOut, "待批准") || !strings.Contains(discOut, "redis-cluster-ops") {
 		t.Fatalf("unexpected discover result: %s", discOut)
 	}
 
-	// Verify it shows up in skill_list
+	// Verify it shows up in skill_list as pending
 	listOut := runSkillTool(t, reg, "skill_list", map[string]any{})
-	if !strings.Contains(listOut, "redis-cluster-ops") {
-		t.Fatalf("expected installed redis skill in list, got: %s", listOut)
+	if !strings.Contains(listOut, "redis-cluster-ops") || !strings.Contains(listOut, `"status": "pending"`) {
+		t.Fatalf("expected installed redis skill pending in list, got: %s", listOut)
 	}
 
-	// 3. Second skill_discover on same query should recognize already active
+	// 3. Second skill_discover on same query should recognize the install
 	discOut2 := runSkillTool(t, reg, "skill_discover", map[string]any{"query": "redis"})
-	if !strings.Contains(discOut2, "已处于激活状态") {
-		t.Fatalf("expected already active notification on repeat discover, got: %s", discOut2)
+	if !strings.Contains(discOut2, "已安装") || !strings.Contains(discOut2, "pending") {
+		t.Fatalf("expected already-installed notification on repeat discover, got: %s", discOut2)
 	}
 }
 
@@ -153,8 +155,15 @@ scope: global
 	_, reg := newSkillTestEngine(t, ts.URL)
 
 	instOut := runSkillTool(t, reg, "skill_install", map[string]any{"target": "kafka-tuning"})
-	if !strings.Contains(instOut, "成功从 Skills Hub 安装技能 kafka-tuning") {
+	if !strings.Contains(instOut, "已从 Skills Hub 安装技能 kafka-tuning") || !strings.Contains(instOut, "待批准") {
 		t.Fatalf("unexpected install result: %s", instOut)
+	}
+
+	// A model-installed skill lands pending — the user approves it, and only
+	// then does skill content become the active workflow.
+	listOut := runSkillTool(t, reg, "skill_list", map[string]any{})
+	if !strings.Contains(listOut, `"status": "pending"`) {
+		t.Fatalf("expected pending status in skill_list, got: %s", listOut)
 	}
 
 	showOut := runSkillTool(t, reg, "skill_show", map[string]any{"name": "kafka-tuning"})

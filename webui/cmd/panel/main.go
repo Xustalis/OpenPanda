@@ -38,6 +38,14 @@ func main() {
 	)
 	flag.Parse()
 
+	// An explicit -config pointing nowhere used to fall back to defaults
+	// silently, surfacing later as a misleading missing-field error.
+	if *configPath != "" {
+		if _, err := os.Stat(*configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "panda-webui: warning: -config %s: %v — continuing with defaults\n", *configPath, err)
+		}
+	}
+
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
@@ -108,7 +116,7 @@ func main() {
 			fatal("load vapid keys", err)
 		}
 		pushSvc = push.NewService(keys, push.NewStore(db), logger)
-		store.SetOnReview(func(t core.Task) {
+		notifyReview := func(t core.Task) {
 			nctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			if err := pushSvc.Notify(nctx, push.Notification{
@@ -120,7 +128,17 @@ func main() {
 			}); err != nil {
 				logger.Warn("notify review", "task", t.TaskID, "err", err)
 			}
-		})
+		}
+		// The hook has to sit on the store the review transition actually
+		// happens on. This process holds two: its own handle (used by the
+		// panel's direct writes) and the one inside the engine's scheduler
+		// core, where a parked task is normally written. Installing on only
+		// the former is why the notification never fired — a task could wait
+		// for approval with nobody told. Both are wired now.
+		store.SetOnReview(notifyReview)
+		if engine != nil {
+			engine.SetOnReview(notifyReview)
+		}
 	}
 
 	// Reminders (P1-28): the sidecar is long-lived, so it runs the scanner —

@@ -96,7 +96,9 @@ scope: global
 	if err != nil {
 		t.Fatalf("toolSkillList: %v", err)
 	}
-	if !strings.Contains(text, "mcp-made-skill") || !strings.Contains(text, `"status":"active"`) {
+	// Agent-initiated imports land pending: the skill is listed but cannot
+	// steer tasks until the user approves it in the foreground.
+	if !strings.Contains(text, "mcp-made-skill") || !strings.Contains(text, `"status":"pending"`) {
 		t.Fatalf("list missing the imported skill: %s", text)
 	}
 }

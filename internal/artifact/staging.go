@@ -16,11 +16,9 @@
 package artifact
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -333,24 +331,4 @@ func (s *Store) PruneStaged(maxAge time.Duration, now time.Time) ([]string, erro
 		}
 	}
 	return pruned, nil
-}
-
-// stagedBytesMatches is a test/debug helper: the staged copy must equal a
-// prefix of the authoritative archive for the transfer to be resumable.
-func (s *Store) stagedBytesMatches(hash string, want io.ReaderAt) bool {
-	s.stagingMu.Lock()
-	defer s.stagingMu.Unlock()
-	_, root, ok := s.stagedProgress(hash)
-	if !ok {
-		return false
-	}
-	data, err := os.ReadFile(stagedDataPath(root, hash))
-	if err != nil {
-		return false
-	}
-	head := make([]byte, len(data))
-	if _, err := want.ReadAt(head, 0); err != nil {
-		return false
-	}
-	return bytes.Equal(data, head)
 }

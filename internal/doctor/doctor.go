@@ -12,9 +12,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/install"
 	"github.com/Xustalis/OpenPanda/internal/providers"
@@ -85,6 +87,25 @@ func Run(configPath string) []Check {
 			add(pass("doctor.modelkey.ok"))
 		} else {
 			add(fail("doctor.modelkey.no"))
+		}
+		// A key that exists is not a model that answers: probe the endpoint
+		// the entry model would call, with the same short budget the
+		// pre-dispatch check uses, so "configured but dead" is visible here
+		// instead of only after a hung ask.
+		if ep := commander.EffectiveBaseURL(cfg.Model); ep != "" {
+			start := time.Now()
+			v, _ := commander.ProbeModel(commander.ProbeSpec{
+				Endpoint:      ep,
+				APIType:       cfg.Model.NormalizedAPIType(),
+				APIKey:        cfg.Model.APIKey,
+				Model:         cfg.Model.Model,
+				KeyDefinitive: cfg.Model.APIKey != "",
+			})
+			if v.OK {
+				add(pass("doctor.modelendpoint.ok", "url", ep, "ms", fmt.Sprintf("%d", time.Since(start).Milliseconds()), "detail", v.Detail))
+			} else {
+				add(fail("doctor.modelendpoint.no", "url", ep, "detail", v.Detail))
+			}
 		}
 
 		// Network planes. Validate() already guarantees listen_addr and

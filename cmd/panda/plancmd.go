@@ -60,8 +60,8 @@ func planUsage() {
 // does not need to stay attached for the plan to finish.
 func runPlanStart(args []string) {
 	fs := flag.NewFlagSet("plan run", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered)")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	cardPath := fs.String("card", cardFlagDefault(), "path to capabilities.yaml (default: discovered)")
 	priority := fs.String("priority", "normal", "priority for every stage: "+cliPriorities)
 	dryRun := fs.Bool("dry-run", false, "validate and print the stage order without creating anything")
 	fs.Parse(reorderFlags(args, commonValueFlags))
@@ -149,7 +149,7 @@ func runPlanStart(args []string) {
 // building an engine: following a plan must work while the daemon owns it.
 func runPlanShow(args []string) {
 	fs := flag.NewFlagSet("plan show", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {

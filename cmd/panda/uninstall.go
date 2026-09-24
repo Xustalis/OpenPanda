@@ -36,7 +36,7 @@ import (
 
 func runUninstall(args []string) {
 	fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	yes := fs.Bool("yes", false, "skip the interactive confirmation(s) (for scripts)")
 	noBackup := fs.Bool("no-backup", false, "delete without writing a backup zip")
 	dryRun := fs.Bool("dry-run", false, "print the plan and exit without deleting anything")

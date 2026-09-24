@@ -203,22 +203,6 @@ func (s *Status) Phase(name, label string) {
 	s.paintLocked()
 }
 
-// PhaseHistory returns a shallow copy of the phase record list — for the
-// closing summary line. Live durations are resolved at call time.
-func (s *Status) PhaseHistory() []PhaseRecord {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := time.Now()
-	out := make([]PhaseRecord, len(s.phases))
-	copy(out, s.phases)
-	for i := range out {
-		if out[i].Dur == 0 && !out[i].Start.IsZero() {
-			out[i].Dur = now.Sub(out[i].Start)
-		}
-	}
-	return out
-}
-
 func (s *Status) phaseChainLocked() string {
 	if len(s.phases) == 0 {
 		return ""

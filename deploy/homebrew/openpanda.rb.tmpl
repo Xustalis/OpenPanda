@@ -31,6 +31,9 @@ class Openpanda < Formula
     root = buildpath unless root.directory?
     bin.install root/"bin/panda"
     (prefix/"adapters").install Dir[root/"adapters/*"]
+    # Voice sidecars too: `panda voice` resolves <prefix>/extensions/voice
+    # beside the real (Cellar) binary.
+    (prefix/"extensions/voice").install Dir[root/"extensions/voice/*"]
     prefix.install root/"config.example.yaml"
     prefix.install Dir[root/"capabilities.example-*.yaml"]
   end

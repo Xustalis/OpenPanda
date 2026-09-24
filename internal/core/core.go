@@ -810,8 +810,9 @@ func (c *Core) blockedAgents() []string {
 	return out
 }
 
-// RunMonitor scans for expired leases and fails them. It returns when ctx
-// is done.
+// RunMonitor runs the full monitor tick — the task-lifecycle sweeps plus the
+// peer-directory duties that only make sense on the node owning the peer
+// connections. It returns when ctx is done.
 func (c *Core) RunMonitor(ctx context.Context) {
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
@@ -820,14 +821,7 @@ func (c *Core) RunMonitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			// Plan convergence does not depend on who finished a stage: a review
-			// approved from the CLI or the console moves the row in another
-			// process, and only this sweep would notice.
-			c.sweepPlans(ctx)
-			// S1-1: a restart orphans forwarded tasks in queued — no lease, no
-			// waiter, nothing else touches them. Re-route them or fail them out
-			// after the grace window so the upstream chain learns the outcome.
-			c.rescueOrphanedForwards(ctx)
+			c.taskSweeps(ctx)
 			// S1-4: directory rows for silently-dead peers stay online forever
 			// without a liveness sweep, and routing keeps aiming ghosts.
 			c.sweepStalePeers(ctx)
@@ -837,61 +831,175 @@ func (c *Core) RunMonitor(ctx context.Context) {
 			// hellos is flushed here rather than waiting on a greeting.
 			c.refreshSelfNeighbors(ctx)
 			c.sweepOutboxes(ctx)
-			// §8.3: a parked push-waiter's inputs can also land via the pull
-			// path or a fat-bundle import — neither calls the wake directly —
-			// and a staging dir whose sender died needs periodic reclamation.
-			c.wakeSatisfiedArtifactWaiters(ctx)
-			c.pruneStagedArtifacts(ctx)
-			expired, err := c.store.ExpireTasks(ctx)
-			if err != nil {
-				c.logger.Warn("expire tasks", "err", err)
-				continue
-			}
-			if len(expired) > 0 {
-				for _, id := range expired {
-					// A force-fail that only rewrites the database row leaves the
-					// agent subprocess running — still writing files, still
-					// committing — under a task already reported failed upstream,
-					// which the parent then re-routes to a second node. Abort the
-					// local execution for real.
-					c.cancelRunning(id)
-					// A task that timed out while paused in waiting_context would
-					// otherwise leak its entry in pendingCtx (P2-7) — and with the
-					// entry, the capacity reservation it carries.
-					c.dropPendingContext(id)
-					// The lease expired on a task this node dispatched to a remote
-					// executor: tell that executor to stop (review P1-4). Without
-					// this the remote agent keeps burning tokens and writing files
-					// under a task this node has already reported failed — work that
-					// a re-route then duplicates. forwardCancelDownstream no-ops
-					// when the task never left this node.
-					c.forwardCancelDownstream(ctx, id)
-					// Propagate the timeout up the delegation chain so a root
-					// scheduler blocked in Submit unblocks (D3). relayToParent is
-					// a no-op for a root task; signalResult no-ops without a waiter.
-					if tk, err := c.store.Get(ctx, id); err == nil {
-						// Report the state the row actually reached: a lease
-						// expiry is a failure, a deadline is 'expired' — the
-						// delegator renders them differently and only the row
-						// knows which sweep fired.
-						state, stderr := tk.State, "lease expired"
-						if state == StateExpired {
-							stderr = "deadline exceeded"
-						} else {
-							state = StateFailed
-						}
-						res := bus.TaskResultPayload{
-							TaskID: id, AttemptID: tk.AttemptID, State: state, OK: false, ExitCode: 1, Stderr: stderr,
-							Chain: tk.Chain,
-						}
-						c.relayToParent(ctx, bus.MsgTaskResult, tk.Chain, res)
-						c.signalResult(id, res)
-					}
-				}
-				c.logger.Info("monitor expired tasks", "count", len(expired))
-			}
 		}
 	}
+}
+
+// RunTaskMonitor runs the task-lifecycle half of the monitor for an embedded
+// surface — the web panel, `panda web`, any long-lived process that executes
+// tasks off the shared store without owning the peer connections. Without it
+// that process's tasks stall silently: a parked waiting_context never times
+// out, a queued-remotely orphan is never rescued, an expired lease is never
+// enforced, and the store alone cannot tell queued work why nothing moved.
+// The peer-directory sweeps stay daemon-only: a second process marking peers
+// offline from a connection set it does not own would fight the real node's
+// heartbeats.
+func (c *Core) RunTaskMonitor(ctx context.Context) {
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.taskSweeps(ctx)
+		}
+	}
+}
+
+// RunReconcile runs only the local-work reconcile — the minimal monitor for
+// surfaces that submit inline (REPL, TUI, one-shot ask): they never own the
+// queue, but a task they execute can still be cancelled or force-failed by
+// another process, and this pass is what stops the orphaned execution instead
+// of letting it run to the agent hard timeout.
+func (c *Core) RunReconcile(ctx context.Context) {
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.reconcileLocalWork(ctx)
+		}
+	}
+}
+
+// taskSweeps is the task-lifecycle half of a monitor tick. Every pass touches
+// only this node's task rows and its own in-memory executions, so any process
+// sharing the store may run it — the state-guarded writes arbitrate the races.
+func (c *Core) taskSweeps(ctx context.Context) {
+	// Plan convergence does not depend on who finished a stage: a review
+	// approved from the CLI or the console moves the row in another
+	// process, and only this sweep would notice.
+	c.sweepPlans(ctx)
+	// S1-1: a restart orphans forwarded tasks in queued — no lease, no
+	// waiter, nothing else touches them. Re-route them or fail them out
+	// after the grace window so the upstream chain learns the outcome.
+	c.rescueOrphanedForwards(ctx)
+	// §8.3: a parked push-waiter's inputs can also land via the pull
+	// path or a fat-bundle import — neither calls the wake directly —
+	// and a staging dir whose sender died needs periodic reclamation.
+	c.wakeSatisfiedArtifactWaiters(ctx)
+	c.pruneStagedArtifacts(ctx)
+	c.expireLeases(ctx)
+	// A row can go terminal — or park in review — out of band: cancelled
+	// from the CLI, rejected from the console, failed by another process's
+	// monitor. ExpireTasks only cleans the rows it fails itself, so without
+	// this pass an out-of-band verdict leaves the local agent running under
+	// a state the store already discarded.
+	c.reconcileLocalWork(ctx)
+}
+
+// expireLeases fails every active task whose lease or absolute deadline has
+// passed, then cleans up what the failure leaves behind: the local execution
+// (if this process drives it), the parked-context reservation, the remote
+// executor still burning tokens, and any blocked upstream waiter.
+func (c *Core) expireLeases(ctx context.Context) {
+	expired, err := c.store.ExpireTasks(ctx)
+	if err != nil {
+		c.logger.Warn("expire tasks", "err", err)
+		return
+	}
+	if len(expired) == 0 {
+		return
+	}
+	for _, id := range expired {
+		// A force-fail that only rewrites the database row leaves the
+		// agent subprocess running — still writing files, still
+		// committing — under a task already reported failed upstream,
+		// which the parent then re-routes to a second node. Abort the
+		// local execution for real.
+		c.cancelRunning(id)
+		// A task that timed out while paused in waiting_context would
+		// otherwise leak its entry in pendingCtx (P2-7) — and with the
+		// entry, the capacity reservation it carries.
+		c.dropPendingContext(id)
+		// The lease expired on a task this node dispatched to a remote
+		// executor: tell that executor to stop (review P1-4). Without
+		// this the remote agent keeps burning tokens and writing files
+		// under a task this node has already reported failed — work that
+		// a re-route then duplicates. forwardCancelDownstream no-ops
+		// when the task never left this node.
+		c.forwardCancelDownstream(ctx, id)
+		// Propagate the timeout up the delegation chain so a root
+		// scheduler blocked in Submit unblocks (D3). relayToParent is
+		// a no-op for a root task; signalResult no-ops without a waiter.
+		if tk, err := c.store.Get(ctx, id); err == nil {
+			// Report the state the row actually reached: a lease
+			// expiry is a failure, a deadline is 'expired' — the
+			// delegator renders them differently and only the row
+			// knows which sweep fired.
+			state, stderr := tk.State, "lease expired"
+			if state == StateExpired {
+				stderr = "deadline exceeded"
+			} else {
+				state = StateFailed
+			}
+			res := bus.TaskResultPayload{
+				TaskID: id, AttemptID: tk.AttemptID, State: state, OK: false, ExitCode: 1, Stderr: stderr,
+				Chain: tk.Chain,
+			}
+			c.relayToParent(ctx, bus.MsgTaskResult, tk.Chain, res)
+			c.signalResult(id, res)
+		}
+	}
+	c.logger.Info("monitor expired tasks", "count", len(expired))
+}
+
+// reconcileLocalWork stops this process's own executions whose task rows left
+// the active states out of band — a `panda cancel`, a console reject, a lease
+// expiry claimed by another process's monitor, a review park written from
+// elsewhere. The store row is the truth: once it no longer says the task is
+// executing, the subprocess here is a zombie still burning tokens and writing
+// files under a verdict nobody will read.
+//
+// dispatched/waiting_context/running count as alive — the registerRunning
+// window spans dispatch through run — and a parked-context entry survives
+// while its row is dispatched or waiting_context; anything else means the
+// row moved on without this process.
+func (c *Core) reconcileLocalWork(ctx context.Context) {
+	alive := func(state string) bool {
+		switch state {
+		case StateDispatched, StateWaitingCtx, StateRunning:
+			return true
+		}
+		return false
+	}
+	c.running.Range(func(k, _ any) bool {
+		id, ok := k.(string)
+		if !ok {
+			return true
+		}
+		t, err := c.store.Get(ctx, id)
+		if err == nil && !alive(t.State) {
+			c.logger.Info("reconcile: stopping orphaned execution", "task", id, "state", t.State)
+			c.cancelRunning(id)
+			c.dropPendingContext(id)
+		}
+		return true
+	})
+	c.pendingCtx.Range(func(k, _ any) bool {
+		id, ok := k.(string)
+		if !ok {
+			return true
+		}
+		t, err := c.store.Get(ctx, id)
+		if err == nil && !alive(t.State) {
+			c.dropPendingContext(id)
+		}
+		return true
+	})
 }
 
 // TaskStore exposes the store for CLI/queue views.
@@ -1594,15 +1702,38 @@ func (c *Core) summary() ledger.CapabilitySummary {
 		s.NativeIDs = append(s.NativeIDs, n.ID)
 	}
 	s.AgentCaps = make(map[string][]string, len(card.Agents))
-	for name, ag := range card.Agents {
-		// Advertise only agents that can actually run here (CLI present and
-		// a reachable model — own credentials or injection). A card entry
-		// whose CLI is installed but locked out would otherwise attract
-		// cross-device routing and fail at runtime after a long hang.
-		if router != nil && !router.AgentViable(name, ag) {
-			continue
+	// Advertise only agents that can actually run here (CLI present,
+	// credentials or injection configured, and the model endpoint
+	// reachable). A card entry whose CLI is installed but locked out —
+	// or whose provider is down — would otherwise attract cross-device
+	// routing and fail at runtime after a long hang. The endpoint probe
+	// inside AgentDispatchable is bounded but runs per agent — fan it out
+	// so N dead providers cost one probe duration, not N, on the
+	// handshake path that calls this.
+	if router != nil && len(card.Agents) > 0 {
+		usable := make(map[string]bool, len(card.Agents))
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		for name, ag := range card.Agents {
+			wg.Add(1)
+			go func(name string, ag ledger.Agent) {
+				defer wg.Done()
+				ok := router.AgentDispatchable(name, ag)
+				mu.Lock()
+				usable[name] = ok
+				mu.Unlock()
+			}(name, ag)
 		}
-		s.AgentCaps[name] = ag.Capabilities
+		wg.Wait()
+		for name, ag := range card.Agents {
+			if usable[name] {
+				s.AgentCaps[name] = ag.Capabilities
+			}
+		}
+	} else {
+		for name, ag := range card.Agents {
+			s.AgentCaps[name] = ag.Capabilities
+		}
 	}
 	for _, m := range card.Manual {
 		s.ManualIDs = append(s.ManualIDs, m.ID)

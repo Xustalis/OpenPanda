@@ -20,7 +20,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
@@ -55,10 +54,4 @@ func runDetect(args []string) {
 // detectCard probes the host and assembles a Card draft.
 func detectCard() ledger.Card {
 	return carddetect.DetectCard()
-}
-
-// installedBinary returns the first of an agent's known binary names found on
-// PATH or in the usual install dirs (~/.local/bin, /opt/homebrew/bin, …).
-func installedBinary(k agents.Known) string {
-	return carddetect.InstalledBinary(k)
 }

@@ -84,13 +84,6 @@ func (m *Manager) statusLocked(ctx context.Context) Status {
 	return st
 }
 
-// SetIncludePrerelease dynamically toggles prerelease checking.
-func (m *Manager) SetIncludePrerelease(include bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.opts.IncludePrerelease = include
-}
-
 // Check queries GitHub for the latest release and updates the stage to
 // available (newer) or idle (up to date). A network or GitHub error leaves the
 // manager in the error stage with the message recorded; the auto-check loop

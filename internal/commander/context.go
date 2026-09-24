@@ -1,15 +1,11 @@
 package commander
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/Xustalis/OpenPanda/internal/executil"
 )
 
 // FileContext is the file-type task context (design doc §12.5). It records
@@ -21,24 +17,6 @@ type FileContext struct {
 	Commit string            `json:"commit,omitempty"`
 	Scope  []string          `json:"scope,omitempty"`
 	Env    map[string]string `json:"env,omitempty"`
-}
-
-// PackFileContext builds a FileContext from a local repo path. If the path is
-// a git repo, branch + commit are captured so a full snapshot can be
-// reconstructed or fetched elsewhere.
-func PackFileContext(ctx context.Context, repoPath string, scope []string) (*FileContext, error) {
-	fc := &FileContext{Type: "file", Scope: scope, Env: map[string]string{}}
-	if repoPath == "" {
-		return fc, nil
-	}
-	abs, err := filepath.Abs(repoPath)
-	if err != nil {
-		return fc, err
-	}
-	fc.Repo = abs
-	fc.Branch = gitOut(ctx, abs, "rev-parse", "--abbrev-ref", "HEAD")
-	fc.Commit = gitOut(ctx, abs, "rev-parse", "HEAD")
-	return fc, nil
 }
 
 // Hash returns a reproducible SHA-256 of the context (excluding volatile
@@ -61,15 +39,4 @@ func (fc *FileContext) Hash() string {
 		fmt.Fprintf(h, "env:%s=%s\n", k, fc.Env[k])
 	}
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// gitOut runs a git command and returns trimmed stdout, or "" on failure.
-func gitOut(ctx context.Context, dir string, args ...string) string {
-	cmd := executil.CommandContext(ctx, "git", args...)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }

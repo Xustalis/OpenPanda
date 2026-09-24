@@ -220,7 +220,7 @@ if [ -f "$WORK/checksums.txt" ]; then
 fi
 
 # Unpack: the archive is a single top-level `openpanda/` directory holding
-# bin/panda + adapters/*.py + example configs.
+# bin/panda + adapters/*.py + extensions/voice/*.py + example configs.
 mkdir -p "$PREFIX"
 tar -xzf "$WORK/$ARCHIVE" -C "$PREFIX" --strip-components=1
 [ -x "$BINDIR/panda" ] || die "安装包缺少可执行的 $BINDIR/panda"

@@ -904,13 +904,17 @@ func parseDelegateRequest(stdout string) (delegateRequest, string, bool) {
 // not kill the child; it completes detached and its result still lands on
 // this node's copy and relays upstream by the chain.
 func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateRequest) (string, error) {
+	// Authorized is deliberately NOT inherited: the user's consent covered the
+	// parent task they were shown, not an arbitrary sub-operation the agent
+	// authors via an output marker. A tier-2 child must earn its own approval —
+	// it parks in review and the user decides in the foreground — so an agent
+	// cannot launder consent (or a fresh AuthHops budget) through PANDA_DELEGATE.
 	in := TaskInput{
 		Title:         dr.Title,
 		Intent:        dr.Intent,
 		Requires:      dr.Requires,
 		PreferredNode: dr.Node,
 		Project:       parent.Project,
-		Authorized:    parent.Authorized,
 		Transport:     parent.Transport,
 		DeadlineUnix:  parent.DeadlineUnix,
 		UserLocale:    parent.GetUserLocale(),

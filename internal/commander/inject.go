@@ -183,11 +183,6 @@ func EffectiveBaseURL(model config.ModelConfig) string {
 	return effectiveBaseURL(model)
 }
 
-// EffectiveModelName returns the model name to use for injection.
-func EffectiveModelName(model config.ModelConfig) string {
-	return effectiveModelName(model)
-}
-
 // homeDir is a test seam over os.UserHomeDir so credential-file probes can be
 // pointed at a temp dir.
 var homeDir = os.UserHomeDir
@@ -222,11 +217,26 @@ func probeAgentCredentials(adapter string) (found bool, source string) {
 			if err != nil || st.Size() == 0 {
 				continue
 			}
+			// A dotenv file of comments and placeholder lines is not
+			// credentials; one real KEY=value assignment is.
+			if isDotenvFile(rel) {
+				if !dotenvFileHasAssignment(p) {
+					continue
+				}
+				return true, "config file ~/" + rel
+			}
 			// A file with declared field requirements counts only when one
-			// of those JSON fields is actually set: Claude Code's state file
-			// exists from first run, logged in or not.
+			// of those fields is actually set: Claude Code's state file
+			// exists from first run, logged in or not; dsh's credentials
+			// file exists with an empty refs block.
 			if fields := k.CredentialFileFields[rel]; len(fields) > 0 {
-				if !jsonFileHasAnyField(p, fields) {
+				ok := false
+				if isYAMLFile(rel) {
+					ok = yamlFileHasAnyField(p, fields)
+				} else {
+					ok = jsonFileHasAnyField(p, fields)
+				}
+				if !ok {
 					continue
 				}
 			}
@@ -234,6 +244,130 @@ func probeAgentCredentials(adapter string) (found bool, source string) {
 		}
 	}
 	return false, ""
+}
+
+// isDotenvFile reports whether rel names a dotenv-style file
+// (.env, .env.local, config.env).
+func isDotenvFile(rel string) bool {
+	base := filepath.Base(rel)
+	return base == ".env" || strings.HasPrefix(base, ".env.") ||
+		strings.HasSuffix(base, ".env")
+}
+
+// isYAMLFile reports whether rel names a YAML file.
+func isYAMLFile(rel string) bool {
+	return strings.HasSuffix(rel, ".yaml") || strings.HasSuffix(rel, ".yml")
+}
+
+// dotenvFileHasAssignment reports whether a dotenv file carries at least one
+// real KEY=value assignment — comments, blank lines and empty values do not
+// count, so a template shipped with placeholders only is not "credentials".
+func dotenvFileHasAssignment(path string) bool {
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(blob), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		key, val, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(key) == "" {
+			continue
+		}
+		if v := strings.Trim(strings.TrimSpace(val), `"'`); v != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// yamlFileHasAnyField reports whether a YAML file carries at least one of
+// fields (dotted paths, e.g. "refs" or "model.default") as a non-empty
+// scalar or a mapping/sequence with entries — the same contract
+// jsonFileHasAnyField gives JSON manifests, for YAML-shaped stores like
+// dsh's .credentials.yaml.
+func yamlFileHasAnyField(path string, fields []string) bool {
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	lines := strings.Split(string(blob), "\n")
+	for _, f := range fields {
+		if yamlFieldNonEmpty(lines, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// yamlFieldNonEmpty resolves a dotted path by indentation — a cheap scan
+// sufficient for harness config shapes, no YAML dependency needed.
+func yamlFieldNonEmpty(lines []string, field string) bool {
+	parts := strings.Split(field, ".")
+	start, parentIndent := 0, -1
+	for depth, part := range parts {
+		found := false
+		for i := start; i < len(lines); i++ {
+			ind, key, val, ok := yamlKV(lines[i])
+			if !ok {
+				continue
+			}
+			if parentIndent >= 0 && ind <= parentIndent {
+				return false // dedented out of the parent block
+			}
+			if key != part {
+				continue
+			}
+			if depth == len(parts)-1 {
+				return yamlValueNonEmpty(lines, i, ind, val)
+			}
+			start, parentIndent, found = i+1, ind, true
+			break
+		}
+		if !found {
+			return false
+		}
+	}
+	return false
+}
+
+// yamlKV splits one YAML line into (indent, key, value); comments, blanks
+// and sequence items are skipped.
+func yamlKV(line string) (indent int, key, val string, ok bool) {
+	t := strings.TrimSpace(line)
+	if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, "-") {
+		return 0, "", "", false
+	}
+	k, v, found := strings.Cut(t, ":")
+	if !found || strings.TrimSpace(k) == "" {
+		return 0, "", "", false
+	}
+	return len(line) - len(strings.TrimLeft(line, " ")),
+		strings.TrimSpace(k), strings.TrimSpace(v), true
+}
+
+// yamlValueNonEmpty reports whether the value at line idx is a non-empty
+// scalar, or — when the scalar is empty — a nested block follows (any
+// deeper-indented content line counts, sequence items included).
+func yamlValueNonEmpty(lines []string, idx, ind int, val string) bool {
+	if val != "" {
+		switch strings.Trim(val, `"'`) {
+		case "", "{}", "[]", "null", "~":
+			return false
+		}
+		return true
+	}
+	for i := idx + 1; i < len(lines); i++ {
+		t := strings.TrimSpace(lines[i])
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		return len(lines[i])-len(strings.TrimLeft(lines[i], " ")) > ind
+	}
+	return false
 }
 
 // jsonFileHasAnyField reports whether the JSON object in path carries at
