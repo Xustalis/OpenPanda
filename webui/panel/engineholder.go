@@ -6,6 +6,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 )
 
 // EngineHolder owns the ask engine's lifecycle so the panel can (re)build it
@@ -28,6 +29,12 @@ type EngineHolder struct {
 
 	cfg  *config.Config
 	opts askengine.Options
+
+	// onReview is the "a task is waiting for the user" hook. The holder keeps
+	// it so every engine it builds — including one hot-loaded after the first
+	// model is saved — announces pending approvals. Losing it on a rebuild
+	// would leave a parked task waiting with nobody told.
+	onReview func(core.Task)
 }
 
 // NewEngineHolder builds the holder and, when a model endpoint is already
@@ -43,6 +50,8 @@ func NewEngineHolder(cfg *config.Config, opts askengine.Options) (*EngineHolder,
 	if err != nil {
 		return nil, err
 	}
+	// The review hook is installed separately by SetOnReview, which the caller
+	// invokes after construction (see cmd/panda/web.go).
 	h.engine = eng
 	return h, nil
 }
@@ -53,6 +62,20 @@ func (h *EngineHolder) Engine() *askengine.Engine {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.engine
+}
+
+// SetOnReview installs the pending-approval hook on the current engine and on
+// every engine the holder builds later. The callback only announces the
+// approval (a push notification, a log line); the decision itself stays with
+// the user in the console.
+func (h *EngineHolder) SetOnReview(fn func(core.Task)) {
+	h.mu.Lock()
+	h.onReview = fn
+	eng := h.engine
+	h.mu.Unlock()
+	if eng != nil {
+		eng.SetOnReview(fn)
+	}
 }
 
 // Reload rebuilds the engine from the holder's live config — the model
@@ -82,7 +105,11 @@ func (h *EngineHolder) Reload() error {
 	h.mu.Lock()
 	old := h.engine
 	h.engine = eng
+	fn := h.onReview
 	h.mu.Unlock()
+	if fn != nil {
+		eng.SetOnReview(fn)
+	}
 	if old != nil {
 		old.Close()
 	}

@@ -258,12 +258,6 @@ type AccessDenied struct {
 
 func (e *AccessDenied) Error() string { return "release lookup: access denied — " + e.Hint }
 
-// Latest queries the GitHub "latest" release for repo. It defaults to stable
-// releases.
-func Latest(ctx context.Context, repo string) (Release, error) {
-	return FindLatest(ctx, repo, false, "")
-}
-
 var githubAPIBase = "https://api.github.com"
 
 // SetAPIBaseForTest overrides the GitHub API base URL for testing and returns

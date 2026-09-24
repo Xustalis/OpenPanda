@@ -32,6 +32,15 @@ type askResult struct {
 	Stdout    string `json:"stdout,omitempty"`
 	Stderr    string `json:"stderr,omitempty"`
 	ExitCode  int    `json:"exit_code,omitempty"`
+	// Execution attribution: which agent harness ran the task, on which node,
+	// with which model (and whether panda injected it), plus the entry model
+	// that served the ask's own classify/answer calls. The console renders
+	// them as subdued context so who did the work is never implicit.
+	Agent      string `json:"agent,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Injected   bool   `json:"injected,omitempty"`
+	Executor   string `json:"executor,omitempty"`
+	EntryModel string `json:"entry_model,omitempty"`
 	// Report is the LLM-generated summary of the task outcome. It is filled
 	// by SummarizeResult after every inline task so the web UI shows a
 	// human-readable summary instead of raw stdout/stderr.
@@ -49,18 +58,23 @@ type askResult struct {
 // session-ask handlers cannot drift on which fields a plan carries.
 func planResultOf(out *askengine.Result) askResult {
 	res := askResult{
-		Kind:      out.Kind,
-		Answer:    out.Answer,
-		Thought:   out.Thought,
-		TaskID:    out.TaskID,
-		TaskState: out.TaskState,
-		OK:        out.OK,
-		Stdout:    out.Stdout,
-		Stderr:    out.Stderr,
-		ExitCode:  out.ExitCode,
-		Report:    out.Report,
-		PlanID:    out.PlanID,
-		PlanGoal:  out.PlanGoal,
+		Kind:       out.Kind,
+		Answer:     out.Answer,
+		Thought:    out.Thought,
+		TaskID:     out.TaskID,
+		TaskState:  out.TaskState,
+		OK:         out.OK,
+		Stdout:     out.Stdout,
+		Stderr:     out.Stderr,
+		ExitCode:   out.ExitCode,
+		Agent:      out.Agent,
+		Model:      out.Model,
+		Injected:   out.Injected,
+		Executor:   out.Executor,
+		EntryModel: out.EntryModel,
+		Report:     out.Report,
+		PlanID:     out.PlanID,
+		PlanGoal:   out.PlanGoal,
 	}
 	for _, t := range out.PlanStages {
 		res.PlanStages = append(res.PlanStages, t.StageID)

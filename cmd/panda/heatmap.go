@@ -325,7 +325,7 @@ func (r *repl) cmdHeatmap(arg string) {
 // one-shot panel command, so scripts and non-interactive shells get it too.
 func runHeatmap(args []string) {
 	fs := flag.NewFlagSet("heatmap", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	weeks := fs.Int("weeks", 0, "weeks of history to show (default: one year)")
 	fs.Parse(args)
 

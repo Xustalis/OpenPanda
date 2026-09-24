@@ -106,9 +106,3 @@ func (e *Executor) Run(ctx context.Context, command string, args ...string) Nati
 	}
 	return res
 }
-
-// LookPath reports whether an executable exists on PATH.
-func LookPath(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
-}

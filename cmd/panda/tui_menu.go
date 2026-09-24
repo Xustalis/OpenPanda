@@ -183,7 +183,7 @@ func argItemDesc(loc i18n.Locale, cmd, cand string) string {
 		if p, ok := providers.Lookup(cand); ok {
 			return p.Label + " · " + i18n.Tf(loc, "tui.menu.modelDefault", "model", p.DefaultModel)
 		}
-		if cfg, _ := config.Load(""); cfg != nil {
+		if cfg, _ := config.Load(cliConfigPath); cfg != nil {
 			for _, m := range cfg.Models {
 				if m.Alias() == cand {
 					desc := effectiveModel(m)

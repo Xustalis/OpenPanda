@@ -35,18 +35,6 @@ func WithAgentTimeout(ctx context.Context, d time.Duration) context.Context {
 	return context.WithValue(ctx, timeoutKey{}, d)
 }
 
-// silenceTimeoutKey is the context key carrying a per-task silence timeout override.
-type silenceTimeoutKey struct{}
-
-// WithSilenceTimeout attaches a progress silence limit to the context; runAdapterProcess
-// aborts if no progress or output is received for this duration.
-func WithSilenceTimeout(ctx context.Context, d time.Duration) context.Context {
-	if d <= 0 {
-		return ctx
-	}
-	return context.WithValue(ctx, silenceTimeoutKey{}, d)
-}
-
 // progressKey is the context key carrying the live progress sink from the
 // orchestration layer (core's execute → RecordEvent) down to the adapter
 // process reader, without widening every execution-path signature.
@@ -488,9 +476,6 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		timeout = int(d / time.Second)
 	}
 	silenceLimit := silenceTimeout
-	if d, ok := ctx.Value(silenceTimeoutKey{}).(time.Duration); ok && d > 0 {
-		silenceLimit = d
-	}
 
 	req := AdapterRequest{Prompt: prompt, TimeoutS: timeout, CWD: cwd}
 	if rid, ok := ctx.Value(resumeKey{}).(string); ok {

@@ -484,19 +484,6 @@ func hasAnyArg(flags ...string) func(args []string) bool {
 	}
 }
 
-// hasAnyArgPrefix reports whether any argument starts with one of the given
-// prefixes (matching both "--flag" and "--flag=value" forms).
-func hasAnyArgPrefix(args []string, prefixes ...string) bool {
-	for _, a := range args {
-		for _, p := range prefixes {
-			if a == p || strings.HasPrefix(a, p+"=") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // firstPositional returns the first argument that is not a flag (and not a
 // value of git's global value-flags like -C/-c), which for git is the
 // subcommand.

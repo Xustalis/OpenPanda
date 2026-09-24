@@ -103,6 +103,16 @@ type Engine struct {
 	schedCtx    context.Context
 	schedCancel context.CancelFunc
 
+	// onReview is the embedder's "a task needs a human" hook (the panel's push
+	// notification). It lives on the engine rather than on one store instance
+	// because the review transition happens inside the scheduler core's own
+	// store: a callback installed on a separately constructed TaskStore over
+	// the same database would never fire. Holding it here also re-attaches it
+	// when the scheduler is rebuilt (card reload), so a pending approval keeps
+	// reaching the user.
+	onReviewMu sync.RWMutex
+	onReview   func(core.Task)
+
 	// project is the ambient project: the one the user entered, which every task
 	// this engine submits belongs to unless the classifier named a different one.
 	// It is a field rather than a per-call argument because "which project am I
@@ -270,6 +280,22 @@ func (e *Engine) TaskStore() *core.TaskStore {
 	return core.NewTaskStore(e.db, e.logger)
 }
 
+// SetOnReview installs the callback fired when a task enters review — i.e. when
+// work is waiting on a human decision. It is attached to the store the scheduler
+// core actually transitions tasks on (and re-attached across card reloads), so
+// an embedder's notification path cannot silently miss a pending approval. The
+// callback must not block; it may not decide the approval, only announce it.
+func (e *Engine) SetOnReview(fn func(core.Task)) {
+	e.onReviewMu.Lock()
+	e.onReview = fn
+	e.onReviewMu.Unlock()
+	e.schedMu.Lock()
+	defer e.schedMu.Unlock()
+	if e.sched != nil && e.sched.TaskStore() != nil {
+		e.sched.TaskStore().SetOnReview(fn)
+	}
+}
+
 // SetLocale updates the active user locale for this engine.
 func (e *Engine) SetLocale(loc i18n.Locale) {
 	if loc != "" {
@@ -308,6 +334,15 @@ type Result struct {
 	Agent     string
 	Model     string
 	Injected  bool
+	// Executor is the node that actually ran the task — this node's id for a
+	// local run, the peer's id for a delegated one. Empty when the result
+	// never reached an executor (route miss, early failure).
+	Executor string
+	// EntryModel is the model that served this ask's entry calls (triage,
+	// classify, answer stream) — the configured primary, or the fallback the
+	// circuit breaker routed to mid-ask. UI surfaces render it next to the
+	// execution attribution so "which model did what" is never a guess.
+	EntryModel string
 	// Report is the LLM-generated summary of the task outcome. It is filled
 	// by SummarizeResult after every inline task (success or failure) so the
 	// user sees a human-readable summary instead of raw stdout/stderr. A
@@ -625,6 +660,14 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	e.schedCtx = schedCtx
 	e.schedCancel = cancel
 	e.cardPath = cardPath
+	// Re-arm the review hook on the new core's store: the notification that a
+	// task is waiting for the user must not be lost to a card reload.
+	e.onReviewMu.RLock()
+	fn := e.onReview
+	e.onReviewMu.RUnlock()
+	if fn != nil && sched.TaskStore() != nil {
+		sched.TaskStore().SetOnReview(fn)
+	}
 
 	// Clean up stale leases from interrupted runs so tasks aren't stranded in running.
 	if sched.TaskStore() != nil {
@@ -639,7 +682,16 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// engines submit inline and must not unexpectedly drain persisted work.
 	if e.queueTasks {
 		sched.StartQueueScheduler(schedCtx)
+		// A queue engine executes tasks off the shared store, so it also owns
+		// the task-lifecycle sweeps: without them a waiting_context park never
+		// times out, an orphaned forward is never rescued, and an expired
+		// lease is never enforced — the task would stall with nobody told.
+		go sched.RunTaskMonitor(schedCtx)
 	}
+	// Every engine reconciles its own executions against the store: a task
+	// cancelled or failed by another process must stop here too, not run on
+	// as a zombie the user believes is still working.
+	go sched.RunReconcile(schedCtx)
 
 	if e.asyncPeers {
 		for _, peer := range e.cfg.Network.Peers {
@@ -885,6 +937,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			res.InputTokens, res.OutputTokens = d.InputTokens, d.OutputTokens
 			res.Latency = time.Since(askStart)
 			res.Cost = client.EstimateCost(d.InputTokens, d.OutputTokens)
+			res.EntryModel = client.ModelName()
 			if fallbackUsed != "" && res.Note == "" {
 				res.Note = fmt.Sprintf("主模型不可用，已自动切换至备用模型: %s", fallbackUsed)
 			}
@@ -987,7 +1040,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	}
 	// The tool gate shares the task gate's consent semantics: "never"
 	// auto-consents, an explicit session grant (--authorize / /authorize /
-	// the panel's authorize field) satisfies every mode.
+	// the panel's authorize field) satisfies on-request, and "always"
+	// withholds consent at submission no matter the grant — every tier-2
+	// operation is decided per-action in the foreground.
 	toolAuthorized := gateAuthorized(e.cfg.Approval.NormalizedMode(), authorize)
 	const maxRounds = 6
 	// maxTasks bounds how many sub-agent rounds one ask may run. A task round
@@ -1196,7 +1251,7 @@ rounds:
 				// Execute against the same registry snapshot classification
 				// saw: a mid-ask SetMCPCommand swap would otherwise make the
 				// model's tool call hit a registry that no longer knows it.
-				results[i] = executeTool(ctx, reg, call, toolAuthorized, effectiveLocale)
+				results[i] = executeTool(ctx, reg, call, toolAuthorized, e.cfg.Approval.NormalizedMode(), effectiveLocale)
 				toolDigest = append(toolDigest, call.Tool+": "+results[i])
 				for _, d := range taskCapture.takeAll() {
 					dispatched = append(dispatched, d)
@@ -1429,17 +1484,22 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 //   - on-request  — the default; consent is withheld until the user approves
 //     at the inline gate (a tier-2 task parks in review otherwise), unless an
 //     explicit session grant (--authorize / /authorize on) already consented.
-//   - always      — same as on-request at this layer. The extra "confirm every
-//     run" strictness is a UI concern enforced by the caller (it does not cache
-//     a prior yes across turns); an explicit grant still satisfies the gate.
-//
-// A session grant (sessionAuthorized: --authorize / /authorize on) is an
-// explicit standing consent and satisfies every mode.
+//   - always      — consent is always withheld at submission: every tier-2
+//     task parks in review and is decided per-task in the foreground. A
+//     standing session grant must not silently satisfy the gate — "每次都需
+//     审批" means the approval happens after the task exists and says what it
+//     will do, not as a flag covering whatever the session produces. The
+//     approval itself (ResumeApproved) carries its own consent and does not
+//     pass through this function.
 func gateAuthorized(mode string, sessionAuthorized bool) bool {
-	if mode == config.ApprovalModeNever {
+	switch mode {
+	case config.ApprovalModeNever:
 		return true
+	case config.ApprovalModeAlways:
+		return false
+	default:
+		return sessionAuthorized
 	}
-	return sessionAuthorized
 }
 
 // submitTask executes a classified task spec through the scheduler core and
@@ -1480,10 +1540,11 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		in.RepoPath = workDir
 	}
 	// Approval mode is the real tier-2 gate (design §16): "never" auto-consents
-	// so an irreversible task runs as classified; "on-request"/"always" withhold
-	// consent until the user approves at the inline gate below. A session-level
-	// authorization (/authorize on, --authorize) is an explicit standing consent
-	// and always satisfies the gate regardless of mode.
+	// so an irreversible task runs as classified; "on-request" withholds consent
+	// until the user approves at the inline gate below, with a session-level
+	// authorization (/authorize on, --authorize) as the standing consent it
+	// honors. "always" withholds regardless: every tier-2 task parks in review
+	// and is decided per-task in the foreground.
 	authorized = gateAuthorized(e.cfg.Approval.NormalizedMode(), authorized)
 	in.Authorized = authorized
 	in.WorkDir = workDir
@@ -1545,6 +1606,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		Agent:     result.Agent,
 		Model:     result.Model,
 		Injected:  result.Injected,
+		Executor:  result.Executor,
 	}
 	// Inline approval closure: a tier-2 task with no standing consent parks in
 	// review with an authorization-refusal reason. Turn that dead end into a
@@ -1693,6 +1755,7 @@ func resultFromTask(task core.Task, result bus.TaskResultPayload) *Result {
 		Agent:     result.Agent,
 		Model:     result.Model,
 		Injected:  result.Injected,
+		Executor:  result.Executor,
 	}
 }
 

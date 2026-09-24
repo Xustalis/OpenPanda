@@ -33,8 +33,8 @@ import (
 
 func runInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to write config.yaml (default: user config dir)")
-	cardPath := fs.String("card", "", "path to write capabilities.yaml (default: <config dir>/capabilities.yaml)")
+	configPath := fs.String("config", cliConfigPath, "path to write config.yaml (default: user config dir)")
+	cardPath := fs.String("card", cliCardPath, "path to write capabilities.yaml (default: <config dir>/capabilities.yaml)")
 	defaultsMode := fs.Bool("defaults", false,
 		"zero prompts: take every detected/default value; the model section is baked in from OPENPANDA_MODEL_API_KEY / OPENPANDA_MODEL when set, otherwise left for the web settings page")
 	nonInteractive := fs.Bool("non-interactive", false,

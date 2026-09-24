@@ -10,8 +10,9 @@ import (
 // submitTask relies on (the single gate for irreversible tasks):
 //   - never       auto-consents regardless of any session grant;
 //   - on-request  withholds consent until an explicit grant arrives;
-//   - always      behaves like on-request at this layer (the "confirm every
-//     run" strictness is a UI concern), and an explicit grant still passes.
+//   - always      withholds consent at submission in every case: each tier-2
+//     task parks in review and is decided per-task in the foreground — a
+//     standing session grant never pre-consents for it.
 //
 // The empty mode must normalize to on-request behavior via NormalizedMode so a
 // misconfigured node fails closed, never open.
@@ -27,7 +28,7 @@ func TestGateAuthorizedModes(t *testing.T) {
 		{"on-request withholds without a grant", config.ApprovalModeOnRequest, false, false},
 		{"on-request honors an explicit grant", config.ApprovalModeOnRequest, true, true},
 		{"always withholds without a grant", config.ApprovalModeAlways, false, false},
-		{"always honors an explicit grant", config.ApprovalModeAlways, true, true},
+		{"always ignores a session grant", config.ApprovalModeAlways, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

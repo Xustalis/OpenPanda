@@ -19,6 +19,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/doctor"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/install"
 )
@@ -64,6 +65,28 @@ func runInstall(args []string) {
 		}
 	}
 
+	// Voice sidecars ride the same layout: extensions/voice sits beside
+	// adapters/ in a packaged install, and the runtime resolves it through the
+	// same probe order (see entry.VoiceDir).
+	if vd := findVoiceDir(); vd != "" {
+		targetDirs := []string{
+			filepath.Join(filepath.Dir(dir), "extensions", "voice"),
+			filepath.Join(filepath.Dir(dir), "share", "openpanda", "extensions", "voice"),
+		}
+		if ucd, err := os.UserConfigDir(); err == nil && ucd != "" {
+			targetDirs = append(targetDirs, filepath.Join(ucd, "openpanda", "extensions", "voice"))
+		}
+		for _, td := range targetDirs {
+			if !samePath(vd, td) {
+				if err := copyAdaptersDir(vd, td); err != nil {
+					fmt.Fprintln(os.Stderr, "install: copy voice sidecars: "+err.Error())
+				} else {
+					fmt.Println(i18n.Tf(loc, "install.copied", "path", td))
+				}
+			}
+		}
+	}
+
 	// Register on PATH unless suppressed. Idempotent on both platforms.
 	if !*noPath {
 		if install.InPATH(dir) {
@@ -98,7 +121,7 @@ func runInstall(args []string) {
 // taking the process down with it.
 func runDoctor(args []string) {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	fs.Parse(args)
 
 	loc := i18n.Detect()
@@ -136,6 +159,17 @@ func doctorReport(loc i18n.Locale, configPath string, out io.Writer) int {
 // internal/doctor so `panda doctor` and /api/doctor probe the same places.
 func findAdaptersDir() string {
 	return doctor.AdaptersDir()
+}
+
+// findVoiceDir locates the extensions/voice sidecar directory through the
+// same resolution the voice pipeline uses at runtime (env override → cwd and
+// ancestors → beside the executable → user config dir).
+func findVoiceDir() string {
+	dir := entry.VoiceDir()
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return ""
+	}
+	return dir
 }
 
 func copyAdaptersDir(src, dst string) error {

@@ -10,28 +10,35 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/skills"
 )
 
-// TestSplitConfig guards the skill subcommand's --config parsing: the flag may
-// appear anywhere, and bare/flag-only invocations must not panic (the former
-// `args[1:]` in runSkill did).
-func TestSplitConfig(t *testing.T) {
+// TestExtractGlobalFlags guards the global --config/--card/--mcp/--json
+// handling: the flags may appear anywhere in argv (both dash spellings), and
+// bare/flag-only invocations must not panic or swallow positionals.
+func TestExtractGlobalFlags(t *testing.T) {
 	cases := []struct {
 		name       string
 		args       []string
 		configPath string
 		positional []string
 	}{
-		{name: "bare", args: nil, configPath: "", positional: nil},
+		{name: "bare", args: nil, configPath: "", positional: []string{}},
 		{name: "list only", args: []string{"list"}, configPath: "", positional: []string{"list"}},
-		{name: "config first", args: []string{"--config", "c.yaml"}, configPath: "c.yaml", positional: nil},
+		{name: "config first", args: []string{"--config", "c.yaml"}, configPath: "c.yaml", positional: []string{}},
 		{name: "config last", args: []string{"list", "--config", "c.yaml"}, configPath: "c.yaml", positional: []string{"list"}},
 		{name: "config equals", args: []string{"--config=c.yaml", "list"}, configPath: "c.yaml", positional: []string{"list"}},
+		{name: "single dash", args: []string{"list", "-config", "c.yaml"}, configPath: "c.yaml", positional: []string{"list"}},
+		{name: "single dash equals", args: []string{"-config=c.yaml", "list"}, configPath: "c.yaml", positional: []string{"list"}},
 		{name: "config between positionals", args: []string{"approve", "--config", "c.yaml", "foo"}, configPath: "c.yaml", positional: []string{"approve", "foo"}},
+		{name: "config without value stays", args: []string{"list", "-config"}, configPath: "", positional: []string{"list", "-config"}},
+		{name: "non-global flag passes", args: []string{"list", "--force"}, configPath: "", positional: []string{"list", "--force"}},
+		{name: "after dashdash untouched", args: []string{"list", "--", "-config", "c.yaml"}, configPath: "", positional: []string{"list", "--", "-config", "c.yaml"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			path, positional := splitConfig(tc.args)
-			if path != tc.configPath {
-				t.Fatalf("configPath = %q, want %q", path, tc.configPath)
+			cliConfigPath, cliCardPath, cliMCP = "", "", ""
+			jsonOutput = false
+			positional := extractGlobalFlags(tc.args)
+			if cliConfigPath != tc.configPath {
+				t.Fatalf("configPath = %q, want %q", cliConfigPath, tc.configPath)
 			}
 			if !reflect.DeepEqual(positional, tc.positional) {
 				t.Fatalf("positional = %v, want %v", positional, tc.positional)

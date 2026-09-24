@@ -97,10 +97,10 @@ func cardSubcommand(args []string) (string, []string) {
 	if subIdx >= 0 {
 		rest = append(append([]string{}, args[:subIdx]...), args[subIdx+1:]...)
 	}
-	// cardMutDashFlags (a superset of commonValueFlags) so the structured
+	// cardMutValueFlags (a superset of commonValueFlags) so the structured
 	// edits' value-carrying flags — "--command go" et al. — keep their pair
 	// through the hoist instead of stranding the value among the positionals.
-	return sub, reorderFlags(rest, cardMutDashFlags)
+	return sub, reorderFlags(rest, cardMutValueFlags)
 }
 
 // cardValueFlags are the value-carrying flags `panda card` accepts, keyed by
@@ -118,7 +118,7 @@ func cardTargetPath(explicit string) string {
 	if p := defaultCardPath(); p != "" {
 		return p
 	}
-	if cfgPath := config.ResolvePath(""); cfgPath != "" {
+	if cfgPath := config.ResolvePath(cliConfigPath); cfgPath != "" {
 		return filepath.Join(filepath.Dir(cfgPath), "capabilities.yaml")
 	}
 	return "capabilities.yaml"
@@ -130,7 +130,7 @@ func cardTargetPath(explicit string) string {
 // first question a multi-node setup raises.
 func runCardShow(args []string) {
 	fs := flag.NewFlagSet("card show", flag.ExitOnError)
-	cardFlag := fs.String("card", "", "path to capabilities.yaml (default: discovered)")
+	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	fs.Parse(args)
 
 	path := cardTargetPath(*cardFlag)
@@ -189,7 +189,7 @@ func nativeIDs(c ledger.Card) []string {
 // trusts and the user has to be able to look at them first.
 func runCardRescan(args []string) {
 	fs := flag.NewFlagSet("card rescan", flag.ExitOnError)
-	cardFlag := fs.String("card", "", "path to capabilities.yaml (default: discovered)")
+	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	write := fs.Bool("write", false, "apply the merge (a .bak of the old card is kept)")
 	fs.Parse(args)
 
@@ -264,7 +264,7 @@ func underlyingErr(err error) error {
 // place would leave a half-saved file that the daemon may read at any moment.
 func runCardEdit(args []string) {
 	fs := flag.NewFlagSet("card edit", flag.ExitOnError)
-	cardFlag := fs.String("card", "", "path to capabilities.yaml (default: discovered)")
+	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	fs.Parse(args)
 
 	path := cardTargetPath(*cardFlag)
@@ -344,8 +344,8 @@ func openEditor(path string) error {
 // on a headless node and inside a provisioning script.
 func runCardSet(args []string) {
 	fs := flag.NewFlagSet("card set", flag.ExitOnError)
-	cardFlag := fs.String("card", "", "path to capabilities.yaml (default: discovered)")
-	fs.Parse(args)
+	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
+	fs.Parse(reorderFlags(args, cardValueFlags))
 
 	assignments := fs.Args()
 	if len(assignments) == 0 {
@@ -572,11 +572,11 @@ func firstNonEmpty(vals ...string) string {
 // real work to it.
 func runCardInvoke(args []string) {
 	fs := flag.NewFlagSet("card invoke", flag.ExitOnError)
-	cardFlag := fs.String("card", "", "path to capabilities.yaml (default: discovered)")
+	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	intentFlag := fs.String("intent", "", "text substituted into {intent} placeholders")
 	authFlag := fs.Bool("authorize", false, "consent to a tier-2 (irreversible) actuator command")
 	dryFlag := fs.Bool("dry-run", false, "print the resolved argv without executing")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(args, map[string]bool{"card": true, "config": true, "intent": true}))
 	pos := fs.Args()
 	if len(pos) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: panda card invoke <actuator-id> [action] [name=value ...] [--intent text] [--authorize] [--dry-run]")

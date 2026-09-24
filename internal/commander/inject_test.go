@@ -16,7 +16,15 @@ import (
 // an empty temp dir so no real ~/.codex or ~/.claude interferes.
 func cleanCredentialEnv(t *testing.T) string {
 	t.Helper()
-	for _, k := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY"} {
+	for _, k := range []string{
+		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY",
+		// Endpoint/model overrides feed the probe target too — a developer
+		// shell that exports them would otherwise leak into the assertions.
+		"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "GROK_BASE_URL", "DEEPSEEK_BASE_URL",
+		"ANTHROPIC_MODEL", "OPENAI_MODEL", "GROK_MODEL", "DEEPSEEK_MODEL",
+		"XAI_API_KEY", "GROK_API_KEY", "DEEPSEEK_API_KEY",
+		"OPENCLAW_API_KEY", "HERMES_API_KEY", "OPENCODE_MODEL",
+	} {
 		t.Setenv(k, "")
 	}
 	home := t.TempDir()

@@ -87,11 +87,6 @@ func (t *termSession) recordHistory(line string) {
 	_ = os.WriteFile(t.historyPath, encodeHistoryFile(t.history), 0o600)
 }
 
-// runeWidth approximates the terminal column count of r. The table lives in
-// internal/cliui (the status line needs the same numbers); this stays as the
-// editor's local name for it.
-func runeWidth(r rune) int { return cliui.RuneWidth(r) }
-
 // displayWidth sums the column count of s.
 func displayWidth(s string) int { return cliui.DisplayWidth(s) }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -48,8 +49,13 @@ type Router struct {
 	// preferred lists agent names that receive a score bonus during routing.
 	preferred []string
 	// probeAgent reports whether an agent's CLI is usable on this machine.
-	// Injectable for tests; production probes PATH (see defaultAgentProbe).
+	// Injectable for tests; production runs AgentDispatchable (static
+	// viability plus the provider-endpoint reachability probe).
 	probeAgent func(name string, ag ledger.Agent) bool
+	// endpointProbe reports whether the resolved model endpoint answers a
+	// minimal request within the probe budget. Injectable for tests;
+	// production is modelProbe.
+	endpointProbe func(spec ProbeSpec) ProbeVerdict
 	// runAdapter is injectable for tests; production uses RunAgent.
 	runAdapter func(ctx context.Context, adapter string, prompt string, cwd string) AgentResult
 	// runProcess runs the adapter process with injected environment.
@@ -72,10 +78,12 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 	}
 	r.runAdapter = r.runAdapterDefault
 	r.runProcess = runAdapterProcess
-	// The production probe is credential-aware (AgentViable), not just a
-	// PATH check: routing to an installed-but-locked-out CLI guarantees a
-	// runtime failure after a long hang.
-	r.probeAgent = r.AgentViable
+	r.endpointProbe = modelProbe
+	// The production probe is credential- AND connectivity-aware
+	// (AgentDispatchable), not just a PATH check: routing to an
+	// installed-but-locked-out CLI, or one whose model endpoint is
+	// unreachable, guarantees a runtime failure after a long hang.
+	r.probeAgent = r.AgentDispatchable
 	return r
 }
 
@@ -123,6 +131,12 @@ func (r *Router) SetAdapterRunner(fn func(ctx context.Context, adapter, prompt, 
 // with a fake adapter runner normally pair it with an always-available probe.
 func (r *Router) SetAgentProber(fn func(name string, ag ledger.Agent) bool) {
 	r.probeAgent = fn
+}
+
+// SetEndpointProber overrides the model-endpoint reachability probe. Test
+// seam: unit tests must never depend on real network state.
+func (r *Router) SetEndpointProber(fn func(spec ProbeSpec) ProbeVerdict) {
+	r.endpointProbe = fn
 }
 
 // Card returns the router's underlying capability card.
@@ -525,7 +539,15 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 			continue
 		}
 		if !r.probeAgent(name, ag) {
-			unavailable = append(unavailable, name+" (cli unavailable)")
+			// Explain the skip in dispatch terms — "no model configured",
+			// "endpoint unreachable", "cli not found" — not a bare
+			// "unavailable", so the failure that eventually surfaces names
+			// the fix (configure a key, restore egress, install the CLI).
+			reason := "cli unavailable"
+			if _, why := r.agentUsable(name, ag); why != "" {
+				reason = why
+			}
+			unavailable = append(unavailable, name+" ("+reason+")")
 			continue
 		}
 		// The tools policy rides the context (the runAdapter seam's signature
@@ -813,4 +835,162 @@ func (r *Router) AgentViable(name string, ag ledger.Agent) bool {
 		return false
 	}
 	return r.model.APIKey != "" && supportsModelInjection(ag.Adapter, r.model)
+}
+
+// AgentDispatchable reports whether an agent is ready to receive a task right
+// now: statically viable (AgentViable) AND able to reach the model endpoint
+// its run would actually use. The second check is what catches the
+// "configured but cannot connect" case — a provider outage, a broken egress
+// route, a dead relay host — before the task blocks inside the adapter.
+func (r *Router) AgentDispatchable(name string, ag ledger.Agent) bool {
+	ok, _ := r.agentUsable(name, ag)
+	return ok
+}
+
+// agentUsable is the canonical dispatchability check, carrying the first
+// failure's reason so callers can explain a skipped candidate. The reason
+// list intentionally mirrors AgentViable's order — runtime/runtime, binary,
+// credentials/injection — then appends the live endpoint probe.
+func (r *Router) agentUsable(name string, ag ledger.Agent) (usable bool, reason string) {
+	if !pyexec.Available() {
+		return false, "no Python 3 interpreter"
+	}
+	if bin := agentBinary(name, ag); bin != "" {
+		if _, err := exec.LookPath(bin); err != nil {
+			return false, "cli " + bin + " not found on PATH"
+		}
+	}
+	k, known := agents.ByAdapter(ag.Adapter)
+	if !known {
+		// Unknown adapters keep the legacy "let the adapter try" behavior:
+		// their credential and endpoint contract is not in the registry.
+		return true, ""
+	}
+	if !k.SelfContainedModel {
+		if own, _ := probeAgentCredentials(ag.Adapter); !own {
+			switch {
+			case r.injectionModel == config.InjectionModelNever:
+				return false, "no model configured (no own credentials; injection.model=never)"
+			case r.model.APIKey == "":
+				return false, "no model configured (no own credentials; no panda model key)"
+			case !supportsModelInjection(ag.Adapter, r.model):
+				return false, "no model configured (no own credentials; injection unsupported for " + ag.Adapter + ")"
+			}
+		}
+	}
+	if spec := r.agentTarget(ag); spec.Endpoint != "" {
+		if v := r.endpointProbe(spec); !v.OK {
+			if v.Rejected {
+				return false, "model credentials/quota rejected by " + spec.Endpoint + " (" + v.Detail + ")"
+			}
+			reason := "model endpoint unreachable: " + spec.Endpoint
+			if v.Detail != "" {
+				reason += " (" + v.Detail + ")"
+			}
+			return false, reason
+		}
+	}
+	return true, ""
+}
+
+// agentEndpoint resolves the provider base URL the agent's run would
+// actually hit — kept for callers that only need the URL.
+func (r *Router) agentEndpoint(ag ledger.Agent) string {
+	return r.agentTarget(ag).Endpoint
+}
+
+// agentTarget resolves the model call the agent's run would actually make:
+// the injected endpoint+key when PANDA's model wins, the agent's own env
+// override when it set one (e.g. ANTHROPIC_BASE_URL), the base URL inside the
+// harness's own config file when it points at a relay or custom provider
+// (codex's config.toml, claude's settings.json, opencode's providers), else
+// the registry's provider default. An empty Endpoint means the endpoint
+// cannot be determined and the probe is skipped — never block an unknown
+// adapter on a guess.
+func (r *Router) agentTarget(ag ledger.Agent) ProbeSpec {
+	k, ok := agents.ByAdapter(ag.Adapter)
+	if !ok {
+		return ProbeSpec{}
+	}
+	apiType := config.APITypeOpenAI
+	if k.ModelEnv != nil && k.ModelEnv.APIType != "" {
+		apiType = k.ModelEnv.APIType
+	}
+	if dec := r.InjectionDecision(ag.Adapter); dec.Inject {
+		ep := dec.BaseURL
+		if ep == "" {
+			ep = effectiveBaseURL(r.model)
+		}
+		return ProbeSpec{
+			Endpoint: ep, APIType: apiType,
+			APIKey: r.model.APIKey, Model: dec.Model,
+			KeyDefinitive: true, // the injected key is exactly what the run sends
+		}
+	}
+	// The run would authenticate with whatever the env exposes — matching it
+	// makes the probe's 2xx mean what it says, and a definitive rejection
+	// means the run would fail identically.
+	var key, model string
+	keyDef := false
+	if k.ModelEnv != nil {
+		key = firstEnvValue(append([]string{k.ModelEnv.APIKey}, k.CredentialEnvVars...)...)
+		model = firstEnvValue(k.ModelEnv.Model)
+		keyDef = key != "" // env keys are the literal credential
+	}
+	// Env override — the same variable the run inherits.
+	if k.ModelEnv != nil && k.ModelEnv.BaseURL != "" {
+		if v := strings.TrimSpace(os.Getenv(k.ModelEnv.BaseURL)); v != "" {
+			return ProbeSpec{Endpoint: v, APIType: apiType, APIKey: key, Model: model, KeyDefinitive: keyDef}
+		}
+	}
+	// The harness's own config file: relay stations and custom providers are
+	// configured there, and the registry default would probe the wrong host.
+	// The same files often carry the credential too (codex's env_key, claude's
+	// settings env, auth.json tokens) — an authenticated probe answers 2xx and
+	// proves the model serves, where an anonymous 401 only proves the host.
+	cfg := agentConfiguredTarget(ag.Adapter)
+	if key == "" {
+		key, keyDef = cfg.APIKey, cfg.KeyDef
+	}
+	if cfg.APIType != "" {
+		apiType = cfg.APIType
+	}
+	if model == "" {
+		model = cfg.Model
+	}
+	if cfg.Endpoint != "" {
+		return ProbeSpec{Endpoint: cfg.Endpoint, APIType: apiType, APIKey: key, Model: model, KeyDefinitive: keyDef, RejectionHint: cfg.Hint}
+	}
+	return ProbeSpec{Endpoint: k.Endpoint, APIType: apiType, APIKey: key, Model: model, KeyDefinitive: keyDef}
+}
+
+// firstEnvValue returns the first non-empty env var among names.
+func firstEnvValue(names ...string) string {
+	for _, n := range names {
+		if v := strings.TrimSpace(os.Getenv(n)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// PlanUsable reports whether the plan can be dispatched for execution on this
+// node right now. Native/manual plans have no agent dependency and always
+// pass; an agent plan needs at least one candidate — primary or alternate —
+// that is dispatchable (viable + endpoint reachable). localMatch and the run
+// path gate on this so a node whose harnesses are all installed-but-dead
+// declines the task fast and the scheduler fails over to a healthy peer.
+func (r *Router) PlanUsable(p Plan) bool {
+	if p.Kind != "agent" {
+		return true
+	}
+	for _, name := range append([]string{p.Agent}, p.Alternates...) {
+		if name == "" {
+			continue
+		}
+		if ag, ok := r.card.Agents[name]; ok && r.probeAgent(name, ag) {
+			return true
+		}
+	}
+	return false
 }

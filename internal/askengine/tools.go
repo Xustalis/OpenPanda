@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
@@ -266,7 +267,7 @@ func reminderDueTime(args map[string]any) (time.Time, error) {
 // with the consent instructions for the current surface — becomes the
 // tool_result the model relays to the user (design §16: the same fail-closed
 // gate native and agent plans pass through in commander.Router.Execute).
-func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall, authorized bool, loc ...i18n.Locale) string {
+func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall, authorized bool, approvalMode string, loc ...i18n.Locale) string {
 	targetLoc := i18n.ChineseSimp
 	if len(loc) > 0 && loc[0] != "" {
 		targetLoc = loc[0]
@@ -280,9 +281,9 @@ func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall,
 	}
 	if err := defense.Authorize(t.Tier, authorized); err != nil {
 		if targetLoc == i18n.English {
-			return "Tool execution refused (tier-2 requires authorization): " + toolConsentHint(t, targetLoc)
+			return "Tool execution refused (tier-2 requires authorization): " + toolConsentHint(t, approvalMode, targetLoc)
 		}
-		return "工具执行被拒（tier-2 需授权）：" + toolConsentHint(t, targetLoc)
+		return "工具执行被拒（tier-2 需授权）：" + toolConsentHint(t, approvalMode, targetLoc)
 	}
 	result, err := t.Run(ctx, call.Arguments)
 	if err != nil {
@@ -441,10 +442,16 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 // consent a refused tool needs: one standing grant per surface (the /authorize
 // toggle in the REPL, --authorize for one-shot asks, the authorize checkbox in
 // the web console). It is phrased as data for the model, not as an instruction.
-func toolConsentHint(t entry.Tool, loc ...i18n.Locale) string {
+func toolConsentHint(t entry.Tool, approvalMode string, loc ...i18n.Locale) string {
 	targetLoc := i18n.ChineseSimp
 	if len(loc) > 0 && loc[0] != "" {
 		targetLoc = loc[0]
+	}
+	if approvalMode == config.ApprovalModeAlways {
+		if targetLoc == i18n.English {
+			return fmt.Sprintf("Tool %s is a tier-2 (irreversible) operation and approval.mode is 'always': a session grant cannot pre-consent — each irreversible action must be approved by the user in the foreground. Tell the user the operation needs their explicit decision (or to switch approval.mode to on-request).", t.Name)
+		}
+		return fmt.Sprintf("工具 %s 属 tier-2（不可逆）操作，且当前审批模式为 always：会话授权不能预先放行，每个不可逆操作都需用户在前台逐个批准。请将该操作需要用户明确决定一事告知用户（或将 approval.mode 调整为 on-request）。", t.Name)
 	}
 	if targetLoc == i18n.English {
 		return fmt.Sprintf("Tool %s is a tier-2 (irreversible) operation, which was not authorized for this session. Please ask user to grant authorization and retry (/authorize in REPL, --authorize flag, or check 'Authorize' in web panel).", t.Name)

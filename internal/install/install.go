@@ -344,6 +344,11 @@ func distributionEntries(prefix string) []string {
 		filepath.Join(prefix, "bin"),
 		filepath.Join(prefix, "adapters"),
 	}
+	// extensions/ (voice sidecars) joined the layout after adapters/ shipped,
+	// so older prefixes legitimately lack it — stat-guard it like the files.
+	if st, err := os.Stat(filepath.Join(prefix, "extensions")); err == nil && st.IsDir() {
+		entries = append(entries, filepath.Join(prefix, "extensions"))
+	}
 	for _, name := range []string{
 		"config.example.yaml",
 		"capabilities.example-desktop.yaml",

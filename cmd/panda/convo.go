@@ -76,7 +76,7 @@ func convoPath() string {
 		}
 	}
 
-	cfg, _ := config.Load("")
+	cfg, _ := config.Load(cliConfigPath)
 	var proj string
 	if cfg != nil {
 		proj, _ = activeProject(cfg)

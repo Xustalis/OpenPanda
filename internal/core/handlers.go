@@ -510,8 +510,17 @@ func (c *Core) localMatch() func([]string) bool {
 		if router == nil {
 			return false
 		}
-		_, err := router.Route(required)
-		return err == nil
+		plan, err := router.Route(required)
+		if err != nil {
+			return false
+		}
+		// A static ability match is not dispatch readiness: the plan must
+		// also have a usable executor. Without this gate a node whose
+		// harnesses are all installed-but-unconfigured — or whose model
+		// endpoint is down — still claims the task, accepts it, and blocks
+		// inside the adapter instead of letting the scheduler fail over to
+		// a healthy peer.
+		return router.PlanUsable(plan)
 	}
 }
 
@@ -867,6 +876,14 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	plan, err := router.Route(required)
 	if err != nil {
 		return bus.TaskResultPayload{}, fmt.Errorf("route: %w", err)
+	}
+	// Re-check dispatch readiness at execution time: a task can be accepted
+	// while its harnesses were healthy and run after the provider went dark
+	// (or after a queue park). Failing here — like a route miss — declines a
+	// delegated task so the parent re-routes it, and fails a local task fast
+	// with an actionable reason instead of parking it inside a dead adapter.
+	if plan.Kind == "agent" && !router.PlanUsable(plan) {
+		return bus.TaskResultPayload{}, fmt.Errorf("route: no usable agent for %v on this node (cli/credentials/endpoint check failed)", required)
 	}
 	// Circuit breaker (P2-27): refuse to run an agent that has been failing
 	// repeatedly, before the task leaves its dispatched state, so the parent

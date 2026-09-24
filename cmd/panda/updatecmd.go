@@ -19,7 +19,7 @@ func runUpdate(args []string) {
 	preFlag := fs.Bool("pre", false, "include pre-release versions (alpha, beta, rc, preview)")
 	forceFlag := fs.Bool("force", false, "force download/apply even if version is equal or older")
 	checkOnlyFlag := fs.Bool("check", false, "check for updates only without applying")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(args, nil))
 
 	subArgs := fs.Args()
 	action := "check"

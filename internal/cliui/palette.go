@@ -130,15 +130,12 @@ func (p Palette) SGR(code, s string) string {
 
 // The base vocabulary. Semantic names live below; these stay for the handful
 // of places that genuinely mean "this word is yellow".
-func (p Palette) Bold(s string) string    { return p.SGR("1", s) }
-func (p Palette) Dim(s string) string     { return p.SGR("2", s) }
-func (p Palette) Italic(s string) string  { return p.SGR("3", s) }
-func (p Palette) Red(s string) string     { return p.SGR("31", s) }
-func (p Palette) Green(s string) string   { return p.SGR("32", s) }
-func (p Palette) Yellow(s string) string  { return p.SGR("33", s) }
-func (p Palette) Blue(s string) string    { return p.SGR("34", s) }
-func (p Palette) Magenta(s string) string { return p.SGR("35", s) }
-func (p Palette) Cyan(s string) string    { return p.SGR("36", s) }
+func (p Palette) Bold(s string) string   { return p.SGR("1", s) }
+func (p Palette) Dim(s string) string    { return p.SGR("2", s) }
+func (p Palette) Red(s string) string    { return p.SGR("31", s) }
+func (p Palette) Green(s string) string  { return p.SGR("32", s) }
+func (p Palette) Yellow(s string) string { return p.SGR("33", s) }
+func (p Palette) Cyan(s string) string   { return p.SGR("36", s) }
 
 // Accent is the OpenPanda wordmark green — the one place a 24-bit terminal
 // gets the exact brand colour and everything else gets plain green.

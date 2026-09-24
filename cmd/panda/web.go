@@ -28,6 +28,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/log"
@@ -45,9 +46,9 @@ import (
 
 func runWeb(args []string) {
 	fs := flag.NewFlagSet("web", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered; enables task execution in /api/ask)")
-	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated)")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	cardPath := fs.String("card", cardFlagDefault(), "path to capabilities.yaml (default: discovered; enables task execution in /api/ask)")
+	mcpCmd := fs.String("mcp", cliMCP, "MCP server command (space-separated)")
 	noBrowser := fs.Bool("no-browser", false, "print the URL instead of opening a browser")
 	daemon := fs.Bool("daemon", false, "run web console quietly in the background")
 	fs.BoolVar(daemon, "d", false, "alias for -daemon")
@@ -142,9 +143,14 @@ func runWeb(args []string) {
 	// queue/projects/nodes; /api/ask reports it is not configured. The
 	// holder lets the settings page build the engine at runtime once a
 	// model is saved (zero-config start → first save), no restart needed.
+	// QueueTasks is not optional for the embedded console: without it the
+	// board's "new task" and every chat-classified task land in queued with
+	// no scheduler to claim them — a silent stall unless a daemon happens to
+	// run alongside. The standalone sidecar sets the same flag.
 	engines, err := panel.NewEngineHolder(cfg, askengine.Options{
 		CardPath:   *cardPath,
 		MCPCommand: *mcpCmd,
+		QueueTasks: true,
 		Logger:     logger,
 	})
 	if err != nil {
@@ -163,6 +169,31 @@ func runWeb(args []string) {
 			pushSvc = push.NewService(keys, push.NewStore(db), logger)
 		}
 	}
+
+	// A task that parks in review is waiting on the user, so the console must
+	// say so rather than let it sit in the queue unnoticed: the open console
+	// picks it up through the SSE change feed, and Web Push reaches a closed
+	// one. The hook is installed on the engine (not on this process's separate
+	// TaskStore handle), because the review transition happens inside the
+	// engine's scheduler core — a callback on any other handle never fires.
+	// It only announces the approval; the decision stays with the user.
+	engines.SetOnReview(func(t core.Task) {
+		logger.Info("task waiting for user approval", "task", t.TaskID, "title", t.Title)
+		if pushSvc == nil {
+			return
+		}
+		nctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := pushSvc.Notify(nctx, push.Notification{
+			Title: "OpenPanda · " + i18n.T(loc, "web.push.reviewTitle"),
+			Body:  t.Title,
+			ID:    t.TaskID,
+			Icon:  "/icons/icon-192.png",
+			Badge: "/icons/badge-72.png",
+		}); err != nil {
+			logger.Warn("notify review", "task", t.TaskID, "err", err)
+		}
+	})
 
 	// Reminders (P1-28): the panel is a long-lived process, so it runs the
 	// reminder scanner — Web Push when configured, and the SSE change feed

@@ -111,16 +111,8 @@ func score(n ledger.Node, now int64, preferred string) float64 {
 	return raw * Freshness(n.LastSeen, now)
 }
 
-// pickBest returns the id of the highest-scoring node, breaking ties by lowest
-// id so every node in the network ranks the same candidate set identically and
-// a forwarded task never loops back through an earlier hop. now is the Unix
-// evaluation time for the freshness discount.
-func pickBest(nodes []ledger.Node, now int64, preferred string) string {
-	id, _ := pickBestScored(nodes, now, preferred)
-	return id
-}
-
-// pickBestScored is pickBest plus the winning score, which is what lets this
+// pickBestScored returns the id of the highest-scoring node plus the winning
+// score, which is what lets this
 // node enter its own ranking as one candidate among many: comparing "best peer"
 // against "myself" needs the number, not just the name. An empty set scores 0,
 // so a lone capable local node wins by default.

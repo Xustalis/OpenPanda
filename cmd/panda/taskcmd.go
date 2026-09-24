@@ -78,7 +78,7 @@ func taskUsage() {
 // event timeline.
 func runTaskShow(args []string) {
 	fs := flag.NewFlagSet("task", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
@@ -315,9 +315,9 @@ func taskStoreFatal(err error, id string) {
 // streams into `panda session show`.
 func runTaskAdd(args []string) {
 	fs := flag.NewFlagSet("task add", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	cardPath := fs.String("card", defaultCardPath(), "path to capabilities.yaml (default: discovered)")
-	mcpCmd := fs.String("mcp", "", "MCP server command (space-separated)")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	cardPath := fs.String("card", cardFlagDefault(), "path to capabilities.yaml (default: discovered)")
+	mcpCmd := fs.String("mcp", cliMCP, "MCP server command (space-separated)")
 	title := fs.String("title", "", "task title (required)")
 	prompt := fs.String("prompt", "", "task prompt (defaults to the title)")
 	priority := fs.String("priority", "normal", "priority: "+cliPriorities)
@@ -411,8 +411,8 @@ func runTaskAdd(args []string) {
 // runTaskPriority implements `panda task priority <id> <level>`.
 func runTaskPriority(args []string) {
 	fs := flag.NewFlagSet("task priority", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	loc := i18n.Detect()
 	if fs.NArg() != 2 {
 		fmt.Fprintln(os.Stderr, "usage: panda task priority <task-id> <"+cliPriorities+">")
@@ -448,8 +448,8 @@ func runTaskPriority(args []string) {
 // the queue scheduler honors before priority.
 func runTaskMove(args []string) {
 	fs := flag.NewFlagSet("task move", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	if fs.NArg() != 2 {
 		fmt.Fprintln(os.Stderr, "usage: panda task move <task-id> <seq>")
 		os.Exit(2)
@@ -486,7 +486,7 @@ func runTaskMove(args []string) {
 // under a live executor would strand its result and lease handling.
 func runTaskDelete(args []string) {
 	fs := flag.NewFlagSet("task delete", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	loc := i18n.Detect()

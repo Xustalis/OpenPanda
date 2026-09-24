@@ -71,7 +71,7 @@ func reminderStore(cfg *config.Config) (*reminders.Store, func(), error) {
 
 func reminderList(args []string) {
 	fs := flag.NewFlagSet("reminder list", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
@@ -110,11 +110,11 @@ func reminderList(args []string) {
 
 func reminderAdd(args []string) {
 	fs := flag.NewFlagSet("reminder add", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	after := fs.String("after", "", "relative delay, e.g. 30s / 10m / 2h / 1h30m")
 	at := fs.String("at", "", `absolute local time, e.g. "2026-08-18 15:00"`)
 	every := fs.String("every", "", "repeat interval, e.g. 30m / 1h — refires until removed")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "after": true, "at": true, "every": true}))
 
 	message := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	loc := i18n.Detect()
@@ -187,8 +187,8 @@ func reminderAdd(args []string) {
 
 func reminderRemove(args []string) {
 	fs := flag.NewFlagSet("reminder rm", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	idRaw := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if idRaw == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda reminder rm [--config PATH] <id>")

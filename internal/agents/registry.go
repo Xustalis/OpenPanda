@@ -38,6 +38,14 @@ type Known struct {
 	Name string
 	// Adapter is the adapter script under adapters/, e.g. "grok_build.py".
 	Adapter string
+	// Endpoint is the provider base URL this harness talks to when it runs on
+	// its own credentials or its self-contained model ("" when unknown). The
+	// pre-dispatch reachability probe hits it so a harness whose provider is
+	// down is skipped before the task can block inside the adapter. When the
+	// run would inject PANDA's model instead, the injected model's base URL
+	// wins; an env override in the agent's own ModelEnv mapping wins over the
+	// registry default.
+	Endpoint string
 	// Binaries are the CLI binary names to probe, in preference order. The
 	// first one is the canonical probe binary (also the availability probe
 	// fallback when a card declares no install_check).
@@ -68,12 +76,14 @@ type Known struct {
 	// proves the agent is logged in / configured with its own provider —
 	// e.g. codex stores its auth and provider sections in ~/.codex.
 	CredentialFiles []string
-	// CredentialFileFields narrows selected CredentialFiles to the JSON
-	// fields whose (non-empty) presence marks real credentials. A file
-	// listed here counts only when at least one named field is set — some
-	// agents keep a state file that exists long before any login (Claude
-	// Code writes ~/.claude.json on first run), and treating its mere
-	// existence as credentials would wrongly disable model injection.
+	// CredentialFileFields narrows selected CredentialFiles to the fields
+	// whose (non-empty) presence marks real credentials. A file listed here
+	// counts only when at least one named field is set — some agents keep a
+	// state file that exists long before any login (Claude Code writes
+	// ~/.claude.json on first run; dsh writes ~/.dsh/.credentials.yaml with
+	// an empty refs block), and treating its mere existence as credentials
+	// would wrongly disable model injection. Field names are dotted paths;
+	// the probe reads JSON files as objects and YAML files by indentation.
 	CredentialFileFields map[string][]string
 	// ModelEnv is the injection side of the credential manifest: the env
 	// vars the agent CLI reads for its model endpoint. Nil means model
@@ -149,6 +159,7 @@ var known = []Known{
 	{
 		Name:        "claude_code",
 		Adapter:     "claude_code.py",
+		Endpoint:    "https://api.anthropic.com",
 		Binaries:    []string{"claude", "claude-code"},
 		DisplayName: "Claude Code",
 		InstallHint: "npm install -g @anthropic-ai/claude-code",
@@ -190,6 +201,7 @@ var known = []Known{
 	{
 		Name:               "opencode",
 		Adapter:            "opencode.py",
+		Endpoint:           "https://opencode.ai/zen",
 		Binaries:           []string{"opencode"},
 		DisplayName:        "OpenCode",
 		InstallHint:        "curl -fsSL https://opencode.ai/install | bash",
@@ -216,6 +228,7 @@ var known = []Known{
 	{
 		Name:              "codex",
 		Adapter:           "codex.py",
+		Endpoint:          "https://api.openai.com",
 		Binaries:          []string{"codex"},
 		DisplayName:       "Codex (OpenAI)",
 		InstallHint:       "npm install -g @openai/codex",
@@ -237,6 +250,7 @@ var known = []Known{
 	{
 		Name:              "grok_build",
 		Adapter:           "grok_build.py",
+		Endpoint:          "https://api.x.ai",
 		Binaries:          []string{"grok", "grok-build"},
 		DisplayName:       "Grok Build (xAI)",
 		InstallHint:       "curl -fsSL https://x.ai/cli/install.sh | bash",
@@ -257,12 +271,19 @@ var known = []Known{
 	{
 		Name:              "deepseek_harness",
 		Adapter:           "deepseek_harness.py",
+		Endpoint:          "https://api.deepseek.com",
 		Binaries:          []string{"dsh", "deepseek-harness"},
 		DisplayName:       "DeepSeek Harness (dsh)",
 		InstallHint:       "npm install -g @deepseek-ai/dsh",
 		InstallURL:        "https://github.com/deepseek-ai/deepseek-harness",
 		CredentialEnvVars: []string{"DEEPSEEK_API_KEY"},
-		CredentialFiles:   []string{".dsh/config.json", ".dsh/auth.json"},
+		// dsh stores secrets in ~/.dsh/.credentials.yaml's `refs` map
+		// (env-name → secret); the file itself exists from first run, so
+		// only a non-empty refs block counts as configured.
+		CredentialFiles: []string{".dsh/.credentials.yaml", ".dsh/.env", ".dsh/config.json", ".dsh/auth.json"},
+		CredentialFileFields: map[string][]string{
+			".dsh/.credentials.yaml": {"refs"},
+		},
 		ModelEnv: &ModelEnvMapping{
 			APIType: "openai",
 			BaseURL: "DEEPSEEK_BASE_URL",
@@ -277,6 +298,7 @@ var known = []Known{
 	{
 		Name:              "openclaw",
 		Adapter:           "openclaw.py",
+		Endpoint:          "https://api.openai.com",
 		Binaries:          []string{"openclaw"},
 		DisplayName:       "OpenClaw",
 		InstallHint:       "curl -fsSL https://openclaw.ai/install.sh | bash",
@@ -297,6 +319,7 @@ var known = []Known{
 	{
 		Name:              "hermes",
 		Adapter:           "hermes.py",
+		Endpoint:          "https://api.openai.com",
 		Binaries:          []string{"hermes", "hermes-agent"},
 		DisplayName:       "Hermes",
 		InstallHint:       "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",

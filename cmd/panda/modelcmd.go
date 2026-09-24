@@ -225,12 +225,6 @@ func (r *repl) modelStatus() {
 	r.outln(p.Muted("  " + i18n.T(r.loc, "repl.model.hint")))
 }
 
-// locActiveMark returns the "active" marker glyph. It is localised via the
-// i18n key so CJK locales get a full-width-safe char.
-func (r *repl) locActiveMark() string {
-	return i18n.T(r.loc, "repl.model.active")
-}
-
 // modelSwitch selects a registered model by alias or model id.
 func (r *repl) modelSwitch(name string) {
 	if r.cfg.Model.Alias() == name && (r.cfg.Model.Model != "" || r.cfg.Model.Provider != "") {
@@ -806,7 +800,7 @@ func (r *repl) resolveModel(args []string, verb string) (config.ModelConfig, str
 // runModel implements `panda model [status|list|add|remove|switch|fetch|test]`.
 func runModel(args []string) {
 	fs := flag.NewFlagSet("model", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	fs.Parse(args)
 	rest := fs.Args()
 

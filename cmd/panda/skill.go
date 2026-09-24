@@ -18,7 +18,10 @@ import (
 // management of procedural workflows (design §8.2, §8.3): auto-generated skills,
 // local and remote imported skills, and curated/community Skills Hub packages.
 func runSkill(args []string) {
-	configPath, positional := splitConfig(args)
+	// --config is a global flag: extractGlobalFlags already lifted it into
+	// cliConfigPath, so args here are positionals plus skill-local flags only.
+	configPath := cliConfigPath
+	positional := args
 
 	cmd := "list"
 	if len(positional) > 0 {
@@ -65,25 +68,6 @@ func runSkill(args []string) {
 
 func printSkillUsage() {
 	fmt.Println("usage: panda skill [--config PATH] <list | approve <name> | reject <name> | reset <name|all> | find/discover <query> | import <path|url> | hub <list|search|install|info> | install/add <target>>")
-}
-
-// splitConfig pulls an optional --config PATH (or --config=PATH) out of args in
-// any position, returning the path and the remaining positional arguments.
-func splitConfig(args []string) (string, []string) {
-	configPath := ""
-	var rest []string
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "--config" && i+1 < len(args):
-			configPath = args[i+1]
-			i++
-		case strings.HasPrefix(args[i], "--config="):
-			configPath = strings.TrimPrefix(args[i], "--config=")
-		default:
-			rest = append(rest, args[i])
-		}
-	}
-	return configPath, rest
 }
 
 // skillList prints every skill (name, scope, status, usage, description).
@@ -161,7 +145,7 @@ func skillFind(cfg *config.Config, store *skills.Store, args []string) {
 	if !jsonOutput {
 		fmt.Printf("🔍 正在自主检索并匹配技能: %q ...\n", query)
 	}
-	sk, isNew, err := store.DiscoverAndInstall(ctx, hubURL, query)
+	sk, isNew, err := store.DiscoverAndInstall(ctx, hubURL, query, skills.ImportOptions{Scope: skills.ScopeGlobal, Status: skills.StatusActive})
 	if err != nil {
 		fatal("discover skill", err)
 	}

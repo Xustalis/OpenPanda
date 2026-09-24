@@ -206,7 +206,7 @@ func TestDiscoverAndInstall(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Discover docker when not installed
-	sk, isNew, err := store.DiscoverAndInstall(ctx, "", "docker compose container")
+	sk, isNew, err := store.DiscoverAndInstall(ctx, "", "docker compose container", ImportOptions{})
 	if err != nil {
 		t.Fatalf("DiscoverAndInstall failed: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestDiscoverAndInstall(t *testing.T) {
 	}
 
 	// 2. Discover again: already installed
-	sk2, isNew2, err := store.DiscoverAndInstall(ctx, "", "docker")
+	sk2, isNew2, err := store.DiscoverAndInstall(ctx, "", "docker", ImportOptions{})
 	if err != nil {
 		t.Fatalf("second DiscoverAndInstall failed: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestDiscoverAndInstall(t *testing.T) {
 	}
 
 	// 3. Discover nonexistent
-	_, _, err = store.DiscoverAndInstall(ctx, "", "completely_unknown_xyz123")
+	_, _, err = store.DiscoverAndInstall(ctx, "", "completely_unknown_xyz123", ImportOptions{})
 	if err == nil {
 		t.Errorf("expected error for nonexistent skill")
 	}

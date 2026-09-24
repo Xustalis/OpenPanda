@@ -263,10 +263,13 @@ type LogConfig struct {
 // Built-in timeout defaults, used when timeouts.* is unset. The lease must stay
 // comfortably above the agent budget: a task whose lease expires while its
 // adapter is still legitimately running gets force-failed and re-routed, so the
-// same work runs twice on two nodes at once.
+// same work runs twice on two nodes at once. DefaultTaskLeaseS is written as
+// 2×(agent + 30s hard-stop grace) — exactly the floor core clamps to — so a
+// default config never trips the "lease raised" warning, while a larger
+// agent_s still lifts it.
 const (
 	DefaultAgentTimeoutS     = 600
-	DefaultTaskLeaseS        = 1200
+	DefaultTaskLeaseS        = 2 * (DefaultAgentTimeoutS + 30)
 	DefaultSuperviseRoundsCf = 5
 )
 
@@ -540,13 +543,6 @@ func (n NodeConfig) EffectiveIdentity() string {
 func shortHash(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:8])
-}
-
-// ValidResourceClass reports whether s is a resource class the scheduler
-// understands (empty counts as "unset → default"). `panda init` uses it to
-// re-prompt on typos before they can break a later config load.
-func ValidResourceClass(s string) bool {
-	return validResourceClasses[s]
 }
 
 // hasEphemeralSuffix reports whether s ends with -<8 hex digits>, which is

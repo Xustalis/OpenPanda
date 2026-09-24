@@ -144,7 +144,7 @@ func sha256File(path string) (string, error) {
 // extractRelease unpacks archive into destDir and returns the path of the
 // top-level "openpanda/" directory it created. The archive layout is produced
 // by scripts/package.sh: a single top-level openpanda/ dir containing
-// bin/panda(.exe) and adapters/*.py. Extraction strips that top component and
+// bin/panda(.exe), adapters/*.py and extensions/voice/*.py. Extraction strips that top component and
 // rejects any entry that would escape destDir (zip/tar slip).
 func extractRelease(archive, destDir string) (string, error) {
 	root := filepath.Join(destDir, "openpanda")

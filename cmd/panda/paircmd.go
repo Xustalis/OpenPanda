@@ -49,8 +49,8 @@ func generateSharedSecret() (string, error) {
 // letting the user assume the dial already happened.
 func runNodesAdd(args []string) {
 	fs := flag.NewFlagSet("nodes add", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	rest := fs.Args()
 	if len(rest) != 1 {
 		fatal("usage", fmt.Errorf("panda nodes add <host:port>"))
@@ -105,8 +105,8 @@ func runNodesAdd(args []string) {
 // changes who the daemon dials.)
 func runNodesDisconnect(args []string) {
 	fs := flag.NewFlagSet("nodes disconnect", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
-	fs.Parse(args)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
 	rest := fs.Args()
 	if len(rest) != 1 {
 		fatal("usage", fmt.Errorf("panda nodes disconnect <host:port>"))
@@ -142,7 +142,7 @@ func runNodesDisconnect(args []string) {
 // colleague standing in front of the new machine.
 func runNodesInvite(args []string) {
 	fs := flag.NewFlagSet("nodes invite", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
@@ -172,7 +172,7 @@ func runNodesInvite(args []string) {
 // exact three a join needs, and a typo in any of them fails the handshake.
 func runPair(args []string) {
 	fs := flag.NewFlagSet("pair", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.yaml")
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	secret := fs.String("secret", "", "shared secret copied from the inviting node's config.yaml")
 	peer := fs.String("peer", "", "the inviting node's host:port to dial")
 	listen := fs.String("listen", "", "this node's listen address (default: keep current)")
