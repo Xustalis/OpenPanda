@@ -22,10 +22,17 @@ import (
 // anthropicVersion is the header required by Anthropic-compatible endpoints.
 const anthropicVersion = "2023-06-01"
 
-// defaultModel is the entry model used when the config names none.
-// deepseek-chat/deepseek-reasoner were deprecated aliases (retired by
-// DeepSeek on 2026-07-24); deepseek-v4-flash is the successor default. The
-// default BaseURL stays the Anthropic-compatible endpoint.
+// ErrNoModel is returned by NewClient when the config names neither a
+// built-in provider nor an endpoint: there is no default vendor, so an
+// unconfigured node must fail loudly instead of silently phoning one.
+var ErrNoModel = errors.New("model not configured: set model.provider or model.base_url (run `panda init` or `panda model add`)")
+
+// IsNoModel reports whether err is ErrNoModel (wrapped or not).
+func IsNoModel(err error) bool { return errors.Is(err, ErrNoModel) }
+
+// defaultModel is the model id used when the config names an endpoint but no
+// model — a bare token the provider is free to reinterpret; without an
+// endpoint there is no default at all (see ErrNoModel).
 const defaultModel = "deepseek-v4-flash"
 
 // defaultMaxTokens is the completion cap when the config does not specify one.
@@ -113,11 +120,13 @@ type Client struct {
 	extraHeaders map[string]string
 }
 
-// NewClient builds a client from the model config. A zero baseURL/model falls
-// back to config defaults, so callers can pass config.Default().Model. The
-// endpoint must be HTTPS so the API key never travels cleartext (M2); loopback
-// http stays allowed for a local dev model, matching the guard the commander
-// applies to adapter endpoints (D7).
+// NewClient builds a client from the model config. An empty baseURL falls
+// back to the named provider's catalogue endpoint; with neither provider nor
+// base_url the config is unconfigured and NewClient fails with ErrNoModel —
+// callers must not mistake a built-in default for the user's own choice.
+// The endpoint must be HTTPS so the API key never travels cleartext (M2);
+// loopback http stays allowed for a local dev model, matching the guard the
+// commander applies to adapter endpoints (D7).
 func NewClient(model config.ModelConfig) (*Client, error) {
 	p, hasProvider := providers.Lookup(model.Provider)
 	base := model.BaseURL
@@ -125,7 +134,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		if hasProvider && p.BaseURL != "" {
 			base = p.BaseURL
 		} else {
-			base = "https://api.deepseek.com/anthropic"
+			return nil, ErrNoModel
 		}
 	}
 	if err := security.NewNetworkGuard(security.EndpointHost(base)).CheckURL(base); err != nil {

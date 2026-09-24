@@ -392,9 +392,10 @@ func TestTUIWelcomeWaitsForTheTerminalSize(t *testing.T) {
 }
 
 // TestTUIWelcomeFitsItsTerminal tests that the welcome banner adapts to the
-// terminal size: narrow terminals (<76 columns) receive the compact header (5
+// terminal size: narrow terminals (<76 columns) receive the compact header (4
 // rows) while standard/wide terminals (>=76 columns) receive the full ASCII
-// wordmark (11 rows), and no line ever exceeds the terminal width.
+// wordmark (10 rows), and no line ever exceeds the terminal width. The banner
+// carries no node/model line — only version, work dir and tips.
 func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
 	for _, width := range []int{40, 52, 80, 200} {
 		m := newTestTUI(t)
@@ -403,9 +404,9 @@ func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
 		m.r.cfg.Model.Model = "deepseek-v4-flash"
 		m = step(m, tea.WindowSizeMsg{Width: width, Height: 30})
 		lines := strings.Split(m.welcome(), "\n")
-		wantRows := 11
+		wantRows := 10
 		if width < 76 {
-			wantRows = 5
+			wantRows = 4
 		}
 		if len(lines) != wantRows {
 			t.Errorf("width %d: banner is %d rows, want %d", width, len(lines), wantRows)
@@ -414,6 +415,12 @@ func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
 			if w := cliui.DisplayWidth(line); w > width {
 				t.Errorf("width %d: banner line is %d columns: %q", width, w, line)
 			}
+		}
+		// Regression: the startup banner must not surface node or model — on a
+		// fresh install those are the built-in defaults / hostname probe, not
+		// the user's own configuration.
+		if strings.Contains(m.welcome(), "XenithdeMacBook-Pro.local") || strings.Contains(m.welcome(), "deepseek-v4-flash") {
+			t.Errorf("width %d: banner leaks node/model values", width)
 		}
 	}
 }

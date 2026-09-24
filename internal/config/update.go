@@ -160,7 +160,12 @@ func loadDocForUpdate(path string) (root *yaml.Node, top *yaml.Node, err error) 
 	case os.IsNotExist(rerr):
 		// Materialize defaults on disk first so the edit lands in a complete,
 		// valid file (mirrors UpdateModelSection's missing-file behavior).
-		out, merr := yaml.Marshal(Default())
+		// The model section stays empty: baking a vendor endpoint into a
+		// config the user never wrote would make a built-in default look
+		// like their own choice.
+		doc := Default()
+		doc.Model = ModelConfig{}
+		out, merr := yaml.Marshal(doc)
 		if merr != nil {
 			return nil, nil, merr
 		}

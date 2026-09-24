@@ -16,7 +16,12 @@ import (
 // detail can replay.
 func TestInjectionAnnouncementFlow(t *testing.T) {
 	ctx := context.Background()
-	c := newCoreWithAgent(t, "inject-node")
+	c := newCoreWithAgentModel(t, "inject-node", config.ModelConfig{
+		Provider: "deepseek",
+		BaseURL:  "https://api.deepseek.com/anthropic",
+		APIKey:   "sk-test",
+		Model:    "deepseek-v4-flash",
+	})
 	c.SetWorkDir(t.TempDir())
 	c.SetRouterPolicy(config.InjectionConfig{Model: config.InjectionModelAlways}, config.RoutingConfig{})
 	c.router.SetAdapterRunner(func(context.Context, string, string, string) commander.AgentResult {

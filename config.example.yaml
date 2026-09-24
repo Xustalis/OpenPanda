@@ -1,11 +1,15 @@
 # OpenPanda node configuration
 # Copy to /etc/openpanda/config.yaml on each node, or run with --config.
+# Easier: `panda init` generates a per-machine config (unique node name from
+# the hostname, fresh shared secret) — prefer it over copying this file.
 node:
-  name: "macbook-m1"
+  # REQUIRED: a name unique per machine — it is how peers and the queue refer
+  # to this node. `panda init` derives one from the hostname automatically.
+  name: "change-me"
   resource_class: "Standard"  # Micro | Standard | Full
   kind: "physical"             # physical | vm; one physical node per host
   # VM deployments must set a stable identity distinct from the host.
-  # identity: "vm-macbook-dev"
+  # identity: "vm-dev-01"
 
 network:
   # Loopback by default, matching config.Default(): a fresh copy of this file
@@ -134,16 +138,19 @@ log:
 #      model: "anthropic/claude-3.5-sonnet"
 #      api_type: "openai"
 #
-model:
-  base_url: "https://api.deepseek.com/anthropic"
-  model: "deepseek-v4-flash"
-  api_type: "anthropic"         # anthropic | openai (default anthropic)
-  # max_tokens: 4096            # completion cap; default 4096
-  # api_key: ""                 # secret; prefer env OPENPANDA_MODEL_API_KEY
-  # provider: "deepseek"        # built-in provider id — when set, its endpoint,
-  #                             # dialect and per-vendor tuning are merged in, so
-  #                             # base_url/api_type may be omitted (paste a key
-  #                             # and pick a model)
+# The model section is commented out on purpose: there is no built-in default
+# vendor — a copied file must not silently adopt one. Configure a model with
+# `panda init`, the first-run wizard, `panda model add`, or by uncommenting and
+# editing the block below (DeepSeek shown as example 1 above).
+#
+# model:
+#   provider: "deepseek"        # built-in provider id — its endpoint, dialect
+#                               # and per-vendor tuning are merged in, so
+#                               # base_url/api_type may be omitted
+#   model: "deepseek-v4-flash"
+#   api_key: ""                 # secret; prefer env OPENPANDA_MODEL_API_KEY
+#   api_type: "anthropic"       # anthropic | openai (default anthropic)
+#   max_tokens: 4096            # completion cap; default 4096
 
 # Multi-model registry: named models the REPL switches between with /model.
 # Each entry is a full model config; name is the alias `/model <name>` uses.

@@ -35,6 +35,13 @@ func TestTaskScope(t *testing.T) {
 // newCoreWithAgent builds a Core whose card advertises one agent ability, so a
 // task can route to the agent execution path without a real LLM CLI.
 func newCoreWithAgent(t *testing.T, id string) *Core {
+	return newCoreWithAgentModel(t, id, config.ModelConfig{})
+}
+
+// newCoreWithAgentModel is newCoreWithAgent with an explicit model config —
+// injection tests need a configured model because an empty one is (correctly)
+// never injected.
+func newCoreWithAgentModel(t *testing.T, id string, model config.ModelConfig) *Core {
 	t.Helper()
 	db := openTestDB(t)
 	card := ledger.Card{
@@ -47,7 +54,7 @@ func newCoreWithAgent(t *testing.T, id string) *Core {
 		},
 		Capacity: ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
 	}
-	c := NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
+	c := NewCore(db, id, card, 5, testLogger(), model)
 	// Tests in this suite fake the adapter runner, so pair it with an
 	// always-available prober: no real agent CLI needs to be installed.
 	c.router.SetAgentProber(func(string, ledger.Agent) bool { return true })
