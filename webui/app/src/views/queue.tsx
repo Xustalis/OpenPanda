@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'preact/hooks'
-import { api, ApiError, isTaskStalled, type Task } from '../api/client'
+import { api, ApiError, isTaskStalled, type ApprovalScope, type Task } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
 import { t } from '../i18n'
+import { ScopeSelect } from '../components/scope-select'
 import { StateBadge } from '../components/state-badge'
 import { ErrorState } from '../components/page'
 import { confirmDialog } from '../components/confirm'
@@ -425,6 +426,10 @@ function KanbanCard({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // Where a review answer is remembered: "once" is the safe default — a
+  // session or project remember writes a standing gate answer, which should
+  // always be a deliberate pick, not an accident of a default.
+  const [scope, setScope] = useState<ApprovalScope>('once')
 
   async function act(fn: () => Promise<unknown>) {
     if (busy) return
@@ -563,17 +568,18 @@ function KanbanCard({
           {task.approval_disposition && (
             <span class="dim review-kind">{t(`detail.reviewKind.${task.approval_disposition}`)}</span>
           )}
+          <ScopeSelect value={scope} onChange={setScope} disabled={busy} />
           <button
             class="btn primary small"
             disabled={busy || task.approval_disposition === 'needs_changed_input'}
-            onClick={() => act(() => api.approve(task.id))}
+            onClick={() => act(() => api.approve(task.id, scope))}
           >
             {t('detail.approve')}
           </button>
           <button
             class="btn danger small"
             disabled={busy}
-            onClick={() => act(() => api.reject(task.id, t('detail.rejectedViaWeb')))}
+            onClick={() => act(() => api.reject(task.id, t('detail.rejectedViaWeb'), scope))}
           >
             {t('detail.reject')}
           </button>

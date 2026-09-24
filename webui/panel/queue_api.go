@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
@@ -85,6 +86,12 @@ func (h *handler) createTask(w http.ResponseWriter, r *http.Request) {
 
 	task, err := eng.EnqueueTask(r.Context(), in, q)
 	if err != nil {
+		if errors.Is(err, askengine.ErrApprovalDenied) {
+			// A remembered deny answered before the row existed: report it as a
+			// policy refusal the board can show, not a server fault.
+			writeErr(w, http.StatusConflict, err)
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

@@ -52,29 +52,59 @@ type askResult struct {
 	PlanID     string   `json:"plan_id,omitempty"`
 	PlanGoal   string   `json:"plan_goal,omitempty"`
 	PlanStages []string `json:"plan_stages,omitempty"`
+	// Approval flow: needs_approval + approval describe a parked tier-2 task
+	// awaiting a foreground decision; denied marks a standing remembered "no"
+	// that answered before the task existed; consent_scope names the remembered
+	// scope (session|project) that supplied consent without prompting.
+	NeedsApproval bool             `json:"needs_approval,omitempty"`
+	Approval      *approvalPayload `json:"approval,omitempty"`
+	Denied        bool             `json:"denied,omitempty"`
+	ConsentScope  string           `json:"consent_scope,omitempty"`
+}
+
+// approvalPayload is the wire form of an engine ApprovalRequest: what the
+// parked task is, and the remember scope the console's card should preselect.
+type approvalPayload struct {
+	TaskID  string `json:"task_id"`
+	Title   string `json:"title"`
+	Reason  string `json:"reason,omitempty"`
+	Project string `json:"project,omitempty"`
+	Scope   string `json:"scope"`
 }
 
 // planResultOf maps one ask outcome into the panel wire form, so the ask and
 // session-ask handlers cannot drift on which fields a plan carries.
 func planResultOf(out *askengine.Result) askResult {
 	res := askResult{
-		Kind:       out.Kind,
-		Answer:     out.Answer,
-		Thought:    out.Thought,
-		TaskID:     out.TaskID,
-		TaskState:  out.TaskState,
-		OK:         out.OK,
-		Stdout:     out.Stdout,
-		Stderr:     out.Stderr,
-		ExitCode:   out.ExitCode,
-		Agent:      out.Agent,
-		Model:      out.Model,
-		Injected:   out.Injected,
-		Executor:   out.Executor,
-		EntryModel: out.EntryModel,
-		Report:     out.Report,
-		PlanID:     out.PlanID,
-		PlanGoal:   out.PlanGoal,
+		Kind:         out.Kind,
+		Answer:       out.Answer,
+		Thought:      out.Thought,
+		TaskID:       out.TaskID,
+		TaskState:    out.TaskState,
+		OK:           out.OK,
+		Stdout:       out.Stdout,
+		Stderr:       out.Stderr,
+		ExitCode:     out.ExitCode,
+		Agent:        out.Agent,
+		Model:        out.Model,
+		Injected:     out.Injected,
+		Executor:     out.Executor,
+		EntryModel:   out.EntryModel,
+		Report:       out.Report,
+		PlanID:       out.PlanID,
+		PlanGoal:     out.PlanGoal,
+		Denied:       out.Denied,
+		ConsentScope: out.ConsentSource,
+	}
+	if out.NeedsApproval && out.Approval != nil {
+		res.NeedsApproval = true
+		res.Approval = &approvalPayload{
+			TaskID:  out.Approval.TaskID,
+			Title:   out.Approval.Title,
+			Reason:  out.Approval.Reason,
+			Project: out.Approval.Project,
+			Scope:   out.Approval.Scope,
+		}
 	}
 	for _, t := range out.PlanStages {
 		res.PlanStages = append(res.PlanStages, t.StageID)

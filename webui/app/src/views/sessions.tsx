@@ -4,8 +4,10 @@ import {
   askSessionStream,
   isAbort,
   isTaskStalled,
+  type ApprovalScope,
   type AskResult,
   type FsFileEntry,
+  type SessionApprovalState,
   type NodeInfo,
   type Session,
   type SessionDiff,
@@ -25,6 +27,7 @@ import { patchStreaming, slashQuery } from '../components/chatstate'
 import { atQuery, expandFileRefs, exportMarkdown, exportFilename } from '../components/attach'
 import { isLiveSession } from '../components/session-guard'
 import DecisionOrbit from '../components/orbit'
+import { ScopeSelect } from '../components/scope-select'
 import FleetTopologyCard from '../components/fleet'
 import { EventTimeline } from '../components/event-timeline'
 import { acquireKeepAlive } from '../utils/keepalive'
@@ -213,6 +216,35 @@ export function SessionsView({
   // the directory is not a routing candidate, so it must not suppress the
   // "add a second device" CTA.
   const onlineNodeCount = nodes.filter((n) => n.status === 'online').length
+
+  // The approval policy this thread's next tier-2 gate will apply — resolved
+  // mode plus any standing remembered answer — so the composer can say what a
+  // send will do before it is sent. nodeTick refetches it: an approve/reject
+  // POST bumps the task fingerprint, which is exactly the change signal.
+  const [approval, setApproval] = useState<SessionApprovalState | null>(null)
+  useEffect(() => {
+    if (!session?.id) {
+      setApproval(null)
+      return
+    }
+    let live = true
+    api
+      .sessionApproval(session.id)
+      .then((s) => {
+        if (live) setApproval(s)
+      })
+      .catch(() => {
+        if (live) setApproval(null)
+      })
+    return () => {
+      live = false
+    }
+  }, [session?.id, session?.project, nodeTick])
+
+  function forgetApproval() {
+    if (!session?.id) return
+    api.clearSessionApproval(session.id).then(setApproval).catch(toastError)
+  }
 
   // Keep the async guard's mirror in step with the prop.
   useEffect(() => {
@@ -1059,6 +1091,27 @@ export function SessionsView({
                 />
                 {t('sessions.authorize')}
               </label>
+              {approval && (approval.mode !== 'on-request' || approval.decision) && (
+                // The standing answer a remember left behind — or a mode that
+                // is not the usual on-request — is the thing a composer must
+                // not hide: a remembered deny would refuse the next tier-2
+                // gate silently otherwise.
+                <span class="approval-chip dim" title={t('approval.stateHint')}>
+                  {t('approval.stateLabel')}&nbsp;
+                  {t(`settings.approval.${approval.mode}`)}
+                  {approval.decision && (
+                    <>
+                      {' · '}
+                      {t(`approval.decision.${approval.decision}`)}
+                      {approval.decision_scope ? ` (${approval.decision_scope})` : ''}
+                      {' · '}
+                      <button class="link-btn" type="button" onClick={forgetApproval}>
+                        {t('approval.forget')}
+                      </button>
+                    </>
+                  )}
+                </span>
+              )}
               {busy ? (
                 // While a reply streams, the primary action is stopping it —
                 // a disabled "Thinking…" button leaves no way out of a bad ask.
@@ -1293,6 +1346,21 @@ function ChatBubble(props: {
               </a>
             </div>
           )}
+          {/* The live ask path carries its approval state on the result, not
+              through a persisted turn ref — a parked tier-2 task must still
+              render its decision card in the same breath it parked in, and a
+              remembered answer must say so where the user can see it. */}
+          {msg.result?.needs_approval && msg.result.approval && !msg.ref && (
+            <TaskApproval taskId={msg.result.approval.task_id} preselect={msg.result.approval.scope} />
+          )}
+          {msg.result?.denied && (
+            <span class="badge red">{t('approval.deniedRemembered')}</span>
+          )}
+          {msg.result?.consent_scope && (
+            <span class="dim approval-consent">
+              {t(`approval.consent.${msg.result.consent_scope}`)}
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -1308,7 +1376,7 @@ function ChatBubble(props: {
  *  views use; needs_changed_input disables Approve, because consent alone
  *  cannot continue that task and a button that silently does nothing is worse
  *  than an honest disabled one. */
-function TaskApproval({ taskId }: { taskId: string }) {
+function TaskApproval({ taskId, preselect }: { taskId: string; preselect?: ApprovalScope }) {
   const change = useChangeSignal()
   const { data: task } = useAsync<Task | null>(
     () => api.task(taskId).catch(() => null),
@@ -1317,6 +1385,13 @@ function TaskApproval({ taskId }: { taskId: string }) {
   )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // The remember scope: where this answer lands for the gates that come after.
+  // The server names its default (the project's configured scope) so the card
+  // preselects it; the user can still pick differently per decision.
+  const [scope, setScope] = useState<ApprovalScope>(preselect ?? 'once')
+  useEffect(() => {
+    if (preselect) setScope(preselect)
+  }, [preselect])
   // A stalled task emits no SSE event — nothing changes — so the badge can
   // only appear on a local clock tick.
   const [, setStallTick] = useState(0)
@@ -1356,17 +1431,18 @@ function TaskApproval({ taskId }: { taskId: string }) {
           {t(`detail.reviewKind.${task.approval_disposition}`)}
         </span>
       )}
+      <ScopeSelect value={scope} onChange={setScope} disabled={busy} />
       <button
         class="btn primary small"
         disabled={busy || task.approval_disposition === 'needs_changed_input'}
-        onClick={() => void act(() => api.approve(task.id))}
+        onClick={() => void act(() => api.approve(task.id, scope))}
       >
         {t('detail.approve')}
       </button>
       <button
         class="btn danger small"
         disabled={busy}
-        onClick={() => void act(() => api.reject(task.id, t('detail.rejectedViaWeb')))}
+        onClick={() => void act(() => api.reject(task.id, t('detail.rejectedViaWeb'), scope))}
       >
         {t('detail.reject')}
       </button>

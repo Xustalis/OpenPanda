@@ -261,6 +261,49 @@ func (h *handler) sessionCancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"id": id, "operation_id": req.OperationID, "cancelled": cancelled})
 }
 
+// ---- Session approval state ----
+
+// getSessionApproval serves GET /api/sessions/{id}/approval — the effective
+// tier-2 approval policy as this session sees it: the resolved mode, the
+// default remember scope, and any remembered decision (and which scope it
+// lives in). The console renders it next to the authorize toggle so a chat
+// can see what its next irreversible action will do before it asks.
+func (h *handler) getSessionApproval(w http.ResponseWriter, r *http.Request) {
+	eng := h.currentEngine()
+	if eng == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("ask engine not configured"))
+		return
+	}
+	sess, err := h.sessions.Get(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such session"))
+		return
+	}
+	writeJSON(w, eng.ApprovalState(sess.ID, sess.Project))
+}
+
+// clearSessionApproval serves DELETE /api/sessions/{id}/approval — forgets
+// this session's remembered approval answers (its session bucket plus the
+// project row's stored decision, so "forget" really forgets). It is how a
+// remembered deny gets lifted without restarting the panel.
+func (h *handler) clearSessionApproval(w http.ResponseWriter, r *http.Request) {
+	eng := h.currentEngine()
+	if eng == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("ask engine not configured"))
+		return
+	}
+	sess, err := h.sessions.Get(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such session"))
+		return
+	}
+	if err := eng.ClearApproval(sess.ID, sess.Project); err != nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("clear approval failed"))
+		return
+	}
+	writeJSON(w, eng.ApprovalState(sess.ID, sess.Project))
+}
+
 // ---- Streaming session ask ----
 
 // sessionAskRequest is the body of POST /api/sessions/{id}/ask.
@@ -420,8 +463,9 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := eng.AskTurnsScoped(execCtx, history, req.Prompt, askengine.AskScope{
-		Project: sess.Project,
-		WorkDir: workDir,
+		Project:   sess.Project,
+		WorkDir:   workDir,
+		SessionID: sess.ID,
 	}, req.Authorize, cb)
 	if err != nil {
 		msg := err.Error()
