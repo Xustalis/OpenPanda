@@ -12,12 +12,18 @@ import (
 )
 
 // bundle.go implements the far-track DTN Bundle (whitepaper §8.2/§8.3): a
-// self-contained, CBOR-encoded unit carrying an EID-addressed, TTL-bounded,
-// HMAC-signed task payload for store-and-forward transport. Where the live
-// track is a JSON envelope over an authenticated WebSocket, a bundle must
-// survive being parked, relayed, and replayed across links that never
-// authenticate — so the header carries its own addressing, lifetime, and
-// signature.
+// self-contained, CBOR-encoded unit carrying an EID-addressed, lifetime-
+// bounded, HMAC-signed task payload for store-and-forward transport. Where
+// the live track is a JSON envelope over an authenticated WebSocket, a
+// bundle must survive being parked, relayed, and replayed across links that
+// never authenticate — so the header carries its own addressing, lifetime,
+// and signature.
+//
+// Lifetime is relative, not absolute: the wire form is (CreatedUnix,
+// LifetimeSec), the same model BPv7 (RFC 9171) uses — deep-space and
+// intermittently-connected nodes cannot be assumed to share a disciplined
+// wall clock, so each node evaluates expiry and custody against its own
+// local time rather than trusting an origin's absolute deadline.
 //
 // The CBOR codec is deliberately minimal (uint/nint/bytes/text/array only —
 // exactly the majors a fixed-schema bundle needs): no external dependency,
@@ -27,34 +33,44 @@ import (
 // Fields marshal as a fixed-length CBOR array (toarray semantics) so the
 // layout is schema-pinned — a field cannot drift into a different slot.
 type Bundle struct {
-	BundleID     string // unique id for dedup at relays
-	Version      int    // bundle format version: 1 = plaintext payload, 2 = sealed
-	SourceEID    string // "panda://<node-id>"
-	DestEID      string
-	CreatedUnix  int64
-	DeadlineUnix int64  // absolute TTL (unix seconds); 0 = no expiry
-	Kind         string // the envelope type this bundle carries
-	Payload      []byte // wire form: plaintext on v1, nonce||AEAD-ciphertext on v2
-	Signature    []byte // HMAC-SHA256 over fields 1..8, keyed by the mesh secret
+	BundleID    string // unique id for dedup at relays
+	Version     int    // format: 1 = plaintext payload, 2 = sealed, 3 = relative lifetime
+	SourceEID   string // "panda://<node-id>"
+	DestEID     string
+	CreatedUnix int64
+	LifetimeSec int64  // seconds after creation the bundle stays live; 0 = no expiry
+	Kind        string // the envelope type this bundle carries
+	Payload     []byte // wire form: plaintext on v1, nonce||AEAD-ciphertext on v2+
+	Signature   []byte // HMAC-SHA256 over fields 1..8, keyed by the mesh secret
+
+	// rawSlot is the verbatim sixth wire field. For v3 it equals
+	// LifetimeSec; pre-v3 wires carried an absolute deadline there, and the
+	// raw bytes are what the signature and the seal's AAD cover — so
+	// decoding normalizes LifetimeSec while rawSlot preserves the signed
+	// value. Zero means "not decoded": hand-built bundles fall back to
+	// LifetimeSec via wireSlot.
+	rawSlot int64
 }
 
-// bundleVersion is the current wire version. Version 2 (farsky) seals the
-// payload under AES-256-GCM — the HMAC alone proved integrity but left every
-// relay and every listener on a broadcast path holding the task in
-// cleartext. Version 1 bundles remain verifiable so a mixed-version mesh
-// still delivers.
-const bundleVersion = 2
+// bundleVersion is the current wire version. Version 2 (farsky) sealed the
+// payload under AES-256-GCM; version 3 re-anchors the lifetime field from an
+// absolute deadline to seconds-since-creation (BPv7's model). Versions 1 and
+// 2 remain readable: UnmarshalBundle converts their absolute deadline slot
+// to a lifetime so a mixed-version mesh still delivers.
+const bundleVersion = 3
 const bundleFields = 9
 
-// NewBundle wraps kind+payload in a signed, TTL-bound bundle addressed from
-// srcEID to dstEID. secret is the mesh shared key: the signature makes a
+// NewBundle wraps kind+payload in a signed, lifetime-bound bundle addressed
+// from srcEID to dstEID. lifetimeSec is seconds of life from creation; 0
+// disables expiry. secret is the mesh shared key: the signature makes a
 // parked or relayed bundle tamper-evident on media that never authenticates,
 // and the payload is sealed first (encrypt-then-sign) so the signed bytes —
 // not the plaintext — are what custody carries.
-func NewBundle(id, srcEID, dstEID, kind string, deadline int64, payload, secret []byte) (*Bundle, error) {
+func NewBundle(id, srcEID, dstEID, kind string, lifetimeSec int64, payload, secret []byte) (*Bundle, error) {
 	b := &Bundle{
 		BundleID: id, Version: bundleVersion, SourceEID: srcEID, DestEID: dstEID,
-		CreatedUnix: nowUnix(), DeadlineUnix: deadline, Kind: kind,
+		CreatedUnix: nowUnix(), LifetimeSec: lifetimeSec, Kind: kind,
+		rawSlot: lifetimeSec,
 	}
 	sealed, err := b.seal(payload, secret)
 	if err != nil {
@@ -90,12 +106,21 @@ func (b *Bundle) signAAD() []byte {
 	aad = cborText(aad, b.SourceEID)
 	aad = cborText(aad, b.DestEID)
 	aad = cborUint(aad, uint64(b.CreatedUnix))
-	aad = cborUint(aad, uint64(b.DeadlineUnix))
+	aad = cborUint(aad, uint64(b.wireSlot()))
 	aad = cborText(aad, b.Kind)
 	return aad
 }
 
-// seal encrypts the plaintext payload for a version-2 wire form: random
+// wireSlot is the sixth wire field as signed: rawSlot for a decoded bundle,
+// LifetimeSec for a locally minted one.
+func (b *Bundle) wireSlot() int64 {
+	if b.rawSlot != 0 {
+		return b.rawSlot
+	}
+	return b.LifetimeSec
+}
+
+// seal encrypts the plaintext payload for a v2+ wire form: random
 // nonce || AES-256-GCM ciphertext, with the header AAD above.
 func (b *Bundle) seal(plaintext, secret []byte) ([]byte, error) {
 	aead, err := bundleAEAD(secret)
@@ -144,7 +169,7 @@ func (b *Bundle) sign(secret []byte) []byte {
 	body = cborText(body, b.SourceEID)
 	body = cborText(body, b.DestEID)
 	body = cborUint(body, uint64(b.CreatedUnix))
-	body = cborUint(body, uint64(b.DeadlineUnix))
+	body = cborUint(body, uint64(b.wireSlot()))
 	body = cborText(body, b.Kind)
 	body = cborBytes(body, b.Payload)
 	mac := hmac.New(sha256.New, secret)
@@ -153,21 +178,42 @@ func (b *Bundle) sign(secret []byte) []byte {
 }
 
 // Verify checks the signature against secret and reports whether the bundle
-// is still within its TTL. A bundle that fails either check must not be
-// delivered — it is either tampered or dead. Versions 1 and 2 verify
-// identically (the signature covers the wire payload either way); Open is
-// what differs.
+// is still within its lifetime. A bundle that fails either check must not be
+// delivered — it is either tampered or dead. All readable versions verify
+// identically (the signature covers the wire payload either way, and
+// UnmarshalBundle has already normalized legacy absolute deadlines into
+// LifetimeSec); Open is what differs.
 func (b *Bundle) Verify(secret []byte, now int64) error {
-	if b.Version != 1 && b.Version != bundleVersion {
+	if b.Version < 1 || b.Version > bundleVersion {
 		return fmt.Errorf("bundle: unsupported version %d", b.Version)
 	}
 	if !hmac.Equal(b.Signature, b.sign(secret)) {
 		return errors.New("bundle: bad signature")
 	}
-	if b.DeadlineUnix > 0 && now > b.DeadlineUnix {
-		return errors.New("bundle: TTL expired")
+	if b.LifetimeSec > 0 && now > b.CreatedUnix+b.LifetimeSec {
+		return errors.New("bundle: lifetime expired")
 	}
 	return nil
+}
+
+// LocalExpiry returns the local-clock unix time at which custody of this
+// bundle should lapse, or 0 for no expiry. Custody bookkeeping (outbox rows,
+// relay logs) must run on the holding node's own clock — the only clock a
+// parked row can trust — so the origin's lifetime is re-anchored to now and
+// clamped to [1, LifetimeSec]: a skewed origin clock can neither kill a
+// fresh bundle nor stretch local custody past one full lifetime.
+func (b *Bundle) LocalExpiry(now int64) int64 {
+	if b.LifetimeSec <= 0 {
+		return 0
+	}
+	rem := b.CreatedUnix + b.LifetimeSec - now
+	if rem < 1 {
+		rem = 1
+	}
+	if rem > b.LifetimeSec {
+		rem = b.LifetimeSec
+	}
+	return now + rem
 }
 
 // Marshal serializes the bundle to canonical CBOR (including the signature).
@@ -179,7 +225,7 @@ func (b *Bundle) Marshal() []byte {
 	out = cborText(out, b.SourceEID)
 	out = cborText(out, b.DestEID)
 	out = cborUint(out, uint64(b.CreatedUnix))
-	out = cborUint(out, uint64(b.DeadlineUnix))
+	out = cborUint(out, uint64(b.wireSlot()))
 	out = cborText(out, b.Kind)
 	out = cborBytes(out, b.Payload)
 	out = cborBytes(out, b.Signature)
@@ -217,7 +263,7 @@ func UnmarshalBundle(data []byte) (*Bundle, error) {
 	if v, err := r.uint(); err != nil {
 		return nil, err
 	} else {
-		b.DeadlineUnix = int64(v)
+		b.rawSlot = int64(v)
 	}
 	if b.Kind, err = r.text(); err != nil {
 		return nil, err
@@ -230,6 +276,17 @@ func UnmarshalBundle(data []byte) (*Bundle, error) {
 	}
 	if len(r.data) != 0 {
 		return nil, errors.New("bundle: trailing bytes")
+	}
+	b.LifetimeSec = b.rawSlot
+	if b.Version < 3 && b.rawSlot != 0 {
+		// Pre-v3 wires carried an absolute deadline in the lifetime slot;
+		// re-anchor it to the creation stamp so downstream code sees one
+		// semantic. A deadline at or before creation is already dead — clamp
+		// to one second rather than letting it read as "no expiry".
+		b.LifetimeSec = b.rawSlot - b.CreatedUnix
+		if b.LifetimeSec < 1 {
+			b.LifetimeSec = 1
+		}
 	}
 	return b, nil
 }

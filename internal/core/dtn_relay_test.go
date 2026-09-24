@@ -42,7 +42,7 @@ func mkTestBundle(t *testing.T, c *Core, bundleID, taskID, dest string) (*bus.Bu
 		t.Fatal(err)
 	}
 	bnd, err := bus.NewBundle(bundleID, bus.EID(c.nodeID), bus.EID(dest),
-		bus.MsgTaskDelegate, time.Now().Add(time.Hour).Unix(), payload, []byte(testSharedSecret))
+		bus.MsgTaskDelegate, int64(time.Hour.Seconds()), payload, []byte(testSharedSecret))
 	if err != nil {
 		t.Fatal(err)
 	}

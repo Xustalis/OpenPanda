@@ -168,9 +168,12 @@ type TaskDelegatePayload struct {
 	BundledArtifacts []FatBundleArtifact `json:"bundled_artifacts,omitempty"`
 	// Transport specifies whether the delegation travels via live streaming or DTN ("live" or "dtn").
 	Transport string `json:"transport,omitempty"`
-	// DeadlineUnix is the absolute bundle TTL for DTN tasks (§8.2): past it
-	// the task is expired rather than lease-killed, because a store-and-forward
-	// path has no heartbeat to renew against.
+	// DeadlineUnix is the absolute task deadline for DTN tasks (§8.2): past
+	// it the task is expired rather than lease-killed, because a
+	// store-and-forward path has no heartbeat to renew against. It is the
+	// origin's wall-clock intent carried inside the sealed payload — the
+	// bundle that wraps it converts the same bound to a relative lifetime
+	// (Bundle.LifetimeSec) for custody decisions at relays.
 	DeadlineUnix int64 `json:"deadline_unix,omitempty"`
 	// Causal-depth and budget fields (§6.1). Depth is Parent.Depth+1 at every
 	// spawn hop, hard-capped by scheduler.MaxChainDepth. DelegationBudget is
