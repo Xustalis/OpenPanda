@@ -48,6 +48,31 @@ var migrations = []Migration{
 	{Version: 23, Name: "add_task_agent_session", Apply: migrateV23},
 	{Version: 24, Name: "add_reminders_repeat", Apply: migrateV24},
 	{Version: 25, Name: "add_dtn_relay_log", Apply: migrateV25},
+	{Version: 26, Name: "add_projects_approval", Apply: migrateV26},
+}
+
+// migrateV26 adds the per-project approval policy columns. approval_mode is a
+// project-scoped override of the node's approval.mode gate; approval_scope
+// picks where an approval card's "remember" writes its decision by default
+// (once|session|project); approval_decision is the remembered project-level
+// answer the tier-2 gate replays instead of re-prompting. All three stay
+// empty on a project that never configured them — empty reads as "inherit the
+// global policy and remember nothing".
+func migrateV26(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "projects")
+	if err != nil || !exists {
+		return err
+	}
+	for _, c := range []struct{ name, def string }{
+		{"approval_mode", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_scope", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_decision", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := addColumnIfMissingTx(tx, "projects", c.name, c.def); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateV23 adds tasks.agent_session_id and tasks.agent_session_node: the

@@ -250,3 +250,86 @@ func TestFindByWorkDir(t *testing.T) {
 		t.Fatalf("FindByWorkDir unknown = %v, want ErrNotFound", err)
 	}
 }
+
+// TestApprovalPolicyFields covers the per-project tier-2 policy the gate
+// resolves: mode/scope/decision round-trip through the row, validation rejects
+// typos instead of silently degrading them, and an unset scope normalizes to
+// session rather than defaulting a remember onto the project row itself.
+func TestApprovalPolicyFields(t *testing.T) {
+	s := newTestStore(t)
+	p, err := s.Create("gate", "", "")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if p.ApprovalMode != "" || p.ApprovalScope != "" || p.ApprovalDecision != "" {
+		t.Fatalf("fresh project carries approval state: %+v", p)
+	}
+	if p.NormalizedScope() != ScopeSession {
+		t.Fatalf("unset scope normalized to %q, want session", p.NormalizedScope())
+	}
+
+	if err := s.SetApprovalPolicy("gate", "bogus", ScopeSession); err == nil {
+		t.Fatal("SetApprovalPolicy accepted an invalid mode")
+	}
+	if err := s.SetApprovalPolicy("gate", "on-request", "bogus"); err == nil {
+		t.Fatal("SetApprovalPolicy accepted an invalid scope")
+	}
+	if err := s.SetApprovalPolicy("gate", "always", ScopeProject); err != nil {
+		t.Fatalf("SetApprovalPolicy: %v", err)
+	}
+	p, err = s.Get("gate")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if p.ApprovalMode != "always" || p.ApprovalScope != ScopeProject {
+		t.Fatalf("policy = mode %q scope %q, want always/project", p.ApprovalMode, p.ApprovalScope)
+	}
+
+	if err := s.SetApprovalDecision("gate", "bogus"); err == nil {
+		t.Fatal("SetApprovalDecision accepted an invalid decision")
+	}
+	if err := s.SetApprovalDecision("gate", DecisionApprove); err != nil {
+		t.Fatalf("SetApprovalDecision: %v", err)
+	}
+	p, _ = s.Get("gate")
+	if p.ApprovalDecision != DecisionApprove {
+		t.Fatalf("decision = %q, want approve", p.ApprovalDecision)
+	}
+	if err := s.SetApprovalDecision("gate", ""); err != nil {
+		t.Fatalf("clear decision: %v", err)
+	}
+	p, _ = s.Get("gate")
+	if p.ApprovalDecision != "" {
+		t.Fatalf("cleared decision = %q", p.ApprovalDecision)
+	}
+
+	// A rename must carry the policy — the decision follows the project
+	// identity, not a stale name.
+	if _, err := s.Rename("gate", "gate2"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	p, err = s.Get("gate2")
+	if err != nil {
+		t.Fatalf("get renamed: %v", err)
+	}
+	if p.ApprovalMode != "always" || p.ApprovalScope != ScopeProject {
+		t.Fatalf("renamed project lost policy: %+v", p)
+	}
+}
+
+// TestApprovalPolicyAdoptsMemoryOnlyProject covers the pre-migration shape: a
+// project that exists only as a memory file gets a row the first time its
+// policy is touched, so remembering never fails for want of a Create call.
+func TestApprovalPolicyAdoptsMemoryOnlyProject(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SetApprovalPolicy("legacy", "never", ScopeOnce); err != nil {
+		t.Fatalf("policy on memory-only project: %v", err)
+	}
+	p, err := s.Get("legacy")
+	if err != nil {
+		t.Fatalf("adopted project missing: %v", err)
+	}
+	if p.ApprovalMode != "never" || p.NormalizedScope() != ScopeOnce {
+		t.Fatalf("adopted policy = %+v", p)
+	}
+}
