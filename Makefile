@@ -33,7 +33,7 @@ NPM_INSTALL ?= npm ci --no-fund --no-audit
 
 .PHONY: all build web web-test web-gate build-webui build-darwin-amd64 build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
-        dev test adapter-test vet fmt fmt-check race race-focused gate gate-all run run-local measure clean icons release package release-local
+        dev test adapter-test vet fmt fmt-check race race-focused gate gate-all run run-local measure clean icons release package release-local install-local
 
 all: build
 
@@ -249,6 +249,18 @@ run:
 # Start the daemon + webui sidecar locally with one command (see scripts/run-local.sh).
 run-local:
 	exec ./scripts/run-local.sh
+
+# install-local syncs a fresh build over every panda location a developer
+# machine accumulates: the ~/.local/bin PATH entry and the install.sh release
+# prefix (~/.local/share/openpanda/bin). A stale copy left behind still opens
+# the shared data directory, and an older-schema binary dies at startup with
+# "schema version newer than binary" — syncing both keeps one habit safe.
+install-local: build
+	cp $(BIN) $(HOME)/.local/bin/panda
+	@if [ -d "$(HOME)/.local/share/openpanda/bin" ]; then \
+		cp $(BIN) "$(HOME)/.local/share/openpanda/bin/panda"; \
+		echo "synced $(HOME)/.local/share/openpanda/bin/panda"; \
+	fi
 
 # Measure steady-state RSS: start core, sample after 2s, stop.
 measure:
