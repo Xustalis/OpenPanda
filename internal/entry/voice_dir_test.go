@@ -47,10 +47,34 @@ func TestResolveVoiceDirAncestorWalk(t *testing.T) {
 	old := voiceDir
 	voiceDir = "extensions/voice"
 	defer func() { voiceDir = old }()
-	// macOS temp dirs sit under /var → /private/var: compare canonical paths.
-	want, _ := filepath.EvalSymlinks(sidecars)
-	if got := resolveVoiceDir(); got != want {
+	// Canonicalize both sides: macOS temp dirs sit under /var → /private/var,
+	// and Windows runners hand t.TempDir() an 8.3 short name (RUNNER~1) that
+	// filepath.Abs keeps verbatim while EvalSymlinks expands — the same
+	// directory either way, so only canonical forms may be compared.
+	want, got := canonPath(sidecars), canonPath(resolveVoiceDir())
+	if got != want {
 		t.Fatalf("resolveVoiceDir = %q, want ancestor match %q", got, want)
+	}
+}
+
+// canonPath canonicalizes a possibly-nonexistent path for comparison:
+// EvalSymlinks on the longest existing ancestor (resolving symlinks and,
+// on Windows, 8.3 short names), with the missing tail rejoined.
+func canonPath(p string) string {
+	var tail []string
+	for cur := p; ; {
+		if r, err := filepath.EvalSymlinks(cur); err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				r = filepath.Join(r, tail[i])
+			}
+			return r
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return filepath.Clean(p)
+		}
+		tail = append(tail, filepath.Base(cur))
+		cur = parent
 	}
 }
 
@@ -76,12 +100,8 @@ func TestResolveVoiceDirFallback(t *testing.T) {
 	old := voiceDir
 	voiceDir = "extensions/voice-nonexistent"
 	defer func() { voiceDir = old }()
-	got := resolveVoiceDir()
-	base := dir
-	if rw, err := filepath.EvalSymlinks(dir); err == nil {
-		base = rw // EvalSymlinks on the missing leaf fails; canonicalize the dir
-	}
-	want := filepath.Join(base, "extensions", "voice-nonexistent")
+	got := canonPath(resolveVoiceDir())
+	want := canonPath(filepath.Join(dir, "extensions", "voice-nonexistent"))
 	if got != want {
 		t.Fatalf("resolveVoiceDir = %q, want cwd-absolute fallback %q", got, want)
 	}
