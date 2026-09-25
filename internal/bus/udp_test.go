@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -146,6 +147,53 @@ func TestSTUNRoundTrip(t *testing.T) {
 	}
 	if addr.Port != cli.LocalAddr().Port || !addr.IP.IsLoopback() {
 		t.Fatalf("reflexive addr = %v, want %v", addr, cli.LocalAddr())
+	}
+}
+
+// TestSTUNRateLimit verifies the per-source cap on binding answers: one
+// source burns its window quota, a different source still gets answers, and
+// an expired window resets the budget.
+func TestSTUNRateLimit(t *testing.T) {
+	u, err := ListenUDP("127.0.0.1:0", "s", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u.Close()
+
+	for i := 0; i < stunRateMax; i++ {
+		if !u.allowSTUN("203.0.113.9") {
+			t.Fatalf("answer %d of %d refused", i+1, stunRateMax)
+		}
+	}
+	if u.allowSTUN("203.0.113.9") {
+		t.Fatal("over-quota answer allowed")
+	}
+	if !u.allowSTUN("198.51.100.7") {
+		t.Fatal("a different source was throttled by another's quota")
+	}
+	// An expired window opens a fresh budget.
+	u.stunRateMu.Lock()
+	u.stunRate["203.0.113.9"].reset = time.Now().Add(-time.Second)
+	u.stunRateMu.Unlock()
+	if !u.allowSTUN("203.0.113.9") {
+		t.Fatal("expired window did not reset the budget")
+	}
+}
+
+// TestSTUNRateCap verifies the tracked-source map is bounded: once it holds
+// stunRateCap distinct sources, new IPs stop getting answers rather than
+// growing memory under a spoofed-source flood.
+func TestSTUNRateCap(t *testing.T) {
+	u, err := ListenUDP("127.0.0.1:0", "s", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u.Close()
+	for i := 0; i < stunRateCap; i++ {
+		u.stunRate[fmt.Sprintf("198.51.%d.%d", i>>8, i&0xff)] = &stunRateState{reset: time.Now().Add(time.Hour)}
+	}
+	if u.allowSTUN("203.0.113.99") {
+		t.Fatal("new source answered past the tracking cap")
 	}
 }
 
