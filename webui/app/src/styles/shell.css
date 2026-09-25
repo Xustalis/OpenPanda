@@ -187,6 +187,21 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+a.sidebar-node {
+  text-decoration: none;
+}
+a.sidebar-node:hover {
+  background: var(--bg-hover);
+}
+.sidebar-node .sidebar-node-name {
+  flex: 1;
+  min-width: 0;
+}
+.sidebar-node .ver {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-tertiary);
+}
 
 /* ---- Main column ---------------------------------------------------------- */
 

@@ -19,6 +19,8 @@ const en: Messages = {
   'nav.group.orchestrate': 'Devices & agents',
   'nav.group.personal': 'Personal',
   'nav.group.system': 'System',
+  'sidebar.node.up': 'This node is running — open System',
+  'sidebar.node.down': 'This node is not running — start it with `panda daemon`',
 
   // ⌘K command palette
   'palette.trigger': 'Search…',

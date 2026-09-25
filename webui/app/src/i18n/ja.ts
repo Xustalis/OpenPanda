@@ -17,6 +17,8 @@ const ja: Messages = {
   'nav.group.orchestrate': 'デバイスとエージェント',
   'nav.group.personal': 'パーソナル',
   'nav.group.system': 'システム',
+  'sidebar.node.up': 'このノードは稼働中です — システムを開く',
+  'sidebar.node.down': 'このノードは停止しています — `panda daemon` で起動',
 
   // ⌘K コマンドパレット
   'palette.trigger': '検索…',

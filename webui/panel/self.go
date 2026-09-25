@@ -37,6 +37,7 @@ type selfJSON struct {
 	NodeRunning  bool         `json:"node_running"`
 	Node         *nodeRow     `json:"node,omitempty"`
 	Version      string       `json:"version"`
+	Codename     string       `json:"codename,omitempty"`
 	Update       *updateSlice `json:"update,omitempty"`
 }
 
@@ -102,6 +103,7 @@ func (h *handler) getSelf(w http.ResponseWriter, r *http.Request) {
 		CPUCores: runtime.NumCPU(),
 		RAMGB:    hwinfo.RAMGB(),
 		Version:  version.Version,
+		Codename: version.Codename,
 	}
 	if h.cfg != nil {
 		out.NodeName = h.cfg.Node.Name
