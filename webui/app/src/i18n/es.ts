@@ -647,7 +647,7 @@ const es: Messages = {
   'ui.update.degraded.sub': 'Acceso a la API de GitHub limitado o denegado; Panda no volverá a comprobar actualizaciones hasta reiniciarlo.',
   'ui.update.degraded.cta': 'Abrir Sistema →',
   'ui.update.degraded.close': 'Cerrar',
-  'ui.update.available.title': 'Actualización disponible: v{version}',
+  'ui.update.available.title': 'Actualización disponible: {version}',
   'ui.update.available.sub': 'Nueva versión lista con correcciones y mejoras.',
   'ui.update.available.cta': 'Ver actualización →',
 
