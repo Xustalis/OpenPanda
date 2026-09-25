@@ -639,7 +639,7 @@ const ja: Messages = {
   'ui.update.degraded.sub': 'GitHub API がレート制限または拒否されています。再起動するまで更新チェックを再開しません。',
   'ui.update.degraded.cta': 'システム画面を開く →',
   'ui.update.degraded.close': '閉じる',
-  'ui.update.available.title': 'アップデート: v{version}',
+  'ui.update.available.title': 'アップデート: {version}',
   'ui.update.available.sub': '修正と改善を含む新しいリリースがあります。',
   'ui.update.available.cta': 'アップデートを見る →',
 

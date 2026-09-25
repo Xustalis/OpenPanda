@@ -647,7 +647,7 @@ const de: Messages = {
   'ui.update.degraded.sub': 'GitHub API ist gedrosselt oder gesperrt; Panda prüft erst nach einem Neustart wieder auf Updates.',
   'ui.update.degraded.cta': 'System öffnen →',
   'ui.update.degraded.close': 'Schließen',
-  'ui.update.available.title': 'Update verfügbar: v{version}',
+  'ui.update.available.title': 'Update verfügbar: {version}',
   'ui.update.available.sub': 'Neue Version mit Korrekturen und Verbesserungen bereit.',
   'ui.update.available.cta': 'Update ansehen →',
 
