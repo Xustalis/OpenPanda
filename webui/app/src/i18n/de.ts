@@ -17,6 +17,8 @@ const de: Messages = {
   'nav.group.orchestrate': 'Geräte & Agents',
   'nav.group.personal': 'Persönlich',
   'nav.group.system': 'System',
+  'sidebar.node.up': 'Dieser Knoten läuft — System öffnen',
+  'sidebar.node.down': 'Dieser Knoten läuft nicht — mit `panda daemon` starten',
 
   // ⌘K-Befehlspalette
   'palette.trigger': 'Suchen…',

@@ -144,6 +144,25 @@ func runStatus(args []string) {
 	}
 	fmt.Println(p.Muted(i18n.Tf(loc, "cli.status.summary",
 		"total", strconv.Itoa(len(views)), "online", strconv.Itoa(online))))
+
+	// The table lists the directory; the question a reader actually brings is
+	// "is THIS node up?". Say so outright — an empty or offline local row is
+	// otherwise indistinguishable from a healthy listing at a glance. Skipped
+	// under --running: filtering already answers it by omission.
+	if !*runningOnly {
+		hasLocal, localRunning := false, false
+		for _, v := range views {
+			if v.Local {
+				hasLocal, localRunning = true, v.Running
+			}
+		}
+		switch {
+		case !hasLocal:
+			fmt.Println(p.Muted(i18n.T(loc, "cli.status.notRegistered")))
+		case !localRunning:
+			fmt.Println(p.Muted(i18n.T(loc, "cli.status.localDown")))
+		}
+	}
 }
 
 // nodeStateWord collapses the directory's two overlapping liveness fields into

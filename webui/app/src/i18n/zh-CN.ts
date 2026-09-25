@@ -17,6 +17,8 @@ const zhCN: Messages = {
   'nav.group.orchestrate': '设备与智能体',
   'nav.group.personal': '个人',
   'nav.group.system': '系统',
+  'sidebar.node.up': '本节点运行中 — 打开系统视图',
+  'sidebar.node.down': '本节点未运行 — 用 `panda daemon` 启动',
 
   // ⌘K 命令面板
   'palette.trigger': '搜索…',

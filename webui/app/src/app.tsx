@@ -86,6 +86,7 @@ export function App() {
         </nav>
 
         <div class="sidebar-footer">
+          <SidebarNode />
           <a href="#/settings" class={`nav-item${active === 'settings' ? ' active' : ''}`}>
             {t('nav.settings')}
           </a>
@@ -187,6 +188,31 @@ function UpdateBanner() {
       <a class="banner-link" href="#/system">{t('ui.update.available.cta')}</a>
       <button class="banner-close" onClick={() => setDismissed(true)} aria-label={t('ui.update.degraded.close')}>×</button>
     </div>
+  )
+}
+
+/** Sidebar footer's node chip: this machine's name, a running/off status
+ *  dot, and the running version — the at-a-glance answer to "is my node up,
+ *  and what am I on?". Links to System, where the same data lives in full. */
+function SidebarNode() {
+  useLocaleRerender()
+  const { data: self } = useAsync(() => api.self(), [])
+  if (!self) return null
+  const name = self.node_name || self.hostname
+  if (!name) return null
+  return (
+    <a
+      href="#/system"
+      class="sidebar-node"
+      title={t(self.node_running ? 'sidebar.node.up' : 'sidebar.node.down')}
+    >
+      <span class={`dot${self.node_running ? '' : ' off'}`} aria-hidden />
+      <span class="mono sidebar-node-name">{name}</span>
+      <span class="ver mono">
+        v{self.version}
+        {self.codename ? ` ${self.codename}` : ''}
+      </span>
+    </a>
   )
 }
 

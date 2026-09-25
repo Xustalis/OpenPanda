@@ -196,6 +196,16 @@ func executeApply(includePre, force bool) {
 		emitJSON(m.Status())
 	} else {
 		fmt.Println(p.Success(i18n.Tf(loc, "cli.update.success", "version", "v"+targetVersion)))
+		// Print the release notes of the version just installed — an update
+		// that reports nothing new feels like nothing happened, and the notes
+		// were already fetched by Check.
+		if st.Notes != "" {
+			fmt.Println()
+			fmt.Println(p.Bold(i18n.T(loc, "cli.update.notes")))
+			for _, line := range strings.Split(st.Notes, "\n") {
+				fmt.Println("  " + line)
+			}
+		}
 		fmt.Println(p.Muted(i18n.T(loc, "cli.update.restartHint")))
 	}
 }

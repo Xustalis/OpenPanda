@@ -449,6 +449,7 @@ export interface SelfInfo {
   node_running: boolean
   node?: NodeInfo
   version: string
+  codename?: string
   update?: UpdateStatus
 }
 
