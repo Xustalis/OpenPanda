@@ -38,7 +38,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-## [0.0.9] - 2026-09-25
+## [0.0.9] - 2026-09-25 — "Periapsis"
 
 La versión estable v0.0.9 — nombre clave **Periapsis**. Para una instalación en una sola máquina es una release de confort: las aprobaciones pueden recordarse en lugar de responderse de nuevo, la CLI se explica mejor (un status que dice si *este* nodo está activo, una cola vacía que sugiere el siguiente paso, una guía de primer arranque, notas de la versión impresas por el actualizador), la consola web atribuye cada respuesta al agente y modelo que la produjo y fija en la barra lateral la vitalidad y versión del nodo, y la TUI sobrevive las secuencias de comandos cotidianas que antes la corrompían. Para flotas completa la línea que abrió la beta: un plano de datagramas autenticado con NAT traversal, cargas DTN cifradas, ventanas de contacto programadas, identidad criptográfica de nodo con consentimiento firmado, entrega directa de artifacts entre etapas y una compilación lite para dispositivos limitados.
 

@@ -76,6 +76,7 @@ func executeCheck(includePre bool) {
 
 	m := updater.New(updater.Options{
 		Current:           versionpkg.Version,
+		CurrentCodename:   versionpkg.Codename,
 		IncludePrerelease: includePre,
 	})
 
@@ -95,7 +96,7 @@ func executeCheck(includePre bool) {
 	}
 
 	if st.Available {
-		fmt.Println(p.Heading(i18n.Tf(loc, "cli.update.available", "latest", "v"+st.Latest, "current", "v"+st.Current)))
+		fmt.Println(p.Heading(i18n.Tf(loc, "cli.update.available", "latest", verDisplay(st.Latest, st.LatestCodename), "current", versionpkg.Display())))
 		if st.Notes != "" {
 			fmt.Println()
 			fmt.Println(p.Bold(i18n.T(loc, "cli.update.notes")))
@@ -110,7 +111,7 @@ func executeCheck(includePre bool) {
 		if st.Notes != "" && strings.HasPrefix(st.Notes, "暂无法检查更新") {
 			fmt.Println(p.Warn(st.Notes))
 		} else {
-			fmt.Println(p.Success(i18n.Tf(loc, "cli.update.uptodate", "current", "v"+st.Current)))
+			fmt.Println(p.Success(i18n.Tf(loc, "cli.update.uptodate", "current", versionpkg.Display())))
 		}
 	}
 }
@@ -124,6 +125,7 @@ func executeApply(includePre, force bool) {
 
 	opts := updater.Options{
 		Current:           versionpkg.Version,
+		CurrentCodename:   versionpkg.Codename,
 		IncludePrerelease: includePre,
 		NoRestart:         true,
 		Force:             force,
@@ -155,19 +157,21 @@ func executeApply(includePre, force bool) {
 			if st.Notes != "" && strings.HasPrefix(st.Notes, "暂无法检查更新") {
 				fmt.Println(p.Warn(st.Notes))
 			} else {
-				fmt.Println(p.Success(i18n.Tf(loc, "cli.update.uptodate", "current", "v"+st.Current)))
+				fmt.Println(p.Success(i18n.Tf(loc, "cli.update.uptodate", "current", versionpkg.Display())))
 			}
 		}
 		return
 	}
 
 	targetVersion := st.Latest
+	targetCodename := st.LatestCodename
 	if targetVersion == "" {
 		targetVersion = st.Current
+		targetCodename = versionpkg.Codename
 	}
 
 	if !jsonOutput {
-		fmt.Println(p.Info(i18n.Tf(loc, "cli.update.downloading", "version", "v"+targetVersion)))
+		fmt.Println(p.Info(i18n.Tf(loc, "cli.update.downloading", "version", verDisplay(targetVersion, targetCodename))))
 	}
 
 	if err := m.DownloadForce(ctx, force); err != nil {
@@ -195,7 +199,7 @@ func executeApply(includePre, force bool) {
 	if jsonOutput {
 		emitJSON(m.Status())
 	} else {
-		fmt.Println(p.Success(i18n.Tf(loc, "cli.update.success", "version", "v"+targetVersion)))
+		fmt.Println(p.Success(i18n.Tf(loc, "cli.update.success", "version", verDisplay(targetVersion, targetCodename))))
 		// Print the release notes of the version just installed — an update
 		// that reports nothing new feels like nothing happened, and the notes
 		// were already fetched by Check.
@@ -208,6 +212,16 @@ func executeApply(includePre, force bool) {
 		}
 		fmt.Println(p.Muted(i18n.T(loc, "cli.update.restartHint")))
 	}
+}
+
+// verDisplay renders a version for a human reader: "v" + semver, with the
+// release codename appended when the side that owns the release supplied one
+// (the GitHub release name carries it; the running binary's is local).
+func verDisplay(ver, codename string) string {
+	if codename == "" {
+		return "v" + ver
+	}
+	return "v" + ver + " " + codename
 }
 
 // schemaFloorFunc adapts an open store handle to Options.SchemaFloor — the

@@ -22,14 +22,15 @@ import (
 // mutex; the long-running network steps (check, download) release the lock so
 // status polls are never blocked.
 type Manager struct {
-	mu       sync.Mutex
-	opts     Options
-	stage    Stage
-	latest   string
-	notes    string
-	errMsg   string
-	staged   *stagedRelease
-	notified string // last version OnAvailable fired for, so ticks don't repeat
+	mu             sync.Mutex
+	opts           Options
+	stage          Stage
+	latest         string
+	latestCodename string
+	notes          string
+	errMsg         string
+	staged         *stagedRelease
+	notified       string // last version OnAvailable fired for, so ticks don't repeat
 }
 
 // stagedRelease is a downloaded-and-verified release waiting to be applied.
@@ -70,12 +71,14 @@ func (m *Manager) status(ctx context.Context) Status {
 
 func (m *Manager) statusLocked(ctx context.Context) Status {
 	st := Status{
-		Stage:   m.stage,
-		Current: m.opts.Current,
-		Latest:  m.latest,
-		Notes:   m.notes,
-		Error:   m.errMsg,
-		Idle:    m.opts.Idle(ctx),
+		Stage:           m.stage,
+		Current:         m.opts.Current,
+		CurrentCodename: m.opts.CurrentCodename,
+		Latest:          m.latest,
+		LatestCodename:  m.latestCodename,
+		Notes:           m.notes,
+		Error:           m.errMsg,
+		Idle:            m.opts.Idle(ctx),
 	}
 	switch m.stage {
 	case StageAvailable, StageDownloading, StageStaged, StageApplying:
@@ -94,6 +97,7 @@ func (m *Manager) Check(ctx context.Context) error {
 	m.stage = StageChecking
 	m.errMsg = ""
 	m.latest = ""
+	m.latestCodename = ""
 	m.notes = ""
 	includePre := m.opts.IncludePrerelease || strings.Contains(m.opts.Current, "-")
 	repo := m.opts.Repo
@@ -116,6 +120,7 @@ func (m *Manager) Check(ctx context.Context) error {
 		case *RateLimitExceeded, *AccessDenied:
 			m.stage = StageIdle
 			m.latest = ""
+			m.latestCodename = ""
 			m.errMsg = ""
 			m.notes = "暂无法检查更新：" + err.Error()
 			m.opts.Logger.Warn("updater: check degraded to idle", "err", err)
@@ -127,12 +132,13 @@ func (m *Manager) Check(ctx context.Context) error {
 		}
 	}
 	m.latest = rel.Version
+	m.latestCodename = rel.Codename
 	m.notes = summarizeNotes(rel.Notes)
 	if CompareVersion(rel.Version, m.opts.Current) > 0 {
 		m.stage = StageAvailable
 		if m.opts.OnAvailable != nil && m.notified != rel.Version {
 			m.notified = rel.Version
-			m.opts.OnAvailable(rel.Version)
+			m.opts.OnAvailable(rel.Version, rel.Codename)
 		}
 	} else {
 		m.stage = StageIdle
@@ -235,6 +241,7 @@ func (m *Manager) Cancel() {
 		m.staged = nil
 	}
 	m.latest = ""
+	m.latestCodename = ""
 	m.notes = ""
 	m.errMsg = ""
 	m.stage = StageIdle

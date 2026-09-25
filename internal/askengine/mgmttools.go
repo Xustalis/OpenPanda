@@ -571,7 +571,7 @@ func (e *Engine) systemStatus(ctx context.Context) (string, error) {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "OpenPanda 状态\n版本：%s", version.Version)
+	fmt.Fprintf(&b, "OpenPanda 状态\n版本：%s", version.Display())
 	fmt.Fprintf(&b, "\n本节点：%s（%s）", e.cfg.Node.Name, e.cfg.Node.Kind)
 	if e.cfg.Model.Model != "" {
 		fmt.Fprintf(&b, "\n入口模型：%s", e.cfg.Model.Model)

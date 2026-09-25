@@ -107,6 +107,7 @@ jobs:
         run: ./scripts/render-homebrew-formula.sh "${GITHUB_REF_NAME#v}"
 
       - name: Extract release notes from CHANGELOG.md
+        id: notes
         # Pull the tagged version's section out of the canonical changelog so
         # the GitHub Release body mirrors it (generate_release_notes alone
         # only lists commits, which told users nothing in 0.0.5). The body is
@@ -134,6 +135,16 @@ jobs:
           if [ ! -s "$section" ]; then
             echo "CHANGELOG.md has no section for $ver — refusing to publish an empty body" >&2
             exit 1
+          fi
+          # The release title carries the codename when the section's intro
+          # line declares one ("codename **Periapsis**"), so release pages,
+          # feeds, and the updater's "v0.0.9 Periapsis" notices all say the
+          # same thing. A section without a codename falls back to the bare tag.
+          codename="$(sed -nE 's/.*codename \*\*([^*]+)\*\*.*/\1/p' "$section" | head -n1)"
+          if [ -n "$codename" ]; then
+            echo "release_name=${GITHUB_REF_NAME} ${codename}" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
           repo="https://github.com/Xustalis/OpenPanda/blob/main"
           printf '%s\n\n' "**Release notes:** English · [简体中文]($repo/CHANGELOG.zh-CN.md) · [日本語]($repo/CHANGELOG.ja.md) · [Español]($repo/CHANGELOG.es.md) · [Deutsch]($repo/CHANGELOG.de.md)" > "$notes"
@@ -168,6 +179,7 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          name: ${{ steps.notes.outputs.release_name }}
           body_path: dist/release-notes.md
           # Appends the generated "What's Changed" commit summary below the
           # changelog body — the body carries the narrative, this carries the

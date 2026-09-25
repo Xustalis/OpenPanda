@@ -42,7 +42,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-## [0.0.9] - 2026-09-25
+## [0.0.9] - 2026-09-25 — "Periapsis"
 
 The v0.0.9 stable release — codename **Periapsis**. For a single-machine setup this is a comfort release: approvals can be remembered instead of re-answered, the CLI explains itself better (a status that says whether *this* node is up, an empty queue that suggests the next step, a first-run pointer, release notes printed by the updater), the web console attributes every answer to the agent and model that produced it and pins the node's liveness and version into the sidebar, and the TUI survives the ordinary command sequences that used to corrupt it. For fleets it completes the line the beta opened: an authenticated datagram plane with NAT traversal, encrypted DTN payloads, scheduled contact windows, cryptographic node identity with signed consent, direct stage-to-stage artifact handoff, and a lite build for constrained nodes.
 

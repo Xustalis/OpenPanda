@@ -391,7 +391,11 @@ export interface DirectoryListing {
 export interface UpdateStatus {
   stage: 'idle' | 'checking' | 'available' | 'downloading' | 'staged' | 'applying' | 'done' | 'error'
   current: string
+  /** The running build's release codename (e.g. "Periapsis"), when known. */
+  current_codename?: string
   latest?: string
+  /** The pending release's codename, parsed from the GitHub release title. */
+  latest_codename?: string
   /** Changelog digest of the latest release (present once a check found one). */
   notes?: string
   available: boolean
@@ -401,6 +405,14 @@ export interface UpdateStatus {
    *  a transient upstream error (GitHub 403/rate limit, network offline).
    *  The UI shows a soft "updates paused" banner in this case. */
   degraded?: boolean
+}
+
+/** Renders a release for humans: "v0.0.9 Periapsis" when the codename is
+ *  known, bare "v0.0.9" when it is not. Empty version renders as-is so a
+ *  not-yet-checked status never shows a dangling "v". */
+export function displayVersion(version?: string, codename?: string): string {
+  if (!version) return ''
+  return 'v' + version + (codename ? ' ' + codename : '')
 }
 
 /** One agent declared on a node's capability card (GET /api/nodes). */
