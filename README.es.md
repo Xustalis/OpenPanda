@@ -159,7 +159,7 @@ panda init
 | Versión | Tema |
 |---|---|
 | **v0.0.8** (base estable) | Orquestación multiagente en una sola máquina, plenamente utilizable: clasificación de intención, despacho, bucle de supervisión, failover, aprobación por niveles, política de idioma en prompts |
-| **v0.0.9-beta** (actual) — "Periapsis" | Arquitectura de transporte híbrido/DTN: enrutado mesh ponderado por latencia, bundles DTN sobre el cable, presupuestos de tokens, copias sombra, ruta de actuadores — más un plano de datagramas UDP con hole punching NAT coordinado por la malla, payloads DTN cifrados, compilación lite para dispositivos limitados y una pasada de fiabilidad del pipeline de tareas |
+| **v0.0.9** (actual) — "Periapsis" | Arquitectura de transporte híbrido/DTN completada: enrutado mesh ponderado por latencia, bundles DTN sobre el cable, presupuestos de tokens, copias sombra, ruta de actuadores, plano de datagramas UDP con hole punching NAT coordinado por la malla, payloads cifrados, planes de contacto, identidad de nodo Ed25519, compilación lite — más aprobaciones recordadas, atribución de ejecución, un chip de nodo en la barra lateral web y pulido de la CLI cotidiana |
 | **v0.0.10** | La colaboración multidispositivo como protagonista: delegación entre nodos, protección por lease, ejecución reanudable — endurecida y probada en campo |
 | **v0.0.x (más allá)** | Estabilidad, rendimiento y ajuste de casos límite |
 | **v0.1.0** | Capacidades de escritorio y un control y una gestión más potentes — calidad comercial |

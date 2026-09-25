@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/ins
 等效的显式写法：
 
 ```bash
-sh scripts/install.sh --version 0.0.9-beta   # 安装指定版本（如预发布版 0.0.9-beta、稳定版 0.0.8；默认 latest，即最新稳定版）
+sh scripts/install.sh --version 0.0.9   # 安装指定版本（如稳定版 0.0.9、预发布版 0.0.9-beta；默认 latest，即最新稳定版）
 sh scripts/install.sh --prefix /opt/openpanda  # 自定义安装目录
 sh scripts/install.sh --lite                   # lite 构建：无内嵌 Web 控制台/TUI（仅 Linux）
 sh scripts/install.sh --yes                    # 额外注册开机自启（不询问）
@@ -67,7 +67,7 @@ irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps
 或下载后运行：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.0.9-beta -Yes
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.0.9 -Yes
 ```
 
 安装到 `%LOCALAPPDATA%\OpenPanda\`，并把 `bin` 加入**用户 PATH**（持久化）。交互式运行时询问是否注册**登录计划任务**（`schtasks /SC ONLOGON`）在后台跑 `panda daemon`。
@@ -149,12 +149,12 @@ panda uninstall --backup-only
 
 ## 发布一个新版本
 
-1. 变更合入 `main`，确认该 commit 的 **Gate 已经跑绿**，再打标签：`git tag v0.0.9-beta && git push origin v0.0.9-beta`（注意两点：CHANGELOG 必须先有该版本章节，否则 release 流水线会拒绝发布；release 流水线会向 Gate 查验**同一个 commit** 的结论，没有 push 触发的 Gate 运行记录、或结论不是 success，都会直接拒绝发布并报错）。
+1. 变更合入 `main`，确认该 commit 的 **Gate 已经跑绿**，再打标签：`git tag v0.0.9 && git push origin v0.0.9`（注意两点：CHANGELOG 必须先有该版本章节，否则 release 流水线会拒绝发布；release 流水线会向 Gate 查验**同一个 commit** 的结论，没有 push 触发的 Gate 运行记录、或结论不是 success，都会直接拒绝发布并报错）。
 2. `.github/workflows/release.yml` 自动跨平台构建 → 打包 `.tar.gz`/`.zip` → 生成 `checksums.txt` → 发布 GitHub Release。
 3. 预发布（带连字符的标签，如 `v0.0.9-beta`、`v0.0.8-alpha`、`v1.0.0-rc1`）会自动标记为 **pre-release**：它不会成为仓库的 Latest，`releases/latest` 仍指向最后一个稳定版，一键安装脚本也只装稳定版；同时**不会**同步 Homebrew tap。
 4. 落地后可用：
 
-   - 项目 README / `docs/install.md` 里的一键脚本直接装到最新**稳定**版（要装预发布版请显式指定，例如 `--version 0.0.9-beta`）；
+   - 项目 README / `docs/install.md` 里的一键脚本直接装到最新**稳定**版（要装预发布版请显式指定，例如 `--version 1.0.0-rc1`）；
 
    - Homebrew 用户 `brew upgrade openpanda`；仅**正式版**会生成带固定 SHA-256 的配方并同步到 tap。
 
