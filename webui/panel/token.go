@@ -23,8 +23,10 @@ func NewToken() string {
 
 // IsLoopbackAddr reports whether a listen address binds only to loopback
 // ("127.0.0.1:7840", "[::1]:7840", "localhost:7840"). A bare port (":7840")
-// binds every interface and is not loopback. Ephemeral tokens are only ever
-// generated for loopback binds — a wider bind must fail closed instead.
+// binds every interface and is not loopback. A non-loopback bind still gets
+// an ephemeral token — /api/* never runs open — but the token travels over
+// plain HTTP, so a stable configured token (or a TLS proxy) is the fix for
+// anything long-lived.
 func IsLoopbackAddr(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -35,6 +37,52 @@ func IsLoopbackAddr(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// LANURLs returns the console URLs reachable from other devices on the LAN —
+// one per non-loopback IPv4 — when bound to a non-loopback address, and
+// nothing for a loopback bind. The bound listener address supplies the port.
+// A bind on one specific address (or a hostname) serves exactly that address,
+// so it is the only URL reported; wildcard binds (":7840", "0.0.0.0", "::")
+// get one URL per detected LAN interface.
+func LANURLs(bound string) []string {
+	host, port, err := net.SplitHostPort(bound)
+	if err != nil || IsLoopbackAddr(bound) {
+		return nil
+	}
+	if host != "" {
+		if ip := net.ParseIP(host); ip == nil || !ip.IsUnspecified() {
+			// Specific IP or hostname bind — the listener serves that one.
+			return []string{"http://" + net.JoinHostPort(host, port)}
+		}
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip4 := ip.To4(); ip4 != nil && !ip4.IsLoopback() && !ip4.IsLinkLocalUnicast() {
+				out = append(out, "http://"+net.JoinHostPort(ip4.String(), port))
+			}
+		}
+	}
+	return out
 }
 
 // AppendToken adds ?token=… (or &token=… when a query already exists) to a
