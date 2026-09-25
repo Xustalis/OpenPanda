@@ -116,7 +116,7 @@ OpenPanda 自己不执行长程任务，而是委派给设备上安装的 agent 
 
 **Web 控制台打不开 / token 丢了？**
 
-回环模式重新 `panda web` 即可（URL 自带临时 token）。对外监听需要 `OPENPANDA_PANEL_TOKEN`；SSE 事件流使用 `?token=` 查询参数鉴权。
+回环模式重新 `panda web` 即可（URL 自带临时 token，前端读取后立即从地址栏清除）。对外监听需要 `OPENPANDA_PANEL_TOKEN`；所有 `/api/*` 请求（含 SSE 事件流）仅接受 `Authorization: Bearer` 头鉴权，URL 中的 `?token=` 会被拒绝——避免 token 落入浏览器历史或代理日志。
 
 **REPL 里会话上下文能存多久？**
 

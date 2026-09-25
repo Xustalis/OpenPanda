@@ -66,6 +66,12 @@ The v0.0.9 line continues under the codename **Periapsis**: a datagram plane and
 - **`Approve` on a resume_execution task re-queues adoptably** — the resume branch marks the row `scheduled=1` so `ListReady` can claim it; a direct Approve no longer produces a `queued` row no scheduler will ever pick up.
 - **Tool-loop exhaustion degrades to a digest** — a burned-out tool budget returns a summary of the calls that did execute instead of a bare "max tool rounds" error.
 - **DTN relay accounting survives restarts** — the per-bundle relay hop budget lives in `dtn_relay_log` (migration V25) instead of memory, and `parkBundle`'s upsert updates `via`, so a redelivered bundle's no-echo rule follows its latest inbound path.
+- **Skill URL imports can no longer probe the internal network** — `ImportURL` (the path behind `panda skill install <url>`, `panda_skill_install`, `skill_install` and `/api/skills/import`) now requires https for any non-loopback host and validates every resolved IP at connect time: loopback, RFC1918/ULA, link-local (cloud metadata endpoints), multicast and unspecified addresses are never dialed, and redirects must satisfy the same classification, so an agent- or index-supplied URL cannot turn the node into an SSRF trampoline (hardening: `internal/skills/fetchguard.go`).
+- **STUN binding answers are rate-limited per source IP** — 10 answers/source/second with a bounded tracking map caps the UDP socket's ~2× reflection factor without hurting real clients (RFC 5389 retransmits on the seconds scale).
+
+### Breaking changes
+
+- **`?token=` query-parameter auth on `/api/*` removed** — the panel API only accepts `Authorization: Bearer <token>` now, because a credential in a URL lands in browser history and proxy access logs. The bundled console already sends the header everywhere including the SSE stream (fetch-based, not EventSource), and the `/?token=` auto-login URL `panda web` opens is unaffected — it is the static page, not the API. External scripts and third-party clients must switch to the header.
 
 ## [0.0.9-beta] - 2026-09-23
 

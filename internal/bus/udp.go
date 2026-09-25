@@ -112,6 +112,9 @@ type UDPConn struct {
 
 	stunMu      sync.Mutex
 	stunWaiters map[[stunTxnLen]byte]chan *net.UDPAddr
+
+	stunRateMu sync.Mutex
+	stunRate   map[string]*stunRateState
 }
 
 // ListenUDP binds addr (e.g. ":7836") and returns a plane ready to ReadLoop.
@@ -143,6 +146,7 @@ func ListenUDP(addr, secret string, logger *slog.Logger) (*UDPConn, error) {
 	return &UDPConn{
 		conn: conn, aead: aead, secret: secret, logger: logger,
 		stunWaiters: make(map[[stunTxnLen]byte]chan *net.UDPAddr),
+		stunRate:    make(map[string]*stunRateState),
 	}, nil
 }
 

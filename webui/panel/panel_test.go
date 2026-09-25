@@ -482,22 +482,23 @@ func TestAuthLockoutStillAcceptsCorrectToken(t *testing.T) {
 	}
 }
 
-// TestAuthTokenViaQuery verifies the ?token= fallback, which EventSource needs
-// because it cannot send an Authorization header.
-func TestAuthTokenViaQuery(t *testing.T) {
+// TestAuthTokenViaQueryRefused verifies the ?token= fallback is gone: a
+// credential in a URL lands in browser history and proxy access logs, so the
+// API ignores it entirely — even the correct token gets a 401, and the
+// attempt still counts against the brute-force budget.
+func TestAuthTokenViaQueryRefused(t *testing.T) {
 	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Token: testToken})
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks?token="+testToken, nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 via query token", rr.Code)
-	}
-	// A wrong query token is still rejected and counts as a failure.
-	req = httptest.NewRequest(http.MethodGet, "/api/tasks?token=wrong", nil)
-	rr = httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401 for wrong query token", rr.Code)
+		t.Fatalf("status = %d, want 401 — query-param credentials are refused", rr.Code)
+	}
+	// Header auth on the same handler still passes.
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 via Authorization header", rr.Code)
 	}
 }
 

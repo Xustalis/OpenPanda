@@ -149,11 +149,48 @@ func parseBindingResponse(msg []byte, txn [stunTxnLen]byte) (*net.UDPAddr, error
 	return nil, errors.New("stun: no XOR-MAPPED-ADDRESS")
 }
 
+// STUN binding answers are rate-limited per source IP: a request is 20 bytes
+// and its answer 32–44, so unthrottled the socket is a ~2x amplifier for
+// spoofed-source floods. The cap keeps the reflection surface small without
+// hurting real clients — RFC 5389 retransmits on the seconds scale.
+const (
+	stunRateWindow = time.Second
+	stunRateMax    = 10
+	// stunRateCap bounds the tracked-source map; a flood from many spoofed
+	// sources stops getting answers rather than growing memory unbounded.
+	stunRateCap = 4096
+)
+
+type stunRateState struct {
+	count int
+	reset time.Time
+}
+
+// allowSTUN reports whether a binding answer may be sent to ip now.
+func (u *UDPConn) allowSTUN(ip string) bool {
+	now := time.Now()
+	u.stunRateMu.Lock()
+	defer u.stunRateMu.Unlock()
+	st := u.stunRate[ip]
+	if st == nil || now.After(st.reset) {
+		if st == nil && len(u.stunRate) >= stunRateCap {
+			return false
+		}
+		st = &stunRateState{reset: now.Add(stunRateWindow)}
+		u.stunRate[ip] = st
+	}
+	st.count++
+	return st.count <= stunRateMax
+}
+
 // handleSTUN answers a binding request directly or wakes a pending binding
 // lookup's waiter on a response.
 func (u *UDPConn) handleSTUN(d []byte, src *net.UDPAddr) {
 	switch binary.BigEndian.Uint16(d[0:2]) {
 	case stunBindReq:
+		if !u.allowSTUN(src.IP.String()) {
+			return
+		}
 		resp, err := buildBindingResponse(d, src)
 		if err != nil {
 			return
