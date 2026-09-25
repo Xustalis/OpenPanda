@@ -320,17 +320,26 @@ func NormalizeURL(rawURL string) string {
 }
 
 // ImportURL downloads a skill or archive from a URL and imports it.
+//
+// The URL is user- and agent-supplied, so the fetch is guarded (fetchguard.go):
+// non-loopback hosts require https, and the dialer refuses to connect to
+// loopback/private/link-local/reserved addresses — including on redirects —
+// so the function cannot be used to probe the LAN or a cloud metadata
+// endpoint from inside the node.
 func (s *Store) ImportURL(ctx context.Context, rawURL string, opts ImportOptions) ([]*Skill, error) {
 	fetchURL := NormalizeURL(rawURL)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fetchURL, nil)
+	u, policy, err := classifyFetchURL(fetchURL)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("skills: create request: %w", err)
 	}
 	req.Header.Set("User-Agent", "OpenPanda-Skill-Importer/1.0")
 
-	client := &http.Client{Timeout: defaultHTTPTimeout}
-	resp, err := client.Do(req)
+	resp, err := fetchClient(policy).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("skills: download from %s: %w", rawURL, err)
 	}

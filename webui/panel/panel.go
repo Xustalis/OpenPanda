@@ -247,7 +247,7 @@ func securityHeaders(next http.Handler) http.Handler {
 // always served. Failed attempts are rate-limited per client IP (L1), but a
 // correct token always passes and resets that budget — the lockout throttles
 // brute force, it must never lock out a client holding valid credentials
-// (EventSource auto-reconnects with a stale token otherwise locks an IP out
+// (a reconnecting SSE stream with a stale token otherwise locks an IP out
 // with the panel left unusable).
 func authMiddleware(token string, next http.Handler) http.Handler {
 	limiter := &authLimiter{failures: map[string]*authFailure{}}
@@ -261,12 +261,12 @@ func authMiddleware(token string, next http.Handler) http.Handler {
 			// A correct token clears the failure budget and passes without
 			// consulting the limiter — checked first, before any lockout.
 			if token != "" {
+				// Authorization header only. A ?token= query credential would
+				// end up in browser history, devtools network panes and any
+				// upstream proxy's access log, so it is refused — the bundled
+				// console sends the header everywhere including the SSE
+				// stream (fetch-based, not EventSource).
 				got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-				// EventSource cannot send headers — accept ?token= too (the
-				// same pattern `panda web` already uses for /?token= login).
-				if got == "" {
-					got = r.URL.Query().Get("token")
-				}
 				// Hash both sides so the comparison is constant-time regardless
 				// of length — ConstantTimeCompare otherwise early-returns on a
 				// length mismatch, leaking the token length.

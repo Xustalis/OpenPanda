@@ -17,6 +17,15 @@ OpenPanda 是一个运行在你自己设备上的 P2P 任务编排内核。本�
 - **审计链无密钥哈希。** `task_events` 的哈希链是无密钥 SHA-256：能写数据库
   就能重算整条链。它与共享密钥同属「密钥分发」问题，见 `docs/status.md` 已知限制
   （P2-8 / P2-9）。
+- **自更新信任止于 GitHub + TLS。** `panda` 的自动更新校验 release 附带
+  `checksums.txt` 的 SHA-256 并拒绝越界解包，但校验和与二进制同源于同一个
+  GitHub release——它保证下载完整，不抵御发布渠道本身被攻破。带外签名
+  （minisign/cosign）在路线图上，尚未落地；在那之前 `internal/updater` 的信任
+  根是 GitHub 账户与 TLS。
+- **技能 URL 导入有出站边界。** `panda skill install <url>` 及对应面板 / MCP
+  路径只允许 https（环回地址除外），且拨号时拒绝环回 / 私网 / 链路本地等
+  保留地址，防止把节点变成内网探测跳板。经 `skills.hub_url` 配置的私有 hub
+  不受此限——那是管理员自己的部署选择。
 
 由此推论：**每个节点视为同等完全信任，任一节点失陷即全网失陷。**
 不要把 mesh 扩展到不完全受控的机器。
