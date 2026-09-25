@@ -673,7 +673,7 @@ const en: Messages = {
   'ui.update.degraded.sub': 'GitHub API access is rate-limited or denied; Panda will not check for updates again until you restart it.',
   'ui.update.degraded.cta': 'Open System →',
   'ui.update.degraded.close': 'Close',
-  'ui.update.available.title': 'Update available: v{version}',
+  'ui.update.available.title': 'Update available: {version}',
   'ui.update.available.sub': 'A new release is ready with fixes and improvements.',
   'ui.update.available.cta': 'View update →',
 

@@ -662,7 +662,7 @@ const zhCN: Messages = {
   'ui.update.degraded.sub': 'GitHub API 访问受限，本次运行不再检查更新；重启后会自动重试。',
   'ui.update.degraded.cta': '在「系统」页查看 →',
   'ui.update.degraded.close': '关闭',
-  'ui.update.available.title': '可升级到 v{version}',
+  'ui.update.available.title': '可升级到 {version}',
   'ui.update.available.sub': '新版本已发布，包含若干修复与改进。',
   'ui.update.available.cta': '查看更新 →',
 
