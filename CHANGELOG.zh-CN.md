@@ -38,21 +38,37 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
-v0.0.9 版本线继续推进，代号 **Periapsis**：为无法保持 WebSocket 的对端带来数据报平面与 NAT 打洞，DTN 载荷加密，面向受限设备的 lite 构建，以及一轮覆盖模型驱动队列方式的任务管线可靠性修复。
+## [0.0.9] - 2026-09-25
+
+v0.0.9 正式版——代号 **Periapsis**。对单机使用来说这是一次舒适度发布：审批可以记住而不必每次都重新回答，CLI 更会解释自己（status 直接说明本节点是否在运行、空队列给出下一步建议、首次运行给出指引、更新器会打印 release notes），Web 控制台把每个回答归属到产出它的 agent 与模型、并把节点存活状态与版本固定在侧栏，TUI 也能扛住过去会把它弄花的日常操作序列。对多机集群则补齐了 beta 开启的整条线：带认证的数据报平面与 NAT 打洞、DTN 载荷加密、定时接触窗口、密码学节点身份与签名授权、stage 间直接 artifact 交接，以及面向受限设备的 lite 构建。
 
 ### 新增
 
+- **全表面的审批记忆** —— 二级（tier-2）确认不必每次都重新回答：决定可以按会话记住，也可以按项目记住（默认仍是仅本次）。引擎保存会话级决定，项目行携带自己的策略（模式覆盖 + 默认范围 + 已记住的决定，迁移 V26），被记住的*拒绝*会直接短路为拒绝而不再弹出询问。范围在提出问题的地方选择：审批卡片的 once|session|project 行（1/2/3 按键与可点击单元格）、`/approval` 与 `panda project approval` 查看管理生效策略、`panda ask`/`session ask`，以及 Web 控制台队列与会话视图中的范围选择器——这两个视图也会透出被暂停的 tier-2 任务。
+- **任务活跃度热力图** —— 全年的每日任务计数渲染为网格：出现在欢迎横幅上，REPL 里用 `/heatmap` 查看，脚本可用 `panda heatmap [--weeks N]`；NO_COLOR/哑终端降级为字符梯度，非 Unicode 控制台使用 ASCII 单元格。
+- **`panda agents test <name>`** —— 对已安装 agent CLI 的一次性诊断：凭据来源、解析出的模型、端点可达性（含状态细节与延迟）；支持 `--json` 与 `--config`，不可用时以非零码退出。
+- **执行归属标注** —— 一条低调的 `agent (模型) · 节点` 行贯穿 ask 输出（人类/JSON/流式）、REPL 任务块、TUI 轮次与面板 approve 路径（从持久化的 ResultJSON 还原），每个回答都能说出是谁产出的。Web 控制台在会话与详情视图中携带同样的归属信息，系统版本卡以完整权重显示 `v0.0.9 Periapsis`。
+- **Web 侧栏节点徽标** —— 控制台侧栏底部现在显示本机名称、运行/离线状态点与当前版本，一键进入系统视图；`GET /api/self` 同时返回版本代号。
+- **去中心化 DAG 运行时** —— 端到端 Ed25519 节点身份：首次启动铸造持久密钥对，签名 hello（`PubKey`/`EdSig`，HMAC 回退保证混合版本 mesh 继续可用；对端密钥只在签名验证通过后才被记录——迁移 V28），以及签名 tier-2 授权：源节点用 AuthSig/AuthPub/AuthTs 签署 `Authorized`，执行方按已记录的密钥校验并丢弃伪造授权（审计日志 `consent:forged`）；授权持久化在任务行上（迁移 V29），在队列转发与拒绝重路由中原样重发。stage 产物直接交接：artifact 拉取携带绑定到 plan/consumer/producer/hash 的编排方签名授权，生产方因此可以服务一个自己没有任务行的消费方；后继任务立即收养产物，hub 副本在后台拉取，生产方不可达时输入拉取回退到编排方。动态子 DAG：`panda task add --parent-id/--preferred`、`panda_subtask_spawn`/`panda_subtask_await` MCP 工具，以及注入 agent 环境的 `PANDA_TASK_ID`。
+- **DTN 接触计划** —— `network.contacts` 按对端声明定时传输窗口（[start, end) 窗口加可选 `period` 与 `rate_bps`），在心跳与能力摘要中 gossip，存入 `employee_cache.contacts_json`（迁移 V27）。`scheduler.ContactNextHop` 在在线边与公告窗口的并集上跑最早到达 Dijkstra，因此发布了计划的离线节点也是合法的保管中间跳——这是纯在线拓扑路由表达不了的情形；装不下整个传输的窗口与到达时已超过 bundle 存活期的路径都会被剪枝。任何地方都没有计划时，搜索照旧回退到在线拓扑；公告一个空计划会清掉已缓存的计划（旧节点不携带该字段时仍保持不动）。
 - **UDP 数据报平面（farsky 轨道）** —— `internal/bus/udp.go` 增加第二条传输：共享 UDP socket 上的 AES-256-GCM 密封信封与 HMAC 签名打洞帧，密钥在域名分隔符下派生自 mesh 共享密钥，单个数据报限 1400 字节。`network.udp_listen` 默认跟随 `listen_addr` 的端口并绑定通配接口（每个数据报都经过认证，通配绑定不暴露局域网之外的任何内容）；`"off"` 完全关闭该平面。`sendTo` 仍优先 WebSocket 连接，无连接时回退到已确认的 UDP 路由。
 - **经 mesh 协调的 NAT 打洞** —— `network.peers` 接受 `punch:<node-id>` 条目，用于无法直连拨号的对端。`punch_offer`/`punch_ready` 协调对经在线连接送达，或沿链路状态图中继（TTL 限界，每跳重封装 envelope、源节点保留在载荷 `Src` 中），随后双方互向交换来的候选地址喷射签名 punch 帧，直到 ack 确认针孔打通。绑定端点成为 UDP 路由，25 秒 keepalive 维持映射，丢失后自动重打。
 - **无外部依赖的反射地址发现** —— 同一 UDP socket 应答 RFC 5389 binding 请求：任何一个拥有公网地址的 mesh 成员就是全队的 STUN 服务器（`internal/bus/stun.go`，零依赖）；`network.stun_servers` 仅为运行或信任外部服务器的部署准备。hello 回包还携带 `you`（监听器观测到的来源 IP），NAT 后的节点零成本得知自己的公网地址。
 - **DTN bundle 载荷加密（v2）** —— `bus.Bundle.Seal` 用 bundle 域密钥（派生自 mesh 共享密钥）对载荷做 AES-256-GCM 加密，签名头作为关联数据绑定；`Open` 解封 v2、校验 v1 明文 bundle，混合版本 mesh 继续可用。中继保管只存密封 blob——中间跳转发的是它读不到的密文。
-- **面向受限设备的 lite 构建** —— `go build -tags lite` / `make build-lite-linux-{amd64,arm64,armv7}` 去掉内嵌 Web 控制台（面板端点改服一个精简提示页）与 Bubble Tea TUI，保留 daemon、mesh、DTN、队列、ask 与经典行 REPL——为树莓派与纯命令行设备提供更小、不含前端依赖链的二进制。`install.sh --lite` 选择 `panda-<ver>-lite-<os>-<arch>` 包并接受 32 位 ARM。
+- **面向受限设备的 lite 构建** —— `go build -tags lite` / `make build-lite-linux-{amd64,arm64,armv7}` 去掉内嵌 Web 控制台（面板端点改服一个精简提示页）与 Bubble Tea TUI，保留 daemon、mesh、DTN、队列、ask 与经典行 REPL——为树莓派与纯命令行设备提供更小、不含前端依赖链的二进制。`install.sh --lite` 选择 `panda-<ver>-lite-<os>-<arch>` 包并接受 32 位 ARM；部署脚本在 SBC 级目标上默认使用 lite 构建。
 - **版本代号** —— `internal/version.Codename` 将本版本线命名为 "Periapsis"；`panda version`、`panda --version`、`/api/version` 与系统视图均会展示。
 - **ask 引擎的队列管理工具族** —— `taskq_approve`（Tier-2，防止模型拓宽自己将要经过的闸门）、`taskq_reject`、`taskq_clear`（history/review/all 三档范围）与 `taskq_cancel` 的批量 `task_ids`；`taskq_list`/`taskq_show` 标注每个任务的审批处置，`taskq_priority`/`taskq_move` 拒绝对非排队任务静默改序。
 
 ### 变更
 
 - **hello 广告数据报平面** —— `HelloPayload` 携带 `udp_port`，回包携带 `you`（对端观测到的来源 IP）：监听器借此获得每个已连 peer 的打洞线索，节点也无需配置便得知自己的公网地址。
+- **bundle 线格式 v3：相对存活期** —— 线上 bundle 的绝对 `DeadlineUnix` 改为 BPv7 风格的（创建时间, 存活期）二元组：每个保管方把过期时间锚到自己的时钟上，而不再信任源节点的时钟——这正是跨未授时节点让暂存 bundle 行为正确的关键。v1/v2 bundle 仍可校验：解码出的原始字段原样保留用于签名/AAD，其绝对截止期仅为保管逻辑归一化为存活期。
+- **`panda init` 预置 mesh 密钥并认得模型目录** —— 生成的配置过去把 `shared_secret` 留空（WS 监听器因此拒绝一切入站 peer，直到有人运行 `pair`/`nodes add`）；init 现在直接铸造。交互式模型菜单改为枚举 provider 注册表——与 `panda model add` 和 Web 设置页共用同一份目录——不再是那份冻结在过时默认值上的五选项列表；尊重 NoAuth provider（Ollama 跳过密钥提问），并把 provider/上下文窗口/max_tokens 与端点字段一并写入。`--defaults` 下把文档化的 `OPENPANDA_MODEL_*` 环境变量收编进文件。
+- **`panda doctor` 检查网络平面** —— `shared_secret` 为空现在判为失败（它会让入站 peering 静默失效，而 daemon 看起来一切正常）；数据报平面报告其绑定地址，或明确说明 `udp_listen=off`。
+- **agent 在派发前先探测** —— 对解析出的端点做一次最小化认证 POST 来判断 agent CLI 是否可派发：确定性凭据类 401/402/403/429 判为拒绝，5xx/传输失败判为不可达，匿名 4xx 算作存活。`AgentDispatchable` 闸住匹配、执行与能力广告，配置了但已损坏的 agent 不再赢下计划然后死在执行上。
+- **更新与安装拒绝比数据目录更旧的二进制** —— `storage.LatestVersion` 暴露二进制的迁移上限，`panda version --json` 报告它（以及数据目录当前的 `db_schema`，可达时）；更新器在替换前探测暂存二进制，`panda install` 拒绝旧 schema 副本，`install.sh` 对下载的包做同样探测——会在启动时死于「schema version newer than binary」的降级在替换前就被拦下（`--force`/`OPENPANDA_FORCE=1` 用于有意降级）。
+- **日常 CLI 打磨** —— `panda status` 正确称呼节点目录（此前误称「存储中暂无任务」），并说明本节点是否在运行、是否注册过；`panda queue` 的空队列会建议下一步；未配置模型的提示指向 `panda model add` 或 Web 设置页而非 yaml 字段；经典 REPL 在没有任何配置文件时打印首次运行指引；`panda update apply`/`upgrade` 打印刚装上版本的 release notes；`init` 的收尾语把 `doctor`/`web`/`panda` 列为下一步。
+- **统一版本标识** —— `v0.0.9 Periapsis` 在 `--version`/`version`、REPL 欢迎横幅、TUI 启动画面与 lite 启动行上以同样的无引号、同权重形式打印，Web 侧栏节点徽标也携带它。
 
 ### 修复
 
@@ -61,7 +77,16 @@ v0.0.9 版本线继续推进，代号 **Periapsis**：为无法保持 WebSocket 
 - **审批状态暴露真实语义** —— `approval_disposition`（accept_work / resume_execution / needs_changed_input）在 `taskq_list`/`taskq_show`、任务 API 载荷与队列/详情视图中透出，需修改输入的任务禁用批准按钮；已产出成果的任务与等待授权执行的任务不再无法区分。
 - **对 resume_execution 任务的 `Approve` 可被调度收养** —— resume 分支现在把行标记为 `scheduled=1`，`ListReady` 能够认领；直接调用 Approve 不再产出任何调度器都选不中的 `queued` 孤儿行。
 - **工具循环预算耗尽时降级为摘要** —— 预算烧光时返回已执行调用的摘要，而不是干巴巴的 "max tool rounds" 报错。
+- **TUI 命令执行不再弄花或弄崩前端** —— 日常序列（`/clear`、几轮对话、敲错的命令）过去会绕过 Bubble Tea 直写真实终端，或留下不成对的历史。`/clear` 改为经 `tea.ClearScreen` 重绘；exec 泵给命令喂空 stdin，并把处理器 panic 恢复为错误块；捕获的输出在提交与实时渲染时都做 ANSI 剥离；会改状态的命令（`/new`、`/resume`、`/project`、`/authorize`、列表变更）经共享辅助函数跑在 Update 协程上，不再重复写状态；失败的轮次持久化为成对的 user+error 回合，下一次 ask 不再 400；`/history` 回退到已持久化的会话，`/new` 同时清空内存与文件。
+- **outbox 会经打洞建立的数据报路由冲刷** —— `sendableTo` 过去把只能经 UDP 针孔到达的 peer 视为不可冲刷，发给 punch-only 对端的暂存 bundle 会一直等一个不存在的 WebSocket 连接；现在会经 UDP 路由排空。
 - **DTN 中继记账跨重启存活** —— 按 bundle 的中继跳数预算改为持久化在 `dtn_relay_log`（迁移 V25）而非内存；`parkBundle` 的 upsert 更新 `via`，重投递 bundle 的防回传规则跟随其最新来路。
+- **skill URL 导入无法再探测内网** —— `ImportURL`（`panda skill install <url>`、`panda_skill_install`、`skill_install` 与 `/api/skills/import` 背后的路径）现在要求非回环主机必须使用 https，并在连接时校验每个解析出的 IP：回环、RFC1918/ULA、链路本地（云元数据端点）、组播与未指定地址一律不拨号，重定向也必须通过同样的分类检查，agent 或索引提供的 URL 无法再把节点变成 SSRF 跳板（加固：`internal/skills/fetchguard.go`）。
+- **STUN binding 应答按源 IP 限流** —— 每源每秒 10 个应答、有界跟踪表，把 UDP socket 约 2 倍的反射系数压到安全范围，同时不影响真实客户端（RFC 5389 的重传以秒计）。
+
+### 破坏性变更
+
+- **移除 `/api/*` 的 `?token=` 查询参数认证** —— 面板 API 现在只接受 `Authorization: Bearer <token>`，因为 URL 里的凭据会落进浏览器历史与代理访问日志。自带控制台在所有请求（含 SSE 流，已改为 fetch 而非 EventSource）中都发送请求头；`panda web` 打开的 `/?token=` 自动登录 URL 不受影响——那是静态页面，不是 API。外部脚本与第三方客户端需改用请求头。
+- **不再内置模型厂商默认值** —— `model:` 为空的配置过去意味着「静默使用内置厂商端点」：它物化进生成的配置、在横幅上冒充用户自己的选择、并把未配置节点的提示词路由给那家厂商。`entry.NewClient` 现在返回 `ErrNoModel`，`panda ask`/`voice`/REPL/TUI 都要求已配置模型并指向 `panda init`/`panda model add`；`config.example.yaml` 改为把该段注释掉并附说明，凭据注入（`injection.model`）也要求真实端点。依赖旧隐式默认值的部署请设置 `model.provider`/`model.base_url`，或运行 `panda init`。
 
 ## [0.0.9-beta] - 2026-09-23
 

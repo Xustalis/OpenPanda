@@ -163,7 +163,7 @@ To connect a second device (preview capability): run `panda pair` on device A to
 | Version | Theme |
 |---|---|
 | **v0.0.8** (stable baseline) | Single-machine multi-agent orchestration, fully usable: intent classification, dispatch, supervision loop, failover, tiered approval, prompt language policy |
-| **v0.0.9-beta** (current) — "Periapsis" | Hybrid transport/DTN architecture: latency-weighted mesh routing, on-wire DTN bundles, token budgets, shadow copies, actuator path — plus a UDP datagram plane with mesh-coordinated NAT hole punching, encrypted DTN payloads, a lite build for constrained devices, and a task-pipeline reliability pass |
+| **v0.0.9** (current) — "Periapsis" | Hybrid transport/DTN architecture completed: latency-weighted mesh routing, on-wire DTN bundles, token budgets, shadow copies, actuator path, UDP datagram plane with mesh-coordinated NAT hole punching, encrypted payloads, contact plans, Ed25519 node identity, lite build — plus remembered approvals, execution attribution, a web sidebar node chip and everyday CLI polish |
 | **v0.0.10** | Multi-device collaboration as the headline: cross-node delegation, lease protection, resumable execution — hardened and field-tested |
 | **v0.0.x (beyond)** | Stability, performance, and edge-case tuning |
 | **v0.1.0** | Desktop capabilities and stronger control & management — commercial-grade quality |

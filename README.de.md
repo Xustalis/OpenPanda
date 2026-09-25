@@ -159,7 +159,7 @@ panda init
 | Version | Thema |
 |---|---|
 | **v0.0.8** (stabile Basis) | Multi-Agenten-Orchestrierung auf einer Maschine, voll nutzbar: Absichtsklassifikation, Dispatch, Überwachungsschleife, Failover, gestufte Freigabe, Richtlinien für Prompt-Sprachen |
-| **v0.0.9-beta** (aktuell) — "Periapsis" | Hybrid-Transport/DTN-Architektur: latenzgewichtetes Mesh-Routing, DTN-Bundles auf der Leitung, Token-Budgets, Schattenkopien, Aktuator-Pfad — plus eine UDP-Datagramm-Ebene mit mesh-koordiniertem NAT-Hole-Punching, verschlüsselte DTN-Payloads, ein Lite-Build für beschränkte Geräte und ein Zuverlässigkeits-Pass der Task-Pipeline |
+| **v0.0.9** (aktuell) — "Periapsis" | Hybrid-Transport/DTN-Architektur vollendet: latenzgewichtetes Mesh-Routing, DTN-Bundles auf der Leitung, Token-Budgets, Schattenkopien, Aktuator-Pfad, UDP-Datagramm-Ebene mit mesh-koordiniertem NAT-Hole-Punching, verschlüsselte Payloads, Kontaktpläne, Ed25519-Knotenidentität, Lite-Build — plus gemerkte Genehmigungen, Execution-Attribution, ein Web-Sidebar-Node-Chip und Alltags-CLI-Politur |
 | **v0.0.10** | Geräteübergreifende Zusammenarbeit als Hauptthema: knotenübergreifende Delegation, Lease-Schutz, wiederaufnehmbare Ausführung — gehärtet und im Feld getestet |
 | **v0.0.x (darüber hinaus)** | Stabilität, Performance und Feinschliff für Randfälle |
 | **v0.1.0** | Desktop-Fähigkeiten und stärkere Steuerung und Verwaltung — kommerzielle Qualität |
