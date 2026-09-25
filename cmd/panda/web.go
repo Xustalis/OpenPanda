@@ -52,6 +52,7 @@ func runWeb(args []string) {
 	noBrowser := fs.Bool("no-browser", false, "print the URL instead of opening a browser")
 	daemon := fs.Bool("daemon", false, "run web console quietly in the background")
 	fs.BoolVar(daemon, "d", false, "alias for -daemon")
+	lan := fs.Bool("lan", false, "bind all interfaces so the console is reachable from the LAN (auto-generates a token when none is configured)")
 	fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
@@ -94,6 +95,13 @@ func runWeb(args []string) {
 		if targetAddr == "" {
 			targetAddr = "127.0.0.1:7840"
 		}
+		if *lan {
+			_, port, err := net.SplitHostPort(targetAddr)
+			if err != nil || port == "" {
+				port = "7840"
+			}
+			targetAddr = net.JoinHostPort("0.0.0.0", port)
+		}
 		fmt.Println(i18n.Tf(loc, "web.background",
 			"pid", strconv.Itoa(cmd.Process.Pid),
 			"url", panelURL(targetAddr),
@@ -108,19 +116,32 @@ func runWeb(args []string) {
 	ctx, cancel := shutdownContext()
 	defer cancel()
 
-	// Zero-config on loopback, fail closed elsewhere (same policy as the
-	// sidecar and /web).
+	// Zero-config on loopback. --lan (or a non-loopback panel_addr) widens the
+	// bind to every interface; an unconfigured token then gets an ephemeral
+	// one — the API never runs open — and the LAN URLs carry it so the link is
+	// usable from another device on the network. Plain HTTP: prefer a stable
+	// network.panel_token (or a TLS reverse proxy) for anything long-lived.
 	addr := cfg.Network.PanelAddr
 	if addr == "" {
 		addr = "127.0.0.1:7840"
 	}
-	token := cfg.Network.PanelToken
-	if token == "" {
-		if !panel.IsLoopbackAddr(addr) {
-			fatal("config", fmt.Errorf("network.panel_token is not set and the bind %s is not loopback — set OPENPANDA_PANEL_TOKEN", addr))
+	if *lan {
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil || port == "" {
+			port = "7840"
 		}
+		addr = net.JoinHostPort("0.0.0.0", port)
+	}
+	token := cfg.Network.PanelToken
+	ephemeral := false
+	if token == "" {
 		token = panel.NewToken()
-		fmt.Println(i18n.T(loc, "repl.web.ephemeral"))
+		ephemeral = true
+		if !panel.IsLoopbackAddr(addr) {
+			fmt.Println(i18n.T(loc, "web.lan.ephemeral"))
+		} else {
+			fmt.Println(i18n.T(loc, "repl.web.ephemeral"))
+		}
 	}
 
 	db, store, err := panelStore(cfg)
@@ -282,6 +303,12 @@ func runWeb(args []string) {
 	} else {
 		fmt.Println(i18n.Tf(loc, "web.started", "url", url))
 		openBrowser(panel.AppendToken(url, token))
+	}
+	for _, lanURL := range panel.LANURLs(ln.Addr().String()) {
+		fmt.Println(i18n.Tf(loc, "web.lan.url", "url", panel.AppendToken(lanURL, token)))
+	}
+	if ephemeral && !panel.IsLoopbackAddr(addr) {
+		fmt.Println(i18n.T(loc, "web.lan.hint"))
 	}
 
 	<-ctx.Done()

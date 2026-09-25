@@ -58,6 +58,8 @@ v0.0.9 正式版——代号 **Periapsis**。对单机使用来说这是一次�
 - **面向受限设备的 lite 构建** —— `go build -tags lite` / `make build-lite-linux-{amd64,arm64,armv7}` 去掉内嵌 Web 控制台（面板端点改服一个精简提示页）与 Bubble Tea TUI，保留 daemon、mesh、DTN、队列、ask 与经典行 REPL——为树莓派与纯命令行设备提供更小、不含前端依赖链的二进制。`install.sh --lite` 选择 `panda-<ver>-lite-<os>-<arch>` 包并接受 32 位 ARM；部署脚本在 SBC 级目标上默认使用 lite 构建。
 - **版本代号** —— `internal/version.Codename` 将本版本线命名为 "Periapsis"；`panda version`、`panda --version`、`/api/version` 与系统视图均会展示。
 - **ask 引擎的队列管理工具族** —— `taskq_approve`（Tier-2，防止模型拓宽自己将要经过的闸门）、`taskq_reject`、`taskq_clear`（history/review/all 三档范围）与 `taskq_cancel` 的批量 `task_ids`；`taskq_list`/`taskq_show` 标注每个任务的审批处置，`taskq_priority`/`taskq_move` 拒绝对非排队任务静默改序。
+- **`task add` 多 harness 任务** —— `panda task add --agents claude_code,codex` 把一个任务扇出到多个 agent harness：`parallel`（默认）同时释放所有阶段，`--mode serial` 让每个阶段接续上一个阶段的产物。每个阶段用 `agent:<name>` 需求钉住自己的 harness，并路由到真正拥有它的节点——复用现有 plan/DAG 机制，不必再手写 YAML 文件。
+- **Web 控制台局域网分享** —— `panda web --lan` 绑定全部网卡，并逐个打印可分享的 `http://<局域网IP>:<端口>?token=…` 链接，局域网上的第二台设备可直接打开控制台。非回环的 `network.panel_addr` 在未配置 token 时现在会自动生成临时令牌——`/api/*` 依旧不会无认证开放——而不再是直接拒绝启动；`panda web`、REPL 的 `/web` 与独立 sidecar 规则一致。
 
 ### 变更
 
@@ -69,6 +71,7 @@ v0.0.9 正式版——代号 **Periapsis**。对单机使用来说这是一次�
 - **更新与安装拒绝比数据目录更旧的二进制** —— `storage.LatestVersion` 暴露二进制的迁移上限，`panda version --json` 报告它（以及数据目录当前的 `db_schema`，可达时）；更新器在替换前探测暂存二进制，`panda install` 拒绝旧 schema 副本，`install.sh` 对下载的包做同样探测——会在启动时死于「schema version newer than binary」的降级在替换前就被拦下（`--force`/`OPENPANDA_FORCE=1` 用于有意降级）。
 - **日常 CLI 打磨** —— `panda status` 正确称呼节点目录（此前误称「存储中暂无任务」），并说明本节点是否在运行、是否注册过；`panda queue` 的空队列会建议下一步；未配置模型的提示指向 `panda model add` 或 Web 设置页而非 yaml 字段；经典 REPL 在没有任何配置文件时打印首次运行指引；`panda update apply`/`upgrade` 打印刚装上版本的 release notes；`init` 的收尾语把 `doctor`/`web`/`panda` 列为下一步。
 - **统一版本标识** —— `v0.0.9 Periapsis` 在 `--version`/`version`、REPL 欢迎横幅、TUI 启动画面与 lite 启动行上以同样的无引号、同权重形式打印，Web 侧栏节点徽标也携带它。
+- **跨进程队列认领提速约 5 倍** —— 由其他进程入队的任务（`panda task add`、`panda plan run`、MCP 提交）此前只能靠队列调度器 2 秒的兜底轮询被发现（wake 通道无法跨进程触达）；轮询现为 400ms，提交的任务明显更早启动，进程内 wake 依旧即时生效。
 
 ### 修复
 
