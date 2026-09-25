@@ -51,18 +51,20 @@ func main() {
 		fatal("load config", err)
 	}
 	// Zero-config convenience: default to loopback, and generate an
-	// ephemeral token there when none is configured (printed below). A
-	// non-loopback bind still fails closed — an unauthenticated panel on
-	// the network is never acceptable.
+	// ephemeral token when none is configured (printed below). A
+	// non-loopback bind gets the same ephemeral token — /api/* still never
+	// runs open, and the printed LAN URL carries the credential. Set
+	// network.panel_token for a stable credential.
 	if cfg.Network.PanelAddr == "" {
 		cfg.Network.PanelAddr = "127.0.0.1:7840"
 	}
 	if cfg.Network.PanelToken == "" {
-		if !panel.IsLoopbackAddr(cfg.Network.PanelAddr) {
-			fatal("config", fmt.Errorf("network.panel_token is not set and the bind %s is not loopback — set OPENPANDA_PANEL_TOKEN (refusing to serve /api/* unauthenticated)", cfg.Network.PanelAddr))
-		}
 		cfg.Network.PanelToken = panel.NewToken()
-		fmt.Fprintln(os.Stderr, "panda-webui: no panel_token configured — generated an ephemeral one for this session")
+		if !panel.IsLoopbackAddr(cfg.Network.PanelAddr) {
+			fmt.Fprintln(os.Stderr, "panda-webui: non-loopback bind with no panel_token — generated an ephemeral one for this session; set OPENPANDA_PANEL_TOKEN for a stable credential")
+		} else {
+			fmt.Fprintln(os.Stderr, "panda-webui: no panel_token configured — generated an ephemeral one for this session")
+		}
 	}
 
 	log.Setup(cfg.Log.Level, nil)
@@ -190,6 +192,9 @@ func main() {
 	// The ready URL carries the token so the console logs in without a
 	// manual paste (the app strips it from the address bar on load).
 	fmt.Println("open:", panel.AppendToken(panelURL(cfg.Network.PanelAddr), cfg.Network.PanelToken))
+	for _, lanURL := range panel.LANURLs(cfg.Network.PanelAddr) {
+		fmt.Println("lan: ", panel.AppendToken(lanURL, cfg.Network.PanelToken))
+	}
 
 	select {
 	case <-ctx.Done():

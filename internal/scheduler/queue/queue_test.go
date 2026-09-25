@@ -236,3 +236,33 @@ func TestSchedulerSkipsLostClaimRace(t *testing.T) {
 	runner.release <- "winner"
 	<-runner.done
 }
+
+// TestSchedulerPollPicksUpWakelessEnqueue models a task enqueued by another
+// process: the store gains a ready row with no Wake() to announce it, and
+// only the fallback ticker can find it. The deadline (4× the poll interval)
+// is tighter than the old 2 s poll, so this test fails if the interval
+// regresses back to seconds-scale polling.
+func TestSchedulerPollPicksUpWakelessEnqueue(t *testing.T) {
+	store := &fakeStore{}
+	runner := newGateRunner()
+	s := New(store, runner, 2, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+
+	// Cross-process enqueue: nobody calls Wake() — the ticker must see it.
+	store.mu.Lock()
+	store.ready = append(store.ready, ReadyTask{ID: "cross-proc", ResourceKeys: []string{"r"}, CreatedAt: 1})
+	store.mu.Unlock()
+
+	deadline := time.Now().Add(4 * s.pollInterval)
+	for time.Now().Before(deadline) {
+		if len(runner.startedIDs()) == 1 {
+			runner.release <- "cross-proc"
+			<-runner.done
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("wake-less enqueue not picked up within %v", 4*s.pollInterval)
+}

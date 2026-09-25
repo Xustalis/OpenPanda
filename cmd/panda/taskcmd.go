@@ -20,6 +20,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/plan"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
@@ -324,6 +325,8 @@ func runTaskAdd(args []string) {
 	project := fs.String("project", "", "project to attach the task to")
 	authorize := fs.Bool("authorize", false, "authorize tier-2 (irreversible) commands")
 	requires := fs.String("requires", "coding", "comma-separated ability ids the task needs (routed cross-device)")
+	agents := fs.String("agents", "", "comma-separated agent harnesses to run this task on (e.g. claude_code,codex); more than one becomes a plan")
+	mode := fs.String("mode", "parallel", "with --agents: 'parallel' runs every harness at once, 'serial' chains them in order")
 	parentID := fs.String("parent-id", "", "parent task id (defaults to PANDA_TASK_ID environment variable)")
 	preferred := fs.String("preferred", "", "preferred node id")
 	fs.Parse(args)
@@ -364,6 +367,12 @@ func runTaskAdd(args []string) {
 	defer engine.Close()
 
 	requiresList := []string{}
+	requiresExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "requires" {
+			requiresExplicit = true
+		}
+	})
 	for _, r := range strings.Split(*requires, ",") {
 		if r = strings.TrimSpace(r); r != "" {
 			requiresList = append(requiresList, r)
@@ -371,6 +380,19 @@ func runTaskAdd(args []string) {
 	}
 	if len(requiresList) == 0 {
 		requiresList = []string{"coding"}
+	}
+
+	// --agents a,b fans the task out to several harnesses: one stage per
+	// agent on a plan — parallel releases them together, serial chains each
+	// on the previous stage's output. A single agent folds into the normal
+	// requires path unchanged.
+	agentList := parseAgentList(*agents)
+	if len(agentList) > 1 {
+		runTaskAddAgents(loc, engine, agentList, *mode, *title, *prompt, requiresList, requiresExplicit, prio, jsonOutput)
+		return
+	}
+	if len(agentList) == 1 {
+		requiresList = append(requiresList, "agent:"+agentList[0])
 	}
 	in := core.TaskInput{
 		Title:         *title,
@@ -535,4 +557,107 @@ func runTaskDelete(args []string) {
 		return
 	}
 	fmt.Println(i18n.Tf(loc, "cli.task.delete.done", "n", strconv.Itoa(n)))
+}
+
+// parseAgentList normalizes the --agents value: comma-separated harness names,
+// "agent:" prefixes stripped, blanks and duplicates dropped while order is
+// kept (the order is the serial chain order).
+func parseAgentList(raw string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, a := range strings.Split(raw, ",") {
+		a = strings.TrimSpace(a)
+		if stripped, ok := strings.CutPrefix(a, "agent:"); ok {
+			a = stripped
+		}
+		if a == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		out = append(out, a)
+	}
+	return out
+}
+
+// errBadAgentMode marks an unrecognised --agents mode; the CLI turns it into
+// a localized usage error (exit 2) rather than a fatal.
+var errBadAgentMode = errors.New("bad agents mode")
+
+// buildMultiAgentPlan turns `task add --agents a,b,...` into a plan: one
+// stage per harness, released together (parallel) or chained on the previous
+// stage's output (serial). Each stage pins its harness with an "agent:<name>"
+// requirement, so routing lands the stage on a node that actually has it —
+// which is the existing plan/DAG machinery, not a special path.
+func buildMultiAgentPlan(agents []string, mode, title, prompt string, requires []string, requiresExplicit bool) (plan.Plan, error) {
+	serial := mode == "serial" || mode == "chain" || mode == "sequential"
+	if !serial && mode != "parallel" {
+		return plan.Plan{}, fmt.Errorf("%w: %s", errBadAgentMode, mode)
+	}
+	p := plan.Plan{Goal: title}
+	prev := ""
+	for i, a := range agents {
+		stageRequires := []string{"agent:" + a}
+		if requiresExplicit {
+			stageRequires = append(stageRequires, requires...)
+		}
+		st := plan.Stage{
+			ID:       fmt.Sprintf("s%d-%s", i+1, stageIDName(a)),
+			Title:    fmt.Sprintf("%s (%s)", title, a),
+			Intent:   prompt,
+			Requires: stageRequires,
+		}
+		if serial && prev != "" {
+			st.Needs = []string{prev}
+		}
+		p.Stages = append(p.Stages, st)
+		prev = st.ID
+	}
+	return p, plan.Validate(p)
+}
+
+// stageIDName maps an agent harness name into the [A-Za-z0-9_-] alphabet a
+// stage id allows ("Claude Code" → "claude-code"); the s<n>- prefix keeps ids
+// unique even when two names sanitize alike.
+func stageIDName(agent string) string {
+	return strings.ToLower(strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			return r
+		default:
+			return '-'
+		}
+	}, agent))
+}
+
+// runTaskAddAgents submits the synthesized multi-harness plan and reports the
+// stages it created.
+func runTaskAddAgents(loc i18n.Locale, engine *askengine.Engine, agents []string, mode, title, prompt string, requires []string, requiresExplicit bool, prio int, jsonOut bool) {
+	p, err := buildMultiAgentPlan(agents, mode, title, prompt, requires, requiresExplicit)
+	if err != nil {
+		if errors.Is(err, errBadAgentMode) {
+			fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.task.add.badMode", "mode", mode))
+			os.Exit(2)
+		}
+		fatal("build plan", err)
+	}
+	q := core.DefaultQueueSpec()
+	q.Priority = prio
+	// No work dir, same rule as `panda plan run`: a path on this machine
+	// means nothing to the node that runs the stage.
+	q.WorkDir = ""
+	planID, err := engine.StartPlan(context.Background(), p, q)
+	if err != nil {
+		fatal("start plan", err)
+	}
+	stages, serr := engine.PlanStages(context.Background(), planID)
+	if serr != nil {
+		fatal("read plan", serr)
+	}
+	if jsonOut {
+		emitJSON(planToJSON(planID, p.Goal, stages))
+		return
+	}
+	fmt.Println(i18n.Tf(loc, "cli.task.add.plan", "id", planID, "stages", strconv.Itoa(len(stages)), "mode", mode))
+	printPlanStages(stages)
+	fmt.Println(i18n.Tf(loc, "cli.task.add.planFollow", "id", planID))
 }

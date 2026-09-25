@@ -2039,22 +2039,23 @@ func (r *repl) cmdPolicy(arg string) {
 // set (sessions, worktrees, skills, reminders, push — same as `panda web`)
 // and opens the browser already logged in: the URL carries the token, which
 // the app consumes once and strips. Zero-config on loopback — no addr
-// defaults to 127.0.0.1:7840, no token gets an ephemeral one. A
-// non-loopback bind without a configured token still refuses: an
-// unauthenticated panel on the network is never acceptable.
+// defaults to 127.0.0.1:7840, no token gets an ephemeral one. A non-loopback
+// bind works the same way — the ephemeral token keeps /api/* authenticated,
+// and the LAN URLs are printed so the link is usable from another device.
 func (r *repl) cmdWeb(arg string) {
 	addr := r.cfg.Network.PanelAddr
 	if addr == "" {
 		addr = "127.0.0.1:7840"
 	}
 	token := r.cfg.Network.PanelToken
+	lanBind := !panel.IsLoopbackAddr(addr)
 	if token == "" {
-		if !panel.IsLoopbackAddr(addr) {
-			r.outln(i18n.T(r.loc, "repl.web.noToken"))
-			return
-		}
 		token = panel.NewToken()
-		r.outln(i18n.T(r.loc, "repl.web.ephemeral"))
+		if lanBind {
+			r.outln(i18n.T(r.loc, "web.lan.ephemeral"))
+		} else {
+			r.outln(i18n.T(r.loc, "repl.web.ephemeral"))
+		}
 	}
 	if r.webSrv != nil {
 		// Already serving: re-open the browser logged in with the token the
@@ -2127,6 +2128,9 @@ func (r *repl) cmdWeb(arg string) {
 	// The token is never shown to the user: the browser opens already
 	// authenticated. The URL printed is the clean one.
 	r.outln(i18n.Tf(r.loc, "repl.web.started", "url", r.webURL))
+	for _, lanURL := range panel.LANURLs(ln.Addr().String()) {
+		r.outln(i18n.Tf(r.loc, "web.lan.url", "url", panel.AppendToken(lanURL, token)))
+	}
 	openBrowser(panel.AppendToken(r.webURL, token))
 }
 

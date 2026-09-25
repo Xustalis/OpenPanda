@@ -167,8 +167,11 @@ type Scheduler struct {
 	max      int
 	logger   *slog.Logger
 
-	// pollInterval bounds how long a wake-less event (e.g. a missed signal)
-	// can stall the queue; wake provides the fast path.
+	// pollInterval bounds how long a wake-less event can stall the queue —
+	// the wake channel is in-process, so a task enqueued by another process
+	// (task add, plan run, the panel's engine) is only discovered here. 400ms
+	// keeps that cross-process pickup latency under a half-second; the poll
+	// itself is one cheap SQLite read.
 	pollInterval time.Duration
 	wake         chan struct{}
 }
@@ -187,7 +190,7 @@ func New(store Store, runner Runner, maxConcurrent int, logger *slog.Logger) *Sc
 		registry:     NewResourceRegistry(),
 		max:          maxConcurrent,
 		logger:       logger,
-		pollInterval: 2 * time.Second,
+		pollInterval: 400 * time.Millisecond,
 		wake:         make(chan struct{}, 1),
 	}
 }

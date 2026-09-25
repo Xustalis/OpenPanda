@@ -58,6 +58,8 @@ v0.0.9 安定版——コードネーム **Periapsis**。単体マシンでの�
 - **制約デバイス向け lite ビルド** —— `go build -tags lite` / `make build-lite-linux-{amd64,arm64,armv7}` は埋め込み Web コンソール（パネル端点は小型の案内ページを返す）と Bubble Tea TUI を外しつつ、daemon・メッシュ・DTN・キュー・ask・クラシック行 REPL を保持——Raspberry Pi や CLI 専用機向けに、フロントエンド依存のないより小さなバイナリ。`install.sh --lite` は `panda-<ver>-lite-<os>-<arch>` アーカイブを選び 32 ビット ARM も受け付け；デプロイスクリプトは SBC 級ターゲットで lite を既定にします。
 - **リリースコードネーム** —— `internal/version.Codename` がこの系を "Periapsis" と命名；`panda version`、`panda --version`、`/api/version`、システムビューで表示。
 - **ask エンジン向けキュー管理ツール群** —— `taskq_approve`（Tier-2：モデルが自分の通るゲートを自ら広げられないよう）、`taskq_reject`、`taskq_clear`（history/review/all の 3 スコープ）、`taskq_cancel` のバッチ `task_ids`；`taskq_list`/`taskq_show` は各タスクの承認ディスポジションを注記し、`taskq_priority`/`taskq_move` はキューにないタスクの暗黙の並べ替えを拒否。
+- **`task add` のマルチハーネス化** —— `panda task add --agents claude_code,codex` で一つのタスクを複数エージェントハーネスへ扇出：`parallel`（デフォルト）で全ステージを同時解放、`--mode serial` で各ステージが前ステージの成果物を引き継ぎます。各ステージは `agent:<name>` 要求でハーネスを固定し、実際にそれを持つノードへルーティング——既存の plan/DAG 機構の活用で、YAML を書かずに使えます。
+- **Web コンソールの LAN 共有** —— `panda web --lan` が全インターフェースにバインドし、検出した LAN アドレスごとに `http://<lan-ip>:<port>?token=…` の共有可能な行を表示——LAN 上の別デバイスからそのままコンソールを開けます。非ループバックの `network.panel_addr` でトークン未設定の場合も、起動を拒否せず一時トークンを自動生成——`/api/*` が無認証になることはありません。`panda web`、REPL の `/web`、独立 sidecar で同じルールです。
 
 ### 変更
 
@@ -69,6 +71,7 @@ v0.0.9 安定版——コードネーム **Periapsis**。単体マシンでの�
 - **データディレクトリより古いバイナリへの更新・インストールを拒否** —— `storage.LatestVersion` がバイナリのマイグレーション上限を公開し、`panda version --json` がそれを報告（到達可能ならデータディレクトリの生 `db_schema` も）；アップデータは差し替え前にステージ済みバイナリをプローブし、`panda install` は旧スキーマのコピーを拒否、`install.sh` もダウンロード済みアーカイブに同じ検査を行います——起動時に「schema version newer than binary」で死ぬようなダウングレードを事前に拒否します（意図的なダウングレードには `--force`/`OPENPANDA_FORCE=1`）。
 - **日常 CLI の磨き上げ** —— `panda status` がノードディレクトリを正しく名指し（以前は「タスクがありません」と誤記）し、このノードが稼働中か・登録されたことがあるかを告げます；`panda queue` の空ボードは次の一手を提案；モデル未設定メッセージは yaml フィールドではなく `panda model add` や Web 設定を指します；設定ファイルが一つも無い初回実行でクラシック REPL が案内を表示；`panda update apply`/`upgrade` は入れたばかりのバージョンのリリースノートを表示；`init` の締めの行は `doctor`/`web`/`panda` を次の一手に挙げます。
 - **統一されたバージョン表記** —— `v0.0.9 Periapsis` が `--version`/`version`、REPL ウェルカム、TUI スプラッシュ、lite 起動行で同じ重み・引用符なしで表示され、Web サイドバーのノードチップにも載ります。
+- **プロセス間キュー取得が約 5 倍高速化** —— 別プロセスから投入されたタスク（`panda task add`、`panda plan run`、MCP 投入）は wake チャネルがプロセスを越えられないため、キュースケジューラの 2 秒フォールバックポーリングでしか発見できませんでした。ポーリングが 400ms になり、投入したタスクが明確に速く起動します（プロセス内の wake は引き続き即時）。
 
 ### 修正
 
