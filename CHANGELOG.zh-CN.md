@@ -38,7 +38,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
-## [0.0.9] - 2026-09-25
+## [0.0.9] - 2026-09-25 — "Periapsis"
 
 v0.0.9 正式版——代号 **Periapsis**。对单机使用来说这是一次舒适度发布：审批可以记住而不必每次都重新回答，CLI 更会解释自己（status 直接说明本节点是否在运行、空队列给出下一步建议、首次运行给出指引、更新器会打印 release notes），Web 控制台把每个回答归属到产出它的 agent 与模型、并把节点存活状态与版本固定在侧栏，TUI 也能扛住过去会把它弄花的日常操作序列。对多机集群则补齐了 beta 开启的整条线：带认证的数据报平面与 NAT 打洞、DTN 载荷加密、定时接触窗口、密码学节点身份与签名授权、stage 间直接 artifact 交接，以及面向受限设备的 lite 构建。
 

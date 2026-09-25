@@ -47,7 +47,7 @@ func main() {
 	// sidecar here. No-op on unix (the atomic rename-over leaves nothing).
 	updater.SweepResidue()
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
-		fmt.Printf("panda v%s %s\n", version, versionpkg.Codename)
+		fmt.Printf("panda %s\n", versionpkg.Display())
 		return
 	}
 	// `panda --help` / `panda -h` must show the main help, not be swallowed
@@ -499,12 +499,17 @@ func runDaemon(args []string) {
 	// operator reading the daemon log learns a release is waiting
 	// instead of discovering it on the next web visit.
 	updateNotice := updater.New(updater.Options{
-		Current: version,
-		Logger:  logger,
-		Idle:    func(ctx context.Context) bool { return coreNode.Idle(ctx) },
-		OnAvailable: func(v string) {
+		Current:         version,
+		CurrentCodename: versionpkg.Codename,
+		Logger:          logger,
+		Idle:            func(ctx context.Context) bool { return coreNode.Idle(ctx) },
+		OnAvailable: func(v, codename string) {
+			disp := "v" + v
+			if codename != "" {
+				disp += " " + codename
+			}
 			logger.Info("update available",
-				"version", v,
+				"version", disp,
 				"hint", "open the web console (System → Updates) to review the changelog and apply")
 		},
 	})
@@ -718,7 +723,7 @@ func printVersion(_ []string) {
 		emitJSON(info)
 		return
 	}
-	fmt.Printf("panda v%s %s\n", version, versionpkg.Codename)
+	fmt.Printf("panda %s\n", versionpkg.Display())
 }
 
 // printUsage lists the subcommands as a grouped command tree — `panda help`

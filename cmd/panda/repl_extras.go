@@ -27,6 +27,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
+	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 )
 
 // cmdClear wipes the screen and reprints the banner — the conversation is
@@ -388,7 +389,7 @@ func (r *repl) cmdProjectEnter(arg string) {
 // cmdVersion reports the current OpenPanda version and runtime environment.
 func (r *repl) cmdVersion(arg string) {
 	p := pal()
-	r.outf("%s v%s (%s/%s)\n", p.Bold("OpenPanda"), version, runtime.GOOS, runtime.GOARCH)
+	r.outf("%s %s (%s/%s)\n", p.Bold("OpenPanda"), versionpkg.Display(), runtime.GOOS, runtime.GOARCH)
 	if r.cfg != nil {
 		if r.cfg.Node.Name != "" {
 			r.outf("  %-10s %s\n", i18n.T(r.loc, "repl.footer.node")+":", r.cfg.Node.Name)

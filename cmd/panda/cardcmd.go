@@ -551,7 +551,7 @@ func backupCard(path string) error {
 func cardHeader() string {
 	return fmt.Sprintf("# capabilities.yaml — written by `panda card` %s on %s\n"+
 		"# hardware fields are re-probed by `panda card rescan`; everything else is yours.\n\n",
-		versionpkg.Version, time.Now().Format("2006-01-02 15:04"))
+		versionpkg.Display(), time.Now().Format("2006-01-02 15:04"))
 }
 
 // firstNonEmpty returns the first non-empty string.

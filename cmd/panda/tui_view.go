@@ -225,7 +225,7 @@ func (m tuiModel) splashView() string {
 		blockLines = append(blockLines, m.th.accent.Render("=== OpenPanda ==="))
 	}
 	blockLines = append(blockLines, "")
-	blockLines = append(blockLines, m.th.heading.Render("  v"+version+" "+versionpkg.Codename))
+	blockLines = append(blockLines, m.th.heading.Render("  "+versionpkg.Display()))
 
 	// The splash shows only the session's own facts: version and work dir.
 	// Node name and model are deliberately absent — a fresh install would
@@ -944,10 +944,10 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 			sb.WriteString(th.accent.Render(line))
 		}
 		sb.WriteString("\n\n")
-		sb.WriteString(th.heading.Render("  " + i18n.T(loc, "repl.banner.title") + " v" + version + " " + versionpkg.Codename))
+		sb.WriteString(th.heading.Render("  " + i18n.T(loc, "repl.banner.title") + " " + versionpkg.Display()))
 	} else {
 		sb.WriteString(th.heading.Render(cliui.Truncate(
-			"  "+th.glyph("✻", "*")+" "+i18n.T(loc, "repl.banner.title")+" v"+version+" "+versionpkg.Codename, width, uni)))
+			"  "+th.glyph("✻", "*")+" "+i18n.T(loc, "repl.banner.title")+" "+versionpkg.Display(), width, uni)))
 	}
 
 	sb.WriteString("\n")

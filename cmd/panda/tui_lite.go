@@ -22,5 +22,5 @@ func runTUI(r *repl) {}
 // it would be the hostname probe parading as user configuration. (In the
 // full build this method lives on repl.go's TUI-adjacent helpers.)
 func (r *repl) printBanner() {
-	fmt.Printf("OpenPanda v%s %s (lite build)\n", version, versionpkg.Codename)
+	fmt.Printf("OpenPanda %s (lite build)\n", versionpkg.Display())
 }

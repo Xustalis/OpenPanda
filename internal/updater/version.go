@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Stage is the updater's position in the check → download → apply pipeline.
@@ -42,13 +43,15 @@ const (
 // progress through check, download, and apply. Notes carries the latest
 // release's changelog digest once a check has found one.
 type Status struct {
-	Stage     Stage  `json:"stage"`
-	Current   string `json:"current"`
-	Latest    string `json:"latest,omitempty"`
-	Notes     string `json:"notes,omitempty"`
-	Available bool   `json:"available"`
-	Idle      bool   `json:"idle"`
-	Error     string `json:"error,omitempty"`
+	Stage           Stage  `json:"stage"`
+	Current         string `json:"current"`
+	CurrentCodename string `json:"current_codename,omitempty"`
+	Latest          string `json:"latest,omitempty"`
+	LatestCodename  string `json:"latest_codename,omitempty"`
+	Notes           string `json:"notes,omitempty"`
+	Available       bool   `json:"available"`
+	Idle            bool   `json:"idle"`
+	Error           string `json:"error,omitempty"`
 }
 
 // Options configures a Manager.
@@ -58,7 +61,11 @@ type Options struct {
 	Repo string
 	// Current is the running version (internal/version.Version).
 	Current string
-	Logger  *slog.Logger
+	// CurrentCodename is the running build's release codename
+	// (internal/version.Codename) — surfaced in Status so displays can print
+	// the full "v0.0.9 Periapsis" identity without a second lookup.
+	CurrentCodename string
+	Logger          *slog.Logger
 	// Idle reports whether the task queue is idle (no running / dispatched /
 	// waiting-for-context tasks). Apply refuses to proceed while it returns
 	// false, so an update never interrupts live work.
@@ -66,8 +73,9 @@ type Options struct {
 	// OnAvailable, when set, is invoked once per discovered version when a
 	// check finds a newer release — the headless daemon's only channel to
 	// surface an update notice. The web panel needs no callback: it polls
-	// GET /api/update.
-	OnAvailable func(version string)
+	// GET /api/update. codename is the release's thematic name when the
+	// release title carries one ("" otherwise).
+	OnAvailable func(version, codename string)
 	// IncludePrerelease enables checking for prereleases even if Current is stable.
 	IncludePrerelease bool
 	// NoRestart prevents delayedRestart from running, for one-shot CLI commands.
@@ -229,15 +237,18 @@ func parseUint(s string) (uint64, bool) {
 }
 
 // Release is the latest GitHub release: its version tag (leading "v"
-// stripped) and the raw release-notes body, which the console surfaces as a
-// changelog digest when an update is available.
+// stripped), its codename when the release title carries one ("v0.0.9
+// Periapsis" → "Periapsis"), and the raw release-notes body, which the
+// console surfaces as a changelog digest when an update is available.
 type Release struct {
-	Version string
-	Notes   string
+	Version  string
+	Codename string
+	Notes    string
 }
 
 type githubRelease struct {
 	TagName    string `json:"tag_name"`
+	Name       string `json:"name"`
 	Body       string `json:"body"`
 	Draft      bool   `json:"draft"`
 	Prerelease bool   `json:"prerelease"`
@@ -347,7 +358,7 @@ func FindLatest(ctx context.Context, repo string, includePrerelease bool, curren
 					}
 					if best != nil {
 						v := strings.TrimPrefix(strings.TrimPrefix(best.TagName, "v"), "V")
-						return Release{Version: v, Notes: best.Body}, nil
+						return Release{Version: v, Codename: releaseCodename(best.Name, v), Notes: best.Body}, nil
 					}
 				}
 			}
@@ -381,7 +392,32 @@ func latestSingle(ctx context.Context, repo, token string) (Release, error) {
 		return Release{}, fmt.Errorf("release has no tag_name")
 	}
 	v := strings.TrimPrefix(strings.TrimPrefix(rel.TagName, "v"), "V")
-	return Release{Version: v, Notes: rel.Body}, nil
+	return Release{Version: v, Codename: releaseCodename(rel.Name, v), Notes: rel.Body}, nil
+}
+
+// releaseCodename extracts the thematic name from a GitHub release title like
+// "v0.0.9 Periapsis". The title must lead with the release's own version tag —
+// anything else returns "", so an unrelated naming scheme never produces a
+// bogus codename. Multi-word names are accepted; digits and punctuation are
+// not, which keeps "v1.2.3 — emergency rollup"-style titles from leaking in.
+func releaseCodename(name, version string) string {
+	rest := ""
+	for _, p := range []string{"v" + version, "V" + version, version} {
+		if r, ok := strings.CutPrefix(strings.TrimSpace(name), p); ok {
+			rest = r
+			break
+		}
+	}
+	rest = strings.Trim(rest, " \t-–—·:=\"'")
+	if rest == "" || len([]rune(rest)) > 32 {
+		return ""
+	}
+	for _, r := range rest {
+		if !unicode.IsLetter(r) && r != ' ' {
+			return ""
+		}
+	}
+	return rest
 }
 
 func gitHubToken(ctx context.Context) string {
