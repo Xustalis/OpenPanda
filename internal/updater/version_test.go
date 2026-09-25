@@ -121,6 +121,51 @@ func TestCheckPreviewToRelease(t *testing.T) {
 	}
 }
 
+func TestReleaseCodename(t *testing.T) {
+	tests := []struct {
+		name, version, want string
+	}{
+		{"v0.0.9 Periapsis", "0.0.9", "Periapsis"},
+		{"v0.0.9 — Periapsis", "0.0.9", "Periapsis"},
+		{"v1.0.0-rc1 Polaris Rising", "1.0.0-rc1", "Polaris Rising"},
+		{"v0.0.9", "0.0.9", ""},             // bare tag: no codename
+		{"Periapsis", "0.0.9", ""},          // no version lead: ignored
+		{"v0.0.9 (hotfix #2)", "0.0.9", ""}, // punctuation/digits rejected
+		{"some other scheme", "0.0.9", ""},
+		{"", "0.0.9", ""},
+	}
+	for _, tt := range tests {
+		if got := releaseCodename(tt.name, tt.version); got != tt.want {
+			t.Errorf("releaseCodename(%q, %q) = %q, want %q", tt.name, tt.version, got, tt.want)
+		}
+	}
+}
+
+func TestCheckSurfacesCodename(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]githubRelease{
+			{TagName: "v0.0.9", Name: "v0.0.9 Periapsis", Body: "notes", Prerelease: false},
+		})
+	}))
+	defer srv.Close()
+
+	cleanup := SetAPIBaseForTest(srv.URL)
+	defer cleanup()
+
+	m := New(Options{Current: "0.0.8", CurrentCodename: "Testname"})
+	if err := m.Check(context.Background()); err != nil {
+		t.Fatalf("Check failed: %v", err)
+	}
+	st := m.Status()
+	if !st.Available || st.Latest != "0.0.9" || st.LatestCodename != "Periapsis" {
+		t.Fatalf("expected 0.0.9 Periapsis available, got: %+v", st)
+	}
+	if st.CurrentCodename != "Testname" {
+		t.Fatalf("expected current codename passthrough, got: %+v", st)
+	}
+}
+
 func TestCheckPrereleaseFiltering(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

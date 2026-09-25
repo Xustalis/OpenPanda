@@ -38,7 +38,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-## [0.0.9] - 2026-09-25
+## [0.0.9] - 2026-09-25 — "Periapsis"
 
 Das stabile v0.0.9-Release — Codename **Periapsis**. Für eine Einzelmaschinen-Installation ist es ein Komfort-Release: Genehmigungen lassen sich merken statt erneut zu beantworten, die CLI erklärt sich besser (ein Status, der sagt ob *dieser* Knoten läuft, eine leere Queue, die den nächsten Schritt vorschlägt, ein Erstlauf-Hinweis, Release-Notes, die der Updater ausgibt), die Web-Konsole attribuiert jede Antwort dem Agenten und Modell, der sie produziert hat, und pinnt Node-Liveness und Version in die Seitenleiste — und die TUI überlebt alltägliche Befehlssequenzen, die sie früher korruptierten. Für Flotten vervollständigt es die Linie, die die Beta eröffnete: eine authentifizierte Datagramm-Ebene mit NAT-Traversal, verschlüsselte DTN-Payloads, geplante Kontaktfenster, kryptografische Knotenidentität mit signiertem Consent, direkte Stage-übergreifende Artifact-Übergabe und ein Lite-Build für beschränkte Geräte.
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { PandaAscii, PandaWordmark } from './brand/panda'
-import { api, clearToken, getToken, onUnauthorized, setToken, type UpdateStatus } from './api/client'
+import { api, clearToken, displayVersion, getToken, onUnauthorized, setToken, type UpdateStatus } from './api/client'
 import { onLocaleChange, t } from './i18n'
 import { useAsync } from './hooks'
 import { navigate, parseHash, primaryNav, type Route } from './nav'
@@ -182,7 +182,7 @@ function UpdateBanner() {
     <div class="banner banner-info update-banner" role="status">
       <span class="banner-ico" aria-hidden>✨</span>
       <span class="banner-body">
-        <strong>{t('ui.update.available.title', { version: up.latest ?? '' })}</strong>
+        <strong>{t('ui.update.available.title', { version: displayVersion(up.latest, up.latest_codename) })}</strong>
         <span class="banner-sub">{up.notes ?? t('ui.update.available.sub')}</span>
       </span>
       <a class="banner-link" href="#/system">{t('ui.update.available.cta')}</a>
@@ -208,10 +208,7 @@ function SidebarNode() {
     >
       <span class={`dot${self.node_running ? '' : ' off'}`} aria-hidden />
       <span class="mono sidebar-node-name">{name}</span>
-      <span class="ver mono">
-        v{self.version}
-        {self.codename ? ` ${self.codename}` : ''}
-      </span>
+      <span class="ver mono">{displayVersion(self.version, self.codename)}</span>
     </a>
   )
 }

@@ -19,3 +19,13 @@ var Version = "0.0.9"
 // nodes (the same physics as an orbital pass). Surfaced by `panda version`
 // and /api/version; not part of the semver itself.
 var Codename = "Periapsis"
+
+// Display returns the human-facing release identity — "v0.0.9 Periapsis" —
+// for anywhere the build introduces itself to a user. Version alone stays
+// the semver used for comparisons, archive names, and wire fields.
+func Display() string {
+	if Codename == "" {
+		return "v" + Version
+	}
+	return "v" + Version + " " + Codename
+}

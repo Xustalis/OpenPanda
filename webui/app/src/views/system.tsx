@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'preact/hooks'
 import {
   api,
+  displayVersion,
   type AuditEntry,
   type DelegationMetric,
   type DoctorReport,
@@ -40,8 +41,7 @@ export function SystemView() {
       <div class="system-head">
         <div class="card version-card">
           <span class="dim">{t('system.version')}</span>
-          <span class="version-num mono">{version?.version ?? '…'}</span>
-          {version?.codename && <span class="version-num mono">{version.codename}</span>}
+          <span class="version-num mono">{version ? displayVersion(version.version, version.codename) : '…'}</span>
         </div>
         <div class="card audit-card">
           <div class="audit-head">
@@ -190,7 +190,7 @@ function UpdateCard() {
 
       {stage === 'available' && (
         <div class="update-actions">
-          <p class="update-note">{t('system.updateAvailable', { latest: status.latest ?? '' })}</p>
+          <p class="update-note">{t('system.updateAvailable', { latest: displayVersion(status.latest, status.latest_codename) })}</p>
           <UpdateNotes notes={status.notes} />
           <button class="btn" disabled={busy} onClick={() => void act(() => api.downloadUpdate())}>
             {t('system.updateDownload')}
@@ -200,7 +200,7 @@ function UpdateCard() {
 
       {stage === 'staged' && (
         <div class="update-actions">
-          <p class="update-note">{t('system.updateStaged', { latest: status.latest ?? '' })}</p>
+          <p class="update-note">{t('system.updateStaged', { latest: displayVersion(status.latest, status.latest_codename) })}</p>
           <UpdateNotes notes={status.notes} />
           {status.idle ? (
             <button class="btn" disabled={busy} onClick={() => void act(() => api.applyUpdate())}>
@@ -230,7 +230,7 @@ function UpdateCard() {
       )}
 
       <p class="dim update-version">
-        {t('system.updateCurrent')}: <span class="mono">{status.current}</span>
+        {t('system.updateCurrent')}: <span class="mono">{displayVersion(status.current, status.current_codename)}</span>
       </p>
     </div>
   )
