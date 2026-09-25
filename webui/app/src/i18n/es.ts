@@ -17,6 +17,8 @@ const es: Messages = {
   'nav.group.orchestrate': 'Dispositivos y agentes',
   'nav.group.personal': 'Personal',
   'nav.group.system': 'Sistema',
+  'sidebar.node.up': 'Este nodo está en ejecución — abrir Sistema',
+  'sidebar.node.down': 'Este nodo no está en ejecución — inícialo con `panda daemon`',
 
   // Paleta de comandos (⌘K)
   'palette.trigger': 'Buscar…',

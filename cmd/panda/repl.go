@@ -379,6 +379,13 @@ func runRepl(args []string) {
 	}
 
 	r.printBanner()
+	// No config file anywhere ResolvePath looks means a first run — say so,
+	// because every other surface assumes `panda init` already happened.
+	if r.interactive {
+		if _, err := os.Stat(config.ResolvePath(*configPath)); os.IsNotExist(err) {
+			fmt.Println(pal().Muted(i18n.T(r.loc, "repl.firstrun")))
+		}
+	}
 	if r.engine != nil && !r.hasCard {
 		fmt.Println(i18n.T(r.loc, "repl.ask.noCard"))
 	}
