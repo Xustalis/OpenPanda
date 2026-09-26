@@ -317,6 +317,28 @@ var known = []Known{
 		DefaultTier:         TierAutoApproved,
 	},
 	{
+		Name:        "antigravity",
+		Adapter:     "antigravity.py",
+		Endpoint:    "https://generativelanguage.googleapis.com",
+		Binaries:    []string{"agy", "antigravity"},
+		DisplayName: "Antigravity (Google)",
+		InstallURL:  "https://antigravity.google/docs/cli/install",
+		InitHint:    "agy  # sign in once interactively — headless runs reuse the keyring session",
+		// agy authenticates through the OS keyring or a Gemini API key; its env
+		// contract is not the OpenAI/Anthropic pair, so ModelEnv stays nil and
+		// PANDA never injects a model endpoint into it.
+		CredentialEnvVars: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"},
+		Capabilities: Capabilities{
+			SupportsSkills:    true,
+			SupportsMCP:       true,
+			SupportsSubagents: true,
+		},
+		DefaultCapabilities: []string{"coding", "shell", "file_edit", "build"},
+		DefaultBestAt:       []string{"multi_file_edits", "code_search", "complex_reasoning"},
+		DefaultCostTier:     "medium_high",
+		DefaultTier:         TierAutoApproved,
+	},
+	{
 		Name:              "hermes",
 		Adapter:           "hermes.py",
 		Endpoint:          "https://api.openai.com",
