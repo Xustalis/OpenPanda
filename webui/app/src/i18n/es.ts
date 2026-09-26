@@ -566,7 +566,7 @@ const es: Messages = {
   'card.agents.empty': 'No hay agentes registrados en esta tarjeta.',
   'card.agent.name': 'nombre (p. ej. opencode)',
   'card.agent.adapter': 'script adaptador',
-  'card.agent.command': 'plantilla de comando (ej. zcode run --headless {prompt})',
+  'card.agent.command': 'plantilla de comando (ej. zcode --prompt {prompt})',
   'card.agent.add': 'Añadir agente',
   'card.agent.missing': 'El nombre y el adaptador son obligatorios.',
   'card.agent.tierHint': 'Alternar tier: 1 = reversible, 2 = irreversible (requiere autorización)',

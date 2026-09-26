@@ -74,7 +74,7 @@ type Agent struct {
 	// Command is the argv template the generic adapter (generic.py) expands:
 	// shlex-split, every "{prompt}" placeholder replaced by the task prompt as
 	// one literal argv element (appended when no placeholder is present). It
-	// lets a card wire ANY headless CLI — `command: "zcode run --yes {prompt}"`
+	// lets a card wire ANY headless CLI — `command: "zcode --prompt {prompt}"`
 	// — without a bespoke adapter script. Ignored by adapters that carry their
 	// own command line. Never crosses the wire (CapabilitySummary carries only
 	// capability tags), so it stays a local declaration like NativeAbility.

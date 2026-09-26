@@ -13,7 +13,7 @@ bespoke script. The card declares the invocation once:
       zcode:
         adapter: "generic.py"
         install_check: "zcode --version"
-        command: "zcode run --headless --yes {prompt}"
+        command: "zcode --prompt {prompt}"
         capabilities: ["coding", "shell", "file_edit"]
 
 The command template rides the request's "cmd" field verbatim. It is split

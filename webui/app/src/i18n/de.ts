@@ -566,7 +566,7 @@ const de: Messages = {
   'card.agents.empty': 'Keine Agenten auf dieser Karte registriert.',
   'card.agent.name': 'Name (z. B. opencode)',
   'card.agent.adapter': 'Adapter-Skript',
-  'card.agent.command': 'Befehlsvorlage (z. B. zcode run --headless {prompt})',
+  'card.agent.command': 'Befehlsvorlage (z. B. zcode --prompt {prompt})',
   'card.agent.add': 'Agent hinzufügen',
   'card.agent.missing': 'Name und Adapter sind erforderlich.',
   'card.agent.tierHint': 'Tier umschalten: 1 = reversibel, 2 = irreversibel (Autorisierung nötig)',
