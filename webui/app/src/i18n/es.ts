@@ -367,6 +367,8 @@ const es: Messages = {
   'system.updateApply': 'Instalar actualización',
   'system.updateApplying': 'Aplicando actualización…',
   'system.updateDone': 'Actualización aplicada — reiniciando…',
+  'system.updateDoneHint': 'Esta consola se reconecta sola. Los demonios registrados en segundo plano reciben la orden de reiniciarse con la nueva versión; un `panda daemon` iniciado a mano sigue necesitando reinicio manual.',
+  'system.updateUnavailable': 'La autoactualización no está disponible en este panel.',
   'system.updateDiscard': 'Descartar descarga',
   'system.updateWaiting': 'Esperando a que terminen las tareas en curso…',
   'system.updateError': 'Fallo de actualización:',

@@ -376,7 +376,9 @@ export interface SessionApprovalState {
 
 export interface ChooseDirectoryResult {
   path?: string
-  canceled: boolean
+  canceled?: boolean
+  /** Older panels emit the British spelling; accept either. */
+  cancelled?: boolean
   error?: string
 }
 
@@ -384,7 +386,7 @@ export interface DirectoryListing {
   current: string
   parent: string
   separator: string
-  entries: { name: string; path: string }[]
+  directories: { name: string; path: string }[]
 }
 
 /** GET /api/update — the self-update pipeline status snapshot. */

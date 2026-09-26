@@ -375,6 +375,8 @@ const en: Messages = {
   'system.updateApply': 'Install update',
   'system.updateApplying': 'Applying update…',
   'system.updateDone': 'Update applied — restarting…',
+  'system.updateDoneHint': 'This console reconnects on its own. Registered background daemons were asked to restart on the new version; a manually started `panda daemon` still needs a restart.',
+  'system.updateUnavailable': 'Self-update is not available on this panel.',
   'system.updateDiscard': 'Discard download',
   'system.updateWaiting': 'Waiting for running tasks to finish…',
   'system.updateError': 'Update failed:',

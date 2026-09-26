@@ -32,3 +32,16 @@ var nodeTaskName = "OpenPandaNode"
 func StopServices() {
 	_ = exec.Command("schtasks.exe", "/Delete", "/TN", nodeTaskName, "/F").Run()
 }
+
+// RestartDaemon best-effort restarts the registered logon task so it picks up
+// a freshly swapped binary (self-update replaces the file on disk, but the
+// running daemon keeps its old image until restarted). /End succeeds only
+// when the task is currently running, so a stopped or absent task stays
+// untouched — and the matching /Run brings the daemon back on the new image.
+// Failures are ignored: no registered task is the normal case.
+func RestartDaemon() {
+	if err := exec.Command("schtasks.exe", "/End", "/TN", nodeTaskName).Run(); err != nil {
+		return
+	}
+	_ = exec.Command("schtasks.exe", "/Run", "/TN", nodeTaskName).Run()
+}
