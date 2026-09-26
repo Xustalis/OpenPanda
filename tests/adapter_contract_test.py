@@ -417,10 +417,10 @@ print("openclaw answer")
         payload, _, _ = run_adapter(
             "generic.py", "zcode", r'''
 import sys
-assert sys.argv[1:] == ["run", "--headless", "--yes", "contract prompt"], sys.argv
+assert sys.argv[1:] == ["--prompt", "contract prompt"], sys.argv
 print("zcode answer")
 ''',
-            extra_request={"cmd": "zcode run --headless --yes {prompt}"},
+            extra_request={"cmd": "zcode --prompt {prompt}"},
         )
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "zcode answer")
@@ -567,12 +567,12 @@ class HarnessContractTest(unittest.TestCase):
     def test_read_request_carries_cmd_template(self):
         # The card's agents.<name>.command rides the request verbatim for
         # generic.py; absent it parses as "".
-        req = {"prompt": "p", "cmd": "zcode run {prompt}"}
+        req = {"prompt": "p", "cmd": "zcode --prompt {prompt}"}
         payload, _ = run_harness(
             "_harness.emit(True, _harness.read_request().cmd, 0)",
             stdin_data=json.dumps(req),
         )
-        self.assertEqual(payload["result"], "zcode run {prompt}", payload)
+        self.assertEqual(payload["result"], "zcode --prompt {prompt}", payload)
         payload, _ = run_harness(
             "_harness.emit(True, repr(_harness.read_request().cmd), 0)",
             stdin_data=json.dumps({"prompt": "p"}),

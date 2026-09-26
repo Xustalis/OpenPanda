@@ -131,7 +131,7 @@ func runCardAgent(args []string) {
 	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	adapter := fs.String("adapter", "", "adapter script in adapters/ (required for add)")
 	installCheck := fs.String("install-check", "", "command that proves the CLI is installed (e.g. 'codex --version')")
-	command := fs.String("command", "", "argv template generic.py expands (e.g. 'zcode run --headless {prompt}')")
+	command := fs.String("command", "", "argv template generic.py expands (e.g. 'zcode --prompt {prompt}')")
 	capabilities := fs.String("capabilities", "", "comma-separated capability tags (e.g. shell,files,code)")
 	bestAt := fs.String("best-at", "", "comma-separated descriptions of what it is best at")
 	notFor := fs.String("not-for", "", "comma-separated things it should not be routed")

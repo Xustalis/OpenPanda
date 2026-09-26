@@ -60,9 +60,14 @@ agents:
   # (appended when absent). Pick the CLI's non-interactive flags — a headless
   # run cannot answer a permission prompt.
   #
+  # zcode (Z.AI) — detected automatically via the registry; its headless
+  # contract is `zcode --prompt "…"` (community-verified, undocumented
+  # upstream). Auth: the TUI setup wizard's ~/.zcode/cli/config.json, or
+  # ZCODE_API_KEY/ZCODE_MODEL/ZCODE_BASE_URL env vars.
+  #
   # zcode:
   #   adapter: "generic.py"
-  #   command: "zcode run --headless {prompt}"
+  #   command: "zcode --prompt {prompt}"
   #   install_check: "zcode --version"
   #   capabilities: ["coding", "shell", "file_edit"]
   #   cost_tier: "low"

@@ -155,7 +155,7 @@ type agentRequest struct {
 	Adapter      *string `json:"adapter"`
 	InstallCheck *string `json:"install_check"`
 	// Command is the argv template generic.py expands — set it when the
-	// adapter is generic.py (e.g. "zcode run --headless {prompt}").
+	// adapter is generic.py (e.g. "zcode --prompt {prompt}").
 	Command      *string  `json:"command"`
 	Capabilities []string `json:"capabilities"`
 	BestAt       []string `json:"best_at"`

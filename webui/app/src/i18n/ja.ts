@@ -558,7 +558,7 @@ const ja: Messages = {
   'card.agents.empty': 'カードに登録されたエージェントはありません。',
   'card.agent.name': '名前（例: opencode）',
   'card.agent.adapter': 'アダプタースクリプト',
-  'card.agent.command': 'コマンドテンプレート（例: zcode run --headless {prompt}）',
+  'card.agent.command': 'コマンドテンプレート（例: zcode --prompt {prompt}）',
   'card.agent.add': 'エージェントを追加',
   'card.agent.missing': '名前とアダプターは必須です。',
   'card.agent.tierHint': 'tier 切り替え：1 = 可逆、2 = 不可逆（要承認）',
