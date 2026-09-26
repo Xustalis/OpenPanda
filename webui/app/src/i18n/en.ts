@@ -590,6 +590,7 @@ const en: Messages = {
   'card.agents.empty': 'No agents registered on this card.',
   'card.agent.name': 'name (e.g. opencode)',
   'card.agent.adapter': 'adapter script',
+  'card.agent.command': 'command template (e.g. zcode run --headless {prompt})',
   'card.agent.add': 'Add agent',
   'card.agent.missing': 'Name and adapter are required.',
   'card.agent.tierHint': 'Toggle tier: 1 = reversible, 2 = irreversible (needs authorization)',

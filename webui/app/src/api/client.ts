@@ -479,6 +479,9 @@ export interface CardNative {
 export interface CardAgent {
   adapter: string
   install_check?: string
+  /** argv template generic.py expands ({prompt} placeholder) — set only for
+   *  agents wired through the generic adapter. */
+  command?: string
   capabilities?: string[]
   best_at?: string[]
   not_for?: string[]
@@ -797,6 +800,7 @@ export const api = {
     body: {
       adapter: string
       install_check?: string
+      command?: string
       capabilities?: string[]
       best_at?: string[]
       not_for?: string[]
@@ -814,6 +818,7 @@ export const api = {
     body: Partial<{
       adapter: string
       install_check: string
+      command: string
       capabilities: string[]
       best_at: string[]
       not_for: string[]

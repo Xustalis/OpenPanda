@@ -574,6 +574,7 @@ const zhCN: Messages = {
   'card.agents.empty': '卡上还没有注册任何 agent。',
   'card.agent.name': '名称（如 opencode）',
   'card.agent.adapter': '适配器脚本',
+  'card.agent.command': '命令模板（如 zcode run --headless {prompt}）',
   'card.agent.add': '添加 agent',
   'card.agent.missing': '名称和适配器脚本不能为空。',
   'card.agent.tierHint': '切换 tier：1 = 可逆，2 = 不可逆（需授权）',
