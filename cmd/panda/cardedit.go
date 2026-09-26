@@ -131,6 +131,7 @@ func runCardAgent(args []string) {
 	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	adapter := fs.String("adapter", "", "adapter script in adapters/ (required for add)")
 	installCheck := fs.String("install-check", "", "command that proves the CLI is installed (e.g. 'codex --version')")
+	command := fs.String("command", "", "argv template generic.py expands (e.g. 'zcode --prompt {prompt}')")
 	capabilities := fs.String("capabilities", "", "comma-separated capability tags (e.g. shell,files,code)")
 	bestAt := fs.String("best-at", "", "comma-separated descriptions of what it is best at")
 	notFor := fs.String("not-for", "", "comma-separated things it should not be routed")
@@ -147,7 +148,7 @@ func runCardAgent(args []string) {
 	case "add":
 		if len(positional) != 1 || *adapter == "" {
 			fmt.Fprintln(os.Stderr, "usage: panda card agent add <name> --adapter <script> [--install-check …] [--capabilities a,b]")
-			fmt.Fprintln(os.Stderr, "                                [--best-at a,b] [--not-for a,b] [--cost-tier …] [--tier 1|2]")
+			fmt.Fprintln(os.Stderr, "                                [--command '… {prompt}'] [--best-at a,b] [--not-for a,b] [--cost-tier …] [--tier 1|2]")
 			os.Exit(2)
 		}
 		if *tier != 1 && *tier != 2 {
@@ -157,6 +158,7 @@ func runCardAgent(args []string) {
 		ag := ledger.Agent{
 			Adapter:      *adapter,
 			InstallCheck: *installCheck,
+			Command:      *command,
 			Capabilities: splitCSV(*capabilities),
 			BestAt:       splitCSV(*bestAt),
 			NotFor:       splitCSV(*notFor),
@@ -179,7 +181,7 @@ func runCardAgent(args []string) {
 	case "set":
 		if len(positional) < 2 {
 			fmt.Fprintln(os.Stderr, "usage: panda card agent set <name> <field>=<value> …")
-			fmt.Fprintln(os.Stderr, "fields: adapter, install_check, capabilities, best_at, not_for, cost_tier, tier")
+			fmt.Fprintln(os.Stderr, "fields: adapter, install_check, command, capabilities, best_at, not_for, cost_tier, tier")
 			os.Exit(2)
 		}
 		name := positional[0]
@@ -253,6 +255,9 @@ func parseAgentUpdate(assignments []string) (cardmut.AgentUpdate, error) {
 		case "install_check":
 			v := value
 			upd.InstallCheck = &v
+		case "command":
+			v := value
+			upd.Command = &v
 		case "capabilities":
 			v := splitCSV(value)
 			upd.Capabilities = &v
@@ -272,7 +277,7 @@ func parseAgentUpdate(assignments []string) (cardmut.AgentUpdate, error) {
 			}
 			upd.Tier = &n
 		default:
-			return upd, fmt.Errorf("unknown agent field %q (adapter, install_check, capabilities, best_at, not_for, cost_tier, tier)", field)
+			return upd, fmt.Errorf("unknown agent field %q (adapter, install_check, command, capabilities, best_at, not_for, cost_tier, tier)", field)
 		}
 	}
 	return upd, nil

@@ -102,6 +102,7 @@ func AgentRemove(path string, name string) error {
 type AgentUpdate struct {
 	Adapter      *string
 	InstallCheck *string
+	Command      *string
 	Capabilities *[]string
 	BestAt       *[]string
 	NotFor       *[]string
@@ -123,6 +124,16 @@ func AgentSet(path string, name string, upd AgentUpdate) error {
 		}
 		if upd.InstallCheck != nil {
 			setMapScalar(ag, "install_check", *upd.InstallCheck)
+		}
+		if upd.Command != nil {
+			// An empty command clears the template instead of leaving a
+			// `command: ""` stub behind — generic.py errors on an empty one
+			// anyway, so the empty key would carry no meaning.
+			if *upd.Command == "" {
+				removeMapKey(ag, "command")
+			} else {
+				setMapScalar(ag, "command", *upd.Command)
+			}
 		}
 		if upd.Capabilities != nil {
 			setMapSeq(ag, "capabilities", *upd.Capabilities)

@@ -26,15 +26,18 @@ export function DirPicker({
     setLoading(true)
     try {
       const res = await api.chooseDirectory(value)
-      if (res && res.path && !res.canceled) {
+      const canceled = !!(res && (res.canceled ?? res.cancelled))
+      if (res && res.path && !canceled) {
         onChange(res.path)
         if (onSuggestName) {
           onSuggestName(suggestProjectName(res.path))
         }
         return
       }
-      if (res && res.error) {
-        // Native dialog not supported or failed — fall back to interactive modal browser
+      if (!canceled) {
+        // Native dialog unsupported, failed, or never answered — fall back
+        // to the interactive modal browser either way so the picker always
+        // opens something the user can navigate.
         setModalOpen(true)
       }
     } catch {
@@ -150,7 +153,12 @@ function DirBrowserModal({
             {isWindows ? 'C:\\' : '/'}
           </button>
           {parts.map((p, i) => {
-            const pathUpTo = (isWindows ? '' : '/') + parts.slice(0, i + 1).join(isWindows ? '\\' : '/')
+            // On Windows parts[0] is the drive ("C:") — a bare "C:" resolves
+            // to the process cwd on that drive, not the drive root, so it
+            // needs its trailing separator.
+            const pathUpTo = isWindows && i === 0
+              ? parts[0] + '\\'
+              : (isWindows ? '' : '/') + parts.slice(0, i + 1).join(isWindows ? '\\' : '/')
             return (
               <span key={i} class="dir-crumb-item">
                 <span class="dir-crumb-sep">/</span>
@@ -187,8 +195,8 @@ function DirBrowserModal({
             </div>
           ) : error ? (
             <div class="dir-error">{error}</div>
-          ) : listing?.entries && listing.entries.length > 0 ? (
-            listing.entries.map((entry) => (
+          ) : listing?.directories && listing.directories.length > 0 ? (
+            listing.directories.map((entry) => (
               <button
                 key={entry.path}
                 type="button"

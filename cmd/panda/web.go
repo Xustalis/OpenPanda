@@ -137,6 +137,13 @@ func runWeb(args []string) {
 	if token == "" {
 		token = panel.NewToken()
 		ephemeral = true
+		// A self-update replaces this process image via exec, which re-reads
+		// config — a fresh ephemeral token would strand every open console at
+		// the token gate. Exporting it through env (config.applyEnv maps
+		// OPENPANDA_PANEL_TOKEN back onto panel_token) keeps the same token
+		// across the restart; the sandboxed adapter/command subprocesses never
+		// see it (security allow-list drops everything else).
+		_ = os.Setenv("OPENPANDA_PANEL_TOKEN", token)
 		if !panel.IsLoopbackAddr(addr) {
 			fmt.Println(i18n.T(loc, "web.lan.ephemeral"))
 		} else {

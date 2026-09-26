@@ -410,6 +410,125 @@ print("openclaw answer")
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "openclaw answer")
 
+    def test_generic_command_template_contract(self):
+        # The card-declared template is shlex-split; {prompt} substitutes as
+        # ONE literal argv element, so prompt whitespace/quotes cannot split
+        # or reach a shell.
+        payload, _, _ = run_adapter(
+            "generic.py", "zcode", r'''
+import sys
+assert sys.argv[1:] == ["--prompt", "contract prompt"], sys.argv
+print("zcode answer")
+''',
+            extra_request={"cmd": "zcode --prompt {prompt}"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "zcode answer")
+
+    def test_generic_prompt_inside_flag_and_default_append(self):
+        # Embedded form: "--prompt={prompt}" keeps the prompt inside one argv
+        # element.
+        payload, _, _ = run_adapter(
+            "generic.py", "mimo", r'''
+import sys
+assert sys.argv[1:] == ["--prompt=contract prompt", "--quiet"], sys.argv
+print("mimo answer")
+''',
+            extra_request={"cmd": "mimo --prompt={prompt} --quiet"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "mimo answer")
+        # No placeholder at all: the prompt is appended as the last argument.
+        payload, _, _ = run_adapter(
+            "generic.py", "mimo", r'''
+import sys
+assert sys.argv[1:] == ["exec", "contract prompt"], sys.argv
+print("appended")
+''',
+            extra_request={"cmd": "mimo exec"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "appended")
+
+    def test_generic_empty_template_is_reported(self):
+        # No command declared (or an unparseable one) is a configuration
+        # error, exit 2 — the adapter never guesses an argv.
+        payload, _, _ = run_adapter(
+            "generic.py", "never-spawned", "import sys; sys.exit(99)\n",
+            extra_request={"cmd": ""},
+        )
+        self.assertFalse(payload["ok"], payload)
+        self.assertEqual(payload["exit_code"], 2)
+        self.assertIn("command", payload["result"])
+
+    def test_generic_timeout_and_missing_binary_contract(self):
+        payload, _, _ = run_adapter(
+            "generic.py", "slowcli", "import time; time.sleep(10)\n",
+            extra_request={"cmd": "slowcli {prompt}"},
+            timeout=8,
+        )
+        self.assertFalse(payload["ok"], payload)
+        self.assertEqual(payload["exit_code"], 124)
+        payload, _, _ = run_adapter(
+            "generic.py", "ghostcli", "import sys\n",
+            extra_request={"cmd": "definitely-not-on-path-xyz {prompt}"},
+        )
+        self.assertFalse(payload["ok"], payload)
+        self.assertEqual(payload["exit_code"], 127)
+
+    def test_antigravity_envelope_contract(self):
+        # agy -p … --output-format json emits ONE JSON envelope; the adapter
+        # reduces it to the wire result and surfaces conversation_id for
+        # resume.
+        payload, _, _ = run_adapter(
+            "antigravity.py", "agy", r'''
+import json, sys
+args = sys.argv[1:]
+assert args[:2] == ["-p", "contract prompt"], args
+assert "--output-format" in args and "json" in args
+assert "--dangerously-skip-permissions" in args
+assert "--conversation" not in args
+print(json.dumps({"conversation_id":"conv-1","status":"SUCCESS",
+                  "response":"agy answer",
+                  "usage":{"input_tokens":9,"output_tokens":4,"thinking_tokens":2,"total_tokens":15}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "agy answer")
+        self.assertEqual(payload["session_id"], "conv-1")
+        self.assertEqual(payload["tokens"], 15)
+        self.assertEqual(payload["usage"]["output_tokens"], 6)
+
+    def test_antigravity_resume_and_failure_contract(self):
+        # A follow-up round resumes the previous conversation by id.
+        payload, _, _ = run_adapter(
+            "antigravity.py", "agy", r'''
+import json, sys
+args = sys.argv[1:]
+assert "--conversation" in args and args[args.index("--conversation") + 1] == "conv-prev"
+print(json.dumps({"conversation_id":"conv-prev","status":"SUCCESS","response":"resumed"}))
+''',
+            extra_request={"resume": "conv-prev"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "resumed")
+        # A non-SUCCESS envelope (or a bare error line) is a failure, and a
+        # stray event object must not satisfy the envelope lookup.
+        payload, _, _ = run_adapter(
+            "antigravity.py", "agy", r'''
+import json, sys
+print(json.dumps({"type":"event","detail":"noise"}))
+print(json.dumps({"status":"FAILED","conversation_id":"conv-x"}))
+sys.stderr.write("authentication required\n")
+sys.exit(1)
+''',
+        )
+        self.assertFalse(payload["ok"], payload)
+        self.assertEqual(payload["exit_code"], 1)
+        # The FAILED envelope carried no response text, so the stderr
+        # diagnosis is what the operator sees.
+        self.assertIn("authentication required", payload["result"])
+
     def test_codex_timeout_is_reported(self):
         payload, _, _ = run_adapter(
             "codex.py", "codex", r'''
@@ -444,6 +563,21 @@ class HarnessContractTest(unittest.TestCase):
             stdin_data=json.dumps(req),
         )
         self.assertEqual(payload["result"], "sess-9:extended", payload)
+
+    def test_read_request_carries_cmd_template(self):
+        # The card's agents.<name>.command rides the request verbatim for
+        # generic.py; absent it parses as "".
+        req = {"prompt": "p", "cmd": "zcode --prompt {prompt}"}
+        payload, _ = run_harness(
+            "_harness.emit(True, _harness.read_request().cmd, 0)",
+            stdin_data=json.dumps(req),
+        )
+        self.assertEqual(payload["result"], "zcode --prompt {prompt}", payload)
+        payload, _ = run_harness(
+            "_harness.emit(True, repr(_harness.read_request().cmd), 0)",
+            stdin_data=json.dumps({"prompt": "p"}),
+        )
+        self.assertEqual(payload["result"], "''", payload)
 
     def test_emit_carries_usage_and_session(self):
         payload, _ = run_harness(

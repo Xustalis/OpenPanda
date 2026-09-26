@@ -15,6 +15,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/install"
 )
 
 // exeName is the installed binary's file name for this platform.
@@ -54,6 +55,13 @@ func applyRelease(ctx context.Context, m *Manager, s *stagedRelease) error {
 	if err := installVoiceScripts(s); err != nil {
 		m.opts.Logger.Warn("update: voice sidecar install failed", "err", err)
 	}
+
+	// The file swap alone leaves a service-managed `panda daemon` running its
+	// old image: a service restart is what makes "the update applied" true for
+	// the node kernel, not just for this console process. Apply gated on the
+	// shared store being idle, so the bounce cannot interrupt in-flight work.
+	// Best-effort — a hand-run daemon or an unregistered service is normal.
+	install.RestartDaemon()
 
 	// Restart on a slight delay so the HTTP apply response can flush before
 	// the process image is replaced. If NoRestart is requested (CLI one-shot),

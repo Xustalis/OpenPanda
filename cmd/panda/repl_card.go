@@ -203,6 +203,7 @@ func (r *repl) cardAgent(rest []string) {
 		ag := ledger.Agent{
 			Adapter:      fl["adapter"],
 			InstallCheck: fl["install-check"],
+			Command:      fl["command"],
 			Capabilities: splitCSV(fl["capabilities"]),
 			BestAt:       splitCSV(fl["best-at"]),
 			NotFor:       splitCSV(fl["not-for"]),

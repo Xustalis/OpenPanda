@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'preact/hooks'
 import {
   api,
+  ApiError,
   displayVersion,
   type AuditEntry,
   type DelegationMetric,
@@ -137,12 +138,17 @@ function UpdateCard() {
   const [status, setStatus] = useState<UpdateStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [unavailable, setUnavailable] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
       setStatus(await api.updateStatus())
-    } catch {
-      // The backend restarts right after apply; ignore the transient miss.
+      setUnavailable(false)
+    } catch (e) {
+      // The backend restarts right after apply — ignore the transient miss.
+      // A 404 means this panel runs without the self-update endpoints (the
+      // standalone sidecar disables them), so say so instead of spinning.
+      if (e instanceof ApiError && e.status === 404) setUnavailable(true)
     }
   }, [])
 
@@ -171,7 +177,7 @@ function UpdateCard() {
     return (
       <div class="card update-card">
         <span class="dim">{t('system.updateTitle')}</span>
-        <p class="dim">{t('common.loading')}</p>
+        <p class="dim">{unavailable ? t('system.updateUnavailable') : t('common.loading')}</p>
       </div>
     )
   }
@@ -186,7 +192,12 @@ function UpdateCard() {
       {stage === 'checking' && <p class="dim">{t('system.updateChecking')}</p>}
       {stage === 'downloading' && <p class="dim">{t('system.updateDownloading')}</p>}
       {stage === 'applying' && <p class="dim">{t('system.updateApplying')}</p>}
-      {stage === 'done' && <p class="test-result ok">{t('system.updateDone')}</p>}
+      {stage === 'done' && (
+        <>
+          <p class="test-result ok">{t('system.updateDone')}</p>
+          <p class="dim">{t('system.updateDoneHint')}</p>
+        </>
+      )}
 
       {stage === 'available' && (
         <div class="update-actions">

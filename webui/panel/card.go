@@ -152,8 +152,11 @@ func (h *handler) removeNative(w http.ResponseWriter, r *http.Request) {
 // (the cardmut.AgentUpdate contract), except on POST where adapter is
 // required — an agent registration without an adapter script cannot run.
 type agentRequest struct {
-	Adapter      *string  `json:"adapter"`
-	InstallCheck *string  `json:"install_check"`
+	Adapter      *string `json:"adapter"`
+	InstallCheck *string `json:"install_check"`
+	// Command is the argv template generic.py expands — set it when the
+	// adapter is generic.py (e.g. "zcode --prompt {prompt}").
+	Command      *string  `json:"command"`
 	Capabilities []string `json:"capabilities"`
 	BestAt       []string `json:"best_at"`
 	NotFor       []string `json:"not_for"`
@@ -168,6 +171,7 @@ type agentRequest struct {
 type agentPatch struct {
 	Adapter      *string   `json:"adapter"`
 	InstallCheck *string   `json:"install_check"`
+	Command      *string   `json:"command"`
 	Capabilities *[]string `json:"capabilities"`
 	BestAt       *[]string `json:"best_at"`
 	NotFor       *[]string `json:"not_for"`
@@ -203,6 +207,7 @@ func (h *handler) addAgent(w http.ResponseWriter, r *http.Request) {
 	ag := ledger.Agent{
 		Adapter:      strings.TrimSpace(*req.Adapter),
 		InstallCheck: derefString(req.InstallCheck),
+		Command:      derefString(req.Command),
 		Capabilities: req.Capabilities,
 		BestAt:       req.BestAt,
 		NotFor:       req.NotFor,
@@ -235,6 +240,7 @@ func (h *handler) patchAgent(w http.ResponseWriter, r *http.Request) {
 	upd := cardmut.AgentUpdate{
 		Adapter:      req.Adapter,
 		InstallCheck: req.InstallCheck,
+		Command:      req.Command,
 		Capabilities: req.Capabilities,
 		BestAt:       req.BestAt,
 		NotFor:       req.NotFor,

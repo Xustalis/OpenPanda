@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"gopkg.in/yaml.v3"
 )
 
@@ -109,12 +110,42 @@ func TestCardReadAndMutations(t *testing.T) {
 		t.Errorf("duplicate agent add status = %d, want 400", code)
 	}
 
+	// A generic-adapter agent carries its argv template on the card.
+	body = `{"adapter":"generic.py","command":"zcode run --headless {prompt}","tier":1}`
+	code, out = doJSON(t, h, jsonReq(http.MethodPost, "/api/card/agents/zcode", body))
+	if code != http.StatusOK {
+		t.Fatalf("generic agent add status = %d body %v", code, out)
+	}
+	data, err := os.ReadFile(cardPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "zcode run --headless {prompt}") {
+		t.Errorf("command template not written:\n%s", data)
+	}
+	// Patch swaps the template; an empty patch value clears the key.
+	code, out = doJSON(t, h, jsonReq(http.MethodPatch, "/api/card/agents/zcode", `{"command":"zcode exec {prompt}"}`))
+	if code != http.StatusOK {
+		t.Fatalf("command patch status = %d body %v", code, out)
+	}
+	code, _ = doJSON(t, h, jsonReq(http.MethodPatch, "/api/card/agents/zcode", `{"command":""}`))
+	if code != http.StatusOK {
+		t.Fatalf("command clear status = %d", code)
+	}
+	cleared, err := ledger.LoadCard(cardPath)
+	if err != nil {
+		t.Fatalf("reload card: %v", err)
+	}
+	if got := cleared.Agents["zcode"].Command; got != "" {
+		t.Errorf("cleared command must not leave a stub, got %q", got)
+	}
+
 	// Agent patch: tier toggle only — capabilities/best_at must survive.
 	code, out = doJSON(t, h, jsonReq(http.MethodPatch, "/api/card/agents/codex", `{"tier":1}`))
 	if code != http.StatusOK {
 		t.Fatalf("agent patch status = %d body %v", code, out)
 	}
-	data, err := os.ReadFile(cardPath)
+	data, err = os.ReadFile(cardPath)
 	if err != nil {
 		t.Fatal(err)
 	}

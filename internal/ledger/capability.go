@@ -69,8 +69,16 @@ type NativeAbility struct {
 
 // Agent is an installed agent CLI + its capabilities.
 type Agent struct {
-	Adapter      string   `yaml:"adapter" json:"adapter"`
-	InstallCheck string   `yaml:"install_check" json:"install_check"`
+	Adapter      string `yaml:"adapter" json:"adapter"`
+	InstallCheck string `yaml:"install_check" json:"install_check"`
+	// Command is the argv template the generic adapter (generic.py) expands:
+	// shlex-split, every "{prompt}" placeholder replaced by the task prompt as
+	// one literal argv element (appended when no placeholder is present). It
+	// lets a card wire ANY headless CLI — `command: "zcode --prompt {prompt}"`
+	// — without a bespoke adapter script. Ignored by adapters that carry their
+	// own command line. Never crosses the wire (CapabilitySummary carries only
+	// capability tags), so it stays a local declaration like NativeAbility.
+	Command      string   `yaml:"command,omitempty" json:"command,omitempty"`
 	Capabilities []string `yaml:"capabilities" json:"capabilities"`
 	BestAt       []string `yaml:"best_at" json:"best_at"`
 	NotFor       []string `yaml:"not_for" json:"not_for"`

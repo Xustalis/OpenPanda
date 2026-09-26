@@ -561,6 +561,9 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		if ctx.Value(toolsPolicyKey{}) == nil {
 			runCtx = WithToolsPolicy(ctx, r.toolsPolicy)
 		}
+		if ag.Command != "" {
+			runCtx = WithAgentCommand(runCtx, ag.Command)
+		}
 		cleanupMCP := r.materializeMCPPassthrough(ag.Adapter, cwd)
 		ar := r.runAdapter(runCtx, ag.Adapter, prompt, cwd)
 		// One bounded retry on provider-side turbulence (rate limit /
