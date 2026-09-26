@@ -362,6 +362,8 @@ const ja: Messages = {
   'system.updateApply': '更新をインストール',
   'system.updateApplying': '更新を適用中…',
   'system.updateDone': '更新を適用しました — 再起動中…',
+  'system.updateDoneHint': 'このコンソールは自動で再接続します。登録済みのバックグラウンドデーモンは新バージョンで再起動されます。手動起動の `panda daemon` は再起動が必要です。',
+  'system.updateUnavailable': 'このパネルでは自己更新は利用できません。',
   'system.updateDiscard': 'ダウンロードを破棄',
   'system.updateWaiting': '実行中のタスクが完了するのを待っています…',
   'system.updateError': '更新に失敗しました：',

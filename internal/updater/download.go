@@ -168,14 +168,19 @@ func extractRelease(archive, destDir string) (string, error) {
 
 // sanitizeEntry strips the leading "openpanda/" component and returns the
 // relative path to materialize inside root. The empty string means "skip" —
-// only the top-level openpanda dir entry itself or a bare "./" earns that.
-// Anything else outside the release layout is an error: absolute paths,
-// ".." traversal, and foreign top-level entries would install a partial or
-// unexpected tree, so they refuse the archive outright rather than being
-// skipped (the same contract artifact.Unpack enforces).
+// the top-level openpanda dir entry itself, a bare "./", and OS metadata
+// junk all earn that: archives packaged on macOS carry AppleDouble shadows
+// ("._openpanda", "openpanda/._bin") and "__MACOSX/" trees that hold no
+// payload bytes. Anything else outside the release layout is an error:
+// absolute paths, ".." traversal, and foreign top-level entries would
+// install a partial or unexpected tree, so they refuse the archive outright
+// rather than being skipped (the same contract artifact.Unpack enforces).
 func sanitizeEntry(name string) (string, error) {
 	raw := filepath.ToSlash(strings.TrimPrefix(name, "./"))
 	if raw == "" || raw == "openpanda" {
+		return "", nil
+	}
+	if isArchiveJunk(raw) {
 		return "", nil
 	}
 	if strings.HasPrefix(raw, "/") {
@@ -193,6 +198,24 @@ func sanitizeEntry(name string) (string, error) {
 		return "", fmt.Errorf("release archive entry %q traverses out of the extraction root; refusing", name)
 	}
 	return clean, nil
+}
+
+// isArchiveJunk reports whether raw (slash-separated, "openpanda/" prefix not
+// yet stripped) is OS packaging noise that carries no payload: macOS
+// AppleDouble files are named "._<name>" beside the real entry (a top-level
+// "._openpanda" would otherwise read as a foreign top-level entry and sink a
+// perfectly good archive), and ditto-made zips wrap their shadows in a
+// "__MACOSX/" tree.
+func isArchiveJunk(raw string) bool {
+	if raw == "__MACOSX" || strings.HasPrefix(raw, "__MACOSX/") {
+		return true
+	}
+	for _, part := range strings.Split(raw, "/") {
+		if strings.HasPrefix(part, "._") {
+			return true
+		}
+	}
+	return false
 }
 
 func directoryTraversal(name string) bool {

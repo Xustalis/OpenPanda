@@ -367,6 +367,8 @@ const de: Messages = {
   'system.updateApply': 'Update installieren',
   'system.updateApplying': 'Update wird angewendet…',
   'system.updateDone': 'Update angewendet — Neustart…',
+  'system.updateDoneHint': 'Diese Konsole verbindet sich von selbst neu. Registrierte Hintergrund-Daemons werden auf die neue Version umgestartet; ein manuell gestarteter `panda daemon` braucht weiterhin einen Neustart.',
+  'system.updateUnavailable': 'Selbst-Update ist auf dieser Konsole nicht verfügbar.',
   'system.updateDiscard': 'Download verwerfen',
   'system.updateWaiting': 'Warte auf den Abschluss laufender Aufgaben…',
   'system.updateError': 'Update fehlgeschlagen:',

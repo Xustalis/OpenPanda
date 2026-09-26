@@ -364,6 +364,8 @@ const zhCN: Messages = {
   'system.updateApply': '立即更新',
   'system.updateApplying': '正在应用更新…',
   'system.updateDone': '更新已应用，正在重启…',
+  'system.updateDoneHint': '本控制台会自动重连。已注册的后台守护进程会被要求重启到新版本；手动启动的 `panda daemon` 仍需手动重启。',
+  'system.updateUnavailable': '此控制台不提供自更新。',
   'system.updateDiscard': '删除已下载',
   'system.updateWaiting': '等待正在运行的任务完成…',
   'system.updateError': '更新失败：',
