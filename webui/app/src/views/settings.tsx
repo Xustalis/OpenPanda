@@ -12,9 +12,6 @@ import { t } from '../i18n'
 import { locale, localeNames, locales, setLocale } from '../i18n'
 import { notifyModelSaved } from './onboarding'
 import { onThemeChange, setTheme, theme } from '../theme'
-import { NodesView } from './nodes'
-import { MemoryView } from './memory'
-import { SkillsView } from './skills'
 import { RemindersView } from './reminders'
 import { SystemView } from './system'
 import { ModelsSection } from './models'
@@ -32,9 +29,6 @@ export type Section =
   | 'policy'
   | 'agents'
   | 'mcp'
-  | 'nodes'
-  | 'memory'
-  | 'skills'
   | 'reminders'
   | 'system'
 
@@ -44,9 +38,6 @@ const SECTIONS: Array<{ id: Section; label: string; icon: string }> = [
   { id: 'policy', label: 'settings.policy', icon: '🛡️' },
   { id: 'agents', label: 'settings.group.agents', icon: '🤖' },
   { id: 'mcp', label: 'settings.mcp', icon: '🔌' },
-  { id: 'nodes', label: 'nav.nodes', icon: '🖥️' },
-  { id: 'memory', label: 'nav.memory', icon: '💾' },
-  { id: 'skills', label: 'nav.skills', icon: '⚡' },
   { id: 'reminders', label: 'nav.reminders', icon: '⏰' },
   { id: 'system', label: 'nav.system', icon: '📊' },
 ]
@@ -54,16 +45,16 @@ const SECTIONS: Array<{ id: Section; label: string; icon: string }> = [
 function normalizeSection(raw?: string): Section {
   if (!raw) return 'general'
   if (raw === 'config' || raw === 'model') return 'models'
-  if (raw === 'devices') return 'nodes'
+  // Promoted views keep working when an old settings deep-link arrives.
+  if (raw === 'nodes' || raw === 'devices' || raw === 'memory' || raw === 'skills') {
+    return 'general'
+  }
   const valid: Section[] = [
     'general',
     'models',
     'policy',
     'agents',
     'mcp',
-    'nodes',
-    'memory',
-    'skills',
     'reminders',
     'system',
   ]
@@ -127,9 +118,6 @@ export function SettingsView(props: {
           {section === 'policy' && <PolicySection />}
           {section === 'agents' && <AgentsSection />}
           {section === 'mcp' && <MCPSection />}
-          {section === 'nodes' && <NodesView />}
-          {section === 'memory' && <MemoryView />}
-          {section === 'skills' && <SkillsView />}
           {section === 'reminders' && <RemindersView />}
           {section === 'system' && <SystemView />}
         </div>

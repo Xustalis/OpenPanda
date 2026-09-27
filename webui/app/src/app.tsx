@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'preact/hooks'
 import { PandaAscii, PandaWordmark } from './brand/panda'
-import { api, clearToken, displayVersion, getToken, onUnauthorized, setToken, type UpdateStatus } from './api/client'
+import { api, clearToken, displayVersion, getToken, onUnauthorized, setToken, subscribeEvents, type UpdateStatus } from './api/client'
 import { onLocaleChange, t } from './i18n'
 import { useAsync } from './hooks'
-import { navigate, parseHash, primaryNav, type Route } from './nav'
+import { navigate, parseHash, primaryNavGroups, type Route } from './nav'
 import { QueueView } from './views/queue'
 import { DetailView } from './views/detail'
 import { SessionsView } from './views/sessions'
 import { ProjectsView } from './views/projects'
 import { PlansView } from './views/plans'
+import { NodesView } from './views/nodes'
+import { MemoryView } from './views/memory'
+import { SkillsView } from './views/skills'
 import { SettingsView } from './views/settings'
 import { OnboardingBanner } from './views/onboarding'
 import { ToastHost } from './components/toast'
@@ -54,6 +57,7 @@ export function App() {
   }
 
   const active: string = route.view === 'detail' ? 'queue' : route.view
+  const reviewCount = useReviewCount()
   const logout = () => {
     clearToken()
     setAuthed(false)
@@ -74,14 +78,36 @@ export function App() {
         </button>
 
         <nav class="primary-nav" aria-label="Primary Navigation">
-          {primaryNav.map(([v, key]) => (
-            <a
-              key={v}
-              href={`#/${v === 'sessions' ? 'chat' : v}`}
-              class={`nav-item${active === v ? ' active' : ''}`}
-            >
-              {t(key)}
-            </a>
+          {primaryNavGroups.map((g) => (
+            <div class="nav-group" key={g.key}>
+              <div class="nav-group-head">{t(g.key)}</div>
+              {g.items.map(([v, key]) => (
+                <a
+                  key={v}
+                  href={`#/${v === 'sessions' ? 'chat' : v}`}
+                  class={`nav-item${active === v ? ' active' : ''}`}
+                >
+                  {t(key)}
+                  {v === 'queue' && reviewCount > 0 && (
+                    <span
+                      class="nav-badge"
+                      title={t('queue.col.review')}
+                      onClick={(e) => {
+                        // Nested anchors are invalid HTML, so the badge is a
+                        // span that hijacks the click: preventDefault kills the
+                        // parent link's default navigation, then we route to
+                        // the review-focused board ourselves.
+                        e.preventDefault()
+                        e.stopPropagation()
+                        navigate({ view: 'queue', review: true })
+                      }}
+                    >
+                      {reviewCount}
+                    </span>
+                  )}
+                </a>
+              ))}
+            </div>
           ))}
         </nav>
 
@@ -108,12 +134,13 @@ export function App() {
               navigate({ view: 'sessions', id: null, project: null })
             }}
             onOpenTask={(id) => navigate({ view: 'detail', id })}
-            onOpenNodes={() => navigate({ view: 'settings', tab: 'nodes' })}
+            onOpenNodes={() => navigate({ view: 'fleet' })}
             onLogout={logout}
           />
         )}
         {route.view === 'queue' && (
           <QueueView
+            focusReview={!!route.review}
             onOpen={(id) => navigate({ view: 'detail', id })}
             onOpenSession={(id) => navigate({ view: 'sessions', id })}
           />
@@ -122,6 +149,9 @@ export function App() {
           <DetailView id={route.id} onBack={() => navigate({ view: 'queue' })} />
         )}
         {route.view === 'plans' && <PlansView />}
+        {route.view === 'fleet' && <NodesView />}
+        {route.view === 'memory' && <MemoryView initialTab={route.tab ?? undefined} />}
+        {route.view === 'skills' && <SkillsView />}
         {route.view === 'projects' && (
           <ProjectsView
             onOpenProject={(name) => {
@@ -211,6 +241,30 @@ function SidebarNode() {
       <span class="ver mono">{displayVersion(self.version, self.codename)}</span>
     </a>
   )
+}
+
+/** Pending-approval count for the Queue nav badge — the approval centre's
+ *  ambient signal. Refreshes on the SSE change feed so it tracks the board
+ *  without polling. */
+function useReviewCount(): number {
+  const [n, setN] = useState(0)
+  useEffect(() => {
+    const ctl = new AbortController()
+    const load = () =>
+      api
+        .tasks({ state: 'review' })
+        .then((ts) => setN(ts.length))
+        .catch(() => {})
+    load()
+    subscribeEvents({
+      signal: ctl.signal,
+      onChange: (ev) => {
+        if (ev.kinds.includes('tasks') || ev.kinds.includes('reconnect')) load()
+      },
+    }).catch(() => {})
+    return () => ctl.abort()
+  }, [])
+  return n
 }
 
 /** The modifier the palette actually listens for, spelled the way the user's

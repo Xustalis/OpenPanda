@@ -1037,6 +1037,13 @@ type AskScope struct {
 	// do not pin a project per ask. Exported so scoped callers outside this
 	// package (panel sessions) can make the same choice explicitly.
 	AmbientProject bool
+
+	// Node pins this ask's classified task to a preferred executor node
+	// (id or name). A model-emitted spec.node always wins — the scope value
+	// is the composer's explicit pick, used when the model leaves routing
+	// to the scheduler. Plans are unaffected: per-stage routing is the
+	// point of a pipeline, so a flat node pin would defeat it.
+	Node string
 }
 
 // AskTurns is the backward-compatible session-aware entry point. Callers that
@@ -1686,6 +1693,11 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		targetLoc = loc[0]
 	} else if !explicit && !e.replyASCII && (containsHan(prompt) || containsHan(spec.Title)) {
 		targetLoc = i18n.ChineseSimp
+	}
+	// The composer's explicit node pick fills spec.node only when the model
+	// left routing to the scheduler — a model-emitted pin always wins.
+	if scope.Node != "" && spec.Spec.Node == "" {
+		spec.Spec.Node = scope.Node
 	}
 	in := toTaskInput(spec, targetLoc)
 	workDir := scope.WorkDir

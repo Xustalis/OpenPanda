@@ -29,7 +29,8 @@ function apply(theme: Theme): void {
   else el.setAttribute('data-theme', theme)
   try {
     // Keep color-scheme hints (scrollbars, form controls) in sync too.
-    el.style.colorScheme = theme === 'auto' ? 'dark light' : theme
+    // Light is the default scheme now, so "auto" resolves light first.
+    el.style.colorScheme = theme === 'auto' ? 'light dark' : theme
   } catch {
     // ignore
   }

@@ -310,6 +310,10 @@ func (h *handler) clearSessionApproval(w http.ResponseWriter, r *http.Request) {
 type sessionAskRequest struct {
 	Prompt    string `json:"prompt"`
 	Authorize bool   `json:"authorize"`
+	// Node is the composer's environment pick: the preferred executor node
+	// (id or name) for any task this ask spawns. Empty lets the scheduler
+	// route by capability, which is also the right behavior for plans.
+	Node string `json:"node"`
 }
 
 // sessionAsk serves POST /api/sessions/{id}/ask as a Server-Sent Events
@@ -466,6 +470,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		Project:   sess.Project,
 		WorkDir:   workDir,
 		SessionID: sess.ID,
+		Node:      req.Node,
 	}, req.Authorize, cb)
 	if err != nil {
 		msg := err.Error()

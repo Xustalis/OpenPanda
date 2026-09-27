@@ -87,7 +87,7 @@ function StageRow(props: { stage: PlanStage }) {
       <div class="plan-stage-head">
         <span class={`badge state-${s.state}`}>{t(`state.${s.state}`, s.state)}</span>
         <span class="stage-name">{s.title || s.stage}</span>
-        {s.owner && <span class="dim mono stage-owner">{s.owner}</span>}
+        {s.owner && <span class="stage-owner mono" title={s.owner}>⛁ {s.owner}</span>}
         <button
           class="btn small ghost"
           onClick={() => navigate({ view: 'detail', id: s.task_id })}

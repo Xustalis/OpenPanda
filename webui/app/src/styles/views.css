@@ -1074,7 +1074,7 @@
 .skill-modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1083,13 +1083,13 @@
 }
 
 .skill-modal {
-  background: var(--bg-surface, #1e1e24);
+  background: var(--bg-surface);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md, 8px);
   width: 100%;
   max-width: 540px;
   padding: 20px;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1292,18 +1292,18 @@
 }
 
 .diff-line-add {
-  background: rgba(46, 160, 67, 0.15);
-  color: #3fb950;
+  background: var(--semantic-good-soft);
+  color: var(--semantic-good);
 }
 
 .diff-line-del {
-  background: rgba(248, 81, 73, 0.15);
-  color: #f85149;
+  background: var(--semantic-danger-soft);
+  color: var(--semantic-danger);
 }
 
 .diff-line-hunk {
-  background: rgba(56, 139, 253, 0.12);
-  color: #58a6ff;
+  background: var(--semantic-info-soft);
+  color: var(--info);
   font-weight: 500;
 }
 
@@ -1325,6 +1325,11 @@
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.node-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
 }
 
 .node-head {
@@ -1369,6 +1374,42 @@
   flex-wrap: wrap;
   gap: 5px;
   margin-top: 4px;
+}
+
+/* Capability chips read differently from status badges: a soft accent tint,
+   monospace-ish sizing, no bold — capabilities are data, not state. */
+.ability-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.ability-tag.more {
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  border-color: var(--border-soft);
+}
+
+.node-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  margin-right: 2px;
+}
+
+.node-dot.off {
+  background: var(--text-disabled);
+  box-shadow: none;
 }
 
 .mono {
@@ -1604,6 +1645,18 @@
 .kanban-col[data-col="doing"] { border-top: 3px solid var(--accent-2); box-shadow: var(--shadow-xs), var(--shadow-glow-2); }
 .kanban-col[data-col="review"] { border-top: 3px solid var(--semantic-warn); }
 .kanban-col[data-col="done"] { border-top: 3px solid var(--semantic-good); }
+
+/* Focus-review mode: the approval centre collapses the board to a single
+   centred column — this is what the sidebar badge deep-links into. */
+.kanban.focus-review {
+  grid-template-columns: minmax(280px, 560px);
+  justify-content: center;
+}
+
+.queue-focus-note {
+  text-align: center;
+  margin-top: var(--sp-3);
+}
 
 /* ---- Kanban list: scrollable inner container so columns stay height-locked ---- */
 
@@ -2270,6 +2323,11 @@
 .chain-node.root {
   border-color: var(--accent-strong);
   color: var(--accent);
+}
+
+.chain-node.unacked {
+  border-style: dashed;
+  color: var(--text-tertiary);
 }
 
 .chain-arrow {
@@ -3127,12 +3185,10 @@
   transform: translateY(-50%);
   font-family: var(--ff-mono, ui-monospace, monospace);
   font-size: 10px;
-  color: var(--text-primary);
-  mix-blend-mode: screen;
+  color: var(--text-secondary);
   font-weight: var(--fw-bold);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
   padding: 1px 6px;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--surface-alpha-md);
   border-radius: var(--radius-pill);
 }
 .orbit-stage-badges {
@@ -3526,270 +3582,12 @@
 
 
 /* ============================================================================
-   REDESIGN 2026-09 · "Panda Paper" — Kimi × Claude 风格重构层
+   REDESIGN 2026-09 · "Panda Paper" — component overrides
    ----------------------------------------------------------------------------
-   本层整层追加在原样式之后：组件零改动，类名/结构/逻辑全部保留，
-   通过「同名 token 重定义 + 级联覆盖」完成视觉换肤。
-
-   设计方向（参考 Kimi 的克制留白 × Claude 的暖纸编辑感）：
-   · 暖纸底色（light）/ 暖墨底色（dark）——拒绝纯黑纯白与冷灰
-   · 竹绿品牌 accent 加深收沉稳，蓝色仅留给 Orbit 决策链路
-   · 衬线展示字体（Iowan/Palatino/宋体）只用于标题层，正文保持无衬线
-   · 移除"AI 感"装饰：标题渐变文字、渐变下划线条、按钮高光覆层
-   · 圆角整体放大一档（8/12/16/22），阴影改用暖棕基调、更浅更软
-   · 交互微动效统一走 token 缓动，hover 只做"提亮 + 微浮起"
+   The colour/elevation tokens moved to styles/tokens.css (single source of
+   truth, light-first). What remains here: typography, sidebar, and per-view
+   cascade overrides on the same class names.
    ========================================================================== */
-
-:root {
-  /* —— 暖墨（dark）—— */
-  --bg: #1c1a17;
-  --bg-chrome: #221f1b;
-  --bg-raised: #2a2721;
-  --bg-inset: #161412;
-  --bg-hover: #333028;
-  --border: #3d3930;
-  --border-soft: #2e2b25;
-  --border-strong: #514b3f;
-
-  --text: #ede9e0;
-  --text-primary: var(--text);
-  --text-secondary: #aaa292;
-  --text-tertiary: #7f7868;
-  --text-disabled: #565147;
-  --text-dim: var(--text-secondary);
-
-  --accent: #6fc7a1;
-  --accent-strong: #8ad6b5;
-  --accent-ink: #0c221a;
-  --accent-soft: rgba(111, 199, 161, 0.14);
-  --accent-1: #8fddbd;
-  --accent-2: #94c6ec;
-  --accent-2-soft: rgba(148, 198, 236, 0.1);
-  --accent-2-border: rgba(148, 198, 236, 0.32);
-
-  --danger: #e8857c;
-  --warn: #d9b45c;
-  --info: #94c6ec;
-  --danger-soft: rgba(232, 133, 124, 0.12);
-  --warn-soft: rgba(217, 180, 92, 0.12);
-  --info-soft: rgba(148, 198, 236, 0.12);
-
-  --semantic-good: #a3d9b0;
-  --semantic-good-soft: rgba(163, 217, 176, 0.09);
-  --semantic-good-border: rgba(163, 217, 176, 0.3);
-  --semantic-info: #cdbcf0;
-  --semantic-info-soft: rgba(205, 188, 240, 0.09);
-  --semantic-info-border: rgba(205, 188, 240, 0.3);
-  --semantic-warn: #e4c486;
-  --semantic-warn-soft: rgba(228, 196, 134, 0.09);
-  --semantic-warn-border: rgba(228, 196, 134, 0.3);
-  --semantic-danger: #eea49c;
-  --semantic-danger-soft: rgba(238, 164, 156, 0.09);
-  --semantic-danger-border: rgba(238, 164, 156, 0.3);
-
-  /* 圆角放大一档：更柔和、更"纸张"（仅在此声明一次，双主题共用） */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 22px;
-
-  /* 暖墨阴影：纯黑但更低饱和、更大弥散 */
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.24), 0 1px 2px rgba(0, 0, 0, 0.14);
-  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.16);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.36), 0 4px 10px rgba(0, 0, 0, 0.2);
-  --shadow-xl: 0 20px 56px rgba(0, 0, 0, 0.46), 0 6px 16px rgba(0, 0, 0, 0.24);
-  --shadow-accent: 0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(111, 199, 161, 0.18);
-  --shadow-glow-1: 0 0 20px rgba(143, 221, 189, 0.07);
-  --shadow-glow-2: 0 0 24px rgba(148, 198, 236, 0.09);
-
-  --backdrop: rgba(14, 12, 10, 0.55);
-  --backdrop-darker: rgba(14, 12, 10, 0.66);
-  --hairline-xs: rgba(236, 229, 216, 0.06);
-  --hairline-sm: rgba(236, 229, 216, 0.08);
-  --hairline-md: rgba(236, 229, 216, 0.11);
-  --hairline-lg: rgba(236, 229, 216, 0.3);
-
-  --accent-1-rgb: 143, 221, 189;
-  --accent-1-tint-xs: rgba(var(--accent-1-rgb), 0.05);
-  --accent-2-tint-xs: rgba(148, 198, 236, 0.05);
-  --accent-2-tint-md: rgba(148, 198, 236, 0.1);
-  --accent-2-strong-soft: rgba(148, 198, 236, 0.12);
-  --accent-2-glow: rgba(148, 198, 236, 0.08);
-  --semantic-warn-strong-soft: rgba(228, 196, 134, 0.14);
-  --semantic-danger-strong-border: rgba(238, 164, 156, 0.55);
-
-  --grad-card: linear-gradient(180deg, rgba(255, 250, 240, 0.02) 0%, transparent 100%);
-  --grad-accent-1: linear-gradient(135deg, rgba(143, 221, 189, 0.16) 0%, rgba(111, 199, 161, 0.05) 100%);
-  --grad-accent-2: linear-gradient(135deg, rgba(148, 198, 236, 0.14) 0%, rgba(148, 198, 236, 0.05) 100%);
-  --grad-hero: radial-gradient(ellipse 640px 320px at 18% 0%, rgba(143, 221, 189, 0.09) 0%, transparent 60%),
-               radial-gradient(ellipse 520px 260px at 82% 8%, rgba(148, 198, 236, 0.07) 0%, transparent 55%);
-
-  /* 排版：衬线展示字体只服务于标题层（双主题共用，声明一次） */
-  --font-display: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Songti SC',
-    'STSong', 'Noto Serif SC', 'Source Han Serif SC', Georgia, 'Times New Roman', serif;
-  --fs-display: 24px;
-}
-
-:root[data-theme='light'] {
-  /* —— 暖纸（light）—— */
-  --bg: #f5f3ec;
-  --bg-chrome: #ede9dd;
-  --bg-raised: #fcfbf7;
-  --bg-inset: #eae6d9;
-  --bg-hover: #e7e2d4;
-  --border: #ddd6c4;
-  --border-soft: #e6e0d0;
-  --border-strong: #c9c1ac;
-
-  --text: #262219;
-  --text-primary: var(--text);
-  --text-secondary: #6e6757;
-  --text-tertiary: #9b937f;
-  --text-disabled: #c4bda9;
-  --text-dim: var(--text-secondary);
-
-  --accent: #0c7a55;
-  --accent-strong: #0a6849;
-  --accent-ink: #ffffff;
-  --accent-soft: rgba(12, 122, 85, 0.1);
-  --accent-1: #0c7a55;
-  --accent-2: #2f6ca0;
-  --accent-2-soft: rgba(47, 108, 160, 0.09);
-  --accent-2-border: rgba(47, 108, 160, 0.32);
-
-  --danger: #b8493b;
-  --warn: #9a7413;
-  --info: #2f6ca0;
-  --danger-soft: rgba(184, 73, 59, 0.09);
-  --warn-soft: rgba(154, 116, 19, 0.09);
-  --info-soft: rgba(47, 108, 160, 0.09);
-
-  --semantic-good: #2e8b57;
-  --semantic-good-soft: rgba(46, 139, 87, 0.1);
-  --semantic-good-border: rgba(46, 139, 87, 0.34);
-  --semantic-info: #6a53c9;
-  --semantic-info-soft: rgba(106, 83, 201, 0.1);
-  --semantic-info-border: rgba(106, 83, 201, 0.34);
-  --semantic-warn: #9a7413;
-  --semantic-warn-soft: rgba(154, 116, 19, 0.1);
-  --semantic-warn-border: rgba(154, 116, 19, 0.34);
-  --semantic-danger: #b8493b;
-  --semantic-danger-soft: rgba(184, 73, 59, 0.1);
-  --semantic-danger-border: rgba(184, 73, 59, 0.34);
-
-  /* 暖棕基调阴影：更浅、更软，落在纸面上而非浮在空中 */
-  --shadow-xs: 0 1px 2px rgba(74, 63, 42, 0.06);
-  --shadow-sm: 0 1px 2px rgba(74, 63, 42, 0.05), 0 4px 12px rgba(74, 63, 42, 0.07);
-  --shadow-md: 0 2px 4px rgba(74, 63, 42, 0.05), 0 10px 28px rgba(74, 63, 42, 0.09);
-  --shadow-lg: 0 4px 8px rgba(74, 63, 42, 0.06), 0 18px 44px rgba(74, 63, 42, 0.12);
-  --shadow-xl: 0 8px 16px rgba(74, 63, 42, 0.08), 0 28px 64px rgba(74, 63, 42, 0.16);
-  --shadow-accent: 0 1px 2px rgba(12, 122, 85, 0.14), 0 4px 16px rgba(12, 122, 85, 0.18);
-  --shadow-glow-1: 0 0 20px rgba(12, 122, 85, 0.06);
-  --shadow-glow-2: 0 0 24px rgba(47, 108, 160, 0.07);
-
-  --backdrop: rgba(52, 44, 30, 0.32);
-  --backdrop-darker: rgba(52, 44, 30, 0.46);
-  --surface-alpha-xs: rgba(74, 63, 42, 0.02);
-  --surface-alpha-sm: rgba(74, 63, 42, 0.035);
-  --surface-alpha-md: rgba(74, 63, 42, 0.06);
-  --surface-alpha-lg: rgba(74, 63, 42, 0.1);
-  --hairline-xs: rgba(74, 63, 42, 0.07);
-  --hairline-sm: rgba(74, 63, 42, 0.09);
-  --hairline-md: rgba(74, 63, 42, 0.12);
-  --hairline-lg: rgba(74, 63, 42, 0.2);
-
-  --accent-1-rgb: 12, 122, 85;
-  --accent-1-tint-xs: rgba(var(--accent-1-rgb), 0.06);
-  --accent-2-tint-xs: rgba(47, 108, 160, 0.05);
-  --accent-2-tint-md: rgba(47, 108, 160, 0.1);
-  --accent-2-strong-soft: rgba(47, 108, 160, 0.12);
-  --accent-2-glow: rgba(47, 108, 160, 0.08);
-  --semantic-warn-strong-soft: rgba(154, 116, 19, 0.14);
-  --semantic-danger-strong-border: rgba(184, 73, 59, 0.36);
-
-  --grad-card: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, transparent 100%);
-  --grad-accent-1: linear-gradient(135deg, rgba(12, 122, 85, 0.14) 0%, rgba(12, 122, 85, 0.04) 100%);
-  --grad-accent-2: linear-gradient(135deg, rgba(47, 108, 160, 0.12) 0%, rgba(47, 108, 160, 0.04) 100%);
-  --grad-hero: radial-gradient(ellipse 640px 320px at 18% 0%, rgba(12, 122, 85, 0.07) 0%, transparent 60%),
-               radial-gradient(ellipse 520px 260px at 82% 8%, rgba(47, 108, 160, 0.05) 0%, transparent 55%);
-}
-
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme='dark']) {
-    --bg: #f5f3ec;
-    --bg-chrome: #ede9dd;
-    --bg-raised: #fcfbf7;
-    --bg-inset: #eae6d9;
-    --bg-hover: #e7e2d4;
-    --border: #ddd6c4;
-    --border-soft: #e6e0d0;
-    --border-strong: #c9c1ac;
-    --text: #262219;
-    --text-primary: var(--text);
-    --text-secondary: #6e6757;
-    --text-tertiary: #9b937f;
-    --text-disabled: #c4bda9;
-    --text-dim: var(--text-secondary);
-    --accent: #0c7a55;
-    --accent-strong: #0a6849;
-    --accent-ink: #ffffff;
-    --accent-soft: rgba(12, 122, 85, 0.1);
-    --accent-1: #0c7a55;
-    --accent-2: #2f6ca0;
-    --accent-2-soft: rgba(47, 108, 160, 0.09);
-    --accent-2-border: rgba(47, 108, 160, 0.32);
-    --danger: #b8493b;
-    --warn: #9a7413;
-    --info: #2f6ca0;
-    --danger-soft: rgba(184, 73, 59, 0.09);
-    --warn-soft: rgba(154, 116, 19, 0.09);
-    --info-soft: rgba(47, 108, 160, 0.09);
-    --semantic-good: #2e8b57;
-    --semantic-good-soft: rgba(46, 139, 87, 0.1);
-    --semantic-good-border: rgba(46, 139, 87, 0.34);
-    --semantic-info: #6a53c9;
-    --semantic-info-soft: rgba(106, 83, 201, 0.1);
-    --semantic-info-border: rgba(106, 83, 201, 0.34);
-    --semantic-warn: #9a7413;
-    --semantic-warn-soft: rgba(154, 116, 19, 0.1);
-    --semantic-warn-border: rgba(154, 116, 19, 0.34);
-    --semantic-danger: #b8493b;
-    --semantic-danger-soft: rgba(184, 73, 59, 0.1);
-    --semantic-danger-border: rgba(184, 73, 59, 0.34);
-    --shadow-xs: 0 1px 2px rgba(74, 63, 42, 0.06);
-    --shadow-sm: 0 1px 2px rgba(74, 63, 42, 0.05), 0 4px 12px rgba(74, 63, 42, 0.07);
-    --shadow-md: 0 2px 4px rgba(74, 63, 42, 0.05), 0 10px 28px rgba(74, 63, 42, 0.09);
-    --shadow-lg: 0 4px 8px rgba(74, 63, 42, 0.06), 0 18px 44px rgba(74, 63, 42, 0.12);
-    --shadow-xl: 0 8px 16px rgba(74, 63, 42, 0.08), 0 28px 64px rgba(74, 63, 42, 0.16);
-    --shadow-accent: 0 1px 2px rgba(12, 122, 85, 0.14), 0 4px 16px rgba(12, 122, 85, 0.18);
-    --shadow-glow-1: 0 0 20px rgba(12, 122, 85, 0.06);
-    --shadow-glow-2: 0 0 24px rgba(47, 108, 160, 0.07);
-    --backdrop: rgba(52, 44, 30, 0.32);
-    --backdrop-darker: rgba(52, 44, 30, 0.46);
-    --surface-alpha-xs: rgba(74, 63, 42, 0.02);
-    --surface-alpha-sm: rgba(74, 63, 42, 0.035);
-    --surface-alpha-md: rgba(74, 63, 42, 0.06);
-    --surface-alpha-lg: rgba(74, 63, 42, 0.1);
-    --hairline-xs: rgba(74, 63, 42, 0.07);
-    --hairline-sm: rgba(74, 63, 42, 0.09);
-    --hairline-md: rgba(74, 63, 42, 0.12);
-    --hairline-lg: rgba(74, 63, 42, 0.2);
-    --accent-1-rgb: 12, 122, 85;
-    --accent-1-tint-xs: rgba(var(--accent-1-rgb), 0.06);
-    --accent-2-tint-xs: rgba(47, 108, 160, 0.05);
-    --accent-2-tint-md: rgba(47, 108, 160, 0.1);
-    --accent-2-strong-soft: rgba(47, 108, 160, 0.12);
-    --accent-2-glow: rgba(47, 108, 160, 0.08);
-    --semantic-warn-strong-soft: rgba(154, 116, 19, 0.14);
-    --semantic-danger-strong-border: rgba(184, 73, 59, 0.36);
-    --grad-card: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, transparent 100%);
-    --grad-accent-1: linear-gradient(135deg, rgba(12, 122, 85, 0.14) 0%, rgba(12, 122, 85, 0.04) 100%);
-    --grad-accent-2: linear-gradient(135deg, rgba(47, 108, 160, 0.12) 0%, rgba(47, 108, 160, 0.04) 100%);
-    --grad-hero: radial-gradient(ellipse 640px 320px at 18% 0%, rgba(12, 122, 85, 0.07) 0%, transparent 60%),
-                 radial-gradient(ellipse 520px 260px at 82% 8%, rgba(47, 108, 160, 0.05) 0%, transparent 55%);
-  }
-}
 
 /* ---- 基础：主题切换渐变、选中色、滚动条 ---- */
 
@@ -4834,17 +4632,60 @@ pre,
 .plan-stages {
   list-style: none;
   margin: 0;
-  padding: var(--sp-2) var(--sp-5) var(--sp-4);
+  padding: var(--sp-3) var(--sp-5) var(--sp-5);
   border-top: 1px solid var(--border-soft);
   display: flex;
   flex-direction: column;
 }
+/* Each stage is a node on a vertical pipeline rail: a status-colored dot on
+   a hairline connector — the DAG reads top-to-bottom at a glance. */
 .plan-stage {
-  padding: var(--sp-2) 0;
-  border-bottom: 1px solid var(--border-soft);
+  position: relative;
+  padding: var(--sp-3) 0 var(--sp-3) 26px;
 }
-.plan-stage:last-child {
-  border-bottom: 0;
+.plan-stage::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: calc(var(--sp-3) + 7px);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  border: 2px solid var(--border-strong);
+  z-index: 1;
+}
+.plan-stage::after {
+  content: '';
+  position: absolute;
+  left: 10.5px;
+  top: calc(var(--sp-3) + 20px);
+  bottom: -1px;
+  width: 1.5px;
+  background: var(--border-soft);
+}
+.plan-stage:last-child::after {
+  display: none;
+}
+.plan-stage.state-done::before {
+  border-color: var(--semantic-good);
+  background: var(--semantic-good);
+}
+.plan-stage.state-running::before,
+.plan-stage.state-dispatched::before {
+  border-color: var(--accent-2);
+  background: var(--accent-2);
+  box-shadow: 0 0 0 3px var(--accent-2-soft);
+}
+.plan-stage.state-review::before {
+  border-color: var(--semantic-warn);
+  background: var(--semantic-warn);
+}
+.plan-stage.state-failed::before,
+.plan-stage.state-cancelled::before,
+.plan-stage.state-expired::before {
+  border-color: var(--semantic-danger);
+  background: var(--semantic-danger);
 }
 .plan-stage-head {
   display: flex;
@@ -4853,6 +4694,12 @@ pre,
 }
 .stage-owner {
   font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+  white-space: nowrap;
 }
 .plan-stage-head .btn {
   margin-left: auto;

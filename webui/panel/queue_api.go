@@ -28,6 +28,9 @@ type createTaskRequest struct {
 	ResourceKeys []string `json:"resource_keys"`
 	Requires     []string `json:"requires"`
 	Authorize    bool     `json:"authorize"`
+	// Node pins the task to a preferred executor (id or name) — the board's
+	// environment picker. Empty leaves routing to the scheduler.
+	Node string `json:"node"`
 }
 
 // createTask serves POST /api/tasks (queue redesign): enqueue a user task and
@@ -70,11 +73,12 @@ func (h *handler) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	in := core.TaskInput{
-		Title:      req.Title,
-		Project:    req.Project,
-		Intent:     req.Prompt,
-		Requires:   requires,
-		Authorized: req.Authorize,
+		Title:         req.Title,
+		Project:       req.Project,
+		Intent:        req.Prompt,
+		Requires:      requires,
+		Authorized:    req.Authorize,
+		PreferredNode: req.Node,
 	}
 	q := core.DefaultQueueSpec()
 	q.Priority = priority

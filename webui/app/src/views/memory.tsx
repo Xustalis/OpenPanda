@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { api, type MemoryFiles, type ProjectMemory, type TopicFile } from '../api/client'
-import { useAsync, useLocaleRerender } from '../hooks'
+import { api, type MemoryFiles, type MemoryGraphNode, type ProjectMemory, type TopicFile } from '../api/client'
+import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
+import { navigate } from '../nav'
 import { ErrorState, LoadingState, PageHeader } from '../components/page'
+import { MemoryGraphView } from '../components/memory-graph'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 
-type Tab = 'user' | 'memory' | 'dreams' | 'topics' | 'daily' | 'projects'
+type Tab = 'graph' | 'user' | 'memory' | 'dreams' | 'topics' | 'daily' | 'projects'
+
+const TABS: Tab[] = ['graph', 'user', 'memory', 'dreams', 'topics', 'daily', 'projects']
 
 /** The memory view (C2): every Hermes file is user-managed here. USER.md /
  *  MEMORY.md edit as § entries (entries promoted from the daily logs carry a
@@ -15,11 +19,16 @@ type Tab = 'user' | 'memory' | 'dreams' | 'topics' | 'daily' | 'projects'
  *  the selective-load memory files (create / edit / delete), daily/*.md is a
  *  read-only browse of the warm-layer diary, and project memory is picked
  *  per project and edited in place. Caps come from the live config values. */
-export function MemoryView() {
+export function MemoryView(props: { initialTab?: string }) {
   useLocaleRerender()
   const [tick, setTick] = useState(0)
   const { data, error } = useAsync(() => api.memory(), [], tick)
-  const [tab, setTab] = useState<Tab>('user')
+  const [tab, setTab] = useState<Tab>(
+    TABS.includes(props.initialTab as Tab) ? (props.initialTab as Tab) : 'user',
+  )
+  useEffect(() => {
+    if (TABS.includes(props.initialTab as Tab)) setTab(props.initialTab as Tab)
+  }, [props.initialTab])
   const [now, setNow] = useState(() => Date.now())
 
   // Live clock: anchor on the node's reported time, then tick locally so the
@@ -67,7 +76,7 @@ export function MemoryView() {
       </div>
 
       <div class="segmented memory-tabs" role="tablist">
-        {(['user', 'memory', 'dreams', 'topics', 'daily', 'projects'] as const).map((k) => (
+        {TABS.map((k) => (
           <button
             key={k}
             role="tab"
@@ -80,6 +89,7 @@ export function MemoryView() {
         ))}
       </div>
 
+      {tab === 'graph' && <GraphTab onOpenTab={setTab} />}
       {tab === 'user' && (
         <MemoryFileView
           key={`user-${tick}`}
@@ -726,6 +736,34 @@ function ProjectsView({ defaultLimit, reload }: { defaultLimit: number; reload()
       </div>
     </div>
   )
+}
+
+/** The knowledge-graph tab: an at-a-glance answer to "what does the agent
+ *  know, and how did it learn it". Edges are honest — a promotion marker the
+ *  Dreamer wrote, or a literal name mention — so the picture never invents
+ *  structure. Clicking a node lists its connections and jumps to the owning
+ *  surface. */
+function GraphTab({ onOpenTab }: { onOpenTab(tab: Tab): void }) {
+  useLocaleRerender()
+  const change = useChangeSignal()
+  const { data: graph, error } = useAsync(() => api.memoryGraph(), [], change)
+
+  function openNode(n: MemoryGraphNode) {
+    if (n.kind === 'topic') {
+      onOpenTab('topics')
+      navigate({ view: 'memory', tab: 'topics' })
+    } else if (n.kind === 'project') {
+      onOpenTab('projects')
+      navigate({ view: 'memory', tab: 'projects' })
+    } else if (n.kind === 'skill') {
+      navigate({ view: 'skills' })
+    }
+  }
+
+  if (error) return <ErrorState title={t('memory.graphTitle')} sub="" error={error} onRetry={() => {}} />
+  if (!graph) return <LoadingState title={t('memory.graphTitle')} sub="" />
+  if (graph.nodes.length === 0) return <p class="dim">{t('memory.graphEmpty')}</p>
+  return <MemoryGraphView graph={graph} onOpen={openNode} />
 }
 
 /** Entries promoted from the daily logs carry a `[from:…]` marker (e.g.

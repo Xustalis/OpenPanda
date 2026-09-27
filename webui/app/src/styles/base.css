@@ -23,6 +23,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   font-feature-settings: "cv02", "cv03", "cv04", "tnum" 0;
+  letter-spacing: -0.011em;
   overflow: hidden;
 }
 
@@ -76,7 +77,7 @@ kbd {
 }
 
 ::selection {
-  background: rgba(61, 220, 151, 0.28);
+  background: rgba(var(--accent-1-rgb), 0.24);
 }
 
 /* One keyboard focus ring for the whole console. */

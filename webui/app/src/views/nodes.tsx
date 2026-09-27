@@ -136,6 +136,11 @@ function NodeCard({
   return (
     <div class="card node-card">
       <div class="node-head" style="width: 100%;">
+        <span
+          class={`dot node-dot${node.status === 'online' ? '' : ' off'}`}
+          aria-hidden
+          title={node.status}
+        />
         <span class="node-name" title={displayName}>{displayName}</span>
       </div>
       {node.name && node.name !== node.id && (
@@ -155,12 +160,12 @@ function NodeCard({
       {node.abilities.length > 0 && (
         <div class="node-abilities">
           {node.abilities.slice(0, 8).map((a) => (
-            <span key={a} class="badge">
+            <span key={a} class="ability-tag">
               {a}
             </span>
           ))}
           {node.abilities.length > 8 && (
-            <span class="badge">+{node.abilities.length - 8}</span>
+            <span class="ability-tag more">+{node.abilities.length - 8}</span>
           )}
         </div>
       )}

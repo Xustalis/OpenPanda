@@ -320,7 +320,7 @@ input[type='checkbox'].check,
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(4, 6, 8, 0.6);
+  background: var(--backdrop-darker);
   backdrop-filter: blur(4px);
   display: grid;
   place-items: center;

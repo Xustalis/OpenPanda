@@ -630,6 +630,7 @@ export const api = {
     priority?: 'high' | 'normal' | 'low'
     project?: string
     resource_keys?: string[]
+    node?: string
   }): Promise<CreateTaskResult> {
     return request('POST', '/api/tasks', body)
   },
@@ -981,6 +982,12 @@ export const api = {
 
   saveProjectMemory(name: string, content: string): Promise<{ project: string; chars: number; limit: number }> {
     return request('PUT', `/api/projects/${encodeURIComponent(name)}/memory`, { content })
+  },
+
+  /** The knowledge graph over every memory surface plus the skill index:
+   *  edges are provenance ([from:日志] promotions) or literal name mentions. */
+  memoryGraph(): Promise<MemoryGraph> {
+    return request('GET', '/api/memory/graph')
   },
 
   // ---- MCP settings ----
@@ -1397,6 +1404,28 @@ export interface MemoryFiles {
   daily: TopicFile[] // warm-layer diary (read-only, newest first)
 }
 
+/** GET /api/memory/graph — nodes are memory surfaces and skills; edges are
+ *  provenance ([from:…] promotions out of the daily diary) or literal name
+ *  mentions between surfaces. */
+export interface MemoryGraphNode {
+  id: string
+  kind: 'core' | 'topic' | 'project' | 'daily' | 'skill' | string
+  label: string
+  chars?: number
+  status?: string
+}
+
+export interface MemoryGraphEdge {
+  from: string
+  to: string
+  kind: 'promotion' | 'reference' | string
+}
+
+export interface MemoryGraph {
+  nodes: MemoryGraphNode[]
+  edges: MemoryGraphEdge[]
+}
+
 export interface SessionTurn {
   role: 'user' | 'assistant'
   text: string
@@ -1560,10 +1589,11 @@ export async function askSessionStream(
   authorize: boolean,
   h: AskStreamHandlers,
   signal?: AbortSignal,
+  node?: string,
 ): Promise<void> {
   await openSSE(`/api/sessions/${encodeURIComponent(id)}/ask`, {
     method: 'POST',
-    body: { prompt, authorize },
+    body: { prompt, authorize, node: node || undefined },
     signal,
     onEvent: (event, data) => {
       let payload: any

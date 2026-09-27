@@ -182,7 +182,7 @@
     position: fixed;
     inset: 0;
     z-index: 55;
-    background: rgba(4, 6, 8, 0.5);
+    background: var(--backdrop);
   }
   .chat.rail-open .rail-scrim {
     display: block;
@@ -562,6 +562,32 @@
   align-items: center;
   gap: var(--sp-2);
   margin-bottom: var(--sp-2);
+}
+.composer-node-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.composer-node-select {
+  appearance: none;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  padding: 2px 18px 2px 6px;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-tertiary) 50%),
+    linear-gradient(135deg, var(--text-tertiary) 50%, transparent 50%);
+  background-position: calc(100% - 10px) 55%, calc(100% - 6px) 55%;
+  background-size: 4px 4px;
+  background-repeat: no-repeat;
+}
+.composer-node-select:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
 }
 .composer-project-pill {
   display: inline-flex;

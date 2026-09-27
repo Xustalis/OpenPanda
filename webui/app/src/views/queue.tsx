@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'preact/hooks'
-import { api, ApiError, isTaskStalled, type ApprovalScope, type Task } from '../api/client'
+import { api, ApiError, isTaskStalled, type ApprovalScope, type NodeInfo, type Task } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
 import { t } from '../i18n'
 import { ScopeSelect } from '../components/scope-select'
@@ -52,9 +52,11 @@ function sortTasks(tasks: Task[]): Task[] {
 }
 
 export function QueueView({
+  focusReview,
   onOpen,
   onOpenSession,
 }: {
+  focusReview?: boolean
   onOpen(id: string): void
   onOpenSession(id: string): void
 }) {
@@ -158,9 +160,10 @@ export function QueueView({
       ) : (
         // The board always renders its four columns — an empty board should
         // still show the shape (todo → doing → review → done), not a blank
-        // page with a hint.
-        <div class="kanban">
-          {COLUMNS.map((col) => (
+        // page with a hint. In focus-review mode (#/queue?review=1, reached via
+        // the nav badge) it collapses to the approval column alone.
+        <div class={`kanban${focusReview ? ' focus-review' : ''}`}>
+          {(focusReview ? COLUMNS.filter((c) => c.key === 'review') : COLUMNS).map((col) => (
             <KanbanColumn
               key={col.key}
               colKey={col.key}
@@ -171,6 +174,11 @@ export function QueueView({
             />
           ))}
         </div>
+      )}
+      {focusReview && (
+        <p class="dim queue-focus-note">
+          <a href="#/queue">{t('queue.showBoard')}</a>
+        </p>
       )}
     </section>
   )
@@ -184,8 +192,15 @@ function NewTaskForm({ projects, onCreated }: { projects: string[]; onCreated():
   const [prompt, setPrompt] = useState('')
   const [priority, setPriority] = useState<Task['priority']>('normal')
   const [project, setProject] = useState('')
+  const [node, setNode] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // The environment picker lists the live fleet; loaded lazily when the form
+  // opens so the board itself never pays for it.
+  const { data: nodes } = useAsync<NodeInfo[]>(
+    () => (open ? api.nodes().catch(() => [] as NodeInfo[]) : Promise.resolve([])),
+    [open],
+  )
 
   async function submit(e: Event) {
     e.preventDefault()
@@ -198,11 +213,13 @@ function NewTaskForm({ projects, onCreated }: { projects: string[]; onCreated():
         prompt: prompt.trim() || undefined,
         priority,
         project: project || undefined,
+        node: node || undefined,
       })
       setTitle('')
       setPrompt('')
       setPriority('normal')
       setProject('')
+      setNode('')
       setOpen(false)
       onCreated()
     } catch (err) {
@@ -262,6 +279,24 @@ function NewTaskForm({ projects, onCreated }: { projects: string[]; onCreated():
                 {p}
               </option>
             ))}
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="nt-node">{t('queue.newNode')}</label>
+          <select
+            id="nt-node"
+            class="input"
+            value={node}
+            onChange={(e) => setNode((e.target as HTMLSelectElement).value)}
+          >
+            <option value="">{t('queue.nodeAuto')}</option>
+            {(nodes ?? [])
+              .filter((n) => n.status === 'online')
+              .map((n) => (
+                <option key={n.id} value={n.id}>
+                  {n.name || n.id}
+                </option>
+              ))}
           </select>
         </div>
       </div>
@@ -544,6 +579,14 @@ function KanbanCard({
         </button>
         {task.project ? <span class="kanban-project">{task.project}</span> : <span>—</span>}
         {task.owner && <span class="kanban-owner">{task.owner}</span>}
+        {(task.delegation_chain?.length ?? 0) > 0 && (
+          <span
+            class="kanban-owner"
+            title={t('queue.delegated', { n: String(task.delegation_chain!.length) })}
+          >
+            ⛁{task.delegation_chain!.length}
+          </span>
+        )}
         {task.session_id && (
           <span class="kanban-session" title={t('queue.openSession')}>
             💬

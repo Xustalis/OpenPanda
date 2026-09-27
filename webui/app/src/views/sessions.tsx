@@ -118,6 +118,9 @@ export function SessionsView({
   const [msgs, setMsgs] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [authorize, setAuthorize] = useState(false)
+  // The composer's environment pick: empty = let the scheduler route by
+  // capability; a node id pins this turn's spawned task to that executor.
+  const [nodePref, setNodePref] = useState('')
   const [busy, setBusy] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [selectedProject, setSelectedProject] = useState(project || '')
@@ -503,6 +506,7 @@ export function SessionsView({
           onError: (message) => patch((m) => ({ ...m, status: undefined, kind: 'error', text: m.text || `⚠ ${message}` })),
         },
         ctrl.signal,
+        nodePref || undefined,
       )
       patch((m) => ({ ...m, streaming: false, status: undefined }))
     } catch (err) {
@@ -1012,6 +1016,26 @@ export function SessionsView({
             <div class="composer-project-pill dim" title={session?.project || activeProject ? `项目: ${session?.project || activeProject}` : t('sessions.noProject')}>
               <span>📁 {session?.project || activeProject || t('sessions.noProject')}</span>
             </div>
+            {/* Environment pick: which node executes this turn's task. "Auto"
+                keeps scheduler routing; the pick only pins classified tasks —
+                it never forces an answer turn onto a peer. */}
+            <label class="composer-node-pick" title={t('sessions.nodePickTip')}>
+              <span aria-hidden="true">⛁</span>
+              <select
+                class="composer-node-select"
+                value={nodePref}
+                onChange={(e) => setNodePref((e.target as HTMLSelectElement).value)}
+              >
+                <option value="">{t('sessions.nodeAuto')}</option>
+                {nodes
+                  .filter((n) => n.status === 'online')
+                  .map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.name || n.id}
+                    </option>
+                  ))}
+              </select>
+            </label>
           </div>
           <div class={`composer-box${busy ? ' composer-running' : ''}`}>
             {completeShown.length > 0 && (

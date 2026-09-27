@@ -1,0 +1,133 @@
+/* Memory knowledge graph — the "what the agent knows" map. SVG nodes and
+   edges ride the design tokens so it reskins with the theme for free. */
+
+.mg-wrap {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+
+.mg-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.mg-edge {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.2;
+  transition: opacity var(--dur-fast) var(--ease), stroke var(--dur-fast) var(--ease);
+}
+.mg-edge-promotion {
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  stroke-dasharray: 5 3;
+}
+.mg-edge.dim {
+  opacity: 0.15;
+}
+
+.mg-node {
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.mg-node circle {
+  stroke-width: 1.5;
+  transition: r var(--dur-med) var(--ease);
+}
+.mg-node text {
+  font-size: 10.5px;
+  fill: var(--text-secondary);
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: var(--bg-raised);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.mg-node.dim {
+  opacity: 0.25;
+}
+.mg-node.sel circle {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+.mg-node.pending {
+  opacity: 0.55;
+}
+
+/* Kind palette: accent for long-term cores, blue for topics, indigo for
+   project memory, amber for the daily diary, violet for skills. */
+.mg-core circle { fill: var(--accent-soft); stroke: var(--accent); }
+.mg-topic circle { fill: var(--accent-2-soft); stroke: var(--accent-2); }
+.mg-project circle { fill: var(--semantic-info-soft); stroke: var(--semantic-info); }
+.mg-daily circle { fill: var(--semantic-warn-soft); stroke: var(--semantic-warn); }
+.mg-skill circle { fill: var(--danger-soft); stroke: var(--danger); }
+.mg-node:hover circle { stroke-width: 2.5; }
+
+.mg-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3) var(--sp-4);
+  padding: var(--sp-2) var(--sp-4);
+  border-top: 1px solid var(--border-soft);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.mg-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mg-legend-item i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+}
+.mg-legend-item.mg-core i { color: var(--accent); }
+.mg-legend-item.mg-topic i { color: var(--accent-2); }
+.mg-legend-item.mg-project i { color: var(--semantic-info); }
+.mg-legend-item.mg-daily i { color: var(--semantic-warn); }
+.mg-legend-item.mg-skill i { color: var(--danger); }
+.mg-legend-edge-promo line { stroke: var(--accent); stroke-width: 1.6; stroke-dasharray: 5 3; }
+.mg-legend-edge-ref line { stroke: var(--border-strong); stroke-width: 1.2; }
+
+.mg-detail {
+  position: absolute;
+  right: var(--sp-4);
+  bottom: var(--sp-4);
+  width: min(300px, calc(100% - 32px));
+  max-height: 60%;
+  overflow-y: auto;
+  box-shadow: var(--shadow-lg);
+  animation: palette-in var(--dur-med) var(--ease);
+}
+.mg-detail-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.mg-detail-head strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mg-detail-edges {
+  list-style: none;
+  margin: 0 0 var(--sp-2);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--text-sm);
+}
+.mg-detail-edges li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}

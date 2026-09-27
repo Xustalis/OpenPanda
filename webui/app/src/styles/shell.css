@@ -124,6 +124,17 @@
   opacity: 1;
   color: var(--accent);
 }
+.nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--semantic-warn-soft);
+  color: var(--semantic-warn);
+  font-size: 10.5px;
+  font-weight: 650;
+  text-align: center;
+}
 
 .nav-group {
   margin-top: var(--sp-3);
@@ -238,6 +249,13 @@ a.sidebar-node:hover {
   .primary-nav {
     flex-direction: row;
     overflow-x: auto;
+    gap: 4px;
+  }
+  .nav-group {
+    display: contents;
+  }
+  .nav-group-head {
+    display: none;
   }
   .nav-item {
     width: auto;
@@ -321,7 +339,7 @@ a.sidebar-node:hover {
 .palette-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(4, 6, 8, 0.55);
+  background: var(--backdrop);
   backdrop-filter: blur(3px);
   z-index: 110;
   display: flex;

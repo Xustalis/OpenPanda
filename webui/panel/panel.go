@@ -196,6 +196,7 @@ func New(d Deps) http.Handler {
 	}
 	if d.Cfg != nil {
 		mux.HandleFunc("GET /api/memory", h.getMemory)
+		mux.HandleFunc("GET /api/memory/graph", h.getMemoryGraph)
 		mux.HandleFunc("PUT /api/memory/{file}", h.putMemory)
 		mux.HandleFunc("PUT /api/memory/topics/{name}", h.putMemoryTopic)
 		mux.HandleFunc("DELETE /api/memory/topics/{name}", h.deleteMemoryTopic)

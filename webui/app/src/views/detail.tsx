@@ -156,6 +156,29 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
           of waiting for the next poll of the task row. */}
       <DecisionOrbit task={task} defaultOpen />
 
+      {/* Structured delegation chain from the ledger: each hop is one leg of
+          the task's trip across nodes (originator → executor → …). Unacked
+          hops render hollow — the outbound leg fired but no node confirmed. */}
+      {task.delegation_chain && task.delegation_chain.length > 0 && (
+        <div class="detail-block">
+          <h2>{t('detail.chain')}</h2>
+          <div class="chain">
+            <span class="chain-node root">{task.delegation_chain[0]?.from_node}</span>
+            {task.delegation_chain.map((hop, i) => (
+              <span key={i} style="display:contents">
+                <span class="chain-arrow" aria-hidden="true">→</span>
+                <span
+                  class={`chain-node${hop.accepted ? '' : ' unacked'}`}
+                  title={`hop ${hop.hop}${hop.via ? ` · ${hop.via}` : ''} · ${fmt(new Date(hop.ts * 1000).toISOString())}`}
+                >
+                  {hop.to_node}
+                </span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div class="detail-grid">
         <Field label={t('detail.id')} value={task.id} mono />
         <Field label={t('detail.project')} value={task.project || '—'} />

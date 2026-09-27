@@ -181,11 +181,21 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
  *  appearance/language hints show what is currently selected. */
 export function buildCommands(onLogout: () => void): Command[] {
   const go = t('palette.group.go')
+  const goAliases: Record<string, string> = {
+    sessions: 'chat sessions threads conversation',
+    queue: 'queue tasks board kanban approvals review',
+    plans: 'plans pipeline stages',
+    projects: 'projects workspaces repos',
+    fleet: 'fleet nodes devices cluster hardware',
+    memory: 'memory knowledge graph store brain',
+    skills: 'skills capabilities plugins tools',
+    settings: 'settings preferences config',
+  }
   const cmds: Command[] = navViews.map(([view, key]) => ({
     id: `go:${view}`,
     group: go,
     label: t(key),
-    alias: view === 'sessions' ? 'chat sessions' : view,
+    alias: goAliases[view] ?? view,
     run: () => navigateView(view),
   }))
 
@@ -194,9 +204,6 @@ export function buildCommands(onLogout: () => void): Command[] {
     { tab: 'policy', key: 'settings.policy', alias: 'policy security rules permissions' },
     { tab: 'agents', key: 'settings.group.agents', alias: 'agents subagents roles' },
     { tab: 'mcp', key: 'settings.mcp', alias: 'mcp tools servers integrations' },
-    { tab: 'nodes', key: 'nav.nodes', alias: 'nodes devices fleet cluster hardware' },
-    { tab: 'memory', key: 'nav.memory', alias: 'memory memory-bank knowledge store' },
-    { tab: 'skills', key: 'nav.skills', alias: 'skills capabilities plugins tools' },
     { tab: 'reminders', key: 'nav.reminders', alias: 'reminders cron schedule timer jobs' },
     { tab: 'system', key: 'nav.system', alias: 'system status health audit metrics telemetry' },
   ]
