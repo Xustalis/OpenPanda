@@ -56,7 +56,12 @@ type Client struct {
 	// and any value small enough to be useful truncates a legitimate stream
 	// mid-token. Liveness comes from streamTransport's per-phase deadlines plus
 	// the caller's context.
-	hcStream  *http.Client
+	hcStream *http.Client
+	// maxRetry is the transport retry budget — retries past the first
+	// attempt — backing off exponentially from retryBase and capped per
+	// step at maxRetryDelay (see retryDelay). The default rides out a
+	// 429/5xx burst; model.max_retries lets a flaky relay run a much
+	// deeper budget without wrapping the duration into a busy-loop.
 	maxRetry  int
 	retryBase time.Duration
 	// promptCache toggles provider-native prompt-cache markers on outgoing
@@ -176,7 +181,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		contextWindow:  contextWindow,
 		hc:             &http.Client{Timeout: 30 * time.Second},
 		hcStream:       &http.Client{Transport: streamTransport()},
-		maxRetry:       2,
+		maxRetry:       resolveMaxRetries(model.MaxRetries),
 		retryBase:      500 * time.Millisecond,
 		thinking:       normalizeThinking(model.Thinking),
 		thinkingBudget: model.ThinkingBudget,
@@ -709,7 +714,7 @@ func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn
 	thinkingProbed := false
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 {
-			if err := sleepCtx(ctx, c.retryBase<<uint(attempt-1)); err != nil {
+			if err := sleepCtx(ctx, c.retryDelay(attempt)); err != nil {
 				return Response{}, err
 			}
 		}
@@ -900,7 +905,7 @@ func (c *Client) completeWithRetry(ctx context.Context, req messagesRequest) (Re
 	thinkingProbed := false
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 {
-			if err := sleepCtx(ctx, c.retryBase<<uint(attempt-1)); err != nil {
+			if err := sleepCtx(ctx, c.retryDelay(attempt)); err != nil {
 				return Response{}, err
 			}
 		}
@@ -1054,6 +1059,42 @@ func retryable(err error) bool {
 	}
 	var te *transientError
 	return errors.As(err, &te)
+}
+
+// defaultMaxRetries is the transport retry budget when model.max_retries is
+// unset: retries past the first attempt, so 5 runs at most 6 calls.
+const defaultMaxRetries = 5
+
+// maxRetryDelay caps one backoff step so a deep configured budget (say
+// max_retries: 50) waits longer, never busier — without it the exponential
+// shift would eventually wrap the int64 duration negative and "back off"
+// into a busy-loop.
+const maxRetryDelay = 30 * time.Second
+
+// resolveMaxRetries maps model.max_retries onto the budget: 0 keeps the
+// default, a negative disables retries entirely, anything else is the count.
+func resolveMaxRetries(configured int) int {
+	switch {
+	case configured < 0:
+		return 0
+	case configured == 0:
+		return defaultMaxRetries
+	default:
+		return configured
+	}
+}
+
+// retryDelay is the backoff before retry attempt n (the loop counter where
+// attempt > 0): retryBase doubled per step, with the shift clamped first so
+// a configured budget in the dozens can never overflow the duration, then
+// capped at maxRetryDelay.
+func (c *Client) retryDelay(attempt int) time.Duration {
+	shift := min(attempt-1, 20) // 500ms << 20 ≈ 6 days; further shifts risk int64 wrap
+	d := c.retryBase << uint(shift)
+	if d <= 0 || d > maxRetryDelay {
+		return maxRetryDelay
+	}
+	return d
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

@@ -150,15 +150,33 @@ func executeApply(includePre, force bool) {
 	}
 
 	st := m.Status()
-	if !st.Available && !force {
+	if !st.Available && (!force || st.Latest == "") {
 		if jsonOutput {
 			emitJSON(st)
 		} else {
-			if st.Notes != "" && strings.HasPrefix(st.Notes, "暂无法检查更新") {
+			switch {
+			case force && st.Latest == "":
+				// The check learned no release at all (it degraded on a
+				// rate limit or an access denial, leaving Latest empty).
+				// --force waives the "is it newer" test, not the need for
+				// a known version — there is nothing to download, so
+				// surface the reason Check recorded instead of pretending
+				// to fetch the running release.
+				reason := strings.TrimPrefix(st.Notes, "暂无法检查更新：")
+				if reason == "" {
+					reason = i18n.T(loc, "cli.update.noRelease")
+				}
+				fmt.Fprintln(os.Stderr, p.Danger(i18n.Tf(loc, "cli.update.failed", "err", reason)))
+			case st.Notes != "" && strings.HasPrefix(st.Notes, "暂无法检查更新"):
 				fmt.Println(p.Warn(st.Notes))
-			} else {
+			case st.Latest == "":
+				fmt.Println(p.Warn(i18n.T(loc, "cli.update.noRelease")))
+			default:
 				fmt.Println(p.Success(i18n.Tf(loc, "cli.update.uptodate", "current", versionpkg.Display())))
 			}
+		}
+		if st.Latest == "" && force {
+			os.Exit(1)
 		}
 		return
 	}

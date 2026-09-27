@@ -582,6 +582,48 @@ func TestCompleteNoRetryClientError(t *testing.T) {
 	}
 }
 
+// TestNewClientMaxRetries verifies model.max_retries drives the retry
+// budget: unset keeps the built-in default, a positive value sets it, and a
+// negative disables retries entirely.
+func TestNewClientMaxRetries(t *testing.T) {
+	for _, tc := range []struct {
+		configured int
+		want       int
+	}{
+		{0, defaultMaxRetries},
+		{9, 9},
+		{50, 50},
+		{-1, 0},
+	} {
+		c, err := NewClient(config.ModelConfig{BaseURL: "http://127.0.0.1:1", APIKey: "sk", Model: "m", MaxRetries: tc.configured})
+		if err != nil {
+			t.Fatalf("new client (max_retries=%d): %v", tc.configured, err)
+		}
+		if c.maxRetry != tc.want {
+			t.Errorf("max_retries=%d → maxRetry = %d, want %d", tc.configured, c.maxRetry, tc.want)
+		}
+	}
+}
+
+// TestRetryDelayCap verifies the backoff grows exponentially and then caps at
+// maxRetryDelay, so a deep configured budget (e.g. max_retries: 50) keeps
+// waiting longer instead of wrapping the duration into a busy-loop.
+func TestRetryDelayCap(t *testing.T) {
+	c := &Client{retryBase: 500 * time.Millisecond}
+	if got := c.retryDelay(1); got != 500*time.Millisecond {
+		t.Fatalf("retryDelay(1) = %v, want 500ms", got)
+	}
+	if got := c.retryDelay(3); got != 2*time.Second {
+		t.Fatalf("retryDelay(3) = %v, want 2s", got)
+	}
+	if got := c.retryDelay(30); got != maxRetryDelay {
+		t.Fatalf("retryDelay(30) = %v, want cap %v", got, maxRetryDelay)
+	}
+	if got := c.retryDelay(60); got != maxRetryDelay {
+		t.Fatalf("retryDelay(60) = %v, want cap %v (no int64 wrap)", got, maxRetryDelay)
+	}
+}
+
 // TestWrapAPIErrorActionableMessages verifies the error→guidance mapping: a
 // rejected key, a wrong endpoint, a rate limit, and an outage each produce a
 // distinct user-facing message that names the knob to fix, instead of the

@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 func TestUpdateModelsSectionRoundTrip(t *testing.T) {
 	p := writeTemp(t, "node:\n  name: \"n\"\n")
@@ -55,6 +59,36 @@ func TestUpdateModelsSectionPreservesOtherSections(t *testing.T) {
 	}
 	if cfg.Node.Name != "keep-me" {
 		t.Fatalf("node section clobbered: %+v", cfg.Node)
+	}
+}
+
+// TestUpdateModelSectionMaxRetries verifies the retry budget round-trips:
+// a positive value lands in the file, and writing 0 removes the key so the
+// built-in default applies on reload.
+func TestUpdateModelSectionMaxRetries(t *testing.T) {
+	p := writeTemp(t, "node:\n  name: \"n\"\n")
+	mc := ModelConfig{BaseURL: "https://api.anthropic.com", Model: "m", MaxRetries: 50}
+	if err := UpdateModelSection(p, mc); err != nil {
+		t.Fatalf("UpdateModelSection: %v", err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Model.MaxRetries != 50 {
+		t.Errorf("model.max_retries = %d, want 50", cfg.Model.MaxRetries)
+	}
+
+	mc.MaxRetries = 0
+	if err := UpdateModelSection(p, mc); err != nil {
+		t.Fatalf("UpdateModelSection clear: %v", err)
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "max_retries") {
+		t.Errorf("max_retries=0 should remove the key:\n%s", data)
 	}
 }
 

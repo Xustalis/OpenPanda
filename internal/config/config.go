@@ -456,6 +456,11 @@ type ModelConfig struct {
 	// supports it (Anthropic budget_tokens, DashScope thinking_budget). 0 =
 	// provider default.
 	ThinkingBudget int `yaml:"thinking_budget,omitempty"`
+	// MaxRetries is the transport retry budget: retries past the first
+	// attempt on a 429/5xx or a dropped connection. 0 = built-in default
+	// (5); a negative value disables retries entirely — useful for
+	// deterministic endpoints where a replay would mask a fault.
+	MaxRetries int `yaml:"max_retries,omitempty"`
 	// Params are extra request-body fields merged into every call — the
 	// escape hatch for relay-specific knobs a first-class field does not
 	// cover (temperature, top_p, enable_search, …). Top-level fields win
@@ -1282,6 +1287,7 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 	setMapFieldInt(model, "context_window", mc.ContextWindow)
 	setMapField(model, "thinking", mc.Thinking)
 	setMapFieldInt(model, "thinking_budget", mc.ThinkingBudget)
+	setMapFieldInt(model, "max_retries", mc.MaxRetries)
 	setMapFieldAnyMap(model, "params", mc.Params)
 	setMapFieldStringMap(model, "headers", mc.Headers)
 
