@@ -2051,6 +2051,10 @@ func (r *repl) cmdWeb(arg string) {
 	lanBind := !panel.IsLoopbackAddr(addr)
 	if token == "" {
 		token = panel.NewToken()
+		// Same contract as `panda web`: carry the ephemeral token through a
+		// self-update exec restart so an open console keeps its session instead
+		// of landing back at the token gate.
+		_ = os.Setenv("OPENPANDA_PANEL_TOKEN", token)
 		if lanBind {
 			r.outln(i18n.T(r.loc, "web.lan.ephemeral"))
 		} else {

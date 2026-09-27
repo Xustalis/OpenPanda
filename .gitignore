@@ -126,3 +126,8 @@ fetch_emails.py
 
 /assets
 
+
+# Updater bookkeeping manifests written into resource dirs when an update is
+# applied in-place (adapters/, extensions/voice/) — regenerated per update.
+.adapters.manifest
+.voice.manifest

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +35,44 @@ func TestRunAdapterProcess(t *testing.T) {
 	}
 	if res.Result != "hello from PANDA" {
 		t.Fatalf("unexpected result: %q", res.Result)
+	}
+}
+
+// echoRequestAdapter hands the parsed stdin request back, so the test can
+// assert exactly which fields crossed the wire.
+const echoRequestAdapter = `#!/usr/bin/env python3
+import json, sys
+req = json.loads(sys.stdin.read())
+print(json.dumps({"ok": True, "result": json.dumps(req, sort_keys=True), "exit_code": 0}))
+`
+
+// TestRunAdapterProcessCarriesCommand: a card-declared argv template
+// (ledger.Agent.Command via WithAgentCommand) rides the request's "cmd"
+// field to generic.py; absent the context value the key stays off the wire.
+func TestRunAdapterProcessCarriesCommand(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "echo.py"), []byte(echoRequestAdapter), 0o755); err != nil {
+		t.Fatalf("write adapter: %v", err)
+	}
+	oldDir := adapterDir
+	adapterDir = dir
+	defer func() { adapterDir = oldDir }()
+
+	ctx := WithAgentCommand(context.Background(), "zcode run --headless {prompt}")
+	res := runAdapterProcess(ctx, "echo.py", "p", "", nil)
+	if !res.OK {
+		t.Fatalf("adapter failed: %+v", res)
+	}
+	if !strings.Contains(res.Result, `"cmd": "zcode run --headless {prompt}"`) {
+		t.Fatalf("cmd template not on the wire: %s", res.Result)
+	}
+
+	res = runAdapterProcess(context.Background(), "echo.py", "p", "", nil)
+	if !res.OK {
+		t.Fatalf("adapter failed: %+v", res)
+	}
+	if strings.Contains(res.Result, `"cmd"`) {
+		t.Fatalf("cmd must stay off the request when unset: %s", res.Result)
 	}
 }
 

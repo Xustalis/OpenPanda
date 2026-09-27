@@ -69,6 +69,39 @@ func TestExtractRejectsNonLayoutEntries(t *testing.T) {
 	}
 }
 
+// TestExtractSkipsMacOSMetadata pins the AppleDouble/`__MACOSX` exception to
+// the strict-layout rule: bsdtar on macOS encodes file xattrs as "._name"
+// shadow members (a top-level "._openpanda" included), and ditto-made zips
+// carry a "__MACOSX/" tree. They hold no payload, so extraction skips them
+// instead of writing junk files or refusing the archive outright.
+func TestExtractSkipsMacOSMetadata(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "rel.tar.gz")
+	writeTarGz(t, archive, []*tar.Header{
+		{Name: "._openpanda", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4},
+		{Name: "openpanda/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "openpanda/._bin", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4},
+		{Name: "openpanda/bin/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "openpanda/bin/panda", Typeflag: tar.TypeReg, Mode: 0o755, Size: 2},
+		{Name: "__MACOSX/openpanda/._bin", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4},
+	})
+	root := filepath.Join(dir, "out")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := untargz(archive, root); err != nil {
+		t.Fatalf("untargz refused macOS metadata: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "bin", "panda")); err != nil {
+		t.Fatalf("real payload missing after extract: %v", err)
+	}
+	for _, junk := range []string{"._openpanda", "bin/._bin", "__MACOSX"} {
+		if _, err := os.Stat(filepath.Join(root, junk)); !os.IsNotExist(err) {
+			t.Errorf("metadata entry %q materialized on disk", junk)
+		}
+	}
+}
+
 // TestUnzipRejectsSymlinkAndTraversal covers the zip half, which previously
 // had no type checks at all: a symlink entry and a traversal name must both
 // refuse the archive.

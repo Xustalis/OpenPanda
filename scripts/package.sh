@@ -139,12 +139,19 @@ for osarch in $TARGETS; do
     src="$STAGE/$osarch/openpanda"
     [ -d "$src" ] || { echo "package.sh: $osarch was not staged" >&2; exit 1; }
     rel="panda-$VERSION-$osarch"
+    # macOS stamps provenance xattrs on every file it touches, and bsdtar
+    # encodes them as "._name" AppleDouble shadow entries — invisible to
+    # `tar -t` on macOS but real members everywhere else. Strip them and tell
+    # tar not to re-derive them so the published archive is clean.
+    if command -v xattr >/dev/null 2>&1; then
+        xattr -rc "$src" 2>/dev/null || true
+    fi
     case "$osarch" in
     windows-*)
         make_zip "$DIST/$rel.zip" "$src"
         ;;
     *)
-        (cd "$src/.." && tar -czf "$DIST/$rel.tar.gz" openpanda)
+        (cd "$src/.." && COPYFILE_DISABLE=1 tar -czf "$DIST/$rel.tar.gz" openpanda)
         ;;
     esac
 done

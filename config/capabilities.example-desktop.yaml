@@ -55,6 +55,27 @@ agents:
     cost_tier: "medium"
     tier: 1
 
+  # Any headless CLI works without a bespoke adapter: adapter: generic.py +
+  # a command template. {prompt} is substituted as one literal argv element
+  # (appended when absent). Pick the CLI's non-interactive flags — a headless
+  # run cannot answer a permission prompt.
+  #
+  # zcode (Z.AI) — detected automatically via the registry; its headless
+  # contract is `zcode --prompt "…"` (community-verified, undocumented
+  # upstream). Auth: the TUI setup wizard's ~/.zcode/cli/config.json, or
+  # ZCODE_API_KEY/ZCODE_MODEL/ZCODE_BASE_URL env vars.
+  #
+  # zcode:
+  #   adapter: "generic.py"
+  #   command: "zcode --prompt {prompt}"
+  #   install_check: "zcode --version"
+  #   capabilities: ["coding", "shell", "file_edit"]
+  #   cost_tier: "low"
+  #   tier: 1
+  #
+  # agy (Antigravity) and grok have their own adapters (antigravity.py /
+  # grok_build.py) — declare them like claude_code above.
+
 capacity:
   cpu_cores: 8
   ram_gb: 16

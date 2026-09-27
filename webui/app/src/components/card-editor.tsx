@@ -103,6 +103,7 @@ function CardAgentsSection({
   const agents = Object.entries(card.card.agents ?? {})
   const [name, setName] = useState('')
   const [adapter, setAdapter] = useState('')
+  const [command, setCommand] = useState('')
 
   async function add() {
     const n = name.trim()
@@ -111,10 +112,15 @@ function CardAgentsSection({
       return
     }
     try {
-      const res = await api.addCardAgent(n, { adapter: adapter.trim(), tier: 2 })
+      const res = await api.addCardAgent(n, {
+        adapter: adapter.trim(),
+        tier: 2,
+        ...(command.trim() ? { command: command.trim() } : {}),
+      })
       toast(res.live ? t('card.saved.live') : t('card.saved.restart'), 'success')
       setName('')
       setAdapter('')
+      setCommand('')
       reload()
       onChanged()
     } catch (e) {
@@ -142,6 +148,14 @@ function CardAgentsSection({
           value={adapter}
           onInput={(e) => setAdapter((e.target as HTMLInputElement).value)}
         />
+        {adapter.trim() === 'generic.py' && (
+          <input
+            class="input"
+            placeholder={t('card.agent.command')}
+            value={command}
+            onInput={(e) => setCommand((e.target as HTMLInputElement).value)}
+          />
+        )}
         <button class="btn small" type="button" onClick={add}>
           {t('card.agent.add')}
         </button>
@@ -217,6 +231,7 @@ function AgentRow({
           {t('card.remove')}
         </button>
       </div>
+      {agent.command && <p class="dim mono">{agent.command}</p>}
       {agent.capabilities && agent.capabilities.length > 0 && (
         <p class="dim">{agent.capabilities.join(' · ')}</p>
       )}

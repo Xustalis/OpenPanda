@@ -14,7 +14,7 @@ import (
 // chooseDirectoryResponse is the JSON response for POST /api/dialog/choose-directory.
 type chooseDirectoryResponse struct {
 	Path      string `json:"path"`
-	Cancelled bool   `json:"cancelled"`
+	Cancelled bool   `json:"canceled"`
 	Error     string `json:"error,omitempty"`
 }
 
