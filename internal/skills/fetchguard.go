@@ -112,6 +112,31 @@ func guardedDialContext(policy fetchPolicy) func(context.Context, string, string
 	}
 }
 
+// PublicFetchClient returns an HTTP client that may only reach public HTTPS
+// endpoints: the dial guard refuses loopback, private, link-local and other
+// special-purpose addresses at connect time, and the redirect check holds
+// every hop to the same policy. It exists for callers outside this package —
+// e.g. the model-driven web_fetch tool — whose destination string is
+// untrusted input.
+func PublicFetchClient() *http.Client {
+	return fetchClient(fetchPublic)
+}
+
+// CheckPublicFetchURL validates rawURL for fetching through
+// PublicFetchClient: the scheme must be https and the host must be a real
+// public endpoint (loopback URLs classify fetchLoopback, which the public
+// policy rejects). The returned URL is parsed and ready for a request.
+func CheckPublicFetchURL(rawURL string) (*url.URL, error) {
+	u, policy, err := classifyFetchURL(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if policy != fetchPublic {
+		return nil, fmt.Errorf("skills: URL %q is not a public https endpoint", rawURL)
+	}
+	return u, nil
+}
+
 // fetchClient builds the client ImportURL uses: the dial guard plus a
 // redirect check holding every hop to the same classification as the origin
 // URL (an https→http or public→loopback redirect fails, not silently

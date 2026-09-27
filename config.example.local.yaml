@@ -49,6 +49,18 @@ model:
   # 缺省 5；负数完全关闭重试。退避步长封顶 30s，大预算不会变成忙等。
   # max_retries: 0
 
+# 联网搜索（web_search/web_fetch 工具）：模型查最新新闻、版本发布等时效性内容的通道。
+# provider: auto（缺省，按已配置项推断）| searxng | brave | tavily | bocha | off（关闭联网工具）
+# auto 推断规则：配了 base_url 用 searxng（自建实例）；配了 api_key 用 brave。
+# 密钥优先经环境变量注入，不要写进此文件：
+#   export OPENPANDA_SEARCH_API_KEY=...      （brave / tavily / bocha 通用）
+#   也识别各家惯用的 BRAVE_SEARCH_API_KEY / TAVILY_API_KEY / BOCHA_API_KEY
+# search:
+#   provider: "auto"
+#   base_url: ""        # searxng 实例地址，如 https://searx.example.org（实例须开启 format=json）
+#   api_key: ""         # brave / tavily / bocha 的密钥
+#   max_results: 8      # 每次搜索返回给模型的结果条数（1-20）
+
 log:
   level: "info"
 

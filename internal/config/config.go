@@ -32,6 +32,7 @@ type Config struct {
 	Models    []ModelConfig   `yaml:"models,omitempty"`
 	Push      PushConfig      `yaml:"push"`
 	MCP       MCPConfig       `yaml:"mcp"`
+	Search    SearchConfig    `yaml:"search"`
 	Injection InjectionConfig `yaml:"injection"`
 	Routing   RoutingConfig   `yaml:"routing"`
 	Memory    MemoryConfig    `yaml:"memory"`
@@ -487,6 +488,21 @@ func (m ModelConfig) Alias() string {
 		return m.Name
 	}
 	return m.Model
+}
+
+// SearchConfig configures the entry model's web tools. Provider selects the
+// web_search backend: "" or "auto" picks from what is configured (base_url →
+// searxng, api_key → brave), "searxng" | "brave" | "tavily" | "bocha" force a
+// backend, and "off" removes web_search and web_fetch from the registry.
+// BaseURL is the SearXNG instance root (its /search endpoint must enable
+// format=json); APIKey serves the keyed providers — prefer the
+// OPENPANDA_SEARCH_API_KEY env var over writing it here. MaxResults caps the
+// result list handed to the model; 0 uses the built-in default.
+type SearchConfig struct {
+	Provider   string `yaml:"provider,omitempty"`
+	APIKey     string `yaml:"api_key,omitempty"`
+	BaseURL    string `yaml:"base_url,omitempty"`
+	MaxResults int    `yaml:"max_results,omitempty"`
 }
 
 // MCPConfig selects the stdio MCP server whose tools the ask engine may call
@@ -1206,6 +1222,15 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("OPENPANDA_MODEL_API_KEY"); v != "" {
 		c.Model.APIKey = v
+	}
+	if v := os.Getenv("OPENPANDA_SEARCH_PROVIDER"); v != "" {
+		c.Search.Provider = v
+	}
+	if v := os.Getenv("OPENPANDA_SEARCH_API_KEY"); v != "" {
+		c.Search.APIKey = v
+	}
+	if v := os.Getenv("OPENPANDA_SEARCH_BASE_URL"); v != "" {
+		c.Search.BaseURL = v
 	}
 	if v := os.Getenv("OPENPANDA_MODEL"); v != "" {
 		c.Model.Model = v

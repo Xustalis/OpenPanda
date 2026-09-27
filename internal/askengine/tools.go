@@ -104,6 +104,11 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 	registerTimeTool(reg)
 	registerWeatherTool(reg)
 
+	// Web tools: search + fetch are the model's window past its training
+	// cutoff. Provider/auth resolution happens inside the call so a missing
+	// config surfaces as guidance the model relays, not a silent dead end.
+	registerWebTools(reg, e.cfg)
+
 	// Management tools (v1): the read half of openpanda 调用 openpanda.
 	registerMgmtTools(reg, e)
 
