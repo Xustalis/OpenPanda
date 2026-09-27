@@ -969,8 +969,8 @@ func TestTUICommandExecutionCancellationAndGenerationIsolation(t *testing.T) {
 	} {
 		next, cmd := m.Update(msg)
 		got := next.(tuiModel)
-		if cmd != nil || got.mode != modeExec || got.exec != current || got.execText.Len() != 0 {
-			t.Fatalf("stale %T changed current execution: mode=%v exec=%p text=%q cmd=%v", msg, got.mode, got.exec, got.execText.String(), cmd)
+		if cmd != nil || got.mode != modeExec || got.exec != current || got.exec.text() != "" {
+			t.Fatalf("stale %T changed current execution: mode=%v exec=%p text=%q cmd=%v", msg, got.mode, got.exec, got.exec.text(), cmd)
 		}
 		m = got
 	}
@@ -987,6 +987,47 @@ func TestTUICommandExecutionCancellationAndGenerationIsolation(t *testing.T) {
 	m = step(m, execDoneMsg{exec: current, generation: 2, text: "!sleep", err: context.Canceled})
 	if m.mode != modeIdle || m.exec != nil {
 		t.Fatalf("matching cancellation did not terminalize execution: mode=%v exec=%p", m.mode, m.exec)
+	}
+}
+
+// TestTUIExecOutputMultiChunkFeedsView is the regression for "strings:
+// illegal use of non-zero Builder copied by value": Update's receiver is a
+// copy, so a strings.Builder model field that was written once panics on the
+// second write. Two execOutputMsg chunks on one execution must both reach the
+// live view — /agents and friends stream several.
+func TestTUIExecOutputMultiChunkFeedsView(t *testing.T) {
+	m := newTestTUI(t)
+	m.mode = modeExec
+	m.execGen = 1
+	m.exec = newCommandExec(m.execGen)
+	m.width, m.height = 80, 24
+
+	var chunks []tea.Msg
+	for _, chunk := range []string{"agents:\n", "- zcode (generic)\n", "- codex\n"} {
+		// commandExec.Write is what a running handler does: buffer the chunk
+		// on the exec, then hand the loop one execOutputMsg.
+		if _, err := m.exec.Write([]byte(chunk)); err != nil {
+			t.Fatalf("exec.Write: %v", err)
+		}
+		chunks = append(chunks, <-m.exec.events)
+	}
+	// Feed each msg from a deeper recursion frame: Update's receiver is a
+	// value copy, and a plain loop hands every call the same argument slot —
+	// the Builder copy-check then sees identical addresses and stays silent.
+	// Distinct frames are what bubbletea's event loop produces for real, and
+	// what makes "builder copied by value" detonate on chunk #2.
+	var pump func(m tuiModel, msgs []tea.Msg) tuiModel
+	pump = func(m tuiModel, msgs []tea.Msg) tuiModel {
+		if len(msgs) == 0 {
+			return m
+		}
+		next, _ := m.Update(msgs[0])
+		return pump(next.(tuiModel), msgs[1:])
+	}
+	m = pump(m, chunks)
+	view := m.View()
+	if !strings.Contains(view, "agents:") || !strings.Contains(view, "- codex") {
+		t.Fatalf("multi-chunk exec output missing from live view:\n%s", view)
 	}
 }
 

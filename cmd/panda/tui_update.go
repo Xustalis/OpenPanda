@@ -281,7 +281,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.exec == nil || msg.exec != m.exec || msg.generation != m.execGen {
 			return m, nil
 		}
-		m.execText.WriteString(msg.text)
+		// No accumulation here: commandExec.Write already appended the chunk
+		// to the exec's own buffer before emitting this message, and View
+		// renders that buffer. A strings.Builder field on the model would be
+		// a value copy per Update — writing it twice panics ("illegal use of
+		// non-zero Builder copied by value").
 		return m, waitForExec(msg.exec)
 	case execDoneMsg:
 		if msg.exec == nil || msg.exec != m.exec || msg.generation != m.execGen {
@@ -291,7 +295,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// to chatHistory and return to modeIdle.
 		m.mode = modeIdle
 		m.exec = nil
-		m.execText.Reset()
 		m.applyLocale()
 		m.refreshProject()
 		if m.chatHistory != nil {
@@ -1050,7 +1053,6 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 func (m tuiModel) startExec(text string) (tea.Model, tea.Cmd) {
 	m.mode = modeExec
 	m.execGen++
-	m.execText.Reset()
 	exec, cmd := startCommandExec(m.r, text, m.execGen)
 	m.exec = exec
 	return m, cmd
