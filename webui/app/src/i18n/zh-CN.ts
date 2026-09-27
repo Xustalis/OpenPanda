@@ -220,6 +220,8 @@ const zhCN: Messages = {
   'settings.apiKeyKeep': '留空表示保留已保存的密钥。',
   'settings.maxTokens': '最大 Token 数',
   'settings.maxTokensHelp': '补全上限；0 = 使用服务商默认值。',
+  'settings.maxRetries': '最大重试次数',
+  'settings.maxRetriesHelp': '请求失败（429、5xx、断连）后的重试上限；0 = 保持当前值（默认 5 次）。',
   'settings.test': '测试连接',
   'settings.testing': '测试中…',
   'settings.testOk': '连接正常 — 回复：{reply}',

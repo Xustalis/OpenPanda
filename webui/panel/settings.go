@@ -23,6 +23,7 @@ type modelSettingsJSON struct {
 	BaseURL    string `json:"base_url"`
 	Model      string `json:"model"`
 	MaxTokens  int    `json:"max_tokens"`
+	MaxRetries int    `json:"max_retries"`       // transport retry budget; 0 = built-in default
 	APIKey     string `json:"api_key,omitempty"` // write-only on PUT/POST; never returned
 	APIKeySet  bool   `json:"api_key_set"`
 	APIKeyHint string `json:"api_key_hint,omitempty"` // masked tail, e.g. "…f3ab"
@@ -39,6 +40,7 @@ func (h *handler) getModelSettings(w http.ResponseWriter, r *http.Request) {
 		BaseURL:    mc.BaseURL,
 		Model:      mc.Model,
 		MaxTokens:  mc.MaxTokens,
+		MaxRetries: mc.MaxRetries,
 		APIKeySet:  mc.APIKey != "",
 		APIKeyHint: maskKey(mc.APIKey),
 	})
@@ -67,6 +69,7 @@ func (h *handler) putModelSettings(w http.ResponseWriter, r *http.Request) {
 		APIKey:        cur.APIKey, // empty request key keeps the stored secret
 		Model:         firstNonEmpty(strings.TrimSpace(req.Model), cur.Model),
 		MaxTokens:     firstPositive(req.MaxTokens, cur.MaxTokens),
+		MaxRetries:    firstPositive(req.MaxRetries, cur.MaxRetries),
 	}
 	if key := strings.TrimSpace(req.APIKey); key != "" {
 		mc.APIKey = key
@@ -115,6 +118,7 @@ func (h *handler) putModelSettings(w http.ResponseWriter, r *http.Request) {
 		BaseURL:    mc.BaseURL,
 		Model:      mc.Model,
 		MaxTokens:  mc.MaxTokens,
+		MaxRetries: mc.MaxRetries,
 		APIKeySet:  mc.APIKey != "",
 		APIKeyHint: maskKey(mc.APIKey),
 	})
@@ -141,6 +145,7 @@ func (h *handler) testModelSettings(w http.ResponseWriter, r *http.Request) {
 		APIKey:        cur.APIKey,
 		Model:         firstNonEmpty(strings.TrimSpace(req.Model), cur.Model),
 		MaxTokens:     firstPositive(req.MaxTokens, cur.MaxTokens),
+		MaxRetries:    firstPositive(req.MaxRetries, cur.MaxRetries),
 	}
 	if key := strings.TrimSpace(req.APIKey); key != "" {
 		mc.APIKey = key
