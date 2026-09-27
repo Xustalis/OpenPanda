@@ -271,27 +271,33 @@ const es: Messages = {
   'onboarding.terms1h': '1. Licencia de código abierto (MIT)',
   'onboarding.terms1b':
     'OpenPanda es software libre y de código abierto publicado bajo la licencia MIT. Puedes usar, copiar, modificar, combinar, publicar, distribuir, sublicenciar y vender copias — en proyectos personales, académicos o comerciales — siempre que se incluyan el aviso de copyright y el texto de la licencia. La licencia completa se encuentra en el archivo LICENSE y prevalece sobre este resumen.',
-  'onboarding.terms2h': '2. Software autoalojado, no un servicio',
+  'onboarding.terms2h': '2. Software autoalojado, no un servicio gestionado',
   'onboarding.terms2b':
-    'OpenPanda es software que instalas y operas en tu propio hardware. Los autores no ofrecen un servicio alojado, no conservan tus datos y no actúan como proveedor ni encargado de tratamiento de nadie. La disponibilidad, las copias de seguridad, el control de acceso y la seguridad de tu instalación son tu responsabilidad.',
+    'OpenPanda es software que instalas, configuras y operas en tu propio hardware. Los autores no ofrecen alojamiento, niveles de servicio, compromisos de disponibilidad, obligaciones de soporte ni custodia de datos. Tú eres el único responsable de la instalación, operación, mantenimiento, control de acceso, monitorización y seguridad de tu despliegue.',
   'onboarding.terms3h': '3. Local-first y autonomía de privacidad',
   'onboarding.terms3b':
-    'Tu código fuente, archivos de trabajo, historial de conversaciones, memorias y credenciales de API permanecen en tus dispositivos de forma predeterminada. No hay telemetría, rastreo ni recopilación de datos privados. Los datos solo abandonan un nodo cuando configuras explícitamente un proveedor de modelos o un nodo par para recibirlos.',
+    'Tu código fuente, archivos de trabajo, historial de conversaciones, memorias y credenciales de API permanecen en tus dispositivos de forma predeterminada. El software no incluye telemetría, rastreo ni recopilación de datos privados. Los datos solo salen de un nodo cuando configuras explícitamente un proveedor de modelos o un par para recibirlos — y una vez fuera, rigen las prácticas del destinatario, no las de OpenPanda.',
   'onboarding.terms4h': '4. Proveedores de modelos de terceros',
   'onboarding.terms4b':
-    'Las funciones de IA requieren tus propias credenciales de API del proveedor que elijas (API alojadas o endpoints locales). Los prompts, el contexto del espacio de trabajo y los archivos enviados a ese proveedor se rigen por sus términos, política de privacidad y precios. OpenPanda no está afiliado a ningún proveedor ni controla lo que registran, retienen o cobran.',
+    'Las funciones de IA usan credenciales que tú aportas del proveedor que elijas (API alojadas o endpoints locales). Los prompts, el contexto del espacio de trabajo y los archivos enviados a un proveedor se rigen exclusivamente por sus términos, política de privacidad, retención y precios. OpenPanda no está afiliado a ningún proveedor ni responde por él; disputas, cargos por exceso y tratamiento de datos son asuntos estrictamente entre tú y el proveedor.',
   'onboarding.terms5h': '5. Delegación P2P y confianza de red',
   'onboarding.terms5b':
-    'OpenPanda puede delegar tareas entre dispositivos que autorizas mediante emparejamiento. Las cargas de tareas, tarjetas de capacidad, archivos y resultados viajan entre tus nodos por canales autenticados. Empareja solo con máquinas de confianza; exponer el listener del nodo o la consola web a redes no confiables es responsabilidad tuya.',
-  'onboarding.terms6h': '6. Aviso sobre resultados generados por IA',
+    'OpenPanda puede delegar tareas entre dispositivos autorizados mediante emparejamiento. Las cargas, tarjetas de capacidad, archivos y resultados viajan entre nodos por canales autenticados — incluidos nodos operados por otras personas con quienes te emparejes, cuyas acciones escapan al control de los autores. Empareja solo con máquinas de confianza y trata el listener del nodo y la consola web como endpoints privados: exponerlos a redes no confiables es riesgo exclusivamente tuyo.',
+  'onboarding.terms6h': '6. Resultados generados por IA',
   'onboarding.terms6b':
-    'El código, los comandos, los análisis y demás salidas producidas por modelos de lenguaje son probabilísticos y pueden contener defectos, alucinaciones, vulnerabilidades de seguridad o material sujeto a derechos de terceros. Revisa y prueba antes de aplicar cualquier salida a producción o sistemas críticos; ejecutas el resultado generado bajo tu propio riesgo y eres responsable de su cumplimiento de licencias.',
+    'El código, los comandos, los análisis y demás salidas del modelo son probabilísticos. Pueden contener defectos, alucinaciones, inseguridad, fallos de funcionamiento o material sujeto a derechos de terceros — y no constituyen asesoramiento profesional de ningún tipo (legal, médico, financiero ni de seguridad). Revisa, verifica licencias y prueba todo antes de usarlo; actuar sobre los resultados generados es bajo tu exclusiva responsabilidad.',
   'onboarding.terms7h': '7. Ejecución y seguridad del sistema',
   'onboarding.terms7b':
-    'OpenPanda puede ejecutar comandos de shell, modificar archivos y cambiar el estado del sistema — incluso en nodos remotos. Los niveles de aprobación y el sandboxing reducen el riesgo pero no lo eliminan. Verifica siempre las acciones destructivas o irreversibles antes de aprobarlas y mantén copias de seguridad de los datos importantes.',
-  'onboarding.terms8h': '8. Sin garantía y limitación de responsabilidad',
+    'OpenPanda puede ejecutar comandos de shell, modificar archivos y alterar el estado del sistema, incluso en nodos remotos. Los niveles de aprobación, el sandboxing y los registros de auditoría son mitigaciones, no garantías: errores, configuraciones incorrectas, inyección de prompts o un par comprometido pueden causar daños. Verifica las acciones destructivas o irreversibles antes de aprobarlas y conserva copias de seguridad independientes de lo importante.',
+  'onboarding.terms8h': '8. Cumplimiento y uso aceptable',
   'onboarding.terms8b':
-    'El software se proporciona "tal cual", sin garantía de ningún tipo, expresa o implícita. En la máxima medida permitida por la ley, los autores y titulares de derechos no serán responsables de reclamación, daño, pérdida de datos u otra responsabilidad derivada del software o de su uso. Los términos pueden actualizarse junto con el software; se aplican los términos incluidos en la compilación que ejecutas.',
+    'Eres el único responsable de usar OpenPanda legalmente y conforme a todas las obligaciones que te aplican: legislación de protección de datos, controles de exportación y sanciones, políticas de dispositivos y redes de tu organización, y los términos de cualquier servicio, repositorio o red a los que accedas a través de él. No lo uses para infringir derechos, acceder a sistemas sin autorización ni procesar datos que no tienes derecho a tratar. Nada de esto transfiere esa responsabilidad.',
+  'onboarding.terms9h': '9. Sin garantía y limitación de responsabilidad',
+  'onboarding.terms9b':
+    'El software se proporciona "tal cual" y "según disponibilidad", sin garantía alguna, expresa, implícita o legal — incluidas comerciabilidad, idoneidad para un fin, seguridad y no infracción. En la máxima medida permitida por la ley, los autores y contribuidores no responden por daños directos, indirectos, incidentales, especiales, consecuentes o punitivos — incluida pérdida de datos, lucro cesante, tiempo de inactividad, coste de servicios sustitutos o reclamaciones de terceros — derivados del software, sus salidas o su uso, aun advirtiendo la posibilidad. Donde la responsabilidad no pueda excluirse por completo, queda limitada al mínimo que la ley exija.',
+  'onboarding.terms10h': '10. Indemnización, cambios y divisibilidad',
+  'onboarding.terms10b':
+    'Aceptas indemnizar, defender y mantener indemnes a los autores y contribuidores frente a reclamaciones, daños y gastos (incluidos honorarios legales) derivados de tu uso del software, tu configuración, las tareas y delegaciones que emites, o tu infracción de estos términos, de la ley o de derechos de terceros. Los términos pueden actualizarse junto con el software; se aplican los incluidos en la compilación que ejecutas. Si alguna disposición resulta inaplicable, el resto permanece en pleno vigor.',
   'onboarding.agree': 'Aceptar y continuar',
   'onboarding.next': 'Siguiente',
   'onboarding.finish': 'Guardar y terminar',
