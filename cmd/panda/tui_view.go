@@ -33,8 +33,13 @@ func (m tuiModel) View() string {
 		live.WriteString(m.th.accent.Render(i18n.T(m.loc, "tui.exec.running")))
 		// Strip terminal control sequences from the live stream: a handler's
 		// clear-screen or color bytes inside the frame would corrupt the paint
-		// Bubble Tea is about to do.
-		if output := ansi.Strip(m.execText.String()); strings.TrimSpace(output) != "" {
+		// Bubble Tea is about to do. The text lives on the exec itself — a
+		// strings.Builder field on the value-copied model panics on write.
+		var output string
+		if m.exec != nil {
+			output = ansi.Strip(m.exec.text())
+		}
+		if strings.TrimSpace(output) != "" {
 			live.WriteString("\n")
 			live.WriteString(output)
 		}

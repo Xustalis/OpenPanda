@@ -104,7 +104,6 @@ type tuiModel struct {
 	stream      *askStream
 	exec        *commandExec
 	execGen     uint64
-	execText    strings.Builder
 	started     time.Time
 	chatHistory *chatHistory
 
