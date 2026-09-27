@@ -83,22 +83,50 @@ func (h *EngineHolder) SetOnReview(fn func(core.Task)) {
 // provider. An empty model.base_url tears the engine down (back to
 // zero-config degraded mode); a failed build returns the error and leaves
 // the previous engine serving.
+//
+// Lock order is reloadMu → cfgMu, matching MutateConfig: while a live
+// engine exists its cfgMu serializes config access, so the config reads
+// here (the base_url check and the whole askengine.New build, which scans
+// the struct) run under that engine's read lock. Engineless, reloadMu
+// alone is the serializer MutateConfig already holds.
 func (h *EngineHolder) Reload() error {
 	h.reloadMu.Lock()
 	defer h.reloadMu.Unlock()
 
-	if h.cfg.Model.BaseURL == "" {
+	readCfg := func(fn func(*config.Config)) {
+		if eng := h.Engine(); eng != nil {
+			eng.ReadConfig(fn)
+			return
+		}
+		if h.cfg != nil {
+			fn(h.cfg)
+		}
+	}
+
+	// The teardown only detaches the pointer inside the config read lock —
+	// old.Close runs after it is released, because Close takes schedMu and a
+	// schedMu holder may itself be waiting on cfgMu (writer-pending blocks
+	// new readers): closing under the read lock would close a cycle.
+	var closed *askengine.Engine
+	readCfg(func(c *config.Config) {
+		if c.Model.BaseURL != "" {
+			return
+		}
 		h.mu.Lock()
-		old := h.engine
+		closed = h.engine
 		h.engine = nil
 		h.mu.Unlock()
-		if old != nil {
-			old.Close()
-		}
+	})
+	if closed != nil {
+		closed.Close()
 		return nil
 	}
 	// Build before swapping: a failed build must not take the old engine down.
-	eng, err := askengine.New(context.Background(), h.cfg, h.opts)
+	var eng *askengine.Engine
+	var err error
+	readCfg(func(c *config.Config) {
+		eng, err = askengine.New(context.Background(), c, h.opts)
+	})
 	if err != nil {
 		return err
 	}
@@ -107,13 +135,59 @@ func (h *EngineHolder) Reload() error {
 	h.engine = eng
 	fn := h.onReview
 	h.mu.Unlock()
-	if fn != nil {
+	if fn != nil && eng != nil {
 		eng.SetOnReview(fn)
 	}
 	if old != nil {
 		old.Close()
 	}
 	return nil
+}
+
+// MutateConfig applies fn to the shared config. With a live engine the write
+// goes through the engine's config lock so in-flight asks see a consistent
+// view; engineless it runs under reloadMu, the same mutex Reload holds while
+// reading the config to build an engine — a mutation can never tear a rebuild.
+func (h *EngineHolder) MutateConfig(fn func(*config.Config)) {
+	h.reloadMu.Lock()
+	defer h.reloadMu.Unlock()
+	if eng := h.Engine(); eng != nil {
+		eng.MutateConfig(fn)
+		return
+	}
+	if h.cfg != nil {
+		fn(h.cfg)
+	}
+}
+
+// MutateConfigErr is MutateConfig for fallible mutations (a config-file
+// persist paired with the in-memory write). The file I/O runs inside the
+// lock so concurrent settings saves cannot interleave config.yaml
+// read-modify-writes into lost updates.
+func (h *EngineHolder) MutateConfigErr(fn func(*config.Config) error) error {
+	h.reloadMu.Lock()
+	defer h.reloadMu.Unlock()
+	if eng := h.Engine(); eng != nil {
+		return eng.MutateConfigErr(fn)
+	}
+	if h.cfg == nil {
+		return nil
+	}
+	return fn(h.cfg)
+}
+
+// ReadConfig runs fn on the shared config under the same serialization as
+// MutateConfig — engine read lock when live, reloadMu otherwise.
+func (h *EngineHolder) ReadConfig(fn func(*config.Config)) {
+	h.reloadMu.Lock()
+	defer h.reloadMu.Unlock()
+	if eng := h.Engine(); eng != nil {
+		eng.ReadConfig(fn)
+		return
+	}
+	if h.cfg != nil {
+		fn(h.cfg)
+	}
 }
 
 // Close releases the current engine's resources (DB handle, scheduler core,
@@ -136,5 +210,66 @@ func (h *handler) currentEngine() *askengine.Engine {
 	if h.engines != nil {
 		return h.engines.Engine()
 	}
+	if h.engineFn != nil {
+		return h.engineFn()
+	}
 	return h.engine
+}
+
+// mutateCfg applies fn to the shared config under whichever lock owns it:
+// the live engine's write lock when one exists (so its ask/tool goroutines
+// see a consistent view), else the holder's reloadMu (keeping Reload's reads
+// serialized), else this handler's cfgMu. h.cfg aliases the engine config —
+// Deps.Cfg is the same pointer engines are built from — so a direct write
+// here would race every reader.
+func (h *handler) mutateCfg(fn func(*config.Config)) {
+	if h.engines != nil {
+		h.engines.MutateConfig(fn)
+		return
+	}
+	if eng := h.currentEngine(); eng != nil {
+		eng.MutateConfig(fn)
+		return
+	}
+	h.cfgMu.Lock()
+	defer h.cfgMu.Unlock()
+	if h.cfg != nil {
+		fn(h.cfg)
+	}
+}
+
+// mutateCfgErr is mutateCfg for fallible mutations. Config-file persists
+// belong inside fn: holding the lock across file+memory writes serializes
+// them with every other surface touching the shared cfg (concurrent HTTP
+// requests, an embedded REPL's mutateConfig).
+func (h *handler) mutateCfgErr(fn func(*config.Config) error) error {
+	if h.engines != nil {
+		return h.engines.MutateConfigErr(fn)
+	}
+	if eng := h.currentEngine(); eng != nil {
+		return eng.MutateConfigErr(fn)
+	}
+	h.cfgMu.Lock()
+	defer h.cfgMu.Unlock()
+	if h.cfg == nil {
+		return nil
+	}
+	return fn(h.cfg)
+}
+
+// readCfg is the read half of mutateCfg: same routing, read locks.
+func (h *handler) readCfg(fn func(*config.Config)) {
+	if h.engines != nil {
+		h.engines.ReadConfig(fn)
+		return
+	}
+	if eng := h.currentEngine(); eng != nil {
+		eng.ReadConfig(fn)
+		return
+	}
+	h.cfgMu.RLock()
+	defer h.cfgMu.RUnlock()
+	if h.cfg != nil {
+		fn(h.cfg)
+	}
 }

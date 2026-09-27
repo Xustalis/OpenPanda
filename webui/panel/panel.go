@@ -44,6 +44,11 @@ type Deps struct {
 	Store        *core.TaskStore
 	Engine       *askengine.Engine
 	EngineHolder *EngineHolder
+	// EngineFn resolves the engine live on every request — for embedders that
+	// can build an engine after the panel is already serving (a REPL whose
+	// first model arrives via the TUI wizard). EngineHolder still wins when
+	// set; Engine is the last static fallback.
+	EngineFn     func() *askengine.Engine
 	DB           *sql.DB
 	Projects     *memory.Projects
 	ProjectStore *projectstore.Store // nil falls back to memory-only projects
@@ -53,11 +58,15 @@ type Deps struct {
 	SkillStore   *skills.Store    // nil disables the skill approval endpoints
 	Reminders    *reminders.Store // nil disables the reminder endpoints
 	Cfg          *config.Config
-	ConfigPath   string // where PUT /api/settings/model persists ("" = memory only)
-	CardPath     string // where the card API reads/edits capabilities.yaml ("" = engine's card)
-	StaticDir    string
-	Token        string
-	Updater      *updater.Manager // nil disables the self-update endpoints
+	// CfgMu, when set, is the lock the handler borrows for cfg access while no
+	// engine exists — the REPL passes its own fallback mutex so a /web panel
+	// embedded in an engineless session still serializes with the front end.
+	CfgMu      *sync.RWMutex
+	ConfigPath string // where PUT /api/settings/model persists ("" = memory only)
+	CardPath   string // where the card API reads/edits capabilities.yaml ("" = engine's card)
+	StaticDir  string
+	Token      string
+	Updater    *updater.Manager // nil disables the self-update endpoints
 }
 
 // New builds the panel HTTP handler: the static web app under StaticDir plus
@@ -71,18 +80,25 @@ type Deps struct {
 // closed: /api/* rejects every request until a token is configured.
 func New(d Deps) http.Handler {
 	h := &handler{
-		store:              d.Store,
-		engine:             d.Engine,
-		engines:            d.EngineHolder,
-		db:                 d.DB,
-		projects:           d.Projects,
-		projectStore:       d.ProjectStore,
-		push:               d.Push,
-		sessions:           d.Sessions,
-		worktrees:          d.Worktrees,
-		skillStore:         d.SkillStore,
-		reminders:          d.Reminders,
-		cfg:                d.Cfg,
+		store:        d.Store,
+		engine:       d.Engine,
+		engines:      d.EngineHolder,
+		engineFn:     d.EngineFn,
+		db:           d.DB,
+		projects:     d.Projects,
+		projectStore: d.ProjectStore,
+		push:         d.Push,
+		sessions:     d.Sessions,
+		worktrees:    d.Worktrees,
+		skillStore:   d.SkillStore,
+		reminders:    d.Reminders,
+		cfg:          d.Cfg,
+		cfgMu: func() *sync.RWMutex {
+			if d.CfgMu != nil {
+				return d.CfgMu
+			}
+			return &sync.RWMutex{}
+		}(),
 		configPath:         d.ConfigPath,
 		cardFilePath:       d.CardPath,
 		updater:            d.Updater,
@@ -354,8 +370,9 @@ func clientIP(r *http.Request) string {
 
 type handler struct {
 	store    *core.TaskStore
-	engine   *askengine.Engine // static engine; ignored when engines != nil
-	engines  *EngineHolder     // reloadable engine source; nil = static
+	engine   *askengine.Engine        // static engine; last fallback
+	engines  *EngineHolder            // reloadable engine source; nil = static
+	engineFn func() *askengine.Engine // live resolver; preferred over engine
 	db       *sql.DB
 	projects *memory.Projects
 	// projectStore is the project metadata table (work dir, description, the
@@ -374,6 +391,11 @@ type handler struct {
 	cardFilePath string
 	updater      *updater.Manager
 
+	// cfgMu guards h.cfg only when no engine exists to borrow a lock from —
+	// degraded static mode still serves concurrent HTTP handlers. When the
+	// embedder passes its own fallback lock (Deps.CfgMu), that one wins so
+	// panel writes serialize with the front end's cfg access too.
+	cfgMu         *sync.RWMutex
 	askMu         sync.Mutex
 	askGeneration uint64
 	activeAsks    map[string]sessionOperation

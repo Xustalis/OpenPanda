@@ -25,6 +25,7 @@ import (
 func newTestTUI(t *testing.T) tuiModel {
 	t.Helper()
 	r := &repl{loc: i18n.Locale("en"), cfg: &config.Config{}, interactive: true}
+	r.cfg.Storage.SkillsPath = t.TempDir() // skills hub writes must stay in the sandbox
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	return m

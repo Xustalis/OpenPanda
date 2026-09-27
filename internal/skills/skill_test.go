@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -85,6 +86,22 @@ func TestStoreSaveLoad(t *testing.T) {
 	missing, err := store.Load(ScopeProject, "panda", "nope")
 	if err != nil || missing != nil {
 		t.Errorf("missing skill: got %v err=%v, want nil nil", missing, err)
+	}
+}
+
+// TestSaveEmptyRoot pins the cwd-pollution fix: NewStore("") used to turn
+// filepath.Join into a relative path and write global/<name>/SKILL.md into
+// whatever directory the process ran from.
+func TestSaveEmptyRoot(t *testing.T) {
+	store := NewStore("")
+	if err := store.Save(sampleSkill()); err == nil {
+		t.Fatal("Save on an empty root must error instead of writing relative to cwd")
+	}
+	if err := store.EnsureBuiltins(); err == nil {
+		t.Fatal("EnsureBuiltins on an empty root must error")
+	}
+	if _, err := os.Stat("global"); err == nil {
+		t.Fatal("a refused write must not leave a global/ directory behind")
 	}
 }
 

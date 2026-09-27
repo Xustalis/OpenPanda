@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -38,7 +39,7 @@ func runSkill(args []string) {
 	if err != nil {
 		fatal("load config", err)
 	}
-	store := skills.NewStore(cfg.Storage.SkillsPath)
+	store := skills.NewStore(skillsPathFor(cfg))
 	_ = store.EnsureBuiltins()
 
 	switch cmd {
@@ -72,21 +73,31 @@ func printSkillUsage() {
 
 // skillList prints every skill (name, scope, status, usage, description).
 func skillList(store *skills.Store) {
+	if err := skillListTo(os.Stdout, i18n.Detect(), store); err != nil {
+		fatal("index skills", err)
+	}
+}
+
+// skillListTo is the writer-scoped form of skillList — /skill list routes it
+// through commandOutput so the listing lands in the transcript instead of
+// escaping to the host terminal, where it tore the alt-screen frame and, on
+// an index error, used to kill the whole TUI via fatal.
+func skillListTo(w io.Writer, loc i18n.Locale, store *skills.Store) error {
 	index, err := store.Index()
 	if err != nil {
-		fatal("index skills", err)
+		return err
 	}
 	if jsonOutput {
 		if index == nil {
 			emitJSON([]struct{}{})
-			return
+			return nil
 		}
 		emitJSON(index)
-		return
+		return nil
 	}
 	if len(index) == 0 {
-		fmt.Println(i18n.T(i18n.Detect(), "cli.skill.none"))
-		return
+		fmt.Fprintln(w, i18n.T(loc, "cli.skill.none"))
+		return nil
 	}
 	sort.Slice(index, func(i, j int) bool { return index[i].Name < index[j].Name })
 	for _, e := range index {
@@ -98,8 +109,9 @@ func skillList(store *skills.Store) {
 		if e.Builtin {
 			tag = " [builtin]"
 		}
-		fmt.Printf("%-24s %-14s %-9s used=%d  %s%s\n", e.Name, scope, e.Status, e.UseCount, e.Description, tag)
+		fmt.Fprintf(w, "%-24s %-14s %-9s used=%d  %s%s\n", e.Name, scope, e.Status, e.UseCount, e.Description, tag)
 	}
+	return nil
 }
 
 // skillReset restores one or all built-in skills to factory defaults.

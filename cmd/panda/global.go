@@ -144,6 +144,20 @@ func systemCardPath() string {
 	return filepath.Join(config.SystemConfigDir(), "capabilities.yaml")
 }
 
+// skillsPathFor resolves the skills store root: the configured path, else the
+// per-user data dir. A raw Config{} (tests, a caller that bypassed Load)
+// carries no path — without the fallback NewStore("") writes its global/ tree
+// into whatever directory panda was launched from.
+func skillsPathFor(cfg *config.Config) string {
+	if cfg != nil && cfg.Storage.SkillsPath != "" {
+		return cfg.Storage.SkillsPath
+	}
+	if d, err := config.UserDataDir(); err == nil && d != "" {
+		return filepath.Join(d, "skills")
+	}
+	return ""
+}
+
 // isLinuxConsole reports whether we are on a bare kernel VT (TERM=linux):
 // the console font carries no CJK glyphs, so every non-ASCII rune — Chinese
 // text, ·, box drawing — renders as a diamond. Callers degrade to English +

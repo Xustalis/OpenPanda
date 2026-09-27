@@ -38,13 +38,16 @@ func (h *handler) getOnboarding(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) onboardingState() onboardingState {
 	mc := h.engineModel()
-	return onboardingState{
-		Locale:          h.cfg.UI.Locale,
-		TermsAccepted:   h.cfg.UI.TermsAccepted,
-		Onboarded:       h.cfg.UI.Onboarded,
-		ApprovalMode:    h.cfg.Approval.NormalizedMode(),
+	st := onboardingState{
 		ModelConfigured: strings.TrimSpace(mc.BaseURL) != "" && (mc.NoAuth || strings.TrimSpace(mc.APIKey) != ""),
 	}
+	h.readCfg(func(c *config.Config) {
+		st.Locale = c.UI.Locale
+		st.TermsAccepted = c.UI.TermsAccepted
+		st.Onboarded = c.UI.Onboarded
+		st.ApprovalMode = c.Approval.NormalizedMode()
+	})
+	return st
 }
 
 type onboardingRequest struct {
@@ -72,18 +75,32 @@ func (h *handler) postOnboarding(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, errors.New("unsupported locale"))
 			return
 		}
-		if err := config.UpdateSectionField(h.configPath, []string{"ui"}, "locale", loc); err != nil {
+		if err := h.mutateCfgErr(func(c *config.Config) error {
+			if h.configPath != "" {
+				if err := config.UpdateSectionField(h.configPath, []string{"ui"}, "locale", loc); err != nil {
+					return err
+				}
+			}
+			c.UI.Locale = loc
+			return nil
+		}); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		h.cfg.UI.Locale = loc
 	}
 	if req.TermsAccepted != nil {
-		if err := config.UpdateSectionFieldBool(h.configPath, []string{"ui"}, "terms_accepted", *req.TermsAccepted); err != nil {
+		if err := h.mutateCfgErr(func(c *config.Config) error {
+			if h.configPath != "" {
+				if err := config.UpdateSectionFieldBool(h.configPath, []string{"ui"}, "terms_accepted", *req.TermsAccepted); err != nil {
+					return err
+				}
+			}
+			c.UI.TermsAccepted = *req.TermsAccepted
+			return nil
+		}); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		h.cfg.UI.TermsAccepted = *req.TermsAccepted
 	}
 	if req.ApprovalMode != nil {
 		mode := strings.TrimSpace(*req.ApprovalMode)
@@ -93,18 +110,32 @@ func (h *handler) postOnboarding(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, errors.New("approval_mode must be always, on-request, or never"))
 			return
 		}
-		if err := config.UpdateSectionField(h.configPath, []string{"approval"}, "mode", mode); err != nil {
+		if err := h.mutateCfgErr(func(c *config.Config) error {
+			if h.configPath != "" {
+				if err := config.UpdateSectionField(h.configPath, []string{"approval"}, "mode", mode); err != nil {
+					return err
+				}
+			}
+			c.Approval.Mode = mode
+			return nil
+		}); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		h.cfg.Approval.Mode = mode
 	}
 	if req.Onboarded != nil {
-		if err := config.UpdateSectionFieldBool(h.configPath, []string{"ui"}, "onboarded", *req.Onboarded); err != nil {
+		if err := h.mutateCfgErr(func(c *config.Config) error {
+			if h.configPath != "" {
+				if err := config.UpdateSectionFieldBool(h.configPath, []string{"ui"}, "onboarded", *req.Onboarded); err != nil {
+					return err
+				}
+			}
+			c.UI.Onboarded = *req.Onboarded
+			return nil
+		}); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		h.cfg.UI.Onboarded = *req.Onboarded
 	}
 	writeJSON(w, h.onboardingState())
 }

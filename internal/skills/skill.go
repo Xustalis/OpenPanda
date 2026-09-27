@@ -140,8 +140,13 @@ func (s *Store) Path(sk *Skill) (string, error) {
 	return filepath.Join(s.root, dir, sk.Name, "SKILL.md"), nil
 }
 
-// Save writes a skill to its scope directory, creating it as needed.
+// Save writes a skill to its scope directory, creating it as needed. An empty
+// store root is refused: filepath.Join would turn "" into a relative path and
+// the "write" would land in whatever directory the process happens to sit in.
 func (s *Store) Save(sk *Skill) error {
+	if s.root == "" {
+		return fmt.Errorf("skills: empty store root")
+	}
 	path, err := s.Path(sk)
 	if err != nil {
 		return err

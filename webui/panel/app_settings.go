@@ -45,18 +45,22 @@ func (h *handler) getAppSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("config not loaded"))
 		return
 	}
-	writeJSON(w, appSettingsJSON{
-		InjectionModel:  h.cfg.Injection.NormalizedModel(),
-		PreferredAgents: append([]string{}, h.cfg.Routing.PreferredAgents...),
-		MemoryLimits: memoryLimitsJSON{
-			User:    h.cfg.Memory.Limits.User,
-			Memory:  h.cfg.Memory.Limits.Memory,
-			Project: h.cfg.Memory.Limits.Project,
-		},
-		ApprovalMode: h.cfg.Approval.NormalizedMode(),
-		ToolsPolicy:  h.cfg.Routing.NormalizedToolsPolicy(),
-		Sandbox:      &sandboxJSON{WorkPath: h.cfg.Storage.WorkPath},
+	var out appSettingsJSON
+	h.readCfg(func(c *config.Config) {
+		out = appSettingsJSON{
+			InjectionModel:  c.Injection.NormalizedModel(),
+			PreferredAgents: append([]string{}, c.Routing.PreferredAgents...),
+			MemoryLimits: memoryLimitsJSON{
+				User:    c.Memory.Limits.User,
+				Memory:  c.Memory.Limits.Memory,
+				Project: c.Memory.Limits.Project,
+			},
+			ApprovalMode: c.Approval.NormalizedMode(),
+			ToolsPolicy:  c.Routing.NormalizedToolsPolicy(),
+			Sandbox:      &sandboxJSON{WorkPath: c.Storage.WorkPath},
+		}
 	})
+	writeJSON(w, out)
 }
 
 // putAppSettings serves PUT /api/settings/app — validate the four policy
@@ -93,7 +97,7 @@ func (h *handler) putAppSettings(w http.ResponseWriter, r *http.Request) {
 	// written before this field existed still saves the rest of the policy.
 	tools := strings.TrimSpace(req.ToolsPolicy)
 	if tools == "" {
-		tools = h.cfg.Routing.NormalizedToolsPolicy()
+		h.readCfg(func(c *config.Config) { tools = c.Routing.NormalizedToolsPolicy() })
 	}
 	switch tools {
 	case config.ToolsPolicyMinimal, config.ToolsPolicyExtended:
@@ -125,50 +129,62 @@ func (h *handler) putAppSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Persist field by field; the first failure aborts the rest, and the
-	// in-memory config only moves once the file is written.
-	if h.configPath != "" {
-		if err := config.UpdateSectionField(h.configPath, []string{"injection"}, "model", injection); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-		if err := config.UpdateSectionList(h.configPath, []string{"routing"}, "preferred_agents", agents); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-		for _, lim := range []struct {
-			key   string
-			value int
-		}{
-			{"user", limits.User},
-			{"memory", limits.Memory},
-			{"project", limits.Project},
-		} {
-			if err := config.UpdateSectionFieldInt(h.configPath, []string{"memory", "limits"}, lim.key, lim.value); err != nil {
-				writeErr(w, http.StatusInternalServerError, err)
-				return
+	// Persist field by field and move the in-memory config in the same
+	// critical section: UpdateSection* is a whole-document read-modify-write,
+	// so a concurrent save (another endpoint, an embedded REPL's /config)
+	// would interleave it into a lost update without the lock covering both.
+	var inj config.InjectionConfig
+	var routing config.RoutingConfig
+	var workPath string
+	err := h.mutateCfgErr(func(c *config.Config) error {
+		if h.configPath != "" {
+			if err := config.UpdateSectionField(h.configPath, []string{"injection"}, "model", injection); err != nil {
+				return err
+			}
+			if err := config.UpdateSectionList(h.configPath, []string{"routing"}, "preferred_agents", agents); err != nil {
+				return err
+			}
+			for _, lim := range []struct {
+				key   string
+				value int
+			}{
+				{"user", limits.User},
+				{"memory", limits.Memory},
+				{"project", limits.Project},
+			} {
+				if err := config.UpdateSectionFieldInt(h.configPath, []string{"memory", "limits"}, lim.key, lim.value); err != nil {
+					return err
+				}
+			}
+			if err := config.UpdateSectionField(h.configPath, []string{"approval"}, "mode", approval); err != nil {
+				return err
+			}
+			if err := config.UpdateSectionField(h.configPath, []string{"routing"}, "tools_policy", tools); err != nil {
+				return err
 			}
 		}
-		if err := config.UpdateSectionField(h.configPath, []string{"approval"}, "mode", approval); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-		if err := config.UpdateSectionField(h.configPath, []string{"routing"}, "tools_policy", tools); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
+		c.Injection.Model = injection
+		c.Routing.PreferredAgents = agents
+		c.Memory.Limits.User = limits.User
+		c.Memory.Limits.Memory = limits.Memory
+		c.Memory.Limits.Project = limits.Project
+		c.Approval.Mode = approval
+		c.Routing.ToolsPolicy = tools
+		// Snapshot the copies SetRouterPolicy installs: reading c.Routing
+		// after mutateCfg returned would race the next mutation.
+		inj = c.Injection
+		routing = c.Routing
+		workPath = c.Storage.WorkPath
+		return nil
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
 	}
-	h.cfg.Injection.Model = injection
-	h.cfg.Routing.PreferredAgents = agents
-	h.cfg.Memory.Limits.User = limits.User
-	h.cfg.Memory.Limits.Memory = limits.Memory
-	h.cfg.Memory.Limits.Project = limits.Project
-	h.cfg.Approval.Mode = approval
-	h.cfg.Routing.ToolsPolicy = tools
 	// Routing and injection are read by the router, which holds its own copy, so a
 	// change here has to re-enter it or it waits for a restart.
 	if eng := h.currentEngine(); eng != nil {
-		eng.SetRouterPolicy(h.cfg.Injection, h.cfg.Routing)
+		eng.SetRouterPolicy(inj, routing)
 	}
 
 	writeJSON(w, appSettingsJSON{
@@ -177,6 +193,6 @@ func (h *handler) putAppSettings(w http.ResponseWriter, r *http.Request) {
 		MemoryLimits:    limits,
 		ApprovalMode:    approval,
 		ToolsPolicy:     tools,
-		Sandbox:         &sandboxJSON{WorkPath: h.cfg.Storage.WorkPath},
+		Sandbox:         &sandboxJSON{WorkPath: workPath},
 	})
 }

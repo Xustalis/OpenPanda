@@ -59,7 +59,7 @@ func runMCP(args []string) {
 	defer db.Close()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	taskStore := core.NewTaskStore(db, logger)
-	skillStore := skills.NewStore(cfg.Storage.SkillsPath)
+	skillStore := skills.NewStore(skillsPathFor(cfg))
 
 	self := selfToolsDeps{
 		cfg:        cfg,

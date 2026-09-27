@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -65,14 +66,22 @@ func (r *repl) applyModel(mc config.ModelConfig) error {
 	if _, err := entry.NewClient(mc); err != nil {
 		return err
 	}
-	if err := config.UpdateModelSection(configWritePath(r.configPath), mc); err != nil {
-		return err
-	}
-	r.cfg.Model = mc
-	if r.engine != nil {
-		if err := r.engine.SetModel(mc); err != nil {
+	// Persist + in-memory write run in one critical section: without that,
+	// an embedded /web panel sharing cfgMu could interleave a whole-document
+	// rewrite between the two and lose this change.
+	if err := r.mutateConfigErr(func(c *config.Config) error {
+		if err := config.UpdateModelSection(configWritePath(r.configPath), mc); err != nil {
 			return err
 		}
+		c.Model = mc
+		return nil
+	}); err != nil {
+		return err
+	}
+	// The in-memory write already happened under cfgMu; SetModel swaps the
+	// engine's live client to match.
+	if eng := r.engine.Load(); eng != nil {
+		return eng.SetModel(mc)
 	}
 	return nil
 }
@@ -80,18 +89,20 @@ func (r *repl) applyModel(mc config.ModelConfig) error {
 // findProviderKey looks up an API key already configured for providerID,
 // checking the active model first and then the registered models.
 func (r *repl) findProviderKey(providerID string) string {
-	if r.cfg == nil {
-		return ""
-	}
-	if (effectiveProvider(r.cfg.Model) == providerID || r.cfg.Model.Alias() == providerID) && r.cfg.Model.APIKey != "" {
-		return r.cfg.Model.APIKey
-	}
-	for _, m := range r.cfg.Models {
-		if (effectiveProvider(m) == providerID || m.Alias() == providerID) && m.APIKey != "" {
-			return m.APIKey
+	key := ""
+	r.readConfig(func(c *config.Config) {
+		if (effectiveProvider(c.Model) == providerID || c.Model.Alias() == providerID) && c.Model.APIKey != "" {
+			key = c.Model.APIKey
+			return
 		}
-	}
-	return ""
+		for _, m := range c.Models {
+			if (effectiveProvider(m) == providerID || m.Alias() == providerID) && m.APIKey != "" {
+				key = m.APIKey
+				return
+			}
+		}
+	})
+	return key
 }
 
 // looksLikeAPIKey heuristically checks if s appears to be an API secret rather
@@ -169,8 +180,13 @@ func effectiveContextWindow(m config.ModelConfig) int {
 // alignment, color highlights, and context length indicators.
 func (r *repl) modelStatus() {
 	p := pal()
-	active := r.cfg.Model
-	if active.BaseURL == "" && active.Provider == "" && len(r.cfg.Models) == 0 {
+	var active config.ModelConfig
+	var models []config.ModelConfig
+	r.readConfig(func(c *config.Config) {
+		active = c.Model
+		models = slices.Clone(c.Models)
+	})
+	if active.BaseURL == "" && active.Provider == "" && len(models) == 0 {
 		r.outln(p.Muted("  " + i18n.T(r.loc, "repl.model.none")))
 		r.outln(p.Muted("  " + i18n.T(r.loc, "repl.model.hint")))
 		return
@@ -181,7 +197,7 @@ func (r *repl) modelStatus() {
 	aliasW = max(aliasW, cliui.DisplayWidth(active.Alias()))
 	modelW = max(modelW, cliui.DisplayWidth(effectiveModel(active)))
 	provW = max(provW, cliui.DisplayWidth(effectiveProvider(active)))
-	for _, m := range r.cfg.Models {
+	for _, m := range models {
 		aliasW = max(aliasW, cliui.DisplayWidth(m.Alias()))
 		modelW = max(modelW, cliui.DisplayWidth(effectiveModel(m)))
 		provW = max(provW, cliui.DisplayWidth(effectiveProvider(m)))
@@ -203,7 +219,7 @@ func (r *repl) modelStatus() {
 		p.Muted(effectiveBaseURL(active)),
 	)
 
-	for _, m := range r.cfg.Models {
+	for _, m := range models {
 		if m.Alias() == active.Alias() && effectiveModel(m) == effectiveModel(active) && effectiveProvider(m) == effectiveProvider(active) {
 			continue // already displayed as active
 		}
@@ -227,32 +243,42 @@ func (r *repl) modelStatus() {
 
 // modelSwitch selects a registered model by alias or model id.
 func (r *repl) modelSwitch(name string) {
-	if r.cfg.Model.Alias() == name && (r.cfg.Model.Model != "" || r.cfg.Model.Provider != "") {
-		r.outln(i18n.Tf(r.loc, "repl.model.set", "alias", r.cfg.Model.Alias(), "model", effectiveModel(r.cfg.Model)))
+	var active, match config.ModelConfig
+	var found, isActive bool
+	r.readConfig(func(c *config.Config) {
+		active = c.Model
+		if c.Model.Alias() == name && (c.Model.Model != "" || c.Model.Provider != "") {
+			match, found, isActive = c.Model, true, true
+			return
+		}
+		// Alias wins over model id: two passes keep the original priority —
+		// a later entry's alias match beats an earlier entry's id match.
+		for _, m := range c.Models {
+			if m.Alias() == name {
+				match, found = m, true
+				return
+			}
+		}
+		for _, m := range c.Models {
+			if m.Model == name {
+				match, found = m, true
+				return
+			}
+		}
+		if c.Model.Model == name && (c.Model.Model != "" || c.Model.Provider != "") {
+			match, found, isActive = c.Model, true, true
+		}
+	})
+	if isActive {
+		r.outln(i18n.Tf(r.loc, "repl.model.set", "alias", active.Alias(), "model", effectiveModel(active)))
 		return
 	}
-	for _, m := range r.cfg.Models {
-		if m.Alias() == name {
-			if err := r.applyModel(m); err != nil {
-				r.storeErr(err)
-				return
-			}
-			r.outln(i18n.Tf(r.loc, "repl.model.set", "alias", m.Alias(), "model", effectiveModel(m)))
+	if found {
+		if err := r.applyModel(match); err != nil {
+			r.storeErr(err)
 			return
 		}
-	}
-	for _, m := range r.cfg.Models {
-		if m.Model == name {
-			if err := r.applyModel(m); err != nil {
-				r.storeErr(err)
-				return
-			}
-			r.outln(i18n.Tf(r.loc, "repl.model.set", "alias", m.Alias(), "model", effectiveModel(m)))
-			return
-		}
-	}
-	if r.cfg.Model.Model == name && (r.cfg.Model.Model != "" || r.cfg.Model.Provider != "") {
-		r.outln(i18n.Tf(r.loc, "repl.model.set", "alias", r.cfg.Model.Alias(), "model", effectiveModel(r.cfg.Model)))
+		r.outln(i18n.Tf(r.loc, "repl.model.set", "alias", match.Alias(), "model", effectiveModel(match)))
 		return
 	}
 	r.outln(i18n.Tf(r.loc, "repl.model.switch.none", "name", name))
@@ -497,13 +523,17 @@ func (r *repl) modelAdd(args []string) {
 		// suffixing until nothing clashes, so a third relay serving the same
 		// model name never silently overwrites the second.
 		collides := func(a string) bool {
-			for _, existing := range r.cfg.Models {
-				if existing.Alias() == a &&
-					(existing.Model != mc.Model || existing.BaseURL != mc.BaseURL || existing.Provider != mc.Provider) {
-					return true
+			hit := false
+			r.readConfig(func(c *config.Config) {
+				for _, existing := range c.Models {
+					if existing.Alias() == a &&
+						(existing.Model != mc.Model || existing.BaseURL != mc.BaseURL || existing.Provider != mc.Provider) {
+						hit = true
+						return
+					}
 				}
-			}
-			return false
+			})
+			return hit
 		}
 		if collides(alias) && mc.Model != "" {
 			alias = mc.Model
@@ -525,23 +555,31 @@ func (r *repl) modelAdd(args []string) {
 	}
 
 	// Upsert into the registry, then persist.
-	replaced := false
-	for i := range r.cfg.Models {
-		if r.cfg.Models[i].Alias() == alias {
-			r.cfg.Models[i] = mc
-			replaced = true
-			break
+	var models []config.ModelConfig
+	if err := r.mutateConfigErr(func(c *config.Config) error {
+		replaced := false
+		for i := range c.Models {
+			if c.Models[i].Alias() == alias {
+				c.Models[i] = mc
+				replaced = true
+				break
+			}
 		}
-	}
-	if !replaced {
-		r.cfg.Models = append(r.cfg.Models, mc)
-	}
-	if err := config.UpdateModelsSection(configWritePath(r.configPath), r.cfg.Models); err != nil {
+		if !replaced {
+			c.Models = append(c.Models, mc)
+		}
+		models = slices.Clone(c.Models)
+		return config.UpdateModelsSection(configWritePath(r.configPath), models)
+	}); err != nil {
 		r.storeErr(err)
 		return
 	}
 	// If no active model is configured at all, make the newly added model active immediately.
-	if r.cfg.Model.BaseURL == "" && r.cfg.Model.Provider == "" && r.cfg.Model.Model == "" {
+	var noActive bool
+	r.readConfig(func(c *config.Config) {
+		noActive = c.Model.BaseURL == "" && c.Model.Provider == "" && c.Model.Model == ""
+	})
+	if noActive {
 		_ = r.applyModel(mc)
 	}
 	r.outln(i18n.Tf(r.loc, "repl.model.add.done", "alias", alias, "model", mc.Model))
@@ -556,7 +594,7 @@ func (r *repl) verifyModel(mc config.ModelConfig) bool {
 		r.outln(i18n.Tf(r.loc, "repl.model.add.verifyfail", "err", err.Error()))
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(r.commandContext(), 20*time.Second)
 	defer cancel()
 	_, err = client.Complete(ctx, "You are a connectivity test.", "Reply with exactly: OK")
 	if err != nil {
@@ -656,19 +694,33 @@ func (r *repl) modelRemove(args []string) {
 		return
 	}
 	name := args[0]
-	for i, m := range r.cfg.Models {
-		if m.Alias() != name && m.Model != name {
-			continue
+	var found, isActive bool
+	var models []config.ModelConfig
+	err := r.mutateConfigErr(func(c *config.Config) error {
+		for i, m := range c.Models {
+			if m.Alias() != name && m.Model != name {
+				continue
+			}
+			found = true
+			if m.Alias() == c.Model.Alias() {
+				isActive = true
+				return nil
+			}
+			c.Models = append(c.Models[:i:i], c.Models[i+1:]...)
+			models = slices.Clone(c.Models)
+			return config.UpdateModelsSection(configWritePath(r.configPath), models)
 		}
-		if m.Alias() == r.cfg.Model.Alias() {
-			r.outln(i18n.Tf(r.loc, "repl.model.remove.active", "alias", name))
-			return
-		}
-		r.cfg.Models = append(r.cfg.Models[:i], r.cfg.Models[i+1:]...)
-		if err := config.UpdateModelsSection(configWritePath(r.configPath), r.cfg.Models); err != nil {
-			r.storeErr(err)
-			return
-		}
+		return nil
+	})
+	if err != nil {
+		r.storeErr(err)
+		return
+	}
+	if isActive {
+		r.outln(i18n.Tf(r.loc, "repl.model.remove.active", "alias", name))
+		return
+	}
+	if found {
 		r.outln(i18n.Tf(r.loc, "repl.model.remove.done", "alias", name))
 		return
 	}
@@ -687,7 +739,7 @@ func (r *repl) modelFetch(args []string) {
 		r.outln(i18n.Tf(r.loc, "repl.model.fetch.err", "err", err.Error()))
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(r.commandContext(), 20*time.Second)
 	defer cancel()
 	models, err := client.ListModels(ctx)
 	if err != nil {
@@ -716,7 +768,7 @@ func (r *repl) modelTest(args []string) {
 		r.outln(i18n.Tf(r.loc, "repl.model.test.fail", "err", err.Error()))
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(r.commandContext(), 20*time.Second)
 	defer cancel()
 	if mc.Model == "" {
 		// A bare custom endpoint carries no default model — pick the first
@@ -748,17 +800,27 @@ func (r *repl) modelTest(args []string) {
 // reports whether a usable config was resolved.
 func (r *repl) resolveModel(args []string, verb string) (config.ModelConfig, string, bool) {
 	if len(args) == 0 {
-		mc := r.cfg.Model
+		var mc config.ModelConfig
+		r.readConfig(func(c *config.Config) { mc = c.Model })
 		return mc, mc.Alias(), true
 	}
 	name := args[0]
-	if (r.cfg.Model.Alias() == name || r.cfg.Model.Model == name) && (r.cfg.Model.Model != "" || r.cfg.Model.Provider != "") {
-		return r.cfg.Model, r.cfg.Model.Alias(), true
-	}
-	for _, m := range r.cfg.Models {
-		if m.Alias() == name || m.Model == name {
-			return m, m.Alias(), true
+	var match config.ModelConfig
+	var found bool
+	r.readConfig(func(c *config.Config) {
+		if (c.Model.Alias() == name || c.Model.Model == name) && (c.Model.Model != "" || c.Model.Provider != "") {
+			match, found = c.Model, true
+			return
 		}
+		for _, m := range c.Models {
+			if m.Alias() == name || m.Model == name {
+				match, found = m, true
+				return
+			}
+		}
+	})
+	if found {
+		return match, match.Alias(), true
 	}
 	p, ok := providers.Lookup(name)
 	if !ok {

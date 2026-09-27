@@ -41,6 +41,7 @@ const (
 	modeModelWizard // Model add/setup onboarding wizard
 	modeOnboarding  // First-time use onboarding wizard
 	modeSkillsHub   // Skills Hub browse/search/install panel
+	modeConfirm     // Yes/no card for a destructive command the exec pump cannot prompt for
 )
 
 type listKind int
@@ -193,6 +194,12 @@ type tuiModel struct {
 	// install — never inside hubRebuildList, which runs per search keystroke.
 	hubInstalled map[string]bool
 
+	// confirmText/confirmYes drive modeConfirm — the yes/no card that stands in
+	// for the classic REPL's r.confirm, which reads a stdin the TUI owns.
+	// confirmYes is the slash line the exec pump runs when the user confirms.
+	confirmText string
+	confirmYes  string
+
 	// pendingPrompt is the user text of the in-flight ask, kept so the turn can
 	// be recorded into conversation memory when it completes.
 	pendingPrompt string
@@ -279,8 +286,8 @@ func newTUIModel(r *repl) tuiModel {
 	sp.Style = th.accent
 
 	cHist := &chatHistory{}
-	if r != nil && len(r.convo) > 0 {
-		turns := r.convo
+	if r != nil && r.convoLen() > 0 {
+		turns := r.convoNow()
 		const maxTurns = 10
 		if len(turns)/2 > maxTurns {
 			cHist.blocks = append(cHist.blocks, block{
@@ -303,7 +310,7 @@ func newTUIModel(r *repl) tuiModel {
 		r:           r,
 		th:          th,
 		loc:         r.loc,
-		engine:      r.engine,
+		engine:      r.engine.Load(),
 		ta:          ta,
 		sp:          sp,
 		menu:        newSlashMenu(r.loc),
@@ -376,10 +383,10 @@ func (m tuiModel) printBlock(b block) tea.Cmd {
 // because it is the frame the transcript hangs from.
 func (m tuiModel) startupPrints() []string {
 	prints := []string{m.welcome()}
-	if m.r == nil || len(m.r.convo) == 0 {
+	if m.r == nil || m.r.convoLen() == 0 {
 		return prints
 	}
-	turns := m.r.convo
+	turns := m.r.convoNow()
 	const maxTurns = 10 // user+assistant pairs, taken from the tail
 	add := func(b block) {
 		prints = append(prints, "\n"+b.render(m.th, m.textWidth(), m.expandThought))
@@ -419,13 +426,17 @@ func (m *tuiModel) refreshProject() {
 // this pass the chrome — footer hints, menu help, detached notes — stays in
 // the old language while only the handlers' printed output switches.
 func (m *tuiModel) applyLocale() {
-	if m.r == nil || m.r.loc == m.loc {
+	if m.r == nil {
 		return
 	}
-	m.loc = m.r.loc
-	m.th.loc = m.r.loc
-	m.menu = newSlashMenu(m.r.loc)
-	m.ta.Placeholder = i18n.T(m.r.loc, "tui.input.placeholder")
+	loc := m.r.locale()
+	if loc == m.loc {
+		return
+	}
+	m.loc = loc
+	m.th.loc = loc
+	m.menu = newSlashMenu(loc)
+	m.ta.Placeholder = i18n.T(loc, "tui.input.placeholder")
 }
 
 // history assembles the conversation context for the next ask by delegating to

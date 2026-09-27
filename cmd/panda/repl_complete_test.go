@@ -6,6 +6,7 @@ package main
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -91,9 +92,12 @@ func TestArgCandidatesForNilResolver(t *testing.T) {
 func TestReplArgCandidatesEnums(t *testing.T) {
 	r := &repl{}
 	// The store-backed slots are nil-safe: a REPL without a store completes
-	// nothing rather than panicking.
-	if got := r.argCandidates("task", []string{""}); got != nil {
-		t.Errorf("task ids without a store = %v, want nil", got)
+	// the static verbs and nothing else, rather than panicking.
+	if got := r.argCandidates("task", []string{""}); !slices.Equal(got, []string{"add", "priority", "move", "delete"}) {
+		t.Errorf("task verbs without a store = %v, want the verb list", got)
+	}
+	if got := r.argCandidates("logs", []string{""}); got != nil {
+		t.Errorf("log ids without a store = %v, want nil", got)
 	}
 	if got := r.argCandidates("lang", []string{""}); len(got) < 2 {
 		t.Errorf("lang candidates = %v, want the locale list", got)

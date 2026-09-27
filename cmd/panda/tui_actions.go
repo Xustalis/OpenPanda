@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -41,7 +42,7 @@ func (m tuiModel) buildSessionItems() []SelectionItem {
 		}
 
 		badge := ""
-		if s.ID == m.r.activeSess {
+		if s.ID == m.r.sessID() {
 			badge = i18n.T(m.loc, "tui.badge.current")
 		}
 
@@ -97,7 +98,12 @@ func (m tuiModel) buildModelItems() []SelectionItem {
 	if m.r == nil || m.r.cfg == nil {
 		return nil
 	}
-	active := m.r.cfg.Model
+	var active config.ModelConfig
+	var models []config.ModelConfig
+	m.r.readConfig(func(c *config.Config) {
+		active = c.Model
+		models = slices.Clone(c.Models)
+	})
 	var items []SelectionItem
 
 	seen := make(map[string]bool)
@@ -115,7 +121,7 @@ func (m tuiModel) buildModelItems() []SelectionItem {
 		})
 	}
 
-	for _, mod := range m.r.cfg.Models {
+	for _, mod := range models {
 		alias := mod.Alias()
 		if alias == "" {
 			alias = effectiveModel(mod)
@@ -210,9 +216,11 @@ func (m tuiModel) openResumeList() (tuiModel, tea.Cmd) {
 func (m tuiModel) openModelPanel() (tuiModel, tea.Cmd) {
 	hasModels := false
 	if m.r != nil && m.r.cfg != nil {
-		if m.r.cfg.Model.BaseURL != "" || m.r.cfg.Model.Provider != "" || len(m.r.cfg.Models) > 0 {
-			hasModels = true
-		}
+		m.r.readConfig(func(c *config.Config) {
+			if c.Model.BaseURL != "" || c.Model.Provider != "" || len(c.Models) > 0 {
+				hasModels = true
+			}
+		})
 	}
 
 	if !hasModels {
@@ -414,24 +422,27 @@ func (m tuiModel) switchSelectedModel() (tuiModel, tea.Cmd) {
 	}
 
 	name := item.ID
-	var targetMC *config.ModelConfig
-	if m.r.cfg.Model.Alias() == name {
-		targetMC = &m.r.cfg.Model
-	} else {
-		for _, mod := range m.r.cfg.Models {
+	var targetMC config.ModelConfig
+	var found bool
+	m.r.readConfig(func(c *config.Config) {
+		if c.Model.Alias() == name {
+			targetMC, found = c.Model, true
+			return
+		}
+		for _, mod := range c.Models {
 			if mod.Alias() == name || mod.Model == name {
-				targetMC = &mod
-				break
+				targetMC, found = mod, true
+				return
 			}
 		}
-	}
+	})
 
-	if targetMC != nil {
-		_ = m.r.applyModel(*targetMC)
+	if found {
+		_ = m.r.applyModel(targetMC)
 		m.mode = modeIdle
 		note := block{
 			kind: blockNote,
-			body: i18n.Tf(m.loc, "tui.model.switched", "alias", targetMC.Alias(), "model", effectiveModel(*targetMC)),
+			body: i18n.Tf(m.loc, "tui.model.switched", "alias", targetMC.Alias(), "model", effectiveModel(targetMC)),
 		}
 		return m, m.printBlock(note)
 	}
@@ -458,22 +469,31 @@ func (m tuiModel) executeDeleteModel(alias string) (tuiModel, tea.Cmd) {
 		return m, nil
 	}
 
-	newModels := make([]config.ModelConfig, 0, len(m.r.cfg.Models))
-	for _, mod := range m.r.cfg.Models {
-		if mod.Alias() != alias && mod.Model != alias {
-			newModels = append(newModels, mod)
+	newModels := make([]config.ModelConfig, 0)
+	var activeHit bool
+	_ = m.r.mutateConfigErr(func(c *config.Config) error {
+		for _, mod := range c.Models {
+			if mod.Alias() != alias && mod.Model != alias {
+				newModels = append(newModels, mod)
+			}
 		}
-	}
-	m.r.cfg.Models = newModels
-	_ = config.UpdateModelsSection(configWritePath(m.r.configPath), m.r.cfg.Models)
+		c.Models = newModels
+		activeHit = c.Model.Alias() == alias || c.Model.Model == alias
+		return config.UpdateModelsSection(configWritePath(m.r.configPath), newModels)
+	})
 
 	// If active model was deleted, switch to first remaining or clear
-	if m.r.cfg.Model.Alias() == alias || m.r.cfg.Model.Model == alias {
+	if activeHit {
 		if len(newModels) > 0 {
 			_ = m.r.applyModel(newModels[0])
 		} else {
-			m.r.cfg.Model = config.ModelConfig{}
-			_ = config.UpdateModelSection(configWritePath(m.r.configPath), m.r.cfg.Model)
+			_ = m.r.mutateConfigErr(func(c *config.Config) error {
+				if err := config.UpdateModelSection(configWritePath(m.r.configPath), config.ModelConfig{}); err != nil {
+					return err
+				}
+				c.Model = config.ModelConfig{}
+				return nil
+			})
 		}
 	}
 
@@ -490,18 +510,20 @@ func (m tuiModel) editSelectedModel() (tuiModel, tea.Cmd) {
 	alias := item.ID
 	var curMC config.ModelConfig
 	found := false
-	if m.r.cfg.Model.Alias() == alias || m.r.cfg.Model.Model == alias {
-		curMC = m.r.cfg.Model
-		found = true
-	} else {
-		for _, mod := range m.r.cfg.Models {
+	m.r.readConfig(func(c *config.Config) {
+		if c.Model.Alias() == alias || c.Model.Model == alias {
+			curMC = c.Model
+			found = true
+			return
+		}
+		for _, mod := range c.Models {
 			if mod.Alias() == alias || mod.Model == alias {
 				curMC = mod
 				found = true
-				break
+				return
 			}
 		}
-	}
+	})
 
 	if !found {
 		return m, nil
@@ -663,13 +685,17 @@ func (m tuiModel) finalizeWizard() (tuiModel, tea.Cmd) {
 	// place.
 	if m.wizardEditAlias == "" || alias != m.wizardEditAlias {
 		collides := func(a string) bool {
-			for _, existing := range m.r.cfg.Models {
-				if existing.Alias() == a && existing.Alias() != m.wizardEditAlias &&
-					(existing.Model != mc.Model || existing.BaseURL != mc.BaseURL || existing.Provider != mc.Provider) {
-					return true
+			hit := false
+			m.r.readConfig(func(c *config.Config) {
+				for _, existing := range c.Models {
+					if existing.Alias() == a && existing.Alias() != m.wizardEditAlias &&
+						(existing.Model != mc.Model || existing.BaseURL != mc.BaseURL || existing.Provider != mc.Provider) {
+						hit = true
+						return
+					}
 				}
-			}
-			return false
+			})
+			return hit
 		}
 		for i := 2; collides(alias); i++ {
 			alias = fmt.Sprintf("%s-%d", mc.Model, i)
@@ -678,49 +704,68 @@ func (m tuiModel) finalizeWizard() (tuiModel, tea.Cmd) {
 	mc.Name = alias
 
 	// Upsert into cfg.Models. When editing, drop the stale alias first so a
-	// renamed endpoint cannot leave two rows behind.
-	if m.wizardEditAlias != "" && m.wizardEditAlias != alias {
-		kept := m.r.cfg.Models[:0]
-		for _, e := range m.r.cfg.Models {
-			if e.Alias() != m.wizardEditAlias {
-				kept = append(kept, e)
+	// renamed endpoint cannot leave two rows behind. The surgery runs under
+	// the engine's config lock: the registry is shared memory e.cfg aliases.
+	editAlias := m.wizardEditAlias
+	var models []config.ModelConfig
+	_ = m.r.mutateConfigErr(func(c *config.Config) error {
+		if editAlias != "" && editAlias != alias {
+			kept := c.Models[:0]
+			for _, e := range c.Models {
+				if e.Alias() != editAlias {
+					kept = append(kept, e)
+				}
+			}
+			c.Models = kept
+		}
+		replaced := false
+		for i := range c.Models {
+			if c.Models[i].Alias() == alias {
+				c.Models[i] = mc
+				replaced = true
+				break
 			}
 		}
-		m.r.cfg.Models = kept
-	}
-	replaced := false
-	for i := range m.r.cfg.Models {
-		if m.r.cfg.Models[i].Alias() == alias {
-			m.r.cfg.Models[i] = mc
-			replaced = true
-			break
+		if !replaced {
+			c.Models = append(c.Models, mc)
 		}
-	}
-	if !replaced {
-		m.r.cfg.Models = append(m.r.cfg.Models, mc)
-	}
-
-	_ = config.UpdateModelsSection(configWritePath(m.r.configPath), m.r.cfg.Models)
+		models = slices.Clone(c.Models)
+		return config.UpdateModelsSection(configWritePath(m.r.configPath), models)
+	})
 	_ = m.r.applyModel(mc)
 
-	// Ensure engine is active
-	if m.r.engine == nil {
-		eng, err := askengine.New(context.Background(), m.r.cfg, askengine.Options{
-			CardPath:   m.r.cardPath,
-			ReplyASCII: isLinuxConsole(),
-			Locale:     m.r.loc,
-			AsyncPeers: true,
+	// Ensure engine is active. Construction reads cfg fields (fallback model
+	// list, card path), so it runs under the config read lock — a concurrent
+	// mutateConfig writer would otherwise tear the build. bindProject stays
+	// outside: it takes the write lock.
+	if m.r.engine.Load() == nil {
+		var eng *askengine.Engine
+		loc := m.r.locale()
+		m.r.readConfig(func(c *config.Config) {
+			built, err := askengine.New(context.Background(), c, askengine.Options{
+				CardPath:   m.r.cardPathNow(),
+				ReplyASCII: isLinuxConsole(),
+				Locale:     loc,
+				AsyncPeers: true,
+			})
+			if err == nil {
+				eng = built
+			}
 		})
-		if err == nil {
-			m.r.engine = eng
+		if eng != nil {
+			m.r.engine.Store(eng)
 			m.engine = eng
 			m.r.bindProject()
 		}
 	} else {
-		m.engine = m.r.engine
+		m.engine = m.r.engine.Load()
 	}
 
-	if m.r != nil && m.r.cfg != nil && !m.r.cfg.UI.Onboarded {
+	onboarded := true
+	if m.r != nil && m.r.cfg != nil {
+		m.r.readConfig(func(c *config.Config) { onboarded = c.UI.Onboarded })
+	}
+	if !onboarded {
 		return m.finalizeOnboarding()
 	}
 
@@ -831,7 +876,7 @@ func buildModelChoiceItems(loc i18n.Locale) []SelectionItem {
 // advanceFromTerms moves to the approval mode step after accepting terms.
 func (m tuiModel) advanceFromTerms() (tuiModel, tea.Cmd) {
 	if m.r != nil && m.r.cfg != nil {
-		m.r.cfg.UI.TermsAccepted = true
+		m.r.mutateConfig(func(c *config.Config) { c.UI.TermsAccepted = true })
 	}
 	m.onboardingStep = onboardingStepApproval
 	sl := NewSelectionList(i18n.T(m.loc, "tui.onboard.approvalTitle"), buildApprovalModeItems(m.loc))
@@ -844,29 +889,43 @@ func (m tuiModel) advanceFromTerms() (tuiModel, tea.Cmd) {
 // finalizeOnboarding persists onboarding configuration and enters idle chat.
 func (m tuiModel) finalizeOnboarding() (tuiModel, tea.Cmd) {
 	if m.r != nil && m.r.cfg != nil {
-		m.r.cfg.UI.TermsAccepted = true
-		m.r.cfg.UI.Onboarded = true
-		m.r.cfg.UI.Locale = string(m.loc)
+		loc := m.loc
 
 		cfgPath := configWritePath(m.r.configPath)
-		m.r.configPath = cfgPath
-		_ = config.UpdateSectionField(cfgPath, []string{"ui"}, "locale", string(m.loc))
-		_ = config.UpdateSectionFieldBool(cfgPath, []string{"ui"}, "terms_accepted", true)
-		_ = config.UpdateSectionFieldBool(cfgPath, []string{"ui"}, "onboarded", true)
-		if m.r.cfg.Approval.Mode != "" {
-			_ = config.UpdateSectionField(cfgPath, []string{"approval"}, "mode", m.r.cfg.Approval.Mode)
-		}
+		// One critical section for the whole onboarding commit: each
+		// UpdateSectionField rewrites the document, and an unlocked write
+		// between fields would let a shared-lock peer lose the rest.
+		// r.configPath joins the mutation too — /config set and /model save
+		// read it inside this same cfgMu critical section.
+		_ = m.r.mutateConfigErr(func(c *config.Config) error {
+			m.r.configPath = cfgPath
+			var firstErr error
+			persist := func(err error) {
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+			persist(config.UpdateSectionField(cfgPath, []string{"ui"}, "locale", string(loc)))
+			persist(config.UpdateSectionFieldBool(cfgPath, []string{"ui"}, "terms_accepted", true))
+			persist(config.UpdateSectionFieldBool(cfgPath, []string{"ui"}, "onboarded", true))
+			c.UI.TermsAccepted = true
+			c.UI.Onboarded = true
+			c.UI.Locale = string(loc)
+			if c.Approval.Mode != "" {
+				persist(config.UpdateSectionField(cfgPath, []string{"approval"}, "mode", c.Approval.Mode))
+			}
+			return firstErr
+		})
 
 		// Ensure capability card exists
-		cardPath := m.r.cardPath
+		cardPath := m.r.cardPathNow()
 		if cardPath == "" {
 			cardPath = filepath.Join(filepath.Dir(cfgPath), "capabilities.yaml")
 		}
 		if _, _, err := carddetect.EnsureCard(cardPath); err == nil {
-			m.r.cardPath = cardPath
-			m.r.hasCard = true
-			if m.r.engine != nil {
-				_ = m.r.engine.ReloadCard(cardPath)
+			m.r.setCard(cardPath, true)
+			if eng := m.r.engine.Load(); eng != nil {
+				_ = eng.ReloadCard(cardPath)
 			}
 		}
 	}
@@ -920,10 +979,10 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			loc := i18n.Locale(item.ID)
 			m.loc = loc
 			if m.r != nil {
-				m.r.loc = loc
-				if m.r.cfg != nil {
-					m.r.cfg.UI.Locale = string(loc)
-				}
+				// applyLocale covers the raw writes this used to do: r.loc
+				// under watchMu (the watcher reads it every poll), the engine
+				// locale, and the ui.locale persist.
+				_ = m.r.applyLocale(loc)
 			}
 			m.applyLocale()
 			m.onboardingStep = onboardingStepTerms
@@ -1000,7 +1059,8 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.r != nil && m.r.cfg != nil {
-				m.r.cfg.Approval.Mode = item.ID
+				mode := item.ID
+				m.r.mutateConfig(func(c *config.Config) { c.Approval.Mode = mode })
 			}
 			m.onboardingStep = onboardingStepModelChoice
 			sl := NewSelectionList(i18n.T(m.loc, "tui.onboard.modelChoiceTitle"), buildModelChoiceItems(m.loc))
@@ -1071,4 +1131,41 @@ func (m tuiModel) handleOnboardingModelWizardKey(msg tea.KeyMsg) (tea.Model, tea
 		return m, nil
 	}
 	return m.handleModelWizardKey(msg)
+}
+
+// confirmTasksClear opens the yes/no card for "/tasks clear". The task count
+// is read inline so the card can say exactly what is about to be wiped — an
+// empty board short-circuits to the same "nothing to do" note the classic
+// handler prints.
+func (m tuiModel) confirmTasksClear() (tea.Model, tea.Cmd) {
+	n := 0
+	if m.r != nil && m.r.store != nil {
+		if tasks, err := m.r.store.ListByState(context.Background(), ""); err == nil {
+			n = len(tasks)
+		}
+	}
+	if n == 0 {
+		note := block{kind: blockNote, body: i18n.T(m.loc, "cli.queue.clear.empty")}
+		return m, m.printBlock(note)
+	}
+	m.mode = modeConfirm
+	m.confirmText = strings.TrimSpace(i18n.Tf(m.loc, "cli.queue.clear.confirm", "n", strconv.Itoa(n)))
+	m.confirmYes = "/tasks clear --yes"
+	return m, nil
+}
+
+// onConfirmKey answers the yes/no card: y runs the held slash line through the
+// exec pump (where its output lands in the transcript like any command);
+// anything else — n, Esc, Enter — declines and says so. A destructive action
+// never fires on an ambiguous key.
+func (m tuiModel) onConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	yes := m.confirmYes
+	if msg.Type == tea.KeyRunes && strings.EqualFold(string(msg.Runes), "y") && yes != "" {
+		m.confirmText, m.confirmYes = "", ""
+		return m.startExec(yes)
+	}
+	m.confirmText, m.confirmYes = "", ""
+	m.mode = modeIdle
+	note := block{kind: blockNote, body: i18n.T(m.loc, "tui.confirm.cancelled")}
+	return m, m.printBlock(note)
 }

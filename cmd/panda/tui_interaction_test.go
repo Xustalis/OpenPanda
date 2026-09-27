@@ -316,6 +316,83 @@ func TestTUIModelManagement(t *testing.T) {
 	}
 }
 
+// TestTUIModelSlashArgsReachHandler is the regression for "/model <args>"
+// being swallowed by the panel shortcut: argument-bearing forms must dispatch
+// to cmdModel through the exec pump, while bare "/model" keeps the panel.
+func TestTUIModelSlashArgsReachHandler(t *testing.T) {
+	cfg := &config.Config{
+		Model: config.ModelConfig{Name: "deepseek-v4-flash", Provider: "deepseek", Model: "deepseek-chat"},
+		Models: []config.ModelConfig{
+			{Name: "deepseek-v4-flash", Provider: "deepseek", Model: "deepseek-chat"},
+			{Name: "gpt-4o", Provider: "openai", Model: "gpt-4o"},
+		},
+	}
+	r := &repl{loc: i18n.English, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width = 100
+	m.height = 30
+
+	// "/model gpt-4o" must run the handler — the alias switch lands in cfg.
+	m = submitAndPump(t, m, "/model gpt-4o")
+	if m.mode != modeIdle {
+		t.Fatalf("/model <alias> should complete through exec, got %v", m.mode)
+	}
+	if r.cfg.Model.Alias() != "gpt-4o" {
+		t.Fatalf("/model <alias> must switch the active model, got %+v", r.cfg.Model)
+	}
+
+	// An unknown alias reports through the transcript — not the panel.
+	m = submitAndPump(t, m, "/model frobnicate")
+	if m.mode != modeIdle {
+		t.Fatalf("/model <unknown> should complete through exec, got %v", m.mode)
+	}
+	if got := lastBlock(m); !strings.Contains(got.body, "frobnicate") {
+		t.Fatalf("unknown model name should be reported, got %q", got.body)
+	}
+
+	// Bare "/model" still opens the picker.
+	next, _ := m.submit("/model")
+	m = next.(tuiModel)
+	if m.mode != modeModelPanel {
+		t.Fatalf("bare /model should open the panel, got %v", m.mode)
+	}
+}
+
+// TestTUILangSwitchInline pins "/lang <code>" running on the Update goroutine:
+// r.loc is read by the watcher's poll goroutine, so an exec-goroutine write
+// would be a data race, and m.loc must move with it or the UI keeps rendering
+// the old language. Bare "/lang" stays on exec (it only lists).
+func TestTUILangSwitchInline(t *testing.T) {
+	r := &repl{loc: i18n.English, cfg: &config.Config{}, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	m := newTUIModel(r)
+	m.mode = modeIdle
+	m.width = 100
+	m.height = 30
+	m.loc = i18n.English
+
+	next, _ := m.submit("/lang zh")
+	m = next.(tuiModel)
+	if m.mode == modeExec {
+		t.Fatal("/lang <code> must not run on the exec goroutine")
+	}
+	if r.loc != i18n.ChineseSimp || m.loc != i18n.ChineseSimp {
+		t.Fatalf("/lang zh should switch both locales, got r=%q m=%q", r.loc, m.loc)
+	}
+
+	next, _ = m.submit("/lang klingon")
+	m = next.(tuiModel)
+	if m.loc != i18n.ChineseSimp || r.loc != i18n.ChineseSimp {
+		t.Fatal("a bad locale must not move the language")
+	}
+
+	// Bare "/lang" lists locales through exec — it writes nothing.
+	m = submitAndPump(t, m, "/lang")
+	if m.mode != modeIdle {
+		t.Fatalf("bare /lang should complete through exec, got %v", m.mode)
+	}
+}
+
 // wizardSelect moves the provider picker's highlight onto id, so the tests
 // stay independent of the catalogue's ordering.
 func wizardSelect(m tuiModel, id string) tuiModel {

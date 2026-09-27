@@ -157,9 +157,10 @@ func (e *Engine) reportTaskOutcome(ctx context.Context, client *entry.Client, tu
 	if client == nil {
 		client = e.client.Load()
 	}
+	loc, _ := e.localeNow()
 	t := append(append([]entry.Turn{}, turns...),
-		entry.Turn{Role: "assistant", Content: taskDispatchNote(spec, e.locale)},
-		entry.Turn{Role: "user", Content: taskObservation(res, e.locale)},
+		entry.Turn{Role: "assistant", Content: taskDispatchNote(spec, loc)},
+		entry.Turn{Role: "user", Content: taskObservation(res, loc)},
 	)
 	out, err := entry.ClassifyTurns(ctx, client, devices, conversationMemory, t, opts...)
 	if err != nil {

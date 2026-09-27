@@ -405,7 +405,7 @@ func runDaemon(args []string) {
 	hermes := memory.NewHermesWithLimits(cfg.Storage.MemoryPath, limits)
 	projects := memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, limits)
 	daily := memory.NewDaily(hermes.WarmDir())
-	skillStore := skills.NewStore(cfg.Storage.SkillsPath)
+	skillStore := skills.NewStore(skillsPathFor(cfg))
 	_ = skillStore.EnsureBuiltins()
 	coreNode.SetMemoryStores(
 		memory.NewInjector(hermes, projects),

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
@@ -19,11 +20,17 @@ import (
 // limits the daemon enforces — the console counter and the store can never
 // disagree.
 func (h *handler) memoryHermes() *memory.Hermes {
-	return memory.NewHermesWithLimits(h.cfg.Storage.MemoryPath, memory.Limits{
-		User:    h.cfg.Memory.Limits.User,
-		Memory:  h.cfg.Memory.Limits.Memory,
-		Project: h.cfg.Memory.Limits.Project,
+	var memPath string
+	var limits memory.Limits
+	h.readCfg(func(c *config.Config) {
+		memPath = c.Storage.MemoryPath
+		limits = memory.Limits{
+			User:    c.Memory.Limits.User,
+			Memory:  c.Memory.Limits.Memory,
+			Project: c.Memory.Limits.Project,
+		}
 	})
+	return memory.NewHermesWithLimits(memPath, limits)
 }
 
 // topicJSON is the wire form of one topics/<name>.md file in GET /api/memory.
@@ -74,7 +81,12 @@ func (h *handler) getMemory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, errNoMemoryConfig)
 		return
 	}
-	root := h.cfg.Storage.MemoryPath
+	var root string
+	var limits config.MemoryLimitsConfig
+	h.readCfg(func(c *config.Config) {
+		root = c.Storage.MemoryPath
+		limits = c.Memory.Limits
+	})
 	hermes := h.memoryHermes()
 	topics := []topicJSON{}
 	if names, err := hermes.ListTopics(); err == nil {
@@ -90,9 +102,9 @@ func (h *handler) getMemory(w http.ResponseWriter, r *http.Request) {
 		"memory":        readFileCapped(filepath.Join(root, "MEMORY.md")),
 		"dreams":        readFileCapped(filepath.Join(root, "DREAMS.md")),
 		"time":          time.Now().Format(time.RFC3339),
-		"user_limit":    h.cfg.Memory.Limits.User,
-		"mem_limit":     h.cfg.Memory.Limits.Memory,
-		"project_limit": h.cfg.Memory.Limits.Project,
+		"user_limit":    limits.User,
+		"mem_limit":     limits.Memory,
+		"project_limit": limits.Project,
 		"topics":        topics,
 		"daily":         listDaily(hermes.WarmDir()),
 	}
@@ -105,13 +117,15 @@ var errNoMemoryConfig = &staticError{msg: "memory path not configured"}
 // its configured character cap. DREAMS.md is handled separately by
 // putMemory (free-form diary, byte cap).
 func (h *handler) memoryFileLimit(name string) (limit int, ok bool) {
-	switch name {
-	case "user":
-		return h.cfg.Memory.Limits.User, true
-	case "memory":
-		return h.cfg.Memory.Limits.Memory, true
-	}
-	return 0, false
+	h.readCfg(func(c *config.Config) {
+		switch name {
+		case "user":
+			limit, ok = c.Memory.Limits.User, true
+		case "memory":
+			limit, ok = c.Memory.Limits.Memory, true
+		}
+	})
+	return limit, ok
 }
 
 // decodeMemoryBody parses the shared {"content": "..."} edit body.
@@ -212,7 +226,8 @@ func (h *handler) putMemoryTopic(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	limit := h.cfg.Memory.Limits.Memory
+	var limit int
+	h.readCfg(func(c *config.Config) { limit = c.Memory.Limits.Memory })
 	mf := memory.ParseMem([]byte(content))
 	mf.Limit = limit
 	hermes := h.memoryHermes()

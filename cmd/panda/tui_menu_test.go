@@ -281,28 +281,29 @@ func TestMenuArgumentMode(t *testing.T) {
 }
 
 // TestArgMenuTabFillsAndEnterSubmits drives the key path end to end: typing
-// "/lang", Tab completes the command, the locale list opens, an arrow moves
-// the selection, Tab fills the candidate into the line, and Enter submits the
-// filled line as the command.
+// "/help", Tab completes the command, the command-name list opens, an arrow
+// moves the selection, Tab fills the candidate into the line, and Enter
+// submits the filled line as the command. (/lang was the original vehicle;
+// it now runs inline, so this test uses /help, which stays on exec.)
 func TestArgMenuTabFillsAndEnterSubmits(t *testing.T) {
 	m := newTestTUI(t)
 	m = step(m, tea.WindowSizeMsg{Width: 100, Height: 40})
-	for _, r := range "/lang" {
+	for _, r := range "/help" {
 		m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 	m = step(m, tea.KeyMsg{Type: tea.KeyTab}) // complete the command name
-	if m.ta.Value() != "/lang " {
-		t.Fatalf("tab should complete to %q, got %q", "/lang ", m.ta.Value())
+	if m.ta.Value() != "/help " {
+		t.Fatalf("tab should complete to %q, got %q", "/help ", m.ta.Value())
 	}
 	if !m.menu.active || !m.menu.argMode {
-		t.Fatalf("the locale list should be open after the command completes, active=%v arg=%v", m.menu.active, m.menu.argMode)
+		t.Fatalf("the command list should be open after the command completes, active=%v arg=%v", m.menu.active, m.menu.argMode)
 	}
-	if len(m.menu.items) != len(localeCodeList()) {
-		t.Fatalf("expected the locale candidates, got %d", len(m.menu.items))
+	if len(m.menu.items) != len(commandNames()) {
+		t.Fatalf("expected the command-name candidates, got %d", len(m.menu.items))
 	}
 	// Arrow to the second candidate, then Tab it into the line.
 	m = step(m, tea.KeyMsg{Type: tea.KeyDown})
-	want := "/lang " + m.menu.items[m.menu.sel].name + " "
+	want := "/help " + m.menu.items[m.menu.sel].name + " "
 	m = step(m, tea.KeyMsg{Type: tea.KeyTab})
 	if m.ta.Value() != want {
 		t.Fatalf("tab should fill %q, got %q", want, m.ta.Value())

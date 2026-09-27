@@ -34,7 +34,7 @@ func shouldUseTUI(r *repl) bool {
 // enabled only when mouseScroll is active (via config, PANDA_MOUSE, or ctrl+t).
 func runTUI(r *repl) {
 	if c := loadConvo(); len(c) > 0 {
-		r.convo = c
+		r.setConvo(c)
 	}
 	// Bubble Tea owns the terminal now: any classic path that still reached the
 	// raw line editor (a y/N confirm, the interrupt watcher, the history list)

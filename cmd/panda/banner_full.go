@@ -2,6 +2,8 @@
 
 package main
 
+import "github.com/Xustalis/OpenPanda/internal/config"
+
 // printBanner draws the startup screen: the OpenPanda wordmark in figlet
 // lettering, then version/workdir info and orientation hints.
 func (r *repl) printBanner() {
@@ -10,5 +12,8 @@ func (r *repl) printBanner() {
 	if w <= 0 {
 		w = 80
 	}
-	r.outln(renderWelcomeBanner(r.cfg, r.loc, w, th, r.activityCounts()))
+	activity := r.activityCounts()
+	var banner string
+	r.readConfig(func(c *config.Config) { banner = renderWelcomeBanner(c, r.loc, w, th, activity) })
+	r.outln(banner)
 }

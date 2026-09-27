@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/cliui"
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	tea "github.com/charmbracelet/bubbletea"
@@ -74,11 +75,11 @@ func hubInstalledSet(store *skills.Store) map[string]bool {
 // hubStore opens the on-disk skills store the hub installs into — the same
 // path /skill and the injector use.
 func (m tuiModel) hubStore() *skills.Store {
-	p := ""
-	if m.r != nil && m.r.cfg != nil {
-		p = m.r.cfg.Storage.SkillsPath
+	var cfg *config.Config
+	if m.r != nil {
+		cfg = m.r.cfg
 	}
-	return skills.NewStore(p)
+	return skills.NewStore(skillsPathFor(cfg))
 }
 
 // hubURL reads the configured hub endpoint; "" means "curated only".

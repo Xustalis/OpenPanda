@@ -558,8 +558,12 @@ func (m tuiModel) wizardBack() (tuiModel, tea.Cmd) {
 	}
 	// Provider step Esc: back to the panel when a register exists, otherwise
 	// the wizard was the only way forward and Esc means "not now".
-	hasModels := m.r != nil && m.r.cfg != nil &&
-		(m.r.cfg.Model.BaseURL != "" || m.r.cfg.Model.Provider != "" || len(m.r.cfg.Models) > 0)
+	var hasModels bool
+	if m.r != nil {
+		m.r.readConfig(func(c *config.Config) {
+			hasModels = c.Model.BaseURL != "" || c.Model.Provider != "" || len(c.Models) > 0
+		})
+	}
 	if hasModels {
 		return m.openModelPanel()
 	}

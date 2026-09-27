@@ -116,10 +116,10 @@ func newMgmtTestEngine(t *testing.T) (*Engine, *entry.Registry) {
 		cfg:      cfg,
 		db:       db,
 		cardPath: cardPath,
-		sched:    sched,
 		schedCtx: context.Background(),
 		remind:   rem,
 	}
+	e.sched.Store(sched)
 	e.registry = buildToolRegistry(e, memory.NewHermes(t.TempDir()), nil, rem)
 	return e, e.registry
 }
@@ -852,21 +852,23 @@ func TestCardAgentAddAutoInit(t *testing.T) {
 	}
 
 	// Verify scheduler was dynamically initialized and holds the agent
-	if e.sched == nil {
+	sched := e.sched.Load()
+	if sched == nil {
 		t.Fatalf("expected scheduler to be dynamically initialized after card_agent_add")
 	}
-	if _, ok := e.sched.Card().Agents["brand_new_agent"]; !ok {
-		t.Fatalf("brand_new_agent not found in scheduler card: %v", e.sched.Card().Agents)
+	if _, ok := sched.Card().Agents["brand_new_agent"]; !ok {
+		t.Fatalf("brand_new_agent not found in scheduler card: %v", sched.Card().Agents)
 	}
 
 	// Verify tryAutoInitScheduler works if scheduler is cleared
-	e.sched = nil
+	e.sched.Store(nil)
 	e.tryAutoInitScheduler()
-	if e.sched == nil {
+	sched = e.sched.Load()
+	if sched == nil {
 		t.Fatalf("expected tryAutoInitScheduler to recreate scheduler")
 	}
-	if _, ok := e.sched.Card().Agents["brand_new_agent"]; !ok {
-		t.Fatalf("brand_new_agent missing after tryAutoInitScheduler: %v", e.sched.Card().Agents)
+	if _, ok := sched.Card().Agents["brand_new_agent"]; !ok {
+		t.Fatalf("brand_new_agent missing after tryAutoInitScheduler: %v", sched.Card().Agents)
 	}
 }
 

@@ -3,8 +3,11 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -19,6 +22,7 @@ func newSessionTUI(t *testing.T) (tuiModel, *sessions.Store) {
 	t.Helper()
 	st := sessions.NewStore(t.TempDir())
 	r := &repl{loc: i18n.Locale("en"), cfg: &config.Config{}, interactive: true, sessionsSt: st}
+	r.cfg.Storage.SkillsPath = t.TempDir()
 	return newTUIModel(r), st
 }
 
@@ -134,6 +138,32 @@ func TestCommitPersistsIntoSession(t *testing.T) {
 	}
 	if len(got.Turns) != 2 || got.Turns[1].Ref != "t-1" || got.Turns[1].Kind != "task" {
 		t.Fatalf("task turn not linked: %+v", got.Turns)
+	}
+}
+
+// TestCommitCountsCost is the /cost regression: a committed TUI turn must
+// accumulate into the same session counters the classic ask loop updates —
+// before the shared funnel the TUI's /cost always reported "no usage yet".
+func TestCommitCountsCost(t *testing.T) {
+	m, _ := newSessionTUI(t)
+	m.r.activeSess = "" // bare mode: convo path, same counters either way
+	m.pendingPrompt = "hi"
+
+	next, _ := m.commit(&askengine.Result{
+		Kind: "answer", OK: true, Answer: "hello",
+		InputTokens: 1000, OutputTokens: 200, Latency: 2 * time.Second, Cost: 0.001,
+	})
+	m = next.(tuiModel)
+
+	if m.r.costTurns != 1 || m.r.costIn != 1000 || m.r.costOut != 200 {
+		t.Fatalf("commit did not charge the session: %+v",
+			map[string]any{"turns": m.r.costTurns, "in": m.r.costIn, "out": m.r.costOut})
+	}
+	var buf bytes.Buffer
+	m.r.dispatchWithIO(context.Background(), "/cost", strings.NewReader(""), &buf, &buf)
+	out := buf.String()
+	if !strings.Contains(out, "1k") || !strings.Contains(out, "$0.0010") {
+		t.Fatalf("/cost should report the committed turn's tokens and cost, got %q", out)
 	}
 }
 

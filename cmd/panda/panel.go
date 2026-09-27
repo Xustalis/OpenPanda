@@ -918,7 +918,7 @@ func runMetrics(args []string) {
 		return
 	}
 
-	printMetricsTable(i18n.Detect(), metrics)
+	printMetricsTableTo(os.Stdout, i18n.Detect(), metrics)
 }
 
 // metricsListLimit caps the human listing at one screen of recent delegations.
@@ -931,8 +931,15 @@ const metricsListLimit = 20
 // is delegation working, and how fast — so it leads, and the rows are the
 // evidence under it.
 func printMetricsTable(loc i18n.Locale, metrics []core.DelegationMetric) {
+	printMetricsTableTo(os.Stdout, loc, metrics)
+}
+
+// printMetricsTableTo is printMetricsTable with the destination injected, so
+// the REPL (and the TUI exec pump behind it) can render the same table into
+// its transcript instead of the process stream.
+func printMetricsTableTo(w io.Writer, loc i18n.Locale, metrics []core.DelegationMetric) {
 	p := pal()
-	fmt.Println(p.Muted(metricsSummary(loc, metrics)))
+	fmt.Fprintln(w, p.Muted(metricsSummary(loc, metrics)))
 
 	shown := metrics
 	if len(shown) > metricsListLimit {
@@ -945,7 +952,7 @@ func printMetricsTable(loc i18n.Locale, metrics []core.DelegationMetric) {
 	routeW = min(routeW, max(24, listWidth()-42))
 	const whenW, okW, latW, tokW = 16, 4, 9, 8
 
-	fmt.Println(listHeader(
+	fmt.Fprintln(w, listHeader(
 		cell(i18n.T(loc, "cli.col.when"), whenW),
 		cell(i18n.T(loc, "cli.col.route"), routeW),
 		cell(i18n.T(loc, "cli.col.ok"), okW),
@@ -964,7 +971,7 @@ func printMetricsTable(loc i18n.Locale, metrics []core.DelegationMetric) {
 				tokens += fmt.Sprintf(" ($%.4f)", m.Cost.Float64)
 			}
 		}
-		fmt.Println(row(
+		fmt.Fprintln(w, row(
 			cell(time.Unix(m.CreatedAt, 0).Format("01-02 15:04:05"), whenW),
 			cell(metricRoute(m), routeW),
 			styledCell(mark, okW, tint),
@@ -973,7 +980,7 @@ func printMetricsTable(loc i18n.Locale, metrics []core.DelegationMetric) {
 		))
 	}
 	if hidden := len(metrics) - len(shown); hidden > 0 {
-		fmt.Println(p.Muted(i18n.Tf(loc, "cli.metrics.more", "n", strconv.Itoa(hidden))))
+		fmt.Fprintln(w, p.Muted(i18n.Tf(loc, "cli.metrics.more", "n", strconv.Itoa(hidden))))
 	}
 }
 

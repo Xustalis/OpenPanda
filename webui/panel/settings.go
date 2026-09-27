@@ -85,24 +85,30 @@ func (h *handler) putModelSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if h.configPath != "" {
-		if err := config.UpdateModelSection(h.configPath, mc); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-	}
 	// Keep the live config in sync: GET falls back to it without an engine,
-	// and a holder reload builds the next engine from it.
-	if h.cfg != nil {
-		h.cfg.Model = mc
+	// and a holder reload builds the next engine from it. The file persist
+	// runs inside the mutation lock — a concurrent save on another endpoint
+	// would otherwise interleave the config.yaml read-modify-write into a
+	// lost update. With a live engine SetModel writes cfg.Model under the
+	// engine lock; mutateCfgErr repeats the write through the same lock —
+	// and covers the engineless path where the config is the only place the
+	// saved model lives.
+	if err := h.mutateCfgErr(func(c *config.Config) error {
+		if h.configPath != "" {
+			if err := config.UpdateModelSection(h.configPath, mc); err != nil {
+				return err
+			}
+		}
+		c.Model = mc
+		return nil
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
 	}
 	if eng := h.currentEngine(); eng != nil {
 		if err := eng.SetModel(mc); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
-		}
-		if cfg := eng.Config(); cfg != nil {
-			cfg.Model = mc
 		}
 	} else if h.engines != nil {
 		// Zero-config start, first model saved: hot-load the engine now.
@@ -179,8 +185,8 @@ func (h *handler) getMCPSettings(w http.ResponseWriter, r *http.Request) {
 	eng := h.currentEngine()
 	if eng != nil {
 		cmd = eng.MCPCommand()
-	} else if h.cfg != nil {
-		cmd = h.cfg.MCP.Command
+	} else {
+		h.readCfg(func(c *config.Config) { cmd = c.MCP.Command })
 	}
 	writeJSON(w, mcpSettingsJSON{Command: cmd, FromCfg: eng == nil})
 }
@@ -217,9 +223,7 @@ func (h *handler) putMCPSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if h.cfg != nil {
-		h.cfg.MCP.Command = cmd
-	}
+	h.mutateCfg(func(c *config.Config) { c.MCP.Command = cmd })
 	writeJSON(w, mcpSettingsJSON{Command: cmd})
 }
 
@@ -229,10 +233,9 @@ func (h *handler) engineModel() config.ModelConfig {
 	if eng := h.currentEngine(); eng != nil {
 		return eng.ModelConfig()
 	}
-	if h.cfg != nil {
-		return h.cfg.Model
-	}
-	return config.Default().Model
+	mc := config.Default().Model
+	h.readCfg(func(c *config.Config) { mc = c.Model })
+	return mc
 }
 
 func normalizeAPIType(v string) string {

@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 )
 
@@ -76,6 +78,16 @@ var taskStates = []string{
 // endpoint, which /model owns.
 var replConfigSections = []string{"injection", "approval", "limits", "routing", "mcp"}
 
+// cardSetFields are the scalar fields `/card set` accepts (cardSet's usage
+// line), so the argument menu can offer them instead of making the user
+// re-read the help.
+var cardSetFields = []string{
+	"device", "resource_class", "chip",
+	"capacity.cpu_cores", "capacity.ram_gb", "capacity.max_concurrent_tasks",
+	"resource_profile.cpu", "resource_profile.ram_gb",
+	"resource_profile.gpu_vram_gb", "resource_profile.duration_hint",
+}
+
 // argCandidates resolves the candidate list for the argument under the cursor.
 // cmd is the slash command without its "/", args are the arguments typed so
 // far with the last element the partial token being completed (possibly "").
@@ -87,7 +99,17 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 		section = args[0]
 	}
 	switch cmd {
-	case "task", "logs", "cancel":
+	case "task":
+		if len(args) == 1 {
+			return append(r.taskIDs(""), "add", "priority", "move", "delete")
+		}
+		if len(args) == 2 {
+			switch args[0] {
+			case "priority", "prio", "move", "delete", "del", "rm":
+				return r.taskIDs("")
+			}
+		}
+	case "logs", "cancel", "delete":
 		if len(args) == 1 {
 			return r.taskIDs("")
 		}
@@ -99,7 +121,84 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 		}
 	case "tasks":
 		if len(args) == 1 {
-			return append(append([]string{}, taskStates...), "watch")
+			return append(append([]string{}, taskStates...), "watch", "clear")
+		}
+		if len(args) == 2 {
+			switch args[0] {
+			case "clear":
+				return []string{"--yes"}
+			case "watch", "-w":
+				return append([]string{}, taskStates...)
+			default:
+				if slices.Contains(taskStates, args[0]) {
+					return []string{"watch"}
+				}
+			}
+		}
+	case "nodes":
+		if len(args) == 1 {
+			return []string{"add", "disconnect", "invite", "remove"}
+		}
+		if len(args) == 2 {
+			switch args[0] {
+			case "remove", "rm":
+				return r.nodeIDs()
+			case "disconnect", "dc":
+				var peers []string
+				r.readConfig(func(c *config.Config) { peers = append([]string{}, c.Network.Peers...) })
+				return peers
+			}
+		}
+	case "card":
+		if len(args) == 1 {
+			return []string{"native", "agent", "manual", "set", "rescan"}
+		}
+		if len(args) == 2 {
+			switch args[0] {
+			case "native", "agent", "agents", "manual":
+				return []string{"add", "remove", "set"}
+			case "set":
+				return cardSetFields
+			case "rescan", "scan", "refresh":
+				return []string{"--write"}
+			}
+		}
+	case "approval":
+		if len(args) == 1 {
+			return []string{"clear", "mode", "scope"}
+		}
+		if len(args) == 2 {
+			switch args[0] {
+			case "mode":
+				return []string{"inherit", "never", "on-request", "always"}
+			case "scope":
+				return []string{"once", "session", "project"}
+			}
+		}
+	case "session", "sessions":
+		if len(args) == 1 {
+			return append(r.sessionIDs(), "list", "new", "show", "mv", "rm", "diff", "merge")
+		}
+		if len(args) == 2 {
+			switch args[0] {
+			case "show", "mv", "rm", "diff", "merge":
+				return r.sessionIDs()
+			}
+		}
+	case "audit":
+		if len(args) == 1 {
+			return []string{"verify", "entries"}
+		}
+		if len(args) == 2 {
+			return r.taskIDs("")
+		}
+	case "metrics":
+		if len(args) == 1 {
+			return []string{"--csv"}
+		}
+	case "reminder", "reminders":
+		if len(args) == 1 {
+			return []string{"list", "add", "rm"}
 		}
 	case "resume":
 		if len(args) == 1 {
@@ -124,9 +223,9 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 	case "memory":
 		switch len(args) {
 		case 1:
-			return []string{"get"}
+			return []string{"get", "set", "rm"}
 		case 2:
-			if section == "get" {
+			if section == "get" || section == "set" || section == "rm" {
 				return r.memoryTargets()
 			}
 		}
@@ -166,18 +265,20 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 				seen[v] = true
 			}
 			if r.cfg != nil {
-				for _, m := range r.cfg.Models {
-					alias := m.Alias()
-					if alias != "" && !seen[alias] {
-						seen[alias] = true
-						out = append(out, alias)
+				r.readConfig(func(c *config.Config) {
+					for _, m := range c.Models {
+						alias := m.Alias()
+						if alias != "" && !seen[alias] {
+							seen[alias] = true
+							out = append(out, alias)
+						}
 					}
-				}
-				active := r.cfg.Model.Alias()
-				if active != "" && !seen[active] {
-					seen[active] = true
-					out = append(out, active)
-				}
+					active := c.Model.Alias()
+					if active != "" && !seen[active] {
+						seen[active] = true
+						out = append(out, active)
+					}
+				})
 			}
 			return out
 		}
@@ -193,26 +294,30 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 				var aliases []string
 				seen := make(map[string]bool)
 				if r.cfg != nil {
-					for _, m := range r.cfg.Models {
-						alias := m.Alias()
-						if alias != "" && !seen[alias] {
-							seen[alias] = true
-							aliases = append(aliases, alias)
+					r.readConfig(func(c *config.Config) {
+						for _, m := range c.Models {
+							alias := m.Alias()
+							if alias != "" && !seen[alias] {
+								seen[alias] = true
+								aliases = append(aliases, alias)
+							}
 						}
-					}
+					})
 				}
 				return aliases
 			case "fetch", "models":
 				var candidates []string
 				seen := make(map[string]bool)
 				if r.cfg != nil {
-					for _, m := range r.cfg.Models {
-						alias := m.Alias()
-						if alias != "" && !seen[alias] {
-							seen[alias] = true
-							candidates = append(candidates, alias)
+					r.readConfig(func(c *config.Config) {
+						for _, m := range c.Models {
+							alias := m.Alias()
+							if alias != "" && !seen[alias] {
+								seen[alias] = true
+								candidates = append(candidates, alias)
+							}
 						}
-					}
+					})
 				}
 				for _, p := range providers.All() {
 					if !seen[p.ID] {
@@ -325,6 +430,29 @@ func (r *repl) sessionIDs() []string {
 		ids = append(ids, s.ID)
 	}
 	return r.sessionCache.put("sessions", ids)
+}
+
+// nodeIDs lists the capability-directory ids `/nodes remove` accepts — every
+// known node except the online ones (removal refuses those anyway), so the
+// menu only ever offers ids that can actually be dropped.
+func (r *repl) nodeIDs() []string {
+	if r.db == nil {
+		return nil
+	}
+	if v, ok := r.nodeCache.get("nodes"); ok {
+		return v
+	}
+	nodes, err := ledger.Query(r.db, "", "")
+	if err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		if n.Status != "online" {
+			ids = append(ids, n.ID)
+		}
+	}
+	return r.nodeCache.put("nodes", ids)
 }
 
 func (r *repl) projectNames() []string {

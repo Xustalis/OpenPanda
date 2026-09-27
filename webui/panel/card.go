@@ -338,10 +338,9 @@ func (h *handler) cardPath() string {
 	if eng := h.currentEngine(); eng != nil && eng.CardPath() != "" {
 		return eng.CardPath()
 	}
-	if h.cfg != nil && h.cfg.EffectiveCardPath() != "" {
-		return h.cfg.EffectiveCardPath()
-	}
-	return ""
+	path := ""
+	h.readCfg(func(c *config.Config) { path = c.EffectiveCardPath() })
+	return path
 }
 
 // nodesAddRequest is the body of POST /api/nodes/add.
@@ -393,39 +392,47 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secret := h.cfg.Network.SharedSecret
-	generated := false
-	if secret == "" {
-		var err error
-		secret, err = generatePanelSecret()
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, errors.New("generate shared secret failed"))
-			return
-		}
-		generated = true
-	}
-
+	// Read-check, mutate, and persist ride one critical section: the peers
+	// contains-check outside the lock was check-then-act, and
+	// UpdateNetworkSection rewrites the whole section — a concurrent save
+	// between the two calls used to lose one side.
+	var secret, listenAddr string
+	var generated bool
 	added := true
-	peers := slices.Clone(h.cfg.Network.Peers)
-	if slices.Contains(peers, req.Addr) {
-		added = false
-	} else {
-		peers = append(peers, req.Addr)
-	}
-	if h.configPath != "" {
-		if err := config.UpdateNetworkSection(h.configPath, config.NetworkConfig{
-			ListenAddr:   h.cfg.Network.ListenAddr,
-			SharedSecret: secret,
-			Peers:        peers,
-		}); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
+	err := h.mutateCfgErr(func(c *config.Config) error {
+		listenAddr = c.Network.ListenAddr
+		secret = c.Network.SharedSecret
+		if secret == "" {
+			var err error
+			secret, err = generatePanelSecret()
+			if err != nil {
+				return errors.New("generate shared secret failed")
+			}
+			generated = true
 		}
+		peers := slices.Clone(c.Network.Peers)
+		if slices.Contains(peers, req.Addr) {
+			added = false
+		} else {
+			peers = append(peers, req.Addr)
+		}
+		if h.configPath != "" {
+			if err := config.UpdateNetworkSection(h.configPath, config.NetworkConfig{
+				ListenAddr:   c.Network.ListenAddr,
+				SharedSecret: secret,
+				Peers:        peers,
+			}); err != nil {
+				return err
+			}
+		}
+		c.Network.Peers = peers
+		c.Network.SharedSecret = secret
+		return nil
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
 	}
-	// Keep the live config in sync so a follow-up add sees the new peer and
-	// the engine holder's next rebuild dials it too.
-	h.cfg.Network.Peers = peers
-	h.cfg.Network.SharedSecret = secret
 
 	// Live dial when an engine is up — the web twin of /nodes add's
 	// dial-on-add. A failed dial is not a failed add: the peer is
@@ -440,7 +447,7 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	listen := h.cfg.Network.ListenAddr
+	listen := listenAddr
 	if host, port, err := net.SplitHostPort(listen); err == nil && host == "" {
 		listen = "<this-machine>" + port
 	}

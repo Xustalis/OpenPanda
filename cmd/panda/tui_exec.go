@@ -125,4 +125,37 @@ func isBareCommand(text string) bool {
 	return strings.HasPrefix(text, "/") || strings.HasPrefix(text, "!")
 }
 
+// screenMarker is the cursor-home escape a repainting writer (watchQueueTo's
+// "/tasks watch" board) emits between frames.
+const screenMarker = "\x1b[H"
+
+// latestFrame returns the text after the stream's last repaint marker — for a
+// watch board that is the current frame, which is all the live region should
+// draw. Output with no marker passes through untouched.
+func latestFrame(out string) string {
+	if i := strings.LastIndex(out, screenMarker); i >= 0 {
+		return out[i+len(screenMarker):]
+	}
+	return out
+}
+
+// commitFrame folds a finished repaint stream into the one frame the
+// transcript keeps: without it, "/tasks watch" commits every 2s snapshot as a
+// single concatenated block. The exit sequence repaints once more only to
+// wipe ("\x1b[0m\x1b[H\x1b[J" + the exited line), so a tail shaped like
+// cleanup folds the previous real frame back in — the board's end state plus
+// the "exited" line. Anything that never repainted twice is ordinary output
+// and passes through whole.
+func commitFrame(out string) string {
+	segs := strings.Split(out, screenMarker)
+	if len(segs) < 3 {
+		return out
+	}
+	last := segs[len(segs)-1]
+	if strings.HasPrefix(last, "\x1b[J") || strings.HasPrefix(last, "\x1b[2J") {
+		return segs[len(segs)-2] + last
+	}
+	return last
+}
+
 var _ io.Writer = (*commandExec)(nil)

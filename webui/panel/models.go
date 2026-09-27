@@ -14,6 +14,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -99,9 +100,9 @@ func modelEntryOf(mc config.ModelConfig, active config.ModelConfig) modelEntryJS
 func (h *handler) listModels(w http.ResponseWriter, r *http.Request) {
 	active := h.engineModel()
 	var models []config.ModelConfig
-	if h.cfg != nil {
-		models = h.cfg.Models
-	}
+	h.readCfg(func(c *config.Config) {
+		models = slices.Clone(c.Models)
+	})
 	out := make([]modelEntryJSON, 0, len(models)+1)
 	out = append(out, modelEntryOf(active, active))
 	for _, m := range models {
@@ -192,12 +193,14 @@ func (h *handler) addModel(w http.ResponseWriter, r *http.Request) {
 		// Avoid silently overwriting a same-named entry that points at a
 		// different model — derive the alias from the model id instead.
 		if mc.Model != "" {
-			for _, existing := range h.cfg.Models {
-				if existing.Alias() == alias && existing.Model != mc.Model {
-					alias = mc.Model
-					break
+			h.readCfg(func(c *config.Config) {
+				for _, existing := range c.Models {
+					if existing.Alias() == alias && existing.Model != mc.Model {
+						alias = mc.Model
+						break
+					}
 				}
-			}
+			})
 		}
 	}
 	mc.Name = alias
@@ -207,25 +210,38 @@ func (h *handler) addModel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	replaced := false
-	for i := range h.cfg.Models {
-		if h.cfg.Models[i].Alias() == alias {
-			h.cfg.Models[i] = mc
-			replaced = true
-			break
+	var models []config.ModelConfig
+	err := h.mutateCfgErr(func(c *config.Config) error {
+		replaced := false
+		for i := range c.Models {
+			if c.Models[i].Alias() == alias {
+				c.Models[i] = mc
+				replaced = true
+				break
+			}
 		}
-	}
-	if !replaced {
-		h.cfg.Models = append(h.cfg.Models, mc)
-	}
-	if h.configPath != "" {
-		if err := config.UpdateModelsSection(h.configPath, h.cfg.Models); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
+		if !replaced {
+			c.Models = append(c.Models, mc)
 		}
+		models = slices.Clone(c.Models)
+		// Persist inside the lock: UpdateModelsSection rewrites the whole
+		// models block, and an unlocked gap would let a concurrent save
+		// read-modify-write over this change.
+		if h.configPath != "" {
+			return config.UpdateModelsSection(h.configPath, models)
+		}
+		return nil
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
 	}
 	// No active model at all → make the fresh one active so the first ask works.
-	if h.cfg.Model.BaseURL == "" && h.cfg.Model.Provider == "" && h.cfg.Model.Model == "" {
+	var noActive bool
+	h.readCfg(func(c *config.Config) {
+		noActive = c.Model.BaseURL == "" && c.Model.Provider == "" && c.Model.Model == ""
+	})
+	if noActive {
 		if err := h.applyModelConfig(mc); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
@@ -242,19 +258,33 @@ func (h *handler) useModel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("config not loaded"))
 		return
 	}
-	if h.cfg.Model.Alias() == name && (h.cfg.Model.Model != "" || h.cfg.Model.Provider != "") {
-		writeJSON(w, modelEntryOf(h.cfg.Model, h.cfg.Model))
-		return
-	}
-	for _, m := range h.cfg.Models {
-		if m.Alias() == name || m.Model == name {
-			if err := h.applyModelConfig(m); err != nil {
-				writeErr(w, http.StatusInternalServerError, err)
-				return
-			}
-			writeJSON(w, modelEntryOf(m, h.engineModel()))
+	var active, match config.ModelConfig
+	isActive := false
+	h.readCfg(func(c *config.Config) {
+		active = c.Model
+		if c.Model.Alias() == name && (c.Model.Model != "" || c.Model.Provider != "") {
+			match = c.Model
+			isActive = true
 			return
 		}
+		for _, m := range c.Models {
+			if m.Alias() == name || m.Model == name {
+				match = m
+				return
+			}
+		}
+	})
+	if isActive {
+		writeJSON(w, modelEntryOf(active, active))
+		return
+	}
+	if match.Model != "" || match.Provider != "" {
+		if err := h.applyModelConfig(match); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, modelEntryOf(match, h.engineModel()))
+		return
 	}
 	writeErr(w, http.StatusNotFound, errors.New("no such model"))
 }
@@ -269,21 +299,38 @@ func (h *handler) removeModel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("config not loaded"))
 		return
 	}
-	for i, m := range h.cfg.Models {
-		if m.Alias() != name && m.Model != name {
-			continue
-		}
-		if m.Alias() == h.cfg.Model.Alias() {
-			writeErr(w, http.StatusConflict, errors.New("model is active — switch first"))
-			return
-		}
-		h.cfg.Models = append(h.cfg.Models[:i], h.cfg.Models[i+1:]...)
-		if h.configPath != "" {
-			if err := config.UpdateModelsSection(h.configPath, h.cfg.Models); err != nil {
-				writeErr(w, http.StatusInternalServerError, err)
-				return
+	found, isActive := false, false
+	var models []config.ModelConfig
+	err := h.mutateCfgErr(func(c *config.Config) error {
+		for i, m := range c.Models {
+			if m.Alias() != name && m.Model != name {
+				continue
 			}
+			found = true
+			if m.Alias() == c.Model.Alias() {
+				isActive = true
+				return nil
+			}
+			c.Models = append(c.Models[:i:i], c.Models[i+1:]...)
+			models = slices.Clone(c.Models)
+			// Persist inside the lock — the whole models block is rewritten,
+			// so a concurrent save between memory and file would lose one.
+			if h.configPath != "" {
+				return config.UpdateModelsSection(h.configPath, models)
+			}
+			return nil
 		}
+		return nil
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if isActive {
+		writeErr(w, http.StatusConflict, errors.New("model is active — switch first"))
+		return
+	}
+	if found {
 		writeJSON(w, map[string]any{"removed": name})
 		return
 	}
@@ -312,17 +359,24 @@ func (h *handler) resolveModelRef(req modelRefRequest) (config.ModelConfig, bool
 	if req.Alias == "" && req.Provider == "" {
 		return h.engineModel(), true
 	}
-	if h.cfg != nil {
-		if req.Alias != "" {
-			if (h.cfg.Model.Alias() == req.Alias || h.cfg.Model.Model == req.Alias) &&
-				(h.cfg.Model.Model != "" || h.cfg.Model.Provider != "") {
-				return h.cfg.Model, true
+	if req.Alias != "" {
+		var match config.ModelConfig
+		found := false
+		h.readCfg(func(c *config.Config) {
+			if (c.Model.Alias() == req.Alias || c.Model.Model == req.Alias) &&
+				(c.Model.Model != "" || c.Model.Provider != "") {
+				match, found = c.Model, true
+				return
 			}
-			for _, m := range h.cfg.Models {
+			for _, m := range c.Models {
 				if m.Alias() == req.Alias || m.Model == req.Alias {
-					return m, true
+					match, found = m, true
+					return
 				}
 			}
+		})
+		if found {
+			return match, true
 		}
 	}
 	pid := firstNonEmpty(strings.TrimSpace(req.Provider), strings.TrimSpace(req.Alias))
@@ -415,18 +469,20 @@ func (h *handler) testModel(w http.ResponseWriter, r *http.Request) {
 // findProviderKey looks up an API key already configured for providerID —
 // the active model first, then the registry. Mirrors the REPL's helper.
 func (h *handler) findProviderKey(providerID string) string {
-	if h.cfg == nil {
-		return ""
-	}
-	if (effectiveProviderID(h.cfg.Model) == providerID || h.cfg.Model.Alias() == providerID) && h.cfg.Model.APIKey != "" {
-		return h.cfg.Model.APIKey
-	}
-	for _, m := range h.cfg.Models {
-		if (effectiveProviderID(m) == providerID || m.Alias() == providerID) && m.APIKey != "" {
-			return m.APIKey
+	key := ""
+	h.readCfg(func(c *config.Config) {
+		if (effectiveProviderID(c.Model) == providerID || c.Model.Alias() == providerID) && c.Model.APIKey != "" {
+			key = c.Model.APIKey
+			return
 		}
-	}
-	return ""
+		for _, m := range c.Models {
+			if (effectiveProviderID(m) == providerID || m.Alias() == providerID) && m.APIKey != "" {
+				key = m.APIKey
+				return
+			}
+		}
+	})
+	return key
 }
 
 // effectiveProviderID resolves a config's provider, falling back to
@@ -448,20 +504,23 @@ func (h *handler) applyModelConfig(mc config.ModelConfig) error {
 	if _, err := entry.NewClient(mc); err != nil {
 		return err
 	}
-	if h.configPath != "" {
-		if err := config.UpdateModelSection(h.configPath, mc); err != nil {
-			return err
+	// Same shape as putModelSettings: the persist and the shared-config write
+	// run in the same critical section (engineless saves still update what
+	// Reload builds from), then SetModel covers the live-engine client swap.
+	if err := h.mutateCfgErr(func(c *config.Config) error {
+		if h.configPath != "" {
+			if err := config.UpdateModelSection(h.configPath, mc); err != nil {
+				return err
+			}
 		}
-	}
-	if h.cfg != nil {
-		h.cfg.Model = mc
+		c.Model = mc
+		return nil
+	}); err != nil {
+		return err
 	}
 	if eng := h.currentEngine(); eng != nil {
 		if err := eng.SetModel(mc); err != nil {
 			return err
-		}
-		if cfg := eng.Config(); cfg != nil {
-			cfg.Model = mc
 		}
 	} else if h.engines != nil {
 		// Zero-config start, first model saved: hot-load the engine now.

@@ -78,7 +78,9 @@ func (e *Engine) approvalFor(sessionID, project string) approvalVerdict {
 		scope: projectstore.ScopeSession,
 	}
 	if e.cfg != nil {
+		e.cfgMu.RLock()
 		v.mode = e.cfg.Approval.NormalizedMode()
+		e.cfgMu.RUnlock()
 	}
 	if project != "" && e.projStore != nil {
 		if p, err := e.projStore.Get(project); err == nil {

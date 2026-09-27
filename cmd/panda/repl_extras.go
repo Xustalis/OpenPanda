@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/cliui"
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -48,22 +49,23 @@ func (r *repl) cmdClear(arg string) {
 // token counts when the provider reports them. A local endpoint that reports
 // no usage still gets a meaningful turn count and clock.
 func (r *repl) cmdCost(arg string) {
-	if r.costTurns == 0 {
+	turns, in, out, wall, usd := r.costNow()
+	if turns == 0 {
 		r.outln(i18n.T(r.loc, "repl.cost.none"))
 		return
 	}
 	p := pal()
 	r.outln(p.Heading(i18n.T(r.loc, "repl.cost.head") + ":"))
-	r.outf("  %-14s %d\n", i18n.T(r.loc, "repl.cost.turns"), r.costTurns)
-	r.outf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.wall"), cliui.HumanDuration(r.costWall))
-	if r.costIn+r.costOut == 0 {
+	r.outf("  %-14s %d\n", i18n.T(r.loc, "repl.cost.turns"), turns)
+	r.outf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.wall"), cliui.HumanDuration(wall))
+	if in+out == 0 {
 		r.outln("  " + p.Muted(i18n.T(r.loc, "repl.cost.noTokens")))
 		return
 	}
-	r.outf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.in"), cliui.HumanCount(r.costIn))
-	r.outf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.out"), cliui.HumanCount(r.costOut))
-	if r.costTotalUSD > 0 {
-		r.outf("  %-14s $%.4f\n", i18n.T(r.loc, "repl.cost.est"), r.costTotalUSD)
+	r.outf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.in"), cliui.HumanCount(in))
+	r.outf("  %-14s %s\n", i18n.T(r.loc, "repl.cost.out"), cliui.HumanCount(out))
+	if usd > 0 {
+		r.outf("  %-14s $%.4f\n", i18n.T(r.loc, "repl.cost.est"), usd)
 	}
 }
 
@@ -77,9 +79,9 @@ func (r *repl) cmdCost(arg string) {
 // from the timestamp and written to the CLI state dir (or the work dir when
 // there is none), and the path is printed so it can be opened straight away.
 func (r *repl) cmdExport(arg string) {
-	turns := r.convo
-	if r.activeSess != "" && r.sessionsSt != nil {
-		if s, err := r.sessionsSt.Get(r.activeSess); err == nil {
+	turns := r.convoNow()
+	if sid := r.sessID(); sid != "" && r.sessionsSt != nil {
+		if s, err := r.sessionsSt.Get(sid); err == nil {
 			turns = nil
 			for _, t := range s.Turns {
 				turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
@@ -94,13 +96,24 @@ func (r *repl) cmdExport(arg string) {
 	if path == "" {
 		dir := cliStateDir()
 		if dir == "" {
-			dir = r.cfg.Storage.WorkPath
+			r.readConfig(func(c *config.Config) {
+				if c != nil {
+					dir = c.Storage.WorkPath
+				}
+			})
 		}
 		path = filepath.Join(dir, "chat-"+time.Now().Format("20060102-150405")+".md")
 	}
 	var b strings.Builder
+	var nodeName, modelName string
+	r.readConfig(func(c *config.Config) {
+		if c != nil {
+			nodeName = c.Node.Name
+			modelName = c.Model.Model
+		}
+	})
 	fmt.Fprintf(&b, "# OpenPanda conversation\n\n_%s · node %s · model %s_\n",
-		time.Now().Format(time.RFC3339), r.cfg.Node.Name, orDash(r.cfg.Model.Model))
+		time.Now().Format(time.RFC3339), nodeName, orDash(modelName))
 	for _, t := range turns {
 		who := "You"
 		if t.Role != "user" {
@@ -138,8 +151,14 @@ func (r *repl) runShell(cmdline string) {
 	}
 	shell, flag := userShell()
 	cmd := exec.CommandContext(r.commandContext(), shell, flag, cmdline)
-	if r.cfg != nil {
-		cmd.Dir = r.cfg.Storage.WorkPath
+	var workPath string
+	r.readConfig(func(c *config.Config) {
+		if c != nil {
+			workPath = c.Storage.WorkPath
+		}
+	})
+	if workPath != "" {
+		cmd.Dir = workPath
 	}
 	cmd.Stdin = r.commandInput()
 	cmd.Stdout = r.commandOutput()
@@ -287,7 +306,7 @@ func countLines(s string) int {
 // every /project switch — one path, so the engine and the stored pointer cannot
 // drift apart.
 func (r *repl) bindProject() {
-	if r.engine == nil {
+	if r.engine.Load() == nil {
 		return
 	}
 	name := r.currentProject()
@@ -295,7 +314,7 @@ func (r *repl) bindProject() {
 		name, _ = r.projStore.Active()
 	}
 	if name == "" {
-		r.engine.SetProject("", "")
+		r.engine.Load().SetProject("", "")
 		return
 	}
 	dir := ""
@@ -304,7 +323,7 @@ func (r *repl) bindProject() {
 			dir = pr.WorkDir
 		}
 	}
-	r.engine.SetProject(name, dir)
+	r.engine.Load().SetProject(name, dir)
 }
 
 // activeProjectName is the project the REPL is in, for the footer and the TUI
@@ -348,7 +367,7 @@ func (r *repl) cmdProjectEnter(arg string) {
 		}
 		r.setProject("")
 		r.bindProject()
-		r.convo = loadConvo()
+		r.setConvo(loadConvo())
 		r.outln(i18n.T(r.loc, "cli.project.noActive"))
 		return
 	}
@@ -382,7 +401,7 @@ func (r *repl) cmdProjectEnter(arg string) {
 		r.outln(i18n.Tf(r.loc, "repl.project.created", "name", name))
 	}
 	r.bindProject()
-	r.convo = loadConvo()
+	r.setConvo(loadConvo())
 	r.outln(i18n.Tf(r.loc, "cli.project.entered", "name", name))
 }
 
@@ -390,13 +409,18 @@ func (r *repl) cmdProjectEnter(arg string) {
 func (r *repl) cmdVersion(arg string) {
 	p := pal()
 	r.outf("%s %s (%s/%s)\n", p.Bold("OpenPanda"), versionpkg.Display(), runtime.GOOS, runtime.GOARCH)
-	if r.cfg != nil {
-		if r.cfg.Node.Name != "" {
-			r.outf("  %-10s %s\n", i18n.T(r.loc, "repl.footer.node")+":", r.cfg.Node.Name)
+	var nodeName, modelName string
+	r.readConfig(func(c *config.Config) {
+		if c != nil {
+			nodeName = c.Node.Name
+			modelName = c.Model.Name
 		}
-		if r.cfg.Model.Name != "" {
-			r.outf("  %-10s %s\n", "model:", r.cfg.Model.Name)
-		}
+	})
+	if nodeName != "" {
+		r.outf("  %-10s %s\n", i18n.T(r.loc, "repl.footer.node")+":", nodeName)
+	}
+	if modelName != "" {
+		r.outf("  %-10s %s\n", "model:", modelName)
 	}
 }
 

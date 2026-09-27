@@ -293,7 +293,7 @@ func TestResumeApprovedAcceptsCompletedWorkWithoutScheduler(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("pause with result: %v", err)
 	}
-	e.sched = nil
+	e.sched.Store(nil)
 
 	res := e.ResumeApproved(ctx, task.TaskID, "", StreamCallbacks{})
 	if res.TaskState != core.StateDone || !res.OK {
@@ -325,7 +325,7 @@ func TestResumeApprovedAcceptsCompletedWorkWithEmptyResultJSON(t *testing.T) {
 			t.Fatalf("drive task: %v", err)
 		}
 	}
-	e.sched = nil
+	e.sched.Store(nil)
 
 	res := e.ResumeApproved(ctx, task.TaskID, "", StreamCallbacks{})
 	if res.TaskState != core.StateDone || !res.OK {

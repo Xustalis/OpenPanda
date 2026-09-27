@@ -95,13 +95,33 @@ type Engine struct {
 
 	// sched powers task execution once initialized — either eagerly from
 	// Options.CardPath/config or lazily on first use (tryAutoInitScheduler).
-	// schedMu serializes task submission: a submit may temporarily pin the
-	// core's work dir to a session worktree, which must not interleave.
+	// It is an atomic pointer because it is read from many goroutines that do
+	// not hold schedMu (CancelTask, DialPeer, per-ask submission checks) while
+	// the lazy init writes it under schedMu.
+	// schedMu serializes scheduler init/reload and task submission: a submit
+	// may temporarily pin the core's work dir to a session worktree, which
+	// must not interleave. schedCtx/schedCancel are init-time companions,
+	// only ever touched under schedMu.
 	// (Queue mode never swaps the global work dir — it travels per task.)
-	sched       *core.Core
+	sched       atomic.Pointer[core.Core]
 	schedMu     sync.Mutex
 	schedCtx    context.Context
 	schedCancel context.CancelFunc
+
+	// cardPath mirrors Options.CardPath: the capabilities.yaml the engine
+	// loaded its scheduler from, reported by the system_status tool. Lazy
+	// writes (checkCardPath, card reload) happen off the init path, so cardMu
+	// guards every access.
+	cardMu   sync.RWMutex
+	cardPath string
+
+	// cfgMu guards post-init mutation of the shared *config.Config: the REPL
+	// aliases it as r.cfg and rewrites hot fields (model, peers, approval
+	// mode, work path) from its own goroutines while ask/tool goroutines read
+	// them. Writers go through MutateConfig (or SetModel for the model);
+	// readers of mutable fields take the read lock. Fields that are immutable
+	// after New (node identity, storage roots) may be read unlocked.
+	cfgMu sync.RWMutex
 
 	// onReview is the embedder's "a task needs a human" hook (the panel's push
 	// notification). It lives on the engine rather than on one store instance
@@ -131,10 +151,10 @@ type Engine struct {
 	asyncPeers bool
 	// replyASCII mirrors Options.ReplyASCII (per-engine classify option).
 	replyASCII bool
-	// cardPath mirrors Options.CardPath: the capabilities.yaml the engine
-	// loaded its scheduler from, reported by the system_status tool.
-	cardPath string
-	// locale is the user's active UI/prompt locale.
+	// locale is the user's active UI/prompt locale. localeMu guards both
+	// fields: SetLocale runs on a front-end goroutine while ask/tool paths
+	// read them on engine goroutines.
+	localeMu       sync.Mutex
 	locale         i18n.Locale
 	explicitLocale bool
 
@@ -253,15 +273,75 @@ func (e *Engine) SetModel(mc config.ModelConfig) error {
 	}
 	c.SetDiskCache(entry.NewDiskCache(e.db))
 	e.client.Store(c)
+	// cfgMu covers both writes: the cfg.Model field the REPL's r.cfg aliases,
+	// and the Models registry buildFallbacks reads for fallbacks.
+	e.cfgMu.Lock()
 	e.cfg.Model = mc
 	e.fallbacksMu.Lock()
 	e.fallbacks = e.buildFallbacks(mc, e.db)
 	e.fallbacksMu.Unlock()
+	e.cfgMu.Unlock()
 	return nil
 }
 
 // ModelConfig returns the engine's current model configuration.
-func (e *Engine) ModelConfig() config.ModelConfig { return e.cfg.Model }
+func (e *Engine) ModelConfig() config.ModelConfig {
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
+	return e.cfg.Model
+}
+
+// MutateConfig applies fn to the engine's shared config under the write lock.
+// Front ends alias e.cfg (the REPL's r.cfg is the same pointer) and use this
+// for every post-init field write, so ask/tool goroutines reading those
+// fields under the read lock never observe a torn mutation.
+func (e *Engine) MutateConfig(fn func(*config.Config)) {
+	e.cfgMu.Lock()
+	defer e.cfgMu.Unlock()
+	if e.cfg != nil {
+		fn(e.cfg)
+	}
+}
+
+// MutateConfigErr is MutateConfig for fallible mutations — typically a
+// config-file persist paired with the in-memory write. Running the file I/O
+// inside the lock serializes it with every other surface's mutate (REPL
+// /model, panel settings saves) so concurrent writers cannot interleave a
+// read-modify-write of config.yaml into a lost update.
+func (e *Engine) MutateConfigErr(fn func(*config.Config) error) error {
+	e.cfgMu.Lock()
+	defer e.cfgMu.Unlock()
+	if e.cfg == nil {
+		return nil
+	}
+	return fn(e.cfg)
+}
+
+// ReadConfig runs fn under the read lock — the read half of MutateConfig, for
+// callers that need several fields observed as one consistent snapshot.
+// A nil cfg skips fn: no config loaded means nothing to snapshot.
+func (e *Engine) ReadConfig(fn func(*config.Config)) {
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
+	if e.cfg != nil {
+		fn(e.cfg)
+	}
+}
+
+// cardPathNow / setCardPath serialize the lazily-mutating cardPath field:
+// checkCardPath fills it on tool goroutines while ReloadCard and the status
+// tool touch it from others.
+func (e *Engine) cardPathNow() string {
+	e.cardMu.RLock()
+	defer e.cardMu.RUnlock()
+	return e.cardPath
+}
+
+func (e *Engine) setCardPath(path string) {
+	e.cardMu.Lock()
+	e.cardPath = path
+	e.cardMu.Unlock()
+}
 
 // CancelTask cancels taskID and its subtree through the scheduler core when
 // the engine has one, so the cancel reaches remote executors too. Without the
@@ -273,14 +353,12 @@ func (e *Engine) ModelConfig() config.ModelConfig { return e.cfg.Model }
 // forwardCancelDownstream can deliver the task_cancel the daemon would have
 // sent had the cancel arrived on the wire.
 func (e *Engine) CancelTask(ctx context.Context, taskID string) ([]string, error) {
-	if e.sched == nil {
+	sched := e.sched.Load()
+	if sched == nil {
 		return core.NewTaskStore(e.db, e.logger).CancelCascade(ctx, taskID)
 	}
-	return e.sched.CancelTree(ctx, taskID)
+	return sched.CancelTree(ctx, taskID)
 }
-
-// Config returns the engine's loaded configuration.
-func (e *Engine) Config() *config.Config { return e.cfg }
 
 // TaskStore returns the task store on the engine's database, for callers that
 // need read-level access (reference resolution) without a scheduler core.
@@ -299,25 +377,39 @@ func (e *Engine) SetOnReview(fn func(core.Task)) {
 	e.onReviewMu.Unlock()
 	e.schedMu.Lock()
 	defer e.schedMu.Unlock()
-	if e.sched != nil && e.sched.TaskStore() != nil {
-		e.sched.TaskStore().SetOnReview(fn)
+	if sched := e.sched.Load(); sched != nil && sched.TaskStore() != nil {
+		sched.TaskStore().SetOnReview(fn)
 	}
 }
 
 // SetLocale updates the active user locale for this engine.
 func (e *Engine) SetLocale(loc i18n.Locale) {
-	if loc != "" {
-		e.locale = loc
-		e.explicitLocale = true
+	if loc == "" {
+		return
 	}
+	e.localeMu.Lock()
+	e.locale = loc
+	e.explicitLocale = true
+	e.localeMu.Unlock()
 }
 
 // Locale returns the active user locale for this engine.
 func (e *Engine) Locale() i18n.Locale {
-	if e.locale != "" {
-		return e.locale
+	e.localeMu.Lock()
+	loc := e.locale
+	e.localeMu.Unlock()
+	if loc != "" {
+		return loc
 	}
 	return i18n.Detect()
+}
+
+// localeNow snapshots both locale fields under one lock; the explicit flag
+// decides whether prompt-side auto-detection may override the value.
+func (e *Engine) localeNow() (i18n.Locale, bool) {
+	e.localeMu.Lock()
+	defer e.localeMu.Unlock()
+	return e.locale, e.explicitLocale
 }
 
 // Result is the outcome of one Ask call.
@@ -586,7 +678,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 					_ = e.initSchedulerLocked(cardTarget)
 				}
 			}
-			if e.sched == nil && explicitCard {
+			if e.sched.Load() == nil && explicitCard {
 				e.Close()
 				return nil, fmt.Errorf("askengine: load capabilities: %w", err)
 			}
@@ -609,12 +701,14 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 func (e *Engine) tryAutoInitScheduler() {
 	e.schedMu.Lock()
 	defer e.schedMu.Unlock()
-	if e.sched != nil {
+	if e.sched.Load() != nil {
 		return
 	}
-	target := e.cardPath
+	target := e.cardPathNow()
 	if target == "" && e.cfg != nil {
+		e.cfgMu.RLock()
 		target = e.cfg.EffectiveCardPath()
+		e.cfgMu.RUnlock()
 	}
 	if target == "" {
 		target = config.DefaultCardTarget("")
@@ -636,6 +730,12 @@ func (e *Engine) tryAutoInitScheduler() {
 }
 
 func (e *Engine) initSchedulerLocked(cardPath string) error {
+	// The shared config supplies most of the scheduler's inputs; hold cfgMu
+	// for the build so a concurrent /model or /nodes mutation cannot tear a
+	// read mid-initialization. Lock order: schedMu → cfgMu (callers already
+	// hold schedMu; nothing acquires schedMu while holding cfgMu).
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
 	card, err := ledger.LoadCard(cardPath)
 	if err != nil {
 		return fmt.Errorf("askengine: load capabilities: %w", err)
@@ -680,10 +780,10 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		e.schedCancel()
 	}
 	schedCtx, cancel := context.WithCancel(context.Background())
-	e.sched = sched
 	e.schedCtx = schedCtx
 	e.schedCancel = cancel
-	e.cardPath = cardPath
+	e.sched.Store(sched) // store last: a non-nil load implies ctx/cancel set
+	e.setCardPath(cardPath)
 	// Re-arm the review hook on the new core's store: the notification that a
 	// task is waiting for the user must not be lost to a card reload.
 	e.onReviewMu.RLock()
@@ -748,14 +848,18 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 // ends — for long-lived embedders (the web panel). Short-lived CLI asks skip
 // it: New's one-shot dial plus waitForPeers already covers them.
 func (e *Engine) MaintainPeers(ctx context.Context) {
-	if e.sched == nil {
+	sched := e.sched.Load()
+	if sched == nil {
 		return
 	}
-	for _, peer := range e.cfg.Network.Peers {
+	e.cfgMu.RLock()
+	peers := append([]string(nil), e.cfg.Network.Peers...)
+	e.cfgMu.RUnlock()
+	for _, peer := range peers {
 		go func(p string) {
 			backoff := time.Second
 			for {
-				err := e.sched.MaintainPeer(ctx, p)
+				err := sched.MaintainPeer(ctx, p)
 				if err != nil {
 					e.logger.Warn("peer dial failed", "peer", p, "err", err)
 					select {
@@ -891,10 +995,11 @@ func (e *Engine) Ask(ctx context.Context, prompt string, authorize bool) (*Resul
 // takes effect without a restart. A no-op on an engine with no card, which has no
 // router to configure.
 func (e *Engine) SetRouterPolicy(injection config.InjectionConfig, routing config.RoutingConfig) {
-	if e.sched == nil {
+	sched := e.sched.Load()
+	if sched == nil {
 		return
 	}
-	e.sched.SetRouterPolicy(injection, routing)
+	sched.SetRouterPolicy(injection, routing)
 }
 
 // SetProject names the ambient project for the tasks this engine submits, and
@@ -993,8 +1098,8 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	turns = append(turns, history...)
 	turns = append(turns, entry.Turn{Role: "user", Content: prompt})
 
-	effectiveLocale := e.locale
-	if !e.explicitLocale && !e.replyASCII {
+	effectiveLocale, explicit := e.localeNow()
+	if !explicit && !e.replyASCII {
 		if containsHan(prompt) {
 			effectiveLocale = i18n.ChineseSimp
 		}
@@ -1234,10 +1339,10 @@ rounds:
 				)
 				break rounds
 			}
-			if e.sched == nil {
+			if e.sched.Load() == nil {
 				e.tryAutoInitScheduler()
 			}
-			if e.sched == nil {
+			if e.sched.Load() == nil {
 				return nil, fmt.Errorf("task output requires a capability card (scheduler initialization failed)")
 			}
 			cb.progress(Progress{Kind: ProgressTask, Name: out.Task.Title})
@@ -1368,10 +1473,10 @@ rounds:
 		e.recordModelSuccess(client.ModelName())
 	}
 	if final.Kind == entry.KindTask {
-		if e.sched == nil {
+		if e.sched.Load() == nil {
 			e.tryAutoInitScheduler()
 		}
-		if e.sched == nil {
+		if e.sched.Load() == nil {
 			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议任务「%s」，但当前未加载能力卡片，无法提交。", maxRounds, final.Task.Title)}, nil
 		}
 		if lastTask != nil && taskRounds >= maxTasks {
@@ -1393,10 +1498,10 @@ rounds:
 		return res, nil
 	}
 	if final.Kind == entry.KindPlan {
-		if e.sched == nil {
+		if e.sched.Load() == nil {
 			e.tryAutoInitScheduler()
 		}
-		if e.sched == nil {
+		if e.sched.Load() == nil {
 			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议多阶段计划「%s」，但当前未加载能力卡片，无法启动。", maxRounds, final.Plan.Goal)}, nil
 		}
 		cb.progress(Progress{Kind: ProgressPlan, Name: final.Plan.Goal})
@@ -1412,11 +1517,15 @@ rounds:
 // WorkPath returns the configured work directory — the project workspace
 // panel sessions execute in. It lets the panel pin non-repo sessions to the
 // work path so the memory wall (§17.2) holds for them too.
-func (e *Engine) WorkPath() string { return e.cfg.Storage.WorkPath }
+func (e *Engine) WorkPath() string {
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
+	return e.cfg.Storage.WorkPath
+}
 
 // CardPath returns the capabilities.yaml the engine's scheduler was built
 // from — the file /card edits and reloads.
-func (e *Engine) CardPath() string { return e.cardPath }
+func (e *Engine) CardPath() string { return e.cardPathNow() }
 
 // ReloadCard hot-swaps the scheduler's capability card (the /card edit path):
 // the core re-reads the file, rebuilds its router, re-registers, and tells
@@ -1426,13 +1535,14 @@ func (e *Engine) CardPath() string { return e.cardPath }
 func (e *Engine) ReloadCard(path string) error {
 	e.schedMu.Lock()
 	defer e.schedMu.Unlock()
-	if e.sched == nil {
+	sched := e.sched.Load()
+	if sched == nil {
 		return e.initSchedulerLocked(path)
 	}
-	if err := e.sched.ReloadCard(e.schedCtx, path); err != nil {
+	if err := sched.ReloadCard(e.schedCtx, path); err != nil {
 		return err
 	}
-	e.cardPath = path
+	e.setCardPath(path)
 	return nil
 }
 
@@ -1441,10 +1551,11 @@ func (e *Engine) ReloadCard(path string) error {
 // session without a restart. The connection registers itself (hello exchange)
 // on success; the caller decides whether to wait or dial in the background.
 func (e *Engine) DialPeer(ctx context.Context, addr string) error {
-	if e.sched == nil {
+	sched := e.sched.Load()
+	if sched == nil {
 		return fmt.Errorf("askengine: no scheduler (card missing or scheduler initialization failed)")
 	}
-	return e.sched.DialPeer(ctx, addr)
+	return sched.DialPeer(ctx, addr)
 }
 
 // EnqueueTask routes a directly-created task (the panel's board "new task"
@@ -1459,7 +1570,8 @@ func (e *Engine) DialPeer(ctx context.Context, addr string) error {
 // remembers cannot apply — the linked session does not exist yet (the board
 // creates it after a successful enqueue).
 func (e *Engine) EnqueueTask(ctx context.Context, in core.TaskInput, q core.QueueSpec) (core.Task, error) {
-	if e.sched == nil {
+	sched := e.sched.Load()
+	if sched == nil {
 		return core.Task{}, fmt.Errorf("task creation requires a capability card (scheduler initialization failed)")
 	}
 	verdict := e.approvalFor("", in.Project)
@@ -1468,7 +1580,7 @@ func (e *Engine) EnqueueTask(ctx context.Context, in core.TaskInput, q core.Queu
 		return core.Task{}, fmt.Errorf("%w (scope: %s)", ErrApprovalDenied, verdict.decisionScope)
 	}
 	in.Authorized = authorized
-	return e.sched.Enqueue(ctx, in, q)
+	return sched.Enqueue(ctx, in, q)
 }
 
 // StartPlan hands a multi-stage plan to the scheduler core, which creates one
@@ -1479,18 +1591,20 @@ func (e *Engine) EnqueueTask(ctx context.Context, in core.TaskInput, q core.Queu
 // Needs a capability card for the same reason task submission does: a plan whose
 // stages cannot be routed is a plan that cannot start.
 func (e *Engine) StartPlan(ctx context.Context, p plan.Plan, q core.QueueSpec) (string, error) {
-	if e.sched == nil {
+	sched := e.sched.Load()
+	if sched == nil {
 		return "", fmt.Errorf("starting a plan requires a capability card (scheduler initialization failed)")
 	}
-	return e.sched.StartPlan(ctx, p, q)
+	return sched.StartPlan(ctx, p, q)
 }
 
 // PlanStages returns every stage of one plan, for following a run.
 func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, error) {
-	if e.sched == nil {
+	sched := e.sched.Load()
+	if sched == nil {
 		return nil, fmt.Errorf("reading a plan requires a capability card (scheduler initialization failed)")
 	}
-	return e.sched.TaskStore().PlanStages(ctx, planID)
+	return sched.TaskStore().PlanStages(ctx, planID)
 }
 
 // startClassifiedPlan turns a model-emitted plan into a running pipeline. It is
@@ -1504,7 +1618,8 @@ func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, er
 // a person instead of inheriting a blanket approval given to the whole sentence.
 // Consent for one shell command is not consent for a three-machine pipeline.
 func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, _ bool) (*Result, error) {
-	if e.sched == nil {
+	sched := e.sched.Load()
+	if sched == nil {
 		return nil, fmt.Errorf("plan output requires a capability card (scheduler initialization failed)")
 	}
 	p, err := plan.FromSpec(*spec)
@@ -1518,11 +1633,11 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 	// No work dir, for the same reason `panda plan run` sets none: a path on this
 	// machine means nothing on the machine that runs the stage.
 	q.WorkDir = ""
-	planID, err := e.sched.StartPlan(ctx, p, q)
+	planID, err := sched.StartPlan(ctx, p, q)
 	if err != nil {
 		return &Result{Kind: "plan", PlanID: planID, PlanGoal: p.Goal, Stderr: err.Error(), ExitCode: 1}, nil
 	}
-	stages, serr := e.sched.TaskStore().PlanStages(ctx, planID)
+	stages, serr := sched.TaskStore().PlanStages(ctx, planID)
 	if serr != nil {
 		e.logger.Warn("askengine: read plan stages", "plan", planID, "err", serr)
 	}
@@ -1566,10 +1681,10 @@ func gateAuthorized(mode string, sessionAuthorized bool) bool {
 // mode a per-task WorkDir is persisted before routing and execution, avoiding
 // process-wide scheduler directory swaps between concurrent asks.
 func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt string, authorized bool, scope AskScope, reasoning string, cb StreamCallbacks, loc ...i18n.Locale) *Result {
-	targetLoc := e.locale
+	targetLoc, explicit := e.localeNow()
 	if len(loc) > 0 && loc[0] != "" {
 		targetLoc = loc[0]
-	} else if !e.explicitLocale && !e.replyASCII && (containsHan(prompt) || containsHan(spec.Title)) {
+	} else if !explicit && !e.replyASCII && (containsHan(prompt) || containsHan(spec.Title)) {
 		targetLoc = i18n.ChineseSimp
 	}
 	in := toTaskInput(spec, targetLoc)
@@ -1635,18 +1750,25 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		rawLabel := i18n.T(targetLoc, "prompt.task.user_raw_request")
 		in.Intent += "\n\n" + rawLabel + "\n" + prompt
 	}
+	// Snapshot the scheduler once: the pointer is only ever stored non-nil in
+	// production (lazy init or reload), but a consistent handle keeps the
+	// atomic load honest across this whole submission.
+	sched := e.sched.Load()
+	if sched == nil {
+		return &Result{Kind: "task", TaskState: "failed", Stderr: "task submission requires a capability card (scheduler initialization failed)", ExitCode: 1}
+	}
 	if e.queueTasks {
 		q := core.DefaultQueueSpec()
 		q.WorkDir = workDir // travels per task; "" falls back to the core's work dir
-		task, err := e.sched.Enqueue(ctx, in, q)
+		task, err := sched.Enqueue(ctx, in, q)
 		if err != nil {
 			return &Result{Kind: "task", TaskState: "failed", Stderr: err.Error(), ExitCode: 1}
 		}
 		if reasoning != "" {
-			e.sched.EvTrace(ctx, task.TaskID, core.EvReasoning, map[string]any{"thought": reasoning})
+			sched.EvTrace(ctx, task.TaskID, core.EvReasoning, map[string]any{"thought": reasoning})
 		}
 		if consentSrc != "" {
-			e.sched.EvTrace(ctx, task.TaskID, "approval_auto", map[string]any{"scope": consentSrc})
+			sched.EvTrace(ctx, task.TaskID, "approval_auto", map[string]any{"scope": consentSrc})
 		}
 		return &Result{Kind: "task", TaskID: task.TaskID, TaskTitle: task.Title, TaskState: task.State, Thought: reasoning, ConsentSource: consentSrc}
 	}
@@ -1656,7 +1778,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	// allows concurrent subagent runs without serializing submissions.
 	// A caller with no progress sink installs nothing.
 	if cb.OnProgress != nil || cb.OnStatus != nil {
-		store := e.sched.TaskStore()
+		store := sched.TaskStore()
 		unsub := store.AddOnEvent(func(_, typ string, data any) {
 			if p, ok := progressForEvent(typ, data); ok {
 				cb.progress(p)
@@ -1664,12 +1786,12 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		})
 		defer unsub()
 	}
-	task, result, err := e.sched.Submit(ctx, in)
+	task, result, err := sched.Submit(ctx, in)
 	if err != nil {
 		return &Result{Kind: "task", TaskState: "failed", Stderr: err.Error(), ExitCode: 1}
 	}
 	if reasoning != "" {
-		e.sched.EvTrace(ctx, task.TaskID, core.EvReasoning, map[string]any{"thought": reasoning})
+		sched.EvTrace(ctx, task.TaskID, core.EvReasoning, map[string]any{"thought": reasoning})
 	}
 	res := &Result{
 		Kind:      "task",
@@ -1688,7 +1810,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	}
 	res.ConsentSource = consentSrc
 	if consentSrc != "" {
-		e.sched.EvTrace(ctx, task.TaskID, "approval_auto", map[string]any{"scope": consentSrc})
+		sched.EvTrace(ctx, task.TaskID, "approval_auto", map[string]any{"scope": consentSrc})
 	}
 	// Inline approval closure: a tier-2 task with no standing consent parks in
 	// review with an authorization-refusal reason. Turn that dead end into a
@@ -1870,10 +1992,11 @@ func (e *Engine) acceptReviewedWork(ctx context.Context, taskID string) *Result 
 // the outcome to a Result. The caller must hold schedMu (submitTask does), so
 // any pinned session work dir is still in effect for the re-run.
 func (e *Engine) resumeLocked(ctx context.Context, taskID string) *Result {
-	task, result, err := e.sched.ResumeApproved(ctx, taskID)
+	sched := e.sched.Load()
+	task, result, err := sched.ResumeApproved(ctx, taskID)
 	if err != nil {
 		state := core.StateReview
-		if current, getErr := e.sched.TaskStore().Get(context.WithoutCancel(ctx), taskID); getErr == nil {
+		if current, getErr := sched.TaskStore().Get(context.WithoutCancel(ctx), taskID); getErr == nil {
 			state = current.State
 		}
 		return &Result{Kind: "task", TaskID: taskID, TaskState: state, Stderr: err.Error(), ExitCode: 1}
@@ -1907,16 +2030,17 @@ func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb 
 	default:
 		return &Result{Kind: "task", TaskID: taskID, TaskState: core.StateReview, Stderr: "unknown approval disposition", ExitCode: 1}
 	}
-	if e.sched == nil {
+	sched := e.sched.Load()
+	if sched == nil {
 		return &Result{Kind: "task", TaskID: taskID, TaskState: core.StateReview, Stderr: "task execution requires a capability card", ExitCode: 1}
 	}
 	if workDir != "" {
-		if err := e.sched.TaskStore().SetWorkDir(ctx, taskID, workDir); err != nil {
+		if err := sched.TaskStore().SetWorkDir(ctx, taskID, workDir); err != nil {
 			return &Result{Kind: "task", TaskID: taskID, TaskState: "review", Stderr: err.Error(), ExitCode: 1}
 		}
 	}
 	if cb.OnProgress != nil || cb.OnStatus != nil {
-		store := e.sched.TaskStore()
+		store := sched.TaskStore()
 		unsub := store.AddOnEvent(func(id, typ string, data any) {
 			if id != taskID {
 				return
@@ -1932,7 +2056,8 @@ func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb 
 		return res
 	}
 	sumClient, _ := e.healthyClient()
-	if report, rerr := entry.SummarizeResult(ctx, sumClient, res.TaskTitle, "", res.OK, res.ExitCode, res.Stdout, res.Stderr, e.locale); rerr == nil {
+	loc, _ := e.localeNow()
+	if report, rerr := entry.SummarizeResult(ctx, sumClient, res.TaskTitle, "", res.OK, res.ExitCode, res.Stdout, res.Stderr, loc); rerr == nil {
 		res.Report = report
 	}
 	return res
@@ -1963,11 +2088,26 @@ func (e *Engine) recordEntryUsage(ctx context.Context, res *Result, client *entr
 // Close releases the engine's resources (DB handle, scheduler core, MCP
 // server). The engine must not be used afterwards.
 func (e *Engine) Close() {
-	if e.schedCancel != nil {
-		e.schedCancel()
+	e.schedMu.Lock()
+	cancel := e.schedCancel
+	e.schedMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
-	if e.mcp != nil {
-		e.mcp.Close()
+	// schedCtx cancellation only stops the scheduler's goroutines; peer
+	// conns survive until their read deadline unless Shutdown closes them —
+	// and the node stays "online" in the ledger. Do it before db.Close so
+	// the offline marking can still reach SQLite.
+	if sched := e.sched.Load(); sched != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		sched.Shutdown(ctx)
+		cancel()
+	}
+	e.regMu.RLock()
+	mcp := e.mcp
+	e.regMu.RUnlock()
+	if mcp != nil {
+		mcp.Close()
 	}
 	if e.db != nil {
 		e.db.Close()

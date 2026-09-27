@@ -8,11 +8,21 @@ package main
 // here (signal.Notify accepts the constant but the OS never delivers it),
 // so no code is lost — the same binary still hot-reloads on unix hosts.
 
-import "fmt"
+import (
+	"fmt"
+	"io"
+	"os"
+)
 
 // notifyDaemonReload reports that a card edit needs a daemon restart. Kept
 // as a function (not a plain print at the call site) so the unix and windows
-// call sites stay identical and the difference cannot leak elsewhere.
+// call sites stay identical and the difference cannot leak elsewhere. The
+// To variant takes the caller's writer so REPL/TUI output stays in the
+// transcript.
 func notifyDaemonReload() {
-	fmt.Println("restart the daemon for the new card to be advertised to peers")
+	notifyDaemonReloadTo(os.Stdout)
+}
+
+func notifyDaemonReloadTo(out io.Writer) {
+	fmt.Fprintln(out, "restart the daemon for the new card to be advertised to peers")
 }

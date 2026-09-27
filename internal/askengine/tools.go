@@ -404,10 +404,10 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 			if err := entry.ValidateTaskSpec(spec); err != nil {
 				return "", err
 			}
-			if e.sched == nil {
+			if e.sched.Load() == nil {
 				e.tryAutoInitScheduler()
 			}
-			if e.sched == nil {
+			if e.sched.Load() == nil {
 				if targetLoc == i18n.English {
 					return "", fmt.Errorf("no capability cards loaded, unable to dispatch task")
 				}

@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"slices"
@@ -209,6 +210,13 @@ func runPair(args []string) {
 // other machine. The secret itself is deliberately not in the text — only the
 // file it lives in — so logs and terminals never carry it.
 func printJoinGuide(loc i18n.Locale, cfg *config.Config) {
+	printJoinGuideTo(os.Stdout, loc, cfg)
+}
+
+// printJoinGuideTo is the writer-scoped form — /nodes invite and /nodes add
+// route it through commandOutput so the guide lands in the TUI transcript
+// instead of escaping to the host terminal behind the alt screen.
+func printJoinGuideTo(w io.Writer, loc i18n.Locale, cfg *config.Config) {
 	listen := cfg.Network.ListenAddr
 	if host, port, err := net.SplitHostPort(listen); err == nil && host == "" {
 		listen = "<this-machine>" + port
@@ -216,16 +224,16 @@ func printJoinGuide(loc i18n.Locale, cfg *config.Config) {
 		// The secure default binds loopback only; a peer on another machine
 		// cannot reach 127.0.0.1. Point the operator at setting listen_addr to
 		// a routable (or overlay) address before the join can work.
-		fmt.Println()
-		fmt.Println(i18n.Tf(loc, "cli.nodes.invite.loopback", "port", port))
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.invite.loopback", "port", port))
 		listen = "<this-machine>" + port
 	}
-	fmt.Println()
-	fmt.Println(i18n.T(loc, "cli.nodes.invite.head"))
-	fmt.Println(i18n.T(loc, "cli.nodes.invite.step1"))
-	fmt.Println("  curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh")
-	fmt.Println(i18n.Tf(loc, "cli.nodes.invite.step2", "path", configWritePath("")))
-	fmt.Println(i18n.Tf(loc, "cli.nodes.invite.step3", "listen", listen))
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, i18n.T(loc, "cli.nodes.invite.head"))
+	fmt.Fprintln(w, i18n.T(loc, "cli.nodes.invite.step1"))
+	fmt.Fprintln(w, "  curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh")
+	fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.invite.step2", "path", configWritePath("")))
+	fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.invite.step3", "listen", listen))
 }
 
 // isLoopbackHost reports whether host names a loopback address (127.0.0.1,

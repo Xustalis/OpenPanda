@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/doctor"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 )
@@ -38,11 +39,10 @@ func (h *handler) allowedReadRoot(abs string) bool {
 	if h.cfg == nil {
 		return false
 	}
-	roots := []string{
-		h.cfg.Storage.WorkPath,
-		h.cfg.Storage.MemoryPath,
-		h.cfg.Storage.ProjectsPath,
-	}
+	var roots []string
+	h.readCfg(func(c *config.Config) {
+		roots = []string{c.Storage.WorkPath, c.Storage.MemoryPath, c.Storage.ProjectsPath}
+	})
 	for _, root := range roots {
 		if root == "" {
 			continue
@@ -75,8 +75,12 @@ func (h *handler) resolveFsPath(reqPath string) (string, error) {
 			reqPath = filepath.Join(home, strings.TrimPrefix(reqPath, "~"))
 		}
 	}
-	if !filepath.IsAbs(reqPath) && h.cfg != nil && h.cfg.Storage.WorkPath != "" {
-		reqPath = filepath.Join(h.cfg.Storage.WorkPath, reqPath)
+	if !filepath.IsAbs(reqPath) {
+		h.readCfg(func(c *config.Config) {
+			if c.Storage.WorkPath != "" {
+				reqPath = filepath.Join(c.Storage.WorkPath, reqPath)
+			}
+		})
 	}
 	return filepath.Abs(reqPath)
 }
@@ -98,9 +102,8 @@ type fsFileEntry struct {
 func (h *handler) listFiles(w http.ResponseWriter, r *http.Request) {
 	reqPath := strings.TrimSpace(r.URL.Query().Get("path"))
 	if reqPath == "" {
-		if h.cfg != nil && h.cfg.Storage.WorkPath != "" {
-			reqPath = h.cfg.Storage.WorkPath
-		} else {
+		h.readCfg(func(c *config.Config) { reqPath = c.Storage.WorkPath })
+		if reqPath == "" {
 			reqPath, _ = os.Getwd()
 		}
 	}
@@ -227,14 +230,20 @@ func (h *handler) readFile(w http.ResponseWriter, r *http.Request) {
 // so it is deliberately absent here.
 func (h *handler) getContext(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{}
+	var workDir, nodeName, memPath string
+	h.readCfg(func(c *config.Config) {
+		workDir = c.Storage.WorkPath
+		nodeName = c.Node.Name
+		memPath = c.Storage.MemoryPath
+	})
 	if h.cfg != nil {
-		out["work_dir"] = h.cfg.Storage.WorkPath
-		out["node_name"] = h.cfg.Node.Name
+		out["work_dir"] = workDir
+		out["node_name"] = nodeName
 	}
 	mc := h.engineModel()
 	out["model"] = modelEntryOf(mc, mc)
-	if h.cfg != nil && h.cfg.Storage.MemoryPath != "" {
-		hermes := memory.NewHermesWithLimits(h.cfg.Storage.MemoryPath, memory.Limits{})
+	if memPath != "" {
+		hermes := memory.NewHermesWithLimits(memPath, memory.Limits{})
 		if files, err := hermes.Files(); err == nil {
 			out["memory_files"] = len(files)
 		}

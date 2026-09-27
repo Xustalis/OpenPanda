@@ -3,15 +3,18 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -24,6 +27,7 @@ func newIsolatedTUI(t *testing.T) tuiModel {
 	cliConfigPath = filepath.Join(t.TempDir(), "missing-config.yaml")
 	t.Cleanup(func() { cliConfigPath = old })
 	r := &repl{loc: i18n.Locale("en"), cfg: &config.Config{}, interactive: true}
+	r.cfg.Storage.SkillsPath = t.TempDir() // /skills hub must not seed builtins into cwd
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width, m.height = 100, 30
@@ -350,7 +354,8 @@ func TestTUIFailedTurnPersistsPair(t *testing.T) {
 
 // TestTUIAuthorizeAndTasksClearGuards checks the two commands that mutated or
 // needed a terminal through the exec path: /authorize toggles inline and
-// /tasks clear refuses with a pointer to the shell.
+// /tasks clear goes through the TUI's own confirm card — never a silent wipe,
+// never a "go run this in a shell" dead end.
 func TestTUIAuthorizeAndTasksClearGuards(t *testing.T) {
 	m := newIsolatedTUI(t)
 
@@ -368,12 +373,76 @@ func TestTUIAuthorizeAndTasksClearGuards(t *testing.T) {
 		t.Fatal("second /authorize should flip the flag back")
 	}
 
+	// An empty board never raises the card — it reports "nothing to do".
 	m = submitAndPump(t, m, "/tasks clear")
 	if m.mode != modeIdle {
-		t.Fatalf("/tasks clear must not enter exec, got %v", m.mode)
+		t.Fatalf("/tasks clear on an empty board must not enter exec/confirm, got %v", m.mode)
 	}
-	if got := lastBlock(m); !strings.Contains(got.body, "panda queue clear") {
-		t.Fatalf("/tasks clear should point at the shell command, got %q", got.body)
+	if got := lastBlock(m); !strings.Contains(got.body, "empty") {
+		t.Fatalf("/tasks clear on an empty board should say so, got %q", got.body)
+	}
+
+	// With a task on the board, /tasks clear raises the confirm card.
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	st := core.NewTaskStore(db, nil)
+	if _, err := st.Create(context.Background(), "", "", "wipe me", "node-a", nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	m.r.store = st
+
+	next, _ = m.submit("/tasks clear")
+	m = next.(tuiModel)
+	if m.mode != modeConfirm {
+		t.Fatalf("/tasks clear should raise the confirm card, got %v", m.mode)
+	}
+	if v := m.View(); !strings.Contains(v, "1") || !strings.Contains(v, "[y]") {
+		t.Fatalf("confirm card should name the task count and the keys:\n%s", v)
+	}
+
+	// 'n' declines: the task survives and the card notes the cancellation.
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if m.mode != modeIdle {
+		t.Fatalf("declining should return to idle, got %v", m.mode)
+	}
+	if n, _ := st.ListByState(context.Background(), ""); len(n) != 1 {
+		t.Fatal("declined clear must not delete the task")
+	}
+
+	// 'y' runs the wipe through the exec pump; the board ends empty.
+	next, _ = m.submit("/tasks clear")
+	m = next.(tuiModel)
+	if m.mode != modeConfirm {
+		t.Fatalf("/tasks clear should raise the confirm card again, got %v", m.mode)
+	}
+	m = step(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if m.mode != modeExec || m.exec == nil {
+		t.Fatalf("confirming should start the exec, got mode=%v", m.mode)
+	}
+	m = pumpExec(t, m, waitForExec(m.exec))
+	if m.mode != modeIdle {
+		t.Fatalf("the wipe should land back in idle, got %v", m.mode)
+	}
+	if n, _ := st.ListByState(context.Background(), ""); len(n) != 0 {
+		t.Fatalf("confirmed clear should empty the board, %d tasks left", len(n))
+	}
+
+	// The --yes form answers ahead of time and skips the card entirely.
+	if _, err := st.Create(context.Background(), "", "", "wipe me too", "node-a", nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	m = submitAndPump(t, m, "/tasks clear --yes")
+	if m.mode != modeIdle {
+		t.Fatalf("/tasks clear --yes should run and settle, got %v", m.mode)
+	}
+	if n, _ := st.ListByState(context.Background(), ""); len(n) != 0 {
+		t.Fatalf("/tasks clear --yes should empty the board, %d tasks left", len(n))
 	}
 }
 
@@ -488,5 +557,159 @@ func TestTUISubmitEmptyAndWhitespace(t *testing.T) {
 	}
 	if len(m.chatHistory.blocks) != 0 {
 		t.Fatalf("empty submits must not touch the transcript: %v", m.chatHistory.blocks)
+	}
+}
+
+// TestEverySlashCommandResponds sweeps the whole replCommands table (plus the
+// TUI aliases) through submit: a registered command must never be a dead end —
+// it either returns a cmd, changes mode (a panel/confirm opened), or quits.
+// Exec-routed commands are additionally pumped and must leave real output in
+// the transcript (a handler that produces nothing is indistinguishable from
+// broken). "/web" is excluded: it binds a real loopback port.
+func TestEverySlashCommandResponds(t *testing.T) {
+	seen := map[string]bool{}
+	var names []string
+	for _, c := range replCommands {
+		if !seen[c.name] {
+			seen[c.name] = true
+			names = append(names, c.name)
+		}
+	}
+	names = append(names, "exit", "cls", "v", "ver", "bogus") // TUI aliases + unknown
+	skipPump := map[string]bool{"web": true, "quit": true, "exit": true}
+
+	for _, name := range names {
+		m := newIsolatedTUI(t)
+		next, cmd := m.submit("/" + name)
+		m = next.(tuiModel)
+		switch {
+		case name == "quit" || name == "exit":
+			if !m.quitting {
+				t.Errorf("/%s must set quitting", name)
+			}
+			continue
+		case cmd == nil && m.mode == modeIdle:
+			t.Errorf("/%s is a dead command: no cmd, mode still idle", name)
+			continue
+		}
+		if m.mode != modeExec || skipPump[name] {
+			continue
+		}
+		before := len(m.chatHistory.blocks)
+		m = pumpExec(t, m, cmd)
+		if m.mode != modeIdle {
+			t.Errorf("/%s left the model in mode %v", name, m.mode)
+		}
+		// The pump commits the user echo plus output/error. Only an echo means
+		// the handler ran but produced nothing — a dead command in practice.
+		var infoBlocks int
+		for _, b := range m.chatHistory.blocks[before:] {
+			if b.kind == blockInfo || b.kind == blockError || b.kind == blockNote {
+				infoBlocks++
+			}
+		}
+		if infoBlocks == 0 {
+			t.Errorf("/%s produced no output in the transcript", name)
+		}
+	}
+}
+
+// TestTasksWatchRoutesToBoard pins the /tasks watch routing fix: the "watch"
+// token must reach cmdTasks, so the exec streams frames until Esc cancels —
+// not return a one-shot listing. And on exit the transcript keeps the last
+// drawn frame, not every 2s snapshot concatenated.
+func TestTasksWatchRoutesToBoard(t *testing.T) {
+	m := newIsolatedTUI(t)
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	st := core.NewTaskStore(db, nil)
+	if _, err := st.Create(context.Background(), "", "", "watchable task", "node-a", nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	m.r.store = st
+
+	next, cmd := m.submit("/tasks watch")
+	m = next.(tuiModel)
+	if m.mode != modeExec || m.exec == nil || cmd == nil {
+		t.Fatalf("/tasks watch should start a streaming exec, got mode=%v exec=%v", m.mode, m.exec)
+	}
+	// The board's first frame arrives as execOutputMsg chunks (one per Write) —
+	// a one-shot listing (the swallowed-token bug) would send execDoneMsg and
+	// stop. Drain chunks until the frame's task row is in the buffer.
+	for i := 0; i < 64; i++ {
+		msg := cmd()
+		switch msg.(type) {
+		case execOutputMsg:
+			next, cmd = m.Update(msg)
+			m = next.(tuiModel)
+			if strings.Contains(m.exec.text(), "watchable task") {
+				goto frameReady
+			}
+		case execDoneMsg:
+			t.Fatalf("watch ended without a frame containing the task: %q", m.exec.text())
+		default:
+			t.Fatalf("unexpected watch event %T", msg)
+		}
+	}
+	t.Fatalf("watch frame never contained the task: %q", m.exec.text())
+frameReady:
+	// Esc cancels the board; the pump drains to execDoneMsg.
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(tuiModel)
+	m = pumpExec(t, m, cmd)
+	if m.mode != modeIdle {
+		t.Fatalf("watch should settle back to idle, got %v", m.mode)
+	}
+	// The committed block is the board's last frame once — folding, not
+	// concatenating — plus the exit note.
+	var board *block
+	for i := range m.chatHistory.blocks {
+		b := &m.chatHistory.blocks[i]
+		if b.kind == blockInfo && strings.Contains(b.body, "watchable task") {
+			board = b
+		}
+	}
+	if board == nil {
+		t.Fatalf("transcript should keep the final board, blocks=%+v", m.chatHistory.blocks)
+	}
+	if n := strings.Count(board.body, "watchable task"); n != 1 {
+		t.Fatalf("watch commit should hold one frame, task appears %d times:\n%s", n, board.body)
+	}
+	if !strings.Contains(board.body, i18n.T(i18n.English, "cli.watch.exited")) {
+		t.Fatalf("watch commit should keep the exited line:\n%s", board.body)
+	}
+}
+
+// TestFrameFolding covers the pure helpers that cut a repaint stream down to
+// its last frame.
+func TestFrameFolding(t *testing.T) {
+	// Ordinary output is untouched.
+	if got := latestFrame("plain\noutput\n"); got != "plain\noutput\n" {
+		t.Fatalf("latestFrame should pass plain output through, got %q", got)
+	}
+	if got := commitFrame("plain\noutput\n"); got != "plain\noutput\n" {
+		t.Fatalf("commitFrame should pass plain output through, got %q", got)
+	}
+	// A repaint stream: latestFrame is the current frame; commitFrame keeps the
+	// final drawn frame plus the exit tail.
+	stream := "\x1b[2J\x1b[Hframe-one\x1b[J" + "\x1b[Hframe-two\x1b[J" + "\x1b[0m\x1b[H\x1b[Jexited\n"
+	if got := latestFrame(stream); got != "\x1b[Jexited\n" {
+		t.Fatalf("latestFrame should expose only the last segment, got %q", got)
+	}
+	got := commitFrame(stream)
+	if !strings.Contains(got, "frame-two") || strings.Contains(got, "frame-one") || !strings.Contains(got, "exited") {
+		t.Fatalf("commitFrame should fold to the last frame plus the exit tail, got %q", got)
+	}
+	// A lone marker is not a repaint stream — pass it through; ansi.Strip
+	// removes the escape itself downstream.
+	two := "\x1b[2J\x1b[Honly-frame"
+	if got := commitFrame(two); got != two {
+		t.Fatalf("commitFrame should pass a single-marker stream through, got %q", got)
 	}
 }

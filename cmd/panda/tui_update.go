@@ -19,6 +19,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
@@ -304,7 +305,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The captured stream can carry terminal control sequences (a
 			// handler's clear-screen, banner colors): strip them so the frame
 			// Bubble Tea repaints is never driven by stray bytes.
-			if out := strings.TrimSpace(ansi.Strip(msg.output)); out != "" {
+			if out := strings.TrimSpace(ansi.Strip(commitFrame(msg.output))); out != "" {
 				m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockInfo, body: out})
 			}
 			if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
@@ -534,6 +535,8 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleModelWizardKey(msg)
 	case modeSkillsHub:
 		return m.handleSkillsHubKey(msg)
+	case modeConfirm:
+		return m.onConfirmKey(msg)
 	case modeAsking:
 		if m.arrowsScrollHere() {
 			if lines, ok := m.arrowScrollLines(msg); ok {
@@ -626,11 +629,21 @@ func (m tuiModel) onSplashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // startFromSplash transitions from splash to the model onboarding guide or main idle chat.
 func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
-	if m.r != nil && m.r.cfg != nil && !m.r.cfg.UI.Onboarded {
+	var onboarded, configured bool
+	if m.r != nil {
+		m.r.readConfig(func(c *config.Config) {
+			if c == nil {
+				return
+			}
+			onboarded = c.UI.Onboarded
+			configured = modelConfigured(c)
+		})
+	}
+	if m.r != nil && m.r.cfg != nil && !onboarded {
 		return m.startOnboarding()
 	}
 
-	if m.r == nil || m.r.cfg == nil || !modelConfigured(m.r.cfg) {
+	if m.r == nil || m.r.cfg == nil || !configured {
 		return m.startModelWizard()
 	}
 
@@ -993,13 +1006,25 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 	case "new":
 		return m.newChat()
 	case "sessions":
-		return m.openSessionsList()
+		// Bare opens the picker; an argument is the verb form (`/sessions rm
+		// x` — cmdSessions hands it to cmdSession) and must reach dispatch.
+		if arg == "" {
+			return m.openSessionsList()
+		}
 	case "projects":
-		return m.openProjectsList()
+		if arg == "" {
+			return m.openProjectsList()
+		}
 	case "resume":
 		return m.resumeSession(arg)
 	case "model":
-		return m.openModelPanel()
+		// Bare "/model" opens the picker; an argument is cmdModel business
+		// ("test", "add", an alias to switch to) and must reach the handler —
+		// intercepting it here swallowed the verb and silently opened the
+		// panel instead.
+		if arg == "" {
+			return m.openModelPanel()
+		}
 	case "skills", "skill":
 		if arg == "" || arg == "hub" {
 			return m.openSkillsHub()
@@ -1023,25 +1048,43 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 		// Bare "/project" only reports the active pointer — read-only output.
 	case "authorize":
 		return m.toggleAuthorize()
+	case "lang":
+		// A bare "/lang" only lists locales — read-only, fine on exec. With
+		// an argument it writes r.loc, which the watcher's tea.Cmd goroutine
+		// reads every poll (completionNote → i18n.Tf(r.loc)) — that write
+		// belongs on the Update goroutine, plus m.loc must move with it or
+		// the UI keeps rendering the old language.
+		if arg != "" {
+			return m.setLang(arg)
+		}
 	case "tasks":
-		// "watch" would stream a redrawn board through the transcript forever;
-		// "clear" needs a y/N prompt the exec goroutine cannot show. Give both
-		// a sane form instead of a silent no-op.
+		// "watch" streams the live board through exec; "clear" is destructive
+		// and needs a y/N the exec goroutine cannot read — it gets the shared
+		// confirm card, and "--yes" answers it ahead of time.
 		var rest []string
 		watch := false
+		clear := false
+		yes := false
 		for _, f := range strings.Fields(arg) {
 			switch f {
 			case "clear":
-				note := block{kind: blockNote, body: i18n.T(m.loc, "tui.tasks.clearShell")}
-				return m, m.printBlock(note)
+				clear = true
 			case "watch", "-w":
 				watch = true
+			case "-y", "--yes":
+				yes = true
 			default:
 				rest = append(rest, f)
 			}
 		}
+		if clear {
+			if yes {
+				return m.startExec("/tasks clear --yes")
+			}
+			return m.confirmTasksClear()
+		}
 		if watch {
-			return m.startExec("/tasks " + strings.Join(rest, " "))
+			return m.startExec("/tasks " + strings.Join(append([]string{"watch"}, rest...), " "))
 		}
 	}
 	return m.startExec(text)
@@ -1062,14 +1105,14 @@ func (m tuiModel) startExec(text string) (tea.Model, tea.Cmd) {
 // persisted file — and clear the screen. A bound session refuses, exactly as
 // the classic handler spells it.
 func (m tuiModel) newChat() (tea.Model, tea.Cmd) {
-	if m.r != nil && m.r.activeSess != "" {
+	if m.r != nil && m.r.sessID() != "" {
 		note := block{kind: blockNote, body: i18n.T(m.loc, "repl.new.session")}
 		return m, m.printBlock(note)
 	}
 	n := 0
 	if m.r != nil {
-		n = len(m.r.convo)
-		m.r.convo = nil
+		n = m.r.convoLen()
+		m.r.setConvo(nil)
 	}
 	clearConvo()
 	if m.chatHistory != nil {
@@ -1090,7 +1133,7 @@ func (m tuiModel) resumeSession(arg string) (tea.Model, tea.Cmd) {
 	}
 	if arg == "-" {
 		if m.r != nil {
-			m.r.activeSess = ""
+			m.r.setSess("")
 		}
 		note := block{kind: blockNote, body: i18n.T(m.loc, "repl.resume.detached")}
 		return m, m.printBlock(note)
@@ -1110,7 +1153,7 @@ func (m tuiModel) attachSession(sess *sessions.Session) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.r != nil {
-		m.r.activeSess = sess.ID
+		m.r.setSess(sess.ID)
 	}
 	m.mode = modeIdle
 	if m.chatHistory != nil {
@@ -1150,9 +1193,9 @@ func (m tuiModel) enterProject(name string) (tea.Model, tea.Cmd) {
 		if err := r.projStore.ClearActive(); err != nil {
 			return fail(err)
 		}
-		r.activeProj = ""
+		r.setProject("")
 		r.bindProject()
-		r.convo = loadConvo()
+		r.setConvo(loadConvo())
 		m.refreshProject()
 		note := block{kind: blockNote, body: i18n.T(m.loc, "cli.project.noActive")}
 		return m, m.printBlock(note)
@@ -1176,12 +1219,13 @@ func (m tuiModel) enterProject(name string) (tea.Model, tea.Cmd) {
 	if err := r.projStore.SetActive(name); err != nil {
 		return fail(err)
 	}
-	r.activeProj = name
+	r.setProject(name)
 	if pr, err := r.projStore.Get(name); err == nil && pr.WorkDir != "" && r.cfg != nil {
-		r.cfg.Storage.WorkPath = pr.WorkDir
+		workDir := pr.WorkDir
+		r.mutateConfig(func(c *config.Config) { c.Storage.WorkPath = workDir })
 	}
 	r.bindProject()
-	r.convo = loadConvo()
+	r.setConvo(loadConvo())
 	m.refreshProject()
 	body := ""
 	if created {
@@ -1196,8 +1240,8 @@ func (m tuiModel) enterProject(name string) (tea.Model, tea.Cmd) {
 // terminal for its interrupt watcher.
 func (m tuiModel) repeatLastTurn() (tea.Model, tea.Cmd) {
 	if m.r != nil {
-		if m.r.activeSess != "" && m.r.sessionsSt != nil {
-			if s, err := m.r.sessionsSt.Get(m.r.activeSess); err == nil {
+		if sid := m.r.sessID(); sid != "" && m.r.sessionsSt != nil {
+			if s, err := m.r.sessionsSt.Get(sid); err == nil {
 				for i := len(s.Turns) - 1; i >= 0; i-- {
 					if s.Turns[i].Role == "user" {
 						return m.askTurn(s.Turns[i].Text, "")
@@ -1205,9 +1249,10 @@ func (m tuiModel) repeatLastTurn() (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		for i := len(m.r.convo) - 1; i >= 0; i-- {
-			if m.r.convo[i].Role == "user" {
-				return m.askTurn(m.r.convo[i].Content, "")
+		convo := m.r.convoNow()
+		for i := len(convo) - 1; i >= 0; i-- {
+			if convo[i].Role == "user" {
+				return m.askTurn(convo[i].Content, "")
 			}
 		}
 	}
@@ -1221,12 +1266,36 @@ func (m tuiModel) toggleAuthorize() (tea.Model, tea.Cmd) {
 	if m.r == nil {
 		return m, nil
 	}
-	m.r.authorize = !m.r.authorize
+	on := m.r.toggleAuth()
 	key := "repl.auth.off"
-	if m.r.authorize {
+	if on {
 		key = "repl.auth.on"
 	}
 	return m, m.printBlock(block{kind: blockNote, body: i18n.T(m.loc, key)})
+}
+
+// setLang is the TUI's inline "/lang <code>": same switch as the classic
+// handler (r.loc + engine + persisted ui.locale) plus m.loc, which is what
+// every frame actually renders through. Runs here, not on exec, because the
+// write must not race the watcher goroutine reading r.loc.
+func (m tuiModel) setLang(arg string) (tea.Model, tea.Cmd) {
+	if m.r == nil {
+		return m, nil
+	}
+	loc, ok := matchLocale(arg)
+	if !ok {
+		return m, m.printBlock(block{kind: blockError,
+			body: i18n.Tf(m.loc, "repl.lang.bad", "lang", arg, "list", localeCodes())})
+	}
+	persistErr := m.r.applyLocale(loc)
+	m.applyLocale() // r.loc moved; pull it into m.loc, the theme and the menu
+	cmds := []tea.Cmd{m.printBlock(block{kind: blockNote,
+		body: i18n.Tf(m.loc, "repl.lang.set", "lang", i18n.LocaleNames[loc])})}
+	if persistErr != nil {
+		cmds = append(cmds, m.printBlock(block{kind: blockError,
+			body: i18n.Tf(m.loc, "repl.lang.persistFail", "err", persistErr.Error())}))
+	}
+	return m, tea.Batch(cmds...)
 }
 
 // askTurn launches one engine turn for prompt with the slash-mode directive
@@ -1234,8 +1303,8 @@ func (m tuiModel) toggleAuthorize() (tea.Model, tea.Cmd) {
 // state: transcript echo, file-ref expansion, textarea reset, asking flag.
 func (m tuiModel) askTurn(text, mode string) (tea.Model, tea.Cmd) {
 	if m.engine == nil {
-		if m.r != nil && m.r.engine != nil {
-			m.engine = m.r.engine
+		if m.r != nil && m.r.engine.Load() != nil {
+			m.engine = m.r.engine.Load()
 		} else {
 			note := block{
 				kind: blockError,
@@ -1292,10 +1361,10 @@ func (m tuiModel) askTurn(text, mode string) (tea.Model, tea.Cmd) {
 	if m.r != nil {
 		m.r.setAsking(true)
 	}
-	authorize := m.r != nil && m.r.authorize
+	authorize := m.r != nil && m.r.authorized()
 	sessID := ""
 	if m.r != nil {
-		sessID = m.r.activeSess
+		sessID = m.r.sessID()
 	}
 
 	stream, pump := startAsk(m.engine, history, prompt, workDir, sessID, authorize, mode)

@@ -10,6 +10,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,38 +29,46 @@ func daemonPIDFile() string {
 	return filepath.Join(filepath.Dir(cfg.Storage.DBPath), "daemon.pid")
 }
 
-// notifyDaemonReload SIGHUPs a running daemon so it hot-reloads the card, and
-// reports which of the two outcomes happened. A dead PID file (crashed
+// notifyDaemonReload reports the reload outcome on process stdout — the CLI
+// spelling. REPL/TUI callers use notifyDaemonReloadTo with their scoped
+// writer instead, so the lines land in the transcript rather than on the
+// frame Bubble Tea is repainting.
+func notifyDaemonReload() {
+	notifyDaemonReloadTo(os.Stdout)
+}
+
+// notifyDaemonReloadTo SIGHUPs a running daemon so it hot-reloads the card,
+// and reports which of the two outcomes happened. A dead PID file (crashed
 // daemon), a missing one (daemon never started), or a config that cannot be
 // resolved all degrade to the restart hint — the card on disk is already the
 // new one either way.
-func notifyDaemonReload() {
+func notifyDaemonReloadTo(out io.Writer) {
 	pidFile := daemonPIDFile()
 	if pidFile == "" {
-		fmt.Println("restart the daemon (or send it SIGHUP) for the new card to be advertised to peers")
+		fmt.Fprintln(out, "restart the daemon (or send it SIGHUP) for the new card to be advertised to peers")
 		return
 	}
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
-		fmt.Println("daemon not running — the new card is picked up at its next start")
+		fmt.Fprintln(out, "daemon not running — the new card is picked up at its next start")
 		return
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil || pid <= 0 {
-		fmt.Println("daemon not running — the new card is picked up at its next start")
+		fmt.Fprintln(out, "daemon not running — the new card is picked up at its next start")
 		return
 	}
 	// Signal 0 probes liveness without delivering anything: a stale PID file
 	// from a crashed daemon must not turn into a signal to an unrelated
 	// process that happened to reuse the number.
 	if err := syscall.Kill(pid, 0); err != nil {
-		fmt.Println("daemon not running — the new card is picked up at its next start")
+		fmt.Fprintln(out, "daemon not running — the new card is picked up at its next start")
 		return
 	}
 	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
-		fmt.Printf("could not signal daemon (pid %d): %v\n", pid, err)
-		fmt.Println("restart the daemon (or send it SIGHUP) for the new card to be advertised to peers")
+		fmt.Fprintf(out, "could not signal daemon (pid %d): %v\n", pid, err)
+		fmt.Fprintln(out, "restart the daemon (or send it SIGHUP) for the new card to be advertised to peers")
 		return
 	}
-	fmt.Printf("daemon (pid %d) told to reload the card — changes are live\n", pid)
+	fmt.Fprintf(out, "daemon (pid %d) told to reload the card — changes are live\n", pid)
 }

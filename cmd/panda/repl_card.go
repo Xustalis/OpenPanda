@@ -22,9 +22,8 @@ package main
 //	/nodes invite                 print the join guide for the other machine
 
 import (
-	"context"
-	"fmt"
 	"net"
+	"os"
 	"slices"
 	"strings"
 
@@ -48,20 +47,132 @@ func (r *repl) cmdCard(arg string) {
 		r.cardAgent(fields[1:])
 	case "manual":
 		r.cardManual(fields[1:])
+	case "set":
+		r.cardSet(fields[1:])
+	case "rescan", "scan", "refresh":
+		r.cardRescan(fields[1:])
 	default:
 		r.outln(i18n.T(r.loc, "repl.card.usage"))
 	}
 }
 
-func (r *repl) ensureCard() string {
-	if r.cardPath == "" {
-		r.cardPath = ensureDefaultCardPath()
-		r.hasCard = r.cardPath != ""
-		if r.engine != nil && r.cardPath != "" {
-			_ = r.engine.ReloadCard(r.cardPath)
+// cardSet runs /card set <field>=<value>… — the scalar tuner fields of
+// `panda card set` (device, resource_class, chip, capacity.*, resource_profile.*).
+// List/map fields stay with the CLI editor verbs; ReloadCard applies live.
+func (r *repl) cardSet(rest []string) {
+	pos, _, err := parseCardFlags(rest)
+	if err != nil {
+		r.outln(err)
+		return
+	}
+	if len(pos) == 0 {
+		r.outln("usage: /card set <field>=<value> [<field>=<value>…]")
+		r.outln("fields: device, resource_class, chip, capacity.cpu_cores, capacity.ram_gb,")
+		r.outln("        capacity.max_concurrent_tasks, resource_profile.cpu,")
+		r.outln("        resource_profile.ram_gb, resource_profile.gpu_vram_gb,")
+		r.outln("        resource_profile.duration_hint")
+		return
+	}
+	path := r.ensureCard()
+	if path == "" {
+		r.outln(i18n.T(r.loc, "repl.card.none"))
+		return
+	}
+	card, err := ledger.LoadCard(path)
+	if err != nil {
+		r.outln(i18n.Tf(r.loc, "repl.card.loadFail", "err", err.Error()))
+		return
+	}
+	for _, a := range pos {
+		field, value, ok := strings.Cut(a, "=")
+		if !ok {
+			r.outln(i18n.Tf(r.loc, "repl.card.badAssign", "a", a))
+			return
+		}
+		if err := setCardField(&card, strings.TrimSpace(field), strings.TrimSpace(value)); err != nil {
+			r.outln(err)
+			return
 		}
 	}
-	return r.cardPath
+	if err := writeCard(path, card, true); err != nil {
+		r.storeErr(err)
+		return
+	}
+	r.outln(path + " updated")
+	r.reloadCardLive()
+}
+
+// cardRescan runs /card rescan [--write] — re-probe the machine and diff the
+// result against the card. Dry-run by default, exactly like the CLI verb;
+// --write merges (keeping a .bak) and reloads the live card in-engine.
+func (r *repl) cardRescan(rest []string) {
+	write := false
+	for _, f := range rest {
+		if f == "--write" || f == "-write" || f == "-w" {
+			write = true
+		}
+	}
+	path := r.cardPathNow()
+	if path == "" {
+		path = ensureDefaultCardPath()
+	}
+	old, err := ledger.LoadCard(path)
+	created := false
+	if err != nil {
+		if !os.IsNotExist(underlyingErr(err)) {
+			r.outln(i18n.Tf(r.loc, "repl.card.loadFail", "err", err.Error()))
+			return
+		}
+		created = true
+	}
+	scanned := detectCard()
+	merged, diffs := mergeCard(old, scanned)
+	if created {
+		merged = scanned
+	}
+	if created {
+		r.outf("no card at %s — the scan will create one\n", path)
+	}
+	if len(diffs) == 0 && !created {
+		r.outln("card already matches this machine — nothing to change")
+		return
+	}
+	for _, d := range diffs {
+		r.outf("  %-34s %s → %s\n", d.Field, orDash(d.Old), d.New)
+	}
+	if !write {
+		r.outln()
+		r.outln("dry run — re-run with --write to apply")
+		return
+	}
+	if err := writeCard(path, merged, true); err != nil {
+		r.storeErr(err)
+		return
+	}
+	r.setCard(path, true)
+	r.outf("%s updated (%d change(s))\n", path, len(diffs))
+	r.reloadCardLive()
+}
+
+func (r *repl) ensureCard() string {
+	r.cardMu.Lock()
+	path := r.cardPath
+	fresh := false
+	if path == "" {
+		path = ensureDefaultCardPath()
+		r.cardPath = path
+		r.hasCard = path != ""
+		fresh = true
+	}
+	r.cardMu.Unlock()
+	// Only the first materialization triggers a reload — an existing card
+	// path is already the one the engine loaded (or /card rescan reloaded).
+	if fresh && path != "" {
+		if eng := r.engine.Load(); eng != nil {
+			_ = eng.ReloadCard(path)
+		}
+	}
+	return path
 }
 
 // cardSummary prints the one-glance view of the card: what this machine is,
@@ -148,7 +259,7 @@ func (r *repl) cardNative(rest []string) {
 			r.outln(i18n.T(r.loc, "repl.card.native.usage"))
 			return
 		}
-		if err := cardmut.NativeAdd(r.cardPath, ab); err != nil {
+		if err := cardmut.NativeAdd(r.cardPathNow(), ab); err != nil {
 			r.outln(err)
 			return
 		}
@@ -159,7 +270,7 @@ func (r *repl) cardNative(rest []string) {
 			r.outln(i18n.T(r.loc, "repl.card.native.usage"))
 			return
 		}
-		if err := cardmut.NativeRemove(r.cardPath, pos[0]); err != nil {
+		if err := cardmut.NativeRemove(r.cardPathNow(), pos[0]); err != nil {
 			r.outln(err)
 			return
 		}
@@ -210,7 +321,7 @@ func (r *repl) cardAgent(rest []string) {
 			CostTier:     fl["cost-tier"],
 			Tier:         tier,
 		}
-		if err := cardmut.AgentAdd(r.cardPath, pos[0], ag); err != nil {
+		if err := cardmut.AgentAdd(r.cardPathNow(), pos[0], ag); err != nil {
 			r.outln(err)
 			return
 		}
@@ -221,7 +332,7 @@ func (r *repl) cardAgent(rest []string) {
 			r.outln(i18n.T(r.loc, "repl.card.agent.usage"))
 			return
 		}
-		if err := cardmut.AgentRemove(r.cardPath, pos[0]); err != nil {
+		if err := cardmut.AgentRemove(r.cardPathNow(), pos[0]); err != nil {
 			r.outln(err)
 			return
 		}
@@ -237,7 +348,7 @@ func (r *repl) cardAgent(rest []string) {
 			r.outln(err)
 			return
 		}
-		if err := cardmut.AgentSet(r.cardPath, pos[0], upd); err != nil {
+		if err := cardmut.AgentSet(r.cardPathNow(), pos[0], upd); err != nil {
 			r.outln(err)
 			return
 		}
@@ -271,7 +382,7 @@ func (r *repl) cardManual(rest []string) {
 			return
 		}
 		ab := ledger.ManualAbility{ID: pos[0], Notify: fl["notify"]}
-		if err := cardmut.ManualAdd(r.cardPath, ab); err != nil {
+		if err := cardmut.ManualAdd(r.cardPathNow(), ab); err != nil {
 			r.outln(err)
 			return
 		}
@@ -282,7 +393,7 @@ func (r *repl) cardManual(rest []string) {
 			r.outln(i18n.T(r.loc, "repl.card.manual.usage"))
 			return
 		}
-		if err := cardmut.ManualRemove(r.cardPath, pos[0]); err != nil {
+		if err := cardmut.ManualRemove(r.cardPathNow(), pos[0]); err != nil {
 			r.outln(err)
 			return
 		}
@@ -298,12 +409,13 @@ func (r *repl) cardManual(rest []string) {
 // no restart and no SIGHUP. Without an engine (no model configured) the
 // fallback is the CLI's daemon-side flow, and the line says which path ran.
 func (r *repl) reloadCardLive() {
-	if r.engine == nil {
+	if r.engine.Load() == nil {
 		r.outln(i18n.T(r.loc, "repl.card.noEngine"))
-		notifyDaemonReload()
+		notifyDaemonReloadTo(r.commandOutput())
 		return
 	}
-	if err := r.engine.ReloadCard(r.cardPath); err != nil {
+	cardPath, _ := r.cardInfo()
+	if err := r.engine.Load().ReloadCard(cardPath); err != nil {
 		r.outln(i18n.Tf(r.loc, "repl.card.reloadFail", "err", err.Error()))
 		return
 	}
@@ -357,48 +469,57 @@ func (r *repl) cmdNodesAdd(addr string) {
 		r.outln(i18n.Tf(r.loc, "cli.nodes.badaddr", "addr", addr))
 		return
 	}
-	if r.cfg.Network.SharedSecret == "" {
+	var haveSecret bool
+	r.readConfig(func(c *config.Config) { haveSecret = c.Network.SharedSecret != "" })
+	if !haveSecret {
 		secret, err := generateSharedSecret()
 		if err != nil {
 			r.outln(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
 			return
 		}
-		r.cfg.Network.SharedSecret = secret
+		r.mutateConfig(func(c *config.Config) { c.Network.SharedSecret = secret })
 		r.outln(i18n.T(r.loc, "cli.nodes.secret.gen"))
 	}
-	if slices.Contains(r.cfg.Network.Peers, addr) {
-		r.outln(i18n.Tf(r.loc, "cli.nodes.add.exists", "addr", addr))
+	// Exists-check, append, and persist ride one critical section — the
+	// exists test outside the lock was a check-then-act gap, and
+	// UpdateNetworkSection rewrites the whole section.
+	var exists bool
+	err := r.mutateConfigErr(func(c *config.Config) error {
+		if exists = slices.Contains(c.Network.Peers, addr); exists {
+			return nil
+		}
+		c.Network.Peers = append(c.Network.Peers, addr)
+		return config.UpdateNetworkSection(configWritePath(r.configPath), config.NetworkConfig{
+			ListenAddr:   c.Network.ListenAddr,
+			SharedSecret: c.Network.SharedSecret,
+			Peers:        slices.Clone(c.Network.Peers),
+		})
+	})
+	if err != nil {
+		r.outln(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
 		return
 	}
-	r.cfg.Network.Peers = append(r.cfg.Network.Peers, addr)
-	if err := config.UpdateNetworkSection(configWritePath(r.configPath), config.NetworkConfig{
-		ListenAddr:   r.cfg.Network.ListenAddr,
-		SharedSecret: r.cfg.Network.SharedSecret,
-		Peers:        r.cfg.Network.Peers,
-	}); err != nil {
-		r.outln(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
+	if exists {
+		r.outln(i18n.Tf(r.loc, "cli.nodes.add.exists", "addr", addr))
 		return
 	}
 	r.outln(i18n.Tf(r.loc, "cli.nodes.add.done", "addr", addr))
 
-	// Live dial: async, because the dialer's timeout would otherwise freeze
-	// the prompt on an offline peer — the same reasoning as startup dials.
-	// The writer is captured NOW, while the command's streams are still
-	// scoped: calling r.outln after dispatch returns would fall back to
-	// process stdout and write straight over a repainting TUI frame.
-	if r.engine != nil {
-		w := r.commandOutput()
-		go func() {
-			if err := r.engine.DialPeer(context.Background(), addr); err != nil {
-				fmt.Fprintf(w, "%s\n", i18n.Tf(r.loc, "repl.nodes.dialFail", "addr", addr))
-				return
-			}
-			fmt.Fprintf(w, "%s\n", i18n.Tf(r.loc, "repl.nodes.dialed", "addr", addr))
-		}()
+	// Live dial through the in-process engine. Synchronous now: an async
+	// goroutine outlived dispatchWithIO, so its result writes hit the command
+	// writer after execDoneMsg and were silently dropped by the TUI — a
+	// dial that reported nothing at all. The command context bounds it (Esc
+	// cancels), matching every other network verb here.
+	if r.engine.Load() != nil {
+		if err := r.engine.Load().DialPeer(r.commandContext(), addr); err != nil {
+			r.outln(i18n.Tf(r.loc, "repl.nodes.dialFail", "addr", addr))
+			return
+		}
+		r.outln(i18n.Tf(r.loc, "repl.nodes.dialed", "addr", addr))
 		return
 	}
 	r.outln(i18n.T(r.loc, "repl.nodes.noEngine"))
-	printJoinGuide(r.loc, r.cfg)
+	r.readConfig(func(c *config.Config) { printJoinGuideTo(r.commandOutput(), r.loc, c) })
 }
 
 // cmdNodesDisconnect implements /nodes disconnect <addr> — the peer leaves
@@ -410,21 +531,30 @@ func (r *repl) cmdNodesDisconnect(addr string) {
 		r.outln(i18n.T(r.loc, "repl.nodes.add.usage"))
 		return
 	}
-	remaining := make([]string, 0, len(r.cfg.Network.Peers))
-	for _, p := range r.cfg.Network.Peers {
-		if p != addr {
-			remaining = append(remaining, p)
+	var remaining []string
+	var found bool
+	err := r.mutateConfigErr(func(c *config.Config) error {
+		remaining = make([]string, 0, len(c.Network.Peers))
+		for _, p := range c.Network.Peers {
+			if p != addr {
+				remaining = append(remaining, p)
+			}
 		}
-	}
-	if len(remaining) == len(r.cfg.Network.Peers) {
-		r.outln(i18n.Tf(r.loc, "cli.nodes.disconnect.none", "addr", addr))
+		found = len(remaining) != len(c.Network.Peers)
+		if !found {
+			return nil
+		}
+		c.Network.Peers = remaining
+		return config.UpdateNetworkSection(configWritePath(r.configPath), config.NetworkConfig{
+			Peers: remaining,
+		})
+	})
+	if err != nil {
+		r.outln(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
 		return
 	}
-	r.cfg.Network.Peers = remaining
-	if err := config.UpdateNetworkSection(configWritePath(r.configPath), config.NetworkConfig{
-		Peers: remaining,
-	}); err != nil {
-		r.outln(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
+	if !found {
+		r.outln(i18n.Tf(r.loc, "cli.nodes.disconnect.none", "addr", addr))
 		return
 	}
 	r.outln(i18n.Tf(r.loc, "cli.nodes.disconnect.done", "addr", addr))
@@ -433,21 +563,28 @@ func (r *repl) cmdNodesDisconnect(addr string) {
 
 // cmdNodesInvite implements /nodes invite — the join guide, no config change.
 func (r *repl) cmdNodesInvite() {
-	if r.cfg.Network.SharedSecret == "" {
+	var haveSecret bool
+	r.readConfig(func(c *config.Config) { haveSecret = c.Network.SharedSecret != "" })
+	if !haveSecret {
 		secret, err := generateSharedSecret()
 		if err != nil {
 			r.outln(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
 			return
 		}
-		r.cfg.Network.SharedSecret = secret
-		if err := config.UpdateNetworkSection(configWritePath(r.configPath), config.NetworkConfig{
-			ListenAddr:   r.cfg.Network.ListenAddr,
-			SharedSecret: secret,
+		// Mutate + persist in one section: a peer sharing cfgMu could
+		// otherwise interleave a whole-section rewrite between them.
+		if err := r.mutateConfigErr(func(c *config.Config) error {
+			c.Network.SharedSecret = secret
+			return config.UpdateNetworkSection(configWritePath(r.configPath), config.NetworkConfig{
+				ListenAddr:   c.Network.ListenAddr,
+				SharedSecret: secret,
+				Peers:        slices.Clone(c.Network.Peers),
+			})
 		}); err != nil {
 			r.outln(i18n.Tf(r.loc, "repl.err", "err", err.Error()))
 			return
 		}
 		r.outln(i18n.T(r.loc, "cli.nodes.secret.gen"))
 	}
-	printJoinGuide(r.loc, r.cfg)
+	r.readConfig(func(c *config.Config) { printJoinGuideTo(r.commandOutput(), r.loc, c) })
 }

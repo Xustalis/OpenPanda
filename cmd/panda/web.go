@@ -272,7 +272,7 @@ func runWeb(args []string) {
 			Sessions:     sessions.NewStore(filepath.Join(filepath.Dir(cfg.Storage.DBPath), "sessions")),
 			Worktrees:    openWorktreesBestEffort(cfg.Storage.WorkPath),
 			SkillStore: func() *skills.Store {
-				st := skills.NewStore(cfg.Storage.SkillsPath)
+				st := skills.NewStore(skillsPathFor(cfg))
 				_ = st.EnsureBuiltins()
 				return st
 			}(),

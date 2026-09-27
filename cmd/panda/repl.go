@@ -33,6 +33,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
@@ -57,28 +58,45 @@ import (
 // engine, the tier-2 authorization switch, the active locale, the terminal
 // layer, and the /web server once booted.
 type repl struct {
-	loc         i18n.Locale
-	cfg         *config.Config
-	configPath  string
-	db          *sql.DB
-	store       *core.TaskStore
-	projects    *memory.Projects
-	projStore   *projectstore.Store
-	hermes      *memory.Hermes
-	sessionsSt  *sessions.Store
-	worktrees   *sessions.Worktrees
-	engine      *askengine.Engine
+	loc        i18n.Locale
+	cfg        *config.Config
+	configPath string
+	db         *sql.DB
+	store      *core.TaskStore
+	projects   *memory.Projects
+	projStore  *projectstore.Store
+	hermes     *memory.Hermes
+	sessionsSt *sessions.Store
+	worktrees  *sessions.Worktrees
+	// engine is an atomic pointer: the TUI hot-builds the engine on its
+	// Update goroutine while exec-goroutine slash handlers (e.g. /approve,
+	// /model) read it concurrently.
+	engine atomic.Pointer[askengine.Engine]
+	// cardMu guards cardPath/hasCard: /card set|rescan write them on the
+	// exec goroutine while the TUI Update goroutine (engine bootstrap) and
+	// /web's Deps read them.
+	cardMu      sync.Mutex
 	cardPath    string
 	hasCard     bool
 	authorize   bool
 	interactive bool
 	quit        bool
-	webSrv      *http.Server
-	webURL      string
-	webToken    string
-	term        *termSession
-	activeSess  string
-	push        *push.Service
+	// webMu guards the embedded panel server fields: /web publishes them on
+	// the exec goroutine while the exit paths shut the server down on the
+	// main goroutine.
+	webMu    sync.Mutex
+	webSrv   *http.Server
+	webURL   string
+	webToken string
+	term     *termSession
+	push     *push.Service
+
+	// sessMu guards the conversation-scoped mutable state: activeSess, convo,
+	// authorize and the /cost counters. The TUI Update goroutine and the
+	// slash-command exec goroutine touch these concurrently — an inline
+	// /resume writes activeSess while an exec /session listing reads it.
+	sessMu     sync.Mutex
+	activeSess string
 
 	// activeProj is the in-memory active-project pointer, guarded by projMu:
 	// the task watcher reads it on its own goroutine every poll while the
@@ -89,6 +107,7 @@ type repl struct {
 	// Conversation memory for bare (session-less) mode: every ask's prompt
 	// and outcome accumulate here so follow-up questions keep context — the
 	// multi-turn UX users expect from a chat, without /resume-ing a session.
+	// Guarded by sessMu (see above).
 	convo []entry.Turn
 	// lastFooter is the footer as last printed; an identical one is skipped
 	// (printFooter runs before every prompt).
@@ -96,6 +115,7 @@ type repl struct {
 	// Session cost, accumulated across every ask this run and reported by
 	// /cost. The provider reports zero tokens for endpoints that send no
 	// usage block; the turn count and model time are always meaningful.
+	// Guarded by sessMu.
 	costTurns    int
 	costIn       int64
 	costOut      int64
@@ -121,6 +141,12 @@ type repl struct {
 	commandOut    io.Writer
 	commandErrOut io.Writer
 
+	// cfgMu guards r.cfg only while no engine exists — once an engine is up
+	// its own cfgMu takes over (mutateConfig/readConfig route there). A
+	// panel embedded via /web borrows this lock through Deps.CfgMu so its
+	// HTTP handlers serialize with the fallback path too.
+	cfgMu sync.RWMutex
+
 	// Tab-completion caches (repl_complete.go). The line editor recomputes
 	// its candidate menu on every keystroke, so the state lookups behind
 	// argument completion are memoized for a couple of seconds.
@@ -128,6 +154,7 @@ type repl struct {
 	sessionCache argCache
 	projectCache argCache
 	memoryCache  argCache
+	nodeCache    argCache
 }
 
 // replCmd is one slash command: a name, the help group it is listed under
@@ -156,6 +183,7 @@ func init() {
 		{"cost", "chat", "cmd.cost", (*repl).cmdCost},
 		{"model", "chat", "cmd.model", (*repl).cmdModel},
 		{"sessions", "chat", "cmd.sessions", (*repl).cmdSessions},
+		{"session", "chat", "cmd.session", (*repl).cmdSession},
 		{"resume", "chat", "cmd.resume", (*repl).cmdResume},
 		{"clear", "chat", "cmd.clear", (*repl).cmdClear},
 		{"tasks", "tasks", "cmd.tasks", (*repl).cmdTasks},
@@ -166,6 +194,10 @@ func init() {
 		{"reject", "tasks", "cmd.reject", (*repl).cmdReject},
 		{"logs", "tasks", "cmd.logs", (*repl).cmdLogs},
 		{"heatmap", "tasks", "cmd.heatmap", (*repl).cmdHeatmap},
+		{"metrics", "tasks", "cmd.metrics", (*repl).cmdMetrics},
+		{"audit", "tasks", "cmd.audit", (*repl).cmdAudit},
+		{"reminder", "tasks", "cmd.reminder", (*repl).cmdReminder},
+		{"reminders", "tasks", "cmd.reminder", (*repl).cmdReminder},
 		{"memory", "memory", "cmd.memory", (*repl).cmdMemory},
 		{"projects", "memory", "cmd.projects", (*repl).cmdProjects},
 		{"project", "memory", "cmd.project", (*repl).cmdProjectEnter},
@@ -358,7 +390,7 @@ func runRepl(args []string) {
 			fatal("ask engine", err)
 		}
 		defer engine.Close()
-		r.engine = engine
+		r.engine.Store(engine)
 		// The REPL inherits the project the user entered, so the first ask of a
 		// sitting already belongs to it. /project switches it mid-session.
 		r.bindProject()
@@ -369,12 +401,7 @@ func runRepl(args []string) {
 	// loop below with a managed display. PANDA_CLASSIC_REPL falls back here.
 	if shouldUseTUI(r) {
 		runTUI(r)
-		if r.webSrv != nil {
-			sctx, scancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = r.webSrv.Shutdown(sctx)
-			scancel()
-			r.webSrv = nil
-		}
+		r.stopWeb()
 		return
 	}
 
@@ -386,7 +413,7 @@ func runRepl(args []string) {
 			fmt.Println(pal().Muted(i18n.T(r.loc, "repl.firstrun")))
 		}
 	}
-	if r.engine != nil && !r.hasCard {
+	if _, hasCard := r.cardInfo(); r.engine.Load() != nil && !hasCard {
 		fmt.Println(i18n.T(r.loc, "repl.ask.noCard"))
 	}
 
@@ -404,7 +431,7 @@ func runRepl(args []string) {
 	// Resume the persisted bare-mode conversation (people reopen
 	// terminals, not conversations); /new starts a fresh one.
 	if c := loadConvo(); len(c) > 0 {
-		r.convo = c
+		r.setConvo(c)
 		fmt.Println(i18n.Tf(r.loc, "repl.convo.resumed", "n", fmt.Sprint(len(c)/2)))
 	}
 
@@ -438,12 +465,121 @@ func runRepl(args []string) {
 	if r.term != nil {
 		r.term.restore()
 	}
-	if r.webSrv != nil {
+	r.stopWeb()
+}
+
+// stopWeb shuts the embedded panel server down if /web ever started one.
+// Safe to call from any goroutine; the publish path holds the same lock.
+func (r *repl) stopWeb() {
+	r.webMu.Lock()
+	srv := r.webSrv
+	r.webSrv = nil
+	r.webMu.Unlock()
+	if srv != nil {
 		sctx, scancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = r.webSrv.Shutdown(sctx)
+		_ = srv.Shutdown(sctx)
 		scancel()
-		r.webSrv = nil
 	}
+}
+
+// cardInfo snapshots the capability-card state under cardMu.
+func (r *repl) cardInfo() (path string, has bool) {
+	r.cardMu.Lock()
+	defer r.cardMu.Unlock()
+	return r.cardPath, r.hasCard
+}
+
+// setCard publishes a new capability-card path under cardMu.
+func (r *repl) setCard(path string, has bool) {
+	r.cardMu.Lock()
+	r.cardPath = path
+	r.hasCard = has
+	r.cardMu.Unlock()
+}
+
+// cardPathNow returns the current card path under cardMu.
+func (r *repl) cardPathNow() string {
+	path, _ := r.cardInfo()
+	return path
+}
+
+// sessID snapshots the bound session id under sessMu.
+func (r *repl) sessID() string {
+	r.sessMu.Lock()
+	defer r.sessMu.Unlock()
+	return r.activeSess
+}
+
+// setSess binds/detaches a session under sessMu.
+func (r *repl) setSess(id string) {
+	r.sessMu.Lock()
+	r.activeSess = id
+	r.sessMu.Unlock()
+}
+
+// convoNow returns a copy of the bare-mode conversation under sessMu so
+// callers can iterate without racing writers.
+func (r *repl) convoNow() []entry.Turn {
+	r.sessMu.Lock()
+	defer r.sessMu.Unlock()
+	return append([]entry.Turn(nil), r.convo...)
+}
+
+// convoLen reports the bare-conversation turn count under sessMu.
+func (r *repl) convoLen() int {
+	r.sessMu.Lock()
+	defer r.sessMu.Unlock()
+	return len(r.convo)
+}
+
+// setConvo replaces the bare conversation under sessMu.
+func (r *repl) setConvo(c []entry.Turn) {
+	r.sessMu.Lock()
+	r.convo = c
+	r.sessMu.Unlock()
+}
+
+// editConvo mutates the bare conversation under sessMu; fn returns the new
+// slice (typically append/trim).
+func (r *repl) editConvo(fn func([]entry.Turn) []entry.Turn) {
+	r.sessMu.Lock()
+	r.convo = fn(r.convo)
+	r.sessMu.Unlock()
+}
+
+// authorized snapshots the tier-2 authorization switch under sessMu.
+func (r *repl) authorized() bool {
+	r.sessMu.Lock()
+	defer r.sessMu.Unlock()
+	return r.authorize
+}
+
+// toggleAuth flips the tier-2 authorization switch under sessMu and reports
+// the new state.
+func (r *repl) toggleAuth() bool {
+	r.sessMu.Lock()
+	r.authorize = !r.authorize
+	v := r.authorize
+	r.sessMu.Unlock()
+	return v
+}
+
+// addCost folds one ask's usage into the session counters under sessMu.
+func (r *repl) addCost(in, out int64, wall time.Duration, usd float64) {
+	r.sessMu.Lock()
+	r.costTurns++
+	r.costIn += in
+	r.costOut += out
+	r.costWall += wall
+	r.costTotalUSD += usd
+	r.sessMu.Unlock()
+}
+
+// costNow snapshots the session counters under sessMu.
+func (r *repl) costNow() (turns int, in, out int64, wall time.Duration, usd float64) {
+	r.sessMu.Lock()
+	defer r.sessMu.Unlock()
+	return r.costTurns, r.costIn, r.costOut, r.costWall, r.costTotalUSD
 }
 
 // slashNames lists "/name" candidates for Tab completion.
@@ -499,13 +635,14 @@ func figlet(word string) []string {
 // a turn added to the conversation) is exactly what the user needs to see.
 func (r *repl) printFooter() {
 	p := pal()
-	mode := r.cfg.Approval.NormalizedMode()
+	var mode string
+	r.readConfig(func(c *config.Config) { mode = c.Approval.NormalizedMode() })
 	remembered := ""
-	if r.engine != nil {
+	if r.engine.Load() != nil {
 		// The footer reports the EFFECTIVE policy: a project's approval_mode
 		// override and a remembered answer both change what the next tier-2
 		// action does, so both belong in the readout.
-		st := r.engine.ApprovalState(r.activeSess, r.activeProjectName())
+		st := r.engine.Load().ApprovalState(r.sessID(), r.activeProjectName())
 		mode = st.Mode
 		if st.Decision != "" {
 			remembered = "·" + st.Decision + "@" + st.DecisionScope
@@ -521,13 +658,13 @@ func (r *repl) printFooter() {
 		mode = p.Success(mode)
 	}
 	authz := p.Muted(i18n.T(r.loc, "repl.footer.authz.off"))
-	if r.authorize {
+	if r.authorized() {
 		authz = p.Danger(i18n.T(r.loc, "repl.footer.authz.on"))
 	}
 	sess := "-"
-	if r.activeSess != "" {
-		sess = r.activeSess
-	} else if n := len(r.convo) / 2; n > 0 {
+	if sid := r.sessID(); sid != "" {
+		sess = sid
+	} else if n := r.convoLen() / 2; n > 0 {
 		sess = fmt.Sprintf("chat(%d turns)", n)
 	}
 	line := p.Muted(fmt.Sprintf("%s:%s  %s:%s  %s:%s  %s:%s",
@@ -674,25 +811,26 @@ func (r *repl) outln(args ...any) {
 func (r *repl) askContext(text string) ([]entry.Turn, string) {
 	var history []entry.Turn
 	workDir := ""
-	if r.activeSess != "" && r.sessionsSt != nil {
-		sess, err := r.sessionsSt.Get(r.activeSess)
+	sessID := r.sessID()
+	if sessID != "" && r.sessionsSt != nil {
+		sess, err := r.sessionsSt.Get(sessID)
 		if err != nil {
-			r.activeSess = "" // stale id: drop silently back to bare mode
+			r.setSess("") // stale id: drop silently back to bare mode
 		} else {
 			for _, t := range sess.Turns {
 				history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
 			}
 			if _, err := r.sessionsSt.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: text}); err == nil {
 				workDir = sess.Worktree
-				if workDir == "" && r.engine != nil {
-					workDir = r.engine.WorkPath()
+				if workDir == "" && r.engine.Load() != nil {
+					workDir = r.engine.Load().WorkPath()
 				}
 				return history, workDir
 			}
 			history = nil // append failed: fall back to bare mode
 		}
 	}
-	return append(history, r.convo...), workDir
+	return append(history, r.convoNow()...), workDir
 }
 
 // recordOutcome persists the assistant side of a finished turn: into the active
@@ -707,7 +845,12 @@ func (r *repl) recordOutcome(ctx context.Context, text string, out *askengine.Re
 	if out == nil {
 		return
 	}
-	if r.activeSess == "" || r.sessionsSt == nil {
+	// The session's running total /cost reads. Both front ends funnel here —
+	// the classic loop's ask and the TUI's commit — so this is the one place
+	// a completed turn can be counted without either side drifting.
+	r.addCost(out.InputTokens, out.OutputTokens, out.Latency, out.Cost)
+	sessID := r.sessID()
+	if sessID == "" || r.sessionsSt == nil {
 		r.rememberTurn(text, out)
 		return
 	}
@@ -716,12 +859,12 @@ func (r *repl) recordOutcome(ctx context.Context, text string, out *askengine.Re
 	case "task":
 		turn.Ref = out.TaskID
 		if out.TaskID != "" && r.store != nil {
-			_ = r.store.SetSessionID(ctx, out.TaskID, r.activeSess)
+			_ = r.store.SetSessionID(ctx, out.TaskID, sessID)
 		}
 	case "plan":
 		turn.Ref = out.PlanID
 	}
-	_, _ = r.sessionsSt.AppendTurn(r.activeSess, turn)
+	_, _ = r.sessionsSt.AppendTurn(sessID, turn)
 }
 
 // currentProject returns the active-project pointer under its lock.
@@ -738,6 +881,56 @@ func (r *repl) setProject(name string) {
 	r.projMu.Unlock()
 }
 
+// mutateConfig applies fn to the shared *config.Config. r.cfg is the same
+// pointer the engine holds (e.cfg), and engine goroutines read its mutable
+// fields (model, peers, approval mode, work path) while asks are in flight —
+// including asks the TUI released but did not stop. Routing the write through
+// the engine's cfgMu pairs it with those reads; without an engine there are
+// no concurrent readers and the write is direct.
+func (r *repl) mutateConfig(fn func(*config.Config)) {
+	if r.engine.Load() != nil {
+		r.engine.Load().MutateConfig(fn)
+		return
+	}
+	r.cfgMu.Lock()
+	defer r.cfgMu.Unlock()
+	fn(r.cfg)
+}
+
+// mutateConfigErr is mutateConfig for fallible mutations — a config-file
+// persist paired with the in-memory write. The file I/O runs under the lock
+// so it serializes with every other surface's writes (panel handlers on an
+// embedded /web share the same cfgMu through the engine or Deps.CfgMu).
+func (r *repl) mutateConfigErr(fn func(*config.Config) error) error {
+	if r.engine.Load() != nil {
+		return r.engine.Load().MutateConfigErr(fn)
+	}
+	r.cfgMu.Lock()
+	defer r.cfgMu.Unlock()
+	if r.cfg != nil {
+		return fn(r.cfg)
+	}
+	return nil
+}
+
+// readConfig is the read half of mutateConfig — required on goroutines other
+// than the command loop (the TUI's Update goroutine, the watcher, panel HTTP
+// handlers via /web) so a mutateConfig write pairs with this read instead of
+// tearing it. Without an engine no goroutine writes cfg, so reads take the
+// fallback cfgMu — which an embedded /web panel shares via Deps.CfgMu.
+// A nil cfg skips fn entirely: no config loaded means nothing to read.
+func (r *repl) readConfig(fn func(*config.Config)) {
+	if r.engine.Load() != nil {
+		r.engine.Load().ReadConfig(fn)
+		return
+	}
+	r.cfgMu.RLock()
+	defer r.cfgMu.RUnlock()
+	if r.cfg != nil {
+		fn(r.cfg)
+	}
+}
+
 // recordErrorTurn persists a failed turn. In session mode it appends the
 // assistant side, mirroring the panel and `session ask` error paths: without
 // it the thread ends on a dangling user turn (askContext persists the
@@ -750,18 +943,24 @@ func (r *repl) recordErrorTurn(text string, err error) {
 	if err == nil {
 		return
 	}
-	if r.activeSess == "" || r.sessionsSt == nil {
+	sessID := r.sessID()
+	if sessID == "" || r.sessionsSt == nil {
 		if strings.TrimSpace(text) != "" {
-			r.convo = append(r.convo,
-				entry.Turn{Role: "user", Content: text},
-				entry.Turn{Role: "assistant", Content: "⚠ " + err.Error()},
-			)
-			r.convo = trimConvo(r.convo)
-			saveConvo(r.convo)
+			var convo []entry.Turn
+			r.editConvo(func(c []entry.Turn) []entry.Turn {
+				c = append(c,
+					entry.Turn{Role: "user", Content: text},
+					entry.Turn{Role: "assistant", Content: "⚠ " + err.Error()},
+				)
+				c = trimConvo(c)
+				convo = c
+				return c
+			})
+			saveConvo(convo)
 		}
 		return
 	}
-	_, _ = r.sessionsSt.AppendTurn(r.activeSess, sessions.Turn{Role: "assistant", Text: "⚠ " + err.Error(), Kind: "error"})
+	_, _ = r.sessionsSt.AppendTurn(sessID, sessions.Turn{Role: "assistant", Text: "⚠ " + err.Error(), Kind: "error"})
 }
 
 // ask runs one prompt through the unified entry engine and prints the
@@ -777,7 +976,7 @@ func (r *repl) ask(text string) { r.askMode(text, "") }
 // askMode runs one prompt under a slash-mode directive: "goal", "plan",
 // "spec", or "" for the default classification path.
 func (r *repl) askMode(text, mode string) {
-	if r.engine == nil {
+	if r.engine.Load() == nil {
 		r.outln(i18n.T(r.loc, "repl.ask.noEngine"))
 		return
 	}
@@ -864,7 +1063,7 @@ func (r *repl) askMode(text, mode string) {
 	}
 	ch := make(chan outcome, 1)
 	go func() {
-		out, err := r.engine.AskTurnsSession(ctx, history, text, workDir, mode, r.activeSess, r.authorize, cb)
+		out, err := r.engine.Load().AskTurnsSession(ctx, history, text, workDir, mode, r.sessID(), r.authorized(), cb)
 		ch <- outcome{out, err}
 	}()
 	got := make(chan struct{})
@@ -975,24 +1174,20 @@ func (r *repl) askMode(text, mode string) {
 	}
 
 	// The closing line: what this turn cost (elapsed, and tokens when the
-	// provider reports them), and the same numbers added to the session total
-	// that /cost reports.
-	r.costTurns++
-	r.costIn += out.InputTokens
-	r.costOut += out.OutputTokens
-	r.costWall += out.Latency
-	r.costTotalUSD += out.Cost
+	// provider reports them). The session total /cost reports is accumulated
+	// inside recordOutcome, shared with the TUI's commit path.
 	printCost(st, out)
 }
 
 // repeatLast re-runs the previous user ask (`!!`) — the shell habit for
 // "ask that again" (after a model swap, a failed run, new context).
 func (r *repl) repeatLast() {
-	if r.activeSess == "" {
-		for i := len(r.convo) - 1; i >= 0; i-- {
-			if r.convo[i].Role == "user" {
-				r.outln("!! " + r.convo[i].Content)
-				r.ask(r.convo[i].Content)
+	if r.sessID() == "" {
+		convo := r.convoNow()
+		for i := len(convo) - 1; i >= 0; i-- {
+			if convo[i].Role == "user" {
+				r.outln("!! " + convo[i].Content)
+				r.ask(convo[i].Content)
 				return
 			}
 		}
@@ -1015,18 +1210,21 @@ func (r *repl) repeatLast() {
 // persistence to the state dir, so the next REPL and `ask --continue`
 // both resume it.
 func (r *repl) rememberTurn(text string, out *askengine.Result) {
-	r.convo = appendConvo(r.convo, r.loc, text, out)
+	loc := r.locale()
+	r.editConvo(func(c []entry.Turn) []entry.Turn {
+		return appendConvo(c, loc, text, out)
+	})
 }
 
 // cmdNew clears the bare-mode conversation (/new) — the "new chat" of a
 // chat app. Bound sessions keep their own history and are unaffected.
 func (r *repl) cmdNew(arg string) {
-	if r.activeSess != "" {
+	if r.sessID() != "" {
 		r.outln(i18n.T(r.loc, "repl.new.session"))
 		return
 	}
-	n := len(r.convo)
-	r.convo = nil
+	n := r.convoLen()
+	r.setConvo(nil)
 	clearConvo()
 	r.outln(i18n.Tf(r.loc, "repl.new.cleared", "n", fmt.Sprint(n/2)))
 }
@@ -1038,14 +1236,14 @@ func (r *repl) cmdNew(arg string) {
 // exchanges sit on disk.
 func (r *repl) cmdHistory(arg string) {
 	var turns []entry.Turn
-	if r.activeSess != "" && r.sessionsSt != nil {
-		if s, err := r.sessionsSt.Get(r.activeSess); err == nil {
+	if sid := r.sessID(); sid != "" && r.sessionsSt != nil {
+		if s, err := r.sessionsSt.Get(sid); err == nil {
 			for _, t := range s.Turns {
 				turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
 			}
 		}
 	} else {
-		turns = r.convo
+		turns = r.convoNow()
 		if len(turns) == 0 {
 			turns = loadConvo()
 		}
@@ -1147,24 +1345,31 @@ func (r *repl) cmdModeSpec(arg string) {
 func (r *repl) cmdTasks(arg string) {
 	state := ""
 	watch := false
+	clear := false
+	yes := false
 	for _, f := range strings.Fields(arg) {
-		if f == "clear" {
-			r.cmdTasksClear()
-			return
-		}
-		if f == "watch" || f == "-w" {
+		switch f {
+		case "clear":
+			clear = true
+		case "watch", "-w":
 			watch = true
-			continue
-		}
-		if state == "" {
-			state = f
+		case "-y", "--yes":
+			yes = true
+		default:
+			if state == "" {
+				state = f
+			}
 		}
 	}
-	if watch {
-		watchQueueTo(r.commandContext(), r.store, state, "", r.commandOutput(), false)
+	if clear {
+		r.cmdTasksClear(yes)
 		return
 	}
-	tasks, err := r.store.ListByState(context.Background(), state)
+	if watch {
+		watchQueueTo(r.commandContext(), r.store, state, "", r.loc, r.commandOutput(), false)
+		return
+	}
+	tasks, err := r.store.ListByState(r.commandContext(), state)
 	if err != nil {
 		r.storeErr(err)
 		return
@@ -1176,10 +1381,13 @@ func (r *repl) cmdTasks(arg string) {
 	printTaskTableTo(r.commandOutput(), r.loc, tasks)
 }
 
-// cmdTasksClear implements "/tasks clear": confirm, cancel everything still
-// moving, then delete every task record — the REPL twin of `panda queue clear`.
-func (r *repl) cmdTasksClear() {
-	tasks, err := r.store.ListByState(context.Background(), "")
+// cmdTasksClear implements "/tasks clear [--yes]": confirm, cancel everything
+// still moving, then delete every task record — the REPL twin of
+// `panda queue clear`. The --yes form skips the prompt; the TUI uses it after
+// its own confirm card (the exec pump owns no terminal to read an answer
+// from).
+func (r *repl) cmdTasksClear(yes bool) {
+	tasks, err := r.store.ListByState(r.commandContext(), "")
 	if err != nil {
 		r.storeErr(err)
 		return
@@ -1189,19 +1397,19 @@ func (r *repl) cmdTasksClear() {
 		return
 	}
 	p := pal()
-	if !r.confirm(i18n.Tf(r.loc, "cli.queue.clear.confirm", "n", strconv.Itoa(len(tasks)))) {
+	if !yes && !r.confirm(i18n.Tf(r.loc, "cli.queue.clear.confirm", "n", strconv.Itoa(len(tasks)))) {
 		return
 	}
-	if r.engine != nil {
+	if r.engine.Load() != nil {
 		for _, t := range tasks {
 			if !core.Terminal(t.State) {
-				_, _ = r.engine.CancelTask(context.Background(), t.TaskID)
+				_, _ = r.engine.Load().CancelTask(r.commandContext(), t.TaskID)
 			}
 		}
 	} else {
 		r.outln(p.Muted(i18n.T(r.loc, "cli.queue.clear.noEngine")))
 	}
-	cancelled, deleted, err := r.store.ClearQueue(context.Background())
+	cancelled, deleted, err := r.store.ClearQueue(r.commandContext())
 	if err != nil {
 		r.storeErr(err)
 		return
@@ -1236,11 +1444,11 @@ func (r *repl) cmdDelete(arg string) {
 	if !ok {
 		return
 	}
-	n, err := r.store.Delete(context.Background(), id)
+	n, err := r.store.Delete(r.commandContext(), id)
 	if err != nil {
 		if errors.Is(err, core.ErrTaskActive) {
 			state := ""
-			if t, gerr := r.store.Get(context.Background(), id); gerr == nil {
+			if t, gerr := r.store.Get(r.commandContext(), id); gerr == nil {
 				state = t.State
 			}
 			r.outln(pal().Warn(i18n.Tf(r.loc, "cli.task.delete.active", "id", id, "state", state)))
@@ -1257,7 +1465,7 @@ func (r *repl) cmdDelete(arg string) {
 // a bad reference reports and returns false rather than ending the process: the
 // REPL survives a typo.
 func (r *repl) resolveRef(ref string) (string, bool) {
-	id, err := r.store.ResolveTaskID(context.Background(), ref)
+	id, err := r.store.ResolveTaskID(r.commandContext(), ref)
 	switch {
 	case err == nil:
 		return id, true
@@ -1274,17 +1482,34 @@ func (r *repl) resolveRef(ref string) (string, bool) {
 	return "", false
 }
 
-// cmdTask shows one task's row and event timeline.
+// cmdTask shows one task's row and event timeline — or dispatches the queue
+// verbs `panda task` owns: add, priority, move. (delete stays its own slash
+// command — /delete — matching the table.)
 func (r *repl) cmdTask(arg string) {
 	if arg == "" {
 		r.outln("/task " + i18n.T(r.loc, "cmd.task"))
+		return
+	}
+	fields := splitArgs(arg)
+	switch fields[0] {
+	case "add":
+		r.cmdTaskAdd(fields[1:])
+		return
+	case "priority", "prio":
+		r.cmdTaskPriority(fields[1:])
+		return
+	case "move":
+		r.cmdTaskMove(fields[1:])
+		return
+	case "delete", "del", "rm":
+		r.cmdDelete(strings.Join(fields[1:], " "))
 		return
 	}
 	id, ok := r.resolveRef(arg)
 	if !ok {
 		return
 	}
-	t, err := r.store.Get(context.Background(), id)
+	t, err := r.store.Get(r.commandContext(), id)
 	if err != nil {
 		r.storeErr(err)
 		return
@@ -1300,7 +1525,10 @@ func (r *repl) cmdTask(arg string) {
 	r.printEvents(t.TaskID)
 }
 
-// cmdCancel cancels a task and its subtree.
+// cmdCancel cancels a task and its subtree. With an engine the cancel travels
+// through the scheduler core so a task_cancel reaches a remote executor over
+// the bus (the `panda cancel` contract); without one the local cascade still
+// applies — engine.CancelTask itself degrades the same way.
 func (r *repl) cmdCancel(arg string) {
 	if arg == "" {
 		r.outln("/cancel " + i18n.T(r.loc, "cmd.cancel"))
@@ -1310,7 +1538,13 @@ func (r *repl) cmdCancel(arg string) {
 	if !ok {
 		return
 	}
-	ids, err := r.store.CancelCascade(context.Background(), id)
+	var ids []string
+	var err error
+	if r.engine.Load() != nil {
+		ids, err = r.engine.Load().CancelTask(r.commandContext(), id)
+	} else {
+		ids, err = r.store.CancelCascade(r.commandContext(), id)
+	}
 	if err != nil {
 		r.storeErr(err)
 		return
@@ -1355,7 +1589,7 @@ func (r *repl) approveInline(out *askengine.Result, workDir string) *askengine.R
 			r.outf("%s %s\n", pal().MarkBullet(), progressNote(r.loc, p))
 		}
 	}
-	return r.engine.ResumeApproved(context.Background(), req.TaskID, workDir, cb)
+	return r.engine.Load().ResumeApproved(context.Background(), req.TaskID, workDir, cb)
 }
 
 // parseApprovalAnswer reads the approval card's reply: "y"/"yes"/"n"/"no"
@@ -1392,7 +1626,7 @@ func parseApprovalAnswer(ans, defScope string) (approved bool, scope string) {
 // A project-scope answer without a project context must not silently persist:
 // it degrades to the session scope instead.
 func (r *repl) rememberApproval(req *askengine.ApprovalRequest, approved bool, scope string) {
-	if r.engine == nil || scope == projectstore.ScopeOnce {
+	if r.engine.Load() == nil || scope == projectstore.ScopeOnce {
 		return
 	}
 	decision := projectstore.DecisionDeny
@@ -1402,7 +1636,7 @@ func (r *repl) rememberApproval(req *askengine.ApprovalRequest, approved bool, s
 	if scope == projectstore.ScopeProject && req.Project == "" {
 		scope = projectstore.ScopeSession
 	}
-	if err := r.engine.RememberApproval(r.activeSess, req.Project, scope, decision); err != nil {
+	if err := r.engine.Load().RememberApproval(r.sessID(), req.Project, scope, decision); err != nil {
 		r.errf("%s\n", "panda: "+err.Error())
 		return
 	}
@@ -1415,14 +1649,14 @@ func (r *repl) rememberApproval(req *askengine.ApprovalRequest, approved bool, s
 // and "/approval scope once|session|project" write the project's own policy —
 // the per-project half of "approval logic set per project or per session".
 func (r *repl) cmdApproval(arg string) {
-	if r.engine == nil {
+	if r.engine.Load() == nil {
 		r.outln(i18n.T(r.loc, "repl.approval.noEngine"))
 		return
 	}
 	proj := r.activeProjectName()
 	fields := strings.Fields(strings.TrimSpace(arg))
 	if len(fields) == 0 {
-		st := r.engine.ApprovalState(r.activeSess, proj)
+		st := r.engine.Load().ApprovalState(r.sessID(), proj)
 		r.outln(i18n.T(r.loc, "repl.approval.stateHead"))
 		r.outf("  project:  %s\n", orDash(proj))
 		r.outf("  mode:     %s\n", st.Mode)
@@ -1443,7 +1677,7 @@ func (r *repl) cmdApproval(arg string) {
 			r.outln(i18n.T(r.loc, "repl.approval.needProject"))
 			return
 		}
-		if err := r.engine.SetProjectApprovalPolicy(proj, mode, scope); err != nil {
+		if err := r.engine.Load().SetProjectApprovalPolicy(proj, mode, scope); err != nil {
 			r.errf("%s\n", "panda: "+err.Error())
 			return
 		}
@@ -1451,7 +1685,7 @@ func (r *repl) cmdApproval(arg string) {
 	}
 	switch fields[0] {
 	case "clear":
-		if err := r.engine.ClearApproval(r.activeSess, proj); err != nil {
+		if err := r.engine.Load().ClearApproval(r.sessID(), proj); err != nil {
 			r.errf("%s\n", "panda: "+err.Error())
 			return
 		}
@@ -1488,13 +1722,19 @@ func (r *repl) cmdApprove(arg string) {
 	if !ok {
 		return
 	}
+	if r.engine.Load() == nil {
+		// ResumeApproved is an engine method; without a model there is none,
+		// and a nil dereference would land as a panicked exec error.
+		r.outln(i18n.T(r.loc, "repl.approval.noEngine"))
+		return
+	}
 	cb := askengine.StreamCallbacks{}
 	if stdoutIsTTY() {
 		cb.OnProgress = func(p askengine.Progress) {
 			r.outf("%s %s\n", pal().MarkBullet(), progressNote(r.loc, p))
 		}
 	}
-	out := r.engine.ResumeApproved(context.Background(), id, "", cb)
+	out := r.engine.Load().ResumeApproved(r.commandContext(), id, "", cb)
 	r.outln(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
 	if out.OK {
 		if stdout := strings.TrimRight(out.Stdout, "\n"); stdout != "" {
@@ -1517,7 +1757,7 @@ func (r *repl) cmdReject(arg string) {
 	if !ok {
 		return
 	}
-	if err := r.store.Reject(context.Background(), id, strings.TrimSpace(reason)); err != nil {
+	if err := r.store.Reject(r.commandContext(), id, strings.TrimSpace(reason)); err != nil {
 		r.storeErr(err)
 		return
 	}
@@ -1539,7 +1779,7 @@ func (r *repl) cmdLogs(arg string) {
 
 // printEvents prints a task's event lines, or the none-message.
 func (r *repl) printEvents(id string) {
-	events, err := r.store.Events(context.Background(), id)
+	events, err := r.store.Events(r.commandContext(), id)
 	if err != nil {
 		r.storeErr(err)
 		return
@@ -1551,8 +1791,15 @@ func (r *repl) printEvents(id string) {
 	printEventTimelineTo(r.commandOutput(), events, "  ")
 }
 
-// cmdSessions lists chat sessions (the web console's session rail).
+// cmdSessions lists chat sessions (the web console's session rail). A
+// non-empty argument is the verb form — `/sessions rm <id>` means the same
+// as `/session rm <id>`, so the plural never swallows a verb the TUI routed
+// here by mistake.
 func (r *repl) cmdSessions(arg string) {
+	if strings.TrimSpace(arg) != "" {
+		r.cmdSession(arg)
+		return
+	}
 	if r.sessionsSt == nil {
 		r.outln(i18n.T(r.loc, "repl.sessions.none"))
 		return
@@ -1569,7 +1816,7 @@ func (r *repl) cmdSessions(arg string) {
 	r.outln(i18n.T(r.loc, "repl.sessions.head"))
 	for _, s := range list {
 		mark := " "
-		if s.ID == r.activeSess {
+		if s.ID == r.sessID() {
 			mark = "*"
 		}
 		branch := orDash(s.Branch)
@@ -1587,15 +1834,15 @@ func (r *repl) cmdResume(arg string) {
 	}
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
-		if r.activeSess == "" {
+		if sid := r.sessID(); sid == "" {
 			r.outln(i18n.T(r.loc, "repl.resume.none"))
 		} else {
-			r.outln(i18n.Tf(r.loc, "repl.resume.current", "id", r.activeSess))
+			r.outln(i18n.Tf(r.loc, "repl.resume.current", "id", sid))
 		}
 		return
 	}
 	if arg == "-" {
-		r.activeSess = ""
+		r.setSess("")
 		r.outln(i18n.T(r.loc, "repl.resume.detached"))
 		return
 	}
@@ -1603,14 +1850,16 @@ func (r *repl) cmdResume(arg string) {
 		r.outln(i18n.Tf(r.loc, "repl.resume.bad", "id", arg))
 		return
 	}
-	r.activeSess = arg
+	r.setSess(arg)
 	r.outln(i18n.Tf(r.loc, "repl.resume.done", "id", arg))
 }
 
 // cmdMemory inspects the memory layer: bare `/memory` lists the selective-
-// load manifest; `/memory get <name>` prints one file's content.
+// load manifest; `/memory get <name>` prints one file's content; `set`/`rm`
+// edit — set takes its content inline (splitArgs keeps "quoted text" whole)
+// or from --file, never from a stdin the TUI does not have.
 func (r *repl) cmdMemory(arg string) {
-	fields := strings.Fields(arg)
+	fields := splitArgs(arg)
 	if len(fields) == 0 {
 		files, err := r.hermes.Files()
 		if err != nil {
@@ -1647,25 +1896,96 @@ func (r *repl) cmdMemory(arg string) {
 		r.outln(i18n.T(r.loc, "repl.memory.hint"))
 		return
 	}
-	if fields[0] != "get" || len(fields) != 2 {
+	switch fields[0] {
+	case "get":
+		if len(fields) != 2 {
+			r.outln(i18n.T(r.loc, "repl.memory.usage"))
+			return
+		}
+		target, err := resolveMemoryTarget(r.cfg, fields[1])
+		if err != nil {
+			r.errf("%s\n", "panda: "+err.Error())
+			return
+		}
+		data, err := os.ReadFile(target.path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				r.outln(i18n.Tf(r.loc, "repl.memory.empty", "name", target.name))
+				return
+			}
+			r.storeErr(err)
+			return
+		}
+		r.outln(r.renderMd(string(data)))
+	case "set":
+		// `/memory set <name> <text>` or `--file F`: the TUI exec pump owns no
+		// stdin, so the content always arrives inline or from a file — never a
+		// terminal read like `panda memory set` does.
+		if len(fields) < 2 {
+			r.outln(i18n.T(r.loc, "repl.memory.usage"))
+			return
+		}
+		r.cmdMemorySet(fields[1], fields[2:])
+	case "rm", "delete":
+		if len(fields) != 2 {
+			r.outln(i18n.T(r.loc, "repl.memory.usage"))
+			return
+		}
+		r.cmdMemoryRm(fields[1])
+	default:
 		r.outln(i18n.T(r.loc, "repl.memory.usage"))
-		return
 	}
-	target, err := resolveMemoryTarget(r.cfg, fields[1])
+}
+
+// cmdMemorySet replaces a writable memory file. `--file F` reads the content
+// from disk; without it, the rest of the line IS the content.
+func (r *repl) cmdMemorySet(name string, rest []string) {
+	target, err := resolveMemoryTarget(r.cfg, name)
 	if err != nil {
 		r.errf("%s\n", "panda: "+err.Error())
 		return
 	}
-	data, err := os.ReadFile(target.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			r.outln(i18n.Tf(r.loc, "repl.memory.empty", "name", target.name))
+	if !target.writable || target.save == nil {
+		r.outln(i18n.Tf(r.loc, "cli.memory.readonly", "name", target.name))
+		return
+	}
+	var data []byte
+	if len(rest) > 0 && (rest[0] == "--file" || rest[0] == "-file") {
+		if len(rest) < 2 {
+			r.outln(i18n.T(r.loc, "repl.memory.usage"))
 			return
 		}
+		if data, err = os.ReadFile(rest[1]); err != nil {
+			r.storeErr(err)
+			return
+		}
+	} else {
+		data = []byte(strings.Join(rest, " "))
+	}
+	m := memory.ParseMem(data)
+	if err := target.save(m); err != nil {
 		r.storeErr(err)
 		return
 	}
-	r.outln(r.renderMd(string(data)))
+	r.outln(i18n.Tf(r.loc, "cli.memory.saved", "name", target.name, "entries", fmt.Sprint(len(m.Entries)), "chars", fmt.Sprint(m.Chars())))
+}
+
+// cmdMemoryRm deletes a topic memory file (the only removable kind).
+func (r *repl) cmdMemoryRm(name string) {
+	target, err := resolveMemoryTarget(r.cfg, name)
+	if err != nil {
+		r.errf("%s\n", "panda: "+err.Error())
+		return
+	}
+	if target.remove == nil {
+		r.outln(i18n.T(r.loc, "cli.memory.rmTopicOnly"))
+		return
+	}
+	if err := target.remove(); err != nil {
+		r.storeErr(err)
+		return
+	}
+	r.outln(i18n.Tf(r.loc, "cli.memory.removed", "name", target.name))
 }
 
 // cmdProjects lists existing project memories.
@@ -1694,16 +2014,14 @@ func (r *repl) cmdSkills(arg string) {
 		fields = fields[1:]
 	}
 
-	skillsPath := ""
-	if r.cfg != nil {
-		skillsPath = r.cfg.Storage.SkillsPath
-	}
-	store := skills.NewStore(skillsPath)
+	store := skills.NewStore(skillsPathFor(r.cfg))
 	_ = store.EnsureBuiltins()
 
 	switch sub {
 	case "list":
-		skillList(store)
+		if err := skillListTo(r.commandOutput(), r.loc, store); err != nil {
+			r.errf("panda: %v\n", err)
+		}
 	case "find", "discover":
 		if len(fields) == 0 {
 			r.outln(i18n.T(r.loc, "repl.skill.find.usage"))
@@ -1715,7 +2033,7 @@ func (r *repl) cmdSkills(arg string) {
 			hubURL = r.cfg.Skills.HubURL
 		}
 		r.outln(i18n.Tf(r.loc, "repl.skill.find.searching", "q", query))
-		sk, isNew, err := store.DiscoverAndInstall(context.Background(), hubURL, query, skills.ImportOptions{Scope: skills.ScopeGlobal, Status: skills.StatusActive})
+		sk, isNew, err := store.DiscoverAndInstall(r.commandContext(), hubURL, query, skills.ImportOptions{Scope: skills.ScopeGlobal, Status: skills.StatusActive})
 		if err != nil {
 			r.errf("panda: %v\n", err)
 			return
@@ -1754,7 +2072,7 @@ func (r *repl) cmdSkills(arg string) {
 			r.outln(i18n.Tf(r.loc, "repl.skill.add.builtin", "name", target))
 			return
 		}
-		ctx := context.Background()
+		ctx := r.commandContext()
 		opts := skills.ImportOptions{Scope: skills.ScopeGlobal, Status: skills.StatusActive}
 		hubURL := ""
 		if r.cfg != nil {
@@ -1785,7 +2103,7 @@ func (r *repl) cmdSkills(arg string) {
 			action = fields[0]
 			fields = fields[1:]
 		}
-		ctx := context.Background()
+		ctx := r.commandContext()
 		hubURL := ""
 		if r.cfg != nil {
 			hubURL = r.cfg.Skills.HubURL
@@ -1859,6 +2177,9 @@ func (r *repl) cmdNodes(arg string) {
 		case "invite":
 			r.cmdNodesInvite()
 			return
+		case "remove", "rm":
+			r.cmdNodesRemove(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
+			return
 		}
 	}
 	nodes, err := ledger.Query(r.db, "", "")
@@ -1902,13 +2223,15 @@ func (r *repl) cmdConfig(arg string) {
 	fields := strings.Fields(arg)
 	if len(fields) == 0 {
 		r.outln(i18n.T(r.loc, "repl.config.head"))
-		r.outf("  model:      %s @ %s\n", orDash(r.cfg.Model.Model), orDash(r.cfg.Model.BaseURL))
-		r.outf("  mcp:        %s\n", orDash(r.cfg.MCP.Command))
-		r.outf("  limits:     user=%d memory=%d project=%d\n",
-			r.cfg.Memory.Limits.User, r.cfg.Memory.Limits.Memory, r.cfg.Memory.Limits.Project)
-		r.outf("  routing:    %s\n", orDash(strings.Join(r.cfg.Routing.PreferredAgents, ",")))
-		r.outf("  injection:  %s\n", r.cfg.Injection.NormalizedModel())
-		r.outf("  approval:   %s\n", r.cfg.Approval.NormalizedMode())
+		r.readConfig(func(c *config.Config) {
+			r.outf("  model:      %s @ %s\n", orDash(c.Model.Model), orDash(c.Model.BaseURL))
+			r.outf("  mcp:        %s\n", orDash(c.MCP.Command))
+			r.outf("  limits:     user=%d memory=%d project=%d\n",
+				c.Memory.Limits.User, c.Memory.Limits.Memory, c.Memory.Limits.Project)
+			r.outf("  routing:    %s\n", orDash(strings.Join(c.Routing.PreferredAgents, ",")))
+			r.outf("  injection:  %s\n", c.Injection.NormalizedModel())
+			r.outf("  approval:   %s\n", c.Approval.NormalizedMode())
+		})
 		return
 	}
 	if fields[0] != "set" || len(fields) < 3 {
@@ -1916,15 +2239,22 @@ func (r *repl) cmdConfig(arg string) {
 		return
 	}
 	section, rest := fields[1], fields[2:]
+	// Each write pairs the file persist with the in-memory mutation inside
+	// mutateConfigErr: UpdateSection* rewrites the whole document, so the
+	// pair must hold cfgMu end to end or a concurrent writer (an embedded
+	// /web panel shares the lock) can interleave into a lost update.
 	var err error
 	switch section {
 	case "injection":
 		switch rest[0] {
 		case config.InjectionModelAuto, config.InjectionModelAlways, config.InjectionModelNever:
-			err = config.UpdateSectionField(r.configPath, []string{"injection"}, "model", rest[0])
-			if err == nil {
-				r.cfg.Injection.Model = rest[0]
-			}
+			err = r.mutateConfigErr(func(c *config.Config) error {
+				if err := config.UpdateSectionField(r.configPath, []string{"injection"}, "model", rest[0]); err != nil {
+					return err
+				}
+				c.Injection.Model = rest[0]
+				return nil
+			})
 		default:
 			r.outln(i18n.T(r.loc, "repl.config.badValue"))
 			return
@@ -1932,10 +2262,13 @@ func (r *repl) cmdConfig(arg string) {
 	case "approval":
 		switch rest[0] {
 		case config.ApprovalModeAlways, config.ApprovalModeOnRequest, config.ApprovalModeNever:
-			err = config.UpdateSectionField(r.configPath, []string{"approval"}, "mode", rest[0])
-			if err == nil {
-				r.cfg.Approval.Mode = rest[0]
-			}
+			err = r.mutateConfigErr(func(c *config.Config) error {
+				if err := config.UpdateSectionField(r.configPath, []string{"approval"}, "mode", rest[0]); err != nil {
+					return err
+				}
+				c.Approval.Mode = rest[0]
+				return nil
+			})
 		default:
 			r.outln(i18n.T(r.loc, "repl.config.badValue"))
 			return
@@ -1950,17 +2283,20 @@ func (r *repl) cmdConfig(arg string) {
 			r.outln(i18n.T(r.loc, "repl.config.badValue"))
 			return
 		}
-		err = config.UpdateSectionFieldInt(r.configPath, []string{"memory", "limits"}, rest[0], value)
-		if err == nil {
+		err = r.mutateConfigErr(func(c *config.Config) error {
+			if err := config.UpdateSectionFieldInt(r.configPath, []string{"memory", "limits"}, rest[0], value); err != nil {
+				return err
+			}
 			switch rest[0] {
 			case "user":
-				r.cfg.Memory.Limits.User = value
+				c.Memory.Limits.User = value
 			case "memory":
-				r.cfg.Memory.Limits.Memory = value
+				c.Memory.Limits.Memory = value
 			case "project":
-				r.cfg.Memory.Limits.Project = value
+				c.Memory.Limits.Project = value
 			}
-		}
+			return nil
+		})
 	case "routing":
 		var agents []string
 		for _, name := range strings.Split(rest[0], ",") {
@@ -1968,16 +2304,22 @@ func (r *repl) cmdConfig(arg string) {
 				agents = append(agents, name)
 			}
 		}
-		err = config.UpdateSectionList(r.configPath, []string{"routing"}, "preferred_agents", agents)
-		if err == nil {
-			r.cfg.Routing.PreferredAgents = agents
-		}
+		err = r.mutateConfigErr(func(c *config.Config) error {
+			if err := config.UpdateSectionList(r.configPath, []string{"routing"}, "preferred_agents", agents); err != nil {
+				return err
+			}
+			c.Routing.PreferredAgents = agents
+			return nil
+		})
 	case "mcp":
 		command := strings.Join(rest, " ")
-		err = config.UpdateMCPSection(r.configPath, command)
-		if err == nil {
-			r.cfg.MCP.Command = command
-		}
+		err = r.mutateConfigErr(func(c *config.Config) error {
+			if err := config.UpdateMCPSection(r.configPath, command); err != nil {
+				return err
+			}
+			c.MCP.Command = command
+			return nil
+		})
 	default:
 		r.outln(i18n.T(r.loc, "repl.config.usage"))
 		return
@@ -1995,44 +2337,51 @@ func (r *repl) cmdConfig(arg string) {
 func (r *repl) cmdContext(arg string) {
 	r.outln(i18n.T(r.loc, "repl.context.head"))
 	model := i18n.T(r.loc, "repl.banner.noModel")
-	if modelConfigured(r.cfg) {
-		model = r.cfg.Model.Model + " @ " + r.cfg.Model.BaseURL
-		if r.cfg.Model.BaseURL == "" {
-			model = r.cfg.Model.Model + " @ " + r.cfg.Model.Provider
+	var workDir string
+	r.readConfig(func(c *config.Config) {
+		if modelConfigured(c) {
+			model = c.Model.Model + " @ " + c.Model.BaseURL
+			if c.Model.BaseURL == "" {
+				model = c.Model.Model + " @ " + c.Model.Provider
+			}
 		}
-	}
+		workDir = c.Storage.WorkPath
+	})
 	r.outf("  model:    %s\n", model)
-	r.outf("  workdir:  %s\n", r.cfg.Storage.WorkPath)
+	r.outf("  workdir:  %s\n", workDir)
 	files, _ := r.hermes.Files()
 	r.outf("  memory:   %d file(s) in the selective-load manifest\n", len(files))
 	sess := "-"
-	if r.activeSess != "" {
-		sess = r.activeSess
-		if s, err := r.sessionsSt.Get(r.activeSess); err == nil {
+	if sid := r.sessID(); sid != "" {
+		sess = sid
+		if s, err := r.sessionsSt.Get(sid); err == nil {
 			sess = fmt.Sprintf("%s (turns=%d branch=%s)", s.ID, len(s.Turns), orDash(s.Branch))
 		}
 	}
 	r.outf("  session:  %s\n", sess)
-	r.outf("  authz:    %v\n", r.authorize)
-	if r.engine != nil {
-		st := r.engine.ApprovalState(r.activeSess, r.activeProjectName())
+	r.outf("  authz:    %v\n", r.authorized())
+	if r.engine.Load() != nil {
+		st := r.engine.Load().ApprovalState(r.sessID(), r.activeProjectName())
 		r.outf("  approval: %s (scope %s)\n", st.Mode, st.Scope)
 		if st.Decision != "" {
 			r.outf("            remembered %s for %s\n", st.Decision, st.DecisionScope)
 		}
 	}
-	r.outf("  card:     %v\n", r.hasCard)
+	_, hasCard := r.cardInfo()
+	r.outf("  card:     %v\n", hasCard)
 }
 
 // cmdPolicy shows the four app-policy groups (the web console's Settings →
 // app policy page, read form).
 func (r *repl) cmdPolicy(arg string) {
 	r.outln(i18n.T(r.loc, "repl.policy.head"))
-	r.outf("  injection_model: %s\n", r.cfg.Injection.NormalizedModel())
-	r.outf("  approval_mode:   %s\n", r.cfg.Approval.NormalizedMode())
-	r.outf("  preferred_agents: %s\n", orDash(strings.Join(r.cfg.Routing.PreferredAgents, ", ")))
-	r.outf("  memory_limits:   user=%d memory=%d project=%d\n",
-		r.cfg.Memory.Limits.User, r.cfg.Memory.Limits.Memory, r.cfg.Memory.Limits.Project)
+	r.readConfig(func(c *config.Config) {
+		r.outf("  injection_model: %s\n", c.Injection.NormalizedModel())
+		r.outf("  approval_mode:   %s\n", c.Approval.NormalizedMode())
+		r.outf("  preferred_agents: %s\n", orDash(strings.Join(c.Routing.PreferredAgents, ", ")))
+		r.outf("  memory_limits:   user=%d memory=%d project=%d\n",
+			c.Memory.Limits.User, c.Memory.Limits.Memory, c.Memory.Limits.Project)
+	})
 }
 
 // cmdWeb boots the embedded web console in-process with the full dependency
@@ -2061,12 +2410,15 @@ func (r *repl) cmdWeb(arg string) {
 			r.outln(i18n.T(r.loc, "repl.web.ephemeral"))
 		}
 	}
-	if r.webSrv != nil {
+	r.webMu.Lock()
+	running, webURL, webToken := r.webSrv, r.webURL, r.webToken
+	r.webMu.Unlock()
+	if running != nil {
 		// Already serving: re-open the browser logged in with the token the
 		// running panel was started with (a fresh ephemeral would not match
 		// the server). The user typed /web because they want the console.
-		r.outln(i18n.Tf(r.loc, "repl.web.running", "url", r.webURL))
-		openBrowser(panel.AppendToken(r.webURL, r.webToken))
+		r.outln(i18n.Tf(r.loc, "repl.web.running", "url", webURL))
+		openBrowser(panel.AppendToken(webURL, webToken))
 		return
 	}
 	// Self-update: discover newer CLI releases in the background; apply gates
@@ -2080,23 +2432,29 @@ func (r *repl) cmdWeb(arg string) {
 	updateMgr.StartAutoCheck(context.Background(), 0)
 
 	handler := panel.New(panel.Deps{
-		Store:        r.store,
-		Engine:       r.engine,
+		Store:  r.store,
+		Engine: r.engine.Load(),
+		// EngineFn resolves the engine live on every request: the panel is
+		// long-lived, while a TUI wizard or /model add may build the engine
+		// after /web already started serving — a static nil snapshot would
+		// leave the console stuck in degraded mode.
+		EngineFn:     func() *askengine.Engine { return r.engine.Load() },
 		DB:           r.db,
 		Projects:     r.projects,
 		ProjectStore: r.projStore,
 		Sessions:     r.sessionsSt,
 		Worktrees:    r.worktrees,
 		SkillStore: func() *skills.Store {
-			st := skills.NewStore(r.cfg.Storage.SkillsPath)
+			st := skills.NewStore(skillsPathFor(r.cfg))
 			_ = st.EnsureBuiltins()
 			return st
 		}(),
 		Reminders:  reminders.NewStore(r.db),
 		Push:       r.push,
 		Cfg:        r.cfg,
+		CfgMu:      &r.cfgMu,
 		ConfigPath: r.configPath,
-		CardPath:   r.cardPath,
+		CardPath:   r.cardPathNow(),
 		Token:      token,
 		Updater:    updateMgr,
 	})
@@ -2126,23 +2484,25 @@ func (r *repl) cmdWeb(arg string) {
 		r.outln(i18n.Tf(r.loc, "web.portfallback", "orig", addr, "actual", bound))
 	}
 	go func() { _ = srv.Serve(ln) }()
+	webURL = panelURL(ln.Addr().String())
+	r.webMu.Lock()
 	r.webSrv = srv
-	r.webURL = panelURL(ln.Addr().String())
+	r.webURL = webURL
 	r.webToken = token
+	r.webMu.Unlock()
 	// The token is never shown to the user: the browser opens already
 	// authenticated. The URL printed is the clean one.
-	r.outln(i18n.Tf(r.loc, "repl.web.started", "url", r.webURL))
+	r.outln(i18n.Tf(r.loc, "repl.web.started", "url", webURL))
 	for _, lanURL := range panel.LANURLs(ln.Addr().String()) {
 		r.outln(i18n.Tf(r.loc, "web.lan.url", "url", panel.AppendToken(lanURL, token)))
 	}
-	openBrowser(panel.AppendToken(r.webURL, token))
+	openBrowser(panel.AppendToken(webURL, token))
 }
 
 // cmdAuthorize toggles tier-2 (irreversible) command authorization for the
 // ask engine; it starts off, like `panda ask` without --authorize.
 func (r *repl) cmdAuthorize(arg string) {
-	r.authorize = !r.authorize
-	if r.authorize {
+	if r.toggleAuth() {
 		r.outln(i18n.T(r.loc, "repl.auth.on"))
 	} else {
 		r.outln(i18n.T(r.loc, "repl.auth.off"))
@@ -2162,38 +2522,67 @@ func (r *repl) cmdLang(arg string) {
 		}
 		return
 	}
-	for _, loc := range i18n.Locales {
-		if strings.EqualFold(string(loc), strings.TrimSpace(arg)) {
-			r.loc = loc
-			if r.term != nil {
-				r.term.loc = loc
-			}
-			if r.engine != nil {
-				r.engine.SetLocale(loc)
-			}
-			r.outln(i18n.Tf(r.loc, "repl.lang.set", "lang", i18n.LocaleNames[loc]))
-			r.persistLocale(loc)
-			return
-		}
+	loc, ok := matchLocale(arg)
+	if !ok {
+		r.outln(i18n.Tf(r.loc, "repl.lang.bad", "lang", arg, "list", localeCodes()))
+		return
 	}
-	r.outln(i18n.Tf(r.loc, "repl.lang.bad", "lang", arg, "list", localeCodes()))
+	if err := r.applyLocale(loc); err != nil {
+		r.errf("%s\n", "panda: "+i18n.Tf(r.loc, "repl.lang.persistFail", "err", err.Error()))
+	}
+	r.outln(i18n.Tf(r.loc, "repl.lang.set", "lang", i18n.LocaleNames[loc]))
+}
+
+// matchLocale resolves a user-typed language word against the supported
+// locales — same tolerance as the persisted ui.locale parser, so "/lang zh"
+// and "zh-CN" spell the same switch. ok is false when nothing matches.
+func matchLocale(arg string) (i18n.Locale, bool) {
+	loc := i18n.Parse(arg)
+	return loc, loc != ""
+}
+
+// applyLocale switches every component that renders in the session language.
+// r.loc is written under watchMu because the task watcher reads it every
+// poll (completionNote → i18n.Tf(r.loc)) from its own goroutine — without the
+// lock a mid-poll language switch is a data race in both front ends. The
+// returned error is only the config-persist failure; the in-session switch
+// already happened either way.
+func (r *repl) applyLocale(loc i18n.Locale) error {
+	r.watchMu.Lock()
+	r.loc = loc
+	r.watchMu.Unlock()
+	if r.term != nil {
+		r.term.loc = loc
+	}
+	if r.engine.Load() != nil {
+		r.engine.Load().SetLocale(loc)
+	}
+	return r.persistLocale(loc)
 }
 
 // persistLocale records the /lang choice as ui.locale in config.yaml so the
-// next run starts in the same language. A write failure is reported but not
-// fatal — the session keeps the new locale either way, it just does not
-// survive a restart.
-func (r *repl) persistLocale(loc i18n.Locale) {
-	if r.cfg == nil || r.cfg.UI.Locale == string(loc) {
-		return
+// next run starts in the same language. The error is returned, not printed:
+// a write failure is not fatal — the session keeps the new locale either
+// way, it just does not survive a restart — and the TUI's inline caller has
+// no scoped error writer to print through.
+func (r *repl) persistLocale(loc i18n.Locale) error {
+	if r.cfg == nil {
+		return nil
 	}
-	if r.configPath != "" {
-		if err := config.UpdateSectionField(r.configPath, []string{"ui"}, "locale", string(loc)); err != nil {
-			r.errf("%s\n", "panda: "+i18n.Tf(r.loc, "repl.lang.persistFail", "err", err.Error()))
-			return
+	var same bool
+	r.readConfig(func(c *config.Config) { same = c.UI.Locale == string(loc) })
+	if same {
+		return nil
+	}
+	return r.mutateConfigErr(func(c *config.Config) error {
+		if r.configPath != "" {
+			if err := config.UpdateSectionField(r.configPath, []string{"ui"}, "locale", string(loc)); err != nil {
+				return err
+			}
 		}
-	}
-	r.cfg.UI.Locale = string(loc)
+		c.UI.Locale = string(loc)
+		return nil
+	})
 }
 
 // cmdQuit exits the loop; defers close the db, engine, and web server.

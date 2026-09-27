@@ -28,13 +28,14 @@ const watchInterval = 2 * time.Second
 // watchQueue renders the task board in place until ctx ends or SIGINT.
 // state/project filter as in the one-shot listing.
 func watchQueue(ctx context.Context, store *core.TaskStore, state, project string) {
-	watchQueueTo(ctx, store, state, project, os.Stdout, true)
+	watchQueueTo(ctx, store, state, project, i18n.Detect(), os.Stdout, true)
 }
 
 func watchQueueTo(
 	ctx context.Context,
 	store *core.TaskStore,
 	state, project string,
+	loc i18n.Locale,
 	out io.Writer,
 	trapSignals bool,
 ) {
@@ -42,6 +43,9 @@ func watchQueueTo(
 	defer cancel()
 	if out == nil {
 		out = io.Discard
+	}
+	if loc == "" {
+		loc = i18n.Detect()
 	}
 
 	if trapSignals {
@@ -59,7 +63,6 @@ func watchQueueTo(
 		}()
 	}
 
-	loc := i18n.Detect()
 	first := true
 	for {
 		tasks, err := store.ListByState(ctx, "")

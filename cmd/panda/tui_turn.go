@@ -385,7 +385,7 @@ func (m tuiModel) rememberApproval(approved bool) string {
 	}
 	sess := ""
 	if m.r != nil {
-		sess = m.r.activeSess
+		sess = m.r.sessID()
 	}
 	if err := m.engine.RememberApproval(sess, req.Project, scope, decision); err != nil {
 		return ""

@@ -37,7 +37,7 @@ func (m tuiModel) View() string {
 		// strings.Builder field on the value-copied model panics on write.
 		var output string
 		if m.exec != nil {
-			output = ansi.Strip(m.exec.text())
+			output = ansi.Strip(latestFrame(m.exec.text()))
 		}
 		if strings.TrimSpace(output) != "" {
 			live.WriteString("\n")
@@ -75,6 +75,8 @@ func (m tuiModel) View() string {
 		return m.mainChatView(live)
 	case modeApproving:
 		return m.mainChatView("\n" + m.approvalCard())
+	case modeConfirm:
+		return m.mainChatView("\n" + m.confirmCard())
 	default:
 		return m.mainChatView("")
 	}
@@ -238,7 +240,7 @@ func (m tuiModel) splashView() string {
 	// the user's own configuration. /context and the footer carry them.
 	workPath := ""
 	if m.r != nil && m.r.cfg != nil {
-		workPath = m.r.cfg.Storage.WorkPath
+		m.r.readConfig(func(c *config.Config) { workPath = c.Storage.WorkPath })
 	} else {
 		workPath, _ = os.Getwd()
 	}
@@ -573,11 +575,12 @@ func (m tuiModel) contextLine() string {
 		return ""
 	}
 	sess := i18n.T(m.loc, "tui.ctx.bare")
+	sessID, convoLen := m.r.sessID(), m.r.convoLen()
 	switch {
-	case m.r.activeSess != "":
-		sess = i18n.Tf(m.loc, "tui.ctx.session", "id", shortID(m.r.activeSess))
-	case len(m.r.convo)/2 > 0:
-		sess = i18n.Tf(m.loc, "tui.ctx.turns", "n", strconv.Itoa(len(m.r.convo)/2))
+	case sessID != "":
+		sess = i18n.Tf(m.loc, "tui.ctx.session", "id", shortID(sessID))
+	case convoLen/2 > 0:
+		sess = i18n.Tf(m.loc, "tui.ctx.turns", "n", strconv.Itoa(convoLen/2))
 	}
 	parts := []string{sess}
 	// Which project the next prompt belongs to is state that changes what an ask
@@ -587,7 +590,7 @@ func (m tuiModel) contextLine() string {
 	if m.projName != "" {
 		parts = append(parts, m.th.glyph("▪", "#")+" "+m.projName)
 	}
-	if m.r.authorize {
+	if m.r.authorized() {
 		parts = append(parts, i18n.T(m.loc, "repl.footer.authz")+":"+i18n.T(m.loc, "repl.footer.authz.on"))
 	}
 	return strings.Join(parts, "  "+m.th.glyph("·", "|")+"  ")
@@ -827,6 +830,19 @@ func (m tuiModel) approvalCard() string {
 	return m.approvalLayout().rendered
 }
 
+// confirmCard renders the generic yes/no prompt (modeConfirm) — the same
+// boxed warning shape as the approval card, minus the scope row: what is about
+// to happen, then the [y]/[n] answers. Any key that is not y declines.
+func (m tuiModel) confirmCard() string {
+	var sb strings.Builder
+	sb.WriteString(m.th.warn.Render(m.th.glyph("⚠", "!") + " " + m.confirmText))
+	yes := m.th.command.Render("[y]") + " " + i18n.T(m.loc, "tui.approval.yes")
+	no := m.th.command.Render("[n]") + " " + i18n.T(m.loc, "tui.approval.no")
+	sb.WriteString("\n\n  " + yes + "   " + no)
+	sb.WriteString("\n" + m.th.muted.Render(i18n.T(m.loc, "tui.confirm.hint")))
+	return m.th.approval.Width(max(1, m.textWidth()-2)).Render(sb.String())
+}
+
 // tuiRect is a half-open rectangle in terminal cells.
 type tuiRect struct {
 	x, y int
@@ -986,13 +1002,16 @@ func (m tuiModel) welcome() string {
 	if w <= 0 {
 		w = 80
 	}
-	cfg := (*config.Config)(nil)
 	var activity map[string]int
+	var banner string
 	if m.r != nil {
-		cfg = m.r.cfg
 		activity = m.activity.get(m.r)
+		// Render inside the config read lock: the banner reads mutable cfg
+		// fields (work path, model) that /project and /model rewrite.
+		m.r.readConfig(func(c *config.Config) { banner = renderWelcomeBanner(c, m.loc, w, m.th, activity) })
+		return banner
 	}
-	return renderWelcomeBanner(cfg, m.loc, w, m.th, activity)
+	return renderWelcomeBanner(nil, m.loc, w, m.th, nil)
 }
 
 // textWidth is the terminal-bounded width available to top-level TUI rows. A

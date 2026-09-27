@@ -573,11 +573,11 @@ func (e *Engine) systemStatus(ctx context.Context) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "OpenPanda 状态\n版本：%s", version.Display())
 	fmt.Fprintf(&b, "\n本节点：%s（%s）", e.cfg.Node.Name, e.cfg.Node.Kind)
-	if e.cfg.Model.Model != "" {
-		fmt.Fprintf(&b, "\n入口模型：%s", e.cfg.Model.Model)
+	if mc := e.ModelConfig(); mc.Model != "" {
+		fmt.Fprintf(&b, "\n入口模型：%s", mc.Model)
 	}
-	if e.cardPath != "" {
-		fmt.Fprintf(&b, "\n能力卡：已加载（%s）", e.cardPath)
+	if cardPath := e.cardPathNow(); cardPath != "" {
+		fmt.Fprintf(&b, "\n能力卡：已加载（%s）", cardPath)
 	} else {
 		b.WriteString("\n能力卡：未加载（本会话无法派发任务）")
 	}
@@ -1300,6 +1300,8 @@ func (e *Engine) taskqClear(ctx context.Context, scope string) (string, error) {
 }
 
 func (e *Engine) checkCardPath() (string, error) {
+	e.cardMu.Lock()
+	defer e.cardMu.Unlock()
 	if e.cardPath != "" {
 		return e.cardPath, nil
 	}

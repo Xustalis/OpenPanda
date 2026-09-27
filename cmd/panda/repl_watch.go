@@ -299,6 +299,14 @@ func (r *repl) askingNow() bool {
 	return r.asking
 }
 
+// locale reads r.loc under watchMu — the only safe read on goroutines other
+// than the command loop, since applyLocale writes it under the same lock.
+func (r *repl) locale() i18n.Locale {
+	r.watchMu.Lock()
+	defer r.watchMu.Unlock()
+	return r.loc
+}
+
 // resetWatchBaseline re-reads the current task states and adopts them as
 // the seen baseline, so already-finished tasks are never announced.
 func (r *repl) resetWatchBaseline() {
