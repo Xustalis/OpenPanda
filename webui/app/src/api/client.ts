@@ -1364,6 +1364,7 @@ export interface ModelSettings {
   base_url: string
   model: string
   max_tokens: number
+  max_retries?: number // transport retry budget; 0/omitted = keep current (default 5)
   api_key?: string // write-only: empty = keep the stored key
   api_key_set?: boolean
   api_key_hint?: string

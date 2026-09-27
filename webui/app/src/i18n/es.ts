@@ -223,6 +223,8 @@ const es: Messages = {
   'settings.apiKeyKeep': 'Déjalo vacío para conservar la clave guardada.',
   'settings.maxTokens': 'Máx. de tokens',
   'settings.maxTokensHelp': 'Límite de completado; 0 = valor por defecto del proveedor.',
+  'settings.maxRetries': 'Reintentos máximos',
+  'settings.maxRetriesHelp': 'Reintentos tras un fallo (429, 5xx, conexión caída); 0 = mantener el valor actual (5 por defecto).',
   'settings.test': 'Probar conexión',
   'settings.testing': 'Probando…',
   'settings.testOk': 'Conexión OK — respondió: {reply}',

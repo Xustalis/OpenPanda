@@ -226,6 +226,7 @@ function ModelSection() {
       base_url: form!.base_url.trim(),
       model: form!.model.trim(),
       max_tokens: Number(form!.max_tokens) || 0,
+      max_retries: Number(form!.max_retries) || 0,
       api_key: apiKey.trim() || undefined,
     }
   }
@@ -337,6 +338,19 @@ function ModelSection() {
             onInput={(e) => patch({ max_tokens: Number((e.target as HTMLInputElement).value) || 0 })}
           />
           <p class="hint">{t('settings.maxTokensHelp')}</p>
+        </div>
+        <div class="field-group">
+          <label for="max-retries">{t('settings.maxRetries')}</label>
+          <input
+            id="max-retries"
+            class="input"
+            type="number"
+            min={0}
+            step={1}
+            value={form.max_retries || 0}
+            onInput={(e) => patch({ max_retries: Number((e.target as HTMLInputElement).value) || 0 })}
+          />
+          <p class="hint">{t('settings.maxRetriesHelp')}</p>
         </div>
       </div>
 

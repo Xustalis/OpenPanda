@@ -221,6 +221,8 @@ const ja: Messages = {
   'settings.apiKeyKeep': '空欄の場合は保存済みキーを維持します。',
   'settings.maxTokens': '最大トークン数',
   'settings.maxTokensHelp': '補完の上限。0 = プロバイダーの既定値。',
+  'settings.maxRetries': '最大リトライ回数',
+  'settings.maxRetriesHelp': '失敗したリクエスト（429・5xx・接続切断）の再試行上限。0 = 現在値を維持（既定 5 回）。',
   'settings.test': '接続テスト',
   'settings.testing': 'テスト中…',
   'settings.testOk': '接続 OK — 応答: {reply}',

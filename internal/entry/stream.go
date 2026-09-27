@@ -41,7 +41,7 @@ func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta, onRea
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 {
-			if err := sleepCtx(ctx, c.retryBase<<uint(attempt-1)); err != nil {
+			if err := sleepCtx(ctx, c.retryDelay(attempt)); err != nil {
 				return Response{}, err
 			}
 		}
