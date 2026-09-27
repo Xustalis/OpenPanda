@@ -376,7 +376,9 @@ export interface SessionApprovalState {
 
 export interface ChooseDirectoryResult {
   path?: string
-  canceled: boolean
+  canceled?: boolean
+  /** Older panels emit the British spelling; accept either. */
+  cancelled?: boolean
   error?: string
 }
 
@@ -384,7 +386,7 @@ export interface DirectoryListing {
   current: string
   parent: string
   separator: string
-  entries: { name: string; path: string }[]
+  directories: { name: string; path: string }[]
 }
 
 /** GET /api/update — the self-update pipeline status snapshot. */
@@ -479,6 +481,9 @@ export interface CardNative {
 export interface CardAgent {
   adapter: string
   install_check?: string
+  /** argv template generic.py expands ({prompt} placeholder) — set only for
+   *  agents wired through the generic adapter. */
+  command?: string
   capabilities?: string[]
   best_at?: string[]
   not_for?: string[]
@@ -797,6 +802,7 @@ export const api = {
     body: {
       adapter: string
       install_check?: string
+      command?: string
       capabilities?: string[]
       best_at?: string[]
       not_for?: string[]
@@ -814,6 +820,7 @@ export const api = {
     body: Partial<{
       adapter: string
       install_check: string
+      command: string
       capabilities: string[]
       best_at: string[]
       not_for: string[]

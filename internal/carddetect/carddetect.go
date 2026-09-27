@@ -192,7 +192,11 @@ func CardAgents() map[string]ledger.Agent {
 			tier = agents.TierAutoApproved
 		}
 		out[k.Name] = ledger.Agent{
-			Adapter:      k.Adapter,
+			Adapter: k.Adapter,
+			// The generic-adapter argv template (e.g. zcode's
+			// "zcode --prompt {prompt}") rides the registry entry so a
+			// detected agent lands on the card runnable, not half-wired.
+			Command:      k.Command,
 			InstallCheck: InstallCheckFor(bin),
 			Capabilities: caps,
 			BestAt:       bestAt,

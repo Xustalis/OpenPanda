@@ -80,20 +80,24 @@ def read_request(default_timeout=DEFAULT_TIMEOUT):
     cwd = req.get("cwd") or None
     resume = req.get("resume") or ""
     tools_policy = req.get("tools_policy") or ""
-    return Request(prompt, timeout, cwd, resume, tools_policy)
+    cmd = req.get("cmd") or ""
+    return Request(prompt, timeout, cwd, resume, tools_policy, cmd)
 
 
 class Request:
     """The parsed adapter request; iterates as (prompt, timeout, cwd) so
     prompt, timeout, cwd = read_request() keeps working, with
-    resume/tools_policy as extra attributes."""
+    resume/tools_policy/cmd as extra attributes."""
 
-    def __init__(self, prompt, timeout, cwd, resume, tools_policy):
+    def __init__(self, prompt, timeout, cwd, resume, tools_policy, cmd=""):
         self.prompt = prompt
         self.timeout = timeout
         self.cwd = cwd
         self.resume = resume
         self.tools_policy = tools_policy
+        # cmd is the argv template a generic adapter (generic.py) expands —
+        # the card's agents.<name>.command field, verbatim.
+        self.cmd = cmd
 
     def __iter__(self):
         return iter((self.prompt, self.timeout, self.cwd))
