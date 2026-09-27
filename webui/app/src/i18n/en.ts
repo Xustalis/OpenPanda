@@ -226,6 +226,8 @@ const en: Messages = {
   'settings.apiKeyKeep': 'Leave blank to keep the stored key.',
   'settings.maxTokens': 'Max tokens',
   'settings.maxTokensHelp': 'Completion cap; 0 = provider default.',
+  'settings.maxRetries': 'Max retries',
+  'settings.maxRetriesHelp': 'Retries after a failed request (429, 5xx, dropped connection); 0 keeps the current value (default 5).',
   'settings.test': 'Test connection',
   'settings.testing': 'Testing…',
   'settings.testOk': 'Connection OK — replied: {reply}',

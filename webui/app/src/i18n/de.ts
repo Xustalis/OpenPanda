@@ -223,6 +223,8 @@ const de: Messages = {
   'settings.apiKeyKeep': 'Leer lassen, um den gespeicherten Schlüssel zu behalten.',
   'settings.maxTokens': 'Max. Tokens',
   'settings.maxTokensHelp': 'Obergrenze; 0 = Provider-Standard.',
+  'settings.maxRetries': 'Max. Wiederholungen',
+  'settings.maxRetriesHelp': 'Wiederholungen nach einem Fehler (429, 5xx, Verbindungsabbruch); 0 = aktuellen Wert behalten (Standard 5).',
   'settings.test': 'Verbindung testen',
   'settings.testing': 'Teste…',
   'settings.testOk': 'Verbindung OK — Antwort: {reply}',

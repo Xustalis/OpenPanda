@@ -305,6 +305,7 @@ type modelAddArgs struct {
 	ctxWindow  int    // --ctx
 	thinking   string // --thinking on|off|auto
 	budget     int    // --budget
+	retries    int    // --retry N
 	verify     bool   // default; --force/--no-test disables
 	params     map[string]any
 	headers    map[string]string
@@ -348,6 +349,8 @@ func parseModelAddArgs(args []string) modelAddArgs {
 			a.thinking = take()
 		case "budget", "thinking-budget":
 			a.budget, _ = strconv.Atoi(take())
+		case "retry", "retries", "max-retries", "max_retries":
+			a.retries, _ = strconv.Atoi(take())
 		case "param", "params": // --param temperature=0.7 (repeatable)
 			if kv := take(); kv != "" {
 				if k, v, ok := strings.Cut(kv, "="); ok {
@@ -401,7 +404,7 @@ func isBaseURL(s string) bool {
 //	/model add custom <baseURL> [model] <key> [alias] [--type anthropic]
 //	/model add ollama [model]                    (no key)
 //	flags: --type, --url, --ctx N, --thinking on|off|auto, --budget N,
-//	       --param k=v, --header k=v, --force
+//	       --retry N, --param k=v, --header k=v, --force
 func (r *repl) modelAdd(args []string) {
 	pa := parseModelAddArgs(args)
 	args = pa.positional
@@ -476,6 +479,9 @@ func (r *repl) modelAdd(args []string) {
 	}
 	if pa.budget > 0 {
 		mc.ThinkingBudget = pa.budget
+	}
+	if pa.retries > 0 {
+		mc.MaxRetries = pa.retries
 	}
 	mc.Params = pa.params
 	mc.Headers = pa.headers

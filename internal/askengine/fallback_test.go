@@ -136,9 +136,10 @@ func TestCircuitBreakerFallback(t *testing.T) {
 	defer fallbackSrv.Close()
 
 	primaryClient, err := entry.NewClient(config.ModelConfig{
-		BaseURL: primarySrv.URL,
-		Model:   "primary-model",
-		APIKey:  "key",
+		BaseURL:    primarySrv.URL,
+		Model:      "primary-model",
+		APIKey:     "key",
+		MaxRetries: 2, // pin the budget so the hit count below doesn't track the default
 	})
 	if err != nil {
 		t.Fatal(err)
