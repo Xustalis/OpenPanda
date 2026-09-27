@@ -268,18 +268,30 @@ const de: Messages = {
   'onboarding.step.model': 'Modell',
   'onboarding.langTitle': 'Sprache wählen',
   'onboarding.termsTitle': 'Nutzungsbedingungen & Lizenz',
-  'onboarding.terms1h': '1. MIT-Open-Source-Lizenz',
+  'onboarding.terms1h': '1. Open-Source-Lizenz (MIT)',
   'onboarding.terms1b':
-    'OpenPanda steht unter der MIT-Lizenz. Du darfst es in privaten, akademischen oder kommerziellen Projekten ausführen, kopieren, ändern, verbreiten und darauf aufbauen.',
-  'onboarding.terms2h': '2. Local-First & Datenhoheit',
+    'OpenPanda ist freie quelloffene Software unter der MIT-Lizenz. Du darfst sie in privaten, akademischen und kommerziellen Projekten nutzen, kopieren, ändern, zusammenführen, veröffentlichen, verbreiten, unterlizenzieren und verkaufen, sofern der Urheberrechtsvermerk und der Lizenztext enthalten bleiben. Der vollständige Lizenztext liegt in der Datei LICENSE bei und geht dieser Zusammenfassung vor.',
+  'onboarding.terms2h': '2. Selbst gehostete Software, kein Dienst',
   'onboarding.terms2b':
-    'Privatsphäre und Datenhoheit sind fundamental. Quellcode, Arbeitsdateien, Verläufe und API-Schlüssel bleiben auf deinem Gerät. Keine unbefugte Telemetrie oder Datenerhebung.',
-  'onboarding.terms3h': '3. Haftungsausschluss für KI-Inhalte',
+    'OpenPanda ist Software, die du auf eigener Hardware installierst und betreibst. Die Autoren betreiben keinen gehosteten Dienst, halten keine deiner Daten und sind weder Anbieter noch Auftragsverarbeiter für irgendeine Partei. Verfügbarkeit, Backups, Zugriffskontrolle und die Sicherheit deiner Installation liegen in deiner Verantwortung.',
+  'onboarding.terms3h': '3. Local-First & Datensouveränität',
   'onboarding.terms3b':
-    'Von Sprachmodellen erzeugte Codeänderungen, Befehle und Analysen sind probabilistisch und können Fehler, Halluzinationen oder Sicherheitsrisiken enthalten. Vor Produktivnutzung prüfen und testen.',
-  'onboarding.terms4h': '4. Befehlsausführung & Systemsicherheit',
+    'Quellcode, Arbeitsdateien, Gesprächsverläufe, Gedächtnisspeicher und API-Zugangsdaten verbleiben standardmäßig auf deinen Geräten. Es gibt keine Telemetrie, kein Tracking und keine Erhebung privater Daten. Daten verlassen einen Knoten nur dann, wenn du ausdrücklich einen Modellanbieter oder einen Peer-Knoten dafür konfigurierst.',
+  'onboarding.terms4h': '4. Modellanbieter von Drittanbietern',
   'onboarding.terms4b':
-    'OpenPanda kann Systembefehle ausführen und Dateien ändern. Trotz mehrstufiger Bestätigungen: destruktive Aktionen vor der Freigabe immer prüfen.',
+    'KI-Funktionen erfordern eigene API-Zugangsdaten eines von dir gewählten Anbieters (gehostete APIs oder lokale Endpunkte). Prompts, Arbeitskontext und Dateien, die an diesen Anbieter gesendet werden, unterliegen dessen Bedingungen, Datenschutzrichtlinie und Preisen. OpenPanda ist mit keinem Anbieter verbunden und kontrolliert nicht, was sie protokollieren, speichern oder berechnen.',
+  'onboarding.terms5h': '5. P2P-Delegation & Netzwerkvertrauen',
+  'onboarding.terms5b':
+    'OpenPanda kann Aufgaben an Geräte delegieren, die du durch Kopplung autorisierst. Aufgaben-Payloads, Fähigkeitskarten, Dateien und Ergebnisse wandern über authentifizierte Kanäle zwischen deinen Knoten. Kopple nur mit Maschinen, denen du vertraust; das Offenlegen des Node-Listeners oder der Web-Konsole gegenüber nicht vertrauenswürdigen Netzen liegt in deiner eigenen Verantwortung.',
+  'onboarding.terms6h': '6. Haftungsausschluss für KI-generierte Inhalte',
+  'onboarding.terms6b':
+    'Code, Befehle, Analysen und andere Ausgaben von Sprachmodellen sind probabilistisch und können Fehler, Halluzinationen, Sicherheitslücken oder Inhalte enthalten, die Rechten Dritter unterliegen. Prüfe und teste Ausgaben, bevor du sie auf Produktions- oder kritische Systeme anwendest; du führst generierte Ausgaben auf eigenes Risiko aus und bist für deren Lizenzkonformität verantwortlich.',
+  'onboarding.terms7h': '7. Ausführung & Systemsicherheit',
+  'onboarding.terms7b':
+    'OpenPanda kann Shell-Befehle ausführen, Dateien verändern und den Systemzustand ändern — auch auf entfernten Knoten. Genehmigungsstufen und Sandboxing senken das Risiko, können es aber nicht ausschalten. Prüfe destruktive oder irreversible Aktionen immer vor der Freigabe und halte wichtige Daten gesichert.',
+  'onboarding.terms8h': '8. Gewährleistungsausschluss & Haftung',
+  'onboarding.terms8b':
+    'Die Software wird „wie besehen" ohne jegliche ausdrückliche oder stillschweigende Gewährleistung bereitgestellt. Soweit gesetzlich zulässig, haften die Autoren und Urheberrechtsinhaber nicht für Ansprüche, Schäden, Datenverluste oder sonstige Haftung, die aus der Software oder ihrer Nutzung entstehen. Die Bedingungen können zusammen mit der Software aktualisiert werden; es gelten die Bedingungen des Builds, den du ausführst.',
   'onboarding.agree': 'Zustimmen & weiter',
   'onboarding.next': 'Weiter',
   'onboarding.finish': 'Speichern & fertig',

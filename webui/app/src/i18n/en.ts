@@ -273,18 +273,30 @@ const en: Messages = {
   'onboarding.step.model': 'Model',
   'onboarding.langTitle': 'Choose your language',
   'onboarding.termsTitle': 'Terms of Service & License',
-  'onboarding.terms1h': '1. MIT Open Source License',
+  'onboarding.terms1h': '1. Open-Source License (MIT)',
   'onboarding.terms1b':
-    'OpenPanda is released under the MIT license. You may run, copy, modify, distribute and build upon it in personal, academic or commercial projects.',
-  'onboarding.terms2h': '2. Local-First & Privacy Autonomy',
+    'OpenPanda is free and open-source software released under the MIT License. You may use, copy, modify, merge, publish, distribute, sublicense and sell copies — in personal, academic or commercial projects alike — provided the copyright notice and license text are included. The complete license ships in the LICENSE file and prevails over this summary.',
+  'onboarding.terms2h': '2. Self-Hosted Software, Not a Service',
   'onboarding.terms2b':
-    'Your privacy and data sovereignty are foundational. Your source code, workspace files, conversation history and API keys stay on your device. There is no unauthorized telemetry, tracking, or harvesting of private data.',
-  'onboarding.terms3h': '3. AI Generation Disclaimer',
+    'OpenPanda is software you install and operate on your own hardware. The authors do not run a hosted service, do not hold your data, and act as no party\'s provider or processor. Availability, backups, access control and the security posture of your installation are yours to manage.',
+  'onboarding.terms3h': '3. Local-First & Privacy Autonomy',
   'onboarding.terms3b':
-    'Code changes, terminal commands and analysis produced by language models are probabilistic and may contain defects, hallucinations or security risks. Review and test before applying anything to production or critical systems; you run generated output at your own risk.',
-  'onboarding.terms4h': '4. Execution & System Safety',
+    'Your source code, workspace files, conversation history, memory stores and API credentials stay on your devices by default. There is no telemetry, tracking or harvesting of private data. Data leaves a node only when you explicitly configure a model provider or peer node to receive it.',
+  'onboarding.terms4h': '4. Third-Party Model Providers',
   'onboarding.terms4b':
-    'OpenPanda can execute system commands and modify files on disk. Although multi-level confirmation gates exist, always verify destructive or irreversible actions before approving them.',
+    'AI features require your own API credentials for a provider you choose (hosted APIs or local endpoints). Prompts, workspace context and any files sent to that provider are governed by its terms, privacy policy and pricing. OpenPanda is not affiliated with any provider and does not control what they log, retain or charge.',
+  'onboarding.terms5h': '5. Peer-to-Peer Delegation & Network Trust',
+  'onboarding.terms5b':
+    'OpenPanda can delegate tasks across devices you authorize through pairing. Task payloads, capability cards, files and results travel between your nodes over authenticated channels. Pair only with machines you trust; exposing the node listener or web console to untrusted networks is your own responsibility.',
+  'onboarding.terms6h': '6. AI-Generated Output Disclaimer',
+  'onboarding.terms6b':
+    'Code, commands, analysis and other output produced by language models are probabilistic and may contain defects, hallucinations, security vulnerabilities or material subject to third-party rights. Review and test before applying output to production or critical systems; you run generated output at your own risk and are responsible for its licensing compliance.',
+  'onboarding.terms7h': '7. Execution & System Safety',
+  'onboarding.terms7b':
+    'OpenPanda can execute shell commands, modify files and change system state — including on remote nodes. Approval tiers and sandboxing reduce risk but cannot eliminate it. Always verify destructive or irreversible actions before approving them, and keep important data backed up.',
+  'onboarding.terms8h': '8. No Warranty & Limitation of Liability',
+  'onboarding.terms8b':
+    'The software is provided "as is" without warranty of any kind, express or implied. To the maximum extent permitted by law, the authors and copyright holders are not liable for any claim, damages, data loss or other liability arising from the software or its use. These terms may be updated together with the software; the build you run carries the terms that apply to it.',
   'onboarding.agree': 'Agree & continue',
   'onboarding.next': 'Next',
   'onboarding.finish': 'Save & finish',
