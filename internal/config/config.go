@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -216,6 +217,17 @@ type NetworkConfig struct {
 	Peers               []string `yaml:"peers"`                  // e.g. "worker-1.your-tailnet.ts.net:7836", or "punch:<node-id>" for a NAT-bound peer reachable only via hole punching
 	MaxConnections      int      `yaml:"max_connections"`        // global concurrent WS connection limit (0 = unlimited)
 	MaxConnectionsPerIP int      `yaml:"max_connections_per_ip"` // per-remote-IP concurrent WS connection limit (0 = unlimited)
+	// AllowCleartext opts the node back into dialing plaintext ws:// peers
+	// beyond the safe set. Hello proves membership, but every frame after it
+	// travels unsigned and unencrypted — a network MITM on a plaintext link
+	// can read task content AND inject frames (a forged task_delegate is
+	// remote code execution). The safe set needs no flag: loopback,
+	// Tailscale (CGNAT 100.64.0.0/10, the fd7a:115e:a214::/48 ULA and
+	// *.ts.net MagicDNS names) ride an encrypted underlay already. Anything
+	// else must be wss://, a punch: entry, or this explicit escape hatch —
+	// keeping the flag spelled "cleartext" is deliberate, so opting out is
+	// never confused for a good idea.
+	AllowCleartext bool `yaml:"allow_cleartext"`
 	// UDPListen is the farsky datagram-plane bind (encrypted AEAD envelopes +
 	// NAT-punch frames). "" follows listen_addr's port on the same host —
 	// the default keeps punching available whenever the WS listener is
@@ -726,8 +738,19 @@ func (c *Config) Validate() error {
 			}
 			continue
 		}
+		// ws:// / wss:// URLs carry their own scheme; wss is the only way to
+		// reach a peer over an untrusted network (the listener has no TLS
+		// termination of its own — put a terminator in front). ws:// entries
+		// still pass through the cleartext gate at dial time.
+		if strings.Contains(peer, "://") {
+			u, err := url.Parse(peer)
+			if err != nil || u.Hostname() == "" || (u.Scheme != "ws" && u.Scheme != "wss") {
+				return fmt.Errorf("config: network.peers[%d] %q is not a ws:// or wss:// URL with a host", i, peer)
+			}
+			continue
+		}
 		if _, _, err := net.SplitHostPort(peer); err != nil {
-			return fmt.Errorf("config: network.peers[%d] %q is not host:port (or punch:<node-id>): %w", i, peer, err)
+			return fmt.Errorf("config: network.peers[%d] %q is not host:port (or punch:<node-id> or ws(s)://url): %w", i, peer, err)
 		}
 	}
 	for i, cc := range c.Network.Contacts {

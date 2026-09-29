@@ -803,6 +803,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	sched.SetWorkDir(e.cfg.Storage.WorkPath)
 	sched.SetHostStatePaths(hostStatePaths(e.cfg))
 	sched.SetSharedSecret(e.cfg.Network.SharedSecret)
+	sched.SetAllowCleartext(e.cfg.Network.AllowCleartext)
 	sched.SetTimeouts(e.cfg.Timeouts)
 
 	if e.schedCancel != nil {

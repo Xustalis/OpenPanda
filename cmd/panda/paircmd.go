@@ -25,8 +25,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"slices"
+	"strings"
 
 	"time"
 
@@ -60,7 +62,14 @@ func runNodesAdd(args []string) {
 		fatal("usage", fmt.Errorf("panda nodes add <host:port>"))
 	}
 	addr := rest[0]
-	if _, _, err := net.SplitHostPort(addr); err != nil {
+	// host:port dials ws:// (subject to the cleartext gate at dial time);
+	// an explicit ws(s):// URL carries its scheme — wss is the way to reach
+	// a peer over an untrusted network.
+	if strings.Contains(addr, "://") {
+		if u, err := url.Parse(addr); err != nil || u.Hostname() == "" || (u.Scheme != "ws" && u.Scheme != "wss") {
+			fatal("bad address", fmt.Errorf("%s", i18n.Tf(i18n.Detect(), "cli.nodes.badaddr", "addr", addr)))
+		}
+	} else if _, _, err := net.SplitHostPort(addr); err != nil {
 		fatal("bad address", fmt.Errorf("%s", i18n.Tf(i18n.Detect(), "cli.nodes.badaddr", "addr", addr)))
 	}
 

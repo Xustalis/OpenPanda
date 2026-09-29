@@ -24,6 +24,12 @@ network:
   # 数据报不含凭据；入网仍要求 shared_secret + Ed25519 hello。
   # "" 默认 :7837；"off" 完全关闭（不广播也不监听）。
   # discovery_addr: ":7837"
+  # 明文 ws:// 出站门禁：hello 只证明成员身份，握手后的帧仍明文无签名——
+  # 明文链路上的 MITM 可以伪造 task_delegate（即远程执行）。默认拒绝拨往
+  # 非安全地址的 ws://：回环与 Tailscale（100.64.0.0/10、fd7a:115e:a214::/48、
+  # *.ts.net）天然加密放行；其余请改用 wss://（listener 本身无 TLS，需在
+  # 前面终结）、punch:<id>（AEAD 数据报），或显式开启下方开关接受明文。
+  # allow_cleartext: false
 
 storage:
   db_path: "openpanda.db"

@@ -25,6 +25,7 @@ package main
 
 import (
 	"net"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -467,7 +468,14 @@ func (r *repl) cmdNodesAdd(addr string) {
 		r.outln(i18n.T(r.loc, "repl.nodes.add.usage"))
 		return
 	}
-	if _, _, err := net.SplitHostPort(addr); err != nil {
+	// host:port dials ws:// (gated by the cleartext policy at dial time);
+	// an explicit ws(s):// URL carries its scheme.
+	if strings.Contains(addr, "://") {
+		if u, err := url.Parse(addr); err != nil || u.Hostname() == "" || (u.Scheme != "ws" && u.Scheme != "wss") {
+			r.outln(i18n.Tf(r.loc, "cli.nodes.badaddr", "addr", addr))
+			return
+		}
+	} else if _, _, err := net.SplitHostPort(addr); err != nil {
 		r.outln(i18n.Tf(r.loc, "cli.nodes.badaddr", "addr", addr))
 		return
 	}
