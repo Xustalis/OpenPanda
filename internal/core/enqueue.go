@@ -223,10 +223,13 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 // queued tasks all stayed on the node that accepted them while idle peers
 // watched. Both are the exact cases the hardware filter and the score exist for.
 func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
-	// A task pinned to a directory on this machine is local work by definition:
-	// the delegate payload carries no work dir (each executor derives its own),
-	// so a forwarded copy would run against a different tree.
-	if t.WorkDir != "" {
+	// A task pinned to a directory on this machine used to be local by
+	// definition: the delegate payload carried no work dir, so a forwarded
+	// copy ran blind. A file task's tree now travels as an artifact input
+	// (attachWorktreeFrom below), so only non-file pins stay unconditionally
+	// local — a file task forwards when its tree actually ships, and falls
+	// back to local when the pack yields nothing.
+	if t.WorkDir != "" && t.ContextType != "file" {
 		return false
 	}
 	chain := t.Chain
@@ -241,8 +244,8 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		c.logger.Warn("queue forward: declined-by", "task", t.TaskID, "err", err)
 	}
 	seenChain := append(slices.Clone(chain), excluded...)
-	decision := scheduler.Route(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
-		resourceRequirement(t.ResourceJSON), preferredNodeOf(t))
+	decision := scheduler.RouteP(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
+		resourceRequirement(t.ResourceJSON), preferredNodeOf(t), t.Project)
 	if decision.Action != scheduler.ActionForward {
 		c.logger.Info("queue: no peer for task", "task", t.TaskID,
 			"action", string(decision.Action), "reason", decision.Reason)
@@ -285,6 +288,13 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 	// Same project carriage as the synchronous path: a queued task delegated to a
 	// peer must arrive with its project context or the peer cannot use it.
 	c.attachProject(ctx, &p, t.Project)
+	// The ad-hoc sibling of the same rule: a queued file task ships its work
+	// tree or it does not ship at all — a forwarded blind copy loses to just
+	// running it here.
+	c.attachWorktreeFrom(ctx, &p, t)
+	if t.ContextType == "file" && t.WorkDir != "" && len(p.Inputs) == 0 {
+		return false
+	}
 	// Hop-limited consent (S2-8): a queue forward is one direct dispatch, so
 	// the consent on record covers exactly the receiving hop and must not walk
 	// further through a forwarding sub-scheduler. The stored grant rides along

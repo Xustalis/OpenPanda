@@ -163,10 +163,21 @@ func (s *Store) findPath(hash string) string {
 // is known — the name cannot be chosen before the content is hashed, and a
 // half-written file must never sit at a name that means "verified".
 func (s *Store) PackDir(tree string) (Manifest, error) {
+	return s.PackDirExcept(tree, nil, 0)
+}
+
+// PackDirExcept is PackDir with a directory-name skip set (see walkExcept)
+// and a caller byte limit: the tighter of limit and the store's configured
+// maxBytes applies, so a caller can bound one pack without retuning the pool.
+func (s *Store) PackDirExcept(tree string, skip map[string]bool, limit int64) (Manifest, error) {
+	max := s.maxBytes
+	if limit > 0 && (max == 0 || limit < max) {
+		max = limit
+	}
 	// Placement is chosen before packing starts: the walked content size is
 	// the conservative bound for the archive, and a volume that cannot hold
 	// it is skipped rather than filled mid-pack.
-	ents, err := walk(tree, s.maxBytes)
+	ents, err := walkExcept(tree, max, skip)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -188,7 +199,7 @@ func (s *Store) PackDir(tree string) (Manifest, error) {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after a successful rename
 
-	m, err := packEntries(ents, tree, tmp, s.maxBytes)
+	m, err := packEntries(ents, tree, tmp, max)
 	if err != nil {
 		tmp.Close()
 		return Manifest{}, err

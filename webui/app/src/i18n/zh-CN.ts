@@ -200,7 +200,7 @@ const zhCN: Messages = {
   'sessions.nodeAuto': '自动（最佳节点）',
   'sessions.nodePickTip': '分类为任务时在该节点执行——普通对话仍在本机',
   'sessions.folderPick': '选择本地文件夹',
-  'sessions.folderSelected': '📁 已选择文件夹，{n} 个文件：',
+  'sessions.folderSelected': '已选择文件夹，{n} 个文件：',
   'sessions.folderTruncated': '  …（还有 {n} 个文件）',
   'sessions.folderFollowUp': '请基于以上文件内容处理我的请求：',
   'sessions.projectPrefix': '[项目: {name}]',

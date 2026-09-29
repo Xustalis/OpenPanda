@@ -33,7 +33,14 @@ type Decision struct {
 // It is RouteAt evaluated at the current time; tests and callers that need a
 // deterministic freshness discount use RouteAt.
 func Route(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, req ledger.ResourceProfile, preferred string) Decision {
-	return RouteAt(self, chain, employees, localMatch, required, req, preferred, time.Now().Unix())
+	return RouteAtP(self, chain, employees, localMatch, required, req, preferred, "", time.Now().Unix())
+}
+
+// RouteP is Route plus the task's project name, which feeds the residence
+// term in the score (§6.3): a node holding a checkout of that project wins a
+// bonus because the tree does not have to cross the wire.
+func RouteP(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, req ledger.ResourceProfile, preferred, project string) Decision {
+	return RouteAtP(self, chain, employees, localMatch, required, req, preferred, project, time.Now().Unix())
 }
 
 // IsSelfRow reports whether the capability-directory row id names the same
@@ -135,6 +142,11 @@ const localBias = 0.15
 // task further downstream even though it cannot execute it; only when neither
 // exists does it decline.
 func RouteAt(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, req ledger.ResourceProfile, preferred string, now int64) Decision {
+	return RouteAtP(self, chain, employees, localMatch, required, req, preferred, "", now)
+}
+
+// RouteAtP is RouteAt plus the task's project name — see RouteP.
+func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, req ledger.ResourceProfile, preferred, project string, now int64) Decision {
 	seen := make(map[string]bool, len(chain))
 	for _, n := range chain {
 		seen[n] = true
@@ -206,7 +218,7 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 		}
 	}
 
-	target, peerScore := pickBestScored(matching, now, preferred)
+	target, peerScore := pickBestScored(matching, now, preferred, project)
 	if canLocal {
 		if !haveSelf {
 			// No row of our own to score against. Absence of evidence about our
@@ -214,7 +226,7 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 			// registers itself, so this is the fixture case: stay local.
 			return Decision{Action: ActionLocal}
 		}
-		if localScore := score(selfNode, now, preferred) + localBias; target == "" || localScore >= peerScore {
+		if localScore := score(selfNode, now, preferred, project) + localBias; target == "" || localScore >= peerScore {
 			return Decision{Action: ActionLocal}
 		}
 	}
@@ -233,7 +245,7 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 			return Decision{Action: ActionForward, Target: hop}
 		}
 	}
-	if sub, _ := pickBestScored(subs, now, preferred); sub != "" {
+	if sub, _ := pickBestScored(subs, now, preferred, project); sub != "" {
 		return Decision{Action: ActionForward, Target: sub}
 	}
 	return Decision{

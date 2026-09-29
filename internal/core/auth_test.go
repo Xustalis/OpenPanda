@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -87,6 +88,101 @@ func TestRejectBadHelloSig(t *testing.T) {
 	defer worker.mu.RUnlock()
 	if _, ok := worker.peers["attacker"]; ok {
 		t.Fatalf("attacker was registered despite a bad signature")
+	}
+}
+
+// TestRejectEd25519OnlyHello proves a hello carrying a self-minted Ed25519
+// identity but no valid shared-secret HMAC must not authenticate. Ed25519
+// proves control of a self-asserted key — identity inside the mesh — while
+// the HMAC is the mesh-membership proof. Before the fix, the Ed25519 branch
+// alone passed VerifyHelloP: anyone who could reach the listener could mint a
+// keypair, claim any node id, register as a peer, and delegate tasks — which
+// is unauthenticated remote code execution on the node.
+func TestRejectEd25519OnlyHello(t *testing.T) {
+	ctx := context.Background()
+	worker := newCoreWithNative(t, "worker", "127.0.0.1:17974", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	if err := worker.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	startListener(t, worker, "127.0.0.1:17974")
+
+	pub, priv, err := bus.GenerateNodeKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	ts := time.Now().Unix()
+	const nonce = "attacker-nonce"
+	mkHello := func(sig string) bus.Envelope {
+		env, err := bus.NewEnvelope(bus.MsgHello, "attacker", "h-1", bus.HelloPayload{
+			NodeID: "attacker", Ver: "t", Ts: ts, Nonce: nonce,
+			PubKey: hex.EncodeToString(pub),
+			EdSig:  bus.SignHelloEd(priv, "attacker", ts, nonce),
+			Sig:    sig,
+		})
+		if err != nil {
+			t.Fatalf("build hello: %v", err)
+		}
+		return env
+	}
+
+	// Shape 1: no HMAC at all — the Ed25519 pair alone must not admit.
+	ws1 := rawDial(t, "127.0.0.1:17974")
+	if err := ws1.WriteJSON(mkHello("")); err != nil {
+		t.Fatalf("write ed25519-only hello: %v", err)
+	}
+	_ = ws1.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, _, err := ws1.ReadMessage(); !isTimeout(err) {
+		t.Fatalf("ed25519-only hello got a reply — self-asserted keys must not authenticate, err=%v", err)
+	}
+
+	// Shape 2: Ed25519 pair plus a wrong-secret HMAC — same verdict.
+	ws2 := rawDial(t, "127.0.0.1:17974")
+	if err := ws2.WriteJSON(mkHello(bus.HelloSigN("wrong-secret", "attacker", ts, nonce))); err != nil {
+		t.Fatalf("write ed25519+wrong-hmac hello: %v", err)
+	}
+	_ = ws2.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, _, err := ws2.ReadMessage(); !isTimeout(err) {
+		t.Fatalf("ed25519 hello with a bad HMAC got a reply, err=%v", err)
+	}
+
+	worker.mu.RLock()
+	defer worker.mu.RUnlock()
+	if _, ok := worker.peers["attacker"]; ok {
+		t.Fatalf("attacker was registered without knowing the shared secret")
+	}
+}
+
+// TestRejectEd25519OnlyHello shows the fix's negative case; the positive case
+// (a correct secret plus a valid Ed25519 pair still authenticates) is covered
+// by every startPair-based test, which signs both layers.
+
+// TestRejectHelloClaimingSelfID: a peer must not claim this node's own node
+// id — the registry would then route "to self" traffic onto a foreign conn.
+func TestRejectHelloClaimingSelfID(t *testing.T) {
+	ctx := context.Background()
+	worker := newCoreWithNative(t, "worker-self", "127.0.0.1:17975", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	if err := worker.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	startListener(t, worker, "127.0.0.1:17975")
+
+	ws := rawDial(t, "127.0.0.1:17975")
+	ts := time.Now().Unix()
+	env, _ := bus.NewEnvelope(bus.MsgHello, "worker-self", "h-1", bus.HelloPayload{
+		NodeID: "worker-self", Ver: "t", Ts: ts,
+		Sig: bus.HelloSig(testSharedSecret, "worker-self", ts),
+	})
+	if err := ws.WriteJSON(env); err != nil {
+		t.Fatalf("write self-claiming hello: %v", err)
+	}
+	_ = ws.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, _, err := ws.ReadMessage(); !isTimeout(err) {
+		t.Fatalf("hello claiming our own node id got a reply, err=%v", err)
+	}
+	worker.mu.RLock()
+	defer worker.mu.RUnlock()
+	if _, ok := worker.peers["worker-self"]; ok {
+		t.Fatalf("a peer was registered under our own node id")
 	}
 }
 

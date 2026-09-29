@@ -859,6 +859,18 @@ func (s *TaskStore) PauseWithDisposition(ctx context.Context, taskID, owner, rea
 // needs sign-off (supervision loop terminal: an irreversible task, or one that
 // exhausted its round budget without satisfying the success criteria).
 func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, result any) error {
+	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalAcceptWork)
+}
+
+// PauseForAnswer parks a running task in review on an agent's clarification
+// question (Q4): the partial result is preserved like PauseWithResult, but
+// the disposition resumes execution — the user's answer travels back on
+// task_resume and folds into the re-run's intent.
+func (s *TaskStore) PauseForAnswer(ctx context.Context, taskID, owner string, result any) error {
+	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalResumeExecution)
+}
+
+func (s *TaskStore) pauseWithResultDisposition(ctx context.Context, taskID, owner string, result any, disposition ApprovalDisposition) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
@@ -867,7 +879,7 @@ func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, r
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateRunning)
 	}
 	if err := s.applyReviewCAS(ctx, taskID, StateRunning, owner, cur.AttemptID, EvReview,
-		map[string]any{"reason": "awaiting approval"}, result, ApprovalAcceptWork); err != nil {
+		map[string]any{"reason": "awaiting approval"}, result, disposition); err != nil {
 		return err
 	}
 	updated, err := s.Get(ctx, taskID)

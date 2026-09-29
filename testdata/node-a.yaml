@@ -20,13 +20,14 @@ network:
   peers:
     - "127.0.0.1:17936"          # 对应 node-b 的 listen_addr
 
+# 相对路径相对本文件所在目录（testdata/）解析，不是启动时的 cwd。
 storage:
-  db_path: "testdata/node-a.db"
-  context_path: "testdata/node-a/context"
-  memory_path: "testdata/node-a/memory"
-  projects_path: "testdata/node-a/projects"
-  skills_path: "testdata/node-a/skills"
-  work_path: "testdata/node-a"
+  db_path: "node-a.db"
+  context_path: "node-a/context"
+  memory_path: "node-a/memory"
+  projects_path: "node-a/projects"
+  skills_path: "node-a/skills"
+  work_path: "node-a"
 
 log:
   # The logger always emits structured JSON; there is no log.format key.

@@ -231,6 +231,46 @@ func TestRegisterQueryResourceProfileRoundTrip(t *testing.T) {
 	}
 }
 
+// TestProjectsResidenceRoundTrip covers the residence set end-to-end at the
+// directory layer: a peer's card-advertised project list lands on its row,
+// heartbeat gossip refreshes it through UpdateAdjacency, and a silent update
+// (Register or a heartbeat without the field) leaves the stored set alone.
+func TestProjectsResidenceRoundTrip(t *testing.T) {
+	db := openLedgerDB(t)
+
+	if err := UpsertRemote(db, "peer-res", CapabilitySummary{
+		Device:   "peer-res",
+		Projects: []string{"panda", "blog"},
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	nodes, err := Query(db, "online", "")
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("query: %v (%d nodes)", err, len(nodes))
+	}
+	if len(nodes[0].Projects) != 2 || nodes[0].Projects[0] != "panda" {
+		t.Fatalf("projects = %v, want [panda blog]", nodes[0].Projects)
+	}
+
+	// Heartbeat gossip refreshes the set without a card upsert.
+	if err := UpdateAdjacency(db, "peer-res", "", "", "", `["panda"]`); err != nil {
+		t.Fatalf("update projects: %v", err)
+	}
+	nodes, _ = Query(db, "online", "")
+	if len(nodes[0].Projects) != 1 || nodes[0].Projects[0] != "panda" {
+		t.Fatalf("projects after gossip = %v, want [panda]", nodes[0].Projects)
+	}
+
+	// A gossip beat with no projects field leaves the stored set alone.
+	if err := UpdateAdjacency(db, "peer-res", `["x"]`, "", "", ""); err != nil {
+		t.Fatalf("update adjacency: %v", err)
+	}
+	nodes, _ = Query(db, "online", "")
+	if len(nodes[0].Projects) != 1 {
+		t.Fatalf("silent beat clobbered projects: %v", nodes[0].Projects)
+	}
+}
+
 func TestLoadCardRejectsInvalidResourceProfile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "capabilities.yaml")
 
@@ -395,5 +435,39 @@ func TestAbilityMatches(t *testing.T) {
 		if got := AbilityMatches(tc.declared, tc.required); got != tc.want {
 			t.Fatalf("AbilityMatches(%q, %q) = %v, want %v", tc.declared, tc.required, got, tc.want)
 		}
+	}
+}
+
+// TestRequiresForActionSpec pins the normalization every submission boundary
+// shares: the spec's exact target id leads requires so MatchActuator's
+// first-match ordering resolves the actuator the spec actually named, not a
+// sibling a vaguer token happened to hit first.
+func TestRequiresForActionSpec(t *testing.T) {
+	spec := &ActionSpec{TargetActuator: "hardware:servo_tilt", Action: "rotate"}
+
+	// Exact id leads, vague tokens stay for capability breadth.
+	got := RequiresForActionSpec([]string{"servo", "coding"}, spec)
+	if got[0] != "hardware:servo_tilt" || len(got) != 3 {
+		t.Fatalf("target should lead requires, got %v", got)
+	}
+
+	// An exact-id entry is folded, not doubled.
+	got = RequiresForActionSpec([]string{"hardware:servo_tilt", "servo"}, spec)
+	if len(got) != 2 || got[0] != "hardware:servo_tilt" || got[1] != "servo" {
+		t.Fatalf("duplicate target should fold, got %v", got)
+	}
+
+	// Empty requires gains just the target.
+	got = RequiresForActionSpec(nil, spec)
+	if len(got) != 1 || got[0] != "hardware:servo_tilt" {
+		t.Fatalf("nil requires should gain the target, got %v", got)
+	}
+
+	// Nil spec and target-less spec pass through untouched.
+	if got := RequiresForActionSpec([]string{"coding"}, nil); len(got) != 1 || got[0] != "coding" {
+		t.Fatalf("nil spec must not rewrite requires, got %v", got)
+	}
+	if got := RequiresForActionSpec([]string{"coding"}, &ActionSpec{Action: "rotate"}); len(got) != 1 || got[0] != "coding" {
+		t.Fatalf("target-less spec must not rewrite requires, got %v", got)
 	}
 }

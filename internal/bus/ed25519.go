@@ -34,28 +34,51 @@ func VerifyHelloEd(pubKey ed25519.PublicKey, nodeID string, ts int64, nonce stri
 	return ed25519.Verify(pubKey, msg, sig)
 }
 
-// AuthMsgBytes constructs the canonical byte slice for a signed Tier-2 authorization grant.
+// AuthMsgBytes constructs the canonical byte slice for a signed Tier-2
+// authorization grant. This v1 form binds only the task id — it approves a
+// NAME, not a task, and a relay that rewrites the payload between origin and
+// executor keeps the grant valid. New signatures use AuthMsgBytesV2; v1 is
+// retained only to verify grants minted by pre-digest peers.
 func AuthMsgBytes(taskID string, authorized bool, ts int64) []byte {
 	return []byte(taskID + ":" + strconv.FormatBool(authorized) + ":" + strconv.FormatInt(ts, 10))
 }
 
+// AuthMsgBytesV2 extends the grant with the payload's ConsentDigest, so the
+// signature attests "this task id, in this exact content form, approved at
+// this time". A relay that edits any intent-bearing field in transit
+// invalidates the grant; edits the consent does not cover (chain, budgets)
+// stay unsigned by design because relays may legitimately rewrite them.
+func AuthMsgBytesV2(taskID string, authorized bool, ts int64, digest string) []byte {
+	return []byte(taskID + ":" + strconv.FormatBool(authorized) + ":" + strconv.FormatInt(ts, 10) + ":" + digest)
+}
+
 // SignAuthorization signs an approval grant with the approver's private key,
-// creating a tamper-proof cryptographic delegation token.
-func SignAuthorization(privKey ed25519.PrivateKey, taskID string, authorized bool, ts int64) string {
-	msg := AuthMsgBytes(taskID, authorized, ts)
+// creating a tamper-proof cryptographic delegation token. digest is the
+// payload's ConsentDigest at signing time; "" mints the legacy v1 form and
+// should only be used to sign for pre-digest receivers.
+func SignAuthorization(privKey ed25519.PrivateKey, taskID string, authorized bool, ts int64, digest string) string {
+	msg := AuthMsgBytesV2(taskID, authorized, ts, digest)
+	if digest == "" {
+		msg = AuthMsgBytes(taskID, authorized, ts)
+	}
 	sig := ed25519.Sign(privKey, msg)
 	return hex.EncodeToString(sig)
 }
 
-// VerifyAuthorization verifies that an authorization token was signed by the holder
-// of the given public key.
-func VerifyAuthorization(pubKey ed25519.PublicKey, taskID string, authorized bool, ts int64, sigHex string) bool {
+// VerifyAuthorization verifies that an authorization token was signed by the
+// holder of the given public key. A v2 (digest-bound) grant verifies only
+// against the digest the EXECUTOR computed over the payload it received —
+// transit edits fail closed. A v1 grant has no digest to compare against, so
+// it verifies on the bare tuple (the best a legacy mint can prove).
+func VerifyAuthorization(pubKey ed25519.PublicKey, taskID string, authorized bool, ts int64, digest, sigHex string) bool {
 	sig, err := hex.DecodeString(sigHex)
 	if err != nil || len(sig) != ed25519.SignatureSize {
 		return false
 	}
-	msg := AuthMsgBytes(taskID, authorized, ts)
-	return ed25519.Verify(pubKey, msg, sig)
+	if digest != "" && ed25519.Verify(pubKey, AuthMsgBytesV2(taskID, authorized, ts, digest), sig) {
+		return true
+	}
+	return ed25519.Verify(pubKey, AuthMsgBytes(taskID, authorized, ts), sig)
 }
 
 // ArtifactGrantMsg constructs the canonical byte slice the plan orchestrator

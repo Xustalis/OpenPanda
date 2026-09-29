@@ -233,6 +233,25 @@ type NetworkConfig struct {
 	// Nodes with only always-on links leave it empty — the plan is gossiped
 	// in heartbeats like the live adjacency.
 	Contacts []ContactConfig `yaml:"contacts,omitempty"`
+	// DiscoveryAddr is the LAN discovery UDP socket (broadcast beacons —
+	// "a node lives here", no credentials). "" binds :7837; "off" disables
+	// both the listener and the announcer. Admission is unaffected by the
+	// beacon: pairing still needs the shared secret and the signed hello.
+	DiscoveryAddr string `yaml:"discovery_addr"`
+}
+
+// defaultDiscoveryAddr is the port LAN-discovery binds when the operator
+// left discovery_addr empty — distinct from the WS listen port so a beacon
+// never collides with the task plane.
+const defaultDiscoveryAddr = ":7837"
+
+// DiscoveryAddrOrDefault resolves the discovery bind for callers that have
+// already excluded "off": an empty value means the default beacon port.
+func (n NetworkConfig) DiscoveryAddrOrDefault() string {
+	if n.DiscoveryAddr == "" {
+		return defaultDiscoveryAddr
+	}
+	return n.DiscoveryAddr
 }
 
 // ContactConfig is one scheduled transmission window. start/end accept an
@@ -681,6 +700,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: network.udp_listen %q is not host:port or \"off\": %w", c.Network.UDPListen, err)
 		}
 	}
+	if c.Network.DiscoveryAddr != "" && c.Network.DiscoveryAddr != "off" {
+		if _, _, err := net.SplitHostPort(c.Network.DiscoveryAddr); err != nil {
+			return fmt.Errorf("config: network.discovery_addr %q is not host:port or \"off\": %w", c.Network.DiscoveryAddr, err)
+		}
+	}
 	for _, addr := range []struct{ name, value string }{
 		{"network.listen_addr", c.Network.ListenAddr},
 		{"network.panel_addr", c.Network.PanelAddr},
@@ -698,7 +722,7 @@ func (c *Config) Validate() error {
 			// daemon reaches it through the punch handshake instead of a
 			// TCP dial.
 			if strings.TrimPrefix(peer, "punch:") == "" {
-				return fmt.Errorf("config: network.peers[%d] %q has an empty node id after punch:", i, peer)
+				return fmt.Errorf("config: network.peers[%d] %q has an empty node id after the punch: prefix", i, peer)
 			}
 			continue
 		}

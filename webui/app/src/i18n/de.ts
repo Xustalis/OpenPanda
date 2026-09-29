@@ -203,7 +203,7 @@ const de: Messages = {
   'sessions.nodeAuto': 'Automatisch (bester Knoten)',
   'sessions.nodePickTip': 'Klassifizierte Aufgaben laufen auf diesem Knoten — Antworten bleiben lokal',
   'sessions.folderPick': 'Lokalen Ordner wählen',
-  'sessions.folderSelected': '📁 Ordner ausgewählt, {n} Dateien:',
+  'sessions.folderSelected': 'Ordner ausgewählt, {n} Dateien:',
   'sessions.folderTruncated': '  … ({n} weitere Dateien)',
   'sessions.folderFollowUp': 'Bearbeite meine Anfrage auf Basis der obigen Dateien:',
   'sessions.projectPrefix': '[Projekt: {name}]',

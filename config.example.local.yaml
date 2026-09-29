@@ -19,6 +19,11 @@ network:
   shared_secret: ""  # 留空即可，单节点不需要 P2P
   panel_addr: "127.0.0.1:7841"   # webui 面板（panda web）HTTP 地址
   panel_token: ""                # 留空；经 OPENPANDA_PANEL_TOKEN 注入
+  # LAN 自动发现（Track 1）：UDP 广播 beacon 宣告"本机有 panda"，
+  # 对端 `panda nodes` 看到未配对列表 → nodes admit/verify 入网。
+  # 数据报不含凭据；入网仍要求 shared_secret + Ed25519 hello。
+  # "" 默认 :7837；"off" 完全关闭（不广播也不监听）。
+  # discovery_addr: ":7837"
 
 storage:
   db_path: "openpanda.db"

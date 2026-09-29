@@ -95,6 +95,24 @@ func TestSubstituteActionSpecNoSpec(t *testing.T) {
 	}
 }
 
+// TestSubstituteActionSpecRejectsMissingAction pins the gate symmetric to the
+// missing-param one: a driver template naming {action} must not execute with
+// an empty verb — spec-less and action-less specs both fail at substitution.
+func TestSubstituteActionSpecRejectsMissingAction(t *testing.T) {
+	plan := Plan{ActuatorID: "x", Command: "drv", Args: []string{"--do", "{action}"}}
+	if err := SubstituteActionSpec(&plan, nil, "intent"); err == nil {
+		t.Fatal("{action} template ran with no action_spec")
+	}
+	if err := SubstituteActionSpec(&plan, &ledger.ActionSpec{}, "intent"); err == nil {
+		t.Fatal("{action} template ran with an action-less spec")
+	}
+	// A template without {action} is unaffected by a missing verb.
+	plan2 := Plan{ActuatorID: "x", Command: "drv", Args: []string{"--intent", "{intent}"}}
+	if err := SubstituteActionSpec(&plan2, nil, "go"); err != nil {
+		t.Fatalf("placeholder-free-of-action template must pass: %v", err)
+	}
+}
+
 func TestParseActionSpec(t *testing.T) {
 	spec, err := ParseActionSpec(`{"action_spec":{"target_actuator":"a","action":"go","parameters":{"n":3}}}`)
 	if err != nil {

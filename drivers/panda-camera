@@ -1,0 +1,72 @@
+#!/bin/sh
+# panda-camera — OpenPanda reference actuator driver for a camera snapshot.
+#
+# Usage:
+#   panda-camera [--out FILE] [--device N]
+#
+# Captures a single still frame to a JPEG file and prints the path. Backends
+# are tried in order: fswebcam (Linux v4l2), imagesnap (macOS), ffmpeg
+# (avfoundation on macOS, video4linux2 elsewhere). Whichever resolves first
+# runs; absence of all backends is exit 3 so the card can be pruned.
+#
+# Exit codes: 0 ok · 2 bad arguments · 3 no capture backend · 1 capture error.
+
+set -eu
+
+out=""
+device="0"
+res="1280x720"
+
+usage() {
+    cat >&2 <<'EOF'
+panda-camera [--out FILE] [--device N] [--res WxH]
+  --out FILE   JPEG output path (default ./snap-<ts>.jpg)
+  --device N   camera index/device path hint (default 0)
+  --res WxH    capture resolution (default 1280x720)
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --out)    out="$2"; shift 2 ;;
+        --device) device="$2"; shift 2 ;;
+        --res)    res="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage; exit 2 ;;
+    esac
+done
+
+if [ -z "$out" ]; then
+    out="snap-$(date +%Y%m%d-%H%M%S).jpg"
+fi
+
+os=$(uname -s 2>/dev/null || echo unknown)
+
+if command -v fswebcam >/dev/null 2>&1; then
+    if ! fswebcam -q --no-banner -r "$res" -d "/dev/video$device" "$out"; then
+        echo "panda-camera: fswebcam capture failed" >&2; exit 1
+    fi
+elif [ "$os" = "Darwin" ] && command -v imagesnap >/dev/null 2>&1; then
+    if ! imagesnap -w 1 "$out"; then
+        echo "panda-camera: imagesnap capture failed" >&2; exit 1
+    fi
+elif command -v ffmpeg >/dev/null 2>&1; then
+    # The device index stays a quoted argv element in both branches — an
+    # unquoted expansion would let a malformed --device split into extra
+    # ffmpeg arguments.
+    if [ "$os" = "Darwin" ]; then
+        ok=0
+        ffmpeg -loglevel error -y -f avfoundation -framerate 30 -i "$device:none" -frames:v 1 "$out" || ok=$?
+    else
+        ok=0
+        ffmpeg -loglevel error -y -f v4l2 -i "/dev/video$device" -frames:v 1 "$out" || ok=$?
+    fi
+    if [ "$ok" -ne 0 ]; then
+        echo "panda-camera: ffmpeg capture failed" >&2; exit 1
+    fi
+else
+    echo "panda-camera: no capture backend — install fswebcam, imagesnap, or ffmpeg" >&2
+    exit 3
+fi
+
+printf 'snapshot -> %s\n' "$out"

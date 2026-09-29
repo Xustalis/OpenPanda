@@ -3,6 +3,7 @@ import { api, type HubSkillEntry, type SkillEntry } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { ErrorState, PageHeader } from '../components/page'
+import { Icon } from '../components/icons'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 
@@ -275,7 +276,7 @@ function SkillsHubPanel({ onInstalled }: { onInstalled(): void }) {
             title={t('skills.discoverTooltip')}
             style={{ whiteSpace: 'nowrap' }}
           >
-            {discovering ? '...' : `✨ ${t('skills.discoverBtn')}`}
+            {discovering ? '...' : <><Icon name="sparkles" size={13} /> {t('skills.discoverBtn')}</>}
           </button>
         )}
       </div>
@@ -293,7 +294,7 @@ function SkillsHubPanel({ onInstalled }: { onInstalled(): void }) {
               disabled={discovering}
               onClick={discover}
             >
-              {discovering ? '...' : `✨ ${t('skills.discoverBtn')}: "${query.trim()}"`}
+              {discovering ? '...' : <><Icon name="sparkles" size={13} /> {t('skills.discoverBtn')}: "{query.trim()}"</>}
             </button>
           )}
         </div>

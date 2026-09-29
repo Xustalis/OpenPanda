@@ -201,7 +201,7 @@ const ja: Messages = {
   'sessions.nodeAuto': '自動（最適なノード）',
   'sessions.nodePickTip': '分類されたタスクはこのノードで実行——チャット回答はローカルのまま',
   'sessions.folderPick': 'ローカルフォルダを選択',
-  'sessions.folderSelected': '📁 フォルダを選択しました（{n} ファイル）：',
+  'sessions.folderSelected': 'フォルダを選択しました（{n} ファイル）：',
   'sessions.folderTruncated': '  …（他 {n} ファイル）',
   'sessions.folderFollowUp': '上記のファイルに基づいてリクエストを処理してください：',
   'sessions.projectPrefix': '[プロジェクト: {name}]',

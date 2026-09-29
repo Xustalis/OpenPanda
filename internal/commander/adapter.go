@@ -81,6 +81,20 @@ func WithToolsPolicy(ctx context.Context, policy string) context.Context {
 	return context.WithValue(ctx, toolsPolicyKey{}, policy)
 }
 
+// maxTurnsKey carries a per-task agent turn cap (spec.max_turns) down to the
+// adapter request without widening the runAdapter seam's signature.
+type maxTurnsKey struct{}
+
+// WithMaxTurns attaches a per-task agent turn cap to the execution context;
+// runAdapterProcess copies it into AdapterRequest.MaxTurns. Non-positive is a
+// no-op — the adapter then falls back to its own default.
+func WithMaxTurns(ctx context.Context, n int) context.Context {
+	if n <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, maxTurnsKey{}, n)
+}
+
 // agentCmdKey carries the card-declared argv template for the generic adapter
 // (ledger.Agent.Command) down to the request without widening the runAdapter
 // seam's signature.
@@ -358,6 +372,10 @@ type AdapterRequest struct {
 	// placeholder). It comes from the card's agents.<name>.command field, so
 	// a node can wire a new CLI without shipping a bespoke adapter script.
 	Cmd string `json:"cmd,omitempty"`
+	// MaxTurns is a per-task agent turn cap from the task spec
+	// (spec.max_turns). Adapters without a turn-limit flag ignore it; those
+	// that have one apply it instead of their own default.
+	MaxTurns int `json:"max_turns,omitempty"`
 }
 
 // UsageDetail is the structured token breakdown an adapter reports alongside
@@ -526,6 +544,9 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	}
 	if policy, ok := ctx.Value(toolsPolicyKey{}).(string); ok {
 		req.ToolsPolicy = policy
+	}
+	if mt, ok := ctx.Value(maxTurnsKey{}).(int); ok && mt > 0 {
+		req.MaxTurns = mt
 	}
 	if cmd, ok := ctx.Value(agentCmdKey{}).(string); ok {
 		req.Cmd = cmd

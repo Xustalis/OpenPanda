@@ -352,11 +352,14 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		sleep:           time.Sleep,
 		retryBackoff:    time.Second,
 	}
-	// The commander needs at least one native ability to route; a zero card
-	// yields a router that declines everything. The router starts with default
-	// policy (auto injection, no preferred agents); SetRouterPolicy applies
-	// the loaded config once the caller has it.
-	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 {
+	// The commander needs at least one routable ability; a zero card yields a
+	// router that declines everything. Actuators count: a hardware-only edge
+	// node (a Pi with just a servo, no agents, no native abilities) must still
+	// get a router or every actuator task routed to it declines at localMatch
+	// as "no capability matches". The router starts with default policy (auto
+	// injection, no preferred agents); SetRouterPolicy applies the loaded
+	// config once the caller has it.
+	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 || len(card.Actuators) > 0 {
 		c.router = commander.NewRouter(card, commander.NewExecutor(), model, config.InjectionConfig{}, config.RoutingConfig{})
 	}
 	return c
@@ -467,7 +470,7 @@ func (c *Core) ReloadCard(ctx context.Context, path string) error {
 
 	c.cardMu.Lock()
 	c.card = card
-	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 {
+	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 || len(card.Actuators) > 0 {
 		c.router = commander.NewRouter(card, commander.NewExecutor(), c.model, c.routerInjection, c.routerRouting)
 		c.router.SetMCPPassthrough(c.mcpPassthrough)
 		c.router.SetSelfConfigPath(c.selfConfigPath)
@@ -606,12 +609,14 @@ func (c *Core) SetHostStatePaths(paths []string) {
 // filterHostDrift drops changed paths that live under a host-owned directory.
 // Changes there (SQLite WAL, skill/dream files, the agent CLI's own config) are
 // the node's own bookkeeping, not the agent's task output, so they must not
-// pause a task for scope drift.
-func (c *Core) filterHostDrift(drift []string) []string {
+// pause a task for scope drift. The drift paths are relative to the run's
+// workDir — a stage dir or an attached task's private dir, not always the
+// node root — so the caller passes the root they were snapshotted under.
+func (c *Core) filterHostDrift(workDir string, drift []string) []string {
 	if len(c.hostStatePaths) == 0 {
 		return drift
 	}
-	wd, _ := filepath.Abs(c.workDir)
+	wd, _ := filepath.Abs(workDir)
 	out := make([]string, 0, len(drift))
 	for _, p := range drift {
 		ap := filepath.Join(wd, p)
@@ -678,6 +683,18 @@ func (c *Core) RunHeartbeat(ctx context.Context) {
 // read loop, and the next tick reaches the replacement.
 func (c *Core) broadcastHeartbeat(ctx context.Context) {
 	capJSON, load := c.node.capacitySnapshot(ctx)
+	projects := c.projectNames()
+	// The wire set goes to peers below; the same list lands on the local
+	// directory's self row so RouteAt's selfNode reads residence off the same
+	// table it scores peers from. A nil list (store read failed) is skipped —
+	// the gossip contract treats absent as "leave the stored set alone".
+	if projects != nil {
+		if b, err := json.Marshal(projects); err == nil {
+			if err := ledger.UpdateAdjacency(c.db, c.nodeID, "", "", "", string(b)); err != nil {
+				c.logger.Debug("publish self residence", "err", err)
+			}
+		}
+	}
 	c.mu.RLock()
 	conns := make(map[string]*bus.Conn, len(c.peers))
 	for id, p := range c.peers {
@@ -699,7 +716,7 @@ func (c *Core) broadcastHeartbeat(ctx context.Context) {
 			Status: "online", Load: load, Capacity: capJSON,
 			BlockedAgents: c.blockedAgents(),
 			Neighbors:     c.livePeerIDs(), Links: wireLinks,
-			Contacts: c.wireContacts(),
+			Contacts: c.wireContacts(), Projects: projects,
 		})
 		if err != nil {
 			c.logger.Warn("build heartbeat", "err", err)
@@ -809,8 +826,8 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 	// and its contact plan ride every beat so the directory's view of the
 	// link-state graph — and the schedule it opens on — tracks reality
 	// instead of freezing at hello time.
-	if p.Neighbors != nil || p.Links != nil || p.Contacts != nil {
-		var nbJSON, linksJSON, contactsJSON string
+	if p.Neighbors != nil || p.Links != nil || p.Contacts != nil || p.Projects != nil {
+		var nbJSON, linksJSON, contactsJSON, projectsJSON string
 		if p.Neighbors != nil {
 			if b, err := json.Marshal(p.Neighbors); err == nil {
 				nbJSON = string(b)
@@ -826,7 +843,12 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 				contactsJSON = string(b)
 			}
 		}
-		if err := ledger.UpdateAdjacency(c.db, env.From, nbJSON, linksJSON, contactsJSON); err != nil {
+		if p.Projects != nil {
+			if b, err := json.Marshal(p.Projects); err == nil {
+				projectsJSON = string(b)
+			}
+		}
+		if err := ledger.UpdateAdjacency(c.db, env.From, nbJSON, linksJSON, contactsJSON, projectsJSON); err != nil {
 			c.logger.Warn("update adjacency", "from", env.From, "err", err)
 		}
 	}
@@ -1523,6 +1545,32 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		c.logger.Warn("rejected hello: from mismatch", "from", env.From, "peer", p.NodeID)
 		return
 	}
+	// A peer may not claim OUR identity. "nodeID == ours" is not another
+	// member, it is this node: accepting it would bind a foreign conn under
+	// our own id, and the registry would then route traffic "to us" out of
+	// the building (and overwrite the self rows the directory keeps).
+	if p.NodeID == c.nodeID {
+		c.logger.Warn("rejected hello: peer claims local node id", "peer", p.NodeID)
+		return
+	}
+	// Identity pin on keys a human verified: once a node id's recorded key is
+	// key_verified, a hello re-keying it is rejected outright — from here a
+	// reinstall and a node-id hijack are indistinguishable, and neither may
+	// silently inherit the human's check. The operator clears the old row
+	// (nodes remove / re-pair) to admit the new key. Unverified rows keep the
+	// TOFU path in recordPeerPubKey (the change still clears key_verified and
+	// logs loudly).
+	if p.PubKey != "" && p.EdSig != "" {
+		if stored, ok := c.peerPubKey(p.NodeID); ok && hex.EncodeToString(stored) != p.PubKey {
+			var verified int
+			_ = c.db.QueryRowContext(ctx,
+				`SELECT COALESCE(key_verified,0) FROM employee_cache WHERE id=?`, p.NodeID).Scan(&verified)
+			if verified != 0 {
+				c.logger.Warn("rejected hello: key re-bind on verified identity", "peer", p.NodeID)
+				return
+			}
+		}
+	}
 	// Replay check (M24): within MaxHelloAge a captured hello still verifies,
 	// so a signature must be single-use — accept each one once, reject it
 	// until its freshness window closes. The key is the signed fields only:
@@ -1785,6 +1833,7 @@ func (c *Core) summary() ledger.CapabilitySummary {
 		Chip:            card.Chip,
 		Capacity:        card.Capacity,
 		ResourceProfile: card.ResourceProfile,
+		Projects:        c.projectNames(),
 	}
 	for _, n := range card.Native {
 		s.NativeIDs = append(s.NativeIDs, n.ID)

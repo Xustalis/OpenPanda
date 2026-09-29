@@ -14,6 +14,10 @@
 #                  想让某个 agent 每次都先问你，就在它下面显式写 tier: 2 ——
 #                  未授权会被拒绝并进待审批，批准后带授权重跑；
 #                  `--authorize` 提交则一次同意直接执行完成。
+#   actuators      可由任务驱动的物理/桌面动作（§7.1）。id 用 hardware:*
+#                  前缀；command 是驱动可执行文件，不存在会被 PruneUnavailable
+#                  Actuators 剪掉；args 里 {intent}/{action}/{param:<name>}
+#                  执行时替换。参考驱动见 drivers/（panda-notify 等）。
 #   capacity       本节点并行任务数与资源上限
 #   resource_profile 声明的硬件（cpu / ram_gb / gpu_vram_gb / duration_hint）。
 #                  capacity 是"现在还能接几个"，这里是"跑得动什么"：路由把它当硬判据，
@@ -75,6 +79,18 @@ agents:
   #
   # agy (Antigravity) and grok have their own adapters (antigravity.py /
   # grok_build.py) — declare them like claude_code above.
+
+# 桌面通知执行器：装上 drivers/panda-notify（或改写成绝对路径）后取消注释。
+# "panda ask 提醒我构建完成" 会产出 action_spec 路由到这里。
+# actuators:
+#   - id: "hardware:notify"
+#     type: "software"
+#     category: "ui_feedback"
+#     interface: "desktop"
+#     capabilities: ["notify", "notification", "alert", "通知"]
+#     tier: 1
+#     command: "panda-notify"
+#     args: ["--title", "{param:title}", "--body", "{param:body}"]
 
 capacity:
   cpu_cores: 8

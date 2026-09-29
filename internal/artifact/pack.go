@@ -167,6 +167,14 @@ type entry struct {
 // the artifact travels to. limit bounds the total regular-file bytes; 0
 // accepts whatever the source tree holds.
 func walk(root string, limit int64) ([]entry, error) {
+	return walkExcept(root, limit, nil)
+}
+
+// walkExcept is walk with a directory-name skip set: a directory whose name is
+// in skip is pruned wholesale (contents never counted, never packed). Callers
+// use it to keep derived trees — dependency checkouts, VCS internals, caches —
+// out of an artifact that only needs the source.
+func walkExcept(root string, limit int64, skip map[string]bool) ([]entry, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, fmt.Errorf("artifact: stat root: %w", err)
@@ -191,6 +199,9 @@ func walk(root string, limit int64) ([]entry, error) {
 		rel = filepath.ToSlash(rel)
 		switch {
 		case fi.IsDir():
+			if skip[fi.Name()] {
+				return filepath.SkipDir
+			}
 			out = append(out, entry{rel: rel, abs: path, mode: fi.Mode().Perm(), dir: true})
 		case fi.Mode().IsRegular():
 			total += fi.Size()

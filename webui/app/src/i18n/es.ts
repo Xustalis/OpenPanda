@@ -203,7 +203,7 @@ const es: Messages = {
   'sessions.nodeAuto': 'Automático (mejor nodo)',
   'sessions.nodePickTip': 'Las tareas clasificadas se ejecutan en este nodo — las respuestas siguen siendo locales',
   'sessions.folderPick': 'Elegir una carpeta local',
-  'sessions.folderSelected': '📁 Carpeta seleccionada, {n} archivos:',
+  'sessions.folderSelected': 'Carpeta seleccionada, {n} archivos:',
   'sessions.folderTruncated': '  … ({n} archivos más)',
   'sessions.folderFollowUp': 'Atiende mi solicitud a partir de los archivos anteriores:',
   'sessions.projectPrefix': '[Proyecto: {name}]',

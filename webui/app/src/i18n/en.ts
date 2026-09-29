@@ -206,7 +206,7 @@ const en: Messages = {
   'sessions.nodeAuto': 'Auto (best node)',
   'sessions.nodePickTip': 'Classified tasks run on this node — chat answers stay local',
   'sessions.folderPick': 'Pick a local folder',
-  'sessions.folderSelected': '📁 Folder selected, {n} files:',
+  'sessions.folderSelected': 'Folder selected, {n} files:',
   'sessions.folderTruncated': '  … ({n} more files)',
   'sessions.folderFollowUp': 'Please handle my request based on the files above:',
   'sessions.projectPrefix': '[Project: {name}]',

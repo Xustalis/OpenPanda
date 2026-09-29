@@ -52,6 +52,53 @@ var migrations = []Migration{
 	{Version: 27, Name: "add_employee_contacts_json", Apply: migrateV27},
 	{Version: 28, Name: "add_employee_pub_key", Apply: migrateV28},
 	{Version: 29, Name: "add_tasks_auth_grant", Apply: migrateV29},
+	{Version: 30, Name: "add_employee_projects_json", Apply: migrateV30},
+	{Version: 31, Name: "add_employee_key_verified", Apply: migrateV31},
+	{Version: 32, Name: "add_pending_nodes", Apply: migrateV32},
+}
+
+// migrateV32 adds pending_nodes: the LAN discovery hint list. A UDP beacon
+// is unauthenticated by design — it may say "a node lives at this address"
+// and nothing more — so its rows sit here, NOT in employee_cache, until the
+// operator pairs the address (shared secret + signed hello). Rows expire:
+// a node that stopped broadcasting should fall off the list instead of
+// accumulating ghosts.
+func migrateV32(tx MigrationExec) error {
+	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS pending_nodes (
+		id TEXT PRIMARY KEY,
+		addr TEXT NOT NULL DEFAULT '',
+		pub_key TEXT NOT NULL DEFAULT '',
+		ver TEXT NOT NULL DEFAULT '',
+		first_seen INTEGER NOT NULL DEFAULT 0,
+		last_seen INTEGER NOT NULL DEFAULT 0)`)
+	return err
+}
+
+// migrateV31 adds employee_cache.key_verified: the unix timestamp a human
+// confirmed this node's advertised fingerprint (panda nodes verify <id>),
+// which is what turns a TOFU-recorded Ed25519 key into a checked one. A key
+// that changes under a still-verified row clears the stamp — the new key has
+// never been compared, and pretending otherwise would make the check
+// decorative.
+func migrateV31(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "employee_cache")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "employee_cache", "key_verified", "INTEGER NOT NULL DEFAULT 0")
+}
+
+// migrateV30 adds employee_cache.projects_json: the names of the projects a
+// node holds a checkout of, gossiped on card and heartbeat so routing can
+// prefer a resident node for a project task. Residence is an optimization the
+// scorer weighs — the tree can still travel as an artifact — but landing the
+// task where the code already lives skips the round trip entirely.
+func migrateV30(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "employee_cache")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "employee_cache", "projects_json", "TEXT NOT NULL DEFAULT ''")
 }
 
 // migrateV28 adds employee_cache.pub_key: the peer's advertised Ed25519

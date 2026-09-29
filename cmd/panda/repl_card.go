@@ -18,6 +18,8 @@ package main
 //	/card manual add <id> --notify <contact>
 //	/card manual remove <id>
 //	/nodes add <host:port>        append peer + generate secret + live dial
+//	/nodes admit <id>             admit a LAN-discovered node (add + dial)
+//	/nodes verify <id>            mark a fingerprint as human-compared
 //	/nodes disconnect <addr>      remove a peer from the dial list
 //	/nodes invite                 print the join guide for the other machine
 

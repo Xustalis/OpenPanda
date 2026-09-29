@@ -297,7 +297,6 @@ type anthropicDelta struct {
 // surfaced live via the reasoning sink and returned on Response.Reasoning,
 // never joined into Response.Text.
 type anthAccumulator struct {
-	texts     []string
 	reasoning []string
 	blocks    map[int]*ContentBlock    // by stream index
 	rawArgs   map[int]*strings.Builder // tool_use partial_json, by index

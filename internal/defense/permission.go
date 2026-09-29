@@ -455,20 +455,6 @@ func subcommandIn(subs ...string) func(args []string) bool {
 	return func(args []string) bool { return set[firstPositional(args)] }
 }
 
-// gitRiskySubcommands run hooks or have irreversible/shared-state effects.
-// checkout/switch/restore/stash discard uncommitted work in the tree — the most
-// common way an agent destroys work that was never committed anywhere — and
-// clone runs the remote's hooks and config on first checkout.
-var gitRiskySubcommands = map[string]bool{
-	"push": true, "commit": true, "merge": true, "rebase": true,
-	"reset": true, "clean": true, "filter-branch": true, "update-ref": true,
-	"checkout": true, "switch": true, "restore": true, "stash": true,
-	"clone": true, "am": true, "cherry-pick": true, "revert": true,
-	"apply": true, "gc": true, "prune": true, "worktree": true,
-	"submodule": true, "remote": true, "config": true, "tag": true,
-	"branch": true, "mv": true, "rm": true,
-}
-
 // hasAnyArg reports a scanner that is true when any argument equals one of the
 // given flags exactly.
 func hasAnyArg(flags ...string) func(args []string) bool {

@@ -55,7 +55,10 @@ def main():
     prompt, timeout, cwd = req
 
     model = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
-    max_turns = os.environ.get("CLAUDE_MAX_TURNS", "30")
+    # Turn cap order: the task's own spec.max_turns wins, then the operator's
+    # env, then the default. A task that needs a long build-test loop asks for
+    # it in-band instead of inheriting a ceiling sized for a quick edit.
+    max_turns = str(req.max_turns or os.environ.get("CLAUDE_MAX_TURNS", "30"))
     base = ["claude", "-p", prompt,
             "--max-turns", max_turns,
             "--permission-mode", "acceptEdits"]

@@ -81,15 +81,19 @@ def read_request(default_timeout=DEFAULT_TIMEOUT):
     resume = req.get("resume") or ""
     tools_policy = req.get("tools_policy") or ""
     cmd = req.get("cmd") or ""
-    return Request(prompt, timeout, cwd, resume, tools_policy, cmd)
+    try:
+        max_turns = max(0, int(req.get("max_turns", 0) or 0))
+    except (TypeError, ValueError):
+        max_turns = 0
+    return Request(prompt, timeout, cwd, resume, tools_policy, cmd, max_turns)
 
 
 class Request:
     """The parsed adapter request; iterates as (prompt, timeout, cwd) so
     prompt, timeout, cwd = read_request() keeps working, with
-    resume/tools_policy/cmd as extra attributes."""
+    resume/tools_policy/cmd/max_turns as extra attributes."""
 
-    def __init__(self, prompt, timeout, cwd, resume, tools_policy, cmd=""):
+    def __init__(self, prompt, timeout, cwd, resume, tools_policy, cmd="", max_turns=0):
         self.prompt = prompt
         self.timeout = timeout
         self.cwd = cwd
@@ -98,6 +102,9 @@ class Request:
         # cmd is the argv template a generic adapter (generic.py) expands —
         # the card's agents.<name>.command field, verbatim.
         self.cmd = cmd
+        # max_turns is a per-task turn cap from the task spec; adapters with
+        # a turn-limit flag apply it, the rest ignore it.
+        self.max_turns = max_turns
 
     def __iter__(self):
         return iter((self.prompt, self.timeout, self.cwd))

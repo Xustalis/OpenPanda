@@ -2180,6 +2180,12 @@ func (r *repl) cmdNodes(arg string) {
 		case "remove", "rm":
 			r.cmdNodesRemove(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
 			return
+		case "verify":
+			r.cmdNodesVerify(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
+			return
+		case "admit":
+			r.cmdNodesAdmit(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
+			return
 		}
 	}
 	nodes, err := ledger.Query(r.db, "", "")
@@ -2189,17 +2195,22 @@ func (r *repl) cmdNodes(arg string) {
 	}
 	if len(nodes) == 0 {
 		r.outln(i18n.T(r.loc, "repl.nodes.none"))
-		return
-	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
-	r.outln(i18n.T(r.loc, "repl.nodes.head"))
-	for _, n := range nodes {
-		seen := time.Unix(n.LastSeen, 0).Format(time.RFC3339)
-		if n.LastSeen == 0 {
-			seen = "never"
+	} else {
+		sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+		r.outln(i18n.T(r.loc, "repl.nodes.head"))
+		for _, n := range nodes {
+			seen := time.Unix(n.LastSeen, 0).Format(time.RFC3339)
+			if n.LastSeen == 0 {
+				seen = "never"
+			}
+			fp := n.Fingerprint()
+			if n.Verified() {
+				fp += " ✓"
+			}
+			r.outf("  %-16s %-8s %-8s %-30s %-18s %s\n", n.ID, n.NodeKind, n.Status, n.Chip, fp, seen)
 		}
-		r.outf("  %-16s %-8s %-8s %-30s %s\n", n.ID, n.NodeKind, n.Status, n.Chip, seen)
 	}
+	printPendingTo(r.commandOutput(), r.db, r.loc)
 }
 
 // cmdAgents lists the agent CLIs this node can delegate to (same probe as

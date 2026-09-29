@@ -104,7 +104,8 @@ func main() {
 			return
 		case "nodes":
 			// Verbs that rewrite the peer list live here; `remove` drops a
-			// stale directory row; bare `nodes` lists the fleet.
+			// stale directory row; `verify` stamps a fingerprint the human has
+			// compared out-of-band; bare `nodes` lists the fleet.
 			if len(args) > 0 {
 				switch args[0] {
 				case "add":
@@ -118,6 +119,12 @@ func main() {
 					return
 				case "remove", "rm":
 					runNodeRemove(args[1:])
+					return
+				case "verify":
+					runNodesVerify(args[1:])
+					return
+				case "admit":
+					runNodesAdmit(args[1:])
 					return
 				}
 			}
@@ -518,6 +525,10 @@ func runDaemon(args []string) {
 	if err := coreNode.Register(ctx); err != nil {
 		fatal("register node", err)
 	}
+	// Materialize the Ed25519 identity now: a peerless node otherwise only
+	// generates it on first hello, leaving its own `panda nodes` fingerprint
+	// blank — the very value an operator compares a discovered peer against.
+	coreNode.EnsureNodeKey()
 	guard.Go(logger, "daemon: heartbeat", cancel, func() { coreNode.RunHeartbeat(ctx) })
 	guard.Go(logger, "daemon: monitor", cancel, func() { coreNode.RunMonitor(ctx) })
 
@@ -544,6 +555,16 @@ func runDaemon(args []string) {
 				logger.Warn("udp: datagram plane failed to start", "addr", udpAddr, "err", err)
 			}
 		}
+	}
+
+	// LAN discovery: unauthenticated broadcast beacons feeding a pending-join
+	// list — the "see a device, then pair it" half of Track 1. Default binds
+	// :7837; "off" silences both directions. Datagrams carry no credentials,
+	// so the socket neither proves nor admits anything.
+	if cfg.Network.DiscoveryAddr != "off" {
+		guard.Go(logger, "daemon: discovery", cancel, func() {
+			coreNode.RunDiscovery(ctx, cfg.Network.DiscoveryAddrOrDefault(), cfg.Network.ListenAddr)
+		})
 	}
 
 	for _, peer := range cfg.Network.Peers {
@@ -742,6 +763,8 @@ func printUsage(w *os.File) {
 	line("  nodes add <host:port>  add a peer to dial (generates shared_secret when missing,")
 	line("                         prints the join guide for the other machine)")
 	line("  nodes invite           print the join guide without changing the peer list")
+	line("  nodes admit <id>       admit a LAN-discovered node as a peer")
+	line("  nodes verify <id>      mark a node's fingerprint as human-compared")
 	line("  nodes disconnect <a>   remove a peer from the dial list")
 	line("  pair --secret S --peer <host:port>")
 	line("                         join an existing network from a new machine")

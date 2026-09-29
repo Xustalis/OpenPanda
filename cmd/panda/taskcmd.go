@@ -20,6 +20,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/plan"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
@@ -215,11 +216,13 @@ func printTaskSpec(raw string) {
 // opens `panda task` to read, in the one encoding they cannot read it in.
 func printTaskResult(raw string) {
 	var res struct {
-		ExitCode int    `json:"exit_code"`
-		OK       bool   `json:"ok"`
-		Stdout   string `json:"stdout"`
-		Stderr   string `json:"stderr"`
-		Failed   string `json:"failed"`
+		ExitCode     int      `json:"exit_code"`
+		OK           bool     `json:"ok"`
+		Stdout       string   `json:"stdout"`
+		Stderr       string   `json:"stderr"`
+		Failed       string   `json:"failed"`
+		FilesChanged []string `json:"files_changed"`
+		Question     string   `json:"question"`
 	}
 	if err := json.Unmarshal([]byte(raw), &res); err != nil {
 		fmt.Printf("result:   %s\n", raw)
@@ -231,6 +234,20 @@ func printTaskResult(raw string) {
 		outcome = p.Danger(fmt.Sprintf("%s exit %d", p.MarkFail(), res.ExitCode))
 	}
 	fmt.Println(p.Heading("result:") + " " + outcome)
+	if res.Question != "" {
+		fmt.Println(p.Heading("question:") + " " + res.Question)
+		fmt.Println("  " + p.Muted("answer with: panda approve <task-id> -m \"<answer>\""))
+	}
+	if len(res.FilesChanged) > 0 {
+		const shown = 15
+		list := res.FilesChanged
+		more := ""
+		if len(list) > shown {
+			more = fmt.Sprintf(" … +%d", len(list)-shown)
+			list = list[:shown]
+		}
+		fmt.Println(p.Heading("files:") + "  " + p.Muted(strings.Join(list, ", ")+more))
+	}
 	for _, body := range []string{res.Failed, strings.TrimRight(res.Stdout, "\n"), strings.TrimRight(res.Stderr, "\n")} {
 		if strings.TrimSpace(body) == "" {
 			continue
@@ -329,6 +346,7 @@ func runTaskAdd(args []string) {
 	mode := fs.String("mode", "parallel", "with --agents: 'parallel' runs every harness at once, 'serial' chains them in order")
 	parentID := fs.String("parent-id", "", "parent task id (defaults to PANDA_TASK_ID environment variable)")
 	preferred := fs.String("preferred", "", "preferred node id")
+	actionSpec := fs.String("action-spec", "", "actuator dispatch JSON: {\"target_actuator\":\"hardware:x\",\"action\":\"verb\",\"parameters\":{...}}")
 	fs.Parse(args)
 
 	loc := i18n.Detect()
@@ -388,17 +406,54 @@ func runTaskAdd(args []string) {
 	// requires path unchanged.
 	agentList := parseAgentList(*agents)
 	if len(agentList) > 1 {
+		// A multi-harness plan and an actuator dispatch are different task
+		// shapes; accepting both would silently drop the action_spec.
+		if strings.TrimSpace(*actionSpec) != "" {
+			fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.add.actionSpecAgents"))
+			os.Exit(2)
+		}
 		runTaskAddAgents(loc, engine, agentList, *mode, *title, *prompt, requiresList, requiresExplicit, prio, jsonOutput)
 		return
 	}
 	if len(agentList) == 1 {
 		requiresList = append(requiresList, "agent:"+agentList[0])
 	}
+
+	// --action-spec carries the §7.2 actuator dispatch the model would emit in
+	// spec.action_spec: the JSON is parsed into the canonical wire type (so a
+	// malformed shape is refused here, not at the executor) and marshalled
+	// back into spec_json. The context flips to "hardware" — a servo has no
+	// checkout to attach.
+	contextType := ""
+	specJSON := ""
+	if raw := strings.TrimSpace(*actionSpec); raw != "" {
+		var as ledger.ActionSpec
+		if err := json.Unmarshal([]byte(raw), &as); err != nil {
+			fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.task.add.badActionSpec", "err", err.Error()))
+			os.Exit(2)
+		}
+		if as.TargetActuator == "" || as.Action == "" {
+			fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.add.actionSpecMissing"))
+			os.Exit(2)
+		}
+		detail := struct {
+			ActionSpec ledger.ActionSpec `json:"action_spec"`
+		}{ActionSpec: as}
+		b, _ := json.Marshal(detail)
+		specJSON = string(b)
+		contextType = "hardware"
+		// The spec's exact target leads requires: without it a defaulted
+		// "coding" routes the task to a coding node whose plan is not an
+		// actuator, and the executor would fail the dispatch there.
+		requiresList = ledger.RequiresForActionSpec(requiresList, &as)
+	}
 	in := core.TaskInput{
 		Title:         *title,
 		ParentID:      pID,
 		Project:       *project,
+		ContextType:   contextType,
 		Intent:        *prompt,
+		SpecJSON:      specJSON,
 		Requires:      requiresList,
 		PreferredNode: pref,
 		Authorized:    *authorize,
