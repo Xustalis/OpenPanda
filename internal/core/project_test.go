@@ -196,7 +196,7 @@ func TestAttachProjectRecordsContextDegraded(t *testing.T) {
 	}
 
 	taskID := "task-degraded-test"
-	if _, err := c.store.CreateWithID(context.Background(), taskID, "", "broken", "title", c.nodeID, nil); err != nil {
+	if _, err := c.store.CreateWithID(context.Background(), taskID, "", "broken", "title", c.nodeID, nil, false); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 

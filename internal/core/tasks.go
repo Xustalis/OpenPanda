@@ -104,13 +104,15 @@ func (s *TaskStore) Create(ctx context.Context, parentID, project, title, owner 
 	if err != nil {
 		return Task{}, fmt.Errorf("uuid: %w", err)
 	}
-	return s.CreateWithID(ctx, taskID, parentID, project, title, owner, chain)
+	return s.CreateWithID(ctx, taskID, parentID, project, title, owner, chain, false)
 }
 
 // CreateWithID inserts a task with an explicit id. The id is the cross-node
-// idempotency key, so delegated tasks keep the delegator's id. Returns
+// idempotency key, so delegated tasks keep the delegator's id. remote is
+// stamped into the row so executor-side policy can tell wire-authored intent
+// apart from a local submit regardless of what the chain claims. Returns
 // ErrConflict if the id already exists.
-func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project, title, owner string, chain []string) (Task, error) {
+func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project, title, owner string, chain []string, remote bool) (Task, error) {
 	if taskID == "" {
 		var err error
 		taskID, err = util.UUIDv7()
@@ -128,15 +130,15 @@ func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project,
 	t := Task{
 		TaskID: taskID, ParentID: parentID, Project: project, Title: title,
 		State: StateSubmitted, OwnerNode: owner, AttemptID: attemptID,
-		StateVersion: 0, Chain: chain, CreatedAt: now, UpdatedAt: now,
+		StateVersion: 0, Chain: chain, Remote: remote, CreatedAt: now, UpdatedAt: now,
 	}
 	err = s.withTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tasks (task_id, parent_id, project, title, state, owner_node,
-				attempt_id, state_version, chain_json, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				attempt_id, state_version, chain_json, remote, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.TaskID, t.ParentID, t.Project, t.Title, t.State, t.OwnerNode,
-			t.AttemptID, t.StateVersion, string(chainJSON), now, now); err != nil {
+			t.AttemptID, t.StateVersion, string(chainJSON), remote, now, now); err != nil {
 			return fmt.Errorf("insert task: %w", err)
 		}
 		return s.recordEventTx(ctx, tx, taskID, EvSubmit, map[string]any{
@@ -161,6 +163,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	var sessionID, resourceKeysJSON, workDir sql.NullString
 	var agentSession, agentSessionNode sql.NullString
 	var scheduled int
+	var remote int
 	var planID, stageID, needsJSON, inputsJSON, outputArt sql.NullString
 	err := s.db.QueryRowContext(ctx,
 		`SELECT `+taskColumns+` FROM tasks WHERE task_id = ?`, taskID).
@@ -172,7 +175,8 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
-			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs)
+			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs,
+			&remote)
 	if err != nil {
 		return Task{}, err
 	}
@@ -200,6 +204,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	t.OutputArtifact = outputArt.String
 	t.AgentSessionID = agentSession.String
 	t.AgentSessionNode = agentSessionNode.String
+	t.Remote = remote != 0
 	return t, nil
 }
 
@@ -1087,7 +1092,9 @@ func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason st
 // mistaken for a stale write. Used when a delegator hears a result for a task
 // it never persisted locally.
 func (s *TaskStore) CreateFromRemote(ctx context.Context, taskID, title, owner string, attemptID string, chain []string) (Task, error) {
-	t, err := s.CreateWithID(ctx, taskID, "", "", title, owner, chain)
+	// remote=false: this row reconstructs a task WE dispatched (the result
+	// arrived before/without our copy) — the intent was authored locally.
+	t, err := s.CreateWithID(ctx, taskID, "", "", title, owner, chain, false)
 	if err != nil {
 		return Task{}, err
 	}
@@ -2108,7 +2115,7 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	priority, seq, session_id, resource_keys_json, work_dir, scheduled,
 	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact,
 	transport, deadline_unix, delegation_budget, token_budget, agent_session_id, agent_session_node,
-	auth_sig, auth_pub, auth_ts`
+	auth_sig, auth_pub, auth_ts, remote`
 
 func scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task
@@ -2123,6 +2130,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var agentSession, agentSessionNode sql.NullString
 		var complexity sql.NullFloat64
 		var scheduled int
+		var remote int
 		var planID, stageID, needsJSON, inputsJSON, outputArt sql.NullString
 		if err := rows.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State,
 			&t.OwnerNode, &t.AttemptID, &t.StateVersion, &chainJSON, &intent,
@@ -2132,7 +2140,8 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
-			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs); err != nil {
+			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs,
+			&remote); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
@@ -2154,6 +2163,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		t.SessionID = sessionID.String
 		t.WorkDir = workDir.String
 		t.Scheduled = scheduled != 0
+		t.Remote = remote != 0
 		t.PlanID = planID.String
 		t.StageID = stageID.String
 		t.OutputArtifact = outputArt.String

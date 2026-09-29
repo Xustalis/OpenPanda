@@ -18,7 +18,7 @@ import (
 func setupDispatchedTask(t *testing.T, c *Core, taskID, target string) Task {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := c.store.CreateWithID(ctx, taskID, "", "", "test task", c.nodeID, []string{c.nodeID}); err != nil {
+	if _, err := c.store.CreateWithID(ctx, taskID, "", "", "test task", c.nodeID, []string{c.nodeID}, false); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if err := c.store.Queue(ctx, taskID, c.nodeID); err != nil {

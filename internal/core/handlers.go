@@ -130,7 +130,10 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		return
 	}
 
-	t, err := c.store.CreateWithID(ctx, p.TaskID, p.ParentID, p.Project, p.TitleOrDefault(), c.nodeID, chain)
+	// remote=true: the intent text came off the wire. Persisted because the
+	// chain is peer-supplied — a delegate may write chain=[self, sender] and
+	// claim we authored it, so executor policy cannot re-derive provenance.
+	t, err := c.store.CreateWithID(ctx, p.TaskID, p.ParentID, p.Project, p.TitleOrDefault(), c.nodeID, chain, true)
 	if err != nil {
 		c.logger.Error("create task from delegate", "err", err)
 		return

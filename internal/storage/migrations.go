@@ -55,6 +55,21 @@ var migrations = []Migration{
 	{Version: 30, Name: "add_employee_projects_json", Apply: migrateV30},
 	{Version: 31, Name: "add_employee_key_verified", Apply: migrateV31},
 	{Version: 32, Name: "add_pending_nodes", Apply: migrateV32},
+	{Version: 33, Name: "add_tasks_remote", Apply: migrateV33},
+}
+
+// migrateV33 adds tasks.remote: set at intake when the row was created by a
+// delegate handler (the intent text came off the wire) rather than by local
+// submit. Provenance must be persisted, not derived from chain[0] — the chain
+// is peer-supplied, and a peer can write chain=[victim, self] to make its
+// task look locally authored. The executor uses this flag to hold remote,
+// unconsented agent runs to the restricted tool face.
+func migrateV33(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "tasks", "remote", "INTEGER NOT NULL DEFAULT 0")
 }
 
 // migrateV32 adds pending_nodes: the LAN discovery hint list. A UDP beacon

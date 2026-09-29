@@ -372,3 +372,53 @@ func TestLocalTier2AuthorizedRuns(t *testing.T) {
 		t.Fatalf("local authorized tier-2 run failed: %s", result.Stderr)
 	}
 }
+
+// TestDelegateStampsRemoteProvenance pins the provenance contract: rows
+// created from a delegate envelope are stamped remote at intake (the flag,
+// not the peer-supplied chain, decides the restricted tool face), a chain
+// claiming we authored the task is refused as a loop before a row exists,
+// and the local submit path stays local.
+func TestDelegateStampsRemoteProvenance(t *testing.T) {
+	ctx := context.Background()
+	c := newCore(t, "victim-node", "127.0.0.1:17990")
+
+	// A member writes chain=[us, sender] — claiming we authored the task —
+	// to dodge remote detection. The loop guard refuses it at intake.
+	forge, err := bus.NewEnvelope(bus.MsgTaskDelegate, "attacker", "m-forge", bus.TaskDelegatePayload{
+		TaskID: "forged-origin", Intent: "rm -rf ~", Requires: []string{"sys:info"},
+		Chain: []string{"victim-node", "attacker"},
+	})
+	if err != nil {
+		t.Fatalf("new envelope: %v", err)
+	}
+	c.handleDelegate(ctx, forge)
+	if _, err := c.store.Get(ctx, "forged-origin"); err == nil {
+		t.Fatalf("chain claiming self-authored task was stored")
+	}
+
+	// An honest remote chain still lands — stamped remote.
+	env, err := bus.NewEnvelope(bus.MsgTaskDelegate, "origin-node", "m-honest", bus.TaskDelegatePayload{
+		TaskID: "honest-remote", Intent: "summarize", Requires: []string{"sys:info"},
+		Chain: []string{"origin-node"},
+	})
+	if err != nil {
+		t.Fatalf("new envelope: %v", err)
+	}
+	c.handleDelegate(ctx, env)
+	tk, err := c.store.Get(ctx, "honest-remote")
+	if err != nil {
+		t.Fatalf("get remote task: %v", err)
+	}
+	if !tk.Remote {
+		t.Fatalf("wire-intake task not stamped remote")
+	}
+
+	// Contrast: the local submit path stays local.
+	lt, err := c.store.Create(ctx, "", "", "local task", c.nodeID, []string{c.nodeID})
+	if err != nil {
+		t.Fatalf("local create: %v", err)
+	}
+	if lt.Remote {
+		t.Fatalf("locally submitted task stamped remote")
+	}
+}
