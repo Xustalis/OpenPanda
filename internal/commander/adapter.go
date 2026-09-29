@@ -81,6 +81,62 @@ func WithToolsPolicy(ctx context.Context, policy string) context.Context {
 	return context.WithValue(ctx, toolsPolicyKey{}, policy)
 }
 
+// remoteTaskKey marks an execution whose prompt was authored on another node.
+// Remote intent is untrusted text: a mesh member (or anything that ever
+// rides a relay) controls the words an agent subprocess acts on, so without
+// the origin's consent the run must not get a writable, shell-capable tool
+// face — the same reasoning that keeps tier-2 behind Authorize applies to a
+// prompt that IS the command.
+type remoteTaskKey struct{}
+
+// WithRemoteTask marks the execution context as carrying a remote-origin
+// task. Execute uses it to hold agent plans to the restricted tool face
+// whenever the task arrived unconsented.
+func WithRemoteTask(ctx context.Context) context.Context {
+	return context.WithValue(ctx, remoteTaskKey{}, true)
+}
+
+// RemoteTask reports whether the execution context carries a remote-origin
+// task (set by the orchestration layer before Execute).
+func RemoteTask(ctx context.Context) bool {
+	v, _ := ctx.Value(remoteTaskKey{}).(bool)
+	return v
+}
+
+// restrictedKey asks the adapter for its narrowest read-only tool face. It is
+// set on the run context, not the request the caller writes, so the runAdapter
+// test seam's signature stays unchanged.
+type restrictedKey struct{}
+
+// WithRestricted asks the adapter subprocess to run with only read-capable
+// tools. Adapters without a restricted mode must never receive it — the
+// execAgent loop filters on AdapterSupportsRestricted before spawning.
+func WithRestricted(ctx context.Context) context.Context {
+	return context.WithValue(ctx, restrictedKey{}, true)
+}
+
+// Restricted reports whether the context asks for a read-only agent run.
+func Restricted(ctx context.Context) bool {
+	v, _ := ctx.Value(restrictedKey{}).(bool)
+	return v
+}
+
+// restrictedCapable lists the adapters that can express a read-only tool
+// face. Everything else (hermes --yolo, agy --dangerously-skip-permissions,
+// opencode --auto, generic argv templates …) has no restricted mode at all,
+// so a restricted request sent to them would silently run full-power: the
+// scheduler must instead refuse the attempt — fail closed, never degrade.
+var restrictedCapable = map[string]bool{
+	"claude_code.py": true,
+	"codex.py":       true,
+}
+
+// AdapterSupportsRestricted reports whether the named adapter can honor a
+// read-only run. Unknown adapters get false — a miss means refuse.
+func AdapterSupportsRestricted(adapter string) bool {
+	return restrictedCapable[adapter]
+}
+
 // maxTurnsKey carries a per-task agent turn cap (spec.max_turns) down to the
 // adapter request without widening the runAdapter seam's signature.
 type maxTurnsKey struct{}
@@ -365,6 +421,11 @@ type AdapterRequest struct {
 	// agent's native skills, sub-agent tooling and project MCP servers are
 	// reachable. Set by the Router from routing.tools_policy.
 	ToolsPolicy string `json:"tools_policy,omitempty"`
+	// Restricted asks for the adapter's read-only mode and OUTRANKS
+	// ToolsPolicy: an unconsented remote task on an operator who chose
+	// extended still gets no shell. Only adapters in restrictedCapable ever
+	// see it set.
+	Restricted bool `json:"restricted,omitempty"`
 	// TaskID carries the OpenPanda task ID that this process executes for.
 	// Used for causal subagent tree linkage and subtask dispatch.
 	TaskID string `json:"task_id,omitempty"`
@@ -544,6 +605,9 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	}
 	if policy, ok := ctx.Value(toolsPolicyKey{}).(string); ok {
 		req.ToolsPolicy = policy
+	}
+	if Restricted(ctx) {
+		req.Restricted = true
 	}
 	if mt, ok := ctx.Value(maxTurnsKey{}).(int); ok && mt > 0 {
 		req.MaxTurns = mt

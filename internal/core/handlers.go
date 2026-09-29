@@ -1404,6 +1404,14 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if sessionID != "" {
 			runCtx = commander.WithResume(execCtx, sessionID)
 		}
+		// A task stamped remote at intake carries off-node intent: commander
+		// holds its agent run to the restricted tool face unless the origin's
+		// consent grant authorized it. The persisted flag is authoritative —
+		// the chain fallback only catches rows written before the flag
+		// existed; a peer can claim chain[0]=us but cannot unset remote.
+		if task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID) {
+			runCtx = commander.WithRemoteTask(runCtx)
+		}
 		res = router.Execute(runCtx, plan, prompt, workDir, task.Authorized)
 		if res.SessionID != "" && res.SessionID != sessionID {
 			sessionID = res.SessionID

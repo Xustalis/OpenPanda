@@ -80,20 +80,21 @@ def read_request(default_timeout=DEFAULT_TIMEOUT):
     cwd = req.get("cwd") or None
     resume = req.get("resume") or ""
     tools_policy = req.get("tools_policy") or ""
+    restricted = bool(req.get("restricted"))
     cmd = req.get("cmd") or ""
     try:
         max_turns = max(0, int(req.get("max_turns", 0) or 0))
     except (TypeError, ValueError):
         max_turns = 0
-    return Request(prompt, timeout, cwd, resume, tools_policy, cmd, max_turns)
+    return Request(prompt, timeout, cwd, resume, tools_policy, cmd, max_turns, restricted)
 
 
 class Request:
     """The parsed adapter request; iterates as (prompt, timeout, cwd) so
     prompt, timeout, cwd = read_request() keeps working, with
-    resume/tools_policy/cmd/max_turns as extra attributes."""
+    resume/tools_policy/cmd/max_turns/restricted as extra attributes."""
 
-    def __init__(self, prompt, timeout, cwd, resume, tools_policy, cmd="", max_turns=0):
+    def __init__(self, prompt, timeout, cwd, resume, tools_policy, cmd="", max_turns=0, restricted=False):
         self.prompt = prompt
         self.timeout = timeout
         self.cwd = cwd
@@ -105,6 +106,12 @@ class Request:
         # max_turns is a per-task turn cap from the task spec; adapters with
         # a turn-limit flag apply it, the rest ignore it.
         self.max_turns = max_turns
+        # restricted marks an unconsented remote-origin run: the adapter must
+        # expose a read-only tool face and it OUTRANKS tools_policy. The Go
+        # scheduler only sends it to adapters that declare the mode, so a
+        # request carrying restricted=true at an adapter that ignores it is
+        # already a bug — never widen flags to work around it here.
+        self.restricted = restricted
 
     def __iter__(self):
         return iter((self.prompt, self.timeout, self.cwd))

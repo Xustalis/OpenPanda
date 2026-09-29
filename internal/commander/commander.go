@@ -469,6 +469,15 @@ func (r *Router) Execute(ctx context.Context, plan Plan, prompt string, cwd stri
 		if err := defense.Authorize(plan.Tier, authorized); err != nil {
 			return Result{OK: false, ExitCode: 1, Stderr: authorizationHint(err, plan)}
 		}
+		// A remote-origin task arrives unconsented with prompt text authored
+		// off-node — the prompt IS the command surface, and a tier-1 agent
+		// label only ever meant "the card didn't say otherwise", never "this
+		// text is safe to hand a shell". Unconsented remote work gets the
+		// read-only tool face; adapters that cannot express it are skipped
+		// rather than silently running full-power (fail closed).
+		if RemoteTask(ctx) && !authorized {
+			ctx = WithRestricted(ctx)
+		}
 		return r.execAgent(ctx, plan, prompt, cwd)
 	case "manual":
 		return Result{OK: false, ExitCode: 0, Stdout: plan.Notify, NeedManual: true}
@@ -536,6 +545,18 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		ag, ok := r.card.Agents[name]
 		if !ok {
 			unavailable = append(unavailable, name+" (not on card)")
+			continue
+		}
+		if Restricted(ctx) && !AdapterSupportsRestricted(ag.Adapter) {
+			// This run is an unconsented remote task: the adapter must
+			// express a read-only tool face or it does not run at all —
+			// degrading to its default (shell-capable) flags would be the
+			// exact hole the restricted mode exists to close. The refusal
+			// carries the authorization sentinel: it is deterministic (a
+			// retry cannot grow a restricted mode) and consent is the fix,
+			// so the orchestration layer parks it for human review.
+			unavailable = append(unavailable,
+				name+" ("+defense.ErrNotAuthorized.Error()+": adapter has no restricted mode; authorize the task to run it)")
 			continue
 		}
 		if !r.probeAgent(name, ag) {
