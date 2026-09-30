@@ -583,6 +583,7 @@ const ja: Messages = {
   'nodes.addDevice.secretGen': 'network.shared_secret を生成しました — 相手側のマシンにコピーが必要です',
   'nodes.addDevice.dialed': '{addr} にダイヤルしました — このセッションで即時有効。',
   'nodes.addDevice.dialFailed': '{addr} に現在ダイヤルできません。構成は保存され、次回起動時に再試行されます。',
+  'nodes.addDevice.cleartextHint': 'このアドレスは平文 ws:// で、宛先が信頼済みアンダーレイ（loopback または Tailscale）上にないため、daemon はダイヤルを拒否します。network.allow_cleartext: true を設定するか、wss:// / punch:<id> を使ってください。',
   'nodes.addDevice.guideTitle': 'もう一台のマシンで',
 
   // 能力カードエディタ（ステージ 6）— `/card` の Web 版

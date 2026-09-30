@@ -524,6 +524,7 @@ export interface NodesAddResult {
   secret_generated: boolean
   dialed: boolean
   dial_error?: string
+  cleartext_hint?: boolean
   config_path: string
   listen_addr: string
   invite_steps: string[]

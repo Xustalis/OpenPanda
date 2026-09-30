@@ -899,10 +899,17 @@ func (e *Engine) MaintainPeers(ctx context.Context) {
 	for _, peer := range peers {
 		go func(p string) {
 			backoff := time.Second
+			// Same throttle as the daemon's keepalive loop: a dead peer is
+			// not news on every retry — first failure, every Nth thereafter,
+			// then one recovery line.
+			failures := 0
 			for {
 				err := sched.MaintainPeer(ctx, p)
 				if err != nil {
-					e.logger.Warn("peer dial failed", "peer", p, "err", err)
+					failures++
+					if failures == 1 || failures%peerFailLogEvery == 0 {
+						e.logger.Warn("peer dial failed", "peer", p, "err", err, "consecutive", failures)
+					}
 					select {
 					case <-ctx.Done():
 						return
@@ -910,6 +917,10 @@ func (e *Engine) MaintainPeers(ctx context.Context) {
 					}
 					backoff = min(backoff*2, 30*time.Second)
 					continue
+				}
+				if failures > 0 {
+					e.logger.Info("peer reachable again", "peer", p, "after_failures", failures)
+					failures = 0
 				}
 				backoff = time.Second
 				select {
@@ -960,6 +971,10 @@ const (
 	ProgressExec  ProgressKind = "exec"  // the agent/adapter started running
 	ProgressJudge ProgressKind = "judge" // a supervision round is evaluating the result
 )
+
+// peerFailLogEvery bounds the per-peer WARN stream a dead peer produces in
+// MaintainPeers — the same policy the daemon's keepalive loop uses.
+const peerFailLogEvery = 20
 
 // Progress is one structured progress event: the action, and the name of what
 // it acts on (a task title, a plan goal, a tool name). The engine deliberately

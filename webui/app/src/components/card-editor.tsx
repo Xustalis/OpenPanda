@@ -525,6 +525,7 @@ export function AddDeviceCard({ onAdded }: { onAdded(): void }) {
           ) : (
             result.dial_error && <p class="node-remove-error">{t('nodes.addDevice.dialFailed', { addr: result.addr })}</p>
           )}
+          {result.cleartext_hint && <p class="hint">{t('nodes.addDevice.cleartextHint')}</p>}
           <h3 class="section-title">{t('nodes.addDevice.guideTitle')}</h3>
           <ol class="join-steps">
             <li>

@@ -601,6 +601,7 @@ const zhCN: Messages = {
   'nodes.addDevice.secretGen': '已生成 network.shared_secret —— 需要复制到对方机器',
   'nodes.addDevice.dialed': '已拨号 {addr} —— 本会话即时生效。',
   'nodes.addDevice.dialFailed': '暂时无法拨通 {addr}；配置已保存，下次启动会重试。',
+  'nodes.addDevice.cleartextHint': '该地址走明文 ws:// 且目标不在受信底层网络（回环或 Tailscale）上——daemon 会拒绝拨号。请设 network.allow_cleartext: true，或改用 wss:// / punch:<id>。',
   'nodes.addDevice.guideTitle': '在另一台机器上',
 
   // 能力卡编辑器（阶段 6）— `/card` 的 Web 对应

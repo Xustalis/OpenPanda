@@ -60,9 +60,12 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **空闲写流量改为按变更落盘**——心跳只在对外通告的 capacity 实际变化时重写本机行（另有 30 秒保鲜下限，安全低于 45 秒存活检查与 90 秒陈旧清理）,5 秒的邻居刷新与逐心跳的驻留发布改为读-比-写（`ledger.UpdateAdjacencyIfChanged`),panel 的节点指纹把 `last_seen` 量化到分钟，心跳不再向每个连接的 console 推送"nodes changed"事件。空闲节点的 WAL 写速率下降约一个数量级。
 - **队列空闲时轮询降频**——就绪行持续为空约 30 秒后，调度器兜底轮询从 400ms 放宽到 2s(`queueIdleAfter`/`queueIdlePoll`)；有活的队列与进程内 `Wake()` 保持快节奏，只有无唤醒的跨进程拾取承担较慢的尾延迟。
 - **reminder 扫描器在空板上降频**——没有待办行时扫描间隔放宽到 60s（其他进程添加的行在该上界内被发现）;`Store.Add`/`AddEvery`/`Delete` 会唤醒同进程的所有扫描器，进程内新增的提醒仍在到点一秒内触发。
-- **离线 peer 重连日志节流**——死掉的 peer 过去每次重拨（稳定态约 30 秒）都往 LaunchAgent 不轮转的 `/tmp` 日志写一条 `peer dial failed`/`punch offer failed` WARN；现在只在首次失败与每约第 20 次记录（带 `consecutive` 计数），恢复时补一条说明中断时长的日志。
+- **离线 peer 重连日志节流**——死掉的 peer 过去每次重拨（稳定态约 30 秒）都往 LaunchAgent 不轮转的 `/tmp` 日志写一条 `peer dial failed`/`punch offer failed` WARN；现在只在首次失败与每约第 20 次记录（带 `consecutive` 计数），恢复时补一条说明中断时长的日志。panel/web 引擎的 `MaintainPeers` 重拨循环遵循同一策略。
 
 ### 修复
+
+- **peer 地址在所有写入入口按真实拨号语法校验**——`nodes add`、REPL `/nodes add`、`pair --peer`、panel 的 `POST /api/nodes/add` 与 config 加载过去各自只做裸 `net.SplitHostPort` 检查：`punch:<id>` 靠巧合漏过、非数字端口（`peer:smtp`）被存下来只在拨号时才静默失败、panel 的报错文案还在要求 host:port。现在 `config.ValidatePeerAddr` 统一掌管语法（punch:<node-id>、ws(s):// URL、端口须为 1–65535 数字的 host:port），所有入口统一调用。
+- **panel 添加节点透出明文门禁提示**——`POST /api/nodes/add` 过去把拨号错误折叠成一条通用"暂不可达"；响应现在携带 `cleartext_hint` 字段，console 会像 CLI 一样指出 `network.allow_cleartext`（或 wss:// / punch:）。
 
 - **MCP stdio server 不再随请求上下文死亡**——spawn 与握手过去继承调用方 30 秒的请求 ctx,settings 变更会杀掉 server 进程；子进程现在活得比请求久（`TestServerSurvivesSpawnContextCancel`)。
 - **无模型节点也能跑 ask engine**——`askengine.New` 不再因未配置模型而失败；Ask 路径惰性报 `ErrNoModel`，边缘节点没有 API key 也能执行委派工作。

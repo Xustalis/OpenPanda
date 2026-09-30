@@ -617,6 +617,7 @@ const en: Messages = {
   'nodes.addDevice.secretGen': 'a network.shared_secret was generated — the other machine needs it copied over',
   'nodes.addDevice.dialed': 'Dialed {addr} — live in this session.',
   'nodes.addDevice.dialFailed': 'Could not dial {addr} now; it stays configured and the next start retries it.',
+  'nodes.addDevice.cleartextHint': 'This address dials plaintext ws:// and the target is not on a trusted underlay (loopback or Tailscale) — the daemon will refuse to dial it. Set network.allow_cleartext: true, or use wss:// / punch:<id>.',
   'nodes.addDevice.guideTitle': 'On the other machine',
 
   // Capability card editor (stage 6) — the web twin of `/card`

@@ -591,6 +591,7 @@ const es: Messages = {
   'nodes.addDevice.secretGen': 'se generó network.shared_secret — hay que copiarlo a la otra máquina',
   'nodes.addDevice.dialed': 'Marcado a {addr} — activo en esta sesión.',
   'nodes.addDevice.dialFailed': 'No se pudo marcar a {addr} ahora; queda configurado y se reintenta en el próximo arranque.',
+  'nodes.addDevice.cleartextHint': 'Esta dirección usa ws:// en claro y el destino no está en una subred confiable (loopback o Tailscale): el daemon rechazará la llamada. Define network.allow_cleartext: true o usa wss:// / punch:<id>.',
   'nodes.addDevice.guideTitle': 'En la otra máquina',
 
   // Editor de tarjeta de capacidades (etapa 6) — gemelo web de `/card`

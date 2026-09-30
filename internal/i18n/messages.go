@@ -249,7 +249,7 @@ var messages = map[Locale]map[string]string{
 		"cli.nodes.online":         "node {id} is online — stop it first; its next hello re-registers it",
 		"cli.nodes.self":           "this is the local node's row — this machine re-registers it",
 
-		"cli.nodes.badaddr":         "{addr} is not a valid host:port",
+		"cli.nodes.badaddr":         "{addr} is not a valid peer address (want host:port, punch:<node-id>, or a ws(s):// URL)",
 		"cli.nodes.add.exists":      "{addr} is already in the peer list",
 		"cli.nodes.add.done":        "peer added: {addr}",
 		"cli.nodes.secret.gen":      "network.shared_secret was missing — a random one was generated in config.yaml",
@@ -1151,7 +1151,7 @@ var messages = map[Locale]map[string]string{
 		"cli.nodes.online":         "节点 {id} 在线 — 请先停掉它；它下次 hello 会重新注册",
 		"cli.nodes.self":           "这是本机节点的行 — 本机会重新注册它",
 
-		"cli.nodes.badaddr":         "{addr} 不是合法的 host:port",
+		"cli.nodes.badaddr":         "{addr} 不是合法的节点地址（应为 host:port、punch:<node-id> 或 ws(s):// URL）",
 		"cli.nodes.add.exists":      "{addr} 已在节点列表里",
 		"cli.nodes.add.done":        "已添加节点：{addr}",
 		"cli.nodes.secret.gen":      "缺少 network.shared_secret — 已在 config.yaml 生成随机值",
@@ -2101,7 +2101,7 @@ var messages = map[Locale]map[string]string{
 		"cli.nodes.online":         "ノード {id} はオンラインです — 先に停止してください。次の hello で再登録されます",
 		"cli.nodes.self":           "これはローカルノードの行です — このマシンが再登録します",
 
-		"cli.nodes.badaddr":         "{addr} は有効な host:port ではありません",
+		"cli.nodes.badaddr":         "{addr} は有効なノードアドレスではありません（host:port、punch:<node-id>、ws(s):// URL のいずれか）",
 		"cli.nodes.add.exists":      "{addr} は既にピア一覧にあります",
 		"cli.nodes.add.done":        "ピアを追加しました：{addr}",
 		"cli.nodes.secret.gen":      "network.shared_secret が未設定でした — config.yaml にランダム値を生成しました",
@@ -2987,7 +2987,7 @@ var messages = map[Locale]map[string]string{
 		"cli.nodes.online":         "el nodo {id} está en línea — deténlo primero; su próximo hello lo vuelve a registrar",
 		"cli.nodes.self":           "es la fila del nodo local — esta máquina lo vuelve a registrar",
 
-		"cli.nodes.badaddr":         "{addr} no es un host:port válido",
+		"cli.nodes.badaddr":         "{addr} no es una dirección de nodo válida (host:port, punch:<node-id> o URL ws(s)://)",
 		"cli.nodes.add.exists":      "{addr} ya está en la lista de pares",
 		"cli.nodes.add.done":        "par añadido: {addr}",
 		"cli.nodes.secret.gen":      "faltaba network.shared_secret — se generó un valor aleatorio en config.yaml",
@@ -3870,7 +3870,7 @@ var messages = map[Locale]map[string]string{
 		"cli.nodes.online":         "Knoten {id} ist online — stoppe ihn zuerst; sein nächstes Hello registriert ihn erneut",
 		"cli.nodes.self":           "das ist die Zeile des lokalen Knotens — diese Maschine registriert ihn erneut",
 
-		"cli.nodes.badaddr":         "{addr} ist kein gültiges host:port",
+		"cli.nodes.badaddr":         "{addr} ist keine gültige Knotenadresse (host:port, punch:<node-id> oder ws(s)://-URL)",
 		"cli.nodes.add.exists":      "{addr} ist bereits in der Peer-Liste",
 		"cli.nodes.add.done":        "Peer hinzugefügt: {addr}",
 		"cli.nodes.secret.gen":      "network.shared_secret fehlte — ein Zufallswert wurde in config.yaml erzeugt",

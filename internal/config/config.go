@@ -729,28 +729,8 @@ func (c *Config) Validate() error {
 		}
 	}
 	for i, peer := range c.Network.Peers {
-		if strings.HasPrefix(peer, "punch:") {
-			// A NAT-bound peer entry names a node id, not an address — the
-			// daemon reaches it through the punch handshake instead of a
-			// TCP dial.
-			if strings.TrimPrefix(peer, "punch:") == "" {
-				return fmt.Errorf("config: network.peers[%d] %q has an empty node id after the punch: prefix", i, peer)
-			}
-			continue
-		}
-		// ws:// / wss:// URLs carry their own scheme; wss is the only way to
-		// reach a peer over an untrusted network (the listener has no TLS
-		// termination of its own — put a terminator in front). ws:// entries
-		// still pass through the cleartext gate at dial time.
-		if strings.Contains(peer, "://") {
-			u, err := url.Parse(peer)
-			if err != nil || u.Hostname() == "" || (u.Scheme != "ws" && u.Scheme != "wss") {
-				return fmt.Errorf("config: network.peers[%d] %q is not a ws:// or wss:// URL with a host", i, peer)
-			}
-			continue
-		}
-		if _, _, err := net.SplitHostPort(peer); err != nil {
-			return fmt.Errorf("config: network.peers[%d] %q is not host:port (or punch:<node-id> or ws(s)://url): %w", i, peer, err)
+		if err := ValidatePeerAddr(peer); err != nil {
+			return fmt.Errorf("config: network.peers[%d] %q: %w", i, peer, err)
 		}
 	}
 	for i, cc := range c.Network.Contacts {
@@ -779,6 +759,43 @@ func (c *Config) Validate() error {
 		if limit.value < 0 {
 			return fmt.Errorf("config: %s %d must not be negative", limit.name, limit.value)
 		}
+	}
+	return nil
+}
+
+// ValidatePeerAddr checks one network.peers entry against the wire-address
+// grammar the daemon dials: a punch:<node-id> NAT-traversal handle, a ws://
+// or wss:// URL (ws is plaintext and gated at dial time), or a bare
+// host:port. Bare host:port entries get a numeric-port check because the
+// dial path hands them to net.Dial, where a service-name port silently
+// resolves to something else — a stored "peer:smtp" would misdial instead
+// of failing loudly at write time.
+func ValidatePeerAddr(peer string) error {
+	if strings.Contains(peer, "://") {
+		u, err := url.Parse(peer)
+		if err != nil || u.Hostname() == "" || (u.Scheme != "ws" && u.Scheme != "wss") {
+			return fmt.Errorf("not a ws:// or wss:// URL with a host")
+		}
+		return nil
+	}
+	if strings.HasPrefix(peer, "punch:") {
+		// A NAT-bound peer entry names a node id, not an address — the
+		// daemon reaches it through the punch handshake instead of a TCP
+		// dial.
+		if strings.TrimPrefix(peer, "punch:") == "" {
+			return fmt.Errorf("empty node id after the punch: prefix")
+		}
+		return nil
+	}
+	host, port, err := net.SplitHostPort(peer)
+	if err != nil {
+		return fmt.Errorf("not host:port (or punch:<node-id> or ws(s)://url): %w", err)
+	}
+	if host == "" {
+		return fmt.Errorf("host is empty")
+	}
+	if n, err := strconv.Atoi(port); err != nil || n <= 0 || n > 65535 {
+		return fmt.Errorf("port %q is not a number between 1 and 65535", port)
 	}
 	return nil
 }

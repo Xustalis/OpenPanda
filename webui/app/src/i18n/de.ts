@@ -591,6 +591,7 @@ const de: Messages = {
   'nodes.addDevice.secretGen': 'network.shared_secret wurde erzeugt — muss auf die andere Maschine kopiert werden',
   'nodes.addDevice.dialed': '{addr} angerufen — in dieser Sitzung sofort aktiv.',
   'nodes.addDevice.dialFailed': '{addr} ist derzeit nicht erreichbar; die Konfiguration bleibt gespeichert und wird beim nächsten Start erneut versucht.',
+  'nodes.addDevice.cleartextHint': 'Diese Adresse wählt Klartext-ws:// und das Ziel liegt nicht auf einem vertrauenswürdigen Underlay (Loopback oder Tailscale) — der Daemon wird die Wahl verweigern. Setze network.allow_cleartext: true oder nutze wss:// / punch:<id>.',
   'nodes.addDevice.guideTitle': 'Auf der anderen Maschine',
 
   // Fähigkeitskarten-Editor (Phase 6) — Web-Pendant zu `/card`
