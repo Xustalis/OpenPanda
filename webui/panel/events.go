@@ -248,7 +248,13 @@ func (h *handler) cachedNodeFingerprint() string {
 			sum.Write([]byte{':'})
 			sum.Write([]byte(n.Status))
 			sum.Write([]byte{':'})
-			binary.BigEndian.PutUint64(buf[:], uint64(n.LastSeen))
+			// LastSeen quantized to the minute: raw last_seen changes every
+			// heartbeat (15s), which made the fingerprint flip on every beat
+			// and pushed a spurious "nodes changed" event to every connected
+			// console — a self-sustaining refetch storm on an idle fleet.
+			// Minute granularity keeps the last-seen column honest while
+			// real liveness signals (status flips) still emit immediately.
+			binary.BigEndian.PutUint64(buf[:], uint64(n.LastSeen/60))
 			sum.Write(buf[:])
 			sum.Write([]byte{';'})
 		}

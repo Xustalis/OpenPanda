@@ -701,7 +701,10 @@ func (c *Core) broadcastHeartbeat(ctx context.Context) {
 	// the gossip contract treats absent as "leave the stored set alone".
 	if projects != nil {
 		if b, err := json.Marshal(projects); err == nil {
-			if err := ledger.UpdateAdjacency(c.db, c.nodeID, "", "", "", string(b)); err != nil {
+			// Write only on change: the residence set moves when work lands,
+			// not per beat — an unconditional UPDATE each tick was WAL churn
+			// on an idle node.
+			if err := ledger.UpdateAdjacencyIfChanged(c.db, c.nodeID, "", "", "", string(b)); err != nil {
 				c.logger.Debug("publish self residence", "err", err)
 			}
 		}
@@ -819,7 +822,10 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 	if status == "" {
 		status = "online"
 	}
-	if err := ledger.Heartbeat(c.db, env.From, status, clampCapacity(p.Capacity)); err != nil {
+	// Change-gated: a steady peer's identical beat only needs last_seen
+	// bumped once in a while — the row write is what refreshes staleness, and
+	// peerFreshnessSec keeps it well under the 90s ExpireStale horizon.
+	if err := ledger.HeartbeatIfChanged(c.db, env.From, status, clampCapacity(p.Capacity), peerFreshnessSec); err != nil {
 		c.logger.Warn("apply heartbeat", "from", env.From, "err", err)
 	}
 	// Heartbeats also publish the sender's circuit-open agents so this node's
@@ -859,7 +865,7 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 				projectsJSON = string(b)
 			}
 		}
-		if err := ledger.UpdateAdjacency(c.db, env.From, nbJSON, linksJSON, contactsJSON, projectsJSON); err != nil {
+		if err := ledger.UpdateAdjacencyIfChanged(c.db, env.From, nbJSON, linksJSON, contactsJSON, projectsJSON); err != nil {
 			c.logger.Warn("update adjacency", "from", env.From, "err", err)
 		}
 	}
@@ -1407,9 +1413,12 @@ func (c *Core) refreshSelfNeighbors(ctx context.Context) {
 	if base, ok := scheduler.EphemeralBase(c.nodeID); ok {
 		row = base
 	}
-	if _, err := c.db.ExecContext(ctx,
-		`UPDATE employee_cache SET neighbors_json=?, links_json=?, contacts_json=? WHERE id=?`,
-		string(raw), string(links), string(contacts), row); err != nil {
+	// Read-compare-write: the 5s monitor tick made this one of the node's
+	// busiest idle writers, yet the trio almost never changes between ticks —
+	// comparing first turns twelve unconditional UPDATEs a minute into one
+	// cheap SELECT while staying honest about a row another process rewrote
+	// (e.g. a REPL engine's Register upsert blanking the columns).
+	if err := ledger.UpdateAdjacencyIfChanged(c.db, row, string(raw), string(links), string(contacts), ""); err != nil {
 		c.logger.Debug("refresh self neighbors", "err", err)
 	}
 }
@@ -1983,6 +1992,15 @@ func cleartextOK(addr string, allowCleartext bool) error {
 		return nil
 	}
 	return fmt.Errorf("cleartext ws:// to %q refused — the task plane would be readable and forgeable by a network MITM; use wss:// with a TLS terminator, a punch: peer, or set network.allow_cleartext", u.Host)
+}
+
+// CleartextDialError surfaces the dial-time gate to code paths that only
+// *record* a peer address (nodes add/admit, pair): they can warn at write
+// time instead of letting the refusal surface days later inside keepalive
+// logs. Non-nil means the daemon would refuse to dial addr under the given
+// allow_cleartext setting; the error text already names the escape hatches.
+func CleartextDialError(addr string, allowCleartext bool) error {
+	return cleartextOK(addr, allowCleartext)
 }
 
 // cleartextSafeHost reports whether host can only be reached over an

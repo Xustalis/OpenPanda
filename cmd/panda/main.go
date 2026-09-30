@@ -41,6 +41,12 @@ import (
 
 var version = versionpkg.Version
 
+// peerFailLogEvery bounds the per-peer WARN stream a dead peer produces: at
+// the 30s steady-state backoff, one line every 20th failure is roughly one
+// line per ~10 minutes — enough to keep a multi-day outage greppable without
+// the log growth LaunchAgent's unrotated /tmp files would turn into.
+const peerFailLogEvery = 20
+
 func main() {
 	// A Windows self-update renames the running image to <exe>.old because the
 	// locked file cannot be replaced in place; the fresh process sweeps that
@@ -577,6 +583,7 @@ func runDaemon(args []string) {
 			// re-punched on the next tick.
 			id := strings.TrimPrefix(peer, "punch:")
 			guard.Go(logger, "daemon: punch "+peer, cancel, func() {
+				punchFails := 0
 				for {
 					if coreNode.UDPPort() == 0 {
 						logger.Warn("punch peer configured but the datagram plane is off (network.udp_listen)", "peer", id)
@@ -584,8 +591,17 @@ func runDaemon(args []string) {
 					}
 					if coreNode.UDPRoute(id) == nil {
 						if err := coreNode.PunchPeer(ctx, id); err != nil {
-							logger.Warn("punch offer failed", "peer", id, "err", err)
+							punchFails++
+							// Same throttling as the dial loop below: first
+							// failure is news, a steady-state retry stream
+							// every 30s is not — log a sparse beat instead.
+							if punchFails == 1 || punchFails%peerFailLogEvery == 0 {
+								logger.Warn("punch offer failed", "peer", id, "err", err, "consecutive", punchFails)
+							}
 						}
+					} else if punchFails > 0 {
+						logger.Info("punch route established", "peer", id, "after_failures", punchFails)
+						punchFails = 0
 					}
 					select {
 					case <-ctx.Done():
@@ -598,6 +614,7 @@ func runDaemon(args []string) {
 		}
 		guard.Go(logger, "daemon: peer keepalive "+peer, cancel, func() {
 			backoff := 1 * time.Second
+			dialFails := 0
 			// jitter spreads a fleet-wide reconnect over a window instead of
 			// having every node redial in lockstep the second the peer returns —
 			// the classic thundering herd after a shared outage.
@@ -609,7 +626,16 @@ func runDaemon(args []string) {
 				if err != nil {
 					// Dial or hello failed; back off exponentially so we do
 					// not hot-loop a permanently offline peer.
-					logger.Warn("peer dial failed", "peer", peer, "err", err)
+					dialFails++
+					// First failure and the recovery are the news — a line
+					// every redial (~30s steady-state) grew an unbounded WARN
+					// stream for a peer that is simply off, and the
+					// LaunchAgent logs have no rotation. Keep a sparse beat
+					// every ~20th failure so the outage stays greppable
+					// without owning the log.
+					if dialFails == 1 || dialFails%peerFailLogEvery == 0 {
+						logger.Warn("peer dial failed", "peer", peer, "err", err, "consecutive", dialFails)
+					}
 					select {
 					case <-ctx.Done():
 						return
@@ -617,6 +643,10 @@ func runDaemon(args []string) {
 					}
 					backoff = min(backoff*2, 30*time.Second)
 					continue
+				}
+				if dialFails > 0 {
+					logger.Info("peer reconnected", "peer", peer, "after_failures", dialFails)
+					dialFails = 0
 				}
 				// The connection was established and later dropped; reset the
 				// backoff and reconnect promptly.
@@ -812,7 +842,7 @@ func printUsage(w *os.File) {
 	line("")
 	line("observability:")
 	line("  status                                    node identity + capability directory")
-	line("  metrics [--csv]                           delegation metrics")
+	line("  metrics [--csv|--runtime]               delegation metrics / runtime load")
 	line("  heatmap [--weeks N]                       task-activity heatmap, last year (also /heatmap)")
 	line("  audit verify [--task id]                  verify the hash chain")
 	line("  audit entries [--task id]                 print audit trail rows")

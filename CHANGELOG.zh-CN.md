@@ -38,6 +38,47 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
+### 新增
+
+- **局域网自动发现 + 指纹确认准入**——节点现在广播一个小型未认证 UDP beacon(`network.discovery_addr` 上的 `panda-beacon/1`，默认 `:7837`，设 `"off"` 关闭），只携带 id/地址/版本/公钥——绝不携带凭据。`panda nodes` 在 "not paired" 分区列出发现的节点并展示其指纹；`panda nodes admit <id>` 把它转成已配置 peer(REPL 里的 `/nodes admit` 会即时拨号）。pending 表会过期清理并封顶 64 行，恶意局域网最多制造噪音而非膨胀。准入流程不变：共享密钥 + Ed25519 签名 hello 仍然是入网的唯一凭据——beacon 只是提示，不是钥匙。
+- **节点指纹 + TOFU 校验**——`panda nodes` 显示每行的 Ed25519 指纹，人工比对后置绿 ✓;`panda nodes verify <id>` 记录该校验（`employee_cache.key_verified`,migration v31)。已验证行上的公钥一旦变化会清除标记并响亮告警——重装、轮换与冒充在这一层无法区分，都不得继承信任；本机行的指纹天然自带。
+- **工作树随委派的文件任务同行**——目标为仓库 checkout 的 `context_type=file` 任务会把工作树打包（跳过 `.git`、`node_modules`、vendor 与缓存目录，上限 256 MiB）作为 `__worktree__` artifact 输入；执行端解到私有 per-task 目录中运行，产出的树再打包、回取、解回发起方的 checkout(`EvProjectSync` 轨迹 + 结果上的 `output_artifact`)。委派的文件编辑现在能回到发起机器，而不是死在远端主机上。
+- **澄清回路(§4.3)**——agent 卡在只有用户能拍板的决策时以 `PANDA_QUESTION:` 行收尾；任务带着问题停进 review 并回传给发起方（`task_result.question`),`panda approve <id> -m "回答"` 把答复折进重跑 intent 后在执行端续跑。该提示随五种语言的每条 agent prompt 下发。
+- **结构化结果契约**——`task_result.files_changed` 报告本次运行实际改动的工作目录相对路径（上限 200)，由前后快照计算而非 agent 自述；监督 judge 拿到同一份清单作为证据，`panda task <id>` 会渲染改动路径，停驻的澄清任务保留其部分足迹。
+- **项目驻留路由**——能力摘要现在会通告各节点持有哪些项目（`employee_cache.projects`，随心跳 gossip);`scheduler.RouteP`/`RouteAtP` 据此计分，项目绑定的任务优先落在已有该树的节点上。
+- **actuator 派发（§7.1/§7.2,Jarvis 线）**——任务现在可以驱动拥有该硬件的节点上的物理动作。卡片声明带 `hardware:*` id、驱动 `command` 和携带 `{intent}`/`{action}`/`{param:<name>}` 占位的 argv 模板的 `actuators`;entry 模型产出 `spec.action_spec`（目标 actuator、动作动词、标量参数）,随 `spec_json` 跨过委派，执行端替换出真实 argv——绝不是拼 shell——再原生运行驱动。`task_submit` 接受 `action_spec` 参数，`panda task add --action-spec '<json>'`（及 `/task add`)不经模型即可派发 actuator,`ValidateTaskSpec` 在边界校验该 spec（必填字段、标量参数、32 参数上限）。
+- **参考 actuator 驱动**——`drivers/` 随每个发布包附带四个可移植驱动：`panda-servo`(gpiozero PWM 舵机，0-180°)、`panda-mic`(arecord WAV 采集，上限 300 秒)、`panda-camera`(fswebcam/imagesnap/ffmpeg 快照回退）、`panda-notify`(notify-send/osascript/powershell toast)。缺少后端时各自以独特退出码失败，能力卡片随之丢弃该 actuator 而非虚报设备；`capabilities.example-edge.yaml` 声明全部四个，`panda ask "turn the servo to 90 degrees"` 是目标流程。
+- **远程任务溯源持久化**——经 wire 进入的任务（delegate/plan/chain 到达）在插入时打上 `remote=1`(migration v33 增加 `tasks.remote`)，任务来源从此随重启与迁移存活，而不是每次读取时从委派链重建。
+- **未授权的远程 agent 运行被钳到只读工具面**——缺少 `ConsentGrant` 钳制（或 digest 不匹配）的远程任务执行时，agent adapter 只拿到只读工具子集；无法表达该限制的 adapter 以 `ErrNotAuthorized` 拒绝派发，而不是静默全功率运行（98fa9c0)。
+- **运行时自省**——`panda metrics --runtime` 报告本机 daemon 的 RSS/CPU/uptime（经 `daemon.pid` + `ps`,Windows 上退化为仅存活判断）以及本进程的 goroutine/堆/GC 计数；panel 的 `GET /api/self` 新增 `runtime` 块（goroutine、heap alloc/sys、GC 次数、uptime)，让长驻的 web 进程自曝内部状态。
+
+### 变更
+
+- **验收标准直达执行端**——spec 的 `success_definition` 与 `constraints` 折进运行 intent(`taskSpecEnvelope`),agent prompt 明确写出"完成"的定义，监督 judge 按同一标准验收而非只读散文。
+- **per-task 执行控制在委派中存活**——`tools_policy` 与 `max_turns` 移入 `entry.TaskSpecDetail`（持久化进 `spec_json`、随 wire 传输的结构）;执行端经 `commander.WithToolsPolicy`/`WithMaxTurns` 应用，adapter 从请求信封解析 `max_turns`。
+- **蒸馏时保留用户原始 prompt**——原始请求在提交时附加到存储的 intent 并随委派传输，peer 与重试同时看到模型蒸馏后的 intent 和用户的原话。
+- **空闲写流量改为按变更落盘**——心跳只在对外通告的 capacity 实际变化时重写本机行（另有 30 秒保鲜下限，安全低于 45 秒存活检查与 90 秒陈旧清理）,5 秒的邻居刷新与逐心跳的驻留发布改为读-比-写（`ledger.UpdateAdjacencyIfChanged`),panel 的节点指纹把 `last_seen` 量化到分钟，心跳不再向每个连接的 console 推送"nodes changed"事件。空闲节点的 WAL 写速率下降约一个数量级。
+- **队列空闲时轮询降频**——就绪行持续为空约 30 秒后，调度器兜底轮询从 400ms 放宽到 2s(`queueIdleAfter`/`queueIdlePoll`)；有活的队列与进程内 `Wake()` 保持快节奏，只有无唤醒的跨进程拾取承担较慢的尾延迟。
+- **reminder 扫描器在空板上降频**——没有待办行时扫描间隔放宽到 60s（其他进程添加的行在该上界内被发现）;`Store.Add`/`AddEvery`/`Delete` 会唤醒同进程的所有扫描器，进程内新增的提醒仍在到点一秒内触发。
+- **离线 peer 重连日志节流**——死掉的 peer 过去每次重拨（稳定态约 30 秒）都往 LaunchAgent 不轮转的 `/tmp` 日志写一条 `peer dial failed`/`punch offer failed` WARN；现在只在首次失败与每约第 20 次记录（带 `consecutive` 计数），恢复时补一条说明中断时长的日志。
+
+### 修复
+
+- **MCP stdio server 不再随请求上下文死亡**——spawn 与握手过去继承调用方 30 秒的请求 ctx,settings 变更会杀掉 server 进程；子进程现在活得比请求久（`TestServerSurvivesSpawnContextCancel`)。
+- **无模型节点也能跑 ask engine**——`askengine.New` 不再因未配置模型而失败；Ask 路径惰性报 `ErrNoModel`，边缘节点没有 API key 也能执行委派工作。
+- **工作目录推导兼容相对根**——`stageWorkDir`/`attachedWorkDir`/`projectWorkDir` 在穿越校验前先 `filepath.Abs` 归一化根目录；`NewCore` 的 `"."` 默认值不再触发逃逸检查失败（回归导致委派任务停在等待推送输入）。
+- **测试 fixture 路径相对其 YAML 解析**——`testdata/*.yaml` 的 storage 路径按文档锚定到配置文件所在目录，多余的 `testdata/testdata/` 树被忽略/清理。
+- **WebSocket ping 周期被钳制**到 pong 等待的合法比例内，防止错误配置的 keepalive 造成饿死。
+- **纯硬件节点可以执行任务**——`NewCore`/`ReloadCard` 过去只在卡片有 native/agent/manual 能力时才建 commander 路由器，整张卡只有 actuator 的节点（Jarvis 边缘情形）对派给它的任务一律回 "no capability matches";actuator 现在也计入路由器创建。
+- **`{action}` 占位符 fail-closed**——声明 `{action}` 的驱动模板在任务未携带 action_spec（或 spec 无 action）时过去替换为空串，把空动词交给驱动；现在与缺失 `{param:<name>}` 一样拒绝——不一致被报告，不被执行。
+- **`action_spec` 不再被搁置在非 actuator 计划上**——携带指向 `hardware:x` 的 spec 但 `requires` 解析成普通能力的任务过去会丢掉 spec 把 intent 当 shell 命令跑；运行门禁现在拒绝该派发，提交边界把 spec 的 `target_actuator` 排在 `requires` 最前，让 `MatchActuator` 的首匹配解析到目标 actuator(`ledger.RequiresForActionSpec`，应用于 `toTaskInput`、`task add` 与 `/task add`)。
+- **REPL `/task add --action-spec` 接受真实 JSON**——`splitArgs` 过去只把双引号分组，JSON 载荷自身的引号会在 token 中途翻转分词器并被剥掉；单引号现在也分组，`--agents` 与 `--action-spec` 同用会被拒绝而非静默丢 spec。
+- **Discovery 绑定校验端口**——非数字的 `network.discovery_addr` 端口通过 `SplitHostPort` 形状检查后绑定到通告端口 0 的临时 socket;`net.ResolveUDPAddr` 现在在启动期把关，`:7837` 默认值收敛到 daemon 与内嵌 engine 共享的一个 `DiscoveryAddrOrDefault()`。
+
+### 破坏性变更
+
+- **明文 `ws://` 拨号在非加密底层上被拒绝**(5d06d37)——hello 握手证明 mesh 成员身份，但之后的帧不再认证，明文链路上的网络 MITM 可以读取任务面并注入伪造的 `task_delegate`。`cleartextOK` 现在门控所有出站拨号：`ws://` 到裸 `host:port` 仅放行 loopback 与 Tailscale(CGNAT 100.64.0.0/10、ULA fd7a:115e:a214::/48、`*.ts.net` MagicDNS)——这些底层要么加密要么本地；`wss://` 与 `punch:` peer 照常放行。**配置为普通局域网 `192.168.x.x:7836` 的 peer 升级后会拨号失败**——改用 `wss://`、走 Tailscale 隧道，或在拨号节点上设 `network.allow_cleartext: true` 以在可信局域网上恢复旧行为。
+
 ## [0.0.9] - 2026-09-25 — "Periapsis"
 
 v0.0.9 正式版——代号 **Periapsis**。对单机使用来说这是一次舒适度发布：审批可以记住而不必每次都重新回答，CLI 更会解释自己（status 直接说明本节点是否在运行、空队列给出下一步建议、首次运行给出指引、更新器会打印 release notes），Web 控制台把每个回答归属到产出它的 agent 与模型、并把节点存活状态与版本固定在侧栏，TUI 也能扛住过去会把它弄花的日常操作序列。对多机集群则补齐了 beta 开启的整条线：带认证的数据报平面与 NAT 打洞、DTN 载荷加密、定时接触窗口、密码学节点身份与签名授权、stage 间直接 artifact 交接，以及面向受限设备的 lite 构建。

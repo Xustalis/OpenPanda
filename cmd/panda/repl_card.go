@@ -32,6 +32,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/cardmut"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
@@ -514,6 +515,15 @@ func (r *repl) cmdNodesAdd(addr string) {
 		return
 	}
 	r.outln(i18n.Tf(r.loc, "cli.nodes.add.done", "addr", addr))
+
+	// Warn at write time when the recorded address would trip the dial-time
+	// cleartext gate — otherwise the refusal only surfaces as keepalive WARN
+	// lines in the daemon log, the "admitted but never connects" trap.
+	var allowCleartext bool
+	r.readConfig(func(c *config.Config) { allowCleartext = c.Network.AllowCleartext })
+	if core.CleartextDialError(addr, allowCleartext) != nil {
+		r.outln(i18n.Tf(r.loc, "cli.nodes.cleartext.hint", "addr", addr))
+	}
 
 	// Live dial through the in-process engine. Synchronous now: an async
 	// goroutine outlived dispatchWithIO, so its result writes hit the command

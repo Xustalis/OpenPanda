@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
@@ -116,7 +117,19 @@ func admitPeerAddr(configPath string, cfg *config.Config, addr string) {
 	}
 	fmt.Println(i18n.Tf(loc, "cli.nodes.add.done", "addr", addr))
 	fmt.Println(i18n.T(loc, "cli.nodes.restart"))
+	warnIfCleartextRefused(os.Stdout, loc, cfg, addr)
 	printJoinGuide(i18n.Detect(), cfg)
+}
+
+// warnIfCleartextRefused warns when addr would trip the dial-time cleartext
+// gate (cleartextOK): the add/pair paths persist the peer before the daemon
+// ever dials, so a refused ws:// LAN address would otherwise only surface as
+// a `peer dial failed` line inside keepalive logs — the "admit succeeded but
+// it never connects" trap the LAN-discovery flow runs straight into.
+func warnIfCleartextRefused(w io.Writer, loc i18n.Locale, cfg *config.Config, addr string) {
+	if core.CleartextDialError(addr, cfg.Network.AllowCleartext) != nil {
+		fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.cleartext.hint", "addr", addr))
+	}
 }
 
 // runNodesAdmit implements `panda nodes admit <id>` — convert a LAN-discovered
@@ -266,6 +279,7 @@ func runPair(args []string) {
 	}
 	fmt.Println(i18n.Tf(i18n.Detect(), "cli.pair.done", "peer", *peer))
 	fmt.Println(i18n.T(i18n.Detect(), "cli.nodes.restart"))
+	warnIfCleartextRefused(os.Stdout, i18n.Detect(), cfg, *peer)
 }
 
 // printJoinGuide writes the three-step instructions for whoever sets up the
@@ -297,6 +311,14 @@ func printJoinGuideTo(w io.Writer, loc i18n.Locale, cfg *config.Config) {
 	fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.invite.step2", "path", configWritePath("")))
 	fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.invite.step3", "listen", listen))
 	fmt.Fprintln(w, i18n.T(loc, "cli.nodes.invite.step4"))
+	// The joining side will dial ws://<listen>: when this machine's listen
+	// address is a literal host outside the cleartext gate's safe set, the
+	// join dead-ends in the joiner's keepalive log unless we say so here.
+	if host, _, err := net.SplitHostPort(cfg.Network.ListenAddr); err == nil && host != "" {
+		if core.CleartextDialError("ws://"+host, false) != nil {
+			fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.cleartext.hint", "addr", "ws://"+cfg.Network.ListenAddr))
+		}
+	}
 }
 
 // isLoopbackHost reports whether host names a loopback address (127.0.0.1,

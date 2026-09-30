@@ -146,10 +146,12 @@ func (c *Core) EnsureNodeKey() {
 }
 
 // signConsentGrant attaches this node's Ed25519 signature over
-// (taskID, authorized, ts) to an outgoing delegate — the tamper-proof form of
-// the Authorized flag (P2-8). Called only where consent is freshly minted:
-// relayed payloads already carry the origin's grant and must forward it
-// verbatim rather than re-signing under a key the origin never used.
+// (taskID, authorized, ts, ConsentDigest) to an outgoing delegate — the
+// tamper-proof form of the Authorized flag, bound to what the task actually
+// is rather than just that it was consented (P2-8). Called only where consent
+// is freshly minted: relayed payloads already carry the origin's grant and
+// must forward it verbatim rather than re-signing under a key the origin
+// never used.
 func (c *Core) signConsentGrant(p *bus.TaskDelegatePayload) {
 	if !p.Authorized {
 		return

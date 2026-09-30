@@ -10,6 +10,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -967,7 +969,8 @@ func runAuditEntries(db *sql.DB, store *core.TaskStore, taskID string) {
 	}
 }
 
-// runMetrics implements `panda metrics [--csv]` — export delegation metrics.
+// runMetrics implements `panda metrics [--csv|--runtime]` — delegation
+// metrics, or this process's runtime stats for live-load inspection.
 func runMetrics(args []string) {
 	fs := flag.NewFlagSet("metrics", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
@@ -975,7 +978,21 @@ func runMetrics(args []string) {
 	// The default was true, which made the human table below dead code — plain
 	// `panda metrics` answered "how is delegation going" with a spreadsheet.
 	asCSV := fs.Bool("csv", false, "output the full history as CSV")
+	// --runtime reports THIS process's Go runtime — goroutines, heap, GC
+	// pressure. Note it measures the `panda metrics` invocation itself, not
+	// the daemon (a separate process); for the daemon's numbers run it via
+	// the daemon host's own shell or check the panel's /api/self.
+	runtimeStats := fs.Bool("runtime", false, "print this process's runtime stats (goroutines, heap, GC)")
 	fs.Parse(args)
+
+	if *runtimeStats {
+		if jsonOutput {
+			emitJSON(snapshotRuntimeStats(*configPath))
+		} else {
+			printRuntimeStats(os.Stdout, *configPath)
+		}
+		return
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -1047,6 +1064,60 @@ func runMetrics(args []string) {
 	}
 
 	printMetricsTableTo(os.Stdout, i18n.Detect(), metrics)
+}
+
+// runtimeStatsSnapshot gathers the numbers `panda metrics --runtime` prints —
+// shared with the --json path so both forms answer the same question.
+type runtimeStatsSnapshot struct {
+	Daemon    string `json:"daemon"`
+	ProcStats struct {
+		Goroutines int    `json:"goroutines"`
+		HeapAlloc  uint64 `json:"heap_alloc_bytes"`
+		HeapSys    uint64 `json:"heap_sys_bytes"`
+		NumGC      uint32 `json:"gc_cycles"`
+	} `json:"process"`
+}
+
+func snapshotRuntimeStats(configPath string) runtimeStatsSnapshot {
+	var snap runtimeStatsSnapshot
+	cfg, err := config.Load(configPath)
+	if err == nil {
+		pidPath := filepath.Join(filepath.Dir(cfg.Storage.DBPath), "daemon.pid")
+		if data, err := os.ReadFile(pidPath); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+				if detail, ok := daemonProcStats(pid); ok {
+					snap.Daemon = fmt.Sprintf("pid %d — %s", pid, detail)
+				} else {
+					snap.Daemon = fmt.Sprintf("pid %d not alive (stale daemon.pid)", pid)
+				}
+			}
+		}
+	}
+	if snap.Daemon == "" {
+		snap.Daemon = "no daemon.pid next to the database (not running)"
+	}
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	snap.ProcStats.Goroutines = runtime.NumGoroutine()
+	snap.ProcStats.HeapAlloc = m.HeapAlloc
+	snap.ProcStats.HeapSys = m.HeapSys
+	snap.ProcStats.NumGC = m.NumGC
+	return snap
+}
+
+// printRuntimeStats is `panda metrics --runtime`: the load numbers of the
+// long-running processes on this host. The daemon's RSS/CPU come through its
+// pid file + ps (daemonProcStats); this CLI's own Go runtime is printed too —
+// labelled, since a newborn `panda metrics` process says little on its own
+// but keeps the flag useful where no daemon runs.
+func printRuntimeStats(w io.Writer, configPath string) {
+	snap := snapshotRuntimeStats(configPath)
+	fmt.Fprintf(w, "daemon: %s\n", snap.Daemon)
+	fmt.Fprintf(w, "this process: goroutines=%d heap_alloc=%.1fMiB heap_sys=%.1fMiB gc_cycles=%d\n",
+		snap.ProcStats.Goroutines,
+		float64(snap.ProcStats.HeapAlloc)/1048576,
+		float64(snap.ProcStats.HeapSys)/1048576,
+		snap.ProcStats.NumGC)
 }
 
 // metricsListLimit caps the human listing at one screen of recent delegations.

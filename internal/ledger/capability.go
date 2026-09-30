@@ -312,6 +312,35 @@ func Heartbeat(db *sql.DB, id, status string, capJSON string) error {
 	return nil
 }
 
+// HeartbeatIfChanged is Heartbeat behind a read-compare: the row is
+// rewritten only when status or the capacity payload differs, or when
+// last_seen is older than minRefreshSec — the freshness floor that keeps the
+// 90s stale-peer sweep and the panel's 45s liveness check honest. A steady
+// peer's 15s beat otherwise appends a WAL page on every arrival for a row
+// that already says exactly this.
+func HeartbeatIfChanged(db *sql.DB, id, status, capJSON string, minRefreshSec int64) error {
+	// Normalize before comparing: Heartbeat stores "{}" for an empty payload,
+	// so comparing raw "" against the stored "{}" would rewrite every beat
+	// and the gate would never engage.
+	if capJSON == "" {
+		b, err := json.Marshal(Capacity{})
+		if err != nil {
+			return err
+		}
+		capJSON = string(b)
+	}
+	var curStatus, curCap string
+	var lastSeen int64
+	err := db.QueryRow(
+		`SELECT status, COALESCE(capacity_json,''), COALESCE(last_seen,0)
+		 FROM employee_cache WHERE id=?`, id).Scan(&curStatus, &curCap, &lastSeen)
+	if err == nil && curStatus == status && curCap == capJSON &&
+		storage.Now()-lastSeen < minRefreshSec {
+		return nil
+	}
+	return Heartbeat(db, id, status, capJSON)
+}
+
 // UpdateAdjacency refreshes a node's advertised edge set, measured link
 // weights (§4.1) and contact plan (§8.4) without touching the rest of its
 // row — the gossip channel heartbeats drive between full card updates.
@@ -339,6 +368,29 @@ func UpdateAdjacency(db *sql.DB, id, neighborsJSON, linksJSON, contactsJSON, pro
 		}
 	}
 	return nil
+}
+
+// UpdateAdjacencyIfChanged runs UpdateAdjacency only when one of the supplied
+// columns would actually change. Timer-driven publishers (heartbeat
+// residence, the 5s self-neighbor refresh) otherwise append a WAL page every
+// tick for a row that already says exactly this. A missing or unreadable row
+// falls through to the write — that is precisely when it matters.
+func UpdateAdjacencyIfChanged(db *sql.DB, id, neighborsJSON, linksJSON, contactsJSON, projectsJSON string) error {
+	var curN, curL, curC, curP string
+	err := db.QueryRow(
+		`SELECT COALESCE(neighbors_json,''), COALESCE(links_json,''),
+		        COALESCE(contacts_json,''), COALESCE(projects_json,'')
+		 FROM employee_cache WHERE id=?`, id).Scan(&curN, &curL, &curC, &curP)
+	if err != nil {
+		return UpdateAdjacency(db, id, neighborsJSON, linksJSON, contactsJSON, projectsJSON)
+	}
+	if (neighborsJSON == "" || neighborsJSON == curN) &&
+		(linksJSON == "" || linksJSON == curL) &&
+		(contactsJSON == "" || contactsJSON == curC) &&
+		(projectsJSON == "" || projectsJSON == curP) {
+		return nil
+	}
+	return UpdateAdjacency(db, id, neighborsJSON, linksJSON, contactsJSON, projectsJSON)
 }
 
 // MarkOffline flips a node to offline and stamps last_seen.

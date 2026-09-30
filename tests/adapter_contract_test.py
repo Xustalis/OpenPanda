@@ -45,7 +45,12 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=10, extra_request=No
         merged["PATH"] = str(tmp) + os.pathsep + merged.get("PATH", "")
         if env:
             merged.update(env)
-        req = {"prompt": "contract prompt", "timeout_s": 3, "cwd": str(work)}
+        # timeout_s is the adapter's watchdog budget for the fake CLI: 3s was
+        # tight enough that suite-level load (parallel jobs on a cold box)
+        # could push a trivial fake past it and flake — 30s leaves the
+        # watchdog exercised (the dedicated timeout tests override it) without
+        # racing scheduler jitter.
+        req = {"prompt": "contract prompt", "timeout_s": 30, "cwd": str(work)}
         if extra_request:
             req.update(extra_request)
         proc = subprocess.run(
@@ -464,7 +469,9 @@ print("appended")
     def test_generic_timeout_and_missing_binary_contract(self):
         payload, _, _ = run_adapter(
             "generic.py", "slowcli", "import time; time.sleep(10)\n",
-            extra_request={"cmd": "slowcli {prompt}"},
+            # The watchdog is the thing under test: pin a small timeout_s so
+            # the adapter kills the fake CLI well inside the 8s outer bound.
+            extra_request={"cmd": "slowcli {prompt}", "timeout_s": 2},
             timeout=8,
         )
         self.assertFalse(payload["ok"], payload)
@@ -535,6 +542,9 @@ sys.exit(1)
 import time
 time.sleep(10)
 ''',
+            # Same as the generic watchdog test: timeout_s must stay small
+            # here or the adapter would outwait the 8s outer bound.
+            extra_request={"timeout_s": 2},
             timeout=8,
         )
         self.assertFalse(payload["ok"], payload)
