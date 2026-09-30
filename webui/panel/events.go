@@ -205,14 +205,18 @@ func (h *handler) taskFingerprint(r *http.Request) (string, error) {
 // connected client (see sharedFingerprints).
 func (h *handler) cachedTaskFingerprint(r *http.Request) (string, error) {
 	return sharedFingerprints.get("tasks", func() (string, error) {
-		tasks, err := h.store.ListByState(r.Context(), "")
+		// Stamps only — the full task rows carry spec/result payloads the
+		// digest never reads; this scan ran once per second per connection
+		// before the shared cache, and the heavy projection made each window
+		// cost O(total task bytes) instead of O(task count).
+		tasks, err := h.store.TaskStamps(r.Context())
 		if err != nil {
 			return "", err
 		}
 		sum := sha256.New()
 		var buf [8]byte
 		for _, t := range tasks {
-			sum.Write([]byte(t.TaskID))
+			sum.Write([]byte(t.ID))
 			sum.Write([]byte{':'})
 			sum.Write([]byte(t.State))
 			sum.Write([]byte{':'})
@@ -237,7 +241,10 @@ func (h *handler) cachedNodeFingerprint() string {
 		return ""
 	}
 	fp, _ := sharedFingerprints.get("nodes", func() (string, error) {
-		nodes, err := ledger.Query(h.db, "", "")
+		// Stamps only: Query pulls every JSON column the card holds just to
+		// be hashed into three fields here — the digest changed on data it
+		// never even looked at.
+		nodes, err := ledger.NodeStamps(h.db)
 		if err != nil {
 			return "", err
 		}

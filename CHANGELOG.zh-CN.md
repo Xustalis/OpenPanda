@@ -61,6 +61,9 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **队列空闲时轮询降频**——就绪行持续为空约 30 秒后，调度器兜底轮询从 400ms 放宽到 2s(`queueIdleAfter`/`queueIdlePoll`)；有活的队列与进程内 `Wake()` 保持快节奏，只有无唤醒的跨进程拾取承担较慢的尾延迟。
 - **reminder 扫描器在空板上降频**——没有待办行时扫描间隔放宽到 60s（其他进程添加的行在该上界内被发现）;`Store.Add`/`AddEvery`/`Delete` 会唤醒同进程的所有扫描器，进程内新增的提醒仍在到点一秒内触发。
 - **离线 peer 重连日志节流**——死掉的 peer 过去每次重拨（稳定态约 30 秒）都往 LaunchAgent 不轮转的 `/tmp` 日志写一条 `peer dial failed`/`punch offer failed` WARN；现在只在首次失败与每约第 20 次记录（带 `consecutive` 计数），恢复时补一条说明中断时长的日志。panel/web 引擎的 `MaintainPeers` 重拨循环遵循同一策略。
+- **变更门写入改为单语句**——`HeartbeatIfChanged`/`UpdateAdjacencyIfChanged` 现在让 SQLite 的 `WHERE … IS NOT …` 判定行是否变化：一次平稳心跳或邻居刷新只花一程 no-op UPDATE，不再是 SELECT 加条件写——且比较与写入原子合一。
+- **消息去重清扫摊销**——`claimMsgID` 过去每收一帧都全扫 `msgSeen` map（热点 mesh 上每帧 O(容量）)；过期清扫现在最多 30 秒一次，只会让去重更保守，不会更弱。
+- **轮询投影不再拖拽载荷**——队列 `ListReady` 轮询现在只取调度器实际读的六列（`ListReadySummaries`)，不再为每个排队任务拉回 spec/intent/result JSON;panel 每秒的 SSE 指纹改为哈希专用 stamp 行（`TaskStamps`、`ledger.NodeStamps`)，而非整行任务与节点数据。
 
 ### 修复
 

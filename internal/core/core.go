@@ -242,6 +242,12 @@ type Core struct {
 	// entries age out of a bounded window and the map is hard-capped so a peer
 	// minting ids forever cannot grow memory without bound.
 	msgSeen map[string]time.Time
+	// msgSeenSweep is the last expiry pass over msgSeen. Sweeping inside the
+	// claim used to walk the whole map on every inbound frame — under a busy
+	// mesh that is an O(capacity) scan per message. Amortized: stale entries
+	// linger at most sweepInterval past their window, which only makes dedup
+	// MORE conservative (an expired id still dedups, never re-executes).
+	msgSeenSweep time.Time
 
 	// leaseTimeout is how long one task attempt may hold its lease before the
 	// monitor treats its executor as dead. Renewed on a heartbeat during
@@ -1436,6 +1442,12 @@ const msgDedupWindow = 10 * time.Minute
 // the same behaviour as having no dedup, never worse.
 const msgSeenMax = 8192
 
+// msgSeenSweepInterval bounds how often claimMsgID walks the dedup map for
+// expiry — far below the dedup window, so entries can only outlive their
+// window by this much, and the amortized cost of a sweep is one map walk per
+// interval no matter how hot the frame rate is.
+const msgSeenSweepInterval = 30 * time.Second
+
 // dispatch routes an envelope to its handler. conn is the connection the
 // message arrived on, needed so the hello handler can bind the authenticated
 // peer identity to it.
@@ -1526,9 +1538,12 @@ func (c *Core) claimMsgID(env bus.Envelope) bool {
 	if _, dup := c.msgSeen[key]; dup {
 		return false
 	}
-	for k, t := range c.msgSeen {
-		if now.Sub(t) > msgDedupWindow {
-			delete(c.msgSeen, k)
+	if now.Sub(c.msgSeenSweep) > msgSeenSweepInterval {
+		c.msgSeenSweep = now
+		for k, t := range c.msgSeen {
+			if now.Sub(t) > msgDedupWindow {
+				delete(c.msgSeen, k)
+			}
 		}
 	}
 	if len(c.msgSeen) >= msgSeenMax {

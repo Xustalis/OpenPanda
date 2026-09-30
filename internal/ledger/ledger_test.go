@@ -471,3 +471,98 @@ func TestRequiresForActionSpec(t *testing.T) {
 		t.Fatalf("target-less spec must not rewrite requires, got %v", got)
 	}
 }
+
+func TestHeartbeatIfChangedSkipsFreshUnchanged(t *testing.T) {
+	db := openLedgerDB(t)
+	if err := Register(db, testCard(), "opi3b", 1); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE employee_cache SET last_seen=?, status='online', capacity_json='{}' WHERE id='opi3b'`, storage.Now()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	stamp := func() int64 {
+		var v int64
+		if err := db.QueryRow(`SELECT last_seen FROM employee_cache WHERE id='opi3b'`).Scan(&v); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		return v
+	}
+	before := stamp()
+	if err := HeartbeatIfChanged(db, "opi3b", "online", "{}", 30); err != nil {
+		t.Fatalf("gated beat: %v", err)
+	}
+	if stamp() != before {
+		t.Fatal("fresh identical beat rewrote the row")
+	}
+	// Empty capacity must compare equal to the stored "{}" — the gate used to
+	// compare raw "" against it and rewrite on every beat.
+	if err := HeartbeatIfChanged(db, "opi3b", "online", "", 30); err != nil {
+		t.Fatalf("empty-capacity beat: %v", err)
+	}
+	if stamp() != before {
+		t.Fatal("empty capacity payload rewrote the row")
+	}
+	// A status change still writes, as does a stale row.
+	if err := HeartbeatIfChanged(db, "opi3b", "busy", "{}", 30); err != nil {
+		t.Fatalf("changed beat: %v", err)
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM employee_cache WHERE id='opi3b'`).Scan(&status); err != nil || status != "busy" {
+		t.Fatalf("status = %q, %v", status, err)
+	}
+	if _, err := db.Exec(`UPDATE employee_cache SET last_seen=0 WHERE id='opi3b'`); err != nil {
+		t.Fatalf("age row: %v", err)
+	}
+	if err := HeartbeatIfChanged(db, "opi3b", "busy", "{}", 30); err != nil {
+		t.Fatalf("stale beat: %v", err)
+	}
+	if stamp() == 0 {
+		t.Fatal("stale row was not refreshed")
+	}
+}
+
+func TestUpdateAdjacencyIfChanged(t *testing.T) {
+	db := openLedgerDB(t)
+	if err := Register(db, testCard(), "opi3b", 1); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	read := func(col string) string {
+		var v string
+		if err := db.QueryRow(`SELECT COALESCE(` + col + `,'') FROM employee_cache WHERE id='opi3b'`).Scan(&v); err != nil {
+			t.Fatalf("scan %s: %v", col, err)
+		}
+		return v
+	}
+	// Empty inputs leave columns alone — the absent-means-skip contract.
+	if err := UpdateAdjacencyIfChanged(db, "opi3b", "", "", "", ""); err != nil {
+		t.Fatalf("all-empty: %v", err)
+	}
+	if read("neighbors_json") != "" || read("projects_json") != "" {
+		t.Fatal("empty inputs touched columns")
+	}
+	// First real write lands.
+	if err := UpdateAdjacencyIfChanged(db, "opi3b", `["b"]`, "", `{"plan":1}`, ""); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	if read("neighbors_json") != `["b"]` || read("contacts_json") != `{"plan":1}` {
+		t.Fatalf("write landed wrong: %q %q", read("neighbors_json"), read("contacts_json"))
+	}
+	// Identical repeat is a no-op (verified via last_seen sentinel the update
+	// does not touch) and empty inputs still do not clobber.
+	if _, err := db.Exec(`UPDATE employee_cache SET last_seen=42 WHERE id='opi3b'`); err != nil {
+		t.Fatalf("sentinel: %v", err)
+	}
+	if err := UpdateAdjacencyIfChanged(db, "opi3b", `["b"]`, "", "", `["proj"]`); err != nil {
+		t.Fatalf("mixed write: %v", err)
+	}
+	if read("projects_json") != `["proj"]` {
+		t.Fatalf("projects_json = %q", read("projects_json"))
+	}
+	var sentinel int64
+	if err := db.QueryRow(`SELECT last_seen FROM employee_cache WHERE id='opi3b'`).Scan(&sentinel); err != nil {
+		t.Fatalf("sentinel read: %v", err)
+	}
+	if sentinel != 42 {
+		t.Fatal("update touched an unrelated column")
+	}
+}

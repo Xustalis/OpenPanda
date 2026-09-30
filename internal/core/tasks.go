@@ -12,6 +12,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
@@ -1411,6 +1412,34 @@ func (s *TaskStore) ListReady(ctx context.Context) ([]Task, error) {
 	return scanTasks(rows)
 }
 
+// ListReadySummaries is the scheduler's polling projection: the six columns a
+// ReadyTask actually reads, not the forty-odd of a full row. The queue poll
+// used to drag spec_json/intent/result_json blobs through the wire for every
+// queued task every 400ms–2s; a 100KB spec now stays on disk until the task
+// is claimed and the runner loads it for real.
+func (s *TaskStore) ListReadySummaries(ctx context.Context) ([]queue.ReadyTask, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT task_id, project, priority, seq, created_at, resource_keys_json
+		 FROM tasks WHERE state = ? AND scheduled = 1`, StateQueued)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []queue.ReadyTask
+	for rows.Next() {
+		var t queue.ReadyTask
+		var keysJSON sql.NullString
+		if err := rows.Scan(&t.ID, &t.Project, &t.Priority, &t.Seq, &t.CreatedAt, &keysJSON); err != nil {
+			return nil, err
+		}
+		if keysJSON.Valid {
+			_ = json.Unmarshal([]byte(keysJSON.String), &t.ResourceKeys)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // ClaimLocal moves a queued task to dispatched-to-self for the queue
 // scheduler. Unlike Dispatch it does not require the caller to already own
 // the task: scheduled tasks are a node-local pool any running scheduler
@@ -2032,6 +2061,37 @@ func (s *TaskStore) ListByState(ctx context.Context, state string) ([]Task, erro
 	}
 	defer rows.Close()
 	return scanTasks(rows)
+}
+
+// TaskStamp is the minimal per-task triple a change-detection digest needs:
+// identity, lifecycle state, and the mutation clock. Pulling the full row for
+// this (spec_json, result_json, intent…) would read every task's payload on
+// every poll.
+type TaskStamp struct {
+	ID        string
+	State     string
+	UpdatedAt int64
+}
+
+// TaskStamps lists the digest input for every task — the panel's SSE
+// change detector calls this once per poll window instead of scanning the
+// full task rows. Ordered by id so the digest is order-stable.
+func (s *TaskStore) TaskStamps(ctx context.Context) ([]TaskStamp, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT task_id, state, updated_at FROM tasks ORDER BY task_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TaskStamp
+	for rows.Next() {
+		var t TaskStamp
+		if err := rows.Scan(&t.ID, &t.State, &t.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 // Events returns the event timeline for a task, oldest first.

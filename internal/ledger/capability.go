@@ -329,16 +329,25 @@ func HeartbeatIfChanged(db *sql.DB, id, status, capJSON string, minRefreshSec in
 		}
 		capJSON = string(b)
 	}
-	var curStatus, curCap string
-	var lastSeen int64
-	err := db.QueryRow(
-		`SELECT status, COALESCE(capacity_json,''), COALESCE(last_seen,0)
-		 FROM employee_cache WHERE id=?`, id).Scan(&curStatus, &curCap, &lastSeen)
-	if err == nil && curStatus == status && curCap == capJSON &&
-		storage.Now()-lastSeen < minRefreshSec {
-		return nil
+	// One statement, not read-compare-write: the WHERE clause gates the
+	// update on "something changed or the row went stale", so a steady beat
+	// costs a single no-op UPDATE round-trip instead of a SELECT plus a
+	// conditional write — and the change check is atomic with the write,
+	// not two racing round-trips. RowsAffected tells the truth either way
+	// (0 = unchanged/stale-gated, 1 = rewritten); callers don't care, so it
+	// is deliberately discarded.
+	now := storage.Now()
+	_, err := db.Exec(
+		`UPDATE employee_cache SET status=?, capacity_json=?, last_seen=?
+		 WHERE id=? AND (
+		   COALESCE(status,'') IS NOT ? OR
+		   COALESCE(capacity_json,'') IS NOT ? OR
+		   COALESCE(last_seen,0) <= ?)`,
+		status, capJSON, now, id, status, capJSON, now-minRefreshSec)
+	if err != nil {
+		return fmt.Errorf("heartbeat %s: %w", id, err)
 	}
-	return Heartbeat(db, id, status, capJSON)
+	return nil
 }
 
 // UpdateAdjacency refreshes a node's advertised edge set, measured link
@@ -376,21 +385,54 @@ func UpdateAdjacency(db *sql.DB, id, neighborsJSON, linksJSON, contactsJSON, pro
 // tick for a row that already says exactly this. A missing or unreadable row
 // falls through to the write — that is precisely when it matters.
 func UpdateAdjacencyIfChanged(db *sql.DB, id, neighborsJSON, linksJSON, contactsJSON, projectsJSON string) error {
-	var curN, curL, curC, curP string
-	err := db.QueryRow(
-		`SELECT COALESCE(neighbors_json,''), COALESCE(links_json,''),
-		        COALESCE(contacts_json,''), COALESCE(projects_json,'')
-		 FROM employee_cache WHERE id=?`, id).Scan(&curN, &curL, &curC, &curP)
+	// One statement: the CASEs keep the stored column for empty inputs (same
+	// "absent means leave alone" contract UpdateAdjacency has), and the WHERE
+	// clause asks SQLite whether any supplied value actually differs — a
+	// steady tick is a single no-op UPDATE round-trip, atomic with the
+	// compare, replacing the old SELECT-then-maybe-four-UPDATEs shape.
+	_, err := db.Exec(
+		`UPDATE employee_cache SET
+		   neighbors_json = CASE WHEN ?1 != '' THEN ?1 ELSE neighbors_json END,
+		   links_json     = CASE WHEN ?2 != '' THEN ?2 ELSE links_json END,
+		   contacts_json  = CASE WHEN ?3 != '' THEN ?3 ELSE contacts_json END,
+		   projects_json  = CASE WHEN ?4 != '' THEN ?4 ELSE projects_json END
+		 WHERE id = ?5 AND (
+		   (?1 != '' AND COALESCE(neighbors_json,'') IS NOT ?1) OR
+		   (?2 != '' AND COALESCE(links_json,'') IS NOT ?2) OR
+		   (?3 != '' AND COALESCE(contacts_json,'') IS NOT ?3) OR
+		   (?4 != '' AND COALESCE(projects_json,'') IS NOT ?4))`,
+		neighborsJSON, linksJSON, contactsJSON, projectsJSON, id)
 	if err != nil {
-		return UpdateAdjacency(db, id, neighborsJSON, linksJSON, contactsJSON, projectsJSON)
+		return fmt.Errorf("update adjacency %s: %w", id, err)
 	}
-	if (neighborsJSON == "" || neighborsJSON == curN) &&
-		(linksJSON == "" || linksJSON == curL) &&
-		(contactsJSON == "" || contactsJSON == curC) &&
-		(projectsJSON == "" || projectsJSON == curP) {
-		return nil
+	return nil
+}
+
+// NodeStamp is the minimal per-node triple a change-detection digest needs —
+// the full Query projection carries every JSON payload the card holds.
+type NodeStamp struct {
+	ID       string
+	Status   string
+	LastSeen int64
+}
+
+// NodeStamps lists the digest input for every known node, ordered by id so a
+// digest built from it is order-stable.
+func NodeStamps(db *sql.DB) ([]NodeStamp, error) {
+	rows, err := db.Query(`SELECT id, status, COALESCE(last_seen,0) FROM employee_cache ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("query node stamps: %w", err)
 	}
-	return UpdateAdjacency(db, id, neighborsJSON, linksJSON, contactsJSON, projectsJSON)
+	defer rows.Close()
+	var out []NodeStamp
+	for rows.Next() {
+		var n NodeStamp
+		if err := rows.Scan(&n.ID, &n.Status, &n.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
 }
 
 // MarkOffline flips a node to offline and stamps last_seen.

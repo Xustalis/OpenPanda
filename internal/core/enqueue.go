@@ -140,22 +140,7 @@ func (c *Core) QueueScheduler() *queue.Scheduler {
 type queueStoreAdapter struct{ c *Core }
 
 func (a queueStoreAdapter) ListReady(ctx context.Context) ([]queue.ReadyTask, error) {
-	tasks, err := a.c.store.ListReady(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]queue.ReadyTask, 0, len(tasks))
-	for _, t := range tasks {
-		out = append(out, queue.ReadyTask{
-			ID:           t.TaskID,
-			Project:      t.Project,
-			Priority:     t.Priority,
-			Seq:          t.Seq,
-			CreatedAt:    t.CreatedAt,
-			ResourceKeys: t.ResourceKeys,
-		})
-	}
-	return out, nil
+	return a.c.store.ListReadySummaries(ctx)
 }
 
 func (a queueStoreAdapter) CountActive(ctx context.Context) (int, error) {
