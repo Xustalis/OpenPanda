@@ -300,10 +300,17 @@ type Core struct {
 	// observedIP are OUR OWN public hints (STUN answer / peer's You field).
 	// All guarded by udpMu; punching is the session table, guarded by
 	// punchMu and keyed by session nonce.
-	udpMu        sync.Mutex
-	udp          *bus.UDPConn
-	udpPort      int
-	udpRoutes    map[string]*net.UDPAddr
+	udpMu     sync.Mutex
+	udp       *bus.UDPConn
+	udpPort   int
+	udpRoutes map[string]*net.UDPAddr
+	// udpHeard is the liveness timestamp behind each udpRoutes entry: the last
+	// time authenticated inbound traffic (envelope, punch, or a keepalive from
+	// the bound endpoint) arrived from that peer. A route with no fresh proof
+	// is a blackhole — UDP sends always "succeed" at write time — so the
+	// keepalive loop reaps silent routes and sendTo falls back to outbox
+	// parking instead of losing envelopes into the void.
+	udpHeard     map[string]time.Time
 	udpCands     map[string][]string
 	udpPeerPort  map[string]int
 	udpPeerIP    map[string]string
