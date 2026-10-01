@@ -255,8 +255,15 @@ func (c *Core) onBeacon(ctx context.Context, raw []byte, src *net.UDPAddr) {
 	if known == 0 {
 		c.logger.Info("discovery: LAN node seen", "id", b.ID, "addr", addr, "ver", b.Ver)
 	}
-	if _, err := c.db.ExecContext(ctx, `DELETE FROM pending_nodes WHERE last_seen < ?`, now-int64(pendingTTL.Seconds())); err != nil {
-		c.logger.Warn("discovery: sweep pending", "err", err)
+	// TTL sweep, paced: a DELETE on every received beacon was WAL churn on a
+	// busy LAN (each node re-announces every beaconInterval), while the
+	// sweep's precision need only be on the order of the TTL itself. Litter
+	// lingers at most half a TTL longer — the expiry is already approximate.
+	if now-c.pendingSweepAt >= int64(pendingTTL.Seconds())/2 {
+		c.pendingSweepAt = now
+		if _, err := c.db.ExecContext(ctx, `DELETE FROM pending_nodes WHERE last_seen < ?`, now-int64(pendingTTL.Seconds())); err != nil {
+			c.logger.Warn("discovery: sweep pending", "err", err)
+		}
 	}
 }
 

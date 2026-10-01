@@ -291,6 +291,13 @@ type Core struct {
 	// lock-free.
 	contacts []ledger.Contact
 
+	// pendingSweepAt paces the pending_nodes TTL DELETE inside onBeacon —
+	// unix seconds of the last sweep. The discovery read loop is its only
+	// caller, so no lock: a DELETE per received beacon is WAL churn on a
+	// chatty LAN, while the sweep itself only needs to run on the order of
+	// pendingTTL.
+	pendingSweepAt int64
+
 	// Farsky datagram plane (§9.2). udp is the shared socket; udpPort its
 	// bound port (advertised in hello). udpRoutes maps peer id -> confirmed
 	// endpoint (a punch/ack or sealed envelope binds it; sendTo falls back
