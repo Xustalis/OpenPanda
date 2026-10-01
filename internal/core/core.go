@@ -523,24 +523,31 @@ func (c *Core) broadcastCard(ctx context.Context) {
 		conns[id] = p.conn
 	}
 	c.mu.RUnlock()
+	msgID, err := newUUID()
+	if err != nil {
+		c.logger.Warn("mint card-broadcast id", "err", err)
+		return
+	}
+	env, err := bus.NewEnvelope(bus.MsgHeartbeat, c.nodeID, msgID, bus.HeartbeatPayload{
+		Status: "online", Load: 0, Capacity: capJSON, Card: card,
+		BlockedAgents: c.blockedAgents(),
+	})
+	if err != nil {
+		c.logger.Warn("build card heartbeat", "err", err)
+		return
+	}
+	// One envelope serves every peer: msg_id dedup is per-receiver. Sends go
+	// out concurrently — Send blocks until the conn's writer places the frame
+	// (bounded by writeWait), so a wedged peer must not serialize its stall
+	// onto every later peer's beat.
 	for id, conn := range conns {
-		msgID, err := newUUID()
-		if err != nil {
-			c.logger.Warn("mint card-broadcast id", "err", err)
-			return
-		}
-		env, err := bus.NewEnvelope(bus.MsgHeartbeat, c.nodeID, msgID, bus.HeartbeatPayload{
-			Status: "online", Load: 0, Capacity: capJSON, Card: card,
-			BlockedAgents: c.blockedAgents(),
-		})
-		if err != nil {
-			c.logger.Warn("build card heartbeat", "err", err)
-			return
-		}
-		env.To = id
-		if err := conn.Send(env); err != nil {
-			c.logger.Debug("card heartbeat send", "peer", id, "err", err)
-		}
+		e := env
+		e.To = id
+		go func() {
+			if err := conn.Send(e); err != nil {
+				c.logger.Debug("card heartbeat send", "peer", id, "err", err)
+			}
+		}()
 	}
 }
 
@@ -728,31 +735,43 @@ func (c *Core) broadcastHeartbeat(ctx context.Context) {
 		conns[id] = p.conn
 	}
 	c.mu.RUnlock()
+	if len(conns) == 0 {
+		return
+	}
+	// The payload is identical for every peer (msg_id dedup is per-receiver,
+	// so a shared id is safe), and it is built once: link metrics and the
+	// neighbor set used to be recomputed inside the per-peer loop.
+	lms := c.linkMetrics()
+	wireLinks := make([]bus.LinkMetric, len(lms))
+	for i, l := range lms {
+		wireLinks[i] = bus.LinkMetric{Peer: l.Peer, RTTms: l.RTTms}
+	}
+	msgID, err := newUUID()
+	if err != nil {
+		c.logger.Warn("mint heartbeat id", "err", err)
+		return
+	}
+	env, err := bus.NewEnvelope(bus.MsgHeartbeat, c.nodeID, msgID, bus.HeartbeatPayload{
+		Status: "online", Load: load, Capacity: capJSON,
+		BlockedAgents: c.blockedAgents(),
+		Neighbors:     c.livePeerIDs(), Links: wireLinks,
+		Contacts: c.wireContacts(), Projects: projects,
+	})
+	if err != nil {
+		c.logger.Warn("build heartbeat", "err", err)
+		return
+	}
+	// Fan out concurrently: Send blocks until the conn's writer places the
+	// frame (bounded by writeWait), so one wedged peer would otherwise delay
+	// every later peer's heartbeat — every tick — by that bound.
 	for id, conn := range conns {
-		msgID, err := newUUID()
-		if err != nil {
-			c.logger.Warn("mint heartbeat id", "err", err)
-			return
-		}
-		lms := c.linkMetrics()
-		wireLinks := make([]bus.LinkMetric, len(lms))
-		for i, l := range lms {
-			wireLinks[i] = bus.LinkMetric{Peer: l.Peer, RTTms: l.RTTms}
-		}
-		env, err := bus.NewEnvelope(bus.MsgHeartbeat, c.nodeID, msgID, bus.HeartbeatPayload{
-			Status: "online", Load: load, Capacity: capJSON,
-			BlockedAgents: c.blockedAgents(),
-			Neighbors:     c.livePeerIDs(), Links: wireLinks,
-			Contacts: c.wireContacts(), Projects: projects,
-		})
-		if err != nil {
-			c.logger.Warn("build heartbeat", "err", err)
-			return
-		}
-		env.To = id
-		if err := conn.Send(env); err != nil {
-			c.logger.Debug("heartbeat send", "peer", id, "err", err)
-		}
+		e := env
+		e.To = id
+		go func() {
+			if err := conn.Send(e); err != nil {
+				c.logger.Debug("heartbeat send", "peer", id, "err", err)
+			}
+		}()
 	}
 }
 
@@ -1151,7 +1170,6 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 		conn.Close()
 	}()
 	go conn.StartPingLoop(ctx, 30*time.Second)
-	firstRead := true
 	for {
 		// A cancelled ctx (shutdown, conn teardown ordered elsewhere) ends the
 		// loop even when ReadJSON is still blocked: the peer's ping/close will
@@ -1178,11 +1196,15 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 			return
 		}
 		c.dispatch(ctx, conn, env)
-		if firstRead {
-			firstRead = false
-			// First frame processed (the hello, or whatever the binding rules
-			// above let through): switch from the short server-side hello
-			// deadline to the normal pong/keepalive deadline.
+		// Refresh the keepalive deadline once the conn is authenticated — on
+		// every frame, not just on pongs. Pongs only get processed while this
+		// loop sits in ReadJSON, so a long dispatch or a slow sender alone
+		// could starve the refresh and kill a healthy conn at pongWait; any
+		// inbound frame proves transport liveness just as well. A dead peer
+		// still stops answering our pings and expires on schedule. A conn that
+		// is NOT yet authenticated keeps its short hello deadline: a rejected
+		// hello must not earn the long keepalive window.
+		if conn.PeerID() != "" {
 			_ = conn.ResetReadDeadline()
 		}
 	}
