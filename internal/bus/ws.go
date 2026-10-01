@@ -350,6 +350,11 @@ func NewServer(addr string, logger *slog.Logger, onConn func(*Conn, string)) *Se
 			// this node's control channel (the PWA talks HTTP on the panel port,
 			// never here).
 			CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" },
+			// Bound the upgrade handshake itself: the server's
+			// ReadHeaderTimeout only covers the request headers, so without
+			// this a stalled handshake write could hold a handler slot
+			// (and its counted connection) indefinitely.
+			HandshakeTimeout: 5 * time.Second,
 		},
 		activePerIP:  make(map[string]int),
 		helloTimeout: defaultHelloTimeout,
