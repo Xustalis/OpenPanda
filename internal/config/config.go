@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -40,6 +41,7 @@ type Config struct {
 	Timeouts  TimeoutsConfig  `yaml:"timeouts"`
 	UI        UIConfig        `yaml:"ui"`
 	Skills    SkillsConfig    `yaml:"skills"`
+	Sandbox   SandboxConfig   `yaml:"sandbox"`
 }
 
 // SkillsConfig controls procedural memory and skills hub settings.
@@ -216,6 +218,17 @@ type NetworkConfig struct {
 	Peers               []string `yaml:"peers"`                  // e.g. "worker-1.your-tailnet.ts.net:7836", or "punch:<node-id>" for a NAT-bound peer reachable only via hole punching
 	MaxConnections      int      `yaml:"max_connections"`        // global concurrent WS connection limit (0 = unlimited)
 	MaxConnectionsPerIP int      `yaml:"max_connections_per_ip"` // per-remote-IP concurrent WS connection limit (0 = unlimited)
+	// AllowCleartext opts the node back into dialing plaintext ws:// peers
+	// beyond the safe set. Hello proves membership, but every frame after it
+	// travels unsigned and unencrypted — a network MITM on a plaintext link
+	// can read task content AND inject frames (a forged task_delegate is
+	// remote code execution). The safe set needs no flag: loopback,
+	// Tailscale (CGNAT 100.64.0.0/10, the fd7a:115e:a214::/48 ULA and
+	// *.ts.net MagicDNS names) ride an encrypted underlay already. Anything
+	// else must be wss://, a punch: entry, or this explicit escape hatch —
+	// keeping the flag spelled "cleartext" is deliberate, so opting out is
+	// never confused for a good idea.
+	AllowCleartext bool `yaml:"allow_cleartext"`
 	// UDPListen is the farsky datagram-plane bind (encrypted AEAD envelopes +
 	// NAT-punch frames). "" follows listen_addr's port on the same host —
 	// the default keeps punching available whenever the WS listener is
@@ -233,6 +246,25 @@ type NetworkConfig struct {
 	// Nodes with only always-on links leave it empty — the plan is gossiped
 	// in heartbeats like the live adjacency.
 	Contacts []ContactConfig `yaml:"contacts,omitempty"`
+	// DiscoveryAddr is the LAN discovery UDP socket (broadcast beacons —
+	// "a node lives here", no credentials). "" binds :7837; "off" disables
+	// both the listener and the announcer. Admission is unaffected by the
+	// beacon: pairing still needs the shared secret and the signed hello.
+	DiscoveryAddr string `yaml:"discovery_addr"`
+}
+
+// defaultDiscoveryAddr is the port LAN-discovery binds when the operator
+// left discovery_addr empty — distinct from the WS listen port so a beacon
+// never collides with the task plane.
+const defaultDiscoveryAddr = ":7837"
+
+// DiscoveryAddrOrDefault resolves the discovery bind for callers that have
+// already excluded "off": an empty value means the default beacon port.
+func (n NetworkConfig) DiscoveryAddrOrDefault() string {
+	if n.DiscoveryAddr == "" {
+		return defaultDiscoveryAddr
+	}
+	return n.DiscoveryAddr
 }
 
 // ContactConfig is one scheduled transmission window. start/end accept an
@@ -333,6 +365,55 @@ type StorageConfig struct {
 // LogConfig controls structured logging.
 type LogConfig struct {
 	Level string `yaml:"level"` // debug | info | warn | error
+}
+
+// SandboxConfig controls the OS-level confinement applied to every subprocess
+// the commander spawns — native commands and agent adapters alike. It sits on
+// top of the environment filter security.Sandbox has always provided.
+//
+//	mode: off | standard | strict   (default off — historical behavior)
+//	  off:      environment filtering only, no OS boundary.
+//	  standard: deny-default file-write confinement — a subprocess can write
+//	            only the task directory plus whitelisted runtime dirs; every
+//	            other write fails with EPERM. deny_write_paths lose write
+//	            access even when they sit under a whitelisted parent.
+//	  strict:   standard plus read denial of the system's credential
+//	            locations (~/.ssh, ~/.aws, agent credential dirs belonging
+//	            to a different adapter, …) and deny_read_paths.
+//
+//	mode: standard/strict is a no-op on a platform with no backend
+//	  (seatbelt on macOS, bubblewrap on Linux); the daemon logs which
+//	  backend took effect at startup.
+//
+// Path lists accept absolute paths, "~"-relative paths, and bare names
+// (resolved against $HOME), so they match the spelling credential manifests
+// already use.
+type SandboxConfig struct {
+	Mode           string   `yaml:"mode"`
+	AllowNetwork   *bool    `yaml:"allow_network"` // default true; false cuts sockets entirely
+	WritablePaths  []string `yaml:"writable_paths"`
+	DenyReadPaths  []string `yaml:"deny_read_paths"`
+	DenyWritePaths []string `yaml:"deny_write_paths"`
+}
+
+// NormalizedMode folds unset/unknown spellings into the canonical mode names
+// ("off", "standard", "strict") — anything unrecognized fails closed-ish by
+// degrading to "off" rather than inventing a policy.
+func (s SandboxConfig) NormalizedMode() string {
+	switch strings.ToLower(strings.TrimSpace(s.Mode)) {
+	case "standard":
+		return "standard"
+	case "strict":
+		return "strict"
+	default:
+		return "off"
+	}
+}
+
+// NetworkEnabled reports the effective network flag: unset means allowed,
+// matching the historical no-confinement behavior.
+func (s SandboxConfig) NetworkEnabled() bool {
+	return s.AllowNetwork == nil || *s.AllowNetwork
 }
 
 // Built-in timeout defaults, used when timeouts.* is unset. The lease must stay
@@ -681,6 +762,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: network.udp_listen %q is not host:port or \"off\": %w", c.Network.UDPListen, err)
 		}
 	}
+	if c.Network.DiscoveryAddr != "" && c.Network.DiscoveryAddr != "off" {
+		if _, _, err := net.SplitHostPort(c.Network.DiscoveryAddr); err != nil {
+			return fmt.Errorf("config: network.discovery_addr %q is not host:port or \"off\": %w", c.Network.DiscoveryAddr, err)
+		}
+	}
 	for _, addr := range []struct{ name, value string }{
 		{"network.listen_addr", c.Network.ListenAddr},
 		{"network.panel_addr", c.Network.PanelAddr},
@@ -693,17 +779,8 @@ func (c *Config) Validate() error {
 		}
 	}
 	for i, peer := range c.Network.Peers {
-		if strings.HasPrefix(peer, "punch:") {
-			// A NAT-bound peer entry names a node id, not an address — the
-			// daemon reaches it through the punch handshake instead of a
-			// TCP dial.
-			if strings.TrimPrefix(peer, "punch:") == "" {
-				return fmt.Errorf("config: network.peers[%d] %q has an empty node id after punch:", i, peer)
-			}
-			continue
-		}
-		if _, _, err := net.SplitHostPort(peer); err != nil {
-			return fmt.Errorf("config: network.peers[%d] %q is not host:port (or punch:<node-id>): %w", i, peer, err)
+		if err := ValidatePeerAddr(peer); err != nil {
+			return fmt.Errorf("config: network.peers[%d] %q: %w", i, peer, err)
 		}
 	}
 	for i, cc := range c.Network.Contacts {
@@ -732,6 +809,43 @@ func (c *Config) Validate() error {
 		if limit.value < 0 {
 			return fmt.Errorf("config: %s %d must not be negative", limit.name, limit.value)
 		}
+	}
+	return nil
+}
+
+// ValidatePeerAddr checks one network.peers entry against the wire-address
+// grammar the daemon dials: a punch:<node-id> NAT-traversal handle, a ws://
+// or wss:// URL (ws is plaintext and gated at dial time), or a bare
+// host:port. Bare host:port entries get a numeric-port check because the
+// dial path hands them to net.Dial, where a service-name port silently
+// resolves to something else — a stored "peer:smtp" would misdial instead
+// of failing loudly at write time.
+func ValidatePeerAddr(peer string) error {
+	if strings.Contains(peer, "://") {
+		u, err := url.Parse(peer)
+		if err != nil || u.Hostname() == "" || (u.Scheme != "ws" && u.Scheme != "wss") {
+			return fmt.Errorf("not a ws:// or wss:// URL with a host")
+		}
+		return nil
+	}
+	if strings.HasPrefix(peer, "punch:") {
+		// A NAT-bound peer entry names a node id, not an address — the
+		// daemon reaches it through the punch handshake instead of a TCP
+		// dial.
+		if strings.TrimPrefix(peer, "punch:") == "" {
+			return fmt.Errorf("empty node id after the punch: prefix")
+		}
+		return nil
+	}
+	host, port, err := net.SplitHostPort(peer)
+	if err != nil {
+		return fmt.Errorf("not host:port (or punch:<node-id> or ws(s)://url): %w", err)
+	}
+	if host == "" {
+		return fmt.Errorf("host is empty")
+	}
+	if n, err := strconv.Atoi(port); err != nil || n <= 0 || n > 65535 {
+		return fmt.Errorf("port %q is not a number between 1 and 65535", port)
 	}
 	return nil
 }

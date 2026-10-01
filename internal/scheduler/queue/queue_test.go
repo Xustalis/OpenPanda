@@ -266,3 +266,21 @@ func TestSchedulerPollPicksUpWakelessEnqueue(t *testing.T) {
 	}
 	t.Fatalf("wake-less enqueue not picked up within %v", 4*s.pollInterval)
 }
+
+// TestPollDelayBacksOffWhenIdle pins the idle-relaxation contract: the
+// fallback poll holds the fast cadence while anything might be queued and
+// only steps back once the queue has provably stayed empty — a live queue
+// and a same-process wake must never see the slow interval.
+func TestPollDelayBacksOffWhenIdle(t *testing.T) {
+	s := New(&fakeStore{}, newGateRunner(), 2, nil)
+	for _, q := range []int{0, 1, queueIdleAfter - 1} {
+		if d := s.pollDelay(q); d != s.pollInterval {
+			t.Fatalf("pollDelay(%d) = %v, want fast %v", q, d, s.pollInterval)
+		}
+	}
+	for _, q := range []int{queueIdleAfter, queueIdleAfter * 4} {
+		if d := s.pollDelay(q); d != queueIdlePoll {
+			t.Fatalf("pollDelay(%d) = %v, want relaxed %v", q, d, queueIdlePoll)
+		}
+	}
+}

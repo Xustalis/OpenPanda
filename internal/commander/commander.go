@@ -469,6 +469,15 @@ func (r *Router) Execute(ctx context.Context, plan Plan, prompt string, cwd stri
 		if err := defense.Authorize(plan.Tier, authorized); err != nil {
 			return Result{OK: false, ExitCode: 1, Stderr: authorizationHint(err, plan)}
 		}
+		// A remote-origin task arrives unconsented with prompt text authored
+		// off-node — the prompt IS the command surface, and a tier-1 agent
+		// label only ever meant "the card didn't say otherwise", never "this
+		// text is safe to hand a shell". Unconsented remote work gets the
+		// read-only tool face; adapters that cannot express it are skipped
+		// rather than silently running full-power (fail closed).
+		if RemoteTask(ctx) && !authorized {
+			ctx = WithRestricted(ctx)
+		}
 		return r.execAgent(ctx, plan, prompt, cwd)
 	case "manual":
 		return Result{OK: false, ExitCode: 0, Stdout: plan.Notify, NeedManual: true}
@@ -538,6 +547,18 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 			unavailable = append(unavailable, name+" (not on card)")
 			continue
 		}
+		if Restricted(ctx) && !AdapterSupportsRestricted(ag.Adapter) {
+			// This run is an unconsented remote task: the adapter must
+			// express a read-only tool face or it does not run at all —
+			// degrading to its default (shell-capable) flags would be the
+			// exact hole the restricted mode exists to close. The refusal
+			// carries the authorization sentinel: it is deterministic (a
+			// retry cannot grow a restricted mode) and consent is the fix,
+			// so the orchestration layer parks it for human review.
+			unavailable = append(unavailable,
+				name+" ("+defense.ErrNotAuthorized.Error()+": adapter has no restricted mode; authorize the task to run it)")
+			continue
+		}
 		if !r.probeAgent(name, ag) {
 			// Explain the skip in dispatch terms — "no model configured",
 			// "endpoint unreachable", "cli not found" — not a bare
@@ -557,9 +578,9 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// per-task override (WithToolsPolicy set by the orchestration layer on
 		// ctx) wins: the global policy is applied only when the context
 		// carries no task-level policy yet.
-		runCtx := ctx
+		runCtx := WithAgentName(ctx, name)
 		if ctx.Value(toolsPolicyKey{}) == nil {
-			runCtx = WithToolsPolicy(ctx, r.toolsPolicy)
+			runCtx = WithToolsPolicy(runCtx, r.toolsPolicy)
 		}
 		if ag.Command != "" {
 			runCtx = WithAgentCommand(runCtx, ag.Command)
@@ -659,14 +680,17 @@ type Result struct {
 	Injected  bool   `json:"injected,omitempty"`
 }
 
-// AgentResult is what an adapter returns.
+// AgentResult is what an adapter returns. Every field carries its wire name
+// explicitly: Go's untagged fallback matches keys case-insensitively but NOT
+// underscore-insensitively, so without the tags "exit_code" would silently
+// drop — adapter-reported 124/127/2 would all decode as 0.
 type AgentResult struct {
-	OK        bool
-	Result    string
-	Stderr    string
-	ExitCode  int
-	Tokens    int
-	Cost      float64
+	OK        bool         `json:"ok"`
+	Result    string       `json:"result"`
+	Stderr    string       `json:"stderr"`
+	ExitCode  int          `json:"exit_code"`
+	Tokens    int          `json:"tokens"`
+	Cost      float64      `json:"cost"`
 	Usage     *UsageDetail `json:"usage"`
 	SessionID string       `json:"session_id"`
 	Model     string       `json:"model,omitempty"`
@@ -677,7 +701,12 @@ type AgentResult struct {
 // the model config only when the injection policy says so (default auto:
 // agent-native credentials win).
 func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt string, cwd string) AgentResult {
-	dec := r.InjectionDecision(adapter)
+	// The card's agent name (WithAgentName, set by execAgent) resolves the
+	// registry record alongside the adapter script: two unrelated CLIs can
+	// share generic.py, so the script alone must not inherit an entry's
+	// credential manifest or model-env mapping.
+	name := AgentName(ctx)
+	dec := r.InjectionDecision(name, adapter)
 	var env []string
 	if dec.Inject {
 		// The model endpoint must be HTTPS so the API key never travels
@@ -688,11 +717,11 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 				return AgentResult{OK: false, Result: security.Redact(err.Error()), ExitCode: 1}
 			}
 		}
-		env = modelEnvForAdapter(r.model, adapter)
+		env = modelEnvForAdapter(r.model, name, adapter)
 	}
 	// Native Agent credentials must survive the minimal sandbox even when PANDA
 	// does not inject its own model. Only adapter-specific keys are forwarded.
-	env = mergeAdapterEnv(adapterCredentialEnv(adapter), env)
+	env = mergeAdapterEnv(adapterCredentialEnv(name, adapter), env)
 	res := r.runProcess(ctx, adapter, prompt, cwd, env)
 	if dec.Inject {
 		res.Injected = true
@@ -706,9 +735,9 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// different failure under injection is not more informative than the
 	// original failure — swapping it in would mask the real reason the task
 	// failed (e.g. report exit-code noise instead of "quota exhausted").
-	if !res.OK && !dec.Inject && modelConfigured(r.model) && supportsModelInjection(adapter, r.model) && r.model.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
+	if !res.OK && !dec.Inject && modelConfigured(r.model) && supportsModelInjection(name, adapter, r.model) && r.model.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
 		if r.model.BaseURL == "" || security.NewNetworkGuard(security.EndpointHost(r.model.BaseURL)).CheckURL(r.model.BaseURL) == nil {
-			injectedEnv := modelEnvForAdapter(r.model, adapter)
+			injectedEnv := modelEnvForAdapter(r.model, name, adapter)
 			if len(injectedEnv) > 0 {
 				retryRes := r.runProcess(ctx, adapter, prompt, cwd, injectedEnv)
 				if retryRes.OK {
@@ -769,8 +798,10 @@ func isProviderFailureOrAuth(text string) bool {
 }
 
 // agentBinary derives the CLI binary for an agent: the card's install_check
-// ("which claude") wins, then the canonical probe binary from the agent
-// registry (internal/agents) for the adapter. "" means the probe cannot
+// ("which claude") wins, then — for the generic adapter — the command
+// template's own first token (the registry cannot name a custom CLI's
+// binary), then the canonical probe binary from the agent registry
+// (internal/agents) resolved by name+adapter. "" means the probe cannot
 // decide and the agent is treated as available (the adapter itself will fail
 // loudly if its CLI is really missing).
 func agentBinary(name string, ag ledger.Agent) string {
@@ -778,7 +809,16 @@ func agentBinary(name string, ag ledger.Agent) string {
 		(fields[0] == "which" || fields[0] == "command" || fields[0] == "where") {
 		return fields[1]
 	}
-	if k, ok := agents.ByAdapter(ag.Adapter); ok {
+	if ag.Adapter == agents.GenericAdapter {
+		// The template's first token IS the binary to probe — the registry
+		// record (whichever agent happens to share generic.py) cannot name a
+		// custom CLI's binary. With no template, fall through to Lookup so a
+		// name-matched entry (e.g. "zcode") still resolves its binaries.
+		if fields := strings.Fields(ag.Command); len(fields) > 0 {
+			return fields[0]
+		}
+	}
+	if k, ok := agents.Lookup(name, ag.Adapter); ok {
 		return k.PrimaryBinary()
 	}
 	return ""
@@ -820,15 +860,16 @@ func (r *Router) AgentViable(name string, ag ledger.Agent) bool {
 	}
 	// Unknown adapters keep the legacy "let the adapter try" behavior: their
 	// credential contract is not in the registry, so viability cannot be
-	// judged here.
-	k, known := agents.ByAdapter(ag.Adapter)
+	// judged here. A generic.py entry whose card name matches no registry
+	// agent resolves to nothing here the same way.
+	k, known := agents.Lookup(name, ag.Adapter)
 	if !known {
 		return true
 	}
 	if k.SelfContainedModel {
 		return true
 	}
-	if own, _ := probeAgentCredentials(ag.Adapter); own {
+	if own, _ := probeAgentCredentials(name, ag.Adapter); own {
 		return true
 	}
 	// No credentials of its own: the agent runs only when panda's model can
@@ -837,7 +878,7 @@ func (r *Router) AgentViable(name string, ag ledger.Agent) bool {
 	if r.injectionModel == config.InjectionModelNever {
 		return false
 	}
-	return modelConfigured(r.model) && r.model.APIKey != "" && supportsModelInjection(ag.Adapter, r.model)
+	return modelConfigured(r.model) && r.model.APIKey != "" && supportsModelInjection(name, ag.Adapter, r.model)
 }
 
 // AgentDispatchable reports whether an agent is ready to receive a task right
@@ -863,14 +904,14 @@ func (r *Router) agentUsable(name string, ag ledger.Agent) (usable bool, reason 
 			return false, "cli " + bin + " not found on PATH"
 		}
 	}
-	k, known := agents.ByAdapter(ag.Adapter)
+	k, known := agents.Lookup(name, ag.Adapter)
 	if !known {
 		// Unknown adapters keep the legacy "let the adapter try" behavior:
 		// their credential and endpoint contract is not in the registry.
 		return true, ""
 	}
 	if !k.SelfContainedModel {
-		if own, _ := probeAgentCredentials(ag.Adapter); !own {
+		if own, _ := probeAgentCredentials(name, ag.Adapter); !own {
 			switch {
 			case r.injectionModel == config.InjectionModelNever:
 				return false, "no model configured (no own credentials; injection.model=never)"
@@ -878,12 +919,12 @@ func (r *Router) agentUsable(name string, ag ledger.Agent) (usable bool, reason 
 				return false, "no model configured (no own credentials; no panda model endpoint)"
 			case r.model.APIKey == "":
 				return false, "no model configured (no own credentials; no panda model key)"
-			case !supportsModelInjection(ag.Adapter, r.model):
+			case !supportsModelInjection(name, ag.Adapter, r.model):
 				return false, "no model configured (no own credentials; injection unsupported for " + ag.Adapter + ")"
 			}
 		}
 	}
-	if spec := r.agentTarget(ag); spec.Endpoint != "" {
+	if spec := r.agentTarget(name, ag); spec.Endpoint != "" {
 		if v := r.endpointProbe(spec); !v.OK {
 			if v.Rejected {
 				return false, "model credentials/quota rejected by " + spec.Endpoint + " (" + v.Detail + ")"
@@ -900,8 +941,8 @@ func (r *Router) agentUsable(name string, ag ledger.Agent) (usable bool, reason 
 
 // agentEndpoint resolves the provider base URL the agent's run would
 // actually hit — kept for callers that only need the URL.
-func (r *Router) agentEndpoint(ag ledger.Agent) string {
-	return r.agentTarget(ag).Endpoint
+func (r *Router) agentEndpoint(name string, ag ledger.Agent) string {
+	return r.agentTarget(name, ag).Endpoint
 }
 
 // agentTarget resolves the model call the agent's run would actually make:
@@ -912,8 +953,8 @@ func (r *Router) agentEndpoint(ag ledger.Agent) string {
 // the registry's provider default. An empty Endpoint means the endpoint
 // cannot be determined and the probe is skipped — never block an unknown
 // adapter on a guess.
-func (r *Router) agentTarget(ag ledger.Agent) ProbeSpec {
-	k, ok := agents.ByAdapter(ag.Adapter)
+func (r *Router) agentTarget(name string, ag ledger.Agent) ProbeSpec {
+	k, ok := agents.Lookup(name, ag.Adapter)
 	if !ok {
 		return ProbeSpec{}
 	}
@@ -921,7 +962,7 @@ func (r *Router) agentTarget(ag ledger.Agent) ProbeSpec {
 	if k.ModelEnv != nil && k.ModelEnv.APIType != "" {
 		apiType = k.ModelEnv.APIType
 	}
-	if dec := r.InjectionDecision(ag.Adapter); dec.Inject {
+	if dec := r.InjectionDecision(name, ag.Adapter); dec.Inject {
 		ep := dec.BaseURL
 		if ep == "" {
 			ep = effectiveBaseURL(r.model)

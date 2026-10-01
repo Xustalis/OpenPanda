@@ -48,7 +48,7 @@ var testModel = config.ModelConfig{
 func TestInjectionNever(t *testing.T) {
 	cleanCredentialEnv(t)
 	r := injectionRouter(testModel, config.InjectionModelNever)
-	d := r.InjectionDecision("claude_code.py")
+	d := r.InjectionDecision("claude_code", "claude_code.py")
 	if d.Inject {
 		t.Fatalf("never mode must not inject, got %+v", d)
 	}
@@ -59,7 +59,7 @@ func TestInjectionAlways(t *testing.T) {
 	// always injects even when the agent has its own credentials.
 	t.Setenv("ANTHROPIC_API_KEY", "agent-own-key")
 	r := injectionRouter(testModel, config.InjectionModelAlways)
-	d := r.InjectionDecision("claude_code.py")
+	d := r.InjectionDecision("claude_code", "claude_code.py")
 	if !d.Inject {
 		t.Fatalf("always mode must inject, got %+v", d)
 	}
@@ -74,7 +74,7 @@ func TestInjectionAutoSkipsAgentWithEnvCreds(t *testing.T) {
 	cleanCredentialEnv(t)
 	t.Setenv("ANTHROPIC_API_KEY", "agent-own-key")
 	r := injectionRouter(testModel, config.InjectionModelAuto)
-	if d := r.InjectionDecision("claude_code.py"); d.Inject {
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); d.Inject {
 		t.Fatalf("auto must not inject when agent has env creds: %+v", d)
 	}
 	// An unrelated provider key does not count for a codex agent's probe...
@@ -82,7 +82,7 @@ func TestInjectionAutoSkipsAgentWithEnvCreds(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "tok")
-	if d := r.InjectionDecision("claude_code.py"); d.Inject {
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); d.Inject {
 		t.Fatalf("ANTHROPIC_AUTH_TOKEN counts as claude creds: %+v", d)
 	}
 }
@@ -99,7 +99,7 @@ func TestInjectionAutoSkipsAgentWithConfigFile(t *testing.T) {
 		t.Fatalf("write auth: %v", err)
 	}
 	r := injectionRouter(testModel, config.InjectionModelAuto)
-	d := r.InjectionDecision("codex.py")
+	d := r.InjectionDecision("codex", "codex.py")
 	if d.Inject {
 		t.Fatalf("auto must not inject when codex has a login file: %+v", d)
 	}
@@ -113,7 +113,7 @@ func TestInjectionAutoSkipsAgentWithConfigFile(t *testing.T) {
 func TestInjectionAutoInjectsWhenNoCredentials(t *testing.T) {
 	cleanCredentialEnv(t)
 	r := injectionRouter(testModel, config.InjectionModelAuto)
-	d := r.InjectionDecision("claude_code.py")
+	d := r.InjectionDecision("claude_code", "claude_code.py")
 	if !d.Inject {
 		t.Fatalf("auto must inject when agent has no creds and panda has a model: %+v", d)
 	}
@@ -127,7 +127,7 @@ func TestInjectionAutoInjectsWhenNoCredentials(t *testing.T) {
 func TestInjectionAutoNoModelConfigured(t *testing.T) {
 	cleanCredentialEnv(t)
 	r := injectionRouter(config.ModelConfig{}, config.InjectionModelAuto)
-	if d := r.InjectionDecision("claude_code.py"); d.Inject {
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); d.Inject {
 		t.Fatalf("auto must not inject without a configured model: %+v", d)
 	}
 }
@@ -135,7 +135,7 @@ func TestInjectionAutoNoModelConfigured(t *testing.T) {
 func TestInjectionCodexDoesNotPretendAnthropicMapping(t *testing.T) {
 	cleanCredentialEnv(t)
 	r := injectionRouter(testModel, config.InjectionModelAuto)
-	if d := r.InjectionDecision("codex.py"); d.Inject {
+	if d := r.InjectionDecision("codex", "codex.py"); d.Inject {
 		t.Fatalf("codex must not receive an unverified Anthropic injection: %+v", d)
 	}
 }
@@ -149,7 +149,7 @@ func TestInjectionDecisionDefaultMode(t *testing.T) {
 		t.Fatalf("zero injection config = %q, want auto", r.injectionModel)
 	}
 	t.Setenv("ANTHROPIC_API_KEY", "agent-own-key")
-	if d := r.InjectionDecision("claude_code.py"); d.Inject {
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); d.Inject {
 		t.Fatalf("default mode must behave as auto: %+v", d)
 	}
 }
@@ -201,14 +201,14 @@ func assertEnv(t *testing.T, env []string, want map[string]string) {
 func TestDeepSeekFlashInjection(t *testing.T) {
 	cleanCredentialEnv(t)
 	r := injectionRouter(flashModel, config.InjectionModelAuto)
-	d := r.InjectionDecision("claude_code.py")
+	d := r.InjectionDecision("claude_code", "claude_code.py")
 	if !d.Inject {
 		t.Fatalf("DeepSeek config + no agent creds must inject: %+v", d)
 	}
 	if d.Model != "deepseek-v4-flash" {
 		t.Fatalf("decision model = %q, want deepseek-v4-flash", d.Model)
 	}
-	env := modelEnvForAdapter(flashModel, "claude_code.py")
+	env := modelEnvForAdapter(flashModel, "claude_code", "claude_code.py")
 	assertEnv(t, env, map[string]string{
 		"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
 		"ANTHROPIC_API_KEY":  "sk-flash-test",
@@ -227,7 +227,7 @@ func TestDeepSeekInjectionSkippedWhenAgentHasKey(t *testing.T) {
 	cleanCredentialEnv(t)
 	t.Setenv("ANTHROPIC_API_KEY", "agent-own-key")
 	r := injectionRouter(flashModel, config.InjectionModelAuto)
-	if d := r.InjectionDecision("claude_code.py"); d.Inject {
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); d.Inject {
 		t.Fatalf("agent with ANTHROPIC_API_KEY must never be injected: %+v", d)
 	}
 }
@@ -239,10 +239,10 @@ func TestDeepSeekInjectionSkippedForNonDeepSeekEndpoint(t *testing.T) {
 	other := flashModel
 	other.BaseURL = "https://api.anthropic.com"
 	r := injectionRouter(other, config.InjectionModelAuto)
-	if d := r.InjectionDecision("claude_code.py"); d.Inject {
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); d.Inject {
 		t.Fatalf("non-DeepSeek base_url must not be injected: %+v", d)
 	}
-	if env := modelEnvForAdapter(other, "claude_code.py"); len(env) != 0 {
+	if env := modelEnvForAdapter(other, "claude_code", "claude_code.py"); len(env) != 0 {
 		t.Fatalf("non-DeepSeek base_url must produce no env override: %v", env)
 	}
 }
@@ -254,14 +254,14 @@ func TestDeepSeekProModelNeverInjected(t *testing.T) {
 	pro := flashModel
 	pro.Model = "deepseek-v4-pro"
 	r := injectionRouter(pro, config.InjectionModelAuto)
-	d := r.InjectionDecision("claude_code.py")
+	d := r.InjectionDecision("claude_code", "claude_code.py")
 	if !d.Inject {
 		t.Fatalf("injection should still happen, just never with pro: %+v", d)
 	}
 	if strings.Contains(d.Model, "deepseek-v4-pro") {
 		t.Fatalf("pro model leaked into the decision: %q", d.Model)
 	}
-	env := modelEnvForAdapter(pro, "claude_code.py")
+	env := modelEnvForAdapter(pro, "claude_code", "claude_code.py")
 	assertEnv(t, env, map[string]string{"ANTHROPIC_MODEL": "deepseek-v4-flash"})
 	for _, kv := range env {
 		if strings.Contains(kv, "deepseek-v4-pro") {
@@ -270,7 +270,7 @@ func TestDeepSeekProModelNeverInjected(t *testing.T) {
 	}
 	// The legacy always path is guarded too.
 	rAlways := injectionRouter(pro, config.InjectionModelAlways)
-	da := rAlways.InjectionDecision("claude_code.py")
+	da := rAlways.InjectionDecision("claude_code", "claude_code.py")
 	if !da.Inject || strings.Contains(da.Model, "deepseek-v4-pro") {
 		t.Fatalf("always mode must inject flash, never pro: %+v", da)
 	}
@@ -285,7 +285,7 @@ func TestDeepSeekInjectionOnlyForClaudeCode(t *testing.T) {
 		"codex.py", "opencode.py", "grok_build.py",
 		"deepseek_harness.py", "openclaw.py", "hermes.py",
 	} {
-		if d := r.InjectionDecision(adapter); d.Inject {
+		if d := r.InjectionDecision(strings.TrimSuffix(adapter, ".py"), adapter); d.Inject {
 			t.Fatalf("%s must not be DeepSeek-injected (no registry model-env mapping): %+v", adapter, d)
 		}
 	}
@@ -307,7 +307,7 @@ func TestClaudeStateFileDoesNotBlockInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := injectionRouter(flashModel, config.InjectionModelAuto)
-	d := r.InjectionDecision("claude_code.py")
+	d := r.InjectionDecision("claude_code", "claude_code.py")
 	if !d.Inject {
 		t.Fatalf("state-only ~/.claude.json must not block injection: %+v", d)
 	}
@@ -325,7 +325,7 @@ func TestClaudeApiKeyLoginBlocksInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := injectionRouter(flashModel, config.InjectionModelAuto)
-	if d := r.InjectionDecision("claude_code.py"); d.Inject {
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); d.Inject {
 		t.Fatalf("primaryApiKey login must keep the agent's own model: %+v", d)
 	}
 }
@@ -339,7 +339,7 @@ func TestClaudeOAuthLoginBlocksInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := injectionRouter(flashModel, config.InjectionModelAuto)
-	if d := r.InjectionDecision("claude_code.py"); d.Inject {
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); d.Inject {
 		t.Fatalf("oauthAccount login must keep the agent's own model: %+v", d)
 	}
 	// A null oauthAccount with other state present must inject.
@@ -347,7 +347,7 @@ func TestClaudeOAuthLoginBlocksInjection(t *testing.T) {
 		[]byte(`{"numStartups":1,"oauthAccount":null}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if d := r.InjectionDecision("claude_code.py"); !d.Inject {
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); !d.Inject {
 		t.Fatalf("null oauthAccount is state, not a credential: %+v", d)
 	}
 }
@@ -365,7 +365,7 @@ func TestClaudeCredentialsFileBlocksInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := injectionRouter(flashModel, config.InjectionModelAuto)
-	if d := r.InjectionDecision("claude_code.py"); d.Inject {
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); d.Inject {
 		t.Fatalf("credentials.json must keep the agent's own model: %+v", d)
 	}
 }
@@ -383,7 +383,7 @@ func TestCodexAuthStillBlocksInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := injectionRouter(flashModel, config.InjectionModelAuto)
-	if d := r.InjectionDecision("codex.py"); d.Inject {
+	if d := r.InjectionDecision("codex", "codex.py"); d.Inject {
 		t.Fatalf("codex auth.json presence must still count: %+v", d)
 	}
 }
@@ -401,7 +401,7 @@ func TestClaudeConfigJsonBlocksInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := injectionRouter(flashModel, config.InjectionModelAuto)
-	d := r.InjectionDecision("claude_code.py")
+	d := r.InjectionDecision("claude_code", "claude_code.py")
 	if d.Inject {
 		t.Fatalf("~/.claude/config.json login must keep the agent's own model: %+v", d)
 	}
@@ -423,7 +423,7 @@ func TestClaudeSettingsEnvBlocksInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := injectionRouter(flashModel, config.InjectionModelAuto)
-	if d := r.InjectionDecision("claude_code.py"); d.Inject {
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); d.Inject {
 		t.Fatalf("settings.json env auth must keep the agent's own model: %+v", d)
 	}
 	// env present but without auth-bearing vars → not a credential.
@@ -431,7 +431,7 @@ func TestClaudeSettingsEnvBlocksInjection(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(withoutAuth), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if d := r.InjectionDecision("claude_code.py"); !d.Inject {
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); !d.Inject {
 		t.Fatalf("settings.json without auth env must not block injection: %+v", d)
 	}
 }
@@ -482,14 +482,14 @@ func TestOpenAIModelInjectionForCodexAndHermes(t *testing.T) {
 
 	// Codex with OpenAI model configured in auto mode (no own credentials).
 	r := injectionRouter(openaiModel, config.InjectionModelAuto)
-	dCodex := r.InjectionDecision("codex.py")
+	dCodex := r.InjectionDecision("codex", "codex.py")
 	if !dCodex.Inject {
 		t.Fatalf("Codex should receive OpenAI model injection in auto mode: %+v", dCodex)
 	}
 	if dCodex.Model != "gpt-4o" || dCodex.BaseURL != "https://api.openai.com/v1" {
 		t.Fatalf("Codex decision model/url mismatch: %+v", dCodex)
 	}
-	envCodex := modelEnvForAdapter(openaiModel, "codex.py")
+	envCodex := modelEnvForAdapter(openaiModel, "codex", "codex.py")
 	assertEnv(t, envCodex, map[string]string{
 		"OPENAI_BASE_URL": "https://api.openai.com/v1",
 		"OPENAI_API_KEY":  "sk-openai-test",
@@ -497,11 +497,11 @@ func TestOpenAIModelInjectionForCodexAndHermes(t *testing.T) {
 	})
 
 	// Hermes with OpenAI model configured.
-	dHermes := r.InjectionDecision("hermes.py")
+	dHermes := r.InjectionDecision("hermes", "hermes.py")
 	if !dHermes.Inject {
 		t.Fatalf("Hermes should receive OpenAI model injection in auto mode: %+v", dHermes)
 	}
-	envHermes := modelEnvForAdapter(openaiModel, "hermes.py")
+	envHermes := modelEnvForAdapter(openaiModel, "hermes", "hermes.py")
 	assertEnv(t, envHermes, map[string]string{
 		"OPENAI_BASE_URL": "https://api.openai.com/v1",
 		"OPENAI_API_KEY":  "sk-openai-test",
@@ -509,7 +509,7 @@ func TestOpenAIModelInjectionForCodexAndHermes(t *testing.T) {
 	})
 
 	// Claude Code should NOT be injected with OpenAI model because it expects Anthropic APIType.
-	dClaude := r.InjectionDecision("claude_code.py")
+	dClaude := r.InjectionDecision("claude_code", "claude_code.py")
 	if dClaude.Inject {
 		t.Fatalf("Claude Code must not receive OpenAI model injection: %+v", dClaude)
 	}

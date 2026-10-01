@@ -350,6 +350,11 @@ register_service() {
     if [ "$OS" = darwin ]; then
         launch_agent="$HOME/Library/LaunchAgents/com.openpanda.node.plist"
         mkdir -p "$HOME/Library/LaunchAgents"
+        # Logs live under ~/Library/Logs like any macOS app: /tmp wiped the
+        # evidence on every reboot, and a crash loop's log is exactly the one
+        # you need after the fact. The daemon's own WARN throttling keeps the
+        # files small; if they still grow, prune the directory by hand.
+        mkdir -p "$HOME/Library/Logs/openpanda"
         cat > "$launch_agent" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -365,8 +370,8 @@ register_service() {
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ProcessType</key><string>Background</string>
-    <key>StandardOutPath</key><string>/tmp/openpanda-daemon.out.log</string>
-    <key>StandardErrorPath</key><string>/tmp/openpanda-daemon.err.log</string>
+    <key>StandardOutPath</key><string>$HOME/Library/Logs/openpanda/daemon.out.log</string>
+    <key>StandardErrorPath</key><string>$HOME/Library/Logs/openpanda/daemon.err.log</string>
 </dict>
 </plist>
 EOF

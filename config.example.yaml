@@ -53,6 +53,23 @@ network:
   # you run your own or trust a public one (they learn your IP, nothing else).
   # stun_servers:
   #   - "stun.l.google.com:19302"
+  # ── LAN auto-discovery ──
+  # A small unauthenticated UDP beacon ("panda-beacon/1") announces this node
+  # on the LAN so `panda nodes` on another host can show it under "not
+  # paired" and `panda nodes admit <id>` can peer it. The beacon carries only
+  # id/address/version/pubkey — never credentials; joining still requires the
+  # shared secret and a signed Ed25519 hello.
+  #   ""      (default) — broadcast+listen on :7837
+  #   "off"             — disable discovery entirely
+  # discovery_addr: ":7837"
+  # ── Cleartext ws:// outbound gate ──
+  # The hello handshake proves mesh membership but does NOT encrypt the
+  # frames after it, so a network MITM on a plaintext link could forge a
+  # task_delegate. Dials to ws:// are therefore refused unless the host is
+  # loopback or Tailscale (100.64.0.0/10, fd7a:115e:a214::/48, *.ts.net) —
+  # everything else needs wss:// (terminate TLS in front; the listener does
+  # not speak TLS), a punch:<id> peer (AEAD datagrams), or this escape hatch:
+  #   allow_cleartext: true   # trusted LAN only — restores pre-gate dialing
   peers:                         # manual peers
     # - "worker-1.your-tailnet.ts.net:7836"
     # - "punch:laptop-home"      # node behind NAT — coordinate UDP hole

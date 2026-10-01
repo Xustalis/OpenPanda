@@ -7,6 +7,7 @@ import {
   TraceEvent,
 } from '../api/client'
 import { orbitPhaseFromTraces, useTraceForTask } from '../hooks'
+import { Icon } from './icons'
 
 // —---------------------------------------------------------------------------
 // DecisionOrbit (§4.1.1 参考基准强约束实现)
@@ -185,7 +186,7 @@ export default function DecisionOrbit(props: DecisionOrbitProps) {
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
         >
-          <span class="orbit-brand" aria-hidden>🛰️</span>
+          <Icon name="orbit" class="orbit-brand-ico" />
           <span class="orbit-brand-title">
             {classify ? t('orbit.brandTitle') : t('orbit.brandShort')}
           </span>
@@ -200,7 +201,7 @@ export default function DecisionOrbit(props: DecisionOrbitProps) {
             )}
             {hasReview && (
               <span class="orbit-sum-pill pill-review" role="status">
-                ⚠ {t('orbit.summary.pendingReview')}
+                <Icon name="alert" /> {t('orbit.summary.pendingReview')}
               </span>
             )}
           </span>
@@ -447,7 +448,7 @@ function ExecLine(props: {
             >
               <span class="label">{b.label}</span>
               <span class="sym" aria-hidden>
-                {b.state === 'done' ? '✓' : b.state === 'active' ? '⚠' : b.state === 'failed' ? '✗' : '·'}
+                {b.state === 'done' ? <Icon name="check" size={10} /> : b.state === 'active' ? <Icon name="alert" size={10} /> : b.state === 'failed' ? <Icon name="x" size={10} /> : '·'}
               </span>
             </span>
           ))}

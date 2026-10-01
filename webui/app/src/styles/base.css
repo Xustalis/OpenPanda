@@ -60,6 +60,14 @@ input, textarea, select {
   color: inherit;
 }
 
+/* Inline icons (components/icons.tsx): sit on the text baseline and never
+   stretch inside flex rows, matching how the emoji they replaced behaved. */
+.ico {
+  display: inline-block;
+  vertical-align: -0.14em;
+  flex: none;
+}
+
 code, pre, kbd, samp {
   font-family: var(--font-mono);
 }

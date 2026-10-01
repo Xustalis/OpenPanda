@@ -51,7 +51,7 @@ func withArtifactPool(t *testing.T, c *Core) *artifact.Store {
 // is what handleDelegate would have created on a real worker.
 func participantTask(t *testing.T, c *Core, taskID, owner string, chain []string) {
 	t.Helper()
-	if _, err := c.store.CreateWithID(context.Background(), taskID, "", "", "train a model", owner, chain); err != nil {
+	if _, err := c.store.CreateWithID(context.Background(), taskID, "", "", "train a model", owner, chain, true); err != nil {
 		t.Fatalf("create task on %s: %v", c.nodeID, err)
 	}
 }

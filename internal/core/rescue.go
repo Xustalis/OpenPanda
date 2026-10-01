@@ -26,6 +26,14 @@ const orphanedForwardGrace = 2 * time.Minute
 // and rows with last_seen=0 (never seen) are left alone.
 const stalePeerAfter = 90 * time.Second
 
+// peerFreshnessSec bounds how stale an unchanged inbound heartbeat may leave
+// last_seen before the next beat rewrites the row (ledger.HeartbeatIfChanged).
+// It must stay comfortably under stalePeerAfter — and under the panel's 45s
+// "running" window — so a peer that stops beating still flips offline on
+// schedule; 30s keeps a healthy peer's row at most ~30s old while halving the
+// write traffic a steady beat used to produce.
+const peerFreshnessSec = 30
+
 // rescueOrphanedForwards recovers tasks this node forwarded to a remote
 // executor before a restart and that Recover left queued (S1-1): the local
 // in-flight delegation state (waiter, lease, connection) died with the

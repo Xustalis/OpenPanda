@@ -10,6 +10,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,6 +90,12 @@ func runStatus(args []string) {
 	loc := i18n.Detect()
 	if len(views) == 0 {
 		fmt.Println(i18n.T(loc, "cli.status.none"))
+		// An empty fleet is exactly when the discovery list matters: a fresh
+		// node that hears beacons must still show them. --running filters the
+		// listing itself, so it suppresses this section like everywhere else.
+		if !*runningOnly {
+			printPendingTo(os.Stdout, db, loc)
+		}
 		return
 	}
 
@@ -115,6 +123,7 @@ func runStatus(args []string) {
 		cell(i18n.T(loc, "cli.col.where"), whereW),
 		cell(i18n.T(loc, "cli.col.state"), stateW),
 		cell(i18n.T(loc, "cli.col.chip"), chipW),
+		cell(i18n.T(loc, "cli.col.fp"), 17),
 		i18n.T(loc, "cli.col.seen"),
 	))
 	online := 0
@@ -133,6 +142,7 @@ func runStatus(args []string) {
 			cell(where, whereW),
 			styledCell(nodeStateWord(view), stateW, nodeStateTint(view)),
 			cell(n.Chip, chipW),
+			nodeFP(n),
 			humanAge(loc, n.LastSeen),
 		))
 		if abilities := n.Abilities(); len(abilities) > 0 {
@@ -162,6 +172,53 @@ func runStatus(args []string) {
 		case !localRunning:
 			fmt.Println(p.Muted(i18n.T(loc, "cli.status.localDown")))
 		}
+		printPendingTo(os.Stdout, db, loc)
+	}
+}
+
+// printPendingTo appends the LAN-discovery hint list: nodes broadcasting on
+// this subnet that have not been paired yet. Each line carries the beacon's
+// advertised fingerprint — the value the operator compares against the other
+// machine's own `panda nodes` row before `nodes admit <id>` / `nodes add`.
+// Rows whose id already sits in the directory are filtered: joined, not
+// pending. Writer-scoped so the REPL can route it through commandOutput.
+func printPendingTo(w io.Writer, db *sql.DB, loc i18n.Locale) {
+	pending, err := ledger.ListPending(db, 90*time.Second)
+	if err != nil || len(pending) == 0 {
+		return
+	}
+	joined, err := ledger.Query(db, "", "")
+	if err != nil {
+		return
+	}
+	fleet := make(map[string]bool, len(joined))
+	for _, v := range joined {
+		fleet[v.ID] = true
+	}
+	p := pal()
+	lines := 0
+	for _, n := range pending {
+		if fleet[n.ID] {
+			continue
+		}
+		if lines == 0 {
+			fmt.Fprintln(w)
+			fmt.Fprintln(w, p.Muted(i18n.T(loc, "cli.nodes.pending.head")))
+		}
+		lines++
+		fp := n.Fingerprint()
+		if fp == "" {
+			fp = "—"
+		}
+		fmt.Fprintln(w, row(
+			"  "+cell(n.ID, 24),
+			cell(n.Addr, 24),
+			p.Warn(fp),
+			humanAge(loc, n.LastSeen),
+		))
+	}
+	if lines > 0 {
+		fmt.Fprintln(w, p.Muted(i18n.T(loc, "cli.nodes.pending.hint")))
 	}
 }
 
@@ -196,6 +253,23 @@ func nodeStateTint(v nodeStatusView) func(string) string {
 		return p.Warn
 	default:
 		return p.Muted
+	}
+}
+
+// nodeFP renders the key column: a human-checked fingerprint carries a green
+// ✓ suffix; a TOFU-recorded one is printed bare in warn tint — present, but
+// nobody has compared it; a keyless row (node predates signed hellos) is an
+// honest dash, not a missing fingerprint wearing "unverified".
+func nodeFP(n ledger.Node) string {
+	p := pal()
+	fp := n.Fingerprint()
+	switch {
+	case fp == "":
+		return p.Muted(cell("—", 17))
+	case n.Verified():
+		return cell(fp, 16) + p.Success("✓")
+	default:
+		return p.Warn(cell(fp, 16)) + " "
 	}
 }
 
@@ -247,6 +321,58 @@ func runNodeRemove(args []string) {
 		return
 	}
 	fatal("remove node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.none", "id", id)))
+}
+
+// runNodesVerify implements `panda nodes verify <id>` — the human half of
+// TOFU. The user has compared this listing's fingerprint against the other
+// machine's own `panda nodes` row (or its first-run log line) and confirms it
+// is the key they expect; the stamp is what separates "a signed hello once
+// claimed this" from "I checked". A node whose key later changes loses the
+// stamp — see recordPeerPubKey — and must be compared and verified again.
+func runNodesVerify(args []string) {
+	fs := flag.NewFlagSet("nodes verify", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fatal("usage", fmt.Errorf("panda nodes verify <id>"))
+	}
+	id := rest[0]
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, _, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	loc := i18n.Detect()
+	nodes, err := ledger.Query(db, "", "")
+	if err != nil {
+		fatal("query employees", err)
+	}
+	for _, n := range nodes {
+		if n.ID != id {
+			continue
+		}
+		fp := n.Fingerprint()
+		if fp == "" {
+			fatal("verify node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.verify.nokey", "id", id)))
+		}
+		ok, err := ledger.MarkVerified(db, id)
+		if err != nil {
+			fatal("verify node", err)
+		}
+		if !ok {
+			fatal("verify node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.verify.nokey", "id", id)))
+		}
+		fmt.Println(i18n.Tf(loc, "cli.nodes.verify.done", "id", id, "fp", fp))
+		return
+	}
+	fatal("verify node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.none", "id", id)))
 }
 
 type nodeStatusView struct {
@@ -543,14 +669,18 @@ func runCancel(args []string) {
 }
 
 // runApprove implements `panda approve <id>` — accepts completed reviewed work
-// or resumes a task that parked before execution.
+// or resumes a task that parked before execution. -m/--answer carries the
+// reply to an agent's clarification question (PANDA_QUESTION park): the text
+// travels on task_resume and is folded into the re-run's intent.
 func runApprove(args []string) {
 	fs := flag.NewFlagSet("approve", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	answer := fs.String("m", "", "answer to a parked clarification question")
+	fs.StringVar(answer, "answer", "", "answer to a parked clarification question")
+	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "m": true, "answer": true}))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
-		fmt.Fprintln(os.Stderr, "usage: panda approve [--config PATH] <task-id>")
+		fmt.Fprintln(os.Stderr, "usage: panda approve [--config PATH] [-m ANSWER] <task-id>")
 		os.Exit(2)
 	}
 
@@ -608,7 +738,7 @@ func runApprove(args []string) {
 			fatal("ask engine", err)
 		}
 		defer engine.Close()
-		out = engine.ResumeApproved(context.Background(), id, "", askengine.StreamCallbacks{})
+		out = engine.ResumeApproved(context.Background(), id, "", askengine.StreamCallbacks{}, *answer)
 	}
 	if jsonOutput {
 		emitJSON(resultToJSON(out))
@@ -839,7 +969,8 @@ func runAuditEntries(db *sql.DB, store *core.TaskStore, taskID string) {
 	}
 }
 
-// runMetrics implements `panda metrics [--csv]` — export delegation metrics.
+// runMetrics implements `panda metrics [--csv|--runtime]` — delegation
+// metrics, or this process's runtime stats for live-load inspection.
 func runMetrics(args []string) {
 	fs := flag.NewFlagSet("metrics", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
@@ -847,7 +978,21 @@ func runMetrics(args []string) {
 	// The default was true, which made the human table below dead code — plain
 	// `panda metrics` answered "how is delegation going" with a spreadsheet.
 	asCSV := fs.Bool("csv", false, "output the full history as CSV")
+	// --runtime reports THIS process's Go runtime — goroutines, heap, GC
+	// pressure. Note it measures the `panda metrics` invocation itself, not
+	// the daemon (a separate process); for the daemon's numbers run it via
+	// the daemon host's own shell or check the panel's /api/self.
+	runtimeStats := fs.Bool("runtime", false, "print this process's runtime stats (goroutines, heap, GC)")
 	fs.Parse(args)
+
+	if *runtimeStats {
+		if jsonOutput {
+			emitJSON(snapshotRuntimeStats(*configPath))
+		} else {
+			printRuntimeStats(os.Stdout, *configPath)
+		}
+		return
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -921,22 +1066,70 @@ func runMetrics(args []string) {
 	printMetricsTableTo(os.Stdout, i18n.Detect(), metrics)
 }
 
+// runtimeStatsSnapshot gathers the numbers `panda metrics --runtime` prints —
+// shared with the --json path so both forms answer the same question.
+type runtimeStatsSnapshot struct {
+	Daemon    string `json:"daemon"`
+	ProcStats struct {
+		Goroutines int    `json:"goroutines"`
+		HeapAlloc  uint64 `json:"heap_alloc_bytes"`
+		HeapSys    uint64 `json:"heap_sys_bytes"`
+		NumGC      uint32 `json:"gc_cycles"`
+	} `json:"process"`
+}
+
+func snapshotRuntimeStats(configPath string) runtimeStatsSnapshot {
+	var snap runtimeStatsSnapshot
+	cfg, err := config.Load(configPath)
+	if err == nil {
+		pidPath := filepath.Join(filepath.Dir(cfg.Storage.DBPath), "daemon.pid")
+		if data, err := os.ReadFile(pidPath); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+				if detail, ok := daemonProcStats(pid); ok {
+					snap.Daemon = fmt.Sprintf("pid %d — %s", pid, detail)
+				} else {
+					snap.Daemon = fmt.Sprintf("pid %d not alive (stale daemon.pid)", pid)
+				}
+			}
+		}
+	}
+	if snap.Daemon == "" {
+		snap.Daemon = "no daemon.pid next to the database (not running)"
+	}
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	snap.ProcStats.Goroutines = runtime.NumGoroutine()
+	snap.ProcStats.HeapAlloc = m.HeapAlloc
+	snap.ProcStats.HeapSys = m.HeapSys
+	snap.ProcStats.NumGC = m.NumGC
+	return snap
+}
+
+// printRuntimeStats is `panda metrics --runtime`: the load numbers of the
+// long-running processes on this host. The daemon's RSS/CPU come through its
+// pid file + ps (daemonProcStats); this CLI's own Go runtime is printed too —
+// labelled, since a newborn `panda metrics` process says little on its own
+// but keeps the flag useful where no daemon runs.
+func printRuntimeStats(w io.Writer, configPath string) {
+	snap := snapshotRuntimeStats(configPath)
+	fmt.Fprintf(w, "daemon: %s\n", snap.Daemon)
+	fmt.Fprintf(w, "this process: goroutines=%d heap_alloc=%.1fMiB heap_sys=%.1fMiB gc_cycles=%d\n",
+		snap.ProcStats.Goroutines,
+		float64(snap.ProcStats.HeapAlloc)/1048576,
+		float64(snap.ProcStats.HeapSys)/1048576,
+		snap.ProcStats.NumGC)
+}
+
 // metricsListLimit caps the human listing at one screen of recent delegations.
 // The summary line above it is computed over every row, so capping the table
 // costs detail, not truth; --csv still prints the whole history.
 const metricsListLimit = 20
 
-// printMetricsTable renders delegation metrics as a summary plus the most recent
-// rows. The summary is the part that answers the question the command is asked —
-// is delegation working, and how fast — so it leads, and the rows are the
-// evidence under it.
-func printMetricsTable(loc i18n.Locale, metrics []core.DelegationMetric) {
-	printMetricsTableTo(os.Stdout, loc, metrics)
-}
-
-// printMetricsTableTo is printMetricsTable with the destination injected, so
-// the REPL (and the TUI exec pump behind it) can render the same table into
-// its transcript instead of the process stream.
+// printMetricsTableTo renders delegation metrics to w as a summary plus the
+// most recent rows. The summary is the part that answers the question the
+// command is asked — is delegation working, and how fast — so it leads, and
+// the rows are the evidence under it. The REPL (and the TUI exec pump behind
+// it) renders the same table into its transcript through this writer form.
 func printMetricsTableTo(w io.Writer, loc i18n.Locale, metrics []core.DelegationMetric) {
 	p := pal()
 	fmt.Fprintln(w, p.Muted(metricsSummary(loc, metrics)))

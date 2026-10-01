@@ -56,7 +56,7 @@ Routing criteria:
 - If a pipeline must be split across different physical machines (e.g. develop on node A, train on GPU node B, summarize on node C) → use Kind 4: plan instead of a single task.
 
 When emitting a task, output ONLY a single JSON object with no surrounding commentary or markdown code fences:
-{"kind":"task","task":{"title":"Brief title","project":"Project name or null","context_type":"file|command|hardware|stream","requires":{"abilities":["..."]},"spec":{"scope":"comma-separated relative paths to modify, or empty string","target":"What to achieve","constraints":["Constraints or prohibitions"],"success_definition":"How to verify completion"},"complexity":0.0,"risk":"low|medium|high|critical","resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short|long"}}}
+{"kind":"task","task":{"title":"Brief title","project":"Project name or null","context_type":"file|command|hardware|stream","requires":{"abilities":["..."]},"spec":{"scope":"comma-separated relative paths to modify, or empty string","target":"Faithful restatement of what the user asked — preserve their details, do not paraphrase away specifics","constraints":["Constraints or prohibitions"],"success_definition":"How to verify completion","action_spec":{"target_actuator":"hardware:x","action":"verb","parameters":{"name":0}}},"complexity":0.0,"risk":"low|medium|high|critical","tools_policy":"minimal|extended","max_turns":0,"resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short|long"}}}
 
 Task field specifications:
 - spec.scope: Comma-separated relative paths (e.g. "src/api,webui/app.tsx"). Do not write prose descriptions; leave empty ("") if uncertain or the entire work directory is allowed.
@@ -70,6 +70,10 @@ Task field specifications:
   - Agent abilities use agent:<name> (e.g. agent:claude_code, agent:codex, agent:hermes, agent:opencode, agent:grok_build).
   - NEVER fabricate IDs outside the provided list.
   - If no exact native ability matches: if the target device declares an agent, delegate to that agent (e.g. agent:claude_code). Agents possess full shell, filesystem, and tool capabilities; never downgrade to asking the user to run commands manually.
+- spec.target: Restate the user's request faithfully and completely. The executing agent reads target as its instruction — a summary that drops their specifics produces wrong work. Keep names, file paths, error messages, and numbers verbatim.
+- spec.action_spec: REQUIRED when the task drives a physical actuator — an ability whose ID starts with "hardware:" in the device list (e.g. hardware:servo_rotate, hardware:mic_record, hardware:camera_snap, hardware:notify). Emit {"target_actuator":"<the exact hardware:* ID, also placed in requires>","action":"<verb such as rotate|record|snap|notify>","parameters":{"<name>":<scalar>}}. Parameters must be scalar (number, string, or boolean) and must name the values the action implies — the driver fails loudly when a needed placeholder is missing. Omit the whole field for ordinary command/file/agent tasks.
+- tools_policy: omit or "minimal" for routine tasks. Use "extended" ONLY for high-complexity agent tasks that legitimately need the agent's full tool face (sub-agents, MCP servers, web tools).
+- max_turns: omit or 0 for the adapter default. Set higher (e.g. 60-100) only for complex multi-file build-test-debug work the 30-turn default would truncate.
 
 ═══ Kind 4: plan ═══
 When a pipeline must be split into sequential stages across DIFFERENT machines, output a multi-stage plan JSON. The sole criterion for using plan over task is: CHANGING MACHINES.
@@ -118,13 +122,16 @@ const taskExampleSection = `
     "requires": {"abilities": ["lint"]},
     "spec": {
       "scope": "Relative paths allowed to modify, comma-separated; empty if uncertain",
-      "target": "Goal to achieve",
+      "target": "Goal to achieve — restate the user's request faithfully, keep specifics verbatim",
       "node": "Preferred target node ID (optional, from device list; omit for scheduler selection)",
       "constraints": ["Prohibited actions"],
-      "success_definition": "How to verify completion"
+      "success_definition": "How to verify completion",
+      "action_spec": "ONLY when driving a hardware:* actuator: {\"target_actuator\":\"hardware:x\",\"action\":\"verb\",\"parameters\":{\"name\":value}}"
     },
     "complexity": 0.0,
     "risk": "low|medium|high|critical",
+    "tools_policy": "minimal|extended (optional; extended only for complex agent work needing full tool face)",
+    "max_turns": 0,
     "resource_profile": {"cpu": 1, "ram_gb": 1, "gpu_vram_gb": 0, "duration_hint": "short|long"}
   }
 }

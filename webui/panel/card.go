@@ -14,6 +14,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/cardmut"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -155,7 +156,8 @@ type agentRequest struct {
 	Adapter      *string `json:"adapter"`
 	InstallCheck *string `json:"install_check"`
 	// Command is the argv template generic.py expands — set it when the
-	// adapter is generic.py (e.g. "zcode --prompt {prompt}").
+	// adapter is generic.py (e.g. "zcode --prompt {prompt}"; {stdin}, {cwd},
+	// {resume} and {max_turns} placeholders are also understood).
 	Command      *string  `json:"command"`
 	Capabilities []string `json:"capabilities"`
 	BestAt       []string `json:"best_at"`
@@ -359,6 +361,7 @@ type nodesAddResult struct {
 	SecretGen      bool     `json:"secret_generated"`
 	Dialed         bool     `json:"dialed"`
 	DialError      string   `json:"dial_error,omitempty"`
+	CleartextHint  bool     `json:"cleartext_hint,omitempty"`
 	ConfigPath     string   `json:"config_path"`
 	ListenAddr     string   `json:"listen_addr"`
 	InviteSteps    []string `json:"invite_steps"`
@@ -383,8 +386,8 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("addr is required"))
 		return
 	}
-	if _, _, err := net.SplitHostPort(req.Addr); err != nil {
-		writeErr(w, http.StatusBadRequest, errors.New("addr must be host:port"))
+	if err := config.ValidatePeerAddr(req.Addr); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("addr must be host:port, punch:<node-id>, or a ws(s):// URL"))
 		return
 	}
 	if h.cfg == nil {
@@ -397,11 +400,12 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 	// UpdateNetworkSection rewrites the whole section — a concurrent save
 	// between the two calls used to lose one side.
 	var secret, listenAddr string
-	var generated bool
+	var generated, allowCleartext bool
 	added := true
 	err := h.mutateCfgErr(func(c *config.Config) error {
 		listenAddr = c.Network.ListenAddr
 		secret = c.Network.SharedSecret
+		allowCleartext = c.Network.AllowCleartext
 		if secret == "" {
 			var err error
 			secret, err = generatePanelSecret()
@@ -452,11 +456,16 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 		listen = "<this-machine>" + port
 	}
 	writeJSON(w, nodesAddResult{
-		Addr:           req.Addr,
-		Added:          added,
-		SecretGen:      generated,
-		Dialed:         dialed,
-		DialError:      dialErr,
+		Addr:      req.Addr,
+		Added:     added,
+		SecretGen: generated,
+		Dialed:    dialed,
+		DialError: dialErr,
+		// The write succeeded but the daemon's cleartext gate may still
+		// refuse every dial — surface that next to the join guide, the same
+		// advisory the CLI prints, so the refusal doesn't only live in
+		// daemon logs.
+		CleartextHint:  core.CleartextDialError(req.Addr, allowCleartext) != nil,
 		ConfigPath:     h.configPath,
 		ListenAddr:     listen,
 		InstallCommand: "curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh",

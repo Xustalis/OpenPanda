@@ -5,14 +5,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Xustalis/OpenPanda/internal/agents"
 )
 
-// mcpPassthroughAdapters are the adapter scripts whose CLIs discover a
-// project-level MCP config (.mcp.json) in their working directory. Only
-// these receive the materialized config under the extended tools policy;
-// every other agent's MCP story stays governed by its own config files.
-var mcpPassthroughAdapters = map[string]bool{
-	"claude_code.py": true,
+// adapterDiscoversProjectMCP reports whether the CLI an adapter drives
+// auto-discovers a project-level MCP config (.mcp.json) in its working
+// directory. The answer is the registry's capability declaration
+// (Capabilities.DiscoversProjectMCP), so the passthrough allowlist cannot
+// drift from the manifest that describes the agent.
+func adapterDiscoversProjectMCP(adapter string) bool {
+	k, ok := agents.ByAdapter(adapter)
+	return ok && k.Capabilities.DiscoversProjectMCP
 }
 
 // mcpProjectFile is the project-level MCP config name the supported CLIs
@@ -34,7 +38,7 @@ const mcpProjectFile = ".mcp.json"
 // and a panda-owned MCP config has no business riding inside that tree.
 func (r *Router) materializeMCPPassthrough(adapter, cwd string) func() {
 	noop := func() {}
-	if r.toolsPolicy != "extended" || cwd == "" || !mcpPassthroughAdapters[adapter] {
+	if r.toolsPolicy != "extended" || cwd == "" || !adapterDiscoversProjectMCP(adapter) {
 		return noop
 	}
 	type serverSpec struct {
