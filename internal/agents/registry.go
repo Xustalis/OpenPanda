@@ -126,20 +126,32 @@ type Known struct {
 
 // Capabilities describes the native feature surface one agent CLI exposes.
 // Each flag is true when the agent's documented CLI surface includes the
-// corresponding feature; `panda agents` displays them today, and the routing
-// layer / prompt builder are planned to read them instead of hard-coding
-// per-adapter knowledge.
+// corresponding feature; the commander reads them instead of hard-coding
+// per-adapter tables (the restricted-mode and MCP-passthrough allowlists
+// used to live in their own maps and drifted out of sync with this one).
 type Capabilities struct {
 	// SupportsSkills means the agent has a native skill/library concept
 	// reachable when the tool whitelist is lifted (extended policy).
 	SupportsSkills bool
-	// SupportsMCP means the agent auto-discovers project-level MCP
-	// servers (.mcp.json in its cwd) when the extended policy writes one.
+	// SupportsMCP means the agent can consume MCP servers in some form
+	// (its own config files, flags, or project discovery). This is the
+	// broad capability; DiscoversProjectMCP is the specific mechanism the
+	// commander's .mcp.json passthrough requires.
 	SupportsMCP bool
 	// SupportsSubagents means the agent can spawn its own child agents
 	// (e.g. Claude's Task tool); the orchestration layer records the
 	// delegation events when the extended policy lifts the whitelist.
 	SupportsSubagents bool
+	// SupportsRestricted means the adapter can express a read-only tool
+	// face (no shell, no writes) for unconsented remote tasks. Adapters
+	// without the flag must never be asked for one — a restricted request
+	// sent to a full-power CLI would silently run unconfined, so the
+	// scheduler refuses the attempt instead of degrading (fail closed).
+	SupportsRestricted bool
+	// DiscoversProjectMCP means the agent CLI auto-discovers a project-level
+	// MCP config (.mcp.json) in its working directory, so the commander can
+	// materialize the configured passthrough servers for one run.
+	DiscoversProjectMCP bool
 }
 
 // ModelEnvMapping names the env vars one agent CLI reads for its model
@@ -198,6 +210,10 @@ var known = []Known{
 			SupportsSkills:    true,
 			SupportsMCP:       true,
 			SupportsSubagents: true,
+			// claude --allowedTools can express a read-only face, and the CLI
+			// auto-discovers .mcp.json in its working directory.
+			SupportsRestricted:  true,
+			DiscoversProjectMCP: true,
 		},
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "refactoring"},
 		DefaultBestAt:       []string{"multi_file_edits", "code_search", "refactoring", "complex_reasoning"},
@@ -248,6 +264,9 @@ var known = []Known{
 			APIKey:  "OPENAI_API_KEY",
 			Model:   "OPENAI_MODEL",
 		},
+		// codex's own sandbox levels include a real read-only mode
+		// (--sandbox read-only), so it can honor restricted runs.
+		Capabilities:        Capabilities{SupportsRestricted: true},
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "code_review"},
 		DefaultBestAt:       []string{"code_review", "running_tests", "multi_file_edits"},
 		DefaultCostTier:     "medium",
@@ -426,4 +445,33 @@ func ByAdapter(adapter string) (Known, bool) {
 		}
 	}
 	return Known{}, false
+}
+
+// GenericAdapter is the script name of the template-driven adapter
+// (adapters/generic.py). Any card agent may point at it, so an adapter-script
+// lookup cannot identify WHICH agent a generic run belongs to — the card's
+// agent name is the identity there, not the adapter.
+const GenericAdapter = "generic.py"
+
+// Lookup resolves a card agent entry (name + adapter) to its registry record.
+//
+// The card's own agent name wins, but only when the entry's adapter agrees
+// with the registry record's — a card naming an agent "codex" while pointing
+// at claude_code.py must not inherit codex's credential manifest. For bespoke
+// adapters the adapter script alone identifies the contract, so a renamed
+// card entry still resolves (a card may call the claude adapter anything).
+//
+// GenericAdapter is the exception that makes the name lookup load-bearing:
+// any number of unrelated CLIs share the script, so an unknown name on it
+// resolves to nothing rather than to whichever registry agent happens to use
+// generic.py. Without this rule every custom CLI silently inherited zcode's
+// binaries, credential manifest and endpoint.
+func Lookup(name, adapter string) (Known, bool) {
+	if k, ok := ByName(name); ok && k.Adapter == adapter {
+		return k, true
+	}
+	if adapter == GenericAdapter {
+		return Known{}, false
+	}
+	return ByAdapter(adapter)
 }
