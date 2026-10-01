@@ -121,20 +121,14 @@ func Restricted(ctx context.Context) bool {
 	return v
 }
 
-// restrictedCapable lists the adapters that can express a read-only tool
-// face. Everything else (hermes --yolo, agy --dangerously-skip-permissions,
-// opencode --auto, generic argv templates …) has no restricted mode at all,
-// so a restricted request sent to them would silently run full-power: the
-// scheduler must instead refuse the attempt — fail closed, never degrade.
-var restrictedCapable = map[string]bool{
-	"claude_code.py": true,
-	"codex.py":       true,
-}
-
 // AdapterSupportsRestricted reports whether the named adapter can honor a
-// read-only run. Unknown adapters get false — a miss means refuse.
+// read-only run. The answer comes from the agent registry's capability
+// declaration (Capabilities.SupportsRestricted), not a local table, so the
+// allowlist cannot drift from the manifest that describes the adapter.
+// Unknown adapters get false — a miss means refuse.
 func AdapterSupportsRestricted(adapter string) bool {
-	return restrictedCapable[adapter]
+	k, ok := agents.ByAdapter(adapter)
+	return ok && k.Capabilities.SupportsRestricted
 }
 
 // maxTurnsKey carries a per-task agent turn cap (spec.max_turns) down to the
@@ -164,6 +158,31 @@ func WithAgentCommand(ctx context.Context, cmd string) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, agentCmdKey{}, cmd)
+}
+
+// agentNameKey carries the card's agent name (the map key in
+// card.Agents, e.g. "claude_code") down to runAdapterDefault, so
+// registry lookups can key on the agent rather than the adapter script —
+// essential for generic.py, where the script name alone cannot identify
+// which CLI the card wired.
+type agentNameKey struct{}
+
+// WithAgentName attaches the card agent name to the execution context;
+// runAdapterDefault reads it for name-aware registry lookups. Empty is a
+// no-op.
+func WithAgentName(ctx context.Context, name string) context.Context {
+	if name == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, agentNameKey{}, name)
+}
+
+// AgentName reads the card agent name WithAgentName attached — "" when none.
+func AgentName(ctx context.Context) string {
+	if v, ok := ctx.Value(agentNameKey{}).(string); ok {
+		return v
+	}
+	return ""
 }
 
 // taskIDKey carries the OpenPanda task ID down to the adapter subprocess.
@@ -271,8 +290,14 @@ func (w *progressWriter) line(b []byte) {
 		Note string `json:"note"`
 		Kind string `json:"kind"`
 	}
-	if err := json.Unmarshal(b, &probe); err == nil && probe.Type == "progress" && probe.Note != "" {
+	if err := json.Unmarshal(b, &probe); err == nil && probe.Type == "progress" {
 		note := strings.TrimSpace(probe.Note)
+		if note == "" {
+			// A well-formed progress envelope with an empty note carries no
+			// information; drop it rather than parking a blank event on the
+			// task timeline.
+			return
+		}
 		if len([]rune(note)) > 300 {
 			note = string([]rune(note)[:300]) + "\u2026"
 		}
@@ -398,9 +423,11 @@ func adapterCandidateDirs(exe string) []string {
 
 // adapterPath joins an adapter name under adapterDir, rejecting any name that
 // could escape it via a path separator or a ".." element (P2-5). Adapter names
-// are flat filenames, so anything path-like is a traversal attempt.
+// are flat filenames, so anything path-like is a traversal attempt. A colon is
+// rejected too — on Windows "C:" / "file:stream" name a drive or an alternate
+// data stream, and no legitimate adapter name needs one.
 func adapterPath(name string) (string, error) {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\:`) {
 		return "", fmt.Errorf("invalid adapter name %q", name)
 	}
 	return filepath.Join(resolveAdapterDir(), name), nil
@@ -423,8 +450,8 @@ type AdapterRequest struct {
 	ToolsPolicy string `json:"tools_policy,omitempty"`
 	// Restricted asks for the adapter's read-only mode and OUTRANKS
 	// ToolsPolicy: an unconsented remote task on an operator who chose
-	// extended still gets no shell. Only adapters in restrictedCapable ever
-	// see it set.
+	// extended still gets no shell. Only adapters whose registry entry
+	// declares Capabilities.SupportsRestricted ever see it set.
 	Restricted bool `json:"restricted,omitempty"`
 	// TaskID carries the OpenPanda task ID that this process executes for.
 	// Used for causal subagent tree linkage and subtask dispatch.
@@ -456,31 +483,33 @@ type UsageDetail struct {
 // fall back to the same defaults the entry model applies, so the adapter and
 // entry never diverge.
 func modelEnv(model config.ModelConfig) []string {
-	return modelEnvForAdapter(model, "claude_code.py")
+	return modelEnvForAdapter(model, "claude_code", "claude_code.py")
 }
 
 // modelEnvForAdapter maps PANDA's provider config onto the adapter's env
 // contract declared in the agent registry (credential manifest); adapters
 // without a declared mapping — or a config the mapping cannot carry — get no
-// override. The DeepSeek flash guard applies here too (effectiveModelName):
-// deepseek-v4-pro is never injected on any path.
-func modelEnvForAdapter(model config.ModelConfig, adapter string) []string {
-	if !supportsModelInjection(adapter, model) {
+// override. The registry record is resolved by agent name + adapter (see
+// agents.Lookup), so a custom CLI on generic.py never receives another
+// agent's env mapping. The DeepSeek flash guard applies here too
+// (effectiveModelName): deepseek-v4-pro is never injected on any path.
+func modelEnvForAdapter(model config.ModelConfig, name, adapter string) []string {
+	if !supportsModelInjection(name, adapter, model) {
 		return nil
 	}
-	k, _ := agents.ByAdapter(adapter)
+	k, _ := agents.Lookup(name, adapter)
 	if k.ModelEnv == nil {
 		return nil
 	}
 	var env []string
 	if k.ModelEnv.BaseURL != "" {
-		env = append(env, k.ModelEnv.BaseURL+"="+effectiveBaseURLFor(adapter, model))
+		env = append(env, k.ModelEnv.BaseURL+"="+effectiveBaseURLFor(name, adapter, model))
 	}
 	if k.ModelEnv.APIKey != "" {
 		env = append(env, k.ModelEnv.APIKey+"="+model.APIKey)
 	}
 	if k.ModelEnv.Model != "" {
-		env = append(env, k.ModelEnv.Model+"="+effectiveModelNameFor(adapter, model))
+		env = append(env, k.ModelEnv.Model+"="+effectiveModelNameFor(name, adapter, model))
 	}
 	env = append(env, "OPENPANDA_INJECTED_MODEL=1")
 	if adapter == "claude_code.py" {
@@ -490,12 +519,13 @@ func modelEnvForAdapter(model config.ModelConfig, adapter string) []string {
 }
 
 // adapterCredentialEnv preserves only credentials explicitly belonging to the
-// selected adapter, per its registry credential manifest. Sandbox.Apply
+// selected agent, per its registry credential manifest. Sandbox.Apply
 // clears the parent environment, so without this bridge native Claude/Codex
 // credentials detected by InjectionDecision would disappear before the CLI
-// starts.
-func adapterCredentialEnv(adapter string) []string {
-	k, ok := agents.ByAdapter(adapter)
+// starts. The manifest is resolved by agent name + adapter (agents.Lookup):
+// a generic.py custom CLI has no manifest and gets no forwarded keys.
+func adapterCredentialEnv(name, adapter string) []string {
+	k, ok := agents.Lookup(name, adapter)
 	if !ok {
 		return nil
 	}
@@ -607,6 +637,16 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		req.ToolsPolicy = policy
 	}
 	if Restricted(ctx) {
+		// Fail closed at the process boundary too, not just in execAgent's
+		// candidate filter: a restricted request sent to an adapter that
+		// cannot express a read-only face would silently run full-power.
+		if !AdapterSupportsRestricted(name) {
+			return AgentResult{
+				OK:       false,
+				ExitCode: 1,
+				Result:   "adapter " + name + " has no restricted mode; refusing unconsented remote task",
+			}
+		}
 		req.Restricted = true
 	}
 	if mt, ok := ctx.Value(maxTurnsKey{}).(int); ok && mt > 0 {
@@ -617,7 +657,10 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	}
 	if tid := TaskID(ctx); tid != "" {
 		req.TaskID = tid
-		env = append(env, "PANDA_TASK_ID="+tid)
+		// Copy before appending: the caller's slice may share a backing
+		// array with headroom, and this frame's addition must not leak into
+		// the caller's next reuse of it.
+		env = append(append([]string(nil), env...), "PANDA_TASK_ID="+tid)
 	}
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
@@ -711,7 +754,11 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	// WaitDelay bounds that wait: the goroutines are abandoned, and since
 	// executil kills the whole process group the pipes close anyway.
 	cmd.WaitDelay = 5 * time.Second
-	security.NewSandbox(cwd).Apply(cmd, env...)
+	// ApplyPolicy installs the filtered env/cwd and — when the configured
+	// sandbox mode is on — wraps the adapter in the OS confinement profile:
+	// workdir+toolchain writable, this agent's credential dirs writable,
+	// foreign credential dirs and OS secrets read-denied under strict.
+	security.NewSandbox(cwd).ApplyPolicy(cmd, adapterSandboxPolicy(name, cwd), env...)
 
 	if err := cmd.Run(); err != nil {
 		actMu.Lock()

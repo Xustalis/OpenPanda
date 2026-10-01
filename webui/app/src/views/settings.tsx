@@ -534,7 +534,14 @@ function PolicySection() {
         <div class="field-group">
           <label>{t('settings.sandbox')}</label>
           <p class="hint">
-            {t('settings.sandboxDesc')}
+            {form.sandbox.mode && form.sandbox.mode !== 'off' && form.sandbox.backend
+              ? t('settings.sandboxDescOn')
+              : t('settings.sandboxDesc')}
+            {form.sandbox.mode && form.sandbox.mode !== 'off' && (
+              <span class="mono">
+                {' '}{form.sandbox.mode}{form.sandbox.backend ? ` (${form.sandbox.backend})` : ''} ·
+              </span>
+            )}
             {form.sandbox.work_path && <span class="mono"> {form.sandbox.work_path}</span>}
           </p>
         </div>

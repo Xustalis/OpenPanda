@@ -41,6 +41,7 @@ type Config struct {
 	Timeouts  TimeoutsConfig  `yaml:"timeouts"`
 	UI        UIConfig        `yaml:"ui"`
 	Skills    SkillsConfig    `yaml:"skills"`
+	Sandbox   SandboxConfig   `yaml:"sandbox"`
 }
 
 // SkillsConfig controls procedural memory and skills hub settings.
@@ -364,6 +365,55 @@ type StorageConfig struct {
 // LogConfig controls structured logging.
 type LogConfig struct {
 	Level string `yaml:"level"` // debug | info | warn | error
+}
+
+// SandboxConfig controls the OS-level confinement applied to every subprocess
+// the commander spawns — native commands and agent adapters alike. It sits on
+// top of the environment filter security.Sandbox has always provided.
+//
+//	mode: off | standard | strict   (default off — historical behavior)
+//	  off:      environment filtering only, no OS boundary.
+//	  standard: deny-default file-write confinement — a subprocess can write
+//	            only the task directory plus whitelisted runtime dirs; every
+//	            other write fails with EPERM. deny_write_paths lose write
+//	            access even when they sit under a whitelisted parent.
+//	  strict:   standard plus read denial of the system's credential
+//	            locations (~/.ssh, ~/.aws, agent credential dirs belonging
+//	            to a different adapter, …) and deny_read_paths.
+//
+//	mode: standard/strict is a no-op on a platform with no backend
+//	  (seatbelt on macOS, bubblewrap on Linux); the daemon logs which
+//	  backend took effect at startup.
+//
+// Path lists accept absolute paths, "~"-relative paths, and bare names
+// (resolved against $HOME), so they match the spelling credential manifests
+// already use.
+type SandboxConfig struct {
+	Mode           string   `yaml:"mode"`
+	AllowNetwork   *bool    `yaml:"allow_network"` // default true; false cuts sockets entirely
+	WritablePaths  []string `yaml:"writable_paths"`
+	DenyReadPaths  []string `yaml:"deny_read_paths"`
+	DenyWritePaths []string `yaml:"deny_write_paths"`
+}
+
+// NormalizedMode folds unset/unknown spellings into the canonical mode names
+// ("off", "standard", "strict") — anything unrecognized fails closed-ish by
+// degrading to "off" rather than inventing a policy.
+func (s SandboxConfig) NormalizedMode() string {
+	switch strings.ToLower(strings.TrimSpace(s.Mode)) {
+	case "standard":
+		return "standard"
+	case "strict":
+		return "strict"
+	default:
+		return "off"
+	}
+}
+
+// NetworkEnabled reports the effective network flag: unset means allowed,
+// matching the historical no-confinement behavior.
+func (s SandboxConfig) NetworkEnabled() bool {
+	return s.AllowNetwork == nil || *s.AllowNetwork
 }
 
 // Built-in timeout defaults, used when timeouts.* is unset. The lease must stay

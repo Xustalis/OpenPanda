@@ -511,7 +511,8 @@ const ja: Messages = {
   'settings.approval.never': 'しない',
   'settings.approvalHelp': 'リスクのある操作をパネルで承認待ちにするかどうか。',
   'settings.sandbox': 'サンドボックス',
-  'settings.sandboxDesc': 'すべてのエージェントサブプロセスは既に作業パス内への隔離下で実行されています — 読み取り専用の説明であり、スイッチではありません：',
+  'settings.sandboxDesc': 'サブプロセスはフィルタ済み環境で作業パス内に実行されますが、OS レベルの隔離はオフです — config.yaml の sandbox.mode を standard または strict に設定すると有効になります。作業パス:',
+  'settings.sandboxDescOn': 'OS サンドボックスが有効 — サブプロセスは作業パスと許可ディレクトリ内のみ書き込み可能です。読み取り専用ステータス:',
 
   // 記憶コンソール拡張（C2）
   'memory.graph': 'グラフ',

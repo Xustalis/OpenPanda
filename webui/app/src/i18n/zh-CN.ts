@@ -529,7 +529,8 @@ const zhCN: Messages = {
   'settings.approval.never': '从不',
   'settings.approvalHelp': '高风险操作是否在面板中等待你的批准。',
   'settings.sandbox': '沙箱',
-  'settings.sandboxDesc': '每个 agent 子进程都已被限制在其工作路径内运行 — 只读说明，不是开关：',
+  'settings.sandboxDesc': '子进程在工作路径内运行且环境变量经过过滤，但 OS 级隔离未开启 — 在 config.yaml 设置 sandbox.mode 为 standard 或 strict 后生效。工作路径：',
+  'settings.sandboxDescOn': 'OS 沙箱已启用 — 子进程只能写入工作路径及白名单目录。只读状态：',
 
   // 记忆台扩展（C2）
   'memory.graph': '图谱',

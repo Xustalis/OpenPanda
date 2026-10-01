@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/artifact"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/guard"
@@ -377,6 +378,41 @@ func runDaemon(args []string) {
 		coreNode.SetWorkDir(cfg.Storage.WorkPath)
 	}
 	coreNode.SetHostStatePaths(hostStatePaths(cfg))
+	// OS sandbox (sandbox.*): the environment filter always applies; when a
+	// mode is configured, every spawned native command and adapter runs under
+	// the platform's deny-default confinement on top. The node's own
+	// bookkeeping — database dir, memory stores, artifact pool, the config
+	// and card files — is write-protected at the sandbox layer too, so a
+	// confused task cannot corrupt the very state the drift detector and
+	// audit chain verify. hostStatePaths is NOT reused verbatim: it also
+	// lists workPath/.claude, the agent's own project config, and denying
+	// that would break the CLI's settings writes mid-run.
+	protected := []string{
+		filepath.Dir(cfg.Storage.DBPath), // data/: openpanda.db + -wal/-shm
+		cfg.Storage.DBPath,               // the database file itself
+		cfg.Storage.MemoryPath,
+		cfg.Storage.ProjectsPath,
+		cfg.Storage.SkillsPath,
+		cfg.Storage.ArtifactPath,
+		cfg.Storage.ContextPath,
+		*configPath,
+		// The arbitration backup tree lives inside the task workdir — writable
+		// in every other respect — so it needs an explicit write deny or an
+		// agent could rewrite the copies a preemption merge restores from.
+		filepath.Join(cfg.Storage.WorkPath, ".panda-shadow"),
+	}
+	protected = append(protected, cfg.Storage.ArtifactExtraPaths...)
+	if *cardPath != "" {
+		protected = append(protected, *cardPath)
+	}
+	if mode := cfg.Sandbox.NormalizedMode(); mode != "off" {
+		if backend := commander.SetSandboxConfig(cfg.Sandbox, protected); backend == "" {
+			logger.Warn("sandbox mode configured but no backend on this platform",
+				"mode", mode)
+		} else {
+			logger.Info("subprocess sandbox enabled", "mode", mode, "backend", backend)
+		}
+	}
 	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
 	coreNode.SetAllowCleartext(cfg.Network.AllowCleartext)
 	// The artifact pool is the data plane: a stage's packed output, named by its

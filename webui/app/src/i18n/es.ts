@@ -518,7 +518,9 @@ const es: Messages = {
   'settings.approvalHelp': 'Si las acciones arriesgadas esperan tu aprobación en el panel.',
   'settings.sandbox': 'Sandbox',
   'settings.sandboxDesc':
-    'Cada subproceso de agente ya se ejecuta confinado a su ruta de trabajo — descripción de solo lectura, no un interruptor:',
+    'Los subprocesos se ejecutan con entorno filtrado en su ruta de trabajo, pero el confinamiento a nivel de SO está desactivado — activa sandbox.mode (standard o strict) en config.yaml. Ruta de trabajo:',
+  'settings.sandboxDescOn':
+    'Sandbox de SO activo — los subprocesos solo pueden escribir en su ruta de trabajo y directorios permitidos. Estado de solo lectura:',
 
   // Extensiones de la consola de memoria (C2)
   'memory.graph': 'Grafo',

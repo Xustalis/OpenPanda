@@ -518,7 +518,9 @@ const de: Messages = {
   'settings.approvalHelp': 'Ob riskante Aktionen im Panel auf deine Freigabe warten.',
   'settings.sandbox': 'Sandbox',
   'settings.sandboxDesc':
-    'Jeder Agent-Subprozess läuft bereits auf seinen Arbeitspfad beschränkt — reine Nur-Lese-Beschreibung, kein Schalter:',
+    'Subprozesse laufen mit gefilterter Umgebung in ihrem Arbeitspfad, aber OS-Isolation ist aus — sandbox.mode (standard oder strict) in config.yaml aktivieren. Arbeitspfad:',
+  'settings.sandboxDescOn':
+    'OS-Sandbox aktiv — Subprozesse dürfen nur in Arbeitspfad und erlaubte Verzeichnisse schreiben. Nur-Lese-Status:',
 
   // Gedächtniskonsole-Erweiterungen (C2)
   'memory.graph': 'Graph',

@@ -481,8 +481,9 @@ export interface CardNative {
 export interface CardAgent {
   adapter: string
   install_check?: string
-  /** argv template generic.py expands ({prompt} placeholder) — set only for
-   *  agents wired through the generic adapter. */
+  /** argv template generic.py expands — {prompt} placeholder, plus {stdin},
+   *  {cwd}, {resume} and {max_turns}. Set only for agents wired through the
+   *  generic adapter. */
   command?: string
   capabilities?: string[]
   best_at?: string[]
@@ -556,7 +557,9 @@ export interface AppSettings {
   /** Agent tool face: minimal keeps each adapter's whitelist, extended reaches
    *  the agent's own skills, sub-agents and MCP servers. */
   tools_policy: 'minimal' | 'extended'
-  sandbox?: { work_path: string } // GET-only: read-only confinement info
+  /** GET-only: read-only confinement info. mode is off|standard|strict from
+   *  config.yaml; backend is the OS mechanism in effect (seatbelt|bwrap|""). */
+  sandbox?: { work_path: string; mode?: string; backend?: string }
 }
 
 /** One topics/*.md (or daily/*.md) file in GET /api/memory. */

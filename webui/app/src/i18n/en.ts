@@ -544,7 +544,9 @@ const en: Messages = {
   'settings.approvalHelp': 'Whether risky actions wait for your approval in the panel.',
   'settings.sandbox': 'Sandbox',
   'settings.sandboxDesc':
-    'Every agent subprocess already runs confined to its work path — read-only description, not a switch:',
+    'Subprocesses run with a filtered environment in their work path, but OS-level confinement is off — set sandbox.mode in config.yaml to standard or strict to enable it. Work path:',
+  'settings.sandboxDescOn':
+    'OS sandbox is active — subprocesses may only write inside their work path and whitelisted dirs. Read-only status:',
 
   // Memory console extensions (C2)
   'memory.graph': 'Graph',
