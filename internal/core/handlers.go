@@ -1056,7 +1056,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// so the decision does not vary between an initial run and a re-delegation.
 	var injection commander.InjectionDecision
 	if plan.Kind == "agent" {
-		injection = router.InjectionDecision(plan.Adapter)
+		injection = router.InjectionDecision(plan.Agent, plan.Adapter)
 	}
 
 	// workDir is normally the node-wide execution directory; a queued task may
@@ -3006,7 +3006,10 @@ func (c *Core) replyResult(ctx context.Context, env bus.Envelope, result bus.Tas
 	c.outboxDrop(ctx, env.From, result.TaskID)
 }
 
-// reply sends a message back to the sender of env.
+// reply sends a message back to the sender of env. It goes through sendTo —
+// not connFor+Send — so a peer whose only live path is a punched datagram
+// route still gets its answer when the frame fits, and every caller shares
+// the same fallback instead of replies alone blackholing on NAT-bound links.
 func (c *Core) reply(ctx context.Context, env bus.Envelope, typ string, payload any) error {
 	msgID, err := newUUID()
 	if err != nil {
@@ -3017,14 +3020,11 @@ func (c *Core) reply(ctx context.Context, env bus.Envelope, typ string, payload 
 		return err
 	}
 	envOut.To = env.From
-	conn := c.connFor(env.From)
-	if conn == nil {
-		// No return channel for this peer (e.g. it just disconnected);
-		// the result will be recovered via a later heartbeat/sync.
-		c.logger.Warn("no peer connection to reply", "peer", env.From, "type", typ)
-		return errors.New("no peer")
+	if err := c.sendTo(env.From, envOut); err != nil {
+		c.logger.Warn("reply: no path to peer", "peer", env.From, "type", typ, "err", err)
+		return err
 	}
-	return conn.Send(envOut)
+	return nil
 }
 
 // isOutputStagnant reports whether an agent's output across consecutive supervision rounds
