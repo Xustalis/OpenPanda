@@ -61,8 +61,10 @@ agents:
 
   # Any headless CLI works without a bespoke adapter: adapter: generic.py +
   # a command template. {prompt} is substituted as one literal argv element
-  # (appended when absent). Pick the CLI's non-interactive flags — a headless
-  # run cannot answer a permission prompt.
+  # (appended when absent); {stdin} pipes the prompt to the CLI's stdin
+  # instead, and {cwd} / {resume} / {max_turns} fill in per-task values.
+  # Pick the CLI's non-interactive flags — a headless run cannot answer a
+  # permission prompt.
   #
   # zcode (Z.AI) — detected automatically via the registry; its headless
   # contract is `zcode --prompt "…"` (community-verified, undocumented

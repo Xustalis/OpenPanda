@@ -296,8 +296,13 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
     return proc.returncode, "".join(err_chunks), timed_out
 
 
-def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT):
+def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, input=None):
     """One-shot runtime: capture stdout/stderr verbatim with a hard timeout.
+
+    input (optional) is piped to the child's stdin — the generic adapter's
+    {stdin} placeholder delivers the prompt this way, both for CLIs whose
+    headless contract reads stdin and for prompts too large for an argv
+    element. Unset keeps stdin at DEVNULL so a CLI that asks cannot block.
 
     Returns (returncode, stdout, stderr). Raises subprocess.TimeoutExpired
     (with the whole tree already killed) when the deadline passes and
@@ -306,12 +311,13 @@ def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT):
     working.
     """
     proc = subprocess.Popen(
-        cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        cmd, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True, env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
     )
     try:
-        out, err = proc.communicate(timeout=timeout)
+        out, err = proc.communicate(input=input, timeout=timeout)
     except subprocess.TimeoutExpired:
         kill_tree(proc)
         proc.communicate()  # reap + drain: the closed pipes return immediately
@@ -319,20 +325,30 @@ def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT):
     return proc.returncode, out, err
 
 
-def run_simple(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, label=None):
+def run_simple(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, label=None, input=None):
     """Full plain-adapter main loop: run cmd and emit the unified result.
 
     stdout is the result (verbatim); on failure the stderr diagnosis is the
-    fallback text. Timeout → exit_code 124, missing binary → 127. This is the
-    whole adapter for CLIs without a streaming contract.
+    fallback text. Timeout → exit_code 124, missing binary → 127, a binary
+    that is present but not executable → 126 (the shell convention), and any
+    other spawn failure — an argv element past the OS limit, ENOEXEC — → 1
+    with the OS error as the diagnosis: an unhandled spawn exception would
+    surface upstream as "adapter output not JSON" instead of the real cause.
+    input is the optional stdin payload (see run_plain).
     """
     label = label or (cmd[0] if cmd else "cli")
     try:
-        returncode, out, err = run_plain(cmd, cwd=cwd, timeout=timeout)
+        returncode, out, err = run_plain(cmd, cwd=cwd, timeout=timeout, input=input)
     except subprocess.TimeoutExpired:
         emit(False, label + " timed out", 124)
         return
     except FileNotFoundError:
         emit(False, label + " binary not found", 127)
         return
-    emit(returncode == 0, out.strip() or err.strip(), returncode)
+    except PermissionError:
+        emit(False, label + " is not executable", 126)
+        return
+    except OSError as ex:
+        emit(False, f"{label} spawn failed: {ex}", 1)
+        return
+    emit(returncode == 0, out.strip() or err.strip() or "(no output)", returncode)

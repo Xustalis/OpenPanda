@@ -94,11 +94,13 @@ type Agent struct {
 	Adapter      string `yaml:"adapter" json:"adapter"`
 	InstallCheck string `yaml:"install_check" json:"install_check"`
 	// Command is the argv template the generic adapter (generic.py) expands:
-	// shlex-split, every "{prompt}" placeholder replaced by the task prompt as
-	// one literal argv element (appended when no placeholder is present). It
-	// lets a card wire ANY headless CLI — `command: "zcode --prompt {prompt}"`
-	// — without a bespoke adapter script. Ignored by adapters that carry their
-	// own command line. Never crosses the wire (CapabilitySummary carries only
+	// shlex-split, with "{prompt}" replaced by the task prompt as one literal
+	// argv element (appended when no placeholder is present), plus optional
+	// {stdin} (pipe the prompt to the child's stdin), {cwd}, {resume} and
+	// {max_turns} placeholders (see the generic.py docstring). It lets a card
+	// wire ANY headless CLI — `command: "zcode --prompt {prompt}"` — without
+	// a bespoke adapter script. Ignored by adapters that carry their own
+	// command line. Never crosses the wire (CapabilitySummary carries only
 	// capability tags), so it stays a local declaration like NativeAbility.
 	Command      string   `yaml:"command,omitempty" json:"command,omitempty"`
 	Capabilities []string `yaml:"capabilities" json:"capabilities"`
