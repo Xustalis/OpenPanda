@@ -133,6 +133,9 @@ func main() {
 				case "admit":
 					runNodesAdmit(args[1:])
 					return
+				case "drain":
+					runNodesDrain(args[1:])
+					return
 				}
 			}
 			runStatus(args)
@@ -386,26 +389,10 @@ func runDaemon(args []string) {
 	// confused task cannot corrupt the very state the drift detector and
 	// audit chain verify. hostStatePaths is NOT reused verbatim: it also
 	// lists workPath/.claude, the agent's own project config, and denying
-	// that would break the CLI's settings writes mid-run.
-	protected := []string{
-		filepath.Dir(cfg.Storage.DBPath), // data/: openpanda.db + -wal/-shm
-		cfg.Storage.DBPath,               // the database file itself
-		cfg.Storage.MemoryPath,
-		cfg.Storage.ProjectsPath,
-		cfg.Storage.SkillsPath,
-		cfg.Storage.ArtifactPath,
-		cfg.Storage.ContextPath,
-		*configPath,
-		// The arbitration backup tree lives inside the task workdir — writable
-		// in every other respect — so it needs an explicit write deny or an
-		// agent could rewrite the copies a preemption merge restores from.
-		filepath.Join(cfg.Storage.WorkPath, ".panda-shadow"),
-	}
-	protected = append(protected, cfg.Storage.ArtifactExtraPaths...)
-	if *cardPath != "" {
-		protected = append(protected, *cardPath)
-	}
+	// that would break the CLI's settings writes mid-run. The deny list is
+	// shared with the embedded engine via commander.ProtectedPaths.
 	if mode := cfg.Sandbox.NormalizedMode(); mode != "off" {
+		protected := commander.ProtectedPaths(cfg, *configPath, *cardPath)
 		if backend := commander.SetSandboxConfig(cfg.Sandbox, protected); backend == "" {
 			logger.Warn("sandbox mode configured but no backend on this platform",
 				"mode", mode)
@@ -832,6 +819,7 @@ func printUsage(w *os.File) {
 	line("  nodes invite           print the join guide without changing the peer list")
 	line("  nodes admit <id>       admit a LAN-discovered node as a peer")
 	line("  nodes verify <id>      mark a node's fingerprint as human-compared")
+	line("  nodes drain [id]       maintenance mode: stop accepting new work (--off lifts)")
 	line("  nodes disconnect <a>   remove a peer from the dial list")
 	line("  pair --secret S --peer <host:port>")
 	line("                         join an existing network from a new machine")

@@ -43,7 +43,12 @@ func panelStore(cfg *config.Config) (*sql.DB, *core.TaskStore, error) {
 		return nil, nil, err
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	return db, core.NewTaskStore(db, logger), nil
+	// NewSigningTaskStore: the CLI writes events too (queue edits, cancels,
+	// intake), and a `panda task` write must not land as a gap in an
+	// otherwise-signed chain. Load-only — a node that never ran a daemon
+	// has no key to mint, and its events stay unsigned rather than signed
+	// by a key nobody advertised.
+	return db, core.NewSigningTaskStore(db, logger), nil
 }
 
 // runStatus implements `panda status` — this node's identity and the local
@@ -402,7 +407,7 @@ func runQueue(args []string) {
 	// `panda queue clear` — the one-shot board wipe. Checked before the state
 	// validation so `clear` is never mistaken for a state filter.
 	if fs.NArg() > 0 && fs.Arg(0) == "clear" {
-		runQueueClear(cfg, *yes)
+		runQueueClear(cfg, *yes, *configPath)
 		return
 	}
 
@@ -461,7 +466,7 @@ func runQueue(args []string) {
 // it over the bus), but a missing engine degrades to the local row update
 // rather than failing — clearing a board of finished tasks needs no engine.
 // The wipe itself always confirms first on a TTY unless --yes is given.
-func runQueueClear(cfg *config.Config, yes bool) {
+func runQueueClear(cfg *config.Config, yes bool, configPath string) {
 	loc := i18n.Detect()
 	db, store, err := panelStore(cfg)
 	if err != nil {
@@ -497,7 +502,8 @@ func runQueueClear(cfg *config.Config, yes bool) {
 	// Best-effort engine cancel for the tasks still moving, so a remote
 	// executor is told to stop instead of burning its lease on deleted work.
 	engine, err := askengine.New(context.Background(), cfg, askengine.Options{
-		CardPath: defaultCardPath(),
+		CardPath:   defaultCardPath(),
+		ConfigPath: configPath,
 	})
 	if err == nil {
 		defer engine.Close()
@@ -649,7 +655,8 @@ func runCancel(args []string) {
 	// executor among them) and CancelTree fans the cancel out through them.
 	// The card is what makes the engine build that core at all.
 	engine, err := askengine.New(context.Background(), cfg, askengine.Options{
-		CardPath: defaultCardPath(),
+		CardPath:   defaultCardPath(),
+		ConfigPath: *configPath,
 	})
 	if err != nil {
 		fatal("ask engine", err)
@@ -732,7 +739,8 @@ func runApprove(args []string) {
 		}
 	} else {
 		engine, err := askengine.New(context.Background(), cfg, askengine.Options{
-			CardPath: defaultCardPath(),
+			CardPath:   defaultCardPath(),
+			ConfigPath: *configPath,
 		})
 		if err != nil {
 			fatal("ask engine", err)
@@ -910,11 +918,22 @@ func runAudit(args []string) {
 			fmt.Fprintf(os.Stderr, "panda: task event chain broken: %v\n", err)
 			os.Exit(1)
 		}
+		events, err := store.Events(context.Background(), *taskID)
+		if err != nil {
+			fatal("load events", err)
+		}
+		signed := 0
+		for _, e := range events {
+			if e.Sig != "" {
+				signed++
+			}
+		}
 		if jsonOutput {
-			emitJSON(map[string]string{"scope": "task", "id": *taskID, "chain": "ok"})
+			emitJSON(map[string]any{"scope": "task", "id": *taskID, "chain": "ok",
+				"events": len(events), "signed": signed})
 			return
 		}
-		fmt.Printf("task %s event chain: OK\n", *taskID)
+		fmt.Printf("task %s event chain: OK (%d events, %d signed)\n", *taskID, len(events), signed)
 		return
 	}
 

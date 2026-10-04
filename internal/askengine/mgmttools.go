@@ -583,7 +583,7 @@ func (e *Engine) systemStatus(ctx context.Context) (string, error) {
 	}
 	fmt.Fprintf(&b, "\n设备网络：%d 台设备，%d 在线 / %d 离线", len(nodes), online, len(nodes)-online)
 
-	store := core.NewTaskStore(e.db, nil)
+	store := core.NewSigningTaskStore(e.db, nil)
 	var counts []string
 	for _, st := range []string{
 		core.StateQueued, core.StateDispatched, core.StateWaitingCtx, core.StateRunning,
@@ -765,7 +765,7 @@ func (e *Engine) cardShow(ctx context.Context, name string) (string, error) {
 // oldest first — the same order the panel's board shows them in.
 func (e *Engine) taskqList(ctx context.Context, filter string) (string, error) {
 	states, label := taskqStates(filter)
-	store := core.NewTaskStore(e.db, nil)
+	store := core.NewSigningTaskStore(e.db, nil)
 	var tasks []core.Task
 	for _, st := range states {
 		ts, err := store.ListByState(ctx, st)
@@ -807,7 +807,7 @@ func (e *Engine) taskqShow(ctx context.Context, taskID string) (string, error) {
 	if taskID == "" {
 		return "", fmt.Errorf("task_id 不能为空")
 	}
-	store := core.NewTaskStore(e.db, nil)
+	store := core.NewSigningTaskStore(e.db, nil)
 	taskID, err := e.resolveTaskID(ctx, store, taskID)
 	if err != nil {
 		return "", fmt.Errorf("读取任务 %s：%w", taskID, err)
@@ -1079,7 +1079,7 @@ func (e *Engine) taskqCancel(ctx context.Context, taskID string) (string, error)
 	if taskID == "" {
 		return "", fmt.Errorf("task_id 不能为空")
 	}
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	resolved, err := e.resolveTaskID(ctx, store, taskID)
 	if err != nil {
 		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
@@ -1105,7 +1105,7 @@ func (e *Engine) taskqPriority(ctx context.Context, taskID, priority string) (st
 	if !ok {
 		return "", fmt.Errorf("无效的优先级 %q，必须为 high、normal 或 low", priority)
 	}
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	resolved, err := e.resolveTaskID(ctx, store, taskID)
 	if err != nil {
 		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
@@ -1126,7 +1126,7 @@ func (e *Engine) taskqMove(ctx context.Context, taskID string, seq int64) (strin
 	if seq < 1 {
 		return "", fmt.Errorf("seq 必须为正整数（>= 1）")
 	}
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	resolved, err := e.resolveTaskID(ctx, store, taskID)
 	if err != nil {
 		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
@@ -1160,7 +1160,7 @@ func (e *Engine) guardReorderable(ctx context.Context, store *core.TaskStore, ta
 // are notified, not just the local row). A batch cleanup reports per-id
 // outcomes instead of aborting on the first failure.
 func (e *Engine) taskqCancelBatch(ctx context.Context, ids []string) (string, error) {
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	var b strings.Builder
 	fmt.Fprintf(&b, "批量取消 %d 个任务：", len(ids))
 	ok := 0
@@ -1206,7 +1206,7 @@ func (e *Engine) taskqApprove(ctx context.Context, taskID string) (string, error
 	if taskID == "" {
 		return "", fmt.Errorf("task_id 不能为空")
 	}
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	resolved, err := e.resolveTaskID(ctx, store, taskID)
 	if err != nil {
 		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
@@ -1246,7 +1246,7 @@ func (e *Engine) guardReviewForModel(ctx context.Context, store *core.TaskStore,
 // they are refused while any review task exists — the reviewer must decide
 // each one in the foreground first.
 func (e *Engine) taskqClear(ctx context.Context, scope string) (string, error) {
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	switch scope {
 	case "review":
 		return "", fmt.Errorf("待审批任务需要用户逐个决定，%s", reviewDecisionHint)

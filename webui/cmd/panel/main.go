@@ -87,7 +87,7 @@ func main() {
 		fatal("migrate database", err)
 	}
 
-	store := core.NewTaskStore(db, logger)
+	store := core.NewSigningTaskStore(db, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -103,6 +103,7 @@ func main() {
 			CardPath:   *cardPath,
 			MCPCommand: *mcpCommand,
 			QueueTasks: true,
+			ConfigPath: *configPath,
 			Logger:     logger,
 		})
 		if err != nil {

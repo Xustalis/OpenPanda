@@ -49,7 +49,7 @@ func seatbeltProfile(p Policy) string {
 	sb.WriteString("(version 1)\n(deny default)\n")
 
 	workDir := p.resolveWorkDir()
-	writable := canonicalPaths(append([]string{workDir}, p.WritablePaths...))
+	writable := canonicalPaths(append(append([]string{workDir}, p.WritablePaths...), p.WritableFiles...))
 	denyWrite := canonicalPaths(p.DenyWritePaths)
 
 	// Holes first. DenyWritePaths lose write access in every mode; under

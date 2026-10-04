@@ -68,6 +68,11 @@ type Options struct {
 	// One-shot callers (panda ask) leave it off — their routing decision runs
 	// immediately and needs the conns settled first.
 	AsyncPeers bool
+	// ConfigPath is the file cfg was loaded from — the same path the caller
+	// passed to config.Load. It joins the sandbox's write-deny set so a
+	// sandboxed subprocess cannot rewrite the node's own configuration.
+	// Empty resolves like config.Load does (flag > env > user > system).
+	ConfigPath string
 	// Logger defaults to a warn-level stderr handler.
 	Logger *slog.Logger
 }
@@ -115,6 +120,12 @@ type Engine struct {
 	// guards every access.
 	cardMu   sync.RWMutex
 	cardPath string
+
+	// configPath mirrors Options.ConfigPath (resolved like config.Load when
+	// empty): the file cfg was read from, enrolled in the sandbox's
+	// write-deny set so a spawned subprocess cannot rewrite the node's own
+	// configuration.
+	configPath string
 
 	// cfgMu guards post-init mutation of the shared *config.Config: the REPL
 	// aliases it as r.cfg and rewrites hot fields (model, peers, approval
@@ -366,7 +377,7 @@ func (e *Engine) setCardPath(path string) {
 func (e *Engine) CancelTask(ctx context.Context, taskID string) ([]string, error) {
 	sched := e.sched.Load()
 	if sched == nil {
-		return core.NewTaskStore(e.db, e.logger).CancelCascade(ctx, taskID)
+		return core.NewSigningTaskStore(e.db, e.logger).CancelCascade(ctx, taskID)
 	}
 	return sched.CancelTree(ctx, taskID)
 }
@@ -374,7 +385,7 @@ func (e *Engine) CancelTask(ctx context.Context, taskID string) ([]string, error
 // TaskStore returns the task store on the engine's database, for callers that
 // need read-level access (reference resolution) without a scheduler core.
 func (e *Engine) TaskStore() *core.TaskStore {
-	return core.NewTaskStore(e.db, e.logger)
+	return core.NewSigningTaskStore(e.db, e.logger)
 }
 
 // SetOnReview installs the callback fired when a task enters review — i.e. when
@@ -662,6 +673,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		asyncPeers:     opts.AsyncPeers,
 		replyASCII:     opts.ReplyASCII,
 		cardPath:       opts.CardPath,
+		configPath:     config.ResolvePath(opts.ConfigPath),
 		locale:         loc,
 		explicitLocale: explicitLocale,
 	}
@@ -804,6 +816,23 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	sched.SetHostStatePaths(hostStatePaths(e.cfg))
 	sched.SetSharedSecret(e.cfg.Network.SharedSecret)
 	sched.SetAllowCleartext(e.cfg.Network.AllowCleartext)
+	// OS sandbox (sandbox.*): the same contract the daemon installs — the
+	// environment filter always applies, and a configured mode wraps every
+	// subprocess this engine spawns in the platform's confinement with the
+	// node's own state write-protected. Called unconditionally on every
+	// scheduler init (not just when a mode is set) so a config reload that
+	// turned the sandbox off resets the process-wide base policy instead of
+	// leaving the previous mode armed.
+	if backend := commander.SetSandboxConfig(e.cfg.Sandbox,
+		commander.ProtectedPaths(e.cfg, e.configPath, cardPath)); e.cfg.Sandbox.NormalizedMode() != "off" {
+		if backend == "" {
+			e.logger.Warn("sandbox mode configured but no backend on this platform",
+				"mode", e.cfg.Sandbox.NormalizedMode())
+		} else {
+			e.logger.Info("subprocess sandbox enabled",
+				"mode", e.cfg.Sandbox.NormalizedMode(), "backend", backend)
+		}
+	}
 	sched.SetTimeouts(e.cfg.Timeouts)
 
 	if e.schedCancel != nil {
@@ -2164,7 +2193,7 @@ func (e *Engine) recordEntryUsage(ctx context.Context, res *Result, client *entr
 		taskID = res.TaskID
 	}
 	cost := client.EstimateCost(delta.InputTokens, delta.OutputTokens)
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	if err := store.RecordDelegationMetric(ctx, taskID, e.cfg.Node.Name, "entry:"+client.ModelName(),
 		nil, true, latency.Milliseconds(), int(delta.Total()), cost); err != nil {
 		e.logger.Warn("askengine: record entry usage", "err", err)

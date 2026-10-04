@@ -179,6 +179,7 @@ func runWeb(args []string) {
 		CardPath:   *cardPath,
 		MCPCommand: *mcpCmd,
 		QueueTasks: true,
+		ConfigPath: *configPath,
 		Logger:     logger,
 	})
 	if err != nil {

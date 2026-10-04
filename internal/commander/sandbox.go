@@ -46,14 +46,45 @@ func SetSandboxConfig(sc config.SandboxConfig, protected []string) string {
 	return security.Backend()
 }
 
+// ProtectedPaths builds the node-state deny list shared by the daemon and
+// the embedded engine (askengine): the database + WAL directory, the memory
+// and skills stores, the artifact pool, the config and card files, and the
+// arbitration shadow tree — bookkeeping the drift detector and audit chain
+// verify, so a sandboxed subprocess must never be able to rewrite it.
+func ProtectedPaths(cfg *config.Config, configPath, cardPath string) []string {
+	protected := []string{
+		filepath.Dir(cfg.Storage.DBPath),
+		cfg.Storage.DBPath,
+		cfg.Storage.MemoryPath,
+		cfg.Storage.ProjectsPath,
+		cfg.Storage.SkillsPath,
+		cfg.Storage.ArtifactPath,
+		cfg.Storage.ContextPath,
+		configPath,
+		filepath.Join(cfg.Storage.WorkPath, ".panda-shadow"),
+	}
+	protected = append(protected, cfg.Storage.ArtifactExtraPaths...)
+	if cardPath != "" {
+		protected = append(protected, cardPath)
+	}
+	return protected
+}
+
 // adapterSandboxPolicy is the base policy plus what this agent's CLI needs:
 // its credential dirs writable, everyone else's credential dirs (and the
-// platform's secret locations) read-denied under strict.
+// platform's secret locations) read-denied under strict. Those same foreign
+// credential paths are write-denied in EVERY mode: standard leaves reads
+// open as the baseline, but a subprocess must never rewrite credentials it
+// does not own — a token under ~/.config/gh or a sibling agent's config is
+// as much a takeover vector as a read leak.
 func adapterSandboxPolicy(adapter, cwd string) security.Policy {
 	p := security.DefaultPolicy(cwd)
 	p.WritablePaths = append(p.WritablePaths, sharedToolchainPaths()...)
-	own := adapterCredentialDirs(adapter)
-	p.WritablePaths = append(p.WritablePaths, own...)
+	dirs, files := adapterCredentialPaths(adapter)
+	p.WritablePaths = append(p.WritablePaths, dirs...)
+	p.WritableFiles = append(p.WritableFiles, files...)
+	p.DenyWritePaths = append(p.DenyWritePaths, security.SystemSecretPaths()...)
+	p.DenyWritePaths = append(p.DenyWritePaths, foreignCredentialDirs(adapter)...)
 	if p.Mode == security.ModeStrict {
 		deny := append(security.SystemSecretPaths(), foreignCredentialDirs(adapter)...)
 		p.DenyReadPaths = append(p.DenyReadPaths, deny...)
@@ -64,8 +95,12 @@ func adapterSandboxPolicy(adapter, cwd string) security.Policy {
 // nativeSandboxPolicy confines a native shell command: workdir-only writes
 // plus, under strict, read denial of the OS secrets AND every agent's
 // credential dirs — a plain command has no business reading claude's login.
+// The same locations are write-denied in every mode: reading may be the
+// standard-mode baseline, but no command may rewrite a credential.
 func nativeSandboxPolicy(dir string) security.Policy {
 	p := security.DefaultPolicy(dir)
+	p.DenyWritePaths = append(p.DenyWritePaths, security.SystemSecretPaths()...)
+	p.DenyWritePaths = append(p.DenyWritePaths, allCredentialDirs()...)
 	if p.Mode == security.ModeStrict {
 		p.DenyReadPaths = append(p.DenyReadPaths, security.SystemSecretPaths()...)
 		p.DenyReadPaths = append(p.DenyReadPaths, allCredentialDirs()...)
@@ -73,16 +108,20 @@ func nativeSandboxPolicy(dir string) security.Policy {
 	return p
 }
 
-// adapterCredentialDirs returns the home-relative directories the agent's
-// credential files live in: "~/.codex" for codex's auth.json/config.toml,
-// "~/.config/opencode" for opencode's two files, and the bare file itself
-// (".claude.json") when the credential sits directly in $HOME.
-func adapterCredentialDirs(adapter string) []string {
+// adapterCredentialPaths resolves the agent's credential entries split by
+// kind: directories (the common case — "~/.codex" for codex's
+// auth.json/config.toml, "~/.config/opencode" for opencode's files) and bare
+// files sitting at $HOME root (".claude.json"). The split matters for
+// sandbox backends that pre-create missing bind sources: a directory gets
+// mkdir -p, a file gets touched — a dotfile basename is NOT a file
+// signature (".claude" is a directory), so the kind has to come from the
+// manifest, not the name.
+func adapterCredentialPaths(adapter string) (dirs, files []string) {
 	k, ok := agents.ByAdapter(adapter)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	return credentialDirs(k.CredentialFiles)
+	return splitCredentialDirs(k.CredentialFiles)
 }
 
 func foreignCredentialDirs(adapter string) []string {
@@ -108,33 +147,46 @@ func allCredentialDirs() []string {
 
 // credentialDirs collapses a credential file list to the paths that need
 // write (or deny) coverage: a file nested inside a dir contributes the dir;
-// a file sitting at $HOME root contributes itself.
+// a file sitting at $HOME root contributes itself. Deny lists use this
+// merged form — for denies the dir/file split is irrelevant.
 func credentialDirs(files []string) []string {
-	var out []string
-	seen := map[string]bool{}
+	dirs, bare := splitCredentialDirs(files)
+	return append(dirs, bare...)
+}
+
+// splitCredentialDirs is credentialDirs with the two kinds kept apart:
+// files nested inside a directory contribute the directory to dirs; files
+// sitting at $HOME root contribute themselves to bare.
+func splitCredentialDirs(files []string) (dirs, bare []string) {
+	seenDirs := map[string]bool{}
+	seenFiles := map[string]bool{}
 	for _, f := range files {
 		f = strings.TrimPrefix(filepath.ToSlash(f), "~/")
-		dir := path.Dir(f)
-		entry := f
-		if dir != "." && dir != "/" && dir != "" {
-			entry = dir
-		}
-		if !seen[entry] {
-			seen[entry] = true
-			out = append(out, entry)
+		if dir := path.Dir(f); dir == "." || dir == "/" || dir == "" {
+			if !seenFiles[f] {
+				seenFiles[f] = true
+				bare = append(bare, f)
+			}
+		} else if !seenDirs[dir] {
+			seenDirs[dir] = true
+			dirs = append(dirs, dir)
 		}
 	}
-	return out
+	return dirs, bare
 }
 
 // sharedToolchainPaths are the home-relative directories a CLI toolchain
 // legitimately writes at run time — package caches, npm/bun shims, Go build
 // cache. They are deliberately shared across agents: distinguishing "codex's
 // npm cache" from "claude's npm cache" buys nothing, since both are the same
-// program.
+// program. ~/.config is deliberately ABSENT: it is a shared config root that
+// also holds other tools' credentials (.config/gh, .config/gcloud, …), and
+// the one agent storing its own config there (opencode) already gets
+// .config/opencode through its credential manifest. A toolchain that truly
+// needs more can be named in the deployer's writable_paths.
 func sharedToolchainPaths() []string {
 	paths := []string{
-		".cache", ".config", ".local", ".npm", ".nvm", ".bun", ".deno",
+		".cache", ".local", ".npm", ".nvm", ".bun", ".deno",
 		".cargo", ".rustup", ".m2", ".gradle", ".nuget", ".vscode",
 		"go", ".composer", ".gem", ".rbenv", ".pyenv", ".volta",
 	}

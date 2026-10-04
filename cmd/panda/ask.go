@@ -120,6 +120,7 @@ func runAsk(args []string) {
 		MCPCommand: *mcpCmd,
 		ReplyASCII: isLinuxConsole(),
 		Locale:     loc,
+		ConfigPath: *configPath,
 	})
 	if err != nil {
 		fatal("ask engine", err)

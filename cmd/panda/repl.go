@@ -381,6 +381,7 @@ func runRepl(args []string) {
 			MCPCommand: *mcpCmd,
 			ReplyASCII: isLinuxConsole(),
 			Locale:     detected,
+			ConfigPath: *configPath,
 			// The session is long-lived and interactive: peers dial in the
 			// background instead of gating the banner (an offline peer's dial
 			// timeout is routine, not 10s of dead air before the first prompt).

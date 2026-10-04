@@ -35,8 +35,17 @@ type Policy struct {
 	// WritablePaths get write access beyond WorkDir. Absolute paths are used
 	// as-is; relative paths and "~/…" resolve against the user's home —
 	// that convention lets config files and credential manifests name
-	// "~/.claude" without knowing the account name.
+	// "~/.claude" without knowing the account name. Entries are directories:
+	// a missing one is created as a directory before bind-mounting.
 	WritablePaths []string
+	// WritableFiles are the file-shaped siblings of WritablePaths — the bare
+	// credential files that sit at $HOME root (".claude.json") rather than in
+	// a directory of their own. Splitting them out is what lets a missing
+	// entry be created with the right inode type: a dotfile basename is not
+	// a file signature (".claude" is a directory), and a guessed-wrong create
+	// both mounts the wrong thing and leaves a junk file on the host that
+	// blocks the real directory forever.
+	WritableFiles []string
 	// DenyReadPaths lose both read and write access under ModeStrict (and
 	// keep write-denied only under ModeStandard — reading is the baseline
 	// there). Home-relative spelling follows WritablePaths.
@@ -165,6 +174,10 @@ func SystemSecretPaths() []string {
 		".python_history", ".node_repl_history", ".sqlite_history",
 		".rediscli_history", ".lesshst", ".viminfo",
 		".bash_sessions", ".zsh_sessions", ".local/share/fish/fish_history",
+		// The desktop login keyring holds the user's website/app passwords —
+		// a subprocess that can write it can rotate a master secret or plant
+		// entries the keyring daemon happily serves back.
+		".local/share/keyrings", ".local/share/gnome-keyring",
 	}
 	if runtime.GOOS == "darwin" {
 		paths = append(paths,
