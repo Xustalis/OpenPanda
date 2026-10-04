@@ -328,6 +328,14 @@ func (c *Core) terminalizeDeclined(ctx context.Context, taskID, reason string) {
 // whose execution slots are full declines instead of silently queueing, so the
 // delegator learns immediately and can re-route to a peer with free capacity.
 func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID string, p bus.TaskDelegatePayload, required []string, chain []string) {
+	if c.node != nil && c.node.draining(ctx) {
+		// Maintenance drain (Track 2): decline new work so the delegator
+		// re-routes, while tasks already in flight finish undisturbed.
+		c.logger.Info("declining delegated task: node draining", "task", taskID)
+		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: "node draining"})
+		c.terminalizeDeclined(ctx, taskID, "node draining")
+		return
+	}
 	release, ok := c.reserveCapacity(ctx)
 	if !ok {
 		c.logger.Info("declining delegated task: capacity full", "task", taskID)
@@ -838,6 +846,16 @@ func (c *Core) storeWriteCtx(ctx context.Context) (context.Context, context.Canc
 	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 }
 
+// lockActuator takes the per-actuator execution mutex for id and returns its
+// release. See Core.actuatorLocks for why a lock — not only a queue resource
+// key — is the right primitive for physical-device exclusivity.
+func (c *Core) lockActuator(id string) func() {
+	v, _ := c.actuatorLocks.LoadOrStore(id, &sync.Mutex{})
+	m := v.(*sync.Mutex)
+	m.Lock()
+	return m.Unlock
+}
+
 // run accepts (or resumes) a dispatched task into running, executes it, and
 // records the outcome. The task may already be running (a context-fetch resume
 // moved it there), dispatched (the normal path), or waiting_context (resumed
@@ -981,6 +999,14 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if err := commander.SubstituteActionSpec(&plan, spec, intent); err != nil {
 			return bus.TaskResultPayload{}, fmt.Errorf("route actuator: %w", err)
 		}
+		// The resolved actuator is a physical device: serialize its driver
+		// across every execution path this run() serves — inline submits and
+		// delegated accepts never pass through the queue's resource-key
+		// registry, and a queue task's keys only decide when it starts, not
+		// what its driver may overlap with. Blocking here, before Accept,
+		// keeps the row in dispatched while a sibling finishes on the same
+		// device rather than running two drivers on one pin concurrently.
+		defer c.lockActuator(plan.ActuatorID)()
 	}
 	taskChain = task.Chain
 	switch task.State {
@@ -1333,7 +1359,16 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// more tokens are spent — agent B silently undoing agent A's fix can
 		// never converge, so it fails fast with a trace event instead.
 		if oscKey != "" {
-			if h, n, herr := defense.HashDir(workDir, stateHashMaxFiles); herr == nil && n <= stateHashMaxFiles && n > 0 {
+			h, n, herr := defense.HashDir(workDir, stateHashMaxFiles)
+			if herr == nil && n > stateHashMaxFiles {
+				// Over the walk cap: a giant work tree still gets the check
+				// via the repo fingerprint — git reads its index, not every
+				// file. A non-repo tree keeps the old behaviour (skip).
+				if gh, gerr := defense.GitFingerprint(execCtx, workDir); gerr == nil {
+					h, n = gh, 1
+				}
+			}
+			if herr == nil && n <= stateHashMaxFiles && n > 0 {
 				if c.stateOscillates(oscKey, h) {
 					c.EvTrace(execCtx, taskID, "state_oscillation", map[string]any{
 						"key":   oscKey,
@@ -1441,21 +1476,33 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 
 		// §4.2 Sub-MainAgent promotion: an agent that hits a resource it lacks
-		// (GPU, tool, hardware actuator) may emit a PANDA_DELEGATE line. This
-		// node — now acting as the child's Sub-Main — spawns the causal child,
-		// waits for its result, and re-runs the round with the product folded
-		// into the intent. The delegation never reaches a judge: the round is
-		// re-driven, not verified.
+		// (GPU, tool, hardware actuator) may emit PANDA_DELEGATE markers — one
+		// turn can request several children at once, and they dispatch in
+		// parallel rather than serializing round trips. This node — now
+		// acting as the children's Sub-Main — spawns each causal child,
+		// waits for their results, and re-runs the round with the products
+		// folded into the intent. The delegation never reaches a judge: the
+		// round is re-driven, not verified.
 		if plan.Kind == "agent" {
-			if dr, cleaned, ok := parseDelegateRequest(res.Stdout); ok {
+			if drs, cleaned := parseDelegateRequests(res.Stdout); len(drs) > 0 {
 				res.Stdout = cleaned
 				if delegations < maxDelegateRequests {
-					delegations++
-					note, derr := c.delegateChild(execCtx, task, dr)
-					if derr != nil {
-						note = "delegation failed: " + derr.Error()
+					take := maxDelegateRequests - delegations
+					if take > len(drs) {
+						take = len(drs)
 					}
-					currentIntent += "\n\n[delegated child result]\n" + note
+					delegations += take
+					notes := c.delegateChildren(execCtx, task, drs[:take])
+					for i, note := range notes {
+						if len(notes) == 1 {
+							currentIntent += "\n\n[delegated child result]\n" + note
+						} else {
+							currentIntent += fmt.Sprintf("\n\n[delegated child result %d/%d]\n%s", i+1, len(notes), note)
+						}
+					}
+					if take < len(drs) {
+						currentIntent += "\n\n[system] delegation budget for this task is exhausted; remaining requests were not dispatched — finish with local resources and report."
+					}
 					// Only a delegation that actually happened re-drives the
 					// round; an exhausted budget falls through to the judge so
 					// a marker-happy agent cannot loop forever past the cap.

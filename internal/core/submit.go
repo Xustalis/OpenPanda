@@ -235,6 +235,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 				"target", decision.Target, "link", linkState, "task", t.TaskID)
 			qSpec := DefaultQueueSpec()
 			qSpec.WorkDir = in.WorkDir
+			qSpec.ResourceKeys = deriveResourceKeys(in)
 			if err := c.store.SetQueueMeta(ctx, t.TaskID, qSpec.Priority, qSpec.SessionID, qSpec.WorkDir, qSpec.ResourceKeys); err != nil {
 				return t, bus.TaskResultPayload{}, fmt.Errorf("set queue meta: %w", err)
 			}
@@ -302,39 +303,80 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 		if err := c.forwardDelegated(ctx, t.TaskID, decision.Target, payload, chain); err != nil {
 			return t, bus.TaskResultPayload{}, fmt.Errorf("forward: %w", err)
 		}
+		return c.waitRemoteResult(ctx, t, ch, "delegation")
+	default:
+		return t, bus.TaskResultPayload{}, fmt.Errorf("no capability: %s", decision.Reason)
+	}
+}
+
+// waitRemoteResult waits for the executor's task_result on ch, bounded by
+// the task's persisted lease rather than a fixed timer. The executor's
+// progress beats keep pushing lease_expires_at forward for as long as it
+// works, so a fixed wall-clock deadline is wrong twice over: it kills a
+// healthy long task that is provably alive (renewals land every lease/3),
+// and it ignores the lease length the row actually carries. This loop fires
+// only once the stamped deadline has lapsed — the same criterion the
+// timeout monitor's ExpireTasks applies (review §7.2). A row without a
+// lease falls back to the wait-start lease bound so an unstamped row can
+// never wedge the caller.
+func (c *Core) waitRemoteResult(ctx context.Context, cur Task, ch <-chan bus.TaskResultPayload, what string) (Task, bus.TaskResultPayload, error) {
+	taskID := cur.TaskID
+	interval := c.lease() / leaseRenewDivisor
+	if interval < minLeaseRenewInterval {
+		interval = minLeaseRenewInterval
+	}
+	if interval > 30*time.Second {
+		interval = 30 * time.Second
+	}
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	waitStart := time.Now()
+	for {
 		select {
 		case res := <-ch:
-			final, err := c.store.Get(ctx, t.TaskID)
+			final, err := c.store.Get(ctx, taskID)
 			if err != nil {
-				return t, res, err
+				return cur, res, err
 			}
 			return final, res, nil
-		case <-time.After(c.lease()):
-			// A dead target must not leave Submit blocked forever (D3): the wait
-			// is bounded by the same lease forwardDelegated stamps on the task,
-			// after which the task is failed and an error returned. The lease —
-			// not the 20-minute default constant — is the bound, because
-			// SetTimeouts can raise it past that default for long agent runs.
-			c.failLocal(ctx, t.TaskID, errors.New("delegation timeout"))
-			// S1-2: give up locally, but the executor may still be running the
-			// work — push the cancellation downstream so it stops there too.
-			c.forwardCancelDownstream(ctx, t.TaskID)
-			return t, bus.TaskResultPayload{}, fmt.Errorf("delegation timeout waiting for %s", decision.Target)
 		case <-ctx.Done():
 			// The caller walked away: terminalize the origin and propagate the same
 			// cancellation through every downstream copy under a live cleanup context.
 			cleanup := context.WithoutCancel(ctx)
-			if _, cancelErr := c.CancelTree(cleanup, t.TaskID); cancelErr != nil {
-				c.logger.Warn("cancel delegated task", "task", t.TaskID, "err", cancelErr)
+			if _, cancelErr := c.CancelTree(cleanup, taskID); cancelErr != nil {
+				c.logger.Warn("cancel remote task", "task", taskID, "err", cancelErr)
 			}
-			final, getErr := c.store.Get(cleanup, t.TaskID)
+			final, getErr := c.store.Get(cleanup, taskID)
 			if getErr != nil {
-				return t, bus.TaskResultPayload{}, getErr
+				return cur, bus.TaskResultPayload{}, getErr
 			}
 			return final, bus.TaskResultPayload{TaskID: final.TaskID, AttemptID: final.AttemptID, State: final.State}, ctx.Err()
+		case <-tick.C:
+			t, err := c.store.Get(ctx, taskID)
+			if err != nil {
+				continue // a row we cannot read is not proof of death
+			}
+			if Terminal(t.State) {
+				// A monitor, cancel or concurrent runner already closed the
+				// row: report the real terminal state, not a timeout verdict.
+				return t, bus.TaskResultPayload{
+					TaskID: t.TaskID, AttemptID: t.AttemptID, State: t.State,
+				}, nil
+			}
+			deadline := t.LeaseExpires
+			if deadline <= 0 {
+				deadline = waitStart.Unix() + int64(c.lease().Seconds())
+			}
+			if deadline < time.Now().Unix() {
+				// The stamped lease actually lapsed: the executor's beats
+				// stopped, so it is dead, not merely slow. Fail locally and
+				// push the cancel downstream so any still-running copy stops
+				// too (D3/S1-2).
+				c.failLocal(ctx, taskID, errors.New(what+" timeout"))
+				c.forwardCancelDownstream(ctx, taskID)
+				return t, bus.TaskResultPayload{}, fmt.Errorf("%s timeout waiting for executor", what)
+			}
 		}
-	default:
-		return t, bus.TaskResultPayload{}, fmt.Errorf("no capability: %s", decision.Reason)
 	}
 }
 
@@ -545,30 +587,7 @@ func (c *Core) resumeRemote(ctx context.Context, cur Task, target, answer string
 	}
 	c.logger.Info("resume forwarded to executor", "task", taskID, "to", target)
 
-	select {
-	case res := <-ch:
-		final, gerr := c.store.Get(ctx, taskID)
-		if gerr != nil {
-			return cur, res, gerr
-		}
-		return final, res, nil
-	case <-time.After(c.lease()):
-		c.failLocal(ctx, taskID, errors.New("resume timeout"))
-		// S1-2: a silent executor may actually still be re-running the work —
-		// cancel it downstream rather than leaving both copies diverged.
-		c.forwardCancelDownstream(ctx, taskID)
-		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume timeout waiting for %s", target)
-	case <-ctx.Done():
-		cleanup := context.WithoutCancel(ctx)
-		if _, cancelErr := c.CancelTree(cleanup, taskID); cancelErr != nil {
-			c.logger.Warn("cancel remote approved task", "task", taskID, "err", cancelErr)
-		}
-		final, getErr := c.store.Get(cleanup, taskID)
-		if getErr != nil {
-			return cur, bus.TaskResultPayload{}, getErr
-		}
-		return final, bus.TaskResultPayload{}, ctx.Err()
-	}
+	return c.waitRemoteResult(ctx, cur, ch, "resume")
 }
 
 // retryLoop drives a task from its first execution outcome to a stable state:

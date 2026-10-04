@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -166,6 +167,127 @@ func TestSameResourceSerializes(t *testing.T) {
 	t.Fatal("first task never reached running")
 }
 
+// TestEnqueueDerivesHardwareKey pins the actuator mutex-key contract
+// (2026-09-29 audit P0): a "hardware:*" requires token becomes a resource key
+// so the queue serializes two tasks on one physical device instead of running
+// two drivers on the same pin.
+func TestEnqueueDerivesHardwareKey(t *testing.T) {
+	c := queueTestCore(t)
+	ctx := context.Background()
+	tk, err := c.Enqueue(ctx, TaskInput{
+		Title: "servo", Intent: "x", Requires: []string{"hardware:servo_tilt"},
+	}, DefaultQueueSpec())
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	got, err := c.store.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !slices.Contains(got.ResourceKeys, "hardware:servo_tilt") {
+		t.Fatalf("resource keys = %v, want hardware:servo_tilt", got.ResourceKeys)
+	}
+}
+
+// TestEnqueueActionSpecForcesActuatorKey covers the spec side of the same
+// contract: even when requires reaches the device through a vaguer token
+// ("servo"), the spec's exact target id is what serializes.
+func TestEnqueueActionSpecForcesActuatorKey(t *testing.T) {
+	c := queueTestCore(t)
+	ctx := context.Background()
+	tk, err := c.Enqueue(ctx, TaskInput{
+		Title: "servo", Intent: "x", Requires: []string{"servo"},
+		SpecJSON: `{"action_spec":{"target_actuator":"hardware:gpio_servo","action":"rotate","parameters":{"angle":90}}}`,
+	}, DefaultQueueSpec())
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	got, err := c.store.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !slices.Contains(got.ResourceKeys, "hardware:gpio_servo") {
+		t.Fatalf("resource keys = %v, want hardware:gpio_servo forced by spec", got.ResourceKeys)
+	}
+}
+
+// TestEnqueueExplicitKeysStillMergeActuator: caller-named keys cannot waive
+// the physical lock — a task pinned to a node AND driving hardware holds both.
+func TestEnqueueExplicitKeysStillMergeActuator(t *testing.T) {
+	c := queueTestCore(t)
+	ctx := context.Background()
+	q := DefaultQueueSpec()
+	q.ResourceKeys = []string{"node:opi"}
+	tk, err := c.Enqueue(ctx, TaskInput{
+		Title: "servo", Intent: "x", Requires: []string{"hardware:servo_tilt"},
+	}, q)
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	got, err := c.store.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !slices.Contains(got.ResourceKeys, "node:opi") || !slices.Contains(got.ResourceKeys, "hardware:servo_tilt") {
+		t.Fatalf("resource keys = %v, want node:opi + hardware:servo_tilt", got.ResourceKeys)
+	}
+}
+
+// TestActuatorKeysSerializeInQueue is the audit's exact scenario: a node with
+// MaxConcurrent > 1 receiving two tasks for the same hardware device must run
+// them one at a time — the second stays queued while the first holds the
+// actuator's resource key.
+func TestActuatorKeysSerializeInQueue(t *testing.T) {
+	db := openTestDB(t)
+	card := ledger.Card{
+		Device:        "queue-edge",
+		ResourceClass: "Edge",
+		Actuators: []ledger.ActuatorProfile{{
+			ID: "hardware:slow_servo", Type: "hardware", Tier: 1,
+			Command: "sleep", Args: []string{"1"},
+		}},
+		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 4},
+	}
+	c := NewCore(db, "queue-edge", card, 5, testLogger(), config.ModelConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.StartQueueScheduler(ctx)
+
+	first, err := c.Enqueue(ctx, TaskInput{
+		Title: "slow servo", Intent: "x", Requires: []string{"hardware:slow_servo"}, Authorized: true,
+	}, DefaultQueueSpec())
+	if err != nil {
+		t.Fatalf("enqueue first: %v", err)
+	}
+	second, err := c.Enqueue(ctx, TaskInput{
+		Title: "servo again", Intent: "x", Requires: []string{"hardware:slow_servo"}, Authorized: true,
+	}, DefaultQueueSpec())
+	if err != nil {
+		t.Fatalf("enqueue second: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		f, _ := c.store.Get(ctx, first.TaskID)
+		if f.State == StateRunning {
+			s, _ := c.store.Get(ctx, second.TaskID)
+			if s.State != StateQueued {
+				t.Fatalf("same-actuator task state = %s, want queued while device held", s.State)
+			}
+			for time.Now().Before(time.Now().Add(5 * time.Second)) {
+				s, _ = c.store.Get(ctx, second.TaskID)
+				if s.State == StateDone {
+					return
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			t.Fatal("second actuator task never ran after device freed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("first actuator task never reached running")
+}
+
 // TestEnqueueRoutesToPeer verifies the queue path is cross-device: a task
 // enqueued on a node that cannot execute it (no gpio:read) is claimed by the
 // local scheduler, forwarded to a capable peer, executed there, and the
@@ -226,4 +348,60 @@ func TestEnqueueRoutesToPeer(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("queued task never reached done via peer within deadline")
+}
+
+// TestDrainFlagPausesQueueAndBeatsDraining covers the maintenance-mode
+// mechanism end to end at unit level: the settings flag makes the queue
+// store report nothing claimable (in-flight work still finishes — it is
+// already claimed) and makes the self heartbeat publish "draining" so peers
+// stop routing new work here.
+func TestDrainFlagPausesQueueAndBeatsDraining(t *testing.T) {
+	ctx := context.Background()
+	c := newCore(t, "drain-node", "")
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	if _, err := c.db.Exec(`INSERT INTO settings(key, value) VALUES('node_drain','1')`); err != nil {
+		t.Fatalf("set drain flag: %v", err)
+	}
+	if !c.node.draining(ctx) {
+		t.Fatal("draining() must read the settings flag")
+	}
+
+	adapter := queueStoreAdapter{c: c}
+	ready, err := adapter.ListReady(ctx)
+	if err != nil || len(ready) != 0 {
+		t.Fatalf("drained ListReady = %v, %v — must report nothing claimable", ready, err)
+	}
+
+	c.node.beat(ctx)
+	nodes, err := ledger.Query(c.db, "", "")
+	if err != nil {
+		t.Fatalf("query nodes: %v", err)
+	}
+	var self *ledger.Node
+	for i := range nodes {
+		if nodes[i].ID == c.nodeID {
+			self = &nodes[i]
+		}
+	}
+	if self == nil || self.Status != "draining" {
+		t.Fatalf("self row status = %+v, want draining", self)
+	}
+
+	// Lifting the flag restores both halves.
+	if _, err := c.db.Exec(`UPDATE settings SET value='0' WHERE key='node_drain'`); err != nil {
+		t.Fatal(err)
+	}
+	if c.node.draining(ctx) {
+		t.Fatal("drain flag cleared but draining() still true")
+	}
+	c.node.beat(ctx)
+	nodes, _ = ledger.Query(c.db, "", "")
+	for _, n := range nodes {
+		if n.ID == c.nodeID && n.Status != "online" {
+			t.Fatalf("after --off self status = %s, want online", n.Status)
+		}
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 )
@@ -41,22 +42,9 @@ func (c *Core) Enqueue(ctx context.Context, in TaskInput, q QueueSpec) (Task, er
 		return Task{}, fmt.Errorf("queue priority %d out of range", q.Priority)
 	}
 	if len(q.ResourceKeys) == 0 {
-		if in.Project != "" {
-			q.ResourceKeys = []string{"project:" + in.Project}
-		} else {
-			var derived []string
-			if in.PreferredNode != "" {
-				derived = append(derived, "node:"+in.PreferredNode)
-			}
-			for _, req := range in.Requires {
-				if strings.HasPrefix(req, "agent:") || strings.HasPrefix(req, "node:") {
-					derived = append(derived, req)
-				}
-			}
-			if len(derived) > 0 {
-				q.ResourceKeys = derived
-			}
-		}
+		q.ResourceKeys = deriveResourceKeys(in)
+	} else {
+		q.ResourceKeys = mergeActuatorKeys(q.ResourceKeys, in.Requires, in.SpecJSON)
 	}
 	t, _, _, err := c.createTask(ctx, in)
 	if err != nil {
@@ -77,6 +65,60 @@ func (c *Core) Enqueue(ctx context.Context, in TaskInput, q QueueSpec) (Task, er
 	c.queueWake()
 	c.logger.Info("task enqueued", "task", t.TaskID, "priority", q.Priority)
 	return t, nil
+}
+
+// deriveResourceKeys computes the queue resource locks a task holds from the
+// shape of its input: a project task serializes on the project (a shared
+// worktree admits one writer), a preferred-node pin serializes on that node,
+// and agent:/node: requires map to their resource ids. Physical actuators
+// merge on top via mergeActuatorKeys — the spec's stated target serializes
+// even when requires reached the device through a vaguer token.
+func deriveResourceKeys(in TaskInput) []string {
+	var keys []string
+	if in.Project != "" {
+		keys = append(keys, "project:"+in.Project)
+	} else {
+		if in.PreferredNode != "" {
+			keys = append(keys, "node:"+in.PreferredNode)
+		}
+		for _, req := range in.Requires {
+			if strings.HasPrefix(req, "agent:") || strings.HasPrefix(req, "node:") {
+				keys = append(keys, req)
+			}
+		}
+	}
+	return mergeActuatorKeys(keys, in.Requires, in.SpecJSON)
+}
+
+// mergeActuatorKeys adds the physical-device locks a task must hold: every
+// "hardware:*" requires token, plus the action_spec's target actuator. Two
+// driver processes on one GPIO pin is a fault, not parallelism, so the key
+// merges on top of whatever else the task already holds — caller-named keys
+// cannot waive it, only ordering around it changes.
+func mergeActuatorKeys(keys []string, requires []string, specJSON string) []string {
+	var hw []string
+	for _, req := range requires {
+		if strings.HasPrefix(req, "hardware:") {
+			hw = append(hw, req)
+		}
+	}
+	if spec, err := commander.ParseActionSpec(specJSON); err == nil && spec != nil {
+		hw = append(hw, spec.TargetActuator)
+	}
+	if len(hw) == 0 {
+		return keys
+	}
+	have := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		have[k] = true
+	}
+	for _, k := range hw {
+		if k != "" && !have[k] {
+			have[k] = true
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 // preferredNodeOf recovers the user-named node an enqueued task carries. The
@@ -140,6 +182,11 @@ func (c *Core) QueueScheduler() *queue.Scheduler {
 type queueStoreAdapter struct{ c *Core }
 
 func (a queueStoreAdapter) ListReady(ctx context.Context) ([]queue.ReadyTask, error) {
+	if a.c.node.draining(ctx) {
+		// Drain is a full pause on new claims: queued rows stay queued (they
+		// release on --off), while tasks already claimed finish their runs.
+		return nil, nil
+	}
 	return a.c.store.ListReadySummaries(ctx)
 }
 

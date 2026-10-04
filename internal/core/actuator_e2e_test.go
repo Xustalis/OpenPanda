@@ -5,9 +5,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
@@ -206,6 +208,82 @@ func TestActuatorSpecOnNonActuatorPlanFailsClosed(t *testing.T) {
 	}
 	if strings.Contains(result.Stdout+result.Stderr, "ran-native") {
 		t.Fatalf("non-actuator plan executed despite action_spec: %+v", result)
+	}
+}
+
+// TestLockActuatorSerializes pins the primitive behind the run()-level
+// device lock: same actuator id blocks, a different id does not.
+func TestLockActuatorSerializes(t *testing.T) {
+	c := newCoreWithActuator(t, "act-lock", "")
+	release := c.lockActuator("hardware:echo_servo")
+	acquired := make(chan struct{})
+	go func() {
+		r := c.lockActuator("hardware:echo_servo")
+		r()
+		close(acquired)
+	}()
+	select {
+	case <-acquired:
+		release()
+		t.Fatal("second lockActuator acquired while the first was held")
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-acquired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("actuator lock was never released")
+	}
+	// A different actuator id is a different device — it must not block.
+	other := c.lockActuator("hardware:other_dev")
+	other()
+}
+
+// TestActuatorRunsSerializeOnDevice is the execution-layer half of the
+// 2026-09-29 audit P0: two tasks reaching an actuator plan concurrently —
+// the inline path never passes through the queue's resource-key registry —
+// must not run their drivers at the same time. The driver guards a sentinel
+// directory and reports CONCURRENT-CONFLICT if a second process enters while
+// the first holds the device.
+func TestActuatorRunsSerializeOnDevice(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh fixture")
+	}
+	ctx := context.Background()
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "dev.lock")
+	db := openTestDB(t)
+	card := actuatorCard("act-ser")
+	card.Actuators[0].Command = "/bin/sh"
+	card.Actuators[0].Args = []string{"-c",
+		"if ! mkdir '" + sentinel + "'; then echo CONCURRENT-CONFLICT; exit 9; fi; sleep 0.2; rmdir '" + sentinel + "'; echo acted-ok"}
+	c := NewCore(db, "act-ser", card, 5, testLogger(), config.ModelConfig{})
+	c.SetSharedSecret(testSharedSecret)
+	c.SetWorkDir(dir)
+
+	var wg sync.WaitGroup
+	results := make([]bus.TaskResultPayload, 2)
+	errs := make([]error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, res, err := c.SubmitLocal(ctx, TaskInput{
+				Title: "drive servo", Intent: "rotate", ContextType: "hardware",
+				Requires: []string{"hardware:echo_servo"}, Authorized: true,
+			})
+			results[i], errs[i] = res, err
+		}(i)
+	}
+	wg.Wait()
+	for i := range results {
+		out := results[i].Stdout + results[i].Stderr
+		if strings.Contains(out, "CONCURRENT-CONFLICT") {
+			t.Fatalf("task %d saw a concurrent driver on the same device: %q (err %v)", i, out, errs[i])
+		}
+		if errs[i] != nil || !results[i].OK || !strings.Contains(out, "acted-ok") {
+			t.Fatalf("task %d failed serialized run: %+v err=%v", i, results[i], errs[i])
+		}
 	}
 }
 
