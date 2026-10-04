@@ -687,6 +687,8 @@ const es: Messages = {
   'fleet.node.online': 'en línea',
   'fleet.node.offline': 'desconectado',
   'fleet.node.tasks': '{cur}/{max} tareas',
+  'fleet.node.queued': '{n} en cola',
+  'fleet.node.verSkewHint': 'ejecuta v{ver}; este dispositivo v{self}',
 
   'ui.update.degraded.title': 'Comprobaciones de actualización en pausa (red limitada)',
   'ui.update.degraded.sub': 'Acceso a la API de GitHub limitado o denegado; Panda no volverá a comprobar actualizaciones hasta reiniciarlo.',

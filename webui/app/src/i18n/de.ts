@@ -687,6 +687,8 @@ const de: Messages = {
   'fleet.node.online': 'online',
   'fleet.node.offline': 'offline',
   'fleet.node.tasks': '{cur}/{max} Aufgaben',
+  'fleet.node.queued': '{n} in Warteschlange',
+  'fleet.node.verSkewHint': 'läuft mit v{ver}, dieses Gerät v{self}',
 
   'ui.update.degraded.title': 'Update-Prüfungen pausiert (Netzwerk begrenzt)',
   'ui.update.degraded.sub': 'GitHub API ist gedrosselt oder gesperrt; Panda prüft erst nach einem Neustart wieder auf Updates.',

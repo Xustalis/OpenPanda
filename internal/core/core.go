@@ -194,6 +194,16 @@ type Core struct {
 	// code, and the parent's re-route then runs the same work twice concurrently.
 	running sync.Map // string -> context.CancelFunc
 
+	// actuatorLocks serializes execution per physical actuator id. The
+	// queue's resource keys order only the scheduled path — delegated work
+	// runs straight through handleLocalDelegate -> execute and inline
+	// submits run through runLocal, both bypassing that registry — so the
+	// lock is the single choke point every actuator driver passes. Two
+	// driver processes on one GPIO pin is a fault, not parallelism.
+	// Per-process, like MaxConcurrent: a daemon and an embedded REPL core
+	// on one host do not share it.
+	actuatorLocks sync.Map // string(actuator id) -> *sync.Mutex
+
 	// orphanSeen records when a forwarded task was first sighted orphaned in
 	// queued after a restart, so the rescue sweep gives it a grace window to
 	// find a new route before failing it (S1-1). Guarded by mu.
@@ -387,6 +397,12 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 || len(card.Actuators) > 0 {
 		c.router = commander.NewRouter(card, commander.NewExecutor(), model, config.InjectionConfig{}, config.RoutingConfig{})
 	}
+	// P2-9: hand the task store this node's identity so every event it
+	// records carries the Ed25519 attestation. The key materializes here —
+	// outside any transaction — so the tx-bound signer never touches the DB.
+	if pub, priv, ok := c.nodeKeyPair(); ok {
+		c.store.SetEventSigner(pub, priv)
+	}
 	return c
 }
 
@@ -538,6 +554,7 @@ func (c *Core) broadcastCard(ctx context.Context) {
 	env, err := bus.NewEnvelope(bus.MsgHeartbeat, c.nodeID, msgID, bus.HeartbeatPayload{
 		Status: "online", Load: 0, Capacity: capJSON, Card: card,
 		BlockedAgents: c.blockedAgents(),
+		Ver:           version.Version,
 	})
 	if err != nil {
 		c.logger.Warn("build card heartbeat", "err", err)
@@ -751,7 +768,11 @@ func (c *Core) broadcastHeartbeat(ctx context.Context) {
 	lms := c.linkMetrics()
 	wireLinks := make([]bus.LinkMetric, len(lms))
 	for i, l := range lms {
-		wireLinks[i] = bus.LinkMetric{Peer: l.Peer, RTTms: l.RTTms}
+		wireLinks[i] = bus.LinkMetric{Peer: l.Peer, RTTms: l.RTTms, Kind: l.Kind}
+	}
+	status := "online"
+	if c.node.draining(ctx) {
+		status = "draining"
 	}
 	msgID, err := newUUID()
 	if err != nil {
@@ -759,10 +780,11 @@ func (c *Core) broadcastHeartbeat(ctx context.Context) {
 		return
 	}
 	env, err := bus.NewEnvelope(bus.MsgHeartbeat, c.nodeID, msgID, bus.HeartbeatPayload{
-		Status: "online", Load: load, Capacity: capJSON,
+		Status: status, Load: load, Capacity: capJSON,
 		BlockedAgents: c.blockedAgents(),
 		Neighbors:     c.livePeerIDs(), Links: wireLinks,
 		Contacts: c.wireContacts(), Projects: projects,
+		Ver: version.Version,
 	})
 	if err != nil {
 		c.logger.Warn("build heartbeat", "err", err)
@@ -805,6 +827,12 @@ func clampCapacity(capJSON string) string {
 	}
 	if cap.CurrentTasks < 0 {
 		cap.CurrentTasks = 0
+	}
+	if l := cap.Live; l != nil && (l.MemFreeGB < -1 || l.DiskFreeGB < -1 || l.GPUUtil < -1 || l.GPUUtil > 100) {
+		// A peer-advertised live block outside its value domain is corrupt:
+		// drop it whole so a forged negative "free" figure cannot read as a
+		// huge headroom bonus in scoring. -1 is the legit unmeasured sentinel.
+		cap.Live = nil
 	}
 	b, err := json.Marshal(cap)
 	if err != nil {
@@ -866,6 +894,12 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 	// peerFreshnessSec keeps it well under the 90s ExpireStale horizon.
 	if err := ledger.HeartbeatIfChanged(c.db, env.From, status, clampCapacity(p.Capacity), peerFreshnessSec); err != nil {
 		c.logger.Warn("apply heartbeat", "from", env.From, "err", err)
+	}
+	// Version gossip (Track 3): every beat re-stamps the sender's software
+	// version, so a mid-release upgrade refreshes the skew display without
+	// waiting for a reconnect-time hello.
+	if err := ledger.SetNodeVerIfChanged(c.db, env.From, p.Ver); err != nil {
+		c.logger.Warn("stamp peer version", "from", env.From, "err", err)
 	}
 	// Heartbeats also publish the sender's circuit-open agents so this node's
 	// routing can weigh the peer's failure history (see applyPeerBlockers).
@@ -1721,6 +1755,10 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 			c.logger.Warn("upsert remote card", "peer", p.NodeID, "err", err)
 		}
 	}
+	// The hello is the first version stamp — heartbeats then keep it fresh.
+	if err := ledger.SetNodeVerIfChanged(c.db, p.NodeID, p.Ver); err != nil {
+		c.logger.Warn("stamp peer version", "peer", p.NodeID, "err", err)
+	}
 	// Record PubKey only when the EdSig actually verified it — a hello that
 	// passed on the HMAC fallback never proved control of the key it claims,
 	// and recording it anyway would let any peer poison this node's entry in
@@ -1970,16 +2008,32 @@ func (c *Core) summary() ledger.CapabilitySummary {
 // a fake zero, which would make an unmeasured link look free.
 func (c *Core) linkMetrics() []ledger.LinkMetric {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	out := make([]ledger.LinkMetric, 0, len(c.peers))
+	conns := make(map[string]int64, len(c.peers))
 	for id, p := range c.peers {
 		if p.conn == nil {
 			continue
 		}
 		if rtt := p.conn.RTT(); rtt > 0 {
-			out = append(out, ledger.LinkMetric{Peer: id, RTTms: rtt.Milliseconds()})
+			conns[id] = rtt.Milliseconds()
 		}
 	}
+	c.mu.RUnlock()
+	out := make([]ledger.LinkMetric, 0, len(conns))
+	for id, rtt := range conns {
+		out = append(out, ledger.LinkMetric{Peer: id, RTTms: rtt, Kind: "ws"})
+	}
+	// A peer reachable only through a punched datagram route has no WS
+	// conn to ping — it still advertises an edge so the fleet view (and
+	// any consumer of links_json) can see the transport it is on. RTT is
+	// left at zero (unmeasured): a fake sample would price the link better
+	// than it is.
+	c.udpMu.Lock()
+	for id := range c.udpRoutes {
+		if _, ok := conns[id]; !ok {
+			out = append(out, ledger.LinkMetric{Peer: id, Kind: "udp"})
+		}
+	}
+	c.udpMu.Unlock()
 	return out
 }
 

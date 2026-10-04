@@ -58,7 +58,25 @@ func resourceEfficiency(n ledger.Node) float64 {
 	if free < 0 {
 		free = 0
 	}
-	return float64(free) / float64(n.Capacity.MaxConcurrent)
+	eff := float64(free) / float64(n.Capacity.MaxConcurrent)
+	// Live headroom discount (Track 2): slot count says how many tasks the
+	// node can hold; measured free memory says how much work they can absorb.
+	// A node down to its last fraction of RAM keeps its slots on paper while
+	// being unable to take real work, so its efficiency is scaled by the
+	// measured headroom — floored at 0.1 so a merely-tight node is not
+	// zeroed out of contention. Unmeasured nodes (no live block, -1 field)
+	// keep the slot ratio: absence of data is not evidence of pressure.
+	if l := n.Capacity.Live; l != nil && l.MemFreeGB >= 0 && n.Capacity.RAMGB > 0 {
+		headroom := l.MemFreeGB / float64(n.Capacity.RAMGB)
+		if headroom > 1 {
+			headroom = 1
+		}
+		if headroom < 0.1 {
+			headroom = 0.1
+		}
+		eff *= headroom
+	}
+	return eff
 }
 
 // waitSignal inverts the node's current queue depth: how soon a new task would

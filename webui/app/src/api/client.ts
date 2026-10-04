@@ -441,8 +441,15 @@ export interface NodeInfo {
   abilities: string[]
   native_ids?: string[]
   agents?: Record<string, NodeAgentDetail>
-  capacity: { cpu_cores: number; ram_gb: number; max_concurrent_tasks: number; current_tasks: number }
+  capacity: { cpu_cores: number; ram_gb: number; max_concurrent_tasks: number; current_tasks: number; queued_tasks?: number }
   resource_profile?: { cpu: number; ram_gb: number; gpu_vram_gb: number; duration_hint: string }
+  /** Fleet observability: advertised software version (empty until a
+   *  new-protocol peer speaks), and this node's measured edge toward the
+   *  peer — transport kind ("ws"/"udp") and ping RTT in ms. Absent for
+   *  the local row and peers only reachable via gossip. */
+  ver?: string
+  rtt_ms?: number
+  transport?: string
 }
 
 /** GET /api/self — this machine's device profile (+ its ledger card),

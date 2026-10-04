@@ -126,6 +126,33 @@ type Capacity struct {
 	RAMGB         int `yaml:"ram_gb" json:"ram_gb"`
 	MaxConcurrent int `yaml:"max_concurrent_tasks" json:"max_concurrent_tasks"`
 	CurrentTasks  int `yaml:"current_tasks" json:"current_tasks"`
+	// QueuedTasks is the backlog depth — tasks accepted locally and waiting
+	// for a free slot (v0.0.10 Track 3). CurrentTasks alone understates load:
+	// two nodes both at max in-flight differ enormously when one holds a
+	// queue of twenty behind them. Sampled per heartbeat like CurrentTasks.
+	QueuedTasks int `yaml:"-" json:"queued_tasks,omitempty"`
+	// Live carries the measured compute metrics the heartbeat refreshes every
+	// beat (v0.0.10 Track 2): unlike the static card fields above, these are
+	// samples of the machine right now — a node whose memory is actually
+	// exhausted must lose tasks to one that merely looks identical on paper.
+	// Nil on old nodes and when every probe failed: absent means "no live
+	// data", so each field can keep an honest zero.
+	Live *LiveMetrics `yaml:"-" json:"live,omitempty"`
+}
+
+// LiveMetrics is the per-beat sampled half of Capacity. A negative field is
+// "unmeasured" (probe failed or no such hardware), never a real reading —
+// routing treats it as absence, not as zero headroom.
+type LiveMetrics struct {
+	// MemFreeGB is usable memory right now (Linux MemAvailable; darwin
+	// free+inactive+purgeable pages; Windows FreePhysicalMemory).
+	MemFreeGB float64 `json:"mem_free"`
+	// DiskFreeGB is free space on the filesystem that holds the daemon's
+	// work directory — the disk task results and worktrees actually land on.
+	DiskFreeGB float64 `json:"disk_free"`
+	// GPUUtil is the busiest GPU's utilization percent (0-100), or -1 when no
+	// GPU/driver answered. Percent not fraction: it renders directly.
+	GPUUtil int `json:"gpu_util"`
 }
 
 // ResourceProfile is a node-side, manually declared resource hint (design §13.2;
@@ -212,6 +239,11 @@ type CapabilitySummary struct {
 type LinkMetric struct {
 	Peer  string `json:"peer"`
 	RTTms int64  `json:"rtt_ms,omitempty"`
+	// Kind names the transport currently carrying the edge ("ws", "udp"),
+	// so the fleet view can show which track a peer is on (Track 3). Empty
+	// on metrics from nodes that predate the field — display treats it as
+	// "ws", the only transport those builds had.
+	Kind string `json:"kind,omitempty"`
 }
 
 // Register inserts (or upserts) this node's card into the local capability
@@ -348,6 +380,21 @@ func HeartbeatIfChanged(db *sql.DB, id, status, capJSON string, minRefreshSec in
 		status, capJSON, now, id, status, capJSON, now-minRefreshSec)
 	if err != nil {
 		return fmt.Errorf("heartbeat %s: %w", id, err)
+	}
+	return nil
+}
+
+// SetNodeVerIfChanged stamps the version a peer advertised (hello or
+// heartbeat Ver field) into its directory row — the fleet view's skew check
+// (Track 3). A no-op write gate keeps a steady beat cheap; an empty ver
+// (old-node hello) leaves the row alone rather than erasing a newer stamp.
+func SetNodeVerIfChanged(db *sql.DB, id, ver string) error {
+	if ver == "" {
+		return nil
+	}
+	_, err := db.Exec(`UPDATE employee_cache SET ver=? WHERE id=? AND COALESCE(ver,'') IS NOT ?`, ver, id, ver)
+	if err != nil {
+		return fmt.Errorf("set ver %s: %w", id, err)
 	}
 	return nil
 }
@@ -706,6 +753,15 @@ type Node struct {
 	// peer id → RTT in milliseconds, decoded from links_json. A neighbor
 	// with no entry costs the unknown-link default in weighted routing.
 	LinkMetrics map[string]int64 `json:"link_metrics,omitempty"`
+	// LinkKinds is the transport table for the same edges (Track 3): peer
+	// id → "ws"/"udp", decoded from links_json alongside LinkMetrics. An
+	// absent entry means the peer's metrics predate the kind field.
+	LinkKinds map[string]string `json:"link_kinds,omitempty"`
+	// Ver is the software version the node advertised in its hello or latest
+	// heartbeat (employee_cache.ver, v34). Empty until a new-protocol peer
+	// speaks; the fleet view diffs it against the local version for the
+	// skew warning.
+	Ver string `json:"ver,omitempty"`
 	// Contacts is the advertised contact plan, decoded from contacts_json:
 	// the scheduled windows this node can transmit on. Contact-graph routing
 	// (scheduler.ContactNextHop) treats them as edges that open at a known
@@ -909,7 +965,7 @@ func tokenSubset(a, b []string) bool {
 
 // Query returns nodes matching filters. Empty status or name matches all.
 func Query(db *sql.DB, status, name string) ([]Node, error) {
-	q := `SELECT id, name, chip, COALESCE(node_kind, 'physical'), COALESCE(node_identity, ''), status, last_seen, scheduler_tier, native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json, projects_json, COALESCE(pub_key,''), COALESCE(key_verified,0)
+	q := `SELECT id, COALESCE(name,''), COALESCE(chip,''), COALESCE(node_kind, 'physical'), COALESCE(node_identity, ''), COALESCE(status,''), COALESCE(last_seen,0), COALESCE(scheduler_tier,0), native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json, projects_json, COALESCE(pub_key,''), COALESCE(key_verified,0), COALESCE(ver,'')
 	      FROM employee_cache WHERE 1=1`
 	var args []any
 	if status != "" {
@@ -936,7 +992,7 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 		var native, agents, manual, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON, projectsJSON sql.NullString
 		if err := rows.Scan(&n.ID, &n.Name, &n.Chip, &n.NodeKind, &n.NodeIdentity, &n.Status, &n.LastSeen, &n.SchedulerTier,
 			&native, &agents, &manual, &capJSON, &resJSON, &neighborsJSON, &linksJSON, &contactsJSON, &projectsJSON,
-			&n.PubKey, &n.KeyVerified); err != nil {
+			&n.PubKey, &n.KeyVerified, &n.Ver); err != nil {
 			return nil, err
 		}
 		if native.Valid && native.String != "" {
@@ -965,6 +1021,12 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 						n.LinkMetrics = make(map[string]int64)
 					}
 					n.LinkMetrics[l.Peer] = l.RTTms
+					if l.Kind != "" {
+						if n.LinkKinds == nil {
+							n.LinkKinds = make(map[string]string)
+						}
+						n.LinkKinds[l.Peer] = l.Kind
+					}
 				}
 			}
 		}

@@ -678,6 +678,8 @@ const ja: Messages = {
   'fleet.node.online': 'オンライン',
   'fleet.node.offline': 'オフライン',
   'fleet.node.tasks': '{cur}/{max} タスク',
+  'fleet.node.queued': '{n} 件キュー中',
+  'fleet.node.verSkewHint': 'v{ver} を実行中（本機は v{self}）',
 
   'ui.update.degraded.title': '更新チェックは一時停止中（ネットワーク制限）',
   'ui.update.degraded.sub': 'GitHub API がレート制限または拒否されています。再起動するまで更新チェックを再開しません。',

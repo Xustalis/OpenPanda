@@ -98,6 +98,14 @@ type nodeRow struct {
 	Agents          map[string]nodeAgentDetail `json:"agents,omitempty"`
 	Capacity        ledger.Capacity            `json:"capacity"`
 	ResourceProfile *ledger.ResourceProfile    `json:"resource_profile,omitempty"`
+	// Fleet observability (Track 3): Ver is the node's advertised software
+	// version (empty until a new-protocol peer speaks); RTTMs/Transport are
+	// this node's measured edge toward that peer — filled by listNodes from
+	// the self row's link metrics, and unset for the local row and for
+	// peers reachable only through gossip.
+	Ver       string `json:"ver,omitempty"`
+	RTTMs     int64  `json:"rtt_ms,omitempty"`
+	Transport string `json:"transport,omitempty"`
 }
 
 type nodeAgentDetail struct {
@@ -194,6 +202,7 @@ func toNodeRow(n ledger.Node) nodeRow {
 		SchedulerTier: n.SchedulerTier,
 		Abilities:     n.Abilities(),
 		Capacity:      n.Capacity,
+		Ver:           n.Ver,
 	}
 	if n.LastSeen != 0 {
 		row.LastSeen = ts(n.LastSeen)

@@ -88,6 +88,12 @@ type HeartbeatPayload struct {
 	// while a field absent outright is an old node's beat and leaves the
 	// stored set alone.
 	Projects []string `json:"projects"`
+	// Ver is the sender's software version (Track 3). Heartbeats repeat the
+	// hello's stamp so a mid-release upgrade refreshes every peer's
+	// directory row without waiting for a reconnect — that row is what the
+	// fleet panel's version-skew warning diffs against its own build.
+	// Absent on old nodes; receivers leave any stored stamp alone.
+	Ver string `json:"ver,omitempty"`
 }
 
 // LinkMetric is the wire form of one measured edge weight (§4.1): the round-
@@ -98,6 +104,10 @@ type HeartbeatPayload struct {
 type LinkMetric struct {
 	Peer  string `json:"peer"`
 	RTTms int64  `json:"rtt_ms"`
+	// Kind names the transport carrying the edge right now ("ws", "udp") —
+	// the fleet view's per-peer transport display (Track 3). Empty on nodes
+	// that predate the field; their only transport was ws.
+	Kind string `json:"kind,omitempty"`
 }
 
 // Contact is the wire form of one scheduled transmission window (§8.4),

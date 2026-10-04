@@ -713,6 +713,8 @@ const en: Messages = {
   'fleet.node.online': 'online',
   'fleet.node.offline': 'offline',
   'fleet.node.tasks': '{cur}/{max} tasks',
+  'fleet.node.queued': '{n} queued',
+  'fleet.node.verSkewHint': 'runs v{ver}, this device runs v{self}',
 
   'ui.update.degraded.title': 'Update checks paused (network limited)',
   'ui.update.degraded.sub': 'GitHub API access is rate-limited or denied; Panda will not check for updates again until you restart it.',

@@ -34,6 +34,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
 
 // generateSharedSecret mints the HMAC material node hellos sign with. Random
@@ -323,4 +324,53 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// runNodesDrain implements `panda nodes drain [id] [--off]` — maintenance
+// mode (Track 2). Draining writes a flag into the shared settings table; the
+// running daemon picks it up within one heartbeat and then: advertises
+// "draining" instead of "online" so peers stop routing new work here,
+// declines inbound delegates outright, and pauses new queue claims — while
+// in-flight tasks run to completion. Only the local node can be drained:
+// there is no remote admin channel, so a remote id fails with the
+// instruction to run the command on that machine.
+func runNodesDrain(args []string) {
+	fs := flag.NewFlagSet("nodes drain", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	off := fs.Bool("off", false, "lift the drain and resume accepting work")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+	rest := fs.Args()
+	if len(rest) > 1 {
+		fatal("usage", fmt.Errorf("panda nodes drain [id] [--off]"))
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	loc := i18n.Detect()
+	selfID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity())
+	id := selfID
+	if len(rest) == 1 {
+		id = rest[0]
+	}
+	if !scheduler.SameRuntimeIdentity(id, selfID) {
+		fatal("drain node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.drain.notSelf", "id", id)))
+	}
+	db, _, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	v := "1"
+	key := "cli.nodes.drain.on"
+	if *off {
+		v, key = "0", "cli.nodes.drain.off"
+	}
+	if _, err := db.Exec(`INSERT INTO settings(key, value) VALUES('node_drain', ?)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value`, v); err != nil {
+		fatal("set drain flag", err)
+	}
+	fmt.Println(i18n.Tf(loc, key, "id", selfID))
 }

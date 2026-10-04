@@ -699,6 +699,8 @@ const zhCN: Messages = {
   'fleet.node.online': '在线',
   'fleet.node.offline': '离线',
   'fleet.node.tasks': '{cur}/{max} 任务',
+  'fleet.node.queued': '{n} 排队中',
+  'fleet.node.verSkewHint': '运行 v{ver}，本机为 v{self}',
 
   // Update banners — painted by <UpdateBanner/> on every view when the
   // updater has backed off to idle, or when a new release is available.

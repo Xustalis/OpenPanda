@@ -145,6 +145,22 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 	return RouteAtP(self, chain, employees, localMatch, required, req, preferred, "", now)
 }
 
+// diskStarvedFloorGB is the measured-free-space floor a node must report to
+// stay a candidate: below it, results and worktree artifacts cannot reliably
+// land. Deliberately small — it is a refuse-to-fail-there floor, not a sizing
+// estimate of the task's output.
+const diskStarvedFloorGB = 0.5
+
+// diskStarved reports whether a node's OWN live sample shows a nearly full
+// work disk. Only a measured value counts: the -1 sentinel and a nil live
+// block both mean "no data", and absence of data must not exclude a node
+// (pre-live-metrics peers and probe-less minimal installs would all vanish).
+func diskStarved(n ledger.Node) bool {
+	return n.Capacity.Live != nil &&
+		n.Capacity.Live.DiskFreeGB >= 0 &&
+		n.Capacity.Live.DiskFreeGB < diskStarvedFloorGB
+}
+
 // RouteAtP is RouteAt plus the task's project name — see RouteP.
 func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, req ledger.ResourceProfile, preferred, project string, now int64) Decision {
 	seen := make(map[string]bool, len(chain))
@@ -174,6 +190,13 @@ func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch f
 			// choosing among the same directory this node already sees.
 			continue
 		}
+		if diskStarved(n) {
+			// The node's own live sample says its work disk is nearly full:
+			// it cannot write results or adopt a worktree, so forwarding
+			// would only fail there. Measured data only — an unprobed peer
+			// stays a candidate like a pre-live-metrics node always was.
+			continue
+		}
 		if n.Matches(required) || len(required) == 0 {
 			matching = append(matching, n)
 		} else if n.SchedulerTier > 1 {
@@ -194,7 +217,7 @@ func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch f
 	// "nobody can do this" would send such a stage to a sub-scheduler or decline
 	// it, when in fact every node can run it and only the hardware filter has an
 	// opinion.
-	canLocal := (len(required) == 0 || localMatch(required)) && (!haveSelf || selfNode.Fits(req))
+	canLocal := (len(required) == 0 || localMatch(required)) && (!haveSelf || (selfNode.Fits(req) && !diskStarved(selfNode)))
 
 	// A named node is authoritative when it can take the task; otherwise fall
 	// through to scored ranking so the task still runs somewhere capable. Match

@@ -3495,6 +3495,9 @@
 .fleet-node.online  .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 .fleet-node.offline .dot { background: var(--text-disabled); }
 .fleet-node .name    { flex: 1; color: var(--text-primary); font-weight: 500; }
+.fleet-node .meta    { color: var(--text-tertiary); white-space: nowrap; font-size: var(--fs-caption); }
+.fleet-node .ver     { color: var(--text-tertiary); white-space: nowrap; font-size: var(--fs-caption); }
+.fleet-node .ver.skew { color: var(--warn); font-weight: 600; cursor: help; }
 .fleet-node .load    { color: var(--text-tertiary); white-space: nowrap; }
 
 /* Single-node CTA body (D4, B6): one centered block that never crowds the

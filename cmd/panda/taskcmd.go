@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -72,15 +73,18 @@ func taskUsage() {
 	fmt.Fprintln(os.Stderr, "      [--project p] [--parent-id ID] [--preferred NODE] [--authorize] [--card PATH]   enqueue a task")
 	fmt.Fprintln(os.Stderr, "  priority <id> <level>                   change a task's priority")
 	fmt.Fprintln(os.Stderr, "  move <id> <seq>                         reorder the drag-sort queue")
+	fmt.Fprintln(os.Stderr, "  <id> --trace                            hop-by-hop delegation trace (hops, timings, transport)")
 	fmt.Fprintln(os.Stderr, "  delete <id>                             remove a task and its subtree (queued/finished)")
 	fmt.Fprintln(os.Stderr, "  approve|reject|cancel|logs <id>         same as the bare commands")
 }
 
 // runTaskShow is the legacy `panda task <id>` — one task's full row plus
-// event timeline.
+// event timeline. --trace switches the record view for the derived
+// hop-by-hop delegation trace (Track 3).
 func runTaskShow(args []string) {
 	fs := flag.NewFlagSet("task", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	trace := fs.Bool("trace", false, "show the hop-by-hop delegation trace instead of the task record")
 	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
@@ -102,6 +106,23 @@ func runTaskShow(args []string) {
 	t, err := store.Get(context.Background(), id)
 	if err != nil {
 		taskStoreFatal(err, id)
+	}
+
+	if *trace {
+		events, err := store.Events(context.Background(), id)
+		if err != nil {
+			fatal("load events", err)
+		}
+		metrics, err := store.DelegationMetricsFor(context.Background(), id)
+		if err != nil {
+			fatal("load delegation metrics", err)
+		}
+		if jsonOutput {
+			emitJSON(traceJSON(t, events, metrics))
+			return
+		}
+		printTaskTrace(t, events, metrics)
+		return
 	}
 
 	if jsonOutput {
@@ -172,6 +193,145 @@ func taskField(label, value string) {
 			continue
 		}
 		fmt.Println(strings.Repeat(" ", taskFieldWidth) + l)
+	}
+}
+
+// printTaskTrace renders `panda task <id> --trace`: the task's path across
+// nodes derived from the event log (Track 3). Each delegate event opens a
+// hop — holder → target; the events until the next delegate belong to that
+// hop and print with +Δ from its start, so "how long did the task sit on
+// node X" reads directly. delegation_metrics rows append the per-hop
+// executor timing the scheduler itself learned from.
+func printTaskTrace(t core.Task, events []core.Event, metrics []core.DelegationMetric) {
+	p := pal()
+	chain := t.Chain
+	if len(chain) == 0 && t.OwnerNode != "" {
+		chain = []string{t.OwnerNode}
+	}
+	transport := t.Transport
+	if transport == "" {
+		transport = "live" // pre-transport-field rows only ever ran live
+	}
+	fmt.Println(p.Heading("trace:"))
+	fmt.Printf("  %s   %s\n", strings.Join(chain, " "+p.MarkArrow()+" "), p.Muted("transport="+transport))
+
+	holder := t.OwnerNode
+	if len(t.Chain) > 0 {
+		holder = t.Chain[0]
+	}
+	hop := 0
+	var hopStart int64
+	for _, e := range events {
+		if e.Type == core.EvDelegate {
+			hop++
+			hopStart = e.TS
+			target := orDash(traceEventField(e.DataJSON, "target"))
+			by := traceEventField(e.DataJSON, "by")
+			when := time.Unix(e.TS, 0).Format("01-02 15:04:05")
+			if by != "" {
+				when += "  by=" + by
+			}
+			fmt.Printf("  hop %-3d %-42s %s\n", hop, holder+" "+p.MarkArrow()+" "+target, p.Muted(when))
+			holder = target
+			continue
+		}
+		line := eventLine(e, "         ")
+		if hopStart > 0 && e.TS >= hopStart {
+			line += p.Muted(fmt.Sprintf("  +%ds", e.TS-hopStart))
+		}
+		fmt.Println(line)
+	}
+	if len(events) == 0 {
+		fmt.Println("  " + p.Muted("(no events recorded)"))
+	}
+	for _, m := range metrics {
+		outcome := "ok"
+		if !m.Success {
+			outcome = "failed"
+		}
+		extra := ""
+		if m.Tokens.Valid {
+			extra += fmt.Sprintf("  tokens=%d", m.Tokens.Int64)
+		}
+		fmt.Printf("  %s %s %s %s  %dms %s%s\n",
+			p.Muted("metric"), shortNode(m.Delegator), p.MarkArrow(), shortNode(m.Executor),
+			m.LatencyMs, outcome, p.Muted(extra))
+	}
+}
+
+// traceEventField extracts one string field from an event's JSON payload;
+// missing keys and malformed payloads both read as "" rather than breaking
+// the trace on old or odd rows.
+func traceEventField(dataJSON, key string) string {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(dataJSON), &obj); err != nil {
+		return ""
+	}
+	var s string
+	if raw, ok := obj[key]; ok && json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	return ""
+}
+
+// traceJSON is the --json --trace payload: the same hop structure the text
+// view renders, kept flat so a script can diff two runs.
+func traceJSON(t core.Task, events []core.Event, metrics []core.DelegationMetric) map[string]any {
+	type hop struct {
+		From   string  `json:"from"`
+		To     string  `json:"to"`
+		TS     int64   `json:"ts"`
+		By     string  `json:"by,omitempty"`
+		Events []int64 `json:"event_ids,omitempty"`
+	}
+	hops := []hop{}
+	cur := -1
+	for _, e := range events {
+		if e.Type == core.EvDelegate {
+			hops = append(hops, hop{To: traceEventField(e.DataJSON, "target"), TS: e.TS, By: traceEventField(e.DataJSON, "by")})
+			cur = len(hops) - 1
+			continue
+		}
+		if cur >= 0 {
+			hops[cur].Events = append(hops[cur].Events, e.ID)
+		}
+	}
+	// Back-fill each hop's origin from the chain: chain[i] is the node that
+	// sent hop i. A local task has chain=[self]; the first hop leaves it.
+	for i := range hops {
+		if i < len(t.Chain) {
+			hops[i].From = t.Chain[i]
+		} else if i > 0 {
+			hops[i].From = hops[i-1].To
+		} else {
+			hops[i].From = t.OwnerNode
+		}
+	}
+	type metric struct {
+		Delegator string  `json:"delegator"`
+		Executor  string  `json:"executor"`
+		Success   bool    `json:"success"`
+		LatencyMs int64   `json:"latency_ms"`
+		Tokens    int64   `json:"tokens,omitempty"`
+		Cost      float64 `json:"cost,omitempty"`
+	}
+	ms := []metric{}
+	for _, m := range metrics {
+		row := metric{Delegator: m.Delegator, Executor: m.Executor, Success: m.Success, LatencyMs: m.LatencyMs}
+		if m.Tokens.Valid {
+			row.Tokens = m.Tokens.Int64
+		}
+		if m.Cost.Valid {
+			row.Cost = m.Cost.Float64
+		}
+		ms = append(ms, row)
+	}
+	return map[string]any{
+		"task_id":   t.TaskID,
+		"chain":     t.Chain,
+		"transport": t.Transport,
+		"hops":      hops,
+		"metrics":   ms,
 	}
 }
 
@@ -346,6 +506,7 @@ func runTaskAdd(args []string) {
 	mode := fs.String("mode", "parallel", "with --agents: 'parallel' runs every harness at once, 'serial' chains them in order")
 	parentID := fs.String("parent-id", "", "parent task id (defaults to PANDA_TASK_ID environment variable)")
 	preferred := fs.String("preferred", "", "preferred node id")
+	nodes := fs.String("nodes", "", "comma-separated node ids to fan the same task out to (one task per node)")
 	actionSpec := fs.String("action-spec", "", "actuator dispatch JSON: {\"target_actuator\":\"hardware:x\",\"action\":\"verb\",\"parameters\":{...}}")
 	fs.Parse(args)
 
@@ -378,6 +539,7 @@ func runTaskAdd(args []string) {
 	engine, err := askengine.New(context.Background(), cfg, askengine.Options{
 		CardPath:   *cardPath,
 		MCPCommand: *mcpCmd,
+		ConfigPath: *configPath,
 	})
 	if err != nil {
 		fatal("ask engine", err)
@@ -466,6 +628,18 @@ func runTaskAdd(args []string) {
 	// `--requires pi.uptime` on a node without that ability never reached the
 	// peer that has it (the same trap plan submission avoids).
 
+	nodeList := parseAgentList(*nodes)
+	if len(nodeList) > 0 {
+		// --nodes IS the routing preference: combining it with --preferred or
+		// a multi-harness plan would produce ambiguous ownership per stage.
+		if pref != "" || len(agentList) > 1 {
+			fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.add.nodesConflict"))
+			os.Exit(2)
+		}
+		runTaskAddNodes(loc, engine, cfg, nodeList, in, q, priorityName(prio))
+		return
+	}
+
 	task, err := engine.EnqueueTask(context.Background(), in, q)
 	if err != nil {
 		fatal("enqueue task", err)
@@ -473,17 +647,7 @@ func runTaskAdd(args []string) {
 
 	// Linked session (same contract as the board): created after a successful
 	// enqueue so a failure leaves no orphan behind.
-	sessionID := ""
-	sessStore := sessions.NewStore(sessionStoreRoot(cfg))
-	if sess, err := sessStore.Create(*title); err == nil {
-		sessionID = sess.ID
-		_, _ = sessStore.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: *prompt})
-		db, store, derr := panelStore(cfg)
-		if derr == nil {
-			_ = store.SetSessionID(context.Background(), task.TaskID, sess.ID)
-			db.Close()
-		}
-	}
+	sessionID := linkTaskSession(cfg, task.TaskID, *title, *prompt)
 
 	if jsonOutput {
 		emitJSON(map[string]string{"task_id": task.TaskID, "session_id": sessionID, "state": task.State})
@@ -492,6 +656,74 @@ func runTaskAdd(args []string) {
 	fmt.Println(i18n.Tf(loc, "cli.task.add.done", "id", task.TaskID, "state", task.State, "priority", priorityName(prio)))
 	if sessionID != "" {
 		fmt.Println(i18n.Tf(loc, "cli.task.add.session", "id", sessionID))
+	}
+}
+
+// linkTaskSession creates the board-style linked session for an enqueued
+// task: a session row, the user's prompt as its first turn, and the task's
+// session_id back-link. Returns "" on any failure — a task must never fail
+// to enqueue because its optional session could not be created.
+func linkTaskSession(cfg *config.Config, taskID, title, prompt string) string {
+	sessStore := sessions.NewStore(sessionStoreRoot(cfg))
+	sess, err := sessStore.Create(title)
+	if err != nil {
+		return ""
+	}
+	_, _ = sessStore.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: prompt})
+	db, store, derr := panelStore(cfg)
+	if derr == nil {
+		_ = store.SetSessionID(context.Background(), taskID, sess.ID)
+		db.Close()
+	}
+	return sess.ID
+}
+
+// runTaskAddNodes fans one task out to the named nodes (Track 2): one
+// enqueued task per node, each pinned by PreferredNode — the router's
+// authoritative-preferred path then lands each copy on its named target
+// while the usual fall-through still applies if a node proves incapable.
+// Results are aggregated as the per-node task list: enqueue is
+// asynchronous, so what can be reported here is where each copy went, and
+// `panda task show <id>` tracks each outcome.
+func runTaskAddNodes(loc i18n.Locale, engine *askengine.Engine, cfg *config.Config, nodes []string, in core.TaskInput, q core.QueueSpec, prioName string) {
+	type fanResult struct {
+		Node      string `json:"node"`
+		TaskID    string `json:"task_id"`
+		SessionID string `json:"session_id,omitempty"`
+		State     string `json:"state,omitempty"`
+		Error     string `json:"error,omitempty"`
+	}
+	results := make([]fanResult, 0, len(nodes))
+	failed := 0
+	for _, node := range nodes {
+		per := in
+		per.PreferredNode = node
+		r := fanResult{Node: node}
+		task, err := engine.EnqueueTask(context.Background(), per, q)
+		if err != nil {
+			r.Error = err.Error()
+			failed++
+		} else {
+			r.TaskID = task.TaskID
+			r.State = task.State
+			r.SessionID = linkTaskSession(cfg, task.TaskID, in.Title, in.Intent)
+		}
+		results = append(results, r)
+	}
+	if jsonOutput {
+		emitJSON(map[string]any{"fanout": len(nodes), "tasks": results})
+		return
+	}
+	fmt.Println(i18n.Tf(loc, "cli.task.add.fanout", "count", strconv.Itoa(len(nodes))))
+	for _, r := range results {
+		if r.Error != "" {
+			fmt.Printf("  %s: ✗ %s\n", r.Node, r.Error)
+			continue
+		}
+		fmt.Printf("  %s: %s → %s (%s)\n", r.Node, r.TaskID, r.State, prioName)
+	}
+	if failed == len(nodes) {
+		os.Exit(1)
 	}
 }
 
