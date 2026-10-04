@@ -2,7 +2,9 @@ package core
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +44,13 @@ type TaskStore struct {
 	eventListeners map[uint64]func(taskID, typ string, data any)
 	nextListenerID uint64
 	onEventMu      sync.RWMutex
+	// eventKey/eventPub sign each recorded event's chain hash with the node's
+	// Ed25519 identity (P2-9). Nil on stores opened without a key (read-only
+	// tools, tests that never wired one) — unsigned events stay legal; they
+	// just carry no attestation.
+	eventKey  ed25519.PrivateKey
+	eventPub  ed25519.PublicKey
+	eventKeyM sync.RWMutex
 }
 
 // NewTaskStore wraps a DB. now may be nil (defaults to Unix time).
@@ -55,6 +64,31 @@ func NewTaskStore(db *sql.DB, logger *slog.Logger) *TaskStore {
 		now:            storage.Now,
 		eventListeners: make(map[uint64]func(taskID, typ string, data any)),
 	}
+}
+
+// NewSigningTaskStore wraps NewTaskStore and, when a node identity is
+// persisted in settings, wires the event signer (P2-9). Every caller that
+// writes events — daemon, ask-engine helpers, CLI verbs — gets the same
+// attestation without re-plumbing the key through each constructor. The
+// key lookup runs here, before any of the store's transactions, so the
+// single-connection pool never sees a nested read.
+func NewSigningTaskStore(db *sql.DB, logger *slog.Logger) *TaskStore {
+	s := NewTaskStore(db, logger)
+	if pub, priv, ok := LoadNodeKey(db); ok {
+		s.SetEventSigner(pub, priv)
+	}
+	return s
+}
+
+// SetEventSigner installs the node identity used to sign recorded events
+// (P2-9). The key must be resolved BEFORE any transaction opens — the store
+// is a single connection, so a lazy settings read from inside recordEventTx
+// would deadlock against its own open tx. Signing is pure-CPU once the key
+// is in memory.
+func (s *TaskStore) SetEventSigner(pub ed25519.PublicKey, priv ed25519.PrivateKey) {
+	s.eventKeyM.Lock()
+	defer s.eventKeyM.Unlock()
+	s.eventPub, s.eventKey = pub, priv
 }
 
 // SetOnReview installs the callback fired when a task transitions into review.
@@ -316,9 +350,21 @@ func (s *TaskStore) recordEventTx(ctx context.Context, tx *sql.Tx, taskID, typ s
 		prevHash = hashEvent(prev.PrevHash, taskID, prev.TS, prev.Type, prev.DataJSON)
 	}
 
+	// P2-9: sign the row's own chain hash — the 32-byte commitment to every
+	// field plus its position — so the signature covers content AND place in
+	// one primitive. Pure-CPU: the key materialized at store-open time, and
+	// a missing key just leaves the columns empty (legacy shape).
+	var sig, sigPub string
+	s.eventKeyM.RLock()
+	if s.eventKey != nil {
+		sig = hex.EncodeToString(ed25519.Sign(s.eventKey, []byte(hashEvent(prevHash, taskID, ts, typ, string(raw)))))
+		sigPub = hex.EncodeToString(s.eventPub)
+	}
+	s.eventKeyM.RUnlock()
+
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO task_events (task_id, ts, type, data_json, prev_hash) VALUES (?, ?, ?, ?, ?)`,
-		taskID, ts, typ, string(raw), prevHash)
+		`INSERT INTO task_events (task_id, ts, type, data_json, prev_hash, sig, sig_pub) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		taskID, ts, typ, string(raw), prevHash, sig, sigPub)
 	if err != nil {
 		return fmt.Errorf("record event %s: %w", typ, err)
 	}
@@ -2097,7 +2143,7 @@ func (s *TaskStore) TaskStamps(ctx context.Context) ([]TaskStamp, error) {
 // Events returns the event timeline for a task, oldest first.
 func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, task_id, ts, type, data_json, COALESCE(prev_hash, '') FROM task_events
+		`SELECT id, task_id, ts, type, data_json, COALESCE(prev_hash, ''), COALESCE(sig, ''), COALESCE(sig_pub, '') FROM task_events
 		 WHERE task_id = ? ORDER BY id ASC`, taskID)
 	if err != nil {
 		return nil, err
@@ -2106,7 +2152,7 @@ func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) 
 	var out []Event
 	for rows.Next() {
 		var e Event
-		if err := rows.Scan(&e.ID, &e.TaskID, &e.TS, &e.Type, &e.DataJSON, &e.PrevHash); err != nil {
+		if err := rows.Scan(&e.ID, &e.TaskID, &e.TS, &e.Type, &e.DataJSON, &e.PrevHash, &e.Sig, &e.SigPub); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -2114,8 +2160,10 @@ func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) 
 	return out, rows.Err()
 }
 
-// VerifyTaskEventChain verifies the per-task hash chain for taskID. It returns
-// nil if the chain is intact, or an error describing the first break.
+// VerifyTaskEventChain verifies the per-task hash chain for taskID: every
+// row's prev_hash links correctly AND every row that carries a signature
+// (P2-9) verifies under the public key it names. It returns nil if the
+// chain is intact, or an error describing the first break.
 func (s *TaskStore) VerifyTaskEventChain(ctx context.Context, taskID string) error {
 	events, err := s.Events(ctx, taskID)
 	if err != nil {
@@ -2127,7 +2175,32 @@ func (s *TaskStore) VerifyTaskEventChain(ctx context.Context, taskID string) err
 			return fmt.Errorf("event %d (id=%d) prev_hash mismatch: got %s, want %s",
 				i+1, e.ID, e.PrevHash, prevHash)
 		}
-		prevHash = hashEvent(e.PrevHash, e.TaskID, e.TS, e.Type, e.DataJSON)
+		h := hashEvent(e.PrevHash, e.TaskID, e.TS, e.Type, e.DataJSON)
+		if e.Sig != "" {
+			if err := verifyEventSig(e.SigPub, h, e.Sig); err != nil {
+				return fmt.Errorf("event %d (id=%d) signature invalid: %w", i+1, e.ID, err)
+			}
+		}
+		prevHash = h
+	}
+	return nil
+}
+
+// verifyEventSig checks a row's signature against the recomputed chain hash
+// and the public key the row names. A torn signature block (sig without
+// pub, undecodable hex) fails closed — a field can only go missing by
+// deletion, which is exactly what verification exists to expose.
+func verifyEventSig(sigPub, chainHash, sig string) error {
+	pub, err := hex.DecodeString(sigPub)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return errors.New("bad sig_pub")
+	}
+	raw, err := hex.DecodeString(sig)
+	if err != nil || len(raw) != ed25519.SignatureSize {
+		return errors.New("bad sig encoding")
+	}
+	if !ed25519.Verify(ed25519.PublicKey(pub), []byte(chainHash), raw) {
+		return errors.New("ed25519 verify failed")
 	}
 	return nil
 }
@@ -2140,6 +2213,11 @@ type Event struct {
 	Type     string
 	DataJSON string
 	PrevHash string
+	// Sig/SigPub are the P2-9 attestation: the Ed25519 signature over this
+	// row's chain hash and the public key that produced it (both hex). Empty
+	// on rows recorded before event signing or by a store without a key.
+	Sig    string
+	SigPub string
 }
 
 // RotateAttempt mints a new attempt_id for a retry/transfer. The caller must

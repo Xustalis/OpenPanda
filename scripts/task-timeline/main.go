@@ -43,7 +43,7 @@ func main() {
 			out = append(out, nodeTimeline{DB: path, Error: err.Error()})
 			continue
 		}
-		store := core.NewTaskStore(db, nil)
+		store := core.NewSigningTaskStore(db, nil)
 		row := nodeTimeline{DB: path}
 		if task, err := store.Get(ctx, *taskID); err == nil {
 			row.Task = &task

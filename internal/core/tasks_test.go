@@ -2,12 +2,14 @@ package core
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
@@ -783,6 +785,102 @@ func TestTaskEventChainTamperDetect(t *testing.T) {
 
 	if err := s.VerifyTaskEventChain(ctx, tk.TaskID); err == nil {
 		t.Fatalf("expected tamper detection error, got nil")
+	}
+}
+
+// TestTaskEventSigning (P2-9): a store with the node key signs every event;
+// the rows verify under the recorded public key; unsigned legacy rows remain
+// legal.
+func TestTaskEventSigning(t *testing.T) {
+	s := newTestStore(t)
+	pub, priv, err := bus.GenerateNodeKey()
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	s.SetEventSigner(pub, priv)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "signed", "root")
+
+	if err := s.Queue(ctx, tk.TaskID, "root"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := s.VerifyTaskEventChain(ctx, tk.TaskID); err != nil {
+		t.Fatalf("verify signed chain: %v", err)
+	}
+	events, err := s.Events(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	for _, e := range events {
+		if e.Sig == "" || e.SigPub == "" {
+			t.Fatalf("event %d unsigned on a keyed store", e.ID)
+		}
+		if e.SigPub != hex.EncodeToString(pub) {
+			t.Fatalf("event %d sig_pub = %s, want this node's key", e.ID, e.SigPub)
+		}
+	}
+}
+
+// TestTaskEventSigForgeryDetect (P2-9): an attacker who rewrites a payload AND
+// repairs the chain — re-hashing forward links — still fails, because the
+// forged row's signature no longer verifies under the node's key.
+func TestTaskEventSigForgeryDetect(t *testing.T) {
+	s := newTestStore(t)
+	pub, priv, err := bus.GenerateNodeKey()
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	s.SetEventSigner(pub, priv)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "forge", "root")
+	if err := s.Queue(ctx, tk.TaskID, "root"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := s.Dispatch(ctx, tk.TaskID, "root", "win"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	// Rewrite event 1's payload and repair event 2's prev_hash — the
+	// classic defeat of the unkeyed chain. Event 1's own sig now lies.
+	events, err := s.Events(ctx, tk.TaskID)
+	if err != nil || len(events) < 2 {
+		t.Fatalf("events: %v n=%d", err, len(events))
+	}
+	forged := `{"tampered":true}`
+	newHash1 := hashEvent(events[0].PrevHash, tk.TaskID, events[0].TS, events[0].Type, forged)
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE task_events SET data_json=? WHERE id=?`, forged, events[0].ID); err != nil {
+		t.Fatalf("tamper payload: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE task_events SET prev_hash=? WHERE id=?`, newHash1, events[1].ID); err != nil {
+		t.Fatalf("repair chain: %v", err)
+	}
+
+	if err := s.VerifyTaskEventChain(ctx, tk.TaskID); err == nil {
+		t.Fatal("repaired forgery passed verification — signature check missing")
+	}
+}
+
+// TestTaskEventChainMixedSigned: legacy unsigned rows next to signed rows
+// still verify — the signature is attestation, not a schema gate.
+func TestTaskEventChainMixedSigned(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "mixed", "root") // unsigned: no key yet
+	if err := s.Queue(ctx, tk.TaskID, "root"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	pub, priv, err := bus.GenerateNodeKey()
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	s.SetEventSigner(pub, priv)
+	if err := s.Dispatch(ctx, tk.TaskID, "root", "win"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if err := s.VerifyTaskEventChain(ctx, tk.TaskID); err != nil {
+		t.Fatalf("mixed chain verify: %v", err)
 	}
 }
 

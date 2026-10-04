@@ -53,13 +53,10 @@ func (c *Core) nodeKeyPair() (ed25519.PublicKey, ed25519.PrivateKey, bool) {
 		case err != nil:
 			c.logger.Warn("node key load", "err", err)
 		default:
-			raw, derr := hex.DecodeString(stored)
-			if derr != nil || len(raw) != ed25519.PrivateKeySize {
+			c.nodePub, c.nodePriv = loadNodeKey(stored)
+			if c.nodePriv == nil {
 				c.logger.Warn("node key corrupt in settings")
-				return
 			}
-			c.nodePriv = ed25519.PrivateKey(raw)
-			c.nodePub = c.nodePriv.Public().(ed25519.PublicKey)
 		}
 		if c.nodePub != nil {
 			c.recordSelfPubKey(c.nodePub)
@@ -69,6 +66,32 @@ func (c *Core) nodeKeyPair() (ed25519.PublicKey, ed25519.PrivateKey, bool) {
 		return nil, nil, false
 	}
 	return c.nodePub, c.nodePriv, true
+}
+
+// loadNodeKey decodes a stored settings value into the keypair, or nils on
+// corruption. Split out so non-Core callers (the audit verifier, the CLI's
+// task store) can reuse the exact format check.
+func loadNodeKey(stored string) (ed25519.PublicKey, ed25519.PrivateKey) {
+	raw, err := hex.DecodeString(stored)
+	if err != nil || len(raw) != ed25519.PrivateKeySize {
+		return nil, nil
+	}
+	priv := ed25519.PrivateKey(raw)
+	return priv.Public().(ed25519.PublicKey), priv
+}
+
+// LoadNodeKey reads this node's persisted Ed25519 identity from an open
+// store, without generating one (generation is the daemon's job). Callers
+// that only verify — `panda audit verify`, the CLI task store — get !ok on a
+// node that has never run a daemon rather than silently minting a key the
+// mesh never advertised.
+func LoadNodeKey(db *sql.DB) (ed25519.PublicKey, ed25519.PrivateKey, bool) {
+	var stored string
+	if err := db.QueryRow(`SELECT value FROM settings WHERE key = ?`, nodeKeySetting).Scan(&stored); err != nil {
+		return nil, nil, false
+	}
+	pub, priv := loadNodeKey(stored)
+	return pub, priv, priv != nil
 }
 
 // peerPubKey resolves a peer's recorded Ed25519 key from the directory. The
