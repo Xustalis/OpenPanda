@@ -79,6 +79,11 @@ type Manifest struct {
 	Hash    string      `json:"hash"`
 	Size    int64       `json:"size"`
 	Entries []EntryMeta `json:"entries"`
+	// Skipped counts archive entries the unpack side declined to materialize
+	// under a skip filter (ExtractExcept): the hash still covers the full
+	// stream, so a skipped .git never changes what the artifact IS, only what
+	// lands in the destination.
+	Skipped int `json:"skipped,omitempty"`
 }
 
 // epoch is the fixed modification time stamped on every entry. Real mtimes are

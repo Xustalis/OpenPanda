@@ -70,6 +70,20 @@ var worktreeSkipDirs = map[string]bool{
 	"target":        true,
 }
 
+// extractProtectedDirs is the return-leg counterpart of worktreeSkipDirs.
+// The outbound set prunes for weight; this set is much smaller because the
+// answer is different — it names what a peer's output must never write back
+// over the user's checkout: .git is the repository's plumbing (hooks, and a
+// config that can embed credentials), and .panda-shadow is this node's own
+// arbitration backup, not task content. A valid artifact — hash-correct, no
+// traversal — can still carry both, and artifact.Unpack alone cannot tell
+// plumbing from content. Regenerable weight like node_modules is NOT here:
+// whatever the executor honestly produced lands intact.
+var extractProtectedDirs = map[string]bool{
+	".git":          true,
+	".panda-shadow": true,
+}
+
 // attachProject fills in the project half of a delegation payload: the memory
 // pack inline, and the work tree as an artifact reference. Called from every
 // place that builds a payload, so a task cannot be delegated project-aware on one
@@ -458,7 +472,7 @@ func (c *Core) adoptProjectOutput(ctx context.Context, t Task, from, hash string
 				}
 			}
 		}
-		m, err := c.artifacts.Extract(hash, dir)
+		m, err := c.artifacts.ExtractExcept(hash, dir, extractProtectedDirs)
 		if err != nil {
 			c.logger.Warn("extract project artifact", "task", t.TaskID, "hash", hash, "err", err)
 			return
@@ -473,6 +487,7 @@ func (c *Core) adoptProjectOutput(ctx context.Context, t Task, from, hash string
 			"hash":    hash,
 			"files":   len(m.Entries),
 			"bytes":   m.Size,
+			"skipped": m.Skipped,
 		})
 		c.logger.Info("project tree adopted", "task", t.TaskID, "project", t.Project,
 			"dir", dir, "files", len(m.Entries))
@@ -509,7 +524,7 @@ func (c *Core) adoptWorktreeOutput(ctx context.Context, t Task, from, hash strin
 				}
 			}
 		}
-		m, err := c.artifacts.Extract(hash, dir)
+		m, err := c.artifacts.ExtractExcept(hash, dir, extractProtectedDirs)
 		if err != nil {
 			c.logger.Warn("extract worktree artifact", "task", t.TaskID, "hash", hash, "err", err)
 			return
@@ -519,7 +534,7 @@ func (c *Core) adoptWorktreeOutput(ctx context.Context, t Task, from, hash strin
 		}
 		c.EvTrace(ctx, t.TaskID, EvProjectSync, map[string]any{
 			"dir": dir, "from": from, "hash": hash,
-			"files": len(m.Entries), "bytes": m.Size,
+			"files": len(m.Entries), "bytes": m.Size, "skipped": m.Skipped,
 		})
 		c.logger.Info("worktree adopted", "task", t.TaskID, "dir", dir, "files", len(m.Entries))
 	}()

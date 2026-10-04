@@ -339,12 +339,23 @@ func (s *Store) Put(want string, r io.Reader) (Manifest, error) {
 // an artifact may have been packed locally, or the file may have been damaged on
 // disk since it arrived.
 func (s *Store) Extract(hash, dst string) (Manifest, error) {
+	return s.ExtractExcept(hash, dst, nil)
+}
+
+// ExtractExcept is Extract with a top-level skip set: archive entries under a
+// named top directory are not materialized. It is the return-leg counterpart
+// of PackDirExcept — the pack side strips those entries for weight, the
+// extract side strips them for safety: a valid (hash-correct, traversal-free)
+// archive from a peer could still contain .git/hooks or a poisoned
+// .git/config, and unpacking it straight onto the user's checkout would hand
+// the sender control of the repository's plumbing.
+func (s *Store) ExtractExcept(hash, dst string, skip map[string]bool) (Manifest, error) {
 	f, err := s.Open(hash)
 	if err != nil {
 		return Manifest{}, err
 	}
 	defer f.Close()
-	m, err := unpack(f, dst, s.maxBytes, s.minFree)
+	m, err := unpack(f, dst, s.maxBytes, s.minFree, skip)
 	if err != nil {
 		return Manifest{}, err
 	}
