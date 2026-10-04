@@ -56,6 +56,95 @@ var migrations = []Migration{
 	{Version: 31, Name: "add_employee_key_verified", Apply: migrateV31},
 	{Version: 32, Name: "add_pending_nodes", Apply: migrateV32},
 	{Version: 33, Name: "add_tasks_remote", Apply: migrateV33},
+	{Version: 34, Name: "add_employee_ver", Apply: migrateV34},
+	{Version: 35, Name: "add_task_events_sig", Apply: migrateV35},
+	{Version: 36, Name: "rekey_outboxes_stable_id", Apply: migrateV36},
+}
+
+// migrateV36 re-keys every outbox destination from the peer's instance id to
+// its stable identity ("k:" + Ed25519 pub) wherever the directory already
+// holds a proven key (Batch-6 restart continuity, confirmed-issues §14). Rows
+// whose peer is unknown or key-less keep their instance id — for those peers
+// the instance id IS the stable key, and they flush exactly as before. The
+// rewrite is INSERT OR REPLACE + DELETE rather than a blind UPDATE: a node
+// that helloed under two instance ids can already hold rows under both, and
+// collapsing them to one stable key must merge, not fail, on the (peer,
+// task_id) primary key.
+func migrateV36(tx MigrationExec) error {
+	// Databases migrating forward from before employee_cache existed have no
+	// identity records to re-key by — every row keeps its instance key, which
+	// is exactly what "no stable identity known" means anyway.
+	dirExists, err := tableExistsTx(tx, "employee_cache")
+	if err != nil || !dirExists {
+		return err
+	}
+	stmts := []struct{ table, cols, vals string }{
+		{"result_outbox",
+			"peer, task_id, payload_json, created_at",
+			"'k:' || e.pub_key, o.task_id, o.payload_json, o.created_at"},
+		{"cancel_outbox",
+			"peer, task_id, reason, created_at",
+			"'k:' || e.pub_key, o.task_id, o.reason, o.created_at"},
+		{"task_outbox",
+			"peer, task_id, payload_json, transport_type, ttl, created_at, payload_blob, via",
+			"'k:' || e.pub_key, o.task_id, o.payload_json, o.transport_type, o.ttl, o.created_at, o.payload_blob, o.via"},
+		{"artifact_push_outbox",
+			"peer, hash, task_id, total, sent_through, acked_through, ttl, created_at",
+			"'k:' || e.pub_key, o.hash, o.task_id, o.total, o.sent_through, o.acked_through, o.ttl, o.created_at"},
+	}
+	for _, s := range stmts {
+		exists, err := tableExistsTx(tx, s.table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if _, err := tx.Exec(fmt.Sprintf(
+			`INSERT OR REPLACE INTO %s (%s)
+			 SELECT %s FROM %s o
+			 JOIN employee_cache e ON e.id = o.peer AND e.pub_key != ''`,
+			s.table, s.cols, s.vals, s.table)); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(fmt.Sprintf(
+			`DELETE FROM %s WHERE peer IN (
+				 SELECT id FROM employee_cache WHERE pub_key != '')`,
+			s.table)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV35 adds task_events.sig / sig_pub (P2-9): the Ed25519 signature of
+// the event's chain hash and the public key that made it. An unkeyed SHA-256
+// chain can be rewritten wholesale by anyone with DB write access and
+// re-hashed end to end — a signed row cannot be forged without the node's
+// private key, so verify gains "this node's key attested this row" on top of
+// "the rows link up". Empty on pre-migration rows: unsigned means unsigned.
+func migrateV35(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "task_events")
+	if err != nil || !exists {
+		return err
+	}
+	if err := addColumnIfMissingTx(tx, "task_events", "sig", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "task_events", "sig_pub", "TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateV34 adds employee_cache.ver: the software version a peer advertised
+// in its hello/heartbeat. Fleet observability (v0.0.10 Track 3) renders the
+// version skew so an operator can see a stale node at a glance instead of
+// debugging a protocol mismatch frame by frame. Empty on rows that predate
+// the column until the next hello re-stamps it.
+func migrateV34(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "employee_cache")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "employee_cache", "ver", "TEXT NOT NULL DEFAULT ''")
 }
 
 // migrateV33 adds tasks.remote: set at intake when the row was created by a

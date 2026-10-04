@@ -45,7 +45,9 @@ func (c *Core) handleDTNBundle(ctx context.Context, env bus.Envelope) {
 	src := strings.TrimPrefix(bnd.SourceEID, "panda://")
 	dest := strings.TrimPrefix(bnd.DestEID, "panda://")
 
-	if dest != c.nodeID {
+	// A destination may be an instance id or a stable "k:" identity (Batch 6):
+	// both are "us" when they name this node.
+	if dest != c.nodeID && dest != c.selfStableID() {
 		c.relayBundle(ctx, env.From, dest, bnd, p.Blob)
 		return
 	}
@@ -92,10 +94,13 @@ func (c *Core) handleDTNBundle(ctx context.Context, env bus.Envelope) {
 // exists the bundle is parked under its destination, recording via so the
 // later flush never echoes it back the way it came.
 func (c *Core) relayBundle(ctx context.Context, via, dest string, bnd *bus.Bundle, blob []byte) {
-	if dest == "" || dest == c.nodeID {
+	if dest == "" || dest == c.nodeID || dest == c.selfStableID() {
 		return
 	}
-	if c.sendableTo(dest) && c.deliverBundle(ctx, dest, blob) {
+	// dest is a stable key for new bundles, an instance id for legacy ones —
+	// delivery and routing need the current instance either way.
+	destInst := c.instanceForStable(ctx, dest)
+	if destInst != "" && c.sendableTo(destInst) && c.deliverBundle(ctx, destInst, blob) {
 		c.logger.Info("dtn_bundle: relayed direct", "bundle", bnd.BundleID, "via", via, "dest", dest)
 		return
 	}
@@ -163,6 +168,13 @@ func (c *Core) parkBundle(ctx context.Context, via, dest string, bnd *bus.Bundle
 func (c *Core) dtnNextHop(ctx context.Context, dest string, exclude map[string]bool, sizeBytes, expiresAt int64) (string, int64) {
 	if c.db == nil {
 		return "", 0
+	}
+	// A stable-keyed destination resolves to its current instance through the
+	// directory; unresolvable identities yield no hop (custody stays parked).
+	if strings.HasPrefix(dest, stableIDPrefix) {
+		if dest = c.instanceForStable(ctx, dest); dest == "" {
+			return "", 0
+		}
 	}
 	self, nodes, err := c.dtnDirectory()
 	if err != nil {

@@ -240,20 +240,20 @@ func TestScheduledFileTaskShipsWorktree(t *testing.T) {
 	}
 
 	// The peer's row must carry the worktree input — the tree rode the wire.
+	// The row is visible to Get the moment CreateWithID lands, but its
+	// inputs column is filled a few statements later inside handleDelegate —
+	// poll until they appear rather than racing that gap.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		lt, gerr := leaf.store.Get(ctx, got.TaskID)
-		if gerr == nil {
-			if len(lt.Inputs) == 0 {
-				t.Fatalf("peer task has no inputs: %+v", lt.Inputs)
-			}
+		if gerr == nil && len(lt.Inputs) > 0 {
 			if lt.Inputs[0].Stage != worktreeArtifactStage {
 				t.Fatalf("input stage = %q, want %q", lt.Inputs[0].Stage, worktreeArtifactStage)
 			}
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("peer never received the delegated task: %v", gerr)
+			t.Fatalf("peer task never gained its worktree input (err=%v inputs=%+v)", gerr, lt.Inputs)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
