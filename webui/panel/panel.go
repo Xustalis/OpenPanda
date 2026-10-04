@@ -241,7 +241,28 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("POST /api/push/unsubscribe", h.pushUnsubscribe)
 	}
 	mux.Handle("/", staticHandler(d.StaticDir))
-	return securityHeaders(authMiddleware(d.Token, mux))
+	return securityHeaders(authMiddleware(d.Token, maxRequestBody(mux)))
+}
+
+// maxAPIBodyBytes bounds any mutating API request body. Every JSON decoder
+// in the handlers reads to EOF, so without a cap an authenticated client —
+// or anything past the Bearer check — could stream unbounded memory into
+// the process. 16 MiB covers the largest legitimate payload (a memory file
+// edit or a long task intent) with room to spare; SSE and reads are GETs
+// and pass through untouched.
+const maxAPIBodyBytes = 16 << 20
+
+// maxRequestBody wraps mutating /api/* requests with a MaxBytesReader so a
+// decode hits a hard bound instead of growing the heap without limit.
+func maxRequestBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") && r.Body != nil &&
+			(r.Method == http.MethodPost || r.Method == http.MethodPut ||
+				r.Method == http.MethodPatch || r.Method == http.MethodDelete) {
+			r.Body = http.MaxBytesReader(w, r.Body, maxAPIBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // securityHeaders adds defense-in-depth response headers to every request

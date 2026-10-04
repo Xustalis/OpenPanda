@@ -1516,6 +1516,12 @@ func checkAdapterExists(adapter string) error {
 	if adapter == "" {
 		return fmt.Errorf("Agent adapter 不能为空：请给出适配器文件名，或使用注册表里已有的名字（%s）", knownAgentList())
 	}
+	// The spawn side (commander.adapterPath) refuses any name with a path
+	// separator or colon, so a path-like name written here could never
+	// launch — reject it now instead of leaving a dead card entry.
+	if strings.ContainsAny(adapter, `/\:`) {
+		return fmt.Errorf("Agent adapter %q 含路径分隔符或冒号，不是合法适配器文件名", adapter)
+	}
 	if adapterFileExists(adapter) {
 		return nil
 	}
