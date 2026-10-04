@@ -36,14 +36,14 @@
   font-size: var(--text-sm);
 }
 .btn.primary {
-  background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+  background: var(--accent);
   border-color: transparent;
   color: var(--accent-ink);
   font-weight: 600;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), var(--shadow-xs);
+  box-shadow: var(--shadow-xs);
 }
 .btn.primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, var(--accent-1), var(--accent));
+  background: var(--accent-strong);
   border-color: transparent;
 }
 .btn.danger {

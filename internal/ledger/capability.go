@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -58,6 +59,27 @@ type ActionSpec struct {
 	Parameters     map[string]any `json:"parameters,omitempty"`
 }
 
+// RequiresForActionSpec returns requires with the spec's target actuator
+// leading it. Commander.MatchActuator resolves the FIRST required token that
+// matches any card actuator, so a vague token ("servo") ahead of the exact id
+// can resolve a different actuator than the spec named — the substitution
+// gate then refuses the mismatch and the task churns through declines and
+// re-routes. Leading with the exact id makes the spec's stated target win;
+// a duplicate exact id is folded rather than doubled.
+func RequiresForActionSpec(requires []string, spec *ActionSpec) []string {
+	if spec == nil || spec.TargetActuator == "" {
+		return requires
+	}
+	out := make([]string, 0, len(requires)+1)
+	out = append(out, spec.TargetActuator)
+	for _, r := range requires {
+		if r != spec.TargetActuator {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // NativeAbility is a deterministic command this node can run.
 type NativeAbility struct {
 	ID          string   `yaml:"id" json:"id"`
@@ -72,11 +94,13 @@ type Agent struct {
 	Adapter      string `yaml:"adapter" json:"adapter"`
 	InstallCheck string `yaml:"install_check" json:"install_check"`
 	// Command is the argv template the generic adapter (generic.py) expands:
-	// shlex-split, every "{prompt}" placeholder replaced by the task prompt as
-	// one literal argv element (appended when no placeholder is present). It
-	// lets a card wire ANY headless CLI — `command: "zcode --prompt {prompt}"`
-	// — without a bespoke adapter script. Ignored by adapters that carry their
-	// own command line. Never crosses the wire (CapabilitySummary carries only
+	// shlex-split, with "{prompt}" replaced by the task prompt as one literal
+	// argv element (appended when no placeholder is present), plus optional
+	// {stdin} (pipe the prompt to the child's stdin), {cwd}, {resume} and
+	// {max_turns} placeholders (see the generic.py docstring). It lets a card
+	// wire ANY headless CLI — `command: "zcode --prompt {prompt}"` — without
+	// a bespoke adapter script. Ignored by adapters that carry their own
+	// command line. Never crosses the wire (CapabilitySummary carries only
 	// capability tags), so it stays a local declaration like NativeAbility.
 	Command      string   `yaml:"command,omitempty" json:"command,omitempty"`
 	Capabilities []string `yaml:"capabilities" json:"capabilities"`
@@ -175,6 +199,11 @@ type CapabilitySummary struct {
 	// forwarded to a node with none, and before v0.0.6 the peer half of this
 	// field was simply dropped, so every peer looked equally capable.
 	ResourceProfile ResourceProfile `json:"resource_profile,omitempty"`
+	// Projects lists the project names this node holds a checkout of, so a
+	// project-bound task can be routed where its tree already lives instead of
+	// packing it across the wire (§6.3 residence term). Membership changes as
+	// projects land, so the regular heartbeat carries the same list.
+	Projects []string `json:"projects,omitempty"`
 }
 
 // LinkMetric is one measured edge of the link-state graph (§4.1): the
@@ -235,17 +264,17 @@ func Register(db *sql.DB, c Card, id string, tier int) error {
 	if identity == "" {
 		identity = id
 	}
-	return upsertNode(db, id, c.Device, c.Chip, kind, identity, string(native), string(agents), string(manual), string(capJSON), string(resJSON), "", "", "", tier)
+	return upsertNode(db, id, c.Device, c.Chip, kind, identity, string(native), string(agents), string(manual), string(capJSON), string(resJSON), "", "", "", "", tier)
 }
 
 // upsertNode writes one directory row — native/agents/manual/capacity/resource
 // profile/neighbors/link metrics/contacts already marshalled to JSON — and
 // marks it online. Shared by Register (self, full card) and UpsertRemote
 // (peer, ID-only summary) so the upsert SQL lives in one place.
-func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON string, tier int) error {
+func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON, projectsJSON string, tier int) error {
 	_, err := db.Exec(`
-		INSERT INTO employee_cache (id, name, department, chip, node_kind, node_identity, native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json, status, last_seen, scheduler_tier)
-		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
+		INSERT INTO employee_cache (id, name, department, chip, node_kind, node_identity, native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json, projects_json, status, last_seen, scheduler_tier)
+		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name=excluded.name, chip=excluded.chip,
 			node_kind=excluded.node_kind, node_identity=excluded.node_identity,
@@ -254,8 +283,13 @@ func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agents
 			resource_profile_json=excluded.resource_profile_json,
 			neighbors_json=excluded.neighbors_json, links_json=excluded.links_json,
 			contacts_json=excluded.contacts_json,
+			-- A silent upsert (self Register, an old peer's card) carries no
+			-- residence claim: preserve what the heartbeat gossip published
+			-- rather than blanking it until the next beat.
+			projects_json=CASE WHEN excluded.projects_json='' THEN employee_cache.projects_json
+				ELSE excluded.projects_json END,
 			status='online', last_seen=excluded.last_seen, scheduler_tier=excluded.scheduler_tier`,
-		id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON, storage.Now(), tier,
+		id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON, projectsJSON, storage.Now(), tier,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert %s: %w", id, err)
@@ -280,12 +314,50 @@ func Heartbeat(db *sql.DB, id, status string, capJSON string) error {
 	return nil
 }
 
+// HeartbeatIfChanged is Heartbeat behind a read-compare: the row is
+// rewritten only when status or the capacity payload differs, or when
+// last_seen is older than minRefreshSec — the freshness floor that keeps the
+// 90s stale-peer sweep and the panel's 45s liveness check honest. A steady
+// peer's 15s beat otherwise appends a WAL page on every arrival for a row
+// that already says exactly this.
+func HeartbeatIfChanged(db *sql.DB, id, status, capJSON string, minRefreshSec int64) error {
+	// Normalize before comparing: Heartbeat stores "{}" for an empty payload,
+	// so comparing raw "" against the stored "{}" would rewrite every beat
+	// and the gate would never engage.
+	if capJSON == "" {
+		b, err := json.Marshal(Capacity{})
+		if err != nil {
+			return err
+		}
+		capJSON = string(b)
+	}
+	// One statement, not read-compare-write: the WHERE clause gates the
+	// update on "something changed or the row went stale", so a steady beat
+	// costs a single no-op UPDATE round-trip instead of a SELECT plus a
+	// conditional write — and the change check is atomic with the write,
+	// not two racing round-trips. RowsAffected tells the truth either way
+	// (0 = unchanged/stale-gated, 1 = rewritten); callers don't care, so it
+	// is deliberately discarded.
+	now := storage.Now()
+	_, err := db.Exec(
+		`UPDATE employee_cache SET status=?, capacity_json=?, last_seen=?
+		 WHERE id=? AND (
+		   COALESCE(status,'') IS NOT ? OR
+		   COALESCE(capacity_json,'') IS NOT ? OR
+		   COALESCE(last_seen,0) <= ?)`,
+		status, capJSON, now, id, status, capJSON, now-minRefreshSec)
+	if err != nil {
+		return fmt.Errorf("heartbeat %s: %w", id, err)
+	}
+	return nil
+}
+
 // UpdateAdjacency refreshes a node's advertised edge set, measured link
 // weights (§4.1) and contact plan (§8.4) without touching the rest of its
 // row — the gossip channel heartbeats drive between full card updates.
 // Empty inputs leave that column alone, so a sender that only publishes one
 // side does not blank the others.
-func UpdateAdjacency(db *sql.DB, id, neighborsJSON, linksJSON, contactsJSON string) error {
+func UpdateAdjacency(db *sql.DB, id, neighborsJSON, linksJSON, contactsJSON, projectsJSON string) error {
 	if neighborsJSON != "" {
 		if _, err := db.Exec(`UPDATE employee_cache SET neighbors_json=? WHERE id=?`, neighborsJSON, id); err != nil {
 			return fmt.Errorf("update neighbors %s: %w", id, err)
@@ -301,7 +373,68 @@ func UpdateAdjacency(db *sql.DB, id, neighborsJSON, linksJSON, contactsJSON stri
 			return fmt.Errorf("update contacts %s: %w", id, err)
 		}
 	}
+	if projectsJSON != "" {
+		if _, err := db.Exec(`UPDATE employee_cache SET projects_json=? WHERE id=?`, projectsJSON, id); err != nil {
+			return fmt.Errorf("update projects %s: %w", id, err)
+		}
+	}
 	return nil
+}
+
+// UpdateAdjacencyIfChanged runs UpdateAdjacency only when one of the supplied
+// columns would actually change. Timer-driven publishers (heartbeat
+// residence, the 5s self-neighbor refresh) otherwise append a WAL page every
+// tick for a row that already says exactly this. A missing or unreadable row
+// falls through to the write — that is precisely when it matters.
+func UpdateAdjacencyIfChanged(db *sql.DB, id, neighborsJSON, linksJSON, contactsJSON, projectsJSON string) error {
+	// One statement: the CASEs keep the stored column for empty inputs (same
+	// "absent means leave alone" contract UpdateAdjacency has), and the WHERE
+	// clause asks SQLite whether any supplied value actually differs — a
+	// steady tick is a single no-op UPDATE round-trip, atomic with the
+	// compare, replacing the old SELECT-then-maybe-four-UPDATEs shape.
+	_, err := db.Exec(
+		`UPDATE employee_cache SET
+		   neighbors_json = CASE WHEN ?1 != '' THEN ?1 ELSE neighbors_json END,
+		   links_json     = CASE WHEN ?2 != '' THEN ?2 ELSE links_json END,
+		   contacts_json  = CASE WHEN ?3 != '' THEN ?3 ELSE contacts_json END,
+		   projects_json  = CASE WHEN ?4 != '' THEN ?4 ELSE projects_json END
+		 WHERE id = ?5 AND (
+		   (?1 != '' AND COALESCE(neighbors_json,'') IS NOT ?1) OR
+		   (?2 != '' AND COALESCE(links_json,'') IS NOT ?2) OR
+		   (?3 != '' AND COALESCE(contacts_json,'') IS NOT ?3) OR
+		   (?4 != '' AND COALESCE(projects_json,'') IS NOT ?4))`,
+		neighborsJSON, linksJSON, contactsJSON, projectsJSON, id)
+	if err != nil {
+		return fmt.Errorf("update adjacency %s: %w", id, err)
+	}
+	return nil
+}
+
+// NodeStamp is the minimal per-node triple a change-detection digest needs —
+// the full Query projection carries every JSON payload the card holds.
+type NodeStamp struct {
+	ID       string
+	Status   string
+	LastSeen int64
+}
+
+// NodeStamps lists the digest input for every known node, ordered by id so a
+// digest built from it is order-stable.
+func NodeStamps(db *sql.DB) ([]NodeStamp, error) {
+	rows, err := db.Query(`SELECT id, status, COALESCE(last_seen,0) FROM employee_cache ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("query node stamps: %w", err)
+	}
+	defer rows.Close()
+	var out []NodeStamp
+	for rows.Next() {
+		var n NodeStamp
+		if err := rows.Scan(&n.ID, &n.Status, &n.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
 }
 
 // MarkOffline flips a node to offline and stamps last_seen.
@@ -385,6 +518,96 @@ func Remove(db *sql.DB, id string) (int64, error) {
 	return n, nil
 }
 
+// MarkVerified stamps the node's CURRENT advertised key as human-confirmed —
+// the `panda nodes verify` write. It refuses (false) when there is no key on
+// record: there is nothing to have compared, and a verify that attaches to a
+// later first-seen key would bless a key nobody looked at.
+func MarkVerified(db *sql.DB, id string) (bool, error) {
+	res, err := db.Exec(`UPDATE employee_cache SET key_verified=? WHERE id=? AND pub_key != ''`,
+		time.Now().Unix(), id)
+	if err != nil {
+		return false, fmt.Errorf("verify node %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("verify node %s: rows: %w", id, err)
+	}
+	return n > 0, nil
+}
+
+// PendingNode is one row of the LAN discovery hint list: an unpaired node
+// that broadcast its address recently. Everything in it is self-asserted —
+// the row is a lead for `panda nodes add`, never proof of identity. Proof
+// still comes from the paired hello (shared secret + Ed25519) after the
+// operator admits the address.
+type PendingNode struct {
+	ID        string `json:"id"`
+	Addr      string `json:"addr"`
+	PubKey    string `json:"pub_key,omitempty"`
+	Ver       string `json:"ver,omitempty"`
+	FirstSeen int64  `json:"first_seen"`
+	LastSeen  int64  `json:"last_seen"`
+}
+
+// Fingerprint renders the advertised key's comparable prefix — the same
+// 16-hex form the fleet list uses, so an operator can compare this row
+// against the other machine's own `panda nodes` line before admitting it.
+func (p PendingNode) Fingerprint() string {
+	if len(p.PubKey) < 16 {
+		return p.PubKey
+	}
+	return p.PubKey[:16]
+}
+
+// UpsertPending records a discovery beacon. first_seen survives across
+// beacons so the listing can tell a just-appeared node from a long-announced
+// one; a node already in the directory is skipped by the caller (it is
+// joined, not pending).
+func UpsertPending(db *sql.DB, p PendingNode) error {
+	_, err := db.Exec(`INSERT INTO pending_nodes (id, addr, pub_key, ver, first_seen, last_seen)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET addr=excluded.addr, pub_key=excluded.pub_key,
+			ver=excluded.ver, last_seen=excluded.last_seen`,
+		p.ID, p.Addr, p.PubKey, p.Ver, p.FirstSeen, p.LastSeen)
+	if err != nil {
+		return fmt.Errorf("upsert pending %s: %w", p.ID, err)
+	}
+	return nil
+}
+
+// ListPending returns pending nodes freshest-first, first sweeping rows whose
+// last beacon is older than maxAge — the read-side expiry keeps the list
+// honest even when the daemon has stopped sweeping.
+func ListPending(db *sql.DB, maxAge time.Duration) ([]PendingNode, error) {
+	if maxAge > 0 {
+		cutoff := time.Now().Add(-maxAge).Unix()
+		if _, err := db.Exec(`DELETE FROM pending_nodes WHERE last_seen < ?`, cutoff); err != nil {
+			return nil, fmt.Errorf("sweep pending: %w", err)
+		}
+	}
+	rows, err := db.Query(`SELECT id, addr, pub_key, ver, first_seen, last_seen FROM pending_nodes ORDER BY last_seen DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]PendingNode, 0, 4)
+	for rows.Next() {
+		var p PendingNode
+		if err := rows.Scan(&p.ID, &p.Addr, &p.PubKey, &p.Ver, &p.FirstSeen, &p.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// ForgetPending drops a pending row — after `nodes admit` converts it to a
+// configured peer, or when the operator wants a broadcaster gone from view.
+func ForgetPending(db *sql.DB, id string) error {
+	_, err := db.Exec(`DELETE FROM pending_nodes WHERE id=?`, id)
+	return err
+}
+
 // UpsertRemote writes a peer's capability summary into the local directory,
 // marking it online. Remote nodes are stored with ID-only abilities (no
 // executable commands) since this node never runs their commands directly —
@@ -440,6 +663,14 @@ func UpsertRemote(db *sql.DB, id string, s CapabilitySummary) error {
 	if err != nil {
 		return fmt.Errorf("marshal remote contacts: %w", err)
 	}
+	// s.Projects stays nil on a peer that predates the field: marshalling the
+	// nil slice still lands as "null" in the column, which decodes to the same
+	// absence — the row simply reads as "unknown residence" until a heartbeat
+	// carrying the list arrives.
+	projectsJSON, err := json.Marshal(s.Projects)
+	if err != nil {
+		return fmt.Errorf("marshal remote projects: %w", err)
+	}
 
 	kind, identity := s.NodeKind, s.NodeIdentity
 	if kind == "" {
@@ -448,7 +679,7 @@ func UpsertRemote(db *sql.DB, id string, s CapabilitySummary) error {
 	if identity == "" {
 		identity = id
 	}
-	return upsertNode(db, id, s.Device, s.Chip, kind, identity, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), string(resJSON), string(neighborsJSON), string(linksJSON), string(contactsJSON), s.SchedulerTier)
+	return upsertNode(db, id, s.Device, s.Chip, kind, identity, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), string(resJSON), string(neighborsJSON), string(linksJSON), string(contactsJSON), string(projectsJSON), s.SchedulerTier)
 }
 
 // Node is a single employee_cache row, decoded.
@@ -480,6 +711,35 @@ type Node struct {
 	// (scheduler.ContactNextHop) treats them as edges that open at a known
 	// time, alongside the always-on live adjacency above.
 	Contacts []Contact `json:"contacts,omitempty"`
+	// Projects is the advertised residence set (§6.3), decoded from
+	// projects_json: the names of the projects this node holds a checkout of.
+	// A project-bound task scores a resident node higher — the tree does not
+	// have to cross the wire when the work lands where the code lives.
+	Projects []string `json:"projects,omitempty"`
+	// PubKey is the node's advertised Ed25519 key (hex), learned from signed
+	// hellos — the bytes the fingerprint is rendered from and every signed
+	// grant verifies against.
+	PubKey string `json:"pub_key,omitempty"`
+	// KeyVerified is the unix timestamp a human confirmed the fingerprint
+	// (panda nodes verify). Zero means TOFU-recorded but never compared — a
+	// state the fleet list shows rather than silently treats as trusted.
+	KeyVerified int64 `json:"key_verified,omitempty"`
+}
+
+// Fingerprint renders the comparable form of PubKey — enough hex digits that
+// two machines' listings can be eyeballed side by side, short enough to say
+// out loud. Empty when the node predates signed hellos.
+func (n Node) Fingerprint() string {
+	if len(n.PubKey) < 16 {
+		return n.PubKey
+	}
+	return n.PubKey[:16]
+}
+
+// Verified reports whether the current key has been human-confirmed. A node
+// with no key at all is not "verified" — there is nothing to have checked.
+func (n Node) Verified() bool {
+	return n.PubKey != "" && n.KeyVerified > 0
 }
 
 // Abilities returns this node's displayable ability list — native IDs,
@@ -649,7 +909,7 @@ func tokenSubset(a, b []string) bool {
 
 // Query returns nodes matching filters. Empty status or name matches all.
 func Query(db *sql.DB, status, name string) ([]Node, error) {
-	q := `SELECT id, name, chip, COALESCE(node_kind, 'physical'), COALESCE(node_identity, ''), status, last_seen, scheduler_tier, native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json
+	q := `SELECT id, name, chip, COALESCE(node_kind, 'physical'), COALESCE(node_identity, ''), status, last_seen, scheduler_tier, native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json, projects_json, COALESCE(pub_key,''), COALESCE(key_verified,0)
 	      FROM employee_cache WHERE 1=1`
 	var args []any
 	if status != "" {
@@ -673,9 +933,10 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 		// later by a migration (legacy rows are NULL until re-upserted), and a
 		// partial insert leaves the others NULL too. Scan all of them as nullable
 		// so a single such row does not fail the whole directory query.
-		var native, agents, manual, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON sql.NullString
+		var native, agents, manual, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON, projectsJSON sql.NullString
 		if err := rows.Scan(&n.ID, &n.Name, &n.Chip, &n.NodeKind, &n.NodeIdentity, &n.Status, &n.LastSeen, &n.SchedulerTier,
-			&native, &agents, &manual, &capJSON, &resJSON, &neighborsJSON, &linksJSON, &contactsJSON); err != nil {
+			&native, &agents, &manual, &capJSON, &resJSON, &neighborsJSON, &linksJSON, &contactsJSON, &projectsJSON,
+			&n.PubKey, &n.KeyVerified); err != nil {
 			return nil, err
 		}
 		if native.Valid && native.String != "" {
@@ -709,6 +970,9 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 		}
 		if contactsJSON.Valid && contactsJSON.String != "" {
 			_ = json.Unmarshal([]byte(contactsJSON.String), &n.Contacts)
+		}
+		if projectsJSON.Valid && projectsJSON.String != "" {
+			_ = json.Unmarshal([]byte(projectsJSON.String), &n.Projects)
 		}
 		out = append(out, n)
 	}

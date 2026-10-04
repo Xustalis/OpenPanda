@@ -71,8 +71,14 @@ type rpcError struct {
 // the parent's full environment is no longer inherited, so a server only sees
 // the variables the caller grants it. It returns a started, initialized
 // client; the caller owns it and must Close it.
+//
+// The child is deliberately NOT bound to ctx: callers hand in request-scoped
+// contexts (the settings PUT handler uses a 30s timeout), and
+// exec.CommandContext would SIGKILL the process group when that ctx ends —
+// the server died moments after the settings page saved. ctx bounds only the
+// spawn+handshake; the child's lifetime is owned by Close.
 func NewStdioClient(ctx context.Context, command string, env []string, args ...string) (*Client, error) {
-	cmd := executil.CommandContext(ctx, command, args...)
+	cmd := executil.CommandContext(context.Background(), command, args...)
 	security.NewSandbox("").Apply(cmd, env...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

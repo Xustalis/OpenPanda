@@ -15,6 +15,7 @@ import { SkillsView } from './views/skills'
 import { SettingsView } from './views/settings'
 import { OnboardingBanner } from './views/onboarding'
 import { ToastHost } from './components/toast'
+import { Icon } from './components/icons'
 import { ConfirmHost } from './components/confirm'
 import { PaletteHost, openPalette } from './components/palette'
 
@@ -191,7 +192,7 @@ function UpdateBanner() {
   if (paused) {
     return (
       <div class="banner banner-warn update-banner" role="status">
-        <span class="banner-ico" aria-hidden>🔕</span>
+        <Icon name="bell-off" class="banner-ico" />
         <span class="banner-body">
           <strong>{t('ui.update.degraded.title')}</strong>
           <span class="banner-sub">
@@ -210,7 +211,7 @@ function UpdateBanner() {
   // New version available is a rarer, softer path.
   return (
     <div class="banner banner-info update-banner" role="status">
-      <span class="banner-ico" aria-hidden>✨</span>
+      <Icon name="sparkles" class="banner-ico" />
       <span class="banner-body">
         <strong>{t('ui.update.available.title', { version: displayVersion(up.latest, up.latest_codename) })}</strong>
         <span class="banner-sub">{up.notes ?? t('ui.update.available.sub')}</span>

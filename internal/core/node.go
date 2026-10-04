@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -66,6 +67,11 @@ type Node struct {
 	tier   int
 	logger *slog.Logger
 	hbTick time.Duration
+	// beatMu guards lastBeatJSON/lastBeatAt — the change-gate that keeps an
+	// idle heartbeat from rewriting an identical self row every tick.
+	beatMu       sync.Mutex
+	lastBeatJSON string
+	lastBeatAt   time.Time
 }
 
 // NewNode builds a Node with an optional card. A nil card is allowed for a
@@ -117,12 +123,30 @@ func (n *Node) RunHeartbeat(ctx context.Context) {
 
 func (n *Node) beat(ctx context.Context) {
 	capJSON, _ := n.capacitySnapshot(ctx)
+	n.beatMu.Lock()
+	defer n.beatMu.Unlock()
+	// Skip the rewrite when the advertised payload is unchanged and the row
+	// is still fresh: the same UPDATE every 15s is pure WAL churn on an idle
+	// node, and every peer's view of our liveness comes from the wire
+	// heartbeat frames (sent regardless), not this row. 30s stays under the
+	// panel's 45s self-liveness bound and the 90s stale-peer sweep, so no
+	// consumer sees the row age out.
+	if capJSON == n.lastBeatJSON && time.Since(n.lastBeatAt) < selfRowRefresh {
+		return
+	}
 	if err := ledger.Heartbeat(n.db, n.id, "online", capJSON); err != nil {
 		n.logger.Warn("heartbeat", "err", err)
 		return
 	}
+	n.lastBeatJSON, n.lastBeatAt = capJSON, time.Now()
 	n.logger.Debug("heartbeat", "node", n.id, "capacity", capJSON)
 }
+
+// selfRowRefresh is the floor under which an unchanged self row is still
+// rewritten: consumers that read last_seen (the panel's 45s "running" test,
+// the 90s ExpireStale sweep, freshness-weighted scoring) must not watch the
+// self row age out just because the payload was identical.
+const selfRowRefresh = 30 * time.Second
 
 // capacitySnapshot returns the live capacity JSON (with the real active-task
 // count, not the static card value) plus the derived 0-1 load. The DCPS

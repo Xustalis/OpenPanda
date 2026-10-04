@@ -41,6 +41,12 @@ import _harness as harness
 
 ALLOWED_TOOLS = "Read,Write,Edit,Bash,Grep,Glob"
 
+# Read-only face for unconsented remote tasks: no Bash (arbitrary shell), no
+# Write/Edit (filesystem mutation), no WebFetch/WebSearch (egress). An agent
+# restricted to reads can still answer "what does this code do" — the class of
+# work a delegation is legitimately for without consent.
+RESTRICTED_TOOLS = "Read,Grep,Glob"
+
 
 class Unsupported(Exception):
     """The CLI rejected a streaming flag — degrade to plain JSON mode."""
@@ -55,14 +61,22 @@ def main():
     prompt, timeout, cwd = req
 
     model = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
-    max_turns = os.environ.get("CLAUDE_MAX_TURNS", "30")
+    # Turn cap order: the task's own spec.max_turns wins, then the operator's
+    # env, then the default. A task that needs a long build-test loop asks for
+    # it in-band instead of inheriting a ceiling sized for a quick edit.
+    max_turns = str(req.max_turns or os.environ.get("CLAUDE_MAX_TURNS", "30"))
     base = ["claude", "-p", prompt,
             "--max-turns", max_turns,
             "--permission-mode", "acceptEdits"]
-    # minimal (or unset) keeps the safe file-and-shell whitelist; extended
-    # leaves the tool face unrestricted so Skills / the Task (sub-agent) tool
-    # / project MCP servers work under an explicit operator choice.
-    if req.tools_policy != "extended":
+    # restricted (unconsented remote task) narrows to a read-only face and
+    # outranks tools_policy — an operator's extended choice widens THEIR
+    # tasks, not a peer's unconsented one. Otherwise minimal (or unset) keeps
+    # the safe file-and-shell whitelist; extended leaves the tool face
+    # unrestricted so Skills / the Task (sub-agent) tool / project MCP
+    # servers work under an explicit operator choice.
+    if req.restricted:
+        base += ["--allowedTools", RESTRICTED_TOOLS]
+    elif req.tools_policy != "extended":
         base += ["--allowedTools", ALLOWED_TOOLS]
     # A follow-up round resumes the agent's own session: its reasoning trail
     # survives instead of cold-starting on the bare follow-up instruction.

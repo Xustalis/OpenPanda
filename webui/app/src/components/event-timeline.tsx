@@ -2,6 +2,7 @@ import { useState } from 'preact/hooks'
 import type { TaskEvent } from '../api/client'
 import { Markdown } from '../md/render'
 import { formatTaskEvent } from './event-parser'
+import { Icon } from './icons'
 import { t } from '../i18n'
 
 export interface EventTimelineProps {
@@ -95,7 +96,7 @@ function ThoughtCard({
   return (
     <div class={`thought-card ${open ? 'is-open' : 'is-collapsed'}`}>
       <div class="thought-card-header" onClick={() => setOpen(!open)}>
-        <span class="thought-card-icon" aria-hidden="true">🧠</span>
+        <Icon name="lightbulb" class="thought-card-icon" />
         <span class="thought-card-title">{t('sessions.thoughtTitle')}</span>
         <span class="dim thought-preview">{!open && preview}</span>
         <span class="grow" />
@@ -105,7 +106,7 @@ function ThoughtCard({
           onClick={copy}
           title={t('common.copy')}
         >
-          {copied ? '✓' : '📋'}
+          {copied ? <Icon name="check" size={13} /> : <Icon name="copy" size={13} />}
         </button>
         <span class="thought-card-toggle">{open ? '▲' : '▼'}</span>
       </div>
@@ -129,7 +130,7 @@ function RawJsonToggle({ raw }: { raw: string }) {
         class="raw-json-btn"
         onClick={() => setOpen(!open)}
       >
-        {open ? '▼ 隐藏原始数据' : '▶ 原始 JSON'}
+        <Icon name={open ? 'chevron-down' : 'chevron-right'} size={13} /> {open ? '隐藏原始数据' : '原始 JSON'}
       </button>
       {open && (
         <pre class="raw-json-block">

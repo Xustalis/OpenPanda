@@ -201,7 +201,7 @@ const ja: Messages = {
   'sessions.nodeAuto': '自動（最適なノード）',
   'sessions.nodePickTip': '分類されたタスクはこのノードで実行——チャット回答はローカルのまま',
   'sessions.folderPick': 'ローカルフォルダを選択',
-  'sessions.folderSelected': '📁 フォルダを選択しました（{n} ファイル）：',
+  'sessions.folderSelected': 'フォルダを選択しました（{n} ファイル）：',
   'sessions.folderTruncated': '  …（他 {n} ファイル）',
   'sessions.folderFollowUp': '上記のファイルに基づいてリクエストを処理してください：',
   'sessions.projectPrefix': '[プロジェクト: {name}]',
@@ -511,7 +511,8 @@ const ja: Messages = {
   'settings.approval.never': 'しない',
   'settings.approvalHelp': 'リスクのある操作をパネルで承認待ちにするかどうか。',
   'settings.sandbox': 'サンドボックス',
-  'settings.sandboxDesc': 'すべてのエージェントサブプロセスは既に作業パス内への隔離下で実行されています — 読み取り専用の説明であり、スイッチではありません：',
+  'settings.sandboxDesc': 'サブプロセスはフィルタ済み環境で作業パス内に実行されますが、OS レベルの隔離はオフです — config.yaml の sandbox.mode を standard または strict に設定すると有効になります。作業パス:',
+  'settings.sandboxDescOn': 'OS サンドボックスが有効 — サブプロセスは作業パスと許可ディレクトリ内のみ書き込み可能です。読み取り専用ステータス:',
 
   // 記憶コンソール拡張（C2）
   'memory.graph': 'グラフ',
@@ -583,6 +584,7 @@ const ja: Messages = {
   'nodes.addDevice.secretGen': 'network.shared_secret を生成しました — 相手側のマシンにコピーが必要です',
   'nodes.addDevice.dialed': '{addr} にダイヤルしました — このセッションで即時有効。',
   'nodes.addDevice.dialFailed': '{addr} に現在ダイヤルできません。構成は保存され、次回起動時に再試行されます。',
+  'nodes.addDevice.cleartextHint': 'このアドレスは平文 ws:// で、宛先が信頼済みアンダーレイ（loopback または Tailscale）上にないため、daemon はダイヤルを拒否します。network.allow_cleartext: true を設定するか、wss:// / punch:<id> を使ってください。',
   'nodes.addDevice.guideTitle': 'もう一台のマシンで',
 
   // 能力カードエディタ（ステージ 6）— `/card` の Web 版

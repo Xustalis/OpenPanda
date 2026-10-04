@@ -207,6 +207,14 @@ func runAsk(args []string) {
 		}
 		fmt.Println(pal().Muted(reportNote))
 
+		// A task parked on a clarification question must lead with the
+		// question — it is the only thing standing between the work and done,
+		// and "review" alone tells the user nothing actionable.
+		if out.Question != "" {
+			fmt.Println(pal().Heading(i18n.T(loc, "cli.ask.question")) + " " + out.Question)
+			fmt.Println("  " + pal().Muted(i18n.Tf(loc, "cli.ask.question.hint", "id", out.TaskID)))
+		}
+
 		answerText := strings.TrimSpace(out.Answer)
 		if answerText == "" {
 			answerText = strings.TrimSpace(out.Report)

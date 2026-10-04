@@ -203,7 +203,7 @@ const es: Messages = {
   'sessions.nodeAuto': 'Automático (mejor nodo)',
   'sessions.nodePickTip': 'Las tareas clasificadas se ejecutan en este nodo — las respuestas siguen siendo locales',
   'sessions.folderPick': 'Elegir una carpeta local',
-  'sessions.folderSelected': '📁 Carpeta seleccionada, {n} archivos:',
+  'sessions.folderSelected': 'Carpeta seleccionada, {n} archivos:',
   'sessions.folderTruncated': '  … ({n} archivos más)',
   'sessions.folderFollowUp': 'Atiende mi solicitud a partir de los archivos anteriores:',
   'sessions.projectPrefix': '[Proyecto: {name}]',
@@ -518,7 +518,9 @@ const es: Messages = {
   'settings.approvalHelp': 'Si las acciones arriesgadas esperan tu aprobación en el panel.',
   'settings.sandbox': 'Sandbox',
   'settings.sandboxDesc':
-    'Cada subproceso de agente ya se ejecuta confinado a su ruta de trabajo — descripción de solo lectura, no un interruptor:',
+    'Los subprocesos se ejecutan con entorno filtrado en su ruta de trabajo, pero el confinamiento a nivel de SO está desactivado — activa sandbox.mode (standard o strict) en config.yaml. Ruta de trabajo:',
+  'settings.sandboxDescOn':
+    'Sandbox de SO activo — los subprocesos solo pueden escribir en su ruta de trabajo y directorios permitidos. Estado de solo lectura:',
 
   // Extensiones de la consola de memoria (C2)
   'memory.graph': 'Grafo',
@@ -591,6 +593,7 @@ const es: Messages = {
   'nodes.addDevice.secretGen': 'se generó network.shared_secret — hay que copiarlo a la otra máquina',
   'nodes.addDevice.dialed': 'Marcado a {addr} — activo en esta sesión.',
   'nodes.addDevice.dialFailed': 'No se pudo marcar a {addr} ahora; queda configurado y se reintenta en el próximo arranque.',
+  'nodes.addDevice.cleartextHint': 'Esta dirección usa ws:// en claro y el destino no está en una subred confiable (loopback o Tailscale): el daemon rechazará la llamada. Define network.allow_cleartext: true o usa wss:// / punch:<id>.',
   'nodes.addDevice.guideTitle': 'En la otra máquina',
 
   // Editor de tarjeta de capacidades (etapa 6) — gemelo web de `/card`

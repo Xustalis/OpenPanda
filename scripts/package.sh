@@ -7,7 +7,7 @@
 #   checksums.txt                         (SHA-256 of each archive, "hash  name")
 #
 # Each archive is a single top-level `openpanda/` directory containing:
-#   bin/panda(.exe)   adapters/*.py   extensions/voice/*.py
+#   bin/panda(.exe)   adapters/*.py   extensions/voice/*.py   drivers/panda-*
 #   config.example.yaml   capabilities.example-*.yaml   LICENSE
 #
 # Run `make web` first so the embedded web console is baked in.
@@ -72,6 +72,11 @@ build() {
     find adapters -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/adapters/" \;
     mkdir -p "$dir/extensions/voice"
     find extensions/voice -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/extensions/voice/" \;
+    # Reference actuator drivers ride with every build — the edge card's
+    # hardware:* actuators resolve them by PATH or absolute path.
+    mkdir -p "$dir/drivers"
+    find drivers -maxdepth 1 -type f -name 'panda-*' -exec cp {} "$dir/drivers/" \;
+    chmod +x "$dir"/drivers/panda-* 2>/dev/null || true
     cp config.example.yaml "$dir/"
     for c in config/capabilities.example-*.yaml; do
         [ -e "$c" ] && cp "$c" "$dir/"
@@ -93,6 +98,9 @@ build_lite() {
     find adapters -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/adapters/" \;
     mkdir -p "$dir/extensions/voice"
     find extensions/voice -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/extensions/voice/" \;
+    mkdir -p "$dir/drivers"
+    find drivers -maxdepth 1 -type f -name 'panda-*' -exec cp {} "$dir/drivers/" \;
+    chmod +x "$dir"/drivers/panda-* 2>/dev/null || true
     cp config.example.yaml "$dir/"
     for c in config/capabilities.example-*.yaml; do
         [ -e "$c" ] && cp "$c" "$dir/"

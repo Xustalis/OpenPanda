@@ -203,7 +203,7 @@ const de: Messages = {
   'sessions.nodeAuto': 'Automatisch (bester Knoten)',
   'sessions.nodePickTip': 'Klassifizierte Aufgaben laufen auf diesem Knoten — Antworten bleiben lokal',
   'sessions.folderPick': 'Lokalen Ordner wählen',
-  'sessions.folderSelected': '📁 Ordner ausgewählt, {n} Dateien:',
+  'sessions.folderSelected': 'Ordner ausgewählt, {n} Dateien:',
   'sessions.folderTruncated': '  … ({n} weitere Dateien)',
   'sessions.folderFollowUp': 'Bearbeite meine Anfrage auf Basis der obigen Dateien:',
   'sessions.projectPrefix': '[Projekt: {name}]',
@@ -518,7 +518,9 @@ const de: Messages = {
   'settings.approvalHelp': 'Ob riskante Aktionen im Panel auf deine Freigabe warten.',
   'settings.sandbox': 'Sandbox',
   'settings.sandboxDesc':
-    'Jeder Agent-Subprozess läuft bereits auf seinen Arbeitspfad beschränkt — reine Nur-Lese-Beschreibung, kein Schalter:',
+    'Subprozesse laufen mit gefilterter Umgebung in ihrem Arbeitspfad, aber OS-Isolation ist aus — sandbox.mode (standard oder strict) in config.yaml aktivieren. Arbeitspfad:',
+  'settings.sandboxDescOn':
+    'OS-Sandbox aktiv — Subprozesse dürfen nur in Arbeitspfad und erlaubte Verzeichnisse schreiben. Nur-Lese-Status:',
 
   // Gedächtniskonsole-Erweiterungen (C2)
   'memory.graph': 'Graph',
@@ -591,6 +593,7 @@ const de: Messages = {
   'nodes.addDevice.secretGen': 'network.shared_secret wurde erzeugt — muss auf die andere Maschine kopiert werden',
   'nodes.addDevice.dialed': '{addr} angerufen — in dieser Sitzung sofort aktiv.',
   'nodes.addDevice.dialFailed': '{addr} ist derzeit nicht erreichbar; die Konfiguration bleibt gespeichert und wird beim nächsten Start erneut versucht.',
+  'nodes.addDevice.cleartextHint': 'Diese Adresse wählt Klartext-ws:// und das Ziel liegt nicht auf einem vertrauenswürdigen Underlay (Loopback oder Tailscale) — der Daemon wird die Wahl verweigern. Setze network.allow_cleartext: true oder nutze wss:// / punch:<id>.',
   'nodes.addDevice.guideTitle': 'Auf der anderen Maschine',
 
   // Fähigkeitskarten-Editor (Phase 6) — Web-Pendant zu `/card`

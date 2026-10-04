@@ -15,6 +15,7 @@ import {
   type Task,
 } from '../api/client'
 import { PandaAscii, PandaMark } from '../brand/panda'
+import { Icon } from '../components/icons'
 import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
 import { t } from '../i18n'
 import { navigateView } from '../nav'
@@ -503,7 +504,7 @@ export function SessionsView({
             }
           },
           onResult: (r) => patch((m) => ({ ...m, result: r, status: undefined })),
-          onError: (message) => patch((m) => ({ ...m, status: undefined, kind: 'error', text: m.text || `⚠ ${message}` })),
+          onError: (message) => patch((m) => ({ ...m, status: undefined, kind: 'error', text: m.text || message })),
         },
         ctrl.signal,
         nodePref || undefined,
@@ -550,7 +551,7 @@ export function SessionsView({
             const message = err instanceof Error ? err.message : String(err)
             setMsgs((ms) => [
               ...ms.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
-              { role: 'assistant', kind: 'error', text: `⚠ ${message}`, k: localMsgId() },
+              { role: 'assistant', kind: 'error', text: message, k: localMsgId() },
             ])
           }
         }
@@ -743,10 +744,10 @@ export function SessionsView({
             }}
             title={t('sessions.activeProject')}
           >
-            <option value="">📂 {t('sessions.allProjects')}</option>
+            <option value="">{t('sessions.allProjects')}</option>
             {projects.map((p) => (
               <option key={p} value={p}>
-                📁 {p}
+                {p}
               </option>
             ))}
           </select>
@@ -755,7 +756,7 @@ export function SessionsView({
         {activeProject && (
           <div class="project-scope-banner">
             <span class="project-scope-label">
-              📁 {activeProject}
+              <Icon name="folder" size={12} /> {activeProject}
             </span>
             <button
               class="btn-icon project-scope-clear"
@@ -796,7 +797,7 @@ export function SessionsView({
               <div class="thread-item-main">
                 <span class="thread-title">{s.title || t('sessions.untitled')}</span>
                 {s.project && !activeProject && (
-                  <span class="thread-project-pill">📁 {s.project}</span>
+                  <span class="thread-project-pill"><Icon name="folder" size={11} /> {s.project}</span>
                 )}
               </div>
               <button
@@ -829,7 +830,7 @@ export function SessionsView({
             aria-label={t('sessions.threads')}
             aria-expanded={railOpen}
           >
-            ☰
+            <Icon name="menu" size={16} />
           </button>
           <div class="chat-title-group">
             {isEditingTitle && session ? (
@@ -876,12 +877,12 @@ export function SessionsView({
                 }}
               >
                 <span class="chat-title-text">{session ? session.title || t('sessions.untitled') : t('sessions.new')}</span>
-                {session && <span class="chat-title-edit-icon" aria-hidden="true">✎</span>}
+                {session && <Icon name="pencil" class="chat-title-edit-icon" />}
               </h1>
             )}
             {session && (
               <div class="session-project-assigner">
-                <span class="dim" aria-hidden="true">📁</span>
+                <Icon name="folder" class="dim" />
                 <select
                   class="session-project-badge"
                   value={session.project || ''}
@@ -1014,13 +1015,13 @@ export function SessionsView({
         <form class="composer" onSubmit={send}>
           <div class="composer-toolbar">
             <div class="composer-project-pill dim" title={session?.project || activeProject ? `项目: ${session?.project || activeProject}` : t('sessions.noProject')}>
-              <span>📁 {session?.project || activeProject || t('sessions.noProject')}</span>
+              <span><Icon name="folder" size={12} /> {session?.project || activeProject || t('sessions.noProject')}</span>
             </div>
             {/* Environment pick: which node executes this turn's task. "Auto"
                 keeps scheduler routing; the pick only pins classified tasks —
                 it never forces an answer turn onto a peer. */}
             <label class="composer-node-pick" title={t('sessions.nodePickTip')}>
-              <span aria-hidden="true">⛁</span>
+              <Icon name="network" size={12} />
               <select
                 class="composer-node-select"
                 value={nodePref}
@@ -1060,7 +1061,7 @@ export function SessionsView({
               ref={composer}
               class="composer-input"
               rows={2}
-              placeholder={busy ? '⚡ ' + (t('sessions.placeholderRunning') || 'Agent 正在执行... 可点击停止或调整指令') : t('sessions.placeholder')}
+              placeholder={busy ? (t('sessions.placeholderRunning') || 'Agent 正在执行... 可点击停止或调整指令') : t('sessions.placeholder')}
               value={input}
               onInput={(e) => {
                 const el = e.target as HTMLTextAreaElement
@@ -1253,7 +1254,7 @@ function ChatBubble(props: {
             <div class="bubble-slot-row slot-meta msg-files">
               {msg.files.map((f) => (
                 <span key={f} class="attach-chip mono" title={f}>
-                  📎 {f.split('/').pop()}
+                  <Icon name="paperclip" size={11} /> {f.split('/').pop()}
                 </span>
               ))}
             </div>

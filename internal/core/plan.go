@@ -608,9 +608,36 @@ func (c *Core) stageWorkDir(planID, stageID string) (string, error) {
 	if root == "" {
 		root = os.TempDir()
 	}
+	// A relative root (NewCore defaults to ".") must be resolved before the
+	// prefix proof: Join keeps it relative and the check then fails on a path
+	// that never left the root.
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
 	dir := filepath.Join(root, "plans", planID, stageID)
 	if !strings.HasPrefix(dir, filepath.Clean(root)+string(os.PathSeparator)) {
 		return "", fmt.Errorf("stage work dir escapes root: %q", dir)
+	}
+	return dir, nil
+}
+
+// attachedWorkDir is where a standalone task's attached work tree lands and
+// executes — the ad-hoc sibling of stageWorkDir. The id is wire-supplied, so
+// the derived path gets the same traversal check (P0-1).
+func (c *Core) attachedWorkDir(taskID string) (string, error) {
+	if !plan.ValidID(taskID) {
+		return "", fmt.Errorf("unsafe task id %q", taskID)
+	}
+	root := c.workDir
+	if root == "" {
+		root = os.TempDir()
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	dir := filepath.Join(root, "tasks", taskID)
+	if !strings.HasPrefix(dir, filepath.Clean(root)+string(os.PathSeparator)) {
+		return "", fmt.Errorf("task work dir escapes root: %q", dir)
 	}
 	return dir, nil
 }
@@ -832,8 +859,8 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 // whatever spawned it. A local/declined child lands on the queue scheduler,
 // which runs it here (or re-routes via forwardScheduled on the next pass).
 func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) error {
-	decision := scheduler.Route(c.nodeID, child.Chain, c.onlineEmployees(ctx), c.localMatch(),
-		in.Requires, resourceRequirement(in.ResourceJSON), in.PreferredNode)
+	decision := scheduler.RouteP(c.nodeID, child.Chain, c.onlineEmployees(ctx), c.localMatch(),
+		in.Requires, resourceRequirement(in.ResourceJSON), in.PreferredNode, in.Project)
 	if decision.Action == scheduler.ActionForward {
 		payload := bus.TaskDelegatePayload{
 			TaskID:           child.TaskID,
@@ -916,6 +943,31 @@ func parseDelegateRequest(stdout string) (delegateRequest, string, bool) {
 		kept = append(kept, line)
 	}
 	return dr, strings.Join(kept, "\n"), found
+}
+
+const questionMarker = "PANDA_QUESTION"
+
+// parseQuestionRequest extracts the last PANDA_QUESTION line from agent
+// output — the clarification the agent cannot resolve without the user —
+// and returns the output with marker lines removed. Like the delegate
+// marker, an empty payload keeps the line in place rather than eating the
+// agent's words. The marker must end at a word boundary: "PANDA_QUESTIONABLE:"
+// is the agent's own prose, not the protocol.
+func parseQuestionRequest(stdout string) (question, cleaned string, ok bool) {
+	var kept []string
+	for _, line := range strings.Split(stdout, "\n") {
+		trim := strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(trim, questionMarker); ok &&
+			(rest == "" || rest[0] == ':' || rest[0] == ' ' || rest[0] == '\t') {
+			rest = strings.TrimSpace(strings.TrimPrefix(rest, ":"))
+			if q := strings.TrimSpace(rest); q != "" {
+				question = q
+				continue
+			}
+		}
+		kept = append(kept, line)
+	}
+	return question, strings.Join(kept, "\n"), question != ""
 }
 
 // delegateChild is the run()-time half of the promotion protocol (§4.2): it

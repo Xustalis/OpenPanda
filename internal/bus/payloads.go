@@ -1,6 +1,8 @@
 package bus
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"time"
 	"unicode/utf8"
@@ -79,6 +81,13 @@ type HeartbeatPayload struct {
 	// peer directory's copy; a field absent outright is an old node's beat
 	// and leaves the stored plan alone.
 	Contacts []Contact `json:"contacts"`
+	// Projects carries the sender's advertised residence set (§6.3): the
+	// names of the projects it holds a checkout of. Semi-static like the
+	// contact plan — it changes when work lands, not per beat — and shares
+	// the same contract: a new node always emits it (empty = "no projects"),
+	// while a field absent outright is an old node's beat and leaves the
+	// stored set alone.
+	Projects []string `json:"projects"`
 }
 
 // LinkMetric is the wire form of one measured edge weight (§4.1): the round-
@@ -215,6 +224,96 @@ type TaskDelegatePayload struct {
 	TokenBudget      int64 `json:"token_budget,omitempty"`
 }
 
+// ConsentDigest is the content hash a tier-2 consent grant binds to (the
+// digest leg of AuthMsgBytesV2). It covers the fields that decide WHAT the
+// task is — identity, intent, spec, requirements, inputs, project material —
+// but deliberately not HOW it travels: the delegation chain, spent budgets,
+// lease stamps and the fat-bundle cache are legitimately rewritten by relays
+// in transit, and binding them would break consent on honest routes. The fat
+// bundle's Data bytes are content-addressed against Inputs/ContextHash (which
+// ARE bound), so excluding BundledArtifacts loses nothing to tampering.
+//
+// The whitelist struct is load-bearing: new payload fields must not silently
+// change the digest, because a digest mismatch across versions drops consent
+// mid-mesh (fail closed, but needlessly).
+//
+// The clamp mirrors clampForWire exactly: the signer computes this digest
+// before marshal and the verifier after unmarshal, so the digest must cover
+// what actually crossed the wire — clamped-off inline blobs are nil on both
+// sides.
+func (p TaskDelegatePayload) ConsentDigest() string {
+	if len(p.ContextData) > MaxContextDataBytes {
+		p.ContextData = nil
+		if p.ContextLevel == "full" {
+			p.ContextLevel = "pointer"
+		}
+	}
+	if len(p.ProjectPack) > MaxProjectPackBytes {
+		p.ProjectPack = nil
+	}
+	type consentBound struct {
+		TaskID          string        `json:"task_id"`
+		ParentID        string        `json:"parent_id,omitempty"`
+		Project         string        `json:"project,omitempty"`
+		Title           string        `json:"title,omitempty"`
+		ContextType     string        `json:"context_type,omitempty"`
+		ContextHash     string        `json:"context_hash,omitempty"`
+		ContextLevel    string        `json:"context_level,omitempty"`
+		ContextData     []byte        `json:"context_data,omitempty"`
+		Intent          string        `json:"intent"`
+		SpecJSON        string        `json:"spec_json,omitempty"`
+		Requires        []string      `json:"requires,omitempty"`
+		PreferredNode   string        `json:"preferred_node,omitempty"`
+		MaxRetries      int           `json:"max_retries,omitempty"`
+		Complexity      float64       `json:"complexity,omitempty"`
+		Risk            string        `json:"risk,omitempty"`
+		AttemptID       string        `json:"attempt_id,omitempty"`
+		ResumeSessionID string        `json:"resume_session_id,omitempty"`
+		ResourceJSON    string        `json:"resource_json,omitempty"`
+		PlanID          string        `json:"plan_id,omitempty"`
+		StageID         string        `json:"stage_id,omitempty"`
+		Inputs          []ArtifactRef `json:"inputs,omitempty"`
+		ProjectPack     []byte        `json:"project_pack,omitempty"`
+		ProjectDir      string        `json:"project_dir,omitempty"`
+		UserLocale      string        `json:"user_locale,omitempty"`
+		DeadlineUnix    int64         `json:"deadline_unix,omitempty"`
+		Depth           int           `json:"depth,omitempty"`
+	}
+	raw, err := json.Marshal(consentBound{
+		TaskID:          p.TaskID,
+		ParentID:        p.ParentID,
+		Project:         p.Project,
+		Title:           p.Title,
+		ContextType:     p.ContextType,
+		ContextHash:     p.ContextHash,
+		ContextLevel:    p.ContextLevel,
+		ContextData:     p.ContextData,
+		Intent:          p.Intent,
+		SpecJSON:        p.SpecJSON,
+		Requires:        p.Requires,
+		PreferredNode:   p.PreferredNode,
+		MaxRetries:      p.MaxRetries,
+		Complexity:      p.Complexity,
+		Risk:            p.Risk,
+		AttemptID:       p.AttemptID,
+		ResumeSessionID: p.ResumeSessionID,
+		ResourceJSON:    p.ResourceJSON,
+		PlanID:          p.PlanID,
+		StageID:         p.StageID,
+		Inputs:          p.Inputs,
+		ProjectPack:     p.ProjectPack,
+		ProjectDir:      p.ProjectDir,
+		UserLocale:      p.UserLocale,
+		DeadlineUnix:    p.DeadlineUnix,
+		Depth:           p.Depth,
+	})
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
 // clampForWire bounds the inline blobs a delegate can carry. An oversized
 // ContextData or ProjectPack is not merely wasteful: it can push the frame past
 // readLimit and get the link closed at the far end, taking the task with it.
@@ -318,6 +417,16 @@ type TaskResultPayload struct {
 	// hands it to the successor stages as their input; the executor stays the
 	// node that holds the bytes until someone pulls them.
 	OutputArtifact string `json:"output_artifact,omitempty"`
+	// FilesChanged lists the workdir-relative paths the run added, removed or
+	// modified — the result's footprint, so the delegator sees what the task
+	// actually touched rather than trusting the agent's prose. Capped for the
+	// wire (maxFilesChangedReport); absent/empty for non-agent plans and
+	// executors from before the field.
+	FilesChanged []string `json:"files_changed,omitempty"`
+	// Question carries the clarification an agent parked on (PANDA_QUESTION):
+	// the review state travels with it so the origin's task display can show
+	// what the executor is asking, and a task_resume.answer replies to it.
+	Question string `json:"question,omitempty"`
 	// Structured attribution so the origin can consume a cross-device result
 	// like an ordinary sub-agent's: who ran it (Executor — the node, stable
 	// across relay hops where env.From is only the last hop), which agent
@@ -425,6 +534,11 @@ type TaskCancelPayload struct {
 type TaskResumePayload struct {
 	TaskID    string `json:"task_id"`
 	AttemptID string `json:"attempt_id,omitempty"`
+	// Answer carries the user's reply to a clarification question the
+	// executor parked on (Q4): a review parked on PANDA_QUESTION resumes
+	// with the answer folded into the re-run's intent. Empty for the
+	// classic tier-2 consent resume — older nodes ignore the field.
+	Answer string `json:"answer,omitempty"`
 }
 
 // ContextFetchPayload asks the source node for a full context snapshot.

@@ -161,7 +161,6 @@ func (s *Store) StageChunk(hash string, offset int64, data []byte, total int64) 
 			return info.ReceivedThrough, nil // fully covered retransmit
 		}
 		data = data[skip:]
-		offset = info.ReceivedThrough
 	}
 	if info.ReceivedThrough+int64(len(data)) > info.Total {
 		return info.ReceivedThrough, fmt.Errorf("artifact: staged overflow past total %d", info.Total)

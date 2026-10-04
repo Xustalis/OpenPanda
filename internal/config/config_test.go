@@ -375,3 +375,36 @@ func TestAmbiguousEphemeralNodeNameRejected(t *testing.T) {
 		t.Fatal("expected vm-deadbeef to be rejected for node.identity")
 	}
 }
+
+func TestValidatePeerAddr(t *testing.T) {
+	valid := []string{
+		"192.168.1.5:7836",
+		"peer.example.com:7836",
+		"[fd7a:115e:a214::1]:7836",
+		"ws://peer.example.com:7836/ws",
+		"wss://peer.example.com",
+		"punch:laptop-home",
+	}
+	for _, a := range valid {
+		if err := ValidatePeerAddr(a); err != nil {
+			t.Errorf("ValidatePeerAddr(%q) = %v, want nil", a, err)
+		}
+	}
+	invalid := []string{
+		"",
+		"punch:",          // empty node id
+		"foo:bar",         // non-numeric port — used to slip through SplitHostPort
+		"host:0",          // port out of range
+		"host:70000",      // port out of range
+		":7836",           // empty host
+		"ftp://x:21",      // wrong scheme
+		"punch://x",       // URL-shaped punch id is not a punch: peer
+		"no-colon-at-all", // not host:port
+		"ws://",           // URL with no host
+	}
+	for _, a := range invalid {
+		if err := ValidatePeerAddr(a); err == nil {
+			t.Errorf("ValidatePeerAddr(%q) = nil, want error", a)
+		}
+	}
+}

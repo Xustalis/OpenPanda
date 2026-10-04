@@ -286,7 +286,7 @@ func newTUIModel(r *repl) tuiModel {
 	sp.Style = th.accent
 
 	cHist := &chatHistory{}
-	if r != nil && r.convoLen() > 0 {
+	if r.convoLen() > 0 {
 		turns := r.convoNow()
 		const maxTurns = 10
 		if len(turns)/2 > maxTurns {

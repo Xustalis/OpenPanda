@@ -45,7 +45,12 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=10, extra_request=No
         merged["PATH"] = str(tmp) + os.pathsep + merged.get("PATH", "")
         if env:
             merged.update(env)
-        req = {"prompt": "contract prompt", "timeout_s": 3, "cwd": str(work)}
+        # timeout_s is the adapter's watchdog budget for the fake CLI: 3s was
+        # tight enough that suite-level load (parallel jobs on a cold box)
+        # could push a trivial fake past it and flake — 30s leaves the
+        # watchdog exercised (the dedicated timeout tests override it) without
+        # racing scheduler jitter.
+        req = {"prompt": "contract prompt", "timeout_s": 30, "cwd": str(work)}
         if extra_request:
             req.update(extra_request)
         proc = subprocess.run(
@@ -464,7 +469,9 @@ print("appended")
     def test_generic_timeout_and_missing_binary_contract(self):
         payload, _, _ = run_adapter(
             "generic.py", "slowcli", "import time; time.sleep(10)\n",
-            extra_request={"cmd": "slowcli {prompt}"},
+            # The watchdog is the thing under test: pin a small timeout_s so
+            # the adapter kills the fake CLI well inside the 8s outer bound.
+            extra_request={"cmd": "slowcli {prompt}", "timeout_s": 2},
             timeout=8,
         )
         self.assertFalse(payload["ok"], payload)
@@ -475,6 +482,87 @@ print("appended")
         )
         self.assertFalse(payload["ok"], payload)
         self.assertEqual(payload["exit_code"], 127)
+
+    def test_generic_not_executable_is_126(self):
+        # A binary on PATH that lacks the exec bit is a spawn failure, not a
+        # missing binary: 126 follows the shell convention.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            (tmp / "noexec").write_text("#!/usr/bin/env python3\n")  # no +x
+            merged = os.environ.copy()
+            merged["PATH"] = str(tmp) + os.pathsep + merged.get("PATH", "")
+            req = {"prompt": "p", "timeout_s": 30, "cmd": "noexec {prompt}"}
+            proc = subprocess.run(
+                [sys.executable, str(ADAPTERS / "generic.py")],
+                input=json.dumps(req), text=True, capture_output=True,
+                env=merged, cwd=str(ROOT), timeout=10,
+            )
+            payload = json.loads(proc.stdout.strip())
+            self.assertFalse(payload["ok"], payload)
+            self.assertEqual(payload["exit_code"], 126)
+
+    def test_generic_stdin_placeholder_pipes_prompt(self):
+        # {stdin} drops its element and delivers the prompt on the child's
+        # stdin — the headless contract for CLIs that read it there, and the
+        # way past the OS argv limit for large prompts.
+        payload, _, _ = run_adapter(
+            "generic.py", "mimo", r'''
+import sys
+assert sys.argv[1:] == ["exec", "-"], sys.argv
+print("stdin:" + sys.stdin.read())
+''',
+            extra_request={"cmd": "mimo exec - {stdin}"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "stdin:contract prompt")
+
+    def test_generic_optional_placeholders(self):
+        # {cwd} always resolves; {resume}/{max_turns} fill in when the
+        # request carries them.
+        payload, _, _ = run_adapter(
+            "generic.py", "mimo", r'''
+import sys
+args = sys.argv[1:]
+assert args[args.index("--dir") + 1].endswith("/work"), args
+assert args[args.index("--session") + 1] == "sess-1", args
+assert args[args.index("--max-agent-turns") + 1] == "7", args
+assert "contract prompt" in args, args
+print("filled")
+''',
+            extra_request={
+                "cmd": "mimo --dir {cwd} --session {resume} "
+                       "--max-agent-turns {max_turns} {prompt}",
+                "resume": "sess-1", "max_turns": 7,
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "filled")
+        # Unset optional placeholders drop cleanly: the joined form loses its
+        # whole element, the two-token form also loses the flag that would
+        # otherwise eat the next element as its value.
+        payload, _, _ = run_adapter(
+            "generic.py", "mimo", r'''
+import sys
+assert sys.argv[1:] == ["run", "contract prompt"], sys.argv
+print("dropped")
+''',
+            extra_request={
+                "cmd": "mimo run --session {resume} --turns={max_turns} {prompt}",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "dropped")
+
+    def test_generic_template_expanding_to_nothing_is_reported(self):
+        # A template whose only element was an unset optional placeholder
+        # expands to zero argv: report a config error instead of exec'ing
+        # the prompt itself as the command.
+        payload, _, _ = run_adapter(
+            "generic.py", "never-spawned", "import sys; sys.exit(99)\n",
+            extra_request={"cmd": "{resume}"},
+        )
+        self.assertFalse(payload["ok"], payload)
+        self.assertEqual(payload["exit_code"], 2)
 
     def test_antigravity_envelope_contract(self):
         # agy -p … --output-format json emits ONE JSON envelope; the adapter
@@ -535,6 +623,9 @@ sys.exit(1)
 import time
 time.sleep(10)
 ''',
+            # Same as the generic watchdog test: timeout_s must stay small
+            # here or the adapter would outwait the 8s outer bound.
+            extra_request={"timeout_s": 2},
             timeout=8,
         )
         self.assertFalse(payload["ok"], payload)

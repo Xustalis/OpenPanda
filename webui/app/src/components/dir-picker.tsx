@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api, type DirectoryListing } from '../api/client'
 import { t } from '../i18n'
+import { Icon } from './icons'
 import { suggestProjectName } from './dir-utils'
 
 export interface DirPickerProps {
@@ -50,7 +51,7 @@ export function DirPicker({
   return (
     <div class="dir-picker-wrap">
       <div class={`dir-picker-box ${value ? 'has-value' : ''} ${disabled ? 'disabled' : ''}`}>
-        <span class="dir-picker-icon" aria-hidden="true">📁</span>
+        <Icon name="folder" class="dir-picker-icon" />
         <span class="dir-picker-path" title={value || placeholder || t('projects.dirPlaceholder')}>
           {value || <span class="dim">{placeholder || t('projects.dirPlaceholder')}</span>}
         </span>
@@ -64,7 +65,7 @@ export function DirPicker({
             }}
             title={t('common.clear')}
           >
-            ✕
+            <Icon name="x" size={12} />
           </button>
         )}
         <button
@@ -181,7 +182,7 @@ function DirBrowserModal({
               class="dir-entry-btn up"
               onClick={() => loadPath(listing.parent)}
             >
-              <span class="dir-icon">⬆️</span>
+              <Icon name="arrow-up" class="dir-icon" />
               <span>.. ({t('projects.parentDir')})</span>
             </button>
           </div>
@@ -203,7 +204,7 @@ function DirBrowserModal({
                 class="dir-entry-btn"
                 onClick={() => loadPath(entry.path)}
               >
-                <span class="dir-icon">📁</span>
+                <Icon name="folder" class="dir-icon" />
                 <span class="dir-entry-name">{entry.name}</span>
               </button>
             ))

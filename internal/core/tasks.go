@@ -12,6 +12,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
@@ -104,13 +105,15 @@ func (s *TaskStore) Create(ctx context.Context, parentID, project, title, owner 
 	if err != nil {
 		return Task{}, fmt.Errorf("uuid: %w", err)
 	}
-	return s.CreateWithID(ctx, taskID, parentID, project, title, owner, chain)
+	return s.CreateWithID(ctx, taskID, parentID, project, title, owner, chain, false)
 }
 
 // CreateWithID inserts a task with an explicit id. The id is the cross-node
-// idempotency key, so delegated tasks keep the delegator's id. Returns
+// idempotency key, so delegated tasks keep the delegator's id. remote is
+// stamped into the row so executor-side policy can tell wire-authored intent
+// apart from a local submit regardless of what the chain claims. Returns
 // ErrConflict if the id already exists.
-func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project, title, owner string, chain []string) (Task, error) {
+func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project, title, owner string, chain []string, remote bool) (Task, error) {
 	if taskID == "" {
 		var err error
 		taskID, err = util.UUIDv7()
@@ -128,15 +131,15 @@ func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project,
 	t := Task{
 		TaskID: taskID, ParentID: parentID, Project: project, Title: title,
 		State: StateSubmitted, OwnerNode: owner, AttemptID: attemptID,
-		StateVersion: 0, Chain: chain, CreatedAt: now, UpdatedAt: now,
+		StateVersion: 0, Chain: chain, Remote: remote, CreatedAt: now, UpdatedAt: now,
 	}
 	err = s.withTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tasks (task_id, parent_id, project, title, state, owner_node,
-				attempt_id, state_version, chain_json, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				attempt_id, state_version, chain_json, remote, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.TaskID, t.ParentID, t.Project, t.Title, t.State, t.OwnerNode,
-			t.AttemptID, t.StateVersion, string(chainJSON), now, now); err != nil {
+			t.AttemptID, t.StateVersion, string(chainJSON), remote, now, now); err != nil {
 			return fmt.Errorf("insert task: %w", err)
 		}
 		return s.recordEventTx(ctx, tx, taskID, EvSubmit, map[string]any{
@@ -161,6 +164,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	var sessionID, resourceKeysJSON, workDir sql.NullString
 	var agentSession, agentSessionNode sql.NullString
 	var scheduled int
+	var remote int
 	var planID, stageID, needsJSON, inputsJSON, outputArt sql.NullString
 	err := s.db.QueryRowContext(ctx,
 		`SELECT `+taskColumns+` FROM tasks WHERE task_id = ?`, taskID).
@@ -172,7 +176,8 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
-			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs)
+			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs,
+			&remote)
 	if err != nil {
 		return Task{}, err
 	}
@@ -200,6 +205,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	t.OutputArtifact = outputArt.String
 	t.AgentSessionID = agentSession.String
 	t.AgentSessionNode = agentSessionNode.String
+	t.Remote = remote != 0
 	return t, nil
 }
 
@@ -859,6 +865,18 @@ func (s *TaskStore) PauseWithDisposition(ctx context.Context, taskID, owner, rea
 // needs sign-off (supervision loop terminal: an irreversible task, or one that
 // exhausted its round budget without satisfying the success criteria).
 func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, result any) error {
+	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalAcceptWork)
+}
+
+// PauseForAnswer parks a running task in review on an agent's clarification
+// question (Q4): the partial result is preserved like PauseWithResult, but
+// the disposition resumes execution — the user's answer travels back on
+// task_resume and folds into the re-run's intent.
+func (s *TaskStore) PauseForAnswer(ctx context.Context, taskID, owner string, result any) error {
+	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalResumeExecution)
+}
+
+func (s *TaskStore) pauseWithResultDisposition(ctx context.Context, taskID, owner string, result any, disposition ApprovalDisposition) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
@@ -867,7 +885,7 @@ func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, r
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateRunning)
 	}
 	if err := s.applyReviewCAS(ctx, taskID, StateRunning, owner, cur.AttemptID, EvReview,
-		map[string]any{"reason": "awaiting approval"}, result, ApprovalAcceptWork); err != nil {
+		map[string]any{"reason": "awaiting approval"}, result, disposition); err != nil {
 		return err
 	}
 	updated, err := s.Get(ctx, taskID)
@@ -1075,7 +1093,9 @@ func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason st
 // mistaken for a stale write. Used when a delegator hears a result for a task
 // it never persisted locally.
 func (s *TaskStore) CreateFromRemote(ctx context.Context, taskID, title, owner string, attemptID string, chain []string) (Task, error) {
-	t, err := s.CreateWithID(ctx, taskID, "", "", title, owner, chain)
+	// remote=false: this row reconstructs a task WE dispatched (the result
+	// arrived before/without our copy) — the intent was authored locally.
+	t, err := s.CreateWithID(ctx, taskID, "", "", title, owner, chain, false)
 	if err != nil {
 		return Task{}, err
 	}
@@ -1390,6 +1410,34 @@ func (s *TaskStore) ListReady(ctx context.Context) ([]Task, error) {
 	}
 	defer rows.Close()
 	return scanTasks(rows)
+}
+
+// ListReadySummaries is the scheduler's polling projection: the six columns a
+// ReadyTask actually reads, not the forty-odd of a full row. The queue poll
+// used to drag spec_json/intent/result_json blobs through the wire for every
+// queued task every 400ms–2s; a 100KB spec now stays on disk until the task
+// is claimed and the runner loads it for real.
+func (s *TaskStore) ListReadySummaries(ctx context.Context) ([]queue.ReadyTask, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT task_id, project, priority, seq, created_at, resource_keys_json
+		 FROM tasks WHERE state = ? AND scheduled = 1`, StateQueued)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []queue.ReadyTask
+	for rows.Next() {
+		var t queue.ReadyTask
+		var keysJSON sql.NullString
+		if err := rows.Scan(&t.ID, &t.Project, &t.Priority, &t.Seq, &t.CreatedAt, &keysJSON); err != nil {
+			return nil, err
+		}
+		if keysJSON.Valid {
+			_ = json.Unmarshal([]byte(keysJSON.String), &t.ResourceKeys)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 // ClaimLocal moves a queued task to dispatched-to-self for the queue
@@ -2015,6 +2063,37 @@ func (s *TaskStore) ListByState(ctx context.Context, state string) ([]Task, erro
 	return scanTasks(rows)
 }
 
+// TaskStamp is the minimal per-task triple a change-detection digest needs:
+// identity, lifecycle state, and the mutation clock. Pulling the full row for
+// this (spec_json, result_json, intent…) would read every task's payload on
+// every poll.
+type TaskStamp struct {
+	ID        string
+	State     string
+	UpdatedAt int64
+}
+
+// TaskStamps lists the digest input for every task — the panel's SSE
+// change detector calls this once per poll window instead of scanning the
+// full task rows. Ordered by id so the digest is order-stable.
+func (s *TaskStore) TaskStamps(ctx context.Context) ([]TaskStamp, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT task_id, state, updated_at FROM tasks ORDER BY task_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TaskStamp
+	for rows.Next() {
+		var t TaskStamp
+		if err := rows.Scan(&t.ID, &t.State, &t.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // Events returns the event timeline for a task, oldest first.
 func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx,
@@ -2096,7 +2175,7 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	priority, seq, session_id, resource_keys_json, work_dir, scheduled,
 	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact,
 	transport, deadline_unix, delegation_budget, token_budget, agent_session_id, agent_session_node,
-	auth_sig, auth_pub, auth_ts`
+	auth_sig, auth_pub, auth_ts, remote`
 
 func scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task
@@ -2111,6 +2190,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var agentSession, agentSessionNode sql.NullString
 		var complexity sql.NullFloat64
 		var scheduled int
+		var remote int
 		var planID, stageID, needsJSON, inputsJSON, outputArt sql.NullString
 		if err := rows.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State,
 			&t.OwnerNode, &t.AttemptID, &t.StateVersion, &chainJSON, &intent,
@@ -2120,7 +2200,8 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
-			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs); err != nil {
+			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs,
+			&remote); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
@@ -2142,6 +2223,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		t.SessionID = sessionID.String
 		t.WorkDir = workDir.String
 		t.Scheduled = scheduled != 0
+		t.Remote = remote != 0
 		t.PlanID = planID.String
 		t.StageID = stageID.String
 		t.OutputArtifact = outputArt.String
