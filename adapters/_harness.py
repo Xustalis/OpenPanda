@@ -219,7 +219,7 @@ def clamp_result(text, limit=MAX_RESULT_CHARS):
 
 
 def emit(ok, result, exit_code, tokens=None, cost=None, usage=None,
-         session_id=None, extra=None):
+         session_id=None, extra=None, session_dead=False):
     """Write the unified adapter result JSON to stdout (one line, flushed).
 
     usage is the optional structured token breakdown (input_tokens /
@@ -230,6 +230,12 @@ def emit(ok, result, exit_code, tokens=None, cost=None, usage=None,
     fields the harness passes through untouched (structured output, the
     CLI's subagent stats). Reserved envelope keys (ok/result/exit_code/
     tokens/cost/usage/session_id) cannot be overridden through it.
+
+    session_dead marks a session-mode result whose adapter process is gone:
+    the Go side's one-shot fallback keys on the session actually being
+    dead, and the async process-exit marker races this envelope when the
+    adapter kills the CLI on its way out — the flag is the deterministic
+    witness.
     """
     payload = {
         "ok": bool(ok),
@@ -244,6 +250,8 @@ def emit(ok, result, exit_code, tokens=None, cost=None, usage=None,
         payload["usage"] = usage
     if session_id:
         payload["session_id"] = session_id
+    if session_dead:
+        payload["session_dead"] = True
     if isinstance(extra, dict):
         for k, v in extra.items():
             if k not in payload:

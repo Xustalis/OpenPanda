@@ -338,6 +338,46 @@ print(json.dumps({"ok": True, "result": "oneshot:" + req["prompt"], "exit_code":
 	}
 }
 
+// TestAgentSessionFallsBackOnSessionDeadFlag pins the in-band death verdict:
+// a failed session turn whose envelope carries session_dead falls back to a
+// one-shot spawn even while the adapter process is still alive — the exit
+// marker (cmd.Wait) races the envelope, so isDead() alone can miss it.
+func TestAgentSessionFallsBackOnSessionDeadFlag(t *testing.T) {
+	dir := t.TempDir()
+	old := adapterDir
+	adapterDir = dir
+	defer func() { adapterDir = old }()
+
+	// Session turn: failed envelope with session_dead, then stay alive —
+	// without the wire flag this result would be returned as-is.
+	stub := `import json, sys
+req = json.loads(sys.stdin.readline())
+if req.get("session"):
+    print(json.dumps({"ok": False, "result": "provider exploded", "exit_code": 1, "session_dead": True}))
+    sys.stdout.flush()
+    for _ in sys.stdin:
+        pass
+else:
+    print(json.dumps({"ok": True, "result": "oneshot:" + req["prompt"], "exit_code": 0}))
+    sys.stdout.flush()
+`
+	if err := os.WriteFile(filepath.Join(dir, "claude_code.py"), []byte(stub), 0o755); err != nil {
+		t.Fatalf("stub: %v", err)
+	}
+
+	r := NewRouter(tier1Card(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	plan := tier1Plan(t, r)
+
+	ctx, pool := WithSessionPool(context.Background())
+	defer pool.CloseAll()
+	ctx = WithSessionMode(ctx)
+	res := r.Execute(ctx, plan, "first", t.TempDir(), true)
+	if !res.OK || res.Stdout != "oneshot:first" {
+		t.Fatalf("fallback oneshot = %+v", res)
+	}
+}
+
 // TestRetryContextCancel verifies the retry wait honors cancellation — a
 // cancelled task must not sit out the 3s backoff.
 func TestRetryContextCancel(t *testing.T) {

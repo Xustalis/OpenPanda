@@ -555,7 +555,7 @@ def _main_session(req, model, max_turns):
     except ProviderFailure as e:
         # The CLI may still be mid-retry — don't let it outlive the session.
         harness.kill_tree(proc)
-        harness.emit(False, str(e), 1)
+        harness.emit(False, str(e), 1, session_dead=True)
     try:
         proc.stdin.close()
     except OSError:
@@ -567,12 +567,18 @@ def _main_session(req, model, max_turns):
 
 
 def _emit_turn_result(out):
-    """One session turn's envelope on stdout; the "_dead" marker is internal."""
+    """One session turn's envelope on stdout; the "_dead" marker is internal.
+
+    A session-ending turn carries session_dead on the wire: the Go side's
+    one-shot fallback must key on the declared verdict — the process-exit
+    marker races this envelope when the adapter kills the CLI on its way
+    out, so reporting it in-band makes the fallback deterministic.
+    """
     dead = out.pop("_dead", False)
     harness.emit(out["ok"], out["result"], out["exit_code"],
                  tokens=out.get("tokens"), cost=out.get("cost"),
                  usage=out.get("usage"), session_id=out.get("session_id"),
-                 extra=out.get("extra"))
+                 extra=out.get("extra"), session_dead=dead)
     out["_dead"] = dead
 
 

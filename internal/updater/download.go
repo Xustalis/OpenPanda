@@ -13,7 +13,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// httpClient bounds the phases a caller's context may not: a wedged connect
+// or a server that never finishes its response headers would otherwise park
+// the call until TCP gives up (minutes). Body streaming stays ctx-bound so a
+// large asset download on a slow link is not clipped mid-flight.
+var httpClient = &http.Client{Transport: func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ResponseHeaderTimeout = 30 * time.Second
+	return t
+}()}
 
 // downloadRelease fetches the release asset for version and its checksums.txt,
 // verifies the asset's SHA-256, and returns the archive path inside destDir.
@@ -51,12 +62,16 @@ func downloadRelease(ctx context.Context, repo, version, destDir string) (string
 
 // fetchText GETs url and returns its body as a string.
 func fetchText(ctx context.Context, url string) (string, error) {
+	// Metadata payloads are ≤1MB; bound the whole request even when the
+	// caller's context is open-ended.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "OpenPanda-updater")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -75,12 +90,17 @@ func fetchText(ctx context.Context, url string) (string, error) {
 // returns the written path. The download goes through a ".part" temp file so a
 // half-downloaded archive never sits at the final name.
 func downloadFile(ctx context.Context, url, destDir string) (string, error) {
+	// Release archives are ~35MB; a generous ceiling for slow links when the
+	// caller's context is open-ended, while ResponseHeaderTimeout still
+	// catches a server that stalls before streaming.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "OpenPanda-updater")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}

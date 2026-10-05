@@ -719,6 +719,11 @@ type AgentResult struct {
 	// (claude's result.subagent_stats) — how many sub-agents the run
 	// spawned, by type. Passthrough for observability.
 	SubagentStats json.RawMessage `json:"subagent_stats,omitempty"`
+	// SessionDead marks a session-mode result whose adapter process is
+	// gone. The session teardown marker (cmd.Wait) races the envelope
+	// when the adapter kills the CLI on its way out, so a failed turn
+	// needs the in-band verdict to drive the one-shot fallback.
+	SessionDead bool `json:"session_dead,omitempty"`
 }
 
 // runAdapterDefault shells out to a Python adapter in adapters/, injecting

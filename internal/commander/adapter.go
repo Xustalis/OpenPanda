@@ -1278,10 +1278,14 @@ func (p *AgentSessions) turn(ctx context.Context, key, adapter string, req Adapt
 	turnCtx, cancel := context.WithTimeout(ctx, hard)
 	defer cancel()
 	res := s.await(turnCtx)
-	if s.isDead() && !res.OK {
+	if !res.OK && (s.isDead() || res.SessionDead) {
 		// The envelope arrived but the process is gone and the turn failed:
 		// one more shot via the plain spawn — which also covers the
 		// "session flag rejected" case an adapter may report this way.
+		// isDead() alone races: await() delivers the envelope before
+		// cmd.Wait() settles the exit marker when the adapter kills the
+		// CLI on its way out, so the adapter also reports the verdict
+		// in-band via session_dead.
 		s.kill()
 		p.mu.Lock()
 		delete(p.live, key)

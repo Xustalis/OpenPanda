@@ -308,6 +308,11 @@ func FindLatest(ctx context.Context, repo string, includePrerelease bool, curren
 		includePrerelease = true
 	}
 
+	// The lookup is two small JSON responses; bound the whole thing even
+	// when the caller's context is open-ended.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	token := gitHubToken(ctx)
 
 	// First attempt: query recent releases list to discover both stable and pre-releases.
@@ -315,7 +320,7 @@ func FindLatest(ctx context.Context, repo string, includePrerelease bool, curren
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err == nil {
 		setGitHubHeaders(req, token)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err == nil {
 			defer resp.Body.Close()
 			if checkErr := checkGitHubStatus(resp, repo); checkErr != nil {
@@ -376,7 +381,7 @@ func latestSingle(ctx context.Context, repo, token string) (Release, error) {
 		return Release{}, err
 	}
 	setGitHubHeaders(req, token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return Release{}, fmt.Errorf("release lookup: %w", err)
 	}

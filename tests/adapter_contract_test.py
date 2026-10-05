@@ -764,6 +764,15 @@ class HarnessContractTest(unittest.TestCase):
         self.assertNotIn("usage", payload)
         self.assertNotIn("session_id", payload)
 
+    def test_emit_carries_session_dead(self):
+        # The wire flag Go's one-shot fallback keys on: present only when the
+        # session process is gone.
+        payload, _ = run_harness(
+            "_harness.emit(False, 'provider exploded', 1, session_dead=True)")
+        self.assertIs(payload["session_dead"], True)
+        payload, _ = run_harness("_harness.emit(True, 'done', 0)")
+        self.assertNotIn("session_dead", payload)
+
     def test_invalid_request_json_is_reported(self):
         payload, proc = run_harness(
             "_harness.read_request()", stdin_data="not json {{{")
