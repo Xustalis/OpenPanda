@@ -2,6 +2,7 @@ package commander
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -33,17 +34,18 @@ type Router struct {
 	// (minimal | extended) the adapters run under. Zero value means minimal.
 	toolsPolicy string
 	// mcpCommand is the configured stdio MCP server (mcp.command, argv
-	// string). Under the extended tools policy it is materialized as an
-	// .mcp.json in the agent's work directory before the run, so agents that
-	// discover project MCP configs can reach the node's server. Empty = none.
+	// string). Under the extended tools policy it reaches agents that
+	// declare an MCP surface: flag-capable CLIs get it on the adapter
+	// request's mcp_config field, project-discovery CLIs get a
+	// materialized .mcp.json in the work dir for the run. Empty = none.
 	mcpCommand string
-	// pandaTools gates the openpanda self-management server in the same
-	// .mcp.json (routing.panda_tools, default on). It only ever applies
+	// pandaTools gates the openpanda self-management server on the same
+	// passthrough (routing.panda_tools, default on). It only ever applies
 	// under the extended tools policy — minimal-policy runs get neither
 	// server.
 	pandaTools bool
 	// selfConfigPath is forwarded to `panda mcp --config` inside the
-	// generated .mcp.json so the self-tools server resolves the same
+	// passthrough document so the self-tools server resolves the same
 	// config the daemon loaded. Empty = the server's own default discovery.
 	selfConfigPath string
 	// preferred lists agent names that receive a score bonus during routing.
@@ -97,15 +99,16 @@ func (r *Router) SetPolicy(injection config.InjectionConfig, routing config.Rout
 }
 
 // SetMCPPassthrough sets the stdio MCP server (argv string, empty disables)
-// that extended-policy agent runs expose through a work-dir .mcp.json. The
+// that extended-policy agent runs expose — on the adapter request for
+// flag-capable CLIs, via a work-dir .mcp.json for discovery-only CLIs. The
 // ask engine's own MCP client is independent of this; the passthrough only
 // concerns what the delegated agent CLIs may discover.
 func (r *Router) SetMCPPassthrough(command string) {
 	r.mcpCommand = strings.TrimSpace(command)
 }
 
-// SetSelfConfigPath records the daemon's --config path so the generated
-// .mcp.json can pass it to `panda mcp`. Empty means the self-tools server
+// SetSelfConfigPath records the daemon's --config path so the passthrough
+// document can hand it to `panda mcp`. Empty means the self-tools server
 // falls back to the same default discovery every CLI command uses.
 func (r *Router) SetSelfConfigPath(path string) {
 	r.selfConfigPath = strings.TrimSpace(path)
@@ -585,7 +588,10 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		if ag.Command != "" {
 			runCtx = WithAgentCommand(runCtx, ag.Command)
 		}
-		cleanupMCP := r.materializeMCPPassthrough(ag.Adapter, cwd)
+		// MCP passthrough: on a CLI with an MCP config flag the servers ride
+		// the request (no .mcp.json in the work dir); project-discovery CLIs
+		// keep the materialize-and-remove file path.
+		runCtx, cleanupMCP := r.wireMCPPassthrough(runCtx, name, ag.Adapter, cwd)
 		ar := r.runAdapter(runCtx, ag.Adapter, prompt, cwd)
 		// One bounded retry on provider-side turbulence (rate limit /
 		// overload / 5xx): these resolve in seconds, and the narrow
@@ -621,17 +627,19 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		}
 
 		res := Result{
-			OK:        ar.OK,
-			ExitCode:  ar.ExitCode,
-			Stdout:    ar.Result,
-			Stderr:    stderr,
-			Tokens:    ar.Tokens,
-			Cost:      ar.Cost,
-			Agent:     name,
-			Usage:     ar.Usage,
-			SessionID: ar.SessionID,
-			Model:     ar.Model,
-			Injected:  ar.Injected,
+			OK:            ar.OK,
+			ExitCode:      ar.ExitCode,
+			Stdout:        ar.Result,
+			Stderr:        stderr,
+			Tokens:        ar.Tokens,
+			Cost:          ar.Cost,
+			Agent:         name,
+			Usage:         ar.Usage,
+			SessionID:     ar.SessionID,
+			Model:         ar.Model,
+			Injected:      ar.Injected,
+			Structured:    ar.Structured,
+			SubagentStats: ar.SubagentStats,
 		}
 		lastExecRes = &res
 
@@ -678,6 +686,12 @@ type Result struct {
 	SessionID string
 	Model     string `json:"model,omitempty"`
 	Injected  bool   `json:"injected,omitempty"`
+	// Structured carries the harness's validated structured output when the
+	// run used a result schema — the parsed protocol fields the run loop
+	// prefers over text markers. SubagentStats is the harness's own
+	// delegation fan-out summary (claude's result.subagent_stats).
+	Structured    json.RawMessage `json:"structured,omitempty"`
+	SubagentStats json.RawMessage `json:"subagent_stats,omitempty"`
 }
 
 // AgentResult is what an adapter returns. Every field carries its wire name
@@ -695,6 +709,16 @@ type AgentResult struct {
 	SessionID string       `json:"session_id"`
 	Model     string       `json:"model,omitempty"`
 	Injected  bool         `json:"injected,omitempty"`
+	// Structured is the harness's validated structured output (claude
+	// --json-schema → structured_output), passed through verbatim. When the
+	// schema carries the panda protocol fields (status/question/
+	// delegate_requests) the run loop reads them here instead of parsing
+	// markers out of prose.
+	Structured json.RawMessage `json:"structured,omitempty"`
+	// SubagentStats is the harness's own delegation fan-out summary
+	// (claude's result.subagent_stats) — how many sub-agents the run
+	// spawned, by type. Passthrough for observability.
+	SubagentStats json.RawMessage `json:"subagent_stats,omitempty"`
 }
 
 // runAdapterDefault shells out to a Python adapter in adapters/, injecting

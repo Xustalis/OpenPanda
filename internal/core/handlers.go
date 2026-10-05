@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/ctxstore"
@@ -34,6 +35,11 @@ import (
 // dense enough to feel live in `panda task` / the panel timeline, sparse
 // enough that a chatty adapter cannot flood the event chain.
 const progressInterval = 2 * time.Second
+
+// maxAgentTranscriptEvents bounds how many structured agent_event rows one
+// task records: a transcript beyond that is pathological, not informative —
+// past the cap one transcript_truncated marker notes the cut.
+const maxAgentTranscriptEvents = 2000
 
 // handleDelegate processes an incoming task_delegate. It decides where the
 // task runs: locally (Phase 0 behavior), forwarded to a capable peer (P2P
@@ -1251,6 +1257,69 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				c.logger.Warn("record agent progress", "task", taskID, "err", err)
 			}
 		})
+
+		// Structured transcript (event protocol v2): every typed block the
+		// adapter streams — assistant text, thinking, tool_use/tool_result,
+		// sub-agent blocks keyed by the parent tool_use id — lands as an
+		// agent_event row so the display layer renders the delegation tree,
+		// not just a progress line. The count is bounded: a pathological
+		// adapter cannot grow the task's event table without limit, and past
+		// the cap one truncation marker records that the stream was cut.
+		var evCount atomic.Int64
+		execCtx = commander.WithAgentEvents(execCtx, func(ev commander.AgentEvent) {
+			if n := evCount.Add(1); n > maxAgentTranscriptEvents {
+				if n == maxAgentTranscriptEvents+1 {
+					c.EvTrace(context.WithoutCancel(ctx), taskID, EvAgentEvent, map[string]any{
+						"ev": "transcript_truncated", "count": n - 1,
+					})
+				}
+				return
+			}
+			data := map[string]any{"ev": ev.Ev}
+			if ev.ID != "" {
+				data["id"] = ev.ID
+			}
+			if ev.Parent != "" {
+				data["parent"] = ev.Parent
+			}
+			if ev.Name != "" {
+				data["name"] = ev.Name
+			}
+			if ev.ToolUseID != "" {
+				data["tool_use_id"] = ev.ToolUseID
+			}
+			if ev.Text != "" {
+				data["text"] = ev.Text
+			}
+			if ev.Thinking != "" {
+				data["thinking"] = ev.Thinking
+			}
+			if ev.Content != "" {
+				data["content"] = ev.Content
+			}
+			if len(ev.Input) > 0 {
+				data["input"] = ev.Input // RawMessage embeds as JSON, not a string
+			}
+			if ev.IsError {
+				data["is_error"] = true
+			}
+			if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID,
+				EvAgentEvent, data); err != nil {
+				c.logger.Warn("record agent event", "task", taskID, "err", err)
+			}
+		})
+
+		// Session pool (Phase 6): under a supervisor, session-capable
+		// adapters keep their CLI alive across rounds — a continue verdict
+		// costs one stdin line instead of a spawn + transcript reload. The
+		// pool dies with the task; adapters that never take a session simply
+		// never populate it.
+		if c.supervisor != nil {
+			var pool *commander.AgentSessions
+			execCtx, pool = commander.WithSessionPool(execCtx)
+			defer pool.CloseAll()
+			execCtx = commander.WithSessionMode(execCtx)
+		}
 	}
 
 	// Per-task agent timeout by plan kind: a training stage gets a larger
@@ -1439,6 +1508,16 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if sessionID != "" {
 			runCtx = commander.WithResume(execCtx, sessionID)
 		}
+		// Structured result contract: a schema-capable adapter (registry
+		// SupportsStructuredOutput) gets the protocol schema, so the result
+		// arrives parsed — status/question/delegate_requests — instead of
+		// relying on text markers alone. Marker parsing below stays as the
+		// fallback for every adapter without the flag.
+		if plan.Kind == "agent" {
+			if k, ok := agents.Lookup(plan.Agent, plan.Adapter); ok && k.Capabilities.SupportsStructuredOutput {
+				runCtx = commander.WithResultSchema(runCtx, agentResultSchema)
+			}
+		}
 		// A task stamped remote at intake carries off-node intent: commander
 		// holds its agent run to the restricted tool face unless the origin's
 		// consent grant authorized it. The persisted flag is authoritative —
@@ -1448,6 +1527,16 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			runCtx = commander.WithRemoteTask(runCtx)
 		}
 		res = router.Execute(runCtx, plan, prompt, workDir, task.Authorized)
+		structured := parseStructuredResult(res.Structured)
+		// The schema's status field is the model's self-report. question and
+		// delegate are consumed below; "failed" is traced as evidence for the
+		// judge rather than flipping res.OK — a task kill here would bypass
+		// the supervision round that could issue a corrective continuation.
+		if structured != nil && structured.Status != "" && structured.Status != "done" {
+			c.EvTrace(execCtx, taskID, "structured_status", map[string]any{
+				"round": round + 1, "agent": res.Agent, "status": structured.Status,
+			})
+		}
 		if res.SessionID != "" && res.SessionID != sessionID {
 			sessionID = res.SessionID
 			// Persist immediately — not at the loop's end — because the
@@ -1484,7 +1573,15 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// folded into the intent. The delegation never reaches a judge: the
 		// round is re-driven, not verified.
 		if plan.Kind == "agent" {
-			if drs, cleaned := parseDelegateRequests(res.Stdout); len(drs) > 0 {
+			drs, cleaned := parseDelegateRequests(res.Stdout)
+			// The structured contract wins when it carries requests: an
+			// agent that filled delegate_requests went through the schema,
+			// so its field is the parsed truth — while marker cleaning
+			// above still strips any stray protocol lines it also printed.
+			if structured != nil && len(structured.Delegates) > 0 {
+				drs = structured.Delegates
+			}
+			if len(drs) > 0 {
 				res.Stdout = cleaned
 				if delegations < maxDelegateRequests {
 					take := maxDelegateRequests - delegations
@@ -1520,7 +1617,14 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// what the re-run folds into the intent. The marker text is stripped
 		// from stdout so the protocol line never reaches the user as prose.
 		if plan.Kind == "agent" && res.OK {
-			if q, cleaned, ok := parseQuestionRequest(res.Stdout); ok {
+			q, cleaned, ask := parseQuestionRequest(res.Stdout)
+			// The structured contract wins when it carries a question: the
+			// schema field is parsed truth, while the marker pass above
+			// still strips any protocol line the agent also printed.
+			if structured != nil && strings.TrimSpace(structured.Question) != "" {
+				q, ask = strings.TrimSpace(structured.Question), true
+			}
+			if ask {
 				res.Stdout = cleaned
 				if beforeOK {
 					if after, serr := defense.SnapshotDir(workDir); serr == nil {
@@ -1620,15 +1724,23 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			// Structured usage (when the adapter speaks it): the flat Tokens
 			// total rides the existing pipeline; the breakdown lands as its
 			// own event so input/output/cache traffic can be told apart.
-			if res.Usage != nil {
-				c.EvTrace(execCtx, taskID, EvAgentUsage, map[string]any{
-					"agent":              res.Agent,
-					"round":              round,
-					"input_tokens":       res.Usage.InputTokens,
-					"output_tokens":      res.Usage.OutputTokens,
-					"cache_read_tokens":  res.Usage.CacheReadTokens,
-					"cache_write_tokens": res.Usage.CacheWriteTokens,
-				})
+			// One usage event carries both meters when present: the token
+			// breakdown and the harness's own delegation fan-out summary
+			// (claude result.subagent_stats) — how many sub-agents the run
+			// spawned, by type; observability for the everything-is-a-node
+			// view.
+			if res.Usage != nil || len(res.SubagentStats) > 0 {
+				usageData := map[string]any{"agent": res.Agent, "round": round}
+				if res.Usage != nil {
+					usageData["input_tokens"] = res.Usage.InputTokens
+					usageData["output_tokens"] = res.Usage.OutputTokens
+					usageData["cache_read_tokens"] = res.Usage.CacheReadTokens
+					usageData["cache_write_tokens"] = res.Usage.CacheWriteTokens
+				}
+				if len(res.SubagentStats) > 0 {
+					usageData["subagent_stats"] = res.SubagentStats
+				}
+				c.EvTrace(execCtx, taskID, EvAgentUsage, usageData)
 			}
 			// Fallback chain visibility (A2): res.Agent names the agent that
 			// actually executed; a mismatch means the scored primary's CLI was

@@ -722,6 +722,16 @@ const es: Messages = {
   'events.tag.state': 'Estado',
   'events.tag.hop': 'Salto',
   'events.tag.path': 'Ruta',
+  'events.agent_event': 'Actividad del agente',
+  'events.agent_text': 'Mensaje del agente',
+  'events.agent_thinking': 'Pensamiento',
+  'events.agent_tool_use': 'Llamada de herramienta',
+  'events.agent_tool_result': 'Resultado de herramienta',
+  'events.transcript_truncated': 'Transcripción truncada',
+  'events.transcriptTruncatedNote': 'La actividad anterior se truncó; el nodo ejecutor conserva el registro completo.',
+  'events.subagent': 'subagente',
+  'events.subagentHint': 'Se ejecutó dentro de un subagente del harness (anidado bajo la llamada de herramienta padre)',
+
   'sessions.copyThought': 'Copiar cadena de pensamiento',
 
   'nav.plans': 'Planes',

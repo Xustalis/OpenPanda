@@ -40,12 +40,21 @@ def main():
     if req.resume:
         cmd += ["--conversation", req.resume]
 
+    # Transcript pair: a CLI without a native event stream still reads as a
+    # node — the invocation row carries argv shape (the prompt is inside argv
+    # and must not be re-logged), the result row the bounded output.
+    harness.emit_event("tool_use", id="agy", name="agy",
+                       input={"argc": len(cmd) - 1})
     try:
         returncode, out, err = harness.run_plain(cmd, cwd=cwd, timeout=timeout)
     except subprocess.TimeoutExpired:
+        harness.emit_event("tool_result", tool_use_id="agy", is_error=True,
+                           content="agy timed out")
         harness.emit(False, "agy timed out", 124)
         return
     except FileNotFoundError:
+        harness.emit_event("tool_result", tool_use_id="agy", is_error=True,
+                           content="agy binary not found")
         harness.emit(False, "agy binary not found", 127)
         return
 
@@ -88,6 +97,8 @@ def main():
     ok = status.upper() == "SUCCESS" and returncode == 0
     if not ok and not response:
         response = "agy status " + (status or "?") + ": " + (err.strip() or "(no detail)")
+    harness.emit_event("tool_result", tool_use_id="agy", is_error=not ok,
+                       content=response)
     harness.emit(ok, response, returncode,
                  tokens=tokens or None, usage=usage,
                  session_id=env.get("conversation_id") or "")

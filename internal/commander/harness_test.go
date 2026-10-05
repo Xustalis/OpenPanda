@@ -234,6 +234,110 @@ func TestTransientPatterns(t *testing.T) {
 	}
 }
 
+// TestAgentSessionPoolReusesProcess drives the REAL session path: a stub
+// claude_code.py keeps stdin open after the request line and answers one
+// result envelope per turn line. Two Execute calls on the same execution
+// context must ride ONE adapter process — the second turn is a stdin line,
+// not a spawn — and CloseAll must reap the process.
+func TestAgentSessionPoolReusesProcess(t *testing.T) {
+	dir := t.TempDir()
+	old := adapterDir
+	adapterDir = dir
+	defer func() { adapterDir = old }()
+
+	stub := `import json, os, sys
+marks = os.path.join(os.getcwd(), "marks.log")
+def mark(m):
+    with open(marks, "a") as f:
+        f.write(m + "\n")
+mark("spawn:" + str(os.getpid()))
+req = json.loads(sys.stdin.readline())
+assert req.get("session") is True, req
+print(json.dumps({"ok": True, "result": "turn0:" + req["prompt"], "exit_code": 0, "session_id": "sess-T"}))
+sys.stdout.flush()
+for line in sys.stdin:
+    msg = json.loads(line)
+    mark("turn:" + msg["text"])
+    print(json.dumps({"ok": True, "result": "turnN:" + msg["text"], "exit_code": 0, "session_id": "sess-T"}))
+    sys.stdout.flush()
+`
+	if err := os.WriteFile(filepath.Join(dir, "claude_code.py"), []byte(stub), 0o755); err != nil {
+		t.Fatalf("stub: %v", err)
+	}
+
+	r := NewRouter(tier1Card(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	plan := tier1Plan(t, r)
+
+	workDir := t.TempDir()
+	ctx, pool := WithSessionPool(context.Background())
+	ctx = WithSessionMode(ctx)
+	res1 := r.Execute(ctx, plan, "first", workDir, true)
+	if !res1.OK || res1.Stdout != "turn0:first" {
+		t.Fatalf("turn0 = %+v", res1)
+	}
+	res2 := r.Execute(ctx, plan, "second", workDir, true)
+	if !res2.OK || res2.Stdout != "turnN:second" {
+		t.Fatalf("turnN = %+v", res2)
+	}
+	pool.CloseAll()
+
+	marks, err := os.ReadFile(filepath.Join(workDir, "marks.log"))
+	if err != nil {
+		t.Fatalf("marks: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(marks)), "\n")
+	// Exactly one spawn, and the second prompt arrived as a stdin turn line.
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "spawn:") || lines[1] != "turn:second" {
+		t.Fatalf("marks = %v — expected one process serving both turns", lines)
+	}
+	// After CloseAll the session process is gone.
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	if len(pool.live) != 0 {
+		t.Fatalf("pool still holds %d sessions after CloseAll", len(pool.live))
+	}
+}
+
+// TestAgentSessionFallsBackOnSpawnFailure verifies a session-incapable or
+// wedge adapter degrades to the one-shot path instead of failing the task.
+func TestAgentSessionFallsBackOnSpawnFailure(t *testing.T) {
+	dir := t.TempDir()
+	old := adapterDir
+	adapterDir = dir
+	defer func() { adapterDir = old }()
+
+	// Session-unaware stub: answers the request line once and exits — an
+	// adapter that ignores "session" and serves the one-shot contract. (It
+	// must readline, not json.load: stdin stays open in session mode, so a
+	// full-document read would block on EOF forever.) The follow-up Execute
+	// then finds the session dead and falls back to a plain spawn, which
+	// the same stub serves again.
+	stub := `import json, sys
+req = json.loads(sys.stdin.readline())
+print(json.dumps({"ok": True, "result": "oneshot:" + req["prompt"], "exit_code": 0}))
+`
+	if err := os.WriteFile(filepath.Join(dir, "claude_code.py"), []byte(stub), 0o755); err != nil {
+		t.Fatalf("stub: %v", err)
+	}
+
+	r := NewRouter(tier1Card(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	plan := tier1Plan(t, r)
+
+	ctx, pool := WithSessionPool(context.Background())
+	defer pool.CloseAll()
+	ctx = WithSessionMode(ctx)
+	res := r.Execute(ctx, plan, "first", t.TempDir(), true)
+	if !res.OK || res.Stdout != "oneshot:first" {
+		t.Fatalf("oneshot via session = %+v", res)
+	}
+	res = r.Execute(ctx, plan, "second", t.TempDir(), true)
+	if !res.OK || res.Stdout != "oneshot:second" {
+		t.Fatalf("fallback oneshot = %+v", res)
+	}
+}
+
 // TestRetryContextCancel verifies the retry wait honors cancellation — a
 // cancelled task must not sit out the 3s backoff.
 func TestRetryContextCancel(t *testing.T) {

@@ -77,7 +77,7 @@ func TestAdapterSandboxPolicy(t *testing.T) {
 	SetSandboxConfig(config.SandboxConfig{Mode: "strict"}, nil)
 	t.Cleanup(func() { security.SetBasePolicy(security.Policy{Mode: security.ModeOff, AllowNetwork: true}) })
 
-	p := adapterSandboxPolicy("codex.py", "/tmp/work")
+	p := adapterSandboxPolicy("codex", "codex.py", "/tmp/work")
 	var found bool
 	for _, w := range p.WritablePaths {
 		if w == ".codex" {
@@ -105,7 +105,7 @@ func TestAdapterSandboxPolicy(t *testing.T) {
 
 	// Standard mode: nothing read-denied beyond the base policy.
 	SetSandboxConfig(config.SandboxConfig{Mode: "standard"}, nil)
-	p = adapterSandboxPolicy("codex.py", "/tmp/work")
+	p = adapterSandboxPolicy("codex", "codex.py", "/tmp/work")
 	if len(p.DenyReadPaths) != 0 {
 		t.Fatalf("standard mode must not deny reads: %v", p.DenyReadPaths)
 	}

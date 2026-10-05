@@ -25,7 +25,7 @@ func contains(list []string, want string) bool {
 // mounted wrong, and left a junk file that blocked the real directory on the
 // host forever.
 func TestAdapterCredentialSplitIsDeclaredNotGuessed(t *testing.T) {
-	dirs, files := adapterCredentialPaths("claude_code.py")
+	dirs, files := adapterCredentialPaths("claude_code", "claude_code.py")
 	if !contains(dirs, ".claude") {
 		t.Fatalf(".claude must come out as a directory: %v", dirs)
 	}
@@ -41,7 +41,7 @@ func TestAdapterCredentialSplitIsDeclaredNotGuessed(t *testing.T) {
 	// for the other.
 	SetSandboxConfig(config.SandboxConfig{Mode: "standard"}, nil)
 	t.Cleanup(func() { security.SetBasePolicy(security.Policy{Mode: security.ModeOff, AllowNetwork: true}) })
-	p := adapterSandboxPolicy("claude_code.py", "/tmp/work")
+	p := adapterSandboxPolicy("claude_code", "claude_code.py", "/tmp/work")
 	if !contains(p.WritablePaths, ".claude") {
 		t.Fatalf(".claude missing from WritablePaths: %v", p.WritablePaths)
 	}
@@ -70,7 +70,7 @@ func TestStandardModeDeniesCredentialWrites(t *testing.T) {
 	SetSandboxConfig(config.SandboxConfig{Mode: "standard"}, nil)
 	t.Cleanup(func() { security.SetBasePolicy(security.Policy{Mode: security.ModeOff, AllowNetwork: true}) })
 
-	p := adapterSandboxPolicy("claude_code.py", "/tmp/work")
+	p := adapterSandboxPolicy("claude_code", "claude_code.py", "/tmp/work")
 	if contains(p.WritablePaths, ".config") {
 		t.Fatalf("shared .config root must not be writable: %v", p.WritablePaths)
 	}
@@ -88,7 +88,7 @@ func TestStandardModeDeniesCredentialWrites(t *testing.T) {
 
 	// opencode keeps its own .config subtree through the manifest, not the
 	// removed shared root.
-	p = adapterSandboxPolicy("opencode.py", "/tmp/work")
+	p = adapterSandboxPolicy("opencode", "opencode.py", "/tmp/work")
 	if !contains(p.WritablePaths, ".config/opencode") {
 		t.Fatalf("opencode's own config dir not writable: %v", p.WritablePaths)
 	}

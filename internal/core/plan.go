@@ -993,6 +993,71 @@ func parseDelegateRequests(stdout string) ([]delegateRequest, string) {
 	return drs, strings.Join(kept, "\n")
 }
 
+// agentResultSchema is the JSON Schema handed to schema-capable adapters
+// (claude --json-schema). The model's final reply validates against it, so
+// the protocol fields arrive parsed — status/question/delegate_requests —
+// instead of as text markers scraped out of prose. The descriptions are
+// load-bearing: they are the only documentation the model sees for what
+// each field means.
+const agentResultSchema = `{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "answer": {
+      "type": "string",
+      "description": "The final user-facing answer: a direct reply, not a transcript of the work."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["done", "question", "delegate", "failed"],
+      "description": "done = finished; question = blocked on input only the user has; delegate = requested sub-tasks; failed = could not complete."
+    },
+    "question": {
+      "type": "string",
+      "description": "When status=question: the single most important question for the user."
+    },
+    "delegate_requests": {
+      "type": "array",
+      "maxItems": 4,
+      "description": "When status=delegate: sub-tasks that need a resource this node lacks (GPU, a tool, a hardware peripheral). The runtime spawns each as a causal child task and folds results back.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "intent": {"type": "string", "description": "What the sub-task must do"},
+          "requires": {"type": "array", "items": {"type": "string"}, "description": "Capability ids the sub-task needs"},
+          "title": {"type": "string", "description": "Short title"},
+          "node": {"type": "string", "description": "Optional specific node name"}
+        },
+        "required": ["intent"]
+      }
+    }
+  },
+  "required": ["answer", "status"]
+}`
+
+// structuredAgentResult is the parsed form of the schema-validated output a
+// capable adapter returns under Result.Structured.
+type structuredAgentResult struct {
+	Answer    string            `json:"answer"`
+	Status    string            `json:"status"`
+	Question  string            `json:"question"`
+	Delegates []delegateRequest `json:"delegate_requests"`
+}
+
+// parseStructuredResult decodes the adapter's structured output. nil when
+// absent or malformed — the caller then runs the marker parsers as before.
+func parseStructuredResult(raw json.RawMessage) *structuredAgentResult {
+	if len(raw) == 0 {
+		return nil
+	}
+	var sr structuredAgentResult
+	if err := json.Unmarshal(raw, &sr); err != nil {
+		return nil
+	}
+	return &sr
+}
+
 const questionMarker = "PANDA_QUESTION"
 
 // parseQuestionRequest extracts the last PANDA_QUESTION line from agent

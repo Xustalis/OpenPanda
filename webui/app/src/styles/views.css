@@ -4142,6 +4142,74 @@ pre,
   opacity: 0.7;
 }
 
+/* Agent transcript (event protocol v2): typed activity blocks, with
+   sub-agent rows nested under the tool call that spawned them. */
+
+.timeline-step-item.agent-child .step-marker {
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+}
+
+.timeline-step-item.ev-thinking .step-marker {
+  border-color: var(--border);
+}
+
+.timeline-step-item.ev-tool_use .step-marker {
+  border-color: var(--accent);
+}
+
+.timeline-step-item.ev-tool_result.is-error .step-marker {
+  border-color: var(--danger);
+}
+
+.agent-sub-badge {
+  font-size: 0.68rem;
+}
+
+.agent-tool-call {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.agent-tool-name {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.agent-tool-arg {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.agent-text {
+  line-height: 1.55;
+}
+
+.agent-result {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg-raised);
+  border-left: 2px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.agent-result.is-error {
+  border-left-color: var(--danger);
+  color: var(--danger);
+}
+
 .step-body {
   background: var(--bg-inset);
   border: 1px solid var(--border-soft);

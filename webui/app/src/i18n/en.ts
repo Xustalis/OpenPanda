@@ -748,6 +748,16 @@ const en: Messages = {
   'events.tag.state': 'State',
   'events.tag.hop': 'Hop',
   'events.tag.path': 'Path',
+  'events.agent_event': 'Agent Activity',
+  'events.agent_text': 'Agent Message',
+  'events.agent_thinking': 'Thinking',
+  'events.agent_tool_use': 'Tool Call',
+  'events.agent_tool_result': 'Tool Result',
+  'events.transcript_truncated': 'Transcript Truncated',
+  'events.transcriptTruncatedNote': 'Older activity was truncated; the executing node keeps the full log.',
+  'events.subagent': 'sub-agent',
+  'events.subagentHint': 'Ran inside a harness sub-agent (nested under the parent tool call)',
+
   'sessions.copyThought': 'Copy thought chain',
 
   'nav.plans': 'Plans',

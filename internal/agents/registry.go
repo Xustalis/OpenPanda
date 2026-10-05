@@ -152,6 +152,20 @@ type Capabilities struct {
 	// MCP config (.mcp.json) in its working directory, so the commander can
 	// materialize the configured passthrough servers for one run.
 	DiscoversProjectMCP bool
+	// SupportsStructuredOutput means the adapter's CLI accepts a result
+	// schema (claude --json-schema): the run's final reply validates
+	// against it, so the protocol fields (status/question/delegate_requests)
+	// arrive parsed rather than as text markers.
+	SupportsStructuredOutput bool
+	// SupportsSession means the adapter can keep the agent CLI alive across
+	// turns (claude --input-format stream-json): a supervision "continue"
+	// costs a message write instead of a process spawn + session reload.
+	SupportsSession bool
+	// MCPConfigFlag names the CLI flag that accepts an MCP config document
+	// (e.g. claude's "--mcp-config"). When set, the commander passes the
+	// passthrough servers on the request instead of writing .mcp.json into
+	// the task's work dir.
+	MCPConfigFlag string
 }
 
 // ModelEnvMapping names the env vars one agent CLI reads for its model
@@ -214,6 +228,12 @@ var known = []Known{
 			// auto-discovers .mcp.json in its working directory.
 			SupportsRestricted:  true,
 			DiscoversProjectMCP: true,
+			// claude -p takes --json-schema, --mcp-config and stream-json
+			// input — the structured contract, file-free passthrough and the
+			// in-session multi-turn the supervision loop drives.
+			SupportsStructuredOutput: true,
+			SupportsSession:          true,
+			MCPConfigFlag:            "--mcp-config",
 		},
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "refactoring"},
 		DefaultBestAt:       []string{"multi_file_edits", "code_search", "refactoring", "complex_reasoning"},

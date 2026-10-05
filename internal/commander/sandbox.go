@@ -77,16 +77,16 @@ func ProtectedPaths(cfg *config.Config, configPath, cardPath string) []string {
 // open as the baseline, but a subprocess must never rewrite credentials it
 // does not own — a token under ~/.config/gh or a sibling agent's config is
 // as much a takeover vector as a read leak.
-func adapterSandboxPolicy(adapter, cwd string) security.Policy {
+func adapterSandboxPolicy(agent, adapter, cwd string) security.Policy {
 	p := security.DefaultPolicy(cwd)
 	p.WritablePaths = append(p.WritablePaths, sharedToolchainPaths()...)
-	dirs, files := adapterCredentialPaths(adapter)
+	dirs, files := adapterCredentialPaths(agent, adapter)
 	p.WritablePaths = append(p.WritablePaths, dirs...)
 	p.WritableFiles = append(p.WritableFiles, files...)
 	p.DenyWritePaths = append(p.DenyWritePaths, security.SystemSecretPaths()...)
-	p.DenyWritePaths = append(p.DenyWritePaths, foreignCredentialDirs(adapter)...)
+	p.DenyWritePaths = append(p.DenyWritePaths, foreignCredentialDirs(agent, adapter)...)
 	if p.Mode == security.ModeStrict {
-		deny := append(security.SystemSecretPaths(), foreignCredentialDirs(adapter)...)
+		deny := append(security.SystemSecretPaths(), foreignCredentialDirs(agent, adapter)...)
 		p.DenyReadPaths = append(p.DenyReadPaths, deny...)
 	}
 	return p
@@ -116,19 +116,26 @@ func nativeSandboxPolicy(dir string) security.Policy {
 // mkdir -p, a file gets touched — a dotfile basename is NOT a file
 // signature (".claude" is a directory), so the kind has to come from the
 // manifest, not the name.
-func adapterCredentialPaths(adapter string) (dirs, files []string) {
-	k, ok := agents.ByAdapter(adapter)
+func adapterCredentialPaths(agent, adapter string) (dirs, files []string) {
+	// Lookup, not ByAdapter: generic.py serves many unrelated CLIs, so an
+	// adapter-only hit would mount the wrong agent's credential manifest.
+	k, ok := agents.Lookup(agent, adapter)
 	if !ok {
 		return nil, nil
 	}
 	return splitCredentialDirs(k.CredentialFiles)
 }
 
-func foreignCredentialDirs(adapter string) []string {
+// foreignCredentialDirs lists every OTHER agent's credential dirs — what
+// this run must not rewrite (or read, under strict). The exclusion is the
+// resolved agent entry (name + adapter via Lookup), not the adapter alone:
+// every generic.py card agent would otherwise exempt each other's secrets.
+func foreignCredentialDirs(agent, adapter string) []string {
+	self, _ := agents.Lookup(agent, adapter)
 	var out []string
 	seen := map[string]bool{}
 	for _, k := range agents.Registry() {
-		if k.Adapter == adapter {
+		if self.Name != "" && k.Name == self.Name {
 			continue
 		}
 		for _, d := range credentialDirs(k.CredentialFiles) {
@@ -142,7 +149,8 @@ func foreignCredentialDirs(adapter string) []string {
 }
 
 func allCredentialDirs() []string {
-	return foreignCredentialDirs("")
+	// No self to exempt: the union of every agent's credential dirs.
+	return foreignCredentialDirs("", "")
 }
 
 // credentialDirs collapses a credential file list to the paths that need

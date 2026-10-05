@@ -713,6 +713,16 @@ const ja: Messages = {
   'events.tag.state': '状態',
   'events.tag.hop': 'ホップ',
   'events.tag.path': 'パス',
+  'events.agent_event': 'エージェント活動',
+  'events.agent_text': 'エージェントメッセージ',
+  'events.agent_thinking': '思考',
+  'events.agent_tool_use': 'ツール呼び出し',
+  'events.agent_tool_result': 'ツール結果',
+  'events.transcript_truncated': 'トランスクリプト省略',
+  'events.transcriptTruncatedNote': '古いアクティビティは省略されました。実行ノードに完全なログが残っています。',
+  'events.subagent': 'サブエージェント',
+  'events.subagentHint': 'ハーネスのサブエージェント内で実行（親ツール呼び出しの下にネスト）',
+
   'sessions.copyThought': '思考チェーンをコピー',
 
   'nav.plans': 'プラン',

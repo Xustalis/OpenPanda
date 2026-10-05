@@ -722,6 +722,16 @@ const de: Messages = {
   'events.tag.state': 'Status',
   'events.tag.hop': 'Hop',
   'events.tag.path': 'Pfad',
+  'events.agent_event': 'Agenten-Aktivität',
+  'events.agent_text': 'Agenten-Nachricht',
+  'events.agent_thinking': 'Denken',
+  'events.agent_tool_use': 'Werkzeugaufruf',
+  'events.agent_tool_result': 'Werkzeugergebnis',
+  'events.transcript_truncated': 'Protokoll gekürzt',
+  'events.transcriptTruncatedNote': 'Ältere Aktivitäten wurden gekürzt; der ausführende Knoten behält das vollständige Protokoll.',
+  'events.subagent': 'Sub-Agent',
+  'events.subagentHint': 'Lief in einem Harness-Sub-Agenten (unter dem Eltern-Toolaufruf verschachtelt)',
+
   'sessions.copyThought': 'Gedankenkette kopieren',
 
   'nav.plans': 'Pläne',

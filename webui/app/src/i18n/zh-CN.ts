@@ -736,6 +736,16 @@ const zhCN: Messages = {
   'events.tag.state': '状态',
   'events.tag.hop': '跳点',
   'events.tag.path': '路径',
+  'events.agent_event': 'Agent 活动',
+  'events.agent_text': 'Agent 消息',
+  'events.agent_thinking': '思考',
+  'events.agent_tool_use': '工具调用',
+  'events.agent_tool_result': '工具结果',
+  'events.transcript_truncated': '转录已截断',
+  'events.transcriptTruncatedNote': '更早的活动已截断；执行节点保留完整日志。',
+  'events.subagent': '子代理',
+  'events.subagentHint': '运行在 harness 子代理内（嵌套在父工具调用下）',
+
   'sessions.copyThought': '复制思维链',
 
   'nav.plans': '计划',

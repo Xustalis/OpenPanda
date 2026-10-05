@@ -189,6 +189,85 @@ print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "resumed")
 
+    def test_codex_transcript_events(self):
+        """Codex items land on the transcript: a tool-shaped item is a
+        tool_use on item.started and a tool_result on item.completed;
+        agent_message is text, reasoning is thinking."""
+        payload, lines, _ = run_adapter(
+            "codex.py", "codex", r'''
+import json
+print(json.dumps({"type":"session_meta","payload":{"id":"cs-1"}}))
+print(json.dumps({"type":"item.started","item":{"id":"i1","type":"command_execution","command":"ls -la","status":"in_progress"}}))
+print(json.dumps({"type":"item.completed","item":{"id":"i2","type":"reasoning","text":"pondering"}}))
+print(json.dumps({"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"ls -la","status":"completed","aggregated_output":"total 0"}}))
+print(json.dumps({"type":"item.completed","item":{"id":"i3","type":"agent_message","text":"codex answer"}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        events = [json.loads(l) for l in lines if l.startswith("{")]
+        events = [e for e in events if e.get("type") == "event"]
+        kinds = [e["ev"] for e in events]
+        self.assertEqual(kinds, ["tool_use", "thinking", "tool_result", "text"])
+        self.assertEqual(events[0]["name"], "shell")
+        self.assertEqual(events[0]["input"], {"command": "ls -la"})
+        self.assertEqual(events[0]["id"], "i1")
+        self.assertEqual(events[1]["thinking"], "pondering")
+        self.assertEqual(events[2]["tool_use_id"], "i1")
+        self.assertEqual(events[2]["content"], "total 0")
+        self.assertFalse(events[2]["is_error"])
+        self.assertEqual(events[3]["text"], "codex answer")
+        self.assertEqual(events[3]["id"], "i3")
+
+    def test_codex_completion_only_tool_pair(self):
+        """Older codex streams emit item.completed with no item.started:
+        the adapter synthesizes the missing tool_use so the transcript never
+        shows an orphaned result."""
+        payload, lines, _ = run_adapter(
+            "codex.py", "codex", r'''
+import json
+print(json.dumps({"type":"item.completed","item":{"id":"w1","type":"command_execution","command":"pwd","status":"completed","aggregated_output":"/repo"}}))
+print(json.dumps({"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"done"}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        events = [json.loads(l) for l in lines if l.startswith("{")]
+        events = [e for e in events if e.get("type") == "event"]
+        kinds = [e["ev"] for e in events]
+        # The synthesized use+result pair precedes the message text.
+        self.assertEqual(kinds, ["tool_use", "tool_result", "text"])
+        self.assertEqual(events[0]["id"], "w1")
+        self.assertEqual(events[0]["name"], "shell")
+        self.assertEqual(events[1]["tool_use_id"], "w1")
+        self.assertEqual(events[1]["content"], "/repo")
+
+    def test_opencode_transcript_events(self):
+        """Opencode parts land on the transcript once: text on first
+        sighting, tool_use on first sighting, tool_result on the first
+        terminal status — re-emitted parts never duplicate a row."""
+        payload, lines, _ = run_adapter(
+            "opencode.py", "opencode", r'''
+import json
+print(json.dumps({"type":"tool_use","sessionID":"s1","part":{"id":"pt","type":"tool","tool":"bash","state":{"status":"running","input":{"command":"uname"},"title":"uname"}}}))
+print(json.dumps({"type":"tool_use","sessionID":"s1","part":{"id":"pt","type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"uname"},"output":"arm64","title":"uname"}}}))
+# A status re-emit must not duplicate the tool_result row.
+print(json.dumps({"type":"tool_use","sessionID":"s1","part":{"id":"pt","type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"uname"},"output":"arm64","title":"uname"}}}))
+print(json.dumps({"type":"text","sessionID":"s1","part":{"id":"px","type":"text","text":"half"}}))
+print(json.dumps({"type":"text","sessionID":"s1","part":{"id":"px","type":"text","text":"half plus more"}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        events = [json.loads(l) for l in lines if l.startswith("{")]
+        events = [e for e in events if e.get("type") == "event"]
+        kinds = [e["ev"] for e in events]
+        self.assertEqual(kinds, ["tool_use", "tool_result", "text"])
+        self.assertEqual(events[0]["name"], "bash")
+        self.assertEqual(events[0]["input"], {"command": "uname"})
+        self.assertEqual(events[1]["tool_use_id"], "pt")
+        self.assertEqual(events[1]["content"], "arm64")
+        self.assertFalse(events[1]["is_error"])
+        # First sighting wins — the update does not re-emit a second row.
+        self.assertEqual(events[2]["text"], "half")
+
     def test_claude_injected_model_strips_settings_on_stream_only(self):
         # Credential rescue: an injected model/base URL disables the user's
         # settings sources on the stream path…
@@ -727,6 +806,85 @@ sys.exit(1)
         self.assertFalse(payload["ok"], payload)
         self.assertEqual(payload["exit_code"], 127)
         self.assertEqual(payload["result"], "definitely-not-on-path-xyz binary not found")
+
+    def test_emit_event_frames(self):
+        """emit_event writes a bounded {"type":"event"} NDJSON frame on
+        stderr: known fields ride under their names, unknown keys land in
+        "data", oversized input is clamped."""
+        _, proc = run_harness(
+            "_harness.emit_event('tool_use', id='t1', name='Bash', "
+            "input={'command': 'x' * 20000}, extra_key='v'); "
+            "_harness.emit_event('text', text='hello', parent='t1'); "
+            "_harness.emit(True, 'done', 0)")
+        frames = [json.loads(l) for l in proc.stderr.splitlines()
+                  if l.startswith("{")]
+        frames = [f for f in frames if f.get("type") == "event"]
+        self.assertEqual(len(frames), 2, proc.stderr)
+        self.assertEqual(frames[0]["ev"], "tool_use")
+        self.assertEqual(frames[0]["id"], "t1")
+        self.assertEqual(frames[0]["name"], "Bash")
+        # Unknown fields pass through at the top level.
+        self.assertEqual(frames[0]["extra_key"], "v")
+        # An oversized input structure degrades to clamped JSON text.
+        self.assertIsInstance(frames[0]["input"], str)
+        self.assertLess(len(frames[0]["input"]), 5000)
+        self.assertEqual(frames[1]["parent"], "t1")
+        self.assertEqual(frames[1]["text"], "hello")
+
+    def test_emit_event_clamps_multibyte_by_bytes(self):
+        """Field limits are UTF-8 byte budgets: the Go harness spills any
+        stderr line past 24KB to diagnostics, and 16000 CJK characters are
+        ~48KB on the wire — a character-count clamp would emit a line too
+        long to survive and the event would be dropped instead of clamped."""
+        _, proc = run_harness(
+            "_harness.emit_event('text', text='汉' * 16000); "
+            "_harness.emit(True, 'done', 0)")
+        frames = [json.loads(l) for l in proc.stderr.splitlines()
+                  if l.startswith("{")]
+        frames = [f for f in frames if f.get("type") == "event"]
+        self.assertEqual(len(frames), 1, proc.stderr)
+        self.assertTrue(frames[0]["text"].endswith("…[截断]"),
+                        frames[0]["text"][-40:])
+        # The whole stderr line stays under the Go side's line cap.
+        self.assertLess(len(proc.stderr.encode("utf-8")), 24 * 1024)
+
+    def test_emit_event_clamp_preserves_code_points(self):
+        """Byte clamping must not split a multi-byte code point — the cut
+        text still decodes cleanly and carries the truncation marker."""
+        _, proc = run_harness(
+            "import sys; "
+            "print(_harness._clamp_str('汉' * 6000, 16000), file=sys.stderr)")
+        # 6000 CJK chars ≈ 18000 bytes: clamped to ≤16000 bytes + marker.
+        out = proc.stderr.strip()
+        self.assertTrue(out.endswith("…[截断]"), out[-40:])
+        self.assertLessEqual(len(out.encode("utf-8")), 16000 + 32)
+
+    def test_run_simple_transcript_events(self):
+        """A plain CLI run lands on the transcript as one tool_use/
+        tool_result pair — argv shape on the call, bounded output on the
+        result."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            write_executable(tmp / "okcli", r'''
+import sys
+print("cli output")
+''')
+            payload, proc = run_harness(
+                "_harness.run_simple([%r, 'a1'], label='okcli')"
+                % str(tmp / "okcli"))
+            self.assertTrue(payload["ok"], payload)
+            frames = [json.loads(l) for l in proc.stderr.splitlines()
+                      if l.startswith("{")]
+            frames = [f for f in frames if f.get("type") == "event"]
+            self.assertEqual([f["ev"] for f in frames],
+                             ["tool_use", "tool_result"])
+            self.assertEqual(frames[0]["name"], "okcli")
+            # The prompt lives inside argv — the event carries the arg
+            # count, not the arguments.
+            self.assertEqual(frames[0]["input"], {"argc": 1})
+            self.assertEqual(frames[1]["tool_use_id"], "okcli")
+            self.assertFalse(frames[1]["is_error"])
+            self.assertEqual(frames[1]["content"], "cli output")
 
     def test_timeout_kills_whole_process_tree(self):
         """The watchdog timeout must kill the CLI AND its children: the child
