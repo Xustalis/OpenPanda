@@ -53,8 +53,9 @@ manual:
 # - id 使用 hardware:* 前缀约定——entry 模型据此产出 spec.action_spec。
 # - 参考驱动见仓库 drivers/（panda-servo 需要 gpiozero，panda-mic 需要
 #   arecord/alsa-utils，panda-camera 需要 fswebcam|imagesnap|ffmpeg 之一，
-#   panda-notify 需要 notify-send|osascript|powershell 之一）。把驱动放到
-#   PATH 上或改写成绝对路径后再启用对应行。
+#   panda-notify 需要 notify-send|osascript|powershell 之一，panda-mcu
+#   走 POSIX termios 串口、纯 stdlib）。把驱动放到 PATH 上或改写成绝对
+#   路径后再启用对应行。
 # - 不写 command 的 actuator 仅是路由广告：任务会落到 agent 层自行实现。
 actuators:
   - id: "hardware:servo_rotate"
@@ -90,6 +91,21 @@ actuators:
     tier: 1
     command: "panda-notify"
     args: ["--title", "{param:title}", "--body", "{param:body}"]
+  # 串口 MCU（Arduino/ESP32/AT 模组等）：发指令、读回执。
+  # {param:port} 让任务选择板子上的具体 tty；{param:cmd} 是要写入的命令。
+  # 注意 {param:x} 是必填——缺参数会整体失败；可选值（baud/expect）直接写死
+  # 在 args 里，要不同波特率就再声明一行 actuator。
+  # 任务发 action_spec {"target_actuator":"hardware:mcu_serial",
+  # "action":"send","parameters":{"port":"/dev/ttyUSB0","cmd":"AT+LED=ON\\r"}}。
+  - id: "hardware:mcu_serial"
+    type: "hardware"
+    category: "embedded_io"
+    interface: "uart_usb"
+    capabilities: ["serial", "uart", "mcu", "arduino", "esp32", "串口", "单片机"]
+    tier: 2   # 写串口是副作用——默认先审批，确认设备行为后改 1
+    command: "panda-mcu"
+    args: ["--port", "{param:port}", "--send", "{param:cmd}",
+           "--read-seconds", "3"]
 
 capacity:
   cpu_cores: 4

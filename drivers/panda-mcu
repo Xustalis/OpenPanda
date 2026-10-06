@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+# panda-mcu — OpenPanda driver for microcontroller / serial UART access.
+#
+# The "whatever device is at the other end of a USB serial port" surface:
+# Arduino, ESP32, RP2040, industrial MCUs, modem/AT command sets, serial
+# consoles on boards that run no Python of their own. One shot per call:
+# open the port, optionally send a command, read until --expect matches or
+# the read window ends, print what came back.
+#
+# Usage:
+#   panda-mcu --port /dev/ttyUSB0 --send "AT+LED=ON\r" [--baud 115200] [--expect OK] [--read-seconds 2]
+#   panda-mcu --port /dev/ttyACM0 --send-hex "DEADBEEF" [--expect-regex "^ACK"]
+#   panda-mcu --port /dev/ttyUSB0 --listen 10          # read-only monitor
+#
+# Placeholders the card template typically uses:
+#   hardware actuator:
+#     command: "drivers/panda-mcu"
+#     args: ["--port", "{param:port}", "--send", "{param:cmd}", "--expect", "{param:expect}"]
+#
+# Pure Python stdlib — no pyserial dependency, so the driver runs wherever
+# python3 exists (termios/serial APIs are POSIX; on Windows exits 3 with a
+# hint to wire the platform's own tool instead, e.g. a PowerShell or vendor
+# CLI declared on the card's own command).
+#
+# Exit codes: 0 ok · 2 bad arguments · 3 backend unavailable (no termios /
+# port absent) · 1 hardware/I/O error · 4 --expect did not match before the
+# read window closed.
+
+import argparse
+import os
+import re
+import sys
+import time
+
+MAX_READ_SECONDS = 300.0
+
+
+def fail(code: int, msg: str) -> None:
+    print(f"panda-mcu: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description="send a command to a serial MCU / read its reply")
+    ap.add_argument("--port", required=True,
+                    help="serial device path, e.g. /dev/ttyUSB0, /dev/ttyACM0")
+    ap.add_argument("--baud", type=int, default=115200)
+    ap.add_argument("--send", help="literal command to write (\\r \\n escapes honored)")
+    ap.add_argument("--send-hex", help="hex bytes to write, e.g. DEADBEEF")
+    ap.add_argument("--expect", help="substring that must appear in the reply")
+    ap.add_argument("--expect-regex", help="regex that must match the reply")
+    ap.add_argument("--read-seconds", type=float, default=2.0,
+                    help="reply read window (default 2s, max %g)" % MAX_READ_SECONDS)
+    ap.add_argument("--listen", type=float, default=0.0,
+                    help="read-only monitor mode: listen this many seconds")
+    a = ap.parse_args()
+
+    if a.send and a.send_hex:
+        fail(2, "--send and --send-hex are mutually exclusive")
+    if not 0 < a.read_seconds <= MAX_READ_SECONDS:
+        fail(2, f"--read-seconds {a.read_seconds:g} out of range (0,{MAX_READ_SECONDS:g}]")
+    if not 0 <= a.listen <= MAX_READ_SECONDS:
+        fail(2, f"--listen {a.listen:g} out of range [0,{MAX_READ_SECONDS:g}]")
+
+    try:
+        import termios
+    except ImportError:
+        fail(3, "no termios (not a POSIX host) — wire the platform's own serial "
+                "tool on this node's capability card instead")
+
+    if not os.path.exists(a.port):
+        fail(3, f"serial port {a.port} does not exist on this node")
+
+    fd = -1
+    try:
+        fd = os.open(a.port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        attrs = termios.tcgetattr(fd)
+        # Raw 8N1, no echo/canonical — an MCU line protocol, not a console.
+        speed = getattr(termios, "B%d" % a.baud, None)
+        if speed is None:
+            fail(2, f"unsupported baud {a.baud}")
+        attrs[4] = attrs[5] = speed          # ispeed / ospeed
+        attrs[2] |= termios.CLOCAL | termios.CREAD  # cflag
+        attrs[3] &= ~(termios.ICANON | termios.ECHO | termios.ECHONL | termios.ISIG)
+        attrs[1] &= ~termios.OPOST           # oflag: no output post-processing
+        attrs[0] &= ~(termios.IXON | termios.IXOFF | termios.ICRNL)
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        termios.tcflush(fd, termios.TCIOFLUSH)
+
+        payload = b""
+        if a.send_hex:
+            try:
+                payload = bytes.fromhex(a.send_hex)
+            except ValueError:
+                fail(2, f"--send-hex {a.send_hex!r} is not hex")
+        elif a.send:
+            try:
+                payload = a.send.encode("utf-8").decode("unicode_escape").encode("latin-1")
+            except (UnicodeDecodeError, UnicodeEncodeError):
+                fail(2, f"--send {a.send!r} is not encodable as serial bytes "
+                        "(\\u escapes above latin-1 are not)")
+        if payload:
+            os.write(fd, payload)
+
+        deadline = time.monotonic() + (a.listen if a.listen > 0 else a.read_seconds)
+        buf = bytearray()
+        echoed = 0  # bytes of buf already emitted in --listen mode
+        while time.monotonic() < deadline:
+            try:
+                chunk = os.read(fd, 4096)
+            except BlockingIOError:
+                chunk = b""
+            if not chunk:
+                time.sleep(0.02)
+                continue
+            buf.extend(chunk)
+            if a.listen > 0 and len(buf) > echoed:
+                # Echo per raw bytes — slicing the decoded text by byte
+                # count double-prints whenever a multi-byte char lands.
+                sys.stdout.write(bytes(buf[echoed:]).decode("utf-8", "replace"))
+                sys.stdout.flush()
+                echoed = len(buf)
+            text = buf.decode("utf-8", "replace")
+            if a.expect and a.expect in text:
+                break
+            if a.expect_regex and re.search(a.expect_regex, text):
+                break
+            # A long listen cannot accumulate forever: keep the tail so
+            # MAX_READ_SECONDS at line speed cannot exhaust RAM. echoed
+            # tracks buf positions, so it shifts with the trim.
+            if len(buf) > 1 << 20:
+                drop = len(buf) - (1 << 20)
+                del buf[:drop]
+                echoed = max(0, echoed - drop)
+        text = buf.decode("utf-8", "replace")
+        if a.listen <= 0 and text:
+            print(text, end="" if text.endswith("\n") else "\n")
+        if a.expect and a.expect not in text:
+            fail(4, f"--expect {a.expect!r} not seen in reply within {a.read_seconds:g}s")
+        if a.expect_regex and not re.search(a.expect_regex, text):
+            fail(4, f"--expect-regex {a.expect_regex!r} did not match reply")
+    except OSError as e:
+        fail(1, f"{a.port}: {e}")
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+if __name__ == "__main__":
+    main()
