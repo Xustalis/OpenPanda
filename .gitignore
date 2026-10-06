@@ -124,6 +124,9 @@ fetch_emails.py
 # Lab scratch directories
 /.lab/
 
+# Marketing site — work in progress. Un-ignore when the Pages site ships.
+/site/
+
 .gocache-tmp
 /.gocache/
 

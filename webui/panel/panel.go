@@ -294,9 +294,10 @@ func securityHeaders(next http.Handler) http.Handler {
 
 // authMiddleware guards /api/* with a constant-time Bearer comparison. An empty
 // token fails closed (every /api/* request is rejected) so the panel can never
-// run open by accident; the daemon additionally refuses to start the panel at
-// all when no token is configured (see cmd/panda). Static assets under / are
-// always served. Failed attempts are rate-limited per client IP (L1), but a
+// run open by accident; callers (cmd/panda, webui/cmd/panel) additionally
+// generate an ephemeral token when none is configured, so the panel always
+// runs with a credential. Static assets under / are always served. Failed
+// attempts are rate-limited per client IP (L1), but a
 // correct token always passes and resets that budget — the lockout throttles
 // brute force, it must never lock out a client holding valid credentials
 // (a reconnecting SSE stream with a stale token otherwise locks an IP out

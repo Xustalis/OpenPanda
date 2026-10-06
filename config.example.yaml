@@ -34,9 +34,11 @@ network:
   # max_connections_per_ip: 8      # per-remote-IP concurrent WS connections (0 = unlimited)
   # ── Embedded console / panel address ──
   # Reused by the webui sidecar (webui/cmd/panel), `panda web`, and the REPL
-  # `/web` command. Empty falls back to 127.0.0.1:7840; a non-loopback bind
-  # without panel_token refuses to start. Plain HTTP — keep loopback or put
-  # it behind a TLS reverse proxy.
+  # `/web` command. Empty falls back to 127.0.0.1:7840. A non-loopback bind
+  # without panel_token gets an ephemeral token for the session (the API
+  # never runs open) and a loud warning — but plain HTTP means the token and
+  # task contents are sniffable on the path, so prefer loopback or a TLS
+  # reverse proxy, and set a stable token for anything long-lived.
   panel_addr: "127.0.0.1:7840"
   # panel_token: ""              # Bearer token guarding /api/* (prefer env OPENPANDA_PANEL_TOKEN)
   # ── UDP datagram plane (Periapsis): NAT traversal + AEAD-sealed delivery ──
