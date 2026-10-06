@@ -4,6 +4,14 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish at the selected ref (blank: v<Version> from version.go)'
+        required: false
+        type: string
 
 concurrency:
   group: release-${{ github.ref }}
@@ -16,6 +24,66 @@ permissions:
   actions: read
 
 jobs:
+  # A release used to start only when somebody pushed a `v*` tag — and the
+  # tag push was a manual step with nothing watching for it, so a merged
+  # release PR could sit unpublished indefinitely (v0.0.10-preview did).
+  # The version bump is the actual release intent: internal/version/version.go
+  # only changes in release PRs, so a push to main that touches it IS the
+  # release request, and this job turns it into one automatically. Manual
+  # `v*` tag pushes still work, and workflow_dispatch re-runs a publish —
+  # e.g. after a transient packaging failure — without re-bumping anything.
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      tag: ${{ steps.decide.outputs.tag }}
+      version: ${{ steps.decide.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Deciding diffs the pushed range against version.go, which needs
+          # the pre-push tip — a depth-1 checkout doesn't have it.
+          fetch-depth: 0
+      - name: Decide whether this run publishes a release
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          BEFORE: ${{ github.event.before }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          release=false
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+            [ -n "$tag" ] || tag="v$(sed -n 's/^var Version = "\(.*\)"/\1/p' internal/version/version.go)"
+            release=true
+          elif [ "$REF_TYPE" = "tag" ]; then
+            tag="$REF_NAME"
+            release=true
+          else
+            tag="v$(sed -n 's/^var Version = "\(.*\)"/\1/p' internal/version/version.go)"
+            # `before` is all-zeros when the push creates the ref (or the
+            # event predates it); for a merge the first parent is the same
+            # "previous main tip" the diff wants anyway.
+            before="$BEFORE"
+            [ -n "$before" ] && [ "$before" != "0000000000000000000000000000000000000000" ] \
+              || before="$GITHUB_SHA^1"
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+              echo "tag $tag already exists — nothing to publish"
+            elif [ -n "$(git diff --name-only "$before" "$GITHUB_SHA" -- internal/version/version.go)" ]; then
+              echo "version.go changed in this push and $tag is untagged — releasing"
+              release=true
+            else
+              echo "version.go untouched by this push — not a release"
+            fi
+          fi
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
   # A tag push and a main-branch push are two independent events with no
   # ordering between them, so nothing stopped a tag on a red tree from
   # publishing. The previous shape closed that hole by re-running the whole
@@ -28,6 +96,8 @@ jobs:
   # nearly free: the release either waits for that run to finish green or
   # refuses to publish.
   preflight:
+    needs: resolve
+    if: needs.resolve.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -69,11 +139,14 @@ jobs:
           done
 
   release:
-    needs: preflight
+    needs: [resolve, preflight]
+    if: needs.resolve.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      VERSION: ${{ needs.resolve.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -98,13 +171,13 @@ jobs:
         run: make web
 
       - name: Package releases (cross-compile + archive + checksums)
-        run: make package VERSION="${GITHUB_REF_NAME#v}"
+        run: make package VERSION="$VERSION"
 
       - name: Verify checksums
-        run: ./scripts/verify-release.sh "${GITHUB_REF_NAME#v}"
+        run: ./scripts/verify-release.sh "$VERSION"
 
       - name: Render checksum-pinned Homebrew formula
-        run: ./scripts/render-homebrew-formula.sh "${GITHUB_REF_NAME#v}"
+        run: ./scripts/render-homebrew-formula.sh "$VERSION"
 
       - name: Extract release notes from CHANGELOG.md
         id: notes
@@ -117,7 +190,7 @@ jobs:
         # first. Full section headers ("## [X.Y.Z]") are demoted one level so
         # the body renders with sane hierarchy.
         run: |
-          ver="${GITHUB_REF_NAME#v}"
+          ver="$VERSION"
           notes="dist/release-notes.md"
           section="dist/changelog-section.md"
           mkdir -p dist
@@ -142,9 +215,9 @@ jobs:
           # same thing. A section without a codename falls back to the bare tag.
           codename="$(sed -nE 's/.*codename \*\*([^*]+)\*\*.*/\1/p' "$section" | head -n1)"
           if [ -n "$codename" ]; then
-            echo "release_name=${GITHUB_REF_NAME} ${codename}" >> "$GITHUB_OUTPUT"
+            echo "release_name=$TAG $codename" >> "$GITHUB_OUTPUT"
           else
-            echo "release_name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "release_name=$TAG" >> "$GITHUB_OUTPUT"
           fi
           repo="https://github.com/Xustalis/OpenPanda/blob/main"
           printf '%s\n\n' "**Release notes:** English · [简体中文]($repo/CHANGELOG.zh-CN.md) · [日本語]($repo/CHANGELOG.ja.md) · [Español]($repo/CHANGELOG.es.md) · [Deutsch]($repo/CHANGELOG.de.md)" > "$notes"
@@ -176,9 +249,30 @@ jobs:
           After installing, run `panda init` to set the node up, or just type `panda` to drop into the REPL. An older install upgrades in place with the same command — user data is preserved.
           INSTALL
 
+      # The tag-push path arrives with its tag already on the remote; the
+      # automatic and dispatch paths may not, so the tag is created here —
+      # annotated, matching the maintainer's manual releases. A tag pushed
+      # by GITHUB_TOKEN does not retrigger this workflow (GitHub suppresses
+      # cascading workflow runs), so this cannot recurse.
+      - name: Create the release tag if missing
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "tag $TAG already exists"
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag -a "$TAG" "$GITHUB_SHA" -m "OpenPanda $TAG"
+          git push origin "refs/tags/$TAG"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          # Explicit on both counts: on the tag-push path these equal the
+          # triggering ref anyway, on the automatic path they are what tie
+          # the release to the tag the previous step just created.
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: ${{ steps.notes.outputs.release_name }}
           body_path: dist/release-notes.md
           # Appends the generated "What's Changed" commit summary below the
@@ -195,7 +289,7 @@ jobs:
           # channel onto an untested build. Marking it pre-release keeps
           # /releases/latest on the last stable tag while the preview stays
           # downloadable by explicit version.
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(needs.resolve.outputs.tag, '-') }}
           files: |
             dist/panda-*.tar.gz
             dist/panda-*.zip
@@ -209,7 +303,7 @@ jobs:
       # is correctly marked pre-release, so the tap only ever tracks bare
       # vX.Y.Z tags.
       - name: Update Homebrew tap
-        if: ${{ env.HOMEBREW_TAP_TOKEN != '' && !contains(github.ref_name, '-') }}
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' && !contains(needs.resolve.outputs.tag, '-') }}
         env:
           GH_TOKEN: ${{ env.HOMEBREW_TAP_TOKEN }}
         run: |
@@ -221,7 +315,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add Formula/openpanda.rb
-          git diff --cached --quiet || git commit -m "openpanda ${GITHUB_REF_NAME}"
+          git diff --cached --quiet || git commit -m "openpanda $TAG"
           # gh repo clone leaves an unauthenticated https remote; push with the
           # token embedded so git never prompts for credentials in CI.
           git push "https://x-access-token:${GH_TOKEN}@github.com/Xustalis/homebrew-openpanda.git"

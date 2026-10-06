@@ -39,7 +39,7 @@ NPM_INSTALL ?= npm ci --no-fund --no-audit
 
 .PHONY: all build web web-test web-gate build-webui build-darwin-amd64 build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
-        dev test adapter-test vet fmt fmt-check race race-focused gate gate-all run run-local measure clean icons release package release-local install-local
+        dev test adapter-test vet fmt fmt-check race race-focused gate gate-all run run-local measure clean icons release package release-local install-local tag-release
 
 all: build
 
@@ -125,6 +125,22 @@ release: web fmt-check vet release-darwin-amd64 release-darwin-arm64 release-lin
 # before a ship. It differs from `release` only in running the packaging
 # step (tar.gz/zip + checksums) as the final action.
 release-local: release package
+
+# tag-release is the manual counterpart of the release workflow's automatic
+# path: the tag name is read out of internal/version/version.go (v<Version>)
+# rather than typed by hand, so a fat-fingered tag can't publish a release
+# whose CHANGELOG section and binary version don't match. Use it when a
+# release needs tagging outside the merge that bumped the version — e.g.
+# after re-pointing a failed publish — and let .github/workflows/release.yml
+# do the rest.
+tag-release:
+	@tag="v$$(sed -n 's/^var Version = "\(.*\)"/\1/p' internal/version/version.go)"; \
+	if git rev-parse -q --verify "refs/tags/$$tag" >/dev/null; then \
+		echo "tag $$tag already exists locally"; exit 1; \
+	fi; \
+	echo "tagging HEAD as $$tag"; \
+	git tag -a "$$tag" -m "OpenPanda $$tag"; \
+	git push origin "refs/tags/$$tag"
 
 release-darwin-amd64:
 	GOOS=darwin GOARCH=amd64 $(GO) build -ldflags "$(RELEASE_LDFLAGS)" -o dist/panda-$(VERSION)-darwin-amd64 ./cmd/panda
