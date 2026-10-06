@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
@@ -818,10 +819,12 @@ func (n Node) Abilities() []string {
 
 // Matches reports whether this node declares any of required, across the
 // four ability layers (native / agent / manual / actuators).
+//
+// Matching is allocation-free: ids are tokenized on the fly and compared
+// token-by-token, so the routing hot path does not churn the heap per
+// candidate node. (The previous form materialized token slices for the whole
+// card per call — ~40 allocs against a representative card.)
 func (n Node) Matches(required []string) bool {
-	// Pre-tokenize the declared ids once; otherwise each required id would
-	// re-tokenize the whole declared set (O(R×A) allocations instead of O(A)).
-	native, agentCaps, manual, actuators := n.tokenizedAbilities()
 	for _, req := range required {
 		if name, ok := strings.CutPrefix(req, "agent:"); ok {
 			if _, exists := n.Agents[name]; exists {
@@ -829,9 +832,36 @@ func (n Node) Matches(required []string) bool {
 			}
 			continue
 		}
-		r := tokenizeAbility(req)
-		if matchTokens(native, r) || matchTokens(agentCaps, r) || matchTokens(manual, r) || matchTokens(actuators, r) {
-			return true
+		reqN := tokenCount(req)
+		if reqN == 0 {
+			continue
+		}
+		for _, ab := range n.Native {
+			if idTokensSubset(ab.ID, req, reqN) {
+				return true
+			}
+		}
+		for _, ag := range n.Agents {
+			for _, cap := range ag.Capabilities {
+				if idTokensSubset(cap, req, reqN) {
+					return true
+				}
+			}
+		}
+		for _, ab := range n.Manual {
+			if idTokensSubset(ab.ID, req, reqN) {
+				return true
+			}
+		}
+		for _, act := range n.Actuators {
+			if idTokensSubset(act.ID, req, reqN) {
+				return true
+			}
+			for _, cap := range act.Capabilities {
+				if idTokensSubset(cap, req, reqN) {
+					return true
+				}
+			}
 		}
 	}
 	return false
@@ -866,55 +896,90 @@ func (n Node) Fits(req ResourceProfile) bool {
 	return true
 }
 
-// tokenizedAbilities returns the node's native, agent and manual abilities as
-// case-folded token sets, computed once so Matches does not re-tokenize them
-// per required id.
-func (n Node) tokenizedAbilities() (native, agentCaps, manual, actuators [][]string) {
-	native = make([][]string, 0, len(n.Native))
-	for _, ab := range n.Native {
-		native = append(native, tokenizeAbility(ab.ID))
+// idTokensSubset applies the tokenSubset rule to two ids without
+// materializing their token slices: the shorter side's tokens must all
+// appear among the longer side's. reqN is tokenCount(required), passed in by
+// callers that evaluate one required id against many declared ones.
+func idTokensSubset(declared, required string, reqN int) bool {
+	declN := tokenCount(declared)
+	if declN == 0 || reqN == 0 {
+		return false
 	}
-	for _, ag := range n.Agents {
-		for _, cap := range ag.Capabilities {
-			agentCaps = append(agentCaps, tokenizeAbility(cap))
-		}
+	if declN <= reqN {
+		return tokensAllIn(declared, required)
 	}
-	manual = make([][]string, 0, len(n.Manual))
-	for _, ab := range n.Manual {
-		manual = append(manual, tokenizeAbility(ab.ID))
-	}
-	actuators = make([][]string, 0, len(n.Actuators))
-	for _, act := range n.Actuators {
-		actuators = append(actuators, tokenizeAbility(act.ID))
-		for _, cap := range act.Capabilities {
-			actuators = append(actuators, tokenizeAbility(cap))
-		}
-	}
-	return native, agentCaps, manual, actuators
+	return tokensAllIn(required, declared)
 }
 
-// matchTokens reports whether any declared token set matches the required set.
-func matchTokens(ids [][]string, required []string) bool {
-	for _, d := range ids {
-		if tokenSubset(d, required) {
+// nextToken returns the next alphanumeric token in s at or after i and the
+// index just past it. An empty token means no token remains. Tokenization
+// mirrors the id grammar the card and the entry model share: tokens are runs
+// of Unicode letters/digits, and every other rune is a separator.
+func nextToken(s string, i int) (string, int) {
+	for i < len(s) {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if isTokenRune(r) {
+			j := i + size
+			for j < len(s) {
+				r2, size2 := utf8.DecodeRuneInString(s[j:])
+				if !isTokenRune(r2) {
+					break
+				}
+				j += size2
+			}
+			return s[i:j], j
+		}
+		i += size
+	}
+	return "", len(s)
+}
+
+// isTokenRune is the token alphabet shared with the card loader.
+func isTokenRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+// tokenCount counts s's tokens without allocating.
+func tokenCount(s string) int {
+	n := 0
+	for i := 0; i < len(s); {
+		tok, next := nextToken(s, i)
+		if tok == "" {
+			break
+		}
+		i = next
+		n++
+	}
+	return n
+}
+
+// tokensAllIn reports whether every token of small occurs among the tokens
+// of large, compared case-insensitively.
+func tokensAllIn(small, large string) bool {
+	for i := 0; i < len(small); {
+		tok, next := nextToken(small, i)
+		if tok == "" {
+			break
+		}
+		if !containsToken(large, tok) {
+			return false
+		}
+		i = next
+	}
+	return true
+}
+
+// containsToken reports whether tok occurs as a whole token of s.
+func containsToken(s, tok string) bool {
+	for i := 0; i < len(s); {
+		t, next := nextToken(s, i)
+		if t == "" {
+			break
+		}
+		if strings.EqualFold(t, tok) {
 			return true
 		}
+		i = next
 	}
 	return false
-}
-
-// tokenizeAbility splits an ability id into case-folded alphanumeric tokens on
-// the separators the model uses inconsistently (":", "-", "_", ".", and any
-// other non-alphanumeric). "code:lint" → ["code","lint"], "glint" → ["glint"].
-func tokenizeAbility(s string) []string {
-	fields := strings.FieldsFunc(s, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
-	out := make([]string, 0, len(fields))
-	for _, f := range fields {
-		out = append(out, strings.ToLower(f))
-	}
-	return out
 }
 
 // AbilityMatches reports whether a declared ability id satisfies a required id.
@@ -937,30 +1002,11 @@ func AbilityMatches(declared, required string) bool {
 	if declared == required {
 		return true
 	}
-	return tokenSubset(tokenizeAbility(declared), tokenizeAbility(required))
-}
-
-// tokenSubset reports whether the tokens of one id are all present in the other.
-// The shorter token list is treated as the subset; an empty list never matches,
-// so a blank or separator-only id cannot fan out to unrelated abilities.
-func tokenSubset(a, b []string) bool {
-	if len(a) == 0 || len(b) == 0 {
+	reqN := tokenCount(required)
+	if reqN == 0 {
 		return false
 	}
-	sub, sup := a, b
-	if len(b) < len(a) {
-		sub, sup = b, a
-	}
-	set := make(map[string]struct{}, len(sup))
-	for _, t := range sup {
-		set[t] = struct{}{}
-	}
-	for _, t := range sub {
-		if _, ok := set[t]; !ok {
-			return false
-		}
-	}
-	return true
+	return idTokensSubset(declared, required, reqN)
 }
 
 // Query returns nodes matching filters. Empty status or name matches all.

@@ -163,9 +163,14 @@ func diskStarved(n ledger.Node) bool {
 
 // RouteAtP is RouteAt plus the task's project name — see RouteP.
 func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, req ledger.ResourceProfile, preferred, project string, now int64) Decision {
-	seen := make(map[string]bool, len(chain))
-	for _, n := range chain {
-		seen[n] = true
+	// The chain is usually empty (a root task): skip the map entirely rather
+	// than allocating one per route decision just to read from it.
+	var seen map[string]bool
+	if len(chain) > 0 {
+		seen = make(map[string]bool, len(chain))
+		for _, n := range chain {
+			seen[n] = true
+		}
 	}
 
 	// This node's own directory row, which carries the capacity its heartbeat

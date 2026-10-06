@@ -271,5 +271,10 @@ measure:
 		ps -o rss= -p $$(cat /tmp/panda-measure.pid) | awk '{printf "RSS: %.2f MB\n", $$1/1024}'; \
 		kill -TERM $$(cat /tmp/panda-measure.pid) 2>/dev/null
 
+# Run the performance benchmarks with allocation reporting: routing match and
+# decision, wire codec (control + 1 MiB data frames), dispatch dedup.
+bench:
+	go test -run '^$$' -bench . -benchmem ./internal/ledger/ ./internal/scheduler/ ./internal/bus/ ./internal/core/
+
 clean:
 	rm -rf bin dist

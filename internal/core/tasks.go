@@ -2109,6 +2109,28 @@ func (s *TaskStore) ListByState(ctx context.Context, state string) ([]Task, erro
 	return scanTasks(rows)
 }
 
+// TerminalSessionTasksWithoutEvent returns the terminal tasks that are linked
+// to a session and lack an event of the given type — the exact set the
+// panel's session finalizer turns into assistant turns. The finalizer runs
+// every few seconds, and the former shape (load every task row, then load
+// every task's full event timeline to look for the marker) re-read a board's
+// worth of payloads on every pass, forever: already-summarized tasks never
+// leave the terminal set. One NOT EXISTS probe per candidate — over the
+// existing task_events(task_id) index — replaces it, and the marker type
+// stays the caller's constant (the panel owns it).
+func (s *TaskStore) TerminalSessionTasksWithoutEvent(ctx context.Context, typ string) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+taskColumns+` FROM tasks t
+		WHERE t.session_id != '' AND t.state IN (?, ?, ?, ?)
+		  AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = t.task_id AND e.type = ?)
+		ORDER BY t.created_at DESC`,
+		StateDone, StateFailed, StateCancelled, StateExpired, typ)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
 // TaskStamp is the minimal per-task triple a change-detection digest needs:
 // identity, lifecycle state, and the mutation clock. Pulling the full row for
 // this (spec_json, result_json, intent…) would read every task's payload on
