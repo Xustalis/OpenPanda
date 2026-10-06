@@ -2281,6 +2281,7 @@ func taskSpecEnvelope(specJSON string) string {
 		return ""
 	}
 	var spec struct {
+		Scope             string   `json:"scope"`
 		SuccessDefinition string   `json:"success_definition"`
 		Constraints       []string `json:"constraints"`
 	}
@@ -2295,6 +2296,9 @@ func taskSpecEnvelope(specJSON string) string {
 		if strings.TrimSpace(cst) != "" {
 			b.WriteString("\nconstraint: " + cst)
 		}
+	}
+	if scope := strings.TrimSpace(spec.Scope); scope != "" {
+		b.WriteString("\nallowed scope: " + scope + " — modify only files under these paths")
 	}
 	if b.Len() == 0 {
 		return ""
@@ -2314,6 +2318,32 @@ func taskSpecEnvelope(specJSON string) string {
 // degrading skills into index lines.
 const agentPromptBudget = 128000
 
+// outputLangName renders a locale as the language name an agent recognizes
+// ("English", "简体中文"…), in the instruction language zh or en.
+func outputLangName(loc i18n.Locale, zh bool) string {
+	names := map[i18n.Locale][2]string{
+		i18n.ChineseSimp: {"简体中文", "Simplified Chinese"},
+		i18n.Japanese:    {"日文", "Japanese"},
+		i18n.Spanish:     {"西班牙文", "Spanish"},
+		i18n.German:      {"德文", "German"},
+		i18n.English:     {"英文", "English"},
+	}
+	if n, ok := names[loc]; ok {
+		if zh {
+			return n[0]
+		}
+		return n[1]
+	}
+	if zh {
+		return "英文"
+	}
+	return "English"
+}
+
+// getAgentOutputRider is the execution contract appended to every agent
+// prompt. Each line is something the supervisor can actually check — verify
+// against the success definition, stay in scope, report what was verified —
+// not motivational phrasing the judge cannot weigh.
 func getAgentOutputRider(locs ...i18n.Locale) string {
 	promptLang := i18n.English
 	outputLang := i18n.English
@@ -2332,32 +2362,23 @@ func getAgentOutputRider(locs ...i18n.Locale) string {
 	}
 
 	if promptLang == i18n.ChineseSimp {
-		switch outputLang {
-		case i18n.English:
-			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；无论推理过程如何，请在获取到充分证据后直接输出清晰结构化的英文报告与最终结论；不要使用不必要的表情符号。"
-		case i18n.Japanese:
-			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；无论推理过程如何，请在获取到充分证据后直接输出清晰结构化的日文报告与最终结论；不要使用不必要的表情符号。"
-		case i18n.Spanish:
-			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；无论推理过程如何，请在获取到充分证据后直接输出清晰结构化的西班牙文报告与最终结论；不要使用不必要的表情符号。"
-		case i18n.German:
-			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；无论推理过程如何，请在获取到充分证据后直接输出清晰结构化的德文报告与最终结论；不要使用不必要的表情符号。"
-		default:
-			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；在获取到充分证据后直接输出清晰结构化的中文报告与最终结论；不要使用不必要的表情符号。"
-		}
-	}
+		return fmt.Sprintf(`
 
-	switch outputLang {
-	case i18n.ChineseSimp:
-		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Regardless of reasoning language, output a clear, structured Simplified Chinese report and final conclusions directly. Do not use unnecessary emojis."
-	case i18n.Japanese:
-		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Regardless of reasoning language, output a clear, structured Japanese report and final conclusions directly. Do not use unnecessary emojis."
-	case i18n.Spanish:
-		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Regardless of reasoning language, output a clear, structured Spanish report and final conclusions directly. Do not use unnecessary emojis."
-	case i18n.German:
-		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Regardless of reasoning language, output a clear, structured German report and final conclusions directly. Do not use unnecessary emojis."
-	default:
-		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Upon gathering sufficient evidence, output a clear, structured English report and final conclusions directly. Do not use unnecessary emojis."
+执行约定：
+- 在 workspace 目录内工作；动手前先读项目里相关的源文件与文档，有源码可读就不要去反汇编二进制。
+- 宣布完成前必须验证：用该项目自身的构建/测试方式（按其 Makefile、scripts、CI 或包管理器惯例）跑通能证明成功定义的命令；只写"应该可行"不算完成。
+- 只改动任务范围内（scope）的文件；不要顺手重构或格式化无关代码。
+- 最终回复用%s，直接说明：改了什么、在哪个文件、如何验证（运行的命令及其结果）。有无法满足的验收标准要明确写出，不许含糊带过。
+- 不要使用表情符号，不要寒暄或与任务无关的自我介绍。`, outputLangName(outputLang, true))
 	}
+	return fmt.Sprintf(`
+
+Execution contract:
+- Work inside the workspace; read the project's relevant source files and docs before editing — never disassemble a binary whose source is on disk.
+- Verify before claiming done: run whatever proves the success definition using the project's own build/test convention (its Makefile, scripts, CI, or package manager); reporting what "should" work is not completion.
+- Touch only files inside the declared scope; do not refactor or reformat unrelated code.
+- Final reply in %s, stating plainly: what changed, in which files, and how it was verified (the commands run and their outcomes). Name any acceptance criterion you could not verify — do not imply it passed.
+- No emojis, no pleasantries, no meta-commentary about being an AI.`, outputLangName(outputLang, false))
 }
 
 // buildAgentPrompt assembles the full agent execution prompt — the memory
@@ -2383,6 +2404,21 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string, loc ...i1
 	}
 	rider := getAgentOutputRider(promptLang, outputLang)
 
+	// Execution frame first: the agent runs headless with cwd already set to
+	// the workspace — stating the task, project, and directory up front keeps
+	// it from guessing where it is or which tree it may touch.
+	var frame strings.Builder
+	frame.WriteString("[execution context]")
+	if title != "" {
+		frame.WriteString("\ntask: " + title)
+	}
+	if project != "" {
+		frame.WriteString("\nproject: " + project)
+	}
+	if workDir != "" {
+		frame.WriteString("\nworkspace: " + workDir + " (your working directory — resolve relative paths from here)")
+	}
+
 	manifest := ""
 	if c.memory != nil {
 		if project == "" {
@@ -2396,11 +2432,12 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string, loc ...i1
 	// The intent, the manifest and the output rider are non-negotiable; only
 	// the skills section degrades. A negative remainder (a huge intent) still
 	// runs — withSkills treats it as "no room for skill bodies".
-	budget := agentPromptBudget - len(intent) - len(manifest) - len(rider)
+	budget := agentPromptBudget - len(intent) - len(manifest) - len(rider) - frame.Len()
 	prompt, used := withSkills(c, intent, project, title, budget, promptLang)
 	if manifest != "" {
 		prompt = manifest + "\n\n" + prompt
 	}
+	prompt = frame.String() + "\n\n" + prompt
 	// Output style rider: the agent's final message is shown to the user
 	// (often verbatim in a terminal) and may be spoken aloud by the voice
 	// pipeline, so it must read as a direct answer — not a transcript of
