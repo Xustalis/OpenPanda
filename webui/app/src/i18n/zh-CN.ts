@@ -531,6 +531,7 @@ const zhCN: Messages = {
   'settings.sandbox': '沙箱',
   'settings.sandboxDesc': '子进程在工作路径内运行且环境变量经过过滤，但 OS 级隔离未开启 — 在 config.yaml 设置 sandbox.mode 为 standard 或 strict 后生效。工作路径：',
   'settings.sandboxDescOn': 'OS 沙箱已启用 — 子进程只能写入工作路径及白名单目录。只读状态：',
+  'settings.sandboxDescNoBackend': '已配置沙箱模式但未生效 — 本平台没有可用后端（seatbelt/bwrap），子进程实际未被隔离。状态：',
 
   // 记忆台扩展（C2）
   'memory.graph': '图谱',

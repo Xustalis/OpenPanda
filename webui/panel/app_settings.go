@@ -43,6 +43,10 @@ type sandboxJSON struct {
 	WorkPath string `json:"work_path"`
 	Mode     string `json:"mode"`
 	Backend  string `json:"backend"`
+	// Active is true only when a non-off mode meets a real platform backend.
+	// mode=standard with Backend()=="" is configured-but-unenforced — the UI
+	// must render that as "not in effect", not as a weaker kind of on.
+	Active bool `json:"active"`
 }
 
 // getAppSettings serves GET /api/settings/app — the live values of the four
@@ -68,6 +72,7 @@ func (h *handler) getAppSettings(w http.ResponseWriter, r *http.Request) {
 				WorkPath: c.Storage.WorkPath,
 				Mode:     c.Sandbox.NormalizedMode(),
 				Backend:  security.Backend(),
+				Active:   c.Sandbox.NormalizedMode() != "off" && security.Backend() != "",
 			},
 		}
 	})
@@ -212,6 +217,6 @@ func (h *handler) putAppSettings(w http.ResponseWriter, r *http.Request) {
 		MemoryLimits:    limits,
 		ApprovalMode:    approval,
 		ToolsPolicy:     tools,
-		Sandbox:         &sandboxJSON{WorkPath: workPath, Mode: sbMode, Backend: sbBackend},
+		Sandbox:         &sandboxJSON{WorkPath: workPath, Mode: sbMode, Backend: sbBackend, Active: sbMode != "off" && sbBackend != ""},
 	})
 }

@@ -12,6 +12,12 @@ VERSION ?= $(shell sed -n 's/^var Version = "\(.*\)"/\1/p' internal/version/vers
 # version.Version source value (including the -beta / -rc suffixes that a
 # VERSION override here would strip).
 RELEASE_LDFLAGS := -s -w -X github.com/Xustalis/OpenPanda/internal/version.Version=$(VERSION)
+# A pinned release key bakes its public half into release binaries so the
+# self-update path verifies checksums.txt.sig by default. Same knob as
+# scripts/package.sh (which additionally signs checksums.txt itself).
+ifneq ($(OPENPANDA_RELEASE_PUBKEY),)
+RELEASE_LDFLAGS += -X github.com/Xustalis/OpenPanda/internal/version.ReleasePubKey=$(OPENPANDA_RELEASE_PUBKEY)
+endif
 LDFLAGS_DEV := -s -w
 
 # Static binaries by default (no cgo). A small minority of users with

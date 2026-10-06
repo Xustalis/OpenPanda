@@ -31,4 +31,11 @@ done
         done < checksums.txt
     fi
 })
+# When a release key is in the environment the signature is part of the
+# contract: a packaged release that pinned the pubkey but ships no
+# checksums.txt.sig would be refused by every updated node.
+if [ -n "${OPENPANDA_RELEASE_KEY:-}" ] || [ -n "${OPENPANDA_RELEASE_PUBKEY:-}" ]; then
+    [ -f "$DIST/checksums.txt.sig" ] || { echo "missing dist/checksums.txt.sig" >&2; exit 1; }
+    (cd "$ROOT" && go run ./scripts/sign-release -verify "$DIST/checksums.txt" "$DIST/checksums.txt.sig")
+fi
 echo "release contract verified for v$VERSION"

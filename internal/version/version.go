@@ -20,6 +20,18 @@ var Version = "0.0.10-preview"
 // and /api/version; not part of the semver itself.
 var Codename = "Apoapsis"
 
+// ReleasePubKey is the Ed25519 public key (hex or base64) the self-update
+// path trusts to sign checksums.txt. Release packaging bakes it in via
+// -ldflags (scripts/package.sh derives it from OPENPANDA_RELEASE_KEY):
+//
+//	-X github.com/Xustalis/OpenPanda/internal/version.ReleasePubKey=<hex>
+//
+// An empty value means this build was not shipped through the signed release
+// channel — a dev build keeps checksums-only verification unless the
+// operator sets OPENPANDA_UPDATE_PUBKEY. Once a build carries a key, an
+// unsigned release is refused outright.
+var ReleasePubKey = ""
+
 // Display returns the human-facing release identity — "v0.0.10-preview
 // Apoapsis" —
 // for anywhere the build introduces itself to a user. Version alone stays

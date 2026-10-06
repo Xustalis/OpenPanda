@@ -521,6 +521,8 @@ const de: Messages = {
     'Subprozesse laufen mit gefilterter Umgebung in ihrem Arbeitspfad, aber OS-Isolation ist aus — sandbox.mode (standard oder strict) in config.yaml aktivieren. Arbeitspfad:',
   'settings.sandboxDescOn':
     'OS-Sandbox aktiv — Subprozesse dürfen nur in Arbeitspfad und erlaubte Verzeichnisse schreiben. Nur-Lese-Status:',
+  'settings.sandboxDescNoBackend':
+    'Sandbox-Modus ist konfiguriert, aber NICHT wirksam — diese Plattform hat kein Sandbox-Backend (seatbelt/bwrap), Subprozesse laufen unisoliert. Status:',
 
   // Gedächtniskonsole-Erweiterungen (C2)
   'memory.graph': 'Graph',

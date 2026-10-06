@@ -17,35 +17,53 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/projects"
 )
 
-// workspaceMarkers are the files that make a directory a project workspace:
-// a VCS root, a language manifest, a build file, or agent/node config dirs.
-// A directory carrying none of them is treated as ambient — launching panda
-// from $HOME or a temp dir does not mint a project.
-var workspaceMarkers = []string{
+// workspaceMarkersStrong are the signals that say "this directory is a
+// project" beyond doubt: a VCS root, a language/build manifest, or agent/node
+// config dirs. The daemon's launch-directory adoption uses ONLY these —
+// running `panda daemon` inside a stray directory must not silently relocate
+// the node's work space.
+var workspaceMarkersStrong = []string{
 	".git", "go.mod", "package.json", "Cargo.toml", "pyproject.toml",
-	"pom.xml", "build.gradle", "build.gradle.kts", "Makefile", "makefile",
-	"CMakeLists.txt", "setup.py", "requirements.txt",
-	".panda", ".pi", ".claude", "capabilities.yaml", "AGENTS.md", "CLAUDE.md",
+	"pom.xml", "build.gradle", "build.gradle.kts", "CMakeLists.txt",
+	".panda", ".pi", ".claude", "capabilities.yaml",
 }
 
-// looksLikeWorkspace reports whether dir carries at least one workspace
-// marker — the cheap, deterministic side of "this directory is a project".
-func looksLikeWorkspace(dir string) bool {
-	if dir == "" {
-		return false
-	}
-	for _, m := range workspaceMarkers {
+// workspaceMarkers extends the strong set with files that mean "project" to
+// an operator at a prompt but are too common to drive an unattended daemon's
+// adoption: a Makefile or requirements.txt sits in any old scratch or home
+// dir. Interactive entry points (ask, repl) use this broader set; the daemon
+// path does not.
+var workspaceMarkers = append(slices.Clone(workspaceMarkersStrong),
+	"Makefile", "makefile", "setup.py", "requirements.txt",
+	"AGENTS.md", "CLAUDE.md")
+
+func hasMarker(dir string, markers []string) bool {
+	for _, m := range markers {
 		if _, err := os.Lstat(filepath.Join(dir, m)); err == nil {
 			return true
 		}
 	}
 	return false
+}
+
+// looksLikeWorkspace reports whether dir carries at least one workspace
+// marker — the cheap, deterministic side of "this directory is a project"
+// for interactive entry points.
+func looksLikeWorkspace(dir string) bool {
+	return dir != "" && hasMarker(dir, workspaceMarkers)
+}
+
+// looksLikeWorkspaceStrong is looksLikeWorkspace restricted to the
+// unambiguous marker set — the bar the daemon's unattended adoption uses.
+func looksLikeWorkspaceStrong(dir string) bool {
+	return dir != "" && hasMarker(dir, workspaceMarkersStrong)
 }
 
 // projectForDir resolves the project owning dir: the project whose WorkDir

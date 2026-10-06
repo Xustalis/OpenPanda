@@ -15,9 +15,8 @@ import (
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 )
 
-// updateEnvOptions layers the release-channel environment overrides onto
-// opts — the two knobs an operator uses to harden or self-host the update
-// path:
+// updateEnvOptions layers the release-channel overrides onto opts — the
+// knobs an operator uses to harden or self-host the update path:
 //
 //   - OPENPANDA_UPDATE_REPO: "owner/repo" of the GitHub release channel.
 //   - OPENPANDA_UPDATE_PUBKEY: hex or base64 Ed25519 public key. When set,
@@ -25,13 +24,20 @@ import (
 //     checksums.txt) or the update is refused, so a compromised release
 //     channel cannot ship a binary this node would install.
 //
-// Explicit Options win over the environment; both are empty by default.
+// Precedence is explicit Options > environment > the key release packaging
+// baked into the binary (version.ReleasePubKey). A build shipped through
+// scripts/package.sh with OPENPANDA_RELEASE_KEY set therefore verifies
+// signatures out of the box, while the env var still lets an operator point
+// a self-hosted channel at their own key.
 func updateEnvOptions(opts updater.Options) updater.Options {
 	if opts.Repo == "" {
 		opts.Repo = os.Getenv("OPENPANDA_UPDATE_REPO")
 	}
 	if opts.ReleaseKey == "" {
 		opts.ReleaseKey = os.Getenv("OPENPANDA_UPDATE_PUBKEY")
+	}
+	if opts.ReleaseKey == "" {
+		opts.ReleaseKey = versionpkg.ReleasePubKey
 	}
 	return opts
 }

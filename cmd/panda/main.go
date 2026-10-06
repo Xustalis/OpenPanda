@@ -388,7 +388,12 @@ func runDaemon(args []string) {
 			filepath.Clean(cfg.Storage.WorkPath) != filepath.Clean(ud)
 	}
 	if !workPathExplicit {
-		if cwd, err := os.Getwd(); err == nil && cwd != "" && looksLikeWorkspace(cwd) {
+		// Only the unambiguous marker set may drive an unattended daemon's
+		// adoption: a Makefile/requirements.txt in a stray directory means
+		// "project" at a prompt, not a reason to relocate the node's work
+		// space. Interactive entry points (ask, repl) keep the wider set via
+		// ambientProject → looksLikeWorkspace.
+		if cwd, err := os.Getwd(); err == nil && cwd != "" && looksLikeWorkspaceStrong(cwd) {
 			abs, _ := filepath.Abs(cwd)
 			cfg.Storage.WorkPath = abs
 			if adopted := adoptWorkspaceProject(projectstore.NewStore(db), abs); adopted != "" {

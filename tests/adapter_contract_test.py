@@ -632,6 +632,24 @@ print("dropped")
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "dropped")
 
+    def test_generic_prompt_text_is_never_rescanned(self):
+        # Single-pass substitution: literal "{cwd}" inside the prompt body
+        # survives verbatim — expansion must not re-scan substituted values.
+        payload, _, _ = run_adapter(
+            "generic.py", "mimo", r'''
+import sys
+args = sys.argv[1:]
+assert args[args.index("--p") + 1] == "fix {cwd} and {resume}", args
+print("literal")
+''',
+            extra_request={
+                "cmd": "mimo --p {prompt}",
+                "prompt": "fix {cwd} and {resume}",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "literal")
+
     def test_generic_template_expanding_to_nothing_is_reported(self):
         # A template whose only element was an unset optional placeholder
         # expands to zero argv: report a config error instead of exec'ing

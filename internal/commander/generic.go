@@ -97,21 +97,7 @@ func expandGenericTemplate(req AdapterRequest) ([]string, bool) {
 			viaStdin = true
 			continue
 		}
-		missingEnv := false
-		expanded := envPlaceholderRe.ReplaceAllStringFunc(arg, func(m string) string {
-			v := os.Getenv(envPlaceholderRe.FindStringSubmatch(m)[1])
-			if v == "" {
-				missingEnv = true
-			}
-			return v
-		})
-		unset := ""
-		for ph, v := range optional {
-			if v == "" && strings.Contains(arg, ph) {
-				unset = ph
-				break
-			}
-		}
+		expanded, missingEnv, unset, sawPrompt := substituteGenericArg(arg, optional, req.Prompt)
 		if missingEnv || unset != "" {
 			// Unresolved optional placeholder: the element drops, and a bare
 			// placeholder ("--flag {x}") takes its introducing flag with it —
@@ -123,22 +109,8 @@ func expandGenericTemplate(req AdapterRequest) ([]string, bool) {
 			}
 			continue
 		}
-		arg = expanded
-		if arg == "{prompt}" {
-			out = append(out, req.Prompt)
-			seenPrompt = true
-			continue
-		}
-		if strings.Contains(arg, "{prompt}") {
-			arg = strings.ReplaceAll(arg, "{prompt}", req.Prompt)
-			seenPrompt = true
-		}
-		for ph, v := range optional {
-			if v != "" && strings.Contains(arg, ph) {
-				arg = strings.ReplaceAll(arg, ph, v)
-			}
-		}
-		out = append(out, arg)
+		seenPrompt = seenPrompt || sawPrompt
+		out = append(out, expanded)
 	}
 	if len(out) == 0 {
 		return nil, viaStdin
@@ -147,6 +119,69 @@ func expandGenericTemplate(req AdapterRequest) ([]string, bool) {
 		out = append(out, req.Prompt)
 	}
 	return out, viaStdin
+}
+
+// substituteGenericArg expands one template element in a single left-to-right
+// pass: every "{...}" span is resolved at most once, so substituted values —
+// above all the prompt text — are never rescanned for further placeholders.
+// (The old two-phase form expanded optional placeholders after {prompt}, so a
+// prompt containing a literal "{cwd}" got silently rewritten.) Returns
+// (expanded, missingEnv, unset, sawPrompt): missingEnv is set when an
+// {env:NAME} reference resolved to "", unset holds the first empty-valued
+// optional placeholder encountered, sawPrompt reports {prompt} was consumed.
+// Unresolvable spans pass through literally.
+func substituteGenericArg(arg string, optional map[string]string, prompt string) (string, bool, string, bool) {
+	var b strings.Builder
+	missingEnv := false
+	unset := ""
+	sawPrompt := false
+	for i := 0; i < len(arg); {
+		j := strings.IndexByte(arg[i:], '{')
+		if j < 0 {
+			b.WriteString(arg[i:])
+			break
+		}
+		b.WriteString(arg[i : i+j])
+		start := i + j
+		end := strings.IndexByte(arg[start:], '}')
+		if end < 0 {
+			b.WriteString(arg[start:])
+			break
+		}
+		tok := arg[start : start+end+1]
+		i = start + end + 1
+		switch {
+		case tok == "{prompt}":
+			b.WriteString(prompt)
+			sawPrompt = true
+		case tok == "{stdin}":
+			// Only the whole-element form pipes the prompt; embedded inside a
+			// larger element it is literal text, matching generic.py.
+			b.WriteString(tok)
+		case envPlaceholderRe.MatchString(tok) && envPlaceholderRe.FindString(tok) == tok:
+			v := os.Getenv(tok[5 : len(tok)-1])
+			if v == "" {
+				missingEnv = true
+				b.WriteString(tok)
+			} else {
+				b.WriteString(v)
+			}
+		default:
+			if v, ok := optional[tok]; ok {
+				if v == "" {
+					if unset == "" {
+						unset = tok
+					}
+					b.WriteString(tok)
+				} else {
+					b.WriteString(v)
+				}
+			} else {
+				b.WriteString(tok)
+			}
+		}
+	}
+	return b.String(), missingEnv, unset, sawPrompt
 }
 
 // runGenericNative executes a card-declared argv template directly — the

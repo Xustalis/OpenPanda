@@ -282,6 +282,20 @@ func TestProjects(t *testing.T) {
 	}
 }
 
+// TestMutatingBodyCap proves the 16 MiB middleware bound lands: a POST past
+// the cap fails decode instead of growing the heap — the handler reports it
+// as a bad request, and nothing is created.
+func TestMutatingBodyCap(t *testing.T) {
+	projects := memory.NewProjects(t.TempDir())
+	h := New(Deps{Store: newTestStore(t), Projects: projects, StaticDir: t.TempDir(), Token: testToken})
+	body := `{"name":"` + strings.Repeat("x", maxAPIBodyBytes) + `"}`
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/projects", strings.NewReader(body)))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for an over-cap body", rr.Code)
+	}
+}
+
 func TestProjectsWithoutProjects(t *testing.T) {
 	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Token: testToken})
 	for _, target := range []string{"/api/projects"} {

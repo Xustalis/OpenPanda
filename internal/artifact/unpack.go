@@ -39,13 +39,15 @@ func Unpack(r io.Reader, dst string) (Manifest, error) {
 }
 
 // unpack is Unpack with an explicit byte limit, a free-space watermark, and
-// an optional top-level skip set: a positive limit rejects archives whose
+// an optional skip set: a positive limit rejects archives whose
 // compressed or decompressed size exceeds it; 0 instead refuses entries that
 // would push the destination's free space below minFree — the honest bound
-// when no fixed cap is configured. Entries whose FIRST path element is in
-// skip are not written and not listed in Entries (counted in Manifest.Skipped
-// instead); nested matches are inert content, not the checkout's own
-// plumbing, and unpack normally.
+// when no fixed cap is configured. Entries at or below a key in skip — keys
+// match a leading path prefix, so ".git" covers the dir and
+// ".github/workflows" the subtree — are not written and not listed in
+// Entries (counted in Manifest.Skipped, named in Manifest.SkippedPaths);
+// paths under non-matching leading elements are inert content, not the
+// checkout's own plumbing, and unpack normally.
 func unpack(r io.Reader, dst string, limit, minFree int64, skip map[string]bool) (Manifest, error) {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return Manifest{}, fmt.Errorf("artifact: create dst: %w", err)
@@ -81,6 +83,7 @@ func unpack(r io.Reader, dst string, limit, minFree int64, skip map[string]bool)
 	var meta []EntryMeta
 	var written int64
 	var skipped int
+	var skippedPaths []string
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -96,8 +99,11 @@ func unpack(r io.Reader, dst string, limit, minFree int64, skip map[string]bool)
 		if err != nil {
 			return Manifest{}, err
 		}
-		if skippedTopDir(rel, skip) {
+		if skippedEntry(rel, skip) {
 			skipped++
+			if len(skippedPaths) < maxSkippedPaths {
+				skippedPaths = append(skippedPaths, filepath.ToSlash(rel))
+			}
 			continue
 		}
 		target := filepath.Join(root, rel)
@@ -156,23 +162,33 @@ func unpack(r io.Reader, dst string, limit, minFree int64, skip map[string]bool)
 	if limit > 0 && counter.n > limit {
 		return Manifest{}, fmt.Errorf("%w: archive is larger than %d bytes", ErrTooLarge, limit)
 	}
-	return Manifest{Hash: hex.EncodeToString(h.Sum(nil)), Size: counter.n, Entries: meta, Skipped: skipped}, nil
+	return Manifest{Hash: hex.EncodeToString(h.Sum(nil)), Size: counter.n,
+		Entries: meta, Skipped: skipped, SkippedPaths: skippedPaths}, nil
 }
 
-// skippedTopDir reports whether rel descends from a top-level name the caller
-// refuses to materialize. Matching on the first element only is deliberate:
-// a vendored checkout's own .git is content (an executor may legitimately
-// return one), while the TOP-LEVEL .git is the destination repository's
-// plumbing — hooks and a config that can hold credentials — which a peer's
-// output must never rewrite.
-func skippedTopDir(rel string, skip map[string]bool) bool {
+// maxSkippedPaths bounds how many declined paths a manifest carries: enough to
+// show the operator exactly which protected entries were withheld, without
+// letting a padded archive grow the manifest unboundedly.
+const maxSkippedPaths = 64
+
+// skippedEntry reports whether rel lands inside a protected path. A key
+// matches the entry itself or any descent below it, so whole directories
+// (".vscode", ".git") and single files ("Jenkinsfile", or a subtree like
+// ".github/workflows") all work as keys — and a key only ever matches at the
+// head of the path: a vendored checkout's nested "vendor/x/.git" remains
+// inert content, not the destination's own plumbing.
+func skippedEntry(rel string, skip map[string]bool) bool {
 	if len(skip) == 0 {
 		return false
 	}
-	if i := strings.IndexByte(rel, filepath.Separator); i >= 0 {
-		rel = rel[:i]
+	sep := string(filepath.Separator)
+	for k := range skip {
+		k = filepath.FromSlash(k)
+		if rel == k || strings.HasPrefix(rel, k+sep) {
+			return true
+		}
 	}
-	return skip[rel]
+	return false
 }
 
 // safeRel validates a tar entry name and returns the relative path to write.

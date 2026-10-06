@@ -112,6 +112,14 @@ func TestExpandGenericTemplate(t *testing.T) {
 		t.Fatalf("cwd argv = %v", argv)
 	}
 
+	// Prompt text is substituted once and never rescanned: a literal
+	// "{cwd}" inside the prompt survives verbatim.
+	req = AdapterRequest{Prompt: "fix {cwd} and {resume}", Cmd: `tool --p {prompt}`, CWD: "/w"}
+	argv, _ = expandGenericTemplate(req)
+	if got := strings.Join(argv, "|"); got != "tool|--p|fix {cwd} and {resume}" {
+		t.Fatalf("rescanned prompt: %q", got)
+	}
+
 	// Empty/expands-to-nothing templates are config errors.
 	for _, cmd := range []string{"", "  ", "{resume}"} {
 		if argv, _ := expandGenericTemplate(AdapterRequest{Prompt: "p", Cmd: cmd}); argv != nil {

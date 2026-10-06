@@ -71,17 +71,47 @@ var worktreeSkipDirs = map[string]bool{
 }
 
 // extractProtectedDirs is the return-leg counterpart of worktreeSkipDirs.
-// The outbound set prunes for weight; this set is much smaller because the
-// answer is different — it names what a peer's output must never write back
-// over the user's checkout: .git is the repository's plumbing (hooks, and a
-// config that can embed credentials), and .panda-shadow is this node's own
-// arbitration backup, not task content. A valid artifact — hash-correct, no
-// traversal — can still carry both, and artifact.Unpack alone cannot tell
-// plumbing from content. Regenerable weight like node_modules is NOT here:
-// whatever the executor honestly produced lands intact.
+// The outbound set prunes for weight; this set answers a different question —
+// what a peer's output must never write back over the user's checkout. A
+// valid artifact — hash-correct, no traversal — can still carry these, and
+// artifact.Unpack alone cannot tell plumbing or auto-run surfaces from
+// content:
+//
+//   - .git, .panda-shadow: the repository's hooks/credentials plumbing and
+//     this node's own arbitration backup;
+//   - open-or-run surfaces: editor task/debug configs that fire on folder
+//     open (.vscode/tasks.json, launch.json), agent-CLI hook files
+//     (.claude/settings*.json can name shell commands a later agent session
+//     executes), direnv's .envrc, and .devcontainer post-create commands;
+//   - push-triggered CI definitions: any workflow/pipeline file that runs
+//     with the push's secrets scope the moment the user commits it.
+//
+// Keys match a leading path element or a path prefix (".github/workflows",
+// ".vscode/tasks.json"), so file-level and directory-level protection share
+// one set. A legitimately edited CI or settings file still lands in the
+// artifact — the hash is unchanged — and is listed in the sync event's
+// withheld paths for the operator to apply by hand. Regenerable weight like
+// node_modules is NOT here: whatever the executor honestly produced lands
+// intact. Makefile stays writable too: it is core work product, and a
+// poisoned target is visible in the same diff the user already reviews.
 var extractProtectedDirs = map[string]bool{
-	".git":          true,
-	".panda-shadow": true,
+	".git":                    true,
+	".panda-shadow":           true,
+	".vscode/tasks.json":      true,
+	".vscode/launch.json":     true,
+	".claude":                 true,
+	".devcontainer":           true,
+	".envrc":                  true,
+	".github/workflows":       true,
+	".gitlab-ci.yml":          true,
+	".gitea/workflows":        true,
+	".forgejo/workflows":      true,
+	".circleci":               true,
+	".travis.yml":             true,
+	"azure-pipelines.yml":     true,
+	"Jenkinsfile":             true,
+	"bitbucket-pipelines.yml": true,
+	".drone.yml":              true,
 }
 
 // attachProject fills in the project half of a delegation payload: the memory
@@ -488,6 +518,10 @@ func (c *Core) adoptProjectOutput(ctx context.Context, t Task, from, hash string
 			"files":   len(m.Entries),
 			"bytes":   m.Size,
 			"skipped": m.Skipped,
+			// withheld names the protected paths the archive carried but the
+			// extract declined to write — auto-run surfaces and CI plumbing a
+			// peer's output may not land on the checkout unattended.
+			"withheld": m.SkippedPaths,
 		})
 		c.logger.Info("project tree adopted", "task", t.TaskID, "project", t.Project,
 			"dir", dir, "files", len(m.Entries))
@@ -535,7 +569,12 @@ func (c *Core) adoptWorktreeOutput(ctx context.Context, t Task, from, hash strin
 		c.EvTrace(ctx, t.TaskID, EvProjectSync, map[string]any{
 			"dir": dir, "from": from, "hash": hash,
 			"files": len(m.Entries), "bytes": m.Size, "skipped": m.Skipped,
+			"withheld": m.SkippedPaths,
 		})
+		if m.Skipped > 0 {
+			c.logger.Warn("worktree adoption withheld protected paths", "task", t.TaskID,
+				"dir", dir, "withheld", m.SkippedPaths)
+		}
 		c.logger.Info("worktree adopted", "task", t.TaskID, "dir", dir, "files", len(m.Entries))
 	}()
 }

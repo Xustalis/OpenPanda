@@ -521,6 +521,8 @@ const es: Messages = {
     'Los subprocesos se ejecutan con entorno filtrado en su ruta de trabajo, pero el confinamiento a nivel de SO está desactivado — activa sandbox.mode (standard o strict) en config.yaml. Ruta de trabajo:',
   'settings.sandboxDescOn':
     'Sandbox de SO activo — los subprocesos solo pueden escribir en su ruta de trabajo y directorios permitidos. Estado de solo lectura:',
+  'settings.sandboxDescNoBackend':
+    'El modo sandbox está configurado pero NO está en efecto — esta plataforma no tiene backend de sandbox (seatbelt/bwrap), los subprocesos se ejecutan sin confinamiento. Estado:',
 
   // Extensiones de la consola de memoria (C2)
   'memory.graph': 'Grafo',

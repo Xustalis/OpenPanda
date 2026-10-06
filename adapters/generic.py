@@ -136,20 +136,9 @@ def expand(template, prompt, cwd="", resume="", max_turns=0, task_id="",
         if arg == STDIN_PLACEHOLDER:
             use_stdin = True
             continue
-        # {env:NAME} resolves from the (sandboxed) process env; a missing
-        # variable makes the whole element drop like any other unresolved
-        # optional placeholder.
-        missing_env = [False]
-
-        def _env_sub(m):
-            v = os.environ.get(m.group(1), "")
-            if v == "":
-                missing_env[0] = True
-            return v
-
-        expanded_arg = ENV_PLACEHOLDER.sub(_env_sub, arg)
-        unset = next((ph for ph, v in optional.items() if not v and ph in arg), None)
-        if missing_env[0] or unset is not None:
+        expanded_arg, missing_env, unset, saw_prompt = _substitute_arg(
+            arg, optional, prompt)
+        if missing_env or unset is not None:
             # An optional placeholder with no value drops its whole element.
             # The bare two-token form ("--session {resume}", "--key {env:X}")
             # also drops the flag that only introduced it — anything but that
@@ -158,23 +147,71 @@ def expand(template, prompt, cwd="", resume="", max_turns=0, task_id="",
             if bare and out and out[-1].startswith("-") and "=" not in out[-1]:
                 out.pop()
             continue
-        arg = expanded_arg
-        if arg == PROMPT_PLACEHOLDER:
-            out.append(prompt)
-            seen_prompt = True
-            continue
-        if PROMPT_PLACEHOLDER in arg:
-            arg = arg.replace(PROMPT_PLACEHOLDER, prompt)
-            seen_prompt = True
-        for ph, v in optional.items():
-            if v and ph in arg:
-                arg = arg.replace(ph, v)
-        out.append(arg)
+        seen_prompt = seen_prompt or saw_prompt
+        out.append(expanded_arg)
     if not out:
         return None, use_stdin
     if not seen_prompt and not use_stdin:
         out.append(prompt)
     return out, use_stdin
+
+
+def _substitute_arg(arg, optional, prompt):
+    """Expand one template element in a single left-to-right pass.
+
+    Every "{...}" span is resolved at most once, so substituted values —
+    above all the prompt text — are never rescanned for further
+    placeholders. (The old form expanded optional placeholders after
+    {prompt}, so a prompt containing a literal "{cwd}" got silently
+    rewritten.) Returns (expanded, missing_env, unset, saw_prompt):
+    missing_env marks an {env:NAME} reference that resolved to "", unset
+    holds the first empty-valued optional placeholder encountered, and
+    saw_prompt reports {prompt} was consumed. Unresolvable spans pass
+    through literally. Mirrors substituteGenericArg in generic.go.
+    """
+    out = []
+    missing_env = False
+    unset = None
+    saw_prompt = False
+    i, n = 0, len(arg)
+    while i < n:
+        j = arg.find("{", i)
+        if j < 0:
+            out.append(arg[i:])
+            break
+        out.append(arg[i:j])
+        k = arg.find("}", j)
+        if k < 0:
+            out.append(arg[j:])
+            break
+        tok = arg[j:k + 1]
+        i = k + 1
+        if tok == PROMPT_PLACEHOLDER:
+            out.append(prompt)
+            saw_prompt = True
+        elif tok == STDIN_PLACEHOLDER:
+            # Only the whole-element form pipes the prompt; embedded inside
+            # a larger element it is literal text.
+            out.append(tok)
+        else:
+            m = ENV_PLACEHOLDER.fullmatch(tok)
+            if m:
+                v = os.environ.get(m.group(1), "")
+                if v:
+                    out.append(v)
+                else:
+                    missing_env = True
+                    out.append(tok)
+            elif tok in optional:
+                if optional[tok]:
+                    out.append(optional[tok])
+                else:
+                    if unset is None:
+                        unset = tok
+                    out.append(tok)
+            else:
+                out.append(tok)
+    return "".join(out), missing_env, unset, saw_prompt
 
 
 def main():

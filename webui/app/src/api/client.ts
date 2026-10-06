@@ -565,8 +565,9 @@ export interface AppSettings {
    *  the agent's own skills, sub-agents and MCP servers. */
   tools_policy: 'minimal' | 'extended'
   /** GET-only: read-only confinement info. mode is off|standard|strict from
-   *  config.yaml; backend is the OS mechanism in effect (seatbelt|bwrap|""). */
-  sandbox?: { work_path: string; mode?: string; backend?: string }
+   *  config.yaml; backend is the OS mechanism in effect (seatbelt|bwrap|"");
+   *  active is false when mode is configured but no backend exists. */
+  sandbox?: { work_path: string; mode?: string; backend?: string; active?: boolean }
 }
 
 /** One topics/*.md (or daily/*.md) file in GET /api/memory. */

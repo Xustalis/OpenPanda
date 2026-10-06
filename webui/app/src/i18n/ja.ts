@@ -513,6 +513,7 @@ const ja: Messages = {
   'settings.sandbox': 'サンドボックス',
   'settings.sandboxDesc': 'サブプロセスはフィルタ済み環境で作業パス内に実行されますが、OS レベルの隔離はオフです — config.yaml の sandbox.mode を standard または strict に設定すると有効になります。作業パス:',
   'settings.sandboxDescOn': 'OS サンドボックスが有効 — サブプロセスは作業パスと許可ディレクトリ内のみ書き込み可能です。読み取り専用ステータス:',
+  'settings.sandboxDescNoBackend': 'サンドボックスモードは設定済みですが有効ではありません — このプラットフォームにはバックエンド（seatbelt/bwrap）がなく、サブプロセスは隔離されずに実行されます。ステータス:',
 
   // 記憶コンソール拡張（C2）
   'memory.graph': 'グラフ',

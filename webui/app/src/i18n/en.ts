@@ -547,6 +547,8 @@ const en: Messages = {
     'Subprocesses run with a filtered environment in their work path, but OS-level confinement is off — set sandbox.mode in config.yaml to standard or strict to enable it. Work path:',
   'settings.sandboxDescOn':
     'OS sandbox is active — subprocesses may only write inside their work path and whitelisted dirs. Read-only status:',
+  'settings.sandboxDescNoBackend':
+    'Sandbox mode is configured but NOT in effect — this platform has no sandbox backend (seatbelt/bwrap), so subprocesses run unconfined. Status:',
 
   // Memory console extensions (C2)
   'memory.graph': 'Graph',

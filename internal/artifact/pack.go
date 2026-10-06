@@ -84,6 +84,11 @@ type Manifest struct {
 	// stream, so a skipped .git never changes what the artifact IS, only what
 	// lands in the destination.
 	Skipped int `json:"skipped,omitempty"`
+	// SkippedPaths names the first few withheld entries (bounded by
+	// maxSkippedPaths at extract time) so the caller can surface WHAT was
+	// held back — a protected path disappearing silently would read as the
+	// executor never producing it.
+	SkippedPaths []string `json:"skipped_paths,omitempty"`
 }
 
 // epoch is the fixed modification time stamped on every entry. Real mtimes are

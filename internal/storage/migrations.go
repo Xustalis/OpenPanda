@@ -119,10 +119,15 @@ func migrateV36(tx MigrationExec) error {
 		if !exists {
 			continue
 		}
+		// ORDER BY makes the merge winner deterministic: two instance rows
+		// collapsing onto one stable (peer, task_id) key apply oldest-first,
+		// so INSERT OR REPLACE leaves the newest payload standing rather than
+		// whichever row SQLite happened to visit last.
 		if _, err := tx.Exec(fmt.Sprintf(
 			`INSERT OR REPLACE INTO %s (%s)
 			 SELECT %s FROM %s o
-			 JOIN employee_cache e ON e.id = o.peer AND e.pub_key != ''`,
+			 JOIN employee_cache e ON e.id = o.peer AND e.pub_key != ''
+			 ORDER BY o.created_at ASC, o.rowid ASC`,
 			s.table, s.cols, s.vals, s.table)); err != nil {
 			return err
 		}
