@@ -160,7 +160,7 @@ func (r *repl) cmdAudit(arg string) {
 		r.outf("task %s event chain: OK\n", taskID)
 		return
 	}
-	if err := security.NewAudit(r.db).VerifyChain(ctx); err != nil {
+	if err := verifyAudit(r.db).VerifyChain(ctx); err != nil {
 		r.errf("panda: audit chain broken: %v\n", err)
 		return
 	}

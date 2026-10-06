@@ -492,6 +492,13 @@ func runDaemon(args []string) {
 	// the Web console can show — and correct or delete — what was memorized.
 	dreamer := memory.NewDreamer(hermes)
 	audit := security.NewAudit(db)
+	// P2-9: the dreamer's audit records carry the same attestation as the
+	// kernel's. Install the signer before the scheduler goroutine starts —
+	// an unsigned row written between goroutine launch and signing would
+	// fail VerifyChain's "no unsigned rows after signed" rule.
+	if pub, priv, ok := core.LoadNodeKey(db); ok {
+		audit.SetSigner(pub, priv)
+	}
 	dreamer.OnPromotion = func(entry string, viaWhitelist bool) {
 		channel := "threshold"
 		if viaWhitelist {

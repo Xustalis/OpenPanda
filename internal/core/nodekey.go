@@ -231,7 +231,15 @@ func (c *Core) consentGrantValid(p bus.TaskDelegatePayload, sender string) bool 
 		return !ok // bare flag is legacy only from a genuinely key-less origin
 	}
 	if !ok {
-		return true // origin key unknown: unverifiable, degrade to legacy
+		// Signed, but the claimed origin's key is not in the directory —
+		// typically a multi-hop relay whose origin this node never helloed.
+		// Adoption keeps relayed consents working (a compatibility choice:
+		// refusing would stall every relayed tier-2 task), but it is also
+		// the one path where a mesh member can assert another node's
+		// consent unverified, so surface it loudly for the operator.
+		c.logger.Warn("adopting consent grant with unverifiable origin key",
+			"task", p.TaskID, "origin", origin, "sender", sender)
+		return true
 	}
 	presented, err := hex.DecodeString(p.AuthPub)
 	if err != nil || !bytes.Equal(presented, stored) {

@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -397,11 +398,13 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 || len(card.Actuators) > 0 {
 		c.router = commander.NewRouter(card, commander.NewExecutor(), model, config.InjectionConfig{}, config.RoutingConfig{})
 	}
-	// P2-9: hand the task store this node's identity so every event it
-	// records carries the Ed25519 attestation. The key materializes here —
-	// outside any transaction — so the tx-bound signer never touches the DB.
+	// P2-9: hand the task store and the audit log this node's identity so
+	// every event and high-risk record they write carries the Ed25519
+	// attestation. The key materializes here — outside any transaction — so
+	// the tx-bound signer never touches the DB.
 	if pub, priv, ok := c.nodeKeyPair(); ok {
 		c.store.SetEventSigner(pub, priv)
+		c.auditLog.SetSigner(pub, priv)
 	}
 	return c
 }
@@ -1617,17 +1620,22 @@ func (c *Core) claimMsgID(env bus.Envelope) bool {
 		}
 	}
 	if len(c.msgSeen) >= msgSeenMax {
-		// Drop a quarter of the entries so the next burst does not pay this
-		// shrink on every claim. Which quarter does not matter — entries are
-		// already pruned to msgDedupWindow, and evicting a still-live id at
-		// worst re-admits one replay; map iteration order is arbitrary, which
-		// is good enough.
-		evict := msgSeenMax / 4
-		for k := range c.msgSeen {
-			delete(c.msgSeen, k)
-			if evict--; evict <= 0 {
-				break
-			}
+		// Drop the oldest quarter, so eviction follows the same order as
+		// expiry: the entries closest to aging out go first, and a replay
+		// only slips through after its own dedup window would have closed
+		// anyway. Evicting in arbitrary map order could drop a fresh id and
+		// re-admit its replay while stale ids survived.
+		type seenEntry struct {
+			k string
+			t time.Time
+		}
+		oldest := make([]seenEntry, 0, len(c.msgSeen))
+		for k, t := range c.msgSeen {
+			oldest = append(oldest, seenEntry{k, t})
+		}
+		sort.Slice(oldest, func(i, j int) bool { return oldest[i].t.Before(oldest[j].t) })
+		for _, e := range oldest[:msgSeenMax/4] {
+			delete(c.msgSeen, e.k)
 		}
 	}
 	c.msgSeen[key] = now

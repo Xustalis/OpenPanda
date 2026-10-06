@@ -59,6 +59,25 @@ var migrations = []Migration{
 	{Version: 34, Name: "add_employee_ver", Apply: migrateV34},
 	{Version: 35, Name: "add_task_events_sig", Apply: migrateV35},
 	{Version: 36, Name: "rekey_outboxes_stable_id", Apply: migrateV36},
+	{Version: 37, Name: "add_audit_log_sig", Apply: migrateV37},
+}
+
+// migrateV37 adds audit_log.sig / sig_pub (P2-9): the Ed25519 signature of
+// the entry's chain hash and the public key that made it. The audit chain
+// used to be unkeyed SHA-256 — anyone with DB write access could rewrite an
+// entry and re-hash the chain end to end. A signed entry cannot be forged
+// without the node's private key. Empty on pre-migration rows: unsigned
+// means unsigned, and the verifier only demands signatures once the chain
+// has begun signing.
+func migrateV37(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "audit_log")
+	if err != nil || !exists {
+		return err
+	}
+	if err := addColumnIfMissingTx(tx, "audit_log", "sig", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "audit_log", "sig_pub", "TEXT NOT NULL DEFAULT ''")
 }
 
 // migrateV36 re-keys every outbox destination from the peer's instance id to

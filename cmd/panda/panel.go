@@ -51,6 +51,18 @@ func panelStore(cfg *config.Config) (*sql.DB, *core.TaskStore, error) {
 	return db, core.NewSigningTaskStore(db, logger), nil
 }
 
+// verifyAudit returns an Audit bound to this node's key when one exists:
+// signature verification must check that audit rows were signed BY THIS
+// NODE, not merely by whatever key a row names (P2-9), so `panda audit
+// verify` resolves the key the same way the signing store does.
+func verifyAudit(db *sql.DB) *security.Audit {
+	a := security.NewAudit(db)
+	if pub, _, ok := core.LoadNodeKey(db); ok {
+		a.SetSigner(pub, nil)
+	}
+	return a
+}
+
 // runStatus implements `panda status` — this node's identity and the local
 // capability directory (Phase 0 employees are all local).
 func runStatus(args []string) {
@@ -937,7 +949,7 @@ func runAudit(args []string) {
 		return
 	}
 
-	audit := security.NewAudit(db)
+	audit := verifyAudit(db)
 	if err := audit.VerifyChain(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "panda: audit chain broken: %v\n", err)
 		os.Exit(1)

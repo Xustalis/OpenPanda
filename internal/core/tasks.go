@@ -2183,25 +2183,62 @@ func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) 
 }
 
 // VerifyTaskEventChain verifies the per-task hash chain for taskID: every
-// row's prev_hash links correctly AND every row that carries a signature
-// (P2-9) verifies under the public key it names. It returns nil if the
-// chain is intact, or an error describing the first break.
+// row's prev_hash links correctly, every signature verifies under the key
+// this verifier trusts, and no unsigned row follows a signed one. It returns
+// nil if the chain is intact, or an error describing the first break.
+//
+// Two rules bind the signatures to a trust anchor rather than to themselves
+// (P2-9 hardening):
+//
+//   - Expected key: when the store knows this node's identity (the daemon's
+//     signing store, or a CLI store built by NewSigningTaskStore), a
+//     signature must be BY THAT KEY. Verifying against whatever key a row
+//     names would let anyone with DB write access re-sign the whole chain
+//     with a keypair of their own — the signature would prove "some key
+//     attested this", which is exactly what a forger can arrange.
+//   - No gap: once a signed row exists, every later row must be signed, so
+//     stripping signatures off the tail of the chain is detected. Rows
+//     recorded before this node ever had a key form a legacy unsigned
+//     prefix — there is nothing to check them against — but the boundary
+//     between the two may not move.
+//
+// The residual is inherent to an in-DB anchor: a writer who rewrites the
+// ENTIRE legacy prefix (or a database that never had a key) leaves nothing
+// to contradict, which is why external notarization of the chain head stays
+// on the roadmap.
 func (s *TaskStore) VerifyTaskEventChain(ctx context.Context, taskID string) error {
 	events, err := s.Events(ctx, taskID)
 	if err != nil {
 		return fmt.Errorf("load events: %w", err)
 	}
+	s.eventKeyM.RLock()
+	expected := ""
+	if s.eventPub != nil {
+		expected = hex.EncodeToString(s.eventPub)
+	}
+	s.eventKeyM.RUnlock()
+
 	var prevHash string
+	signedSeen := false
 	for i, e := range events {
 		if e.PrevHash != prevHash {
 			return fmt.Errorf("event %d (id=%d) prev_hash mismatch: got %s, want %s",
 				i+1, e.ID, e.PrevHash, prevHash)
 		}
 		h := hashEvent(e.PrevHash, e.TaskID, e.TS, e.Type, e.DataJSON)
-		if e.Sig != "" {
+		if e.Sig == "" {
+			if signedSeen {
+				return fmt.Errorf("event %d (id=%d) unsigned after signed events — signature stripped", i+1, e.ID)
+			}
+		} else {
+			if expected != "" && e.SigPub != expected {
+				return fmt.Errorf("event %d (id=%d) signed by key %s, want this node's key %s",
+					i+1, e.ID, e.SigPub, expected)
+			}
 			if err := verifyEventSig(e.SigPub, h, e.Sig); err != nil {
 				return fmt.Errorf("event %d (id=%d) signature invalid: %w", i+1, e.ID, err)
 			}
+			signedSeen = true
 		}
 		prevHash = h
 	}
