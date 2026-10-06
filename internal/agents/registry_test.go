@@ -51,6 +51,65 @@ func TestInjectedAgentsDeclareProbeVars(t *testing.T) {
 	}
 }
 
+// TestPiEntry pins the pi harness manifest: adapter script, install
+// guidance, the polyglot model-env mapping, the restricted/capability face,
+// and pi's own project MCP discovery path (.pi/mcp.json — not .mcp.json).
+func TestPiEntry(t *testing.T) {
+	pi, ok := ByName("pi")
+	if !ok {
+		t.Fatal("pi missing from registry")
+	}
+	if pi.Adapter != "pi.py" {
+		t.Fatalf("pi adapter = %q", pi.Adapter)
+	}
+	if len(pi.Binaries) == 0 || pi.Binaries[0] != "pi" {
+		t.Fatalf("pi binaries = %v", pi.Binaries)
+	}
+	if len(pi.CredentialEnvVars) == 0 || pi.ModelEnv == nil {
+		t.Fatal("pi must declare credential probe vars and a model-env mapping")
+	}
+	// Polyglot: APIType empty means the adapter speaks the model's own
+	// protocol — the commander passes OPENPANDA_MODEL_API_TYPE through.
+	if pi.ModelEnv.APIType != "" || pi.ModelEnv.Model != "PI_MODEL" ||
+		pi.ModelEnv.APIKey != "PI_API_KEY" || pi.ModelEnv.BaseURL != "PI_BASE_URL" {
+		t.Fatalf("pi model env mapping = %+v", pi.ModelEnv)
+	}
+	if !pi.Capabilities.SupportsRestricted || !pi.Capabilities.DiscoversProjectMCP {
+		t.Fatalf("pi capabilities = %+v", pi.Capabilities)
+	}
+	if pi.Capabilities.MCPProjectFile != ".pi/mcp.json" {
+		t.Fatalf("pi MCP project file = %q", pi.Capabilities.MCPProjectFile)
+	}
+	if pi.DefaultTier != TierAutoApproved {
+		t.Fatalf("pi default tier = %d", pi.DefaultTier)
+	}
+	// Lookup by name+adapter is the identity path the commander uses.
+	if _, ok := Lookup("pi", "pi.py"); !ok {
+		t.Fatal("Lookup(pi, pi.py) must resolve")
+	}
+}
+
+// TestGenericLookupIdentity pins the generic identity rule: generic.py and
+// the native "generic" adapter are shared by any card agent, so an unknown
+// card name on either must resolve to NOTHING rather than borrowing another
+// generic entry's binaries, credentials, or endpoint.
+func TestGenericLookupIdentity(t *testing.T) {
+	// A card naming its agent "zcode" (a registry entry on generic.py)
+	// resolves; a card naming it anything else on the same adapter must not.
+	if _, ok := Lookup("zcode", "generic.py"); !ok {
+		t.Fatal("Lookup(zcode, generic.py) should resolve — that is its entry")
+	}
+	if _, ok := Lookup("some-custom-cli", "generic.py"); ok {
+		t.Fatal("unknown name on generic.py must not borrow another entry")
+	}
+	if _, ok := Lookup("zcode", "generic"); ok {
+		t.Fatal("zcode's manifest is generic.py — the native adapter is a different identity")
+	}
+	if _, ok := Lookup("some-custom-cli", "generic"); ok {
+		t.Fatal("unknown name on native generic must resolve to nothing")
+	}
+}
+
 // TestDetectedAgentsAreAutoApproved pins the tier a registry entry contributes
 // to a generated capability card. commander.Route defaults an agent's tier to 1
 // ("delegating to an agent is auto-approved") and lets a card declaration win —

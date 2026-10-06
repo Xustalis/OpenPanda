@@ -10,14 +10,20 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/agents"
 )
 
-// adapterDiscoversProjectMCP reports whether the CLI an adapter drives
-// auto-discovers a project-level MCP config (.mcp.json) in its working
-// directory. The answer comes from the registry's capability declaration
-// (Capabilities.DiscoversProjectMCP), so the passthrough allowlist cannot
-// drift from the manifest that describes the agent.
-func adapterDiscoversProjectMCP(agent, adapter string) bool {
+// adapterDiscoversProjectMCP reports the project-level MCP config path the
+// CLI an adapter drives auto-discovers in its working directory — "" when it
+// has no such convention. The answer comes from the registry's capability
+// declaration (Capabilities.DiscoversProjectMCP + MCPProjectFile), so the
+// passthrough cannot drift from the manifest that describes the agent.
+func adapterDiscoversProjectMCP(agent, adapter string) string {
 	k, ok := agents.Lookup(agent, adapter)
-	return ok && k.Capabilities.DiscoversProjectMCP
+	if !ok || !k.Capabilities.DiscoversProjectMCP {
+		return ""
+	}
+	if k.Capabilities.MCPProjectFile != "" {
+		return k.Capabilities.MCPProjectFile
+	}
+	return mcpProjectFile
 }
 
 // adapterMCPConfigFlag reports whether the agent's CLI takes an MCP config
@@ -105,28 +111,39 @@ func (r *Router) wireMCPPassthrough(ctx context.Context, agent, adapter, cwd str
 	if adapterMCPConfigFlag(agent, adapter) {
 		return WithMCPConfig(ctx, mcpConfigDocument(servers)), noop
 	}
-	if !adapterDiscoversProjectMCP(agent, adapter) || cwd == "" {
+	file := adapterDiscoversProjectMCP(agent, adapter)
+	if file == "" || cwd == "" {
 		return ctx, noop
 	}
-	return ctx, materializeMCPFile(cwd, servers)
+	return ctx, materializeMCPFile(cwd, file, servers)
 }
 
-// materializeMCPFile writes the servers map as a project .mcp.json in cwd
+// materializeMCPFile writes the servers map as a project MCP config in cwd
 // for the duration of one run and returns the cleanup that removes it
-// again. An existing project config wins: panda never clobbers user
-// content, and the passthrough is best-effort either way.
-func materializeMCPFile(cwd string, servers map[string]serverSpec) func() {
+// again. file is the CLI's project-config convention (".mcp.json" for
+// claude-style CLIs, ".pi/mcp.json" for pi). An existing project config
+// wins: panda never clobbers user content, and the passthrough is
+// best-effort either way.
+func materializeMCPFile(cwd, file string, servers map[string]serverSpec) func() {
 	noop := func() {}
 	blob := mcpConfigDocument(servers)
 	if blob == "" {
 		return noop
 	}
-	// The target is a fixed constant filename joined under the task's own
-	// work dir; the containment check is defense in depth against a cwd that
-	// ever resolves outside the intended tree.
-	path := filepath.Clean(filepath.Join(cwd, mcpProjectFile))
+	// The target is a fixed registry-declared filename joined under the
+	// task's own work dir; the containment check is defense in depth against
+	// a cwd that ever resolves outside the intended tree.
+	path := filepath.Clean(filepath.Join(cwd, filepath.FromSlash(file)))
 	if !strings.HasPrefix(path, filepath.Clean(cwd)+string(os.PathSeparator)) {
 		return noop
+	}
+	if dir := filepath.Dir(path); dir != filepath.Clean(cwd) {
+		// A nested config name (".pi/mcp.json") needs its parent dir; a
+		// failed or racy mkdir leaves the passthrough off, which is the
+		// same best-effort contract as a write failure.
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return noop
+		}
 	}
 	// Lstat, not Stat: a dangling symlink would fail Stat and then pass the
 	// write straight through to its target outside the work dir.

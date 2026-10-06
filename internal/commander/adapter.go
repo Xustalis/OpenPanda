@@ -749,7 +749,11 @@ func modelEnvForAdapter(model config.ModelConfig, name, adapter string) []string
 	if k.ModelEnv.Model != "" {
 		env = append(env, k.ModelEnv.Model+"="+effectiveModelNameFor(name, adapter, model))
 	}
-	env = append(env, "OPENPANDA_INJECTED_MODEL=1")
+	env = append(env, "OPENPANDA_INJECTED_MODEL=1",
+		// The configured protocol rides alongside the endpoint vars so
+		// adapters for multi-protocol CLIs (pi, which declares a dialect
+		// per provider) know which wire format the endpoint speaks.
+		"OPENPANDA_MODEL_API_TYPE="+model.NormalizedAPIType())
 	if adapter == "claude_code.py" {
 		env = append(env, "ANTHROPIC_AUTH_TOKEN=")
 	}
@@ -927,11 +931,34 @@ func adapterSupportsSession(agent, adapter string) bool {
 // split through progressWriter: NDJSON progress lines go to the context's
 // sink, the rest is retained for failure diagnosis.
 func runAdapterProcess(ctx context.Context, name string, prompt string, cwd string, env []string) AgentResult {
+	// adapter: "generic" (no .py) is the built-in template executor: same
+	// contract as generic.py — argv expansion, exit-code mapping, sandbox —
+	// implemented natively so a node without a Python interpreter can still
+	// serve as an execution endpoint. Script adapters continue below.
+	if name == agents.GenericNativeAdapter {
+		return runGenericNative(ctx, AgentName(ctx), prompt, cwd, env)
+	}
 	silenceLimit := silenceTimeout
 
 	req, timeout, refusal := buildAdapterRequest(ctx, name, prompt, cwd)
 	if refusal != nil {
 		return *refusal
+	}
+	// {env:NAME} placeholders in a generic template resolve inside the
+	// adapter's own environment — which the sandbox filters down to the
+	// allow-list plus whatever the caller injected, so a custom name like
+	// MYTOOL_API_KEY would never resolve. Forward the names the template
+	// actually references (operator-declared, never task-controlled) so the
+	// script expands against the same daemon env the native generic path
+	// reads directly.
+	if req.Cmd != "" {
+		forward := append([]string(nil), env...)
+		for _, n := range templateEnvRefs(req.Cmd) {
+			if v, ok := os.LookupEnv(n); ok {
+				forward = append(forward, n+"="+v)
+			}
+		}
+		env = forward
 	}
 	// Session mode: when the orchestration layer asked for it
 	// (WithSessionMode), the task carries a session pool and this agent's

@@ -139,8 +139,13 @@ const (
 func effectiveBaseURLFor(name, adapter string, model config.ModelConfig) string {
 	k, _ := agents.Lookup(name, adapter)
 	targetAPIType := config.APITypeAnthropic
-	if k.ModelEnv != nil && k.ModelEnv.APIType != "" {
+	if k.ModelEnv != nil {
+		// A polyglot agent (APIType "") speaks the model's own protocol;
+		// a declared one pins the dialect regardless of the config.
 		targetAPIType = k.ModelEnv.APIType
+		if targetAPIType == "" {
+			targetAPIType = model.NormalizedAPIType()
+		}
 	}
 	if isDeepSeekEndpoint(model.BaseURL) {
 		if targetAPIType == config.APITypeOpenAI {
@@ -161,8 +166,11 @@ func effectiveBaseURLFor(name, adapter string, model config.ModelConfig) string 
 func effectiveModelNameFor(name, adapter string, model config.ModelConfig) string {
 	k, _ := agents.Lookup(name, adapter)
 	targetAPIType := config.APITypeAnthropic
-	if k.ModelEnv != nil && k.ModelEnv.APIType != "" {
+	if k.ModelEnv != nil {
 		targetAPIType = k.ModelEnv.APIType
+		if targetAPIType == "" {
+			targetAPIType = model.NormalizedAPIType()
+		}
 	}
 	if isDeepSeekEndpoint(model.BaseURL) && targetAPIType == config.APITypeOpenAI {
 		return "deepseek-chat"

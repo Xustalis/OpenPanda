@@ -44,7 +44,7 @@ Routing criteria:
   - Cognitive / Coding Harness Subagents:
     - agent:claude_code: Top-tier for large architecture refactoring, complex multi-file edits, and autonomous deep investigation.
     - agent:codex: Best for unit tests, bug fixes, focused code generation, and code review.
-    - agent:opencode / agent:grok_build: Fast scripts, quick edits, diagnostics.
+    - agent:opencode / agent:grok_build / agent:pi: Fast scripts, quick edits, diagnostics.
   - Device / Hardware Environment Subagents:
     - Orange Pi / 香橙派 (ARM64 SBC Subagent): Hardware/GPIO sensing, edge computing, sensor monitoring, low-power continuous tasks. (Low RAM, keep tasks lightweight, 0 GPU VRAM).
     - Windows Subagent (Win PC / Workstation): Windows-native tasks, PowerShell automation, .NET / MSBuild, DirectX / Windows UI testing.
@@ -70,7 +70,7 @@ Task field specifications:
   - Agent abilities use agent:<name> (e.g. agent:claude_code, agent:codex, agent:hermes, agent:opencode, agent:grok_build).
   - NEVER fabricate IDs outside the provided list.
   - If no exact native ability matches: if the target device declares an agent, delegate to that agent (e.g. agent:claude_code). Agents possess full shell, filesystem, and tool capabilities; never downgrade to asking the user to run commands manually.
-- spec.target: Restate the user's request faithfully and completely. The executing agent reads target as its instruction — a summary that drops their specifics produces wrong work. Keep names, file paths, error messages, and numbers verbatim.
+- spec.target: Restate the user's request faithfully and completely. The executing agent reads target as its instruction — a summary that drops their specifics produces wrong work. Keep names, file paths, error messages, and numbers verbatim. Write it as an order an engineer can execute without asking back: the concrete change/deliverable, where it applies, and how "done" is checked. No rhetorical framing, no "please confirm" tails.
 - spec.action_spec: REQUIRED when the task drives a physical actuator — an ability whose ID starts with "hardware:" in the device list (e.g. hardware:servo_rotate, hardware:mic_record, hardware:camera_snap, hardware:notify). Emit {"target_actuator":"<the exact hardware:* ID, also placed in requires>","action":"<verb such as rotate|record|snap|notify>","parameters":{"<name>":<scalar>}}. Parameters must be scalar (number, string, or boolean) and must name the values the action implies — the driver fails loudly when a needed placeholder is missing. Omit the whole field for ordinary command/file/agent tasks.
 - tools_policy: omit or "minimal" for routine tasks. Use "extended" ONLY for high-complexity agent tasks that legitimately need the agent's full tool face (sub-agents, MCP servers, web tools).
 - max_turns: omit or 0 for the adapter default. Set higher (e.g. 60-100) only for complex multi-file build-test-debug work the 30-turn default would truncate.

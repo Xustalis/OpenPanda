@@ -643,6 +643,148 @@ print("dropped")
         self.assertFalse(payload["ok"], payload)
         self.assertEqual(payload["exit_code"], 2)
 
+    def test_pi_json_mode_contract(self):
+        # `pi --mode json` emits a session header plus JSONL events; the
+        # adapter reduces it to the wire result: last assistant text is the
+        # answer, the session id rides for resume, usage sums across
+        # messages, and tool executions become progress/event rows.
+        payload, progress, _ = run_adapter(
+            "pi.py", "pi", r'''
+import json, os, sys
+args = sys.argv[1:]
+assert args[:2] == ["--mode", "json"], args
+assert "--approve" in args
+assert "--tools" in args and "read" in args[args.index("--tools") + 1]
+assert "--exclude-tools" in args and "mcp__*" in args
+assert args[-2:] == ["--", "contract prompt"], args
+assert os.getcwd().endswith("/work")
+print(json.dumps({"type":"session","id":"pi-sess-1","version":1}))
+print(json.dumps({"type":"tool_execution_start","toolCallId":"t1","toolName":"bash","args":{"command":"pwd"}}))
+print(json.dumps({"type":"tool_execution_end","toolCallId":"t1","isError":False,"result":"/work"}))
+print(json.dumps({"type":"message_end","message":{"role":"assistant","id":"m1",
+      "content":[{"type":"text","text":"pi answer"}],
+      "usage":{"input":4,"output":6,"cacheRead":2,"cacheWrite":1,"cost":{"total":0.03}}}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "pi answer")
+        self.assertEqual(payload["session_id"], "pi-sess-1")
+        self.assertEqual(payload["tokens"], 10)
+        self.assertEqual(payload["cost"], 0.03)
+        self.assertEqual(payload["usage"]["cache_read_tokens"], 2)
+        self.assertTrue(any("bash: pwd" in line for line in progress), progress)
+
+    def test_pi_resume_policy_and_restricted_contract(self):
+        # A follow-up round resumes the session by id; extended policy drops
+        # the --tools whitelist entirely.
+        payload, _, _ = run_adapter(
+            "pi.py", "pi", r'''
+import json, sys
+args = sys.argv[1:]
+assert "--session" in args and args[args.index("--session") + 1] == "pi-prev"
+assert "--tools" not in args, args
+print(json.dumps({"type":"message_end","message":{"role":"assistant",
+      "content":[{"type":"text","text":"resumed"}],"usage":{"input":1,"output":1}}}))
+''',
+            extra_request={"resume": "pi-prev", "tools_policy": "extended"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "resumed")
+        # Restricted (unconsented remote) narrows to read-only tools and
+        # switches project resources off — no approve, no MCP, no extensions.
+        payload, _, _ = run_adapter(
+            "pi.py", "pi", r'''
+import json, sys
+args = sys.argv[1:]
+assert "--tools" in args
+assert args[args.index("--tools") + 1] == "read,grep,find,ls", args
+assert "--no-mcp" in args and "--no-extensions" in args
+assert "--no-approve" in args and "--approve" not in args
+print(json.dumps({"type":"message_end","message":{"role":"assistant",
+      "content":[{"type":"text","text":"readonly"}],"usage":{"input":1,"output":1}}}))
+''',
+            extra_request={"restricted": True},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "readonly")
+
+    def test_pi_print_fallback_contract(self):
+        # A pi too old for --mode json degrades to print mode — the command
+        # is rebuilt wholesale, never token-filtered.
+        payload, _, _ = run_adapter(
+            "pi.py", "pi", r'''
+import sys
+args = sys.argv[1:]
+if "--mode" in args:
+    sys.stderr.write("error: unknown option --mode\n")
+    sys.exit(1)
+assert args[0] == "--print" and args[-1] == "contract prompt", args
+print("pi print answer")
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "pi print answer")
+
+    def test_pi_injected_model_contract(self):
+        # Injection writes a temp agent dir whose models.json declares the
+        # "panda" provider; the api key rides a ${PI_API_KEY} interpolation —
+        # the secret never lands in the file or argv.
+        payload, _, _ = run_adapter(
+            "pi.py", "pi", r'''
+import json, os, sys
+args = sys.argv[1:]
+assert "--model" in args and args[args.index("--model") + 1] == "panda/injected-model"
+agent_dir = os.environ.get("PI_CODING_AGENT_DIR", "")
+assert agent_dir, "PI_CODING_AGENT_DIR must point at the temp dir"
+with open(os.path.join(agent_dir, "models.json")) as f:
+    doc = json.load(f)
+prov = doc["providers"]["panda"]
+assert "${PI_API_KEY}" in json.dumps(prov), doc
+assert "sekret-key" not in json.dumps(prov)
+assert "--session-dir" in args, args
+print(json.dumps({"type":"message_end","message":{"role":"assistant",
+      "content":[{"type":"text","text":"injected"}],"usage":{"input":1,"output":1}}}))
+''',
+            env={
+                "OPENPANDA_INJECTED_MODEL": "1",
+                "PI_MODEL": "injected-model",
+                "PI_BASE_URL": "https://api.example/v1",
+                "PI_API_KEY": "sekret-key",
+                "OPENPANDA_MODEL_API_TYPE": "openai",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "injected")
+
+    def test_generic_extended_placeholders(self):
+        # task_id / effort / system_prompt / timeout_s fill in when the
+        # request carries them, and {env:NAME} resolves from the sandboxed
+        # environment — a missing variable drops flag and element together.
+        payload, _, _ = run_adapter(
+            "generic.py", "mimo", r'''
+import os, sys
+args = sys.argv[1:]
+assert args[args.index("--task") + 1] == "task-42", args
+assert args[args.index("--effort") + 1] == "high", args
+assert args[args.index("--sysp") + 1] == "static protocol text", args
+assert args[args.index("--deadline") + 1] == "30", args
+assert args[args.index("--key") + 1] == "sekrit", args
+assert "--other" not in args, args
+assert "contract prompt" in args, args
+print("filled")
+''',
+            env={"MIMO_API_KEY": "sekrit"},
+            extra_request={
+                "cmd": "mimo --task {task_id} --effort {effort} "
+                       "--sysp {system_prompt} --deadline {timeout_s} "
+                       "--key {env:MIMO_API_KEY} --other {env:MIMO_MISSING} {prompt}",
+                "task_id": "task-42", "effort": "high",
+                "system_prompt": "static protocol text",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "filled")
+
     def test_antigravity_envelope_contract(self):
         # agy -p … --output-format json emits ONE JSON envelope; the adapter
         # reduces it to the wire result and surfaces conversation_id for

@@ -152,7 +152,7 @@ func TestMaterializeMCPFile(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	cleanup := materializeMCPFile(dir, servers)
+	cleanup := materializeMCPFile(dir, mcpProjectFile, servers)
 	blob, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
 	if err != nil {
 		t.Fatalf("materialize: %v", err)
@@ -177,7 +177,7 @@ func TestMaterializeMCPFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), own, 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	cleanup = materializeMCPFile(dir, servers)
+	cleanup = materializeMCPFile(dir, mcpProjectFile, servers)
 	if got, _ := os.ReadFile(filepath.Join(dir, ".mcp.json")); string(got) != string(own) {
 		t.Fatalf("existing .mcp.json was clobbered: %s", got)
 	}

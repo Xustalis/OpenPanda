@@ -838,12 +838,14 @@ func agentBinary(name string, ag ledger.Agent) string {
 		(fields[0] == "which" || fields[0] == "command" || fields[0] == "where") {
 		return fields[1]
 	}
-	if ag.Adapter == agents.GenericAdapter {
+	if ag.Adapter == agents.GenericAdapter || ag.Adapter == agents.GenericNativeAdapter {
 		// The template's first token IS the binary to probe — the registry
 		// record (whichever agent happens to share generic.py) cannot name a
 		// custom CLI's binary. With no template, fall through to Lookup so a
 		// name-matched entry (e.g. "zcode") still resolves its binaries.
-		if fields := strings.Fields(ag.Command); len(fields) > 0 {
+		// splitArgv, not Fields: a quoted path ("C:\Program Files\tool.exe")
+		// must probe as one element, matching what the adapter will exec.
+		if fields := splitArgv(ag.Command); len(fields) > 0 {
 			return fields[0]
 		}
 	}
@@ -872,13 +874,14 @@ func defaultAgentProbe(name string, ag ledger.Agent) bool {
 // hang; probing viability up front keeps both the local fallback chain and the
 // capability summary peers route on from ever selecting such an agent.
 func (r *Router) AgentViable(name string, ag ledger.Agent) bool {
-	// Every agent tier runs through a Python adapter, so a host without an
+	// Every script adapter runs through Python, so a host without an
 	// interpreter can run none of them however well the CLI itself is
-	// installed. Without this check such a node advertises coding abilities,
-	// wins the routing score, accepts the delegated stage and fails at exec
-	// time — and in the flagship pipeline that is the development stage landing
-	// on a machine that cannot start it.
-	if !pyexec.Available() {
+	// installed. The built-in "generic" adapter is the exception — it is
+	// implemented in-process and needs no interpreter, which is exactly what
+	// makes it the fallback for bare-metal nodes. Without this check such a
+	// node advertises coding abilities, wins the routing score, accepts the
+	// delegated stage and fails at exec time.
+	if ag.Adapter != agents.GenericNativeAdapter && !pyexec.Available() {
 		return false
 	}
 	bin := agentBinary(name, ag)
@@ -925,7 +928,9 @@ func (r *Router) AgentDispatchable(name string, ag ledger.Agent) bool {
 // list intentionally mirrors AgentViable's order — runtime/runtime, binary,
 // credentials/injection — then appends the live endpoint probe.
 func (r *Router) agentUsable(name string, ag ledger.Agent) (usable bool, reason string) {
-	if !pyexec.Available() {
+	// Same interpreter exemption as AgentViable: adapter "generic" (no .py)
+	// is implemented natively.
+	if ag.Adapter != agents.GenericNativeAdapter && !pyexec.Available() {
 		return false, "no Python 3 interpreter"
 	}
 	if bin := agentBinary(name, ag); bin != "" {
@@ -988,8 +993,13 @@ func (r *Router) agentTarget(name string, ag ledger.Agent) ProbeSpec {
 		return ProbeSpec{}
 	}
 	apiType := config.APITypeOpenAI
-	if k.ModelEnv != nil && k.ModelEnv.APIType != "" {
+	if k.ModelEnv != nil {
 		apiType = k.ModelEnv.APIType
+		if apiType == "" {
+			// Polyglot agent (pi): the probe speaks the configured
+			// model's own protocol — that is what the run uses.
+			apiType = r.model.NormalizedAPIType()
+		}
 	}
 	if dec := r.InjectionDecision(name, ag.Adapter); dec.Inject {
 		ep := dec.BaseURL

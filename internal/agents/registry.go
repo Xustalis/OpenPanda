@@ -149,9 +149,13 @@ type Capabilities struct {
 	// scheduler refuses the attempt instead of degrading (fail closed).
 	SupportsRestricted bool
 	// DiscoversProjectMCP means the agent CLI auto-discovers a project-level
-	// MCP config (.mcp.json) in its working directory, so the commander can
-	// materialize the configured passthrough servers for one run.
+	// MCP config in its working directory, so the commander can materialize
+	// the configured passthrough servers for one run.
 	DiscoversProjectMCP bool
+	// MCPProjectFile names the project-level config path the CLI discovers
+	// (".mcp.json" for claude-style CLIs, ".pi/mcp.json" for pi). Empty
+	// defaults to ".mcp.json" — only read when DiscoversProjectMCP is set.
+	MCPProjectFile string
 	// SupportsStructuredOutput means the adapter's CLI accepts a result
 	// schema (claude --json-schema): the run's final reply validates
 	// against it, so the protocol fields (status/question/delegate_requests)
@@ -173,7 +177,11 @@ type Capabilities struct {
 // through the mapping, so a new agent in the registry gets credential probing
 // and (when a mapping is declared) injection without any commander change.
 type ModelEnvMapping struct {
-	APIType string // protocol required: "anthropic" | "openai" (empty matches any)
+	// APIType is the protocol the agent expects: "anthropic" | "openai".
+	// Empty matches any configured protocol — a polyglot agent (pi, which
+	// selects the wire dialect per-provider) speaks whatever the model
+	// config speaks, so the effective api type is the model's own.
+	APIType string
 	BaseURL string // env var carrying the provider base URL, e.g. ANTHROPIC_BASE_URL / OPENAI_BASE_URL
 	APIKey  string // env var carrying the API key, e.g. ANTHROPIC_API_KEY / OPENAI_API_KEY
 	Model   string // env var carrying the model name, e.g. ANTHROPIC_MODEL / OPENAI_MODEL
@@ -434,6 +442,64 @@ var known = []Known{
 		DefaultCostTier:     "low_medium",
 		DefaultTier:         TierAutoApproved,
 	},
+	{
+		Name:    "pi",
+		Adapter: "pi.py",
+		// pi is multi-provider — /login to any vendor, or its env vars. There
+		// is no single provider endpoint to probe, so Endpoint stays empty
+		// and the pre-dispatch reachability check is skipped for it.
+		Binaries:    []string{"pi"},
+		DisplayName: "Pi",
+		InstallHint: "npm install -g @mariozechner/pi-coding-agent",
+		InstallURL:  "https://pi.dev",
+		InitHint:    "pi  # run once and /login to connect a provider",
+		// pi authenticates through ~/.pi/agent/auth.json (written by /login),
+		// a custom provider block in models.json, or the provider's own env
+		// var — the union of the common vendor keys is the env signal.
+		CredentialEnvVars: []string{
+			"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
+			"OPENROUTER_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+			"XAI_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY",
+			"CEREBRAS_API_KEY", "ZAI_API_KEY", "KIMI_API_KEY",
+			"MOONSHOT_API_KEY", "MINIMAX_API_KEY",
+		},
+		CredentialFiles: []string{".pi/agent/auth.json", ".pi/agent/models.json"},
+		CredentialFileFields: map[string][]string{
+			// auth.json maps provider id → credential; a provider key with a
+			// value is the login signal. models.json counts when it declares
+			// a custom providers block (a compatible endpoint configured).
+			".pi/agent/auth.json": {
+				"anthropic", "openai", "google", "deepseek", "openrouter",
+				"github-copilot", "xai", "mistral", "groq", "cerebras",
+				"zai", "kimi", "moonshot", "minimax", "qwen", "ollama",
+			},
+			".pi/agent/models.json": {"providers"},
+		},
+		// pi speaks whatever protocol the configured model speaks — the
+		// adapter declares the dialect per-provider in a generated
+		// models.json — so the mapping matches any api_type and the
+		// commander passes the model's own type as OPENPANDA_MODEL_API_TYPE.
+		ModelEnv: &ModelEnvMapping{
+			APIType: "",
+			BaseURL: "PI_BASE_URL",
+			APIKey:  "PI_API_KEY",
+			Model:   "PI_MODEL",
+		},
+		Capabilities: Capabilities{
+			SupportsSkills: true,
+			SupportsMCP:    true,
+			// --tools read,grep,find,ls --no-mcp --no-extensions --no-approve
+			// gives a real read-only face, and project .pi/mcp.json is pi's
+			// discovery point for the passthrough servers.
+			SupportsRestricted:  true,
+			DiscoversProjectMCP: true,
+			MCPProjectFile:      ".pi/mcp.json",
+		},
+		DefaultCapabilities: []string{"coding", "shell", "file_edit", "refactoring"},
+		DefaultBestAt:       []string{"multi_file_edits", "code_search", "scripting"},
+		DefaultCostTier:     "medium",
+		DefaultTier:         TierAutoApproved,
+	},
 }
 
 // Registry returns every known agent in deterministic (name-sorted) order.
@@ -473,6 +539,15 @@ func ByAdapter(adapter string) (Known, bool) {
 // agent name is the identity there, not the adapter.
 const GenericAdapter = "generic.py"
 
+// GenericNativeAdapter is the Python-free twin of GenericAdapter: a card
+// declaring adapter: "generic" (no .py) gets the identical argv-template
+// expansion implemented inside the commander itself. It exists for nodes
+// where a Python runtime cannot be assumed (bare Windows/macOS, minimal
+// containers, embedded boards) — the place where "any device can serve"
+// would otherwise die on a missing interpreter. Same identity rule: an
+// unknown card name on it resolves to no manifest.
+const GenericNativeAdapter = "generic"
+
 // Lookup resolves a card agent entry (name + adapter) to its registry record.
 //
 // The card's own agent name wins, but only when the entry's adapter agrees
@@ -484,13 +559,15 @@ const GenericAdapter = "generic.py"
 // GenericAdapter is the exception that makes the name lookup load-bearing:
 // any number of unrelated CLIs share the script, so an unknown name on it
 // resolves to nothing rather than to whichever registry agent happens to use
-// generic.py. Without this rule every custom CLI silently inherited zcode's
-// binaries, credential manifest and endpoint.
+// generic.py. GenericNativeAdapter follows the same rule — an unknown name
+// resolves to nothing rather than borrowing a manifest. Without this rule
+// every custom CLI silently inherited zcode's binaries, credential manifest
+// and endpoint.
 func Lookup(name, adapter string) (Known, bool) {
 	if k, ok := ByName(name); ok && k.Adapter == adapter {
 		return k, true
 	}
-	if adapter == GenericAdapter {
+	if adapter == GenericAdapter || adapter == GenericNativeAdapter {
 		return Known{}, false
 	}
 	return ByAdapter(adapter)
