@@ -2435,12 +2435,12 @@ func (r *repl) cmdWeb(arg string) {
 	}
 	// Self-update: discover newer CLI releases in the background; apply gates
 	// on the task queue being idle (same policy as `panda web`).
-	updateMgr := updater.New(updater.Options{
+	updateMgr := updater.New(updateEnvOptions(updater.Options{
 		Current:         versionpkg.Version,
 		CurrentCodename: versionpkg.Codename,
 		Idle:            r.store.Idle,
 		SchemaFloor:     schemaFloorFunc(r.db),
-	})
+	}))
 	updateMgr.StartAutoCheck(context.Background(), 0)
 
 	handler := panel.New(panel.Deps{

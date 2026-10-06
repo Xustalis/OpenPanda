@@ -256,6 +256,19 @@ injection:
 #   # Cap on the execute → judge → re-dispatch loop per task. Default 5.
 #   supervise_rounds: 5
 
+# Self-update channel. Defaults to the official GitHub releases; both knobs
+# are env-only (never written to this file):
+#   OPENPANDA_UPDATE_REPO    "owner/repo" of a self-hosted release channel.
+#   OPENPANDA_UPDATE_PUBKEY  Ed25519 public key (hex or base64). When set, a
+#                            release must ship checksums.txt.sig — a detached
+#                            signature over checksums.txt — or the update is
+#                            refused. This is the out-of-band trust anchor:
+#                            archives and checksums come from the same channel,
+#                            so a compromised channel defeats the hash check
+#                            without it. Produce the signature with:
+#                              openssl pkeyutl -sign -rawin -inkey ed25519.pem \
+#                                -in checksums.txt | base64 > checksums.txt.sig
+
 # Web Push notifications (design P3-26): task entering review → phone push.
 # Read by the embedded console (`panda web`); requires a secure context —
 # HTTPS, or loopback which browsers already treat as secure.

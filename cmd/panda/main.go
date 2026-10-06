@@ -542,7 +542,7 @@ func runDaemon(args []string) {
 	// from — but it still checks periodically and logs a notice, so an
 	// operator reading the daemon log learns a release is waiting
 	// instead of discovering it on the next web visit.
-	updateNotice := updater.New(updater.Options{
+	updateNotice := updater.New(updateEnvOptions(updater.Options{
 		Current:         version,
 		CurrentCodename: versionpkg.Codename,
 		Logger:          logger,
@@ -556,7 +556,7 @@ func runDaemon(args []string) {
 				"version", disp,
 				"hint", "open the web console (System → Updates) to review the changelog and apply")
 		},
-	})
+	}))
 	updateNotice.StartAutoCheck(ctx, 6*time.Hour)
 
 	if err := coreNode.Register(ctx); err != nil {

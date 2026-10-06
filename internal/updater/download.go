@@ -5,8 +5,11 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +18,24 @@ import (
 	"strings"
 	"time"
 )
+
+// githubDownloadBase is where release assets are fetched from. Overridable
+// for tests, mirroring githubAPIBase in version.go.
+var githubDownloadBase = "https://github.com"
+
+// SetDownloadBaseForTest overrides the release-asset base URL for testing and
+// returns a cleanup function that restores the previous value.
+func SetDownloadBaseForTest(base string) func() {
+	orig := githubDownloadBase
+	if base == "" {
+		githubDownloadBase = "https://github.com"
+	} else {
+		githubDownloadBase = base
+	}
+	return func() {
+		githubDownloadBase = orig
+	}
+}
 
 // httpClient bounds the phases a caller's context may not: a wedged connect
 // or a server that never finishes its response headers would otherwise park
@@ -30,14 +51,29 @@ var httpClient = &http.Client{Transport: func() *http.Transport {
 // verifies the asset's SHA-256, and returns the archive path inside destDir.
 // destDir must already exist. A missing checksums entry or a hash mismatch is
 // an error: a silent corrupt archive is worse than a failed update.
-func downloadRelease(ctx context.Context, repo, version, destDir string) (string, error) {
-	base := "https://github.com/" + repo + "/releases/download/v" + version
+//
+// When releaseKey is non-empty the release must also carry a valid
+// checksums.txt.sig — a detached Ed25519 signature over the raw checksums.txt
+// bytes (see verifyChecksumsSig). That is the out-of-band trust anchor: the
+// checksums and the archive come from the same channel, so without it a
+// compromised channel defeats the hash check by shipping both.
+func downloadRelease(ctx context.Context, repo, version, destDir, releaseKey string) (string, error) {
+	base := githubDownloadBase + "/" + repo + "/releases/download/v" + version
 	name := AssetName(version)
 
 	checksumsURL := base + "/checksums.txt"
 	sums, err := fetchText(ctx, checksumsURL)
 	if err != nil {
 		return "", fmt.Errorf("fetch checksums: %w", err)
+	}
+	if releaseKey != "" {
+		sigText, err := fetchText(ctx, base+"/checksums.txt.sig")
+		if err != nil {
+			return "", fmt.Errorf("fetch checksums signature: %w (a release key is configured, so an unsigned release is refused)", err)
+		}
+		if err := verifyChecksumsSig(releaseKey, sums, sigText); err != nil {
+			return "", err
+		}
 	}
 	want := checksumFor(sums, name)
 	if want == "" {
@@ -58,6 +94,67 @@ func downloadRelease(ctx context.Context, repo, version, destDir string) (string
 		return "", fmt.Errorf("SHA-256 mismatch for %s: want %s, got %s", name, want, got)
 	}
 	return archive, nil
+}
+
+// verifyChecksumsSig checks a detached Ed25519 signature over the raw
+// checksums.txt bytes. pubKey and sigText are hex or base64 (standard or URL
+// alphabet, padded or raw); sigText may carry a leading comment line, so the
+// last whitespace-separated field is used. Any decode failure, wrong length,
+// or verification failure is an error — with a release key configured,
+// nothing unsigned or unverifiable may install.
+//
+// Raw Ed25519 keeps this dependency-free (crypto/ed25519, stdlib). The
+// release pipeline can produce the signature with:
+//
+//	openssl pkeyutl -sign -rawin -inkey ed25519.pem -in checksums.txt \
+//	  | base64 > checksums.txt.sig
+//
+// minisign/cosign formats remain future work (they need extra primitives).
+func verifyChecksumsSig(pubKey, sums, sigText string) error {
+	pub, err := parseEd25519PubKey(pubKey)
+	if err != nil {
+		return fmt.Errorf("update release key: %w", err)
+	}
+	sig, err := decodeSignatureText(sigText)
+	if err != nil {
+		return fmt.Errorf("checksums.txt.sig: %w", err)
+	}
+	if !ed25519.Verify(pub, []byte(sums), sig) {
+		return errors.New("checksums.txt.sig does not verify under the configured release key")
+	}
+	return nil
+}
+
+// parseEd25519PubKey decodes a 32-byte Ed25519 public key from hex or base64.
+func parseEd25519PubKey(s string) (ed25519.PublicKey, error) {
+	s = strings.TrimSpace(s)
+	if raw, err := hex.DecodeString(s); err == nil && len(raw) == ed25519.PublicKeySize {
+		return ed25519.PublicKey(raw), nil
+	}
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if raw, err := enc.DecodeString(s); err == nil && len(raw) == ed25519.PublicKeySize {
+			return ed25519.PublicKey(raw), nil
+		}
+	}
+	return nil, errors.New("not a 32-byte Ed25519 public key (hex or base64)")
+}
+
+// decodeSignatureText decodes a 64-byte Ed25519 signature from hex or base64,
+// tolerating a leading comment line (the minisign-style shape) by taking the
+// last whitespace-separated field.
+func decodeSignatureText(s string) ([]byte, error) {
+	if fields := strings.Fields(s); len(fields) > 0 {
+		s = fields[len(fields)-1]
+	}
+	if raw, err := hex.DecodeString(s); err == nil && len(raw) == ed25519.SignatureSize {
+		return raw, nil
+	}
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if raw, err := enc.DecodeString(s); err == nil && len(raw) == ed25519.SignatureSize {
+			return raw, nil
+		}
+	}
+	return nil, errors.New("not a 64-byte Ed25519 signature (hex or base64)")
 }
 
 // fetchText GETs url and returns its body as a string.
