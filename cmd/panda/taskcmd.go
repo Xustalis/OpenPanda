@@ -609,10 +609,17 @@ func runTaskAdd(args []string) {
 		// actuator, and the executor would fail the dispatch there.
 		requiresList = ledger.RequiresForActionSpec(requiresList, &as)
 	}
+	projName := strings.TrimSpace(*project)
+	if projName == "" {
+		// Unnamed: the launch directory is the project space — the owning or
+		// active project wins, else the directory is adopted when it looks
+		// like a workspace (same rule `panda ask` uses).
+		projName, _ = ambientProject(cfg)
+	}
 	in := core.TaskInput{
 		Title:         *title,
 		ParentID:      pID,
-		Project:       *project,
+		Project:       projName,
 		ContextType:   contextType,
 		Intent:        *prompt,
 		SpecJSON:      specJSON,

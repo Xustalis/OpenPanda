@@ -284,44 +284,12 @@ func runRepl(args []string) {
 	var activeProjectName string
 	if workspaceAllowed && cwd != "" {
 		cfg.Storage.WorkPath = cwd
-		if existing, err := projStore.FindByWorkDir(cwd); err == nil {
-			activeProjectName = existing.Name
-		} else {
-			base := filepath.Base(cwd)
-			if base == "/" || base == "." || base == "" {
-				base = "workspace"
-			}
-			cleanBase := ""
-			for _, ch := range base {
-				if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' {
-					cleanBase += string(ch)
-				}
-			}
-			if cleanBase == "" {
-				cleanBase = "workspace"
-			}
-			candidate := cleanBase
-			for i := 1; i <= 100; i++ {
-				if pr, err := projStore.Get(candidate); err == nil {
-					if pr.WorkDir == "" {
-						_, _ = projStore.Update(candidate, cwd, "Workspace at "+cwd)
-						activeProjectName = candidate
-						break
-					}
-					candidate = fmt.Sprintf("%s-%d", cleanBase, i+1)
-				} else {
-					if created, err := projStore.Create(candidate, cwd, "Workspace at "+cwd); err == nil {
-						activeProjectName = created.Name
-						break
-					}
-				}
-			}
-		}
-		if activeProjectName != "" {
-			_ = projStore.SetActive(activeProjectName)
-			if interactive && !*yesFlag && !isTUI {
-				fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.Tf(detected, "cli.workspace.accepted", "path", cwd, "name", activeProjectName)))
-			}
+		// Shared adoption: the launch directory is the project space — the
+		// existing project owning it wins, else a fresh one is created and
+		// marked active (see workspace.go).
+		activeProjectName = adoptWorkspaceProject(projStore, cwd)
+		if activeProjectName != "" && interactive && !*yesFlag && !isTUI {
+			fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.Tf(detected, "cli.workspace.accepted", "path", cwd, "name", activeProjectName)))
 		}
 	} else if !workspaceAllowed && cwd != "" && interactive {
 		fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.T(detected, "cli.workspace.declined")))

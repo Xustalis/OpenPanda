@@ -371,6 +371,31 @@ func runDaemon(args []string) {
 	// success criteria and re-delegate work that isn't complete. A model-less
 	// node skips this — agent tasks finish in one shot as before.
 	coreNode.AttachSupervisor(cfg.Model)
+	// "在哪里启动哪里就是项目空间" — a daemon launched inside a workspace
+	// directory (a VCS root or a manifest-bearing dir) adopts it as the
+	// project space: WorkPath becomes the launch dir, a project row is bound
+	// to it, and every harness the daemon schedules runs inside the project.
+	// An explicit operator choice always wins — OPENPANDA_WORK_PATH or a
+	// configured storage.work_path outranks the launch directory.
+	workPathExplicit := os.Getenv("OPENPANDA_WORK_PATH") != ""
+	if !workPathExplicit && cfg.Storage.WorkPath != "" {
+		// A configured path is explicit — unless it is exactly the default
+		// UserDataDir (what config.Load materializes when the file never set
+		// one). On a UserDataDir failure err on the explicit side: a
+		// configured path must never be overridden by the launch directory.
+		ud, uerr := config.UserDataDir()
+		workPathExplicit = uerr != nil ||
+			filepath.Clean(cfg.Storage.WorkPath) != filepath.Clean(ud)
+	}
+	if !workPathExplicit {
+		if cwd, err := os.Getwd(); err == nil && cwd != "" && looksLikeWorkspace(cwd) {
+			abs, _ := filepath.Abs(cwd)
+			cfg.Storage.WorkPath = abs
+			if adopted := adoptWorkspaceProject(projectstore.NewStore(db), abs); adopted != "" {
+				logger.Info("workspace adopted", "dir", abs, "project", adopted)
+			}
+		}
+	}
 	// The work dir travels to adapter subprocesses as their cwd (via the
 	// sandbox and the adapter request's CWD field), so it must be absolute —
 	// a relative path would resolve against the TASK dir inside the adapter
