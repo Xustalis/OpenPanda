@@ -38,6 +38,10 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
+## [0.0.10-preview] - 2026-10-06
+
+v0.0.10 预览版——代号 **Apoapsis**（远拱点）：这条线从内核向外伸手——伸向节点身边的局域网，也伸向边缘的硬件。节点在局域网内自动发现彼此、以指纹确认准入，并可人工钉住对方密钥；委派的文件任务把工作树带到执行端、再把结果带回来；卡住的 agent 可以向用户提问而不是瞎猜；任务可以驱动拥有硬件的节点上的物理 actuator——舵机、麦克风、摄像头、通知、串口 MCU。底层信任面同步加固：`task_events` 与 `audit_log` 逐行 Ed25519 签名并绑定本节点密钥验签；没有同意授权的远程 agent 运行被钳到只读工具面；明文 `ws://` 拨号在非加密底层上一律拒绝；更新器可要求带外的 release 签名。稳态开销也随之下降：空闲 WAL 写按变更落盘，队列与提醒扫描器在空板时降频，能力匹配零分配，artifact 面复用块缓冲。
+
 ### 新增
 
 - **局域网自动发现 + 指纹确认准入**——节点现在广播一个小型未认证 UDP beacon(`network.discovery_addr` 上的 `panda-beacon/1`，默认 `:7837`，设 `"off"` 关闭），只携带 id/地址/版本/公钥——绝不携带凭据。`panda nodes` 在 "not paired" 分区列出发现的节点并展示其指纹；`panda nodes admit <id>` 把它转成已配置 peer(REPL 里的 `/nodes admit` 会即时拨号）。pending 表会过期清理并封顶 64 行，恶意局域网最多制造噪音而非膨胀。准入流程不变：共享密钥 + Ed25519 签名 hello 仍然是入网的唯一凭据——beacon 只是提示，不是钥匙。
@@ -47,10 +51,15 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **结构化结果契约**——`task_result.files_changed` 报告本次运行实际改动的工作目录相对路径（上限 200)，由前后快照计算而非 agent 自述；监督 judge 拿到同一份清单作为证据，`panda task <id>` 会渲染改动路径，停驻的澄清任务保留其部分足迹。
 - **项目驻留路由**——能力摘要现在会通告各节点持有哪些项目（`employee_cache.projects`，随心跳 gossip);`scheduler.RouteP`/`RouteAtP` 据此计分，项目绑定的任务优先落在已有该树的节点上。
 - **actuator 派发（§7.1/§7.2,Jarvis 线）**——任务现在可以驱动拥有该硬件的节点上的物理动作。卡片声明带 `hardware:*` id、驱动 `command` 和携带 `{intent}`/`{action}`/`{param:<name>}` 占位的 argv 模板的 `actuators`;entry 模型产出 `spec.action_spec`（目标 actuator、动作动词、标量参数）,随 `spec_json` 跨过委派，执行端替换出真实 argv——绝不是拼 shell——再原生运行驱动。`task_submit` 接受 `action_spec` 参数，`panda task add --action-spec '<json>'`（及 `/task add`)不经模型即可派发 actuator,`ValidateTaskSpec` 在边界校验该 spec（必填字段、标量参数、32 参数上限）。
-- **参考 actuator 驱动**——`drivers/` 随每个发布包附带四个可移植驱动：`panda-servo`(gpiozero PWM 舵机，0-180°)、`panda-mic`(arecord WAV 采集，上限 300 秒)、`panda-camera`(fswebcam/imagesnap/ffmpeg 快照回退）、`panda-notify`(notify-send/osascript/powershell toast)。缺少后端时各自以独特退出码失败，能力卡片随之丢弃该 actuator 而非虚报设备；`capabilities.example-edge.yaml` 声明全部四个，`panda ask "turn the servo to 90 degrees"` 是目标流程。
+- **参考 actuator 驱动**——`drivers/` 随每个发布包附带五个可移植驱动：`panda-servo`(gpiozero PWM 舵机，0-180°)、`panda-mic`(arecord WAV 采集，上限 300 秒)、`panda-camera`(fswebcam/imagesnap/ffmpeg 快照回退）、`panda-notify`(notify-send/osascript/powershell toast)、`panda-mcu`（纯 stdlib POSIX termios 串口/UART——Arduino、ESP32、RP2040、AT 模组；`--send`/`--send-hex` 配 `--expect`/`--expect-regex` 读窗口，无 pyserial 依赖）。缺少后端时各自以独特退出码失败，能力卡片随之丢弃该 actuator 而非虚报设备；`capabilities.example-edge.yaml` 声明全部五个，`panda ask "turn the servo to 90 degrees"` 是目标流程。
 - **远程任务溯源持久化**——经 wire 进入的任务（delegate/plan/chain 到达）在插入时打上 `remote=1`(migration v33 增加 `tasks.remote`)，任务来源从此随重启与迁移存活，而不是每次读取时从委派链重建。
 - **未授权的远程 agent 运行被钳到只读工具面**——缺少 `ConsentGrant` 钳制（或 digest 不匹配）的远程任务执行时，agent adapter 只拿到只读工具子集；无法表达该限制的 adapter 以 `ErrNotAuthorized` 拒绝派发，而不是静默全功率运行（98fa9c0)。
 - **运行时自省**——`panda metrics --runtime` 报告本机 daemon 的 RSS/CPU/uptime（经 `daemon.pid` + `ps`,Windows 上退化为仅存活判断）以及本进程的 goroutine/堆/GC 计数；panel 的 `GET /api/self` 新增 `runtime` 块（goroutine、heap alloc/sys、GC 次数、uptime)，让长驻的 web 进程自曝内部状态。
+- **启动目录即项目空间**——daemon、REPL、`panda ask`、`panda task add` 在看似 workspace 的目录（VCS 根、语言清单、agent/节点配置）中启动时将其收养为项目空间：`storage.work_path` 跟随 cwd，所属项目被找到或新建（最深的祖先 workdir 也算数，在子目录里启动会落进该项目），每个被调度的 harness 都继承该 cwd。收养保持「环境感知」的克制——裸 `$HOME` 不会产出项目，`--project`/`OPENPANDA_WORK_PATH`/已配置的 `storage.work_path` 永远优先。
+- **Pi adapter**——`adapters/pi.py` 加多供应商 Pi CLI 的注册表条目：凭据检测覆盖常见厂商 env 变量与 `~/.pi/agent/{auth,models}.json`，只读受限工具面，`.pi/mcp.json` 作为其项目级 MCP 发现点——`Capabilities.MCPProjectFile` 让每个 CLI 声明自己的约定，passthrough 按声明物化文件而不再写死 `.mcp.json`。多语言的 `ModelEnv`(`APIType: ""`）意味着该 agent 说所配置模型自己的协议，经 `OPENPANDA_MODEL_API_TYPE` 传下去。
+- **内建 generic 执行器**——卡片声明 `adapter: "generic"`（不带 `.py`）时拿到同一套 argv 模板展开的进程内实现，没有 Python 运行时的节点（裸 Windows/macOS、最小容器、嵌入式板子）也能承接 agent 层任务；仅该 adapter 豁免解释器检查；`{env:NAME}` 占位符解析经沙箱过滤后转发的、由运维声明的变量；模板首 token 经 `splitArgv` 探测，带引号的路径不再被劈开。
+- **审计行签名**——`audit_log` 行现在携带本节点 Ed25519 签名，签在其自身链哈希上（迁移 v37）：能写库的人不再能改完一行再把整条链重算一遍。`panda audit verify`、`/audit` 与 `GET /api/audit` 全部按本节点密钥验签。
+- **更新带外验签**——`OPENPANDA_UPDATE_PUBKEY`(hex/base64 Ed25519）让 release 必须携带 `checksums.txt.sig`——对 checksums 的分离签名，这是通道自身哈希无法提供的信任锚；`OPENPANDA_UPDATE_REPO` 把更新通道指向自托管的 `owner/repo`。两个开关仅走环境变量，作用于所有 updater 调用点。
 
 ### 变更
 
@@ -64,6 +73,8 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **变更门写入改为单语句**——`HeartbeatIfChanged`/`UpdateAdjacencyIfChanged` 现在让 SQLite 的 `WHERE … IS NOT …` 判定行是否变化：一次平稳心跳或邻居刷新只花一程 no-op UPDATE，不再是 SELECT 加条件写——且比较与写入原子合一。
 - **消息去重清扫摊销**——`claimMsgID` 过去每收一帧都全扫 `msgSeen` map（热点 mesh 上每帧 O(容量）)；过期清扫现在最多 30 秒一次，只会让去重更保守，不会更弱。
 - **轮询投影不再拖拽载荷**——队列 `ListReady` 轮询现在只取调度器实际读的六列（`ListReadySummaries`)，不再为每个排队任务拉回 spec/intent/result JSON;panel 每秒的 SSE 指纹改为哈希专用 stamp 行（`TaskStamps`、`ledger.NodeStamps`)，而非整行任务与节点数据。
+- **agent prompt 开头是一段可验收的执行约定**——收尾 rider 重写为五种语言的可核查条目（动手前先读项目自身的源码与文档；宣布完成前用项目自身的构建/测试惯例跑通验收标准；只动 scope 内的文件；汇报跑过的命令与结果；无法验证的标准要点名）,`[execution context]` 帧在最前面声明任务、项目与 workspace(即其 cwd),`spec.scope` 与验收标准一起折进运行 intent。
+- **稳态 CPU 与分配下降**——能力匹配改为 on-the-fly 分词、零分配（每候选 2709ns/40allocs → 1619ns/0allocs);artifact 数据面从 `sync.Pool` 借 1 MiB 块缓冲，且不再每块写一次 `sent_through`（接收端 ack 才决定重传）;panel 的会话总结 sweep 改为对 `task_events` 的一条探测而非重读每个任务的时间线；`RouteAtP` 在常见的空链路径上跳过 seen-map。`make bench` 固化这些数字（路由匹配/决策、控制帧与 1 MiB 数据帧编解码约 86/184 MB/s、派发去重）。
 
 ### 修复
 
@@ -80,6 +91,8 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **`action_spec` 不再被搁置在非 actuator 计划上**——携带指向 `hardware:x` 的 spec 但 `requires` 解析成普通能力的任务过去会丢掉 spec 把 intent 当 shell 命令跑；运行门禁现在拒绝该派发，提交边界把 spec 的 `target_actuator` 排在 `requires` 最前，让 `MatchActuator` 的首匹配解析到目标 actuator(`ledger.RequiresForActionSpec`，应用于 `toTaskInput`、`task add` 与 `/task add`)。
 - **REPL `/task add --action-spec` 接受真实 JSON**——`splitArgs` 过去只把双引号分组，JSON 载荷自身的引号会在 token 中途翻转分词器并被剥掉；单引号现在也分组，`--agents` 与 `--action-spec` 同用会被拒绝而非静默丢 spec。
 - **Discovery 绑定校验端口**——非数字的 `network.discovery_addr` 端口通过 `SplitHostPort` 形状检查后绑定到通告端口 0 的临时 socket;`net.ResolveUDPAddr` 现在在启动期把关，`:7837` 默认值收敛到 daemon 与内嵌 engine 共享的一个 `DiscoveryAddrOrDefault()`。
+- **事件链验证锚定到本节点密钥**——`VerifyTaskEventChain`/`VerifyChain` 过去按每行自己携带的 `sig_pub` 验签：改写整条链的人用自己的密钥重签照样通过；现在签名必须出自本节点密钥，且已签名链中不允许再出现未签名行——尾部剥签名会被抓住。来源密钥未知的中转同意授权仍然收养（拒绝会让每个中转的 tier-2 任务停摆），但现在会响亮记日志。
+- **去重淘汰遵循过期顺序**——`msgSeen` 溢出时过去按 map 序任意删掉四分之一：可能删掉新 id 放重放入侵，而陈旧 id 还活着；改为最旧先淘汰后，重放只有在自己的去重窗口本已关闭之后才溜得进来。
 
 ### 破坏性变更
 

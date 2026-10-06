@@ -159,8 +159,8 @@ panda init
 | Version | Thema |
 |---|---|
 | **v0.0.8** (stabile Basis) | Multi-Agenten-Orchestrierung auf einer Maschine, voll nutzbar: Absichtsklassifikation, Dispatch, Überwachungsschleife, Failover, gestufte Freigabe, Richtlinien für Prompt-Sprachen |
-| **v0.0.9** (aktuell) — "Periapsis" | Hybrid-Transport/DTN-Architektur vollendet: latenzgewichtetes Mesh-Routing, DTN-Bundles auf der Leitung, Token-Budgets, Schattenkopien, Aktuator-Pfad, UDP-Datagramm-Ebene mit mesh-koordiniertem NAT-Hole-Punching, verschlüsselte Payloads, Kontaktpläne, Ed25519-Knotenidentität, Lite-Build — plus gemerkte Genehmigungen, Execution-Attribution, ein Web-Sidebar-Node-Chip und Alltags-CLI-Politur |
-| **v0.0.10** | Geräteübergreifende Zusammenarbeit als Hauptthema: knotenübergreifende Delegation, Lease-Schutz, wiederaufnehmbare Ausführung — gehärtet und im Feld getestet |
+| **v0.0.9** (stabil) — "Periapsis" | Hybrid-Transport/DTN-Architektur vollendet: latenzgewichtetes Mesh-Routing, DTN-Bundles auf der Leitung, Token-Budgets, Schattenkopien, Aktuator-Pfad, UDP-Datagramm-Ebene mit mesh-koordiniertem NAT-Hole-Punching, verschlüsselte Payloads, Kontaktpläne, Ed25519-Knotenidentität, Lite-Build — plus gemerkte Genehmigungen, Execution-Attribution, ein Web-Sidebar-Node-Chip und Alltags-CLI-Politur |
+| **v0.0.10-preview** (aktuell) — "Apoapsis" | Hinaus ins LAN und an den Edge: Discovery mit fingerprint-bestätigter Aufnahme und TOFU-Key-Pinning, Worktree-reisende delegierte Datei-Tasks, die Klärungs-Schleife, Aktor-Dispatch mit fünf Referenztreibern (inkl. seriellem MCU), der Pi-Adapter und ein Python-freier Generic-Executor, Launch-Directory-Projektadoption — plus am Node-Key verankerte signierte Event-/Audit-Ketten, Read-Only-Klemmung unkonsentierter Remote-Läufe, optionale Out-of-Band-Update-Signaturen und eine Steady-State-Perf-Runde |
 | **v0.0.x (darüber hinaus)** | Stabilität, Performance und Feinschliff für Randfälle |
 | **v0.1.0** | Desktop-Fähigkeiten und stärkere Steuerung und Verwaltung — kommerzielle Qualität |
 

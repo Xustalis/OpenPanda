@@ -38,6 +38,65 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
+## [0.0.10-preview] - 2026-10-06
+
+v0.0.10 プレビュー版——コードネーム **Apoapsis**（遠地点）：コアからノードの足元の LAN とエッジのハードウェアへ伸びるラインです。ノードは LAN 上で互いを自動発見し、フィンガープリント確認の准入でペア化し、相手の鍵を手作業でピン留めできます。委任されたファイルタスクはワークツリーを実行者へ運び、結果を持ち帰ります。行き詰まったエージェントは推測ではなくユーザーに質問できます。タスクはハードウェアを持つノード上の物理アクチュエータ——サーボ、マイク、カメラ、通知、シリアル MCU——を駆動できます。足下の信頼面も固めました：`task_events` と `audit_log` は行ごとに Ed25519 署名されこのノードの鍵で検証され、同意なきリモートエージェント実行は読み取り専用ツール面にクランプされ、暗号化アンダーレイ外への平文 `ws://` ダイヤルは拒否され、アップデータは帯域外のリリース署名を要求できます。定常コストも下げました：アイドル時の WAL 書き込みは変更ゲート化、キューとリマインダースキャナは空のとき緩和、能力マッチングは無アロケーション、artifact 面はチャンクバッファをプールします。
+
+### 追加
+
+- **フィンガープリント確認准入つき LAN 自動発見** —— ノードは小さな未認証 UDP ビーコン（`network.discovery_addr`、デフォルト `:7837`、`"off"` で無効）で `panda-beacon/1` を放送し、id/アドレス/バージョン/公開鍵のみを載せ、認証情報は一切含みません。`panda nodes` は発見されたノードを "not paired" 区分に広告フィンガープリント付きで表示し、`panda nodes admit <id>` が設定済みピアに昇格させます（REPL の `/nodes admit` は即座にダイヤルします）。pending テーブルは古いエントリを期限切れさせ 64 行にキャップするため、敵対的 LAN は増殖ではなくノイズに留まります。准入は不変です：共有シークレットと Ed25519 署名 hello だけが入网の鍵——ビーコンはヒントであり、鍵ではありません。
+- **ノードフィンガープリント + TOFU 検証** —— `panda nodes` は各行の Ed25519 フィンガープリントを表示し、人手で比較されると緑の ✓ に；`panda nodes verify <id>` がその確認を記録します（`employee_cache.key_verified`、migration v31）。検証済み行で鍵が変わるとスタンプを消して大声でログに残します——再インストール・ローテーション・なりすましはこの層では区別できず、どれも信頼を継承できません。自ノード行のフィンガープリントは構造上常に備わっています。
+- **委任ファイルタスクにワークツリーが同行** —— ターゲットがリポジトリ checkout の `context_type=file` タスクは、ツリー（`.git`、`node_modules`、vendor、キャッシュを除外、上限 256 MiB）を `__worktree__` artifact 入力として梱包し、実行者は専用のタスク毎ディレクトリに展開してそこで実行し、生成ツリーは再梱包・回収されて発端の checkout に展開されます（`EvProjectSync` トレース + 結果の `output_artifact`）。委任されたファイル編集はリモートホストで死なず、依頼したマシンに届きます。
+- **明確化ループ（§4.3)** —— ユーザーにしか決められない判断で詰まったエージェントは `PANDA_QUESTION:` 行でターンを終えます。タスクは質問と共に review に停泊し委任元へ伝播し（`task_result.question`)、`panda approve <id> -m "回答"` が返答を再実行の intent に織り込んで実行者で再開します。このヒントは五言語すべてのエージェントプロンプトに乗ります。
+- **構造化リザルト契約** —— `task_result.files_changed` は実行が実際に触れた workdir 相対パスを報告します（上限 200)。エージェントの散文ではなく前後スナップショットから算出され、監督 judge は同じリストを証拠として受け取り、`panda task <id>` が変更パスを表示し、停泊した明確化タスクは部分的な足跡を保持します。
+- **プロジェクト常駐ルーティング** —— 能力サマリは各ノードがどのプロジェクトを持つかを広告し（`employee_cache.projects`、ハートビートで gossip)、`scheduler.RouteP`/`RouteAtP` は常駐性を採点するため、プロジェクト紐付きタスクは既にツリーを持つノードを優先します。
+- **アクチュエータディスパッチ（§7.1/§7.2、Jarvis 系）** —— タスクはそれを所有するノード上の物理動作を駆動できます。カードは `hardware:*` id、ドライバ `command`、`{intent}`/`{action}`/`{param:<name>}` プレースホルダを持つ argv テンプレートで `actuators` を宣言します。entry モデルは `spec.action_spec`（対象アクチュエータ、動作動詞、スカラーパラメータ）を発行し、`spec_json` で委任を越え、実行者は実 argv に代入——shell 行ではなく——してからドライバをネイティブ実行します。`task_submit` は `action_spec` 引数を受け、`panda task add --action-spec '<json>'`（および `/task add`）はモデルなしでアクチュエータをディスパッチし、`ValidateTaskSpec` が境界で spec を検査します（必須フィールド、スカラーパラメータ、32 パラメータ上限）。
+- **参照アクチュエータドライバ** —— `drivers/` は五つの移植性ドライバを全リリースアーカイブに同梱します：`panda-servo`(gpiozero PWM サーボ、0-180°)、`panda-mic`(arecord WAV 録音、上限 300 秒）、`panda-camera`(fswebcam/imagesnap/ffmpeg スナップショットフォールバック)、`panda-notify`(notify-send/osascript/powershell トースト)、そして `panda-mcu`（ピュア stdlib POSIX termios シリアル/UART——Arduino、ESP32、RP2040、AT モデム；`--send`/`--send-hex` と `--expect`/`--expect-regex` 読み取り窓、pyserial 不要）。バックエンド不在時はそれぞれ固有の終了コードで失敗し、能力カードは幽霊デバイスを広告せずアクチュエータを落とします。`capabilities.example-edge.yaml` は五つすべてを宣言し、`panda ask "turn the servo to 90 degrees"` が目標フローです。
+- **リモートタスクの出自を永続化** —— wire 経由で入ったタスク（delegate/plan/chain 到着）は挿入時に `remote=1` が打たれ（migration v33 が `tasks.remote` を追加）、再起動やマイグレーションを越えて出自が残り、読み取り時に委任チェーンから再構成されません。
+- **同意なきリモートエージェント実行は読み取り専用ツール面に** —— `ConsentGrant` クランプなし（または digest 不一致）で実行されるリモートタスクは、エージェントアダプタを読み取り専用ツールサブセットで通します。その制限を表現できないアダプタは、暗黙に全開で走る代わりに `ErrNotAuthorized` でディスパッチを拒否します（98fa9c0)。
+- **ランタイムイントロスペクション** —— `panda metrics --runtime` はローカルデーモンの RSS/CPU/uptime(`daemon.pid` + `ps` 経由、Windows では生存のみの回答にフォールバック）と、このプロセスの goroutine/ヒープ/GC カウンタを報告し、パネルの `GET /api/self` は `runtime` ブロック（goroutine、heap alloc/sys、GC 回数、uptime）を載せて、長時間動く web 面が自らの内部状態を公開します。
+- **起動ディレクトリがそのままプロジェクト空間** —— daemon、REPL、`panda ask`、`panda task add` は、ワークスペースらしいディレクトリ（VCS ルート、マニフェスト、agent/ノード設定）で起動するとそれをプロジェクトとして養子縁組します：`storage.work_path` が cwd に追従し、所有プロジェクトが発見または新規作成され（最深の祖先 workdir も数えるため、サブディレクトリからの起動はそのプロジェクトに着地）、スケジュールされたすべての harness がその cwd を継承します。養子縁組はあくまで環境感知——裸の `$HOME` では何も作られず、`--project`/`OPENPANDA_WORK_PATH`/設定済み `storage.work_path` が常に優先します。
+- **Pi アダプタ** —— `adapters/pi.py` と、マルチプロバイダ Pi CLI のレジストリエントリ：ベンダー env 変数と `~/.pi/agent/{auth,models}.json` を横断する認証情報検出、読み取り専用の制限面、プロジェクトレベル MCP 発見点としての `.pi/mcp.json`——`Capabilities.MCPProjectFile` で各 CLI が自前の慣例を宣言し、パススルーは `.mcp.json` 決め打ちではなく宣言されたファイルを物化します。ポリグロットな `ModelEnv`(`APIType: ""`）は、そのエージェントが設定済みモデル自身のプロトコルを話すことを意味し、`OPENPANDA_MODEL_API_TYPE` として引き渡されます。
+- **内蔵 generic エグゼキュータ** —— `adapter: "generic"`(`.py` なし）を宣言したカードは、同一の argv テンプレート展開をプロセス内実装で受け取ります。Python ランタイムのないノード（素の Windows/macOS、最小コンテナ、組み込みボード）でもエージェント層の仕事を請けられます。インタプリタ要件を免除されるのはこのアダプタのみで、`{env:NAME}` プレースホルダはオペレータ宣言の変数をサンドボックスフィルタ越しに転送して解決し、テンプレート先頭トークンは `splitArgv` でプローブされるため引用符付きパスも一要素として残ります。
+- **署名つき監査行** —— `audit_log` の行は自チェーンハッシュへのこのノードの Ed25519 署名を携えます（migration v37)。DB 書き込み権だけでは、エントリを書き換えてチェーン全体を再ハッシュすることはもうできません。`panda audit verify`、`/audit`、`GET /api/audit` はすべてこのノードの鍵で検証します。
+- **帯域外アップデート検証** —— `OPENPANDA_UPDATE_PUBKEY`(hex/base64 Ed25519)を設定すると、リリースは `checksums.txt.sig`——チェックサムへの分離署名、チャネル自身のハッシュでは与えられない信頼アンカー——を必須とし、`OPENPANDA_UPDATE_REPO` がアップデートチャネルを自前ホストの `owner/repo` に向けます。両者とも env のみで、すべての updater 呼び出し箇所に効きます。
+
+### 変更
+
+- **受入基準が実行者まで届く** —— spec の `success_definition` と `constraints` が実行 intent(`taskSpecEnvelope`）に折り込まれ、エージェントプロンプトは「完了」の意味を明示し、監督 judge は散文採点ではなく同一基準で照合します。
+- **タスク毎の実行制御が委任を生き残る** —— `tools_policy` と `max_turns` が `entry.TaskSpecDetail`(`spec_json` に永続化され wire を渡る構造体）に移り、実行者は `commander.WithToolsPolicy`/`WithMaxTurns` で適用し、アダプタはリクエスト封筒から `max_turns` を解析します。
+- **蒸留を通してユーザーの原文プロンプトを保持** —— 元の依頼は提出時に保存 intent に追記され委任と共に旅するため、ピアとリトライは entry モデルの蒸留 intent とユーザーの言葉の両方を見ます。
+- **アイドル書き込みは変更ゲート化** —— ハートビートは広告 capacity が実際に変わった時だけ自己行を書き換え（30 秒の鮮度下限付き、45 秒の生存確認と 90 秒の stale 掃除を安全に下回る)、5 秒の近傍更新と毎拍の常駐 publish は読み比べ書き（`ledger.UpdateAdjacencyIfChanged`)、パネルのノードフィンガープリントは `last_seen` を分単位に量子化して、ハートビートが "nodes changed" イベントを全接続コンソールへ押し出さないようにしました。アイドルノードの WAL 書き込み率は概ね一桁下がります。
+- **キューが空のままならポーリングは緩和** —— ready 行が ~30 秒続かなければスケジューラのフォールバックポールは 400 ms から 2 s へ（`queueIdleAfter`/`queueIdlePoll`)。活きたキューとプロセス内 `Wake()` は速いままなので、wake なしのプロセス間ピックアップだけが遅い尾を払います。
+- **リマインダースキャナは空盤でアイドル** —— 未処理行がなければスキャン間隔は 15 s から 60 s に緩和し（他プロセスが足した行はその範囲内で見つかる)、`Store.Add`/`AddEvery`/`Delete` は同プロセスの全スキャナを起こすため、プロセス内リマインダーは到点から 1 秒以内に発火します。
+- **オフラインピアの再接続ログはスロットル** —— 死んだピアは redial 毎（定常 ~30 秒）に `peer dial failed`/`punch offer failed` の WARN を LaunchAgent の非ローテート `/tmp` ログへ吐いていました。最初の失敗と ~20 回毎に `consecutive` カウント付きで記録し、復旧時に中断が続いた時間を報告します。パネル/web エンジンの `MaintainPeers` redial ループも同じ方針です。
+- **変更ゲート書き込みは単一文** —— `HeartbeatIfChanged`/`UpdateAdjacencyIfChanged` は SQLite の `WHERE … IS NOT …` ゲートに行の変化判定を任せるため、平穏な拍動や近傍ティックは no-op UPDATE 一往復——SELECT + 条件書きではなく——で済み、比較と書き込みはアトミックです。
+- **メッセージ重複排除スイープは償却** —— `claimMsgID` は到着フレーム毎に `msgSeen` マップ全体を歩いていました（ホットな mesh ではメッセージ毎に O（容量）)。期限切れ処理は最大 30 秒毎になり、これは重複排除をより保守的にするだけで、弱めることはありません。
+- **ポール投影がペイロードを引きずらない** —— キューの `ListReady` ポールはスケジューラが読む 6 列だけを選び（`ListReadySummaries`)、全キューイングタスクの spec/intent/result JSON を引かず、パネルの毎秒 SSE フィンガープリントはタスク・ノード全行ではなく専用スタンプ行（`TaskStamps`、`ledger.NodeStamps`）をハッシュします。
+- **エージェントプロンプトは検証可能な実行契約で始まる** —— 末尾の rider は五言語すべてで検証可能な箇条書きになりました（編集前にプロジェクト自身のソースとドキュメントを読む、完了を宣言する前にプロジェクト自身のビルド/テスト作法で成功定義を証明する、宣言された scope 内だけ触れる、実行したコマンドと結果を報告する、検証できなかった基準は名指しする)。`[execution context]` フレームが先頭でタスク・プロジェクト・cwd としてのワークスペースを述べ、`spec.scope` は成功基準と共に実行 intent に折り込まれます。
+- **定常 CPU とアロケーションの削減** —— 能力マッチングはオンザフライ分詞で無アロケーション（候補あたり 2709 ns/40 allocs → 1619 ns/0 allocs)。artifact データ面は `sync.Pool` から 1 MiB チャンクバッファを借り、チャンク毎の `sent_through` 書き込みをやめました（再送を決めるのは受信側の ack)。パネルのセッションファイナライザは全タスクのタイムライン再読ではなく `task_events` への一本の NOT EXISTS プローブに。`RouteAtP` は空チェーンという一般経路で seen-map を作りません。`make bench` が数字を固定します（ルーティング match/decision、制御 + 1 MiB フレームコーデック ~86/184 MB/s、ディスパッチ重複排除）。
+
+### 修正
+
+- **ピアアドレスは全書き込み経路で実際の wire 文法を検証** —— `nodes add`、REPL `/nodes add`、`pair --peer`、パネルの `POST /api/nodes/add`、config ロードは裸の `net.SplitHostPort` チェックしか共有していなかったため、`punch:<id>` は字面で紛れ込み、数値でないポート（`peer:smtp`）は保存されてダイヤル時にだけ静かに失敗し、パネルのエラーメッセージは未だ host:port を要求していました。`config.ValidatePeerAddr` が文法を一手に引き受け（punch:<node-id>、ws(s):// URL、1–65535 の数値ポートを持つ host:port)、全入口がそれを呼びます。
+- **パネルの add-node が cleartext ゲートを表面化** —— `POST /api/nodes/add` はダイヤル失敗を一律の "not reachable" に呑み込んでいました。応答は `cleartext_hint` を載せ、CLI と同じく `network.allow_cleartext`（または wss:// / punch:）を指し示せます。
+- **MCP stdio サーバがリクエストコンテキストと共に死なない** —— spawn とハンドシェイクは呼び出し側の 30 秒リクエスト ctx を継承していたため、settings 変更がサーバプロセスを殺していました。子プロセスはリクエストを生き延びます（`TestServerSurvivesSpawnContextCancel`)。
+- **モデルなしノードでも ask エンジンが動く** —— `askengine.New` は未設定モデルで失敗しなくなり、Ask 経路は `ErrNoModel` を遅延報告します。API キーのないエッジノードでも委任された仕事を実行できます。
+- **work-dir 導出が相対ルートを処理** —— `stageWorkDir`/`attachedWorkDir`/`projectWorkDir` はトラバーサル証明の前に `filepath.Abs` でルートを正規化し、`NewCore` の `"."` デフォルトはもうエスケープ判定に落ちません（委任タスクがプッシュ入力待ちで停泊する退行を解消）。
+- **テストフィクスチャパスは自身の YAML 隣で解決** —— `testdata/*.yaml` の storage パスはドキュメント通り設定ファイルのディレクトリにアンカーされ、迷子の `testdata/testdata/` ツリーは無視/除去されます。
+- **WebSocket ping 周期はクランプ済み** —— pong 待ちの合法な割合内に収め、設定ミスの keepalive による饿死を防ぎます。
+- **ハードウェアのみのノードも実行可能** —— `NewCore`/`ReloadCard` はカードに native/agent/manual 能力がある時だけ commander ルータを組み立てていたため、能力セットがアクチュエータだけのノード（Jarvis エッジケース）は回された全タスクを "no capability matches" で断っていました。アクチュエータもルータ作成にカウントします。
+- **`{action}` プレースホルダは fail-closed** —— `{action}` を名指すドライバテンプレートは、タスクが action_spec を持たない（または action なし spec の）時に空文字を代入し、空の動詞をドライバに渡していました。`{param:<name>}` 欠落と同じく拒否するようになり——不一致は実行されず報告されます。
+- **`action_spec` が非アクチュエータ plan で迷子にならない** —— `hardware:x` を狙う spec を持ちながら `requires` が通常能力に解決したタスクは、spec を落として intent を shell コマンドとして走らせていました。ランゲートはそのディスパッチを拒否し、提出境界は spec の `target_actuator` を `requires` の先頭に置いて `MatchActuator` の先勝ち順で意図したアクチュエータを解決します（`ledger.RequiresForActionSpec`、`toTaskInput`、`task add`、`/task add` に適用）。
+- **REPL `/task add --action-spec` が実 JSON を受け付ける** —— `splitArgs` はダブルクォートしかグルーピングせず、JSON ペイロード自身のクォートがトークナイザをトークン途中で反転させて剥がされていました。シングルクォートもグループ化し、`--agents` と `--action-spec` の併用は spec を静かに落とす代わりに拒否します。
+- **Discovery バインドはポートを検証** —— 非数値の `network.discovery_addr` ポートは `SplitHostPort` の形状チェックを通ってポート 0 を広告するエフェメラルソケットを bind していました。`net.ResolveUDPAddr` が起動時に検査し、`:7837` デフォルトは daemon と組み込みエンジンが共有する一つの `DiscoveryAddrOrDefault()` に住みます。
+- **イベントチェーン検証はこのノードの鍵にアンカー** —— `VerifyTaskEventChain`/`VerifyChain` は各行が名乗る `sig_pub` で検証していたため、チェーンを書き換えた書き手は自前の鍵で全行に再署名しても通り抜けられました。署名はこのノードの鍵によるものを要求し、署名済み行が一度現れた後の未署名行は許さないため、末尾の署名剥がしも検出されます。由来鍵が未収録の中継同意グラントは従来通り養子縁組します（拒否すれば中継 tier-2 タスクがすべて停滞する）が、大声でログに残します。
+- **重複排除の退避は期限切れ順** —— `msgSeen` 溢れは map 順で任意の四分の一を落としていたため、新しい id を捨ててそのリプレイを再入場させ、古い id を残しかねませんでした。最古からの退避により、リプレイが紛れ込めるのは自身の重複排除窓がどのみち閉じた後だけです。
+
+### 破壊的変更
+
+- **平文 `ws://` ダイヤルはアンダーレイが暗号化しない限り拒否**(5d06d37)——hello ハンドシェイクは mesh 所属を証明しますがその後を認証しないため、平文リンク上のネットワーク MITM はタスク面を読み、偽造 `task_delegate` を注入できました。`cleartextOK` が全送信ダイヤルをゲートします：裸 `host:port` への `ws://` は loopback と Tailscale(CGNAT 100.64.0.0/10、fd7a:115e:a214::/48 ULA、`*.ts.net` MagicDNS）のみ通過——これらは暗号化またはローカルのアンダーレイに乗ります。`wss://` と `punch:` ピアはそのまま通ります。**素の LAN `192.168.x.x:7836` として設定されたピアはアップグレード後にダイヤル失敗します**——`wss://` に切り替えるか、Tailscale 経由にするか、ダイヤル側ノードで `network.allow_cleartext: true` を設定して信頼できる LAN 上で旧挙動に戻してください。
+
 ## [0.0.9] - 2026-09-25 — "Periapsis"
 
 v0.0.9 安定版——コードネーム **Periapsis**。単体マシンでの利用では快適性のリリースです：承認は毎回の再回答ではなく記憶できるようになり、CLI はより親切に説明します（このノードが稼働中か答える status、次の一手を示す空のキュー、初回実行の案内、更新時に表示されるリリースノート）。Web コンソールは各回答を生成したエージェントとモデルに帰属表示し、ノードの稼働状態とバージョンをサイドバーに固定します。TUI は以前は崩壊していた日常の操作列にも耐えます。フリート向けには beta が開いた流れを完成させます：認証済みデータグラム面と NAT トラバーサル、暗号化 DTN ペイロード、スケジュールされたコンタクトウィンドウ、暗号的ノード同一性と署名済み同意、ステージ間の直接 artifact 受け渡し、制約デバイス向け lite ビルド。
