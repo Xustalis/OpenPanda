@@ -171,7 +171,7 @@ func (m *Manager) DownloadForce(ctx context.Context, force bool) error {
 		m.fail(err)
 		return err
 	}
-	archive, err := downloadRelease(ctx, m.opts.Repo, version, dir)
+	archive, err := downloadRelease(ctx, m.opts.Repo, version, dir, m.opts.ReleaseKey)
 	if err != nil {
 		os.RemoveAll(dir)
 		m.fail(err)

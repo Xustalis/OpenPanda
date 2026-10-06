@@ -113,7 +113,7 @@ func runPlanStart(args []string) {
 	if err != nil {
 		fatal("load config", err)
 	}
-	engine, err := askengine.New(context.Background(), cfg, askengine.Options{CardPath: *cardPath})
+	engine, err := askengine.New(context.Background(), cfg, askengine.Options{CardPath: *cardPath, ConfigPath: *configPath})
 	if err != nil {
 		fatal("ask engine", err)
 	}

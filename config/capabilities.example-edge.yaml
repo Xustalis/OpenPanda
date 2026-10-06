@@ -43,6 +43,70 @@ manual:
   - id: "gpio:wire"
     notify: "需要人工按接线图接好 GPIO 引脚后回复"
 
+# ─── 物理执行器（§7.1/§7.2：Jarvis 式硬件调度）────────────────────────────
+# actuators 声明可由任务驱动的物理设备。command 是驱动可执行文件：
+# - 驱动必须在目标机上真实可解析（PATH 或绝对路径），否则
+#   PruneUnavailableActuators 会在加载时删除该行——能力卡不会虚报。
+# - args 中的占位符在执行时替换：{intent} 任务意图原文、{action} 动作动词、
+#   {param:<name>} action_spec.parameters 中的标量值。缺失参数会在路由端
+#   报错而不是带着字面花括号执行。
+# - id 使用 hardware:* 前缀约定——entry 模型据此产出 spec.action_spec。
+# - 参考驱动见仓库 drivers/（panda-servo 需要 gpiozero，panda-mic 需要
+#   arecord/alsa-utils，panda-camera 需要 fswebcam|imagesnap|ffmpeg 之一，
+#   panda-notify 需要 notify-send|osascript|powershell 之一，panda-mcu
+#   走 POSIX termios 串口、纯 stdlib）。把驱动放到 PATH 上或改写成绝对
+#   路径后再启用对应行。
+# - 不写 command 的 actuator 仅是路由广告：任务会落到 agent 层自行实现。
+actuators:
+  - id: "hardware:servo_rotate"
+    type: "hardware"
+    category: "motor_control"
+    interface: "gpio_pwm"
+    pin_mapping: [12]
+    capabilities: ["servo", "rotate", "motor", "舵机"]
+    tier: 1
+    command: "panda-servo"
+    args: ["--pin", "12", "--angle", "{param:angle}", "--hold", "0.5"]
+  - id: "hardware:mic_record"
+    type: "hardware"
+    category: "audio_sensing"
+    interface: "alsa"
+    capabilities: ["microphone", "record", "audio", "麦克风", "录音"]
+    tier: 1
+    command: "panda-mic"
+    args: ["--seconds", "{param:seconds}"]
+  - id: "hardware:camera_snap"
+    type: "hardware"
+    category: "video_sensing"
+    interface: "usb_camera"
+    capabilities: ["camera", "snapshot", "photo", "拍照", "摄像头"]
+    tier: 1
+    command: "panda-camera"
+    args: ["--out", "{param:out}"]
+  - id: "hardware:notify"
+    type: "software"
+    category: "ui_feedback"
+    interface: "desktop"
+    capabilities: ["notify", "notification", "alert", "通知"]
+    tier: 1
+    command: "panda-notify"
+    args: ["--title", "{param:title}", "--body", "{param:body}"]
+  # 串口 MCU（Arduino/ESP32/AT 模组等）：发指令、读回执。
+  # {param:port} 让任务选择板子上的具体 tty；{param:cmd} 是要写入的命令。
+  # 注意 {param:x} 是必填——缺参数会整体失败；可选值（baud/expect）直接写死
+  # 在 args 里，要不同波特率就再声明一行 actuator。
+  # 任务发 action_spec {"target_actuator":"hardware:mcu_serial",
+  # "action":"send","parameters":{"port":"/dev/ttyUSB0","cmd":"AT+LED=ON\\r"}}。
+  - id: "hardware:mcu_serial"
+    type: "hardware"
+    category: "embedded_io"
+    interface: "uart_usb"
+    capabilities: ["serial", "uart", "mcu", "arduino", "esp32", "串口", "单片机"]
+    tier: 2   # 写串口是副作用——默认先审批，确认设备行为后改 1
+    command: "panda-mcu"
+    args: ["--port", "{param:port}", "--send", "{param:cmd}",
+           "--read-seconds", "3"]
+
 capacity:
   cpu_cores: 4
   ram_gb: 2

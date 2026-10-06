@@ -271,6 +271,80 @@ func TestExecuteAgentDeclaredTier2(t *testing.T) {
 	}
 }
 
+// TestExecuteRemoteUnconsentedAgentRestricted pins the remote-task boundary:
+// intent authored off-node is untrusted text, so an agent run that carries no
+// consent executes with the read-only tool face — and adapters that cannot
+// express one must be skipped, never silently run with their shell-capable
+// defaults. Consent, or a local-origin task, restores the normal tool face.
+func TestExecuteRemoteUnconsentedAgentRestricted(t *testing.T) {
+	card := testCard()
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	plan, err := r.Route([]string{"code:modify"}) // claude_code.py — restricted-capable
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+
+	var sawRestricted bool
+	r.runAdapter = func(ctx context.Context, adapter, prompt, cwd string) AgentResult {
+		sawRestricted = Restricted(ctx)
+		return AgentResult{OK: true, Result: "ok", ExitCode: 0}
+	}
+
+	// Remote + no consent → restricted run on a capable adapter.
+	res := r.Execute(WithRemoteTask(context.Background()), plan, "summarize", "", false)
+	if !res.OK || !sawRestricted {
+		t.Fatalf("remote unconsented agent = ok:%v restricted:%v, want ok+restricted", res.OK, sawRestricted)
+	}
+
+	// Remote + consent → full tool face.
+	sawRestricted = false
+	res = r.Execute(WithRemoteTask(context.Background()), plan, "summarize", "", true)
+	if !res.OK || sawRestricted {
+		t.Fatalf("remote consented agent = ok:%v restricted:%v, want ok+unrestricted", res.OK, sawRestricted)
+	}
+
+	// Local + no consent → unchanged (the local user authored the intent).
+	sawRestricted = false
+	res = r.Execute(context.Background(), plan, "summarize", "", false)
+	if !res.OK || sawRestricted {
+		t.Fatalf("local unconsented agent = ok:%v restricted:%v, want ok+unrestricted", res.OK, sawRestricted)
+	}
+
+	// An adapter without a restricted mode must not run an unconsented
+	// remote task at all — degrading to its default flags would re-open the
+	// hole restricted mode exists to close.
+	card2 := testCard()
+	op := card2.Agents["opencode"]
+	op.Capabilities = []string{"code:modify"}
+	card2.Agents["opencode"] = op
+	delete(card2.Agents, "claude_code")
+	r2 := NewRouter(card2, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	plan2, err := r2.Route([]string{"code:modify"})
+	if err != nil {
+		t.Fatalf("route2: %v", err)
+	}
+	r2.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	adapterRan := false
+	r2.runAdapter = func(ctx context.Context, adapter, prompt, cwd string) AgentResult {
+		adapterRan = true
+		return AgentResult{OK: true, Result: "ok", ExitCode: 0}
+	}
+	res = r2.Execute(WithRemoteTask(context.Background()), plan2, "summarize", "", false)
+	if res.OK || adapterRan {
+		t.Fatalf("remote unconsented task ran a non-restricted adapter: ok=%v ran=%v stderr=%q",
+			res.OK, adapterRan, res.Stderr)
+	}
+	if !strings.Contains(res.Stderr, "restricted") {
+		t.Fatalf("refusal %q does not explain the restricted-mode gate", res.Stderr)
+	}
+	// With consent the same plan runs normally.
+	res = r2.Execute(WithRemoteTask(context.Background()), plan2, "summarize", "", true)
+	if !res.OK || !adapterRan {
+		t.Fatalf("remote consented task on plain adapter = ok:%v ran:%v, want run", res.OK, adapterRan)
+	}
+}
+
 func TestRouteTierFromCommand(t *testing.T) {
 	card := testCard()
 	// A sudo command without an explicit tier is inferred as Tier 2.

@@ -59,6 +59,15 @@ type Options struct {
 	// Repo is the "owner/repo" whose GitHub releases host the assets. Empty
 	// falls back to DefaultRepo.
 	Repo string
+	// ReleaseKey is an optional hex or base64 Ed25519 public key. When set,
+	// a release must ship checksums.txt.sig — a detached signature over the
+	// raw checksums.txt bytes — and the download is refused without a valid
+	// one. This is the out-of-band trust anchor: checksums and archives come
+	// from the same channel, so a compromised channel (GitHub account,
+	// release pipeline) defeats the hash check by shipping both. The
+	// signature can only be produced by the holder of the private key.
+	// Empty keeps the historical behavior (channel TLS + checksums).
+	ReleaseKey string
 	// Current is the running version (internal/version.Version).
 	Current string
 	// CurrentCodename is the running build's release codename
@@ -308,6 +317,11 @@ func FindLatest(ctx context.Context, repo string, includePrerelease bool, curren
 		includePrerelease = true
 	}
 
+	// The lookup is two small JSON responses; bound the whole thing even
+	// when the caller's context is open-ended.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	token := gitHubToken(ctx)
 
 	// First attempt: query recent releases list to discover both stable and pre-releases.
@@ -315,7 +329,7 @@ func FindLatest(ctx context.Context, repo string, includePrerelease bool, curren
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err == nil {
 		setGitHubHeaders(req, token)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err == nil {
 			defer resp.Body.Close()
 			if checkErr := checkGitHubStatus(resp, repo); checkErr != nil {
@@ -376,7 +390,7 @@ func latestSingle(ctx context.Context, repo, token string) (Release, error) {
 		return Release{}, err
 	}
 	setGitHubHeaders(req, token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return Release{}, fmt.Errorf("release lookup: %w", err)
 	}

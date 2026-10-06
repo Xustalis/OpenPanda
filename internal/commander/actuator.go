@@ -51,6 +51,17 @@ func SubstituteActionSpec(p *Plan, spec *ledger.ActionSpec, intent string) error
 		action = spec.Action
 		params = spec.Parameters
 	}
+	// {action} gets the same hard gate {param:<name>} has: a driver whose
+	// template names the action must not run with an empty verb — an absent
+	// or action-less spec is a spec/driver disagreement the gate reports,
+	// not argv the driver silently sees as "".
+	if action == "" {
+		for _, a := range append([]string{p.Command}, p.Args...) {
+			if strings.Contains(a, "{action}") {
+				return fmt.Errorf("action_spec provides no action needed by %q", a)
+			}
+		}
+	}
 	subst := func(arg string) (string, error) {
 		out := strings.ReplaceAll(arg, "{intent}", intent)
 		out = strings.ReplaceAll(out, "{action}", action)

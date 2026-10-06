@@ -200,7 +200,7 @@ const zhCN: Messages = {
   'sessions.nodeAuto': '自动（最佳节点）',
   'sessions.nodePickTip': '分类为任务时在该节点执行——普通对话仍在本机',
   'sessions.folderPick': '选择本地文件夹',
-  'sessions.folderSelected': '📁 已选择文件夹，{n} 个文件：',
+  'sessions.folderSelected': '已选择文件夹，{n} 个文件：',
   'sessions.folderTruncated': '  …（还有 {n} 个文件）',
   'sessions.folderFollowUp': '请基于以上文件内容处理我的请求：',
   'sessions.projectPrefix': '[项目: {name}]',
@@ -529,7 +529,9 @@ const zhCN: Messages = {
   'settings.approval.never': '从不',
   'settings.approvalHelp': '高风险操作是否在面板中等待你的批准。',
   'settings.sandbox': '沙箱',
-  'settings.sandboxDesc': '每个 agent 子进程都已被限制在其工作路径内运行 — 只读说明，不是开关：',
+  'settings.sandboxDesc': '子进程在工作路径内运行且环境变量经过过滤，但 OS 级隔离未开启 — 在 config.yaml 设置 sandbox.mode 为 standard 或 strict 后生效。工作路径：',
+  'settings.sandboxDescOn': 'OS 沙箱已启用 — 子进程只能写入工作路径及白名单目录。只读状态：',
+  'settings.sandboxDescNoBackend': '已配置沙箱模式但未生效 — 本平台没有可用后端（seatbelt/bwrap），子进程实际未被隔离。状态：',
 
   // 记忆台扩展（C2）
   'memory.graph': '图谱',
@@ -601,6 +603,7 @@ const zhCN: Messages = {
   'nodes.addDevice.secretGen': '已生成 network.shared_secret —— 需要复制到对方机器',
   'nodes.addDevice.dialed': '已拨号 {addr} —— 本会话即时生效。',
   'nodes.addDevice.dialFailed': '暂时无法拨通 {addr}；配置已保存，下次启动会重试。',
+  'nodes.addDevice.cleartextHint': '该地址走明文 ws:// 且目标不在受信底层网络（回环或 Tailscale）上——daemon 会拒绝拨号。请设 network.allow_cleartext: true，或改用 wss:// / punch:<id>。',
   'nodes.addDevice.guideTitle': '在另一台机器上',
 
   // 能力卡编辑器（阶段 6）— `/card` 的 Web 对应
@@ -697,6 +700,8 @@ const zhCN: Messages = {
   'fleet.node.online': '在线',
   'fleet.node.offline': '离线',
   'fleet.node.tasks': '{cur}/{max} 任务',
+  'fleet.node.queued': '{n} 排队中',
+  'fleet.node.verSkewHint': '运行 v{ver}，本机为 v{self}',
 
   // Update banners — painted by <UpdateBanner/> on every view when the
   // updater has backed off to idle, or when a new release is available.
@@ -732,6 +737,16 @@ const zhCN: Messages = {
   'events.tag.state': '状态',
   'events.tag.hop': '跳点',
   'events.tag.path': '路径',
+  'events.agent_event': 'Agent 活动',
+  'events.agent_text': 'Agent 消息',
+  'events.agent_thinking': '思考',
+  'events.agent_tool_use': '工具调用',
+  'events.agent_tool_result': '工具结果',
+  'events.transcript_truncated': '转录已截断',
+  'events.transcriptTruncatedNote': '更早的活动已截断；执行节点保留完整日志。',
+  'events.subagent': '子代理',
+  'events.subagentHint': '运行在 harness 子代理内（嵌套在父工具调用下）',
+
   'sessions.copyThought': '复制思维链',
 
   'nav.plans': '计划',

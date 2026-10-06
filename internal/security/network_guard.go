@@ -19,14 +19,21 @@ type NetworkGuard struct {
 
 // NewNetworkGuard builds a guard allowing the given hostnames (bare or
 // host:port). Matching is case-insensitive and treats a host:port entry as
-// allowing the bare host too.
+// allowing the bare host too — the entry is stored verbatim (so an exact
+// host:port match still works) plus its hostname leg (so a URL that names the
+// host without a port, or on a different one, still matches the bare-host
+// check).
 func NewNetworkGuard(hosts ...string) *NetworkGuard {
 	g := &NetworkGuard{allowed: make(map[string]bool, len(hosts))}
 	for _, h := range hosts {
+		h = strings.ToLower(strings.TrimSpace(h))
 		if h == "" {
 			continue
 		}
-		g.allowed[strings.ToLower(h)] = true
+		g.allowed[h] = true
+		if host, _, err := net.SplitHostPort(h); err == nil && host != "" {
+			g.allowed[host] = true
+		}
 	}
 	return g
 }

@@ -206,7 +206,7 @@ const en: Messages = {
   'sessions.nodeAuto': 'Auto (best node)',
   'sessions.nodePickTip': 'Classified tasks run on this node — chat answers stay local',
   'sessions.folderPick': 'Pick a local folder',
-  'sessions.folderSelected': '📁 Folder selected, {n} files:',
+  'sessions.folderSelected': 'Folder selected, {n} files:',
   'sessions.folderTruncated': '  … ({n} more files)',
   'sessions.folderFollowUp': 'Please handle my request based on the files above:',
   'sessions.projectPrefix': '[Project: {name}]',
@@ -544,7 +544,11 @@ const en: Messages = {
   'settings.approvalHelp': 'Whether risky actions wait for your approval in the panel.',
   'settings.sandbox': 'Sandbox',
   'settings.sandboxDesc':
-    'Every agent subprocess already runs confined to its work path — read-only description, not a switch:',
+    'Subprocesses run with a filtered environment in their work path, but OS-level confinement is off — set sandbox.mode in config.yaml to standard or strict to enable it. Work path:',
+  'settings.sandboxDescOn':
+    'OS sandbox is active — subprocesses may only write inside their work path and whitelisted dirs. Read-only status:',
+  'settings.sandboxDescNoBackend':
+    'Sandbox mode is configured but NOT in effect — this platform has no sandbox backend (seatbelt/bwrap), so subprocesses run unconfined. Status:',
 
   // Memory console extensions (C2)
   'memory.graph': 'Graph',
@@ -617,6 +621,7 @@ const en: Messages = {
   'nodes.addDevice.secretGen': 'a network.shared_secret was generated — the other machine needs it copied over',
   'nodes.addDevice.dialed': 'Dialed {addr} — live in this session.',
   'nodes.addDevice.dialFailed': 'Could not dial {addr} now; it stays configured and the next start retries it.',
+  'nodes.addDevice.cleartextHint': 'This address dials plaintext ws:// and the target is not on a trusted underlay (loopback or Tailscale) — the daemon will refuse to dial it. Set network.allow_cleartext: true, or use wss:// / punch:<id>.',
   'nodes.addDevice.guideTitle': 'On the other machine',
 
   // Capability card editor (stage 6) — the web twin of `/card`
@@ -710,6 +715,8 @@ const en: Messages = {
   'fleet.node.online': 'online',
   'fleet.node.offline': 'offline',
   'fleet.node.tasks': '{cur}/{max} tasks',
+  'fleet.node.queued': '{n} queued',
+  'fleet.node.verSkewHint': 'runs v{ver}, this device runs v{self}',
 
   'ui.update.degraded.title': 'Update checks paused (network limited)',
   'ui.update.degraded.sub': 'GitHub API access is rate-limited or denied; Panda will not check for updates again until you restart it.',
@@ -743,6 +750,16 @@ const en: Messages = {
   'events.tag.state': 'State',
   'events.tag.hop': 'Hop',
   'events.tag.path': 'Path',
+  'events.agent_event': 'Agent Activity',
+  'events.agent_text': 'Agent Message',
+  'events.agent_thinking': 'Thinking',
+  'events.agent_tool_use': 'Tool Call',
+  'events.agent_tool_result': 'Tool Result',
+  'events.transcript_truncated': 'Transcript Truncated',
+  'events.transcriptTruncatedNote': 'Older activity was truncated; the executing node keeps the full log.',
+  'events.subagent': 'sub-agent',
+  'events.subagentHint': 'Ran inside a harness sub-agent (nested under the parent tool call)',
+
   'sessions.copyThought': 'Copy thought chain',
 
   'nav.plans': 'Plans',

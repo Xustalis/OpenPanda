@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 )
@@ -41,22 +42,9 @@ func (c *Core) Enqueue(ctx context.Context, in TaskInput, q QueueSpec) (Task, er
 		return Task{}, fmt.Errorf("queue priority %d out of range", q.Priority)
 	}
 	if len(q.ResourceKeys) == 0 {
-		if in.Project != "" {
-			q.ResourceKeys = []string{"project:" + in.Project}
-		} else {
-			var derived []string
-			if in.PreferredNode != "" {
-				derived = append(derived, "node:"+in.PreferredNode)
-			}
-			for _, req := range in.Requires {
-				if strings.HasPrefix(req, "agent:") || strings.HasPrefix(req, "node:") {
-					derived = append(derived, req)
-				}
-			}
-			if len(derived) > 0 {
-				q.ResourceKeys = derived
-			}
-		}
+		q.ResourceKeys = deriveResourceKeys(in)
+	} else {
+		q.ResourceKeys = mergeActuatorKeys(q.ResourceKeys, in.Requires, in.SpecJSON)
 	}
 	t, _, _, err := c.createTask(ctx, in)
 	if err != nil {
@@ -77,6 +65,60 @@ func (c *Core) Enqueue(ctx context.Context, in TaskInput, q QueueSpec) (Task, er
 	c.queueWake()
 	c.logger.Info("task enqueued", "task", t.TaskID, "priority", q.Priority)
 	return t, nil
+}
+
+// deriveResourceKeys computes the queue resource locks a task holds from the
+// shape of its input: a project task serializes on the project (a shared
+// worktree admits one writer), a preferred-node pin serializes on that node,
+// and agent:/node: requires map to their resource ids. Physical actuators
+// merge on top via mergeActuatorKeys — the spec's stated target serializes
+// even when requires reached the device through a vaguer token.
+func deriveResourceKeys(in TaskInput) []string {
+	var keys []string
+	if in.Project != "" {
+		keys = append(keys, "project:"+in.Project)
+	} else {
+		if in.PreferredNode != "" {
+			keys = append(keys, "node:"+in.PreferredNode)
+		}
+		for _, req := range in.Requires {
+			if strings.HasPrefix(req, "agent:") || strings.HasPrefix(req, "node:") {
+				keys = append(keys, req)
+			}
+		}
+	}
+	return mergeActuatorKeys(keys, in.Requires, in.SpecJSON)
+}
+
+// mergeActuatorKeys adds the physical-device locks a task must hold: every
+// "hardware:*" requires token, plus the action_spec's target actuator. Two
+// driver processes on one GPIO pin is a fault, not parallelism, so the key
+// merges on top of whatever else the task already holds — caller-named keys
+// cannot waive it, only ordering around it changes.
+func mergeActuatorKeys(keys []string, requires []string, specJSON string) []string {
+	var hw []string
+	for _, req := range requires {
+		if strings.HasPrefix(req, "hardware:") {
+			hw = append(hw, req)
+		}
+	}
+	if spec, err := commander.ParseActionSpec(specJSON); err == nil && spec != nil {
+		hw = append(hw, spec.TargetActuator)
+	}
+	if len(hw) == 0 {
+		return keys
+	}
+	have := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		have[k] = true
+	}
+	for _, k := range hw {
+		if k != "" && !have[k] {
+			have[k] = true
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 // preferredNodeOf recovers the user-named node an enqueued task carries. The
@@ -140,22 +182,12 @@ func (c *Core) QueueScheduler() *queue.Scheduler {
 type queueStoreAdapter struct{ c *Core }
 
 func (a queueStoreAdapter) ListReady(ctx context.Context) ([]queue.ReadyTask, error) {
-	tasks, err := a.c.store.ListReady(ctx)
-	if err != nil {
-		return nil, err
+	if a.c.node.draining(ctx) {
+		// Drain is a full pause on new claims: queued rows stay queued (they
+		// release on --off), while tasks already claimed finish their runs.
+		return nil, nil
 	}
-	out := make([]queue.ReadyTask, 0, len(tasks))
-	for _, t := range tasks {
-		out = append(out, queue.ReadyTask{
-			ID:           t.TaskID,
-			Project:      t.Project,
-			Priority:     t.Priority,
-			Seq:          t.Seq,
-			CreatedAt:    t.CreatedAt,
-			ResourceKeys: t.ResourceKeys,
-		})
-	}
-	return out, nil
+	return a.c.store.ListReadySummaries(ctx)
 }
 
 func (a queueStoreAdapter) CountActive(ctx context.Context) (int, error) {
@@ -223,10 +255,13 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 // queued tasks all stayed on the node that accepted them while idle peers
 // watched. Both are the exact cases the hardware filter and the score exist for.
 func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
-	// A task pinned to a directory on this machine is local work by definition:
-	// the delegate payload carries no work dir (each executor derives its own),
-	// so a forwarded copy would run against a different tree.
-	if t.WorkDir != "" {
+	// A task pinned to a directory on this machine used to be local by
+	// definition: the delegate payload carried no work dir, so a forwarded
+	// copy ran blind. A file task's tree now travels as an artifact input
+	// (attachWorktreeFrom below), so only non-file pins stay unconditionally
+	// local — a file task forwards when its tree actually ships, and falls
+	// back to local when the pack yields nothing.
+	if t.WorkDir != "" && t.ContextType != "file" {
 		return false
 	}
 	chain := t.Chain
@@ -241,8 +276,8 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		c.logger.Warn("queue forward: declined-by", "task", t.TaskID, "err", err)
 	}
 	seenChain := append(slices.Clone(chain), excluded...)
-	decision := scheduler.Route(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
-		resourceRequirement(t.ResourceJSON), preferredNodeOf(t))
+	decision := scheduler.RouteP(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
+		resourceRequirement(t.ResourceJSON), preferredNodeOf(t), t.Project)
 	if decision.Action != scheduler.ActionForward {
 		c.logger.Info("queue: no peer for task", "task", t.TaskID,
 			"action", string(decision.Action), "reason", decision.Reason)
@@ -285,6 +320,13 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 	// Same project carriage as the synchronous path: a queued task delegated to a
 	// peer must arrive with its project context or the peer cannot use it.
 	c.attachProject(ctx, &p, t.Project)
+	// The ad-hoc sibling of the same rule: a queued file task ships its work
+	// tree or it does not ship at all — a forwarded blind copy loses to just
+	// running it here.
+	c.attachWorktreeFrom(ctx, &p, t)
+	if t.ContextType == "file" && t.WorkDir != "" && len(p.Inputs) == 0 {
+		return false
+	}
 	// Hop-limited consent (S2-8): a queue forward is one direct dispatch, so
 	// the consent on record covers exactly the receiving hop and must not walk
 	// further through a forwarding sub-scheduler. The stored grant rides along

@@ -319,6 +319,7 @@ func runSessionAsk(args []string) {
 	engine, err := askengine.New(context.Background(), cfg, askengine.Options{
 		CardPath:   *cardPath,
 		MCPCommand: *mcpCmd,
+		ConfigPath: *configPath,
 		// An interactive session over a chat thread: peers dial in the
 		// background rather than gating the first prompt (same as the REPL).
 		AsyncPeers: true,

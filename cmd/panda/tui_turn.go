@@ -471,8 +471,6 @@ func appendReasoning(lines []string, chunk string) []string {
 		lines = append(lines, "")
 	}
 	lines[len(lines)-1] += parts[0]
-	for _, p := range parts[1:] {
-		lines = append(lines, p)
-	}
+	lines = append(lines, parts[1:]...)
 	return lines
 }

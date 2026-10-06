@@ -331,6 +331,11 @@ func (c *Core) taskWorkDir(t Task) string {
 			return wd
 		}
 	}
+	if attachedInputs(t) {
+		if wd, err := c.attachedWorkDir(t.TaskID); err == nil {
+			return wd
+		}
+	}
 	if t.WorkDir != "" {
 		return t.WorkDir
 	}

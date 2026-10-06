@@ -1,6 +1,11 @@
 package entry
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/Xustalis/OpenPanda/internal/ledger"
+)
 
 // validRisk is the set of acceptable risk levels. The model must pick one;
 // anything else is rejected so callers can rely on the field.
@@ -41,6 +46,46 @@ func ValidateTaskSpec(t *TaskSpec) error {
 	}
 	if t.ToolsPolicy != "" && t.ToolsPolicy != "minimal" && t.ToolsPolicy != "extended" {
 		return fmt.Errorf("entry: task.tools_policy %q invalid (must be minimal or extended)", t.ToolsPolicy)
+	}
+	if err := validateActionSpec(t.Spec.ActionSpec); err != nil {
+		return err
+	}
+	return nil
+}
+
+// maxActionParams bounds an action_spec's parameter map. Driver placeholders
+// are few ({param:angle}, {param:seconds}); a map of hundreds is a confused
+// or hostile spec, and every key is substituted at execution anyway.
+const maxActionParams = 32
+
+// validateActionSpec checks the actuator dispatch block a model may attach to
+// a task (§7.2). The executor re-checks everything at substitution, but the
+// boundary validation exists for the same reason the rest of
+// ValidateTaskSpec does: a malformed spec must be refused while the model can
+// still fix it, not after it has been persisted and routed to a device.
+func validateActionSpec(s *ledger.ActionSpec) error {
+	if s == nil {
+		return nil
+	}
+	if s.TargetActuator == "" {
+		return fmt.Errorf("entry: spec.action_spec.target_actuator is required")
+	}
+	if s.Action == "" {
+		return fmt.Errorf("entry: spec.action_spec.action is required")
+	}
+	if len(s.Parameters) > maxActionParams {
+		return fmt.Errorf("entry: spec.action_spec.parameters has %d entries, limit is %d",
+			len(s.Parameters), maxActionParams)
+	}
+	for k, v := range s.Parameters {
+		if k == "" || len(k) > 64 || strings.ContainsAny(k, "{} \t") {
+			return fmt.Errorf("entry: spec.action_spec parameter name %q invalid", k)
+		}
+		switch v.(type) {
+		case nil, string, float64, bool:
+		default:
+			return fmt.Errorf("entry: spec.action_spec parameter %q must be a scalar value", k)
+		}
 	}
 	return nil
 }

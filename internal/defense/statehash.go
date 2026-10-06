@@ -1,12 +1,14 @@
 package defense
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -104,3 +106,98 @@ func HashDir(root string, maxFiles int) (hash string, nfiles int, err error) {
 // than fs.SkipAll: WalkDir swallows SkipAll into a nil return, which would
 // silently hash the truncated file set as if it were the whole tree.
 var errTooManyFiles = errors.New("defense: file count over hash cap")
+
+// errNotGitRepo is returned by GitFingerprint when root is not inside a git
+// work tree — the caller then falls back to skipping the oscillation check,
+// exactly as it does for an oversized non-repo tree.
+var errNotGitRepo = errors.New("defense: not a git work tree")
+
+// gitFingerprintDiffCap bounds each diff stream fed into the fingerprint.
+// Past it the stream is marked truncated and cut: a deterministic prefix
+// still separates A→B→A regressions without hashing an unbounded diff.
+const gitFingerprintDiffCap = 16 << 20
+
+// GitFingerprint fingerprints a git work tree for the §6.2 oscillation check
+// when the directory walk exceeds maxFiles. It reads git's own index instead
+// of every file — HEAD, the full porcelain status listing (-uall names every
+// untracked file), and the staged + unstaged diff streams, so the actual
+// content of tracked edits participates and an agent reverting earlier work
+// still reproduces the earlier fingerprint. Untracked file contents are
+// named but not hashed: a rewrite confined to untracked paths can fingerprint
+// identically, the deliberate cost bound — the alternative today is skipping
+// the check outright on any large repository.
+func GitFingerprint(ctx context.Context, root string) (string, error) {
+	gitExe, err := exec.LookPath("git")
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	write := func(tag string, data []byte) {
+		h.Write([]byte(tag))
+		h.Write([]byte{0})
+		h.Write(data)
+		h.Write([]byte{0})
+	}
+	// rev-parse doubles as the repo test and normalizes a nested workDir to
+	// the work-tree top, so a task running in a subdirectory fingerprints
+	// the same repo state as one at the root.
+	top, err := gitOutput(ctx, gitExe, root, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", errNotGitRepo
+	}
+	write("top", top)
+	// HEAD may not exist (unborn branch): the diffs below still cover index
+	// and worktree against the empty tree.
+	head, err := gitOutput(ctx, gitExe, root, "rev-parse", "--verify", "HEAD")
+	if err != nil {
+		head = nil
+	}
+	write("head", head)
+	status, err := gitOutput(ctx, gitExe, root, "status", "--porcelain=v1", "-uall")
+	if err != nil {
+		return "", err
+	}
+	write("status", status)
+	if err := gitDiffInto(ctx, gitExe, root, h, "cached", "diff", "--cached", "--"); err != nil {
+		return "", err
+	}
+	if err := gitDiffInto(ctx, gitExe, root, h, "worktree", "diff", "--"); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// gitOutput runs git with args in dir and returns stdout.
+func gitOutput(ctx context.Context, gitExe, dir string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, gitExe, args...)
+	cmd.Dir = dir
+	return cmd.Output()
+}
+
+// gitDiffInto streams one git diff into h under tag, capping the bytes read
+// and marking truncation so a huge diff stays a stable-but-bounded input.
+func gitDiffInto(ctx context.Context, gitExe, dir string, h io.Writer, tag string, args ...string) error {
+	cmd := exec.CommandContext(ctx, gitExe, args...)
+	cmd.Dir = dir
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	h.Write([]byte(tag))
+	h.Write([]byte{0})
+	n, copyErr := io.Copy(h, io.LimitReader(out, gitFingerprintDiffCap))
+	if n == gitFingerprintDiffCap {
+		// Mark the cut, then drain the rest so git is never left blocked on
+		// a full pipe when Wait runs.
+		h.Write([]byte("\x00TRUNCATED\x00"))
+		_, _ = io.Copy(io.Discard, out)
+	}
+	waitErr := cmd.Wait()
+	if copyErr != nil {
+		return copyErr
+	}
+	return waitErr
+}

@@ -100,34 +100,34 @@ func TestBuildAgentPrompt_MultiLanguage(t *testing.T) {
 
 	// 1. English
 	promptEn, _ := buildAgentPrompt(c, "Run diagnostics", "", "diag", "", i18n.English)
-	if strings.Contains(promptEn, "输出与执行要求") || strings.Contains(promptEn, "中文报告") {
+	if strings.Contains(promptEn, "执行约定") || strings.Contains(promptEn, "中文") {
 		t.Errorf("English agent prompt contains Chinese instructions:\n%s", promptEn)
 	}
-	if !strings.Contains(promptEn, "Output & Execution Requirements") || !strings.Contains(promptEn, "structured English report") {
+	if !strings.Contains(promptEn, "Execution contract") || !strings.Contains(promptEn, "Final reply in English") {
 		t.Errorf("English agent prompt missing expected English rider:\n%s", promptEn)
 	}
 
 	// 2. Chinese
 	promptZh, _ := buildAgentPrompt(c, "运行诊断", "", "diag", "", i18n.ChineseSimp)
-	if !strings.Contains(promptZh, "输出与执行要求") || !strings.Contains(promptZh, "中文报告") {
+	if !strings.Contains(promptZh, "执行约定") || !strings.Contains(promptZh, "最终回复用简体中文") {
 		t.Errorf("Chinese agent prompt missing expected Chinese rider:\n%s", promptZh)
 	}
 
 	// 3. Scenario B: Chinese User + Global Model (English prompt instructions, Chinese report output)
 	promptB, _ := buildAgentPrompt(c, "排查错误", "", "debug", "", i18n.English, i18n.ChineseSimp)
-	if !strings.Contains(promptB, "Output & Execution Requirements") {
+	if !strings.Contains(promptB, "Execution contract") {
 		t.Errorf("Scenario B prompt instructions should be English:\n%s", promptB)
 	}
-	if !strings.Contains(promptB, "Simplified Chinese report") {
+	if !strings.Contains(promptB, "Final reply in Simplified Chinese") {
 		t.Errorf("Scenario B should instruct model to output Simplified Chinese report:\n%s", promptB)
 	}
 
 	// 4. Scenario C: English User + China Model (Chinese prompt instructions, English report output)
 	promptC, _ := buildAgentPrompt(c, "Debug error", "", "debug", "", i18n.ChineseSimp, i18n.English)
-	if !strings.Contains(promptC, "输出与执行要求") {
+	if !strings.Contains(promptC, "执行约定") {
 		t.Errorf("Scenario C prompt instructions should be Chinese:\n%s", promptC)
 	}
-	if !strings.Contains(promptC, "英文报告") {
+	if !strings.Contains(promptC, "最终回复用英文") {
 		t.Errorf("Scenario C should instruct model to output English report:\n%s", promptC)
 	}
 

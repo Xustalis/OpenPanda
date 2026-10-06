@@ -441,8 +441,15 @@ export interface NodeInfo {
   abilities: string[]
   native_ids?: string[]
   agents?: Record<string, NodeAgentDetail>
-  capacity: { cpu_cores: number; ram_gb: number; max_concurrent_tasks: number; current_tasks: number }
+  capacity: { cpu_cores: number; ram_gb: number; max_concurrent_tasks: number; current_tasks: number; queued_tasks?: number }
   resource_profile?: { cpu: number; ram_gb: number; gpu_vram_gb: number; duration_hint: string }
+  /** Fleet observability: advertised software version (empty until a
+   *  new-protocol peer speaks), and this node's measured edge toward the
+   *  peer — transport kind ("ws"/"udp") and ping RTT in ms. Absent for
+   *  the local row and peers only reachable via gossip. */
+  ver?: string
+  rtt_ms?: number
+  transport?: string
 }
 
 /** GET /api/self — this machine's device profile (+ its ledger card),
@@ -481,8 +488,9 @@ export interface CardNative {
 export interface CardAgent {
   adapter: string
   install_check?: string
-  /** argv template generic.py expands ({prompt} placeholder) — set only for
-   *  agents wired through the generic adapter. */
+  /** argv template generic.py expands — {prompt} placeholder, plus {stdin},
+   *  {cwd}, {resume} and {max_turns}. Set only for agents wired through the
+   *  generic adapter. */
   command?: string
   capabilities?: string[]
   best_at?: string[]
@@ -524,6 +532,7 @@ export interface NodesAddResult {
   secret_generated: boolean
   dialed: boolean
   dial_error?: string
+  cleartext_hint?: boolean
   config_path: string
   listen_addr: string
   invite_steps: string[]
@@ -555,7 +564,10 @@ export interface AppSettings {
   /** Agent tool face: minimal keeps each adapter's whitelist, extended reaches
    *  the agent's own skills, sub-agents and MCP servers. */
   tools_policy: 'minimal' | 'extended'
-  sandbox?: { work_path: string } // GET-only: read-only confinement info
+  /** GET-only: read-only confinement info. mode is off|standard|strict from
+   *  config.yaml; backend is the OS mechanism in effect (seatbelt|bwrap|"");
+   *  active is false when mode is configured but no backend exists. */
+  sandbox?: { work_path: string; mode?: string; backend?: string; active?: boolean }
 }
 
 /** One topics/*.md (or daily/*.md) file in GET /api/memory. */

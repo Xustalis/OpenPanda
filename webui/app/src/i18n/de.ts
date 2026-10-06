@@ -203,7 +203,7 @@ const de: Messages = {
   'sessions.nodeAuto': 'Automatisch (bester Knoten)',
   'sessions.nodePickTip': 'Klassifizierte Aufgaben laufen auf diesem Knoten — Antworten bleiben lokal',
   'sessions.folderPick': 'Lokalen Ordner wählen',
-  'sessions.folderSelected': '📁 Ordner ausgewählt, {n} Dateien:',
+  'sessions.folderSelected': 'Ordner ausgewählt, {n} Dateien:',
   'sessions.folderTruncated': '  … ({n} weitere Dateien)',
   'sessions.folderFollowUp': 'Bearbeite meine Anfrage auf Basis der obigen Dateien:',
   'sessions.projectPrefix': '[Projekt: {name}]',
@@ -518,7 +518,11 @@ const de: Messages = {
   'settings.approvalHelp': 'Ob riskante Aktionen im Panel auf deine Freigabe warten.',
   'settings.sandbox': 'Sandbox',
   'settings.sandboxDesc':
-    'Jeder Agent-Subprozess läuft bereits auf seinen Arbeitspfad beschränkt — reine Nur-Lese-Beschreibung, kein Schalter:',
+    'Subprozesse laufen mit gefilterter Umgebung in ihrem Arbeitspfad, aber OS-Isolation ist aus — sandbox.mode (standard oder strict) in config.yaml aktivieren. Arbeitspfad:',
+  'settings.sandboxDescOn':
+    'OS-Sandbox aktiv — Subprozesse dürfen nur in Arbeitspfad und erlaubte Verzeichnisse schreiben. Nur-Lese-Status:',
+  'settings.sandboxDescNoBackend':
+    'Sandbox-Modus ist konfiguriert, aber NICHT wirksam — diese Plattform hat kein Sandbox-Backend (seatbelt/bwrap), Subprozesse laufen unisoliert. Status:',
 
   // Gedächtniskonsole-Erweiterungen (C2)
   'memory.graph': 'Graph',
@@ -591,6 +595,7 @@ const de: Messages = {
   'nodes.addDevice.secretGen': 'network.shared_secret wurde erzeugt — muss auf die andere Maschine kopiert werden',
   'nodes.addDevice.dialed': '{addr} angerufen — in dieser Sitzung sofort aktiv.',
   'nodes.addDevice.dialFailed': '{addr} ist derzeit nicht erreichbar; die Konfiguration bleibt gespeichert und wird beim nächsten Start erneut versucht.',
+  'nodes.addDevice.cleartextHint': 'Diese Adresse wählt Klartext-ws:// und das Ziel liegt nicht auf einem vertrauenswürdigen Underlay (Loopback oder Tailscale) — der Daemon wird die Wahl verweigern. Setze network.allow_cleartext: true oder nutze wss:// / punch:<id>.',
   'nodes.addDevice.guideTitle': 'Auf der anderen Maschine',
 
   // Fähigkeitskarten-Editor (Phase 6) — Web-Pendant zu `/card`
@@ -684,6 +689,8 @@ const de: Messages = {
   'fleet.node.online': 'online',
   'fleet.node.offline': 'offline',
   'fleet.node.tasks': '{cur}/{max} Aufgaben',
+  'fleet.node.queued': '{n} in Warteschlange',
+  'fleet.node.verSkewHint': 'läuft mit v{ver}, dieses Gerät v{self}',
 
   'ui.update.degraded.title': 'Update-Prüfungen pausiert (Netzwerk begrenzt)',
   'ui.update.degraded.sub': 'GitHub API ist gedrosselt oder gesperrt; Panda prüft erst nach einem Neustart wieder auf Updates.',
@@ -717,6 +724,16 @@ const de: Messages = {
   'events.tag.state': 'Status',
   'events.tag.hop': 'Hop',
   'events.tag.path': 'Pfad',
+  'events.agent_event': 'Agenten-Aktivität',
+  'events.agent_text': 'Agenten-Nachricht',
+  'events.agent_thinking': 'Denken',
+  'events.agent_tool_use': 'Werkzeugaufruf',
+  'events.agent_tool_result': 'Werkzeugergebnis',
+  'events.transcript_truncated': 'Protokoll gekürzt',
+  'events.transcriptTruncatedNote': 'Ältere Aktivitäten wurden gekürzt; der ausführende Knoten behält das vollständige Protokoll.',
+  'events.subagent': 'Sub-Agent',
+  'events.subagentHint': 'Lief in einem Harness-Sub-Agenten (unter dem Eltern-Toolaufruf verschachtelt)',
+
   'sessions.copyThought': 'Gedankenkette kopieren',
 
   'nav.plans': 'Pläne',

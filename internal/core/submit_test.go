@@ -3,8 +3,11 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -176,5 +179,87 @@ func TestSubmitFallsBackToDTNWhenTargetNonLive(t *testing.T) {
 	}
 	if result.State != StateQueued {
 		t.Fatalf("result state = %s, want %s", result.State, StateQueued)
+	}
+}
+
+// TestWaitRemoteResultHonoursRenewedLease is the §7.2 regression: a healthy
+// executor keeps refreshing lease_expires_at on the origin's row, so the wait
+// must outlive the deadline stamped when the wait began — the old fixed
+// time.After(c.lease()) fired at wait-start+lease regardless and mis-killed a
+// long task that was provably alive.
+func TestWaitRemoteResultHonoursRenewedLease(t *testing.T) {
+	ctx := context.Background()
+	c := newCore(t, "origin", "")
+	c.mu.Lock()
+	c.leaseTimeout = 900 * time.Millisecond
+	c.mu.Unlock()
+
+	tk := createTask(t, c.store, "", "long work", c.nodeID)
+	if err := c.store.SetLease(ctx, tk.TaskID, 1000); err != nil {
+		t.Fatalf("stamp lease: %v", err)
+	}
+
+	// Executor-side liveness: renew the origin row's deadline every 200ms for
+	// ~1.4s — well past both the stamped deadline and the fixed-timer bound.
+	stop := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(200 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				_ = c.store.SetLease(context.Background(), tk.TaskID, 1000)
+			}
+		}
+	}()
+	defer close(stop)
+
+	ch := make(chan bus.TaskResultPayload, 1)
+	go func() {
+		time.Sleep(1400 * time.Millisecond)
+		ch <- bus.TaskResultPayload{TaskID: tk.TaskID, State: StateDone, OK: true}
+	}()
+
+	final, res, err := c.waitRemoteResult(ctx, tk, ch, "delegation")
+	if err != nil {
+		t.Fatalf("renewed task must not time out: %v", err)
+	}
+	if !res.OK || final.State != StateDone && res.State != StateDone {
+		t.Fatalf("result = %+v state=%s, want done", res, final.State)
+	}
+}
+
+// TestWaitRemoteResultExpiresLapsedLease verifies the other half: once the
+// stamped deadline actually passes (no beats), the wait fails the row and
+// returns a timeout — a dead executor cannot wedge the caller either.
+func TestWaitRemoteResultExpiresLapsedLease(t *testing.T) {
+	ctx := context.Background()
+	c := newCore(t, "origin", "")
+	c.mu.Lock()
+	c.leaseTimeout = 900 * time.Millisecond
+	c.mu.Unlock()
+
+	tk := createTask(t, c.store, "", "dead executor", c.nodeID)
+	if err := c.store.SetLease(ctx, tk.TaskID, 1000); err != nil {
+		t.Fatalf("stamp lease: %v", err)
+	}
+
+	ch := make(chan bus.TaskResultPayload)
+	start := time.Now()
+	_, _, err := c.waitRemoteResult(ctx, tk, ch, "delegation")
+	if err == nil || !strings.Contains(err.Error(), "delegation timeout") {
+		t.Fatalf("err = %v, want delegation timeout", err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("wait took %s, should have observed the lapsed lease quickly", d)
+	}
+	got, gerr := c.store.Get(ctx, tk.TaskID)
+	if gerr != nil {
+		t.Fatalf("get: %v", gerr)
+	}
+	if got.State != StateFailed {
+		t.Fatalf("state = %s, want failed after lease lapse", got.State)
 	}
 }

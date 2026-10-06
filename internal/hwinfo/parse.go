@@ -12,9 +12,12 @@ import (
 // into stdout — and answers with a zero value rather than a guess.
 
 var (
-	reMemTotalKB = regexp.MustCompile(`(\d+)\s*kB`)
-	reDigits     = regexp.MustCompile(`\d{4,}`) // byte counts, never a 3-digit one
-	reGBValue    = regexp.MustCompile(`(\d+)\s*GB`)
+	reMemTotalKB     = regexp.MustCompile(`(\d+)\s*kB`)
+	reDigits         = regexp.MustCompile(`\d{4,}`) // byte counts, never a 3-digit one
+	reGBValue        = regexp.MustCompile(`(\d+)\s*GB`)
+	reMemAvailableKB = regexp.MustCompile(`MemAvailable:\s*(\d+)\s*kB`)
+	reVMStatPages    = regexp.MustCompile(`(?i)pages (?:free|inactive|purgeable):\s*(\d+)\.`)
+	reVMStatPageSize = regexp.MustCompile(`page size of (\d+) bytes`)
 )
 
 // parseCPUInfoModel pulls the model out of a /proc/cpuinfo "model name" line.
@@ -80,6 +83,59 @@ func roundGB(bytes int64) int {
 	}
 	const gib = 1 << 30
 	return int((bytes + gib/2) / gib)
+}
+
+// parseMemAvailableGB reads /proc/meminfo's MemAvailable line — the kernel's
+// own estimate of memory usable without swapping, which is the honest
+// headroom figure a scheduler wants (MemFree alone undercounts reclaimable
+// cache).
+func parseMemAvailableGB(out string) (float64, bool) {
+	m := reMemAvailableKB.FindStringSubmatch(out)
+	if m == nil {
+		return 0, false
+	}
+	kb, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return float64(kb) / (1 << 20), true
+}
+
+// parseVMStatFreeGB reads darwin `vm_stat` output: pages free + inactive +
+// purgeable, times the page size the header line declares. Purgeable and
+// inactive memory are the reclaimable pool an incoming task can actually
+// consume; wired/active are not.
+func parseVMStatFreeGB(out string) (float64, bool) {
+	pageSize := int64(16384) // arm64 default; the header overrides on x86
+	if m := reVMStatPageSize.FindStringSubmatch(out); m != nil {
+		if n, err := strconv.ParseInt(m[1], 10, 64); err == nil && n > 0 {
+			pageSize = n
+		}
+	}
+	var pages int64
+	for _, m := range reVMStatPages.FindAllStringSubmatch(out, -1) {
+		if n, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+			pages += n
+		}
+	}
+	if pages <= 0 {
+		return 0, false
+	}
+	return float64(pages) * float64(pageSize) / (1 << 30), true
+}
+
+// parseByteCountKB extracts the first integer from wmic/PowerShell noise,
+// already in KiB — used for Win32_OperatingSystem.FreePhysicalMemory.
+func parseByteCountKB(out string) int64 {
+	m := reDigits.FindString(out)
+	if m == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(m, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // parseNvidiaVRAMGB reads `nvidia-smi --query-gpu=memory.total` output (one

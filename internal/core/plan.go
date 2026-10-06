@@ -34,6 +34,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
@@ -262,6 +263,9 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		if len(keys) == 0 {
 			keys = []string{"plan:" + planID + ":" + st.ID}
 		}
+		// Physical actuators are exclusive regardless of the plan key: two
+		// stages from different plans driving one servo must serialize.
+		keys = mergeActuatorKeys(keys, st.Requires, "")
 		if err := c.store.SetQueueMeta(ctx, t.TaskID, q.Priority, q.SessionID, "", keys); err != nil {
 			abandon()
 			return "", fmt.Errorf("queue meta for stage %s: %w", st.ID, err)
@@ -608,9 +612,36 @@ func (c *Core) stageWorkDir(planID, stageID string) (string, error) {
 	if root == "" {
 		root = os.TempDir()
 	}
+	// A relative root (NewCore defaults to ".") must be resolved before the
+	// prefix proof: Join keeps it relative and the check then fails on a path
+	// that never left the root.
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
 	dir := filepath.Join(root, "plans", planID, stageID)
 	if !strings.HasPrefix(dir, filepath.Clean(root)+string(os.PathSeparator)) {
 		return "", fmt.Errorf("stage work dir escapes root: %q", dir)
+	}
+	return dir, nil
+}
+
+// attachedWorkDir is where a standalone task's attached work tree lands and
+// executes — the ad-hoc sibling of stageWorkDir. The id is wire-supplied, so
+// the derived path gets the same traversal check (P0-1).
+func (c *Core) attachedWorkDir(taskID string) (string, error) {
+	if !plan.ValidID(taskID) {
+		return "", fmt.Errorf("unsafe task id %q", taskID)
+	}
+	root := c.workDir
+	if root == "" {
+		root = os.TempDir()
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	dir := filepath.Join(root, "tasks", taskID)
+	if !strings.HasPrefix(dir, filepath.Clean(root)+string(os.PathSeparator)) {
+		return "", fmt.Errorf("task work dir escapes root: %q", dir)
 	}
 	return dir, nil
 }
@@ -832,8 +863,8 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 // whatever spawned it. A local/declined child lands on the queue scheduler,
 // which runs it here (or re-routes via forwardScheduled on the next pass).
 func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) error {
-	decision := scheduler.Route(c.nodeID, child.Chain, c.onlineEmployees(ctx), c.localMatch(),
-		in.Requires, resourceRequirement(in.ResourceJSON), in.PreferredNode)
+	decision := scheduler.RouteP(c.nodeID, child.Chain, c.onlineEmployees(ctx), c.localMatch(),
+		in.Requires, resourceRequirement(in.ResourceJSON), in.PreferredNode, in.Project)
 	if decision.Action == scheduler.ActionForward {
 		payload := bus.TaskDelegatePayload{
 			TaskID:           child.TaskID,
@@ -886,7 +917,13 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 // line prefix rather than a structured channel because the only medium every
 // adapter shares is the agent's own stdout: claude_code, codex and any future
 // harness can all emit a plain line without adapter support.
-const delegateMarker = "PANDA_DELEGATE "
+const delegateMarker = "PANDA_DELEGATE"
+
+// maxDelegatePayloadLines bounds how many lines after a marker the parser
+// accumulates while looking for a complete JSON payload: an agent that
+// pretty-prints its request gets a bounded continuation window, not the
+// rest of its transcript.
+const maxDelegatePayloadLines = 60
 
 // delegateRequest is the parsed PANDA_DELEGATE payload.
 type delegateRequest struct {
@@ -896,26 +933,177 @@ type delegateRequest struct {
 	Node     string   `json:"node,omitempty"`
 }
 
-// parseDelegateRequest extracts the first well-formed PANDA_DELEGATE line
-// from agent output and returns the output with marker lines removed, so the
-// protocol envelope never reaches the user-facing result. A malformed marker
-// line is left in place — silently eating an agent's words is worse than
+// parseDelegateRequests extracts every well-formed PANDA_DELEGATE request
+// from agent output and returns the output with the consumed blocks removed.
+// The payload may sit on the marker line, on the following lines (pretty-
+// printed JSON), or inside a markdown fence — the ways an LLM formats a
+// block when it "helpfully" typesets the protocol line. A single turn can
+// also legitimately request several children ("train on the GPU box and
+// probe the sensor on the Pi"), so all valid markers are collected, not
+// just the first.
+//
+// A marker whose payload never parses is left in place, and so is any line
+// the parse did not consume: silently eating an agent's words is worse than
 // showing a stray protocol line.
-func parseDelegateRequest(stdout string) (delegateRequest, string, bool) {
-	var dr delegateRequest
-	found := false
+func parseDelegateRequests(stdout string) ([]delegateRequest, string) {
+	var drs []delegateRequest
+	var kept []string
+	lines := strings.Split(stdout, "\n")
+	for i := 0; i < len(lines); i++ {
+		trim := strings.TrimSpace(lines[i])
+		rest, isMarker := strings.CutPrefix(trim, delegateMarker)
+		// The marker ends at a word boundary: "PANDA_DELEGATED:" is the
+		// agent's own prose, not the protocol. A glued "PANDA_DELEGATE{"
+		// still counts — the payload is already there.
+		if !isMarker || (rest != "" && rest[0] != ' ' && rest[0] != '\t' && rest[0] != '{') {
+			kept = append(kept, lines[i])
+			continue
+		}
+		candidate := strings.TrimSpace(rest)
+		var dr delegateRequest
+		parsed := false
+		consumed := 0
+		for {
+			var try delegateRequest
+			if err := json.Unmarshal([]byte(candidate), &try); err == nil && try.Intent != "" {
+				dr, parsed = try, true
+				break
+			}
+			if consumed >= maxDelegatePayloadLines || i+consumed+1 >= len(lines) {
+				break
+			}
+			consumed++
+			candidate += "\n" + lines[i+consumed]
+		}
+		if !parsed {
+			kept = append(kept, lines[i])
+			continue
+		}
+		drs = append(drs, dr)
+		i += consumed
+		// A fence pair wrapping only the consumed block goes with it — the
+		// marker was the fence's entire content, so the pair would be
+		// protocol litter in the user's output.
+		if i+1 < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i+1]), "```") &&
+			len(kept) > 0 && strings.HasPrefix(strings.TrimSpace(kept[len(kept)-1]), "```") {
+			kept = kept[:len(kept)-1]
+			i++
+		}
+	}
+	return drs, strings.Join(kept, "\n")
+}
+
+// agentResultSchema is the JSON Schema handed to schema-capable adapters
+// (claude --json-schema). The model's final reply validates against it, so
+// the protocol fields arrive parsed — status/question/delegate_requests —
+// instead of as text markers scraped out of prose. The descriptions are
+// load-bearing: they are the only documentation the model sees for what
+// each field means.
+const agentResultSchema = `{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "answer": {
+      "type": "string",
+      "description": "The final user-facing answer: a direct reply, not a transcript of the work."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["done", "question", "delegate", "failed"],
+      "description": "done = finished; question = blocked on input only the user has; delegate = requested sub-tasks; failed = could not complete."
+    },
+    "question": {
+      "type": "string",
+      "description": "When status=question: the single most important question for the user."
+    },
+    "delegate_requests": {
+      "type": "array",
+      "maxItems": 4,
+      "description": "When status=delegate: sub-tasks that need a resource this node lacks (GPU, a tool, a hardware peripheral). The runtime spawns each as a causal child task and folds results back.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "intent": {"type": "string", "description": "What the sub-task must do"},
+          "requires": {"type": "array", "items": {"type": "string"}, "description": "Capability ids the sub-task needs"},
+          "title": {"type": "string", "description": "Short title"},
+          "node": {"type": "string", "description": "Optional specific node name"}
+        },
+        "required": ["intent"]
+      }
+    }
+  },
+  "required": ["answer", "status"]
+}`
+
+// structuredAgentResult is the parsed form of the schema-validated output a
+// capable adapter returns under Result.Structured.
+type structuredAgentResult struct {
+	Answer    string            `json:"answer"`
+	Status    string            `json:"status"`
+	Question  string            `json:"question"`
+	Delegates []delegateRequest `json:"delegate_requests"`
+}
+
+// parseStructuredResult decodes the adapter's structured output. nil when
+// absent or malformed — the caller then runs the marker parsers as before.
+func parseStructuredResult(raw json.RawMessage) *structuredAgentResult {
+	if len(raw) == 0 {
+		return nil
+	}
+	var sr structuredAgentResult
+	if err := json.Unmarshal(raw, &sr); err != nil {
+		return nil
+	}
+	return &sr
+}
+
+const questionMarker = "PANDA_QUESTION"
+
+// parseQuestionRequest extracts the last PANDA_QUESTION line from agent
+// output — the clarification the agent cannot resolve without the user —
+// and returns the output with marker lines removed. Like the delegate
+// marker, an empty payload keeps the line in place rather than eating the
+// agent's words. The marker must end at a word boundary: "PANDA_QUESTIONABLE:"
+// is the agent's own prose, not the protocol.
+func parseQuestionRequest(stdout string) (question, cleaned string, ok bool) {
 	var kept []string
 	for _, line := range strings.Split(stdout, "\n") {
 		trim := strings.TrimSpace(line)
-		if !found && strings.HasPrefix(trim, delegateMarker) {
-			if err := json.Unmarshal([]byte(strings.TrimPrefix(trim, delegateMarker)), &dr); err == nil && dr.Intent != "" {
-				found = true
+		if rest, ok := strings.CutPrefix(trim, questionMarker); ok &&
+			(rest == "" || rest[0] == ':' || rest[0] == ' ' || rest[0] == '\t') {
+			rest = strings.TrimSpace(strings.TrimPrefix(rest, ":"))
+			if q := strings.TrimSpace(rest); q != "" {
+				question = q
 				continue
 			}
 		}
 		kept = append(kept, line)
 	}
-	return dr, strings.Join(kept, "\n"), found
+	return question, strings.Join(kept, "\n"), question != ""
+}
+
+// delegateChildren fans the agent's parsed requests out to causal children
+// in parallel — a turn asking to train on the GPU box AND probe the sensor
+// on the Pi should not serialize two cross-node round trips — then returns
+// each child's fold note in request order so the next prompt reads
+// deterministically.
+func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegateRequest) []string {
+	notes := make([]string, len(drs))
+	var wg sync.WaitGroup
+	for i, dr := range drs {
+		wg.Add(1)
+		go func(i int, dr delegateRequest) {
+			defer wg.Done()
+			note, derr := c.delegateChild(ctx, parent, dr)
+			if derr != nil {
+				note = "delegation failed: " + derr.Error()
+			}
+			notes[i] = note
+		}(i, dr)
+	}
+	wg.Wait()
+	return notes
 }
 
 // delegateChild is the run()-time half of the promotion protocol (§4.2): it

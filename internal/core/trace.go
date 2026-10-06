@@ -30,6 +30,16 @@ const (
 	EvAgentUsage       = "agent_usage"        // adapter's structured token breakdown → agent/input/output/cache_*
 	EvContextOverflow  = "context_overflow"   // agent failed on its context window → parked in review, retry cannot help
 	EvSubagentEvent    = "subagent_event"     // agent spawned a sub-agent (Claude Task tool) → note
+	// EvAgentEvent records one structured activity block the adapter
+	// streamed back ({"type":"event"} NDJSON): assistant text, thinking,
+	// tool_use/tool_result pairs, and sub-agent blocks carrying the parent
+	// tool_use id — the transcript the display layer nests into the
+	// delegation tree. Payload keys mirror commander.AgentEvent:
+	// ev/id/parent/name/tool_use_id/text/thinking/content/input/is_error.
+	EvAgentEvent = "agent_event"
+	// EvClarification records an agent parking the task on a PANDA_QUESTION
+	// marker (§4.3): the question and the round it surfaced in.
+	EvClarification = "clarification"
 )
 
 // EvTrace records one trace event. Errors are downgraded to a warning log: a

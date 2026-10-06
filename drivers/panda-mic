@@ -1,0 +1,71 @@
+#!/bin/sh
+# panda-mic — OpenPanda reference actuator driver for microphone capture.
+#
+# Usage:
+#   panda-mic [--seconds N] [--out FILE] [--device NAME]
+#
+# Records N seconds of audio from the ALSA device (arecord) into a WAV file
+# and prints the file path. Duration is capped so a malformed spec cannot
+# start an unbounded capture on a remote device.
+#
+# Exit codes: 0 ok · 2 bad arguments · 3 arecord unavailable · 1 capture error.
+
+set -eu
+
+MAX_SECONDS=300
+seconds=5
+out=""
+device=""
+
+usage() {
+    cat >&2 <<'EOF'
+panda-mic [--seconds N] [--out FILE] [--device NAME]
+  --seconds N   record duration (1-300, default 5)
+  --out FILE    WAV output path (default ./capture-<ts>.wav)
+  --device NAME ALSA device (default: system default)
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --seconds) seconds="$2"; shift 2 ;;
+        --out)     out="$2"; shift 2 ;;
+        --device)  device="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage; exit 2 ;;
+    esac
+done
+
+case "$seconds" in
+    ''|*[!0-9]*) echo "panda-mic: --seconds must be a positive integer" >&2; exit 2 ;;
+esac
+if [ "$seconds" -lt 1 ] || [ "$seconds" -gt "$MAX_SECONDS" ]; then
+    echo "panda-mic: --seconds $seconds out of range 1-$MAX_SECONDS" >&2
+    exit 2
+fi
+
+if ! command -v arecord >/dev/null 2>&1; then
+    echo "panda-mic: arecord not installed — apt install alsa-utils" >&2
+    exit 3
+fi
+
+if [ -z "$out" ]; then
+    out="capture-$(date +%Y%m%d-%H%M%S).wav"
+fi
+
+# -f cd: 16-bit 44.1kHz stereo is what every sensor node can produce. The
+# device name is passed as one quoted argv element — never word-split — so an
+# ALSA name containing spaces stays a single -D argument.
+if [ -n "$device" ]; then
+    ok=0
+    arecord -q -f cd -t wav -d "$seconds" -D "$device" "$out" || ok=$?
+else
+    ok=0
+    arecord -q -f cd -t wav -d "$seconds" "$out" || ok=$?
+fi
+if [ "$ok" -ne 0 ]; then
+    echo "panda-mic: recording failed (device busy or no such ALSA device)" >&2
+    exit 1
+fi
+
+printf 'recorded %ss -> %s\n' "$seconds" "$out"

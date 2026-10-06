@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/ctxstore"
@@ -34,6 +35,11 @@ import (
 // dense enough to feel live in `panda task` / the panel timeline, sparse
 // enough that a chatty adapter cannot flood the event chain.
 const progressInterval = 2 * time.Second
+
+// maxAgentTranscriptEvents bounds how many structured agent_event rows one
+// task records: a transcript beyond that is pathological, not informative —
+// past the cap one transcript_truncated marker notes the cut.
+const maxAgentTranscriptEvents = 2000
 
 // handleDelegate processes an incoming task_delegate. It decides where the
 // task runs: locally (Phase 0 behavior), forwarded to a capable peer (P2P
@@ -130,7 +136,10 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		return
 	}
 
-	t, err := c.store.CreateWithID(ctx, p.TaskID, p.ParentID, p.Project, p.TitleOrDefault(), c.nodeID, chain)
+	// remote=true: the intent text came off the wire. Persisted because the
+	// chain is peer-supplied — a delegate may write chain=[self, sender] and
+	// claim we authored it, so executor policy cannot re-derive provenance.
+	t, err := c.store.CreateWithID(ctx, p.TaskID, p.ParentID, p.Project, p.TitleOrDefault(), c.nodeID, chain, true)
 	if err != nil {
 		c.logger.Error("create task from delegate", "err", err)
 		return
@@ -265,8 +274,8 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	}
 
 	required := delegateRequired(p)
-	decision := scheduler.Route(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), required,
-		resourceRequirement(p.ResourceJSON), p.PreferredNode)
+	decision := scheduler.RouteP(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), required,
+		resourceRequirement(p.ResourceJSON), p.PreferredNode, p.Project)
 
 	switch decision.Action {
 	case scheduler.ActionLocal:
@@ -325,6 +334,14 @@ func (c *Core) terminalizeDeclined(ctx context.Context, taskID, reason string) {
 // whose execution slots are full declines instead of silently queueing, so the
 // delegator learns immediately and can re-route to a peer with free capacity.
 func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID string, p bus.TaskDelegatePayload, required []string, chain []string) {
+	if c.node != nil && c.node.draining(ctx) {
+		// Maintenance drain (Track 2): decline new work so the delegator
+		// re-routes, while tasks already in flight finish undisturbed.
+		c.logger.Info("declining delegated task: node draining", "task", taskID)
+		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: "node draining"})
+		c.terminalizeDeclined(ctx, taskID, "node draining")
+		return
+	}
 	release, ok := c.reserveCapacity(ctx)
 	if !ok {
 		c.logger.Info("declining delegated task: capacity full", "task", taskID)
@@ -835,6 +852,16 @@ func (c *Core) storeWriteCtx(ctx context.Context) (context.Context, context.Canc
 	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 }
 
+// lockActuator takes the per-actuator execution mutex for id and returns its
+// release. See Core.actuatorLocks for why a lock — not only a queue resource
+// key — is the right primitive for physical-device exclusivity.
+func (c *Core) lockActuator(id string) func() {
+	v, _ := c.actuatorLocks.LoadOrStore(id, &sync.Mutex{})
+	m := v.(*sync.Mutex)
+	m.Lock()
+	return m.Unlock
+}
+
 // run accepts (or resumes) a dispatched task into running, executes it, and
 // records the outcome. The task may already be running (a context-fetch resume
 // moved it there), dispatched (the normal path), or waiting_context (resumed
@@ -953,14 +980,39 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// {param:<name>} from the task's action_spec before anything runs. A
 	// substitution failure means the spec and the card disagree, which no
 	// retry fixes: fail at the gate, not inside the driver.
-	if plan.ActuatorID != "" {
-		spec, serr := commander.ParseActionSpec(task.SpecJSON)
-		if serr != nil {
+	//
+	// The mirror check comes first: a spec that names a target but reached a
+	// NON-actuator plan (its id never made requires, or requires matched a
+	// plain ability first) would otherwise be dropped silently while the raw
+	// intent runs as a shell command — the task asked for hardware and got a
+	// prompt-shaped command. Fail the dispatch instead.
+	spec, serr := commander.ParseActionSpec(task.SpecJSON)
+	if serr != nil {
+		// Malformed spec_json only hard-fails an actuator plan — the field is
+		// what that plan substitutes from. A non-actuator plan never reads it,
+		// so an old or foreign row carrying odd spec text keeps the
+		// pre-gate behavior rather than inheriting a new fatal parse.
+		if plan.ActuatorID != "" {
 			return bus.TaskResultPayload{}, fmt.Errorf("route actuator: %w", serr)
 		}
+		spec = nil
+	}
+	if spec != nil && spec.TargetActuator != "" && plan.ActuatorID == "" {
+		return bus.TaskResultPayload{}, fmt.Errorf("route actuator: action_spec targets %q but the resolved plan (%s %q) is not an actuator — requires %v matched no hardware:* capability",
+			spec.TargetActuator, plan.Kind, plan.Ability, task.Requires)
+	}
+	if plan.ActuatorID != "" {
 		if err := commander.SubstituteActionSpec(&plan, spec, intent); err != nil {
 			return bus.TaskResultPayload{}, fmt.Errorf("route actuator: %w", err)
 		}
+		// The resolved actuator is a physical device: serialize its driver
+		// across every execution path this run() serves — inline submits and
+		// delegated accepts never pass through the queue's resource-key
+		// registry, and a queue task's keys only decide when it starts, not
+		// what its driver may overlap with. Blocking here, before Accept,
+		// keeps the row in dispatched while a sibling finishes on the same
+		// device rather than running two drivers on one pin concurrently.
+		defer c.lockActuator(plan.ActuatorID)()
 	}
 	taskChain = task.Chain
 	switch task.State {
@@ -996,9 +1048,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 		// Resume succeeded: the row is running and countable, so the
 		// reservation is freed now — holding it through execution would
-		// double-count the slot.
+		// double-count the slot. The deferred releaseSlot() above still fires
+		// at return; reserveCapacity's once makes that second call a no-op.
 		releaseSlot()
-		releaseSlot = func() {}
 	case StateRunning:
 		// Already running: another run() invocation owns this task. Executing
 		// here would spawn a duplicate executor racing the first one's
@@ -1036,7 +1088,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// so the decision does not vary between an initial run and a re-delegation.
 	var injection commander.InjectionDecision
 	if plan.Kind == "agent" {
-		injection = router.InjectionDecision(plan.Adapter)
+		injection = router.InjectionDecision(plan.Agent, plan.Adapter)
 	}
 
 	// workDir is normally the node-wide execution directory; a queued task may
@@ -1084,6 +1136,21 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 		if err := c.fetchStageInputs(execCtx, task, workDir); err != nil {
 			return bus.TaskResultPayload{}, fmt.Errorf("project inputs: %w", err)
+		}
+	} else if attachedInputs(task) {
+		// A file task whose work tree shipped as an artifact input: it unpacks
+		// into a private per-task dir — the shared node work dir would race
+		// with every other anonymous task — and runs there with the real code.
+		wd, err := c.attachedWorkDir(task.TaskID)
+		if err != nil {
+			return bus.TaskResultPayload{}, err
+		}
+		workDir = wd
+		if err := os.MkdirAll(workDir, 0o755); err != nil {
+			return bus.TaskResultPayload{}, fmt.Errorf("create task work dir: %w", err)
+		}
+		if err := c.fetchStageInputs(execCtx, task, workDir); err != nil {
+			return bus.TaskResultPayload{}, fmt.Errorf("worktree inputs: %w", err)
 		}
 	}
 
@@ -1141,11 +1208,18 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 		defer c.negoReleaseTask(task.TaskID)
 	}
+	// The before-snapshot rides every agent plan, not only scoped ones: the
+	// scope check consumes it for drift detection, and the result contract
+	// (files_changed) diffs it against the after snapshot — a delegator that
+	// never declared a scope still wants to see what the task touched.
 	var before defense.Snapshot
-	if plan.Kind == "agent" && !scope.Empty() {
+	beforeOK := false
+	if plan.Kind == "agent" {
 		var err error
 		if before, err = defense.SnapshotDir(workDir); err != nil {
 			c.logger.Warn("snapshot workdir before agent", "task", taskID, "err", err)
+		} else {
+			beforeOK = true
 		}
 	}
 
@@ -1183,6 +1257,69 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				c.logger.Warn("record agent progress", "task", taskID, "err", err)
 			}
 		})
+
+		// Structured transcript (event protocol v2): every typed block the
+		// adapter streams — assistant text, thinking, tool_use/tool_result,
+		// sub-agent blocks keyed by the parent tool_use id — lands as an
+		// agent_event row so the display layer renders the delegation tree,
+		// not just a progress line. The count is bounded: a pathological
+		// adapter cannot grow the task's event table without limit, and past
+		// the cap one truncation marker records that the stream was cut.
+		var evCount atomic.Int64
+		execCtx = commander.WithAgentEvents(execCtx, func(ev commander.AgentEvent) {
+			if n := evCount.Add(1); n > maxAgentTranscriptEvents {
+				if n == maxAgentTranscriptEvents+1 {
+					c.EvTrace(context.WithoutCancel(ctx), taskID, EvAgentEvent, map[string]any{
+						"ev": "transcript_truncated", "count": n - 1,
+					})
+				}
+				return
+			}
+			data := map[string]any{"ev": ev.Ev}
+			if ev.ID != "" {
+				data["id"] = ev.ID
+			}
+			if ev.Parent != "" {
+				data["parent"] = ev.Parent
+			}
+			if ev.Name != "" {
+				data["name"] = ev.Name
+			}
+			if ev.ToolUseID != "" {
+				data["tool_use_id"] = ev.ToolUseID
+			}
+			if ev.Text != "" {
+				data["text"] = ev.Text
+			}
+			if ev.Thinking != "" {
+				data["thinking"] = ev.Thinking
+			}
+			if ev.Content != "" {
+				data["content"] = ev.Content
+			}
+			if len(ev.Input) > 0 {
+				data["input"] = ev.Input // RawMessage embeds as JSON, not a string
+			}
+			if ev.IsError {
+				data["is_error"] = true
+			}
+			if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID,
+				EvAgentEvent, data); err != nil {
+				c.logger.Warn("record agent event", "task", taskID, "err", err)
+			}
+		})
+
+		// Session pool (Phase 6): under a supervisor, session-capable
+		// adapters keep their CLI alive across rounds — a continue verdict
+		// costs one stdin line instead of a spawn + transcript reload. The
+		// pool dies with the task; adapters that never take a session simply
+		// never populate it.
+		if c.supervisor != nil {
+			var pool *commander.AgentSessions
+			execCtx, pool = commander.WithSessionPool(execCtx)
+			defer pool.CloseAll()
+			execCtx = commander.WithSessionMode(execCtx)
+		}
 	}
 
 	// Per-task agent timeout by plan kind: a training stage gets a larger
@@ -1201,6 +1338,11 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if tp := taskToolsPolicy(task.SpecJSON); tp != "" {
 			execCtx = commander.WithToolsPolicy(execCtx, tp)
 		}
+		// Per-task turn cap: a task that needs a long build-test loop declares
+		// it in spec.max_turns rather than inheriting the adapter default.
+		if mt := taskMaxTurns(task.SpecJSON); mt > 0 {
+			execCtx = commander.WithMaxTurns(execCtx, mt)
+		}
 	}
 
 	// Supervision loop. An agent task under a supervisor executes once and is
@@ -1214,7 +1356,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		maxRounds = c.superviseRounds
 	}
 
-	currentIntent := intent
+	currentIntent := intent + taskSpecEnvelope(task.SpecJSON)
 	if shadowConflicts != nil {
 		// The winner's bytes won on these paths: tell the resumed agent
 		// exactly which of its preempted edits died so it re-applies them
@@ -1244,6 +1386,11 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		})
 	}
 	var lastAgent, lastOutput, lastStderr string
+	// lastChanged carries the last completed round's workdir footprint out of
+	// the loop: the judge sees it as evidence (an agent claiming done while
+	// touching nothing is the classic failure), and the result contract below
+	// reports it as files_changed.
+	var lastChanged []string
 	verdict := entry.SuperviseVerdict{Status: entry.VerdictDone}
 	// delegations bounds how many PANDA_DELEGATE promotions one task may make
 	// (§4.2). Each re-runs the round with the child's result folded into the
@@ -1281,7 +1428,16 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// more tokens are spent — agent B silently undoing agent A's fix can
 		// never converge, so it fails fast with a trace event instead.
 		if oscKey != "" {
-			if h, n, herr := defense.HashDir(workDir, stateHashMaxFiles); herr == nil && n <= stateHashMaxFiles && n > 0 {
+			h, n, herr := defense.HashDir(workDir, stateHashMaxFiles)
+			if herr == nil && n > stateHashMaxFiles {
+				// Over the walk cap: a giant work tree still gets the check
+				// via the repo fingerprint — git reads its index, not every
+				// file. A non-repo tree keeps the old behaviour (skip).
+				if gh, gerr := defense.GitFingerprint(execCtx, workDir); gerr == nil {
+					h, n = gh, 1
+				}
+			}
+			if herr == nil && n <= stateHashMaxFiles && n > 0 {
 				if c.stateOscillates(oscKey, h) {
 					c.EvTrace(execCtx, taskID, "state_oscillation", map[string]any{
 						"key":   oscKey,
@@ -1352,7 +1508,35 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if sessionID != "" {
 			runCtx = commander.WithResume(execCtx, sessionID)
 		}
+		// Structured result contract: a schema-capable adapter (registry
+		// SupportsStructuredOutput) gets the protocol schema, so the result
+		// arrives parsed — status/question/delegate_requests — instead of
+		// relying on text markers alone. Marker parsing below stays as the
+		// fallback for every adapter without the flag.
+		if plan.Kind == "agent" {
+			if k, ok := agents.Lookup(plan.Agent, plan.Adapter); ok && k.Capabilities.SupportsStructuredOutput {
+				runCtx = commander.WithResultSchema(runCtx, agentResultSchema)
+			}
+		}
+		// A task stamped remote at intake carries off-node intent: commander
+		// holds its agent run to the restricted tool face unless the origin's
+		// consent grant authorized it. The persisted flag is authoritative —
+		// the chain fallback only catches rows written before the flag
+		// existed; a peer can claim chain[0]=us but cannot unset remote.
+		if task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID) {
+			runCtx = commander.WithRemoteTask(runCtx)
+		}
 		res = router.Execute(runCtx, plan, prompt, workDir, task.Authorized)
+		structured := parseStructuredResult(res.Structured)
+		// The schema's status field is the model's self-report. question and
+		// delegate are consumed below; "failed" is traced as evidence for the
+		// judge rather than flipping res.OK — a task kill here would bypass
+		// the supervision round that could issue a corrective continuation.
+		if structured != nil && structured.Status != "" && structured.Status != "done" {
+			c.EvTrace(execCtx, taskID, "structured_status", map[string]any{
+				"round": round + 1, "agent": res.Agent, "status": structured.Status,
+			})
+		}
 		if res.SessionID != "" && res.SessionID != sessionID {
 			sessionID = res.SessionID
 			// Persist immediately — not at the loop's end — because the
@@ -1381,21 +1565,41 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 
 		// §4.2 Sub-MainAgent promotion: an agent that hits a resource it lacks
-		// (GPU, tool, hardware actuator) may emit a PANDA_DELEGATE line. This
-		// node — now acting as the child's Sub-Main — spawns the causal child,
-		// waits for its result, and re-runs the round with the product folded
-		// into the intent. The delegation never reaches a judge: the round is
-		// re-driven, not verified.
+		// (GPU, tool, hardware actuator) may emit PANDA_DELEGATE markers — one
+		// turn can request several children at once, and they dispatch in
+		// parallel rather than serializing round trips. This node — now
+		// acting as the children's Sub-Main — spawns each causal child,
+		// waits for their results, and re-runs the round with the products
+		// folded into the intent. The delegation never reaches a judge: the
+		// round is re-driven, not verified.
 		if plan.Kind == "agent" {
-			if dr, cleaned, ok := parseDelegateRequest(res.Stdout); ok {
+			drs, cleaned := parseDelegateRequests(res.Stdout)
+			// The structured contract wins when it carries requests: an
+			// agent that filled delegate_requests went through the schema,
+			// so its field is the parsed truth — while marker cleaning
+			// above still strips any stray protocol lines it also printed.
+			if structured != nil && len(structured.Delegates) > 0 {
+				drs = structured.Delegates
+			}
+			if len(drs) > 0 {
 				res.Stdout = cleaned
 				if delegations < maxDelegateRequests {
-					delegations++
-					note, derr := c.delegateChild(execCtx, task, dr)
-					if derr != nil {
-						note = "delegation failed: " + derr.Error()
+					take := maxDelegateRequests - delegations
+					if take > len(drs) {
+						take = len(drs)
 					}
-					currentIntent += "\n\n[delegated child result]\n" + note
+					delegations += take
+					notes := c.delegateChildren(execCtx, task, drs[:take])
+					for i, note := range notes {
+						if len(notes) == 1 {
+							currentIntent += "\n\n[delegated child result]\n" + note
+						} else {
+							currentIntent += fmt.Sprintf("\n\n[delegated child result %d/%d]\n%s", i+1, len(notes), note)
+						}
+					}
+					if take < len(drs) {
+						currentIntent += "\n\n[system] delegation budget for this task is exhausted; remaining requests were not dispatched — finish with local resources and report."
+					}
 					// Only a delegation that actually happened re-drives the
 					// round; an exhausted budget falls through to the judge so
 					// a marker-happy agent cannot loop forever past the cap.
@@ -1403,6 +1607,55 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 					continue
 				}
 				currentIntent += "\n\n[system] delegation budget for this task is exhausted; finish with local resources and report."
+			}
+		}
+
+		// §4.3 clarification loop: an agent blocked on input only the user
+		// has ends its turn with a PANDA_QUESTION line. Parking in review —
+		// not retrying — is what hands the question to the origin: no retry
+		// can produce the answer, and the delegator's task_resume.answer is
+		// what the re-run folds into the intent. The marker text is stripped
+		// from stdout so the protocol line never reaches the user as prose.
+		if plan.Kind == "agent" && res.OK {
+			q, cleaned, ask := parseQuestionRequest(res.Stdout)
+			// The structured contract wins when it carries a question: the
+			// schema field is parsed truth, while the marker pass above
+			// still strips any protocol line the agent also printed.
+			if structured != nil && strings.TrimSpace(structured.Question) != "" {
+				q, ask = strings.TrimSpace(structured.Question), true
+			}
+			if ask {
+				res.Stdout = cleaned
+				if beforeOK {
+					if after, serr := defense.SnapshotDir(workDir); serr == nil {
+						lastChanged = c.filterHostDrift(workDir, before.Changed(after))
+					}
+				}
+				if err := c.store.PauseForAnswer(ctx, taskID, c.nodeID, map[string]any{
+					"question": q, "stdout": res.Stdout, "files_changed": lastChanged,
+				}); err != nil {
+					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+						return bus.TaskResultPayload{}, ErrCancelled
+					}
+					return bus.TaskResultPayload{}, fmt.Errorf("pause for clarification: %w", err)
+				}
+				c.EvTrace(execCtx, taskID, EvClarification, map[string]any{
+					"question": q, "round": round + 1, "agent": res.Agent,
+				})
+				c.logTask(task.Title, false)
+				trackTask(c, task.Project, required, task.Title, false)
+				fc := lastChanged
+				if len(fc) > maxFilesChangedReport {
+					fc = fc[:maxFilesChangedReport]
+				}
+				return bus.TaskResultPayload{
+					TaskID: taskID, AttemptID: attemptID, State: StateReview,
+					ApprovalDisposition: string(ApprovalResumeExecution),
+					Question:            q,
+					OK:                  true, ExitCode: 0, Stdout: res.Stdout,
+					FilesChanged: fc,
+					Tokens:       res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+				}, nil
 			}
 		}
 
@@ -1471,15 +1724,23 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			// Structured usage (when the adapter speaks it): the flat Tokens
 			// total rides the existing pipeline; the breakdown lands as its
 			// own event so input/output/cache traffic can be told apart.
-			if res.Usage != nil {
-				c.EvTrace(execCtx, taskID, EvAgentUsage, map[string]any{
-					"agent":              res.Agent,
-					"round":              round,
-					"input_tokens":       res.Usage.InputTokens,
-					"output_tokens":      res.Usage.OutputTokens,
-					"cache_read_tokens":  res.Usage.CacheReadTokens,
-					"cache_write_tokens": res.Usage.CacheWriteTokens,
-				})
+			// One usage event carries both meters when present: the token
+			// breakdown and the harness's own delegation fan-out summary
+			// (claude result.subagent_stats) — how many sub-agents the run
+			// spawned, by type; observability for the everything-is-a-node
+			// view.
+			if res.Usage != nil || len(res.SubagentStats) > 0 {
+				usageData := map[string]any{"agent": res.Agent, "round": round}
+				if res.Usage != nil {
+					usageData["input_tokens"] = res.Usage.InputTokens
+					usageData["output_tokens"] = res.Usage.OutputTokens
+					usageData["cache_read_tokens"] = res.Usage.CacheReadTokens
+					usageData["cache_write_tokens"] = res.Usage.CacheWriteTokens
+				}
+				if len(res.SubagentStats) > 0 {
+					usageData["subagent_stats"] = res.SubagentStats
+				}
+				c.EvTrace(execCtx, taskID, EvAgentUsage, usageData)
 			}
 			// Fallback chain visibility (A2): res.Agent names the agent that
 			// actually executed; a mismatch means the scored primary's CLI was
@@ -1549,15 +1810,25 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			c.audit(ctx, taskID, "native:tier2", plan.Command, result, "")
 		}
 
+		// The round's workdir diff is computed once for every agent that came
+		// back OK: the scope check diffs it for drift, the judge reads it as
+		// evidence, and the result contract reports it as files_changed.
+		// Host-noise paths are filtered here so all three consumers agree.
+		if plan.Kind == "agent" && res.OK && beforeOK {
+			after, err := defense.SnapshotDir(workDir)
+			if err != nil {
+				c.logger.Warn("snapshot workdir after agent", "task", taskID, "err", err)
+			} else {
+				lastChanged = c.filterHostDrift(workDir, before.Changed(after))
+			}
+		}
+
 		// Scope-drift intercept: a successful agent that touched files outside
 		// its declared scope has overstepped the task. Pause it for human
 		// analysis rather than mark it done, fail it into the retry loop, or
 		// re-delegate — a deterministic intercept will not improve on retry.
 		if plan.Kind == "agent" && !scope.Empty() && res.OK {
-			after, err := defense.SnapshotDir(workDir)
-			if err != nil {
-				c.logger.Warn("snapshot workdir after agent", "task", taskID, "err", err)
-			} else if drift := c.filterHostDrift(scope.Drift(after.Changed(before))); len(drift) > 0 {
+			if drift := scope.Drift(lastChanged); len(drift) > 0 {
 				msg := "scope drift: agent changed files outside declared scope: " + strings.Join(drift, ", ")
 				c.audit(ctx, taskID, "scope:drift", plan.Agent, "denied", msg)
 				if err := c.store.Pause(ctx, taskID, c.nodeID, msg); err != nil {
@@ -1706,6 +1977,18 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if strings.TrimSpace(res.Stderr) != "" {
 			judgeResult = judgeResult + "\n\n错误输出（stderr）：\n" + res.Stderr
 		}
+		// The footprint is evidence the prose cannot fake: an agent reporting
+		// success while its diff is empty is the classic delegation failure,
+		// and a judge that only reads text cannot catch it.
+		if len(lastChanged) > 0 {
+			shown := lastChanged
+			if len(shown) > 50 {
+				shown = shown[:50]
+			}
+			judgeResult += "\n\n[本轮实际变更的文件] " + strings.Join(shown, ", ")
+		} else if beforeOK {
+			judgeResult += "\n\n[本轮实际变更的文件] （无 —— 工作目录没有任何文件改动）"
+		}
 		// Supervise under execCtx, not the handler's ctx: the judge call is part
 		// of this execution, so it must honor the task's cancel (cancelRunning
 		// kills execCtx on force-fail/cancel) — and must NOT die with the
@@ -1801,20 +2084,27 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// hash has to travel with the result either way. A pack failure fails the
 	// stage: reporting done without an artifact would block every successor
 	// forever on something that was never produced.
+	// The result's footprint: every agent outcome below — done, review, parked —
+	// reports the workdir-relative paths the last completed round changed, so
+	// the delegator sees what was touched instead of trusting the agent's prose.
+	filesChanged := lastChanged
+	if len(filesChanged) > maxFilesChangedReport {
+		filesChanged = filesChanged[:maxFilesChangedReport]
+	}
 	var outputArtifact string
 	if task.PlanID != "" {
 		var perr error
 		if outputArtifact, perr = c.packStageOutput(ctx, task, workDir); perr != nil {
 			return bus.TaskResultPayload{}, perr
 		}
-	} else if projectInputs(task) {
-		// A project task executed on someone else's behalf hands its tree back the
+	} else if projectInputs(task) || attachedInputs(task) {
+		// A task executed on someone else's behalf hands its tree back the
 		// same way a stage does, so the changes it made reach the machine that
 		// asked. A pack failure is a warning rather than a failure here: the work
 		// itself succeeded, and reporting it failed would be a worse lie than
 		// reporting it without the tree.
 		if hash, perr := c.packStageOutput(ctx, task, workDir); perr != nil {
-			c.logger.Warn("pack project output", "task", taskID, "err", perr)
+			c.logger.Warn("pack task output", "task", taskID, "err", perr)
 		} else {
 			outputArtifact = hash
 		}
@@ -1835,6 +2125,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
 			"needs_followup": verdict.Status == entry.VerdictContinue,
 			"verdict":        verdict.Status, "verdict_reason": verdict.Reason,
+			"files_changed": filesChanged,
 		}); err != nil {
 			if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 				return bus.TaskResultPayload{}, ErrCancelled
@@ -1847,7 +2138,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			TaskID: taskID, AttemptID: attemptID, State: StateReview,
 			ApprovalDisposition: string(ApprovalAcceptWork),
 			OK:                  true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, FilesChanged: filesChanged, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 			AgentSessionID: sessionID,
 		}, nil
 	}
@@ -1876,6 +2167,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			defer cancel()
 			if err := c.store.PauseWithResult(wCtx, taskID, c.nodeID, map[string]any{
 				"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
+				"files_changed": filesChanged,
 			}); err != nil {
 				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 					return bus.TaskResultPayload{}, ErrCancelled
@@ -1888,7 +2180,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				TaskID: taskID, AttemptID: attemptID, State: StateReview,
 				ApprovalDisposition: string(ApprovalAcceptWork),
 				OK:                  true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-				Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+				Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, FilesChanged: filesChanged, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				AgentSessionID: sessionID,
 			}, nil
 		}
@@ -1901,7 +2193,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	wCtx, cancel := c.storeWriteCtx(ctx)
 	defer cancel()
 	if err := c.store.Complete(wCtx, taskID, c.nodeID, map[string]any{
-		"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout,
+		"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "files_changed": filesChanged,
 	}); err != nil {
 		if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 			return bus.TaskResultPayload{}, ErrCancelled
@@ -1915,12 +2207,17 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	trackTask(c, task.Project, required, task.Title, true)
 	return bus.TaskResultPayload{
 		TaskID: taskID, AttemptID: attemptID, State: StateDone, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-		Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+		Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, FilesChanged: filesChanged, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 		// Reported even though the local row cleared it: the delegator keeps
 		// the handle so a re-dispatch back here can offer ResumeSessionID.
 		AgentSessionID: sessionID,
 	}, nil
 }
+
+// maxFilesChangedReport caps the file list a result carries on the wire: the
+// footprint's job is showing what the task touched, and the first few hundred
+// paths show that fine — a node_modules-scale rewrite would only drown it.
+const maxFilesChangedReport = 200
 
 // taskScope extracts the declared scope from a task's persisted spec JSON
 // (entry.TaskSpecDetail.Scope). A parse failure or absent field yields an
@@ -1958,6 +2255,57 @@ func taskToolsPolicy(specJSON string) string {
 	return spec.ToolsPolicy
 }
 
+// taskMaxTurns extracts the per-task agent turn cap from a task's persisted
+// spec JSON (entry.TaskSpecDetail.MaxTurns). A parse failure or a non-positive
+// value yields 0 (the adapter's own default).
+func taskMaxTurns(specJSON string) int {
+	if specJSON == "" {
+		return 0
+	}
+	var spec struct {
+		MaxTurns int `json:"max_turns"`
+	}
+	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil || spec.MaxTurns < 0 {
+		return 0
+	}
+	return spec.MaxTurns
+}
+
+// taskSpecEnvelope extracts the acceptance side of a task's persisted spec —
+// the entry model's success definition and constraints — rendered as one
+// bracketed block. Both fold into the intent so the agent prompt states what
+// "done" means and the supervise judge (which reads the same intent) can hold
+// the work to it, instead of the criteria dying inside spec_json.
+func taskSpecEnvelope(specJSON string) string {
+	if specJSON == "" {
+		return ""
+	}
+	var spec struct {
+		Scope             string   `json:"scope"`
+		SuccessDefinition string   `json:"success_definition"`
+		Constraints       []string `json:"constraints"`
+	}
+	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
+		return ""
+	}
+	var b strings.Builder
+	if spec.SuccessDefinition != "" {
+		b.WriteString("\nsuccess definition: " + spec.SuccessDefinition)
+	}
+	for _, cst := range spec.Constraints {
+		if strings.TrimSpace(cst) != "" {
+			b.WriteString("\nconstraint: " + cst)
+		}
+	}
+	if scope := strings.TrimSpace(spec.Scope); scope != "" {
+		b.WriteString("\nallowed scope: " + scope + " — modify only files under these paths")
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "\n\n[acceptance criteria — judge the result against these]" + b.String()
+}
+
 // agentPromptBudget is the soft cap (bytes) on the assembled agent prompt.
 // The budget exists because the prompt is composed of unbounded parts
 // (matched skill bodies, the memory manifest) and no adapter can see an
@@ -1970,6 +2318,32 @@ func taskToolsPolicy(specJSON string) string {
 // degrading skills into index lines.
 const agentPromptBudget = 128000
 
+// outputLangName renders a locale as the language name an agent recognizes
+// ("English", "简体中文"…), in the instruction language zh or en.
+func outputLangName(loc i18n.Locale, zh bool) string {
+	names := map[i18n.Locale][2]string{
+		i18n.ChineseSimp: {"简体中文", "Simplified Chinese"},
+		i18n.Japanese:    {"日文", "Japanese"},
+		i18n.Spanish:     {"西班牙文", "Spanish"},
+		i18n.German:      {"德文", "German"},
+		i18n.English:     {"英文", "English"},
+	}
+	if n, ok := names[loc]; ok {
+		if zh {
+			return n[0]
+		}
+		return n[1]
+	}
+	if zh {
+		return "英文"
+	}
+	return "English"
+}
+
+// getAgentOutputRider is the execution contract appended to every agent
+// prompt. Each line is something the supervisor can actually check — verify
+// against the success definition, stay in scope, report what was verified —
+// not motivational phrasing the judge cannot weigh.
 func getAgentOutputRider(locs ...i18n.Locale) string {
 	promptLang := i18n.English
 	outputLang := i18n.English
@@ -1988,32 +2362,23 @@ func getAgentOutputRider(locs ...i18n.Locale) string {
 	}
 
 	if promptLang == i18n.ChineseSimp {
-		switch outputLang {
-		case i18n.English:
-			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；无论推理过程如何，请在获取到充分证据后直接输出清晰结构化的英文报告与最终结论；不要使用不必要的表情符号。"
-		case i18n.Japanese:
-			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；无论推理过程如何，请在获取到充分证据后直接输出清晰结构化的日文报告与最终结论；不要使用不必要的表情符号。"
-		case i18n.Spanish:
-			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；无论推理过程如何，请在获取到充分证据后直接输出清晰结构化的西班牙文报告与最终结论；不要使用不必要的表情符号。"
-		case i18n.German:
-			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；无论推理过程如何，请在获取到充分证据后直接输出清晰结构化的德文报告与最终结论；不要使用不必要的表情符号。"
-		default:
-			return "\n\n输出与执行要求：请高效聚焦核心目标，确保彻底完成任务。排查与分析任务请优先检索与阅读项目源代码（.go, .py, .yaml, .json, .md）与文档，避免无意义的二进制反汇编窥探；在获取到充分证据后直接输出清晰结构化的中文报告与最终结论；不要使用不必要的表情符号。"
-		}
-	}
+		return fmt.Sprintf(`
 
-	switch outputLang {
-	case i18n.ChineseSimp:
-		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Regardless of reasoning language, output a clear, structured Simplified Chinese report and final conclusions directly. Do not use unnecessary emojis."
-	case i18n.Japanese:
-		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Regardless of reasoning language, output a clear, structured Japanese report and final conclusions directly. Do not use unnecessary emojis."
-	case i18n.Spanish:
-		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Regardless of reasoning language, output a clear, structured Spanish report and final conclusions directly. Do not use unnecessary emojis."
-	case i18n.German:
-		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Regardless of reasoning language, output a clear, structured German report and final conclusions directly. Do not use unnecessary emojis."
-	default:
-		return "\n\nOutput & Execution Requirements: Focus efficiently on the core goal, ensuring thorough task completion. For investigation and analysis tasks, prioritize searching and reading project source code (.go, .py, .yaml, .json, .md) and documentation; avoid meaningless binary disassembly inspection. Upon gathering sufficient evidence, output a clear, structured English report and final conclusions directly. Do not use unnecessary emojis."
+执行约定：
+- 在 workspace 目录内工作；动手前先读项目里相关的源文件与文档，有源码可读就不要去反汇编二进制。
+- 宣布完成前必须验证：用该项目自身的构建/测试方式（按其 Makefile、scripts、CI 或包管理器惯例）跑通能证明成功定义的命令；只写"应该可行"不算完成。
+- 只改动任务范围内（scope）的文件；不要顺手重构或格式化无关代码。
+- 最终回复用%s，直接说明：改了什么、在哪个文件、如何验证（运行的命令及其结果）。有无法满足的验收标准要明确写出，不许含糊带过。
+- 不要使用表情符号，不要寒暄或与任务无关的自我介绍。`, outputLangName(outputLang, true))
 	}
+	return fmt.Sprintf(`
+
+Execution contract:
+- Work inside the workspace; read the project's relevant source files and docs before editing — never disassemble a binary whose source is on disk.
+- Verify before claiming done: run whatever proves the success definition using the project's own build/test convention (its Makefile, scripts, CI, or package manager); reporting what "should" work is not completion.
+- Touch only files inside the declared scope; do not refactor or reformat unrelated code.
+- Final reply in %s, stating plainly: what changed, in which files, and how it was verified (the commands run and their outcomes). Name any acceptance criterion you could not verify — do not imply it passed.
+- No emojis, no pleasantries, no meta-commentary about being an AI.`, outputLangName(outputLang, false))
 }
 
 // buildAgentPrompt assembles the full agent execution prompt — the memory
@@ -2039,24 +2404,40 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string, loc ...i1
 	}
 	rider := getAgentOutputRider(promptLang, outputLang)
 
+	// Execution frame first: the agent runs headless with cwd already set to
+	// the workspace — stating the task, project, and directory up front keeps
+	// it from guessing where it is or which tree it may touch.
+	var frame strings.Builder
+	frame.WriteString("[execution context]")
+	if title != "" {
+		frame.WriteString("\ntask: " + title)
+	}
+	if project != "" {
+		frame.WriteString("\nproject: " + project)
+	}
+	if workDir != "" {
+		frame.WriteString("\nworkspace: " + workDir + " (your working directory — resolve relative paths from here)")
+	}
+
 	manifest := ""
 	if c.memory != nil {
 		if project == "" {
 			if files, err := c.memory.Manifest(); err == nil {
 				manifest = memory.RenderManifest(files)
 			}
-		} else if pm, err := c.memory.ProjectManifest(project, workDir); err == nil {
+		} else if pm, err := c.memory.ProjectManifest(project, workDir, promptLang); err == nil {
 			manifest = pm
 		}
 	}
 	// The intent, the manifest and the output rider are non-negotiable; only
 	// the skills section degrades. A negative remainder (a huge intent) still
 	// runs — withSkills treats it as "no room for skill bodies".
-	budget := agentPromptBudget - len(intent) - len(manifest) - len(rider)
+	budget := agentPromptBudget - len(intent) - len(manifest) - len(rider) - frame.Len()
 	prompt, used := withSkills(c, intent, project, title, budget, promptLang)
 	if manifest != "" {
 		prompt = manifest + "\n\n" + prompt
 	}
+	prompt = frame.String() + "\n\n" + prompt
 	// Output style rider: the agent's final message is shown to the user
 	// (often verbatim in a terminal) and may be spoken aloud by the voice
 	// pipeline, so it must read as a direct answer — not a transcript of
@@ -2066,6 +2447,10 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string, loc ...i1
 	// §4.2 Sub-MainAgent protocol hint: the marker format the run loop
 	// parses. Kept terse — it rides every agent round.
 	prompt += i18n.T(promptLang, "prompt.delegate.hint")
+	// §4.3 clarification protocol hint: headless execution cannot prompt
+	// mid-run, so a blocked agent ends its turn with the marker the run
+	// loop parks on. Same rider placement — every agent round.
+	prompt += i18n.T(promptLang, "prompt.question.hint")
 	// Self-management hint: under the extended tools policy the agent may
 	// reach the node's own surface — MCP-capable CLIs see the openpanda
 	// server from the materialized .mcp.json, shell-capable agents can run
@@ -2368,8 +2753,8 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	// past decliner. Suffixing the chain keeps the persisted/wire chain clean.
 	seenChain := append(slices.Clone(t.Chain), excluded...)
 
-	decision := scheduler.Route(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
-		resourceRequirement(t.ResourceJSON), "")
+	decision := scheduler.RouteP(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
+		resourceRequirement(t.ResourceJSON), "", t.Project)
 	if decision.Action != scheduler.ActionForward {
 		c.logger.Info("reroute: no alternate node", "task", taskID, "action", decision.Action)
 		return false
@@ -2416,6 +2801,13 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	}
 	// A re-routed project task needs its context as much as the first attempt did.
 	c.attachProject(ctx, &payload, t.Project)
+	// Same for an ad-hoc file task: the tree travels with the re-route or the
+	// task stays — a blind copy on a fresh peer is the failure mode the
+	// attach exists to prevent.
+	c.attachWorktreeFrom(ctx, &payload, t)
+	if t.ContextType == "file" && t.WorkDir != "" && len(payload.Inputs) == 0 {
+		return false
+	}
 	if t.ContextHash != "" {
 		payload.ContextLevel = "pointer"
 	}
@@ -2560,6 +2952,12 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 	} else if transitionOK && t.Project != "" && p.OutputArtifact != "" &&
 		(state == StateDone || state == StateReview) {
 		c.adoptProjectOutput(ctx, t, env.From, p.OutputArtifact)
+	} else if transitionOK && p.OutputArtifact != "" &&
+		(state == StateDone || state == StateReview) {
+		// The ad-hoc sibling: a file task that shipped its work tree gets the
+		// produced tree back over the directory it packed from, so a remote
+		// edit actually reaches the user's checkout.
+		c.adoptWorktreeOutput(ctx, t, env.From, p.OutputArtifact)
 	}
 
 	// Record delegation outcome for scheduling analysis (B2). Only record when
@@ -2766,7 +3164,7 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 	// link drops. Explicit cancels still land via the running map's CancelFunc.
 	runCtx := context.WithoutCancel(ctx)
 	go func() {
-		final, result, rerr := c.ResumeApproved(runCtx, p.TaskID)
+		final, result, rerr := c.ResumeApproved(runCtx, p.TaskID, p.Answer)
 		if rerr != nil {
 			result = bus.TaskResultPayload{
 				TaskID: p.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,
@@ -2804,7 +3202,10 @@ func (c *Core) replyResult(ctx context.Context, env bus.Envelope, result bus.Tas
 	c.outboxDrop(ctx, env.From, result.TaskID)
 }
 
-// reply sends a message back to the sender of env.
+// reply sends a message back to the sender of env. It goes through sendTo —
+// not connFor+Send — so a peer whose only live path is a punched datagram
+// route still gets its answer when the frame fits, and every caller shares
+// the same fallback instead of replies alone blackholing on NAT-bound links.
 func (c *Core) reply(ctx context.Context, env bus.Envelope, typ string, payload any) error {
 	msgID, err := newUUID()
 	if err != nil {
@@ -2815,14 +3216,11 @@ func (c *Core) reply(ctx context.Context, env bus.Envelope, typ string, payload 
 		return err
 	}
 	envOut.To = env.From
-	conn := c.connFor(env.From)
-	if conn == nil {
-		// No return channel for this peer (e.g. it just disconnected);
-		// the result will be recovered via a later heartbeat/sync.
-		c.logger.Warn("no peer connection to reply", "peer", env.From, "type", typ)
-		return errors.New("no peer")
+	if err := c.sendTo(env.From, envOut); err != nil {
+		c.logger.Warn("reply: no path to peer", "peer", env.From, "type", typ, "err", err)
+		return err
 	}
-	return conn.Send(envOut)
+	return nil
 }
 
 // isOutputStagnant reports whether an agent's output across consecutive supervision rounds

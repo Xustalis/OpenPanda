@@ -56,6 +56,9 @@ make release-local
 # Run a single test
 go test -run TestName ./path/to/package/...
 
+# Performance benchmarks (routing match/decision, wire codec, dispatch dedup)
+make bench
+
 # Quick-start: build and open web console with config.yaml
 make dev
 

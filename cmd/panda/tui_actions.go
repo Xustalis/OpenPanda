@@ -746,6 +746,7 @@ func (m tuiModel) finalizeWizard() (tuiModel, tea.Cmd) {
 				CardPath:   m.r.cardPathNow(),
 				ReplyASCII: isLinuxConsole(),
 				Locale:     loc,
+				ConfigPath: m.r.configPath,
 				AsyncPeers: true,
 			})
 			if err == nil {

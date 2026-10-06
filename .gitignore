@@ -27,6 +27,9 @@ var/
 context/
 *.sock
 testdata/run/
+# Loopback test-node state (node-a.yaml / node-b.yaml fixtures)
+testdata/node-a/
+testdata/node-b/
 
 # Live personal data (real memory/diary/skills captured from this machine —
 # test fixtures for local runs only, never for the repo)
@@ -120,6 +123,9 @@ fetch_emails.py
 
 # Lab scratch directories
 /.lab/
+
+# Marketing site — work in progress. Un-ignore when the Pages site ships.
+/site/
 
 .gocache-tmp
 /.gocache/

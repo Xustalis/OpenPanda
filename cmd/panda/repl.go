@@ -284,44 +284,12 @@ func runRepl(args []string) {
 	var activeProjectName string
 	if workspaceAllowed && cwd != "" {
 		cfg.Storage.WorkPath = cwd
-		if existing, err := projStore.FindByWorkDir(cwd); err == nil {
-			activeProjectName = existing.Name
-		} else {
-			base := filepath.Base(cwd)
-			if base == "/" || base == "." || base == "" {
-				base = "workspace"
-			}
-			cleanBase := ""
-			for _, ch := range base {
-				if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' {
-					cleanBase += string(ch)
-				}
-			}
-			if cleanBase == "" {
-				cleanBase = "workspace"
-			}
-			candidate := cleanBase
-			for i := 1; i <= 100; i++ {
-				if pr, err := projStore.Get(candidate); err == nil {
-					if pr.WorkDir == "" {
-						_, _ = projStore.Update(candidate, cwd, "Workspace at "+cwd)
-						activeProjectName = candidate
-						break
-					}
-					candidate = fmt.Sprintf("%s-%d", cleanBase, i+1)
-				} else {
-					if created, err := projStore.Create(candidate, cwd, "Workspace at "+cwd); err == nil {
-						activeProjectName = created.Name
-						break
-					}
-				}
-			}
-		}
-		if activeProjectName != "" {
-			_ = projStore.SetActive(activeProjectName)
-			if interactive && !*yesFlag && !isTUI {
-				fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.Tf(detected, "cli.workspace.accepted", "path", cwd, "name", activeProjectName)))
-			}
+		// Shared adoption: the launch directory is the project space — the
+		// existing project owning it wins, else a fresh one is created and
+		// marked active (see workspace.go).
+		activeProjectName = adoptWorkspaceProject(projStore, cwd)
+		if activeProjectName != "" && interactive && !*yesFlag && !isTUI {
+			fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.Tf(detected, "cli.workspace.accepted", "path", cwd, "name", activeProjectName)))
 		}
 	} else if !workspaceAllowed && cwd != "" && interactive {
 		fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.T(detected, "cli.workspace.declined")))
@@ -381,6 +349,7 @@ func runRepl(args []string) {
 			MCPCommand: *mcpCmd,
 			ReplyASCII: isLinuxConsole(),
 			Locale:     detected,
+			ConfigPath: *configPath,
 			// The session is long-lived and interactive: peers dial in the
 			// background instead of gating the banner (an offline peer's dial
 			// timeout is routine, not 10s of dead air before the first prompt).
@@ -2180,6 +2149,12 @@ func (r *repl) cmdNodes(arg string) {
 		case "remove", "rm":
 			r.cmdNodesRemove(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
 			return
+		case "verify":
+			r.cmdNodesVerify(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
+			return
+		case "admit":
+			r.cmdNodesAdmit(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
+			return
 		}
 	}
 	nodes, err := ledger.Query(r.db, "", "")
@@ -2189,17 +2164,22 @@ func (r *repl) cmdNodes(arg string) {
 	}
 	if len(nodes) == 0 {
 		r.outln(i18n.T(r.loc, "repl.nodes.none"))
-		return
-	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
-	r.outln(i18n.T(r.loc, "repl.nodes.head"))
-	for _, n := range nodes {
-		seen := time.Unix(n.LastSeen, 0).Format(time.RFC3339)
-		if n.LastSeen == 0 {
-			seen = "never"
+	} else {
+		sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+		r.outln(i18n.T(r.loc, "repl.nodes.head"))
+		for _, n := range nodes {
+			seen := time.Unix(n.LastSeen, 0).Format(time.RFC3339)
+			if n.LastSeen == 0 {
+				seen = "never"
+			}
+			fp := n.Fingerprint()
+			if n.Verified() {
+				fp += " ✓"
+			}
+			r.outf("  %-16s %-8s %-8s %-30s %-18s %s\n", n.ID, n.NodeKind, n.Status, n.Chip, fp, seen)
 		}
-		r.outf("  %-16s %-8s %-8s %-30s %s\n", n.ID, n.NodeKind, n.Status, n.Chip, seen)
 	}
+	printPendingTo(r.commandOutput(), r.db, r.loc)
 }
 
 // cmdAgents lists the agent CLIs this node can delegate to (same probe as
@@ -2423,12 +2403,12 @@ func (r *repl) cmdWeb(arg string) {
 	}
 	// Self-update: discover newer CLI releases in the background; apply gates
 	// on the task queue being idle (same policy as `panda web`).
-	updateMgr := updater.New(updater.Options{
+	updateMgr := updater.New(updateEnvOptions(updater.Options{
 		Current:         versionpkg.Version,
 		CurrentCodename: versionpkg.Codename,
 		Idle:            r.store.Idle,
 		SchemaFloor:     schemaFloorFunc(r.db),
-	})
+	}))
 	updateMgr.StartAutoCheck(context.Background(), 0)
 
 	handler := panel.New(panel.Deps{

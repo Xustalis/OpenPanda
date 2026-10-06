@@ -40,6 +40,12 @@ const defaultModel = "deepseek-v4-flash"
 // hardcoded 1024 was), while still bounding a runaway generation.
 const defaultMaxTokens = 4096
 
+// maxModelBodyBytes bounds a non-streaming provider response body. A chat
+// completion is a few MB at most; the 30s client timeout otherwise lets a
+// malfunctioning or hostile endpoint (operator-set base_url, a broken relay)
+// stream unbounded memory into the process.
+const maxModelBodyBytes = 64 << 20
+
 // Client talks to an Anthropic-compatible Messages API or an OpenAI-compatible
 // Chat Completions API, selected by the config's api_type. It is small and
 // dependency-free so the core daemon does not pull in an SDK.
@@ -772,7 +778,7 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []o
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxModelBodyBytes))
 	if err != nil {
 		return Response{}, &transientError{err: fmt.Errorf("read response: %w", err)}
 	}
@@ -972,7 +978,7 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxModelBodyBytes))
 	if err != nil {
 		// A mid-body truncation (unexpected EOF / connection reset) is a
 		// transient transport failure like a failed Do: no complete response was
@@ -1160,7 +1166,7 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxModelBodyBytes))
 	if err != nil {
 		return nil, &transientError{err: fmt.Errorf("read models: %w", err)}
 	}

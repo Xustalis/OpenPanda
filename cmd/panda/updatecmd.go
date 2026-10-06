@@ -15,6 +15,33 @@ import (
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 )
 
+// updateEnvOptions layers the release-channel overrides onto opts — the
+// knobs an operator uses to harden or self-host the update path:
+//
+//   - OPENPANDA_UPDATE_REPO: "owner/repo" of the GitHub release channel.
+//   - OPENPANDA_UPDATE_PUBKEY: hex or base64 Ed25519 public key. When set,
+//     a release must carry checksums.txt.sig (a detached signature over
+//     checksums.txt) or the update is refused, so a compromised release
+//     channel cannot ship a binary this node would install.
+//
+// Precedence is explicit Options > environment > the key release packaging
+// baked into the binary (version.ReleasePubKey). A build shipped through
+// scripts/package.sh with OPENPANDA_RELEASE_KEY set therefore verifies
+// signatures out of the box, while the env var still lets an operator point
+// a self-hosted channel at their own key.
+func updateEnvOptions(opts updater.Options) updater.Options {
+	if opts.Repo == "" {
+		opts.Repo = os.Getenv("OPENPANDA_UPDATE_REPO")
+	}
+	if opts.ReleaseKey == "" {
+		opts.ReleaseKey = os.Getenv("OPENPANDA_UPDATE_PUBKEY")
+	}
+	if opts.ReleaseKey == "" {
+		opts.ReleaseKey = versionpkg.ReleasePubKey
+	}
+	return opts
+}
+
 // runUpdate handles `panda update [check|apply] [--pre] [--force]`
 func runUpdate(args []string) {
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
@@ -74,11 +101,11 @@ func executeCheck(includePre bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	m := updater.New(updater.Options{
+	m := updater.New(updateEnvOptions(updater.Options{
 		Current:           versionpkg.Version,
 		CurrentCodename:   versionpkg.Codename,
 		IncludePrerelease: includePre,
-	})
+	}))
 
 	if err := m.Check(ctx); err != nil {
 		if jsonOutput {
@@ -134,7 +161,7 @@ func executeApply(includePre, force bool) {
 		opts.SchemaFloor = func(context.Context) (int, error) { return floor, nil }
 	}
 
-	m := updater.New(opts)
+	m := updater.New(updateEnvOptions(opts))
 
 	if !jsonOutput {
 		fmt.Println(p.Muted(i18n.T(loc, "cli.update.checking")))

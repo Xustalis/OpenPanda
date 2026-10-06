@@ -28,8 +28,13 @@ import (
 	"os"
 	"slices"
 
+	"time"
+
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
 
 // generateSharedSecret mints the HMAC material node hellos sign with. Random
@@ -57,7 +62,10 @@ func runNodesAdd(args []string) {
 		fatal("usage", fmt.Errorf("panda nodes add <host:port>"))
 	}
 	addr := rest[0]
-	if _, _, err := net.SplitHostPort(addr); err != nil {
+	// host:port dials ws:// (subject to the cleartext gate at dial time);
+	// an explicit ws(s):// URL carries its scheme — wss is the way to reach
+	// a peer over an untrusted network; punch:<id> names a NAT peer.
+	if err := config.ValidatePeerAddr(addr); err != nil {
 		fatal("bad address", fmt.Errorf("%s", i18n.Tf(i18n.Detect(), "cli.nodes.badaddr", "addr", addr)))
 	}
 
@@ -65,10 +73,17 @@ func runNodesAdd(args []string) {
 	if err != nil {
 		fatal("load config", err)
 	}
+	admitPeerAddr(*configPath, cfg, addr)
+}
 
+// admitPeerAddr is the shared half of `nodes add` and `nodes admit`: ensure a
+// shared secret exists, append addr to the peer list, persist, report. The
+// daemon picks the new peer up on restart — the restart hint says so.
+func admitPeerAddr(configPath string, cfg *config.Config, addr string) {
 	secret := cfg.Network.SharedSecret
 	generated := false
 	if secret == "" {
+		var err error
 		secret, err = generateSharedSecret()
 		if err != nil {
 			fatal("generate shared secret", err)
@@ -83,7 +98,7 @@ func runNodesAdd(args []string) {
 		return
 	}
 	peers = append(peers, addr)
-	if err := config.UpdateNetworkSection(configWritePath(*configPath), config.NetworkConfig{
+	if err := config.UpdateNetworkSection(configWritePath(configPath), config.NetworkConfig{
 		ListenAddr:   cfg.Network.ListenAddr,
 		SharedSecret: secret,
 		Peers:        peers,
@@ -97,7 +112,62 @@ func runNodesAdd(args []string) {
 	}
 	fmt.Println(i18n.Tf(loc, "cli.nodes.add.done", "addr", addr))
 	fmt.Println(i18n.T(loc, "cli.nodes.restart"))
+	warnIfCleartextRefused(os.Stdout, loc, cfg, addr)
 	printJoinGuide(i18n.Detect(), cfg)
+}
+
+// warnIfCleartextRefused warns when addr would trip the dial-time cleartext
+// gate (cleartextOK): the add/pair paths persist the peer before the daemon
+// ever dials, so a refused ws:// LAN address would otherwise only surface as
+// a `peer dial failed` line inside keepalive logs — the "admit succeeded but
+// it never connects" trap the LAN-discovery flow runs straight into.
+func warnIfCleartextRefused(w io.Writer, loc i18n.Locale, cfg *config.Config, addr string) {
+	if core.CleartextDialError(addr, cfg.Network.AllowCleartext) != nil {
+		fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.cleartext.hint", "addr", addr))
+	}
+}
+
+// runNodesAdmit implements `panda nodes admit <id>` — convert a LAN-discovered
+// pending row into a configured peer in one step: look up the beacon's
+// advertised address, run the same add path `nodes add` uses, then drop the
+// pending row. Admission still travels through the operator's own channels —
+// the beacon only carried the hint; the shared secret and the signed hello
+// remain what actually let the node in.
+func runNodesAdmit(args []string) {
+	fs := flag.NewFlagSet("nodes admit", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fatal("usage", fmt.Errorf("panda nodes admit <node-id>"))
+	}
+	id := rest[0]
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, _, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	pending, err := ledger.ListPending(db, 90*time.Second)
+	if err != nil {
+		fatal("query pending", err)
+	}
+	loc := i18n.Detect()
+	for _, p := range pending {
+		if p.ID != id {
+			continue
+		}
+		admitPeerAddr(*configPath, cfg, p.Addr)
+		_ = ledger.ForgetPending(db, id)
+		fmt.Println(i18n.Tf(loc, "cli.nodes.admit.done", "id", id))
+		return
+	}
+	fatal("admit node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.admit.none", "id", id)))
 }
 
 // runNodesDisconnect implements `panda nodes disconnect <addr>` — the opposite
@@ -183,7 +253,7 @@ func runPair(args []string) {
 		fmt.Fprintln(os.Stderr, i18n.T(i18n.Detect(), "cli.pair.usage"))
 		os.Exit(2)
 	}
-	if _, _, err := net.SplitHostPort(*peer); err != nil {
+	if err := config.ValidatePeerAddr(*peer); err != nil {
 		fatal("bad address", fmt.Errorf("%s", i18n.Tf(i18n.Detect(), "cli.nodes.badaddr", "addr", *peer)))
 	}
 
@@ -204,6 +274,7 @@ func runPair(args []string) {
 	}
 	fmt.Println(i18n.Tf(i18n.Detect(), "cli.pair.done", "peer", *peer))
 	fmt.Println(i18n.T(i18n.Detect(), "cli.nodes.restart"))
+	warnIfCleartextRefused(os.Stdout, i18n.Detect(), cfg, *peer)
 }
 
 // printJoinGuide writes the three-step instructions for whoever sets up the
@@ -234,6 +305,15 @@ func printJoinGuideTo(w io.Writer, loc i18n.Locale, cfg *config.Config) {
 	fmt.Fprintln(w, "  curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh")
 	fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.invite.step2", "path", configWritePath("")))
 	fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.invite.step3", "listen", listen))
+	fmt.Fprintln(w, i18n.T(loc, "cli.nodes.invite.step4"))
+	// The joining side will dial ws://<listen>: when this machine's listen
+	// address is a literal host outside the cleartext gate's safe set, the
+	// join dead-ends in the joiner's keepalive log unless we say so here.
+	if host, _, err := net.SplitHostPort(cfg.Network.ListenAddr); err == nil && host != "" {
+		if core.CleartextDialError("ws://"+host, false) != nil {
+			fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.cleartext.hint", "addr", "ws://"+cfg.Network.ListenAddr))
+		}
+	}
 }
 
 // isLoopbackHost reports whether host names a loopback address (127.0.0.1,
@@ -244,4 +324,53 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// runNodesDrain implements `panda nodes drain [id] [--off]` — maintenance
+// mode (Track 2). Draining writes a flag into the shared settings table; the
+// running daemon picks it up within one heartbeat and then: advertises
+// "draining" instead of "online" so peers stop routing new work here,
+// declines inbound delegates outright, and pauses new queue claims — while
+// in-flight tasks run to completion. Only the local node can be drained:
+// there is no remote admin channel, so a remote id fails with the
+// instruction to run the command on that machine.
+func runNodesDrain(args []string) {
+	fs := flag.NewFlagSet("nodes drain", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	off := fs.Bool("off", false, "lift the drain and resume accepting work")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+	rest := fs.Args()
+	if len(rest) > 1 {
+		fatal("usage", fmt.Errorf("panda nodes drain [id] [--off]"))
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	loc := i18n.Detect()
+	selfID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity())
+	id := selfID
+	if len(rest) == 1 {
+		id = rest[0]
+	}
+	if !scheduler.SameRuntimeIdentity(id, selfID) {
+		fatal("drain node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.drain.notSelf", "id", id)))
+	}
+	db, _, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	v := "1"
+	key := "cli.nodes.drain.on"
+	if *off {
+		v, key = "0", "cli.nodes.drain.off"
+	}
+	if _, err := db.Exec(`INSERT INTO settings(key, value) VALUES('node_drain', ?)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value`, v); err != nil {
+		fatal("set drain flag", err)
+	}
+	fmt.Println(i18n.Tf(loc, key, "id", selfID))
 }

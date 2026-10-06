@@ -18,8 +18,7 @@ import (
 func setupDispatchedTask(t *testing.T, c *Core, taskID, target string) Task {
 	t.Helper()
 	ctx := context.Background()
-	tk, err := c.store.CreateWithID(ctx, taskID, "", "", "test task", c.nodeID, []string{c.nodeID})
-	if err != nil {
+	if _, err := c.store.CreateWithID(ctx, taskID, "", "", "test task", c.nodeID, []string{c.nodeID}, false); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if err := c.store.Queue(ctx, taskID, c.nodeID); err != nil {
@@ -28,7 +27,7 @@ func setupDispatchedTask(t *testing.T, c *Core, taskID, target string) Task {
 	if err := c.store.Dispatch(ctx, taskID, c.nodeID, target); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	tk, err = c.store.Get(ctx, taskID)
+	tk, err := c.store.Get(ctx, taskID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}

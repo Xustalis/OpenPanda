@@ -87,7 +87,7 @@
   bottom: -1px;
   width: 40px;
   height: 2px;
-  background: linear-gradient(90deg, var(--accent-2), transparent);
+  background: var(--accent-2);
 }
 
 .timeline {
@@ -1778,15 +1778,14 @@
   left: 0;
   right: 0;
   height: 2px;
-  background: linear-gradient(90deg, var(--accent-2) 0%, var(--accent-1) 100%);
+  background: var(--accent-2);
   opacity: 0;
   transition: opacity var(--dur-normal) var(--ease-standard);
 }
 
 .kanban-card:hover {
   border-color: var(--accent-2-border);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md), var(--shadow-glow-2);
+  box-shadow: var(--shadow-sm);
 }
 
 .kanban-card:hover::before {
@@ -1958,8 +1957,7 @@
   color: var(--accent-2);
   border-color: var(--accent-2-border);
   background: var(--accent-2-soft);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-xs);
 }
 
 .kanban-expand-count {
@@ -2862,18 +2860,19 @@
 }
 .orbit-head-btn:hover {
   border-color: var(--accent-2-border);
-  background-image: var(--grad-accent-2), var(--grad-card);
-  box-shadow: var(--shadow-sm), var(--shadow-glow-2);
-  transform: translateY(-0.5px);
+  background: var(--accent-2-soft);
+  box-shadow: var(--shadow-xs);
 }
 .orbit-head-btn:active {
-  transform: translateY(0);
   box-shadow: var(--shadow-xs);
 }
 .orbit-brand {
   font-size: 18px;
   color: var(--accent-2);
-  filter: drop-shadow(0 0 4px var(--accent-2-glow));
+}
+.orbit-brand-ico {
+  font-size: 15px;
+  color: var(--accent-2);
 }
 .orbit-brand-title {
   font-weight: var(--fw-semibold);
@@ -2971,10 +2970,10 @@
   border-radius: var(--radius-pill);
   font-family: var(--ff-mono, ui-monospace, monospace);
   color: var(--accent-ink);
-  background: linear-gradient(135deg, var(--accent-2) 0%, var(--accent-1) 100%);
+  background: var(--accent-2);
   font-weight: var(--fw-bold);
   font-size: 11px;
-  box-shadow: var(--shadow-xs), 0 0 8px var(--accent-2-glow);
+  box-shadow: var(--shadow-xs);
 }
 .orbit-step-title {
   color: var(--text-primary);
@@ -3046,24 +3045,23 @@
               box-shadow var(--dur-normal) var(--ease-standard);
 }
 .pill:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-xs);
 }
 .pill-plan   {
   color: var(--accent-2);
   border-color: var(--accent-2-border);
-  background: linear-gradient(135deg, var(--accent-2-soft) 0%, var(--accent-2-tint-xs) 100%);
+  background: var(--accent-2-soft);
   box-shadow: 0 0 0 1px var(--accent-2-border), var(--shadow-glow-2);
 }
 .pill-task   {
   color: var(--semantic-good);
   border-color: var(--semantic-good-border);
-  background: linear-gradient(135deg, var(--semantic-good-soft) 0%, rgba(155, 225, 154, 0.04) 100%);
+  background: var(--semantic-good-soft);
 }
 .pill-tool   {
   color: var(--semantic-info);
   border-color: var(--semantic-info-border);
-  background: linear-gradient(135deg, var(--semantic-info-soft) 0%, rgba(201, 179, 255, 0.04) 100%);
+  background: var(--semantic-info-soft);
 }
 .pill-answer {
   color: var(--text-primary);
@@ -3096,7 +3094,7 @@
 }
 .orbit-route-line.chosen {
   border: 1px solid var(--accent-2-border);
-  background: linear-gradient(135deg, var(--accent-2-soft) 0%, var(--accent-2-tint-xs) 100%);
+  background: var(--accent-2-soft);
   box-shadow: var(--shadow-xs), var(--shadow-glow-2);
   position: relative;
   overflow: hidden;
@@ -3154,29 +3152,8 @@
 .orbit-progress-fill {
   position: absolute; inset: 0;
   width: var(--prog, 0%);
-  background: linear-gradient(90deg,
-    var(--accent-2) 0%,
-    var(--accent-1) 50%,
-    var(--accent-1) 100%
-  );
-  background-size: 200% 100%;
-  animation: orbit-progress-shimmer 3s ease-in-out infinite;
+  background: var(--accent-2);
   transition: width var(--dur-slow) var(--ease-emphasized);
-  box-shadow: 0 0 8px var(--accent-2-glow);
-}
-.orbit-progress-fill::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg,
-    rgba(255, 255, 255, 0.25) 0%,
-    rgba(255, 255, 255, 0) 50%,
-    rgba(0, 0, 0, 0.1) 100%
-  );
-}
-@keyframes orbit-progress-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
 }
 .orbit-progress-label {
   position: absolute;
@@ -3216,7 +3193,6 @@
   transition: all var(--dur-fast) var(--ease-standard);
 }
 .badge-stage:hover {
-  transform: translateY(-1px);
   box-shadow: var(--shadow-xs);
 }
 .badge-stage .label {
@@ -3230,13 +3206,13 @@
 .badge-stage.done {
   color: var(--semantic-good);
   border-color: var(--semantic-good-border);
-  background: linear-gradient(135deg, var(--semantic-good-soft) 0%, rgba(155, 225, 154, 0.04) 100%);
+  background: var(--semantic-good-soft);
 }
 .badge-stage.done .label    { color: var(--text-primary); }
 .badge-stage.active  {
   color: var(--semantic-warn);
   border-color: var(--semantic-warn-border);
-  background: linear-gradient(135deg, var(--semantic-warn-soft) 0%, rgba(240, 201, 123, 0.04) 100%);
+  background: var(--semantic-warn-soft);
   animation: orbit-badge-active-pulse 2s ease-in-out infinite;
 }
 @keyframes orbit-badge-active-pulse {
@@ -3247,7 +3223,7 @@
 .badge-stage.failed  {
   color: var(--semantic-danger);
   border-color: var(--semantic-danger-border);
-  background: linear-gradient(135deg, var(--semantic-danger-soft) 0%, rgba(255, 155, 155, 0.04) 100%);
+  background: var(--semantic-danger-soft);
 }
 .badge-stage.failed .label  { color: var(--text-primary); }
 
@@ -3291,7 +3267,7 @@
 }
 .orbit-action-btn {
   appearance: none;
-  background: linear-gradient(135deg, var(--surface-alpha-sm) 0%, var(--surface-alpha-xs) 100%);
+  background: var(--surface-alpha-sm);
   color: var(--accent-2);
   border: 1px solid var(--accent-2-border);
   border-radius: var(--radius-md);
@@ -3318,16 +3294,14 @@
 }
 .orbit-action-btn:hover {
   background: var(--accent-2-soft);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm), var(--shadow-glow-2);
+  box-shadow: var(--shadow-xs);
   border-color: var(--accent-2);
 }
 .orbit-action-btn:hover::before {
   opacity: 1;
 }
 .orbit-action-btn:active {
-  transform: translateY(0);
-  box-shadow: var(--shadow-xs);
+  box-shadow: none;
 }
 
 .orbit-single {
@@ -3361,20 +3335,19 @@
   padding: var(--sp-2) var(--sp-4) !important;
   margin-top: var(--sp-1);
   font-weight: var(--fw-semibold) !important;
-  background: linear-gradient(135deg, var(--accent-2) 0%, var(--accent-1) 100%) !important;
+  background: var(--accent) !important;
   color: var(--accent-ink) !important;
   border: none !important;
   border-radius: var(--radius-md) !important;
-  box-shadow: var(--shadow-sm), var(--shadow-glow-2) !important;
-  transition: all var(--dur-normal) var(--ease-standard) !important;
+  box-shadow: var(--shadow-xs) !important;
+  transition: background var(--dur-normal) var(--ease-standard) !important;
 }
 .orbit-cta:hover {
-  transform: translateY(-2px) !important;
-  box-shadow: var(--shadow-md), var(--shadow-glow-2) !important;
+  background: var(--accent-strong) !important;
+  box-shadow: var(--shadow-sm) !important;
 }
 .orbit-cta:active {
-  transform: translateY(0) !important;
-  box-shadow: var(--shadow-xs) !important;
+  box-shadow: none !important;
 }
 .orbit-single .line1 { color: var(--text-primary); font-weight: 500; }
 .orbit-single .line2 { font-size: var(--fs-caption); }
@@ -3522,6 +3495,9 @@
 .fleet-node.online  .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 .fleet-node.offline .dot { background: var(--text-disabled); }
 .fleet-node .name    { flex: 1; color: var(--text-primary); font-weight: 500; }
+.fleet-node .meta    { color: var(--text-tertiary); white-space: nowrap; font-size: var(--fs-caption); }
+.fleet-node .ver     { color: var(--text-tertiary); white-space: nowrap; font-size: var(--fs-caption); }
+.fleet-node .ver.skew { color: var(--warn); font-weight: 600; cursor: help; }
 .fleet-node .load    { color: var(--text-tertiary); white-space: nowrap; }
 
 /* Single-node CTA body (D4, B6): one centered block that never crowds the
@@ -3564,7 +3540,6 @@
 }
 .fleet-cta-btn:hover {
   background: var(--accent-2-tint-md);
-  transform: translateY(-1px);
 }
 .fleet-cta-sub {
   color: var(--text-tertiary);
@@ -4167,6 +4142,74 @@ pre,
   opacity: 0.7;
 }
 
+/* Agent transcript (event protocol v2): typed activity blocks, with
+   sub-agent rows nested under the tool call that spawned them. */
+
+.timeline-step-item.agent-child .step-marker {
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+}
+
+.timeline-step-item.ev-thinking .step-marker {
+  border-color: var(--border);
+}
+
+.timeline-step-item.ev-tool_use .step-marker {
+  border-color: var(--accent);
+}
+
+.timeline-step-item.ev-tool_result.is-error .step-marker {
+  border-color: var(--danger);
+}
+
+.agent-sub-badge {
+  font-size: 0.68rem;
+}
+
+.agent-tool-call {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.agent-tool-name {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.agent-tool-arg {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.agent-text {
+  line-height: 1.55;
+}
+
+.agent-result {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg-raised);
+  border-left: 2px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.agent-result.is-error {
+  border-left-color: var(--danger);
+  color: var(--danger);
+}
+
 .step-body {
   background: var(--bg-inset);
   border: 1px solid var(--border-soft);
@@ -4455,7 +4498,7 @@ pre,
 }
 .model-active-card {
   border-color: var(--accent-border);
-  background: linear-gradient(180deg, var(--accent-soft), transparent 60%), var(--bg-raised);
+  background: var(--bg-raised);
 }
 .model-active-head {
   display: flex;
@@ -4626,7 +4669,7 @@ pre,
 .plan-progress-fill {
   height: 100%;
   border-radius: var(--radius-pill);
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  background: var(--accent);
   transition: width var(--dur-med) var(--ease);
 }
 .plan-stages {

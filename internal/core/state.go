@@ -204,6 +204,13 @@ type Task struct {
 	Inputs         []bus.ArtifactRef
 	OutputArtifact string
 
+	// Remote is stamped at intake when this row was created by the delegate
+	// handler — i.e. the intent text arrived over the wire — versus a local
+	// submit. It is the authoritative provenance bit: chain[0] is
+	// peer-supplied and can be written to claim local origin, so provenance
+	// cannot be re-derived from Chain.
+	Remote bool
+
 	// UserLocale is the user's language preference ("en", "zh-CN", etc.).
 	UserLocale string
 

@@ -33,7 +33,11 @@ type InjectionDecision struct {
 //     own (env vars, login state / config files — both from the agent's
 //     registry credential manifest) AND panda has a model key configured;
 //     otherwise the agent's native model wins.
-func (r *Router) InjectionDecision(adapter string) InjectionDecision {
+//
+// name is the card's agent entry ("claude_code"), adapter its script
+// ("claude_code.py"); both go to agents.Lookup so a generic.py custom CLI
+// resolves to no manifest instead of borrowing zcode's.
+func (r *Router) InjectionDecision(name, adapter string) InjectionDecision {
 	switch r.injectionModel {
 	case config.InjectionModelNever:
 		return InjectionDecision{Inject: false, Reason: "injection.model=never"}
@@ -41,18 +45,18 @@ func (r *Router) InjectionDecision(adapter string) InjectionDecision {
 		if !modelConfigured(r.model) {
 			return InjectionDecision{Inject: false, Reason: "no model configured"}
 		}
-		if !supportsModelInjection(adapter, r.model) {
+		if !supportsModelInjection(name, adapter, r.model) {
 			return InjectionDecision{Inject: false, Reason: "model injection is not safely supported for " + adapter}
 		}
 		return InjectionDecision{
 			Inject:  true,
 			Reason:  "injection.model=always",
-			Model:   effectiveModelNameFor(adapter, r.model),
-			BaseURL: effectiveBaseURLFor(adapter, r.model),
+			Model:   effectiveModelNameFor(name, adapter, r.model),
+			BaseURL: effectiveBaseURLFor(name, adapter, r.model),
 		}
 	}
 	// auto: agent-native credentials win.
-	if own, source := probeAgentCredentials(adapter); own {
+	if own, source := probeAgentCredentials(name, adapter); own {
 		return InjectionDecision{
 			Inject: false,
 			Reason: "agent carries its own model credentials (" + source + ")",
@@ -64,7 +68,7 @@ func (r *Router) InjectionDecision(adapter string) InjectionDecision {
 			Reason: "agent has no own credentials but panda has no model key configured",
 		}
 	}
-	if !supportsModelInjection(adapter, r.model) {
+	if !supportsModelInjection(name, adapter, r.model) {
 		return InjectionDecision{
 			Inject: false,
 			Reason: "model injection is not safely supported for " + adapter,
@@ -73,8 +77,8 @@ func (r *Router) InjectionDecision(adapter string) InjectionDecision {
 	return InjectionDecision{
 		Inject:  true,
 		Reason:  "agent has no own model credentials and panda has a model configured",
-		Model:   effectiveModelNameFor(adapter, r.model),
-		BaseURL: effectiveBaseURLFor(adapter, r.model),
+		Model:   effectiveModelNameFor(name, adapter, r.model),
+		BaseURL: effectiveBaseURLFor(name, adapter, r.model),
 	}
 }
 
@@ -88,9 +92,11 @@ func modelConfigured(model config.ModelConfig) bool {
 
 // supportsModelInjection is registry-driven: an agent is injectable when its
 // registry entry declares a model-env mapping and panda's model speaks a
-// compatible protocol (Anthropic or OpenAI).
-func supportsModelInjection(adapter string, model config.ModelConfig) bool {
-	k, ok := agents.ByAdapter(adapter)
+// compatible protocol (Anthropic or OpenAI). Resolution is by name+adapter
+// (agents.Lookup): a generic.py entry for an unknown CLI has no mapping and
+// is never injectable.
+func supportsModelInjection(name, adapter string, model config.ModelConfig) bool {
+	k, ok := agents.Lookup(name, adapter)
 	if !ok || k.ModelEnv == nil {
 		return false
 	}
@@ -128,13 +134,18 @@ const (
 	deepseekFlashModel = "deepseek-v4-flash"
 )
 
-// effectiveBaseURLFor returns the target-appropriate endpoint URL for an adapter.
+// effectiveBaseURLFor returns the target-appropriate endpoint URL for an agent.
 // DeepSeek supports both Anthropic and OpenAI endpoints.
-func effectiveBaseURLFor(adapter string, model config.ModelConfig) string {
-	k, _ := agents.ByAdapter(adapter)
+func effectiveBaseURLFor(name, adapter string, model config.ModelConfig) string {
+	k, _ := agents.Lookup(name, adapter)
 	targetAPIType := config.APITypeAnthropic
-	if k.ModelEnv != nil && k.ModelEnv.APIType != "" {
+	if k.ModelEnv != nil {
+		// A polyglot agent (APIType "") speaks the model's own protocol;
+		// a declared one pins the dialect regardless of the config.
 		targetAPIType = k.ModelEnv.APIType
+		if targetAPIType == "" {
+			targetAPIType = model.NormalizedAPIType()
+		}
 	}
 	if isDeepSeekEndpoint(model.BaseURL) {
 		if targetAPIType == config.APITypeOpenAI {
@@ -151,12 +162,15 @@ func effectiveBaseURLFor(adapter string, model config.ModelConfig) string {
 	return model.BaseURL
 }
 
-// effectiveModelNameFor returns the target-appropriate model name for an adapter.
-func effectiveModelNameFor(adapter string, model config.ModelConfig) string {
-	k, _ := agents.ByAdapter(adapter)
+// effectiveModelNameFor returns the target-appropriate model name for an agent.
+func effectiveModelNameFor(name, adapter string, model config.ModelConfig) string {
+	k, _ := agents.Lookup(name, adapter)
 	targetAPIType := config.APITypeAnthropic
-	if k.ModelEnv != nil && k.ModelEnv.APIType != "" {
+	if k.ModelEnv != nil {
 		targetAPIType = k.ModelEnv.APIType
+		if targetAPIType == "" {
+			targetAPIType = model.NormalizedAPIType()
+		}
 	}
 	if isDeepSeekEndpoint(model.BaseURL) && targetAPIType == config.APITypeOpenAI {
 		return "deepseek-chat"
@@ -203,28 +217,31 @@ func EffectiveBaseURL(model config.ModelConfig) string {
 var homeDir = os.UserHomeDir
 
 // credentialManifest resolves the agent's credential manifest from the
-// registry (the single source of truth). Unknown adapters — or agents without
-// a declared manifest — fall back to the union of common provider keys so a
-// not-yet-registered adapter is still probed conservatively.
-func credentialManifest(adapter string) (envVars, files []string) {
-	if k, ok := agents.ByAdapter(adapter); ok &&
+// registry (the single source of truth) by name+adapter. Unknown agents — or
+// agents without a declared manifest — fall back to the union of common
+// provider keys so a not-yet-registered adapter is still probed
+// conservatively; a generic.py custom CLI lands there too rather than
+// borrowing whichever registry agent shares the script.
+func credentialManifest(name, adapter string) (envVars, files []string) {
+	if k, ok := agents.Lookup(name, adapter); ok &&
 		(len(k.CredentialEnvVars) > 0 || len(k.CredentialFiles) > 0) {
 		return k.CredentialEnvVars, k.CredentialFiles
 	}
 	return []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}, nil
 }
 
-// probeAgentCredentials reports whether the agent driven by adapter carries
-// model credentials of its own, plus a short description of the evidence
-// (safe to surface in announcements/audit — never includes secret values).
-func probeAgentCredentials(adapter string) (found bool, source string) {
-	envs, files := credentialManifest(adapter)
+// probeAgentCredentials reports whether the agent named name driven by
+// adapter carries model credentials of its own, plus a short description of
+// the evidence (safe to surface in announcements/audit — never includes
+// secret values).
+func probeAgentCredentials(name, adapter string) (found bool, source string) {
+	envs, files := credentialManifest(name, adapter)
 	for _, key := range envs {
 		if os.Getenv(key) != "" {
 			return true, "env " + key
 		}
 	}
-	k, _ := agents.ByAdapter(adapter)
+	k, _ := agents.Lookup(name, adapter)
 	if home, err := homeDir(); err == nil {
 		for _, rel := range files {
 			p := filepath.Join(home, filepath.FromSlash(rel))

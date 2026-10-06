@@ -126,20 +126,50 @@ type Known struct {
 
 // Capabilities describes the native feature surface one agent CLI exposes.
 // Each flag is true when the agent's documented CLI surface includes the
-// corresponding feature; `panda agents` displays them today, and the routing
-// layer / prompt builder are planned to read them instead of hard-coding
-// per-adapter knowledge.
+// corresponding feature; the commander reads them instead of hard-coding
+// per-adapter tables (the restricted-mode and MCP-passthrough allowlists
+// used to live in their own maps and drifted out of sync with this one).
 type Capabilities struct {
 	// SupportsSkills means the agent has a native skill/library concept
 	// reachable when the tool whitelist is lifted (extended policy).
 	SupportsSkills bool
-	// SupportsMCP means the agent auto-discovers project-level MCP
-	// servers (.mcp.json in its cwd) when the extended policy writes one.
+	// SupportsMCP means the agent can consume MCP servers in some form
+	// (its own config files, flags, or project discovery). This is the
+	// broad capability; DiscoversProjectMCP is the specific mechanism the
+	// commander's .mcp.json passthrough requires.
 	SupportsMCP bool
 	// SupportsSubagents means the agent can spawn its own child agents
 	// (e.g. Claude's Task tool); the orchestration layer records the
 	// delegation events when the extended policy lifts the whitelist.
 	SupportsSubagents bool
+	// SupportsRestricted means the adapter can express a read-only tool
+	// face (no shell, no writes) for unconsented remote tasks. Adapters
+	// without the flag must never be asked for one — a restricted request
+	// sent to a full-power CLI would silently run unconfined, so the
+	// scheduler refuses the attempt instead of degrading (fail closed).
+	SupportsRestricted bool
+	// DiscoversProjectMCP means the agent CLI auto-discovers a project-level
+	// MCP config in its working directory, so the commander can materialize
+	// the configured passthrough servers for one run.
+	DiscoversProjectMCP bool
+	// MCPProjectFile names the project-level config path the CLI discovers
+	// (".mcp.json" for claude-style CLIs, ".pi/mcp.json" for pi). Empty
+	// defaults to ".mcp.json" — only read when DiscoversProjectMCP is set.
+	MCPProjectFile string
+	// SupportsStructuredOutput means the adapter's CLI accepts a result
+	// schema (claude --json-schema): the run's final reply validates
+	// against it, so the protocol fields (status/question/delegate_requests)
+	// arrive parsed rather than as text markers.
+	SupportsStructuredOutput bool
+	// SupportsSession means the adapter can keep the agent CLI alive across
+	// turns (claude --input-format stream-json): a supervision "continue"
+	// costs a message write instead of a process spawn + session reload.
+	SupportsSession bool
+	// MCPConfigFlag names the CLI flag that accepts an MCP config document
+	// (e.g. claude's "--mcp-config"). When set, the commander passes the
+	// passthrough servers on the request instead of writing .mcp.json into
+	// the task's work dir.
+	MCPConfigFlag string
 }
 
 // ModelEnvMapping names the env vars one agent CLI reads for its model
@@ -147,7 +177,11 @@ type Capabilities struct {
 // through the mapping, so a new agent in the registry gets credential probing
 // and (when a mapping is declared) injection without any commander change.
 type ModelEnvMapping struct {
-	APIType string // protocol required: "anthropic" | "openai" (empty matches any)
+	// APIType is the protocol the agent expects: "anthropic" | "openai".
+	// Empty matches any configured protocol — a polyglot agent (pi, which
+	// selects the wire dialect per-provider) speaks whatever the model
+	// config speaks, so the effective api type is the model's own.
+	APIType string
 	BaseURL string // env var carrying the provider base URL, e.g. ANTHROPIC_BASE_URL / OPENAI_BASE_URL
 	APIKey  string // env var carrying the API key, e.g. ANTHROPIC_API_KEY / OPENAI_API_KEY
 	Model   string // env var carrying the model name, e.g. ANTHROPIC_MODEL / OPENAI_MODEL
@@ -198,6 +232,16 @@ var known = []Known{
 			SupportsSkills:    true,
 			SupportsMCP:       true,
 			SupportsSubagents: true,
+			// claude --allowedTools can express a read-only face, and the CLI
+			// auto-discovers .mcp.json in its working directory.
+			SupportsRestricted:  true,
+			DiscoversProjectMCP: true,
+			// claude -p takes --json-schema, --mcp-config and stream-json
+			// input — the structured contract, file-free passthrough and the
+			// in-session multi-turn the supervision loop drives.
+			SupportsStructuredOutput: true,
+			SupportsSession:          true,
+			MCPConfigFlag:            "--mcp-config",
 		},
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "refactoring"},
 		DefaultBestAt:       []string{"multi_file_edits", "code_search", "refactoring", "complex_reasoning"},
@@ -248,6 +292,9 @@ var known = []Known{
 			APIKey:  "OPENAI_API_KEY",
 			Model:   "OPENAI_MODEL",
 		},
+		// codex's own sandbox levels include a real read-only mode
+		// (--sandbox read-only), so it can honor restricted runs.
+		Capabilities:        Capabilities{SupportsRestricted: true},
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "code_review"},
 		DefaultBestAt:       []string{"code_review", "running_tests", "multi_file_edits"},
 		DefaultCostTier:     "medium",
@@ -395,6 +442,64 @@ var known = []Known{
 		DefaultCostTier:     "low_medium",
 		DefaultTier:         TierAutoApproved,
 	},
+	{
+		Name:    "pi",
+		Adapter: "pi.py",
+		// pi is multi-provider — /login to any vendor, or its env vars. There
+		// is no single provider endpoint to probe, so Endpoint stays empty
+		// and the pre-dispatch reachability check is skipped for it.
+		Binaries:    []string{"pi"},
+		DisplayName: "Pi",
+		InstallHint: "npm install -g @mariozechner/pi-coding-agent",
+		InstallURL:  "https://pi.dev",
+		InitHint:    "pi  # run once and /login to connect a provider",
+		// pi authenticates through ~/.pi/agent/auth.json (written by /login),
+		// a custom provider block in models.json, or the provider's own env
+		// var — the union of the common vendor keys is the env signal.
+		CredentialEnvVars: []string{
+			"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
+			"OPENROUTER_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+			"XAI_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY",
+			"CEREBRAS_API_KEY", "ZAI_API_KEY", "KIMI_API_KEY",
+			"MOONSHOT_API_KEY", "MINIMAX_API_KEY",
+		},
+		CredentialFiles: []string{".pi/agent/auth.json", ".pi/agent/models.json"},
+		CredentialFileFields: map[string][]string{
+			// auth.json maps provider id → credential; a provider key with a
+			// value is the login signal. models.json counts when it declares
+			// a custom providers block (a compatible endpoint configured).
+			".pi/agent/auth.json": {
+				"anthropic", "openai", "google", "deepseek", "openrouter",
+				"github-copilot", "xai", "mistral", "groq", "cerebras",
+				"zai", "kimi", "moonshot", "minimax", "qwen", "ollama",
+			},
+			".pi/agent/models.json": {"providers"},
+		},
+		// pi speaks whatever protocol the configured model speaks — the
+		// adapter declares the dialect per-provider in a generated
+		// models.json — so the mapping matches any api_type and the
+		// commander passes the model's own type as OPENPANDA_MODEL_API_TYPE.
+		ModelEnv: &ModelEnvMapping{
+			APIType: "",
+			BaseURL: "PI_BASE_URL",
+			APIKey:  "PI_API_KEY",
+			Model:   "PI_MODEL",
+		},
+		Capabilities: Capabilities{
+			SupportsSkills: true,
+			SupportsMCP:    true,
+			// --tools read,grep,find,ls --no-mcp --no-extensions --no-approve
+			// gives a real read-only face, and project .pi/mcp.json is pi's
+			// discovery point for the passthrough servers.
+			SupportsRestricted:  true,
+			DiscoversProjectMCP: true,
+			MCPProjectFile:      ".pi/mcp.json",
+		},
+		DefaultCapabilities: []string{"coding", "shell", "file_edit", "refactoring"},
+		DefaultBestAt:       []string{"multi_file_edits", "code_search", "scripting"},
+		DefaultCostTier:     "medium",
+		DefaultTier:         TierAutoApproved,
+	},
 }
 
 // Registry returns every known agent in deterministic (name-sorted) order.
@@ -426,4 +531,44 @@ func ByAdapter(adapter string) (Known, bool) {
 		}
 	}
 	return Known{}, false
+}
+
+// GenericAdapter is the script name of the template-driven adapter
+// (adapters/generic.py). Any card agent may point at it, so an adapter-script
+// lookup cannot identify WHICH agent a generic run belongs to — the card's
+// agent name is the identity there, not the adapter.
+const GenericAdapter = "generic.py"
+
+// GenericNativeAdapter is the Python-free twin of GenericAdapter: a card
+// declaring adapter: "generic" (no .py) gets the identical argv-template
+// expansion implemented inside the commander itself. It exists for nodes
+// where a Python runtime cannot be assumed (bare Windows/macOS, minimal
+// containers, embedded boards) — the place where "any device can serve"
+// would otherwise die on a missing interpreter. Same identity rule: an
+// unknown card name on it resolves to no manifest.
+const GenericNativeAdapter = "generic"
+
+// Lookup resolves a card agent entry (name + adapter) to its registry record.
+//
+// The card's own agent name wins, but only when the entry's adapter agrees
+// with the registry record's — a card naming an agent "codex" while pointing
+// at claude_code.py must not inherit codex's credential manifest. For bespoke
+// adapters the adapter script alone identifies the contract, so a renamed
+// card entry still resolves (a card may call the claude adapter anything).
+//
+// GenericAdapter is the exception that makes the name lookup load-bearing:
+// any number of unrelated CLIs share the script, so an unknown name on it
+// resolves to nothing rather than to whichever registry agent happens to use
+// generic.py. GenericNativeAdapter follows the same rule — an unknown name
+// resolves to nothing rather than borrowing a manifest. Without this rule
+// every custom CLI silently inherited zcode's binaries, credential manifest
+// and endpoint.
+func Lookup(name, adapter string) (Known, bool) {
+	if k, ok := ByName(name); ok && k.Adapter == adapter {
+		return k, true
+	}
+	if adapter == GenericAdapter || adapter == GenericNativeAdapter {
+		return Known{}, false
+	}
+	return ByAdapter(adapter)
 }

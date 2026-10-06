@@ -79,6 +79,16 @@ type Manifest struct {
 	Hash    string      `json:"hash"`
 	Size    int64       `json:"size"`
 	Entries []EntryMeta `json:"entries"`
+	// Skipped counts archive entries the unpack side declined to materialize
+	// under a skip filter (ExtractExcept): the hash still covers the full
+	// stream, so a skipped .git never changes what the artifact IS, only what
+	// lands in the destination.
+	Skipped int `json:"skipped,omitempty"`
+	// SkippedPaths names the first few withheld entries (bounded by
+	// maxSkippedPaths at extract time) so the caller can surface WHAT was
+	// held back — a protected path disappearing silently would read as the
+	// executor never producing it.
+	SkippedPaths []string `json:"skipped_paths,omitempty"`
 }
 
 // epoch is the fixed modification time stamped on every entry. Real mtimes are
@@ -167,6 +177,14 @@ type entry struct {
 // the artifact travels to. limit bounds the total regular-file bytes; 0
 // accepts whatever the source tree holds.
 func walk(root string, limit int64) ([]entry, error) {
+	return walkExcept(root, limit, nil)
+}
+
+// walkExcept is walk with a directory-name skip set: a directory whose name is
+// in skip is pruned wholesale (contents never counted, never packed). Callers
+// use it to keep derived trees — dependency checkouts, VCS internals, caches —
+// out of an artifact that only needs the source.
+func walkExcept(root string, limit int64, skip map[string]bool) ([]entry, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, fmt.Errorf("artifact: stat root: %w", err)
@@ -191,6 +209,9 @@ func walk(root string, limit int64) ([]entry, error) {
 		rel = filepath.ToSlash(rel)
 		switch {
 		case fi.IsDir():
+			if skip[fi.Name()] {
+				return filepath.SkipDir
+			}
 			out = append(out, entry{rel: rel, abs: path, mode: fi.Mode().Perm(), dir: true})
 		case fi.Mode().IsRegular():
 			total += fi.Size()

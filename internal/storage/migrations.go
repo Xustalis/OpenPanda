@@ -52,6 +52,181 @@ var migrations = []Migration{
 	{Version: 27, Name: "add_employee_contacts_json", Apply: migrateV27},
 	{Version: 28, Name: "add_employee_pub_key", Apply: migrateV28},
 	{Version: 29, Name: "add_tasks_auth_grant", Apply: migrateV29},
+	{Version: 30, Name: "add_employee_projects_json", Apply: migrateV30},
+	{Version: 31, Name: "add_employee_key_verified", Apply: migrateV31},
+	{Version: 32, Name: "add_pending_nodes", Apply: migrateV32},
+	{Version: 33, Name: "add_tasks_remote", Apply: migrateV33},
+	{Version: 34, Name: "add_employee_ver", Apply: migrateV34},
+	{Version: 35, Name: "add_task_events_sig", Apply: migrateV35},
+	{Version: 36, Name: "rekey_outboxes_stable_id", Apply: migrateV36},
+	{Version: 37, Name: "add_audit_log_sig", Apply: migrateV37},
+}
+
+// migrateV37 adds audit_log.sig / sig_pub (P2-9): the Ed25519 signature of
+// the entry's chain hash and the public key that made it. The audit chain
+// used to be unkeyed SHA-256 — anyone with DB write access could rewrite an
+// entry and re-hash the chain end to end. A signed entry cannot be forged
+// without the node's private key. Empty on pre-migration rows: unsigned
+// means unsigned, and the verifier only demands signatures once the chain
+// has begun signing.
+func migrateV37(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "audit_log")
+	if err != nil || !exists {
+		return err
+	}
+	if err := addColumnIfMissingTx(tx, "audit_log", "sig", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "audit_log", "sig_pub", "TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateV36 re-keys every outbox destination from the peer's instance id to
+// its stable identity ("k:" + Ed25519 pub) wherever the directory already
+// holds a proven key (Batch-6 restart continuity, confirmed-issues §14). Rows
+// whose peer is unknown or key-less keep their instance id — for those peers
+// the instance id IS the stable key, and they flush exactly as before. The
+// rewrite is INSERT OR REPLACE + DELETE rather than a blind UPDATE: a node
+// that helloed under two instance ids can already hold rows under both, and
+// collapsing them to one stable key must merge, not fail, on the (peer,
+// task_id) primary key.
+func migrateV36(tx MigrationExec) error {
+	// Databases migrating forward from before employee_cache existed have no
+	// identity records to re-key by — every row keeps its instance key, which
+	// is exactly what "no stable identity known" means anyway.
+	dirExists, err := tableExistsTx(tx, "employee_cache")
+	if err != nil || !dirExists {
+		return err
+	}
+	stmts := []struct{ table, cols, vals string }{
+		{"result_outbox",
+			"peer, task_id, payload_json, created_at",
+			"'k:' || e.pub_key, o.task_id, o.payload_json, o.created_at"},
+		{"cancel_outbox",
+			"peer, task_id, reason, created_at",
+			"'k:' || e.pub_key, o.task_id, o.reason, o.created_at"},
+		{"task_outbox",
+			"peer, task_id, payload_json, transport_type, ttl, created_at, payload_blob, via",
+			"'k:' || e.pub_key, o.task_id, o.payload_json, o.transport_type, o.ttl, o.created_at, o.payload_blob, o.via"},
+		{"artifact_push_outbox",
+			"peer, hash, task_id, total, sent_through, acked_through, ttl, created_at",
+			"'k:' || e.pub_key, o.hash, o.task_id, o.total, o.sent_through, o.acked_through, o.ttl, o.created_at"},
+	}
+	for _, s := range stmts {
+		exists, err := tableExistsTx(tx, s.table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		// ORDER BY makes the merge winner deterministic: two instance rows
+		// collapsing onto one stable (peer, task_id) key apply oldest-first,
+		// so INSERT OR REPLACE leaves the newest payload standing rather than
+		// whichever row SQLite happened to visit last.
+		if _, err := tx.Exec(fmt.Sprintf(
+			`INSERT OR REPLACE INTO %s (%s)
+			 SELECT %s FROM %s o
+			 JOIN employee_cache e ON e.id = o.peer AND e.pub_key != ''
+			 ORDER BY o.created_at ASC, o.rowid ASC`,
+			s.table, s.cols, s.vals, s.table)); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(fmt.Sprintf(
+			`DELETE FROM %s WHERE peer IN (
+				 SELECT id FROM employee_cache WHERE pub_key != '')`,
+			s.table)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV35 adds task_events.sig / sig_pub (P2-9): the Ed25519 signature of
+// the event's chain hash and the public key that made it. An unkeyed SHA-256
+// chain can be rewritten wholesale by anyone with DB write access and
+// re-hashed end to end — a signed row cannot be forged without the node's
+// private key, so verify gains "this node's key attested this row" on top of
+// "the rows link up". Empty on pre-migration rows: unsigned means unsigned.
+func migrateV35(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "task_events")
+	if err != nil || !exists {
+		return err
+	}
+	if err := addColumnIfMissingTx(tx, "task_events", "sig", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "task_events", "sig_pub", "TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateV34 adds employee_cache.ver: the software version a peer advertised
+// in its hello/heartbeat. Fleet observability (v0.0.10 Track 3) renders the
+// version skew so an operator can see a stale node at a glance instead of
+// debugging a protocol mismatch frame by frame. Empty on rows that predate
+// the column until the next hello re-stamps it.
+func migrateV34(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "employee_cache")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "employee_cache", "ver", "TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateV33 adds tasks.remote: set at intake when the row was created by a
+// delegate handler (the intent text came off the wire) rather than by local
+// submit. Provenance must be persisted, not derived from chain[0] — the chain
+// is peer-supplied, and a peer can write chain=[victim, self] to make its
+// task look locally authored. The executor uses this flag to hold remote,
+// unconsented agent runs to the restricted tool face.
+func migrateV33(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "tasks", "remote", "INTEGER NOT NULL DEFAULT 0")
+}
+
+// migrateV32 adds pending_nodes: the LAN discovery hint list. A UDP beacon
+// is unauthenticated by design — it may say "a node lives at this address"
+// and nothing more — so its rows sit here, NOT in employee_cache, until the
+// operator pairs the address (shared secret + signed hello). Rows expire:
+// a node that stopped broadcasting should fall off the list instead of
+// accumulating ghosts.
+func migrateV32(tx MigrationExec) error {
+	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS pending_nodes (
+		id TEXT PRIMARY KEY,
+		addr TEXT NOT NULL DEFAULT '',
+		pub_key TEXT NOT NULL DEFAULT '',
+		ver TEXT NOT NULL DEFAULT '',
+		first_seen INTEGER NOT NULL DEFAULT 0,
+		last_seen INTEGER NOT NULL DEFAULT 0)`)
+	return err
+}
+
+// migrateV31 adds employee_cache.key_verified: the unix timestamp a human
+// confirmed this node's advertised fingerprint (panda nodes verify <id>),
+// which is what turns a TOFU-recorded Ed25519 key into a checked one. A key
+// that changes under a still-verified row clears the stamp — the new key has
+// never been compared, and pretending otherwise would make the check
+// decorative.
+func migrateV31(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "employee_cache")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "employee_cache", "key_verified", "INTEGER NOT NULL DEFAULT 0")
+}
+
+// migrateV30 adds employee_cache.projects_json: the names of the projects a
+// node holds a checkout of, gossiped on card and heartbeat so routing can
+// prefer a resident node for a project task. Residence is an optimization the
+// scorer weighs — the tree can still travel as an artifact — but landing the
+// task where the code already lives skips the round trip entirely.
+func migrateV30(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "employee_cache")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "employee_cache", "projects_json", "TEXT NOT NULL DEFAULT ''")
 }
 
 // migrateV28 adds employee_cache.pub_key: the peer's advertised Ed25519

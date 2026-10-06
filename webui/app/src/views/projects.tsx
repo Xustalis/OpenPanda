@@ -3,6 +3,7 @@ import { api, type ApprovalScope, type ProjectDetail } from '../api/client'
 import { useAsync, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { ErrorState, PageHeader } from '../components/page'
+import { Icon } from '../components/icons'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 import { DirPicker } from '../components/dir-picker'
@@ -223,13 +224,13 @@ function ProjectRow({
     <div class={`card project-item${project.active ? ' project-active' : ''}`}>
       <div class="project-head">
         <button class="project-name-btn" onClick={onOpen} title={t('projects.openChat')}>
-          <span class="project-name-icon">📁</span>
+          <Icon name="folder" class="project-name-icon" />
           <span class="project-name">{project.name}</span>
         </button>
         {project.active && <span class="badge">{t('projects.current')}</span>}
         <span class="grow" />
         <button class="btn primary project-chat-btn" onClick={onOpen} disabled={busy} title={t('projects.openChat')}>
-          💬 {t('projects.openChat')}
+          <Icon name="message" size={13} /> {t('projects.openChat')}
         </button>
         <button class="btn" onClick={onEdit} disabled={busy}>
           {editing ? t('common.cancel') : t('projects.rename')}
@@ -241,7 +242,7 @@ function ProjectRow({
 
       <div class="project-meta dim">
         <span class="project-dir-tag">
-          📁 {project.work_dir ? project.work_dir : t('projects.noDir')}
+          <Icon name="folder" size={13} /> {project.work_dir ? project.work_dir : t('projects.noDir')}
           {project.work_dir && (
             <button
               type="button"
@@ -253,7 +254,7 @@ function ProjectRow({
                 toast(t('projects.copiedDir'), 'info')
               }}
             >
-              📋
+              <Icon name="copy" size={12} />
             </button>
           )}
         </span>

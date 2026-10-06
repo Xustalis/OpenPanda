@@ -8,6 +8,7 @@ import {
   type ModelSettings,
 } from '../api/client'
 import { useLocaleRerender } from '../hooks'
+import { Icon, type IconName } from '../components/icons'
 import { t } from '../i18n'
 import { locale, localeNames, locales, setLocale } from '../i18n'
 import { notifyModelSaved } from './onboarding'
@@ -32,14 +33,14 @@ export type Section =
   | 'reminders'
   | 'system'
 
-const SECTIONS: Array<{ id: Section; label: string; icon: string }> = [
-  { id: 'general', label: 'settings.group.general', icon: '⚙️' },
-  { id: 'models', label: 'settings.model', icon: '🧠' },
-  { id: 'policy', label: 'settings.policy', icon: '🛡️' },
-  { id: 'agents', label: 'settings.group.agents', icon: '🤖' },
-  { id: 'mcp', label: 'settings.mcp', icon: '🔌' },
-  { id: 'reminders', label: 'nav.reminders', icon: '⏰' },
-  { id: 'system', label: 'nav.system', icon: '📊' },
+const SECTIONS: Array<{ id: Section; label: string; icon: IconName }> = [
+  { id: 'general', label: 'settings.group.general', icon: 'gear' },
+  { id: 'models', label: 'settings.model', icon: 'cpu' },
+  { id: 'policy', label: 'settings.policy', icon: 'shield' },
+  { id: 'agents', label: 'settings.group.agents', icon: 'bot' },
+  { id: 'mcp', label: 'settings.mcp', icon: 'plug' },
+  { id: 'reminders', label: 'nav.reminders', icon: 'bell' },
+  { id: 'system', label: 'nav.system', icon: 'activity' },
 ]
 
 function normalizeSection(raw?: string): Section {
@@ -98,7 +99,7 @@ export function SettingsView(props: {
               class={`settings-nav-item${section === s.id ? ' active' : ''}`}
               onClick={() => handleSelect(s.id)}
             >
-              <span class="settings-nav-icon" aria-hidden="true">{s.icon}</span>
+              <Icon name={s.icon} class="settings-nav-icon" />
               <span class="settings-nav-text">{t(s.label)}</span>
             </button>
           ))}
@@ -533,7 +534,16 @@ function PolicySection() {
         <div class="field-group">
           <label>{t('settings.sandbox')}</label>
           <p class="hint">
-            {t('settings.sandboxDesc')}
+            {form.sandbox.active
+              ? t('settings.sandboxDescOn')
+              : form.sandbox.mode && form.sandbox.mode !== 'off'
+                ? t('settings.sandboxDescNoBackend')
+                : t('settings.sandboxDesc')}
+            {form.sandbox.mode && form.sandbox.mode !== 'off' && (
+              <span class="mono">
+                {' '}{form.sandbox.mode}{form.sandbox.backend ? ` (${form.sandbox.backend})` : ''} ·
+              </span>
+            )}
             {form.sandbox.work_path && <span class="mono"> {form.sandbox.work_path}</span>}
           </p>
         </div>

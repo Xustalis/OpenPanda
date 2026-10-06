@@ -316,5 +316,9 @@ func newCoreWithNative(t *testing.T, id, addr string, native ledger.NativeAbilit
 	}
 	c := NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
 	c.SetSharedSecret(testSharedSecret)
+	// A dedicated work dir keeps staged/attached trees out of the package
+	// directory — NewCore defaults to ".", which would litter test artifacts
+	// into the source tree the moment a task unpacks inputs there.
+	c.SetWorkDir(t.TempDir())
 	return c
 }

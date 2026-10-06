@@ -27,17 +27,22 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
-// splitArgs tokenizes a slash-command tail, honoring double quotes so
-// `--title "deploy the thing"` keeps its payload intact.
+// splitArgs tokenizes a slash-command tail, honoring single and double
+// quotes so `--title "deploy the thing"` keeps its payload intact. Single
+// quotes matter for `--action-spec '{"a":"b c"}'`: JSON's own double quotes
+// would otherwise toggle the parser mid-token, stripping the quotes and
+// leaving {a:b c} — unparseable every time.
 func splitArgs(s string) []string {
 	var out []string
 	var cur strings.Builder
-	inQuote := false
+	var quote rune // 0 outside a quote; '"'/'\'' inside one
 	for _, r := range s {
 		switch {
-		case r == '"':
-			inQuote = !inQuote
-		case (r == ' ' || r == '\t') && !inQuote:
+		case quote == 0 && (r == '"' || r == '\''):
+			quote = r
+		case r == quote:
+			quote = 0
+		case (r == ' ' || r == '\t') && quote == 0:
 			if cur.Len() > 0 {
 				out = append(out, cur.String())
 				cur.Reset()
@@ -155,7 +160,7 @@ func (r *repl) cmdAudit(arg string) {
 		r.outf("task %s event chain: OK\n", taskID)
 		return
 	}
-	if err := security.NewAudit(r.db).VerifyChain(ctx); err != nil {
+	if err := verifyAudit(r.db).VerifyChain(ctx); err != nil {
 		r.errf("panda: audit chain broken: %v\n", err)
 		return
 	}
@@ -603,6 +608,71 @@ func (r *repl) cmdNodesRemove(arg string) {
 	r.outln(i18n.Tf(r.loc, "cli.nodes.none", "id", id))
 }
 
+// cmdNodesVerify implements `/nodes verify <id>` — the REPL twin of
+// `panda nodes verify`: stamp the fingerprint the operator compared
+// out-of-band so the TOFU line between "a hello claimed this" and "I
+// checked" is kept honest.
+func (r *repl) cmdNodesVerify(arg string) {
+	id := strings.TrimSpace(arg)
+	if id == "" {
+		r.outln("usage: /nodes verify <id>")
+		return
+	}
+	nodes, err := ledger.Query(r.db, "", "")
+	if err != nil {
+		r.storeErr(err)
+		return
+	}
+	for _, n := range nodes {
+		if n.ID != id {
+			continue
+		}
+		fp := n.Fingerprint()
+		if fp == "" {
+			r.outln(i18n.Tf(r.loc, "cli.nodes.verify.nokey", "id", id))
+			return
+		}
+		ok, err := ledger.MarkVerified(r.db, id)
+		if err != nil {
+			r.storeErr(err)
+			return
+		}
+		if !ok {
+			r.outln(i18n.Tf(r.loc, "cli.nodes.verify.nokey", "id", id))
+			return
+		}
+		r.outln(i18n.Tf(r.loc, "cli.nodes.verify.done", "id", id, "fp", fp))
+		return
+	}
+	r.outln(i18n.Tf(r.loc, "cli.nodes.none", "id", id))
+}
+
+// cmdNodesAdmit implements `/nodes admit <id>` — resolve a LAN-discovered
+// pending row into its advertised address and run it through the same
+// add-and-dial path `/nodes add` uses (live dial when the engine is up), then
+// forget the pending row.
+func (r *repl) cmdNodesAdmit(arg string) {
+	id := strings.TrimSpace(arg)
+	if id == "" {
+		r.outln("usage: /nodes admit <id>")
+		return
+	}
+	pending, err := ledger.ListPending(r.db, 90*time.Second)
+	if err != nil {
+		r.storeErr(err)
+		return
+	}
+	for _, p := range pending {
+		if p.ID != id {
+			continue
+		}
+		r.cmdNodesAdd(p.Addr)
+		_ = ledger.ForgetPending(r.db, id)
+		return
+	}
+	r.outln(i18n.Tf(r.loc, "cli.nodes.admit.none", "id", id))
+}
+
 // cmdTaskAdd implements `/task add <title>` with the optional flags the CLI
 // takes (--prompt/--priority/--project/--requires/--preferred/--authorize,
 // and --agents/--mode for the multi-harness plan form). It needs the ask
@@ -612,7 +682,7 @@ func (r *repl) cmdTaskAdd(fields []string) {
 		r.outln(i18n.T(r.loc, "repl.approval.noEngine"))
 		return
 	}
-	var title, prompt, priority, project, requires, agents, mode, preferred string
+	var title, prompt, priority, project, requires, agents, mode, preferred, actionSpec string
 	authorize := false
 	var pos []string
 	for i := 0; i < len(fields); i++ {
@@ -641,6 +711,8 @@ func (r *repl) cmdTaskAdd(fields []string) {
 			mode = val()
 		case "preferred":
 			preferred = val()
+		case "action-spec", "actionSpec":
+			actionSpec = val()
 		case "authorize":
 			authorize = true
 		default:
@@ -682,6 +754,10 @@ func (r *repl) cmdTaskAdd(fields []string) {
 
 	agentList := parseAgentList(agents)
 	if len(agentList) > 1 {
+		if strings.TrimSpace(actionSpec) != "" {
+			r.outln(i18n.T(r.loc, "cli.task.add.actionSpecAgents"))
+			return
+		}
 		if mode == "" {
 			mode = "parallel"
 		}
@@ -713,10 +789,35 @@ func (r *repl) cmdTaskAdd(fields []string) {
 	if len(agentList) == 1 {
 		requiresList = append(requiresList, "agent:"+agentList[0])
 	}
+	// --action-spec carries the §7.2 actuator dispatch, same contract as the
+	// CLI flag: parsed into the wire type here so a malformed spec fails in
+	// the REPL, not at the executor.
+	contextType := ""
+	specJSON := ""
+	if raw := strings.TrimSpace(actionSpec); raw != "" {
+		var as ledger.ActionSpec
+		if err := json.Unmarshal([]byte(raw), &as); err != nil {
+			r.outln(i18n.Tf(r.loc, "cli.task.add.badActionSpec", "err", err.Error()))
+			return
+		}
+		if as.TargetActuator == "" || as.Action == "" {
+			r.outln(i18n.T(r.loc, "cli.task.add.actionSpecMissing"))
+			return
+		}
+		detail := struct {
+			ActionSpec ledger.ActionSpec `json:"action_spec"`
+		}{ActionSpec: as}
+		b, _ := json.Marshal(detail)
+		specJSON = string(b)
+		contextType = "hardware"
+		requiresList = ledger.RequiresForActionSpec(requiresList, &as)
+	}
 	in := core.TaskInput{
 		Title:         title,
 		Project:       project,
+		ContextType:   contextType,
 		Intent:        prompt,
+		SpecJSON:      specJSON,
 		Requires:      requiresList,
 		PreferredNode: strings.TrimSpace(preferred),
 		Authorized:    authorize,

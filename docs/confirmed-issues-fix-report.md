@@ -38,7 +38,7 @@
 | 远程取消 | 下游取消后本地 origin 仍停留在运行态 | 已确认，待修复 |
 | Web 会话 | 旧请求清理新请求、Stop 取消历史任务 | 已确认，待修复 |
 | 节点身份 | 稳定名称被误判为 ephemeral sibling | 已确认，待修复 |
-| Outbox | 请求方重启后旧结果无法投递 | 协议迁移待办 |
+| Outbox | 请求方重启后旧结果无法投递 | 已修复（Batch 6，stable 键控 + v36 迁移，2026-10-04） |
 
 ## 3. TUI 交互与布局问题
 
@@ -457,6 +457,19 @@ Wake Lock/Web Audio 只能改善体验，不提供正确性。SSE 事件应携�
 6. 新实例只能领取同一已认证 stable node 的结果。
 7. 版本协商、滚动升级和数据库迁移测试。
 
+**已实施（Batch 6，2026-10-04）**。协议三个身份全部显式化，且复用既有签名 hello 作为 stable↔instance 的认证绑定，未新增线上字段：
+
+- `stable_node_id` = 节点已认证的 Ed25519 身份，在 outbox 与 EID 中记作 `"k:"+hex(pub_key)`。pub_key 仅在签名 hello 通过 `EdSig` 验证后由 `recordPeerPubKey` 落库，因此 stable 身份天然可认证。
+- `instance_id` = 现有 node id（进程/守护实例）；hello、拨号、env.To 语义不变。
+- `operation_id` = `task_id`，本就跨重启持久。
+- `result_outbox`/`cancel_outbox`/`task_outbox`/`artifact_push_outbox` 全部按 stable 键持久化（`stablePeerID`），flush 时按"stable 键 + 同身份所有实例 id"的并集认领（`claimKeys`），行级删除用原始存储键。
+- 授权边界：hello 里 EdSig 证明 instance 持有私钥后才记 pub_key——新实例持同库同密钥即继承 stable 身份并领取全部 custody；冒名者无对应私钥，pub 无法被记到其实例下，认领集合永不含他人 stable 键（`TestOutboxFlushRejectsForeignIdentity`）。
+- Bundle DestEID 同步改为 stable 键；`handleDTNBundle`/`relayBundle`/`dtnNextHop`/`relayParked`/`sweepOutboxes` 均先做 stable→instance 解析再投递/路由。
+- 迁移 v36 `rekey_outboxes_stable_id`：`INSERT OR REPLACE + DELETE` 把存量 instance 键行并入 stable 键（同任务双实例行合并而非 PK 冲突）；无 key 或未知 peer 的行保持原样；employee_cache 不存在的旧库直接跳过；幂等。
+- 兼容：key-less peer 的 instance id 即其 stable 键，新旧行为一致；旧格式 DestEID（instance id）与新格式（`k:`）都解析投递。
+- 推送水位线仍按实例键（`env.From`）：接收端磁盘位置是每实例事实，重启后由新实例自报水位续传。
+- 测试：`TestMigrateV36RekeysOutboxes`（迁移+冲突合并+幂等）、`TestOutboxFlushAfterPeerRestart`（同 db 换实例 e2e 领取）、`TestStablePeerIDResolution`、`TestOutboxClaimKeysAcrossInstances`、`TestOutboxFlushRejectsForeignIdentity`。
+
 ## 11. 实施批次
 
 ### Batch 0：保护现有工作并建立基线
@@ -507,12 +520,14 @@ Wake Lock/Web Audio 只能改善体验，不提供正确性。SSE 事件应携�
 - 授权默认 exact identity。
 - 明确协议迁移边界。
 
-### Batch 6：独立协议迁移
+### Batch 6：独立协议迁移 — **已完成（2026-10-04）**
 
 - stable node、instance、operation 三类身份显式化。
 - 迁移 outbox schema 与握手认证。
 - 做兼容、滚动升级、重启恢复和未授权领取失败测试。
 - 此批次必须单独审查与发布；未完成前只能标记“待办”。
+
+实现要点与测试清单见 §10.2 末尾“已实施”段。握手复用既有签名 hello（`Pub`+`EdSig`）完成 stable↔instance 绑定，无需新线上字段；滚动升级依赖 hello 的既有版本字段与 key-less 回退语义。
 
 ## 12. 回归测试矩阵
 
@@ -605,7 +620,7 @@ make gate-all
 | Web generation-safe registry | 未实施 |
 | Stop 不再取消历史任务 | 未实施 |
 | 节点 identity 最小加固 | 未实施 |
-| Outbox 跨重启协议迁移 | 待独立设计与实施 |
+| Outbox 跨重启协议迁移 | 已实施（2026-10-04，见 §10.2/Batch 6：stable_node_id=`k:`+Ed25519 pub、instance_id=node id、v36 迁移、认领并集与未授权拒绝测试） |
 
 ## 16. 此前验证记录
 

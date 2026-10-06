@@ -72,10 +72,11 @@ func TestSandboxEnvDoesNotLeakSecrets(t *testing.T) {
 
 func TestSandboxApplySetsDirAndEnv(t *testing.T) {
 	cmd := exec.Command("true")
-	NewSandbox("/tmp/taskdir").Apply(cmd, "FOO=bar")
+	dir := t.TempDir() // native separators — Apply normalizes via filepath
+	NewSandbox(dir).Apply(cmd, "FOO=bar")
 
-	if cmd.Dir != "/tmp/taskdir" {
-		t.Fatalf("cmd.Dir = %q, want /tmp/taskdir", cmd.Dir)
+	if cmd.Dir != dir {
+		t.Fatalf("cmd.Dir = %q, want %q", cmd.Dir, dir)
 	}
 	hasFoo := false
 	hasPath := false

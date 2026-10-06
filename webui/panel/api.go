@@ -13,6 +13,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
+	"github.com/Xustalis/OpenPanda/internal/version"
 )
 
 // askRequest is the body of POST /api/ask.
@@ -207,13 +208,32 @@ func (h *handler) listNodes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, errors.New("query nodes failed"))
 		return
 	}
+	// Our own row's link metrics are the only edge table this node actually
+	// measures: peer-to-peer RTT/transport toward every remote row comes
+	// from them (Track 3). Find the self row first so the join below works
+	// regardless of query order.
+	localID := ""
+	if h.cfg != nil {
+		localID = localNodeID(h.cfg)
+	}
+	var selfRTT map[string]int64
+	var selfKind map[string]string
+	for _, n := range nodes {
+		if n.ID == localID {
+			selfRTT, selfKind = n.LinkMetrics, n.LinkKinds
+		}
+	}
 	out := make([]nodeRow, 0, len(nodes))
 	for _, n := range nodes {
 		row := toNodeRow(n)
-		if h.cfg != nil && n.ID == localNodeID(h.cfg) {
+		if n.ID == localID {
 			row.IsLocal = true
+			row.Ver = version.Version
 			held, err := nodeidentity.Held(h.cfg.Node.Kind, h.cfg.Node.EffectiveIdentity())
 			row.Running = err == nil && held && n.Status == "online"
+		} else {
+			row.RTTMs = selfRTT[n.ID]
+			row.Transport = selfKind[n.ID]
 		}
 		out = append(out, row)
 	}
