@@ -43,7 +43,7 @@ The project evolves along two tracks:
 | Track | Description | Status |
 |---|---|---|
 | **Multi-Agent orchestration** | Hire and command multiple terminal agents: dispatch, supervision, failover, approval | ✅ Current focus |
-| **Multi-device collaboration** | Cross-node task routing and scheduling over a P2P mesh | 🔶 Preview — not yet hardened; the theme of v0.0.10 |
+| **Multi-device collaboration** | Cross-node task routing and scheduling over a P2P mesh | ✅ Shipped in v0.0.10 — LAN discovery, TOFU pinning, delegated worktrees |
 
 ---
 
@@ -65,11 +65,21 @@ The project evolves along two tracks:
 - **Skills Hub & autonomous discovery** — a curated offline catalog (`panda skill hub`), importing from a path, URL, or archive (`panda skill import`), and an assistant that finds and installs the skill a task needs mid-flight.
 - **Traveling context** — delegated tasks carry project memory and a workspace digest to the executing node.
 
-### Multi-Device Collaboration (Preview)
+### Multi-Device Collaboration
 
+- **LAN auto-discovery + TOFU pinning** — nodes find each other on the LAN with fingerprint-confirmed admission; `panda nodes verify` pins each peer's Ed25519 key.
 - **Capability cards** — each node auto-declares its hardware and tool profile (CPU, RAM, OS, available agents).
-- **P2P mesh** — nodes communicate over authenticated, encrypted WebSocket; data never leaves your private network.
-- **Capability-based routing** — the scheduler scores nodes and routes each task to the best match.
+- **P2P mesh** — nodes communicate over authenticated, encrypted WebSocket and an encrypted UDP data plane with NAT traversal; data never leaves your private network.
+- **Capability-based routing** — the scheduler scores nodes on measured capacity and routes each task to the best match; `panda nodes drain` parks a node for maintenance.
+- **Worktree-traveling delegation** — a file task delegated to another node carries its checkout there and brings the result back.
+- **Actuator dispatch** — tasks can drive physical actuators (servo, mic, camera, notify, serial MCU) on the node that owns the hardware.
+
+### Sessions & Embedding
+
+- **Session trees** — `panda session fork <id> --at N` branches a conversation at any turn; in a repository the child's worktree branches off the parent's, so it inherits the code the parent produced. `panda session tree` renders the family, `/fork` does it inside the REPL/TUI.
+- **Auto-compaction** — overflowing history folds into a model-written running digest instead of being dropped; the stored thread stays whole.
+- **`panda rpc`** — NDJSON-over-stdio embedding surface (`status`, streaming `ask`, `session.*`), so other tools can drive OpenPanda; `scripts/panda_rpc.py` is a stdlib-only reference client.
+- **Subscription OAuth** — `panda auth login anthropic` signs in a Claude Pro/Max subscription via PKCE with transparent token refresh.
 
 ### Interfaces & Runtime
 
@@ -116,7 +126,7 @@ panda web                                            # web console, opens browse
 panda ask "check system status and summarize tasks"  # one-shot command
 ```
 
-To connect a second device (preview capability): run `panda pair` on device A to get a pairing code, then `panda nodes add <device-A-address>` on device B.
+To connect a second device: run `panda pair` on device A to get a pairing code, then `panda nodes add <device-A-address>` on device B — or let LAN discovery surface it under `panda nodes` and admit it by fingerprint.
 
 ---
 
@@ -132,7 +142,10 @@ To connect a second device (preview capability): run `panda pair` on device A to
 | `panda queue` | Inspect pending, running, and review tasks (`--watch` for live updates) |
 | `panda approve <id>` | Approve a pending Tier-2 task |
 | `panda project list` | Manage workspace projects and context |
+| `panda session` | List, fork, and resume conversation sessions (`session tree` shows the family) |
 | `panda skill` | Browse, import, and install workflow skills (Hub, URL, or file) |
+| `panda auth login` | Sign in a model subscription (e.g. `anthropic`) via OAuth |
+| `panda rpc` | NDJSON-over-stdio API for embedding OpenPanda |
 | `panda doctor` | Diagnose PATH, config, adapters, and database health |
 | `panda version` | Print the current version |
 
@@ -150,8 +163,10 @@ To connect a second device (preview capability): run `panda pair` on device A to
 │ defense        Tiered gating · circuit breakers · anti-loop │
 │ memory         Dual-layer memory (User/Project) + Skills    │
 ├─────────────────────────────────────────────────────────────┤
+│ sessions       Conversation trees · forking · compaction    │
+│ auth           Subscription OAuth (PKCE) · token store      │
 │ scheduler      Multi-device scoring & task routing          │
-│ bus / ledger   P2P WebSocket transport · HMAC auth · ledger │
+│ bus / ledger   P2P WebSocket + UDP transport · HMAC auth    │
 │ storage        Pure Go SQLite (WAL mode)                    │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -164,7 +179,7 @@ To connect a second device (preview capability): run `panda pair` on device A to
 |---|---|
 | **v0.0.8** (stable baseline) | Single-machine multi-agent orchestration, fully usable: intent classification, dispatch, supervision loop, failover, tiered approval, prompt language policy |
 | **v0.0.9** (stable) — "Periapsis" | Hybrid transport/DTN architecture completed: latency-weighted mesh routing, on-wire DTN bundles, token budgets, shadow copies, actuator path, UDP datagram plane with mesh-coordinated NAT hole punching, encrypted payloads, contact plans, Ed25519 node identity, lite build — plus remembered approvals, execution attribution, a web sidebar node chip and everyday CLI polish |
-| **v0.0.10-preview** (current) — "Apoapsis" | Reaching outward to the LAN and the edge: discovery with fingerprint-confirmed admission and TOFU key pinning, worktree-traveling delegated file tasks, the clarification loop, actuator dispatch with five reference drivers (serial MCU included), the Pi adapter and a Python-free generic executor, launch-directory project adoption — plus node-key-anchored signed event/audit chains, read-only clamping of unconsented remote runs, optional out-of-band update signatures, and a steady-state perf round |
+| **v0.0.10** (current) — "Apoapsis" | Reaching outward to the LAN and the edge: discovery with fingerprint-confirmed admission and TOFU key pinning, worktree-traveling delegated file tasks, the clarification loop, actuator dispatch with five reference drivers (serial MCU included), the Pi adapter and a Python-free generic executor — plus session trees with forking, auto-compaction, the `panda rpc` embedding surface, subscription OAuth, signed event/audit chains, OS-level sandboxing, and a steady-state perf round. Relicensed to AGPL-3.0-or-later with dual commercial licensing |
 | **v0.0.x (beyond)** | Stability, performance, and edge-case tuning |
 | **v0.1.0** | Desktop capabilities and stronger control & management — commercial-grade quality |
 

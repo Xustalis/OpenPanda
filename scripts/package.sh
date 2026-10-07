@@ -15,7 +15,7 @@
 #
 # Run `make web` first so the embedded web console is baked in.
 #
-# Usage: scripts/package.sh [version]   (default: $VERSION or 0.0.10-preview)
+# Usage: scripts/package.sh [version]   (default: $VERSION or 0.0.10)
 #
 # Env:
 #   OPENPANDA_PACKAGE_TARGETS  space-separated "os-arch" list to build instead
@@ -38,7 +38,7 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${1:-${VERSION:-0.0.10-preview}}"
+VERSION="${1:-${VERSION:-0.0.10}}"
 VERSION="${VERSION#v}"
 VERSION_PKG="github.com/Xustalis/OpenPanda/internal/version"
 LDFLAGS="-s -w -X ${VERSION_PKG}.Version=${VERSION}"
