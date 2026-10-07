@@ -157,7 +157,7 @@ func skillFind(cfg *config.Config, store *skills.Store, args []string) {
 
 	hubURL := cfg.Skills.HubURL
 	if !jsonOutput {
-		fmt.Printf("🔍 正在自主检索并匹配技能: %q ...\n", query)
+		fmt.Printf("🔍 正在自主检索并匹配技能 (Searching and matching skills): %q ...\n", query)
 	}
 	sk, isNew, err := store.DiscoverAndInstall(ctx, hubURL, query, skills.ImportOptions{Scope: skills.ScopeGlobal, Status: skills.StatusActive})
 	if err != nil {
@@ -176,12 +176,12 @@ func skillFind(cfg *config.Config, store *skills.Store, args []string) {
 	}
 
 	if isNew {
-		fmt.Printf("✅ 找到并自动安装激活技能: %s\n", sk.Name)
-		fmt.Printf("   描述: %s\n", sk.Description)
-		fmt.Printf("   状态: %s (已就绪)\n", sk.Status)
+		fmt.Printf("✅ 找到并自动安装激活技能 (Found and auto-installed skill): %s\n", sk.Name)
+		fmt.Printf("   描述 (Description): %s\n", sk.Description)
+		fmt.Printf("   状态 (Status): %s (已就绪 ready)\n", sk.Status)
 	} else {
-		fmt.Printf("ℹ️  匹配到技能 %s，该技能已处于激活就绪状态。\n", sk.Name)
-		fmt.Printf("   描述: %s\n", sk.Description)
+		fmt.Printf("ℹ️  匹配到技能 %s，该技能已处于激活就绪状态 (already active and ready)。\n", sk.Name)
+		fmt.Printf("   描述 (Description): %s\n", sk.Description)
 	}
 }
 
@@ -463,17 +463,17 @@ func skillInstall(cfg *config.Config, store *skills.Store, args []string) {
 		fmt.Println("内置标准技能已全部就绪生效 (All built-in skills are active by default).")
 		fmt.Println()
 		fmt.Println("用法 (Usage):")
-		fmt.Println("  panda skill find <query>                 智能自主检索并一键安装最匹配技能")
-		fmt.Println("  panda skill add <url | file | archive>   从链接或本地文件导入自定义技能")
-		fmt.Println("  panda skill hub search <query>           从技能集市搜索社区扩展技能")
-		fmt.Println("  panda skill hub install <name>           从技能集市安装扩展技能")
-		fmt.Println("  panda skill reset <name | all>           将内置技能恢复为出厂默认设置")
+		fmt.Println("  panda skill find <query>                 智能自主检索并一键安装最匹配技能 (find & install best match)")
+		fmt.Println("  panda skill add <url | file | archive>   从链接或本地文件导入自定义技能 (import custom skill)")
+		fmt.Println("  panda skill hub search <query>           从技能集市搜索社区扩展技能 (search the hub)")
+		fmt.Println("  panda skill hub install <name>           从技能集市安装扩展技能 (install from the hub)")
+		fmt.Println("  panda skill reset <name | all>           将内置技能恢复为出厂默认设置 (reset built-in skills)")
 		return
 	}
 	target := posArgs[0]
 	if strings.EqualFold(target, "all") {
 		fmt.Println("所有内置标准技能已默认全部就绪生效 (All built-in skills are active by default).")
-		fmt.Println("如需将所有内置技能恢复为出厂设置，请运行: panda skill reset all")
+		fmt.Println("如需将所有内置技能恢复为出厂设置，请运行 (To reset all built-in skills, run): panda skill reset all")
 		return
 	}
 	if skills.IsBuiltinSkill(target) {

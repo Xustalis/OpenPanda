@@ -955,6 +955,9 @@ var messages = map[Locale]map[string]string{
 		"prompt.project.workdir":  "- Working directory: {dir}\n",
 		"prompt.project.memory":   "- Project memory: {path} ({count} entries, {chars} chars) — read it yourself if the task needs project background\n",
 		"prompt.project.memempty": "- Project memory: {path} (empty)\n",
+		"ask.loop.noConvergeTask": "Tool calls did not converge after {n} rounds; the model's final suggestion was the task \"{title}\", but no capability card is loaded, so it cannot be submitted.",
+		"ask.loop.noConvergePlan": "Tool calls did not converge after {n} rounds; the model's final suggestion was the multi-stage plan \"{goal}\", but no capability card is loaded, so it cannot be started.",
+		"ask.plan.invalid":        "The plan cannot run: {err}",
 	},
 	ChineseSimp: {
 		"repl.model.add.badthinking":   "未知思考模式 {value}——可选 on、off 或 auto",
@@ -1900,6 +1903,9 @@ var messages = map[Locale]map[string]string{
 		"prompt.project.workdir":  "- 工作目录：{dir}\n",
 		"prompt.project.memory":   "- 项目记忆：{path}（{count} 条，{chars} 字符）——如任务需要项目背景，请自行读取\n",
 		"prompt.project.memempty": "- 项目记忆：{path}（暂无内容）\n",
+		"ask.loop.noConvergeTask": "已连续调用 {n} 轮工具未收敛；模型最终建议任务「{title}」，但当前未加载能力卡片，无法提交。",
+		"ask.loop.noConvergePlan": "已连续调用 {n} 轮工具未收敛；模型最终建议多阶段计划「{goal}」，但当前未加载能力卡片，无法启动。",
+		"ask.plan.invalid":        "计划无法执行：{err}",
 	},
 	Japanese: {
 		"repl.model.add.badthinking":             "不明な思考モード {value} — on、off、auto から選んでください",
@@ -2828,8 +2834,11 @@ var messages = map[Locale]map[string]string{
 		"repl.at.fail":               "{path} を読めません：{err}",
 		"repl.search.label":          "検索",
 
-		"repl.err.store":  "ストア：{err}",
-		"repl.err.config": "設定：{err}",
+		"repl.err.store":          "ストア：{err}",
+		"repl.err.config":         "設定：{err}",
+		"ask.loop.noConvergeTask": "ツール呼び出しが {n} ラウンドで収束しませんでした。モデルの最終提案はタスク「{title}」でしたが、能力カードが未ロードのため投入できません。",
+		"ask.loop.noConvergePlan": "ツール呼び出しが {n} ラウンドで収束しませんでした。モデルの最終提案はマルチステージ計画「{goal}」でしたが、能力カードが未ロードのため開始できません。",
+		"ask.plan.invalid":        "計画を実行できません：{err}",
 	},
 	Spanish: {
 		"repl.model.add.badthinking":             "modo de razonamiento desconocido {value} — elige on, off o auto",
@@ -3758,8 +3767,11 @@ var messages = map[Locale]map[string]string{
 		"repl.at.fail":               "no se puede leer {path}: {err}",
 		"repl.search.label":          "buscar",
 
-		"repl.err.store":  "almacén: {err}",
-		"repl.err.config": "config: {err}",
+		"repl.err.store":          "almacén: {err}",
+		"repl.err.config":         "config: {err}",
+		"ask.loop.noConvergeTask": "Las llamadas a herramientas no convergieron tras {n} rondas; la sugerencia final del modelo fue la tarea «{title}», pero no hay tarjeta de capacidades cargada, así que no se puede enviar.",
+		"ask.loop.noConvergePlan": "Las llamadas a herramientas no convergieron tras {n} rondas; la sugerencia final del modelo fue el plan multietapa «{goal}», pero no hay tarjeta de capacidades cargada, así que no se puede iniciar.",
+		"ask.plan.invalid":        "El plan no puede ejecutarse: {err}",
 	},
 	German: {
 		"repl.model.add.badthinking":             "unbekannter Denkmodus {value} — wähle on, off oder auto",
@@ -4688,7 +4700,10 @@ var messages = map[Locale]map[string]string{
 		"repl.at.fail":               "{path} kann nicht gelesen werden: {err}",
 		"repl.search.label":          "suchen",
 
-		"repl.err.store":  "Store: {err}",
-		"repl.err.config": "Konfig: {err}",
+		"repl.err.store":          "Store: {err}",
+		"repl.err.config":         "Konfig: {err}",
+		"ask.loop.noConvergeTask": "Die Tool-Aufrufe konvergierten nach {n} Runden nicht; der finale Vorschlag des Modells war die Aufgabe „{title}“, aber es ist keine Fähigkeitskarte geladen — Übermittlung nicht möglich.",
+		"ask.loop.noConvergePlan": "Die Tool-Aufrufe konvergierten nach {n} Runden nicht; der finale Vorschlag des Modells war der mehrstufige Plan „{goal}“, aber es ist keine Fähigkeitskarte geladen — Start nicht möglich.",
+		"ask.plan.invalid":        "Der Plan kann nicht ausgeführt werden: {err}",
 	},
 }

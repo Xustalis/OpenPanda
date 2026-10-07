@@ -26,14 +26,14 @@ func NewDreamDiary(path string) *DreamDiary {
 func (d *DreamDiary) Append(report Report, now time.Time) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## %s\n", now.Format("2006-01-02"))
-	fmt.Fprintf(&b, "- 扫描候选：%d 条\n", report.Candidates)
+	fmt.Fprintf(&b, "- Scanned %d candidates / 扫描候选：%d 条\n", report.Candidates, report.Candidates)
 	if len(report.Promoted) > 0 {
-		b.WriteString("- 提升到长期记忆：\n")
+		b.WriteString("- Promoted to long-term memory / 提升到长期记忆：\n")
 		for _, p := range report.Promoted {
 			fmt.Fprintf(&b, "  - %s\n", p)
 		}
 	} else {
-		b.WriteString("- 提升到长期记忆：无\n")
+		b.WriteString("- Promoted to long-term memory / 提升到长期记忆：无 none\n")
 	}
 
 	if err := os.MkdirAll(dirOf(d.path), 0o755); err != nil {

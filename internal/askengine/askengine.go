@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1579,7 +1580,7 @@ rounds:
 			e.tryAutoInitScheduler()
 		}
 		if e.sched.Load() == nil {
-			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议任务「%s」，但当前未加载能力卡片，无法提交。", maxRounds, final.Task.Title)}, nil
+			return &Result{Kind: "answer", Answer: i18n.Tf(effectiveLocale, "ask.loop.noConvergeTask", "n", strconv.Itoa(maxRounds), "title", final.Task.Title)}, nil
 		}
 		if lastTask != nil && taskRounds >= maxTasks {
 			// The loop exhausted the task budget and the model still wants
@@ -1604,7 +1605,7 @@ rounds:
 			e.tryAutoInitScheduler()
 		}
 		if e.sched.Load() == nil {
-			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议多阶段计划「%s」，但当前未加载能力卡片，无法启动。", maxRounds, final.Plan.Goal)}, nil
+			return &Result{Kind: "answer", Answer: i18n.Tf(effectiveLocale, "ask.loop.noConvergePlan", "n", strconv.Itoa(maxRounds), "goal", final.Plan.Goal)}, nil
 		}
 		cb.progress(Progress{Kind: ProgressPlan, Name: final.Plan.Goal})
 		return e.startClassifiedPlan(ctx, final.Plan, authorize)
@@ -1729,7 +1730,7 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 		// A plan the model got wrong has created nothing, so the useful answer is
 		// the defect itself rather than a failed run: the user (or the next turn)
 		// can see that the stages did not hang together.
-		return &Result{Kind: "answer", Answer: "计划无法执行：" + err.Error()}, nil
+		return &Result{Kind: "answer", Answer: i18n.Tf(e.Locale(), "ask.plan.invalid", "err", err.Error())}, nil
 	}
 	q := core.DefaultQueueSpec()
 	// No work dir, for the same reason `panda plan run` sets none: a path on this
