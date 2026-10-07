@@ -38,7 +38,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Dieses Changelog ist kuratiert: einige interne Refaktorierungen und Adapter sind hier nicht gelistet.
 - Die englische Datei ist maßgeblich. Die Übersetzungen zh-CN / ja / es / de spiegeln sie und können um ein Release kurz verzögert sein.
 
-## [Unreleased]
+## [0.0.10] - 2026-10-07 — "Apoapsis"
+
+Die stabile v0.0.10 — Codename **Apoapsis** (Apoapsis, der fernste Bahnpunkt). Dieser Schnitt vereint die Preview-Linie (LAN-Auto-Discovery mit fingerabdruckbestätigter Aufnahme, TOFU-Key-Pinning, mit Delegation reisender Worktree, die Rückfrage-Schleife, Aktuator-Versand, Ed25519-signierte Audit-Zeilen, OS-Sandboxing, UDP/NAT-Traversal, gemessene Kapazitätsplanung und das Panda-Paper-Redesign der Konsole) mit den Neuerungen dieses Zyklus: Sitzungen bilden nun einen Baum, der an jeder Turn-Grenze geforkt werden kann; überlaufende Historie wird in eine modellgeschriebene Fortlauf-Zusammenfassung gefaltet statt verworfen; `panda rpc` öffnet eine NDJSON-over-stdio-Einbettungsfläche; und `panda auth login` bringt Abo-OAuth zum Entry-Modell. Das Release stellt zudem die Lizenz auf AGPL-3.0-or-later mit dualem kommerziellem Lizenzmodell um — Installationen mit Zustimmung aus der MIT-Ära bestätigen die Bedingungen beim ersten Start einmalig erneut.
 
 ### Hinzugefügt
 
@@ -55,6 +57,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Fehlgeschlagene Runden im freien Modus werden wieder persistiert: Der Done-Handler des TUI löschte `pendingPrompt` über `resetLive`, bevor `recordErrorTurn` ihn lesen konnte, sodass ein fehlgeschlagener Ask keine Spur in der Convo-Datei oder `/history` hinterließ — jetzt wird der Versuch wie im klassischen Loop gespeichert (User-Prompt + markierte Fehlerseite).
 - Modell-Fehlertexte der Entry-Schicht sind lokalisiert: Die ClassifyError-Hinweise (unerreichbar, Timeout, 401/403, 404, 400 mit Provider-Detail, 429, 5xx, fehlender Key, generisch), die DSML-Toolcall-Meldungen (abgelehnt/ignoriert/nicht parsbar), der Validierungsfehler, der max_tokens-Kürzungsmarker und der Primär→Fallback-Wechselhinweis folgen jetzt der Gesprächssprache statt immer auf Chinesisch zu erscheinen.
 - TUI-Sitzungstests isolieren `XDG_STATE_HOME` und den CLI-Konfigpfad, sodass ein Testlauf nicht mehr in den echten Unterhaltungsspeicher des Entwicklers schreibt.
+- Sitzungs-JSON und der OAuth-Token-Store schreiben jetzt atomar — ein Absturz mitten im Schreibvorgang hinterlässt keine abgeschnittene Datei mehr, die einen Thread lautlos aus der Sitzungsliste verschwinden lässt oder einen erneuten Login erzwingt.
 
 ### Verbessert
 

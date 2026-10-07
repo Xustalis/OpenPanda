@@ -44,7 +44,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
-## [Unreleased]
+## [0.0.10] - 2026-10-07 — "Apoapsis"
+
+The stable v0.0.10 — codename **Apoapsis**, the far point of the orbit. This cut folds the preview line (LAN auto-discovery with fingerprint-confirmed admission, TOFU key pinning, worktree-carrying delegation, the clarification loop, actuator dispatch, Ed25519-signed audit rows, OS-level sandboxing, UDP/NAT traversal, measured-capacity scheduling, and the Panda Paper console redesign) together with this cycle's additions: sessions are now a tree you can fork at any turn boundary, overflowing history compacts into a model-written running digest instead of being dropped, `panda rpc` opens an NDJSON-over-stdio embedding surface, and `panda auth login` brings subscription OAuth to the entry model. The release also relicenses the project to AGPL-3.0-or-later with dual commercial licensing — installs holding MIT-era consent re-confirm the terms once on first launch.
 
 ### Added
 
@@ -60,6 +62,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Bare-mode failed turns persist again: the TUI's done handler cleared `pendingPrompt` before `recordErrorTurn` could read it, so a failed ask left no trace in the convo file or `/history` — the attempt is now recorded (user prompt + marked error) exactly like the classic loop.
 - Entry-layer model error text is localized: the ClassifyError guidance (unreachable, timeout, 401/403, 404, 400 with provider detail, 429, 5xx, missing key, generic), the DSML tool-call reject/ignore/unparsable messages, the output-validation error, the max-tokens truncation marker, and the primary→fallback switch note now follow the conversation locale instead of always rendering in Chinese.
 - TUI session tests sandbox `XDG_STATE_HOME` and the CLI config path, so running the test suite no longer writes into the developer's real conversation store.
+- Session JSON files and the OAuth token store write atomically — a crash mid-write can no longer leave a truncated file that silently drops a thread from the session list or forces a re-login.
 
 ### Changed
 

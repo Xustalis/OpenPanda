@@ -38,7 +38,9 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 本 changelog 为策展式记录：部分内部重构与 adapter 未在此列出。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
-## [Unreleased]
+## [0.0.10] - 2026-10-07 — "Apoapsis"
+
+v0.0.10 正式版 —— 代号 **Apoapsis**（远拱点）。本版将预览线（带指纹确认的 LAN 自动发现、TOFU 密钥钉住、随委派旅行的工作树、澄清回问循环、actuator 派遣、Ed25519 签名审计行、OS 级沙箱、UDP/NAT 穿透、实测容量调度、Panda Paper 控制台改版）与本周期新增能力合并发布：会话现在是一棵可在任意轮次边界分叉的树；溢出的历史折叠为模型撰写的滚动摘要而不再直接丢弃；`panda rpc` 提供 NDJSON-over-stdio 嵌入面；`panda auth login` 为入口模型带来订阅 OAuth。本版同时将许可证迁移至 AGPL-3.0-or-later 并引入商业双重授权 —— 持有 MIT 时代同意的安装会在首次启动时重新确认一次条款。
 
 ### 新增
 
@@ -55,6 +57,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 裸模式失败轮次恢复持久化：TUI 的 done 处理在 `recordErrorTurn` 读取前就通过 `resetLive` 清掉了 `pendingPrompt`，失败的 ask 在 convo 文件与 `/history` 中完全无痕——现在与经典 REPL 一样记录（用户提示 + 带标记的错误侧）。
 - entry 层模型报错本地化：ClassifyError 指引（不可达、超时、401/403、404、带 provider 细节的 400、429、5xx、缺 key、通用）、DSML 工具调用的拒绝/忽略/不可解析文案、输出校验错误、max-tokens 截断标记、主备模型切换提示，现在随会话语言渲染，不再一律输出中文。
 - TUI 会话测试隔离 `XDG_STATE_HOME` 与 CLI 配置路径，跑测试套件不再写入开发者真实的对话存储。
+- 会话 JSON 与 OAuth token 存储改为原子写 —— 写入中途崩溃不再留下截断文件，导致线程从会话列表中静默消失或强制重新登录。
 
 ### 变更
 

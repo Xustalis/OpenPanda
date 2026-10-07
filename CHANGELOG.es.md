@@ -38,7 +38,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Este changelog es curado: algunas refactorizaciones internas y adaptadores no se listan aquí.
 - Este archivo en inglés es el canónico. Las traducciones zh-CN / ja / es / de lo replican y pueden retrasarse brevemente alrededor de un lanzamiento.
 
-## [Unreleased]
+## [0.0.10] - 2026-10-07 — "Apoapsis"
+
+La v0.0.10 estable — nombre en clave **Apoapsis** (apoapsis, el punto más lejano de la órbita). Este corte integra la línea preview (autodescubrimiento LAN con admisión confirmada por huella, fijación de claves TOFU, worktree que viaja con la delegación, el bucle de aclaraciones, envío de actuadores, filas de auditoría firmadas con Ed25519, sandbox a nivel de SO, atravieso UDP/NAT, planificación por capacidad medida y el rediseño Panda Paper de la consola) con las novedades del ciclo: las sesiones ahora forman un árbol que se bifurca en cualquier límite de turno; el historial desbordado se pliega en un resumen corriente escrito por el modelo en lugar de descartarse; `panda rpc` abre una superficie de incrustación NDJSON sobre stdio; y `panda auth login` trae OAuth de suscripción al modelo de entrada. La versión también relicencia el proyecto a AGPL-3.0-or-later con licencia comercial dual — las instalaciones con consentimiento de la era MIT reconfirman los términos una vez en el primer arranque.
 
 ### Añadido
 
@@ -55,6 +57,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Los turnos fallidos en modo libre vuelven a persistirse: el handler done del TUI limpiaba `pendingPrompt` con `resetLive` antes de que `recordErrorTurn` lo leyera, así que un ask fallido no dejaba rastro en el archivo convo ni en `/history` — ahora se registra igual que el bucle clásico (prompt del usuario + lado de error marcado).
 - El texto de error del modelo en la capa entry está localizado: la guía de ClassifyError (inalcanzable, timeout, 401/403, 404, 400 con detalle del proveedor, 429, 5xx, sin clave, genérico), los mensajes DSML de tool call rechazada/ignorada/imposible de parsear, el error de validación de salida, el marcador de truncamiento por max_tokens y la nota de cambio principal→respaldo ahora siguen el locale de la conversación en vez de renderizarse siempre en chino.
 - Los tests de sesión del TUI aíslan `XDG_STATE_HOME` y la ruta de config del CLI, de modo que ejecutar la suite ya no escribe en el almacén de conversaciones real del desarrollador.
+- Los JSON de sesión y el almacén de tokens OAuth escriben de forma atómica — un fallo a mitad de escritura ya no deja un archivo truncado que haga desaparecer un hilo de la lista de sesiones o fuerce un nuevo inicio de sesión.
 
 ### Mejorado
 
