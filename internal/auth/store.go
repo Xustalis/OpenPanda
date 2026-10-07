@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // Token is one stored OAuth credential set for a provider.
@@ -97,7 +99,10 @@ func (s *Store) save(tokens map[string]Token) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o600)
+	// Atomic: a crash mid-WriteFile would leave a truncated file that loads
+	// as empty and forces a re-login — the token set deserves the same
+	// crash safety the config writer already pays for.
+	return util.WriteFileAtomic(s.path, data, 0o600)
 }
 
 // Put stores a token under its provider id.
