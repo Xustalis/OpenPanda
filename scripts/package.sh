@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Build and package release archives for every supported platform.
 #
 # Produces, under dist/:
@@ -109,7 +110,7 @@ build() {
     for c in config/capabilities.example-*.yaml; do
         [ -e "$c" ] && cp "$c" "$dir/"
     done
-    cp LICENSE "$dir/"
+    cp LICENSE NOTICE THIRD_PARTY_NOTICES.md COMMERCIAL.md "$dir/"
 }
 
 build_lite() {
@@ -133,7 +134,7 @@ build_lite() {
     for c in config/capabilities.example-*.yaml; do
         [ -e "$c" ] && cp "$c" "$dir/"
     done
-    cp LICENSE "$dir/"
+    cp LICENSE NOTICE THIRD_PARTY_NOTICES.md COMMERCIAL.md "$dir/"
 }
 
 # Build only the requested targets. Filtering here rather than at the archive

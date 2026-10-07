@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package memory implements the two-layer memory system (design doc §17):
 // Hermes personal-assistant memory and per-project memory, kept physically
 // isolated by an isolation wall. The on-disk format and hot-layer model follow

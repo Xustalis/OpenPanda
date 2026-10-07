@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package cliui
 
 // Terminal geometry: how wide a rune renders. The line editor

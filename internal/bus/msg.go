@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package bus implements the WebSocket transport and wire protocol for
 // node-to-node task delegation (design doc §10).
 package bus

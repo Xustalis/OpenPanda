@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # panda-mcu — OpenPanda driver for microcontroller / serial UART access.
 #
 # The "whatever device is at the other end of a USB serial port" surface:

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package panel
 
 // The multi-model registry endpoints — the web counterpart of the REPL's

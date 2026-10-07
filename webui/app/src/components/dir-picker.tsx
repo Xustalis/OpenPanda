@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useEffect, useState } from 'preact/hooks'
 import { api, type DirectoryListing } from '../api/client'
 import { t } from '../i18n'

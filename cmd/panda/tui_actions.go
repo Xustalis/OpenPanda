@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //go:build !lite
 
 package main
@@ -783,6 +785,7 @@ func (m tuiModel) startOnboarding() (tuiModel, tea.Cmd) {
 	m.mode = modeOnboarding
 	m.onboardingStep = onboardingStepLanguage
 	m.termsCursor = 0
+	m.termsReconsent = false
 
 	title := "Welcome to OpenPanda · Please select your language / 请选择语言:"
 	sl := NewSelectionList(title, buildLanguageItems())
@@ -874,10 +877,40 @@ func buildModelChoiceItems(loc i18n.Locale) []SelectionItem {
 	}
 }
 
-// advanceFromTerms moves to the approval mode step after accepting terms.
+// startTermsReconsent re-shows only the license step when the accepted terms
+// predate TermsVersionCurrent (the MIT→AGPL change). Accepting re-records the
+// version and drops straight into the session; declining exits, so the next
+// launch asks again.
+func (m tuiModel) startTermsReconsent() (tuiModel, tea.Cmd) {
+	m.mode = modeOnboarding
+	m.onboardingStep = onboardingStepTerms
+	m.termsCursor = 0
+	m.termsReconsent = true
+	return m, nil
+}
+
+// advanceFromTerms moves to the approval mode step after accepting terms —
+// or, on the re-consent path, persists the new version and ends the wizard.
 func (m tuiModel) advanceFromTerms() (tuiModel, tea.Cmd) {
 	if m.r != nil && m.r.cfg != nil {
-		m.r.mutateConfig(func(c *config.Config) { c.UI.TermsAccepted = true })
+		m.r.mutateConfig(func(c *config.Config) {
+			c.UI.TermsAccepted = true
+			c.UI.TermsVersion = config.TermsVersionCurrent
+		})
+	}
+	if m.termsReconsent {
+		m.termsReconsent = false
+		// Re-consent users never reach finalizeOnboarding — persist now.
+		cfgPath := configWritePath(m.r.configPath)
+		_ = config.UpdateSectionFieldBool(cfgPath, []string{"ui"}, "terms_accepted", true)
+		_ = config.UpdateSectionFieldInt(cfgPath, []string{"ui"}, "terms_version", config.TermsVersionCurrent)
+		var configured bool
+		m.r.readConfig(func(c *config.Config) { configured = modelConfigured(c) })
+		if !configured {
+			return m.startModelWizard()
+		}
+		m.mode = modeIdle
+		return m, m.printBlock(block{kind: blockNote, body: i18n.T(m.loc, "tui.onboard.termsAccepted")})
 	}
 	m.onboardingStep = onboardingStepApproval
 	sl := NewSelectionList(i18n.T(m.loc, "tui.onboard.approvalTitle"), buildApprovalModeItems(m.loc))
@@ -908,8 +941,10 @@ func (m tuiModel) finalizeOnboarding() (tuiModel, tea.Cmd) {
 			}
 			persist(config.UpdateSectionField(cfgPath, []string{"ui"}, "locale", string(loc)))
 			persist(config.UpdateSectionFieldBool(cfgPath, []string{"ui"}, "terms_accepted", true))
+			persist(config.UpdateSectionFieldInt(cfgPath, []string{"ui"}, "terms_version", config.TermsVersionCurrent))
 			persist(config.UpdateSectionFieldBool(cfgPath, []string{"ui"}, "onboarded", true))
 			c.UI.TermsAccepted = true
+			c.UI.TermsVersion = config.TermsVersionCurrent
 			c.UI.Onboarded = true
 			c.UI.Locale = string(loc)
 			if c.Approval.Mode != "" {

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Voice sidecar: wake-word detection ("hey panda").
 
 Backend selected by OPENPANDA_WAKE_BACKEND: "openwakeword" (default, open source,

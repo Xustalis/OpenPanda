@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Command sign-release signs the release checksums file with the release
 // Ed25519 key, producing the detached signature (checksums.txt.sig) the
 // updater verifies before installing a downloaded archive.

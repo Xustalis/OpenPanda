@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # check-homebrew-tap.sh — fails when the Homebrew tap points at a release that
 # no longer exists or has moved.
 #

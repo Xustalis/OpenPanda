@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //go:build !lite
 
 package main
@@ -12,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -629,7 +632,7 @@ func (m tuiModel) onSplashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // startFromSplash transitions from splash to the model onboarding guide or main idle chat.
 func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
-	var onboarded, configured bool
+	var onboarded, configured, termsCurrent bool
 	if m.r != nil {
 		m.r.readConfig(func(c *config.Config) {
 			if c == nil {
@@ -637,10 +640,16 @@ func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
 			}
 			onboarded = c.UI.Onboarded
 			configured = modelConfigured(c)
+			termsCurrent = c.UI.TermsCurrent()
 		})
 	}
 	if m.r != nil && m.r.cfg != nil && !onboarded {
 		return m.startOnboarding()
+	}
+	// Onboarded but under stale terms (e.g. accepted before the AGPL
+	// relicensing): re-show only the license step before anything else.
+	if m.r != nil && m.r.cfg != nil && !termsCurrent {
+		return m.startTermsReconsent()
 	}
 
 	if m.r == nil || m.r.cfg == nil || !configured {
@@ -1017,6 +1026,8 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 		}
 	case "resume":
 		return m.resumeSession(arg)
+	case "fork":
+		return m.forkSession(arg)
 	case "model":
 		// Bare "/model" opens the picker; an argument is cmdModel business
 		// ("test", "add", an alias to switch to) and must reach the handler —
@@ -1145,6 +1156,51 @@ func (m tuiModel) resumeSession(arg string) (tea.Model, tea.Cmd) {
 	}
 	note := block{kind: blockError, body: i18n.Tf(m.loc, "tui.resume.notFound", "id", arg)}
 	return m, m.printBlock(note)
+}
+
+// forkSession implements "/fork [n]": split the bound session at turn n
+// (default: whole thread) and re-attach to the child. It runs the same store
+// + worktree steps as the REPL's cmdFork, then reseeds the transcript through
+// attachSession — a truncated fork must drop the parent's tail from view, not
+// leave it on screen while the child no longer owns those turns.
+func (m tuiModel) forkSession(arg string) (tea.Model, tea.Cmd) {
+	fail := func(key string) (tea.Model, tea.Cmd) {
+		return m, m.printBlock(block{kind: blockNote, body: i18n.T(m.loc, key)})
+	}
+	if m.r == nil || m.r.sessionsSt == nil || m.r.sessID() == "" {
+		return fail("repl.fork.nosess")
+	}
+	sid := m.r.sessID()
+	parent, err := m.r.sessionsSt.Get(sid)
+	if err != nil {
+		m.r.setSess("")
+		return m, m.printBlock(block{kind: blockError, body: i18n.Tf(m.loc, "tui.resume.notFound", "id", sid)})
+	}
+	at := len(parent.Turns)
+	if arg = strings.TrimSpace(arg); arg != "" {
+		n, err := strconv.Atoi(arg)
+		if err != nil || n < 0 {
+			return fail("repl.fork.usage")
+		}
+		at = n
+	}
+	child, err := m.r.sessionsSt.Fork(sid, at)
+	if err != nil {
+		return m, m.printBlock(block{kind: blockError, body: err.Error()})
+	}
+	if m.r.worktrees != nil {
+		base := "HEAD"
+		if parent.Branch != "" {
+			base = parent.Branch
+		}
+		if path, err := m.r.worktrees.EnsureFrom(context.Background(), child.ID, base); err == nil {
+			_ = m.r.sessionsSt.SetWorktree(child.ID, path, sessions.Branch(child.ID))
+			child, _ = m.r.sessionsSt.Get(child.ID)
+		}
+	}
+	note := block{kind: blockNote, body: i18n.Tf(m.loc, "repl.fork.done", "parent", sid, "id", child.ID, "n", fmt.Sprint(child.ForkIndex))}
+	model, cmd := m.attachSession(child)
+	return model, tea.Sequence(m.printBlock(note), cmd)
 }
 
 // attachSession binds a session and reseeds the transcript with its thread.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 // The project plane: what has to travel with a task so that a project means the

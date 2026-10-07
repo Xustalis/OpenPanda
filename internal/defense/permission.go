@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package defense implements the task-loop defense chain (design doc §14) and
 // the permission model (design doc §16). MVP scope is the deterministic layer:
 // command-tier classification and authorization gating. The adversarial model

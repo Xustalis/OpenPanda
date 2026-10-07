@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
 /* Stylesheet entry — aggregates the layered design system.
    Order matters: tokens first, then base, primitives, carried view rules,
    and finally the shell/chat chrome (last wins on equal specificity). */

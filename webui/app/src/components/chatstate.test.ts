@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // State helpers for the chat composer, tested apart from the component.
 //
 // Run with `npm test` (node's built-in runner). The bugs these guard against

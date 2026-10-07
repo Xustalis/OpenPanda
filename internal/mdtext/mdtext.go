@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package mdtext converts light Markdown into the two forms OpenPanda's
 // surfaces need beyond a rendered web page:
 //

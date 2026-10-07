@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda task <id> --trace` (Track 3): the hop structure derived from the
