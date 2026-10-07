@@ -320,7 +320,7 @@ func runSessionFork(args []string) {
 	fs := flag.NewFlagSet("session fork", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	at := fs.Int("at", 0, "number of turns to copy into the fork (default: all)")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "at": true}))
 	id := strings.TrimSpace(fs.Arg(0))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda session fork <id> [--at N]")
