@@ -253,7 +253,9 @@ func (w *Worktrees) Remove(ctx context.Context, id string) error {
 // the user's .gitignore) so it stays out of git status without touching
 // tracked files.
 func (w *Worktrees) excludeWorktreeDir() error {
-	admin, err := exec.Command("git", "-C", w.repo, "rev-parse", "--git-dir").Output()
+	// --git-common-dir, not --git-dir: inside a linked worktree the latter is
+	// the worktree's own admin dir, whose info/exclude does not apply.
+	admin, err := exec.Command("git", "-C", w.repo, "rev-parse", "--git-common-dir").Output()
 	if err != nil {
 		return fmt.Errorf("sessions: rev-parse --git-dir: %w", err)
 	}

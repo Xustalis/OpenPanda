@@ -30,6 +30,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
@@ -94,6 +95,12 @@ func runRPC(args []string) {
 			continue
 		}
 		srv.dispatch(&req)
+	}
+	// A scan error (a line over the 4 MiB cap, or an I/O fault) ends the loop
+	// silently — the embedder sees only EOF. Say why on stderr so it is not
+	// indistinguishable from a clean shutdown.
+	if err := sc.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "panda rpc: input error: %v\n", err)
 	}
 }
 

@@ -538,7 +538,10 @@ func (s *Store) save(sess *Session) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path(sess.ID), data, 0o644)
+	// Atomic: a crash mid-write would leave a truncated file that fails to
+	// parse — invisible in List and unreadable in Get, i.e. a silently lost
+	// conversation.
+	return util.WriteFileAtomic(s.path(sess.ID), data, 0o644)
 }
 
 func truncateTitle(s string) string {
