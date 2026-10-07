@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 GO ?= go
 BIN := bin/panda
 # VERSION is read from internal/version/version.go by default. Set explicitly

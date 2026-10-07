@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda card` — read, rescan and edit this node's capability card without

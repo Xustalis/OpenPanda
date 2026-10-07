@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package commander implements the three-tier capability execution:
 // native (deterministic commands, no model), agent (AI CLI via adapter), and
 // manual (human-notified). Design doc §6.

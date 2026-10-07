@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package ledger manages the local capability directory (SQLite cache of
 // node capability cards) and this node's self-registration.
 //

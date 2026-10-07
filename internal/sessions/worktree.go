@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Git worktree management for sessions: each session that will touch files
 // gets its own worktree + branch (panda/<session-id>) carved out of HEAD, so
 // agent work is isolated from the user's checkout and reviewable as a diff —

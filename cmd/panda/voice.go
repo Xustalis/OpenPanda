@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda voice` — the hands-free entry surface. On the Orange Pi sitting on a

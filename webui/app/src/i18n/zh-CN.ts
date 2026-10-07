@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import type { Messages } from './index'
 
 const zhCN: Messages = {
@@ -264,9 +266,9 @@ const zhCN: Messages = {
   'onboarding.step.model': '模型',
   'onboarding.langTitle': '选择界面语言',
   'onboarding.termsTitle': '开源许可与服务条款',
-  'onboarding.terms1h': '1. 开源许可（MIT）',
+  'onboarding.terms1h': '1. 开源许可（AGPL-3.0）',
   'onboarding.terms1b':
-    'OpenPanda 是基于 MIT 许可证发布的自由开源软件。你可以在个人、学术或商业项目中使用、复制、修改、合并、发布、分发、再许可和出售本软件的副本，前提是保留版权声明与许可文本。完整许可证见随附的 LICENSE 文件，如与本摘要不一致，以 LICENSE 为准。',
+    'OpenPanda 是基于 GNU Affero 通用公共许可证 3.0 或更高版本（AGPL-3.0-or-later）发布的自由开源软件。你可以运行、研究、修改和再分发（包括商业用途），但衍生作品必须同样以 AGPL 发布；若将修改版通过网络提供给他人使用，必须同时提供其源代码。闭源集成或托管用途可购买商业授权（见 COMMERCIAL.md）。完整许可证见随附的 LICENSE 文件，如与本摘要不一致，以 LICENSE 为准。',
   'onboarding.terms2h': '2. 自托管软件，而非托管服务',
   'onboarding.terms2b':
     'OpenPanda 是你自行安装、配置并在自己的硬件上运行的软件。作者不提供托管服务、服务水平承诺、正常运行时间保证、支持义务或数据保管。安装、运行、维护、访问控制、监控及部署环境的安全姿态全部由你自行负责。',

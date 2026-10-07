@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package panel serves the legacy PWA control panel (kept frozen as an optional
 // webui/ sidecar; the kernel daemon no longer mounts it): the static web app
 // under webui/web/pwa plus the JSON API that backs it — task queue, task detail,

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package askengine
 
 // Remembered approval decisions and their resolution into the tier-2 gate.

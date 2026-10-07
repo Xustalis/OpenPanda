@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package sessions implements the web console's conversation model: each
 // session is one chat thread plus — when the working directory is a git
 // repository — a dedicated git worktree, so changes made while answering a

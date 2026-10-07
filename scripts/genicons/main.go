@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Command genicons renders the PANDA PWA icon set from a pure-stdlib drawing so
 // the manifest is installable and push notifications carry an app mark without
 // shipping binary assets or a third-party drawing library (design P2-17).

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package projects makes a project a first-class entity rather than a name that
 // happens to appear on some tasks.
 //

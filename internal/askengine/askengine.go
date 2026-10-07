@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package askengine is the unified entry engine shared by `panda ask` (CLI)
 // and the web panel: one prompt in, three intents out — answer (pure LLM
 // reply), tool_call (memory tools, executed and fed back), task (submitted to

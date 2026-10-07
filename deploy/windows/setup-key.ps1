@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # PANDA Windows deploy helper: install SSH key + prep layout + start daemon
 $ErrorActionPreference = 'Stop'
 

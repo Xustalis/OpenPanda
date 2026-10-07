@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package entry implements the unified entry model (design doc §7): one model
 // call classifies a user request as an answer, a controlled tool call, a
 // structured task, or a multi-stage plan. The model never performs side

@@ -129,7 +129,13 @@ repositorio) con pasos para reproducirlo. La cadena de auditoría
 (`panda audit verify`) está ahí precisamente para verificar las correcciones
 frente a manipulaciones.
 
-## Licencia
+## Licencia y CLA
 
-Al contribuir aceptas que tu trabajo se publica bajo la [Licencia MIT](LICENSE)
-del proyecto.
+OpenPanda se distribuye bajo [AGPL-3.0-or-later](LICENSE) y una
+licencia comercial (ver [COMMERCIAL.md](COMMERCIAL.md)). Al contribuir
+aceptas el [Acuerdo de Licencia de Colaborador](CLA.md), que otorga al
+proyecto el derecho de distribuir tu trabajo bajo ambas vías. La
+aceptación del CLA es obligatoria antes de fusionar un pull request,
+salvo cambios triviales (erratas, documentación, parches de ~15 líneas
+o menos) y contribuciones en `adapters/`, que se aceptan directamente
+bajo la AGPL (ver CLA.md §2).

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package artifact packs and unpacks task artifacts: the directory trees that
 // have to travel between nodes when one node produces work another node
 // consumes. It is the data plane the orchestrator was missing — until now a

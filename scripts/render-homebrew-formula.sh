@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Render a versioned, checksum-pinned Homebrew formula from release artifacts.
 set -eu
 

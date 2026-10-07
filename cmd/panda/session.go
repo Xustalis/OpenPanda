@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda session` — the kernel-form of the web console's conversation model:

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import type { Messages } from './index'
 
 const ja: Messages = {
@@ -265,9 +267,9 @@ const ja: Messages = {
   'onboarding.step.model': 'モデル',
   'onboarding.langTitle': '言語を選択',
   'onboarding.termsTitle': '利用規約とライセンス',
-  'onboarding.terms1h': '1. オープンソースライセンス（MIT）',
+  'onboarding.terms1h': '1. オープンソースライセンス（AGPL-3.0）',
   'onboarding.terms1b':
-    'OpenPanda は MIT ライセンスの下で公開されているフリーかつオープンソースのソフトウェアです。著作権表示とライセンス文を含めることを条件に、個人・学術・商用を問わず、使用・複製・改変・結合・公開・配布・サブライセンス・販売が可能です。完全なライセンス文は同梱の LICENSE ファイルに記載されており、本要約と矛盾する場合はそちらが優先されます。',
+    'OpenPanda は GNU Affero General Public License v3.0 以降（AGPL-3.0-or-later）の下で公開されているフリーかつオープンソースのソフトウェアです。商用を含め、実行・研究・改変・再配布が可能ですが、派生作品は同じ AGPL 条件で公開する必要があり、改変版をネットワーク越しにユーザーへ提供する場合はそのソースコードも提供しなければなりません。クローズドソース利用には商用ライセンスをご利用ください（COMMERCIAL.md 参照）。完全なライセンス文は同梱の LICENSE ファイルに記載されており、本要約と矛盾する場合はそちらが優先されます。',
   'onboarding.terms2h': '2. セルフホスト型ソフトウェア（マネージドサービスではありません）',
   'onboarding.terms2b':
     'OpenPanda は利用者自身のハードウェアにインストール・設定・運用するソフトウェアです。作者はホスティング、サービスレベル、稼働率の約束、サポート義務、データ管理を一切提供しません。インストール、運用、保守、アクセス制御、監視、デプロイ環境のセキュリティはすべて利用者の責任です。',

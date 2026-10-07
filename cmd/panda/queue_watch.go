@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // The watch-mode task board: `panda queue --watch` (and /tasks watch in the

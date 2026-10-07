@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package ctxstore implements the local context snapshot cache (design doc
 // §12.4): a hash→data KV store over the `context` table with LRU eviction.
 // Each node caches full context snapshots it has either packed locally or

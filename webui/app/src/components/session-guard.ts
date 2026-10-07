@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Session-stream race guard, tested apart from the component.
 //
 // Run with `npm test` (node's built-in runner). A reply streams into

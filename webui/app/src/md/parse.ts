@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Markdown block parser for the chat transcript.
 //
 // Why hand-rolled: the console ships one runtime dependency (preact) on

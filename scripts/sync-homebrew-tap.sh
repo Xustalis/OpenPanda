@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Sync Formula/openpanda.rb in the Homebrew tap from a *published* release.
 #
 # Why this exists: .github/workflows/release.yml renders the formula from the

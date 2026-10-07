@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda install` places the running binary on PATH persistently (rc-file

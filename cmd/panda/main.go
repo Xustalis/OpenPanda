@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Command panda is the OpenPanda CLI. With no subcommand it drops into the
 // interactive REPL (the operator's seat); `panda daemon` runs the headless
 // kernel that registers this node's capabilities and delegates/executes

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //go:build !lite
 
 package main
@@ -334,9 +336,10 @@ func (m tuiModel) onboardingTermsView(w, h int) string {
 		lines = append(lines, m.th.heading.Render("⚖️  OpenPanda 开源许可与服务条款协议"))
 		lines = append(lines, m.th.muted.Render(strings.Repeat("─", boxWidth-4)))
 		lines = append(lines, "")
-		lines = append(lines, m.th.accent.Bold(true).Render("1. MIT 开源许可证声明 (MIT Open Source License)"))
-		lines = append(lines, "   OpenPanda 遵循 MIT 协议开源发布。您拥有完全且自由的权利在个人、")
-		lines = append(lines, "   学术或商业项目中运行、复制、修改、分发及二次开发本软件。")
+		lines = append(lines, m.th.accent.Bold(true).Render("1. AGPL 开源许可证声明 (AGPL-3.0 Open Source License)"))
+		lines = append(lines, "   OpenPanda 遵循 AGPL-3.0-or-later 开源发布。您可自由运行、修改、")
+		lines = append(lines, "   分发本软件（含商业用途）；衍生作品须同样以 AGPL 发布，通过网络")
+		lines = append(lines, "   提供修改版须同步公开源代码。闭源使用可联系购买商业授权。")
 		lines = append(lines, "")
 		lines = append(lines, m.th.accent.Bold(true).Render("2. 本地优先与数据自治原则 (Local-First & Privacy Autonomy)"))
 		lines = append(lines, "   开发者的隐私与数据主权是我们的根本基石。OpenPanda 恪守本地优先原则，")
@@ -370,10 +373,12 @@ func (m tuiModel) onboardingTermsView(w, h int) string {
 		lines = append(lines, m.th.heading.Render("⚖️  OpenPanda Terms of Service & License Agreement"))
 		lines = append(lines, m.th.muted.Render(strings.Repeat("─", boxWidth-4)))
 		lines = append(lines, "")
-		lines = append(lines, m.th.accent.Bold(true).Render("1. MIT Open Source License"))
-		lines = append(lines, "   OpenPanda is free software licensed under the MIT License. You have")
-		lines = append(lines, "   full rights to run, modify, distribute, and build on it for personal,")
-		lines = append(lines, "   academic, or commercial use without royalty fees.")
+		lines = append(lines, m.th.accent.Bold(true).Render("1. AGPL Open Source License"))
+		lines = append(lines, "   OpenPanda is free software under the GNU Affero GPL v3.0 or later.")
+		lines = append(lines, "   You may run, modify and redistribute it — including commercially —")
+		lines = append(lines, "   provided derivatives stay under the AGPL and modified versions")
+		lines = append(lines, "   offered over a network also offer their source. Commercial licensing")
+		lines = append(lines, "   is available for closed-source use.")
 		lines = append(lines, "")
 		lines = append(lines, m.th.accent.Bold(true).Render("2. Local-First Architecture & Privacy Autonomy"))
 		lines = append(lines, "   Your privacy and source code confidentiality are foundational. OpenPanda")

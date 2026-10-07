@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //go:build !lite
 
 package main
@@ -825,7 +827,7 @@ func TestTUIFirstRunOnboardingFlow(t *testing.T) {
 	// Verify rich Terms view in English
 	termsView := m.View()
 	for _, expectedText := range []string{
-		"MIT Open Source License",
+		"AGPL Open Source License",
 		"Local-First Architecture & Privacy Autonomy",
 		"AI Generation Advisory & Risk Disclaimer",
 		"System Execution & Operational Safety",
@@ -929,7 +931,7 @@ func TestTUIFirstRunOnboardingFlow(t *testing.T) {
 	// Check Chinese terms
 	zhTermsView := mZh.View()
 	for _, expectedText := range []string{
-		"MIT 开源许可证声明",
+		"AGPL 开源许可证声明",
 		"本地优先与数据自治原则",
 		"AI 生成内容免责声明",
 		"命令执行与系统安全须知",
