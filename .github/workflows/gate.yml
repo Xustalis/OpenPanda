@@ -226,5 +226,12 @@ jobs:
       # misread as a flaky test rather than a platform-specific build error.
       - name: Build
         run: go build ./...
-      - name: Test
-        run: go test ./...
+      # The internal/core e2e tests poll real loopback websockets on fixed
+      # deadlines, and shared-CPU macOS/Windows runners stall them often enough
+      # to flake dependabot PRs twice in a row (TestPlanThreeStagesThreeNodes,
+      # TestDeclineTerminalizesLocalRow — both green on retry and locally).
+      # `--rerun-fails` re-runs only the tests that failed, so a consistent
+      # regression still fails the leg while a one-off stall does not hold
+      # the gate hostage. A data-race failure is never retried.
+      - name: Test (rerun only failures — these runners stall the loopback e2e tests)
+        run: go run gotest.tools/gotestsum@v1.13.0 --rerun-fails=3 --rerun-fails-abort-on-data-race --packages="./..."
