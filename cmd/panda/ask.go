@@ -144,7 +144,7 @@ func runAsk(args []string) {
 	}
 	recordConvo := func(out *askengine.Result) {
 		if *continueConvo {
-			appendConvo(history, loc, prompt, out)
+			appendConvo(history, loc, prompt, out, engine)
 		}
 	}
 

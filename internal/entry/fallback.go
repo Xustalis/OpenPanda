@@ -8,6 +8,8 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
 // ClassifyError wraps a model/parse failure with a user-friendly message. The
@@ -25,18 +27,24 @@ func (e *ClassifyError) Unwrap() error { return e.Err }
 // WrapAPIError converts a model-call error into a user-friendly ClassifyError.
 // The message is actionable, not generic: a rejected key says to fix the key,
 // a wrong endpoint says to fix base_url/model, rate limits and outages say to
-// wait — so the user knows what to do instead of retrying blind.
-func WrapAPIError(err error) error {
+// wait — so the user knows what to do instead of retrying blind. loc is the
+// reply locale of the ask that failed (PromptOptions.UserLocale); omitting it
+// falls back to the process default, matching the pre-locale behaviour.
+func WrapAPIError(err error, locs ...i18n.Locale) error {
+	loc := i18n.Locale("")
+	if len(locs) > 0 {
+		loc = locs[0]
+	}
 	switch {
 	case errors.Is(err, ErrNoKey):
 		return &ClassifyError{
-			UserMsg: "未配置模型 API key：运行 `panda init` 完成引导配置，或打开 `panda web` 在设置页填写（也可用 OPENPANDA_MODEL_API_KEY 环境变量）",
+			UserMsg: i18n.T(loc, "entry.err.noKey"),
 			Err:     err,
 		}
 	case errors.Is(err, context.Canceled):
-		return &ClassifyError{UserMsg: "模型调用被取消", Err: err}
+		return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.canceled"), Err: err}
 	case errors.Is(err, context.DeadlineExceeded):
-		return &ClassifyError{UserMsg: "模型调用超时，请检查网络后重试", Err: err}
+		return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.timeout"), Err: err}
 	}
 
 	// A definitive provider rejection (the request was answered, not lost).
@@ -44,15 +52,15 @@ func WrapAPIError(err error) error {
 	if errors.As(err, &se) {
 		switch {
 		case se.status == http.StatusUnauthorized || se.status == http.StatusForbidden:
-			return &ClassifyError{UserMsg: "模型 API key 无效或无权限，请在设置中检查 model.api_key", Err: err}
+			return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.unauthorized"), Err: err}
 		case se.status == http.StatusNotFound:
-			return &ClassifyError{UserMsg: "模型接口不存在，请检查 base_url 与 model 名称是否正确", Err: err}
+			return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.notFound"), Err: err}
 		case se.status == http.StatusBadRequest:
 			// The stock hint names the two most common causes, but a 400 can be
 			// anything the provider dislikes (a retired model name, an oversized
 			// context) — the provider's own reason rides along so the user fixes
 			// the real cause instead of chasing the hint.
-			msg := "模型服务拒绝了请求（400），请检查 model 名称与 api_type 是否匹配"
+			msg := i18n.T(loc, "entry.err.badRequest")
 			if detail := providerDetail(se.body); detail != "" {
 				msg += "：" + detail
 			}
@@ -65,19 +73,19 @@ func WrapAPIError(err error) error {
 	var re *retryableError
 	if errors.As(err, &re) {
 		if re.status == http.StatusTooManyRequests {
-			return &ClassifyError{UserMsg: "模型服务限流（已自动重试仍失败），请稍后再试", Err: err}
+			return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.rateLimited"), Err: err}
 		}
-		return &ClassifyError{UserMsg: "模型服务暂时不可用（已自动重试仍失败），请稍后再试", Err: err}
+		return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.unavailable"), Err: err}
 	}
 
 	// A transport-level failure that survived its retries: the endpoint was
 	// never reached.
 	var te *transientError
 	if errors.As(err, &te) {
-		return &ClassifyError{UserMsg: "无法连接模型服务，请检查网络与 base_url 是否可达", Err: err}
+		return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.unreachable"), Err: err}
 	}
 
-	return &ClassifyError{UserMsg: "入口模型调用失败，请稍后重试", Err: err}
+	return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.generic"), Err: err}
 }
 
 // providerDetail extracts the provider's rejection reason from a response

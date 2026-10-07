@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -72,6 +73,43 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, sess)
+}
+
+// forkSession serves POST /api/sessions/{id}/fork — splits the thread at a
+// turn boundary into a child session. Body: {"at": N} (0/absent copies the
+// whole thread). In a repository the child's worktree branches off the
+// parent's branch so it inherits the parent's code state.
+func (h *handler) forkSession(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		At int `json:"at"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+			return
+		}
+	}
+	parent, err := h.sessions.Get(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such session"))
+		return
+	}
+	child, err := h.sessions.Fork(parent.ID, req.At)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if h.worktrees != nil {
+		base := "HEAD"
+		if parent.Branch != "" {
+			base = parent.Branch
+		}
+		if path, err := h.worktrees.EnsureFrom(r.Context(), child.ID, base); err == nil {
+			_ = h.sessions.SetWorktree(child.ID, path, sessions.Branch(child.ID))
+			child, _ = h.sessions.Get(child.ID)
+		}
+	}
+	writeJSON(w, child)
 }
 
 // getSession serves GET /api/sessions/{id}.
@@ -410,13 +448,32 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// History is the thread as it stands. The user turn is persisted first
+	// History is the thread as it stands, auto-compacted when it overflows
+	// the replay budget (the compacted prefix survives as sess.Summary and
+	// replays as a leading context note). The user turn is persisted first
 	// (a failed ask still leaves the question in the thread, like codex/claude
 	// code) but excluded from the replay: AskTurns carries the prompt itself,
 	// so replaying the persisted copy too would send two consecutive user
 	// messages — a 400 from strict providers.
 	var history []entry.Turn
-	for _, t := range sess.Turns {
+	if updated, err := h.sessions.CompactHistory(r.Context(), sess.ID, sessions.DefaultHistoryBudget,
+		func(ctx context.Context, evicted []sessions.Turn) (string, error) {
+			turns := make([]entry.Turn, 0, len(evicted))
+			for _, t := range evicted {
+				turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
+			}
+			return eng.SummarizeTurns(ctx, turns)
+		}); err == nil {
+		sess = updated
+	}
+	if sess.Summary != "" {
+		history = append(history, entry.Turn{Role: "user", Content: sessions.SummaryMarker + "\n" + sess.Summary})
+	}
+	// The replay stays budget-bounded even when compaction could not run
+	// (summarize failed or thread fits): the stored thread keeps every turn,
+	// only the model's view is trimmed to the tail that fits.
+	_, kept := sessions.SplitForBudget(sess.Turns, sessions.DefaultHistoryBudget)
+	for _, t := range kept {
 		history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
 	}
 	if _, err := h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: req.Prompt}); err != nil {

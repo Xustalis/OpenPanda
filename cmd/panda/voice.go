@@ -136,7 +136,7 @@ func runVoice(args []string) {
 			}
 			continue
 		}
-		history = appendConvo(history, loc, text, out)
+		history = appendConvo(history, loc, text, out, engine)
 		speakBack(ctx, loc, out, *mute)
 		if *once {
 			return

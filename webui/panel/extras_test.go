@@ -62,6 +62,11 @@ func TestOnboardingRoundTrip(t *testing.T) {
 	if out["locale"] != "zh-CN" || out["onboarded"] != true || out["approval_mode"] != "never" {
 		t.Fatalf("post did not persist: %v", out)
 	}
+	// Accepting terms stamps the current revision so a license change can
+	// re-prompt stale consents.
+	if out["terms_version"] != float64(config.TermsVersionCurrent) {
+		t.Fatalf("terms_version not stamped: %v", out["terms_version"])
+	}
 
 	code, _ = doJSON(t, h, jsonReq(http.MethodPost, "/api/onboarding", `{"approval_mode":"yolo"}`))
 	if code != http.StatusBadRequest {

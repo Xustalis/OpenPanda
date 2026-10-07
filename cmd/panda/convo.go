@@ -20,6 +20,7 @@ package main
 //     `panda ask --continue` can pick the same thread up from scripts.
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -30,6 +31,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
 // maxConvoChars is the replay budget for the bare-mode conversation:
@@ -159,6 +161,11 @@ func clearConvo() {
 	}
 }
 
+// convoSummaryMarker prefixes the synthetic turn that carries the running
+// digest of compacted history — the same wire marker sessions.SummaryMarker
+// defines for session threads.
+const convoSummaryMarker = sessions.SummaryMarker
+
 // trimConvo evicts whole exchanges from the head while the total size
 // exceeds the character budget. The newest exchange always survives.
 func trimConvo(turns []entry.Turn) []entry.Turn {
@@ -179,20 +186,101 @@ func trimConvo(turns []entry.Turn) []entry.Turn {
 	return turns
 }
 
+// compactConvo is trimConvo with auto-compaction: when a model client is
+// reachable, the evicted head (which may itself begin with the previous
+// digest turn) is folded into a fresh digest that survives as the first
+// turn. When the engine is nil or summarization fails it degrades to the
+// same hard trim as before — context is lost, never correctness.
+func compactConvo(turns []entry.Turn, engine *askengine.Engine) []entry.Turn {
+	total := 0
+	for _, t := range turns {
+		total += len(t.Content)
+	}
+	if total <= maxConvoChars || len(turns) <= 2 {
+		return turns
+	}
+	if engine == nil {
+		return trimConvo(turns)
+	}
+	var evicted []entry.Turn
+	kept := turns
+	for total > maxConvoChars && len(kept) > 2 {
+		drop := 2
+		if len(kept)%2 == 1 {
+			drop = 1
+		}
+		for i := 0; i < drop && i < len(kept); i++ {
+			total -= len(kept[i].Content)
+		}
+		evicted = append(evicted, kept[:drop]...)
+		kept = kept[drop:]
+	}
+	digest, err := engine.SummarizeTurns(context.Background(), evicted)
+	if err != nil || strings.TrimSpace(digest) == "" {
+		return trimConvo(turns)
+	}
+	head := entry.Turn{Role: "user", Content: convoSummaryMarker + "\n" + strings.TrimSpace(digest)}
+	return append([]entry.Turn{head}, kept...)
+}
+
 // appendConvo records one exchange (user prompt + assistant outcome) into
 // the conversation, trims to budget, persists, and returns the new view.
 // A task outcome is summarized (title, state, result head) — the next ask
 // knows what was done without the full stdout. The locale is the caller's
-// (the REPL's, so /lang is honoured), not a freshly detected one.
-func appendConvo(turns []entry.Turn, loc i18n.Locale, text string, out *askengine.Result) []entry.Turn {
+// (the REPL's, so /lang is honoured), not a freshly detected one. When an
+// engine is supplied, overflowing history is compacted instead of dropped.
+func appendConvo(turns []entry.Turn, loc i18n.Locale, text string, out *askengine.Result, engine ...*askengine.Engine) []entry.Turn {
 	assistant := convoSummaryOf(loc, out)
 	turns = append(turns,
 		entry.Turn{Role: "user", Content: text},
 		entry.Turn{Role: "assistant", Content: assistant},
 	)
-	turns = trimConvo(turns)
+	var eng *askengine.Engine
+	if len(engine) > 0 {
+		eng = engine[0]
+	}
+	turns = compactConvo(turns, eng)
 	saveConvo(turns)
 	return turns
+}
+
+// summarizeSessionTurns adapts the engine's entry.Turn summarizer to the
+// store's sessions.Turn shape. A nil engine yields a nil summarizer, which
+// CompactHistory treats as "no compaction available".
+func summarizeSessionTurns(engine *askengine.Engine) func(context.Context, []sessions.Turn) (string, error) {
+	if engine == nil {
+		return nil
+	}
+	return func(ctx context.Context, evicted []sessions.Turn) (string, error) {
+		turns := make([]entry.Turn, 0, len(evicted))
+		for _, t := range evicted {
+			turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
+		}
+		return engine.SummarizeTurns(ctx, turns)
+	}
+}
+
+// sessionHistory compacts a session thread if needed and builds its replay:
+// the running digest as a leading context note, then the surviving turns.
+// It returns the possibly-updated session (Summary/Turns may have changed).
+// The replay is always budget-bounded: when no engine is reachable (or the
+// summarizer failed) the stored thread stays whole but only the tail that
+// fits is replayed — the same degradation the bare convo applies.
+func sessionHistory(ctx context.Context, store *sessions.Store, sess *sessions.Session, engine *askengine.Engine) (*sessions.Session, []entry.Turn) {
+	if engine != nil {
+		if updated, err := store.CompactHistory(ctx, sess.ID, sessions.DefaultHistoryBudget, summarizeSessionTurns(engine)); err == nil {
+			sess = updated
+		}
+	}
+	var history []entry.Turn
+	if sess.Summary != "" {
+		history = append(history, entry.Turn{Role: "user", Content: sessions.SummaryMarker + "\n" + sess.Summary})
+	}
+	_, kept := sessions.SplitForBudget(sess.Turns, sessions.DefaultHistoryBudget)
+	for _, t := range kept {
+		history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
+	}
+	return sess, history
 }
 
 // convoSummaryOf renders the assistant side of one exchange.

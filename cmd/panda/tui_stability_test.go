@@ -354,6 +354,28 @@ func TestTUIFailedTurnPersistsPair(t *testing.T) {
 	}
 }
 
+// TestTUIDoneErrRecordsPair is the onDone-level regression for the same
+// guarantee: resetLive clears pendingPrompt, so the error path must capture it
+// first or recordErrorTurn is handed "" and the bare-mode pair is silently
+// dropped — a failed TUI turn would leave no trace in convo or /history.
+func TestTUIDoneErrRecordsPair(t *testing.T) {
+	m := newIsolatedTUI(t)
+	s := &askStream{events: make(chan tea.Msg, 1), dropped: make(chan struct{})}
+	m.stream = s
+	m.mode = modeAsking
+	m.pendingPrompt = "what is this"
+
+	next, _ := m.onDone(doneMsg{stream: s, err: errors.New("model exploded")})
+	m = next.(tuiModel)
+
+	if len(m.r.convo) != 2 || m.r.convo[0].Content != "what is this" {
+		t.Fatalf("failed turn should persist the bare pair, got %v", m.r.convo)
+	}
+	if m.pendingPrompt != "" {
+		t.Fatal("resetLive should still clear the in-flight prompt")
+	}
+}
+
 // TestTUIAuthorizeAndTasksClearGuards checks the two commands that mutated or
 // needed a terminal through the exec path: /authorize toggles inline and
 // /tasks clear goes through the TUI's own confirm card — never a silent wipe,

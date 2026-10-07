@@ -3,8 +3,11 @@
 package sessions
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -196,5 +199,246 @@ func TestRenameProject(t *testing.T) {
 	s3Loaded, err := store.Get(s3.ID)
 	if err != nil || s3Loaded.Project != "other-p" {
 		t.Errorf("s3.Project = %q, want other-p", s3Loaded.Project)
+	}
+}
+
+func TestForkCopiesPrefixAndTree(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	parent, err := store.Create("root thread", "proj")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for i, txt := range []string{"q1", "q2", "q3"} {
+		if _, err := store.AppendTurn(parent.ID, Turn{Role: "user", Text: txt}); err != nil {
+			t.Fatalf("AppendTurn %d: %v", i, err)
+		}
+		if _, err := store.AppendTurn(parent.ID, Turn{Role: "assistant", Text: "a" + txt}); err != nil {
+			t.Fatalf("AppendTurn a%d: %v", i, err)
+		}
+	}
+
+	// Fork at turn 2: only the first exchange.
+	child, err := store.Fork(parent.ID, 2)
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	if child.ParentID != parent.ID || child.ForkIndex != 2 {
+		t.Errorf("child ParentID/ForkIndex = %q/%d, want %q/2", child.ParentID, child.ForkIndex, parent.ID)
+	}
+	if len(child.Turns) != 2 {
+		t.Fatalf("child turns = %d, want 2", len(child.Turns))
+	}
+	if child.Project != "proj" || child.Title != "root thread" {
+		t.Errorf("child inherited project/title = %q/%q", child.Project, child.Title)
+	}
+
+	// Fork copies: appending to the child must not touch the parent.
+	if _, err := store.AppendTurn(child.ID, Turn{Role: "user", Text: "child-only"}); err != nil {
+		t.Fatalf("child AppendTurn: %v", err)
+	}
+	p2, err := store.Get(parent.ID)
+	if err != nil || len(p2.Turns) != 6 {
+		t.Errorf("parent turns after child append = %d, want 6", len(p2.Turns))
+	}
+
+	// at <= 0 or beyond length copies everything.
+	full, err := store.Fork(parent.ID, 0)
+	if err != nil || len(full.Turns) != 6 {
+		t.Errorf("full fork turns = %d, want 6", len(full.Turns))
+	}
+
+	// Children lists direct forks only, oldest first.
+	kids, err := store.Children(parent.ID)
+	if err != nil {
+		t.Fatalf("Children: %v", err)
+	}
+	if len(kids) != 2 {
+		t.Fatalf("Children = %d, want 2", len(kids))
+	}
+	if kids[0].ID != child.ID || kids[1].ID != full.ID {
+		t.Errorf("Children order = %q,%q want %q,%q", kids[0].ID, kids[1].ID, child.ID, full.ID)
+	}
+
+	// A grandchild is not a direct child of the root.
+	gc, err := store.Fork(child.ID, 0)
+	if err != nil {
+		t.Fatalf("grandchild fork: %v", err)
+	}
+	kids, _ = store.Children(parent.ID)
+	if len(kids) != 2 {
+		t.Errorf("Children after grandchild = %d, want 2", len(kids))
+	}
+	if gc.ParentID != child.ID {
+		t.Errorf("grandchild parent = %q, want %q", gc.ParentID, child.ID)
+	}
+}
+
+func TestCompactHistoryFoldsIntoSummary(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	sess, err := store.Create("long thread")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// 10 exchanges × ~200 chars each — far over a small test budget.
+	for i := 0; i < 10; i++ {
+		body := string(rune('a'+i)) + strings.Repeat("x", 200)
+		if _, err := store.AppendTurn(sess.ID, Turn{Role: "user", Text: "q" + body}); err != nil {
+			t.Fatalf("AppendTurn u%d: %v", i, err)
+		}
+		if _, err := store.AppendTurn(sess.ID, Turn{Role: "assistant", Text: "a" + body}); err != nil {
+			t.Fatalf("AppendTurn a%d: %v", i, err)
+		}
+	}
+
+	var got [][]Turn
+	summarize := func(ctx context.Context, evicted []Turn) (string, error) {
+		got = append(got, evicted)
+		return "digest: " + evicted[0].Text[:3], nil
+	}
+	updated, err := store.CompactHistory(context.Background(), sess.ID, 500, summarize)
+	if err != nil {
+		t.Fatalf("CompactHistory: %v", err)
+	}
+	if updated.Summary == "" {
+		t.Fatal("Summary empty after compaction")
+	}
+	if len(updated.Turns) >= 20 {
+		t.Fatalf("turns not trimmed: %d", len(updated.Turns))
+	}
+	// Pair-aligned: kept thread must start on a user turn.
+	if len(updated.Turns) > 0 && updated.Turns[0].Role != "user" {
+		t.Errorf("kept thread starts on %q, want user", updated.Turns[0].Role)
+	}
+	if len(got) != 1 || len(got[0]) == 0 {
+		t.Fatalf("summarizer saw %d evicted batches", len(got))
+	}
+
+	// Second compaction folds the prior digest forward: it must reach the
+	// summarizer as the first evicted turn.
+	for i := 0; i < 10; i++ {
+		body := strings.Repeat("y", 200)
+		_, _ = store.AppendTurn(sess.ID, Turn{Role: "user", Text: "p" + body})
+		_, _ = store.AppendTurn(sess.ID, Turn{Role: "assistant", Text: "r" + body})
+	}
+	updated, err = store.CompactHistory(context.Background(), sess.ID, 500, summarize)
+	if err != nil {
+		t.Fatalf("CompactHistory 2: %v", err)
+	}
+	last := got[len(got)-1]
+	if !strings.HasPrefix(last[0].Text, SummaryMarker) {
+		t.Errorf("prior digest not folded forward; first evicted turn starts %q", last[0].Text[:min(30, len(last[0].Text))])
+	}
+
+	// Under budget: summarizer not called, session untouched.
+	small, _ := store.Create("small")
+	_, _ = store.AppendTurn(small.ID, Turn{Role: "user", Text: "hi"})
+	before := len(got)
+	if _, err := store.CompactHistory(context.Background(), small.ID, 500, summarize); err != nil {
+		t.Fatalf("CompactHistory small: %v", err)
+	}
+	if len(got) != before {
+		t.Error("summarizer called on an under-budget thread")
+	}
+
+	// A failing summarizer leaves the session intact.
+	fail := func(ctx context.Context, evicted []Turn) (string, error) { return "", errors.New("no model") }
+	untouched, err := store.CompactHistory(context.Background(), sess.ID, 10, fail)
+	if err != nil || untouched == nil {
+		t.Fatalf("CompactHistory fail: %v", err)
+	}
+}
+
+// Turns appended while the summarizer is running must not be dropped: the
+// digest only covers the turns it was shown, so the appended tail stays in
+// the thread even when that leaves it over budget until the next pass.
+func TestCompactHistoryKeepsAppendedTurns(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	sess, err := store.Create("concurrent")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for i := 0; i < 6; i++ {
+		body := strings.Repeat("x", 200)
+		_, _ = store.AppendTurn(sess.ID, Turn{Role: "user", Text: "q" + body})
+		_, _ = store.AppendTurn(sess.ID, Turn{Role: "assistant", Text: "a" + body})
+	}
+
+	entered := make(chan struct{})
+	appended := make(chan struct{})
+	summarize := func(ctx context.Context, evicted []Turn) (string, error) {
+		close(entered) // signal: summarizer is mid-flight
+		<-appended     // wait for the sneaky AppendTurn before returning
+		return "digest", nil
+	}
+	// Run the compaction in a goroutine; once the summarizer is entered,
+	// append a fresh turn — it must survive the write phase.
+	done := make(chan *Session, 1)
+	go func() {
+		updated, _ := store.CompactHistory(context.Background(), sess.ID, 500, summarize)
+		done <- updated
+	}()
+	<-entered
+	newTurn := Turn{Role: "user", Text: "arrived mid-summarize"}
+	if _, err := store.AppendTurn(sess.ID, newTurn); err != nil {
+		t.Fatalf("AppendTurn mid-summarize: %v", err)
+	}
+	close(appended)
+	updated := <-done
+	if updated == nil {
+		t.Fatal("CompactHistory returned nil")
+	}
+	last := updated.Turns[len(updated.Turns)-1]
+	if last.Text != newTurn.Text {
+		t.Errorf("appended turn lost during compaction; tail is %q", last.Text[:min(30, len(last.Text))])
+	}
+	if updated.Summary != "digest" {
+		t.Errorf("Summary = %q, want digest", updated.Summary)
+	}
+}
+
+// A second compaction racing the first must not be overwritten by a stale
+// digest: whichever write lands second sees the other's Summary and yields.
+func TestCompactHistoryCAS(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	sess, err := store.Create("race")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for i := 0; i < 6; i++ {
+		body := strings.Repeat("x", 200)
+		_, _ = store.AppendTurn(sess.ID, Turn{Role: "user", Text: "q" + body})
+		_, _ = store.AppendTurn(sess.ID, Turn{Role: "assistant", Text: "a" + body})
+	}
+	entered := make(chan struct{})
+	proceed := make(chan struct{})
+	summarize := func(ctx context.Context, evicted []Turn) (string, error) {
+		close(entered)
+		<-proceed
+		return "slow digest", nil
+	}
+	done := make(chan *Session, 1)
+	go func() {
+		updated, _ := store.CompactHistory(context.Background(), sess.ID, 500, summarize)
+		done <- updated
+	}()
+	<-entered
+	// A competing compaction finishes first and publishes its summary.
+	winner, err := store.CompactHistory(context.Background(), sess.ID, 500,
+		func(ctx context.Context, evicted []Turn) (string, error) { return "winner digest", nil })
+	if err != nil || winner.Summary != "winner digest" {
+		t.Fatalf("winner compaction: %v summary=%q", err, winner.Summary)
+	}
+	close(proceed) // let the slow summarizer return; its write must now yield
+	loser := <-done
+	if loser == nil {
+		t.Fatal("loser compaction returned nil")
+	}
+	if loser.Summary != "winner digest" {
+		t.Errorf("stale digest overwrote the winner: %q", loser.Summary)
 	}
 }

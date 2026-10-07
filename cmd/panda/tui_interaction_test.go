@@ -75,8 +75,11 @@ func TestTUISplashScreen(t *testing.T) {
 		t.Fatalf("expected transition to modeOnboarding, got %v (step %v)", m2.mode, m2.onboardingStep)
 	}
 
-	// Pressing Enter when already onboarded but no model configured transitions to model wizard
+	// Pressing Enter when already onboarded but no model configured transitions to model wizard.
+	// Current-terms consent is required: a stale version routes to re-consent first.
 	cfg.UI.Onboarded = true
+	cfg.UI.TermsAccepted = true
+	cfg.UI.TermsVersion = config.TermsVersionCurrent
 	mOnboarded := newTUIModel(r)
 	nextO, _ := mOnboarded.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	mOnboarded = nextO.(tuiModel)
@@ -940,6 +943,67 @@ func TestTUIFirstRunOnboardingFlow(t *testing.T) {
 		if !strings.Contains(zhTermsView, expectedText) {
 			t.Fatalf("Chinese terms view missing '%s':\n%s", expectedText, zhTermsView)
 		}
+	}
+}
+
+// TestTUITermsReconsentFlow covers the license-change path: an install that
+// accepted the MIT-era terms (terms_accepted set, no terms_version) is
+// onboarded but must re-confirm the AGPL card — alone, without the wizard —
+// before chat unlocks. Accepting stamps terms_version; the next launch goes
+// straight to idle.
+func TestTUITermsReconsentFlow(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("ui:\n  onboarded: true\n  terms_accepted: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	cfg.UI.Onboarded = true
+	cfg.UI.TermsAccepted = true // MIT-era consent: no terms_version
+	cfg.Model.BaseURL = "http://localhost:1/v1"
+	r := &repl{loc: i18n.English, cfg: cfg, configPath: cfgPath}
+	m := newTUIModel(r)
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = next.(tuiModel)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(tuiModel)
+
+	if m.mode != modeOnboarding || m.onboardingStep != onboardingStepTerms {
+		t.Fatalf("stale terms should land on the terms step, got %v/%v", m.mode, m.onboardingStep)
+	}
+	if !m.termsReconsent {
+		t.Fatal("expected termsReconsent flag")
+	}
+	if v := m.View(); !strings.Contains(v, "License updated to AGPL-3.0") {
+		t.Fatalf("re-consent view missing update banner:\n%s", v)
+	}
+
+	// Accept -> straight to idle (already onboarded), version stamped both in
+	// memory and on disk.
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = next.(tuiModel)
+	if m.mode != modeIdle {
+		t.Fatalf("expected modeIdle after re-consent, got %v", m.mode)
+	}
+	if cfg.UI.TermsVersion != config.TermsVersionCurrent {
+		t.Fatalf("terms_version not stamped: %d", cfg.UI.TermsVersion)
+	}
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "terms_version: 2") {
+		t.Fatalf("terms_version not persisted:\n%s", data)
+	}
+
+	// A current-version config takes the normal path (no re-prompt).
+	m2 := newTUIModel(&repl{loc: i18n.English, cfg: cfg, configPath: cfgPath})
+	next, _ = m2.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m2 = next.(tuiModel)
+	next, _ = m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2 = next.(tuiModel)
+	if m2.mode != modeIdle {
+		t.Fatalf("current terms should skip onboarding, got %v", m2.mode)
 	}
 }
 

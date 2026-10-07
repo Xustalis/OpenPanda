@@ -142,6 +142,55 @@ func TestSessionsCRUD(t *testing.T) {
 	}
 }
 
+func TestSessionForkEndpoint(t *testing.T) {
+	sessStore := sessions.NewStore(t.TempDir())
+	h := New(Deps{
+		Store:     newTestStore(t),
+		Sessions:  sessStore,
+		StaticDir: t.TempDir(),
+		Token:     testToken,
+	})
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions", `{"title":"root"}`))
+	if code != http.StatusOK {
+		t.Fatalf("create status = %d, body %v", code, out)
+	}
+	parent := out["id"].(string)
+
+	// Seed two turns so the fork has something to copy.
+	for _, role := range []string{"user", "assistant"} {
+		if _, err := sessStore.AppendTurn(parent, sessions.Turn{Role: role, Text: role + " turn"}); err != nil {
+			t.Fatalf("AppendTurn: %v", err)
+		}
+	}
+
+	code, child := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions/"+parent+"/fork", `{"at":1}`))
+	if code != http.StatusOK {
+		t.Fatalf("fork status = %d, body %v", code, child)
+	}
+	if child["parent_id"] != parent {
+		t.Fatalf("child parent_id = %v, want %s", child["parent_id"], parent)
+	}
+	if child["fork_index"].(float64) != 1 {
+		t.Fatalf("child fork_index = %v, want 1", child["fork_index"])
+	}
+	turns, _ := child["turns"].([]any)
+	if len(turns) != 1 {
+		t.Fatalf("child turns = %d, want 1 (truncated prefix)", len(turns))
+	}
+
+	// Fork of a missing session is a 404; a whole-thread fork omits at.
+	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions/nope/fork", `{}`)); code != http.StatusNotFound {
+		t.Fatalf("fork missing status = %d, want 404", code)
+	}
+	code, full := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions/"+parent+"/fork", `{}`))
+	if code != http.StatusOK {
+		t.Fatalf("full fork status = %d", code)
+	}
+	if turns, _ := full["turns"].([]any); len(turns) != 2 {
+		t.Fatalf("full fork turns = %d, want 2", len(turns))
+	}
+}
+
 func TestSessionAskValidation(t *testing.T) {
 	h := New(Deps{
 		Store:     newTestStore(t),

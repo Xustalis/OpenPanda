@@ -29,6 +29,14 @@ export function notifyModelSaved(): void {
 type Step = 'language' | 'terms' | 'approval' | 'model'
 const STEPS: Step[] = ['language', 'terms', 'approval', 'model']
 
+/** Mirrors config.TermsVersionCurrent — bump alongside it on terms changes. */
+const TERMS_VERSION_CURRENT = 2
+
+/** Effective consent: accepted AND stamped at the current revision. */
+function termsCurrent(state: OnboardingState): boolean {
+  return state.terms_accepted && (state.terms_version ?? 0) >= TERMS_VERSION_CURRENT
+}
+
 /** First-run gate rendered at the top of the main pane. Fresh installs
  *  (`onboarded`/`terms_accepted` unset) get the full wizard immediately;
  *  an install that finished the wizard but has no usable model gets a
@@ -50,7 +58,7 @@ export function OnboardingBanner() {
     return () => window.removeEventListener(MODEL_SAVED_EVENT, check)
   }, [])
 
-  const needsWizard = Boolean(state && (!state.onboarded || !state.terms_accepted))
+  const needsWizard = Boolean(state && (!state.onboarded || !termsCurrent(state)))
   // Fresh installs get the wizard without a click — state setters belong in
   // an effect, not the render path.
   useEffect(() => {
@@ -74,6 +82,7 @@ export function OnboardingBanner() {
         <OnboardingWizard
           state={state}
           modelOnly={!needsWizard}
+          termsOnly={needsWizard && state.onboarded}
           onClose={() => setOpen(false)}
           onDone={() => {
             setCompleted(true)
@@ -86,18 +95,22 @@ export function OnboardingBanner() {
 }
 
 /** The four-step wizard. `modelOnly` jumps straight to the model step for
- *  the "already onboarded, still no model" banner path. */
+ *  the "already onboarded, still no model" banner path; `termsOnly` shows
+ *  just the license step for installs that accepted a stale terms revision
+ *  (the MIT→AGPL change) — accepting completes the wizard. */
 function OnboardingWizard(props: {
   state: OnboardingState
   modelOnly: boolean
+  termsOnly: boolean
   onClose(): void
   onDone(): void
 }) {
   useLocaleRerender()
-  const [stepIdx, setStepIdx] = useState(props.modelOnly ? 3 : 0)
+  const steps: Step[] = props.termsOnly ? ['terms'] : STEPS
+  const [stepIdx, setStepIdx] = useState(props.modelOnly ? steps.length - 1 : 0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const step = STEPS[stepIdx]
+  const step = steps[stepIdx]
 
   async function save(patch: OnboardingPatch): Promise<boolean> {
     setBusy(true)
@@ -115,7 +128,13 @@ function OnboardingWizard(props: {
 
   async function next() {
     if (step === 'terms' && !(await save({ terms_accepted: true }))) return
-    if (stepIdx < STEPS.length - 1) setStepIdx(stepIdx + 1)
+    if (stepIdx < steps.length - 1) {
+      setStepIdx(stepIdx + 1)
+    } else if (props.termsOnly) {
+      // Re-consent path: the license step is also the last step — the
+      // install was already onboarded.
+      props.onDone()
+    }
   }
 
   async function finish() {
@@ -143,7 +162,7 @@ function OnboardingWizard(props: {
       <div class="modal onboarding-modal wizard" role="dialog" aria-modal="true"
         aria-label={t('onboarding.title')}>
         <div class="wizard-progress" aria-hidden="true">
-          {STEPS.map((s, i) => (
+          {steps.map((s, i) => (
             <span
               key={s}
               class={`wizard-dot${i < stepIdx ? ' done' : ''}${i === stepIdx ? ' on' : ''}`}

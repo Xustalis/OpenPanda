@@ -100,8 +100,8 @@ func TestAskModelFallback(t *testing.T) {
 	if res.Answer != "备用模型回答成功" {
 		t.Fatalf("unexpected answer: got %q, want '备用模型回答成功'", res.Answer)
 	}
-	if !strings.Contains(res.Note, "备用模型") {
-		t.Fatalf("expected note to mention fallback model, got %q", res.Note)
+	if !strings.Contains(res.Note, "fallback-model") {
+		t.Fatalf("expected note to name the fallback model, got %q", res.Note)
 	}
 }
 

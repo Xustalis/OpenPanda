@@ -187,6 +187,7 @@ func init() {
 		{"sessions", "chat", "cmd.sessions", (*repl).cmdSessions},
 		{"session", "chat", "cmd.session", (*repl).cmdSession},
 		{"resume", "chat", "cmd.resume", (*repl).cmdResume},
+		{"fork", "chat", "cmd.fork", (*repl).cmdFork},
 		{"clear", "chat", "cmd.clear", (*repl).cmdClear},
 		{"tasks", "tasks", "cmd.tasks", (*repl).cmdTasks},
 		{"task", "tasks", "cmd.task", (*repl).cmdTask},
@@ -266,6 +267,11 @@ func runRepl(args []string) {
 	cwd, _ := os.Getwd()
 	workspaceAllowed := false
 	isTUI := interactive && stdoutIsTTY() && os.Getenv("PANDA_CLASSIC_REPL") == ""
+	// The classic loop has no terms card — but a license change still deserves
+	// a notice. Non-blocking: pipes and scripts must not stall on a prompt.
+	if interactive && !isTUI && cfg != nil && !cfg.UI.TermsCurrent() {
+		fmt.Println(i18n.T(detected, "cli.terms.staleNotice"))
+	}
 	if *yesFlag || !interactive || isTUI {
 		workspaceAllowed = true
 	} else if cwd != "" {
@@ -788,9 +794,7 @@ func (r *repl) askContext(text string) ([]entry.Turn, string) {
 		if err != nil {
 			r.setSess("") // stale id: drop silently back to bare mode
 		} else {
-			for _, t := range sess.Turns {
-				history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
-			}
+			sess, history = sessionHistory(context.Background(), r.sessionsSt, sess, r.engine.Load())
 			if _, err := r.sessionsSt.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: text}); err == nil {
 				workDir = sess.Worktree
 				if workDir == "" && r.engine.Load() != nil {
@@ -923,7 +927,7 @@ func (r *repl) recordErrorTurn(text string, err error) {
 					entry.Turn{Role: "user", Content: text},
 					entry.Turn{Role: "assistant", Content: "⚠ " + err.Error()},
 				)
-				c = trimConvo(c)
+				c = compactConvo(c, r.engine.Load())
 				convo = c
 				return c
 			})
@@ -1183,7 +1187,7 @@ func (r *repl) repeatLast() {
 func (r *repl) rememberTurn(text string, out *askengine.Result) {
 	loc := r.locale()
 	r.editConvo(func(c []entry.Turn) []entry.Turn {
-		return appendConvo(c, loc, text, out)
+		return appendConvo(c, loc, text, out, r.engine.Load())
 	})
 }
 
@@ -1790,8 +1794,12 @@ func (r *repl) cmdSessions(arg string) {
 		if s.ID == r.sessID() {
 			mark = "*"
 		}
+		title := s.Title
+		if s.ParentID != "" {
+			title = "↳ " + title
+		}
 		branch := orDash(s.Branch)
-		r.outf("  %s %-16s %-18s turns=%-3d %s (%s)\n", mark, s.ID, s.UpdatedAt.Format("2006-01-02 15:04"), len(s.Turns), s.Title, branch)
+		r.outf("  %s %-16s %-18s turns=%-3d %s (%s)\n", mark, s.ID, s.UpdatedAt.Format("2006-01-02 15:04"), len(s.Turns), title, branch)
 	}
 }
 
@@ -1823,6 +1831,54 @@ func (r *repl) cmdResume(arg string) {
 	}
 	r.setSess(arg)
 	r.outln(i18n.Tf(r.loc, "repl.resume.done", "id", arg))
+}
+
+// cmdFork splits the bound session into a new thread: `/fork` copies the
+// whole history, `/fork <n>` copies only the first n turns. The REPL
+// re-attaches to the child, so the next ask explores a different direction
+// without losing the parent's thread. In a repository the child gets a
+// worktree branched off the parent's branch.
+func (r *repl) cmdFork(arg string) {
+	if r.sessionsSt == nil {
+		r.outln(i18n.T(r.loc, "repl.sessions.none"))
+		return
+	}
+	sid := r.sessID()
+	if sid == "" {
+		r.outln(i18n.T(r.loc, "repl.fork.nosess"))
+		return
+	}
+	sess, err := r.sessionsSt.Get(sid)
+	if err != nil {
+		r.outln(i18n.Tf(r.loc, "repl.resume.bad", "id", sid))
+		r.setSess("")
+		return
+	}
+	at := len(sess.Turns)
+	if arg = strings.TrimSpace(arg); arg != "" {
+		n, err := strconv.Atoi(arg)
+		if err != nil || n < 0 {
+			r.outln(i18n.T(r.loc, "repl.fork.usage"))
+			return
+		}
+		at = n
+	}
+	child, err := r.sessionsSt.Fork(sid, at)
+	if err != nil {
+		r.storeErr(err)
+		return
+	}
+	if r.worktrees != nil {
+		base := "HEAD"
+		if sess.Branch != "" {
+			base = sess.Branch
+		}
+		if path, err := r.worktrees.EnsureFrom(context.Background(), child.ID, base); err == nil {
+			_ = r.sessionsSt.SetWorktree(child.ID, path, sessions.Branch(child.ID))
+		}
+	}
+	r.setSess(child.ID)
+	r.outln(i18n.Tf(r.loc, "repl.fork.done", "parent", sid, "id", child.ID, "n", fmt.Sprint(child.ForkIndex)))
 }
 
 // cmdMemory inspects the memory layer: bare `/memory` lists the selective-

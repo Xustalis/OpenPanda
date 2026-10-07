@@ -1184,7 +1184,8 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			res.Cost = client.EstimateCost(d.InputTokens, d.OutputTokens)
 			res.EntryModel = client.ModelName()
 			if fallbackUsed != "" && res.Note == "" {
-				res.Note = fmt.Sprintf("主模型不可用，已自动切换至备用模型: %s", fallbackUsed)
+				loc, _ := e.localeNow()
+				res.Note = i18n.Tf(loc, "entry.note.fallback", "name", fallbackUsed)
 			}
 			// Reasoning backstop (D14): every return path funnels through
 			// here, so one strip covers the Answer this engine hands to

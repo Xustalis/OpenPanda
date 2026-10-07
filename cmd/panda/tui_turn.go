@@ -100,6 +100,7 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 		// A user-initiated cancel (Esc / Ctrl+C mid-stream) surfaces as a context
 		// error; that is a quiet "interrupted" note, not a red failure block.
 		done := m.turnEnded()
+		prompt := m.pendingPrompt
 		m.resetLive()
 		if errors.Is(msg.err, context.Canceled) {
 			note := block{kind: blockNote, body: i18n.T(m.loc, "repl.interrupted")}
@@ -108,9 +109,11 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 		blk := block{kind: blockError, body: msg.err.Error()}
 		// Pair the persisted user turn with the failure (same guard as the
 		// classic loop): a thread left dangling on a user turn 400s on its
-		// every following ask.
+		// every following ask. prompt was captured before resetLive, which
+		// clears pendingPrompt — passing the field itself would silently
+		// drop the bare-mode pair.
 		if m.r != nil {
-			m.r.recordErrorTurn(m.pendingPrompt, msg.err)
+			m.r.recordErrorTurn(prompt, msg.err)
 		}
 		return m, tea.Batch(done, m.printBlock(blk))
 	}

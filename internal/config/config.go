@@ -67,11 +67,28 @@ type SkillsConfig struct {
 //
 // Empty means "use the default (select)". PANDA_MOUSE overrides this per run,
 // and ctrl+t flips it live.
+// TermsVersionCurrent is the revision of the terms card a user must accept.
+// Bump it when the terms materially change: v1 predates the AGPL relicensing,
+// so every acceptance recorded by an MIT-era build carries version 0/1 and is
+// re-prompted once.
+const TermsVersionCurrent = 2
+
 type UIConfig struct {
 	Locale        string `yaml:"locale"`
 	Mouse         string `yaml:"mouse,omitempty"`
 	TermsAccepted bool   `yaml:"terms_accepted,omitempty"`
-	Onboarded     bool   `yaml:"onboarded,omitempty"`
+	// TermsVersion records which terms revision was accepted — a bare
+	// terms_accepted bool can't tell a stale MIT-era consent from a current
+	// one, and upgrades must re-show the card.
+	TermsVersion int  `yaml:"terms_version,omitempty"`
+	Onboarded    bool `yaml:"onboarded,omitempty"`
+}
+
+// TermsCurrent reports whether the stored consent covers the current terms
+// revision. MIT-era installs have TermsAccepted=true but no version, so the
+// version check alone decides.
+func (u UIConfig) TermsCurrent() bool {
+	return u.TermsAccepted && u.TermsVersion >= TermsVersionCurrent
 }
 
 // Injection model strategies (injection.model).
@@ -521,11 +538,16 @@ const (
 // construction time. Both are optional — a bare ModelConfig is unchanged
 // legacy behaviour.
 type ModelConfig struct {
-	Name          string `yaml:"name,omitempty"`           // alias for /model switch; empty = model id
-	Provider      string `yaml:"provider,omitempty"`       // built-in provider id (internal/providers)
-	APIType       string `yaml:"api_type"`                 // "anthropic" | "openai" (default anthropic)
-	BaseURL       string `yaml:"base_url"`                 // e.g. https://api.deepseek.com/anthropic
-	APIKey        string `yaml:"api_key"`                  // secret; prefer env OPENPANDA_MODEL_API_KEY
+	Name     string `yaml:"name,omitempty"`     // alias for /model switch; empty = model id
+	Provider string `yaml:"provider,omitempty"` // built-in provider id (internal/providers)
+	APIType  string `yaml:"api_type"`           // "anthropic" | "openai" (default anthropic)
+	BaseURL  string `yaml:"base_url"`           // e.g. https://api.deepseek.com/anthropic
+	APIKey   string `yaml:"api_key"`            // secret; prefer env OPENPANDA_MODEL_API_KEY
+	// Auth names an OAuth provider from internal/auth ("anthropic"): the
+	// client then authenticates with the stored subscription token instead
+	// of api_key, refreshing it transparently. Experimental — see
+	// `panda auth login`.
+	Auth          string `yaml:"auth,omitempty"`
 	Model         string `yaml:"model"`                    // e.g. deepseek-chat | gpt-4o-mini — fully user-defined
 	MaxTokens     int    `yaml:"max_tokens"`               // completion cap; 0 = provider/entry default
 	ContextWindow int    `yaml:"context_window,omitempty"` // advertised context length; 0 = unknown
@@ -1419,6 +1441,7 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 		{"api_type", mc.NormalizedAPIType()},
 		{"base_url", mc.BaseURL},
 		{"api_key", mc.APIKey},
+		{"auth", mc.Auth},
 		{"model", mc.Model},
 	}
 	for _, f := range fields {

@@ -15,6 +15,8 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
 // shouldUseTUI reports whether the rich TUI should drive this session. It needs
@@ -70,5 +72,13 @@ func runTUI(r *repl) {
 	}()
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
+	}
+	// Restoring the main screen makes the conversation look lost, so say where
+	// it went: a bound session persists in the store (resume by id), a bare
+	// chat lives in the convo file and reloads on the next launch.
+	if sid := r.sessID(); sid != "" {
+		fmt.Println(pal().Muted(i18n.Tf(r.locale(), "tui.exit.session", "id", sid)))
+	} else if r.convoLen() > 0 {
+		fmt.Println(pal().Muted(i18n.T(r.locale(), "tui.exit.bare")))
 	}
 }

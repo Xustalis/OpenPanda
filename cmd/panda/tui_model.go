@@ -143,6 +143,10 @@ type tuiModel struct {
 	// Onboarding state
 	onboardingStep onboardingStep
 	termsCursor    int // 0 = Agree [Y], 1 = Decline [N]
+	// termsReconsent marks the "license changed, re-accept" path: the terms
+	// step shows alone (no language/approval wizard), and accepting goes
+	// straight to idle instead of continuing the first-run wizard.
+	termsReconsent bool
 
 	// Model wizard/form state. The wizard* fields are the canonical values the
 	// form edits (via mfieldGet/mfieldSet) and wizardConfig assembles; the

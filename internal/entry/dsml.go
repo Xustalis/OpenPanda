@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
 // DSML ("<||DSML||tool_calls>…") is the textual tool-call markup some
@@ -219,7 +221,11 @@ func dsmlParamValue(attrs, raw string) any {
 // and the remainder is handed to the ordinary JSON/prose parser; the error only
 // stands when nothing usable is left. What never happens either way is raw
 // markup reaching the user as an answer.
-func resolveDSML(resp Response, toolsOffered bool) (Output, error) {
+func resolveDSML(resp Response, toolsOffered bool, locs ...i18n.Locale) (Output, error) {
+	loc := i18n.Locale("")
+	if len(locs) > 0 {
+		loc = locs[0]
+	}
 	uses, preamble, ok := parseDSMLToolCalls(resp.Text)
 	if ok && toolsOffered {
 		// Every invoke becomes a call the loop executes this round — a batch
@@ -237,14 +243,14 @@ func resolveDSML(resp Response, toolsOffered bool) (Output, error) {
 			return Output{Kind: KindAnswer, Answer: preamble}, nil
 		}
 		return Output{}, &ClassifyError{
-			UserMsg: "模型输出了文本化工具调用（DSML 协议），但当前会话阶段不接受工具调用，已拒绝执行。请重试，或在设置中更换支持原生工具调用的入口模型。",
+			UserMsg: i18n.T(loc, "entry.err.dsmlRejected"),
 			Err:     fmt.Errorf("entry: DSML tool call %q in a tool-free round", uses[0].Name),
 		}
 	}
 	// Unparsable markup: strip it and let the normal parser try the rest.
 	if stripped := strings.TrimSpace(StripDSMLToolCalls(resp.Text)); stripped != "" {
 		if out, err := ParseOutput(stripped); err == nil {
-			const note = "（已忽略模型输出中无法解析的工具调用标记）"
+			note := i18n.T(loc, "entry.note.dsmlIgnored")
 			if out.Note == "" {
 				out.Note = note
 			} else {
@@ -254,7 +260,7 @@ func resolveDSML(resp Response, toolsOffered bool) (Output, error) {
 		}
 	}
 	return Output{}, &ClassifyError{
-		UserMsg: "模型以 DSML 文本形式返回了工具调用，但无法解析为有效调用（接入点协议不兼容）。请重试，或更换支持原生工具调用的入口模型/接入点。",
+		UserMsg: i18n.T(loc, "entry.err.dsmlUnparsable"),
 		// The offending markup goes into the wrapped cause, not the user message:
 		// it is the only evidence of what the endpoint actually emitted, and an
 		// "unparsable" error with no sample is undiagnosable. Bounded and
