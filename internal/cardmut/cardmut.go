@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package cardmut implements structured edits to a node's capability card
 // (capabilities.yaml): add/remove/set of native abilities, agents and manual
 // abilities without opening an editor.

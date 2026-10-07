@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Parser tests for the chat Markdown renderer.
 //
 // Run with `npm test` (node's built-in test runner strips the types; no test

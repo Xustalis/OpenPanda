@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package panel
 
 // GET/POST /api/onboarding — the first-run wizard's persistence surface. The
@@ -21,8 +23,11 @@ import (
 type onboardingState struct {
 	Locale        string `json:"locale"`
 	TermsAccepted bool   `json:"terms_accepted"`
-	Onboarded     bool   `json:"onboarded"`
-	ApprovalMode  string `json:"approval_mode"`
+	// TermsVersion lets the wizard re-show the license step after a terms
+	// change — MIT-era installs hold terms_accepted without a version.
+	TermsVersion int    `json:"terms_version"`
+	Onboarded    bool   `json:"onboarded"`
+	ApprovalMode string `json:"approval_mode"`
 	// ModelConfigured tells the wizard whether the model step can be
 	// skipped without leaving chat unusable.
 	ModelConfigured bool `json:"model_configured"`
@@ -39,11 +44,13 @@ func (h *handler) getOnboarding(w http.ResponseWriter, r *http.Request) {
 func (h *handler) onboardingState() onboardingState {
 	mc := h.engineModel()
 	st := onboardingState{
-		ModelConfigured: strings.TrimSpace(mc.BaseURL) != "" && (mc.NoAuth || strings.TrimSpace(mc.APIKey) != ""),
+		// OAuth (model.auth) counts as configured — api_key stays empty there.
+		ModelConfigured: strings.TrimSpace(mc.BaseURL) != "" && (mc.NoAuth || strings.TrimSpace(mc.APIKey) != "" || strings.TrimSpace(mc.Auth) != ""),
 	}
 	h.readCfg(func(c *config.Config) {
 		st.Locale = c.UI.Locale
 		st.TermsAccepted = c.UI.TermsAccepted
+		st.TermsVersion = c.UI.TermsVersion
 		st.Onboarded = c.UI.Onboarded
 		st.ApprovalMode = c.Approval.NormalizedMode()
 	})
@@ -94,8 +101,18 @@ func (h *handler) postOnboarding(w http.ResponseWriter, r *http.Request) {
 				if err := config.UpdateSectionFieldBool(h.configPath, []string{"ui"}, "terms_accepted", *req.TermsAccepted); err != nil {
 					return err
 				}
+				// Accepting stamps the current terms revision so a later
+				// license change can distinguish stale consent.
+				if *req.TermsAccepted {
+					if err := config.UpdateSectionFieldInt(h.configPath, []string{"ui"}, "terms_version", config.TermsVersionCurrent); err != nil {
+						return err
+					}
+				}
 			}
 			c.UI.TermsAccepted = *req.TermsAccepted
+			if *req.TermsAccepted {
+				c.UI.TermsVersion = config.TermsVersionCurrent
+			}
 			return nil
 		}); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)

@@ -12,7 +12,7 @@
 class Openpanda < Formula
   desc "Personal adaptive node-based distributed assistant (agent-of-agents)"
   homepage "https://github.com/Xustalis/OpenPanda"
-  license "MIT"
+  license "AGPL-3.0-or-later"
   version "0.0.9"
 
   depends_on "python@3.12"
@@ -49,6 +49,7 @@ class Openpanda < Formula
     (prefix/"extensions/voice").install Dir[root/"extensions/voice/*"]
     prefix.install root/"config.example.yaml"
     prefix.install Dir[root/"capabilities.example-*.yaml"]
+    pkgshare.install root/"LICENSE", root/"NOTICE", root/"COMMERCIAL.md", root/"THIRD_PARTY_NOTICES.md"
   end
 
   test do

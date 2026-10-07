@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package skills
 
 // Stats aggregates one task class's execution history for the create trigger.

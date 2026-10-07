@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Appearance theme: light / dark / follow-system (C1). The choice rides on
 // <html data-theme> so the CSS-variable layers in styles.css can react
 // without any re-render: `data-theme="light"` forces light tokens,

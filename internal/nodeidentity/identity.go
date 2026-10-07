@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package nodeidentity owns the process-wide identity lock for a running node.
 // It deliberately keys locks by node kind and stable identity: one physical
 // node per host, while a VM on that host may hold a separate VM lock.

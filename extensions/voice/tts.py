@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Voice sidecar: text-to-speech (TTS).
 
 Speaks the text from stdin. Backend selected by OPENPANDA_TTS_BACKEND: "piper"

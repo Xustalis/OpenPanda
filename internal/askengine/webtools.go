@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package askengine
 
 import (
@@ -70,12 +72,12 @@ func registerWebTools(reg *entry.Registry, cfg *config.Config) {
 
 	reg.Register(entry.Tool{
 		Name:        "web_search",
-		Description: "联网搜索网页，获取最新内容。当用户询问最新/近期新闻、版本发布、价格、赛事比分、或任何超出训练数据的时效性问题时必须调用；对拿不准的事实也用它查证。query 填搜索关键词（可含年份提高时效）。返回标题/链接/摘要，需看全文再用 web_fetch 打开链接。Search the web for up-to-date information beyond the training cutoff.",
+		Description: "Search the web for up-to-date information beyond the training cutoff. Must be called when the user asks about latest/recent news, version releases, prices, match scores, or any time-sensitive question; also use it to verify uncertain facts. query = search keywords (including a year improves recency). Returns titles/links/snippets — open a link with web_fetch for the full text. / 联网搜索网页，获取最新内容。当用户询问最新/近期新闻、版本发布、价格、赛事比分、或任何超出训练数据的时效性问题时必须调用；对拿不准的事实也用它查证。query 填搜索关键词（可含年份提高时效）。返回标题/链接/摘要，需看全文再用 web_fetch 打开链接。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"query": map[string]any{"type": "string", "description": "搜索关键词，如 'OpenAI 最新模型 2026' / 'golang 1.26 release'"},
+				"query": map[string]any{"type": "string", "description": "Search keywords, e.g. 'OpenAI 最新模型 2026' / 'golang 1.26 release' / 搜索关键词"},
 			},
 			"required": []string{"query"},
 		},
@@ -90,13 +92,13 @@ func registerWebTools(reg *entry.Registry, cfg *config.Config) {
 
 	reg.Register(entry.Tool{
 		Name:        "web_fetch",
-		Description: "抓取一个公网 https 网页并返回正文纯文本（超长会截断）。用于打开 web_search 返回的链接或用户给出的 URL 读取详情；不要拿它探测内网/本机服务——仅限公网地址。Fetch a public https page and return its text content.",
+		Description: "Fetch a public https page and return its text content (truncated when too long). Use it to open links returned by web_search or a user-given URL for details; never probe intranet/local services — public addresses only. / 抓取一个公网 https 网页并返回正文纯文本（超长会截断）。用于打开 web_search 返回的链接或用户给出的 URL 读取详情；不要拿它探测内网/本机服务——仅限公网地址。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"url":       map[string]any{"type": "string", "description": "要抓取的公网 https URL"},
-				"max_chars": map[string]any{"type": "number", "description": "返回正文的最大字符数（默认 8000，上限 20000）"},
+				"url":       map[string]any{"type": "string", "description": "Public https URL to fetch / 要抓取的公网 https URL"},
+				"max_chars": map[string]any{"type": "number", "description": "Max characters of body text to return (default 8000, cap 20000) / 返回正文的最大字符数（默认 8000，上限 20000）"},
 			},
 			"required": []string{"url"},
 		},

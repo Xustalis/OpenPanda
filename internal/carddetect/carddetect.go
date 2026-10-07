@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package carddetect probes host hardware, discovers installed agent CLIs,
 // and assembles or initializes capability cards (capabilities.yaml).
 package carddetect

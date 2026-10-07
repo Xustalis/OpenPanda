@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda mcp` runs the node itself as an MCP stdio server: the agent tier's

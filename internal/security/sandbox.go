@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package security implements the execution-side hardening of design doc §16
 // and plan P3-29..P3-32: a reduced subprocess environment, network egress
 // validation, secret scrubbing, a high-risk audit trail, and — when

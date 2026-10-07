@@ -21,3 +21,4 @@ Fixes #(issue number)
 - [ ] I have run `make race-focused` or `make gate` locally.
 - [ ] I have updated relevant documentation (e.g. `docs/`, `CHANGELOG.md`, `README.md`).
 - [ ] If changing core interfaces or CLI commands, I have verified cross-platform compatibility (macOS/Linux/Windows).
+- [ ] I agree to the Contributor License Agreement (`CLA.md`) for the non-trivial changes in this PR, or my change qualifies for a triviality/adapters exemption.

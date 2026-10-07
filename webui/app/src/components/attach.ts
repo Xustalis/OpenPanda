@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Pure helpers for the composer's `@file` attachments and `/export`
 // transcript serialization — kept apart from the view so node --test can
 // hit them without a DOM.
