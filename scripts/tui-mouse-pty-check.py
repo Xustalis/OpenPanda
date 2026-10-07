@@ -85,6 +85,10 @@ def make_config():
             "ui:\n"
             "  onboarded: true\n"
             "  terms_accepted: true\n"
+            # Without a version the fixture looks like a MIT-era install and
+            # the reconsent card swallows the keys below. Keep in step with
+            # internal/config.TermsVersionCurrent.
+            "  terms_version: 2\n"
             "  locale: en\n"
             % tuple(os.path.join(tmp, n) for n in
                     ("panda.db", "artifacts", "context", "memory"))
