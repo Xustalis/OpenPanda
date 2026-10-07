@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
 /* Base: reset, typography, focus, shared utility classes. */
 
 *,
@@ -58,6 +60,14 @@ button:disabled {
 input, textarea, select {
   font: inherit;
   color: inherit;
+}
+
+/* Inline icons (components/icons.tsx): sit on the text baseline and never
+   stretch inside flex rows, matching how the emoji they replaced behaved. */
+.ico {
+  display: inline-block;
+  vertical-align: -0.14em;
+  flex: none;
 }
 
 code, pre, kbd, samp {

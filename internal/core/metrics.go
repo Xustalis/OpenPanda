@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 import (
@@ -112,6 +114,30 @@ func (s *TaskStore) ListDelegationMetrics(ctx context.Context) ([]DelegationMetr
 		return nil, fmt.Errorf("delegation metrics rows: %w", err)
 	}
 	return out, nil
+}
+
+// DelegationMetricsFor returns one task's delegation metric rows, oldest
+// first — the per-hop executor timings `panda task <id> --trace` pairs with
+// the event log's hop boundaries (Track 3).
+func (s *TaskStore) DelegationMetricsFor(ctx context.Context, taskID string) ([]DelegationMetric, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, task_id, delegator, executor, abilities_json, success, latency_ms, tokens, cost, created_at
+		 FROM delegation_metrics WHERE task_id=? ORDER BY id`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("query task delegation metrics: %w", err)
+	}
+	defer rows.Close()
+
+	var out []DelegationMetric
+	for rows.Next() {
+		var m DelegationMetric
+		if err := rows.Scan(&m.ID, &m.TaskID, &m.Delegator, &m.Executor, &m.AbilitiesJSON,
+			&m.Success, &m.LatencyMs, &m.Tokens, &m.Cost, &m.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan delegation metric: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // TaskActivityByDay counts tasks per local calendar day, keyed "2006-01-02".

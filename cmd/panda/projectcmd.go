@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda project` — the project surface: create one, enter it, look at it,
@@ -617,15 +619,11 @@ func activeProject(cfg *config.Config) (name, workDir string) {
 	defer db.Close()
 	store := projects.NewStore(db)
 
-	// Prefer project matching current working directory.
-	if cwd != "" {
-		if list, err := store.List(); err == nil {
-			for _, p := range list {
-				if filepath.Clean(p.WorkDir) == filepath.Clean(cwd) {
-					return p.Name, p.WorkDir
-				}
-			}
-		}
+	// Prefer the project owning the current working directory — exact match
+	// or the deepest ancestor workdir, so running from a subdirectory of a
+	// project lands in that project's space instead of the global one.
+	if name, dir := projectForDir(store, cwd); name != "" {
+		return name, dir
 	}
 
 	name, err = store.Active()
@@ -658,7 +656,11 @@ func bindAskProject(engine *askengine.Engine, cfg *config.Config, named string) 
 	}
 	named = strings.TrimSpace(named)
 	if named == "" {
-		name, dir := activeProject(cfg)
+		// "在哪里启动哪里就是项目空间": an unnamed ask from a directory that
+		// looks like a workspace adopts it as its project, so the harness
+		// runs inside the project tree instead of the bare cwd — even when
+		// the directory was never `panda project enter`ed.
+		name, dir := ambientProject(cfg)
 		engine.SetProject(name, dir)
 		return
 	}

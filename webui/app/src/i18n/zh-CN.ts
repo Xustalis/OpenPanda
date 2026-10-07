@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import type { Messages } from './index'
 
 const zhCN: Messages = {
@@ -200,7 +202,7 @@ const zhCN: Messages = {
   'sessions.nodeAuto': '自动（最佳节点）',
   'sessions.nodePickTip': '分类为任务时在该节点执行——普通对话仍在本机',
   'sessions.folderPick': '选择本地文件夹',
-  'sessions.folderSelected': '📁 已选择文件夹，{n} 个文件：',
+  'sessions.folderSelected': '已选择文件夹，{n} 个文件：',
   'sessions.folderTruncated': '  …（还有 {n} 个文件）',
   'sessions.folderFollowUp': '请基于以上文件内容处理我的请求：',
   'sessions.projectPrefix': '[项目: {name}]',
@@ -264,9 +266,9 @@ const zhCN: Messages = {
   'onboarding.step.model': '模型',
   'onboarding.langTitle': '选择界面语言',
   'onboarding.termsTitle': '开源许可与服务条款',
-  'onboarding.terms1h': '1. 开源许可（MIT）',
+  'onboarding.terms1h': '1. 开源许可（AGPL-3.0）',
   'onboarding.terms1b':
-    'OpenPanda 是基于 MIT 许可证发布的自由开源软件。你可以在个人、学术或商业项目中使用、复制、修改、合并、发布、分发、再许可和出售本软件的副本，前提是保留版权声明与许可文本。完整许可证见随附的 LICENSE 文件，如与本摘要不一致，以 LICENSE 为准。',
+    'OpenPanda 是基于 GNU Affero 通用公共许可证 3.0 或更高版本（AGPL-3.0-or-later）发布的自由开源软件。你可以运行、研究、修改和再分发（包括商业用途），但衍生作品必须同样以 AGPL 发布；若将修改版通过网络提供给他人使用，必须同时提供其源代码。闭源集成或托管用途可购买商业授权（见 COMMERCIAL.md）。完整许可证见随附的 LICENSE 文件，如与本摘要不一致，以 LICENSE 为准。',
   'onboarding.terms2h': '2. 自托管软件，而非托管服务',
   'onboarding.terms2b':
     'OpenPanda 是你自行安装、配置并在自己的硬件上运行的软件。作者不提供托管服务、服务水平承诺、正常运行时间保证、支持义务或数据保管。安装、运行、维护、访问控制、监控及部署环境的安全姿态全部由你自行负责。',
@@ -529,7 +531,9 @@ const zhCN: Messages = {
   'settings.approval.never': '从不',
   'settings.approvalHelp': '高风险操作是否在面板中等待你的批准。',
   'settings.sandbox': '沙箱',
-  'settings.sandboxDesc': '每个 agent 子进程都已被限制在其工作路径内运行 — 只读说明，不是开关：',
+  'settings.sandboxDesc': '子进程在工作路径内运行且环境变量经过过滤，但 OS 级隔离未开启 — 在 config.yaml 设置 sandbox.mode 为 standard 或 strict 后生效。工作路径：',
+  'settings.sandboxDescOn': 'OS 沙箱已启用 — 子进程只能写入工作路径及白名单目录。只读状态：',
+  'settings.sandboxDescNoBackend': '已配置沙箱模式但未生效 — 本平台没有可用后端（seatbelt/bwrap），子进程实际未被隔离。状态：',
 
   // 记忆台扩展（C2）
   'memory.graph': '图谱',
@@ -601,6 +605,7 @@ const zhCN: Messages = {
   'nodes.addDevice.secretGen': '已生成 network.shared_secret —— 需要复制到对方机器',
   'nodes.addDevice.dialed': '已拨号 {addr} —— 本会话即时生效。',
   'nodes.addDevice.dialFailed': '暂时无法拨通 {addr}；配置已保存，下次启动会重试。',
+  'nodes.addDevice.cleartextHint': '该地址走明文 ws:// 且目标不在受信底层网络（回环或 Tailscale）上——daemon 会拒绝拨号。请设 network.allow_cleartext: true，或改用 wss:// / punch:<id>。',
   'nodes.addDevice.guideTitle': '在另一台机器上',
 
   // 能力卡编辑器（阶段 6）— `/card` 的 Web 对应
@@ -697,6 +702,8 @@ const zhCN: Messages = {
   'fleet.node.online': '在线',
   'fleet.node.offline': '离线',
   'fleet.node.tasks': '{cur}/{max} 任务',
+  'fleet.node.queued': '{n} 排队中',
+  'fleet.node.verSkewHint': '运行 v{ver}，本机为 v{self}',
 
   // Update banners — painted by <UpdateBanner/> on every view when the
   // updater has backed off to idle, or when a new release is available.
@@ -732,6 +739,16 @@ const zhCN: Messages = {
   'events.tag.state': '状态',
   'events.tag.hop': '跳点',
   'events.tag.path': '路径',
+  'events.agent_event': 'Agent 活动',
+  'events.agent_text': 'Agent 消息',
+  'events.agent_thinking': '思考',
+  'events.agent_tool_use': '工具调用',
+  'events.agent_tool_result': '工具结果',
+  'events.transcript_truncated': '转录已截断',
+  'events.transcriptTruncatedNote': '更早的活动已截断；执行节点保留完整日志。',
+  'events.subagent': '子代理',
+  'events.subagentHint': '运行在 harness 子代理内（嵌套在父工具调用下）',
+
   'sessions.copyThought': '复制思维链',
 
   'nav.plans': '计划',

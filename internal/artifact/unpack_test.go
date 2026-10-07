@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package artifact
 
 import (
@@ -183,7 +185,7 @@ func TestUnpackRejectsOversizedContent(t *testing.T) {
 	_ = gz.Close()
 
 	dst := filepath.Join(t.TempDir(), "out")
-	_, err := unpack(bytes.NewReader(buf.Bytes()), dst, MaxBytes, 0)
+	_, err := unpack(bytes.NewReader(buf.Bytes()), dst, MaxBytes, 0, nil)
 	if err == nil {
 		t.Fatalf("unpack accepted an archive declaring more than %d bytes", MaxBytes)
 	}
@@ -207,7 +209,7 @@ func TestUnpackRejectsOversizedContent(t *testing.T) {
 		_ = gz.Close()
 		return &b
 	}()
-	if _, err = unpack(buf2, filepath.Join(t.TempDir(), "out3"), 0, 0); !errors.Is(err, ErrNoSpace) {
+	if _, err = unpack(buf2, filepath.Join(t.TempDir(), "out3"), 0, 0, nil); !errors.Is(err, ErrNoSpace) {
 		t.Fatalf("unbounded unpack error = %v, want ErrNoSpace", err)
 	}
 }

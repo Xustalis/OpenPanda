@@ -1,8 +1,12 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +16,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
@@ -41,6 +46,13 @@ type TaskStore struct {
 	eventListeners map[uint64]func(taskID, typ string, data any)
 	nextListenerID uint64
 	onEventMu      sync.RWMutex
+	// eventKey/eventPub sign each recorded event's chain hash with the node's
+	// Ed25519 identity (P2-9). Nil on stores opened without a key (read-only
+	// tools, tests that never wired one) — unsigned events stay legal; they
+	// just carry no attestation.
+	eventKey  ed25519.PrivateKey
+	eventPub  ed25519.PublicKey
+	eventKeyM sync.RWMutex
 }
 
 // NewTaskStore wraps a DB. now may be nil (defaults to Unix time).
@@ -54,6 +66,31 @@ func NewTaskStore(db *sql.DB, logger *slog.Logger) *TaskStore {
 		now:            storage.Now,
 		eventListeners: make(map[uint64]func(taskID, typ string, data any)),
 	}
+}
+
+// NewSigningTaskStore wraps NewTaskStore and, when a node identity is
+// persisted in settings, wires the event signer (P2-9). Every caller that
+// writes events — daemon, ask-engine helpers, CLI verbs — gets the same
+// attestation without re-plumbing the key through each constructor. The
+// key lookup runs here, before any of the store's transactions, so the
+// single-connection pool never sees a nested read.
+func NewSigningTaskStore(db *sql.DB, logger *slog.Logger) *TaskStore {
+	s := NewTaskStore(db, logger)
+	if pub, priv, ok := LoadNodeKey(db); ok {
+		s.SetEventSigner(pub, priv)
+	}
+	return s
+}
+
+// SetEventSigner installs the node identity used to sign recorded events
+// (P2-9). The key must be resolved BEFORE any transaction opens — the store
+// is a single connection, so a lazy settings read from inside recordEventTx
+// would deadlock against its own open tx. Signing is pure-CPU once the key
+// is in memory.
+func (s *TaskStore) SetEventSigner(pub ed25519.PublicKey, priv ed25519.PrivateKey) {
+	s.eventKeyM.Lock()
+	defer s.eventKeyM.Unlock()
+	s.eventPub, s.eventKey = pub, priv
 }
 
 // SetOnReview installs the callback fired when a task transitions into review.
@@ -104,13 +141,15 @@ func (s *TaskStore) Create(ctx context.Context, parentID, project, title, owner 
 	if err != nil {
 		return Task{}, fmt.Errorf("uuid: %w", err)
 	}
-	return s.CreateWithID(ctx, taskID, parentID, project, title, owner, chain)
+	return s.CreateWithID(ctx, taskID, parentID, project, title, owner, chain, false)
 }
 
 // CreateWithID inserts a task with an explicit id. The id is the cross-node
-// idempotency key, so delegated tasks keep the delegator's id. Returns
+// idempotency key, so delegated tasks keep the delegator's id. remote is
+// stamped into the row so executor-side policy can tell wire-authored intent
+// apart from a local submit regardless of what the chain claims. Returns
 // ErrConflict if the id already exists.
-func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project, title, owner string, chain []string) (Task, error) {
+func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project, title, owner string, chain []string, remote bool) (Task, error) {
 	if taskID == "" {
 		var err error
 		taskID, err = util.UUIDv7()
@@ -128,15 +167,15 @@ func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project,
 	t := Task{
 		TaskID: taskID, ParentID: parentID, Project: project, Title: title,
 		State: StateSubmitted, OwnerNode: owner, AttemptID: attemptID,
-		StateVersion: 0, Chain: chain, CreatedAt: now, UpdatedAt: now,
+		StateVersion: 0, Chain: chain, Remote: remote, CreatedAt: now, UpdatedAt: now,
 	}
 	err = s.withTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tasks (task_id, parent_id, project, title, state, owner_node,
-				attempt_id, state_version, chain_json, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				attempt_id, state_version, chain_json, remote, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.TaskID, t.ParentID, t.Project, t.Title, t.State, t.OwnerNode,
-			t.AttemptID, t.StateVersion, string(chainJSON), now, now); err != nil {
+			t.AttemptID, t.StateVersion, string(chainJSON), remote, now, now); err != nil {
 			return fmt.Errorf("insert task: %w", err)
 		}
 		return s.recordEventTx(ctx, tx, taskID, EvSubmit, map[string]any{
@@ -161,6 +200,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	var sessionID, resourceKeysJSON, workDir sql.NullString
 	var agentSession, agentSessionNode sql.NullString
 	var scheduled int
+	var remote int
 	var planID, stageID, needsJSON, inputsJSON, outputArt sql.NullString
 	err := s.db.QueryRowContext(ctx,
 		`SELECT `+taskColumns+` FROM tasks WHERE task_id = ?`, taskID).
@@ -172,7 +212,8 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
-			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs)
+			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs,
+			&remote)
 	if err != nil {
 		return Task{}, err
 	}
@@ -200,6 +241,7 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	t.OutputArtifact = outputArt.String
 	t.AgentSessionID = agentSession.String
 	t.AgentSessionNode = agentSessionNode.String
+	t.Remote = remote != 0
 	return t, nil
 }
 
@@ -310,9 +352,21 @@ func (s *TaskStore) recordEventTx(ctx context.Context, tx *sql.Tx, taskID, typ s
 		prevHash = hashEvent(prev.PrevHash, taskID, prev.TS, prev.Type, prev.DataJSON)
 	}
 
+	// P2-9: sign the row's own chain hash — the 32-byte commitment to every
+	// field plus its position — so the signature covers content AND place in
+	// one primitive. Pure-CPU: the key materialized at store-open time, and
+	// a missing key just leaves the columns empty (legacy shape).
+	var sig, sigPub string
+	s.eventKeyM.RLock()
+	if s.eventKey != nil {
+		sig = hex.EncodeToString(ed25519.Sign(s.eventKey, []byte(hashEvent(prevHash, taskID, ts, typ, string(raw)))))
+		sigPub = hex.EncodeToString(s.eventPub)
+	}
+	s.eventKeyM.RUnlock()
+
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO task_events (task_id, ts, type, data_json, prev_hash) VALUES (?, ?, ?, ?, ?)`,
-		taskID, ts, typ, string(raw), prevHash)
+		`INSERT INTO task_events (task_id, ts, type, data_json, prev_hash, sig, sig_pub) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		taskID, ts, typ, string(raw), prevHash, sig, sigPub)
 	if err != nil {
 		return fmt.Errorf("record event %s: %w", typ, err)
 	}
@@ -859,6 +913,18 @@ func (s *TaskStore) PauseWithDisposition(ctx context.Context, taskID, owner, rea
 // needs sign-off (supervision loop terminal: an irreversible task, or one that
 // exhausted its round budget without satisfying the success criteria).
 func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, result any) error {
+	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalAcceptWork)
+}
+
+// PauseForAnswer parks a running task in review on an agent's clarification
+// question (Q4): the partial result is preserved like PauseWithResult, but
+// the disposition resumes execution — the user's answer travels back on
+// task_resume and folds into the re-run's intent.
+func (s *TaskStore) PauseForAnswer(ctx context.Context, taskID, owner string, result any) error {
+	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalResumeExecution)
+}
+
+func (s *TaskStore) pauseWithResultDisposition(ctx context.Context, taskID, owner string, result any, disposition ApprovalDisposition) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
@@ -867,7 +933,7 @@ func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, r
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateRunning)
 	}
 	if err := s.applyReviewCAS(ctx, taskID, StateRunning, owner, cur.AttemptID, EvReview,
-		map[string]any{"reason": "awaiting approval"}, result, ApprovalAcceptWork); err != nil {
+		map[string]any{"reason": "awaiting approval"}, result, disposition); err != nil {
 		return err
 	}
 	updated, err := s.Get(ctx, taskID)
@@ -1075,7 +1141,9 @@ func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason st
 // mistaken for a stale write. Used when a delegator hears a result for a task
 // it never persisted locally.
 func (s *TaskStore) CreateFromRemote(ctx context.Context, taskID, title, owner string, attemptID string, chain []string) (Task, error) {
-	t, err := s.CreateWithID(ctx, taskID, "", "", title, owner, chain)
+	// remote=false: this row reconstructs a task WE dispatched (the result
+	// arrived before/without our copy) — the intent was authored locally.
+	t, err := s.CreateWithID(ctx, taskID, "", "", title, owner, chain, false)
 	if err != nil {
 		return Task{}, err
 	}
@@ -1390,6 +1458,34 @@ func (s *TaskStore) ListReady(ctx context.Context) ([]Task, error) {
 	}
 	defer rows.Close()
 	return scanTasks(rows)
+}
+
+// ListReadySummaries is the scheduler's polling projection: the six columns a
+// ReadyTask actually reads, not the forty-odd of a full row. The queue poll
+// used to drag spec_json/intent/result_json blobs through the wire for every
+// queued task every 400ms–2s; a 100KB spec now stays on disk until the task
+// is claimed and the runner loads it for real.
+func (s *TaskStore) ListReadySummaries(ctx context.Context) ([]queue.ReadyTask, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT task_id, project, priority, seq, created_at, resource_keys_json
+		 FROM tasks WHERE state = ? AND scheduled = 1`, StateQueued)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []queue.ReadyTask
+	for rows.Next() {
+		var t queue.ReadyTask
+		var keysJSON sql.NullString
+		if err := rows.Scan(&t.ID, &t.Project, &t.Priority, &t.Seq, &t.CreatedAt, &keysJSON); err != nil {
+			return nil, err
+		}
+		if keysJSON.Valid {
+			_ = json.Unmarshal([]byte(keysJSON.String), &t.ResourceKeys)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 // ClaimLocal moves a queued task to dispatched-to-self for the queue
@@ -2015,10 +2111,63 @@ func (s *TaskStore) ListByState(ctx context.Context, state string) ([]Task, erro
 	return scanTasks(rows)
 }
 
+// TerminalSessionTasksWithoutEvent returns the terminal tasks that are linked
+// to a session and lack an event of the given type — the exact set the
+// panel's session finalizer turns into assistant turns. The finalizer runs
+// every few seconds, and the former shape (load every task row, then load
+// every task's full event timeline to look for the marker) re-read a board's
+// worth of payloads on every pass, forever: already-summarized tasks never
+// leave the terminal set. One NOT EXISTS probe per candidate — over the
+// existing task_events(task_id) index — replaces it, and the marker type
+// stays the caller's constant (the panel owns it).
+func (s *TaskStore) TerminalSessionTasksWithoutEvent(ctx context.Context, typ string) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+taskColumns+` FROM tasks t
+		WHERE t.session_id != '' AND t.state IN (?, ?, ?, ?)
+		  AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = t.task_id AND e.type = ?)
+		ORDER BY t.created_at DESC`,
+		StateDone, StateFailed, StateCancelled, StateExpired, typ)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+// TaskStamp is the minimal per-task triple a change-detection digest needs:
+// identity, lifecycle state, and the mutation clock. Pulling the full row for
+// this (spec_json, result_json, intent…) would read every task's payload on
+// every poll.
+type TaskStamp struct {
+	ID        string
+	State     string
+	UpdatedAt int64
+}
+
+// TaskStamps lists the digest input for every task — the panel's SSE
+// change detector calls this once per poll window instead of scanning the
+// full task rows. Ordered by id so the digest is order-stable.
+func (s *TaskStore) TaskStamps(ctx context.Context) ([]TaskStamp, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT task_id, state, updated_at FROM tasks ORDER BY task_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TaskStamp
+	for rows.Next() {
+		var t TaskStamp
+		if err := rows.Scan(&t.ID, &t.State, &t.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // Events returns the event timeline for a task, oldest first.
 func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, task_id, ts, type, data_json, COALESCE(prev_hash, '') FROM task_events
+		`SELECT id, task_id, ts, type, data_json, COALESCE(prev_hash, ''), COALESCE(sig, ''), COALESCE(sig_pub, '') FROM task_events
 		 WHERE task_id = ? ORDER BY id ASC`, taskID)
 	if err != nil {
 		return nil, err
@@ -2027,7 +2176,7 @@ func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) 
 	var out []Event
 	for rows.Next() {
 		var e Event
-		if err := rows.Scan(&e.ID, &e.TaskID, &e.TS, &e.Type, &e.DataJSON, &e.PrevHash); err != nil {
+		if err := rows.Scan(&e.ID, &e.TaskID, &e.TS, &e.Type, &e.DataJSON, &e.PrevHash, &e.Sig, &e.SigPub); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -2035,20 +2184,84 @@ func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) 
 	return out, rows.Err()
 }
 
-// VerifyTaskEventChain verifies the per-task hash chain for taskID. It returns
+// VerifyTaskEventChain verifies the per-task hash chain for taskID: every
+// row's prev_hash links correctly, every signature verifies under the key
+// this verifier trusts, and no unsigned row follows a signed one. It returns
 // nil if the chain is intact, or an error describing the first break.
+//
+// Two rules bind the signatures to a trust anchor rather than to themselves
+// (P2-9 hardening):
+//
+//   - Expected key: when the store knows this node's identity (the daemon's
+//     signing store, or a CLI store built by NewSigningTaskStore), a
+//     signature must be BY THAT KEY. Verifying against whatever key a row
+//     names would let anyone with DB write access re-sign the whole chain
+//     with a keypair of their own — the signature would prove "some key
+//     attested this", which is exactly what a forger can arrange.
+//   - No gap: once a signed row exists, every later row must be signed, so
+//     stripping signatures off the tail of the chain is detected. Rows
+//     recorded before this node ever had a key form a legacy unsigned
+//     prefix — there is nothing to check them against — but the boundary
+//     between the two may not move.
+//
+// The residual is inherent to an in-DB anchor: a writer who rewrites the
+// ENTIRE legacy prefix (or a database that never had a key) leaves nothing
+// to contradict, which is why external notarization of the chain head stays
+// on the roadmap.
 func (s *TaskStore) VerifyTaskEventChain(ctx context.Context, taskID string) error {
 	events, err := s.Events(ctx, taskID)
 	if err != nil {
 		return fmt.Errorf("load events: %w", err)
 	}
+	s.eventKeyM.RLock()
+	expected := ""
+	if s.eventPub != nil {
+		expected = hex.EncodeToString(s.eventPub)
+	}
+	s.eventKeyM.RUnlock()
+
 	var prevHash string
+	signedSeen := false
 	for i, e := range events {
 		if e.PrevHash != prevHash {
 			return fmt.Errorf("event %d (id=%d) prev_hash mismatch: got %s, want %s",
 				i+1, e.ID, e.PrevHash, prevHash)
 		}
-		prevHash = hashEvent(e.PrevHash, e.TaskID, e.TS, e.Type, e.DataJSON)
+		h := hashEvent(e.PrevHash, e.TaskID, e.TS, e.Type, e.DataJSON)
+		if e.Sig == "" {
+			if signedSeen {
+				return fmt.Errorf("event %d (id=%d) unsigned after signed events — signature stripped", i+1, e.ID)
+			}
+		} else {
+			if expected != "" && e.SigPub != expected {
+				return fmt.Errorf("event %d (id=%d) signed by key %s, want this node's key %s",
+					i+1, e.ID, e.SigPub, expected)
+			}
+			if err := verifyEventSig(e.SigPub, h, e.Sig); err != nil {
+				return fmt.Errorf("event %d (id=%d) signature invalid: %w", i+1, e.ID, err)
+			}
+			signedSeen = true
+		}
+		prevHash = h
+	}
+	return nil
+}
+
+// verifyEventSig checks a row's signature against the recomputed chain hash
+// and the public key the row names. A torn signature block (sig without
+// pub, undecodable hex) fails closed — a field can only go missing by
+// deletion, which is exactly what verification exists to expose.
+func verifyEventSig(sigPub, chainHash, sig string) error {
+	pub, err := hex.DecodeString(sigPub)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return errors.New("bad sig_pub")
+	}
+	raw, err := hex.DecodeString(sig)
+	if err != nil || len(raw) != ed25519.SignatureSize {
+		return errors.New("bad sig encoding")
+	}
+	if !ed25519.Verify(ed25519.PublicKey(pub), []byte(chainHash), raw) {
+		return errors.New("ed25519 verify failed")
 	}
 	return nil
 }
@@ -2061,6 +2274,11 @@ type Event struct {
 	Type     string
 	DataJSON string
 	PrevHash string
+	// Sig/SigPub are the P2-9 attestation: the Ed25519 signature over this
+	// row's chain hash and the public key that produced it (both hex). Empty
+	// on rows recorded before event signing or by a store without a key.
+	Sig    string
+	SigPub string
 }
 
 // RotateAttempt mints a new attempt_id for a retry/transfer. The caller must
@@ -2096,7 +2314,7 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	priority, seq, session_id, resource_keys_json, work_dir, scheduled,
 	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact,
 	transport, deadline_unix, delegation_budget, token_budget, agent_session_id, agent_session_node,
-	auth_sig, auth_pub, auth_ts`
+	auth_sig, auth_pub, auth_ts, remote`
 
 func scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task
@@ -2111,6 +2329,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		var agentSession, agentSessionNode sql.NullString
 		var complexity sql.NullFloat64
 		var scheduled int
+		var remote int
 		var planID, stageID, needsJSON, inputsJSON, outputArt sql.NullString
 		if err := rows.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State,
 			&t.OwnerNode, &t.AttemptID, &t.StateVersion, &chainJSON, &intent,
@@ -2120,7 +2339,8 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
 			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
-			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs); err != nil {
+			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs,
+			&remote); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
@@ -2142,6 +2362,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		t.SessionID = sessionID.String
 		t.WorkDir = workDir.String
 		t.Scheduled = scheduled != 0
+		t.Remote = remote != 0
 		t.PlanID = planID.String
 		t.StageID = stageID.String
 		t.OutputArtifact = outputArt.String

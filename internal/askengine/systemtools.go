@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package askengine
 
 import (
@@ -24,7 +26,7 @@ import (
 func registerTimeTool(reg *entry.Registry) {
 	reg.Register(entry.Tool{
 		Name:        "time_now",
-		Description: "获取宿主机当前系统时间（本地时区）。回答“现在几点/今天几号/星期几/明天是什么日期”等任何与当前时间有关的问题前，必须先调用此工具。",
+		Description: "Get the host machine's current system time (local timezone). Must be called before answering any current-time question — \"what time is it / what date today / what weekday / tomorrow's date\" etc. / 获取宿主机当前系统时间（本地时区）。回答“现在几点/今天几号/星期几/明天是什么日期”等任何与当前时间有关的问题前，必须先调用此工具。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type":       "object",
@@ -125,12 +127,12 @@ type forecastResponse struct {
 func registerWeatherTool(reg *entry.Registry) {
 	reg.Register(entry.Tool{
 		Name:        "weather_get",
-		Description: "查询指定地点的实时天气（含今天与明天的预报）。location 为城市名，支持中文或英文（如“北京”、“上海”、“Tokyo”）。",
+		Description: "Query live weather for a named place (today's and tomorrow's forecast included). location = a city name, Chinese or English (e.g. 北京, Shanghai, Tokyo). / 查询指定地点的实时天气（含今天与明天的预报）。location 为城市名，支持中文或英文（如“北京”、“上海”、“Tokyo”）。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"location": map[string]any{"type": "string", "description": "城市名（中文或英文）"},
+				"location": map[string]any{"type": "string", "description": "City name (Chinese or English) / 城市名（中文或英文）"},
 			},
 			"required": []string{"location"},
 		},

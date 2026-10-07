@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 // Chunked proactive artifact delivery (whitepaper §8.3 fat-push, v2).
@@ -36,6 +38,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -64,6 +67,7 @@ func (c *Core) artifactPushEnqueue(ctx context.Context, peer, taskID, hash strin
 		// fallback for whoever eventually has it.
 		return
 	}
+	peer = c.stablePeerID(ctx, peer)
 	if _, err := c.db.ExecContext(ctx,
 		`INSERT INTO artifact_push_outbox (peer, hash, task_id, total, sent_through, acked_through, ttl, created_at)
 		 VALUES (?, ?, ?, ?, 0, 0, ?, ?)
@@ -104,54 +108,66 @@ func (c *Core) bumpPushWaterline(peer, hash string, through int64) {
 	}
 }
 
-// streamArtifactPushes drains this node's push custody toward peer. It runs
+// streamArtifactPushes drains this node's push custody toward inst. It runs
 // inside outboxFlush (hello-triggered or sweep-triggered), which already
 // holds the per-peer claim — so at most one stream per peer exists and the
-// chunks stay ordered on the wire.
+// chunks stay ordered on the wire. Custody rows are keyed by the stable
+// identity (key); chunks, waterlines and acks are keyed by the live instance
+// (inst) — the receiver's disk position is a per-instance fact, so a
+// restarted peer resumes from the waterline IT reports, not the one its old
+// instance last persisted.
 //
 // Per row: TTL expiry mirrors the parked-bundle rule (dead is dead — the
 // task's own row is swept by the same deadline), a hash we no longer hold is
 // abandoned (the pull path remains the receiver's fallback), and the stream
-// starts at max(acked_through, live waterline). Sent bytes persist as
-// sent_through — the next flush re-reads them as candidates but the
-// receiver's ack is what actually stops retransmission.
-func (c *Core) streamArtifactPushes(ctx context.Context, peer string) {
-	if c.db == nil || c.artifacts == nil {
+// starts at max(acked_through, live waterline). The receiver's ack is the
+// only position that matters: bytes below it are on the receiver's disk, and
+// the receiver's staging trims any overlap, so the sender keeps no send log
+// of its own (the sent_through column predates that finding and is no longer
+// written).
+func (c *Core) streamArtifactPushes(ctx context.Context, keys []string, inst string) {
+	if c.db == nil || c.artifacts == nil || len(keys) == 0 {
 		return
 	}
+	ph := "?" + strings.Repeat(",?", len(keys)-1)
+	args := make([]any, len(keys))
+	for i, k := range keys {
+		args[i] = k
+	}
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT hash, task_id, total, sent_through, acked_through, ttl
-		 FROM artifact_push_outbox WHERE peer = ?`, peer)
+		`SELECT peer, hash, task_id, total, acked_through, ttl
+		 FROM artifact_push_outbox WHERE peer IN (`+ph+`)`, args...)
 	if err != nil {
-		c.logger.Warn("push: query outbox", "peer", peer, "err", err)
+		c.logger.Warn("push: query outbox", "peer", inst, "err", err)
 		return
 	}
 	type pushRow struct {
-		hash, taskID            string
-		total, sent, acked, ttl int64
+		key, hash, taskID string
+		total, acked, ttl int64
 	}
 	var pushes []pushRow
 	for rows.Next() {
 		var r pushRow
-		if err := rows.Scan(&r.hash, &r.taskID, &r.total, &r.sent, &r.acked, &r.ttl); err != nil {
+		if err := rows.Scan(&r.key, &r.hash, &r.taskID, &r.total, &r.acked, &r.ttl); err != nil {
 			rows.Close()
-			c.logger.Warn("push: scan", "peer", peer, "err", err)
+			c.logger.Warn("push: scan", "peer", inst, "err", err)
 			return
 		}
 		pushes = append(pushes, r)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		c.logger.Warn("push: rows", "peer", peer, "err", err)
+		c.logger.Warn("push: rows", "peer", inst, "err", err)
 		return
 	}
-	buf := make([]byte, bus.ArtifactChunkBytes)
+	buf, release := getChunkBuf()
+	defer release()
 	for _, r := range pushes {
 		// §8.2 TTL: the bundle is dead, so its payload is dead weight — stop
 		// spending contact-window bandwidth on it.
 		if r.ttl > 0 && time.Now().Unix() > r.ttl {
-			c.pushRowDrop(ctx, peer, r.hash)
-			c.logger.Info("push: custody past TTL, dropping", "hash", r.hash, "peer", peer)
+			c.pushRowDrop(ctx, []string{r.key}, inst, r.hash)
+			c.logger.Info("push: custody past TTL, dropping", "hash", r.hash, "peer", inst)
 			continue
 		}
 		size, ok := c.artifacts.Has(r.hash)
@@ -159,11 +175,11 @@ func (c *Core) streamArtifactPushes(ctx context.Context, peer string) {
 			// The pool no longer holds (or disagrees about) what we promised:
 			// drop the row rather than stream corrupt bytes the receiver's
 			// hash check will reject anyway.
-			c.pushRowDrop(ctx, peer, r.hash)
+			c.pushRowDrop(ctx, []string{r.key}, inst, r.hash)
 			continue
 		}
 		off := r.acked
-		if live := c.pushWaterline(peer, r.hash); live > off {
+		if live := c.pushWaterline(inst, r.hash); live > off {
 			off = live
 		}
 		if off >= r.total {
@@ -182,8 +198,8 @@ func (c *Core) streamArtifactPushes(ctx context.Context, peer string) {
 			if err != nil {
 				return
 			}
-			env.To = peer
-			if err := c.sendTo(peer, env); err != nil {
+			env.To = inst
+			if err := c.sendTo(inst, env); err != nil {
 				return
 			}
 			continue
@@ -200,7 +216,7 @@ func (c *Core) streamArtifactPushes(ctx context.Context, peer string) {
 		// the rest to the next flush rather than pinning the window open.
 		stalls := 0
 		for {
-			live := c.pushWaterline(peer, r.hash)
+			live := c.pushWaterline(inst, r.hash)
 			if live >= r.total {
 				break // receiver holds every byte; the done verdict retires the row
 			}
@@ -208,7 +224,7 @@ func (c *Core) streamArtifactPushes(ctx context.Context, peer string) {
 				off = live
 			}
 			if off >= r.total {
-				if c.waitPushAdvance(peer, r.hash, live) {
+				if c.waitPushAdvance(inst, r.hash, live) {
 					stalls = 0 // receiver alive and reporting: keep going
 					continue
 				}
@@ -234,20 +250,15 @@ func (c *Core) streamArtifactPushes(ctx context.Context, peer string) {
 			if err != nil {
 				return
 			}
-			env.To = peer
-			if err := c.sendTo(peer, env); err != nil {
-				// Link died mid-stream. sent_through keeps the last durable
-				// position; the receiver's ack — not our send log — decides
-				// what the next flush actually re-sends.
-				c.logger.Info("push: send failed, custody retained", "hash", r.hash, "peer", peer, "off", off, "err", err)
+			env.To = inst
+			if err := c.sendTo(inst, env); err != nil {
+				// Link died mid-stream. The receiver's ack — not our send
+				// log — decides what the next flush re-sends, so custody
+				// simply stays put.
+				c.logger.Info("push: send failed, custody retained", "hash", r.hash, "peer", inst, "off", off, "err", err)
 				return
 			}
 			off += int64(n)
-			if _, err := c.db.ExecContext(ctx,
-				`UPDATE artifact_push_outbox SET sent_through = ? WHERE peer = ? AND hash = ?`,
-				off, peer, r.hash); err != nil {
-				c.logger.Warn("push: persist sent", "peer", peer, "hash", r.hash, "err", err)
-			}
 		}
 	}
 }
@@ -274,13 +285,24 @@ const (
 	pushStallBudget = 4
 )
 
-// pushRowDrop retires one custody record and its live waterline.
-func (c *Core) pushRowDrop(ctx context.Context, peer, hash string) {
-	if _, err := c.db.ExecContext(ctx,
-		`DELETE FROM artifact_push_outbox WHERE peer = ? AND hash = ?`, peer, hash); err != nil {
-		c.logger.Warn("push: drop row", "peer", peer, "hash", hash, "err", err)
+// pushRowDrop retires one custody record and its live waterline (keyed by
+// instance). keys is the claim set the row may be parked under — the delete
+// hits whichever key form the row actually has.
+func (c *Core) pushRowDrop(ctx context.Context, keys []string, inst, hash string) {
+	if len(keys) == 0 {
+		return
 	}
-	c.pushAck.Delete(peer + "|" + hash)
+	ph := "?" + strings.Repeat(",?", len(keys)-1)
+	args := make([]any, 0, len(keys)+1)
+	for _, k := range keys {
+		args = append(args, k)
+	}
+	args = append(args, hash)
+	if _, err := c.db.ExecContext(ctx,
+		`DELETE FROM artifact_push_outbox WHERE peer IN (`+ph+`) AND hash = ?`, args...); err != nil {
+		c.logger.Warn("push: drop row", "peer", inst, "hash", hash, "err", err)
+	}
+	c.pushAck.Delete(inst + "|" + hash)
 }
 
 // handleArtifactPush lands one pushed chunk on the receiver's staging area.
@@ -393,9 +415,20 @@ func (c *Core) handleArtifactPushStatus(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	c.bumpPushWaterline(env.From, p.Hash, p.ReceivedThrough)
+	// The custody row may sit under any key of the sender's identity claim
+	// set (stable key, or an instance id it was parked under before the key
+	// was known) — update whichever form it takes.
+	keys := c.claimKeys(ctx, c.stablePeerID(ctx, env.From), env.From)
+	ph := "?" + strings.Repeat(",?", len(keys)-1)
+	args := make([]any, 0, len(keys)+2)
+	args = append(args, p.ReceivedThrough)
+	for _, k := range keys {
+		args = append(args, k)
+	}
+	args = append(args, p.Hash)
 	if _, err := c.db.ExecContext(ctx,
-		`UPDATE artifact_push_outbox SET acked_through = MAX(acked_through, ?) WHERE peer = ? AND hash = ?`,
-		p.ReceivedThrough, env.From, p.Hash); err != nil {
+		`UPDATE artifact_push_outbox SET acked_through = MAX(acked_through, ?) WHERE peer IN (`+ph+`) AND hash = ?`,
+		args...); err != nil {
 		c.logger.Warn("push: persist ack", "peer", env.From, "hash", p.Hash, "err", err)
 	}
 }
@@ -414,7 +447,7 @@ func (c *Core) handleArtifactPushDone(ctx context.Context, env bus.Envelope) {
 		c.logger.Warn("push rejected by receiver", "task", p.TaskID, "hash", p.Hash,
 			"peer", env.From, "reason", p.Reason)
 	}
-	c.pushRowDrop(ctx, env.From, p.Hash)
+	c.pushRowDrop(ctx, c.claimKeys(ctx, c.stablePeerID(ctx, env.From), env.From), env.From, p.Hash)
 }
 
 // missingPushInputs lists the task's declared input hashes this node does

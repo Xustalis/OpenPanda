@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package entry
 
 import (
@@ -297,7 +299,6 @@ type anthropicDelta struct {
 // surfaced live via the reasoning sink and returned on Response.Reasoning,
 // never joined into Response.Text.
 type anthAccumulator struct {
-	texts     []string
 	reasoning []string
 	blocks    map[int]*ContentBlock    // by stream index
 	rawArgs   map[int]*strings.Builder // tool_use partial_json, by index
@@ -391,7 +392,7 @@ func (a *anthAccumulator) result() Response {
 }
 
 func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
-	if c.apiKey == "" && !c.noAuth {
+	if c.noCredential() {
 		return Response{}, ErrNoKey
 	}
 	msgs := turnsToMessages(turns)
@@ -497,8 +498,8 @@ func (c *Client) sendOAIStream(ctx context.Context, system string, msgs []oaiMes
 	}
 	httpReq.Header.Set("content-type", "application/json")
 	httpReq.Header.Set("accept", "text/event-stream")
-	if c.apiKey != "" {
-		httpReq.Header.Set("authorization", "Bearer "+c.apiKey)
+	if err := c.applyAuth(ctx, httpReq); err != nil {
+		return nil, err
 	}
 	c.applyExtraHeaders(httpReq)
 
@@ -552,8 +553,8 @@ func (c *Client) sendAnthropicStream(ctx context.Context, system string, msgs []
 	}
 	httpReq.Header.Set("content-type", "application/json")
 	httpReq.Header.Set("accept", "text/event-stream")
-	if c.apiKey != "" {
-		httpReq.Header.Set("x-api-key", c.apiKey)
+	if err := c.applyAuth(ctx, httpReq); err != nil {
+		return nil, err
 	}
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
 	c.applyExtraHeaders(httpReq)
@@ -583,7 +584,7 @@ func (c *Client) sendAnthropicStream(ctx context.Context, system string, msgs []
 // ---- OpenAI Chat Completions SSE streaming ----
 
 func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
-	if c.apiKey == "" && !c.noAuth {
+	if c.noCredential() {
 		return Response{}, ErrNoKey
 	}
 	msgs := turnsToOpenAI(system, turns)

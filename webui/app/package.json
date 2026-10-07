@@ -1,9 +1,10 @@
 {
   "name": "openpanda-web",
   "private": true,
-  "version": "0.0.9",
+  "version": "0.0.10-preview",
   "type": "module",
   "description": "OpenPanda web console — Vite + Preact + TypeScript, embedded into the panel binary at build time",
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

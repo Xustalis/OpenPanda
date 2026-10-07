@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package commander
 
 import (
@@ -87,6 +89,42 @@ func TestRunAdapterMissingBinary(t *testing.T) {
 	}
 }
 
+// failingAdapter reports a task failure over the wire: ok=false plus the
+// exit code the CLI died with, a session id and token count.
+const failingAdapter = `#!/usr/bin/env python3
+import json, sys
+req = json.loads(sys.stdin.read())
+print(json.dumps({"ok": False, "result": "cli exploded", "exit_code": 42,
+                  "tokens": 7, "cost": 0.02, "session_id": "s-1"}))
+`
+
+// TestRunAdapterResultDecodesWireContract is the result-envelope regression:
+// the adapter reports failure details in snake_case keys ("exit_code",
+// "session_id"), and every one must survive the decode — before AgentResult
+// carried explicit tags, Go's case-insensitive-but-not-underscore matching
+// dropped "exit_code" entirely, so timeouts (124), missing binaries (127)
+// and malformed requests (2) all reported as exit 0 upstream.
+func TestRunAdapterResultDecodesWireContract(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "boom.py"), []byte(failingAdapter), 0o755); err != nil {
+		t.Fatalf("write adapter: %v", err)
+	}
+	oldDir := adapterDir
+	adapterDir = dir
+	defer func() { adapterDir = oldDir }()
+
+	res := runAdapterProcess(context.Background(), "boom.py", "x", "", nil)
+	if res.OK {
+		t.Fatal("ok=false adapter must report failure")
+	}
+	if res.ExitCode != 42 {
+		t.Fatalf("exit_code = %d, want 42 decoded from the wire", res.ExitCode)
+	}
+	if res.Result != "cli exploded" || res.Tokens != 7 || res.SessionID != "s-1" {
+		t.Fatalf("wire fields lost in decode: %+v", res)
+	}
+}
+
 func TestModelEnvInjectsProvider(t *testing.T) {
 	env := modelEnv(config.ModelConfig{
 		BaseURL: "https://api.deepseek.com/anthropic",
@@ -113,7 +151,7 @@ func TestModelEnvInjectsProvider(t *testing.T) {
 func TestModelEnvRejectsUnsupportedProviderMapping(t *testing.T) {
 	env := modelEnvForAdapter(config.ModelConfig{
 		APIType: config.APITypeOpenAI, BaseURL: "https://api.openai.com/v1", APIKey: "sk-test", Model: "gpt-4o",
-	}, "claude_code.py")
+	}, "claude_code", "claude_code.py")
 	if len(env) != 0 {
 		t.Fatalf("openai config must not be mapped to Claude env: %v", env)
 	}
@@ -124,7 +162,7 @@ func TestAdapterCredentialEnvIsWhitelisted(t *testing.T) {
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "anthropic-token")
 	t.Setenv("OPENAI_API_KEY", "openai-secret")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "unrelated")
-	env := adapterCredentialEnv("codex.py")
+	env := adapterCredentialEnv("codex", "codex.py")
 	if len(env) != 1 || env[0] != "OPENAI_API_KEY=openai-secret" {
 		t.Fatalf("codex credential env = %v, want only OpenAI key", env)
 	}

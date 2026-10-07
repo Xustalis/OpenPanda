@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package updater implements the self-update path for the `panda` CLI: it
 // checks GitHub for a newer release, downloads and verifies the platform's
 // release archive, and — once the task queue is idle — atomically swaps the
@@ -171,7 +173,7 @@ func (m *Manager) DownloadForce(ctx context.Context, force bool) error {
 		m.fail(err)
 		return err
 	}
-	archive, err := downloadRelease(ctx, m.opts.Repo, version, dir)
+	archive, err := downloadRelease(ctx, m.opts.Repo, version, dir, m.opts.ReleaseKey)
 	if err != nil {
 		os.RemoveAll(dir)
 		m.fail(err)

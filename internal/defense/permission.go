@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package defense implements the task-loop defense chain (design doc §14) and
 // the permission model (design doc §16). MVP scope is the deterministic layer:
 // command-tier classification and authorization gating. The adversarial model
@@ -61,6 +63,17 @@ func TierFromCommand(command string, args ...string) int {
 	if subs := irreversibleSubVerbs[command]; subs != nil {
 		if pos := positionalArgs(command, args); len(pos) > 0 && subs[pos[0]] {
 			return TierIrreversible
+		}
+	}
+	// find's exec clauses run an embedded command whose payload sits between
+	// the flag and its ';'/'+' terminator. Locate and classify the payload —
+	// nothing downstream re-checks the processes find spawns, so a bare
+	// "find … -exec rm" used to sail through as Tier 1.
+	if command == "find" {
+		for _, payload := range findExecPayloads(args) {
+			if len(payload) > 0 && TierFromCommand(payload[0], payload[1:]...) == TierIrreversible {
+				return TierIrreversible
+			}
 		}
 	}
 	// Pass-through wrappers run a later argument as the real command (env VAR=x
@@ -273,6 +286,18 @@ var irreversibleVerbs = map[string]bool{
 	"del": true, "erase": true, "rd": true, "rmdir": true,
 	"format": true, "diskpart": true, "bcdedit": true,
 	"vssadmin": true, "cipher": true, "fsutil": true,
+	// Block-level erasure siblings of mkfs/dd: these rewrite a device's
+	// signatures or discard its blocks outright, which is the same "no copy
+	// left anywhere" the data-destruction entries encode.
+	"wipefs": true, "blkdiscard": true, "sg_format": true,
+	// LVM removal/shrink destroys the volume's contents regardless of the
+	// filesystem inside it.
+	"lvremove": true, "vgremove": true, "pvremove": true, "lvreduce": true,
+	"lvresize": true,
+	// Privilege-boundary tools the plain "sudo" row misses: sudoedit edits as
+	// root; run0 and pkexec are the systemd/polkit privilege execs; nsenter
+	// steps into another container's namespaces — the canonical escape verb.
+	"sudoedit": true, "run0": true, "pkexec": true, "nsenter": true,
 }
 
 // irreversibleSubVerbs gates a command only when its subcommand is one of the
@@ -282,7 +307,14 @@ var irreversibleVerbs = map[string]bool{
 // the flags stripped (positionalArgs), so "systemctl --now poweroff" resolves
 // the same as "systemctl poweroff".
 var irreversibleSubVerbs = map[string]map[string]bool{
-	"systemctl": {"poweroff": true, "halt": true, "kexec": true},
+	// Everything that drops the node's own availability or power state:
+	// a machine that is rebooting, suspended or booted into firmware stops
+	// answering exactly like one that is powered off. "isolate" switches the
+	// runlevel, which kills the sessions (incl. the network) the mesh rides on.
+	"systemctl": {"poweroff": true, "halt": true, "kexec": true, "reboot": true,
+		"soft-reboot": true, "suspend": true, "hibernate": true,
+		"hybrid-sleep": true, "suspend-then-hibernate": true,
+		"firmware-setup": true, "isolate": true},
 }
 
 // subVerbValueFlags lists, per gated command, the option spellings that consume
@@ -298,6 +330,18 @@ var subVerbValueFlags = map[string][]string{
 		"--boot-loader-entry", "--boot-loader-menu", "--firmware-setup",
 		"--timestamp",
 	},
+	// These lists exist so a dedicated arg-risk scanner can tell a flag's
+	// value apart from the subcommand that decides the tier.
+	"docker":  {"-H", "--host", "--config", "--context", "-l", "--log-level", "--tlscacert", "--tlscert", "--tlskey"},
+	"podman":  {"--connection", "-c", "--url", "--identity", "-i", "--log-level", "--storage-driver", "--root"},
+	"nerdctl": {"-H", "--host", "--namespace", "-n", "--snapshotter", "--address", "-a"},
+	"kubectl": {"-n", "--namespace", "--context", "--kubeconfig", "-s", "--server", "--as", "--as-group", "--as-uid", "--token", "--user", "--cluster", "-l", "--selector", "--field-selector", "-o", "--output", "--sort-by", "-f", "--filename", "-k", "--kustomize", "--for", "--timeout", "--container", "-c"},
+	"oc":      {"-n", "--namespace", "--context", "--kubeconfig", "-s", "--server", "--as", "--token", "--user", "--cluster", "-l", "--selector", "-o", "--output", "-f", "--filename"},
+	"helm":    {"-n", "--namespace", "--kubeconfig", "--kube-context", "--repo", "--registry-config", "--kube-apiserver", "--kube-token", "--kube-as-user", "--kube-as-group"},
+	"pulumi":  {"-C", "--cwd", "--stack", "-s", "--config-file", "--secrets-provider"},
+	"zfs":     {"-o", "-t", "-s", "-d"},
+	"zpool":   {"-o", "-t", "-d"},
+	"ip":      {"-f", "-o", "-s", "-4", "-6", "-br", "-brief", "-j", "-json"},
 }
 
 // positionalArgs returns the arguments that are not flags and not the value of
@@ -353,6 +397,14 @@ var interpreterCodeFlags = map[string][]string{
 	"powershell": {"-Command", "-EncodedCommand", "-File", "-c"},
 	"pwsh":       {"-Command", "-EncodedCommand", "-File", "-c"},
 	"cmd":        {"/c", "/k"},
+	// Database client shells: -c/-e/--eval run a statement string, which is
+	// code for exactly the same reason interpreter code is. codeEscalates
+	// reads the statement against the SQL/document patterns.
+	"psql":    {"-c", "--command"},
+	"mysql":   {"-e", "--execute"},
+	"mariadb": {"-e", "--execute"},
+	"mongosh": {"--eval"},
+	"mongo":   {"--eval"},
 }
 
 // opaqueWrappers run a command that cannot be located by position: flock takes
@@ -362,6 +414,11 @@ var interpreterCodeFlags = map[string][]string{
 var opaqueWrappers = map[string]bool{
 	"flock": true, "watch": true, "time": true, "script": true,
 	"runuser": true, "taskset": true, "chrt": true, "setarch": true,
+	// parallel's command arrives as ONE string argument ("parallel 'rm -rf /'
+	// ::: files"), so positional unwrapping would hand the whole string to a
+	// verb table that matches on the executable name only — scanning the
+	// joined argv is what catches it.
+	"parallel": true,
 }
 
 // commandArgRisks are per-command argument scanners: the command is Tier 1 with
@@ -370,14 +427,13 @@ var opaqueWrappers = map[string]bool{
 // overwrites history; `rsync` copies, `rsync --delete` mirrors a deletion.
 //
 // The list used to include every package manager (install/remove/run), plus
-// go/cargo/dotnet run|install|generate, and tar/find -exec on the grounds that
-// they execute code. Executing code is not the test; irreversibility is. A build
-// or an install can be repeated or undone, so those are gone: `npm install`,
-// `npm run build` and `go run ./...` now run unattended.
+// go/cargo/dotnet run|install|generate and tar extraction on the grounds that
+// they execute code or write files. Executing code is not the test;
+// irreversibility is. A build or an install can be repeated or undone, so
+// those are gone: `npm install`, `npm run build` and `go run ./...` run
+// unattended. find -exec IS classified — but on the embedded payload, not the
+// find name (see TierFromCommand).
 var commandArgRisks = map[string]func(args []string) bool{
-	// find -delete removes every match, with no copy left behind. -exec is not
-	// here: what it runs is classified on its own merits when it runs.
-	"find": hasAnyArg("-delete"),
 	// sed -i rewrites the file in place; without a backup suffix the original
 	// content is gone. Plain sed only writes to stdout.
 	"sed": hasAnyShortFlagPrefix("-i", "--in-place"),
@@ -392,6 +448,66 @@ var commandArgRisks = map[string]func(args []string) bool{
 	// them. See downloadWritesFile for the flag forms.
 	"curl": downloadWritesFile,
 	"wget": downloadWritesFile,
+
+	// ssh's payload is a remote command line the positional scan never
+	// reaches, plus -o ProxyCommand which executes LOCALLY. Both get the
+	// code-level scan.
+	"ssh": sshArgsIrreversible,
+	// find: -delete removes with no copy; -exec/-execdir/-ok/-okdir embed a
+	// whole command — extracted and classified by findExecPayloads at the top
+	// of TierFromCommand; the residual risk here stays -delete.
+	"find": hasAnyArg("-delete"),
+	// crontab: -r wipes the table with no copy; -e execs $EDITOR through a
+	// shell (an injected EDITOR is arbitrary code); a positional operand
+	// replaces the installed table outright.
+	"crontab": crontabArgsIrreversible,
+	// Container CLIs: containers, images and volumes carry state no later
+	// command recreates — rm/rmi and the prune family are the irreversible
+	// forms. docker/podman/nerdctl share the subcommand shape.
+	"docker":    dockerArgsIrreversible,
+	"podman":    dockerArgsIrreversible,
+	"nerdctl":   dockerArgsIrreversible,
+	"kubectl":   kubectlArgsIrreversible,
+	"oc":        kubectlArgsIrreversible,
+	"helm":      helmArgsIrreversible,
+	"terraform": terraformArgsIrreversible,
+	"tofu":      terraformArgsIrreversible,
+	"pulumi":    pulumiArgsIrreversible,
+	// vagrant destroy deletes the VM and its disk image.
+	"vagrant": subcommandIn("destroy"),
+	// Filesystem/volume managers: destroying a zfs dataset, a zpool, a btrfs
+	// subvolume or an encrypted volume's header is disk-level data loss.
+	"zfs":        subcommandIn("destroy"),
+	"zpool":      subcommandIn("destroy", "labelclear"),
+	"btrfs":      btrfsArgsIrreversible,
+	"nvme":       subcommandIn("format", "sanitize"),
+	"cryptsetup": subcommandIn("luksFormat", "erase", "reencrypt"),
+	// launchctl bootout ends whole sessions/domains; reboot/shutdown are the
+	// launchd spellings of the same power verbs.
+	"launchctl": subcommandIn("bootout", "reboot", "shutdown"),
+	// pmset sleepnow drops the machine's availability; scheduled power-downs
+	// hide the same inside a second positional.
+	"pmset": pmsetArgsIrreversible,
+	// machinectl shell/login cross the container boundary into another
+	// context's privileges.
+	"machinectl": subcommandIn("shell"),
+	// Network plumbing: deleting or flushing links/addresses/routes/namespaces
+	// is an availability loss — the node stops answering its own peers.
+	"ip":        ipArgsIrreversible,
+	"ifconfig":  ifconfigArgsIrreversible,
+	"iptables":  hasAnyArg("-F", "-X", "--flush"),
+	"ip6tables": hasAnyArg("-F", "-X", "--flush"),
+	"nft":       subcommandIn("flush"),
+	"pfctl":     hasAnyArg("-F", "-a"),
+	// Database clients whose destructive statement arrives as positionals or
+	// an opaque input file rather than a -c/-e flag.
+	"sqlite3":   sqliteArgsIrreversible,
+	"sqlite":    sqliteArgsIrreversible,
+	"redis-cli": redisArgsIrreversible,
+	// tmux send-keys / screen -X stuff inject keystrokes into a live terminal
+	// — command execution inside a context this classifier cannot see at all.
+	"tmux":   tmuxArgsIrreversible,
+	"screen": screenArgsIrreversible,
 }
 
 // gitArgsIrreversible reports whether a git invocation is one of the forms that
@@ -400,7 +516,11 @@ var commandArgRisks = map[string]func(args []string) bool{
 // not a mutation at all, and gating it made an agent ask permission to do version
 // control.
 func gitArgsIrreversible(args []string) bool {
-	sub := firstPositional(args)
+	pos := gitPositionals(args)
+	if len(pos) == 0 {
+		return false
+	}
+	sub := pos[0]
 	force := hasAnyArg("-f", "--force")(args)
 	switch sub {
 	case "push":
@@ -421,10 +541,401 @@ func gitArgsIrreversible(args []string) bool {
 		// -D deletes an unmerged branch: its commits become unreachable.
 		return hasAnyArg("-D")(args)
 	case "stash":
-		return subcommandIn("drop", "clear")(args[1:])
+		return len(pos) > 1 && (pos[1] == "drop" || pos[1] == "clear")
 	case "filter-branch":
 		// Rewrites every commit in place.
 		return true
+	case "update-ref":
+		// -d deletes a ref outright — a branch deleted this way leaves no
+		// reflog entry on the branch itself.
+		return hasAnyArg("-d", "--delete")(args)
+	case "tag":
+		// -d removes the tag object; an annotated/signed tag's bytes are gone.
+		return hasAnyArg("-d", "--delete")(args)
+	case "reflog":
+		// expire prunes the recovery net that makes every other operation
+		// above recoverable — that is precisely what makes it irreversible.
+		return len(pos) > 1 && pos[1] == "expire"
+	case "gc":
+		// A bare --prune or --prune=now discards every unreachable object;
+		// --prune=<date> keeps the safety window and stays routine.
+		for _, a := range args {
+			if a == "--prune" || a == "--prune=now" || a == "--prune=all" {
+				return true
+			}
+		}
+		return false
+	case "worktree":
+		// worktree remove refuses a dirty tree unless --force, at which point
+		// it destroys uncommitted work like checkout -- does.
+		return len(pos) > 1 && pos[1] == "remove" && force
+	}
+	return false
+}
+
+// gitPositionals returns git's positional arguments with its global
+// value-taking flags (-C, -c, --git-dir, …) and their values removed. The
+// previous logic derived the inner verb from args[1:], which read a -C value
+// as the subcommand and let `git -C /x stash drop` slip through.
+func gitPositionals(args []string) []string {
+	valueFlags := map[string]bool{"-C": true, "-c": true, "--git-dir": true, "--work-tree": true, "--exec-path": true, "-P": true, "--paginate": false}
+	var out []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "" || a == "--" {
+			continue
+		}
+		if a[0] == '-' {
+			if valueFlags[a] && i+1 < len(args) {
+				i++ // skip the flag's value
+			}
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// findExecPayloads extracts the argv of every -exec/-execdir/-ok/-okdir
+// clause. The payload runs between the flag and its ';' or '+' terminator; an
+// unterminated clause consumes the rest of the line, which is how find itself
+// would read it.
+func findExecPayloads(args []string) [][]string {
+	var out [][]string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-exec", "-execdir", "-ok", "-okdir":
+		default:
+			continue
+		}
+		start := i + 1
+		j := start
+		for j < len(args) && args[j] != ";" && args[j] != `\;` && args[j] != "+" {
+			j++
+		}
+		if j > start {
+			out = append(out, args[start:j])
+		}
+		i = j
+	}
+	return out
+}
+
+// sshValueFlags are ssh's option spellings that consume the next argument —
+// everything a scanner must skip before the host positional.
+var sshValueFlags = map[string]bool{
+	"-b": true, "-c": true, "-D": true, "-E": true, "-e": true, "-F": true,
+	"-I": true, "-i": true, "-J": true, "-L": true, "-l": true, "-m": true,
+	"-O": true, "-o": true, "-p": true, "-Q": true, "-R": true, "-S": true,
+	"-W": true, "-w": true,
+}
+
+func sshArgsIrreversible(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		var opt string
+		switch {
+		case a == "-o" && i+1 < len(args):
+			opt = args[i+1]
+		case strings.HasPrefix(a, "-o") && len(a) > 2:
+			opt = a[2:]
+		}
+		// -o ProxyCommand=… runs a LOCAL shell command to reach the host.
+		if k, v, ok := strings.Cut(opt, "="); ok && strings.EqualFold(k, "proxycommand") && codeEscalates(v) {
+			return true
+		}
+	}
+	var pos []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "" || a == "--" {
+			continue
+		}
+		if a[0] == '-' {
+			if sshValueFlags[a] && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		pos = append(pos, a)
+	}
+	// Everything after the host operand is a remote command line — damage on
+	// the remote machine counts the same as damage on this one.
+	return len(pos) > 1 && codeEscalates(strings.Join(pos[1:], " "))
+}
+
+func crontabArgsIrreversible(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "" {
+			continue
+		}
+		if a[0] == '-' && a != "-" {
+			// -u/--user selects whose table the operation reads — its value is
+			// an operand of the flag, not a table file.
+			if a == "-u" || a == "--user" {
+				i++
+				continue
+			}
+			// -r removes the whole table; -e opens it in $EDITOR, which is
+			// arbitrary code selected by the environment.
+			if strings.ContainsAny(a[1:], "re") {
+				return true
+			}
+			continue
+		}
+		// Any positional (a file, or "-" for stdin) installs a fresh table.
+		return true
+	}
+	return false
+}
+
+func dockerArgsIrreversible(args []string) bool {
+	pos := positionalArgs("docker", args)
+	if len(pos) == 0 {
+		return false
+	}
+	switch pos[0] {
+	case "rm", "rmi", "prune":
+		return true
+	case "system", "container", "image", "volume":
+		return len(pos) > 1 && (pos[1] == "rm" || pos[1] == "prune")
+	case "compose":
+		// `compose rm` drops the project containers; `compose down -v` also
+		// drops the named volumes that hold the project's data.
+		return len(pos) > 1 && (pos[1] == "rm" ||
+			(pos[1] == "down" && hasAnyArg("-v", "--volumes")(args)))
+	}
+	return false
+}
+
+func helmArgsIrreversible(args []string) bool {
+	pos := positionalArgs("helm", args)
+	return len(pos) > 0 && (pos[0] == "uninstall" || pos[0] == "delete")
+}
+
+func kubectlArgsIrreversible(args []string) bool {
+	pos := positionalArgs("kubectl", args)
+	if len(pos) == 0 {
+		return false
+	}
+	switch pos[0] {
+	case "delete":
+		// Objects — and with a PVC the data behind it — come straight back only
+		// from something outside kubectl.
+		return true
+	case "replace":
+		// --force is delete-then-recreate under a benign verb.
+		return hasAnyArg("--force")(args)
+	}
+	return false
+}
+
+func terraformArgsIrreversible(args []string) bool {
+	pos := positionalArgs("terraform", args)
+	if len(pos) == 0 {
+		return false
+	}
+	// `destroy` is the verb; `apply -destroy` reaches the same plan behind a
+	// reversible-looking word.
+	return pos[0] == "destroy" || (pos[0] == "apply" && hasAnyArg("-destroy")(args))
+}
+
+func pulumiArgsIrreversible(args []string) bool {
+	pos := positionalArgs("pulumi", args)
+	if len(pos) == 0 {
+		return false
+	}
+	return pos[0] == "destroy" || (pos[0] == "stack" && len(pos) > 1 && pos[1] == "rm")
+}
+
+func btrfsArgsIrreversible(args []string) bool {
+	pos := positionalArgs("btrfs", args)
+	return len(pos) > 1 && pos[0] == "subvolume" && pos[1] == "delete"
+}
+
+func pmsetArgsIrreversible(args []string) bool {
+	var pos []string
+	for _, a := range args {
+		if a != "" && a[0] != '-' {
+			pos = append(pos, strings.ToLower(a))
+		}
+	}
+	if len(pos) == 0 {
+		return false
+	}
+	if pos[0] == "sleepnow" {
+		return true
+	}
+	// `pmset schedule sleep|shutdown|poweroff` hides the power event behind a
+	// scheduling verb; wake/wakeorpoweron keep the machine up.
+	if pos[0] == "schedule" || pos[0] == "repeat" {
+		for _, p := range pos[1:] {
+			if p == "sleep" || p == "shutdown" || p == "poweroff" || p == "shutdownrestart" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ipNetObjects are the `ip` object classes whose deletion or flush takes the
+// node off the network — same availability loss the power verbs gate.
+var ipNetObjects = map[string]bool{
+	"link": true, "address": true, "addr": true, "route": true, "rule": true,
+	"netns": true, "neighbour": true, "neighbor": true, "tunnel": true,
+	"xfrm": true, "table": true,
+}
+
+func ipArgsIrreversible(args []string) bool {
+	pos := positionalArgs("ip", args)
+	if len(pos) < 2 {
+		return false
+	}
+	obj, verb := pos[0], pos[1]
+	if ipNetObjects[obj] {
+		switch verb {
+		case "delete", "del", "flush", "replace":
+			return true
+		case "set":
+			// `ip link set <dev> down` removes the interface the mesh runs on.
+			return obj == "link" && hasAnyArg("down")(args)
+		case "add":
+			// A blackhole route silently drops traffic — route deletion by
+			// another spelling.
+			return obj == "route" && hasAnyArg("blackhole", "prohibit")(args)
+		}
+	}
+	return false
+}
+
+func ifconfigArgsIrreversible(args []string) bool {
+	var pos []string
+	for _, a := range args {
+		if a != "" && a[0] != '-' {
+			pos = append(pos, strings.ToLower(a))
+		}
+	}
+	return len(pos) > 1 && (pos[1] == "down" || pos[1] == "destroy" || pos[1] == "delete" || pos[1] == "unplumb")
+}
+
+// sqlite3ValueFlags are the sqlite3 options whose value is data to skip, not
+// a statement. -cmd and -init are handled inside the scanner itself.
+var sqlite3ValueFlags = map[string]bool{
+	"-separator": true, "-newline": true, "-nullvalue": true, "-vfs": true,
+	"-memtrace": true, "-file": true,
+}
+
+func sqliteArgsIrreversible(args []string) bool {
+	var pos []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "-cmd" && i+1 < len(args) {
+			// -cmd runs a SQL statement verbatim.
+			if codeEscalates(args[i+1]) {
+				return true
+			}
+			i++
+			continue
+		}
+		// -init loads a file of SQL — same opacity as a script path, but the
+		// file contents could be anything, so the form itself is gated.
+		if a == "-init" {
+			return true
+		}
+		if a == "" || a == "--" {
+			continue
+		}
+		if a[0] == '-' {
+			if sqlite3ValueFlags[a] && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		pos = append(pos, a)
+	}
+	// pos[0] is the database path; every later positional is a statement.
+	return len(pos) > 1 && codeEscalates(strings.Join(pos[1:], " "))
+}
+
+// redisCliDestructive are the redis verbs that erase state outright — case-
+// insensitive, because redis answers either spelling.
+var redisCliDestructive = map[string]bool{
+	"flushall": true, "flushdb": true, "del": true, "unlink": true,
+	"shutdown": true, "eval": true, "evalsha": true, "eval_ro": true,
+	"evalsha_ro": true, "script": true, "debug": true, "migrate": true,
+	"swapdb": true, "failover": true, "reset": true,
+}
+
+var redisCliValueFlags = map[string]bool{
+	"-h": true, "-p": true, "-s": true, "-n": true, "-a": true, "-u": true,
+	"-t": true, "-i": true, "-r": true, "-d": true, "-l": true,
+	"--user": true, "--pass": true, "--db": true, "--timeout": true,
+	"--eval": true, "--evalsha": true,
+}
+
+func redisArgsIrreversible(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "" || a == "--" {
+			continue
+		}
+		if a[0] == '-' {
+			// --eval loads a Lua script file — opaque code, and the script's
+			// content decides the blast radius.
+			if a == "--eval" || a == "--evalsha" {
+				return true
+			}
+			if redisCliValueFlags[a] && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		if redisCliDestructive[strings.ToLower(a)] {
+			return true
+		}
+	}
+	return false
+}
+
+func tmuxArgsIrreversible(args []string) bool {
+	pos := positionalArgs("tmux", args)
+	// send-keys injects input into a live terminal — execution inside a
+	// session this classifier has no visibility into.
+	return len(pos) > 0 && (pos[0] == "send-keys" || pos[0] == "send")
+}
+
+// screenValueFlags are screen's options that consume the next argument —
+// important here because "-S name -X cmd" puts the session name in the slot a
+// naive positional scan would read as the command.
+var screenValueFlags = map[string]bool{
+	"-S": true, "-c": true, "-e": true, "-f": true, "-h": true, "-p": true,
+	"-T": true, "-t": true, "-X": true, "-r": true, "-R": true,
+}
+
+func screenArgsIrreversible(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		// -X's value is the command pushed into the running session —
+		// stuff/exec/eval inject keystrokes or exec inside a context this
+		// classifier cannot see.
+		if a == "-X" && i+1 < len(args) {
+			v := args[i+1]
+			if v == "stuff" || v == "exec" || v == "eval" {
+				return true
+			}
+			i++
+			continue
+		}
+		if a == "" || a == "--" {
+			continue
+		}
+		if a[0] == '-' {
+			if screenValueFlags[a] && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
 	}
 	return false
 }
@@ -453,20 +964,6 @@ func subcommandIn(subs ...string) func(args []string) bool {
 		set[s] = true
 	}
 	return func(args []string) bool { return set[firstPositional(args)] }
-}
-
-// gitRiskySubcommands run hooks or have irreversible/shared-state effects.
-// checkout/switch/restore/stash discard uncommitted work in the tree — the most
-// common way an agent destroys work that was never committed anywhere — and
-// clone runs the remote's hooks and config on first checkout.
-var gitRiskySubcommands = map[string]bool{
-	"push": true, "commit": true, "merge": true, "rebase": true,
-	"reset": true, "clean": true, "filter-branch": true, "update-ref": true,
-	"checkout": true, "switch": true, "restore": true, "stash": true,
-	"clone": true, "am": true, "cherry-pick": true, "revert": true,
-	"apply": true, "gc": true, "prune": true, "worktree": true,
-	"submodule": true, "remote": true, "config": true, "tag": true,
-	"branch": true, "mv": true, "rm": true,
 }
 
 // hasAnyArg reports a scanner that is true when any argument equals one of the
@@ -555,6 +1052,14 @@ var irreversibleCodePatterns = []string{
 	"base64 -d", "base64 --decode", "-encodedcommand", "frombase64string",
 	"eval ", "eval(", "| sh", "|sh", "| bash", "|bash", "| zsh", "|zsh",
 	"| sudo", "|sudo", "iex ", "invoke-expression",
+	// Database destruction reached through a client shell's -c/-e/--eval flag,
+	// or written verbatim inside an opaque command line. Matching the
+	// statement shape (not the client name) keeps `bash -c 'psql -c "drop
+	// table t"'` and `sqlite3 db 'drop table t'` on the same footing.
+	"drop table", "drop database", "drop schema", "truncate table",
+	"delete from", "drop index", "drop view", "drop trigger", "drop role",
+	"drop user", "drop collection", "dropdatabase", "dropcollection",
+	"flushall", "flushdb",
 }
 
 // passThroughVerbs are commands that execute a later argument as the real

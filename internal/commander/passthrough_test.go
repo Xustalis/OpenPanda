@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package commander
 
 import (
@@ -68,25 +70,16 @@ func TestSplitArgv(t *testing.T) {
 	}
 }
 
-// TestMaterializeMCPPassthrough covers the policy gating and the file
-// lifecycle: extended policy + configured server + discovering adapter writes
-// a valid project .mcp.json and the cleanup removes it; minimal policy (the
-// default) never writes; an existing project config is never clobbered.
-func TestMaterializeMCPPassthrough(t *testing.T) {
-	mk := func(policy string) *Router {
-		r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{},
-			config.InjectionConfig{}, config.RoutingConfig{ToolsPolicy: policy})
-		r.SetMCPPassthrough("npx -y @modelcontextprotocol/server-filesystem /tmp")
-		return r
-	}
-
-	// Extended + claude: file appears, parses, cleanup removes it.
-	dir := t.TempDir()
-	r := mk("extended")
-	cleanup := r.materializeMCPPassthrough("claude_code.py", dir)
-	blob, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
-	if err != nil {
-		t.Fatalf("extended policy should write .mcp.json: %v", err)
+// mcpDocFromCtx unmarshals the {"mcpServers":…} document the flag path
+// threaded into the request context.
+func mcpDocFromCtx(t *testing.T, ctx context.Context) map[string]struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+} {
+	t.Helper()
+	doc, _ := ctx.Value(mcpConfigKey{}).(string)
+	if doc == "" {
+		t.Fatalf("no mcp config document on the context")
 	}
 	var cfg struct {
 		MCPServers map[string]struct {
@@ -94,33 +87,91 @@ func TestMaterializeMCPPassthrough(t *testing.T) {
 			Args    []string `json:"args"`
 		} `json:"mcpServers"`
 	}
-	if err := json.Unmarshal(blob, &cfg); err != nil {
-		t.Fatalf(".mcp.json not JSON: %v", err)
+	if err := json.Unmarshal([]byte(doc), &cfg); err != nil {
+		t.Fatalf("mcp config doc not JSON: %v (%q)", err, doc)
 	}
-	srv := cfg.MCPServers["panda"]
+	return cfg.MCPServers
+}
+
+// TestWireMCPPassthrough covers the two delivery paths: a CLI declared with
+// an MCP config flag (claude) receives the servers document on the request
+// context and nothing touches the work dir; the minimal policy and
+// non-participating adapters get neither. The file materialization
+// lifecycle itself is covered by TestMaterializeMCPFile.
+func TestWireMCPPassthrough(t *testing.T) {
+	mk := func(policy string) *Router {
+		r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{},
+			config.InjectionConfig{}, config.RoutingConfig{ToolsPolicy: policy})
+		r.SetMCPPassthrough("npx -y @modelcontextprotocol/server-filesystem /tmp")
+		return r
+	}
+
+	// Extended + claude: the doc rides ctx, the work dir stays clean.
+	dir := t.TempDir()
+	ctx, cleanup := mk("extended").wireMCPPassthrough(context.Background(), "claude_code", "claude_code.py", dir)
+	servers := mcpDocFromCtx(t, ctx)
+	srv, ok := servers["panda"]
+	if !ok {
+		t.Fatalf("panda server missing from doc: %+v", servers)
+	}
 	if srv.Command != "npx" || strings.Join(srv.Args, " ") != "-y @modelcontextprotocol/server-filesystem /tmp" {
 		t.Fatalf("server materialized wrong: %+v", srv)
 	}
 	cleanup()
 	if _, err := os.Stat(filepath.Join(dir, ".mcp.json")); !os.IsNotExist(err) {
-		t.Fatalf("cleanup should remove .mcp.json, err=%v", err)
+		t.Fatalf("flag-capable adapter must not write .mcp.json: %v", err)
 	}
 
-	// Minimal policy: nothing written.
+	// Minimal policy: no ctx doc, no file.
 	dir = t.TempDir()
-	cleanup = mk("minimal").materializeMCPPassthrough("claude_code.py", dir)
+	ctx, cleanup = mk("minimal").wireMCPPassthrough(context.Background(), "claude_code", "claude_code.py", dir)
+	if doc, _ := ctx.Value(mcpConfigKey{}).(string); doc != "" {
+		t.Fatalf("minimal policy must not attach an mcp doc")
+	}
 	if _, err := os.Stat(filepath.Join(dir, ".mcp.json")); !os.IsNotExist(err) {
 		t.Fatalf("minimal policy must not write .mcp.json")
 	}
 	cleanup()
 
-	// An adapter whose CLI does not discover project configs gets nothing.
+	// An adapter with neither a config flag nor project discovery gets nothing.
 	dir = t.TempDir()
-	cleanup = mk("extended").materializeMCPPassthrough("codex.py", dir)
+	ctx, cleanup = mk("extended").wireMCPPassthrough(context.Background(), "codex", "codex.py", dir)
+	if doc, _ := ctx.Value(mcpConfigKey{}).(string); doc != "" {
+		t.Fatalf("non-participating adapter must not attach an mcp doc")
+	}
 	if _, err := os.Stat(filepath.Join(dir, ".mcp.json")); !os.IsNotExist(err) {
 		t.Fatalf("non-discovering adapter must not receive .mcp.json")
 	}
 	cleanup()
+}
+
+// TestMaterializeMCPFile covers the file lifecycle for project-discovery
+// CLIs: a valid .mcp.json appears for the run, cleanup removes it, and a
+// repo's own .mcp.json is never clobbered or deleted.
+func TestMaterializeMCPFile(t *testing.T) {
+	servers := map[string]serverSpec{
+		"panda": {Command: "npx", Args: []string{"server-x"}},
+	}
+
+	dir := t.TempDir()
+	cleanup := materializeMCPFile(dir, mcpProjectFile, servers)
+	blob, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	var cfg struct {
+		MCPServers map[string]serverSpec `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(blob, &cfg); err != nil {
+		t.Fatalf(".mcp.json not JSON: %v", err)
+	}
+	if cfg.MCPServers["panda"].Command != "npx" {
+		t.Fatalf("server materialized wrong: %+v", cfg.MCPServers)
+	}
+	cleanup()
+	if _, err := os.Stat(filepath.Join(dir, ".mcp.json")); !os.IsNotExist(err) {
+		t.Fatalf("cleanup should remove .mcp.json, err=%v", err)
+	}
 
 	// A repo's own .mcp.json wins: panda never clobbers user content.
 	dir = t.TempDir()
@@ -128,7 +179,7 @@ func TestMaterializeMCPPassthrough(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), own, 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	cleanup = mk("extended").materializeMCPPassthrough("claude_code.py", dir)
+	cleanup = materializeMCPFile(dir, mcpProjectFile, servers)
 	if got, _ := os.ReadFile(filepath.Join(dir, ".mcp.json")); string(got) != string(own) {
 		t.Fatalf("existing .mcp.json was clobbered: %s", got)
 	}
@@ -139,41 +190,20 @@ func TestMaterializeMCPPassthrough(t *testing.T) {
 }
 
 // TestMaterializeSelfTools covers the openpanda self-management server the
-// router adds under the extended policy: it appears next to the configured
-// passthrough by default, carries `mcp --config <path>` when the daemon ran
-// with --config, and disappears under routing.panda_tools=false — leaving
-// the configured server, or no file at all if none is set.
+// router adds under the extended policy: it appears in the passthrough
+// document next to the configured server by default, carries
+// `mcp --config <path>` when the daemon ran with --config, and disappears
+// under routing.panda_tools=false — leaving the configured server, or no
+// document at all if none is set.
 func TestMaterializeSelfTools(t *testing.T) {
-	read := func(t *testing.T, dir string) map[string]struct {
-		Command string   `json:"command"`
-		Args    []string `json:"args"`
-	} {
-		t.Helper()
-		blob, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
-		if err != nil {
-			t.Fatalf("read .mcp.json: %v", err)
-		}
-		var cfg struct {
-			MCPServers map[string]struct {
-				Command string   `json:"command"`
-				Args    []string `json:"args"`
-			} `json:"mcpServers"`
-		}
-		if err := json.Unmarshal(blob, &cfg); err != nil {
-			t.Fatalf(".mcp.json not JSON: %v", err)
-		}
-		return cfg.MCPServers
-	}
-
 	// Extended default (panda_tools unset): openpanda rides alongside the
 	// configured server, its command is this binary running `mcp`.
-	dir := t.TempDir()
 	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{},
 		config.InjectionConfig{}, config.RoutingConfig{ToolsPolicy: "extended"})
 	r.SetMCPPassthrough("npx server-x")
 	r.SetSelfConfigPath("/etc/panda/config.yaml")
-	cleanup := r.materializeMCPPassthrough("claude_code.py", dir)
-	servers := read(t, dir)
+	ctx, cleanup := r.wireMCPPassthrough(context.Background(), "claude_code", "claude_code.py", t.TempDir())
+	servers := mcpDocFromCtx(t, ctx)
 	self, ok := servers["openpanda"]
 	if !ok {
 		t.Fatalf("openpanda server missing under extended default: %+v", servers)
@@ -191,13 +221,12 @@ func TestMaterializeSelfTools(t *testing.T) {
 
 	// Opt-out: panda_tools=false drops openpanda but keeps the configured
 	// passthrough server — extended tools stay, self-management closes.
-	dir = t.TempDir()
 	off := false
 	r = NewRouter(testCard(), NewExecutor(), config.ModelConfig{},
 		config.InjectionConfig{}, config.RoutingConfig{ToolsPolicy: "extended", PandaTools: &off})
 	r.SetMCPPassthrough("npx server-x")
-	cleanup = r.materializeMCPPassthrough("claude_code.py", dir)
-	servers = read(t, dir)
+	ctx, cleanup = r.wireMCPPassthrough(context.Background(), "claude_code", "claude_code.py", t.TempDir())
+	servers = mcpDocFromCtx(t, ctx)
 	if _, ok := servers["openpanda"]; ok {
 		t.Fatalf("openpanda must be absent with panda_tools=false: %+v", servers)
 	}
@@ -206,22 +235,21 @@ func TestMaterializeSelfTools(t *testing.T) {
 	}
 	cleanup()
 
-	// Opt-out + nothing configured: no file at all.
-	dir = t.TempDir()
+	// Opt-out + nothing configured: no document at all.
 	r2 := NewRouter(testCard(), NewExecutor(), config.ModelConfig{},
 		config.InjectionConfig{}, config.RoutingConfig{ToolsPolicy: "extended", PandaTools: &off})
-	cleanup = r2.materializeMCPPassthrough("claude_code.py", dir)
-	if _, err := os.Stat(filepath.Join(dir, ".mcp.json")); !os.IsNotExist(err) {
-		t.Fatalf("no servers configured and panda_tools off must not write .mcp.json")
+	ctx, cleanup = r2.wireMCPPassthrough(context.Background(), "claude_code", "claude_code.py", t.TempDir())
+	if doc, _ := ctx.Value(mcpConfigKey{}).(string); doc != "" {
+		t.Fatalf("no servers configured and panda_tools off must not attach a doc")
 	}
 	cleanup()
 }
 
 // TestExtendedRunThreadsRequestAndMCP drives the REAL process path with the
 // extended policy: the stub adapter reads the request JSON (resume +
-// tools_policy must arrive), sees the .mcp.json present during the run, and
-// returns usage + session_id that must propagate into Result. After Execute
-// returns, the passthrough file is gone.
+// tools_policy + the mcp_config document must arrive — claude takes the
+// --mcp-config path, so no file touches the work dir) and returns usage +
+// session_id that must propagate into Result.
 func TestExtendedRunThreadsRequestAndMCP(t *testing.T) {
 	dir := t.TempDir()
 	old := adapterDir
@@ -230,10 +258,12 @@ func TestExtendedRunThreadsRequestAndMCP(t *testing.T) {
 
 	stub := `import json, os, sys
 req = json.loads(sys.stdin.read())
+doc = json.loads(req.get("mcp_config") or "{}")
 seen = {
     "resume": req.get("resume", ""),
     "tools_policy": req.get("tools_policy", ""),
-    "mcp_present": os.path.exists(os.path.join(os.getcwd(), ".mcp.json")),
+    "mcp_present": bool(doc.get("mcpServers")),
+    "workdir_clean": not os.path.exists(os.path.join(os.getcwd(), ".mcp.json")),
 }
 print(json.dumps({"ok": True, "result": json.dumps(seen), "exit_code": 0,
                   "tokens": 9, "usage": {"input_tokens": 4, "output_tokens": 5},
@@ -256,9 +286,10 @@ print(json.dumps({"ok": True, "result": json.dumps(seen), "exit_code": 0,
 		t.Fatalf("exec failed: %+v", res)
 	}
 	var seen struct {
-		Resume      string `json:"resume"`
-		ToolsPolicy string `json:"tools_policy"`
-		MCPPresent  bool   `json:"mcp_present"`
+		Resume       string `json:"resume"`
+		ToolsPolicy  string `json:"tools_policy"`
+		MCPPresent   bool   `json:"mcp_present"`
+		WorkdirClean bool   `json:"workdir_clean"`
 	}
 	if err := json.Unmarshal([]byte(res.Stdout), &seen); err != nil {
 		t.Fatalf("stub result: %v (%q)", err, res.Stdout)
@@ -270,7 +301,10 @@ print(json.dumps({"ok": True, "result": json.dumps(seen), "exit_code": 0,
 		t.Errorf("tools_policy not threaded into request: %+v", seen)
 	}
 	if !seen.MCPPresent {
-		t.Errorf(".mcp.json missing during the extended run: %+v", seen)
+		t.Errorf("mcp_config doc missing during the extended run: %+v", seen)
+	}
+	if !seen.WorkdirClean {
+		t.Errorf("flag-capable adapter must not see a .mcp.json in the work dir: %+v", seen)
 	}
 	if res.SessionID != "sess-abc" {
 		t.Errorf("SessionID = %q, want sess-abc", res.SessionID)

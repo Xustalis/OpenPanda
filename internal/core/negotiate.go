@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 import (
@@ -328,6 +330,11 @@ func (c *Core) taskWorkDir(t Task) string {
 	}
 	if projectInputs(t) {
 		if wd, err := c.projectWorkDir(t.Project); err == nil {
+			return wd
+		}
+	}
+	if attachedInputs(t) {
+		if wd, err := c.attachedWorkDir(t.TaskID); err == nil {
 			return wd
 		}
 	}

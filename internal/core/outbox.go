@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 // The result-delivery layer (review P0-2). Terminal task results cross the bus
@@ -12,6 +14,7 @@ package core
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"time"
@@ -22,6 +25,149 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
+// Batch-6 restart continuity (confirmed-issues §14): outbox rows used to key
+// the DESTINATION by the peer's instance id, so a node that restarted — new
+// process, new node id — could never claim work parked for its old self. The
+// protocol now separates the three identities the doc requires:
+//
+//   - stable_node_id: the node's authenticated Ed25519 identity, recorded in
+//     employee_cache.pub_key by a signed hello. On the wire and in the outbox
+//     it is written "k:" + hex(pub) so stable keys can never collide with a
+//     raw instance id.
+//   - instance_id: the ordinary node id — one running process. It is what
+//     hellos advertise, conns are dialed to, and envelopes are sent to.
+//   - operation_id: the task id, which already survives every restart.
+//
+// The signed hello IS the binding between the two: EdSig proves the instance
+// controls the key it advertises, and only then is pub_key recorded — so a
+// restarted instance claiming the same key inherits its stable identity,
+// while an impostor without the private key can never get the key attributed
+// to its instance at all. Peers that never sign (pre-key hellos) keep their
+// instance id as the stable key and behave exactly as before.
+const stableIDPrefix = "k:"
+
+// stablePeerID resolves the durable outbox key for a peer: its authenticated
+// stable identity when the directory holds a proven key for that instance,
+// the instance id itself otherwise. Already-stable inputs pass through so
+// callers can feed either form.
+func (c *Core) stablePeerID(ctx context.Context, peer string) string {
+	if c.db == nil || peer == "" || strings.HasPrefix(peer, stableIDPrefix) {
+		return peer
+	}
+	var pub string
+	if err := c.db.QueryRowContext(ctx,
+		`SELECT COALESCE(pub_key, '') FROM employee_cache WHERE id = ?`, peer).Scan(&pub); err == nil && pub != "" {
+		return stableIDPrefix + pub
+	}
+	return peer
+}
+
+// instanceForStable maps a stable outbox key back to the peer's CURRENT
+// instance id — the only form a conn can be dialed to. A restarted node may
+// leave several directory rows under one identity, so the pick is the most
+// recently seen instance, online first. Returns "" when the stable identity
+// is not resolvable (the peer has not helloed this node since the identity
+// was keyed). Non-stable inputs are themselves instances and pass through.
+func (c *Core) instanceForStable(ctx context.Context, key string) string {
+	if inst := c.sendableInstanceForStable(ctx, key); inst != "" {
+		return inst
+	}
+	if c.db == nil || !strings.HasPrefix(key, stableIDPrefix) {
+		return key
+	}
+	var id string
+	if err := c.db.QueryRowContext(ctx,
+		`SELECT id FROM employee_cache WHERE pub_key = ?
+		 ORDER BY (status = 'online') DESC, last_seen DESC LIMIT 1`,
+		key[len(stableIDPrefix):]).Scan(&id); err == nil {
+		return id
+	}
+	return ""
+}
+
+// sendableInstanceForStable resolves a stable key to an instance that can
+// actually be reached right now: it walks every directory id recorded under
+// that identity, online first, and returns the first with a live track.
+// Returns "" when no instance is currently sendable.
+func (c *Core) sendableInstanceForStable(ctx context.Context, key string) string {
+	for _, id := range c.instancesForStable(ctx, key) {
+		if c.sendableTo(id) {
+			return id
+		}
+	}
+	return ""
+}
+
+// instancesForStable lists the instance ids a stable key may be delivered
+// through, online instances first. Non-stable keys yield just themselves.
+func (c *Core) instancesForStable(ctx context.Context, key string) []string {
+	if c.db == nil || !strings.HasPrefix(key, stableIDPrefix) {
+		return []string{key}
+	}
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT id FROM employee_cache WHERE pub_key = ?
+		 ORDER BY (status = 'online') DESC, last_seen DESC`,
+		key[len(stableIDPrefix):])
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil && id != "" {
+			out = append(out, id)
+		}
+	}
+	rows.Close()
+	return out
+}
+
+// selfStableID is this node's own stable key — what bundles addressed to it
+// carry once senders key destinations by identity rather than instance.
+func (c *Core) selfStableID() string {
+	if pub, _, ok := c.nodeKeyPair(); ok {
+		return stableIDPrefix + hex.EncodeToString(pub)
+	}
+	return c.nodeID
+}
+
+// claimKeys returns every outbox destination key an instance may claim: its
+// stable key plus every instance id the directory attributes to that same
+// identity plus its own instance id. The union covers rows parked before the
+// peer's key was known (keyed by raw instance id) and rows a previous
+// instance left behind — while never reaching past the authenticated
+// identity boundary: an instance whose key proves a DIFFERENT pub only ever
+// matches its own key's set.
+func (c *Core) claimKeys(ctx context.Context, key, inst string) []string {
+	keys := []string{key}
+	if inst != key {
+		keys = append(keys, inst)
+	}
+	if strings.HasPrefix(key, stableIDPrefix) && c.db != nil {
+		rows, err := c.db.QueryContext(ctx,
+			`SELECT id FROM employee_cache WHERE pub_key = ?`, key[len(stableIDPrefix):])
+		if err == nil {
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err == nil && id != key {
+					keys = append(keys, id)
+				}
+			}
+			rows.Close()
+		}
+	}
+	// Dedup; the set is tiny (one entry per instance the mesh has seen).
+	out := keys[:0]
+	seen := map[string]bool{}
+	for _, k := range keys {
+		if k != "" && !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // outboxPersist stores a terminal result that could not be delivered to peer.
 // It upserts on (peer, task_id) so repeated failures of the same result do not
 // accumulate rows. A persistence failure is logged, not fatal: the result is
@@ -31,6 +177,7 @@ func (c *Core) outboxPersist(ctx context.Context, peer string, p bus.TaskResultP
 	if c.db == nil || peer == "" {
 		return
 	}
+	peer = c.stablePeerID(ctx, peer)
 	raw, err := json.Marshal(p)
 	if err != nil {
 		c.logger.Warn("outbox: marshal result", "task", p.TaskID, "err", err)
@@ -54,44 +201,72 @@ func (c *Core) outboxDrop(ctx context.Context, peer, taskID string) {
 	if c.db == nil || peer == "" || taskID == "" {
 		return
 	}
+	c.resultOutboxDropKey(ctx, c.stablePeerID(ctx, peer), taskID)
+}
+
+// resultOutboxDropKey deletes by the exact stored destination key. The flush
+// claims rows under several keys at once (stable + every known instance of
+// that identity), so the delete must name the key the row was parked under,
+// not whatever the peer resolves to today.
+func (c *Core) resultOutboxDropKey(ctx context.Context, key, taskID string) {
 	if _, err := c.db.ExecContext(ctx,
-		`DELETE FROM result_outbox WHERE peer = ? AND task_id = ?`, peer, taskID); err != nil {
-		c.logger.Warn("outbox: drop delivered result", "task", taskID, "peer", peer, "err", err)
+		`DELETE FROM result_outbox WHERE peer = ? AND task_id = ?`, key, taskID); err != nil {
+		c.logger.Warn("outbox: drop delivered result", "task", taskID, "peer", key, "err", err)
 	}
 }
 
 // outboxFlush re-delivers every parked result AND cancel destined for peer.
 // Invoked when a peer's hello is accepted — the moment a return channel exists
-// again. Each entry is sent independently so one bad payload cannot block the
-// rest; a successful send removes the entry, a failed send leaves it for the
-// next reconnect. Cancels ride the same guarantee (S2-7): a cancel that could
-// not be delivered is re-delivered here, and the receiver's handleCancel is
-// idempotent (a cancel on a terminal or unknown task is a no-op). The flush
-// runs in its own goroutine so the handshake path is never blocked by
-// delivery.
+// again. peer is the INSTANCE id from that hello; custody rows are keyed by
+// the peer's stable identity, resolved once here — this is the claim: a
+// restarted node whose new instance proves the same key collects everything
+// its old instance was owed, while an instance that cannot authenticate the
+// key selects nothing (stablePeerID falls back to the instance id, which
+// matches only rows parked under that exact name). Each entry is sent
+// independently so one bad payload cannot block the rest; a successful send
+// removes the entry, a failed send leaves it for the next reconnect. Cancels
+// ride the same guarantee (S2-7): a cancel that could not be delivered is
+// re-delivered here, and the receiver's handleCancel is idempotent (a cancel
+// on a terminal or unknown task is a no-op). The flush runs in its own
+// goroutine so the handshake path is never blocked by delivery.
 func (c *Core) outboxFlush(ctx context.Context, peer string) {
 	if c.db == nil || peer == "" {
 		return
 	}
-	if !c.outboxFlushClaim(peer) {
+	key := c.stablePeerID(ctx, peer)
+	if !c.outboxFlushClaim(key) {
 		return // a flush for this peer is already running (hello or sweep)
 	}
+	fail := func() { c.outboxFlushDone(key) }
+	// The claim set: the stable key plus every instance id the directory
+	// attributes to that identity — rows parked under any of them are this
+	// peer's custody, and nothing outside the set is.
+	destKeys := c.claimKeys(ctx, key, peer)
+	ph := "?" + strings.Repeat(",?", len(destKeys)-1)
+	dargs := func() []any {
+		a := make([]any, len(destKeys))
+		for i, k := range destKeys {
+			a[i] = k
+		}
+		return a
+	}
 	type entry struct {
-		taskID string
-		raw    string
+		taskID, raw, peer string
 	}
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT task_id, payload_json FROM result_outbox WHERE peer = ?`, peer)
+		`SELECT task_id, payload_json, peer FROM result_outbox WHERE peer IN (`+ph+`)`, dargs()...)
 	if err != nil {
 		c.logger.Warn("outbox: query", "peer", peer, "err", err)
+		fail()
 		return
 	}
 	var entries []entry
 	for rows.Next() {
 		var e entry
-		if err := rows.Scan(&e.taskID, &e.raw); err != nil {
+		if err := rows.Scan(&e.taskID, &e.raw, &e.peer); err != nil {
 			rows.Close()
 			c.logger.Warn("outbox: scan", "peer", peer, "err", err)
+			fail()
 			return
 		}
 		entries = append(entries, e)
@@ -99,23 +274,24 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		c.logger.Warn("outbox: rows", "peer", peer, "err", err)
+		fail()
 		return
 	}
 	type cancelEntry struct {
-		taskID string
-		reason string
+		taskID, reason, peer string
 	}
 	var cancels []cancelEntry
 	crows, err := c.db.QueryContext(ctx,
-		`SELECT task_id, reason FROM cancel_outbox WHERE peer = ?`, peer)
+		`SELECT task_id, reason, peer FROM cancel_outbox WHERE peer IN (`+ph+`)`, dargs()...)
 	if err != nil {
 		c.logger.Warn("outbox: query cancels", "peer", peer, "err", err)
 	} else {
 		for crows.Next() {
 			var e cancelEntry
-			if err := crows.Scan(&e.taskID, &e.reason); err != nil {
+			if err := crows.Scan(&e.taskID, &e.reason, &e.peer); err != nil {
 				crows.Close()
 				c.logger.Warn("outbox: scan cancels", "peer", peer, "err", err)
+				fail()
 				return
 			}
 			cancels = append(cancels, e)
@@ -123,26 +299,27 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 		crows.Close()
 		if err := crows.Err(); err != nil {
 			c.logger.Warn("outbox: cancel rows", "peer", peer, "err", err)
+			fail()
 			return
 		}
 	}
 	type taskEntry struct {
-		taskID string
-		raw    string
-		blob   []byte
-		ttl    int64
+		taskID, raw, peer string
+		blob              []byte
+		ttl               int64
 	}
 	var taskEntries []taskEntry
 	trows, err := c.db.QueryContext(ctx,
-		`SELECT task_id, payload_json, payload_blob, ttl FROM task_outbox WHERE peer = ?`, peer)
+		`SELECT task_id, payload_json, peer, payload_blob, ttl FROM task_outbox WHERE peer IN (`+ph+`)`, dargs()...)
 	if err != nil {
 		c.logger.Warn("outbox: query tasks", "peer", peer, "err", err)
 	} else {
 		for trows.Next() {
 			var e taskEntry
-			if err := trows.Scan(&e.taskID, &e.raw, &e.blob, &e.ttl); err != nil {
+			if err := trows.Scan(&e.taskID, &e.raw, &e.peer, &e.blob, &e.ttl); err != nil {
 				trows.Close()
 				c.logger.Warn("outbox: scan tasks", "peer", peer, "err", err)
+				fail()
 				return
 			}
 			taskEntries = append(taskEntries, e)
@@ -155,14 +332,14 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 	// would stall until some unrelated row arrived.
 	var pushPending int
 	_ = c.db.QueryRowContext(ctx,
-		`SELECT count(*) FROM artifact_push_outbox WHERE peer = ?`, peer).Scan(&pushPending)
+		`SELECT count(*) FROM artifact_push_outbox WHERE peer IN (`+ph+`)`, dargs()...).Scan(&pushPending)
 
 	if len(entries) == 0 && len(cancels) == 0 && len(taskEntries) == 0 && pushPending == 0 {
-		c.outboxFlushDone(peer)
+		c.outboxFlushDone(key)
 		return
 	}
 	go func() {
-		defer c.outboxFlushDone(peer)
+		defer c.outboxFlushDone(key)
 		flushCtx := context.WithoutCancel(ctx)
 		for _, e := range taskEntries {
 			// §8.2 TTL: a bundle parked past its deadline is dead — delivering
@@ -170,8 +347,8 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 			// Drop the entry and expire the local copy so it stops occupying
 			// the dispatched slot it was parked under.
 			if e.ttl > 0 && time.Now().Unix() > e.ttl {
-				c.logger.Info("outbox: parked task past TTL, expiring", "task", e.taskID, "peer", peer)
-				c.taskOutboxDrop(flushCtx, peer, e.taskID)
+				c.logger.Info("outbox: parked task past TTL, expiring", "task", e.taskID, "peer", e.peer)
+				c.taskOutboxDropKey(flushCtx, e.peer, e.taskID)
 				if err := c.store.MarkExpired(flushCtx, e.taskID, "dtn TTL expired"); err != nil {
 					c.logger.Warn("outbox: mark expired", "task", e.taskID, "err", err)
 				}
@@ -185,13 +362,13 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 			if len(e.blob) > 0 {
 				bnd, berr := bus.UnmarshalBundle(e.blob)
 				if berr != nil {
-					c.logger.Warn("outbox: corrupt bundle, dropping", "task", e.taskID, "peer", peer, "err", berr)
-					c.taskOutboxDrop(flushCtx, peer, e.taskID)
+					c.logger.Warn("outbox: corrupt bundle, dropping", "task", e.taskID, "peer", e.peer, "err", berr)
+					c.taskOutboxDropKey(flushCtx, e.peer, e.taskID)
 					continue
 				}
 				if verr := bnd.Verify([]byte(c.sharedSecret), time.Now().Unix()); verr != nil {
-					c.logger.Warn("outbox: bundle verify failed, dropping", "task", e.taskID, "peer", peer, "err", verr)
-					c.taskOutboxDrop(flushCtx, peer, e.taskID)
+					c.logger.Warn("outbox: bundle verify failed, dropping", "task", e.taskID, "peer", e.peer, "err", verr)
+					c.taskOutboxDropKey(flushCtx, e.peer, e.taskID)
 					if err := c.store.MarkExpired(flushCtx, e.taskID, "bundle verify failed"); err != nil {
 						c.logger.Warn("outbox: mark expired", "task", e.taskID, "err", err)
 					}
@@ -200,7 +377,7 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 				if !c.deliverBundle(flushCtx, peer, e.blob) {
 					continue
 				}
-				c.taskOutboxDrop(flushCtx, peer, e.taskID)
+				c.taskOutboxDropKey(flushCtx, e.peer, e.taskID)
 				c.logger.Info("outbox: redelivered forward task", "task", e.taskID, "peer", peer)
 				continue
 			}
@@ -208,14 +385,14 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 			// the JSON payload as an ordinary task_delegate.
 			var p bus.TaskDelegatePayload
 			if err := json.Unmarshal([]byte(e.raw), &p); err != nil {
-				c.logger.Warn("outbox: bad parked task payload, dropping", "task", e.taskID, "peer", peer, "err", err)
-				c.taskOutboxDrop(flushCtx, peer, e.taskID)
+				c.logger.Warn("outbox: bad parked task payload, dropping", "task", e.taskID, "peer", e.peer, "err", err)
+				c.taskOutboxDropKey(flushCtx, e.peer, e.taskID)
 				continue
 			}
 			if !c.deliverTask(flushCtx, peer, p) {
 				continue
 			}
-			c.taskOutboxDrop(flushCtx, peer, e.taskID)
+			c.taskOutboxDropKey(flushCtx, e.peer, e.taskID)
 			c.logger.Info("outbox: redelivered forward task", "task", e.taskID, "peer", peer)
 		}
 		// §8.3 chunked push rides the same custody model as the parked
@@ -223,7 +400,7 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 		// the stream resumes — not restarts — after a reconnect. Ordering
 		// matters: delegates go first so the task row exists when the chunks
 		// arrive and the receiver's authorization check can bind them to it.
-		c.streamArtifactPushes(flushCtx, peer)
+		c.streamArtifactPushes(flushCtx, destKeys, peer)
 		// Multi-hop custody: a peer that just connected may be the best next
 		// hop for bundles keyed to some third, still-offline destination.
 		// Rows keyed to this peer itself were handled above.
@@ -231,21 +408,21 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 		for _, e := range entries {
 			var p bus.TaskResultPayload
 			if err := json.Unmarshal([]byte(e.raw), &p); err != nil {
-				c.logger.Warn("outbox: bad parked payload, dropping", "task", e.taskID, "peer", peer, "err", err)
-				c.outboxDrop(flushCtx, peer, e.taskID)
+				c.logger.Warn("outbox: bad parked payload, dropping", "task", e.taskID, "peer", e.peer, "err", err)
+				c.resultOutboxDropKey(flushCtx, e.peer, e.taskID)
 				continue
 			}
 			if !c.deliverResult(flushCtx, peer, p) {
 				continue // still parked; retry on next reconnect
 			}
-			c.outboxDrop(flushCtx, peer, e.taskID)
+			c.resultOutboxDropKey(flushCtx, e.peer, e.taskID)
 			c.logger.Info("outbox: redelivered result", "task", e.taskID, "peer", peer)
 		}
 		for _, e := range cancels {
 			if !c.deliverCancel(flushCtx, peer, e.taskID, e.reason) {
 				continue // still parked; retry on next reconnect
 			}
-			c.outboxCancelDrop(flushCtx, peer, e.taskID)
+			c.cancelOutboxDropKey(flushCtx, e.peer, e.taskID)
 			c.logger.Info("outbox: redelivered cancel", "task", e.taskID, "peer", peer)
 		}
 	}()
@@ -281,6 +458,7 @@ func (c *Core) outboxCancelPersist(ctx context.Context, peer, taskID, reason str
 	if c.db == nil || peer == "" || taskID == "" {
 		return
 	}
+	peer = c.stablePeerID(ctx, peer)
 	_, err := c.db.ExecContext(ctx,
 		`INSERT INTO cancel_outbox (peer, task_id, reason, created_at)
 		 VALUES (?, ?, ?, ?)
@@ -298,9 +476,15 @@ func (c *Core) outboxCancelDrop(ctx context.Context, peer, taskID string) {
 	if c.db == nil || peer == "" || taskID == "" {
 		return
 	}
+	c.cancelOutboxDropKey(ctx, c.stablePeerID(ctx, peer), taskID)
+}
+
+// cancelOutboxDropKey deletes by the exact stored destination key — the same
+// raw-key rule as resultOutboxDropKey.
+func (c *Core) cancelOutboxDropKey(ctx context.Context, key, taskID string) {
 	if _, err := c.db.ExecContext(ctx,
-		`DELETE FROM cancel_outbox WHERE peer = ? AND task_id = ?`, peer, taskID); err != nil {
-		c.logger.Warn("outbox: drop delivered cancel", "task", taskID, "peer", peer, "err", err)
+		`DELETE FROM cancel_outbox WHERE peer = ? AND task_id = ?`, key, taskID); err != nil {
+		c.logger.Warn("outbox: drop delivered cancel", "task", taskID, "peer", key, "err", err)
 	}
 }
 
@@ -339,6 +523,7 @@ func (c *Core) taskOutboxPersist(ctx context.Context, peer string, p bus.TaskDel
 	if c.db == nil || peer == "" {
 		return
 	}
+	peer = c.stablePeerID(ctx, peer)
 	raw, err := json.Marshal(p)
 	if err != nil {
 		c.logger.Warn("task_outbox: marshal task", "task", p.TaskID, "err", err)
@@ -379,9 +564,15 @@ func (c *Core) taskOutboxDrop(ctx context.Context, peer, taskID string) {
 	if c.db == nil || peer == "" || taskID == "" {
 		return
 	}
+	c.taskOutboxDropKey(ctx, c.stablePeerID(ctx, peer), taskID)
+}
+
+// taskOutboxDropKey deletes by the exact stored destination key — the same
+// raw-key rule as resultOutboxDropKey.
+func (c *Core) taskOutboxDropKey(ctx context.Context, key, taskID string) {
 	if _, err := c.db.ExecContext(ctx,
-		`DELETE FROM task_outbox WHERE peer = ? AND task_id = ?`, peer, taskID); err != nil {
-		c.logger.Warn("task_outbox: drop delivered task", "task", taskID, "peer", peer, "err", err)
+		`DELETE FROM task_outbox WHERE peer = ? AND task_id = ?`, key, taskID); err != nil {
+		c.logger.Warn("task_outbox: drop delivered task", "task", taskID, "peer", key, "err", err)
 	}
 }
 
@@ -442,7 +633,8 @@ func (c *Core) sweepOutboxes(ctx context.Context) {
 	rows, err := c.db.QueryContext(ctx, `
 		SELECT DISTINCT peer FROM result_outbox
 		UNION SELECT DISTINCT peer FROM cancel_outbox
-		UNION SELECT DISTINCT peer FROM task_outbox`)
+		UNION SELECT DISTINCT peer FROM task_outbox
+		UNION SELECT DISTINCT peer FROM artifact_push_outbox`)
 	if err != nil {
 		c.logger.Warn("outbox: sweep query", "err", err)
 		return
@@ -456,10 +648,16 @@ func (c *Core) sweepOutboxes(ctx context.Context) {
 	}
 	rows.Close()
 	for _, peer := range peers {
-		if !c.sendableTo(peer) {
-			continue
+		// Delivery needs an instance, custody is keyed by stable identity —
+		// and a row can also be parked under an INSTANCE key of a peer that
+		// has since proven a key (parked before the key was known, or parked
+		// by a peer running the old protocol). Resolve through the row's
+		// stable identity so a restarted peer's rows flush through whichever
+		// instance is live, not only the one that parked them.
+		stable := c.stablePeerID(ctx, peer)
+		if inst := c.sendableInstanceForStable(ctx, stable); inst != "" {
+			c.outboxFlush(ctx, inst) // claims internally; skips if one is running
 		}
-		c.outboxFlush(ctx, peer) // claims internally; skips if one is running
 	}
 	// §8.3 multi-hop: rows keyed to a destination that never connects
 	// directly would wait out their TTL parked. Recompute a live next hop
@@ -480,8 +678,13 @@ func (c *Core) relayParked(ctx context.Context, onlyHop string) {
 	if c.db == nil {
 		return
 	}
+	// Two-pass scan: the light projection (no payload_blob) first, so every
+	// row the key/TTL filters reject never pays to move its bundle bytes —
+	// parked custody is mostly rows for OFFLINE destinations, and a bundle
+	// can run to megabytes. The second pass fetches the blob only for a row
+	// that survived everything checkable without it.
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT peer, task_id, payload_blob, ttl, via FROM task_outbox WHERE payload_blob IS NOT NULL`)
+		`SELECT peer, task_id, ttl, via FROM task_outbox WHERE payload_blob IS NOT NULL`)
 	if err != nil {
 		c.logger.Warn("outbox: relay scan", "err", err)
 		return
@@ -494,13 +697,11 @@ func (c *Core) relayParked(ctx context.Context, onlyHop string) {
 	var entries []parked
 	for rows.Next() {
 		var e parked
-		var blob []byte
-		if err := rows.Scan(&e.peer, &e.taskID, &blob, &e.ttl, &e.via); err != nil {
+		if err := rows.Scan(&e.peer, &e.taskID, &e.ttl, &e.via); err != nil {
 			rows.Close()
 			c.logger.Warn("outbox: relay scan row", "err", err)
 			return
 		}
-		e.blob = blob
 		entries = append(entries, e)
 	}
 	rows.Close()
@@ -516,10 +717,16 @@ func (c *Core) relayParked(ctx context.Context, onlyHop string) {
 	var self ledger.Node
 	var nodes []ledger.Node
 	dirLoaded := false
+	selfStable := c.selfStableID()
 	for _, e := range entries {
 		// A row keyed to a sendable peer is the ordinary flush's job; in
 		// the hello-triggered pass the flush already handled its own rows.
-		if e.peer == onlyHop || (onlyHop == "" && c.sendableTo(e.peer)) {
+		// e.peer is a stable key — resolve to the current instance before
+		// comparing or dialing. A row parked under an instance key of a peer
+		// that has since proven a key resolves through that identity.
+		inst := c.sendableInstanceForStable(ctx, c.stablePeerID(ctx, e.peer))
+		if e.peer == onlyHop || (inst != "" && inst == onlyHop) ||
+			(onlyHop == "" && inst != "") {
 			continue
 		}
 		if e.ttl > 0 && now > e.ttl {
@@ -530,6 +737,15 @@ func (c *Core) relayParked(ctx context.Context, onlyHop string) {
 			}
 			continue
 		}
+		var blob []byte
+		if err := c.db.QueryRowContext(ctx,
+			`SELECT payload_blob FROM task_outbox WHERE peer = ? AND task_id = ?`,
+			e.peer, e.taskID).Scan(&blob); err != nil {
+			// Row vanished between passes (a flush claimed it mid-sweep): not
+			// an error — custody moved on, nothing to re-route.
+			continue
+		}
+		e.blob = blob
 		bnd, err := bus.UnmarshalBundle(e.blob)
 		if err != nil {
 			c.logger.Warn("outbox: corrupt parked bundle, dropping", "task", e.taskID, "peer", e.peer, "err", err)
@@ -545,7 +761,7 @@ func (c *Core) relayParked(ctx context.Context, onlyHop string) {
 			continue
 		}
 		dest := strings.TrimPrefix(bnd.DestEID, "panda://")
-		if dest == "" || dest == c.nodeID {
+		if dest == "" || dest == c.nodeID || dest == selfStable {
 			continue
 		}
 		if !dirLoaded {
@@ -557,6 +773,22 @@ func (c *Core) relayParked(ctx context.Context, onlyHop string) {
 			}
 			dirLoaded = true
 		}
+		// Routing speaks instance ids; a stable-keyed destination resolves
+		// through the directory's recorded pub_key (same mapping
+		// instanceForStable uses, over the already-loaded node list).
+		routeDest := dest
+		if strings.HasPrefix(dest, stableIDPrefix) {
+			routeDest = ""
+			for _, n := range nodes {
+				if stableIDPrefix+n.PubKey == dest {
+					routeDest = n.ID
+					break
+				}
+			}
+			if routeDest == "" {
+				continue // destination identity unresolvable: hold custody
+			}
+		}
 		exclude := map[string]bool{}
 		if e.via != "" {
 			exclude[e.via] = true
@@ -566,9 +798,9 @@ func (c *Core) relayParked(ctx context.Context, onlyHop string) {
 		}
 		var hop string
 		if c.dtnPlanActive(nodes) {
-			hop, _ = scheduler.ContactNextHop(self, nodes, dest, exclude, now, int64(len(e.blob)), e.ttl)
+			hop, _ = scheduler.ContactNextHop(self, nodes, routeDest, exclude, now, int64(len(e.blob)), e.ttl)
 		} else {
-			hop = scheduler.DTNNextHop(self, nodes, dest, exclude)
+			hop = scheduler.DTNNextHop(self, nodes, routeDest, exclude)
 		}
 		if hop == "" || (onlyHop != "" && hop != onlyHop) || !c.sendableTo(hop) {
 			continue

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package commander
 
 import (
@@ -92,6 +94,24 @@ func TestSubstituteActionSpecNoSpec(t *testing.T) {
 	}
 	if plan.Args[1] != "do the thing" {
 		t.Fatalf("args = %v", plan.Args)
+	}
+}
+
+// TestSubstituteActionSpecRejectsMissingAction pins the gate symmetric to the
+// missing-param one: a driver template naming {action} must not execute with
+// an empty verb — spec-less and action-less specs both fail at substitution.
+func TestSubstituteActionSpecRejectsMissingAction(t *testing.T) {
+	plan := Plan{ActuatorID: "x", Command: "drv", Args: []string{"--do", "{action}"}}
+	if err := SubstituteActionSpec(&plan, nil, "intent"); err == nil {
+		t.Fatal("{action} template ran with no action_spec")
+	}
+	if err := SubstituteActionSpec(&plan, &ledger.ActionSpec{}, "intent"); err == nil {
+		t.Fatal("{action} template ran with an action-less spec")
+	}
+	// A template without {action} is unaffected by a missing verb.
+	plan2 := Plan{ActuatorID: "x", Command: "drv", Args: []string{"--intent", "{intent}"}}
+	if err := SubstituteActionSpec(&plan2, nil, "go"); err != nil {
+		t.Fatalf("placeholder-free-of-action template must pass: %v", err)
 	}
 }
 

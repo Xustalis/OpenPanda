@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 import (
@@ -52,7 +54,7 @@ func TestDTNContactPlanMovesCustodyToScheduledHop(t *testing.T) {
 
 	// Gossip r1's plan into s's directory (what the next heartbeat carries).
 	raw, _ := json.Marshal(window)
-	if err := ledger.UpdateAdjacency(s.db, r1.nodeID, "", "", string(raw)); err != nil {
+	if err := ledger.UpdateAdjacency(s.db, r1.nodeID, "", "", string(raw), ""); err != nil {
 		t.Fatalf("seed r1 contacts: %v", err)
 	}
 	s.relayParked(ctx, "")
@@ -90,7 +92,7 @@ func TestHeartbeatContactPlanClearSemantics(t *testing.T) {
 
 	window := []ledger.Contact{{Peer: "dtn-d6", Start: 1000, End: 2000}}
 	raw, _ := json.Marshal(window)
-	if err := ledger.UpdateAdjacency(s.db, "dtn-peer6", "", "", string(raw)); err != nil {
+	if err := ledger.UpdateAdjacency(s.db, "dtn-peer6", "", "", string(raw), ""); err != nil {
 		t.Fatalf("seed contacts: %v", err)
 	}
 	readPlan := func() []ledger.Contact {

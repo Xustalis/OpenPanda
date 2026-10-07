@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
 /* Design tokens — one source of truth for colour, space, radius, elevation.
    Light-first: warm paper neutrals (Kimi restraint × Claude paper × Apple
    hairline separation). `[data-theme='dark']` (or auto + dark OS) keeps the
@@ -65,11 +67,12 @@
   --semantic-danger-soft: rgba(184, 73, 59, 0.1);
   --semantic-danger-border: rgba(184, 73, 59, 0.34);
 
-  /* — Radius: rounder reads friendlier on paper. */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 22px;
+  /* — Radius: tight and precise. Large radii read friendly; small ones read
+     engineered. Controls sit at sm, cards at md, sheets at lg. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
   --radius-pill: 999px;
   --radius: var(--radius-md);
 
@@ -80,8 +83,12 @@
   --shadow-lg: 0 4px 8px rgba(74, 63, 42, 0.06), 0 18px 44px rgba(74, 63, 42, 0.12);
   --shadow-xl: 0 8px 16px rgba(74, 63, 42, 0.08), 0 28px 64px rgba(74, 63, 42, 0.16);
   --shadow-accent: 0 1px 2px rgba(12, 122, 85, 0.14), 0 4px 16px rgba(12, 122, 85, 0.18);
-  --shadow-glow-1: 0 0 20px rgba(12, 122, 85, 0.06);
-  --shadow-glow-2: 0 0 24px rgba(47, 108, 160, 0.07);
+  /* Glows are intentionally inert: ambient colour bloom is the one effect
+     that reads as decoration rather than structure, so the tokens resolve
+     to a zero-blur transparent shadow at every call site that still names
+     them. */
+  --shadow-glow-1: 0 0 0 transparent;
+  --shadow-glow-2: 0 0 0 transparent;
   --shadow: var(--shadow-md);
 
   /* — Scrims + alpha surfaces for overlays. */
@@ -195,8 +202,8 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.36), 0 4px 10px rgba(0, 0, 0, 0.2);
   --shadow-xl: 0 20px 56px rgba(0, 0, 0, 0.46), 0 6px 16px rgba(0, 0, 0, 0.24);
   --shadow-accent: 0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(111, 199, 161, 0.18);
-  --shadow-glow-1: 0 0 20px rgba(143, 221, 189, 0.07);
-  --shadow-glow-2: 0 0 24px rgba(148, 198, 236, 0.09);
+  --shadow-glow-1: 0 0 0 transparent;
+  --shadow-glow-2: 0 0 0 transparent;
 
   --backdrop: rgba(14, 12, 10, 0.55);
   --backdrop-darker: rgba(14, 12, 10, 0.66);
@@ -262,8 +269,8 @@
     --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.36), 0 4px 10px rgba(0, 0, 0, 0.2);
     --shadow-xl: 0 20px 56px rgba(0, 0, 0, 0.46), 0 6px 16px rgba(0, 0, 0, 0.24);
     --shadow-accent: 0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(111, 199, 161, 0.18);
-    --shadow-glow-1: 0 0 20px rgba(143, 221, 189, 0.07);
-    --shadow-glow-2: 0 0 24px rgba(148, 198, 236, 0.09);
+    --shadow-glow-1: 0 0 0 transparent;
+    --shadow-glow-2: 0 0 0 transparent;
     --backdrop: rgba(14, 12, 10, 0.55);
     --backdrop-darker: rgba(14, 12, 10, 0.66);
     --surface-alpha-xs: rgba(236, 229, 216, 0.03);
@@ -325,11 +332,13 @@
   --semantic-warn-strong-soft: rgba(154, 116, 19, 0.14);
   --semantic-danger-strong-border: rgba(184, 73, 59, 0.36);
 
-  --grad-card: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, transparent 100%);
-  --grad-accent-1: linear-gradient(135deg, rgba(12, 122, 85, 0.14) 0%, rgba(12, 122, 85, 0.04) 100%);
-  --grad-accent-2: linear-gradient(135deg, rgba(47, 108, 160, 0.12) 0%, rgba(47, 108, 160, 0.04) 100%);
-  --grad-hero: radial-gradient(ellipse 640px 320px at 18% 0%, rgba(12, 122, 85, 0.07) 0%, transparent 60%),
-               radial-gradient(ellipse 520px 260px at 82% 8%, rgba(47, 108, 160, 0.05) 0%, transparent 55%);
+  /* Gradients are intentionally flat: a sheen or radial bloom reads as
+     generated art, while a clean surface reads as built. The tokens stay
+     declared so call sites keep resolving; they now paint nothing. */
+  --grad-card: none;
+  --grad-accent-1: none;
+  --grad-accent-2: none;
+  --grad-hero: none;
 }
 :root[data-theme='dark'] {
   --accent-1-rgb: 143, 221, 189;
@@ -344,11 +353,10 @@
   --hairline-sm: rgba(236, 229, 216, 0.08);
   --hairline-md: rgba(236, 229, 216, 0.11);
   --hairline-lg: rgba(236, 229, 216, 0.3);
-  --grad-card: linear-gradient(180deg, rgba(255, 250, 240, 0.02) 0%, transparent 100%);
-  --grad-accent-1: linear-gradient(135deg, rgba(143, 221, 189, 0.16) 0%, rgba(111, 199, 161, 0.05) 100%);
-  --grad-accent-2: linear-gradient(135deg, rgba(148, 198, 236, 0.14) 0%, rgba(148, 198, 236, 0.05) 100%);
-  --grad-hero: radial-gradient(ellipse 640px 320px at 18% 0%, rgba(143, 221, 189, 0.09) 0%, transparent 60%),
-               radial-gradient(ellipse 520px 260px at 82% 8%, rgba(148, 198, 236, 0.07) 0%, transparent 55%);
+  --grad-card: none;
+  --grad-accent-1: none;
+  --grad-accent-2: none;
+  --grad-hero: none;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
@@ -364,11 +372,10 @@
     --hairline-sm: rgba(236, 229, 216, 0.08);
     --hairline-md: rgba(236, 229, 216, 0.11);
     --hairline-lg: rgba(236, 229, 216, 0.3);
-    --grad-card: linear-gradient(180deg, rgba(255, 250, 240, 0.02) 0%, transparent 100%);
-    --grad-accent-1: linear-gradient(135deg, rgba(143, 221, 189, 0.16) 0%, rgba(111, 199, 161, 0.05) 100%);
-    --grad-accent-2: linear-gradient(135deg, rgba(148, 198, 236, 0.14) 0%, rgba(148, 198, 236, 0.05) 100%);
-    --grad-hero: radial-gradient(ellipse 640px 320px at 18% 0%, rgba(143, 221, 189, 0.09) 0%, transparent 60%),
-                 radial-gradient(ellipse 520px 260px at 82% 8%, rgba(148, 198, 236, 0.07) 0%, transparent 55%);
+    --grad-card: none;
+    --grad-accent-1: none;
+    --grad-accent-2: none;
+    --grad-hero: none;
   }
 }
 

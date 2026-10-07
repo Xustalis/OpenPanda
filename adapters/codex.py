@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Adapter: Codex CLI → PANDA Commander.
 
 Protocol (shared with claude_code.py / opencode.py):
@@ -6,6 +7,11 @@ Protocol (shared with claude_code.py / opencode.py):
           plus optional {resume, tools_policy}
   stdout: a JSON object with keys {ok, result, exit_code, tokens, cost},
           plus optional {usage, session_id}
+  stderr: NDJSON {"type":"progress","note":str,"kind":str?} status lines,
+          plus {"type":"event","ev":...} transcript frames — tool-shaped
+          items land as tool_use (on item.started) / tool_result (on
+          item.completed), agent_message items as text, reasoning items as
+          thinking; see _harness.py
 
 Runs `codex exec --json` and reduces its JSONL event stream to the final
 agent message. Codex emits one JSON object per line; the event shape has
@@ -41,10 +47,16 @@ def main():
     prompt, timeout, cwd = req
 
     # PANDA's sandbox is a cwd/env boundary, not OS isolation. Keep Codex's
-    # own workspace policy on top: minimal stays workspace-write, extended
+    # own workspace policy on top: restricted (unconsented remote task) pins
+    # the run to read-only — no writes, and codex's sandbox is what stands
+    # between the remote prompt and the filesystem, so restricted outranks
+    # tools_policy. Otherwise minimal stays workspace-write and extended
     # lifts the filesystem scope (explicit operator choice, mirroring the
     # claude adapter's extended tool face).
-    sandbox = "danger-full-access" if req.tools_policy == "extended" else "workspace-write"
+    if req.restricted:
+        sandbox = "read-only"
+    else:
+        sandbox = "danger-full-access" if req.tools_policy == "extended" else "workspace-write"
 
     # Non-interactive headless exec; a follow-up round resumes the previous
     # run's session (its plan history and approvals survive) instead of
@@ -86,7 +98,7 @@ def main():
     # notes on stderr (see the Go harness progressWriter), so the task
     # timeline fills in while codex works.
     lines = []
-    state = {"session_id": ""}
+    state = {"session_id": "", "started": set()}
 
     def on_line(line):
         lines.append(line)
@@ -96,6 +108,7 @@ def main():
         note = _note(line)
         if note:
             harness.progress(note)
+        _emit_item_events(line, state["started"])
 
         # Fast provider failure detection: if the turn failed with 402/quota/server error,
         # raise ProviderFailure so PANDA's dynamic model injection can rescue immediately.
@@ -132,6 +145,78 @@ def main():
     tokens = usage["input_tokens"] + usage["output_tokens"] or None
     harness.emit(returncode == 0, text, returncode, tokens,
                  usage=usage, session_id=state["session_id"])
+
+
+def _emit_item_events(line, started):
+    """Map a codex JSONL item envelope to typed activity events.
+
+    item.started on a tool-shaped item becomes the tool_use row (live: the
+    call is underway); item.completed pairs it as tool_result on the same
+    item id. A completed item without a seen start (older streams emit only
+    completions) gets its tool_use emitted first so the transcript never
+    shows an orphaned result. agent_message items become text blocks,
+    reasoning items become thinking blocks. Codex has no sub-agent parent
+    id, so sub-agent nesting simply never appears here — the transcript
+    stays flat, which is the honest shape of what the harness reported.
+    `started` is the caller's set of item ids already announced.
+    """
+    obj = harness.parse_json_line(line)
+    if obj is None:
+        return
+    et = obj.get("type")
+    item = obj.get("item")
+    if not isinstance(item, dict):
+        return
+    it = item.get("type")
+    iid = str(item.get("id") or "")
+
+    if et == "item.started":
+        name, inp = _tool_call(item)
+        if name:
+            started.add(iid)
+            harness.emit_event("tool_use", id=iid, name=name, input=inp)
+        return
+    if et != "item.completed":
+        return
+    if it == "agent_message":
+        text = str(item.get("text") or "")
+        if text.strip():
+            harness.emit_event("text", text=text, id=iid)
+        return
+    if it == "reasoning":
+        text = str(item.get("text") or "")
+        if text.strip():
+            harness.emit_event("thinking", thinking=text, id=iid)
+        return
+    name, inp = _tool_call(item)
+    if name:
+        if iid not in started:
+            # No item.started ever arrived — emit the call alongside its
+            # result so the pair stays complete on the transcript.
+            harness.emit_event("tool_use", id=iid, name=name, input=inp)
+        out = item.get("aggregated_output") or item.get("output") or ""
+        status = str(item.get("status") or "")
+        harness.emit_event("tool_result", tool_use_id=iid,
+                           is_error=status in ("failed", "error")
+                           or bool(item.get("is_error")),
+                           content=str(out))
+
+
+def _tool_call(item):
+    """(name, input) for a codex tool-shaped item, or (None, None)."""
+    it = item.get("type")
+    if it == "command_execution":
+        return "shell", {"command": item.get("command") or ""}
+    if it == "file_change":
+        return "edit", {"path": item.get("path") or "",
+                        "kind": item.get("kind") or ""}
+    if it == "mcp_tool_call":
+        server = item.get("server") or ""
+        tool = item.get("tool") or ""
+        return f"mcp:{server}.{tool}".rstrip("."), item.get("arguments") or {}
+    if it == "web_search":
+        return "web_search", {"query": item.get("query") or ""}
+    return None, None
 
 
 def _session_id(line):

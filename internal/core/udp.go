@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 import (
@@ -26,6 +28,16 @@ import (
 // mappings commonly expire after ~30-60s of silence; 25s keeps the pinhole
 // open without measurable load.
 const udpKeepalivePeriod = 25 * time.Second
+
+// udpRouteTTL is how long a bound endpoint may stay silent before the route
+// is reaped. A UDP send can never tell delivery from a blackhole, so the only
+// liveness signal a route has is authenticated inbound traffic — envelopes,
+// punch frames, or keepalives from the bound endpoint. 90s matches the
+// stale-peer directory horizon (stalePeerAfter): about four keepalive periods
+// of silence, long enough that a peer behind a flaky NAT is not bounced out
+// by a few lost datagrams, short enough that a dead endpoint stops absorbing
+// sends before the outbox would have parked them.
+const udpRouteTTL = 90 * time.Second
 
 // punchInterval / punchWindow define the spray: an offerer sends a signed
 // punch to every candidate every interval until an ack lands or the window
@@ -77,6 +89,7 @@ func (c *Core) ListenUDP(ctx context.Context, addr string, stunServers []string)
 
 	u.OnEnvelope = func(env bus.Envelope, src *net.UDPAddr) { c.handleUDPEnvelope(ctx, env, src) }
 	u.OnPunch = func(f bus.PunchFrame, src *net.UDPAddr, isAck bool) { c.handlePunchFrame(f, src, isAck) }
+	u.OnKeepalive = func(src *net.UDPAddr) { c.noteUDPAlive(src) }
 	go u.ReadLoop(ctx)
 	go c.udpKeepaliveLoop(ctx)
 	c.logger.Info("udp: datagram plane listening", "addr", u.LocalAddr())
@@ -194,13 +207,18 @@ func (c *Core) udpPeerAddrOKLocked(peer string, src *net.UDPAddr) bool {
 	return false
 }
 
-// bindUDPRoute records src as peer's datagram endpoint. A brand-new binding
-// is routine; an IP change on an established route is worth a warn — it is
-// either a network migration or a member racing the real peer for the name.
+// bindUDPRoute records src as peer's datagram endpoint and stamps its
+// liveness: the envelope that arrived over it is authenticated traffic, so
+// the route is proven fresh right now. A brand-new binding is routine; an IP
+// change on an established route is worth a warn — it is either a network
+// migration or a member racing the real peer for the name.
 func (c *Core) bindUDPRoute(peer string, src *net.UDPAddr) {
 	c.udpMu.Lock()
 	if c.udpRoutes == nil {
 		c.udpRoutes = make(map[string]*net.UDPAddr)
+	}
+	if c.udpHeard == nil {
+		c.udpHeard = make(map[string]time.Time)
 	}
 	prev := c.udpRoutes[peer]
 	if prev == nil && len(c.udpRoutes) >= udpMaxRoutes {
@@ -209,6 +227,7 @@ func (c *Core) bindUDPRoute(peer string, src *net.UDPAddr) {
 		return
 	}
 	c.udpRoutes[peer] = src
+	c.udpHeard[peer] = time.Now()
 	c.udpMu.Unlock()
 	switch {
 	case prev == nil:
@@ -220,8 +239,14 @@ func (c *Core) bindUDPRoute(peer string, src *net.UDPAddr) {
 	}
 }
 
-// udpKeepaliveLoop holds NAT mappings open for every bound endpoint. It
-// stops when ctx ends or the UDP plane goes away.
+// udpKeepaliveLoop holds NAT mappings open for every bound endpoint — and
+// reaps the dead ones. A route that has seen no authenticated inbound traffic
+// for udpRouteTTL is deleted: sending to a dead endpoint returns success at
+// write time (UDP has no delivery signal), so without expiry a stale route
+// silently blackholes every envelope sendTo routes through it — including
+// terminal task results the outbox then drops as "delivered". Reaping also
+// re-arms the punch-maintain loop, which only re-offers while UDPRoute is nil.
+// The loop stops when ctx ends or the UDP plane goes away.
 func (c *Core) udpKeepaliveLoop(ctx context.Context) {
 	t := time.NewTicker(udpKeepalivePeriod)
 	defer t.Stop()
@@ -233,16 +258,55 @@ func (c *Core) udpKeepaliveLoop(ctx context.Context) {
 		}
 		c.udpMu.Lock()
 		u := c.udp
-		var targets []*net.UDPAddr
+		stale := c.sweepStaleUDPRoutesLocked(time.Now())
+		targets := make([]*net.UDPAddr, 0, len(c.udpRoutes))
 		for _, a := range c.udpRoutes {
 			targets = append(targets, a)
 		}
 		c.udpMu.Unlock()
+		for _, peer := range stale {
+			c.logger.Info("udp: route expired (silent endpoint)", "peer", peer)
+		}
 		if u == nil {
 			return
 		}
 		for _, a := range targets {
 			_ = u.SendKeepalive(a)
+		}
+	}
+}
+
+// sweepStaleUDPRoutesLocked deletes routes whose last authenticated inbound
+// traffic is older than udpRouteTTL, returning the expired peer ids. Caller
+// holds udpMu. A route with no freshness record at all counts as silent —
+// every legitimate bind writes one, so a missing stamp means the entry
+// predates the tracking or lost it to a map reset.
+func (c *Core) sweepStaleUDPRoutesLocked(now time.Time) []string {
+	var stale []string
+	for peer := range c.udpRoutes {
+		if now.Sub(c.udpHeard[peer]) > udpRouteTTL {
+			delete(c.udpRoutes, peer)
+			delete(c.udpHeard, peer)
+			stale = append(stale, peer)
+		}
+	}
+	return stale
+}
+
+// noteUDPAlive refreshes a bound route's freshness when a keepalive arrives
+// from its exact endpoint. The sealed keepalive proves mesh membership but
+// carries no identity, so it may only renew the route whose endpoint it came
+// from — matching on IP alone would let a NAT-rebound port keep a dead
+// binding alive (sends would still go to the old port), and matching less
+// would let one member refresh another's route. A keepalive from an unknown
+// endpoint renews nothing; the peer's own envelopes rebind it instead.
+func (c *Core) noteUDPAlive(src *net.UDPAddr) {
+	c.udpMu.Lock()
+	defer c.udpMu.Unlock()
+	for peer, a := range c.udpRoutes {
+		if a.Port == src.Port && a.IP.Equal(src.IP) {
+			c.udpHeard[peer] = time.Now()
+			return
 		}
 	}
 }
@@ -549,6 +613,10 @@ func (c *Core) handlePunchFrame(f bus.PunchFrame, src *net.UDPAddr, isAck bool) 
 		return
 	}
 	c.udpRoutes[f.From] = src
+	if c.udpHeard == nil {
+		c.udpHeard = make(map[string]time.Time)
+	}
+	c.udpHeard[f.From] = time.Now()
 	u := c.udp
 	c.udpMu.Unlock()
 	c.logger.Info("udp: pinhole confirmed", "peer", f.From, "addr", src, "ack", isAck)

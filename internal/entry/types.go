@@ -1,8 +1,12 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package entry implements the unified entry model (design doc §7): one model
 // call classifies a user request as an answer, a controlled tool call, a
 // structured task, or a multi-stage plan. The model never performs side
 // effects — the Go core validates and executes whatever the model emits.
 package entry
+
+import "github.com/Xustalis/OpenPanda/internal/ledger"
 
 // Kind is the entry model's top-level output category.
 type Kind string
@@ -77,8 +81,14 @@ type TaskSpec struct {
 	// tools are reachable. The entry model sets this based on the task's
 	// complexity and risk: high-complexity tasks that need the agent's
 	// full capability set can request extended without operator intervention
-	// at the routing layer.
+	// at the routing layer. The engine copies it into Spec.ToolsPolicy so it
+	// rides spec_json to the executor; this outer field only exists for the
+	// model's emit shape.
 	ToolsPolicy string `json:"tools_policy,omitempty"`
+	// MaxTurns is the per-task agent turn cap the entry model may request for
+	// a task whose complexity needs more (or fewer) rounds than the adapter
+	// default. Copied into Spec.MaxTurns for the same reason as ToolsPolicy.
+	MaxTurns int `json:"max_turns,omitempty"`
 }
 
 // Requires lists the abilities a task needs (design doc §7.3).
@@ -93,6 +103,19 @@ type TaskSpecDetail struct {
 	Node              string   `json:"node,omitempty"` // preferred node id/name; empty lets the scheduler choose
 	Constraints       []string `json:"constraints"`
 	SuccessDefinition string   `json:"success_definition"`
+	// ToolsPolicy / MaxTurns live here (not on the outer TaskSpec) because
+	// spec_json is what persists on the task row and crosses the wire in
+	// TaskDelegatePayload — an outer-field-only override would evaporate at
+	// toTaskInput's marshal and never reach the executor.
+	ToolsPolicy string `json:"tools_policy,omitempty"`
+	MaxTurns    int    `json:"max_turns,omitempty"`
+	// ActionSpec is the hardware/software actuator dispatch (§7.2): when the
+	// request drives a declared actuator (a hardware:* ability on a device),
+	// the model names the target actuator, the action verb and the scalar
+	// parameters the actuator's driver placeholders need. It lives inside
+	// spec for the same reason as ToolsPolicy — spec_json is what reaches the
+	// executor, where SubstituteActionSpec fills {action}/{param:<name>}.
+	ActionSpec *ledger.ActionSpec `json:"action_spec,omitempty"`
 }
 
 // ResourceProfile is a coarse resource hint, not a safety rating (design doc

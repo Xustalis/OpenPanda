@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package mcp
 
 import (
@@ -172,6 +174,33 @@ func TestCallToolTimeoutKillsProcess(t *testing.T) {
 	_, err = client.CallTool(context.Background(), "echo", map[string]any{"x": "hello"})
 	if err == nil {
 		t.Fatal("expected error after process was killed")
+	}
+}
+
+// TestServerSurvivesSpawnContextCancel pins the child-lifetime contract (A9):
+// NewStdioClient's ctx bounds only the spawn+handshake. Callers pass
+// request-scoped contexts (the settings PUT handler wraps a 30s timeout), so
+// binding the child to that ctx killed the server moments after configuration.
+// After the spawn ctx is canceled, the server must keep serving until Close.
+func TestServerSurvivesSpawnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client, err := NewStdioClient(ctx, os.Args[0], []string{"OPENPANDA_MCP_FAKE=1"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	defer client.Close()
+
+	cancel() // the HTTP request ended — the server must not die with it
+
+	// Give a hypothetical ctx watcher a beat to fire, then prove the server
+	// still answers: before the fix this call raced a SIGKILL and failed.
+	time.Sleep(100 * time.Millisecond)
+	got, err := client.CallTool(context.Background(), "echo", map[string]any{"x": "alive"})
+	if err != nil {
+		t.Fatalf("call after spawn ctx cancel: %v", err)
+	}
+	if !strings.Contains(got, "alive") {
+		t.Fatalf("call result = %q, want it to echo alive", got)
 	}
 }
 

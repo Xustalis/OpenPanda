@@ -1,7 +1,12 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package defense
 
 import (
+	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -80,5 +85,82 @@ func TestHashDirMissingAndEmpty(t *testing.T) {
 	}
 	if h, n, err := HashDir(t.TempDir(), 10); err != nil || h != "" || n != 0 {
 		t.Fatalf("empty dir: h=%q n=%d err=%v", h, n, err)
+	}
+}
+
+// initGitRepo creates a repo with one committed file so the fingerprint has
+// a real HEAD to mix in. Skips when git is unavailable.
+func initGitRepo(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("config", "user.email", "t@t")
+	run("config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "tracked.txt")
+	run("commit", "-qm", "init")
+	return root
+}
+
+// TestGitFingerprintTracksContent verifies the fallback hash: identical
+// states hash identically, and editing a tracked file — or reverting that
+// edit — moves (and restores) the fingerprint, which is exactly what the
+// oscillation window relies on to catch an A→B→A regression.
+func TestGitFingerprintTracksContent(t *testing.T) {
+	root := initGitRepo(t)
+	ctx := context.Background()
+
+	h1, err := GitFingerprint(ctx, root)
+	if err != nil || h1 == "" {
+		t.Fatalf("fingerprint: %q %v", h1, err)
+	}
+	// Same state → same fingerprint.
+	h2, _ := GitFingerprint(ctx, root)
+	if h1 != h2 {
+		t.Fatal("identical tree fingerprinted differently")
+	}
+	// Edit a tracked file → fingerprint moves.
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h3, _ := GitFingerprint(ctx, root)
+	if h3 == h1 {
+		t.Fatal("tracked edit did not move the fingerprint")
+	}
+	// Revert → back to the original fingerprint (the A→B→A signal).
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h4, _ := GitFingerprint(ctx, root)
+	if h4 != h1 {
+		t.Fatalf("reverted tree did not restore the fingerprint: %s != %s", h4, h1)
+	}
+	// An untracked file participates by name.
+	if err := os.WriteFile(filepath.Join(root, "new.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h5, _ := GitFingerprint(ctx, root)
+	if h5 == h1 {
+		t.Fatal("new untracked file did not move the fingerprint")
+	}
+}
+
+// TestGitFingerprintNonRepo verifies the sentinel the caller branches on.
+func TestGitFingerprintNonRepo(t *testing.T) {
+	if _, err := GitFingerprint(context.Background(), t.TempDir()); !errors.Is(err, errNotGitRepo) {
+		t.Fatalf("err = %v, want errNotGitRepo", err)
 	}
 }

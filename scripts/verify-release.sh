@@ -1,10 +1,11 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Verify the local release contract used by all three installers.
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="${OPENPANDA_DIST_DIR:-$ROOT/dist}"
-VERSION="${1:-0.0.9}"
+VERSION="${1:-0.0.10-preview}"
 VERSION="${VERSION#v}"
 
 set -- \
@@ -31,4 +32,11 @@ done
         done < checksums.txt
     fi
 })
+# When a release key is in the environment the signature is part of the
+# contract: a packaged release that pinned the pubkey but ships no
+# checksums.txt.sig would be refused by every updated node.
+if [ -n "${OPENPANDA_RELEASE_KEY:-}" ] || [ -n "${OPENPANDA_RELEASE_PUBKEY:-}" ]; then
+    [ -f "$DIST/checksums.txt.sig" ] || { echo "missing dist/checksums.txt.sig" >&2; exit 1; }
+    (cd "$ROOT" && go run ./scripts/sign-release -verify "$DIST/checksums.txt" "$DIST/checksums.txt.sig")
+fi
 echo "release contract verified for v$VERSION"

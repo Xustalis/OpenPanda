@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package panel serves the legacy PWA control panel (kept frozen as an optional
 // webui/ sidecar; the kernel daemon no longer mounts it): the static web app
 // under webui/web/pwa plus the JSON API that backs it — task queue, task detail,
@@ -225,6 +227,7 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("GET /api/sessions/{id}", h.getSession)
 		mux.HandleFunc("PATCH /api/sessions/{id}", h.patchSession)
 		mux.HandleFunc("DELETE /api/sessions/{id}", h.deleteSession)
+		mux.HandleFunc("POST /api/sessions/{id}/fork", h.forkSession)
 		mux.HandleFunc("POST /api/sessions/{id}/ask", h.sessionAsk)
 		mux.HandleFunc("GET /api/sessions/{id}/approval", h.getSessionApproval)
 		mux.HandleFunc("DELETE /api/sessions/{id}/approval", h.clearSessionApproval)
@@ -241,7 +244,28 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("POST /api/push/unsubscribe", h.pushUnsubscribe)
 	}
 	mux.Handle("/", staticHandler(d.StaticDir))
-	return securityHeaders(authMiddleware(d.Token, mux))
+	return securityHeaders(authMiddleware(d.Token, maxRequestBody(mux)))
+}
+
+// maxAPIBodyBytes bounds any mutating API request body. Every JSON decoder
+// in the handlers reads to EOF, so without a cap an authenticated client —
+// or anything past the Bearer check — could stream unbounded memory into
+// the process. 16 MiB covers the largest legitimate payload (a memory file
+// edit or a long task intent) with room to spare; SSE and reads are GETs
+// and pass through untouched.
+const maxAPIBodyBytes = 16 << 20
+
+// maxRequestBody wraps mutating /api/* requests with a MaxBytesReader so a
+// decode hits a hard bound instead of growing the heap without limit.
+func maxRequestBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") && r.Body != nil &&
+			(r.Method == http.MethodPost || r.Method == http.MethodPut ||
+				r.Method == http.MethodPatch || r.Method == http.MethodDelete) {
+			r.Body = http.MaxBytesReader(w, r.Body, maxAPIBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // securityHeaders adds defense-in-depth response headers to every request
@@ -253,15 +277,30 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		// The app is fully self-hosted: module scripts and the service
+		// worker come from same origin, styles are inline attributes
+		// ('unsafe-inline' scoped to style-src only), blob: covers the
+		// session-export download. No frames, no objects, no foreign
+		// origins anywhere — so a same-origin default with script-src
+		// pinned to 'self' is a strict CSP, not a placeholder.
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; script-src 'self'; "+
+				"style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data: blob:; connect-src 'self'; "+
+				"font-src 'self' data:; manifest-src 'self'; "+
+				"worker-src 'self'; object-src 'none'; "+
+				"base-uri 'self'; form-action 'self'; "+
+				"frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
 }
 
 // authMiddleware guards /api/* with a constant-time Bearer comparison. An empty
 // token fails closed (every /api/* request is rejected) so the panel can never
-// run open by accident; the daemon additionally refuses to start the panel at
-// all when no token is configured (see cmd/panda). Static assets under / are
-// always served. Failed attempts are rate-limited per client IP (L1), but a
+// run open by accident; callers (cmd/panda, webui/cmd/panel) additionally
+// generate an ephemeral token when none is configured, so the panel always
+// runs with a credential. Static assets under / are always served. Failed
+// attempts are rate-limited per client IP (L1), but a
 // correct token always passes and resets that budget — the lockout throttles
 // brute force, it must never lock out a client holding valid credentials
 // (a reconnecting SSE stream with a stale token otherwise locks an IP out

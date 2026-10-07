@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda agents` — probe the agent CLIs this node can delegate to, driven by
@@ -183,7 +185,7 @@ func runAgentTest(loc i18n.Locale, name, configPath string) {
 	// a second CheckAgent reflects it if the cached one was stale.
 	var latency time.Duration
 	if chk.Endpoint != "" {
-		fresh, lat := router.ProbeAgentFresh(ag)
+		fresh, lat := router.ProbeAgentFresh(k.Name, ag)
 		latency = lat
 		if fresh.OK != chk.Reachable || fresh.Detail != chk.Detail {
 			chk = router.CheckAgent(k.Name, ag)

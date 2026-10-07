@@ -1,8 +1,11 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 import (
 	"context"
 	"database/sql"
+	"net"
 	"testing"
 	"time"
 
@@ -77,8 +80,16 @@ func TestPunchRelayedOffer(t *testing.T) {
 	defer r.Shutdown(ctx)
 	defer b.Shutdown(ctx)
 
-	// R listens WS; A and B dial it so R holds live conns to both.
-	rAddr := "127.0.0.1:18131"
+	// R listens WS; A and B dial it so R holds live conns to both. The port
+	// is a probed ephemeral, not a fixed number: a hardcoded port collides
+	// with stale test binaries or parallel runs, and then DialPeer can
+	// "succeed" against a foreign listener while R never registers the peer.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rAddr := l.Addr().String()
+	l.Close()
 	rd := make(chan error, 1)
 	go func() { rd <- r.Listen(ctx, rAddr) }()
 	for _, c := range []*Core{a, r, b} {
@@ -86,23 +97,27 @@ func TestPunchRelayedOffer(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if err := a.DialPeer(ctx, rAddr); err == nil {
-			break
-		} else if time.Now().After(deadline) {
-			t.Fatal(err)
+	dial := func(c *Core) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			err := c.DialPeer(ctx, rAddr)
+			if err == nil {
+				return
+			}
+			select {
+			case lerr := <-rd:
+				t.Fatalf("relay listen died: %v (dial: %v)", lerr, err)
+			default:
+			}
+			if time.Now().After(deadline) {
+				t.Fatal(err)
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
-		time.Sleep(50 * time.Millisecond)
 	}
-	for {
-		if err := b.DialPeer(ctx, rAddr); err == nil {
-			break
-		} else if time.Now().After(deadline) {
-			t.Fatal(err)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	dial(a)
+	dial(b)
 	waitPeer(t, a, "pn-r")
 	waitPeer(t, b, "pn-r")
 	waitPeer(t, r, "pn-a")

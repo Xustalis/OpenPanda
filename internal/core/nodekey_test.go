@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 import (
@@ -63,6 +65,65 @@ func TestHelloRecordsPeerPubKey(t *testing.T) {
 	}
 }
 
+// TestPeerKeyTofuLifecycle covers the trust-on-first-use contract the CLI
+// exposes: a signed hello records the key UNVERIFIED, the human's `nodes
+// verify` stamps it, and a later different key — reinstall, rotation or
+// impersonation, indistinguishable at this layer — drops the stamp instead of
+// inheriting it.
+func TestPeerKeyTofuLifecycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	entry := newCore(t, "entry", "127.0.0.1:17976")
+	worker := newCore(t, "worker", "127.0.0.1:17977")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17976", "127.0.0.1:17977")
+
+	// First use: the worker's key is on file but nobody has compared it.
+	nodes, err := ledger.Query(entry.db, "", "worker")
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("query worker: %v len=%d", err, len(nodes))
+	}
+	w := nodes[0]
+	if w.PubKey == "" {
+		t.Fatal("worker's signed hello did not leave a pubkey")
+	}
+	if w.Verified() {
+		t.Fatal("a TOFU-recorded key must not read as verified")
+	}
+	if len(w.Fingerprint()) != 16 {
+		t.Fatalf("fingerprint %q — want 16 hex chars", w.Fingerprint())
+	}
+
+	// The self row verifies by construction: it is this process's own key.
+	self, err := ledger.Query(entry.db, "", "entry")
+	if err != nil || len(self) != 1 {
+		t.Fatalf("query self: %v len=%d", err, len(self))
+	}
+	if !self[0].Verified() || self[0].PubKey == "" {
+		t.Fatal("self row must carry its own key, verified by construction")
+	}
+
+	// Human compares fingerprints and verifies.
+	ok, err := ledger.MarkVerified(entry.db, "worker")
+	if err != nil || !ok {
+		t.Fatalf("mark verified: %v ok=%v", err, ok)
+	}
+	if nodes, _ = ledger.Query(entry.db, "", "worker"); !nodes[0].Verified() {
+		t.Fatal("verify stamp did not stick")
+	}
+
+	// A new key under the same ID loses the stamp — the human never saw it.
+	newPub, _, _ := bus.GenerateNodeKey()
+	entry.recordPeerPubKey(ctx, "worker", hex.EncodeToString(newPub))
+	nodes, _ = ledger.Query(entry.db, "", "worker")
+	if nodes[0].Verified() {
+		t.Fatal("a changed key must not inherit the old key's verification")
+	}
+	if nodes[0].PubKey != hex.EncodeToString(newPub) {
+		t.Fatal("the changed key was not recorded")
+	}
+}
+
 // TestConsentGrantVerification pins the P2-8 fix: a consent grant minted by
 // the origin's key verifies, while a grant signed by another key, presented
 // under the wrong public key, or bound to a different task is rejected — and
@@ -95,7 +156,7 @@ func TestConsentGrantVerification(t *testing.T) {
 
 	forged := p
 	_, mPriv, _ := bus.GenerateNodeKey()
-	forged.AuthSig = bus.SignAuthorization(mPriv, p.TaskID, true, p.AuthTs)
+	forged.AuthSig = bus.SignAuthorization(mPriv, p.TaskID, true, p.AuthTs, p.ConsentDigest())
 	if exec.consentGrantValid(forged, "mallory") {
 		t.Fatal("a consent grant signed by a non-origin key was accepted")
 	}
@@ -113,9 +174,39 @@ func TestConsentGrantVerification(t *testing.T) {
 		t.Fatal("a consent grant transplanted to another task was accepted")
 	}
 
-	legacy := bus.TaskDelegatePayload{TaskID: "t-legacy", Authorized: true, Chain: []string{"origin"}}
-	if !exec.consentGrantValid(legacy, "origin") {
-		t.Fatal("an unsigned legacy consent must still pass")
+	// A transit edit of any intent-bearing field invalidates the grant: the
+	// signature binds the task's ConsentDigest, so a relay cannot reshape the
+	// task the origin approved.
+	mutated := p
+	mutated.Intent = "run something else entirely"
+	if exec.consentGrantValid(mutated, "relay-node") {
+		t.Fatal("a grant must not survive an intent rewrite in transit")
+	}
+	// Mutable transport fields stay covered by neither signature nor digest:
+	// a relay that spent a budget hop did not forge anything.
+	mutatedOK := p
+	mutatedOK.Chain = []string{"origin", "relay-node"}
+	hop := 3
+	mutatedOK.DelegationBudget = &hop
+	if !exec.consentGrantValid(mutatedOK, "relay-node") {
+		t.Fatal("legitimate relay edits (chain, budgets) must not break the grant")
+	}
+
+	// Unsigned from a key-capable origin is a STRIPPED grant — refuse.
+	stripped := bus.TaskDelegatePayload{TaskID: "t-stripped", Authorized: true, Chain: []string{"origin"}}
+	if exec.consentGrantValid(stripped, "origin") {
+		t.Fatal("an unsigned consent from a known-signing origin is a stripped grant, not legacy")
+	}
+	// A torn grant — some fields erased — fails closed rather than degrading.
+	torn := p
+	torn.AuthSig = ""
+	if exec.consentGrantValid(torn, "origin") {
+		t.Fatal("a half-present grant must be rejected, not treated as legacy")
+	}
+	// Genuinely legacy: origin has no recorded key anywhere.
+	legacy := bus.TaskDelegatePayload{TaskID: "t-legacy", Authorized: true, Chain: []string{"oldtimer"}}
+	if !exec.consentGrantValid(legacy, "oldtimer") {
+		t.Fatal("an unsigned legacy consent from a key-less origin must still pass")
 	}
 }
 

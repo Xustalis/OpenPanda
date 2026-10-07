@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package hwinfo
 
 import (
@@ -134,5 +136,48 @@ func TestLiveProbesProduceAValidProfile(t *testing.T) {
 	// keeps the Orange Pi out of GPU work.
 	if len(GPUs()) == 0 && p.GPUVRAMGB != 0 {
 		t.Errorf("no GPUs detected but VRAM = %d, want a hard 0", p.GPUVRAMGB)
+	}
+}
+
+func TestParseMemAvailableGB(t *testing.T) {
+	out := "MemTotal:       16305416 kB\nMemFree:          123456 kB\nMemAvailable:    8388608 kB\n"
+	v, ok := parseMemAvailableGB(out)
+	if !ok || v < 7.9 || v > 8.1 {
+		t.Fatalf("MemAvailable parse = %v ok=%v, want ~8 GiB", v, ok)
+	}
+	if _, ok := parseMemAvailableGB("garbage"); ok {
+		t.Fatal("junk input must report unmeasured")
+	}
+}
+
+func TestParseVMStatFreeGB(t *testing.T) {
+	out := "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n" +
+		"Pages free:                              100000.\n" +
+		"Pages active:                            500000.\n" +
+		"Pages inactive:                          200000.\n" +
+		"Pages purgeable:                          10000.\n" +
+		"Pages wired:                             300000.\n"
+	v, ok := parseVMStatFreeGB(out)
+	// (100000+200000+10000) pages * 16384 B = 310000*16384 = 5,078,190,000 B ≈ 4.73 GiB
+	if !ok || v < 4.5 || v > 5.0 {
+		t.Fatalf("vm_stat parse = %v ok=%v, want ~4.7 GiB", v, ok)
+	}
+	if _, ok := parseVMStatFreeGB("garbage"); ok {
+		t.Fatal("junk input must report unmeasured")
+	}
+}
+
+func TestLiveProbesSmoke(t *testing.T) {
+	// Probes must never panic or lie: on any supported platform at least one
+	// of the disk/memory probes usually succeeds; a false ok is worse than
+	// unmeasured, so only sanity-check the values that arrive.
+	if v, ok := MemFreeGB(); ok && v < 0 {
+		t.Fatalf("MemFreeGB = %v", v)
+	}
+	if v, ok := DiskFreeGB("/"); ok && v < 0 {
+		t.Fatalf("DiskFreeGB = %v", v)
+	}
+	if v, ok := GPUUtilPercent(); ok && (v < 0 || v > 100) {
+		t.Fatalf("GPUUtilPercent = %v", v)
 	}
 }

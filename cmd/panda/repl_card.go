@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // /card and /nodes add — the REPL's window on the structured card edits and
@@ -18,17 +20,19 @@ package main
 //	/card manual add <id> --notify <contact>
 //	/card manual remove <id>
 //	/nodes add <host:port>        append peer + generate secret + live dial
+//	/nodes admit <id>             admit a LAN-discovered node (add + dial)
+//	/nodes verify <id>            mark a fingerprint as human-compared
 //	/nodes disconnect <addr>      remove a peer from the dial list
 //	/nodes invite                 print the join guide for the other machine
 
 import (
-	"net"
 	"os"
 	"slices"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/cardmut"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
@@ -465,7 +469,9 @@ func (r *repl) cmdNodesAdd(addr string) {
 		r.outln(i18n.T(r.loc, "repl.nodes.add.usage"))
 		return
 	}
-	if _, _, err := net.SplitHostPort(addr); err != nil {
+	// host:port dials ws:// (gated by the cleartext policy at dial time);
+	// an explicit ws(s):// URL carries its scheme; punch:<id> names a NAT peer.
+	if err := config.ValidatePeerAddr(addr); err != nil {
 		r.outln(i18n.Tf(r.loc, "cli.nodes.badaddr", "addr", addr))
 		return
 	}
@@ -504,6 +510,15 @@ func (r *repl) cmdNodesAdd(addr string) {
 		return
 	}
 	r.outln(i18n.Tf(r.loc, "cli.nodes.add.done", "addr", addr))
+
+	// Warn at write time when the recorded address would trip the dial-time
+	// cleartext gate — otherwise the refusal only surfaces as keepalive WARN
+	// lines in the daemon log, the "admitted but never connects" trap.
+	var allowCleartext bool
+	r.readConfig(func(c *config.Config) { allowCleartext = c.Network.AllowCleartext })
+	if core.CleartextDialError(addr, allowCleartext) != nil {
+		r.outln(i18n.Tf(r.loc, "cli.nodes.cleartext.hint", "addr", addr))
+	}
 
 	// Live dial through the in-process engine. Synchronous now: an async
 	// goroutine outlived dispatchWithIO, so its result writes hit the command

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package storage
 
 import (
@@ -411,6 +413,70 @@ func TestMigrateV20Columns(t *testing.T) {
 	}
 	if err := db.QueryRow(`SELECT links_json FROM employee_cache LIMIT 1`).Scan(&links); err == nil && links != "" {
 		t.Fatalf("fresh links_json = %q, want ''", links)
+	}
+}
+
+// V36 re-keys parked outbox custody from instance ids to stable "k:" keys
+// wherever the directory holds a proven pub_key (Batch-6). Rows for key-less
+// or unknown peers keep their instance key, and a node that helloed under two
+// instance ids collapses to one stable row rather than deadlocking the
+// migration on the (peer, task_id) primary key.
+func TestMigrateV36RekeysOutboxes(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Pre-migration shape: instance-id peers, two of them instances of the
+	// same stable identity (a restart that helloed twice).
+	for _, q := range []string{
+		`INSERT INTO employee_cache (id, pub_key, status, last_seen) VALUES ('b-old', 'pubB', 'offline', 0)`,
+		`INSERT INTO employee_cache (id, pub_key, status, last_seen) VALUES ('b-new', 'pubB', 'offline', 0)`,
+		`INSERT INTO employee_cache (id, pub_key, status, last_seen) VALUES ('keyless', '', 'offline', 0)`,
+		`INSERT INTO result_outbox (peer, task_id, payload_json, created_at) VALUES ('b-old', 't1', '{}', 1)`,
+		`INSERT INTO result_outbox (peer, task_id, payload_json, created_at) VALUES ('b-new', 't1', '{"r":2}', 2)`,
+		`INSERT INTO result_outbox (peer, task_id, payload_json, created_at) VALUES ('keyless', 't2', '{}', 1)`,
+		`INSERT INTO result_outbox (peer, task_id, payload_json, created_at) VALUES ('ghost', 't3', '{}', 1)`,
+		`INSERT INTO cancel_outbox (peer, task_id, reason, created_at) VALUES ('b-old', 't1', 'x', 1)`,
+		`INSERT INTO task_outbox (peer, task_id, payload_json, transport_type, ttl, created_at) VALUES ('b-old', 't9', '{}', 'dtn', 0, 1)`,
+		`INSERT INTO artifact_push_outbox (peer, hash, task_id, total, created_at) VALUES ('b-old', 'h1', 't1', 10, 1)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("seed: %v\n%s", err, q)
+		}
+	}
+
+	if err := migrateV36(migrationTx{db}); err != nil {
+		t.Fatalf("migrateV36: %v", err)
+	}
+
+	// Two instance rows for the same task collapse to one stable row.
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM result_outbox WHERE peer = 'k:pubB'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("stable rows = %d, want 1 (err %v)", n, err)
+	}
+	for _, tbl := range []string{"cancel_outbox", "task_outbox", "artifact_push_outbox"} {
+		if err := db.QueryRow(fmt.Sprintf(`SELECT count(*) FROM %s WHERE peer = 'k:pubB'`, tbl)).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("%s stable rows = %d, want 1 (err %v)", tbl, n, err)
+		}
+	}
+	// Instance-keyed rows for the keyed peer are gone; key-less and unknown
+	// peers are untouched.
+	if err := db.QueryRow(`SELECT count(*) FROM result_outbox WHERE peer IN ('b-old','b-new')`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("instance rows left = %d (err %v)", n, err)
+	}
+	for _, peer := range []string{"keyless", "ghost"} {
+		if err := db.QueryRow(`SELECT count(*) FROM result_outbox WHERE peer = ?`, peer).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("row for %s lost (n=%d, err=%v)", peer, n, err)
+		}
+	}
+	// Idempotent: a second application changes nothing.
+	if err := migrateV36(migrationTx{db}); err != nil {
+		t.Fatalf("migrateV36 rerun: %v", err)
 	}
 }
 

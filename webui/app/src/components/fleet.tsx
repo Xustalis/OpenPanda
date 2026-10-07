@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { t } from '../i18n'
 import { NodeInfo } from '../api/client'
 
@@ -83,6 +85,13 @@ function NodeList(props: { nodes: NodeInfo[]; selfNodeId?: string }) {
     if (ao !== bo) return ao - bo
     return (a.name ?? a.id).localeCompare(b.name ?? b.id)
   })
+  // The skew check diffs each peer's advertised version against this
+  // device's own row — the local row always reports the running build.
+  const selfVer = props.nodes.find(
+    (n) =>
+      (typeof props.selfNodeId === 'string' && n.id === props.selfNodeId) ||
+      Boolean(n.is_local),
+  )?.ver
   return (
     <div class="fleet-nodes" role="list">
       {sorted.map((n) => {
@@ -91,6 +100,11 @@ function NodeList(props: { nodes: NodeInfo[]; selfNodeId?: string }) {
           (typeof props.selfNodeId === 'string' && n.id === props.selfNodeId) ||
           Boolean(n.is_local)
         const cap = n.capacity ?? { max_concurrent_tasks: 0, current_tasks: 0 }
+        const skew = Boolean(n.ver && selfVer && n.ver !== selfVer)
+        const link =
+          n.transport != null && n.transport !== ''
+            ? n.transport + (n.rtt_ms ? ` ${n.rtt_ms}ms` : '')
+            : ''
         return (
           <div
             key={n.id}
@@ -101,6 +115,21 @@ function NodeList(props: { nodes: NodeInfo[]; selfNodeId?: string }) {
             <span class="name">
               {self ? `${n.name} · ${t('fleet.node.self')}` : n.name}
             </span>
+            {(link || (cap.queued_tasks ?? 0) > 0) && (
+              <span class="meta">
+                {link}
+                {(cap.queued_tasks ?? 0) > 0 &&
+                  `${link ? ' · ' : ''}${t('fleet.node.queued', { n: cap.queued_tasks ?? 0 })}`}
+              </span>
+            )}
+            {n.ver && (
+              <span
+                class={'ver' + (skew ? ' skew' : '')}
+                title={skew ? t('fleet.node.verSkewHint', { ver: n.ver, self: selfVer ?? '' }) : undefined}
+              >
+                v{n.ver}
+              </span>
+            )}
             <span class="load" aria-label={t('fleet.node.tasks', {
               cur: cap.current_tasks ?? 0,
               max: cap.max_concurrent_tasks ?? 0,

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package panel
 
 import (
@@ -9,6 +11,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // appSettingsJSON is the wire form of the four "app policy" config groups
@@ -34,8 +37,18 @@ type memoryLimitsJSON struct {
 	Project int `json:"project"`
 }
 
+// sandboxJSON reports the confinement actually in effect — read-only by
+// design: the mode comes from config.yaml, the backend from whatever the
+// platform provides (seatbelt/bwrap/""), and the UI must not pretend the
+// sandbox is stronger than it is.
 type sandboxJSON struct {
 	WorkPath string `json:"work_path"`
+	Mode     string `json:"mode"`
+	Backend  string `json:"backend"`
+	// Active is true only when a non-off mode meets a real platform backend.
+	// mode=standard with Backend()=="" is configured-but-unenforced — the UI
+	// must render that as "not in effect", not as a weaker kind of on.
+	Active bool `json:"active"`
 }
 
 // getAppSettings serves GET /api/settings/app — the live values of the four
@@ -57,7 +70,12 @@ func (h *handler) getAppSettings(w http.ResponseWriter, r *http.Request) {
 			},
 			ApprovalMode: c.Approval.NormalizedMode(),
 			ToolsPolicy:  c.Routing.NormalizedToolsPolicy(),
-			Sandbox:      &sandboxJSON{WorkPath: c.Storage.WorkPath},
+			Sandbox: &sandboxJSON{
+				WorkPath: c.Storage.WorkPath,
+				Mode:     c.Sandbox.NormalizedMode(),
+				Backend:  security.Backend(),
+				Active:   c.Sandbox.NormalizedMode() != "off" && security.Backend() != "",
+			},
 		}
 	})
 	writeJSON(w, out)
@@ -187,12 +205,20 @@ func (h *handler) putAppSettings(w http.ResponseWriter, r *http.Request) {
 		eng.SetRouterPolicy(inj, routing)
 	}
 
+	// sandbox.* is not part of this PUT — it is a startup decision (mode and
+	// backend), so the response echoes whatever the live config reports.
+	var sbMode string
+	var sbBackend string
+	h.readCfg(func(c *config.Config) {
+		sbMode = c.Sandbox.NormalizedMode()
+		sbBackend = security.Backend()
+	})
 	writeJSON(w, appSettingsJSON{
 		InjectionModel:  injection,
 		PreferredAgents: agents,
 		MemoryLimits:    limits,
 		ApprovalMode:    approval,
 		ToolsPolicy:     tools,
-		Sandbox:         &sandboxJSON{WorkPath: workPath},
+		Sandbox:         &sandboxJSON{WorkPath: workPath, Mode: sbMode, Backend: sbBackend, Active: sbMode != "off" && sbBackend != ""},
 	})
 }

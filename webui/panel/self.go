@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package panel
 
 import (
@@ -39,7 +41,24 @@ type selfJSON struct {
 	Version      string       `json:"version"`
 	Codename     string       `json:"codename,omitempty"`
 	Update       *updateSlice `json:"update,omitempty"`
+	Runtime      *runtimeJSON `json:"runtime,omitempty"`
 }
+
+// runtimeJSON reports this (panel/web) process's Go runtime — the surface a
+// user actually watches for load. The daemon's own numbers are not reachable
+// here (separate process, no IPC); `panda metrics --runtime` reads its pid
+// file + ps for that side.
+type runtimeJSON struct {
+	Goroutines int    `json:"goroutines"`
+	HeapAlloc  int64  `json:"heap_alloc_bytes"`
+	HeapSys    int64  `json:"heap_sys_bytes"`
+	NumGC      uint32 `json:"gc_cycles"`
+	UptimeSec  int64  `json:"uptime_sec"`
+}
+
+// processStart anchors the uptime field; wall-clock, so a host suspend
+// counts as uptime — honest for "how long has this process been up".
+var processStart = time.Now()
 
 // updateSlice is the panel's projection of updater.Status, with one
 // derived flag, `degraded`, added: it is true when the check loop has
@@ -81,6 +100,14 @@ type nodeRow struct {
 	Agents          map[string]nodeAgentDetail `json:"agents,omitempty"`
 	Capacity        ledger.Capacity            `json:"capacity"`
 	ResourceProfile *ledger.ResourceProfile    `json:"resource_profile,omitempty"`
+	// Fleet observability (Track 3): Ver is the node's advertised software
+	// version (empty until a new-protocol peer speaks); RTTMs/Transport are
+	// this node's measured edge toward that peer — filled by listNodes from
+	// the self row's link metrics, and unset for the local row and for
+	// peers reachable only through gossip.
+	Ver       string `json:"ver,omitempty"`
+	RTTMs     int64  `json:"rtt_ms,omitempty"`
+	Transport string `json:"transport,omitempty"`
 }
 
 type nodeAgentDetail struct {
@@ -104,6 +131,17 @@ func (h *handler) getSelf(w http.ResponseWriter, r *http.Request) {
 		RAMGB:    hwinfo.RAMGB(),
 		Version:  version.Version,
 		Codename: version.Codename,
+	}
+	{
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		out.Runtime = &runtimeJSON{
+			Goroutines: runtime.NumGoroutine(),
+			HeapAlloc:  int64(m.HeapAlloc),
+			HeapSys:    int64(m.HeapSys),
+			NumGC:      m.NumGC,
+			UptimeSec:  int64(time.Since(processStart).Seconds()),
+		}
 	}
 	if h.cfg != nil {
 		out.NodeName = h.cfg.Node.Name
@@ -166,6 +204,7 @@ func toNodeRow(n ledger.Node) nodeRow {
 		SchedulerTier: n.SchedulerTier,
 		Abilities:     n.Abilities(),
 		Capacity:      n.Capacity,
+		Ver:           n.Ver,
 	}
 	if n.LastSeen != 0 {
 		row.LastSeen = ts(n.LastSeen)

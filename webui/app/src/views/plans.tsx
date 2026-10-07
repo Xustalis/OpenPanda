@@ -1,8 +1,11 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useState } from 'preact/hooks'
 import { api, type PlanStage, type PlanSummary } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { navigate } from '../nav'
+import { Icon } from '../components/icons'
 
 /** The plan board — web parity with `/plans`. A plan is the set of tasks
  *  sharing a plan_id; the board summarizes each pipeline (stages, progress,
@@ -87,7 +90,7 @@ function StageRow(props: { stage: PlanStage }) {
       <div class="plan-stage-head">
         <span class={`badge state-${s.state}`}>{t(`state.${s.state}`, s.state)}</span>
         <span class="stage-name">{s.title || s.stage}</span>
-        {s.owner && <span class="stage-owner mono" title={s.owner}>⛁ {s.owner}</span>}
+        {s.owner && <span class="stage-owner mono" title={s.owner}><Icon name="network" size={11} /> {s.owner}</span>}
         <button
           class="btn small ghost"
           onClick={() => navigate({ view: 'detail', id: s.task_id })}

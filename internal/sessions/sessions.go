@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package sessions implements the web console's conversation model: each
 // session is one chat thread plus — when the working directory is a git
 // repository — a dedicated git worktree, so changes made while answering a
@@ -10,6 +12,7 @@
 package sessions
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +25,16 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
+
+// SummaryMarker prefixes the synthetic context note that carries a session's
+// compacted-history digest when it is replayed. It is wire contract with the
+// model, not UI text, so it stays English in every locale.
+const SummaryMarker = "[earlier conversation, summarized]"
+
+// DefaultHistoryBudget is the replay window (characters) a session's thread
+// is compacted to. It matches the bare-mode conversation budget: both feed
+// the same entry prompt, so the constraint is prompt size, not storage.
+const DefaultHistoryBudget = 24000
 
 // Turn is one stored conversation message.
 type Turn struct {
@@ -36,13 +49,22 @@ type Turn struct {
 // Session is one chat thread. Worktree/Branch are empty when the work path is
 // not a git repository (sessions then run in the shared work dir).
 type Session struct {
-	ID            string            `json:"id"`
-	Title         string            `json:"title"`
-	CreatedAt     time.Time         `json:"created_at"`
-	UpdatedAt     time.Time         `json:"updated_at"`
-	Branch        string            `json:"branch,omitempty"`
-	Worktree      string            `json:"worktree,omitempty"`
-	Project       string            `json:"project,omitempty"`
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Branch    string    `json:"branch,omitempty"`
+	Worktree  string    `json:"worktree,omitempty"`
+	Project   string    `json:"project,omitempty"`
+	// ParentID/ForkIndex describe a session forked from another: the child
+	// starts with a copy of the parent's first ForkIndex turns. Empty
+	// ParentID marks a root thread.
+	ParentID  string `json:"parent_id,omitempty"`
+	ForkIndex int    `json:"fork_index,omitempty"`
+	// Summary is a model-written digest of evicted turns. Compaction moves
+	// the oldest exchanges here instead of dropping them, so replays keep
+	// early context within the replay budget.
+	Summary       string            `json:"summary,omitempty"`
 	Turns         []Turn            `json:"turns"`
 	AgentSessions map[string]string `json:"agent_sessions,omitempty"`
 	Operation     *Operation        `json:"operation,omitempty"`
@@ -105,6 +127,76 @@ func (s *Store) Create(title string, project ...string) (*Session, error) {
 	return sess, nil
 }
 
+// Fork creates a child session that starts with a copy of the parent's
+// first atTurn turns (atTurn <= 0 or beyond the parent's length copies the
+// whole thread). The child is a new root for all purposes after creation —
+// later parent turns do not propagate — but it remembers where it split
+// (ParentID + ForkIndex) so listings can render the conversation tree.
+// The parent's title/project/summary carry over; its worktree does not —
+// callers carve a fresh one from the parent's branch when in a repository.
+func (s *Store) Fork(id string, atTurn int) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	parent, err := s.load(id)
+	if err != nil {
+		return nil, err
+	}
+	if atTurn <= 0 || atTurn > len(parent.Turns) {
+		atTurn = len(parent.Turns)
+	}
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		return nil, fmt.Errorf("sessions: mkdir: %w", err)
+	}
+	now := time.Now()
+	uid, err := util.UUIDv7()
+	if err != nil {
+		return nil, fmt.Errorf("sessions: id: %w", err)
+	}
+	child := &Session{
+		ID:        strings.ReplaceAll(uid, "-", "")[:16],
+		Title:     parent.Title,
+		Project:   parent.Project,
+		ParentID:  parent.ID,
+		ForkIndex: atTurn,
+		Summary:   parent.Summary,
+		Turns:     append([]Turn(nil), parent.Turns[:atTurn]...),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.save(child); err != nil {
+		return nil, err
+	}
+	return child, nil
+}
+
+// Children returns the sessions forked directly from id, oldest first.
+func (s *Store) Children(id string) ([]*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []*Session
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		sess, err := s.load(strings.TrimSuffix(e.Name(), ".json"))
+		if err != nil {
+			continue
+		}
+		if sess.ParentID == id {
+			out = append(out, sess)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
 // Get loads one session.
 func (s *Store) Get(id string) (*Session, error) {
 	s.mu.Lock()
@@ -156,6 +248,95 @@ func (s *Store) AppendTurn(id string, turn Turn) (*Session, error) {
 		return nil, err
 	}
 	return sess, nil
+}
+
+// SplitForBudget partitions a thread into (evicted, kept) where kept fits
+// budget characters of Text. Eviction is pair-aligned like the bare-mode
+// convo trim: a user turn never survives without its assistant answer, and
+// the newest exchange is never evicted.
+func SplitForBudget(turns []Turn, budget int) (evicted, kept []Turn) {
+	total := 0
+	for _, t := range turns {
+		total += len(t.Text)
+	}
+	kept = turns
+	for total > budget && len(kept) > 2 {
+		drop := 2
+		if len(kept)%2 == 1 {
+			drop = 1
+		}
+		for i := 0; i < drop && i < len(kept); i++ {
+			total -= len(kept[i].Text)
+		}
+		evicted = append(evicted, kept[:drop]...)
+		kept = kept[drop:]
+	}
+	return evicted, kept
+}
+
+// CompactHistory auto-compacts one session: while the thread exceeds budget,
+// the oldest exchanges are folded into the session's Summary by summarize
+// (the previous digest is prepended so the model merges it forward). It
+// returns the possibly-updated session. When the thread fits, when no
+// summarizer is given, or when summarization fails, the session is returned
+// unchanged — compaction degrades, it never corrupts.
+//
+// The summarizer is a model call (seconds, not microseconds), so it runs
+// outside the store lock: the split happens under the mutex, the digest
+// happens unlocked, and the write re-loads and re-splits so turns appended
+// meanwhile survive in the kept tail. A concurrent compaction that already
+// published a newer Summary wins — this call then returns the store's state
+// rather than overwriting with a stale digest.
+func (s *Store) CompactHistory(ctx context.Context, id string, budget int, summarize func(context.Context, []Turn) (string, error)) (*Session, error) {
+	s.mu.Lock()
+	sess, err := s.load(id)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	evicted, _ := SplitForBudget(sess.Turns, budget)
+	priorSummary := sess.Summary
+	s.mu.Unlock()
+	if len(evicted) == 0 || summarize == nil {
+		return sess, nil
+	}
+	input := evicted
+	if priorSummary != "" {
+		input = append([]Turn{{Role: "user", Text: SummaryMarker + "\n" + priorSummary}}, evicted...)
+	}
+	digest, err := summarize(ctx, input)
+	if err != nil || strings.TrimSpace(digest) == "" {
+		return sess, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fresh, err := s.load(id)
+	if err != nil {
+		return nil, err
+	}
+	if fresh.Summary != priorSummary {
+		return fresh, nil // another compaction published meanwhile
+	}
+	if len(fresh.Turns) < len(evicted) {
+		// A racing compaction wrote the SAME digest text (the CAS above
+		// compares Summary, not turn count): the thread is already trimmed —
+		// do not slice past its end.
+		return fresh, nil
+	}
+	// Turns only ever change by append (or by a compaction the CAS above
+	// already caught), so the evicted set is still a strict prefix of the
+	// stored thread: everything past it was not summarized and must be kept.
+	// The thread may sit slightly over budget until the next compaction —
+	// a soft overshoot, never a silent drop of unsummarized turns.
+	kept2 := append([]Turn(nil), fresh.Turns[len(evicted):]...)
+	fresh.Summary = strings.TrimSpace(digest)
+	fresh.Turns = kept2
+	fresh.UpdatedAt = time.Now()
+	if err := s.save(fresh); err != nil {
+		return nil, err
+	}
+	return fresh, nil
 }
 
 // SetOperation replaces the session's current durable operation snapshot.
@@ -357,7 +538,10 @@ func (s *Store) save(sess *Session) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path(sess.ID), data, 0o644)
+	// Atomic: a crash mid-write would leave a truncated file that fails to
+	// parse — invisible in List and unreadable in Get, i.e. a silently lost
+	// conversation.
+	return util.WriteFileAtomic(s.path(sess.ID), data, 0o644)
 }
 
 func truncateTitle(s string) string {

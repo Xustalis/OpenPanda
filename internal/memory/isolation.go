@@ -1,8 +1,12 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package memory
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
+
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
 // Isolation wall (design §17.2 and §17.5): Hermes memory must never enter a
@@ -47,7 +51,10 @@ func (i *Injector) ContextPack(project string) (string, error) {
 // workDir, when non-empty, is named too. The tree is the other half of what a
 // project *is*, and an agent that is told where the files are does not have to
 // guess which directory it landed in.
-func (i *Injector) ProjectManifest(project, workDir string) (string, error) {
+// loc is the prompt language the caller already resolved (see
+// PromptLanguagePolicy) — the manifest rides the agent prompt, so it follows
+// the same language as the hints around it instead of a hard-coded one.
+func (i *Injector) ProjectManifest(project, workDir string, loc i18n.Locale) (string, error) {
 	if i.projects == nil || project == "" {
 		return "", nil
 	}
@@ -60,15 +67,15 @@ func (i *Injector) ProjectManifest(project, workDir string) (string, error) {
 		return "", err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "当前项目：%s\n", project)
+	b.WriteString(i18n.Tf(loc, "prompt.project.current", "name", project))
 	if workDir != "" {
-		fmt.Fprintf(&b, "- 工作目录：%s\n", workDir)
+		b.WriteString(i18n.Tf(loc, "prompt.project.workdir", "dir", workDir))
 	}
 	if len(m.Entries) > 0 {
-		fmt.Fprintf(&b, "- 项目记忆：%s（%d 条，%d 字符）——如任务需要项目背景，请自行读取\n",
-			path, len(m.Entries), m.Chars())
+		b.WriteString(i18n.Tf(loc, "prompt.project.memory",
+			"path", path, "count", strconv.Itoa(len(m.Entries)), "chars", strconv.Itoa(m.Chars())))
 	} else {
-		fmt.Fprintf(&b, "- 项目记忆：%s（暂无内容）\n", path)
+		b.WriteString(i18n.Tf(loc, "prompt.project.memempty", "path", path))
 	}
 	return fenceMemoryData(b.String()), nil
 }

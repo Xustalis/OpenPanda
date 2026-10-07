@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Command panel runs the web control panel as a sidecar, reading the same
 // SQLite store the kernel daemon writes (see webui/README.md). Besides the
 // read-only queue it serves the panel's write paths: POST /api/ask (the
@@ -87,7 +89,7 @@ func main() {
 		fatal("migrate database", err)
 	}
 
-	store := core.NewTaskStore(db, logger)
+	store := core.NewSigningTaskStore(db, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -103,6 +105,7 @@ func main() {
 			CardPath:   *cardPath,
 			MCPCommand: *mcpCommand,
 			QueueTasks: true,
+			ConfigPath: *configPath,
 			Logger:     logger,
 		})
 		if err != nil {

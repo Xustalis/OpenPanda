@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 import (
@@ -30,7 +32,7 @@ func seedNeighbor(t *testing.T, c *Core, id string, neighbors []string, online b
 func seedAdjacency(t *testing.T, c *Core, neighbors []string) {
 	t.Helper()
 	raw, _ := json.Marshal(neighbors)
-	if err := ledger.UpdateAdjacency(c.db, c.nodeID, string(raw), "", ""); err != nil {
+	if err := ledger.UpdateAdjacency(c.db, c.nodeID, string(raw), "", "", ""); err != nil {
 		t.Fatalf("adjacency: %v", err)
 	}
 }

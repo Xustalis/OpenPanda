@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package ledger
 
 import (
@@ -231,6 +233,46 @@ func TestRegisterQueryResourceProfileRoundTrip(t *testing.T) {
 	}
 }
 
+// TestProjectsResidenceRoundTrip covers the residence set end-to-end at the
+// directory layer: a peer's card-advertised project list lands on its row,
+// heartbeat gossip refreshes it through UpdateAdjacency, and a silent update
+// (Register or a heartbeat without the field) leaves the stored set alone.
+func TestProjectsResidenceRoundTrip(t *testing.T) {
+	db := openLedgerDB(t)
+
+	if err := UpsertRemote(db, "peer-res", CapabilitySummary{
+		Device:   "peer-res",
+		Projects: []string{"panda", "blog"},
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	nodes, err := Query(db, "online", "")
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("query: %v (%d nodes)", err, len(nodes))
+	}
+	if len(nodes[0].Projects) != 2 || nodes[0].Projects[0] != "panda" {
+		t.Fatalf("projects = %v, want [panda blog]", nodes[0].Projects)
+	}
+
+	// Heartbeat gossip refreshes the set without a card upsert.
+	if err := UpdateAdjacency(db, "peer-res", "", "", "", `["panda"]`); err != nil {
+		t.Fatalf("update projects: %v", err)
+	}
+	nodes, _ = Query(db, "online", "")
+	if len(nodes[0].Projects) != 1 || nodes[0].Projects[0] != "panda" {
+		t.Fatalf("projects after gossip = %v, want [panda]", nodes[0].Projects)
+	}
+
+	// A gossip beat with no projects field leaves the stored set alone.
+	if err := UpdateAdjacency(db, "peer-res", `["x"]`, "", "", ""); err != nil {
+		t.Fatalf("update adjacency: %v", err)
+	}
+	nodes, _ = Query(db, "online", "")
+	if len(nodes[0].Projects) != 1 {
+		t.Fatalf("silent beat clobbered projects: %v", nodes[0].Projects)
+	}
+}
+
 func TestLoadCardRejectsInvalidResourceProfile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "capabilities.yaml")
 
@@ -395,5 +437,134 @@ func TestAbilityMatches(t *testing.T) {
 		if got := AbilityMatches(tc.declared, tc.required); got != tc.want {
 			t.Fatalf("AbilityMatches(%q, %q) = %v, want %v", tc.declared, tc.required, got, tc.want)
 		}
+	}
+}
+
+// TestRequiresForActionSpec pins the normalization every submission boundary
+// shares: the spec's exact target id leads requires so MatchActuator's
+// first-match ordering resolves the actuator the spec actually named, not a
+// sibling a vaguer token happened to hit first.
+func TestRequiresForActionSpec(t *testing.T) {
+	spec := &ActionSpec{TargetActuator: "hardware:servo_tilt", Action: "rotate"}
+
+	// Exact id leads, vague tokens stay for capability breadth.
+	got := RequiresForActionSpec([]string{"servo", "coding"}, spec)
+	if got[0] != "hardware:servo_tilt" || len(got) != 3 {
+		t.Fatalf("target should lead requires, got %v", got)
+	}
+
+	// An exact-id entry is folded, not doubled.
+	got = RequiresForActionSpec([]string{"hardware:servo_tilt", "servo"}, spec)
+	if len(got) != 2 || got[0] != "hardware:servo_tilt" || got[1] != "servo" {
+		t.Fatalf("duplicate target should fold, got %v", got)
+	}
+
+	// Empty requires gains just the target.
+	got = RequiresForActionSpec(nil, spec)
+	if len(got) != 1 || got[0] != "hardware:servo_tilt" {
+		t.Fatalf("nil requires should gain the target, got %v", got)
+	}
+
+	// Nil spec and target-less spec pass through untouched.
+	if got := RequiresForActionSpec([]string{"coding"}, nil); len(got) != 1 || got[0] != "coding" {
+		t.Fatalf("nil spec must not rewrite requires, got %v", got)
+	}
+	if got := RequiresForActionSpec([]string{"coding"}, &ActionSpec{Action: "rotate"}); len(got) != 1 || got[0] != "coding" {
+		t.Fatalf("target-less spec must not rewrite requires, got %v", got)
+	}
+}
+
+func TestHeartbeatIfChangedSkipsFreshUnchanged(t *testing.T) {
+	db := openLedgerDB(t)
+	if err := Register(db, testCard(), "opi3b", 1); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE employee_cache SET last_seen=?, status='online', capacity_json='{}' WHERE id='opi3b'`, storage.Now()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	stamp := func() int64 {
+		var v int64
+		if err := db.QueryRow(`SELECT last_seen FROM employee_cache WHERE id='opi3b'`).Scan(&v); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		return v
+	}
+	before := stamp()
+	if err := HeartbeatIfChanged(db, "opi3b", "online", "{}", 30); err != nil {
+		t.Fatalf("gated beat: %v", err)
+	}
+	if stamp() != before {
+		t.Fatal("fresh identical beat rewrote the row")
+	}
+	// Empty capacity must compare equal to the stored "{}" — the gate used to
+	// compare raw "" against it and rewrite on every beat.
+	if err := HeartbeatIfChanged(db, "opi3b", "online", "", 30); err != nil {
+		t.Fatalf("empty-capacity beat: %v", err)
+	}
+	if stamp() != before {
+		t.Fatal("empty capacity payload rewrote the row")
+	}
+	// A status change still writes, as does a stale row.
+	if err := HeartbeatIfChanged(db, "opi3b", "busy", "{}", 30); err != nil {
+		t.Fatalf("changed beat: %v", err)
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM employee_cache WHERE id='opi3b'`).Scan(&status); err != nil || status != "busy" {
+		t.Fatalf("status = %q, %v", status, err)
+	}
+	if _, err := db.Exec(`UPDATE employee_cache SET last_seen=0 WHERE id='opi3b'`); err != nil {
+		t.Fatalf("age row: %v", err)
+	}
+	if err := HeartbeatIfChanged(db, "opi3b", "busy", "{}", 30); err != nil {
+		t.Fatalf("stale beat: %v", err)
+	}
+	if stamp() == 0 {
+		t.Fatal("stale row was not refreshed")
+	}
+}
+
+func TestUpdateAdjacencyIfChanged(t *testing.T) {
+	db := openLedgerDB(t)
+	if err := Register(db, testCard(), "opi3b", 1); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	read := func(col string) string {
+		var v string
+		if err := db.QueryRow(`SELECT COALESCE(` + col + `,'') FROM employee_cache WHERE id='opi3b'`).Scan(&v); err != nil {
+			t.Fatalf("scan %s: %v", col, err)
+		}
+		return v
+	}
+	// Empty inputs leave columns alone — the absent-means-skip contract.
+	if err := UpdateAdjacencyIfChanged(db, "opi3b", "", "", "", ""); err != nil {
+		t.Fatalf("all-empty: %v", err)
+	}
+	if read("neighbors_json") != "" || read("projects_json") != "" {
+		t.Fatal("empty inputs touched columns")
+	}
+	// First real write lands.
+	if err := UpdateAdjacencyIfChanged(db, "opi3b", `["b"]`, "", `{"plan":1}`, ""); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	if read("neighbors_json") != `["b"]` || read("contacts_json") != `{"plan":1}` {
+		t.Fatalf("write landed wrong: %q %q", read("neighbors_json"), read("contacts_json"))
+	}
+	// Identical repeat is a no-op (verified via last_seen sentinel the update
+	// does not touch) and empty inputs still do not clobber.
+	if _, err := db.Exec(`UPDATE employee_cache SET last_seen=42 WHERE id='opi3b'`); err != nil {
+		t.Fatalf("sentinel: %v", err)
+	}
+	if err := UpdateAdjacencyIfChanged(db, "opi3b", `["b"]`, "", "", `["proj"]`); err != nil {
+		t.Fatalf("mixed write: %v", err)
+	}
+	if read("projects_json") != `["proj"]` {
+		t.Fatalf("projects_json = %q", read("projects_json"))
+	}
+	var sentinel int64
+	if err := db.QueryRow(`SELECT last_seen FROM employee_cache WHERE id='opi3b'`).Scan(&sentinel); err != nil {
+		t.Fatalf("sentinel read: %v", err)
+	}
+	if sentinel != 42 {
+		t.Fatal("update touched an unrelated column")
 	}
 }

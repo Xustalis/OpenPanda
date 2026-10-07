@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package artifact
 
 import (
@@ -163,10 +165,21 @@ func (s *Store) findPath(hash string) string {
 // is known — the name cannot be chosen before the content is hashed, and a
 // half-written file must never sit at a name that means "verified".
 func (s *Store) PackDir(tree string) (Manifest, error) {
+	return s.PackDirExcept(tree, nil, 0)
+}
+
+// PackDirExcept is PackDir with a directory-name skip set (see walkExcept)
+// and a caller byte limit: the tighter of limit and the store's configured
+// maxBytes applies, so a caller can bound one pack without retuning the pool.
+func (s *Store) PackDirExcept(tree string, skip map[string]bool, limit int64) (Manifest, error) {
+	max := s.maxBytes
+	if limit > 0 && (max == 0 || limit < max) {
+		max = limit
+	}
 	// Placement is chosen before packing starts: the walked content size is
 	// the conservative bound for the archive, and a volume that cannot hold
 	// it is skipped rather than filled mid-pack.
-	ents, err := walk(tree, s.maxBytes)
+	ents, err := walkExcept(tree, max, skip)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -188,7 +201,7 @@ func (s *Store) PackDir(tree string) (Manifest, error) {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after a successful rename
 
-	m, err := packEntries(ents, tree, tmp, s.maxBytes)
+	m, err := packEntries(ents, tree, tmp, max)
 	if err != nil {
 		tmp.Close()
 		return Manifest{}, err
@@ -328,12 +341,23 @@ func (s *Store) Put(want string, r io.Reader) (Manifest, error) {
 // an artifact may have been packed locally, or the file may have been damaged on
 // disk since it arrived.
 func (s *Store) Extract(hash, dst string) (Manifest, error) {
+	return s.ExtractExcept(hash, dst, nil)
+}
+
+// ExtractExcept is Extract with a top-level skip set: archive entries under a
+// named top directory are not materialized. It is the return-leg counterpart
+// of PackDirExcept — the pack side strips those entries for weight, the
+// extract side strips them for safety: a valid (hash-correct, traversal-free)
+// archive from a peer could still contain .git/hooks or a poisoned
+// .git/config, and unpacking it straight onto the user's checkout would hand
+// the sender control of the repository's plumbing.
+func (s *Store) ExtractExcept(hash, dst string, skip map[string]bool) (Manifest, error) {
 	f, err := s.Open(hash)
 	if err != nil {
 		return Manifest{}, err
 	}
 	defer f.Close()
-	m, err := unpack(f, dst, s.maxBytes, s.minFree)
+	m, err := unpack(f, dst, s.maxBytes, s.minFree, skip)
 	if err != nil {
 		return Manifest{}, err
 	}

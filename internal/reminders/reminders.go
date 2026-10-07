@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package reminders implements scheduled user reminders (design P1-28):
 // "提醒我 5 分钟后开会" — a reminder is persisted in SQLite, and a Scanner
 // running in the daemon (and/or the web panel) claims each reminder when it
@@ -13,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -69,6 +72,7 @@ func (s *Store) AddEvery(ctx context.Context, message string, dueAt time.Time, e
 	if err != nil {
 		return Reminder{}, fmt.Errorf("add reminder: %w", err)
 	}
+	notifyScanners()
 	return r, nil
 }
 
@@ -119,6 +123,9 @@ func (s *Store) Delete(ctx context.Context, id int64) (bool, error) {
 		return false, err
 	}
 	n, err := res.RowsAffected()
+	if n > 0 {
+		notifyScanners()
+	}
 	return n > 0, err
 }
 
@@ -222,6 +229,29 @@ type Scanner struct {
 	Every  time.Duration
 	OnFire func(Reminder)
 	Logger *slog.Logger
+	wake   chan struct{}
+}
+
+// liveScanners registers running scanners so a same-process Add/Delete can
+// wake them out of the idle sleep — a reminder typed into the web console or
+// the engine's tool fires on time even while the empty-board backoff is in
+// effect. Adds from a sibling process still surface within idleScanInterval.
+var liveScanners = struct {
+	mu  sync.Mutex
+	set map[*Scanner]struct{}
+}{set: map[*Scanner]struct{}{}}
+
+// notifyScanners wakes every scanner running in this process. Called on the
+// write path (Add/AddEvery/Delete); a no-op where none runs (bare CLI).
+func notifyScanners() {
+	liveScanners.mu.Lock()
+	defer liveScanners.mu.Unlock()
+	for s := range liveScanners.set {
+		select {
+		case s.wake <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // NewScanner builds a Scanner with sensible defaults (15s cadence).
@@ -232,7 +262,7 @@ func NewScanner(store *Store, every time.Duration, onFire func(Reminder), logger
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	}
-	return &Scanner{Store: store, Every: every, OnFire: onFire, Logger: logger}
+	return &Scanner{Store: store, Every: every, OnFire: onFire, Logger: logger, wake: make(chan struct{}, 1)}
 }
 
 // scanOnce claims everything currently due and fires it. It is also the probe
@@ -254,27 +284,44 @@ func (s *Scanner) scanOnce(ctx context.Context) {
 	}
 }
 
+// idleScanInterval is the ceiling for an empty board: nothing pending means
+// nothing can fire, so polling at the normal cadence is pure churn across the
+// daemon, web console and panel processes that each run a scanner. 60s bounds
+// how long a reminder added by a *sibling* process takes to be noticed on an
+// empty board — same-process adds wake the scanner via notifyScanners.
+const idleScanInterval = 60 * time.Second
+
 // sleepFor computes how long until the next wake: the earlier of the polling
 // ceiling (s.Every — the safety net for rows added by a process that cannot
-// signal us) and the next pending due_at. A busy board wakes promptly; an idle
-// one sleeps the full cadence instead of polling a dead table.
+// signal us) and the next pending due_at. A busy board wakes promptly; a
+// board with pending rows sleeps at most Every (cross-process adds still land
+// within the cadence); an empty board relaxes to idleScanInterval.
 func (s *Scanner) sleepFor(ctx context.Context) time.Duration {
-	d := s.Every
-	if next, ok := s.Store.NextDue(ctx); ok {
-		if until := time.Until(next); until < d {
-			d = max(until, time.Second)
-		}
+	next, ok := s.Store.NextDue(ctx)
+	if !ok {
+		return idleScanInterval
 	}
-	return d
+	if until := time.Until(next); until < s.Every {
+		return max(until, time.Second)
+	}
+	return s.Every
 }
 
 // Run loops until ctx is cancelled. Each iteration fires what is due, then
-// sleeps until the next scheduled row (or the Every ceiling, whichever comes
+// sleeps until the next scheduled row (or the ceiling, whichever comes
 // first) — so a reminder lands within a second of its due time when the board
 // is quiet, while errors and empty boards fall back to the cadence. Errors are
 // logged and retried — a transient database hiccup must not kill reminder
 // delivery.
 func (s *Scanner) Run(ctx context.Context) {
+	liveScanners.mu.Lock()
+	liveScanners.set[s] = struct{}{}
+	liveScanners.mu.Unlock()
+	defer func() {
+		liveScanners.mu.Lock()
+		delete(liveScanners.set, s)
+		liveScanners.mu.Unlock()
+	}()
 	for {
 		s.scanOnce(ctx)
 		t := time.NewTimer(s.sleepFor(ctx))
@@ -283,6 +330,8 @@ func (s *Scanner) Run(ctx context.Context) {
 			t.Stop()
 			return
 		case <-t.C:
+		case <-s.wake:
+			t.Stop()
 		}
 	}
 }

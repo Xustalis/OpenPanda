@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package core hosts the node lifecycle: registration, heartbeat loop, and
 // graceful shutdown. Message routing and task state live alongside it in
 // later phases.
@@ -11,11 +13,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"sync"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/hwinfo"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/util"
+	"github.com/Xustalis/OpenPanda/internal/version"
 )
 
 // NodeID is this node's stable identifier. Phase 0 uses the configured name;
@@ -66,6 +72,11 @@ type Node struct {
 	tier   int
 	logger *slog.Logger
 	hbTick time.Duration
+	// beatMu guards lastBeatJSON/lastBeatAt — the change-gate that keeps an
+	// idle heartbeat from rewriting an identical self row every tick.
+	beatMu       sync.Mutex
+	lastBeatJSON string
+	lastBeatAt   time.Time
 }
 
 // NewNode builds a Node with an optional card. A nil card is allowed for a
@@ -117,12 +128,55 @@ func (n *Node) RunHeartbeat(ctx context.Context) {
 
 func (n *Node) beat(ctx context.Context) {
 	capJSON, _ := n.capacitySnapshot(ctx)
-	if err := ledger.Heartbeat(n.db, n.id, "online", capJSON); err != nil {
+	status := "online"
+	if n.draining(ctx) {
+		status = "draining"
+	}
+	n.beatMu.Lock()
+	defer n.beatMu.Unlock()
+	// Skip the rewrite when the advertised payload is unchanged and the row
+	// is still fresh: the same UPDATE every 15s is pure WAL churn on an idle
+	// node, and every peer's view of our liveness comes from the wire
+	// heartbeat frames (sent regardless), not this row. 30s stays under the
+	// panel's 45s self-liveness bound and the 90s stale-peer sweep, so no
+	// consumer sees the row age out.
+	// The drain flag joins the dedup key: a toggle must rewrite the row on the
+	// next beat, not wait out the 30s refresh floor with a stale status.
+	if capJSON+status == n.lastBeatJSON && time.Since(n.lastBeatAt) < selfRowRefresh {
+		return
+	}
+	if err := ledger.Heartbeat(n.db, n.id, status, capJSON); err != nil {
 		n.logger.Warn("heartbeat", "err", err)
 		return
 	}
+	// Stamp our own version on the self row too (Track 3): peers learn it
+	// from the wire beat, but anything reading this node's directory
+	// directly — the panel's skew check, panda status — needs it here.
+	if err := ledger.SetNodeVerIfChanged(n.db, n.id, version.Version); err != nil {
+		n.logger.Warn("stamp self version", "err", err)
+	}
+	n.lastBeatJSON, n.lastBeatAt = capJSON+status, time.Now()
 	n.logger.Debug("heartbeat", "node", n.id, "capacity", capJSON)
 }
+
+// draining reports whether this node is in maintenance drain (Track 2): the
+// heartbeat advertises "draining" instead of "online" so peers stop routing
+// new work here, inbound delegates are declined, and the local queue stops
+// claiming fresh tasks — while in-flight work runs to completion. The flag
+// lives in the shared settings table so `panda nodes drain` (a separate
+// process) can flip a running daemon without a control channel.
+func (n *Node) draining(ctx context.Context) bool {
+	var v string
+	err := n.db.QueryRowContext(ctx,
+		`SELECT value FROM settings WHERE key='node_drain'`).Scan(&v)
+	return err == nil && v == "1"
+}
+
+// selfRowRefresh is the floor under which an unchanged self row is still
+// rewritten: consumers that read last_seen (the panel's 45s "running" test,
+// the 90s ExpireStale sweep, freshness-weighted scoring) must not watch the
+// self row age out just because the payload was identical.
+const selfRowRefresh = 30 * time.Second
 
 // capacitySnapshot returns the live capacity JSON (with the real active-task
 // count, not the static card value) plus the derived 0-1 load. The DCPS
@@ -137,6 +191,30 @@ func (n *Node) capacitySnapshot(ctx context.Context) (string, float64) {
 	} else {
 		capacity.CurrentTasks = active
 	}
+	// Queue depth (Track 3): the accepted-but-waiting backlog. Peers and the
+	// fleet panel read it alongside CurrentTasks — an idle-looking node with
+	// a deep queue is not actually idle.
+	var queued int
+	if err := n.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tasks WHERE state='queued'`).Scan(&queued); err == nil {
+		capacity.QueuedTasks = queued
+	}
+	// Live compute metrics (Track 2): the static card declares the machine;
+	// these samples say what it can absorb right now. A failed probe reports
+	// -1 ("unmeasured"), never a false zero a peer would read as exhausted.
+	live := ledger.LiveMetrics{MemFreeGB: -1, DiskFreeGB: -1, GPUUtil: -1}
+	if v, ok := hwinfo.MemFreeGB(); ok {
+		live.MemFreeGB = v
+	}
+	if dir, err := os.Getwd(); err == nil {
+		if v, ok := hwinfo.DiskFreeGB(dir); ok {
+			live.DiskFreeGB = v
+		}
+	}
+	if v, ok := hwinfo.GPUUtilPercent(); ok {
+		live.GPUUtil = v
+	}
+	capacity.Live = &live
 	capJSON, err := json.Marshal(capacity)
 	if err != nil {
 		n.logger.Warn("marshal capacity", "err", err)

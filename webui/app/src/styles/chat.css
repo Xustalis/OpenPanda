@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
 /* Chat workbench — the core surface. Layout: session rail | pane with a
    centered reading column and a docked composer. */
 
@@ -333,8 +335,7 @@
   color: var(--text);
   border-color: var(--accent-border);
   background: var(--bg-hover);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-sm);
 }
 .scroll-bottom-icon {
   font-size: 14px;

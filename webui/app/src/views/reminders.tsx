@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useState } from 'preact/hooks'
 import { api, type Reminder } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'

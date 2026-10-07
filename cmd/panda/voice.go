@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda voice` — the hands-free entry surface. On the Orange Pi sitting on a
@@ -76,6 +78,7 @@ func runVoice(args []string) {
 		CardPath:   *cardPath,
 		MCPCommand: *mcpCmd,
 		ReplyASCII: isLinuxConsole(),
+		ConfigPath: *configPath,
 		// Voice is a long-lived listening loop: same reasoning as the REPL —
 		// peers dial in the background, the mic opens without dead air.
 		AsyncPeers: true,
@@ -133,7 +136,7 @@ func runVoice(args []string) {
 			}
 			continue
 		}
-		history = appendConvo(history, loc, text, out)
+		history = appendConvo(history, loc, text, out, engine)
 		speakBack(ctx, loc, out, *mute)
 		if *once {
 			return

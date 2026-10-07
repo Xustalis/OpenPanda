@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# panda-servo — OpenPanda reference actuator driver for a GPIO PWM servo.
+#
+# Usage:
+#   panda-servo --angle DEGREES [--pin BCM] [--hold SECONDS] [--min-pulse MS] [--max-pulse MS]
+#
+# Drives a hobby servo through gpiozero (RPi.GPIO / lgpio pin factory). Angle is
+# 0-180. The servo is attached only for the hold window, then released so a
+# lightweight node does not keep the PWM channel open forever.
+#
+# Exit codes: 0 ok · 2 bad arguments · 3 backend unavailable (gpiozero or a
+# pin factory missing — the capability card should then drop this actuator
+# via PruneUnavailableActuators) · 1 hardware/driver error.
+
+import argparse
+import sys
+import time
+
+MAX_HOLD_SECONDS = 30.0
+
+
+def fail(code: int, msg: str) -> None:
+    print(f"panda-servo: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="rotate a GPIO PWM servo to an angle")
+    ap.add_argument("--angle", type=float, required=True, help="target angle 0-180")
+    ap.add_argument("--pin", type=int, default=12, help="BCM GPIO pin (default 12)")
+    ap.add_argument("--hold", type=float, default=0.5,
+                    help=f"seconds to keep the position (max {MAX_HOLD_SECONDS:g})")
+    ap.add_argument("--min-pulse", type=float, default=1.0, help="min pulse width ms")
+    ap.add_argument("--max-pulse", type=float, default=2.0, help="max pulse width ms")
+    a = ap.parse_args()
+
+    if not 0.0 <= a.angle <= 180.0:
+        fail(2, f"--angle {a.angle:g} out of range 0-180")
+    if not 0 < a.hold <= MAX_HOLD_SECONDS:
+        fail(2, f"--hold {a.hold:g} out of range (0,{MAX_HOLD_SECONDS:g}]")
+    if not (0 <= a.pin <= 27):
+        fail(2, f"--pin {a.pin} is not a BCM GPIO number (0-27)")
+
+    try:
+        from gpiozero import AngularServo
+    except ImportError:
+        fail(3, "gpiozero not installed — pip install gpiozero (or lgpio on Lite)")
+
+    # Normalize degrees into AngularServo's -1..+1 domain.
+    value = (a.angle / 90.0) - 1.0
+    try:
+        servo = AngularServo(
+            a.pin,
+            min_angle=-90,
+            max_angle=90,
+            min_pulse_width=a.min_pulse / 1000.0,
+            max_pulse_width=a.max_pulse / 1000.0,
+        )
+        try:
+            servo.angle = value * 90.0
+            time.sleep(a.hold)
+        finally:
+            servo.detach()
+            servo.close()
+    except Exception as e:  # pin factory, permission, wiring errors
+        msg = str(e)
+        if "pin factory" in msg.lower() or "FactoryFallback" in type(e).__name__:
+            fail(3, f"no GPIO pin factory available: {e}")
+        fail(1, f"servo failed: {e}")
+
+    print(f"servo pin={a.pin} angle={a.angle:g} held={a.hold:g}s")
+
+
+if __name__ == "__main__":
+    main()

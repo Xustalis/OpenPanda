@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package scheduler
 
 import (
@@ -33,7 +35,14 @@ type Decision struct {
 // It is RouteAt evaluated at the current time; tests and callers that need a
 // deterministic freshness discount use RouteAt.
 func Route(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, req ledger.ResourceProfile, preferred string) Decision {
-	return RouteAt(self, chain, employees, localMatch, required, req, preferred, time.Now().Unix())
+	return RouteAtP(self, chain, employees, localMatch, required, req, preferred, "", time.Now().Unix())
+}
+
+// RouteP is Route plus the task's project name, which feeds the residence
+// term in the score (§6.3): a node holding a checkout of that project wins a
+// bonus because the tree does not have to cross the wire.
+func RouteP(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, req ledger.ResourceProfile, preferred, project string) Decision {
+	return RouteAtP(self, chain, employees, localMatch, required, req, preferred, project, time.Now().Unix())
 }
 
 // IsSelfRow reports whether the capability-directory row id names the same
@@ -135,9 +144,35 @@ const localBias = 0.15
 // task further downstream even though it cannot execute it; only when neither
 // exists does it decline.
 func RouteAt(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, req ledger.ResourceProfile, preferred string, now int64) Decision {
-	seen := make(map[string]bool, len(chain))
-	for _, n := range chain {
-		seen[n] = true
+	return RouteAtP(self, chain, employees, localMatch, required, req, preferred, "", now)
+}
+
+// diskStarvedFloorGB is the measured-free-space floor a node must report to
+// stay a candidate: below it, results and worktree artifacts cannot reliably
+// land. Deliberately small — it is a refuse-to-fail-there floor, not a sizing
+// estimate of the task's output.
+const diskStarvedFloorGB = 0.5
+
+// diskStarved reports whether a node's OWN live sample shows a nearly full
+// work disk. Only a measured value counts: the -1 sentinel and a nil live
+// block both mean "no data", and absence of data must not exclude a node
+// (pre-live-metrics peers and probe-less minimal installs would all vanish).
+func diskStarved(n ledger.Node) bool {
+	return n.Capacity.Live != nil &&
+		n.Capacity.Live.DiskFreeGB >= 0 &&
+		n.Capacity.Live.DiskFreeGB < diskStarvedFloorGB
+}
+
+// RouteAtP is RouteAt plus the task's project name — see RouteP.
+func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, req ledger.ResourceProfile, preferred, project string, now int64) Decision {
+	// The chain is usually empty (a root task): skip the map entirely rather
+	// than allocating one per route decision just to read from it.
+	var seen map[string]bool
+	if len(chain) > 0 {
+		seen = make(map[string]bool, len(chain))
+		for _, n := range chain {
+			seen[n] = true
+		}
 	}
 
 	// This node's own directory row, which carries the capacity its heartbeat
@@ -162,6 +197,13 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 			// choosing among the same directory this node already sees.
 			continue
 		}
+		if diskStarved(n) {
+			// The node's own live sample says its work disk is nearly full:
+			// it cannot write results or adopt a worktree, so forwarding
+			// would only fail there. Measured data only — an unprobed peer
+			// stays a candidate like a pre-live-metrics node always was.
+			continue
+		}
 		if n.Matches(required) || len(required) == 0 {
 			matching = append(matching, n)
 		} else if n.SchedulerTier > 1 {
@@ -182,7 +224,7 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 	// "nobody can do this" would send such a stage to a sub-scheduler or decline
 	// it, when in fact every node can run it and only the hardware filter has an
 	// opinion.
-	canLocal := (len(required) == 0 || localMatch(required)) && (!haveSelf || selfNode.Fits(req))
+	canLocal := (len(required) == 0 || localMatch(required)) && (!haveSelf || (selfNode.Fits(req) && !diskStarved(selfNode)))
 
 	// A named node is authoritative when it can take the task; otherwise fall
 	// through to scored ranking so the task still runs somewhere capable. Match
@@ -206,7 +248,7 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 		}
 	}
 
-	target, peerScore := pickBestScored(matching, now, preferred)
+	target, peerScore := pickBestScored(matching, now, preferred, project)
 	if canLocal {
 		if !haveSelf {
 			// No row of our own to score against. Absence of evidence about our
@@ -214,7 +256,7 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 			// registers itself, so this is the fixture case: stay local.
 			return Decision{Action: ActionLocal}
 		}
-		if localScore := score(selfNode, now, preferred) + localBias; target == "" || localScore >= peerScore {
+		if localScore := score(selfNode, now, preferred, project) + localBias; target == "" || localScore >= peerScore {
 			return Decision{Action: ActionLocal}
 		}
 	}
@@ -233,7 +275,7 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 			return Decision{Action: ActionForward, Target: hop}
 		}
 	}
-	if sub, _ := pickBestScored(subs, now, preferred); sub != "" {
+	if sub, _ := pickBestScored(subs, now, preferred, project); sub != "" {
 		return Decision{Action: ActionForward, Target: sub}
 	}
 	return Decision{

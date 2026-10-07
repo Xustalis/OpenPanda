@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package askengine is the unified entry engine shared by `panda ask` (CLI)
 // and the web panel: one prompt in, three intents out — answer (pure LLM
 // reply), tool_call (memory tools, executed and fed back), task (submitted to
@@ -11,10 +13,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,6 +71,11 @@ type Options struct {
 	// One-shot callers (panda ask) leave it off — their routing decision runs
 	// immediately and needs the conns settled first.
 	AsyncPeers bool
+	// ConfigPath is the file cfg was loaded from — the same path the caller
+	// passed to config.Load. It joins the sandbox's write-deny set so a
+	// sandboxed subprocess cannot rewrite the node's own configuration.
+	// Empty resolves like config.Load does (flag > env > user > system).
+	ConfigPath string
 	// Logger defaults to a warn-level stderr handler.
 	Logger *slog.Logger
 }
@@ -114,6 +123,12 @@ type Engine struct {
 	// guards every access.
 	cardMu   sync.RWMutex
 	cardPath string
+
+	// configPath mirrors Options.ConfigPath (resolved like config.Load when
+	// empty): the file cfg was read from, enrolled in the sandbox's
+	// write-deny set so a spawned subprocess cannot rewrite the node's own
+	// configuration.
+	configPath string
 
 	// cfgMu guards post-init mutation of the shared *config.Config: the REPL
 	// aliases it as r.cfg and rewrites hot fields (model, peers, approval
@@ -217,10 +232,20 @@ func (e *Engine) recordModelSuccess(name string) {
 }
 
 // healthyClient returns an active client: the primary if healthy, or the first
-// healthy fallback when the primary is in circuit-breaker cooldown.
+// healthy fallback when the primary is in circuit-breaker cooldown. A missing
+// primary (model-less config with a populated models list) is served by the
+// first usable fallback rather than failing the ask outright.
 func (e *Engine) healthyClient() (*entry.Client, string) {
 	client := e.client.Load()
-	if client == nil || e.isModelHealthy(client.ModelName()) {
+	if client == nil {
+		for _, fb := range e.getFallbacks() {
+			if e.isModelHealthy(fb.ModelName()) {
+				return fb, fb.ModelName()
+			}
+		}
+		return nil, ""
+	}
+	if e.isModelHealthy(client.ModelName()) {
 		return client, ""
 	}
 	for _, fb := range e.getFallbacks() {
@@ -355,7 +380,7 @@ func (e *Engine) setCardPath(path string) {
 func (e *Engine) CancelTask(ctx context.Context, taskID string) ([]string, error) {
 	sched := e.sched.Load()
 	if sched == nil {
-		return core.NewTaskStore(e.db, e.logger).CancelCascade(ctx, taskID)
+		return core.NewSigningTaskStore(e.db, e.logger).CancelCascade(ctx, taskID)
 	}
 	return sched.CancelTree(ctx, taskID)
 }
@@ -363,7 +388,7 @@ func (e *Engine) CancelTask(ctx context.Context, taskID string) ([]string, error
 // TaskStore returns the task store on the engine's database, for callers that
 // need read-level access (reference resolution) without a scheduler core.
 func (e *Engine) TaskStore() *core.TaskStore {
-	return core.NewTaskStore(e.db, e.logger)
+	return core.NewSigningTaskStore(e.db, e.logger)
 }
 
 // SetOnReview installs the callback fired when a task enters review — i.e. when
@@ -438,6 +463,14 @@ type Result struct {
 	// local run, the peer's id for a delegated one. Empty when the result
 	// never reached an executor (route miss, early failure).
 	Executor string
+	// Question carries the agent's clarification when the task parked in
+	// review on a PANDA_QUESTION marker (core §4.3): the surface should show
+	// it verbatim — it is the one thing standing between the task and done.
+	Question string
+	// FilesChanged lists the workdir-relative paths the run touched — the
+	// result's footprint, so a surface can show what moved instead of trusting
+	// the agent's prose.
+	FilesChanged []string
 	// EntryModel is the model that served this ask's entry calls (triage,
 	// classify, answer stream) — the configured primary, or the fallback the
 	// circuit breaker routed to mid-ask. UI surfaces render it next to the
@@ -593,12 +626,22 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 
 	client, err := entry.NewClient(cfg.Model)
 	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("askengine: model client: %w", err)
+		if !errors.Is(err, entry.ErrNoModel) {
+			db.Close()
+			return nil, fmt.Errorf("askengine: model client: %w", err)
+		}
+		// No model configured: the engine still serves the model-free surface —
+		// task/plan enqueue, cancel/approve, the queue board, session ops — on
+		// nodes whose only job is executing delegated work (a Micro edge node
+		// has no API key and needs none). Only the ask path wants a client, and
+		// it fails lazily there with ErrNoModel instead of taking down New.
+		client = nil
 	}
-	// Disk cache for entry-model decisions (classify/supervise): identical
-	// inputs skip the LLM call entirely. Best-effort by design.
-	client.SetDiskCache(entry.NewDiskCache(db))
+	if client != nil {
+		// Disk cache for entry-model decisions (classify/supervise): identical
+		// inputs skip the LLM call entirely. Best-effort by design.
+		client.SetDiskCache(entry.NewDiskCache(db))
+	}
 
 	var skillStore *skills.Store
 	if cfg != nil && strings.TrimSpace(cfg.Storage.SkillsPath) != "" {
@@ -633,6 +676,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		asyncPeers:     opts.AsyncPeers,
 		replyASCII:     opts.ReplyASCII,
 		cardPath:       opts.CardPath,
+		configPath:     config.ResolvePath(opts.ConfigPath),
 		locale:         loc,
 		explicitLocale: explicitLocale,
 	}
@@ -774,6 +818,24 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	sched.SetWorkDir(e.cfg.Storage.WorkPath)
 	sched.SetHostStatePaths(hostStatePaths(e.cfg))
 	sched.SetSharedSecret(e.cfg.Network.SharedSecret)
+	sched.SetAllowCleartext(e.cfg.Network.AllowCleartext)
+	// OS sandbox (sandbox.*): the same contract the daemon installs — the
+	// environment filter always applies, and a configured mode wraps every
+	// subprocess this engine spawns in the platform's confinement with the
+	// node's own state write-protected. Called unconditionally on every
+	// scheduler init (not just when a mode is set) so a config reload that
+	// turned the sandbox off resets the process-wide base policy instead of
+	// leaving the previous mode armed.
+	if backend := commander.SetSandboxConfig(e.cfg.Sandbox,
+		commander.ProtectedPaths(e.cfg, e.configPath, cardPath)); e.cfg.Sandbox.NormalizedMode() != "off" {
+		if backend == "" {
+			e.logger.Warn("sandbox mode configured but no backend on this platform",
+				"mode", e.cfg.Sandbox.NormalizedMode())
+		} else {
+			e.logger.Info("subprocess sandbox enabled",
+				"mode", e.cfg.Sandbox.NormalizedMode(), "backend", backend)
+		}
+	}
 	sched.SetTimeouts(e.cfg.Timeouts)
 
 	if e.schedCancel != nil {
@@ -783,6 +845,17 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	e.schedCtx = schedCtx
 	e.schedCancel = cancel
 	e.sched.Store(sched) // store last: a non-nil load implies ctx/cancel set
+
+	// The embedded core owns the LAN-discovery listener in a process that
+	// never runs `panda daemon` (the interactive REPL/TUI seat): without it
+	// the seat sees only fleet rows it already paired, never the pending
+	// beacons discovery exists to surface. A port held by a daemon on the
+	// same box degrades to warn-and-idle — the loser keeps its fleet, loses
+	// nothing else.
+	if e.cfg.Network.DiscoveryAddr != "off" {
+		sched.EnsureNodeKey()
+		go sched.RunDiscovery(schedCtx, e.cfg.Network.DiscoveryAddrOrDefault(), e.cfg.Network.ListenAddr)
+	}
 	e.setCardPath(cardPath)
 	// Re-arm the review hook on the new core's store: the notification that a
 	// task is waiting for the user must not be lost to a card reload.
@@ -858,10 +931,17 @@ func (e *Engine) MaintainPeers(ctx context.Context) {
 	for _, peer := range peers {
 		go func(p string) {
 			backoff := time.Second
+			// Same throttle as the daemon's keepalive loop: a dead peer is
+			// not news on every retry — first failure, every Nth thereafter,
+			// then one recovery line.
+			failures := 0
 			for {
 				err := sched.MaintainPeer(ctx, p)
 				if err != nil {
-					e.logger.Warn("peer dial failed", "peer", p, "err", err)
+					failures++
+					if failures == 1 || failures%peerFailLogEvery == 0 {
+						e.logger.Warn("peer dial failed", "peer", p, "err", err, "consecutive", failures)
+					}
 					select {
 					case <-ctx.Done():
 						return
@@ -869,6 +949,10 @@ func (e *Engine) MaintainPeers(ctx context.Context) {
 					}
 					backoff = min(backoff*2, 30*time.Second)
 					continue
+				}
+				if failures > 0 {
+					e.logger.Info("peer reachable again", "peer", p, "after_failures", failures)
+					failures = 0
 				}
 				backoff = time.Second
 				select {
@@ -919,6 +1003,10 @@ const (
 	ProgressExec  ProgressKind = "exec"  // the agent/adapter started running
 	ProgressJudge ProgressKind = "judge" // a supervision round is evaluating the result
 )
+
+// peerFailLogEvery bounds the per-peer WARN stream a dead peer produces in
+// MaintainPeers — the same policy the daemon's keepalive loop uses.
+const peerFailLogEvery = 20
 
 // Progress is one structured progress event: the action, and the name of what
 // it acts on (a task title, a plan goal, a tool name). The engine deliberately
@@ -1068,8 +1156,15 @@ func (e *Engine) AskTurnsSession(ctx context.Context, history []entry.Turn, prom
 func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, prompt string, scope AskScope, authorize bool, cb StreamCallbacks) (res *Result, err error) {
 	workDir := scope.WorkDir
 	client, fallbackUsed := e.healthyClient()
+	if client == nil {
+		return nil, entry.ErrNoModel
+	}
 	if fallbackUsed != "" {
-		e.logger.Info("askengine: primary model in circuit breaker cooldown, routing directly to fallback", "primary", e.client.Load().ModelName(), "fallback", fallbackUsed)
+		primaryName := "<none>"
+		if p := e.client.Load(); p != nil {
+			primaryName = p.ModelName()
+		}
+		e.logger.Info("askengine: primary model unavailable or in circuit breaker cooldown, routing directly to fallback", "primary", primaryName, "fallback", fallbackUsed)
 		cb.progress(Progress{Kind: ProgressRoute, Name: fallbackUsed})
 	}
 
@@ -1090,7 +1185,8 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			res.Cost = client.EstimateCost(d.InputTokens, d.OutputTokens)
 			res.EntryModel = client.ModelName()
 			if fallbackUsed != "" && res.Note == "" {
-				res.Note = fmt.Sprintf("主模型不可用，已自动切换至备用模型: %s", fallbackUsed)
+				loc, _ := e.localeNow()
+				res.Note = i18n.Tf(loc, "entry.note.fallback", "name", fallbackUsed)
 			}
 			// Reasoning backstop (D14): every return path funnels through
 			// here, so one strip covers the Answer this engine hands to
@@ -1484,7 +1580,7 @@ rounds:
 			e.tryAutoInitScheduler()
 		}
 		if e.sched.Load() == nil {
-			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议任务「%s」，但当前未加载能力卡片，无法提交。", maxRounds, final.Task.Title)}, nil
+			return &Result{Kind: "answer", Answer: i18n.Tf(effectiveLocale, "ask.loop.noConvergeTask", "n", strconv.Itoa(maxRounds), "title", final.Task.Title)}, nil
 		}
 		if lastTask != nil && taskRounds >= maxTasks {
 			// The loop exhausted the task budget and the model still wants
@@ -1509,7 +1605,7 @@ rounds:
 			e.tryAutoInitScheduler()
 		}
 		if e.sched.Load() == nil {
-			return &Result{Kind: "answer", Answer: fmt.Sprintf("已连续调用 %d 轮工具未收敛；模型最终建议多阶段计划「%s」，但当前未加载能力卡片，无法启动。", maxRounds, final.Plan.Goal)}, nil
+			return &Result{Kind: "answer", Answer: i18n.Tf(effectiveLocale, "ask.loop.noConvergePlan", "n", strconv.Itoa(maxRounds), "goal", final.Plan.Goal)}, nil
 		}
 		cb.progress(Progress{Kind: ProgressPlan, Name: final.Plan.Goal})
 		return e.startClassifiedPlan(ctx, final.Plan, authorize)
@@ -1634,7 +1730,7 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 		// A plan the model got wrong has created nothing, so the useful answer is
 		// the defect itself rather than a failed run: the user (or the next turn)
 		// can see that the stages did not hang together.
-		return &Result{Kind: "answer", Answer: "计划无法执行：" + err.Error()}, nil
+		return &Result{Kind: "answer", Answer: i18n.Tf(e.Locale(), "ask.plan.invalid", "err", err.Error())}, nil
 	}
 	q := core.DefaultQueueSpec()
 	// No work dir, for the same reason `panda plan run` sets none: a path on this
@@ -1820,6 +1916,8 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		Injected:  result.Injected,
 		Executor:  result.Executor,
 	}
+	res.Question = result.Question
+	res.FilesChanged = result.FilesChanged
 	res.ConsentSource = consentSrc
 	if consentSrc != "" {
 		sched.EvTrace(ctx, task.TaskID, "approval_auto", map[string]any{"scope": consentSrc})
@@ -1838,7 +1936,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 			return res
 		}
 		if cb.OnApproval(req) {
-			resumed := e.resumeLocked(ctx, req.TaskID)
+			resumed := e.resumeLocked(ctx, req.TaskID, "")
 			sumClient, _ := e.healthyClient()
 			if report, rerr := entry.SummarizeResult(ctx, sumClient, resumed.TaskTitle, in.Intent, resumed.OK, resumed.ExitCode, resumed.Stdout, resumed.Stderr, targetLoc); rerr == nil {
 				resumed.Report = report
@@ -1960,18 +2058,20 @@ func numberField(v any) int {
 // scheduler, so this mapping deliberately depends only on storage.
 func resultFromTask(task core.Task, result bus.TaskResultPayload) *Result {
 	return &Result{
-		Kind:      "task",
-		TaskID:    task.TaskID,
-		TaskTitle: task.Title,
-		TaskState: task.State,
-		OK:        result.OK,
-		Stdout:    result.Stdout,
-		Stderr:    result.Stderr,
-		ExitCode:  result.ExitCode,
-		Agent:     result.Agent,
-		Model:     result.Model,
-		Injected:  result.Injected,
-		Executor:  result.Executor,
+		Kind:         "task",
+		TaskID:       task.TaskID,
+		TaskTitle:    task.Title,
+		TaskState:    task.State,
+		OK:           result.OK,
+		Stdout:       result.Stdout,
+		Stderr:       result.Stderr,
+		ExitCode:     result.ExitCode,
+		Agent:        result.Agent,
+		Model:        result.Model,
+		Injected:     result.Injected,
+		Executor:     result.Executor,
+		Question:     result.Question,
+		FilesChanged: result.FilesChanged,
 	}
 }
 
@@ -2003,9 +2103,9 @@ func (e *Engine) acceptReviewedWork(ctx context.Context, taskID string) *Result 
 // resumeLocked re-runs an approved review-parked task synchronously and maps
 // the outcome to a Result. The caller must hold schedMu (submitTask does), so
 // any pinned session work dir is still in effect for the re-run.
-func (e *Engine) resumeLocked(ctx context.Context, taskID string) *Result {
+func (e *Engine) resumeLocked(ctx context.Context, taskID, answer string) *Result {
 	sched := e.sched.Load()
-	task, result, err := sched.ResumeApproved(ctx, taskID)
+	task, result, err := sched.ResumeApproved(ctx, taskID, answer)
 	if err != nil {
 		state := core.StateReview
 		if current, getErr := sched.TaskStore().Get(context.WithoutCancel(ctx), taskID); getErr == nil {
@@ -2020,7 +2120,7 @@ func (e *Engine) resumeLocked(ctx context.Context, taskID string) *Result {
 // workDir optionally overrides the persisted task directory for an active
 // originating session; progress is bridged from the same core event stream as
 // initial foreground submission.
-func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb StreamCallbacks) *Result {
+func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb StreamCallbacks, answers ...string) *Result {
 	if e == nil || e.db == nil {
 		return &Result{Kind: "task", TaskID: taskID, TaskState: core.StateFailed, Stderr: "task approval requires an initialized engine", ExitCode: 1}
 	}
@@ -2063,7 +2163,11 @@ func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb 
 		})
 		defer unsub()
 	}
-	res := e.resumeLocked(ctx, taskID)
+	answer := ""
+	if len(answers) > 0 {
+		answer = answers[0]
+	}
+	res := e.resumeLocked(ctx, taskID, answer)
 	if ctx.Err() != nil {
 		return res
 	}
@@ -2081,6 +2185,9 @@ func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb 
 // label "entry:<model>" keeps the rows distinguishable; providers that do not
 // report usage (delta zero) record nothing.
 func (e *Engine) recordEntryUsage(ctx context.Context, res *Result, client *entry.Client, before entry.Usage, latency time.Duration) {
+	if client == nil {
+		return
+	}
 	delta := client.Usage().Sub(before)
 	if delta.Total() == 0 {
 		return
@@ -2090,7 +2197,7 @@ func (e *Engine) recordEntryUsage(ctx context.Context, res *Result, client *entr
 		taskID = res.TaskID
 	}
 	cost := client.EstimateCost(delta.InputTokens, delta.OutputTokens)
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	if err := store.RecordDelegationMetric(ctx, taskID, e.cfg.Node.Name, "entry:"+client.ModelName(),
 		nil, true, latency.Milliseconds(), int(delta.Total()), cost); err != nil {
 		e.logger.Warn("askengine: record entry usage", "err", err)

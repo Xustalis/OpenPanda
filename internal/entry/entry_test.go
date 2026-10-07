@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package entry
 
 import (
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -308,6 +311,78 @@ func TestValidateTaskSpec(t *testing.T) {
 		if err := ValidateTaskSpec(s); err == nil {
 			t.Fatalf("%s: expected error", tc.name)
 		}
+	}
+}
+
+// TestValidateTaskSpecActionSpec vets the actuator dispatch boundary: a valid
+// spec passes, and every malformed shape is refused at entry — before the
+// task ever persists or routes — instead of failing at the executor where the
+// model can no longer fix it.
+func TestValidateTaskSpecActionSpec(t *testing.T) {
+	base := func() *TaskSpec {
+		return &TaskSpec{
+			Title:       "turn servo",
+			ContextType: "hardware",
+			Requires:    Requires{Abilities: []string{"hardware:servo_rotate"}},
+			Spec: TaskSpecDetail{ActionSpec: &ledger.ActionSpec{
+				TargetActuator: "hardware:servo_rotate",
+				Action:         "rotate",
+				Parameters:     map[string]any{"angle": 90.0},
+			}},
+		}
+	}
+	if err := ValidateTaskSpec(base()); err != nil {
+		t.Fatalf("valid action_spec rejected: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		mut  func(*ledger.ActionSpec)
+	}{
+		{"no target", func(a *ledger.ActionSpec) { a.TargetActuator = "" }},
+		{"no action", func(a *ledger.ActionSpec) { a.Action = "" }},
+		{"empty param name", func(a *ledger.ActionSpec) { a.Parameters[""] = 1.0 }},
+		{"brace in param name", func(a *ledger.ActionSpec) { a.Parameters["x}"] = 1.0 }},
+		{"structured param", func(a *ledger.ActionSpec) { a.Parameters["angle"] = map[string]any{"x": 1} }},
+		{"array param", func(a *ledger.ActionSpec) { a.Parameters["angle"] = []any{1} }},
+	}
+	for _, tc := range cases {
+		s := base()
+		tc.mut(s.Spec.ActionSpec)
+		if err := ValidateTaskSpec(s); err == nil {
+			t.Fatalf("%s: expected error", tc.name)
+		}
+	}
+
+	over := base()
+	over.Spec.ActionSpec.Parameters = map[string]any{}
+	for i := 0; i <= maxActionParams; i++ {
+		over.Spec.ActionSpec.Parameters["p"+string(rune('a'+i%26))+string(rune('a'+i/26))] = float64(i)
+	}
+	if err := ValidateTaskSpec(over); err == nil {
+		t.Fatalf("parameters over the cap must fail")
+	}
+}
+
+// TestParseOutputCarriesActionSpec proves the wire path end to end at the
+// entry boundary: a task JSON emitted with spec.action_spec unmarshals into
+// the Detail — the same object toTaskInput marshals into spec_json for the
+// executor.
+func TestParseOutputCarriesActionSpec(t *testing.T) {
+	raw := `{"kind":"task","task":{"title":"turn servo","context_type":"hardware","requires":{"abilities":["hardware:servo_rotate"]},"spec":{"scope":"","target":"turn the servo to 90 degrees","action_spec":{"target_actuator":"hardware:servo_rotate","action":"rotate","parameters":{"angle":90}}},"complexity":0.1,"risk":"low"}}`
+	out, err := ParseOutput(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if out.Task == nil || out.Task.Spec.ActionSpec == nil {
+		t.Fatalf("action_spec dropped at parse: %+v", out.Task)
+	}
+	as := out.Task.Spec.ActionSpec
+	if as.TargetActuator != "hardware:servo_rotate" || as.Action != "rotate" {
+		t.Fatalf("action_spec mangled: %+v", as)
+	}
+	if deg, ok := as.Parameters["angle"].(float64); !ok || deg != 90 {
+		t.Fatalf("parameters mangled: %+v", as.Parameters)
 	}
 }
 
@@ -637,9 +712,9 @@ func TestWrapAPIErrorActionableMessages(t *testing.T) {
 		{"unauthorized", &statusError{status: http.StatusUnauthorized, body: "bad key"}, "api_key"},
 		{"forbidden", &statusError{status: http.StatusForbidden, body: "denied"}, "api_key"},
 		{"not found", &statusError{status: http.StatusNotFound, body: "no route"}, "base_url"},
-		{"rate limited after retries", &retryableError{status: http.StatusTooManyRequests, body: "slow down"}, "限流"},
-		{"server down after retries", &retryableError{status: http.StatusBadGateway, body: "boom"}, "暂时不可用"},
-		{"unreachable", &transientError{err: errors.New("connection refused")}, "无法连接"},
+		{"rate limited after retries", &retryableError{status: http.StatusTooManyRequests, body: "slow down"}, "rate-limiting"},
+		{"server down after retries", &retryableError{status: http.StatusBadGateway, body: "boom"}, "temporarily unavailable"},
+		{"unreachable", &transientError{err: errors.New("connection refused")}, "cannot reach"},
 		{"no key", ErrNoKey, "API key"},
 	}
 	for _, tc := range cases {
@@ -653,6 +728,13 @@ func TestWrapAPIErrorActionableMessages(t *testing.T) {
 				t.Fatalf("UserMsg = %q, want substring %q", ce.UserMsg, tc.wantSub)
 			}
 		})
+	}
+	// The message follows the caller's locale — a zh ask gets the zh guidance,
+	// not a Chinese-strings-only build leaking into every front end.
+	wrapped := WrapAPIError(&transientError{err: errors.New("connection refused")}, i18n.ChineseSimp)
+	var ce *ClassifyError
+	if !errors.As(wrapped, &ce) || !strings.Contains(ce.UserMsg, "无法连接") {
+		t.Fatalf("zh locale should produce the zh message, got %q", wrapped)
 	}
 }
 

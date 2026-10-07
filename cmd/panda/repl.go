@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // The interactive REPL — the operator's seat on top of the kernel. Slash
@@ -185,6 +187,7 @@ func init() {
 		{"sessions", "chat", "cmd.sessions", (*repl).cmdSessions},
 		{"session", "chat", "cmd.session", (*repl).cmdSession},
 		{"resume", "chat", "cmd.resume", (*repl).cmdResume},
+		{"fork", "chat", "cmd.fork", (*repl).cmdFork},
 		{"clear", "chat", "cmd.clear", (*repl).cmdClear},
 		{"tasks", "tasks", "cmd.tasks", (*repl).cmdTasks},
 		{"task", "tasks", "cmd.task", (*repl).cmdTask},
@@ -264,6 +267,11 @@ func runRepl(args []string) {
 	cwd, _ := os.Getwd()
 	workspaceAllowed := false
 	isTUI := interactive && stdoutIsTTY() && os.Getenv("PANDA_CLASSIC_REPL") == ""
+	// The classic loop has no terms card — but a license change still deserves
+	// a notice. Non-blocking: pipes and scripts must not stall on a prompt.
+	if interactive && !isTUI && cfg != nil && !cfg.UI.TermsCurrent() {
+		fmt.Println(i18n.T(detected, "cli.terms.staleNotice"))
+	}
 	if *yesFlag || !interactive || isTUI {
 		workspaceAllowed = true
 	} else if cwd != "" {
@@ -284,44 +292,12 @@ func runRepl(args []string) {
 	var activeProjectName string
 	if workspaceAllowed && cwd != "" {
 		cfg.Storage.WorkPath = cwd
-		if existing, err := projStore.FindByWorkDir(cwd); err == nil {
-			activeProjectName = existing.Name
-		} else {
-			base := filepath.Base(cwd)
-			if base == "/" || base == "." || base == "" {
-				base = "workspace"
-			}
-			cleanBase := ""
-			for _, ch := range base {
-				if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' {
-					cleanBase += string(ch)
-				}
-			}
-			if cleanBase == "" {
-				cleanBase = "workspace"
-			}
-			candidate := cleanBase
-			for i := 1; i <= 100; i++ {
-				if pr, err := projStore.Get(candidate); err == nil {
-					if pr.WorkDir == "" {
-						_, _ = projStore.Update(candidate, cwd, "Workspace at "+cwd)
-						activeProjectName = candidate
-						break
-					}
-					candidate = fmt.Sprintf("%s-%d", cleanBase, i+1)
-				} else {
-					if created, err := projStore.Create(candidate, cwd, "Workspace at "+cwd); err == nil {
-						activeProjectName = created.Name
-						break
-					}
-				}
-			}
-		}
-		if activeProjectName != "" {
-			_ = projStore.SetActive(activeProjectName)
-			if interactive && !*yesFlag && !isTUI {
-				fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.Tf(detected, "cli.workspace.accepted", "path", cwd, "name", activeProjectName)))
-			}
+		// Shared adoption: the launch directory is the project space — the
+		// existing project owning it wins, else a fresh one is created and
+		// marked active (see workspace.go).
+		activeProjectName = adoptWorkspaceProject(projStore, cwd)
+		if activeProjectName != "" && interactive && !*yesFlag && !isTUI {
+			fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.Tf(detected, "cli.workspace.accepted", "path", cwd, "name", activeProjectName)))
 		}
 	} else if !workspaceAllowed && cwd != "" && interactive {
 		fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.T(detected, "cli.workspace.declined")))
@@ -381,6 +357,7 @@ func runRepl(args []string) {
 			MCPCommand: *mcpCmd,
 			ReplyASCII: isLinuxConsole(),
 			Locale:     detected,
+			ConfigPath: *configPath,
 			// The session is long-lived and interactive: peers dial in the
 			// background instead of gating the banner (an offline peer's dial
 			// timeout is routine, not 10s of dead air before the first prompt).
@@ -817,9 +794,7 @@ func (r *repl) askContext(text string) ([]entry.Turn, string) {
 		if err != nil {
 			r.setSess("") // stale id: drop silently back to bare mode
 		} else {
-			for _, t := range sess.Turns {
-				history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
-			}
+			sess, history = sessionHistory(context.Background(), r.sessionsSt, sess, r.engine.Load())
 			if _, err := r.sessionsSt.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: text}); err == nil {
 				workDir = sess.Worktree
 				if workDir == "" && r.engine.Load() != nil {
@@ -952,7 +927,7 @@ func (r *repl) recordErrorTurn(text string, err error) {
 					entry.Turn{Role: "user", Content: text},
 					entry.Turn{Role: "assistant", Content: "⚠ " + err.Error()},
 				)
-				c = trimConvo(c)
+				c = compactConvo(c, r.engine.Load())
 				convo = c
 				return c
 			})
@@ -1212,7 +1187,7 @@ func (r *repl) repeatLast() {
 func (r *repl) rememberTurn(text string, out *askengine.Result) {
 	loc := r.locale()
 	r.editConvo(func(c []entry.Turn) []entry.Turn {
-		return appendConvo(c, loc, text, out)
+		return appendConvo(c, loc, text, out, r.engine.Load())
 	})
 }
 
@@ -1819,8 +1794,12 @@ func (r *repl) cmdSessions(arg string) {
 		if s.ID == r.sessID() {
 			mark = "*"
 		}
+		title := s.Title
+		if s.ParentID != "" {
+			title = "↳ " + title
+		}
 		branch := orDash(s.Branch)
-		r.outf("  %s %-16s %-18s turns=%-3d %s (%s)\n", mark, s.ID, s.UpdatedAt.Format("2006-01-02 15:04"), len(s.Turns), s.Title, branch)
+		r.outf("  %s %-16s %-18s turns=%-3d %s (%s)\n", mark, s.ID, s.UpdatedAt.Format("2006-01-02 15:04"), len(s.Turns), title, branch)
 	}
 }
 
@@ -1852,6 +1831,54 @@ func (r *repl) cmdResume(arg string) {
 	}
 	r.setSess(arg)
 	r.outln(i18n.Tf(r.loc, "repl.resume.done", "id", arg))
+}
+
+// cmdFork splits the bound session into a new thread: `/fork` copies the
+// whole history, `/fork <n>` copies only the first n turns. The REPL
+// re-attaches to the child, so the next ask explores a different direction
+// without losing the parent's thread. In a repository the child gets a
+// worktree branched off the parent's branch.
+func (r *repl) cmdFork(arg string) {
+	if r.sessionsSt == nil {
+		r.outln(i18n.T(r.loc, "repl.sessions.none"))
+		return
+	}
+	sid := r.sessID()
+	if sid == "" {
+		r.outln(i18n.T(r.loc, "repl.fork.nosess"))
+		return
+	}
+	sess, err := r.sessionsSt.Get(sid)
+	if err != nil {
+		r.outln(i18n.Tf(r.loc, "repl.resume.bad", "id", sid))
+		r.setSess("")
+		return
+	}
+	at := len(sess.Turns)
+	if arg = strings.TrimSpace(arg); arg != "" {
+		n, err := strconv.Atoi(arg)
+		if err != nil || n < 0 {
+			r.outln(i18n.T(r.loc, "repl.fork.usage"))
+			return
+		}
+		at = n
+	}
+	child, err := r.sessionsSt.Fork(sid, at)
+	if err != nil {
+		r.storeErr(err)
+		return
+	}
+	if r.worktrees != nil {
+		base := "HEAD"
+		if sess.Branch != "" {
+			base = sess.Branch
+		}
+		if path, err := r.worktrees.EnsureFrom(context.Background(), child.ID, base); err == nil {
+			_ = r.sessionsSt.SetWorktree(child.ID, path, sessions.Branch(child.ID))
+		}
+	}
+	r.setSess(child.ID)
+	r.outln(i18n.Tf(r.loc, "repl.fork.done", "parent", sid, "id", child.ID, "n", fmt.Sprint(child.ForkIndex)))
 }
 
 // cmdMemory inspects the memory layer: bare `/memory` lists the selective-
@@ -2180,6 +2207,12 @@ func (r *repl) cmdNodes(arg string) {
 		case "remove", "rm":
 			r.cmdNodesRemove(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
 			return
+		case "verify":
+			r.cmdNodesVerify(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
+			return
+		case "admit":
+			r.cmdNodesAdmit(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
+			return
 		}
 	}
 	nodes, err := ledger.Query(r.db, "", "")
@@ -2189,17 +2222,22 @@ func (r *repl) cmdNodes(arg string) {
 	}
 	if len(nodes) == 0 {
 		r.outln(i18n.T(r.loc, "repl.nodes.none"))
-		return
-	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
-	r.outln(i18n.T(r.loc, "repl.nodes.head"))
-	for _, n := range nodes {
-		seen := time.Unix(n.LastSeen, 0).Format(time.RFC3339)
-		if n.LastSeen == 0 {
-			seen = "never"
+	} else {
+		sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+		r.outln(i18n.T(r.loc, "repl.nodes.head"))
+		for _, n := range nodes {
+			seen := time.Unix(n.LastSeen, 0).Format(time.RFC3339)
+			if n.LastSeen == 0 {
+				seen = "never"
+			}
+			fp := n.Fingerprint()
+			if n.Verified() {
+				fp += " ✓"
+			}
+			r.outf("  %-16s %-8s %-8s %-30s %-18s %s\n", n.ID, n.NodeKind, n.Status, n.Chip, fp, seen)
 		}
-		r.outf("  %-16s %-8s %-8s %-30s %s\n", n.ID, n.NodeKind, n.Status, n.Chip, seen)
 	}
+	printPendingTo(r.commandOutput(), r.db, r.loc)
 }
 
 // cmdAgents lists the agent CLIs this node can delegate to (same probe as
@@ -2423,12 +2461,12 @@ func (r *repl) cmdWeb(arg string) {
 	}
 	// Self-update: discover newer CLI releases in the background; apply gates
 	// on the task queue being idle (same policy as `panda web`).
-	updateMgr := updater.New(updater.Options{
+	updateMgr := updater.New(updateEnvOptions(updater.Options{
 		Current:         versionpkg.Version,
 		CurrentCodename: versionpkg.Codename,
 		Idle:            r.store.Idle,
 		SchemaFloor:     schemaFloorFunc(r.db),
-	})
+	}))
 	updateMgr.StartAutoCheck(context.Background(), 0)
 
 	handler := panel.New(panel.Deps{

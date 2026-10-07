@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package bus
 
 import (
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -57,27 +60,51 @@ func VerifyHello(secret, nodeID string, ts int64, sig string, now time.Time) boo
 }
 
 // VerifyHelloP verifies a hello the way the receiver does: freshness first,
-// then the signature. If the payload carries an Ed25519 public key and signature
-// (p.PubKey, p.EdSig), cryptographic asymmetric verification is performed.
-// Otherwise, it falls back to HMAC under the mesh shared secret.
+// then signatures. Two layers answer two different questions, and BOTH must
+// hold — they are conjunctive, not alternatives:
+//
+//   - Sig (HMAC under the mesh shared secret) proves mesh MEMBERSHIP. It is
+//     always required: the Ed25519 fields are self-asserted, so accepting them
+//     alone would let anyone who can reach the listener mint a keypair, claim
+//     any node id, and register as a peer — unauthenticated mesh join, and
+//     from there task delegation (i.e. remote code execution on this node).
+//   - PubKey+EdSig (Ed25519 over NodeID:Ts:Nonce) proves control of the
+//     identity key a member ADVERTISES. It is optional because pre-key peers
+//     send neither field — but a hello that carries identity must carry a
+//     coherent pair: a bad or half-present Ed25519 block under a valid HMAC
+//     is tampering or corruption, not a legacy peer, and fails closed. The
+//     receiver still only records the key after this check, so identity
+//     metadata that fails verification never reaches the directory.
+//
+// Binding the advertised key to a node-id already known under a different key
+// (the pin check) is the caller's job — this function sees only the wire.
 func VerifyHelloP(secret string, p HelloPayload, now time.Time) bool {
 	if !helloFresh(p.Ts, now) {
 		return false
 	}
-	if p.PubKey != "" && p.EdSig != "" {
-		if pubBytes, err := hex.DecodeString(p.PubKey); err == nil {
-			if VerifyHelloEd(pubBytes, p.NodeID, p.Ts, p.Nonce, p.EdSig) {
-				return true
-			}
-		}
-	}
 	if secret == "" || p.Sig == "" {
 		return false
 	}
+	var member bool
 	if p.Nonce != "" {
-		return hmac.Equal([]byte(HelloSigN(secret, p.NodeID, p.Ts, p.Nonce)), []byte(p.Sig))
+		member = hmac.Equal([]byte(HelloSigN(secret, p.NodeID, p.Ts, p.Nonce)), []byte(p.Sig))
+	} else {
+		member = hmac.Equal([]byte(HelloSig(secret, p.NodeID, p.Ts)), []byte(p.Sig))
 	}
-	return hmac.Equal([]byte(HelloSig(secret, p.NodeID, p.Ts)), []byte(p.Sig))
+	if !member {
+		return false
+	}
+	if p.PubKey == "" && p.EdSig == "" {
+		return true // legacy identity-less peer: membership is all it proves
+	}
+	if p.PubKey == "" || p.EdSig == "" {
+		return false // half an identity is a malformed (or stripped) hello
+	}
+	pub, err := hex.DecodeString(p.PubKey)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return false
+	}
+	return VerifyHelloEd(pub, p.NodeID, p.Ts, p.Nonce, p.EdSig)
 }
 
 // helloFresh reports whether ts sits within MaxHelloAge of now.

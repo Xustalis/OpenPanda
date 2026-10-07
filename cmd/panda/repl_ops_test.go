@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 import (
@@ -198,6 +200,12 @@ func TestSplitArgsQuotes(t *testing.T) {
 		{`say "unterminated`, []string{"say", "unterminated"}},
 		{`path C:\dir "x`, []string{`path`, `C:\dir`, "x"}},
 		{"", nil},
+		// Single quotes group too — the --action-spec carrier: JSON's own
+		// double quotes must reach the parser intact, so they live inside a
+		// single-quoted token. And a single quote inside a double-quoted
+		// payload stays literal.
+		{`add --action-spec '{"a":"b c","n":1}'`, []string{"add", "--action-spec", `{"a":"b c","n":1}`}},
+		{`title "it's done"`, []string{"title", "it's done"}},
 	} {
 		if got := splitArgs(tc.in); !slices.Equal(got, tc.want) {
 			t.Errorf("splitArgs(%q) = %v, want %v", tc.in, got, tc.want)

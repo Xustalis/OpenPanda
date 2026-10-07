@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package panel
 
 import (
@@ -10,9 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/version"
 )
 
 // askBody builds a POST /api/ask request with the given JSON body.
@@ -165,6 +169,55 @@ func TestListNodes(t *testing.T) {
 	}
 }
 
+// Track 3: /api/nodes joins each remote row with this node's measured edge
+// (self row's links_json) — RTT and transport — plus the advertised version
+// stamp, and reports the local build version on the self row.
+func TestListNodesLinkMeta(t *testing.T) {
+	db := newTestDB(t)
+	cfg := config.Default()
+	selfID := localNodeID(cfg)
+	if err := ledger.Register(db, ledger.Card{Device: "self"}, selfID, 2); err != nil {
+		t.Fatalf("register self: %v", err)
+	}
+	links := `[{"peer":"peer-ws","rtt_ms":12,"kind":"ws"},{"peer":"peer-udp","kind":"udp"}]`
+	if err := ledger.UpdateAdjacency(db, selfID, "", links, "", ""); err != nil {
+		t.Fatalf("seed links: %v", err)
+	}
+	for _, id := range []string{"peer-ws", "peer-udp"} {
+		if err := ledger.UpsertRemote(db, id, ledger.CapabilitySummary{Device: id}); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+	if err := ledger.SetNodeVerIfChanged(db, "peer-ws", "0.0.9"); err != nil {
+		t.Fatalf("stamp ver: %v", err)
+	}
+
+	h := New(Deps{Store: newTestStore(t), DB: db, Cfg: cfg, StaticDir: t.TempDir(), Token: testToken})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/nodes", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	var nodes []nodeRow
+	if err := json.Unmarshal(rr.Body.Bytes(), &nodes); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	rows := make(map[string]nodeRow, len(nodes))
+	for _, n := range nodes {
+		rows[n.ID] = n
+	}
+	if ws := rows["peer-ws"]; ws.RTTMs != 12 || ws.Transport != "ws" || ws.Ver != "0.0.9" {
+		t.Fatalf("peer-ws row = %+v, want rtt 12 transport ws ver 0.0.9", ws)
+	}
+	if udp := rows["peer-udp"]; udp.Transport != "udp" || udp.RTTMs != 0 {
+		t.Fatalf("peer-udp row = %+v, want transport udp rtt 0", udp)
+	}
+	self := rows[selfID]
+	if !self.IsLocal || self.Ver != version.Version {
+		t.Fatalf("self row = %+v, want is_local + running version", self)
+	}
+}
+
 func TestListNodesWithoutDB(t *testing.T) {
 	h := New(Deps{Store: newTestStore(t), StaticDir: t.TempDir(), Token: testToken})
 	rr := httptest.NewRecorder()
@@ -228,6 +281,20 @@ func TestProjects(t *testing.T) {
 	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/projects", strings.NewReader(`{"name":"../escape"}`)))
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("escape status = %d, want 400", rr.Code)
+	}
+}
+
+// TestMutatingBodyCap proves the 16 MiB middleware bound lands: a POST past
+// the cap fails decode instead of growing the heap — the handler reports it
+// as a bad request, and nothing is created.
+func TestMutatingBodyCap(t *testing.T) {
+	projects := memory.NewProjects(t.TempDir())
+	h := New(Deps{Store: newTestStore(t), Projects: projects, StaticDir: t.TempDir(), Token: testToken})
+	body := `{"name":"` + strings.Repeat("x", maxAPIBodyBytes) + `"}`
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/projects", strings.NewReader(body)))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for an over-cap body", rr.Code)
 	}
 }
 

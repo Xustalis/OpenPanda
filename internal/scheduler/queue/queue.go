@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package queue implements the node-local task queue scheduler: it decides
 // which queued task runs next on this node. It is the temporal counterpart of
 // the parent scheduler package (which decides WHICH node a task runs on) and
@@ -176,6 +178,19 @@ type Scheduler struct {
 	wake         chan struct{}
 }
 
+// The fallback poll relaxes once the queue has been empty for a while: 400ms
+// exists for cross-process pickup latency and stays the cadence while work
+// sits in the queue (a budget-bound ready task still needs prompt pickup
+// when another process frees a slot), but an empty queue polled forever is
+// ~2 SELECTs a second of pure idle churn per attached process — daemon, web
+// console and panel each run a scheduler over the same DB. Past ~30s of
+// emptiness the poll steps back to 2s; a same-process submit still lands
+// instantly through Wake().
+const (
+	queueIdleAfter = 75 // quiet ticks at 400ms ≈ 30s of an empty queue
+	queueIdlePoll  = 2 * time.Second
+)
+
 // New builds a scheduler. maxConcurrent < 1 is clamped to 1.
 func New(store Store, runner Runner, maxConcurrent int, logger *slog.Logger) *Scheduler {
 	if maxConcurrent < 1 {
@@ -209,44 +224,66 @@ func (s *Scheduler) Wake() {
 }
 
 // Run loops until ctx ends: every wake (or poll fallback) it tries to start
-// whatever the policy and the locks allow.
+// whatever the policy and the locks allow. The fallback cadence relaxes after
+// a sustained empty queue (queueIdleAfter) — in-process wakes are never
+// slowed, only the wake-less polling path.
 func (s *Scheduler) Run(ctx context.Context) {
-	ticker := time.NewTicker(s.pollInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(s.pollInterval)
+	defer timer.Stop()
+	quiet := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 		case <-s.wake:
+			quiet = 0
 		}
-		s.tick(ctx)
+		if s.tick(ctx) == 0 {
+			quiet++
+		} else {
+			quiet = 0
+		}
+		timer.Reset(s.pollDelay(quiet))
 	}
+}
+
+// pollDelay picks the next fallback interval: fast while anything is queued
+// (or an error may have hidden a queued task), relaxed once the queue has
+// provably stayed empty. Errors count as quiet — a store that cannot answer
+// keeps its WARN stream slow instead of repeating every 400ms.
+func (s *Scheduler) pollDelay(quietTicks int) time.Duration {
+	if quietTicks >= queueIdleAfter {
+		return queueIdlePoll
+	}
+	return s.pollInterval
 }
 
 // tick starts every ready task that fits the budget and whose resources are
 // free. It is one pass, not a drain loop: a started task may free resources
-// only after it finishes, and its completion wakes the next pass.
-func (s *Scheduler) tick(ctx context.Context) {
+// only after it finishes, and its completion wakes the next pass. The return
+// is the ready-set size, used by Run to tell a lively queue (budget-bound
+// work still needs prompt polling) from an idle one eligible for backoff.
+func (s *Scheduler) tick(ctx context.Context) int {
 	ready, err := s.store.ListReady(ctx)
 	if err != nil {
 		s.logger.Warn("queue: list ready", "err", err)
-		return
+		return 0
 	}
 	if len(ready) == 0 {
-		return
+		return 0
 	}
 	sortReady(ready)
 
 	active, err := s.store.CountActive(ctx)
 	if err != nil {
 		s.logger.Warn("queue: count active", "err", err)
-		return
+		return len(ready)
 	}
 
 	for _, t := range ready {
 		if active >= s.max {
-			return // budget exhausted; a finishing task wakes the next pass
+			return len(ready) // budget exhausted; a finishing task wakes the next pass
 		}
 		keys := DefaultKeys(t.ResourceKeys, t.Project)
 		if !s.registry.TryAcquire(keys, t.ID) {
@@ -266,4 +303,5 @@ func (s *Scheduler) tick(ctx context.Context) {
 			s.runner.Run(ctx, id)
 		}(t.ID)
 	}
+	return len(ready)
 }

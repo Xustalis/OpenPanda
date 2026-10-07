@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package skills implements the self-evolving procedural-memory layer (design
 // §8): reusable workflows distilled from task history into SKILL.md files.
 // Declarative memory (the memory package) stores facts; skills store procedures

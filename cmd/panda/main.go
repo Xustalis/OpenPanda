@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Command panda is the OpenPanda CLI. With no subcommand it drops into the
 // interactive REPL (the operator's seat); `panda daemon` runs the headless
 // kernel that registers this node's capabilities and delegates/executes
@@ -21,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/artifact"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/guard"
@@ -40,6 +43,12 @@ import (
 )
 
 var version = versionpkg.Version
+
+// peerFailLogEvery bounds the per-peer WARN stream a dead peer produces: at
+// the 30s steady-state backoff, one line every 20th failure is roughly one
+// line per ~10 minutes — enough to keep a multi-day outage greppable without
+// the log growth LaunchAgent's unrotated /tmp files would turn into.
+const peerFailLogEvery = 20
 
 func main() {
 	// A Windows self-update renames the running image to <exe>.old because the
@@ -104,7 +113,8 @@ func main() {
 			return
 		case "nodes":
 			// Verbs that rewrite the peer list live here; `remove` drops a
-			// stale directory row; bare `nodes` lists the fleet.
+			// stale directory row; `verify` stamps a fingerprint the human has
+			// compared out-of-band; bare `nodes` lists the fleet.
 			if len(args) > 0 {
 				switch args[0] {
 				case "add":
@@ -118,6 +128,15 @@ func main() {
 					return
 				case "remove", "rm":
 					runNodeRemove(args[1:])
+					return
+				case "verify":
+					runNodesVerify(args[1:])
+					return
+				case "admit":
+					runNodesAdmit(args[1:])
+					return
+				case "drain":
+					runNodesDrain(args[1:])
 					return
 				}
 			}
@@ -152,6 +171,12 @@ func main() {
 			return
 		case "mcp":
 			runMCP(args)
+			return
+		case "auth":
+			runAuth(args)
+			return
+		case "rpc":
+			runRPC(args)
 			return
 		case "reminder":
 			runReminder(args)
@@ -246,6 +271,7 @@ func subcommandNames() []string {
 		"task", "plan", "cancel", "approve", "reject", "logs", "skill", "mcp",
 		"reminder", "detect", "card", "init", "metrics", "heatmap", "audit", "session",
 		"sessions", "memory", "config", "model", "models", "agents", "project",
+		"auth", "rpc",
 		"read", "view", "cat", "md", "markdown", "version", "help",
 	}
 }
@@ -354,6 +380,36 @@ func runDaemon(args []string) {
 	// success criteria and re-delegate work that isn't complete. A model-less
 	// node skips this — agent tasks finish in one shot as before.
 	coreNode.AttachSupervisor(cfg.Model)
+	// "在哪里启动哪里就是项目空间" — a daemon launched inside a workspace
+	// directory (a VCS root or a manifest-bearing dir) adopts it as the
+	// project space: WorkPath becomes the launch dir, a project row is bound
+	// to it, and every harness the daemon schedules runs inside the project.
+	// An explicit operator choice always wins — OPENPANDA_WORK_PATH or a
+	// configured storage.work_path outranks the launch directory.
+	workPathExplicit := os.Getenv("OPENPANDA_WORK_PATH") != ""
+	if !workPathExplicit && cfg.Storage.WorkPath != "" {
+		// A configured path is explicit — unless it is exactly the default
+		// UserDataDir (what config.Load materializes when the file never set
+		// one). On a UserDataDir failure err on the explicit side: a
+		// configured path must never be overridden by the launch directory.
+		ud, uerr := config.UserDataDir()
+		workPathExplicit = uerr != nil ||
+			filepath.Clean(cfg.Storage.WorkPath) != filepath.Clean(ud)
+	}
+	if !workPathExplicit {
+		// Only the unambiguous marker set may drive an unattended daemon's
+		// adoption: a Makefile/requirements.txt in a stray directory means
+		// "project" at a prompt, not a reason to relocate the node's work
+		// space. Interactive entry points (ask, repl) keep the wider set via
+		// ambientProject → looksLikeWorkspace.
+		if cwd, err := os.Getwd(); err == nil && cwd != "" && looksLikeWorkspaceStrong(cwd) {
+			abs, _ := filepath.Abs(cwd)
+			cfg.Storage.WorkPath = abs
+			if adopted := adoptWorkspaceProject(projectstore.NewStore(db), abs); adopted != "" {
+				logger.Info("workspace adopted", "dir", abs, "project", adopted)
+			}
+		}
+	}
 	// The work dir travels to adapter subprocesses as their cwd (via the
 	// sandbox and the adapter request's CWD field), so it must be absolute —
 	// a relative path would resolve against the TASK dir inside the adapter
@@ -364,7 +420,27 @@ func runDaemon(args []string) {
 		coreNode.SetWorkDir(cfg.Storage.WorkPath)
 	}
 	coreNode.SetHostStatePaths(hostStatePaths(cfg))
+	// OS sandbox (sandbox.*): the environment filter always applies; when a
+	// mode is configured, every spawned native command and adapter runs under
+	// the platform's deny-default confinement on top. The node's own
+	// bookkeeping — database dir, memory stores, artifact pool, the config
+	// and card files — is write-protected at the sandbox layer too, so a
+	// confused task cannot corrupt the very state the drift detector and
+	// audit chain verify. hostStatePaths is NOT reused verbatim: it also
+	// lists workPath/.claude, the agent's own project config, and denying
+	// that would break the CLI's settings writes mid-run. The deny list is
+	// shared with the embedded engine via commander.ProtectedPaths.
+	if mode := cfg.Sandbox.NormalizedMode(); mode != "off" {
+		protected := commander.ProtectedPaths(cfg, *configPath, *cardPath)
+		if backend := commander.SetSandboxConfig(cfg.Sandbox, protected); backend == "" {
+			logger.Warn("sandbox mode configured but no backend on this platform",
+				"mode", mode)
+		} else {
+			logger.Info("subprocess sandbox enabled", "mode", mode, "backend", backend)
+		}
+	}
 	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
+	coreNode.SetAllowCleartext(cfg.Network.AllowCleartext)
 	// The artifact pool is the data plane: a stage's packed output, named by its
 	// hash, that a later stage on another node pulls over the bus. Without it a
 	// delegated task can only carry a path, which means nothing on the node that
@@ -455,6 +531,13 @@ func runDaemon(args []string) {
 	// the Web console can show — and correct or delete — what was memorized.
 	dreamer := memory.NewDreamer(hermes)
 	audit := security.NewAudit(db)
+	// P2-9: the dreamer's audit records carry the same attestation as the
+	// kernel's. Install the signer before the scheduler goroutine starts —
+	// an unsigned row written between goroutine launch and signing would
+	// fail VerifyChain's "no unsigned rows after signed" rule.
+	if pub, priv, ok := core.LoadNodeKey(db); ok {
+		audit.SetSigner(pub, priv)
+	}
 	dreamer.OnPromotion = func(entry string, viaWhitelist bool) {
 		channel := "threshold"
 		if viaWhitelist {
@@ -498,7 +581,7 @@ func runDaemon(args []string) {
 	// from — but it still checks periodically and logs a notice, so an
 	// operator reading the daemon log learns a release is waiting
 	// instead of discovering it on the next web visit.
-	updateNotice := updater.New(updater.Options{
+	updateNotice := updater.New(updateEnvOptions(updater.Options{
 		Current:         version,
 		CurrentCodename: versionpkg.Codename,
 		Logger:          logger,
@@ -512,12 +595,16 @@ func runDaemon(args []string) {
 				"version", disp,
 				"hint", "open the web console (System → Updates) to review the changelog and apply")
 		},
-	})
+	}))
 	updateNotice.StartAutoCheck(ctx, 6*time.Hour)
 
 	if err := coreNode.Register(ctx); err != nil {
 		fatal("register node", err)
 	}
+	// Materialize the Ed25519 identity now: a peerless node otherwise only
+	// generates it on first hello, leaving its own `panda nodes` fingerprint
+	// blank — the very value an operator compares a discovered peer against.
+	coreNode.EnsureNodeKey()
 	guard.Go(logger, "daemon: heartbeat", cancel, func() { coreNode.RunHeartbeat(ctx) })
 	guard.Go(logger, "daemon: monitor", cancel, func() { coreNode.RunMonitor(ctx) })
 
@@ -546,6 +633,16 @@ func runDaemon(args []string) {
 		}
 	}
 
+	// LAN discovery: unauthenticated broadcast beacons feeding a pending-join
+	// list — the "see a device, then pair it" half of Track 1. Default binds
+	// :7837; "off" silences both directions. Datagrams carry no credentials,
+	// so the socket neither proves nor admits anything.
+	if cfg.Network.DiscoveryAddr != "off" {
+		guard.Go(logger, "daemon: discovery", cancel, func() {
+			coreNode.RunDiscovery(ctx, cfg.Network.DiscoveryAddrOrDefault(), cfg.Network.ListenAddr)
+		})
+	}
+
 	for _, peer := range cfg.Network.Peers {
 		if strings.HasPrefix(peer, "punch:") {
 			// A punch entry names a node id, not an address: the peer is
@@ -555,6 +652,7 @@ func runDaemon(args []string) {
 			// re-punched on the next tick.
 			id := strings.TrimPrefix(peer, "punch:")
 			guard.Go(logger, "daemon: punch "+peer, cancel, func() {
+				punchFails := 0
 				for {
 					if coreNode.UDPPort() == 0 {
 						logger.Warn("punch peer configured but the datagram plane is off (network.udp_listen)", "peer", id)
@@ -562,8 +660,17 @@ func runDaemon(args []string) {
 					}
 					if coreNode.UDPRoute(id) == nil {
 						if err := coreNode.PunchPeer(ctx, id); err != nil {
-							logger.Warn("punch offer failed", "peer", id, "err", err)
+							punchFails++
+							// Same throttling as the dial loop below: first
+							// failure is news, a steady-state retry stream
+							// every 30s is not — log a sparse beat instead.
+							if punchFails == 1 || punchFails%peerFailLogEvery == 0 {
+								logger.Warn("punch offer failed", "peer", id, "err", err, "consecutive", punchFails)
+							}
 						}
+					} else if punchFails > 0 {
+						logger.Info("punch route established", "peer", id, "after_failures", punchFails)
+						punchFails = 0
 					}
 					select {
 					case <-ctx.Done():
@@ -576,6 +683,7 @@ func runDaemon(args []string) {
 		}
 		guard.Go(logger, "daemon: peer keepalive "+peer, cancel, func() {
 			backoff := 1 * time.Second
+			dialFails := 0
 			// jitter spreads a fleet-wide reconnect over a window instead of
 			// having every node redial in lockstep the second the peer returns —
 			// the classic thundering herd after a shared outage.
@@ -587,7 +695,16 @@ func runDaemon(args []string) {
 				if err != nil {
 					// Dial or hello failed; back off exponentially so we do
 					// not hot-loop a permanently offline peer.
-					logger.Warn("peer dial failed", "peer", peer, "err", err)
+					dialFails++
+					// First failure and the recovery are the news — a line
+					// every redial (~30s steady-state) grew an unbounded WARN
+					// stream for a peer that is simply off, and the
+					// LaunchAgent logs have no rotation. Keep a sparse beat
+					// every ~20th failure so the outage stays greppable
+					// without owning the log.
+					if dialFails == 1 || dialFails%peerFailLogEvery == 0 {
+						logger.Warn("peer dial failed", "peer", peer, "err", err, "consecutive", dialFails)
+					}
 					select {
 					case <-ctx.Done():
 						return
@@ -595,6 +712,10 @@ func runDaemon(args []string) {
 					}
 					backoff = min(backoff*2, 30*time.Second)
 					continue
+				}
+				if dialFails > 0 {
+					logger.Info("peer reconnected", "peer", peer, "after_failures", dialFails)
+					dialFails = 0
 				}
 				// The connection was established and later dropped; reset the
 				// backoff and reconnect promptly.
@@ -742,6 +863,9 @@ func printUsage(w *os.File) {
 	line("  nodes add <host:port>  add a peer to dial (generates shared_secret when missing,")
 	line("                         prints the join guide for the other machine)")
 	line("  nodes invite           print the join guide without changing the peer list")
+	line("  nodes admit <id>       admit a LAN-discovered node as a peer")
+	line("  nodes verify <id>      mark a node's fingerprint as human-compared")
+	line("  nodes drain [id]       maintenance mode: stop accepting new work (--off lifts)")
 	line("  nodes disconnect <a>   remove a peer from the dial list")
 	line("  pair --secret S --peer <host:port>")
 	line("                         join an existing network from a new machine")
@@ -755,7 +879,9 @@ func printUsage(w *os.File) {
 	line("  read <file> | <file.md> view file or document (renders Markdown automatically)")
 	line("")
 	line("sessions:")
-	line("  session list|new|show|rm|ask|diff|merge   chat sessions over git worktrees")
+	line("  session list|new|show|rm|ask|diff|merge")
+	line("          |fork|tree                      chat sessions over git worktrees;")
+	line("                                            fork/tree branch a thread")
 	line("")
 	line("tasks:")
 	line("  queue [--state s] [--project p] [--watch] the task board (--watch: live view)")
@@ -785,10 +911,12 @@ func printUsage(w *os.File) {
 	line("  reminder list|add|rm                      scheduled reminders")
 	line("  skill list|find|hub|add|reset             procedural skill & hub management")
 	line("  mcp                                       run the node's self-tools as an MCP stdio server")
+	line("  rpc                                       NDJSON-over-stdio embedding protocol (experimental)")
+	line("  auth login|status|logout <provider>       subscription OAuth (e.g. anthropic)")
 	line("")
 	line("observability:")
 	line("  status                                    node identity + capability directory")
-	line("  metrics [--csv]                           delegation metrics")
+	line("  metrics [--csv|--runtime]               delegation metrics / runtime load")
 	line("  heatmap [--weeks N]                       task-activity heatmap, last year (also /heatmap)")
 	line("  audit verify [--task id]                  verify the hash chain")
 	line("  audit entries [--task id]                 print audit trail rows")

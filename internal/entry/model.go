@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package entry
 
 import (
@@ -14,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/auth"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/security"
@@ -40,13 +43,25 @@ const defaultModel = "deepseek-v4-flash"
 // hardcoded 1024 was), while still bounding a runaway generation.
 const defaultMaxTokens = 4096
 
+// maxModelBodyBytes bounds a non-streaming provider response body. A chat
+// completion is a few MB at most; the 30s client timeout otherwise lets a
+// malfunctioning or hostile endpoint (operator-set base_url, a broken relay)
+// stream unbounded memory into the process.
+const maxModelBodyBytes = 64 << 20
+
 // Client talks to an Anthropic-compatible Messages API or an OpenAI-compatible
 // Chat Completions API, selected by the config's api_type. It is small and
 // dependency-free so the core daemon does not pull in an SDK.
 type Client struct {
-	apiType   string
-	baseURL   string
-	apiKey    string
+	apiType string
+	baseURL string
+	apiKey  string
+	// keyFn resolves a live credential per request (subscription OAuth).
+	// When set it supersedes apiKey, and oauth marks that the credential
+	// is a Bearer token rather than an API key — Anthropic then takes
+	// `authorization: Bearer` + the oauth beta flag instead of x-api-key.
+	keyFn     func(ctx context.Context) (string, error)
+	oauth     bool
 	model     string
 	maxTokens int
 	hc        *http.Client
@@ -188,6 +203,34 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		thinkingStyle:  providers.ThinkingStyleFor(model),
 		extraParams:    maps.Clone(model.Params),
 		extraHeaders:   maps.Clone(model.Headers),
+	}
+	// Subscription OAuth (model.auth): the credential resolves per request
+	// through the token store, so refreshes apply without a restart. The
+	// store directory follows the CLI's state-dir convention so a token
+	// written by `panda auth login` is the one found here.
+	if provider := strings.TrimSpace(model.Auth); provider != "" {
+		// Fail fast on a typoed provider id instead of silently sending a
+		// Bearer header against whatever endpoint model.base_url names.
+		if _, err := auth.Lookup(provider); err != nil {
+			return nil, fmt.Errorf("entry: model.auth: %w (%s)", err, strings.Join(auth.ProviderIDs(), ", "))
+		}
+		store := auth.OpenStore(auth.DefaultStateDir())
+		id := provider
+		c.keyFn = func(ctx context.Context) (string, error) { return store.AccessToken(ctx, id) }
+		c.oauth = true
+		// Anthropic OAuth needs the oauth beta flag on every call; merge it
+		// with a caller-supplied beta list rather than clobbering it.
+		const oauthBeta = "oauth-2025-04-20"
+		if c.extraHeaders == nil {
+			c.extraHeaders = map[string]string{}
+		}
+		if cur := c.extraHeaders["anthropic-beta"]; !strings.Contains(cur, oauthBeta) {
+			if cur != "" {
+				c.extraHeaders["anthropic-beta"] = cur + "," + oauthBeta
+			} else {
+				c.extraHeaders["anthropic-beta"] = oauthBeta
+			}
+		}
 	}
 	c.promptCache.Store(true)
 	if hasProvider {
@@ -609,6 +652,43 @@ type apiError struct {
 // ErrNoKey is returned when no API key is configured.
 var ErrNoKey = errors.New("entry: no model api_key configured")
 
+// credential resolves the per-request credential: a live OAuth token when
+// model.auth is configured, else the static api_key. The error is nil when
+// no credential exists (a no-auth endpoint), so callers pair it with the
+// noCredential guard rather than trusting the token's shape.
+func (c *Client) credential(ctx context.Context) (string, error) {
+	if c.keyFn != nil {
+		return c.keyFn(ctx)
+	}
+	return c.apiKey, nil
+}
+
+// noCredential reports whether the client has no way to authenticate: no
+// static key, no OAuth token source, and the endpoint is not marked no-auth.
+func (c *Client) noCredential() bool {
+	return c.apiKey == "" && c.keyFn == nil && !c.noAuth
+}
+
+// applyAuth sets the authentication header for one request. An OAuth token
+// goes out as Bearer on either dialect — the Anthropic OAuth path requires
+// it *instead of* x-api-key — while a static api_key keeps its per-dialect
+// header (Bearer for OpenAI, x-api-key for Anthropic).
+func (c *Client) applyAuth(ctx context.Context, httpReq *http.Request) error {
+	tok, err := c.credential(ctx)
+	if err != nil {
+		return err
+	}
+	if tok == "" {
+		return nil
+	}
+	if c.oauth || c.apiType == config.APITypeOpenAI {
+		httpReq.Header.Set("authorization", "Bearer "+tok)
+	} else {
+		httpReq.Header.Set("x-api-key", tok)
+	}
+	return nil
+}
+
 // Turn is one conversation turn for multi-turn classification.
 type Turn struct {
 	Role    string         // "user" | "assistant"
@@ -639,7 +719,7 @@ func (c *Client) CompleteTurns(ctx context.Context, system string, turns []Turn)
 // Anthropic endpoint rejects the string "auto" (it wants the internally-tagged
 // object form). Omitting it is simpler and correct.
 func (c *Client) CompleteTurnsWithTools(ctx context.Context, system string, turns []Turn, tools []ToolSpec) (Response, error) {
-	if c.apiKey == "" && !c.noAuth {
+	if c.noCredential() {
 		// Same guard as the streaming and OpenAI paths: an empty key would
 		// otherwise hit the provider and come back as a misleading 401
 		// "invalid key" instead of "not configured".
@@ -702,7 +782,7 @@ func normalizeTurns(turns []Turn) []Turn {
 // thinking-passback probe mirrors completeWithRetry: a rejection sets the
 // sticky flag and retries the corrected payload off the transport budget.
 func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn, tools []ToolSpec) (Response, error) {
-	if c.apiKey == "" && !c.noAuth {
+	if c.noCredential() {
 		return Response{}, ErrNoKey
 	}
 	msgs := turnsToOpenAI(system, turns)
@@ -758,8 +838,8 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []o
 		return Response{}, err
 	}
 	httpReq.Header.Set("content-type", "application/json")
-	if c.apiKey != "" {
-		httpReq.Header.Set("authorization", "Bearer "+c.apiKey)
+	if err := c.applyAuth(ctx, httpReq); err != nil {
+		return Response{}, err
 	}
 	c.applyExtraHeaders(httpReq)
 
@@ -772,7 +852,7 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []o
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxModelBodyBytes))
 	if err != nil {
 		return Response{}, &transientError{err: fmt.Errorf("read response: %w", err)}
 	}
@@ -955,8 +1035,8 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 		return Response{}, err
 	}
 	httpReq.Header.Set("content-type", "application/json")
-	if c.apiKey != "" {
-		httpReq.Header.Set("x-api-key", c.apiKey)
+	if err := c.applyAuth(ctx, httpReq); err != nil {
+		return Response{}, err
 	}
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
 	c.applyExtraHeaders(httpReq)
@@ -972,7 +1052,7 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxModelBodyBytes))
 	if err != nil {
 		// A mid-body truncation (unexpected EOF / connection reset) is a
 		// transient transport failure like a failed Do: no complete response was
@@ -1131,7 +1211,7 @@ type listModelsResponse struct {
 // listModelsEndpoint); the response is the OpenAI "data":[{"id":…}] form. It
 // needs an API key unless the provider is no-auth (a local Ollama).
 func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
-	if c.apiKey == "" && !c.noAuth {
+	if c.noCredential() {
 		return nil, ErrNoKey
 	}
 	url, bearer := c.listModelsEndpoint()
@@ -1139,15 +1219,11 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	if bearer {
-		if c.apiKey != "" {
-			req.Header.Set("authorization", "Bearer "+c.apiKey)
-		}
-	} else {
-		if c.apiKey != "" {
-			req.Header.Set("x-api-key", c.apiKey)
-		}
+	if !bearer {
 		req.Header.Set("anthropic-version", anthropicVersion)
+	}
+	if err := c.applyAuth(ctx, req); err != nil {
+		return nil, err
 	}
 	c.applyExtraHeaders(req)
 
@@ -1160,7 +1236,7 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxModelBodyBytes))
 	if err != nil {
 		return nil, &transientError{err: fmt.Errorf("read models: %w", err)}
 	}

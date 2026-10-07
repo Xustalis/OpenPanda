@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package commander
 
 import (
@@ -336,9 +338,10 @@ func ProbeModel(spec ProbeSpec) (ProbeVerdict, time.Duration) {
 
 // ProbeAgentFresh resolves the endpoint this agent's run would use and probes
 // it uncached — the live counterpart of CheckAgent's cached verdict, for
-// diagnostics that report the network as it is now.
-func (r *Router) ProbeAgentFresh(ag ledger.Agent) (ProbeVerdict, time.Duration) {
-	spec := r.agentTarget(ag)
+// diagnostics that report the network as it is now. name is the card's agent
+// entry, needed to resolve the registry record for generic.py custom CLIs.
+func (r *Router) ProbeAgentFresh(name string, ag ledger.Agent) (ProbeVerdict, time.Duration) {
+	spec := r.agentTarget(name, ag)
 	if spec.Endpoint == "" {
 		return ProbeVerdict{}, 0
 	}
@@ -378,16 +381,16 @@ type AgentCheck struct {
 func (r *Router) CheckAgent(name string, ag ledger.Agent) AgentCheck {
 	chk := AgentCheck{}
 	chk.Usable, chk.Reason = r.agentUsable(name, ag)
-	k, _ := agents.ByAdapter(ag.Adapter)
-	spec := r.agentTarget(ag)
+	k, _ := agents.Lookup(name, ag.Adapter)
+	spec := r.agentTarget(name, ag)
 	switch {
 	case k.SelfContainedModel:
 		chk.ModelSrc = "self"
 	default:
-		if dec := r.InjectionDecision(ag.Adapter); dec.Inject {
+		if dec := r.InjectionDecision(name, ag.Adapter); dec.Inject {
 			chk.ModelSrc = "injected"
 			chk.Model = dec.Model
-		} else if own, _ := probeAgentCredentials(ag.Adapter); own {
+		} else if own, _ := probeAgentCredentials(name, ag.Adapter); own {
 			chk.ModelSrc = "own"
 			chk.Model = spec.Model // the model the agent's config names
 		} else {

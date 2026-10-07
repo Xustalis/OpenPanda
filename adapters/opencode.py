@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Adapter: OpenCode CLI → PANDA Commander.
 
 Protocol (shared with claude_code.py / codex.py):
@@ -6,6 +7,10 @@ Protocol (shared with claude_code.py / codex.py):
           plus optional {resume, tools_policy}
   stdout: a JSON object with keys {ok, result, exit_code, tokens, cost},
           plus optional {usage, session_id}
+  stderr: NDJSON {"type":"progress","note":str,"kind":str?} status lines,
+          plus {"type":"event","ev":...} transcript frames — a text part on
+          first sighting → text, a tool part → tool_use on first sighting
+          and tool_result on its first terminal status; see _harness.py
 
 Execution mode: `opencode run --format json` streams the session's raw JSON
 events (one per line). Text parts accumulate into the answer, tool parts
@@ -120,6 +125,13 @@ def _run_events(cmd, cwd, timeout):
         "order": [],
         "tool_outputs": [],
         "counted": set(),
+        # Event-stream bookkeeping: parts re-emit as they update, so the
+        # transcript emits each part once — a text part on first sighting,
+        # a tool part's tool_use on first sighting and its tool_result the
+        # first time it reports a terminal status.
+        "seen_text": set(),
+        "seen_tool": set(),
+        "done_tool": set(),
         "usage": {"input_tokens": 0, "output_tokens": 0},
         "cost": None,
         "error": "",
@@ -225,6 +237,13 @@ def _fold(ev, state):
         if ptype == "text" and isinstance(part.get("text"), str) and part["text"]:
             if pid not in state["texts"]:
                 state["order"].append(pid)
+                # Text parts re-emit as they grow; the transcript row shows
+                # the first sighting. A mid-stream snapshot may be partial —
+                # the final answer is the result either way, and one row per
+                # part beats an update storm on the timeline.
+                if pid not in state["seen_text"]:
+                    state["seen_text"].add(pid)
+                    harness.emit_event("text", text=part["text"], id=pid)
             state["texts"][pid] = part["text"]
         elif ptype == "tool":
             # The event that carries a tool part is "tool_use" on current builds
@@ -233,13 +252,32 @@ def _fold(ev, state):
                 tool = str(part.get("tool") or "tool")
                 st = part.get("state") if isinstance(part.get("state"), dict) else {}
                 arg = str(st.get("title") or st.get("input") or "")[:80]
-                # A completed tool call is the useful timeline entry; started
-                # calls churn too much to be worth a note each.
-                if st.get("status") in ("completed", "error") or "completed" in str(st):
-                    harness.progress(f"{tool}: {arg}" if arg else tool)
-                    out = st.get("output")
-                    if isinstance(out, str) and out.strip():
-                        state["tool_outputs"].append(out.strip())
+                # tool_use on first sighting — the transcript shows the call
+                # while it runs; tool_result the first time a terminal
+                # status lands (the part keeps re-emitting after that, so
+                # everything below the check runs exactly once).
+                if pid not in state["seen_tool"]:
+                    state["seen_tool"].add(pid)
+                    inp = st.get("input")
+                    if isinstance(inp, str):
+                        inp = {"input": inp} if inp else {}
+                    harness.emit_event("tool_use", id=pid, name=tool,
+                                       input=inp if isinstance(inp, dict) else {"input": inp})
+                # The loose second test covers builds whose terminal status
+                # does not live at state.status — but the tool's own input
+                # text must not satisfy it, so it is pruned from the repr.
+                drift = {k: v for k, v in st.items() if k != "input"}
+                if st.get("status") in ("completed", "error") or "completed" in str(drift):
+                    if pid not in state["done_tool"]:
+                        state["done_tool"].add(pid)
+                        harness.progress(f"{tool}: {arg}" if arg else tool)
+                        out = st.get("output")
+                        harness.emit_event(
+                            "tool_result", tool_use_id=pid,
+                            is_error=st.get("status") == "error",
+                            content=str(out) if out is not None else "")
+                        if isinstance(out, str) and out.strip():
+                            state["tool_outputs"].append(out.strip())
         # Usage rides the step_finish part on current builds: each step reports
         # the tokens that call spent, so they accumulate (keyed by part id, so a
         # re-emitted part never double counts).

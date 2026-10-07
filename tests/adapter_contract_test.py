@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Black-box command contracts for the bundled Agent adapters.
 
 These tests never call a real provider. They put a deterministic fake CLI first
@@ -45,7 +46,12 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=10, extra_request=No
         merged["PATH"] = str(tmp) + os.pathsep + merged.get("PATH", "")
         if env:
             merged.update(env)
-        req = {"prompt": "contract prompt", "timeout_s": 3, "cwd": str(work)}
+        # timeout_s is the adapter's watchdog budget for the fake CLI: 3s was
+        # tight enough that suite-level load (parallel jobs on a cold box)
+        # could push a trivial fake past it and flake — 30s leaves the
+        # watchdog exercised (the dedicated timeout tests override it) without
+        # racing scheduler jitter.
+        req = {"prompt": "contract prompt", "timeout_s": 30, "cwd": str(work)}
         if extra_request:
             req.update(extra_request)
         proc = subprocess.run(
@@ -183,6 +189,85 @@ print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":
         )
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "resumed")
+
+    def test_codex_transcript_events(self):
+        """Codex items land on the transcript: a tool-shaped item is a
+        tool_use on item.started and a tool_result on item.completed;
+        agent_message is text, reasoning is thinking."""
+        payload, lines, _ = run_adapter(
+            "codex.py", "codex", r'''
+import json
+print(json.dumps({"type":"session_meta","payload":{"id":"cs-1"}}))
+print(json.dumps({"type":"item.started","item":{"id":"i1","type":"command_execution","command":"ls -la","status":"in_progress"}}))
+print(json.dumps({"type":"item.completed","item":{"id":"i2","type":"reasoning","text":"pondering"}}))
+print(json.dumps({"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"ls -la","status":"completed","aggregated_output":"total 0"}}))
+print(json.dumps({"type":"item.completed","item":{"id":"i3","type":"agent_message","text":"codex answer"}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        events = [json.loads(l) for l in lines if l.startswith("{")]
+        events = [e for e in events if e.get("type") == "event"]
+        kinds = [e["ev"] for e in events]
+        self.assertEqual(kinds, ["tool_use", "thinking", "tool_result", "text"])
+        self.assertEqual(events[0]["name"], "shell")
+        self.assertEqual(events[0]["input"], {"command": "ls -la"})
+        self.assertEqual(events[0]["id"], "i1")
+        self.assertEqual(events[1]["thinking"], "pondering")
+        self.assertEqual(events[2]["tool_use_id"], "i1")
+        self.assertEqual(events[2]["content"], "total 0")
+        self.assertFalse(events[2]["is_error"])
+        self.assertEqual(events[3]["text"], "codex answer")
+        self.assertEqual(events[3]["id"], "i3")
+
+    def test_codex_completion_only_tool_pair(self):
+        """Older codex streams emit item.completed with no item.started:
+        the adapter synthesizes the missing tool_use so the transcript never
+        shows an orphaned result."""
+        payload, lines, _ = run_adapter(
+            "codex.py", "codex", r'''
+import json
+print(json.dumps({"type":"item.completed","item":{"id":"w1","type":"command_execution","command":"pwd","status":"completed","aggregated_output":"/repo"}}))
+print(json.dumps({"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"done"}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        events = [json.loads(l) for l in lines if l.startswith("{")]
+        events = [e for e in events if e.get("type") == "event"]
+        kinds = [e["ev"] for e in events]
+        # The synthesized use+result pair precedes the message text.
+        self.assertEqual(kinds, ["tool_use", "tool_result", "text"])
+        self.assertEqual(events[0]["id"], "w1")
+        self.assertEqual(events[0]["name"], "shell")
+        self.assertEqual(events[1]["tool_use_id"], "w1")
+        self.assertEqual(events[1]["content"], "/repo")
+
+    def test_opencode_transcript_events(self):
+        """Opencode parts land on the transcript once: text on first
+        sighting, tool_use on first sighting, tool_result on the first
+        terminal status — re-emitted parts never duplicate a row."""
+        payload, lines, _ = run_adapter(
+            "opencode.py", "opencode", r'''
+import json
+print(json.dumps({"type":"tool_use","sessionID":"s1","part":{"id":"pt","type":"tool","tool":"bash","state":{"status":"running","input":{"command":"uname"},"title":"uname"}}}))
+print(json.dumps({"type":"tool_use","sessionID":"s1","part":{"id":"pt","type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"uname"},"output":"arm64","title":"uname"}}}))
+# A status re-emit must not duplicate the tool_result row.
+print(json.dumps({"type":"tool_use","sessionID":"s1","part":{"id":"pt","type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"uname"},"output":"arm64","title":"uname"}}}))
+print(json.dumps({"type":"text","sessionID":"s1","part":{"id":"px","type":"text","text":"half"}}))
+print(json.dumps({"type":"text","sessionID":"s1","part":{"id":"px","type":"text","text":"half plus more"}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        events = [json.loads(l) for l in lines if l.startswith("{")]
+        events = [e for e in events if e.get("type") == "event"]
+        kinds = [e["ev"] for e in events]
+        self.assertEqual(kinds, ["tool_use", "tool_result", "text"])
+        self.assertEqual(events[0]["name"], "bash")
+        self.assertEqual(events[0]["input"], {"command": "uname"})
+        self.assertEqual(events[1]["tool_use_id"], "pt")
+        self.assertEqual(events[1]["content"], "arm64")
+        self.assertFalse(events[1]["is_error"])
+        # First sighting wins — the update does not re-emit a second row.
+        self.assertEqual(events[2]["text"], "half")
 
     def test_claude_injected_model_strips_settings_on_stream_only(self):
         # Credential rescue: an injected model/base URL disables the user's
@@ -464,7 +549,9 @@ print("appended")
     def test_generic_timeout_and_missing_binary_contract(self):
         payload, _, _ = run_adapter(
             "generic.py", "slowcli", "import time; time.sleep(10)\n",
-            extra_request={"cmd": "slowcli {prompt}"},
+            # The watchdog is the thing under test: pin a small timeout_s so
+            # the adapter kills the fake CLI well inside the 8s outer bound.
+            extra_request={"cmd": "slowcli {prompt}", "timeout_s": 2},
             timeout=8,
         )
         self.assertFalse(payload["ok"], payload)
@@ -475,6 +562,247 @@ print("appended")
         )
         self.assertFalse(payload["ok"], payload)
         self.assertEqual(payload["exit_code"], 127)
+
+    def test_generic_not_executable_is_126(self):
+        # A binary on PATH that lacks the exec bit is a spawn failure, not a
+        # missing binary: 126 follows the shell convention.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            (tmp / "noexec").write_text("#!/usr/bin/env python3\n")  # no +x
+            merged = os.environ.copy()
+            merged["PATH"] = str(tmp) + os.pathsep + merged.get("PATH", "")
+            req = {"prompt": "p", "timeout_s": 30, "cmd": "noexec {prompt}"}
+            proc = subprocess.run(
+                [sys.executable, str(ADAPTERS / "generic.py")],
+                input=json.dumps(req), text=True, capture_output=True,
+                env=merged, cwd=str(ROOT), timeout=10,
+            )
+            payload = json.loads(proc.stdout.strip())
+            self.assertFalse(payload["ok"], payload)
+            self.assertEqual(payload["exit_code"], 126)
+
+    def test_generic_stdin_placeholder_pipes_prompt(self):
+        # {stdin} drops its element and delivers the prompt on the child's
+        # stdin — the headless contract for CLIs that read it there, and the
+        # way past the OS argv limit for large prompts.
+        payload, _, _ = run_adapter(
+            "generic.py", "mimo", r'''
+import sys
+assert sys.argv[1:] == ["exec", "-"], sys.argv
+print("stdin:" + sys.stdin.read())
+''',
+            extra_request={"cmd": "mimo exec - {stdin}"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "stdin:contract prompt")
+
+    def test_generic_optional_placeholders(self):
+        # {cwd} always resolves; {resume}/{max_turns} fill in when the
+        # request carries them.
+        payload, _, _ = run_adapter(
+            "generic.py", "mimo", r'''
+import sys
+args = sys.argv[1:]
+assert args[args.index("--dir") + 1].endswith("/work"), args
+assert args[args.index("--session") + 1] == "sess-1", args
+assert args[args.index("--max-agent-turns") + 1] == "7", args
+assert "contract prompt" in args, args
+print("filled")
+''',
+            extra_request={
+                "cmd": "mimo --dir {cwd} --session {resume} "
+                       "--max-agent-turns {max_turns} {prompt}",
+                "resume": "sess-1", "max_turns": 7,
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "filled")
+        # Unset optional placeholders drop cleanly: the joined form loses its
+        # whole element, the two-token form also loses the flag that would
+        # otherwise eat the next element as its value.
+        payload, _, _ = run_adapter(
+            "generic.py", "mimo", r'''
+import sys
+assert sys.argv[1:] == ["run", "contract prompt"], sys.argv
+print("dropped")
+''',
+            extra_request={
+                "cmd": "mimo run --session {resume} --turns={max_turns} {prompt}",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "dropped")
+
+    def test_generic_prompt_text_is_never_rescanned(self):
+        # Single-pass substitution: literal "{cwd}" inside the prompt body
+        # survives verbatim — expansion must not re-scan substituted values.
+        payload, _, _ = run_adapter(
+            "generic.py", "mimo", r'''
+import sys
+args = sys.argv[1:]
+assert args[args.index("--p") + 1] == "fix {cwd} and {resume}", args
+print("literal")
+''',
+            extra_request={
+                "cmd": "mimo --p {prompt}",
+                "prompt": "fix {cwd} and {resume}",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "literal")
+
+    def test_generic_template_expanding_to_nothing_is_reported(self):
+        # A template whose only element was an unset optional placeholder
+        # expands to zero argv: report a config error instead of exec'ing
+        # the prompt itself as the command.
+        payload, _, _ = run_adapter(
+            "generic.py", "never-spawned", "import sys; sys.exit(99)\n",
+            extra_request={"cmd": "{resume}"},
+        )
+        self.assertFalse(payload["ok"], payload)
+        self.assertEqual(payload["exit_code"], 2)
+
+    def test_pi_json_mode_contract(self):
+        # `pi --mode json` emits a session header plus JSONL events; the
+        # adapter reduces it to the wire result: last assistant text is the
+        # answer, the session id rides for resume, usage sums across
+        # messages, and tool executions become progress/event rows.
+        payload, progress, _ = run_adapter(
+            "pi.py", "pi", r'''
+import json, os, sys
+args = sys.argv[1:]
+assert args[:2] == ["--mode", "json"], args
+assert "--approve" in args
+assert "--tools" in args and "read" in args[args.index("--tools") + 1]
+assert "--exclude-tools" in args and "mcp__*" in args
+assert args[-2:] == ["--", "contract prompt"], args
+assert os.getcwd().endswith("/work")
+print(json.dumps({"type":"session","id":"pi-sess-1","version":1}))
+print(json.dumps({"type":"tool_execution_start","toolCallId":"t1","toolName":"bash","args":{"command":"pwd"}}))
+print(json.dumps({"type":"tool_execution_end","toolCallId":"t1","isError":False,"result":"/work"}))
+print(json.dumps({"type":"message_end","message":{"role":"assistant","id":"m1",
+      "content":[{"type":"text","text":"pi answer"}],
+      "usage":{"input":4,"output":6,"cacheRead":2,"cacheWrite":1,"cost":{"total":0.03}}}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "pi answer")
+        self.assertEqual(payload["session_id"], "pi-sess-1")
+        self.assertEqual(payload["tokens"], 10)
+        self.assertEqual(payload["cost"], 0.03)
+        self.assertEqual(payload["usage"]["cache_read_tokens"], 2)
+        self.assertTrue(any("bash: pwd" in line for line in progress), progress)
+
+    def test_pi_resume_policy_and_restricted_contract(self):
+        # A follow-up round resumes the session by id; extended policy drops
+        # the --tools whitelist entirely.
+        payload, _, _ = run_adapter(
+            "pi.py", "pi", r'''
+import json, sys
+args = sys.argv[1:]
+assert "--session" in args and args[args.index("--session") + 1] == "pi-prev"
+assert "--tools" not in args, args
+print(json.dumps({"type":"message_end","message":{"role":"assistant",
+      "content":[{"type":"text","text":"resumed"}],"usage":{"input":1,"output":1}}}))
+''',
+            extra_request={"resume": "pi-prev", "tools_policy": "extended"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "resumed")
+        # Restricted (unconsented remote) narrows to read-only tools and
+        # switches project resources off — no approve, no MCP, no extensions.
+        payload, _, _ = run_adapter(
+            "pi.py", "pi", r'''
+import json, sys
+args = sys.argv[1:]
+assert "--tools" in args
+assert args[args.index("--tools") + 1] == "read,grep,find,ls", args
+assert "--no-mcp" in args and "--no-extensions" in args
+assert "--no-approve" in args and "--approve" not in args
+print(json.dumps({"type":"message_end","message":{"role":"assistant",
+      "content":[{"type":"text","text":"readonly"}],"usage":{"input":1,"output":1}}}))
+''',
+            extra_request={"restricted": True},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "readonly")
+
+    def test_pi_print_fallback_contract(self):
+        # A pi too old for --mode json degrades to print mode — the command
+        # is rebuilt wholesale, never token-filtered.
+        payload, _, _ = run_adapter(
+            "pi.py", "pi", r'''
+import sys
+args = sys.argv[1:]
+if "--mode" in args:
+    sys.stderr.write("error: unknown option --mode\n")
+    sys.exit(1)
+assert args[0] == "--print" and args[-1] == "contract prompt", args
+print("pi print answer")
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "pi print answer")
+
+    def test_pi_injected_model_contract(self):
+        # Injection writes a temp agent dir whose models.json declares the
+        # "panda" provider; the api key rides a ${PI_API_KEY} interpolation —
+        # the secret never lands in the file or argv.
+        payload, _, _ = run_adapter(
+            "pi.py", "pi", r'''
+import json, os, sys
+args = sys.argv[1:]
+assert "--model" in args and args[args.index("--model") + 1] == "panda/injected-model"
+agent_dir = os.environ.get("PI_CODING_AGENT_DIR", "")
+assert agent_dir, "PI_CODING_AGENT_DIR must point at the temp dir"
+with open(os.path.join(agent_dir, "models.json")) as f:
+    doc = json.load(f)
+prov = doc["providers"]["panda"]
+assert "${PI_API_KEY}" in json.dumps(prov), doc
+assert "sekret-key" not in json.dumps(prov)
+assert "--session-dir" in args, args
+print(json.dumps({"type":"message_end","message":{"role":"assistant",
+      "content":[{"type":"text","text":"injected"}],"usage":{"input":1,"output":1}}}))
+''',
+            env={
+                "OPENPANDA_INJECTED_MODEL": "1",
+                "PI_MODEL": "injected-model",
+                "PI_BASE_URL": "https://api.example/v1",
+                "PI_API_KEY": "sekret-key",
+                "OPENPANDA_MODEL_API_TYPE": "openai",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "injected")
+
+    def test_generic_extended_placeholders(self):
+        # task_id / effort / system_prompt / timeout_s fill in when the
+        # request carries them, and {env:NAME} resolves from the sandboxed
+        # environment — a missing variable drops flag and element together.
+        payload, _, _ = run_adapter(
+            "generic.py", "mimo", r'''
+import os, sys
+args = sys.argv[1:]
+assert args[args.index("--task") + 1] == "task-42", args
+assert args[args.index("--effort") + 1] == "high", args
+assert args[args.index("--sysp") + 1] == "static protocol text", args
+assert args[args.index("--deadline") + 1] == "30", args
+assert args[args.index("--key") + 1] == "sekrit", args
+assert "--other" not in args, args
+assert "contract prompt" in args, args
+print("filled")
+''',
+            env={"MIMO_API_KEY": "sekrit"},
+            extra_request={
+                "cmd": "mimo --task {task_id} --effort {effort} "
+                       "--sysp {system_prompt} --deadline {timeout_s} "
+                       "--key {env:MIMO_API_KEY} --other {env:MIMO_MISSING} {prompt}",
+                "task_id": "task-42", "effort": "high",
+                "system_prompt": "static protocol text",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "filled")
 
     def test_antigravity_envelope_contract(self):
         # agy -p … --output-format json emits ONE JSON envelope; the adapter
@@ -535,6 +863,9 @@ sys.exit(1)
 import time
 time.sleep(10)
 ''',
+            # Same as the generic watchdog test: timeout_s must stay small
+            # here or the adapter would outwait the 8s outer bound.
+            extra_request={"timeout_s": 2},
             timeout=8,
         )
         self.assertFalse(payload["ok"], payload)
@@ -594,6 +925,15 @@ class HarnessContractTest(unittest.TestCase):
         self.assertNotIn("usage", payload)
         self.assertNotIn("session_id", payload)
 
+    def test_emit_carries_session_dead(self):
+        # The wire flag Go's one-shot fallback keys on: present only when the
+        # session process is gone.
+        payload, _ = run_harness(
+            "_harness.emit(False, 'provider exploded', 1, session_dead=True)")
+        self.assertIs(payload["session_dead"], True)
+        payload, _ = run_harness("_harness.emit(True, 'done', 0)")
+        self.assertNotIn("session_dead", payload)
+
     def test_invalid_request_json_is_reported(self):
         payload, proc = run_harness(
             "_harness.read_request()", stdin_data="not json {{{")
@@ -636,6 +976,85 @@ sys.exit(1)
         self.assertFalse(payload["ok"], payload)
         self.assertEqual(payload["exit_code"], 127)
         self.assertEqual(payload["result"], "definitely-not-on-path-xyz binary not found")
+
+    def test_emit_event_frames(self):
+        """emit_event writes a bounded {"type":"event"} NDJSON frame on
+        stderr: known fields ride under their names, unknown keys land in
+        "data", oversized input is clamped."""
+        _, proc = run_harness(
+            "_harness.emit_event('tool_use', id='t1', name='Bash', "
+            "input={'command': 'x' * 20000}, extra_key='v'); "
+            "_harness.emit_event('text', text='hello', parent='t1'); "
+            "_harness.emit(True, 'done', 0)")
+        frames = [json.loads(l) for l in proc.stderr.splitlines()
+                  if l.startswith("{")]
+        frames = [f for f in frames if f.get("type") == "event"]
+        self.assertEqual(len(frames), 2, proc.stderr)
+        self.assertEqual(frames[0]["ev"], "tool_use")
+        self.assertEqual(frames[0]["id"], "t1")
+        self.assertEqual(frames[0]["name"], "Bash")
+        # Unknown fields pass through at the top level.
+        self.assertEqual(frames[0]["extra_key"], "v")
+        # An oversized input structure degrades to clamped JSON text.
+        self.assertIsInstance(frames[0]["input"], str)
+        self.assertLess(len(frames[0]["input"]), 5000)
+        self.assertEqual(frames[1]["parent"], "t1")
+        self.assertEqual(frames[1]["text"], "hello")
+
+    def test_emit_event_clamps_multibyte_by_bytes(self):
+        """Field limits are UTF-8 byte budgets: the Go harness spills any
+        stderr line past 24KB to diagnostics, and 16000 CJK characters are
+        ~48KB on the wire — a character-count clamp would emit a line too
+        long to survive and the event would be dropped instead of clamped."""
+        _, proc = run_harness(
+            "_harness.emit_event('text', text='汉' * 16000); "
+            "_harness.emit(True, 'done', 0)")
+        frames = [json.loads(l) for l in proc.stderr.splitlines()
+                  if l.startswith("{")]
+        frames = [f for f in frames if f.get("type") == "event"]
+        self.assertEqual(len(frames), 1, proc.stderr)
+        self.assertTrue(frames[0]["text"].endswith("…[截断]"),
+                        frames[0]["text"][-40:])
+        # The whole stderr line stays under the Go side's line cap.
+        self.assertLess(len(proc.stderr.encode("utf-8")), 24 * 1024)
+
+    def test_emit_event_clamp_preserves_code_points(self):
+        """Byte clamping must not split a multi-byte code point — the cut
+        text still decodes cleanly and carries the truncation marker."""
+        _, proc = run_harness(
+            "import sys; "
+            "print(_harness._clamp_str('汉' * 6000, 16000), file=sys.stderr)")
+        # 6000 CJK chars ≈ 18000 bytes: clamped to ≤16000 bytes + marker.
+        out = proc.stderr.strip()
+        self.assertTrue(out.endswith("…[截断]"), out[-40:])
+        self.assertLessEqual(len(out.encode("utf-8")), 16000 + 32)
+
+    def test_run_simple_transcript_events(self):
+        """A plain CLI run lands on the transcript as one tool_use/
+        tool_result pair — argv shape on the call, bounded output on the
+        result."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            write_executable(tmp / "okcli", r'''
+import sys
+print("cli output")
+''')
+            payload, proc = run_harness(
+                "_harness.run_simple([%r, 'a1'], label='okcli')"
+                % str(tmp / "okcli"))
+            self.assertTrue(payload["ok"], payload)
+            frames = [json.loads(l) for l in proc.stderr.splitlines()
+                      if l.startswith("{")]
+            frames = [f for f in frames if f.get("type") == "event"]
+            self.assertEqual([f["ev"] for f in frames],
+                             ["tool_use", "tool_result"])
+            self.assertEqual(frames[0]["name"], "okcli")
+            # The prompt lives inside argv — the event carries the arg
+            # count, not the arguments.
+            self.assertEqual(frames[0]["input"], {"argc": 1})
+            self.assertEqual(frames[1]["tool_use_id"], "okcli")
+            self.assertFalse(frames[1]["is_error"])
+            self.assertEqual(frames[1]["content"], "cli output")
 
     def test_timeout_kills_whole_process_tree(self):
         """The watchdog timeout must kill the CLI AND its children: the child

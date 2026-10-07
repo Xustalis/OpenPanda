@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package askengine
 
 import (
@@ -105,16 +107,36 @@ func toTaskInput(spec *entry.TaskSpec, loc ...i18n.Locale) core.TaskInput {
 		intent.WriteString("\n" + i18n.Tf(targetLoc, "prompt.task.success_definition", "def", spec.Spec.SuccessDefinition))
 	}
 
+	// spec_json is marshalled from the Detail — execution overrides the model
+	// emitted on the outer spec must be copied down or they die here.
+	if spec.Spec.ToolsPolicy == "" {
+		spec.Spec.ToolsPolicy = spec.ToolsPolicy
+	}
+	if spec.Spec.MaxTurns == 0 {
+		spec.Spec.MaxTurns = spec.MaxTurns
+	}
+
 	specJSON, _ := json.Marshal(spec.Spec)
 	resourceJSON, _ := json.Marshal(spec.Resources)
+
+	// An action_spec is an actuator dispatch: the context is hardware (a servo
+	// has no checkout) whatever the model labelled it, and the spec's exact
+	// target id leads requires so MatchActuator resolves THIS actuator rather
+	// than whichever card actuator a vaguer token happens to hit first.
+	requires := spec.Requires.Abilities
+	contextType := spec.ContextType
+	if spec.Spec.ActionSpec != nil {
+		requires = ledger.RequiresForActionSpec(requires, spec.Spec.ActionSpec)
+		contextType = "hardware"
+	}
 
 	return core.TaskInput{
 		Title:         spec.Title,
 		Project:       spec.Project,
-		ContextType:   spec.ContextType,
+		ContextType:   contextType,
 		Intent:        intent.String(),
 		SpecJSON:      string(specJSON),
-		Requires:      spec.Requires.Abilities,
+		Requires:      requires,
 		PreferredNode: spec.Spec.Node,
 		Complexity:    spec.Complexity,
 		Risk:          spec.Risk,

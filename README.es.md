@@ -7,7 +7,7 @@
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
 [![Release](https://img.shields.io/github/v/release/Xustalis/OpenPanda?label=release&color=blue)](https://github.com/Xustalis/OpenPanda/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/plataformas-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
@@ -159,8 +159,8 @@ panda init
 | Versión | Tema |
 |---|---|
 | **v0.0.8** (base estable) | Orquestación multiagente en una sola máquina, plenamente utilizable: clasificación de intención, despacho, bucle de supervisión, failover, aprobación por niveles, política de idioma en prompts |
-| **v0.0.9** (actual) — "Periapsis" | Arquitectura de transporte híbrido/DTN completada: enrutado mesh ponderado por latencia, bundles DTN sobre el cable, presupuestos de tokens, copias sombra, ruta de actuadores, plano de datagramas UDP con hole punching NAT coordinado por la malla, payloads cifrados, planes de contacto, identidad de nodo Ed25519, compilación lite — más aprobaciones recordadas, atribución de ejecución, un chip de nodo en la barra lateral web y pulido de la CLI cotidiana |
-| **v0.0.10** | La colaboración multidispositivo como protagonista: delegación entre nodos, protección por lease, ejecución reanudable — endurecida y probada en campo |
+| **v0.0.9** (estable) — "Periapsis" | Arquitectura de transporte híbrido/DTN completada: enrutado mesh ponderado por latencia, bundles DTN sobre el cable, presupuestos de tokens, copias sombra, ruta de actuadores, plano de datagramas UDP con hole punching NAT coordinado por la malla, payloads cifrados, planes de contacto, identidad de nodo Ed25519, compilación lite — más aprobaciones recordadas, atribución de ejecución, un chip de nodo en la barra lateral web y pulido de la CLI cotidiana |
+| **v0.0.10-preview** (actual) — "Apoapsis" | Hacia fuera, a la LAN y al borde: descubrimiento con admisión confirmada por huella y pinning TOFU de claves, tareas de archivo delegadas que viajan con su worktree, el bucle de clarificación, despacho de actuadores con cinco drivers de referencia (MCU serie incluido), el adaptador Pi y un ejecutor generic sin Python, adopción del directorio de lanzamiento como proyecto — más cadenas de eventos/auditoría firmadas ancladas a la clave del nodo, clamp de solo-lectura para ejecuciones remotas sin consentimiento, firma de actualización fuera de banda opcional y una ronda de rendimiento en régimen |
 | **v0.0.x (más allá)** | Estabilidad, rendimiento y ajuste de casos límite |
 | **v0.1.0** | Capacidades de escritorio y un control y una gestión más potentes — calidad comercial |
 
@@ -182,4 +182,9 @@ Hoy OpenPanda sirve a los dispositivos y agentes de un desarrollador. El objetiv
 
 ## 📄 Licencia
 
-OpenPanda es software de código abierto bajo la [Licencia MIT](LICENSE).
+OpenPanda se distribuye bajo doble licencia:
+
+- **Comunitaria** — [GNU Affero General Public License v3.0 o posterior](LICENSE) (AGPL-3.0-or-later)
+- **Comercial** — licencia propietaria para integración en código cerrado u oferta alojada; consulta [COMMERCIAL.md](COMMERCIAL.md)
+
+Las versiones publicadas antes del cambio siguen disponibles bajo la licencia MIT.

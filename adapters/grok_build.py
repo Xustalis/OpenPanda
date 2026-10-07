@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Adapter: Grok Build CLI → PANDA Commander.
 
 Protocol (shared with codex.py / claude_code.py / opencode.py):
@@ -49,12 +50,21 @@ def main():
     if model:
         cmd += ["--model", model]
 
+    # Transcript pair, same shape run_simple emits for plain adapters: the
+    # invocation row records argv shape only (the prompt is inside argv and
+    # must not be re-logged), the result row the bounded output.
+    harness.emit_event("tool_use", id="grok", name="grok",
+                       input={"argc": len(cmd) - 1})
     try:
         returncode, out, err = harness.run_plain(cmd, cwd=cwd, timeout=timeout)
     except subprocess.TimeoutExpired:
+        harness.emit_event("tool_result", tool_use_id="grok", is_error=True,
+                           content="grok timed out")
         harness.emit(False, "grok timed out", 124)
         return
     except FileNotFoundError:
+        harness.emit_event("tool_result", tool_use_id="grok", is_error=True,
+                           content="grok binary not found")
         harness.emit(False, "grok binary not found", 127)
         return
 
@@ -72,7 +82,10 @@ def main():
             return
         session = ""  # nameless run: nothing a later round could resume
 
-    harness.emit(returncode == 0, out.strip() or err.strip(), returncode,
+    result = out.strip() or err.strip()
+    harness.emit_event("tool_result", tool_use_id="grok",
+                       is_error=returncode != 0, content=result)
+    harness.emit(returncode == 0, result, returncode,
                  session_id=session)
 
 

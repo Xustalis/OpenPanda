@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 GO ?= go
 BIN := bin/panda
 # VERSION is read from internal/version/version.go by default. Set explicitly
@@ -12,6 +14,12 @@ VERSION ?= $(shell sed -n 's/^var Version = "\(.*\)"/\1/p' internal/version/vers
 # version.Version source value (including the -beta / -rc suffixes that a
 # VERSION override here would strip).
 RELEASE_LDFLAGS := -s -w -X github.com/Xustalis/OpenPanda/internal/version.Version=$(VERSION)
+# A pinned release key bakes its public half into release binaries so the
+# self-update path verifies checksums.txt.sig by default. Same knob as
+# scripts/package.sh (which additionally signs checksums.txt itself).
+ifneq ($(OPENPANDA_RELEASE_PUBKEY),)
+RELEASE_LDFLAGS += -X github.com/Xustalis/OpenPanda/internal/version.ReleasePubKey=$(OPENPANDA_RELEASE_PUBKEY)
+endif
 LDFLAGS_DEV := -s -w
 
 # Static binaries by default (no cgo). A small minority of users with
@@ -165,6 +173,17 @@ tui-pty-test: build
 		echo "tui-pty-test: skipped — this platform has no pty (run it on macOS/Linux)"; \
 	fi
 
+# TUI exit-visibility check: drives a real turn to failure in a pty and asserts
+# the pair lands in the convo file, the "saved / resume" note prints on the
+# restored normal screen, and the terminal is left clean. Same reason as the
+# mouse leg: the ordering and the bytes only exist in a real terminal.
+tui-pty-exit-test: build
+	@if [ "$$(uname -s)" = "Darwin" ] || [ "$$(uname -s)" = "Linux" ]; then \
+		PANDA_BIN=$(BIN) python3 scripts/tui-exit-pty-check.py; \
+	else \
+		echo "tui-pty-exit-test: skipped — this platform has no pty (run it on macOS/Linux)"; \
+	fi
+
 test: adapter-test
 	$(GO) test ./...
 
@@ -212,6 +231,7 @@ race-focused:
 #   在 gate 之上追加：
 #   7. web-gate     (npm ci + typecheck + 前端单测 + vite 生产构建，验证 embed 产物)
 #   8. tui-pty-test (真实 pty 下的鼠标所有权契约)
+#   9. tui-pty-exit-test (真实 pty 下的退出提示与失败轮次持久化契约)
 #
 # 与 CI 的对应关系：
 #   gate.yml 的每个 job 都必须能在这里跑出来，否则一个只在 CI 里存在的
@@ -232,7 +252,7 @@ gate: fmt-check vet build adapter-test test race-focused
 # web tests) + the TUI pty check. CI runs these as separate jobs (see
 # .github/workflows/gate.yml); gate-all is the local equivalent for a pre-merge
 # pass.
-gate-all: gate web-gate tui-pty-test
+gate-all: gate web-gate tui-pty-test tui-pty-exit-test
 
 # Regenerate the PWA icon set (webui/app/public/icons/) from the stdlib-only generator.
 icons:
@@ -270,6 +290,11 @@ measure:
 		sleep 2; \
 		ps -o rss= -p $$(cat /tmp/panda-measure.pid) | awk '{printf "RSS: %.2f MB\n", $$1/1024}'; \
 		kill -TERM $$(cat /tmp/panda-measure.pid) 2>/dev/null
+
+# Run the performance benchmarks with allocation reporting: routing match and
+# decision, wire codec (control + 1 MiB data frames), dispatch dedup.
+bench:
+	go test -run '^$$' -bench . -benchmem ./internal/ledger/ ./internal/scheduler/ ./internal/bus/ ./internal/core/
 
 clean:
 	rm -rf bin dist

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useMemo, useState } from 'preact/hooks'
 import { api, ApiError, isTaskStalled, type ApprovalScope, type NodeInfo, type Task } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
@@ -5,6 +7,7 @@ import { t } from '../i18n'
 import { ScopeSelect } from '../components/scope-select'
 import { StateBadge } from '../components/state-badge'
 import { ErrorState } from '../components/page'
+import { Icon } from '../components/icons'
 import { confirmDialog } from '../components/confirm'
 import { toast, toastError } from '../components/toast'
 
@@ -584,12 +587,12 @@ function KanbanCard({
             class="kanban-owner"
             title={t('queue.delegated', { n: String(task.delegation_chain!.length) })}
           >
-            ⛁{task.delegation_chain!.length}
+            <Icon name="network" size={11} /> {task.delegation_chain!.length}
           </span>
         )}
         {task.session_id && (
           <span class="kanban-session" title={t('queue.openSession')}>
-            💬
+            <Icon name="message" size={12} />
           </span>
         )}
         <span>{task.updated_at ? new Date(task.updated_at).toLocaleString() : ''}</span>

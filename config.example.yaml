@@ -34,9 +34,11 @@ network:
   # max_connections_per_ip: 8      # per-remote-IP concurrent WS connections (0 = unlimited)
   # ── Embedded console / panel address ──
   # Reused by the webui sidecar (webui/cmd/panel), `panda web`, and the REPL
-  # `/web` command. Empty falls back to 127.0.0.1:7840; a non-loopback bind
-  # without panel_token refuses to start. Plain HTTP — keep loopback or put
-  # it behind a TLS reverse proxy.
+  # `/web` command. Empty falls back to 127.0.0.1:7840. A non-loopback bind
+  # without panel_token gets an ephemeral token for the session (the API
+  # never runs open) and a loud warning — but plain HTTP means the token and
+  # task contents are sniffable on the path, so prefer loopback or a TLS
+  # reverse proxy, and set a stable token for anything long-lived.
   panel_addr: "127.0.0.1:7840"
   # panel_token: ""              # Bearer token guarding /api/* (prefer env OPENPANDA_PANEL_TOKEN)
   # ── UDP datagram plane (Periapsis): NAT traversal + AEAD-sealed delivery ──
@@ -53,6 +55,23 @@ network:
   # you run your own or trust a public one (they learn your IP, nothing else).
   # stun_servers:
   #   - "stun.l.google.com:19302"
+  # ── LAN auto-discovery ──
+  # A small unauthenticated UDP beacon ("panda-beacon/1") announces this node
+  # on the LAN so `panda nodes` on another host can show it under "not
+  # paired" and `panda nodes admit <id>` can peer it. The beacon carries only
+  # id/address/version/pubkey — never credentials; joining still requires the
+  # shared secret and a signed Ed25519 hello.
+  #   ""      (default) — broadcast+listen on :7837
+  #   "off"             — disable discovery entirely
+  # discovery_addr: ":7837"
+  # ── Cleartext ws:// outbound gate ──
+  # The hello handshake proves mesh membership but does NOT encrypt the
+  # frames after it, so a network MITM on a plaintext link could forge a
+  # task_delegate. Dials to ws:// are therefore refused unless the host is
+  # loopback or Tailscale (100.64.0.0/10, fd7a:115e:a214::/48, *.ts.net) —
+  # everything else needs wss:// (terminate TLS in front; the listener does
+  # not speak TLS), a punch:<id> peer (AEAD datagrams), or this escape hatch:
+  #   allow_cleartext: true   # trusted LAN only — restores pre-gate dialing
   peers:                         # manual peers
     # - "worker-1.your-tailnet.ts.net:7836"
     # - "punch:laptop-home"      # node behind NAT — coordinate UDP hole
@@ -238,6 +257,19 @@ injection:
 #   agent_s: 600
 #   # Cap on the execute → judge → re-dispatch loop per task. Default 5.
 #   supervise_rounds: 5
+
+# Self-update channel. Defaults to the official GitHub releases; both knobs
+# are env-only (never written to this file):
+#   OPENPANDA_UPDATE_REPO    "owner/repo" of a self-hosted release channel.
+#   OPENPANDA_UPDATE_PUBKEY  Ed25519 public key (hex or base64). When set, a
+#                            release must ship checksums.txt.sig — a detached
+#                            signature over checksums.txt — or the update is
+#                            refused. This is the out-of-band trust anchor:
+#                            archives and checksums come from the same channel,
+#                            so a compromised channel defeats the hash check
+#                            without it. Produce the signature with:
+#                              openssl pkeyutl -sign -rawin -inkey ed25519.pem \
+#                                -in checksums.txt | base64 > checksums.txt.sig
 
 # Web Push notifications (design P3-26): task entering review → phone push.
 # Read by the embedded console (`panda web`); requires a secure context —

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda mcp` runs the node itself as an MCP stdio server: the agent tier's
@@ -58,7 +60,7 @@ func runMCP(args []string) {
 	}
 	defer db.Close()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	taskStore := core.NewTaskStore(db, logger)
+	taskStore := core.NewSigningTaskStore(db, logger)
 	skillStore := skills.NewStore(skillsPathFor(cfg))
 
 	self := selfToolsDeps{

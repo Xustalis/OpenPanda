@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // Argument-position Tab completion. Completing the command name is only half
@@ -137,12 +139,14 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 		}
 	case "nodes":
 		if len(args) == 1 {
-			return []string{"add", "disconnect", "invite", "remove"}
+			return []string{"add", "admit", "disconnect", "invite", "remove", "verify"}
 		}
 		if len(args) == 2 {
 			switch args[0] {
-			case "remove", "rm":
+			case "remove", "rm", "verify":
 				return r.nodeIDs()
+			case "admit":
+				return r.pendingNodeIDs()
 			case "disconnect", "dc":
 				var peers []string
 				r.readConfig(func(c *config.Config) { peers = append([]string{}, c.Network.Peers...) })
@@ -453,6 +457,24 @@ func (r *repl) nodeIDs() []string {
 		}
 	}
 	return r.nodeCache.put("nodes", ids)
+}
+
+// pendingNodeIDs lists the LAN-discovery hint ids `/nodes admit` accepts —
+// not cached: beacons arrive between keystrokes and a stale menu here is
+// worse than a slow one.
+func (r *repl) pendingNodeIDs() []string {
+	if r.db == nil {
+		return nil
+	}
+	pending, err := ledger.ListPending(r.db, 90*time.Second)
+	if err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(pending))
+	for _, p := range pending {
+		ids = append(ids, p.ID)
+	}
+	return ids
 }
 
 func (r *repl) projectNames() []string {

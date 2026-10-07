@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import type { Messages } from './index'
 
 const es: Messages = {
@@ -203,7 +205,7 @@ const es: Messages = {
   'sessions.nodeAuto': 'Automático (mejor nodo)',
   'sessions.nodePickTip': 'Las tareas clasificadas se ejecutan en este nodo — las respuestas siguen siendo locales',
   'sessions.folderPick': 'Elegir una carpeta local',
-  'sessions.folderSelected': '📁 Carpeta seleccionada, {n} archivos:',
+  'sessions.folderSelected': 'Carpeta seleccionada, {n} archivos:',
   'sessions.folderTruncated': '  … ({n} archivos más)',
   'sessions.folderFollowUp': 'Atiende mi solicitud a partir de los archivos anteriores:',
   'sessions.projectPrefix': '[Proyecto: {name}]',
@@ -268,9 +270,9 @@ const es: Messages = {
   'onboarding.step.model': 'Modelo',
   'onboarding.langTitle': 'Elige tu idioma',
   'onboarding.termsTitle': 'Términos de servicio y licencia',
-  'onboarding.terms1h': '1. Licencia de código abierto (MIT)',
+  'onboarding.terms1h': '1. Licencia de código abierto (AGPL-3.0)',
   'onboarding.terms1b':
-    'OpenPanda es software libre y de código abierto publicado bajo la licencia MIT. Puedes usar, copiar, modificar, combinar, publicar, distribuir, sublicenciar y vender copias — en proyectos personales, académicos o comerciales — siempre que se incluyan el aviso de copyright y el texto de la licencia. La licencia completa se encuentra en el archivo LICENSE y prevalece sobre este resumen.',
+    'OpenPanda es software libre y de código abierto publicado bajo la GNU Affero General Public License v3.0 o posterior (AGPL-3.0-or-later). Puedes ejecutarlo, estudiarlo, modificarlo y redistribuirlo —incluido el uso comercial— siempre que las obras derivadas permanezcan bajo la AGPL y cualquier versión modificada ofrecida a usuarios a través de una red les ofrezca también su código fuente. Existe una licencia comercial para uso en código cerrado; consulta COMMERCIAL.md. La licencia completa se encuentra en el archivo LICENSE y prevalece sobre este resumen.',
   'onboarding.terms2h': '2. Software autoalojado, no un servicio gestionado',
   'onboarding.terms2b':
     'OpenPanda es software que instalas, configuras y operas en tu propio hardware. Los autores no ofrecen alojamiento, niveles de servicio, compromisos de disponibilidad, obligaciones de soporte ni custodia de datos. Tú eres el único responsable de la instalación, operación, mantenimiento, control de acceso, monitorización y seguridad de tu despliegue.',
@@ -518,7 +520,11 @@ const es: Messages = {
   'settings.approvalHelp': 'Si las acciones arriesgadas esperan tu aprobación en el panel.',
   'settings.sandbox': 'Sandbox',
   'settings.sandboxDesc':
-    'Cada subproceso de agente ya se ejecuta confinado a su ruta de trabajo — descripción de solo lectura, no un interruptor:',
+    'Los subprocesos se ejecutan con entorno filtrado en su ruta de trabajo, pero el confinamiento a nivel de SO está desactivado — activa sandbox.mode (standard o strict) en config.yaml. Ruta de trabajo:',
+  'settings.sandboxDescOn':
+    'Sandbox de SO activo — los subprocesos solo pueden escribir en su ruta de trabajo y directorios permitidos. Estado de solo lectura:',
+  'settings.sandboxDescNoBackend':
+    'El modo sandbox está configurado pero NO está en efecto — esta plataforma no tiene backend de sandbox (seatbelt/bwrap), los subprocesos se ejecutan sin confinamiento. Estado:',
 
   // Extensiones de la consola de memoria (C2)
   'memory.graph': 'Grafo',
@@ -591,6 +597,7 @@ const es: Messages = {
   'nodes.addDevice.secretGen': 'se generó network.shared_secret — hay que copiarlo a la otra máquina',
   'nodes.addDevice.dialed': 'Marcado a {addr} — activo en esta sesión.',
   'nodes.addDevice.dialFailed': 'No se pudo marcar a {addr} ahora; queda configurado y se reintenta en el próximo arranque.',
+  'nodes.addDevice.cleartextHint': 'Esta dirección usa ws:// en claro y el destino no está en una subred confiable (loopback o Tailscale): el daemon rechazará la llamada. Define network.allow_cleartext: true o usa wss:// / punch:<id>.',
   'nodes.addDevice.guideTitle': 'En la otra máquina',
 
   // Editor de tarjeta de capacidades (etapa 6) — gemelo web de `/card`
@@ -684,6 +691,8 @@ const es: Messages = {
   'fleet.node.online': 'en línea',
   'fleet.node.offline': 'desconectado',
   'fleet.node.tasks': '{cur}/{max} tareas',
+  'fleet.node.queued': '{n} en cola',
+  'fleet.node.verSkewHint': 'ejecuta v{ver}; este dispositivo v{self}',
 
   'ui.update.degraded.title': 'Comprobaciones de actualización en pausa (red limitada)',
   'ui.update.degraded.sub': 'Acceso a la API de GitHub limitado o denegado; Panda no volverá a comprobar actualizaciones hasta reiniciarlo.',
@@ -717,6 +726,16 @@ const es: Messages = {
   'events.tag.state': 'Estado',
   'events.tag.hop': 'Salto',
   'events.tag.path': 'Ruta',
+  'events.agent_event': 'Actividad del agente',
+  'events.agent_text': 'Mensaje del agente',
+  'events.agent_thinking': 'Pensamiento',
+  'events.agent_tool_use': 'Llamada de herramienta',
+  'events.agent_tool_result': 'Resultado de herramienta',
+  'events.transcript_truncated': 'Transcripción truncada',
+  'events.transcriptTruncatedNote': 'La actividad anterior se truncó; el nodo ejecutor conserva el registro completo.',
+  'events.subagent': 'subagente',
+  'events.subagentHint': 'Se ejecutó dentro de un subagente del harness (anidado bajo la llamada de herramienta padre)',
+
   'sessions.copyThought': 'Copiar cadena de pensamiento',
 
   'nav.plans': 'Planes',

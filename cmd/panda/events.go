@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // One renderer for a task's event timeline, shared by `panda task <id>`,
@@ -138,7 +140,130 @@ func printEventTimeline(events []core.Event, indent string) {
 }
 
 func printEventTimelineTo(out io.Writer, events []core.Event, indent string) {
+	// depths maps a tool_use id to its tree depth so agent_event rows whose
+	// payload carries parent=<id> render nested beneath the call that
+	// spawned them — the harness sub-agent tree (Claude Task) shows as a
+	// tree, not a flat stream. A parent outside the window (pagination)
+	// still nests one level rather than pretending to be top-level work.
+	depths := map[string]int{}
 	for _, e := range events {
+		if e.Type == core.EvAgentEvent {
+			_, _ = fmt.Fprintln(out, agentEventLine(e, indent, depths))
+			continue
+		}
 		_, _ = fmt.Fprintln(out, eventLine(e, indent))
 	}
+}
+
+// agentEventLine renders one structured activity event as a transcript row:
+// the ev kind in the type column, the block's own words in the payload, and
+// a tree indent derived from the parent tool_use id. The same row fields
+// the webui transcript consumes; here they flatten into a bounded line.
+func agentEventLine(e core.Event, indent string, depths map[string]int) string {
+	p := pal()
+	when := time.Unix(e.TS, 0).Format("01-02 15:04:05")
+
+	var obj struct {
+		Ev        string          `json:"ev"`
+		ID        string          `json:"id"`
+		Parent    string          `json:"parent"`
+		Name      string          `json:"name"`
+		ToolUseID string          `json:"tool_use_id"`
+		Text      string          `json:"text"`
+		Thinking  string          `json:"thinking"`
+		Content   string          `json:"content"`
+		Input     json.RawMessage `json:"input"`
+		IsError   bool            `json:"is_error"`
+	}
+	if err := json.Unmarshal([]byte(e.DataJSON), &obj); err != nil || obj.Ev == "" {
+		return eventLine(e, indent) // not the v2 shape — generic row
+	}
+
+	// Tree depth: a tool_use registers its own id so later rows carrying
+	// parent=<id> nest under it; an unknown parent still nests once.
+	depth := 0
+	if obj.Parent != "" {
+		depth = 1
+		if d, ok := depths[obj.Parent]; ok {
+			depth = d + 1
+		}
+	}
+	if obj.Ev == "tool_use" && obj.ID != "" {
+		depths[obj.ID] = depth
+	}
+	switch {
+	case depth > 6:
+		depth = 6 // a deep chain would eat the payload column
+	case depth < 0:
+		depth = 0
+	}
+	nest := indent
+	if depth > 0 {
+		nest += strings.Repeat("  ", depth-1) + "↳ "
+	}
+
+	kind := obj.Ev
+	if kind == "" {
+		kind = "agent_event"
+	}
+	head := nest + when + "  " + cell(kind, eventTypeWidth)
+
+	var payload string
+	switch obj.Ev {
+	case "tool_use":
+		payload = obj.Name + agentToolArg(obj.Input)
+	case "tool_result":
+		if obj.IsError {
+			payload = "error: " + oneLine(obj.Content)
+		} else {
+			payload = "→ " + oneLine(obj.Content)
+		}
+	case "thinking":
+		payload = p.Muted(oneLine(obj.Thinking))
+	case "text":
+		payload = oneLine(obj.Text)
+	case "transcript_truncated":
+		payload = p.Muted("older activity truncated — node keeps the full log")
+	default:
+		payload = eventPayload(e.DataJSON)
+	}
+	if payload == "" {
+		return strings.TrimRight(head, " ")
+	}
+	budget := listWidth() - cliui.DisplayWidth(head) - 1
+	if budget < 12 {
+		budget = 12
+	}
+	return head + " " + cliui.Truncate(payload, budget, p.Unicode())
+}
+
+// agentToolArg extracts the one argument a timeline row wants from a
+// tool_use input object — the same summary the adapter's progress note
+// picks (command / file_path / pattern / path / url / query / description).
+func agentToolArg(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		// Degraded string form (oversized inputs arrive quoted).
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil && s != "" {
+			return " " + s
+		}
+		return ""
+	}
+	for _, k := range []string{"command", "file_path", "pattern", "path", "url", "query", "description"} {
+		if v, ok := m[k]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return " " + s
+			}
+		}
+	}
+	return ""
+}
+
+// oneLine collapses whitespace so a multi-line block stays one row.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }

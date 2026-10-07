@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package commander implements the three-tier capability execution:
 // native (deterministic commands, no model), agent (AI CLI via adapter), and
 // manual (human-notified). Design doc §6.
@@ -49,12 +51,14 @@ func (e *Executor) Run(ctx context.Context, command string, args ...string) Nati
 	}
 
 	cmd := executil.CommandContext(ctx, command, args...)
-	cmd.Dir = e.dir
 	// Run under the same minimal, secret-free environment as adapter
 	// subprocesses (security.Sandbox), never the parent's full os.Environ(),
 	// so a native command cannot exfiltrate the model API key or other host
-	// secrets (P1-1).
-	cmd.Env = security.NewSandbox(e.dir).Env(e.env...)
+	// secrets (P1-1). ApplyPolicy also wraps the process under the OS sandbox
+	// (seatbelt/bwrap) when the configured mode asks for it — the policy
+	// confines a bare command tighter than an adapter, which owns its own
+	// credential dirs.
+	security.NewSandbox(e.dir).ApplyPolicy(cmd, nativeSandboxPolicy(e.dir), e.env...)
 
 	var stdout, stderr executil.Capture
 	cmd.Stdout = &stdout

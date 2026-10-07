@@ -1,9 +1,10 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # OpenPanda one-click installer (macOS + Linux).
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh
-#   sh install.sh --version 0.0.9            # pin a release (default: newest stable)
+#   sh install.sh --version 0.0.10-preview            # pin a release (default: newest stable)
 #   sh install.sh --prefix /opt/openpanda    # custom install dir
 #   sh install.sh --lite                     # lite build (no web console/TUI; Pi & CLI nodes)
 #   sh install.sh --yes                      # also register auto-start (no prompt)
@@ -350,6 +351,11 @@ register_service() {
     if [ "$OS" = darwin ]; then
         launch_agent="$HOME/Library/LaunchAgents/com.openpanda.node.plist"
         mkdir -p "$HOME/Library/LaunchAgents"
+        # Logs live under ~/Library/Logs like any macOS app: /tmp wiped the
+        # evidence on every reboot, and a crash loop's log is exactly the one
+        # you need after the fact. The daemon's own WARN throttling keeps the
+        # files small; if they still grow, prune the directory by hand.
+        mkdir -p "$HOME/Library/Logs/openpanda"
         cat > "$launch_agent" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -365,8 +371,8 @@ register_service() {
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ProcessType</key><string>Background</string>
-    <key>StandardOutPath</key><string>/tmp/openpanda-daemon.out.log</string>
-    <key>StandardErrorPath</key><string>/tmp/openpanda-daemon.err.log</string>
+    <key>StandardOutPath</key><string>$HOME/Library/Logs/openpanda/daemon.out.log</string>
+    <key>StandardErrorPath</key><string>$HOME/Library/Logs/openpanda/daemon.err.log</string>
 </dict>
 </plist>
 EOF

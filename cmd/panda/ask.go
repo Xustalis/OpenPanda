@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 import (
@@ -120,6 +122,7 @@ func runAsk(args []string) {
 		MCPCommand: *mcpCmd,
 		ReplyASCII: isLinuxConsole(),
 		Locale:     loc,
+		ConfigPath: *configPath,
 	})
 	if err != nil {
 		fatal("ask engine", err)
@@ -141,7 +144,7 @@ func runAsk(args []string) {
 	}
 	recordConvo := func(out *askengine.Result) {
 		if *continueConvo {
-			appendConvo(history, loc, prompt, out)
+			appendConvo(history, loc, prompt, out, engine)
 		}
 	}
 
@@ -206,6 +209,14 @@ func runAsk(args []string) {
 			reportNote += " · " + i18n.Tf(loc, "tui.task.execBy", "exec", execNote)
 		}
 		fmt.Println(pal().Muted(reportNote))
+
+		// A task parked on a clarification question must lead with the
+		// question — it is the only thing standing between the work and done,
+		// and "review" alone tells the user nothing actionable.
+		if out.Question != "" {
+			fmt.Println(pal().Heading(i18n.T(loc, "cli.ask.question")) + " " + out.Question)
+			fmt.Println("  " + pal().Muted(i18n.Tf(loc, "cli.ask.question.hint", "id", out.TaskID)))
+		}
 
 		answerText := strings.TrimSpace(out.Answer)
 		if answerText == "" {

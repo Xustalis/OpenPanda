@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 import (
@@ -8,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/artifact"
@@ -58,6 +61,23 @@ const (
 type artifactTransfer struct {
 	source string
 	chunks chan bus.ArtifactChunkPayload
+}
+
+// chunkBufPool reuses the 1 MiB read buffers the artifact plane fills with
+// Store.ReadAt and hands to the JSON encoder. A buffer is live only until its
+// envelope is marshaled (NewEnvelope copies the bytes into the JSON payload),
+// so pooling removes one 1 MiB allocation per transferred chunk — the data
+// plane's dominant transient allocation, and a chunk transfer can run for
+// thousands of chunks.
+var chunkBufPool = sync.Pool{
+	New: func() any { b := make([]byte, bus.ArtifactChunkBytes); return &b },
+}
+
+// getChunkBuf borrows a pooled chunk buffer; release must run after the
+// buffer's last reader (the envelope marshal).
+func getChunkBuf() ([]byte, func()) {
+	bp := chunkBufPool.Get().(*[]byte)
+	return *bp, func() { chunkBufPool.Put(bp) }
 }
 
 // SetArtifactStore attaches the node's artifact pool. Nil leaves the node without
@@ -418,7 +438,8 @@ func (c *Core) handleArtifactFetch(ctx context.Context, env bus.Envelope) {
 		deny("artifact not held")
 		return
 	}
-	buf := make([]byte, bus.ArtifactChunkBytes)
+	buf, release := getChunkBuf()
+	defer release()
 	n, eof, err := c.artifacts.ReadAt(p.Hash, p.Offset, buf)
 	if err != nil {
 		c.logger.Warn("read artifact chunk", "hash", p.Hash, "offset", p.Offset, "err", err)

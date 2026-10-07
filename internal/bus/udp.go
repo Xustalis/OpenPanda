@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package bus
 
 import (
@@ -109,6 +111,11 @@ type UDPConn struct {
 
 	OnEnvelope func(env Envelope, src *net.UDPAddr)
 	OnPunch    func(f PunchFrame, src *net.UDPAddr, isAck bool)
+	// OnKeepalive fires on a successfully unsealed keepalive datagram. The
+	// frame carries no identity — the AEAD open proves only mesh membership —
+	// so callers must match src against a known endpoint rather than trusting
+	// it standalone.
+	OnKeepalive func(src *net.UDPAddr)
 
 	stunMu      sync.Mutex
 	stunWaiters map[[stunTxnLen]byte]chan *net.UDPAddr
@@ -268,6 +275,8 @@ func (u *UDPConn) ReadLoop(ctx context.Context) {
 		case kindKeep:
 			if _, err := u.open(body, d[:udpHdrLen]); err != nil {
 				u.logger.Debug("udp: unseal keepalive failed", "from", src)
+			} else if u.OnKeepalive != nil {
+				u.OnKeepalive(src)
 			}
 		}
 	}

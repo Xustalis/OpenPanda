@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,10 +14,11 @@ import (
 
 func TestParseDelegateRequest(t *testing.T) {
 	out := "line one\nPANDA_DELEGATE {\"intent\":\"train the model\",\"requires\":[\"gpu\"],\"title\":\"train\"}\nline three"
-	dr, kept, ok := parseDelegateRequest(out)
-	if !ok {
-		t.Fatal("valid marker not parsed")
+	drs, kept := parseDelegateRequests(out)
+	if len(drs) != 1 {
+		t.Fatalf("valid marker not parsed: %d requests", len(drs))
 	}
+	dr := drs[0]
 	if dr.Intent != "train the model" || dr.Title != "train" || len(dr.Requires) != 1 {
 		t.Fatalf("bad parse: %+v", dr)
 	}
@@ -25,8 +29,8 @@ func TestParseDelegateRequest(t *testing.T) {
 
 func TestParseDelegateRequestMalformedKept(t *testing.T) {
 	out := "start\nPANDA_DELEGATE {not json}\nend"
-	_, kept, ok := parseDelegateRequest(out)
-	if ok {
+	drs, kept := parseDelegateRequests(out)
+	if len(drs) != 0 {
 		t.Fatal("malformed marker parsed")
 	}
 	if kept != out {
@@ -34,15 +38,71 @@ func TestParseDelegateRequestMalformedKept(t *testing.T) {
 	}
 }
 
-func TestParseDelegateRequestFirstOnly(t *testing.T) {
-	out := "PANDA_DELEGATE {\"intent\":\"a\"}\nPANDA_DELEGATE {\"intent\":\"b\"}"
-	dr, kept, ok := parseDelegateRequest(out)
-	if !ok || dr.Intent != "a" {
-		t.Fatalf("first marker: %+v ok=%v", dr, ok)
+// TestParseDelegateRequestsMulti covers the second half of the 2026-09-29
+// audit finding: a turn may legitimately ask for several children, and every
+// well-formed marker parses — not just the first.
+func TestParseDelegateRequestsMulti(t *testing.T) {
+	out := "PANDA_DELEGATE {\"intent\":\"a\"}\nsome prose\nPANDA_DELEGATE {\"intent\":\"b\",\"requires\":[\"gpu\"]}"
+	drs, kept := parseDelegateRequests(out)
+	if len(drs) != 2 || drs[0].Intent != "a" || drs[1].Intent != "b" {
+		t.Fatalf("multi markers: %+v", drs)
 	}
-	// The second marker stays in output — one delegation per parse.
-	if kept == "" || len(kept) == 0 {
-		t.Fatal("second marker line dropped")
+	if kept != "some prose" {
+		t.Fatalf("kept = %q, want only the prose line", kept)
+	}
+}
+
+// TestParseDelegateRequestMultiline covers the markdown-tolerance half of
+// the audit finding: an agent that pretty-prints its payload must still
+// parse — the marker line plus continuation lines form the request.
+func TestParseDelegateRequestMultiline(t *testing.T) {
+	out := "before\nPANDA_DELEGATE {\n  \"intent\": \"train\",\n  \"requires\": [\"gpu\"]\n}\nafter"
+	drs, kept := parseDelegateRequests(out)
+	if len(drs) != 1 || drs[0].Intent != "train" || len(drs[0].Requires) != 1 {
+		t.Fatalf("multiline parse: %+v", drs)
+	}
+	if kept != "before\nafter" {
+		t.Fatalf("continuation lines not consumed: %q", kept)
+	}
+}
+
+// TestParseDelegateRequestFenced covers the fenced-code-block shape: the
+// marker parses inside the fence, and the fence pair wrapping only the
+// marker leaves with it.
+func TestParseDelegateRequestFenced(t *testing.T) {
+	out := "prose\n```json\nPANDA_DELEGATE {\"intent\":\"snap\"}\n```\nmore"
+	drs, kept := parseDelegateRequests(out)
+	if len(drs) != 1 || drs[0].Intent != "snap" {
+		t.Fatalf("fenced parse: %+v", drs)
+	}
+	if kept != "prose\nmore" {
+		t.Fatalf("fence not stripped: %q", kept)
+	}
+}
+
+// TestParseDelegateRequestNextLine covers the bare-marker shape: the marker
+// stands alone and the JSON object begins on the next line.
+func TestParseDelegateRequestNextLine(t *testing.T) {
+	out := "PANDA_DELEGATE\n{\"intent\":\"read sensor\"}\ndone"
+	drs, kept := parseDelegateRequests(out)
+	if len(drs) != 1 || drs[0].Intent != "read sensor" {
+		t.Fatalf("next-line parse: %+v", drs)
+	}
+	if kept != "done" {
+		t.Fatalf("kept = %q", kept)
+	}
+}
+
+// TestParseDelegateRequestBoundary: prose that shares the marker's prefix is
+// not a request — same contract as PANDA_QUESTION's word-boundary rule.
+func TestParseDelegateRequestBoundary(t *testing.T) {
+	out := "PANDA_DELEGATED: this is prose\nPANDA_DELEGATE {\"intent\":\"real\"}"
+	drs, kept := parseDelegateRequests(out)
+	if len(drs) != 1 || drs[0].Intent != "real" {
+		t.Fatalf("boundary parse: %+v", drs)
+	}
+	if !strings.Contains(kept, "PANDA_DELEGATED") {
+		t.Fatalf("prose line eaten: %q", kept)
 	}
 }
 

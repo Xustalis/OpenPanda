@@ -19,6 +19,17 @@ network:
   shared_secret: ""  # 留空即可，单节点不需要 P2P
   panel_addr: "127.0.0.1:7841"   # webui 面板（panda web）HTTP 地址
   panel_token: ""                # 留空；经 OPENPANDA_PANEL_TOKEN 注入
+  # LAN 自动发现（Track 1）：UDP 广播 beacon 宣告"本机有 panda"，
+  # 对端 `panda nodes` 看到未配对列表 → nodes admit/verify 入网。
+  # 数据报不含凭据；入网仍要求 shared_secret + Ed25519 hello。
+  # "" 默认 :7837；"off" 完全关闭（不广播也不监听）。
+  # discovery_addr: ":7837"
+  # 明文 ws:// 出站门禁：hello 只证明成员身份，握手后的帧仍明文无签名——
+  # 明文链路上的 MITM 可以伪造 task_delegate（即远程执行）。默认拒绝拨往
+  # 非安全地址的 ws://：回环与 Tailscale（100.64.0.0/10、fd7a:115e:a214::/48、
+  # *.ts.net）天然加密放行；其余请改用 wss://（listener 本身无 TLS，需在
+  # 前面终结）、punch:<id>（AEAD 数据报），或显式开启下方开关接受明文。
+  # allow_cleartext: false
 
 storage:
   db_path: "openpanda.db"
@@ -45,6 +56,9 @@ model:
   base_url: ""       # 如 provider 需要自定义 endpoint
   model: ""          # 如 claude-opus-4, gpt-4o-mini, deepseek-v4-flash ...
   api_key: ""        # 留空；优先经 OPENPANDA_MODEL_API_KEY 注入
+  # auth: ""         # 订阅 OAuth provider（experimental）：先 `panda auth login
+                     # anthropic`，再设 auth: anthropic 即改用订阅 Bearer token
+                     # 认证（自动刷新），此时 api_key 可留空
   # 重试预算：模型请求失败（429 / 5xx / 断连）后的重试次数上限。
   # 缺省 5；负数完全关闭重试。退避步长封顶 30s，大预算不会变成忙等。
   # max_retries: 0
@@ -87,6 +101,25 @@ injection:
 # 任务审批：always = 每次都需审批；on-request = 仅高风险任务；never = 从不审批
 # approval:
 #   mode: "on-request"
+
+# 子进程 OS 沙盒：对每一个派生的 native 命令和 agent 适配器套平台级隔离。
+#   off      —— 默认；只做环境变量过滤和工作目录，没有 OS 边界（历史行为）
+#   standard —— deny-default 写隔离：只能写任务目录 + 白名单运行时目录，
+#               其余写入 EPERM；deny_write_paths 里的路径即使在白名单父目录下也不可写
+#   strict   —— standard + 拒读系统凭证位（~/.ssh、~/.aws、其它 agent 的凭证目录、
+#               shell 历史……）和 deny_read_paths
+# 后端：macOS 用 sandbox-exec（seatbelt），Linux 用 bubblewrap（需安装 bwrap），
+# 无后端的平台配置 mode 为空转并在启动时告警。
+# sandbox:
+#   mode: "standard"
+#   # 完全切断子进程出网（默认允许 —— 端点白名单由 network guard 管）
+#   # allow_network: false
+#   # 额外放行写入（绝对路径、~ 开头或裸名都会按 $HOME 解析）
+#   # writable_paths: ["~/projects/shared"]
+#   # 连读都拒绝（仅 strict 生效）
+#   # deny_read_paths: ["~/Documents/private"]
+#   # 禁止写入（节点自己的 db/记忆/配置文件自动在列）
+#   # deny_write_paths: []
 
 # 长任务时间预算（单位：秒；留空或删掉即用内置默认值）。
 # 深度学习这类任务动辄跑几小时，而默认值是按"改一段代码"调的，所以这三个旋钮必须能改。

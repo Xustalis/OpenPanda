@@ -1,6 +1,6 @@
 # 项目现状
 
-> 记录时间：2026-08-30（`main`，v0.0.7 发布）；2026-08-31 更新（审查问题全面修复一轮，已并入 v0.0.7）；2026-09-02 更新（v0.0.8-preview：项目一等公民、审批门重写、plan 看板端点，及当日审查的 P1/P2 修复）；2026-09-05 更新（v0.0.8-preview：正式开源项目收尾发布，管理工具族、TUI 运行中转向、模型主动故障转移与注入、多模型注册中心全面落地）；2026-09-06 更新（技能中心与自主发现安装、TUI 全屏化与首次运行向导、Web 技能面板与会话取消）；2026-09-19 更新（随 `v0.0.8-preview` 预发布完成多轮验证）；2026-09-20 更新（`v0.0.8` 正式发布：全链路提示词多语言策略、Provider 地理归属分类、敏感凭据自动脱敏、SQLite WAL 并发优化与发版门禁打通）；2026-09-23 更新（`v0.0.9-beta`：混合传输/DTN 架构完成——延迟加权 mesh 路由、DTN bundle 上线、令牌预算、影子副本、执行器通路、agent 自管理面 `panda mcp`、分块可续传 artifact 推送、DTN 多跳中继与会话检查点；模型配置面完整落地，模型管理 TUI 重设计为全宽注册表 + 单屏表单）；2026-09-25 更新（`v0.0.9` "Periapsis" 正式发布：UDP 数据报平面与 mesh 协调的 NAT 打洞、DTN bundle 载荷加密 v2、接触计划路由、Ed25519 节点身份与签名授权、受限设备 lite 构建、审批记忆与项目级审批策略、执行归属标注、Web 侧栏节点状态徽标、任务管线与 TUI 可靠性一轮修复——批量工具调用、DSML 兼容、审批处置语义、队列管理工具族；安全面收紧：skill URL 导入防 SSRF、`/api/*` 移除 query token 认证、STUN 按源限流；破坏性变更：移除内置模型厂商默认值，`panda init`/`panda model add` 为配置入口；发布前追加：`panda web --lan` 默认支持的局域网分享（自动临时令牌 + 可分享链接）、`panda task add --agents a,b --mode parallel|serial` 单任务多 harness 编排（复用 plan/DAG）、跨进程队列认领轮询 2s→400ms）。
+> 记录时间：2026-08-30（`main`，v0.0.7 发布）；2026-08-31 更新（审查问题全面修复一轮，已并入 v0.0.7）；2026-09-02 更新（v0.0.8-preview：项目一等公民、审批门重写、plan 看板端点，及当日审查的 P1/P2 修复）；2026-09-05 更新（v0.0.8-preview：正式开源项目收尾发布，管理工具族、TUI 运行中转向、模型主动故障转移与注入、多模型注册中心全面落地）；2026-09-06 更新（技能中心与自主发现安装、TUI 全屏化与首次运行向导、Web 技能面板与会话取消）；2026-09-19 更新（随 `v0.0.8-preview` 预发布完成多轮验证）；2026-09-20 更新（`v0.0.8` 正式发布：全链路提示词多语言策略、Provider 地理归属分类、敏感凭据自动脱敏、SQLite WAL 并发优化与发版门禁打通）；2026-09-23 更新（`v0.0.9-beta`：混合传输/DTN 架构完成——延迟加权 mesh 路由、DTN bundle 上线、令牌预算、影子副本、执行器通路、agent 自管理面 `panda mcp`、分块可续传 artifact 推送、DTN 多跳中继与会话检查点；模型配置面完整落地，模型管理 TUI 重设计为全宽注册表 + 单屏表单）；2026-09-25 更新（`v0.0.9` "Periapsis" 正式发布：UDP 数据报平面与 mesh 协调的 NAT 打洞、DTN bundle 载荷加密 v2、接触计划路由、Ed25519 节点身份与签名授权、受限设备 lite 构建、审批记忆与项目级审批策略、执行归属标注、Web 侧栏节点状态徽标、任务管线与 TUI 可靠性一轮修复——批量工具调用、DSML 兼容、审批处置语义、队列管理工具族；安全面收紧：skill URL 导入防 SSRF、`/api/*` 移除 query token 认证、STUN 按源限流；破坏性变更：移除内置模型厂商默认值，`panda init`/`panda model add` 为配置入口；发布前追加：`panda web --lan` 默认支持的局域网分享（自动临时令牌 + 可分享链接）、`panda task add --agents a,b --mode parallel|serial` 单任务多 harness 编排（复用 plan/DAG）、跨进程队列认领轮询 2s→400ms）；2026-10-06 更新（安全加固一轮：`task_events`/`audit_log` 签名验证绑定本节点密钥并拒绝签名尾部剥离，`audit_log` 逐行 Ed25519 签名（迁移 v37）；更新器支持 `OPENPANDA_UPDATE_PUBKEY` 带外 Ed25519 验签与 `OPENPANDA_UPDATE_REPO` 自托管通道；消息去重表改为按最旧淘汰；`SECURITY.md`/配置示例与代码现状对齐）；2026-10-06 性能一轮（能力匹配改为零分配 on-the-fly 分词——2709ns/40allocs → 1619ns/0allocs；artifact 数据面 1 MiB 读缓冲池化并移除每块一次的无用 DB 写；面板会话总结 sweep 从「全表任务行 + 逐任务事件时间线」改为单条 NOT EXISTS 查询；新增 `make bench` 基准：路由匹配/决策、控制与 1 MiB 数据帧编解码、消息去重；实测接收侧编解码 ~86 MB/s、发送侧 ~184 MB/s，结构性提升需二进制数据道，已记录待设计）；2026-10-06 更新（`v0.0.10-preview` "Apoapsis" 预览发布：LAN 自动发现与指纹确认准入、节点 TOFU 密钥钉住、工作树随委派文件任务同行、澄清回路、actuator 派发与五个参考驱动（含串口 MCU）、Pi adapter 与免 Python 内建 generic 执行器、启动目录即项目空间——连同当日的安全加固与性能一轮；破坏性变更：非加密底层上的明文 `ws://` 拨号被拒绝）；2026-10-07 更新（许可证切换为 AGPL-3.0-or-later + 商业双许可，存量 MIT 时代同意经 `terms_version` 重弹一次条款；`feat/session-tree-rpc-auth` 分支未发布工作：会话树 `panda session fork`/`tree` + `/fork` + `POST /api/sessions/{id}/fork`、溢出历史自动压缩成 running digest、`panda rpc` NDJSON-over-stdio 嵌入面、`panda auth login anthropic` 订阅 OAuth——均标 Experimental；修复两个 PTY 契约测试夹具缺少 `terms_version` 被重授权门拦截的问题，`make gate-all` 全绿）。
 > 这份文档回答一个问题：**现在做到哪一步了，哪些能用、哪些还不能。**
 
 ## 一句话结论
@@ -58,8 +58,12 @@ P0 安全发现（路径穿越、结果送达、TUI 退出）已关闭，P1 安�
 | **LLM 任务汇报** | ✅ | `entry.SummarizeResult` 在每个内联任务后调用，REPL/TUI/Web 渲染汇报 |
 | **Bubble Tea TUI** | ✅ | `panda` 默认进入 TUI，带 tier-2 审批路径；经典 REPL 可通过 `PANDA_CLASSIC_REPL=1` 使用 |
 | **项目随任务跨设备**（v0.0.8-preview） | ✅ 代码落地 | `panda project` 命令族 + settings 指针；委派载荷内联项目记忆、工作树走分块 artifact、产出覆盖式收回（`internal/projects` / `internal/core/project.go`） |
-| **Plan 看板端点**（v0.0.8-preview） | ✅ 代码落地 | `GET /api/plans`、`GET /api/plans/{id}`（阶段 + artifact 接线）；前端视图未接 |
-| 引脚驱动舵机（香橙派） | ❌ 未实现 | `gpio` 目前只是能力卡上的字符串：能把阶段路由到派，但没有执行通路 |
+| **Plan 看板端点**（v0.0.8-preview） | ✅ | `GET /api/plans`、`GET /api/plans/{id}`（阶段 + artifact 接线）；Web 看板视图已接（`views/plans.tsx`） |
+| **LAN 自动发现 + 指纹准入**（v0.0.10-preview） | 🟡 Experimental | UDP beacon（`network.discovery_addr` :7837）→ `pending_nodes`（60s TTL + 64 行上限）→ `panda nodes admit`；`nodes verify` 钉住 Ed25519 指纹 |
+| **工作树随委派同行**（v0.0.10-preview） | 🟡 Experimental | `context_type=file` 仓库任务打包 `__worktree__` artifact（≤256 MiB），执行端私有目录跑完收回 |
+| **澄清回路**（v0.0.10-preview） | 🟡 Experimental | agent 以 `PANDA_QUESTION:` 行挂起 → `panda approve <id> -m "答案"` 带答案恢复 |
+| **会话树 / 自动压缩 / RPC / 订阅 OAuth**（未发布分支） | 🟡 Experimental | `panda session fork`/`tree`/`/fork`、溢出历史折叠为 running digest、`panda rpc` NDJSON-stdio、`panda auth login anthropic` |
+| 引脚驱动舵机（香橙派） | 🟡 通路已落地，真机未验 | v0.0.10 actuator 派发：卡片声明 `actuators` + argv 模板，`spec.action_spec` 跨委派传递，执行端替换占位符跑驱动；`drivers/` 随发行包附带 servo/mic/camera/notify/mcu 五个参考实现 |
 | 最短路径多跳中继 | ✅ 图路由已落地 | 邻居广告构建链路状态图，边权取 `LinkMetrics` 的 RTT 采样（无测量走 `unknownLinkCost`），`graphFirstHop` 跑 Dijkstra 取全局最便宜路径的第一跳（`internal/scheduler/route.go`） |
 
 ## 两条入口都可达
@@ -93,7 +97,8 @@ panda voice                              # 同一条路径，改成说出来
 | 检查 | 结果 |
 |---|---|
 | `make gate`（fmt-check + build + vet + test + race） | exit 0 |
-| Web typecheck | exit 0（node_modules 已复原，9/2 复验通过） |
+| `make gate-all`（+ web-gate + 两个 TUI PTY 契约） | exit 0（2026-10-07 复验；修复了两个 PTY 夹具缺 `terms_version` 被条款重授权门拦截的问题） |
+| Web typecheck + 单测 + vite build | exit 0（79 tests，2026-10-07） |
 | P0 安全发现（路径穿越、结果送达、TUI 退出） | ✅ 已关闭 |
 | P1 安全加固（默认回环、context_fetch 授权、supervisor 不可达） | ✅ 已落地 |
 | 2026-08-31 审查修复（后端稳定性 + 前端竞态/可访问性） | ✅ 代码落地，单测全绿；多设备真机回归待做 |
@@ -107,13 +112,21 @@ panda voice                              # 同一条路径，改成说出来
 
 ## 已知限制
 
-**P2-8 全网单一共享密钥（最严重）。** 网络共享密钥是唯一凭据，持有它的节点可以
-伪造 `Authorized`，也就是自己给自己批准 tier-2。「不可逆操作必须我审批」这条约束
-在单机和可信内网成立，一旦网络里有你不完全信任的节点就不成立。修法是 per-node
-密钥 / 可验签授权——属于改信任模型，不是打补丁。
+**P2-8 全网单一共享密钥（已部分缓解）。** 网络共享密钥仍是成员凭据：持有它的
+节点可以完成 mesh 加入。在此之上，Ed25519 节点身份与签名同意已落地——tier-2
+的 `Authorized` 以 `Ed25519(taskID, authorized, ts, ConsentDigest)` 随任务传递，
+执行端按目录中记录的来源公钥验签，签名剥离/篡改/换钥重签一律拒绝；`panda nodes
+verify` 可钉住指纹，钉住后换钥 hello 直接拒绝。**仍存缺口**：共享密钥成员可为
+「接收端从未见过其公钥的节点」伪造同意（多跳中继 + TOFU 的固有边界，现会打印
+警告）；未钉住的身份仍按 TOFU 首次见到即信任。因此「不可逆操作必须我审批」在
+单机和可信内网成立，一旦网络里有你不完全信任的节点就不成立。彻底修法是
+per-node 密钥分发/准入——属于改信任模型，不是打补丁。
 
-**P2-9 审计链可篡改。** `task_events` 的哈希链是无密钥 SHA-256：能写库就能重算整条
-链。需要换成 HMAC 或签名，和 P2-8 是同一个密钥分发问题。
+**P2-9 审计链已签名，锚点在库内。** `task_events` 与 `audit_log` 的哈希链现在
+逐行携带 Ed25519 签名（迁移 v35/v37），验证时绑定本节点公钥（`VerifyTaskEventChain`
+/ `VerifyChain`：换钥重签会被拒绝，已签名链不允许再出现未签名行——防尾部剥离）。
+但签名锚点在数据库本身：从未签过名的历史前缀无法与「被整体重写」区分，进一步
+收紧需要外部存证（导出/公证链头），仍在路线图上。
 
 **审批门的剩余不透明向量（9/2 审查后已知）。** 审批门重写为「仅不可逆」后，
 `curl -o`/`wget -O` 下载落盘已重新纳入 Tier 2（下载字节对分类器不可见），
@@ -124,12 +137,20 @@ token 扫描看不到 `>`）、`bash <(curl …)`（进程替换）、以及执�
 对 native 能力显式声明 `tier: 2` 永远压过推断。彻底的修法需要命令级污点追踪，
 属于大改，先记录在此。
 
-**i18n 收了一轮但没到头。** v0.0.6 把此前列出的面（语音链路、ask/repl
+**i18n 收了两轮，模型面基本对齐。** v0.0.6 把此前列出的面（语音链路、ask/repl
 计划输出、会话摘要、卸载报错、一处 help 提示）挪进了 `internal/i18n`
-五语言；仍有零散硬编码中文：ask 引擎的边缘答复（如「N 轮工具未收敛」）、
-给 agent 的注入说明、dream 扫描输出。
+五语言；本轮再清：ask 引擎边缘答复（「N 轮工具未收敛」「计划无法执行」）走
+`ask.loop.*`/`ask.plan.invalid` 五语言 key；全部 ask 工具的工具描述与 schema
+属性描述补齐为 "EN / 中文" 双语内联（沿用 `tools.go` 约定；`task_submit` 早已按
+会话 locale 二选一，MCP 面纯英文）；给 agent 的注入通知、memory manifest/快照
+围栏、dream 日记条目均已双语化。工具执行结果与错误体仍为中文（模型消费的中间
+产物，测试已钉住；模型按用户语言转述），`supervise` 上级裁判提示词保持调好的
+中文原文——这两块若要 5 语言是单独一轮设计。
 
-**GPIO / 舵机没有执行通路。** 要在派上驱动舵机，目前得自己提供脚本或 adapter。
+**GPIO / 舵机已有执行通路但真机未验。** v0.0.10 起 actuator 派发落地（`action_spec` →
+卡片 `actuators` argv 模板替换 → 驱动进程），`drivers/` 附带五个参考驱动且发行包
+自带；但舵机/麦克风/摄像头/串口都只过了单测与 `/bin/echo` 替身链路，没在任何
+一块真硬件上点过火——`panda ask "把舵机转到 90 度"` 的端到端验证仍欠。
 
 **多跳已是加权最短路。** 邻居广告传播拓扑、`LinkMetrics` 携带链路 RTT，
 `graphFirstHop`/`DTNNextHop` 在其上跑 Dijkstra。仍缺的深空级能力：链路度量
@@ -145,11 +166,16 @@ NAT）打不通时需要 TURN 式中继兜底；contact-plan 预约窗口投递�
 
 ## 下一步
 
-1. 在三设备真机 lab 上验证 0.0.7 新功能（设备配对、卡片热重载、outbox 结果重投）
-   ——这些是本期核心卖点，单测替代不了多设备实测。
-2. 在三设备真机 lab 上把一句话触发的流水线跑一遍——这一次会同时验证语音入口、
-   逐边路由、阶段产物搬运和审批停泊，是目前信息量最大的一次验证。
-3. 真机验证项目跨设备旅行（记忆内联 + 工作树 artifact + 产出收回）与 plan 看板
-   端点。
-4. 定 P2-8 的方向（per-node 密钥还是签名授权），P2-9 随之落地。
-5. i18n 收尾、GPIO 执行通路、链路度量增强（带宽/丢包维度），按需排期。
+1. **三设备真机 lab 的欠账已经累积两版**：v0.0.7 的配对/热重载/outbox 之外，
+   现在还加上 LAN 发现与指纹准入、TOFU 钉住、工作树随行、澄清回路、
+   `nodes drain` + 滚动升级、实测容量调度——一次全跑是信息量最大的验证。
+2. **actuator 真机点火**：舵机（gpiozero）、麦克风（arecord）、摄像头、串口 MCU
+   各在一个真硬件上过一遍 `panda ask` → `action_spec` → 驱动链路。
+3. 一句话触发的流水线真机跑一遍（语音入口 → 逐边路由 → 阶段产物搬运 →
+   审批停泊），项目跨设备旅行（记忆内联 + 工作树 artifact + 产出收回）。
+4. 信任面收尾：P2-8 per-node 密钥分发/准入（收口「未知来源同意」路径）；
+   P2-9 审计链头外部存证。
+5. 未发布分支（`feat/session-tree-rpc-auth`）：会话树 fork、自动压缩、
+   `panda rpc`、订阅 OAuth 合入前需真实模型与真实订阅各跑一轮；
+   `terms_version` 重授权路径已在 PTY 契约中复验。
+6. i18n 收尾、链路度量带宽/丢包维度、对称 NAT 的 TURN 式中继兜底，按需排期。

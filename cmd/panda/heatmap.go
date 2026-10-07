@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // Task-activity heatmap — a GitHub-contributions-style grid over the task

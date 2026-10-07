@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package panel
 
 import (
@@ -48,30 +50,17 @@ func (h *handler) startSessionFinalizer(ctx context.Context) {
 }
 
 // finalizeSessionSweep appends the summary turn for every terminal task
-// linked to a session that has not been summarized yet.
+// linked to a session that has not been summarized yet. The candidate set
+// comes straight from the store as one probe (terminal + session + no
+// marker); the former shape loaded every task row and then every task's full
+// event timeline on every pass, so a board of already-summarized tasks was
+// re-read forever.
 func (h *handler) finalizeSessionSweep(ctx context.Context) {
-	tasks, err := h.store.ListByState(ctx, "")
+	tasks, err := h.store.TerminalSessionTasksWithoutEvent(ctx, evSessionSummary)
 	if err != nil {
 		return
 	}
 	for _, t := range tasks {
-		if t.SessionID == "" || !terminalState(t.State) {
-			continue
-		}
-		events, err := h.store.Events(ctx, t.TaskID)
-		if err != nil {
-			continue
-		}
-		done := false
-		for _, ev := range events {
-			if ev.Type == evSessionSummary {
-				done = true
-				break
-			}
-		}
-		if done {
-			continue
-		}
 		summary := taskSummary(t)
 		// Marker first (see evSessionSummary): a crash after the marker but
 		// before the turn loses one turn, a crash the other way round would
@@ -91,15 +80,6 @@ func (h *handler) finalizeSessionSweep(ctx context.Context) {
 			log.From(ctx).Warn("session summary append", "task", t.TaskID, "session", t.SessionID, "err", err)
 		}
 	}
-}
-
-// terminalState reports whether state is one the task never leaves.
-func terminalState(state string) bool {
-	switch state {
-	case core.StateDone, core.StateFailed, core.StateCancelled, core.StateExpired:
-		return true
-	}
-	return false
 }
 
 // taskSummary renders the one-turn digest of a finished task: state line

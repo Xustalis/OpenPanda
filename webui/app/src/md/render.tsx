@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { parseBlocks, type Align, type Block, type Inline, type ListItem } from './parse'

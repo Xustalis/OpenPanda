@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package bus
 
 import (
@@ -163,12 +165,17 @@ func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
 	return c
 }
 
-// StartPingLoop sends a ping every pingPeriod and refreshes the read
+// StartPingLoop sends a ping every period and refreshes the read
 // deadline, keeping the connection alive and letting the peer's pong reset
 // our deadline. It returns when ctx is done. Pings ride the control lane so
-// keepalives are never stuck behind a data backlog.
-func (c *Conn) StartPingLoop(ctx context.Context, pingPeriod time.Duration) {
-	t := time.NewTicker(pingPeriod)
+// keepalives are never stuck behind a data backlog. A period <= 0 or one that
+// would outrun pongWait falls back to the package default: pinging slower than
+// the read deadline kills a healthy connection by starvation.
+func (c *Conn) StartPingLoop(ctx context.Context, period time.Duration) {
+	if period <= 0 || period >= pongWait {
+		period = pingPeriod
+	}
+	t := time.NewTicker(period)
 	defer t.Stop()
 	for {
 		select {
@@ -345,6 +352,11 @@ func NewServer(addr string, logger *slog.Logger, onConn func(*Conn, string)) *Se
 			// this node's control channel (the PWA talks HTTP on the panel port,
 			// never here).
 			CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" },
+			// Bound the upgrade handshake itself: the server's
+			// ReadHeaderTimeout only covers the request headers, so without
+			// this a stalled handshake write could hold a handler slot
+			// (and its counted connection) indefinitely.
+			HandshakeTimeout: 5 * time.Second,
 		},
 		activePerIP:  make(map[string]int),
 		helloTimeout: defaultHelloTimeout,

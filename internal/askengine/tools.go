@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package askengine
 
 import (
@@ -13,6 +15,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/mcp"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
@@ -346,6 +349,13 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 		"scope":              map[string]any{"type": "string", "description": "允许修改的相对路径，逗号分隔（可选）"},
 		"constraints":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "约束/禁令（可选）"},
 		"success_definition": map[string]any{"type": "string", "description": "如何验证完成（可选）"},
+		"action_spec": map[string]any{"type": "object", "description": "驱动 hardware:* 物理执行器时必填（可选）",
+			"properties": map[string]any{
+				"target_actuator": map[string]any{"type": "string", "description": "设备列表中的 hardware:* 能力 ID"},
+				"action":          map[string]any{"type": "string", "description": "动作动词，如 rotate|record|snap|notify"},
+				"parameters":      map[string]any{"type": "object", "description": "标量参数，如 {\"angle\": 90}"},
+			},
+			"required": []string{"target_actuator", "action"}},
 	}
 	if targetLoc == i18n.English {
 		desc = "Dispatch a task to an agent for execution. Must be called when the user asks to schedule an agent to do work (or output a task JSON directive). title: task title, target: goal to achieve, abilities: capability IDs from Connected Devices (e.g. agent:codex)."
@@ -357,6 +367,13 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 			"scope":              map[string]any{"type": "string", "description": "Allowed relative paths to modify, comma-separated (optional)"},
 			"constraints":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Constraints or prohibited actions (optional)"},
 			"success_definition": map[string]any{"type": "string", "description": "How to verify completion (optional)"},
+			"action_spec": map[string]any{"type": "object", "description": "Required when driving a hardware:* physical actuator (optional)",
+				"properties": map[string]any{
+					"target_actuator": map[string]any{"type": "string", "description": "hardware:* ability ID from the device list"},
+					"action":          map[string]any{"type": "string", "description": "Action verb, e.g. rotate|record|snap|notify"},
+					"parameters":      map[string]any{"type": "object", "description": "Scalar parameters, e.g. {\"angle\": 90}"},
+				},
+				"required": []string{"target_actuator", "action"}},
 		}
 	}
 	return entry.Tool{
@@ -387,9 +404,29 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 			node, _ := args["node"].(string)
 			taskScope, _ := args["scope"].(string)
 			successDef, _ := args["success_definition"].(string)
+			var actionSpec *ledger.ActionSpec
+			if raw, ok := args["action_spec"]; ok && raw != nil {
+				// The argument arrives as untyped JSON; round-tripping into the
+				// canonical struct rejects malformed shapes while keeping the
+				// model's parameters verbatim for ValidateTaskSpec to vet.
+				blob, merr := json.Marshal(raw)
+				if merr != nil || json.Unmarshal(blob, &actionSpec) != nil {
+					if targetLoc == i18n.English {
+						return "", fmt.Errorf("action_spec is malformed: expected {\"target_actuator\",\"action\",\"parameters\"}")
+					}
+					return "", fmt.Errorf("action_spec 格式错误：应为 {\"target_actuator\",\"action\",\"parameters\"}")
+				}
+			}
+			contextType := "command"
+			if actionSpec != nil {
+				// An actuator dispatch is a hardware action, not a shell task:
+				// the context type drives queue filtering and worktree
+				// decisions, and a servo has no checkout to carry.
+				contextType = "hardware"
+			}
 			spec := &entry.TaskSpec{
 				Title:       strings.TrimSpace(title),
-				ContextType: "command",
+				ContextType: contextType,
 				Requires:    entry.Requires{Abilities: abilities},
 				Spec: entry.TaskSpecDetail{
 					Target:            strings.TrimSpace(target),
@@ -397,6 +434,7 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 					Scope:             strings.TrimSpace(taskScope),
 					Constraints:       toStringSlice(args["constraints"]),
 					SuccessDefinition: strings.TrimSpace(successDef),
+					ActionSpec:        actionSpec,
 				},
 				Complexity: 0.5,
 				Risk:       "low",

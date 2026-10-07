@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Last-resort render guard. A render-time crash anywhere in the tree used to
 // blank the whole console with no way back short of a reload; this catches
 // it, explains it, and offers a retry that simply remounts the app tree.

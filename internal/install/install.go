@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package install implements `panda install` / `panda uninstall` /
 // `panda doctor`: placing the binary on PATH (persistently, per-OS), and a
 // whitelist-based uninstall that backs up and removes only OpenPanda-owned
@@ -345,9 +347,12 @@ func distributionEntries(prefix string) []string {
 		filepath.Join(prefix, "adapters"),
 	}
 	// extensions/ (voice sidecars) joined the layout after adapters/ shipped,
-	// so older prefixes legitimately lack it — stat-guard it like the files.
-	if st, err := os.Stat(filepath.Join(prefix, "extensions")); err == nil && st.IsDir() {
-		entries = append(entries, filepath.Join(prefix, "extensions"))
+	// and drivers/ (reference actuator drivers) arrived later still — older
+	// prefixes legitimately lack both, so stat-guard them like the files.
+	for _, dir := range []string{"extensions", "drivers"} {
+		if st, err := os.Stat(filepath.Join(prefix, dir)); err == nil && st.IsDir() {
+			entries = append(entries, filepath.Join(prefix, dir))
+		}
 	}
 	for _, name := range []string{
 		"config.example.yaml",

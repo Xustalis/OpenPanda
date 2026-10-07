@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package doctor is the structured self-check suite shared by `panda doctor`
 // (which renders the checks as a terminal report) and the panel's
 // /api/doctor (which serializes them to JSON). Each check is a stable i18n
@@ -21,6 +23,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/install"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/pyexec"
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // Check is one self-check line: the i18n key that describes it, the ordered
@@ -128,6 +131,18 @@ func Run(configPath string) []Check {
 			}
 		default:
 			add(pass("doctor.udp.ok", "addr", cfg.Network.UDPListen))
+		}
+
+		// OS sandbox: "off" is a valid choice and reports as information; a
+		// configured mode with no platform backend is a real problem — the
+		// confinement the operator asked for is silently absent.
+		switch m := cfg.Sandbox.NormalizedMode(); {
+		case m == "off":
+			add(pass("doctor.sandbox.off"))
+		case security.Backend() == "":
+			add(fail("doctor.sandbox.nobackend", "mode", m))
+		default:
+			add(pass("doctor.sandbox.ok", "mode", m, "backend", security.Backend()))
 		}
 	} else {
 		add(fail("doctor.config.no", "err", err.Error()))

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import type { Messages } from './index'
 
 const ja: Messages = {
@@ -201,7 +203,7 @@ const ja: Messages = {
   'sessions.nodeAuto': '自動（最適なノード）',
   'sessions.nodePickTip': '分類されたタスクはこのノードで実行——チャット回答はローカルのまま',
   'sessions.folderPick': 'ローカルフォルダを選択',
-  'sessions.folderSelected': '📁 フォルダを選択しました（{n} ファイル）：',
+  'sessions.folderSelected': 'フォルダを選択しました（{n} ファイル）：',
   'sessions.folderTruncated': '  …（他 {n} ファイル）',
   'sessions.folderFollowUp': '上記のファイルに基づいてリクエストを処理してください：',
   'sessions.projectPrefix': '[プロジェクト: {name}]',
@@ -265,9 +267,9 @@ const ja: Messages = {
   'onboarding.step.model': 'モデル',
   'onboarding.langTitle': '言語を選択',
   'onboarding.termsTitle': '利用規約とライセンス',
-  'onboarding.terms1h': '1. オープンソースライセンス（MIT）',
+  'onboarding.terms1h': '1. オープンソースライセンス（AGPL-3.0）',
   'onboarding.terms1b':
-    'OpenPanda は MIT ライセンスの下で公開されているフリーかつオープンソースのソフトウェアです。著作権表示とライセンス文を含めることを条件に、個人・学術・商用を問わず、使用・複製・改変・結合・公開・配布・サブライセンス・販売が可能です。完全なライセンス文は同梱の LICENSE ファイルに記載されており、本要約と矛盾する場合はそちらが優先されます。',
+    'OpenPanda は GNU Affero General Public License v3.0 以降（AGPL-3.0-or-later）の下で公開されているフリーかつオープンソースのソフトウェアです。商用を含め、実行・研究・改変・再配布が可能ですが、派生作品は同じ AGPL 条件で公開する必要があり、改変版をネットワーク越しにユーザーへ提供する場合はそのソースコードも提供しなければなりません。クローズドソース利用には商用ライセンスをご利用ください（COMMERCIAL.md 参照）。完全なライセンス文は同梱の LICENSE ファイルに記載されており、本要約と矛盾する場合はそちらが優先されます。',
   'onboarding.terms2h': '2. セルフホスト型ソフトウェア（マネージドサービスではありません）',
   'onboarding.terms2b':
     'OpenPanda は利用者自身のハードウェアにインストール・設定・運用するソフトウェアです。作者はホスティング、サービスレベル、稼働率の約束、サポート義務、データ管理を一切提供しません。インストール、運用、保守、アクセス制御、監視、デプロイ環境のセキュリティはすべて利用者の責任です。',
@@ -511,7 +513,9 @@ const ja: Messages = {
   'settings.approval.never': 'しない',
   'settings.approvalHelp': 'リスクのある操作をパネルで承認待ちにするかどうか。',
   'settings.sandbox': 'サンドボックス',
-  'settings.sandboxDesc': 'すべてのエージェントサブプロセスは既に作業パス内への隔離下で実行されています — 読み取り専用の説明であり、スイッチではありません：',
+  'settings.sandboxDesc': 'サブプロセスはフィルタ済み環境で作業パス内に実行されますが、OS レベルの隔離はオフです — config.yaml の sandbox.mode を standard または strict に設定すると有効になります。作業パス:',
+  'settings.sandboxDescOn': 'OS サンドボックスが有効 — サブプロセスは作業パスと許可ディレクトリ内のみ書き込み可能です。読み取り専用ステータス:',
+  'settings.sandboxDescNoBackend': 'サンドボックスモードは設定済みですが有効ではありません — このプラットフォームにはバックエンド（seatbelt/bwrap）がなく、サブプロセスは隔離されずに実行されます。ステータス:',
 
   // 記憶コンソール拡張（C2）
   'memory.graph': 'グラフ',
@@ -583,6 +587,7 @@ const ja: Messages = {
   'nodes.addDevice.secretGen': 'network.shared_secret を生成しました — 相手側のマシンにコピーが必要です',
   'nodes.addDevice.dialed': '{addr} にダイヤルしました — このセッションで即時有効。',
   'nodes.addDevice.dialFailed': '{addr} に現在ダイヤルできません。構成は保存され、次回起動時に再試行されます。',
+  'nodes.addDevice.cleartextHint': 'このアドレスは平文 ws:// で、宛先が信頼済みアンダーレイ（loopback または Tailscale）上にないため、daemon はダイヤルを拒否します。network.allow_cleartext: true を設定するか、wss:// / punch:<id> を使ってください。',
   'nodes.addDevice.guideTitle': 'もう一台のマシンで',
 
   // 能力カードエディタ（ステージ 6）— `/card` の Web 版
@@ -676,6 +681,8 @@ const ja: Messages = {
   'fleet.node.online': 'オンライン',
   'fleet.node.offline': 'オフライン',
   'fleet.node.tasks': '{cur}/{max} タスク',
+  'fleet.node.queued': '{n} 件キュー中',
+  'fleet.node.verSkewHint': 'v{ver} を実行中（本機は v{self}）',
 
   'ui.update.degraded.title': '更新チェックは一時停止中（ネットワーク制限）',
   'ui.update.degraded.sub': 'GitHub API がレート制限または拒否されています。再起動するまで更新チェックを再開しません。',
@@ -709,6 +716,16 @@ const ja: Messages = {
   'events.tag.state': '状態',
   'events.tag.hop': 'ホップ',
   'events.tag.path': 'パス',
+  'events.agent_event': 'エージェント活動',
+  'events.agent_text': 'エージェントメッセージ',
+  'events.agent_thinking': '思考',
+  'events.agent_tool_use': 'ツール呼び出し',
+  'events.agent_tool_result': 'ツール結果',
+  'events.transcript_truncated': 'トランスクリプト省略',
+  'events.transcriptTruncatedNote': '古いアクティビティは省略されました。実行ノードに完全なログが残っています。',
+  'events.subagent': 'サブエージェント',
+  'events.subagentHint': 'ハーネスのサブエージェント内で実行（親ツール呼び出しの下にネスト）',
+
   'sessions.copyThought': '思考チェーンをコピー',
 
   'nav.plans': 'プラン',

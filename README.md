@@ -5,7 +5,7 @@
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
 [![Release](https://img.shields.io/github/v/release/Xustalis/OpenPanda?label=release&color=blue)](https://github.com/Xustalis/OpenPanda/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
@@ -163,8 +163,8 @@ To connect a second device (preview capability): run `panda pair` on device A to
 | Version | Theme |
 |---|---|
 | **v0.0.8** (stable baseline) | Single-machine multi-agent orchestration, fully usable: intent classification, dispatch, supervision loop, failover, tiered approval, prompt language policy |
-| **v0.0.9** (current) — "Periapsis" | Hybrid transport/DTN architecture completed: latency-weighted mesh routing, on-wire DTN bundles, token budgets, shadow copies, actuator path, UDP datagram plane with mesh-coordinated NAT hole punching, encrypted payloads, contact plans, Ed25519 node identity, lite build — plus remembered approvals, execution attribution, a web sidebar node chip and everyday CLI polish |
-| **v0.0.10** | Multi-device collaboration as the headline: cross-node delegation, lease protection, resumable execution — hardened and field-tested |
+| **v0.0.9** (stable) — "Periapsis" | Hybrid transport/DTN architecture completed: latency-weighted mesh routing, on-wire DTN bundles, token budgets, shadow copies, actuator path, UDP datagram plane with mesh-coordinated NAT hole punching, encrypted payloads, contact plans, Ed25519 node identity, lite build — plus remembered approvals, execution attribution, a web sidebar node chip and everyday CLI polish |
+| **v0.0.10-preview** (current) — "Apoapsis" | Reaching outward to the LAN and the edge: discovery with fingerprint-confirmed admission and TOFU key pinning, worktree-traveling delegated file tasks, the clarification loop, actuator dispatch with five reference drivers (serial MCU included), the Pi adapter and a Python-free generic executor, launch-directory project adoption — plus node-key-anchored signed event/audit chains, read-only clamping of unconsented remote runs, optional out-of-band update signatures, and a steady-state perf round |
 | **v0.0.x (beyond)** | Stability, performance, and edge-case tuning |
 | **v0.1.0** | Desktop capabilities and stronger control & management — commercial-grade quality |
 
@@ -189,4 +189,9 @@ Today, OpenPanda serves a developer's devices and agents. The long-term goal is 
 
 ## 📄 License
 
-[MIT License](LICENSE)
+OpenPanda is dual-licensed:
+
+- **Community** — [GNU Affero General Public License v3.0 or later](LICENSE) (AGPL-3.0-or-later)
+- **Commercial** — proprietary terms for closed-source embedding or hosted use; see [COMMERCIAL.md](COMMERCIAL.md)
+
+Releases published before the license change remain available under the MIT License.

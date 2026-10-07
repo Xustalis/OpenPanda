@@ -1,0 +1,70 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# panda-notify — OpenPanda reference actuator driver for desktop notification.
+#
+# Usage:
+#   panda-notify [--title TEXT] [--body TEXT]
+#
+# Delivers a desktop notification through whatever the host session has:
+# notify-send (freedesktop), osascript (macOS), or powershell BurntToast-free
+# toast (Windows/git-bash). Text is passed as argv/applescript literals —
+# never interpolated into a shell line beyond the quoting each backend needs.
+#
+# Exit codes: 0 ok · 2 bad arguments · 3 no notification backend · 1 delivery error.
+
+set -eu
+
+title="OpenPanda"
+body=""
+
+usage() {
+    cat >&2 <<'EOF'
+panda-notify [--title TEXT] [--body TEXT]
+  --title TEXT   notification title (default "OpenPanda")
+  --body TEXT    notification body
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --title) title="$2"; shift 2 ;;
+        --body)  body="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage; exit 2 ;;
+    esac
+done
+
+os=$(uname -s 2>/dev/null || echo unknown)
+
+if command -v notify-send >/dev/null 2>&1; then
+    if ! notify-send -- "$title" "$body"; then
+        echo "panda-notify: notify-send failed" >&2; exit 1
+    fi
+elif [ "$os" = "Darwin" ] && command -v osascript >/dev/null 2>&1; then
+    # osascript takes argv as on-run parameters — no string interpolation of
+    # user text into the script itself.
+    if ! osascript - "$title" "$body" <<'EOF'
+on run argv
+    display notification (item 2 of argv) with title (item 1 of argv)
+end run
+EOF
+    then
+        echo "panda-notify: osascript failed" >&2; exit 1
+    fi
+elif command -v powershell.exe >/dev/null 2>&1 || command -v powershell >/dev/null 2>&1; then
+    ps=powershell.exe
+    command -v powershell.exe >/dev/null 2>&1 || ps=powershell
+    # Single-quoted PowerShell literals after escaping embedded quotes.
+    t=$(printf '%s' "$title" | sed "s/'/''/g")
+    b=$(printf '%s' "$body" | sed "s/'/''/g")
+    if ! "$ps" -NoProfile -Command \
+        "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; \$n = New-Object System.Windows.Forms.NotifyIcon; \$n.Icon = [System.Drawing.SystemIcons]::Information; \$n.Visible = \$true; \$n.ShowBalloonTip(3000, '$t', '$b', [System.Windows.Forms.ToolTipIcon]::Info); Start-Sleep -Seconds 1" \
+        >/dev/null 2>&1; then
+        echo "panda-notify: powershell toast failed" >&2; exit 1
+    fi
+else
+    echo "panda-notify: no notification backend — install libnotify-bin (Linux), use macOS, or run on Windows" >&2
+    exit 3
+fi
+
+printf 'notified: %s\n' "$title"

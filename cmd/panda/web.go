@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // Command web boots the embedded web console with zero ceremony — the
@@ -179,6 +181,7 @@ func runWeb(args []string) {
 		CardPath:   *cardPath,
 		MCPCommand: *mcpCmd,
 		QueueTasks: true,
+		ConfigPath: *configPath,
 		Logger:     logger,
 	})
 	if err != nil {
@@ -247,13 +250,13 @@ func runWeb(args []string) {
 	// Self-update: check the release channel in the background while the panel
 	// runs, so a newer CLI is discovered during normal use rather than only on
 	// demand. Apply gates on task-queue idle so an update never interrupts work.
-	updateMgr := updater.New(updater.Options{
+	updateMgr := updater.New(updateEnvOptions(updater.Options{
 		Current:         versionpkg.Version,
 		CurrentCodename: versionpkg.Codename,
 		Logger:          logger,
 		Idle:            store.Idle,
 		SchemaFloor:     schemaFloorFunc(db),
-	})
+	}))
 	// StartAutoCheck spawns its loop internally; it is wired to ctx here so it
 	// stops with the process, but a panic inside it is not guard-wrapped
 	// (internal/updater is outside the cmd/panda wiring scope).

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package askengine
 
 import (
@@ -47,7 +49,7 @@ import (
 func registerMgmtTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "system_status",
-		Description: "查看 OpenPanda 整体运行状态：版本、本节点身份、入口模型、能力卡加载情况、设备网络在线状况、各状态任务数量。回答“现在什么情况/几台设备在线/队列里有多少任务”等问题的第一步。",
+		Description: "Check OpenPanda's overall status: version, this node's identity, entry model, capability-card load state, device-network online counts, per-state task counts. First step for questions like \"what's going on / how many devices online / how many tasks queued\". / 查看 OpenPanda 整体运行状态：版本、本节点身份、入口模型、能力卡加载情况、设备网络在线状况、各状态任务数量。回答“现在什么情况/几台设备在线/队列里有多少任务”等问题的第一步。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type":       "object",
@@ -60,7 +62,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "card_list",
-		Description: "列出设备网络里所有节点及其能力卡概要（设备名、类型、在线状态、能力清单）。需要为任务挑选合适设备时先看这里。",
+		Description: "List every node in the device network with a capability-card summary (name, kind, online status, ability list). Look here first when picking a device for a task. / 列出设备网络里所有节点及其能力卡概要（设备名、类型、在线状态、能力清单）。需要为任务挑选合适设备时先看这里。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type":       "object",
@@ -73,12 +75,12 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "card_show",
-		Description: "查看一个节点的能力卡详情：原生能力（含执行命令）、agent 配置（能力/擅长/不擅长/成本档）、人工能力、容量与资源档案。name 填设备名或节点 ID，留空看本机。",
+		Description: "Show one node's full capability card: native abilities (with their commands), agent config (capabilities/best_at/not_for/cost tier), manual abilities, capacity and resource profile. name = device name or node ID; empty = this node. / 查看一个节点的能力卡详情：原生能力（含执行命令）、agent 配置（能力/擅长/不擅长/成本档）、人工能力、容量与资源档案。name 填设备名或节点 ID，留空看本机。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "设备名或节点 ID（留空 = 本机）"},
+				"name": map[string]any{"type": "string", "description": "Device name or node ID (empty = this node) / 设备名或节点 ID（留空 = 本机）"},
 			},
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
@@ -89,12 +91,12 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "taskq_list",
-		Description: "查看任务队列。filter 可选：active（排队/已派发/运行中，默认）、review（待审批）、history（已完成/失败/已取消）、all（全部），或直接填某个状态名（如 running）。",
+		Description: "List the task queue. filter is optional: active (queued/dispatched/running, default), review (pending approval), history (done/failed/cancelled), all (everything), or a raw state name (e.g. running). / 查看任务队列。filter 可选：active（排队/已派发/运行中，默认）、review（待审批）、history（已完成/失败/已取消）、all（全部），或直接填某个状态名（如 running）。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"filter": map[string]any{"type": "string", "description": "active / review / history / all / 状态名"},
+				"filter": map[string]any{"type": "string", "description": "Queue filter: active / review / history / all / a state name / 队列过滤：active / review / history / all / 状态名"},
 			},
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
@@ -105,12 +107,12 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "taskq_show",
-		Description: "查看一个任务的详情：标题、状态、负责节点、意图、能力要求、结果摘要、事件时间线。task_id 填任务 ID。",
+		Description: "Show one task's detail: title, state, owner node, intent, ability requirements, result summary, event timeline. task_id = the task ID. / 查看一个任务的详情：标题、状态、负责节点、意图、能力要求、结果摘要、事件时间线。task_id 填任务 ID。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"task_id": map[string]any{"type": "string", "description": "任务 ID"},
+				"task_id": map[string]any{"type": "string", "description": "Task ID / 任务 ID"},
 			},
 			"required": []string{"task_id"},
 		},
@@ -122,14 +124,16 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name: "taskq_cancel",
-		Description: "取消任务及其所有子任务树，立即中止执行。task_id 填单个任务 ID 或前缀；task_ids 填 ID 数组可一次取消多个（清理队列时优先用它，比逐个调用省轮次）。" +
+		Description: "Cancel a task and its whole subtree, aborting execution immediately. task_id = one task ID or prefix; task_ids = an ID array to cancel several at once (prefer it when cleaning the queue — it saves rounds over per-task calls). " +
+			"Call it when a task loops, stalls on anti-bot, times out, or is no longer needed. Note: tasks in review (pending approval) are refused — that decision belongs to the user. / " +
+			"取消任务及其所有子任务树，立即中止执行。task_id 填单个任务 ID 或前缀；task_ids 填 ID 数组可一次取消多个（清理队列时优先用它，比逐个调用省轮次）。" +
 			"当任务死循环、卡反爬、超时或不再需要时调用。注意：处于待审批（review）状态的任务会被拒绝——那是留给用户的决定。",
 		Tier: defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"task_id":  map[string]any{"type": "string", "description": "要取消的任务 ID 或前缀"},
-				"task_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "批量取消的任务 ID 列表（与 task_id 二选一）"},
+				"task_id":  map[string]any{"type": "string", "description": "Task ID or prefix to cancel / 要取消的任务 ID 或前缀"},
+				"task_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Task IDs for batch cancel (choose one with task_id) / 批量取消的任务 ID 列表（与 task_id 二选一）"},
 			},
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
@@ -144,13 +148,13 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "taskq_priority",
-		Description: "修改任务的排队优先级。priority 可选：high（高）、normal（中/普通）、low（低）。",
+		Description: "Change a task's queue priority. priority: high / normal / low. / 修改任务的排队优先级。priority 可选：high（高）、normal（中/普通）、low（低）。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"task_id":  map[string]any{"type": "string", "description": "任务 ID 或前缀"},
-				"priority": map[string]any{"type": "string", "description": "优先级：high / normal / low"},
+				"task_id":  map[string]any{"type": "string", "description": "Task ID or prefix / 任务 ID 或前缀"},
+				"priority": map[string]any{"type": "string", "description": "Priority: high / normal / low / 优先级：high / normal / low"},
 			},
 			"required": []string{"task_id", "priority"},
 		},
@@ -163,13 +167,13 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "taskq_move",
-		Description: "调整任务在排队队列中的顺序序号（seq）。调度器按序号升序优先调度。seq 必须为正整数（>= 1）。",
+		Description: "Move a task's position in the pending queue by setting its sequence number (seq). The scheduler dispatches ascending seq first. seq must be a positive integer (>= 1). / 调整任务在排队队列中的顺序序号（seq）。调度器按序号升序优先调度。seq 必须为正整数（>= 1）。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"task_id": map[string]any{"type": "string", "description": "任务 ID 或前缀"},
-				"seq":     map[string]any{"type": "integer", "description": "新的顺序序号（正整数）"},
+				"task_id": map[string]any{"type": "string", "description": "Task ID or prefix / 任务 ID 或前缀"},
+				"seq":     map[string]any{"type": "integer", "description": "New sequence number (positive integer) / 新的顺序序号（正整数）"},
 			},
 			"required": []string{"task_id", "seq"},
 		},
@@ -190,7 +194,10 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name: "taskq_approve",
-		Description: "查询一个待审批（review）任务并提示用户去前台批准。批准是用户本人的决定：模型不得代替批准或拒绝——" +
+		Description: "Look up a pending-approval (review) task and prompt the user to approve it in the foreground. Approval is the user's own decision: the model must not approve or reject on their behalf — " +
+			"any disposition (approve/reject/cancel/clear) can only happen on a user-visible surface (the TUI's /approve and /reject, " +
+			"or the web panel's approve/reject buttons). This tool only returns the task's state plus a hint that the user must act; it does not change the task. task_id = task ID or prefix. / " +
+			"查询一个待审批（review）任务并提示用户去前台批准。批准是用户本人的决定：模型不得代替批准或拒绝——" +
 			"任何方向（approve/reject/cancel/clear）的处置都只能在用户可见的前台界面完成（TUI 的 /approve、/reject，" +
 			"或 Web 面板的批准/拒绝按钮）。本工具只返回该任务状态与需要用户操作的提示，不会改动任务。task_id 填任务 ID 或前缀。",
 		// Tier 2 keeps the call itself behind consent, but the decisive guard is
@@ -200,7 +207,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"task_id": map[string]any{"type": "string", "description": "待审批任务 ID 或前缀"},
+				"task_id": map[string]any{"type": "string", "description": "Pending-approval task ID or prefix / 待审批任务 ID 或前缀"},
 			},
 			"required": []string{"task_id"},
 		},
@@ -212,14 +219,16 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name: "taskq_reject",
-		Description: "查询一个待审批（review）任务并提示用户去前台拒绝。与批准一样，拒绝只能由用户本人在前台完成——" +
+		Description: "Look up a pending-approval (review) task and prompt the user to reject it in the foreground. Like approval, rejection can only be made by the user on a foreground surface — " +
+			"the model must not silently dispose of pending tasks. This tool only returns the task's state plus a hint that the user must act; it does not change the task. task_id = task ID or prefix. / " +
+			"查询一个待审批（review）任务并提示用户去前台拒绝。与批准一样，拒绝只能由用户本人在前台完成——" +
 			"模型不得静默处置待审批任务。本工具只返回该任务状态与需要用户操作的提示，不会改动任务。task_id 填任务 ID 或前缀。",
 		Tier: defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"task_id": map[string]any{"type": "string", "description": "待审批任务 ID 或前缀"},
-				"reason":  map[string]any{"type": "string", "description": "忽略——模型不执行拒绝操作"},
+				"task_id": map[string]any{"type": "string", "description": "Pending-approval task ID or prefix / 待审批任务 ID 或前缀"},
+				"reason":  map[string]any{"type": "string", "description": "Ignored — the model does not perform the rejection / 忽略——模型不执行拒绝操作"},
 			},
 			"required": []string{"task_id"},
 		},
@@ -232,7 +241,10 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name: "taskq_clear",
-		Description: "清理任务队列记录。scope 必填：history=删除所有终态任务记录（已完成/失败/已取消/已过期）；" +
+		Description: "Clear task-queue records. scope is required: history = delete all terminal task records (done/failed/cancelled/expired); " +
+			"all = cancel every unfinished task and delete all task records — refused while any task sits in review (pending approval), since those are decided by the user one by one. " +
+			"Deletion is unrecoverable and removes event timelines too. / " +
+			"清理任务队列记录。scope 必填：history=删除所有终态任务记录（已完成/失败/已取消/已过期）；" +
 			"all=取消所有未完成任务并删除全部任务记录——但存在待审批（review）任务时会拒绝执行，待审批只能由用户逐个决定。" +
 			"删除不可恢复，任务事件时间线一并移除。",
 		// Tier 2: this deletes audit-visible history, not just moves states.
@@ -240,7 +252,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"scope": map[string]any{"type": "string", "enum": []string{"history", "review", "all"}, "description": "清理范围：history / review / all"},
+				"scope": map[string]any{"type": "string", "enum": []string{"history", "review", "all"}, "description": "Clear scope: history / review / all / 清理范围：history / review / all"},
 			},
 			"required": []string{"scope"},
 		},
@@ -252,7 +264,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "card_native_add",
-		Description: "为本机能力卡（capabilities.yaml）添加一项原生命令行能力，变更后自动热重载。",
+		Description: "Add a native command-line ability to this node's capability card (capabilities.yaml); the card hot-reloads after the change. / 为本机能力卡（capabilities.yaml）添加一项原生命令行能力，变更后自动热重载。",
 		// Tier 2 by necessity: this tool decides what the node is allowed to
 		// run. Leaving it at Tier 1 let the model write its own authorization
 		// basis — add a card entry (with its own `tier`) for the command it
@@ -261,11 +273,11 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id":          map[string]any{"type": "string", "description": "能力 ID，如 ffmpeg:transcode"},
-				"description": map[string]any{"type": "string", "description": "能力说明"},
-				"command":     map[string]any{"type": "string", "description": "执行命令"},
-				"args":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "默认参数列表"},
-				"tier":        map[string]any{"type": "integer", "description": "操作等级（1=可逆/只读，2=不可逆/需授权，默认 1）"},
+				"id":          map[string]any{"type": "string", "description": "Ability ID, e.g. ffmpeg:transcode / 能力 ID，如 ffmpeg:transcode"},
+				"description": map[string]any{"type": "string", "description": "Ability description / 能力说明"},
+				"command":     map[string]any{"type": "string", "description": "Command to execute / 执行命令"},
+				"args":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Default argument list / 默认参数列表"},
+				"tier":        map[string]any{"type": "integer", "description": "Operation tier (1=reversible/read-only, 2=irreversible/needs authorization, default 1) / 操作等级（1=可逆/只读，2=不可逆/需授权，默认 1）"},
 			},
 			"required": []string{"id", "description", "command"},
 		},
@@ -294,12 +306,12 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "card_native_remove",
-		Description: "从本机能力卡中删除指定 ID 的原生能力，变更后自动热重载。",
+		Description: "Remove a native ability by ID from this node's capability card; the card hot-reloads after the change. / 从本机能力卡中删除指定 ID 的原生能力，变更后自动热重载。",
 		Tier:        defense.TierIrreversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id": map[string]any{"type": "string", "description": "要删除的原生能力 ID"},
+				"id": map[string]any{"type": "string", "description": "Native ability ID to remove / 要删除的原生能力 ID"},
 			},
 			"required": []string{"id"},
 		},
@@ -311,20 +323,20 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "card_agent_add",
-		Description: "为本机能力卡注册一个新的 Agent CLI，变更后自动热重载。adapter 可留空——按 name 从内置注册表（panda agents）解析，dsh 这类已知 CLI 会自动映射到正确适配器。",
+		Description: "Register a new agent CLI on this node's capability card; the card hot-reloads after the change. adapter may be left empty — it resolves from name via the built-in registry (panda agents), and known CLIs like dsh map to the right adapter automatically. / 为本机能力卡注册一个新的 Agent CLI，变更后自动热重载。adapter 可留空——按 name 从内置注册表（panda agents）解析，dsh 这类已知 CLI 会自动映射到正确适配器。",
 		// Tier 2 for the same reason as card_native_add: registering an agent
 		// is adding a way to run code on this node.
 		Tier: defense.TierIrreversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":         map[string]any{"type": "string", "description": "Agent 名称或 CLI 命令名，如 claude_code / dsh"},
-				"adapter":      map[string]any{"type": "string", "description": "适配器文件名，如 claude_code.py；已知 CLI 可留空由注册表解析"},
-				"capabilities": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "能力标识列表"},
-				"best_at":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "擅长领域"},
-				"not_for":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "不适合领域"},
-				"cost_tier":    map[string]any{"type": "string", "description": "成本档位：low / mid / high"},
-				"tier":         map[string]any{"type": "integer", "description": "安全等级（1=可逆，默认 1；2=不可逆、每次需人工授权）"},
+				"name":         map[string]any{"type": "string", "description": "Agent name or CLI command, e.g. claude_code, dsh / Agent 名称或 CLI 命令名，如 claude_code、dsh"},
+				"adapter":      map[string]any{"type": "string", "description": "Adapter filename, e.g. claude_code.py; leave empty for known CLIs to resolve via the registry / 适配器文件名，如 claude_code.py；已知 CLI 可留空由注册表解析"},
+				"capabilities": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Capability ID list / 能力标识列表"},
+				"best_at":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Areas it excels at / 擅长领域"},
+				"not_for":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Areas it is not suited for / 不适合领域"},
+				"cost_tier":    map[string]any{"type": "string", "description": "Cost tier: low / mid / high / 成本档位：low / mid / high"},
+				"tier":         map[string]any{"type": "integer", "description": "Safety tier (1=reversible, default; 2=irreversible, needs human authorization each time) / 安全等级（1=可逆，默认 1；2=不可逆、每次需人工授权）"},
 			},
 			"required": []string{"name"},
 		},
@@ -354,7 +366,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "card_rescan",
-		Description: "扫描本机已安装的 Agent CLI，把尚未注册的补进能力卡（panda card rescan 的等价操作）。用户要求“配置/注册某个 CLI”“让它以后能接任务”时用这个，不要手工猜适配器文件名。",
+		Description: "Scan this machine's installed agent CLIs and add the unregistered ones to the capability card (same as `panda card rescan`). Use it when the user asks to \"configure/register some CLI\" or \"let it take tasks from now on\"; never hand-guess adapter filenames. / 扫描本机已安装的 Agent CLI，把尚未注册的补进能力卡（panda card rescan 的等价操作）。用户要求“配置/注册某个 CLI”“让它以后能接任务”时用这个，不要手工猜适配器文件名。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type":       "object",
@@ -367,18 +379,18 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "card_agent_set",
-		Description: "修改本机能力卡中已有的 Agent CLI 配置属性，变更后自动热重载。",
+		Description: "Update an existing agent CLI's properties on this node's capability card; the card hot-reloads after the change. / 修改本机能力卡中已有的 Agent CLI 配置属性，变更后自动热重载。",
 		Tier:        defense.TierIrreversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":         map[string]any{"type": "string", "description": "Agent 名称"},
-				"adapter":      map[string]any{"type": "string", "description": "适配器文件名"},
-				"capabilities": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "能力标识列表"},
-				"best_at":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "擅长领域"},
-				"not_for":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "不适合领域"},
-				"cost_tier":    map[string]any{"type": "string", "description": "成本档位：low / mid / high"},
-				"tier":         map[string]any{"type": "integer", "description": "安全等级（1=可逆，2=不可逆）"},
+				"name":         map[string]any{"type": "string", "description": "Agent name / Agent 名称"},
+				"adapter":      map[string]any{"type": "string", "description": "Adapter filename / 适配器文件名"},
+				"capabilities": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Capability ID list / 能力标识列表"},
+				"best_at":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Areas it excels at / 擅长领域"},
+				"not_for":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Areas it is not suited for / 不适合领域"},
+				"cost_tier":    map[string]any{"type": "string", "description": "Cost tier: low / mid / high / 成本档位：low / mid / high"},
+				"tier":         map[string]any{"type": "integer", "description": "Safety tier (1=reversible, 2=irreversible) / 安全等级（1=可逆，2=不可逆）"},
 			},
 			"required": []string{"name"},
 		},
@@ -415,12 +427,12 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "card_agent_remove",
-		Description: "从本机能力卡中注销指定的 Agent CLI，变更后自动热重载。",
+		Description: "Unregister an agent CLI from this node's capability card; the card hot-reloads after the change. / 从本机能力卡中注销指定的 Agent CLI，变更后自动热重载。",
 		Tier:        defense.TierIrreversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "Agent 名称"},
+				"name": map[string]any{"type": "string", "description": "Agent name / Agent 名称"},
 			},
 			"required": []string{"name"},
 		},
@@ -432,13 +444,13 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "card_manual_add",
-		Description: "为本机能力卡添加一项人工协同能力，变更后自动热重载。",
+		Description: "Add a manual (human-in-the-loop) ability to this node's capability card; the card hot-reloads after the change. / 为本机能力卡添加一项人工协同能力，变更后自动热重载。",
 		Tier:        defense.TierIrreversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id":     map[string]any{"type": "string", "description": "能力 ID"},
-				"notify": map[string]any{"type": "string", "description": "通知渠道/提示"},
+				"id":     map[string]any{"type": "string", "description": "Ability ID / 能力 ID"},
+				"notify": map[string]any{"type": "string", "description": "Notification channel or hint / 通知渠道/提示"},
 			},
 			"required": []string{"id"},
 		},
@@ -454,12 +466,12 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "card_manual_remove",
-		Description: "从本机能力卡中删除指定的人工协同能力，变更后自动热重载。",
+		Description: "Remove a manual (human-in-the-loop) ability from this node's capability card; the card hot-reloads after the change. / 从本机能力卡中删除指定的人工协同能力，变更后自动热重载。",
 		Tier:        defense.TierIrreversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id": map[string]any{"type": "string", "description": "人工能力 ID"},
+				"id": map[string]any{"type": "string", "description": "Manual ability ID / 人工能力 ID"},
 			},
 			"required": []string{"id"},
 		},
@@ -471,7 +483,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "project_list",
-		Description: "查看系统中所有项目列表，以及当前会话正处于哪个激活项目中。",
+		Description: "List all projects in the system and which one the current session is inside. / 查看系统中所有项目列表，以及当前会话正处于哪个激活项目中。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type":       "object",
@@ -484,15 +496,15 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "project_create",
-		Description: "创建一个新项目。name 填项目名称，work_dir 为工作目录（可选），description 为项目描述（可选），enter 为是否立即切换进入该项目（默认 true）。",
+		Description: "Create a new project. name = project name; work_dir = working directory (optional); description = project description (optional); enter = switch into the project immediately (default true). / 创建一个新项目。name 填项目名称，work_dir 为工作目录（可选），description 为项目描述（可选），enter 为是否立即切换进入该项目（默认 true）。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":        map[string]any{"type": "string", "description": "项目名称"},
-				"work_dir":    map[string]any{"type": "string", "description": "工作目录（可选）"},
-				"description": map[string]any{"type": "string", "description": "项目描述（可选）"},
-				"enter":       map[string]any{"type": "boolean", "description": "是否立即切换进入该项目（默认 true）"},
+				"name":        map[string]any{"type": "string", "description": "Project name / 项目名称"},
+				"work_dir":    map[string]any{"type": "string", "description": "Working directory (optional) / 工作目录（可选）"},
+				"description": map[string]any{"type": "string", "description": "Project description (optional) / 项目描述（可选）"},
+				"enter":       map[string]any{"type": "boolean", "description": "Switch into the project immediately (default true) / 是否立即切换进入该项目（默认 true）"},
 			},
 			"required": []string{"name"},
 		},
@@ -510,12 +522,12 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "project_enter",
-		Description: "切换当前会话所处的目标项目。切换后新建任务默认归属于该项目。",
+		Description: "Switch the session's active project. Tasks created afterwards default to that project. / 切换当前会话所处的目标项目。切换后新建任务默认归属于该项目。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "要进入的项目名称"},
+				"name": map[string]any{"type": "string", "description": "Project name to enter / 要进入的项目名称"},
 			},
 			"required": []string{"name"},
 		},
@@ -527,7 +539,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "project_exit",
-		Description: "退出当前激活的项目环境，回到全局无项目状态。",
+		Description: "Leave the active project and return to the global no-project state. / 退出当前激活的项目环境，回到全局无项目状态。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type":       "object",
@@ -540,12 +552,12 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "node_remove",
-		Description: "从设备网络目录中移除一个离线或废弃的节点记录。不能删除本机或在线节点。",
+		Description: "Remove an offline or retired node's record from the device-network directory. Cannot remove this node or any online node. / 从设备网络目录中移除一个离线或废弃的节点记录。不能删除本机或在线节点。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"node_id": map[string]any{"type": "string", "description": "要移除的节点 ID"},
+				"node_id": map[string]any{"type": "string", "description": "Node ID to remove / 要移除的节点 ID"},
 			},
 			"required": []string{"node_id"},
 		},
@@ -583,7 +595,7 @@ func (e *Engine) systemStatus(ctx context.Context) (string, error) {
 	}
 	fmt.Fprintf(&b, "\n设备网络：%d 台设备，%d 在线 / %d 离线", len(nodes), online, len(nodes)-online)
 
-	store := core.NewTaskStore(e.db, nil)
+	store := core.NewSigningTaskStore(e.db, nil)
 	var counts []string
 	for _, st := range []string{
 		core.StateQueued, core.StateDispatched, core.StateWaitingCtx, core.StateRunning,
@@ -765,7 +777,7 @@ func (e *Engine) cardShow(ctx context.Context, name string) (string, error) {
 // oldest first — the same order the panel's board shows them in.
 func (e *Engine) taskqList(ctx context.Context, filter string) (string, error) {
 	states, label := taskqStates(filter)
-	store := core.NewTaskStore(e.db, nil)
+	store := core.NewSigningTaskStore(e.db, nil)
 	var tasks []core.Task
 	for _, st := range states {
 		ts, err := store.ListByState(ctx, st)
@@ -807,7 +819,7 @@ func (e *Engine) taskqShow(ctx context.Context, taskID string) (string, error) {
 	if taskID == "" {
 		return "", fmt.Errorf("task_id 不能为空")
 	}
-	store := core.NewTaskStore(e.db, nil)
+	store := core.NewSigningTaskStore(e.db, nil)
 	taskID, err := e.resolveTaskID(ctx, store, taskID)
 	if err != nil {
 		return "", fmt.Errorf("读取任务 %s：%w", taskID, err)
@@ -1079,7 +1091,7 @@ func (e *Engine) taskqCancel(ctx context.Context, taskID string) (string, error)
 	if taskID == "" {
 		return "", fmt.Errorf("task_id 不能为空")
 	}
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	resolved, err := e.resolveTaskID(ctx, store, taskID)
 	if err != nil {
 		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
@@ -1105,7 +1117,7 @@ func (e *Engine) taskqPriority(ctx context.Context, taskID, priority string) (st
 	if !ok {
 		return "", fmt.Errorf("无效的优先级 %q，必须为 high、normal 或 low", priority)
 	}
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	resolved, err := e.resolveTaskID(ctx, store, taskID)
 	if err != nil {
 		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
@@ -1126,7 +1138,7 @@ func (e *Engine) taskqMove(ctx context.Context, taskID string, seq int64) (strin
 	if seq < 1 {
 		return "", fmt.Errorf("seq 必须为正整数（>= 1）")
 	}
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	resolved, err := e.resolveTaskID(ctx, store, taskID)
 	if err != nil {
 		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
@@ -1160,7 +1172,7 @@ func (e *Engine) guardReorderable(ctx context.Context, store *core.TaskStore, ta
 // are notified, not just the local row). A batch cleanup reports per-id
 // outcomes instead of aborting on the first failure.
 func (e *Engine) taskqCancelBatch(ctx context.Context, ids []string) (string, error) {
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	var b strings.Builder
 	fmt.Fprintf(&b, "批量取消 %d 个任务：", len(ids))
 	ok := 0
@@ -1206,7 +1218,7 @@ func (e *Engine) taskqApprove(ctx context.Context, taskID string) (string, error
 	if taskID == "" {
 		return "", fmt.Errorf("task_id 不能为空")
 	}
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	resolved, err := e.resolveTaskID(ctx, store, taskID)
 	if err != nil {
 		return "", fmt.Errorf("解析任务 %s：%w", taskID, err)
@@ -1246,7 +1258,7 @@ func (e *Engine) guardReviewForModel(ctx context.Context, store *core.TaskStore,
 // they are refused while any review task exists — the reviewer must decide
 // each one in the foreground first.
 func (e *Engine) taskqClear(ctx context.Context, scope string) (string, error) {
-	store := core.NewTaskStore(e.db, e.logger)
+	store := core.NewSigningTaskStore(e.db, e.logger)
 	switch scope {
 	case "review":
 		return "", fmt.Errorf("待审批任务需要用户逐个决定，%s", reviewDecisionHint)
@@ -1515,6 +1527,12 @@ func checkAdapterExists(adapter string) error {
 	adapter = strings.TrimSpace(adapter)
 	if adapter == "" {
 		return fmt.Errorf("Agent adapter 不能为空：请给出适配器文件名，或使用注册表里已有的名字（%s）", knownAgentList())
+	}
+	// The spawn side (commander.adapterPath) refuses any name with a path
+	// separator or colon, so a path-like name written here could never
+	// launch — reject it now instead of leaving a dead card entry.
+	if strings.ContainsAny(adapter, `/\:`) {
+		return fmt.Errorf("Agent adapter %q 含路径分隔符或冒号，不是合法适配器文件名", adapter)
 	}
 	if adapterFileExists(adapter) {
 		return nil

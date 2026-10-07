@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package panel
 
 import (
@@ -7,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 )
@@ -107,6 +110,18 @@ func (h *handler) listMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// verifyAuditChain returns an Audit bound to this node's key when one
+// exists: signature verification must check that rows were signed BY THIS
+// NODE, not merely by whatever key a row names (P2-9), so the panel's
+// integrity endpoint resolves the key the same way `panda audit verify` does.
+func (h *handler) verifyAuditChain() *security.Audit {
+	a := security.NewAudit(h.db)
+	if pub, _, ok := core.LoadNodeKey(h.db); ok {
+		a.SetSigner(pub, nil)
+	}
+	return a
+}
+
 // verifyAudit serves GET /api/audit — integrity verification of the tamper
 // -evident hash chains, the web equivalent of `panda audit verify`. With
 // ?task_id= it verifies that task's event chain; otherwise the global audit
@@ -130,7 +145,7 @@ func (h *handler) verifyAudit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, errors.New("load audit log failed"))
 		return
 	}
-	if err := security.NewAudit(h.db).VerifyChain(r.Context()); err != nil {
+	if err := h.verifyAuditChain().VerifyChain(r.Context()); err != nil {
 		writeJSON(w, map[string]any{"ok": false, "scope": "global", "entries": len(entries), "error": err.Error()})
 		return
 	}

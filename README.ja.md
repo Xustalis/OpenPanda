@@ -7,7 +7,7 @@
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
 [![Release](https://img.shields.io/github/v/release/Xustalis/OpenPanda?label=release&color=blue)](https://github.com/Xustalis/OpenPanda/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/プラットフォーム-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
@@ -160,8 +160,8 @@ MacBook と Linux ワークステーションを連携させる場合：
 | バージョン | テーマ |
 |---|---|
 | **v0.0.8**（安定ベースライン） | 単一マシンでのマルチエージェント協調が完全に実用可能：意図分類、タスク派遣、監督ループ、フェイルオーバー、段階的承認、プロンプト多言語ポリシー |
-| **v0.0.9**（現在）— "Periapsis" | ハイブリッド転送/DTN アーキテクチャ完成：遅延加重メッシュルーティング、ワイヤ上の DTN バンドル、トークン予算、シャドウコピー、アクチュエータ実行経路、UDP データグラム面とメッシュ調整の NAT ホールパンチング、ペイロード暗号化、コンタクト計画、Ed25519 ノード同一性、lite ビルド——さらに承認記憶、実行帰属表示、Web サイドバーのノードチップと日常 CLI の磨き上げ |
-| **v0.0.10** | マルチデバイス協調を主役に：クロスノード委譲、リース保護、再開可能な実行——堅牢化と実機検証まで |
+| **v0.0.9**（安定版）— "Periapsis" | ハイブリッド転送/DTN アーキテクチャ完成：遅延加重メッシュルーティング、ワイヤ上の DTN バンドル、トークン予算、シャドウコピー、アクチュエータ実行経路、UDP データグラム面とメッシュ調整の NAT ホールパンチング、ペイロード暗号化、コンタクト計画、Ed25519 ノード同一性、lite ビルド——さらに承認記憶、実行帰属表示、Web サイドバーのノードチップと日常 CLI の磨き上げ |
+| **v0.0.10-preview**（現在）— "Apoapsis" | LAN とエッジへ外へ：フィンガープリント確認准入つき LAN 自動発見と TOFU 鍵ピン留め、ワークツリー同行の委任ファイルタスク、明確化ループ、五つの参照ドライバ（シリアル MCU 含む）つきアクチュエータディスパッチ、Pi アダプタと Python 不要の内蔵 generic エグゼキュータ、起動ディレクトリのプロジェクト養子縁組——加えてノード鍵にアンカーされた署名イベント/監査チェーン、同意なきリモート実行の読み取り専用クランプ、任意の帯域外アップデート署名、定常状態パフォーマンスの一巡 |
 | **v0.0.x（以降）** | 安定性・性能・エッジケースの調整 |
 | **v0.1.0** | デスクトップ能力と、より強力な操作・管理機能——商用品質 |
 
@@ -188,4 +188,9 @@ OpenPanda のアーキテクチャは、大規模な異種クラスタのため�
 
 ## 📄 ライセンス
 
-OpenPanda は [MIT License](LICENSE) のもとで公開されているオープンソースソフトウェアです。
+OpenPanda はデュアルライセンスで提供されています：
+
+- **コミュニティ版** — [GNU Affero General Public License v3.0 or later](LICENSE)（AGPL-3.0-or-later）
+- **商用ライセンス** — クローズドソースへの組み込みやホステッド提供向け。詳細は [COMMERCIAL.md](COMMERCIAL.md)
+
+ライセンス変更前に公開されたリリースは、引き続き MIT ライセンスで利用できます。

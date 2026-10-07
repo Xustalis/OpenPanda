@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package scheduler
 
 import (
@@ -17,6 +19,12 @@ const (
 	wUserPriority       = 0.3
 	wSchedulerTier      = 0.2
 	wWaitTime           = 0.1
+	// wProjectResidence is the context-cost term (v0.0.10): a node that holds
+	// a checkout of the task's project needs no tree transfer, so it earns a
+	// bonus rather than merely competing on load. A term, not a gate — the
+	// tree can still travel as an artifact, so a non-resident node that is
+	// meaningfully freer still wins.
+	wProjectResidence = 0.2
 )
 
 // freshnessHalfLife is the λ of the TMB delayed-discount attention mapping
@@ -52,7 +60,25 @@ func resourceEfficiency(n ledger.Node) float64 {
 	if free < 0 {
 		free = 0
 	}
-	return float64(free) / float64(n.Capacity.MaxConcurrent)
+	eff := float64(free) / float64(n.Capacity.MaxConcurrent)
+	// Live headroom discount (Track 2): slot count says how many tasks the
+	// node can hold; measured free memory says how much work they can absorb.
+	// A node down to its last fraction of RAM keeps its slots on paper while
+	// being unable to take real work, so its efficiency is scaled by the
+	// measured headroom — floored at 0.1 so a merely-tight node is not
+	// zeroed out of contention. Unmeasured nodes (no live block, -1 field)
+	// keep the slot ratio: absence of data is not evidence of pressure.
+	if l := n.Capacity.Live; l != nil && l.MemFreeGB >= 0 && n.Capacity.RAMGB > 0 {
+		headroom := l.MemFreeGB / float64(n.Capacity.RAMGB)
+		if headroom > 1 {
+			headroom = 1
+		}
+		if headroom < 0.1 {
+			headroom = 0.1
+		}
+		eff *= headroom
+	}
+	return eff
 }
 
 // waitSignal inverts the node's current queue depth: how soon a new task would
@@ -98,16 +124,34 @@ func userPriority(n ledger.Node, preferred string) float64 {
 	return 0
 }
 
+// projectResidence is 1.0 when the node advertises a checkout of the task's
+// project — the tree then costs nothing to move, which is exactly what the
+// term rewards. An empty project name asks nothing: every node is equally
+// (non-)resident, so the term stays 0 rather than distorting the ranking.
+func projectResidence(n ledger.Node, project string) float64 {
+	if project == "" {
+		return 0
+	}
+	for _, p := range n.Projects {
+		if p == project {
+			return 1
+		}
+	}
+	return 0
+}
+
 // score returns the node's weighted desirability (design §6.3), discounted by
 // heartbeat freshness (TMB). user_priority enters as 1.0 for the user-named
 // preferred node; in practice Route honors a matching preferred node before
 // scoring runs, so the term mostly shows up in the breakdown the orbit renders
-// — but it is part of the §6.3 sum, so it belongs in the score.
-func score(n ledger.Node, now int64, preferred string) float64 {
+// — but it is part of the §6.3 sum, so it belongs in the score. project is the
+// task's project name: a node resident for it earns the context-cost term.
+func score(n ledger.Node, now int64, preferred, project string) float64 {
 	raw := wResourceEfficiency*resourceEfficiency(n) +
 		wUserPriority*userPriority(n, preferred) +
 		wSchedulerTier*tierSignal(n) +
-		wWaitTime*waitSignal(n)
+		wWaitTime*waitSignal(n) +
+		wProjectResidence*projectResidence(n, project)
 	return raw * Freshness(n.LastSeen, now)
 }
 
@@ -116,14 +160,14 @@ func score(n ledger.Node, now int64, preferred string) float64 {
 // node enter its own ranking as one candidate among many: comparing "best peer"
 // against "myself" needs the number, not just the name. An empty set scores 0,
 // so a lone capable local node wins by default.
-func pickBestScored(nodes []ledger.Node, now int64, preferred string) (string, float64) {
+func pickBestScored(nodes []ledger.Node, now int64, preferred, project string) (string, float64) {
 	if len(nodes) == 0 {
 		return "", 0
 	}
 	best := nodes[0]
-	bestScore := score(best, now, preferred)
+	bestScore := score(best, now, preferred, project)
 	for _, n := range nodes[1:] {
-		s := score(n, now, preferred)
+		s := score(n, now, preferred, project)
 		if s > bestScore || (s == bestScore && n.ID < best.ID) {
 			best, bestScore = n, s
 		}
@@ -144,6 +188,10 @@ type ScoreBreakdown struct {
 	UserPriority  float64 `json:"user_priority"`
 	SchedulerTier float64 `json:"scheduler_tier"`
 	WaitTime      float64 `json:"wait_time"`
+	// ProjectResidence is 1 when the node advertises a checkout of the task's
+	// project — the orbit can then show "this node won because the code is
+	// already there" rather than a bare score bump.
+	ProjectResidence float64 `json:"project_residence,omitempty"`
 	// HeartbeatFreshness is the TMB decay weight in (0,1] — 1.0 = brand-new
 	// heartbeat, ≈0 = stale past the half-life. The wire shape mirrors the
 	// design doc §3.1.1 "heartbeat_age" (0..∞ seconds, lower is better) so
@@ -171,22 +219,24 @@ type ScoredCandidate struct {
 // scoreBreakdown computes the per-term breakdown for a single node. total =
 // (weighted raw sum) * freshness. localBonus is applied by the caller (it is
 // not a term inside score()).
-func scoreBreakdown(n ledger.Node, now int64, preferred string) ScoreBreakdown {
+func scoreBreakdown(n ledger.Node, now int64, preferred, project string) ScoreBreakdown {
 	re := resourceEfficiency(n)
 	up := userPriority(n, preferred)
 	ti := tierSignal(n)
 	wt := waitSignal(n)
+	pr := projectResidence(n, project)
 	var ageSec float64
 	if n.LastSeen > 0 && now > n.LastSeen {
 		ageSec = float64(now - n.LastSeen)
 	}
 	fresh := Freshness(n.LastSeen, now)
-	raw := wResourceEfficiency*re + wUserPriority*up + wSchedulerTier*ti + wWaitTime*wt
+	raw := wResourceEfficiency*re + wUserPriority*up + wSchedulerTier*ti + wWaitTime*wt + wProjectResidence*pr
 	return ScoreBreakdown{
 		ResourceEfficiency: re,
 		UserPriority:       up,
 		SchedulerTier:      ti,
 		WaitTime:           wt,
+		ProjectResidence:   pr,
 		HeartbeatAge:       ageSec, // design doc §3.1.1 wire contract
 		HeartbeatFreshness: fresh,  // internal weight, still useful
 		Total:              raw * fresh,
@@ -197,13 +247,13 @@ func scoreBreakdown(n ledger.Node, now int64, preferred string) ScoreBreakdown {
 // online/capable) and returns them with full score breakdown. selfID (when
 // non-empty) receives the localBias add-on on top of its baseline score;
 // preferred (when non-empty) is the user-named node, whose user_priority term
-// reflects the §6.3 weight. Callers should filter candidates (online,
-// hardware fit, not on chain) before passing them in — this function scores,
-// it does not gate.
-func ScoreAllCandidates(candidates []ledger.Node, selfID, preferred string, now int64) []ScoredCandidate {
+// reflects the §6.3 weight; project (when non-empty) feeds the residence
+// term. Callers should filter candidates (online, hardware fit, not on chain)
+// before passing them in — this function scores, it does not gate.
+func ScoreAllCandidates(candidates []ledger.Node, selfID, preferred, project string, now int64) []ScoredCandidate {
 	out := make([]ScoredCandidate, 0, len(candidates))
 	for _, n := range candidates {
-		bd := scoreBreakdown(n, now, preferred)
+		bd := scoreBreakdown(n, now, preferred, project)
 		if selfID != "" && n.ID == selfID {
 			bd.LocalBonus = localBias
 			bd.Total += localBias

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package commander
 
 import (
@@ -326,11 +328,11 @@ func TestAgentEndpointResolution(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "own-key")
 	t.Setenv("OPENAI_BASE_URL", "https://override.test/v1")
 	r := probeRouter(config.ModelConfig{})
-	if ep := r.agentEndpoint(usableAgent("codex.py")); ep != "https://override.test/v1" {
+	if ep := r.agentEndpoint("codex", usableAgent("codex.py")); ep != "https://override.test/v1" {
 		t.Fatalf("env override endpoint = %q", ep)
 	}
 	t.Setenv("OPENAI_BASE_URL", "")
-	if ep := r.agentEndpoint(usableAgent("codex.py")); ep != "https://api.openai.com" {
+	if ep := r.agentEndpoint("codex", usableAgent("codex.py")); ep != "https://api.openai.com" {
 		t.Fatalf("registry endpoint = %q", ep)
 	}
 
@@ -342,7 +344,7 @@ func TestAgentEndpointResolution(t *testing.T) {
 		APIKey:  "sk-test",
 		Model:   "m",
 	})
-	if ep := r2.agentEndpoint(usableAgent("codex.py")); ep != "https://injected.test/v1" {
+	if ep := r2.agentEndpoint("codex", usableAgent("codex.py")); ep != "https://injected.test/v1" {
 		t.Fatalf("injected endpoint = %q", ep)
 	}
 }
@@ -366,10 +368,10 @@ env_key = "DEEPSEEK_API_KEY"
 `)
 	t.Setenv("OPENAI_API_KEY", "own-key") // own creds: injection stays off
 	r := probeRouter(config.ModelConfig{})
-	if ep := r.agentEndpoint(usableAgent("codex.py")); ep != "https://api.deepseek.com/v1" {
+	if ep := r.agentEndpoint("codex", usableAgent("codex.py")); ep != "https://api.deepseek.com/v1" {
 		t.Fatalf("codex config.toml endpoint = %q, want the configured relay", ep)
 	}
-	spec := r.agentTarget(usableAgent("codex.py"))
+	spec := r.agentTarget("codex", usableAgent("codex.py"))
 	if spec.APIKey != "own-key" || spec.APIType != config.APITypeOpenAI {
 		t.Fatalf("probe spec should carry own key + openai type, got %+v", spec)
 	}
@@ -379,7 +381,7 @@ env_key = "DEEPSEEK_API_KEY"
 	mustWrite(t, filepath.Join(home2, ".claude", "settings.json"),
 		`{"env": {"ANTHROPIC_BASE_URL": "https://relay.example.com"}}`)
 	t.Setenv("ANTHROPIC_API_KEY", "k")
-	if ep := r.agentEndpoint(usableAgent("claude_code.py")); ep != "https://relay.example.com" {
+	if ep := r.agentEndpoint("claude_code", usableAgent("claude_code.py")); ep != "https://relay.example.com" {
 		t.Fatalf("claude settings.json endpoint = %q, want the configured relay", ep)
 	}
 
@@ -389,7 +391,7 @@ env_key = "DEEPSEEK_API_KEY"
   "model": "myrelay/some-model",
   "provider": {"myrelay": {"options": {"baseURL": "https://relay2.example.com/v1"}}}
 }`)
-	if ep := r.agentEndpoint(usableAgent("opencode.py")); ep != "https://relay2.example.com/v1" {
+	if ep := r.agentEndpoint("opencode", usableAgent("opencode.py")); ep != "https://relay2.example.com/v1" {
 		t.Fatalf("opencode provider endpoint = %q", ep)
 	}
 }
@@ -407,7 +409,7 @@ base_url = "https://relay.test/v1"
 wire_api = "responses"
 experimental_bearer_token = "tok-relay"
 `)
-	spec := probeRouter(config.ModelConfig{}).agentTarget(usableAgent("codex.py"))
+	spec := probeRouter(config.ModelConfig{}).agentTarget("codex", usableAgent("codex.py"))
 	if spec.Endpoint != "https://relay.test/v1" || spec.APIType != apiTypeResponses || spec.APIKey != "tok-relay" {
 		t.Fatalf("codex responses target = %+v", spec)
 	}
@@ -447,7 +449,7 @@ func TestHermesRecordedFailure(t *testing.T) {
   }
 }`)
 
-	spec := probeRouter(config.ModelConfig{}).agentTarget(usableAgent("hermes.py"))
+	spec := probeRouter(config.ModelConfig{}).agentTarget("hermes", usableAgent("hermes.py"))
 	if spec.Endpoint != srv.URL || spec.RejectionHint == "" {
 		t.Fatalf("hermes target = %+v, want endpoint + rejection hint", spec)
 	}
@@ -479,11 +481,11 @@ func TestDshCredentialsYaml(t *testing.T) {
 		"agent-default-model:\n  provider: deepseek-official\n  model: deepseek-flash\n  reasoningEffort: high\n"+
 			"llm-pi-ai:\n  providers:\n    custom:\n      base_url: "+srv.URL+"\n")
 
-	own, src := probeAgentCredentials("deepseek_harness.py")
+	own, src := probeAgentCredentials("deepseek_harness", "deepseek_harness.py")
 	if !own || !strings.Contains(src, ".credentials.yaml") {
 		t.Fatalf("dsh credentials not detected: own=%v src=%q", own, src)
 	}
-	spec := probeRouter(config.ModelConfig{}).agentTarget(usableAgent("deepseek_harness.py"))
+	spec := probeRouter(config.ModelConfig{}).agentTarget("deepseek_harness", usableAgent("deepseek_harness.py"))
 	if spec.Endpoint != srv.URL {
 		t.Fatalf("dsh endpoint = %q, want custom provider %q", spec.Endpoint, srv.URL)
 	}
@@ -507,7 +509,7 @@ func TestDshEmptyRefsNotCredentials(t *testing.T) {
 	home := cleanCredentialEnv(t)
 	mustWrite(t, filepath.Join(home, ".dsh", ".credentials.yaml"),
 		"version: 1\nrecords:\n  session: {}\nrefs: {}\n")
-	if own, _ := probeAgentCredentials("deepseek_harness.py"); own {
+	if own, _ := probeAgentCredentials("deepseek_harness", "deepseek_harness.py"); own {
 		t.Fatal("empty refs block must not count as credentials")
 	}
 }
@@ -518,11 +520,11 @@ func TestDotenvCommentsNotCredentials(t *testing.T) {
 	home := cleanCredentialEnv(t)
 	mustWrite(t, filepath.Join(home, ".hermes", ".env"),
 		"# Hermes env\n# OPENAI_API_KEY=sk-...\nOPENAI_API_KEY=\n")
-	if own, _ := probeAgentCredentials("hermes.py"); own {
+	if own, _ := probeAgentCredentials("hermes", "hermes.py"); own {
 		t.Fatal("comments-only .env must not count as credentials")
 	}
 	mustWrite(t, filepath.Join(home, ".hermes", ".env"), "OPENAI_API_KEY=sk-live\n")
-	if own, _ := probeAgentCredentials("hermes.py"); !own {
+	if own, _ := probeAgentCredentials("hermes", "hermes.py"); !own {
 		t.Fatal("a real assignment in .env should count as credentials")
 	}
 }
@@ -547,7 +549,7 @@ func TestHermesStaleRecordIgnored(t *testing.T) {
     }]
   }
 }`)
-	spec := probeRouter(config.ModelConfig{}).agentTarget(usableAgent("hermes.py"))
+	spec := probeRouter(config.ModelConfig{}).agentTarget("hermes", usableAgent("hermes.py"))
 	if spec.RejectionHint != "" {
 		t.Fatalf("stale record fed a hint: %+v", spec)
 	}
@@ -643,7 +645,9 @@ func TestProbeModelFreshLatency(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	t.Cleanup(srv.Close)
 	v, lat := ProbeModel(ProbeSpec{Endpoint: srv.URL, APIType: config.APITypeOpenAI})
-	if !v.OK || lat <= 0 || lat > 10*time.Second || v.Detail != "http 200" {
+	// lat == 0 is legal, not a missing measurement: on coarse-grained timers
+	// (Windows) a localhost probe can complete inside one clock tick.
+	if !v.OK || lat < 0 || lat > 10*time.Second || v.Detail != "http 200" {
 		t.Fatalf("ProbeModel = %+v, %v", v, lat)
 	}
 }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Command task-timeline prints a task and its event timeline from one or more
 // node databases. It is read-only and intended for distributed lab reports.
 package main
@@ -43,7 +45,7 @@ func main() {
 			out = append(out, nodeTimeline{DB: path, Error: err.Error()})
 			continue
 		}
-		store := core.NewTaskStore(db, nil)
+		store := core.NewSigningTaskStore(db, nil)
 		row := nodeTimeline{DB: path}
 		if task, err := store.Get(ctx, *taskID); err == nil {
 			row.Task = &task

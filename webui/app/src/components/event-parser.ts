@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Parses and formats task events for human-readable display.
 // Replaces raw JSON walls with clear structured information and formats
 // Chain-of-Thought (reasoning) into readable thinking blocks.
@@ -12,6 +14,60 @@ export interface FormattedEvent {
   thought?: string
   tags: { key: string; value: string }[]
   rawJson?: string
+  /** Structured agent-activity block (type === 'agent_event'). */
+  agent?: AgentBlock
+}
+
+/** AgentBlock is one typed activity block the adapter streamed back
+ * (event protocol v2): assistant text, thinking, a tool_use call, or a
+ * tool_result. `parent` carries the enclosing tool_use id when the block
+ * ran inside a harness sub-agent — the timeline nests it into the
+ * delegation tree. */
+export interface AgentBlock {
+  ev: string
+  id?: string
+  parent?: string
+  name?: string
+  toolUseId?: string
+  text?: string
+  thinking?: string
+  content?: string
+  input?: unknown
+  isError?: boolean
+}
+
+function str(v: unknown): string | undefined {
+  const s = typeof v === 'string' ? v : ''
+  return s === '' ? undefined : s
+}
+
+/** The one argument a tool_use row summarizes — same pick order the
+ * adapter's progress note uses. */
+export function toolArgSummary(input: unknown): string {
+  if (typeof input === 'string') return input
+  if (!input || typeof input !== 'object') return ''
+  const m = input as Record<string, unknown>
+  for (const k of ['command', 'file_path', 'pattern', 'path', 'url', 'query', 'description']) {
+    const v = m[k]
+    if (typeof v === 'string' && v) return v
+  }
+  return ''
+}
+
+/** One transcript row's tree depth, computed in stream order: a tool_use
+ * registers its id so later blocks carrying parent=<id> render nested
+ * under it — the harness sub-agent tree (Claude Task) shows as a tree.
+ * A parent outside the visible window (pagination, truncation) still
+ * nests one level rather than pretending to be top-level work. */
+export function blockDepth(block: AgentBlock, depths: Map<string, number>): number {
+  let depth = 0
+  if (block.parent) {
+    depth = (depths.get(block.parent) ?? 0) + 1
+  }
+  if (block.ev === 'tool_use' && block.id) {
+    depths.set(block.id, depth)
+  }
+  return Math.min(depth, 6)
 }
 
 const NOISE_KEYS = new Set(['candidates', 'score_breakdown'])
@@ -65,6 +121,48 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
       tags: [],
       rawJson,
     }
+  }
+
+  // Structured agent-activity events (adapter protocol v2): the timeline
+  // renders the block itself, so here we only unpack it and pick the badge.
+  if (type === 'agent_event' && data) {
+    const block: AgentBlock = {
+      ev: String(data.ev ?? ''),
+      id: str(data.id),
+      parent: str(data.parent),
+      name: str(data.name),
+      toolUseId: str(data.tool_use_id),
+      text: str(data.text),
+      thinking: str(data.thinking),
+      content: str(data.content),
+      input: data.input,
+      isError: Boolean(data.is_error),
+    }
+    let label = t('events.agent_event')
+    let badgeClass: FormattedEvent['badgeClass'] = 'dim'
+    switch (block.ev) {
+      case 'text':
+        label = t('events.agent_text')
+        badgeClass = 'accent'
+        break
+      case 'thinking':
+        label = t('events.agent_thinking')
+        badgeClass = 'dim'
+        break
+      case 'tool_use':
+        label = block.name ? `${t('events.agent_tool_use')}: ${block.name}` : t('events.agent_tool_use')
+        badgeClass = 'info'
+        break
+      case 'tool_result':
+        label = t('events.agent_tool_result')
+        badgeClass = block.isError ? 'danger' : 'dim'
+        break
+      case 'transcript_truncated':
+        label = t('events.transcript_truncated')
+        badgeClass = 'warn'
+        break
+    }
+    return { type, label, badgeClass, agent: block, tags, rawJson }
   }
 
   // Lifecycle & trace events

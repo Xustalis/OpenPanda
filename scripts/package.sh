@@ -1,18 +1,21 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Build and package release archives for every supported platform.
 #
 # Produces, under dist/:
 #   panda-<version>-<os>-<arch>.tar.gz   (darwin/linux)
 #   panda-<version>-windows-<arch>.zip    (windows, for install.ps1's Expand-Archive)
 #   checksums.txt                         (SHA-256 of each archive, "hash  name")
+#   checksums.txt.sig                     (detached Ed25519 sig over checksums.txt,
+#                                          only when OPENPANDA_RELEASE_KEY is set)
 #
 # Each archive is a single top-level `openpanda/` directory containing:
-#   bin/panda(.exe)   adapters/*.py   extensions/voice/*.py
+#   bin/panda(.exe)   adapters/*.py   extensions/voice/*.py   drivers/panda-*
 #   config.example.yaml   capabilities.example-*.yaml   LICENSE
 #
 # Run `make web` first so the embedded web console is baked in.
 #
-# Usage: scripts/package.sh [version]   (default: $VERSION or 0.0.9)
+# Usage: scripts/package.sh [version]   (default: $VERSION or 0.0.10-preview)
 #
 # Env:
 #   OPENPANDA_PACKAGE_TARGETS  space-separated "os-arch" list to build instead
@@ -20,22 +23,48 @@
 #                              installer tests, which only need the host's own
 #                              archive and should not pay for five cross
 #                              compiles they will never execute.
+#   OPENPANDA_RELEASE_KEY      hex/base64 Ed25519 private key (or 32-byte seed)
+#                              of the release channel. When set, the matching
+#                              public key is baked into every binary (the
+#                              updater then refuses unsigned releases) and
+#                              checksums.txt is signed into checksums.txt.sig.
+#   OPENPANDA_RELEASE_PUBKEY   bake this public key into the binaries without
+#                              holding the private half (e.g. signing happens
+#                              on another machine); ignored when _KEY is set,
+#                              which derives the public half itself.
 
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${1:-${VERSION:-0.0.9}}"
+VERSION="${1:-${VERSION:-0.0.10-preview}}"
 VERSION="${VERSION#v}"
 VERSION_PKG="github.com/Xustalis/OpenPanda/internal/version"
 LDFLAGS="-s -w -X ${VERSION_PKG}.Version=${VERSION}"
+
+# Bake the release public key into the binaries so `panda update` verifies
+# checksums.txt.sig by default instead of trusting checksums fetched over the
+# same channel as the archive. The private key derives its own public half;
+# OPENPANDA_RELEASE_PUBKEY covers split signing setups.
+RELEASE_PUBKEY=""
+if [ -n "${OPENPANDA_RELEASE_KEY:-}" ]; then
+    RELEASE_PUBKEY="$(go run ./scripts/sign-release -pub)"
+elif [ -n "${OPENPANDA_RELEASE_PUBKEY:-}" ]; then
+    RELEASE_PUBKEY="$OPENPANDA_RELEASE_PUBKEY"
+fi
+if [ -n "$RELEASE_PUBKEY" ]; then
+    LDFLAGS="$LDFLAGS -X ${VERSION_PKG}.ReleasePubKey=${RELEASE_PUBKEY}"
+    echo "→ release key pinned: ${RELEASE_PUBKEY%????????????????????????????????}…"
+else
+    echo "package.sh: no OPENPANDA_RELEASE_KEY/_PUBKEY — binaries will accept checksum-only releases" >&2
+fi
 
 TARGETS="${OPENPANDA_PACKAGE_TARGETS:-darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-arm64 lite-linux-amd64 lite-linux-arm64 lite-linux-armv7}"
 
 DIST="${OPENPANDA_DIST_DIR:-$ROOT/dist}"
 STAGE="$DIST/package"
-rm -rf "$STAGE" "$DIST"/panda-* "$DIST/checksums.txt"
+rm -rf "$STAGE" "$DIST"/panda-* "$DIST/checksums.txt" "$DIST/checksums.txt.sig"
 mkdir -p "$DIST"
 
 # hash_file <path> → lowercase hex (macOS shasum / Linux sha256sum).
@@ -72,11 +101,16 @@ build() {
     find adapters -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/adapters/" \;
     mkdir -p "$dir/extensions/voice"
     find extensions/voice -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/extensions/voice/" \;
+    # Reference actuator drivers ride with every build — the edge card's
+    # hardware:* actuators resolve them by PATH or absolute path.
+    mkdir -p "$dir/drivers"
+    find drivers -maxdepth 1 -type f -name 'panda-*' -exec cp {} "$dir/drivers/" \;
+    chmod +x "$dir"/drivers/panda-* 2>/dev/null || true
     cp config.example.yaml "$dir/"
     for c in config/capabilities.example-*.yaml; do
         [ -e "$c" ] && cp "$c" "$dir/"
     done
-    cp LICENSE "$dir/"
+    cp LICENSE NOTICE THIRD_PARTY_NOTICES.md COMMERCIAL.md "$dir/"
 }
 
 build_lite() {
@@ -93,11 +127,14 @@ build_lite() {
     find adapters -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/adapters/" \;
     mkdir -p "$dir/extensions/voice"
     find extensions/voice -maxdepth 1 -type f -name '*.py' -exec cp {} "$dir/extensions/voice/" \;
+    mkdir -p "$dir/drivers"
+    find drivers -maxdepth 1 -type f -name 'panda-*' -exec cp {} "$dir/drivers/" \;
+    chmod +x "$dir"/drivers/panda-* 2>/dev/null || true
     cp config.example.yaml "$dir/"
     for c in config/capabilities.example-*.yaml; do
         [ -e "$c" ] && cp "$c" "$dir/"
     done
-    cp LICENSE "$dir/"
+    cp LICENSE NOTICE THIRD_PARTY_NOTICES.md COMMERCIAL.md "$dir/"
 }
 
 # Build only the requested targets. Filtering here rather than at the archive
@@ -157,6 +194,16 @@ for osarch in $TARGETS; do
 done
 
 ( cd "$DIST" && for f in panda-*; do [ -f "$f" ] && printf '%s  %s\n' "$(hash_file "$f")" "$f"; done > checksums.txt )
+
+# Detached Ed25519 signature over checksums.txt — the out-of-band trust
+# anchor the updater checks when a release key is pinned. Signed here rather
+# than by hand so the asset and its signature can never drift apart.
+if [ -n "${OPENPANDA_RELEASE_KEY:-}" ]; then
+    go run ./scripts/sign-release "$DIST/checksums.txt" > "$DIST/checksums.txt.sig"
+    echo "→ signed checksums.txt.sig"
+elif [ -n "${OPENPANDA_RELEASE_PUBKEY:-}" ]; then
+    echo "package.sh: pubkey pinned but no OPENPANDA_RELEASE_KEY — ship checksums.txt.sig from the signer" >&2
+fi
 
 rm -rf "$STAGE"
 echo "Packaged (version $VERSION):"
