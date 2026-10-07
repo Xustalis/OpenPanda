@@ -55,9 +55,12 @@ Das una instrucción desde **cualquier** dispositivo. OpenPanda analiza la tarea
 ## 🌟 ¿Qué puede hacer OpenPanda?
 
 ### 1. 🌐 Colaboración multidispositivo P2P heterogénea
+- **Descubrimiento LAN + fijación TOFU**: Los nodos se encuentran en la LAN con admisión confirmada por huella; `panda nodes verify` fija la clave Ed25519 de cada par.
 - **Tarjetas de capacidad dinámicas**: Cada nodo declara su perfil de hardware (CPU, GPU, RAM, SO) y herramientas disponibles.
-- **Enrutamiento inteligente de tareas**: Asigna compilaciones pesadas a servidores potentes y tareas de sensores a placas de bajo consumo.
-- **Malla P2P privada**: Comunicación directa por WebSocket autenticado y cifrado. Tu código y memoria nunca salen de tus dispositivos.
+- **Enrutamiento inteligente de tareas**: Asigna compilaciones pesadas a servidores potentes y tareas de sensores a placas de bajo consumo según capacidad medida; `panda nodes drain` retira un nodo para mantenimiento.
+- **Delegación con worktree**: Una tarea de archivos delegada a otro nodo lleva su checkout allí y trae el resultado de vuelta.
+- **Despacho de actuadores**: Las tareas pueden accionar actuadores físicos (servo, micrófono, cámara, notificación, MCU serie) en el nodo que posee el hardware.
+- **Malla P2P privada**: Comunicación directa por WebSocket autenticado y cifrado y plano de datos UDP cifrado con atravieso NAT. Tu código y memoria nunca salen de tus dispositivos.
 
 ### 2. 🤖 Orquestación universal de agentes y failover automático
 - **Adaptadores listos para usar**: Compatible con Claude Code, OpenAI Codex, Grok Build, DeepSeek Harness, OpenCode y comandos de shell.
@@ -75,10 +78,14 @@ Das una instrucción desde **cualquier** dispositivo. OpenPanda analiza la tarea
 - **Skills Hub y descubrimiento autónomo**: Un catálogo curado sin conexión (`panda skill hub`), importación desde ruta, URL o archivo (`panda skill import`), y un asistente que encuentra e instala la habilidad que una tarea necesita mientras se ejecuta.
 - **Delegación contextual**: Al transferir una tarea entre máquinas, la memoria del proyecto viaja con ella.
 
-### 5. 🖥️ Tres interfaces unificadas
+### 5. 🖥️ Interfaces unificadas e incrustación
 - **TUI interactiva de terminal**: Construida con Bubble Tea, con modo de pantalla alternativa a pantalla completa, navegación por teclado, asistente de primer arranque, progreso en vivo y redirección en marcha.
 - **Consola Web integrada**: Tablero Kanban, streaming en tiempo real vía SSE, gestión de habilidades, cancelación de sesiones y login automático.
 - **CLI para scripts**: Comandos rápidos como `panda ask` para integrar en scripts y pipelines.
+- **Árboles de sesión con bifurcación**: `panda session fork <id> --at N` bifurca la conversación en cualquier turno; en un repositorio, el worktree hijo se ramifica desde la rama del padre y hereda el código producido. `panda session tree` muestra la familia; `/fork` hace lo mismo en REPL/TUI.
+- **Compactación automática**: El historial desbordado se pliega en un resumen corriente escrito por el modelo en vez de descartarse; el hilo almacenado permanece íntegro.
+- **`panda rpc`**: Superficie de incrustación NDJSON sobre stdio (`status`, `ask` en streaming, `session.*`); `scripts/panda_rpc.py` es un cliente de referencia solo-stdlib.
+- **OAuth de suscripción**: `panda auth login anthropic` inicia sesión en Claude Pro/Max vía PKCE con refresco transparente del token.
 
 ### 6. 🪶 Ultraligero (~20MB de memoria)
 - Binario estático único en Go puro (SQLite en modo WAL).
@@ -148,7 +155,10 @@ panda init
 | `panda queue` | Ver tareas pendientes, en ejecución y en revisión |
 | `panda approve <id>` | Aprobar una acción irreversible de nivel 2 |
 | `panda project list` | Gestionar proyectos y contexto del espacio de trabajo |
+| `panda session` | Listar, bifurcar y reanudar sesiones (`session tree` muestra la familia) |
 | `panda skill` | Explorar, importar e instalar habilidades de flujo de trabajo (Hub, URL o archivo) |
+| `panda auth login` | Iniciar sesión OAuth en una suscripción de modelo (p. ej. `anthropic`) |
+| `panda rpc` | API NDJSON sobre stdio para incrustar OpenPanda |
 | `panda doctor` | Diagnóstico de PATH, configuración, adaptadores y base de datos |
 | `panda version` | Mostrar la versión del binario |
 
@@ -160,7 +170,7 @@ panda init
 |---|---|
 | **v0.0.8** (base estable) | Orquestación multiagente en una sola máquina, plenamente utilizable: clasificación de intención, despacho, bucle de supervisión, failover, aprobación por niveles, política de idioma en prompts |
 | **v0.0.9** (estable) — "Periapsis" | Arquitectura de transporte híbrido/DTN completada: enrutado mesh ponderado por latencia, bundles DTN sobre el cable, presupuestos de tokens, copias sombra, ruta de actuadores, plano de datagramas UDP con hole punching NAT coordinado por la malla, payloads cifrados, planes de contacto, identidad de nodo Ed25519, compilación lite — más aprobaciones recordadas, atribución de ejecución, un chip de nodo en la barra lateral web y pulido de la CLI cotidiana |
-| **v0.0.10-preview** (actual) — "Apoapsis" | Hacia fuera, a la LAN y al borde: descubrimiento con admisión confirmada por huella y pinning TOFU de claves, tareas de archivo delegadas que viajan con su worktree, el bucle de clarificación, despacho de actuadores con cinco drivers de referencia (MCU serie incluido), el adaptador Pi y un ejecutor generic sin Python, adopción del directorio de lanzamiento como proyecto — más cadenas de eventos/auditoría firmadas ancladas a la clave del nodo, clamp de solo-lectura para ejecuciones remotas sin consentimiento, firma de actualización fuera de banda opcional y una ronda de rendimiento en régimen |
+| **v0.0.10** (actual) — "Apoapsis" | Hacia fuera, a la LAN y al borde: descubrimiento con admisión confirmada por huella y pinning TOFU de claves, tareas de archivo delegadas que viajan con su worktree, el bucle de clarificación, despacho de actuadores con cinco drivers de referencia (MCU serie incluido), el adaptador Pi y un ejecutor generic sin Python — más árboles de sesión con bifurcación, compactación automática, la superficie de incrustación `panda rpc`, OAuth de suscripción, cadenas de eventos/auditoría firmadas, sandbox a nivel de SO y una ronda de rendimiento en régimen. Relicenciado a AGPL-3.0-or-later con licencia comercial dual |
 | **v0.0.x (más allá)** | Estabilidad, rendimiento y ajuste de casos límite |
 | **v0.1.0** | Capacidades de escritorio y un control y una gestión más potentes — calidad comercial |
 

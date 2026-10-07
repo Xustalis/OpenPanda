@@ -43,7 +43,7 @@ OpenPanda 将终端 AI 编程助手（Claude Code、OpenAI Codex、Grok Build、
 | 主线               | 说明                              | 状态                        |
 | ---------------- | ------------------------------- | ------------------------- |
 | **多 Agent 协同控制** | 雇佣并统一指挥多个终端 Agent：派发、监督、故障转移、审批 | ✅ 当前工作重点                  |
-| **多设备协同控制**      | P2P 网络内跨节点任务路由与调度               | 🔶 预览能力，v0.0.10 完成一轮加固（LAN 发现、TOFU 密钥、工作树随行、签名审计链） |
+| **多设备协同控制**      | P2P 网络内跨节点任务路由与调度               | ✅ v0.0.10 已发布：LAN 自动发现、TOFU 密钥钉住、工作树随委派同行 |
 
 ***
 
@@ -73,13 +73,29 @@ OpenPanda 将终端 AI 编程助手（Claude Code、OpenAI Codex、Grok Build、
 
 - **上下文漫游** —— 跨设备委派任务时，项目记忆与工作目录摘要随任务同行。
 
-### 多设备协同（预览）
+### 多设备协同
+
+- **LAN 自动发现 + TOFU 钉住** —— 节点在局域网内自动互见，凭指纹确认准入；`panda nodes verify` 钉住每个对端的 Ed25519 密钥。
 
 - **能力卡宣告** —— 每台设备自动生成硬件与工具画像（CPU、内存、系统、可用 Agent）。
 
-- **P2P 直连** —— 节点间通过认证加密的 WebSocket 点对点通信，数据不离开私有网络。
+- **P2P 直连** —— 节点间通过认证加密的 WebSocket 与加密 UDP 数据面通信（支持 NAT 穿透），数据不离开私有网络。
 
-- **按需路由** —— 调度器依据能力评分将任务派往最匹配的节点。
+- **按需路由** —— 调度器按实测容量评分将任务派往最匹配的节点；`panda nodes drain` 可将节点下线维护。
+
+- **工作树随委派同行** —— 委派到其他节点的文件任务会携带工作目录过去并把结果带回。
+
+- **Actuator 派发** —— 任务可驱动持有硬件的节点上的物理执行器（舵机、麦克风、摄像头、通知、串口 MCU）。
+
+### 会话与嵌入
+
+- **会话树** —— `panda session fork <id> --at N` 在任意轮次边界分叉对话；仓库内子会话的 worktree 从父分支切出，继承父会话产出的代码。`panda session tree` 渲染家族树，REPL/TUI 内 `/fork` 同样可用。
+
+- **自动压缩** —— 溢出的历史折叠为模型撰写的滚动摘要而非丢弃，存储的线程保持完整。
+
+- **`panda rpc`** —— NDJSON-over-stdio 嵌入面（`status`、流式 `ask`、`session.*`），其他工具可驱动 OpenPanda；`scripts/panda_rpc.py` 为纯 stdlib 参考客户端。
+
+- **订阅 OAuth** —— `panda auth login anthropic` 通过 PKCE 登录 Claude Pro/Max 订阅，token 自动刷新。
 
 ### 接口与运行时
 
@@ -132,7 +148,7 @@ panda web                              # 网页控制台，自动调起浏览器
 panda ask "查看系统状态并总结待办任务"  # 直接发一条指令
 ```
 
-连接第二台设备（预览能力）：在设备 A 上运行 `panda pair` 获取配对码，在设备 B 上运行 `panda nodes add <设备A地址>`。
+连接第二台设备：在设备 A 上运行 `panda pair` 获取配对码，在设备 B 上运行 `panda nodes add <设备A地址>` —— 或让 LAN 发现把它列到 `panda nodes` 里，按指纹确认准入。
 
 ***
 
@@ -148,7 +164,10 @@ panda ask "查看系统状态并总结待办任务"  # 直接发一条指令
 | `panda queue`        | 查看排队中、执行中或待审批的任务（`--watch` 实时刷新） |
 | `panda approve <id>` | 审批放行二级高危操作                       |
 | `panda project list` | 管理工作空间项目与工程记忆                    |
+| `panda session`      | 列出、分叉并恢复会话（`session tree` 查看家族树）       |
 | `panda skill`        | 浏览、导入并安装工作流技能（技能中心/URL/文件）        |
+| `panda auth login`   | 通过 OAuth 登录模型订阅（如 `anthropic`）       |
+| `panda rpc`          | NDJSON-over-stdio API，供其他工具嵌入 OpenPanda |
 | `panda doctor`       | 体检 PATH、配置、适配器与数据库               |
 | `panda version`      | 输出版本号                            |
 
@@ -166,8 +185,10 @@ panda ask "查看系统状态并总结待办任务"  # 直接发一条指令
 │ defense        分级权限门控 · 熔断器 · 防漂移与防死循环     │
 │ memory         双层隔离记忆（用户/项目） · 自学习 Skills    │
 ├─────────────────────────────────────────────────────────────┤
+│ sessions       会话树 · 分叉 · 自动压缩                     │
+│ auth           订阅 OAuth（PKCE）· token 存储              │
 │ scheduler      多设备能力评分与任务路由                     │
-│ bus / ledger   P2P WebSocket 传输 · HMAC 认证 · 节点账本    │
+│ bus / ledger   P2P WebSocket + UDP 传输 · HMAC 认证         │
 │ storage        纯 Go 嵌入式 SQLite（WAL 模式）             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -180,7 +201,7 @@ panda ask "查看系统状态并总结待办任务"  # 直接发一条指令
 | ---------------- | ----------------------------------------- |
 | **v0.0.8**（稳定基线） | 单机多 Agent 协同完整可用：意图分类、任务派发、监督循环、故障转移、分级审批、多语言提示词策略 |
 | **v0.0.9**（稳定版）— "Periapsis" | 混合传输/DTN 架构完成：延迟加权 mesh 路由、DTN bundle 上线、令牌预算、影子副本、执行器通路、UDP 数据报平面与经 mesh 协调的 NAT 打洞、DTN 载荷加密、接触计划、Ed25519 节点身份、lite 构建——以及可记忆的审批、执行归属标注、Web 侧栏节点徽标与日常 CLI 打磨 |
-| **v0.0.10-preview**（当前）— "Apoapsis" | 伸向局域网与边缘硬件：指纹确认准入的 LAN 自动发现与 TOFU 密钥钉住、工作树随委派文件任务同行、澄清回路、带五个参考驱动（含串口 MCU）的 actuator 派发、Pi adapter 与免 Python 的内建 generic 执行器、启动目录即项目空间——以及绑定本节点密钥的签名事件/审计链、未授权远程运行的只读钳制、可选的更新带外验签，与一轮稳态性能优化 |
+| **v0.0.10**（当前）— "Apoapsis" | 伸向局域网与边缘硬件：指纹确认准入的 LAN 自动发现与 TOFU 密钥钉住、工作树随委派文件任务同行、澄清回路、带五个参考驱动（含串口 MCU）的 actuator 派发、Pi adapter 与免 Python 的内建 generic 执行器——以及可分叉的会话树、自动压缩、`panda rpc` 嵌入面、订阅 OAuth、签名事件/审计链、OS 级沙箱与一轮稳态性能优化。许可证迁移至 AGPL-3.0-or-later 并引入商业双授权 |
 | **v0.0.x（后续）**   | 稳定性、性能与边缘场景调优                             |
 | **v0.1.0**       | 桌面端（Desktop）能力与更强的操控管理能力，达到可商用化标准         |
 

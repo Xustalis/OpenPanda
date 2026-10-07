@@ -5,7 +5,7 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="${OPENPANDA_DIST_DIR:-$ROOT/dist}"
-VERSION="${1:-0.0.10-preview}"
+VERSION="${1:-0.0.10}"
 VERSION="${VERSION#v}"
 
 set -- \
