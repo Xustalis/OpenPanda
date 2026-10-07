@@ -6,7 +6,7 @@
 #   Set-ExecutionPolicy -Scope Process Bypass
 #   irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 | iex
 # or download and run:
-#   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.0.10-preview -Yes
+#   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.0.10 -Yes
 #   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Prefix D:\openpanda
 #
 # Env:
@@ -133,7 +133,7 @@ if ($Version -eq "latest") {
         }
         if ($tag -and $tag -match '/tag/(v?[0-9][^/?#]*)') { $tag = $Matches[1] } else { $tag = $null }
     }
-    if (-not $tag) { Fail "Unable to resolve the latest release (network/API issue? Pin it: -Version 0.0.10-preview)" }
+    if (-not $tag) { Fail "Unable to resolve the latest release (network/API issue? Pin it: -Version 0.0.10)" }
     $Version = $tag.TrimStart("v")
     Info "Latest version: v$Version"
 } else {
