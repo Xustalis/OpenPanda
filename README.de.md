@@ -55,9 +55,12 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 ## 🌟 Was kann OpenPanda?
 
 ### 1. 🌐 Heterogene P2P-Gerätezusammenarbeit
+- **LAN-Discovery + TOFU-Pinning**: Knoten finden sich im LAN mit fingerprint-bestätigter Aufnahme; `panda nodes verify` pinnt den Ed25519-Schlüssel jedes Peers.
 - **Dynamische Fähigkeitskarten**: Jeder Knoten erfasst automatisch sein Hardwareprofil (CPU, RAM, OS) und verfügbare Agenten.
-- **Intelligente Aufgabenverteilung**: Schwere Kompiliervorgänge gehen an leistungsstarke Server, Sensoraufgaben an energieeffiziente Edge-Knoten.
-- **Privates P2P-Netzwerk**: Direkte Kommunikation über authentifiziertes WebSocket. Dein Code und Kontext verlassen niemals deine Geräte.
+- **Intelligente Aufgabenverteilung**: Routet nach gemessener Kapazität — schwere Kompiliervorgänge an leistungsstarke Server, Sensoraufgaben an Edge-Knoten; `panda nodes drain` entfernt einen Knoten für Wartung.
+- **Worktree-reisende Delegation**: Eine an einen anderen Knoten delegierte Datei-Aufgabe trägt ihren Checkout hin und bringt das Ergebnis zurück.
+- **Aktor-Dispatch**: Aufgaben betätigen physische Aktuatoren (Servo, Mikrofon, Kamera, Benachrichtigung, serieller MCU) auf dem Knoten mit der Hardware.
+- **Privates P2P-Netzwerk**: Direkte Kommunikation über authentifizierte WebSockets und eine verschlüsselte UDP-Datenebene mit NAT-Traversal. Dein Code und Kontext verlassen niemals deine Geräte.
 
 ### 2. 🤖 Universelle Agenten-Orchestrierung & Ausfallsicherung
 - **Vorkonfigurierte Adapter**: Funktioniert direkt mit Claude Code, OpenAI Codex, Grok Build, DeepSeek Harness, OpenCode und Shell-Befehlen.
@@ -75,10 +78,14 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 - **Skills Hub & autonome Erkennung**: Ein kuratierter Offline-Katalog (`panda skill hub`), Import aus Pfad, URL oder Archiv (`panda skill import`), und ein Assistent, der den Skill, den eine Aufgabe braucht, während des Laufs selbst findet und installiert.
 - **Projektkontext-Roaming**: Bei der Aufgabenübergabe reisen Projektspeicher und Arbeitsbaum-Zusammenfassungen automatisch mit.
 
-### 5. 🖥️ Drei einheitliche Schnittstellen
+### 5. 🖥️ Einheitliche Schnittstellen & Einbettung
 - **Interaktive Terminal-TUI**: Bubble Tea mit Vollbild-Alternate-Screen-Modus, Tastaturnavigation, Erststarts-Assistent, Live-Fortschritt und Richtungswechsel während der Ausführung.
 - **Integrierte Web-Konsole**: Kanban-Board, Echtzeit-SSE-Streaming, Skills-Verwaltung, Sitzungsabbruch und automatische Anmeldung.
 - **Skriptfähige CLI**: Schnelle Befehle wie `panda ask` zur nahtlosen Einbindung in eigene Skripte.
+- **Sitzungsbäume & Forking**: `panda session fork <id> --at N` gabelt die Konversation an beliebigem Turn; in einem Repo wird der Kind-Worktree vom Eltern-Branch abgezweigt und erbt erzeugten Code. `panda session tree` zeigt die Familie, `/fork` tut dasselbe in REPL/TUI.
+- **Auto-Kompaktierung**: Überlaufende Historie wird zu einem modellgeschriebenen Rollsummary gefaltet statt verworfen — der gespeicherte Verlauf bleibt vollständig.
+- **`panda rpc`**: NDJSON-over-stdio-Einbettungsoberfläche (`status`, Streaming-`ask`, `session.*`); `scripts/panda_rpc.py` ist ein stdlib-Referenzclient.
+- **Abo-OAuth**: `panda auth login anthropic` meldet Claude Pro/Max per PKCE an und erneuert Token transparent.
 
 ### 6. 🪶 Extrem leichtgewichtig (~20MB Speicher)
 - Einzelne statische Go-Binärdatei ohne externe Laufzeitabhängigkeiten (reines Go SQLite im WAL-Modus).
@@ -148,7 +155,10 @@ panda init
 | `panda queue` | Wartende, laufende und zu genehmigende Aufgaben anzeigen |
 | `panda approve <id>` | Ausstehende irreversible Stufe-2-Aktion freigeben |
 | `panda project list` | Workspace-Projekte und Kontext verwalten |
+| `panda session` | Sitzungen auflisten, forken und fortsetzen (`session tree` zeigt die Familie) |
 | `panda skill` | Workflow-Fähigkeiten durchsuchen, importieren und installieren (Hub, URL oder Datei) |
+| `panda auth login` | Modell-Abo per OAuth anmelden (z. B. `anthropic`) |
+| `panda rpc` | NDJSON-over-stdio-API zum Einbetten von OpenPanda |
 | `panda doctor` | PATH, Konfiguration, Adapter und Datenbank prüfen |
 | `panda version` | Aktuelle Binärversion ausgeben |
 
@@ -160,7 +170,7 @@ panda init
 |---|---|
 | **v0.0.8** (stabile Basis) | Multi-Agenten-Orchestrierung auf einer Maschine, voll nutzbar: Absichtsklassifikation, Dispatch, Überwachungsschleife, Failover, gestufte Freigabe, Richtlinien für Prompt-Sprachen |
 | **v0.0.9** (stabil) — "Periapsis" | Hybrid-Transport/DTN-Architektur vollendet: latenzgewichtetes Mesh-Routing, DTN-Bundles auf der Leitung, Token-Budgets, Schattenkopien, Aktuator-Pfad, UDP-Datagramm-Ebene mit mesh-koordiniertem NAT-Hole-Punching, verschlüsselte Payloads, Kontaktpläne, Ed25519-Knotenidentität, Lite-Build — plus gemerkte Genehmigungen, Execution-Attribution, ein Web-Sidebar-Node-Chip und Alltags-CLI-Politur |
-| **v0.0.10-preview** (aktuell) — "Apoapsis" | Hinaus ins LAN und an den Edge: Discovery mit fingerprint-bestätigter Aufnahme und TOFU-Key-Pinning, Worktree-reisende delegierte Datei-Tasks, die Klärungs-Schleife, Aktor-Dispatch mit fünf Referenztreibern (inkl. seriellem MCU), der Pi-Adapter und ein Python-freier Generic-Executor, Launch-Directory-Projektadoption — plus am Node-Key verankerte signierte Event-/Audit-Ketten, Read-Only-Klemmung unkonsentierter Remote-Läufe, optionale Out-of-Band-Update-Signaturen und eine Steady-State-Perf-Runde |
+| **v0.0.10** (aktuell) — "Apoapsis" | Hinaus ins LAN und an den Edge: Discovery mit fingerprint-bestätigter Aufnahme und TOFU-Key-Pinning, Worktree-reisende delegierte Datei-Tasks, die Klärungs-Schleife, Aktor-Dispatch mit fünf Referenztreibern (inkl. seriellem MCU), der Pi-Adapter und ein Python-freier Generic-Executor — plus forkbare Sitzungsbäume, Auto-Kompaktierung, die `panda rpc`-Einbettungsoberfläche, Abo-OAuth, signierte Event-/Audit-Ketten, OS-level Sandbox und eine Steady-State-Perf-Runde. Relizenziert zu AGPL-3.0-or-later mit kommerzieller Doppellizenz |
 | **v0.0.x (darüber hinaus)** | Stabilität, Performance und Feinschliff für Randfälle |
 | **v0.1.0** | Desktop-Fähigkeiten und stärkere Steuerung und Verwaltung — kommerzielle Qualität |
 

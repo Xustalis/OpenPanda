@@ -4,7 +4,7 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh
-#   sh install.sh --version 0.0.10-preview            # pin a release (default: newest stable)
+#   sh install.sh --version 0.0.10            # pin a release (default: newest stable)
 #   sh install.sh --prefix /opt/openpanda    # custom install dir
 #   sh install.sh --lite                     # lite build (no web console/TUI; Pi & CLI nodes)
 #   sh install.sh --yes                      # also register auto-start (no prompt)
