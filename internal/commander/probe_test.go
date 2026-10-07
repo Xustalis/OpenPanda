@@ -645,7 +645,9 @@ func TestProbeModelFreshLatency(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	t.Cleanup(srv.Close)
 	v, lat := ProbeModel(ProbeSpec{Endpoint: srv.URL, APIType: config.APITypeOpenAI})
-	if !v.OK || lat <= 0 || lat > 10*time.Second || v.Detail != "http 200" {
+	// lat == 0 is legal, not a missing measurement: on coarse-grained timers
+	// (Windows) a localhost probe can complete inside one clock tick.
+	if !v.OK || lat < 0 || lat > 10*time.Second || v.Detail != "http 200" {
 		t.Fatalf("ProbeModel = %+v, %v", v, lat)
 	}
 }
