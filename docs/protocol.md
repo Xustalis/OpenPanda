@@ -1,11 +1,27 @@
 # P2P 总线协议（internal/bus）
 
-> 本文从 `internal/bus` 包提炼，描述节点间任务委派的 WebSocket 传输与线协议。
-> 以代码为准（`msg.go` / `payloads.go` / `ws.go` / `auth.go`）；与代码冲突时以代码为准。
+> 本文从 `internal/bus` 包提炼，描述节点间任务委派的传输与线协议。
+> 以代码为准（`msg.go` / `payloads.go` / `ws.go` / `udp.go` / `auth.go` / `ed25519.go` /
+> `bundle.go`）；与代码冲突时以代码为准。
 
 ## 传输层
 
-- 传输介质：WebSocket（`gorilla/websocket`），端点路径 `/ws`，纯 `ws://` **不加密**。
+有两条数据面，跑的是**同一套信封**（见下）：
+
+- **WebSocket**（`gorilla/websocket`），端点路径 `/ws`。`ws://` 本身不加密，
+  但出站有明文门禁（`cleartextOK`）：`ws://` 只允许拨向 loopback /
+  Tailscale 形态的目标（`100.64.0.0/10`、`fd7a:115e:a214::/48`、`*.ts.net`，
+  即链路已被下层加密或出不了本机），其余目标必须 `wss://` 或走 `punch:`
+  UDP 端点；`network.allow_cleartext` 是运维侧的显式退出开关。
+- **UDP 数据报平面**（`udp.go`，NAT 场景）。TCP/WebSocket 会话建立不了的
+  链路靠它打通和兜底。每个数据报是四种帧之一（4 字节头区分）：
+  - `kind 1 punch` / `kind 2 punch_ack`：JSON `PunchFrame`，HMAC 签名
+    （`punch|<nonce>|<from>|<ts>`）证明 mesh 成员身份，负责开 NAT 洞；
+  - `kind 3 data`：`nonce(12) || AES-256-GCM(JSON Envelope)`，AAD 为帧头——
+    密钥由共享密钥域分离派生，所以 UDP 平面上信封**全程加密**；
+  - `kind 4 keepalive`：密封空体，保活 NAT 映射。
+  同一 socket 还应答 STUN binding 请求（RFC 5389，按 magic cookie 识别）：
+  反射地址发现零外部依赖。
 - 服务端只接受**不带 `Origin` 头**的握手（节点间 Go 客户端不发 Origin；浏览器会发），
   因此跨站页面无法连到节点的控制通道（PWA 走面板端口的 HTTP，不走这里）。
 - 拨号端 `TLSClientConfig.InsecureSkipVerify = false`：`wss://` 必须证书有效。
@@ -55,25 +71,36 @@
 裁剪超大字段（见下文结果帧）。在**构建点**统一裁剪是为了——一条跑了一小时的任务，
 不能因为日志太长把帧撑爆、被接收端断连、连结果带链路一起丢掉。
 
-## 认证：hello 的 HMAC 签名
+## 认证：hello 的双重签名
 
-`hello` 的 `sig` 是 `HMAC-SHA256(secret, nodeID + ":" + ts)` 的十六进制（`HelloSig`）。
-把时间戳 `ts` 绑进签名，意味着一条被抓包的 `hello` 只在接收方的容忍窗口内有效，
-过期即不能重放（设计 §16 / P0-1）。
+`hello` 携带两层身份：
 
-校验规则（`VerifyHello`）：
+- **成员资格（HMAC）**：`sig` 是 `HMAC-SHA256(secret, nodeID + ":" + ts + ":" + nonce)`
+  的十六进制（`HelloSigN`）。`ts` 绑定时间戳限定重放窗口；`nonce` 是每拨号随机值，
+  让同一秒内的两次合法重连不会被接收端的单次性重放缓存误判。无 nonce 的旧对端
+  按双字段形式校验（`HelloSig`，仅兼容）。
+- **密码学身份（Ed25519）**：`pub_key` 是节点持久化身份公钥（hex），`ed_sig` 是对
+  `NodeID:Ts:Nonce` 的 Ed25519 签名。HMAC 证明「你持有 mesh 密钥」，Ed25519 证明
+  「你是这个 node id 的密钥本体」——二者缺一不可：光有有效 EdSig 而无共享密钥一律
+  拒绝，持有 `pub_key` 却签不出 EdSig 同样拒绝（防身份冒称）。
 
-- 共享密钥为空或签名为空 → **恒失败（fail-closed）**：没有共享密钥的节点不得为任何对端背书。
+校验规则（`VerifyHelloP`）：
+
 - `ts` 距当前时间超过 `maxHelloAge = 5 * time.Minute`（过去或未来）→ 失败。
-- 否则用恒定时间比较 `hmac.Equal`。
+- 共享密钥为空或签名为空 → **恒失败（fail-closed）**：没有共享密钥的节点不得为任何对端背书。
+- `sig` 按 nonce 形态（有 `nonce` 用 `HelloSigN`，无则按旧双字段 `HelloSig`）
+  恒定时间比较；不符 → 失败。接收侧另以签名覆盖字段建单次性重放缓存。
+- `pub_key`/`ed_sig` 都不带 → 按无身份旧对端放行（仅成员资格）；只带一半
+  或签不出来 → 按伪造/剥离处理，失败而非降级。
 
-`5 min` 窗口既容忍 P2P 时钟漂移，又能让抓到的旧 `hello` 过期。
+`5 min` 窗口既容忍 P2P 时钟漂移，又能让抓到的旧 `hello` 过期。经认证的 Ed25519
+身份随后成为 outbox 稳定托管键（`k:<pub>`）与 `panda nodes verify` 指纹钉住的对象。
 
 ## 消息类型
 
 | `type` | 负载结构 | 说明 |
 |---|---|---|
-| `hello` | `HelloPayload` | 连接时声明身份；带能力摘要 `card` 与 `sig` |
+| `hello` | `HelloPayload` | 连接时声明身份：`card` 摘要 + HMAC `sig`（绑 `ts`/`nonce`）+ Ed25519 `pub_key`/`ed_sig` + `udp_port` |
 | `join` | — | 加入（常量定义在 `bus`，处理在核心层） |
 | `heartbeat` | `HeartbeatPayload` | 状态 + 容量；可顺带最新能力卡 `card` |
 | `task_delegate` | `TaskDelegatePayload` | 任务移交（核心帧，见下） |
@@ -84,23 +111,47 @@
 | `task_retry` | — | 重试（常量在 `bus`） |
 | `task_transfer` | — | 任务转移（常量在 `bus`） |
 | `task_cancel` | `TaskCancelPayload` | 取消，附 `reason` |
-| `task_resume` | `TaskResumePayload` | 对「停在审批」的重新放行 |
+| `task_resume` | `TaskResumePayload` | 对「停在审批」的重新放行（可带澄清答案 `answer`） |
 | `context_fetch` | `ContextFetchPayload` | 向源节点要完整上下文快照 |
 | `context_ack` | `ContextAckPayload` | `context_fetch` 的应答 |
 | `artifact_fetch` | `ArtifactFetchPayload` | 按 offset 拉一段工件 |
 | `artifact_chunk` | `ArtifactChunkPayload` | `artifact_fetch` 的应答（一段数据） |
+| `artifact_push` | `ArtifactPushPayload` | 主动推一段工件（DTN/断连场景，可续传） |
+| `artifact_push_status` | `ArtifactPushStatusPayload` | 接收方托管回报：`received_through` 连续字节数 |
+| `artifact_push_done` | `ArtifactPushDonePayload` | 推送收尾：按哈希校验入池（`ok`）或失败停推 |
+| `agent_negotiate` | `AgentNegotiatePayload` | 对等冲突协商信号（§5.1，TargetScope + 权重） |
+| `agent_grant` | `AgentGrantPayload` | 租约锁授权/拒绝（§5.2，`denied` 区分显式拒绝与无应答） |
+| `agent_yield` | `AgentYieldPayload` | agent 在检查点让出执行 |
+| `dtn_bundle` | `DTNBundlePayload` | 一个 CBOR 编码的 DTN bundle 原样透传（见下） |
+| `punch_offer` | `PunchOfferPayload` | NAT 打洞协调：会话 nonce + 候选端点 + TTL |
+| `punch_ready` | `PunchOfferPayload` | 应答 offer：回显 nonce，附己方候选端点 |
 
 ## 关键帧细节
 
 ### `hello`
-`node_id`、`ver`（版本）、`card`（能力摘要的紧凑 JSON，原始负载）、`ts`、`sig`。
-能力摘要刻意以原始 JSON 透传，让传输层与持有 `CapabilitySummary` 类型的 ledger 包解耦。
+`node_id`、`ver`（版本）、`card`（能力摘要的紧凑 JSON，原始负载）、`ts`、`nonce`、
+`sig`、`pub_key`、`ed_sig`（Ed25519 身份对，见认证节）、`udp_port`（数据报平面
+监听端口，0 = 无 UDP 面）。能力摘要刻意以原始 JSON 透传，让传输层与持有
+`CapabilitySummary` 类型的 ledger 包解耦。hello **应答**额外带 `you`——对端
+观察到本连接来源 IP，是白送的反射地址发现（不签名：篡改它只换来错误的候选
+列表，打洞握手本身会识破）。
 
 ### `heartbeat`
-`status`（`online`/`busy`/`offline`）、`load`（0.0–1.0）、`capacity`（卡里的原始 JSON），
-可选 `card`。心跳每几秒一次、`hello` 只在拨号时——节点热重载能力卡后，
+`status`（`online`/`busy`/`offline`/`draining`——维护排空态，入站委派被谢绝）、
+`load`（0.0–1.0）、`capacity`（卡里的原始 JSON，内含实测容量 `live`：
+`mem_free`/`disk_free`/`gpu_util`，以及 `queued_tasks` 队列深度）、可选 `card`。
+心跳每几秒一次、`hello` 只在拨号时——节点热重载能力卡后，
 靠心跳里的 `card` 让对端立刻学到新能力，而不必等重连。旧节点不认识该字段就忽略，
-新节点没收到就回退用 `hello` 时的卡。
+新节点没收到就回退用 `hello` 时的卡。此外每拍还顺带：
+
+- `blocked_agents`：本机熔断中的 agent 名单，对端路由时从能力集剔除；
+- `neighbors` + `links`：邻接表与链路度量（`peer`/`rtt_ms`/`kind` 传输类型），
+  让链路状态图的边集与权重跟随活拓扑——加权最短路（Dijkstra 取第一跳）靠它喂；
+- `contacts`：接触计划（预约传输窗口），供 DTN 托管路由规划；新节点恒发
+  （空数组 = 无计划），字段缺席才表示旧节点；
+- `projects`：本机持有 checkout 的项目名（驻留路由打分的输入）；
+- `ver`：本机版本号，mid-release 升级不必等重连就刷新对端目录行
+  （fleet 面板的版本错位告警即拿它与自身构建对比）。
 
 ### `task_delegate`
 任务移交（§10.3 示例）。除 `task_id` / `intent` / `spec_json` / `requires` /
@@ -114,9 +165,17 @@
 - **硬件需求** `resource_json`：任务声明的 `entry.ResourceProfile`。它随移交传递，
   因为硬件需求是「工作」的属性、不是「首个节点」的属性——中继节点重新路由时，
   得能把训练任务挡在没有显存的节点外，没有这个字段约束会在第一跳丢失。
-- **授权** `authorized`：原始用户的 tier-2 同意（§16），让委派任务不在执行方的
-  防御层被拦。它只有在**已认证**的总线上才有意义——正是共享密钥的 HMAC
-  让它对非对端不可伪造，且源节点只在用户显式授权后才置位。
+- **授权** `authorized` + `auth_sig`/`auth_pub`/`auth_ts`：原始用户的 tier-2
+  同意（§16）以 Ed25519 签名形式随任务传递——`auth_sig` 是对
+  `TaskID:Authorized:TS:ConsentDigest` 的签名，执行端按目录中登记的发源公钥验签，
+  剥离/篡改/换钥重签一律拒绝；`auth_hops` 记录同意随中继前进的跳数。无有效
+  同意钳制的远端 agent 运行被压成只读工具面（adapter 表达不了就直接
+  `ErrNotAuthorized`）。裸 `authorized` 布尔只是无密钥旧节点的兼容形。
+- **项目随行**：`project`/`title` 标识归属项目；`project_pack`/`project_dir`
+  内联项目记忆与元数据，`context_type=file` 的仓库任务再把工作树打成
+  `__worktree__` artifact 输入（≤256 MiB，跳过 `.git`/`node_modules`/缓存目录），
+  执行方在私有 per-task 目录解开、跑完打包收回——委派的文件改动能落回
+  发起节点的 checkout 而不是死在远端。
 - **计划面**（v0.0.6）：`plan_id` / `stage_id` 标识该阶段供编排者审计，
   `inputs`（`ArtifactRef` 列表）声明每个前置阶段打包产物及其所在节点，
   执行方据此拉取起始树。独立任务为空。
@@ -140,3 +199,25 @@
 - `artifact_chunk`：`offset` / `data`（base64）/ `total`（全档大小，供进度并拒绝
   中途变长的流）/ `eof`（最后一段；收齐后按 `hash` 校验才允许入池）/ `ok` /
   `reason`（对端不持有或拒供时 `ok = false`，请求方改问别的节点而非无限重试）。
+
+### 工件推送：`artifact_push` 三帧
+拉取的镜像：**主动推**，给 DTN/断连场景用——对方未必能发起 `artifact_fetch`。
+`artifact_push` 逐段携带 `offset`/`data`/`total`；接收方回 `artifact_push_status`
+报告 `received_through`（从 0 起连续字节数），发送侧 outbox 只按这个覆盖数退役
+行——发完即崩也能在下次 flush 重传未确认段，不留永久缺口；`artifact_push_done`
+收尾：收齐并按内容哈希校验入池（`ok`），或对端拒收/已持有（`reason`）。
+
+### DTN bundle：`dtn_bundle`
+`blob` 是一个 CBOR 编码 bundle 的原样字节（§8.3）。接收方解包、验签、查 TTL，
+然后把内层负载回灌正常消息路径——bundle 是签名的传输容器，不是第二套任务
+协议。v1 明文载荷仅兼容验证，v2+ 载荷 AES-256-GCM 密封；`DestEID` 用稳定身份
+键（`k:<pub>`），经目录解析到当前实例。
+
+### NAT 打洞协调：`punch_offer` / `punch_ready`
+走信封（有直连走直连，没有就沿链路状态图经 mesh 中继，TTL 自 `PunchMaxTTL=8`
+逐跳递减），协调两个 NAT 后节点的 UDP 打洞会话：`nonce` 是打洞数据报里的
+会话凭证，`src` 是真源节点 id（中继会以自己重打包信封，`env.From` 只是上一跳），
+`hosts` 是发起方全部候选端点（本地接口 + `hello.you` 观测到的反射 IP + STUN
+结果，统一在 UDP 监听端口——打洞永远从共享 socket 喷出，NAT 开的洞就是监听
+口）。`punch_ready` 回显 nonce 并附己方候选，双方同时开喷。`network.peers` 里
+`punch:<node-id>` 形态的条目触发这条路径；打通的端点成为 `sendTo` 的回退路由。

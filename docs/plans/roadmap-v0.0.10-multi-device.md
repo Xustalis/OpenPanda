@@ -148,14 +148,16 @@ fixed seven issues before they reached a release:
 
 ## Track 2 — scheduling beyond harnesses
 
-- [x] Actuator drivers shipped — `drivers/` carries the four reference
+- [x] Actuator drivers shipped — `drivers/` carries the five reference
       drivers: `panda-servo` (gpiozero/AngularServo, BCM pin, 0-180°),
       `panda-mic` (arecord→WAV, 1-300 s cap), `panda-camera` (fswebcam /
       imagesnap / ffmpeg fallback chain), `panda-notify` (notify-send /
-      osascript / powershell toast). Each exits 3 on a missing backend so
-      `PruneUnavailableActuators` keeps the card honest. `package.sh` ships
-      `drivers/` in every archive (full + lite) and `install.distributionEntries`
-      sweeps it on uninstall.
+      osascript / powershell toast), `panda-mcu` (pure-stdlib POSIX termios
+      serial/UART for Arduino/ESP32/RP2040/AT modems, `--send`/`--send-hex`
+      with `--expect`/`--expect-regex` read windows). Each exits 3 on a
+      missing backend so `PruneUnavailableActuators` keeps the card honest.
+      `package.sh` ships `drivers/` in every archive (full + lite) and
+      `install.distributionEntries` sweeps it on uninstall.
 - [x] action_spec end to end — `TaskSpecDetail.action_spec` rides spec_json
       (`ParseActionSpec`'s existing reader); `ValidateTaskSpec` vets target/
       action/param-name/scalar-value at the boundary (32-param cap); the entry
@@ -174,7 +176,7 @@ fixed seven issues before they reached a release:
       commander router only when Native/Agents/Manual were non-empty, so a
       hardware-only edge card (just a servo) declined every actuator task at
       `localMatch`. Actuators now count. `capabilities.example-edge.yaml`
-      declares all four drivers; desktop example shows `hardware:notify`.
+      declares all five drivers; desktop example shows `hardware:notify`.
 
 ### Post-Track-2 review pass (findings fixed this increment)
 
@@ -203,25 +205,42 @@ fixed seven issues before they reached a release:
 - `recordSelfPubKey` inserted `last_seen=0` on a fresh row — the self row
   showed "never" until the first heartbeat; now stamps the materialize time.
 
-- [ ] Live compute metrics — `capacity_json` gains gpu_util / mem_free /
-      disk_free; scoring consumes them.
-- [ ] `task add --nodes a,b` fan-out with aggregated results (distinct from
-      `--agents`, which is same-node harness parallelism).
-- [ ] `panda nodes drain <id>` — maintenance mode: heartbeat status
-      `draining`, scheduler skips it, in-flight finishes; pairs with the
-      updater's idle-queue gate for rolling upgrades.
+- [x] Live compute metrics — heartbeats carry measured `live` samples in
+      the capacity summary: `mem_free` / `disk_free` (GB, hwinfo probes) and
+      `gpu_util` (-1 = unmeasured, values clamped at the intake boundary in
+      `NewCore`). Scoring discounts efficiency by measured memory headroom
+      and routing hard-drops a node whose work disk is nearly full —
+      measured data only, so unprobed peers are never excluded.
+- [x] `task add --nodes a,b` fan-out with aggregated results (distinct from
+      `--agents`, which is same-node harness parallelism): one pinned copy
+      per named node, per-node outcomes aggregated into the task row.
+- [x] `panda nodes drain [--off]` — maintenance mode: a shared settings
+      flag the running daemon picks up; heartbeats advertise status
+      `draining`, inbound delegates are declined (`node draining`), and
+      in-flight work runs to completion — pairs with the updater's
+      idle-queue gate for rolling upgrades.
 
 ## Track 3 — fleet observability
 
-- [ ] Fleet panel: RTT, transport (ws/udp/punch/dtn), version skew warning,
-      in-flight task count per node (data already in `employee_cache`).
-- [ ] `panda task <id> --trace` + web timeline — the cross-node hop trail
-      (delegate → relay → accept → result) without lab scripts.
-- [ ] Fleet queue snapshot — heartbeats carry queued counts.
+- [x] Fleet panel (`webui/app/src/components/fleet.tsx`): per-peer
+      transport + RTT (`links[].kind`/`rtt_ms`), version skew warning
+      (heartbeat `ver` diffed against the build), in-flight
+      (`current_tasks`/`max_concurrent_tasks`) and queued
+      (`queued_tasks`) counts per node.
+- [x] `panda task <id> --trace` + web timeline — the cross-node hop trail
+      (delegate → relay → accept → result) without lab scripts; typed
+      `agent_event` frames render as a delegation tree in the console.
+- [x] Fleet queue snapshot — heartbeats carry `queued_tasks` inside the
+      capacity summary alongside the in-flight count.
 
 ## Track 4 — trust & protocol tail
 
-- [ ] Audit chain signing (P2-9): task_events hash chain → Ed25519/HMAC.
+- [x] Audit chain signing (P2-9): `task_events` and `audit_log` rows carry
+      per-row Ed25519 signatures over the chain hash (migrations v35/v37);
+      `panda audit verify` / `VerifyTaskEventChain` / `VerifyChain` anchor
+      verification to this node's key and reject tail-stripping. Remaining
+      gap moved to known-limits: the anchor lives inside the DB, so
+      external notarization of the chain head is still open.
 - [ ] Link metrics beyond RTT: bandwidth/loss samples.
 - [ ] TURN-style relay fallback for symmetric NAT (large; may slip).
 - [ ] Command-taint tracking for approval-gate residual vectors (documented;
