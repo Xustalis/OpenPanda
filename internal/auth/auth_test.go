@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -34,9 +35,13 @@ func TestStoreRoundTrip(t *testing.T) {
 		t.Fatalf("AccessToken = %q, %v", at, err)
 	}
 
-	// File is private to the owner.
-	if fi, err := os.Stat(s.path); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Errorf("auth.json mode = %v / %v, want 0600", fi.Mode().Perm(), err)
+	// File is private to the owner. Skipped on Windows: the platform maps
+	// only the read-only bit, so POSIX group/other bits never apply — ACLs
+	// on the user profile carry the same protection.
+	if runtime.GOOS != "windows" {
+		if fi, err := os.Stat(s.path); err != nil || fi.Mode().Perm() != 0o600 {
+			t.Errorf("auth.json mode = %v / %v, want 0600", fi.Mode().Perm(), err)
+		}
 	}
 
 	if err := s.Delete("anthropic"); err != nil {
