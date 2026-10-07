@@ -10,10 +10,10 @@ package version
 // Version is the semantic version of this build, and the default for a build
 // that does not go through release packaging.
 //
-// It tracks the newest tag on main — currently the v0.0.10-preview release —
-// so ad-hoc builds identify themselves with the branch's latest published
+// It tracks the newest tag on main — currently the v0.0.10 release — so
+// ad-hoc builds identify themselves with the branch's latest published
 // lineage.
-var Version = "0.0.10-preview"
+var Version = "0.0.10"
 
 // Codename is the release line's thematic name — v0.0.10 is "Apoapsis", the
 // far point of the orbit: the release that reaches outward from the core to
@@ -34,8 +34,7 @@ var Codename = "Apoapsis"
 // unsigned release is refused outright.
 var ReleasePubKey = ""
 
-// Display returns the human-facing release identity — "v0.0.10-preview
-// Apoapsis" —
+// Display returns the human-facing release identity — "v0.0.10 Apoapsis" —
 // for anywhere the build introduces itself to a user. Version alone stays
 // the semver used for comparisons, archive names, and wire fields.
 func Display() string {
