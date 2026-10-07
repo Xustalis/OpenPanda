@@ -211,9 +211,12 @@ func TestDiscoveryBadBindAddr(t *testing.T) {
 	c := newCore(t, "self", "127.0.0.1:0")
 	done := make(chan struct{})
 	go func() { c.RunDiscovery(ctx, ":not-a-port", ":9999"); close(done) }()
+	// The malformed port still goes through a resolver lookup, and on loaded
+	// CI runners that syscall alone has taken ~5s. The assertion guards a
+	// real hang, not resolver speed, so the budget stays generous.
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("RunDiscovery hung on a malformed bind addr")
 	}
 }

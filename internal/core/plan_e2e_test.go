@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -149,13 +148,10 @@ func TestPlanThreeStagesThreeNodes(t *testing.T) {
 // is also what the board and the CLI read.
 func waitPlanDone(t *testing.T, ctx context.Context, c *Core, planID string, want int) []Task {
 	t.Helper()
-	// Loaded Windows runners have repeatedly needed more than 75s to walk a
-	// three-node plan to completion; the deadline guards a hang, not speed.
-	wait := 75 * time.Second
-	if runtime.GOOS == "windows" {
-		wait = 150 * time.Second
-	}
-	deadline := time.Now().Add(wait)
+	// Loaded CI runners — macOS and Windows alike — have repeatedly needed
+	// more than 75s to walk a three-node plan to completion; the deadline
+	// guards a hang, not speed.
+	deadline := time.Now().Add(150 * time.Second)
 	var stages []Task
 	for time.Now().Before(deadline) {
 		var err error
