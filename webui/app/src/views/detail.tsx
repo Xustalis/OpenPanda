@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useState } from 'preact/hooks'
 import { api, isTaskStalled, type ApprovalScope } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'

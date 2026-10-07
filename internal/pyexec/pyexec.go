@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package pyexec resolves the Python interpreter that runs PANDA's agent
 // adapters (adapters/*.py).
 //

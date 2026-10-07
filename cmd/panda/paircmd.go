@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // Device pairing — the `panda pair` flow the web console's empty-fleet copy

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package mcp is a minimal Model Context Protocol (MCP) client over stdio. It
 // speaks just the JSON-RPC 2.0 methods PANDA needs — initialize, tools/list,
 // tools/call — against a child process's stdin/stdout.

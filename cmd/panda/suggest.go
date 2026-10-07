@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // Typo recovery. A mistyped command is the most common way a CLI session goes

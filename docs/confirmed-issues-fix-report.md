@@ -31,13 +31,13 @@
 
 | 领域 | 主要风险 | 当前状态 |
 |---|---|---|
-| TUI 鼠标与按键 | 误取消、无法原生选择、退出语义混乱 | 已确认，待修复 |
-| 流式事件 | 旧请求增量污染新请求 | 已确认，待修复 |
-| 命令执行 | 界面空白、无法取消、全局 stdout/stderr 串扰 | 已确认，待修复 |
-| 审批 | 已完成工作被报告失败，确定性失败原样重跑 | 已确认，待修复 |
-| 远程取消 | 下游取消后本地 origin 仍停留在运行态 | 已确认，待修复 |
-| Web 会话 | 旧请求清理新请求、Stop 取消历史任务 | 已确认，待修复 |
-| 节点身份 | 稳定名称被误判为 ephemeral sibling | 已确认，待修复 |
+| TUI 鼠标与按键 | 误取消、无法原生选择、退出语义混乱 | 已实施（§3.1–3.9；hitbox 由渲染行精确计算，审批坐标经 approvalLayout，双击退出口中断窗） |
+| 流式事件 | 旧请求增量污染新请求 | 已实施（delta/reasoning/progress/done/resumed 统一携带 stream，dispatch 校验 `event.stream == m.stream && !detached`） |
+| 命令执行 | 界面空白、无法取消、全局 stdout/stderr 串扰 | 已实施（commandExec 为显式 io.Writer 不再替换进程 fd；ctx/cancel + generation；modeExec 渲染并可 Esc/Ctrl+C 取消；`/tasks watch` 帧折叠） |
+| 审批 | 已完成工作被报告失败，确定性失败原样重跑 | 已实施（`TaskResultPayload{OK: true}` 预初始化；`ApprovalDisposition` 三态 accept/resume/needs_changed_input；CLI approve 仅 resume 才建 engine） |
+| 远程取消 | 下游取消后本地 origin 仍停留在运行态 | 已实施（`context.WithoutCancel` + `CancelTree` + 返回真实终态；lease 改为轮询持久状态） |
+| Web 会话 | 旧请求清理新请求、Stop 取消历史任务 | 已实施（`sessionOperation{generation, operationID, cancel}` 比较删除；cancel API 强制 operation_id；busy/write 走 isLiveSession 守卫；project 经 AskScope 请求级传递） |
+| 节点身份 | 稳定名称被误判为 ephemeral sibling | 已实施（config 校验与 daemon 启动均拒绝 `-`+8hex 后缀稳定名；`SameRuntimeIdentity` 仅限经认证的 restart-continuity 检查） |
 | Outbox | 请求方重启后旧结果无法投递 | 已修复（Batch 6，stable 键控 + v36 迁移，2026-10-04） |
 
 ## 3. TUI 交互与布局问题
@@ -611,15 +611,22 @@ make gate-all
 | 终端旁路键（`⌥`/`Fn`）与"非二选一"结论成文 | 已实施（2026-09-16，见 §3.1 追加段） |
 | 1007 跟随 ctrl+t 双向切换 | 已实施（2026-09-16，`altScrollCmd`） |
 | exec 期间滚轮可用 | 已实施（2026-09-16，滚轮分支提到模式闸门之前） |
-| 精确 TUI hitbox | 未实施 |
-| 全流事件 source identity | 未实施 |
-| 命令可取消与 writer 化 | 未实施 |
-| AskEngine 接受结果默认成功 | 未实施 |
-| 确定性失败审批分类 | 未实施 |
-| 普通远程取消终结 origin | 未实施 |
-| Web generation-safe registry | 未实施 |
-| Stop 不再取消历史任务 | 未实施 |
-| 节点 identity 最小加固 | 未实施 |
+| 精确 TUI hitbox | 已实施（`askingButtonRects` 从渲染状态行按可见标签文本定位精确矩形；`approvalHit` 经 `approvalLayout` + 卡片高度换算 originY，矩形外一律 no-op，默认焦点停 deny） |
+| 全流事件 source identity | 已实施（delta/reasoning/progress/done/resumed 均携带 `stream`，dispatch 先校验 `event.stream == m.stream && !detached`，续泵只 re-arm 事件自身 stream；drop 关闭 `dropped` 唤醒阻塞泵） |
+| 命令可取消与 writer 化 | 已实施（`commandExec` 实现 `io.Writer`，`dispatchWithIO` 显式传 writer 不再替换全局 fd；exec 有 ctx/cancel 与 generation 绑定；modeExec 照常渲染并支持 Esc/Ctrl+C 取消、PgUp/PgDn 滚动；`/tasks watch` 经 `latestFrame`/`commitFrame` 折叠帧） |
+| AskEngine 接受结果默认成功 | 已实施（`acceptReviewedWork` 以 `TaskResultPayload{OK: true}` 初始化后再覆盖持久 payload） |
+| 确定性失败审批分类 | 已实施（`ApprovalDisposition` 三态：AcceptWork/ResumeExecution/NeedsChangedInput；`ReviewWithDisposition` 持久化；CLI/Web 在 needs_changed_input 时拒绝原样重跑） |
+| CLI approve 轻量路径 | 已实施（`runApprove` 先查 disposition：accept_work 纯 store 操作，仅 resume_execution 才构造 engine） |
+| 普通远程取消终结 origin | 已实施（`context.WithoutCancel` + `CancelTree` 统一级联 + 返回真实终态；远端等待改轮询持久 lease） |
+| 队列删除以终态为前提 | 已实施（`ClearQueue` 先取消全部非终态任务再删除） |
+| Web generation-safe registry | 已实施（`sessionOperation{generation, operationID, cancel}`，register 返回 op，unregister 比较 generation+operationID 才删） |
+| Stop 不再取消历史任务 | 已实施（`/api/sessions/{id}/cancel` 强制 `operation_id`，只取消当前 operation，不从历史消息推断） |
+| Web 审批长操作 | 已实施（resume_execution 走 202 + 独立 operation，执行挂在 serviceCtx 而非请求 ctx；响应携带 typed status；重复批准 409） |
+| Web 会话 busy/写入守卫 | 已实施（`isLiveSession` 谓词，stale 写入与 finally 清理都以当前线程为准） |
+| 共享 Engine project 状态 | 已实施（`AskTurnsScoped`/`AskScope` 把 project/workDir/sessionID/node 作为请求级参数，不再改共享 ambient 状态） |
+| SSE 断线恢复 | 已实施（会话 operation 持久化 StartOperation/SetOperation + `operation` 帧携带 operation_id，客户端可按 operation 查询终态；事件流含 trace watermark 与 heartbeat） |
+| 节点 identity 最小加固 | 已实施（`config.go` 拒绝 `-`+8hex 后缀的 node.name/node.identity；daemon 启动同样拒绝；`SameRuntimeIdentity` 收窄至已认证 restart-continuity 用途） |
+| Alt Screen 退出可见性 | 已实施（2026-10-07：退出时按绑定状态打印提示——会话已持久化并给出 /resume 指引，裸对话提示 convo 文件保存并自动恢复） |
 | Outbox 跨重启协议迁移 | 已实施（2026-10-04，见 §10.2/Batch 6：stable_node_id=`k:`+Ed25519 pub、instance_id=node id、v36 迁移、认领并集与未授权拒绝测试） |
 
 ## 16. 此前验证记录

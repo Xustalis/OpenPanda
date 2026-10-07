@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package hwinfo
 
 // live.go samples the compute metrics the heartbeat advertises per beat

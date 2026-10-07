@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 /** JSON formatting for display.
  *
  *  Kept apart from the component that renders it so the behaviour is testable

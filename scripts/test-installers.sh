@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # test-installers.sh — exercise scripts/install.sh the way a user does.
 #
 # Why: nothing in CI ever ran the installers. installers.yml only *builds* the

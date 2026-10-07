@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `/model` — the multi-model registry front end. It lifts the old single-model

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package mcpserve is the server half of the MCP stdio transport the agent
 // tier already speaks as a client (internal/mcp): newline-delimited JSON-RPC
 // 2.0 on a reader/writer pair, the initialize handshake, tools/list and
