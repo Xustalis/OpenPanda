@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
 /* View-level rules carried from the previous stylesheet. These drive the
    kanban board, detail timeline, orbit, memory editor, diff drawer, card
    editor, and per-view chrome; they reskin automatically against the new

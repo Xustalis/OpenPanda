@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package commander
 
 import (
@@ -458,17 +460,22 @@ func jsonFieldNonEmpty(obj map[string]json.RawMessage, path string) bool {
 // the task output whenever a model injection happens, so the user always
 // sees what was injected and why (no secrets included).
 func InjectionNotice(d InjectionDecision, agent string) string {
-	var b strings.Builder
-	b.WriteString("[panda] 模型调度：已为 agent「" + agent + "」注入模型能力")
+	params := ""
 	if d.Model != "" {
-		b.WriteString("（model=" + d.Model)
+		params = "model=" + d.Model
 		if d.BaseURL != "" {
-			b.WriteString("，endpoint=" + d.BaseURL)
+			params += ", endpoint=" + d.BaseURL
 		}
-		b.WriteString("）")
+	}
+	en := "[panda] model dispatch: injected model capability for agent \"" + agent + "\""
+	zh := "模型调度：已为 agent「" + agent + "」注入模型能力"
+	if params != "" {
+		en += " (" + params + ")"
+		zh += "（" + params + "）"
 	}
 	if d.Reason != "" {
-		b.WriteString("，配置：" + d.Reason)
+		en += ", config: " + d.Reason
+		zh += "，配置：" + d.Reason
 	}
-	return b.String()
+	return en + " / " + zh
 }

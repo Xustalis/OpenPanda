@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package cliui
 
 // Spinner frame sets and the small glyph vocabulary the status line draws with.

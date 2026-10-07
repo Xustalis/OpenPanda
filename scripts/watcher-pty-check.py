@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """PTY integration check for the REPL task watcher.
 
 Drives the real REPL in a pseudo-terminal, simulates the user typing a

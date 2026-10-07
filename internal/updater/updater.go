@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package updater implements the self-update path for the `panda` CLI: it
 // checks GitHub for a newer release, downloads and verifies the platform's
 // release archive, and — once the task queue is idle — atomically swaps the

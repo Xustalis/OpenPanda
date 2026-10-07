@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 import (
@@ -142,7 +144,7 @@ func runAsk(args []string) {
 	}
 	recordConvo := func(out *askengine.Result) {
 		if *continueConvo {
-			appendConvo(history, loc, prompt, out)
+			appendConvo(history, loc, prompt, out, engine)
 		}
 	}
 

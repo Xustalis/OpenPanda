@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # 部署 OpenPanda 到嵌入式 Linux 节点（示例脚本，按设备调整）。
 # 用法: ./scripts/deploy-opi.sh [host]
 # 步骤: 交叉编译 → scp 二进制/能力卡/配置 → 安装 systemd 服务 → 重启

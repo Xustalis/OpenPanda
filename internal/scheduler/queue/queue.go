@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package queue implements the node-local task queue scheduler: it decides
 // which queued task runs next on this node. It is the temporal counterpart of
 // the parent scheduler package (which decides WHICH node a task runs on) and

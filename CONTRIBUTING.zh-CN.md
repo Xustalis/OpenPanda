@@ -83,6 +83,10 @@ feat(web): 完整控制台 — 队列/详情/提问/项目/节点 + go:embed 单
 
 传输鉴权、Tier 模型或脱敏层存在漏洞时，**不要**在公开 Issue 中披露。请通过仓库设置中的安全联系人，把复现步骤私下发送给维护者。审计链（`panda audit verify`）正是为此设计：修复后可以验证改动没被篡改。
 
-## 许可
+## 许可与 CLA
 
-提交代码即视为同意你的贡献以项目的 [MIT License](LICENSE) 发布。
+OpenPanda 采用 [AGPL-3.0-or-later](LICENSE) 与商业授权双许可证（见
+[COMMERCIAL.md](COMMERCIAL.md)）。提交贡献即表示你同意
+[贡献者许可协议](CLA.md)，授权项目方以双轨条款分发你的代码。
+PR 合并前必须完成 CLA 签署——琐碎改动（typo、文档、约 15 行以内）
+及 `adapters/` 目录下的贡献除外，这些直接按 AGPL 接收（见 CLA.md §2）。

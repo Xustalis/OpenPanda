@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
 /* Design tokens — one source of truth for colour, space, radius, elevation.
    Light-first: warm paper neutrals (Kimi restraint × Claude paper × Apple
    hairline separation). `[data-theme='dark']` (or auto + dark OS) keeps the

@@ -56,6 +56,9 @@ model:
   base_url: ""       # 如 provider 需要自定义 endpoint
   model: ""          # 如 claude-opus-4, gpt-4o-mini, deepseek-v4-flash ...
   api_key: ""        # 留空；优先经 OPENPANDA_MODEL_API_KEY 注入
+  # auth: ""         # 订阅 OAuth provider（experimental）：先 `panda auth login
+                     # anthropic`，再设 auth: anthropic 即改用订阅 Bearer token
+                     # 认证（自动刷新），此时 api_key 可留空
   # 重试预算：模型请求失败（429 / 5xx / 断连）后的重试次数上限。
   # 缺省 5；负数完全关闭重试。退避步长封顶 30s，大预算不会变成忙等。
   # max_retries: 0

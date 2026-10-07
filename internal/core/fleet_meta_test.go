@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 // Track 3 fleet observability: heartbeat-carried version stamps, per-peer

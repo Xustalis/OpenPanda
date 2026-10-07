@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Git worktree management for sessions: each session that will touch files
 // gets its own worktree + branch (panda/<session-id>) carved out of HEAD, so
 // agent work is isolated from the user's checkout and reviewable as a diff —
@@ -63,6 +65,13 @@ func (w *Worktrees) Path(id string) string {
 // Ensure creates the session's worktree if absent and returns its path.
 // The branch is created from the repository's current HEAD.
 func (w *Worktrees) Ensure(ctx context.Context, id string) (string, error) {
+	return w.EnsureFrom(ctx, id, "HEAD")
+}
+
+// EnsureFrom is Ensure with an explicit base ref: a forked session branches
+// its worktree off the parent's branch so it inherits the parent's code
+// state, while a fresh session branches off HEAD.
+func (w *Worktrees) EnsureFrom(ctx context.Context, id, base string) (string, error) {
 	path := w.Path(id)
 	if st, err := os.Stat(filepath.Join(path, ".git")); err == nil && !st.IsDir() {
 		// git worktrees use a .git *file* pointing at the admin dir
@@ -76,7 +85,10 @@ func (w *Worktrees) Ensure(ctx context.Context, id string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
-	cmd := executil.CommandContext(ctx, "git", "-C", w.repo, "worktree", "add", "-b", Branch(id), path, "HEAD")
+	if base == "" {
+		base = "HEAD"
+	}
+	cmd := executil.CommandContext(ctx, "git", "-C", w.repo, "worktree", "add", "-b", Branch(id), path, base)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// The branch may already exist from an earlier session run — attach a
 		// worktree to it instead of failing.
@@ -241,7 +253,9 @@ func (w *Worktrees) Remove(ctx context.Context, id string) error {
 // the user's .gitignore) so it stays out of git status without touching
 // tracked files.
 func (w *Worktrees) excludeWorktreeDir() error {
-	admin, err := exec.Command("git", "-C", w.repo, "rev-parse", "--git-dir").Output()
+	// --git-common-dir, not --git-dir: inside a linked worktree the latter is
+	// the worktree's own admin dir, whose info/exclude does not apply.
+	admin, err := exec.Command("git", "-C", w.repo, "rev-parse", "--git-common-dir").Output()
 	if err != nil {
 		return fmt.Errorf("sessions: rev-parse --git-dir: %w", err)
 	}

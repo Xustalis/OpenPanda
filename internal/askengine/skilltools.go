@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package askengine
 
 import (
@@ -17,12 +19,12 @@ import (
 func registerSkillTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "skill_search",
-		Description: "在 Skills Hub（技能集市）与本地技能库中搜索技能。当用户询问是否有某项技能、需要特定开发/运维规范指导，或你要自主寻找新技能执行任务时调用。query 填关键词，如 'k8s', 'python', 'docker', 'test', 'review' 等。",
+		Description: "Search the Skills Hub and the local skill library for skills. Call it when the user asks whether a skill exists, when a task needs specific dev/ops conventions, or when you want to find a new skill yourself. query = keywords like 'k8s', 'python', 'docker', 'test', 'review'. / 在 Skills Hub（技能集市）与本地技能库中搜索技能。当用户询问是否有某项技能、需要特定开发/运维规范指导，或你要自主寻找新技能执行任务时调用。query 填关键词，如 'k8s', 'python', 'docker', 'test', 'review' 等。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"query": map[string]any{"type": "string", "description": "技能搜索关键词或技术领域"},
+				"query": map[string]any{"type": "string", "description": "Skill search keywords or technical domain / 技能搜索关键词或技术领域"},
 			},
 			"required": []string{"query"},
 		},
@@ -34,12 +36,12 @@ func registerSkillTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "skill_discover",
-		Description: "智能自主寻找并安装技能：根据需求描述或技术关键词，自动在技能集市中搜索最匹配的技能并完成安装。技能安装后为 pending 待批准状态，不会自动生效——需用户在前台批准（panda skill approve 或 Web 技能页）后方可指导任务。适用于‘帮我找找并安装关于 X 的技能’。",
+		Description: "Autonomously find and install a skill: searches the hub for the best match from a need description or technical keyword and installs it. Installed skills stay pending until the user approves them in the foreground (panda skill approve or the web Skills page) — they cannot guide tasks before that. For requests like \"find and install a skill about X\". / 智能自主寻找并安装技能：根据需求描述或技术关键词，自动在技能集市中搜索最匹配的技能并完成安装。技能安装后为 pending 待批准状态，不会自动生效——需用户在前台批准（panda skill approve 或 Web 技能页）后方可指导任务。适用于‘帮我找找并安装关于 X 的技能’。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"query": map[string]any{"type": "string", "description": "需要寻找的技能需求描述或技术关键词（如 'redis'、'k8s deploy'、'爬虫'）"},
+				"query": map[string]any{"type": "string", "description": "Skill need description or technical keyword, e.g. 'redis', 'k8s deploy', '爬虫' / 需要寻找的技能需求描述或技术关键词"},
 			},
 			"required": []string{"query"},
 		},
@@ -51,13 +53,13 @@ func registerSkillTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "skill_install",
-		Description: "自主安装指定技能到本地。target 支持填写 Skills Hub 技能名称（如 'docker-compose'），或者填入 HTTP/HTTPS 网络直链（如 GitHub 上的 SKILL.md）及本地路径。安装后为 pending 待批准状态，需用户在前台批准（panda skill approve 或 Web 技能页）后才会在后续任务中生效。",
+		Description: "Install a specific skill locally. target = a Skills Hub skill name (e.g. 'docker-compose'), an HTTP/HTTPS direct URL (e.g. a SKILL.md on GitHub), or a local path. Installed skills stay pending until the user approves them in the foreground (panda skill approve or the web Skills page) before they take effect on later tasks. / 自主安装指定技能到本地。target 支持填写 Skills Hub 技能名称（如 'docker-compose'），或者填入 HTTP/HTTPS 网络直链（如 GitHub 上的 SKILL.md）及本地路径。安装后为 pending 待批准状态，需用户在前台批准（panda skill approve 或 Web 技能页）后才会在后续任务中生效。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target": map[string]any{"type": "string", "description": "技能名称、网络 URL 或本地文件路径"},
-				"force":  map[string]any{"type": "boolean", "description": "是否覆盖已存在的同名技能（默认 false）"},
+				"target": map[string]any{"type": "string", "description": "Skill name, network URL, or local file path / 技能名称、网络 URL 或本地文件路径"},
+				"force":  map[string]any{"type": "boolean", "description": "Overwrite an existing same-name skill (default false) / 是否覆盖已存在的同名技能（默认 false）"},
 			},
 			"required": []string{"target"},
 		},
@@ -70,7 +72,7 @@ func registerSkillTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "skill_list",
-		Description: "列出当前已安装且生效的所有技能，了解已掌握的工作流、代码规范与诊断规程。",
+		Description: "List all installed and active skills — the workflows, coding conventions and diagnostic procedures currently available. / 列出当前已安装且生效的所有技能，了解已掌握的工作流、代码规范与诊断规程。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type":       "object",
@@ -83,12 +85,12 @@ func registerSkillTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "skill_show",
-		Description: "查看已安装技能的完整操作规程与步骤内容（SKILL.md 正文）。name 填技能名称。",
+		Description: "Show an installed skill's full operating procedure (the SKILL.md body). name = the skill's name. / 查看已安装技能的完整操作规程与步骤内容（SKILL.md 正文）。name 填技能名称。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "技能名称"},
+				"name": map[string]any{"type": "string", "description": "Skill name / 技能名称"},
 			},
 			"required": []string{"name"},
 		},

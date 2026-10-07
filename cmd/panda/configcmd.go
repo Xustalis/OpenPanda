@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda config` — view and edit config.yaml from the CLI with the same
@@ -176,6 +178,7 @@ func runConfigSet(section string, args []string) {
 		apiKey := fs.String("api-key", "", "model API key (empty keeps the stored one)")
 		model := fs.String("model", "", "model name")
 		maxTokens := fs.Int("max-tokens", 0, "max tokens per completion (0 keeps current)")
+		authProvider := fs.String("auth", "", "subscription OAuth provider (e.g. anthropic; 'none' clears)")
 		fs.Parse(args)
 		cfg, err := config.Load(*configPath)
 		if err != nil {
@@ -193,6 +196,13 @@ func runConfigSet(section string, args []string) {
 		}
 		if v := strings.TrimSpace(*apiKey); v != "" {
 			mc.APIKey = v
+		}
+		if v := strings.TrimSpace(*authProvider); v != "" {
+			if strings.EqualFold(v, "none") {
+				mc.Auth = ""
+			} else {
+				mc.Auth = v
+			}
 		}
 		// Build a client first: invalid endpoints fail here without touching
 		// the stored config (same guard as the web settings page).

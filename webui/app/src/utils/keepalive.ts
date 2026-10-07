@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 /**
  * Keeps the browser tab and page execution active during long-running tasks:
  * 1. Requests a screen WakeLock so the display and OS do not sleep.

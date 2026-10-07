@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 // Chunked proactive artifact delivery (whitepaper §8.3 fat-push, v2).

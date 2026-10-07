@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, type MemoryFiles, type MemoryGraphNode, type ProjectMemory, type TopicFile } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'

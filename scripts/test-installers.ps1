@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # test-installers.ps1 — exercise scripts/install.ps1 the way a Windows user does.
 #
 # Why: nothing in CI ever ran the Windows installer. installers.yml only

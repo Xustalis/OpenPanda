@@ -7,7 +7,7 @@
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
 [![Release](https://img.shields.io/github/v/release/Xustalis/OpenPanda?label=release&color=blue)](https://github.com/Xustalis/OpenPanda/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/プラットフォーム-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
@@ -188,4 +188,9 @@ OpenPanda のアーキテクチャは、大規模な異種クラスタのため�
 
 ## 📄 ライセンス
 
-OpenPanda は [MIT License](LICENSE) のもとで公開されているオープンソースソフトウェアです。
+OpenPanda はデュアルライセンスで提供されています：
+
+- **コミュニティ版** — [GNU Affero General Public License v3.0 or later](LICENSE)（AGPL-3.0-or-later）
+- **商用ライセンス** — クローズドソースへの組み込みやホステッド提供向け。詳細は [COMMERCIAL.md](COMMERCIAL.md)
+
+ライセンス変更前に公開されたリリースは、引き続き MIT ライセンスで利用できます。

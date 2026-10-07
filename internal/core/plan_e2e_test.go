@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 import (
@@ -146,7 +148,10 @@ func TestPlanThreeStagesThreeNodes(t *testing.T) {
 // is also what the board and the CLI read.
 func waitPlanDone(t *testing.T, ctx context.Context, c *Core, planID string, want int) []Task {
 	t.Helper()
-	deadline := time.Now().Add(75 * time.Second)
+	// Loaded CI runners — macOS and Windows alike — have repeatedly needed
+	// more than 75s to walk a three-node plan to completion; the deadline
+	// guards a hang, not speed.
+	deadline := time.Now().Add(150 * time.Second)
 	var stages []Task
 	for time.Now().Before(deadline) {
 		var err error

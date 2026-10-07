@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Typed client for the panel JSON API. The Bearer token lives in
 // localStorage (entered once at the token gate); a 401 clears it and fires
 // `unauthorized` so the app shell can drop back to the gate.
@@ -543,6 +545,10 @@ export interface NodesAddResult {
 export interface OnboardingState {
   locale: string
   terms_accepted: boolean
+  /** Revision of the accepted terms — MIT-era installs have
+   *  terms_accepted without a version, so a license change re-shows the
+   *  terms step. Compare against TERMS_VERSION_CURRENT. */
+  terms_version: number
   onboarded: boolean
   approval_mode: 'always' | 'on-request' | 'never'
   model_configured: boolean

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 // The plan plane. A plan is the flagship scenario written down: develop the
