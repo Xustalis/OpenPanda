@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The console's icon vocabulary: stroke-drawn glyphs on a 24×24 grid that
 // replace the emoji pictographs that used to stand in for them.
 //

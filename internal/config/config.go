@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package config loads PANDA node configuration from YAML.
 package config
 
@@ -519,11 +521,16 @@ const (
 // construction time. Both are optional — a bare ModelConfig is unchanged
 // legacy behaviour.
 type ModelConfig struct {
-	Name          string `yaml:"name,omitempty"`           // alias for /model switch; empty = model id
-	Provider      string `yaml:"provider,omitempty"`       // built-in provider id (internal/providers)
-	APIType       string `yaml:"api_type"`                 // "anthropic" | "openai" (default anthropic)
-	BaseURL       string `yaml:"base_url"`                 // e.g. https://api.deepseek.com/anthropic
-	APIKey        string `yaml:"api_key"`                  // secret; prefer env OPENPANDA_MODEL_API_KEY
+	Name     string `yaml:"name,omitempty"`     // alias for /model switch; empty = model id
+	Provider string `yaml:"provider,omitempty"` // built-in provider id (internal/providers)
+	APIType  string `yaml:"api_type"`           // "anthropic" | "openai" (default anthropic)
+	BaseURL  string `yaml:"base_url"`           // e.g. https://api.deepseek.com/anthropic
+	APIKey   string `yaml:"api_key"`            // secret; prefer env OPENPANDA_MODEL_API_KEY
+	// Auth names an OAuth provider from internal/auth ("anthropic"): the
+	// client then authenticates with the stored subscription token instead
+	// of api_key, refreshing it transparently. Experimental — see
+	// `panda auth login`.
+	Auth          string `yaml:"auth,omitempty"`
 	Model         string `yaml:"model"`                    // e.g. deepseek-chat | gpt-4o-mini — fully user-defined
 	MaxTokens     int    `yaml:"max_tokens"`               // completion cap; 0 = provider/entry default
 	ContextWindow int    `yaml:"context_window,omitempty"` // advertised context length; 0 = unknown
@@ -1417,6 +1424,7 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 		{"api_type", mc.NormalizedAPIType()},
 		{"base_url", mc.BaseURL},
 		{"api_key", mc.APIKey},
+		{"auth", mc.Auth},
 		{"model", mc.Model},
 	}
 	for _, f := range fields {

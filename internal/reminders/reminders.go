@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package reminders implements scheduled user reminders (design P1-28):
 // "提醒我 5 分钟后开会" — a reminder is persisted in SQLite, and a Scanner
 // running in the daemon (and/or the web panel) claims each reminder when it

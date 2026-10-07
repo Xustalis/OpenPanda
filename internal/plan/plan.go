@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package plan is the plan plane: the missing third layer between "one task, one
 // node" and the scenario this project exists for — develop on the Mac, train on
 // the Windows box, report through the Pi.

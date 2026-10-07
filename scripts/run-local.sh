@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # run-local.sh — 一键启动本地 PANDA（守护进程 + webui 侧车）
 #
 # 用法：

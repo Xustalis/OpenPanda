@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Command panel runs the web control panel as a sidecar, reading the same
 // SQLite store the kernel daemon writes (see webui/README.md). Besides the
 // read-only queue it serves the panel's write paths: POST /api/ask (the

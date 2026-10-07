@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Formatting tests for the JSON shown on the task detail page.
 //
 // The reason these exist: the whole point of the result viewer is that a raw

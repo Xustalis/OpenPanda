@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { locale, localeNames, locales, setLocale, t, type Locale } from '../i18n'
 import { navigateView, navViews } from '../nav'

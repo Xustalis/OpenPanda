@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # check-docs.sh — doc-drift guard for two regressions we already paid for.
 #
 #   1. The retired model alias "deepseek-chat" must not linger in the

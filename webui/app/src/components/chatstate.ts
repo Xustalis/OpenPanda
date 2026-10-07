@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Pure state helpers for the chat composer, kept apart from the component so
 // the streaming-target races that garbled transcripts can be tested head-on
 // (see chatstate.test.ts).

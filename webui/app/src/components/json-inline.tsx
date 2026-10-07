@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { flattenJson, prettifyJson } from '../format/json'
 
 /** A collapsible JSON payload.

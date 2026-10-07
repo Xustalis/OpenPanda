@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package panel
 
 // The project surface for the console: the same first-class project the CLI

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Scoring tests for the palette's search.
 //
 // Run with `npm test` (node's built-in runner). The palette component itself

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // Command reminder manages scheduled reminders (design P1-28) from the CLI:

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package askengine is the unified entry engine shared by `panda ask` (CLI)
 // and the web panel: one prompt in, three intents out — answer (pure LLM
 // reply), tool_call (memory tools, executed and fed back), task (submitted to
@@ -1182,7 +1184,8 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			res.Cost = client.EstimateCost(d.InputTokens, d.OutputTokens)
 			res.EntryModel = client.ModelName()
 			if fallbackUsed != "" && res.Note == "" {
-				res.Note = fmt.Sprintf("主模型不可用，已自动切换至备用模型: %s", fallbackUsed)
+				loc, _ := e.localeNow()
+				res.Note = i18n.Tf(loc, "entry.note.fallback", "name", fallbackUsed)
 			}
 			// Reasoning backstop (D14): every return path funnels through
 			// here, so one strip covers the Answer this engine hands to

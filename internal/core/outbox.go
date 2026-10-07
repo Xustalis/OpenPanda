@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package core
 
 // The result-delivery layer (review P0-2). Terminal task results cross the bus

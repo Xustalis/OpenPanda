@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Minimal typings for the two node builtins the parser test imports. The
 // console follows the same rule as src/types.d.ts: hand-write the handful of
 // signatures actually used rather than pull a whole @types package in for a

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Subsequence scoring for the ⌘K palette.
 //
 // The palette is searched by people who already know the name of where they

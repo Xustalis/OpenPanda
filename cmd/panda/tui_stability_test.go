@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //go:build !lite
 
 package main
@@ -349,6 +351,28 @@ func TestTUIFailedTurnPersistsPair(t *testing.T) {
 	got := loadConvo()
 	if len(got) != 2 || got[0].Content != "what is this" {
 		t.Fatalf("failed turn should reach the persisted file: %v", got)
+	}
+}
+
+// TestTUIDoneErrRecordsPair is the onDone-level regression for the same
+// guarantee: resetLive clears pendingPrompt, so the error path must capture it
+// first or recordErrorTurn is handed "" and the bare-mode pair is silently
+// dropped — a failed TUI turn would leave no trace in convo or /history.
+func TestTUIDoneErrRecordsPair(t *testing.T) {
+	m := newIsolatedTUI(t)
+	s := &askStream{events: make(chan tea.Msg, 1), dropped: make(chan struct{})}
+	m.stream = s
+	m.mode = modeAsking
+	m.pendingPrompt = "what is this"
+
+	next, _ := m.onDone(doneMsg{stream: s, err: errors.New("model exploded")})
+	m = next.(tuiModel)
+
+	if len(m.r.convo) != 2 || m.r.convo[0].Content != "what is this" {
+		t.Fatalf("failed turn should persist the bare pair, got %v", m.r.convo)
+	}
+	if m.pendingPrompt != "" {
+		t.Fatal("resetLive should still clear the in-flight prompt")
 	}
 }
 

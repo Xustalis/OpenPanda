@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package install implements `panda install` / `panda uninstall` /
 // `panda doctor`: placing the binary on PATH (persistently, per-OS), and a
 // whitelist-based uninstall that backs up and removes only OpenPanda-owned

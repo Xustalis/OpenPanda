@@ -7,7 +7,7 @@
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
 [![Release](https://img.shields.io/github/v/release/Xustalis/OpenPanda?label=release&color=blue)](https://github.com/Xustalis/OpenPanda/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/Plattformen-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
@@ -182,4 +182,9 @@ Wir freuen uns über Beiträge aus der Community! Bitte beachte [CONTRIBUTING.de
 
 ## 📄 Lizenz
 
-OpenPanda ist Open-Source-Software unter der [MIT-Lizenz](LICENSE).
+OpenPanda wird unter dualem Lizenzmodell bereitgestellt:
+
+- **Community** — [GNU Affero General Public License v3.0 oder später](LICENSE) (AGPL-3.0-or-later)
+- **Kommerziell** — proprietäre Lizenz für Closed-Source-Einbettung oder gehostete Angebote; siehe [COMMERCIAL.md](COMMERCIAL.md)
+
+Vor der Lizenzänderung veröffentlichte Versionen bleiben unter der MIT-Lizenz verfügbar.

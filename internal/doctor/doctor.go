@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package doctor is the structured self-check suite shared by `panda doctor`
 // (which renders the checks as a terminal report) and the panel's
 // /api/doctor (which serializes them to JSON). Each check is a stable i18n

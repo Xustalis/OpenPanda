@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package agents is the single source of truth for the agent CLIs PANDA can
 // delegate to. It maps each agent's registry key to its adapter script, the
 // binary names to probe on PATH, install/update guidance (download link +

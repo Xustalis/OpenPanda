@@ -34,32 +34,60 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 发布通过打 `vX.Y.Z` 标签完成；上一个标签之后的全部提交归入新版本的段落，`[Unreleased]` 收集最近一次发布之后的内容。
 - 每个版本按四个分类记录：**新增功能**、**问题修复**、**优化改进**、**破坏性变更**（升级时需要采取行动的改动）。
 - 每条记录以一至三行写明变更内容与用户可见的影响；必要时标注引入该变更的提交，便于追溯。
+- 条目前可带 **[Experimental]** 标记：功能可用，但其接口、wire 格式或默认值仍在演进，后续版本可能不经破坏性变更窗口直接调整——请勿将其当作稳定 API 形成硬依赖。
+- 本 changelog 为策展式记录：部分内部重构与 adapter 未在此列出。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
 ## [Unreleased]
 
+### 新增
+
+- **会话分叉** [Experimental]:会话现在是一棵树。`panda session fork <id> [--at N]` 在指定轮次把线程分叉为子会话,继承父会话的历史前缀与项目;在 git 仓库中子会话的 worktree 基于父分支创建,能看到父会话产出的代码状态。`panda session tree [id]` 渲染会话家族树,REPL/TUI 内 `/fork` 同样可用并自动附加到子会话,面板新增 `POST /api/sessions/{id}/fork`。
+- **自动压缩** [Experimental]:超出回放预算的对话历史改为折叠进模型生成的滚动摘要,不再直接丢弃。裸模式 convo 文件把摘要保存为开头的一条合成轮(跨多次压缩自我维持);会话存储在新的 `Summary` 字段并作为上下文注记回放。`panda session show` 会标出已压缩线程。模型不可达时退化为原先的硬裁剪。
+- **`panda rpc`** [Experimental]:NDJSON-over-stdio 嵌入协议 —— `status`、`ask`(带 delta/status/reasoning 事件)、`session.list/get/new/fork`、`convo.get`。`scripts/panda_rpc.py` 是一个纯 stdlib 的最小参考客户端。
+- **订阅 OAuth** [Experimental]:`panda auth login anthropic` 通过 PKCE 登录 Claude Pro/Max 订阅(浏览器授权 → 粘贴 code),token 存于 CLI state 目录(0600)并自动刷新。`model.auth: anthropic` 使入口模型改用该 Bearer token 认证(附加 `oauth-2025-04-20` beta 头);`auth status`/`logout` 查看与删除凭据。其他订阅 provider 在入口模型支持其协议后可加入。
+
+- 全屏 TUI 退出提示：绑定会话时打印已保存的会话 id 与 `/resume` 恢复指引；裸对话时提示对话已写入 convo 文件、下次启动自动恢复——alternate screen 不再让对话看起来凭空消失。
+- `make tui-pty-exit-test`：第二条真实 pty 契约（与 `tui-pty-test` 并列），断言失败轮次持久化、退出提示与终端现场还原；已接入 `make gate-all`。
+
+### 修复
+
+- 裸模式失败轮次恢复持久化：TUI 的 done 处理在 `recordErrorTurn` 读取前就通过 `resetLive` 清掉了 `pendingPrompt`，失败的 ask 在 convo 文件与 `/history` 中完全无痕——现在与经典 REPL 一样记录（用户提示 + 带标记的错误侧）。
+- entry 层模型报错本地化：ClassifyError 指引（不可达、超时、401/403、404、带 provider 细节的 400、429、5xx、缺 key、通用）、DSML 工具调用的拒绝/忽略/不可解析文案、输出校验错误、max-tokens 截断标记、主备模型切换提示，现在随会话语言渲染，不再一律输出中文。
+- TUI 会话测试隔离 `XDG_STATE_HOME` 与 CLI 配置路径，跑测试套件不再写入开发者真实的对话存储。
+
 ## [0.0.10-preview] - 2026-10-06
 
-v0.0.10 预览版——代号 **Apoapsis**（远拱点）：这条线从内核向外伸手——伸向节点身边的局域网，也伸向边缘的硬件。节点在局域网内自动发现彼此、以指纹确认准入，并可人工钉住对方密钥；委派的文件任务把工作树带到执行端、再把结果带回来；卡住的 agent 可以向用户提问而不是瞎猜；任务可以驱动拥有硬件的节点上的物理 actuator——舵机、麦克风、摄像头、通知、串口 MCU。底层信任面同步加固：`task_events` 与 `audit_log` 逐行 Ed25519 签名并绑定本节点密钥验签；没有同意授权的远程 agent 运行被钳到只读工具面；明文 `ws://` 拨号在非加密底层上一律拒绝；更新器可要求带外的 release 签名。稳态开销也随之下降：空闲 WAL 写按变更落盘，队列与提醒扫描器在空板时降频，能力匹配零分配，artifact 面复用块缓冲。
+v0.0.10 预览版——代号 **Apoapsis**（远拱点）：这条线从内核向外伸手——伸向节点身边的局域网，也伸向边缘的硬件。节点在局域网内自动发现彼此、以指纹确认准入，并可人工钉住对方密钥；委派的文件任务把工作树带到执行端、再把结果带回来；卡住的 agent 可以向用户提问而不是瞎猜；任务可以驱动拥有硬件的节点上的物理 actuator——舵机、麦克风、摄像头、通知、串口 MCU。底层信任面同步加固：`task_events` 与 `audit_log` 逐行 Ed25519 签名并绑定本节点密钥验签；没有同意授权的远程 agent 运行被钳到只读工具面；明文 `ws://` 拨号在非加密底层上一律拒绝；更新器可要求带外的 release 签名。稳态开销也随之下降：空闲 WAL 写按变更落盘，队列与提醒扫描器在空板时降频，能力匹配零分配，artifact 面复用块缓冲。头条之外：entry 模型现在可以搜索与读取实时网页（web_search/web_fetch）,`sandbox.mode` 让每个被 spawn 的子进程落在 OS 默认拒绝的隔离配置里，adapter wire 协议升级到带会话与类型化 transcript 的 v2，调度读取实测容量（`nodes drain` 维护模式与 `--nodes` 扇出）,Web 控制台完成浅色系重设计。
 
 ### 新增
 
-- **局域网自动发现 + 指纹确认准入**——节点现在广播一个小型未认证 UDP beacon(`network.discovery_addr` 上的 `panda-beacon/1`，默认 `:7837`，设 `"off"` 关闭），只携带 id/地址/版本/公钥——绝不携带凭据。`panda nodes` 在 "not paired" 分区列出发现的节点并展示其指纹；`panda nodes admit <id>` 把它转成已配置 peer(REPL 里的 `/nodes admit` 会即时拨号）。pending 表会过期清理并封顶 64 行，恶意局域网最多制造噪音而非膨胀。准入流程不变：共享密钥 + Ed25519 签名 hello 仍然是入网的唯一凭据——beacon 只是提示，不是钥匙。
-- **节点指纹 + TOFU 校验**——`panda nodes` 显示每行的 Ed25519 指纹，人工比对后置绿 ✓;`panda nodes verify <id>` 记录该校验（`employee_cache.key_verified`,migration v31)。已验证行上的公钥一旦变化会清除标记并响亮告警——重装、轮换与冒充在这一层无法区分，都不得继承信任；本机行的指纹天然自带。
-- **工作树随委派的文件任务同行**——目标为仓库 checkout 的 `context_type=file` 任务会把工作树打包（跳过 `.git`、`node_modules`、vendor 与缓存目录，上限 256 MiB）作为 `__worktree__` artifact 输入；执行端解到私有 per-task 目录中运行，产出的树再打包、回取、解回发起方的 checkout(`EvProjectSync` 轨迹 + 结果上的 `output_artifact`)。委派的文件编辑现在能回到发起机器，而不是死在远端主机上。
-- **澄清回路(§4.3)**——agent 卡在只有用户能拍板的决策时以 `PANDA_QUESTION:` 行收尾；任务带着问题停进 review 并回传给发起方（`task_result.question`),`panda approve <id> -m "回答"` 把答复折进重跑 intent 后在执行端续跑。该提示随五种语言的每条 agent prompt 下发。
-- **结构化结果契约**——`task_result.files_changed` 报告本次运行实际改动的工作目录相对路径（上限 200)，由前后快照计算而非 agent 自述；监督 judge 拿到同一份清单作为证据，`panda task <id>` 会渲染改动路径，停驻的澄清任务保留其部分足迹。
-- **项目驻留路由**——能力摘要现在会通告各节点持有哪些项目（`employee_cache.projects`，随心跳 gossip);`scheduler.RouteP`/`RouteAtP` 据此计分，项目绑定的任务优先落在已有该树的节点上。
-- **actuator 派发（§7.1/§7.2,Jarvis 线）**——任务现在可以驱动拥有该硬件的节点上的物理动作。卡片声明带 `hardware:*` id、驱动 `command` 和携带 `{intent}`/`{action}`/`{param:<name>}` 占位的 argv 模板的 `actuators`;entry 模型产出 `spec.action_spec`（目标 actuator、动作动词、标量参数）,随 `spec_json` 跨过委派，执行端替换出真实 argv——绝不是拼 shell——再原生运行驱动。`task_submit` 接受 `action_spec` 参数，`panda task add --action-spec '<json>'`（及 `/task add`)不经模型即可派发 actuator,`ValidateTaskSpec` 在边界校验该 spec（必填字段、标量参数、32 参数上限）。
-- **参考 actuator 驱动**——`drivers/` 随每个发布包附带五个可移植驱动：`panda-servo`(gpiozero PWM 舵机，0-180°)、`panda-mic`(arecord WAV 采集，上限 300 秒)、`panda-camera`(fswebcam/imagesnap/ffmpeg 快照回退）、`panda-notify`(notify-send/osascript/powershell toast)、`panda-mcu`（纯 stdlib POSIX termios 串口/UART——Arduino、ESP32、RP2040、AT 模组；`--send`/`--send-hex` 配 `--expect`/`--expect-regex` 读窗口，无 pyserial 依赖）。缺少后端时各自以独特退出码失败，能力卡片随之丢弃该 actuator 而非虚报设备；`capabilities.example-edge.yaml` 声明全部五个，`panda ask "turn the servo to 90 degrees"` 是目标流程。
+- **[Experimental] 局域网自动发现 + 指纹确认准入**——节点现在广播一个小型未认证 UDP beacon(`network.discovery_addr` 上的 `panda-beacon/1`，默认 `:7837`，设 `"off"` 关闭），只携带 id/地址/版本/公钥——绝不携带凭据。`panda nodes` 在 "not paired" 分区列出发现的节点并展示其指纹；`panda nodes admit <id>` 把它转成已配置 peer(REPL 里的 `/nodes admit` 会即时拨号）。pending 表会过期清理并封顶 64 行，恶意局域网最多制造噪音而非膨胀。准入流程不变：共享密钥 + Ed25519 签名 hello 仍然是入网的唯一凭据——beacon 只是提示，不是钥匙。
+- **[Experimental] 节点指纹 + TOFU 校验**——`panda nodes` 显示每行的 Ed25519 指纹，人工比对后置绿 ✓;`panda nodes verify <id>` 记录该校验（`employee_cache.key_verified`,migration v31)。已验证行上的公钥一旦变化会清除标记并响亮告警——重装、轮换与冒充在这一层无法区分，都不得继承信任；本机行的指纹天然自带。
+- **[Experimental] 工作树随委派的文件任务同行**——目标为仓库 checkout 的 `context_type=file` 任务会把工作树打包（跳过 `.git`、`node_modules`、vendor 与缓存目录，上限 256 MiB）作为 `__worktree__` artifact 输入；执行端解到私有 per-task 目录中运行，产出的树再打包、回取、解回发起方的 checkout(`EvProjectSync` 轨迹 + 结果上的 `output_artifact`)。委派的文件编辑现在能回到发起机器，而不是死在远端主机上。
+- **[Experimental] 澄清回路(§4.3)**——agent 卡在只有用户能拍板的决策时以 `PANDA_QUESTION:` 行收尾；任务带着问题停进 review 并回传给发起方（`task_result.question`),`panda approve <id> -m "回答"` 把答复折进重跑 intent 后在执行端续跑。该提示随五种语言的每条 agent prompt 下发。
+- **[Experimental] 结构化结果契约**——`task_result.files_changed` 报告本次运行实际改动的工作目录相对路径（上限 200)，由前后快照计算而非 agent 自述；监督 judge 拿到同一份清单作为证据，`panda task <id>` 会渲染改动路径，停驻的澄清任务保留其部分足迹。
+- **[Experimental] 项目驻留路由**——能力摘要现在会通告各节点持有哪些项目（`employee_cache.projects`，随心跳 gossip);`scheduler.RouteP`/`RouteAtP` 据此计分，项目绑定的任务优先落在已有该树的节点上。
+- **[Experimental] actuator 派发（§7.1/§7.2,Jarvis 线）**——任务现在可以驱动拥有该硬件的节点上的物理动作。卡片声明带 `hardware:*` id、驱动 `command` 和携带 `{intent}`/`{action}`/`{param:<name>}` 占位的 argv 模板的 `actuators`;entry 模型产出 `spec.action_spec`（目标 actuator、动作动词、标量参数）,随 `spec_json` 跨过委派，执行端替换出真实 argv——绝不是拼 shell——再原生运行驱动。`task_submit` 接受 `action_spec` 参数，`panda task add --action-spec '<json>'`（及 `/task add`)不经模型即可派发 actuator,`ValidateTaskSpec` 在边界校验该 spec（必填字段、标量参数、32 参数上限）。
+- **[Experimental] 参考 actuator 驱动**——`drivers/` 随每个发布包附带五个可移植驱动：`panda-servo`(gpiozero PWM 舵机，0-180°)、`panda-mic`(arecord WAV 采集，上限 300 秒)、`panda-camera`(fswebcam/imagesnap/ffmpeg 快照回退）、`panda-notify`(notify-send/osascript/powershell toast)、`panda-mcu`（纯 stdlib POSIX termios 串口/UART——Arduino、ESP32、RP2040、AT 模组；`--send`/`--send-hex` 配 `--expect`/`--expect-regex` 读窗口，无 pyserial 依赖）。缺少后端时各自以独特退出码失败，能力卡片随之丢弃该 actuator 而非虚报设备；`capabilities.example-edge.yaml` 声明全部五个，`panda ask "turn the servo to 90 degrees"` 是目标流程。
 - **远程任务溯源持久化**——经 wire 进入的任务（delegate/plan/chain 到达）在插入时打上 `remote=1`(migration v33 增加 `tasks.remote`)，任务来源从此随重启与迁移存活，而不是每次读取时从委派链重建。
 - **未授权的远程 agent 运行被钳到只读工具面**——缺少 `ConsentGrant` 钳制（或 digest 不匹配）的远程任务执行时，agent adapter 只拿到只读工具子集；无法表达该限制的 adapter 以 `ErrNotAuthorized` 拒绝派发，而不是静默全功率运行（98fa9c0)。
 - **运行时自省**——`panda metrics --runtime` 报告本机 daemon 的 RSS/CPU/uptime（经 `daemon.pid` + `ps`,Windows 上退化为仅存活判断）以及本进程的 goroutine/堆/GC 计数；panel 的 `GET /api/self` 新增 `runtime` 块（goroutine、heap alloc/sys、GC 次数、uptime)，让长驻的 web 进程自曝内部状态。
 - **启动目录即项目空间**——daemon、REPL、`panda ask`、`panda task add` 在看似 workspace 的目录（VCS 根、语言清单、agent/节点配置）中启动时将其收养为项目空间：`storage.work_path` 跟随 cwd，所属项目被找到或新建（最深的祖先 workdir 也算数，在子目录里启动会落进该项目），每个被调度的 harness 都继承该 cwd。收养保持「环境感知」的克制——裸 `$HOME` 不会产出项目，`--project`/`OPENPANDA_WORK_PATH`/已配置的 `storage.work_path` 永远优先。
-- **Pi adapter**——`adapters/pi.py` 加多供应商 Pi CLI 的注册表条目：凭据检测覆盖常见厂商 env 变量与 `~/.pi/agent/{auth,models}.json`，只读受限工具面，`.pi/mcp.json` 作为其项目级 MCP 发现点——`Capabilities.MCPProjectFile` 让每个 CLI 声明自己的约定，passthrough 按声明物化文件而不再写死 `.mcp.json`。多语言的 `ModelEnv`(`APIType: ""`）意味着该 agent 说所配置模型自己的协议，经 `OPENPANDA_MODEL_API_TYPE` 传下去。
-- **内建 generic 执行器**——卡片声明 `adapter: "generic"`（不带 `.py`）时拿到同一套 argv 模板展开的进程内实现，没有 Python 运行时的节点（裸 Windows/macOS、最小容器、嵌入式板子）也能承接 agent 层任务；仅该 adapter 豁免解释器检查；`{env:NAME}` 占位符解析经沙箱过滤后转发的、由运维声明的变量；模板首 token 经 `splitArgv` 探测，带引号的路径不再被劈开。
+- **[Experimental] Pi adapter**——`adapters/pi.py` 加多供应商 Pi CLI 的注册表条目：凭据检测覆盖常见厂商 env 变量与 `~/.pi/agent/{auth,models}.json`，只读受限工具面，`.pi/mcp.json` 作为其项目级 MCP 发现点——`Capabilities.MCPProjectFile` 让每个 CLI 声明自己的约定，passthrough 按声明物化文件而不再写死 `.mcp.json`。多语言的 `ModelEnv`(`APIType: ""`）意味着该 agent 说所配置模型自己的协议，经 `OPENPANDA_MODEL_API_TYPE` 传下去。
+- **[Experimental] 内建 generic 执行器**——卡片声明 `adapter: "generic"`（不带 `.py`）时拿到同一套 argv 模板展开的进程内实现，没有 Python 运行时的节点（裸 Windows/macOS、最小容器、嵌入式板子）也能承接 agent 层任务；仅该 adapter 豁免解释器检查；`{env:NAME}` 占位符解析经沙箱过滤后转发的、由运维声明的变量；模板首 token 经 `splitArgv` 探测，带引号的路径不再被劈开。
 - **审计行签名**——`audit_log` 行现在携带本节点 Ed25519 签名，签在其自身链哈希上（迁移 v37）：能写库的人不再能改完一行再把整条链重算一遍。`panda audit verify`、`/audit` 与 `GET /api/audit` 全部按本节点密钥验签。
-- **更新带外验签**——`OPENPANDA_UPDATE_PUBKEY`(hex/base64 Ed25519）让 release 必须携带 `checksums.txt.sig`——对 checksums 的分离签名，这是通道自身哈希无法提供的信任锚；`OPENPANDA_UPDATE_REPO` 把更新通道指向自托管的 `owner/repo`。两个开关仅走环境变量，作用于所有 updater 调用点。
+- **[Experimental] 更新带外验签**——`OPENPANDA_UPDATE_PUBKEY`(hex/base64 Ed25519）让 release 必须携带 `checksums.txt.sig`——对 checksums 的分离签名，这是通道自身哈希无法提供的信任锚；`OPENPANDA_UPDATE_REPO` 把更新通道指向自托管的 `owner/repo`。两个开关仅走环境变量，作用于所有 updater 调用点。
+- **[Experimental] Adapter wire 协议 v2：会话与类型化 transcript**——adapter 结果信封现在按 schema 校验（`status`/`question`/`delegate_requests` 作为字段解析而非文本标记），支持会话的 adapter 在监督轮次间保持 CLI 存活，类型化的 `agent_event` 帧把完整活动转录（text/thinking/tool_use/tool_result，带子代理父 id）流入任务事件链，在 CLI 与 Web 控制台渲染为委派树。MCP 透传在支持 flag 的 CLI 上经 `--mcp-config` 传递，任务工作目录不再落 `.mcp.json`；凭据沙箱豁免按 (agent, adapter) 二元组匹配而非仅按脚本；事件字段钳制改为 UTF-8 字节预算，CJK 文本不再产生被 harness 静默丢弃的超长行。
+- **[Experimental] 通用命令模板 adapter;zcode 与 Antigravity 一等支持**——任意 headless CLI 现在只需在卡片声明一次 argv 模板（`agents.<name>.command`，如 `"zcode --prompt {prompt}"`):`adapters/generic.py` 在 shlex 切分后把 `{prompt}` 作为一个字面 argv 元素替换——绝不经过 shell 插值，prompt 内容无法逃逸；进程内 generic 执行器展开同一模板及 `{stdin}`/`{cwd}`/`{resume}`/`{max_turns}`/`{env:NAME}` 占位符。`zcode` 以真实 headless 契约（`--prompt`）进入注册表，`ZCODE_API_KEY`/`ZCODE_MODEL`/`ZCODE_BASE_URL` 环境变量映射与 anthropic 协议探测齐备，`panda detect` 产出可运行的卡片条目；Antigravity 配专属 `antigravity.py`。
+- **[Experimental] entry 模型的 web_search 与 web_fetch 工具**——两个 Tier-1 工具为模型打开训练截止之后的实时窗口：`web_search` 查询配置的 provider——SearXNG（自托管免 key,`base_url`)、Brave、Tavily 或 Bocha(`api_key`);`auto` 选用已配置者，`off` 同时移除两个工具——返回带发布日期提示的标题链接；`web_fetch` 经 SSRF 防护读取模型选定的 URL（仅 https、仅公网单播 IP、跳转全程同策略）。未配置搜索时返回模型可转述的配置指引，而非死路。
+- **可配置的模型重试预算**——`model.max_retries` 取代硬编码的传输重试预算（缺省/0 保持默认 5，负数彻底关闭重试）；单步退避封顶 30 秒，深预算改为等待而非忙转；该开关在 web 设置模型表单、panel 模型接口、`/model add --retry` 与 `config.example.local.yaml` 同步暴露。
+- **[Experimental] 实测容量指标、drain 模式与指定节点扇出**——心跳现在携带实测的 mem-free/disk-free/GPU-util 采样（`-1` 表示未测量，异常值被钳制）并在 in-flight 计数旁通告队列深度；计分按实测内存余量折减效率，路由对将满的工作磁盘硬排除——只信实测数据，未探测的 peer 绝不被误排。`panda task add --nodes` 把一个任务扇出到指定节点（每节点一份钉住副本）并聚合各节点结果；`panda nodes drain [--off]` 写入共享 settings 标志，运行中的 daemon 即刻感知：心跳宣告 "draining"，入站委派被拒绝，在途任务跑完为止。
+- **稳定身份 outbox 托管**——outbox 托管过去以实例 id 为键，重启的 peer 以新 id 重新握手后，其停驻的结果、取消、bundle 与 artifact 推送全部孤儿化直到 TTL；托管现在以经认证的 Ed25519 身份（`k:<pub>`，由签名 hello 绑定）为键、`task_id` 为操作 id，四张 outbox 表全部按稳定键持久化，flush 认领稳定键与所有已记录实例 id 的并集，bundle `DestEID` 携带稳定键并经目录解析到当前实例。
+- **worktree 回程保护仓库管道**——哈希正确、无穿越的归档仍可能在顶层携带 `.git`，其中的 hooks 与 config（可内嵌凭据）会直落用户的 checkout;`ExtractExcept` 新增首元素跳过集，收养路径永不落地 peer 提供的 `.git` 或 `.panda-shadow` 内容（嵌套命中保留——vendored checkout 自带的 `.git` 是合法输出），被跳过条目计入清单并记日志。
+- **[Experimental] OS 级子进程沙盒（`sandbox.mode`)**——`security.Sandbox` 在环境过滤之外获得真隔离：`sandbox.mode: standard|strict` 把每个被 spawn 的子进程——native 命令与 agent adapter 一视同仁——包进平台默认拒绝机制（macOS 上 sandbox-exec/seatbelt,Linux 上 bubblewrap，其他平台诚实空转并在启动时告警）。`standard` 仅放行 workdir 与白名单运行时目录可写、其余一律 EPERM,`deny_write_paths`(db 目录、memory、config、card、artifact 池、`.panda-shadow`）即便在白名单父目录下也保持保护；`strict` 追加对 OS 凭据位置的读拒绝。`panda doctor` 报告后端是否真正隔离了节点。
+- **文件型可写挂载与共享保护路径集**——`$HOME` 根部的裸凭据文件（如 `.claude.json`）现在经 `WritableFiles` 显式声明，在 Linux 按文件绑定、在 macOS 折入可写集，不再按 basename 猜 inode 类型而挂错对象；daemon 原先硬编码的拒绝清单收敛为 `commander.ProtectedPaths`，与内嵌 engine 共享，ask/repl/web/voice 会话获得同一契约；`Options.ConfigPath` 允许 engine 自己的配置文件加入写拒绝集，桌面钥匙串进入 `SystemSecretPaths`。
+- **Web 控制台刷新**——暖纸色浅主题成为 token 层唯一真相源（深色经 `[data-theme='dark']` 与 `prefers-color-scheme` 回退保留）;fleet、memory、skills 提升为顶层分组路由，旧的 `#/settings?tab=*` 深链自动重定向；对话输入框与新建任务表单开放节点挑选，并新增 memory 关系图视图。onboarding 条款扩展到十节——自托管/无 SLA 澄清、第三方模型与 peer 节点条款、AI 输出与专业建议免责、执行安全、担保与责任——五种语言同步。
 
 ### 变更
 
@@ -93,6 +121,13 @@ v0.0.10 预览版——代号 **Apoapsis**（远拱点）：这条线从内核�
 - **Discovery 绑定校验端口**——非数字的 `network.discovery_addr` 端口通过 `SplitHostPort` 形状检查后绑定到通告端口 0 的临时 socket;`net.ResolveUDPAddr` 现在在启动期把关，`:7837` 默认值收敛到 daemon 与内嵌 engine 共享的一个 `DiscoveryAddrOrDefault()`。
 - **事件链验证锚定到本节点密钥**——`VerifyTaskEventChain`/`VerifyChain` 过去按每行自己携带的 `sig_pub` 验签：改写整条链的人用自己的密钥重签照样通过；现在签名必须出自本节点密钥，且已签名链中不允许再出现未签名行——尾部剥签名会被抓住。来源密钥未知的中转同意授权仍然收养（拒绝会让每个中转的 tier-2 任务停摆），但现在会响亮记日志。
 - **去重淘汰遵循过期顺序**——`msgSeen` 溢出时过去按 map 序任意删掉四分之一：可能删掉新 id 放重放入侵，而陈旧 id 还活着；改为最旧先淘汰后，重放只有在自己的去重窗口本已关闭之后才溜得进来。
+- **权限分级分类器的绕过被全面封堵**——`TierFromCommand` 过去只看二进制名，破坏性载荷得以藏在良性命令里；现在提取内嵌命令行并分类：`find -exec`/`-execdir`/`-ok`/`-okdir` 载荷、`ssh` 远程命令与 `-o ProxyCommand`、`parallel` 的不透明命令串、`tmux send-keys`/`screen -X stuff` 对活终端的击键注入；动词与对象缺口同步补齐：`systemctl` 电源状态全家（reboot/suspend/hibernate/isolate/firmware-setup)、`pmset` 睡眠与计划关机、`launchctl bootout`/`reboot`、容器销毁。
+- **自更新现在真正装上**——报告背后是三个真缺陷：临时 panel token 在 exec 重启时被重新生成，所有打开的控制台被晾在 token 门（token 现在经 `OPENPANDA_PANEL_TOKEN` 随重启传递，并被环境白名单挡在任务子进程外）；服务托管的 `panda daemon` 在磁盘二进制更换后仍跑旧镜像（`applyRelease` 现在请求服务管理器重启）;macOS 归档以 `COPYFILE_DISABLE=1` 加 xattr 清理重打包。退化检查下的 `panda update --force` 不再打印幻影 `downloading v<current>`——`--force` 豁免的是新旧判定而非已知 release 的前提——updater 换用有边界的 `http.Client`（元数据 30 秒、资产 30 分钟）,panel 也会解释应用后状态。
+- **TUI 死命令与共享状态竞争**——带参数的 `/model`、`/sessions`、`/projects` 被斜杠面板拦截吞掉（裸命令仍开面板，参数现在送达 exec);`/tasks watch` 把 `watch` token 消费掉却不回传，实时面板从未启动，退出时 2 秒重绘帧还灌满转录（现在只提交最新帧）;`watchQueueTo` 写死 `i18n.Detect()` 无视 `/lang`。多块 exec 输出让整个 TUI panic——值接收者拷贝了非零 `strings.Builder`，第二块写入即引爆，任何流式输出的斜杠/shell 命令（`/agents` 等）都会杀死程序——冗余的 model 镜像字段已删，视图直接渲染互斥锁累积的缓冲。
+- **Mesh 传输的停顿与黑洞**——回复过去只查 `connFor`，仅靠打洞数据报路由可达的 peer 永远收不到 decline/result/ack 应答；现在统一走 `sendTo`（先 conn、再绑定的 UDP 端点、失败进 outbox)。UDP 路由携带 `udpHeard` 并在静默后过期——死端点此前一直"正常"，因为 UDP 写在调用时即报成功：send 被确认、outbox 行被删、peer 永不重新打洞；keepalive 仅在端点精确匹配时刷新。入站死线在 conn 绑定后按每个派发帧刷新（被拒绝的 hello 不再白拿 60 秒窗口，慢 handler 也无法饿死健康链路）,heartbeat/card 广播并发扇出，不再被单个卡死 peer 每拍拖 `writeWait` 全员；WS upgrader 获得 `HandshakeTimeout`;UDP keepalive 仅在 AEAD 解密成功后上抛。
+- **adapter wire 解码与注册表作用域**——`AgentResult.ExitCode` 缺 json tag,wire 上的 `exit_code` 从未反序列化成功：adapter 超时（124)、二进制缺失（127)、请求畸形（2）一律上浮为 exit 0，污染重试分类与失败报告；`AgentResult` 所有字段现在显式携带 wire 名。注册表解析过去仅按 adapter 脚本键控，所有 `generic.py` 卡片条目互相混淆（自定义 CLI 会继承 zcode 的二进制、凭据与端点）;`agents.Lookup(name, adapter)` 现在要求两者同时匹配。
+- **输入边界上限与标志补齐**——变更型 panel `/api/*` 请求过去无 body 上限（POST/PUT/PATCH/DELETE 现在包一层 16 MiB `MaxBytesReader`)；非流式 provider 响应无限读取（封顶 64 MiB)；路径形态的 adapter 名（`../x.py`）在写卡时即被拒而非拖到 spawn;`session_mode` 在结果信封上报 `session_dead`，一次性回退不再与异步 `cmd.Wait` 标记竞争；panel 为非 loopback 暴露场景下发严格同源 CSP(`script-src 'self'`，禁 object/frame)。
+- **actuator 互斥、delegate 解析、租约等待与状态哈希**——同一 GPIO 针脚上的两个驱动是故障而非并行：队列资源键现在合并全部 `hardware:*` 需求与 `action_spec` 的目标 actuator,`run()` 在执行点取 per-actuator 互斥，委派受理与内联提交同样串行化。`PANDA_DELEGATE` 解析容忍美化打印与 markdown 围栏，收集一轮内的全部请求，并按预算并行派发子任务；远端等待改为轮询持久化租约，续约执行端的心跳使其活过旧的固定死线；超过哈希遍历上限的工作树改用 git 自身索引（`HEAD` + porcelain + 有上限的 diff 流）做指纹，不再跳过振荡检查。
 
 ### 破坏性变更
 

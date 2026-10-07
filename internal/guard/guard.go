@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package guard is the panic firewall for long-lived goroutines. A resident
 // goroutine that panics would otherwise take the whole process down with an
 // unformatted stack dump; guard recovers it, logs the name and the full stack

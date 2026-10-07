@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The OpenPanda brand marks.
 //
 // Two of them, for two different jobs:

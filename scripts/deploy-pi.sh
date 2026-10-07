@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # 一键部署 OpenPanda 到香橙派（PI_HOST/PI_USER 可覆盖）。
 #
 # 用法（在 Mac / 开发机上执行）:

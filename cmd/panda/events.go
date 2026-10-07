@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // One renderer for a task's event timeline, shared by `panda task <id>`,

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api, type ModelEntry, type ModelsResponse, type ProviderInfo } from '../api/client'
 import { useLocaleRerender } from '../hooks'

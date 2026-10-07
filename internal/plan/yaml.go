@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package plan
 
 // YAML is the plan plane's hand-written form. It exists because the plan layer

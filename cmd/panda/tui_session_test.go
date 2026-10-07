@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //go:build !lite
 
 package main
@@ -5,6 +7,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +23,13 @@ import (
 // binding tests never touch the user's real CLI state directory.
 func newSessionTUI(t *testing.T) (tuiModel, *sessions.Store) {
 	t.Helper()
+	// Same isolation as newIsolatedTUI: bare-mode commits persist through
+	// saveConvo into XDG_STATE_HOME, which is the developer's real CLI state
+	// without this.
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	old := cliConfigPath
+	cliConfigPath = filepath.Join(t.TempDir(), "missing-config.yaml")
+	t.Cleanup(func() { cliConfigPath = old })
 	st := sessions.NewStore(t.TempDir())
 	r := &repl{loc: i18n.Locale("en"), cfg: &config.Config{}, interactive: true, sessionsSt: st}
 	r.cfg.Storage.SkillsPath = t.TempDir()

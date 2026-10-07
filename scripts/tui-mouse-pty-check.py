@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """PTY integration check for TUI mouse ownership.
 
 The regression this guards is invisible to unit tests, because it is about the

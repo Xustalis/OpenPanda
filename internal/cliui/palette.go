@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package cliui is OpenPanda's terminal presentation layer: one colour
 // vocabulary, one spinner, one live status line, shared by every CLI surface.
 //

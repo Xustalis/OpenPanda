@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package storage wraps the local SQLite database (WAL mode).
 //
 // A pure-Go driver (modernc.org/sqlite) is used so the binary cross-compiles

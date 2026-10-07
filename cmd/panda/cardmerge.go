@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // mergeCard is the whole of `panda card rescan`'s policy, kept pure so it can be

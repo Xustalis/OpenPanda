@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { isTaskStalled, STALL_ACTIVE_MS, STALL_QUEUED_MS } from './client.ts'

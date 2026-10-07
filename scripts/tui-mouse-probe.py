@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Interactive probe: what does THIS terminal actually send for the mouse?
 
 Whether a wheel gesture arrives as an arrow key, as a mouse report, or not at

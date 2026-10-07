@@ -123,7 +123,13 @@ Repo-Einstellungen mit Reproduktionsschritten. Die Audit-Kette
 (`panda audit verify`) ist genau dafür da, dass Fixes gegen Manipulation
 verifiziert werden können.
 
-## Lizenz
+## Lizenz & CLA
 
-Mit deinem Beitrag stimmst du zu, dass dein Werk unter der [MIT-Lizenz](LICENSE)
-des Projekts veröffentlicht wird.
+OpenPanda ist unter [AGPL-3.0-or-later](LICENSE) und einer kommerziellen
+Lizenz doppelt lizenziert (siehe [COMMERCIAL.md](COMMERCIAL.md)). Mit
+deinem Beitrag stimmst du der [Contributor License Agreement](CLA.md)
+zu, die dem Projekt das Recht einräumt, deine Arbeit unter beiden
+Spuren zu verbreiten. Die CLA-Zustimmung ist vor dem Mergen eines
+Pull Requests erforderlich — ausgenommen triviale Änderungen (Tippfehler,
+Dokumentation, Patches bis ~15 Zeilen) und Beiträge unter `adapters/`,
+die direkt unter der AGPL angenommen werden (siehe CLA.md §2).

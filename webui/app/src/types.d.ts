@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Minimal Web Speech API typings — the DOM lib doesn't ship them. Only what
 // the ask view uses; unsupported browsers never see the feature.
 

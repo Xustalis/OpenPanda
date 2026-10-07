@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Adapter: Pi coding agent (`pi`, @mariozechner/pi-coding-agent) → PANDA Commander.
 
 Protocol (shared with claude_code.py / codex.py / opencode.py):

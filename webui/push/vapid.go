@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package push implements the (frozen) Web Push notifications behind the webui
 // panel (design P3-26): the VAPID identity (RFC 8292), message encryption
 // (RFC 8291 over the aes128gcm content coding from RFC 8188), subscription

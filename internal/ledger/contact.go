@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package ledger
 
 // contact.go models the contact plan of delay-tolerant routing (whitepaper

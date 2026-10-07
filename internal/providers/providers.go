@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package providers is the built-in LLM provider catalogue. It turns the
 // "paste a key and pick a model" workflow into data instead of prose: each
 // entry carries the wire dialect, endpoint, auth style, model-list path and

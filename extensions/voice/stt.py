@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Voice sidecar: speech-to-text (ASR).
 
 Captures one utterance from the microphone and transcribes it. Backend selected

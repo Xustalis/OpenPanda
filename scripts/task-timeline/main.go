@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Command task-timeline prints a task and its event timeline from one or more
 // node databases. It is read-only and intended for distributed lab reports.
 package main

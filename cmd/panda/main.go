@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Command panda is the OpenPanda CLI. With no subcommand it drops into the
 // interactive REPL (the operator's seat); `panda daemon` runs the headless
 // kernel that registers this node's capabilities and delegates/executes
@@ -170,6 +172,12 @@ func main() {
 		case "mcp":
 			runMCP(args)
 			return
+		case "auth":
+			runAuth(args)
+			return
+		case "rpc":
+			runRPC(args)
+			return
 		case "reminder":
 			runReminder(args)
 			return
@@ -263,6 +271,7 @@ func subcommandNames() []string {
 		"task", "plan", "cancel", "approve", "reject", "logs", "skill", "mcp",
 		"reminder", "detect", "card", "init", "metrics", "heatmap", "audit", "session",
 		"sessions", "memory", "config", "model", "models", "agents", "project",
+		"auth", "rpc",
 		"read", "view", "cat", "md", "markdown", "version", "help",
 	}
 }
@@ -870,7 +879,9 @@ func printUsage(w *os.File) {
 	line("  read <file> | <file.md> view file or document (renders Markdown automatically)")
 	line("")
 	line("sessions:")
-	line("  session list|new|show|rm|ask|diff|merge   chat sessions over git worktrees")
+	line("  session list|new|show|rm|ask|diff|merge")
+	line("          |fork|tree                      chat sessions over git worktrees;")
+	line("                                            fork/tree branch a thread")
 	line("")
 	line("tasks:")
 	line("  queue [--state s] [--project p] [--watch] the task board (--watch: live view)")
@@ -900,6 +911,8 @@ func printUsage(w *os.File) {
 	line("  reminder list|add|rm                      scheduled reminders")
 	line("  skill list|find|hub|add|reset             procedural skill & hub management")
 	line("  mcp                                       run the node's self-tools as an MCP stdio server")
+	line("  rpc                                       NDJSON-over-stdio embedding protocol (experimental)")
+	line("  auth login|status|logout <provider>       subscription OAuth (e.g. anthropic)")
 	line("")
 	line("observability:")
 	line("  status                                    node identity + capability directory")

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package entry
 
 import (
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -709,9 +712,9 @@ func TestWrapAPIErrorActionableMessages(t *testing.T) {
 		{"unauthorized", &statusError{status: http.StatusUnauthorized, body: "bad key"}, "api_key"},
 		{"forbidden", &statusError{status: http.StatusForbidden, body: "denied"}, "api_key"},
 		{"not found", &statusError{status: http.StatusNotFound, body: "no route"}, "base_url"},
-		{"rate limited after retries", &retryableError{status: http.StatusTooManyRequests, body: "slow down"}, "限流"},
-		{"server down after retries", &retryableError{status: http.StatusBadGateway, body: "boom"}, "暂时不可用"},
-		{"unreachable", &transientError{err: errors.New("connection refused")}, "无法连接"},
+		{"rate limited after retries", &retryableError{status: http.StatusTooManyRequests, body: "slow down"}, "rate-limiting"},
+		{"server down after retries", &retryableError{status: http.StatusBadGateway, body: "boom"}, "temporarily unavailable"},
+		{"unreachable", &transientError{err: errors.New("connection refused")}, "cannot reach"},
 		{"no key", ErrNoKey, "API key"},
 	}
 	for _, tc := range cases {
@@ -725,6 +728,13 @@ func TestWrapAPIErrorActionableMessages(t *testing.T) {
 				t.Fatalf("UserMsg = %q, want substring %q", ce.UserMsg, tc.wantSub)
 			}
 		})
+	}
+	// The message follows the caller's locale — a zh ask gets the zh guidance,
+	// not a Chinese-strings-only build leaking into every front end.
+	wrapped := WrapAPIError(&transientError{err: errors.New("connection refused")}, i18n.ChineseSimp)
+	var ce *ClassifyError
+	if !errors.As(wrapped, &ce) || !strings.Contains(ce.UserMsg, "无法连接") {
+		t.Fatalf("zh locale should produce the zh message, got %q", wrapped)
 	}
 }
 

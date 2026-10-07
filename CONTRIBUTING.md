@@ -120,7 +120,13 @@ security contact in the repository settings) with reproduction steps. The
 audit chain (`panda audit verify`) is there exactly so fixes can be verified
 against tampering.
 
-## License
+## License & CLA
 
-By contributing you agree your work is released under the project's
-[MIT License](LICENSE).
+OpenPanda is dual-licensed under the [AGPL-3.0-or-later](LICENSE) and a
+commercial license (see [COMMERCIAL.md](COMMERCIAL.md)). By contributing
+you agree to the [Contributor License Agreement](CLA.md), which grants
+the project the right to distribute your work under both tracks. CLA
+assent is required before a pull request can be merged — except for
+trivial changes (typos, docs, patches of ~15 lines or fewer) and
+contributions under `adapters/`, which are accepted under the outbound
+AGPL directly (see CLA.md §2).

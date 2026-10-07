@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda agents` — probe the agent CLIs this node can delegate to, driven by

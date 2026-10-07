@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Tests for the session-stream race guard (see session-guard.ts).
 
 import assert from 'node:assert/strict'

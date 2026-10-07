@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Focus trap for the console's modals (⌘K palette, confirm dialog).
 //
 // A modal owns the keyboard while it is open: focus moves in on mount, Tab

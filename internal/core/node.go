@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package core hosts the node lifecycle: registration, heartbeat loop, and
 // graceful shutdown. Message routing and task state live alongside it in
 // later phases.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 /** Extract a clean project name candidate from an absolute directory path */
 export function suggestProjectName(dirPath: string): string {
   if (!dirPath) return ''

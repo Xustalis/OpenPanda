@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package i18n provides the CLI's user-facing strings in the five project
 // languages (the same set the READMEs and web console ship). English is the
 // fallback: a key missing from another language falls back to English rather

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package plan
 
 // FromSpec is the model-generated half of the plan entry point. The YAML file

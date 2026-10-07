@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda plan` is the plan plane's user-facing surface: start a multi-stage,

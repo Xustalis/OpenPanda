@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Parses and formats task events for human-readable display.
 // Replaces raw JSON walls with clear structured information and formats
 // Chain-of-Thought (reasoning) into readable thinking blocks.

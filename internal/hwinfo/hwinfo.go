@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package hwinfo probes the host machine's hardware identity (hostname, CPU
 // model, RAM, GPU, VRAM). It is the single detection layer: `panda detect`,
 // `panda card rescan` and the panel's GET /api/self all read from here, so a

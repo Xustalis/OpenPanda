@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package version holds the build version in one place so both the CLI
 // (`panda version`) and the web panel (/api/version) report the same value.
 // Release builds override it via -ldflags:

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Tiny dependency-free i18n. Adding a language = one messages file + one
 // line in the registry below; nothing else in the app changes.
 

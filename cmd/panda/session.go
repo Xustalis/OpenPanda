@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package main
 
 // `panda session` — the kernel-form of the web console's conversation model:
@@ -48,6 +50,10 @@ func runSession(args []string) {
 		runSessionMove(rest)
 	case "rm", "delete":
 		runSessionRm(rest)
+	case "fork":
+		runSessionFork(rest)
+	case "tree":
+		runSessionTree(rest)
 	case "ask":
 		runSessionAsk(rest)
 	case "diff":
@@ -70,6 +76,8 @@ func sessionUsage() {
 	fmt.Fprintln(os.Stderr, "  show <id>                     show one session and its turns")
 	fmt.Fprintln(os.Stderr, "  mv <id> --project P           move session to project (empty to disassociate)")
 	fmt.Fprintln(os.Stderr, "  rm <id>                       remove the session and its worktree")
+	fmt.Fprintln(os.Stderr, "  fork <id> [--at N]            fork the session at turn N into a new thread")
+	fmt.Fprintln(os.Stderr, "  tree [id]                     show the conversation tree (or one session's family)")
 	fmt.Fprintln(os.Stderr, "  ask <id> <prompt> [--authorize] [--card PATH]   continue a session")
 	fmt.Fprintln(os.Stderr, "  diff <id>                     show the session's worktree changes")
 	fmt.Fprintln(os.Stderr, "  merge <id> [--message M]      merge the session branch into HEAD")
@@ -130,13 +138,17 @@ func runSessionList(args []string) {
 		i18n.T(loc, "cli.col.title"),
 	))
 	for _, s := range list {
+		title := s.Title
+		if s.ParentID != "" {
+			title = "↳ " + title // forked thread — `session tree` shows the family
+		}
 		fmt.Println(row(
 			cell(s.ID, idW),
 			cell(s.UpdatedAt.Format("2006-01-02 15:04"), whenW),
 			cell(orDash(s.Project), projW),
 			cell(orDash(s.Branch), branchW),
 			cell(strconv.Itoa(len(s.Turns)), turnsW),
-			cell(s.Title, titleW),
+			cell(title, titleW),
 		))
 	}
 }
@@ -218,6 +230,12 @@ func runSessionShow(args []string) {
 	if sess.Worktree != "" {
 		fmt.Printf("worktree: %s\n", sess.Worktree)
 	}
+	if sess.ParentID != "" {
+		fmt.Printf("forked:   %s @ turn %d\n", sess.ParentID, sess.ForkIndex)
+	}
+	if sess.Summary != "" {
+		fmt.Printf("summary:  %d chars (compacted)\n", len(sess.Summary))
+	}
 	if len(sess.Turns) == 0 {
 		return
 	}
@@ -293,6 +311,149 @@ func runSessionRm(args []string) {
 	fmt.Printf("%s deleted\n", id)
 }
 
+// runSessionFork splits a session into two threads at a turn boundary. The
+// child inherits the parent's turns up to the boundary and its project; in a
+// repository its worktree branches off the parent's branch (so the child
+// sees the code state the parent produced). The parent keeps its full
+// thread — a fork never rewrites history.
+func runSessionFork(args []string) {
+	fs := flag.NewFlagSet("session fork", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	at := fs.Int("at", 0, "number of turns to copy into the fork (default: all)")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+	id := strings.TrimSpace(fs.Arg(0))
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "usage: panda session fork <id> [--at N]")
+		os.Exit(2)
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	store := sessions.NewStore(sessionStoreRoot(cfg))
+	parent, err := store.Get(id)
+	if err != nil {
+		if errors.Is(err, sessions.ErrNotFound) {
+			fmt.Fprintf(os.Stderr, "panda: no such session: %s\n", id)
+			os.Exit(1)
+		}
+		fatal("load session", err)
+	}
+	child, err := store.Fork(id, *at)
+	if err != nil {
+		fatal("fork session", err)
+	}
+	// Repo sessions get a worktree rooted at the parent's branch when it has
+	// one (inherit the code state), else at HEAD like `session new`.
+	if wt := openWorktreesBestEffort(cfg.Storage.WorkPath); wt != nil {
+		base := "HEAD"
+		if parent.Branch != "" {
+			base = parent.Branch
+		}
+		if path, err := wt.EnsureFrom(context.Background(), child.ID, base); err == nil {
+			_ = store.SetWorktree(child.ID, path, sessions.Branch(child.ID))
+			child, _ = store.Get(child.ID)
+		}
+	}
+	if jsonOutput {
+		emitJSON(child)
+		return
+	}
+	loc := i18n.Detect()
+	fmt.Println(i18n.Tf(loc, "cli.session.forked", "parent", id, "id", child.ID, "n", fmt.Sprint(child.ForkIndex)))
+	if child.Worktree != "" {
+		fmt.Printf("worktree: %s  branch: %s\n", child.Worktree, child.Branch)
+	}
+}
+
+// runSessionTree renders the conversation tree: root threads with their
+// forks nested beneath, so a session family's branching is visible at a
+// glance. `tree <id>` scopes to the family containing id.
+func runSessionTree(args []string) {
+	fs := flag.NewFlagSet("session tree", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	store := sessions.NewStore(sessionStoreRoot(cfg))
+	list, err := store.List()
+	if err != nil {
+		fatal("list sessions", err)
+	}
+	loc := i18n.Detect()
+	if len(list) == 0 {
+		fmt.Println(i18n.T(loc, "cli.session.none"))
+		return
+	}
+	byID := make(map[string]*sessions.Session, len(list))
+	kids := make(map[string][]*sessions.Session)
+	var roots []*sessions.Session
+	for _, s := range list {
+		byID[s.ID] = s
+	}
+	for _, s := range list {
+		if s.ParentID != "" && byID[s.ParentID] != nil {
+			kids[s.ParentID] = append(kids[s.ParentID], s)
+		} else {
+			roots = append(roots, s)
+		}
+	}
+	for _, k := range kids {
+		sortSessionsByCreated(k)
+	}
+	// `tree <id>` climbs to the family root; orphan-parented children (their
+	// parent was deleted) already surface as roots.
+	scope := strings.TrimSpace(fs.Arg(0))
+	if scope != "" {
+		s := byID[scope]
+		if s == nil {
+			fmt.Fprintf(os.Stderr, "panda: no such session: %s\n", scope)
+			os.Exit(1)
+		}
+		for s.ParentID != "" && byID[s.ParentID] != nil {
+			s = byID[s.ParentID]
+		}
+		roots = []*sessions.Session{s}
+	}
+	var walk func(s *sessions.Session, depth int, last bool, prefix string)
+	walk = func(s *sessions.Session, depth int, last bool, prefix string) {
+		connector := ""
+		childPrefix := prefix
+		if depth > 0 {
+			if last {
+				connector = "└─ "
+				childPrefix += "   "
+			} else {
+				connector = "├─ "
+				childPrefix += "│  "
+			}
+		}
+		title := s.Title
+		if title == "" {
+			title = i18n.T(loc, "cli.session.untitled")
+		}
+		fmt.Printf("%s%s%s  %s  %s\n", prefix, connector, s.ID,
+			i18n.Tf(loc, "cli.session.tree.turns", "n", fmt.Sprint(len(s.Turns))), title)
+		children := kids[s.ID]
+		for i, c := range children {
+			walk(c, depth+1, i == len(children)-1, childPrefix)
+		}
+	}
+	for i, r := range roots {
+		walk(r, 0, i == len(roots)-1, "")
+	}
+}
+
+func sortSessionsByCreated(list []*sessions.Session) {
+	for i := 1; i < len(list); i++ {
+		for j := i; j > 0 && list[j].CreatedAt.Before(list[j-1].CreatedAt); j-- {
+			list[j], list[j-1] = list[j-1], list[j]
+		}
+	}
+}
+
 // runSessionAsk continues a session from the terminal: same flow as the web
 // console's POST /api/sessions/{id}/ask (persist the user turn, run with the
 // full history in the session's worktree, bind a spawned task back to the
@@ -339,13 +500,12 @@ func runSessionAsk(args []string) {
 		fatal("load session", err)
 	}
 
-	// History is the thread as it stands; the fresh turn is persisted after
-	// building it because AskTurns carries the prompt itself — replaying the
-	// persisted copy too would send two consecutive user messages (400).
+	// History is the thread as it stands (auto-compacted when it overflows
+	// the replay budget); the fresh turn is persisted after building it
+	// because AskTurns carries the prompt itself — replaying the persisted
+	// copy too would send two consecutive user messages (400).
 	var history []entry.Turn
-	for _, t := range sess.Turns {
-		history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
-	}
+	sess, history = sessionHistory(context.Background(), store, sess, engine)
 	if _, err := store.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: prompt}); err != nil {
 		fatal("save turn", err)
 	}

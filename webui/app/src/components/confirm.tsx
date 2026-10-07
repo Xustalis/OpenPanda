@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../i18n'
 import { useModalFocus } from './modal-focus'

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package log provides structured JSON logging over slog.
 //
 // The core daemon logs JSON lines so they can be shipped to journald,

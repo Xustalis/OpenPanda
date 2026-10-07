@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // The console's navigation vocabulary: the route union, the hash codec, and
 // the sidebar's grouping. It lives in its own module because two surfaces need
 // it — the sidebar (app.tsx) and the ⌘K palette (components/palette.tsx) — and

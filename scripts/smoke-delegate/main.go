@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Command smoke-delegate verifies cross-process task delegation without the
 // entry model: it becomes an ephemeral scheduler participant (the same
 // pattern internal/askengine uses — a fresh node id, the node's capability

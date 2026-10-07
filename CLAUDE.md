@@ -1,132 +1,114 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Working notes for AI agents contributing to this repository.
 
-## Project Overview
+## What this is
 
-OpenPanda (Open Personal Adaptive Node-based Distributed Assistant) is a peer-to-peer task-orchestration assistant that runs across heterogeneous devices. It sits above individual agent CLIs (Claude Code, Codex, etc.) and delegates tasks to the best-suited node in the network.
+OpenPanda (Open Personal Adaptive Node-based Distributed Assistant) is a
+peer-to-peer orchestrator that runs on heterogeneous machines and farms
+work out to whichever node is best suited. It is not itself an agent —
+it coordinates the agent CLIs already on each device (Claude Code,
+Codex, and friends) plus direct shell execution and human-approved
+tasks.
 
-## Build & Test Commands
+Requires Go 1.26+. The build deliberately avoids CGO: even SQLite comes
+from `modernc.org/sqlite`, so cross-compilation is just `GOOS/GOARCH`.
+
+## Licensing
+
+Dual-licensed: **AGPL-3.0-or-later** (see `LICENSE`) for open-source use,
+plus a commercial license for proprietary embedding/hosting. All external
+contributions are governed by `CLA.md` — new PRs require CLA assent
+before merge. Keep new files consistent with the existing
+`// SPDX-License-Identifier: AGPL-3.0-or-later` headers.
+
+## Build, test, ship
+
+Everything goes through the Makefile:
 
 ```bash
-# Build the native binary (release, stripped symbols)
-make build
+make build        # native binary (fmt-check + vet run first as prerequisites)
+make test         # unit/integration suite
+make race         # race detector, whole tree
+make race-focused # race detector on concurrency-heavy pkgs only (bus/core/storage/panel)
+make vet          # go vet
+make fmt / fmt-check
+make gate         # pre-merge bar: fmt + vet + build + adapter-test + test + race-focused
+make gate-all     # gate plus web console tests/build and TUI PTY tests
+make bench        # routing/codec/dedup microbenchmarks
+make dev          # build + launch web console against config.yaml
+make run          # run daemon from source
+make measure      # steady-state RSS measurement
 
-# Build the web console into the binary (requires node/npm)
-make web
+# release machinery
+make build-<os>-<arch>   # darwin/linux/windows x amd64/arm64 (+ linux-armv7 lite)
+make build-lite          # reduced-footprint builds for small devices
+make package             # release archives into dist/
+make release / release-local
 
-# Run the full test suite
-make test
-
-# Run tests with race detector
-make race
-
-# Race detector scoped to the concurrency-sensitive packages (storage, core, bus, panel)
-make race-focused
-
-# Static analysis
-make vet
-
-# Format check (gofmt) / format all Go code
-make fmt-check
-make fmt
-
-# Merge gate: fmt-check + vet + build + test + race (must pass before PR lands)
-make gate
-
-# The full gate: gate + web-test + web (web console tests and embedded build)
-make gate-all
-
-# Web console tests (node --test) / build the web console into the binary
-make web-test
-make web
-
-# Cross-compile targets
-make build-darwin-amd64
-make build-darwin-arm64
-make build-linux-arm64
-make build-linux-amd64
-make build-windows-amd64
-make build-windows-arm64
-
-# Package release archives (dist/) / local packaging
-make package
-make release-local
-
-# Run a single test
-go test -run TestName ./path/to/package/...
-
-# Performance benchmarks (routing match/decision, wire codec, dispatch dedup)
-make bench
-
-# Quick-start: build and open web console with config.yaml
-make dev
-
-# Run the daemon directly
-make run
-
-# Measure steady-state RSS
-make measure
+# single test
+go test -run TestName ./internal/<pkg>/...
 ```
 
-## Architecture
+The web console needs node/npm only when rebuilding it (`make web`,
+`make web-test`); the Go binary embeds a prebuilt copy.
 
-The codebase is a Go 1.26+ monorepo with pure-Go SQLite (no CGO).
+## Layout
 
-### Entry Points
-- `cmd/panda/` — CLI entry point with subcommands: `daemon`/`serve`, `ask`, `repl`/`chat`, `web`, `voice`, `install`, `uninstall`, `doctor`, `status`, `nodes` (`add`/`invite`/`disconnect`/`remove`), `pair`, `queue`, `task` (`add`/`priority`/`move`), `plan`, `cancel`, `approve`, `reject`, `logs`, `skill`, `reminder`, `detect`, `card` (`show`/`rescan`/`edit`/`set` + `native`/`agent`/`manual`), `init`, `metrics`, `audit` (`verify`/`entries`), `session`/`sessions`, `memory`, `config`, `agents`, `project`, `mcp` (self-tools MCP stdio server), `version`, `help`
-- `webui/cmd/panel/` — Web console sidecar (embeds the Preact app via go:embed)
+- `cmd/panda/` — the `panda` CLI. Bare invocation drops into the TUI
+  REPL; subcommands cover `daemon`/`serve`, `ask`, `repl`/`chat`, `web`,
+  `voice`, `install`/`uninstall`, `doctor`, `status`, `nodes`, `pair`,
+  `queue`, `task`, `plan`, `cancel`, `approve`/`reject`, `logs`, `skill`,
+  `reminder`, `detect`, `card`, `init`, `metrics`, `audit`, `session`
+  (incl. `fork`/`tree` for thread branching), `memory`, `config`, `agents`,
+  `project`, `mcp`, `rpc` (NDJSON-over-stdio embedding surface,
+  experimental), `auth` (subscription OAuth, experimental), `version`.
+- `internal/` — all runtime code (see below).
+- `adapters/` — Python scripts, one per agent CLI, plus `_harness.py`
+  (the shared stdin/stdout JSON protocol they all speak). Installed next
+  to the binary; pure stdlib, no pip deps.
+- `webui/app/` — Preact console (vite build, embedded via go:embed into
+  `webui/panel/`; `webui/cmd/panel/` is the sidecar binary).
+- `config/` + `config.example*.yaml` — config schema and sample node
+  cards. `testdata/` holds `node-a.yaml`/`node-b.yaml`/`deploy-opi.yaml`
+  fixtures.
+- `deploy/`, `drivers/`, `scripts/` — deployment manifests, hardware
+  profiles, install scripts.
+- `docs/` — design docs and review reports.
 
-### Core Packages (`internal/`)
+### `internal/` by concern
 
-**Node Lifecycle & Task Orchestration:**
-- `core/` — Root daemon type (`Core`) wiring node lifecycle, task store, and WebSocket transport. Contains the task execution loop, delegation, retry, supervision (judge → re-delegate), and metrics.
-- `entry/` — Unified entry model: classifies user input into `answer` (LLM reply), `tool_call` (tool invocation), `task` (delegated to a node), or `plan` (multi-stage pipeline whose stages run on different machines). Handles prompt building, streaming, tool routing, and output parsing.
-- `scheduler/` — Task routing and scoring. `queue/` manages the task queue; `route.go` picks the best node; `score.go` ranks candidates; `chain.go` handles multi-step delegation chains.
-- `commander/` — Three-tier execution: `native` (direct shell via `executil`), `agent` (adapter-backed, e.g. Claude Code), `manual` (queued for human approval). `adapter.go` manages agent adapters; `native.go` runs shell commands; `inject.go` injects memory/skills into agent context.
+- **Node & task lifecycle**: `core` (the `Core` daemon — wires store,
+  transport, execution loop, delegation/retry/judge, metrics), `entry`
+  (classifies input into answer/tool_call/task/plan, builds prompts,
+  streams output), `scheduler` (queue, node scoring `score.go`, routing
+  `route.go`, multi-hop `chain.go`), `commander` (three execution tiers:
+  `native` shell via `executil`, `agent` via adapters, `manual` approval
+  queue; `inject.go` enriches agent context).
+- **Wire & discovery**: `bus` (WebSocket + HMAC auth, envelopes,
+  payloads), `ledger` (capability cards — what each node advertises),
+  `nodeidentity`, `carddetect`, `cardmut`.
+- **Safety**: `defense` (permission tiers, circuit breaker, scope-drift
+  and loop detection, snapshots), `security` (sandbox, net allowlists,
+  secret redaction, audit log), `guard`.
+- **Memory & skills**: `memory` (USER.md/MEMORY.md layers, isolation
+  wall, daily logs, Dreaming consolidation engine, context injector),
+  `skills` (SKILL.md progressive loading + self-evolution).
+- **Data & platform**: `storage` (SQLite WAL + migrations), `ctxstore`,
+  `sessions`, `projects`, `config`, `log`, `util` (UUIDv7 etc.),
+  `version`, `hwinfo`, `install`, `i18n` (EN/ZH/JA/ES/DE), `reminders`,
+  `updater`, `doctor`, `cliui`, `providers`, `pyexec`, `askengine`,
+  `artifact`, `mdtext`, `mcp`/`mcpserve`, `agents`, `plan`, `auth`
+  (subscription-OAuth token store + PKCE flows).
 
-**Transport & Discovery:**
-- `bus/` — WebSocket transport with HMAC auth (`auth.go`), message envelope (`msg.go`), and payloads (`payloads.go`).
-- `ledger/` — Capability directory: `card.go` defines node capability cards; `capability.go` manages the card registry; `card_load_test.go` tests card parsing.
+## Conventions
 
-**Safety & Defense:**
-- `defense/` — Permission tiers (`permission.go`), circuit breaker (`circuit.go`), scope-drift detection (`scope.go`), infinite-loop detection (`loop.go`), and state snapshots (`snapshot.go`).
-- `security/` — Sandboxing, network allow-lists, secret redaction, audit logging.
-
-**Memory & Skills:**
-- `memory/` — Two-layer memory (USER.md/MEMORY.md) with isolation wall (`isolation.go`), daily task logging (`daily.go`), Dreaming engine (`dream.go`, `dream_scheduler.go`, `dream_diary.go`) for consolidating logs into long-term memory, and memory injection into agent context (`injector.go`).
-- `skills/` — SKILL.md procedural memory with progressive loading and self-evolution tracking.
-
-**Infrastructure:**
-- `storage/` — SQLite with WAL mode (`sqlite.go`) and migrations (`migrate.go`, `migrations.go`).
-- `config/` — YAML configuration loading.
-- `log/` — Structured JSON logging.
-- `util/` — Shared utilities (UUIDv7, etc.).
-- `version/` — Build version info.
-- `hwinfo/` — Hardware detection for capability cards.
-- `i18n/` — Internationalization (5 languages: EN, ZH, JA, ES, DE).
-- `mcp/` — Model Context Protocol stdio server integration.
-- `reminders/` — Scheduled reminders stored in SQLite, fired by scanner, delivered via Web Push and SSE.
-- `updater/` — Self-update mechanism.
-- `install/` — Installation logic (path management, service registration).
-
-### Configuration
-- `config.example.local.yaml` — Example config file
-- `config/capabilities.example-*.yaml` — Example capability cards for different node tiers (desktop, edge)
-- Key config sections: `network` (listen addr, shared secret, peers), `model` (base URL, model name, API key)
-
-### Testing
-- Tests are co-located with source files (`*_test.go`)
-- `testdata/` contains test fixtures (`node-a.yaml`, `node-b.yaml`, `deploy-opi.yaml`)
-- Use `make gate` to run the full merge gate before PRs
-- The `internal/core/` package has extensive integration tests (`e2e_test.go`)
-
-### Agent Adapters
-- `adapters/` — Python scripts for agent adapters (Claude Code, Codex, etc.)
-- Adapters are installed alongside the binary and needed for agent-tier execution
-
-### Web Console
-- `webui/app/` — Preact frontend (built with npm/vite)
-- `webui/panel/` — Go sidecar that embeds the built frontend via go:embed
-- `webui/push/` — Web Push notification support
-- Build with `make web` (requires node/npm)
+- Tests sit next to the code (`foo_test.go`); `internal/core/e2e_test.go`
+  is the heavyweight integration suite.
+- Before opening a PR run `make gate` — it is what CI enforces.
+- User-facing strings go through `internal/i18n` and
+  `webui/app/src/i18n/` — all five locales are maintained in parallel.
+- New agent adapters plug into `adapters/` and speak the `_harness.py`
+  wire contract; `make adapter-test` exercises them.
+- Never log secrets; `internal/security` owns redaction — route new
+  secret-handling through it rather than reinventing.

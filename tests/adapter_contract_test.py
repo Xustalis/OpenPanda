@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Black-box command contracts for the bundled Agent adapters.
 
 These tests never call a real provider. They put a deterministic fake CLI first

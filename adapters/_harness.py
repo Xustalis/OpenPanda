@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Shared adapter runtime for PANDA Commander (pi-style harness layering).
 
 Every adapter under adapters/ is a thin "how do I call this CLI" layer on top

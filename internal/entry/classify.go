@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package entry
 
 import (
@@ -5,6 +7,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -104,9 +107,9 @@ func ClassifyTurnsWithTools(ctx context.Context, c *Client, devices []ledger.Nod
 	}
 	resp, err := c.CompleteTurnsWithTools(ctx, system, turns, specs)
 	if err != nil {
-		return Output{}, WrapAPIError(err)
+		return Output{}, WrapAPIError(err, po.UserLocale)
 	}
-	out, err := resolveResponse(resp, len(specs) > 0)
+	out, err := resolveResponse(resp, len(specs) > 0, po.UserLocale)
 	if err != nil {
 		return Output{}, err
 	}
@@ -139,9 +142,9 @@ func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.No
 	}
 	resp, err := c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta, onReasoning)
 	if err != nil {
-		return Output{}, WrapAPIError(err)
+		return Output{}, WrapAPIError(err, po.UserLocale)
 	}
-	out, err := resolveResponse(resp, len(specs) > 0)
+	out, err := resolveResponse(resp, len(specs) > 0, po.UserLocale)
 	if err != nil {
 		return Output{}, err
 	}
@@ -156,7 +159,11 @@ func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.No
 // toolsOffered tells the DSML path whether this call carried a tool roster —
 // a recovered call may only run when the model could legitimately have made
 // one.
-func resolveResponse(resp Response, toolsOffered bool) (Output, error) {
+func resolveResponse(resp Response, toolsOffered bool, locs ...i18n.Locale) (Output, error) {
+	loc := i18n.Locale("")
+	if len(locs) > 0 {
+		loc = locs[0]
+	}
 	// A tool_use is authoritative: the model chose controlled tools, so route
 	// every call to the registry rather than the text parser. All of them are
 	// returned in Tools — executing just the first made one round trip per
@@ -174,21 +181,21 @@ func resolveResponse(resp Response, toolsOffered bool) (Output, error) {
 		return out, nil
 	}
 	if ContainsDSMLToolCall(resp.Text) {
-		return resolveDSML(resp, toolsOffered)
+		return resolveDSML(resp, toolsOffered, loc)
 	}
 	out, err := ParseOutput(resp.Text)
 	if err != nil {
 		// A validation failure on a structured output is a model error; surface
 		// it rather than degrading silently, so the user can retry.
 		return Output{}, &ClassifyError{
-			UserMsg: "模型输出校验失败：" + err.Error(),
+			UserMsg: i18n.Tf(loc, "entry.err.validation", "err", err.Error()),
 			Err:     err,
 		}
 	}
 	if out.Kind == KindAnswer && resp.Truncated {
 		// The provider stopped at max_tokens; mark the answer so the user knows
 		// it is incomplete rather than silently passing a cut-off reply through.
-		out.Answer += "\n\n[回答因长度上限被截断]"
+		out.Answer += i18n.T(loc, "entry.answer.truncated")
 	}
 	return out, nil
 }

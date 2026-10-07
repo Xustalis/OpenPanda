@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package panel
 
 // GET/POST /api/onboarding — the first-run wizard's persistence surface. The

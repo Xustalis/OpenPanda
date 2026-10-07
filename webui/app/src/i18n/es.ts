@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import type { Messages } from './index'
 
 const es: Messages = {
@@ -268,9 +270,9 @@ const es: Messages = {
   'onboarding.step.model': 'Modelo',
   'onboarding.langTitle': 'Elige tu idioma',
   'onboarding.termsTitle': 'Términos de servicio y licencia',
-  'onboarding.terms1h': '1. Licencia de código abierto (MIT)',
+  'onboarding.terms1h': '1. Licencia de código abierto (AGPL-3.0)',
   'onboarding.terms1b':
-    'OpenPanda es software libre y de código abierto publicado bajo la licencia MIT. Puedes usar, copiar, modificar, combinar, publicar, distribuir, sublicenciar y vender copias — en proyectos personales, académicos o comerciales — siempre que se incluyan el aviso de copyright y el texto de la licencia. La licencia completa se encuentra en el archivo LICENSE y prevalece sobre este resumen.',
+    'OpenPanda es software libre y de código abierto publicado bajo la GNU Affero General Public License v3.0 o posterior (AGPL-3.0-or-later). Puedes ejecutarlo, estudiarlo, modificarlo y redistribuirlo —incluido el uso comercial— siempre que las obras derivadas permanezcan bajo la AGPL y cualquier versión modificada ofrecida a usuarios a través de una red les ofrezca también su código fuente. Existe una licencia comercial para uso en código cerrado; consulta COMMERCIAL.md. La licencia completa se encuentra en el archivo LICENSE y prevalece sobre este resumen.',
   'onboarding.terms2h': '2. Software autoalojado, no un servicio gestionado',
   'onboarding.terms2b':
     'OpenPanda es software que instalas, configuras y operas en tu propio hardware. Los autores no ofrecen alojamiento, niveles de servicio, compromisos de disponibilidad, obligaciones de soporte ni custodia de datos. Tú eres el único responsable de la instalación, operación, mantenimiento, control de acceso, monitorización y seguridad de tu despliegue.',

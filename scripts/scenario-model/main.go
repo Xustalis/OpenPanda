@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Command scenario-model is a deterministic Anthropic-compatible supervisor
 // used by distributed long-task labs. It is not a production model endpoint.
 package main

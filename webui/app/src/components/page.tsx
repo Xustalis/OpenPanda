@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { t } from '../i18n'
 
 // Shared page skeleton (P1: "设计语言统一"). Every view renders the same

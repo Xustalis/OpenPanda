@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Typed client for the panel JSON API. The Bearer token lives in
 // localStorage (entered once at the token gate); a 401 clears it and fires
 // `unauthorized` so the app shell can drop back to the gate.

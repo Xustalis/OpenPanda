@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // OpenPanda service worker: network-first for navigations (index.html must
 // always track the latest build), cache-first for static assets (build
 // output is content-hashed, so new deploys carry new URLs and stale entries
