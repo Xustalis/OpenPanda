@@ -95,9 +95,9 @@ def resolve_argv(cmd):
     if not found:
         return cmd  # let the spawn raise FileNotFoundError honestly
     if found.lower().endswith((".cmd", ".bat")):
-        real = _shim_exe(found)
-        if real:
-            return [real] + cmd[1:]
+        prefix = _shim_exe(found)
+        if prefix:
+            return prefix + cmd[1:]
         comspec = os.environ.get("COMSPEC") or "cmd.exe"
         # /d skips AutoRun; /s keeps the command string verbatim so the
         # list2cmdline quoting reaches the shim's %* intact.
@@ -137,24 +137,52 @@ def _win_which(exe):
 
 
 def _shim_exe(shim_path):
-    """Find the real .exe a .cmd/.bat shim wraps. Bun and several npm
-    packages put `name.exe` beside `name.cmd`; otherwise scan the shim
-    body for a quoted .exe path (%~dp0 resolved)."""
+    """Resolve what a .cmd/.bat shim launches, as an argv prefix, or None.
+
+    Three shapes, in order: a sibling `name.exe` (bun and some npm
+    packages); a quoted .exe path inside the shim body (%~dp0 resolved);
+    or the npm cmd-shim form — `"%_prog%" "%dp0%\\node_modules\\..."`
+    — which becomes [node, script]. That last case matters most: it
+    bypasses cmd.exe and the shim's %* forwarding entirely, so the task
+    prompt rides argv with full fidelity instead of being requoted (and
+    silently dropped) by cmd."""
     sibling = os.path.splitext(shim_path)[0] + ".exe"
     if os.path.isfile(sibling):
-        return sibling
+        return [sibling]
     try:
         with open(shim_path, "r", errors="replace") as fh:
             body = fh.read()
     except OSError:
         return None
     shim_dir = os.path.dirname(shim_path) + os.sep
+
+    def resolve(p):
+        p = p.replace("%~dp0", shim_dir).replace("%dp0%", shim_dir)
+        p = p.replace("\\", os.sep).replace("/", os.sep)
+        return os.path.normpath(p)
+
+    # The npm cmd-shim pattern first: its body also names node.exe, and the
+    # generic .exe scan below would mistake the interpreter for the target.
+    script = None
+    for match in re.finditer(r'"([^"]*%dp0%[^"]*)"', body):
+        cand = resolve(match.group(1))
+        if os.path.isfile(cand) and not cand.lower().endswith(".exe"):
+            script = cand
+            break
+    if script:
+        node = None
+        prog = re.search(r'SET\s+"?_prog=(%dp0%\\[^"\r\n]*?\.exe)"?', body, re.I)
+        if prog:
+            cand = resolve(prog.group(1))
+            if os.path.isfile(cand):
+                node = cand
+        if not node:
+            node = _win_which("node") or "node"
+        return [node, script]
     for match in re.finditer(r'"([^"]+\.exe)"', body):
-        cand = match.group(1).replace("%~dp0", shim_dir)
-        cand = cand.replace("\\", os.sep).replace("/", os.sep)
-        cand = os.path.normpath(cand)
+        cand = resolve(match.group(1))
         if os.path.isfile(cand):
-            return cand
+            return [cand]
     return None
 
 

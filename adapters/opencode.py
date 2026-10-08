@@ -33,6 +33,7 @@ diagnostics live in _harness.py; this file is only the opencode difference:
 model resolution, the command line and the event reduction.
 """
 import os
+import re
 import subprocess
 
 import _harness as harness
@@ -41,6 +42,39 @@ import _harness as harness
 # provider and fails resolution. The built-in free model needs no key or config,
 # so it is the default when no provider/model id is given.
 DEFAULT_MODEL = "opencode/deepseek-v4-flash-free"
+
+_FLAG_PROBE = None
+
+
+def _cli_flags():
+    """Probe `opencode run --help` once per process for the flags this build
+    accepts.
+
+    Flag names drift across builds: the permission flag shipped as
+    --dangerously-skip-permissions before it was renamed --auto, and
+    --format json arrived later. Passing a flag the build does not know
+    makes yargs print its usage line instead of running the prompt — the
+    failure that looked like a lost message ("run opencode with a message")
+    on a real Windows 1.4.3 install while the adapter kept sending 1.18
+    flags. An empty probe result keeps the current-build flags, the common
+    case; the run itself then reports any real problem honestly."""
+    global _FLAG_PROBE
+    if _FLAG_PROBE is not None:
+        return _FLAG_PROBE
+    text = ""
+    try:
+        argv = harness.resolve_argv(["opencode", "run", "--help"])
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=15)
+        text = (proc.stdout or "") + (proc.stderr or "")
+    except Exception:
+        text = ""
+    auto = ""
+    if re.search(r"--auto\b", text):
+        auto = "--auto"
+    elif re.search(r"--dangerously-skip-permissions\b", text):
+        auto = "--dangerously-skip-permissions"
+    _FLAG_PROBE = {"format": bool(re.search(r"--format\b", text)), "auto": auto}
+    return _FLAG_PROBE
 
 
 class ProviderFailure(Exception):
@@ -54,12 +88,17 @@ class Unsupported(Exception):
 def main():
     req = harness.read_request()
     prompt, timeout, cwd = req
+    flags = _cli_flags()
+    auto = [flags["auto"]] if flags["auto"] else []
 
     # Model resolution:
-    # Always pass --auto so non-interactive runs auto-approve tool permissions.
-    # Keep print-logs=false to avoid polluting stdout with internal runtime diagnostics.
-    cmd = ["opencode", "run", "--print-logs=true",
-           "--format", "json", "--auto"]
+    # Always pass the build's permission flag so non-interactive runs
+    # auto-approve tool permissions. Keep print-logs=false to avoid polluting
+    # stdout with internal runtime diagnostics.
+    cmd = ["opencode", "run", "--print-logs=true"] + auto
+    if flags["format"]:
+        cmd += ["--format", "json"]
+    model = ""
     if os.environ.get("OPENPANDA_INJECTED_MODEL") == "1":
         model = os.environ.get("OPENCODE_MODEL") or os.environ.get("OPENAI_MODEL", "")
         if model:
@@ -78,32 +117,25 @@ def main():
         cmd += ["--session", req.resume]
     cmd.append(prompt)
 
+    if not flags["format"]:
+        # A build too old for --format json goes straight to the plain text
+        # mode — the stream attempt could only fail with a usage line.
+        return _run_plain(prompt, cwd, timeout, req.resume, model, auto)
+
     try:
         out = _run_events(cmd, cwd, timeout)
     except ProviderFailure as e:
         harness.emit(False, f"provider failure: {e}", 1)
         return
     except Unsupported:
-        # Older CLI without --format json: one-shot plain text run. The
-        # plain command is rebuilt from scratch (never token-filtered out
-        # of cmd — the prompt itself could match a filtered token). The
-        # default model rides here too: the stream path may have omitted
-        # --model in favor of --auto — which an old CLI just rejected — so
-        # a bare "--model ''" would fail resolution outright.
-        plain = ["opencode", "run", "--print-logs=false", "--auto", "--model", model or DEFAULT_MODEL]
-        if req.resume:
-            plain += ["--session", req.resume]
-        plain.append(prompt)
-        try:
-            returncode, text, err = harness.run_plain(plain, cwd=cwd, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            harness.emit(False, "opencode timed out", 124)
-            return
-        except FileNotFoundError:
-            harness.emit(False, "opencode binary not found", 127)
-            return
-        harness.emit(returncode == 0, text.strip() or err.strip(), returncode)
-        return
+        # The help listed --format but the run rejected it: one-shot plain
+        # text run. The plain command is rebuilt from scratch (never
+        # token-filtered out of cmd — the prompt itself could match a
+        # filtered token) and carries the build's own permission flag and a
+        # resolvable model: the stream path may have omitted --model in
+        # favor of --auto — which an old CLI just rejected — so a bare
+        # "--model ''" would fail resolution outright.
+        return _run_plain(prompt, cwd, timeout, req.resume, model, auto)
     except subprocess.TimeoutExpired:
         harness.emit(False, "opencode timed out", 124)
         return
@@ -114,6 +146,23 @@ def main():
     harness.emit(out["ok"], out["result"], out["exit_code"],
                  tokens=out.get("tokens"), cost=out.get("cost"),
                  usage=out.get("usage"), session_id=out.get("session_id"))
+
+
+def _run_plain(prompt, cwd, timeout, resume, model, auto):
+    """One-shot plain text mode for builds without --format json."""
+    plain = ["opencode", "run", "--print-logs=false"] + auto + ["--model", model or DEFAULT_MODEL]
+    if resume:
+        plain += ["--session", resume]
+    plain.append(prompt)
+    try:
+        returncode, text, err = harness.run_plain(plain, cwd=cwd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        harness.emit(False, "opencode timed out", 124)
+        return
+    except FileNotFoundError:
+        harness.emit(False, "opencode binary not found", 127)
+        return
+    harness.emit(returncode == 0, text.strip() or err.strip(), returncode)
 
 
 def _run_events(cmd, cwd, timeout):
@@ -168,8 +217,9 @@ def _run_events(cmd, cwd, timeout):
         # Nothing parsed came out: either the CLI rejects --format json
         # (older version — degrade) or it failed outright (surface stderr).
         low = err.lower()
-        if returncode != 0 and ("unknown option" in low or "unrecognized" in low
-                                or "invalid value" in low or "unknown flag" in low):
+        if returncode != 0 and ("unknown option" in low or "unknown argument" in low
+                                or "unrecognized" in low or "invalid value" in low
+                                or "unknown flag" in low):
             raise Unsupported()
         msg = err.strip() or f"opencode exited {returncode} without events"
         return {"ok": False, "result": msg, "exit_code": returncode or 1}

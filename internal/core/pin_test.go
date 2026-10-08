@@ -376,6 +376,107 @@ func TestPinWorkDirCommandTaskForwards(t *testing.T) {
 	t.Fatal("pinned command task never executed on the named node")
 }
 
+// TestConsentGrantSignsFinalPayload: the v2 grant's digest binds the payload
+// the executor receives — target node, inputs, project pack. Signing before
+// those are attached (or persisting a grant across a payload rebuild)
+// produces a signature the receiver must reject, which is how authorized
+// tasks with a project silently degraded to restricted runs.
+func TestConsentGrantSignsFinalPayload(t *testing.T) {
+	c := pinCore(t, "grant-node", "x")
+	c.EnsureNodeKey()
+	pub, _, ok := c.nodeKeyPair()
+	if !ok {
+		t.Fatal("no node key")
+	}
+	task := Task{TaskID: "t-grant", Chain: []string{"grant-node"}}
+	p := bus.TaskDelegatePayload{TaskID: "t-grant", Authorized: true, AuthHops: 1, Intent: "x"}
+	c.grantConsentFor(task, &p)
+	if p.AuthSig == "" || p.AuthPub == "" {
+		t.Fatal("origin did not sign its own task's grant")
+	}
+	if !bus.VerifyAuthorization(pub, p.TaskID, true, p.AuthTs, p.ConsentDigest(), p.AuthSig) {
+		t.Fatal("grant does not verify against the payload it was signed over")
+	}
+	// A digest-bound field attached after signing invalidates the grant —
+	// exactly the pre-fix ordering bug.
+	p.Inputs = []bus.ArtifactRef{{Hash: "h", Source: "s"}}
+	if bus.VerifyAuthorization(pub, p.TaskID, true, p.AuthTs, p.ConsentDigest(), p.AuthSig) {
+		t.Fatal("digest binding is broken: post-signing edits must invalidate the grant")
+	}
+	// A relay re-emits the origin's grant verbatim and never mints its own.
+	relay := pinCore(t, "relay-node", "x")
+	relay.EnsureNodeKey()
+	relayTask := Task{TaskID: "t-grant", Chain: []string{"grant-node", "relay-node"},
+		AuthSig: p.AuthSig, AuthPub: p.AuthPub, AuthTs: p.AuthTs}
+	out := bus.TaskDelegatePayload{TaskID: "t-grant", Authorized: true, AuthHops: 1, Intent: "x"}
+	relay.grantConsentFor(relayTask, &out)
+	if out.AuthSig != p.AuthSig {
+		t.Fatal("relay re-signed instead of forwarding the origin's grant")
+	}
+}
+
+// TestAuthorizedQueueForwardCarriesVerifiableGrant: an --authorize task
+// routed through the queue must arrive with a grant the executor verifies
+// and adopts. Pre-fix the origin's row held no signature, the queue path
+// copied the empty grant, the executor dropped the consent, and a tier-2
+// agent task failed closed as "restricted".
+func TestAuthorizedQueueForwardCarriesVerifiableGrant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	root := pinCore(t, "pin-root", "ran-on-root")
+	if err := root.Register(ctx); err != nil {
+		t.Fatalf("register root: %v", err)
+	}
+	go func() { _ = root.Listen(ctx, "127.0.0.1:18341") }()
+	time.Sleep(150 * time.Millisecond)
+
+	leafCard := ledger.Card{
+		Device: "pin-leaf", ResourceClass: "Standard",
+		Native:   []ledger.NativeAbility{{ID: "pin:probe", Command: "echo", Args: []string{"ran-on-leaf"}}},
+		Capacity: ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
+	}
+	if err := ledger.Register(root.db, leafCard, "pin-leaf", 5); err != nil {
+		t.Fatalf("register stale leaf: %v", err)
+	}
+	if err := ledger.MarkOffline(root.db, "pin-leaf"); err != nil {
+		t.Fatalf("mark offline: %v", err)
+	}
+
+	root.StartQueueScheduler(ctx)
+	task, _, err := root.Submit(ctx, TaskInput{
+		Title: "consented probe", Intent: "run the marker",
+		Requires: []string{"pin:probe"}, TargetNode: "pin-leaf",
+		Authorized: true,
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	leaf := pinCore(t, "pin-leaf", "ran-on-leaf")
+	if err := leaf.Register(ctx); err != nil {
+		t.Fatalf("register leaf: %v", err)
+	}
+	go func() { _ = leaf.Listen(ctx, "127.0.0.1:18342") }()
+	time.Sleep(150 * time.Millisecond)
+	if err := leaf.DialPeer(ctx, "127.0.0.1:18341"); err != nil {
+		t.Fatalf("leaf dial: %v", err)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		lt, err := leaf.store.Get(ctx, task.TaskID)
+		if err == nil && Terminal(lt.State) {
+			if !lt.Authorized {
+				t.Fatalf("executor did not adopt the consent: authorized=%v result=%s", lt.Authorized, lt.ResultJSON)
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("task never reached the leaf")
+}
+
 // TestPinDeclineIsTerminal: the pinned node's refusal is the answer — the task
 // fails with who-refused, it does not shop for a substitute. Two capable
 // leaves; the pin names the saturated one.

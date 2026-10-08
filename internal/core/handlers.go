@@ -3045,14 +3045,6 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	if t.AgentSessionID != "" && t.AgentSessionNode == decision.Target {
 		payload.ResumeSessionID = t.AgentSessionID
 	}
-	// Hop-limited consent (S2-8): a re-route is one direct dispatch, so the
-	// consent on record covers exactly the receiving hop and must not walk
-	// further through a forwarding sub-scheduler. The stored grant rides along
-	// so the consent the origin signed reaches the executor verifiably intact.
-	if t.Authorized {
-		payload.AuthHops = 1
-		payload.AuthSig, payload.AuthPub, payload.AuthTs = t.AuthSig, t.AuthPub, t.AuthTs
-	}
 	// A re-routed project task needs its context as much as the first attempt did.
 	c.attachProject(ctx, &payload, t.Project)
 	// Same for an ad-hoc file task: the tree travels with the re-route or the
@@ -3064,6 +3056,15 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	}
 	if t.ContextHash != "" {
 		payload.ContextLevel = "pointer"
+	}
+	// Hop-limited consent (S2-8): a re-route is one direct dispatch, so the
+	// consent covers exactly the receiving hop and must not walk further
+	// through a forwarding sub-scheduler. Signed after the attaches — the
+	// grant's digest binds the final payload — and re-emitted verbatim when
+	// this node is only relaying another origin's task (P2-8).
+	if t.Authorized {
+		payload.AuthHops = 1
+		c.grantConsentFor(t, &payload)
 	}
 	if err := c.dispatchDelegated(ctx, taskID, decision.Target, payload, t.Chain); err != nil {
 		c.logger.Warn("reroute: forward failed", "task", taskID, "target", decision.Target, "err", err)

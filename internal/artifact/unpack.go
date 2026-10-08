@@ -145,6 +145,14 @@ func unpack(r io.Reader, dst string, limit, minFree int64, skip map[string]bool)
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return Manifest{}, fmt.Errorf("artifact: mkdir %s: %w", filepath.Dir(rel), err)
 			}
+			// Same read-only trap as writeRegular: Windows refuses to remove
+			// a read-only file (the error is deliberately ignored here), and
+			// the following Symlink then dies "file exists" on exactly the
+			// re-extracted git trees this path serves. Clear the attribute
+			// first so the replace can land on every platform.
+			if _, lerr := os.Lstat(target); lerr == nil {
+				_ = os.Chmod(target, 0o666)
+			}
 			_ = os.Remove(target)
 			if err := os.Symlink(hdr.Linkname, target); err != nil {
 				return Manifest{}, fmt.Errorf("artifact: symlink %s: %w", rel, err)
@@ -271,6 +279,15 @@ func writeRegular(r io.Reader, path string, mode os.FileMode, size int64) error 
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
 		return err
+	}
+	// A destination that already exists may be read-only — git marks every
+	// object file read-only, and a re-extraction of the same tree lands
+	// exactly on those — and Windows refuses the overwrite rename with
+	// ACCESS_DENIED in that case. Clearing the attribute first keeps the
+	// atomic-rename contract on every platform: the chmod touches only the
+	// doomed old inode, the rename still installs tmp's mode and contents.
+	if _, err := os.Stat(path); err == nil {
+		_ = os.Chmod(path, mode|0o200)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)

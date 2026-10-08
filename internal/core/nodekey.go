@@ -215,6 +215,25 @@ func (c *Core) signConsentGrant(p *bus.TaskDelegatePayload) {
 	p.AuthPub = hex.EncodeToString(pub)
 }
 
+// grantConsentFor mints or re-emits the consent grant on an outbound
+// delegate. The v2 digest binds the FINAL payload — target node, inputs,
+// project pack — so the origin must sign after everything is attached: a
+// signature minted before the attaches (or a grant persisted across a
+// payload rebuild) is one the receiver must reject, which is exactly how
+// authorized tasks with a project silently degraded to restricted runs. A
+// relay never re-signs: it forwards the origin's stored grant verbatim,
+// because only the origin's key can mint consent for its task (P2-8).
+func (c *Core) grantConsentFor(t Task, p *bus.TaskDelegatePayload) {
+	if !p.Authorized {
+		return
+	}
+	if len(t.Chain) == 0 || scheduler.SameRuntimeIdentity(t.Chain[0], c.nodeID) {
+		c.signConsentGrant(p)
+		return
+	}
+	p.AuthSig, p.AuthPub, p.AuthTs = t.AuthSig, t.AuthPub, t.AuthTs
+}
+
 // consentGrantValid decides whether the Authorized flag on an inbound delegate
 // may be adopted. The grant is a single object: a payload that carries some
 // but not all of (AuthSig, AuthPub, AuthTs) is a torn grant — fields stripped

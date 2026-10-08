@@ -319,14 +319,6 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			AttemptID:     t.AttemptID,
 			Authorized:    in.Authorized,
 		}
-		// Hop-limited consent (S2-8): the origin mints its consent with a
-		// bounded hop count so it decays as the task is relayed onward. The
-		// Ed25519 grant travels beside it so the flag a relay cannot mint for
-		// another node verifies at the executor (P2-8).
-		if in.Authorized {
-			payload.AuthHops = defaultConsentHops
-			c.signConsentGrant(&payload)
-		}
 		// The project travels with the task: its memory inline, its tree as an
 		// artifact reference. Without this the executor gets a bare name it cannot
 		// resolve against anything local.
@@ -334,6 +326,15 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 		// The ad-hoc sibling of the same rule: a file task outside any project
 		// still ships its work tree, or the remote agent edits nothing.
 		c.attachWorktree(ctx, &payload, in)
+		// Hop-limited consent (S2-8): the origin mints its consent with a
+		// bounded hop count so it decays as the task is relayed onward. The
+		// Ed25519 grant is signed LAST — its digest binds the final payload,
+		// and a signature taken before the attaches above is one the receiver
+		// must reject (P2-8).
+		if in.Authorized {
+			payload.AuthHops = defaultConsentHops
+			c.signConsentGrant(&payload)
+		}
 		// Last line of the file-context guard: the attach above legitimately
 		// produces nothing when the task's directory is not a repo (or the
 		// pack failed). Forwarding that blind copy loses to just running it
