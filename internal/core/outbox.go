@@ -342,6 +342,15 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 		defer c.outboxFlushDone(key)
 		flushCtx := context.WithoutCancel(ctx)
 		for _, e := range taskEntries {
+			// The local row died while the task was parked — a user cancel, a
+			// decline, an orphan rescue. Custody must not resurrect it:
+			// delivering now would run work the mesh already declared dead.
+			if lt, lerr := c.store.Get(flushCtx, e.taskID); lerr == nil && Terminal(lt.State) {
+				c.logger.Info("outbox: local task is terminal, dropping parked delivery",
+					"task", e.taskID, "peer", e.peer, "state", lt.State)
+				c.taskOutboxDropKey(flushCtx, e.peer, e.taskID)
+				continue
+			}
 			// §8.2 TTL: a bundle parked past its deadline is dead — delivering
 			// it now would run work whose result the mesh already abandoned.
 			// Drop the entry and expire the local copy so it stops occupying
@@ -557,6 +566,37 @@ func (c *Core) taskOutboxPersist(ctx context.Context, peer string, p bus.TaskDel
 		return
 	}
 	c.logger.Info("task_outbox: task parked for DTN redelivery", "task", p.TaskID, "peer", peer)
+}
+
+// taskOutboxPending reports whether a parked forward for taskID still sits in
+// this node's custody. A parked task is awaiting delivery, not orphaned — the
+// rescue sweep must leave it alone regardless of the state a restart left its
+// row in.
+func (c *Core) taskOutboxPending(ctx context.Context, taskID string) bool {
+	if c.db == nil || taskID == "" {
+		return false
+	}
+	var n int
+	if err := c.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM task_outbox WHERE task_id = ?`, taskID).Scan(&n); err != nil {
+		return false
+	}
+	return n > 0
+}
+
+// taskOutboxTTL returns the latest delivery deadline among parked custody
+// rows for taskID — the bound a synchronous waiter should honor while a
+// pinned task waits out an unreachable link. 0 means nothing parked.
+func (c *Core) taskOutboxTTL(ctx context.Context, taskID string) int64 {
+	if c.db == nil || taskID == "" {
+		return 0
+	}
+	var ttl int64
+	if err := c.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(ttl), 0) FROM task_outbox WHERE task_id = ?`, taskID).Scan(&ttl); err != nil {
+		return 0
+	}
+	return ttl
 }
 
 // taskOutboxDrop removes a delivered task so it is not resent.

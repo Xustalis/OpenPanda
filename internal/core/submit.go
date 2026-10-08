@@ -45,15 +45,24 @@ type TaskInput struct {
 	RepoPath     string // file-type repo root for auto-packing (MVP: CLI not yet wired)
 	// WorkDir pins execution to the originating workspace. It is persisted before
 	// routing/execution so concurrent callers never swap the Core's ambient work dir.
-	WorkDir       string
-	Intent        string
-	SpecJSON      string
-	Requires      []string
-	PreferredNode string // user-named node (task spec scope); routing prefers it when it can match
-	Complexity    float64
-	Risk          string
-	ResourceJSON  string
-	Authorized    bool // user consented to executing tier-2 (irreversible) commands
+	WorkDir  string
+	Intent   string
+	SpecJSON string
+	Requires []string
+	// PreferredNode is a soft routing hint: the scorer's user-priority term
+	// and RouteAtP's capable-match shortcut both weigh it, but an incapable
+	// or unavailable node simply loses — the task still lands somewhere.
+	PreferredNode string
+	// TargetNode is a hard pin: the task runs on the named node, waits for
+	// its link, or fails with the reason — it never silently reroutes to a
+	// higher-scored candidate. Any user-specified destination (spec.node,
+	// --nodes, --preferred, a plan stage's node, an agent's delegate target)
+	// lands here, because "on Mac" is an instruction, not a suggestion.
+	TargetNode   string
+	Complexity   float64
+	Risk         string
+	ResourceJSON string
+	Authorized   bool // user consented to executing tier-2 (irreversible) commands
 	// ClassifyKind carries the entry model's classification ("task") for trace
 	// emission. Empty means the input did not come from a classified ask (a
 	// direct CLI submission, a delegated peer task): no classify_result event
@@ -84,17 +93,31 @@ func (in TaskInput) detail() TaskDetail {
 			}
 		}
 	}
-	if in.PreferredNode != "" {
+	if in.TargetNode != "" || in.PreferredNode != "" {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(specJSON), &m); err == nil && m != nil {
-			if _, ok := m["node"]; !ok {
-				m["node"] = in.PreferredNode
-				if b, err := json.Marshal(m); err == nil {
-					specJSON = string(b)
+			// "node" is the hard pin key; "preferred" keeps the soft hint.
+			if in.TargetNode != "" {
+				if _, ok := m["node"]; !ok {
+					m["node"] = in.TargetNode
 				}
 			}
+			if in.PreferredNode != "" {
+				if _, ok := m["preferred"]; !ok {
+					m["preferred"] = in.PreferredNode
+				}
+			}
+			if b, err := json.Marshal(m); err == nil {
+				specJSON = string(b)
+			}
 		} else if specJSON == "" {
-			m = map[string]any{"node": in.PreferredNode}
+			m := map[string]any{}
+			if in.TargetNode != "" {
+				m["node"] = in.TargetNode
+			}
+			if in.PreferredNode != "" {
+				m["preferred"] = in.PreferredNode
+			}
 			if in.UserLocale != "" {
 				m["user_locale"] = string(in.UserLocale)
 			}
@@ -148,8 +171,25 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 	chain := []string{c.nodeID}
 	employees := c.onlineEmployees(ctx)
 	localMatch := c.localMatch()
-	decision := scheduler.RouteP(c.nodeID, chain, employees, localMatch, in.Requires,
-		resourceRequirement(in.ResourceJSON), in.PreferredNode, in.Project)
+	var decision scheduler.Decision
+	pinned := strings.TrimSpace(in.TargetNode) != ""
+	if pinned {
+		// A user-named node is a hard pin: the task runs there, waits for the
+		// link, or fails with the reason — it never falls back to the
+		// highest-scored candidate. See routePinned.
+		decision = c.routePinned(ctx, in.TargetNode, chain, in.Requires, resourceRequirement(in.ResourceJSON))
+		if decision.Action == scheduler.ActionForward {
+			// Carry the stable identity on the wire (k:<pubkey> when the peer
+			// proved one, else its instance id) so downstream hops and the
+			// executor's own pin check match by identity — immune to both the
+			// name collisions that make display-name routing unreliable and
+			// the instance-id churn of a target that restarted mid-flight.
+			in.TargetNode = c.stablePeerID(ctx, decision.Target)
+		}
+	} else {
+		decision = scheduler.RouteP(c.nodeID, chain, employees, localMatch, in.Requires,
+			resourceRequirement(in.ResourceJSON), in.PreferredNode, in.Project)
+	}
 
 	// A file task with no project used to be forced local whenever this node
 	// could run it: the payload carried no tree, so a forwarded copy ran blind
@@ -247,11 +287,16 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			t.State = StateQueued
 			t.Scheduled = true
 			c.queueWake()
+			receipt := fmt.Sprintf("dispatched to asynchronous DTN queue (target link: %s)", linkState)
+			if pinned {
+				receipt = fmt.Sprintf("pinned to %s — queued until the link is live (link: %s)",
+					decision.Target, linkState)
+			}
 			return t, bus.TaskResultPayload{
 				TaskID:    t.TaskID,
 				AttemptID: t.AttemptID,
 				State:     StateQueued,
-				Stdout:    fmt.Sprintf("dispatched to asynchronous DTN queue (target link: %s)", linkState),
+				Stdout:    receipt,
 			}, nil
 		}
 
@@ -267,6 +312,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			Requires:      in.Requires,
 			Chain:         chain,
 			PreferredNode: in.PreferredNode,
+			TargetNode:    in.TargetNode,
 			Complexity:    in.Complexity,
 			Risk:          in.Risk,
 			ResourceJSON:  in.ResourceJSON,
@@ -292,7 +338,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 		// produces nothing when the task's directory is not a repo (or the
 		// pack failed). Forwarding that blind copy loses to just running it
 		// here, so the forward only stands when the tree actually travels.
-		if in.Project == "" && in.PreferredNode == "" && in.ContextType == "file" &&
+		if in.Project == "" && in.PreferredNode == "" && in.TargetNode == "" && in.ContextType == "file" &&
 			c.localMatch()(in.Requires) && len(payload.Inputs) == 0 {
 			c.logger.Info("keeping file task local: no context to forward", "task", t.TaskID)
 			return c.runLocal(ctx, t, in)
@@ -307,6 +353,13 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 		}
 		return c.waitRemoteResult(ctx, t, ch, "delegation")
 	default:
+		// A pin decline names its own reason ("pinned node X is not in the
+		// directory"); the generic wrapper would bury it under a capability
+		// framing that was never evaluated.
+		if pinned {
+			c.failLocal(ctx, t.TaskID, fmt.Errorf("%s", decision.Reason))
+			return t, bus.TaskResultPayload{}, errors.New(decision.Reason)
+		}
 		return t, bus.TaskResultPayload{}, fmt.Errorf("no capability: %s", decision.Reason)
 	}
 }
@@ -367,7 +420,16 @@ func (c *Core) waitRemoteResult(ctx context.Context, cur Task, ch <-chan bus.Tas
 			}
 			deadline := t.LeaseExpires
 			if deadline <= 0 {
-				deadline = waitStart.Unix() + int64(c.lease().Seconds())
+				// The row may be parked in the outbox holding for the peer's
+				// link — a pinned task carries no lease there, and custody's
+				// ttl is its honest bound. The flush drops a stale row and
+				// MarkExpired terminalizes this task, ending the wait the
+				// same way a lapsed lease does.
+				if ttl := c.taskOutboxTTL(ctx, taskID); ttl > 0 {
+					deadline = ttl
+				} else {
+					deadline = waitStart.Unix() + int64(c.lease().Seconds())
+				}
 			}
 			if deadline < time.Now().Unix() {
 				// The stamped lease actually lapsed: the executor's beats

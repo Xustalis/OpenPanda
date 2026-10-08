@@ -36,6 +36,11 @@ const (
 	writeWait = 10 * time.Second
 )
 
+// KeepaliveTimeout exposes pongWait for the connection registry: a conn with
+// no inbound proof-of-life for this long is dead even if its socket has not
+// noticed, which is the bound same-id duplicate arbitration uses.
+func KeepaliveTimeout() time.Duration { return pongWait }
+
 // defaultHelloTimeout is how long an inbound connection has to send a valid
 // hello before the server drops it. This bounds slow-/never-handshake DoS.
 const defaultHelloTimeout = 10 * time.Second
@@ -103,6 +108,11 @@ type Conn struct {
 	// rttNanos is the last measured ping/pong round trip (§4.1 link metric):
 	// nanoseconds, zero until the first pong answers a timestamped ping.
 	rttNanos atomic.Int64
+	// lastSeen is the unixnano timestamp of the last inbound proof-of-life —
+	// a pong, or any successfully read frame. Peer-registration uses it to
+	// tell a live same-id duplicate conn from a half-dead socket nobody has
+	// noticed yet: only the latter may be replaced.
+	lastSeen atomic.Int64
 }
 
 // SetPeerID binds the authenticated node id to this connection (set once, at
@@ -145,6 +155,7 @@ func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
 	ws.SetReadLimit(readLimit)
 	c := &Conn{ws: ws, logger: logger, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	ws.SetPongHandler(func(data string) error {
+		c.lastSeen.Store(time.Now().UnixNano())
 		// A ping written by writeLoop carries its send time as 8 bytes of
 		// big-endian nanos; answering it gives the link its RTT sample.
 		if len(data) == 8 {
@@ -158,6 +169,7 @@ func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
 	})
 	// Initial deadline so a peer that never responds is detected promptly.
 	_ = ws.SetReadDeadline(time.Now().Add(pongWait))
+	c.lastSeen.Store(time.Now().UnixNano())
 	for i := range c.lanes {
 		c.lanes[i] = make(chan queuedWrite, qosLaneCap)
 	}
@@ -297,9 +309,37 @@ func (c *Conn) Send(v any) error {
 }
 
 // ReadJSON reads one JSON message into v. Callers must set a read deadline
-// if they want a timeout.
+// if they want a timeout. A successful read is inbound proof-of-life, so it
+// refreshes the liveness stamp the same way a received pong does.
 func (c *Conn) ReadJSON(v any) error {
-	return c.ws.ReadJSON(v)
+	err := c.ws.ReadJSON(v)
+	if err == nil {
+		c.lastSeen.Store(time.Now().UnixNano())
+	}
+	return err
+}
+
+// SeenWithin reports whether the conn produced inbound proof-of-life within
+// the last d. A conn silent longer than that is treated as dead even if its
+// socket has not noticed yet (the half-dead-TCP case, P1-7).
+func (c *Conn) SeenWithin(d time.Duration) bool {
+	last := c.lastSeen.Load()
+	return last > 0 && time.Since(time.Unix(0, last)) < d
+}
+
+// Live reports whether this conn is still demonstrably alive: inbound
+// proof-of-life within the keepalive bound. Same-id duplicate sessions use
+// it for arbitration — a live incumbent keeps the peer edge instead of being
+// swapped out every time a sibling process dials.
+func (c *Conn) Live() bool {
+	return c.SeenWithin(pongWait)
+}
+
+// LiveWithin is SeenWithin under a caller-chosen bound: the registry's
+// arbitration window is a Core-level knob (tests shrink it; zero means
+// "never trust the incumbent"), so arbitration consults this form.
+func (c *Conn) LiveWithin(d time.Duration) bool {
+	return c.SeenWithin(d)
 }
 
 // RTT returns the last measured ping/pong round trip on this link, or 0

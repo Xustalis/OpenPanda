@@ -41,6 +41,8 @@ This module never prints secrets.
 """
 import json
 import os
+import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -67,6 +69,93 @@ if sys.platform == "win32":
     GROUP_KW = {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
 else:
     GROUP_KW = {"start_new_session": True}
+
+
+def resolve_argv(cmd):
+    """Resolve cmd[0] to something CreateProcess can actually run on
+    Windows; POSIX returns cmd untouched.
+
+    npm/bun-installed agent CLIs land on PATH as `name.cmd` shims. A bare
+    Popen([name, ...]) then raises FileNotFoundError for a binary the
+    user can plainly run (CreateProcess has no PATHEXT search), and even
+    when a shim does run, its %* forwarding mangles quoted/newline
+    arguments — the task prompt rides argv, so the CLI errors out with
+    its usage line instead of doing work. Resolve through PATH (plus the
+    global bin dirs a service-session PATH drops), prefer the real .exe
+    the shim wraps, and fall back to COMSPEC invocation with
+    list2cmdline quoting.
+    """
+    if sys.platform != "win32" or not cmd:
+        return cmd
+    exe = cmd[0]
+    if os.path.isfile(exe):
+        found = exe
+    else:
+        found = _win_which(exe)
+    if not found:
+        return cmd  # let the spawn raise FileNotFoundError honestly
+    if found.lower().endswith((".cmd", ".bat")):
+        real = _shim_exe(found)
+        if real:
+            return [real] + cmd[1:]
+        comspec = os.environ.get("COMSPEC") or "cmd.exe"
+        # /d skips AutoRun; /s keeps the command string verbatim so the
+        # list2cmdline quoting reaches the shim's %* intact.
+        return [comspec, "/d", "/s", "/c",
+                subprocess.list2cmdline([found] + cmd[1:])]
+    return [found] + cmd[1:]
+
+
+def _win_which(exe):
+    """shutil.which plus the npm/bun/scoop global-bin dirs a headless
+    session's PATH often drops (Task Scheduler does not inherit the
+    interactive user's environment)."""
+    try:
+        found = shutil.which(exe)
+    except Exception:
+        found = None
+    if found:
+        return found
+    dirs = []
+    appdata = os.environ.get("APPDATA")
+    profile = os.environ.get("USERPROFILE")
+    programfiles = os.environ.get("ProgramFiles")
+    if appdata:
+        dirs.append(os.path.join(appdata, "npm"))
+    if profile:
+        dirs += [os.path.join(profile, "AppData", "Roaming", "npm"),
+                 os.path.join(profile, ".bun", "bin"),
+                 os.path.join(profile, "scoop", "shims")]
+    if programfiles:
+        dirs.append(os.path.join(programfiles, "nodejs"))
+    for d in dirs:
+        for ext in (".exe", ".cmd", ".bat"):
+            cand = os.path.join(d, exe + ext)
+            if os.path.isfile(cand):
+                return cand
+    return None
+
+
+def _shim_exe(shim_path):
+    """Find the real .exe a .cmd/.bat shim wraps. Bun and several npm
+    packages put `name.exe` beside `name.cmd`; otherwise scan the shim
+    body for a quoted .exe path (%~dp0 resolved)."""
+    sibling = os.path.splitext(shim_path)[0] + ".exe"
+    if os.path.isfile(sibling):
+        return sibling
+    try:
+        with open(shim_path, "r", errors="replace") as fh:
+            body = fh.read()
+    except OSError:
+        return None
+    shim_dir = os.path.dirname(shim_path) + os.sep
+    for match in re.finditer(r'"([^"]+\.exe)"', body):
+        cand = match.group(1).replace("%~dp0", shim_dir)
+        cand = cand.replace("\\", os.sep).replace("/", os.sep)
+        cand = os.path.normpath(cand)
+        if os.path.isfile(cand):
+            return cand
+    return None
 
 
 def _parse_request(raw, default_timeout):
@@ -392,7 +481,7 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
     (the tree is already dead), not via an exception.
     """
     proc = subprocess.Popen(
-        cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        resolve_argv(cmd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True, env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
     )
@@ -467,7 +556,8 @@ def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, input=None):
     working.
     """
     proc = subprocess.Popen(
-        cmd, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+        resolve_argv(cmd),
+        stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True, env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
@@ -543,7 +633,7 @@ def spawn(cmd, cwd=None):
     binary is missing.
     """
     proc = subprocess.Popen(
-        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        resolve_argv(cmd), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True, env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
     )

@@ -106,6 +106,10 @@ type Core struct {
 	// the base delay between task retries, doubling each retry.
 	sleep        func(time.Duration)
 	retryBackoff time.Duration
+	// peerLivenessWindow is the bound ensurePeer's same-id duplicate
+	// arbitration trusts an incumbent conn for: zero disables arbitration
+	// (legacy always-replace), the default is the transport keepalive bound.
+	peerLivenessWindow time.Duration
 	// auditLog records high-risk operations (Tier-2 exec/denial, circuit trips)
 	// for later review (P3-32).
 	auditLog *security.Audit
@@ -389,6 +393,8 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		leaseTimeout:    defaultDelegateTimeout,
 		sleep:           time.Sleep,
 		retryBackoff:    time.Second,
+
+		peerLivenessWindow: bus.KeepaliveTimeout(),
 	}
 	// The commander needs at least one routable ability; a zero card yields a
 	// router that declines everything. Actuators count: a hardware-only edge
@@ -955,6 +961,9 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 		var sum ledger.CapabilitySummary
 		if err := json.Unmarshal(p.Card, &sum); err != nil {
 			c.logger.Warn("bad capability card in heartbeat", "peer", env.From, "err", err)
+		} else if ledger.SessionRowID(env.From) {
+			// A session id is a client seat, not a fleet member — storing its
+			// card would leave a permanent ghost row per session.
 		} else if err := ledger.UpsertRemote(c.db, env.From, sanitizeSummary(sum)); err != nil {
 			c.logger.Warn("upsert remote card from heartbeat", "peer", env.From, "err", err)
 		} else {
@@ -1454,6 +1463,20 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
 			c.logger.Info("peer connection deduped", "peer", id)
 			return false
 		}
+	} else if old != nil && c.peerLivenessWindow > 0 && old.conn.LiveWithin(c.peerLivenessWindow) {
+		// Same direction, incumbent still demonstrably alive: the new conn is
+		// a same-id SIBLING SESSION, not a reconnect — a CLI/TUI engine shares
+		// the daemon's stable node id, so every `panda` invocation used to
+		// kick the daemon's edge conn here (and the daemon's redial kicked
+		// the CLI's), producing the periodic connect/disconnect flap that
+		// stranded in-flight delegates. A live incumbent keeps the edge; the
+		// newcomer still got its identity-binding hello reply above, so the
+		// losing side quiesces the same way a mutual-dial loser does. Only a
+		// conn silent past the keepalive bound falls through to replacement,
+		// preserving the half-dead-socket takeover this branch exists for.
+		c.mu.Unlock()
+		c.logger.Info("peer connection held by live same-id session", "peer", id)
+		return false
 	}
 	c.peers[id] = &Peer{id: id, conn: conn}
 	n := len(c.peers)
@@ -1757,7 +1780,9 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		return
 	}
 	// Ingest the peer's advertised capability card so routing can consider it.
-	if len(p.Card) > 0 {
+	// A session-shaped id (name-8hex) is a client seat dialing in, not a fleet
+	// node: writing its card would accumulate one ghost row per session.
+	if len(p.Card) > 0 && !ledger.SessionRowID(p.NodeID) {
 		var sum ledger.CapabilitySummary
 		if err := json.Unmarshal(p.Card, &sum); err != nil {
 			c.logger.Warn("bad capability card in hello", "peer", p.NodeID, "err", err)

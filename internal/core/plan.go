@@ -865,8 +865,18 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 // whatever spawned it. A local/declined child lands on the queue scheduler,
 // which runs it here (or re-routes via forwardScheduled on the next pass).
 func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) error {
-	decision := scheduler.RouteP(c.nodeID, child.Chain, c.onlineEmployees(ctx), c.localMatch(),
-		in.Requires, resourceRequirement(in.ResourceJSON), in.PreferredNode, in.Project)
+	var decision scheduler.Decision
+	if strings.TrimSpace(in.TargetNode) != "" {
+		// An agent-named destination is a hard pin like a user-named one:
+		// "delegate this to the GPU box" must land there or fail honestly.
+		decision = c.routePinned(ctx, in.TargetNode, child.Chain, in.Requires, resourceRequirement(in.ResourceJSON))
+		if decision.Action == scheduler.ActionForward {
+			in.TargetNode = c.stablePeerID(ctx, decision.Target)
+		}
+	} else {
+		decision = scheduler.RouteP(c.nodeID, child.Chain, c.onlineEmployees(ctx), c.localMatch(),
+			in.Requires, resourceRequirement(in.ResourceJSON), in.PreferredNode, in.Project)
+	}
 	if decision.Action == scheduler.ActionForward {
 		payload := bus.TaskDelegatePayload{
 			TaskID:           child.TaskID,
@@ -880,6 +890,7 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 			Requires:         in.Requires,
 			Chain:            child.Chain,
 			PreferredNode:    in.PreferredNode,
+			TargetNode:       in.TargetNode,
 			Complexity:       in.Complexity,
 			Risk:             in.Risk,
 			ResourceJSON:     in.ResourceJSON,
@@ -1122,14 +1133,14 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 	// it parks in review and the user decides in the foreground — so an agent
 	// cannot launder consent (or a fresh AuthHops budget) through PANDA_DELEGATE.
 	in := TaskInput{
-		Title:         dr.Title,
-		Intent:        dr.Intent,
-		Requires:      dr.Requires,
-		PreferredNode: dr.Node,
-		Project:       parent.Project,
-		Transport:     parent.Transport,
-		DeadlineUnix:  parent.DeadlineUnix,
-		UserLocale:    parent.GetUserLocale(),
+		Title:        dr.Title,
+		Intent:       dr.Intent,
+		Requires:     dr.Requires,
+		TargetNode:   dr.Node,
+		Project:      parent.Project,
+		Transport:    parent.Transport,
+		DeadlineUnix: parent.DeadlineUnix,
+		UserLocale:   parent.GetUserLocale(),
 	}
 	if in.Title == "" {
 		in.Title = dr.Intent

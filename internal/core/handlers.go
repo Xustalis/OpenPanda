@@ -276,8 +276,18 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	}
 
 	required := delegateRequired(p)
-	decision := scheduler.RouteP(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), required,
-		resourceRequirement(p.ResourceJSON), p.PreferredNode, p.Project)
+	var decision scheduler.Decision
+	if strings.TrimSpace(p.TargetNode) != "" {
+		// The pin is re-evaluated per hop: resolving to self accepts and runs
+		// the task here; resolving onward forwards toward the named node;
+		// resolving nowhere declines honestly. What it never does is fall
+		// through to scored ranking — the pin names the destination, not a
+		// preference.
+		decision = c.routePinned(ctx, p.TargetNode, chain, required, resourceRequirement(p.ResourceJSON))
+	} else {
+		decision = scheduler.RouteP(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), required,
+			resourceRequirement(p.ResourceJSON), p.PreferredNode, p.Project)
+	}
 
 	switch decision.Action {
 	case scheduler.ActionLocal:
@@ -711,6 +721,13 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 		return fmt.Errorf("dispatch: %w", err)
 	}
 	dtn := p.Transport == "dtn"
+	// A hard-pinned task shares DTN's delivery contract: the named peer is the
+	// only acceptable destination, so a dead link means park-and-wait — and a
+	// parked copy must hold no lease. An expiry ticking while custody still
+	// intends delivery would fail the local row, and the real result would
+	// land on a terminal task after the peer's reconnect.
+	pinned := p.TargetNode != ""
+	parkable := dtn || pinned
 	// The deadline a parked bundle or a deferred push lives under: the wire's
 	// absolute TTL, else the default DTN lifetime. Computed once here because
 	// both the fat-bundle attachment below and the send-failure park use it.
@@ -718,13 +735,15 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 	if pushDeadline <= 0 {
 		pushDeadline = time.Now().Add(defaultDTNTTL).Unix()
 	}
+	park := parkable && !c.sendableTo(target)
 	// Stamp a lease on the local copy so a dead executor is detected and the
 	// failure propagated, instead of leaving this copy dispatched forever (D3).
 	// The timeout is carried on the wire so every hop inherits the same
 	// deadline. A DTN task is exempt (§8.2): a store-and-forward path has no
 	// heartbeat to renew against, so the absolute DeadlineUnix is its bound.
+	// A pinned task about to be parked is exempt for the same reason.
 	timeoutMS := p.TimeoutMS
-	if !dtn {
+	if !park && !dtn {
 		if timeoutMS <= 0 {
 			timeoutMS = c.lease().Milliseconds()
 			p.TimeoutMS = timeoutMS
@@ -732,7 +751,7 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 		if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
 			return fmt.Errorf("set lease: %w", err)
 		}
-	} else {
+	} else if dtn {
 		// Inline what fits the envelope; everything else becomes a chunked
 		// push obligation the flush drains once the link carries the delegate.
 		for _, h := range c.attachFatBundle(ctx, &p) {
@@ -749,10 +768,27 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 		return err
 	}
 	env.To = target
-	if err := c.sendTo(target, env); err != nil {
-		c.logger.Info("delegation send failed or target offline; parking in task_outbox for DTN relay",
-			"target", target, "task", taskID, "err", err)
-		c.taskOutboxPersist(ctx, target, p, "dtn", pushDeadline)
+	delivered := false
+	var sendErr error
+	if !park {
+		sendErr = c.sendTo(target, env)
+		delivered = sendErr == nil
+	}
+	if !delivered {
+		kind := "dtn"
+		if pinned && !dtn {
+			kind = "pin"
+			if !park {
+				// The link died between the sendable check and the send: take
+				// the lease stamped above back off before custody takes over.
+				if cerr := c.store.ClearLease(ctx, taskID); cerr != nil {
+					c.logger.Warn("clear lease for parked pinned task", "task", taskID, "err", cerr)
+				}
+			}
+		}
+		c.logger.Info("delegation undeliverable; parked in task_outbox for the peer's next contact",
+			"target", target, "task", taskID, "kind", kind, "err", sendErr)
+		c.taskOutboxPersist(ctx, target, p, kind, pushDeadline)
 	} else {
 		c.logger.Info("forwarded delegated task", "task", taskID, "to", target)
 		if dtn {
@@ -786,6 +822,26 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 // left empty until a later phase adds it.
 func delegateDetail(p bus.TaskDelegatePayload) TaskDetail {
 	specJSON := p.SpecJSON
+	if p.TargetNode != "" || p.PreferredNode != "" {
+		// The wire carries the canonical pin identity (k:<pubkey> when the
+		// destination proved a key); persist THAT into spec.node so a later
+		// local re-dispatch — restart recovery, a requeue — resolves by
+		// identity instead of the raw name the origin user typed, which could
+		// collide with a same-named ghost row on this node's directory.
+		var m map[string]any
+		if err := json.Unmarshal([]byte(specJSON), &m); err != nil || m == nil {
+			m = map[string]any{}
+		}
+		if p.TargetNode != "" {
+			m["node"] = p.TargetNode
+		}
+		if p.PreferredNode != "" {
+			m["preferred"] = p.PreferredNode
+		}
+		if b, err := json.Marshal(m); err == nil {
+			specJSON = string(b)
+		}
+	}
 	if p.UserLocale != "" {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(specJSON), &m); err == nil && m != nil {
@@ -2699,6 +2755,24 @@ func (c *Core) handleDecline(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	c.logger.Info("task declined", "task", p.TaskID, "reason", p.Reason, "by", env.From)
+	if pin := targetNodeOf(t); pin != "" {
+		// The task names its destination: a decline from that destination is
+		// a terminal answer, not an invitation to shop for a substitute.
+		// Record who refused, fail honestly, and let the verdict reach the
+		// waiting submitter below.
+		if err := c.store.RecordEvent(ctx, p.TaskID, EvDecline,
+			map[string]any{"reason": p.Reason, "by": env.From}); err != nil {
+			c.logger.Debug("decline event record failed", "task", p.TaskID, "err", err)
+		}
+		c.failLocal(ctx, p.TaskID,
+			fmt.Errorf("pinned node %s declined: %s", env.From, p.Reason))
+		c.relayToParent(ctx, bus.MsgTaskDecline, t.Chain, p)
+		c.signalResult(p.TaskID, bus.TaskResultPayload{
+			TaskID: p.TaskID, State: StateFailed, OK: false, ExitCode: 1,
+			Stderr: fmt.Sprintf("pinned node %s declined: %s", env.From, p.Reason),
+		})
+		return
+	}
 	// Parent returns the task to queued for re-routing elsewhere.
 	if err := c.store.Decline(ctx, p.TaskID, c.nodeID, p.Reason, env.From); err != nil {
 		c.logger.Debug("decline apply failed", "task", p.TaskID, "err", err)
@@ -2743,6 +2817,12 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	if len(t.Requires) == 0 {
 		// Tasks persisted before requires_json have no routing key; fall back
 		// to the previous propagate-the-decline behaviour.
+		return false
+	}
+	if targetNodeOf(t) != "" {
+		// A pinned task has exactly one acceptable destination; when it
+		// declines, the task must surface that refusal — rerouting would be
+		// the silent-substitution failure the pin exists to prevent.
 		return false
 	}
 
@@ -2883,6 +2963,31 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 	if p.AttemptID == "" || (t.AttemptID != "" && t.AttemptID != p.AttemptID) {
 		c.logger.Info("stale attempt result ignored", "task", p.TaskID,
 			"stored", t.AttemptID, "got", p.AttemptID)
+		// Keep the drop honest: a real executor DID produce this outcome for
+		// an attempt the row moved past. Without the audit event the timeline
+		// reads as if the remote work never reported back.
+		if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
+			"late": true, "dropped": "stale_attempt",
+			"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
+		}); rerr != nil {
+			c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
+		}
+		return
+	}
+	if Terminal(t.State) {
+		// A closed row stays closed — cancel/expire/done are deliberate
+		// outcomes a late wire message must not reopen. But the executor's
+		// real verdict is recorded so `task show` shows what actually
+		// happened remotely instead of a silent divergence.
+		c.logger.Info("late result on terminal task", "task", p.TaskID,
+			"state", t.State, "from", env.From, "remote_state", p.State)
+		if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
+			"late": true, "dropped": "terminal_state", "local_state": t.State,
+			"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
+		}); rerr != nil {
+			c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
+		}
+		c.signalResult(p.TaskID, p)
 		return
 	}
 	state := p.State

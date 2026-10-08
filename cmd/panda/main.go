@@ -129,6 +129,9 @@ func main() {
 				case "remove", "rm":
 					runNodeRemove(args[1:])
 					return
+				case "prune":
+					runNodePrune(args[1:])
+					return
 				case "verify":
 					runNodesVerify(args[1:])
 					return
@@ -866,6 +869,7 @@ func printUsage(w *os.File) {
 	line("  nodes admit <id>       admit a LAN-discovered node as a peer")
 	line("  nodes verify <id>      mark a node's fingerprint as human-compared")
 	line("  nodes drain [id]       maintenance mode: stop accepting new work (--off lifts)")
+	line("  nodes prune            delete session-ghost directory rows (--offline-days N for stale rows)")
 	line("  nodes disconnect <a>   remove a peer from the dial list")
 	line("  pair --secret S --peer <host:port>")
 	line("                         join an existing network from a new machine")

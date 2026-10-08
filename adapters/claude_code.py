@@ -55,7 +55,9 @@ This adapter never prints secrets.
 """
 import json
 import os
+import shutil
 import subprocess
+import sys
 
 import _harness as harness
 
@@ -80,6 +82,7 @@ def main():
     # read_request_lined keeps stdin open for session mode's turn lines; in
     # one-shot mode the first (only) line is the whole request.
     req = harness.read_request_lined()
+    _ensure_git_bash()
 
     model = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
     # Turn cap order: the task's own spec.max_turns wins, then the operator's
@@ -137,6 +140,31 @@ def main():
                  tokens=out.get("tokens"), cost=out.get("cost"),
                  usage=out.get("usage"), session_id=out.get("session_id"),
                  extra=out.get("extra"))
+
+
+def _ensure_git_bash():
+    """Claude Code on Windows shells out to Git Bash for its Bash tool.
+    A daemon/session-spawned adapter does not inherit the interactive
+    PATH, so the CLI dies with the generic "requires git-bash" message.
+    Point CLAUDE_CODE_GIT_BASH_PATH at a discovered bash.exe instead —
+    an operator-set value always wins."""
+    if sys.platform != "win32" or os.environ.get("CLAUDE_CODE_GIT_BASH_PATH"):
+        return
+    cands = []
+    git = shutil.which("git")
+    if git:
+        root = os.path.dirname(os.path.dirname(git))
+        cands += [os.path.join(root, "bin", "bash.exe"),
+                  os.path.join(root, "usr", "bin", "bash.exe")]
+    for pf in (os.environ.get("ProgramFiles"),
+               os.environ.get("ProgramFiles(x86)")):
+        if pf:
+            cands += [os.path.join(pf, "Git", "bin", "bash.exe"),
+                      os.path.join(pf, "Git", "usr", "bin", "bash.exe")]
+    for cand in cands:
+        if os.path.isfile(cand):
+            os.environ["CLAUDE_CODE_GIT_BASH_PATH"] = cand
+            return
 
 
 def _injected():

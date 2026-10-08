@@ -80,7 +80,9 @@ func deriveResourceKeys(in TaskInput) []string {
 	if in.Project != "" {
 		keys = append(keys, "project:"+in.Project)
 	} else {
-		if in.PreferredNode != "" {
+		if in.TargetNode != "" {
+			keys = append(keys, "node:"+in.TargetNode)
+		} else if in.PreferredNode != "" {
 			keys = append(keys, "node:"+in.PreferredNode)
 		}
 		for _, req := range in.Requires {
@@ -123,13 +125,27 @@ func mergeActuatorKeys(keys []string, requires []string, specJSON string) []stri
 	return keys
 }
 
-// preferredNodeOf recovers the user-named node an enqueued task carries. The
-// route hint is not a column of its own — it lives in the persisted spec
-// (askengine marshals TaskSpecDetail into spec_json, and spec.node is its
-// "preferred node" field) — so it has to be parsed back out. Specs written by
-// other paths may omit it or carry the spec at another shape; a miss simply
-// means no preference, never an error worth surfacing.
+// preferredNodeOf recovers the SOFT routing hint a task carries — spec's
+// "preferred" key. A miss simply means no preference, never an error worth
+// surfacing.
 func preferredNodeOf(t Task) string {
+	if t.SpecJSON == "" {
+		return ""
+	}
+	var spec struct {
+		Preferred string `json:"preferred"`
+	}
+	if err := json.Unmarshal([]byte(t.SpecJSON), &spec); err != nil {
+		return ""
+	}
+	return spec.Preferred
+}
+
+// targetNodeOf recovers the HARD pin a task carries — spec's "node" key.
+// The pin names the only acceptable destination: any caller considering a
+// re-route, re-dispatch, or decline-propagation must check this first.
+// A miss means no pin and normal scored routing applies.
+func targetNodeOf(t Task) string {
 	if t.SpecJSON == "" {
 		return ""
 	}
@@ -262,8 +278,12 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 	// copy ran blind. A file task's tree now travels as an artifact input
 	// (attachWorktreeFrom below), so only non-file pins stay unconditionally
 	// local — a file task forwards when its tree actually ships, and falls
-	// back to local when the pack yields nothing.
-	if t.WorkDir != "" && t.ContextType != "file" {
+	// back to local when the pack yields nothing. A NODE pin overrides the
+	// workdir rule only in the failure direction: a non-file task bound to
+	// a local directory cannot honestly run on another machine at all.
+	pinRef := targetNodeOf(t)
+	pinned := pinRef != ""
+	if t.WorkDir != "" && t.ContextType != "file" && !pinned {
 		return false
 	}
 	chain := t.Chain
@@ -278,8 +298,42 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		c.logger.Warn("queue forward: declined-by", "task", t.TaskID, "err", err)
 	}
 	seenChain := append(slices.Clone(chain), excluded...)
-	decision := scheduler.RouteP(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
-		resourceRequirement(t.ResourceJSON), preferredNodeOf(t), t.Project)
+	// Routing: an unpinned task takes the scored path as before; a pinned
+	// task bypasses scoring entirely — the pin names the only acceptable
+	// destination and resolvePin decides where the task is allowed to land.
+	var decision scheduler.Decision
+	if pinned {
+		decision = c.routePinned(ctx, pinRef, seenChain, t.Requires, resourceRequirement(t.ResourceJSON))
+		switch decision.Action {
+		case scheduler.ActionLocal:
+			return false // the pin names this node: run here — a local work dir is fine
+		case scheduler.ActionDecline:
+			// Honest terminal failure — a pin that resolves nowhere (or to a
+			// node that already declined, or to an ambiguous name) must not
+			// degrade into "whoever scored best".
+			c.failLocal(ctx, t.TaskID, fmt.Errorf("%s", decision.Reason))
+			c.signalResult(t.TaskID, bus.TaskResultPayload{
+				TaskID: t.TaskID, AttemptID: t.AttemptID,
+				State: StateFailed, Stderr: decision.Reason,
+			})
+			return true
+		}
+		// The pin resolved to a remote node. A non-file task bound to a
+		// local work dir cannot honestly run there: its tree does not ship,
+		// so decline rather than forward a blind copy.
+		if t.WorkDir != "" && t.ContextType != "file" {
+			reason := fmt.Sprintf("task is bound to a local work dir and cannot run on pinned node %q", pinRef)
+			c.failLocal(ctx, t.TaskID, fmt.Errorf("%s", reason))
+			c.signalResult(t.TaskID, bus.TaskResultPayload{
+				TaskID: t.TaskID, AttemptID: t.AttemptID,
+				State: StateFailed, Stderr: reason,
+			})
+			return true
+		}
+	} else {
+		decision = scheduler.RouteP(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
+			resourceRequirement(t.ResourceJSON), preferredNodeOf(t), t.Project)
+	}
 	if decision.Action != scheduler.ActionForward {
 		c.logger.Info("queue: no peer for task", "task", t.TaskID,
 			"action", string(decision.Action), "reason", decision.Reason)
@@ -314,6 +368,12 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		DelegationBudget: &t.DelegationBudget,
 		TokenBudget:      t.TokenBudget,
 	}
+	if pinned {
+		// Stable identity on the wire: the executor's own pin re-check (and
+		// any sub-scheduler hop in between) resolves by identity, immune to
+		// name collisions and to the target's instance-id churn on restart.
+		p.TargetNode = c.stablePeerID(ctx, decision.Target)
+	}
 	// Session resume hint (§5.2): the handle only means something to the node
 	// that minted it, so it is offered only when the route leads back there.
 	if t.AgentSessionID != "" && t.AgentSessionNode == decision.Target {
@@ -341,6 +401,19 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 	if err := c.sendClaimedDelegate(ctx, t.TaskID, decision.Target, p); err != nil {
 		c.logger.Warn("queue: forward to peer failed", "task", t.TaskID,
 			"target", decision.Target, "err", err)
+		if pinned {
+			// A pinned forward that fails before the send path (budget spent,
+			// retarget conflict, envelope error) is an honest terminal failure
+			// — returning false would run the task here, the silent
+			// local-fallback the pin forbids.
+			c.failLocal(ctx, t.TaskID, fmt.Errorf("pinned forward to %s failed: %w", decision.Target, err))
+			c.signalResult(t.TaskID, bus.TaskResultPayload{
+				TaskID: t.TaskID, AttemptID: t.AttemptID,
+				State:  StateFailed,
+				Stderr: fmt.Sprintf("pinned forward to %s failed: %s", decision.Target, err),
+			})
+			return true
+		}
 		return false
 	}
 	c.logger.Info("queue: task forwarded to peer", "task", t.TaskID, "target", decision.Target)
@@ -370,11 +443,17 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 		return fmt.Errorf("retarget: %w", err)
 	}
 	dtn := p.Transport == "dtn"
+	// A hard-pinned task shares DTN's delivery contract: the named peer is the
+	// only acceptable destination, so a dead link means park-and-wait, never
+	// the unpinned fall-back-to-local corrective path.
+	pinned := p.TargetNode != ""
+	parkable := dtn || pinned
 	pushDeadline := p.DeadlineUnix
 	if pushDeadline <= 0 {
 		pushDeadline = time.Now().Add(defaultDTNTTL).Unix()
 	}
-	if !dtn {
+	park := parkable && !c.sendableTo(target)
+	if !park && !dtn {
 		// A DTN task is lease-exempt (§8.2): the absolute deadline is its bound.
 		timeoutMS := p.TimeoutMS
 		if timeoutMS <= 0 {
@@ -384,61 +463,88 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 		if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
 			return fmt.Errorf("set lease: %w", err)
 		}
-	} else {
+	} else if dtn {
 		// Same fat-push split as dispatchDelegated: small artifacts ride the
 		// envelope, larger ones become durable push custody for the flush.
 		for _, h := range c.attachFatBundle(ctx, &p) {
 			c.artifactPushEnqueue(ctx, target, taskID, h, pushDeadline)
 		}
 	}
-	msgID, err := newUUID()
-	if err != nil {
-		return err
-	}
-	env, err := bus.NewEnvelope(bus.MsgTaskDelegate, c.nodeID, msgID, p)
-	if err != nil {
-		return err
-	}
-	env.To = target
-	if err := c.sendTo(target, env); err != nil {
-		if dtn {
-			// §8.2 store-and-forward: an undeliverable DTN task parks in the
-			// outbox for the peer's next reconnect instead of falling back to
-			// local execution — the task chose delay-tolerant delivery, and
-			// the retarget pointing at the peer stays true: the outbox flush
-			// IS this node holding the task for that peer.
-			c.taskOutboxPersist(ctx, target, p, "dtn", pushDeadline)
-			c.logger.Info("queue: task parked in task_outbox for DTN relay",
-				"task", taskID, "target", target, "err", err)
-			// The parked bundle owns this hop — the budget is spent even
-			// though no frame left the socket.
-			if err := c.store.SetDelegationBudget(ctx, taskID, remaining); err != nil {
-				c.logger.Warn("persist delegation budget", "task", taskID, "err", err)
+	if !park {
+		msgID, err := newUUID()
+		if err != nil {
+			return err
+		}
+		env, err := bus.NewEnvelope(bus.MsgTaskDelegate, c.nodeID, msgID, p)
+		if err != nil {
+			return err
+		}
+		env.To = target
+		if err := c.sendTo(target, env); err != nil {
+			if parkable {
+				// §8.2 store-and-forward, and the pinned variant: an
+				// undeliverable task parks in the outbox for the peer's next
+				// reconnect instead of falling back to local execution — the
+				// retarget pointing at the peer stays true: the outbox flush
+				// IS this node holding the task for that peer.
+				kind := "dtn"
+				if pinned && !dtn {
+					kind = "pin"
+				}
+				if err := c.store.ClearLease(ctx, taskID); err != nil {
+					c.logger.Warn("queue: clear lease for parked task", "task", taskID, "err", err)
+				}
+				c.taskOutboxPersist(ctx, target, p, kind, pushDeadline)
+				c.logger.Info("queue: task parked in task_outbox awaiting peer link",
+					"task", taskID, "target", target, "kind", kind, "err", err)
+				// The parked bundle owns this hop — the budget is spent even
+				// though no frame left the socket.
+				if err := c.store.SetDelegationBudget(ctx, taskID, remaining); err != nil {
+					c.logger.Warn("persist delegation budget", "task", taskID, "err", err)
+				}
+				return nil
 			}
-			return nil
+			// The send failed, so the peer never received the task — but the audit
+			// trail already records IT as the delegation target. Leaving that in
+			// place makes DispatchTarget authenticate a non-executor and makes the
+			// task look remotely-owned to the orphan sweep, when in fact this node
+			// still holds it (dispatched-to-self, lease ours). Write a corrective
+			// delegate event pointing back at ourselves so the last EvDelegate
+			// reflects the actual executor; the task stays queued for the next
+			// scheduling pass instead of being orphaned on paper.
+			if rerr := c.store.RetargetDelegation(ctx, taskID, c.nodeID); rerr != nil {
+				c.logger.Warn("queue: corrective retarget failed", "task", taskID, "err", rerr)
+			}
+			return fmt.Errorf("send: %w", err)
 		}
-		// The send failed, so the peer never received the task — but the audit
-		// trail already records IT as the delegation target. Leaving that in
-		// place makes DispatchTarget authenticate a non-executor and makes the
-		// task look remotely-owned to the orphan sweep, when in fact this node
-		// still holds it (dispatched-to-self, lease ours). Write a corrective
-		// delegate event pointing back at ourselves so the last EvDelegate
-		// reflects the actual executor; the task stays queued for the next
-		// scheduling pass instead of being orphaned on paper.
-		if rerr := c.store.RetargetDelegation(ctx, taskID, c.nodeID); rerr != nil {
-			c.logger.Warn("queue: corrective retarget failed", "task", taskID, "err", rerr)
+	} else {
+		// No link at claim time: park directly without a doomed send attempt.
+		// The audit trail already names the peer as delegation target, so the
+		// result the flush eventually earns authenticates normally.
+		kind := "dtn"
+		if pinned && !dtn {
+			kind = "pin"
 		}
-		return fmt.Errorf("send: %w", err)
+		// A parked task holds no executor, so no lease may expire on it:
+		// whatever a previous attempt stamped would otherwise fire mid-wait
+		// and fail a task that is legitimately holding for its peer.
+		if err := c.store.ClearLease(ctx, taskID); err != nil {
+			c.logger.Warn("queue: clear lease for parked task", "task", taskID, "err", err)
+		}
+		c.taskOutboxPersist(ctx, target, p, kind, pushDeadline)
+		c.logger.Info("queue: task parked in task_outbox awaiting peer link",
+			"task", taskID, "target", target, "kind", kind)
 	}
-	// The hop landed on the wire — now the budget is spent. Persisting only
-	// here (and in the DTN park above) keeps a failed retarget or dead socket
-	// from burning a delegation the mesh never took.
+	// The hop landed on the wire (or is durably parked for it) — now the
+	// budget is spent. Persisting only here keeps a failed retarget or dead
+	// socket from burning a delegation the mesh never took.
 	if err := c.store.SetDelegationBudget(ctx, taskID, remaining); err != nil {
 		c.logger.Warn("persist delegation budget", "task", taskID, "err", err)
 	}
-	if dtn {
-		// Drain deferred push custody into the same contact window that just
-		// carried the delegate (see dispatchDelegated).
+	if dtn || park {
+		// Drain deferred push custody into the contact window that just
+		// carried the delegate — or, for a parked bundle, prime the flush so
+		// the next peer hello has nothing left to prepare.
 		go c.outboxFlush(context.WithoutCancel(ctx), target)
 	}
 	// — Trace: queue re-route hop (from=here, to=target), same shape as

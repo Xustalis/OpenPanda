@@ -342,6 +342,57 @@ func runNodeRemove(args []string) {
 	fatal("remove node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.none", "id", id)))
 }
 
+// runNodePrune implements `panda nodes prune` — bulk-cleans directory rows a
+// single `nodes remove` would make tedious: every row keyed by an ephemeral
+// "-8hex" session id (a client seat, never a fleet member — old versions
+// left one per `panda ask`/`repl` dial), plus optionally offline rows older
+// than --offline-days. The self row and online nodes are refused on the
+// same grounds as `nodes remove`.
+func runNodePrune(args []string) {
+	fs := flag.NewFlagSet("nodes prune", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	offlineDays := fs.Int("offline-days", 0, "also delete rows offline longer than this many days")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, _, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	loc := i18n.Detect()
+	selfID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity())
+	nodes, err := ledger.Query(db, "", "")
+	if err != nil {
+		fatal("query employees", err)
+	}
+	cutoff := time.Now().Add(-time.Duration(*offlineDays) * 24 * time.Hour).Unix()
+	var ghosts, stale []string
+	for _, n := range nodes {
+		if n.ID == selfID || n.Status == "online" {
+			continue
+		}
+		if ledger.SessionRowID(n.ID) {
+			ghosts = append(ghosts, n.ID)
+			continue
+		}
+		if *offlineDays > 0 && n.LastSeen > 0 && n.LastSeen < cutoff {
+			stale = append(stale, n.ID)
+		}
+	}
+	for _, id := range append(ghosts, stale...) {
+		if _, err := ledger.Remove(db, id); err != nil {
+			fatal("remove node", err)
+		}
+	}
+	fmt.Println(i18n.Tf(loc, "cli.nodes.pruned",
+		"sessions", strconv.Itoa(len(ghosts)), "stale", strconv.Itoa(len(stale))))
+}
+
 // runNodesVerify implements `panda nodes verify <id>` — the human half of
 // TOFU. The user has compared this listing's fingerprint against the other
 // machine's own `panda nodes` row (or its first-run log line) and confirms it

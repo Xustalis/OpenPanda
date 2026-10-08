@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
 
 // Node identity (design §16, P2-8 follow-up). The shared-secret HMAC proves a
@@ -103,8 +105,17 @@ func LoadNodeKey(db *sql.DB) (ed25519.PublicKey, ed25519.PrivateKey, bool) {
 // victim's name.
 func (c *Core) peerPubKey(nodeID string) (ed25519.PublicKey, bool) {
 	var hexKey string
-	if err := c.db.QueryRow(
-		`SELECT pub_key FROM employee_cache WHERE id = ?`, nodeID).Scan(&hexKey); err != nil || hexKey == "" {
+	err := c.db.QueryRow(
+		`SELECT pub_key FROM employee_cache WHERE id = ?`, nodeID).Scan(&hexKey)
+	if err != nil || hexKey == "" {
+		// A session id signs with its host node's key, which lives on the
+		// node's stable row — the session itself never gets a row.
+		if base, ok := scheduler.EphemeralBase(nodeID); ok && base != nodeID {
+			err = c.db.QueryRow(
+				`SELECT pub_key FROM employee_cache WHERE id = ?`, base).Scan(&hexKey)
+		}
+	}
+	if err != nil || hexKey == "" {
 		return nil, false
 	}
 	raw, err := hex.DecodeString(hexKey)
@@ -125,7 +136,12 @@ func (c *Core) peerPubKey(nodeID string) (ed25519.PublicKey, bool) {
 // none of them may inherit the human's earlier check. The change is logged
 // loudly: it is exactly the signal a silent overwrite would hide.
 func (c *Core) recordPeerPubKey(ctx context.Context, nodeID, pubKeyHex string) {
-	if pubKeyHex == "" {
+	if pubKeyHex == "" || ledger.SessionRowID(nodeID) {
+		// An ephemeral-suffix id is a client session, not a fleet member:
+		// recording a row per session is exactly how ghost nodes pile up.
+		// The session shares its node's keypair, so the node row's key —
+		// reached via peerPubKey's ephemeral-base fallback — still verifies
+		// anything the session signs.
 		return
 	}
 	var existing string
@@ -141,6 +157,15 @@ func (c *Core) recordPeerPubKey(ctx context.Context, nodeID, pubKeyHex string) {
 		         ELSE employee_cache.key_verified END`,
 		nodeID, pubKeyHex); err != nil {
 		c.logger.Warn("record peer pubkey", "peer", nodeID, "err", err)
+		return
+	}
+	// The signature proving this key already passed (handleHello gates the
+	// call), so sibling rows advertising the same key under another id are
+	// provably stale — a rename, a reinstall, or an old session's residue.
+	if stale, err := ledger.ReapKeySiblings(c.db, nodeID, pubKeyHex, c.nodeID); err != nil {
+		c.logger.Warn("reap key siblings", "peer", nodeID, "err", err)
+	} else if len(stale) > 0 {
+		c.logger.Info("reaped stale rows sharing peer key", "peer", nodeID, "ids", stale)
 	}
 }
 

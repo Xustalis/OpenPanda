@@ -133,18 +133,23 @@ type Contact struct {
 //     context (no snapshot transfer).
 //   - context_level "full": context_data carries the inline snapshot (base64).
 type TaskDelegatePayload struct {
-	TaskID          string   `json:"task_id"`
-	ParentID        string   `json:"parent_id,omitempty"`
-	Project         string   `json:"project,omitempty"`
-	Title           string   `json:"title,omitempty"`
-	ContextType     string   `json:"context_type,omitempty"`
-	ContextHash     string   `json:"context_hash,omitempty"`
-	ContextLevel    string   `json:"context_level,omitempty"` // pointer|summary|full
-	ContextData     []byte   `json:"context_data,omitempty"`  // inline full snapshot
-	Intent          string   `json:"intent"`
-	SpecJSON        string   `json:"spec_json,omitempty"`
-	Requires        []string `json:"requires,omitempty"`
-	PreferredNode   string   `json:"preferred_node,omitempty"` // user-named node; honored when it matches
+	TaskID        string   `json:"task_id"`
+	ParentID      string   `json:"parent_id,omitempty"`
+	Project       string   `json:"project,omitempty"`
+	Title         string   `json:"title,omitempty"`
+	ContextType   string   `json:"context_type,omitempty"`
+	ContextHash   string   `json:"context_hash,omitempty"`
+	ContextLevel  string   `json:"context_level,omitempty"` // pointer|summary|full
+	ContextData   []byte   `json:"context_data,omitempty"`  // inline full snapshot
+	Intent        string   `json:"intent"`
+	SpecJSON      string   `json:"spec_json,omitempty"`
+	Requires      []string `json:"requires,omitempty"`
+	PreferredNode string   `json:"preferred_node,omitempty"` // soft routing hint; honored when it matches
+	// TargetNode is the hard pin: the receiving node executes when the pin
+	// resolves to itself, forwards toward it when it resolves onward, and
+	// declines honestly when it resolves nowhere. It is the resolved row id
+	// by the time it leaves the origin, so every hop reads the same identity.
+	TargetNode      string   `json:"target_node,omitempty"`
 	Chain           []string `json:"chain"`
 	TimeoutMS       int64    `json:"timeout_ms,omitempty"`
 	MaxRetries      int      `json:"max_retries,omitempty"`
@@ -276,6 +281,7 @@ func (p TaskDelegatePayload) ConsentDigest() string {
 		SpecJSON        string        `json:"spec_json,omitempty"`
 		Requires        []string      `json:"requires,omitempty"`
 		PreferredNode   string        `json:"preferred_node,omitempty"`
+		TargetNode      string        `json:"target_node,omitempty"`
 		MaxRetries      int           `json:"max_retries,omitempty"`
 		Complexity      float64       `json:"complexity,omitempty"`
 		Risk            string        `json:"risk,omitempty"`
@@ -304,6 +310,7 @@ func (p TaskDelegatePayload) ConsentDigest() string {
 		SpecJSON:        p.SpecJSON,
 		Requires:        p.Requires,
 		PreferredNode:   p.PreferredNode,
+		TargetNode:      p.TargetNode,
 		MaxRetries:      p.MaxRetries,
 		Complexity:      p.Complexity,
 		Risk:            p.Risk,

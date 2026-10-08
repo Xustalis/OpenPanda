@@ -1191,6 +1191,20 @@ func (s *TaskStore) SetLease(ctx context.Context, taskID string, durationMS int6
 	return nil
 }
 
+// ClearLease drops a task's lease deadline entirely. A task parked in the
+// outbox waiting on a peer link holds no executor, so nothing it could
+// measure would fire legitimately — the DTN deadline (or a human cancel) is
+// its bound instead.
+func (s *TaskStore) ClearLease(ctx context.Context, taskID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET lease_expires_at=NULL, updated_at=? WHERE task_id=?`,
+		s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("clear lease: %w", err)
+	}
+	return nil
+}
+
 // SetAuthorized persists whether the task's tier-2 (irreversible) commands were
 // consented to by the user. It is server-side state (design §16 / P0-1): only
 // the local entry path sets it, and a delegated task cannot forge authorization

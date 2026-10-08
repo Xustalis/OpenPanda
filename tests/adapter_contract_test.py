@@ -1100,5 +1100,79 @@ time.sleep(60)
                              "grandchild survived the process-tree kill")
 
 
+class ResolveArgvTest(unittest.TestCase):
+    """Windows argv resolution for npm-installed agent CLIs.
+
+    Runs on any host: sys.platform is patched to win32 inside the harness
+    subprocess, so the win32 branch of _harness.resolve_argv is exercised
+    without a Windows machine.
+    """
+
+    def _resolve(self, argv, env=None):
+        body = ("import sys, json; sys.platform='win32'; "
+                "print(json.dumps(_harness.resolve_argv(%r)))" % (argv,))
+        payload, proc = run_harness(body, env=env)
+        self.assertIsNotNone(payload, proc.stderr)
+        return payload
+
+    def test_posix_passthrough(self):
+        # sys.platform untouched → the argv comes back byte-identical.
+        payload, proc = run_harness(
+            "import json; print(json.dumps(_harness.resolve_argv("
+            "['opencode', 'run', 'hi'])))")
+        self.assertIsNotNone(payload, proc.stderr)
+        self.assertEqual(payload, ["opencode", "run", "hi"])
+
+    def test_win32_prefers_sibling_exe(self):
+        # APPDATA\npm\zzagent.exe beats zzagent.cmd: the real exe gets argv
+        # fidelity (the .cmd's %* forwarding would mangle quoting).
+        with tempfile.TemporaryDirectory() as td:
+            npm = pathlib.Path(td) / "npm"
+            npm.mkdir()
+            (npm / "zzagent.cmd").write_text(
+                '@echo off\r\n"%~dp0\\zzagent.exe" %*\r\n')
+            (npm / "zzagent.exe").write_text("x")
+            out = self._resolve(["zzagent", "run", "a prompt"],
+                                env={"APPDATA": td})
+            self.assertEqual(out[0], str(npm / "zzagent.exe"))
+            self.assertEqual(out[1:], ["run", "a prompt"])
+
+    def test_win32_shim_body_exe(self):
+        # A .cmd that wraps a .exe deeper in the tree: the body's quoted
+        # path is resolved through %~dp0.
+        with tempfile.TemporaryDirectory() as td:
+            npm = pathlib.Path(td) / "npm"
+            real = npm / "node_modules" / "pkg" / "bin"
+            real.mkdir(parents=True)
+            (real / "real.exe").write_text("x")
+            (npm / "zzagent.cmd").write_text(
+                '@echo off\r\n"%~dp0\\node_modules\\pkg\\bin\\real.exe" %*\r\n')
+            out = self._resolve(["zzagent", "go"], env={"APPDATA": td})
+            self.assertEqual(out[0], str(real / "real.exe"))
+            self.assertEqual(out[1:], ["go"])
+
+    def test_win32_cmdshim_via_comspec(self):
+        # A .cmd with no discoverable .exe falls back to COMSPEC /c with
+        # list2cmdline quoting so the shim receives the args intact.
+        with tempfile.TemporaryDirectory() as td:
+            npm = pathlib.Path(td) / "npm"
+            npm.mkdir()
+            (npm / "zzagent.cmd").write_text("@echo off\r\nnode x %*\r\n")
+            out = self._resolve(["zzagent", "run", "two words"],
+                                env={"APPDATA": td})
+            self.assertTrue(out[0].lower().endswith("cmd.exe"), out)
+            self.assertEqual(out[1:4], ["/d", "/s", "/c"])
+            self.assertIn("zzagent.cmd", out[4])
+            self.assertIn('"two words"', out[4])
+
+    def test_win32_missing_binary_stays_honest(self):
+        # Nothing on PATH or the probed dirs → the original argv survives
+        # so the spawn raises a truthful FileNotFoundError (exit 127).
+        with tempfile.TemporaryDirectory() as td:
+            out = self._resolve(["definitely-missing-cli-xyz", "run"],
+                                env={"APPDATA": td})
+            self.assertEqual(out, ["definitely-missing-cli-xyz", "run"])
+
+
 if __name__ == "__main__":
     unittest.main()

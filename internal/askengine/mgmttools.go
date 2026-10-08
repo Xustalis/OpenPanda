@@ -801,7 +801,7 @@ func (e *Engine) taskqList(ctx context.Context, filter string) (string, error) {
 		// The full id travels on the row: the model must be able to quote it
 		// back into taskq_show, and short prefixes collide within one batch
 		// (the id's leading segment is a timestamp).
-		fmt.Fprintf(&b, "\n- %s %s — %s（负责节点 %s）",
+		fmt.Fprintf(&b, "\n- %s %s — %s（持有节点 %s）",
 			t.TaskID, t.Title, zhTaskState(t.State), t.OwnerNode)
 		if t.State == core.StateReview {
 			// "待审批" alone hides what approving would DO — the model kept
@@ -831,7 +831,18 @@ func (e *Engine) taskqShow(ctx context.Context, taskID string) (string, error) {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "任务 %s\n标题：%s\n状态：%s", t.TaskID, t.Title, zhTaskState(t.State))
-	fmt.Fprintf(&b, "\n负责节点：%s", t.OwnerNode)
+	// Owner is the lease holder; the EXECUTOR is the node the latest
+	// delegation targeted. On a forwarded task they differ — showing only
+	// the owner was the bug that made remote-executed work report itself as
+	// local. Report both, plus the hard pin when the user named a node.
+	fmt.Fprintf(&b, "\n持有节点：%s", t.OwnerNode)
+	if target, terr := store.DispatchTarget(ctx, t.TaskID); terr == nil &&
+		target != "" && target != t.OwnerNode {
+		fmt.Fprintf(&b, "\n执行节点：%s", target)
+	}
+	if pin := core.PinnedNode(t); pin != "" {
+		fmt.Fprintf(&b, "\n钉选目标：%s（硬约束：仅该节点执行或明确失败）", pin)
+	}
 	fmt.Fprintf(&b, "\n创建：%s / 更新：%s", fmtTime(t.CreatedAt), fmtTime(t.UpdatedAt))
 	if t.Intent != "" {
 		fmt.Fprintf(&b, "\n意图：%s", t.Intent)

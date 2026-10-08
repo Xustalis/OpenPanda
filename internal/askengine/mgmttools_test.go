@@ -273,7 +273,7 @@ func TestTaskqShow(t *testing.T) {
 	}
 
 	detail := runMgmtTool(t, reg, "taskq_show", map[string]any{"task_id": taskID})
-	for _, want := range []string{"已完成的任务", "已完成", "构建通过，产物已落盘", "负责节点：test-node", "事件时间线"} {
+	for _, want := range []string{"已完成的任务", "已完成", "构建通过，产物已落盘", "持有节点：test-node", "事件时间线"} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("taskq_show missing %q;\ngot:\n%s", want, detail)
 		}
