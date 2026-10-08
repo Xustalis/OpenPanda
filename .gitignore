@@ -40,6 +40,10 @@ testdata/live/
 /projects/
 /skills/
 
+# Workspace memory layers the daemon writes when its workspace is the repo
+MEMORY.md
+USER.md
+
 # Node (webui/web frontend tooling)
 node_modules/
 
