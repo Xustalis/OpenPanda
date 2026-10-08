@@ -52,6 +52,15 @@ const (
 	// answers every fetch with a stale or empty chunk cannot park a goroutine
 	// forever by keeping the per-chunk timer armed.
 	artifactTransferBudget = 30 * time.Minute
+
+	// artifactFetchWindow is the number of chunk requests allowed in flight
+	// at once. Stop-and-wait made every chunk cost a full round trip — a
+	// 500 MiB tree was ~500 serialized RTTs, so a WAN link capped the
+	// transfer at chunkSize/RTT no matter its bandwidth. Four in flight
+	// keeps a ~4 MiB pipe filling without a flood: large enough that a
+	// 100 ms link reaches line rate, small enough that a refusal still
+	// costs little.
+	artifactFetchWindow = 4
 )
 
 // artifactTransfer is one in-flight inbound pull. source is the node the fetches
@@ -236,7 +245,7 @@ func (c *Core) fetchArtifact(ctx context.Context, source, taskID string, ref bus
 	}
 
 	key := artifactKey(taskID, hash)
-	tr := &artifactTransfer{source: source, chunks: make(chan bus.ArtifactChunkPayload, 4)}
+	tr := &artifactTransfer{source: source, chunks: make(chan bus.ArtifactChunkPayload, artifactFetchWindow)}
 	if _, busy := c.pendingArt.LoadOrStore(key, tr); busy {
 		return artifact.Manifest{}, fmt.Errorf("core: artifact %s for task %s is already being fetched", hash, taskID)
 	}
@@ -267,92 +276,170 @@ func (c *Core) fetchArtifact(ctx context.Context, source, taskID string, ref bus
 	budget := time.NewTimer(artifactTransferBudget)
 	defer budget.Stop()
 
-	var off, total int64
-	total = -1
-	for {
-		var chunk bus.ArtifactChunkPayload
-		got := false
-		for try := 0; try <= artifactChunkRetries && !got; try++ {
-			if err := c.sendArtifactFetch(source, taskID, ref, off); err != nil {
-				return abort(fmt.Errorf("core: request artifact %s at %d: %w", hash, off, err))
-			}
-			wait := time.NewTimer(artifactChunkTimeout)
-			// A stale chunk (the answer to a request that already timed out)
-			// must not be mistaken for the one asked for, so the offset is
-			// checked here and a mismatch keeps waiting rather than failing.
-		waitChunk:
-			for {
-				select {
-				case <-ctx.Done():
-					wait.Stop()
-					return abort(ctx.Err())
-				case <-budget.C:
-					wait.Stop()
-					return abort(fmt.Errorf("core: artifact %s exceeded its transfer budget at %d bytes", hash, off))
-				case res := <-done:
-					// Put gave up on its own (invalid hash, write failure).
-					wait.Stop()
-					pw.CloseWithError(res.err)
-					if res.err == nil {
-						res.err = errors.New("core: artifact pool closed the transfer early")
-					}
-					return artifact.Manifest{}, res.err
-				case <-wait.C:
-					break waitChunk // re-request this offset
-				case p := <-tr.chunks:
-					if !p.OK {
-						wait.Stop()
-						reason := p.Reason
-						if reason == "" {
-							reason = "declined"
-						}
-						return abort(fmt.Errorf("core: %s cannot serve artifact %s: %s", source, hash, reason))
-					}
-					if p.Offset != off {
-						c.logger.Debug("stale artifact chunk", "hash", hash, "offset", p.Offset, "want", off)
-						continue
-					}
-					wait.Stop()
-					chunk, got = p, true
-					break waitChunk
-				}
-			}
-		}
-		if !got {
-			return abort(fmt.Errorf("core: no chunk of artifact %s at offset %d after %d attempts", hash, off, artifactChunkRetries+1))
-		}
+	var total int64 = -1
+	var writeOff int64 // next byte offset the pipe is waiting for
+	nextOff := int64(0)
+	eofSeen := false
+	finished := false
+	inflight := map[int64]time.Time{} // requested offset -> last send time
+	retries := map[int64]int{}
+	have := map[int64]bus.ArtifactChunkPayload{} // received, awaiting its write turn
 
-		if lim := c.artifacts.Limit(); lim > 0 && chunk.Total > lim {
-			return abort(fmt.Errorf("%w: %s advertises %d bytes", artifact.ErrTooLarge, hash, chunk.Total))
+	// checkTotal applies the two size invariants every chunk repeats: the
+	// advertised archive length must fit this pool, and it must never
+	// change mid-transfer — the archive is immutable once named by its
+	// hash, so a moving Total means the peer is not serving what it claims.
+	checkTotal := func(t int64) error {
+		if lim := c.artifacts.Limit(); lim > 0 && t > lim {
+			return fmt.Errorf("%w: %s advertises %d bytes", artifact.ErrTooLarge, hash, t)
 		}
 		if lim := c.artifacts.Limit(); lim <= 0 {
 			// Unbounded pool: the advertised total is still attacker input,
 			// and the volumes are the bound — refuse before the first byte
 			// lands when no pool root could hold the archive.
-			if room, ok := c.artifacts.MaxStorable(); ok && chunk.Total > room {
-				return abort(fmt.Errorf("%w: %s advertises %d bytes with %d usable", artifact.ErrNoSpace, hash, chunk.Total, room))
+			if room, ok := c.artifacts.MaxStorable(); ok && t > room {
+				return fmt.Errorf("%w: %s advertises %d bytes with %d usable", artifact.ErrNoSpace, hash, t, room)
 			}
 		}
 		if total < 0 {
-			total = chunk.Total
-		} else if chunk.Total != total {
-			// The archive is immutable once named by its hash; a changing length
-			// means the peer is not serving the artifact it claims to.
-			return abort(fmt.Errorf("core: artifact %s changed size mid-transfer (%d then %d)", hash, total, chunk.Total))
+			total = t
+		} else if t != total {
+			return fmt.Errorf("core: artifact %s changed size mid-transfer (%d then %d)", hash, total, t)
 		}
-		if len(chunk.Data) > 0 {
-			if _, err := pw.Write(chunk.Data); err != nil {
-				return abort(fmt.Errorf("core: buffer artifact %s: %w", hash, err))
+		return nil
+	}
+
+	for !finished {
+		// Refill the request window. Offsets are server-authoritative — a
+		// fetch at O answers the bytes [O, O+ArtifactChunkBytes) — so the
+		// next request offsets are known before the first reply teaches us
+		// Total; requests past Total come back as empty EOF markers the
+		// drain discards. When the window is empty but the stream is not
+		// finished, probe the frontier once: the only legitimate missing
+		// reply is a lost EOF marker, and re-asking writeOff re-elicits it.
+		for len(inflight) < artifactFetchWindow && !eofSeen {
+			off := nextOff
+			if total >= 0 && nextOff >= total {
+				if len(inflight) > 0 {
+					break
+				}
+				off = writeOff
 			}
-			off += int64(len(chunk.Data))
+			if err := c.sendArtifactFetch(source, taskID, ref, off); err != nil {
+				return abort(fmt.Errorf("core: request artifact %s at %d: %w", hash, off, err))
+			}
+			inflight[off] = time.Now()
+			if off == nextOff {
+				nextOff += bus.ArtifactChunkBytes
+			}
+			if off == writeOff && total >= 0 && nextOff >= total {
+				break // frontier probe sent; wait for its answer
+			}
 		}
-		if chunk.EOF {
-			break
+		if len(inflight) == 0 {
+			// Every request was answered but the drain could not finish:
+			// a gap the peer never made good on (an empty non-EOF answer
+			// aborts at receive time, so only a skipped offset lands here).
+			// Nothing more can legitimately arrive — waiting would just
+			// burn the transfer budget.
+			return abort(fmt.Errorf("core: artifact %s stalled at %d bytes with all requests answered", hash, writeOff))
 		}
-		if len(chunk.Data) == 0 {
-			// Not EOF and no bytes: the transfer cannot advance, and asking again
-			// would spin.
-			return abort(fmt.Errorf("core: empty non-final chunk of artifact %s at %d", hash, off))
+		// Wake when the oldest unanswered request ages out; sooner arrivals
+		// land through the channel case.
+		earliest := time.Now()
+		for _, t := range inflight {
+			if t.Before(earliest) {
+				earliest = t
+			}
+		}
+		wakeIn := artifactChunkTimeout - time.Since(earliest)
+		if wakeIn < 0 {
+			wakeIn = 0
+		}
+		wait := time.NewTimer(wakeIn)
+		select {
+		case <-ctx.Done():
+			wait.Stop()
+			return abort(ctx.Err())
+		case <-budget.C:
+			wait.Stop()
+			return abort(fmt.Errorf("core: artifact %s exceeded its transfer budget at %d bytes", hash, writeOff))
+		case res := <-done:
+			// Put gave up on its own (invalid hash, write failure).
+			wait.Stop()
+			pw.CloseWithError(res.err)
+			if res.err == nil {
+				res.err = errors.New("core: artifact pool closed the transfer early")
+			}
+			return artifact.Manifest{}, res.err
+		case <-wait.C:
+			// Re-request every expired offset; each keeps its own retry
+			// count, so one black-holed range fails without resending the
+			// answers already in flight.
+			for off, t := range inflight {
+				if time.Since(t) < artifactChunkTimeout {
+					continue
+				}
+				retries[off]++
+				if retries[off] > artifactChunkRetries {
+					return abort(fmt.Errorf("core: no chunk of artifact %s at offset %d after %d attempts", hash, off, artifactChunkRetries+1))
+				}
+				if err := c.sendArtifactFetch(source, taskID, ref, off); err != nil {
+					return abort(fmt.Errorf("core: request artifact %s at %d: %w", hash, off, err))
+				}
+				inflight[off] = time.Now()
+			}
+		case p := <-tr.chunks:
+			wait.Stop()
+			if !p.OK {
+				reason := p.Reason
+				if reason == "" {
+					reason = "declined"
+				}
+				return abort(fmt.Errorf("core: %s cannot serve artifact %s: %s", source, hash, reason))
+			}
+			if _, ok := inflight[p.Offset]; !ok {
+				// A stale chunk — the answer to a request already served,
+				// or one nobody asked — must not be mistaken for a gap
+				// fill. Dropping keeps the invariant that only requested
+				// offsets ever reach the pipe.
+				c.logger.Debug("stale artifact chunk", "hash", hash, "offset", p.Offset)
+				continue
+			}
+			delete(inflight, p.Offset)
+			if err := checkTotal(p.Total); err != nil {
+				return abort(err)
+			}
+			if p.EOF {
+				eofSeen = true
+			}
+			have[p.Offset] = p
+			// Drain every contiguous chunk the pipe can take. Bytes hash
+			// as they stream (Store.Put reads the other end), so a
+			// reordered arrival costs only its buffer slot.
+			for {
+				ch, ok := have[writeOff]
+				if !ok {
+					break
+				}
+				delete(have, writeOff)
+				if len(ch.Data) > 0 {
+					if _, err := pw.Write(ch.Data); err != nil {
+						return abort(fmt.Errorf("core: buffer artifact %s: %w", hash, err))
+					}
+					writeOff += int64(len(ch.Data))
+				}
+				if ch.EOF {
+					finished = true
+					break
+				}
+				if len(ch.Data) == 0 {
+					// Not EOF and no bytes: the stream cannot advance past
+					// this offset, and re-asking would spin on the same
+					// answer.
+					return abort(fmt.Errorf("core: empty non-final chunk of artifact %s at %d", hash, writeOff))
+				}
+			}
 		}
 	}
 
@@ -446,10 +533,13 @@ func (c *Core) handleArtifactFetch(ctx context.Context, env bus.Envelope) {
 		deny("read failed")
 		return
 	}
-	if err := c.reply(ctx, env, bus.MsgArtifactChunk, bus.ArtifactChunkPayload{
+	cp := bus.ArtifactChunkPayload{
 		TaskID: p.TaskID, Hash: p.Hash, Offset: p.Offset,
 		Data: buf[:n], Total: size, EOF: eof, OK: true,
-	}); err != nil {
+	}
+	head := cp
+	head.Data = nil
+	if err := c.sendDataFrame(env.From, bus.MsgArtifactChunk, head, cp, buf[:n]); err != nil {
 		c.logger.Warn("send artifact chunk", "hash", p.Hash, "offset", p.Offset, "err", err)
 	}
 }
@@ -463,6 +553,9 @@ func (c *Core) handleArtifactChunk(ctx context.Context, env bus.Envelope) {
 	if err := env.PayloadInto(&p); err != nil {
 		c.logger.Warn("bad artifact_chunk", "err", err)
 		return
+	}
+	if len(env.BinaryPayload) > 0 {
+		p.Data = env.BinaryPayload
 	}
 	v, ok := c.pendingArt.Load(artifactKey(p.TaskID, p.Hash))
 	if !ok {

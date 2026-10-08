@@ -495,7 +495,11 @@ func runQueue(args []string) {
 		return
 	}
 
-	tasks, err := store.ListByState(context.Background(), *state)
+	// The listing is capped at the recent-activity window — the board renders
+	// the working set, and an uncapped history read is what made this view
+	// slow on long-lived daemons.
+	const queueListCap = 500
+	tasks, err := store.ListRecentByState(context.Background(), *state, queueListCap)
 	if err != nil {
 		fatal("list tasks", err)
 	}
@@ -506,6 +510,10 @@ func runQueue(args []string) {
 		}
 	}
 	sort.Slice(filtered, func(i, j int) bool { return filtered[i].UpdatedAt > filtered[j].UpdatedAt })
+	loc := i18n.Detect()
+	if len(tasks) == queueListCap && !jsonOutput {
+		fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.queue.truncated", "n", strconv.Itoa(queueListCap)))
+	}
 
 	if jsonOutput {
 		out := make([]taskJSON, 0, len(filtered))
@@ -515,7 +523,6 @@ func runQueue(args []string) {
 		emitJSON(out)
 		return
 	}
-	loc := i18n.Detect()
 	if len(filtered) == 0 {
 		fmt.Println(i18n.T(loc, "cli.queue.none"))
 		return
@@ -539,11 +546,11 @@ func runQueueClear(cfg *config.Config, yes bool, configPath string) {
 	}
 	defer db.Close()
 
-	tasks, err := store.ListByState(context.Background(), "")
+	n, err := store.CountByState(context.Background(), "")
 	if err != nil {
-		fatal("list tasks", err)
+		fatal("count tasks", err)
 	}
-	if len(tasks) == 0 {
+	if n == 0 {
 		fmt.Println(i18n.T(loc, "cli.queue.clear.empty"))
 		return
 	}
@@ -553,7 +560,7 @@ func runQueueClear(cfg *config.Config, yes bool, configPath string) {
 			fmt.Fprintln(os.Stderr, "panda queue clear: pass --yes to clear non-interactively")
 			os.Exit(2)
 		}
-		fmt.Print(i18n.Tf(loc, "cli.queue.clear.confirm", "n", strconv.Itoa(len(tasks))))
+		fmt.Print(i18n.Tf(loc, "cli.queue.clear.confirm", "n", strconv.Itoa(n)))
 		var ans string
 		if _, err := fmt.Scanln(&ans); err != nil && ans == "" {
 			return // empty line = the default "no"
@@ -572,8 +579,10 @@ func runQueueClear(cfg *config.Config, yes bool, configPath string) {
 	})
 	if err == nil {
 		defer engine.Close()
-		for _, t := range tasks {
-			if !core.Terminal(t.State) {
+		// Only the active set can still be executing — the settled archive
+		// has nothing to cancel.
+		if active, lerr := store.ListActive(context.Background()); lerr == nil {
+			for _, t := range active {
 				_, _ = engine.CancelTask(context.Background(), t.TaskID)
 			}
 		}

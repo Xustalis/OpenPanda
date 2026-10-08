@@ -48,7 +48,19 @@ type HelloPayload struct {
 	// NodeID/Ts/Nonce only): a tampered You costs the attacker nothing but a
 	// wrong candidate list, which the punch handshake detects anyway.
 	You string `json:"you,omitempty"`
+	// Caps advertises optional wire features this build supports (e.g.
+	// binary data frames) so a peer can pick the better encoding without a
+	// version-number parse. Absent on old nodes; receivers that do not know
+	// a listed capability simply never exercise it.
+	Caps []string `json:"caps,omitempty"`
 }
+
+// CapBinaryData is the hello-advertised capability for binary data frames:
+// a peer that lists it accepts data-carrying envelopes (artifact_chunk,
+// artifact_push) as a WS binary frame — 2-byte header length + JSON header +
+// raw bytes — instead of the JSON/base64 form. A sender checks it before
+// choosing the encoding, so mixed-version links keep working.
+const CapBinaryData = "binart"
 
 // HeartbeatPayload carries status + capacity. Card is an optional capability
 // summary (same compact JSON form as HelloPayload.Card) sent when the sender
@@ -645,7 +657,7 @@ type ArtifactPushPayload struct {
 	TaskID string `json:"task_id"`
 	Hash   string `json:"hash"`
 	Offset int64  `json:"offset"`
-	Data   []byte `json:"data"`
+	Data   []byte `json:"data,omitempty"`
 	Total  int64  `json:"total"`
 }
 

@@ -240,18 +240,12 @@ func (c *Core) streamArtifactPushes(ctx context.Context, keys []string, inst str
 				c.logger.Warn("push: read chunk", "hash", r.hash, "off", off, "err", err)
 				break
 			}
-			msgID, err := newUUID()
-			if err != nil {
-				return
-			}
-			env, err := bus.NewEnvelope(bus.MsgArtifactPush, c.nodeID, msgID, bus.ArtifactPushPayload{
+			pp := bus.ArtifactPushPayload{
 				TaskID: r.taskID, Hash: r.hash, Offset: off, Data: buf[:n], Total: r.total,
-			})
-			if err != nil {
-				return
 			}
-			env.To = inst
-			if err := c.sendTo(inst, env); err != nil {
+			head := pp
+			head.Data = nil
+			if err := c.sendDataFrame(inst, bus.MsgArtifactPush, head, pp, buf[:n]); err != nil {
 				// Link died mid-stream. The receiver's ack — not our send
 				// log — decides what the next flush re-sends, so custody
 				// simply stays put.
@@ -314,6 +308,9 @@ func (c *Core) handleArtifactPush(ctx context.Context, env bus.Envelope) {
 	if err := env.PayloadInto(&p); err != nil {
 		c.logger.Warn("bad artifact_push", "err", err)
 		return
+	}
+	if len(env.BinaryPayload) > 0 {
+		p.Data = env.BinaryPayload
 	}
 	status := func(through int64) {
 		if err := c.reply(ctx, env, bus.MsgArtifactPushStatus, bus.ArtifactPushStatusPayload{

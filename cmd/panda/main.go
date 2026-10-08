@@ -453,6 +453,7 @@ func runDaemon(args []string) {
 	artifactStore.SetMinFreeBytes(cfg.Storage.ArtifactMinFreeBytes)
 	coreNode.SetArtifactStore(artifactStore)
 	coreNode.SetLimits(cfg.Network.MaxConnections, cfg.Network.MaxConnectionsPerIP)
+	coreNode.SetRetentionDays(cfg.Storage.EffectiveTaskRetentionDays())
 	// DTN contact plan (network.contacts): the scheduled windows custody
 	// routing plans around. A malformed window fails startup outright —
 	// silently dropping it would strand bundles the operator scheduled.

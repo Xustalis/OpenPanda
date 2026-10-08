@@ -251,15 +251,19 @@ func (d *selfToolsDeps) toolQueue(ctx context.Context, _ map[string]any) (string
 	var items []item
 	counts := map[string]int{}
 	for _, state := range []string{"submitted", "queued", "dispatched", "running", "waiting_context", "review"} {
-		tasks, err := d.tasks.ListByState(ctx, state)
+		cnt, err := d.tasks.CountByState(ctx, state)
+		if err != nil {
+			return "", fmt.Errorf("count %s: %w", state, err)
+		}
+		counts[state] = cnt
+		if len(items) >= 25 {
+			continue
+		}
+		tasks, err := d.tasks.ListByStateLimit(ctx, state, 25-len(items))
 		if err != nil {
 			return "", fmt.Errorf("list %s: %w", state, err)
 		}
-		counts[state] = len(tasks)
 		for _, t := range tasks {
-			if len(items) >= 25 {
-				break
-			}
 			items = append(items, item{ID: t.TaskID, Title: t.Title, State: t.State, Owner: t.OwnerNode})
 		}
 	}

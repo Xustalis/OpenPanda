@@ -3,6 +3,7 @@
 package bus
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"testing"
 )
@@ -56,6 +57,71 @@ func BenchmarkEnvelopeChunkMarshal(b *testing.B) {
 		}
 		if _, err := json.Marshal(env); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkDataFrameMarshal measures the CapBinaryData send path for the
+// same 1 MiB chunk: marshal only the data-less header, then frame it. The
+// base64 codec — BenchmarkEnvelopeChunkMarshal's whole cost — never runs.
+func BenchmarkDataFrameMarshal(b *testing.B) {
+	data := make([]byte, ArtifactChunkBytes)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	head := ArtifactChunkPayload{TaskID: "t-1", Hash: "abc", Offset: 0, Total: int64(len(data)), EOF: true, OK: true}
+	b.SetBytes(int64(len(data)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		env, err := NewEnvelope(MsgArtifactChunk, "node-a", "m-chunk", head)
+		if err != nil {
+			b.Fatal(err)
+		}
+		header, err := json.Marshal(env)
+		if err != nil {
+			b.Fatal(err)
+		}
+		frame := make([]byte, 2+len(header)+len(data))
+		binary.BigEndian.PutUint16(frame, uint16(len(header)))
+		copy(frame[2:], header)
+		copy(frame[2+len(header):], data)
+	}
+}
+
+// BenchmarkDataFrameUnmarshal is the receive side: split the frame, decode
+// the header, attach the body — no base64 decode, no payload copy.
+func BenchmarkDataFrameUnmarshal(b *testing.B) {
+	data := make([]byte, ArtifactChunkBytes)
+	head := ArtifactChunkPayload{TaskID: "t-1", Hash: "abc", Offset: 0, Total: int64(len(data)), EOF: true, OK: true}
+	env, err := NewEnvelope(MsgArtifactChunk, "node-a", "m-chunk", head)
+	if err != nil {
+		b.Fatal(err)
+	}
+	header, err := json.Marshal(env)
+	if err != nil {
+		b.Fatal(err)
+	}
+	frame := make([]byte, 2+len(header)+len(data))
+	binary.BigEndian.PutUint16(frame, uint16(len(header)))
+	copy(frame[2:], header)
+	copy(frame[2+len(header):], data)
+	b.SetBytes(int64(len(data)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		hlen := int(binary.BigEndian.Uint16(frame))
+		var got Envelope
+		if err := json.Unmarshal(frame[2:2+hlen], &got); err != nil {
+			b.Fatal(err)
+		}
+		got.BinaryPayload = frame[2+hlen:]
+		var cp ArtifactChunkPayload
+		if err := got.PayloadInto(&cp); err != nil {
+			b.Fatal(err)
+		}
+		if body := got.BinaryPayload; len(body) != len(data) {
+			b.Fatalf("chunk body = %d bytes, want %d", len(body), len(data))
 		}
 	}
 }

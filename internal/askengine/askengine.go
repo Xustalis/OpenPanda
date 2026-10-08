@@ -837,6 +837,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		}
 	}
 	sched.SetTimeouts(e.cfg.Timeouts)
+	sched.SetRetentionDays(e.cfg.Storage.EffectiveTaskRetentionDays())
 
 	if e.schedCancel != nil {
 		e.schedCancel()

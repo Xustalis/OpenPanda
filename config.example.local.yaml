@@ -50,6 +50,11 @@ storage:
   # 每个卷保留的最小剩余空间：产物可以任意大，但不能把卷写到这条线以下——
   # 写满的文件系统会拖垮 SQLite 的 WAL。缺省 256MiB，显式 0 关闭。
   artifact_min_free_bytes: 268435456
+  # 已完结任务（done/failed/cancelled/expired）的保留天数，超过后由每小时
+  # 的清理周期删除——daemon 的任务表否则只会无限增长，每次任务列表都在为
+  # 历史买单。缺省 30 天；显式 0 永久保留。review 任务不会过期：等人批准的
+  # 行不是历史。
+  # task_retention_days: 30
 
 model:
   api_type: ""       # anthropic | openai（缺省 anthropic）

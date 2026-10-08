@@ -601,12 +601,12 @@ func (e *Engine) systemStatus(ctx context.Context) (string, error) {
 		core.StateQueued, core.StateDispatched, core.StateWaitingCtx, core.StateRunning,
 		core.StateReview, core.StateDone, core.StateFailed,
 	} {
-		ts, err := store.ListByState(ctx, st)
+		n, err := store.CountByState(ctx, st)
 		if err != nil {
 			return "", fmt.Errorf("统计任务：%w", err)
 		}
-		if len(ts) > 0 {
-			counts = append(counts, fmt.Sprintf("%s %d", zhTaskState(st), len(ts)))
+		if n > 0 {
+			counts = append(counts, fmt.Sprintf("%s %d", zhTaskState(st), n))
 		}
 	}
 	if len(counts) == 0 {
@@ -778,22 +778,35 @@ func (e *Engine) cardShow(ctx context.Context, name string) (string, error) {
 func (e *Engine) taskqList(ctx context.Context, filter string) (string, error) {
 	states, label := taskqStates(filter)
 	store := core.NewSigningTaskStore(e.db, nil)
+	// Counts come from COUNT(*); rows only for what is rendered — a long
+	// history must not reach the model's context just to say "500 done".
+	total := 0
 	var tasks []core.Task
 	for _, st := range states {
-		ts, err := store.ListByState(ctx, st)
+		n, err := store.CountByState(ctx, st)
+		if err != nil {
+			return "", fmt.Errorf("查询任务：%w", err)
+		}
+		total += n
+	}
+	// The listing reads at most taskqReadCap rows per state — far past the 30
+	// shown, enough that "earliest" is meaningful on any real queue.
+	const taskqReadCap = 200
+	for _, st := range states {
+		ts, err := store.ListByStateLimit(ctx, st, taskqReadCap)
 		if err != nil {
 			return "", fmt.Errorf("查询任务：%w", err)
 		}
 		tasks = append(tasks, ts...)
 	}
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreatedAt < tasks[j].CreatedAt })
-	if len(tasks) == 0 {
+	if total == 0 {
 		return fmt.Sprintf("任务队列（%s）：空。", label), nil
 	}
 	const maxRows = 30
 	rows := min(maxRows, len(tasks))
 	var b strings.Builder
-	fmt.Fprintf(&b, "任务队列（%s）共 %d 个", label, len(tasks))
+	fmt.Fprintf(&b, "任务队列（%s）共 %d 个", label, total)
 	if len(tasks) > rows {
 		fmt.Fprintf(&b, "，仅显示最早的 %d 个", rows)
 	}
@@ -894,37 +907,31 @@ func (e *Engine) taskqShow(ctx context.Context, taskID string) (string, error) {
 // form. A unique prefix resolves; an ambiguous one errors with the
 // candidates; no match falls through to the caller's not-found handling.
 func (e *Engine) resolveTaskID(ctx context.Context, store *core.TaskStore, id string) (string, error) {
+	// An exact id always resolves, however short — custom ids need not be
+	// UUIDs. Below that, a prefix under 4 chars is never resolvable: models
+	// quote the 8-char display form, and anything shorter is far more likely
+	// a mangled quote than a real attempt at a prefix.
 	if _, err := store.Get(ctx, id); err == nil {
 		return id, nil
 	}
 	if len(id) < 4 {
 		return "", fmt.Errorf("not found")
 	}
-	states, _ := taskqStates("all")
-	var matches []string
-	for _, st := range states {
-		ts, err := store.ListByState(ctx, st)
-		if err != nil {
-			continue
-		}
-		for _, t := range ts {
-			if strings.HasPrefix(t.TaskID, id) {
-				matches = append(matches, t.TaskID)
-			}
-		}
+	// Delegate to the store's own prefix resolver — one indexed LIKE query
+	// instead of a full-table read per state.
+	resolved, err := store.ResolveTaskID(ctx, id)
+	if err == nil {
+		return resolved, nil
 	}
-	switch len(matches) {
-	case 0:
-		return "", fmt.Errorf("not found")
-	case 1:
-		return matches[0], nil
-	default:
-		shorts := make([]string, 0, len(matches))
-		for _, m := range matches {
+	var amb *core.AmbiguousTaskIDError
+	if errors.As(err, &amb) {
+		shorts := make([]string, 0, len(amb.Candidates))
+		for _, m := range amb.Candidates {
 			shorts = append(shorts, shortID(m))
 		}
-		return "", fmt.Errorf("前缀 %s 匹配到 %d 个任务（%s），请用更长的前缀", id, len(matches), strings.Join(shorts, "、"))
+		return "", fmt.Errorf("前缀 %s 匹配到多个任务（%s），请用更长的前缀", id, strings.Join(shorts, "、"))
 	}
+	return "", fmt.Errorf("not found")
 }
 
 // selfNodeID is the stable runtime id this node registers its card under —
@@ -1274,22 +1281,24 @@ func (e *Engine) taskqClear(ctx context.Context, scope string) (string, error) {
 	case "review":
 		return "", fmt.Errorf("待审批任务需要用户逐个决定，%s", reviewDecisionHint)
 	case "all":
-		ts, err := store.ListByState(ctx, core.StateReview)
+		n, err := store.CountByState(ctx, core.StateReview)
 		if err != nil {
 			return "", fmt.Errorf("查询任务：%w", err)
 		}
-		if len(ts) > 0 {
-			return "", fmt.Errorf("仍有 %d 个任务等待用户审批，%s", len(ts), reviewDecisionHint)
+		if n > 0 {
+			return "", fmt.Errorf("仍有 %d 个任务等待用户审批，%s", n, reviewDecisionHint)
 		}
-		ts, err = store.ListByState(ctx, "")
+		n, err = store.CountByState(ctx, "")
 		if err != nil {
 			return "", fmt.Errorf("查询任务：%w", err)
 		}
-		if len(ts) == 0 {
+		if n == 0 {
 			return "任务队列已为空。", nil
 		}
-		for _, t := range ts {
-			if !core.Terminal(t.State) {
+		// Only the active set can still be executing — the settled archive
+		// has nothing to cancel.
+		if active, lerr := store.ListActive(ctx); lerr == nil {
+			for _, t := range active {
 				_, _ = e.CancelTask(ctx, t.TaskID)
 			}
 		}

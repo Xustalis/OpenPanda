@@ -102,7 +102,7 @@ func (s *TaskStore) PlanStages(ctx context.Context, planID string) ([]Task, erro
 		return nil, err
 	}
 	defer rows.Close()
-	return scanTasks(rows)
+	return s.scanTasks(rows)
 }
 
 // PlanSummary is one plan as a listing row: how many stages it has, how many have

@@ -169,18 +169,20 @@ func (h *handler) deleteTask(w http.ResponseWriter, r *http.Request) {
 // configured so remote executors hear them too; without an engine the rows are
 // still cleared and running work ends on its own lease.
 func (h *handler) clearTasks(w http.ResponseWriter, r *http.Request) {
-	tasks, err := h.store.ListByState(r.Context(), "")
+	n, err := h.store.CountByState(r.Context(), "")
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, errors.New("list tasks failed"))
+		writeErr(w, http.StatusInternalServerError, errors.New("count tasks failed"))
 		return
 	}
-	if len(tasks) == 0 {
+	if n == 0 {
 		writeJSON(w, map[string]int{"cancelled": 0, "deleted": 0})
 		return
 	}
 	if eng := h.currentEngine(); eng != nil {
-		for _, t := range tasks {
-			if !core.Terminal(t.State) {
+		// Only the active set can still be executing — settled rows have
+		// nothing left to cancel.
+		if active, lerr := h.store.ListActive(r.Context()); lerr == nil {
+			for _, t := range active {
 				_, _ = eng.CancelTask(r.Context(), t.TaskID)
 			}
 		}

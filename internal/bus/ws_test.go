@@ -279,3 +279,59 @@ func statusOf(resp *http.Response) int {
 	}
 	return resp.StatusCode
 }
+
+// TestDataFrameRoundTrip covers the CapBinaryData wire form end to end: a
+// chunk written by SendData must arrive with its header fields intact and
+// its body in Envelope.BinaryPayload, at byte-exact size (no base64).
+func TestDataFrameRoundTrip(t *testing.T) {
+	got := make(chan Envelope, 1)
+	cancel, _ := startTestServer(t, "127.0.0.1:17877", func(conn *Conn) {
+		var env Envelope
+		if err := conn.ReadJSON(&env); err != nil {
+			return
+		}
+		got <- env
+	})
+	defer cancel()
+
+	client, err := NewClient("ws://127.0.0.1:17877/ws", testLogger()).Dial(context.Background())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	body := make([]byte, ArtifactChunkBytes)
+	for i := range body {
+		body[i] = byte(i)
+	}
+	head := ArtifactChunkPayload{TaskID: "t-1", Hash: "abc", Offset: 7 << 20, Total: 9 << 20, OK: true}
+	env, err := NewEnvelope(MsgArtifactChunk, "node-a", "m-data", head)
+	if err != nil {
+		t.Fatalf("envelope: %v", err)
+	}
+	if err := client.SendData(env, body); err != nil {
+		t.Fatalf("send data frame: %v", err)
+	}
+
+	select {
+	case got := <-got:
+		if got.Type != MsgArtifactChunk || got.From != "node-a" {
+			t.Fatalf("header = %s from %s", got.Type, got.From)
+		}
+		var cp ArtifactChunkPayload
+		if err := got.PayloadInto(&cp); err != nil {
+			t.Fatalf("payload: %v", err)
+		}
+		if cp.Offset != 7<<20 || cp.Total != 9<<20 || !cp.OK {
+			t.Fatalf("chunk header fields = %+v", cp)
+		}
+		if len(cp.Data) != 0 {
+			t.Fatalf("json data field should be empty on a data frame, got %d bytes", len(cp.Data))
+		}
+		if len(got.BinaryPayload) != len(body) || got.BinaryPayload[123] != body[123] {
+			t.Fatalf("binary body = %d bytes", len(got.BinaryPayload))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("data frame never arrived")
+	}
+}

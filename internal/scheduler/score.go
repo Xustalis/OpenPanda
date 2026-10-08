@@ -4,6 +4,7 @@ package scheduler
 
 import (
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -270,13 +271,11 @@ func ScoreAllCandidates(candidates []ledger.Node, selfID, preferred, project str
 		})
 	}
 	// desc by total, asc by node_id for tie-break consistency
-	for i := 0; i < len(out); i++ {
-		for j := i + 1; j < len(out); j++ {
-			if out[j].TotalScore > out[i].TotalScore ||
-				(out[j].TotalScore == out[i].TotalScore && out[j].NodeID < out[i].NodeID) {
-				out[i], out[j] = out[j], out[i]
-			}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].TotalScore != out[j].TotalScore {
+			return out[i].TotalScore > out[j].TotalScore
 		}
-	}
+		return out[i].NodeID < out[j].NodeID
+	})
 	return out
 }

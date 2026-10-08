@@ -379,6 +379,27 @@ type StorageConfig struct {
 	// WAL, so an artifact may fill a volume only down to this mark. The
 	// default is 256 MiB; 0 disables the watermark.
 	ArtifactMinFreeBytes int64 `yaml:"artifact_min_free_bytes"`
+	// TaskRetentionDays bounds how long a settled task row (done, failed,
+	// cancelled, expired) and its event timeline are kept before the hourly
+	// sweep deletes them. A daemon's task table otherwise only grows, and
+	// every task listing pays for the archive. Omitted means the default
+	// (30 days); an explicit 0 disables the sweep and keeps everything.
+	// review tasks never age out — a row parked for a human is not history.
+	TaskRetentionDays *int `yaml:"task_retention_days,omitempty"`
+}
+
+// DefaultTaskRetentionDays is how long settled task history is kept when the
+// config does not say: a month is long enough that anything worth revisiting
+// has been, short enough that the board stays a working set.
+const DefaultTaskRetentionDays = 30
+
+// EffectiveTaskRetentionDays resolves the retention knob: unset means the
+// default, explicit 0 means keep forever.
+func (s StorageConfig) EffectiveTaskRetentionDays() int {
+	if s.TaskRetentionDays == nil {
+		return DefaultTaskRetentionDays
+	}
+	return *s.TaskRetentionDays
 }
 
 // LogConfig controls structured logging.

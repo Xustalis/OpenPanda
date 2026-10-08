@@ -8,6 +8,7 @@
 package doctor
 
 import (
+	"database/sql"
 	"fmt"
 	"net"
 	"os"
@@ -15,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
@@ -81,6 +84,9 @@ func Run(configPath string) []Check {
 		add(pass("doctor.config.ok", "path", config.ResolvePath(configPath), "name", cfg.Node.Name))
 		if st, err := os.Stat(cfg.Storage.DBPath); err == nil {
 			add(pass("doctor.db.ok", "path", cfg.Storage.DBPath, "size", fmt.Sprintf("%d B", st.Size())))
+			if c := checkDBGrowth(cfg); c.Key != "" {
+				add(c)
+			}
 		} else {
 			add(fail("doctor.db.no", "path", cfg.Storage.DBPath))
 		}
@@ -229,3 +235,49 @@ func AdaptersDir() string {
 }
 
 func joinPaths(ps []string) string { return strings.Join(ps, ", ") }
+
+// doctorSettledWarn is the settled-history row count where "retention off"
+// stops being a preference and becomes a scaling problem: at tens of
+// thousands of dead rows every bounded board query still pays the index
+// scan, and a full clear becomes a multi-second delete.
+const doctorSettledWarn = 20000
+
+// checkDBGrowth counts task/audit rows in the local database and flags the
+// one unbounded-growth combination that has a knob: a large settled history
+// with retention disabled. It reports a Check{}-with-empty-Key when the
+// database cannot be read — the sibling db.ok check already covers
+// reachability, so a second red line would only duplicate it.
+func checkDBGrowth(cfg *config.Config) Check {
+	db, err := sql.Open("sqlite",
+		fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(2000)", escapeURIPath(cfg.Storage.DBPath)))
+	if err != nil {
+		return Check{}
+	}
+	defer db.Close()
+	var tasks, settled, audits int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&tasks); err != nil {
+		return Check{}
+	}
+	// A failed count would report as zero — a schema old enough to lack one
+	// of these tables makes any printed number a lie, so stay silent instead.
+	if err := db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE state IN ('done','failed','cancelled','expired')`).Scan(&settled); err != nil {
+		return Check{}
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM audit_log`).Scan(&audits); err != nil {
+		return Check{}
+	}
+	if settled > doctorSettledWarn && cfg.Storage.EffectiveTaskRetentionDays() == 0 {
+		return fail("doctor.db.growth.no",
+			"settled", fmt.Sprintf("%d", settled), "audit", fmt.Sprintf("%d", audits))
+	}
+	return pass("doctor.db.growth.ok",
+		"tasks", fmt.Sprintf("%d", tasks), "settled", fmt.Sprintf("%d", settled),
+		"audit", fmt.Sprintf("%d", audits))
+}
+
+// escapeURIPath keeps a database path inside a file: URI intact — the same
+// three characters storage.escapeDBPath encodes, duplicated here so doctor
+// stays free of a storage dependency for two queries.
+func escapeURIPath(path string) string {
+	return strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(path)
+}

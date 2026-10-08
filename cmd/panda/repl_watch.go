@@ -87,19 +87,24 @@ type watchEvent struct {
 // the baseline. Both front ends share it: the classic loop prints the lines
 // through the line editor, the TUI commits them as transcript notes and raises
 // the approval card for review events.
+//
+// The poll reads the stamp digest (id/state/updated_at) rather than full task
+// rows: the diff and the stall bookkeeping need nothing more, so a long task
+// history costs three columns a row instead of every payload column. Full rows
+// are fetched only for the two small sets that need them — tasks whose state
+// just turned terminal (rare per poll) and the active set the stall check
+// walks, which the archive never enters.
 func (r *repl) pollCompletions(ctx context.Context) []watchEvent {
 	if r.store == nil {
 		return nil
 	}
-	tasks, err := r.store.ListByState(ctx, "")
+	stamps, err := r.store.TaskStamps(ctx)
 	if err != nil {
 		return nil
 	}
-	cur := make(map[string]core.Task, len(tasks))
-	states := make(map[string]string, len(tasks))
-	for _, t := range tasks {
-		cur[t.TaskID] = t
-		states[t.TaskID] = t.State
+	states := make(map[string]string, len(stamps))
+	for _, s := range stamps {
+		states[s.ID] = s.State
 	}
 	var events []watchEvent
 	r.watchMu.Lock()
@@ -110,7 +115,10 @@ func (r *repl) pollCompletions(ctx context.Context) []watchEvent {
 	for id, st := range states {
 		prev, seen := r.baseline[id]
 		if seen && prev != st && isTerminalState(st) {
-			t := cur[id]
+			t, err := r.store.Get(ctx, id)
+			if err != nil {
+				continue // row left under us (retention, a clear): no note to build
+			}
 			events = append(events, watchEvent{
 				note:   r.completionNote(t),
 				task:   t,
@@ -123,17 +131,19 @@ func (r *repl) pollCompletions(ctx context.Context) []watchEvent {
 			}
 		}
 	}
-	for _, t := range tasks {
-		if ev, ok := r.stallEventLocked(t, now); ok {
-			events = append(events, ev)
+	if active, err := r.store.ListActive(ctx); err == nil {
+		for _, t := range active {
+			if ev, ok := r.stallEventLocked(t, now); ok {
+				events = append(events, ev)
+			}
 		}
 	}
 	// Forget stall marks for tasks that left the watched set — terminal,
 	// deleted, or moved to a new state (a new key, free to warn again).
 	for key := range r.stallNoted {
 		id, _, _ := strings.Cut(key, "|")
-		t, ok := cur[id]
-		if !ok || key != id+"|"+t.State {
+		st, ok := states[id]
+		if !ok || key != id+"|"+st {
 			delete(r.stallNoted, key)
 		}
 	}
@@ -317,13 +327,13 @@ func (r *repl) resetWatchBaseline() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	tasks, err := r.store.ListByState(ctx, "")
+	stamps, err := r.store.TaskStamps(ctx)
 	if err != nil {
 		return
 	}
-	states := make(map[string]string, len(tasks))
-	for _, t := range tasks {
-		states[t.TaskID] = t.State
+	states := make(map[string]string, len(stamps))
+	for _, s := range stamps {
+		states[s.ID] = s.State
 	}
 	r.watchMu.Lock()
 	r.baseline = states

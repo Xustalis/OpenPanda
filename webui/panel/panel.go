@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -652,15 +653,29 @@ func parsePriority(label string) (int, bool) {
 	return 0, false
 }
 
-// listTasks serves the queue, optionally filtered by state and project.
+// queueBoardCap bounds the tasks one board poll reads — several times any
+// realistic working set so a long history never slows the refresh.
+const queueBoardCap = 500
+
+// listTasks serves the queue, optionally filtered by state and project. The
+// read is capped at queueBoardCap; when the cap is hit the response carries
+// X-Tasks-Truncated plus the true count in X-Tasks-Total, so a client can say
+// "500 of 12k" instead of silently showing a shortened board. The body stays
+// a bare array for backward compatibility.
 func (h *handler) listTasks(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	project := r.URL.Query().Get("project")
 
-	tasks, err := h.store.ListByState(r.Context(), state)
+	tasks, err := h.store.ListRecentByState(r.Context(), state, queueBoardCap)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("list tasks failed"))
 		return
+	}
+	if len(tasks) == queueBoardCap {
+		w.Header().Set("X-Tasks-Truncated", "1")
+		if n, cerr := h.store.CountByState(r.Context(), state); cerr == nil {
+			w.Header().Set("X-Tasks-Total", strconv.Itoa(n))
+		}
 	}
 	var filtered []core.Task
 	for _, t := range tasks {

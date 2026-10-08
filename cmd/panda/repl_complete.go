@@ -407,13 +407,15 @@ func (r *repl) taskIDs(state string) []string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	tasks, err := r.store.ListByState(ctx, state)
+	stamps, err := r.store.TaskStamps(ctx)
 	if err != nil {
 		return nil
 	}
-	ids := make([]string, 0, len(tasks))
-	for _, t := range tasks {
-		ids = append(ids, t.TaskID)
+	ids := make([]string, 0, len(stamps))
+	for _, s := range stamps {
+		if state == "" || s.State == state {
+			ids = append(ids, s.ID)
+		}
 	}
 	return r.taskIDCache.put(state, ids)
 }

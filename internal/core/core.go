@@ -315,6 +315,15 @@ type Core struct {
 	// pendingTTL.
 	pendingSweepAt int64
 
+	// retentionDays is the configured age limit for settled task rows
+	// (storage.task_retention_days): 0 keeps history forever. retentionSweepAt
+	// paces the hourly pass inside taskSweeps — the monitor ticks every 5s
+	// but a delete only needs to run on the order of the retention window.
+	// Both atomics: SetRetentionDays may land after the monitor started
+	// (config reload), and the sweep check runs on every tick.
+	retentionDays    atomic.Int64
+	retentionSweepAt atomic.Int64
+
 	// Farsky datagram plane (§9.2). udp is the shared socket; udpPort its
 	// bound port (advertised in hello). udpRoutes maps peer id -> confirmed
 	// endpoint (a punch/ack or sealed envelope binds it; sendTo falls back
@@ -1072,12 +1081,60 @@ func (c *Core) taskSweeps(ctx context.Context) {
 	c.wakeSatisfiedArtifactWaiters(ctx)
 	c.pruneStagedArtifacts(ctx)
 	c.expireLeases(ctx)
+	c.sweepRetention(ctx)
 	// A row can go terminal — or park in review — out of band: cancelled
 	// from the CLI, rejected from the console, failed by another process's
 	// monitor. ExpireTasks only cleans the rows it fails itself, so without
 	// this pass an out-of-band verdict leaves the local agent running under
 	// a state the store already discarded.
 	c.reconcileLocalWork(ctx)
+}
+
+// retentionSweepInterval paces DeleteSettledBefore: the deadline it enforces
+// is measured in days, so an hourly pass is both timely enough and cheap.
+const retentionSweepInterval = time.Hour
+
+// SetRetentionDays installs the settled-task age limit (config
+// storage.task_retention_days). Zero disables the sweep — the task table
+// then grows without bound, which is the pre-knob behaviour an operator can
+// still choose explicitly.
+func (c *Core) SetRetentionDays(days int) {
+	if days < 0 {
+		days = 0
+	}
+	c.retentionDays.Store(int64(days))
+}
+
+// sweepRetention deletes settled tasks older than the configured retention.
+// It is deliberately part of taskSweeps rather than its own goroutine: every
+// process that owns the lifecycle monitor inherits the cleanup, the 5s tick
+// provides the pacing, and the state-guarded delete is idempotent across the
+// processes that may share one store.
+func (c *Core) sweepRetention(ctx context.Context) {
+	days := c.retentionDays.Load()
+	if days <= 0 {
+		return
+	}
+	now := time.Now()
+	last := c.retentionSweepAt.Load()
+	if last > 0 && now.Sub(time.Unix(last, 0)) < retentionSweepInterval {
+		return
+	}
+	if !c.retentionSweepAt.CompareAndSwap(last, now.Unix()) {
+		return // another sweep pass won the slot
+	}
+	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour).Unix()
+	deleted, err := c.store.DeleteSettledBefore(ctx, cutoff)
+	if err != nil {
+		c.retentionSweepAt.Store(last) // let the next tick retry
+		c.logger.Warn("task retention sweep", "err", err)
+		return
+	}
+	if deleted > 0 {
+		c.logger.Info("task retention sweep", "days", days, "deleted", deleted)
+		c.audit(ctx, "", "store:retention", "tasks", "swept",
+			fmt.Sprintf("deleted %d settled task(s) older than %d days", deleted, days))
+	}
 }
 
 // expireLeases fails every active task whose lease or absolute deadline has
@@ -1388,6 +1445,7 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 		Nonce:   nonce,
 		Sig:     bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
 		UDPPort: c.UDPPort(),
+		Caps:    []string{bus.CapBinaryData},
 	}
 	c.signHello(&hello, ts, nonce)
 	env, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, hello)
@@ -1745,6 +1803,11 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	}
 	c.mu.Unlock()
 	conn.SetPeerID(p.NodeID)
+	// Wire-feature negotiation: the peer's advertised caps decide whether
+	// data-plane envelopes may leave as binary frames. Old peers send no
+	// list and get the JSON/base64 form forever — capability probing via an
+	// explicit bit, never a version parse.
+	conn.SetCaps(p.Caps)
 
 	// Send our hello reply BEFORE registering the conn, and directly on the
 	// conn this hello arrived on — never via the registry (c.reply). The far
@@ -1862,6 +1925,7 @@ func (c *Core) sendHelloReply(conn *bus.Conn, to string) {
 		Sig:     bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
 		UDPPort: c.UDPPort(),
 		You:     observed,
+		Caps:    []string{bus.CapBinaryData},
 	}
 	c.signHello(&reply, ts, nonce)
 	envOut, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, reply)
@@ -1944,6 +2008,34 @@ func (c *Core) sendTo(id string, env bus.Envelope) error {
 		return u.SendEnvelope(env, addr)
 	}
 	return errors.New("peer not connected: " + id)
+}
+
+// sendDataFrame delivers an envelope whose payload carries a bulk []byte. On
+// a direct conn whose peer advertised CapBinaryData the bytes ride a binary
+// frame — the header is the same envelope with its data field cleared, the
+// body the raw bytes, no base64 and no codec on either side. Everywhere else
+// (old peer, UDP route, no direct conn) the full JSON form goes through the
+// ordinary path, so a mixed-version mesh never loses the data. Both payload
+// arguments are the same message: header with Data cleared, full with it set.
+func (c *Core) sendDataFrame(to, typ string, header, full any, body []byte) error {
+	msgID, err := newUUID()
+	if err != nil {
+		return err
+	}
+	if conn := c.connFor(to); conn != nil && conn.Supports(bus.CapBinaryData) {
+		env, err := bus.NewEnvelope(typ, c.nodeID, msgID, header)
+		if err != nil {
+			return err
+		}
+		env.To = to
+		return conn.SendData(env, body)
+	}
+	env, err := bus.NewEnvelope(typ, c.nodeID, msgID, full)
+	if err != nil {
+		return err
+	}
+	env.To = to
+	return c.sendTo(to, env)
 }
 
 // newUUID mints a fresh message id. It returns an error rather than panicking
