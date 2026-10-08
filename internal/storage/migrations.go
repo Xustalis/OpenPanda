@@ -62,6 +62,31 @@ var migrations = []Migration{
 	{Version: 35, Name: "add_task_events_sig", Apply: migrateV35},
 	{Version: 36, Name: "rekey_outboxes_stable_id", Apply: migrateV36},
 	{Version: 37, Name: "add_audit_log_sig", Apply: migrateV37},
+	{Version: 38, Name: "add_resume_outbox", Apply: migrateV38},
+}
+
+// migrateV38 adds resume_outbox: the delivery guarantee for task_resume
+// approvals. A resume sent while the executor's link was down used to fail
+// the task outright — a user's explicit approval killed by a transient
+// flap, the same class of divergence the task/result/cancel outboxes exist
+// to close. Parked approvals are re-delivered on the executor's next hello,
+// bounded by ttl (the lease window at persist time): a peer that never
+// returns expires the row and the local copy together instead of diverging.
+// The receiver is idempotent — a resume on a task no longer in review is
+// answered with a failed result rather than re-run — so a resend is safe.
+func migrateV38(tx MigrationExec) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS resume_outbox (
+		peer TEXT NOT NULL,
+		task_id TEXT NOT NULL,
+		payload_json TEXT NOT NULL,
+		ttl INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY (peer, task_id)
+	)`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_resume_outbox_peer ON resume_outbox(peer)`)
+	return err
 }
 
 // migrateV37 adds audit_log.sig / sig_pub (P2-9): the Ed25519 signature of

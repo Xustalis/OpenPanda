@@ -643,11 +643,22 @@ func (c *Core) resumeRemote(ctx context.Context, cur Task, target, answer string
 	}
 	env.To = target
 	if err := c.sendTo(target, env); err != nil {
-		// The executor went away between the refusal and the approval: fail
-		// the task with the reason rather than leaving it dispatched to a
-		// dead peer for the whole lease window.
-		c.failLocal(ctx, taskID, err)
-		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume on %s: %w", target, err)
+		// The executor went away between the refusal and the approval — a
+		// transient flap must not kill the user's explicit consent. Park the
+		// approval in the resume outbox: the next hello from the peer
+		// redelivers it (even if this process — a CLI approve — exits first,
+		// because the shared-DB daemon inherits the flush). The ttl is the
+		// same lease window the live wait would have honored, so an executor
+		// that never returns expires both copies instead of diverging.
+		ttl := time.Now().Add(c.lease()).Unix()
+		if lerr := c.store.ClearLease(ctx, taskID); lerr != nil {
+			c.logger.Warn("resume: clear lease for parked approval", "task", taskID, "err", lerr)
+		}
+		c.resumeOutboxPersist(ctx, target, bus.TaskResumePayload{
+			TaskID: taskID, AttemptID: cur.AttemptID, Answer: answer,
+		}, ttl)
+		c.logger.Info("resume parked for executor's next link", "task", taskID, "to", target, "err", err)
+		return c.waitRemoteResult(ctx, cur, ch, "resume")
 	}
 	c.logger.Info("resume forwarded to executor", "task", taskID, "to", target)
 

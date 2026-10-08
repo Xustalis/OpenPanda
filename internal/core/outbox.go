@@ -327,6 +327,28 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 		trows.Close()
 	}
 
+	// Parked approvals (resume_outbox) ride the same custody contract as
+	// cancels: the user's decision must survive the link that was down when
+	// it was made.
+	var resumes []taskEntry
+	rrows, err := c.db.QueryContext(ctx,
+		`SELECT task_id, payload_json, peer, ttl FROM resume_outbox WHERE peer IN (`+ph+`)`, dargs()...)
+	if err != nil {
+		c.logger.Warn("outbox: query resumes", "peer", peer, "err", err)
+	} else {
+		for rrows.Next() {
+			var e taskEntry
+			if err := rrows.Scan(&e.taskID, &e.raw, &e.peer, &e.ttl); err != nil {
+				rrows.Close()
+				c.logger.Warn("outbox: scan resumes", "peer", peer, "err", err)
+				fail()
+				return
+			}
+			resumes = append(resumes, e)
+		}
+		rrows.Close()
+	}
+
 	// Deferred artifact pushes are custody too: a peer whose only pending
 	// work is chunked payload must still get its flush, or a large transfer
 	// would stall until some unrelated row arrived.
@@ -334,7 +356,7 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 	_ = c.db.QueryRowContext(ctx,
 		`SELECT count(*) FROM artifact_push_outbox WHERE peer IN (`+ph+`)`, dargs()...).Scan(&pushPending)
 
-	if len(entries) == 0 && len(cancels) == 0 && len(taskEntries) == 0 && pushPending == 0 {
+	if len(entries) == 0 && len(cancels) == 0 && len(taskEntries) == 0 && len(resumes) == 0 && pushPending == 0 {
 		c.outboxFlushDone(key)
 		return
 	}
@@ -434,7 +456,107 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 			c.cancelOutboxDropKey(flushCtx, e.peer, e.taskID)
 			c.logger.Info("outbox: redelivered cancel", "task", e.taskID, "peer", peer)
 		}
+		// Approvals last: a resume that raced its own cancel must never
+		// arrive after the cancel delivered (the cancel wins by ordering).
+		for _, e := range resumes {
+			if lt, lerr := c.store.Get(flushCtx, e.taskID); lerr == nil && Terminal(lt.State) {
+				// The local copy already closed (a lapsed approval window, a
+				// user cancel): the consent must not revive a dead task.
+				c.logger.Info("outbox: local task is terminal, dropping parked resume",
+					"task", e.taskID, "peer", e.peer, "state", lt.State)
+				c.resumeOutboxDropKey(flushCtx, e.peer, e.taskID)
+				continue
+			}
+			if e.ttl > 0 && time.Now().Unix() > e.ttl {
+				// The approval window (the lease at persist time) has lapsed:
+				// the executor stayed unreachable past the same bound that
+				// would have failed the live wait, so expire both copies.
+				c.logger.Info("outbox: parked resume past TTL, expiring", "task", e.taskID, "peer", e.peer)
+				c.resumeOutboxDropKey(flushCtx, e.peer, e.taskID)
+				if err := c.store.MarkExpired(flushCtx, e.taskID, "resume TTL expired"); err != nil {
+					c.logger.Warn("outbox: mark expired", "task", e.taskID, "err", err)
+				}
+				continue
+			}
+			var p bus.TaskResumePayload
+			if err := json.Unmarshal([]byte(e.raw), &p); err != nil {
+				c.logger.Warn("outbox: bad parked resume, dropping", "task", e.taskID, "peer", e.peer, "err", err)
+				c.resumeOutboxDropKey(flushCtx, e.peer, e.taskID)
+				continue
+			}
+			if !c.deliverResume(flushCtx, peer, p) {
+				continue // still parked; retry on next reconnect
+			}
+			c.resumeOutboxDropKey(flushCtx, e.peer, e.taskID)
+			c.logger.Info("outbox: redelivered resume", "task", e.taskID, "peer", peer)
+		}
 	}()
+}
+
+// deliverResume places a task_resume envelope on the wire to peer, returning
+// whether it was accepted by the connection. Shared by the initial approval
+// path and the flush path.
+func (c *Core) deliverResume(ctx context.Context, peer string, p bus.TaskResumePayload) bool {
+	msgID, err := newUUID()
+	if err != nil {
+		c.logger.Warn("outbox: mint message id", "task", p.TaskID, "err", err)
+		return false
+	}
+	env, err := bus.NewEnvelope(bus.MsgTaskResume, c.nodeID, msgID, p)
+	if err != nil {
+		c.logger.Warn("outbox: build envelope", "task", p.TaskID, "err", err)
+		return false
+	}
+	env.To = peer
+	if err := c.sendTo(peer, env); err != nil {
+		c.logger.Warn("outbox: send resume", "task", p.TaskID, "peer", peer, "err", err)
+		return false
+	}
+	return true
+}
+
+// resumeOutboxPersist stores a task_resume approval that could not be
+// delivered to peer, upserting on (peer, task_id). ttl bounds how long the
+// approval stays deliverable: past it the flush drops the row and expires the
+// local copy, so an executor that never returns cannot leave the approval
+// parked forever.
+func (c *Core) resumeOutboxPersist(ctx context.Context, peer string, p bus.TaskResumePayload, ttl int64) {
+	if c.db == nil || peer == "" || p.TaskID == "" {
+		return
+	}
+	peer = c.stablePeerID(ctx, peer)
+	raw, err := json.Marshal(p)
+	if err != nil {
+		c.logger.Warn("outbox: marshal resume", "task", p.TaskID, "err", err)
+		return
+	}
+	_, err = c.db.ExecContext(ctx,
+		`INSERT INTO resume_outbox (peer, task_id, payload_json, ttl, created_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(peer, task_id) DO UPDATE SET payload_json = excluded.payload_json,
+			ttl = excluded.ttl, created_at = excluded.created_at`,
+		peer, p.TaskID, string(raw), ttl, storage.Now())
+	if err != nil {
+		c.logger.Warn("outbox: persist resume", "task", p.TaskID, "peer", peer, "err", err)
+		return
+	}
+	c.logger.Info("outbox: resume parked for redelivery", "task", p.TaskID, "peer", peer)
+}
+
+// resumeOutboxDropKey deletes by the exact stored destination key.
+func (c *Core) resumeOutboxDropKey(ctx context.Context, key, taskID string) {
+	if _, err := c.db.ExecContext(ctx,
+		`DELETE FROM resume_outbox WHERE peer = ? AND task_id = ?`, key, taskID); err != nil {
+		c.logger.Warn("outbox: drop resume", "task", taskID, "peer", key, "err", err)
+	}
+}
+
+// resumeOutboxDrop removes a delivered approval keyed by either form.
+func (c *Core) resumeOutboxDrop(ctx context.Context, peer, taskID string) {
+	if c.db == nil || peer == "" || taskID == "" {
+		return
+	}
+	c.resumeOutboxDropKey(ctx, c.stablePeerID(ctx, peer), taskID)
 }
 
 // deliverResult places a task_result envelope on the wire to peer, returning
@@ -586,14 +708,19 @@ func (c *Core) taskOutboxPending(ctx context.Context, taskID string) bool {
 
 // taskOutboxTTL returns the latest delivery deadline among parked custody
 // rows for taskID — the bound a synchronous waiter should honor while a
-// pinned task waits out an unreachable link. 0 means nothing parked.
+// pinned task (task_outbox) or a parked approval (resume_outbox) waits out
+// an unreachable link. 0 means nothing parked.
 func (c *Core) taskOutboxTTL(ctx context.Context, taskID string) int64 {
 	if c.db == nil || taskID == "" {
 		return 0
 	}
 	var ttl int64
 	if err := c.db.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(ttl), 0) FROM task_outbox WHERE task_id = ?`, taskID).Scan(&ttl); err != nil {
+		`SELECT COALESCE(MAX(ttl), 0) FROM (
+			SELECT ttl FROM task_outbox WHERE task_id = ?
+			UNION ALL
+			SELECT ttl FROM resume_outbox WHERE task_id = ?
+		)`, taskID, taskID).Scan(&ttl); err != nil {
 		return 0
 	}
 	return ttl

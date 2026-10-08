@@ -273,16 +273,22 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 // queued tasks all stayed on the node that accepted them while idle peers
 // watched. Both are the exact cases the hardware filter and the score exist for.
 func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
-	// A task pinned to a directory on this machine used to be local by
-	// definition: the delegate payload carried no work dir, so a forwarded
-	// copy ran blind. A file task's tree now travels as an artifact input
-	// (attachWorktreeFrom below), so only non-file pins stay unconditionally
-	// local — a file task forwards when its tree actually ships, and falls
-	// back to local when the pack yields nothing. A NODE pin overrides the
-	// workdir rule only in the failure direction: a non-file task bound to
-	// a local directory cannot honestly run on another machine at all.
+	// A task with a work dir on this machine used to be local by definition:
+	// the delegate payload carried no work dir, so a forwarded copy ran
+	// blind. A file task's tree now travels as an artifact input
+	// (attachWorktreeFrom below); a non-file task's work dir is just the
+	// launch directory, which the executor replaces with its own. So the
+	// workdir rule keeps only the unpinned non-file case home (the blind
+	// copy still loses there), and a pinned file task whose tree cannot
+	// ship fails honestly instead of falling back to local execution.
 	pinRef := targetNodeOf(t)
 	pinned := pinRef != ""
+	// An unpinned task with a work dir stays home: forwarding it would run a
+	// blind copy without the directory it names. A PINNED task forwards
+	// anyway — the user named the destination, and for a non-file task the
+	// work dir is the launch directory the executor replaces with its own,
+	// not content that must travel (file tasks ship their tree below, and a
+	// pin whose tree cannot ship fails there honestly).
 	if t.WorkDir != "" && t.ContextType != "file" && !pinned {
 		return false
 	}
@@ -315,18 +321,6 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 			c.signalResult(t.TaskID, bus.TaskResultPayload{
 				TaskID: t.TaskID, AttemptID: t.AttemptID,
 				State: StateFailed, Stderr: decision.Reason,
-			})
-			return true
-		}
-		// The pin resolved to a remote node. A non-file task bound to a
-		// local work dir cannot honestly run there: its tree does not ship,
-		// so decline rather than forward a blind copy.
-		if t.WorkDir != "" && t.ContextType != "file" {
-			reason := fmt.Sprintf("task is bound to a local work dir and cannot run on pinned node %q", pinRef)
-			c.failLocal(ctx, t.TaskID, fmt.Errorf("%s", reason))
-			c.signalResult(t.TaskID, bus.TaskResultPayload{
-				TaskID: t.TaskID, AttemptID: t.AttemptID,
-				State: StateFailed, Stderr: reason,
 			})
 			return true
 		}
@@ -387,6 +381,18 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 	// running it here.
 	c.attachWorktreeFrom(ctx, &p, t)
 	if t.ContextType == "file" && t.WorkDir != "" && len(p.Inputs) == 0 {
+		if pinned {
+			// The pinned destination cannot receive the tree it needs —
+			// running the blind copy here instead would be the silent
+			// substitution the pin forbids. Fail with the reason.
+			reason := fmt.Sprintf("pinned node %q cannot receive the task's work tree", pinRef)
+			c.failLocal(ctx, t.TaskID, fmt.Errorf("%s", reason))
+			c.signalResult(t.TaskID, bus.TaskResultPayload{
+				TaskID: t.TaskID, AttemptID: t.AttemptID,
+				State: StateFailed, Stderr: reason,
+			})
+			return true
+		}
 		return false
 	}
 	// Hop-limited consent (S2-8): a queue forward is one direct dispatch, so

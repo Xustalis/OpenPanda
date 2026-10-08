@@ -305,6 +305,77 @@ func TestPinOfflineTargetWaitsForLink(t *testing.T) {
 	t.Fatal("pinned task never delivered after the target came online")
 }
 
+// TestPinWorkDirCommandTaskForwards: the ask path sets a work dir on every
+// task (the CLI's launch directory). For a command task that is not content
+// that must travel — the executor uses its own — so a pinned command task
+// must forward instead of failing "bound to a local work dir" (the
+// over-restriction) or running locally (the old silent degradation).
+func TestPinWorkDirCommandTaskForwards(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	root := pinCore(t, "pin-root", "ran-on-root")
+	if err := root.Register(ctx); err != nil {
+		t.Fatalf("register root: %v", err)
+	}
+	go func() { _ = root.Listen(ctx, "127.0.0.1:18331") }()
+	time.Sleep(150 * time.Millisecond)
+
+	leafCard := ledger.Card{
+		Device: "pin-leaf", ResourceClass: "Standard",
+		Native:   []ledger.NativeAbility{{ID: "pin:probe", Command: "echo", Args: []string{"ran-on-leaf"}}},
+		Capacity: ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
+	}
+	if err := ledger.Register(root.db, leafCard, "pin-leaf", 5); err != nil {
+		t.Fatalf("register stale leaf: %v", err)
+	}
+	if err := ledger.MarkOffline(root.db, "pin-leaf"); err != nil {
+		t.Fatalf("mark offline: %v", err)
+	}
+
+	root.StartQueueScheduler(ctx)
+	task, result, err := root.Submit(ctx, TaskInput{
+		Title: "wd probe", Intent: "run the marker",
+		Requires: []string{"pin:probe"}, TargetNode: "pin-leaf",
+		WorkDir: t.TempDir(), ContextType: "command",
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if result.State == StateFailed {
+		t.Fatalf("pinned command task failed on its launch work dir: %+v", result)
+	}
+
+	leaf := pinCore(t, "pin-leaf", "ran-on-leaf")
+	if err := leaf.Register(ctx); err != nil {
+		t.Fatalf("register leaf: %v", err)
+	}
+	go func() { _ = leaf.Listen(ctx, "127.0.0.1:18332") }()
+	time.Sleep(150 * time.Millisecond)
+	if err := leaf.DialPeer(ctx, "127.0.0.1:18331"); err != nil {
+		t.Fatalf("leaf dial: %v", err)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := root.store.Get(ctx, task.TaskID)
+		if err != nil {
+			t.Fatalf("get task: %v", err)
+		}
+		if got.State == StateDone {
+			if !strings.Contains(got.ResultJSON, "ran-on-leaf") {
+				t.Fatalf("result = %s, want ran-on-leaf", got.ResultJSON)
+			}
+			return
+		}
+		if got.State == StateFailed {
+			t.Fatalf("task failed instead of forwarding: %s", got.ResultJSON)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("pinned command task never executed on the named node")
+}
+
 // TestPinDeclineIsTerminal: the pinned node's refusal is the answer — the task
 // fails with who-refused, it does not shop for a substitute. Two capable
 // leaves; the pin names the saturated one.
