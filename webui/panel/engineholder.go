@@ -39,15 +39,15 @@ type EngineHolder struct {
 	onReview func(core.Task)
 }
 
-// NewEngineHolder builds the holder and, when a model endpoint is already
-// configured, the initial engine. A zero-config start (model.base_url empty)
-// yields a holder with a nil engine — degraded, answers-only mode — and no
-// error; the first Reload after a model is configured brings the engine up.
+// NewEngineHolder builds the holder and the initial engine. The engine is
+// built even without a model endpoint: the task surface (enqueue, queue,
+// nodes, cancel) is model-free — `panda task add` proves it on the CLI —
+// and only the ask pipeline needs an entry model, which reports ErrNoModel
+// lazily per request. A model-less node is not a console-less node; gating
+// the whole engine on model.base_url made the web board silently unusable
+// on exactly the worker devices multi-device routing targets.
 func NewEngineHolder(cfg *config.Config, opts askengine.Options) (*EngineHolder, error) {
 	h := &EngineHolder{cfg: cfg, opts: opts}
-	if cfg.Model.BaseURL == "" {
-		return h, nil
-	}
 	eng, err := askengine.New(context.Background(), cfg, opts)
 	if err != nil {
 		return nil, err
@@ -58,8 +58,9 @@ func NewEngineHolder(cfg *config.Config, opts askengine.Options) (*EngineHolder,
 	return h, nil
 }
 
-// Engine returns the current engine snapshot; nil in degraded (no model
-// configured) mode. Safe for concurrent use.
+// Engine returns the current engine snapshot; nil only after Close (or on a
+// failed initial build, which the constructor reports instead). Safe for
+// concurrent use.
 func (h *EngineHolder) Engine() *askengine.Engine {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -82,15 +83,14 @@ func (h *EngineHolder) SetOnReview(fn func(core.Task)) {
 
 // Reload rebuilds the engine from the holder's live config — the model
 // settings API mutates that config, so the rebuild already sees the new
-// provider. An empty model.base_url tears the engine down (back to
-// zero-config degraded mode); a failed build returns the error and leaves
-// the previous engine serving.
+// provider. Clearing model.base_url rebuilds to a model-less engine (task
+// surface stays live, asks degrade lazily); a failed build returns the
+// error and leaves the previous engine serving.
 //
 // Lock order is reloadMu → cfgMu, matching MutateConfig: while a live
 // engine exists its cfgMu serializes config access, so the config reads
-// here (the base_url check and the whole askengine.New build, which scans
-// the struct) run under that engine's read lock. Engineless, reloadMu
-// alone is the serializer MutateConfig already holds.
+// here (the whole askengine.New build, which scans the struct) run under
+// that engine's read lock.
 func (h *EngineHolder) Reload() error {
 	h.reloadMu.Lock()
 	defer h.reloadMu.Unlock()
@@ -105,24 +105,6 @@ func (h *EngineHolder) Reload() error {
 		}
 	}
 
-	// The teardown only detaches the pointer inside the config read lock —
-	// old.Close runs after it is released, because Close takes schedMu and a
-	// schedMu holder may itself be waiting on cfgMu (writer-pending blocks
-	// new readers): closing under the read lock would close a cycle.
-	var closed *askengine.Engine
-	readCfg(func(c *config.Config) {
-		if c.Model.BaseURL != "" {
-			return
-		}
-		h.mu.Lock()
-		closed = h.engine
-		h.engine = nil
-		h.mu.Unlock()
-	})
-	if closed != nil {
-		closed.Close()
-		return nil
-	}
 	// Build before swapping: a failed build must not take the old engine down.
 	var eng *askengine.Engine
 	var err error
