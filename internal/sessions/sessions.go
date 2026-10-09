@@ -406,17 +406,6 @@ func (s *Store) SetAgentSession(id, agent, agentSessionID string) error {
 	return s.save(sess)
 }
 
-// GetAgentSession returns an agent's native session id on a session, or empty if none.
-func (s *Store) GetAgentSession(id, agent string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sess, err := s.load(id)
-	if err != nil || sess.AgentSessions == nil {
-		return ""
-	}
-	return sess.AgentSessions[agent]
-}
-
 // SetTitle updates the title of a session.
 func (s *Store) SetTitle(id, title string) error {
 	s.mu.Lock()

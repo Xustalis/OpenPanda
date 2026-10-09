@@ -274,11 +274,6 @@ func IntProp(desc string) map[string]any {
 	return map[string]any{"type": "integer", "description": desc}
 }
 
-// BoolProp is the {"type":"boolean","description":…} property shorthand.
-func BoolProp(desc string) map[string]any {
-	return map[string]any{"type": "boolean", "description": desc}
-}
-
 // StringArrayProp is the {"type":"array","items":{"type":"string"}} shorthand.
 func StringArrayProp(desc string) map[string]any {
 	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": desc}

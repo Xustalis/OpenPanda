@@ -518,16 +518,6 @@ func (t TimeoutsConfig) AgentTimeout() time.Duration {
 	return DefaultAgentTimeoutS * time.Second
 }
 
-// AgentTimeoutForKind returns the per-kind agent timeout when configured,
-// falling back to AgentTimeout. A kind not present in AgentByKind uses the
-// global AgentS, so only kinds that genuinely differ need an entry.
-func (t TimeoutsConfig) AgentTimeoutForKind(kind string) time.Duration {
-	if s, ok := t.AgentByKind[kind]; ok && s > 0 {
-		return time.Duration(s) * time.Second
-	}
-	return t.AgentTimeout()
-}
-
 // Rounds returns the configured supervision round budget, or the default.
 func (t TimeoutsConfig) Rounds() int {
 	if t.SuperviseRounds > 0 {
