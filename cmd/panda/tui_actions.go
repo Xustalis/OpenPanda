@@ -1176,8 +1176,8 @@ func (m tuiModel) handleOnboardingModelWizardKey(msg tea.KeyMsg) (tea.Model, tea
 func (m tuiModel) confirmTasksClear() (tea.Model, tea.Cmd) {
 	n := 0
 	if m.r != nil && m.r.store != nil {
-		if tasks, err := m.r.store.ListByState(context.Background(), ""); err == nil {
-			n = len(tasks)
+		if cnt, err := m.r.store.CountByState(context.Background(), ""); err == nil {
+			n = cnt
 		}
 	}
 	if n == 0 {

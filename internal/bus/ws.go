@@ -36,6 +36,11 @@ const (
 	writeWait = 10 * time.Second
 )
 
+// KeepaliveTimeout exposes pongWait for the connection registry: a conn with
+// no inbound proof-of-life for this long is dead even if its socket has not
+// noticed, which is the bound same-id duplicate arbitration uses.
+func KeepaliveTimeout() time.Duration { return pongWait }
+
 // defaultHelloTimeout is how long an inbound connection has to send a valid
 // hello before the server drops it. This bounds slow-/never-handshake DoS.
 const defaultHelloTimeout = 10 * time.Second
@@ -76,10 +81,12 @@ func qosForType(typ string) int {
 
 // queuedWrite is one frame awaiting the writer goroutine. res carries the
 // real write result back to the sender — Send stays synchronous, only the
-// ORDER of writes is prioritized.
+// ORDER of writes is prioritized. binary marks a data-frame write: the data
+// lanes carry both, and the flag selects the WS opcode at write time.
 type queuedWrite struct {
-	data []byte
-	res  chan error
+	data   []byte
+	binary bool
+	res    chan error
 }
 
 // Conn wraps one websocket.Conn with a prioritized writer goroutine (the
@@ -100,9 +107,18 @@ type Conn struct {
 	wake     chan struct{}
 	done     chan struct{}
 	doneOnce sync.Once
+	// caps holds the peer's hello-advertised wire capabilities (HelloPayload
+	// .Caps), set once the handshake verifies. atomic.Value because the
+	// read loop writes it once and every sender may consult it.
+	caps atomic.Value // []string
 	// rttNanos is the last measured ping/pong round trip (§4.1 link metric):
 	// nanoseconds, zero until the first pong answers a timestamped ping.
 	rttNanos atomic.Int64
+	// lastSeen is the unixnano timestamp of the last inbound proof-of-life —
+	// a pong, or any successfully read frame. Peer-registration uses it to
+	// tell a live same-id duplicate conn from a half-dead socket nobody has
+	// noticed yet: only the latter may be replaced.
+	lastSeen atomic.Int64
 }
 
 // SetPeerID binds the authenticated node id to this connection (set once, at
@@ -141,10 +157,29 @@ func (c *Conn) RemoteAddr() string {
 	return c.ws.RemoteAddr().String()
 }
 
+// SetCaps records the capabilities the peer advertised in its hello; call it
+// once the hello is verified. Supports reports whether cap was advertised —
+// senders consult it before choosing an encoding old peers would not parse.
+func (c *Conn) SetCaps(caps []string) { c.caps.Store(caps) }
+
+func (c *Conn) Supports(cap string) bool {
+	v := c.caps.Load()
+	if v == nil {
+		return false
+	}
+	for _, s := range v.([]string) {
+		if s == cap {
+			return true
+		}
+	}
+	return false
+}
+
 func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
 	ws.SetReadLimit(readLimit)
 	c := &Conn{ws: ws, logger: logger, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	ws.SetPongHandler(func(data string) error {
+		c.lastSeen.Store(time.Now().UnixNano())
 		// A ping written by writeLoop carries its send time as 8 bytes of
 		// big-endian nanos; answering it gives the link its RTT sample.
 		if len(data) == 8 {
@@ -158,6 +193,7 @@ func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
 	})
 	// Initial deadline so a peer that never responds is detected promptly.
 	_ = ws.SetReadDeadline(time.Now().Add(pongWait))
+	c.lastSeen.Store(time.Now().UnixNano())
 	for i := range c.lanes {
 		c.lanes[i] = make(chan queuedWrite, qosLaneCap)
 	}
@@ -218,11 +254,14 @@ func (c *Conn) writeLoop() {
 		// thereby every queued sender) forever.
 		_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
 		var err error
-		if m.data == nil {
+		switch {
+		case m.data == nil:
 			var ping [8]byte
 			binary.BigEndian.PutUint64(ping[:], uint64(time.Now().UnixNano()))
 			err = c.ws.WriteMessage(websocket.PingMessage, ping[:])
-		} else {
+		case m.binary:
+			err = c.ws.WriteMessage(websocket.BinaryMessage, m.data)
+		default:
 			err = c.ws.WriteMessage(websocket.TextMessage, m.data)
 		}
 		m.res <- err
@@ -257,7 +296,11 @@ func (c *Conn) failQueued() {
 // reports the real write result — the same synchronous contract the old
 // send-mutex version had. A nil data payload writes a ping frame.
 func (c *Conn) enqueue(data []byte, lane int) error {
-	m := queuedWrite{data: data, res: make(chan error, 1)}
+	return c.enqueueFrame(data, false, lane)
+}
+
+func (c *Conn) enqueueFrame(data []byte, binaryFrame bool, lane int) error {
+	m := queuedWrite{data: data, binary: binaryFrame, res: make(chan error, 1)}
 	select {
 	case c.lanes[lane] <- m:
 	case <-c.done:
@@ -296,10 +339,85 @@ func (c *Conn) Send(v any) error {
 	return c.enqueue(data, lane)
 }
 
-// ReadJSON reads one JSON message into v. Callers must set a read deadline
-// if they want a timeout.
+// SendData writes v as a binary data frame (CapBinaryData): a 2-byte
+// big-endian header length, the JSON header (the envelope marshalled with its
+// bulk field already cleared), then the raw body bytes. It removes the base64
+// expansion and its codec cost from the data plane — a 1 MiB chunk is ~1 MiB
+// on the wire instead of 1.4, and neither side runs the codec. Callers must
+// only use it when the peer advertised CapBinaryData; a JSON-fallback caller
+// never reaches here.
+func (c *Conn) SendData(v any, body []byte) error {
+	lane := QoSBulk
+	if env, ok := v.(Envelope); ok {
+		lane = qosForType(env.Type)
+	}
+	header, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	if len(header) > 0xffff {
+		return errors.New("bus: data frame header exceeds 64 KiB")
+	}
+	frame := make([]byte, 2+len(header)+len(body))
+	binary.BigEndian.PutUint16(frame, uint16(len(header)))
+	copy(frame[2:], header)
+	copy(frame[2+len(header):], body)
+	return c.enqueueFrame(frame, true, lane)
+}
+
+// ReadJSON reads one message into v. Text frames decode as JSON. A binary
+// frame is a data frame (CapBinaryData): 2-byte header length + JSON header +
+// raw body; the header decodes into v and — when v is an *Envelope — the body
+// lands in Envelope.BinaryPayload for the dispatcher to attach to its
+// payload struct. Callers must set a read deadline for a timeout. A
+// successful read is inbound proof-of-life either way, so it refreshes the
+// liveness stamp the same way a received pong does.
 func (c *Conn) ReadJSON(v any) error {
-	return c.ws.ReadJSON(v)
+	mt, data, err := c.ws.ReadMessage()
+	if err != nil {
+		return err
+	}
+	c.lastSeen.Store(time.Now().UnixNano())
+	if mt == websocket.BinaryMessage {
+		if len(data) < 2 {
+			return errors.New("bus: short data frame")
+		}
+		hlen := int(binary.BigEndian.Uint16(data))
+		if len(data) < 2+hlen {
+			return errors.New("bus: truncated data frame header")
+		}
+		if err := json.Unmarshal(data[2:2+hlen], v); err != nil {
+			return err
+		}
+		if env, ok := v.(*Envelope); ok {
+			env.BinaryPayload = data[2+hlen:]
+		}
+		return nil
+	}
+	return json.Unmarshal(data, v)
+}
+
+// SeenWithin reports whether the conn produced inbound proof-of-life within
+// the last d. A conn silent longer than that is treated as dead even if its
+// socket has not noticed yet (the half-dead-TCP case, P1-7).
+func (c *Conn) SeenWithin(d time.Duration) bool {
+	last := c.lastSeen.Load()
+	return last > 0 && time.Since(time.Unix(0, last)) < d
+}
+
+// Live reports whether this conn is still demonstrably alive: inbound
+// proof-of-life within the keepalive bound. Same-id duplicate sessions use
+// it for arbitration — a live incumbent keeps the peer edge instead of being
+// swapped out every time a sibling process dials.
+func (c *Conn) Live() bool {
+	return c.SeenWithin(pongWait)
+}
+
+// LiveWithin is SeenWithin under a caller-chosen bound: the registry's
+// arbitration window is a Core-level knob (tests shrink it; zero means
+// "never trust the incumbent"), so arbitration consults this form.
+func (c *Conn) LiveWithin(d time.Duration) bool {
+	return c.SeenWithin(d)
 }
 
 // RTT returns the last measured ping/pong round trip on this link, or 0

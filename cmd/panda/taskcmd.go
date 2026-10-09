@@ -128,7 +128,7 @@ func runTaskShow(args []string) {
 	}
 
 	if jsonOutput {
-		emitJSON(taskToJSON(t))
+		emitJSON(taskToJSONWithStore(store, t))
 		return
 	}
 
@@ -143,6 +143,17 @@ func runTaskShow(args []string) {
 	taskField("state", colorState(t.State))
 	taskField("priority", priorityName(t.Priority))
 	taskField("owner", t.OwnerNode)
+	// Owner is the lease holder — the node the queue/store believes drives the
+	// task. The EXECUTOR is whichever node the latest delegation targeted; on
+	// a forwarded task those differ, and showing only the owner made every
+	// remotely-executed task look local.
+	if target, terr := store.DispatchTarget(context.Background(), t.TaskID); terr == nil &&
+		target != "" && target != t.OwnerNode {
+		taskField("executor", target)
+	}
+	if pin := core.PinnedNode(t); pin != "" {
+		taskField("pinned", pin)
+	}
 	taskField("attempt", t.AttemptID)
 	taskField("chain", strings.Join(t.Chain, " "+pal().MarkArrow()+" "))
 	taskField("created", ts(t.CreatedAt))
@@ -430,6 +441,8 @@ type taskJSON struct {
 	State    string `json:"state"`
 	Priority string `json:"priority"`
 	Owner    string `json:"owner,omitempty"`
+	Executor string `json:"executor,omitempty"`
+	Pinned   string `json:"pinned,omitempty"`
 	Session  string `json:"session_id,omitempty"`
 	Intent   string `json:"intent,omitempty"`
 	Created  string `json:"created_at"`
@@ -437,7 +450,7 @@ type taskJSON struct {
 }
 
 func taskToJSON(t core.Task) taskJSON {
-	return taskJSON{
+	j := taskJSON{
 		ID:       t.TaskID,
 		ParentID: t.ParentID,
 		Project:  t.Project,
@@ -445,11 +458,24 @@ func taskToJSON(t core.Task) taskJSON {
 		State:    t.State,
 		Priority: priorityName(t.Priority),
 		Owner:    t.OwnerNode,
+		Pinned:   core.PinnedNode(t),
 		Session:  t.SessionID,
 		Intent:   t.Intent,
 		Created:  ts(t.CreatedAt),
 		Updated:  ts(t.UpdatedAt),
 	}
+	return j
+}
+
+// taskToJSONWithStore fills the store-derived fields (executor) taskToJSON
+// leaves empty; the JSON emitter calls it where a store handle exists.
+func taskToJSONWithStore(store *core.TaskStore, t core.Task) taskJSON {
+	j := taskToJSON(t)
+	if target, err := store.DispatchTarget(context.Background(), t.TaskID); err == nil &&
+		target != "" && target != t.OwnerNode {
+		j.Executor = target
+	}
+	return j
 }
 
 // resolveTaskRef turns a user-typed task reference into a full task id, or ends
@@ -507,8 +533,8 @@ func runTaskAdd(args []string) {
 	agents := fs.String("agents", "", "comma-separated agent harnesses to run this task on (e.g. claude_code,codex); more than one becomes a plan")
 	mode := fs.String("mode", "parallel", "with --agents: 'parallel' runs every harness at once, 'serial' chains them in order")
 	parentID := fs.String("parent-id", "", "parent task id (defaults to PANDA_TASK_ID environment variable)")
-	preferred := fs.String("preferred", "", "preferred node id")
-	nodes := fs.String("nodes", "", "comma-separated node ids to fan the same task out to (one task per node)")
+	preferred := fs.String("preferred", "", "target node id or name (hard pin: runs there or fails)")
+	nodes := fs.String("nodes", "", "comma-separated node ids to pin the task onto (one task per node; each lands on its named node or fails)")
 	actionSpec := fs.String("action-spec", "", "actuator dispatch JSON: {\"target_actuator\":\"hardware:x\",\"action\":\"verb\",\"parameters\":{...}}")
 	fs.Parse(args)
 
@@ -619,15 +645,15 @@ func runTaskAdd(args []string) {
 		projName, _ = ambientProject(cfg)
 	}
 	in := core.TaskInput{
-		Title:         *title,
-		ParentID:      pID,
-		Project:       projName,
-		ContextType:   contextType,
-		Intent:        *prompt,
-		SpecJSON:      specJSON,
-		Requires:      requiresList,
-		PreferredNode: pref,
-		Authorized:    *authorize,
+		Title:       *title,
+		ParentID:    pID,
+		Project:     projName,
+		ContextType: contextType,
+		Intent:      *prompt,
+		SpecJSON:    specJSON,
+		Requires:    requiresList,
+		TargetNode:  pref,
+		Authorized:  *authorize,
 	}
 	q := core.DefaultQueueSpec()
 	q.Priority = prio
@@ -706,7 +732,7 @@ func runTaskAddNodes(loc i18n.Locale, engine *askengine.Engine, cfg *config.Conf
 	failed := 0
 	for _, node := range nodes {
 		per := in
-		per.PreferredNode = node
+		per.TargetNode = node
 		r := fanResult{Node: node}
 		task, err := engine.EnqueueTask(context.Background(), per, q)
 		if err != nil {

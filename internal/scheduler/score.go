@@ -4,6 +4,7 @@ package scheduler
 
 import (
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +26,18 @@ const (
 	// tree can still travel as an artifact, so a non-resident node that is
 	// meaningfully freer still wins.
 	wProjectResidence = 0.2
+	// wLinkLatency is the measured-link term: the RTT this node's own pings
+	// recorded for the edge to a candidate (the self row's link metrics).
+	// Every delegation pays the link at least three times — handshake,
+	// payload, result — so between two equally capable, equally loaded
+	// candidates the nearer one finishes sooner; on the real mesh measured
+	// during testing a WiFi edge cost ~500ms per round trip against a LAN's
+	// few. The weight sits below the capability and context terms: latency
+	// breaks near-ties, it never beats "can run it" or "already has the
+	// tree". Self scores 1.0 (zero RTT by definition); an edge with no pong
+	// sample yet is neutral 0.5, the same absence-of-evidence convention
+	// resourceEfficiency uses.
+	wLinkLatency = 0.15
 )
 
 // freshnessHalfLife is the λ of the TMB delayed-discount attention mapping
@@ -140,18 +153,40 @@ func projectResidence(n ledger.Node, project string) float64 {
 	return 0
 }
 
+// linkQuality scores the measured link between this node and n as a term in
+// [0,1]. The local node is 1.0 (zero RTT by definition, including the
+// ephemeral-session aliases IsSelfRow reconciles); a measured edge decays as
+// 1/(1+rtt_ms/100) — a few-ms LAN edge ≈1, 100ms ≈0.5, the 500ms WiFi edge
+// from the field tests ≈0.17, a second-plus ≈0.09; an edge with no pong
+// sample yet is neutral 0.5, because absence of measurement is not evidence
+// of a slow link (the same convention resourceEfficiency uses for unknown
+// capacity). selfLinks is the SELF row's link metrics: this node's own
+// measurements to each peer, which is the edge a direct delegation to that
+// peer actually rides.
+func linkQuality(n ledger.Node, selfID string, selfLinks map[string]int64) float64 {
+	if n.ID == selfID || IsSelfRow(n.ID, selfID) {
+		return 1
+	}
+	rtt, ok := selfLinks[n.ID]
+	if !ok || rtt <= 0 {
+		return 0.5
+	}
+	return 1 / (1 + float64(rtt)/100)
+}
+
 // score returns the node's weighted desirability (design §6.3), discounted by
 // heartbeat freshness (TMB). user_priority enters as 1.0 for the user-named
 // preferred node; in practice Route honors a matching preferred node before
 // scoring runs, so the term mostly shows up in the breakdown the orbit renders
 // — but it is part of the §6.3 sum, so it belongs in the score. project is the
 // task's project name: a node resident for it earns the context-cost term.
-func score(n ledger.Node, now int64, preferred, project string) float64 {
+func score(n ledger.Node, now int64, preferred, project, selfID string, selfLinks map[string]int64) float64 {
 	raw := wResourceEfficiency*resourceEfficiency(n) +
 		wUserPriority*userPriority(n, preferred) +
 		wSchedulerTier*tierSignal(n) +
 		wWaitTime*waitSignal(n) +
-		wProjectResidence*projectResidence(n, project)
+		wProjectResidence*projectResidence(n, project) +
+		wLinkLatency*linkQuality(n, selfID, selfLinks)
 	return raw * Freshness(n.LastSeen, now)
 }
 
@@ -160,14 +195,14 @@ func score(n ledger.Node, now int64, preferred, project string) float64 {
 // node enter its own ranking as one candidate among many: comparing "best peer"
 // against "myself" needs the number, not just the name. An empty set scores 0,
 // so a lone capable local node wins by default.
-func pickBestScored(nodes []ledger.Node, now int64, preferred, project string) (string, float64) {
+func pickBestScored(nodes []ledger.Node, now int64, preferred, project, selfID string, selfLinks map[string]int64) (string, float64) {
 	if len(nodes) == 0 {
 		return "", 0
 	}
 	best := nodes[0]
-	bestScore := score(best, now, preferred, project)
+	bestScore := score(best, now, preferred, project, selfID, selfLinks)
 	for _, n := range nodes[1:] {
-		s := score(n, now, preferred, project)
+		s := score(n, now, preferred, project, selfID, selfLinks)
 		if s > bestScore || (s == bestScore && n.ID < best.ID) {
 			best, bestScore = n, s
 		}
@@ -192,6 +227,10 @@ type ScoreBreakdown struct {
 	// project — the orbit can then show "this node won because the code is
 	// already there" rather than a bare score bump.
 	ProjectResidence float64 `json:"project_residence,omitempty"`
+	// LinkLatency is the measured-edge quality in [0,1] (see linkQuality):
+	// 1.0 = self or a few-ms edge, 0.5 = no pong sample yet, decaying with
+	// this node's own measured RTT to the candidate.
+	LinkLatency float64 `json:"link_latency,omitempty"`
 	// HeartbeatFreshness is the TMB decay weight in (0,1] — 1.0 = brand-new
 	// heartbeat, ≈0 = stale past the half-life. The wire shape mirrors the
 	// design doc §3.1.1 "heartbeat_age" (0..∞ seconds, lower is better) so
@@ -219,24 +258,26 @@ type ScoredCandidate struct {
 // scoreBreakdown computes the per-term breakdown for a single node. total =
 // (weighted raw sum) * freshness. localBonus is applied by the caller (it is
 // not a term inside score()).
-func scoreBreakdown(n ledger.Node, now int64, preferred, project string) ScoreBreakdown {
+func scoreBreakdown(n ledger.Node, now int64, preferred, project, selfID string, selfLinks map[string]int64) ScoreBreakdown {
 	re := resourceEfficiency(n)
 	up := userPriority(n, preferred)
 	ti := tierSignal(n)
 	wt := waitSignal(n)
 	pr := projectResidence(n, project)
+	ll := linkQuality(n, selfID, selfLinks)
 	var ageSec float64
 	if n.LastSeen > 0 && now > n.LastSeen {
 		ageSec = float64(now - n.LastSeen)
 	}
 	fresh := Freshness(n.LastSeen, now)
-	raw := wResourceEfficiency*re + wUserPriority*up + wSchedulerTier*ti + wWaitTime*wt + wProjectResidence*pr
+	raw := wResourceEfficiency*re + wUserPriority*up + wSchedulerTier*ti + wWaitTime*wt + wProjectResidence*pr + wLinkLatency*ll
 	return ScoreBreakdown{
 		ResourceEfficiency: re,
 		UserPriority:       up,
 		SchedulerTier:      ti,
 		WaitTime:           wt,
 		ProjectResidence:   pr,
+		LinkLatency:        ll,
 		HeartbeatAge:       ageSec, // design doc §3.1.1 wire contract
 		HeartbeatFreshness: fresh,  // internal weight, still useful
 		Total:              raw * fresh,
@@ -248,13 +289,15 @@ func scoreBreakdown(n ledger.Node, now int64, preferred, project string) ScoreBr
 // non-empty) receives the localBias add-on on top of its baseline score;
 // preferred (when non-empty) is the user-named node, whose user_priority term
 // reflects the §6.3 weight; project (when non-empty) feeds the residence
-// term. Callers should filter candidates (online, hardware fit, not on chain)
-// before passing them in — this function scores, it does not gate.
-func ScoreAllCandidates(candidates []ledger.Node, selfID, preferred, project string, now int64) []ScoredCandidate {
+// term; selfLinks is the self row's measured-RTT table feeding the
+// link_latency term. Callers should filter candidates (online, hardware fit,
+// not on chain) before passing them in — this function scores, it does not
+// gate.
+func ScoreAllCandidates(candidates []ledger.Node, selfID, preferred, project string, now int64, selfLinks map[string]int64) []ScoredCandidate {
 	out := make([]ScoredCandidate, 0, len(candidates))
 	for _, n := range candidates {
-		bd := scoreBreakdown(n, now, preferred, project)
-		if selfID != "" && n.ID == selfID {
+		bd := scoreBreakdown(n, now, preferred, project, selfID, selfLinks)
+		if selfID != "" && (n.ID == selfID || IsSelfRow(n.ID, selfID)) {
 			bd.LocalBonus = localBias
 			bd.Total += localBias
 		}
@@ -270,13 +313,11 @@ func ScoreAllCandidates(candidates []ledger.Node, selfID, preferred, project str
 		})
 	}
 	// desc by total, asc by node_id for tie-break consistency
-	for i := 0; i < len(out); i++ {
-		for j := i + 1; j < len(out); j++ {
-			if out[j].TotalScore > out[i].TotalScore ||
-				(out[j].TotalScore == out[i].TotalScore && out[j].NodeID < out[i].NodeID) {
-				out[i], out[j] = out[j], out[i]
-			}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].TotalScore != out[j].TotalScore {
+			return out[i].TotalScore > out[j].TotalScore
 		}
-	}
+		return out[i].NodeID < out[j].NodeID
+	})
 	return out
 }

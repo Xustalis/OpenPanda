@@ -342,6 +342,57 @@ func runNodeRemove(args []string) {
 	fatal("remove node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.none", "id", id)))
 }
 
+// runNodePrune implements `panda nodes prune` — bulk-cleans directory rows a
+// single `nodes remove` would make tedious: every row keyed by an ephemeral
+// "-8hex" session id (a client seat, never a fleet member — old versions
+// left one per `panda ask`/`repl` dial), plus optionally offline rows older
+// than --offline-days. The self row and online nodes are refused on the
+// same grounds as `nodes remove`.
+func runNodePrune(args []string) {
+	fs := flag.NewFlagSet("nodes prune", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	offlineDays := fs.Int("offline-days", 0, "also delete rows offline longer than this many days")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, _, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	loc := i18n.Detect()
+	selfID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity())
+	nodes, err := ledger.Query(db, "", "")
+	if err != nil {
+		fatal("query employees", err)
+	}
+	cutoff := time.Now().Add(-time.Duration(*offlineDays) * 24 * time.Hour).Unix()
+	var ghosts, stale []string
+	for _, n := range nodes {
+		if n.ID == selfID || n.Status == "online" {
+			continue
+		}
+		if ledger.SessionRowID(n.ID) {
+			ghosts = append(ghosts, n.ID)
+			continue
+		}
+		if *offlineDays > 0 && n.LastSeen > 0 && n.LastSeen < cutoff {
+			stale = append(stale, n.ID)
+		}
+	}
+	for _, id := range append(ghosts, stale...) {
+		if _, err := ledger.Remove(db, id); err != nil {
+			fatal("remove node", err)
+		}
+	}
+	fmt.Println(i18n.Tf(loc, "cli.nodes.pruned",
+		"sessions", strconv.Itoa(len(ghosts)), "stale", strconv.Itoa(len(stale))))
+}
+
 // runNodesVerify implements `panda nodes verify <id>` — the human half of
 // TOFU. The user has compared this listing's fingerprint against the other
 // machine's own `panda nodes` row (or its first-run log line) and confirms it
@@ -444,7 +495,11 @@ func runQueue(args []string) {
 		return
 	}
 
-	tasks, err := store.ListByState(context.Background(), *state)
+	// The listing is capped at the recent-activity window — the board renders
+	// the working set, and an uncapped history read is what made this view
+	// slow on long-lived daemons.
+	const queueListCap = 500
+	tasks, err := store.ListRecentByState(context.Background(), *state, queueListCap)
 	if err != nil {
 		fatal("list tasks", err)
 	}
@@ -455,6 +510,10 @@ func runQueue(args []string) {
 		}
 	}
 	sort.Slice(filtered, func(i, j int) bool { return filtered[i].UpdatedAt > filtered[j].UpdatedAt })
+	loc := i18n.Detect()
+	if len(tasks) == queueListCap && !jsonOutput {
+		fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.queue.truncated", "n", strconv.Itoa(queueListCap)))
+	}
 
 	if jsonOutput {
 		out := make([]taskJSON, 0, len(filtered))
@@ -464,7 +523,6 @@ func runQueue(args []string) {
 		emitJSON(out)
 		return
 	}
-	loc := i18n.Detect()
 	if len(filtered) == 0 {
 		fmt.Println(i18n.T(loc, "cli.queue.none"))
 		return
@@ -488,11 +546,11 @@ func runQueueClear(cfg *config.Config, yes bool, configPath string) {
 	}
 	defer db.Close()
 
-	tasks, err := store.ListByState(context.Background(), "")
+	n, err := store.CountByState(context.Background(), "")
 	if err != nil {
-		fatal("list tasks", err)
+		fatal("count tasks", err)
 	}
-	if len(tasks) == 0 {
+	if n == 0 {
 		fmt.Println(i18n.T(loc, "cli.queue.clear.empty"))
 		return
 	}
@@ -502,7 +560,7 @@ func runQueueClear(cfg *config.Config, yes bool, configPath string) {
 			fmt.Fprintln(os.Stderr, "panda queue clear: pass --yes to clear non-interactively")
 			os.Exit(2)
 		}
-		fmt.Print(i18n.Tf(loc, "cli.queue.clear.confirm", "n", strconv.Itoa(len(tasks))))
+		fmt.Print(i18n.Tf(loc, "cli.queue.clear.confirm", "n", strconv.Itoa(n)))
 		var ans string
 		if _, err := fmt.Scanln(&ans); err != nil && ans == "" {
 			return // empty line = the default "no"
@@ -521,8 +579,10 @@ func runQueueClear(cfg *config.Config, yes bool, configPath string) {
 	})
 	if err == nil {
 		defer engine.Close()
-		for _, t := range tasks {
-			if !core.Terminal(t.State) {
+		// Only the active set can still be executing — the settled archive
+		// has nothing to cancel.
+		if active, lerr := store.ListActive(context.Background()); lerr == nil {
+			for _, t := range active {
 				_, _ = engine.CancelTask(context.Background(), t.TaskID)
 			}
 		}

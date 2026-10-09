@@ -1,0 +1,27 @@
+device: test-node-a
+resource_class: Standard
+chip: "test"
+
+native:
+  - id: sys:info
+    command: uname
+    args: ["-a"]
+    tier: 1
+    description: "system info"
+  - id: net:curl
+    command: curl
+    args: ["--version"]
+    tier: 1
+    description: "network fetch"
+
+capacity:
+  cpu_cores: 8
+  ram_gb: 16
+  max_concurrent_tasks: 4
+  current_tasks: 0
+
+resource_profile:
+  cpu: 8
+  ram_gb: 16
+  gpu_vram_gb: 0
+  duration_hint: short

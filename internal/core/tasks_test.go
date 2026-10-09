@@ -1291,3 +1291,38 @@ func TestCancelCascadePlanSiblings(t *testing.T) {
 		t.Fatalf("state: s3=%s; want done", g3.State)
 	}
 }
+
+// TestDeclineTrail pins the by+reason pairing enrichDeclineReason renders:
+// a task refused twice must surface BOTH decliners with their stated reasons,
+// not a bare "no capability matches".
+func TestDeclineTrail(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "trail", "root")
+	must := func(err error) {
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	must(s.Queue(ctx, tk.TaskID, "root"))
+	must(s.Dispatch(ctx, tk.TaskID, "root", "peer-a"))
+	must(s.Decline(ctx, tk.TaskID, "root", "capacity full", "peer-a"))
+	must(s.Dispatch(ctx, tk.TaskID, "root", "peer-b"))
+	must(s.Decline(ctx, tk.TaskID, "root", "node draining", "peer-b"))
+
+	trail, err := s.DeclineTrail(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("decline trail: %v", err)
+	}
+	if len(trail) != 2 {
+		t.Fatalf("trail len = %d, want 2", len(trail))
+	}
+	if trail[0] != (DeclineRecord{By: "peer-a", Reason: "capacity full"}) ||
+		trail[1] != (DeclineRecord{By: "peer-b", Reason: "node draining"}) {
+		t.Fatalf("trail = %+v", trail)
+	}
+	ids, err := s.DeclinedBy(ctx, tk.TaskID)
+	if err != nil || len(ids) != 2 || ids[0] != "peer-a" || ids[1] != "peer-b" {
+		t.Fatalf("DeclinedBy = %v, %v", ids, err)
+	}
+}

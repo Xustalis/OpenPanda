@@ -276,8 +276,18 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	}
 
 	required := delegateRequired(p)
-	decision := scheduler.RouteP(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), required,
-		resourceRequirement(p.ResourceJSON), p.PreferredNode, p.Project)
+	var decision scheduler.Decision
+	if strings.TrimSpace(p.TargetNode) != "" {
+		// The pin is re-evaluated per hop: resolving to self accepts and runs
+		// the task here; resolving onward forwards toward the named node;
+		// resolving nowhere declines honestly. What it never does is fall
+		// through to scored ranking — the pin names the destination, not a
+		// preference.
+		decision = c.routePinned(ctx, p.TargetNode, chain, required, resourceRequirement(p.ResourceJSON))
+	} else {
+		decision = scheduler.RouteP(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), required,
+			resourceRequirement(p.ResourceJSON), p.PreferredNode, p.Project)
+	}
 
 	switch decision.Action {
 	case scheduler.ActionLocal:
@@ -711,6 +721,13 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 		return fmt.Errorf("dispatch: %w", err)
 	}
 	dtn := p.Transport == "dtn"
+	// A hard-pinned task shares DTN's delivery contract: the named peer is the
+	// only acceptable destination, so a dead link means park-and-wait — and a
+	// parked copy must hold no lease. An expiry ticking while custody still
+	// intends delivery would fail the local row, and the real result would
+	// land on a terminal task after the peer's reconnect.
+	pinned := p.TargetNode != ""
+	parkable := dtn || pinned
 	// The deadline a parked bundle or a deferred push lives under: the wire's
 	// absolute TTL, else the default DTN lifetime. Computed once here because
 	// both the fat-bundle attachment below and the send-failure park use it.
@@ -718,13 +735,15 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 	if pushDeadline <= 0 {
 		pushDeadline = time.Now().Add(defaultDTNTTL).Unix()
 	}
+	park := parkable && !c.sendableTo(target)
 	// Stamp a lease on the local copy so a dead executor is detected and the
 	// failure propagated, instead of leaving this copy dispatched forever (D3).
 	// The timeout is carried on the wire so every hop inherits the same
 	// deadline. A DTN task is exempt (§8.2): a store-and-forward path has no
 	// heartbeat to renew against, so the absolute DeadlineUnix is its bound.
+	// A pinned task about to be parked is exempt for the same reason.
 	timeoutMS := p.TimeoutMS
-	if !dtn {
+	if !park && !dtn {
 		if timeoutMS <= 0 {
 			timeoutMS = c.lease().Milliseconds()
 			p.TimeoutMS = timeoutMS
@@ -732,7 +751,7 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 		if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
 			return fmt.Errorf("set lease: %w", err)
 		}
-	} else {
+	} else if dtn {
 		// Inline what fits the envelope; everything else becomes a chunked
 		// push obligation the flush drains once the link carries the delegate.
 		for _, h := range c.attachFatBundle(ctx, &p) {
@@ -749,10 +768,27 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 		return err
 	}
 	env.To = target
-	if err := c.sendTo(target, env); err != nil {
-		c.logger.Info("delegation send failed or target offline; parking in task_outbox for DTN relay",
-			"target", target, "task", taskID, "err", err)
-		c.taskOutboxPersist(ctx, target, p, "dtn", pushDeadline)
+	delivered := false
+	var sendErr error
+	if !park {
+		sendErr = c.sendTo(target, env)
+		delivered = sendErr == nil
+	}
+	if !delivered {
+		kind := "dtn"
+		if pinned && !dtn {
+			kind = "pin"
+			if !park {
+				// The link died between the sendable check and the send: take
+				// the lease stamped above back off before custody takes over.
+				if cerr := c.store.ClearLease(ctx, taskID); cerr != nil {
+					c.logger.Warn("clear lease for parked pinned task", "task", taskID, "err", cerr)
+				}
+			}
+		}
+		c.logger.Info("delegation undeliverable; parked in task_outbox for the peer's next contact",
+			"target", target, "task", taskID, "kind", kind, "err", sendErr)
+		c.taskOutboxPersist(ctx, target, p, kind, pushDeadline)
 	} else {
 		c.logger.Info("forwarded delegated task", "task", taskID, "to", target)
 		if dtn {
@@ -786,6 +822,26 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 // left empty until a later phase adds it.
 func delegateDetail(p bus.TaskDelegatePayload) TaskDetail {
 	specJSON := p.SpecJSON
+	if p.TargetNode != "" || p.PreferredNode != "" {
+		// The wire carries the canonical pin identity (k:<pubkey> when the
+		// destination proved a key); persist THAT into spec.node so a later
+		// local re-dispatch — restart recovery, a requeue — resolves by
+		// identity instead of the raw name the origin user typed, which could
+		// collide with a same-named ghost row on this node's directory.
+		var m map[string]any
+		if err := json.Unmarshal([]byte(specJSON), &m); err != nil || m == nil {
+			m = map[string]any{}
+		}
+		if p.TargetNode != "" {
+			m["node"] = p.TargetNode
+		}
+		if p.PreferredNode != "" {
+			m["preferred"] = p.PreferredNode
+		}
+		if b, err := json.Marshal(m); err == nil {
+			specJSON = string(b)
+		}
+	}
 	if p.UserLocale != "" {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(specJSON), &m); err == nil && m != nil {
@@ -906,14 +962,94 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			}
 		}
 	}()
+
+	plan, router, breakerKey, err := c.resolveRunPlan(ctx, taskID, required)
+	if err != nil {
+		return bus.TaskResultPayload{}, err
+	}
+	task, unlockActuator, err := c.claimForRun(ctx, taskID, intent, &plan, releaseSlot)
+	if err != nil {
+		return bus.TaskResultPayload{}, err
+	}
+	defer unlockActuator()
+	taskChain = task.Chain
+
+	// Notify the delegator that this node has accepted the task so its copy
+	// transitions dispatched -> running and can time the execution (D3). A local
+	// task (chain = [self]) has no predecessor and relayToParent is a no-op.
+	c.relayToParent(ctx, bus.MsgTaskAccept, task.Chain, bus.TaskAcceptPayload{TaskID: taskID})
+
+	// Capture the current attempt id so the result carries it; the delegator
+	// uses it to reject stale results after a transfer/retry.
+	attemptID := task.AttemptID
+
+	// Execution lifetime (P0-1). Two things must hold for a long stage — a
+	// training run, a multi-minute agent session — to survive:
+	//   1. its lease has to keep being renewed, here and one hop up the chain,
+	//      or the monitor force-fails work that is still running and the parent
+	//      re-routes it to a second node;
+	//   2. a force-fail has to actually stop the subprocess, which needs a
+	//      cancellable context registered under the task id.
+	// Both stop when this function returns.
+	execCtx, cancelExec := context.WithCancel(ctx)
+	defer cancelExec()
+	defer c.registerRunning(taskID, cancelExec)()
+	defer c.renewLease(execCtx, taskID, task.Chain, attemptID)()
+	execCtx = commander.WithTaskID(execCtx, taskID)
+
+	// Model-injection policy check (A1): decided once before the supervision
+	// loop — the adapter (and therefore the plan) is identical across rounds,
+	// so the decision does not vary between an initial run and a re-delegation.
+	var injection commander.InjectionDecision
+	if plan.Kind == "agent" {
+		if router != nil {
+			injection = router.InjectionDecision(plan.Agent, plan.Adapter)
+		}
+	}
+
+	prep, err := c.prepareRunDir(execCtx, ctx, task, taskID, plan)
+	if err != nil {
+		return bus.TaskResultPayload{}, err
+	}
+	if prep.negoRelease != nil {
+		defer prep.negoRelease()
+	}
+	var execCleanup func()
+	execCtx, execCleanup = c.decorateExecCtx(execCtx, ctx, taskID, task, plan)
+	defer execCleanup()
+
+	work := &runWork{
+		c: c, taskID: taskID, intent: intent, required: required,
+		task: task, plan: plan, router: router, breakerKey: breakerKey, injection: injection,
+		execCtx: execCtx, attemptID: attemptID,
+		workDir: prep.workDir, oscKey: prep.oscKey, scope: prep.scope,
+		before: prep.before, beforeOK: prep.beforeOK,
+		shadowConflicts: prep.shadowConflicts,
+	}
+	outcome, err := work.executeRounds(ctx)
+	if err != nil {
+		return bus.TaskResultPayload{}, err
+	}
+	if outcome.done {
+		return outcome.payload, nil
+	}
+	return c.finalizeRun(ctx, taskID, task, work.plan, required, attemptID, prep.workDir,
+		outcome.res, outcome.lastChanged, outcome.verdict, outcome.sessionID)
+}
+
+// resolveRunPlan turns a task's requires into an executable plan: route
+// selection, the just-in-time usability and circuit-breaker gates, and the
+// failover/alternate pruning those gates imply. It is run()'s first phase —
+// everything that can still be decided without touching the store.
+func (c *Core) resolveRunPlan(ctx context.Context, taskID string, required []string) (commander.Plan, *commander.Router, string, error) {
 	router := c.currentRouter()
 	if router == nil {
 		// No capability card loaded: nothing to execute.
-		return bus.TaskResultPayload{}, fmt.Errorf("no commander configured")
+		return commander.Plan{}, nil, "", fmt.Errorf("no commander configured")
 	}
 	plan, err := router.Route(required)
 	if err != nil {
-		return bus.TaskResultPayload{}, fmt.Errorf("route: %w", err)
+		return commander.Plan{}, nil, "", fmt.Errorf("route: %w", err)
 	}
 	// Re-check dispatch readiness at execution time: a task can be accepted
 	// while its harnesses were healthy and run after the provider went dark
@@ -921,7 +1057,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// delegated task so the parent re-routes it, and fails a local task fast
 	// with an actionable reason instead of parking it inside a dead adapter.
 	if plan.Kind == "agent" && !router.PlanUsable(plan) {
-		return bus.TaskResultPayload{}, fmt.Errorf("route: no usable agent for %v on this node (cli/credentials/endpoint check failed)", required)
+		return commander.Plan{}, nil, "", fmt.Errorf("route: no usable agent for %v on this node (cli/credentials/endpoint check failed)", required)
 	}
 	// Circuit breaker (P2-27): refuse to run an agent that has been failing
 	// repeatedly, before the task leaves its dispatched state, so the parent
@@ -955,7 +1091,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			}
 			if !promoted {
 				c.audit(ctx, taskID, "agent:spawn", plan.Agent, "open", "circuit open")
-				return bus.TaskResultPayload{}, fmt.Errorf("agent %s circuit open", plan.Agent)
+				return commander.Plan{}, nil, "", fmt.Errorf("agent %s circuit open", plan.Agent)
 			}
 		}
 		// Drop circuit-open alternates before the fallback chain runs. The
@@ -973,10 +1109,19 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			plan.Alternates = alternates
 		}
 	}
+	return plan, router, breakerKey, nil
+}
 
+// claimForRun moves the task row into running and returns whatever the
+// caller must hold while it runs: the task snapshot and the actuator unlock
+// (a no-op for non-hardware plans). On error the lock is already released —
+// the success path hands ownership to the caller's defer.
+func (c *Core) claimForRun(ctx context.Context, taskID, intent string, plan *commander.Plan, releaseSlot func()) (Task, func(), error) {
+	unlock := func() {}
 	task, err := c.store.Get(ctx, taskID)
 	if err != nil {
-		return bus.TaskResultPayload{}, fmt.Errorf("load task: %w", err)
+		unlock()
+		return Task{}, nil, fmt.Errorf("load task: %w", err)
 	}
 	// §7.2: an actuator plan's argv is a template — fill {intent}/{action}/
 	// {param:<name>} from the task's action_spec before anything runs. A
@@ -995,17 +1140,20 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// so an old or foreign row carrying odd spec text keeps the
 		// pre-gate behavior rather than inheriting a new fatal parse.
 		if plan.ActuatorID != "" {
-			return bus.TaskResultPayload{}, fmt.Errorf("route actuator: %w", serr)
+			unlock()
+			return Task{}, nil, fmt.Errorf("route actuator: %w", serr)
 		}
 		spec = nil
 	}
 	if spec != nil && spec.TargetActuator != "" && plan.ActuatorID == "" {
-		return bus.TaskResultPayload{}, fmt.Errorf("route actuator: action_spec targets %q but the resolved plan (%s %q) is not an actuator — requires %v matched no hardware:* capability",
+		unlock()
+		return Task{}, nil, fmt.Errorf("route actuator: action_spec targets %q but the resolved plan (%s %q) is not an actuator — requires %v matched no hardware:* capability",
 			spec.TargetActuator, plan.Kind, plan.Ability, task.Requires)
 	}
 	if plan.ActuatorID != "" {
-		if err := commander.SubstituteActionSpec(&plan, spec, intent); err != nil {
-			return bus.TaskResultPayload{}, fmt.Errorf("route actuator: %w", err)
+		if err := commander.SubstituteActionSpec(plan, spec, intent); err != nil {
+			unlock()
+			return Task{}, nil, fmt.Errorf("route actuator: %w", err)
 		}
 		// The resolved actuator is a physical device: serialize its driver
 		// across every execution path this run() serves — inline submits and
@@ -1014,9 +1162,8 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// what its driver may overlap with. Blocking here, before Accept,
 		// keeps the row in dispatched while a sibling finishes on the same
 		// device rather than running two drivers on one pin concurrently.
-		defer c.lockActuator(plan.ActuatorID)()
+		unlock = c.lockActuator(plan.ActuatorID)
 	}
-	taskChain = task.Chain
 	switch task.State {
 	case StateDispatched:
 		if err := c.store.Accept(ctx, taskID, c.nodeID); err != nil {
@@ -1036,17 +1183,21 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 					// this invocation). Falling through would spawn a second
 					// executor on the same task: bail out quietly and let the
 					// owner report the outcome.
-					return bus.TaskResultPayload{}, ErrAlreadyRunning
+					unlock()
+					return Task{}, nil, ErrAlreadyRunning
 				}
 				if gerr == nil && Terminal(fresh.State) {
-					return bus.TaskResultPayload{}, ErrCancelled
+					unlock()
+					return Task{}, nil, ErrCancelled
 				}
 			}
-			return bus.TaskResultPayload{}, fmt.Errorf("accept: %w", err)
+			unlock()
+			return Task{}, nil, fmt.Errorf("accept: %w", err)
 		}
 	case StateWaitingCtx:
 		if err := c.store.Resume(ctx, taskID, c.nodeID); err != nil {
-			return bus.TaskResultPayload{}, fmt.Errorf("resume: %w", err)
+			unlock()
+			return Task{}, nil, fmt.Errorf("resume: %w", err)
 		}
 		// Resume succeeded: the row is running and countable, so the
 		// reservation is freed now — holding it through execution would
@@ -1057,42 +1208,36 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// Already running: another run() invocation owns this task. Executing
 		// here would spawn a duplicate executor racing the first one's
 		// subprocess on the same work dir.
-		return bus.TaskResultPayload{}, ErrAlreadyRunning
+		unlock()
+		return Task{}, nil, ErrAlreadyRunning
 	default:
-		return bus.TaskResultPayload{}, fmt.Errorf("cannot run task in state %s", task.State)
+		unlock()
+		return Task{}, nil, fmt.Errorf("cannot run task in state %s", task.State)
 	}
+	return task, unlock, nil
+}
 
-	// Notify the delegator that this node has accepted the task so its copy
-	// transitions dispatched -> running and can time the execution (D3). A local
-	// task (chain = [self]) has no predecessor and relayToParent is a no-op.
-	c.relayToParent(ctx, bus.MsgTaskAccept, task.Chain, bus.TaskAcceptPayload{TaskID: taskID})
+// runPrep is what prepareRunDir leaves behind: the working directory the
+// task executes in, the scope/oscillation bookkeeping the supervision loop
+// consults, the pre-run snapshot files_changed diffs against, and the
+// negotiation release the caller owns until the run ends.
+type runPrep struct {
+	workDir         string
+	scope           *defense.Scope
+	oscKey          string
+	before          defense.Snapshot
+	beforeOK        bool
+	shadowConflicts []string
+	negoRelease     func()
+}
 
-	// Capture the current attempt id so the result carries it; the delegator
-	// uses it to reject stale results after a transfer/retry.
-	attemptID := task.AttemptID
-
-	// Execution lifetime (P0-1). Two things must hold for a long stage — a
-	// training run, a multi-minute agent session — to survive:
-	//   1. its lease has to keep being renewed, here and one hop up the chain,
-	//      or the monitor force-fails work that is still running and the parent
-	//      re-routes it to a second node;
-	//   2. a force-fail has to actually stop the subprocess, which needs a
-	//      cancellable context registered under the task id.
-	// Both stop when this function returns.
-	execCtx, cancelExec := context.WithCancel(ctx)
-	defer cancelExec()
-	defer c.registerRunning(taskID, cancelExec)()
-	defer c.renewLease(execCtx, taskID, task.Chain, attemptID)()
-	execCtx = commander.WithTaskID(execCtx, taskID)
-
-	// Model-injection policy check (A1): decided once before the supervision
-	// loop — the adapter (and therefore the plan) is identical across rounds,
-	// so the decision does not vary between an initial run and a re-delegation.
-	var injection commander.InjectionDecision
-	if plan.Kind == "agent" {
-		injection = router.InjectionDecision(plan.Agent, plan.Adapter)
-	}
-
+// prepareRunDir builds the task's workspace: the workdir resolution rules
+// (pinned, stage, project, attached), the artifact inputs it unpacks, the
+// shadow merges a preempted task resumes through, scope negotiation, and the
+// before-snapshot. Nothing here executes the plan — it only makes executing
+// honest.
+func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID string, plan commander.Plan) (runPrep, error) {
+	var negoRelease func()
 	// workDir is normally the node-wide execution directory; a queued task may
 	// pin its own (a panel session's worktree) so concurrent tasks never share
 	// a working directory (queue redesign — SetWorkDir is process-global and
@@ -1113,14 +1258,14 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	if task.PlanID != "" {
 		wd, err := c.stageWorkDir(task.PlanID, task.StageID)
 		if err != nil {
-			return bus.TaskResultPayload{}, err
+			return runPrep{}, err
 		}
 		workDir = wd
 		if err := os.MkdirAll(workDir, 0o755); err != nil {
-			return bus.TaskResultPayload{}, fmt.Errorf("create stage work dir: %w", err)
+			return runPrep{}, fmt.Errorf("create stage work dir: %w", err)
 		}
 		if err := c.fetchStageInputs(execCtx, task, workDir); err != nil {
-			return bus.TaskResultPayload{}, fmt.Errorf("stage inputs: %w", err)
+			return runPrep{}, fmt.Errorf("stage inputs: %w", err)
 		}
 	} else if projectInputs(task) {
 		// A delegated project task: the tree it must start from arrived as an
@@ -1130,14 +1275,14 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// reports success over work it never had the inputs to do.
 		wd, err := c.projectWorkDir(task.Project)
 		if err != nil {
-			return bus.TaskResultPayload{}, err
+			return runPrep{}, err
 		}
 		workDir = wd
 		if err := os.MkdirAll(workDir, 0o755); err != nil {
-			return bus.TaskResultPayload{}, fmt.Errorf("create project work dir: %w", err)
+			return runPrep{}, fmt.Errorf("create project work dir: %w", err)
 		}
 		if err := c.fetchStageInputs(execCtx, task, workDir); err != nil {
-			return bus.TaskResultPayload{}, fmt.Errorf("project inputs: %w", err)
+			return runPrep{}, fmt.Errorf("project inputs: %w", err)
 		}
 	} else if attachedInputs(task) {
 		// A file task whose work tree shipped as an artifact input: it unpacks
@@ -1145,14 +1290,14 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// with every other anonymous task — and runs there with the real code.
 		wd, err := c.attachedWorkDir(task.TaskID)
 		if err != nil {
-			return bus.TaskResultPayload{}, err
+			return runPrep{}, err
 		}
 		workDir = wd
 		if err := os.MkdirAll(workDir, 0o755); err != nil {
-			return bus.TaskResultPayload{}, fmt.Errorf("create task work dir: %w", err)
+			return runPrep{}, fmt.Errorf("create task work dir: %w", err)
 		}
 		if err := c.fetchStageInputs(execCtx, task, workDir); err != nil {
-			return bus.TaskResultPayload{}, fmt.Errorf("worktree inputs: %w", err)
+			return runPrep{}, fmt.Errorf("worktree inputs: %w", err)
 		}
 	}
 
@@ -1206,9 +1351,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		// scope, arbitrate it against every peer's lock table. A denial fails
 		// the run and the retry loop re-negotiates later — the mesh's "wait".
 		if err := c.negotiateTaskScope(execCtx, task, scope, plan.Agent); err != nil {
-			return bus.TaskResultPayload{}, fmt.Errorf("scope negotiation: %w", err)
+			return runPrep{}, fmt.Errorf("scope negotiation: %w", err)
 		}
-		defer c.negoReleaseTask(task.TaskID)
+		negoRelease = func() { c.negoReleaseTask(task.TaskID) }
 	}
 	// The before-snapshot rides every agent plan, not only scoped ones: the
 	// scope check consumes it for drift detection, and the result contract
@@ -1224,7 +1369,20 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			beforeOK = true
 		}
 	}
+	return runPrep{
+		workDir: workDir, scope: scope, oscKey: oscKey,
+		before: before, beforeOK: beforeOK,
+		shadowConflicts: shadowConflicts, negoRelease: negoRelease,
+	}, nil
+}
 
+// decorateExecCtx layers the agent-only context machinery onto execCtx:
+// the throttled progress sink, the bounded transcript-event tap, the session
+// pool, and the per-task timeout/tools/turn overrides. It returns the
+// decorated context and the pool's cleanup (a no-op when no pool was made)
+// so the caller can hold them for the run's lifetime.
+func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task Task, plan commander.Plan) (context.Context, func()) {
+	cleanup := func() {}
 	// Live progress (A5) is per-task, not per-round: the throttled progress
 	// sink is built once and reused across supervision rounds. It decorates
 	// execCtx, which already carries the cancellation the abort registry holds.
@@ -1319,7 +1477,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if c.supervisor != nil {
 			var pool *commander.AgentSessions
 			execCtx, pool = commander.WithSessionPool(execCtx)
-			defer pool.CloseAll()
+			cleanup = pool.CloseAll
 			execCtx = commander.WithSessionMode(execCtx)
 		}
 	}
@@ -1346,7 +1504,69 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			execCtx = commander.WithMaxTurns(execCtx, mt)
 		}
 	}
+	return execCtx, cleanup
+}
 
+// roundOutcome is superviseRounds' answer: either a terminal payload a
+// mid-loop branch already decided (done), or the post-loop state finalizeRun
+// turns into one. The loop's review parks and refusals already build the
+// whole result envelope, so wrapping — rather than re-deriving — keeps them
+// byte-identical.
+type roundOutcome struct {
+	payload     bus.TaskResultPayload
+	done        bool
+	res         commander.Result
+	lastChanged []string
+	verdict     entry.SuperviseVerdict
+	sessionID   string
+}
+
+// runWork bundles the mutable state run()'s phases share, so each phase stays
+// a method with a short signature instead of a dozen threaded parameters.
+type runWork struct {
+	c               *Core
+	taskID          string
+	intent          string
+	required        []string
+	task            Task
+	plan            commander.Plan
+	router          *commander.Router
+	breakerKey      string
+	injection       commander.InjectionDecision
+	execCtx         context.Context
+	attemptID       string
+	workDir         string
+	oscKey          string
+	scope           *defense.Scope
+	before          defense.Snapshot
+	beforeOK        bool
+	shadowConflicts []string
+}
+
+// executeRounds is the supervision loop: an agent task under a supervisor
+// executes once and is then judged; a "continue" verdict re-delegates the
+// follow-up to the same plan (whose fallback chain may pick a different
+// agent) until the judge accepts or the round budget runs out. Every
+// non-agent plan — and every agent plan without a supervisor — converges in
+// one round.
+func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
+	c := w.c
+	task := w.task
+	taskID := w.taskID
+	intent := w.intent
+	required := w.required
+	plan := &w.plan
+	router := w.router
+	breakerKey := w.breakerKey
+	injection := w.injection
+	execCtx := w.execCtx
+	workDir := w.workDir
+	oscKey := w.oscKey
+	scope := w.scope
+	before := w.before
+	beforeOK := w.beforeOK
+	attemptID := w.attemptID
+	shadowConflicts := w.shadowConflicts
 	// Supervision loop. An agent task under a supervisor executes once and is
 	// then judged; a "continue" verdict re-delegates the follow-up instruction
 	// to the same plan (whose fallback chain may pick a different agent if the
@@ -1411,18 +1631,18 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			msg := "token budget exhausted"
 			if err := c.store.Pause(ctx, taskID, c.nodeID, msg); err != nil {
 				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
-					return bus.TaskResultPayload{}, ErrCancelled
+					return roundOutcome{}, ErrCancelled
 				}
-				return bus.TaskResultPayload{}, fmt.Errorf("pause on token exhaustion: %w", err)
+				return roundOutcome{}, fmt.Errorf("pause on token exhaustion: %w", err)
 			}
 			c.logTask(task.Title, false)
 			trackTask(c, task.Project, required, task.Title, false)
-			return bus.TaskResultPayload{
+			return roundOutcome{done: true, payload: bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateReview,
 				ApprovalDisposition: string(ApprovalNeedsChangedInput),
 				OK:                  false, ExitCode: 1, Stderr: msg,
 				Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
-			}, nil
+			}}, nil
 		}
 		// §6.2 monotonic progress: hashing the work tree at each round's head
 		// means a later round that regresses to a state an earlier round (or
@@ -1446,7 +1666,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 						"hash":  h,
 						"round": round + 1,
 					})
-					return bus.TaskResultPayload{}, fmt.Errorf(
+					return roundOutcome{}, fmt.Errorf(
 						"state oscillation on %s: work tree regressed to a previously seen state (round %d)",
 						oscKey, round+1)
 				}
@@ -1528,7 +1748,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID) {
 			runCtx = commander.WithRemoteTask(runCtx)
 		}
-		res = router.Execute(runCtx, plan, prompt, workDir, task.Authorized)
+		res = router.Execute(runCtx, *plan, prompt, workDir, task.Authorized)
 		structured := parseStructuredResult(res.Structured)
 		// The schema's status field is the model's self-report. question and
 		// delegate are consumed below; "failed" is traced as evidence for the
@@ -1637,9 +1857,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 					"question": q, "stdout": res.Stdout, "files_changed": lastChanged,
 				}); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
-						return bus.TaskResultPayload{}, ErrCancelled
+						return roundOutcome{}, ErrCancelled
 					}
-					return bus.TaskResultPayload{}, fmt.Errorf("pause for clarification: %w", err)
+					return roundOutcome{}, fmt.Errorf("pause for clarification: %w", err)
 				}
 				c.EvTrace(execCtx, taskID, EvClarification, map[string]any{
 					"question": q, "round": round + 1, "agent": res.Agent,
@@ -1650,14 +1870,14 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				if len(fc) > maxFilesChangedReport {
 					fc = fc[:maxFilesChangedReport]
 				}
-				return bus.TaskResultPayload{
+				return roundOutcome{done: true, payload: bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview,
 					ApprovalDisposition: string(ApprovalResumeExecution),
 					Question:            q,
 					OK:                  true, ExitCode: 0, Stdout: res.Stdout,
 					FilesChanged: fc,
 					Tokens:       res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
-				}, nil
+				}}, nil
 			}
 		}
 
@@ -1835,18 +2055,18 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				c.audit(ctx, taskID, "scope:drift", plan.Agent, "denied", msg)
 				if err := c.store.Pause(ctx, taskID, c.nodeID, msg); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
-						return bus.TaskResultPayload{}, ErrCancelled
+						return roundOutcome{}, ErrCancelled
 					}
-					return bus.TaskResultPayload{}, fmt.Errorf("pause on scope drift: %w", err)
+					return roundOutcome{}, fmt.Errorf("pause on scope drift: %w", err)
 				}
 				c.logTask(task.Title, false)
 				trackTask(c, task.Project, required, task.Title, false)
-				return bus.TaskResultPayload{
+				return roundOutcome{done: true, payload: bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview,
 					ApprovalDisposition: string(ApprovalNeedsChangedInput),
 					OK:                  false, ExitCode: 1, Stderr: msg,
 					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
-				}, nil
+				}}, nil
 			}
 		}
 
@@ -1859,18 +2079,18 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				"manual": true, "notify": res.Stdout,
 			}); err != nil {
 				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
-					return bus.TaskResultPayload{}, ErrCancelled
+					return roundOutcome{}, ErrCancelled
 				}
-				return bus.TaskResultPayload{}, fmt.Errorf("pause manual: %w", err)
+				return roundOutcome{}, fmt.Errorf("pause manual: %w", err)
 			}
 			c.logTask(task.Title, false)
 			trackTask(c, task.Project, required, task.Title, false)
-			return bus.TaskResultPayload{
+			return roundOutcome{done: true, payload: bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateReview,
 				ApprovalDisposition: string(ApprovalAcceptWork),
 				OK:                  true, ExitCode: 0, Stdout: res.Stdout,
 				Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
-			}, nil
+			}}, nil
 		}
 
 		if !res.OK {
@@ -1886,24 +2106,24 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				defer cancel()
 				if err := c.store.Fail(wCtx, taskID, c.nodeID, msg); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
-						return bus.TaskResultPayload{}, ErrCancelled
+						return roundOutcome{}, ErrCancelled
 					}
-					return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
+					return roundOutcome{}, fmt.Errorf("fail: %w", err)
 				}
 				if err := c.store.Review(wCtx, taskID, c.nodeID, msg); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
-						return bus.TaskResultPayload{}, ErrCancelled
+						return roundOutcome{}, ErrCancelled
 					}
-					return bus.TaskResultPayload{}, fmt.Errorf("park overflowed task: %w", err)
+					return roundOutcome{}, fmt.Errorf("park overflowed task: %w", err)
 				}
 				c.logTask(task.Title, false)
 				trackTask(c, task.Project, required, task.Title, false)
-				return bus.TaskResultPayload{
+				return roundOutcome{done: true, payload: bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview,
 					ApprovalDisposition: string(ApprovalNeedsChangedInput),
 					OK:                  false, ExitCode: res.ExitCode, Stderr: msg,
 					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
-				}, nil
+				}}, nil
 			}
 			// A tier-2 authorization refusal is deterministic policy, not a failed
 			// attempt: retrying cannot produce consent. Park the task in review —
@@ -1917,40 +2137,40 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				defer cancel()
 				if err := c.store.Fail(wCtx, taskID, c.nodeID, res.Stderr); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
-						return bus.TaskResultPayload{}, ErrCancelled
+						return roundOutcome{}, ErrCancelled
 					}
-					return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
+					return roundOutcome{}, fmt.Errorf("fail: %w", err)
 				}
 				if err := c.store.ReviewWithDisposition(wCtx, taskID, c.nodeID, res.Stderr, ApprovalResumeExecution); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
-						return bus.TaskResultPayload{}, ErrCancelled
+						return roundOutcome{}, ErrCancelled
 					}
-					return bus.TaskResultPayload{}, fmt.Errorf("park refused task: %w", err)
+					return roundOutcome{}, fmt.Errorf("park refused task: %w", err)
 				}
 				c.logTask(task.Title, false)
 				trackTask(c, task.Project, required, task.Title, false)
-				return bus.TaskResultPayload{
+				return roundOutcome{done: true, payload: bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview,
 					ApprovalDisposition: string(ApprovalResumeExecution),
 					OK:                  false, ExitCode: res.ExitCode, Stderr: res.Stderr,
 					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
-				}, nil
+				}}, nil
 			}
 			wCtx, cancel := c.storeWriteCtx(ctx)
 			defer cancel()
 			if err := c.store.Fail(wCtx, taskID, c.nodeID, res.Stderr); err != nil {
 				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
-					return bus.TaskResultPayload{}, ErrCancelled
+					return roundOutcome{}, ErrCancelled
 				}
-				return bus.TaskResultPayload{}, fmt.Errorf("fail: %w", err)
+				return roundOutcome{}, fmt.Errorf("fail: %w", err)
 			}
 			c.logTask(task.Title, false)
 			trackTask(c, task.Project, required, task.Title, false)
-			return bus.TaskResultPayload{
+			return roundOutcome{done: true, payload: bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateFailed, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
 				Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				AgentSessionID: sessionID,
-			}, nil
+			}}, nil
 		}
 
 		// Supervision applies only to agent tasks under a configured supervisor.
@@ -2079,7 +2299,15 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			currentIntent = currentIntent + "\n\n[上级补充指令]\n" + v.Followup
 		}
 	}
+	return roundOutcome{res: res, lastChanged: lastChanged, verdict: verdict, sessionID: sessionID}, nil
+}
 
+// finalizeRun is run()'s terminal routing: pack the workdir into its
+// output artifact, then land the row in review (judge reject, unauthorized
+// Tier-2) or done. Every return is already the wire payload run reports.
+func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan commander.Plan,
+	required []string, attemptID, workDir string, res commander.Result,
+	lastChanged []string, verdict entry.SuperviseVerdict, sessionID string) (bus.TaskResultPayload, error) {
 	// A stage hands its work-dir to its successors as a content-addressed
 	// artifact. It is packed before the terminal branches below, not inside one of
 	// them, because a stage that parks in review still produced a tree and the
@@ -2699,6 +2927,24 @@ func (c *Core) handleDecline(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	c.logger.Info("task declined", "task", p.TaskID, "reason", p.Reason, "by", env.From)
+	if pin := targetNodeOf(t); pin != "" {
+		// The task names its destination: a decline from that destination is
+		// a terminal answer, not an invitation to shop for a substitute.
+		// Record who refused, fail honestly, and let the verdict reach the
+		// waiting submitter below.
+		if err := c.store.RecordEvent(ctx, p.TaskID, EvDecline,
+			map[string]any{"reason": p.Reason, "by": env.From}); err != nil {
+			c.logger.Debug("decline event record failed", "task", p.TaskID, "err", err)
+		}
+		c.failLocal(ctx, p.TaskID,
+			fmt.Errorf("pinned node %s declined: %s", env.From, p.Reason))
+		c.relayToParent(ctx, bus.MsgTaskDecline, t.Chain, p)
+		c.signalResult(p.TaskID, bus.TaskResultPayload{
+			TaskID: p.TaskID, State: StateFailed, OK: false, ExitCode: 1,
+			Stderr: fmt.Sprintf("pinned node %s declined: %s", env.From, p.Reason),
+		})
+		return
+	}
 	// Parent returns the task to queued for re-routing elsewhere.
 	if err := c.store.Decline(ctx, p.TaskID, c.nodeID, p.Reason, env.From); err != nil {
 		c.logger.Debug("decline apply failed", "task", p.TaskID, "err", err)
@@ -2745,6 +2991,12 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 		// to the previous propagate-the-decline behaviour.
 		return false
 	}
+	if targetNodeOf(t) != "" {
+		// A pinned task has exactly one acceptable destination; when it
+		// declines, the task must surface that refusal — rerouting would be
+		// the silent-substitution failure the pin exists to prevent.
+		return false
+	}
 
 	excluded, err := c.store.DeclinedBy(ctx, taskID)
 	if err != nil {
@@ -2758,7 +3010,8 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	decision := scheduler.RouteP(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
 		resourceRequirement(t.ResourceJSON), "", t.Project)
 	if decision.Action != scheduler.ActionForward {
-		c.logger.Info("reroute: no alternate node", "task", taskID, "action", decision.Action)
+		c.logger.Info("reroute: no alternate node", "task", taskID, "action", decision.Action,
+			"reason", c.enrichDeclineReason(ctx, taskID, decision.Reason))
 		return false
 	}
 
@@ -2793,14 +3046,6 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	if t.AgentSessionID != "" && t.AgentSessionNode == decision.Target {
 		payload.ResumeSessionID = t.AgentSessionID
 	}
-	// Hop-limited consent (S2-8): a re-route is one direct dispatch, so the
-	// consent on record covers exactly the receiving hop and must not walk
-	// further through a forwarding sub-scheduler. The stored grant rides along
-	// so the consent the origin signed reaches the executor verifiably intact.
-	if t.Authorized {
-		payload.AuthHops = 1
-		payload.AuthSig, payload.AuthPub, payload.AuthTs = t.AuthSig, t.AuthPub, t.AuthTs
-	}
 	// A re-routed project task needs its context as much as the first attempt did.
 	c.attachProject(ctx, &payload, t.Project)
 	// Same for an ad-hoc file task: the tree travels with the re-route or the
@@ -2812,6 +3057,15 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	}
 	if t.ContextHash != "" {
 		payload.ContextLevel = "pointer"
+	}
+	// Hop-limited consent (S2-8): a re-route is one direct dispatch, so the
+	// consent covers exactly the receiving hop and must not walk further
+	// through a forwarding sub-scheduler. Signed after the attaches — the
+	// grant's digest binds the final payload — and re-emitted verbatim when
+	// this node is only relaying another origin's task (P2-8).
+	if t.Authorized {
+		payload.AuthHops = 1
+		c.grantConsentFor(t, &payload)
 	}
 	if err := c.dispatchDelegated(ctx, taskID, decision.Target, payload, t.Chain); err != nil {
 		c.logger.Warn("reroute: forward failed", "task", taskID, "target", decision.Target, "err", err)
@@ -2883,6 +3137,31 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 	if p.AttemptID == "" || (t.AttemptID != "" && t.AttemptID != p.AttemptID) {
 		c.logger.Info("stale attempt result ignored", "task", p.TaskID,
 			"stored", t.AttemptID, "got", p.AttemptID)
+		// Keep the drop honest: a real executor DID produce this outcome for
+		// an attempt the row moved past. Without the audit event the timeline
+		// reads as if the remote work never reported back.
+		if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
+			"late": true, "dropped": "stale_attempt",
+			"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
+		}); rerr != nil {
+			c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
+		}
+		return
+	}
+	if Terminal(t.State) {
+		// A closed row stays closed — cancel/expire/done are deliberate
+		// outcomes a late wire message must not reopen. But the executor's
+		// real verdict is recorded so `task show` shows what actually
+		// happened remotely instead of a silent divergence.
+		c.logger.Info("late result on terminal task", "task", p.TaskID,
+			"state", t.State, "from", env.From, "remote_state", p.State)
+		if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
+			"late": true, "dropped": "terminal_state", "local_state": t.State,
+			"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
+		}); rerr != nil {
+			c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
+		}
+		c.signalResult(p.TaskID, p)
 		return
 	}
 	state := p.State

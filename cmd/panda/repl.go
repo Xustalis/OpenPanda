@@ -1344,7 +1344,11 @@ func (r *repl) cmdTasks(arg string) {
 		watchQueueTo(r.commandContext(), r.store, state, "", r.loc, r.commandOutput(), false)
 		return
 	}
-	tasks, err := r.store.ListByState(r.commandContext(), state)
+	// The listing is bounded: /tasks shows the working set, not the archive —
+	// an uncapped read of the whole history just to paint a table is what
+	// made the board slow on long-lived daemons.
+	const taskListCap = 200
+	tasks, err := r.store.ListByStateLimit(r.commandContext(), state, taskListCap)
 	if err != nil {
 		r.storeErr(err)
 		return
@@ -1352,6 +1356,9 @@ func (r *repl) cmdTasks(arg string) {
 	if len(tasks) == 0 {
 		r.outln(i18n.T(r.loc, "repl.tasks.none"))
 		return
+	}
+	if len(tasks) == taskListCap {
+		r.outln(pal().Muted(i18n.Tf(r.loc, "cli.queue.truncated", "n", strconv.Itoa(taskListCap))))
 	}
 	printTaskTableTo(r.commandOutput(), r.loc, tasks)
 }
@@ -1362,22 +1369,24 @@ func (r *repl) cmdTasks(arg string) {
 // its own confirm card (the exec pump owns no terminal to read an answer
 // from).
 func (r *repl) cmdTasksClear(yes bool) {
-	tasks, err := r.store.ListByState(r.commandContext(), "")
+	n, err := r.store.CountByState(r.commandContext(), "")
 	if err != nil {
 		r.storeErr(err)
 		return
 	}
-	if len(tasks) == 0 {
+	if n == 0 {
 		r.outln(i18n.T(r.loc, "cli.queue.clear.empty"))
 		return
 	}
 	p := pal()
-	if !yes && !r.confirm(i18n.Tf(r.loc, "cli.queue.clear.confirm", "n", strconv.Itoa(len(tasks)))) {
+	if !yes && !r.confirm(i18n.Tf(r.loc, "cli.queue.clear.confirm", "n", strconv.Itoa(n))) {
 		return
 	}
 	if r.engine.Load() != nil {
-		for _, t := range tasks {
-			if !core.Terminal(t.State) {
+		// Only the active set can still be executing — the settled archive
+		// has nothing to cancel.
+		if active, lerr := r.store.ListActive(r.commandContext()); lerr == nil {
+			for _, t := range active {
 				_, _ = r.engine.Load().CancelTask(r.commandContext(), t.TaskID)
 			}
 		}

@@ -50,6 +50,15 @@ var version = versionpkg.Version
 // the log growth LaunchAgent's unrotated /tmp files would turn into.
 const peerFailLogEvery = 20
 
+// Redial backoff caps. The steady-state cap keeps a permanently offline peer
+// cheap to probe; with custody in hand the cap collapses so a parked task —
+// whose delivery IS the reconnect — waits seconds between attempts, not
+// half-minutes, on the flappy links real deployments run over.
+const (
+	peerBackoffCap        = 30 * time.Second
+	peerBackoffCapCustody = 5 * time.Second
+)
+
 func main() {
 	// A Windows self-update renames the running image to <exe>.old because the
 	// locked file cannot be replaced in place; the fresh process sweeps that
@@ -128,6 +137,9 @@ func main() {
 					return
 				case "remove", "rm":
 					runNodeRemove(args[1:])
+					return
+				case "prune":
+					runNodePrune(args[1:])
 					return
 				case "verify":
 					runNodesVerify(args[1:])
@@ -450,6 +462,7 @@ func runDaemon(args []string) {
 	artifactStore.SetMinFreeBytes(cfg.Storage.ArtifactMinFreeBytes)
 	coreNode.SetArtifactStore(artifactStore)
 	coreNode.SetLimits(cfg.Network.MaxConnections, cfg.Network.MaxConnectionsPerIP)
+	coreNode.SetRetentionDays(cfg.Storage.EffectiveTaskRetentionDays())
 	// DTN contact plan (network.contacts): the scheduled windows custody
 	// routing plans around. A malformed window fails startup outright —
 	// silently dropping it would strand bundles the operator scheduled.
@@ -705,12 +718,22 @@ func runDaemon(args []string) {
 					if dialFails == 1 || dialFails%peerFailLogEvery == 0 {
 						logger.Warn("peer dial failed", "peer", peer, "err", err, "consecutive", dialFails)
 					}
+					// Custody-aware cadence: with an outbox holding rows the
+					// peer owes (or is owed) work, probing the contact
+					// opportunity is the priority — the steady-state cap
+					// would stretch a flappy link's recovery into minutes of
+					// needless waiting for a parked task that would flow the
+					// moment the dial lands.
+					capTo := peerBackoffCap
+					if coreNode.HasPendingCustody(ctx) {
+						capTo = peerBackoffCapCustody
+					}
 					select {
 					case <-ctx.Done():
 						return
 					case <-time.After(jitter(backoff)):
 					}
-					backoff = min(backoff*2, 30*time.Second)
+					backoff = min(backoff*2, capTo)
 					continue
 				}
 				if dialFails > 0 {
@@ -782,12 +805,19 @@ func schedulerTier(resourceClass string) int {
 	}
 }
 
-// hostStatePaths returns the node's own bookkeeping paths — its SQLite/memory
-// trees and the agent CLI's own config dir — so scope-drift detection ignores
-// the host's side-effect writes rather than flagging them as agent drift.
+// hostStatePaths returns the node's own bookkeeping paths — its SQLite file
+// and sidecars, memory trees, pid file, and the agent CLI's own config dir —
+// so scope-drift detection ignores the host's side-effect writes rather than
+// flagging them as agent drift, and so artifact pack/extract never ships or
+// overwrites live node state (see Core.hostStatePrune/extractSkipSet).
 func hostStatePaths(cfg *config.Config) []string {
+	dbDir := filepath.Dir(cfg.Storage.DBPath)
 	return []string{
-		filepath.Dir(cfg.Storage.DBPath), // data/: openpanda.db + -wal/-shm + context/
+		dbDir,                       // data/: openpanda.db + -wal/-shm + context/
+		cfg.Storage.DBPath,          // the live SQLite file, for pack/extract pruning
+		cfg.Storage.DBPath + "-wal", // and its sidecars, whose loss splits the db
+		cfg.Storage.DBPath + "-shm",
+		filepath.Join(dbDir, "daemon.pid"),
 		cfg.Storage.MemoryPath,
 		cfg.Storage.ProjectsPath,
 		cfg.Storage.SkillsPath,
@@ -866,6 +896,7 @@ func printUsage(w *os.File) {
 	line("  nodes admit <id>       admit a LAN-discovered node as a peer")
 	line("  nodes verify <id>      mark a node's fingerprint as human-compared")
 	line("  nodes drain [id]       maintenance mode: stop accepting new work (--off lifts)")
+	line("  nodes prune            delete session-ghost directory rows (--offline-days N for stale rows)")
 	line("  nodes disconnect <a>   remove a peer from the dial list")
 	line("  pair --secret S --peer <host:port>")
 	line("                         join an existing network from a new machine")

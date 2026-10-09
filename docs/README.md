@@ -15,7 +15,13 @@ OpenPanda project docs that are intentionally part of the public source tree.
 
 - [`plans/roadmap-desktop-and-packaging.md`](plans/roadmap-desktop-and-packaging.md) — high-level roadmap for the desktop client & packaging pipeline.
 - [`plans/roadmap-v0.0.10-multi-device.md`](plans/roadmap-v0.0.10-multi-device.md) — the v0.0.10 multi-device collaboration roadmap: delegation-parity, joining & identity, actuator scheduling, fleet observability, trust tail, and the validation gates; per-item status tracked inline.
-- [`author/reports/Agent调度与上下文管理审查-2026-09-03.md`](author/reports/Agent调度与上下文管理审查-2026-09-03.md) — code review of the agent scheduling chain (route/queue/run/supervise/retry) and subagent context management: verified issue list (P1 plain-task cross-node zero file context, P1 silent context degradation, P2 followup replacing intent, plus P2/P3s) with file:line evidence, what is solid, and the W1-W6 fix plan. (中文)
-- [`author/reports/项目与对话关联修复方案-2026-09-03.md`](author/reports/项目与对话关联修复方案-2026-09-03.md) — the broken "enter project" jump, and why sessions have no project association at all: diagnosis with code evidence plus the Web+CLI fix plan (Session.project field, project-scoped routing, REPL conversation sharding, delete semantics). (中文)
-- [`author/reports/全面分析与修复方案-2026-08-28.md`](author/reports/全面分析与修复方案-2026-08-28.md) — user-reported pain points (capability editing, device onboarding, scheduling UX) fully diagnosed with code evidence, plus the staged fix plan. (中文)
-- [`author/guides/DEVELOPMENT.md`](author/guides/DEVELOPMENT.md) — historical hands-on developer guide (2026-08-18 snapshot; see the banner inside). (中文)
+
+## Historical reports
+
+Point-in-time investigation and fix records; their items have landed — see
+[`status.md`](status.md) for current state.
+
+- [`reports/confirmed-issues-fix-report-2026-09-09.md`](reports/confirmed-issues-fix-report-2026-09-09.md) — confirmed CLI/TUI, approval/cancel, web-session and node-identity issues with root causes and the implemented fix list. (中文)
+- [`reports/irreversible-approval-findings-2026-09-09.md`](reports/irreversible-approval-findings-2026-09-09.md) — irreversible-operation approval gate: findings and requirements feeding the approval redesign. (中文)
+- [`reports/修复总结_2026-09-20.md`](reports/修复总结_2026-09-20.md) — fix summary for the 2026-09-20 stability/security pass. (中文)
+- [`reports/PANDA系统架构优化与CLI交互重构分析汇报.md`](reports/PANDA系统架构优化与CLI交互重构分析汇报.md) — architecture & CLI interaction analysis report. (中文)

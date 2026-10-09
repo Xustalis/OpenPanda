@@ -104,6 +104,11 @@ storage:
   # named by hash. Not ctxstore (the Micro-node LRU keeps only 5 entries and
   # would silently evict them), not SQLite (artifacts are gigabyte-scale).
   # artifact_path: "artifacts"
+  # Days a settled task (done/failed/cancelled/expired) is kept before the
+  # hourly sweep deletes it — the task table otherwise only grows, and every
+  # task listing pays for the archive. Default 30; explicit 0 keeps forever.
+  # review tasks never age out: a row parked for a human is not history.
+  # task_retention_days: 30
 
 log:
   level: "info"                  # debug | info | warn | error

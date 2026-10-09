@@ -248,7 +248,7 @@ func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch f
 		}
 	}
 
-	target, peerScore := pickBestScored(matching, now, preferred, project)
+	target, peerScore := pickBestScored(matching, now, preferred, project, self, selfNode.LinkMetrics)
 	if canLocal {
 		if !haveSelf {
 			// No row of our own to score against. Absence of evidence about our
@@ -256,7 +256,7 @@ func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch f
 			// registers itself, so this is the fixture case: stay local.
 			return Decision{Action: ActionLocal}
 		}
-		if localScore := score(selfNode, now, preferred, project) + localBias; target == "" || localScore >= peerScore {
+		if localScore := score(selfNode, now, preferred, project, self, selfNode.LinkMetrics) + localBias; target == "" || localScore >= peerScore {
 			return Decision{Action: ActionLocal}
 		}
 	}
@@ -275,7 +275,7 @@ func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch f
 			return Decision{Action: ActionForward, Target: hop}
 		}
 	}
-	if sub, _ := pickBestScored(subs, now, preferred, project); sub != "" {
+	if sub, _ := pickBestScored(subs, now, preferred, project, self, selfNode.LinkMetrics); sub != "" {
 		return Decision{Action: ActionForward, Target: sub}
 	}
 	return Decision{

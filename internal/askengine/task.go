@@ -131,17 +131,17 @@ func toTaskInput(spec *entry.TaskSpec, loc ...i18n.Locale) core.TaskInput {
 	}
 
 	return core.TaskInput{
-		Title:         spec.Title,
-		Project:       spec.Project,
-		ContextType:   contextType,
-		Intent:        intent.String(),
-		SpecJSON:      string(specJSON),
-		Requires:      requires,
-		PreferredNode: spec.Spec.Node,
-		Complexity:    spec.Complexity,
-		Risk:          spec.Risk,
-		ResourceJSON:  string(resourceJSON),
-		UserLocale:    targetLoc,
+		Title:        spec.Title,
+		Project:      spec.Project,
+		ContextType:  contextType,
+		Intent:       intent.String(),
+		SpecJSON:     string(specJSON),
+		Requires:     requires,
+		TargetNode:   spec.Spec.Node,
+		Complexity:   spec.Complexity,
+		Risk:         spec.Risk,
+		ResourceJSON: string(resourceJSON),
+		UserLocale:   targetLoc,
 	}
 }
 

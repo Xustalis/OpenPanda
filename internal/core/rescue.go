@@ -52,6 +52,15 @@ func (c *Core) rescueOrphanedForwards(ctx context.Context) {
 	active := make(map[string]bool, len(tasks))
 	for _, t := range tasks {
 		active[t.TaskID] = true
+		if c.taskOutboxPending(ctx, t.TaskID) {
+			// The task is parked in this node's custody awaiting the peer's
+			// next contact: delivery is already owed by the outbox flush, so
+			// it is not orphaned no matter what state the restart left the
+			// row in. Failing it would let custody deliver work the local
+			// copy already declared dead.
+			c.dropOrphan(t.TaskID)
+			continue
+		}
 		if c.rerouteDeclined(ctx, t.TaskID) {
 			c.dropOrphan(t.TaskID)
 			c.logger.Info("orphaned forward rescued by re-route", "task", t.TaskID)
@@ -142,4 +151,21 @@ func (c *Core) sweepStalePeers(ctx context.Context) {
 		}
 		c.logger.Info("stale peer marked offline", "peer", id)
 	}
+
+	// Session-ghost GC: rows keyed by an ephemeral "-8hex" id can never host
+	// a fleet member again once their session ends — delete them outright
+	// instead of letting them pile up as offline routing candidates.
+	ghosts, err := ledger.ReapGhosts(c.db, int64(ghostRowAfter.Seconds()), exclude)
+	if err != nil {
+		c.logger.Warn("reap session ghosts", "err", err)
+	} else {
+		for _, id := range ghosts {
+			c.logger.Info("reaped session-ghost row", "node", id)
+		}
+	}
 }
+
+// ghostRowAfter is the grace before a session-keyed row is deleted: long
+// enough that a session reconnecting mid-sweep keeps its row, short enough
+// that yesterday's `panda ask` does not linger as a routing candidate.
+const ghostRowAfter = 15 * time.Minute

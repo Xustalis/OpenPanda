@@ -300,15 +300,9 @@ func runProjectShow(args []string) {
 // its tasks is a name and a path; the tasks are what makes `show` answer "what is
 // happening here".
 func printProjectTasks(loc i18n.Locale, store *core.TaskStore, name string) {
-	all, err := store.ListByState(context.Background(), "")
+	mine, err := store.ListByProject(context.Background(), name)
 	if err != nil {
 		return
-	}
-	var mine []core.Task
-	for _, t := range all {
-		if t.Project == name {
-			mine = append(mine, t)
-		}
 	}
 	if len(mine) == 0 {
 		fmt.Println(pal().Muted(i18n.T(loc, "cli.project.noTasks")))

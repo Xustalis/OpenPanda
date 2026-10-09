@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 
@@ -190,6 +191,22 @@ func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project,
 
 // Get loads one task.
 func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+taskColumns+` FROM tasks WHERE task_id = ?`, taskID)
+	return s.scanTask(row)
+}
+
+// rowScanner is satisfied by both *sql.Row and *sql.Rows, so Get's single-row
+// read and every list query share one hydration path.
+type rowScanner interface {
+	Scan(...any) error
+}
+
+// scanTask reads one taskColumns row into a Task. JSON columns that fail to
+// decode leave their fields zeroed — the row itself is still usable (a
+// damaged requires_json must not strand the task's state machine) — and are
+// logged so a corrupt column is visible instead of silently reading as empty.
+func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 	var t Task
 	var chainJSON string
 	var intent, spec, result sql.NullString
@@ -202,26 +219,31 @@ func (s *TaskStore) Get(ctx context.Context, taskID string) (Task, error) {
 	var scheduled int
 	var remote int
 	var planID, stageID, needsJSON, inputsJSON, outputArt sql.NullString
-	err := s.db.QueryRowContext(ctx,
-		`SELECT `+taskColumns+` FROM tasks WHERE task_id = ?`, taskID).
-		Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State, &t.OwnerNode,
-			&t.AttemptID, &t.StateVersion, &chainJSON, &intent, &spec,
-			&result, &contextType, &contextHash, &complexity, &risk, &resource,
-			&requiresJSON, &approvalDisposition, &operationDecision, &lease,
-			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
-			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
-			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
-			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
-			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs,
-			&remote)
-	if err != nil {
+	if err := row.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State, &t.OwnerNode,
+		&t.AttemptID, &t.StateVersion, &chainJSON, &intent, &spec,
+		&result, &contextType, &contextHash, &complexity, &risk, &resource,
+		&requiresJSON, &approvalDisposition, &operationDecision, &lease,
+		&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
+		&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
+		&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
+		&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
+		&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs,
+		&remote); err != nil {
 		return Task{}, err
 	}
-	_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
-	_ = json.Unmarshal([]byte(requiresJSON.String), &t.Requires)
-	_ = json.Unmarshal([]byte(resourceKeysJSON.String), &t.ResourceKeys)
-	_ = json.Unmarshal([]byte(needsJSON.String), &t.Needs)
-	_ = json.Unmarshal([]byte(inputsJSON.String), &t.Inputs)
+	decode := func(col, raw string, v any) {
+		if raw == "" {
+			return
+		}
+		if err := json.Unmarshal([]byte(raw), v); err != nil {
+			s.logger.Warn("decode task json column", "task", t.TaskID, "col", col, "err", err)
+		}
+	}
+	decode("chain_json", chainJSON, &t.Chain)
+	decode("requires_json", requiresJSON.String, &t.Requires)
+	decode("resource_keys_json", resourceKeysJSON.String, &t.ResourceKeys)
+	decode("needs_json", needsJSON.String, &t.Needs)
+	decode("input_artifacts_json", inputsJSON.String, &t.Inputs)
 	t.Intent = intent.String
 	t.SpecJSON = spec.String
 	t.ResultJSON = result.String
@@ -410,27 +432,7 @@ func (s *TaskStore) recordEventTx(ctx context.Context, tx *sql.Tx, taskID, typ s
 // state/owner guard, two concurrent transitions can both pass their pre-checks
 // and overwrite each other. Returns ErrConflict when the guard fails.
 func (s *TaskStore) applyCAS(ctx context.Context, taskID, from, to, owner, attemptID, event string, data, result any) error {
-	now := s.now()
-	dataJSON, _ := json.Marshal(data)
-	var resultJSON any
-	if result != nil {
-		b, _ := json.Marshal(result)
-		resultJSON = string(b)
-	}
-	return s.withTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `
-			UPDATE tasks SET state=?, owner_node=?, attempt_id=?, state_version=state_version+1,
-				result_json=COALESCE(?, result_json), updated_at=?
-			WHERE task_id=? AND state=? AND owner_node=?`,
-			to, owner, attemptID, resultJSON, now, taskID, from, owner)
-		if err != nil {
-			return fmt.Errorf("update task state: %w", err)
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return fmt.Errorf("%w: task %s state=%s owner=%s", ErrConflict, taskID, from, owner)
-		}
-		return s.recordEventTx(ctx, tx, taskID, event, dataJSON)
-	})
+	return s.applyTransition(ctx, taskID, from, to, owner, attemptID, event, data, result, true)
 }
 
 // applyState writes the new state + event atomically, succeeding only if the
@@ -440,6 +442,10 @@ func (s *TaskStore) applyCAS(ctx context.Context, taskID, from, to, owner, attem
 // state guard is what prevents a concurrent timeout/cancel from being
 // overwritten by a result that read the pre-transition state.
 func (s *TaskStore) applyState(ctx context.Context, taskID, from, to, owner, attemptID, event string, data, result any) error {
+	return s.applyTransition(ctx, taskID, from, to, owner, attemptID, event, data, result, false)
+}
+
+func (s *TaskStore) applyTransition(ctx context.Context, taskID, from, to, owner, attemptID, event string, data, result any, checkOwner bool) error {
 	now := s.now()
 	dataJSON, _ := json.Marshal(data)
 	var resultJSON any
@@ -448,15 +454,25 @@ func (s *TaskStore) applyState(ctx context.Context, taskID, from, to, owner, att
 		resultJSON = string(b)
 	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `
-			UPDATE tasks SET state=?, owner_node=?, attempt_id=?, state_version=state_version+1,
-				result_json=COALESCE(?, result_json), updated_at=?
-			WHERE task_id=? AND state=?`,
-			to, owner, attemptID, resultJSON, now, taskID, from)
+		query := `UPDATE tasks SET state=?, owner_node=?, attempt_id=?, state_version=state_version+1,
+			result_json=COALESCE(?, result_json), updated_at=?
+			WHERE task_id=? AND state=?`
+		args := []any{to, owner, attemptID, resultJSON, now, taskID, from}
+		if checkOwner {
+			query += " AND owner_node=?"
+			args = append(args, owner)
+		}
+		res, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("update task state: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
+			// owner in the message is the claimant, which is only meaningful
+			// when the guard actually checked it — on the unchecked path it
+			// is just who wanted to write, not who holds the row.
+			if checkOwner {
+				return fmt.Errorf("%w: task %s state=%s owner=%s", ErrConflict, taskID, from, owner)
+			}
 			return fmt.Errorf("%w: task %s state=%s", ErrConflict, taskID, from)
 		}
 		return s.recordEventTx(ctx, tx, taskID, event, dataJSON)
@@ -575,36 +591,57 @@ func (s *TaskStore) DispatchTarget(ctx context.Context, taskID string) (string, 
 	return d.Target, nil
 }
 
-// DeclinedBy returns every node that has declined this task, read from the
-// task_events audit trail (Decline records the declining executor as "by").
-// The re-router (P1-5) excludes them so a task cannot bounce back to a node
-// that already refused it — that is what bounds the decline/re-route loop.
-func (s *TaskStore) DeclinedBy(ctx context.Context, taskID string) ([]string, error) {
+// DeclineRecord is one refusal on a task's audit trail: the declining
+// executor and the reason it stated ("capacity full", "node draining").
+type DeclineRecord struct {
+	By     string
+	Reason string
+}
+
+// DeclineTrail returns every refusal this task collected, oldest first.
+func (s *TaskStore) DeclineTrail(ctx context.Context, taskID string) ([]DeclineRecord, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT data_json FROM task_events WHERE task_id=? AND type=? ORDER BY id`,
 		taskID, EvDecline)
 	if err != nil {
-		return nil, fmt.Errorf("declined-by: %w", err)
+		return nil, fmt.Errorf("decline trail: %w", err)
 	}
 	defer rows.Close()
-	var out []string
+	var out []DeclineRecord
 	for rows.Next() {
 		var data string
 		if err := rows.Scan(&data); err != nil {
 			return nil, err
 		}
 		var d struct {
-			By string `json:"by"`
+			By     string `json:"by"`
+			Reason string `json:"reason"`
 		}
 		if err := json.Unmarshal([]byte(data), &d); err == nil && d.By != "" {
-			out = append(out, d.By)
+			out = append(out, DeclineRecord{By: d.By, Reason: d.Reason})
 		}
 	}
 	return out, rows.Err()
 }
 
+// DeclinedBy returns every node that has declined this task, read from the
+// task_events audit trail (Decline records the declining executor as "by").
+// The re-router (P1-5) excludes them so a task cannot bounce back to a node
+// that already refused it — that is what bounds the decline/re-route loop.
+func (s *TaskStore) DeclinedBy(ctx context.Context, taskID string) ([]string, error) {
+	trail, err := s.DeclineTrail(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(trail))
+	for _, d := range trail {
+		out = append(out, d.By)
+	}
+	return out, nil
+}
+
 // RetryCount returns the number of retries recorded on a task's audit trail
-// (one EvRetry event per Requeue). Unlike the in-memory loop detector — whose
+// (one EvRetry event per RequeueForRetry). Unlike the in-memory loop detector — whose
 // counters reset with the process — this count survives daemon restarts, so a
 // deterministically failing task cannot earn an unbounded number of attempts
 // by crashing and restarting its node between retries (S2-6).
@@ -636,7 +673,7 @@ func (s *TaskStore) QueuedDelegatedRemotely(ctx context.Context, self string) ([
 		return nil, fmt.Errorf("queued delegated tasks: %w", err)
 	}
 	defer rows.Close()
-	tasks, err := scanTasks(rows)
+	tasks, err := s.scanTasks(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -838,13 +875,6 @@ func (s *TaskStore) Fail(ctx context.Context, taskID, owner, reason string) erro
 	}
 	return s.transition(ctx, taskID, from, StateFailed, owner, EvResult,
 		map[string]any{"failed": reason})
-}
-
-// Requeue transitions a failed task back to queued for a retry. It is the
-// retry loop's entry: after a failed attempt the task returns to the queue to
-// be re-dispatched. Only the owner may requeue.
-func (s *TaskStore) Requeue(ctx context.Context, taskID, owner string) error {
-	return s.transition(ctx, taskID, StateFailed, StateQueued, owner, EvRetry, nil)
 }
 
 // RequeueForRetry is the atomic form of the retry loop's three-step move
@@ -1191,6 +1221,20 @@ func (s *TaskStore) SetLease(ctx context.Context, taskID string, durationMS int6
 	return nil
 }
 
+// ClearLease drops a task's lease deadline entirely. A task parked in the
+// outbox waiting on a peer link holds no executor, so nothing it could
+// measure would fire legitimately — the DTN deadline (or a human cancel) is
+// its bound instead.
+func (s *TaskStore) ClearLease(ctx context.Context, taskID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET lease_expires_at=NULL, updated_at=? WHERE task_id=?`,
+		s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("clear lease: %w", err)
+	}
+	return nil
+}
+
 // SetAuthorized persists whether the task's tier-2 (irreversible) commands were
 // consented to by the user. It is server-side state (design §16 / P0-1): only
 // the local entry path sets it, and a delegated task cannot forge authorization
@@ -1457,7 +1501,7 @@ func (s *TaskStore) ListReady(ctx context.Context) ([]Task, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanTasks(rows)
+	return s.scanTasks(rows)
 }
 
 // ListReadySummaries is the scheduler's polling projection: the six columns a
@@ -1962,9 +2006,7 @@ func (s *TaskStore) ClearQueue(ctx context.Context) (cancelled, deleted int, err
 func (s *TaskStore) deleteTaskRows(ctx context.Context, ids []string) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		if ids == nil {
-			for _, table := range []string{
-				"task_events", "delegation_metrics", "result_outbox", "cancel_outbox", "tasks",
-			} {
+			for _, table := range append(slices.Clone(taskSatellites), "tasks") {
 				if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 					return fmt.Errorf("clear %s: %w", table, err)
 				}
@@ -1972,9 +2014,7 @@ func (s *TaskStore) deleteTaskRows(ctx context.Context, ids []string) error {
 			return nil
 		}
 		for _, id := range ids {
-			for _, table := range []string{
-				"task_events", "delegation_metrics", "result_outbox", "cancel_outbox", "tasks",
-			} {
+			for _, table := range append(slices.Clone(taskSatellites), "tasks") {
 				if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE task_id = ?", id); err != nil {
 					return fmt.Errorf("delete %s from %s: %w", id, table, err)
 				}
@@ -1992,7 +2032,7 @@ func (s *TaskStore) Children(ctx context.Context, parentID string) ([]Task, erro
 		return nil, err
 	}
 	defer rows.Close()
-	return scanTasks(rows)
+	return s.scanTasks(rows)
 }
 
 // Idle reports whether the store has no in-flight tasks (running, dispatched,
@@ -2095,20 +2135,193 @@ func (s *TaskStore) RenameProject(ctx context.Context, oldName, newName string) 
 }
 
 // ListByState returns tasks filtered by state ("" = all), newest first.
+// Callers that display a bounded view should use ListByStateLimit so a long
+// task history cannot make one listing read the whole table.
 func (s *TaskStore) ListByState(ctx context.Context, state string) ([]Task, error) {
-	q := `SELECT ` + taskColumns + ` FROM tasks`
+	return s.ListByStateLimit(ctx, state, 0)
+}
+
+// ListByStateLimit is ListByState capped at limit rows; limit <= 0 reads the
+// full set. The cap exists because a daemon's task table only grows — the
+// board/listing surfaces want the newest rows, not the archive.
+func (s *TaskStore) ListByStateLimit(ctx context.Context, state string, limit int) ([]Task, error) {
+	return s.listTasks(ctx, state, "", "created_at DESC", limit)
+}
+
+// ListRecentByState orders by updated_at — the "recent activity" ordering the
+// queue board and watch loops sort to client-side anyway — and caps the read.
+func (s *TaskStore) ListRecentByState(ctx context.Context, state string, limit int) ([]Task, error) {
+	return s.listTasks(ctx, state, "", "updated_at DESC", limit)
+}
+
+// ListByProject returns the tasks of one project, newest first. Filtering in
+// SQL keeps a project listing from reading every other project's rows.
+func (s *TaskStore) ListByProject(ctx context.Context, project string) ([]Task, error) {
+	return s.listTasks(ctx, "", project, "created_at DESC", 0)
+}
+
+// ListActive returns the tasks that can still move — everything outside the
+// terminal set (done/cancelled/expired). Unlike the archive it is naturally
+// small: the completed history a daemon accumulates never enters it, which is
+// what makes it the right read for a poll loop watching for stalls.
+func (s *TaskStore) ListActive(ctx context.Context) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+taskColumns+` FROM tasks WHERE state NOT IN (?, ?, ?) ORDER BY created_at DESC`,
+		StateDone, StateCancelled, StateExpired)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return s.scanTasks(rows)
+}
+
+// CountByState counts tasks filtered by state ("" = all) — the shape
+// count-only consumers (status summaries, clear-confirmations) should use
+// instead of hydrating every row just to len() it.
+func (s *TaskStore) CountByState(ctx context.Context, state string) (int, error) {
+	q := `SELECT COUNT(*) FROM tasks`
 	var args []any
 	if state != "" {
 		q += " WHERE state = ?"
 		args = append(args, state)
 	}
-	q += " ORDER BY created_at DESC"
+	var n int
+	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+func (s *TaskStore) listTasks(ctx context.Context, state, project, order string, limit int) ([]Task, error) {
+	q := `SELECT ` + taskColumns + ` FROM tasks`
+	var conds []string
+	var args []any
+	if state != "" {
+		conds = append(conds, "state = ?")
+		args = append(args, state)
+	}
+	if project != "" {
+		conds = append(conds, "project = ?")
+		args = append(args, project)
+	}
+	if len(conds) > 0 {
+		q += " WHERE " + strings.Join(conds, " AND ")
+	}
+	q += " ORDER BY " + order
+	if limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, limit)
+	}
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanTasks(rows)
+	return s.scanTasks(rows)
+}
+
+// settledStates are the histories retention may delete: the four states a
+// task cannot leave except through a fresh user action. review is excluded —
+// it parks for a human and must never age out unseen — and so are the live
+// states, which a sweep must not touch regardless of age.
+var settledStates = []string{StateDone, StateFailed, StateCancelled, StateExpired}
+
+// retentionSweepBatch bounds one delete transaction. The store runs on a
+// single connection, so a monolithic first sweep of a long-lived daemon —
+// tens of thousands of settled rows — would hold the write lock while every
+// other query queues behind it. Deleting in batches keeps each transaction
+// short; the sweep's hourly cadence re-runs until the backlog is gone.
+const retentionSweepBatch = 2000
+
+// taskSatellites are the per-task tables deleted alongside a tasks row: the
+// event timeline, routing metrics, and every pending-delivery outbox. A row
+// whose task is gone has no one left to answer to, so delivery records die
+// with it rather than replaying for a task that no longer exists.
+var taskSatellites = []string{
+	"task_events", "delegation_metrics", "result_outbox", "cancel_outbox",
+	"task_outbox", "artifact_push_outbox",
+}
+
+// DeleteSettledBefore removes settled tasks (done/failed/cancelled/expired)
+// whose updated_at predates cutoff, together with their satellite rows —
+// the retention sweep's delete path. Returns the number of task rows removed.
+// The delete re-checks state and age inside the transaction, so a task a user
+// requeued between batches is never swept out from under them.
+func (s *TaskStore) DeleteSettledBefore(ctx context.Context, cutoff int64) (int, error) {
+	ph := make([]string, len(settledStates))
+	for i := range settledStates {
+		ph[i] = "?"
+	}
+	pred := `state IN (` + strings.Join(ph, ",") + `) AND updated_at < ?`
+	predArgs := func() []any {
+		args := make([]any, 0, len(settledStates)+1)
+		for _, st := range settledStates {
+			args = append(args, st)
+		}
+		return append(args, cutoff)
+	}
+	total := 0
+	for {
+		rows, err := s.db.QueryContext(ctx,
+			`SELECT task_id FROM tasks WHERE `+pred+` LIMIT ?`,
+			append(predArgs(), retentionSweepBatch)...)
+		if err != nil {
+			return total, err
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return total, err
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return total, err
+		}
+		if len(ids) == 0 {
+			return total, nil
+		}
+		deleted, err := s.deleteSettledBatch(ctx, ids, pred, predArgs)
+		total += deleted
+		if err != nil {
+			return total, err
+		}
+		if len(ids) < retentionSweepBatch {
+			return total, nil
+		}
+	}
+}
+
+// deleteSettledBatch removes one batch of candidate ids in a single
+// transaction. The tasks delete re-asserts the settled/age predicate — a
+// task the user requeued (failed is settled until retried) since the select
+// does not match its guard and survives, satellites and all.
+func (s *TaskStore) deleteSettledBatch(ctx context.Context, ids []string, pred string, predArgs func() []any) (int, error) {
+	deleted := 0
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		for _, id := range ids {
+			res, err := tx.ExecContext(ctx,
+				`DELETE FROM tasks WHERE task_id = ? AND `+pred,
+				append([]any{id}, predArgs()...)...)
+			if err != nil {
+				return fmt.Errorf("delete settled task %s: %w", id, err)
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				continue // requeued out of the settled set since the select
+			}
+			for _, table := range taskSatellites {
+				if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE task_id = ?", id); err != nil {
+					return fmt.Errorf("delete %s from %s: %w", id, table, err)
+				}
+			}
+			deleted++
+		}
+		return nil
+	})
+	return deleted, err
 }
 
 // TerminalSessionTasksWithoutEvent returns the terminal tasks that are linked
@@ -2130,7 +2343,7 @@ func (s *TaskStore) TerminalSessionTasksWithoutEvent(ctx context.Context, typ st
 		return nil, err
 	}
 	defer rows.Close()
-	return scanTasks(rows)
+	return s.scanTasks(rows)
 }
 
 // TaskStamp is the minimal per-task triple a change-detection digest needs:
@@ -2316,58 +2529,13 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	transport, deadline_unix, delegation_budget, token_budget, agent_session_id, agent_session_node,
 	auth_sig, auth_pub, auth_ts, remote`
 
-func scanTasks(rows *sql.Rows) ([]Task, error) {
+func (s *TaskStore) scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task
 	for rows.Next() {
-		var t Task
-		var chainJSON string
-		var intent, spec, result sql.NullString
-		var lease sql.NullInt64
-		var contextType, contextHash, risk, resource, requiresJSON sql.NullString
-		var approvalDisposition, operationDecision sql.NullString
-		var sessionID, resourceKeysJSON, workDir sql.NullString
-		var agentSession, agentSessionNode sql.NullString
-		var complexity sql.NullFloat64
-		var scheduled int
-		var remote int
-		var planID, stageID, needsJSON, inputsJSON, outputArt sql.NullString
-		if err := rows.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State,
-			&t.OwnerNode, &t.AttemptID, &t.StateVersion, &chainJSON, &intent,
-			&spec, &result, &contextType, &contextHash, &complexity, &risk, &resource,
-			&requiresJSON, &approvalDisposition, &operationDecision, &lease,
-			&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
-			&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
-			&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
-			&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
-			&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs,
-			&remote); err != nil {
+		t, err := s.scanTask(rows)
+		if err != nil {
 			return nil, err
 		}
-		_ = json.Unmarshal([]byte(chainJSON), &t.Chain)
-		_ = json.Unmarshal([]byte(requiresJSON.String), &t.Requires)
-		_ = json.Unmarshal([]byte(resourceKeysJSON.String), &t.ResourceKeys)
-		_ = json.Unmarshal([]byte(needsJSON.String), &t.Needs)
-		_ = json.Unmarshal([]byte(inputsJSON.String), &t.Inputs)
-		t.Intent = intent.String
-		t.SpecJSON = spec.String
-		t.ResultJSON = result.String
-		t.ContextType = contextType.String
-		t.ContextHash = contextHash.String
-		t.Complexity = complexity.Float64
-		t.Risk = risk.String
-		t.ResourceJSON = resource.String
-		t.ApprovalDisposition = parseApprovalDisposition(approvalDisposition.String)
-		t.OperationDecisionJSON = operationDecision.String
-		t.LeaseExpires = lease.Int64
-		t.SessionID = sessionID.String
-		t.WorkDir = workDir.String
-		t.Scheduled = scheduled != 0
-		t.Remote = remote != 0
-		t.PlanID = planID.String
-		t.StageID = stageID.String
-		t.OutputArtifact = outputArt.String
-		t.AgentSessionID = agentSession.String
-		t.AgentSessionNode = agentSessionNode.String
 		out = append(out, t)
 	}
 	return out, rows.Err()

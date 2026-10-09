@@ -10,7 +10,7 @@ package main
 // be split: while cell-motion reporting is on, the terminal stops doing its own
 // drag-select/double-click/⌘C and forwards every gesture to the app instead.
 // That is why "wheel scrolling" and "select to copy" look like an either/or
-// choice — see docs/confirmed-issues-fix-report.md §3.1.
+// choice — see docs/reports/confirmed-issues-fix-report-2026-09-09.md §3.1.
 //
 // They are not an either/or. Every desktop terminal keeps an escape hatch for
 // exactly this situation: a modifier held during the drag makes the terminal

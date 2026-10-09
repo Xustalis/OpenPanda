@@ -116,6 +116,67 @@ var extractProtectedDirs = map[string]bool{
 	".drone.yml":              true,
 }
 
+// hostStatePrune returns this node's own bookkeeping paths that sit inside
+// root, for PackDirExceptPaths: an artifact must never carry live node state.
+// A project tree rooted at the checkout can contain the SQLite database
+// (whose settings table holds the node private key — shipping it leaks the
+// node identity to every peer that pulls the tree), its WAL/SHM sidecars,
+// and the pid file. A host path equal to root is dropped: pruning it would
+// empty the artifact, and the file-level entries still cover the live files.
+func (c *Core) hostStatePrune(root string) []string {
+	if len(c.hostStatePaths) == 0 {
+		return nil
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil
+	}
+	abs = filepath.Clean(abs)
+	var out []string
+	for _, h := range c.hostStatePaths {
+		if h == abs {
+			continue
+		}
+		if rel, rerr := filepath.Rel(abs, h); rerr == nil && rel != ".." &&
+			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// extractSkipSet returns the skip set for adopting a peer's tree into dst:
+// the static protected paths plus this node's bookkeeping paths that fall
+// inside dst — mapped to the dst-relative keys skippedEntry matches on. An
+// incoming tree must never overwrite the live SQLite file: replacing an open
+// database orphans the daemon's connection on a dead inode while later
+// readers see the imported snapshot — the node silently splits from its own
+// state until restart.
+func (c *Core) extractSkipSet(dst string) map[string]bool {
+	if len(c.hostStatePaths) == 0 {
+		return extractProtectedDirs
+	}
+	abs, err := filepath.Abs(dst)
+	if err != nil {
+		return extractProtectedDirs
+	}
+	abs = filepath.Clean(abs)
+	skip := make(map[string]bool, len(extractProtectedDirs)+len(c.hostStatePaths))
+	for k := range extractProtectedDirs {
+		skip[k] = true
+	}
+	for _, h := range c.hostStatePaths {
+		if h == abs {
+			continue // a state path equal to dst cannot prune the whole tree
+		}
+		if rel, rerr := filepath.Rel(abs, h); rerr == nil && rel != ".." &&
+			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			skip[filepath.ToSlash(rel)] = true
+		}
+	}
+	return skip
+}
+
 // attachProject fills in the project half of a delegation payload: the memory
 // pack inline, and the work tree as an artifact reference. Called from every
 // place that builds a payload, so a task cannot be delegated project-aware on one
@@ -218,7 +279,7 @@ func (c *Core) packProjectTree(ctx context.Context, taskID, dir string) (bus.Art
 	} else if !st.IsDir() {
 		return bus.ArtifactRef{}, fmt.Errorf("project work tree %s is not a directory", dir)
 	}
-	m, err := c.artifacts.PackDir(dir)
+	m, err := c.artifacts.PackSourceDirExceptPaths(dir, worktreeSkipDirs, c.hostStatePrune(dir), 0)
 	if err != nil {
 		return bus.ArtifactRef{}, err
 	}
@@ -334,7 +395,7 @@ func (c *Core) packWorktree(ctx context.Context, taskID, dir string) (bus.Artifa
 	} else if !st.IsDir() {
 		return bus.ArtifactRef{}, fmt.Errorf("worktree %s is not a directory", dir)
 	}
-	m, err := c.artifacts.PackDirExcept(dir, worktreeSkipDirs, worktreeAttachLimit)
+	m, err := c.artifacts.PackSourceDirExceptPaths(dir, worktreeSkipDirs, c.hostStatePrune(dir), worktreeAttachLimit)
 	if err != nil {
 		return bus.ArtifactRef{}, err
 	}
@@ -504,7 +565,7 @@ func (c *Core) adoptProjectOutput(ctx context.Context, t Task, from, hash string
 				}
 			}
 		}
-		m, err := c.artifacts.ExtractExcept(hash, dir, extractProtectedDirs)
+		m, err := c.artifacts.ExtractExcept(hash, dir, c.extractSkipSet(dir))
 		if err != nil {
 			c.logger.Warn("extract project artifact", "task", t.TaskID, "hash", hash, "err", err)
 			return
@@ -560,7 +621,7 @@ func (c *Core) adoptWorktreeOutput(ctx context.Context, t Task, from, hash strin
 				}
 			}
 		}
-		m, err := c.artifacts.ExtractExcept(hash, dir, extractProtectedDirs)
+		m, err := c.artifacts.ExtractExcept(hash, dir, c.extractSkipSet(dir))
 		if err != nil {
 			c.logger.Warn("extract worktree artifact", "task", t.TaskID, "hash", hash, "err", err)
 			return

@@ -76,6 +76,12 @@ type Envelope struct {
 	To      string          `json:"to,omitempty"`
 	TS      int64           `json:"ts"`
 	Payload json.RawMessage `json:"payload,omitempty"`
+	// BinaryPayload carries the raw body of a binary data frame — the
+	// CapBinaryData wire form that lifts a payload's bulk bytes out of the
+	// JSON. It is populated by the read path only and never marshals: a
+	// re-marshal of the envelope (UDP route, outbox parking) reproduces the
+	// JSON form, which is why binary frames are only used on direct conns.
+	BinaryPayload []byte `json:"-"`
 }
 
 // NewEnvelope builds an envelope. msgID must be non-empty for idempotency.

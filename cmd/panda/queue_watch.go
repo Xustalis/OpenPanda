@@ -14,7 +14,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +25,11 @@ import (
 
 // watchInterval is the board's refresh cadence.
 const watchInterval = 2 * time.Second
+
+// watchBoardCap bounds the rows one poll reads — several times the 50-row
+// display so project-filtered views still find their rows near the top of the
+// recent-activity window.
+const watchBoardCap = 200
 
 // watchQueue renders the task board in place until ctx ends or SIGINT.
 // state/project filter as in the one-shot listing.
@@ -67,15 +71,16 @@ func watchQueueTo(
 
 	first := true
 	for {
-		tasks, err := store.ListByState(ctx, "")
+		// Read only the recent-activity slice: ordering and the cap happen in
+		// SQL, so a long task history is never walked just to paint 50 rows.
+		tasks, err := store.ListRecentByState(ctx, state, watchBoardCap)
 		if err == nil {
 			var rows []core.Task
 			for _, t := range tasks {
-				if (state == "" || t.State == state) && (project == "" || t.Project == project) {
+				if project == "" || t.Project == project {
 					rows = append(rows, t)
 				}
 			}
-			sort.Slice(rows, func(i, j int) bool { return rows[i].UpdatedAt > rows[j].UpdatedAt })
 			if n := len(rows); n > 50 {
 				rows = rows[:50] // the board shows activity, not the archive
 			}

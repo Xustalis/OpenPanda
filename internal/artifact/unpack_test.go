@@ -55,6 +55,36 @@ func buildTarGz(t *testing.T, entries ...hostileEntry) []byte {
 	return buf.Bytes()
 }
 
+// TestWriteRegularReplacesReadOnlyDestination: a re-extraction lands on files
+// that already exist, and git marks its objects read-only — Windows refuses
+// the overwrite rename on a read-only destination with ACCESS_DENIED, which
+// is what killed project-tree delivery to a second machine. The writer must
+// clear the attribute and replace the file on every platform.
+func TestWriteRegularReplacesReadOnlyDestination(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "object")
+	if err := os.WriteFile(path, []byte("old"), 0o444); err != nil {
+		t.Fatalf("seed read-only file: %v", err)
+	}
+	// Read-only must actually be in force on POSIX or the test proves nothing.
+	if err := os.Chmod(path, 0o444); err != nil {
+		t.Fatalf("chmod read-only: %v", err)
+	}
+	if err := writeRegular(strings.NewReader("new content"), path, 0o644, int64(len("new content"))); err != nil {
+		t.Fatalf("writeRegular over read-only destination: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != "new content" {
+		t.Fatalf("content = %q, want the replacement", got)
+	}
+	if _, err := os.Stat(path + ".partial"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial temp file left behind: %v", err)
+	}
+}
+
 // TestUnpackRejectsHostileEntries is the security contract. An artifact arrives
 // from another node over the network, so each of these is a real attack an
 // unpacker has to refuse — and refuse for the whole archive, since honouring the

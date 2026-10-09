@@ -85,9 +85,6 @@ func (s *Store) Limit() int64 { return s.maxBytes }
 // the disk-filling equivalent of a circuit breaker. Zero disables it.
 func (s *Store) SetMinFreeBytes(n int64) { s.minFree = n }
 
-// MinFree reports the configured free-space watermark in bytes.
-func (s *Store) MinFree() int64 { return s.minFree }
-
 // Root returns the pool's primary directory — the path callers configured as
 // artifact_path. Use Roots for the full volume list.
 func (s *Store) Root() string { return s.roots[0] }
@@ -172,6 +169,43 @@ func (s *Store) PackDir(tree string) (Manifest, error) {
 // and a caller byte limit: the tighter of limit and the store's configured
 // maxBytes applies, so a caller can bound one pack without retuning the pool.
 func (s *Store) PackDirExcept(tree string, skip map[string]bool, limit int64) (Manifest, error) {
+	return s.PackDirExceptPaths(tree, skip, nil, limit)
+}
+
+// PackSourceDirExceptPaths is PackDirExceptPaths for packs that ship SOURCE
+// to a peer: the tree's root .gitignore is honored on top of the skip and
+// prune sets, so git-ignored runtime state, build output, and ignored config
+// (which routinely carries secrets — config.yaml, .env) never leave the box.
+// Do NOT use it for executor-output packs: there a gitignored file (dist/,
+// *.out) is exactly what must come back.
+func (s *Store) PackSourceDirExceptPaths(tree string, skip map[string]bool, absSkip []string, limit int64) (Manifest, error) {
+	return s.packDir(tree, skip, absSkip, loadIgnoreRules(tree), limit)
+}
+
+// PackDirExceptPaths is PackDirExcept plus an absolute-path prune set: any
+// path equal to or under an entry is left out of the archive entirely. The
+// name set answers "which derived trees never travel"; the absolute set
+// answers "which of THIS node's own live files must never leave the box" —
+// the SQLite database (whose settings table holds the node private key), its
+// WAL/SHM sidecars, pid and lock files. Entries are normalized to cleaned
+// absolute paths; anything outside the tree simply never matches.
+func (s *Store) PackDirExceptPaths(tree string, skip map[string]bool, absSkip []string, limit int64) (Manifest, error) {
+	return s.packDir(tree, skip, absSkip, nil, limit)
+}
+
+func (s *Store) packDir(tree string, skip map[string]bool, absSkip []string, ignores []ignoreRule, limit int64) (Manifest, error) {
+	var prune map[string]bool
+	for _, p := range absSkip {
+		if p == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(p); err == nil {
+			if prune == nil {
+				prune = make(map[string]bool, len(absSkip))
+			}
+			prune[filepath.Clean(abs)] = true
+		}
+	}
 	max := s.maxBytes
 	if limit > 0 && (max == 0 || limit < max) {
 		max = limit
@@ -179,7 +213,7 @@ func (s *Store) PackDirExcept(tree string, skip map[string]bool, limit int64) (M
 	// Placement is chosen before packing starts: the walked content size is
 	// the conservative bound for the archive, and a volume that cannot hold
 	// it is skipped rather than filled mid-pack.
-	ents, err := walkExcept(tree, max, skip)
+	ents, err := walkExcept(tree, max, skip, prune, ignores)
 	if err != nil {
 		return Manifest{}, err
 	}

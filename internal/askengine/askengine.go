@@ -34,6 +34,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/mcp"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 	"github.com/Xustalis/OpenPanda/internal/plan"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/providers"
@@ -809,6 +810,18 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// belong to this machine's stable identity rather than a fleeting hash
 	// that leaves tasks stranded when the process exits.
 	sched := core.NewCore(e.db, stableID, card, schedulerTier(e.cfg.Node.ResourceClass), e.logger, e.cfg.Model)
+	// Row ownership probe: the identity lock tells a borrowed engine (a CLI
+	// sharing the daemon's stable node id) from the row's owner. A live daemon
+	// holds the lock and heartbeats the row, so a borrowed engine's Shutdown
+	// must not mark it offline — otherwise every `task add`/`ask` exit flips
+	// the daemon's self row until the next beat, and routing sees the local
+	// node as gone. Probe-only: the lock is released immediately so this
+	// process never blocks a real daemon from starting.
+	if lock, err := nodeidentity.Acquire(e.cfg.Node.Kind, card.NodeIdentity); err == nil {
+		_ = lock.Release()
+	} else if errors.Is(err, nodeidentity.ErrAlreadyRunning) {
+		sched.SetOwnsNodeRow(false)
+	}
 	sched.SetRouterPolicy(e.cfg.Injection, e.cfg.Routing)
 	sched.AttachSupervisor(e.cfg.Model)
 	if e.skills != nil {
@@ -837,6 +850,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		}
 	}
 	sched.SetTimeouts(e.cfg.Timeouts)
+	sched.SetRetentionDays(e.cfg.Storage.EffectiveTaskRetentionDays())
 
 	if e.schedCancel != nil {
 		e.schedCancel()
@@ -917,54 +931,6 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	return nil
 }
 
-// MaintainPeers keeps redialing configured peers in the background until ctx
-// ends — for long-lived embedders (the web panel). Short-lived CLI asks skip
-// it: New's one-shot dial plus waitForPeers already covers them.
-func (e *Engine) MaintainPeers(ctx context.Context) {
-	sched := e.sched.Load()
-	if sched == nil {
-		return
-	}
-	e.cfgMu.RLock()
-	peers := append([]string(nil), e.cfg.Network.Peers...)
-	e.cfgMu.RUnlock()
-	for _, peer := range peers {
-		go func(p string) {
-			backoff := time.Second
-			// Same throttle as the daemon's keepalive loop: a dead peer is
-			// not news on every retry — first failure, every Nth thereafter,
-			// then one recovery line.
-			failures := 0
-			for {
-				err := sched.MaintainPeer(ctx, p)
-				if err != nil {
-					failures++
-					if failures == 1 || failures%peerFailLogEvery == 0 {
-						e.logger.Warn("peer dial failed", "peer", p, "err", err, "consecutive", failures)
-					}
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(backoff):
-					}
-					backoff = min(backoff*2, 30*time.Second)
-					continue
-				}
-				if failures > 0 {
-					e.logger.Info("peer reachable again", "peer", p, "after_failures", failures)
-					failures = 0
-				}
-				backoff = time.Second
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(backoff):
-				}
-			}
-		}(peer)
-	}
-}
-
 // StreamCallbacks receives live progress while an ask converges. OnDelta
 // delivers answer text incrementally (streaming); OnReasoning delivers the
 // model's chain-of-thought live (display-only, kept out of the answer and
@@ -1003,10 +969,6 @@ const (
 	ProgressExec  ProgressKind = "exec"  // the agent/adapter started running
 	ProgressJudge ProgressKind = "judge" // a supervision round is evaluating the result
 )
-
-// peerFailLogEvery bounds the per-peer WARN stream a dead peer produces in
-// MaintainPeers — the same policy the daemon's keepalive loop uses.
-const peerFailLogEvery = 20
 
 // Progress is one structured progress event: the action, and the name of what
 // it acts on (a task title, a plan goal, a tool name). The engine deliberately
@@ -1140,14 +1102,8 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, AmbientProject: true}, authorize, cb)
 }
 
-// AskTurnsMode is AskTurns plus the slash-prefix interaction mode the user
-// picked (/goal, /plan, /spec). "" is exactly AskTurns.
-func (e *Engine) AskTurnsMode(ctx context.Context, history []entry.Turn, prompt, workDir, mode string, authorize bool, cb StreamCallbacks) (res *Result, err error) {
-	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, Mode: mode, AmbientProject: true}, authorize, cb)
-}
-
-// AskTurnsSession is AskTurnsMode plus the session id a remembered "session"
-// approval binds to. "" degrades to AskTurnsMode's session-less bucket.
+// AskTurnsSession is AskTurnsScoped plus the session id a remembered "session"
+// approval binds to. "" degrades to the session-less bucket.
 func (e *Engine) AskTurnsSession(ctx context.Context, history []entry.Turn, prompt, workDir, mode, sessionID string, authorize bool, cb StreamCallbacks) (res *Result, err error) {
 	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, Mode: mode, SessionID: sessionID, AmbientProject: true}, authorize, cb)
 }

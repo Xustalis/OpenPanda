@@ -316,11 +316,17 @@ func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agents
 			native_json=excluded.native_json, agents_json=excluded.agents_json,
 			manual_json=excluded.manual_json, capacity_json=excluded.capacity_json,
 			resource_profile_json=excluded.resource_profile_json,
-			neighbors_json=excluded.neighbors_json, links_json=excluded.links_json,
-			contacts_json=excluded.contacts_json,
-			-- A silent upsert (self Register, an old peer's card) carries no
-			-- residence claim: preserve what the heartbeat gossip published
-			-- rather than blanking it until the next beat.
+			-- A silent upsert (self Register, a peer hello with no adjacency
+			-- claim) carries no link-state data: preserve what heartbeat gossip
+			-- published rather than blanking it until the next beat. 'null'
+			-- alongside '': a marshalled nil slice claims nothing, unlike '[]'
+			-- which explicitly claims zero neighbors.
+			neighbors_json=CASE WHEN excluded.neighbors_json IN ('','null') THEN employee_cache.neighbors_json
+				ELSE excluded.neighbors_json END,
+			links_json=CASE WHEN excluded.links_json IN ('','null') THEN employee_cache.links_json
+				ELSE excluded.links_json END,
+			contacts_json=CASE WHEN excluded.contacts_json IN ('','null') THEN employee_cache.contacts_json
+				ELSE excluded.contacts_json END,
 			projects_json=CASE WHEN excluded.projects_json='' THEN employee_cache.projects_json
 				ELSE excluded.projects_json END,
 			status='online', last_seen=excluded.last_seen, scheduler_tier=excluded.scheduler_tier`,
@@ -566,6 +572,108 @@ func Remove(db *sql.DB, id string) (int64, error) {
 		return 0, fmt.Errorf("remove node %s: rows: %w", id, err)
 	}
 	return n, nil
+}
+
+// SessionRowID reports whether id carries the "-"+8-hex suffix the ephemeral
+// session-id convention mints (core.EphemeralNodeID / scheduler.EphemeralBase).
+// It is duplicated here — scheduler imports ledger, so the reverse would
+// cycle — and must stay in sync with both. A stable node id is forbidden
+// this shape at config-load and daemon start, so a directory row keyed by
+// one can only ever be a session ghost: a client seat, never a fleet member.
+func SessionRowID(id string) bool {
+	i := strings.LastIndex(id, "-")
+	if i <= 0 || len(id)-i-1 != 8 {
+		return false
+	}
+	for _, c := range id[i+1:] {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// ReapGhosts deletes session-ghost rows: directory rows keyed by an
+// ephemeral-suffix id that no live connection claims (exclude) and whose
+// last_seen predates minAgeSec. Such a row can never become a node again —
+// the suffix is random per session — so the directory must not keep it as a
+// routing candidate forever. Stable rows are untouched: an offline node is
+// still a known fleet member (DTN pins stay valid), only `nodes remove`
+// retires those. Returns the deleted ids.
+func ReapGhosts(db *sql.DB, minAgeSec int64, exclude []string) ([]string, error) {
+	cutoff := storage.Now() - minAgeSec
+	rows, err := db.Query(`SELECT id FROM employee_cache WHERE last_seen < ?`, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("scan ghost rows: %w", err)
+	}
+	skip := make(map[string]bool, len(exclude))
+	for _, id := range exclude {
+		skip[id] = true
+	}
+	var ghosts []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if SessionRowID(id) && !skip[id] {
+			ghosts = append(ghosts, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, id := range ghosts {
+		if _, err := db.Exec(`DELETE FROM employee_cache WHERE id=?`, id); err != nil {
+			return ghosts, fmt.Errorf("reap ghost %s: %w", id, err)
+		}
+	}
+	return ghosts, nil
+}
+
+// ReapKeySiblings deletes directory rows that advertise the same pub_key as
+// keepID under a different id. Called only after a signed hello PROVED the
+// peer controls that key: two ids presenting one key are the same node seen
+// under a rename/reinstall (or a copied keystore), and the stale row's id
+// can never authenticate again — keeping it would ghost-pin the old name
+// and inflate the fleet list. protected ids are never deleted — the caller
+// passes the self row so a peer presenting a copied keystore cannot make us
+// reap ourselves. Returns the deleted ids.
+func ReapKeySiblings(db *sql.DB, keepID, pubKey string, protected ...string) ([]string, error) {
+	if pubKey == "" {
+		return nil, nil
+	}
+	rows, err := db.Query(`SELECT id FROM employee_cache WHERE pub_key=? AND id != ?`, pubKey, keepID)
+	if err != nil {
+		return nil, fmt.Errorf("scan key siblings: %w", err)
+	}
+	keep := make(map[string]bool, len(protected))
+	for _, id := range protected {
+		keep[id] = true
+	}
+	var stale []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if !keep[id] {
+			stale = append(stale, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, id := range stale {
+		if _, err := db.Exec(`DELETE FROM employee_cache WHERE id=?`, id); err != nil {
+			return stale, fmt.Errorf("reap key sibling %s: %w", id, err)
+		}
+	}
+	return stale, nil
 }
 
 // MarkVerified stamps the node's CURRENT advertised key as human-confirmed —

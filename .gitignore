@@ -40,6 +40,16 @@ testdata/live/
 /projects/
 /skills/
 
+# Daemon runtime dirs created directly under work_path — with work_path="."
+# (the loopback/dev config) these land at the repo root: stage workdirs, task
+# workspaces, adopted project copies. Runtime output, never source.
+/plans/
+/tasks/
+
+# Workspace memory layers the daemon writes when its workspace is the repo
+MEMORY.md
+USER.md
+
 # Node (webui/web frontend tooling)
 node_modules/
 

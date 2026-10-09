@@ -568,3 +568,51 @@ func TestUpdateAdjacencyIfChanged(t *testing.T) {
 		t.Fatal("update touched an unrelated column")
 	}
 }
+
+// TestSilentUpsertPreservesAdjacency pins the upsert contract the regression
+// fixed: Register and a hello without adjacency claims pass ""/"null" for the
+// link-state columns, and must not blank what heartbeat gossip published.
+// Before the CASE guard, every CLI engine's self-register wiped the node's
+// neighbors/links until the next heartbeat re-advertised them.
+func TestSilentUpsertPreservesAdjacency(t *testing.T) {
+	db := openLedgerDB(t)
+	if err := Register(db, testCard(), "opi3b", 1); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := UpdateAdjacencyIfChanged(db, "opi3b",
+		`["peer-b"]`, `[{"peer":"peer-b","rtt_ms":7,"kind":"ws"}]`, `[]`, ""); err != nil {
+		t.Fatalf("adjacency: %v", err)
+	}
+
+	// A self re-register (what every CLI engine does on init) must keep the
+	// gossiped adjacency.
+	if err := Register(db, testCard(), "opi3b", 1); err != nil {
+		t.Fatalf("re-register: %v", err)
+	}
+	nodes, err := Query(db, "", "")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(nodes[0].Neighbors) != 1 || nodes[0].Neighbors[0] != "peer-b" {
+		t.Fatalf("neighbors wiped by silent upsert: %+v", nodes[0].Neighbors)
+	}
+	if nodes[0].LinkMetrics["peer-b"] != 7 || nodes[0].LinkKinds["peer-b"] != "ws" {
+		t.Fatalf("link metrics wiped by silent upsert: %+v", nodes[0].LinkMetrics)
+	}
+
+	// A peer hello carrying no adjacency claims marshals nil slices as
+	// "null" — the same "no claim" signal, not an explicit empty set.
+	if err := UpsertRemote(db, "opi3b", CapabilitySummary{}); err != nil {
+		t.Fatalf("remote upsert: %v", err)
+	}
+	nodes, err = Query(db, "", "")
+	if err != nil {
+		t.Fatalf("query2: %v", err)
+	}
+	if len(nodes[0].Neighbors) != 1 || nodes[0].Neighbors[0] != "peer-b" {
+		t.Fatalf("neighbors wiped by null-adjacency upsert: %+v", nodes[0].Neighbors)
+	}
+	if nodes[0].LinkMetrics["peer-b"] != 7 {
+		t.Fatalf("link metrics wiped by null-adjacency upsert: %+v", nodes[0].LinkMetrics)
+	}
+}

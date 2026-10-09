@@ -106,6 +106,10 @@ type Core struct {
 	// the base delay between task retries, doubling each retry.
 	sleep        func(time.Duration)
 	retryBackoff time.Duration
+	// peerLivenessWindow is the bound ensurePeer's same-id duplicate
+	// arbitration trusts an incumbent conn for: zero disables arbitration
+	// (legacy always-replace), the default is the transport keepalive bound.
+	peerLivenessWindow time.Duration
 	// auditLog records high-risk operations (Tier-2 exec/denial, circuit trips)
 	// for later review (P3-32).
 	auditLog *security.Audit
@@ -236,6 +240,15 @@ type Core struct {
 	// Guarded by mu; entries die with the peer's connection.
 	peerBlocked map[string][]string
 
+	// ownsNodeRow says whether this process owns the node's directory row.
+	// The daemon does: it holds the identity lock and runs the heartbeat, so
+	// its Shutdown marks the row offline. A short-lived CLI engine (task add,
+	// ask, nodes) registers under the same stable node id but only borrows
+	// the row — marking it offline on Close would flap the live daemon's
+	// self row until the next beat, during which the scheduler sees the local
+	// node as gone. Set once before serving; read unguarded afterward.
+	ownsNodeRow bool
+
 	// helloSeen maps nodeID|ts|sig|msg_id -> the time the hello was verified,
 	// making each signed hello frame single-use within its validity window.
 	// Without it a captured hello can be replayed on a second connection for
@@ -311,6 +324,15 @@ type Core struct {
 	// pendingTTL.
 	pendingSweepAt int64
 
+	// retentionDays is the configured age limit for settled task rows
+	// (storage.task_retention_days): 0 keeps history forever. retentionSweepAt
+	// paces the hourly pass inside taskSweeps — the monitor ticks every 5s
+	// but a delete only needs to run on the order of the retention window.
+	// Both atomics: SetRetentionDays may land after the monitor started
+	// (config reload), and the sweep check runs on every tick.
+	retentionDays    atomic.Int64
+	retentionSweepAt atomic.Int64
+
 	// Farsky datagram plane (§9.2). udp is the shared socket; udpPort its
 	// bound port (advertised in hello). udpRoutes maps peer id -> confirmed
 	// endpoint (a punch/ack or sealed envelope binds it; sendTo falls back
@@ -384,11 +406,14 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		auditLog:     security.NewAudit(db),
 		workDir:      ".",
 		model:        model,
+		ownsNodeRow:  true,
 
 		superviseRounds: defaultSuperviseRounds,
 		leaseTimeout:    defaultDelegateTimeout,
 		sleep:           time.Sleep,
 		retryBackoff:    time.Second,
+
+		peerLivenessWindow: bus.KeepaliveTimeout(),
 	}
 	// The commander needs at least one routable ability; a zero card yields a
 	// router that declines everything. Actuators count: a hardware-only edge
@@ -417,6 +442,12 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 // lands in the local directory row via refreshSelfNeighbors.
 func (c *Core) SetContacts(contacts []ledger.Contact) {
 	c.contacts = contacts
+}
+
+// SetOwnsNodeRow declares whether this process owns the node's directory
+// row. Call it after NewCore, before serving starts. See the field comment.
+func (c *Core) SetOwnsNodeRow(owns bool) {
+	c.ownsNodeRow = owns
 }
 
 // wireContacts converts the configured plan to its wire form. The slice is
@@ -955,6 +986,9 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 		var sum ledger.CapabilitySummary
 		if err := json.Unmarshal(p.Card, &sum); err != nil {
 			c.logger.Warn("bad capability card in heartbeat", "peer", env.From, "err", err)
+		} else if ledger.SessionRowID(env.From) {
+			// A session id is a client seat, not a fleet member — storing its
+			// card would leave a permanent ghost row per session.
 		} else if err := ledger.UpsertRemote(c.db, env.From, sanitizeSummary(sum)); err != nil {
 			c.logger.Warn("upsert remote card from heartbeat", "peer", env.From, "err", err)
 		} else {
@@ -1063,12 +1097,60 @@ func (c *Core) taskSweeps(ctx context.Context) {
 	c.wakeSatisfiedArtifactWaiters(ctx)
 	c.pruneStagedArtifacts(ctx)
 	c.expireLeases(ctx)
+	c.sweepRetention(ctx)
 	// A row can go terminal — or park in review — out of band: cancelled
 	// from the CLI, rejected from the console, failed by another process's
 	// monitor. ExpireTasks only cleans the rows it fails itself, so without
 	// this pass an out-of-band verdict leaves the local agent running under
 	// a state the store already discarded.
 	c.reconcileLocalWork(ctx)
+}
+
+// retentionSweepInterval paces DeleteSettledBefore: the deadline it enforces
+// is measured in days, so an hourly pass is both timely enough and cheap.
+const retentionSweepInterval = time.Hour
+
+// SetRetentionDays installs the settled-task age limit (config
+// storage.task_retention_days). Zero disables the sweep — the task table
+// then grows without bound, which is the pre-knob behaviour an operator can
+// still choose explicitly.
+func (c *Core) SetRetentionDays(days int) {
+	if days < 0 {
+		days = 0
+	}
+	c.retentionDays.Store(int64(days))
+}
+
+// sweepRetention deletes settled tasks older than the configured retention.
+// It is deliberately part of taskSweeps rather than its own goroutine: every
+// process that owns the lifecycle monitor inherits the cleanup, the 5s tick
+// provides the pacing, and the state-guarded delete is idempotent across the
+// processes that may share one store.
+func (c *Core) sweepRetention(ctx context.Context) {
+	days := c.retentionDays.Load()
+	if days <= 0 {
+		return
+	}
+	now := time.Now()
+	last := c.retentionSweepAt.Load()
+	if last > 0 && now.Sub(time.Unix(last, 0)) < retentionSweepInterval {
+		return
+	}
+	if !c.retentionSweepAt.CompareAndSwap(last, now.Unix()) {
+		return // another sweep pass won the slot
+	}
+	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour).Unix()
+	deleted, err := c.store.DeleteSettledBefore(ctx, cutoff)
+	if err != nil {
+		c.retentionSweepAt.Store(last) // let the next tick retry
+		c.logger.Warn("task retention sweep", "err", err)
+		return
+	}
+	if deleted > 0 {
+		c.logger.Info("task retention sweep", "days", days, "deleted", deleted)
+		c.audit(ctx, "", "store:retention", "tasks", "swept",
+			fmt.Sprintf("deleted %d settled task(s) older than %d days", deleted, days))
+	}
 }
 
 // expireLeases fails every active task whose lease or absolute deadline has
@@ -1192,7 +1274,12 @@ func (c *Core) Shutdown(ctx context.Context) {
 		c.udp = nil
 	}
 	c.udpMu.Unlock()
-	c.node.Shutdown(ctx)
+	// Only the process that owns the row may retire it: a borrowed engine
+	// (CLI sharing the daemon's node id) must leave liveness to the owner's
+	// heartbeat, or every CLI exit flips a running node offline.
+	if c.ownsNodeRow {
+		c.node.Shutdown(ctx)
+	}
 }
 
 // Listen starts the WebSocket server and accepts connections. Blocks until
@@ -1277,8 +1364,15 @@ func (c *Core) removePeerForConn(conn *bus.Conn) {
 		c.mu.Lock()
 		delete(c.peerBlocked, id)
 		c.mu.Unlock()
-		if err := ledger.MarkOffline(c.db, id); err != nil {
-			c.logger.Warn("mark peer offline", "peer", id, "err", err)
+		// Liveness writes belong to the row's owner: a borrowed engine whose
+		// transient conn to this peer just closed must not flip the shared
+		// row — the owning daemon's own conn to the same peer is still live,
+		// and marking it offline here would blind the daemon's routing until
+		// the next hello restores it.
+		if c.ownsNodeRow {
+			if err := ledger.MarkOffline(c.db, id); err != nil {
+				c.logger.Warn("mark peer offline", "peer", id, "err", err)
+			}
 		}
 	}
 	if len(gone) > 0 {
@@ -1379,6 +1473,7 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 		Nonce:   nonce,
 		Sig:     bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
 		UDPPort: c.UDPPort(),
+		Caps:    []string{bus.CapBinaryData},
 	}
 	c.signHello(&hello, ts, nonce)
 	env, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, hello)
@@ -1454,6 +1549,20 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
 			c.logger.Info("peer connection deduped", "peer", id)
 			return false
 		}
+	} else if old != nil && c.peerLivenessWindow > 0 && old.conn.LiveWithin(c.peerLivenessWindow) {
+		// Same direction, incumbent still demonstrably alive: the new conn is
+		// a same-id SIBLING SESSION, not a reconnect — a CLI/TUI engine shares
+		// the daemon's stable node id, so every `panda` invocation used to
+		// kick the daemon's edge conn here (and the daemon's redial kicked
+		// the CLI's), producing the periodic connect/disconnect flap that
+		// stranded in-flight delegates. A live incumbent keeps the edge; the
+		// newcomer still got its identity-binding hello reply above, so the
+		// losing side quiesces the same way a mutual-dial loser does. Only a
+		// conn silent past the keepalive bound falls through to replacement,
+		// preserving the half-dead-socket takeover this branch exists for.
+		c.mu.Unlock()
+		c.logger.Info("peer connection held by live same-id session", "peer", id)
+		return false
 	}
 	c.peers[id] = &Peer{id: id, conn: conn}
 	n := len(c.peers)
@@ -1722,6 +1831,11 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	}
 	c.mu.Unlock()
 	conn.SetPeerID(p.NodeID)
+	// Wire-feature negotiation: the peer's advertised caps decide whether
+	// data-plane envelopes may leave as binary frames. Old peers send no
+	// list and get the JSON/base64 form forever — capability probing via an
+	// explicit bit, never a version parse.
+	conn.SetCaps(p.Caps)
 
 	// Send our hello reply BEFORE registering the conn, and directly on the
 	// conn this hello arrived on — never via the registry (c.reply). The far
@@ -1757,7 +1871,9 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		return
 	}
 	// Ingest the peer's advertised capability card so routing can consider it.
-	if len(p.Card) > 0 {
+	// A session-shaped id (name-8hex) is a client seat dialing in, not a fleet
+	// node: writing its card would accumulate one ghost row per session.
+	if len(p.Card) > 0 && !ledger.SessionRowID(p.NodeID) {
 		var sum ledger.CapabilitySummary
 		if err := json.Unmarshal(p.Card, &sum); err != nil {
 			c.logger.Warn("bad capability card in hello", "peer", p.NodeID, "err", err)
@@ -1837,6 +1953,7 @@ func (c *Core) sendHelloReply(conn *bus.Conn, to string) {
 		Sig:     bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
 		UDPPort: c.UDPPort(),
 		You:     observed,
+		Caps:    []string{bus.CapBinaryData},
 	}
 	c.signHello(&reply, ts, nonce)
 	envOut, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, reply)
@@ -1919,6 +2036,34 @@ func (c *Core) sendTo(id string, env bus.Envelope) error {
 		return u.SendEnvelope(env, addr)
 	}
 	return errors.New("peer not connected: " + id)
+}
+
+// sendDataFrame delivers an envelope whose payload carries a bulk []byte. On
+// a direct conn whose peer advertised CapBinaryData the bytes ride a binary
+// frame — the header is the same envelope with its data field cleared, the
+// body the raw bytes, no base64 and no codec on either side. Everywhere else
+// (old peer, UDP route, no direct conn) the full JSON form goes through the
+// ordinary path, so a mixed-version mesh never loses the data. Both payload
+// arguments are the same message: header with Data cleared, full with it set.
+func (c *Core) sendDataFrame(to, typ string, header, full any, body []byte) error {
+	msgID, err := newUUID()
+	if err != nil {
+		return err
+	}
+	if conn := c.connFor(to); conn != nil && conn.Supports(bus.CapBinaryData) {
+		env, err := bus.NewEnvelope(typ, c.nodeID, msgID, header)
+		if err != nil {
+			return err
+		}
+		env.To = to
+		return conn.SendData(env, body)
+	}
+	env, err := bus.NewEnvelope(typ, c.nodeID, msgID, full)
+	if err != nil {
+		return err
+	}
+	env.To = to
+	return c.sendTo(to, env)
 }
 
 // newUUID mints a fresh message id. It returns an error rather than panicking
@@ -2024,7 +2169,10 @@ func (c *Core) linkMetrics() []ledger.LinkMetric {
 			continue
 		}
 		if rtt := p.conn.RTT(); rtt > 0 {
-			conns[id] = rtt.Milliseconds()
+			// A measured sub-millisecond edge (loopback, same-host) is real
+			// data: ceil it to 1ms rather than dropping it as unmeasured.
+			// Zero still means "no sample", never "this edge is free".
+			conns[id] = max(rtt.Milliseconds(), 1)
 		}
 	}
 	c.mu.RUnlock()

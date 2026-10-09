@@ -64,6 +64,28 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=10, extra_request=No
         return payload, lines, tmp
 
 
+# Opencode's adapter probes `opencode run --help` once per process for the
+# flags the installed build accepts (they drift: --dangerously-skip-permissions
+# became --auto; --format json arrived later). These preambles answer that
+# probe inside the fake CLIs — current-build flags, and the legacy set.
+OC_HELP_CURRENT = r'''
+import sys
+if "--help" in sys.argv:
+    print("opencode run [message..]")
+    print("      --format  format: default (formatted) or json (raw JSON events)")
+    print("      --auto    auto-approve permissions that are not explicitly denied")
+    sys.exit(0)
+'''
+
+OC_HELP_LEGACY = r'''
+import sys
+if "--help" in sys.argv:
+    print("opencode run [message..]")
+    print("      --dangerously-skip-permissions  auto-approve permissions (dangerous!)")
+    sys.exit(0)
+'''
+
+
 def run_harness(body, stdin_data="", env=None, timeout=5):
     """Run a snippet against adapters/_harness.py directly and return
     (stdout payload, completed process)."""
@@ -246,7 +268,7 @@ print(json.dumps({"type":"item.completed","item":{"id":"m1","type":"agent_messag
         sighting, tool_use on first sighting, tool_result on the first
         terminal status — re-emitted parts never duplicate a row."""
         payload, lines, _ = run_adapter(
-            "opencode.py", "opencode", r'''
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
 import json
 print(json.dumps({"type":"tool_use","sessionID":"s1","part":{"id":"pt","type":"tool","tool":"bash","state":{"status":"running","input":{"command":"uname"},"title":"uname"}}}))
 print(json.dumps({"type":"tool_use","sessionID":"s1","part":{"id":"pt","type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"uname"},"output":"arm64","title":"uname"}}}))
@@ -304,7 +326,7 @@ print(json.dumps({"is_error": False, "result": "degraded"}))
 
     def test_opencode_provider_model_contract(self):
         payload, _, _ = run_adapter(
-            "opencode.py", "opencode", r'''
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
 import json, os, sys
 args = sys.argv[1:]
 assert args[:2] == ["run", "--print-logs=true"]
@@ -338,7 +360,7 @@ print(json.dumps({"type":"message.updated","properties":{"info":{"tokens":{"inpu
         stderr log wall.
         """
         payload, progress, _ = run_adapter(
-            "opencode.py", "opencode", r'''
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
 import json
 print(json.dumps({"type":"step_start","timestamp":1789547927287,"sessionID":"ses_real","part":{"id":"prt_s","messageID":"msg_1","sessionID":"ses_real","type":"step-start"}}))
 print(json.dumps({"type":"tool_use","timestamp":1789548046933,"sessionID":"ses_real","part":{"id":"prt_t","messageID":"msg_1","sessionID":"ses_real","type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"uname -m"},"output":"arm64\n","title":"uname -m"}}}))
@@ -365,7 +387,7 @@ print(json.dumps({"type":"text","timestamp":1789547927591,"sessionID":"ses_real"
         review. A failure hands the work to the next adapter in the chain.
         """
         payload, _, _ = run_adapter(
-            "opencode.py", "opencode", r'''
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
 import json, sys
 print(json.dumps({"type":"step_start","sessionID":"ses_x","part":{"id":"p","type":"step-start"}}))
 sys.stderr.write("timestamp=2026-01-01T00:00:00Z level=INFO message=noise\n")
@@ -379,7 +401,7 @@ sys.stderr.write("timestamp=2026-01-01T00:00:00Z level=INFO message=noise\n")
     def test_opencode_resume_and_plain_fallback_contract(self):
         # Resume threads --session through to the CLI.
         payload, _, _ = run_adapter(
-            "opencode.py", "opencode", r'''
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
 import json, sys
 args = sys.argv[1:]
 assert "--session" in args and args[args.index("--session") + 1] == "ses-prev"
@@ -389,15 +411,17 @@ print(json.dumps({"type":"message.part.updated","properties":{"part":{"id":"p","
         )
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "ok")
-        # A CLI that rejects --format json degrades to the plain text run.
+        # A build whose help predates --format json (and named the permission
+        # flag --dangerously-skip-permissions) goes straight to the plain text
+        # run — no doomed stream attempt, and the legacy flag, not --auto.
         payload, _, _ = run_adapter(
-            "opencode.py", "opencode", r'''
+            "opencode.py", "opencode", OC_HELP_LEGACY + r'''
 import sys
 args = sys.argv[1:]
-if "--format" in args:
-    sys.stderr.write("error: unknown option --format\n")
-    sys.exit(1)
+assert "--format" not in args
 assert args[:2] == ["run", "--print-logs=false"]
+assert "--dangerously-skip-permissions" in args
+assert "--auto" not in args
 # The plain path always carries a resolvable model: with no env model set it
 # must be the built-in default, never the empty string.
 assert "--model" in args
@@ -1098,6 +1122,106 @@ time.sleep(60)
             time.sleep(0.8)
             self.assertEqual(ticks(), first,
                              "grandchild survived the process-tree kill")
+
+
+class ResolveArgvTest(unittest.TestCase):
+    """Windows argv resolution for npm-installed agent CLIs.
+
+    Runs on any host: sys.platform is patched to win32 inside the harness
+    subprocess, so the win32 branch of _harness.resolve_argv is exercised
+    without a Windows machine.
+    """
+
+    def _resolve(self, argv, env=None):
+        body = ("import sys, json; sys.platform='win32'; "
+                "print(json.dumps(_harness.resolve_argv(%r)))" % (argv,))
+        payload, proc = run_harness(body, env=env)
+        self.assertIsNotNone(payload, proc.stderr)
+        return payload
+
+    def test_posix_passthrough(self):
+        # sys.platform untouched → the argv comes back byte-identical.
+        payload, proc = run_harness(
+            "import json; print(json.dumps(_harness.resolve_argv("
+            "['opencode', 'run', 'hi'])))")
+        self.assertIsNotNone(payload, proc.stderr)
+        self.assertEqual(payload, ["opencode", "run", "hi"])
+
+    def test_win32_prefers_sibling_exe(self):
+        # APPDATA\npm\zzagent.exe beats zzagent.cmd: the real exe gets argv
+        # fidelity (the .cmd's %* forwarding would mangle quoting).
+        with tempfile.TemporaryDirectory() as td:
+            npm = pathlib.Path(td) / "npm"
+            npm.mkdir()
+            (npm / "zzagent.cmd").write_text(
+                '@echo off\r\n"%~dp0\\zzagent.exe" %*\r\n')
+            (npm / "zzagent.exe").write_text("x")
+            out = self._resolve(["zzagent", "run", "a prompt"],
+                                env={"APPDATA": td})
+            self.assertEqual(out[0], str(npm / "zzagent.exe"))
+            self.assertEqual(out[1:], ["run", "a prompt"])
+
+    def test_win32_shim_body_exe(self):
+        # A .cmd that wraps a .exe deeper in the tree: the body's quoted
+        # path is resolved through %~dp0.
+        with tempfile.TemporaryDirectory() as td:
+            npm = pathlib.Path(td) / "npm"
+            real = npm / "node_modules" / "pkg" / "bin"
+            real.mkdir(parents=True)
+            (real / "real.exe").write_text("x")
+            (npm / "zzagent.cmd").write_text(
+                '@echo off\r\n"%~dp0\\node_modules\\pkg\\bin\\real.exe" %*\r\n')
+            out = self._resolve(["zzagent", "go"], env={"APPDATA": td})
+            self.assertEqual(out[0], str(real / "real.exe"))
+            self.assertEqual(out[1:], ["go"])
+
+    def test_win32_npm_cmdshim_runs_node_directly(self):
+        # The npm cmd-shim shape — "%_prog%" "%dp0%\node_modules\...\bin\x"
+        # %* — resolves to [node, script] so the spawn skips cmd.exe and
+        # %* forwarding entirely: the requoting path that silently dropped
+        # the task prompt on real Windows runs.
+        with tempfile.TemporaryDirectory() as td:
+            npm = pathlib.Path(td) / "npm"
+            script = npm / "node_modules" / "pkg" / "bin" / "cli"
+            script.parent.mkdir(parents=True)
+            script.write_text("// js\n")
+            (npm / "node.exe").write_text("x")
+            (npm / "zzagent.cmd").write_text(
+                "@ECHO off\r\n"
+                'IF EXIST "%dp0%\\node.exe" (\r\n'
+                '  SET "_prog=%dp0%\\node.exe"\r\n'
+                ") ELSE (\r\n"
+                '  SET "_prog=node"\r\n'
+                ")\r\n"
+                'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & '
+                '"%_prog%"  "%dp0%\\node_modules\\pkg\\bin\\cli" %*\r\n')
+            out = self._resolve(["zzagent", "run", "a prompt"],
+                                env={"APPDATA": td})
+            self.assertEqual(out[0], str(npm / "node.exe"))
+            self.assertEqual(out[1], str(script))
+            self.assertEqual(out[2:], ["run", "a prompt"])
+
+    def test_win32_cmdshim_via_comspec(self):
+        # A .cmd with no discoverable .exe falls back to COMSPEC /c with
+        # list2cmdline quoting so the shim receives the args intact.
+        with tempfile.TemporaryDirectory() as td:
+            npm = pathlib.Path(td) / "npm"
+            npm.mkdir()
+            (npm / "zzagent.cmd").write_text("@echo off\r\nnode x %*\r\n")
+            out = self._resolve(["zzagent", "run", "two words"],
+                                env={"APPDATA": td})
+            self.assertTrue(out[0].lower().endswith("cmd.exe"), out)
+            self.assertEqual(out[1:4], ["/d", "/s", "/c"])
+            self.assertIn("zzagent.cmd", out[4])
+            self.assertIn('"two words"', out[4])
+
+    def test_win32_missing_binary_stays_honest(self):
+        # Nothing on PATH or the probed dirs → the original argv survives
+        # so the spawn raises a truthful FileNotFoundError (exit 127).
+        with tempfile.TemporaryDirectory() as td:
+            out = self._resolve(["definitely-missing-cli-xyz", "run"],
+                                env={"APPDATA": td})
+            self.assertEqual(out, ["definitely-missing-cli-xyz", "run"])
 
 
 if __name__ == "__main__":

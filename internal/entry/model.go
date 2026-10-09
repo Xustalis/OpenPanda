@@ -30,9 +30,6 @@ const anthropicVersion = "2023-06-01"
 // unconfigured node must fail loudly instead of silently phoning one.
 var ErrNoModel = errors.New("model not configured: set model.provider or model.base_url (run `panda init` or `panda model add`)")
 
-// IsNoModel reports whether err is ErrNoModel (wrapped or not).
-func IsNoModel(err error) bool { return errors.Is(err, ErrNoModel) }
-
 // defaultModel is the model id used when the config names an endpoint but no
 // model — a bare token the provider is free to reinterpret; without an
 // endpoint there is no default at all (see ErrNoModel).
