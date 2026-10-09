@@ -22,6 +22,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/plan"
 )
 
@@ -75,7 +76,7 @@ func runPlanStart(args []string) {
 	}
 	prio, ok := parseCLIPriority(*priority)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "panda: unknown priority %q (want %s)\n", *priority, cliPriorities)
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.task.add.badPriority", "level", *priority, "list", cliPriorities))
 		os.Exit(2)
 	}
 
@@ -136,6 +137,12 @@ func runPlanStart(args []string) {
 		fatal("read plan", serr)
 	}
 
+	// "The daemon does the rest" only holds when one runs — without a queue
+	// consumer every stage parks forever, and the follow line alone would
+	// read like a successful handoff.
+	if !queueConsumerAlive(cfg) {
+		warnNoConsumerStderr(i18n.Detect())
+	}
 	if jsonOutput {
 		emitJSON(planToJSON(planID, p.Goal, stages))
 		return
@@ -173,7 +180,7 @@ func runPlanShow(args []string) {
 		fatal("read plan", err)
 	}
 	if len(stages) == 0 {
-		fmt.Fprintf(os.Stderr, "panda: no such plan: %s\n", id)
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.noSuch.plan", "id", id))
 		os.Exit(1)
 	}
 	if jsonOutput {

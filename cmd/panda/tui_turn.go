@@ -207,7 +207,11 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 		}
 		if report := strings.TrimSpace(out.Answer); report != "" {
 			body := report
-			if !out.OK {
+			// Only a result with failure evidence gets the exit line: a task
+			// that never failed (queued, parked, released) carries OK=false
+			// and an empty stderr, and "exit 0: " under a fine report reads
+			// as a failure that never happened.
+			if !out.OK && (out.ExitCode != 0 || strings.TrimSpace(out.Stderr) != "") {
 				body += fmt.Sprintf("\nexit %d: %s", out.ExitCode, strings.TrimSpace(out.Stderr))
 			}
 			if out.TaskID != "" && out.TaskState != "" {

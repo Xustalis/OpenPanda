@@ -167,8 +167,9 @@ func runStatus(args []string) {
 		if abilities := n.Abilities(); len(abilities) > 0 {
 			// Clipped, not padded: the ability list is a detail row under its
 			// node, and padding it would trail invisible whitespace into every
-			// copy-paste of a listing.
-			fmt.Println("  " + p.Muted(cliui.Truncate(strings.Join(abilities, ", "), listWidth()-2, p.Unicode())))
+			// copy-paste of a listing. The "+N" tail names what the clip hid —
+			// a bare ellipsis reads like the line itself broke.
+			fmt.Println("  " + p.Muted(truncateListCount(abilities, listWidth()-2, p.Unicode())))
 		}
 	}
 	fmt.Println(p.Muted(i18n.Tf(loc, "cli.status.summary",
@@ -283,6 +284,44 @@ func nodeStateTint(v nodeStatusView) func(string) string {
 	}
 }
 
+// truncateListCount joins items into one width-bounded line; when not all fit
+// the tail names how many were dropped ("a, b, c … +4") instead of a bare
+// ellipsis that reads like mid-item damage. Items are never cut mid-word —
+// the line ends at the last whole item that fits alongside the count.
+func truncateListCount(items []string, maxWidth int, unicode bool) string {
+	ellipsis := "…"
+	if !unicode {
+		ellipsis = "..."
+	}
+	full := strings.Join(items, ", ")
+	if cliui.DisplayWidth(full) <= maxWidth {
+		return full
+	}
+	shown, used := "", 0
+	for i, it := range items {
+		cand := it
+		if shown != "" {
+			cand = shown + ", " + it
+		}
+		rest := len(items) - i - 1
+		// The row this item would produce must leave room for its count.
+		suffixW := cliui.DisplayWidth(" " + ellipsis + "+" + strconv.Itoa(rest))
+		if rest == 0 {
+			suffixW = 0
+		}
+		if cliui.DisplayWidth(cand)+suffixW <= maxWidth {
+			shown, used = cand, i+1
+			continue
+		}
+		break
+	}
+	rest := len(items) - used
+	if shown == "" {
+		return ellipsis + "+" + strconv.Itoa(rest)
+	}
+	return shown + " " + ellipsis + "+" + strconv.Itoa(rest)
+}
+
 // nodeFP renders the key column: a human-checked fingerprint carries a green
 // ✓ suffix; a TOFU-recorded one is printed bare in warn tint — present, but
 // nobody has compared it; a keyless row (node predates signed hellos) is an
@@ -294,9 +333,9 @@ func nodeFP(n ledger.Node) string {
 	case fp == "":
 		return p.Muted(cell("—", 17))
 	case n.Verified():
-		return cell(fp, 16) + p.Success("✓")
+		return cell(fp, 15) + " " + p.Success("✓")
 	default:
-		return p.Warn(cell(fp, 16)) + " "
+		return p.Warn(cell(fp, 15)) + "  "
 	}
 }
 
@@ -499,7 +538,7 @@ func runQueue(args []string) {
 	}
 
 	if *watch {
-		watchQueue(context.Background(), store, *state, *project)
+		watchQueue(context.Background(), cfg, store, *state, *project)
 		return
 	}
 
@@ -523,6 +562,18 @@ func runQueue(args []string) {
 		fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.queue.truncated", "n", strconv.Itoa(queueListCap)))
 	}
 
+	// Queued/submitted rows plus no live consumer is the silent-stall shape:
+	// the listing is truthful, but without the hint it reads as "work in
+	// progress" when nothing will ever pick it up. Checked before the output
+	// split so --json callers get the advisory on stderr too.
+	for _, t := range filtered {
+		if t.State == core.StateQueued || t.State == core.StateSubmitted {
+			if !queueConsumerAlive(cfg) {
+				warnNoConsumerStderr(loc)
+			}
+			break
+		}
+	}
 	if jsonOutput {
 		out := make([]taskJSON, 0, len(filtered))
 		for _, t := range filtered {
@@ -535,7 +586,7 @@ func runQueue(args []string) {
 		fmt.Println(i18n.T(loc, "cli.queue.none"))
 		return
 	}
-	printTaskTable(loc, filtered)
+	printTaskTable(loc, filtered, taskRefsFor(context.Background(), store, filtered))
 }
 
 // runQueueClear implements `panda queue clear [--yes]` — the board's "clear
@@ -622,17 +673,17 @@ const queueListLimit = 25
 // priority, the owning node and as much title as the terminal has room for.
 // `panda queue --watch` renders the same rows through the same helpers, so the
 // live board and the one-shot listing cannot drift apart.
-func printTaskTable(loc i18n.Locale, tasks []core.Task) {
-	printTaskTableTo(os.Stdout, loc, tasks)
+func printTaskTable(loc i18n.Locale, tasks []core.Task, refs map[string]string) {
+	printTaskTableTo(os.Stdout, loc, tasks, refs)
 }
 
-func printTaskTableTo(out io.Writer, loc i18n.Locale, tasks []core.Task) {
+func printTaskTableTo(out io.Writer, loc i18n.Locale, tasks []core.Task, refs map[string]string) {
 	p := pal()
 	shown := tasks
 	if len(shown) > queueListLimit {
 		shown = shown[:queueListLimit]
 	}
-	cols := planTaskTable(loc, shown, listWidth())
+	cols := planTaskTableRefs(loc, shown, listWidth(), refs)
 
 	_, _ = fmt.Fprintln(out, taskTableHeader(loc, cols))
 	for _, t := range shown {
@@ -650,15 +701,28 @@ func printTaskTableTo(out io.Writer, loc i18n.Locale, tasks []core.Task) {
 // id, state and priority (their vocabularies are bounded), a node column sized
 // to the widest owner actually present, and the title taking whatever the
 // terminal has left. Shared by the one-shot listing and the watch board.
-type taskTableCols struct{ id, state, prio, node, title int }
+//
+// refs carries each row's shortest-unique prefix (see taskref.go): the width
+// of the id column follows the longest ref actually shown, so a listing of
+// same-second tasks widens instead of printing indistinguishable rows.
+type taskTableCols struct {
+	id, state, prio, node, title int
+	refs                         map[string]string
+}
 
 func planTaskTable(loc i18n.Locale, tasks []core.Task, width int) taskTableCols {
-	c := taskTableCols{id: 10, state: 10, prio: 8}
+	return planTaskTableRefs(loc, tasks, width, nil)
+}
+
+func planTaskTableRefs(loc i18n.Locale, tasks []core.Task, width int, refs map[string]string) taskTableCols {
+	c := taskTableCols{id: 10, state: 10, prio: 8, refs: refs}
 	c.node = cliui.DisplayWidth(i18n.T(loc, "cli.col.node"))
 	for _, t := range tasks {
 		c.node = max(c.node, cliui.DisplayWidth(shortNode(t.OwnerNode)))
+		c.id = max(c.id, cliui.DisplayWidth(refOr(refs, t.TaskID)))
 	}
 	c.node = min(c.node, 26)
+	c.id = min(c.id, taskRefCeil)
 	c.title = max(20, width-(c.id+c.state+c.prio+c.node+4))
 	return c
 }
@@ -677,7 +741,7 @@ func taskTableHeader(loc i18n.Locale, c taskTableCols) string {
 // taskTableRow is one task as a row of sized cells.
 func taskTableRow(t core.Task, c taskTableCols) string {
 	return row(
-		cell(shortID(t.TaskID), c.id),
+		cell(refOr(c.refs, t.TaskID), c.id),
 		stateCell(t.State, c.state),
 		cell(priorityName(t.Priority), c.prio),
 		cell(shortNode(t.OwnerNode), c.node),

@@ -41,6 +41,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/defense"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"gopkg.in/yaml.v3"
@@ -68,7 +69,7 @@ func runCard(args []string) {
 	case "path":
 		fmt.Println(orDash(cardTargetPath("")))
 	default:
-		fmt.Fprintf(os.Stderr, "panda: unknown card subcommand %q\n", sub)
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamed", "kind", "card subcommand", "name", sub))
 		fmt.Fprintln(os.Stderr, "usage: panda card [show|rescan|edit|set|native|agent|manual|invoke|path]")
 		os.Exit(2)
 	}

@@ -1127,13 +1127,20 @@ func (r *repl) askMode(text, mode string) {
 			break
 		}
 		r.outln(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
-		if out.OK {
+		switch {
+		case out.OK:
 			r.outf("%s", r.renderMd(out.Stdout))
 			if s := strings.TrimRight(out.Stdout, "\n"); s != "" && !strings.HasSuffix(out.Stdout, "\n") {
 				r.outln()
 			}
-		} else {
+		case out.ExitCode != 0 || strings.TrimSpace(out.Stderr) != "":
 			r.errf("exit %d: %s\n", out.ExitCode, out.Stderr)
+		case strings.TrimSpace(out.Stdout) != "":
+			// No failure evidence, but the result still has something to say:
+			// a queue receipt ("pinned to X — queued until the link is live")
+			// on a wait the user released. "exit 0: " here read as a failure
+			// that never happened.
+			r.outln(r.renderMd(out.Stdout))
 		}
 	case "plan":
 		// A plan does not finish inside the ask: its stages are queued and will
@@ -1341,7 +1348,7 @@ func (r *repl) cmdTasks(arg string) {
 		return
 	}
 	if watch {
-		watchQueueTo(r.commandContext(), r.store, state, "", r.loc, r.commandOutput(), false)
+		watchQueueTo(r.commandContext(), r.cfg, r.store, state, "", r.loc, r.commandOutput(), false)
 		return
 	}
 	// The listing is bounded: /tasks shows the working set, not the archive —
@@ -1360,7 +1367,16 @@ func (r *repl) cmdTasks(arg string) {
 	if len(tasks) == taskListCap {
 		r.outln(pal().Muted(i18n.Tf(r.loc, "cli.queue.truncated", "n", strconv.Itoa(taskListCap))))
 	}
-	printTaskTableTo(r.commandOutput(), r.loc, tasks)
+	printTaskTableTo(r.commandOutput(), r.loc, tasks,
+		taskRefsFor(r.commandContext(), r.store, tasks))
+	for _, t := range tasks {
+		if t.State == core.StateQueued || t.State == core.StateSubmitted {
+			if !queueConsumerAlive(r.cfg) {
+				warnNoConsumerTo(r.commandOutput(), r.loc)
+			}
+			break
+		}
+	}
 }
 
 // cmdTasksClear implements "/tasks clear [--yes]": confirm, cancel everything
@@ -1507,6 +1523,9 @@ func (r *repl) cmdTask(arg string) {
 	r.outf("  created: %s\n", ts(t.CreatedAt))
 	r.outf("  updated: %s\n", ts(t.UpdatedAt))
 	r.printEvents(t.TaskID)
+	if hint := taskNextStepHint(r.loc, r.cfg, t); hint != "" {
+		r.outln(pal().Muted(hint))
+	}
 }
 
 // cmdCancel cancels a task and its subtree. With an engine the cancel travels
@@ -1720,13 +1739,18 @@ func (r *repl) cmdApprove(arg string) {
 	}
 	out := r.engine.Load().ResumeApproved(r.commandContext(), id, "", cb)
 	r.outln(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
-	if out.OK {
+	switch {
+	case out.OK:
 		if stdout := strings.TrimRight(out.Stdout, "\n"); stdout != "" {
 			r.outln(renderCliMd(stdout))
 		}
-		return
+	case out.ExitCode != 0 || strings.TrimSpace(out.Stderr) != "":
+		r.errf("exit %d: %s\n", out.ExitCode, out.Stderr)
+	case strings.TrimSpace(out.Stdout) != "":
+		// Still parked (review kept, a queue receipt) with no failure
+		// evidence: show what the result says instead of "exit 0: ".
+		r.outln(renderCliMd(out.Stdout))
 	}
-	r.errf("exit %d: %s\n", out.ExitCode, out.Stderr)
 }
 
 // cmdReject rejects a reviewed task (review -> failed); the reason is the

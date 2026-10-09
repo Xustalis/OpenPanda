@@ -103,8 +103,10 @@ func (r *repl) pollCompletions(ctx context.Context) []watchEvent {
 		return nil
 	}
 	states := make(map[string]string, len(stamps))
+	allIDs := make([]string, 0, len(stamps))
 	for _, s := range stamps {
 		states[s.ID] = s.State
+		allIDs = append(allIDs, s.ID)
 	}
 	var events []watchEvent
 	r.watchMu.Lock()
@@ -120,7 +122,7 @@ func (r *repl) pollCompletions(ctx context.Context) []watchEvent {
 				continue // row left under us (retention, a clear): no note to build
 			}
 			events = append(events, watchEvent{
-				note:   r.completionNote(t),
+				note:   r.completionNote(t, allIDs),
 				task:   t,
 				review: t.State == core.StateReview,
 			})
@@ -133,7 +135,7 @@ func (r *repl) pollCompletions(ctx context.Context) []watchEvent {
 	}
 	if active, err := r.store.ListActive(ctx); err == nil {
 		for _, t := range active {
-			if ev, ok := r.stallEventLocked(t, now); ok {
+			if ev, ok := r.stallEventLocked(t, now, allIDs); ok {
 				events = append(events, ev)
 			}
 		}
@@ -157,12 +159,12 @@ func (r *repl) pollCompletions(ctx context.Context) []watchEvent {
 // wait — a review parked on the user, a plan stage held by its graph — get a
 // reminder cadence or an exemption rather than an alarm; everything else that
 // has not moved past its own bound is a genuine silent stall.
-func (r *repl) stallEventLocked(t core.Task, now time.Time) (watchEvent, bool) {
+func (r *repl) stallEventLocked(t core.Task, now time.Time, allIDs []string) (watchEvent, bool) {
 	key := t.TaskID + "|" + t.State
 	notedAt, noted := r.stallNoted[key]
 	mark := func() { r.stallNoted[key] = now }
 	p := pal()
-	short := shortID(t.TaskID)
+	short := shortestUniquePrefix(t.TaskID, allIDs)
 	title := t.Title
 	if len([]rune(title)) > 48 {
 		title = string([]rune(title)[:48]) + "…"
@@ -249,14 +251,14 @@ func (r *repl) stallEventLocked(t core.Task, now time.Time) (watchEvent, bool) {
 // completionNote renders one finished/failed task as a single report line. A
 // review task gets the actionable form instead: it is waiting on the user, so
 // the line names the two decisions rather than only where to look.
-func (r *repl) completionNote(t core.Task) string {
+func (r *repl) completionNote(t core.Task, allIDs []string) string {
 	title := t.Title
 	if len([]rune(title)) > 48 {
 		title = string([]rune(title)[:48]) + "…"
 	}
 	p := pal()
 	if t.State == core.StateReview {
-		short := shortID(t.TaskID)
+		short := shortestUniquePrefix(t.TaskID, allIDs)
 		if t.ApprovalDisposition == core.ApprovalNeedsChangedInput {
 			return p.Warn(fmt.Sprintf("%s %s — %s", p.MarkBullet(), title,
 				i18n.Tf(r.loc, "repl.watch.reviewBlocked", "id", short)))
@@ -268,7 +270,7 @@ func (r *repl) completionNote(t core.Task) string {
 	if t.State != core.StateDone {
 		mark, tint = p.MarkFail(), p.Danger
 	}
-	return tint(fmt.Sprintf("%s %s (%s) — /task %s", mark, title, t.State, shortID(t.TaskID)))
+	return tint(fmt.Sprintf("%s %s (%s) — /task %s", mark, title, t.State, shortestUniquePrefix(t.TaskID, allIDs)))
 }
 
 // reviewReason digs the executor's refusal/park reason out of a review task's

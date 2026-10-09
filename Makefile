@@ -276,9 +276,22 @@ run-local:
 # the shared data directory, and an older-schema binary dies at startup with
 # "schema version newer than binary" — syncing both keeps one habit safe.
 install-local: build
-	cp $(BIN) $(HOME)/.local/bin/panda
+	@# Atomic rename, not cp-over: overwriting a running daemon's binary in
+	@# place taints the vnode's code signature on macOS and every subsequent
+	@# exec of that path dies with SIGKILL ("Killed: 9").
+	@# Codesign before the mv when a signing identity is present: an ad-hoc
+	@# signature embeds the cdhash, so each rebuild becomes a new TCC Local
+	@# Network identity and the launchd daemon silently loses its grant
+	@# (peer dials die with EHOSTUNREACH). A stable cert identity keeps the
+	@# grant across rebuilds.
+	@tmp=$$(mktemp $(HOME)/.local/bin/.panda.XXXXXX) && cp $(BIN) $$tmp && chmod 755 $$tmp && \
+		(codesign -s "OpenPanda Local Development" --identifier com.openpanda.node --force $$tmp 2>/dev/null || true) && \
+		mv $$tmp $(HOME)/.local/bin/panda
 	@if [ -d "$(HOME)/.local/share/openpanda/bin" ]; then \
-		cp $(BIN) "$(HOME)/.local/share/openpanda/bin/panda"; \
+		tmp=$$(mktemp "$(HOME)/.local/share/openpanda/bin/.panda.XXXXXX") && \
+		cp $(BIN) $$tmp && chmod 755 $$tmp && \
+		(codesign -s "OpenPanda Local Development" --identifier com.openpanda.node --force $$tmp 2>/dev/null || true) && \
+		mv $$tmp "$(HOME)/.local/share/openpanda/bin/panda" && \
 		echo "synced $(HOME)/.local/share/openpanda/bin/panda"; \
 	fi
 

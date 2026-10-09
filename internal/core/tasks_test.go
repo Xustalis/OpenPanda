@@ -63,6 +63,46 @@ func TestRecordEventBumpsUpdatedAt(t *testing.T) {
 	}
 }
 
+// TestEventsSinceAdvancesCursor pins the incremental timeline read the
+// askengine's settle wait polls with: rows after the cursor only, oldest
+// first, and a cursor at the tail yields nothing.
+func TestEventsSinceAdvancesCursor(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "cursor", "node")
+	for _, note := range []string{"one", "two"} {
+		if err := s.RecordEvent(ctx, tk.TaskID, EvProgress, map[string]any{"note": note}); err != nil {
+			t.Fatalf("record %s: %v", note, err)
+		}
+	}
+	all, err := s.Events(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	if len(all) < 3 { // submit + two progress rows
+		t.Fatalf("timeline = %d events, want at least 3", len(all))
+	}
+	tail := all[len(all)-1]
+	rest, err := s.EventsSince(ctx, tk.TaskID, all[len(all)-2].ID)
+	if err != nil {
+		t.Fatalf("events since: %v", err)
+	}
+	if len(rest) != 1 || rest[0].ID != tail.ID {
+		t.Fatalf("events since cursor = %+v, want just the tail row", rest)
+	}
+	if past, err := s.EventsSince(ctx, tk.TaskID, tail.ID); err != nil || len(past) != 0 {
+		t.Fatalf("events past the tail = %+v (%v), want empty", past, err)
+	}
+	// Another task's rows never leak into the window.
+	other := createTask(t, s, "", "other", "node")
+	if err := s.RecordEvent(ctx, other.TaskID, EvProgress, map[string]any{"note": "x"}); err != nil {
+		t.Fatalf("record other: %v", err)
+	}
+	if again, err := s.EventsSince(ctx, tk.TaskID, all[len(all)-2].ID); err != nil || len(again) != 1 {
+		t.Fatalf("other task's events leaked: %+v (%v)", again, err)
+	}
+}
+
 // TestConcurrentTransitionSingleWinner races two goroutines closing the same
 // running task. The state/owner CAS guard (P1-2) must let exactly one win; the
 // other loses with ErrConflict (or ErrIllegal if it observed the new state in a

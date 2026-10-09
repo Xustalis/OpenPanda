@@ -2397,6 +2397,30 @@ func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) 
 	return out, rows.Err()
 }
 
+// EventsSince returns the events recorded for taskID after the given event
+// id, oldest first — the incremental read a poll loop uses to follow a task
+// timeline without re-reading it whole. A cursor of 0 reads the full history
+// (the same rows Events returns); callers then advance their cursor to the
+// last row's ID.
+func (s *TaskStore) EventsSince(ctx context.Context, taskID string, afterID int64) ([]Event, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, task_id, ts, type, data_json, COALESCE(prev_hash, ''), COALESCE(sig, ''), COALESCE(sig_pub, '') FROM task_events
+		 WHERE task_id = ? AND id > ? ORDER BY id ASC`, taskID, afterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		if err := rows.Scan(&e.ID, &e.TaskID, &e.TS, &e.Type, &e.DataJSON, &e.PrevHash, &e.Sig, &e.SigPub); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // VerifyTaskEventChain verifies the per-task hash chain for taskID: every
 // row's prev_hash links correctly, every signature verifies under the key
 // this verifier trusts, and no unsigned row follows a signed one. It returns

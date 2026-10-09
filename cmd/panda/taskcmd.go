@@ -72,7 +72,8 @@ func taskUsage() {
 	fmt.Fprintln(os.Stderr, "usage: panda task <verb|task-id>")
 	fmt.Fprintln(os.Stderr, "  <id>                                    show one task and its timeline")
 	fmt.Fprintln(os.Stderr, "  add --title T [--prompt P] [--priority "+cliPriorities+"]")
-	fmt.Fprintln(os.Stderr, "      [--project p] [--parent-id ID] [--preferred NODE] [--authorize] [--card PATH]   enqueue a task")
+	fmt.Fprintln(os.Stderr, "      [--project p] [--parent-id ID] [--preferred NODE] [--authorize] [--card PATH]")
+	fmt.Fprintln(os.Stderr, "      [--agents a,b [--mode m] | --nodes n1,n2] [--wait [--wait-timeout D]] [--json]   enqueue a task")
 	fmt.Fprintln(os.Stderr, "  priority <id> <level>                   change a task's priority")
 	fmt.Fprintln(os.Stderr, "  move <id> <seq>                         reorder the drag-sort queue")
 	fmt.Fprintln(os.Stderr, "  <id> --trace                            hop-by-hop delegation trace (hops, timings, transport)")
@@ -188,6 +189,32 @@ func runTaskShow(args []string) {
 		fmt.Println(pal().Heading("events:"))
 		printEventTimeline(events, "  ")
 	}
+	if hint := taskNextStepHint(i18n.Detect(), cfg, t); hint != "" {
+		fmt.Println(pal().Muted(hint))
+	}
+}
+
+// taskNextStepHint names the one command that moves a task out of its current
+// parked state — or "" when nothing is waiting on the user. `task show` reads
+// like a dead end without it: a review row's events end at "review" and the
+// reader has to guess that `panda approve` is the way out.
+//
+// waiting_context is an agent's clarification question — the same park, the
+// same resume verb; the stored question itself was already printed under
+// result:. A queued row with no live consumer is the silent-stall shape the
+// queue listing already warns about; show it here too.
+func taskNextStepHint(loc i18n.Locale, cfg *config.Config, t core.Task) string {
+	switch t.State {
+	case core.StateReview:
+		return i18n.Tf(loc, "cli.task.wait.review", "id", t.TaskID)
+	case core.StateWaitingCtx:
+		return i18n.Tf(loc, "cli.ask.question.hint", "id", t.TaskID)
+	case core.StateQueued, core.StateSubmitted:
+		if cfg != nil && !queueConsumerAlive(cfg) {
+			return i18n.T(loc, "cli.queue.noConsumer")
+		}
+	}
+	return ""
 }
 
 // taskFieldWidth is the label column of the task record, sized to its longest
@@ -509,7 +536,7 @@ func ambiguousTaskMsg(loc i18n.Locale, amb *core.AmbiguousTaskIDError) string {
 
 func taskStoreFatal(err error, id string) {
 	if errors.Is(err, sql.ErrNoRows) {
-		fmt.Fprintf(os.Stderr, "panda: no such task: %s\n", id)
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.noSuch.task", "id", id))
 		os.Exit(1)
 	}
 	fatal("get task", err)
@@ -536,10 +563,30 @@ func runTaskAdd(args []string) {
 	preferred := fs.String("preferred", "", "target node id or name (hard pin: runs there or fails)")
 	nodes := fs.String("nodes", "", "comma-separated node ids to pin the task onto (one task per node; each lands on its named node or fails)")
 	actionSpec := fs.String("action-spec", "", "actuator dispatch JSON: {\"target_actuator\":\"hardware:x\",\"action\":\"verb\",\"parameters\":{...}}")
-	fs.Parse(args)
+	wait := fs.Bool("wait", false, "block until the task settles (done/failed/cancelled/review) and print the result")
+	waitTimeout := fs.Duration("wait-timeout", 30*time.Minute, "with --wait: stop watching after this long (the task itself keeps running)")
+	fs.Parse(reorderFlags(args, taskAddValueFlags))
 
 	loc := i18n.Detect()
+	// Positional words join --prompt: `task add --title T do the thing` —
+	// silently dropping them would send the title as the whole prompt.
+	var joined string
+	if rest := fs.Args(); len(rest) > 0 {
+		joined = strings.TrimSpace(strings.Join(rest, " "))
+		if joined != "" {
+			if *prompt == "" {
+				*prompt = joined
+			} else {
+				*prompt = strings.TrimSpace(*prompt + " " + joined)
+			}
+		}
+	}
 	*title = strings.TrimSpace(*title)
+	// `panda task add 帮我看下日志` with no --title: the words are the title,
+	// and the prompt falls through to it below.
+	if *title == "" {
+		*title = joined
+	}
 	if *title == "" {
 		fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.add.noTitle"))
 		os.Exit(2)
@@ -595,6 +642,12 @@ func runTaskAdd(args []string) {
 	// on the previous stage's output. A single agent folds into the normal
 	// requires path unchanged.
 	agentList := parseAgentList(*agents)
+	// --wait watches one row; the fan-out paths create several, so a single
+	// exit code could never describe the batch.
+	if *wait && (len(agentList) > 1 || strings.TrimSpace(*nodes) != "") {
+		fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.wait.multi"))
+		os.Exit(2)
+	}
 	if len(agentList) > 1 {
 		// A multi-harness plan and an actuator dispatch are different task
 		// shapes; accepting both would silently drop the action_spec.
@@ -602,7 +655,7 @@ func runTaskAdd(args []string) {
 			fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.add.actionSpecAgents"))
 			os.Exit(2)
 		}
-		runTaskAddAgents(loc, engine, agentList, *mode, *title, *prompt, requiresList, requiresExplicit, prio, jsonOutput)
+		runTaskAddAgents(loc, engine, cfg, agentList, *mode, *title, *prompt, requiresList, requiresExplicit, prio, jsonOutput)
 		return
 	}
 	if len(agentList) == 1 {
@@ -684,6 +737,16 @@ func runTaskAdd(args []string) {
 	// enqueue so a failure leaves no orphan behind.
 	sessionID := linkTaskSession(cfg, task.TaskID, *title, *prompt)
 
+	// The advisory precedes the output split: --json keeps stdout clean but a
+	// stderr line is still the cheapest way to keep a silently-stalled queue
+	// from looking like a successful enqueue.
+	if !queueConsumerAlive(cfg) {
+		warnNoConsumerStderr(loc)
+	}
+	if *wait {
+		waitForTaskAdd(loc, cfg, task.TaskID, *waitTimeout)
+		return
+	}
 	if jsonOutput {
 		emitJSON(map[string]string{"task_id": task.TaskID, "session_id": sessionID, "state": task.State})
 		return
@@ -692,6 +755,89 @@ func runTaskAdd(args []string) {
 	if sessionID != "" {
 		fmt.Println(i18n.Tf(loc, "cli.task.add.session", "id", sessionID))
 	}
+}
+
+// waitTask polls a task row until it settles or ctx ends. "Settled" is
+// broader than core.Terminal: a failed row can be retried and a review row
+// resumed, but for --wait both are answers to "what happened to my task?".
+func waitTask(ctx context.Context, store *core.TaskStore, taskID string) (core.Task, error) {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	var last core.Task
+	for {
+		t, err := store.Get(ctx, taskID)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			// The watch expired mid-read — report the last good row so the
+			// caller can still say what state the task was in.
+			return last, ctx.Err()
+		case err != nil:
+			return last, err
+		}
+		last = t
+		if core.Terminal(t.State) || t.State == core.StateFailed || t.State == core.StateReview {
+			return t, nil
+		}
+		select {
+		case <-ctx.Done():
+			return t, ctx.Err()
+		case <-tick.C:
+		}
+	}
+}
+
+// waitForTaskAdd is the --wait half of `task add`: the row is already
+// enqueued, so this only watches it — an interrupted or expired watch leaves
+// the task running under whatever consumer picks it up. It owns the exit
+// code: 0 done, 1 anything-not-done, 130 on Ctrl-C.
+func waitForTaskAdd(loc i18n.Locale, cfg *config.Config, taskID string, timeout time.Duration) {
+	db, store, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+	ctx, cancel := shutdownContext()
+	defer cancel()
+	wctx, wcancel := context.WithTimeout(ctx, timeout)
+	defer wcancel()
+	if !jsonOutput {
+		fmt.Println(i18n.Tf(loc, "cli.task.waiting", "id", taskID))
+	}
+	final, werr := waitTask(wctx, store, taskID)
+	exit := 1
+	switch {
+	case errors.Is(werr, context.DeadlineExceeded):
+		if jsonOutput {
+			emitJSON(map[string]string{"task_id": taskID, "state": final.State, "outcome": "timeout"})
+		} else {
+			fmt.Println(i18n.Tf(loc, "cli.task.wait.timeout",
+				"id", taskID, "state", final.State, "dur", timeout.String()))
+		}
+	case errors.Is(werr, context.Canceled):
+		exit = 130
+		if jsonOutput {
+			emitJSON(map[string]string{"task_id": taskID, "state": final.State, "outcome": "interrupted"})
+		} else {
+			fmt.Println(i18n.Tf(loc, "cli.task.wait.interrupted", "id", taskID))
+		}
+	case werr != nil:
+		fatal("watch task", werr)
+	default:
+		if final.State == core.StateDone {
+			exit = 0
+		}
+		if jsonOutput {
+			emitJSON(taskToJSONWithStore(store, final))
+		} else {
+			fmt.Println(i18n.Tf(loc, "cli.task.wait.state", "id", final.TaskID, "state", final.State))
+			if final.State == core.StateReview {
+				fmt.Println(i18n.Tf(loc, "cli.task.wait.review", "id", final.TaskID))
+			} else if final.ResultJSON != "" {
+				printTaskResult(final.ResultJSON)
+			}
+		}
+	}
+	os.Exit(exit)
 }
 
 // linkTaskSession creates the board-style linked session for an enqueued
@@ -744,6 +890,9 @@ func runTaskAddNodes(loc i18n.Locale, engine *askengine.Engine, cfg *config.Conf
 			r.SessionID = linkTaskSession(cfg, task.TaskID, in.Title, in.Intent)
 		}
 		results = append(results, r)
+	}
+	if failed < len(nodes) && !queueConsumerAlive(cfg) {
+		warnNoConsumerStderr(loc)
 	}
 	if jsonOutput {
 		emitJSON(map[string]any{"fanout": len(nodes), "tasks": results})
@@ -953,7 +1102,7 @@ func stageIDName(agent string) string {
 
 // runTaskAddAgents submits the synthesized multi-harness plan and reports the
 // stages it created.
-func runTaskAddAgents(loc i18n.Locale, engine *askengine.Engine, agents []string, mode, title, prompt string, requires []string, requiresExplicit bool, prio int, jsonOut bool) {
+func runTaskAddAgents(loc i18n.Locale, engine *askengine.Engine, cfg *config.Config, agents []string, mode, title, prompt string, requires []string, requiresExplicit bool, prio int, jsonOut bool) {
 	p, err := buildMultiAgentPlan(agents, mode, title, prompt, requires, requiresExplicit)
 	if err != nil {
 		if errors.Is(err, errBadAgentMode) {
@@ -974,6 +1123,9 @@ func runTaskAddAgents(loc i18n.Locale, engine *askengine.Engine, agents []string
 	stages, serr := engine.PlanStages(context.Background(), planID)
 	if serr != nil {
 		fatal("read plan", serr)
+	}
+	if !queueConsumerAlive(cfg) {
+		warnNoConsumerStderr(loc)
 	}
 	if jsonOut {
 		emitJSON(planToJSON(planID, p.Goal, stages))

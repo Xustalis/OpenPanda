@@ -97,6 +97,11 @@ func progressNote(loc i18n.Locale, p askengine.Progress) string {
 		note = i18n.Tf(loc, "cli.progress.exec", "agent", agentLabel)
 	case askengine.ProgressJudge:
 		note = i18n.T(loc, "cli.progress.judge")
+	case askengine.ProgressWait:
+		// The round is following a task the queue parked (its link is not
+		// live yet); the state word is the store's own ("queued",
+		// "dispatched"), the same vocabulary the task board shows.
+		note = i18n.Tf(loc, "cli.progress.wait", "state", p.Name)
 	default:
 		note = p.Name
 	}

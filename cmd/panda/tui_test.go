@@ -128,6 +128,25 @@ func TestResultBlockTaskReport(t *testing.T) {
 	}
 }
 
+// TestResultBlockNoPhantomExit pins the queued/parked report shape: OK=false
+// with no failure evidence is not a failure — a released wait's report must
+// not grow an "exit 0: " line that reads as one.
+func TestResultBlockNoPhantomExit(t *testing.T) {
+	queued := &askengine.Result{
+		Kind: "task", OK: false, TaskID: "t-q", TaskState: "queued",
+		Answer: "已派发到 Mac，正在排队等待链路。",
+	}
+	b := resultBlock(queued, "", i18n.ChineseSimp)
+	if strings.Contains(b.body, "exit") {
+		t.Fatalf("a parked report gained a phantom exit line: %q", b.body)
+	}
+	// A nonzero exit still carries its evidence.
+	failed := &askengine.Result{Kind: "task", OK: false, ExitCode: 3, Stderr: "no such file", Answer: "boom"}
+	if b := resultBlock(failed, "", i18n.ChineseSimp); !strings.Contains(b.body, "exit 3: no such file") {
+		t.Fatalf("failure evidence lost: %q", b.body)
+	}
+}
+
 // TestResultBlockExecutionAttribution verifies that a completed task block
 // retains and renders its executor agent, model, and injection status.
 func TestResultBlockExecutionAttribution(t *testing.T) {

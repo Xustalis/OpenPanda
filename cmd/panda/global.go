@@ -305,3 +305,13 @@ func reorderFlags(args []string, valueFlags map[string]bool) []string {
 var commonValueFlags = map[string]bool{
 	"config": true, "card": true,
 }
+
+// taskAddValueFlags lets `task add --title X do the thing` keep its flags
+// after reorderFlags hoists positionals: every value flag of runTaskAdd must
+// be listed or reordering would split a flag from its value.
+var taskAddValueFlags = map[string]bool{
+	"config": true, "card": true, "mcp": true,
+	"title": true, "prompt": true, "priority": true, "project": true,
+	"requires": true, "agents": true, "mode": true, "parent-id": true,
+	"preferred": true, "nodes": true, "action-spec": true, "wait-timeout": true,
+}

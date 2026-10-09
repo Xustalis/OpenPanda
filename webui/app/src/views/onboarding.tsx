@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useMemo, useState } from 'preact/hooks'
 import {
   api,
-  type ModelSettings,
   type OnboardingPatch,
   type OnboardingState,
+  type ProviderInfo,
 } from '../api/client'
 import { useLocaleRerender } from '../hooks'
 import { locale, localeNames, locales, setLocale, t, type Locale } from '../i18n'
@@ -298,14 +298,23 @@ const EXAMPLES: Record<ApiType, { base: string; model: string }> = {
   openai: { base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
 }
 
+/** The model step mirrors the models page's add wizard: a catalogue card
+ *  grid first (endpoints, default models, no-auth flags all prefilled),
+ *  then a form that only asks for what the pick still needs — a key for
+ *  hosted providers, nothing but a model id for Ollama-style ones, and the
+ *  full wire shape for "custom". Saving goes through POST /api/models,
+ *  which activates the first entry automatically — exactly the zero-config
+ *  path this wizard exists for. */
 function ModelStep(props: { onSaved(): void }) {
-  const [initial, setInitial] = useState<ModelSettings | null>(null)
-  const [apiType, setApiType] = useState<ApiType>('anthropic')
-  const [baseUrl, setBaseUrl] = useState('')
+  const [providers, setProviders] = useState<ProviderInfo[] | null>(null)
+  const [provider, setProvider] = useState<ProviderInfo | null>(null)
   const [model, setModel] = useState('')
   const [apiKey, setApiKey] = useState('')
-  const [testing, setTesting] = useState(false)
-  const [saving, setSaving] = useState(false)
+  const [apiType, setApiType] = useState<ApiType>('openai')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [maxTokens, setMaxTokens] = useState(0)
+  const [remoteModels, setRemoteModels] = useState<string[] | null>(null)
+  const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [testResult, setTestResult] = useState<{
     ok: boolean
@@ -315,136 +324,256 @@ function ModelStep(props: { onSaved(): void }) {
 
   useEffect(() => {
     api
-      .getModelSettings()
-      .then((s) => {
-        setInitial(s)
-        setApiType((s.api_type || 'anthropic') as ApiType)
-        setBaseUrl(s.base_url)
-        setModel(s.model)
-      })
-      .catch(() => setInitial({} as ModelSettings))
+      .models()
+      .then((r) => setProviders(r.providers))
+      .catch(() => setProviders([])) // catalogue unreachable → custom form still works
   }, [])
 
-  const ready = baseUrl.trim() !== '' && model.trim() !== ''
-
-  function payload(): ModelSettings {
-    return {
-      api_type: apiType,
-      base_url: baseUrl.trim(),
-      model: model.trim(),
-      max_tokens: initial?.max_tokens ?? 0,
-      api_key: apiKey.trim() || undefined, // empty = keep the stored key
+  const regions = useMemo(() => {
+    const groups: Record<string, ProviderInfo[]> = { global: [], cn: [] }
+    for (const p of providers ?? []) {
+      ;(groups[p.region] ?? groups.global)!.push(p)
     }
+    return groups
+  }, [providers])
+
+  function pick(p: ProviderInfo) {
+    setProvider(p)
+    setModel(p.default_model)
+    setBaseUrl(p.id === 'custom' ? '' : p.base_url)
+    if (p.api_type === 'anthropic' || p.api_type === 'openai') setApiType(p.api_type)
+    setRemoteModels(null)
+    setTestResult(null)
+    setError('')
   }
 
+  function refPayload() {
+    if (!provider) return {}
+    return provider.id === 'custom'
+      ? {
+          provider: 'custom',
+          api_type: apiType,
+          base_url: baseUrl.trim(),
+          model: model.trim(),
+          api_key: apiKey.trim() || undefined,
+        }
+      : {
+          provider: provider.id,
+          model: model.trim() || undefined,
+          api_key: apiKey.trim() || undefined,
+        }
+  }
+
+  const needsKey = provider !== null && !provider.no_auth && !provider.key_saved
+  const ready =
+    provider !== null &&
+    (provider.id === 'custom'
+      ? baseUrl.trim() !== '' && model.trim() !== ''
+      : model.trim() !== '' || provider.default_model !== '') &&
+    (!needsKey || apiKey.trim() !== '')
+
   async function test() {
-    if (testing || !ready) return
-    setTesting(true)
+    if (busy !== '' || !ready) return
+    setBusy('test')
     setTestResult(null)
     try {
-      setTestResult(await api.testModelSettings(payload()))
+      const r = await api.testModelRef(refPayload())
+      setTestResult(r.ok ? { ok: true, reply: r.reply } : { ok: false, error: r.error })
     } catch (e: unknown) {
       setTestResult({ ok: false, error: e instanceof Error ? e.message : String(e) })
     } finally {
-      setTesting(false)
+      setBusy('')
+    }
+  }
+
+  async function fetchRemote() {
+    if (!provider || busy !== '') return
+    setBusy('fetch')
+    setError('')
+    try {
+      const r = await api.fetchModels(refPayload())
+      if (r.ok && r.models) setRemoteModels(r.models)
+      else setError(r.error ?? t('models.fetchFail'))
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy('')
     }
   }
 
   async function save(e: Event) {
     e.preventDefault()
-    if (!ready || saving) return
-    setSaving(true)
+    if (!ready || busy !== '') return
+    setBusy('save')
     setError('')
     try {
-      await api.putModelSettings(payload())
+      await api.addModel({
+        provider: provider!.id,
+        model: model.trim() || undefined,
+        api_key: apiKey.trim() || undefined,
+        ...(provider!.id === 'custom'
+          ? { api_type: apiType, base_url: baseUrl.trim(), max_tokens: maxTokens || undefined }
+          : {}),
+      })
       notifyModelSaved()
       toast(t('onboarding.saved'), 'success')
       props.onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setSaving(false)
+      setBusy('')
     }
   }
 
-  if (!initial) return <p class="hint">{t('common.loading')}</p>
+  if (!providers) return <p class="hint">{t('common.loading')}</p>
 
+  // Phase 1: the catalogue grid — same card markup as the models page.
+  if (!provider) {
+    return (
+      <>
+        <h2 class="modal-title">{t('onboarding.modelTitle')}</h2>
+        <p class="modal-msg">{t('onboarding.subtitle')}</p>
+        <p class="hint">{t('models.pickProvider')}</p>
+        <div class="wizard-scroll">
+          {(['global', 'cn'] as const).map(
+            (r) =>
+              regions[r]!.length > 0 && (
+                <div key={r}>
+                  <div class="section-title wizard-region">{t(`models.region.${r}`)}</div>
+                  <div class="provider-grid">
+                    {regions[r]!.map((p) => (
+                      <button key={p.id} type="button" class="provider-card" onClick={() => pick(p)}>
+                        <span class="provider-name">{p.label}</span>
+                        <span class="provider-sub dim mono">{p.default_model || p.api_type}</span>
+                        <span class="provider-badges">
+                          {p.no_auth && <span class="badge">{t('models.noAuth')}</span>}
+                          {p.key_saved && <span class="badge green">{t('models.keySaved')}</span>}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ),
+          )}
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn" onClick={props.onSaved}>
+            {t('onboarding.skip')}
+          </button>
+        </div>
+      </>
+    )
+  }
+
+  // Phase 2: only the fields the pick still needs.
   return (
     <form onSubmit={save}>
       <h2 class="modal-title">{t('onboarding.modelTitle')}</h2>
-      <p class="modal-msg">{t('onboarding.subtitle')}</p>
+      <div class="wizard-picked">
+        <button class="btn small ghost" type="button" onClick={() => setProvider(null)}>
+          ← {provider.label}
+        </button>
+      </div>
 
-      <div class="field-group">
-        <label>{t('settings.apiType')}</label>
-        <div class="segmented" role="radiogroup">
-          {(['anthropic', 'openai'] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              role="radio"
-              aria-checked={apiType === v}
-              class={`seg${apiType === v ? ' on' : ''}`}
-              onClick={() => {
-                setApiType(v)
+      {provider.id === 'custom' && (
+        <>
+          <div class="field-group">
+            <label>{t('settings.apiType')}</label>
+            <div class="segmented" role="radiogroup">
+              {(['openai', 'anthropic'] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  role="radio"
+                  aria-checked={apiType === v}
+                  class={`seg${apiType === v ? ' on' : ''}`}
+                  onClick={() => {
+                    setApiType(v)
+                    setTestResult(null)
+                  }}
+                >
+                  {v === 'anthropic' ? t('settings.anthropic') : t('settings.openai')}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div class="field-group">
+            <label for="onboarding-base-url">{t('settings.baseURL')}</label>
+            <input
+              id="onboarding-base-url"
+              class="input mono"
+              type="url"
+              required
+              placeholder={EXAMPLES[apiType].base}
+              value={baseUrl}
+              onInput={(e) => {
+                setBaseUrl((e.target as HTMLInputElement).value)
                 setTestResult(null)
               }}
-            >
-              {v === 'anthropic' ? t('settings.anthropic') : t('settings.openai')}
-            </button>
-          ))}
-        </div>
-        <p class="hint">{t('settings.apiTypeHelp')}</p>
-      </div>
-
-      <div class="field-group">
-        <label for="onboarding-base-url">{t('settings.baseURL')}</label>
-        <input
-          id="onboarding-base-url"
-          class="input mono"
-          type="url"
-          required
-          placeholder={EXAMPLES[apiType].base}
-          value={baseUrl}
-          onInput={(e) => {
-            setBaseUrl((e.target as HTMLInputElement).value)
-            setTestResult(null)
-          }}
-        />
-        <p class="hint">{t('settings.baseURLHelp')}</p>
-      </div>
+            />
+            <p class="hint">{t('settings.baseURLHelp')}</p>
+          </div>
+        </>
+      )}
 
       <div class="field-group">
         <label for="onboarding-model">{t('settings.model')}</label>
-        <input
-          id="onboarding-model"
-          class="input mono"
-          type="text"
-          required
-          placeholder={EXAMPLES[apiType].model}
-          value={model}
-          onInput={(e) => {
-            setModel((e.target as HTMLInputElement).value)
-            setTestResult(null)
-          }}
-        />
-        <p class="hint">{t('settings.modelHelp')}</p>
+        <div class="field-row">
+          <input
+            id="onboarding-model"
+            class="input mono u-flex-1"
+            type="text"
+            required={provider.id === 'custom'}
+            placeholder={provider.default_model || EXAMPLES[apiType].model}
+            value={model}
+            list="onboarding-remote-models"
+            onInput={(e) => {
+              setModel((e.target as HTMLInputElement).value)
+              setTestResult(null)
+            }}
+          />
+          <button type="button" class="btn" disabled={busy !== ''} onClick={fetchRemote}>
+            {busy === 'fetch' ? '…' : t('models.fetch')}
+          </button>
+        </div>
+        {remoteModels && (
+          <datalist id="onboarding-remote-models">
+            {remoteModels.map((id) => (
+              <option key={id} value={id} />
+            ))}
+          </datalist>
+        )}
+        {remoteModels && <p class="hint">{t('models.fetched', { n: remoteModels.length })}</p>}
       </div>
 
-      <div class="field-group">
-        <label for="onboarding-api-key">{t('settings.apiKey')}</label>
-        <input
-          id="onboarding-api-key"
-          class="input mono"
-          type="password"
-          autocomplete="off"
-          placeholder="sk-…"
-          value={apiKey}
-          onInput={(e) => setApiKey((e.target as HTMLInputElement).value)}
-        />
-        <p class="hint">
-          {initial?.api_key_set ? t('settings.apiKeyKeep') : t('settings.apiKeyHelp')}
-        </p>
-      </div>
+      {!provider.no_auth && (
+        <div class="field-group">
+          <label for="onboarding-api-key">{t('settings.apiKey')}</label>
+          <input
+            id="onboarding-api-key"
+            class="input mono"
+            type="password"
+            autocomplete="off"
+            placeholder={provider.key_saved ? t('models.keyReuseHint') : 'sk-…'}
+            value={apiKey}
+            onInput={(e) => setApiKey((e.target as HTMLInputElement).value)}
+          />
+          {provider.key_saved && <p class="hint">{t('models.keyReuseHelp')}</p>}
+        </div>
+      )}
+
+      {provider.id === 'custom' && (
+        <div class="field-group">
+          <label for="onboarding-max-tokens">{t('settings.maxTokens')}</label>
+          <input
+            id="onboarding-max-tokens"
+            class="input"
+            type="number"
+            min={0}
+            value={maxTokens || ''}
+            onInput={(e) => setMaxTokens(Number((e.target as HTMLInputElement).value) || 0)}
+          />
+        </div>
+      )}
 
       {testResult && (
         <p class={`test-result ${testResult.ok ? 'ok' : 'bad'}`}>
@@ -459,11 +588,11 @@ function ModelStep(props: { onSaved(): void }) {
         <button type="button" class="btn" onClick={props.onSaved}>
           {t('onboarding.skip')}
         </button>
-        <button type="button" class="btn" disabled={testing || !ready} onClick={test}>
-          {testing ? t('settings.testing') : t('settings.test')}
+        <button type="button" class="btn" disabled={busy !== '' || !ready} onClick={test}>
+          {busy === 'test' ? t('settings.testing') : t('settings.test')}
         </button>
-        <button type="submit" class="btn primary" disabled={!ready || saving}>
-          {saving ? t('common.save') + '…' : t('onboarding.finish')}
+        <button type="submit" class="btn primary" disabled={!ready || busy === 'save'}>
+          {busy === 'save' ? t('common.save') + '…' : t('onboarding.finish')}
         </button>
       </div>
     </form>

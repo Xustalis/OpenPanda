@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/cliui"
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
@@ -33,12 +34,13 @@ const watchBoardCap = 200
 
 // watchQueue renders the task board in place until ctx ends or SIGINT.
 // state/project filter as in the one-shot listing.
-func watchQueue(ctx context.Context, store *core.TaskStore, state, project string) {
-	watchQueueTo(ctx, store, state, project, i18n.Detect(), os.Stdout, true)
+func watchQueue(ctx context.Context, cfg *config.Config, store *core.TaskStore, state, project string) {
+	watchQueueTo(ctx, cfg, store, state, project, i18n.Detect(), os.Stdout, true)
 }
 
 func watchQueueTo(
 	ctx context.Context,
+	cfg *config.Config,
 	store *core.TaskStore,
 	state, project string,
 	loc i18n.Locale,
@@ -100,10 +102,21 @@ func watchQueueTo(
 			// Same column plan and same row renderer as the one-shot listing, so
 			// the two boards stay one board. The indent is the board's own, and
 			// it is charged against the width so a row still fits the terminal.
-			cols := planTaskTable(loc, rows, listWidth()-2)
+			cols := planTaskTableRefs(loc, rows, listWidth()-2, taskRefsFor(ctx, store, rows))
 			_, _ = fmt.Fprint(out, "  "+taskTableHeader(loc, cols)+"\r\n")
 			for _, t := range rows {
 				_, _ = fmt.Fprint(out, "  "+taskTableRow(t, cols)+"\r\n")
+			}
+			// The board's own silent stall: queued rows with no consumer
+			// behind them. The probe reruns each repaint so a daemon that
+			// just came up clears the line on the next tick.
+			for _, t := range rows {
+				if t.State == core.StateQueued || t.State == core.StateSubmitted {
+					if !queueConsumerAlive(cfg) {
+						_, _ = fmt.Fprint(out, "  "+pal().Muted(i18n.T(loc, "cli.queue.noConsumer"))+"\r\n")
+					}
+					break
+				}
 			}
 			_, _ = fmt.Fprint(out, "\x1b[J") // clear stale rows below (shrunk lists)
 		}

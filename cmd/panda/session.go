@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/cliui"
@@ -63,7 +64,7 @@ func runSession(args []string) {
 	case "help", "-h", "--help":
 		sessionUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "panda: unknown session verb %q\n", verb)
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamed", "kind", "session verb", "name", verb))
 		sessionUsage()
 		os.Exit(2)
 	}
@@ -75,7 +76,8 @@ func sessionUsage() {
 	fmt.Fprintln(os.Stderr, "  new [--title T] [--project P] create a session (carves a worktree in a repo)")
 	fmt.Fprintln(os.Stderr, "  show <id>                     show one session and its turns")
 	fmt.Fprintln(os.Stderr, "  mv <id> --project P           move session to project (empty to disassociate)")
-	fmt.Fprintln(os.Stderr, "  rm <id>                       remove the session and its worktree")
+	fmt.Fprintln(os.Stderr, "  rm <id> [id …]                remove session(s) and their worktrees (ids may be unique prefixes)")
+	fmt.Fprintln(os.Stderr, "  rm --project P|--older-than D|--all [--yes]   batch-remove by filter (asks first)")
 	fmt.Fprintln(os.Stderr, "  fork <id> [--at N]            fork the session at turn N into a new thread")
 	fmt.Fprintln(os.Stderr, "  tree [id]                     show the conversation tree (or one session's family)")
 	fmt.Fprintln(os.Stderr, "  ask <id> <prompt> [--authorize] [--card PATH]   continue a session")
@@ -208,7 +210,7 @@ func runSessionShow(args []string) {
 	sess, err := sessions.NewStore(sessionStoreRoot(cfg)).Get(id)
 	if err != nil {
 		if errors.Is(err, sessions.ErrNotFound) {
-			fmt.Fprintf(os.Stderr, "panda: no such session: %s\n", id)
+			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.noSuch.session", "id", id))
 			os.Exit(1)
 		}
 		fatal("load session", err)
@@ -285,30 +287,210 @@ func runSessionMove(args []string) {
 	}
 }
 
+// runSessionRm removes sessions. Two forms:
+//
+//	panda session rm <id> [id …]                              explicit ids — like rm(1), no prompt
+//	panda session rm --project P | --older-than D | --all [--yes]
+//	                                                          filtered — confirms first
+//
+// Ids accept unique prefixes (same rule as task refs): the listing column
+// shows the full 16-char id, but typing the first few is enough when it names
+// one session. Filtered deletion without --yes on a non-TTY exits 2 — the
+// same rule `queue clear` follows, because a script that cannot answer the
+// prompt must say so rather than wipe silently.
 func runSessionRm(args []string) {
 	fs := flag.NewFlagSet("session rm", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
-	id := strings.TrimSpace(fs.Arg(0))
-	if id == "" {
-		fmt.Fprintln(os.Stderr, "usage: panda session rm <id>")
-		os.Exit(2)
-	}
+	yes := fs.Bool("yes", false, "skip the confirmation prompt (required for filtered deletes off a TTY)")
+	projectName := fs.String("project", "", "delete every session of this project")
+	olderThan := fs.String("older-than", "", "delete sessions idle longer than this (e.g. 30d, 2w, 12h)")
+	all := fs.Bool("all", false, "delete every session")
+	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "project": true, "older-than": true}))
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
 	}
-	if wt := openWorktreesBestEffort(cfg.Storage.WorkPath); wt != nil {
-		_ = wt.Remove(context.Background(), id)
-	}
-	if err := sessions.NewStore(sessionStoreRoot(cfg)).Delete(id); err != nil {
-		if errors.Is(err, sessions.ErrNotFound) {
-			fmt.Fprintf(os.Stderr, "panda: no such session: %s\n", id)
+	store := sessions.NewStore(sessionStoreRoot(cfg))
+	loc := i18n.Detect()
+	ctx := context.Background()
+	wt := openWorktreesBestEffort(cfg.Storage.WorkPath)
+
+	filtered := *all || *projectName != "" || *olderThan != ""
+	if !filtered {
+		refs := fs.Args()
+		if len(refs) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: panda session rm <id> [id …] | --project P | --older-than D | --all [--yes]")
+			os.Exit(2)
+		}
+		deleted, failed := 0, 0
+		for _, ref := range refs {
+			id, err := rmOneSession(ctx, store, wt, ref)
+			if err != nil {
+				failed++
+				printSessionRmErr(loc, ref, err)
+				continue
+			}
+			deleted++
+			fmt.Println(i18n.Tf(loc, "cli.session.rm.one", "id", id))
+		}
+		if jsonOutput {
+			emitJSON(map[string]any{"deleted": deleted, "failed": failed})
+		}
+		if failed > 0 {
 			os.Exit(1)
 		}
-		fatal("delete session", err)
+		return
 	}
-	fmt.Printf("%s deleted\n", id)
+
+	// Filtered form: gather candidates first so the confirmation names a
+	// number, and "nothing matched" is a quiet no-op rather than a prompt.
+	list, err := store.List()
+	if err != nil {
+		fatal("list sessions", err)
+	}
+	var cutoff time.Time
+	if *olderThan != "" {
+		d, err := parseOlderThan(*olderThan)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(loc, "cli.session.rm.olderBad", "val", *olderThan))
+			os.Exit(2)
+		}
+		cutoff = time.Now().Add(-d)
+	}
+	var candidates []*sessions.Session
+	for _, s := range list {
+		if *projectName != "" && s.Project != *projectName {
+			continue
+		}
+		if !cutoff.IsZero() && !s.UpdatedAt.Before(cutoff) {
+			continue
+		}
+		candidates = append(candidates, s)
+	}
+	if len(candidates) == 0 {
+		fmt.Println(i18n.T(loc, "cli.session.rm.none"))
+		return
+	}
+	if !*yes {
+		if !stdinIsTTY() {
+			fmt.Fprintln(os.Stderr, "panda session rm: "+i18n.T(loc, "cli.session.rm.nonTTY"))
+			os.Exit(2)
+		}
+		fmt.Print(i18n.Tf(loc, "cli.session.rm.confirm", "n", strconv.Itoa(len(candidates))))
+		var ans string
+		if _, err := fmt.Scanln(&ans); err != nil && ans == "" {
+			return // empty line = the default "no"
+		}
+		if a := strings.ToLower(strings.TrimSpace(ans)); a != "y" && a != "yes" {
+			return
+		}
+	}
+
+	deleted, failed := 0, 0
+	for _, s := range candidates {
+		if _, err := rmOneSession(ctx, store, wt, s.ID); err != nil {
+			failed++
+			printSessionRmErr(loc, s.ID, err)
+			continue
+		}
+		deleted++
+	}
+	if jsonOutput {
+		emitJSON(map[string]any{"deleted": deleted, "failed": failed})
+		return
+	}
+	fmt.Println(i18n.Tf(loc, "cli.session.rm.done", "n", strconv.Itoa(deleted)))
+	if failed > 0 {
+		os.Exit(1)
+	}
+}
+
+// rmOneSession resolves ref (exact id or unique prefix), removes its worktree
+// best-effort, then deletes the session file. The returned string is the
+// resolved full id for reporting.
+func rmOneSession(ctx context.Context, store *sessions.Store, wt *sessions.Worktrees, ref string) (string, error) {
+	id, err := resolveSessionRef(store, ref)
+	if err != nil {
+		return "", err
+	}
+	if wt != nil {
+		_ = wt.Remove(ctx, id)
+	}
+	if err := store.Delete(id); err != nil {
+		return id, err
+	}
+	return id, nil
+}
+
+// resolveSessionRef maps a user-typed ref to a session id: exact match wins,
+// then unique prefix. Zero matches is ErrNotFound; several is
+// errSessionAmbiguous carrying the candidate list for the message.
+var errSessionAmbiguous = errors.New("sessions: ambiguous ref")
+
+type sessionAmbiguousError struct{ candidates []string }
+
+func (e sessionAmbiguousError) Error() string { return errSessionAmbiguous.Error() }
+
+func resolveSessionRef(store *sessions.Store, ref string) (string, error) {
+	if _, err := store.Get(ref); err == nil {
+		return ref, nil
+	}
+	list, err := store.List()
+	if err != nil {
+		return "", err
+	}
+	var matches []string
+	for _, s := range list {
+		if strings.HasPrefix(s.ID, ref) {
+			matches = append(matches, s.ID)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", sessions.ErrNotFound
+	case 1:
+		return matches[0], nil
+	default:
+		return "", sessionAmbiguousError{candidates: matches}
+	}
+}
+
+// printSessionRmErr reports one failed ref in a batch — the row names what
+// was typed so a mixed batch keeps its failures attributable.
+func printSessionRmErr(loc i18n.Locale, ref string, err error) {
+	var amb sessionAmbiguousError
+	switch {
+	case errors.As(err, &amb):
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(loc, "cli.session.rm.ambiguous",
+			"id", ref, "n", strconv.Itoa(len(amb.candidates))))
+	case errors.Is(err, sessions.ErrNotFound):
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(loc, "cli.noSuch.session", "id", ref))
+	default:
+		fmt.Fprintf(os.Stderr, "panda: %s: %v\n", ref, err)
+	}
+}
+
+// parseOlderThan accepts what time.ParseDuration does plus day/week suffixes
+// ("30d", "2w") — the units people actually type for "how old".
+func parseOlderThan(s string) (time.Duration, error) {
+	s = strings.TrimSpace(strings.ToLower(s))
+	for _, su := range []struct {
+		suffix string
+		mult   time.Duration
+	}{{"d", 24 * time.Hour}, {"w", 7 * 24 * time.Hour}} {
+		if strings.HasSuffix(s, su.suffix) {
+			n, err := strconv.Atoi(strings.TrimSuffix(s, su.suffix))
+			if err != nil || n <= 0 {
+				return 0, fmt.Errorf("invalid duration %q", s)
+			}
+			return time.Duration(n) * su.mult, nil
+		}
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("invalid duration %q", s)
+	}
+	return d, nil
 }
 
 // runSessionFork splits a session into two threads at a turn boundary. The
@@ -334,7 +516,7 @@ func runSessionFork(args []string) {
 	parent, err := store.Get(id)
 	if err != nil {
 		if errors.Is(err, sessions.ErrNotFound) {
-			fmt.Fprintf(os.Stderr, "panda: no such session: %s\n", id)
+			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.noSuch.session", "id", id))
 			os.Exit(1)
 		}
 		fatal("load session", err)
@@ -409,7 +591,7 @@ func runSessionTree(args []string) {
 	if scope != "" {
 		s := byID[scope]
 		if s == nil {
-			fmt.Fprintf(os.Stderr, "panda: no such session: %s\n", scope)
+			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.noSuch.session", "id", scope))
 			os.Exit(1)
 		}
 		for s.ParentID != "" && byID[s.ParentID] != nil {
@@ -494,7 +676,7 @@ func runSessionAsk(args []string) {
 	sess, err := store.Get(id)
 	if err != nil {
 		if errors.Is(err, sessions.ErrNotFound) {
-			fmt.Fprintf(os.Stderr, "panda: no such session: %s\n", id)
+			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.noSuch.session", "id", id))
 			os.Exit(1)
 		}
 		fatal("load session", err)
@@ -582,7 +764,12 @@ func runSessionAsk(args []string) {
 				fmt.Println()
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
+			// Failure evidence only: a parked or cancelled row carries
+			// OK=false with no stderr, and "exit 0: " there would report a
+			// failure that never happened.
+			if out.ExitCode != 0 || strings.TrimSpace(out.Stderr) != "" {
+				fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
+			}
 			os.Exit(1)
 		}
 	case "plan":

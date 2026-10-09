@@ -41,14 +41,26 @@ func runInit(args []string) {
 		"zero prompts: take every detected/default value; the model section is baked in from OPENPANDA_MODEL_API_KEY / OPENPANDA_MODEL when set, otherwise left for the web settings page")
 	nonInteractive := fs.Bool("non-interactive", false,
 		"CI: never wait for input — every would-be prompt takes its default (model setup skipped); auto-enabled when stdin is not a terminal. Unlike --defaults, env model vars are NOT written into the file (the daemon still reads them live at startup)")
+	force := fs.Bool("force", false,
+		"rewrite an existing config: back up to <path>.bak first, keep your settings, re-detect node name/resource class/kind")
 	fs.Parse(args)
 
 	loc := i18n.Detect()
 	target := resolveInitConfigPath(*configPath)
 
+	// --force snapshots the old file before anything else runs: whatever the
+	// rest of init does, the user's previous settings survive on disk.
+	var oldRaw []byte
 	if exists(target) {
-		fmt.Println(i18n.Tf(loc, "init.exists", "path", target))
-		os.Exit(1)
+		if !*force {
+			fmt.Println(i18n.Tf(loc, "init.exists", "path", target))
+			os.Exit(1)
+		}
+		var err error
+		oldRaw, err = os.ReadFile(target)
+		if err != nil {
+			fatal("read existing config", err)
+		}
 	}
 
 	// The hardware scan replaces the node prompts: name from the hostname,
@@ -103,6 +115,25 @@ func runInit(args []string) {
 		fmt.Println(i18n.T(loc, "init.model.skipped"))
 	}
 
+	// --force merge: the previous file is unmarshalled over the fresh
+	// defaults, so every setting it spells out survives (network, peers,
+	// model, UI, …) while keys it never had keep this version's defaults.
+	// The machine-observed node fields are then re-asserted — re-detecting
+	// them is the point of re-running init — and a freshly answered model
+	// question wins over the preserved section.
+	if oldRaw != nil {
+		bak := target + ".bak"
+		if err := os.WriteFile(bak, oldRaw, 0o600); err != nil {
+			fatal("backup config", err)
+		}
+		fmt.Println(i18n.Tf(loc, "init.force.backup", "path", bak))
+		if mergePreservedConfig(oldRaw, def, modelConfigured) {
+			fmt.Println(i18n.T(loc, "init.force.kept"))
+		} else {
+			fmt.Println(i18n.T(loc, "init.force.unmergeable"))
+		}
+	}
+
 	// Belt and braces: never write a config the node would refuse to load.
 	if err := def.Validate(); err != nil {
 		fatal("validate config", err)
@@ -118,6 +149,10 @@ func runInit(args []string) {
 	if err := os.WriteFile(target, data, 0o600); err != nil {
 		fatal("write config", err)
 	}
+	// WriteFile's perm applies only on create; a --force rewrite truncates an
+	// existing file and inherits its mode, so a 0644 hand-edited config would
+	// keep leaking the secret inside to group/other readers.
+	_ = os.Chmod(target, 0o600)
 	fmt.Println(i18n.Tf(loc, "init.config.written", "path", target))
 
 	// Capability card next to the config unless the user named one.
@@ -129,12 +164,48 @@ func runInit(args []string) {
 	if err != nil {
 		fatal("render card", err)
 	}
+	// The card is user-edited too — --force backs it up before overwriting,
+	// same contract as the config.
+	if *force && exists(cardOut) {
+		if old, err := os.ReadFile(cardOut); err == nil {
+			bak := cardOut + ".bak"
+			if werr := os.WriteFile(bak, old, 0o644); werr == nil {
+				fmt.Println(i18n.Tf(loc, "init.force.cardbak", "path", bak))
+			}
+		}
+	}
 	if err := os.WriteFile(cardOut, cardData, 0o644); err != nil {
 		fatal("write card", err)
 	}
 	fmt.Println(i18n.Tf(loc, "init.card.written", "path", cardOut))
 
 	fmt.Println(i18n.T(loc, "init.next"))
+}
+
+// mergePreservedConfig folds a previous config file into the freshly-built
+// one for `init --force`: the old bytes unmarshal over the fresh defaults,
+// so every key the old file spelled out survives (network, peers, model, UI,
+// …) while keys it never had keep this version's defaults. The machine-
+// observed node fields are re-asserted afterwards — re-detecting them is the
+// point of re-running init — and a freshly answered model question wins over
+// the preserved section. Reports false when the old file won't parse (the
+// caller then keeps the fresh config; the backup is already on disk).
+func mergePreservedConfig(oldRaw []byte, def *config.Config, modelConfigured bool) bool {
+	merged := *def
+	if err := yaml.Unmarshal(oldRaw, &merged); err != nil {
+		return false
+	}
+	merged.Node.Name = def.Node.Name
+	merged.Node.ResourceClass = def.Node.ResourceClass
+	merged.Node.Kind = def.Node.Kind
+	if merged.Node.Identity == "" {
+		merged.Node.Identity = def.Node.Identity
+	}
+	if modelConfigured {
+		merged.Model = def.Model
+	}
+	*def = merged
+	return true
 }
 
 // askYes prints question with a [y/N] hint and reports whether the answer
