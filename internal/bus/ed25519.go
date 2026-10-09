@@ -83,6 +83,32 @@ func VerifyAuthorization(pubKey ed25519.PublicKey, taskID string, authorized boo
 	return ed25519.Verify(pubKey, AuthMsgBytes(taskID, authorized, ts), sig)
 }
 
+// BeaconMsgBytes constructs the canonical byte slice a LAN-discovery beacon
+// signs: everything the datagram asserts, so a verified signature proves the
+// broadcaster controls the advertised key AND chose this id/address itself.
+// The beacon is still only a hint — the signature's job is narrower: stop a
+// LAN peer from broadcasting a victim's fingerprint next to its own address.
+func BeaconMsgBytes(id, addr, ver, pub string, ts int64) []byte {
+	return []byte("panda-beacon:" + id + ":" + addr + ":" + ver + ":" + pub + ":" + strconv.FormatInt(ts, 10))
+}
+
+// SignBeacon mints the beacon's Ed25519 signature over its asserted fields.
+func SignBeacon(privKey ed25519.PrivateKey, id, addr, ver, pub string, ts int64) string {
+	return hex.EncodeToString(ed25519.Sign(privKey, BeaconMsgBytes(id, addr, ver, pub, ts)))
+}
+
+// VerifyBeaconSig checks a beacon signature against the key the beacon itself
+// advertises — self-signed by design, since discovery predates pairing and no
+// trusted key directory exists yet. Verification proves key control, not mesh
+// membership: what it buys is an unfakeable fingerprint, not admission.
+func VerifyBeaconSig(pubKey ed25519.PublicKey, id, addr, ver, pub string, ts int64, sigHex string) bool {
+	sig, err := hex.DecodeString(sigHex)
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return false
+	}
+	return ed25519.Verify(pubKey, BeaconMsgBytes(id, addr, ver, pub, ts), sig)
+}
+
 // ArtifactGrantMsg constructs the canonical byte slice the plan orchestrator
 // signs to let a stage's executor pull an input artifact straight from the
 // node that produced it (direct stage handoff). Binding the plan, the

@@ -2,31 +2,45 @@
 
 package core
 
-// LAN discovery (roadmap Track 1): a deliberately-unauthenticated UDP
-// broadcast beacon — "a panda node lives at this address" — plus the pending
-// list it feeds. The beacon is a HINT, never proof: it carries no secret, no
-// signature-verified claim (only the node's public key, for fingerprint
-// display), and it cannot admit anyone. Admission is unchanged: the operator
-// runs `panda nodes add`/`pair`, and the first authenticated hello (shared
-// secret + Ed25519) is still what proves the peer.
+// LAN discovery (roadmap Track 1): a UDP broadcast beacon — "a panda node
+// lives at this address" — plus the pending list it feeds. The beacon is a
+// HINT, never proof of membership: it carries no secret and it cannot admit
+// anyone. Admission is unchanged: the operator runs `panda nodes add`/`pair`,
+// and the first authenticated hello (shared secret + Ed25519) is still what
+// proves the peer.
+//
+// The beacon IS Ed25519-signed over its asserted fields (id, addr, ver, pub,
+// ts) — not to prove membership (a stranger can mint a keypair too) but to
+// pin the advertised fingerprint to the advertised address: without the
+// signature a LAN peer could broadcast a victim's node id + pubkey next to
+// its own address, show the operator a familiar fingerprint, and harvest the
+// signed hello our dial emits (replayable at the real node inside its
+// freshness window). A row whose signature verifies is recorded as verified;
+// a v1 beacon with no signature still lands, flagged unsigned; a beacon
+// carrying a BROKEN signature is tampering and is dropped outright — the
+// same fail-closed posture the hello applies to a half-present identity.
 //
 // Design constraints this file keeps:
 //   - nothing secret in a datagram: shared_secret NEVER leaves the wire format
 //   - nothing trusted from a datagram: rows land in pending_nodes, not
 //     employee_cache; a forged beacon can only litter the hint list, and a
-//     TTL sweep clears litter on its own
+//     TTL sweep clears litter on its own. Verified rows evict unverified
+//     ones first under the cap, so a flood of unsigned beacons displaces
+//     noise before signal
 //   - nothing surprising: a node on loopback-only announces nothing (nothing
 //     can reach it), and a node without a shared secret cannot pair anyway,
 //     so it does not broadcast either
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"net"
 	"strconv"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/version"
 )
@@ -57,25 +71,38 @@ const (
 
 // Beacon is the discovery datagram's payload. Every field is self-asserted:
 // Pub exists so the pending list can show a fingerprint the operator can
-// compare BEFORE pairing, not so the receiver can trust it.
+// compare BEFORE pairing, not so the receiver can trust it. Sig, when
+// present, is the broadcaster's Ed25519 signature over the asserted fields —
+// it makes the fingerprint unfakeable without claiming membership (the
+// signing key is self-asserted too: anyone can mint one, nobody can mint
+// someone else's). TS is signed display metadata, not a freshness gate —
+// nodes without reliable clocks must not lose discovery over it.
 type Beacon struct {
 	Panda string `json:"panda"` // beaconMagic
 	ID    string `json:"id"`
 	Addr  string `json:"addr"` // WS listen addr as configured (host may be empty)
 	Ver   string `json:"ver"`
-	Pub   string `json:"pub"` // Ed25519 pub hex — display hint, not auth
+	Pub   string `json:"pub"`           // Ed25519 pub hex — display hint, not auth
+	TS    int64  `json:"ts,omitempty"`  // announce time; bound into Sig
+	Sig   string `json:"sig,omitempty"` // Ed25519 over id:addr:ver:pub:ts
 }
 
 // marshalBeacon renders the datagram. The advertised addr keeps whatever
 // host the operator configured — including an empty one: the receiver
-// substitutes the source IP when the host is unspecified or loopback.
-func marshalBeacon(id, listenAddr string, pub []byte) []byte {
+// substitutes the source IP when the host is unspecified or loopback. A nil
+// priv emits the unsigned v1 form (a node whose identity key could not
+// materialize still announces — it just earns no verified mark).
+func marshalBeacon(id, listenAddr string, pub ed25519.PublicKey, priv ed25519.PrivateKey) []byte {
 	b := Beacon{
 		Panda: beaconMagic,
 		ID:    id,
 		Addr:  listenAddr,
 		Ver:   version.Version,
 		Pub:   hex.EncodeToString(pub),
+	}
+	if priv != nil {
+		b.TS = time.Now().Unix()
+		b.Sig = bus.SignBeacon(priv, b.ID, b.Addr, b.Ver, b.Pub, b.TS)
 	}
 	raw, err := json.Marshal(b)
 	if err != nil || len(raw) > beaconMaxBytes {
@@ -84,10 +111,13 @@ func marshalBeacon(id, listenAddr string, pub []byte) []byte {
 	return raw
 }
 
-// parseBeacon validates a datagram. It refuses anything that is not a
-// well-formed small beacon: wrong magic, oversized id, a port that is not a
-// port, a pubkey that is not hex. A refused datagram is dropped silently —
-// LAN noise is not a log stream's business.
+// parseBeacon validates a datagram's SHAPE. It refuses anything that is not
+// a well-formed small beacon: wrong magic, oversized id, a port that is not
+// a port, a pubkey that is not hex — and a signature field that is not a
+// 64-byte hex blob, or that arrives with no key to verify against. Shape is
+// all this checks; beaconVerified answers whether the sig actually signs the
+// fields. A refused datagram is dropped silently — LAN noise is not a log
+// stream's business.
 func parseBeacon(raw []byte) (Beacon, bool) {
 	var b Beacon
 	if len(raw) == 0 || len(raw) > beaconMaxBytes {
@@ -96,7 +126,7 @@ func parseBeacon(raw []byte) (Beacon, bool) {
 	if err := json.Unmarshal(raw, &b); err != nil || b.Panda != beaconMagic {
 		return b, false
 	}
-	if b.ID == "" || len(b.ID) > 128 || len(b.Addr) > 128 || len(b.Ver) > 32 || len(b.Pub) > 128 {
+	if b.ID == "" || len(b.ID) > 128 || len(b.Addr) > 128 || len(b.Ver) > 32 || len(b.Pub) > 128 || len(b.Sig) > 160 {
 		return b, false
 	}
 	host, port, err := net.SplitHostPort(b.Addr)
@@ -107,11 +137,35 @@ func parseBeacon(raw []byte) (Beacon, bool) {
 		return b, false
 	}
 	if b.Pub != "" {
-		if dec, err := hex.DecodeString(b.Pub); err != nil || len(dec) != 32 {
+		if dec, err := hex.DecodeString(b.Pub); err != nil || len(dec) != ed25519.PublicKeySize {
+			return b, false
+		}
+	}
+	if b.Sig != "" {
+		// A signature with no advertised key signs nothing — malformed, and
+		// indistinguishable from a tamper probe. Fail closed.
+		if b.Pub == "" {
+			return b, false
+		}
+		if dec, err := hex.DecodeString(b.Sig); err != nil || len(dec) != ed25519.SignatureSize {
 			return b, false
 		}
 	}
 	return b, true
+}
+
+// beaconVerified reports whether the beacon's signature genuinely signs its
+// asserted fields under its advertised key. Unsigned beacons are not
+// "unverified" in the failure sense — they are the v1 form — so the caller
+// distinguishes three states: unsigned (record, flagged), signed-and-valid
+// (record, marked verified), signed-and-broken (drop: a well-formed key and
+// a bad signature is tampering, never a keyless node that grew a sig field).
+func beaconVerified(b Beacon) bool {
+	pub, err := hex.DecodeString(b.Pub)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return false
+	}
+	return bus.VerifyBeaconSig(ed25519.PublicKey(pub), b.ID, b.Addr, b.Ver, b.Pub, b.TS, b.Sig)
 }
 
 // resolveBeaconAddr fills in the host the sender could not know: an empty,
@@ -198,9 +252,9 @@ func (c *Core) RunDiscovery(ctx context.Context, bindAddr, advertiseAddr string)
 // onBeacon drops it, which doubles as a live smoke test that the wire
 // works.
 func (c *Core) discoveryAnnounceLoop(ctx context.Context, conn *net.UDPConn, bcast *net.UDPAddr, advertiseAddr string) {
-	pub, _, _ := c.nodeKeyPair()
+	pub, priv, _ := c.nodeKeyPair()
 	tick := func() {
-		raw := marshalBeacon(c.nodeID, advertiseAddr, pub)
+		raw := marshalBeacon(c.nodeID, advertiseAddr, pub, priv)
 		if raw == nil {
 			return
 		}
@@ -222,12 +276,21 @@ func (c *Core) discoveryAnnounceLoop(ctx context.Context, conn *net.UDPConn, bca
 }
 
 // onBeacon validates one datagram and upserts the hint. Skips: self (our own
-// broadcast echoes back), malformed datagrams, and ids already in the
-// directory — a joined node is fleet, not pending.
+// broadcast echoes back), malformed datagrams, beacons with a broken
+// signature, and ids already in the directory — a joined node is fleet, not
+// pending.
 func (c *Core) onBeacon(ctx context.Context, raw []byte, src *net.UDPAddr) {
 	b, ok := parseBeacon(raw)
 	if !ok || b.ID == c.nodeID {
 		return
+	}
+	verified := false
+	if b.Sig != "" {
+		if !beaconVerified(b) {
+			c.logger.Debug("discovery: beacon with invalid signature dropped", "id", b.ID, "from", src.IP)
+			return
+		}
+		verified = true
 	}
 	var joined int
 	_ = c.db.QueryRowContext(ctx, `SELECT 1 FROM employee_cache WHERE id=?`, b.ID).Scan(&joined)
@@ -237,16 +300,20 @@ func (c *Core) onBeacon(ctx context.Context, raw []byte, src *net.UDPAddr) {
 	now := time.Now().Unix()
 	addr := resolveBeaconAddr(b, src.IP)
 	var known, total int
-	_ = c.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM pending_nodes WHERE id=?`, b.ID).Scan(&known)
-	_ = c.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM pending_nodes`).Scan(&total)
+	// One roundtrip for both lookups — this runs per datagram on the LAN
+	// socket, and every skipped query is WAL work saved.
+	_ = c.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM pending_nodes WHERE id=?), (SELECT COUNT(1) FROM pending_nodes)`,
+		b.ID).Scan(&known, &total)
 	if known == 0 && total >= pendingCap {
-		// Cap reached: evict the stalest row before this insert. Under a
-		// forged-beacon flood the list thrashes — bounded noise, not growth.
+		// Cap reached: make room before this insert. Unverified rows evict
+		// first, stalest among them — an unsigned-beacon flood displaces
+		// other noise before it displaces a fingerprint a signature proved.
 		_, _ = c.db.ExecContext(ctx, `DELETE FROM pending_nodes WHERE id = (
-			SELECT id FROM pending_nodes ORDER BY last_seen ASC LIMIT 1)`)
+			SELECT id FROM pending_nodes ORDER BY verified ASC, last_seen ASC LIMIT 1)`)
 	}
 	if err := ledger.UpsertPending(c.db, ledger.PendingNode{
-		ID: b.ID, Addr: addr, PubKey: b.Pub, Ver: b.Ver,
+		ID: b.ID, Addr: addr, PubKey: b.Pub, Ver: b.Ver, Verified: verified,
 		FirstSeen: now, LastSeen: now,
 	}); err != nil {
 		c.logger.Warn("discovery: record pending", "id", b.ID, "err", err)

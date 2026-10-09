@@ -63,6 +63,20 @@ var migrations = []Migration{
 	{Version: 36, Name: "rekey_outboxes_stable_id", Apply: migrateV36},
 	{Version: 37, Name: "add_audit_log_sig", Apply: migrateV37},
 	{Version: 38, Name: "add_resume_outbox", Apply: migrateV38},
+	{Version: 39, Name: "add_pending_verified", Apply: migrateV39},
+}
+
+// migrateV39 adds pending_nodes.verified: whether the discovery beacon's
+// Ed25519 signature proved the advertised fingerprint belongs to the
+// advertiser. Unsigned (v1-format) beacons stay listable — they are the
+// backward-compatible form — but they never earn the mark, and the pending
+// cap evicts them before signed rows.
+func migrateV39(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "pending_nodes")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "pending_nodes", "verified", "INTEGER NOT NULL DEFAULT 0")
 }
 
 // migrateV38 adds resume_outbox: the delivery guarantee for task_resume

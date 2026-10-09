@@ -5,6 +5,7 @@ package core
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"net"
 	"strconv"
 	"strings"
@@ -19,7 +20,7 @@ import (
 // fields — the wire contract sender and listener share.
 func TestBeaconCodecRoundTrip(t *testing.T) {
 	pub, _, _ := bus.GenerateNodeKey()
-	raw := marshalBeacon("node-a", ":7836", pub)
+	raw := marshalBeacon("node-a", ":7836", pub, nil)
 	if raw == nil {
 		t.Fatal("marshalBeacon returned nil")
 	}
@@ -86,7 +87,7 @@ func TestOnBeaconRecordsPending(t *testing.T) {
 
 	pub, _, _ := bus.GenerateNodeKey()
 	src := &net.UDPAddr{IP: net.ParseIP("192.168.1.60"), Port: 50000}
-	raw := marshalBeacon("stranger", ":7836", pub)
+	raw := marshalBeacon("stranger", ":7836", pub, nil)
 	c.onBeacon(ctx, raw, src)
 
 	pending, err := ledger.ListPending(c.db, time.Minute)
@@ -102,7 +103,7 @@ func TestOnBeaconRecordsPending(t *testing.T) {
 	}
 
 	// Self beacon is ignored.
-	c.onBeacon(ctx, marshalBeacon("self", ":7836", pub), src)
+	c.onBeacon(ctx, marshalBeacon("self", ":7836", pub, nil), src)
 	// A malformed datagram adds nothing.
 	c.onBeacon(ctx, []byte(`{"panda":"panda-beacon/1","id":"bogus"}`), src)
 	// A node already in the directory is fleet, not pending.
@@ -124,6 +125,101 @@ func TestOnBeaconRecordsPending(t *testing.T) {
 	}
 }
 
+// TestSignedBeaconVerified: a beacon carrying a genuine Ed25519 signature
+// lands with verified set — the fingerprint provably belongs to the
+// broadcaster. A beacon signed by a key it does NOT advertise (the
+// fingerprint-spoof shape: victim's pub, attacker's key) is dropped
+// outright; sig-without-pub is malformed, not unsigned.
+func TestSignedBeaconVerified(t *testing.T) {
+	ctx := context.Background()
+	c := newCore(t, "self", "127.0.0.1:0")
+	src := &net.UDPAddr{IP: net.ParseIP("192.168.1.60"), Port: 50000}
+
+	pub, priv, _ := bus.GenerateNodeKey()
+	c.onBeacon(ctx, marshalBeacon("signed-node", ":7836", pub, priv), src)
+
+	pending, err := ledger.ListPending(c.db, time.Minute)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending after signed beacon: %v len=%d", err, len(pending))
+	}
+	if !pending[0].Verified {
+		t.Fatal("signed beacon was not recorded verified")
+	}
+
+	// The spoof: victim's id + pubkey (the fingerprint an operator would
+	// trust), signed by an unrelated key — i.e. addr lies about who owns the
+	// fingerprint. Verify fails and nothing is recorded.
+	_, evilPriv, _ := bus.GenerateNodeKey()
+	forged := Beacon{
+		Panda: beaconMagic, ID: "victim", Addr: ":7836", Ver: "x",
+		Pub: hex.EncodeToString(pub), TS: time.Now().Unix(),
+	}
+	forged.Sig = bus.SignBeacon(evilPriv, forged.ID, forged.Addr, forged.Ver, forged.Pub, forged.TS)
+	rawForged, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.onBeacon(ctx, rawForged, src)
+
+	// An honestly unsigned beacon still lands — flagged, not refused.
+	c.onBeacon(ctx, marshalBeacon("unsigned-node", ":7836", nil, nil), src)
+
+	pending, _ = ledger.ListPending(c.db, time.Minute)
+	var sawVictim, sawUnsigned bool
+	for _, p := range pending {
+		if p.ID == "victim" {
+			sawVictim = true
+		}
+		if p.ID == "unsigned-node" {
+			sawUnsigned = p.Verified == false
+		}
+	}
+	if sawVictim {
+		t.Fatal("forged-signature beacon was recorded")
+	}
+	if !sawUnsigned {
+		t.Fatal("unsigned beacon missing or wrongly marked verified")
+	}
+
+	// A sig field with no advertised key is malformed, not an unsigned node.
+	sigNoKey := `{"panda":"panda-beacon/1","id":"n","addr":":7836","sig":"` + strings.Repeat("aa", 64) + `"}`
+	if _, ok := parseBeacon([]byte(sigNoKey)); ok {
+		t.Fatal("sig-without-key beacon parsed")
+	}
+}
+
+// TestPendingCapPrefersVerified: at cap, the eviction order is unverified
+// first — a forged-beacon flood (everything it emits is unsigned, since a
+// forged sig is dropped upstream) displaces noise before it displaces a
+// fingerprint a signature actually proved.
+func TestPendingCapPrefersVerified(t *testing.T) {
+	ctx := context.Background()
+	c := newCore(t, "self", "127.0.0.1:0")
+	src := &net.UDPAddr{IP: net.ParseIP("192.168.1.60"), Port: 50000}
+	for i := 0; i < pendingCap; i++ {
+		c.onBeacon(ctx, marshalBeacon("junk-"+strconv.Itoa(i), ":7836", nil, nil), src)
+	}
+	pub, priv, _ := bus.GenerateNodeKey()
+	c.onBeacon(ctx, marshalBeacon("real-node", ":7836", pub, priv), src)
+
+	pending, err := ledger.ListPending(c.db, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) > pendingCap {
+		t.Fatalf("pending grew to %d past cap %d", len(pending), pendingCap)
+	}
+	var found bool
+	for _, p := range pending {
+		if p.ID == "real-node" {
+			found = p.Verified
+		}
+	}
+	if !found {
+		t.Fatal("verified beacon lost to an unsigned flood")
+	}
+}
+
 // TestPendingCap: a LAN flood of forged beacons must degrade to bounded
 // noise, not unbounded growth — the table never exceeds pendingCap and the
 // stalest row is the one evicted.
@@ -132,7 +228,7 @@ func TestPendingCap(t *testing.T) {
 	c := newCore(t, "self", "127.0.0.1:0")
 	src := &net.UDPAddr{IP: net.ParseIP("192.168.1.60"), Port: 50000}
 	for i := 0; i < pendingCap+8; i++ {
-		c.onBeacon(ctx, marshalBeacon("flood-"+strconv.Itoa(i), ":7836", nil), src)
+		c.onBeacon(ctx, marshalBeacon("flood-"+strconv.Itoa(i), ":7836", nil, nil), src)
 	}
 	pending, err := ledger.ListPending(c.db, time.Hour)
 	if err != nil {
@@ -182,7 +278,7 @@ func TestDiscoverySocketEndToEnd(t *testing.T) {
 	}
 	defer sender.Close()
 	pub, _, _ := bus.GenerateNodeKey()
-	if _, err := sender.Write(marshalBeacon("lan-node", ":9999", pub)); err != nil {
+	if _, err := sender.Write(marshalBeacon("lan-node", ":9999", pub, nil)); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 
