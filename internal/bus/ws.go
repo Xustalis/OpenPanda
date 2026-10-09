@@ -444,7 +444,7 @@ func (c *Conn) ResetReadDeadline() error {
 type Server struct {
 	addr     string
 	logger   *slog.Logger
-	onConn   func(*Conn, string) // called with (conn, nodeID) after hello; must block while the conn is alive
+	onConn   func(*Conn) // called once the socket is up; must block while the conn is alive
 	upgrader websocket.Upgrader
 
 	maxConns      int
@@ -456,10 +456,11 @@ type Server struct {
 	helloTimeout time.Duration // per-server hello deadline; tests can shorten it
 }
 
-// NewServer creates a WebSocket server on addr. onConn is invoked once a
-// peer handshakes and identifies itself. onConn must block while the connection
+// NewServer creates a WebSocket server on addr. onConn is invoked once the
+// socket upgrades — the hello handshake that binds a peer identity happens
+// inside it, on the conn's read loop. onConn must block while the connection
 // is alive so the server can accurately enforce connection limits.
-func NewServer(addr string, logger *slog.Logger, onConn func(*Conn, string)) *Server {
+func NewServer(addr string, logger *slog.Logger, onConn func(*Conn)) *Server {
 	return &Server{
 		addr:   addr,
 		logger: logger,
@@ -559,7 +560,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	// loop is logged and closes only that connection — a hostile or buggy peer
 	// must not be able to crash the whole node.
 	guard.Call(s.logger, "bus: conn read loop "+r.RemoteAddr, func() { _ = conn.Close() }, func() {
-		s.onConn(conn, "")
+		s.onConn(conn)
 	})
 	s.dec(ip)
 }

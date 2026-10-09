@@ -1312,7 +1312,7 @@ func (c *Core) Shutdown(ctx context.Context) {
 // Listen starts the WebSocket server and accepts connections. Blocks until
 // ctx is done.
 func (c *Core) Listen(ctx context.Context, addr string) error {
-	srv := bus.NewServer(addr, c.logger, func(conn *bus.Conn, _ string) {
+	srv := bus.NewServer(addr, c.logger, func(conn *bus.Conn) {
 		c.handleInbound(ctx, conn)
 	})
 	srv.SetLimits(c.maxConns, c.maxConnsPerIP)
@@ -1808,6 +1808,12 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	if !bus.VerifyHelloP(c.sharedSecret, p, time.Now()) {
 		c.logger.Warn("rejected hello: bad signature", "peer", p.NodeID)
 		return
+	}
+	if p.Nonce == "" {
+		// Pre-nonce peer: the two-field HMAC verified, but a same-second
+		// reconnect of theirs will collide in helloSeen. Worth knowing which
+		// peers still run the old form before the fallback ever retires.
+		c.logger.Debug("hello from legacy (nonce-less) peer", "peer", p.NodeID)
 	}
 	// The claimed identity must match the envelope's from field; both become the
 	// identity bound to this conn, so later messages may only carry this id.
