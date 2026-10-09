@@ -515,8 +515,12 @@ func (r *repl) cmdNodesAdd(addr string) {
 	// cleartext gate — otherwise the refusal only surfaces as keepalive WARN
 	// lines in the daemon log, the "admitted but never connects" trap.
 	var allowCleartext bool
-	r.readConfig(func(c *config.Config) { allowCleartext = c.Network.AllowCleartext })
-	if core.CleartextDialError(addr, allowCleartext) != nil {
+	var allowFor []string
+	r.readConfig(func(c *config.Config) {
+		allowCleartext = c.Network.AllowCleartext
+		allowFor = c.Network.AllowCleartextFor
+	})
+	if core.CleartextDialError(addr, allowCleartext, allowFor) != nil {
 		r.outln(i18n.Tf(r.loc, "cli.nodes.cleartext.hint", "addr", addr))
 	}
 

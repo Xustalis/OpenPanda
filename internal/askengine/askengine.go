@@ -841,6 +841,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	sched.SetHostStatePaths(hostStatePaths(e.cfg))
 	sched.SetSharedSecret(e.cfg.Network.SharedSecret)
 	sched.SetAllowCleartext(e.cfg.Network.AllowCleartext)
+	sched.SetCleartextAllowlist(e.cfg.Network.AllowCleartextFor)
 	// OS sandbox (sandbox.*): the same contract the daemon installs — the
 	// environment filter always applies, and a configured mode wraps every
 	// subprocess this engine spawns in the platform's confinement with the

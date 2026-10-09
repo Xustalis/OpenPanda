@@ -410,3 +410,28 @@ func TestValidatePeerAddr(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateCleartextScope pins the allow_cleartext_for entry grammar:
+// CIDR, literal IP, or bare hostname — anything URL-shaped or ported is
+// rejected, because the dial-time match runs against a bare host and a
+// malformed entry would silently never match.
+func TestValidateCleartextScope(t *testing.T) {
+	valid := []string{"192.168.0.0/16", "fd00::/8", "10.0.0.5", "worker.lan"}
+	for _, e := range valid {
+		if err := validateCleartextScope(e); err != nil {
+			t.Errorf("validateCleartextScope(%q) = %v, want nil", e, err)
+		}
+	}
+	invalid := []string{
+		"", "   ",
+		"192.168.1.5:7836", // ported — the match sees a bare host
+		"ws://host:7836",   // URL-shaped
+		"192.168.0.0/33",   // malformed CIDR and not a valid host either
+		"*.lan",            // wildcard — exact match only
+	}
+	for _, e := range invalid {
+		if err := validateCleartextScope(e); err == nil {
+			t.Errorf("validateCleartextScope(%q) = nil, want error", e)
+		}
+	}
+}

@@ -453,6 +453,7 @@ func runDaemon(args []string) {
 	}
 	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
 	coreNode.SetAllowCleartext(cfg.Network.AllowCleartext)
+	coreNode.SetCleartextAllowlist(cfg.Network.AllowCleartextFor)
 	// The artifact pool is the data plane: a stage's packed output, named by its
 	// hash, that a later stage on another node pulls over the bus. Without it a
 	// delegated task can only carry a path, which means nothing on the node that

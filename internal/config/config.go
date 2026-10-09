@@ -248,6 +248,12 @@ type NetworkConfig struct {
 	// keeping the flag spelled "cleartext" is deliberate, so opting out is
 	// never confused for a good idea.
 	AllowCleartext bool `yaml:"allow_cleartext"`
+	// AllowCleartextFor is the scoped version of AllowCleartext: CIDRs,
+	// literal IPs or exact hostnames where plaintext ws:// dials are also
+	// permitted — e.g. ["192.168.0.0/16"] opens the home LAN without
+	// disarming the MITM gate for peers anywhere else. Prefer it over the
+	// global flag whenever the plaintext links live on one known segment.
+	AllowCleartextFor []string `yaml:"allow_cleartext_for"`
 	// UDPListen is the farsky datagram-plane bind (encrypted AEAD envelopes +
 	// NAT-punch frames). "" follows listen_addr's port on the same host —
 	// the default keeps punching available whenever the WS listener is
@@ -818,6 +824,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: network.peers[%d] %q: %w", i, peer, err)
 		}
 	}
+	for i, entry := range c.Network.AllowCleartextFor {
+		if err := validateCleartextScope(entry); err != nil {
+			return fmt.Errorf("config: network.allow_cleartext_for[%d] %q: %w", i, entry, err)
+		}
+	}
 	for i, cc := range c.Network.Contacts {
 		if _, err := cc.Resolve(); err != nil {
 			return fmt.Errorf("config: network.contacts[%d]: %w", i, err)
@@ -881,6 +892,27 @@ func ValidatePeerAddr(peer string) error {
 	}
 	if n, err := strconv.Atoi(port); err != nil || n <= 0 || n > 65535 {
 		return fmt.Errorf("port %q is not a number between 1 and 65535", port)
+	}
+	return nil
+}
+
+// validateCleartextScope checks one network.allow_cleartext_for entry. The
+// accepted shapes mirror what the dial-time matcher can apply: a CIDR, a
+// literal IP, or an exact hostname — nothing with a scheme, port, or path,
+// because the match runs against the bare host a peer URL resolves to.
+func validateCleartextScope(entry string) error {
+	e := strings.TrimSpace(entry)
+	if e == "" {
+		return fmt.Errorf("empty entry")
+	}
+	if _, _, err := net.ParseCIDR(e); err == nil {
+		return nil
+	}
+	if net.ParseIP(e) != nil {
+		return nil
+	}
+	if strings.ContainsAny(e, " \t:/*") {
+		return fmt.Errorf("want a CIDR, literal IP, or bare hostname — not %q", e)
 	}
 	return nil
 }

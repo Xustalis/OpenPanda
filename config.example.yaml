@@ -56,11 +56,13 @@ network:
   # stun_servers:
   #   - "stun.l.google.com:19302"
   # ── LAN auto-discovery ──
-  # A small unauthenticated UDP beacon ("panda-beacon/1") announces this node
-  # on the LAN so `panda nodes` on another host can show it under "not
-  # paired" and `panda nodes admit <id>` can peer it. The beacon carries only
-  # id/address/version/pubkey — never credentials; joining still requires the
-  # shared secret and a signed Ed25519 hello.
+  # A small UDP beacon ("panda-beacon/1") announces this node on the LAN so
+  # `panda nodes` on another host can show it under "not paired" and
+  # `panda nodes admit <id>` can peer it. The beacon carries only
+  # id/address/version/pubkey — never credentials — and is Ed25519-signed so
+  # a listed ✓ fingerprint provably belongs to its broadcaster (⚠ marks the
+  # unsigned legacy form). Joining still requires the shared secret and a
+  # signed Ed25519 hello — a beacon admits nothing.
   #   ""      (default) — broadcast+listen on :7837
   #   "off"             — disable discovery entirely
   # discovery_addr: ":7837"
@@ -70,8 +72,12 @@ network:
   # task_delegate. Dials to ws:// are therefore refused unless the host is
   # loopback or Tailscale (100.64.0.0/10, fd7a:115e:a214::/48, *.ts.net) —
   # everything else needs wss:// (terminate TLS in front; the listener does
-  # not speak TLS), a punch:<id> peer (AEAD datagrams), or this escape hatch:
-  #   allow_cleartext: true   # trusted LAN only — restores pre-gate dialing
+  # not speak TLS), a punch:<id> peer (AEAD datagrams), or an explicit opt-in:
+  #   allow_cleartext_for: ["192.168.0.0/16"]  # scoped: just these CIDRs/IPs/hosts
+  #   allow_cleartext: true                    # global: trusted networks only —
+  #                                            # plaintext toward EVERY peer
+  # Prefer allow_cleartext_for on a LAN: it opens your segment without
+  # disarming the MITM check for peers everywhere else.
   peers:                         # manual peers
     # - "worker-1.your-tailnet.ts.net:7836"
     # - "punch:laptop-home"      # node behind NAT — coordinate UDP hole

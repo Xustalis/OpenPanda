@@ -124,7 +124,7 @@ func admitPeerAddr(configPath string, cfg *config.Config, addr string) {
 // a `peer dial failed` line inside keepalive logs — the "admit succeeded but
 // it never connects" trap the LAN-discovery flow runs straight into.
 func warnIfCleartextRefused(w io.Writer, loc i18n.Locale, cfg *config.Config, addr string) {
-	if core.CleartextDialError(addr, cfg.Network.AllowCleartext) != nil {
+	if core.CleartextDialError(addr, cfg.Network.AllowCleartext, cfg.Network.AllowCleartextFor) != nil {
 		fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.cleartext.hint", "addr", addr))
 	}
 }
@@ -312,7 +312,7 @@ func printJoinGuideTo(w io.Writer, loc i18n.Locale, cfg *config.Config) {
 	// address is a literal host outside the cleartext gate's safe set, the
 	// join dead-ends in the joiner's keepalive log unless we say so here.
 	if host, _, err := net.SplitHostPort(cfg.Network.ListenAddr); err == nil && host != "" {
-		if core.CleartextDialError("ws://"+host, false) != nil {
+		if core.CleartextDialError("ws://"+host, cfg.Network.AllowCleartext, cfg.Network.AllowCleartextFor) != nil {
 			fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.cleartext.hint", "addr", "ws://"+cfg.Network.ListenAddr))
 		}
 	}
