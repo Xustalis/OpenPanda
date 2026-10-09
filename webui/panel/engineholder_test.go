@@ -30,23 +30,29 @@ func newHolderConfig(t *testing.T) *config.Config {
 	return cfg
 }
 
-// TestEngineHolderHotLoad covers the zero-config lifecycle of the reloadable
-// engine holder: start with no model (nil engine, degraded mode), configure
-// one and Reload (engine live), swap the engine under concurrent readers,
-// and verify a failed rebuild leaves the previous engine serving.
+// TestEngineHolderHotLoad covers the lifecycle of the reloadable engine
+// holder: start with no model (a model-less task engine — the queue/board
+// surface is model-free, only asks degrade), configure one and Reload
+// (engine swaps to the model-enabled build), swap the engine under
+// concurrent readers, and verify a failed rebuild leaves the previous
+// engine serving.
 func TestEngineHolderHotLoad(t *testing.T) {
 	cfg := newHolderConfig(t)
 	cfg.Model.BaseURL = ""
 
-	// Zero-config start: degraded mode, no error, engine nil — `panda web`
-	// boots exactly like this.
+	// Zero-config start: the engine still builds — `panda task add` works on
+	// a model-less node, so the web board must too. Only /api/ask degrades.
 	h, err := NewEngineHolder(cfg, askengine.Options{})
 	if err != nil {
 		t.Fatalf("NewEngineHolder: %v", err)
 	}
 	defer h.Close()
-	if eng := h.Engine(); eng != nil {
-		t.Fatal("engine must be nil before a model is configured")
+	initial := h.Engine()
+	if initial == nil {
+		t.Fatal("engine must be live without a model — the task surface is model-free")
+	}
+	if mc := initial.ModelConfig(); mc.BaseURL != "" {
+		t.Fatalf("model-less engine built with a stale endpoint: %+v", mc)
 	}
 
 	// First model configured (dead endpoint — construction must succeed

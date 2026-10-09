@@ -458,6 +458,13 @@ func (c *Core) SetOwnsNodeRow(owns bool) {
 	c.ownsNodeRow = owns
 }
 
+// OwnsNodeRow reports the same: false marks a borrowed engine whose daemon
+// holds the identity lock — such a core must never write liveness or run a
+// second work consumer for the identity.
+func (c *Core) OwnsNodeRow() bool {
+	return c.ownsNodeRow
+}
+
 // wireContacts converts the configured plan to its wire form. The slice is
 // non-nil even when empty so the heartbeat emits "contacts":[] — a plan
 // deleted from config must clear the directories that cached it, which only

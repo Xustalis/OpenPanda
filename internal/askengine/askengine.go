@@ -817,10 +817,19 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// the daemon's self row until the next beat, and routing sees the local
 	// node as gone. Probe-only: the lock is released immediately so this
 	// process never blocks a real daemon from starting.
+	//
+	// ownsRow=false carries the same signal further: the daemon already runs
+	// the queue scheduler, task-lifecycle sweeps, peer links and discovery for
+	// this identity. A second consumer in the same process family (the web
+	// console, a REPL with QueueTasks) would race the daemon for claims on the
+	// shared store and its sibling conns only churn the daemon's held edges —
+	// one node identity, one work pipeline. Borrowed engines submit and read.
+	ownsRow := true
 	if lock, err := nodeidentity.Acquire(e.cfg.Node.Kind, card.NodeIdentity); err == nil {
 		_ = lock.Release()
 	} else if errors.Is(err, nodeidentity.ErrAlreadyRunning) {
 		sched.SetOwnsNodeRow(false)
+		ownsRow = false
 	}
 	sched.SetRouterPolicy(e.cfg.Injection, e.cfg.Routing)
 	sched.AttachSupervisor(e.cfg.Model)
@@ -865,9 +874,10 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// the seat sees only fleet rows it already paired, never the pending
 	// beacons discovery exists to surface. A port held by a daemon on the
 	// same box degrades to warn-and-idle — the loser keeps its fleet, loses
-	// nothing else.
-	if e.cfg.Network.DiscoveryAddr != "off" {
-		sched.EnsureNodeKey()
+	// nothing else. A borrowed engine skips it entirely: the daemon holds
+	// the socket already.
+	sched.EnsureNodeKey()
+	if ownsRow && e.cfg.Network.DiscoveryAddr != "off" {
 		go sched.RunDiscovery(schedCtx, e.cfg.Network.DiscoveryAddrOrDefault(), e.cfg.Network.ListenAddr)
 	}
 	e.setCardPath(cardPath)
@@ -889,9 +899,13 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		}
 	}
 
-	// Only queue-mode surfaces own a background consumer. One-shot ask/REPL
-	// engines submit inline and must not unexpectedly drain persisted work.
-	if e.queueTasks {
+	// Only queue-mode surfaces own a background consumer, and only the row
+	// owner's engine may be it: a borrowed engine that also drained the shared
+	// queue would race the daemon's claims and run two work pipelines for one
+	// node — the split the row-ownership rule exists to prevent. One-shot
+	// ask/REPL engines submit inline and must not unexpectedly drain
+	// persisted work either way.
+	if e.queueTasks && ownsRow {
 		sched.StartQueueScheduler(schedCtx)
 		// A queue engine executes tasks off the shared store, so it also owns
 		// the task-lifecycle sweeps: without them a waiting_context park never
@@ -904,6 +918,16 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// as a zombie the user believes is still working.
 	go sched.RunReconcile(schedCtx)
 
+	if !ownsRow {
+		// The daemon owns the peer edges for this identity — its keepalive
+		// conns are the incumbents our hello arbitration holds, so a borrowed
+		// engine's startup dials would land as same-id sibling sessions that
+		// get held, answered and closed on the far side: pure churn. Tasks the
+		// borrowed engine enqueues route and forward on the daemon's links
+		// through the shared store. On-demand Engine.DialPeer stays available
+		// for an explicit "nodes add".
+		return nil
+	}
 	if e.asyncPeers {
 		for _, peer := range e.cfg.Network.Peers {
 			go func(p string) {
