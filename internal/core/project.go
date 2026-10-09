@@ -570,6 +570,9 @@ func (c *Core) adoptProjectOutput(ctx context.Context, t Task, from, hash string
 			c.logger.Warn("extract project artifact", "task", t.TaskID, "hash", hash, "err", err)
 			return
 		}
+		if c.projects != nil {
+			_ = c.projects.Touch(t.Project)
+		}
 		if err := c.store.SetOutputArtifact(ctx, t.TaskID, hash); err != nil {
 			c.logger.Warn("record project output", "task", t.TaskID, "err", err)
 		}
