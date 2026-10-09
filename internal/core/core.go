@@ -152,6 +152,13 @@ type Core struct {
 	// key made the reply follow the registry entry, which a concurrent
 	// tie-break replacement can swap mid-handshake.
 	greetedConns map[*bus.Conn]bool
+	// evictedConns are conns this registry already replaced and closed. A
+	// conn's read loop can still surface frames buffered before the close —
+	// notably the peer's hello reply to OUR hello-reply — and re-running
+	// arbitration for that zombie hello would resurrect the dead conn over
+	// the live replacement. Marked under the same lock as the registry
+	// swap, so there is no window where eviction is invisible.
+	evictedConns map[*bus.Conn]struct{}
 
 	// waiters maps task_id -> result channel for synchronous Submit calls
 	// that forwarded a task and are blocked awaiting the outcome.
@@ -397,6 +404,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		node:         NewNode(db, nodeID, card, tier, logger),
 		peers:        make(map[string]*Peer),
 		greetedConns: make(map[*bus.Conn]bool),
+		evictedConns: make(map[*bus.Conn]struct{}),
 		orphanSeen:   make(map[string]time.Time),
 		peerBlocked:  make(map[string][]string),
 		helloSeen:    make(map[string]time.Time),
@@ -1349,8 +1357,11 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 func (c *Core) removePeerForConn(conn *bus.Conn) {
 	c.mu.Lock()
 	// Drop the per-conn greeting marker: a reconnect arrives on a NEW conn,
-	// which must get a fresh hello reply to bind our identity.
+	// which must get a fresh hello reply to bind our identity. The eviction
+	// marker goes too — the conn object can be GC'd and its address reused
+	// by a future conn, which must not inherit "already dead".
 	delete(c.greetedConns, conn)
+	delete(c.evictedConns, conn)
 	var gone []string
 	for id, p := range c.peers {
 		if p.conn == conn {
@@ -1536,6 +1547,13 @@ func (c *Core) signHello(p *bus.HelloPayload, ts int64, nonce string) {
 // must not be registered; true otherwise.
 func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
 	c.mu.Lock()
+	if _, dead := c.evictedConns[conn]; dead {
+		// This conn already lost arbitration once — its read loop is only
+		// still talking because the socket had frames buffered before the
+		// close. Eviction is permanent: let the replacement keep the edge.
+		c.mu.Unlock()
+		return false
+	}
 	old := c.peers[id]
 	if old != nil && old.conn == conn {
 		c.mu.Unlock()
@@ -1565,6 +1583,12 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
 		return false
 	}
 	c.peers[id] = &Peer{id: id, conn: conn}
+	if old != nil {
+		// Mark the loser before releasing the lock: a frame its read loop
+		// already buffered must find the eviction recorded by the time the
+		// dispatch thread re-enters ensurePeer.
+		c.evictedConns[old.conn] = struct{}{}
+	}
 	n := len(c.peers)
 	c.mu.Unlock()
 

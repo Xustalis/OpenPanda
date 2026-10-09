@@ -417,6 +417,14 @@ func (s *Store) ClearActive() error {
 	return err
 }
 
+// Touch moves a project's updated_at, which is what orders `panda project list`.
+// Called when work happens in a project rather than when its row is edited, so
+// the list reads as "what I have been working on".
+func (s *Store) Touch(name string) error {
+	_, err := s.db.Exec(`UPDATE projects SET updated_at = ? WHERE name = ?`, s.now(), name)
+	return err
+}
+
 // EnsureFromName creates a metadata row for a project that only ever existed as a
 // memory file. Projects predate this table, so a name that appears on a task or
 // in projects/<name>/ must still resolve to a project; this is the adoption path,

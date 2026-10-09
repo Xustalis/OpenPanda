@@ -28,7 +28,13 @@ func TestPeerReconnectReplacesStaleConn(t *testing.T) {
 
 	a := newCore(t, "node-a", "127.0.0.1:17951")
 	b := newCore(t, "node-b", "127.0.0.1:17952")
-	b.peerLivenessWindow = 0 // incumbent counts as stale: exercise replacement
+	// Both arbiters distrust their incumbent. Zeroing only b's leaves a
+	// holding O1 ("live" in its own frame) over O2 — a closes the conn b
+	// just registered, and whether the edge survives depends on whose
+	// goroutine wins the close-vs-reply race. A stale-incumbent world is
+	// stale on both ends.
+	a.peerLivenessWindow = 0
+	b.peerLivenessWindow = 0
 	for _, c := range []*Core{a, b} {
 		if err := c.Register(ctx); err != nil {
 			t.Fatalf("register: %v", err)
@@ -42,8 +48,14 @@ func TestPeerReconnectReplacesStaleConn(t *testing.T) {
 	if err := a.DialPeer(ctx, "127.0.0.1:17952"); err != nil {
 		t.Fatalf("dial 1: %v", err)
 	}
-	time.Sleep(300 * time.Millisecond)
-	first := b.connFor("node-a")
+	var first *bus.Conn
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if first = b.connFor("node-a"); first != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if first == nil {
 		t.Fatalf("b has no conn for node-a after first dial")
 	}
@@ -52,8 +64,14 @@ func TestPeerReconnectReplacesStaleConn(t *testing.T) {
 	if err := a.DialPeer(ctx, "127.0.0.1:17952"); err != nil {
 		t.Fatalf("dial 2: %v", err)
 	}
-	time.Sleep(300 * time.Millisecond)
-	second := b.connFor("node-a")
+	var second *bus.Conn
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if second = b.connFor("node-a"); second != nil && second != first {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if second == nil {
 		t.Fatalf("b lost node-a after reconnect")
 	}
@@ -64,7 +82,7 @@ func TestPeerReconnectReplacesStaleConn(t *testing.T) {
 	// The stale conn's read loop exits on close and runs removePeerForConn.
 	// Give it a moment, then the fresh registration must still be there and
 	// still sendable.
-	deadline := time.Now().Add(2 * time.Second)
+	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if b.connFor("node-a") == second {
 			break

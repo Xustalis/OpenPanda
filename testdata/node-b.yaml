@@ -13,6 +13,9 @@ network:
   # nested "panel: {addr, token}" form is not read, and was being ignored here.
   panel_addr: "127.0.0.1:17937"
   panel_token: ""                 # 经 OPENPANDA_PANEL_TOKEN 注入
+  # Loopback pair dials each other via explicit peers; LAN discovery would
+  # only fight the sibling node for :7837 on the same host.
+  discovery_addr: "off"
   peers:
     - "127.0.0.1:17836"          # 对应 node-a 的 listen_addr
 

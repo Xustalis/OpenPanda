@@ -456,6 +456,13 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 	if err != nil {
 		return Task{}, "", "", err
 	}
+	// Task creation is project activity: bump the row so `panda project list`
+	// orders by recently-worked-on, not recently-edited.
+	if c.projects != nil && in.Project != "" {
+		if err := c.projects.Touch(in.Project); err != nil {
+			c.logger.Debug("touch project recency", "project", in.Project, "err", err)
+		}
+	}
 	// Persist the user's tier-2 consent as server-side state (design §16 / P0-1).
 	// execute/run read it from the DB, so the wire payload never needs to carry it.
 	if err := c.store.SetAuthorized(ctx, t.TaskID, in.Authorized); err != nil {
