@@ -66,6 +66,13 @@ network:
   #   ""      (default) — broadcast+listen on :7837
   #   "off"             — disable discovery entirely
   # discovery_addr: ":7837"
+  # discovery_auto_dial (default true): turn a discovered node into a dial
+  # without `nodes admit`. Only beacons whose resolved host IS the packet's
+  # own source IP are dialed — a forged beacon can name any address, but it
+  # cannot move its packet's origin, so this can never be aimed at a third
+  # party. The hello's shared secret still decides membership; auto-dial only
+  # saves typing the IP. Set false to keep every join an explicit admit.
+  # discovery_auto_dial: false
   # ── Cleartext ws:// outbound gate ──
   # The hello handshake proves mesh membership but does NOT encrypt the
   # frames after it, so a network MITM on a plaintext link could forge a

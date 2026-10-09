@@ -1416,6 +1416,16 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 				map[string]any{"note": note}); err != nil {
 				c.logger.Warn("record agent progress", "task", taskID, "err", err)
 			}
+			// Delegated task: the origin's own copy of this row shows only
+			// accept→result without the note, so `panda task <id>`/logs there
+			// look frozen for the whole agent run. Ride the same text on the
+			// existing task_progress beat — every hop relays it upward, and a
+			// missing peer just drops the note (the lease beat still fires on
+			// its own tick).
+			if len(task.Chain) > 0 {
+				c.relayToParent(context.WithoutCancel(ctx), bus.MsgTaskProgress, task.Chain,
+					bus.TaskProgressPayload{TaskID: taskID, AttemptID: task.AttemptID, Note: note})
+			}
 		})
 
 		// Structured transcript (event protocol v2): every typed block the
@@ -1724,6 +1734,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			"model":      activeModel,
 			"authorized": task.Authorized,
 			"tier":       plan.Tier,
+			"workdir":    workDir,
 		})
 
 		runCtx := execCtx
@@ -2883,6 +2894,17 @@ func (c *Core) handleProgress(ctx context.Context, env bus.Envelope) {
 	}
 	if err := c.store.SetLease(ctx, p.TaskID, c.lease().Milliseconds()); err != nil {
 		c.logger.Warn("refresh lease from progress", "task", p.TaskID, "err", err)
+	}
+	// A beat carrying a note is the executor's progress sink reaching the
+	// delegator: record it so `task logs`/`task show` here shows the same
+	// life the executor's own timeline does. The executor already throttles
+	// and dedupes notes before sending, so one row lands per reported beat.
+	if p.Note != "" {
+		if err := c.store.RecordEvent(ctx, p.TaskID, EvProgress, map[string]any{
+			"note": p.Note, "from": env.From,
+		}); err != nil {
+			c.logger.Warn("record remote progress", "task", p.TaskID, "err", err)
+		}
 	}
 	c.relayToParent(ctx, bus.MsgTaskProgress, t.Chain, p)
 }

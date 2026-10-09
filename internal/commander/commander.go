@@ -925,6 +925,13 @@ func (r *Router) AgentDispatchable(name string, ag ledger.Agent) bool {
 	return ok
 }
 
+// AgentUsableReason is AgentDispatchable with the first failure's reason
+// attached — the diagnostic form (doctor, debug logs). An empty reason means
+// usable.
+func (r *Router) AgentUsableReason(name string, ag ledger.Agent) (bool, string) {
+	return r.agentUsable(name, ag)
+}
+
 // agentUsable is the canonical dispatchability check, carrying the first
 // failure's reason so callers can explain a skipped candidate. The reason
 // list intentionally mirrors AgentViable's order — runtime/runtime, binary,

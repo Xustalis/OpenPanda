@@ -336,6 +336,17 @@ type Core struct {
 	// pendingTTL.
 	pendingSweepAt int64
 
+	// autoDialCands holds LAN beacons safe to dial without an operator admit:
+	// the resolved host IS the datagram's own source IP, so the entry can only
+	// ever point back at the broadcaster itself — a forged beacon may name any
+	// host, but it cannot change where its packet came from. The dial is still
+	// gated by the hello's shared secret; auto-dial replaces typing the IP,
+	// never the pairing proof. autoDialOn is armed by RunDiscovery once the
+	// config gate passes.
+	autoDialOn    atomic.Bool
+	autoDialMu    sync.Mutex
+	autoDialCands map[string]autoDialCand // node id -> dial candidate
+
 	// retentionDays is the configured age limit for settled task rows
 	// (storage.task_retention_days): 0 keeps history forever. retentionSweepAt
 	// paces the hourly pass inside taskSweeps — the monitor ticks every 5s
@@ -399,27 +410,28 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		logger = slog.Default()
 	}
 	c := &Core{
-		db:           db,
-		nodeID:       nodeID,
-		card:         card,
-		tier:         tier,
-		logger:       logger,
-		store:        NewTaskStore(db, logger),
-		ctx:          ctxstore.New(db, ctxstore.MaxEntriesForResourceClass(card.ResourceClass)),
-		node:         NewNode(db, nodeID, card, tier, logger),
-		peers:        make(map[string]*Peer),
-		greetedConns: make(map[*bus.Conn]bool),
-		evictedConns: make(map[*bus.Conn]struct{}),
-		orphanSeen:   make(map[string]time.Time),
-		peerBlocked:  make(map[string][]string),
-		helloSeen:    make(map[string]time.Time),
-		msgSeen:      make(map[string]time.Time),
-		breaker:      defense.NewCircuitBreaker(0, 0),
-		loop:         defense.NewLoopDetector(2),
-		auditLog:     security.NewAudit(db),
-		workDir:      ".",
-		model:        model,
-		ownsNodeRow:  true,
+		db:            db,
+		nodeID:        nodeID,
+		card:          card,
+		tier:          tier,
+		logger:        logger,
+		store:         NewTaskStore(db, logger),
+		ctx:           ctxstore.New(db, ctxstore.MaxEntriesForResourceClass(card.ResourceClass)),
+		node:          NewNode(db, nodeID, card, tier, logger),
+		peers:         make(map[string]*Peer),
+		autoDialCands: make(map[string]autoDialCand),
+		greetedConns:  make(map[*bus.Conn]bool),
+		evictedConns:  make(map[*bus.Conn]struct{}),
+		orphanSeen:    make(map[string]time.Time),
+		peerBlocked:   make(map[string][]string),
+		helloSeen:     make(map[string]time.Time),
+		msgSeen:       make(map[string]time.Time),
+		breaker:       defense.NewCircuitBreaker(0, 0),
+		loop:          defense.NewLoopDetector(2),
+		auditLog:      security.NewAudit(db),
+		workDir:       ".",
+		model:         model,
+		ownsNodeRow:   true,
 
 		superviseRounds: defaultSuperviseRounds,
 		leaseTimeout:    defaultDelegateTimeout,
@@ -2168,15 +2180,17 @@ func (c *Core) summary() ledger.CapabilitySummary {
 	// handshake path that calls this.
 	if router != nil && len(card.Agents) > 0 {
 		usable := make(map[string]bool, len(card.Agents))
+		reasons := make(map[string]string, len(card.Agents))
 		var wg sync.WaitGroup
 		var mu sync.Mutex
 		for name, ag := range card.Agents {
 			wg.Add(1)
 			go func(name string, ag ledger.Agent) {
 				defer wg.Done()
-				ok := router.AgentDispatchable(name, ag)
+				ok, reason := router.AgentUsableReason(name, ag)
 				mu.Lock()
 				usable[name] = ok
+				reasons[name] = reason
 				mu.Unlock()
 			}(name, ag)
 		}
@@ -2184,6 +2198,8 @@ func (c *Core) summary() ledger.CapabilitySummary {
 		for name, ag := range card.Agents {
 			if usable[name] {
 				s.AgentCaps[name] = ag.Capabilities
+			} else {
+				c.logger.Debug("summary: agent not advertised", "agent", name, "reason", reasons[name])
 			}
 		}
 	} else {

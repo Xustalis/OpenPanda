@@ -36,7 +36,10 @@ func (c *Core) SetTimeouts(t config.TimeoutsConfig) {
 	commander.SetSilenceTimeout(t.SilenceTimeout())
 	lease := t.TaskLease()
 	if floor := commander.AgentHardTimeout() * 2; lease < floor {
-		c.logger.Warn("task lease raised above the agent hard timeout",
+		// Info, not Warn: every CLI invocation builds a Core-shaped object and
+		// stderr defaults to warn-and-up, so the auto-correction notice ended
+		// up on `panda task add`/`ask` output — daemon logs still show it.
+		c.logger.Info("task lease raised above the agent hard timeout",
 			"configured", lease, "using", floor)
 		lease = floor
 	}

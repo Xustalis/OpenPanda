@@ -26,6 +26,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/executil"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -232,6 +233,9 @@ func main() {
 		case "version":
 			printVersion(args)
 			return
+		case "completion":
+			runCompletion(args)
+			return
 		case "read", "view", "cat", "md", "markdown":
 			runRead(args)
 			return
@@ -243,6 +247,16 @@ func main() {
 			// automatically read and render it without requiring a subcommand.
 			if fi, err := os.Stat(sub); err == nil && !fi.IsDir() {
 				runRead(append([]string{sub}, args...))
+				return
+			}
+
+			// Bare-input routing: words that can't be a command get treated
+			// as the prompt they almost surely are (`panda fix the bug`,
+			// `panda 你好`), while a single all-lowercase ASCII word stays a
+			// probable typo and keeps the did-you-mean error below — the one
+			// shape where "send it to the model" would surprise.
+			if bareInputIsAsk(sub, args) {
+				runAsk(append([]string{sub}, args...))
 				return
 			}
 
@@ -263,6 +277,7 @@ func main() {
 			if s := suggest(sub, subcommandNames()); s != "" {
 				fmt.Fprintf(os.Stderr, "  %s\n", i18n.Tf(loc, "repl.didyoumean", "cmd", p.Command(s)))
 			}
+			fmt.Fprintf(os.Stderr, "  %s\n", p.Muted(i18n.T(loc, "cli.unknownSub.askHint")))
 			fmt.Fprintf(os.Stderr, "  %s\n", p.Muted(i18n.T(loc, "cli.help.more")))
 			os.Exit(2)
 		}
@@ -284,8 +299,53 @@ func subcommandNames() []string {
 		"reminder", "detect", "card", "init", "metrics", "heatmap", "audit", "session",
 		"sessions", "memory", "config", "model", "models", "agents", "project",
 		"auth", "rpc",
-		"read", "view", "cat", "md", "markdown", "version", "help",
+		"read", "view", "cat", "md", "markdown", "version", "help", "completion",
 	}
+}
+
+// looksLikeSubcommand reports whether a bare argv word could plausibly be a
+// mistyped subcommand name: all-lowercase ASCII letters, digits, '-' and '_'.
+// A token carrying anything else — CJK, uppercase, punctuation — can never be
+// a typo of an all-lowercase command, so routing it to the error path would
+// only ever insult a prompt.
+func looksLikeSubcommand(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// bareInputIsAsk decides the default branch's fate for an unrecognized first
+// word. Two or more real positional words read as a sentence (`fix the bug`)
+// and go to ask; so does a single token that cannot spell a command (`你好`,
+// `Deploy`, `don't`). A lone lowercase-ASCII word stays an error — typo
+// country. Flag tokens and the values of ask's known value-flags don't count
+// as words: `panda fix --project x` is a one-word line, not a phrase.
+func bareInputIsAsk(sub string, rest []string) bool {
+	if !looksLikeSubcommand(sub) {
+		return true
+	}
+	skipNext := false
+	for _, a := range rest {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if strings.HasPrefix(a, "-") && a != "-" {
+			name := strings.TrimLeft(a, "-")
+			if !strings.Contains(name, "=") && askValueFlags[name] {
+				skipNext = true
+			}
+			continue
+		}
+		return true // a second bare word makes it a phrase
+	}
+	return false
 }
 
 // parseSubcommand returns the first bare word (the subcommand) plus the rest
@@ -312,6 +372,12 @@ func runDaemon(args []string) {
 	cardPath := fs.String("card", cardFlagDefault(), fmt.Sprintf("path to capabilities.yaml (default: discovered — ./capabilities.yaml, next to the resolved config, or %s)", systemCardPath()))
 	fs.Parse(args)
 
+	// Before anything looks for an agent CLI: a launchd/systemd/task-scheduler
+	// launch inherits a minimal PATH, and the CLIs live in user dirs it never
+	// contains — the node would advertise zero agents and peers would route
+	// no work to it.
+	executil.AugmentProcessPath()
+
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
@@ -334,7 +400,9 @@ func runDaemon(args []string) {
 		}
 	}
 
-	log.Setup(cfg.Log.Level, nil)
+	// A foreground daemon's stdout is its operator's console: JSON lines are
+	// the right shape for journald and wrong shape for eyes.
+	log.SetupTTY(cfg.Log.Level, nil, stdoutIsTTY())
 	logger := log.From(context.Background())
 
 	db, err := openStore(cfg)
@@ -653,7 +721,7 @@ func runDaemon(args []string) {
 	// so the socket neither proves nor admits anything.
 	if cfg.Network.DiscoveryAddr != "off" {
 		guard.Go(logger, "daemon: discovery", cancel, func() {
-			coreNode.RunDiscovery(ctx, cfg.Network.DiscoveryAddrOrDefault(), cfg.Network.ListenAddr)
+			coreNode.RunDiscovery(ctx, cfg.Network.DiscoveryAddrOrDefault(), cfg.Network.ListenAddr, cfg.Network.DiscoveryAutoDial)
 		})
 	}
 
@@ -920,6 +988,7 @@ func printUsage(w *os.File) {
 	line("  task <id>                                 show one task + timeline")
 	line("  task add --title T [--prompt P] [--priority low|medium|normal|high|critical]")
 	line("           [--project p] [--authorize]      enqueue a task (needs --card)")
+	line("           [--wait [--wait-timeout 30m]]    block until it settles, print result")
 	line("           [--agents a,b] [--mode parallel|serial]")
 	line("                                            run it on several harnesses as a plan")
 	line("  task priority <id> <level>                change a task's priority")
@@ -965,6 +1034,7 @@ func printUsage(w *os.File) {
 	line("  card native|agent|manual add|remove|set   structured card edits (comments kept,")
 	line("                                            validated, hot-reloaded into the daemon)")
 	line("  version|help                              version / this help")
+	line("  completion bash|zsh|fish                  shell completion script (source it)")
 	line("")
 	line("global flags: --config <path>, --card <path>, --mcp <cmd>, --json")
 	line("              (before or after the subcommand; --json = JSON output)")

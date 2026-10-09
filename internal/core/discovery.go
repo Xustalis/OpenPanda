@@ -67,7 +67,27 @@ const (
 	// means evict the stalest row — a flood may still evict a legit node,
 	// but a bounded list degrades to noise, not to a resource leak.
 	pendingCap = 64
+
+	// autoDialTick/autoDialCooldown pace the discovery auto-dial pass: fresh
+	// src-pinned candidates are tried on the first tick after their beacon;
+	// failures re-arm only after the cooldown so a wrong-secret neighbour or
+	// a flapping host does not own the dial path. The cadence deliberately
+	// sits below pendingTTL so a silent node stops being dialed as soon as
+	// its beacons stop.
+	autoDialTick     = 5 * time.Second
+	autoDialCooldown = 60 * time.Second
 )
+
+// autoDialCand is a beacon-origin dial candidate: an address the receiver
+// resolved to the datagram's own source IP (src-pinned), lastSeen for TTL,
+// lastDial for the failure cooldown, and gateWarned so a cleartext refusal
+// logs its remediation hint once per candidate instead of once per pass.
+type autoDialCand struct {
+	addr       string
+	lastSeen   time.Time
+	lastDial   time.Time
+	gateWarned bool
+}
 
 // Beacon is the discovery datagram's payload. Every field is self-asserted:
 // Pub exists so the pending list can show a fingerprint the operator can
@@ -187,11 +207,14 @@ func resolveBeaconAddr(b Beacon, src net.IP) string {
 // socket binds the wildcard address regardless, because a socket bound to a
 // single interface address cannot hear broadcasts aimed at the others.
 // advertiseAddr is this node's WS listen address as configured — receivers
-// substitute the source IP when its host is not routable. Runs until ctx
-// ends; socket or broadcast failure degrades to warn-and-idle, never daemon
+// substitute the source IP when its host is not routable. autoDial enables
+// the zero-config half of discovery: src-pinned beacons get an outbound
+// DialPeer so same-secret nodes connect without `nodes admit` — the hello's
+// shared secret remains the only admission proof. Runs until ctx ends;
+// socket or broadcast failure degrades to warn-and-idle, never daemon
 // death — discovery is convenience, not substrate. IPv4 only: broadcast is
 // an IPv4 concept (v6 multicast discovery is a later track).
-func (c *Core) RunDiscovery(ctx context.Context, bindAddr, advertiseAddr string) {
+func (c *Core) RunDiscovery(ctx context.Context, bindAddr, advertiseAddr string, autoDial bool) {
 	// ResolveUDPAddr, not SplitHostPort+Atoi: it also vets the port — a
 	// non-numeric port ("discovery_addr: \":abc\"") must die here with a
 	// warning rather than silently bind an ephemeral port and announce to
@@ -202,7 +225,12 @@ func (c *Core) RunDiscovery(ctx context.Context, bindAddr, advertiseAddr string)
 		return
 	}
 	port := uaddr.Port
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: port})
+	// udp4, not udp: an AF_INET6 socket does not receive IPv4 broadcast
+	// datagrams (dual-stack covers unicast, not broadcast), so a "udp"
+	// listener binds happily and then never hears a single beacon. The
+	// beacon wire is IPv4-only by design, so the v4 wildcard is the
+	// correct socket.
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: port})
 	if err != nil {
 		c.logger.Warn("discovery: listener failed", "addr", bindAddr, "err", err)
 		return
@@ -227,8 +255,17 @@ func (c *Core) RunDiscovery(ctx context.Context, bindAddr, advertiseAddr string)
 		c.logger.Info("discovery: listen_addr is loopback — listening only (nothing could reach the advertised address)")
 	}
 	if announce {
-		bcast := &net.UDPAddr{IP: net.IPv4bcast, Port: port}
-		go c.discoveryAnnounceLoop(ctx, conn, bcast, advertiseAddr)
+		go c.discoveryAnnounceLoop(ctx, conn, port, advertiseAddr)
+	}
+
+	// Auto-dial needs the same secret the hello will be checked against:
+	// without one every handshake fails closed, so the dial pass would be
+	// pure churn. The pending list still fills either way.
+	if autoDial && c.sharedSecret != "" {
+		c.autoDialOn.Store(true)
+		go c.autoDialLoop(ctx)
+	} else if autoDial {
+		c.logger.Info("discovery: auto-dial idle — no shared_secret to satisfy the hello")
 	}
 
 	buf := make([]byte, beaconMaxBytes+64)
@@ -250,16 +287,20 @@ func (c *Core) RunDiscovery(ctx context.Context, bindAddr, advertiseAddr string)
 // discoveryAnnounceLoop emits the beacon every beaconInterval. The same
 // socket receives our own broadcast on a LAN — the self-id check in
 // onBeacon drops it, which doubles as a live smoke test that the wire
-// works.
-func (c *Core) discoveryAnnounceLoop(ctx context.Context, conn *net.UDPConn, bcast *net.UDPAddr, advertiseAddr string) {
+// works. Targets are recomputed per tick: interfaces come and go (a VPN
+// rising, a dock connecting) and a stale target list is a node that
+// silently stops being seen.
+func (c *Core) discoveryAnnounceLoop(ctx context.Context, conn *net.UDPConn, port int, advertiseAddr string) {
 	pub, priv, _ := c.nodeKeyPair()
 	tick := func() {
 		raw := marshalBeacon(c.nodeID, advertiseAddr, pub, priv)
 		if raw == nil {
 			return
 		}
-		if _, err := conn.WriteToUDP(raw, bcast); err != nil {
-			c.logger.Debug("discovery: beacon send failed", "err", err)
+		for _, target := range beaconTargets(port) {
+			if _, err := conn.WriteToUDP(raw, target); err != nil {
+				c.logger.Debug("discovery: beacon send failed", "target", target, "err", err)
+			}
 		}
 	}
 	tick() // announce immediately — a rebooted node should not wait 15s to appear
@@ -273,6 +314,61 @@ func (c *Core) discoveryAnnounceLoop(ctx context.Context, conn *net.UDPConn, bca
 			tick()
 		}
 	}
+}
+
+// beaconTargets lists the addresses one beacon should be sent to: the
+// limited broadcast plus every up-and-broadcast interface's subnet-directed
+// broadcast. The limited form alone is not enough in practice — a
+// multi-homed host (VMware/WSL/VPN adapters beside the real NIC) can route
+// 255.255.255.255 out an interface the peers are not on, and some APs drop
+// it — while the directed form is scoped to the exact subnet each interface
+// serves. Link-local (169.254/16) subnets are skipped: nothing pairs there.
+func beaconTargets(port int) []*net.UDPAddr {
+	out := []*net.UDPAddr{{IP: net.IPv4bcast, Port: port}}
+	seen := map[string]bool{net.IPv4bcast.String(): true}
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return out
+	}
+	for _, ifc := range ifs {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagBroadcast == 0 {
+			continue
+		}
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipn, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ipn.IP.To4() == nil || ipn.IP.IsLoopback() || ipn.IP.IsLinkLocalUnicast() {
+				continue
+			}
+			if bcast := directedBroadcast(ipn); bcast != nil {
+				if s := bcast.String(); !seen[s] {
+					seen[s] = true
+					out = append(out, &net.UDPAddr{IP: bcast, Port: port})
+				}
+			}
+		}
+	}
+	return out
+}
+
+// directedBroadcast computes an interface's subnet broadcast address
+// (ip | ^mask) from its network, or nil for anything not IPv4.
+func directedBroadcast(ipn *net.IPNet) net.IP {
+	ip4 := ipn.IP.To4()
+	if ip4 == nil || len(ipn.Mask) != 4 {
+		return nil
+	}
+	bcast := make(net.IP, 4)
+	for i := 0; i < 4; i++ {
+		bcast[i] = ip4[i] | ^ipn.Mask[i]
+	}
+	return bcast
 }
 
 // onBeacon validates one datagram and upserts the hint. Skips: self (our own
@@ -292,13 +388,30 @@ func (c *Core) onBeacon(ctx context.Context, raw []byte, src *net.UDPAddr) {
 		}
 		verified = true
 	}
+	now := time.Now().Unix()
+	addr := resolveBeaconAddr(b, src.IP)
+	// Auto-dial eligibility is narrower than pending-list eligibility: the
+	// resolved host must be the datagram's own source IP. resolveBeaconAddr
+	// produces exactly that for a wildcard/empty/loopback host, and an
+	// explicit host equal to the source pins itself. Anything else — a DNS
+	// name, a third-party IP — stays operator-admit only: it could be an
+	// honest alias, but it could also be a forged pointer at a victim, and
+	// an auto-dialer must never become a reflection tool.
+	//
+	// The predicate is CONNECTION state, not membership: a directory row
+	// that is merely stale must not block re-discovery — a joined-but-
+	// offline node's beacon is exactly the reachability hint auto-dial
+	// exists to use. Only an already-live edge makes a hint redundant.
+	if c.autoDialOn.Load() && c.connFor(b.ID) == nil {
+		if host, _, err := net.SplitHostPort(addr); err == nil && host == src.IP.String() {
+			c.noteAutoDial(b.ID, addr)
+		}
+	}
 	var joined int
 	_ = c.db.QueryRowContext(ctx, `SELECT 1 FROM employee_cache WHERE id=?`, b.ID).Scan(&joined)
 	if joined == 1 {
 		return
 	}
-	now := time.Now().Unix()
-	addr := resolveBeaconAddr(b, src.IP)
 	var known, total int
 	// One roundtrip for both lookups — this runs per datagram on the LAN
 	// socket, and every skipped query is WAL work saved.
@@ -354,4 +467,99 @@ func advertiseIsLoopback(listenAddr string) bool {
 		return ip.IsLoopback()
 	}
 	return false // a DNS name: presumably reachable, announce
+}
+
+// noteAutoDial records or refreshes a src-pinned candidate. Called from the
+// discovery read loop only when autoDialOn is armed — the table otherwise
+// stays empty, so `discovery_dial: "off"` disables the feature at its source.
+func (c *Core) noteAutoDial(id, addr string) {
+	c.autoDialMu.Lock()
+	defer c.autoDialMu.Unlock()
+	cand := c.autoDialCands[id]
+	cand.addr, cand.lastSeen = addr, time.Now()
+	c.autoDialCands[id] = cand
+}
+
+// autoDialLoop runs the dial pass every autoDialTick until ctx ends.
+func (c *Core) autoDialLoop(ctx context.Context) {
+	t := time.NewTicker(autoDialTick)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.autoDialPass(ctx)
+		}
+	}
+}
+
+// autoDialPass dials the candidates that are due: a candidate whose node is
+// now connected leaves the table (the pending hint row goes with it — a live
+// peer is fleet, not a suggestion); stale candidates expire with pendingTTL;
+// the rest respect the per-node cooldown. Dials run inline and serially — a
+// LAN holds a handful of candidates at most, and DialPeer returns as soon as
+// the hello is on the wire.
+func (c *Core) autoDialPass(ctx context.Context) {
+	now := time.Now()
+	var connected, due []string
+	c.autoDialMu.Lock()
+	for id, cand := range c.autoDialCands {
+		switch {
+		case now.Sub(cand.lastSeen) > pendingTTL:
+			delete(c.autoDialCands, id)
+		case c.connFor(id) != nil:
+			delete(c.autoDialCands, id)
+			connected = append(connected, id)
+		default:
+			// No directory check here on purpose: a joined-but-offline node
+			// whose beacon still arrives is dial-worthy (its row is stale,
+			// the hint is live). Only a standing connection clears a
+			// candidate — that is the branch above.
+			if now.Sub(cand.lastDial) >= autoDialCooldown {
+				cand.lastDial = now
+				c.autoDialCands[id] = cand
+				due = append(due, id)
+			}
+		}
+	}
+	c.autoDialMu.Unlock()
+
+	// A joined node's pending row outlives its welcome otherwise — it sat in
+	// `panda nodes` as "not paired" while the fleet list showed it running.
+	for _, id := range connected {
+		c.logger.Info("discovery: LAN node connected", "id", id)
+		_ = ledger.ForgetPending(c.db, id)
+	}
+	for _, id := range due {
+		c.autoDialMu.Lock()
+		cand, ok := c.autoDialCands[id]
+		c.autoDialMu.Unlock()
+		if !ok {
+			continue
+		}
+		if err := c.DialPeer(ctx, cand.addr); err != nil {
+			// The cleartext gate is the failure an operator can act on —
+			// surface its remediation once per candidate, at Warn, then let
+			// the cooldown keep retries quiet at Debug.
+			if !cand.gateWarned && cleartextOK(cand.addr, c.allowCleartext, c.cleartextFor) != nil {
+				c.logger.Warn("discovery: LAN node seen but ws:// auto-dial refused — open the segment with network.allow_cleartext_for (or admit manually: panda nodes admit)", "id", id, "addr", cand.addr)
+				c.autoDialMu.Lock()
+				if cur, ok := c.autoDialCands[id]; ok {
+					cur.gateWarned = true
+					c.autoDialCands[id] = cur
+				}
+				c.autoDialMu.Unlock()
+			} else {
+				c.logger.Debug("discovery: auto-dial failed", "id", id, "addr", cand.addr, "err", err)
+			}
+			continue
+		}
+		// DialPeer returns once the hello is on the wire — admission lands
+		// (or fails) on the conn asynchronously. Keep the candidate: the
+		// next pass's connFor check does the "auto-connected" bookkeeping if
+		// the edge stood, and a rejected hello simply retries on cooldown
+		// while the beacon keeps the row fresh.
+		c.logger.Info("discovery: auto-dialing LAN node", "id", id, "addr", cand.addr)
+	}
 }

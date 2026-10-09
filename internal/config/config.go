@@ -276,6 +276,14 @@ type NetworkConfig struct {
 	// both the listener and the announcer. Admission is unaffected by the
 	// beacon: pairing still needs the shared secret and the signed hello.
 	DiscoveryAddr string `yaml:"discovery_addr"`
+	// DiscoveryAutoDial turns a src-pinned LAN beacon into an outbound dial
+	// so same-secret nodes join without `nodes admit`: the beacon only
+	// supplies the address (and only ever the broadcaster's own — a row is
+	// dialed only when its host is the datagram's source IP), the signed
+	// hello still decides membership. Default on; false keeps the manual
+	// pending-list → admit flow. Ignored without a shared_secret (a hello
+	// that cannot authenticate would only churn).
+	DiscoveryAutoDial bool `yaml:"discovery_auto_dial"`
 }
 
 // defaultDiscoveryAddr is the port LAN-discovery binds when the operator
@@ -1068,6 +1076,10 @@ func Default() *Config {
 			// Conservative defaults for a personal device network.
 			MaxConnections:      64,
 			MaxConnectionsPerIP: 8,
+			// Auto-dial src-pinned LAN beacons by default: the hello's shared
+			// secret still gates admission, so opting out is for operators
+			// who want every peer to be an explicit act.
+			DiscoveryAutoDial: true,
 		},
 		Storage: StorageConfig{
 			DBPath:       filepath.Join(data, "openpanda.db"),
@@ -1697,6 +1709,9 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 	}
 	if nc.Peers != nil {
 		setMapFieldSeq(network, "peers", nc.Peers)
+	}
+	if nc.AllowCleartextFor != nil {
+		setMapFieldSeq(network, "allow_cleartext_for", nc.AllowCleartextFor)
 	}
 
 	out, err := yaml.Marshal(&root)

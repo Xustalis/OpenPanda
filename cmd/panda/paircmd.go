@@ -29,6 +29,7 @@ import (
 	"net"
 	"os"
 	"slices"
+	"strings"
 
 	"time"
 
@@ -114,7 +115,7 @@ func admitPeerAddr(configPath string, cfg *config.Config, addr string) {
 	}
 	fmt.Println(i18n.Tf(loc, "cli.nodes.add.done", "addr", addr))
 	fmt.Println(i18n.T(loc, "cli.nodes.restart"))
-	warnIfCleartextRefused(os.Stdout, loc, cfg, addr)
+	ensureCleartextAllowed(os.Stdout, loc, configPath, cfg, addr)
 	printJoinGuide(i18n.Detect(), cfg)
 }
 
@@ -129,6 +130,49 @@ func warnIfCleartextRefused(w io.Writer, loc i18n.Locale, cfg *config.Config, ad
 	}
 }
 
+// ensureCleartextAllowed upgrades warnIfCleartextRefused for the explicit
+// admit/add/pair paths: when the cleartext gate would refuse the very address
+// the operator just asked to connect, the refusal is itself the bug — the
+// operator's command IS consent to talk to that host. So the gate opens for
+// exactly that host (never a subnet, never global) and the change is said out
+// loud. A punch: peer rides the AEAD plane and needs nothing; a wss:// or
+// safe host never reaches here. On a persistence failure the old warning
+// still prints — the peer row is already written either way.
+func ensureCleartextAllowed(w io.Writer, loc i18n.Locale, configPath string, cfg *config.Config, addr string) {
+	if core.CleartextDialError(addr, cfg.Network.AllowCleartext, cfg.Network.AllowCleartextFor) == nil {
+		return
+	}
+	host := peerDialHost(addr)
+	if host == "" {
+		fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.cleartext.hint", "addr", addr))
+		return
+	}
+	allowFor := append(slices.Clone(cfg.Network.AllowCleartextFor), host)
+	if err := config.UpdateNetworkSection(configWritePath(configPath), config.NetworkConfig{
+		AllowCleartextFor: allowFor,
+	}); err != nil {
+		fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.cleartext.hint", "addr", addr))
+		return
+	}
+	cfg.Network.AllowCleartextFor = allowFor
+	fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.cleartext.opened", "host", host))
+}
+
+// peerDialHost extracts the host a ws:// dial would target from a configured
+// peer address: bare host:port, ws(s):// URLs, or "" for punch: ids (those
+// never touch the cleartext gate).
+func peerDialHost(addr string) string {
+	if strings.HasPrefix(addr, "punch:") {
+		return ""
+	}
+	u := strings.TrimPrefix(strings.TrimPrefix(addr, "ws://"), "wss://")
+	host, _, err := net.SplitHostPort(u)
+	if err != nil {
+		return ""
+	}
+	return host
+}
+
 // runNodesAdmit implements `panda nodes admit <id>` — convert a LAN-discovered
 // pending row into a configured peer in one step: look up the beacon's
 // advertised address, run the same add path `nodes add` uses, then drop the
@@ -140,10 +184,13 @@ func runNodesAdmit(args []string) {
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	fs.Parse(reorderFlags(args, commonValueFlags))
 	rest := fs.Args()
-	if len(rest) != 1 {
-		fatal("usage", fmt.Errorf("panda nodes admit <node-id>"))
+	if len(rest) > 1 {
+		fatal("usage", fmt.Errorf("panda nodes admit [node-id]"))
 	}
-	id := rest[0]
+	id := ""
+	if len(rest) == 1 {
+		id = rest[0]
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -160,6 +207,16 @@ func runNodesAdmit(args []string) {
 		fatal("query pending", err)
 	}
 	loc := i18n.Detect()
+	if id == "" {
+		// Bare `nodes admit`: the common case is exactly one node waiting —
+		// admit it without making the operator retype an id they just read.
+		// With several pending rows there is no safe default to pick.
+		if len(pending) == 1 {
+			id = pending[0].ID
+		} else {
+			fatal("usage", fmt.Errorf("panda nodes admit <node-id>"))
+		}
+	}
 	for _, p := range pending {
 		if p.ID != id {
 			continue
@@ -279,7 +336,7 @@ func runPair(args []string) {
 	}
 	fmt.Println(i18n.Tf(i18n.Detect(), "cli.pair.done", "peer", *peer))
 	fmt.Println(i18n.T(i18n.Detect(), "cli.nodes.restart"))
-	warnIfCleartextRefused(os.Stdout, i18n.Detect(), cfg, *peer)
+	ensureCleartextAllowed(os.Stdout, i18n.Detect(), *configPath, cfg, *peer)
 }
 
 // printJoinGuide writes the three-step instructions for whoever sets up the

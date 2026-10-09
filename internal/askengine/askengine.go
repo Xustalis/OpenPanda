@@ -879,7 +879,10 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// the socket already.
 	sched.EnsureNodeKey()
 	if ownsRow && e.cfg.Network.DiscoveryAddr != "off" {
-		go sched.RunDiscovery(schedCtx, e.cfg.Network.DiscoveryAddrOrDefault(), e.cfg.Network.ListenAddr)
+		// No auto-dial here: an interactive seat is short-lived, so edges it
+		// opens would flap for peers on every exit. The daemon owns dial
+		// policy; the seat only listens for pending hints.
+		go sched.RunDiscovery(schedCtx, e.cfg.Network.DiscoveryAddrOrDefault(), e.cfg.Network.ListenAddr, false)
 	}
 	e.setCardPath(cardPath)
 	// Re-arm the review hook on the new core's store: the notification that a
@@ -993,6 +996,12 @@ const (
 	ProgressRoute ProgressKind = "route" // scheduler picked a node
 	ProgressExec  ProgressKind = "exec"  // the agent/adapter started running
 	ProgressJudge ProgressKind = "judge" // a supervision round is evaluating the result
+	// ProgressWait is the round following a task the queue parked — its link
+	// is not live yet, so the work has not started. Name carries the observed
+	// state ("queued", "dispatched"), emitted on entering the wait and on
+	// every state change, so the card keeps advancing while the round waits
+	// instead of sitting frozen at the dispatch.
+	ProgressWait ProgressKind = "wait"
 )
 
 // Progress is one structured progress event: the action, and the name of what
@@ -1054,6 +1063,8 @@ func (cb StreamCallbacks) progress(p Progress) {
 			return
 		}
 		cb.OnStatus(fmt.Sprintf("reviewing result (%s)%s…", p.Name, roundNote(p)))
+	case ProgressWait:
+		cb.OnStatus(fmt.Sprintf("watching the task (%s)…", p.Name))
 	}
 }
 
@@ -1441,6 +1452,14 @@ rounds:
 			if res.NeedsApproval {
 				// The inline gate parks the ask; the front-end prompts on its
 				// own event loop and resumes via ResumeApprovedReport.
+				return res, nil
+			}
+			if ctx.Err() != nil {
+				// The wait was released mid-flight (Esc / Ctrl-C): report the
+				// task's last observed state and end the round. The cancelled
+				// context would fail the next model call anyway, and the task
+				// itself keeps running — a released front end never cancels
+				// queued work.
 				return res, nil
 			}
 			taskRounds++
@@ -1878,6 +1897,17 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	task, result, err := sched.Submit(ctx, in)
 	if err != nil {
 		return &Result{Kind: "task", TaskState: "failed", Stderr: err.Error(), ExitCode: 1}
+	}
+	// A parked task is not an outcome. When the queue holds the task — the
+	// pinned target's link is not live yet — Submit returns the receipt
+	// immediately, and converging the round on "queued" would end the session
+	// while the work has not started. Follow the row instead: the queue
+	// consumer claims it when the link comes up, and this round reports the
+	// outcome it actually reached. Queue-mode surfaces are async by design
+	// (the panel's finalizer folds the result into the session turn), so they
+	// keep the immediate receipt.
+	if !e.queueTasks && !settledState(task.State) {
+		task, result = e.awaitSettled(ctx, sched, task, result, cb)
 	}
 	if reasoning != "" {
 		sched.EvTrace(ctx, task.TaskID, core.EvReasoning, map[string]any{"thought": reasoning})

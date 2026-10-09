@@ -20,6 +20,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -1122,6 +1123,18 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 	sb.WriteString("\n\n")
 	sb.WriteString(th.muted.Render("  " + cliui.Truncate(
 		i18n.T(loc, "tui.welcome.tips"), contentWidth, uni)))
+
+	// The REPL does not listen: a configured-to-mesh node (a shared secret
+	// exists) whose identity lock is free has no daemon running, so peers can
+	// neither reach it nor see its discovery beacon. This is the Windows
+	// double-click trap — bare panda.exe looks "running" while the node is
+	// offline to the fleet. A standalone install (no secret) is a legitimate
+	// single-machine setup and stays quiet.
+	if cfg != nil && cfg.Network.SharedSecret != "" {
+		if held, err := nodeidentity.Held(cfg.Node.Kind, cfg.Node.EffectiveIdentity()); err == nil && !held {
+			sb.WriteString("\n" + th.warn.Render("  "+i18n.T(loc, "repl.banner.noDaemon")))
+		}
+	}
 
 	if activity != nil {
 		var hb strings.Builder
