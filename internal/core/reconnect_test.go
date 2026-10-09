@@ -28,7 +28,13 @@ func TestPeerReconnectReplacesStaleConn(t *testing.T) {
 
 	a := newCore(t, "node-a", "127.0.0.1:17951")
 	b := newCore(t, "node-b", "127.0.0.1:17952")
-	b.peerLivenessWindow = 0 // incumbent counts as stale: exercise replacement
+	// Both arbiters distrust their incumbent. Zeroing only b's leaves a
+	// holding O1 ("live" in its own frame) over O2 — a closes the conn b
+	// just registered, and whether the edge survives depends on whose
+	// goroutine wins the close-vs-reply race. A stale-incumbent world is
+	// stale on both ends.
+	a.peerLivenessWindow = 0
+	b.peerLivenessWindow = 0
 	for _, c := range []*Core{a, b} {
 		if err := c.Register(ctx); err != nil {
 			t.Fatalf("register: %v", err)
