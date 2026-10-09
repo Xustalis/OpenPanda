@@ -283,3 +283,44 @@ func TestPunchDatagram(t *testing.T) {
 		t.Fatal("punch not received")
 	}
 }
+
+// TestPunchReplay verifies the single-use claim: a captured punch frame
+// resent verbatim inside its freshness window is dropped, while the
+// protocol's own re-send (new ts, new signature — what the spray emits each
+// tick) still lands. claimPunch is exercised directly: the datagram path is
+// covered by TestPunchDatagram, and timing the wall clock against two UDP
+// sends of the same bytes would only test scheduling noise.
+func TestPunchReplay(t *testing.T) {
+	u, err := ListenUDP("127.0.0.1:0", "s", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u.Close()
+	now := time.Now()
+
+	f := PunchFrame{Nonce: "n", From: "a", TS: now.Unix()}
+	f.Sig = PunchSig("s", f.Nonce, f.From, f.TS)
+	if !u.claimPunch(f, now) {
+		t.Fatal("first claim of a fresh frame refused")
+	}
+	if u.claimPunch(f, now) {
+		t.Fatal("verbatim replay inside the window was accepted")
+	}
+
+	// A second send ticks the timestamp forward — a new signature, so the
+	// honest spray pattern is not collateral of the replay drop.
+	next := PunchFrame{Nonce: "n", From: "a", TS: now.Unix() + 1}
+	next.Sig = PunchSig("s", next.Nonce, next.From, next.TS)
+	if !u.claimPunch(next, now.Add(time.Second)) {
+		t.Fatal("next-tick frame (new ts/sig) rejected as replay")
+	}
+
+	// Expired entries stop claiming space: a stamp beyond MaxHelloAge is
+	// pruned on the next claim, so the window cannot wedge the table.
+	u.punchSeen["x|a|old|sig"] = now.Add(-2 * MaxHelloAge) // pre-aged entry
+	fresh := PunchFrame{Nonce: "y", From: "b", TS: now.Unix() + 2}
+	fresh.Sig = PunchSig("s", fresh.Nonce, fresh.From, fresh.TS)
+	if !u.claimPunch(fresh, now) {
+		t.Fatal("claim after stale entries refused — prune did not run")
+	}
+}

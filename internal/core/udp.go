@@ -470,9 +470,14 @@ func (c *Core) punchSpray(nonce string, sess *punchSession) {
 	tick := time.NewTicker(punchInterval)
 	defer tick.Stop()
 	send := func() {
+		// One timestamp for both fields: TS and Sig must cover the same
+		// second or the frame minted across a second boundary fails the
+		// far end's VerifyPunch — the sig was computed over a ts the frame
+		// never carried.
+		ts := time.Now().Unix()
 		f := bus.PunchFrame{
-			Nonce: nonce, From: c.nodeID, TS: time.Now().Unix(),
-			Sig: bus.PunchSig(c.sharedSecret, nonce, c.nodeID, time.Now().Unix()),
+			Nonce: nonce, From: c.nodeID, TS: ts,
+			Sig: bus.PunchSig(c.sharedSecret, nonce, c.nodeID, ts),
 		}
 		c.punchMu.Lock()
 		addrs := sess.addrs
@@ -604,9 +609,10 @@ func (c *Core) handlePunchFrame(f bus.PunchFrame, src *net.UDPAddr, isAck bool) 
 		// The route table is full — still answer the punch so the far side
 		// can bind us; we just do not spend a route slot on it.
 		if !isAck && u != nil {
+			ts := time.Now().Unix()
 			ack := bus.PunchFrame{
-				Nonce: f.Nonce, From: c.nodeID, TS: time.Now().Unix(),
-				Sig: bus.PunchSig(c.sharedSecret, f.Nonce, c.nodeID, time.Now().Unix()),
+				Nonce: f.Nonce, From: c.nodeID, TS: ts,
+				Sig: bus.PunchSig(c.sharedSecret, f.Nonce, c.nodeID, ts),
 			}
 			_ = u.SendPunch(ack, src, true)
 		}
@@ -622,9 +628,10 @@ func (c *Core) handlePunchFrame(f bus.PunchFrame, src *net.UDPAddr, isAck bool) 
 	c.logger.Info("udp: pinhole confirmed", "peer", f.From, "addr", src, "ack", isAck)
 	c.finishPunch(f.Nonce)
 	if !isAck && u != nil {
+		ts := time.Now().Unix()
 		ack := bus.PunchFrame{
-			Nonce: f.Nonce, From: c.nodeID, TS: time.Now().Unix(),
-			Sig: bus.PunchSig(c.sharedSecret, f.Nonce, c.nodeID, time.Now().Unix()),
+			Nonce: f.Nonce, From: c.nodeID, TS: ts,
+			Sig: bus.PunchSig(c.sharedSecret, f.Nonce, c.nodeID, ts),
 		}
 		_ = u.SendPunch(ack, src, true)
 	}
