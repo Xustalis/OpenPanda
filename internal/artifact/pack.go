@@ -35,6 +35,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -179,14 +180,17 @@ type entry struct {
 // the artifact travels to. limit bounds the total regular-file bytes; 0
 // accepts whatever the source tree holds.
 func walk(root string, limit int64) ([]entry, error) {
-	return walkExcept(root, limit, nil)
+	return walkExcept(root, limit, nil, nil, nil)
 }
 
 // walkExcept is walk with a directory-name skip set: a directory whose name is
 // in skip is pruned wholesale (contents never counted, never packed). Callers
 // use it to keep derived trees — dependency checkouts, VCS internals, caches —
-// out of an artifact that only needs the source.
-func walkExcept(root string, limit int64, skip map[string]bool) ([]entry, error) {
+// out of an artifact that only needs the source. ignores additionally applies
+// the pack root's parsed .gitignore rules — only for packs that ship SOURCE,
+// never for executor-output packs where a gitignored build artifact (dist/,
+// *.out) is precisely the content that must come back.
+func walkExcept(root string, limit int64, skip map[string]bool, absSkip map[string]bool, ignores []ignoreRule) ([]entry, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, fmt.Errorf("artifact: stat root: %w", err)
@@ -194,7 +198,15 @@ func walkExcept(root string, limit int64, skip map[string]bool) ([]entry, error)
 	if !info.IsDir() {
 		return nil, fmt.Errorf("artifact: root %q is not a directory", root)
 	}
-
+	sep := string(filepath.Separator)
+	pathPruned := func(path string) bool {
+		for a := range absSkip {
+			if path == a || strings.HasPrefix(path, a+sep) {
+				return true
+			}
+		}
+		return false
+	}
 	var out []entry
 	var total int64
 	err = filepath.Walk(root, func(path string, fi os.FileInfo, err error) error {
@@ -208,7 +220,25 @@ func walkExcept(root string, limit int64, skip map[string]bool) ([]entry, error)
 		if rel == "." {
 			return nil // the root itself is implicit
 		}
+		// Absolute-path pruning keeps the packer's own live state off the
+		// wire: a work tree rooted at the checkout can contain the node's
+		// SQLite file, whose settings table holds the node private key, and
+		// shipping it both leaks the identity and invites the receiver to
+		// overwrite its own live files at extract. Skip before the byte
+		// accounting so a big database never trips the limit.
+		if pathPruned(path) {
+			if fi.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		rel = filepath.ToSlash(rel)
+		if ignoredBy(ignores, rel, fi.IsDir()) {
+			if fi.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		switch {
 		case fi.IsDir():
 			if skip[fi.Name()] {

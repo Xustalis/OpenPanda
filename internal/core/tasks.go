@@ -591,36 +591,57 @@ func (s *TaskStore) DispatchTarget(ctx context.Context, taskID string) (string, 
 	return d.Target, nil
 }
 
-// DeclinedBy returns every node that has declined this task, read from the
-// task_events audit trail (Decline records the declining executor as "by").
-// The re-router (P1-5) excludes them so a task cannot bounce back to a node
-// that already refused it — that is what bounds the decline/re-route loop.
-func (s *TaskStore) DeclinedBy(ctx context.Context, taskID string) ([]string, error) {
+// DeclineRecord is one refusal on a task's audit trail: the declining
+// executor and the reason it stated ("capacity full", "node draining").
+type DeclineRecord struct {
+	By     string
+	Reason string
+}
+
+// DeclineTrail returns every refusal this task collected, oldest first.
+func (s *TaskStore) DeclineTrail(ctx context.Context, taskID string) ([]DeclineRecord, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT data_json FROM task_events WHERE task_id=? AND type=? ORDER BY id`,
 		taskID, EvDecline)
 	if err != nil {
-		return nil, fmt.Errorf("declined-by: %w", err)
+		return nil, fmt.Errorf("decline trail: %w", err)
 	}
 	defer rows.Close()
-	var out []string
+	var out []DeclineRecord
 	for rows.Next() {
 		var data string
 		if err := rows.Scan(&data); err != nil {
 			return nil, err
 		}
 		var d struct {
-			By string `json:"by"`
+			By     string `json:"by"`
+			Reason string `json:"reason"`
 		}
 		if err := json.Unmarshal([]byte(data), &d); err == nil && d.By != "" {
-			out = append(out, d.By)
+			out = append(out, DeclineRecord{By: d.By, Reason: d.Reason})
 		}
 	}
 	return out, rows.Err()
 }
 
+// DeclinedBy returns every node that has declined this task, read from the
+// task_events audit trail (Decline records the declining executor as "by").
+// The re-router (P1-5) excludes them so a task cannot bounce back to a node
+// that already refused it — that is what bounds the decline/re-route loop.
+func (s *TaskStore) DeclinedBy(ctx context.Context, taskID string) ([]string, error) {
+	trail, err := s.DeclineTrail(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(trail))
+	for _, d := range trail {
+		out = append(out, d.By)
+	}
+	return out, nil
+}
+
 // RetryCount returns the number of retries recorded on a task's audit trail
-// (one EvRetry event per Requeue). Unlike the in-memory loop detector — whose
+// (one EvRetry event per RequeueForRetry). Unlike the in-memory loop detector — whose
 // counters reset with the process — this count survives daemon restarts, so a
 // deterministically failing task cannot earn an unbounded number of attempts
 // by crashing and restarting its node between retries (S2-6).
@@ -854,13 +875,6 @@ func (s *TaskStore) Fail(ctx context.Context, taskID, owner, reason string) erro
 	}
 	return s.transition(ctx, taskID, from, StateFailed, owner, EvResult,
 		map[string]any{"failed": reason})
-}
-
-// Requeue transitions a failed task back to queued for a retry. It is the
-// retry loop's entry: after a failed attempt the task returns to the queue to
-// be re-dispatched. Only the owner may requeue.
-func (s *TaskStore) Requeue(ctx context.Context, taskID, owner string) error {
-	return s.transition(ctx, taskID, StateFailed, StateQueued, owner, EvRetry, nil)
 }
 
 // RequeueForRetry is the atomic form of the retry loop's three-step move

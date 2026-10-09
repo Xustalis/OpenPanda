@@ -240,6 +240,15 @@ type Core struct {
 	// Guarded by mu; entries die with the peer's connection.
 	peerBlocked map[string][]string
 
+	// ownsNodeRow says whether this process owns the node's directory row.
+	// The daemon does: it holds the identity lock and runs the heartbeat, so
+	// its Shutdown marks the row offline. A short-lived CLI engine (task add,
+	// ask, nodes) registers under the same stable node id but only borrows
+	// the row — marking it offline on Close would flap the live daemon's
+	// self row until the next beat, during which the scheduler sees the local
+	// node as gone. Set once before serving; read unguarded afterward.
+	ownsNodeRow bool
+
 	// helloSeen maps nodeID|ts|sig|msg_id -> the time the hello was verified,
 	// making each signed hello frame single-use within its validity window.
 	// Without it a captured hello can be replayed on a second connection for
@@ -397,6 +406,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		auditLog:     security.NewAudit(db),
 		workDir:      ".",
 		model:        model,
+		ownsNodeRow:  true,
 
 		superviseRounds: defaultSuperviseRounds,
 		leaseTimeout:    defaultDelegateTimeout,
@@ -432,6 +442,12 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 // lands in the local directory row via refreshSelfNeighbors.
 func (c *Core) SetContacts(contacts []ledger.Contact) {
 	c.contacts = contacts
+}
+
+// SetOwnsNodeRow declares whether this process owns the node's directory
+// row. Call it after NewCore, before serving starts. See the field comment.
+func (c *Core) SetOwnsNodeRow(owns bool) {
+	c.ownsNodeRow = owns
 }
 
 // wireContacts converts the configured plan to its wire form. The slice is
@@ -1258,7 +1274,12 @@ func (c *Core) Shutdown(ctx context.Context) {
 		c.udp = nil
 	}
 	c.udpMu.Unlock()
-	c.node.Shutdown(ctx)
+	// Only the process that owns the row may retire it: a borrowed engine
+	// (CLI sharing the daemon's node id) must leave liveness to the owner's
+	// heartbeat, or every CLI exit flips a running node offline.
+	if c.ownsNodeRow {
+		c.node.Shutdown(ctx)
+	}
 }
 
 // Listen starts the WebSocket server and accepts connections. Blocks until
@@ -1343,8 +1364,15 @@ func (c *Core) removePeerForConn(conn *bus.Conn) {
 		c.mu.Lock()
 		delete(c.peerBlocked, id)
 		c.mu.Unlock()
-		if err := ledger.MarkOffline(c.db, id); err != nil {
-			c.logger.Warn("mark peer offline", "peer", id, "err", err)
+		// Liveness writes belong to the row's owner: a borrowed engine whose
+		// transient conn to this peer just closed must not flip the shared
+		// row — the owning daemon's own conn to the same peer is still live,
+		// and marking it offline here would blind the daemon's routing until
+		// the next hello restores it.
+		if c.ownsNodeRow {
+			if err := ledger.MarkOffline(c.db, id); err != nil {
+				c.logger.Warn("mark peer offline", "peer", id, "err", err)
+			}
 		}
 	}
 	if len(gone) > 0 {
@@ -2141,7 +2169,10 @@ func (c *Core) linkMetrics() []ledger.LinkMetric {
 			continue
 		}
 		if rtt := p.conn.RTT(); rtt > 0 {
-			conns[id] = rtt.Milliseconds()
+			// A measured sub-millisecond edge (loopback, same-host) is real
+			// data: ceil it to 1ms rather than dropping it as unmeasured.
+			// Zero still means "no sample", never "this edge is free".
+			conns[id] = max(rtt.Milliseconds(), 1)
 		}
 	}
 	c.mu.RUnlock()

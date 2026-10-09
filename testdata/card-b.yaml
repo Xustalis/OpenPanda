@@ -1,0 +1,27 @@
+device: test-node-b
+resource_class: Micro
+chip: "test"
+
+native:
+  - id: sys:info
+    command: uname
+    args: ["-a"]
+    tier: 1
+    description: "system info"
+  - id: probe:beta
+    command: uname
+    args: ["-a"]
+    tier: 1
+    description: "unique ability only node-b has"
+
+capacity:
+  cpu_cores: 2
+  ram_gb: 4
+  max_concurrent_tasks: 2
+  current_tasks: 0
+
+resource_profile:
+  cpu: 2
+  ram_gb: 4
+  gpu_vram_gb: 0
+  duration_hint: short

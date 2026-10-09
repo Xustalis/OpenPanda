@@ -109,6 +109,39 @@ func TestResumeParksWhenExecutorUnreachable(t *testing.T) {
 	t.Fatal("parked approval was never redelivered after the executor returned")
 }
 
+// TestHasPendingCustody: the redial loops tighten their cadence when an
+// outbox holds undelivered rows — the check must see every custody table and
+// clear the moment the row is delivered.
+func TestHasPendingCustody(t *testing.T) {
+	ctx := context.Background()
+	root := pinCore(t, "pin-root", "x")
+	if root.HasPendingCustody(ctx) {
+		t.Fatal("fresh store must hold no custody")
+	}
+	tk, err := root.store.Create(ctx, "", "", "custody probe", "pin-root", []string{"pin-root"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	root.taskOutboxPersist(ctx, "pin-leaf", bus.TaskDelegatePayload{TaskID: tk.TaskID},
+		"pin", time.Now().Add(time.Hour).Unix())
+	if !root.HasPendingCustody(ctx) {
+		t.Fatal("parked task must register as pending custody")
+	}
+	root.taskOutboxDrop(ctx, "pin-leaf", tk.TaskID)
+	if root.HasPendingCustody(ctx) {
+		t.Fatal("delivered custody must clear")
+	}
+	root.resumeOutboxPersist(ctx, "pin-leaf", bus.TaskResumePayload{TaskID: tk.TaskID},
+		time.Now().Add(time.Hour).Unix())
+	if !root.HasPendingCustody(ctx) {
+		t.Fatal("parked approval must register as pending custody")
+	}
+	root.resumeOutboxDrop(ctx, "pin-leaf", tk.TaskID)
+	if root.HasPendingCustody(ctx) {
+		t.Fatal("all custody delivered must clear")
+	}
+}
+
 // TestTaskOutboxTTLCoversParkedResume: a synchronous waiter bounded on
 // custody must honor a parked approval's ttl — the same window the live wait
 // would have used — not fall back to a bare lease guess.

@@ -188,12 +188,28 @@ func (c *Core) StartQueueScheduler(ctx context.Context) *queue.Scheduler {
 	return s
 }
 
-// QueueScheduler exposes the running scheduler (nil before
-// StartQueueScheduler). Used by tests and diagnostics.
-func (c *Core) QueueScheduler() *queue.Scheduler {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.queueSched
+// enrichDeclineReason attaches the recorded refusal trail to a route decline,
+// so "no capability matches" stops masquerading as the verdict when capable
+// nodes already refused — "declined by B (capacity full)" is the actionable
+// truth the operator needs. No trail means a genuine capability miss: the
+// base reason stands.
+func (c *Core) enrichDeclineReason(ctx context.Context, taskID, base string) string {
+	if c.store == nil {
+		return base
+	}
+	trail, err := c.store.DeclineTrail(ctx, taskID)
+	if err != nil || len(trail) == 0 {
+		return base
+	}
+	parts := make([]string, 0, len(trail))
+	for _, d := range trail {
+		if d.Reason != "" {
+			parts = append(parts, d.By+" ("+d.Reason+")")
+		} else {
+			parts = append(parts, d.By)
+		}
+	}
+	return base + "; declined by " + strings.Join(parts, "; ")
 }
 
 // queueStoreAdapter implements queue.Store on the core's task store.
@@ -330,7 +346,8 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 	}
 	if decision.Action != scheduler.ActionForward {
 		c.logger.Info("queue: no peer for task", "task", t.TaskID,
-			"action", string(decision.Action), "reason", decision.Reason)
+			"action", string(decision.Action),
+			"reason", c.enrichDeclineReason(ctx, t.TaskID, decision.Reason))
 		return false
 	}
 	p := bus.TaskDelegatePayload{

@@ -3010,7 +3010,8 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	decision := scheduler.RouteP(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
 		resourceRequirement(t.ResourceJSON), "", t.Project)
 	if decision.Action != scheduler.ActionForward {
-		c.logger.Info("reroute: no alternate node", "task", taskID, "action", decision.Action)
+		c.logger.Info("reroute: no alternate node", "task", taskID, "action", decision.Action,
+			"reason", c.enrichDeclineReason(ctx, taskID, decision.Reason))
 		return false
 	}
 

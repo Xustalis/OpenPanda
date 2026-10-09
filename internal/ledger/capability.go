@@ -316,11 +316,17 @@ func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agents
 			native_json=excluded.native_json, agents_json=excluded.agents_json,
 			manual_json=excluded.manual_json, capacity_json=excluded.capacity_json,
 			resource_profile_json=excluded.resource_profile_json,
-			neighbors_json=excluded.neighbors_json, links_json=excluded.links_json,
-			contacts_json=excluded.contacts_json,
-			-- A silent upsert (self Register, an old peer's card) carries no
-			-- residence claim: preserve what the heartbeat gossip published
-			-- rather than blanking it until the next beat.
+			-- A silent upsert (self Register, a peer hello with no adjacency
+			-- claim) carries no link-state data: preserve what heartbeat gossip
+			-- published rather than blanking it until the next beat. 'null'
+			-- alongside '': a marshalled nil slice claims nothing, unlike '[]'
+			-- which explicitly claims zero neighbors.
+			neighbors_json=CASE WHEN excluded.neighbors_json IN ('','null') THEN employee_cache.neighbors_json
+				ELSE excluded.neighbors_json END,
+			links_json=CASE WHEN excluded.links_json IN ('','null') THEN employee_cache.links_json
+				ELSE excluded.links_json END,
+			contacts_json=CASE WHEN excluded.contacts_json IN ('','null') THEN employee_cache.contacts_json
+				ELSE excluded.contacts_json END,
 			projects_json=CASE WHEN excluded.projects_json='' THEN employee_cache.projects_json
 				ELSE excluded.projects_json END,
 			status='online', last_seen=excluded.last_seen, scheduler_tier=excluded.scheduler_tier`,

@@ -226,14 +226,17 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 				capable = append(capable, n)
 			}
 		}
-		// Also route the self-node in so ScoreAllCandidates can apply localBias.
+		// Also route the self-node in so ScoreAllCandidates can apply localBias;
+		// its LinkMetrics feed the link-latency term for the peer candidates.
+		var selfLinks map[string]int64
 		for i := range employees {
 			if scheduler.IsSelfRow(employees[i].ID, c.nodeID) {
 				capable = append(capable, employees[i])
+				selfLinks = employees[i].LinkMetrics
 				break
 			}
 		}
-		allCandidates := scheduler.ScoreAllCandidates(capable, c.nodeID, in.PreferredNode, in.Project, now)
+		allCandidates := scheduler.ScoreAllCandidates(capable, c.nodeID, in.PreferredNode, in.Project, now, selfLinks)
 		// — Pick the breakdown that actually drove the decision so the orbit
 		//    can explain "why this node". For ActionLocal the winner is the
 		//    local self node (top of allCandidates due to localBias); for

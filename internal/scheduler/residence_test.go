@@ -19,7 +19,12 @@ func residentEmployees() []ledger.Node {
 			ID: "self", Status: "online", SchedulerTier: 5,
 			Native:   []ledger.NativeAbility{{ID: "code:modify"}},
 			Capacity: ledger.Capacity{MaxConcurrent: 4, CurrentTasks: 0},
-			LastSeen: time.Now().Unix(),
+			// A measured LAN-grade edge to the peer keeps the scene
+			// "identical nodes": with no RTT sample the link term would
+			// price the peer at neutral 0.5 against self's 1.0, and the
+			// residence test would be measuring the link penalty instead.
+			LinkMetrics: map[string]int64{"peer-res": 5},
+			LastSeen:    time.Now().Unix(),
 		},
 		{
 			ID: "peer-res", Status: "online", SchedulerTier: 5,
@@ -75,11 +80,11 @@ func TestResidenceIsScoreNotGate(t *testing.T) {
 func TestScoreBreakdownResidence(t *testing.T) {
 	now := time.Now().Unix()
 	emps := residentEmployees()
-	res := scoreBreakdown(emps[1], now, "", "p")
+	res := scoreBreakdown(emps[1], now, "", "p", "self", nil)
 	if res.ProjectResidence != 1 {
 		t.Fatalf("resident breakdown = %+v, want residence 1", res)
 	}
-	non := scoreBreakdown(emps[0], now, "", "p")
+	non := scoreBreakdown(emps[0], now, "", "p", "self", nil)
 	if non.ProjectResidence != 0 {
 		t.Fatalf("non-resident breakdown = %+v, want residence 0", non)
 	}

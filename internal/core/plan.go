@@ -704,7 +704,7 @@ func (c *Core) packStageOutput(ctx context.Context, t Task, workDir string) (str
 	if c.artifacts == nil {
 		return "", nil // no data plane on this node: nothing to hand on
 	}
-	m, err := c.artifacts.PackDir(workDir)
+	m, err := c.artifacts.PackDirExceptPaths(workDir, nil, c.hostStatePrune(workDir), 0)
 	if err != nil {
 		return "", fmt.Errorf("pack stage output: %w", err)
 	}

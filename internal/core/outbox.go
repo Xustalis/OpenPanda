@@ -726,6 +726,27 @@ func (c *Core) taskOutboxTTL(ctx context.Context, taskID string) int64 {
 	return ttl
 }
 
+// HasPendingCustody reports whether any outbox holds undelivered rows — a
+// parked task, result, cancel or approval waiting on a peer's next contact.
+// The daemon's redial loops use it to tighten their cadence: with custody in
+// hand, probing the contact opportunity is the priority, and the usual
+// steady-state backoff would leave a parked task waiting out half-minute
+// retry gaps on a link that is ready to carry it.
+func (c *Core) HasPendingCustody(ctx context.Context) bool {
+	if c.db == nil {
+		return false
+	}
+	var n int
+	if err := c.db.QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM task_outbox) +
+		(SELECT COUNT(*) FROM result_outbox) +
+		(SELECT COUNT(*) FROM cancel_outbox) +
+		(SELECT COUNT(*) FROM resume_outbox)`).Scan(&n); err != nil {
+		return false
+	}
+	return n > 0
+}
+
 // taskOutboxDrop removes a delivered task so it is not resent.
 func (c *Core) taskOutboxDrop(ctx context.Context, peer, taskID string) {
 	if c.db == nil || peer == "" || taskID == "" {
