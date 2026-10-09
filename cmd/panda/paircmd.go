@@ -167,6 +167,9 @@ func runNodesAdmit(args []string) {
 		admitPeerAddr(*configPath, cfg, p.Addr)
 		_ = ledger.ForgetPending(db, id)
 		fmt.Println(i18n.Tf(loc, "cli.nodes.admit.done", "id", id))
+		if !p.Verified {
+			fmt.Println(i18n.Tf(loc, "cli.nodes.admit.unverified", "id", id))
+		}
 		return
 	}
 	fatal("admit node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.admit.none", "id", id)))

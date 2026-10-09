@@ -229,10 +229,18 @@ func printPendingTo(w io.Writer, db *sql.DB, loc i18n.Locale) {
 		if fp == "" {
 			fp = "—"
 		}
+		// A signed beacon proves the fingerprint belongs to the broadcaster;
+		// an unsigned (v1) one could name anybody's key next to its own
+		// address, so it wears the warn mark until the hello proves more.
+		sigMark := p.Success(p.MarkOK())
+		if !n.Verified {
+			sigMark = p.Warn(p.Glyph("⚠", "!"))
+			fp = p.Warn(fp)
+		}
 		fmt.Fprintln(w, row(
 			"  "+cell(n.ID, 24),
 			cell(n.Addr, 24),
-			p.Warn(fp),
+			sigMark+" "+fp,
 			humanAge(loc, n.LastSeen),
 		))
 	}

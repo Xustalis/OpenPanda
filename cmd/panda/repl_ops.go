@@ -670,6 +670,9 @@ func (r *repl) cmdNodesAdmit(arg string) {
 		}
 		r.cmdNodesAdd(p.Addr)
 		_ = ledger.ForgetPending(r.db, id)
+		if !p.Verified {
+			r.outln(i18n.Tf(r.loc, "cli.nodes.admit.unverified", "id", id))
+		}
 		return
 	}
 	r.outln(i18n.Tf(r.loc, "cli.nodes.admit.none", "id", id))
