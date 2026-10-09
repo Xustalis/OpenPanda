@@ -64,7 +64,7 @@ def _cli_flags():
     text = ""
     try:
         argv = harness.resolve_argv(["opencode", "run", "--help"])
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=15)
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
         text = (proc.stdout or "") + (proc.stderr or "")
     except Exception:
         text = ""
