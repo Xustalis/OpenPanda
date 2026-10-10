@@ -481,6 +481,14 @@ const (
 	DefaultAgentTimeoutS     = 600
 	DefaultTaskLeaseS        = 2 * (DefaultAgentTimeoutS + 30)
 	DefaultSuperviseRoundsCf = 5
+	// DefaultSilenceS bounds how long one agent execution may emit zero
+	// progress notes or output before the watchdog calls it stalled and
+	// aborts. Four minutes is far above any healthy provider request or
+	// tool call's quiet stretch, so a longer silence is a wedge (hung API
+	// call, dead CLI), not a slow-but-live run — and a stalled attempt that
+	// dies early retries into a working one instead of burning the whole
+	// agent budget on a corpse.
+	DefaultSilenceS = 240
 )
 
 // TimeoutsConfig bounds long-running task execution. All durations are seconds;
@@ -503,16 +511,23 @@ type TimeoutsConfig struct {
 	// SuperviseRounds caps the execute → judge → re-delegate loop per task.
 	SuperviseRounds int `yaml:"supervise_rounds"`
 	// SilenceS is how long execution may produce zero progress notes or output
-	// before the watchdog treats it as stalled and aborts. 0 = disabled.
+	// before the watchdog treats it as stalled and aborts. 0 = DefaultSilenceS;
+	// a negative value disables the kill (heartbeat notes still post — the
+	// stall stays visible, it just is not aborted).
 	SilenceS int `yaml:"silence_s"`
 }
 
-// SilenceTimeout returns the configured progress silence limit, or 0 (disabled).
+// SilenceTimeout returns the configured progress silence limit: DefaultSilenceS
+// when unset, 0 when explicitly disabled with a negative value.
 func (t TimeoutsConfig) SilenceTimeout() time.Duration {
-	if t.SilenceS > 0 {
+	switch {
+	case t.SilenceS < 0:
+		return 0
+	case t.SilenceS == 0:
+		return DefaultSilenceS * time.Second
+	default:
 		return time.Duration(t.SilenceS) * time.Second
 	}
-	return 0
 }
 
 // TaskLease returns the configured task lease, or the default when unset.

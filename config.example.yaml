@@ -280,6 +280,14 @@ injection:
 #   # Wall-clock budget for one agent-adapter execution (told to the adapter and
 #   # enforced as a hard deadline). Default 600.
 #   agent_s: 600
+#   # How long one agent execution may produce ZERO progress notes or output
+#   # before the watchdog calls it stalled and aborts the attempt. A wedged
+#   # provider call or dead CLI emits nothing for arbitrarily long — four
+#   # silent minutes is a corpse, not a slow worker, and killing it lets the
+#   # retry succeed instead of burning the whole agent budget. Default 240;
+#   # set -1 to disable the kill (the "no output for Xs" heartbeat notes still
+#   # post, the stall just is not aborted).
+#   silence_s: 240
 #   # Cap on the execute → judge → re-dispatch loop per task. Default 5.
 #   supervise_rounds: 5
 

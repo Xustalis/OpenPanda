@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func writeTemp(t *testing.T, content string) string {
@@ -433,5 +434,21 @@ func TestValidateCleartextScope(t *testing.T) {
 		if err := validateCleartextScope(e); err == nil {
 			t.Errorf("validateCleartextScope(%q) = nil, want error", e)
 		}
+	}
+}
+
+// SilenceTimeout semantics: unset means the built-in stall limit (a wedged
+// adapter emitting nothing for minutes is killed, not waited on); an explicit
+// negative opts the kill out while heartbeat notes still post; a positive
+// value is honoured verbatim.
+func TestSilenceTimeoutDefaultsToStallLimit(t *testing.T) {
+	if got := (TimeoutsConfig{}).SilenceTimeout(); got != DefaultSilenceS*time.Second {
+		t.Fatalf("unset silence_s = %v, want DefaultSilenceS (%ds)", got, DefaultSilenceS)
+	}
+	if got := (TimeoutsConfig{SilenceS: -1}).SilenceTimeout(); got != 0 {
+		t.Fatalf("silence_s: -1 = %v, want 0 (disabled)", got)
+	}
+	if got := (TimeoutsConfig{SilenceS: 90}).SilenceTimeout(); got != 90*time.Second {
+		t.Fatalf("silence_s: 90 = %v, want 90s", got)
 	}
 }
