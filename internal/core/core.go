@@ -2110,7 +2110,21 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// after (the probe's registry entry then gets cleaned up with it).
 	c.lastVerifiedHello.Store(probeHello{id: p.NodeID, encrypted: conn.Encrypted()})
 
-	accepted := c.ensurePeer(p.NodeID, conn, p.Authoritative)
+	// The authority that ranks competing conns is the one of the side whose
+	// process they belong to. An inbound conn was dialed by the REMOTE
+	// process, so its hello's claim (p.Authoritative) is the ranking input.
+	// An outbound conn is our own dial — the competing conns on this side are
+	// our own, so the input is our own claim, and what was stored at each
+	// registration is our claim then. Both ends then agree: an authoritative
+	// process that redials while its own older, non-authoritative conn is
+	// still live promotes the new conn on BOTH sides, instead of the peer
+	// promoting it while this side rejects-and-closes it as a sibling loser
+	// and kills the edge it just won.
+	auth := p.Authoritative
+	if conn.Outbound() {
+		auth = c.edgeAuthority.Load()
+	}
+	accepted := c.ensurePeer(p.NodeID, conn, auth)
 	if !accepted {
 		// Lost the mutual-dial tie-break: the reply above already left on
 		// this conn, so the losing dialer bound our identity and its
