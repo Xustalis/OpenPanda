@@ -10,6 +10,7 @@ import {
 } from '../api/client'
 import { t } from '../i18n'
 import { toast, toastError } from './toast'
+import { confirmDialog } from './confirm'
 
 /** — Capability card editor (stage 6): the web twin of `/card`. One card,
  *  three sections (agents / native / manual), each entry editable in place —
@@ -201,7 +202,12 @@ function AgentRow({
 
   async function remove() {
     if (busy) return
-    if (!window.confirm(t('card.agent.removeConfirm', { name }))) return
+    const ok = await confirmDialog({
+      title: t('card.agent.removeTitle'),
+      message: t('card.agent.removeConfirm', { name }),
+      confirmLabel: t('card.remove'),
+    })
+    if (!ok) return
     setBusy(true)
     try {
       const res = await api.removeCardAgent(name)
@@ -313,7 +319,12 @@ function NativeRemove({ id, reload, onChanged }: { id: string; reload(): void; o
   const [busy, setBusy] = useState(false)
   async function remove() {
     if (busy) return
-    if (!window.confirm(t('card.native.removeConfirm', { id }))) return
+    const ok = await confirmDialog({
+      title: t('card.native.removeTitle'),
+      message: t('card.native.removeConfirm', { id }),
+      confirmLabel: t('card.remove'),
+    })
+    if (!ok) return
     setBusy(true)
     try {
       const res = await api.removeNativeAbility(id)
@@ -367,7 +378,12 @@ function CardManualSection({
   }
 
   async function remove(mid: string) {
-    if (!window.confirm(t('card.manual.removeConfirm', { id: mid }))) return
+    const ok = await confirmDialog({
+      title: t('card.manual.removeTitle'),
+      message: t('card.manual.removeConfirm', { id: mid }),
+      confirmLabel: t('card.remove'),
+    })
+    if (!ok) return
     try {
       const res = await api.removeManualAbility(mid)
       toast(res.live ? t('card.saved.live') : t('card.saved.restart'), 'success')

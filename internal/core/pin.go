@@ -43,6 +43,13 @@ type pinResolution struct {
 	// resolve to their freshest row instead (ghost entries decay, the real
 	// node's row is the one that beat most recently).
 	ambiguous bool
+	// viaLink marks a resolution that came from network configuration — the
+	// addr→id bindings recorded at hello (peer_addrs) or a live authenticated
+	// conn — rather than a directory row. The directory does not gossip: a
+	// node configured to dial a peer it has never met holds no row for it,
+	// and this fallback is what keeps the pin deliverable there. Callers
+	// report it so the fallback is visible, never silent.
+	viaLink bool
 }
 
 // resolvePin maps ref to a node in this node's directory view. Resolution
@@ -92,6 +99,7 @@ func (c *Core) resolvePin(ctx context.Context, ref string) pinResolution {
 			continue
 		}
 		matched := strings.EqualFold(n.ID, ref) || strings.EqualFold(n.Name, ref) ||
+			strings.EqualFold(scheduler.NodeNamePart(n.ID), ref) ||
 			(n.PubKey != "" && strings.EqualFold(n.PubKey, keyRef))
 		if isKeyRef {
 			matched = n.PubKey != "" && strings.EqualFold(n.PubKey, keyRef)
@@ -113,6 +121,7 @@ func (c *Core) resolvePin(ctx context.Context, ref string) pinResolution {
 	}
 	if selfRef || (selfRow.ID != "" &&
 		(strings.EqualFold(ref, selfRow.ID) || strings.EqualFold(ref, selfRow.Name) ||
+			strings.EqualFold(ref, scheduler.NodeNamePart(selfRow.ID)) ||
 			(selfRow.PubKey != "" && strings.EqualFold(selfRow.PubKey, keyRef) &&
 				(isKeyRef || strings.EqualFold(ref, selfRow.PubKey))))) {
 		// The self row rides along so callers can run the same resource-fit
@@ -130,8 +139,72 @@ func (c *Core) resolvePin(ctx context.Context, ref string) pinResolution {
 	case staleCount > 0:
 		return pinResolution{targetID: staleHit.ID, node: staleHit, found: true}
 	default:
+		return c.resolvePinViaLink(ctx, ref)
+	}
+}
+
+// resolvePinViaLink is the directory fallback for a pin naming a peer this
+// node knows only through its network configuration: the addr→id bindings
+// recorded at hello (peer_addrs) plus the live conn registry. Without it, a
+// `--preferred <addr>` declines "not in the directory" on a node whose
+// directory simply never gossiped that peer — while a perfectly good
+// configured link to it sits idle (the cross-subnet case, where LAN beacons
+// cannot fill the gap). Security posture is unchanged: only an explicitly
+// configured address or an already-authenticated live conn can produce an
+// id; nothing a stranger says creates a resolution, and an unresolved ref
+// still declines honestly.
+func (c *Core) resolvePinViaLink(ctx context.Context, ref string) pinResolution {
+	if c.db == nil {
 		return pinResolution{}
 	}
+	live := map[string]bool{}
+	c.mu.RLock()
+	for id := range c.peers {
+		live[id] = true
+	}
+	c.mu.RUnlock()
+	bindings, err := ledger.PeerAddrBindings(c.db)
+	if err != nil {
+		c.logger.Warn("resolve pin: peer bindings", "ref", ref, "err", err)
+		return pinResolution{}
+	}
+	// A ref naming a configured ADDRESS resolves through its binding: the
+	// address is what the operator wrote down, and the binding says which
+	// node answered it. An offline binding still resolves — the pin parks
+	// for the peer's return, the same posture an offline directory row gets.
+	for addr, id := range bindings {
+		if strings.EqualFold(addr, ref) {
+			return pinResolution{targetID: id, found: true, viaLink: true, online: live[id]}
+		}
+	}
+	// Name/id refs match against the candidates (bindings' ids and live
+	// conns): the node's config-name segment is how the operator refers to
+	// it, even when its row never reached this directory.
+	var hit string
+	consider := func(id string) pinResolution {
+		if !strings.EqualFold(id, ref) && !strings.EqualFold(scheduler.NodeNamePart(id), ref) {
+			return pinResolution{}
+		}
+		if hit != "" && hit != id {
+			return pinResolution{found: true, viaLink: true, ambiguous: true}
+		}
+		hit = id
+		return pinResolution{}
+	}
+	for _, id := range bindings {
+		if amb := consider(id); amb.ambiguous {
+			return amb
+		}
+	}
+	for id := range live {
+		if amb := consider(id); amb.ambiguous {
+			return amb
+		}
+	}
+	if hit == "" {
+		return pinResolution{}
+	}
+	return pinResolution{targetID: hit, found: true, viaLink: true, online: live[hit]}
 }
 
 // routePinned produces the routing decision for a task carrying a hard node
@@ -176,6 +249,15 @@ func (c *Core) routePinned(ctx context.Context, ref string, chain []string,
 	case slices.Contains(chain, res.targetID):
 		return scheduler.Decision{Action: scheduler.ActionDecline,
 			Reason: fmt.Sprintf("pinned node %q is already in the delegation chain", ref)}
+	case res.viaLink:
+		// Resolved through network configuration, not the directory: forward
+		// exactly where the user pointed and say so. There is no row to run
+		// the capability checks against — the executor's own admission gate
+		// is the honest check for a node this directory cannot see — and the
+		// pin keeps its no-reroute contract: the target is fixed, delivery
+		// parks for it when the link is down.
+		return scheduler.Decision{Action: scheduler.ActionForward, Target: res.targetID,
+			Reason: fmt.Sprintf("pinned to %s (configured peer — not in the local directory)", res.targetID)}
 	case len(requires) > 0 && !res.node.Matches(requires):
 		return scheduler.Decision{Action: scheduler.ActionDecline,
 			Reason: fmt.Sprintf("pinned node %q cannot satisfy requires %v", ref, requires)}

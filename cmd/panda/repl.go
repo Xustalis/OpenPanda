@@ -1071,8 +1071,18 @@ func (r *repl) askMode(text, mode string) {
 	// prompt happens here, on the main loop, after the interrupt watcher has
 	// released the terminal — a raw-mode read from the ask goroutine would fight
 	// it for stdin). On a yes, re-run the same task authorized in place.
-	if out != nil && out.NeedsApproval && out.Approval != nil {
-		out = r.approveInline(out, workDir)
+	// A plan may park more than once: each approval re-enters the stage
+	// watch, and the next parked stage comes back as another NeedsApproval.
+	// The loop ends on a denial (the same Result comes back) or when the
+	// same stage still parks after its own resume (a resumed failure left
+	// it in review — re-prompting that card forever is a deadlock).
+	for out != nil && out.NeedsApproval && out.Approval != nil {
+		next := r.approveInline(out, workDir)
+		if next == out || (next.NeedsApproval && next.Approval != nil && next.Approval.TaskID == out.Approval.TaskID) {
+			out = next
+			break
+		}
+		out = next
 	}
 
 	// Bind a spawned task back to the active session and persist the reply.
@@ -1115,6 +1125,9 @@ func (r *repl) askMode(text, mode string) {
 				}
 				reportNote += " · " + i18n.Tf(r.loc, "tui.task.execBy", "exec", execNote)
 			}
+			if out.RouteFallback != "" {
+				reportNote += " · " + i18n.Tf(r.loc, "cli.task.route_fallback", "peer", out.RouteFallback)
+			}
 			r.outln(pal().Muted(reportNote))
 			break
 		}
@@ -1127,25 +1140,51 @@ func (r *repl) askMode(text, mode string) {
 			break
 		}
 		r.outln(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
-		if out.OK {
+		switch {
+		case out.OK:
 			r.outf("%s", r.renderMd(out.Stdout))
 			if s := strings.TrimRight(out.Stdout, "\n"); s != "" && !strings.HasSuffix(out.Stdout, "\n") {
 				r.outln()
 			}
-		} else {
+		case out.ExitCode != 0 || strings.TrimSpace(out.Stderr) != "":
 			r.errf("exit %d: %s\n", out.ExitCode, out.Stderr)
+		case strings.TrimSpace(out.Stdout) != "":
+			// No failure evidence, but the result still has something to say:
+			// a queue receipt ("pinned to X — queued until the link is live")
+			// on a wait the user released. "exit 0: " here read as a failure
+			// that never happened.
+			r.outln(r.renderMd(out.Stdout))
 		}
 	case "plan":
-		// A plan does not finish inside the ask: its stages are queued and will
-		// run on other machines. Print the board and how to follow it.
-		if !out.OK {
+		// A start failure has no board (the plan never formed); a non-empty
+		// board means the engine followed the stages to their verdict and
+		// !OK is a stage's failure, not a start failure.
+		if !out.OK && len(out.PlanStages) == 0 {
 			r.errf("%s\n", "panda: "+i18n.Tf(r.loc, "cli.plan.failed", "err", out.Stderr))
 			break
 		}
 		r.outln(i18n.Tf(r.loc, "cli.plan.started",
 			"id", out.PlanID, "n", strconv.Itoa(len(out.PlanStages)), "goal", out.PlanGoal))
 		printPlanStagesTo(r.commandOutput(), out.PlanStages)
-		r.outln(i18n.Tf(r.loc, "cli.plan.follow", "id", out.PlanID))
+		if out.Warning != "" {
+			r.outln(pal().Muted(out.Warning))
+		}
+		switch planBoardState(out.PlanStages) {
+		case "done":
+			r.outln(i18n.T(r.loc, "cli.plan.done"))
+		case "failed":
+			r.outln(i18n.Tf(r.loc, "cli.plan.stageFailed", "err", out.Stderr))
+		case "awaiting":
+			// The approval card ran ahead (approveInline). A denied or
+			// non-interactive turn lands here: point at the parked stage.
+			id := out.PlanID
+			if out.Approval != nil {
+				id = out.Approval.TaskID
+			}
+			r.outln(i18n.Tf(r.loc, "cli.plan.awaiting", "id", shortID(id)))
+		default:
+			r.outln(i18n.Tf(r.loc, "cli.plan.follow", "id", out.PlanID))
+		}
 	}
 
 	// The closing line: what this turn cost (elapsed, and tokens when the
@@ -1341,7 +1380,7 @@ func (r *repl) cmdTasks(arg string) {
 		return
 	}
 	if watch {
-		watchQueueTo(r.commandContext(), r.store, state, "", r.loc, r.commandOutput(), false)
+		watchQueueTo(r.commandContext(), r.cfg, r.store, state, "", r.loc, r.commandOutput(), false)
 		return
 	}
 	// The listing is bounded: /tasks shows the working set, not the archive —
@@ -1360,7 +1399,16 @@ func (r *repl) cmdTasks(arg string) {
 	if len(tasks) == taskListCap {
 		r.outln(pal().Muted(i18n.Tf(r.loc, "cli.queue.truncated", "n", strconv.Itoa(taskListCap))))
 	}
-	printTaskTableTo(r.commandOutput(), r.loc, tasks)
+	printTaskTableTo(r.commandOutput(), r.loc, tasks,
+		taskRefsFor(r.commandContext(), r.store, tasks), r.store)
+	for _, t := range tasks {
+		if t.State == core.StateQueued || t.State == core.StateSubmitted {
+			if !queueConsumerAlive(r.cfg) {
+				warnNoConsumerTo(r.commandOutput(), r.loc)
+			}
+			break
+		}
+	}
 }
 
 // cmdTasksClear implements "/tasks clear [--yes]": confirm, cancel everything
@@ -1507,6 +1555,9 @@ func (r *repl) cmdTask(arg string) {
 	r.outf("  created: %s\n", ts(t.CreatedAt))
 	r.outf("  updated: %s\n", ts(t.UpdatedAt))
 	r.printEvents(t.TaskID)
+	if hint := taskNextStepHint(r.loc, r.cfg, t); hint != "" {
+		r.outln(pal().Muted(hint))
+	}
 }
 
 // cmdCancel cancels a task and its subtree. With an engine the cancel travels
@@ -1573,7 +1624,18 @@ func (r *repl) approveInline(out *askengine.Result, workDir string) *askengine.R
 			r.outf("%s %s\n", pal().MarkBullet(), progressNote(r.loc, p))
 		}
 	}
-	return r.engine.Load().ResumeApproved(context.Background(), req.TaskID, workDir, cb)
+	resumed := r.engine.Load().ResumeApproved(context.Background(), req.TaskID, workDir, cb)
+	// Approving a plan stage unblocks one task; the pipeline behind it —
+	// released successor stages, the next human gate — still needs the plan
+	// watch or the turn ends at the resumed stage's receipt while the plan
+	// runs on unreported. Re-enter it: a later parked stage comes back as
+	// another NeedsApproval the caller's loop hands to this same card.
+	if out.Kind == "plan" && out.PlanID != "" {
+		if awaited := r.engine.Load().AwaitPlanOutcome(context.Background(), out.PlanID, cb); awaited != nil {
+			return awaited
+		}
+	}
+	return resumed
 }
 
 // parseApprovalAnswer reads the approval card's reply: "y"/"yes"/"n"/"no"
@@ -1720,13 +1782,18 @@ func (r *repl) cmdApprove(arg string) {
 	}
 	out := r.engine.Load().ResumeApproved(r.commandContext(), id, "", cb)
 	r.outln(i18n.Tf(r.loc, "repl.ask.task", "id", out.TaskID, "state", out.TaskState))
-	if out.OK {
+	switch {
+	case out.OK:
 		if stdout := strings.TrimRight(out.Stdout, "\n"); stdout != "" {
 			r.outln(renderCliMd(stdout))
 		}
-		return
+	case out.ExitCode != 0 || strings.TrimSpace(out.Stderr) != "":
+		r.errf("exit %d: %s\n", out.ExitCode, out.Stderr)
+	case strings.TrimSpace(out.Stdout) != "":
+		// Still parked (review kept, a queue receipt) with no failure
+		// evidence: show what the result says instead of "exit 0: ".
+		r.outln(renderCliMd(out.Stdout))
 	}
-	r.errf("exit %d: %s\n", out.ExitCode, out.Stderr)
 }
 
 // cmdReject rejects a reviewed task (review -> failed); the reason is the

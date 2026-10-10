@@ -63,6 +63,75 @@ var migrations = []Migration{
 	{Version: 36, Name: "rekey_outboxes_stable_id", Apply: migrateV36},
 	{Version: 37, Name: "add_audit_log_sig", Apply: migrateV37},
 	{Version: 38, Name: "add_resume_outbox", Apply: migrateV38},
+	{Version: 39, Name: "add_pending_verified", Apply: migrateV39},
+	{Version: 40, Name: "add_pair_sessions", Apply: migrateV40},
+	{Version: 41, Name: "add_peer_addrs", Apply: migrateV41},
+	{Version: 42, Name: "add_tasks_exec_work_dir", Apply: migrateV42},
+}
+
+// migrateV42 adds tasks.exec_work_dir: the workspace a task actually executed
+// in, persisted when the run starts. The row's work_dir column is a PIN (a
+// session worktree the submitter chose) and stays empty for ordinary tasks,
+// whose effective directory (node work dir, stage dir, project dir) is only
+// derived at run time — so "where did this run?" had no answer on the board.
+func migrateV42(tx MigrationExec) error {
+	// A pre-v7 database has no tasks table yet (a later migration creates it
+	// with the column already present); guard like v39 does.
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "tasks", "exec_work_dir", "TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateV41 adds peer_addrs: the daemon-persisted binding from a configured
+// dial address to the node id its hello bound. `panda status` runs in its own
+// process and can only see the directory, so without this it cannot say
+// whether the peers THIS node dials are up — the mesh line counted live
+// directory rows instead, and an inbound-only stranger could make a dead
+// configured peer read as online.
+func migrateV41(tx MigrationExec) error {
+	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS peer_addrs (
+		addr TEXT PRIMARY KEY,
+		node_id TEXT NOT NULL,
+		last_seen INTEGER NOT NULL
+	)`)
+	return err
+}
+
+// migrateV40 adds pair_sessions: the responder-side row of a Bluetooth-style
+// pairing exchange. The daemon writes it when a pair_hello lands (ephemeral
+// keys stay in memory — the row is the IPC between the daemon holding the
+// session and the operator's `panda pair confirm` on the same machine); the
+// operator flips state ready→confirmed/rejected, and the daemon's session
+// goroutine watches that flip to send or refuse the sealed secret. Direction
+// is always 'in' today — the initiator side is a synchronous CLI flow with
+// nothing to persist.
+func migrateV40(tx MigrationExec) error {
+	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS pair_sessions (
+		id TEXT PRIMARY KEY,
+		peer_addr TEXT NOT NULL DEFAULT '',
+		peer_name TEXT NOT NULL DEFAULT '',
+		peer_pub TEXT NOT NULL DEFAULT '',
+		sas TEXT NOT NULL DEFAULT '',
+		state TEXT NOT NULL DEFAULT 'ready',
+		created_at INTEGER NOT NULL,
+		expires_at INTEGER NOT NULL
+	)`)
+	return err
+}
+
+// migrateV39 adds pending_nodes.verified: whether the discovery beacon's
+// Ed25519 signature proved the advertised fingerprint belongs to the
+// advertiser. Unsigned (v1-format) beacons stay listable — they are the
+// backward-compatible form — but they never earn the mark, and the pending
+// cap evicts them before signed rows.
+func migrateV39(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "pending_nodes")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "pending_nodes", "verified", "INTEGER NOT NULL DEFAULT 0")
 }
 
 // migrateV38 adds resume_outbox: the delivery guarantee for task_resume

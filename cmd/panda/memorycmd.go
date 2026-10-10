@@ -134,7 +134,7 @@ func runMemory(args []string) {
 	case "help", "-h", "--help":
 		memoryUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "panda: unknown memory verb %q\n", verb)
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamed", "kind", "memory verb", "name", verb))
 		memoryUsage()
 		os.Exit(2)
 	}

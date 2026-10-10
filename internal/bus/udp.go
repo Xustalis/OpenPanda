@@ -86,7 +86,9 @@ func PunchSig(secret, nonce, from string, ts int64) string {
 
 // VerifyPunch reports whether f is a fresh, correctly-signed punch frame.
 // Fail-closed on empty secret, empty sig, or stale timestamp — same posture
-// as VerifyHelloP.
+// as VerifyHelloP. Freshness alone does not make a frame single-use: a
+// captured punch replays cleanly inside MaxHelloAge, so callers gate replays
+// through UDPConn.claimPunch.
 func VerifyPunch(secret string, f PunchFrame, now time.Time) bool {
 	if secret == "" || f.Sig == "" || f.From == "" || f.Nonce == "" {
 		return false
@@ -97,6 +99,11 @@ func VerifyPunch(secret string, f PunchFrame, now time.Time) bool {
 	}
 	return hmac.Equal([]byte(PunchSig(secret, f.Nonce, f.From, f.TS)), []byte(f.Sig))
 }
+
+// punchSeenMax bounds the single-use claim table. Every entry got there by
+// passing VerifyPunch — only mesh members mint valid signatures — so the cap
+// exists against a member spraying distinct signed frames, not the open LAN.
+const punchSeenMax = 1024
 
 // UDPConn is a bound UDP socket carrying sealed envelopes and punch frames.
 // The callbacks are wired by the core: OnEnvelope gets an authenticated,
@@ -122,6 +129,14 @@ type UDPConn struct {
 
 	stunRateMu sync.Mutex
 	stunRate   map[string]*stunRateState
+
+	// punchSeen is the single-use claim table for verified punch frames:
+	// a frame's signature stays valid for MaxHelloAge, so without it a
+	// captured punch replays cleanly — re-firing session confirmations and
+	// ack replies the original sender emitted once. Keyed on the signed
+	// fields only, mirroring the hello replay cache.
+	punchMu   sync.Mutex
+	punchSeen map[string]time.Time
 }
 
 // ListenUDP binds addr (e.g. ":7836") and returns a plane ready to ReadLoop.
@@ -154,6 +169,7 @@ func ListenUDP(addr, secret string, logger *slog.Logger) (*UDPConn, error) {
 		conn: conn, aead: aead, secret: secret, logger: logger,
 		stunWaiters: make(map[[stunTxnLen]byte]chan *net.UDPAddr),
 		stunRate:    make(map[string]*stunRateState),
+		punchSeen:   make(map[string]time.Time),
 	}, nil
 }
 
@@ -255,6 +271,10 @@ func (u *UDPConn) ReadLoop(ctx context.Context) {
 				u.logger.Debug("udp: bad punch frame", "from", src)
 				continue
 			}
+			if !u.claimPunch(f, time.Now()) {
+				u.logger.Debug("udp: replayed punch frame", "from", src)
+				continue
+			}
 			if u.OnPunch != nil {
 				u.OnPunch(f, src, d[3] == kindAck)
 			}
@@ -280,6 +300,33 @@ func (u *UDPConn) ReadLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// claimPunch records a verified punch frame's signature as spent. False means
+// either an exact replay (same signed fields, still inside the freshness
+// window) or a table full of fresh signatures — both are drop conditions:
+// the spray re-mints TS per send, so an identical second datagram is never
+// the protocol's own doing.
+func (u *UDPConn) claimPunch(f PunchFrame, now time.Time) bool {
+	key := f.Nonce + "|" + f.From + "|" + strconv.FormatInt(f.TS, 10) + "|" + f.Sig
+	u.punchMu.Lock()
+	defer u.punchMu.Unlock()
+	if _, dup := u.punchSeen[key]; dup {
+		return false
+	}
+	// Prune before the capacity check: entries past MaxHelloAge can never
+	// verify again anyway, so a flood window expires out of the table rather
+	// than wedging it.
+	for k, t := range u.punchSeen {
+		if now.Sub(t) > MaxHelloAge {
+			delete(u.punchSeen, k)
+		}
+	}
+	if len(u.punchSeen) >= punchSeenMax {
+		return false
+	}
+	u.punchSeen[key] = now
+	return true
 }
 
 // open decrypts a sealed datagram body (nonce || ciphertext) with the frame

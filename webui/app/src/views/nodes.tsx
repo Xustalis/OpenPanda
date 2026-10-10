@@ -1,10 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState } from 'preact/hooks'
-import { api, type AgentInfo, type NodeInfo, type SelfInfo, type Task } from '../api/client'
+import { useEffect, useState } from 'preact/hooks'
+import {
+  api,
+  type AgentInfo,
+  type NodeInfo,
+  type PairView,
+  type SelfInfo,
+  type Task,
+} from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { ErrorState, PageHeader } from '../components/page'
+import { confirmDialog } from '../components/confirm'
 import { AddDeviceCard, CardEditor } from '../components/card-editor'
 
 /** Devices & nodes (C3): which device this console runs on (/api/self),
@@ -36,6 +44,11 @@ export function NodesView() {
 
       {self && <SelfCard self={self} />}
 
+      {/* Bluetooth-style pairing (`panda pair`'s web twin): discovered
+          devices, inbound requests awaiting this operator, and outgoing
+          sessions. The manual add form below stays as the SSH fallback. */}
+      <PairCard onChanged={() => setTick((v) => v + 1)} />
+
       {/* Stage 6: the join-a-device form (add a peer to the dial list) and
           the local card editor (/card's web twin) — both live on the fleet
           page because that's where "what can this fleet do" is managed. */}
@@ -66,6 +79,157 @@ export function NodesView() {
 
       {agents !== null && <ControllableAgents agents={agents} />}
     </section>
+  )
+}
+
+/** Bluetooth-style pairing surface (web twin of `panda pair`): inbound
+ *  requests to answer with the code on both screens, LAN-discovered
+ *  devices to start a session with, and the outgoing sessions' live
+ *  state — waiting → done / refused / expired. Polls faster while any
+ *  session is still waiting on the remote human. */
+function PairCard({ onChanged }: { onChanged(): void }) {
+  const [tick, setTick] = useState(0)
+  const { data } = useAsync<PairView>(() => api.pair(), [], tick)
+  const [manual, setManual] = useState('')
+  const [busy, setBusy] = useState('')
+  const [err, setErr] = useState('')
+
+  const waiting = (data?.outgoing ?? []).some((o) => o.state === 'waiting')
+  const pendingReqs = data?.requests ?? []
+
+  // While a session waits on the remote human — or a request sits
+  // unanswered — poll so state flips show without a manual refresh.
+  useEffect(() => {
+    if (!waiting && pendingReqs.length === 0) return
+    const id = setInterval(() => setTick((v) => v + 1), 2500)
+    return () => clearInterval(id)
+  }, [waiting, pendingReqs.length])
+
+  async function start(target: string) {
+    if (busy) return
+    setErr('')
+    setBusy(target)
+    try {
+      await api.pairInitiate(target)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy('')
+      setManual('')
+      setTick((v) => v + 1)
+    }
+  }
+
+  async function answer(id: string, confirm: boolean) {
+    if (busy) return
+    setErr('')
+    setBusy(id)
+    try {
+      await api.pairAnswer(id, confirm)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy('')
+      setTick((v) => v + 1)
+      onChanged()
+    }
+  }
+
+  const discovered = data?.discovered ?? []
+  const outgoing = data?.outgoing ?? []
+
+  return (
+    <div class="card">
+      <h2 class="block-title">{t('nodes.pair.title')}</h2>
+      <p class="hint">{t('nodes.pair.hint')}</p>
+
+      {pendingReqs.length > 0 && (
+        <div style="margin-bottom: 12px">
+          <p class="dim">{t('nodes.pair.requests')}</p>
+          {pendingReqs.map((r) => (
+            <div class="node-head" key={r.id} style="gap: 8px; align-items:center; margin: 6px 0">
+              <span class="node-name">{r.peer_name || r.peer_addr}</span>
+              <span class="dim mono">{r.peer_addr}</span>
+              <span class="badge">{t('nodes.pair.code')}: {r.code}</span>
+              <button class="btn small" disabled={busy !== ''} onClick={() => answer(r.id, true)}>
+                {t('nodes.pair.confirm')}
+              </button>
+              <button class="btn small danger" disabled={busy !== ''} onClick={() => answer(r.id, false)}>
+                {t('nodes.pair.reject')}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {outgoing.length > 0 && (
+        <div style="margin-bottom: 12px">
+          <p class="dim">{t('nodes.pair.outgoing')}</p>
+          {outgoing.map((o) => (
+            <div class="node-head" key={o.session} style="gap: 8px; align-items:center; margin: 6px 0">
+              <span class="node-name">{o.target || o.addr}</span>
+              <span class="dim mono">{o.addr}</span>
+              <span class="badge">{t('nodes.pair.code')}: {o.code}</span>
+              {o.state === 'waiting' && (
+                <span class="dim">
+                  <span class="spinner spinner-inline" aria-hidden="true" /> {t('nodes.pair.waiting')}
+                </span>
+              )}
+              {o.state === 'done' && <span class="badge green">{t('nodes.pair.done')}</span>}
+              {o.state === 'rejected' && <span class="badge red">{t('nodes.pair.rejected')}</span>}
+              {o.state === 'expired' && <span class="badge">{t('nodes.pair.expired')}</span>}
+              {o.state === 'error' && (
+                <span class="badge red">
+                  {t('nodes.pair.error')}: {o.err}
+                </span>
+              )}
+            </div>
+          ))}
+          {outgoing.some((o) => o.state === 'waiting') && (
+            <p class="hint">{t('nodes.pair.compare')}</p>
+          )}
+        </div>
+      )}
+
+      <p class="dim">{t('nodes.pair.discovered')}</p>
+      {discovered.length === 0 && outgoing.length === 0 && pendingReqs.length === 0 ? (
+        <p class="dim">{t('nodes.pair.empty')}</p>
+      ) : (
+        discovered.map((d) => (
+          <div class="node-head" key={d.id} style="gap: 8px; align-items:center; margin: 6px 0">
+            <span class={`dot node-dot`} aria-hidden />
+            <span class="node-name">{d.id}</span>
+            <span class="dim mono">{d.addr}</span>
+            {!d.verified && <span class="badge">{t('nodes.pair.unverified')}</span>}
+            <button
+              class="btn small"
+              disabled={busy !== ''}
+              onClick={() => start(d.id)}
+            >
+              {busy === d.id ? t('common.loading') : t('nodes.pair.start')}
+            </button>
+          </div>
+        ))
+      )}
+
+      <div class="node-head" style="gap: 8px; margin-top: 10px">
+        <input
+          type="text"
+          value={manual}
+          placeholder={t('nodes.pair.manual')}
+          onInput={(e) => setManual((e.target as HTMLInputElement).value)}
+          style="max-width: 240px"
+        />
+        <button
+          class="btn small"
+          disabled={busy !== '' || manual.trim() === ''}
+          onClick={() => start(manual.trim())}
+        >
+          {t('nodes.pair.start')}
+        </button>
+      </div>
+      {err && <p class="node-remove-error">{err}</p>}
+    </div>
   )
 }
 
@@ -123,7 +287,12 @@ function NodeCard({
 
   async function remove() {
     if (removing) return
-    if (!window.confirm(t('nodes.removeConfirm', { name: displayName }))) return
+    const ok = await confirmDialog({
+      title: t('nodes.removeTitle'),
+      message: t('nodes.removeConfirm', { name: displayName }),
+      confirmLabel: t('nodes.remove'),
+    })
+    if (!ok) return
     setRemoving(true)
     setRemoveErr('')
     try {

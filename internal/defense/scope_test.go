@@ -3,6 +3,8 @@
 package defense
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -76,6 +78,69 @@ func TestScopeEmptyNeverDrifts(t *testing.T) {
 	}
 	if !s.Contains("anything") {
 		t.Errorf("empty scope should contain everything")
+	}
+}
+
+// TestScopeDriftUnderReanchorsParentRoot covers the anchor mismatch the entry
+// model produces: scope written from the project root ("proj/sub" while
+// workDir is ".../proj") names the same tree, and must not drift every change
+// inside it.
+func TestScopeDriftUnderReanchorsParentRoot(t *testing.T) {
+	work := filepath.Join(t.TempDir(), "test_of_OpenPanda")
+	if err := os.MkdirAll(filepath.Join(work, "openpanda-intro"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	s := NewScope("test_of_OpenPanda/openpanda-intro")
+	changed := []string{"openpanda-intro/server.log", "openpanda-intro/start_server.sh"}
+	if got := s.DriftUnder(work, changed); len(got) != 0 {
+		t.Fatalf("DriftUnder() = %v, want no drift for parent-anchored scope", got)
+	}
+	got := s.DriftUnder(work, []string{"openpanda-intro/ok.txt", "elsewhere.txt"})
+	if !reflect.DeepEqual(got, []string{"elsewhere.txt"}) {
+		t.Fatalf("DriftUnder() = %v, want [elsewhere.txt]", got)
+	}
+}
+
+// TestScopeDriftUnderKeepsCorrectRootStrict pins the re-anchor gate: a suffix
+// is only considered when the dropped prefix ends in the workDir's own name,
+// so "x/y" never loosens to a coincidentally existing "y".
+func TestScopeDriftUnderKeepsCorrectRootStrict(t *testing.T) {
+	work := filepath.Join(t.TempDir(), "proj")
+	if err := os.MkdirAll(filepath.Join(work, "y"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	s := NewScope("x/y")
+	got := s.DriftUnder(work, []string{"y/file.txt"})
+	if !reflect.DeepEqual(got, []string{"y/file.txt"}) {
+		t.Fatalf("DriftUnder() = %v, want drift (root x/y must not widen to y)", got)
+	}
+}
+
+// TestScopeDriftUnderUnresolvableRootStaysStrict: a root that resolves
+// nowhere keeps intercepting rather than silently widening.
+func TestScopeDriftUnderUnresolvableRootStaysStrict(t *testing.T) {
+	work := filepath.Join(t.TempDir(), "proj")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	s := NewScope("nope/deep")
+	got := s.DriftUnder(work, []string{"other/file.txt"})
+	if !reflect.DeepEqual(got, []string{"other/file.txt"}) {
+		t.Fatalf("DriftUnder() = %v, want drift for unresolvable root", got)
+	}
+}
+
+// TestScopeDriftUnderDeletedTree: a tree the agent deleted no longer stats,
+// but the changed paths still resolve the suffix — an in-scope deletion must
+// not be flagged as drift.
+func TestScopeDriftUnderDeletedTree(t *testing.T) {
+	work := filepath.Join(t.TempDir(), "proj")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	s := NewScope("proj/sub")
+	if got := s.DriftUnder(work, []string{"sub/gone.txt"}); len(got) != 0 {
+		t.Fatalf("DriftUnder() = %v, want no drift (deleted in-scope tree)", got)
 	}
 }
 

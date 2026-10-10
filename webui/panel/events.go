@@ -67,7 +67,7 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("event: change\ndata: init\n\n"))
 	flusher.Flush()
 
-	var lastTask, lastNode, lastRem string
+	var lastTask, lastNode, lastRem, lastSess string
 	// trace watermark: the highest task_events.id we have already delivered.
 	// 0 means "deliver everything from the start of the connection's lifetime"
 	// — a newly arrived user typically sees tasks already in flight, and the
@@ -96,21 +96,27 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 			}
 			nodeFP := h.cachedNodeFingerprint()
 			remFP := h.cachedReminderFingerprint()
-			fpChanged := first || taskFP != lastTask || nodeFP != lastNode || remFP != lastRem
+			sessFP := h.cachedSessionFingerprint()
+			fpChanged := first || taskFP != lastTask || nodeFP != lastNode || remFP != lastRem || sessFP != lastSess
 			if fpChanged {
 				first = false
-				lastTask, lastNode, lastRem = taskFP, nodeFP, remFP
+				lastTask, lastNode, lastRem, lastSess = taskFP, nodeFP, remFP, sessFP
 				kinds := []string{"tasks"}
-				data := []string{taskFP}
 				if nodeFP != "" {
 					kinds = append(kinds, "nodes")
-					data = append(data, nodeFP)
 				}
 				if remFP != "" {
 					kinds = append(kinds, "reminders")
-					data = append(data, remFP)
 				}
-				if _, err := w.Write([]byte("event: change\ndata: " + strings.Join(kinds, ",") + " " + strings.Join(data, "/") + "\n\n")); err != nil {
+				if sessFP != "" {
+					kinds = append(kinds, "sessions")
+				}
+				// Fixed four-slot fingerprint field — task/node/reminder/session —
+				// so a missing middle fingerprint never shifts the sessions slot
+				// left. Older clients read the same first three slots and ignore
+				// the fourth.
+				data := taskFP + "/" + nodeFP + "/" + remFP + "/" + sessFP
+				if _, err := w.Write([]byte("event: change\ndata: " + strings.Join(kinds, ",") + " " + data + "\n\n")); err != nil {
 					return
 				}
 				flusher.Flush()
@@ -280,6 +286,38 @@ func (h *handler) cachedReminderFingerprint() string {
 	}
 	fp, _ := sharedFingerprints.get("reminders", func() (string, error) {
 		return h.reminderFingerprint(), nil
+	})
+	return fp
+}
+
+// cachedSessionFingerprint digests the session files' stamps (id:size:mtime,
+// never the JSON bodies) so a thread created, titled, pinned, written to, or
+// deleted anywhere — another tab, a paired device, the CLI — pushes a
+// 'sessions' change to every console. Empty when the panel has no session
+// store. Fingerprint errors deliberately produce an empty digest rather than
+// killing the stream: a transient readdir failure is not a change event.
+func (h *handler) cachedSessionFingerprint() string {
+	if h.sessions == nil {
+		return ""
+	}
+	fp, _ := sharedFingerprints.get("sessions", func() (string, error) {
+		stamps, err := h.sessions.Stamps()
+		if err != nil {
+			return "", err
+		}
+		sum := sha256.New()
+		var buf [8]byte
+		for _, s := range stamps {
+			sum.Write([]byte(s.ID))
+			sum.Write([]byte{':'})
+			binary.BigEndian.PutUint64(buf[:], uint64(s.Size))
+			sum.Write(buf[:])
+			sum.Write([]byte{':'})
+			binary.BigEndian.PutUint64(buf[:], uint64(s.ModUnixNano))
+			sum.Write(buf[:])
+			sum.Write([]byte{';'})
+		}
+		return hex.EncodeToString(sum.Sum(nil))[:16], nil
 	})
 	return fp
 }

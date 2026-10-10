@@ -697,12 +697,16 @@ func MarkVerified(db *sql.DB, id string) (bool, error) {
 // that broadcast its address recently. Everything in it is self-asserted —
 // the row is a lead for `panda nodes add`, never proof of identity. Proof
 // still comes from the paired hello (shared secret + Ed25519) after the
-// operator admits the address.
+// operator admits the address. Verified only means the beacon's own
+// signature checked out: the advertised fingerprint provably belongs to
+// whoever broadcast it — it cannot be a spoof of another node's key — but it
+// says nothing about membership.
 type PendingNode struct {
 	ID        string `json:"id"`
 	Addr      string `json:"addr"`
 	PubKey    string `json:"pub_key,omitempty"`
 	Ver       string `json:"ver,omitempty"`
+	Verified  bool   `json:"verified,omitempty"`
 	FirstSeen int64  `json:"first_seen"`
 	LastSeen  int64  `json:"last_seen"`
 }
@@ -717,16 +721,54 @@ func (p PendingNode) Fingerprint() string {
 	return p.PubKey[:16]
 }
 
+// RecordPeerAddr persists the binding from a configured dial address to the
+// node id its hello bound. One row per address, overwritten on re-bind: the
+// address is the stable key an operator configured, and a node id behind it
+// changing (a reinstall) must update rather than accumulate. Written by the
+// daemon at hello time; `panda status` — a separate process that cannot ask
+// the daemon anything — reads it to say which CONFIGURED peers are up.
+func RecordPeerAddr(db *sql.DB, addr, nodeID string) error {
+	if db == nil || addr == "" || nodeID == "" {
+		return nil
+	}
+	_, err := db.Exec(`INSERT INTO peer_addrs (addr, node_id, last_seen) VALUES (?, ?, ?)
+		ON CONFLICT(addr) DO UPDATE SET node_id=excluded.node_id, last_seen=excluded.last_seen`,
+		addr, nodeID, storage.Now())
+	return err
+}
+
+// PeerAddrBindings returns every addr→node_id binding the daemon recorded.
+func PeerAddrBindings(db *sql.DB) (map[string]string, error) {
+	rows, err := db.Query(`SELECT addr, node_id FROM peer_addrs`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]string)
+	for rows.Next() {
+		var addr, id string
+		if err := rows.Scan(&addr, &id); err != nil {
+			return nil, err
+		}
+		out[addr] = id
+	}
+	return out, rows.Err()
+}
+
 // UpsertPending records a discovery beacon. first_seen survives across
 // beacons so the listing can tell a just-appeared node from a long-announced
 // one; a node already in the directory is skipped by the caller (it is
 // joined, not pending).
 func UpsertPending(db *sql.DB, p PendingNode) error {
-	_, err := db.Exec(`INSERT INTO pending_nodes (id, addr, pub_key, ver, first_seen, last_seen)
-		VALUES (?, ?, ?, ?, ?, ?)
+	verified := 0
+	if p.Verified {
+		verified = 1
+	}
+	_, err := db.Exec(`INSERT INTO pending_nodes (id, addr, pub_key, ver, verified, first_seen, last_seen)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET addr=excluded.addr, pub_key=excluded.pub_key,
-			ver=excluded.ver, last_seen=excluded.last_seen`,
-		p.ID, p.Addr, p.PubKey, p.Ver, p.FirstSeen, p.LastSeen)
+			ver=excluded.ver, verified=excluded.verified, last_seen=excluded.last_seen`,
+		p.ID, p.Addr, p.PubKey, p.Ver, verified, p.FirstSeen, p.LastSeen)
 	if err != nil {
 		return fmt.Errorf("upsert pending %s: %w", p.ID, err)
 	}
@@ -743,7 +785,7 @@ func ListPending(db *sql.DB, maxAge time.Duration) ([]PendingNode, error) {
 			return nil, fmt.Errorf("sweep pending: %w", err)
 		}
 	}
-	rows, err := db.Query(`SELECT id, addr, pub_key, ver, first_seen, last_seen FROM pending_nodes ORDER BY last_seen DESC`)
+	rows, err := db.Query(`SELECT id, addr, pub_key, ver, verified, first_seen, last_seen FROM pending_nodes ORDER BY last_seen DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -751,9 +793,11 @@ func ListPending(db *sql.DB, maxAge time.Duration) ([]PendingNode, error) {
 	out := make([]PendingNode, 0, 4)
 	for rows.Next() {
 		var p PendingNode
-		if err := rows.Scan(&p.ID, &p.Addr, &p.PubKey, &p.Ver, &p.FirstSeen, &p.LastSeen); err != nil {
+		var verified int
+		if err := rows.Scan(&p.ID, &p.Addr, &p.PubKey, &p.Ver, &verified, &p.FirstSeen, &p.LastSeen); err != nil {
 			return nil, err
 		}
+		p.Verified = verified != 0
 		out = append(out, p)
 	}
 	return out, rows.Err()

@@ -142,6 +142,66 @@ func TestSessionsCRUD(t *testing.T) {
 	}
 }
 
+func TestSessionPinAndBulkDelete(t *testing.T) {
+	h := New(Deps{
+		Store:     newTestStore(t),
+		Sessions:  sessions.NewStore(t.TempDir()),
+		StaticDir: t.TempDir(),
+		Token:     testToken,
+	})
+
+	var ids []string
+	for _, title := range []string{"a", "b", "c"} {
+		code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions", `{"title":"`+title+`"}`))
+		if code != http.StatusOK {
+			t.Fatalf("create %s status = %d, body %v", title, code, out)
+		}
+		ids = append(ids, out["id"].(string))
+	}
+
+	// Pin the oldest-created session: it must lead the listing despite
+	// being the least recently active.
+	code, out := doJSON(t, h, jsonReq(http.MethodPatch, "/api/sessions/"+ids[0], `{"pinned":true}`))
+	if code != http.StatusOK || out["pinned"] != true {
+		t.Fatalf("pin status = %d, out = %v", code, out)
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/sessions", nil))
+	var list []*sessions.Session
+	if err := json.Unmarshal(rr.Body.Bytes(), &list); err != nil {
+		t.Fatalf("list unmarshal: %v", err)
+	}
+	if len(list) != 3 || list[0].ID != ids[0] || !list[0].Pinned {
+		t.Fatalf("pinned order = %+v", list)
+	}
+
+	// Bulk delete: two real ids plus a ghost — the ghost lands in failed,
+	// the real ones are gone.
+	body := `{"ids":["` + ids[0] + `","` + ids[2] + `","ghost-id"]}`
+	code, out = doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions/bulk-delete", body))
+	if code != http.StatusOK {
+		t.Fatalf("bulk delete status = %d, body %v", code, out)
+	}
+	deleted, _ := out["deleted"].([]any)
+	failed, _ := out["failed"].([]any)
+	if len(deleted) != 2 || len(failed) != 1 {
+		t.Fatalf("bulk delete = deleted %v failed %v", deleted, failed)
+	}
+	for _, id := range []string{ids[0], ids[2]} {
+		if code, _ := doJSON(t, h, authedReq(http.MethodGet, "/api/sessions/"+id, nil)); code != http.StatusNotFound {
+			t.Fatalf("get %s after bulk delete status = %d, want 404", id, code)
+		}
+	}
+	if code, _ := doJSON(t, h, authedReq(http.MethodGet, "/api/sessions/"+ids[1], nil)); code != http.StatusOK {
+		t.Fatalf("untouched session status = %d, want 200", code)
+	}
+
+	// Validation: empty ids and oversize batches are rejected.
+	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions/bulk-delete", `{"ids":[]}`)); code != http.StatusBadRequest {
+		t.Fatalf("empty bulk delete status = %d, want 400", code)
+	}
+}
+
 func TestSessionForkEndpoint(t *testing.T) {
 	sessStore := sessions.NewStore(t.TempDir())
 	h := New(Deps{

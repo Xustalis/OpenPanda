@@ -4,12 +4,15 @@ package core
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // TestDelegateIdempotent sends the same task_delegate twice; the second must
@@ -254,6 +257,536 @@ func TestCancelPropagates(t *testing.T) {
 	}
 	if tk.State != StateCancelled {
 		t.Fatalf("worker state = %s, want cancelled", tk.State)
+	}
+}
+
+// TestRejectPropagates covers the review-side of the same hole: `panda reject`
+// on the delegator must stand down the executor's delegated review copy, not
+// just fail the local row. Without the forward the executor's copy stayed in
+// review and a local approve there ran work the origin explicitly denied.
+func TestRejectPropagates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-reject", "127.0.0.1:17966")
+	worker := newCore(t, "worker-reject", "127.0.0.1:17967")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17966", "127.0.0.1:17967")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	const taskID = "reject-task"
+	// Executor copy: parked in review awaiting consent, owned by the
+	// executor (delegated rows name the delegator in the chain so its
+	// kill is authorized).
+	_, err := worker.store.CreateWithID(ctx, taskID, "", "proj", "t", "worker-reject",
+		[]string{"entry-reject", "worker-reject"}, true)
+	must(err)
+	must(worker.store.Queue(ctx, taskID, "worker-reject"))
+	must(worker.store.Dispatch(ctx, taskID, "worker-reject", "worker-reject"))
+	must(worker.store.Accept(ctx, taskID, "worker-reject"))
+	must(worker.store.PauseWithDisposition(ctx, taskID, "worker-reject", "parked", ApprovalResumeExecution))
+
+	// Delegator copy: same wire id, review, dispatch target = the executor.
+	_, err = entry.store.CreateWithID(ctx, taskID, "", "proj", "t", "entry-reject", nil, false)
+	must(err)
+	must(entry.store.Queue(ctx, taskID, "entry-reject"))
+	must(entry.store.Dispatch(ctx, taskID, "entry-reject", "worker-reject"))
+	must(entry.store.Accept(ctx, taskID, "entry-reject"))
+	must(entry.store.PauseWithDisposition(ctx, taskID, "entry-reject", "parked", ApprovalResumeExecution))
+
+	must(entry.RejectTree(ctx, taskID, "not what I asked"))
+	if tk, _ := entry.store.Get(ctx, taskID); tk.State != StateFailed {
+		t.Fatalf("origin state = %s, want failed", tk.State)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		tk, err := worker.store.Get(ctx, taskID)
+		if err != nil {
+			t.Fatalf("worker get: %v", err)
+		}
+		if tk.State == StateCancelled {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("worker state = %s, want cancelled — reject never crossed the wire", tk.State)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The kill must hold: the executor's copy can no longer be approved.
+	if err := worker.store.Approve(ctx, taskID); err == nil {
+		t.Fatal("approve on rejected executor copy succeeded — denied work is still runnable")
+	}
+}
+
+// TestResultFromRotatedAttemptLands is the resume/retry convergence case: the
+// executor re-ran the task under a fresh attempt (task_resume re-run or a
+// supervisor retry), and its result must land on the delegator's row rather
+// than being dropped as stale — the pre-fix split that left the origin in
+// running while the executor parked back in review.
+func TestResultFromRotatedAttemptLands(t *testing.T) {
+	ctx := context.Background()
+	entry := newCore(t, "entry-rot", "127.0.0.1:17976")
+	if err := entry.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	// An attempt minted BEFORE the task exists is strictly older than the
+	// row's own — the stale-drop control case below.
+	past, err := util.UUIDv7()
+	must(err)
+	time.Sleep(3 * time.Millisecond)
+
+	tk, err := entry.store.CreateWithID(ctx, "rot-task", "", "proj", "t", "entry-rot", nil, false)
+	must(err)
+	must(entry.store.Queue(ctx, "rot-task", "entry-rot"))
+	must(entry.store.Dispatch(ctx, "rot-task", "entry-rot", "worker-rot"))
+	must(entry.store.Accept(ctx, "rot-task", "entry-rot"))
+	stored := tk.AttemptID
+
+	time.Sleep(3 * time.Millisecond)
+	rotated, err := util.UUIDv7()
+	must(err)
+	if !attemptIsNewer(rotated, stored) {
+		t.Fatalf("test premise broken: %s should order after %s", rotated, stored)
+	}
+	env, _ := bus.NewEnvelope(bus.MsgTaskResult, "worker-rot", "m-rot", bus.TaskResultPayload{
+		TaskID: "rot-task", AttemptID: rotated, State: StateDone, OK: true,
+		Stdout: "finished on the retry",
+	})
+	entry.handleResult(ctx, env)
+	got, err := entry.store.Get(ctx, "rot-task")
+	must(err)
+	if got.State != StateDone {
+		t.Fatalf("rotated-attempt result dropped: state = %s, want done", got.State)
+	}
+	if got.AttemptID != rotated {
+		t.Fatalf("attempt = %s, want adopted %s", got.AttemptID, rotated)
+	}
+
+	// The inverse must still hold: a genuinely OLDER attempt — the replay
+	// shape the check exists for — is dropped, not adopted.
+	tk2, err := entry.store.CreateWithID(ctx, "stale-task", "", "proj", "t", "entry-rot", nil, false)
+	must(err)
+	must(entry.store.Queue(ctx, "stale-task", "entry-rot"))
+	must(entry.store.Dispatch(ctx, "stale-task", "entry-rot", "worker-rot"))
+	must(entry.store.Accept(ctx, "stale-task", "entry-rot"))
+	env2, _ := bus.NewEnvelope(bus.MsgTaskResult, "worker-rot", "m-stale", bus.TaskResultPayload{
+		TaskID: "stale-task", AttemptID: past, State: StateDone, OK: true,
+		Stdout: "replay of a superseded run",
+	})
+	entry.handleResult(ctx, env2)
+	got2, err := entry.store.Get(ctx, "stale-task")
+	must(err)
+	if got2.State == StateDone {
+		t.Fatal("older-attempt result landed — stale protection regressed")
+	}
+	if got2.AttemptID != tk2.AttemptID {
+		t.Fatalf("attempt = %s, want unchanged %s after dropped result", got2.AttemptID, tk2.AttemptID)
+	}
+}
+
+// seedAcceptWorkPair parks the same AcceptWork review copy on both cores:
+// the executor's copy (owned by itself, chain naming the delegator) and the
+// delegator's copy (dispatch target = the executor). Returns nothing — both
+// rows are addressable by taskID on their respective stores.
+func seedAcceptWorkPair(t *testing.T, ctx context.Context, entry, worker *Core, taskID string) {
+	t.Helper()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("seed %s: %v", taskID, err)
+		}
+	}
+	_, err := worker.store.CreateWithID(ctx, taskID, "", "proj", "t", worker.nodeID,
+		[]string{entry.nodeID, worker.nodeID}, true)
+	must(err)
+	must(worker.store.Queue(ctx, taskID, worker.nodeID))
+	must(worker.store.Dispatch(ctx, taskID, worker.nodeID, worker.nodeID))
+	must(worker.store.Accept(ctx, taskID, worker.nodeID))
+	must(worker.store.PauseWithDisposition(ctx, taskID, worker.nodeID, "awaiting approval", ApprovalAcceptWork))
+
+	_, err = entry.store.CreateWithID(ctx, taskID, "", "proj", "t", entry.nodeID, nil, false)
+	must(err)
+	must(entry.store.Queue(ctx, taskID, entry.nodeID))
+	must(entry.store.Dispatch(ctx, taskID, entry.nodeID, worker.nodeID))
+	must(entry.store.Accept(ctx, taskID, entry.nodeID))
+	must(entry.store.PauseWithDisposition(ctx, taskID, entry.nodeID, "awaiting approval", ApprovalAcceptWork))
+}
+
+// TestAcceptMirrorsToSiblingCopy: approving an AcceptWork park on one node
+// must close the sibling copy parked on the other — before the mirror frame,
+// whichever side approved first left the other's copy in review forever.
+func TestAcceptMirrorsToSiblingCopy(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-accept", "127.0.0.1:17996")
+	worker := newCore(t, "worker-accept", "127.0.0.1:17997")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17996", "127.0.0.1:17997")
+
+	const taskID = "accept-task"
+	seedAcceptWorkPair(t, ctx, entry, worker, taskID)
+
+	final, _, err := entry.ResumeApproved(ctx, taskID)
+	if err != nil {
+		t.Fatalf("resume approved: %v", err)
+	}
+	if final.State != StateDone {
+		t.Fatalf("origin state = %s, want done", final.State)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		tk, err := worker.store.Get(ctx, taskID)
+		if err != nil {
+			t.Fatalf("worker get: %v", err)
+		}
+		if tk.State == StateDone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("worker state = %s, want done — the accept never mirrored", tk.State)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestAcceptMirrorsFromExecutorSide is the reverse direction: the human
+// approves on the EXECUTOR's copy, and the origin's parked copy must close.
+func TestAcceptMirrorsFromExecutorSide(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-accept2", "127.0.0.1:17990")
+	worker := newCore(t, "worker-accept2", "127.0.0.1:17991")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17990", "127.0.0.1:17991")
+
+	const taskID = "accept-task2"
+	seedAcceptWorkPair(t, ctx, entry, worker, taskID)
+
+	final, _, err := worker.ResumeApproved(ctx, taskID)
+	if err != nil {
+		t.Fatalf("resume approved: %v", err)
+	}
+	if final.State != StateDone {
+		t.Fatalf("executor state = %s, want done", final.State)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		tk, err := entry.store.Get(ctx, taskID)
+		if err != nil {
+			t.Fatalf("entry get: %v", err)
+		}
+		if tk.State == StateDone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("origin state = %s, want done — the accept never mirrored back", tk.State)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestAcceptParksForOfflineExecutor: approving while the sibling's node is
+// offline must park the accept in the resume outbox (not drop it), and the
+// executor's next hello must deliver it — its copy closes without its own
+// human having to re-approve.
+func TestAcceptParksForOfflineExecutor(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-park", "127.0.0.1:17998")
+	worker := newCore(t, "worker-park", "127.0.0.1:17999")
+
+	const taskID = "accept-parked"
+	seedAcceptWorkPair(t, ctx, entry, worker, taskID)
+
+	// No link yet: the approve succeeds locally and the mirror is parked.
+	final, _, err := entry.ResumeApproved(ctx, taskID)
+	if err != nil {
+		t.Fatalf("resume approved: %v", err)
+	}
+	if final.State != StateDone {
+		t.Fatalf("origin state = %s, want done", final.State)
+	}
+	var raw string
+	if err := entry.db.QueryRow(
+		`SELECT payload_json FROM resume_outbox WHERE task_id=?`, taskID).Scan(&raw); err != nil {
+		t.Fatalf("parked accept missing from resume_outbox: %v", err)
+	}
+	if !strings.Contains(raw, `"accept":true`) {
+		t.Fatalf("parked payload = %s, want an accept mirror", raw)
+	}
+
+	// The executor comes online: its hello flushes the parked accept and the
+	// copy closes without a second human decision.
+	startPair(t, ctx, entry, worker, "127.0.0.1:17998", "127.0.0.1:17999")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		tk, err := worker.store.Get(ctx, taskID)
+		if err != nil {
+			t.Fatalf("worker get: %v", err)
+		}
+		if tk.State == StateDone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("worker state = %s, want done — the parked accept was not flushed", tk.State)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestPrepareToleratesRacedQueue: the delegate path's prepare must adopt a
+// row another path already moved — a plan sweep that raced the delegation, a
+// duplicate delivery's first invocation — instead of declining the task on a
+// bookkeeping conflict. A terminal row is the one real stand-down.
+func TestPrepareToleratesRacedQueue(t *testing.T) {
+	ctx := context.Background()
+	worker := newCore(t, "worker-prep", "127.0.0.1:17979")
+	if err := worker.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	_, err := worker.store.CreateWithID(ctx, "raced-task", "", "proj", "t",
+		"worker-prep", []string{"worker-prep"}, false)
+	must(err)
+	// Another path queued the row first (the plan sweep's release).
+	must(worker.store.Queue(ctx, "raced-task", "worker-prep"))
+	if err := worker.prepare(ctx, "raced-task"); err != nil {
+		t.Fatalf("prepare on a raced queue = %v, want adopted", err)
+	}
+	if got, _ := worker.store.Get(ctx, "raced-task"); got.State != StateDispatched {
+		t.Fatalf("state = %s, want dispatched", got.State)
+	}
+	// A terminal row reports ErrCancelled so the caller stands down silently
+	// instead of declining a task the delegator already closed.
+	must(worker.store.Cancel(ctx, "raced-task"))
+	if err := worker.prepare(ctx, "raced-task"); !errors.Is(err, ErrCancelled) {
+		t.Fatalf("prepare on a cancelled row = %v, want ErrCancelled", err)
+	}
+}
+
+// TestExecWorkDirPersistedAndReported: a run must record WHERE it happened —
+// the row's exec_work_dir (for the queue board / task show / panel) and the
+// result payload's work_dir (so a delegator can locate the output on the
+// machine that made it). work_dir itself stays the submitter's pin.
+func TestExecWorkDirPersistedAndReported(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreWithNative(t, "ws-node", "127.0.0.1:17989", ledger.NativeAbility{
+		ID: "sys:probe", Command: "echo", Args: []string{"hi"},
+	})
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	dir := t.TempDir()
+	c.SetWorkDir(dir)
+
+	task, result, err := c.Submit(ctx, TaskInput{
+		Title: "ws probe", Intent: "run the probe", Requires: []string{"sys:probe"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if result.WorkDir != dir {
+		t.Fatalf("result work_dir = %q, want %q", result.WorkDir, dir)
+	}
+	row, err := c.store.Get(ctx, task.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if row.ExecWorkDir != dir {
+		t.Fatalf("row exec_work_dir = %q, want %q", row.ExecWorkDir, dir)
+	}
+	if row.WorkDir != "" {
+		t.Fatalf("row work_dir = %q, want empty (pin untouched)", row.WorkDir)
+	}
+}
+
+// TestResumeRaceAlreadyRunningDoesNotFailOrigin is the double-approval race:
+// the human approved on BOTH copies, and the delegator's task_resume arrives
+// while the executor's copy is already running. The old synthesized
+// "resume: task state is running" FAILURE landed on the delegator as a
+// task_result, killed its copy, and cascaded its plan. The reply must echo
+// the real state instead: in-flight is informational — the delegator keeps
+// waiting for the executor's eventual result.
+func TestResumeRaceAlreadyRunningDoesNotFailOrigin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-race", "127.0.0.1:17970")
+	worker := newCore(t, "worker-race", "127.0.0.1:17971")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17970", "127.0.0.1:17971")
+
+	const taskID = "race-task"
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	// Executor copy: already RUNNING (its local approval won the race).
+	_, err := worker.store.CreateWithID(ctx, taskID, "", "proj", "t", worker.nodeID,
+		[]string{entry.nodeID, worker.nodeID}, true)
+	must(err)
+	must(worker.store.Queue(ctx, taskID, worker.nodeID))
+	must(worker.store.Dispatch(ctx, taskID, worker.nodeID, worker.nodeID))
+	must(worker.store.Accept(ctx, taskID, worker.nodeID))
+
+	// Delegator copy: dispatched to the executor (its approval claimed it).
+	// The attempt must match the executor's — the delegation's AdoptAttempt
+	// does this in the real flow, and a mismatched attempt is (correctly)
+	// dropped as stale before any of this logic runs.
+	wt, err := worker.store.Get(ctx, taskID)
+	must(err)
+	_, err = entry.store.CreateWithID(ctx, taskID, "", "proj", "t", entry.nodeID, nil, false)
+	must(err)
+	must(entry.store.AdoptAttempt(ctx, taskID, wt.AttemptID))
+	must(entry.store.Queue(ctx, taskID, entry.nodeID))
+	must(entry.store.Dispatch(ctx, taskID, entry.nodeID, worker.nodeID))
+
+	// The late resume crosses the wire; the executor is already running it.
+	env, _ := bus.NewEnvelope(bus.MsgTaskResume, entry.nodeID, "m-race",
+		bus.TaskResumePayload{TaskID: taskID, AttemptID: wt.AttemptID})
+	worker.handleResume(ctx, env)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		tk, err := entry.store.Get(ctx, taskID)
+		if err != nil {
+			t.Fatalf("entry get: %v", err)
+		}
+		if tk.State == StateFailed {
+			t.Fatalf("delegator copy failed on the benign double approval (result %s)", tk.ResultJSON)
+		}
+		if taskEventsContain(entry, ctx, taskID, "executor reports task running") {
+			break // informational report recorded; the wait continues
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no informational report reached the delegator; state=%s", tk.State)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if tk, _ := entry.store.Get(ctx, taskID); tk.State != StateDispatched {
+		t.Fatalf("delegator state = %s, want dispatched (still waiting for the executor's result)", tk.State)
+	}
+}
+
+// TestResumeRaceTerminalEchoesVerdict: when the executor's copy already
+// CLOSED (failed here), the resume reply must carry that row's real verdict —
+// the delegator converges on the same reason instead of a synthesized
+// "resume: task state is failed" string.
+func TestResumeRaceTerminalEchoesVerdict(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-echo", "127.0.0.1:17972")
+	worker := newCore(t, "worker-echo", "127.0.0.1:17973")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17972", "127.0.0.1:17973")
+
+	const taskID = "echo-task"
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	_, err := worker.store.CreateWithID(ctx, taskID, "", "proj", "t", worker.nodeID,
+		[]string{entry.nodeID, worker.nodeID}, true)
+	must(err)
+	must(worker.store.Queue(ctx, taskID, worker.nodeID))
+	must(worker.store.Dispatch(ctx, taskID, worker.nodeID, worker.nodeID))
+	must(worker.store.Accept(ctx, taskID, worker.nodeID))
+	must(worker.store.Fail(ctx, taskID, worker.nodeID, "disk full"))
+	wt, err := worker.store.Get(ctx, taskID)
+	must(err)
+
+	_, err = entry.store.CreateWithID(ctx, taskID, "", "proj", "t", entry.nodeID, nil, false)
+	must(err)
+	must(entry.store.AdoptAttempt(ctx, taskID, wt.AttemptID))
+	must(entry.store.Queue(ctx, taskID, entry.nodeID))
+	must(entry.store.Dispatch(ctx, taskID, entry.nodeID, worker.nodeID))
+
+	env, _ := bus.NewEnvelope(bus.MsgTaskResume, entry.nodeID, "m-echo",
+		bus.TaskResumePayload{TaskID: taskID, AttemptID: wt.AttemptID})
+	worker.handleResume(ctx, env)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		tk, err := entry.store.Get(ctx, taskID)
+		if err != nil {
+			t.Fatalf("entry get: %v", err)
+		}
+		if tk.State == StateFailed {
+			if !strings.Contains(tk.ResultJSON, "disk full") {
+				t.Fatalf("delegator verdict = %s, want the executor's real reason (disk full)", tk.ResultJSON)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("delegator state = %s, want failed with the executor's verdict", tk.State)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestHelloRejectAuthSurfaces exercises the whole rejection verdict: a peer
+// whose secret does not match gets an explicit hello_reject before the close,
+// its MaintainPeer reports ErrAuthRejected (not a dropped-link nil), and a
+// one-shot probe reads "online but refusing our credential" instead of the
+// generic handshake timeout that used to read like a network flap.
+func TestHelloRejectAuthSurfaces(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := newCore(t, "srv-auth", "127.0.0.1:17986")
+	dialer := newCore(t, "cli-auth", "127.0.0.1:17987")
+	dialer.SetSharedSecret("wrong-secret")
+
+	if err := server.Register(ctx); err != nil {
+		t.Fatalf("register server: %v", err)
+	}
+	if err := dialer.Register(ctx); err != nil {
+		t.Fatalf("register dialer: %v", err)
+	}
+	go func() { _ = server.Listen(ctx, "127.0.0.1:17986") }()
+
+	// The listener binds asynchronously; the first dial attempts may hit a
+	// not-yet-bound socket — real errors until the reject verdict arrives.
+	var merr error
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		merr = dialer.MaintainPeer(ctx, "127.0.0.1:17986")
+		if errors.Is(merr, ErrAuthRejected) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("MaintainPeer = %v, want ErrAuthRejected (rejected dial must not read as a dropped link)", merr)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// A one-shot probe reports the same verdict distinctly from a timeout —
+	// this is what `panda doctor`/`nodes add` prints for the user.
+	_, err := ProbePeer(ctx, "probe-auth", ledger.Card{Device: "probe-auth"},
+		config.ModelConfig{}, config.NetworkConfig{SharedSecret: "wrong-secret"},
+		"127.0.0.1:17986", nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "rejected our authentication") {
+		t.Fatalf("ProbePeer err = %v, want the auth-rejection diagnosis", err)
 	}
 }
 

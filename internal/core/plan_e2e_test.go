@@ -311,3 +311,280 @@ func TestSpawnChildTaskSubMain(t *testing.T) {
 		t.Fatalf("expected non-empty chain on child task")
 	}
 }
+
+// TestPlanStageNodePin is the regression for the reported bug class: a stage
+// that names a device in `node:` must run there even when its `requires` also
+// matches the origin node — the pin is the destination, requires is the
+// ability check on it, never a competing candidate pool.
+func TestPlanStageNodePin(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	ability := ledger.NativeAbility{
+		ID: "dev:code", Command: "sh", Args: []string{"-c", "true"}, Tier: 1,
+	}
+	// Both nodes advertise dev:code: scored routing alone would keep the
+	// stage local (localBias); only the pin sends it to mac.
+	pi := newCoreWithNative(t, "pi", "127.0.0.1:17995", ability)
+	mac := newCoreWithNative(t, "mac", "127.0.0.1:17996", ability)
+	for _, c := range []*Core{pi, mac} {
+		withArtifactPool(t, c)
+		c.SetWorkDir(t.TempDir())
+	}
+	if err := pi.Register(ctx); err != nil {
+		t.Fatalf("register pi: %v", err)
+	}
+	if err := mac.Register(ctx); err != nil {
+		t.Fatalf("register mac: %v", err)
+	}
+	go func() { _ = pi.Listen(ctx, "127.0.0.1:17995") }()
+	go func() { _ = mac.Listen(ctx, "127.0.0.1:17996") }()
+	time.Sleep(200 * time.Millisecond)
+	if err := pi.DialPeer(ctx, "127.0.0.1:17996"); err != nil {
+		t.Fatalf("dial mac: %v", err)
+	}
+	waitPeer(t, pi, "mac")
+	time.Sleep(300 * time.Millisecond)
+	pi.StartQueueScheduler(ctx)
+
+	planID, err := pi.StartPlan(ctx, plan.Plan{
+		Goal: "build on mac, verify on mac",
+		Stages: []plan.Stage{{
+			ID: "build", Title: "build", Intent: "build on mac",
+			Requires: []string{"dev:code"}, Node: "mac",
+		}},
+	}, DefaultQueueSpec())
+	if err != nil {
+		t.Fatalf("start pinned plan: %v", err)
+	}
+
+	stages := waitPlanDone(t, ctx, pi, planID, 1)
+	if len(stages) != 1 {
+		t.Fatalf("expected 1 stage, got %d", len(stages))
+	}
+	st := stages[0]
+	if got := PinnedNode(st); got != "mac" {
+		t.Errorf("PinnedNode = %q, want mac", got)
+	}
+	target, err := pi.store.DispatchTarget(ctx, st.TaskID)
+	if err != nil {
+		t.Fatalf("dispatch target: %v", err)
+	}
+	if target != "mac" {
+		t.Errorf("pinned stage dispatched to %q, want mac", target)
+	}
+}
+
+// TestPlanSweepSkipsDelegatedStageCopy pins the executor-side guard: a node
+// holding only a DELEGATED stage copy (chain [origin, self]) must not treat
+// itself as the plan's orchestrator — its sweep queued the copy out from
+// under the delegation's own prepare/dispatch and the delegate path then
+// declined the task on a state conflict, failing the stage and cascading
+// through its dependents. The origin's own row (chain [self]) still releases.
+func TestPlanSweepSkipsDelegatedStageCopy(t *testing.T) {
+	ctx := context.Background()
+	worker := newCore(t, "worker-sweep", "127.0.0.1:17977")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	// The delegated copy: the executor owns its row, the origin leads the chain.
+	_, err := worker.store.CreateWithID(ctx, "delegated-stage", "", "proj", "t",
+		"worker-sweep", []string{"entry-sweep", "worker-sweep"}, true)
+	must(err)
+	must(worker.store.SetStage(ctx, "delegated-stage", "plan-x", "stage-1", nil))
+	must(worker.AdvancePlan(ctx, "plan-x"))
+	if got, _ := worker.store.Get(ctx, "delegated-stage"); got.State != StateSubmitted {
+		t.Fatalf("delegated stage copy = %s, want submitted (the sweep must not release it)", got.State)
+	}
+
+	// Control: the origin's own row (chain starts with self) is released.
+	_, err = worker.store.CreateWithID(ctx, "local-stage", "", "proj", "t",
+		"worker-sweep", []string{"worker-sweep"}, false)
+	must(err)
+	must(worker.store.SetStage(ctx, "local-stage", "plan-y", "stage-1", nil))
+	must(worker.AdvancePlan(ctx, "plan-y"))
+	if got, _ := worker.store.Get(ctx, "local-stage"); got.State != StateQueued {
+		t.Fatalf("origin stage = %s, want queued (the origin's sweep releases it)", got.State)
+	}
+}
+
+// TestPlanPinnedStageWithSweepRunning is the live failure shape, end to end:
+// the plan node runs its stage pinned to mac while MAC'S OWN plan sweep runs
+// (as every daemon's monitor tick does). Before the fix the sweep released
+// the delegated copy, the delegate path declined on the queue conflict, and
+// the whole stage failed.
+func TestPlanPinnedStageWithSweepRunning(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	ability := ledger.NativeAbility{
+		ID: "dev:code", Command: "sh", Args: []string{"-c", "true"}, Tier: 1,
+	}
+	pi := newCoreWithNative(t, "pi-sweep", "127.0.0.1:17994", ability)
+	mac := newCoreWithNative(t, "mac-sweep", "127.0.0.1:17995", ability)
+	for _, c := range []*Core{pi, mac} {
+		withArtifactPool(t, c)
+		c.SetWorkDir(t.TempDir())
+	}
+	if err := pi.Register(ctx); err != nil {
+		t.Fatalf("register pi: %v", err)
+	}
+	if err := mac.Register(ctx); err != nil {
+		t.Fatalf("register mac: %v", err)
+	}
+	go func() { _ = pi.Listen(ctx, "127.0.0.1:17994") }()
+	go func() { _ = mac.Listen(ctx, "127.0.0.1:17995") }()
+	time.Sleep(200 * time.Millisecond)
+	if err := pi.DialPeer(ctx, "127.0.0.1:17995"); err != nil {
+		t.Fatalf("dial mac: %v", err)
+	}
+	waitPeer(t, pi, "mac-sweep")
+	time.Sleep(300 * time.Millisecond)
+	pi.StartQueueScheduler(ctx)
+
+	// The mac's daemon sweeps pending plans on every monitor tick — run that
+	// sweep for the whole test so the release race is genuinely exercised.
+	sweepCtx, stopSweep := context.WithCancel(ctx)
+	defer stopSweep()
+	go func() {
+		for {
+			select {
+			case <-sweepCtx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+				mac.sweepPlans(sweepCtx)
+			}
+		}
+	}()
+
+	planID, err := pi.StartPlan(ctx, plan.Plan{
+		Goal: "sweep race",
+		Stages: []plan.Stage{{
+			ID: "build", Title: "build", Intent: "build on mac",
+			Requires: []string{"dev:code"}, Node: "mac-sweep",
+		}},
+	}, DefaultQueueSpec())
+	if err != nil {
+		t.Fatalf("start plan: %v", err)
+	}
+
+	stages := waitPlanDone(t, ctx, pi, planID, 1)
+	if st := stages[0]; st.State != StateDone {
+		t.Fatalf("stage state = %s, want done (the sweep race must not fail the stage)", st.State)
+	}
+}
+
+// TestPlanStageNodePinUnknown fails the plan at StartPlan when a stage pins
+// a node the directory cannot resolve: the pin is a promise the run cannot
+// keep, so it must fail before any stage row exists.
+func TestPlanStageNodePinUnknown(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pi := newCoreWithNative(t, "pi", "127.0.0.1:17997", ledger.NativeAbility{
+		ID: "dev:code", Command: "true", Tier: 1,
+	})
+	if err := pi.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	_, err := pi.StartPlan(ctx, plan.Plan{
+		Goal: "pin to a node that does not exist",
+		Stages: []plan.Stage{{
+			ID: "build", Title: "build", Intent: "on a ghost",
+			Requires: []string{"dev:code"}, Node: "no-such-node",
+		}},
+	}, DefaultQueueSpec())
+	if err == nil {
+		t.Fatal("StartPlan should fail when a stage pins an unknown node")
+	}
+	if !strings.Contains(err.Error(), "no-such-node") {
+		t.Fatalf("error should name the bad pin, got %v", err)
+	}
+	// And nothing parked: the whole plan refused, so no plan row exists.
+	if plans, serr := pi.store.ListPlans(ctx); serr != nil || len(plans) > 0 {
+		t.Fatalf("a rejected plan must not leave stage rows: plans=%d err=%v", len(plans), serr)
+	}
+}
+
+// TestQueueKeysReleaseReacquire pins the core wiring the delegate wait uses:
+// a queue-held task releases its keys for the wait and re-acquires after; a
+// task the queue never held (delegate-driven) owes nothing.
+func TestQueueKeysReleaseReacquire(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	c := newCore(t, "rel-reacq", "127.0.0.1:17978")
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	sched := c.StartQueueScheduler(ctx)
+	keys := []string{"project:X"}
+	if !sched.Registry().TryAcquire(keys, "held-task") {
+		t.Fatal("setup acquire failed")
+	}
+	if !c.queueReleaseFor("held-task") {
+		t.Fatal("queueReleaseFor reported nothing held")
+	}
+	if got := sched.Registry().HeldBy("project:X"); got != "" {
+		t.Fatalf("key still held by %q after release", got)
+	}
+	c.queueAcquireFor(ctx, "held-task", keys)
+	if got := sched.Registry().HeldBy("project:X"); got != "held-task" {
+		t.Fatalf("holder = %q, want held-task after re-acquire", got)
+	}
+	if c.queueReleaseFor("never-held") {
+		t.Fatal("queueReleaseFor claimed an unheld task")
+	}
+}
+
+// TestChildRowResultCarriesFailureReason: a child failed by the routing
+// writers stores {"failed": reason} — a key TaskResultPayload has no field
+// for. The fold must carry the reason; before this fix the parent agent read
+// "failed with no detail" and guessed (it invented capability ids twice in
+// the live run).
+func TestChildRowResultCarriesFailureReason(t *testing.T) {
+	row := Task{
+		TaskID: "child-x", State: StateFailed,
+		ResultJSON: `{"failed":"route: no capability matches required: [filesystem-write]"}`,
+	}
+	p, ok := childRowResult(row)
+	if !ok {
+		t.Fatal("terminal row was not folded")
+	}
+	if !strings.Contains(p.Stderr, "no capability matches required") {
+		t.Fatalf("folded stderr = %q, want the failure reason", p.Stderr)
+	}
+	if p.State != StateFailed {
+		t.Fatalf("folded state = %q, want failed", p.State)
+	}
+}
+
+// TestAgentResultSchemaFor pins the dynamic schema: the requires description
+// lists this node's declared ability ids (a hallucinated child request cannot
+// route), and a read-only session is told to ask the user for authorization
+// instead of delegating for a permission it cannot grant. Both variants must
+// stay valid JSON — the CLI parses them as --json-schema.
+func TestAgentResultSchemaFor(t *testing.T) {
+	plain := agentResultSchemaFor([]string{"git", "net:curl"}, false)
+	if !strings.Contains(plain, "git, net:curl") {
+		t.Fatalf("schema does not list the declared abilities:\n%s", plain)
+	}
+	if strings.Contains(plain, "READ-ONLY") {
+		t.Fatal("unrestricted schema carries the read-only instruction")
+	}
+	restricted := agentResultSchemaFor([]string{"git"}, true)
+	if !strings.Contains(restricted, "READ-ONLY") || !strings.Contains(restricted, "do NOT delegate") {
+		t.Fatalf("restricted schema lacks the ask-instead-of-delegate instruction:\n%s", restricted)
+	}
+	for _, s := range []string{plain, restricted} {
+		var v any
+		if err := json.Unmarshal([]byte(s), &v); err != nil {
+			t.Fatalf("schema is not valid JSON: %v\n%s", err, s)
+		}
+	}
+}

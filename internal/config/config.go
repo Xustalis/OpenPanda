@@ -248,6 +248,12 @@ type NetworkConfig struct {
 	// keeping the flag spelled "cleartext" is deliberate, so opting out is
 	// never confused for a good idea.
 	AllowCleartext bool `yaml:"allow_cleartext"`
+	// AllowCleartextFor is the scoped version of AllowCleartext: CIDRs,
+	// literal IPs or exact hostnames where plaintext ws:// dials are also
+	// permitted — e.g. ["192.168.0.0/16"] opens the home LAN without
+	// disarming the MITM gate for peers anywhere else. Prefer it over the
+	// global flag whenever the plaintext links live on one known segment.
+	AllowCleartextFor []string `yaml:"allow_cleartext_for"`
 	// UDPListen is the farsky datagram-plane bind (encrypted AEAD envelopes +
 	// NAT-punch frames). "" follows listen_addr's port on the same host —
 	// the default keeps punching available whenever the WS listener is
@@ -270,6 +276,14 @@ type NetworkConfig struct {
 	// both the listener and the announcer. Admission is unaffected by the
 	// beacon: pairing still needs the shared secret and the signed hello.
 	DiscoveryAddr string `yaml:"discovery_addr"`
+	// DiscoveryAutoDial turns a src-pinned LAN beacon into an outbound dial
+	// so same-secret nodes join without `nodes admit`: the beacon only
+	// supplies the address (and only ever the broadcaster's own — a row is
+	// dialed only when its host is the datagram's source IP), the signed
+	// hello still decides membership. Default on; false keeps the manual
+	// pending-list → admit flow. Ignored without a shared_secret (a hello
+	// that cannot authenticate would only churn).
+	DiscoveryAutoDial bool `yaml:"discovery_auto_dial"`
 }
 
 // defaultDiscoveryAddr is the port LAN-discovery binds when the operator
@@ -467,6 +481,14 @@ const (
 	DefaultAgentTimeoutS     = 600
 	DefaultTaskLeaseS        = 2 * (DefaultAgentTimeoutS + 30)
 	DefaultSuperviseRoundsCf = 5
+	// DefaultSilenceS bounds how long one agent execution may emit zero
+	// progress notes or output before the watchdog calls it stalled and
+	// aborts. Four minutes is far above any healthy provider request or
+	// tool call's quiet stretch, so a longer silence is a wedge (hung API
+	// call, dead CLI), not a slow-but-live run — and a stalled attempt that
+	// dies early retries into a working one instead of burning the whole
+	// agent budget on a corpse.
+	DefaultSilenceS = 240
 )
 
 // TimeoutsConfig bounds long-running task execution. All durations are seconds;
@@ -489,16 +511,23 @@ type TimeoutsConfig struct {
 	// SuperviseRounds caps the execute → judge → re-delegate loop per task.
 	SuperviseRounds int `yaml:"supervise_rounds"`
 	// SilenceS is how long execution may produce zero progress notes or output
-	// before the watchdog treats it as stalled and aborts. 0 = disabled.
+	// before the watchdog treats it as stalled and aborts. 0 = DefaultSilenceS;
+	// a negative value disables the kill (heartbeat notes still post — the
+	// stall stays visible, it just is not aborted).
 	SilenceS int `yaml:"silence_s"`
 }
 
-// SilenceTimeout returns the configured progress silence limit, or 0 (disabled).
+// SilenceTimeout returns the configured progress silence limit: DefaultSilenceS
+// when unset, 0 when explicitly disabled with a negative value.
 func (t TimeoutsConfig) SilenceTimeout() time.Duration {
-	if t.SilenceS > 0 {
+	switch {
+	case t.SilenceS < 0:
+		return 0
+	case t.SilenceS == 0:
+		return DefaultSilenceS * time.Second
+	default:
 		return time.Duration(t.SilenceS) * time.Second
 	}
-	return 0
 }
 
 // TaskLease returns the configured task lease, or the default when unset.
@@ -818,6 +847,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: network.peers[%d] %q: %w", i, peer, err)
 		}
 	}
+	for i, entry := range c.Network.AllowCleartextFor {
+		if err := validateCleartextScope(entry); err != nil {
+			return fmt.Errorf("config: network.allow_cleartext_for[%d] %q: %w", i, entry, err)
+		}
+	}
 	for i, cc := range c.Network.Contacts {
 		if _, err := cc.Resolve(); err != nil {
 			return fmt.Errorf("config: network.contacts[%d]: %w", i, err)
@@ -881,6 +915,27 @@ func ValidatePeerAddr(peer string) error {
 	}
 	if n, err := strconv.Atoi(port); err != nil || n <= 0 || n > 65535 {
 		return fmt.Errorf("port %q is not a number between 1 and 65535", port)
+	}
+	return nil
+}
+
+// validateCleartextScope checks one network.allow_cleartext_for entry. The
+// accepted shapes mirror what the dial-time matcher can apply: a CIDR, a
+// literal IP, or an exact hostname — nothing with a scheme, port, or path,
+// because the match runs against the bare host a peer URL resolves to.
+func validateCleartextScope(entry string) error {
+	e := strings.TrimSpace(entry)
+	if e == "" {
+		return fmt.Errorf("empty entry")
+	}
+	if _, _, err := net.ParseCIDR(e); err == nil {
+		return nil
+	}
+	if net.ParseIP(e) != nil {
+		return nil
+	}
+	if strings.ContainsAny(e, " \t:/*") {
+		return fmt.Errorf("want a CIDR, literal IP, or bare hostname — not %q", e)
 	}
 	return nil
 }
@@ -1022,12 +1077,13 @@ func Default() *Config {
 			Kind:          NodeKindPhysical,
 		},
 		Network: NetworkConfig{
-			// Loopback by default (review P1-2): the bus speaks unauthenticated-
-			// after-hello WebSocket, so a wildcard bind would expose delegation
-			// traffic and the hello signature to the LAN. A node that should be
-			// reachable by peers must set listen_addr explicitly — to a routable
-			// interface or, preferably, a Tailscale/WireGuard overlay address.
-			ListenAddr: "127.0.0.1:7836",
+			// Wildcard by default: sessaead (capability-negotiated AEAD keyed
+			// from the shared secret + both hello nonces) seals every frame
+			// after the hello exchange, so the wildcard bind exposes nothing
+			// plaintext beyond the two signed hellos — which carry no secret
+			// material and are replay-bound. Peers too old to negotiate fall
+			// back to the cleartext policy (loopback/Tailscale/allowlist).
+			ListenAddr: "0.0.0.0:7836",
 			// Loopback by default (P1-24): the panel speaks plain HTTP, so a
 			// wildcard bind would expose the Bearer token and task contents to
 			// the LAN. Set panel_addr explicitly to expose it (e.g. behind a
@@ -1036,6 +1092,10 @@ func Default() *Config {
 			// Conservative defaults for a personal device network.
 			MaxConnections:      64,
 			MaxConnectionsPerIP: 8,
+			// Auto-dial src-pinned LAN beacons by default: the hello's shared
+			// secret still gates admission, so opting out is for operators
+			// who want every peer to be an explicit act.
+			DiscoveryAutoDial: true,
 		},
 		Storage: StorageConfig{
 			DBPath:       filepath.Join(data, "openpanda.db"),
@@ -1466,7 +1526,7 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 	setMapFieldAnyMap(model, "params", mc.Params)
 	setMapFieldStringMap(model, "headers", mc.Headers)
 
-	out, err := yaml.Marshal(&root)
+	out, err := marshalYAML(&root)
 	if err != nil {
 		return err
 	}
@@ -1530,7 +1590,7 @@ func UpdateModelsSection(path string, models []ModelConfig) error {
 		)
 	}
 
-	out, err := yaml.Marshal(&root)
+	out, err := marshalYAML(&root)
 	if err != nil {
 		return err
 	}
@@ -1608,7 +1668,7 @@ func UpdateMCPSection(path string, command string) error {
 	}
 	setMapField(mcp, "command", command)
 
-	out, err := yaml.Marshal(&root)
+	out, err := marshalYAML(&root)
 	if err != nil {
 		return err
 	}
@@ -1643,7 +1703,7 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 	case os.IsNotExist(err):
 		doc := Default()
 		doc.Network = nc
-		out, err := yaml.Marshal(doc)
+		out, err := marshalYAML(doc)
 		if err != nil {
 			return err
 		}
@@ -1666,8 +1726,11 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 	if nc.Peers != nil {
 		setMapFieldSeq(network, "peers", nc.Peers)
 	}
+	if nc.AllowCleartextFor != nil {
+		setMapFieldSeq(network, "allow_cleartext_for", nc.AllowCleartextFor)
+	}
 
-	out, err := yaml.Marshal(&root)
+	out, err := marshalYAML(&root)
 	if err != nil {
 		return err
 	}
@@ -1889,4 +1952,18 @@ func hardenSecretPerms(path string, data []byte) {
 		return
 	}
 	slog.Warn("tightened config file permissions to 0600 (contains secrets)", "path", path)
+}
+
+// marshalYAML emits YAML at the 2-space indent every hand-written config
+// in this repo uses — yaml.Marshal's 4-space default used to reformat the
+// whole file on the first programmatic write and drown the real change in
+// whitespace noise.
+func marshalYAML(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), enc.Close()
 }

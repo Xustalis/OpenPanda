@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState } from 'preact/hooks'
+import { useRef, useState } from 'preact/hooks'
 import { api, type HubSkillEntry, type SkillEntry } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
@@ -8,6 +8,7 @@ import { ErrorState, PageHeader } from '../components/page'
 import { Icon } from '../components/icons'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
+import { useModalFocus } from '../components/modal-focus'
 
 /** The skills view: every skill with its approval status, plus
  *  quick recommended presets, custom importing and community Skills Hub integration. */
@@ -174,14 +175,14 @@ function SkillRow({
         <span class="skill-desc dim">{skill.description}</span>
         <span class="skill-meta dim">
           {skill.scope}
-          {skill.key ? `:${skill.key}` : ''} · used {skill.use_count}
+          {skill.key ? `:${skill.key}` : ''} · {t('skills.usedN', { n: skill.use_count })}
         </span>
       </div>
       <div class="skill-side">
         <span
           class={`badge ${skill.status === 'active' ? 'green' : skill.status === 'pending' ? 'yellow' : 'red'}`}
         >
-          {skill.status}
+          {t(`skills.status.${skill.status}`, skill.status)}
         </span>
         {skill.builtin && (
           <button
@@ -330,7 +331,7 @@ function HubSkillRow({
           <span class="skill-name mono">{skill.name}</span>
           {skill.alias && <span class="badge dim" style={{ fontSize: '11px' }}>{skill.alias}</span>}
           {skill.version && <span class="badge dim">{skill.version}</span>}
-          {skill.author && <span class="dim" style={{ fontSize: '12px' }}>by {skill.author}</span>}
+          {skill.author && <span class="dim" style={{ fontSize: '12px' }}>{t('skills.byAuthor', { name: skill.author })}</span>}
           {skill.recommended && (
             <span class="badge blue" style={{ fontSize: '11px' }}>
               {t('skills.builtinTag')}
@@ -395,6 +396,8 @@ function ImportSkillModal({
   const [pending, setPending] = useState(false)
   const [force, setForce] = useState(false)
   const [busy, setBusy] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  useModalFocus(box, true)
 
   async function submit(e: Event) {
     e.preventDefault()
@@ -424,7 +427,20 @@ function ImportSkillModal({
 
   return (
     <div class="skill-modal-backdrop" onClick={onClose}>
-      <div class="skill-modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={box}
+        class="skill-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('skills.importTitle')}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.stopPropagation()
+            onClose()
+          }
+        }}
+      >
         <h3>{t('skills.importTitle')}</h3>
         <p class="dim" style={{ fontSize: '13px', margin: 0 }}>
           {t('skills.importSub')}
@@ -476,16 +492,16 @@ function ImportSkillModal({
             <div class="skill-form-group">
               <label>{t('skills.importScope')}</label>
               <select value={scope} onChange={(e) => setScope((e.target as HTMLSelectElement).value)}>
-                <option value="global">Global</option>
-                <option value="project">Project</option>
-                <option value="device">Device</option>
+                <option value="global">{t('skills.scopeGlobal')}</option>
+                <option value="project">{t('skills.scopeProject')}</option>
+                <option value="device">{t('skills.scopeDevice')}</option>
               </select>
             </div>
             <div class="skill-form-group">
-              <label>Name (Override)</label>
+              <label>{t('skills.importName')}</label>
               <input
                 type="text"
-                placeholder="optional"
+                placeholder={t('skills.optional')}
                 value={name}
                 onInput={(e) => setName((e.target as HTMLInputElement).value)}
               />
@@ -494,7 +510,7 @@ function ImportSkillModal({
 
           {scope === 'project' && (
             <div class="skill-form-group">
-              <label>Project Name</label>
+              <label>{t('skills.importProject')}</label>
               <input
                 type="text"
                 value={project}
@@ -506,7 +522,7 @@ function ImportSkillModal({
 
           {scope === 'device' && (
             <div class="skill-form-group">
-              <label>Device Name</label>
+              <label>{t('skills.importDevice')}</label>
               <input
                 type="text"
                 value={device}
@@ -523,7 +539,7 @@ function ImportSkillModal({
                 checked={pending}
                 onChange={(e) => setPending((e.target as HTMLInputElement).checked)}
               />
-              Pending approval
+              {t('skills.importPending')}
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
               <input
@@ -531,13 +547,13 @@ function ImportSkillModal({
                 checked={force}
                 onChange={(e) => setForce((e.target as HTMLInputElement).checked)}
               />
-              Overwrite existing
+              {t('skills.importForce')}
             </label>
           </div>
 
           <div class="skill-modal-actions">
             <button type="button" class="btn" onClick={onClose} disabled={busy}>
-              Cancel
+              {t('common.cancel')}
             </button>
             <button type="submit" class="btn primary" disabled={busy}>
               {busy ? '...' : t('skills.importSubmit')}

@@ -149,6 +149,58 @@ func TestRegistryAllOrNothing(t *testing.T) {
 	r.Release("t2") // double release must not panic
 }
 
+// TestReleaseDuringWaitLetsChildStart is the live deadlock shape: the parent
+// (queue-held on project:X) waits on a child that needs the same key, so
+// before the fix the child could never start — it queued behind its own
+// parent's lock while the parent queued behind the child. The waiting parent
+// releases; the child claims and runs; the parent re-acquires before it
+// resumes.
+func TestReleaseDuringWaitLetsChildStart(t *testing.T) {
+	store := &fakeStore{ready: []ReadyTask{
+		{ID: "parent", Project: "X", CreatedAt: 1},
+		{ID: "child", Project: "X", CreatedAt: 2},
+	}}
+	runner := newGateRunner()
+	s := New(store, runner, 4, nil)
+
+	s.tick(context.Background())
+	waitForStarted(t, runner, 1)
+	if got := s.Registry().HeldBy("project:X"); got != "parent" {
+		t.Fatalf("holder = %q, want parent", got)
+	}
+	// The child cannot start while the parent holds the key.
+	s.tick(context.Background())
+	if len(runner.startedIDs()) != 1 {
+		t.Fatalf("started = %v; the child must stay blocked behind its parent's key", runner.startedIDs())
+	}
+
+	// The waiting parent releases: the next pass starts the child.
+	if !s.ReleaseTask("parent") {
+		t.Fatal("ReleaseTask reported nothing held")
+	}
+	s.tick(context.Background())
+	waitForStarted(t, runner, 2)
+
+	// The child finishes; the parent re-acquires before resuming.
+	runner.release <- "child"
+	<-runner.done
+	s.registry.Release("child")
+	keys := []string{"project:X"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if !s.AcquireTask(ctx, "parent", keys) {
+		t.Fatal("re-acquire failed")
+	}
+	if got := s.Registry().HeldBy("project:X"); got != "parent" {
+		t.Fatalf("holder = %q, want parent after re-acquire", got)
+	}
+	// An unheld task owes no re-acquire.
+	if s.ReleaseTask("never-held") {
+		t.Fatal("ReleaseTask claimed an unheld task")
+	}
+	runner.release <- "parent"
+}
+
 func TestSchedulerParallelDisjointSerialConflict(t *testing.T) {
 	store := &fakeStore{ready: []ReadyTask{
 		{ID: "opi", Project: "", ResourceKeys: []string{"node:opi"}, CreatedAt: 1},

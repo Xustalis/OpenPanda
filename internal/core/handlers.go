@@ -31,6 +31,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // progressInterval is the minimum spacing between EvProgress recordings:
@@ -447,6 +448,14 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 				c.logger.Info("task cancelled during execution", "task", taskID)
 				return
 			}
+			if errors.Is(err, ErrAlreadyRunning) {
+				// Another runner already owns the row (a duplicate delivery's
+				// first invocation, a resume that raced ahead): it reports the
+				// outcome through its own env, and declining here would cancel
+				// a live task the delegator is waiting on.
+				c.logger.Info("delegated task already running; standing down", "task", taskID)
+				return
+			}
 			c.logger.Warn("route delegated task", "err", err, "task", taskID)
 			c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: err.Error()})
 			// The decline tells the parent to re-route, but the local row must
@@ -717,6 +726,10 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 		return err
 	}
 	p.TokenBudget = tokens
+	// Dispatch records the new delegation target on the audit trail — the
+	// supersede check must read the PREVIOUS target first, so it runs before
+	// the transition, not after.
+	c.supersedeTarget(ctx, taskID, target)
 	if err := c.store.Dispatch(ctx, taskID, c.nodeID, target); err != nil {
 		return fmt.Errorf("dispatch: %w", err)
 	}
@@ -894,14 +907,32 @@ func (c *Core) execute(ctx context.Context, taskID, intent string, required []st
 
 // prepare records a freshly-created task in the local queue and dispatches it
 // to this node, so the queue reflects it even if the process dies mid-run.
+// The transitions tolerate a row another path already moved — a plan sweep
+// that raced the delegate, a duplicate delivery's first invocation: a task
+// already queued/dispatched/running is one this path can still adopt, and
+// declining it over a bookkeeping race is how a delegated task "never
+// completes". A terminal row is the one real conflict (the delegator
+// cancelled, or another verdict won) and reports as ErrCancelled so the
+// caller stands down without a decline.
 func (c *Core) prepare(ctx context.Context, taskID string) error {
-	if err := c.store.Queue(ctx, taskID, c.nodeID); err != nil {
+	if err := c.store.Queue(ctx, taskID, c.nodeID); err != nil && !errors.Is(err, ErrConflict) {
 		return fmt.Errorf("queue: %w", err)
 	}
-	if err := c.store.Dispatch(ctx, taskID, c.nodeID, c.nodeID); err != nil {
+	if err := c.store.Dispatch(ctx, taskID, c.nodeID, c.nodeID); err != nil && !errors.Is(err, ErrConflict) {
 		return fmt.Errorf("dispatch: %w", err)
 	}
-	return nil
+	t, err := c.store.Get(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("load task: %w", err)
+	}
+	switch t.State {
+	case StateQueued, StateDispatched, StateRunning, StateWaitingCtx:
+		return nil
+	}
+	if Terminal(t.State) {
+		return ErrCancelled
+	}
+	return fmt.Errorf("queue: %w: task %s state=%s, want submitted", ErrConflict, taskID, t.State)
 }
 
 // storeWriteCtx returns a context bounded to 5 seconds that survives cancellation
@@ -942,10 +973,15 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// cross-device result like an ordinary sub-agent's (S1-3).
 	start := time.Now()
 	var taskChain []string
+	// execWorkDir is the workspace the run actually derived; stamped onto
+	// every result on the way out so the delegator can see WHERE the work
+	// happened, not just who reported it (set after prepareRunDir below).
+	var execWorkDir string
 	defer func() {
 		if out.TaskID != "" {
 			out.DurationMS = time.Since(start).Milliseconds()
 			out.Executor = c.nodeID
+			out.WorkDir = execWorkDir
 			if len(out.Chain) == 0 {
 				out.Chain = taskChain
 			}
@@ -1010,6 +1046,15 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	prep, err := c.prepareRunDir(execCtx, ctx, task, taskID, plan)
 	if err != nil {
 		return bus.TaskResultPayload{}, err
+	}
+	execWorkDir = prep.workDir
+	// Persist where this run happens so the queue board, `task show` and the
+	// panel can answer "where did it run?" — the row's work_dir is only a
+	// submitter pin and is empty for ordinary tasks.
+	if execWorkDir != "" {
+		if werr := c.store.SetExecWorkDir(context.WithoutCancel(ctx), taskID, execWorkDir); werr != nil {
+			c.logger.Warn("persist exec work dir", "task", taskID, "err", werr)
+		}
 	}
 	if prep.negoRelease != nil {
 		defer prep.negoRelease()
@@ -1416,6 +1461,16 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 				map[string]any{"note": note}); err != nil {
 				c.logger.Warn("record agent progress", "task", taskID, "err", err)
 			}
+			// Delegated task: the origin's own copy of this row shows only
+			// accept→result without the note, so `panda task <id>`/logs there
+			// look frozen for the whole agent run. Ride the same text on the
+			// existing task_progress beat — every hop relays it upward, and a
+			// missing peer just drops the note (the lease beat still fires on
+			// its own tick).
+			if len(task.Chain) > 0 {
+				c.relayToParent(context.WithoutCancel(ctx), bus.MsgTaskProgress, task.Chain,
+					bus.TaskProgressPayload{TaskID: taskID, AttemptID: task.AttemptID, Note: note})
+			}
 		})
 
 		// Structured transcript (event protocol v2): every typed block the
@@ -1620,7 +1675,28 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	// marker-happy agent; the mesh budget bounds the spawned tree itself.
 	const maxDelegateRequests = 4
 	delegations := 0
+	// pendingChildren are delegate children still in flight — a request whose
+	// result had not landed when its wait window closed. Rebuilding the set
+	// from the rows (not just this episode's memory) means a resumed run also
+	// folds children spawned before the interruption.
+	pendingChildren := c.liveChildren(execCtx, taskID)
+	defer func() {
+		// Every exit path drops the waiters of still-pending children: the
+		// row, not the channel, is what a late result needs to land on.
+		for _, pc := range pendingChildren {
+			c.waiters.Delete(pc.id)
+		}
+	}()
 	for round := 0; round < maxRounds; round++ {
+		// Fold delegate children that resolved since the last round before
+		// the agent runs again: a result that arrived after its wait window
+		// still reaches the prompt, so "the child answered too late" stops
+		// meaning "the answer was lost".
+		if len(pendingChildren) > 0 {
+			for _, note := range c.foldLateChildren(execCtx, &pendingChildren) {
+				currentIntent += "\n\n[delegated child result arrived]\n" + note
+			}
+		}
 		// §6.1 token budget: a task whose quota is already spent — by an
 		// earlier round's judge charge, or before it ever reached this
 		// executor — must not run another metered round. The check reads the
@@ -1724,29 +1800,35 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			"model":      activeModel,
 			"authorized": task.Authorized,
 			"tier":       plan.Tier,
+			"workdir":    workDir,
 		})
 
 		runCtx := execCtx
 		if sessionID != "" {
 			runCtx = commander.WithResume(execCtx, sessionID)
 		}
-		// Structured result contract: a schema-capable adapter (registry
-		// SupportsStructuredOutput) gets the protocol schema, so the result
-		// arrives parsed — status/question/delegate_requests — instead of
-		// relying on text markers alone. Marker parsing below stays as the
-		// fallback for every adapter without the flag.
-		if plan.Kind == "agent" {
-			if k, ok := agents.Lookup(plan.Agent, plan.Adapter); ok && k.Capabilities.SupportsStructuredOutput {
-				runCtx = commander.WithResultSchema(runCtx, agentResultSchema)
-			}
-		}
 		// A task stamped remote at intake carries off-node intent: commander
 		// holds its agent run to the restricted tool face unless the origin's
 		// consent grant authorized it. The persisted flag is authoritative —
 		// the chain fallback only catches rows written before the flag
 		// existed; a peer can claim chain[0]=us but cannot unset remote.
-		if task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID) {
+		remoteOrigin := task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID)
+		restricted := remoteOrigin && !task.Authorized
+		if remoteOrigin {
 			runCtx = commander.WithRemoteTask(runCtx)
+		}
+		// Structured result contract: a schema-capable adapter (registry
+		// SupportsStructuredOutput) gets the protocol schema, so the result
+		// arrives parsed — status/question/delegate_requests — instead of
+		// relying on text markers alone. Marker parsing below stays as the
+		// fallback for every adapter without the flag. The schema carries
+		// this node's declared ability ids (a hallucinated child request
+		// cannot route) and, for a read-only session, the instruction to ask
+		// the user for authorization instead of delegating for it.
+		if plan.Kind == "agent" {
+			if k, ok := agents.Lookup(plan.Agent, plan.Adapter); ok && k.Capabilities.SupportsStructuredOutput {
+				runCtx = commander.WithResultSchema(runCtx, agentResultSchemaFor(c.abilityIDs(), restricted))
+			}
 		}
 		res = router.Execute(runCtx, *plan, prompt, workDir, task.Authorized)
 		structured := parseStructuredResult(res.Structured)
@@ -1811,7 +1893,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 						take = len(drs)
 					}
 					delegations += take
-					notes := c.delegateChildren(execCtx, task, drs[:take])
+					notes := c.delegateChildren(execCtx, task, drs[:take], &pendingChildren)
 					for i, note := range notes {
 						if len(notes) == 1 {
 							currentIntent += "\n\n[delegated child result]\n" + note
@@ -1853,9 +1935,16 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 						lastChanged = c.filterHostDrift(workDir, before.Changed(after))
 					}
 				}
-				if err := c.store.PauseForAnswer(ctx, taskID, c.nodeID, map[string]any{
+				park := map[string]any{
 					"question": q, "stdout": res.Stdout, "files_changed": lastChanged,
-				}); err != nil {
+				}
+				if restricted {
+					// The question exists because the session is read-only:
+					// record it so the origin's view can say why approving
+					// (which re-runs with consent) is the fix.
+					park["restricted"] = true
+				}
+				if err := c.store.PauseForAnswer(ctx, taskID, c.nodeID, park); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 						return roundOutcome{}, ErrCancelled
 					}
@@ -2049,11 +2138,14 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// its declared scope has overstepped the task. Pause it for human
 		// analysis rather than mark it done, fail it into the retry loop, or
 		// re-delegate — a deterministic intercept will not improve on retry.
+		// The roots are re-anchored to workDir first: a spec written from the
+		// project root ("proj/sub" while workDir is ".../proj") names the same
+		// tree, and comparing it verbatim drifted every in-scope change.
 		if plan.Kind == "agent" && !scope.Empty() && res.OK {
-			if drift := scope.Drift(lastChanged); len(drift) > 0 {
+			if drift := scope.DriftUnder(workDir, lastChanged); len(drift) > 0 {
 				msg := "scope drift: agent changed files outside declared scope: " + strings.Join(drift, ", ")
 				c.audit(ctx, taskID, "scope:drift", plan.Agent, "denied", msg)
-				if err := c.store.Pause(ctx, taskID, c.nodeID, msg); err != nil {
+				if err := c.store.PauseDrift(ctx, taskID, c.nodeID, msg, drift); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 						return roundOutcome{}, ErrCancelled
 					}
@@ -2063,7 +2155,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				trackTask(c, task.Project, required, task.Title, false)
 				return roundOutcome{done: true, payload: bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview,
-					ApprovalDisposition: string(ApprovalNeedsChangedInput),
+					ApprovalDisposition: string(ApprovalAcceptWork),
 					OK:                  false, ExitCode: 1, Stderr: msg,
 					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}}, nil
@@ -2297,6 +2389,16 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			currentIntent = currentIntent + "\n\n上一轮未能完整完成，请继续完成剩余工作，并汇报最终结果。"
 		} else {
 			currentIntent = currentIntent + "\n\n[上级补充指令]\n" + v.Followup
+		}
+	}
+	// §4.2 final fold: a run must not report a verdict while children it
+	// delegated are still outstanding — that is the "declared done while a
+	// sub-task is still running" lie from the orchestrator's side. Hold until
+	// they land (folded into the reported output), park (annotated), or the
+	// task's own deadline arrives.
+	if len(pendingChildren) > 0 {
+		if notes := c.awaitPendingChildren(execCtx, task, pendingChildren); len(notes) > 0 {
+			res.Stdout += "\n\n[delegated child results]\n" + strings.Join(notes, "\n")
 		}
 	}
 	return roundOutcome{res: res, lastChanged: lastChanged, verdict: verdict, sessionID: sessionID}, nil
@@ -2877,14 +2979,45 @@ func (c *Core) handleProgress(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	if p.AttemptID != "" && t.AttemptID != "" && p.AttemptID != t.AttemptID {
-		// A beat from a superseded attempt (after a retry/transfer) must not
-		// extend the current one's lease.
-		return
+		if attemptIsNewer(p.AttemptID, t.AttemptID) {
+			// The executor rotated its attempt forward (a resume re-run or a
+			// supervisor retry re-attempts under a fresh id upstream never
+			// sees). UUIDv7 ids are time-ordered, so a newer id can only come
+			// from a rotation after our record — adopt it and let the beat
+			// renew the lease: the executor is alive on its current attempt.
+			if aerr := c.store.AdoptAttempt(ctx, p.TaskID, p.AttemptID); aerr == nil {
+				t.AttemptID = p.AttemptID
+			}
+		} else {
+			// A beat from a superseded attempt (after a retry/transfer) must not
+			// extend the current one's lease.
+			return
+		}
 	}
 	if err := c.store.SetLease(ctx, p.TaskID, c.lease().Milliseconds()); err != nil {
 		c.logger.Warn("refresh lease from progress", "task", p.TaskID, "err", err)
 	}
+	// A beat carrying a note is the executor's progress sink reaching the
+	// delegator: record it so `task logs`/`task show` here shows the same
+	// life the executor's own timeline does. The executor already throttles
+	// and dedupes notes before sending, so one row lands per reported beat.
+	if p.Note != "" {
+		if err := c.store.RecordEvent(ctx, p.TaskID, EvProgress, map[string]any{
+			"note": p.Note, "from": env.From,
+		}); err != nil {
+			c.logger.Warn("record remote progress", "task", p.TaskID, "err", err)
+		}
+	}
 	c.relayToParent(ctx, bus.MsgTaskProgress, t.Chain, p)
+}
+
+// attemptIsNewer reports whether candidate is a strictly later attempt than
+// stored: both must be UUIDv7 (the only id shape whose lexical order is time
+// order), and candidate must sort after stored. Anything else — an arbitrary
+// foreign id, a missing version nibble — cannot be ordered and stays on the
+// drop path it always took.
+func attemptIsNewer(candidate, stored string) bool {
+	return util.IsUUIDv7(candidate) && util.IsUUIDv7(stored) && candidate > stored
 }
 
 // isCurrentExecutor reports whether from is the node expected to report on
@@ -3135,34 +3268,36 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	if p.AttemptID == "" || (t.AttemptID != "" && t.AttemptID != p.AttemptID) {
-		c.logger.Info("stale attempt result ignored", "task", p.TaskID,
-			"stored", t.AttemptID, "got", p.AttemptID)
-		// Keep the drop honest: a real executor DID produce this outcome for
-		// an attempt the row moved past. Without the audit event the timeline
-		// reads as if the remote work never reported back.
-		if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
-			"late": true, "dropped": "stale_attempt",
-			"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
-		}); rerr != nil {
-			c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
+		if t.AttemptID != "" && attemptIsNewer(p.AttemptID, t.AttemptID) {
+			// The executor rotated its attempt forward — a task_resume
+			// re-run or supervisor retry mints a fresh attempt upstream never
+			// hears about, and before this the result was dropped as stale,
+			// leaving delegator and executor permanently split (running vs
+			// review). The sender already authenticated as THIS task's
+			// current executor above, and UUIDv7 ids are time-ordered: a
+			// newer attempt can only come from a rotation after our record,
+			// never from a replayed older one (those stay dropped below).
+			if aerr := c.store.AdoptAttempt(ctx, p.TaskID, p.AttemptID); aerr != nil {
+				c.logger.Warn("adopt rotated attempt", "task", p.TaskID, "err", aerr)
+			} else {
+				c.logger.Info("adopted executor's rotated attempt", "task", p.TaskID,
+					"stored", t.AttemptID, "got", p.AttemptID)
+				t.AttemptID = p.AttemptID
+			}
+		} else {
+			c.logger.Info("stale attempt result ignored", "task", p.TaskID,
+				"stored", t.AttemptID, "got", p.AttemptID)
+			// Keep the drop honest: a real executor DID produce this outcome for
+			// an attempt the row moved past. Without the audit event the timeline
+			// reads as if the remote work never reported back.
+			if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
+				"late": true, "dropped": "stale_attempt",
+				"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
+			}); rerr != nil {
+				c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
+			}
+			return
 		}
-		return
-	}
-	if Terminal(t.State) {
-		// A closed row stays closed — cancel/expire/done are deliberate
-		// outcomes a late wire message must not reopen. But the executor's
-		// real verdict is recorded so `task show` shows what actually
-		// happened remotely instead of a silent divergence.
-		c.logger.Info("late result on terminal task", "task", p.TaskID,
-			"state", t.State, "from", env.From, "remote_state", p.State)
-		if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
-			"late": true, "dropped": "terminal_state", "local_state": t.State,
-			"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
-		}); rerr != nil {
-			c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
-		}
-		c.signalResult(p.TaskID, p)
-		return
 	}
 	state := p.State
 	if state == "" {
@@ -3173,6 +3308,28 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			state = StateFailed
 		}
 	}
+	if Terminal(t.State) {
+		// An expired row is a timeout's pessimistic close — the deadline
+		// bounded delivery, not correctness — so a real done still
+		// reconciles below. Cancelled and done stay sealed: one is a human
+		// decision, the other is the answer already.
+		if !(t.State == StateExpired && state == StateDone && p.OK) {
+			// A closed row stays closed — cancel/expire/done are deliberate
+			// outcomes a late wire message must not reopen. But the executor's
+			// real verdict is recorded so `task show` shows what actually
+			// happened remotely instead of a silent divergence.
+			c.logger.Info("late result on terminal task", "task", p.TaskID,
+				"state", t.State, "from", env.From, "remote_state", p.State)
+			if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
+				"late": true, "dropped": "terminal_state", "local_state": t.State,
+				"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
+			}); rerr != nil {
+				c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
+			}
+			c.signalResult(p.TaskID, p)
+			return
+		}
+	}
 	transitionOK := true
 	switch state {
 	case StateDone:
@@ -3180,7 +3337,31 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			c.logger.Warn("inconsistent task_result state", "task", p.TaskID, "state", state, "ok", p.OK)
 			return
 		}
-		if err := c.store.CompleteFromRemote(ctx, p.TaskID, c.nodeID, p); err != nil {
+		if t.State == StateFailed || t.State == StateExpired {
+			// Reconcile: a timeout path already closed this row, but the
+			// executor's done is evidence the work actually finished. The
+			// one failure a result may never overturn is a human reject —
+			// its last event carries {rejected}, everything else (lease
+			// expiry, remote fail, deadline) wrote EvResult.
+			if c.store.failureWasRejected(ctx, p.TaskID) {
+				c.logger.Info("late done on human-rejected task ignored", "task", p.TaskID, "from", env.From)
+				if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
+					"late": true, "dropped": "human_rejected",
+					"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
+				}); rerr != nil {
+					c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
+				}
+				transitionOK = false
+			} else if rerr := c.store.ReconcileDone(ctx, p.TaskID, c.nodeID, p, t.State); rerr != nil {
+				if !errors.Is(rerr, ErrConflict) {
+					c.logger.Warn("reconcile late done", "task", p.TaskID, "err", rerr)
+					transitionOK = false
+				}
+			} else {
+				c.logger.Info("late done reconciled over timeout close", "task", p.TaskID,
+					"was", t.State, "from", env.From)
+			}
+		} else if err := c.store.CompleteFromRemote(ctx, p.TaskID, c.nodeID, p); err != nil {
 			c.logger.Warn("complete from result", "task", p.TaskID, "err", err)
 			transitionOK = false
 		}
@@ -3199,6 +3380,31 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			c.logger.Warn("cancel from result", "task", p.TaskID, "err", err)
 			transitionOK = false
 		}
+	case StateExpired:
+		// An executor copy that expired reports it so both sides land on the
+		// same verdict instead of one side waiting on a dead run.
+		reason := p.Stderr
+		if reason == "" {
+			reason = "executor task expired"
+		}
+		if err := c.store.FailFromRemote(ctx, p.TaskID, c.nodeID, reason); err != nil {
+			c.logger.Warn("expire from result", "task", p.TaskID, "err", err)
+			transitionOK = false
+		}
+	case StateRunning, StateQueued, StateDispatched, StateWaitingCtx, StateSubmitted:
+		// Informational: the executor's copy is in flight — most commonly a
+		// task_resume whose consent raced the task's own progress (the human
+		// approved on both copies). No transition: this node keeps waiting
+		// (its lease is renewed by the executor's beats), and the eventual
+		// terminal result converges both copies. Recording it keeps the
+		// timeline honest about why the wait continues.
+		c.logger.Info("in-flight executor report", "task", p.TaskID, "state", state, "from", env.From)
+		if rerr := c.store.RecordEvent(ctx, p.TaskID, EvProgress, map[string]any{
+			"note": "executor reports task " + state, "from": env.From,
+		}); rerr != nil {
+			c.logger.Debug("record in-flight report", "task", p.TaskID, "err", rerr)
+		}
+		return
 	default:
 		c.logger.Warn("unknown task_result state ignored", "task", p.TaskID, "state", state)
 		return
@@ -3239,6 +3445,16 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 		// produced tree back over the directory it packed from, so a remote
 		// edit actually reaches the user's checkout.
 		c.adoptWorktreeOutput(ctx, t, env.From, p.OutputArtifact)
+	}
+
+	// The executor reported WHERE it ran; record it on this row too, so the
+	// delegator's queue board answers "where did it run?" for remote work
+	// instead of showing a dash (the row's own exec_work_dir only exists
+	// when THIS node ran the task).
+	if p.WorkDir != "" && p.WorkDir != t.ExecWorkDir {
+		if werr := c.store.SetExecWorkDir(context.WithoutCancel(ctx), p.TaskID, p.WorkDir); werr != nil {
+			c.logger.Warn("record executor work dir", "task", p.TaskID, "err", werr)
+		}
 	}
 
 	// Record delegation outcome for scheduling analysis (B2). Only record when
@@ -3285,7 +3501,15 @@ func (c *Core) relayToParent(ctx context.Context, typ string, chain []string, pa
 	}
 	env.To = parent
 	if err := c.sendTo(parent, env); err != nil {
-		c.logger.Warn("relay", "type", typ, "to", parent, "err", err)
+		// A progress beat to an offline delegator is expected, not news: the
+		// executor keeps working while the delegator is away, and a WARN per
+		// beat (one every few seconds for a live task) is pure log noise.
+		// Terminal frames keep the warning — those have custody semantics.
+		if typ == bus.MsgTaskProgress {
+			c.logger.Debug("relay progress to offline delegator", "to", parent, "err", err)
+		} else {
+			c.logger.Warn("relay", "type", typ, "to", parent, "err", err)
+		}
 		// A terminal result must survive a disconnected parent (review P0-2):
 		// park it for redelivery on the next hello instead of dropping it.
 		if typ == bus.MsgTaskResult {
@@ -3345,7 +3569,7 @@ func (c *Core) finishCancel(ctx context.Context, cancelled []string) {
 	for _, id := range cancelled {
 		c.cancelRunning(id)
 		c.dropPendingContext(id)
-		c.forwardCancelDownstream(ctx, id)
+		c.forwardCancelDownstream(ctx, id, "cancelled by delegator")
 	}
 }
 
@@ -3362,13 +3586,28 @@ func (c *Core) CancelTree(ctx context.Context, taskID string) ([]string, error) 
 	return cancelled, nil
 }
 
+// RejectTree is the local-entry reject: fail the reviewed row, then notify
+// the downstream executor holding the delegated review copy. Reject without
+// the forward left the executor's copy parked in review — a local approve on
+// that copy would run work the origin explicitly denied. The kill rides the
+// same task_cancel/cancel_outbox path as CancelTree: the executor's
+// handleCancel cascades it out of review, and an unreachable executor gets it
+// parked for its next hello.
+func (c *Core) RejectTree(ctx context.Context, taskID, reason string) error {
+	if err := c.store.Reject(ctx, taskID, reason); err != nil {
+		return err
+	}
+	c.forwardCancelDownstream(ctx, taskID, "rejected by delegator: "+reason)
+	return nil
+}
+
 // forwardCancelDownstream propagates a cancel to the remote executor holding
 // the dispatch lease, if any (P2-3). Without it, cancelling a delegated task
 // cancelled only the delegator's local copy: the executor kept running to
 // completion and its eventual result landed on an already-cancelled task.
 // The receiver's handleCancel re-runs its own cascade-and-forward, so the
 // cancel walks the whole downstream chain hop by hop.
-func (c *Core) forwardCancelDownstream(ctx context.Context, taskID string) {
+func (c *Core) forwardCancelDownstream(ctx context.Context, taskID, reason string) {
 	target, err := c.store.DispatchTarget(ctx, taskID)
 	if err != nil {
 		c.logger.Warn("cancel: dispatch target lookup", "task", taskID, "err", err)
@@ -3377,7 +3616,9 @@ func (c *Core) forwardCancelDownstream(ctx context.Context, taskID string) {
 	if target == "" || target == c.nodeID {
 		return // never dispatched, or dispatched to ourselves
 	}
-	const reason = "cancelled by delegator"
+	if reason == "" {
+		reason = "cancelled by delegator"
+	}
 	if c.deliverCancel(ctx, target, taskID, reason) {
 		// Delivered now: clear any copy parked from an earlier failed attempt.
 		c.outboxCancelDrop(ctx, target, taskID)
@@ -3411,6 +3652,10 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 		c.logger.Debug("resume for unknown task", "task", p.TaskID, "from", env.From)
 		return
 	}
+	if p.Accept {
+		c.handleAcceptWork(ctx, env, t)
+		return
+	}
 	parent := scheduler.Predecessor(t.Chain, c.nodeID)
 	if !scheduler.SameRuntimeIdentity(env.From, parent) {
 		c.logger.Warn("resume from non-delegator ignored", "task", p.TaskID,
@@ -3423,17 +3668,17 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	if t.State != StateReview {
-		// Answer honestly instead of leaving the delegator waiting on its
-		// lease timeout: a task that moved on (timed out, cancelled, already
-		// re-run) cannot take the consent, and a failed result is the one
-		// state every delegator path already renders.
-		c.logger.Warn("resume for task not in review", "task", p.TaskID, "state", t.State)
-		result := bus.TaskResultPayload{
-			TaskID: t.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,
-			Stderr: "resume: task state is " + t.State,
-			Chain:  t.Chain,
-		}
-		c.replyResult(ctx, env, result)
+		// The consent raced the task's own progress — most commonly the
+		// human approved on BOTH copies and this one is already running.
+		// Echo the row's REAL state instead of a synthesized failure: the
+		// old "resume: task state is running" failure reply landed on the
+		// delegator as a task_result and killed its copy (and cascaded its
+		// plan) over a benign double approval. In-flight states are
+		// informational (the delegator keeps waiting; the executor's
+		// eventual result converges both copies); terminal states carry the
+		// row's stored result so the delegator lands on the same verdict.
+		c.logger.Info("resume raced task progress", "task", p.TaskID, "state", t.State)
+		c.replyResult(ctx, env, c.resumeOutcomeFor(ctx, t))
 		return
 	}
 	// Re-run asynchronously so the message loop stays responsive to
@@ -3455,20 +3700,193 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 		}
 		// ResumeApproved can return without a wire-shaped outcome when a
 		// local queue scheduler raced the just-approved task (its dispatch
-		// lost the CAS): report the row's state so the delegator's wait ends
-		// with the truth instead of an empty result it must guess at.
+		// lost the CAS): echo the row's real state so the delegator's wait
+		// continues (in-flight) or converges (terminal) instead of dying on
+		// a synthesized failure.
 		switch result.State {
-		case StateDone, StateReview, StateFailed, StateCancelled:
+		case StateDone, StateReview, StateFailed, StateCancelled, StateExpired:
 		default:
-			result = bus.TaskResultPayload{
-				TaskID: p.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,
-				Stderr: "resume: task claimed by " + final.State + " before re-run",
-				Chain:  t.Chain,
-			}
+			result = c.resumeOutcomeFor(ctx, final)
 		}
 		c.replyResult(context.WithoutCancel(ctx), env, result)
 	}()
 }
+
+// resumeOutcomeFor builds the reply a resume gets when the consent raced the
+// task's own progress on this node. The payload echoes the row's REAL state
+// and stored result: an in-flight state (running/queued/dispatched/waiting)
+// is informational — OK stays true so no delegator path renders it as a
+// failure, and handleResult keeps the delegator's copy waiting for the
+// eventual terminal result; a terminal state carries the row's verdict so
+// both copies converge on the same outcome.
+func (c *Core) resumeOutcomeFor(ctx context.Context, t Task) bus.TaskResultPayload {
+	result := bus.TaskResultPayload{
+		TaskID: t.TaskID, AttemptID: t.AttemptID, State: t.State, Chain: t.Chain,
+	}
+	if t.ResultJSON != "" {
+		_ = json.Unmarshal([]byte(t.ResultJSON), &result)
+		if result.Stderr == "" {
+			// ForceFail-style rows store {"failed": reason} — carry it.
+			var alt struct {
+				Failed string `json:"failed"`
+			}
+			if json.Unmarshal([]byte(t.ResultJSON), &alt) == nil && alt.Failed != "" {
+				result.Stderr = alt.Failed
+			}
+		}
+		result.TaskID, result.AttemptID, result.State, result.Chain =
+			t.TaskID, t.AttemptID, t.State, t.Chain
+	}
+	if result.Stderr == "" && (t.State == StateFailed || t.State == StateExpired) {
+		// A locally-failed row keeps its reason on the audit trail (Fail
+		// writes the EvResult event, not the result column); carry it so
+		// the delegator converges on the real cause.
+		if evs, err := c.store.Events(ctx, t.TaskID); err == nil {
+			for i := len(evs) - 1; i >= 0; i-- {
+				if evs[i].Type != EvResult {
+					continue
+				}
+				var d struct {
+					Failed string `json:"failed"`
+					Stderr string `json:"stderr"`
+				}
+				if json.Unmarshal([]byte(evs[i].DataJSON), &d) != nil {
+					continue
+				}
+				if d.Failed != "" {
+					result.Stderr = d.Failed
+					break
+				}
+				if d.Stderr != "" {
+					result.Stderr = d.Stderr
+					break
+				}
+			}
+		}
+	}
+	switch t.State {
+	case StateDone:
+		result.OK = true
+	case StateFailed, StateCancelled, StateExpired:
+		result.OK = false
+		if result.Stderr == "" {
+			result.Stderr = "task is " + t.State
+		}
+	default:
+		// In flight: not a verdict, just the truth about where the task is.
+		result.OK = true
+		result.ExitCode = 0
+		if result.Stderr == "" {
+			result.Stderr = "resume: task already " + t.State + " (consent raced an earlier approval)"
+		}
+	}
+	return result
+}
+
+// handleAcceptWork processes a task_resume carrying Accept: the human on the
+// other copy of this task accepted work that already ran, and this parked copy
+// mirrors the decision (review -> done). Accept is not consent to run
+// anything — it only ever closes a finished copy — so it is refused for any
+// disposition other than AcceptWork, and for rows that already moved on.
+//
+// Authorization: the sender must be this copy's chain predecessor (the
+// delegator) or the dispatch target (the executor) — the two nodes that hold
+// the sibling copies. A task that changed attempts since the decision is still
+// closed: an accept mirrors a finished result, not consent scoped to a run,
+// so the attempt guard a re-run needs does not apply.
+func (c *Core) handleAcceptWork(ctx context.Context, env bus.Envelope, t Task) {
+	parent := scheduler.Predecessor(t.Chain, c.nodeID)
+	target, _ := c.store.DispatchTarget(ctx, t.TaskID)
+	fromParent := scheduler.SameRuntimeIdentity(env.From, parent)
+	fromTarget := target != "" && scheduler.SameRuntimeIdentity(env.From, target)
+	if !fromParent && !fromTarget {
+		c.logger.Warn("accept from unauthorized peer ignored", "task", t.TaskID,
+			"from", env.From, "parent", parent, "target", target)
+		return
+	}
+	if t.State != StateReview {
+		// Honest reply instead of silence: the sender's mirror frame is
+		// informational, but a node that raced another close (already done,
+		// cancelled, expired) says so rather than looking unresponsive.
+		c.logger.Info("accept for task not in review", "task", t.TaskID, "state", t.State)
+		c.replyResult(ctx, env, bus.TaskResultPayload{
+			TaskID: t.TaskID, AttemptID: t.AttemptID, State: t.State, OK: true, Chain: t.Chain,
+		})
+		return
+	}
+	disposition, err := c.store.ApprovalDisposition(ctx, t.TaskID)
+	if err != nil || disposition != ApprovalAcceptWork {
+		c.logger.Warn("accept for non-accept disposition ignored", "task", t.TaskID,
+			"disposition", disposition, "err", err)
+		return
+	}
+	if err := c.store.Approve(ctx, t.TaskID); err != nil {
+		c.logger.Warn("accept approve failed", "task", t.TaskID, "err", err)
+		return
+	}
+	final, err := c.store.Get(ctx, t.TaskID)
+	if err != nil {
+		c.logger.Warn("accept: read final row", "task", t.TaskID, "err", err)
+		return
+	}
+	c.logger.Info("accepted parked copy from peer", "task", t.TaskID, "from", env.From)
+	// Forward onward for multi-hop chains (the middle node closes its own
+	// copy, then mirrors the accept to the next hop), never back to the
+	// sender whose copy is the origin of this decision.
+	c.forwardAcceptDownstream(ctx, t.TaskID, env.From)
+	result := bus.TaskResultPayload{TaskID: final.TaskID, AttemptID: final.AttemptID, State: final.State, OK: true, Chain: final.Chain}
+	if final.ResultJSON != "" {
+		_ = json.Unmarshal([]byte(final.ResultJSON), &result)
+		result.TaskID, result.AttemptID, result.State, result.Chain = final.TaskID, final.AttemptID, final.State, final.Chain
+	}
+	c.replyResult(ctx, env, result)
+}
+
+// forwardAcceptDownstream mirrors an accepted decision to the sibling copies
+// of this task: from the delegator's copy the accept goes to the dispatch
+// target (the executor), from the executor's copy to the chain predecessor
+// (the delegator). Without it, whichever side approved an AcceptWork park
+// first left the other side's copy in review forever — the mirror of the
+// reject-forward bug RejectTree fixed in the other direction. Delivery rides
+// deliverResume; an unreachable peer gets the accept parked in resume_outbox
+// (flushed on its next hello or the periodic sweep). exclude names a peer
+// that must not receive the frame (the sender of an accept we are relaying).
+func (c *Core) forwardAcceptDownstream(ctx context.Context, taskID, exclude string) {
+	if c.db == nil {
+		return
+	}
+	var targets []string
+	if target, err := c.store.DispatchTarget(ctx, taskID); err == nil && target != "" {
+		targets = append(targets, target)
+	}
+	if t, err := c.store.Get(ctx, taskID); err == nil {
+		if pred := scheduler.Predecessor(t.Chain, c.nodeID); pred != "" {
+			targets = append(targets, pred)
+		}
+	}
+	seen := map[string]bool{}
+	for _, target := range targets {
+		if scheduler.SameRuntimeIdentity(target, c.nodeID) || seen[target] {
+			continue
+		}
+		if exclude != "" && scheduler.SameRuntimeIdentity(target, exclude) {
+			continue
+		}
+		seen[target] = true
+		p := bus.TaskResumePayload{TaskID: taskID, Accept: true}
+		if c.deliverResume(ctx, target, p) {
+			c.logger.Info("accept forwarded to peer copy", "task", taskID, "to", target)
+			continue
+		}
+		c.resumeOutboxPersist(ctx, target, p, time.Now().Add(acceptOutboxTTL).Unix())
+	}
+}
+
+// acceptOutboxTTL bounds how long an undelivered accept waits for its peer.
+// Generous on purpose: an accept is custody of a decision already made (no
+// run is gated on it), and the peer may be off overnight; past the bound the
+// row is dropped and the peer's own human can still approve locally.
+const acceptOutboxTTL = 7 * 24 * time.Hour
 
 // replyResult returns a task_resume outcome to the authenticated requester that
 // sent this specific request, not to the historical predecessor in the task's

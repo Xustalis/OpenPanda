@@ -72,6 +72,9 @@ func (w *Worktrees) Ensure(ctx context.Context, id string) (string, error) {
 // its worktree off the parent's branch so it inherits the parent's code
 // state, while a fresh session branches off HEAD.
 func (w *Worktrees) EnsureFrom(ctx context.Context, id, base string) (string, error) {
+	if !ValidID(id) {
+		return "", ErrNotFound
+	}
 	path := w.Path(id)
 	if st, err := os.Stat(filepath.Join(path, ".git")); err == nil && !st.IsDir() {
 		// git worktrees use a .git *file* pointing at the admin dir
@@ -225,6 +228,9 @@ func (w *Worktrees) Merge(ctx context.Context, id string, message string) (strin
 // ensureExists verifies the session worktree is present (created by Ensure
 // during the session's first ask).
 func (w *Worktrees) ensureExists(id string) error {
+	if !ValidID(id) {
+		return ErrNotFound
+	}
 	if _, err := os.Stat(w.Path(id)); err != nil {
 		return fmt.Errorf("sessions: no worktree for session %s (run a prompt first)", id)
 	}
@@ -234,6 +240,9 @@ func (w *Worktrees) ensureExists(id string) error {
 // Remove deletes the session's worktree and its branch. Uncommitted changes
 // are discarded (the worktree was the session's sandbox).
 func (w *Worktrees) Remove(ctx context.Context, id string) error {
+	if !ValidID(id) {
+		return ErrNotFound
+	}
 	path := w.Path(id)
 	if _, err := os.Stat(path); err == nil {
 		cmd := executil.CommandContext(ctx, "git", "-C", w.repo, "worktree", "remove", "--force", path)

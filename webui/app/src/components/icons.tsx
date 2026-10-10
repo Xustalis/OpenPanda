@@ -37,9 +37,12 @@ export type IconName =
   | 'orbit'
   | 'paperclip'
   | 'pencil'
+  | 'pin'
+  | 'pin-off'
   | 'plug'
   | 'shield'
   | 'sparkles'
+  | 'trash'
   | 'x'
 
 const paths: Record<IconName, JSX.Element> = {
@@ -153,6 +156,21 @@ const paths: Record<IconName, JSX.Element> = {
       <path d="m15 5 4 4" />
     </>
   ),
+  pin: (
+    <>
+      <path d="M12 17v5" />
+      <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+    </>
+  ),
+  'pin-off': (
+    <>
+      <path d="M12 17v5" />
+      <path d="M5 17h9.5" />
+      <path d="M16.76 12.55A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0-2 2" />
+      <path d="M5 15.24a2 2 0 0 1 1.11-1.79l1.78-.9A2 2 0 0 0 9 10.76V9.5" />
+      <path d="m2 2 20 20" />
+    </>
+  ),
   plug: (
     <>
       <path d="M12 22v-5" />
@@ -171,6 +189,15 @@ const paths: Record<IconName, JSX.Element> = {
       <path d="M22 5h-4" />
       <path d="M4 17v2" />
       <path d="M5 18H3" />
+    </>
+  ),
+  trash: (
+    <>
+      <path d="M3 6h18" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
     </>
   ),
   x: (

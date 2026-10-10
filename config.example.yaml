@@ -12,22 +12,26 @@ node:
   # identity: "vm-dev-01"
 
 network:
-  # Loopback by default, matching config.Default(): a fresh copy of this file
-  # must not put an unencrypted listener on every interface. To reach peers on
-  # other machines, either point this at the specific interface you mean
-  # (e.g. "192.168.1.10:7836") or widen it deliberately to ":7836" — and read
-  # the transport notes below first.
-  listen_addr: "127.0.0.1:7836"  # WebSocket listener (kernel daemon)
-  # ── Transport security: plain ws:// is NOT encrypted ──
-  # Only use plain WebSocket over loopback, Tailscale/VPN, or a trusted LAN.
-  # If any peer crosses the public Internet, terminate TLS in a reverse proxy
-  # and set peers to "wss://host:port".
+  # Wildcard by default: since this release every frame after the hello
+  # handshake is AEAD-sealed (capability "sessaead", keyed by the shared
+  # secret + both hello nonces), so an any-interface bind exposes nothing
+  # readable to the LAN — the two signed hellos carry no secret material.
+  # Narrow it to a specific interface (e.g. "192.168.1.10:7836") if you want
+  # the socket itself unreachable, not just unreadable.
+  listen_addr: "0.0.0.0:7836"  # WebSocket listener (kernel daemon)
+  # ── Transport security: sessaead seals the wire; ws:// is safe everywhere ──
+  # Peers too old to negotiate sessaead fall back to plaintext, which the
+  # cleartext policy still gates: loopback, Tailscale hosts, and
+  # allow_cleartext_for entries pass; everything else is refused. For wss://
+  # peers terminate TLS in a reverse proxy (the listener does no TLS itself).
   # ── Transport auth: the WS listener REFUSES to start without a shared secret ──
   # The HMAC secret authenticates node-to-node hellos; every node in the P2P
   # network must share the same value. Prefer env OPENPANDA_SHARED_SECRET.
-  # NOTE: shared_secret authenticates peers but does NOT encrypt payloads.
+  # It also keys the per-connection AEAD session cipher (HKDF over the secret
+  # plus both hello nonces), so it is the root of both authentication and
+  # confidentiality — treat it like a password, not a checksum.
   # `panda init` generates one automatically; `panda pair`/`nodes invite` fill
-  # it when missing.
+  # it when missing; a daemon with none generates and persists one at boot.
   shared_secret: ""              # e.g. openssl rand -hex 32; keep out of public repos
   # ── Connection limits (slow-DoS protection) ──
   # max_connections: 64            # global concurrent WS connections (0 = unlimited)
@@ -56,22 +60,38 @@ network:
   # stun_servers:
   #   - "stun.l.google.com:19302"
   # ── LAN auto-discovery ──
-  # A small unauthenticated UDP beacon ("panda-beacon/1") announces this node
-  # on the LAN so `panda nodes` on another host can show it under "not
-  # paired" and `panda nodes admit <id>` can peer it. The beacon carries only
-  # id/address/version/pubkey — never credentials; joining still requires the
-  # shared secret and a signed Ed25519 hello.
+  # A small UDP beacon ("panda-beacon/1") announces this node on the LAN so
+  # `panda nodes` on another host can show it under "not paired" and
+  # `panda nodes admit <id>` can peer it. The beacon carries only
+  # id/address/version/pubkey — never credentials — and is Ed25519-signed so
+  # a listed ✓ fingerprint provably belongs to its broadcaster (⚠ marks the
+  # unsigned legacy form). Joining still requires the shared secret and a
+  # signed Ed25519 hello — a beacon admits nothing.
   #   ""      (default) — broadcast+listen on :7837
   #   "off"             — disable discovery entirely
   # discovery_addr: ":7837"
-  # ── Cleartext ws:// outbound gate ──
-  # The hello handshake proves mesh membership but does NOT encrypt the
-  # frames after it, so a network MITM on a plaintext link could forge a
-  # task_delegate. Dials to ws:// are therefore refused unless the host is
-  # loopback or Tailscale (100.64.0.0/10, fd7a:115e:a214::/48, *.ts.net) —
-  # everything else needs wss:// (terminate TLS in front; the listener does
-  # not speak TLS), a punch:<id> peer (AEAD datagrams), or this escape hatch:
-  #   allow_cleartext: true   # trusted LAN only — restores pre-gate dialing
+  # discovery_auto_dial (default true): turn a discovered node into a dial
+  # without `nodes admit`. Only beacons whose resolved host IS the packet's
+  # own source IP are dialed — a forged beacon can name any address, but it
+  # cannot move its packet's origin, so this can never be aimed at a third
+  # party. The hello's shared secret still decides membership; auto-dial only
+  # saves typing the IP. Set false to keep every join an explicit admit.
+  # discovery_auto_dial: false
+  # ── Cleartext ws:// gate (legacy peers only) ──
+  # Modern peers negotiate sessaead inside the hello and seal every frame
+  # after it, so ws:// to them is safe anywhere. The gate below only governs
+  # links that DID NOT negotiate encryption — peers too old to speak
+  # sessaead, where a network MITM could still forge a task_delegate.
+  # Plaintext links are refused unless the remote is loopback or Tailscale
+  # (100.64.0.0/10, fd7a:115e:a214::/48, *.ts.net) — anything else needs the
+  # peer upgraded (preferred), wss:// (terminate TLS in front; the listener
+  # does not speak TLS), a punch:<id> peer (AEAD datagrams), or an explicit
+  # opt-in:
+  #   allow_cleartext_for: ["192.168.0.0/16"]  # scoped: just these CIDRs/IPs/hosts
+  #   allow_cleartext: true                    # global: trusted networks only —
+  #                                            # plaintext toward EVERY peer
+  # Prefer allow_cleartext_for on a LAN: it opens your segment without
+  # disarming the MITM check for peers everywhere else.
   peers:                         # manual peers
     # - "worker-1.your-tailnet.ts.net:7836"
     # - "punch:laptop-home"      # node behind NAT — coordinate UDP hole
@@ -260,6 +280,14 @@ injection:
 #   # Wall-clock budget for one agent-adapter execution (told to the adapter and
 #   # enforced as a hard deadline). Default 600.
 #   agent_s: 600
+#   # How long one agent execution may produce ZERO progress notes or output
+#   # before the watchdog calls it stalled and aborts the attempt. A wedged
+#   # provider call or dead CLI emits nothing for arbitrarily long — four
+#   # silent minutes is a corpse, not a slow worker, and killing it lets the
+#   # retry succeed instead of burning the whole agent budget. Default 240;
+#   # set -1 to disable the kill (the "no output for Xs" heartbeat notes still
+#   # post, the stall just is not aborted).
+#   silence_s: 240
 #   # Cap on the execute → judge → re-dispatch loop per task. Default 5.
 #   supervise_rounds: 5
 

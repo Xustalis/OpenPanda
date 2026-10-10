@@ -10,17 +10,18 @@ package version
 // Version is the semantic version of this build, and the default for a build
 // that does not go through release packaging.
 //
-// It tracks the newest tag on main — currently the v0.0.10 release — so
-// ad-hoc builds identify themselves with the branch's latest published
+// It tracks the newest tag on main — currently the v0.0.11-alpha preview —
+// so ad-hoc builds identify themselves with the branch's latest published
 // lineage.
-var Version = "0.0.10"
+var Version = "0.0.11-alpha"
 
-// Codename is the release line's thematic name — v0.0.10 is "Apoapsis", the
-// far point of the orbit: the release that reaches outward from the core to
-// the LAN around the node (discovery, TOFU key pinning) and the hardware at
-// its edge (actuator dispatch, serial drivers). Surfaced by `panda version`
-// and /api/version; not part of the semver itself.
-var Codename = "Apoapsis"
+// Codename is the release line's thematic name — v0.0.11 is "Periapsis", the
+// near point of the orbit: after Apoapsis reached outward to the LAN, this
+// line tightens the mesh itself — encrypted sessions, custody that survives
+// dead links, honest parked states, and approvals that cannot strand on a
+// stale hello. Surfaced by `panda version` and /api/version; not part of the
+// semver itself.
+var Codename = "Periapsis"
 
 // ReleasePubKey is the Ed25519 public key (hex or base64) the self-update
 // path trusts to sign checksums.txt. Release packaging bakes it in via

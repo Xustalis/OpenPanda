@@ -44,6 +44,16 @@ var eventNoiseKeys = map[string]bool{
 // a timeline for "where did this fail" is scanning this column.
 const eventTypeWidth = 17
 
+// eventTailKeys name the payload fields whose informative content lives at the
+// END of the string — an error's reason follows its path/context prefix
+// ("…opencode.py': No such file or directory"). Head-clipping those shows the
+// scaffolding and drops the cause, so a payload that is one of these keys gets
+// tail-anchored truncation instead: `failed=…No such file or directory`.
+var eventTailKeys = map[string]bool{
+	"failed": true, "reason": true, "error": true,
+	"message": true, "detail": true, "stderr": true,
+}
+
 // eventLine renders one event as a timeline row, prefixed by indent. The payload
 // is dimmed so the eye lands on the clock and the type first, and the row is
 // clipped to the terminal so a long reason cannot wrap the timeline into a wall.
@@ -51,7 +61,7 @@ func eventLine(e core.Event, indent string) string {
 	p := pal()
 	when := time.Unix(e.TS, 0).Format("01-02 15:04:05")
 	head := indent + when + "  " + cell(e.Type, eventTypeWidth)
-	payload := eventPayload(e.DataJSON)
+	payload, tailKey := eventPayload(e.DataJSON)
 	if payload == "" {
 		return strings.TrimRight(head, " ")
 	}
@@ -59,22 +69,35 @@ func eventLine(e core.Event, indent string) string {
 	if budget < 12 {
 		budget = 12
 	}
+	// A lone error field keeps its tail: the "key=" prefix stays, then the
+	// message's END (where the cause lives) rather than its prefix.
+	if tailKey {
+		if k, v, ok := strings.Cut(payload, "="); ok && eventTailKeys[k] {
+			vBudget := budget - cliui.DisplayWidth(k) - 1
+			if vBudget > 8 {
+				return head + " " + p.Muted(k+"="+cliui.TruncateTail(v, vBudget, p.Unicode()))
+			}
+		}
+	}
 	return head + " " + p.Muted(cliui.Truncate(payload, budget, p.Unicode()))
 }
 
 // eventPayload flattens an event's JSON object into sorted k=v pairs, dropping
 // the fields that carry no information for a reader: absent values (null, "",
-// false, 0, empty list/object) and the scheduler's own bookkeeping. A payload
-// that is not an object is returned as-is, so an unexpected shape degrades to
-// what the timeline printed before rather than to nothing.
-func eventPayload(raw string) string {
+// false, 0, empty list/object) and the scheduler's own bookkeeping. The second
+// return reports whether the flattened payload is a single error-ish field
+// (eventTailKeys) — eventLine uses it to truncate from the head of the value
+// instead of the tail. A payload that is not an object is returned as-is, so
+// an unexpected shape degrades to what the timeline printed before rather than
+// to nothing.
+func eventPayload(raw string) (string, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "null" || raw == "{}" {
-		return ""
+		return "", false
 	}
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
-		return raw
+		return raw, false
 	}
 	keys := make([]string, 0, len(obj))
 	for k := range obj {
@@ -90,7 +113,12 @@ func eventPayload(raw string) string {
 			parts = append(parts, k+"="+v)
 		}
 	}
-	return strings.Join(parts, " ")
+	if len(parts) == 1 {
+		if k, _, ok := strings.Cut(parts[0], "="); ok && eventTailKeys[k] {
+			return parts[0], true
+		}
+	}
+	return strings.Join(parts, " "), false
 }
 
 // eventValue renders one payload value, or "" for a value that says nothing.
@@ -225,7 +253,7 @@ func agentEventLine(e core.Event, indent string, depths map[string]int) string {
 	case "transcript_truncated":
 		payload = p.Muted("older activity truncated — node keeps the full log")
 	default:
-		payload = eventPayload(e.DataJSON)
+		payload, _ = eventPayload(e.DataJSON)
 	}
 	if payload == "" {
 		return strings.TrimRight(head, " ")

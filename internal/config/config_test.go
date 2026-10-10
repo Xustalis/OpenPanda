@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func writeTemp(t *testing.T, content string) string {
@@ -408,5 +409,46 @@ func TestValidatePeerAddr(t *testing.T) {
 		if err := ValidatePeerAddr(a); err == nil {
 			t.Errorf("ValidatePeerAddr(%q) = nil, want error", a)
 		}
+	}
+}
+
+// TestValidateCleartextScope pins the allow_cleartext_for entry grammar:
+// CIDR, literal IP, or bare hostname — anything URL-shaped or ported is
+// rejected, because the dial-time match runs against a bare host and a
+// malformed entry would silently never match.
+func TestValidateCleartextScope(t *testing.T) {
+	valid := []string{"192.168.0.0/16", "fd00::/8", "10.0.0.5", "worker.lan"}
+	for _, e := range valid {
+		if err := validateCleartextScope(e); err != nil {
+			t.Errorf("validateCleartextScope(%q) = %v, want nil", e, err)
+		}
+	}
+	invalid := []string{
+		"", "   ",
+		"192.168.1.5:7836", // ported — the match sees a bare host
+		"ws://host:7836",   // URL-shaped
+		"192.168.0.0/33",   // malformed CIDR and not a valid host either
+		"*.lan",            // wildcard — exact match only
+	}
+	for _, e := range invalid {
+		if err := validateCleartextScope(e); err == nil {
+			t.Errorf("validateCleartextScope(%q) = nil, want error", e)
+		}
+	}
+}
+
+// SilenceTimeout semantics: unset means the built-in stall limit (a wedged
+// adapter emitting nothing for minutes is killed, not waited on); an explicit
+// negative opts the kill out while heartbeat notes still post; a positive
+// value is honoured verbatim.
+func TestSilenceTimeoutDefaultsToStallLimit(t *testing.T) {
+	if got := (TimeoutsConfig{}).SilenceTimeout(); got != DefaultSilenceS*time.Second {
+		t.Fatalf("unset silence_s = %v, want DefaultSilenceS (%ds)", got, DefaultSilenceS)
+	}
+	if got := (TimeoutsConfig{SilenceS: -1}).SilenceTimeout(); got != 0 {
+		t.Fatalf("silence_s: -1 = %v, want 0 (disabled)", got)
+	}
+	if got := (TimeoutsConfig{SilenceS: 90}).SilenceTimeout(); got != 90*time.Second {
+		t.Fatalf("silence_s: 90 = %v, want 90s", got)
 	}
 }

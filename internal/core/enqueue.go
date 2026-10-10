@@ -463,6 +463,9 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 		return err
 	}
 	p.TokenBudget = tokens
+	// A re-route after lease expiry can leave the previous executor still
+	// running its copy — stand it down before the new target takes over.
+	c.supersedeTarget(ctx, taskID, target)
 	if err := c.store.RetargetDelegation(ctx, taskID, target); err != nil {
 		return fmt.Errorf("retarget: %w", err)
 	}
@@ -538,6 +541,14 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 			// scheduling pass instead of being orphaned on paper.
 			if rerr := c.store.RetargetDelegation(ctx, taskID, c.nodeID); rerr != nil {
 				c.logger.Warn("queue: corrective retarget failed", "task", taskID, "err", rerr)
+			}
+			// Mark the fall-back honestly: the timeline must show that the
+			// task was MEANT for a peer but ran here because the link failed —
+			// not silently look like local work all along.
+			if rerr := c.store.RecordEvent(ctx, taskID, EvRouteFallback, map[string]any{
+				"intended": target, "reason": err.Error(),
+			}); rerr != nil {
+				c.logger.Warn("queue: route_fallback event", "task", taskID, "err", rerr)
 			}
 			return fmt.Errorf("send: %w", err)
 		}

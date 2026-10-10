@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -38,12 +39,21 @@ func TestMutualDialDedup(t *testing.T) {
 	go func() { done <- a.MaintainPeer(ctx, "127.0.0.1:17962") }()
 	go func() { done <- b.MaintainPeer(ctx, "127.0.0.1:17961") }()
 
-	// Settling window: handshakes plus one former flap period.
-	time.Sleep(2 * time.Second)
-
-	firstA, firstB := a.connFor("node-b"), b.connFor("node-a")
-	if firstA == nil || firstB == nil {
-		t.Fatalf("peer not connected: a→b=%v b→a=%v", firstA, firstB)
+	// Wait for both handshakes to settle instead of a fixed sleep: a loaded
+	// CI runner (the whole suite running in parallel) can exceed any constant
+	// window, and a spurious failure here reads as a dedup bug. The
+	// stability window below is what actually proves the dedup held.
+	var firstA, firstB *bus.Conn
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		firstA, firstB = a.connFor("node-b"), b.connFor("node-a")
+		if firstA != nil && firstB != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("peer not connected: a→b=%v b→a=%v", firstA, firstB)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	// The registrations must hold steady — no replacement churn.
@@ -61,6 +71,19 @@ func TestMutualDialDedup(t *testing.T) {
 	case err := <-done:
 		t.Fatalf("MaintainPeer returned while the edge was alive: %v", err)
 	default:
+	}
+
+	// Both sides must have recorded the addr→id binding for the peer they
+	// dialed — including the side whose outbound conn LOST the tie-break.
+	// The mesh status line joins these bindings against live neighbors to
+	// count configured peers online; a binding written only on the winner
+	// left a healthy edge whose surviving conn is the peer's inbound one
+	// reading "0/1 online" forever.
+	if got, err := ledger.PeerAddrBindings(b.db); err != nil || got["127.0.0.1:17961"] != "node-a" {
+		t.Fatalf("b's peer_addrs = %v (err %v), want 127.0.0.1:17961 → node-a", got, err)
+	}
+	if got, err := ledger.PeerAddrBindings(a.db); err != nil || got["127.0.0.1:17962"] != "node-b" {
+		t.Fatalf("a's peer_addrs = %v (err %v), want 127.0.0.1:17962 → node-b", got, err)
 	}
 
 	// The capability directory must show both nodes online on both sides —

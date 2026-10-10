@@ -223,6 +223,78 @@ func TestTaskOutboxFlushOnHello(t *testing.T) {
 	}
 }
 
+// TestResultReconcileOnReconnect is the silent-loss wedge: a result frame
+// written into a half-dead socket "sends" fine and never arrives, so no
+// result_outbox row is ever parked — and the delegator's copy stays
+// dispatched forever. The reconnect sweep re-pushes recent terminal verdicts
+// whether or not an outbox row exists, closing that gap. Here b settles a
+// task a dispatched, the edge comes up only AFTER the verdict exists, and
+// the first hello's flush must converge a's copy to done.
+func TestResultReconcileOnReconnect(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	a := newCore(t, "node-a", "127.0.0.1:18031")
+	b := newCore(t, "node-b", "127.0.0.1:18032")
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	must(a.Register(ctx))
+	must(b.Register(ctx))
+	go func() { _ = a.Listen(ctx, "127.0.0.1:18031") }()
+	go func() { _ = b.Listen(ctx, "127.0.0.1:18032") }()
+	time.Sleep(100 * time.Millisecond)
+
+	taskID := "task-reconcile-1"
+	// a's delegator copy — stranded exactly as the silent-loss leaves it.
+	// The attempt id is minted here: the wire delegation carries it, so both
+	// sides run under the same attempt.
+	atk, err := a.store.CreateWithID(ctx, taskID, "", "proj", "lost result",
+		"node-a", []string{"node-a", "node-b"}, true)
+	if err != nil {
+		t.Fatalf("delegator row: %v", err)
+	}
+	must(a.store.Queue(ctx, taskID, "node-a"))
+	must(a.store.Dispatch(ctx, taskID, "node-a", "node-b"))
+
+	// b's executor copy — the settled side, adopting the attempt the
+	// delegation frame carried. chain a→b makes "node-a" the delegation
+	// predecessor the sweep matches against the peer's claim keys.
+	if _, err := b.store.CreateFromRemote(ctx, taskID, "lost result",
+		"node-b", atk.AttemptID, []string{"node-a", "node-b"}); err != nil {
+		t.Fatalf("executor row: %v", err)
+	}
+	must(b.store.Queue(ctx, taskID, "node-b"))
+	must(b.store.Dispatch(ctx, taskID, "node-b", "node-b"))
+	must(b.store.Accept(ctx, taskID, "node-b"))
+	must(b.store.Complete(ctx, taskID, "node-b", map[string]any{"exit_code": 0}))
+
+	// Sanity: no result was ever parked — the sweep, not the outbox rows,
+	// must be what delivers this verdict.
+	var count int
+	if err := b.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM result_outbox WHERE task_id = ?`, taskID).Scan(&count); err == nil && count != 0 {
+		t.Fatalf("test premise broken: %d parked result rows", count)
+	}
+
+	// The link comes up after settlement. b's hello handler flushes its
+	// outbox AND runs the sweep; a's copy must reach done.
+	must(a.DialPeer(ctx, "127.0.0.1:18032"))
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := a.store.Get(ctx, taskID)
+		if err == nil && got.State == StateDone {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	got, _ := a.store.Get(ctx, taskID)
+	t.Fatalf("delegator copy = %s, want done — reconcile did not re-push the verdict", got.State)
+}
+
 // Batch-6 restart continuity, end to end: a result parked for b's FIRST
 // instance is claimed and delivered to b's SECOND instance — the two Cores
 // share one database, so they carry the same persisted Ed25519 identity

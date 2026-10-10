@@ -98,6 +98,51 @@ func TestResolvePinOnlineMatch(t *testing.T) {
 	}
 }
 
+// TestResolvePinByNodeNamePartOfID: an instance id "<name>@<identity>" must
+// resolve by its configured name — the string a human copies off `panda
+// nodes` — even when the row's Name holds the OS hostname instead. Bug: a
+// pin/--preferred of "test-node-b" against a VM peer printed "not in the
+// directory" because matching only covered the full id and the hostname.
+func TestResolvePinByNodeNamePartOfID(t *testing.T) {
+	c := pinCore(t, "root-x", "x")
+	ctx := context.Background()
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	// A VM peer: configured name test-node-b, identity-suffixed instance id,
+	// Name = the VM's OS hostname — none of the old predicates matched
+	// "test-node-b".
+	card := ledger.Card{Device: "ubuntu-vm", ResourceClass: "Standard",
+		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 2}}
+	if err := ledger.Register(c.db, card, "test-node-b@vm-208029ca7bab", 5); err != nil {
+		t.Fatalf("register vm peer: %v", err)
+	}
+	res := c.resolvePin(ctx, "test-node-b")
+	if res.self || !res.found || !res.online || res.targetID != "test-node-b@vm-208029ca7bab" {
+		t.Fatalf("resolvePin(test-node-b) = %+v, want the vm instance", res)
+	}
+	// The scored path agrees: --preferred by configured name forwards too.
+	employees, err := ledger.Query(c.db, "", "")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	d := scheduler.RouteP("root-x", []string{"root-x"}, employees,
+		func([]string) bool { return true }, nil, ledger.ResourceProfile{},
+		"test-node-b", "")
+	if d.Action != scheduler.ActionForward || d.Target != "test-node-b@vm-208029ca7bab" {
+		t.Fatalf("RouteP preferred test-node-b = %+v, want forward to the vm instance", d)
+	}
+	// Two live instances sharing the configured name stay ambiguous — the
+	// fix widens matching, it does not weaken the ambiguity guard.
+	if err := ledger.Register(c.db, card, "test-node-b@vm-ffffffffffff", 5); err != nil {
+		t.Fatalf("register twin: %v", err)
+	}
+	res = c.resolvePin(ctx, "test-node-b")
+	if !res.ambiguous {
+		t.Fatalf("resolvePin(test-node-b) with two live same-name instances = %+v, want ambiguous", res)
+	}
+}
+
 func TestResolvePinAmbiguousOnlineRefuses(t *testing.T) {
 	c := pinCore(t, "root-x", "x")
 	ctx := context.Background()
@@ -149,6 +194,47 @@ func TestResolvePinStaleRowTracksFreshest(t *testing.T) {
 	d := c.routePinned(ctx, "ghost-name", []string{"root-x"}, nil, ledger.ResourceProfile{})
 	if d.Action != "forward" || d.Target != "ghost-new" {
 		t.Fatalf("routePinned stale = %+v, want forward ghost-new", d)
+	}
+}
+
+// TestResolvePinFallsBackToConfiguredLink covers the directory-gap fallback:
+// a peer this node is configured to dial but has never met holds no directory
+// row, and the pin must still resolve through the recorded addr→id binding —
+// the cross-subnet case LAN beacons cannot fill. The resolution is marked as
+// a link fallback, the forward says so, and an unknown ref still declines.
+func TestResolvePinFallsBackToConfiguredLink(t *testing.T) {
+	c := pinCore(t, "root-x", "x")
+	ctx := context.Background()
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := ledger.RecordPeerAddr(c.db, "10.9.9.9:7836", "far-node@vm-abc"); err != nil {
+		t.Fatalf("record binding: %v", err)
+	}
+
+	// By the configured address.
+	res := c.resolvePin(ctx, "10.9.9.9:7836")
+	if !res.found || !res.viaLink || res.targetID != "far-node@vm-abc" {
+		t.Fatalf("resolve by addr = %+v, want viaLink hit on far-node@vm-abc", res)
+	}
+	if res.online {
+		t.Fatal("binding without a live conn must not read online")
+	}
+	// By the node's config-name segment.
+	if res := c.resolvePin(ctx, "far-node"); !res.found || res.targetID != "far-node@vm-abc" {
+		t.Fatalf("resolve by name = %+v, want the bound id", res)
+	}
+	// The hard pin forwards there, naming the fallback.
+	d := c.routePinned(ctx, "10.9.9.9:7836", []string{"root-x"}, []string{"coding"}, ledger.ResourceProfile{})
+	if d.Action != scheduler.ActionForward || d.Target != "far-node@vm-abc" {
+		t.Fatalf("routePinned = %+v, want forward to far-node@vm-abc", d)
+	}
+	if !strings.Contains(d.Reason, "configured peer") {
+		t.Fatalf("reason = %q, want the fallback named", d.Reason)
+	}
+	// A ref neither in the directory nor bound still declines honestly.
+	if d := c.routePinned(ctx, "no-such-node", []string{"root-x"}, nil, ledger.ResourceProfile{}); d.Action != scheduler.ActionDecline {
+		t.Fatalf("routePinned unknown = %+v, want decline", d)
 	}
 }
 

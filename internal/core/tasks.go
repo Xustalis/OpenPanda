@@ -214,7 +214,7 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 	var contextType, contextHash, risk, resource, requiresJSON sql.NullString
 	var approvalDisposition, operationDecision sql.NullString
 	var complexity sql.NullFloat64
-	var sessionID, resourceKeysJSON, workDir sql.NullString
+	var sessionID, resourceKeysJSON, workDir, execWorkDir sql.NullString
 	var agentSession, agentSessionNode sql.NullString
 	var scheduled int
 	var remote int
@@ -224,7 +224,7 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 		&result, &contextType, &contextHash, &complexity, &risk, &resource,
 		&requiresJSON, &approvalDisposition, &operationDecision, &lease,
 		&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
-		&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
+		&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &execWorkDir, &scheduled,
 		&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 		&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
 		&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs,
@@ -257,6 +257,7 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 	t.LeaseExpires = lease.Int64
 	t.SessionID = sessionID.String
 	t.WorkDir = workDir.String
+	t.ExecWorkDir = execWorkDir.String
 	t.Scheduled = scheduled != 0
 	t.PlanID = planID.String
 	t.StageID = stageID.String
@@ -566,6 +567,26 @@ func (s *TaskStore) RetargetDelegation(ctx context.Context, taskID, target strin
 	return s.recordEvent(ctx, taskID, EvDelegate, map[string]any{"target": target, "by": "queue-forward"})
 }
 
+// RouteFallbackPeer returns the peer named by the newest route_fallback
+// event — the node routing intended before the link failed and the task ran
+// locally. "" means the task went exactly where routing decided.
+func (s *TaskStore) RouteFallbackPeer(ctx context.Context, taskID string) string {
+	var data string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT data_json FROM task_events WHERE task_id=? AND type=? ORDER BY id DESC LIMIT 1`,
+		taskID, EvRouteFallback).Scan(&data)
+	if err != nil {
+		return ""
+	}
+	var d struct {
+		Intended string `json:"intended"`
+	}
+	if err := json.Unmarshal([]byte(data), &d); err != nil {
+		return ""
+	}
+	return d.Intended
+}
+
 // DispatchTarget returns the node this task was most recently dispatched to,
 // read from the task_events audit trail (Dispatch records the target on its
 // EvDelegate event). "" means the task was never dispatched. Wire handlers use
@@ -781,10 +802,24 @@ func (s *TaskStore) Complete(ctx context.Context, taskID, owner string, result a
 	return s.applyCAS(ctx, taskID, StateRunning, StateDone, owner, cur.AttemptID, EvResult, result, result)
 }
 
+// reviewProtected reports whether a parked review row must ignore a late
+// remote verdict. An accept-work park holds a human verdict on FINISHED
+// output — a wire result arriving while that verdict is pending must not
+// close it. The pre-execution gates (resume_execution consent,
+// needs_changed_input questions) differ: their question is "may this run /
+// with what input", and a remote terminal result means reality already
+// answered it — the other side approved, a resume raced in, or the run
+// ended on its own. Converging there keeps a one-sided approval from
+// stranding this copy in review forever (the headless-delegator case).
+func reviewProtected(t Task) bool {
+	return t.State == StateReview && t.ApprovalDisposition == ApprovalAcceptWork
+}
+
 // CompleteFromRemote records a remote executor's final result on the
 // delegator's copy. The delegator may be in submitted/queued/dispatched/
-// running; review is intentionally protected, and the owner is moved to
-// the delegator (who holds the parent-side lease).
+// running — or parked in a consent/question review, which the remote verdict
+// resolves. An accept-work review stays protected (reviewProtected), and the
+// owner is moved to the delegator (who holds the parent-side lease).
 func (s *TaskStore) CompleteFromRemote(ctx context.Context, taskID, owner string, result any) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
@@ -793,8 +828,8 @@ func (s *TaskStore) CompleteFromRemote(ctx context.Context, taskID, owner string
 	if Terminal(cur.State) {
 		return nil // already closed; keep first result
 	}
-	if cur.State == StateReview {
-		return nil // human-review state is protected from late remote results
+	if reviewProtected(cur) {
+		return nil // accept-work verdict still pending; a wire result must not close it
 	}
 	if err := s.applyState(ctx, taskID, cur.State, StateDone, owner, cur.AttemptID, EvResult, result, result); err != nil {
 		if errors.Is(err, ErrConflict) {
@@ -819,9 +854,13 @@ func (s *TaskStore) ReviewFromRemote(ctx context.Context, taskID, owner string, 
 	if Terminal(cur.State) {
 		return nil
 	}
-	if cur.State == StateReview {
-		return nil // do not let a late failure overwrite a human-review pause
+	if cur.State == StateReview && cur.ApprovalDisposition == ApprovalAcceptWork {
+		return nil // do not let a late result redefine the finished work a human is judging
 	}
+	// A consent/question park receiving a fresh remote review means the
+	// executor re-parked (it ran — approved elsewhere — then asked a new
+	// question): applyReviewState rewrites the parked payload and
+	// disposition in place and notifyReview surfaces the new question.
 	if !validApprovalDisposition(disposition) {
 		// Old peers did not carry the typed field. Preserve compatibility, but
 		// resume only from explicit pre-execution authorization evidence.
@@ -943,7 +982,25 @@ func (s *TaskStore) PauseWithDisposition(ctx context.Context, taskID, owner, rea
 // needs sign-off (supervision loop terminal: an irreversible task, or one that
 // exhausted its round budget without satisfying the success criteria).
 func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, result any) error {
-	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalAcceptWork)
+	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalAcceptWork, "awaiting approval")
+}
+
+// PauseDrift parks a running task whose agent overstepped its declared scope.
+// The drift message and the strayed paths are preserved as the result so the
+// human reviewing sees exactly what left the scope, and the disposition is
+// AcceptWork: approving accepts the work as done (the reviewer saw the diff),
+// rejecting fails it. The old NeedsChangedInput disposition made approve
+// error out — a finished task with no route to done.
+//
+// ok:true in the stored result: the agent's run succeeded and drift is a
+// policy intercept, not an execution failure — an approving human accepts the
+// work, so the approve receipt must not report (and exit) as a failure.
+func (s *TaskStore) PauseDrift(ctx context.Context, taskID, owner, reason string, files []string) error {
+	result := map[string]any{"drift": true, "ok": true, "stderr": reason}
+	if len(files) > 0 {
+		result["files_changed"] = files
+	}
+	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalAcceptWork, reason)
 }
 
 // PauseForAnswer parks a running task in review on an agent's clarification
@@ -951,10 +1008,10 @@ func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, r
 // the disposition resumes execution — the user's answer travels back on
 // task_resume and folds into the re-run's intent.
 func (s *TaskStore) PauseForAnswer(ctx context.Context, taskID, owner string, result any) error {
-	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalResumeExecution)
+	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalResumeExecution, "awaiting approval")
 }
 
-func (s *TaskStore) pauseWithResultDisposition(ctx context.Context, taskID, owner string, result any, disposition ApprovalDisposition) error {
+func (s *TaskStore) pauseWithResultDisposition(ctx context.Context, taskID, owner string, result any, disposition ApprovalDisposition, reason string) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
@@ -963,7 +1020,7 @@ func (s *TaskStore) pauseWithResultDisposition(ctx context.Context, taskID, owne
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateRunning)
 	}
 	if err := s.applyReviewCAS(ctx, taskID, StateRunning, owner, cur.AttemptID, EvReview,
-		map[string]any{"reason": "awaiting approval"}, result, disposition); err != nil {
+		map[string]any{"reason": reason}, result, disposition); err != nil {
 		return err
 	}
 	updated, err := s.Get(ctx, taskID)
@@ -1141,9 +1198,71 @@ func (s *TaskStore) Reject(ctx context.Context, taskID, reason string) error {
 	})
 }
 
+// ReconcileDone lands a late remote done on a row a timeout path already
+// closed — lease expiry, deadline expiry, a resume window — where the close
+// was about silence, not about the work. The executor's real product trumps
+// the monitor's pessimistic verdict, but the row keeps its honesty: the
+// audit event carries `reconciled: "<from>→done"` so the timeline shows this
+// task did not succeed normally, it was overturned by evidence.
+//
+// The reconcile is only reachable for failed/expired rows whose last word
+// was NOT a human decision — failureWasRejected gates the caller. A row
+// concurrently closed another way (cancel, a second timeout) wins: the CAS
+// keeps first-close semantics.
+func (s *TaskStore) ReconcileDone(ctx context.Context, taskID, owner string, result any, from string) error {
+	resultJSON, _ := json.Marshal(result)
+	now := s.now()
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state=?, owner_node=?, result_json=?,
+				lease_expires_at=NULL, state_version=state_version+1, updated_at=?
+			WHERE task_id=? AND state IN ('failed','expired')`,
+			StateDone, owner, string(resultJSON), now, taskID)
+		if err != nil {
+			return fmt.Errorf("reconcile task: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: task %s no longer reconcilable", ErrConflict, taskID)
+		}
+		return s.recordEventTx(ctx, tx, taskID, EvResult, map[string]any{
+			"reconciled": from + "→done",
+			"result":     json.RawMessage(resultJSON),
+		})
+	})
+}
+
+// failureWasRejected reports whether the row's last recorded word was a
+// human reject — the one failure provenance a late result must never
+// overturn. The reject path writes EvReview{rejected} in the same
+// transaction as the state change, so the newest event on a rejected row is
+// that review entry; lease expiries, remote failures and timeouts all write
+// EvResult instead.
+func (s *TaskStore) failureWasRejected(ctx context.Context, taskID string) bool {
+	var typ, data string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT type, data_json FROM task_events WHERE task_id=? ORDER BY id DESC LIMIT 1`,
+		taskID).Scan(&typ, &data)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.Warn("reconcile check: read last event", "task", taskID, "err", err)
+		}
+		return false
+	}
+	if typ != EvReview {
+		return false
+	}
+	var ev map[string]any
+	if json.Unmarshal([]byte(data), &ev) != nil {
+		return false
+	}
+	_, rejected := ev["rejected"]
+	return rejected
+}
+
 // FailFromRemote records a remote executor's failure on the delegator's copy.
-// Mirrors CompleteFromRemote, while preserving a task already parked for
-// human review.
+// Mirrors CompleteFromRemote — including the same review rule: an accept-work
+// park keeps its pending human verdict, while a consent/question park
+// converges on the executor's actual outcome.
 func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason string) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
@@ -1152,7 +1271,7 @@ func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason st
 	if Terminal(cur.State) {
 		return nil
 	}
-	if cur.State == StateReview {
+	if reviewProtected(cur) {
 		return nil
 	}
 	if err := s.applyState(ctx, taskID, cur.State, StateFailed, owner, cur.AttemptID, EvResult,
@@ -1390,6 +1509,25 @@ func (s *TaskStore) CountScheduledActive(ctx context.Context, self string) (int,
 		return 0, fmt.Errorf("count scheduled active: %w", err)
 	}
 	return n, nil
+}
+
+// SetExecWorkDir records the workspace a task actually executed in — the
+// effective directory (node work dir, stage dir, project dir) derived at run
+// start, which the row had no field for: work_dir is a submitter PIN and
+// stays empty for ordinary tasks. Observability metadata for the queue board
+// and task show ("where did this run?").
+func (s *TaskStore) SetExecWorkDir(ctx context.Context, taskID, workDir string) error {
+	workDir = strings.TrimSpace(workDir)
+	// Deliberately no state_version bump: this is observability metadata (the
+	// directory a run derived), not a state-machine move, and bumping the
+	// version would invalidate concurrent CAS writes that raced the run start.
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET exec_work_dir=?, updated_at=? WHERE task_id=?`,
+		workDir, s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("set exec work dir: %w", err)
+	}
+	return nil
 }
 
 // SetWorkDir pins a task to its originating workspace without assigning queue
@@ -1694,12 +1832,18 @@ func (s *TaskStore) ForceFail(ctx context.Context, taskID, reason string) error 
 func (s *TaskStore) Recover(ctx context.Context) (int, error) {
 	var failed, requeued int
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		n, err := s.recoverBatchTx(ctx, tx, []string{StateRunning, StateWaitingCtx}, StateFailed, "interrupted")
+		n, err := s.recoverBatchTx(ctx, tx, []string{StateRunning, StateWaitingCtx}, StateFailed, "interrupted", "")
 		if err != nil {
 			return fmt.Errorf("recover active tasks: %w", err)
 		}
 		failed = n
-		n, err = s.recoverBatchTx(ctx, tx, []string{StateDispatched}, StateQueued, "requeued")
+		// Rows parked in task_outbox are NOT requeued: their custody is the
+		// parked bundle itself, delivered by the flush on the peer's next
+		// connect — moving them to queued would double-hand them (outbox +
+		// scheduler racing to forward). They stay dispatched until either
+		// the link or the TTL closes the matter.
+		n, err = s.recoverBatchTx(ctx, tx, []string{StateDispatched}, StateQueued, "requeued",
+			`AND NOT EXISTS (SELECT 1 FROM task_outbox o WHERE o.task_id = tasks.task_id)`)
 		if err != nil {
 			return fmt.Errorf("recover dispatched tasks: %w", err)
 		}
@@ -1711,7 +1855,8 @@ func (s *TaskStore) Recover(ctx context.Context) (int, error) {
 		// and the sweep releases it — or fails it — exactly as if the restart
 		// never happened. Non-plan submitted rows are unscheduled asks awaiting
 		// a first dispatch, so they requeue safely.
-		n, err = s.recoverBatchTx(ctx, tx, []string{StateSubmitted}, StateQueued, "requeued")
+		n, err = s.recoverBatchTx(ctx, tx, []string{StateSubmitted}, StateQueued, "requeued",
+			`AND (plan_id IS NULL OR plan_id = '')`)
 		if err != nil {
 			return fmt.Errorf("recover submitted tasks: %w", err)
 		}
@@ -1727,25 +1872,24 @@ func (s *TaskStore) Recover(ctx context.Context) (int, error) {
 
 // recoverBatchTx moves every task in one of from's states to to, clearing the
 // lease and appending an EvRecover event per task so the audit chain stays
-// complete. It leaves result_json untouched.
-func (s *TaskStore) recoverBatchTx(ctx context.Context, tx *sql.Tx, from []string, to, disposition string) (int, error) {
+// complete. It leaves result_json untouched. extraWhere carries the batch's
+// exclusion predicate (parked outbox custody, unreleased plan stages).
+//
+// Every requeued row is stamped scheduled=1: queued without it is invisible
+// to ListReady, so a dispatch that restarted mid-flight would otherwise park
+// in a queue no scheduler ever reads — the stranded "went away but nobody
+// did it" class. The failed batch keeps scheduled untouched (a dead row has
+// no claim to a queue slot until a human or a retry re-arms it).
+func (s *TaskStore) recoverBatchTx(ctx context.Context, tx *sql.Tx, from []string, to, disposition, extraWhere string) (int, error) {
 	ph := make([]string, len(from))
 	args := make([]any, 0, len(from))
 	for i, st := range from {
 		ph[i] = "?"
 		args = append(args, st)
 	}
-	// Plan-stage rows are excluded only on the submitted requeue pass: an
-	// unreleased stage parked in submitted must stay there — queued +
-	// scheduled=1 makes it a ListReady candidate that would run before its
-	// dependencies (H1). Its plan stays pending and the sweep releases or fails
-	// it. A dispatched stage was already released and is mid-flight, so it
-	// requeues normally — keying on the from-states, not the target, is what
-	// keeps the two batches apart.
-	excludePlan := len(from) == 1 && from[0] == StateSubmitted
 	query := `SELECT task_id, state FROM tasks WHERE state IN (` + strings.Join(ph, ",") + `)`
-	if excludePlan {
-		query += ` AND (plan_id IS NULL OR plan_id = '')`
+	if extraWhere != "" {
+		query += " " + extraWhere
 	}
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1766,10 +1910,17 @@ func (s *TaskStore) recoverBatchTx(ctx context.Context, tx *sql.Tx, from []strin
 		return 0, err
 	}
 	now := s.now()
+	requeue := to == StateQueued
 	for _, r := range found {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?,
-				lease_expires_at=NULL WHERE task_id=?`, to, now, r.id); err != nil {
+		set := `UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?,
+			lease_expires_at=NULL WHERE task_id=?`
+		if requeue {
+			// scheduled=1 is what makes the requeue real — an unscheduled
+			// queued row is one ListReady will never select.
+			set = `UPDATE tasks SET state=?, scheduled=1, state_version=state_version+1, updated_at=?,
+				lease_expires_at=NULL WHERE task_id=?`
+		}
+		if _, err := tx.ExecContext(ctx, set, to, now, r.id); err != nil {
 			return 0, err
 		}
 		if err := s.recordEventTx(ctx, tx, r.id, EvRecover, map[string]any{
@@ -2022,6 +2173,24 @@ func (s *TaskStore) deleteTaskRows(ctx context.Context, ids []string) error {
 		}
 		return nil
 	})
+}
+
+// TaskOutboxPending reports whether a parked outbox delivery exists for
+// taskID — the "waiting for peer link" sub-state of a dispatched row: the
+// task is not running anywhere, it is in this node's custody awaiting the
+// target's next connect. Both dispatch (task_outbox) and approval
+// (resume_outbox) custody count — a parked resume is the same parked
+// delivery from the user's point of view. Callers that render task state
+// use it to stop showing "dispatched" for work sitting in a mailbox.
+func (s *TaskStore) TaskOutboxPending(ctx context.Context, taskID string) bool {
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT (SELECT COUNT(*) FROM task_outbox WHERE task_id = ?) +
+		        (SELECT COUNT(*) FROM resume_outbox WHERE task_id = ?)`,
+		taskID, taskID).Scan(&n); err != nil {
+		return false
+	}
+	return n > 0
 }
 
 // Children lists direct children of taskID.
@@ -2397,6 +2566,30 @@ func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) 
 	return out, rows.Err()
 }
 
+// EventsSince returns the events recorded for taskID after the given event
+// id, oldest first — the incremental read a poll loop uses to follow a task
+// timeline without re-reading it whole. A cursor of 0 reads the full history
+// (the same rows Events returns); callers then advance their cursor to the
+// last row's ID.
+func (s *TaskStore) EventsSince(ctx context.Context, taskID string, afterID int64) ([]Event, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, task_id, ts, type, data_json, COALESCE(prev_hash, ''), COALESCE(sig, ''), COALESCE(sig_pub, '') FROM task_events
+		 WHERE task_id = ? AND id > ? ORDER BY id ASC`, taskID, afterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		if err := rows.Scan(&e.ID, &e.TaskID, &e.TS, &e.Type, &e.DataJSON, &e.PrevHash, &e.Sig, &e.SigPub); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // VerifyTaskEventChain verifies the per-task hash chain for taskID: every
 // row's prev_hash links correctly, every signature verifies under the key
 // this verifier trusts, and no unsigned row follows a signed one. It returns
@@ -2524,7 +2717,7 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	state_version, chain_json, intent, spec_json, result_json,
 	context_type, context_hash, complexity, risk, resource_json, requires_json,
 	approval_disposition, operation_decision_json, lease_expires_at, created_at, updated_at, authorized,
-	priority, seq, session_id, resource_keys_json, work_dir, scheduled,
+	priority, seq, session_id, resource_keys_json, work_dir, exec_work_dir, scheduled,
 	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact,
 	transport, deadline_unix, delegation_budget, token_budget, agent_session_id, agent_session_node,
 	auth_sig, auth_pub, auth_ts, remote`

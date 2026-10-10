@@ -8,6 +8,8 @@
 package doctor
 
 import (
+	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"fmt"
 	"net"
@@ -23,7 +25,9 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/install"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/pyexec"
 	"github.com/Xustalis/OpenPanda/internal/security"
@@ -137,6 +141,39 @@ func Run(configPath string) []Check {
 			}
 		default:
 			add(pass("doctor.udp.ok", "addr", cfg.Network.UDPListen))
+		}
+
+		// Mesh link health: every configured peer gets the same handshake
+		// self-check `nodes add` runs — WS dial, signed hello, session-AEAD
+		// negotiation, cleartext policy — so "paired but silent" is a red
+		// line here instead of a WARN buried in a keepalive log. A punch:
+		// peer has no TCP to probe; it links on demand over the datagram
+		// plane and reports as informational.
+		if len(cfg.Network.Peers) > 0 {
+			selfID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity())
+			card := ledger.Card{Device: cfg.Node.Name, NodeKind: cfg.Node.Kind}
+			var pub ed25519.PublicKey
+			var priv ed25519.PrivateKey
+			if kdb, kerr := sql.Open("sqlite",
+				fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(2000)", escapeURIPath(cfg.Storage.DBPath))); kerr == nil {
+				pub, priv, _ = core.LoadNodeKey(kdb)
+				kdb.Close()
+			}
+			for _, peer := range cfg.Network.Peers {
+				if strings.HasPrefix(peer, "punch:") {
+					add(pass("doctor.mesh.peer.punch", "peer", peer))
+					continue
+				}
+				res, err := core.ProbePeer(context.Background(), selfID, card, cfg.Model, cfg.Network, peer, pub, priv)
+				switch {
+				case err != nil:
+					add(fail("doctor.mesh.peer.no", "peer", peer, "err", err.Error()))
+				case res.Encrypted:
+					add(pass("doctor.mesh.peer.enc", "peer", peer, "id", res.PeerID))
+				default:
+					add(pass("doctor.mesh.peer.plain", "peer", peer, "id", res.PeerID))
+				}
+			}
 		}
 
 		// OS sandbox: "off" is a valid choice and reports as information; a

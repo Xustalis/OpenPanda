@@ -21,7 +21,7 @@ func testLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 func startTestServer(t *testing.T, addr string, handler func(*Conn)) (context.CancelFunc, <-chan error) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	srv := NewServer(addr, testLogger(), func(conn *Conn, _ string) {
+	srv := NewServer(addr, testLogger(), func(conn *Conn) {
 		handler(conn)
 	})
 	done := make(chan error, 1)
@@ -116,7 +116,7 @@ func TestPingLoopSendsPings(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srv := NewServer("127.0.0.1:17877", testLogger(), func(conn *Conn, _ string) {
+	srv := NewServer("127.0.0.1:17877", testLogger(), func(conn *Conn) {
 		go conn.StartPingLoop(ctx, 20*time.Millisecond)
 		var env Envelope
 		for {
@@ -164,7 +164,7 @@ func TestServerDropsSlowHello(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srv := NewServer("127.0.0.1:17879", testLogger(), func(conn *Conn, _ string) {
+	srv := NewServer("127.0.0.1:17879", testLogger(), func(conn *Conn) {
 		var env Envelope
 		for {
 			if err := conn.ReadJSON(&env); err != nil {
@@ -211,7 +211,7 @@ func TestServerEnforcesConnectionLimits(t *testing.T) {
 	block2 := make(chan struct{})
 	var block atomic.Value
 	block.Store(block1)
-	srv := NewServer("127.0.0.1:17880", testLogger(), func(conn *Conn, _ string) {
+	srv := NewServer("127.0.0.1:17880", testLogger(), func(conn *Conn) {
 		conns <- conn
 		// Block until the test releases so connections count as active.
 		<-block.Load().(chan struct{})

@@ -4,10 +4,12 @@ package bus
 
 import (
 	"context"
+	"crypto/cipher"
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -64,7 +66,7 @@ const qosLaneCap = 64
 // qosForType classifies an envelope by its message type.
 func qosForType(typ string) int {
 	switch typ {
-	case MsgHello, MsgHeartbeat, MsgTaskCancel, MsgTaskDecline,
+	case MsgHello, MsgHelloReject, MsgHeartbeat, MsgTaskCancel, MsgTaskDecline,
 		MsgAgentGrant, MsgAgentYield, MsgArtifactPushStatus, MsgArtifactPushDone:
 		return QoSControl
 	case MsgTaskDelegate, MsgTaskAccept, MsgTaskResult, MsgTaskProgress,
@@ -111,6 +113,18 @@ type Conn struct {
 	// .Caps), set once the handshake verifies. atomic.Value because the
 	// read loop writes it once and every sender may consult it.
 	caps atomic.Value // []string
+	// sessAEAD, once armed, seals every subsequent application frame
+	// (negotiated via the sessaead hello cap). atomic.Value because the
+	// read loop arms it mid-handshake while sender goroutines consult it
+	// per frame; before arming it holds nil and frames go plaintext.
+	sessAEAD atomic.Value // cipher.AEAD
+	// localNonce/remoteNonce carry the two hello nonces that key the
+	// session cipher; dialAddr records the operator-configured outbound
+	// address so the post-handshake link policy evaluates it rather than
+	// the resolved socket. Written once during the handshake under idMu.
+	localNonce  string
+	remoteNonce string
+	dialAddr    string
 	// rttNanos is the last measured ping/pong round trip (§4.1 link metric):
 	// nanoseconds, zero until the first pong answers a timestamped ping.
 	rttNanos atomic.Int64
@@ -119,6 +133,11 @@ type Conn struct {
 	// tell a live same-id duplicate conn from a half-dead socket nobody has
 	// noticed yet: only the latter may be replaced.
 	lastSeen atomic.Int64
+	// rejectReason records the hello_reject code the peer sent before
+	// dropping us — "auth", "identity", "replay" — so the dialer can tell
+	// "peer online but refusing our credential" from a transport flap.
+	// Written once, on the unauthenticated leg the frame is allowed to ride.
+	rejectReason atomic.Value // string
 }
 
 // SetPeerID binds the authenticated node id to this connection (set once, at
@@ -134,6 +153,25 @@ func (c *Conn) PeerID() string {
 	c.idMu.RLock()
 	defer c.idMu.RUnlock()
 	return c.peerID
+}
+
+// SetRejectReason records the hello_reject reason the peer sent us (first
+// write wins — a later frame must not rewrite the verdict). RejectReason
+// returns "" until one arrives.
+func (c *Conn) SetRejectReason(reason string) {
+	if reason == "" {
+		return
+	}
+	c.rejectReason.CompareAndSwap(nil, reason)
+}
+
+// RejectReason returns the hello_reject code the peer sent before closing,
+// or "" when the conn died without a stated reason.
+func (c *Conn) RejectReason() string {
+	if v := c.rejectReason.Load(); v != nil {
+		return v.(string)
+	}
+	return ""
 }
 
 // MarkOutbound flags this connection as locally-initiated; Outbound reports it.
@@ -173,6 +211,83 @@ func (c *Conn) Supports(cap string) bool {
 		}
 	}
 	return false
+}
+
+// SetLocalNonce records the nonce this side sent in its hello (the dial
+// nonce outbound, the reply nonce inbound); the session-key KDF needs it
+// because the nonce never returns to us over the wire.
+func (c *Conn) SetLocalNonce(n string) {
+	c.idMu.Lock()
+	c.localNonce = n
+	c.idMu.Unlock()
+}
+
+// LocalNonce returns the hello nonce this side sent.
+func (c *Conn) LocalNonce() string {
+	c.idMu.RLock()
+	defer c.idMu.RUnlock()
+	return c.localNonce
+}
+
+// SetRemoteNonce records the peer's hello nonce. First-write-wins: a
+// second hello on an already-bound conn must not silently re-key the
+// session cipher out from under in-flight frames.
+func (c *Conn) SetRemoteNonce(n string) {
+	c.idMu.Lock()
+	if c.remoteNonce == "" {
+		c.remoteNonce = n
+	}
+	c.idMu.Unlock()
+}
+
+// RemoteNonce returns the first hello nonce the peer presented.
+func (c *Conn) RemoteNonce() string {
+	c.idMu.RLock()
+	defer c.idMu.RUnlock()
+	return c.remoteNonce
+}
+
+// SetDialAddr records the configured outbound address (pre-resolution) so
+// post-handshake link policy can evaluate the operator's intent — an
+// allow_cleartext_for entry names the configured host, not the socket IP.
+func (c *Conn) SetDialAddr(addr string) {
+	c.idMu.Lock()
+	c.dialAddr = addr
+	c.idMu.Unlock()
+}
+
+// DialAddr returns the configured outbound address, or "" on inbound conns.
+func (c *Conn) DialAddr() string {
+	c.idMu.RLock()
+	defer c.idMu.RUnlock()
+	return c.dialAddr
+}
+
+// ArmSession installs the negotiated per-connection cipher; every
+// subsequent application frame is AEAD-sealed on write and opened on read.
+// Called once per conn, after the verified hello exchange.
+func (c *Conn) ArmSession(aead cipher.AEAD) { c.sessAEAD.Store(aead) }
+
+// sessionCipher returns the armed cipher or nil before negotiation.
+func (c *Conn) sessionCipher() cipher.AEAD {
+	if v := c.sessAEAD.Load(); v != nil {
+		return v.(cipher.AEAD)
+	}
+	return nil
+}
+
+// Encrypted reports whether this conn carries sealed application frames.
+func (c *Conn) Encrypted() bool { return c.sessionCipher() != nil }
+
+// CloseReason sends a WebSocket close frame carrying a human-readable
+// reason, then closes the socket — the far read loop surfaces it as the
+// close error, so a post-handshake policy refusal is diagnosable instead
+// of a bare EOF that looks like flaky connectivity.
+func (c *Conn) CloseReason(code int, reason string) {
+	_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
+	_ = c.ws.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(code, reason))
+	_ = c.Close()
 }
 
 func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
@@ -300,6 +415,19 @@ func (c *Conn) enqueue(data []byte, lane int) error {
 }
 
 func (c *Conn) enqueueFrame(data []byte, binaryFrame bool, lane int) error {
+	// Sealed links encrypt every application frame; a nil payload is the
+	// keepalive ping, which stays a WS control frame outside the cipher.
+	if aead := c.sessionCipher(); aead != nil && data != nil {
+		tag := sessTagText
+		if binaryFrame {
+			tag = sessTagData
+		}
+		sealed, err := sealSessFrame(aead, tag, data)
+		if err != nil {
+			return err
+		}
+		data, binaryFrame = sealed, true
+	}
 	m := queuedWrite{data: data, binary: binaryFrame, res: make(chan error, 1)}
 	select {
 	case c.lanes[lane] <- m:
@@ -378,23 +506,44 @@ func (c *Conn) ReadJSON(v any) error {
 		return err
 	}
 	c.lastSeen.Store(time.Now().UnixNano())
-	if mt == websocket.BinaryMessage {
-		if len(data) < 2 {
-			return errors.New("bus: short data frame")
+	if aead := c.sessionCipher(); aead != nil {
+		// Armed conns carry only sealed binary frames — a plaintext frame
+		// here is a downgrade attempt or corruption; fail closed either way.
+		if mt != websocket.BinaryMessage {
+			return fmt.Errorf("bus: plaintext frame on encrypted connection (opcode %d)", mt)
 		}
-		hlen := int(binary.BigEndian.Uint16(data))
-		if len(data) < 2+hlen {
-			return errors.New("bus: truncated data frame header")
-		}
-		if err := json.Unmarshal(data[2:2+hlen], v); err != nil {
+		tag, plain, err := openSessFrame(aead, data)
+		if err != nil {
 			return err
 		}
-		if env, ok := v.(*Envelope); ok {
-			env.BinaryPayload = data[2+hlen:]
+		if tag == sessTagText {
+			return json.Unmarshal(plain, v)
 		}
-		return nil
+		return c.readDataFrame(plain, v)
+	}
+	if mt == websocket.BinaryMessage {
+		return c.readDataFrame(data, v)
 	}
 	return json.Unmarshal(data, v)
+}
+
+// readDataFrame decodes one data frame body (CapBinaryData): 2-byte header
+// length + JSON header + raw body.
+func (c *Conn) readDataFrame(data []byte, v any) error {
+	if len(data) < 2 {
+		return errors.New("bus: short data frame")
+	}
+	hlen := int(binary.BigEndian.Uint16(data))
+	if len(data) < 2+hlen {
+		return errors.New("bus: truncated data frame header")
+	}
+	if err := json.Unmarshal(data[2:2+hlen], v); err != nil {
+		return err
+	}
+	if env, ok := v.(*Envelope); ok {
+		env.BinaryPayload = data[2+hlen:]
+	}
+	return nil
 }
 
 // SeenWithin reports whether the conn produced inbound proof-of-life within
@@ -444,7 +593,7 @@ func (c *Conn) ResetReadDeadline() error {
 type Server struct {
 	addr     string
 	logger   *slog.Logger
-	onConn   func(*Conn, string) // called with (conn, nodeID) after hello; must block while the conn is alive
+	onConn   func(*Conn) // called once the socket is up; must block while the conn is alive
 	upgrader websocket.Upgrader
 
 	maxConns      int
@@ -456,10 +605,11 @@ type Server struct {
 	helloTimeout time.Duration // per-server hello deadline; tests can shorten it
 }
 
-// NewServer creates a WebSocket server on addr. onConn is invoked once a
-// peer handshakes and identifies itself. onConn must block while the connection
+// NewServer creates a WebSocket server on addr. onConn is invoked once the
+// socket upgrades — the hello handshake that binds a peer identity happens
+// inside it, on the conn's read loop. onConn must block while the connection
 // is alive so the server can accurately enforce connection limits.
-func NewServer(addr string, logger *slog.Logger, onConn func(*Conn, string)) *Server {
+func NewServer(addr string, logger *slog.Logger, onConn func(*Conn)) *Server {
 	return &Server{
 		addr:   addr,
 		logger: logger,
@@ -559,7 +709,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	// loop is logged and closes only that connection — a hostile or buggy peer
 	// must not be able to crash the whole node.
 	guard.Call(s.logger, "bus: conn read loop "+r.RemoteAddr, func() { _ = conn.Close() }, func() {
-		s.onConn(conn, "")
+		s.onConn(conn)
 	})
 	s.dec(ip)
 }

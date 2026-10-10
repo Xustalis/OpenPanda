@@ -62,7 +62,8 @@ The web console needs node/npm only when rebuilding it (`make web`,
   `reminder`, `detect`, `card`, `init`, `metrics`, `audit`, `session`
   (incl. `fork`/`tree` for thread branching), `memory`, `config`, `agents`,
   `project`, `mcp`, `rpc` (NDJSON-over-stdio embedding surface,
-  experimental), `auth` (subscription OAuth, experimental), `version`.
+  experimental), `auth` (subscription OAuth, experimental), `version`,
+  `completion` (bash/zsh/fish script generation).
 - `internal/` — all runtime code (see below).
 - `adapters/` — Python scripts, one per agent CLI, plus `_harness.py`
   (the shared stdin/stdout JSON protocol they all speak). Installed next

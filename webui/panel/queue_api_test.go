@@ -47,7 +47,13 @@ func newQueueEngine(t *testing.T) *askengine.Engine {
 		t.Fatalf("write card: %v", err)
 	}
 	cfg := &config.Config{
-		Node: config.NodeConfig{Name: "panel-test", ResourceClass: "Standard"},
+		// Kind vm, not the physical default: the engine probes the node
+		// identity lock to decide whether it owns the row (a live daemon on
+		// this machine would make the engine a borrower that must NOT
+		// consume the queue). A physical test node shares the real machine
+		// identity, so the suite only passes when no daemon happens to be
+		// running — scope the lock to a distinct kind and it always owns.
+		Node: config.NodeConfig{Name: "panel-test", Kind: "vm", ResourceClass: "Standard"},
 		Storage: config.StorageConfig{
 			DBPath:       filepath.Join(dir, "panda.db"),
 			MemoryPath:   filepath.Join(dir, "memory"),
@@ -100,7 +106,10 @@ capacity:
 	}))
 	t.Cleanup(model.Close)
 	cfg := &config.Config{
-		Node: config.NodeConfig{Name: "panel-approval-test", ResourceClass: "Standard"},
+		// Kind vm for the same reason as newQueueEngine: a physical test node
+		// collides with a live daemon's identity lock and the engine then
+		// refuses to consume the queue, stranding every task in queued.
+		Node: config.NodeConfig{Name: "panel-approval-test", Kind: "vm", ResourceClass: "Standard"},
 		Storage: config.StorageConfig{
 			DBPath: filepath.Join(dir, "panda.db"), MemoryPath: filepath.Join(dir, "memory"),
 			ProjectsPath: filepath.Join(dir, "projects"), SkillsPath: filepath.Join(dir, "skills"), WorkPath: dir,

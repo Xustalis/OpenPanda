@@ -323,6 +323,42 @@ else
     die "自检失败：请运行 '$LINK_DIR/panda version' 查看原因"
 fi
 
+# ── Shell completion (best effort, never fatal) ──────────────────────────────
+# The binary prints static scripts (`panda completion bash|zsh|fish`); we drop
+# the one matching the login shell into that shell's conventional directory.
+install_completion() {
+    sh_name="$(basename "${SHELL:-}")"
+    case "$sh_name" in
+        zsh)
+            dir="${ZDOTDIR:-$HOME}/.zsh/completions"
+            mkdir -p "$dir" 2>/dev/null || return 0
+            if "$LINK_DIR/panda" completion zsh > "$dir/_panda" 2>/dev/null; then
+                ok "zsh 补全 → $dir/_panda"
+                info "若未生效：在 ~/.zshrc 加 'fpath=($dir \$fpath)' 后重开终端"
+            fi
+            ;;
+        bash)
+            dir="$HOME/.local/share/bash-completion/completions"
+            mkdir -p "$dir" 2>/dev/null || return 0
+            if "$LINK_DIR/panda" completion bash > "$dir/panda" 2>/dev/null; then
+                ok "bash 补全 → $dir/panda"
+                info "若未生效：source ~/.bashrc 里的 bash-completion，或手动 'source $dir/panda'"
+            fi
+            ;;
+        fish)
+            dir="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
+            mkdir -p "$dir" 2>/dev/null || return 0
+            if "$LINK_DIR/panda" completion fish > "$dir/panda.fish" 2>/dev/null; then
+                ok "fish 补全 → $dir/panda.fish（新开终端生效）"
+            fi
+            ;;
+        *)
+            info "未识别的 shell（${SHELL:-?}）：跳过补全安装，可手动 'panda completion bash|zsh|fish'"
+            ;;
+    esac
+}
+install_completion
+
 # ── Auto-start (LaunchAgent / systemd --user) ───────────────────────────────
 # The generated service files pass NO --config/--card flags: the daemon then
 # auto-discovers them exactly like an interactive `panda daemon`
@@ -463,5 +499,6 @@ printf '%b' "      panda init      # 交互式生成配置与能力卡\n"
 printf '%b' "      panda repl      # 进入交互命令行\n"
 printf '%b' "      panda web       # 打开内嵌 Web 控制台（自动登录）\n"
 printf '%b' "自检：panda doctor\n"
+printf '%b' "补全：panda completion bash|zsh|fish（打印到 stdout，source 或放入对应目录）\n"
 printf '%b' "卸载：panda uninstall（白名单清理 + 自动备份；--purge 连用户数据一起删，--backup-only 仅备份）\n"
 printf '%b' "     开机自启的停用命令见上文；详见 docs/install.md\n"

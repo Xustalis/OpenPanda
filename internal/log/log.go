@@ -46,6 +46,20 @@ func Setup(level string, w io.Writer) {
 	slog.SetDefault(slog.New(h))
 }
 
+// SetupTTY is Setup for a process whose log sink IS the terminal the user is
+// looking at: compact console lines instead of JSON. isTTY should reflect the
+// actual sink (stdout for the daemon's default path); a false keeps JSON.
+func SetupTTY(level string, w io.Writer, isTTY bool) {
+	if !isTTY {
+		Setup(level, w)
+		return
+	}
+	if w == nil {
+		w = os.Stdout
+	}
+	slog.SetDefault(slog.New(Console(level, w)))
+}
+
 // CtxKey is the key under which a logger may be stored in a context.
 type CtxKey struct{}
 

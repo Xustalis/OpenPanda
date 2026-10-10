@@ -237,17 +237,18 @@ function NotifyBanner({
   )
 }
 
-/** "5d 3h" / "2h 05m" / "12m" / "45s" — compact human countdown. */
+/** "5d 3h" / "2h 05m" / "12m" / "45s" — compact human countdown, units
+ *  localized so CJK locales read 天/小时/分钟/秒 instead of latin letters. */
 function formatDuration(ms: number): string {
   const s = Math.max(1, Math.round(ms / 1000))
   const d = Math.floor(s / 86400)
   const h = Math.floor((s % 86400) / 3600)
   const m = Math.floor((s % 3600) / 60)
   const sec = s % 60
-  if (d > 0) return `${d}d ${h}h`
-  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`
-  if (m > 0) return `${m}m`
-  return `${sec}s`
+  if (d > 0) return `${d}${t('time.unit.d')} ${h}${t('time.unit.h')}`
+  if (h > 0) return `${h}${t('time.unit.h')} ${String(m).padStart(2, '0')}${t('time.unit.m')}`
+  if (m > 0) return `${m}${t('time.unit.m')}`
+  return `${sec}${t('time.unit.s')}`
 }
 
 /** VAPID keys arrive URL-base64 encoded; PushManager wants raw bytes. */

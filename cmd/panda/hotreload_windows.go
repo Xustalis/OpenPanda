@@ -28,3 +28,9 @@ func notifyDaemonReload() {
 func notifyDaemonReloadTo(out io.Writer) {
 	fmt.Fprintln(out, "restart the daemon for the new card to be advertised to peers")
 }
+
+// notifyDaemonMeshTo mirrors the unix peer-list notification: Windows cannot
+// SIGHUP the daemon, so the honest outcome is the restart hint.
+func notifyDaemonMeshTo(out io.Writer) {
+	fmt.Fprintln(out, "restart the daemon for the new peer list to take effect")
+}

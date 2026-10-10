@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
@@ -127,6 +128,27 @@ func TestOnProgressOpensAndAdvancesCard(t *testing.T) {
 	}
 	if m.note == "" {
 		t.Error("the note should still track the latest event for the status line")
+	}
+}
+
+// TestOnProgressWaitAdvancesCard pins the settle-wait milestone: a task the
+// queue parked keeps the card advancing — the session follows the sub-agent's
+// task state — instead of freezing at the dispatch until the outcome lands.
+func TestOnProgressWaitAdvancesCard(t *testing.T) {
+	m := newTestTUI(t)
+	stream := newTestStream(new(bool))
+	m.stream = stream
+
+	next, _ := m.onProgress(progressMsg{stream: stream, progress: askengine.Progress{Kind: askengine.ProgressTask, Name: "self intro page"}})
+	m = next.(tuiModel)
+	next, _ = m.onProgress(progressMsg{stream: stream, progress: askengine.Progress{Kind: askengine.ProgressWait, Name: core.StateQueued}})
+	m = next.(tuiModel)
+
+	if m.liveTask == nil || len(m.liveTask.stages) != 1 {
+		t.Fatalf("wait milestone should advance the card, stages = %+v", m.liveTask)
+	}
+	if !strings.Contains(m.liveTask.stages[0].label, core.StateQueued) {
+		t.Fatalf("stage label = %q, want the observed state", m.liveTask.stages[0].label)
 	}
 }
 

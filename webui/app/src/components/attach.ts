@@ -2,7 +2,10 @@
 
 // Pure helpers for the composer's `@file` attachments and `/export`
 // transcript serialization — kept apart from the view so node --test can
-// hit them without a DOM.
+// hit them without a DOM. The i18n import is safe here: index.ts guards
+// every browser API it touches.
+
+import { t } from '../i18n/index.ts'
 
 /** The `@path` token under the caret: [start, caret) covers `@token`, where
  *  token may be a partial path the /api/fs/files endpoint filters on. */
@@ -84,7 +87,7 @@ export function exportMarkdown(
     `_${new Date().toISOString()}${meta.project ? ` · project ${meta.project}` : ''}_`,
   ]
   for (const m of msgs) {
-    lines.push('', `## ${m.role === 'user' ? 'You' : 'Panda'}`, '', m.text.trim())
+    lines.push('', `## ${m.role === 'user' ? t('sessions.you') : 'Panda'}`, '', m.text.trim())
     if (m.thought) {
       lines.push('', `<details><summary>thought</summary>`, '', m.thought.trim(), `</details>`)
     }

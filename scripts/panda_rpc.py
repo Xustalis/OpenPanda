@@ -37,7 +37,8 @@ class PandaRPC:
         if card:
             cmd += ["--card", card]
         self._proc = subprocess.Popen(
-            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+            encoding="utf-8", errors="replace",
         )
         self._next = 0
 

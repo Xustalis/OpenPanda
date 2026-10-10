@@ -510,7 +510,7 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
     """
     proc = subprocess.Popen(
         resolve_argv(cmd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, env=os.environ.copy(), cwd=cwd,
+        stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
     )
     err_chunks = []
@@ -587,7 +587,7 @@ def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, input=None):
         resolve_argv(cmd),
         stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, env=os.environ.copy(), cwd=cwd,
+        stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
     )
     try:
@@ -662,7 +662,7 @@ def spawn(cmd, cwd=None):
     """
     proc = subprocess.Popen(
         resolve_argv(cmd), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, env=os.environ.copy(), cwd=cwd,
+        stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
     )
     err_chunks = []

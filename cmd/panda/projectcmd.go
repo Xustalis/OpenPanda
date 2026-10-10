@@ -309,7 +309,7 @@ func printProjectTasks(loc i18n.Locale, store *core.TaskStore, name string) {
 		return
 	}
 	fmt.Println()
-	printTaskTable(loc, mine)
+	printTaskTable(loc, mine, taskRefsFor(context.Background(), store, mine), store)
 }
 
 // printProjectSessions lists the project's sessions under its record.

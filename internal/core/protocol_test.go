@@ -5,6 +5,7 @@ package core
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -367,6 +368,137 @@ func TestRemoteReviewRejectsLateDone(t *testing.T) {
 	}
 }
 
+// A consent-to-run park is a pre-execution question. When the executor
+// reports the work finished anyway — the human approved on the executor's
+// copy, or a resume raced in — the delegator's parked copy must converge on
+// the real verdict. Keeping it in review is the headless dead-end: the user
+// approved on one node, the other copy waits forever.
+func TestRemoteConsentReviewConvergesOnDone(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "consent-park", "entry")
+	if err := s.Queue(ctx, tk.TaskID, "entry"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Dispatch(ctx, tk.TaskID, "entry", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReviewFromRemote(ctx, tk.TaskID, "entry",
+		map[string]any{"state": StateReview}, ApprovalResumeExecution); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompleteFromRemote(ctx, tk.TaskID, "entry",
+		map[string]any{"state": StateDone, "ok": true, "stdout": "shipped"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateDone {
+		t.Fatalf("consent-parked copy state = %s, want done after remote verdict", got.State)
+	}
+}
+
+// The same convergence applies to a remote failure: the run the consent
+// covered already ended, and the delegator copy must carry the verdict.
+func TestRemoteConsentReviewConvergesOnFail(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "consent-park-fail", "entry")
+	if err := s.Queue(ctx, tk.TaskID, "entry"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Dispatch(ctx, tk.TaskID, "entry", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReviewFromRemote(ctx, tk.TaskID, "entry",
+		map[string]any{"state": StateReview}, ApprovalResumeExecution); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FailFromRemote(ctx, tk.TaskID, "entry", "executor blew up"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateFailed {
+		t.Fatalf("consent-parked copy state = %s, want failed after remote verdict", got.State)
+	}
+	if !strings.Contains(got.ResultJSON, "executor blew up") {
+		t.Fatalf("failed copy lost the reason: %s", got.ResultJSON)
+	}
+}
+
+// A consent/question park that receives a FRESH remote review means the
+// executor ran (approved elsewhere) and parked again with a new question:
+// the parked payload and disposition are replaced so the delegator's human
+// sees what is actually being asked now.
+func TestRemoteConsentReviewReParkRefreshesQuestion(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "repark", "entry")
+	if err := s.Queue(ctx, tk.TaskID, "entry"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Dispatch(ctx, tk.TaskID, "entry", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReviewFromRemote(ctx, tk.TaskID, "entry",
+		map[string]any{"state": StateReview, "stderr": "may I delete files?"},
+		ApprovalResumeExecution); err != nil {
+		t.Fatal(err)
+	}
+	// Executor ran, finished output, and parked again for acceptance.
+	if err := s.ReviewFromRemote(ctx, tk.TaskID, "entry",
+		map[string]any{"state": StateReview, "stdout": "output ready"},
+		ApprovalAcceptWork); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateReview {
+		t.Fatalf("re-parked copy state = %s, want review", got.State)
+	}
+	if got.ApprovalDisposition != ApprovalAcceptWork {
+		t.Fatalf("re-parked disposition = %q, want %q", got.ApprovalDisposition, ApprovalAcceptWork)
+	}
+	if !strings.Contains(got.ResultJSON, "output ready") {
+		t.Fatalf("re-parked copy kept stale payload: %s", got.ResultJSON)
+	}
+}
+
+// …and once the row holds accept_work, the protection is back: a late
+// terminal verdict must not close the human's pending judgement.
+func TestRemoteAcceptWorkReviewStillRejectsLateVerdict(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "accept-work-guard", "entry")
+	if err := s.Queue(ctx, tk.TaskID, "entry"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Dispatch(ctx, tk.TaskID, "entry", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReviewFromRemote(ctx, tk.TaskID, "entry",
+		map[string]any{"state": StateReview}, ApprovalAcceptWork); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FailFromRemote(ctx, tk.TaskID, "entry", "stale failure frame"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateReview {
+		t.Fatalf("accept-work review lost to late fail: %s", got.State)
+	}
+}
+
 func TestCapabilitySummaryCarriesNodeIdentity(t *testing.T) {
 	c := newCore(t, "vm-node", "127.0.0.1:17986")
 	c.card.NodeKind = "vm"
@@ -501,6 +633,221 @@ func newCore(t *testing.T, id, addr string) *Core {
 	c := NewCore(db, id, card, 5, verboseTestLogger(), config.ModelConfig{})
 	c.SetSharedSecret(testSharedSecret)
 	return c
+}
+
+// waitState polls a store until taskID reaches want, failing at the deadline.
+// Mirror-frame delivery is asynchronous — the sender never blocks on the
+// peer's read loop — so convergence is asserted by polling, not by a return.
+func waitState(t *testing.T, ctx context.Context, store *TaskStore, taskID, want string) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		if tk, err := store.Get(ctx, taskID); err == nil && tk.State == want {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	tk, _ := store.Get(ctx, taskID)
+	t.Fatalf("task %s state = %s, want %s", taskID, tk.State, want)
+}
+
+// parkReviewPair drives a delegated task to the exact state the supervisor
+// follow-up leaves behind: the worker executed and parked an AcceptWork
+// review, and the delegator's copy mirrors it over the wire. Returns the task
+// id both copies share.
+func parkReviewPair(t *testing.T, ctx context.Context, entry, worker *Core, entryAddr, workerAddr string) string {
+	t.Helper()
+	worker.SetWorkDir(t.TempDir())
+	worker.SetSuperviseRounds(1)
+	worker.SetSupervisor(newFakeSupervisor(t, func(int) string {
+		return `{"status":"continue","reason":"incomplete","followup":"finish remaining work"}`
+	}))
+	var calls atomic.Int32
+	worker.router.SetAdapterRunner(agentRunner(&calls))
+	startPair(t, ctx, entry, worker, entryAddr, workerAddr)
+
+	task, _, err := entry.Submit(ctx, TaskInput{
+		Title: "long task", Project: "proj", ContextType: "command",
+		Intent: "finish a multi-step change", Requires: []string{"code:modify"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	waitState(t, ctx, entry.store, task.TaskID, StateReview)
+	waitState(t, ctx, worker.store, task.TaskID, StateReview)
+	for _, store := range []*TaskStore{entry.store, worker.store} {
+		tk, err := store.Get(ctx, task.TaskID)
+		if err != nil {
+			t.Fatalf("load parked copy: %v", err)
+		}
+		if tk.ApprovalDisposition != ApprovalAcceptWork {
+			t.Fatalf("parked disposition = %q, want %q", tk.ApprovalDisposition, ApprovalAcceptWork)
+		}
+	}
+	return task.TaskID
+}
+
+// TestRemoteAcceptWorkMirrorsFromDelegator pins the delegator-first accept:
+// a task whose executor parked an AcceptWork review shows review on both
+// copies; the user approves on the delegator, and the executor's parked copy
+// must converge to done — not sit in review forever (the orphan that mirrored
+// the pre-RejectTree reject bug, in the accept direction).
+func TestRemoteAcceptWorkMirrorsFromDelegator(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-accept-wire", "127.0.0.1:17940")
+	worker := newSuperviseCore(t, "worker-accept-wire", 1)
+	taskID := parkReviewPair(t, ctx, entry, worker, "127.0.0.1:17940", "127.0.0.1:17941")
+
+	final, _, err := entry.ResumeApproved(ctx, taskID)
+	if err != nil {
+		t.Fatalf("resume approved: %v", err)
+	}
+	if final.State != StateDone {
+		t.Fatalf("entry state after accept = %s, want done", final.State)
+	}
+	waitState(t, ctx, worker.store, taskID, StateDone)
+}
+
+// TestRemoteAcceptWorkMirrorsFromExecutor is the reverse order: the executor
+// approves its own parked copy first, and the delegator's copy — parked with
+// the same AcceptWork disposition — mirrors the decision to done.
+func TestRemoteAcceptWorkMirrorsFromExecutor(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-accept-rev", "127.0.0.1:17942")
+	worker := newSuperviseCore(t, "worker-accept-rev", 1)
+	taskID := parkReviewPair(t, ctx, entry, worker, "127.0.0.1:17942", "127.0.0.1:17943")
+
+	final, _, err := worker.ResumeApproved(ctx, taskID)
+	if err != nil {
+		t.Fatalf("executor resume approved: %v", err)
+	}
+	if final.State != StateDone {
+		t.Fatalf("worker state after accept = %s, want done", final.State)
+	}
+	waitState(t, ctx, entry.store, taskID, StateDone)
+}
+
+// TestParkedAcceptFlushesOnReconnect pins the custody path for an accept
+// whose peer is unreachable at approve time: the frame parks in resume_outbox
+// even though the local copy is already done (the guard that drops a parked
+// re-run for a dead task must not drop an accept — done is its normal state),
+// and the periodic sweep delivers it once the peer is back.
+func TestParkedAcceptFlushesOnReconnect(t *testing.T) {
+	ctx := context.Background()
+	entry := newCore(t, "entry-accept-park", "127.0.0.1:17947")
+	worker := newCore(t, "worker-accept-park", "127.0.0.1:17948")
+	taskID := "accept-park-task"
+
+	drive := func(c *Core, step string, fn func() error) {
+		t.Helper()
+		if err := fn(); err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+	}
+	// Entry's copy: delegated to the worker, parked AcceptWork.
+	drive(entry, "entry create", func() error {
+		_, err := entry.store.CreateWithID(ctx, taskID, "", "proj", "parked",
+			entry.node.id, []string{entry.node.id}, false)
+		return err
+	})
+	drive(entry, "entry queue", func() error { return entry.store.Queue(ctx, taskID, entry.node.id) })
+	drive(entry, "entry dispatch", func() error {
+		return entry.store.Dispatch(ctx, taskID, entry.node.id, worker.node.id)
+	})
+	drive(entry, "entry accept", func() error { return entry.store.Accept(ctx, taskID, entry.node.id) })
+	drive(entry, "entry pause", func() error {
+		return entry.store.PauseWithResult(ctx, taskID, entry.node.id, map[string]any{"ok": true})
+	})
+	// Worker's copy: the executor-side park with the same disposition.
+	drive(worker, "worker create", func() error {
+		_, err := worker.store.CreateWithID(ctx, taskID, "", "proj", "parked",
+			worker.node.id, []string{entry.node.id, worker.node.id}, false)
+		return err
+	})
+	drive(worker, "worker queue", func() error { return worker.store.Queue(ctx, taskID, worker.node.id) })
+	drive(worker, "worker dispatch", func() error {
+		return worker.store.Dispatch(ctx, taskID, worker.node.id, worker.node.id)
+	})
+	drive(worker, "worker accept", func() error { return worker.store.Accept(ctx, taskID, worker.node.id) })
+	drive(worker, "worker pause", func() error {
+		return worker.store.PauseWithResult(ctx, taskID, worker.node.id, map[string]any{"ok": true})
+	})
+
+	// Approve on the entry while the worker is unreachable: the accept parks.
+	if final, _, err := entry.ResumeApproved(ctx, taskID); err != nil || final.State != StateDone {
+		t.Fatalf("entry approve: state=%s err=%v", final.State, err)
+	}
+	var parked int
+	if err := entry.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM resume_outbox WHERE task_id = ?`, taskID).Scan(&parked); err != nil {
+		t.Fatalf("count parked accepts: %v", err)
+	}
+	if parked != 1 {
+		t.Fatalf("parked accepts = %d, want 1 (local copy done must not drop the accept)", parked)
+	}
+
+	// The worker comes back; the periodic sweep must deliver the accept.
+	startPair(t, ctx, entry, worker, "127.0.0.1:17947", "127.0.0.1:17948")
+	entry.sweepOutboxes(ctx)
+	waitState(t, ctx, worker.store, taskID, StateDone)
+
+	if err := entry.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM resume_outbox WHERE task_id = ?`, taskID).Scan(&parked); err != nil {
+		t.Fatalf("count parked accepts after flush: %v", err)
+	}
+	if parked != 0 {
+		t.Fatalf("parked accepts after flush = %d, want 0", parked)
+	}
+}
+
+// TestAcceptFromUnauthorizedPeerIgnored: an accept frame from a peer that is
+// neither this copy's chain predecessor nor its dispatch target must not
+// close the parked copy — the mirror of the cancel/resume authz rule.
+func TestAcceptFromUnauthorizedPeerIgnored(t *testing.T) {
+	ctx := context.Background()
+	worker := newCore(t, "worker-accept-authz", "")
+
+	drive := func(step string, fn func() error) {
+		t.Helper()
+		if err := fn(); err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+	}
+	drive("create", func() error {
+		_, err := worker.store.CreateWithID(ctx, "accept-authz-task", "", "proj", "parked",
+			worker.node.id, []string{"entry-x", worker.node.id}, false)
+		return err
+	})
+	drive("queue", func() error { return worker.store.Queue(ctx, "accept-authz-task", worker.node.id) })
+	drive("dispatch", func() error { return worker.store.Dispatch(ctx, "accept-authz-task", worker.node.id, worker.node.id) })
+	drive("accept", func() error { return worker.store.Accept(ctx, "accept-authz-task", worker.node.id) })
+	drive("pause", func() error {
+		return worker.store.PauseWithResult(ctx, "accept-authz-task", worker.node.id, map[string]any{"ok": true})
+	})
+
+	env, err := bus.NewEnvelope(bus.MsgTaskResume, "mallory", "m-1", bus.TaskResumePayload{
+		TaskID: "accept-authz-task", Accept: true,
+	})
+	if err != nil {
+		t.Fatalf("build accept: %v", err)
+	}
+	tk, err := worker.store.Get(ctx, "accept-authz-task")
+	if err != nil {
+		t.Fatalf("load parked row: %v", err)
+	}
+	worker.handleAcceptWork(ctx, env, tk)
+
+	after, err := worker.store.Get(ctx, "accept-authz-task")
+	if err != nil {
+		t.Fatalf("reload parked row: %v", err)
+	}
+	if after.State != StateReview {
+		t.Fatalf("state after unauthorized accept = %s, want review", after.State)
+	}
 }
 
 // testSharedSecret is the shared HMAC secret used by every test core that

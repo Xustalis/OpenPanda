@@ -477,6 +477,7 @@ func (r *repl) cmdNodesAdd(addr string) {
 	}
 	var haveSecret bool
 	r.readConfig(func(c *config.Config) { haveSecret = c.Network.SharedSecret != "" })
+	generatedSecret := ""
 	if !haveSecret {
 		secret, err := generateSharedSecret()
 		if err != nil {
@@ -484,6 +485,7 @@ func (r *repl) cmdNodesAdd(addr string) {
 			return
 		}
 		r.mutateConfig(func(c *config.Config) { c.Network.SharedSecret = secret })
+		generatedSecret = secret
 		r.outln(i18n.T(r.loc, "cli.nodes.secret.gen"))
 	}
 	// Exists-check, append, and persist ride one critical section — the
@@ -495,9 +497,11 @@ func (r *repl) cmdNodesAdd(addr string) {
 			return nil
 		}
 		c.Network.Peers = append(c.Network.Peers, addr)
+		// Only a secret minted here belongs on disk — an env-injected one
+		// (OPENPANDA_SHARED_SECRET) must stay out of config.yaml.
 		return config.UpdateNetworkSection(configWritePath(r.configPath), config.NetworkConfig{
 			ListenAddr:   c.Network.ListenAddr,
-			SharedSecret: c.Network.SharedSecret,
+			SharedSecret: generatedSecret,
 			Peers:        slices.Clone(c.Network.Peers),
 		})
 	})
@@ -515,8 +519,12 @@ func (r *repl) cmdNodesAdd(addr string) {
 	// cleartext gate — otherwise the refusal only surfaces as keepalive WARN
 	// lines in the daemon log, the "admitted but never connects" trap.
 	var allowCleartext bool
-	r.readConfig(func(c *config.Config) { allowCleartext = c.Network.AllowCleartext })
-	if core.CleartextDialError(addr, allowCleartext) != nil {
+	var allowFor []string
+	r.readConfig(func(c *config.Config) {
+		allowCleartext = c.Network.AllowCleartext
+		allowFor = c.Network.AllowCleartextFor
+	})
+	if core.CleartextDialError(addr, allowCleartext, allowFor) != nil {
 		r.outln(i18n.Tf(r.loc, "cli.nodes.cleartext.hint", "addr", addr))
 	}
 

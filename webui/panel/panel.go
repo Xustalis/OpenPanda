@@ -149,6 +149,11 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/nodes", h.listNodes)
 	mux.HandleFunc("POST /api/nodes/add", h.addNode)
 	mux.HandleFunc("DELETE /api/nodes/{id}", h.removeNode)
+	// Bluetooth-style pairing — the web twin of `panda pair` /
+	// `panda pair <device>` / `panda pair confirm` (see pair.go).
+	mux.HandleFunc("GET /api/pair", h.listPair)
+	mux.HandleFunc("POST /api/pair/initiate", h.initiatePair)
+	mux.HandleFunc("POST /api/pair/answer", h.answerPair)
 	mux.HandleFunc("GET /api/self", h.getSelf)
 	mux.HandleFunc("GET /api/events", h.events)
 	mux.HandleFunc("GET /api/settings/model", h.getModelSettings)
@@ -225,6 +230,7 @@ func New(d Deps) http.Handler {
 	if d.Sessions != nil {
 		mux.HandleFunc("GET /api/sessions", h.listSessions)
 		mux.HandleFunc("POST /api/sessions", h.createSession)
+		mux.HandleFunc("POST /api/sessions/bulk-delete", h.bulkDeleteSession)
 		mux.HandleFunc("GET /api/sessions/{id}", h.getSession)
 		mux.HandleFunc("PATCH /api/sessions/{id}", h.patchSession)
 		mux.HandleFunc("DELETE /api/sessions/{id}", h.deleteSession)
@@ -444,6 +450,11 @@ type handler struct {
 	approvalMu         sync.Mutex
 	approvalOperations map[string]approvalOperation
 	serviceCtx         context.Context
+
+	// pair tracks console-initiated pairing sessions — the live conn and
+	// the state the polling UI reads. Inbound requests need no field: the
+	// pair_sessions table is the shared surface (see pair.go).
+	pair pairTracker
 }
 
 // taskJSON is the wire form of a task row, with stable snake_case names so the
@@ -469,6 +480,11 @@ type taskJSON struct {
 	SessionID    string   `json:"session_id,omitempty"`
 	ResourceKeys []string `json:"resource_keys,omitempty"`
 	Scheduled    bool     `json:"scheduled"`
+	// WorkDir is the submitter's pin (a session worktree); ExecWorkDir is
+	// where the run actually happened — the board shows the latter so a
+	// finished row can be located on the machine that ran it.
+	WorkDir     string `json:"work_dir,omitempty"`
+	ExecWorkDir string `json:"exec_work_dir,omitempty"`
 	// ApprovalDisposition says what approving a reviewed task would do —
 	// accept_work / resume_execution / needs_changed_input — so the board can
 	// label the pending decision instead of a bare "awaiting approval".
@@ -574,6 +590,8 @@ func toTaskJSON(t core.Task) taskJSON {
 		SessionID:    t.SessionID,
 		ResourceKeys: t.ResourceKeys,
 		Scheduled:    t.Scheduled,
+		WorkDir:      t.WorkDir,
+		ExecWorkDir:  t.ExecWorkDir,
 		CreatedAt:    ts(t.CreatedAt),
 		UpdatedAt:    ts(t.UpdatedAt),
 	}
@@ -912,6 +930,20 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if disposition == core.ApprovalAcceptWork {
+		// Prefer the engine when one is configured: its ResumeApproved also
+		// mirrors the accept to the sibling copy parked on the other node
+		// (the same path cancelTask takes for its forward); the engine-less
+		// panel degrades to the local row update, and the peer's own human
+		// can still approve locally.
+		if eng := h.currentEngine(); eng != nil {
+			out := eng.ResumeApproved(r.Context(), id, "", askengine.StreamCallbacks{})
+			if out == nil || out.TaskState != core.StateDone {
+				writeErr(w, http.StatusInternalServerError, errors.New("approve failed"))
+				return
+			}
+			writeJSON(w, map[string]string{"id": id, "status": out.TaskState})
+			return
+		}
 		if err := h.store.Approve(r.Context(), id); err != nil {
 			if errors.Is(err, core.ErrConflict) || errors.Is(err, core.ErrIllegal) {
 				writeErr(w, http.StatusConflict, errors.New("task is not awaiting approval"))
@@ -1097,13 +1129,23 @@ func (h *handler) rejectTask(w http.ResponseWriter, r *http.Request) {
 		Reason string `json:"reason"`
 		Scope  string `json:"scope"`
 	}
+	var err error
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body) // empty/invalid body falls back to the query param
 		if body.Reason != "" {
 			reason = body.Reason
 		}
 	}
-	if err := h.store.Reject(r.Context(), id, reason); err != nil {
+	// Go through the ask engine when one is configured so the rejection also
+	// travels to the remote executor holding the delegated review copy (the
+	// same path cancelTask uses); an engine-less panel degrades to the local
+	// row update.
+	if eng := h.currentEngine(); eng != nil {
+		err = eng.RejectTask(r.Context(), id, reason)
+	} else {
+		err = h.store.Reject(r.Context(), id, reason)
+	}
+	if err != nil {
 		if errors.Is(err, core.ErrConflict) || errors.Is(err, core.ErrIllegal) {
 			writeErr(w, http.StatusConflict, errors.New("task is not awaiting approval"))
 			return

@@ -40,7 +40,7 @@ func runAuth(args []string) {
 	case "help", "-h", "--help":
 		authUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "panda: unknown auth verb %q\n", verb)
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamed", "kind", "auth verb", "name", verb))
 		authUsage()
 		os.Exit(2)
 	}
@@ -66,7 +66,7 @@ func runAuthLogin(args []string) {
 	}
 	p, err := auth.Lookup(provider)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "panda: unknown provider %q — one of: %s\n", provider, strings.Join(auth.ProviderIDs(), ", "))
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamedOpts", "kind", "provider", "name", provider, "opts", strings.Join(auth.ProviderIDs(), ", ")))
 		os.Exit(2)
 	}
 	verifier, challenge, state, err := auth.NewPKCE()

@@ -12,7 +12,12 @@ import (
 // Message types. These strings are the routing key in the envelope's "type"
 // field and are part of the cross-node protocol.
 const (
-	MsgHello        = "hello"
+	MsgHello = "hello"
+	// MsgHelloReject is the only pre-auth frame a server sends back: the
+	// peer's hello failed verification, and this is the reason it is about
+	// to be dropped. Without it a rejected dialer saw "connected" then EOF —
+	// indistinguishable from a network flap — and kept redialing forever.
+	MsgHelloReject  = "hello_reject"
 	MsgJoin         = "join"
 	MsgHeartbeat    = "heartbeat"
 	MsgTaskDelegate = "task_delegate"
@@ -27,6 +32,9 @@ const (
 	// parked in review for lack of tier-2 consent: the user granted it, and
 	// the re-run belongs on the node that holds the task (its capability
 	// match, context, and worktree), not wherever the approval was given.
+	// With Payload.Accept set it is the mirror of that decision: the parked
+	// copy closes as done instead of re-running (work that already ran was
+	// accepted on the other side).
 	MsgTaskResume   = "task_resume"
 	MsgContextFetch = "context_fetch"
 	MsgContextAck   = "context_ack"
@@ -64,6 +72,15 @@ const (
 	// any residual loop.
 	MsgPunchOffer = "punch_offer"
 	MsgPunchReady = "punch_ready"
+	// Bluetooth-style LAN pairing (pair_hello is the ONLY frame accepted on
+	// an unauthenticated connection besides hello — it runs an ephemeral
+	// X25519 exchange so the two operators can compare a short code and the
+	// responder can hand the shared secret over the sealed channel; see
+	// internal/core/pairing.go).
+	MsgPairHello  = "pair_hello"
+	MsgPairReady  = "pair_ready"
+	MsgPairSecret = "pair_secret"
+	MsgPairReject = "pair_reject"
 )
 
 // Envelope is the JSON wire format (design doc §10.3). MsgID is a UUIDv7

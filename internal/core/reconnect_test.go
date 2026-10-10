@@ -145,3 +145,67 @@ func TestPeerLiveSiblingHoldsEdge(t *testing.T) {
 		t.Fatalf("b swapped a live same-id conn — the flap is back")
 	}
 }
+
+// TestPeerAuthoritativeNewcomerTakesEdge is the stray-sibling wedge: a
+// borrowed-engine process (a bare `panda` invocation that found the daemon
+// down and claimed the node row) holds a live edge the real daemon can never
+// reclaim under the sibling rule, and every frame the edge receives lands in
+// the wrong process. The daemon marks its hello Authoritative — the one
+// process allowed to preempt a live same-id incumbent — and the registry
+// swaps to it.
+func TestPeerAuthoritativeNewcomerTakesEdge(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	a := newCore(t, "node-a", "127.0.0.1:17971")
+	b := newCore(t, "node-b", "127.0.0.1:17972")
+	for _, c := range []*Core{a, b} {
+		if err := c.Register(ctx); err != nil {
+			t.Fatalf("register: %v", err)
+		}
+	}
+	go func() { _ = a.Listen(ctx, "127.0.0.1:17971") }()
+	go func() { _ = b.Listen(ctx, "127.0.0.1:17972") }()
+	time.Sleep(200 * time.Millisecond)
+
+	// The stray sibling connects first: no authority, edge held by liveness.
+	if err := a.DialPeer(ctx, "127.0.0.1:17972"); err != nil {
+		t.Fatalf("sibling dial: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	first := b.connFor("node-a")
+	if first == nil {
+		t.Fatalf("b has no conn for node-a after sibling dial")
+	}
+
+	// The daemon comes up and dials over the same node id, now claiming
+	// authority. The incumbent is live, so only the authority bit opens the
+	// swap.
+	a.SetEdgeAuthority(true)
+	if err := a.DialPeer(ctx, "127.0.0.1:17972"); err != nil {
+		t.Fatalf("authoritative dial: %v", err)
+	}
+	var second *bus.Conn
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if second = b.connFor("node-a"); second != nil && second != first {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if second == nil || second == first {
+		t.Fatalf("authoritative newcomer could not take the edge from a live sibling")
+	}
+
+	// And the evicted sibling's cleanup must not remove the daemon's edge.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if b.connFor("node-a") == second {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if b.connFor("node-a") != second {
+		t.Fatalf("sibling cleanup removed the authoritative registration")
+	}
+}

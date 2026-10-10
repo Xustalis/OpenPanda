@@ -53,6 +53,26 @@ type HelloPayload struct {
 	// version-number parse. Absent on old nodes; receivers that do not know
 	// a listed capability simply never exercise it.
 	Caps []string `json:"caps,omitempty"`
+	// Authoritative declares that the sending process holds the node
+	// identity lock — the daemon, not a borrowed engine (CLI/TUI sibling
+	// that probe-passed at startup). Same-id arbitration uses it to let a
+	// real daemon reclaim its peer edge from a sibling session that claimed
+	// ownership while the daemon was down: without it, a live stray conn
+	// holds the edge indefinitely and delegated work lands on the wrong
+	// engine. Unsigned like You — a forged claim is no worse than a forged
+	// node id, which the sig already gates.
+	Authoritative bool `json:"authoritative,omitempty"`
+}
+
+// HelloRejectPayload is what the server sends before closing a connection
+// whose hello failed. Reason is a stable machine-readable code:
+// "auth" (signature/secret mismatch — the usual case, and the one a dialer
+// must surface so an operator knows the peer is online but rejecting us),
+// "identity" (claimed id collides or re-keys a verified identity), and
+// "replay" (a consumed signature). It deliberately carries nothing derived
+// from the secret — the frame rides the still-unauthenticated channel.
+type HelloRejectPayload struct {
+	Reason string `json:"reason"`
 }
 
 // CapBinaryData is the hello-advertised capability for binary data frames:
@@ -435,14 +455,19 @@ type TaskResultPayload struct {
 	// ApprovalDisposition tells the delegator what approving a review means.
 	// It is optional for wire compatibility; receivers classify legacy review
 	// results conservatively from explicit authorization-refusal evidence only.
-	ApprovalDisposition string  `json:"approval_disposition,omitempty"`
-	OK                  bool    `json:"ok"`
-	ExitCode            int     `json:"exit_code"`
-	Stdout              string  `json:"stdout,omitempty"`
-	Stderr              string  `json:"stderr,omitempty"`
-	Artifacts           string  `json:"artifacts,omitempty"`
-	Tokens              int     `json:"tokens,omitempty"`
-	Cost                float64 `json:"cost,omitempty"`
+	ApprovalDisposition string `json:"approval_disposition,omitempty"`
+	// Deferred marks a result that reports custody, not execution: the
+	// caller's request (a resume approval) was accepted and parked in an
+	// outbox for delivery when the executor's link returns. Surfaces must
+	// render it as "queued for delivery" — not as a failed exit code.
+	Deferred  bool    `json:"deferred,omitempty"`
+	OK        bool    `json:"ok"`
+	ExitCode  int     `json:"exit_code"`
+	Stdout    string  `json:"stdout,omitempty"`
+	Stderr    string  `json:"stderr,omitempty"`
+	Artifacts string  `json:"artifacts,omitempty"`
+	Tokens    int     `json:"tokens,omitempty"`
+	Cost      float64 `json:"cost,omitempty"`
 	// OutputArtifact is the hash of the tree this stage produced, packed into the
 	// executor's artifact pool. The node orchestrating the plan records it and
 	// hands it to the successor stages as their input; the executor stays the
@@ -463,7 +488,11 @@ type TaskResultPayload struct {
 	// across relay hops where env.From is only the last hop), which agent
 	// actually executed (Agent — the fallback chain may have swapped it),
 	// and how long the execution took on the executor's clock.
-	Executor       string `json:"executor,omitempty"`
+	Executor string `json:"executor,omitempty"`
+	// WorkDir is the workspace the executor actually ran in — the derived
+	// directory, not the submitter's pin — so the origin can locate the
+	// produced files on the machine that ran the work.
+	WorkDir        string `json:"work_dir,omitempty"`
 	Agent          string `json:"agent,omitempty"`
 	Model          string `json:"model,omitempty"`
 	Injected       bool   `json:"injected,omitempty"`
@@ -570,6 +599,15 @@ type TaskResumePayload struct {
 	// with the answer folded into the re-run's intent. Empty for the
 	// classic tier-2 consent resume — older nodes ignore the field.
 	Answer string `json:"answer,omitempty"`
+	// Accept closes the parked copy instead of re-running it: the human on
+	// one side accepted work that already ran (AcceptWork disposition), and
+	// this tells the copy parked on the other side to mirror the decision
+	// (review -> done). Without it, whichever side approved first left the
+	// other's copy in review forever. An accept carries no consent to run
+	// anything — it only ever closes a finished copy — so the receiving
+	// side refuses it for any other disposition. Older nodes ignore the
+	// field and stay parked; their own human can still approve locally.
+	Accept bool `json:"accept,omitempty"`
 }
 
 // ContextFetchPayload asks the source node for a full context snapshot.
@@ -771,3 +809,46 @@ type PunchReadyPayload = PunchOfferPayload
 // mesh's own relay bound is 3; punch adds headroom because coordination is
 // cheap and a failed punch costs a real reachability path.
 const PunchMaxTTL = 8
+
+// PairHelloPayload opens a Bluetooth-style pairing session on an
+// unauthenticated connection. The initiator is not yet a mesh peer — this
+// frame carries only ephemeral key material and self-describing display
+// fields; nothing in it is trusted until the two humans compare the
+// derived code on both screens.
+type PairHelloPayload struct {
+	Session string `json:"session"` // initiator-minted session id (uuid)
+	X       string `json:"x"`       // initiator ephemeral X25519 pub, hex
+	Pub     string `json:"pub"`     // initiator Ed25519 identity pub, hex (SAS-bound)
+	Nonce   string `json:"nonce"`   // initiator nonce, hex — HKDF salt half
+	Addr    string `json:"addr"`    // initiator's advertised listen addr (host may be 0.0.0.0)
+	Name    string `json:"name"`    // configured node.name, display only
+	NodeID  string `json:"node_id"` // runtime node id, display only
+}
+
+// PairReadyPayload answers pair_hello with the responder's ephemeral half.
+// After this frame both sides hold enough material to derive the same
+// short authentication string — a MITM relay produces a different one on
+// each end because its two DH secrets differ.
+type PairReadyPayload struct {
+	Session string `json:"session"`
+	X       string `json:"x"`
+	Pub     string `json:"pub"`
+	Nonce   string `json:"nonce"`
+}
+
+// PairSecretPayload delivers the mesh shared secret to the confirmed
+// initiator. Box is base64(gcm-nonce ‖ AES-256-GCM ciphertext) keyed by
+// HKDF(dh, salt=nonces, info="panda-pair/1") — the secret never crosses
+// the LAN readable, and only ever flows responder→initiator.
+type PairSecretPayload struct {
+	Session string `json:"session"`
+	Box     string `json:"box"`
+}
+
+// PairRejectPayload ends a session without joining: human said no, the
+// confirm window expired, or the responder refused. Reason is a stable
+// machine token ("rejected", "expired", "busy") plus optional detail.
+type PairRejectPayload struct {
+	Session string `json:"session"`
+	Reason  string `json:"reason"`
+}

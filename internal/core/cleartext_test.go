@@ -27,7 +27,7 @@ func TestCleartextGate(t *testing.T) {
 		"wss://203.0.113.10:7836/ws",    // TLS-terminated, public IP
 	}
 	for _, addr := range allowed {
-		if err := cleartextOK(addr, false); err != nil {
+		if err := cleartextOK(addr, false, nil); err != nil {
 			t.Errorf("cleartextOK(%q) = %v, want allowed", addr, err)
 		}
 	}
@@ -43,7 +43,7 @@ func TestCleartextGate(t *testing.T) {
 		"ws://attacker.example.com:80",
 	}
 	for _, addr := range blocked {
-		err := cleartextOK(addr, false)
+		err := cleartextOK(addr, false, nil)
 		if err == nil {
 			t.Errorf("cleartextOK(%q) = nil, want refusal", addr)
 			continue
@@ -55,8 +55,49 @@ func TestCleartextGate(t *testing.T) {
 
 	// The explicit opt-out restores the old behavior for every target.
 	for _, addr := range blocked {
-		if err := cleartextOK(addr, true); err != nil {
+		if err := cleartextOK(addr, true, nil); err != nil {
 			t.Errorf("cleartextOK(%q, allow) = %v, want allowed", addr, err)
 		}
+	}
+}
+
+// TestCleartextAllowlist pins the scoped opt-in (network.allow_cleartext_for):
+// a listed CIDR/IP/hostname passes the gate while neighbours of it stay
+// refused — the whole point of the knob over the global flag.
+func TestCleartextAllowlist(t *testing.T) {
+	allowFor := []string{"192.168.0.0/16", "10.1.2.3", "worker.lan"}
+
+	listed := []string{
+		"192.168.1.5:7836",        // inside the CIDR
+		"192.168.255.254:7836",    // CIDR top edge
+		"ws://192.168.0.1:7836",   // URL form, same net
+		"10.1.2.3:7836",           // literal IP entry
+		"worker.lan:7836",         // exact hostname
+		"WORKER.LAN:7836",         // hostnames match case-insensitively
+		"ws://worker.lan:7836/ws", // URL form, same host
+	}
+	for _, addr := range listed {
+		if err := cleartextOK(addr, false, allowFor); err != nil {
+			t.Errorf("cleartextOK(%q, allowFor) = %v, want allowed", addr, err)
+		}
+	}
+
+	stillBlocked := []string{
+		"192.167.1.5:7836",        // one outside the CIDR
+		"10.1.2.4:7836",           // adjacent IP, not listed
+		"other.lan:7836",          // hostname not listed
+		"sub.worker.lan:7836",     // suffix match does NOT count — exact only
+		"worker.lan.evil.com:443", // hostname must equal, not prefix-match
+	}
+	for _, addr := range stillBlocked {
+		if err := cleartextOK(addr, false, allowFor); err == nil {
+			t.Errorf("cleartextOK(%q, allowFor) = nil, want refusal", addr)
+		}
+	}
+
+	// An allowlist entry is additive, not a replacement for the safe set:
+	// loopback still passes with no overlap.
+	if err := cleartextOK("127.0.0.1:7836", false, allowFor); err != nil {
+		t.Errorf("cleartextOK(loopback, allowFor) = %v, want allowed", err)
 	}
 }

@@ -106,6 +106,9 @@ func ClassifyTurnsWithTools(ctx context.Context, c *Client, devices []ledger.Nod
 		specs = registry.Specs()
 	}
 	resp, err := c.CompleteTurnsWithTools(ctx, system, turns, specs)
+	if err == nil && emptyCompletion(resp) {
+		resp, err = c.CompleteTurnsWithTools(ctx, system, turns, specs)
+	}
 	if err != nil {
 		return Output{}, WrapAPIError(err, po.UserLocale)
 	}
@@ -141,6 +144,11 @@ func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.No
 		specs = registry.Specs()
 	}
 	resp, err := c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta, onReasoning)
+	if err == nil && emptyCompletion(resp) {
+		// Nothing streamed (Text is empty by definition here), so replaying
+		// the call cannot double-display deltas on the user's screen.
+		resp, err = c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta, onReasoning)
+	}
 	if err != nil {
 		return Output{}, WrapAPIError(err, po.UserLocale)
 	}
@@ -150,6 +158,16 @@ func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.No
 	}
 	storeClassification(ctx, c, turns, memory, devices, registry, out)
 	return out, nil
+}
+
+// emptyCompletion reports a response that carries nothing ParseOutput could
+// work with: no tool calls and no text. Providers occasionally answer 200-OK
+// with an empty content field — a transient hiccup (or a reasoning-only turn
+// whose chain-of-thought lives in the separate reasoning field, per D14), not
+// a real verdict. Retrying once rides it out instead of letting the empty
+// body surface as a validation error that kills the whole turn.
+func emptyCompletion(resp Response) bool {
+	return len(resp.ToolUses) == 0 && strings.TrimSpace(resp.Text) == ""
 }
 
 // resolveResponse routes one completed model response: a native tool_use is

@@ -68,6 +68,10 @@ type Session struct {
 	Turns         []Turn            `json:"turns"`
 	AgentSessions map[string]string `json:"agent_sessions,omitempty"`
 	Operation     *Operation        `json:"operation,omitempty"`
+	// Pinned keeps a session at the top of List regardless of recency. It is
+	// a user-facing ordering flag only — it does not protect the session
+	// from deletion.
+	Pinned bool `json:"pinned,omitempty"`
 }
 
 // Operation is the latest durable ask operation for a session. It lets a
@@ -95,6 +99,17 @@ func NewStore(dir string) *Store {
 
 // ErrNotFound is returned for unknown session ids.
 var ErrNotFound = errors.New("sessions: no such session")
+
+// ValidID reports whether id is safe to use inside a filesystem path or git
+// ref. Session ids are generated hex, so anything containing a separator,
+// a parent traversal, or a drive/anchor is not a session — this is the store
+// layer's guard against callers (HTTP path values included) smuggling a path.
+func ValidID(id string) bool {
+	if id == "" || strings.Contains(id, "..") || strings.ContainsAny(id, "/\\") {
+		return false
+	}
+	return !filepath.IsAbs(id)
+}
 
 // Create starts a new session titled after the first prompt (the title is
 // derived lazily by the caller; Create accepts it directly). An optional
@@ -204,7 +219,7 @@ func (s *Store) Get(id string) (*Session, error) {
 	return s.load(id)
 }
 
-// List returns all sessions, newest first.
+// List returns all sessions, pinned first and then newest first.
 func (s *Store) List() ([]*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -226,7 +241,57 @@ func (s *Store) List() ([]*Session, error) {
 		}
 		out = append(out, sess)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	Sort(out)
+	return out, nil
+}
+
+// Sort orders a session listing the way the rail renders it: pinned threads
+// first, then newest activity first within each group.
+func Sort(list []*Session) {
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].Pinned != list[j].Pinned {
+			return list[i].Pinned
+		}
+		return list[i].UpdatedAt.After(list[j].UpdatedAt)
+	})
+}
+
+// Stamp is the lightest identity-of-change a session file exposes: name,
+// size and mtime. The SSE change feed hashes stamps instead of unmarshalling
+// every thread once per poll — an O(n) stat scan instead of O(total bytes).
+type Stamp struct {
+	ID          string
+	Size        int64
+	ModUnixNano int64
+}
+
+// Stamps returns one stamp per stored session file, sorted by id.
+func (s *Store) Stamps() ([]Stamp, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []Stamp
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		out = append(out, Stamp{
+			ID:          strings.TrimSuffix(e.Name(), ".json"),
+			Size:        info.Size(),
+			ModUnixNano: info.ModTime().UnixNano(),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
 
@@ -419,7 +484,21 @@ func (s *Store) SetTitle(id, title string) error {
 	return s.save(sess)
 }
 
-// ListByProject returns all sessions belonging to project, newest first.
+// SetPinned marks or clears a session's pinned flag.
+func (s *Store) SetPinned(id string, pinned bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return err
+	}
+	sess.Pinned = pinned
+	sess.UpdatedAt = time.Now()
+	return s.save(sess)
+}
+
+// ListByProject returns all sessions belonging to project in List order
+// (pinned first, then newest).
 // If project is empty, it returns unassigned sessions (where Project is empty).
 func (s *Store) ListByProject(project string) ([]*Session, error) {
 	list, err := s.List()
@@ -493,6 +572,9 @@ func (s *Store) RenameProject(oldName, newName string) (int, error) {
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !ValidID(id) {
+		return ErrNotFound
+	}
 	if err := os.Remove(s.path(id)); err != nil {
 		if os.IsNotExist(err) {
 			return ErrNotFound
@@ -505,7 +587,7 @@ func (s *Store) Delete(id string) error {
 func (s *Store) path(id string) string { return filepath.Join(s.root, id+".json") }
 
 func (s *Store) load(id string) (*Session, error) {
-	if id == "" || strings.Contains(id, "/") || strings.Contains(id, "..") {
+	if !ValidID(id) {
 		return nil, ErrNotFound
 	}
 	data, err := os.ReadFile(s.path(id))

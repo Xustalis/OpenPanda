@@ -25,6 +25,14 @@ import (
 
 var configSections = []string{"model", "mcp", "limits", "routing", "injection", "approval"}
 
+func isConfigAction(s string) bool {
+	switch s {
+	case "get", "set", "test":
+		return true
+	}
+	return false
+}
+
 func runConfig(args []string) {
 	if len(args) == 0 {
 		configUsage()
@@ -38,13 +46,24 @@ func runConfig(args []string) {
 			break
 		}
 	}
+	if !valid && isConfigAction(section) && len(rest) > 0 {
+		// `panda config get model` — action/section swapped; accept the order
+		// users naturally type.
+		for _, s := range configSections {
+			if s == rest[0] {
+				section, rest = rest[0], append([]string{section}, rest[1:]...)
+				valid = true
+				break
+			}
+		}
+	}
 	if !valid {
 		switch section {
 		case "help", "-h", "--help":
 			configUsage()
 			return
 		default:
-			fmt.Fprintf(os.Stderr, "panda: unknown config section %q\n", section)
+			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamed", "kind", "config section", "name", section))
 			configUsage()
 			os.Exit(2)
 		}
@@ -63,7 +82,7 @@ func runConfig(args []string) {
 	case "help", "-h", "--help":
 		configUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "panda: unknown config action %q (get|set|test)\n", action)
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamedOpts", "kind", "config action", "name", action, "opts", "get|set|test"))
 		configUsage()
 		os.Exit(2)
 	}
@@ -234,7 +253,7 @@ func runConfigSet(section string, args []string) {
 		switch key {
 		case "user", "memory", "project":
 		default:
-			fmt.Fprintf(os.Stderr, "panda: unknown limits key %q (user|memory|project)\n", key)
+			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamedOpts", "kind", "limits key", "name", key, "opts", "user|memory|project"))
 			os.Exit(2)
 		}
 		value, err := strconv.Atoi(raw)

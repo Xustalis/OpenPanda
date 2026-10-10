@@ -62,6 +62,61 @@ func TestClassifyTask(t *testing.T) {
 	}
 }
 
+func TestClassifyRetriesEmptyCompletion(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("content-type", "application/json")
+		text := ""
+		if calls > 1 {
+			text = "late answer"
+		}
+		resp := map[string]any{"content": []map[string]string{{"type": "text", "text": text}}}
+		b, _ := json.Marshal(resp)
+		_, _ = w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	out, err := Classify(context.Background(), c, nil, "", "你好")
+	if err != nil {
+		t.Fatalf("classify: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("provider calls = %d, want 2 (empty completion retried once)", calls)
+	}
+	if out.Kind != KindAnswer || out.Answer != "late answer" {
+		t.Fatalf("out = %+v", out)
+	}
+}
+
+func TestClassifyEmptyCompletionTwiceFails(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("content-type", "application/json")
+		resp := map[string]any{"content": []map[string]string{{"type": "text", "text": ""}}}
+		b, _ := json.Marshal(resp)
+		_, _ = w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = Classify(context.Background(), c, nil, "", "你好")
+	if err == nil || !strings.Contains(err.Error(), "empty model output") {
+		t.Fatalf("err = %v, want empty model output", err)
+	}
+	if calls != 2 {
+		t.Fatalf("provider calls = %d, want exactly 2 (one retry, no loop)", calls)
+	}
+}
+
 func TestClassifyToolCall(t *testing.T) {
 	payload, _ := json.Marshal(map[string]any{
 		"kind": "tool_call",

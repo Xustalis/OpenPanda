@@ -214,7 +214,7 @@ function ProjectRow({
   const handleDirectRemove = async () => {
     const ok = await confirmDialog({
       title: t('projects.confirmRemove').replace('{name}', project.name),
-      message: `${project.name} (${project.work_dir || t('projects.noDir')}) - 本地目录与源码文件将完整保留。`,
+      message: `${project.name} (${project.work_dir || t('projects.noDir')}) — ${t('projects.removeKeepNote')}`,
       confirmLabel: t('projects.remove'),
       danger: true,
     })

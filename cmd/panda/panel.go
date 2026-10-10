@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -167,8 +168,9 @@ func runStatus(args []string) {
 		if abilities := n.Abilities(); len(abilities) > 0 {
 			// Clipped, not padded: the ability list is a detail row under its
 			// node, and padding it would trail invisible whitespace into every
-			// copy-paste of a listing.
-			fmt.Println("  " + p.Muted(cliui.Truncate(strings.Join(abilities, ", "), listWidth()-2, p.Unicode())))
+			// copy-paste of a listing. The "+N" tail names what the clip hid —
+			// a bare ellipsis reads like the line itself broke.
+			fmt.Println("  " + p.Muted(truncateListCount(abilities, listWidth()-2, p.Unicode())))
 		}
 	}
 	fmt.Println(p.Muted(i18n.Tf(loc, "cli.status.summary",
@@ -191,8 +193,76 @@ func runStatus(args []string) {
 		case !localRunning:
 			fmt.Println(p.Muted(i18n.T(loc, "cli.status.localDown")))
 		}
+		printMeshLineTo(os.Stdout, loc, cfg, db, views)
 		printPendingTo(os.Stdout, db, loc)
 	}
+}
+
+// printMeshLineTo appends the one-line mesh summary `status` owes a fleet
+// listing: whether THIS node's WS listener answers (self-dialed — a
+// wildcard listen_addr is probed via loopback), how many CONFIGURED peers
+// are up, and whether the mesh secret exists at all. "0 peers configured"
+// is information; a down listener with peers configured is the fault line
+// this surfaces.
+//
+// The fraction is configured-peers-online / configured-peers, both sides
+// from the config: a peer is online when the daemon's addr→id binding
+// (peer_addrs, written at hello time) maps its configured address to an id
+// the self row currently advertises as a live neighbor. Counting live
+// directory rows instead — the old behavior — let an inbound-only stranger
+// make a dead configured peer read as "1/1 online".
+func printMeshLineTo(w io.Writer, loc i18n.Locale, cfg *config.Config, db *sql.DB, views []nodeStatusView) {
+	p := pal()
+	peersOnline := 0
+	if len(cfg.Network.Peers) > 0 {
+		// Live ids come from the local row's link-state advertisement, which
+		// the daemon refreshes on its monitor tick. A daemon that is not
+		// running cannot vouch for anything: the advertisement is stale, so
+		// the count degrades to 0 rather than repeating the last state.
+		live := map[string]bool{}
+		localRunning := false
+		for _, v := range views {
+			if v.Local {
+				localRunning = v.Running
+				for _, id := range v.Neighbors {
+					live[id] = true
+				}
+			}
+		}
+		if localRunning {
+			if bindings, err := ledger.PeerAddrBindings(db); err == nil {
+				for _, addr := range cfg.Network.Peers {
+					if id := bindings[core.NormalizeDialAddr(addr)]; id != "" && live[id] {
+						peersOnline++
+					}
+				}
+			}
+		}
+	}
+	host, port, err := net.SplitHostPort(cfg.Network.ListenAddr)
+	listenUp := false
+	if err == nil {
+		dial := host
+		if dial == "" || dial == "0.0.0.0" || dial == "::" {
+			dial = "127.0.0.1"
+		}
+		if conn, derr := net.DialTimeout("tcp", net.JoinHostPort(dial, port), 800*time.Millisecond); derr == nil {
+			conn.Close()
+			listenUp = true
+		}
+	}
+	state := i18n.T(loc, "cli.status.mesh.down")
+	if listenUp {
+		state = i18n.T(loc, "cli.status.mesh.up")
+	}
+	secret := i18n.T(loc, "cli.status.mesh.secret.no")
+	if cfg.Network.SharedSecret != "" {
+		secret = i18n.T(loc, "cli.status.mesh.secret.yes")
+	}
+	fmt.Fprintln(w, p.Muted(i18n.Tf(loc, "cli.status.mesh",
+		"listen", cfg.Network.ListenAddr, "state", state,
+		"online", strconv.Itoa(peersOnline), "configured", strconv.Itoa(len(cfg.Network.Peers)),
+		"secret", secret)))
 }
 
 // printPendingTo appends the LAN-discovery hint list: nodes broadcasting on
@@ -229,10 +299,18 @@ func printPendingTo(w io.Writer, db *sql.DB, loc i18n.Locale) {
 		if fp == "" {
 			fp = "—"
 		}
+		// A signed beacon proves the fingerprint belongs to the broadcaster;
+		// an unsigned (v1) one could name anybody's key next to its own
+		// address, so it wears the warn mark until the hello proves more.
+		sigMark := p.Success(p.MarkOK())
+		if !n.Verified {
+			sigMark = p.Warn(p.Glyph("⚠", "!"))
+			fp = p.Warn(fp)
+		}
 		fmt.Fprintln(w, row(
 			"  "+cell(n.ID, 24),
 			cell(n.Addr, 24),
-			p.Warn(fp),
+			sigMark+" "+fp,
 			humanAge(loc, n.LastSeen),
 		))
 	}
@@ -275,6 +353,44 @@ func nodeStateTint(v nodeStatusView) func(string) string {
 	}
 }
 
+// truncateListCount joins items into one width-bounded line; when not all fit
+// the tail names how many were dropped ("a, b, c … +4") instead of a bare
+// ellipsis that reads like mid-item damage. Items are never cut mid-word —
+// the line ends at the last whole item that fits alongside the count.
+func truncateListCount(items []string, maxWidth int, unicode bool) string {
+	ellipsis := "…"
+	if !unicode {
+		ellipsis = "..."
+	}
+	full := strings.Join(items, ", ")
+	if cliui.DisplayWidth(full) <= maxWidth {
+		return full
+	}
+	shown, used := "", 0
+	for i, it := range items {
+		cand := it
+		if shown != "" {
+			cand = shown + ", " + it
+		}
+		rest := len(items) - i - 1
+		// The row this item would produce must leave room for its count.
+		suffixW := cliui.DisplayWidth(" " + ellipsis + "+" + strconv.Itoa(rest))
+		if rest == 0 {
+			suffixW = 0
+		}
+		if cliui.DisplayWidth(cand)+suffixW <= maxWidth {
+			shown, used = cand, i+1
+			continue
+		}
+		break
+	}
+	rest := len(items) - used
+	if shown == "" {
+		return ellipsis + "+" + strconv.Itoa(rest)
+	}
+	return shown + " " + ellipsis + "+" + strconv.Itoa(rest)
+}
+
 // nodeFP renders the key column: a human-checked fingerprint carries a green
 // ✓ suffix; a TOFU-recorded one is printed bare in warn tint — present, but
 // nobody has compared it; a keyless row (node predates signed hellos) is an
@@ -286,9 +402,9 @@ func nodeFP(n ledger.Node) string {
 	case fp == "":
 		return p.Muted(cell("—", 17))
 	case n.Verified():
-		return cell(fp, 16) + p.Success("✓")
+		return cell(fp, 15) + " " + p.Success("✓")
 	default:
-		return p.Warn(cell(fp, 16)) + " "
+		return p.Warn(cell(fp, 15)) + "  "
 	}
 }
 
@@ -491,7 +607,7 @@ func runQueue(args []string) {
 	}
 
 	if *watch {
-		watchQueue(context.Background(), store, *state, *project)
+		watchQueue(context.Background(), cfg, store, *state, *project)
 		return
 	}
 
@@ -515,6 +631,18 @@ func runQueue(args []string) {
 		fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.queue.truncated", "n", strconv.Itoa(queueListCap)))
 	}
 
+	// Queued/submitted rows plus no live consumer is the silent-stall shape:
+	// the listing is truthful, but without the hint it reads as "work in
+	// progress" when nothing will ever pick it up. Checked before the output
+	// split so --json callers get the advisory on stderr too.
+	for _, t := range filtered {
+		if t.State == core.StateQueued || t.State == core.StateSubmitted {
+			if !queueConsumerAlive(cfg) {
+				warnNoConsumerStderr(loc)
+			}
+			break
+		}
+	}
 	if jsonOutput {
 		out := make([]taskJSON, 0, len(filtered))
 		for _, t := range filtered {
@@ -527,7 +655,18 @@ func runQueue(args []string) {
 		fmt.Println(i18n.T(loc, "cli.queue.none"))
 		return
 	}
-	printTaskTable(loc, filtered)
+	printTaskTable(loc, filtered, taskRefsFor(context.Background(), store, filtered), store)
+}
+
+// dispState is the display state a task row should show: mostly t.State, but
+// a dispatched row whose delivery sits parked in the task outbox is "waiting
+// for the peer's link", not running — without the distinction a dead link
+// reads on the board as work in flight.
+func dispState(ctx context.Context, store *core.TaskStore, loc i18n.Locale, t core.Task) string {
+	if t.State == core.StateDispatched && store != nil && store.TaskOutboxPending(ctx, t.TaskID) {
+		return i18n.T(loc, "cli.task.state.wait_link")
+	}
+	return t.State
 }
 
 // runQueueClear implements `panda queue clear [--yes]` — the board's "clear
@@ -614,21 +753,22 @@ const queueListLimit = 25
 // priority, the owning node and as much title as the terminal has room for.
 // `panda queue --watch` renders the same rows through the same helpers, so the
 // live board and the one-shot listing cannot drift apart.
-func printTaskTable(loc i18n.Locale, tasks []core.Task) {
-	printTaskTableTo(os.Stdout, loc, tasks)
+func printTaskTable(loc i18n.Locale, tasks []core.Task, refs map[string]string, store *core.TaskStore) {
+	printTaskTableTo(os.Stdout, loc, tasks, refs, store)
 }
 
-func printTaskTableTo(out io.Writer, loc i18n.Locale, tasks []core.Task) {
+func printTaskTableTo(out io.Writer, loc i18n.Locale, tasks []core.Task, refs map[string]string, store *core.TaskStore) {
 	p := pal()
 	shown := tasks
 	if len(shown) > queueListLimit {
 		shown = shown[:queueListLimit]
 	}
-	cols := planTaskTable(loc, shown, listWidth())
+	cols := planTaskTableRefs(loc, shown, listWidth(), refs)
 
 	_, _ = fmt.Fprintln(out, taskTableHeader(loc, cols))
+	ctx := context.Background()
 	for _, t := range shown {
-		_, _ = fmt.Fprintln(out, taskTableRow(t, cols))
+		_, _ = fmt.Fprintln(out, taskTableRowState(t, cols, dispState(ctx, store, loc, t)))
 	}
 	if hidden := len(tasks) - len(shown); hidden > 0 {
 		_, _ = fmt.Fprintln(out, p.Muted(i18n.Tf(loc, "cli.queue.more", "n", strconv.Itoa(hidden))))
@@ -642,17 +782,75 @@ func printTaskTableTo(out io.Writer, loc i18n.Locale, tasks []core.Task) {
 // id, state and priority (their vocabularies are bounded), a node column sized
 // to the widest owner actually present, and the title taking whatever the
 // terminal has left. Shared by the one-shot listing and the watch board.
-type taskTableCols struct{ id, state, prio, node, title int }
+//
+// refs carries each row's shortest-unique prefix (see taskref.go): the width
+// of the id column follows the longest ref actually shown, so a listing of
+// same-second tasks widens instead of printing indistinguishable rows.
+type taskTableCols struct {
+	id, state, prio, node, ws, title int
+	refs                             map[string]string
+}
 
 func planTaskTable(loc i18n.Locale, tasks []core.Task, width int) taskTableCols {
-	c := taskTableCols{id: 10, state: 10, prio: 8}
+	return planTaskTableRefs(loc, tasks, width, nil)
+}
+
+func planTaskTableRefs(loc i18n.Locale, tasks []core.Task, width int, refs map[string]string) taskTableCols {
+	c := taskTableCols{id: 10, state: 10, prio: 8, refs: refs}
 	c.node = cliui.DisplayWidth(i18n.T(loc, "cli.col.node"))
+	c.ws = cliui.DisplayWidth(i18n.T(loc, "cli.col.workspace"))
 	for _, t := range tasks {
 		c.node = max(c.node, cliui.DisplayWidth(shortNode(t.OwnerNode)))
+		c.id = max(c.id, cliui.DisplayWidth(refOr(refs, t.TaskID)))
+		c.ws = max(c.ws, cliui.DisplayWidth(elidePath(taskWorkspace(t), taskWorkspaceCap)))
 	}
 	c.node = min(c.node, 26)
-	c.title = max(20, width-(c.id+c.state+c.prio+c.node+4))
+	c.id = min(c.id, taskRefCeil)
+	c.ws = min(c.ws, taskWorkspaceCap)
+	c.title = max(20, width-(c.id+c.state+c.prio+c.node+c.ws+5))
 	return c
+}
+
+// taskWorkspaceCap bounds the workspace column: paths are long, the board is
+// for locating — the tail of the path is what identifies the directory, and
+// the full path lives in `task show`.
+const taskWorkspaceCap = 30
+
+// taskWorkspace is the workspace a row should show: the directory the run
+// actually used, or the submitter's pin before a run has derived one.
+func taskWorkspace(t core.Task) string {
+	if t.ExecWorkDir != "" {
+		return t.ExecWorkDir
+	}
+	return t.WorkDir
+}
+
+// elidePath shortens a path to fit w columns, keeping its tail — the part
+// that names the directory — with a leading "…/" marking the cut.
+func elidePath(p string, w int) string {
+	if p == "" {
+		return ""
+	}
+	if cliui.DisplayWidth(p) <= w {
+		return p
+	}
+	runes := []rune(p)
+	// Keep the tail; reserve 2 columns for the "…/" marker.
+	keep := w - 2
+	if keep < 1 {
+		keep = 1
+	}
+	start := len(runes) - keep
+	if start < 0 {
+		start = 0
+	}
+	// Cut at a separator when one is nearby so the tail reads as path
+	// segments, not a byte soup.
+	tail := string(runes[start:])
+	if i := strings.IndexByte(tail, '/'); i > 0 && i < len(tail)/2 {
+		tail = tail[i:]
+	}
+	return "…" + tail
 }
 
 // taskTableHeader is the dimmed column-name row.
@@ -662,17 +860,31 @@ func taskTableHeader(loc i18n.Locale, c taskTableCols) string {
 		cell(i18n.T(loc, "cli.col.state"), c.state),
 		cell(i18n.T(loc, "cli.col.priority"), c.prio),
 		cell(i18n.T(loc, "cli.col.node"), c.node),
+		cell(i18n.T(loc, "cli.col.workspace"), c.ws),
 		i18n.T(loc, "cli.col.title"),
 	)
 }
 
 // taskTableRow is one task as a row of sized cells.
 func taskTableRow(t core.Task, c taskTableCols) string {
+	return taskTableRowState(t, c, t.State)
+}
+
+// taskTableRowState renders the row with a display state in place of the
+// stored one — used for the "waiting for link" sub-state, which is not a
+// real state (the row is dispatched; its delivery is parked in the outbox)
+// but is the honest thing to show where a state column claims liveness.
+func taskTableRowState(t core.Task, c taskTableCols, state string) string {
+	ws := elidePath(taskWorkspace(t), c.ws)
+	if ws == "" {
+		ws = "-"
+	}
 	return row(
-		cell(shortID(t.TaskID), c.id),
-		stateCell(t.State, c.state),
+		cell(refOr(c.refs, t.TaskID), c.id),
+		stateCell(state, c.state),
 		cell(priorityName(t.Priority), c.prio),
 		cell(shortNode(t.OwnerNode), c.node),
+		cell(ws, c.ws),
 		cell(t.Title, c.title),
 	)
 }
@@ -784,8 +996,25 @@ func runApprove(args []string) {
 		fatal("approve", core.ErrApprovalNeedsChangedInput)
 	}
 
+	// The engine carries the approval through the scheduler core: for an
+	// AcceptWork park its ResumeApproved also mirrors the decision to the
+	// sibling copy parked on the other node (forwardAcceptDownstream), which
+	// a store-only approve cannot do. Only an AcceptWork approve whose engine
+	// cannot be built degrades to the local row update — the peer's own human
+	// can still approve its copy.
+	engine, eerr := askengine.New(context.Background(), cfg, askengine.Options{
+		CardPath:   defaultCardPath(),
+		ConfigPath: *configPath,
+	})
+	if eerr != nil && disposition != core.ApprovalAcceptWork {
+		fatal("ask engine", eerr)
+	}
 	var out *askengine.Result
-	if disposition == core.ApprovalAcceptWork {
+	switch {
+	case eerr == nil:
+		defer engine.Close()
+		out = engine.ResumeApproved(context.Background(), id, "", askengine.StreamCallbacks{}, *answer)
+	default:
 		if err := store.Approve(context.Background(), id); err != nil {
 			fatal("approve", err)
 		}
@@ -811,20 +1040,15 @@ func runApprove(args []string) {
 			Injected:  result.Injected,
 			Executor:  result.Executor,
 		}
-	} else {
-		engine, err := askengine.New(context.Background(), cfg, askengine.Options{
-			CardPath:   defaultCardPath(),
-			ConfigPath: *configPath,
-		})
-		if err != nil {
-			fatal("ask engine", err)
-		}
-		defer engine.Close()
-		out = engine.ResumeApproved(context.Background(), id, "", askengine.StreamCallbacks{}, *answer)
 	}
+	// A successful AcceptWork approve is a success whatever the stored result
+	// says: the result describes why the task parked (drift text, a notify
+	// payload, a failed-looking run the human chose to accept), not whether
+	// the approve action worked. Exit 0 and surface the text as a note.
+	approved := disposition == core.ApprovalAcceptWork
 	if jsonOutput {
 		emitJSON(resultToJSON(out))
-		if !out.OK {
+		if !out.OK && !out.Deferred && !approved {
 			os.Exit(1)
 		}
 		return
@@ -846,8 +1070,25 @@ func runApprove(args []string) {
 		}
 		reportNote += " · " + i18n.Tf(i18n.Detect(), "tui.task.execBy", "exec", execNote)
 	}
+	if out.RouteFallback != "" {
+		reportNote += " · " + i18n.Tf(i18n.Detect(), "cli.task.route_fallback", "peer", out.RouteFallback)
+	}
 	fmt.Println(pal().Muted(reportNote))
+	if out.Deferred {
+		// Approval parked for the executor's next link — a custody receipt,
+		// not a failure. Print what it is and exit clean.
+		if s := strings.TrimSpace(out.Stdout); s != "" {
+			fmt.Println(pal().Muted(s))
+		}
+		return
+	}
 	if !out.OK {
+		if approved {
+			if s := strings.TrimSpace(out.Stderr); s != "" {
+				fmt.Fprintln(os.Stderr, s)
+			}
+			return
+		}
 		fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
 		os.Exit(1)
 	}
@@ -858,6 +1099,10 @@ func runApprove(args []string) {
 
 // runReject implements `panda reject <id> [--reason s]` — rejects a reviewed
 // task (review -> failed). Kernel-form replacement for the web panel's reject.
+// The reject must travel through the scheduler core like `panda cancel` does:
+// a delegated task's executor also parks a review copy, and only a task_cancel
+// over the bus takes it out — a local store write would leave that copy
+// approvable, running work the origin explicitly denied.
 func runReject(args []string) {
 	fs := flag.NewFlagSet("reject", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
@@ -873,14 +1118,17 @@ func runReject(args []string) {
 	if err != nil {
 		fatal("load config", err)
 	}
-	db, store, err := panelStore(cfg)
+	engine, err := askengine.New(context.Background(), cfg, askengine.Options{
+		CardPath:   defaultCardPath(),
+		ConfigPath: *configPath,
+	})
 	if err != nil {
-		fatal("open store", err)
+		fatal("ask engine", err)
 	}
-	defer db.Close()
+	defer engine.Close()
 
-	id = resolveTaskRef(store, id)
-	if err := store.Reject(context.Background(), id, *reason); err != nil {
+	id = resolveTaskRef(engine.TaskStore(), id)
+	if err := engine.RejectTask(context.Background(), id, *reason); err != nil {
 		fatal("reject", err)
 	}
 	if jsonOutput {

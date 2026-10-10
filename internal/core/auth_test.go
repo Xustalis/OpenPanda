@@ -45,6 +45,26 @@ func isTimeout(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
+// expectHelloReject reads the one frame a rejecting listener owes a failed
+// hello: a hello_reject carrying the fixed reason code, after which the
+// connection closes. It returns the reason for the test to pin.
+func expectHelloReject(t *testing.T, ws *websocket.Conn) string {
+	t.Helper()
+	_ = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var env bus.Envelope
+	if err := ws.ReadJSON(&env); err != nil {
+		t.Fatalf("read hello_reject: %v", err)
+	}
+	if env.Type != bus.MsgHelloReject {
+		t.Fatalf("expected hello_reject, got %q", env.Type)
+	}
+	var p bus.HelloRejectPayload
+	if err := env.PayloadInto(&p); err != nil {
+		t.Fatalf("decode hello_reject: %v", err)
+	}
+	return p.Reason
+}
+
 // taskEventsContain reports whether any task_events data_json for taskID
 // contains substr.
 func taskEventsContain(c *Core, ctx context.Context, taskID, substr string) bool {
@@ -61,7 +81,9 @@ func taskEventsContain(c *Core, ctx context.Context, taskID, substr string) bool
 }
 
 // TestRejectBadHelloSig verifies a hello carrying a bad HMAC is rejected: the
-// peer is not registered and no hello reply is sent (design §16 / P0-1).
+// peer is not registered, no hello reply is sent, and the one frame the
+// listener owes the dialer is a hello_reject naming the reason (design §16 /
+// P0-1) — without it the dialer saw "connected" then EOF and kept redialing.
 func TestRejectBadHelloSig(t *testing.T) {
 	ctx := context.Background()
 	worker := newCoreWithNative(t, "worker", "127.0.0.1:17970", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
@@ -79,11 +101,8 @@ func TestRejectBadHelloSig(t *testing.T) {
 		t.Fatalf("write hello: %v", err)
 	}
 
-	// No hello reply should arrive: the bad signature is rejected. A read
-	// timeout (no frame) is the expected outcome.
-	_ = ws.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-	if _, _, err := ws.ReadMessage(); !isTimeout(err) {
-		t.Fatalf("expected no hello reply (timeout), got err=%v", err)
+	if reason := expectHelloReject(t, ws); reason != "auth" {
+		t.Fatalf("hello_reject reason = %q, want auth", reason)
 	}
 
 	worker.mu.RLock()
@@ -127,14 +146,14 @@ func TestRejectEd25519OnlyHello(t *testing.T) {
 		return env
 	}
 
-	// Shape 1: no HMAC at all — the Ed25519 pair alone must not admit.
+	// Shape 1: no HMAC at all — the Ed25519 pair alone must not admit. The
+	// verdict frame is hello_reject(auth), never a hello reply.
 	ws1 := rawDial(t, "127.0.0.1:17974")
 	if err := ws1.WriteJSON(mkHello("")); err != nil {
 		t.Fatalf("write ed25519-only hello: %v", err)
 	}
-	_ = ws1.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-	if _, _, err := ws1.ReadMessage(); !isTimeout(err) {
-		t.Fatalf("ed25519-only hello got a reply — self-asserted keys must not authenticate, err=%v", err)
+	if reason := expectHelloReject(t, ws1); reason != "auth" {
+		t.Fatalf("ed25519-only hello reject reason = %q, want auth", reason)
 	}
 
 	// Shape 2: Ed25519 pair plus a wrong-secret HMAC — same verdict.
@@ -142,9 +161,8 @@ func TestRejectEd25519OnlyHello(t *testing.T) {
 	if err := ws2.WriteJSON(mkHello(bus.HelloSigN("wrong-secret", "attacker", ts, nonce))); err != nil {
 		t.Fatalf("write ed25519+wrong-hmac hello: %v", err)
 	}
-	_ = ws2.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-	if _, _, err := ws2.ReadMessage(); !isTimeout(err) {
-		t.Fatalf("ed25519 hello with a bad HMAC got a reply, err=%v", err)
+	if reason := expectHelloReject(t, ws2); reason != "auth" {
+		t.Fatalf("ed25519+wrong-hmac hello reject reason = %q, want auth", reason)
 	}
 
 	worker.mu.RLock()
@@ -177,9 +195,8 @@ func TestRejectHelloClaimingSelfID(t *testing.T) {
 	if err := ws.WriteJSON(env); err != nil {
 		t.Fatalf("write self-claiming hello: %v", err)
 	}
-	_ = ws.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-	if _, _, err := ws.ReadMessage(); !isTimeout(err) {
-		t.Fatalf("hello claiming our own node id got a reply, err=%v", err)
+	if reason := expectHelloReject(t, ws); reason != "identity" {
+		t.Fatalf("self-claiming hello reject reason = %q, want identity", reason)
 	}
 	worker.mu.RLock()
 	defer worker.mu.RUnlock()
@@ -232,9 +249,8 @@ func TestRejectReplayedHello(t *testing.T) {
 	if err := ws2.WriteJSON(mkHello("h-1")); err != nil {
 		t.Fatalf("write verbatim replay: %v", err)
 	}
-	_ = ws2.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-	if _, _, err := ws2.ReadMessage(); !isTimeout(err) {
-		t.Fatalf("verbatim replay got a reply, err=%v", err)
+	if reason := expectHelloReject(t, ws2); reason != "replay" {
+		t.Fatalf("verbatim replay reject reason = %q, want replay", reason)
 	}
 
 	// Replay under a rewritten msg_id: the unsigned field must not matter.
@@ -242,9 +258,8 @@ func TestRejectReplayedHello(t *testing.T) {
 	if err := ws3.WriteJSON(mkHello("h-2-different")); err != nil {
 		t.Fatalf("write msgid-rewritten replay: %v", err)
 	}
-	_ = ws3.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-	if _, _, err := ws3.ReadMessage(); !isTimeout(err) {
-		t.Fatalf("msgid-rewritten replay got a reply — dedup key must not include msg_id, err=%v", err)
+	if reason := expectHelloReject(t, ws3); reason != "replay" {
+		t.Fatalf("msgid-rewritten replay reject reason = %q, want replay (dedup key must not include msg_id)", reason)
 	}
 }
 

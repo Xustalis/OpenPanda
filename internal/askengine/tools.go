@@ -593,6 +593,17 @@ func toolResultsDigest(digest []string, loc i18n.Locale) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// interruptionNote is the compact stand-in for the raw digest when a TASK
+// already carries the outcome: the model was cut off mid-loop, the task block
+// is the real result, and the tool transcript belongs behind `task show`
+// rather than dumped into the reply.
+func interruptionNote(n int, taskID string, loc i18n.Locale) string {
+	if loc == i18n.English {
+		return fmt.Sprintf("The model stopped after %d tool operation(s) without a final summary. The task result above is what actually ran; full output: `panda task show %s`.", n, taskID)
+	}
+	return fmt.Sprintf("模型在完成 %d 项工具操作后中断，未生成最终总结。上方任务结果即为实际执行内容；完整输出见 `panda task show %s`。", n, taskID)
+}
+
 // registerMCPTools lists the tools a stdio MCP server advertises and registers
 // each as an entry-model tool whose Run delegates to the server. The server is
 // spawned and owned by the Engine; this only imports its tool surface.

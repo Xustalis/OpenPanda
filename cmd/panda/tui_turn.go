@@ -119,19 +119,28 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 	}
 	out := msg.out
 	if out != nil && out.NeedsApproval && out.Approval != nil {
-		m.pending = out
-		m.pendingWorkDir = m.turnWorkDir
-		m.mode = modeApproving
-		m.approvalSel = 1 // arrows + Enter start on deny, the [y/N] safe default
-		m.approvalScope = out.Approval.Scope
-		if m.approvalScope == "" {
-			m.approvalScope = projectstore.ScopeSession
-		}
 		// The watcher stays quiet while the card is up: the parked task's own
 		// "review" state is what the card is showing.
-		return m, nil // the card renders in View; keys handled by onApprovalKey
+		return m.enterApproval(out, m.turnWorkDir)
 	}
 	return m.commit(out)
+}
+
+// enterApproval parks a NeedsApproval result on the approval card: the human
+// gate holds the turn open until a keypress answers it (View renders the card;
+// onApprovalKey handles the keys). workDir is where an approve's resume runs —
+// the ask's tree for a turn-raised gate, the resume's own tree for a chained
+// plan gate.
+func (m tuiModel) enterApproval(out *askengine.Result, workDir string) (tea.Model, tea.Cmd) {
+	m.pending = out
+	m.pendingWorkDir = workDir
+	m.mode = modeApproving
+	m.approvalSel = 1 // arrows + Enter start on deny, the [y/N] safe default
+	m.approvalScope = out.Approval.Scope
+	if m.approvalScope == "" {
+		m.approvalScope = projectstore.ScopeSession
+	}
+	return m, nil
 }
 
 // onResumed commits the outcome of a ResumeApproved re-run.
@@ -142,8 +151,16 @@ func (m tuiModel) onResumed(msg resumedMsg) (tea.Model, tea.Cmd) {
 	m.mode = modeIdle
 	m.stream = nil
 	m.pending = nil
+	resumeWorkDir := m.pendingWorkDir
 	m.pendingWorkDir = ""
-	return m.commit(msg.out)
+	out := msg.out
+	// A resumed plan stage can surface the NEXT parked stage — the follow
+	// chained inside startResume ends at the human gate again. The same card
+	// answers it; commit would have rendered the gate as a finished turn.
+	if out != nil && out.NeedsApproval && out.Approval != nil {
+		return m.enterApproval(out, resumeWorkDir)
+	}
+	return m.commit(out)
 }
 
 // turnEnded releases the out-of-band watcher and hands back the command that
@@ -207,43 +224,50 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 		}
 		if report := strings.TrimSpace(out.Answer); report != "" {
 			body := report
-			if !out.OK {
+			// Only a result with failure evidence gets the exit line: a task
+			// that never failed (queued, parked, released) carries OK=false
+			// and an empty stderr, and "exit 0: " under a fine report reads
+			// as a failure that never happened.
+			if !out.OK && (out.ExitCode != 0 || strings.TrimSpace(out.Stderr) != "") {
 				body += fmt.Sprintf("\nexit %d: %s", out.ExitCode, strings.TrimSpace(out.Stderr))
 			}
 			if out.TaskID != "" && out.TaskState != "" {
 				meta = i18n.Tf(loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
 			}
-			return block{kind: blockTask, ok: out.OK, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
+			return block{kind: blockTask, ok: out.OK, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
 		}
 		if summary := strings.TrimSpace(out.Report); summary != "" {
 			// The LLM summary is the whole display, matching the classic REPL:
 			// it prints the summary and stops. Appending the raw stdout here
 			// buried the readable report under a wall of execution log.
-			return block{kind: blockTask, ok: out.OK, body: summary, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
+			return block{kind: blockTask, ok: out.OK, body: summary, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
 		}
 		if out.OK {
 			// When no LLM summary was generated (queue-parked, budget-cut, summarizer
 			// degraded), fall back to the cleaned agent output so the user sees the
 			// actual work result rather than a blank note.
 			if log := cleanedTaskLog(loc, out.Stdout); log != "" {
-				return block{kind: blockTask, ok: true, body: log, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
+				return block{kind: blockTask, ok: true, body: log, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
 			}
 			body := i18n.T(loc, "tui.task.noSummary")
 			if out.TaskID != "" {
 				body += " " + i18n.Tf(loc, "tui.task.rawLogHint", "id", out.TaskID)
 			}
-			return block{kind: blockTask, ok: true, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
+			return block{kind: blockTask, ok: true, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
 		}
 		// Failure keeps its exit evidence, with a runaway stderr tail-capped
 		// so a noisy command cannot flood the transcript.
-		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, cleanedTaskLog(loc, out.Stderr)), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
+		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, cleanedTaskLog(loc, out.Stderr)), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
 	case "plan":
 		// A plan that failed to start has no board to follow and no stages, so
 		// its summary line would read "plan  · 0 stages" — a failure rendered
-		// as a success. Surface it as the error it is, the way the classic loop
-		// does.
-		if !out.OK {
+		// as a success. A non-empty board means the engine followed the plan
+		// to a stage's failure: surface that, not "could not start".
+		if !out.OK && len(out.PlanStages) == 0 {
 			return block{kind: blockError, body: i18n.Tf(loc, "cli.plan.failed", "err", out.Stderr)}
+		}
+		if !out.OK {
+			return block{kind: blockError, body: i18n.Tf(loc, "cli.plan.stageFailed", "err", out.Stderr)}
 		}
 		return block{kind: blockInfo, body: planSummaryLine(out)}
 	default: // answer
@@ -309,10 +333,19 @@ func resultCostMeta(out *askengine.Result) string {
 	return strings.Join(parts, " · ")
 }
 
-// planSummaryLine is the one-line commit for a started plan: a plan runs
-// asynchronously, so the transcript records that it started and how to follow it.
+// planSummaryLine is the one-line commit for a plan result: what it is, and
+// where the follow ended — all stages done, a stage parked for a human, or
+// the watch detached with work still running.
 func planSummaryLine(out *askengine.Result) string {
-	return fmt.Sprintf("plan %s · %d stages · %s", out.PlanID, len(out.PlanStages), out.PlanGoal)
+	s := fmt.Sprintf("plan %s · %d stages · %s", out.PlanID, len(out.PlanStages), out.PlanGoal)
+	switch planBoardState(out.PlanStages) {
+	case "done":
+		return s + " · done"
+	case "awaiting":
+		return s + " · awaiting approval"
+	default:
+		return s
+	}
 }
 
 // approvalScopes is the card's remember-scope axis in display order: the
@@ -411,7 +444,11 @@ func (m tuiModel) approvePending() (tea.Model, tea.Cmd) {
 	// work path — for an irreversible task that is the wrong directory, not
 	// merely a cosmetic difference. An out-of-band task (watcher-raised card)
 	// carries no session tree, and an empty workDir keeps its persisted one.
-	stream, pump := startResume(m.engine, req.TaskID, m.pendingWorkDir)
+	// A stage parked inside a plan resumes the pipeline, not just the task:
+	// pass the plan id (the plan result carries it; so does the synthesized
+	// watcher card for a stage row) so the resume stream re-enters the stage
+	// watch and the next parked stage or verdict lands back on this turn.
+	stream, pump := startResume(m.engine, req.TaskID, m.pending.PlanID, m.pendingWorkDir)
 	m.stream = stream
 	cmds := []tea.Cmd{m.sp.Tick, pump}
 	if note != "" {

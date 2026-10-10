@@ -44,3 +44,23 @@ func UUIDv7() (string, error) {
 	hex.Encode(out[24:36], b[10:16])
 	return string(out[:]), nil
 }
+
+// IsUUIDv7 reports whether s is a canonical lowercase UUIDv7 — the shape
+// UUIDv7 mints, version nibble pinned — so callers may order-compare only
+// ids the timestamp layout actually sorts. An arbitrary foreign string must
+// not win "newer" just because it happens to sort high.
+func IsUUIDv7(s string) bool {
+	if len(s) != 36 || s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' || s[14] != '7' {
+		return false
+	}
+	for i := 0; i < 36; i++ {
+		switch i {
+		case 8, 13, 18, 23:
+			continue
+		}
+		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}

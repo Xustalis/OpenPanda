@@ -10,13 +10,14 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
-	"math/rand/v2"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -26,6 +27,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/executil"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -43,21 +45,6 @@ import (
 )
 
 var version = versionpkg.Version
-
-// peerFailLogEvery bounds the per-peer WARN stream a dead peer produces: at
-// the 30s steady-state backoff, one line every 20th failure is roughly one
-// line per ~10 minutes — enough to keep a multi-day outage greppable without
-// the log growth LaunchAgent's unrotated /tmp files would turn into.
-const peerFailLogEvery = 20
-
-// Redial backoff caps. The steady-state cap keeps a permanently offline peer
-// cheap to probe; with custody in hand the cap collapses so a parked task —
-// whose delivery IS the reconnect — waits seconds between attempts, not
-// half-minutes, on the flappy links real deployments run over.
-const (
-	peerBackoffCap        = 30 * time.Second
-	peerBackoffCapCustody = 5 * time.Second
-)
 
 func main() {
 	// A Windows self-update renames the running image to <exe>.old because the
@@ -232,6 +219,9 @@ func main() {
 		case "version":
 			printVersion(args)
 			return
+		case "completion":
+			runCompletion(args)
+			return
 		case "read", "view", "cat", "md", "markdown":
 			runRead(args)
 			return
@@ -243,6 +233,16 @@ func main() {
 			// automatically read and render it without requiring a subcommand.
 			if fi, err := os.Stat(sub); err == nil && !fi.IsDir() {
 				runRead(append([]string{sub}, args...))
+				return
+			}
+
+			// Bare-input routing: words that can't be a command get treated
+			// as the prompt they almost surely are (`panda fix the bug`,
+			// `panda 你好`), while a single all-lowercase ASCII word stays a
+			// probable typo and keeps the did-you-mean error below — the one
+			// shape where "send it to the model" would surprise.
+			if bareInputIsAsk(sub, args) {
+				runAsk(append([]string{sub}, args...))
 				return
 			}
 
@@ -263,6 +263,7 @@ func main() {
 			if s := suggest(sub, subcommandNames()); s != "" {
 				fmt.Fprintf(os.Stderr, "  %s\n", i18n.Tf(loc, "repl.didyoumean", "cmd", p.Command(s)))
 			}
+			fmt.Fprintf(os.Stderr, "  %s\n", p.Muted(i18n.T(loc, "cli.unknownSub.askHint")))
 			fmt.Fprintf(os.Stderr, "  %s\n", p.Muted(i18n.T(loc, "cli.help.more")))
 			os.Exit(2)
 		}
@@ -284,8 +285,53 @@ func subcommandNames() []string {
 		"reminder", "detect", "card", "init", "metrics", "heatmap", "audit", "session",
 		"sessions", "memory", "config", "model", "models", "agents", "project",
 		"auth", "rpc",
-		"read", "view", "cat", "md", "markdown", "version", "help",
+		"read", "view", "cat", "md", "markdown", "version", "help", "completion",
 	}
+}
+
+// looksLikeSubcommand reports whether a bare argv word could plausibly be a
+// mistyped subcommand name: all-lowercase ASCII letters, digits, '-' and '_'.
+// A token carrying anything else — CJK, uppercase, punctuation — can never be
+// a typo of an all-lowercase command, so routing it to the error path would
+// only ever insult a prompt.
+func looksLikeSubcommand(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// bareInputIsAsk decides the default branch's fate for an unrecognized first
+// word. Two or more real positional words read as a sentence (`fix the bug`)
+// and go to ask; so does a single token that cannot spell a command (`你好`,
+// `Deploy`, `don't`). A lone lowercase-ASCII word stays an error — typo
+// country. Flag tokens and the values of ask's known value-flags don't count
+// as words: `panda fix --project x` is a one-word line, not a phrase.
+func bareInputIsAsk(sub string, rest []string) bool {
+	if !looksLikeSubcommand(sub) {
+		return true
+	}
+	skipNext := false
+	for _, a := range rest {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if strings.HasPrefix(a, "-") && a != "-" {
+			name := strings.TrimLeft(a, "-")
+			if !strings.Contains(name, "=") && askValueFlags[name] {
+				skipNext = true
+			}
+			continue
+		}
+		return true // a second bare word makes it a phrase
+	}
+	return false
 }
 
 // parseSubcommand returns the first bare word (the subcommand) plus the rest
@@ -312,6 +358,12 @@ func runDaemon(args []string) {
 	cardPath := fs.String("card", cardFlagDefault(), fmt.Sprintf("path to capabilities.yaml (default: discovered — ./capabilities.yaml, next to the resolved config, or %s)", systemCardPath()))
 	fs.Parse(args)
 
+	// Before anything looks for an agent CLI: a launchd/systemd/task-scheduler
+	// launch inherits a minimal PATH, and the CLIs live in user dirs it never
+	// contains — the node would advertise zero agents and peers would route
+	// no work to it.
+	executil.AugmentProcessPath()
+
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
@@ -334,7 +386,9 @@ func runDaemon(args []string) {
 		}
 	}
 
-	log.Setup(cfg.Log.Level, nil)
+	// A foreground daemon's stdout is its operator's console: JSON lines are
+	// the right shape for journald and wrong shape for eyes.
+	log.SetupTTY(cfg.Log.Level, nil, stdoutIsTTY())
 	logger := log.From(context.Background())
 
 	db, err := openStore(cfg)
@@ -381,6 +435,10 @@ func runDaemon(args []string) {
 		fatal("node id", fmt.Errorf("%q ends in an ephemeral-style -8hex suffix; it would alias onto %q — rename the node", runtimeNodeID, base))
 	}
 	coreNode := core.NewCore(db, runtimeNodeID, card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
+	// This process holds the identity lock for its lifetime — the hello it
+	// sends may claim edge authority so a borrowed sibling session holding
+	// a peer conn yields when the real daemon redials.
+	coreNode.SetEdgeAuthority(true)
 	coreNode.SetRouterPolicy(cfg.Injection, cfg.Routing)
 	// Extended-policy agent runs expose the node's MCP server to the
 	// delegated agent CLI (work-dir .mcp.json); minimal policy ignores it.
@@ -451,8 +509,46 @@ func runDaemon(args []string) {
 			logger.Info("subprocess sandbox enabled", "mode", mode, "backend", backend)
 		}
 	}
+	// A secret-less node cannot mesh at all: the WS listener refuses to
+	// start and discovery stays listen-only. Rather than booting a node
+	// that is silently unreachable, mint one here and persist it into the
+	// config so the next start (and any `panda nodes`/pair output) sees the
+	// same material. The secret creates a standalone mesh domain — a node
+	// joining an existing mesh later adopts the inviter's secret via pair.
+	if cfg.Network.SharedSecret == "" {
+		// Silent rekey guard: a node that HAS a mesh — configured peers, or
+		// registered remote nodes in the directory — but no secret almost
+		// certainly lost its credential (OPENPANDA_SHARED_SECRET not passed
+		// this start, or the file's field was cleared). Minting a fresh
+		// secret anyway exiles the node permanently: every configured peer
+		// rejects its hello until the ORIGINAL secret is restored. Scream
+		// about it, and keep the wrong value off disk — a persisted mismatch
+		// would exile the node on every future env-less start too.
+		meshed := len(cfg.Network.Peers) > 0 || hasMeshHistory(db, runtimeNodeID)
+		if secret, serr := generateSharedSecret(); serr == nil {
+			cfg.Network.SharedSecret = secret
+			switch {
+			case meshed:
+				logger.Error("network.shared_secret is empty on a node that has meshed before — "+
+					"a fresh in-memory secret was minted and configured peers WILL REJECT it. "+
+					"If this node previously joined a mesh via OPENPANDA_SHARED_SECRET or `panda pair`, "+
+					"stop it and restore the original secret; pairing again also re-adopts the mesh secret",
+					"configured_peers", len(cfg.Network.Peers))
+			default:
+				if werr := config.UpdateNetworkSection(*configPath,
+					config.NetworkConfig{SharedSecret: secret}); werr != nil {
+					logger.Warn("generated shared secret could not be persisted (in-memory only)", "err", werr)
+				} else {
+					logger.Info("generated and saved shared secret", "config", *configPath)
+				}
+			}
+		} else {
+			logger.Warn("could not generate shared secret", "err", serr)
+		}
+	}
 	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
 	coreNode.SetAllowCleartext(cfg.Network.AllowCleartext)
+	coreNode.SetCleartextAllowlist(cfg.Network.AllowCleartextFor)
 	// The artifact pool is the data plane: a stage's packed output, named by its
 	// hash, that a later stage on another node pulls over the bus. Without it a
 	// delegated task can only carry a path, which means nothing on the node that
@@ -514,18 +610,27 @@ func runDaemon(args []string) {
 
 	// Hot reload (阶段 3): SIGHUP re-reads the capability card and rebroadcasts
 	// it — the signal `panda card` write commands send after touching the file.
-	// A separate channel, deliberately: folding SIGHUP into the NotifyContext
+	// The same signal re-reads config.yaml's mutable network half (peers,
+	// secret, cleartext policy): `nodes add`/`disconnect`/`pair` signal the
+	// daemon after writing, so a peer change is live without a restart. A
+	// separate channel, deliberately: folding SIGHUP into the NotifyContext
 	// above would make it shut the daemon down, the exact opposite of intent.
 	// On Windows the notification simply never fires (the OS does not deliver
 	// the signal), so the CLI prints its restart hint instead.
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
-	guard.Go(logger, "daemon: SIGHUP card reload", cancel, func() {
+	guard.Go(logger, "daemon: SIGHUP hot reload", cancel, func() {
 		for range hup {
 			if err := coreNode.ReloadCard(context.Background(), *cardPath); err != nil {
 				logger.Warn("reload card on SIGHUP", "err", err)
 			}
+			reloaded, err := config.Load(*configPath)
+			if err != nil {
+				logger.Warn("reload config on SIGHUP", "err", err)
+				continue
+			}
+			coreNode.ApplyNetworkConfig(ctx, reloaded.Network)
 		}
 	})
 
@@ -652,105 +757,47 @@ func runDaemon(args []string) {
 	// so the socket neither proves nor admits anything.
 	if cfg.Network.DiscoveryAddr != "off" {
 		guard.Go(logger, "daemon: discovery", cancel, func() {
-			coreNode.RunDiscovery(ctx, cfg.Network.DiscoveryAddrOrDefault(), cfg.Network.ListenAddr)
+			coreNode.RunDiscovery(ctx, cfg.Network.DiscoveryAddrOrDefault(), cfg.Network.ListenAddr, cfg.Network.DiscoveryAutoDial)
 		})
 	}
 
-	for _, peer := range cfg.Network.Peers {
-		if strings.HasPrefix(peer, "punch:") {
-			// A punch entry names a node id, not an address: the peer is
-			// NAT-bound and reachable only through the farsky pinhole
-			// handshake. Keep retrying until a UDP route exists; the
-			// keepalive loop then holds the mapping, and a lost mapping is
-			// re-punched on the next tick.
-			id := strings.TrimPrefix(peer, "punch:")
-			guard.Go(logger, "daemon: punch "+peer, cancel, func() {
-				punchFails := 0
-				for {
-					if coreNode.UDPPort() == 0 {
-						logger.Warn("punch peer configured but the datagram plane is off (network.udp_listen)", "peer", id)
-						return
-					}
-					if coreNode.UDPRoute(id) == nil {
-						if err := coreNode.PunchPeer(ctx, id); err != nil {
-							punchFails++
-							// Same throttling as the dial loop below: first
-							// failure is news, a steady-state retry stream
-							// every 30s is not — log a sparse beat instead.
-							if punchFails == 1 || punchFails%peerFailLogEvery == 0 {
-								logger.Warn("punch offer failed", "peer", id, "err", err, "consecutive", punchFails)
-							}
-						}
-					} else if punchFails > 0 {
-						logger.Info("punch route established", "peer", id, "after_failures", punchFails)
-						punchFails = 0
-					}
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(30 * time.Second):
-					}
-				}
-			})
-			continue
+	// Configured peer edges: one keepalive goroutine per address, owned by
+	// the core so a config reload (SIGHUP or `nodes add`) can re-sync the
+	// set without a restart — ws:// / wss:// entries get the dial loop,
+	// "punch:<id>" entries get the NAT-pinhole loop.
+	// Pairing join hook: when an interactive pair_hello session is
+	// confirmed, the initiator's address joins the dial list and applies
+	// hot — persisting so the pairing survives restarts exactly like a
+	// `nodes add` would have.
+	coreNode.SetPairJoinHook(func(peerAddr string) error {
+		fresh, err := config.Load(*configPath)
+		if err != nil {
+			return err
 		}
-		guard.Go(logger, "daemon: peer keepalive "+peer, cancel, func() {
-			backoff := 1 * time.Second
-			dialFails := 0
-			// jitter spreads a fleet-wide reconnect over a window instead of
-			// having every node redial in lockstep the second the peer returns —
-			// the classic thundering herd after a shared outage.
-			jitter := func(d time.Duration) time.Duration {
-				return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
-			}
-			for {
-				err := coreNode.MaintainPeer(ctx, peer)
-				if err != nil {
-					// Dial or hello failed; back off exponentially so we do
-					// not hot-loop a permanently offline peer.
-					dialFails++
-					// First failure and the recovery are the news — a line
-					// every redial (~30s steady-state) grew an unbounded WARN
-					// stream for a peer that is simply off, and the
-					// LaunchAgent logs have no rotation. Keep a sparse beat
-					// every ~20th failure so the outage stays greppable
-					// without owning the log.
-					if dialFails == 1 || dialFails%peerFailLogEvery == 0 {
-						logger.Warn("peer dial failed", "peer", peer, "err", err, "consecutive", dialFails)
-					}
-					// Custody-aware cadence: with an outbox holding rows the
-					// peer owes (or is owed) work, probing the contact
-					// opportunity is the priority — the steady-state cap
-					// would stretch a flappy link's recovery into minutes of
-					// needless waiting for a parked task that would flow the
-					// moment the dial lands.
-					capTo := peerBackoffCap
-					if coreNode.HasPendingCustody(ctx) {
-						capTo = peerBackoffCapCustody
-					}
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(jitter(backoff)):
-					}
-					backoff = min(backoff*2, capTo)
-					continue
-				}
-				if dialFails > 0 {
-					logger.Info("peer reconnected", "peer", peer, "after_failures", dialFails)
-					dialFails = 0
-				}
-				// The connection was established and later dropped; reset the
-				// backoff and reconnect promptly.
-				backoff = 1 * time.Second
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(jitter(backoff)):
-				}
-			}
+		peers := fresh.Network.Peers
+		if !slices.Contains(peers, peerAddr) {
+			peers = append(peers, peerAddr)
+		}
+		// Secret deliberately omitted: when it arrives via
+		// OPENPANDA_SHARED_SECRET, Load() injects it into the struct — and
+		// writing the struct back to disk would leak the env-provided
+		// material into config.yaml. The hook only needs to persist the
+		// peer edge; the secret lives in memory for ApplyNetworkConfig.
+		if err := config.UpdateNetworkSection(configWritePath(*configPath), config.NetworkConfig{
+			Peers: peers,
+		}); err != nil {
+			return err
+		}
+		coreNode.ApplyNetworkConfig(ctx, config.NetworkConfig{
+			SharedSecret:      fresh.Network.SharedSecret,
+			Peers:             peers,
+			AllowCleartext:    fresh.Network.AllowCleartext,
+			AllowCleartextFor: fresh.Network.AllowCleartextFor,
 		})
-	}
+		return nil
+	})
+
+	coreNode.SyncPeers(ctx, cfg.Network.Peers)
 
 	logger.Info("panda core started",
 		"version", version,
@@ -769,11 +816,31 @@ func runDaemon(args []string) {
 	// Fail-closed transport auth (design §16 / P0-1): without a shared secret no
 	// peer can authenticate, so the WebSocket listener is not started at all —
 	// the node runs local-only rather than accepting unauthenticated peers.
+	// Reached only when the generation+persist above also failed.
 	if cfg.Network.SharedSecret == "" {
-		logger.Warn("websocket disabled: network.shared_secret is not set (refusing to accept unauthenticated peers)")
+		logger.Warn("websocket disabled: network.shared_secret is not set and could not be generated (refusing to accept unauthenticated peers)")
 	} else {
 		guard.Go(logger, "daemon: websocket listener", cancel, func() {
-			serveErr <- coreNode.Listen(ctx, cfg.Network.ListenAddr)
+			for {
+				err := coreNode.Listen(ctx, cfg.Network.ListenAddr)
+				if err == nil || ctx.Err() != nil {
+					serveErr <- err
+					return
+				}
+				// A bind failure here is usually a custody dispute, not a dead
+				// end: a same-identity engine that claimed the node row while
+				// this daemon was down holds the socket until it exits or
+				// demotes itself. Dying hands the box to the stray — keep
+				// retrying; the authoritative outbound dials reclaim the
+				// edges in the meantime.
+				logger.Warn("websocket listen failed, retrying", "err", err)
+				select {
+				case <-ctx.Done():
+					serveErr <- nil
+					return
+				case <-time.After(5 * time.Second):
+				}
+			}
 		})
 	}
 
@@ -790,6 +857,19 @@ func runDaemon(args []string) {
 			fatal("websocket server", err)
 		}
 	}
+}
+
+// hasMeshHistory reports whether this node's directory ever held a remote
+// node — the signal that an empty shared_secret is a lost credential, not a
+// first run. The self row is excluded because Register writes it on every
+// boot regardless of mesh membership.
+func hasMeshHistory(db *sql.DB, selfID string) bool {
+	var n int
+	if err := db.QueryRow(
+		`SELECT COUNT(1) FROM employee_cache WHERE id != ?`, selfID).Scan(&n); err != nil {
+		return false // can't prove history — stay on the first-run path
+	}
+	return n > 0
 }
 
 // schedulerTier maps a resource class to the DCPS-style scheduler tier used
@@ -919,6 +999,7 @@ func printUsage(w *os.File) {
 	line("  task <id>                                 show one task + timeline")
 	line("  task add --title T [--prompt P] [--priority low|medium|normal|high|critical]")
 	line("           [--project p] [--authorize]      enqueue a task (needs --card)")
+	line("           [--wait [--wait-timeout 30m]]    block until it settles, print result")
 	line("           [--agents a,b] [--mode parallel|serial]")
 	line("                                            run it on several harnesses as a plan")
 	line("  task priority <id> <level>                change a task's priority")
@@ -964,6 +1045,7 @@ func printUsage(w *os.File) {
 	line("  card native|agent|manual add|remove|set   structured card edits (comments kept,")
 	line("                                            validated, hot-reloaded into the daemon)")
 	line("  version|help                              version / this help")
+	line("  completion bash|zsh|fish                  shell completion script (source it)")
 	line("")
 	line("global flags: --config <path>, --card <path>, --mcp <cmd>, --json")
 	line("              (before or after the subcommand; --json = JSON output)")

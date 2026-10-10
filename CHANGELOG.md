@@ -44,6 +44,34 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
+## [0.0.11-alpha] - 2026-10-10
+
+The v0.0.11 alpha preview — codename **Periapsis**, the near point of the orbit: after Apoapsis reached outward to the LAN, this line tightens the mesh itself. Peer links negotiate per-connection AEAD encryption inside the signed hello; devices join a node network the way Bluetooth pairs — pick a device, compare the code, confirm on both sides — instead of copying secrets by hand; and every stage of a task's life reports where it actually stands. Hard-pinned work runs on the pinned node or fails honestly, never silently rerouted; a verdict produced while the link was down converges when the link returns (a reconnecting daemon reclaims its edge from a stray same-identity process, and terminal results re-push on every hello); approving a plan stage re-enters the plan watch instead of ending the turn at one task's receipt. Underneath, custody grew teeth: results, cancels and approvals park in durable outboxes through link flaps, the silence watchdog kills a genuinely stuck agent at 240 seconds instead of burning the full timeout, and remote stdout is transcoded from the executor's console code page so CJK text round-trips intact.
+
+### Added
+
+- **[Experimental] Bluetooth-style LAN pairing** — `panda pair` discovers devices on the LAN, both sides show the same short code, both confirm, and the devices join the node network; no secret copying, no address typing. Unsigned beacons are refused at admission, and secrets provided via environment variables stay off disk.
+- **[Experimental] Encrypted peer sessions** — every connection negotiates a per-session AEAD key (HKDF over the shared secret and both nonces) inside the signed hello. Legacy peers fall back to cleartext only under an explicit policy (`network.allow_cleartext_for`); plaintext dials off encrypted underlays are refused.
+- **Zero-config LAN discovery** — Ed25519-signed discovery beacons (replay-guarded, with single-use punch frames), a stable node identity keyed by `k:<pubkey>`, and auto-dial for a verified key across IP and instance drift. `panda nodes` marks signed beacons and warns on unsigned ones.
+- **Hard node pins, end to end** — plan stages and tasks carry their node pin through planning, routing and execution: the work runs on the named node or the task fails with an honest reason. Results record the executor and its workspace, so "where did this run" is answerable from the queue, the task card and the result itself.
+- **[Experimental] Binary data frames and bounded queue reads** — the bus negotiates binary frames for artifact transfer; settled-task retention and bounded queue reads keep long task histories cheap.
+- **Console and session UX** — the web pairing flow and node probe on admit, a fleet-page hardening pass, thread-rail pin/batch operations with live sync, pinned threads with bulk delete, and a session fingerprint on the change feed.
+
+### Fixed
+
+- **A verdict produced during a link outage now converges** — terminal results, cancels and approvals park in durable outboxes and re-deliver on the next hello, and a reconnect-time sweep re-pushes recent terminal verdicts even when no outbox row exists (a frame written into a half-dead socket used to vanish silently, stranding the delegator in `dispatched` until a lease lied about a timeout). A late `done` also reconciles a lease-expired failure — but never revives a human-rejected task.
+- **The real daemon always wins its edge** — hellos carry an authority bit set only by the lock-holding daemon, so it reclaims the peer edge from a stray same-identity process; a daemon whose listen port is held by such a stray retries the bind instead of dying, and the stray demotes its mesh duties the moment the daemon takes the node lock.
+- **Approvals cannot strand or lie** — an accepted decision mirrors to the sibling copy parked on the peer; a double approval no longer kills the delegator's copy; consent-parked copies converge on the executor's verdict; and a parked approval renders as an honest delivery receipt instead of a model-invented "still waiting for approval".
+- **Plans are followed to their verdict** — a started plan is watched until every stage settles or a human gate is reached; approving a parked stage re-enters the plan watch and surfaces the next gate, rather than ending the turn at one task's receipt.
+- **Stuck agents die visibly** — the silence watchdog now defaults to killing an agent that produces no output for 240 seconds (`timeouts.silence_s`; `-1` disables the kill), and a periodic heartbeat reports "agent still running" so a silent run is never mistaken for a dead one. The entry model also retries once on an empty completion instead of failing the whole turn.
+- **Windows output round-trips** — remote stdout is transcoded from the executor's console code page (GB18030/ShiftJIS/EUCKR/Big5), so CJK output no longer arrives as replacement characters; the scheduled daemon task runs through a wrapper script that keeps `daemon.log` rolling; adapters decode subprocess output as UTF-8 explicitly.
+- **Delegation no longer deadlocks or double-runs** — the parent-child resource deadlock is broken, a restricted session can still ask, the executor's plan sweep no longer kills delegated stages, and a zombie hello cannot resurrect an evicted connection.
+- **Kernel hardening** — shared-ledger ownership and artifact boundaries are enforced, consent grants sign the final payload, and peer addresses bind before the dial tie-break so a task is never routed onto an unproven link.
+
+### Changed
+
+- `timeouts.silence_s` semantics: unset or `0` now means the 240-second default kill (previously disabled); `-1` disables the kill while keeping the heartbeat.
+
 ## [0.0.10] - 2026-10-07 — "Apoapsis"
 
 The stable v0.0.10 — codename **Apoapsis**, the far point of the orbit. This cut folds the preview line (LAN auto-discovery with fingerprint-confirmed admission, TOFU key pinning, worktree-carrying delegation, the clarification loop, actuator dispatch, Ed25519-signed audit rows, OS-level sandboxing, UDP/NAT traversal, measured-capacity scheduling, and the Panda Paper console redesign) together with this cycle's additions: sessions are now a tree you can fork at any turn boundary, overflowing history compacts into a model-written running digest instead of being dropped, `panda rpc` opens an NDJSON-over-stdio embedding surface, and `panda auth login` brings subscription OAuth to the entry model. The release also relicenses the project to AGPL-3.0-or-later with dual commercial licensing — installs holding MIT-era consent re-confirm the terms once on first launch.

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, type DirectoryListing } from '../api/client'
 import { t } from '../i18n'
 import { Icon } from './icons'
 import { suggestProjectName } from './dir-utils'
+import { useModalFocus } from './modal-focus'
 
 export interface DirPickerProps {
   value?: string
@@ -110,6 +111,8 @@ function DirBrowserModal({
   const [listing, setListing] = useState<DirectoryListing | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const box = useRef<HTMLDivElement>(null)
+  useModalFocus(box, true)
 
   async function loadPath(path: string) {
     setLoading(true)
@@ -139,7 +142,19 @@ function DirBrowserModal({
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div class="modal dir-browser-modal" role="dialog" aria-modal="true">
+      <div
+        ref={box}
+        class="modal dir-browser-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('projects.selectDirTitle')}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.stopPropagation()
+            onClose()
+          }
+        }}
+      >
         <div class="dir-browser-header">
           <h2 class="modal-title">{t('projects.selectDirTitle')}</h2>
           <button type="button" class="btn-icon" onClick={onClose} title={t('common.close')}>

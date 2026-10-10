@@ -72,6 +72,16 @@ type Options struct {
 	// One-shot callers (panda ask) leave it off — their routing decision runs
 	// immediately and needs the conns settled first.
 	AsyncPeers bool
+	// MeshNode makes the engine a full network participant whenever it owns
+	// the node row (no daemon running): the WS listener comes up on
+	// network.listen_addr, configured peers get reconnect keepalives via
+	// SyncPeers, and LAN discovery gains auto-dial. `panda web` and the
+	// panel sidecar set it — both are long-lived, and without it a web-only
+	// node is an island: it could drain the queue but never be dialed, and
+	// a dropped peer edge stayed dead until restart. Interactive seats keep
+	// it off: the flap a short-lived REPL causes on peers outweighs the
+	// benefit (and a co-resident daemon makes the row borrowed anyway).
+	MeshNode bool
 	// ConfigPath is the file cfg was loaded from — the same path the caller
 	// passed to config.Load. It joins the sandbox's write-deny set so a
 	// sandboxed subprocess cannot rewrite the node's own configuration.
@@ -165,6 +175,8 @@ type Engine struct {
 	queueTasks bool
 	// asyncPeers mirrors Options.AsyncPeers.
 	asyncPeers bool
+	// meshNode mirrors Options.MeshNode.
+	meshNode bool
 	// replyASCII mirrors Options.ReplyASCII (per-engine classify option).
 	replyASCII bool
 	// locale is the user's active UI/prompt locale. localeMu guards both
@@ -323,10 +335,11 @@ func (e *Engine) ModelConfig() config.ModelConfig {
 // fields under the read lock never observe a torn mutation.
 func (e *Engine) MutateConfig(fn func(*config.Config)) {
 	e.cfgMu.Lock()
-	defer e.cfgMu.Unlock()
 	if e.cfg != nil {
 		fn(e.cfg)
 	}
+	e.cfgMu.Unlock()
+	e.applyNetworkConfig()
 }
 
 // MutateConfigErr is MutateConfig for fallible mutations — typically a
@@ -336,11 +349,40 @@ func (e *Engine) MutateConfig(fn func(*config.Config)) {
 // read-modify-write of config.yaml into a lost update.
 func (e *Engine) MutateConfigErr(fn func(*config.Config) error) error {
 	e.cfgMu.Lock()
-	defer e.cfgMu.Unlock()
 	if e.cfg == nil {
+		e.cfgMu.Unlock()
 		return nil
 	}
-	return fn(e.cfg)
+	err := fn(e.cfg)
+	e.cfgMu.Unlock()
+	if err == nil {
+		e.applyNetworkConfig()
+	}
+	return err
+}
+
+// applyNetworkConfig pushes the mutable network.* fields onto a live
+// scheduler after a config mutation: a mesh node's SyncPeers reconciles the
+// peer keepalive set (a /nodes add connects now, a /nodes disconnect drops
+// the loop and conn), and every engine picks up secret/cleartext edits for
+// its next outbound dial. On a non-mesh engine the peer sync is a no-op —
+// SyncPeers is still safe to call (it just starts loops), so the meshNode
+// guard decides which half applies.
+func (e *Engine) applyNetworkConfig() {
+	sched := e.sched.Load()
+	if sched == nil {
+		return
+	}
+	e.cfgMu.RLock()
+	n := e.cfg.Network
+	e.cfgMu.RUnlock()
+	if e.meshNode {
+		sched.ApplyNetworkConfig(e.schedCtx, n)
+		return
+	}
+	sched.SetSharedSecret(n.SharedSecret)
+	sched.SetAllowCleartext(n.AllowCleartext)
+	sched.SetCleartextAllowlist(n.AllowCleartextFor)
 }
 
 // ReadConfig runs fn under the read lock — the read half of MutateConfig, for
@@ -384,6 +426,18 @@ func (e *Engine) CancelTask(ctx context.Context, taskID string) ([]string, error
 		return core.NewSigningTaskStore(e.db, e.logger).CancelCascade(ctx, taskID)
 	}
 	return sched.CancelTree(ctx, taskID)
+}
+
+// RejectTask fails a reviewed task and propagates the rejection to the remote
+// executor holding its delegated review copy, on the same cancel path
+// CancelTask uses. Without the forward the executor's copy stayed in review
+// and a local approve there would run work the origin explicitly denied.
+func (e *Engine) RejectTask(ctx context.Context, taskID, reason string) error {
+	sched := e.sched.Load()
+	if sched == nil {
+		return core.NewSigningTaskStore(e.db, e.logger).Reject(ctx, taskID, reason)
+	}
+	return sched.RejectTree(ctx, taskID, reason)
 }
 
 // TaskStore returns the task store on the engine's database, for callers that
@@ -457,13 +511,28 @@ type Result struct {
 	Stdout    string
 	Stderr    string
 	ExitCode  int
-	Agent     string
-	Model     string
-	Injected  bool
+	// Deferred marks a parked-for-delivery outcome: the approval was
+	// accepted into an outbox because the executor's link is down, so the
+	// correct rendering is "queued for delivery" with exit 0 — not a
+	// failure. Mirrors TaskResultPayload.Deferred.
+	Deferred bool
+	Agent    string
+	Model    string
+	Injected bool
 	// Executor is the node that actually ran the task — this node's id for a
 	// local run, the peer's id for a delegated one. Empty when the result
 	// never reached an executor (route miss, early failure).
 	Executor string
+	// WorkDir is the workspace the executor ran in (the derived directory,
+	// not the submitter's pin) — carried on the wire so the origin can
+	// locate the produced files on the machine that made them.
+	WorkDir string
+	// RouteFallback names the peer the task was routed to before the link
+	// failed at send time and it ran locally instead. Empty for a clean
+	// local run or a real delegation — non-empty means Executor's local id
+	// understates the user's intent ("on the Mac") and the report should say
+	// so. The marker lives in the task's audit events (EvRouteFallback).
+	RouteFallback string
 	// Question carries the agent's clarification when the task parked in
 	// review on a PANDA_QUESTION marker (core §4.3): the surface should show
 	// it verbatim — it is the one thing standing between the task and done.
@@ -490,6 +559,10 @@ type Result struct {
 	PlanID     string
 	PlanGoal   string
 	PlanStages []core.Task
+	// Warning is a non-fatal advisory the surface should print — currently
+	// "no queue consumer is running" when the plan's stages were parked but
+	// nothing on this node will drain them. It does not change OK.
+	Warning string
 
 	// Cost of this ask, as reported by the entry model's provider (zero for
 	// providers that report no usage). The CLI shows them on its closing status
@@ -675,6 +748,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		logger:         logger,
 		queueTasks:     opts.QueueTasks,
 		asyncPeers:     opts.AsyncPeers,
+		meshNode:       opts.MeshNode,
 		replyASCII:     opts.ReplyASCII,
 		cardPath:       opts.CardPath,
 		configPath:     config.ResolvePath(opts.ConfigPath),
@@ -841,6 +915,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	sched.SetHostStatePaths(hostStatePaths(e.cfg))
 	sched.SetSharedSecret(e.cfg.Network.SharedSecret)
 	sched.SetAllowCleartext(e.cfg.Network.AllowCleartext)
+	sched.SetCleartextAllowlist(e.cfg.Network.AllowCleartextFor)
 	// OS sandbox (sandbox.*): the same contract the daemon installs — the
 	// environment filter always applies, and a configured mode wraps every
 	// subprocess this engine spawns in the platform's confinement with the
@@ -869,6 +944,20 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	e.schedCancel = cancel
 	e.sched.Store(sched) // store last: a non-nil load implies ctx/cancel set
 
+	// ownCtx scopes the duties only a node-row owner may run — the mesh
+	// listener, discovery, outbound edge keepalives, the queue consumer and
+	// the lifecycle monitor. This engine owns the row only provisionally:
+	// it probed the lock free at init because no daemon was up, and the
+	// moment a real daemon takes the lock these duties must die with it —
+	// or the stray keeps the listen port the daemon needs to bind and
+	// churns edges it no longer owns. watchNodeRow is the demotion tripwire.
+	ownCtx := schedCtx
+	if ownsRow {
+		var ownCancel context.CancelFunc
+		ownCtx, ownCancel = context.WithCancel(schedCtx)
+		go e.watchNodeRow(ownCtx, sched, ownCancel, card)
+	}
+
 	// The embedded core owns the LAN-discovery listener in a process that
 	// never runs `panda daemon` (the interactive REPL/TUI seat): without it
 	// the seat sees only fleet rows it already paired, never the pending
@@ -878,7 +967,24 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// the socket already.
 	sched.EnsureNodeKey()
 	if ownsRow && e.cfg.Network.DiscoveryAddr != "off" {
-		go sched.RunDiscovery(schedCtx, e.cfg.Network.DiscoveryAddrOrDefault(), e.cfg.Network.ListenAddr)
+		// Auto-dial only for a mesh-owning process (web console, sidecar): a
+		// long-lived owner behaves like the daemon. An interactive seat is
+		// short-lived, so edges it opens would flap for peers on every exit —
+		// the seat listens for pending hints only.
+		go sched.RunDiscovery(ownCtx, e.cfg.Network.DiscoveryAddrOrDefault(), e.cfg.Network.ListenAddr, e.meshNode)
+	}
+	// A mesh-owning engine also serves inbound peers and holds the outbound
+	// keepalives — the transport ownership a web-only node was missing when
+	// it could consume queued work but never be reached or redialed.
+	if ownsRow && e.meshNode {
+		if e.cfg.Network.SharedSecret != "" {
+			go func() {
+				if err := sched.Listen(ownCtx, e.cfg.Network.ListenAddr); err != nil {
+					e.logger.Warn("websocket listener failed", "addr", e.cfg.Network.ListenAddr, "err", err)
+				}
+			}()
+		}
+		sched.SyncPeers(ownCtx, e.cfg.Network.Peers)
 	}
 	e.setCardPath(cardPath)
 	// Re-arm the review hook on the new core's store: the notification that a
@@ -906,12 +1012,12 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// ask/REPL engines submit inline and must not unexpectedly drain
 	// persisted work either way.
 	if e.queueTasks && ownsRow {
-		sched.StartQueueScheduler(schedCtx)
+		sched.StartQueueScheduler(ownCtx)
 		// A queue engine executes tasks off the shared store, so it also owns
 		// the task-lifecycle sweeps: without them a waiting_context park never
 		// times out, an orphaned forward is never rescued, and an expired
 		// lease is never enforced — the task would stall with nobody told.
-		go sched.RunTaskMonitor(schedCtx)
+		go sched.RunTaskMonitor(ownCtx)
 	}
 	// Every engine reconciles its own executions against the store: a task
 	// cancelled or failed by another process must stop here too, not run on
@@ -926,6 +1032,12 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		// borrowed engine enqueues route and forward on the daemon's links
 		// through the shared store. On-demand Engine.DialPeer stays available
 		// for an explicit "nodes add".
+		return nil
+	}
+	if e.meshNode {
+		// SyncPeers above already owns every configured outbound edge (with
+		// reconnect keepalive), so the one-shot dial pass below would only
+		// double-dial into the arbitration it exists to deduplicate.
 		return nil
 	}
 	if e.asyncPeers {
@@ -953,6 +1065,39 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		}
 	}
 	return nil
+}
+
+// watchNodeRow demotes a provisional row owner back to borrowed status.
+// Every engine-side owner is provisional by construction: the real daemon is
+// a separate process, and an engine only probed the lock free because no
+// daemon was up at init. Once a daemon takes the node-identity lock, this
+// engine must shed the owner's duties — the mesh listener (which holds the
+// port the daemon needs to bind), LAN discovery, outbound edge keepalives,
+// the queue consumer and the lifecycle monitor — or it becomes the stray
+// that wedges the real node out. The probe is a cheap flock attempt; on
+// ErrAlreadyRunning the duties' ownCtx dies and the core stops claiming the
+// row, so its remaining conns arbitrate as ordinary siblings.
+func (e *Engine) watchNodeRow(ctx context.Context, sched *core.Core, demote context.CancelFunc, card ledger.Card) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		held, err := nodeidentity.Held(e.cfg.Node.Kind, card.NodeIdentity)
+		if err != nil {
+			continue // a transient lock failure is not proof of a new owner
+		}
+		if !held {
+			continue // still the only claimant — stay owner
+		}
+		e.logger.Warn("node row claimed by the daemon — demoting borrowed mesh duties")
+		sched.SetOwnsNodeRow(false)
+		demote()
+		return
+	}
 }
 
 // StreamCallbacks receives live progress while an ask converges. OnDelta
@@ -992,6 +1137,12 @@ const (
 	ProgressRoute ProgressKind = "route" // scheduler picked a node
 	ProgressExec  ProgressKind = "exec"  // the agent/adapter started running
 	ProgressJudge ProgressKind = "judge" // a supervision round is evaluating the result
+	// ProgressWait is the round following a task the queue parked — its link
+	// is not live yet, so the work has not started. Name carries the observed
+	// state ("queued", "dispatched"), emitted on entering the wait and on
+	// every state change, so the card keeps advancing while the round waits
+	// instead of sitting frozen at the dispatch.
+	ProgressWait ProgressKind = "wait"
 )
 
 // Progress is one structured progress event: the action, and the name of what
@@ -1053,6 +1204,8 @@ func (cb StreamCallbacks) progress(p Progress) {
 			return
 		}
 		cb.OnStatus(fmt.Sprintf("reviewing result (%s)%s…", p.Name, roundNote(p)))
+	case ProgressWait:
+		cb.OnStatus(fmt.Sprintf("watching the task (%s)…", p.Name))
 	}
 }
 
@@ -1300,11 +1453,24 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// successfully-executed queue operations).
 	var toolDigest []string
 	digestOrErr := func(err error) (*Result, error) {
-		if digest := toolResultsDigest(toolDigest, effectiveLocale); digest != "" {
-			if lastTask != nil {
-				lastTask.Answer = digest
-				return finalizeLastTask(lastTask), nil
+		if lastTask != nil {
+			// A task ran: its outcome IS the answer. Dumping the raw tool
+			// results beside it buries the outcome in logs the user never
+			// asked for (the live Windows report showed a ten-line task-list
+			// dump after a successful browser-open task); a compact
+			// interruption note keeps the honesty without the noise, and the
+			// transcript stays one `task show` away.
+			if len(toolDigest) > 0 {
+				note := interruptionNote(len(toolDigest), lastTask.TaskID, effectiveLocale)
+				if strings.TrimSpace(lastTask.Answer) == "" {
+					lastTask.Answer = note
+				} else if !strings.Contains(lastTask.Answer, note) {
+					lastTask.Answer = strings.TrimRight(lastTask.Answer, "\n") + "\n\n" + note
+				}
 			}
+			return finalizeLastTask(lastTask), nil
+		}
+		if digest := toolResultsDigest(toolDigest, effectiveLocale); digest != "" {
 			return &Result{Kind: "answer", Answer: digest}, nil
 		}
 		return nil, err
@@ -1442,6 +1608,14 @@ rounds:
 				// own event loop and resumes via ResumeApprovedReport.
 				return res, nil
 			}
+			if ctx.Err() != nil {
+				// The wait was released mid-flight (Esc / Ctrl-C): report the
+				// task's last observed state and end the round. The cancelled
+				// context would fail the next model call anyway, and the task
+				// itself keeps running — a released front end never cancels
+				// queued work.
+				return res, nil
+			}
 			taskRounds++
 			lastTask = res
 			// The sub-agent round: the task is one step of this conversation,
@@ -1456,7 +1630,7 @@ rounds:
 			)
 		case entry.KindPlan:
 			cb.progress(Progress{Kind: ProgressPlan, Name: out.Plan.Goal})
-			return e.startClassifiedPlan(ctx, out.Plan, authorize)
+			return e.startClassifiedPlan(ctx, out.Plan, authorize, cb)
 		case entry.KindToolCall:
 			calls := out.ToolCalls()
 			if len(calls) == 0 {
@@ -1588,7 +1762,7 @@ rounds:
 			return &Result{Kind: "answer", Answer: i18n.Tf(effectiveLocale, "ask.loop.noConvergePlan", "n", strconv.Itoa(maxRounds), "goal", final.Plan.Goal)}, nil
 		}
 		cb.progress(Progress{Kind: ProgressPlan, Name: final.Plan.Goal})
-		return e.startClassifiedPlan(ctx, final.Plan, authorize)
+		return e.startClassifiedPlan(ctx, final.Plan, authorize, cb)
 	}
 	if lastTask != nil {
 		lastTask.Answer = final.Answer
@@ -1700,7 +1874,7 @@ func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, er
 // tier-2 consent (core.StartPlan), so an irreversible stage parks in review for
 // a person instead of inheriting a blanket approval given to the whole sentence.
 // Consent for one shell command is not consent for a three-machine pipeline.
-func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, _ bool) (*Result, error) {
+func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, _ bool, cb StreamCallbacks) (*Result, error) {
 	sched := e.sched.Load()
 	if sched == nil {
 		return nil, fmt.Errorf("plan output requires a capability card (scheduler initialization failed)")
@@ -1724,10 +1898,37 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 	if serr != nil {
 		e.logger.Warn("askengine: read plan stages", "plan", planID, "err", serr)
 	}
+	res := &Result{Kind: "plan", PlanID: planID, PlanGoal: p.Goal, PlanStages: stages, OK: true}
+	// A plan is queue work: with no consumer anywhere the stages park forever
+	// and the "plan started" receipt reads like a handoff that never happened.
+	// This engine consuming (queueTasks) counts; so do a live daemon or web
+	// console on this node.
+	consumer := e.queueTasks
+	if !consumer {
+		e.cfgMu.RLock()
+		cfg := e.cfg
+		e.cfgMu.RUnlock()
+		consumer = core.QueueConsumerAlive(cfg)
+		if !consumer {
+			res.Warning = i18n.T(e.Locale(), "cli.queue.noConsumer")
+		}
+	}
+	// "Plan started" is a receipt, not an outcome. Like a queued task the
+	// pipeline is followed until every stage settles (or one parks for a
+	// human): the round keeps streaming stage progress and closes on the real
+	// verdict instead of going quiet at dispatch. Queue-mode surfaces are
+	// async by design and keep the immediate receipt; with no consumer
+	// anywhere the wait could never move, so the warning above stands alone.
+	if !e.queueTasks && consumer {
+		if board := e.awaitPlanSettled(ctx, sched, planID, cb); len(board) > 0 {
+			res.PlanStages = board
+			e.planBoardVerdict(ctx, sched.TaskStore(), res, board)
+		}
+	}
 	// The per-stage classify_result events are traced inside core.StartPlan at
 	// stage creation, before AdvancePlan releases anything — leading each
 	// stage's own execution events in the orbit timeline.
-	return &Result{Kind: "plan", PlanID: planID, PlanGoal: p.Goal, PlanStages: stages, OK: true}, nil
+	return res, nil
 }
 
 // gateAuthorized resolves the effective tier-2 consent for a task from the
@@ -1878,6 +2079,17 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	if err != nil {
 		return &Result{Kind: "task", TaskState: "failed", Stderr: err.Error(), ExitCode: 1}
 	}
+	// A parked task is not an outcome. When the queue holds the task — the
+	// pinned target's link is not live yet — Submit returns the receipt
+	// immediately, and converging the round on "queued" would end the session
+	// while the work has not started. Follow the row instead: the queue
+	// consumer claims it when the link comes up, and this round reports the
+	// outcome it actually reached. Queue-mode surfaces are async by design
+	// (the panel's finalizer folds the result into the session turn), so they
+	// keep the immediate receipt.
+	if !e.queueTasks && !settledState(task.State) {
+		task, result = e.awaitSettled(ctx, sched, task, result, cb)
+	}
 	if reasoning != "" {
 		sched.EvTrace(ctx, task.TaskID, core.EvReasoning, map[string]any{"thought": reasoning})
 	}
@@ -1895,9 +2107,11 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		Model:     result.Model,
 		Injected:  result.Injected,
 		Executor:  result.Executor,
+		WorkDir:   result.WorkDir,
 	}
 	res.Question = result.Question
 	res.FilesChanged = result.FilesChanged
+	res.RouteFallback = routeFallbackPeer(ctx, sched.TaskStore(), task.TaskID)
 	res.ConsentSource = consentSrc
 	if consentSrc != "" {
 		sched.EvTrace(ctx, task.TaskID, "approval_auto", map[string]any{"scope": consentSrc})
@@ -2036,23 +2250,50 @@ func numberField(v any) int {
 // resultFromTask maps one persisted task/result pair into the typed result used
 // by every interactive surface. Accepting reviewed work may run without a
 // scheduler, so this mapping deliberately depends only on storage.
-func resultFromTask(task core.Task, result bus.TaskResultPayload) *Result {
+func resultFromTask(task core.Task, result bus.TaskResultPayload, routeFallback string) *Result {
 	return &Result{
-		Kind:         "task",
-		TaskID:       task.TaskID,
-		TaskTitle:    task.Title,
-		TaskState:    task.State,
-		OK:           result.OK,
-		Stdout:       result.Stdout,
-		Stderr:       result.Stderr,
-		ExitCode:     result.ExitCode,
-		Agent:        result.Agent,
-		Model:        result.Model,
-		Injected:     result.Injected,
-		Executor:     result.Executor,
-		Question:     result.Question,
-		FilesChanged: result.FilesChanged,
+		Kind:          "task",
+		TaskID:        task.TaskID,
+		TaskTitle:     task.Title,
+		TaskState:     task.State,
+		OK:            result.OK,
+		Stdout:        result.Stdout,
+		Stderr:        result.Stderr,
+		ExitCode:      result.ExitCode,
+		Deferred:      result.Deferred,
+		Agent:         result.Agent,
+		Model:         result.Model,
+		Injected:      result.Injected,
+		Executor:      result.Executor,
+		WorkDir:       result.WorkDir,
+		RouteFallback: routeFallback,
+		Question:      result.Question,
+		FilesChanged:  result.FilesChanged,
 	}
+}
+
+// routeFallbackPeer scans the task's audit trail for the newest
+// route_fallback event — the marker the queue scheduler writes when the
+// send to the routed peer failed and the task ran locally instead. ""
+// means the run went exactly where routing intended.
+func routeFallbackPeer(ctx context.Context, store *core.TaskStore, taskID string) string {
+	events, err := store.Events(ctx, taskID)
+	if err != nil {
+		return ""
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type != core.EvRouteFallback {
+			continue
+		}
+		var d struct {
+			Intended string `json:"intended"`
+		}
+		if err := json.Unmarshal([]byte(events[i].DataJSON), &d); err == nil {
+			return d.Intended
+		}
+		return ""
+	}
+	return ""
 }
 
 func (e *Engine) acceptReviewedWork(ctx context.Context, taskID string) *Result {
@@ -2060,6 +2301,23 @@ func (e *Engine) acceptReviewedWork(ctx context.Context, taskID string) *Result 
 	task, err := store.Get(ctx, taskID)
 	if err != nil {
 		return &Result{Kind: "task", TaskID: taskID, TaskState: core.StateReview, Stderr: err.Error(), ExitCode: 1}
+	}
+	// Prefer the scheduler core when the engine carries one: its ResumeApproved
+	// also mirrors the accept to the sibling copy parked on the other node
+	// (forwardAcceptDownstream) — a store-only approve left whichever side
+	// approved second's peer parked in review forever. A core-less engine
+	// degrades to the plain row update; the peer's own human can still
+	// approve its copy locally.
+	if sched := e.sched.Load(); sched != nil {
+		final, result, rerr := sched.ResumeApproved(ctx, taskID)
+		if rerr != nil {
+			state := core.StateReview
+			if current, getErr := store.Get(context.WithoutCancel(ctx), taskID); getErr == nil {
+				state = current.State
+			}
+			return &Result{Kind: "task", TaskID: taskID, TaskTitle: task.Title, TaskState: state, Stderr: rerr.Error(), ExitCode: 1}
+		}
+		return resultFromTask(final, result, routeFallbackPeer(ctx, store, taskID))
 	}
 	result := bus.TaskResultPayload{OK: true}
 	if task.ResultJSON != "" {
@@ -2077,7 +2335,7 @@ func (e *Engine) acceptReviewedWork(ctx context.Context, taskID string) *Result 
 	result.TaskID = final.TaskID
 	result.AttemptID = final.AttemptID
 	result.State = final.State
-	return resultFromTask(final, result)
+	return resultFromTask(final, result, routeFallbackPeer(ctx, store, taskID))
 }
 
 // resumeLocked re-runs an approved review-parked task synchronously and maps
@@ -2093,7 +2351,7 @@ func (e *Engine) resumeLocked(ctx context.Context, taskID, answer string) *Resul
 		}
 		return &Result{Kind: "task", TaskID: taskID, TaskState: state, Stderr: err.Error(), ExitCode: 1}
 	}
-	return resultFromTask(task, result)
+	return resultFromTask(task, result, routeFallbackPeer(ctx, sched.TaskStore(), taskID))
 }
 
 // ResumeApproved accepts or re-runs a reviewed task under the caller's context.
@@ -2149,6 +2407,15 @@ func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb 
 	}
 	res := e.resumeLocked(ctx, taskID, answer)
 	if ctx.Err() != nil {
+		return res
+	}
+	if res.Deferred {
+		// The approval parked for delivery is itself the honest answer —
+		// a model pass over it invents a stale "waiting for approval /
+		// re-run the task" story the receipt already contradicts (the
+		// consent IS granted; the work resumes on the next link, no
+		// re-submission exists to be told about).
+		res.Answer = res.Stdout
 		return res
 	}
 	sumClient, _ := e.healthyClient()

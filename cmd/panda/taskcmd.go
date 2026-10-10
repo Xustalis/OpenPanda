@@ -72,7 +72,8 @@ func taskUsage() {
 	fmt.Fprintln(os.Stderr, "usage: panda task <verb|task-id>")
 	fmt.Fprintln(os.Stderr, "  <id>                                    show one task and its timeline")
 	fmt.Fprintln(os.Stderr, "  add --title T [--prompt P] [--priority "+cliPriorities+"]")
-	fmt.Fprintln(os.Stderr, "      [--project p] [--parent-id ID] [--preferred NODE] [--authorize] [--card PATH]   enqueue a task")
+	fmt.Fprintln(os.Stderr, "      [--project p] [--parent-id ID] [--preferred NODE] [--authorize] [--card PATH]")
+	fmt.Fprintln(os.Stderr, "      [--agents a,b [--mode m] | --nodes n1,n2] [--wait [--wait-timeout D]] [--json]   enqueue a task")
 	fmt.Fprintln(os.Stderr, "  priority <id> <level>                   change a task's priority")
 	fmt.Fprintln(os.Stderr, "  move <id> <seq>                         reorder the drag-sort queue")
 	fmt.Fprintln(os.Stderr, "  <id> --trace                            hop-by-hop delegation trace (hops, timings, transport)")
@@ -140,7 +141,15 @@ func runTaskShow(args []string) {
 	taskField("parent", orDash(t.ParentID))
 	taskField("project", orDash(t.Project))
 	taskField("title", t.Title)
-	taskField("state", colorState(t.State))
+	stateLabel := colorState(t.State)
+	// A dispatched row with a parked outbox delivery is not on a wire — it is
+	// in this node's mailbox awaiting the target's next connect. Say so:
+	// "dispatched" reads as running, which is precisely the lie that made
+	// parked pins look like work in flight.
+	if t.State == core.StateDispatched && store.TaskOutboxPending(context.Background(), t.TaskID) {
+		stateLabel += " (" + i18n.T(i18n.Detect(), "cli.task.waiting_link") + ")"
+	}
+	taskField("state", stateLabel)
 	taskField("priority", priorityName(t.Priority))
 	taskField("owner", t.OwnerNode)
 	// Owner is the lease holder — the node the queue/store believes drives the
@@ -150,6 +159,38 @@ func runTaskShow(args []string) {
 	if target, terr := store.DispatchTarget(context.Background(), t.TaskID); terr == nil &&
 		target != "" && target != t.OwnerNode {
 		taskField("executor", target)
+	}
+	// Where the work happened — the first question a produced file raises.
+	// This node's own derived directory wins; a delegated result carries the
+	// executor's directory on the wire (recorded on the row too, for the
+	// queue board), so the origin can locate the output on the machine that
+	// made it; the submitter's pin is the fallback before any run has
+	// derived one.
+	workDir, workDirOn := t.ExecWorkDir, ""
+	if dir, exec, ok := resultWorkDir(t.ResultJSON); ok &&
+		(workDir == "" || workDir == dir) && exec != "" && exec != t.OwnerNode {
+		// The row's field and the result agree — annotate the node that ran
+		// it, which the bare path cannot say.
+		workDir, workDirOn = dir, exec
+	}
+	if workDir == "" {
+		workDir = t.WorkDir
+	}
+	if workDir != "" {
+		val := workDir
+		if workDirOn != "" && workDirOn != t.OwnerNode {
+			val += " " + pal().Separator() + " " + workDirOn
+		}
+		taskField("workdir", val)
+	}
+	// The events are loaded once here so the field block can annotate a
+	// route_fallback (meant for a peer, ran locally) alongside the timeline.
+	events, err := store.Events(context.Background(), id)
+	if err != nil {
+		fatal("load events", err)
+	}
+	if fb := latestRouteFallback(events); fb != "" {
+		taskField("route", fb)
 	}
 	if pin := core.PinnedNode(t); pin != "" {
 		taskField("pinned", pin)
@@ -180,14 +221,36 @@ func runTaskShow(args []string) {
 		printTaskResult(t.ResultJSON)
 	}
 
-	events, err := store.Events(context.Background(), id)
-	if err != nil {
-		fatal("load events", err)
-	}
 	if len(events) > 0 {
 		fmt.Println(pal().Heading("events:"))
 		printEventTimeline(events, "  ")
 	}
+	if hint := taskNextStepHint(i18n.Detect(), cfg, t); hint != "" {
+		fmt.Println(pal().Muted(hint))
+	}
+}
+
+// taskNextStepHint names the one command that moves a task out of its current
+// parked state — or "" when nothing is waiting on the user. `task show` reads
+// like a dead end without it: a review row's events end at "review" and the
+// reader has to guess that `panda approve` is the way out.
+//
+// waiting_context is an agent's clarification question — the same park, the
+// same resume verb; the stored question itself was already printed under
+// result:. A queued row with no live consumer is the silent-stall shape the
+// queue listing already warns about; show it here too.
+func taskNextStepHint(loc i18n.Locale, cfg *config.Config, t core.Task) string {
+	switch t.State {
+	case core.StateReview:
+		return i18n.Tf(loc, "cli.task.wait.review", "id", t.TaskID)
+	case core.StateWaitingCtx:
+		return i18n.Tf(loc, "cli.ask.question.hint", "id", t.TaskID)
+	case core.StateQueued, core.StateSubmitted:
+		if cfg != nil && !queueConsumerAlive(cfg) {
+			return i18n.T(loc, "cli.queue.noConsumer")
+		}
+	}
+	return ""
 }
 
 // taskFieldWidth is the label column of the task record, sized to its longest
@@ -431,6 +494,26 @@ func printTaskResult(raw string) {
 	}
 }
 
+// latestRouteFallback renders the newest route_fallback event as a one-line
+// field, or "" when the task never fell back. A fallback means the task was
+// routed to a peer, the link failed at send time, and it ran locally — the
+// reader should see that without digging through the timeline.
+func latestRouteFallback(events []core.Event) string {
+	for i := len(events) - 1; i >= 0; i-- {
+		e := events[i]
+		if e.Type != core.EvRouteFallback {
+			continue
+		}
+		var d struct {
+			Intended string `json:"intended"`
+			Reason   string `json:"reason"`
+		}
+		_ = json.Unmarshal([]byte(e.DataJSON), &d)
+		return i18n.Tf(i18n.Detect(), "cli.task.route_fallback", "peer", orDash(d.Intended))
+	}
+	return ""
+}
+
 // taskJSON is the --json wire form of one task (fields mirror the web API's
 // taskJSON closely enough for scripts).
 type taskJSON struct {
@@ -445,26 +528,55 @@ type taskJSON struct {
 	Pinned   string `json:"pinned,omitempty"`
 	Session  string `json:"session_id,omitempty"`
 	Intent   string `json:"intent,omitempty"`
-	Created  string `json:"created_at"`
-	Updated  string `json:"updated_at"`
+	// WorkDir is the submitter's pin (a session worktree), empty for
+	// ordinary tasks; ExecWorkDir is where the run actually happened.
+	WorkDir     string `json:"work_dir,omitempty"`
+	ExecWorkDir string `json:"exec_work_dir,omitempty"`
+	// WaitingLink marks a dispatched row whose real location is this node's
+	// outbox — parked awaiting the target's link, not running anywhere.
+	WaitingLink bool `json:"waiting_link,omitempty"`
+	// RouteFallback names the peer routing intended before the link failed
+	// and the task ran locally — empty when the task went where decided.
+	RouteFallback string `json:"route_fallback,omitempty"`
+	Created       string `json:"created_at"`
+	Updated       string `json:"updated_at"`
 }
 
 func taskToJSON(t core.Task) taskJSON {
 	j := taskJSON{
-		ID:       t.TaskID,
-		ParentID: t.ParentID,
-		Project:  t.Project,
-		Title:    t.Title,
-		State:    t.State,
-		Priority: priorityName(t.Priority),
-		Owner:    t.OwnerNode,
-		Pinned:   core.PinnedNode(t),
-		Session:  t.SessionID,
-		Intent:   t.Intent,
-		Created:  ts(t.CreatedAt),
-		Updated:  ts(t.UpdatedAt),
+		ID:          t.TaskID,
+		ParentID:    t.ParentID,
+		Project:     t.Project,
+		Title:       t.Title,
+		State:       t.State,
+		Priority:    priorityName(t.Priority),
+		Owner:       t.OwnerNode,
+		Pinned:      core.PinnedNode(t),
+		Session:     t.SessionID,
+		Intent:      t.Intent,
+		WorkDir:     t.WorkDir,
+		ExecWorkDir: t.ExecWorkDir,
+		Created:     ts(t.CreatedAt),
+		Updated:     ts(t.UpdatedAt),
 	}
 	return j
+}
+
+// resultWorkDir extracts the executor's workspace and node from a stored
+// result payload — present when the work ran on another node (the local row
+// then has no exec_work_dir of its own).
+func resultWorkDir(resultJSON string) (dir, executor string, ok bool) {
+	if resultJSON == "" {
+		return "", "", false
+	}
+	var res struct {
+		WorkDir  string `json:"work_dir"`
+		Executor string `json:"executor"`
+	}
+	if json.Unmarshal([]byte(resultJSON), &res) != nil || res.WorkDir == "" {
+		return "", "", false
+	}
+	return res.WorkDir, res.Executor, true
 }
 
 // taskToJSONWithStore fills the store-derived fields (executor) taskToJSON
@@ -475,6 +587,9 @@ func taskToJSONWithStore(store *core.TaskStore, t core.Task) taskJSON {
 		target != "" && target != t.OwnerNode {
 		j.Executor = target
 	}
+	j.WaitingLink = t.State == core.StateDispatched &&
+		store.TaskOutboxPending(context.Background(), t.TaskID)
+	j.RouteFallback = store.RouteFallbackPeer(context.Background(), t.TaskID)
 	return j
 }
 
@@ -509,7 +624,7 @@ func ambiguousTaskMsg(loc i18n.Locale, amb *core.AmbiguousTaskIDError) string {
 
 func taskStoreFatal(err error, id string) {
 	if errors.Is(err, sql.ErrNoRows) {
-		fmt.Fprintf(os.Stderr, "panda: no such task: %s\n", id)
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.noSuch.task", "id", id))
 		os.Exit(1)
 	}
 	fatal("get task", err)
@@ -536,10 +651,30 @@ func runTaskAdd(args []string) {
 	preferred := fs.String("preferred", "", "target node id or name (hard pin: runs there or fails)")
 	nodes := fs.String("nodes", "", "comma-separated node ids to pin the task onto (one task per node; each lands on its named node or fails)")
 	actionSpec := fs.String("action-spec", "", "actuator dispatch JSON: {\"target_actuator\":\"hardware:x\",\"action\":\"verb\",\"parameters\":{...}}")
-	fs.Parse(args)
+	wait := fs.Bool("wait", false, "block until the task settles (done/failed/cancelled/review) and print the result")
+	waitTimeout := fs.Duration("wait-timeout", 30*time.Minute, "with --wait: stop watching after this long (the task itself keeps running)")
+	fs.Parse(reorderFlags(args, taskAddValueFlags))
 
 	loc := i18n.Detect()
+	// Positional words join --prompt: `task add --title T do the thing` —
+	// silently dropping them would send the title as the whole prompt.
+	var joined string
+	if rest := fs.Args(); len(rest) > 0 {
+		joined = strings.TrimSpace(strings.Join(rest, " "))
+		if joined != "" {
+			if *prompt == "" {
+				*prompt = joined
+			} else {
+				*prompt = strings.TrimSpace(*prompt + " " + joined)
+			}
+		}
+	}
 	*title = strings.TrimSpace(*title)
+	// `panda task add 帮我看下日志` with no --title: the words are the title,
+	// and the prompt falls through to it below.
+	if *title == "" {
+		*title = joined
+	}
 	if *title == "" {
 		fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.add.noTitle"))
 		os.Exit(2)
@@ -595,6 +730,12 @@ func runTaskAdd(args []string) {
 	// on the previous stage's output. A single agent folds into the normal
 	// requires path unchanged.
 	agentList := parseAgentList(*agents)
+	// --wait watches one row; the fan-out paths create several, so a single
+	// exit code could never describe the batch.
+	if *wait && (len(agentList) > 1 || strings.TrimSpace(*nodes) != "") {
+		fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.wait.multi"))
+		os.Exit(2)
+	}
 	if len(agentList) > 1 {
 		// A multi-harness plan and an actuator dispatch are different task
 		// shapes; accepting both would silently drop the action_spec.
@@ -602,7 +743,7 @@ func runTaskAdd(args []string) {
 			fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.add.actionSpecAgents"))
 			os.Exit(2)
 		}
-		runTaskAddAgents(loc, engine, agentList, *mode, *title, *prompt, requiresList, requiresExplicit, prio, jsonOutput)
+		runTaskAddAgents(loc, engine, cfg, agentList, *mode, *title, *prompt, requiresList, requiresExplicit, prio, jsonOutput)
 		return
 	}
 	if len(agentList) == 1 {
@@ -684,6 +825,16 @@ func runTaskAdd(args []string) {
 	// enqueue so a failure leaves no orphan behind.
 	sessionID := linkTaskSession(cfg, task.TaskID, *title, *prompt)
 
+	// The advisory precedes the output split: --json keeps stdout clean but a
+	// stderr line is still the cheapest way to keep a silently-stalled queue
+	// from looking like a successful enqueue.
+	if !queueConsumerAlive(cfg) {
+		warnNoConsumerStderr(loc)
+	}
+	if *wait {
+		waitForTaskAdd(loc, cfg, task.TaskID, *waitTimeout)
+		return
+	}
 	if jsonOutput {
 		emitJSON(map[string]string{"task_id": task.TaskID, "session_id": sessionID, "state": task.State})
 		return
@@ -692,6 +843,89 @@ func runTaskAdd(args []string) {
 	if sessionID != "" {
 		fmt.Println(i18n.Tf(loc, "cli.task.add.session", "id", sessionID))
 	}
+}
+
+// waitTask polls a task row until it settles or ctx ends. "Settled" is
+// broader than core.Terminal: a failed row can be retried and a review row
+// resumed, but for --wait both are answers to "what happened to my task?".
+func waitTask(ctx context.Context, store *core.TaskStore, taskID string) (core.Task, error) {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	var last core.Task
+	for {
+		t, err := store.Get(ctx, taskID)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			// The watch expired mid-read — report the last good row so the
+			// caller can still say what state the task was in.
+			return last, ctx.Err()
+		case err != nil:
+			return last, err
+		}
+		last = t
+		if core.Terminal(t.State) || t.State == core.StateFailed || t.State == core.StateReview {
+			return t, nil
+		}
+		select {
+		case <-ctx.Done():
+			return t, ctx.Err()
+		case <-tick.C:
+		}
+	}
+}
+
+// waitForTaskAdd is the --wait half of `task add`: the row is already
+// enqueued, so this only watches it — an interrupted or expired watch leaves
+// the task running under whatever consumer picks it up. It owns the exit
+// code: 0 done, 1 anything-not-done, 130 on Ctrl-C.
+func waitForTaskAdd(loc i18n.Locale, cfg *config.Config, taskID string, timeout time.Duration) {
+	db, store, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+	ctx, cancel := shutdownContext()
+	defer cancel()
+	wctx, wcancel := context.WithTimeout(ctx, timeout)
+	defer wcancel()
+	if !jsonOutput {
+		fmt.Println(i18n.Tf(loc, "cli.task.waiting", "id", taskID))
+	}
+	final, werr := waitTask(wctx, store, taskID)
+	exit := 1
+	switch {
+	case errors.Is(werr, context.DeadlineExceeded):
+		if jsonOutput {
+			emitJSON(map[string]string{"task_id": taskID, "state": final.State, "outcome": "timeout"})
+		} else {
+			fmt.Println(i18n.Tf(loc, "cli.task.wait.timeout",
+				"id", taskID, "state", final.State, "dur", timeout.String()))
+		}
+	case errors.Is(werr, context.Canceled):
+		exit = 130
+		if jsonOutput {
+			emitJSON(map[string]string{"task_id": taskID, "state": final.State, "outcome": "interrupted"})
+		} else {
+			fmt.Println(i18n.Tf(loc, "cli.task.wait.interrupted", "id", taskID))
+		}
+	case werr != nil:
+		fatal("watch task", werr)
+	default:
+		if final.State == core.StateDone {
+			exit = 0
+		}
+		if jsonOutput {
+			emitJSON(taskToJSONWithStore(store, final))
+		} else {
+			fmt.Println(i18n.Tf(loc, "cli.task.wait.state", "id", final.TaskID, "state", final.State))
+			if final.State == core.StateReview {
+				fmt.Println(i18n.Tf(loc, "cli.task.wait.review", "id", final.TaskID))
+			} else if final.ResultJSON != "" {
+				printTaskResult(final.ResultJSON)
+			}
+		}
+	}
+	os.Exit(exit)
 }
 
 // linkTaskSession creates the board-style linked session for an enqueued
@@ -744,6 +978,9 @@ func runTaskAddNodes(loc i18n.Locale, engine *askengine.Engine, cfg *config.Conf
 			r.SessionID = linkTaskSession(cfg, task.TaskID, in.Title, in.Intent)
 		}
 		results = append(results, r)
+	}
+	if failed < len(nodes) && !queueConsumerAlive(cfg) {
+		warnNoConsumerStderr(loc)
 	}
 	if jsonOutput {
 		emitJSON(map[string]any{"fanout": len(nodes), "tasks": results})
@@ -953,7 +1190,7 @@ func stageIDName(agent string) string {
 
 // runTaskAddAgents submits the synthesized multi-harness plan and reports the
 // stages it created.
-func runTaskAddAgents(loc i18n.Locale, engine *askengine.Engine, agents []string, mode, title, prompt string, requires []string, requiresExplicit bool, prio int, jsonOut bool) {
+func runTaskAddAgents(loc i18n.Locale, engine *askengine.Engine, cfg *config.Config, agents []string, mode, title, prompt string, requires []string, requiresExplicit bool, prio int, jsonOut bool) {
 	p, err := buildMultiAgentPlan(agents, mode, title, prompt, requires, requiresExplicit)
 	if err != nil {
 		if errors.Is(err, errBadAgentMode) {
@@ -974,6 +1211,9 @@ func runTaskAddAgents(loc i18n.Locale, engine *askengine.Engine, agents []string
 	stages, serr := engine.PlanStages(context.Background(), planID)
 	if serr != nil {
 		fatal("read plan", serr)
+	}
+	if !queueConsumerAlive(cfg) {
+		warnNoConsumerStderr(loc)
 	}
 	if jsonOut {
 		emitJSON(planToJSON(planID, p.Goal, stages))

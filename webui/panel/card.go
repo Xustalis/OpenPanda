@@ -403,11 +403,13 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 	// between the two calls used to lose one side.
 	var secret, listenAddr string
 	var generated, allowCleartext bool
+	var allowFor []string
 	added := true
 	err := h.mutateCfgErr(func(c *config.Config) error {
 		listenAddr = c.Network.ListenAddr
 		secret = c.Network.SharedSecret
 		allowCleartext = c.Network.AllowCleartext
+		allowFor = c.Network.AllowCleartextFor
 		if secret == "" {
 			var err error
 			secret, err = generatePanelSecret()
@@ -423,9 +425,15 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 			peers = append(peers, req.Addr)
 		}
 		if h.configPath != "" {
+			// Only a secret this call generated belongs on disk — one
+			// injected via OPENPANDA_SHARED_SECRET must stay env-provided.
+			persistSecret := ""
+			if generated {
+				persistSecret = secret
+			}
 			if err := config.UpdateNetworkSection(h.configPath, config.NetworkConfig{
 				ListenAddr:   c.Network.ListenAddr,
-				SharedSecret: secret,
+				SharedSecret: persistSecret,
 				Peers:        peers,
 			}); err != nil {
 				return err
@@ -467,7 +475,7 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 		// refuse every dial — surface that next to the join guide, the same
 		// advisory the CLI prints, so the refusal doesn't only live in
 		// daemon logs.
-		CleartextHint:  core.CleartextDialError(req.Addr, allowCleartext) != nil,
+		CleartextHint:  core.CleartextDialError(req.Addr, allowCleartext, allowFor) != nil,
 		ConfigPath:     h.configPath,
 		ListenAddr:     listen,
 		InstallCommand: "curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh",

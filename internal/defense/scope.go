@@ -3,6 +3,7 @@
 package defense
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -136,4 +137,76 @@ func (s *Scope) Drift(relPaths []string) []string {
 		}
 	}
 	return out
+}
+
+// DriftUnder is Drift with the roots re-anchored to workDir first. The entry
+// model declares scope as the user phrases it, which is not always relative to
+// the task's working directory: a spec written from the project root can say
+// "proj/sub" while workDir is ".../proj", naming the same tree from one level
+// up. Compared verbatim, every changed path under that tree misses the root
+// and a fully in-scope task drifts — a guaranteed false intercept. Each root
+// is rewritten to its longest suffix that resolves under workDir; roots that
+// resolve nowhere stay verbatim, so an unresolvable root keeps intercepting
+// rather than silently widening.
+func (s *Scope) DriftUnder(workDir string, relPaths []string) []string {
+	if s.Empty() {
+		return nil
+	}
+	roots := make([]string, 0, len(s.roots))
+	for _, r := range s.roots {
+		roots = append(roots, reanchorRoot(workDir, r, relPaths))
+	}
+	var out []string
+	for _, p := range relPaths {
+		rel := filepath.ToSlash(filepath.Clean(p))
+		matched := false
+		for _, r := range roots {
+			if rel == r || strings.HasPrefix(rel, r+"/") {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// reanchorRoot picks the longest suffix of root that resolves under workDir.
+// A suffix resolves when it exists on disk, or — for a tree the agent deleted
+// or has not created yet — when it names a path-boundary prefix of an
+// actually-changed path. The full root wins whenever it resolves, so a
+// correctly anchored root is never loosened.
+//
+// A shortened suffix is only considered when the dropped prefix ends in the
+// workDir's own directory name — that is what makes the suffix the same tree
+// seen from above ("proj/sub" under workDir ".../proj" is "sub"). Without the
+// gate, any suffix that happened to resolve ("x/y" → "y") would silently
+// widen the scope.
+func reanchorRoot(workDir, root string, relPaths []string) string {
+	if workDir == "" {
+		return root
+	}
+	base := filepath.Base(filepath.Clean(workDir))
+	segs := strings.Split(root, "/")
+	for i := range segs {
+		if i > 0 && segs[i-1] != base {
+			continue
+		}
+		cand := strings.Join(segs[i:], "/")
+		if cand == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(workDir, filepath.FromSlash(cand))); err == nil {
+			return cand
+		}
+		for _, p := range relPaths {
+			rel := filepath.ToSlash(filepath.Clean(p))
+			if rel == cand || strings.HasPrefix(rel, cand+"/") {
+				return cand
+			}
+		}
+	}
+	return root
 }

@@ -127,8 +127,13 @@ function StageRow(props: { stage: PlanStage }) {
 function fmtAgo(ts: number): string {
   if (!ts) return ''
   const s = Math.max(0, Math.floor(Date.now() / 1000 - ts))
-  if (s < 60) return `${s}s`
-  if (s < 3600) return `${Math.floor(s / 60)}m`
-  if (s < 86400) return `${Math.floor(s / 3600)}h`
-  return `${Math.floor(s / 86400)}d`
+  const d =
+    s < 60
+      ? `${s}${t('time.unit.s')}`
+      : s < 3600
+        ? `${Math.floor(s / 60)}${t('time.unit.m')}`
+        : s < 86400
+          ? `${Math.floor(s / 3600)}${t('time.unit.h')}`
+          : `${Math.floor(s / 86400)}${t('time.unit.d')}`
+  return t('time.ago', { d })
 }

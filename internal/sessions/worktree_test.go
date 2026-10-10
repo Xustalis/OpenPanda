@@ -4,6 +4,7 @@ package sessions
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -105,5 +106,27 @@ func TestWorktreeStatusWithoutWorktree(t *testing.T) {
 	}
 	if _, err := w.Status(context.Background(), "never-created"); err == nil {
 		t.Fatal("Status on a missing worktree should fail")
+	}
+}
+
+func TestWorktreeRejectsTraversalIDs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	w, err := OpenWorktrees(newGitRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, id := range []string{"..", "../escape", "a/b"} {
+		if _, err := w.Ensure(ctx, id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Ensure(%q) err = %v, want ErrNotFound", id, err)
+		}
+		if err := w.Remove(ctx, id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Remove(%q) err = %v, want ErrNotFound", id, err)
+		}
+		if _, err := w.Status(ctx, id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Status(%q) err = %v, want ErrNotFound", id, err)
+		}
 	}
 }

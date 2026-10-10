@@ -22,6 +22,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/plan"
 )
 
@@ -75,7 +76,7 @@ func runPlanStart(args []string) {
 	}
 	prio, ok := parseCLIPriority(*priority)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "panda: unknown priority %q (want %s)\n", *priority, cliPriorities)
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.task.add.badPriority", "level", *priority, "list", cliPriorities))
 		os.Exit(2)
 	}
 
@@ -104,7 +105,8 @@ func runPlanStart(args []string) {
 			fatal("order plan", oerr)
 		}
 		for i, st := range order {
-			fmt.Printf("  %d. %-14s requires=%s needs=%s%s\n", i+1, st.ID,
+			fmt.Printf("  %d. %-14s node=%-16s requires=%s needs=%s%s\n", i+1, st.ID,
+				orDash(st.Node),
 				orDash(strings.Join(st.Requires, ",")), orDash(strings.Join(st.Needs, ",")),
 				resourceSummary(st.Resources))
 		}
@@ -136,6 +138,12 @@ func runPlanStart(args []string) {
 		fatal("read plan", serr)
 	}
 
+	// "The daemon does the rest" only holds when one runs — without a queue
+	// consumer every stage parks forever, and the follow line alone would
+	// read like a successful handoff.
+	if !queueConsumerAlive(cfg) {
+		warnNoConsumerStderr(i18n.Detect())
+	}
 	if jsonOutput {
 		emitJSON(planToJSON(planID, p.Goal, stages))
 		return
@@ -173,7 +181,7 @@ func runPlanShow(args []string) {
 		fatal("read plan", err)
 	}
 	if len(stages) == 0 {
-		fmt.Fprintf(os.Stderr, "panda: no such plan: %s\n", id)
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.noSuch.plan", "id", id))
 		os.Exit(1)
 	}
 	if jsonOutput {
@@ -192,10 +200,47 @@ func printPlanStages(stages []core.Task) {
 	printPlanStagesTo(os.Stdout, stages)
 }
 
+// planBoardState folds a stage board into one verdict word for display:
+// "failed" when any stage closed badly, "awaiting" when one parks for a
+// human (the plan's next action), "running" while anything is still in
+// flight (the watch detached), "done" when the whole board finished.
+func planBoardState(stages []core.Task) string {
+	sawReview, sawBad, sawOpen := false, false, false
+	for _, st := range stages {
+		switch st.State {
+		case core.StateReview:
+			sawReview = true
+		case core.StateDone:
+		case core.StateFailed, core.StateCancelled, core.StateExpired:
+			sawBad = true
+		default:
+			sawOpen = true
+		}
+	}
+	switch {
+	case sawBad:
+		return "failed"
+	case sawReview:
+		return "awaiting"
+	case sawOpen:
+		return "running"
+	default:
+		return "done"
+	}
+}
+
 func printPlanStagesTo(out io.Writer, stages []core.Task) {
 	for _, t := range stages {
-		_, _ = fmt.Fprintf(out, "  %-14s %-12s owner=%-16s needs=%s\n",
-			t.StageID, t.State, orDash(t.OwnerNode), orDash(strings.Join(t.Needs, ",")))
+		// "submitted" is the dependency-parked state: a stage with needs it
+		// lists is BLOCKED, not queued for dispatch — the word matters,
+		// because "submitted" reads like the stage is already on its way.
+		state := t.State
+		if state == "submitted" && len(t.Needs) > 0 {
+			state = "blocked"
+		}
+		_, _ = fmt.Fprintf(out, "  %-14s %-12s pin=%-16s owner=%-16s needs=%s\n",
+			t.StageID, state, orDash(core.PinnedNode(t)), orDash(t.OwnerNode),
+			orDash(strings.Join(t.Needs, ",")))
 		for _, in := range t.Inputs {
 			_, _ = fmt.Fprintf(out, "      in   <- %s %s from %s\n",
 				in.Stage, shortHash(in.Hash), in.Source)
@@ -210,6 +255,7 @@ type planStageJSON struct {
 	Stage  string   `json:"stage"`
 	TaskID string   `json:"task_id"`
 	State  string   `json:"state"`
+	Pin    string   `json:"pin,omitempty"`
 	Owner  string   `json:"owner,omitempty"`
 	Needs  []string `json:"needs,omitempty"`
 	Output string   `json:"output_artifact,omitempty"`
@@ -222,6 +268,7 @@ func planToJSON(planID, goal string, stages []core.Task) map[string]any {
 			Stage:  t.StageID,
 			TaskID: t.TaskID,
 			State:  t.State,
+			Pin:    core.PinnedNode(t),
 			Owner:  t.OwnerNode,
 			Needs:  t.Needs,
 			Output: t.OutputArtifact,

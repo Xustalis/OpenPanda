@@ -351,15 +351,13 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 
 	// Deferred artifact pushes are custody too: a peer whose only pending
 	// work is chunked payload must still get its flush, or a large transfer
-	// would stall until some unrelated row arrived.
-	var pushPending int
-	_ = c.db.QueryRowContext(ctx,
-		`SELECT count(*) FROM artifact_push_outbox WHERE peer IN (`+ph+`)`, dargs()...).Scan(&pushPending)
+	// would stall until some unrelated row arrived. They are drained inside
+	// the goroutine via streamArtifactPushes below.
 
-	if len(entries) == 0 && len(cancels) == 0 && len(taskEntries) == 0 && len(resumes) == 0 && pushPending == 0 {
-		c.outboxFlushDone(key)
-		return
-	}
+	// The reconcile sweep runs even with every outbox empty: a result frame
+	// written into a dying socket is a silent loss the outbox never saw, and
+	// the delegator's copy stays dispatched until its lease lies about a
+	// timeout. The goroutine is cheap — one indexed scan per hello.
 	go func() {
 		defer c.outboxFlushDone(key)
 		flushCtx := context.WithoutCancel(ctx)
@@ -459,29 +457,35 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 		// Approvals last: a resume that raced its own cancel must never
 		// arrive after the cancel delivered (the cancel wins by ordering).
 		for _, e := range resumes {
-			if lt, lerr := c.store.Get(flushCtx, e.taskID); lerr == nil && Terminal(lt.State) {
-				// The local copy already closed (a lapsed approval window, a
-				// user cancel): the consent must not revive a dead task.
-				c.logger.Info("outbox: local task is terminal, dropping parked resume",
-					"task", e.taskID, "peer", e.peer, "state", lt.State)
+			var p bus.TaskResumePayload
+			if err := json.Unmarshal([]byte(e.raw), &p); err != nil {
+				c.logger.Warn("outbox: bad parked resume, dropping", "task", e.taskID, "peer", e.peer, "err", err)
 				c.resumeOutboxDropKey(flushCtx, e.peer, e.taskID)
 				continue
 			}
+			if !p.Accept {
+				// A re-run consent must not revive a dead task: the local copy
+				// already closed (a lapsed approval window, a user cancel).
+				// An accept is the opposite case — the local copy is done
+				// precisely because the decision was made — so it skips this
+				// guard and stays parked for the peer.
+				if lt, lerr := c.store.Get(flushCtx, e.taskID); lerr == nil && Terminal(lt.State) {
+					c.logger.Info("outbox: local task is terminal, dropping parked resume",
+						"task", e.taskID, "peer", e.peer, "state", lt.State)
+					c.resumeOutboxDropKey(flushCtx, e.peer, e.taskID)
+					continue
+				}
+			}
 			if e.ttl > 0 && time.Now().Unix() > e.ttl {
-				// The approval window (the lease at persist time) has lapsed:
-				// the executor stayed unreachable past the same bound that
-				// would have failed the live wait, so expire both copies.
+				// The approval window (the lease at persist time, a week for
+				// an accept) has lapsed: the executor stayed unreachable past
+				// its bound. MarkExpired no-ops on an already-terminal local
+				// copy, so an expired accept only drops its custody row.
 				c.logger.Info("outbox: parked resume past TTL, expiring", "task", e.taskID, "peer", e.peer)
 				c.resumeOutboxDropKey(flushCtx, e.peer, e.taskID)
 				if err := c.store.MarkExpired(flushCtx, e.taskID, "resume TTL expired"); err != nil {
 					c.logger.Warn("outbox: mark expired", "task", e.taskID, "err", err)
 				}
-				continue
-			}
-			var p bus.TaskResumePayload
-			if err := json.Unmarshal([]byte(e.raw), &p); err != nil {
-				c.logger.Warn("outbox: bad parked resume, dropping", "task", e.taskID, "peer", e.peer, "err", err)
-				c.resumeOutboxDropKey(flushCtx, e.peer, e.taskID)
 				continue
 			}
 			if !c.deliverResume(flushCtx, peer, p) {
@@ -490,7 +494,80 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 			c.resumeOutboxDropKey(flushCtx, e.peer, e.taskID)
 			c.logger.Info("outbox: redelivered resume", "task", e.taskID, "peer", peer)
 		}
+		// Verdict reconcile last: parked custody above is authoritative for
+		// its tasks, so the sweep for silently-lost results trails it.
+		c.resultReconcile(flushCtx, peer, destKeys)
 	}()
+}
+
+// resultReconcileWindow bounds how far back the reconnect sweep re-pushes
+// verdicts. A day covers any plausible link outage while keeping the burst
+// per reconnect trivially small; the receiver dedups re-pushes regardless.
+const resultReconcileWindow = 24 * time.Hour
+
+// resultReconcile re-pushes terminal (and review) verdicts for tasks this
+// node executed for peer, settled recently. It closes the gap the persisted
+// outbox cannot: outboxPersist only runs when sendTo returns an error, but
+// a frame written into a half-dead socket "succeeds" and never arrives —
+// the delegator's copy is then stranded in dispatched until a lease lies
+// about a timeout. The wire carries no result ack, so re-push on every
+// reconnect is the honest convergence: handleResult on the far side is
+// idempotent (a converged copy audits the duplicate and moves on). The
+// delegator match accepts every claim key the flush resolved — a restarted
+// peer collecting custody under a new instance id still matches the old
+// instance id its chain recorded.
+func (c *Core) resultReconcile(ctx context.Context, peer string, destKeys []string) {
+	if c.db == nil || c.store == nil {
+		return
+	}
+	cutoff := time.Now().Add(-resultReconcileWindow).Unix()
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT task_id FROM tasks
+		 WHERE owner_node = ?
+		   AND state IN ('done','failed','cancelled','expired','review')
+		   AND updated_at > ?
+		 ORDER BY updated_at DESC LIMIT 200`, c.nodeID, cutoff)
+	if err != nil {
+		c.logger.Warn("reconcile: query", "peer", peer, "err", err)
+		return
+	}
+	defer rows.Close()
+	owed := map[string]bool{}
+	for _, k := range destKeys {
+		owed[k] = true
+	}
+	// Collect the candidates before touching the store again: the pool is
+	// single-connection (sqlite WAL single-writer), so a store.Get inside
+	// rows.Next() would queue behind its own iterator and deadlock.
+	var ids []string
+	for rows.Next() {
+		var taskID string
+		if err := rows.Scan(&taskID); err != nil {
+			c.logger.Warn("reconcile: scan", "peer", peer, "err", err)
+			return
+		}
+		ids = append(ids, taskID)
+	}
+	if err := rows.Close(); err != nil {
+		c.logger.Warn("reconcile: close", "peer", peer, "err", err)
+	}
+	pushed := 0
+	for _, taskID := range ids {
+		t, err := c.store.Get(ctx, taskID)
+		if err != nil {
+			continue
+		}
+		if !owed[scheduler.Predecessor(t.Chain, c.nodeID)] {
+			continue // settled for a different delegator — their flush handles it
+		}
+		if !c.deliverResult(ctx, peer, c.resumeOutcomeFor(ctx, t)) {
+			return // the link went mid-sweep; the next hello retries the rest
+		}
+		pushed++
+	}
+	if pushed > 0 {
+		c.logger.Info("reconcile: re-pushed verdicts on reconnect", "peer", peer, "count", pushed)
+	}
 }
 
 // deliverResume places a task_resume envelope on the wire to peer, returning
@@ -619,6 +696,31 @@ func (c *Core) cancelOutboxDropKey(ctx context.Context, key, taskID string) {
 	}
 }
 
+// supersedeTarget stands down whoever held taskID's delegation before the
+// current retarget. A re-route after lease expiry leaves the stale executor
+// holding a live copy that keeps burning budget on work this node no longer
+// waits on — two executors editing one worktree is the divergence the
+// reroute was meant to escape. The cancel rides the same authorization rule
+// handleCancel applies (delegator/owner in chain); an unreachable stale
+// executor gets it parked for the next hello.
+func (c *Core) supersedeTarget(ctx context.Context, taskID, newTarget string) {
+	prev, err := c.store.DispatchTarget(ctx, taskID)
+	if err != nil {
+		c.logger.Warn("supersede: prior target lookup", "task", taskID, "err", err)
+		return
+	}
+	if prev == "" || scheduler.SameRuntimeIdentity(prev, newTarget) ||
+		scheduler.SameRuntimeIdentity(prev, c.nodeID) {
+		return // never dispatched, same executor, or the prior copy is local
+	}
+	const reason = "superseded by reroute"
+	if !c.deliverCancel(ctx, prev, taskID, reason) {
+		c.outboxCancelPersist(ctx, prev, taskID, reason)
+	}
+	c.logger.Info("superseded prior dispatch target", "task", taskID,
+		"prev", prev, "new", newTarget)
+}
+
 // deliverCancel places a task_cancel envelope on the wire to peer, returning
 // whether it was accepted by the connection. Shared by the initial send path
 // (forwardCancelDownstream) and the flush path.
@@ -698,12 +800,7 @@ func (c *Core) taskOutboxPending(ctx context.Context, taskID string) bool {
 	if c.db == nil || taskID == "" {
 		return false
 	}
-	var n int
-	if err := c.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM task_outbox WHERE task_id = ?`, taskID).Scan(&n); err != nil {
-		return false
-	}
-	return n > 0
+	return c.store.TaskOutboxPending(ctx, taskID)
 }
 
 // taskOutboxTTL returns the latest delivery deadline among parked custody
@@ -822,6 +919,7 @@ func (c *Core) sweepOutboxes(ctx context.Context) {
 		SELECT DISTINCT peer FROM result_outbox
 		UNION SELECT DISTINCT peer FROM cancel_outbox
 		UNION SELECT DISTINCT peer FROM task_outbox
+		UNION SELECT DISTINCT peer FROM resume_outbox
 		UNION SELECT DISTINCT peer FROM artifact_push_outbox`)
 	if err != nil {
 		c.logger.Warn("outbox: sweep query", "err", err)

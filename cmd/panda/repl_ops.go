@@ -487,26 +487,42 @@ func (r *repl) cmdSessionMove(rest []string) {
 // repl state that must be mutated on the front-end goroutine (/resume -).
 func (r *repl) cmdSessionRm(ctx context.Context, rest []string) {
 	if len(rest) == 0 {
-		r.outln("usage: /session rm <id>")
+		r.outln("usage: /session rm <id> [id …]")
 		return
 	}
-	id := rest[0]
-	if id == r.sessID() {
-		r.outln(i18n.Tf(r.loc, "repl.session.rmActive", "id", id))
-		return
-	}
-	if r.worktrees != nil {
-		_ = r.worktrees.Remove(ctx, id)
-	}
-	if err := r.sessionsSt.Delete(id); err != nil {
-		if errors.Is(err, sessions.ErrNotFound) {
-			r.outln(i18n.Tf(r.loc, "repl.resume.bad", "id", id))
-			return
+	// Multiple refs delete in one pass (CLI: panda session rm a b c). The
+	// attached session is refused inline, not fatal to the batch.
+	for _, ref := range rest {
+		id, err := resolveSessionRef(r.sessionsSt, ref)
+		if err != nil {
+			var amb sessionAmbiguousError
+			switch {
+			case errors.As(err, &amb):
+				r.outln(i18n.Tf(r.loc, "cli.session.rm.ambiguous", "id", ref, "n", strconv.Itoa(len(amb.candidates))))
+			case errors.Is(err, sessions.ErrNotFound):
+				r.outln(i18n.Tf(r.loc, "repl.resume.bad", "id", ref))
+			default:
+				r.storeErr(err)
+			}
+			continue
 		}
-		r.storeErr(err)
-		return
+		if id == r.sessID() {
+			r.outln(i18n.Tf(r.loc, "repl.session.rmActive", "id", id))
+			continue
+		}
+		if r.worktrees != nil {
+			_ = r.worktrees.Remove(ctx, id)
+		}
+		if err := r.sessionsSt.Delete(id); err != nil {
+			if errors.Is(err, sessions.ErrNotFound) {
+				r.outln(i18n.Tf(r.loc, "repl.resume.bad", "id", ref))
+				continue
+			}
+			r.storeErr(err)
+			continue
+		}
+		r.outln(i18n.Tf(r.loc, "cli.session.rm.one", "id", id))
 	}
-	r.outf("%s deleted\n", id)
 }
 
 // cmdSessionDiff shows a session's worktree changes (CLI `session diff`).
@@ -670,6 +686,9 @@ func (r *repl) cmdNodesAdmit(arg string) {
 		}
 		r.cmdNodesAdd(p.Addr)
 		_ = ledger.ForgetPending(r.db, id)
+		if !p.Verified {
+			r.outln(i18n.Tf(r.loc, "cli.nodes.admit.unverified", "id", id))
+		}
 		return
 	}
 	r.outln(i18n.Tf(r.loc, "cli.nodes.admit.none", "id", id))
@@ -686,6 +705,8 @@ func (r *repl) cmdTaskAdd(fields []string) {
 	}
 	var title, prompt, priority, project, requires, agents, mode, preferred, actionSpec string
 	authorize := false
+	wait := false
+	waitTimeout := 30 * time.Minute
 	var pos []string
 	for i := 0; i < len(fields); i++ {
 		f := fields[i]
@@ -715,6 +736,12 @@ func (r *repl) cmdTaskAdd(fields []string) {
 			preferred = val()
 		case "action-spec", "actionSpec":
 			actionSpec = val()
+		case "wait":
+			wait = true
+		case "wait-timeout":
+			if d, err := time.ParseDuration(val()); err == nil && d > 0 {
+				waitTimeout = d
+			}
 		case "authorize":
 			authorize = true
 		default:
@@ -755,6 +782,10 @@ func (r *repl) cmdTaskAdd(fields []string) {
 	ctx := r.commandContext()
 
 	agentList := parseAgentList(agents)
+	if wait && len(agentList) > 1 {
+		r.outln(i18n.T(r.loc, "cli.task.wait.multi"))
+		return
+	}
 	if len(agentList) > 1 {
 		if strings.TrimSpace(actionSpec) != "" {
 			r.outln(i18n.T(r.loc, "cli.task.add.actionSpecAgents"))
@@ -786,6 +817,9 @@ func (r *repl) cmdTaskAdd(fields []string) {
 		}
 		r.outln(i18n.Tf(r.loc, "cli.task.add.plan", "id", planID, "stages", strconv.Itoa(len(stages)), "mode", mode))
 		printPlanStagesTo(r.commandOutput(), stages)
+		if !queueConsumerAlive(r.cfg) {
+			warnNoConsumerTo(r.commandOutput(), r.loc)
+		}
 		return
 	}
 	if len(agentList) == 1 {
@@ -842,6 +876,29 @@ func (r *repl) cmdTaskAdd(fields []string) {
 	r.outln(i18n.Tf(r.loc, "cli.task.add.done", "id", task.TaskID, "state", task.State, "priority", priorityName(prio)))
 	if sessionID != "" {
 		r.outln(i18n.Tf(r.loc, "cli.task.add.session", "id", sessionID))
+	}
+	if !queueConsumerAlive(r.cfg) {
+		warnNoConsumerTo(r.commandOutput(), r.loc)
+	}
+	if wait {
+		// Same watch-only contract as `panda task add --wait`: the command
+		// context ending (REPL quit) stops the watch, never the task.
+		r.outln(i18n.Tf(r.loc, "cli.task.waiting", "id", task.TaskID))
+		wctx, wcancel := context.WithTimeout(ctx, waitTimeout)
+		defer wcancel()
+		final, werr := waitTask(wctx, r.store, task.TaskID)
+		switch {
+		case errors.Is(werr, context.DeadlineExceeded):
+			r.outln(i18n.Tf(r.loc, "cli.task.wait.timeout",
+				"id", task.TaskID, "state", final.State, "dur", waitTimeout.String()))
+		case werr != nil:
+			r.outln(i18n.Tf(r.loc, "cli.task.wait.interrupted", "id", task.TaskID))
+		default:
+			r.outln(i18n.Tf(r.loc, "cli.task.wait.state", "id", final.TaskID, "state", final.State))
+			if final.State == core.StateReview {
+				r.outln(i18n.Tf(r.loc, "cli.task.wait.review", "id", final.TaskID))
+			}
+		}
 	}
 }
 

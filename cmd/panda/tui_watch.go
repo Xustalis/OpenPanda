@@ -112,6 +112,10 @@ func (m tuiModel) onWatch(msg watchMsg) (tea.Model, tea.Cmd) {
 			TaskTitle:     ev.task.Title,
 			TaskState:     ev.task.State,
 			NeedsApproval: true,
+			// A stage row carries its plan: approving this card resumes the
+			// pipeline, not just the stage — the resume stream re-enters the
+			// plan watch so the next gate or verdict lands back here.
+			PlanID: ev.task.PlanID,
 			Approval: &askengine.ApprovalRequest{
 				TaskID: ev.task.TaskID,
 				Title:  ev.task.Title,

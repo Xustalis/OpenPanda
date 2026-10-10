@@ -36,17 +36,27 @@ type askJSON struct {
 	TaskID    string `json:"task_id,omitempty"`
 	TaskState string `json:"task_state,omitempty"`
 	OK        bool   `json:"ok,omitempty"`
-	Stdout    string `json:"stdout,omitempty"`
-	Stderr    string `json:"stderr,omitempty"`
-	ExitCode  int    `json:"exit_code,omitempty"`
+	// Deferred marks an approval parked for delivery — the task didn't fail,
+	// it's waiting for the executor's link. Lets scripts tell custody from
+	// failure without parsing task_state.
+	Deferred bool   `json:"deferred,omitempty"`
+	Stdout   string `json:"stdout,omitempty"`
+	Stderr   string `json:"stderr,omitempty"`
+	ExitCode int    `json:"exit_code,omitempty"`
 	// Execution attribution: which agent harness ran the task, on which node,
 	// with which model (and whether that model was injected by panda), plus
 	// the entry model that served the ask's own classify/answer calls.
-	Agent      string `json:"agent,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Injected   bool   `json:"injected,omitempty"`
-	Executor   string `json:"executor,omitempty"`
-	EntryModel string `json:"entry_model,omitempty"`
+	Agent    string `json:"agent,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Injected bool   `json:"injected,omitempty"`
+	Executor string `json:"executor,omitempty"`
+	// WorkDir is the workspace the executor ran in — the derived directory,
+	// not the submitter's pin — so a script can locate the produced files.
+	WorkDir string `json:"work_dir,omitempty"`
+	// RouteFallback names the peer the task was routed to before the link
+	// failed and it ran locally — the "meant for remote, ran here" marker.
+	RouteFallback string `json:"route_fallback,omitempty"`
+	EntryModel    string `json:"entry_model,omitempty"`
 	// Plan fields (kind == "plan"): the stage list is what makes the routing
 	// decision auditable from a script — which stage went where, and what it is
 	// waiting for.
@@ -58,9 +68,9 @@ type askJSON struct {
 func resultToJSON(out *askengine.Result) askJSON {
 	j := askJSON{
 		Kind: out.Kind, Answer: out.Answer, TaskID: out.TaskID, TaskState: out.TaskState,
-		OK: out.OK, Stdout: out.Stdout, Stderr: out.Stderr, ExitCode: out.ExitCode,
+		OK: out.OK, Deferred: out.Deferred, Stdout: out.Stdout, Stderr: out.Stderr, ExitCode: out.ExitCode,
 		Agent: out.Agent, Model: out.Model, Injected: out.Injected,
-		Executor: out.Executor, EntryModel: out.EntryModel,
+		Executor: out.Executor, WorkDir: out.WorkDir, RouteFallback: out.RouteFallback, EntryModel: out.EntryModel,
 		PlanID: out.PlanID, PlanGoal: out.PlanGoal,
 	}
 	for _, t := range out.PlanStages {
@@ -176,8 +186,17 @@ func runAsk(args []string) {
 	// in review. On an interactive terminal, prompt and — on a yes — re-run it
 	// authorized in place before recording the turn, so --continue captures the
 	// resolved outcome rather than the transient review.
-	if out.NeedsApproval && out.Approval != nil {
-		out = confirmApprovalCLI(engine, out, loc, "")
+	// A plan may park more than once: each approval re-enters the stage watch
+	// and the next parked stage comes back as another NeedsApproval. The loop
+	// ends on a denial or when the same stage still parks after its resume —
+	// re-prompting that card forever would deadlock.
+	for out.NeedsApproval && out.Approval != nil {
+		next := confirmApprovalCLI(engine, out, loc, "")
+		if next == out || (next.NeedsApproval && next.Approval != nil && next.Approval.TaskID == out.Approval.TaskID) {
+			out = next
+			break
+		}
+		out = next
 	}
 	recordConvo(out)
 
@@ -207,6 +226,11 @@ func runAsk(args []string) {
 				execNote += out.Executor
 			}
 			reportNote += " · " + i18n.Tf(loc, "tui.task.execBy", "exec", execNote)
+		}
+		// "Meant for the Mac, ran here" must surface in the receipt, not only
+		// in the audit trail — the user's intent was a remote node.
+		if out.RouteFallback != "" {
+			reportNote += " · " + i18n.Tf(loc, "cli.task.route_fallback", "peer", out.RouteFallback)
 		}
 		fmt.Println(pal().Muted(reportNote))
 
@@ -262,6 +286,9 @@ func printAskPlan(loc i18n.Locale, out *askengine.Result) {
 	fmt.Printf("goal:   %s\n", out.PlanGoal)
 	fmt.Printf("stages: %d\n", len(out.PlanStages))
 	printPlanStages(out.PlanStages)
+	if out.Warning != "" {
+		fmt.Fprintln(os.Stderr, out.Warning)
+	}
 	fmt.Printf("\nfollow: panda plan show %s\n", out.PlanID)
 }
 
@@ -516,7 +543,17 @@ func confirmApprovalCLI(engine *askengine.Engine, out *askengine.Result, loc i18
 			fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(loc, p))
 		},
 	}
-	return engine.ResumeApproved(context.Background(), req.TaskID, "", cb)
+	resumed := engine.ResumeApproved(context.Background(), req.TaskID, "", cb)
+	// Approving a plan stage unblocks one task; the pipeline behind it still
+	// needs the plan watch or the ask ends at the resumed stage's receipt
+	// while later stages run unreported. A later parked stage comes back as
+	// another NeedsApproval for the caller's prompt loop.
+	if out.Kind == "plan" && out.PlanID != "" {
+		if awaited := engine.AwaitPlanOutcome(context.Background(), out.PlanID, cb); awaited != nil {
+			return awaited
+		}
+	}
+	return resumed
 }
 
 // printCost closes an interactive ask with what it cost: elapsed time, and the

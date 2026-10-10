@@ -99,6 +99,86 @@ func TestScopeDriftPausesAgent(t *testing.T) {
 	}
 }
 
+// TestScopeDriftParentAnchoredScopeCompletes pins the anchor fix: a scope the
+// entry model wrote from the project root ("proj/sub" while workDir is
+// ".../proj") names the same tree, so in-scope changes must complete, not
+// drift — the guaranteed false intercept that parked finished work in review.
+func TestScopeDriftParentAnchoredScopeCompletes(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreWithAgent(t, "drift-node-anchor")
+	work := filepath.Join(t.TempDir(), "proj")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	c.SetWorkDir(work)
+
+	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
+		_ = os.MkdirAll(filepath.Join(work, "sub"), 0o755)
+		_ = os.WriteFile(filepath.Join(work, "sub", "page.html"), []byte("x"), 0o644)
+		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}
+	})
+
+	task, result, err := c.SubmitLocal(ctx, TaskInput{
+		Title:       "parent-anchored scope",
+		Project:     "proj",
+		ContextType: "file",
+		Intent:      "write page",
+		SpecJSON:    `{"scope":"proj/sub","target":"x"}`,
+		Requires:    []string{"code:modify"},
+		Complexity:  0.1,
+		Risk:        "low",
+	})
+	if err != nil {
+		t.Fatalf("submit local: %v", err)
+	}
+	if task.State != StateDone {
+		t.Fatalf("state = %s, want done (in-scope writes must not drift); result=%+v", task.State, result)
+	}
+}
+
+// TestScopeDriftParkedIsApprovable pins the disposition contract: a drift park
+// is AcceptWork, so approving a finished-but-flagged task reaches done instead
+// of erroring out (the old NeedsChangedInput dead end).
+func TestScopeDriftParkedIsApprovable(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreWithAgent(t, "drift-node-approve")
+	work := t.TempDir()
+	c.SetWorkDir(work)
+
+	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
+		_ = os.WriteFile(filepath.Join(work, "out-of-scope.txt"), []byte("x"), 0o644)
+		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}
+	})
+
+	task, result, err := c.SubmitLocal(ctx, TaskInput{
+		Title:       "write out of scope",
+		Project:     "proj",
+		ContextType: "file",
+		Intent:      "write a file",
+		SpecJSON:    `{"scope":"allowed","target":"x"}`,
+		Requires:    []string{"code:modify"},
+		Complexity:  0.1,
+		Risk:        "low",
+	})
+	if err != nil {
+		t.Fatalf("submit local: %v", err)
+	}
+	if task.State != StateReview {
+		t.Fatalf("state = %s, want review", task.State)
+	}
+	if result.ApprovalDisposition != string(ApprovalAcceptWork) {
+		t.Fatalf("disposition = %q, want %q", result.ApprovalDisposition, ApprovalAcceptWork)
+	}
+
+	final, _, err := c.ResumeApproved(ctx, task.TaskID)
+	if err != nil {
+		t.Fatalf("resume approved: %v", err)
+	}
+	if final.State != StateDone {
+		t.Fatalf("state after approve = %s, want done", final.State)
+	}
+}
+
 // TestScopeDriftIgnoresHostState verifies that the node's own bookkeeping paths
 // (its SQLite dir, the agent CLI's own config) do not count as agent drift: the
 // host writes them as a side effect of running a task, so a task that touches
