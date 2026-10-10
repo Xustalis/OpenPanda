@@ -55,6 +55,17 @@ type HelloPayload struct {
 	Caps []string `json:"caps,omitempty"`
 }
 
+// HelloRejectPayload is what the server sends before closing a connection
+// whose hello failed. Reason is a stable machine-readable code:
+// "auth" (signature/secret mismatch — the usual case, and the one a dialer
+// must surface so an operator knows the peer is online but rejecting us),
+// "identity" (claimed id collides or re-keys a verified identity), and
+// "replay" (a consumed signature). It deliberately carries nothing derived
+// from the secret — the frame rides the still-unauthenticated channel.
+type HelloRejectPayload struct {
+	Reason string `json:"reason"`
+}
+
 // CapBinaryData is the hello-advertised capability for binary data frames:
 // a peer that lists it accepts data-carrying envelopes (artifact_chunk,
 // artifact_push) as a WS binary frame — 2-byte header length + JSON header +

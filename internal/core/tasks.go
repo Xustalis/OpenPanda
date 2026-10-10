@@ -963,7 +963,25 @@ func (s *TaskStore) PauseWithDisposition(ctx context.Context, taskID, owner, rea
 // needs sign-off (supervision loop terminal: an irreversible task, or one that
 // exhausted its round budget without satisfying the success criteria).
 func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, result any) error {
-	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalAcceptWork)
+	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalAcceptWork, "awaiting approval")
+}
+
+// PauseDrift parks a running task whose agent overstepped its declared scope.
+// The drift message and the strayed paths are preserved as the result so the
+// human reviewing sees exactly what left the scope, and the disposition is
+// AcceptWork: approving accepts the work as done (the reviewer saw the diff),
+// rejecting fails it. The old NeedsChangedInput disposition made approve
+// error out — a finished task with no route to done.
+//
+// ok:true in the stored result: the agent's run succeeded and drift is a
+// policy intercept, not an execution failure — an approving human accepts the
+// work, so the approve receipt must not report (and exit) as a failure.
+func (s *TaskStore) PauseDrift(ctx context.Context, taskID, owner, reason string, files []string) error {
+	result := map[string]any{"drift": true, "ok": true, "stderr": reason}
+	if len(files) > 0 {
+		result["files_changed"] = files
+	}
+	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalAcceptWork, reason)
 }
 
 // PauseForAnswer parks a running task in review on an agent's clarification
@@ -971,10 +989,10 @@ func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, r
 // the disposition resumes execution — the user's answer travels back on
 // task_resume and folds into the re-run's intent.
 func (s *TaskStore) PauseForAnswer(ctx context.Context, taskID, owner string, result any) error {
-	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalResumeExecution)
+	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalResumeExecution, "awaiting approval")
 }
 
-func (s *TaskStore) pauseWithResultDisposition(ctx context.Context, taskID, owner string, result any, disposition ApprovalDisposition) error {
+func (s *TaskStore) pauseWithResultDisposition(ctx context.Context, taskID, owner string, result any, disposition ApprovalDisposition, reason string) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
@@ -983,7 +1001,7 @@ func (s *TaskStore) pauseWithResultDisposition(ctx context.Context, taskID, owne
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateRunning)
 	}
 	if err := s.applyReviewCAS(ctx, taskID, StateRunning, owner, cur.AttemptID, EvReview,
-		map[string]any{"reason": "awaiting approval"}, result, disposition); err != nil {
+		map[string]any{"reason": reason}, result, disposition); err != nil {
 		return err
 	}
 	updated, err := s.Get(ctx, taskID)

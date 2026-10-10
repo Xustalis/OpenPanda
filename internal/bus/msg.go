@@ -12,7 +12,12 @@ import (
 // Message types. These strings are the routing key in the envelope's "type"
 // field and are part of the cross-node protocol.
 const (
-	MsgHello        = "hello"
+	MsgHello = "hello"
+	// MsgHelloReject is the only pre-auth frame a server sends back: the
+	// peer's hello failed verification, and this is the reason it is about
+	// to be dropped. Without it a rejected dialer saw "connected" then EOF —
+	// indistinguishable from a network flap — and kept redialing forever.
+	MsgHelloReject  = "hello_reject"
 	MsgJoin         = "join"
 	MsgHeartbeat    = "heartbeat"
 	MsgTaskDelegate = "task_delegate"

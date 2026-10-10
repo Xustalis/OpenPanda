@@ -197,6 +197,47 @@ func TestResolvePinStaleRowTracksFreshest(t *testing.T) {
 	}
 }
 
+// TestResolvePinFallsBackToConfiguredLink covers the directory-gap fallback:
+// a peer this node is configured to dial but has never met holds no directory
+// row, and the pin must still resolve through the recorded addr→id binding —
+// the cross-subnet case LAN beacons cannot fill. The resolution is marked as
+// a link fallback, the forward says so, and an unknown ref still declines.
+func TestResolvePinFallsBackToConfiguredLink(t *testing.T) {
+	c := pinCore(t, "root-x", "x")
+	ctx := context.Background()
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := ledger.RecordPeerAddr(c.db, "10.9.9.9:7836", "far-node@vm-abc"); err != nil {
+		t.Fatalf("record binding: %v", err)
+	}
+
+	// By the configured address.
+	res := c.resolvePin(ctx, "10.9.9.9:7836")
+	if !res.found || !res.viaLink || res.targetID != "far-node@vm-abc" {
+		t.Fatalf("resolve by addr = %+v, want viaLink hit on far-node@vm-abc", res)
+	}
+	if res.online {
+		t.Fatal("binding without a live conn must not read online")
+	}
+	// By the node's config-name segment.
+	if res := c.resolvePin(ctx, "far-node"); !res.found || res.targetID != "far-node@vm-abc" {
+		t.Fatalf("resolve by name = %+v, want the bound id", res)
+	}
+	// The hard pin forwards there, naming the fallback.
+	d := c.routePinned(ctx, "10.9.9.9:7836", []string{"root-x"}, []string{"coding"}, ledger.ResourceProfile{})
+	if d.Action != scheduler.ActionForward || d.Target != "far-node@vm-abc" {
+		t.Fatalf("routePinned = %+v, want forward to far-node@vm-abc", d)
+	}
+	if !strings.Contains(d.Reason, "configured peer") {
+		t.Fatalf("reason = %q, want the fallback named", d.Reason)
+	}
+	// A ref neither in the directory nor bound still declines honestly.
+	if d := c.routePinned(ctx, "no-such-node", []string{"root-x"}, nil, ledger.ResourceProfile{}); d.Action != scheduler.ActionDecline {
+		t.Fatalf("routePinned unknown = %+v, want decline", d)
+	}
+}
+
 func TestResolvePinNotFoundDeclines(t *testing.T) {
 	c := pinCore(t, "root-x", "x")
 	ctx := context.Background()

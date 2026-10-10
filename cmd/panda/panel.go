@@ -193,23 +193,50 @@ func runStatus(args []string) {
 		case !localRunning:
 			fmt.Println(p.Muted(i18n.T(loc, "cli.status.localDown")))
 		}
-		printMeshLineTo(os.Stdout, loc, cfg, views)
+		printMeshLineTo(os.Stdout, loc, cfg, db, views)
 		printPendingTo(os.Stdout, db, loc)
 	}
 }
 
 // printMeshLineTo appends the one-line mesh summary `status` owes a fleet
 // listing: whether THIS node's WS listener answers (self-dialed — a
-// wildcard listen_addr is probed via loopback), how many configured peers
-// are reachable per the directory's freshness, and whether the mesh
-// secret exists at all. "0 peers configured" is information; a down
-// listener with peers configured is the fault line this surfaces.
-func printMeshLineTo(w io.Writer, loc i18n.Locale, cfg *config.Config, views []nodeStatusView) {
+// wildcard listen_addr is probed via loopback), how many CONFIGURED peers
+// are up, and whether the mesh secret exists at all. "0 peers configured"
+// is information; a down listener with peers configured is the fault line
+// this surfaces.
+//
+// The fraction is configured-peers-online / configured-peers, both sides
+// from the config: a peer is online when the daemon's addr→id binding
+// (peer_addrs, written at hello time) maps its configured address to an id
+// the self row currently advertises as a live neighbor. Counting live
+// directory rows instead — the old behavior — let an inbound-only stranger
+// make a dead configured peer read as "1/1 online".
+func printMeshLineTo(w io.Writer, loc i18n.Locale, cfg *config.Config, db *sql.DB, views []nodeStatusView) {
 	p := pal()
 	peersOnline := 0
-	for _, v := range views {
-		if v.Running && !v.Local {
-			peersOnline++
+	if len(cfg.Network.Peers) > 0 {
+		// Live ids come from the local row's link-state advertisement, which
+		// the daemon refreshes on its monitor tick. A daemon that is not
+		// running cannot vouch for anything: the advertisement is stale, so
+		// the count degrades to 0 rather than repeating the last state.
+		live := map[string]bool{}
+		localRunning := false
+		for _, v := range views {
+			if v.Local {
+				localRunning = v.Running
+				for _, id := range v.Neighbors {
+					live[id] = true
+				}
+			}
+		}
+		if localRunning {
+			if bindings, err := ledger.PeerAddrBindings(db); err == nil {
+				for _, addr := range cfg.Network.Peers {
+					if id := bindings[core.NormalizeDialAddr(addr)]; id != "" && live[id] {
+						peersOnline++
+					}
+				}
+			}
 		}
 	}
 	host, port, err := net.SplitHostPort(cfg.Network.ListenAddr)
@@ -956,9 +983,14 @@ func runApprove(args []string) {
 		defer engine.Close()
 		out = engine.ResumeApproved(context.Background(), id, "", askengine.StreamCallbacks{}, *answer)
 	}
+	// A successful AcceptWork approve is a success whatever the stored result
+	// says: the result describes why the task parked (drift text, a notify
+	// payload, a failed-looking run the human chose to accept), not whether
+	// the approve action worked. Exit 0 and surface the text as a note.
+	approved := disposition == core.ApprovalAcceptWork
 	if jsonOutput {
 		emitJSON(resultToJSON(out))
-		if !out.OK && !out.Deferred {
+		if !out.OK && !out.Deferred && !approved {
 			os.Exit(1)
 		}
 		return
@@ -993,6 +1025,12 @@ func runApprove(args []string) {
 		return
 	}
 	if !out.OK {
+		if approved {
+			if s := strings.TrimSpace(out.Stderr); s != "" {
+				fmt.Fprintln(os.Stderr, s)
+			}
+			return
+		}
 		fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
 		os.Exit(1)
 	}
@@ -1003,6 +1041,10 @@ func runApprove(args []string) {
 
 // runReject implements `panda reject <id> [--reason s]` — rejects a reviewed
 // task (review -> failed). Kernel-form replacement for the web panel's reject.
+// The reject must travel through the scheduler core like `panda cancel` does:
+// a delegated task's executor also parks a review copy, and only a task_cancel
+// over the bus takes it out — a local store write would leave that copy
+// approvable, running work the origin explicitly denied.
 func runReject(args []string) {
 	fs := flag.NewFlagSet("reject", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
@@ -1018,14 +1060,17 @@ func runReject(args []string) {
 	if err != nil {
 		fatal("load config", err)
 	}
-	db, store, err := panelStore(cfg)
+	engine, err := askengine.New(context.Background(), cfg, askengine.Options{
+		CardPath:   defaultCardPath(),
+		ConfigPath: *configPath,
+	})
 	if err != nil {
-		fatal("open store", err)
+		fatal("ask engine", err)
 	}
-	defer db.Close()
+	defer engine.Close()
 
-	id = resolveTaskRef(store, id)
-	if err := store.Reject(context.Background(), id, *reason); err != nil {
+	id = resolveTaskRef(engine.TaskStore(), id)
+	if err := engine.RejectTask(context.Background(), id, *reason); err != nil {
 		fatal("reject", err)
 	}
 	if jsonOutput {

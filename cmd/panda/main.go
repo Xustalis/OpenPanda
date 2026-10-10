@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"net"
@@ -511,13 +512,31 @@ func runDaemon(args []string) {
 	// same material. The secret creates a standalone mesh domain — a node
 	// joining an existing mesh later adopts the inviter's secret via pair.
 	if cfg.Network.SharedSecret == "" {
+		// Silent rekey guard: a node that HAS a mesh — configured peers, or
+		// registered remote nodes in the directory — but no secret almost
+		// certainly lost its credential (OPENPANDA_SHARED_SECRET not passed
+		// this start, or the file's field was cleared). Minting a fresh
+		// secret anyway exiles the node permanently: every configured peer
+		// rejects its hello until the ORIGINAL secret is restored. Scream
+		// about it, and keep the wrong value off disk — a persisted mismatch
+		// would exile the node on every future env-less start too.
+		meshed := len(cfg.Network.Peers) > 0 || hasMeshHistory(db, runtimeNodeID)
 		if secret, serr := generateSharedSecret(); serr == nil {
 			cfg.Network.SharedSecret = secret
-			if werr := config.UpdateNetworkSection(*configPath,
-				config.NetworkConfig{SharedSecret: secret}); werr != nil {
-				logger.Warn("generated shared secret could not be persisted (in-memory only)", "err", werr)
-			} else {
-				logger.Info("generated and saved shared secret", "config", *configPath)
+			switch {
+			case meshed:
+				logger.Error("network.shared_secret is empty on a node that has meshed before — "+
+					"a fresh in-memory secret was minted and configured peers WILL REJECT it. "+
+					"If this node previously joined a mesh via OPENPANDA_SHARED_SECRET or `panda pair`, "+
+					"stop it and restore the original secret; pairing again also re-adopts the mesh secret",
+					"configured_peers", len(cfg.Network.Peers))
+			default:
+				if werr := config.UpdateNetworkSection(*configPath,
+					config.NetworkConfig{SharedSecret: secret}); werr != nil {
+					logger.Warn("generated shared secret could not be persisted (in-memory only)", "err", werr)
+				} else {
+					logger.Info("generated and saved shared secret", "config", *configPath)
+				}
 			}
 		} else {
 			logger.Warn("could not generate shared secret", "err", serr)
@@ -815,6 +834,19 @@ func runDaemon(args []string) {
 			fatal("websocket server", err)
 		}
 	}
+}
+
+// hasMeshHistory reports whether this node's directory ever held a remote
+// node — the signal that an empty shared_secret is a lost credential, not a
+// first run. The self row is excluded because Register writes it on every
+// boot regardless of mesh membership.
+func hasMeshHistory(db *sql.DB, selfID string) bool {
+	var n int
+	if err := db.QueryRow(
+		`SELECT COUNT(1) FROM employee_cache WHERE id != ?`, selfID).Scan(&n); err != nil {
+		return false // can't prove history — stay on the first-run path
+	}
+	return n > 0
 }
 
 // schedulerTier maps a resource class to the DCPS-style scheduler tier used

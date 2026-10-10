@@ -441,7 +441,7 @@ func (c *Core) waitRemoteResult(ctx context.Context, cur Task, ch <-chan bus.Tas
 				// push the cancel downstream so any still-running copy stops
 				// too (D3/S1-2).
 				c.failLocal(ctx, taskID, errors.New(what+" timeout"))
-				c.forwardCancelDownstream(ctx, taskID)
+				c.forwardCancelDownstream(ctx, taskID, what+" timeout")
 				return t, bus.TaskResultPayload{}, fmt.Errorf("%s timeout waiting for executor", what)
 			}
 		}

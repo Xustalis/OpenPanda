@@ -1107,13 +1107,23 @@ func (h *handler) rejectTask(w http.ResponseWriter, r *http.Request) {
 		Reason string `json:"reason"`
 		Scope  string `json:"scope"`
 	}
+	var err error
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body) // empty/invalid body falls back to the query param
 		if body.Reason != "" {
 			reason = body.Reason
 		}
 	}
-	if err := h.store.Reject(r.Context(), id, reason); err != nil {
+	// Go through the ask engine when one is configured so the rejection also
+	// travels to the remote executor holding the delegated review copy (the
+	// same path cancelTask uses); an engine-less panel degrades to the local
+	// row update.
+	if eng := h.currentEngine(); eng != nil {
+		err = eng.RejectTask(r.Context(), id, reason)
+	} else {
+		err = h.store.Reject(r.Context(), id, reason)
+	}
+	if err != nil {
 		if errors.Is(err, core.ErrConflict) || errors.Is(err, core.ErrIllegal) {
 			writeErr(w, http.StatusConflict, errors.New("task is not awaiting approval"))
 			return

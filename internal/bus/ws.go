@@ -66,7 +66,7 @@ const qosLaneCap = 64
 // qosForType classifies an envelope by its message type.
 func qosForType(typ string) int {
 	switch typ {
-	case MsgHello, MsgHeartbeat, MsgTaskCancel, MsgTaskDecline,
+	case MsgHello, MsgHelloReject, MsgHeartbeat, MsgTaskCancel, MsgTaskDecline,
 		MsgAgentGrant, MsgAgentYield, MsgArtifactPushStatus, MsgArtifactPushDone:
 		return QoSControl
 	case MsgTaskDelegate, MsgTaskAccept, MsgTaskResult, MsgTaskProgress,
@@ -133,6 +133,11 @@ type Conn struct {
 	// tell a live same-id duplicate conn from a half-dead socket nobody has
 	// noticed yet: only the latter may be replaced.
 	lastSeen atomic.Int64
+	// rejectReason records the hello_reject code the peer sent before
+	// dropping us — "auth", "identity", "replay" — so the dialer can tell
+	// "peer online but refusing our credential" from a transport flap.
+	// Written once, on the unauthenticated leg the frame is allowed to ride.
+	rejectReason atomic.Value // string
 }
 
 // SetPeerID binds the authenticated node id to this connection (set once, at
@@ -148,6 +153,25 @@ func (c *Conn) PeerID() string {
 	c.idMu.RLock()
 	defer c.idMu.RUnlock()
 	return c.peerID
+}
+
+// SetRejectReason records the hello_reject reason the peer sent us (first
+// write wins — a later frame must not rewrite the verdict). RejectReason
+// returns "" until one arrives.
+func (c *Conn) SetRejectReason(reason string) {
+	if reason == "" {
+		return
+	}
+	c.rejectReason.CompareAndSwap(nil, reason)
+}
+
+// RejectReason returns the hello_reject code the peer sent before closing,
+// or "" when the conn died without a stated reason.
+func (c *Conn) RejectReason() string {
+	if v := c.rejectReason.Load(); v != nil {
+		return v.(string)
+	}
+	return ""
 }
 
 // MarkOutbound flags this connection as locally-initiated; Outbound reports it.

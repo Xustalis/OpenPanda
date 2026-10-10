@@ -31,6 +31,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // progressInterval is the minimum spacing between EvProgress recordings:
@@ -2085,11 +2086,14 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// its declared scope has overstepped the task. Pause it for human
 		// analysis rather than mark it done, fail it into the retry loop, or
 		// re-delegate — a deterministic intercept will not improve on retry.
+		// The roots are re-anchored to workDir first: a spec written from the
+		// project root ("proj/sub" while workDir is ".../proj") names the same
+		// tree, and comparing it verbatim drifted every in-scope change.
 		if plan.Kind == "agent" && !scope.Empty() && res.OK {
-			if drift := scope.Drift(lastChanged); len(drift) > 0 {
+			if drift := scope.DriftUnder(workDir, lastChanged); len(drift) > 0 {
 				msg := "scope drift: agent changed files outside declared scope: " + strings.Join(drift, ", ")
 				c.audit(ctx, taskID, "scope:drift", plan.Agent, "denied", msg)
-				if err := c.store.Pause(ctx, taskID, c.nodeID, msg); err != nil {
+				if err := c.store.PauseDrift(ctx, taskID, c.nodeID, msg, drift); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 						return roundOutcome{}, ErrCancelled
 					}
@@ -2099,7 +2103,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				trackTask(c, task.Project, required, task.Title, false)
 				return roundOutcome{done: true, payload: bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview,
-					ApprovalDisposition: string(ApprovalNeedsChangedInput),
+					ApprovalDisposition: string(ApprovalAcceptWork),
 					OK:                  false, ExitCode: 1, Stderr: msg,
 					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}}, nil
@@ -2923,9 +2927,20 @@ func (c *Core) handleProgress(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	if p.AttemptID != "" && t.AttemptID != "" && p.AttemptID != t.AttemptID {
-		// A beat from a superseded attempt (after a retry/transfer) must not
-		// extend the current one's lease.
-		return
+		if attemptIsNewer(p.AttemptID, t.AttemptID) {
+			// The executor rotated its attempt forward (a resume re-run or a
+			// supervisor retry re-attempts under a fresh id upstream never
+			// sees). UUIDv7 ids are time-ordered, so a newer id can only come
+			// from a rotation after our record — adopt it and let the beat
+			// renew the lease: the executor is alive on its current attempt.
+			if aerr := c.store.AdoptAttempt(ctx, p.TaskID, p.AttemptID); aerr == nil {
+				t.AttemptID = p.AttemptID
+			}
+		} else {
+			// A beat from a superseded attempt (after a retry/transfer) must not
+			// extend the current one's lease.
+			return
+		}
 	}
 	if err := c.store.SetLease(ctx, p.TaskID, c.lease().Milliseconds()); err != nil {
 		c.logger.Warn("refresh lease from progress", "task", p.TaskID, "err", err)
@@ -2942,6 +2957,15 @@ func (c *Core) handleProgress(ctx context.Context, env bus.Envelope) {
 		}
 	}
 	c.relayToParent(ctx, bus.MsgTaskProgress, t.Chain, p)
+}
+
+// attemptIsNewer reports whether candidate is a strictly later attempt than
+// stored: both must be UUIDv7 (the only id shape whose lexical order is time
+// order), and candidate must sort after stored. Anything else — an arbitrary
+// foreign id, a missing version nibble — cannot be ordered and stays on the
+// drop path it always took.
+func attemptIsNewer(candidate, stored string) bool {
+	return util.IsUUIDv7(candidate) && util.IsUUIDv7(stored) && candidate > stored
 }
 
 // isCurrentExecutor reports whether from is the node expected to report on
@@ -3192,18 +3216,36 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	if p.AttemptID == "" || (t.AttemptID != "" && t.AttemptID != p.AttemptID) {
-		c.logger.Info("stale attempt result ignored", "task", p.TaskID,
-			"stored", t.AttemptID, "got", p.AttemptID)
-		// Keep the drop honest: a real executor DID produce this outcome for
-		// an attempt the row moved past. Without the audit event the timeline
-		// reads as if the remote work never reported back.
-		if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
-			"late": true, "dropped": "stale_attempt",
-			"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
-		}); rerr != nil {
-			c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
+		if t.AttemptID != "" && attemptIsNewer(p.AttemptID, t.AttemptID) {
+			// The executor rotated its attempt forward — a task_resume
+			// re-run or supervisor retry mints a fresh attempt upstream never
+			// hears about, and before this the result was dropped as stale,
+			// leaving delegator and executor permanently split (running vs
+			// review). The sender already authenticated as THIS task's
+			// current executor above, and UUIDv7 ids are time-ordered: a
+			// newer attempt can only come from a rotation after our record,
+			// never from a replayed older one (those stay dropped below).
+			if aerr := c.store.AdoptAttempt(ctx, p.TaskID, p.AttemptID); aerr != nil {
+				c.logger.Warn("adopt rotated attempt", "task", p.TaskID, "err", aerr)
+			} else {
+				c.logger.Info("adopted executor's rotated attempt", "task", p.TaskID,
+					"stored", t.AttemptID, "got", p.AttemptID)
+				t.AttemptID = p.AttemptID
+			}
+		} else {
+			c.logger.Info("stale attempt result ignored", "task", p.TaskID,
+				"stored", t.AttemptID, "got", p.AttemptID)
+			// Keep the drop honest: a real executor DID produce this outcome for
+			// an attempt the row moved past. Without the audit event the timeline
+			// reads as if the remote work never reported back.
+			if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
+				"late": true, "dropped": "stale_attempt",
+				"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
+			}); rerr != nil {
+				c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
+			}
+			return
 		}
-		return
 	}
 	state := p.State
 	if state == "" {
@@ -3432,7 +3474,7 @@ func (c *Core) finishCancel(ctx context.Context, cancelled []string) {
 	for _, id := range cancelled {
 		c.cancelRunning(id)
 		c.dropPendingContext(id)
-		c.forwardCancelDownstream(ctx, id)
+		c.forwardCancelDownstream(ctx, id, "cancelled by delegator")
 	}
 }
 
@@ -3449,13 +3491,28 @@ func (c *Core) CancelTree(ctx context.Context, taskID string) ([]string, error) 
 	return cancelled, nil
 }
 
+// RejectTree is the local-entry reject: fail the reviewed row, then notify
+// the downstream executor holding the delegated review copy. Reject without
+// the forward left the executor's copy parked in review — a local approve on
+// that copy would run work the origin explicitly denied. The kill rides the
+// same task_cancel/cancel_outbox path as CancelTree: the executor's
+// handleCancel cascades it out of review, and an unreachable executor gets it
+// parked for its next hello.
+func (c *Core) RejectTree(ctx context.Context, taskID, reason string) error {
+	if err := c.store.Reject(ctx, taskID, reason); err != nil {
+		return err
+	}
+	c.forwardCancelDownstream(ctx, taskID, "rejected by delegator: "+reason)
+	return nil
+}
+
 // forwardCancelDownstream propagates a cancel to the remote executor holding
 // the dispatch lease, if any (P2-3). Without it, cancelling a delegated task
 // cancelled only the delegator's local copy: the executor kept running to
 // completion and its eventual result landed on an already-cancelled task.
 // The receiver's handleCancel re-runs its own cascade-and-forward, so the
 // cancel walks the whole downstream chain hop by hop.
-func (c *Core) forwardCancelDownstream(ctx context.Context, taskID string) {
+func (c *Core) forwardCancelDownstream(ctx context.Context, taskID, reason string) {
 	target, err := c.store.DispatchTarget(ctx, taskID)
 	if err != nil {
 		c.logger.Warn("cancel: dispatch target lookup", "task", taskID, "err", err)
@@ -3464,7 +3521,9 @@ func (c *Core) forwardCancelDownstream(ctx context.Context, taskID string) {
 	if target == "" || target == c.nodeID {
 		return // never dispatched, or dispatched to ourselves
 	}
-	const reason = "cancelled by delegator"
+	if reason == "" {
+		reason = "cancelled by delegator"
+	}
 	if c.deliverCancel(ctx, target, taskID, reason) {
 		// Delivered now: clear any copy parked from an earlier failed attempt.
 		c.outboxCancelDrop(ctx, target, taskID)

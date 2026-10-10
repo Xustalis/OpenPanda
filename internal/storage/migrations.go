@@ -65,6 +65,22 @@ var migrations = []Migration{
 	{Version: 38, Name: "add_resume_outbox", Apply: migrateV38},
 	{Version: 39, Name: "add_pending_verified", Apply: migrateV39},
 	{Version: 40, Name: "add_pair_sessions", Apply: migrateV40},
+	{Version: 41, Name: "add_peer_addrs", Apply: migrateV41},
+}
+
+// migrateV41 adds peer_addrs: the daemon-persisted binding from a configured
+// dial address to the node id its hello bound. `panda status` runs in its own
+// process and can only see the directory, so without this it cannot say
+// whether the peers THIS node dials are up — the mesh line counted live
+// directory rows instead, and an inbound-only stranger could make a dead
+// configured peer read as online.
+func migrateV41(tx MigrationExec) error {
+	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS peer_addrs (
+		addr TEXT PRIMARY KEY,
+		node_id TEXT NOT NULL,
+		last_seen INTEGER NOT NULL
+	)`)
+	return err
 }
 
 // migrateV40 adds pair_sessions: the responder-side row of a Bluetooth-style

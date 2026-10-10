@@ -428,6 +428,18 @@ func (e *Engine) CancelTask(ctx context.Context, taskID string) ([]string, error
 	return sched.CancelTree(ctx, taskID)
 }
 
+// RejectTask fails a reviewed task and propagates the rejection to the remote
+// executor holding its delegated review copy, on the same cancel path
+// CancelTask uses. Without the forward the executor's copy stayed in review
+// and a local approve there would run work the origin explicitly denied.
+func (e *Engine) RejectTask(ctx context.Context, taskID, reason string) error {
+	sched := e.sched.Load()
+	if sched == nil {
+		return core.NewSigningTaskStore(e.db, e.logger).Reject(ctx, taskID, reason)
+	}
+	return sched.RejectTree(ctx, taskID, reason)
+}
+
 // TaskStore returns the task store on the engine's database, for callers that
 // need read-level access (reference resolution) without a scheduler core.
 func (e *Engine) TaskStore() *core.TaskStore {

@@ -721,6 +721,40 @@ func (p PendingNode) Fingerprint() string {
 	return p.PubKey[:16]
 }
 
+// RecordPeerAddr persists the binding from a configured dial address to the
+// node id its hello bound. One row per address, overwritten on re-bind: the
+// address is the stable key an operator configured, and a node id behind it
+// changing (a reinstall) must update rather than accumulate. Written by the
+// daemon at hello time; `panda status` — a separate process that cannot ask
+// the daemon anything — reads it to say which CONFIGURED peers are up.
+func RecordPeerAddr(db *sql.DB, addr, nodeID string) error {
+	if db == nil || addr == "" || nodeID == "" {
+		return nil
+	}
+	_, err := db.Exec(`INSERT INTO peer_addrs (addr, node_id, last_seen) VALUES (?, ?, ?)
+		ON CONFLICT(addr) DO UPDATE SET node_id=excluded.node_id, last_seen=excluded.last_seen`,
+		addr, nodeID, storage.Now())
+	return err
+}
+
+// PeerAddrBindings returns every addr→node_id binding the daemon recorded.
+func PeerAddrBindings(db *sql.DB) (map[string]string, error) {
+	rows, err := db.Query(`SELECT addr, node_id FROM peer_addrs`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]string)
+	for rows.Next() {
+		var addr, id string
+		if err := rows.Scan(&addr, &id); err != nil {
+			return nil, err
+		}
+		out[addr] = id
+	}
+	return out, rows.Err()
+}
+
 // UpsertPending records a discovery beacon. first_seen survives across
 // beacons so the listing can tell a just-appeared node from a long-announced
 // one; a node already in the directory is skipped by the caller (it is

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"strings"
@@ -102,10 +103,20 @@ func (c *Core) maintainPeerLoop(ctx context.Context, peer string) {
 			// peer that is simply off. Keep a sparse beat every ~20th failure
 			// so the outage stays greppable without owning the log.
 			if dialFails == 1 || dialFails%peerFailLogEvery == 0 {
-				c.logger.Warn("peer dial failed", "peer", peer, "err", err, "consecutive", dialFails)
+				if errors.Is(err, ErrAuthRejected) {
+					// The peer is online and refusing our credential —
+					// the remedy is fixing shared_secret, not the network.
+					c.logger.Warn("peer rejecting our authentication — verify shared_secret matches the peer",
+						"peer", peer, "err", err, "consecutive", dialFails)
+				} else {
+					c.logger.Warn("peer dial failed", "peer", peer, "err", err, "consecutive", dialFails)
+				}
 			}
 			capTo := peerBackoffCap
-			if c.HasPendingCustody(ctx) {
+			// Custody collapses the cap so parked work meets a reconnect
+			// sooner — but an auth-rejected edge can never carry it, so the
+			// refusal keeps the full 30s backoff instead of a 5s storm.
+			if c.HasPendingCustody(ctx) && !errors.Is(err, ErrAuthRejected) {
 				capTo = peerBackoffCapCustody
 			}
 			select {
@@ -233,6 +244,13 @@ func ProbePeer(ctx context.Context, nodeID string, card ledger.Card, model confi
 		probe.mu.RUnlock()
 		if hit != nil {
 			return &ProbeResult{PeerID: hit.id, Encrypted: hit.conn.Encrypted()}, nil
+		}
+		// The peer explicitly refused our hello — fail fast and say so. A
+		// generic timeout here reads as "peer unreachable" when the peer is
+		// actually online and rejecting our credential; those need opposite
+		// remedies (check the secret, not the network).
+		if v := probe.lastHelloReject.Load(); v != nil {
+			return nil, fmt.Errorf("peer online but rejected our authentication (hello_reject: %s) — check shared_secret matches", v.(string))
 		}
 		select {
 		case <-pctx.Done():

@@ -294,6 +294,11 @@ type Core struct {
 	// entries age out of a bounded window and the map is hard-capped so a peer
 	// minting ids forever cannot grow memory without bound.
 	msgSeen map[string]time.Time
+	// lastHelloReject is the most recent hello_reject reason a peer sent us,
+	// mirrored off the conn so one-shot probes without a conn handle (the
+	// ProbePeer loop) can still report "online but refusing our credential"
+	// instead of a generic handshake timeout.
+	lastHelloReject atomic.Value // string
 	// msgSeenSweep is the last expiry pass over msgSeen. Sweeping inside the
 	// claim used to walk the whole map on every inbound frame — under a busy
 	// mesh that is an O(capacity) scan per message. Amortized: stale entries
@@ -1239,7 +1244,7 @@ func (c *Core) expireLeases(ctx context.Context) {
 		// under a task this node has already reported failed — work that
 		// a re-route then duplicates. forwardCancelDownstream no-ops
 		// when the task never left this node.
-		c.forwardCancelDownstream(ctx, id)
+		c.forwardCancelDownstream(ctx, id, "lease expired")
 		// Propagate the timeout up the delegation chain so a root
 		// scheduler blocked in Submit unblocks (D3). relayToParent is
 		// a no-op for a root task; signalResult no-ops without a waiter.
@@ -1380,10 +1385,13 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 				c.logger.Warn("spoofed sender on connection", "bound", id, "from", env.From)
 				return
 			}
-		} else if env.Type != bus.MsgHello && !isPairMessage(env.Type) {
-			// The pairing frames are the only pre-hello traffic besides the
-			// hello itself — pair_hello runs a sealed DH exchange, so the
-			// unauthenticated channel it rides cannot leak the secret.
+		} else if env.Type != bus.MsgHello && env.Type != bus.MsgHelloReject && !isPairMessage(env.Type) {
+			// The pairing frames and the hello_reject verdict are the only
+			// pre-hello traffic besides the hello itself — pair_hello runs a
+			// sealed DH exchange so the unauthenticated channel it rides
+			// cannot leak the secret, and hello_reject carries only a fixed
+			// reason code that is worth more to the rejected peer than the
+			// nothing it reveals to anyone else.
 			c.logger.Warn("message before hello", "type", env.Type, "from", env.From)
 			return
 		}
@@ -1469,6 +1477,13 @@ func (c *Core) MaintainPeer(ctx context.Context, addr string) error {
 		return err
 	}
 	c.handleInbound(ctx, conn)
+	// The peer answered our hello with hello_reject and closed us: that is a
+	// refusal, not a dropped healthy link. Report it as a dial failure so the
+	// maintain loop takes the exponential backoff path — two nodes with
+	// mismatched secrets otherwise redial each other every second forever.
+	if reason := conn.RejectReason(); reason != "" {
+		return fmt.Errorf("%w: %s", ErrAuthRejected, reason)
+	}
 	// Our outbound conn ended. If the peer still reaches us on its own conn,
 	// wait for that conn to die too before handing control back.
 	//
@@ -1743,6 +1758,8 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 	switch env.Type {
 	case bus.MsgHello:
 		c.handleHello(ctx, conn, env)
+	case bus.MsgHelloReject:
+		c.handleHelloReject(ctx, conn, env)
 	case bus.MsgPairHello:
 		c.handlePairHello(ctx, conn, env)
 	case bus.MsgPairReject:
@@ -1854,6 +1871,49 @@ func (c *Core) claimMsgID(env bus.Envelope) bool {
 	return true
 }
 
+// ErrAuthRejected wraps the reason a peer sent in hello_reject: the link
+// itself worked but our credential did not. maintainPeerLoop treats it like
+// any dial failure (exponential backoff, sparse logging) — the distinct
+// error keeps the log line saying "rejected", not "unreachable".
+var ErrAuthRejected = errors.New("peer rejected our hello")
+
+// rejectHello answers a failed hello with hello_reject so the dialer learns
+// it was refused — not merely disconnected — then drops the conn. The frame
+// rides the still-unauthenticated leg deliberately: it carries a fixed reason
+// code only, nothing derived from the secret. A peer old enough not to know
+// the type still sees the close, which is all it ever saw; and the close
+// frame carries the same reason for operators watching at the WS layer.
+func (c *Core) rejectHello(conn *bus.Conn, reason string) {
+	msgID, err := newUUID()
+	if err == nil {
+		if env, err := bus.NewEnvelope(bus.MsgHelloReject, c.nodeID, msgID,
+			bus.HelloRejectPayload{Reason: reason}); err == nil {
+			// Send reports the real socket write (the QoS writer is
+			// synchronous), so the reason is on the wire before Close.
+			_ = conn.Send(env)
+		}
+	}
+	conn.CloseReason(4001, "hello rejected: "+reason)
+}
+
+// handleHelloReject records a peer's refusal verdict on our conn and closes
+// it. The conn carries the reason for MaintainPeer; the core-level marker
+// gives one-shot probes (ProbePeer) the same signal without a conn handle.
+func (c *Core) handleHelloReject(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
+	var p bus.HelloRejectPayload
+	if err := env.PayloadInto(&p); err != nil || p.Reason == "" {
+		c.logger.Debug("hello_reject without reason", "from", env.From)
+	}
+	reason := p.Reason
+	if reason == "" {
+		reason = "unknown"
+	}
+	conn.SetRejectReason(reason)
+	c.lastHelloReject.Store(reason)
+	c.logger.Warn("peer rejected our hello", "peer", env.From, "reason", reason)
+	conn.Close()
+}
+
 func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 	var p bus.HelloPayload
 	if err := env.PayloadInto(&p); err != nil {
@@ -1862,9 +1922,12 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	}
 	// Verify the transport signature before trusting the claimed identity
 	// (design §16 / P0-1). Fail closed: an unauthenticated or stale hello
-	// registers nothing and receives no reply.
+	// registers nothing and receives no reply — but it DOES receive a
+	// hello_reject first, so the dialer can tell "my credential is wrong"
+	// from "the network dropped us".
 	if !bus.VerifyHelloP(c.sharedSecret, p, time.Now()) {
 		c.logger.Warn("rejected hello: bad signature", "peer", p.NodeID)
+		c.rejectHello(conn, "auth")
 		return
 	}
 	if p.Nonce == "" {
@@ -1880,6 +1943,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// the same signature — out until the window closed.
 	if env.From != p.NodeID {
 		c.logger.Warn("rejected hello: from mismatch", "from", env.From, "peer", p.NodeID)
+		c.rejectHello(conn, "auth")
 		return
 	}
 	// A peer may not claim OUR identity. "nodeID == ours" is not another
@@ -1888,6 +1952,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// the building (and overwrite the self rows the directory keeps).
 	if p.NodeID == c.nodeID {
 		c.logger.Warn("rejected hello: peer claims local node id", "peer", p.NodeID)
+		c.rejectHello(conn, "identity")
 		return
 	}
 	// Identity pin on keys a human verified: once a node id's recorded key is
@@ -1904,6 +1969,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 				`SELECT COALESCE(key_verified,0) FROM employee_cache WHERE id=?`, p.NodeID).Scan(&verified)
 			if verified != 0 {
 				c.logger.Warn("rejected hello: key re-bind on verified identity", "peer", p.NodeID)
+				c.rejectHello(conn, "identity")
 				return
 			}
 		}
@@ -1924,6 +1990,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	if _, dup := c.helloSeen[key]; dup {
 		c.mu.Unlock()
 		c.logger.Warn("rejected hello: replayed signature", "peer", p.NodeID)
+		c.rejectHello(conn, "replay")
 		return
 	}
 	now := time.Now()
@@ -2001,6 +2068,17 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// The hello is the first version stamp — heartbeats then keep it fresh.
 	if err := ledger.SetNodeVerIfChanged(c.db, p.NodeID, p.Ver); err != nil {
 		c.logger.Warn("stamp peer version", "peer", p.NodeID, "err", err)
+	}
+	// Bind the configured dial address to the id it resolved to. `panda
+	// status` runs in its own process and cannot ask this daemon which
+	// configured peers are up; this row is how the mesh line maps the
+	// operator's configured list onto live directory ids. Only outbound
+	// conns carry a dial address — an inbound hello proves a peer exists
+	// but names no address of ours to compare against the config.
+	if conn.Outbound() && !ledger.SessionRowID(p.NodeID) {
+		if err := ledger.RecordPeerAddr(c.db, NormalizeDialAddr(conn.DialAddr()), p.NodeID); err != nil {
+			c.logger.Debug("record peer addr binding", "peer", p.NodeID, "err", err)
+		}
 	}
 	// Record PubKey only when the EdSig actually verified it — a hello that
 	// passed on the HMAC fallback never proved control of the key it claims,
@@ -2382,6 +2460,18 @@ func (c *Core) linkMetrics() []ledger.LinkMetric {
 // helloCard marshals the capability summary for the hello payload.
 func (c *Core) helloCard() (json.RawMessage, error) {
 	return json.Marshal(c.summary())
+}
+
+// NormalizeDialAddr canonicalizes a configured peer address for the
+// addr→node_id binding (peer_addrs): scheme and trailing slash off, so the
+// config's "ws://host:7836/" and a bare "host:7836" compare equal. Shared
+// with `panda status`, whose configured-peer-online count joins the same
+// strings against the same table.
+func NormalizeDialAddr(addr string) string {
+	addr = strings.TrimSpace(addr)
+	addr = strings.TrimPrefix(addr, "ws://")
+	addr = strings.TrimPrefix(addr, "wss://")
+	return strings.TrimSuffix(addr, "/")
 }
 
 // normalizeWSURL turns a bare host[:port] peer address into a WebSocket URL,
