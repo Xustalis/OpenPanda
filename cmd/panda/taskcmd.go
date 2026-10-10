@@ -162,14 +162,16 @@ func runTaskShow(args []string) {
 	}
 	// Where the work happened — the first question a produced file raises.
 	// This node's own derived directory wins; a delegated result carries the
-	// executor's directory on the wire, so the origin can locate the output
-	// on the machine that made it; the submitter's pin is the fallback
-	// before any run has derived one.
+	// executor's directory on the wire (recorded on the row too, for the
+	// queue board), so the origin can locate the output on the machine that
+	// made it; the submitter's pin is the fallback before any run has
+	// derived one.
 	workDir, workDirOn := t.ExecWorkDir, ""
-	if workDir == "" {
-		if dir, exec, ok := resultWorkDir(t.ResultJSON); ok {
-			workDir, workDirOn = dir, exec
-		}
+	if dir, exec, ok := resultWorkDir(t.ResultJSON); ok &&
+		(workDir == "" || workDir == dir) && exec != "" && exec != t.OwnerNode {
+		// The row's field and the result agree — annotate the node that ran
+		// it, which the bare path cannot say.
+		workDir, workDirOn = dir, exec
 	}
 	if workDir == "" {
 		workDir = t.WorkDir

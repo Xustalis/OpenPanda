@@ -3422,6 +3422,16 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 		c.adoptWorktreeOutput(ctx, t, env.From, p.OutputArtifact)
 	}
 
+	// The executor reported WHERE it ran; record it on this row too, so the
+	// delegator's queue board answers "where did it run?" for remote work
+	// instead of showing a dash (the row's own exec_work_dir only exists
+	// when THIS node ran the task).
+	if p.WorkDir != "" && p.WorkDir != t.ExecWorkDir {
+		if werr := c.store.SetExecWorkDir(context.WithoutCancel(ctx), p.TaskID, p.WorkDir); werr != nil {
+			c.logger.Warn("record executor work dir", "task", p.TaskID, "err", werr)
+		}
+	}
+
 	// Record delegation outcome for scheduling analysis (B2). Only record when
 	// this node actually delegated the task to the sender of the result.
 	if target, err := c.store.DispatchTarget(ctx, p.TaskID); err == nil && target == env.From {
