@@ -43,6 +43,7 @@ type askResult struct {
 	Model      string `json:"model,omitempty"`
 	Injected   bool   `json:"injected,omitempty"`
 	Executor   string `json:"executor,omitempty"`
+	WorkDir    string `json:"work_dir,omitempty"`
 	EntryModel string `json:"entry_model,omitempty"`
 	// Report is the LLM-generated summary of the task outcome. It is filled
 	// by SummarizeResult after every inline task so the web UI shows a
@@ -92,6 +93,7 @@ func planResultOf(out *askengine.Result) askResult {
 		Model:        out.Model,
 		Injected:     out.Injected,
 		Executor:     out.Executor,
+		WorkDir:      out.WorkDir,
 		EntryModel:   out.EntryModel,
 		Report:       out.Report,
 		PlanID:       out.PlanID,

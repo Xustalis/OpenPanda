@@ -973,10 +973,15 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// cross-device result like an ordinary sub-agent's (S1-3).
 	start := time.Now()
 	var taskChain []string
+	// execWorkDir is the workspace the run actually derived; stamped onto
+	// every result on the way out so the delegator can see WHERE the work
+	// happened, not just who reported it (set after prepareRunDir below).
+	var execWorkDir string
 	defer func() {
 		if out.TaskID != "" {
 			out.DurationMS = time.Since(start).Milliseconds()
 			out.Executor = c.nodeID
+			out.WorkDir = execWorkDir
 			if len(out.Chain) == 0 {
 				out.Chain = taskChain
 			}
@@ -1041,6 +1046,15 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	prep, err := c.prepareRunDir(execCtx, ctx, task, taskID, plan)
 	if err != nil {
 		return bus.TaskResultPayload{}, err
+	}
+	execWorkDir = prep.workDir
+	// Persist where this run happens so the queue board, `task show` and the
+	// panel can answer "where did it run?" — the row's work_dir is only a
+	// submitter pin and is empty for ordinary tasks.
+	if execWorkDir != "" {
+		if werr := c.store.SetExecWorkDir(context.WithoutCancel(ctx), taskID, execWorkDir); werr != nil {
+			c.logger.Warn("persist exec work dir", "task", taskID, "err", werr)
+		}
 	}
 	if prep.negoRelease != nil {
 		defer prep.negoRelease()

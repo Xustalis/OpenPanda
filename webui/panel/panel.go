@@ -479,6 +479,11 @@ type taskJSON struct {
 	SessionID    string   `json:"session_id,omitempty"`
 	ResourceKeys []string `json:"resource_keys,omitempty"`
 	Scheduled    bool     `json:"scheduled"`
+	// WorkDir is the submitter's pin (a session worktree); ExecWorkDir is
+	// where the run actually happened — the board shows the latter so a
+	// finished row can be located on the machine that ran it.
+	WorkDir     string `json:"work_dir,omitempty"`
+	ExecWorkDir string `json:"exec_work_dir,omitempty"`
 	// ApprovalDisposition says what approving a reviewed task would do —
 	// accept_work / resume_execution / needs_changed_input — so the board can
 	// label the pending decision instead of a bare "awaiting approval".
@@ -584,6 +589,8 @@ func toTaskJSON(t core.Task) taskJSON {
 		SessionID:    t.SessionID,
 		ResourceKeys: t.ResourceKeys,
 		Scheduled:    t.Scheduled,
+		WorkDir:      t.WorkDir,
+		ExecWorkDir:  t.ExecWorkDir,
 		CreatedAt:    ts(t.CreatedAt),
 		UpdatedAt:    ts(t.UpdatedAt),
 	}

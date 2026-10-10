@@ -14,6 +14,28 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
+// TestElidePathKeepsTail pins the workspace column's shortening: the tail —
+// the part that names the directory — must survive, with a marker showing the
+// cut, and a path that fits passes through untouched.
+func TestElidePathKeepsTail(t *testing.T) {
+	if got := elidePath("/Users/x/work/project", 30); got != "/Users/x/work/project" {
+		t.Fatalf("fitting path changed: %q", got)
+	}
+	got := elidePath("/Users/xenith/Library/Application Support/openpanda/stages/plan-x/stage-1", 30)
+	if len([]rune(got)) > 30 {
+		t.Fatalf("elided path longer than cap: %q", got)
+	}
+	if !strings.HasPrefix(got, "…") {
+		t.Fatalf("elided path lacks the cut marker: %q", got)
+	}
+	if !strings.HasSuffix(got, "stage-1") {
+		t.Fatalf("elided path lost the tail: %q", got)
+	}
+	if got := elidePath("", 30); got != "" {
+		t.Fatalf("empty path = %q, want empty", got)
+	}
+}
+
 // TestMeshLineCountsConfiguredPeersOnly pins the denominator fix: the mesh
 // summary must count online CONFIGURED peers, not live directory rows. The
 // old numerator let an inbound-only node (reachable, never configured) make a

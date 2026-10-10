@@ -861,10 +861,21 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 		return Task{}, fmt.Errorf("create child task: %w", err)
 	}
 	if in.WorkDir != "" {
-		_ = c.store.SetWorkDir(ctx, t.TaskID, in.WorkDir)
+		if err := c.store.SetWorkDir(ctx, t.TaskID, in.WorkDir); err != nil {
+			c.logger.Warn("persist child work dir", "task", t.TaskID, "err", err)
+		}
 	}
-	_ = c.store.SetAuthorized(ctx, t.TaskID, in.Authorized)
-	_ = c.store.SetDetail(ctx, t.TaskID, in.detail())
+	if err := c.store.SetAuthorized(ctx, t.TaskID, in.Authorized); err != nil {
+		// Fail-open on consent is safe (tier-2 parks), but the operator
+		// should see why a consented child ran gated.
+		c.logger.Warn("persist child authorization", "task", t.TaskID, "err", err)
+	}
+	if err := c.store.SetDetail(ctx, t.TaskID, in.detail()); err != nil {
+		// The detail IS the child's intent and requires: without it the row
+		// would run with an empty intent — a silent wrong-run. Fail the
+		// spawn; the parent folds "delegation failed: ..." and can retry.
+		return Task{}, fmt.Errorf("persist child detail: %w", err)
+	}
 	// A pre-budget parent (delegation_budget=0, e.g. a row minted before v19)
 	// carries the default; its child's dispatch still decrements normally.
 	budget := parent.DelegationBudget

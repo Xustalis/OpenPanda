@@ -523,6 +523,10 @@ type Result struct {
 	// local run, the peer's id for a delegated one. Empty when the result
 	// never reached an executor (route miss, early failure).
 	Executor string
+	// WorkDir is the workspace the executor ran in (the derived directory,
+	// not the submitter's pin) — carried on the wire so the origin can
+	// locate the produced files on the machine that made them.
+	WorkDir string
 	// RouteFallback names the peer the task was routed to before the link
 	// failed at send time and it ran locally instead. Empty for a clean
 	// local run or a real delegation — non-empty means Executor's local id
@@ -2029,6 +2033,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		Model:     result.Model,
 		Injected:  result.Injected,
 		Executor:  result.Executor,
+		WorkDir:   result.WorkDir,
 	}
 	res.Question = result.Question
 	res.FilesChanged = result.FilesChanged
@@ -2186,6 +2191,7 @@ func resultFromTask(task core.Task, result bus.TaskResultPayload, routeFallback 
 		Model:         result.Model,
 		Injected:      result.Injected,
 		Executor:      result.Executor,
+		WorkDir:       result.WorkDir,
 		RouteFallback: routeFallback,
 		Question:      result.Question,
 		FilesChanged:  result.FilesChanged,

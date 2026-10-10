@@ -160,6 +160,27 @@ func runTaskShow(args []string) {
 		target != "" && target != t.OwnerNode {
 		taskField("executor", target)
 	}
+	// Where the work happened — the first question a produced file raises.
+	// This node's own derived directory wins; a delegated result carries the
+	// executor's directory on the wire, so the origin can locate the output
+	// on the machine that made it; the submitter's pin is the fallback
+	// before any run has derived one.
+	workDir, workDirOn := t.ExecWorkDir, ""
+	if workDir == "" {
+		if dir, exec, ok := resultWorkDir(t.ResultJSON); ok {
+			workDir, workDirOn = dir, exec
+		}
+	}
+	if workDir == "" {
+		workDir = t.WorkDir
+	}
+	if workDir != "" {
+		val := workDir
+		if workDirOn != "" && workDirOn != t.OwnerNode {
+			val += " " + pal().Separator() + " " + workDirOn
+		}
+		taskField("workdir", val)
+	}
 	// The events are loaded once here so the field block can annotate a
 	// route_fallback (meant for a peer, ran locally) alongside the timeline.
 	events, err := store.Events(context.Background(), id)
@@ -505,6 +526,10 @@ type taskJSON struct {
 	Pinned   string `json:"pinned,omitempty"`
 	Session  string `json:"session_id,omitempty"`
 	Intent   string `json:"intent,omitempty"`
+	// WorkDir is the submitter's pin (a session worktree), empty for
+	// ordinary tasks; ExecWorkDir is where the run actually happened.
+	WorkDir     string `json:"work_dir,omitempty"`
+	ExecWorkDir string `json:"exec_work_dir,omitempty"`
 	// WaitingLink marks a dispatched row whose real location is this node's
 	// outbox — parked awaiting the target's link, not running anywhere.
 	WaitingLink bool `json:"waiting_link,omitempty"`
@@ -517,20 +542,39 @@ type taskJSON struct {
 
 func taskToJSON(t core.Task) taskJSON {
 	j := taskJSON{
-		ID:       t.TaskID,
-		ParentID: t.ParentID,
-		Project:  t.Project,
-		Title:    t.Title,
-		State:    t.State,
-		Priority: priorityName(t.Priority),
-		Owner:    t.OwnerNode,
-		Pinned:   core.PinnedNode(t),
-		Session:  t.SessionID,
-		Intent:   t.Intent,
-		Created:  ts(t.CreatedAt),
-		Updated:  ts(t.UpdatedAt),
+		ID:          t.TaskID,
+		ParentID:    t.ParentID,
+		Project:     t.Project,
+		Title:       t.Title,
+		State:       t.State,
+		Priority:    priorityName(t.Priority),
+		Owner:       t.OwnerNode,
+		Pinned:      core.PinnedNode(t),
+		Session:     t.SessionID,
+		Intent:      t.Intent,
+		WorkDir:     t.WorkDir,
+		ExecWorkDir: t.ExecWorkDir,
+		Created:     ts(t.CreatedAt),
+		Updated:     ts(t.UpdatedAt),
 	}
 	return j
+}
+
+// resultWorkDir extracts the executor's workspace and node from a stored
+// result payload — present when the work ran on another node (the local row
+// then has no exec_work_dir of its own).
+func resultWorkDir(resultJSON string) (dir, executor string, ok bool) {
+	if resultJSON == "" {
+		return "", "", false
+	}
+	var res struct {
+		WorkDir  string `json:"work_dir"`
+		Executor string `json:"executor"`
+	}
+	if json.Unmarshal([]byte(resultJSON), &res) != nil || res.WorkDir == "" {
+		return "", "", false
+	}
+	return res.WorkDir, res.Executor, true
 }
 
 // taskToJSONWithStore fills the store-derived fields (executor) taskToJSON

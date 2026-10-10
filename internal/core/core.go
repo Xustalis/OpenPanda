@@ -233,9 +233,12 @@ type Core struct {
 	// content hashes backing the §6.2 monotonic-progress check (see
 	// stateOscillates). In-memory by design: the window bounds the lifetime
 	// of the checking process, and a restart rebuilding it from live trees
-	// costs nothing but a slightly younger window.
-	stateMu  sync.Mutex
-	stateWin map[string][]string
+	// costs nothing but a slightly younger window. stateWinAt timestamps
+	// each key so stale windows (one per plan UUID, forever, without this)
+	// are pruned once the map outgrows its bound.
+	stateMu    sync.Mutex
+	stateWin   map[string][]string
+	stateWinAt map[string]time.Time
 
 	// nego is the §5/§6.3 peer-negotiation state: nego is the scope lock
 	// table, negoWait the wait-for edges (waiter -> holders) whose cycles the
@@ -2261,6 +2264,13 @@ const stateWindowCap = 5
 // every supervision round.
 const stateHashMaxFiles = 20000
 
+// stateWinKeysMax / stateWinTTL bound the oscillation window table: past the
+// key bound, windows untouched for the TTL are dropped (see stateOscillates).
+const (
+	stateWinKeysMax = 512
+	stateWinTTL     = 24 * time.Hour
+)
+
 // stateOscillates records the content hash of a task's work tree and reports
 // whether the tree regressed to an earlier state — agent B undoing agent A's
 // fix — which is the "logical oscillation" the check exists to kill (§6.2).
@@ -2275,7 +2285,21 @@ func (c *Core) stateOscillates(key, hash string) bool {
 	defer c.stateMu.Unlock()
 	if c.stateWin == nil {
 		c.stateWin = make(map[string][]string)
+		c.stateWinAt = make(map[string]time.Time)
 	}
+	// A long-lived daemon runs plans forever and every plan id is a fresh
+	// UUID: without this prune the map keeps one window per plan ever seen.
+	// The sweep only runs past the bound, so the steady state is cheap.
+	if len(c.stateWinAt) > stateWinKeysMax {
+		cutoff := time.Now().Add(-stateWinTTL)
+		for k, at := range c.stateWinAt {
+			if at.Before(cutoff) {
+				delete(c.stateWinAt, k)
+				delete(c.stateWin, k)
+			}
+		}
+	}
+	c.stateWinAt[key] = time.Now()
 	w := c.stateWin[key]
 	if n := len(w); n > 0 && w[n-1] == hash {
 		return false // no movement

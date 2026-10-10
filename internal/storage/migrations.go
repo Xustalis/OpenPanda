@@ -66,6 +66,22 @@ var migrations = []Migration{
 	{Version: 39, Name: "add_pending_verified", Apply: migrateV39},
 	{Version: 40, Name: "add_pair_sessions", Apply: migrateV40},
 	{Version: 41, Name: "add_peer_addrs", Apply: migrateV41},
+	{Version: 42, Name: "add_tasks_exec_work_dir", Apply: migrateV42},
+}
+
+// migrateV42 adds tasks.exec_work_dir: the workspace a task actually executed
+// in, persisted when the run starts. The row's work_dir column is a PIN (a
+// session worktree the submitter chose) and stays empty for ordinary tasks,
+// whose effective directory (node work dir, stage dir, project dir) is only
+// derived at run time — so "where did this run?" had no answer on the board.
+func migrateV42(tx MigrationExec) error {
+	// A pre-v7 database has no tasks table yet (a later migration creates it
+	// with the column already present); guard like v39 does.
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "tasks", "exec_work_dir", "TEXT NOT NULL DEFAULT ''")
 }
 
 // migrateV41 adds peer_addrs: the daemon-persisted binding from a configured

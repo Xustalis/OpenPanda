@@ -214,7 +214,7 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 	var contextType, contextHash, risk, resource, requiresJSON sql.NullString
 	var approvalDisposition, operationDecision sql.NullString
 	var complexity sql.NullFloat64
-	var sessionID, resourceKeysJSON, workDir sql.NullString
+	var sessionID, resourceKeysJSON, workDir, execWorkDir sql.NullString
 	var agentSession, agentSessionNode sql.NullString
 	var scheduled int
 	var remote int
@@ -224,7 +224,7 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 		&result, &contextType, &contextHash, &complexity, &risk, &resource,
 		&requiresJSON, &approvalDisposition, &operationDecision, &lease,
 		&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
-		&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &scheduled,
+		&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &execWorkDir, &scheduled,
 		&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 		&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
 		&agentSession, &agentSessionNode, &t.AuthSig, &t.AuthPub, &t.AuthTs,
@@ -257,6 +257,7 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 	t.LeaseExpires = lease.Int64
 	t.SessionID = sessionID.String
 	t.WorkDir = workDir.String
+	t.ExecWorkDir = execWorkDir.String
 	t.Scheduled = scheduled != 0
 	t.PlanID = planID.String
 	t.StageID = stageID.String
@@ -1491,6 +1492,25 @@ func (s *TaskStore) CountScheduledActive(ctx context.Context, self string) (int,
 	return n, nil
 }
 
+// SetExecWorkDir records the workspace a task actually executed in — the
+// effective directory (node work dir, stage dir, project dir) derived at run
+// start, which the row had no field for: work_dir is a submitter PIN and
+// stays empty for ordinary tasks. Observability metadata for the queue board
+// and task show ("where did this run?").
+func (s *TaskStore) SetExecWorkDir(ctx context.Context, taskID, workDir string) error {
+	workDir = strings.TrimSpace(workDir)
+	// Deliberately no state_version bump: this is observability metadata (the
+	// directory a run derived), not a state-machine move, and bumping the
+	// version would invalidate concurrent CAS writes that raced the run start.
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET exec_work_dir=?, updated_at=? WHERE task_id=?`,
+		workDir, s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("set exec work dir: %w", err)
+	}
+	return nil
+}
+
 // SetWorkDir pins a task to its originating workspace without assigning queue
 // ownership. Inline asks use it before returning a review result so detached
 // approval can resume in the same session worktree.
@@ -2678,7 +2698,7 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	state_version, chain_json, intent, spec_json, result_json,
 	context_type, context_hash, complexity, risk, resource_json, requires_json,
 	approval_disposition, operation_decision_json, lease_expires_at, created_at, updated_at, authorized,
-	priority, seq, session_id, resource_keys_json, work_dir, scheduled,
+	priority, seq, session_id, resource_keys_json, work_dir, exec_work_dir, scheduled,
 	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact,
 	transport, deadline_unix, delegation_budget, token_budget, agent_session_id, agent_session_node,
 	auth_sig, auth_pub, auth_ts, remote`

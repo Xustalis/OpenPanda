@@ -787,8 +787,8 @@ func printTaskTableTo(out io.Writer, loc i18n.Locale, tasks []core.Task, refs ma
 // of the id column follows the longest ref actually shown, so a listing of
 // same-second tasks widens instead of printing indistinguishable rows.
 type taskTableCols struct {
-	id, state, prio, node, title int
-	refs                         map[string]string
+	id, state, prio, node, ws, title int
+	refs                             map[string]string
 }
 
 func planTaskTable(loc i18n.Locale, tasks []core.Task, width int) taskTableCols {
@@ -798,14 +798,59 @@ func planTaskTable(loc i18n.Locale, tasks []core.Task, width int) taskTableCols 
 func planTaskTableRefs(loc i18n.Locale, tasks []core.Task, width int, refs map[string]string) taskTableCols {
 	c := taskTableCols{id: 10, state: 10, prio: 8, refs: refs}
 	c.node = cliui.DisplayWidth(i18n.T(loc, "cli.col.node"))
+	c.ws = cliui.DisplayWidth(i18n.T(loc, "cli.col.workspace"))
 	for _, t := range tasks {
 		c.node = max(c.node, cliui.DisplayWidth(shortNode(t.OwnerNode)))
 		c.id = max(c.id, cliui.DisplayWidth(refOr(refs, t.TaskID)))
+		c.ws = max(c.ws, cliui.DisplayWidth(elidePath(taskWorkspace(t), taskWorkspaceCap)))
 	}
 	c.node = min(c.node, 26)
 	c.id = min(c.id, taskRefCeil)
-	c.title = max(20, width-(c.id+c.state+c.prio+c.node+4))
+	c.ws = min(c.ws, taskWorkspaceCap)
+	c.title = max(20, width-(c.id+c.state+c.prio+c.node+c.ws+5))
 	return c
+}
+
+// taskWorkspaceCap bounds the workspace column: paths are long, the board is
+// for locating — the tail of the path is what identifies the directory, and
+// the full path lives in `task show`.
+const taskWorkspaceCap = 30
+
+// taskWorkspace is the workspace a row should show: the directory the run
+// actually used, or the submitter's pin before a run has derived one.
+func taskWorkspace(t core.Task) string {
+	if t.ExecWorkDir != "" {
+		return t.ExecWorkDir
+	}
+	return t.WorkDir
+}
+
+// elidePath shortens a path to fit w columns, keeping its tail — the part
+// that names the directory — with a leading "…/" marking the cut.
+func elidePath(p string, w int) string {
+	if p == "" {
+		return ""
+	}
+	if cliui.DisplayWidth(p) <= w {
+		return p
+	}
+	runes := []rune(p)
+	// Keep the tail; reserve 2 columns for the "…/" marker.
+	keep := w - 2
+	if keep < 1 {
+		keep = 1
+	}
+	start := len(runes) - keep
+	if start < 0 {
+		start = 0
+	}
+	// Cut at a separator when one is nearby so the tail reads as path
+	// segments, not a byte soup.
+	tail := string(runes[start:])
+	if i := strings.IndexByte(tail, '/'); i > 0 && i < len(tail)/2 {
+		tail = tail[i:]
+	}
+	return "…" + tail
 }
 
 // taskTableHeader is the dimmed column-name row.
@@ -815,6 +860,7 @@ func taskTableHeader(loc i18n.Locale, c taskTableCols) string {
 		cell(i18n.T(loc, "cli.col.state"), c.state),
 		cell(i18n.T(loc, "cli.col.priority"), c.prio),
 		cell(i18n.T(loc, "cli.col.node"), c.node),
+		cell(i18n.T(loc, "cli.col.workspace"), c.ws),
 		i18n.T(loc, "cli.col.title"),
 	)
 }
@@ -829,11 +875,16 @@ func taskTableRow(t core.Task, c taskTableCols) string {
 // real state (the row is dispatched; its delivery is parked in the outbox)
 // but is the honest thing to show where a state column claims liveness.
 func taskTableRowState(t core.Task, c taskTableCols, state string) string {
+	ws := elidePath(taskWorkspace(t), c.ws)
+	if ws == "" {
+		ws = "-"
+	}
 	return row(
 		cell(refOr(c.refs, t.TaskID), c.id),
 		stateCell(state, c.state),
 		cell(priorityName(t.Priority), c.prio),
 		cell(shortNode(t.OwnerNode), c.node),
+		cell(ws, c.ws),
 		cell(t.Title, c.title),
 	)
 }

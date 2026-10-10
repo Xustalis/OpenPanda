@@ -581,6 +581,42 @@ func TestPrepareToleratesRacedQueue(t *testing.T) {
 	}
 }
 
+// TestExecWorkDirPersistedAndReported: a run must record WHERE it happened —
+// the row's exec_work_dir (for the queue board / task show / panel) and the
+// result payload's work_dir (so a delegator can locate the output on the
+// machine that made it). work_dir itself stays the submitter's pin.
+func TestExecWorkDirPersistedAndReported(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreWithNative(t, "ws-node", "127.0.0.1:17989", ledger.NativeAbility{
+		ID: "sys:probe", Command: "echo", Args: []string{"hi"},
+	})
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	dir := t.TempDir()
+	c.SetWorkDir(dir)
+
+	task, result, err := c.Submit(ctx, TaskInput{
+		Title: "ws probe", Intent: "run the probe", Requires: []string{"sys:probe"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if result.WorkDir != dir {
+		t.Fatalf("result work_dir = %q, want %q", result.WorkDir, dir)
+	}
+	row, err := c.store.Get(ctx, task.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if row.ExecWorkDir != dir {
+		t.Fatalf("row exec_work_dir = %q, want %q", row.ExecWorkDir, dir)
+	}
+	if row.WorkDir != "" {
+		t.Fatalf("row work_dir = %q, want empty (pin untouched)", row.WorkDir)
+	}
+}
+
 // TestHelloRejectAuthSurfaces exercises the whole rejection verdict: a peer
 // whose secret does not match gets an explicit hello_reject before the close,
 // its MaintainPeer reports ErrAuthRejected (not a dropped-link nil), and a

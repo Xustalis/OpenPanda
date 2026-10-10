@@ -191,7 +191,12 @@ type Task struct {
 	SessionID    string
 	ResourceKeys []string
 	WorkDir      string
-	Scheduled    bool
+	// ExecWorkDir is the workspace the run ACTUALLY used, persisted when the
+	// run starts (SetExecWorkDir). WorkDir above is a submitter pin and is
+	// empty for ordinary tasks; this one answers "where did it run?" on the
+	// queue board, `task show`, and the panel.
+	ExecWorkDir string
+	Scheduled   bool
 	// AgentSessionID is the adapter's own conversation handle, persisted each
 	// round so an interrupted run (yield, restart, redelegation back here)
 	// resumes the agent's session instead of cold-starting (§5.2). The handle

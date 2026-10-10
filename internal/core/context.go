@@ -227,19 +227,25 @@ func (c *Core) handleContextAck(ctx context.Context, env bus.Envelope) {
 	if !p.OK {
 		c.logger.Warn("context fetch declined", "task", p.TaskID)
 		release()
-		_ = c.store.ForceFail(ctx, p.TaskID, "context unavailable")
+		if ferr := c.store.ForceFail(ctx, p.TaskID, "context unavailable"); ferr != nil {
+			c.logger.Warn("fail task on declined context", "task", p.TaskID, "err", ferr)
+		}
 		return
 	}
 	if ctxstore.Hash(p.Data) != p.Hash {
 		c.logger.Warn("context hash mismatch", "task", p.TaskID)
 		release()
-		_ = c.store.ForceFail(ctx, p.TaskID, "context hash mismatch")
+		if ferr := c.store.ForceFail(ctx, p.TaskID, "context hash mismatch"); ferr != nil {
+			c.logger.Warn("fail task on context hash mismatch", "task", p.TaskID, "err", ferr)
+		}
 		return
 	}
 	if err := c.ctx.Put(ctx, p.Hash, pc.ctxType, p.Data, p.Refs); err != nil {
 		c.logger.Warn("store fetched context", "task", p.TaskID, "err", err)
 		release()
-		_ = c.store.ForceFail(ctx, p.TaskID, "store context: "+err.Error())
+		if ferr := c.store.ForceFail(ctx, p.TaskID, "store context: "+err.Error()); ferr != nil {
+			c.logger.Warn("fail task on context store error", "task", p.TaskID, "err", ferr)
+		}
 		return
 	}
 	// The parked row has been occupying a CountActive slot since

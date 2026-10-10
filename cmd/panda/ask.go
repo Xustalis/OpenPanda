@@ -50,6 +50,9 @@ type askJSON struct {
 	Model    string `json:"model,omitempty"`
 	Injected bool   `json:"injected,omitempty"`
 	Executor string `json:"executor,omitempty"`
+	// WorkDir is the workspace the executor ran in — the derived directory,
+	// not the submitter's pin — so a script can locate the produced files.
+	WorkDir string `json:"work_dir,omitempty"`
 	// RouteFallback names the peer the task was routed to before the link
 	// failed and it ran locally — the "meant for remote, ran here" marker.
 	RouteFallback string `json:"route_fallback,omitempty"`
@@ -67,7 +70,7 @@ func resultToJSON(out *askengine.Result) askJSON {
 		Kind: out.Kind, Answer: out.Answer, TaskID: out.TaskID, TaskState: out.TaskState,
 		OK: out.OK, Deferred: out.Deferred, Stdout: out.Stdout, Stderr: out.Stderr, ExitCode: out.ExitCode,
 		Agent: out.Agent, Model: out.Model, Injected: out.Injected,
-		Executor: out.Executor, RouteFallback: out.RouteFallback, EntryModel: out.EntryModel,
+		Executor: out.Executor, WorkDir: out.WorkDir, RouteFallback: out.RouteFallback, EntryModel: out.EntryModel,
 		PlanID: out.PlanID, PlanGoal: out.PlanGoal,
 	}
 	for _, t := range out.PlanStages {

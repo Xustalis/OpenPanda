@@ -479,7 +479,11 @@ type TaskResultPayload struct {
 	// across relay hops where env.From is only the last hop), which agent
 	// actually executed (Agent — the fallback chain may have swapped it),
 	// and how long the execution took on the executor's clock.
-	Executor       string `json:"executor,omitempty"`
+	Executor string `json:"executor,omitempty"`
+	// WorkDir is the workspace the executor actually ran in — the derived
+	// directory, not the submitter's pin — so the origin can locate the
+	// produced files on the machine that ran the work.
+	WorkDir        string `json:"work_dir,omitempty"`
 	Agent          string `json:"agent,omitempty"`
 	Model          string `json:"model,omitempty"`
 	Injected       bool   `json:"injected,omitempty"`
