@@ -5,6 +5,7 @@ package core
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -364,6 +365,137 @@ func TestRemoteReviewRejectsLateDone(t *testing.T) {
 	}
 	if got.State != StateReview {
 		t.Fatalf("late remote done changed protected review state to %s", got.State)
+	}
+}
+
+// A consent-to-run park is a pre-execution question. When the executor
+// reports the work finished anyway — the human approved on the executor's
+// copy, or a resume raced in — the delegator's parked copy must converge on
+// the real verdict. Keeping it in review is the headless dead-end: the user
+// approved on one node, the other copy waits forever.
+func TestRemoteConsentReviewConvergesOnDone(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "consent-park", "entry")
+	if err := s.Queue(ctx, tk.TaskID, "entry"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Dispatch(ctx, tk.TaskID, "entry", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReviewFromRemote(ctx, tk.TaskID, "entry",
+		map[string]any{"state": StateReview}, ApprovalResumeExecution); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompleteFromRemote(ctx, tk.TaskID, "entry",
+		map[string]any{"state": StateDone, "ok": true, "stdout": "shipped"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateDone {
+		t.Fatalf("consent-parked copy state = %s, want done after remote verdict", got.State)
+	}
+}
+
+// The same convergence applies to a remote failure: the run the consent
+// covered already ended, and the delegator copy must carry the verdict.
+func TestRemoteConsentReviewConvergesOnFail(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "consent-park-fail", "entry")
+	if err := s.Queue(ctx, tk.TaskID, "entry"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Dispatch(ctx, tk.TaskID, "entry", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReviewFromRemote(ctx, tk.TaskID, "entry",
+		map[string]any{"state": StateReview}, ApprovalResumeExecution); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FailFromRemote(ctx, tk.TaskID, "entry", "executor blew up"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateFailed {
+		t.Fatalf("consent-parked copy state = %s, want failed after remote verdict", got.State)
+	}
+	if !strings.Contains(got.ResultJSON, "executor blew up") {
+		t.Fatalf("failed copy lost the reason: %s", got.ResultJSON)
+	}
+}
+
+// A consent/question park that receives a FRESH remote review means the
+// executor ran (approved elsewhere) and parked again with a new question:
+// the parked payload and disposition are replaced so the delegator's human
+// sees what is actually being asked now.
+func TestRemoteConsentReviewReParkRefreshesQuestion(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "repark", "entry")
+	if err := s.Queue(ctx, tk.TaskID, "entry"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Dispatch(ctx, tk.TaskID, "entry", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReviewFromRemote(ctx, tk.TaskID, "entry",
+		map[string]any{"state": StateReview, "stderr": "may I delete files?"},
+		ApprovalResumeExecution); err != nil {
+		t.Fatal(err)
+	}
+	// Executor ran, finished output, and parked again for acceptance.
+	if err := s.ReviewFromRemote(ctx, tk.TaskID, "entry",
+		map[string]any{"state": StateReview, "stdout": "output ready"},
+		ApprovalAcceptWork); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateReview {
+		t.Fatalf("re-parked copy state = %s, want review", got.State)
+	}
+	if got.ApprovalDisposition != ApprovalAcceptWork {
+		t.Fatalf("re-parked disposition = %q, want %q", got.ApprovalDisposition, ApprovalAcceptWork)
+	}
+	if !strings.Contains(got.ResultJSON, "output ready") {
+		t.Fatalf("re-parked copy kept stale payload: %s", got.ResultJSON)
+	}
+}
+
+// …and once the row holds accept_work, the protection is back: a late
+// terminal verdict must not close the human's pending judgement.
+func TestRemoteAcceptWorkReviewStillRejectsLateVerdict(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tk := createTask(t, s, "", "accept-work-guard", "entry")
+	if err := s.Queue(ctx, tk.TaskID, "entry"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Dispatch(ctx, tk.TaskID, "entry", "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReviewFromRemote(ctx, tk.TaskID, "entry",
+		map[string]any{"state": StateReview}, ApprovalAcceptWork); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FailFromRemote(ctx, tk.TaskID, "entry", "stale failure frame"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateReview {
+		t.Fatalf("accept-work review lost to late fail: %s", got.State)
 	}
 }
 

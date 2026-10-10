@@ -802,10 +802,24 @@ func (s *TaskStore) Complete(ctx context.Context, taskID, owner string, result a
 	return s.applyCAS(ctx, taskID, StateRunning, StateDone, owner, cur.AttemptID, EvResult, result, result)
 }
 
+// reviewProtected reports whether a parked review row must ignore a late
+// remote verdict. An accept-work park holds a human verdict on FINISHED
+// output — a wire result arriving while that verdict is pending must not
+// close it. The pre-execution gates (resume_execution consent,
+// needs_changed_input questions) differ: their question is "may this run /
+// with what input", and a remote terminal result means reality already
+// answered it — the other side approved, a resume raced in, or the run
+// ended on its own. Converging there keeps a one-sided approval from
+// stranding this copy in review forever (the headless-delegator case).
+func reviewProtected(t Task) bool {
+	return t.State == StateReview && t.ApprovalDisposition == ApprovalAcceptWork
+}
+
 // CompleteFromRemote records a remote executor's final result on the
 // delegator's copy. The delegator may be in submitted/queued/dispatched/
-// running; review is intentionally protected, and the owner is moved to
-// the delegator (who holds the parent-side lease).
+// running — or parked in a consent/question review, which the remote verdict
+// resolves. An accept-work review stays protected (reviewProtected), and the
+// owner is moved to the delegator (who holds the parent-side lease).
 func (s *TaskStore) CompleteFromRemote(ctx context.Context, taskID, owner string, result any) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
@@ -814,8 +828,8 @@ func (s *TaskStore) CompleteFromRemote(ctx context.Context, taskID, owner string
 	if Terminal(cur.State) {
 		return nil // already closed; keep first result
 	}
-	if cur.State == StateReview {
-		return nil // human-review state is protected from late remote results
+	if reviewProtected(cur) {
+		return nil // accept-work verdict still pending; a wire result must not close it
 	}
 	if err := s.applyState(ctx, taskID, cur.State, StateDone, owner, cur.AttemptID, EvResult, result, result); err != nil {
 		if errors.Is(err, ErrConflict) {
@@ -840,9 +854,13 @@ func (s *TaskStore) ReviewFromRemote(ctx context.Context, taskID, owner string, 
 	if Terminal(cur.State) {
 		return nil
 	}
-	if cur.State == StateReview {
-		return nil // do not let a late failure overwrite a human-review pause
+	if cur.State == StateReview && cur.ApprovalDisposition == ApprovalAcceptWork {
+		return nil // do not let a late result redefine the finished work a human is judging
 	}
+	// A consent/question park receiving a fresh remote review means the
+	// executor re-parked (it ran — approved elsewhere — then asked a new
+	// question): applyReviewState rewrites the parked payload and
+	// disposition in place and notifyReview surfaces the new question.
 	if !validApprovalDisposition(disposition) {
 		// Old peers did not carry the typed field. Preserve compatibility, but
 		// resume only from explicit pre-execution authorization evidence.
@@ -1242,8 +1260,9 @@ func (s *TaskStore) failureWasRejected(ctx context.Context, taskID string) bool 
 }
 
 // FailFromRemote records a remote executor's failure on the delegator's copy.
-// Mirrors CompleteFromRemote, while preserving a task already parked for
-// human review.
+// Mirrors CompleteFromRemote — including the same review rule: an accept-work
+// park keeps its pending human verdict, while a consent/question park
+// converges on the executor's actual outcome.
 func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason string) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
@@ -1252,7 +1271,7 @@ func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason st
 	if Terminal(cur.State) {
 		return nil
 	}
-	if cur.State == StateReview {
+	if reviewProtected(cur) {
 		return nil
 	}
 	if err := s.applyState(ctx, taskID, cur.State, StateFailed, owner, cur.AttemptID, EvResult,

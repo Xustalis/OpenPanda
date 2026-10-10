@@ -283,6 +283,13 @@ func sessionHistory(ctx context.Context, store *sessions.Store, sess *sessions.S
 	return sess, history
 }
 
+// maxConvoAnswerChars bounds one recorded assistant answer. A single
+// oversized reply (a long report, or the raw tool transcript a budget-cut
+// loop falls back to) must not crowd every other exchange out of the
+// replay window — the full text stays reachable through the task row and
+// the session log.
+const maxConvoAnswerChars = 2000
+
 // convoSummaryOf renders the assistant side of one exchange.
 func convoSummaryOf(loc i18n.Locale, out *askengine.Result) string {
 	if out == nil {
@@ -291,7 +298,7 @@ func convoSummaryOf(loc i18n.Locale, out *askengine.Result) string {
 	switch out.Kind {
 	case "answer":
 		if strings.TrimSpace(out.Answer) != "" {
-			return out.Answer
+			return head(out.Answer, maxConvoAnswerChars)
 		}
 	case "task":
 		// A converged ask carries the model's report over the task fields —
@@ -299,7 +306,7 @@ func convoSummaryOf(loc i18n.Locale, out *askengine.Result) string {
 		// the raw output still reachable through the task id. The pointer
 		// summary below is the degraded path (queue-parked, budget-cut).
 		if strings.TrimSpace(out.Answer) != "" {
-			return out.Answer
+			return head(out.Answer, maxConvoAnswerChars)
 		}
 		var s string
 		if out.TaskTitle != "" {

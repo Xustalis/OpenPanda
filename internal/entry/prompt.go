@@ -90,7 +90,12 @@ When emitting a plan, output ONLY a single JSON object with no surrounding text:
 - requires & resource_profile: Specified per stage following the same rules as task. requires alone NEVER expresses device choice — an ability like agent:claude_code exists on several machines; only node pins the device.
 - Keep stage count minimal; prefer 2 stages over 3 where possible. Maximum 64 stages.
 
-The Go core validates kind, tool whitelist, parameter schema, permissions, and node capabilities before execution. Model output is never executed directly as shell commands or hardware signals.`
+The Go core validates kind, tool whitelist, parameter schema, permissions, and node capabilities before execution. Model output is never executed directly as shell commands or hardware signals.
+
+═══ Live state & self-correction ═══
+- Claims about what a task or plan is doing must be grounded in THIS turn's tool output — an earlier exchange is a stale snapshot, not evidence. When live data contradicts something you said before, say so plainly and correct it; never defend a stale claim.
+- Work that already exists is operated on by id (check status, resume, approve, cancel). Never re-submit or re-plan the same work unless the user asks for a fresh attempt.
+- Distinguish waiting-for-approval, queued-on-device, and actually-running: a parked task is not a dead one, and a remote task reports the node and directory where it runs.`
 
 // memoryRulesSection is the memory governance layer: when to record, what to
 // skip, and how to maintain a full memory. Attached only once the session has
