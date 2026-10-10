@@ -261,6 +261,11 @@ type Core struct {
 	peerLoopsMu sync.Mutex
 	peerLoops   map[string]context.CancelFunc
 
+	// pairing holds the Bluetooth-style LAN pairing state: inbound
+	// pair_sessions (ephemeral keys, conns, the join hook) and the
+	// pair_hello rate bucket. See pairing.go.
+	pairing pairingState
+
 	// ownsNodeRow says whether this process owns the node's directory row.
 	// The daemon does: it holds the identity lock and runs the heartbeat, so
 	// its Shutdown marks the row offline. A short-lived CLI engine (task add,
@@ -1083,6 +1088,9 @@ func (c *Core) RunMonitor(ctx context.Context) {
 			// hellos is flushed here rather than waiting on a greeting.
 			c.refreshSelfNeighbors(ctx)
 			c.sweepOutboxes(ctx)
+			// Backstop for pairing sessions orphaned by a wedged conn —
+			// each live session's own goroutine handles the normal expiry.
+			c.sweepPairSessions(ctx)
 		}
 	}
 }
@@ -1372,7 +1380,10 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 				c.logger.Warn("spoofed sender on connection", "bound", id, "from", env.From)
 				return
 			}
-		} else if env.Type != bus.MsgHello {
+		} else if env.Type != bus.MsgHello && !isPairMessage(env.Type) {
+			// The pairing frames are the only pre-hello traffic besides the
+			// hello itself — pair_hello runs a sealed DH exchange, so the
+			// unauthenticated channel it rides cannot leak the secret.
 			c.logger.Warn("message before hello", "type", env.Type, "from", env.From)
 			return
 		}
@@ -1732,6 +1743,12 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 	switch env.Type {
 	case bus.MsgHello:
 		c.handleHello(ctx, conn, env)
+	case bus.MsgPairHello:
+		c.handlePairHello(ctx, conn, env)
+	case bus.MsgPairReject:
+		// A pair_reject arriving inbound is the initiator aborting the
+		// session we host — cancel it.
+		c.handlePairCancel(ctx, conn, env)
 	case bus.MsgTaskDelegate:
 		c.handleDelegate(ctx, env)
 	case bus.MsgTaskAccept:

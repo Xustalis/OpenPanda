@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -741,6 +742,34 @@ func runDaemon(args []string) {
 	// the core so a config reload (SIGHUP or `nodes add`) can re-sync the
 	// set without a restart — ws:// / wss:// entries get the dial loop,
 	// "punch:<id>" entries get the NAT-pinhole loop.
+	// Pairing join hook: when an interactive pair_hello session is
+	// confirmed, the initiator's address joins the dial list and applies
+	// hot — persisting so the pairing survives restarts exactly like a
+	// `nodes add` would have.
+	coreNode.SetPairJoinHook(func(peerAddr string) error {
+		fresh, err := config.Load(*configPath)
+		if err != nil {
+			return err
+		}
+		peers := fresh.Network.Peers
+		if !slices.Contains(peers, peerAddr) {
+			peers = append(peers, peerAddr)
+		}
+		if err := config.UpdateNetworkSection(configWritePath(*configPath), config.NetworkConfig{
+			SharedSecret: fresh.Network.SharedSecret,
+			Peers:        peers,
+		}); err != nil {
+			return err
+		}
+		coreNode.ApplyNetworkConfig(ctx, config.NetworkConfig{
+			SharedSecret:      fresh.Network.SharedSecret,
+			Peers:             peers,
+			AllowCleartext:    fresh.Network.AllowCleartext,
+			AllowCleartextFor: fresh.Network.AllowCleartextFor,
+		})
+		return nil
+	})
+
 	coreNode.SyncPeers(ctx, cfg.Network.Peers)
 
 	logger.Info("panda core started",

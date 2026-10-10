@@ -771,3 +771,46 @@ type PunchReadyPayload = PunchOfferPayload
 // mesh's own relay bound is 3; punch adds headroom because coordination is
 // cheap and a failed punch costs a real reachability path.
 const PunchMaxTTL = 8
+
+// PairHelloPayload opens a Bluetooth-style pairing session on an
+// unauthenticated connection. The initiator is not yet a mesh peer — this
+// frame carries only ephemeral key material and self-describing display
+// fields; nothing in it is trusted until the two humans compare the
+// derived code on both screens.
+type PairHelloPayload struct {
+	Session string `json:"session"` // initiator-minted session id (uuid)
+	X       string `json:"x"`       // initiator ephemeral X25519 pub, hex
+	Pub     string `json:"pub"`     // initiator Ed25519 identity pub, hex (SAS-bound)
+	Nonce   string `json:"nonce"`   // initiator nonce, hex — HKDF salt half
+	Addr    string `json:"addr"`    // initiator's advertised listen addr (host may be 0.0.0.0)
+	Name    string `json:"name"`    // configured node.name, display only
+	NodeID  string `json:"node_id"` // runtime node id, display only
+}
+
+// PairReadyPayload answers pair_hello with the responder's ephemeral half.
+// After this frame both sides hold enough material to derive the same
+// short authentication string — a MITM relay produces a different one on
+// each end because its two DH secrets differ.
+type PairReadyPayload struct {
+	Session string `json:"session"`
+	X       string `json:"x"`
+	Pub     string `json:"pub"`
+	Nonce   string `json:"nonce"`
+}
+
+// PairSecretPayload delivers the mesh shared secret to the confirmed
+// initiator. Box is base64(gcm-nonce ‖ AES-256-GCM ciphertext) keyed by
+// HKDF(dh, salt=nonces, info="panda-pair/1") — the secret never crosses
+// the LAN readable, and only ever flows responder→initiator.
+type PairSecretPayload struct {
+	Session string `json:"session"`
+	Box     string `json:"box"`
+}
+
+// PairRejectPayload ends a session without joining: human said no, the
+// confirm window expired, or the responder refused. Reason is a stable
+// machine token ("rejected", "expired", "busy") plus optional detail.
+type PairRejectPayload struct {
+	Session string `json:"session"`
+	Reason  string `json:"reason"`
+}

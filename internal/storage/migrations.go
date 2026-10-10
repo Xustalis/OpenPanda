@@ -64,6 +64,29 @@ var migrations = []Migration{
 	{Version: 37, Name: "add_audit_log_sig", Apply: migrateV37},
 	{Version: 38, Name: "add_resume_outbox", Apply: migrateV38},
 	{Version: 39, Name: "add_pending_verified", Apply: migrateV39},
+	{Version: 40, Name: "add_pair_sessions", Apply: migrateV40},
+}
+
+// migrateV40 adds pair_sessions: the responder-side row of a Bluetooth-style
+// pairing exchange. The daemon writes it when a pair_hello lands (ephemeral
+// keys stay in memory — the row is the IPC between the daemon holding the
+// session and the operator's `panda pair confirm` on the same machine); the
+// operator flips state ready→confirmed/rejected, and the daemon's session
+// goroutine watches that flip to send or refuse the sealed secret. Direction
+// is always 'in' today — the initiator side is a synchronous CLI flow with
+// nothing to persist.
+func migrateV40(tx MigrationExec) error {
+	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS pair_sessions (
+		id TEXT PRIMARY KEY,
+		peer_addr TEXT NOT NULL DEFAULT '',
+		peer_name TEXT NOT NULL DEFAULT '',
+		peer_pub TEXT NOT NULL DEFAULT '',
+		sas TEXT NOT NULL DEFAULT '',
+		state TEXT NOT NULL DEFAULT 'ready',
+		created_at INTEGER NOT NULL,
+		expires_at INTEGER NOT NULL
+	)`)
+	return err
 }
 
 // migrateV39 adds pending_nodes.verified: whether the discovery beacon's

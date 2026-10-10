@@ -64,6 +64,15 @@ const (
 	// any residual loop.
 	MsgPunchOffer = "punch_offer"
 	MsgPunchReady = "punch_ready"
+	// Bluetooth-style LAN pairing (pair_hello is the ONLY frame accepted on
+	// an unauthenticated connection besides hello — it runs an ephemeral
+	// X25519 exchange so the two operators can compare a short code and the
+	// responder can hand the shared secret over the sealed channel; see
+	// internal/core/pairing.go).
+	MsgPairHello  = "pair_hello"
+	MsgPairReady  = "pair_ready"
+	MsgPairSecret = "pair_secret"
+	MsgPairReject = "pair_reject"
 )
 
 // Envelope is the JSON wire format (design doc §10.3). MsgID is a UUIDv7

@@ -1,0 +1,23 @@
+# node-c: 无 shared_secret 的新节点，用于测试蓝牙式配对加入
+node:
+    name: "test-node-c"
+    resource_class: "Micro"
+    kind: "vm"
+    identity: "local-test-node-c"
+network:
+    listen_addr: "127.0.0.1:17846"
+    shared_secret: "test-secret-0123456789abcdef"
+    panel_addr: "127.0.0.1:17847"
+    panel_token: ""
+    discovery_addr: "off"
+    peers:
+        - 127.0.0.1:17836
+storage:
+    db_path: "node-c.db"
+    context_path: "node-c/context"
+    memory_path: "node-c/memory"
+    projects_path: "node-c/projects"
+    skills_path: "node-c/skills"
+    work_path: "node-c"
+log:
+    level: "debug"
