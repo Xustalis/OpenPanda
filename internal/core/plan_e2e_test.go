@@ -375,6 +375,109 @@ func TestPlanStageNodePin(t *testing.T) {
 	}
 }
 
+// TestPlanSweepSkipsDelegatedStageCopy pins the executor-side guard: a node
+// holding only a DELEGATED stage copy (chain [origin, self]) must not treat
+// itself as the plan's orchestrator — its sweep queued the copy out from
+// under the delegation's own prepare/dispatch and the delegate path then
+// declined the task on a state conflict, failing the stage and cascading
+// through its dependents. The origin's own row (chain [self]) still releases.
+func TestPlanSweepSkipsDelegatedStageCopy(t *testing.T) {
+	ctx := context.Background()
+	worker := newCore(t, "worker-sweep", "127.0.0.1:17977")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	// The delegated copy: the executor owns its row, the origin leads the chain.
+	_, err := worker.store.CreateWithID(ctx, "delegated-stage", "", "proj", "t",
+		"worker-sweep", []string{"entry-sweep", "worker-sweep"}, true)
+	must(err)
+	must(worker.store.SetStage(ctx, "delegated-stage", "plan-x", "stage-1", nil))
+	must(worker.AdvancePlan(ctx, "plan-x"))
+	if got, _ := worker.store.Get(ctx, "delegated-stage"); got.State != StateSubmitted {
+		t.Fatalf("delegated stage copy = %s, want submitted (the sweep must not release it)", got.State)
+	}
+
+	// Control: the origin's own row (chain starts with self) is released.
+	_, err = worker.store.CreateWithID(ctx, "local-stage", "", "proj", "t",
+		"worker-sweep", []string{"worker-sweep"}, false)
+	must(err)
+	must(worker.store.SetStage(ctx, "local-stage", "plan-y", "stage-1", nil))
+	must(worker.AdvancePlan(ctx, "plan-y"))
+	if got, _ := worker.store.Get(ctx, "local-stage"); got.State != StateQueued {
+		t.Fatalf("origin stage = %s, want queued (the origin's sweep releases it)", got.State)
+	}
+}
+
+// TestPlanPinnedStageWithSweepRunning is the live failure shape, end to end:
+// the plan node runs its stage pinned to mac while MAC'S OWN plan sweep runs
+// (as every daemon's monitor tick does). Before the fix the sweep released
+// the delegated copy, the delegate path declined on the queue conflict, and
+// the whole stage failed.
+func TestPlanPinnedStageWithSweepRunning(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	ability := ledger.NativeAbility{
+		ID: "dev:code", Command: "sh", Args: []string{"-c", "true"}, Tier: 1,
+	}
+	pi := newCoreWithNative(t, "pi-sweep", "127.0.0.1:17994", ability)
+	mac := newCoreWithNative(t, "mac-sweep", "127.0.0.1:17995", ability)
+	for _, c := range []*Core{pi, mac} {
+		withArtifactPool(t, c)
+		c.SetWorkDir(t.TempDir())
+	}
+	if err := pi.Register(ctx); err != nil {
+		t.Fatalf("register pi: %v", err)
+	}
+	if err := mac.Register(ctx); err != nil {
+		t.Fatalf("register mac: %v", err)
+	}
+	go func() { _ = pi.Listen(ctx, "127.0.0.1:17994") }()
+	go func() { _ = mac.Listen(ctx, "127.0.0.1:17995") }()
+	time.Sleep(200 * time.Millisecond)
+	if err := pi.DialPeer(ctx, "127.0.0.1:17995"); err != nil {
+		t.Fatalf("dial mac: %v", err)
+	}
+	waitPeer(t, pi, "mac-sweep")
+	time.Sleep(300 * time.Millisecond)
+	pi.StartQueueScheduler(ctx)
+
+	// The mac's daemon sweeps pending plans on every monitor tick — run that
+	// sweep for the whole test so the release race is genuinely exercised.
+	sweepCtx, stopSweep := context.WithCancel(ctx)
+	defer stopSweep()
+	go func() {
+		for {
+			select {
+			case <-sweepCtx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+				mac.sweepPlans(sweepCtx)
+			}
+		}
+	}()
+
+	planID, err := pi.StartPlan(ctx, plan.Plan{
+		Goal: "sweep race",
+		Stages: []plan.Stage{{
+			ID: "build", Title: "build", Intent: "build on mac",
+			Requires: []string{"dev:code"}, Node: "mac-sweep",
+		}},
+	}, DefaultQueueSpec())
+	if err != nil {
+		t.Fatalf("start plan: %v", err)
+	}
+
+	stages := waitPlanDone(t, ctx, pi, planID, 1)
+	if st := stages[0]; st.State != StateDone {
+		t.Fatalf("stage state = %s, want done (the sweep race must not fail the stage)", st.State)
+	}
+}
+
 // TestPlanStageNodePinUnknown fails the plan at StartPlan when a stage pins
 // a node the directory cannot resolve: the pin is a promise the run cannot
 // keep, so it must fail before any stage row exists.

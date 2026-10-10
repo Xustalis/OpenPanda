@@ -448,6 +448,14 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 				c.logger.Info("task cancelled during execution", "task", taskID)
 				return
 			}
+			if errors.Is(err, ErrAlreadyRunning) {
+				// Another runner already owns the row (a duplicate delivery's
+				// first invocation, a resume that raced ahead): it reports the
+				// outcome through its own env, and declining here would cancel
+				// a live task the delegator is waiting on.
+				c.logger.Info("delegated task already running; standing down", "task", taskID)
+				return
+			}
 			c.logger.Warn("route delegated task", "err", err, "task", taskID)
 			c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: err.Error()})
 			// The decline tells the parent to re-route, but the local row must
@@ -899,14 +907,32 @@ func (c *Core) execute(ctx context.Context, taskID, intent string, required []st
 
 // prepare records a freshly-created task in the local queue and dispatches it
 // to this node, so the queue reflects it even if the process dies mid-run.
+// The transitions tolerate a row another path already moved — a plan sweep
+// that raced the delegate, a duplicate delivery's first invocation: a task
+// already queued/dispatched/running is one this path can still adopt, and
+// declining it over a bookkeeping race is how a delegated task "never
+// completes". A terminal row is the one real conflict (the delegator
+// cancelled, or another verdict won) and reports as ErrCancelled so the
+// caller stands down without a decline.
 func (c *Core) prepare(ctx context.Context, taskID string) error {
-	if err := c.store.Queue(ctx, taskID, c.nodeID); err != nil {
+	if err := c.store.Queue(ctx, taskID, c.nodeID); err != nil && !errors.Is(err, ErrConflict) {
 		return fmt.Errorf("queue: %w", err)
 	}
-	if err := c.store.Dispatch(ctx, taskID, c.nodeID, c.nodeID); err != nil {
+	if err := c.store.Dispatch(ctx, taskID, c.nodeID, c.nodeID); err != nil && !errors.Is(err, ErrConflict) {
 		return fmt.Errorf("dispatch: %w", err)
 	}
-	return nil
+	t, err := c.store.Get(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("load task: %w", err)
+	}
+	switch t.State {
+	case StateQueued, StateDispatched, StateRunning, StateWaitingCtx:
+		return nil
+	}
+	if Terminal(t.State) {
+		return ErrCancelled
+	}
+	return fmt.Errorf("queue: %w: task %s state=%s, want submitted", ErrConflict, taskID, t.State)
 }
 
 // storeWriteCtx returns a context bounded to 5 seconds that survives cancellation

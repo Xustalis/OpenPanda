@@ -552,18 +552,28 @@ func (c *Core) planStageInputs(ctx context.Context, consumer Task, byStage map[s
 }
 
 // orchestratesAny reports whether this node has orchestration authority over
-// these stages. In the decentralized mesh (whitepaper §4.2), a node that
-// originated the plan or owns a child stage as a Sub-MainAgent can advance
-// dependencies.
+// these stages — the plan's origin, which is the only node that may release
+// them. A delegated stage copy is executed by the delegate path, never by the
+// local plan sweep: the executor holds a partial graph and its Queue would
+// race the delegation already under way.
 func (c *Core) orchestratesAny(stages []Task) bool {
 	for _, t := range stages {
-		if len(t.Chain) > 0 && t.Chain[0] == c.nodeID {
-			return true
+		if len(t.Chain) > 0 {
+			// The plan's origin is chain[0]. A delegated stage copy carries
+			// [origin, executor, ...] even though the executor owns its own
+			// row — ownership must never qualify, or the executor's plan
+			// sweep "releases" the copy (queues it out from under the
+			// delegation's own prepare/dispatch) and the delegate path
+			// declines the task on a state conflict, failing the stage and
+			// cascading through its dependents.
+			if scheduler.SameRuntimeIdentity(t.Chain[0], c.nodeID) {
+				return true
+			}
+			continue
 		}
-		if t.OwnerNode == c.nodeID {
-			return true
-		}
-		if t.ParentID != "" && (t.OwnerNode == c.nodeID || (len(t.Chain) > 0 && t.Chain[0] == c.nodeID)) {
+		// Chainless rows are legacy/local: only their owner can be the
+		// orchestrator.
+		if scheduler.SameRuntimeIdentity(t.OwnerNode, c.nodeID) {
 			return true
 		}
 	}

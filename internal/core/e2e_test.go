@@ -546,6 +546,41 @@ func TestAcceptParksForOfflineExecutor(t *testing.T) {
 	}
 }
 
+// TestPrepareToleratesRacedQueue: the delegate path's prepare must adopt a
+// row another path already moved — a plan sweep that raced the delegation, a
+// duplicate delivery's first invocation — instead of declining the task on a
+// bookkeeping conflict. A terminal row is the one real stand-down.
+func TestPrepareToleratesRacedQueue(t *testing.T) {
+	ctx := context.Background()
+	worker := newCore(t, "worker-prep", "127.0.0.1:17979")
+	if err := worker.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	_, err := worker.store.CreateWithID(ctx, "raced-task", "", "proj", "t",
+		"worker-prep", []string{"worker-prep"}, false)
+	must(err)
+	// Another path queued the row first (the plan sweep's release).
+	must(worker.store.Queue(ctx, "raced-task", "worker-prep"))
+	if err := worker.prepare(ctx, "raced-task"); err != nil {
+		t.Fatalf("prepare on a raced queue = %v, want adopted", err)
+	}
+	if got, _ := worker.store.Get(ctx, "raced-task"); got.State != StateDispatched {
+		t.Fatalf("state = %s, want dispatched", got.State)
+	}
+	// A terminal row reports ErrCancelled so the caller stands down silently
+	// instead of declining a task the delegator already closed.
+	must(worker.store.Cancel(ctx, "raced-task"))
+	if err := worker.prepare(ctx, "raced-task"); !errors.Is(err, ErrCancelled) {
+		t.Fatalf("prepare on a cancelled row = %v, want ErrCancelled", err)
+	}
+}
+
 // TestHelloRejectAuthSurfaces exercises the whole rejection verdict: a peer
 // whose secret does not match gets an explicit hello_reject before the close,
 // its MaintainPeer reports ErrAuthRejected (not a dropped-link nil), and a
