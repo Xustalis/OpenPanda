@@ -299,6 +299,14 @@ type Core struct {
 	// ProbePeer loop) can still report "online but refusing our credential"
 	// instead of a generic handshake timeout.
 	lastHelloReject atomic.Value // string
+	// lastVerifiedHello is the evidence a one-shot probe needs: the id a
+	// verified hello reply announced and whether the session cipher armed on
+	// that exchange. ProbePeer normally polls the peer registry, but a peer
+	// holding a live same-id session (the daemon's own edge) answers our
+	// hello reply and then closes the probe conn — the register-then-delete
+	// race reads as unreachable even though the reply proved the peer is
+	// online and authenticated. Tiny and informational on every core.
+	lastVerifiedHello atomic.Value // probeHello
 	// msgSeenSweep is the last expiry pass over msgSeen. Sweeping inside the
 	// claim used to walk the whole map on every inbound frame — under a busy
 	// mesh that is an O(capacity) scan per message. Amortized: stale entries
@@ -2044,6 +2052,25 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		return
 	}
 
+	// Bind the configured dial address to the id it resolved to, BEFORE the
+	// mutual-dial tie-break below. `panda status` runs in its own process and
+	// cannot ask this daemon which configured peers are up; this row is how
+	// the mesh line maps the operator's configured list onto live directory
+	// ids. The binding must survive the dedup loser: when the surviving conn
+	// is the PEER's inbound one, this side's outbound loses the tie-break
+	// and closes — writing the binding only on the winner left a healthy
+	// configured edge reading 0/1 forever. Only outbound conns carry a dial
+	// address; an inbound hello names no address of ours to compare.
+	if conn.Outbound() && !ledger.SessionRowID(p.NodeID) {
+		if err := ledger.RecordPeerAddr(c.db, NormalizeDialAddr(conn.DialAddr()), p.NodeID); err != nil {
+			c.logger.Debug("record peer addr binding", "peer", p.NodeID, "err", err)
+		}
+	}
+	// The verified reply is itself the reachability proof a probe reports on:
+	// record it before the tie-break below, which may close this conn right
+	// after (the probe's registry entry then gets cleaned up with it).
+	c.lastVerifiedHello.Store(probeHello{id: p.NodeID, encrypted: conn.Encrypted()})
+
 	accepted := c.ensurePeer(p.NodeID, conn)
 	if !accepted {
 		// Lost the mutual-dial tie-break: the reply above already left on
@@ -2068,17 +2095,6 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// The hello is the first version stamp — heartbeats then keep it fresh.
 	if err := ledger.SetNodeVerIfChanged(c.db, p.NodeID, p.Ver); err != nil {
 		c.logger.Warn("stamp peer version", "peer", p.NodeID, "err", err)
-	}
-	// Bind the configured dial address to the id it resolved to. `panda
-	// status` runs in its own process and cannot ask this daemon which
-	// configured peers are up; this row is how the mesh line maps the
-	// operator's configured list onto live directory ids. Only outbound
-	// conns carry a dial address — an inbound hello proves a peer exists
-	// but names no address of ours to compare against the config.
-	if conn.Outbound() && !ledger.SessionRowID(p.NodeID) {
-		if err := ledger.RecordPeerAddr(c.db, NormalizeDialAddr(conn.DialAddr()), p.NodeID); err != nil {
-			c.logger.Debug("record peer addr binding", "peer", p.NodeID, "err", err)
-		}
 	}
 	// Record PubKey only when the EdSig actually verified it — a hello that
 	// passed on the HMAC fallback never proved control of the key it claims,

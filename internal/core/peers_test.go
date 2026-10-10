@@ -112,6 +112,36 @@ func TestProbePeerEncrypted(t *testing.T) {
 	}
 }
 
+// TestProbePeerAgainstHeldEdge covers the probe on a live mesh: the peer
+// holds an edge for this node id (the running daemon's own session), so the
+// probe's conn is answered and then closed by the same-id-session rule. The
+// registry entry the probe polls is cleaned up with that conn — the probe
+// must still report the peer reachable, because the verified hello reply is
+// the proof it exists to gather. Before the fix this read "handshake timed
+// out — peer never completed the hello" on a perfectly healthy mesh.
+func TestProbePeerAgainstHeldEdge(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	entry := newCore(t, "entry-held", "127.0.0.1:17982")
+	worker := newCore(t, "worker-held", "127.0.0.1:17983")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17982", "127.0.0.1:17983")
+
+	// The live worker core holds the edge; the probe claims the same id.
+	res, err := ProbePeer(ctx, "worker-held", ledger.Card{Device: "worker-held"},
+		config.ModelConfig{}, config.NetworkConfig{SharedSecret: testSharedSecret},
+		"127.0.0.1:17982", nil, nil)
+	if err != nil {
+		t.Fatalf("probe against a held edge = %v, want reachable", err)
+	}
+	if res.PeerID != "entry-held" {
+		t.Fatalf("probe peer id = %q, want entry-held", res.PeerID)
+	}
+	if !res.Encrypted {
+		t.Fatal("probe session did not arm against a sessaead peer")
+	}
+}
+
 func TestProbePeerUnreachable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()

@@ -73,6 +73,19 @@ func TestMutualDialDedup(t *testing.T) {
 	default:
 	}
 
+	// Both sides must have recorded the addr→id binding for the peer they
+	// dialed — including the side whose outbound conn LOST the tie-break.
+	// The mesh status line joins these bindings against live neighbors to
+	// count configured peers online; a binding written only on the winner
+	// left a healthy edge whose surviving conn is the peer's inbound one
+	// reading "0/1 online" forever.
+	if got, err := ledger.PeerAddrBindings(b.db); err != nil || got["127.0.0.1:17961"] != "node-a" {
+		t.Fatalf("b's peer_addrs = %v (err %v), want 127.0.0.1:17961 → node-a", got, err)
+	}
+	if got, err := ledger.PeerAddrBindings(a.db); err != nil || got["127.0.0.1:17962"] != "node-b" {
+		t.Fatalf("a's peer_addrs = %v (err %v), want 127.0.0.1:17962 → node-b", got, err)
+	}
+
 	// The capability directory must show both nodes online on both sides —
 	// the flap used to stamp peers offline mid-churn.
 	for _, tc := range []struct {

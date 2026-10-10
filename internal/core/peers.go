@@ -193,6 +193,14 @@ type ProbeResult struct {
 	Encrypted bool
 }
 
+// probeHello is the verified-reply evidence ProbePeer reports on when the
+// registry entry is gone: the id the peer's hello reply announced, and
+// whether the session cipher armed on that exchange.
+type probeHello struct {
+	id        string
+	encrypted bool
+}
+
 // injectNodeKey installs a pre-loaded identity so nodeKeyPair serves it
 // instead of materializing a fresh pair — the probe's path, where minting a
 // throwaway key under the real node id would poison the peer's TOFU record
@@ -251,6 +259,15 @@ func ProbePeer(ctx context.Context, nodeID string, card ledger.Card, model confi
 		// remedies (check the secret, not the network).
 		if v := probe.lastHelloReject.Load(); v != nil {
 			return nil, fmt.Errorf("peer online but rejected our authentication (hello_reject: %s) — check shared_secret matches", v.(string))
+		}
+		// The peer answered our hello and then closed the probe conn — it
+		// holds a live same-id session (the daemon's own edge), so the
+		// registry entry this loop polls was cleaned up with the conn. The
+		// verified reply is the proof the probe exists to gather: report the
+		// peer reachable instead of timing out on a healthy mesh.
+		if v := probe.lastVerifiedHello.Load(); v != nil {
+			ev := v.(probeHello)
+			return &ProbeResult{PeerID: ev.id, Encrypted: ev.encrypted}, nil
 		}
 		select {
 		case <-pctx.Done():
