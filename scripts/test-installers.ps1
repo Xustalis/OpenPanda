@@ -236,17 +236,27 @@ try {
         Ok "logon task OpenPandaNode registered"
         # The task has to point at *this* prefix: a task left over from an
         # earlier install keeps launching the old binary after an upgrade, and
-        # nothing else in the suite would notice. Two normalisations are not
-        # cosmetic — schtasks can emit UTF-16, which decodes to NUL-interleaved
-        # text if the console encoding is single-byte (that would fail the
-        # match on a perfectly healthy task), and Windows paths are
-        # case-insensitive.
+        # nothing else in the suite would notice. It references the generated
+        # panda-daemon.cmd wrapper (console-less tasks lose stdout, so the
+        # wrapper appends it to daemon.log); the wrapper in turn bakes the
+        # absolute exe path — the chain task→wrapper→binary is what must point
+        # at this prefix. Two normalisations are not cosmetic — schtasks can
+        # emit UTF-16, which decodes to NUL-interleaved text if the console
+        # encoding is single-byte (that would fail the match on a perfectly
+        # healthy task), and Windows paths are case-insensitive.
         $flat = ($taskXml -replace "`0", "").ToLowerInvariant()
         $expectedExe = (Join-Path $SvcPrefix "bin\panda.exe").ToLowerInvariant()
-        if ($flat.Contains($expectedExe)) {
-            Ok "logon task starts the installed binary"
+        $expectedWrapper = (Join-Path $SvcPrefix "bin\panda-daemon.cmd").ToLowerInvariant()
+        if ($flat.Contains($expectedWrapper)) {
+            Ok "logon task starts the installed daemon wrapper"
+            $baked = (Get-Content (Join-Path $SvcPrefix "bin\panda-daemon.cmd") -Raw).ToLowerInvariant()
+            if ($baked.Contains($expectedExe)) {
+                Ok "daemon wrapper references the installed binary"
+            } else {
+                Bad "daemon wrapper does not reference $SvcPrefix\bin\panda.exe"
+            }
         } else {
-            Bad "logon task does not reference $SvcPrefix\bin\panda.exe"
+            Bad "logon task does not reference $SvcPrefix\bin\panda-daemon.cmd"
         }
     }
 
