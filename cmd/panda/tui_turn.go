@@ -119,19 +119,28 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 	}
 	out := msg.out
 	if out != nil && out.NeedsApproval && out.Approval != nil {
-		m.pending = out
-		m.pendingWorkDir = m.turnWorkDir
-		m.mode = modeApproving
-		m.approvalSel = 1 // arrows + Enter start on deny, the [y/N] safe default
-		m.approvalScope = out.Approval.Scope
-		if m.approvalScope == "" {
-			m.approvalScope = projectstore.ScopeSession
-		}
 		// The watcher stays quiet while the card is up: the parked task's own
 		// "review" state is what the card is showing.
-		return m, nil // the card renders in View; keys handled by onApprovalKey
+		return m.enterApproval(out, m.turnWorkDir)
 	}
 	return m.commit(out)
+}
+
+// enterApproval parks a NeedsApproval result on the approval card: the human
+// gate holds the turn open until a keypress answers it (View renders the card;
+// onApprovalKey handles the keys). workDir is where an approve's resume runs —
+// the ask's tree for a turn-raised gate, the resume's own tree for a chained
+// plan gate.
+func (m tuiModel) enterApproval(out *askengine.Result, workDir string) (tea.Model, tea.Cmd) {
+	m.pending = out
+	m.pendingWorkDir = workDir
+	m.mode = modeApproving
+	m.approvalSel = 1 // arrows + Enter start on deny, the [y/N] safe default
+	m.approvalScope = out.Approval.Scope
+	if m.approvalScope == "" {
+		m.approvalScope = projectstore.ScopeSession
+	}
+	return m, nil
 }
 
 // onResumed commits the outcome of a ResumeApproved re-run.
@@ -142,8 +151,16 @@ func (m tuiModel) onResumed(msg resumedMsg) (tea.Model, tea.Cmd) {
 	m.mode = modeIdle
 	m.stream = nil
 	m.pending = nil
+	resumeWorkDir := m.pendingWorkDir
 	m.pendingWorkDir = ""
-	return m.commit(msg.out)
+	out := msg.out
+	// A resumed plan stage can surface the NEXT parked stage — the follow
+	// chained inside startResume ends at the human gate again. The same card
+	// answers it; commit would have rendered the gate as a finished turn.
+	if out != nil && out.NeedsApproval && out.Approval != nil {
+		return m.enterApproval(out, resumeWorkDir)
+	}
+	return m.commit(out)
 }
 
 // turnEnded releases the out-of-band watcher and hands back the command that
@@ -427,7 +444,11 @@ func (m tuiModel) approvePending() (tea.Model, tea.Cmd) {
 	// work path — for an irreversible task that is the wrong directory, not
 	// merely a cosmetic difference. An out-of-band task (watcher-raised card)
 	// carries no session tree, and an empty workDir keeps its persisted one.
-	stream, pump := startResume(m.engine, req.TaskID, m.pendingWorkDir)
+	// A stage parked inside a plan resumes the pipeline, not just the task:
+	// pass the plan id (the plan result carries it; so does the synthesized
+	// watcher card for a stage row) so the resume stream re-enters the stage
+	// watch and the next parked stage or verdict lands back on this turn.
+	stream, pump := startResume(m.engine, req.TaskID, m.pending.PlanID, m.pendingWorkDir)
 	m.stream = stream
 	cmds := []tea.Cmd{m.sp.Tick, pump}
 	if note != "" {

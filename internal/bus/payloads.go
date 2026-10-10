@@ -53,6 +53,15 @@ type HelloPayload struct {
 	// version-number parse. Absent on old nodes; receivers that do not know
 	// a listed capability simply never exercise it.
 	Caps []string `json:"caps,omitempty"`
+	// Authoritative declares that the sending process holds the node
+	// identity lock — the daemon, not a borrowed engine (CLI/TUI sibling
+	// that probe-passed at startup). Same-id arbitration uses it to let a
+	// real daemon reclaim its peer edge from a sibling session that claimed
+	// ownership while the daemon was down: without it, a live stray conn
+	// holds the edge indefinitely and delegated work lands on the wrong
+	// engine. Unsigned like You — a forged claim is no worse than a forged
+	// node id, which the sig already gates.
+	Authoritative bool `json:"authoritative,omitempty"`
 }
 
 // HelloRejectPayload is what the server sends before closing a connection

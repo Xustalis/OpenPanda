@@ -186,6 +186,54 @@ func (e *Engine) awaitPlanSettled(ctx context.Context, sched *core.Core, planID 
 	}
 }
 
+// AwaitPlanOutcome re-enters the stage watch for a plan that is already
+// running — the post-approval path. Approving a parked stage resumes that
+// one task; the pipeline behind it (next stages, their verdict) still needs
+// the same follow startClassifiedPlan installed at submit, or the turn ends
+// at the resumed stage's receipt while the plan runs on unreported. Returns
+// nil when the plan id resolves to no board a watch could mean.
+func (e *Engine) AwaitPlanOutcome(ctx context.Context, planID string, cb StreamCallbacks) *Result {
+	sched := e.sched.Load()
+	if sched == nil {
+		return nil
+	}
+	stages, err := sched.TaskStore().PlanStages(ctx, planID)
+	if err != nil || len(stages) == 0 {
+		return nil
+	}
+	res := &Result{Kind: "plan", PlanID: planID, PlanGoal: planGoalFromStages(ctx, sched.TaskStore(), stages), PlanStages: stages, OK: true}
+	if board := e.awaitPlanSettled(ctx, sched, planID, cb); len(board) > 0 {
+		res.PlanStages = board
+		e.planBoardVerdict(ctx, sched.TaskStore(), res, board)
+	}
+	return res
+}
+
+// planGoalFromStages recovers the plan's goal from a stage's classify audit
+// event — a plan has no row of its own, so the goal the submit-time board
+// printed lives only there. Empty is acceptable: the re-await board renders
+// stage states, not the banner.
+func planGoalFromStages(ctx context.Context, store *core.TaskStore, stages []core.Task) string {
+	for _, st := range stages {
+		evs, err := store.Events(ctx, st.TaskID)
+		if err != nil {
+			continue
+		}
+		for _, ev := range evs {
+			if ev.Type != core.EvClassifyResult {
+				continue
+			}
+			var d struct {
+				PlanGoal string `json:"plan_goal"`
+			}
+			if json.Unmarshal([]byte(ev.DataJSON), &d) == nil && d.PlanGoal != "" {
+				return d.PlanGoal
+			}
+		}
+	}
+	return ""
+}
+
 // planBoardVerdict folds the final stage board into the round's outcome: a
 // parked stage becomes the caller's approval card (the human gate ends the
 // watch, it is not a failure); the first terminal-but-not-done stage is the

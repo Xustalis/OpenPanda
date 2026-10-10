@@ -2362,6 +2362,15 @@ func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb 
 	if ctx.Err() != nil {
 		return res
 	}
+	if res.Deferred {
+		// The approval parked for delivery is itself the honest answer —
+		// a model pass over it invents a stale "waiting for approval /
+		// re-run the task" story the receipt already contradicts (the
+		// consent IS granted; the work resumes on the next link, no
+		// re-submission exists to be told about).
+		res.Answer = res.Stdout
+		return res
+	}
 	sumClient, _ := e.healthyClient()
 	loc, _ := e.localeNow()
 	if report, rerr := entry.SummarizeResult(ctx, sumClient, res.TaskTitle, "", res.OK, res.ExitCode, res.Stdout, res.Stderr, loc); rerr == nil {

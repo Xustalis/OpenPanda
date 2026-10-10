@@ -45,6 +45,13 @@ import (
 type Peer struct {
 	id   string
 	conn *bus.Conn
+	// authoritative records the peer's own hello claim: its sending process
+	// holds the node identity lock (the daemon), rather than borrowing the
+	// identity the way a CLI/TUI sibling engine does. Same-id arbitration
+	// lets an authoritative newcomer reclaim the edge from a live
+	// non-authoritative incumbent — a stray sibling that claimed ownership
+	// while the daemon was down otherwise holds it forever.
+	authoritative bool
 }
 
 // Core wires the node lifecycle, task store, and WebSocket transport into a
@@ -112,6 +119,13 @@ type Core struct {
 	// arbitration trusts an incumbent conn for: zero disables arbitration
 	// (legacy always-replace), the default is the transport keepalive bound.
 	peerLivenessWindow time.Duration
+	// edgeAuthority is stamped on every hello this core sends: true means
+	// this process holds the node identity lock (the daemon entry point,
+	// which acquires it for the process lifetime). Engines only probe the
+	// lock at init and release it immediately, so borrowed siblings always
+	// send false — letting a real daemon reclaim its peer edge when it
+	// redials behind a stray that claimed the identity while it was down.
+	edgeAuthority atomic.Bool
 	// auditLog records high-risk operations (Tier-2 exec/denial, circuit trips)
 	// for later review (P3-32).
 	auditLog *security.Audit
@@ -510,6 +524,15 @@ func (c *Core) SetOwnsNodeRow(owns bool) {
 // second work consumer for the identity.
 func (c *Core) OwnsNodeRow() bool {
 	return c.ownsNodeRow
+}
+
+// SetEdgeAuthority marks whether this process holds the node identity lock
+// for its lifetime (the daemon entry point does; engines only probe-and-
+// release it at init, so they must leave this false). The claim rides every
+// hello and lets a same-id arbitration prefer the lock-holding process when
+// a stray sibling holds a peer edge hostage.
+func (c *Core) SetEdgeAuthority(v bool) {
+	c.edgeAuthority.Store(v)
 }
 
 // wireContacts converts the configured plan to its wire form. The slice is
@@ -1555,14 +1578,15 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 		return nil, err
 	}
 	hello := bus.HelloPayload{
-		NodeID:  c.nodeID,
-		Ver:     version.Version,
-		Card:    card,
-		Ts:      ts,
-		Nonce:   nonce,
-		Sig:     bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
-		UDPPort: c.UDPPort(),
-		Caps:    c.helloCaps(),
+		NodeID:        c.nodeID,
+		Ver:           version.Version,
+		Card:          card,
+		Ts:            ts,
+		Nonce:         nonce,
+		Sig:           bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
+		UDPPort:       c.UDPPort(),
+		Caps:          c.helloCaps(),
+		Authoritative: c.edgeAuthority.Load(),
 	}
 	conn.SetLocalNonce(nonce)
 	c.signHello(&hello, ts, nonce)
@@ -1641,8 +1665,9 @@ func (c *Core) signHello(p *bus.HelloPayload, ts int64, nonce string) {
 // blind.
 //
 // Returns accepted=false when this conn lost the mutual-dial tie-break and
-// must not be registered; true otherwise.
-func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
+// must not be registered; true otherwise. auth carries the peer's declared
+// edge authority from its hello (process holds the node identity lock).
+func (c *Core) ensurePeer(id string, conn *bus.Conn, auth bool) (accepted bool) {
 	c.mu.Lock()
 	if _, dead := c.evictedConns[conn]; dead {
 		// This conn already lost arbitration once — its read loop is only
@@ -1664,7 +1689,8 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
 			c.logger.Info("peer connection deduped", "peer", id)
 			return false
 		}
-	} else if old != nil && c.peerLivenessWindow > 0 && old.conn.LiveWithin(c.peerLivenessWindow) {
+	} else if old != nil && c.peerLivenessWindow > 0 && old.conn.LiveWithin(c.peerLivenessWindow) &&
+		!(auth && !old.authoritative) {
 		// Same direction, incumbent still demonstrably alive: the new conn is
 		// a same-id SIBLING SESSION, not a reconnect — a CLI/TUI engine shares
 		// the daemon's stable node id, so every `panda` invocation used to
@@ -1675,11 +1701,21 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn) (accepted bool) {
 		// losing side quiesces the same way a mutual-dial loser does. Only a
 		// conn silent past the keepalive bound falls through to replacement,
 		// preserving the half-dead-socket takeover this branch exists for.
+		//
+		// One exception ranks the sibling check itself: a newcomer whose
+		// hello claims edge authority (its process holds the node identity
+		// lock — the real daemon) reclaims the edge from a live but
+		// non-authoritative incumbent. That incumbent is a stray sibling that
+		// claimed the identity while the daemon was down; left alone it
+		// answers keepalives forever and delegated work lands on the wrong
+		// engine. Two authoritative claimants fall back to the liveness
+		// rule — duplicate daemons on one identity are a misconfiguration no
+		// tie-break can fix.
 		c.mu.Unlock()
 		c.logger.Info("peer connection held by live same-id session", "peer", id)
 		return false
 	}
-	c.peers[id] = &Peer{id: id, conn: conn}
+	c.peers[id] = &Peer{id: id, conn: conn, authoritative: auth}
 	if old != nil {
 		// Mark the loser before releasing the lock: a frame its read loop
 		// already buffered must find the eviction recorded by the time the
@@ -2074,7 +2110,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// after (the probe's registry entry then gets cleaned up with it).
 	c.lastVerifiedHello.Store(probeHello{id: p.NodeID, encrypted: conn.Encrypted()})
 
-	accepted := c.ensurePeer(p.NodeID, conn)
+	accepted := c.ensurePeer(p.NodeID, conn, p.Authoritative)
 	if !accepted {
 		// Lost the mutual-dial tie-break: the reply above already left on
 		// this conn, so the losing dialer bound our identity and its
@@ -2159,15 +2195,16 @@ func (c *Core) sendHelloReply(conn *bus.Conn, to string) {
 		observed = host
 	}
 	reply := bus.HelloPayload{
-		NodeID:  c.nodeID,
-		Ver:     version.Version,
-		Card:    card,
-		Ts:      ts,
-		Nonce:   nonce,
-		Sig:     bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
-		UDPPort: c.UDPPort(),
-		You:     observed,
-		Caps:    c.helloCaps(),
+		NodeID:        c.nodeID,
+		Ver:           version.Version,
+		Card:          card,
+		Ts:            ts,
+		Nonce:         nonce,
+		Sig:           bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
+		UDPPort:       c.UDPPort(),
+		You:           observed,
+		Caps:          c.helloCaps(),
+		Authoritative: c.edgeAuthority.Load(),
 	}
 	conn.SetLocalNonce(nonce)
 	c.signHello(&reply, ts, nonce)

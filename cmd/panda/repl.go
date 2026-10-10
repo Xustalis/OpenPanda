@@ -1071,8 +1071,18 @@ func (r *repl) askMode(text, mode string) {
 	// prompt happens here, on the main loop, after the interrupt watcher has
 	// released the terminal — a raw-mode read from the ask goroutine would fight
 	// it for stdin). On a yes, re-run the same task authorized in place.
-	if out != nil && out.NeedsApproval && out.Approval != nil {
-		out = r.approveInline(out, workDir)
+	// A plan may park more than once: each approval re-enters the stage
+	// watch, and the next parked stage comes back as another NeedsApproval.
+	// The loop ends on a denial (the same Result comes back) or when the
+	// same stage still parks after its own resume (a resumed failure left
+	// it in review — re-prompting that card forever is a deadlock).
+	for out != nil && out.NeedsApproval && out.Approval != nil {
+		next := r.approveInline(out, workDir)
+		if next == out || (next.NeedsApproval && next.Approval != nil && next.Approval.TaskID == out.Approval.TaskID) {
+			out = next
+			break
+		}
+		out = next
 	}
 
 	// Bind a spawned task back to the active session and persist the reply.
@@ -1614,7 +1624,18 @@ func (r *repl) approveInline(out *askengine.Result, workDir string) *askengine.R
 			r.outf("%s %s\n", pal().MarkBullet(), progressNote(r.loc, p))
 		}
 	}
-	return r.engine.Load().ResumeApproved(context.Background(), req.TaskID, workDir, cb)
+	resumed := r.engine.Load().ResumeApproved(context.Background(), req.TaskID, workDir, cb)
+	// Approving a plan stage unblocks one task; the pipeline behind it —
+	// released successor stages, the next human gate — still needs the plan
+	// watch or the turn ends at the resumed stage's receipt while the plan
+	// runs on unreported. Re-enter it: a later parked stage comes back as
+	// another NeedsApproval the caller's loop hands to this same card.
+	if out.Kind == "plan" && out.PlanID != "" {
+		if awaited := r.engine.Load().AwaitPlanOutcome(context.Background(), out.PlanID, cb); awaited != nil {
+			return awaited
+		}
+	}
+	return resumed
 }
 
 // parseApprovalAnswer reads the approval card's reply: "y"/"yes"/"n"/"no"

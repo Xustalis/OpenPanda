@@ -186,8 +186,17 @@ func runAsk(args []string) {
 	// in review. On an interactive terminal, prompt and — on a yes — re-run it
 	// authorized in place before recording the turn, so --continue captures the
 	// resolved outcome rather than the transient review.
-	if out.NeedsApproval && out.Approval != nil {
-		out = confirmApprovalCLI(engine, out, loc, "")
+	// A plan may park more than once: each approval re-enters the stage watch
+	// and the next parked stage comes back as another NeedsApproval. The loop
+	// ends on a denial or when the same stage still parks after its resume —
+	// re-prompting that card forever would deadlock.
+	for out.NeedsApproval && out.Approval != nil {
+		next := confirmApprovalCLI(engine, out, loc, "")
+		if next == out || (next.NeedsApproval && next.Approval != nil && next.Approval.TaskID == out.Approval.TaskID) {
+			out = next
+			break
+		}
+		out = next
 	}
 	recordConvo(out)
 
@@ -534,7 +543,17 @@ func confirmApprovalCLI(engine *askengine.Engine, out *askengine.Result, loc i18
 			fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(loc, p))
 		},
 	}
-	return engine.ResumeApproved(context.Background(), req.TaskID, "", cb)
+	resumed := engine.ResumeApproved(context.Background(), req.TaskID, "", cb)
+	// Approving a plan stage unblocks one task; the pipeline behind it still
+	// needs the plan watch or the ask ends at the resumed stage's receipt
+	// while later stages run unreported. A later parked stage comes back as
+	// another NeedsApproval for the caller's prompt loop.
+	if out.Kind == "plan" && out.PlanID != "" {
+		if awaited := engine.AwaitPlanOutcome(context.Background(), out.PlanID, cb); awaited != nil {
+			return awaited
+		}
+	}
+	return resumed
 }
 
 // printCost closes an interactive ask with what it cost: elapsed time, and the

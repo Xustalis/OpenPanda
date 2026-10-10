@@ -720,8 +720,17 @@ func runSessionAsk(args []string) {
 	// interactive terminal prompt for it here so the thread records the
 	// resolved outcome, not the transient park. Session-scoped remembers bind
 	// to this session id.
-	if out.NeedsApproval && out.Approval != nil {
-		out = confirmApprovalCLI(engine, out, loc, sess.ID)
+	// A plan may park more than once: each approval re-enters the stage watch
+	// and the next parked stage comes back as another NeedsApproval. The loop
+	// ends on a denial or when the same stage still parks after its resume —
+	// re-prompting that card forever would deadlock.
+	for out.NeedsApproval && out.Approval != nil {
+		next := confirmApprovalCLI(engine, out, loc, sess.ID)
+		if next == out || (next.NeedsApproval && next.Approval != nil && next.Approval.TaskID == out.Approval.TaskID) {
+			out = next
+			break
+		}
+		out = next
 	}
 
 	if sess.Title == sess.ID || sess.Title == "" {

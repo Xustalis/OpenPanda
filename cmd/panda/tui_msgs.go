@@ -192,7 +192,10 @@ func waitForActivity(s *askStream) tea.Cmd {
 
 // startResume re-runs a parked task through the same cancellable progress pump
 // as an ask, so its route/exec/tool/judge phases extend the existing task card.
-func startResume(engine *askengine.Engine, taskID, workDir string) (*askStream, tea.Cmd) {
+// A stage parked inside a plan gets the plan watch chained on its resume —
+// the turn follows the pipeline to the next human gate or verdict instead of
+// closing on the resumed task's receipt.
+func startResume(engine *askengine.Engine, taskID, planID, workDir string) (*askStream, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &askStream{
 		events:  make(chan tea.Msg, 256),
@@ -208,6 +211,11 @@ func startResume(engine *askengine.Engine, taskID, workDir string) (*askStream, 
 	go func() {
 		defer cancel()
 		out := engine.ResumeApproved(ctx, taskID, workDir, cb)
+		if planID != "" {
+			if awaited := engine.AwaitPlanOutcome(ctx, planID, cb); awaited != nil {
+				out = awaited
+			}
+		}
 		s.send(ctx, resumedMsg{stream: s, out: out})
 	}()
 	return s, waitForActivity(s)

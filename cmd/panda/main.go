@@ -435,6 +435,10 @@ func runDaemon(args []string) {
 		fatal("node id", fmt.Errorf("%q ends in an ephemeral-style -8hex suffix; it would alias onto %q — rename the node", runtimeNodeID, base))
 	}
 	coreNode := core.NewCore(db, runtimeNodeID, card, schedulerTier(cfg.Node.ResourceClass), logger, cfg.Model)
+	// This process holds the identity lock for its lifetime — the hello it
+	// sends may claim edge authority so a borrowed sibling session holding
+	// a peer conn yields when the real daemon redials.
+	coreNode.SetEdgeAuthority(true)
 	coreNode.SetRouterPolicy(cfg.Injection, cfg.Routing)
 	// Extended-policy agent runs expose the node's MCP server to the
 	// delegated agent CLI (work-dir .mcp.json); minimal policy ignores it.
