@@ -38,6 +38,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/util"
 	"github.com/Xustalis/OpenPanda/internal/version"
+	"github.com/gorilla/websocket"
 )
 
 // Peer is an established connection to another node.
@@ -251,6 +252,14 @@ type Core struct {
 	// ability set and weigh failure history into candidate selection.
 	// Guarded by mu; entries die with the peer's connection.
 	peerBlocked map[string][]string
+
+	// peerLoops runs one keepalive goroutine per configured peer address
+	// (see SyncPeers): the daemon owns the set, a mesh-owning embedded
+	// engine can hold it too, and a config reload diffs the map instead of
+	// restarting the process. Keyed by the configured address string —
+	// not the peer's node id, which is unknown until the hello lands.
+	peerLoopsMu sync.Mutex
+	peerLoops   map[string]context.CancelFunc
 
 	// ownsNodeRow says whether this process owns the node's directory row.
 	// The daemon does: it holds the identity lock and runs the heartbeat, so
@@ -1476,12 +1485,12 @@ func (c *Core) MaintainPeer(ctx context.Context, addr string) error {
 // node's capability card. The caller owns the returned conn and must read it
 // (synchronously via handleInbound, or asynchronously via go handleInbound).
 func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
-	// The cleartext gate runs before the socket opens: a ws:// target that
-	// is not already encrypted underneath is refused, not merely warned —
-	// a warning nobody reads is exactly how plaintext meshes shipped.
-	if err := cleartextOK(addr, c.allowCleartext, c.cleartextFor); err != nil {
-		return nil, err
-	}
+	// The cleartext gate runs AFTER the hello exchange now, not before the
+	// socket opens: ws:// to a peer that negotiates sessaead is encrypted
+	// and safe on any network, so the socket must open for the caps to be
+	// seen. A peer that cannot encrypt still hits the policy post-hello —
+	// on the wire the only exposure is the two (already HMAC-signed) hello
+	// envelopes, never task traffic.
 	u := normalizeWSURL(addr)
 	client := bus.NewClient(u, c.logger)
 	conn, err := client.Dial(ctx)
@@ -1490,6 +1499,7 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 	}
 	// Locally-initiated: peer dedup needs the direction (see ensurePeer).
 	conn.MarkOutbound()
+	conn.SetDialAddr(addr)
 	// Send hello to identify ourselves and advertise our capability card.
 	card, err := c.helloCard()
 	if err != nil {
@@ -1515,8 +1525,9 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 		Nonce:   nonce,
 		Sig:     bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
 		UDPPort: c.UDPPort(),
-		Caps:    []string{bus.CapBinaryData},
+		Caps:    c.helloCaps(),
 	}
+	conn.SetLocalNonce(nonce)
 	c.signHello(&hello, ts, nonce)
 	env, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, hello)
 	if err != nil {
@@ -1527,8 +1538,26 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 		conn.Close()
 		return nil, fmt.Errorf("send hello: %w", err)
 	}
+	// Our hello already went out on this conn, so the peer's reply must not
+	// trigger a reply-to-the-reply: mark it greeted up front. Without this
+	// the dial side minted a second hello (and nonce) on every connect, and
+	// the session KDF could not tell which nonce pair keyed the link.
+	c.mu.Lock()
+	c.greetedConns[conn] = true
+	c.mu.Unlock()
 	c.logger.Info("connected to peer", "peer", addr)
 	return conn, nil
+}
+
+// helloCaps is the capability list this node advertises. sessaead rides
+// only when a shared secret exists — without one there is no key material
+// to seal frames with, so advertising it would be a lie.
+func (c *Core) helloCaps() []string {
+	caps := []string{bus.CapBinaryData}
+	if c.sharedSecret != "" {
+		caps = append(caps, bus.CapSessionAEAD)
+	}
+	return caps
 }
 
 // signHello attaches this node's Ed25519 identity to an outgoing hello when a
@@ -1897,6 +1926,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// list and get the JSON/base64 form forever — capability probing via an
 	// explicit bit, never a version parse.
 	conn.SetCaps(p.Caps)
+	conn.SetRemoteNonce(p.Nonce)
 
 	// Send our hello reply BEFORE registering the conn, and directly on the
 	// conn this hello arrived on — never via the registry (c.reply). The far
@@ -1919,6 +1949,15 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	c.mu.Unlock()
 	if !already {
 		c.sendHelloReply(conn, p.NodeID)
+	}
+
+	// Session encryption or fail-closed cleartext policy: with sessaead
+	// negotiated the cipher arms here — before the conn is registered, so
+	// no task frame can ever leave it in plaintext. Without it the link is
+	// plaintext and must pass the same gate the pre-dial check used to be.
+	if err := c.armSessionLink(conn, p); err != nil {
+		conn.CloseReason(websocket.ClosePolicyViolation, err.Error())
+		return
 	}
 
 	accepted := c.ensurePeer(p.NodeID, conn)
@@ -2014,8 +2053,9 @@ func (c *Core) sendHelloReply(conn *bus.Conn, to string) {
 		Sig:     bus.HelloSigN(c.sharedSecret, c.nodeID, ts, nonce),
 		UDPPort: c.UDPPort(),
 		You:     observed,
-		Caps:    []string{bus.CapBinaryData},
+		Caps:    c.helloCaps(),
 	}
+	conn.SetLocalNonce(nonce)
 	c.signHello(&reply, ts, nonce)
 	envOut, err := bus.NewEnvelope(bus.MsgHello, c.nodeID, msgID, reply)
 	if err != nil {
@@ -2025,6 +2065,68 @@ func (c *Core) sendHelloReply(conn *bus.Conn, to string) {
 	if err := conn.Send(envOut); err != nil {
 		c.logger.Debug("hello reply failed", "peer", to, "err", err)
 	}
+}
+
+// armSessionLink decides the conn's wire security after the verified hello
+// exchange. When both hellos advertised sessaead and a shared secret
+// exists, the two exchanged nonces key a per-conn AEAD and the link is
+// sealed from this point on. Otherwise the conn stays plaintext and must
+// pass the cleartext policy — the same gate that used to run pre-dial,
+// now evaluated with knowledge of what the peer can actually do.
+func (c *Core) armSessionLink(conn *bus.Conn, p bus.HelloPayload) error {
+	if conn.Encrypted() {
+		// A repeat hello on an armed conn never re-keys: the cipher guards
+		// in-flight frames from a mid-stream key swap.
+		return nil
+	}
+	if c.sharedSecret != "" && conn.RemoteNonce() != "" &&
+		conn.LocalNonce() != "" && conn.Supports(bus.CapSessionAEAD) {
+		var dialerNonce, listenerNonce, dialerID, listenerID string
+		if conn.Outbound() {
+			dialerNonce, listenerNonce = conn.LocalNonce(), conn.RemoteNonce()
+			dialerID, listenerID = c.nodeID, p.NodeID
+		} else {
+			dialerNonce, listenerNonce = conn.RemoteNonce(), conn.LocalNonce()
+			dialerID, listenerID = p.NodeID, c.nodeID
+		}
+		aead, err := bus.SessionAEAD(c.sharedSecret, dialerID, listenerID, dialerNonce, listenerNonce)
+		if err != nil {
+			return err
+		}
+		conn.ArmSession(aead)
+		c.logger.Debug("session cipher armed", "peer", p.NodeID)
+		return nil
+	}
+	return c.enforceLinkPolicy(conn, p.NodeID)
+}
+
+// enforceLinkPolicy is the post-handshake cleartext gate: reached only when
+// session encryption was NOT negotiated (peer lacks sessaead or no shared
+// secret exists). Outbound conns are judged on the configured dial address;
+// inbound conns on the source IP — a verified-mesh peer from an untrusted
+// network is still refused plaintext, because a hello signature proves
+// membership, not that the link itself is free of relays.
+func (c *Core) enforceLinkPolicy(conn *bus.Conn, peerID string) error {
+	if conn.Outbound() {
+		addr := conn.DialAddr()
+		if addr == "" {
+			addr = conn.RemoteAddr()
+		}
+		if err := cleartextOK(addr, c.allowCleartext, c.cleartextFor); err != nil {
+			c.logger.Warn("refusing cleartext link", "peer", peerID, "addr", addr)
+			return fmt.Errorf("peer %s cannot encrypt (needs sessaead) and %w", peerID, err)
+		}
+		return nil
+	}
+	host, _, err := net.SplitHostPort(conn.RemoteAddr())
+	if err != nil {
+		host = conn.RemoteAddr()
+	}
+	if c.allowCleartext || cleartextSafeHost(host) || cleartextListed(host, c.cleartextFor) {
+		return nil
+	}
+	c.logger.Warn("refusing cleartext inbound", "peer", peerID, "remote", conn.RemoteAddr())
+	return fmt.Errorf("peer %s cannot encrypt (needs sessaead): cleartext refused for inbound from %s — upgrade the peer or list its address in network.allow_cleartext_for", peerID, host)
 }
 
 // connFor returns the connection associated with from, if any.

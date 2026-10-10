@@ -84,6 +84,20 @@ func SameRuntimeIdentity(a, b string) bool {
 	}
 }
 
+// NodeNamePart returns the configured node name embedded in an instance id.
+// Runtime ids are "<name>@<identity>" for kinds that carry an identity
+// suffix ("test-node-b@vm-208029ca7bab") and the bare name otherwise — so
+// the part before the last '@' IS the name the user configured and the one
+// `panda nodes` shows inside the id column. Routing references typed by a
+// human resolve against it, while n.Name holds the OS hostname, which is
+// display metadata, not the name the operator chose.
+func NodeNamePart(id string) string {
+	if i := strings.LastIndexByte(id, '@'); i > 0 {
+		return id[:i]
+	}
+	return id
+}
+
 // EphemeralBase validates and strips the random suffix produced by
 // core.EphemeralNodeID. Stable names are returned unchanged with ok=false.
 // The strip is purely syntactic — a stable id that itself ends in "-"+8hex
@@ -238,11 +252,13 @@ func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch f
 		// stable id must still land the task at home.
 		if canLocal && (preferred == self || strings.EqualFold(preferred, self) ||
 			(haveSelf && (preferred == selfNode.ID || strings.EqualFold(preferred, selfNode.ID) ||
-				preferred == selfNode.Name || strings.EqualFold(preferred, selfNode.Name)))) {
+				preferred == selfNode.Name || strings.EqualFold(preferred, selfNode.Name) ||
+				strings.EqualFold(preferred, NodeNamePart(selfNode.ID))))) {
 			return Decision{Action: ActionLocal}
 		}
 		for _, n := range matching {
-			if n.ID == preferred || n.Name == preferred || strings.EqualFold(n.ID, preferred) || strings.EqualFold(n.Name, preferred) {
+			if n.ID == preferred || n.Name == preferred || strings.EqualFold(n.ID, preferred) || strings.EqualFold(n.Name, preferred) ||
+				strings.EqualFold(NodeNamePart(n.ID), preferred) {
 				return Decision{Action: ActionForward, Target: n.ID}
 			}
 		}

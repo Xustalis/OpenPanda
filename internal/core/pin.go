@@ -92,6 +92,7 @@ func (c *Core) resolvePin(ctx context.Context, ref string) pinResolution {
 			continue
 		}
 		matched := strings.EqualFold(n.ID, ref) || strings.EqualFold(n.Name, ref) ||
+			strings.EqualFold(scheduler.NodeNamePart(n.ID), ref) ||
 			(n.PubKey != "" && strings.EqualFold(n.PubKey, keyRef))
 		if isKeyRef {
 			matched = n.PubKey != "" && strings.EqualFold(n.PubKey, keyRef)
@@ -113,6 +114,7 @@ func (c *Core) resolvePin(ctx context.Context, ref string) pinResolution {
 	}
 	if selfRef || (selfRow.ID != "" &&
 		(strings.EqualFold(ref, selfRow.ID) || strings.EqualFold(ref, selfRow.Name) ||
+			strings.EqualFold(ref, scheduler.NodeNamePart(selfRow.ID)) ||
 			(selfRow.PubKey != "" && strings.EqualFold(selfRow.PubKey, keyRef) &&
 				(isKeyRef || strings.EqualFold(ref, selfRow.PubKey))))) {
 		// The self row rides along so callers can run the same resource-fit

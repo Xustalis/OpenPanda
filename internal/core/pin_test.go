@@ -98,6 +98,51 @@ func TestResolvePinOnlineMatch(t *testing.T) {
 	}
 }
 
+// TestResolvePinByNodeNamePartOfID: an instance id "<name>@<identity>" must
+// resolve by its configured name — the string a human copies off `panda
+// nodes` — even when the row's Name holds the OS hostname instead. Bug: a
+// pin/--preferred of "test-node-b" against a VM peer printed "not in the
+// directory" because matching only covered the full id and the hostname.
+func TestResolvePinByNodeNamePartOfID(t *testing.T) {
+	c := pinCore(t, "root-x", "x")
+	ctx := context.Background()
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	// A VM peer: configured name test-node-b, identity-suffixed instance id,
+	// Name = the VM's OS hostname — none of the old predicates matched
+	// "test-node-b".
+	card := ledger.Card{Device: "ubuntu-vm", ResourceClass: "Standard",
+		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 2}}
+	if err := ledger.Register(c.db, card, "test-node-b@vm-208029ca7bab", 5); err != nil {
+		t.Fatalf("register vm peer: %v", err)
+	}
+	res := c.resolvePin(ctx, "test-node-b")
+	if res.self || !res.found || !res.online || res.targetID != "test-node-b@vm-208029ca7bab" {
+		t.Fatalf("resolvePin(test-node-b) = %+v, want the vm instance", res)
+	}
+	// The scored path agrees: --preferred by configured name forwards too.
+	employees, err := ledger.Query(c.db, "", "")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	d := scheduler.RouteP("root-x", []string{"root-x"}, employees,
+		func([]string) bool { return true }, nil, ledger.ResourceProfile{},
+		"test-node-b", "")
+	if d.Action != scheduler.ActionForward || d.Target != "test-node-b@vm-208029ca7bab" {
+		t.Fatalf("RouteP preferred test-node-b = %+v, want forward to the vm instance", d)
+	}
+	// Two live instances sharing the configured name stay ambiguous — the
+	// fix widens matching, it does not weaken the ambiguity guard.
+	if err := ledger.Register(c.db, card, "test-node-b@vm-ffffffffffff", 5); err != nil {
+		t.Fatalf("register twin: %v", err)
+	}
+	res = c.resolvePin(ctx, "test-node-b")
+	if !res.ambiguous {
+		t.Fatalf("resolvePin(test-node-b) with two live same-name instances = %+v, want ambiguous", res)
+	}
+}
+
 func TestResolvePinAmbiguousOnlineRefuses(t *testing.T) {
 	c := pinCore(t, "root-x", "x")
 	ctx := context.Background()

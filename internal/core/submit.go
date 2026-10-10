@@ -669,6 +669,25 @@ func (c *Core) resumeRemote(ctx context.Context, cur Task, target, answer string
 			TaskID: taskID, AttemptID: cur.AttemptID, Answer: answer,
 		}, ttl)
 		c.logger.Info("resume parked for executor's next link", "task", taskID, "to", target, "err", err)
+		if !c.sendableTo(target) {
+			// No track can carry the resume at all: holding the caller on the
+			// wait channel would park them for the entire outbox ttl (and then
+			// failLocal would kill a row the parked resume may still revive).
+			// Report the row's real parked state instead — dispatched with the
+			// resume in custody, which user surfaces render as waiting-for-link.
+			final, gerr := c.store.Get(ctx, taskID)
+			if gerr != nil {
+				return cur, bus.TaskResultPayload{}, gerr
+			}
+			return final, bus.TaskResultPayload{
+				TaskID:    final.TaskID,
+				AttemptID: final.AttemptID,
+				State:     final.State,
+				Stdout:    i18n.T(cur.GetUserLocale(), "task.resume.parked"),
+			}, nil
+		}
+		// The link exists but the write failed transiently: the periodic
+		// outbox sweep redelivers on this same connection, so keep waiting.
 		return c.waitRemoteResult(ctx, cur, ch, "resume")
 	}
 	c.logger.Info("resume forwarded to executor", "task", taskID, "to", target)

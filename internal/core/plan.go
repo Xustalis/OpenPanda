@@ -212,6 +212,23 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 	if q.Priority < PriorityHigh || q.Priority > PriorityLow {
 		return "", fmt.Errorf("queue priority %d out of range", q.Priority)
 	}
+	// Early pin check: a stage hard-pinned to a node this directory cannot
+	// resolve fails the whole plan BEFORE any stage row exists — the pin is
+	// a promise the run cannot keep, and stages parked in submitted under a
+	// plan id nobody holds are the expensive way to report a typo. An
+	// offline-but-known node stays legal: the pin parks until the link is up.
+	for _, st := range p.Stages {
+		if st.Node == "" {
+			continue
+		}
+		res := c.resolvePin(ctx, st.Node)
+		switch {
+		case res.ambiguous:
+			return "", fmt.Errorf("stage %s: pinned node %q matches multiple online rows — pin by node id or k:<pubkey>", st.ID, st.Node)
+		case !res.found:
+			return "", fmt.Errorf("stage %s: pinned node %q is not in the directory (run `panda nodes` for the fleet)", st.ID, st.Node)
+		}
+	}
 	planID, err := newUUID()
 	if err != nil {
 		return "", fmt.Errorf("mint plan id: %w", err)
@@ -244,6 +261,10 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 			Intent:       st.Intent,
 			Requires:     st.Requires,
 			ResourceJSON: string(resourceJSON),
+			// The stage's hard pin travels into spec.node so every hop of the
+			// pinned route re-checks it — the queue scheduler, the claim, and
+			// the receiving node all see the same destination.
+			TargetNode: st.Node,
 		})
 		if err != nil {
 			abandon()
@@ -1100,17 +1121,25 @@ func parseQuestionRequest(stdout string) (question, cleaned string, ok bool) {
 // in parallel — a turn asking to train on the GPU box AND probe the sensor
 // on the Pi should not serialize two cross-node round trips — then returns
 // each child's fold note in request order so the next prompt reads
-// deterministically.
-func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegateRequest) []string {
+// deterministically. Children that outlive their wait window are appended
+// to pending so a late result is still folded back (round start, or the
+// run's final hold) instead of vanishing on a row nobody re-reads.
+func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegateRequest, pending *[]pendingChild) []string {
 	notes := make([]string, len(drs))
+	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for i, dr := range drs {
 		wg.Add(1)
 		go func(i int, dr delegateRequest) {
 			defer wg.Done()
-			note, derr := c.delegateChild(ctx, parent, dr)
+			note, pendingID, derr := c.delegateChild(ctx, parent, dr)
 			if derr != nil {
 				note = "delegation failed: " + derr.Error()
+			}
+			if pendingID != "" {
+				mu.Lock()
+				*pending = append(*pending, pendingChild{id: pendingID, title: dr.Title})
+				mu.Unlock()
 			}
 			notes[i] = note
 		}(i, dr)
@@ -1119,14 +1148,24 @@ func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegate
 	return notes
 }
 
+// pendingChild is a delegate child whose result had not landed when its wait
+// window closed. The id is all a fold needs: the task row is the source of
+// truth for a late result, and re-reading it catches every delivery path —
+// the wire frame, a reconcile, a resume — without keeping a channel alive.
+type pendingChild struct {
+	id    string
+	title string
+}
+
 // delegateChild is the run()-time half of the promotion protocol (§4.2): it
 // spawns the requested causal child, dispatches it to the best node, and
 // waits for the result so the caller can fold the product into the agent's
 // next prompt. The waiter is registered before dispatch so a fast local
-// child cannot signal into the void. The wait is bounded — a timeout does
-// not kill the child; it completes detached and its result still lands on
-// this node's copy and relays upstream by the chain.
-func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateRequest) (string, error) {
+// child cannot signal into the void. The wait is lease-aware (awaitChild):
+// it holds while the child's executor keeps heartbeating, not for a fixed
+// window — and a child that outlives the wait keeps its row pending rather
+// than being killed; its late result folds back via pendingChildren.
+func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateRequest) (string, string, error) {
 	// Authorized is deliberately NOT inherited: the user's consent covered the
 	// parent task they were shown, not an arbitrary sub-operation the agent
 	// authors via an output marker. A tier-2 child must earn its own approval —
@@ -1150,13 +1189,13 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 	}
 	child, err := c.SpawnChildTask(ctx, parent.TaskID, in)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	waiter := make(chan bus.TaskResultPayload, 1)
 	c.waiters.Store(child.TaskID, waiter)
-	defer c.waiters.Delete(child.TaskID)
 	if err := c.DispatchChild(ctx, child, in); err != nil {
-		return "", err
+		c.waiters.Delete(child.TaskID)
+		return "", "", err
 	}
 	c.EvTrace(ctx, parent.TaskID, "delegate_request", map[string]any{
 		"child":    child.TaskID,
@@ -1164,22 +1203,219 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 		"node":     dr.Node,
 		"chain":    child.Chain,
 	})
-	timeout := c.lease()
+	r, delivered, state, err := c.awaitChild(ctx, parent, child, waiter)
+	if delivered || err != nil {
+		// Terminal or cancelled: nothing more can arrive that a fold would
+		// still want — the row carries the final word. Only a still-pending
+		// child keeps its waiter registered, so a fast late frame still
+		// signals whoever next reads the row.
+		c.waiters.Delete(child.TaskID)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if !delivered {
+		return fmt.Sprintf("child task %s is still %s past the wait window; its result will arrive asynchronously.",
+			child.TaskID, state), child.TaskID, nil
+	}
+	out := r.Stdout
+	if s := strings.TrimSpace(r.Stderr); s != "" {
+		out += "\nstderr: " + s
+	}
+	return fmt.Sprintf("child task %s finished (state %s):\n%s", child.TaskID, r.State, out), "", nil
+}
+
+// awaitChild blocks on a delegated child's result for as long as the child
+// is demonstrably alive — the wire waiter for the fast path, the task row
+// for everything else. "Alive" is a fresh lease: a remote executor's
+// progress beats renew it, so a legitimately long child (a training run)
+// keeps its parent waiting past any fixed window — the old code's single
+// `time.After(lease)` is what let a parent run on without its child's
+// product. A child with no live lease gets one lease-length of grace: a
+// queued row is awaiting claim, a parked row is awaiting a link, a review
+// row is awaiting a human — none of those resolves promptly, but a brand
+// new dispatch may not have stamped its lease yet.
+//
+// delivered=false means the wait ran out with the child unresolved; the
+// caller should keep folding it as pending. The parent's own deadline is
+// the hard bound — never the child lease, since renewing it is what an
+// executor does while working.
+func (c *Core) awaitChild(ctx context.Context, parent Task, child Task,
+	waiter <-chan bus.TaskResultPayload) (bus.TaskResultPayload, bool, string, error) {
+
+	slice := c.lease() / leaseRenewDivisor
+	if slice < time.Second {
+		slice = time.Second
+	}
+	if slice > 30*time.Second {
+		slice = 30 * time.Second
+	}
+	var deadline time.Time
 	if parent.DeadlineUnix > 0 {
-		if d := time.Until(time.Unix(parent.DeadlineUnix, 0)); d > 0 && d < timeout {
-			timeout = d
+		deadline = time.Unix(parent.DeadlineUnix, 0)
+	}
+	// silentSince measures grace for a child carrying no live lease — the
+	// countdown starts now and restarts on every fresh heartbeat.
+	silentSince := time.Now()
+	silentCap := c.lease()
+	tick := time.NewTicker(slice)
+	defer tick.Stop()
+	for {
+		select {
+		case r := <-waiter:
+			return r, true, r.State, nil
+		case <-ctx.Done():
+			return bus.TaskResultPayload{}, false, "", ctx.Err()
+		case <-tick.C:
+		}
+		row, err := c.store.Get(ctx, child.TaskID)
+		if err != nil {
+			continue
+		}
+		if r, ok := childRowResult(row); ok {
+			return r, true, row.State, nil
+		}
+		now := time.Now()
+		if !deadline.IsZero() && !now.Before(deadline) {
+			return bus.TaskResultPayload{}, false, row.State, nil
+		}
+		if row.LeaseExpires > now.Unix() {
+			silentSince = now // an executor is renewing — the child is alive
+			continue
+		}
+		if now.Sub(silentSince) > silentCap {
+			return bus.TaskResultPayload{}, false, row.State, nil
 		}
 	}
-	select {
-	case r := <-waiter:
+}
+
+// childRowResult reads a terminal child row into the payload a fold reports,
+// covering the paths where no result frame ever reached this node: the row
+// was force-failed on lease expiry, cancelled, or reconciled. ok=false while
+// the child is still non-terminal (review included — parked for a human).
+func childRowResult(t Task) (bus.TaskResultPayload, bool) {
+	if t.State != StateDone && t.State != StateFailed &&
+		t.State != StateCancelled && t.State != StateExpired {
+		return bus.TaskResultPayload{}, false
+	}
+	var p bus.TaskResultPayload
+	if t.ResultJSON != "" {
+		_ = json.Unmarshal([]byte(t.ResultJSON), &p)
+	}
+	if p.TaskID == "" {
+		p.TaskID = t.TaskID
+	}
+	if p.State == "" {
+		p.State = t.State
+	}
+	return p, true
+}
+
+// foldLateChildren re-reads each tracked child's row and returns fold notes
+// for the ones that resolved since the last pass — the result a late frame
+// (or a monitor's terminal write) produced still reaches the parent's next
+// prompt instead of vanishing.
+func (c *Core) foldLateChildren(ctx context.Context, pending *[]pendingChild) []string {
+	var notes []string
+	rest := (*pending)[:0]
+	for _, pc := range *pending {
+		row, err := c.store.Get(ctx, pc.id)
+		if err != nil {
+			rest = append(rest, pc)
+			continue
+		}
+		r, done := childRowResult(row)
+		if !done {
+			rest = append(rest, pc)
+			continue
+		}
+		c.waiters.Delete(pc.id)
 		out := r.Stdout
 		if s := strings.TrimSpace(r.Stderr); s != "" {
 			out += "\nstderr: " + s
 		}
-		return fmt.Sprintf("child task %s finished (state %s):\n%s", child.TaskID, r.State, out), nil
-	case <-time.After(timeout):
-		return fmt.Sprintf("child task %s is still running past the wait window; its result will arrive asynchronously.", child.TaskID), nil
-	case <-ctx.Done():
-		return "", ctx.Err()
+		notes = append(notes, fmt.Sprintf("child task %s finished (state %s):\n%s", pc.id, r.State, out))
+		c.EvTrace(ctx, pc.id, "late_child_result_folded", map[string]any{"child": pc.id, "state": r.State})
 	}
+	*pending = rest
+	return notes
+}
+
+// awaitPendingChildren is the run's final hold against reporting done while
+// delegated children are still outstanding — the "做完了但是说没做完" class
+// in reverse. It blocks while any child keeps a live lease (bounded by the
+// task's own deadline), folds each result into notes as it lands, and stops
+// when nothing alive remains — a parked or silent child annotates rather
+// than blocks, since a dead link can outlast any deadline.
+func (c *Core) awaitPendingChildren(ctx context.Context, parent Task, pending []pendingChild) []string {
+	slice := c.lease() / leaseRenewDivisor
+	if slice < time.Second {
+		slice = time.Second
+	}
+	if slice > 30*time.Second {
+		slice = 30 * time.Second
+	}
+	var deadline time.Time
+	if parent.DeadlineUnix > 0 {
+		deadline = time.Unix(parent.DeadlineUnix, 0)
+	}
+	var notes []string
+	for len(pending) > 0 {
+		notes = append(notes, c.foldLateChildren(ctx, &pending)...)
+		if len(pending) == 0 {
+			return notes
+		}
+		now := time.Now()
+		if !deadline.IsZero() && !now.Before(deadline) {
+			break
+		}
+		// Keep holding only while some child is demonstrably alive: a fresh
+		// lease or a not-yet-claimed queue row. All-leaseless means parked
+		// for a link, parked for a human, or orphaned — annotate, don't wait.
+		alive := false
+		for _, pc := range pending {
+			row, err := c.store.Get(ctx, pc.id)
+			if err != nil {
+				continue
+			}
+			if row.LeaseExpires > now.Unix() || row.State == StateQueued || row.State == StateSubmitted {
+				alive = true
+				break
+			}
+		}
+		if !alive {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return append(notes, c.foldLateChildren(context.WithoutCancel(ctx), &pending)...)
+		case <-time.After(slice):
+		}
+	}
+	notes = append(notes, c.foldLateChildren(ctx, &pending)...)
+	for _, pc := range pending {
+		// The parent is reporting without this child — drop its waiter so a
+		// result frame arriving later lands on the row alone rather than
+		// holding a map entry for a reader that no longer exists.
+		c.waiters.Delete(pc.id)
+		notes = append(notes, fmt.Sprintf("child task %s is still outstanding at completion time; its result will reconcile asynchronously.", pc.id))
+	}
+	return notes
+}
+
+// liveChildren lists this task's non-terminal delegate children. A resumed
+// or re-driven run rebuilds its pending set from the rows rather than from
+// memory, so a child spawned in an earlier episode is still folded.
+func (c *Core) liveChildren(ctx context.Context, parentID string) []pendingChild {
+	kids, err := c.store.Children(ctx, parentID)
+	if err != nil {
+		return nil
+	}
+	var out []pendingChild
+	for _, k := range kids {
+		if _, done := childRowResult(k); !done {
+			out = append(out, pendingChild{id: k.TaskID, title: k.Title})
+		}
+	}
+	return out
 }

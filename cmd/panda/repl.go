@@ -1115,6 +1115,9 @@ func (r *repl) askMode(text, mode string) {
 				}
 				reportNote += " · " + i18n.Tf(r.loc, "tui.task.execBy", "exec", execNote)
 			}
+			if out.RouteFallback != "" {
+				reportNote += " · " + i18n.Tf(r.loc, "cli.task.route_fallback", "peer", out.RouteFallback)
+			}
 			r.outln(pal().Muted(reportNote))
 			break
 		}
@@ -1152,6 +1155,9 @@ func (r *repl) askMode(text, mode string) {
 		r.outln(i18n.Tf(r.loc, "cli.plan.started",
 			"id", out.PlanID, "n", strconv.Itoa(len(out.PlanStages)), "goal", out.PlanGoal))
 		printPlanStagesTo(r.commandOutput(), out.PlanStages)
+		if out.Warning != "" {
+			r.outln(pal().Muted(out.Warning))
+		}
 		r.outln(i18n.Tf(r.loc, "cli.plan.follow", "id", out.PlanID))
 	}
 
@@ -1368,7 +1374,7 @@ func (r *repl) cmdTasks(arg string) {
 		r.outln(pal().Muted(i18n.Tf(r.loc, "cli.queue.truncated", "n", strconv.Itoa(taskListCap))))
 	}
 	printTaskTableTo(r.commandOutput(), r.loc, tasks,
-		taskRefsFor(r.commandContext(), r.store, tasks))
+		taskRefsFor(r.commandContext(), r.store, tasks), r.store)
 	for _, t := range tasks {
 		if t.State == core.StateQueued || t.State == core.StateSubmitted {
 			if !queueConsumerAlive(r.cfg) {

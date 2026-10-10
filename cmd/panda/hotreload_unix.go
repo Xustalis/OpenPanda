@@ -39,38 +39,57 @@ func notifyDaemonReload() {
 	notifyDaemonReloadTo(os.Stdout)
 }
 
+// sighupDaemon delivers SIGHUP to the daemon PID recorded next to the
+// database. Signal 0 probes liveness first: a stale PID file from a crashed
+// daemon must not turn into a signal to an unrelated process that happened
+// to reuse the number.
+func sighupDaemon() (int, bool) {
+	pidFile := daemonPIDFile()
+	if pidFile == "" {
+		return 0, false
+	}
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		return 0, false
+	}
+	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
+		fmt.Fprintf(os.Stderr, "could not signal daemon (pid %d): %v\n", pid, err)
+		return 0, false
+	}
+	return pid, true
+}
+
 // notifyDaemonReloadTo SIGHUPs a running daemon so it hot-reloads the card,
 // and reports which of the two outcomes happened. A dead PID file (crashed
 // daemon), a missing one (daemon never started), or a config that cannot be
 // resolved all degrade to the restart hint — the card on disk is already the
 // new one either way.
 func notifyDaemonReloadTo(out io.Writer) {
-	pidFile := daemonPIDFile()
-	if pidFile == "" {
-		fmt.Fprintln(out, "restart the daemon (or send it SIGHUP) for the new card to be advertised to peers")
-		return
-	}
-	data, err := os.ReadFile(pidFile)
-	if err != nil {
+	pid, ok := sighupDaemon()
+	if !ok {
 		fmt.Fprintln(out, "daemon not running — the new card is picked up at its next start")
-		return
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 {
-		fmt.Fprintln(out, "daemon not running — the new card is picked up at its next start")
-		return
-	}
-	// Signal 0 probes liveness without delivering anything: a stale PID file
-	// from a crashed daemon must not turn into a signal to an unrelated
-	// process that happened to reuse the number.
-	if err := syscall.Kill(pid, 0); err != nil {
-		fmt.Fprintln(out, "daemon not running — the new card is picked up at its next start")
-		return
-	}
-	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
-		fmt.Fprintf(out, "could not signal daemon (pid %d): %v\n", pid, err)
-		fmt.Fprintln(out, "restart the daemon (or send it SIGHUP) for the new card to be advertised to peers")
 		return
 	}
 	fmt.Fprintf(out, "daemon (pid %d) told to reload the card — changes are live\n", pid)
+}
+
+// notifyDaemonMeshTo is the peer-list counterpart of notifyDaemonReloadTo:
+// `nodes add`/`disconnect`/`pair` call it after writing network.*, and the
+// daemon's SIGHUP handler applies the fresh peers/secret/cleartext policy
+// through Core.ApplyNetworkConfig — the link forms (or drops) without a
+// restart.
+func notifyDaemonMeshTo(out io.Writer) {
+	pid, ok := sighupDaemon()
+	if !ok {
+		fmt.Fprintln(out, "daemon not running — the new peer list takes effect at its next start")
+		return
+	}
+	fmt.Fprintf(out, "daemon (pid %d) applied the new peer list — live now\n", pid)
 }

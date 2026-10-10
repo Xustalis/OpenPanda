@@ -42,11 +42,14 @@ type askJSON struct {
 	// Execution attribution: which agent harness ran the task, on which node,
 	// with which model (and whether that model was injected by panda), plus
 	// the entry model that served the ask's own classify/answer calls.
-	Agent      string `json:"agent,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Injected   bool   `json:"injected,omitempty"`
-	Executor   string `json:"executor,omitempty"`
-	EntryModel string `json:"entry_model,omitempty"`
+	Agent    string `json:"agent,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Injected bool   `json:"injected,omitempty"`
+	Executor string `json:"executor,omitempty"`
+	// RouteFallback names the peer the task was routed to before the link
+	// failed and it ran locally — the "meant for remote, ran here" marker.
+	RouteFallback string `json:"route_fallback,omitempty"`
+	EntryModel    string `json:"entry_model,omitempty"`
 	// Plan fields (kind == "plan"): the stage list is what makes the routing
 	// decision auditable from a script — which stage went where, and what it is
 	// waiting for.
@@ -60,7 +63,7 @@ func resultToJSON(out *askengine.Result) askJSON {
 		Kind: out.Kind, Answer: out.Answer, TaskID: out.TaskID, TaskState: out.TaskState,
 		OK: out.OK, Stdout: out.Stdout, Stderr: out.Stderr, ExitCode: out.ExitCode,
 		Agent: out.Agent, Model: out.Model, Injected: out.Injected,
-		Executor: out.Executor, EntryModel: out.EntryModel,
+		Executor: out.Executor, RouteFallback: out.RouteFallback, EntryModel: out.EntryModel,
 		PlanID: out.PlanID, PlanGoal: out.PlanGoal,
 	}
 	for _, t := range out.PlanStages {
@@ -208,6 +211,11 @@ func runAsk(args []string) {
 			}
 			reportNote += " · " + i18n.Tf(loc, "tui.task.execBy", "exec", execNote)
 		}
+		// "Meant for the Mac, ran here" must surface in the receipt, not only
+		// in the audit trail — the user's intent was a remote node.
+		if out.RouteFallback != "" {
+			reportNote += " · " + i18n.Tf(loc, "cli.task.route_fallback", "peer", out.RouteFallback)
+		}
 		fmt.Println(pal().Muted(reportNote))
 
 		// A task parked on a clarification question must lead with the
@@ -262,6 +270,9 @@ func printAskPlan(loc i18n.Locale, out *askengine.Result) {
 	fmt.Printf("goal:   %s\n", out.PlanGoal)
 	fmt.Printf("stages: %d\n", len(out.PlanStages))
 	printPlanStages(out.PlanStages)
+	if out.Warning != "" {
+		fmt.Fprintln(os.Stderr, out.Warning)
+	}
 	fmt.Printf("\nfollow: panda plan show %s\n", out.PlanID)
 }
 

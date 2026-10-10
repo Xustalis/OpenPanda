@@ -217,30 +217,30 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 			if out.TaskID != "" && out.TaskState != "" {
 				meta = i18n.Tf(loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
 			}
-			return block{kind: blockTask, ok: out.OK, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
+			return block{kind: blockTask, ok: out.OK, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
 		}
 		if summary := strings.TrimSpace(out.Report); summary != "" {
 			// The LLM summary is the whole display, matching the classic REPL:
 			// it prints the summary and stops. Appending the raw stdout here
 			// buried the readable report under a wall of execution log.
-			return block{kind: blockTask, ok: out.OK, body: summary, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
+			return block{kind: blockTask, ok: out.OK, body: summary, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
 		}
 		if out.OK {
 			// When no LLM summary was generated (queue-parked, budget-cut, summarizer
 			// degraded), fall back to the cleaned agent output so the user sees the
 			// actual work result rather than a blank note.
 			if log := cleanedTaskLog(loc, out.Stdout); log != "" {
-				return block{kind: blockTask, ok: true, body: log, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
+				return block{kind: blockTask, ok: true, body: log, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
 			}
 			body := i18n.T(loc, "tui.task.noSummary")
 			if out.TaskID != "" {
 				body += " " + i18n.Tf(loc, "tui.task.rawLogHint", "id", out.TaskID)
 			}
-			return block{kind: blockTask, ok: true, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
+			return block{kind: blockTask, ok: true, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
 		}
 		// Failure keeps its exit evidence, with a runaway stderr tail-capped
 		// so a noisy command cannot flood the transcript.
-		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, cleanedTaskLog(loc, out.Stderr)), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor}
+		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, cleanedTaskLog(loc, out.Stderr)), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
 	case "plan":
 		// A plan that failed to start has no board to follow and no stages, so
 		// its summary line would read "plan  · 0 stages" — a failure rendered

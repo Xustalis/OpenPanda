@@ -21,6 +21,8 @@ package main
 // own channel, which is the one channel this code cannot open for them.
 
 import (
+	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"flag"
@@ -80,8 +82,10 @@ func runNodesAdd(args []string) {
 }
 
 // admitPeerAddr is the shared half of `nodes add` and `nodes admit`: ensure a
-// shared secret exists, append addr to the peer list, persist, report. The
-// daemon picks the new peer up on restart — the restart hint says so.
+// shared secret exists, append addr to the peer list, persist, report. A
+// running daemon is SIGHUPed into applying the fresh peer list, and the
+// self-check dials the peer through the real handshake so the report says
+// "linked" or "unreachable" — not "restart and hope".
 func admitPeerAddr(configPath string, cfg *config.Config, addr string) {
 	secret := cfg.Network.SharedSecret
 	generated := false
@@ -114,9 +118,49 @@ func admitPeerAddr(configPath string, cfg *config.Config, addr string) {
 		fmt.Println(i18n.T(loc, "cli.nodes.secret.gen"))
 	}
 	fmt.Println(i18n.Tf(loc, "cli.nodes.add.done", "addr", addr))
-	fmt.Println(i18n.T(loc, "cli.nodes.restart"))
-	ensureCleartextAllowed(os.Stdout, loc, configPath, cfg, addr)
+	notifyDaemonMeshTo(os.Stdout)
+	// The in-memory cfg predates the write; the self-check must present the
+	// secret we just persisted, or it would test the old material.
+	cfg.Network.SharedSecret = secret
+	selfCheckPeer(os.Stdout, loc, configPath, cfg, addr)
 	printJoinGuide(i18n.Detect(), cfg)
+}
+
+// selfCheckPeer runs the admit-time link check: one real outbound handshake
+// against the just-configured address (ProbePeer). Encrypted links report
+// ready immediately. A failure whose cause could be the cleartext gate (the
+// peer is a pre-sessaead build) opens the host-scoped exemption and retries
+// once — the operator's admit command is the consent for exactly that host.
+// punch: peers ride the UDP plane; there is nothing to probe over TCP.
+func selfCheckPeer(w io.Writer, loc i18n.Locale, configPath string, cfg *config.Config, addr string) {
+	if strings.HasPrefix(addr, "punch:") {
+		return
+	}
+	var pub ed25519.PublicKey
+	var privKey ed25519.PrivateKey
+	if db, _, err := panelStore(cfg); err == nil {
+		pub, privKey, _ = core.LoadNodeKey(db)
+		db.Close()
+	}
+	selfID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity())
+	card := ledger.Card{Device: cfg.Node.Name, NodeKind: cfg.Node.Kind, NodeIdentity: cfg.Node.EffectiveIdentity()}
+	for attempt := 0; attempt < 2; attempt++ {
+		res, err := core.ProbePeer(context.Background(), selfID, card, cfg.Model, cfg.Network, addr, pub, privKey)
+		if err == nil {
+			if res.Encrypted {
+				fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.probe.enc", "id", res.PeerID))
+			} else {
+				fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.probe.plain", "id", res.PeerID))
+			}
+			return
+		}
+		if attempt == 0 && core.CleartextDialError(addr, cfg.Network.AllowCleartext, cfg.Network.AllowCleartextFor) != nil {
+			ensureCleartextAllowed(w, loc, configPath, cfg, addr)
+			continue
+		}
+		fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.probe.fail", "err", err.Error()))
+		return
+	}
 }
 
 // warnIfCleartextRefused warns when addr would trip the dial-time cleartext
@@ -266,7 +310,7 @@ func runNodesDisconnect(args []string) {
 		fatal("write config", err)
 	}
 	fmt.Println(i18n.Tf(i18n.Detect(), "cli.nodes.disconnect.done", "addr", addr))
-	fmt.Println(i18n.T(i18n.Detect(), "cli.nodes.restart"))
+	notifyDaemonMeshTo(os.Stdout)
 }
 
 // runNodesInvite implements `panda nodes invite` — print the peer-side join
@@ -335,8 +379,11 @@ func runPair(args []string) {
 		fatal("write config", err)
 	}
 	fmt.Println(i18n.Tf(i18n.Detect(), "cli.pair.done", "peer", *peer))
-	fmt.Println(i18n.T(i18n.Detect(), "cli.nodes.restart"))
-	ensureCleartextAllowed(os.Stdout, i18n.Detect(), *configPath, cfg, *peer)
+	notifyDaemonMeshTo(os.Stdout)
+	// Same caveat as admitPeerAddr: the loaded cfg predates the write, so
+	// hand the self-check the secret the joining operator just typed.
+	cfg.Network.SharedSecret = *secret
+	selfCheckPeer(os.Stdout, i18n.Detect(), *configPath, cfg, *peer)
 }
 
 // printJoinGuide writes the three-step instructions for whoever sets up the
@@ -354,9 +401,9 @@ func printJoinGuideTo(w io.Writer, loc i18n.Locale, cfg *config.Config) {
 	if host, port, err := net.SplitHostPort(listen); err == nil && host == "" {
 		listen = "<this-machine>" + port
 	} else if err == nil && isLoopbackHost(host) {
-		// The secure default binds loopback only; a peer on another machine
-		// cannot reach 127.0.0.1. Point the operator at setting listen_addr to
-		// a routable (or overlay) address before the join can work.
+		// A loopback listener is reachable only from this machine — a peer
+		// elsewhere cannot dial 127.0.0.1. Point the operator at a routable
+		// (or overlay) listen_addr before the join can work.
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.invite.loopback", "port", port))
 		listen = "<this-machine>" + port

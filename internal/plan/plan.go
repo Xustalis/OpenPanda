@@ -68,6 +68,11 @@ type Stage struct {
 	// Needs lists the stage IDs that must finish before this one may start. It
 	// is also the artifact wiring: a stage consumes the outputs of what it needs.
 	Needs []string
+	// Node is a hard pin: when set, the stage runs on exactly that node (id,
+	// display name, or k:<pubkey> stable identity) — parked while the node is
+	// unreachable rather than silently re-scored onto a different machine.
+	// Empty means normal scored routing.
+	Node string
 	// Resources is the hardware the stage asks for (VRAM for a training run,
 	// nothing much for a summary).
 	Resources entry.ResourceProfile

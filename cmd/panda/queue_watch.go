@@ -105,7 +105,7 @@ func watchQueueTo(
 			cols := planTaskTableRefs(loc, rows, listWidth()-2, taskRefsFor(ctx, store, rows))
 			_, _ = fmt.Fprint(out, "  "+taskTableHeader(loc, cols)+"\r\n")
 			for _, t := range rows {
-				_, _ = fmt.Fprint(out, "  "+taskTableRow(t, cols)+"\r\n")
+				_, _ = fmt.Fprint(out, "  "+taskTableRowState(t, cols, dispState(ctx, store, loc, t))+"\r\n")
 			}
 			// The board's own silent stall: queued rows with no consumer
 			// behind them. The probe reruns each repaint so a daemon that

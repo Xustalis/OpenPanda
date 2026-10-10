@@ -109,6 +109,87 @@ func TestResumeParksWhenExecutorUnreachable(t *testing.T) {
 	t.Fatal("parked approval was never redelivered after the executor returned")
 }
 
+// TestSweepFlushesParkedResumeOnLiveLink: a resume parked while the link is
+// UP (the borrowed-CLI approve case: the CLI core has no peers, parks the
+// row, exits) must be delivered by the daemon's periodic sweep — the peer
+// enumeration used to skip resume_outbox, so the approval could only ever
+// leave on a fresh hello, which a stable link never sends.
+func TestSweepFlushesParkedResumeOnLiveLink(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	root := pinCore(t, "pin-root", "x")
+	leaf := pinCore(t, "pin-leaf", "x")
+	wireTwo(t, ctx, leaf, root, "127.0.0.1:18421", "127.0.0.1:18422")
+
+	root.resumeOutboxPersist(ctx, "pin-leaf", bus.TaskResumePayload{
+		TaskID: "t-parked", AttemptID: "a1", Answer: "yes",
+	}, time.Now().Add(time.Hour).Unix())
+
+	root.sweepOutboxes(ctx)
+
+	// outboxFlush delivers on its own goroutine — the sweep only queues it.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		if err := root.db.QueryRow(`SELECT COUNT(*) FROM resume_outbox WHERE task_id='t-parked'`).Scan(&n); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if n == 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("parked resume survived a sweep over a live link — sweep skipped resume_outbox custody")
+}
+
+// TestResumeReturnsPromptlyWhenExecutorOffline: approving a review-parked
+// task whose executor has no link at all must return promptly with the
+// honest parked state — the old path held the caller in waitRemoteResult
+// for the whole outbox ttl and then failLocal-killed a row the parked
+// approval was still meant to revive ("审批了但审批不了").
+func TestResumeReturnsPromptlyWhenExecutorOffline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	root := pinCore(t, "pin-root", "x")
+	tk, err := root.store.Create(ctx, "", "", "offline approval", "pin-root", []string{"pin-root"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, step := range []func() error{
+		func() error { return root.store.Queue(ctx, tk.TaskID, "pin-root") },
+		func() error { return root.store.Dispatch(ctx, tk.TaskID, "pin-root", "pin-leaf") },
+		func() error { return root.store.Accept(ctx, tk.TaskID, "pin-root") },
+		func() error {
+			return root.store.PauseForAnswer(ctx, tk.TaskID, "pin-root",
+				map[string]any{"question": "run it?"})
+		},
+	} {
+		if err := step(); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+
+	start := time.Now()
+	final, res, err := root.ResumeApproved(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("resume approved: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("resume blocked %v — an unreachable executor must return promptly", elapsed)
+	}
+	if final.State != StateDispatched {
+		t.Fatalf("state = %s, want dispatched (claimed, consent parked for delivery)", final.State)
+	}
+	if res.State != StateDispatched || res.Stdout == "" {
+		t.Fatalf("result = state %q stdout %q, want the parked-with-note payload", res.State, res.Stdout)
+	}
+	if !root.store.TaskOutboxPending(ctx, tk.TaskID) {
+		t.Fatal("parked approval must surface as waiting-for-link custody")
+	}
+}
+
 // TestHasPendingCustody: the redial loops tighten their cadence when an
 // outbox holds undelivered rows — the check must see every custody table and
 // clear the moment the row is delivered.

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -192,8 +193,49 @@ func runStatus(args []string) {
 		case !localRunning:
 			fmt.Println(p.Muted(i18n.T(loc, "cli.status.localDown")))
 		}
+		printMeshLineTo(os.Stdout, loc, cfg, views)
 		printPendingTo(os.Stdout, db, loc)
 	}
+}
+
+// printMeshLineTo appends the one-line mesh summary `status` owes a fleet
+// listing: whether THIS node's WS listener answers (self-dialed — a
+// wildcard listen_addr is probed via loopback), how many configured peers
+// are reachable per the directory's freshness, and whether the mesh
+// secret exists at all. "0 peers configured" is information; a down
+// listener with peers configured is the fault line this surfaces.
+func printMeshLineTo(w io.Writer, loc i18n.Locale, cfg *config.Config, views []nodeStatusView) {
+	p := pal()
+	peersOnline := 0
+	for _, v := range views {
+		if v.Running && !v.Local {
+			peersOnline++
+		}
+	}
+	host, port, err := net.SplitHostPort(cfg.Network.ListenAddr)
+	listenUp := false
+	if err == nil {
+		dial := host
+		if dial == "" || dial == "0.0.0.0" || dial == "::" {
+			dial = "127.0.0.1"
+		}
+		if conn, derr := net.DialTimeout("tcp", net.JoinHostPort(dial, port), 800*time.Millisecond); derr == nil {
+			conn.Close()
+			listenUp = true
+		}
+	}
+	state := i18n.T(loc, "cli.status.mesh.down")
+	if listenUp {
+		state = i18n.T(loc, "cli.status.mesh.up")
+	}
+	secret := i18n.T(loc, "cli.status.mesh.secret.no")
+	if cfg.Network.SharedSecret != "" {
+		secret = i18n.T(loc, "cli.status.mesh.secret.yes")
+	}
+	fmt.Fprintln(w, p.Muted(i18n.Tf(loc, "cli.status.mesh",
+		"listen", cfg.Network.ListenAddr, "state", state,
+		"online", strconv.Itoa(peersOnline), "configured", strconv.Itoa(len(cfg.Network.Peers)),
+		"secret", secret)))
 }
 
 // printPendingTo appends the LAN-discovery hint list: nodes broadcasting on
@@ -586,7 +628,18 @@ func runQueue(args []string) {
 		fmt.Println(i18n.T(loc, "cli.queue.none"))
 		return
 	}
-	printTaskTable(loc, filtered, taskRefsFor(context.Background(), store, filtered))
+	printTaskTable(loc, filtered, taskRefsFor(context.Background(), store, filtered), store)
+}
+
+// dispState is the display state a task row should show: mostly t.State, but
+// a dispatched row whose delivery sits parked in the task outbox is "waiting
+// for the peer's link", not running — without the distinction a dead link
+// reads on the board as work in flight.
+func dispState(ctx context.Context, store *core.TaskStore, loc i18n.Locale, t core.Task) string {
+	if t.State == core.StateDispatched && store != nil && store.TaskOutboxPending(ctx, t.TaskID) {
+		return i18n.T(loc, "cli.task.state.wait_link")
+	}
+	return t.State
 }
 
 // runQueueClear implements `panda queue clear [--yes]` — the board's "clear
@@ -673,11 +726,11 @@ const queueListLimit = 25
 // priority, the owning node and as much title as the terminal has room for.
 // `panda queue --watch` renders the same rows through the same helpers, so the
 // live board and the one-shot listing cannot drift apart.
-func printTaskTable(loc i18n.Locale, tasks []core.Task, refs map[string]string) {
-	printTaskTableTo(os.Stdout, loc, tasks, refs)
+func printTaskTable(loc i18n.Locale, tasks []core.Task, refs map[string]string, store *core.TaskStore) {
+	printTaskTableTo(os.Stdout, loc, tasks, refs, store)
 }
 
-func printTaskTableTo(out io.Writer, loc i18n.Locale, tasks []core.Task, refs map[string]string) {
+func printTaskTableTo(out io.Writer, loc i18n.Locale, tasks []core.Task, refs map[string]string, store *core.TaskStore) {
 	p := pal()
 	shown := tasks
 	if len(shown) > queueListLimit {
@@ -686,8 +739,9 @@ func printTaskTableTo(out io.Writer, loc i18n.Locale, tasks []core.Task, refs ma
 	cols := planTaskTableRefs(loc, shown, listWidth(), refs)
 
 	_, _ = fmt.Fprintln(out, taskTableHeader(loc, cols))
+	ctx := context.Background()
 	for _, t := range shown {
-		_, _ = fmt.Fprintln(out, taskTableRow(t, cols))
+		_, _ = fmt.Fprintln(out, taskTableRowState(t, cols, dispState(ctx, store, loc, t)))
 	}
 	if hidden := len(tasks) - len(shown); hidden > 0 {
 		_, _ = fmt.Fprintln(out, p.Muted(i18n.Tf(loc, "cli.queue.more", "n", strconv.Itoa(hidden))))
@@ -740,9 +794,17 @@ func taskTableHeader(loc i18n.Locale, c taskTableCols) string {
 
 // taskTableRow is one task as a row of sized cells.
 func taskTableRow(t core.Task, c taskTableCols) string {
+	return taskTableRowState(t, c, t.State)
+}
+
+// taskTableRowState renders the row with a display state in place of the
+// stored one — used for the "waiting for link" sub-state, which is not a
+// real state (the row is dispatched; its delivery is parked in the outbox)
+// but is the honest thing to show where a state column claims liveness.
+func taskTableRowState(t core.Task, c taskTableCols, state string) string {
 	return row(
 		cell(refOr(c.refs, t.TaskID), c.id),
-		stateCell(t.State, c.state),
+		stateCell(state, c.state),
 		cell(priorityName(t.Priority), c.prio),
 		cell(shortNode(t.OwnerNode), c.node),
 		cell(t.Title, c.title),
@@ -917,6 +979,9 @@ func runApprove(args []string) {
 			execNote += out.Executor
 		}
 		reportNote += " · " + i18n.Tf(i18n.Detect(), "tui.task.execBy", "exec", execNote)
+	}
+	if out.RouteFallback != "" {
+		reportNote += " · " + i18n.Tf(i18n.Detect(), "cli.task.route_fallback", "peer", out.RouteFallback)
 	}
 	fmt.Println(pal().Muted(reportNote))
 	if !out.OK {

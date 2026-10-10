@@ -105,6 +105,9 @@ func main() {
 			CardPath:   *cardPath,
 			MCPCommand: *mcpCommand,
 			QueueTasks: true,
+			// The sidecar is long-lived; when it owns the node row it is the
+			// node's mesh endpoint (listener + peer keepalives + auto-dial).
+			MeshNode:   true,
 			ConfigPath: *configPath,
 			Logger:     logger,
 		})

@@ -311,3 +311,99 @@ func TestSpawnChildTaskSubMain(t *testing.T) {
 		t.Fatalf("expected non-empty chain on child task")
 	}
 }
+
+// TestPlanStageNodePin is the regression for the reported bug class: a stage
+// that names a device in `node:` must run there even when its `requires` also
+// matches the origin node — the pin is the destination, requires is the
+// ability check on it, never a competing candidate pool.
+func TestPlanStageNodePin(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	ability := ledger.NativeAbility{
+		ID: "dev:code", Command: "sh", Args: []string{"-c", "true"}, Tier: 1,
+	}
+	// Both nodes advertise dev:code: scored routing alone would keep the
+	// stage local (localBias); only the pin sends it to mac.
+	pi := newCoreWithNative(t, "pi", "127.0.0.1:17995", ability)
+	mac := newCoreWithNative(t, "mac", "127.0.0.1:17996", ability)
+	for _, c := range []*Core{pi, mac} {
+		withArtifactPool(t, c)
+		c.SetWorkDir(t.TempDir())
+	}
+	if err := pi.Register(ctx); err != nil {
+		t.Fatalf("register pi: %v", err)
+	}
+	if err := mac.Register(ctx); err != nil {
+		t.Fatalf("register mac: %v", err)
+	}
+	go func() { _ = pi.Listen(ctx, "127.0.0.1:17995") }()
+	go func() { _ = mac.Listen(ctx, "127.0.0.1:17996") }()
+	time.Sleep(200 * time.Millisecond)
+	if err := pi.DialPeer(ctx, "127.0.0.1:17996"); err != nil {
+		t.Fatalf("dial mac: %v", err)
+	}
+	waitPeer(t, pi, "mac")
+	time.Sleep(300 * time.Millisecond)
+	pi.StartQueueScheduler(ctx)
+
+	planID, err := pi.StartPlan(ctx, plan.Plan{
+		Goal: "build on mac, verify on mac",
+		Stages: []plan.Stage{{
+			ID: "build", Title: "build", Intent: "build on mac",
+			Requires: []string{"dev:code"}, Node: "mac",
+		}},
+	}, DefaultQueueSpec())
+	if err != nil {
+		t.Fatalf("start pinned plan: %v", err)
+	}
+
+	stages := waitPlanDone(t, ctx, pi, planID, 1)
+	if len(stages) != 1 {
+		t.Fatalf("expected 1 stage, got %d", len(stages))
+	}
+	st := stages[0]
+	if got := PinnedNode(st); got != "mac" {
+		t.Errorf("PinnedNode = %q, want mac", got)
+	}
+	target, err := pi.store.DispatchTarget(ctx, st.TaskID)
+	if err != nil {
+		t.Fatalf("dispatch target: %v", err)
+	}
+	if target != "mac" {
+		t.Errorf("pinned stage dispatched to %q, want mac", target)
+	}
+}
+
+// TestPlanStageNodePinUnknown fails the plan at StartPlan when a stage pins
+// a node the directory cannot resolve: the pin is a promise the run cannot
+// keep, so it must fail before any stage row exists.
+func TestPlanStageNodePinUnknown(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pi := newCoreWithNative(t, "pi", "127.0.0.1:17997", ledger.NativeAbility{
+		ID: "dev:code", Command: "true", Tier: 1,
+	})
+	if err := pi.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	_, err := pi.StartPlan(ctx, plan.Plan{
+		Goal: "pin to a node that does not exist",
+		Stages: []plan.Stage{{
+			ID: "build", Title: "build", Intent: "on a ghost",
+			Requires: []string{"dev:code"}, Node: "no-such-node",
+		}},
+	}, DefaultQueueSpec())
+	if err == nil {
+		t.Fatal("StartPlan should fail when a stage pins an unknown node")
+	}
+	if !strings.Contains(err.Error(), "no-such-node") {
+		t.Fatalf("error should name the bad pin, got %v", err)
+	}
+	// And nothing parked: the whole plan refused, so no plan row exists.
+	if plans, serr := pi.store.ListPlans(ctx); serr != nil || len(plans) > 0 {
+		t.Fatalf("a rejected plan must not leave stage rows: plans=%d err=%v", len(plans), serr)
+	}
+}

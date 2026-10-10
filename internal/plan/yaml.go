@@ -37,6 +37,7 @@ type yamlStage struct {
 	Title     string        `yaml:"title"`
 	Requires  []string      `yaml:"requires"`
 	Needs     []string      `yaml:"needs"`
+	Node      string        `yaml:"node"`
 	Intent    string        `yaml:"intent"`
 	Resources yamlResources `yaml:"resources"`
 }
@@ -69,6 +70,7 @@ func Parse(data []byte) (Plan, error) {
 			Title:    strings.TrimSpace(s.Title),
 			Requires: trimAll(s.Requires),
 			Needs:    trimAll(s.Needs),
+			Node:     strings.TrimSpace(s.Node),
 			Intent:   strings.TrimSpace(s.Intent),
 			Resources: entry.ResourceProfile{
 				CPU:          s.Resources.CPU,
@@ -114,8 +116,12 @@ goal: 训练一个图像分类模型，并把结论总结回来
 
 stages:
   # 第一步：在有编码 agent 的机器上写训练脚本（MacBook）。
+  # node 是硬钉：指定后这一阶段只在那台机器上跑，离线就排队等它，
+  # 绝不会悄悄落到另一台恰好满足 requires 的设备。填 panda nodes
+  # 里看到的节点 id 或显示名；不写则按 requires 自由路由。
   - id: develop
     title: 写训练脚本
+    # node: macbook-air      # 可选：钉死设备
     requires: [coding]
     resources:
       cpu: 2

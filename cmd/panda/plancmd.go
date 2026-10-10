@@ -105,7 +105,8 @@ func runPlanStart(args []string) {
 			fatal("order plan", oerr)
 		}
 		for i, st := range order {
-			fmt.Printf("  %d. %-14s requires=%s needs=%s%s\n", i+1, st.ID,
+			fmt.Printf("  %d. %-14s node=%-16s requires=%s needs=%s%s\n", i+1, st.ID,
+				orDash(st.Node),
 				orDash(strings.Join(st.Requires, ",")), orDash(strings.Join(st.Needs, ",")),
 				resourceSummary(st.Resources))
 		}
@@ -201,8 +202,16 @@ func printPlanStages(stages []core.Task) {
 
 func printPlanStagesTo(out io.Writer, stages []core.Task) {
 	for _, t := range stages {
-		_, _ = fmt.Fprintf(out, "  %-14s %-12s owner=%-16s needs=%s\n",
-			t.StageID, t.State, orDash(t.OwnerNode), orDash(strings.Join(t.Needs, ",")))
+		// "submitted" is the dependency-parked state: a stage with needs it
+		// lists is BLOCKED, not queued for dispatch — the word matters,
+		// because "submitted" reads like the stage is already on its way.
+		state := t.State
+		if state == "submitted" && len(t.Needs) > 0 {
+			state = "blocked"
+		}
+		_, _ = fmt.Fprintf(out, "  %-14s %-12s pin=%-16s owner=%-16s needs=%s\n",
+			t.StageID, state, orDash(core.PinnedNode(t)), orDash(t.OwnerNode),
+			orDash(strings.Join(t.Needs, ",")))
 		for _, in := range t.Inputs {
 			_, _ = fmt.Fprintf(out, "      in   <- %s %s from %s\n",
 				in.Stage, shortHash(in.Hash), in.Source)
@@ -217,6 +226,7 @@ type planStageJSON struct {
 	Stage  string   `json:"stage"`
 	TaskID string   `json:"task_id"`
 	State  string   `json:"state"`
+	Pin    string   `json:"pin,omitempty"`
 	Owner  string   `json:"owner,omitempty"`
 	Needs  []string `json:"needs,omitempty"`
 	Output string   `json:"output_artifact,omitempty"`
@@ -229,6 +239,7 @@ func planToJSON(planID, goal string, stages []core.Task) map[string]any {
 			Stage:  t.StageID,
 			TaskID: t.TaskID,
 			State:  t.State,
+			Pin:    core.PinnedNode(t),
 			Owner:  t.OwnerNode,
 			Needs:  t.Needs,
 			Output: t.OutputArtifact,

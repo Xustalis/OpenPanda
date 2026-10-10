@@ -141,7 +141,15 @@ func runTaskShow(args []string) {
 	taskField("parent", orDash(t.ParentID))
 	taskField("project", orDash(t.Project))
 	taskField("title", t.Title)
-	taskField("state", colorState(t.State))
+	stateLabel := colorState(t.State)
+	// A dispatched row with a parked outbox delivery is not on a wire — it is
+	// in this node's mailbox awaiting the target's next connect. Say so:
+	// "dispatched" reads as running, which is precisely the lie that made
+	// parked pins look like work in flight.
+	if t.State == core.StateDispatched && store.TaskOutboxPending(context.Background(), t.TaskID) {
+		stateLabel += " (" + i18n.T(i18n.Detect(), "cli.task.waiting_link") + ")"
+	}
+	taskField("state", stateLabel)
 	taskField("priority", priorityName(t.Priority))
 	taskField("owner", t.OwnerNode)
 	// Owner is the lease holder — the node the queue/store believes drives the
@@ -151,6 +159,15 @@ func runTaskShow(args []string) {
 	if target, terr := store.DispatchTarget(context.Background(), t.TaskID); terr == nil &&
 		target != "" && target != t.OwnerNode {
 		taskField("executor", target)
+	}
+	// The events are loaded once here so the field block can annotate a
+	// route_fallback (meant for a peer, ran locally) alongside the timeline.
+	events, err := store.Events(context.Background(), id)
+	if err != nil {
+		fatal("load events", err)
+	}
+	if fb := latestRouteFallback(events); fb != "" {
+		taskField("route", fb)
 	}
 	if pin := core.PinnedNode(t); pin != "" {
 		taskField("pinned", pin)
@@ -181,10 +198,6 @@ func runTaskShow(args []string) {
 		printTaskResult(t.ResultJSON)
 	}
 
-	events, err := store.Events(context.Background(), id)
-	if err != nil {
-		fatal("load events", err)
-	}
 	if len(events) > 0 {
 		fmt.Println(pal().Heading("events:"))
 		printEventTimeline(events, "  ")
@@ -458,6 +471,26 @@ func printTaskResult(raw string) {
 	}
 }
 
+// latestRouteFallback renders the newest route_fallback event as a one-line
+// field, or "" when the task never fell back. A fallback means the task was
+// routed to a peer, the link failed at send time, and it ran locally — the
+// reader should see that without digging through the timeline.
+func latestRouteFallback(events []core.Event) string {
+	for i := len(events) - 1; i >= 0; i-- {
+		e := events[i]
+		if e.Type != core.EvRouteFallback {
+			continue
+		}
+		var d struct {
+			Intended string `json:"intended"`
+			Reason   string `json:"reason"`
+		}
+		_ = json.Unmarshal([]byte(e.DataJSON), &d)
+		return i18n.Tf(i18n.Detect(), "cli.task.route_fallback", "peer", orDash(d.Intended))
+	}
+	return ""
+}
+
 // taskJSON is the --json wire form of one task (fields mirror the web API's
 // taskJSON closely enough for scripts).
 type taskJSON struct {
@@ -472,8 +505,14 @@ type taskJSON struct {
 	Pinned   string `json:"pinned,omitempty"`
 	Session  string `json:"session_id,omitempty"`
 	Intent   string `json:"intent,omitempty"`
-	Created  string `json:"created_at"`
-	Updated  string `json:"updated_at"`
+	// WaitingLink marks a dispatched row whose real location is this node's
+	// outbox — parked awaiting the target's link, not running anywhere.
+	WaitingLink bool `json:"waiting_link,omitempty"`
+	// RouteFallback names the peer routing intended before the link failed
+	// and the task ran locally — empty when the task went where decided.
+	RouteFallback string `json:"route_fallback,omitempty"`
+	Created       string `json:"created_at"`
+	Updated       string `json:"updated_at"`
 }
 
 func taskToJSON(t core.Task) taskJSON {
@@ -502,6 +541,9 @@ func taskToJSONWithStore(store *core.TaskStore, t core.Task) taskJSON {
 		target != "" && target != t.OwnerNode {
 		j.Executor = target
 	}
+	j.WaitingLink = t.State == core.StateDispatched &&
+		store.TaskOutboxPending(context.Background(), t.TaskID)
+	j.RouteFallback = store.RouteFallbackPeer(context.Background(), t.TaskID)
 	return j
 }
 

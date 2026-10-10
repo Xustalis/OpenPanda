@@ -181,6 +181,11 @@ func runWeb(args []string) {
 		CardPath:   *cardPath,
 		MCPCommand: *mcpCmd,
 		QueueTasks: true,
+		// A web console that owns the node row is the node's mesh endpoint:
+		// it listens for inbound peers, holds outbound keepalives and answers
+		// LAN beacons — otherwise the console is an island that can drain the
+		// queue but never be reached.
+		MeshNode:   true,
 		ConfigPath: *configPath,
 		Logger:     logger,
 	})

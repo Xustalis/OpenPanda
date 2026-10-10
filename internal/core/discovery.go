@@ -412,6 +412,24 @@ func (c *Core) onBeacon(ctx context.Context, raw []byte, src *net.UDPAddr) {
 	if joined == 1 {
 		return
 	}
+	// Known-member drift: a VERIFIED beacon whose pubkey already sits on a
+	// joined row under a different id is the same device re-announcing after
+	// a rename (a reinstall rekeys, so key continuity is device continuity).
+	// It is fleet, not pending — skip the pending insert entirely; the
+	// noteAutoDial above already armed a redial to the resolved address, and
+	// the hello it earns reaps the stale id via ReapKeySiblings. An unsigned
+	// beacon never earns this exemption: the pubkey claim is self-asserted
+	// until the signature verifies.
+	if verified && b.Pub != "" {
+		var driftID string
+		_ = c.db.QueryRowContext(ctx,
+			`SELECT id FROM employee_cache WHERE pub_key=? AND id != ?`, b.Pub, b.ID).Scan(&driftID)
+		if driftID != "" {
+			c.logger.Info("discovery: known node re-announced under a new id",
+				"key", b.Pub[:min(16, len(b.Pub))]+"…", "old_id", driftID, "new_id", b.ID, "addr", addr)
+			return
+		}
+	}
 	var known, total int
 	// One roundtrip for both lookups — this runs per datagram on the LAN
 	// socket, and every skipped query is WAL work saved.
@@ -539,11 +557,13 @@ func (c *Core) autoDialPass(ctx context.Context) {
 			continue
 		}
 		if err := c.DialPeer(ctx, cand.addr); err != nil {
-			// The cleartext gate is the failure an operator can act on —
-			// surface its remediation once per candidate, at Warn, then let
-			// the cooldown keep retries quiet at Debug.
-			if !cand.gateWarned && cleartextOK(cand.addr, c.allowCleartext, c.cleartextFor) != nil {
-				c.logger.Warn("discovery: LAN node seen but ws:// auto-dial refused — open the segment with network.allow_cleartext_for (or admit manually: panda nodes admit)", "id", id, "addr", cand.addr)
+			// Dial-time failures are transport issues; the post-handshake
+			// cleartext refusal (a peer too old for sessaead on a non-safe
+			// network) lands asynchronously after the socket opens — the
+			// warn there carries the remediation. Log the dial error itself
+			// once at Warn, then let the cooldown keep retries quiet.
+			if !cand.gateWarned {
+				c.logger.Warn("discovery: auto-dial failed (will keep retrying)", "id", id, "addr", cand.addr, "err", err)
 				c.autoDialMu.Lock()
 				if cur, ok := c.autoDialCands[id]; ok {
 					cur.gateWarned = true

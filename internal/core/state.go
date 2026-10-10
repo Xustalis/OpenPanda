@@ -29,8 +29,9 @@ var (
 	// invocation must neither re-execute nor disturb the live row.
 	ErrAlreadyRunning = fmt.Errorf("%w: already running on this node", ErrCancelled)
 	// ErrApprovalNeedsChangedInput reports that a reviewed task cannot be
-	// approved as-is. Its input, scope, or context must change before a new run.
-	ErrApprovalNeedsChangedInput = errors.New("approval requires changed input")
+	// approved as-is. Its input, scope, or context must change before a new
+	// run. The message doubles as user-facing copy, so it names the action.
+	ErrApprovalNeedsChangedInput = errors.New("approval requires changed input — resubmit the task with a corrected prompt instead")
 )
 
 // Task states. These strings are part of the wire protocol across nodes,
@@ -118,6 +119,12 @@ const (
 	// work tree artifact) failed to attach or land, running in a degraded state
 	// instead of failing silently.
 	EvContextDegraded = "context_degraded"
+
+	// EvRouteFallback records that routing chose a peer but the task ran
+	// locally anyway — the link to the intended executor failed at send
+	// time. Without this event the timeline only shows the corrective
+	// retarget to self, and "meant for the Mac, ran here" is invisible.
+	EvRouteFallback = "route_fallback"
 )
 
 // Task priority levels for the panel queue (smaller runs first). The DB

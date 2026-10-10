@@ -12,7 +12,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"math/rand/v2"
 	"net"
 	"os"
 	"os/signal"
@@ -44,21 +43,6 @@ import (
 )
 
 var version = versionpkg.Version
-
-// peerFailLogEvery bounds the per-peer WARN stream a dead peer produces: at
-// the 30s steady-state backoff, one line every 20th failure is roughly one
-// line per ~10 minutes — enough to keep a multi-day outage greppable without
-// the log growth LaunchAgent's unrotated /tmp files would turn into.
-const peerFailLogEvery = 20
-
-// Redial backoff caps. The steady-state cap keeps a permanently offline peer
-// cheap to probe; with custody in hand the cap collapses so a parked task —
-// whose delivery IS the reconnect — waits seconds between attempts, not
-// half-minutes, on the flappy links real deployments run over.
-const (
-	peerBackoffCap        = 30 * time.Second
-	peerBackoffCapCustody = 5 * time.Second
-)
 
 func main() {
 	// A Windows self-update renames the running image to <exe>.old because the
@@ -519,6 +503,25 @@ func runDaemon(args []string) {
 			logger.Info("subprocess sandbox enabled", "mode", mode, "backend", backend)
 		}
 	}
+	// A secret-less node cannot mesh at all: the WS listener refuses to
+	// start and discovery stays listen-only. Rather than booting a node
+	// that is silently unreachable, mint one here and persist it into the
+	// config so the next start (and any `panda nodes`/pair output) sees the
+	// same material. The secret creates a standalone mesh domain — a node
+	// joining an existing mesh later adopts the inviter's secret via pair.
+	if cfg.Network.SharedSecret == "" {
+		if secret, serr := generateSharedSecret(); serr == nil {
+			cfg.Network.SharedSecret = secret
+			if werr := config.UpdateNetworkSection(*configPath,
+				config.NetworkConfig{SharedSecret: secret}); werr != nil {
+				logger.Warn("generated shared secret could not be persisted (in-memory only)", "err", werr)
+			} else {
+				logger.Info("generated and saved shared secret", "config", *configPath)
+			}
+		} else {
+			logger.Warn("could not generate shared secret", "err", serr)
+		}
+	}
 	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
 	coreNode.SetAllowCleartext(cfg.Network.AllowCleartext)
 	coreNode.SetCleartextAllowlist(cfg.Network.AllowCleartextFor)
@@ -583,18 +586,27 @@ func runDaemon(args []string) {
 
 	// Hot reload (阶段 3): SIGHUP re-reads the capability card and rebroadcasts
 	// it — the signal `panda card` write commands send after touching the file.
-	// A separate channel, deliberately: folding SIGHUP into the NotifyContext
+	// The same signal re-reads config.yaml's mutable network half (peers,
+	// secret, cleartext policy): `nodes add`/`disconnect`/`pair` signal the
+	// daemon after writing, so a peer change is live without a restart. A
+	// separate channel, deliberately: folding SIGHUP into the NotifyContext
 	// above would make it shut the daemon down, the exact opposite of intent.
 	// On Windows the notification simply never fires (the OS does not deliver
 	// the signal), so the CLI prints its restart hint instead.
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
-	guard.Go(logger, "daemon: SIGHUP card reload", cancel, func() {
+	guard.Go(logger, "daemon: SIGHUP hot reload", cancel, func() {
 		for range hup {
 			if err := coreNode.ReloadCard(context.Background(), *cardPath); err != nil {
 				logger.Warn("reload card on SIGHUP", "err", err)
 			}
+			reloaded, err := config.Load(*configPath)
+			if err != nil {
+				logger.Warn("reload config on SIGHUP", "err", err)
+				continue
+			}
+			coreNode.ApplyNetworkConfig(ctx, reloaded.Network)
 		}
 	})
 
@@ -725,101 +737,11 @@ func runDaemon(args []string) {
 		})
 	}
 
-	for _, peer := range cfg.Network.Peers {
-		if strings.HasPrefix(peer, "punch:") {
-			// A punch entry names a node id, not an address: the peer is
-			// NAT-bound and reachable only through the farsky pinhole
-			// handshake. Keep retrying until a UDP route exists; the
-			// keepalive loop then holds the mapping, and a lost mapping is
-			// re-punched on the next tick.
-			id := strings.TrimPrefix(peer, "punch:")
-			guard.Go(logger, "daemon: punch "+peer, cancel, func() {
-				punchFails := 0
-				for {
-					if coreNode.UDPPort() == 0 {
-						logger.Warn("punch peer configured but the datagram plane is off (network.udp_listen)", "peer", id)
-						return
-					}
-					if coreNode.UDPRoute(id) == nil {
-						if err := coreNode.PunchPeer(ctx, id); err != nil {
-							punchFails++
-							// Same throttling as the dial loop below: first
-							// failure is news, a steady-state retry stream
-							// every 30s is not — log a sparse beat instead.
-							if punchFails == 1 || punchFails%peerFailLogEvery == 0 {
-								logger.Warn("punch offer failed", "peer", id, "err", err, "consecutive", punchFails)
-							}
-						}
-					} else if punchFails > 0 {
-						logger.Info("punch route established", "peer", id, "after_failures", punchFails)
-						punchFails = 0
-					}
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(30 * time.Second):
-					}
-				}
-			})
-			continue
-		}
-		guard.Go(logger, "daemon: peer keepalive "+peer, cancel, func() {
-			backoff := 1 * time.Second
-			dialFails := 0
-			// jitter spreads a fleet-wide reconnect over a window instead of
-			// having every node redial in lockstep the second the peer returns —
-			// the classic thundering herd after a shared outage.
-			jitter := func(d time.Duration) time.Duration {
-				return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
-			}
-			for {
-				err := coreNode.MaintainPeer(ctx, peer)
-				if err != nil {
-					// Dial or hello failed; back off exponentially so we do
-					// not hot-loop a permanently offline peer.
-					dialFails++
-					// First failure and the recovery are the news — a line
-					// every redial (~30s steady-state) grew an unbounded WARN
-					// stream for a peer that is simply off, and the
-					// LaunchAgent logs have no rotation. Keep a sparse beat
-					// every ~20th failure so the outage stays greppable
-					// without owning the log.
-					if dialFails == 1 || dialFails%peerFailLogEvery == 0 {
-						logger.Warn("peer dial failed", "peer", peer, "err", err, "consecutive", dialFails)
-					}
-					// Custody-aware cadence: with an outbox holding rows the
-					// peer owes (or is owed) work, probing the contact
-					// opportunity is the priority — the steady-state cap
-					// would stretch a flappy link's recovery into minutes of
-					// needless waiting for a parked task that would flow the
-					// moment the dial lands.
-					capTo := peerBackoffCap
-					if coreNode.HasPendingCustody(ctx) {
-						capTo = peerBackoffCapCustody
-					}
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(jitter(backoff)):
-					}
-					backoff = min(backoff*2, capTo)
-					continue
-				}
-				if dialFails > 0 {
-					logger.Info("peer reconnected", "peer", peer, "after_failures", dialFails)
-					dialFails = 0
-				}
-				// The connection was established and later dropped; reset the
-				// backoff and reconnect promptly.
-				backoff = 1 * time.Second
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(jitter(backoff)):
-				}
-			}
-		})
-	}
+	// Configured peer edges: one keepalive goroutine per address, owned by
+	// the core so a config reload (SIGHUP or `nodes add`) can re-sync the
+	// set without a restart — ws:// / wss:// entries get the dial loop,
+	// "punch:<id>" entries get the NAT-pinhole loop.
+	coreNode.SyncPeers(ctx, cfg.Network.Peers)
 
 	logger.Info("panda core started",
 		"version", version,
@@ -838,8 +760,9 @@ func runDaemon(args []string) {
 	// Fail-closed transport auth (design §16 / P0-1): without a shared secret no
 	// peer can authenticate, so the WebSocket listener is not started at all —
 	// the node runs local-only rather than accepting unauthenticated peers.
+	// Reached only when the generation+persist above also failed.
 	if cfg.Network.SharedSecret == "" {
-		logger.Warn("websocket disabled: network.shared_secret is not set (refusing to accept unauthenticated peers)")
+		logger.Warn("websocket disabled: network.shared_secret is not set and could not be generated (refusing to accept unauthenticated peers)")
 	} else {
 		guard.Go(logger, "daemon: websocket listener", cancel, func() {
 			serveErr <- coreNode.Listen(ctx, cfg.Network.ListenAddr)

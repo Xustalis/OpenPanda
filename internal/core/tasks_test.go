@@ -1366,3 +1366,61 @@ func TestDeclineTrail(t *testing.T) {
 		t.Fatalf("DeclinedBy = %v, %v", ids, err)
 	}
 }
+
+// TestRecoverRequeueSchedulableAndParked pins the restart fixes: a dispatched
+// row coming back to queued must carry scheduled=1 or ListReady never sees it
+// (the silent "went away but nobody did it" stall), while a row whose delivery
+// is parked in task_outbox must stay dispatched — its custody is the parked
+// bundle, not the queue.
+func TestRecoverRequeueSchedulableAndParked(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// dispatched, nothing parked: restart requeues it and arms the scheduler.
+	fly := createTask(t, s, "", "mid-flight", "root")
+	if err := s.Queue(ctx, fly.TaskID, "root"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := s.Dispatch(ctx, fly.TaskID, "root", "peer-x"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	// Simulate the non-scheduled path: a direct submit carries scheduled=0.
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET scheduled=0 WHERE task_id=?`, fly.TaskID); err != nil {
+		t.Fatalf("unschedule: %v", err)
+	}
+
+	// dispatched AND parked in the outbox: custody is the bundle, not the row.
+	parked := createTask(t, s, "", "parked pin", "root")
+	if err := s.Queue(ctx, parked.TaskID, "root"); err != nil {
+		t.Fatalf("queue parked: %v", err)
+	}
+	if err := s.Dispatch(ctx, parked.TaskID, "root", "peer-dead"); err != nil {
+		t.Fatalf("dispatch parked: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO task_outbox (peer, task_id, payload_json, transport_type, ttl, created_at)
+		 VALUES ('peer-dead', ?, '{}', 'pin', 0, 1)`, parked.TaskID); err != nil {
+		t.Fatalf("park outbox row: %v", err)
+	}
+
+	if _, err := s.Recover(ctx); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+
+	g1, err := s.Get(ctx, fly.TaskID)
+	if err != nil {
+		t.Fatalf("get fly: %v", err)
+	}
+	if g1.State != StateQueued || !g1.Scheduled {
+		t.Fatalf("recovered dispatch = state:%s scheduled:%v, want queued+scheduled", g1.State, g1.Scheduled)
+	}
+
+	g2, err := s.Get(ctx, parked.TaskID)
+	if err != nil {
+		t.Fatalf("get parked: %v", err)
+	}
+	if g2.State != StateDispatched {
+		t.Fatalf("parked task state = %s, want %s (outbox custody survives restart)", g2.State, StateDispatched)
+	}
+}

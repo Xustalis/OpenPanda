@@ -140,12 +140,15 @@ type PlanSpec struct {
 // PlanStageSpec is one stage of a model-emitted plan. Requires and Resources are
 // the same routing vocabulary a single task uses, so a stage is matched to a node
 // by the existing scoring — the GPU stage cannot land on the Pi because of what
-// it declares here.
+// it declares here. Node is the hard pin ("在 Mac 上做"): a stage carrying it may
+// only run on that node — the requires match alone is a coincidence across a
+// fleet where every machine advertises the same agent.
 type PlanStageSpec struct {
 	ID        string          `json:"id"`
 	Title     string          `json:"title"`
 	Intent    string          `json:"intent"`
 	Requires  []string        `json:"requires"`
 	Needs     []string        `json:"needs"`
+	Node      string          `json:"node,omitempty"`
 	Resources ResourceProfile `json:"resource_profile"`
 }

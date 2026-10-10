@@ -1062,12 +1062,13 @@ func Default() *Config {
 			Kind:          NodeKindPhysical,
 		},
 		Network: NetworkConfig{
-			// Loopback by default (review P1-2): the bus speaks unauthenticated-
-			// after-hello WebSocket, so a wildcard bind would expose delegation
-			// traffic and the hello signature to the LAN. A node that should be
-			// reachable by peers must set listen_addr explicitly — to a routable
-			// interface or, preferably, a Tailscale/WireGuard overlay address.
-			ListenAddr: "127.0.0.1:7836",
+			// Wildcard by default: sessaead (capability-negotiated AEAD keyed
+			// from the shared secret + both hello nonces) seals every frame
+			// after the hello exchange, so the wildcard bind exposes nothing
+			// plaintext beyond the two signed hellos — which carry no secret
+			// material and are replay-bound. Peers too old to negotiate fall
+			// back to the cleartext policy (loopback/Tailscale/allowlist).
+			ListenAddr: "0.0.0.0:7836",
 			// Loopback by default (P1-24): the panel speaks plain HTTP, so a
 			// wildcard bind would expose the Bearer token and task contents to
 			// the LAN. Set panel_addr explicitly to expose it (e.g. behind a

@@ -39,6 +39,7 @@ func FromSpec(spec entry.PlanSpec) (Plan, error) {
 			Title:     title,
 			Requires:  trimAll(s.Requires),
 			Needs:     trimAll(s.Needs),
+			Node:      strings.TrimSpace(s.Node),
 			Intent:    intent,
 			Resources: s.Resources,
 		})

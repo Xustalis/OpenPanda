@@ -717,6 +717,10 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 		return err
 	}
 	p.TokenBudget = tokens
+	// Dispatch records the new delegation target on the audit trail — the
+	// supersede check must read the PREVIOUS target first, so it runs before
+	// the transition, not after.
+	c.supersedeTarget(ctx, taskID, target)
 	if err := c.store.Dispatch(ctx, taskID, c.nodeID, target); err != nil {
 		return fmt.Errorf("dispatch: %w", err)
 	}
@@ -1630,7 +1634,28 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	// marker-happy agent; the mesh budget bounds the spawned tree itself.
 	const maxDelegateRequests = 4
 	delegations := 0
+	// pendingChildren are delegate children still in flight — a request whose
+	// result had not landed when its wait window closed. Rebuilding the set
+	// from the rows (not just this episode's memory) means a resumed run also
+	// folds children spawned before the interruption.
+	pendingChildren := c.liveChildren(execCtx, taskID)
+	defer func() {
+		// Every exit path drops the waiters of still-pending children: the
+		// row, not the channel, is what a late result needs to land on.
+		for _, pc := range pendingChildren {
+			c.waiters.Delete(pc.id)
+		}
+	}()
 	for round := 0; round < maxRounds; round++ {
+		// Fold delegate children that resolved since the last round before
+		// the agent runs again: a result that arrived after its wait window
+		// still reaches the prompt, so "the child answered too late" stops
+		// meaning "the answer was lost".
+		if len(pendingChildren) > 0 {
+			for _, note := range c.foldLateChildren(execCtx, &pendingChildren) {
+				currentIntent += "\n\n[delegated child result arrived]\n" + note
+			}
+		}
 		// §6.1 token budget: a task whose quota is already spent — by an
 		// earlier round's judge charge, or before it ever reached this
 		// executor — must not run another metered round. The check reads the
@@ -1822,7 +1847,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 						take = len(drs)
 					}
 					delegations += take
-					notes := c.delegateChildren(execCtx, task, drs[:take])
+					notes := c.delegateChildren(execCtx, task, drs[:take], &pendingChildren)
 					for i, note := range notes {
 						if len(notes) == 1 {
 							currentIntent += "\n\n[delegated child result]\n" + note
@@ -2308,6 +2333,16 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			currentIntent = currentIntent + "\n\n上一轮未能完整完成，请继续完成剩余工作，并汇报最终结果。"
 		} else {
 			currentIntent = currentIntent + "\n\n[上级补充指令]\n" + v.Followup
+		}
+	}
+	// §4.2 final fold: a run must not report a verdict while children it
+	// delegated are still outstanding — that is the "declared done while a
+	// sub-task is still running" lie from the orchestrator's side. Hold until
+	// they land (folded into the reported output), park (annotated), or the
+	// task's own deadline arrives.
+	if len(pendingChildren) > 0 {
+		if notes := c.awaitPendingChildren(execCtx, task, pendingChildren); len(notes) > 0 {
+			res.Stdout += "\n\n[delegated child results]\n" + strings.Join(notes, "\n")
 		}
 	}
 	return roundOutcome{res: res, lastChanged: lastChanged, verdict: verdict, sessionID: sessionID}, nil
@@ -3170,22 +3205,6 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 		}
 		return
 	}
-	if Terminal(t.State) {
-		// A closed row stays closed — cancel/expire/done are deliberate
-		// outcomes a late wire message must not reopen. But the executor's
-		// real verdict is recorded so `task show` shows what actually
-		// happened remotely instead of a silent divergence.
-		c.logger.Info("late result on terminal task", "task", p.TaskID,
-			"state", t.State, "from", env.From, "remote_state", p.State)
-		if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
-			"late": true, "dropped": "terminal_state", "local_state": t.State,
-			"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
-		}); rerr != nil {
-			c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
-		}
-		c.signalResult(p.TaskID, p)
-		return
-	}
 	state := p.State
 	if state == "" {
 		// Backward compatibility for nodes that predate the explicit state field.
@@ -3195,6 +3214,28 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			state = StateFailed
 		}
 	}
+	if Terminal(t.State) {
+		// An expired row is a timeout's pessimistic close — the deadline
+		// bounded delivery, not correctness — so a real done still
+		// reconciles below. Cancelled and done stay sealed: one is a human
+		// decision, the other is the answer already.
+		if !(t.State == StateExpired && state == StateDone && p.OK) {
+			// A closed row stays closed — cancel/expire/done are deliberate
+			// outcomes a late wire message must not reopen. But the executor's
+			// real verdict is recorded so `task show` shows what actually
+			// happened remotely instead of a silent divergence.
+			c.logger.Info("late result on terminal task", "task", p.TaskID,
+				"state", t.State, "from", env.From, "remote_state", p.State)
+			if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
+				"late": true, "dropped": "terminal_state", "local_state": t.State,
+				"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
+			}); rerr != nil {
+				c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
+			}
+			c.signalResult(p.TaskID, p)
+			return
+		}
+	}
 	transitionOK := true
 	switch state {
 	case StateDone:
@@ -3202,7 +3243,31 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			c.logger.Warn("inconsistent task_result state", "task", p.TaskID, "state", state, "ok", p.OK)
 			return
 		}
-		if err := c.store.CompleteFromRemote(ctx, p.TaskID, c.nodeID, p); err != nil {
+		if t.State == StateFailed || t.State == StateExpired {
+			// Reconcile: a timeout path already closed this row, but the
+			// executor's done is evidence the work actually finished. The
+			// one failure a result may never overturn is a human reject —
+			// its last event carries {rejected}, everything else (lease
+			// expiry, remote fail, deadline) wrote EvResult.
+			if c.store.failureWasRejected(ctx, p.TaskID) {
+				c.logger.Info("late done on human-rejected task ignored", "task", p.TaskID, "from", env.From)
+				if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
+					"late": true, "dropped": "human_rejected",
+					"from": env.From, "remote_state": p.State, "remote_attempt": p.AttemptID,
+				}); rerr != nil {
+					c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
+				}
+				transitionOK = false
+			} else if rerr := c.store.ReconcileDone(ctx, p.TaskID, c.nodeID, p, t.State); rerr != nil {
+				if !errors.Is(rerr, ErrConflict) {
+					c.logger.Warn("reconcile late done", "task", p.TaskID, "err", rerr)
+					transitionOK = false
+				}
+			} else {
+				c.logger.Info("late done reconciled over timeout close", "task", p.TaskID,
+					"was", t.State, "from", env.From)
+			}
+		} else if err := c.store.CompleteFromRemote(ctx, p.TaskID, c.nodeID, p); err != nil {
 			c.logger.Warn("complete from result", "task", p.TaskID, "err", err)
 			transitionOK = false
 		}

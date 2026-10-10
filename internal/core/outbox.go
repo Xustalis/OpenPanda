@@ -619,6 +619,31 @@ func (c *Core) cancelOutboxDropKey(ctx context.Context, key, taskID string) {
 	}
 }
 
+// supersedeTarget stands down whoever held taskID's delegation before the
+// current retarget. A re-route after lease expiry leaves the stale executor
+// holding a live copy that keeps burning budget on work this node no longer
+// waits on — two executors editing one worktree is the divergence the
+// reroute was meant to escape. The cancel rides the same authorization rule
+// handleCancel applies (delegator/owner in chain); an unreachable stale
+// executor gets it parked for the next hello.
+func (c *Core) supersedeTarget(ctx context.Context, taskID, newTarget string) {
+	prev, err := c.store.DispatchTarget(ctx, taskID)
+	if err != nil {
+		c.logger.Warn("supersede: prior target lookup", "task", taskID, "err", err)
+		return
+	}
+	if prev == "" || scheduler.SameRuntimeIdentity(prev, newTarget) ||
+		scheduler.SameRuntimeIdentity(prev, c.nodeID) {
+		return // never dispatched, same executor, or the prior copy is local
+	}
+	const reason = "superseded by reroute"
+	if !c.deliverCancel(ctx, prev, taskID, reason) {
+		c.outboxCancelPersist(ctx, prev, taskID, reason)
+	}
+	c.logger.Info("superseded prior dispatch target", "task", taskID,
+		"prev", prev, "new", newTarget)
+}
+
 // deliverCancel places a task_cancel envelope on the wire to peer, returning
 // whether it was accepted by the connection. Shared by the initial send path
 // (forwardCancelDownstream) and the flush path.
@@ -698,12 +723,7 @@ func (c *Core) taskOutboxPending(ctx context.Context, taskID string) bool {
 	if c.db == nil || taskID == "" {
 		return false
 	}
-	var n int
-	if err := c.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM task_outbox WHERE task_id = ?`, taskID).Scan(&n); err != nil {
-		return false
-	}
-	return n > 0
+	return c.store.TaskOutboxPending(ctx, taskID)
 }
 
 // taskOutboxTTL returns the latest delivery deadline among parked custody
@@ -822,6 +842,7 @@ func (c *Core) sweepOutboxes(ctx context.Context) {
 		SELECT DISTINCT peer FROM result_outbox
 		UNION SELECT DISTINCT peer FROM cancel_outbox
 		UNION SELECT DISTINCT peer FROM task_outbox
+		UNION SELECT DISTINCT peer FROM resume_outbox
 		UNION SELECT DISTINCT peer FROM artifact_push_outbox`)
 	if err != nil {
 		c.logger.Warn("outbox: sweep query", "err", err)

@@ -54,6 +54,9 @@ type block struct {
 	model    string
 	injected bool
 	executor string
+	// routeFallback names the peer the run was routed to before its link
+	// failed and the task executed locally — "meant for the Mac, ran here".
+	routeFallback string
 }
 
 // render draws the block at the given width using the theme. expandThought
@@ -218,6 +221,9 @@ func (b block) renderTask(t theme, width int) string {
 			execNote += b.executor
 		}
 		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+i18n.Tf(t.loc, "tui.task.execBy", "exec", execNote)))
+	}
+	if b.routeFallback != "" {
+		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+i18n.Tf(t.loc, "cli.task.route_fallback", "peer", b.routeFallback)))
 	}
 	if b.meta != "" {
 		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+b.meta))
