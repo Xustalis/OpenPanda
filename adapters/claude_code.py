@@ -78,6 +78,29 @@ class ProviderFailure(Exception):
     """The agent CLI's model provider failed with a server or auth error."""
 
 
+def _retry_status(ev):
+    """Extract (display, code) from a CLI api_retry event.
+
+    The CLI's event shape has drifted across versions: some emit a bare
+    error_status, some nest it under error.status / error.message. Reading
+    only error_status produced "API retry 1 (None)…" — a retry with no
+    reason, which is the one thing the note exists to convey.
+    """
+    status = ev.get("error_status") or ev.get("status") or ""
+    err = ev.get("error")
+    if not status and isinstance(err, dict):
+        status = err.get("status") or err.get("message") or err.get("type") or ""
+    elif not status and isinstance(err, str):
+        status = err
+    code = status if isinstance(status, int) else None
+    if code is None and status:
+        try:
+            code = int(str(status))
+        except (TypeError, ValueError):
+            code = None
+    return status, code
+
+
 def main():
     # read_request_lined keeps stdin open for session mode's turn lines; in
     # one-shot mode the first (only) line is the whole request.
@@ -281,12 +304,13 @@ def _run_stream(base, req, model, cwd, timeout, disable_settings=False, v2=True)
                     harness.progress("Claude: thinking…")
             elif subtype == "api_retry":
                 attempt = ev.get("attempt", 1)
-                status = ev.get("error_status", "")
-                harness.progress(f"Claude: API retry {attempt} ({status})…")
+                status, code = _retry_status(ev)
+                detail = f" ({status})" if status else ""
+                harness.progress(f"Claude: API retry {attempt}{detail}…")
                 # Fast failover: if provider returns 5xx or auth error on retries,
                 # abort quickly so PANDA dynamic injection or fallback chain can rescue the task.
-                if attempt >= 2 and status in (401, 403, 500, 502, 503, 504):
-                    raise ProviderFailure(f"api_retry error {status}: server_error")
+                if attempt >= 2 and code in (401, 403, 500, 502, 503, 504):
+                    raise ProviderFailure(f"api_retry error {code}: server_error")
 
     returncode, err, timed_out = harness.run_stream(
         cmd, cwd=cwd, timeout=timeout, on_line=on_line)
@@ -551,10 +575,11 @@ def _main_session(req, model, max_turns):
                     sub = ev.get("subtype")
                     if sub == "api_retry":
                         attempt = ev.get("attempt", 1)
-                        status = ev.get("error_status", "")
-                        harness.progress(f"Claude: API retry {attempt} ({status})…")
-                        if attempt >= 2 and status in (401, 403, 500, 502, 503, 504):
-                            raise ProviderFailure(f"api_retry error {status}: server_error")
+                        status, code = _retry_status(ev)
+                        detail = f" ({status})" if status else ""
+                        harness.progress(f"Claude: API retry {attempt}{detail}…")
+                        if attempt >= 2 and code in (401, 403, 500, 502, 503, 504):
+                            raise ProviderFailure(f"api_retry error {code}: server_error")
         finally:
             deadline.cancel()
         if final is None:

@@ -140,16 +140,20 @@ func (r *ResourceRegistry) TryAcquire(keys []string, taskID string) bool {
 }
 
 // Release drops every lock held by taskID. Releasing an unknown task is a
-// no-op, so double-release (defensive cleanup paths) is safe.
-func (r *ResourceRegistry) Release(taskID string) {
+// no-op, so double-release (defensive cleanup paths) is safe. Reports whether
+// the task actually held anything, so a caller that released before a wait
+// knows whether a matching re-acquire is owed.
+func (r *ResourceRegistry) Release(taskID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	held := len(r.byTask[taskID]) > 0
 	for _, k := range r.byTask[taskID] {
 		if r.holder[k] == taskID {
 			delete(r.holder, k)
 		}
 	}
 	delete(r.byTask, taskID)
+	return held
 }
 
 // HeldBy reports the task currently holding key ("" = free). Exposed for
@@ -212,6 +216,41 @@ func New(store Store, runner Runner, maxConcurrent int, logger *slog.Logger) *Sc
 
 // Registry exposes the lock table (tests and diagnostics).
 func (s *Scheduler) Registry() *ResourceRegistry { return s.registry }
+
+// ReleaseTask frees every resource key held by taskID and wakes the queue so
+// a blocked task can start. A task waiting on its own children calls this so
+// the children — which inherit the same project key — can actually run: the
+// waiter is not touching the worktree while it waits, and without the release
+// a child queued behind its own parent's key deadlocks the pair. Reports
+// whether anything was held (a delegate-driven task never held queue locks,
+// and owes no re-acquire).
+func (s *Scheduler) ReleaseTask(taskID string) bool {
+	held := s.registry.Release(taskID)
+	if held {
+		s.Wake()
+	}
+	return held
+}
+
+// AcquireTask blocks until every key is locked for taskID, or ctx ends
+// (false). The runner's end-of-run release still fires from its defer, so
+// re-acquired keys live exactly as long as the resumed round; waiting for
+// whoever took the keys meanwhile is the serialization the keys exist for.
+func (s *Scheduler) AcquireTask(ctx context.Context, taskID string, keys []string) bool {
+	if len(keys) == 0 {
+		return true
+	}
+	for {
+		if s.registry.TryAcquire(keys, taskID) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
 
 // Wake nudges the scheduler to re-evaluate the queue immediately (a task was
 // enqueued, finished, cancelled, or reordered). Coalesced: a pending wake is

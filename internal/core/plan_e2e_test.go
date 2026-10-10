@@ -510,3 +510,81 @@ func TestPlanStageNodePinUnknown(t *testing.T) {
 		t.Fatalf("a rejected plan must not leave stage rows: plans=%d err=%v", len(plans), serr)
 	}
 }
+
+// TestQueueKeysReleaseReacquire pins the core wiring the delegate wait uses:
+// a queue-held task releases its keys for the wait and re-acquires after; a
+// task the queue never held (delegate-driven) owes nothing.
+func TestQueueKeysReleaseReacquire(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	c := newCore(t, "rel-reacq", "127.0.0.1:17978")
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	sched := c.StartQueueScheduler(ctx)
+	keys := []string{"project:X"}
+	if !sched.Registry().TryAcquire(keys, "held-task") {
+		t.Fatal("setup acquire failed")
+	}
+	if !c.queueReleaseFor("held-task") {
+		t.Fatal("queueReleaseFor reported nothing held")
+	}
+	if got := sched.Registry().HeldBy("project:X"); got != "" {
+		t.Fatalf("key still held by %q after release", got)
+	}
+	c.queueAcquireFor(ctx, "held-task", keys)
+	if got := sched.Registry().HeldBy("project:X"); got != "held-task" {
+		t.Fatalf("holder = %q, want held-task after re-acquire", got)
+	}
+	if c.queueReleaseFor("never-held") {
+		t.Fatal("queueReleaseFor claimed an unheld task")
+	}
+}
+
+// TestChildRowResultCarriesFailureReason: a child failed by the routing
+// writers stores {"failed": reason} — a key TaskResultPayload has no field
+// for. The fold must carry the reason; before this fix the parent agent read
+// "failed with no detail" and guessed (it invented capability ids twice in
+// the live run).
+func TestChildRowResultCarriesFailureReason(t *testing.T) {
+	row := Task{
+		TaskID: "child-x", State: StateFailed,
+		ResultJSON: `{"failed":"route: no capability matches required: [filesystem-write]"}`,
+	}
+	p, ok := childRowResult(row)
+	if !ok {
+		t.Fatal("terminal row was not folded")
+	}
+	if !strings.Contains(p.Stderr, "no capability matches required") {
+		t.Fatalf("folded stderr = %q, want the failure reason", p.Stderr)
+	}
+	if p.State != StateFailed {
+		t.Fatalf("folded state = %q, want failed", p.State)
+	}
+}
+
+// TestAgentResultSchemaFor pins the dynamic schema: the requires description
+// lists this node's declared ability ids (a hallucinated child request cannot
+// route), and a read-only session is told to ask the user for authorization
+// instead of delegating for a permission it cannot grant. Both variants must
+// stay valid JSON — the CLI parses them as --json-schema.
+func TestAgentResultSchemaFor(t *testing.T) {
+	plain := agentResultSchemaFor([]string{"git", "net:curl"}, false)
+	if !strings.Contains(plain, "git, net:curl") {
+		t.Fatalf("schema does not list the declared abilities:\n%s", plain)
+	}
+	if strings.Contains(plain, "READ-ONLY") {
+		t.Fatal("unrestricted schema carries the read-only instruction")
+	}
+	restricted := agentResultSchemaFor([]string{"git"}, true)
+	if !strings.Contains(restricted, "READ-ONLY") || !strings.Contains(restricted, "do NOT delegate") {
+		t.Fatalf("restricted schema lacks the ask-instead-of-delegate instruction:\n%s", restricted)
+	}
+	for _, s := range []string{plain, restricted} {
+		var v any
+		if err := json.Unmarshal([]byte(s), &v); err != nil {
+			t.Fatalf("schema is not valid JSON: %v\n%s", err, s)
+		}
+	}
+}

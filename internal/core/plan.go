@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/plan"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
+	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 )
 
 // SetStage stamps a task's place in a plan: the plan it belongs to, its stage id
@@ -1080,6 +1082,62 @@ const agentResultSchema = `{
   "required": ["answer", "status"]
 }`
 
+// agentResultSchemaFor renders the protocol schema with this node's actual
+// context baked into the descriptions — the only documentation the model
+// sees:
+//
+//   - The child requests may only name abilities this node declares; a
+//     hallucinated id (filesystem-write, file_write in the live run) fails
+//     to route, so the list removes the guessing (and the need to go read
+//     capabilities.yaml mid-round).
+//   - An unconsented remote session runs under the read-only tool face. The
+//     model must report status=question when the task needs writes it does
+//     not have — a child task cannot grant a permission this session lacks,
+//     so delegating for it burns rounds and deadlocks on resource keys.
+func agentResultSchemaFor(abilities []string, restricted bool) string {
+	s := agentResultSchema
+	if len(abilities) > 0 {
+		s = strings.Replace(s,
+			`"description": "Capability ids the sub-task needs"`,
+			`"description": "Capability ids the sub-task needs — choose from this node's declared abilities: `+
+				strings.Join(abilities, ", ")+`. An id outside this list cannot be routed."`,
+			1)
+	}
+	if restricted {
+		s = strings.Replace(s,
+			`"description": "done = finished; question = blocked on input only the user has; delegate = requested sub-tasks; failed = could not complete."`,
+			`"description": "done = finished; question = blocked on input or a PERMISSION only the user can grant; delegate = requested sub-tasks; failed = could not complete. NOTE: this session is READ-ONLY (no Write/Edit/Bash). If completing the task requires writing files or running commands, report status=question explaining that the user must authorize the task — do NOT delegate: a sub-task cannot grant a permission this session lacks."`,
+			1)
+	}
+	return s
+}
+
+// abilityIDs lists every capability id this node declares — native commands
+// plus agent capability tags — sorted and de-duplicated, for the schema's
+// requires description.
+func (c *Core) abilityIDs() []string {
+	card := c.Card()
+	seen := make(map[string]bool, len(card.Native)+8)
+	out := make([]string, 0, len(card.Native)+8)
+	add := func(id string) {
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	for _, n := range card.Native {
+		add(n.ID)
+	}
+	for _, ag := range card.Agents {
+		for _, id := range ag.Capabilities {
+			add(id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // structuredAgentResult is the parsed form of the schema-validated output a
 // capable adapter returns under Result.Structured.
 type structuredAgentResult struct {
@@ -1135,6 +1193,19 @@ func parseQuestionRequest(stdout string) (question, cleaned string, ok bool) {
 // to pending so a late result is still folded back (round start, or the
 // run's final hold) instead of vanishing on a row nobody re-reads.
 func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegateRequest, pending *[]pendingChild) []string {
+	// The waiting parent holds no queue resources: its children inherit the
+	// same project key, and a child queued behind its own parent's lock can
+	// never start — the pair deadlocks until the wait window expires. Release
+	// for the duration of the fan-out and re-acquire before the round
+	// resumes (the parent is not touching the worktree while it waits).
+	keys := queue.DefaultKeys(parent.ResourceKeys, parent.Project)
+	held := c.queueReleaseFor(parent.TaskID)
+	defer func() {
+		if held {
+			c.queueAcquireFor(ctx, parent.TaskID, keys)
+		}
+	}()
+
 	notes := make([]string, len(drs))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -1156,6 +1227,32 @@ func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegate
 	}
 	wg.Wait()
 	return notes
+}
+
+// queueReleaseFor releases the queue resource keys held by taskID on this
+// node's scheduler. False when the scheduler is absent or the task was never
+// queue-claimed (the delegate path drives its own rows and holds no locks).
+func (c *Core) queueReleaseFor(taskID string) bool {
+	c.mu.RLock()
+	s := c.queueSched
+	c.mu.RUnlock()
+	if s == nil {
+		return false
+	}
+	return s.ReleaseTask(taskID)
+}
+
+// queueAcquireFor re-acquires keys for taskID before the round resumes,
+// waiting for whoever took them in the meantime. The wait is the point: the
+// keys are the worktree serialization, and the round is about to use it.
+func (c *Core) queueAcquireFor(ctx context.Context, taskID string, keys []string) {
+	c.mu.RLock()
+	s := c.queueSched
+	c.mu.RUnlock()
+	if s == nil {
+		return
+	}
+	s.AcquireTask(ctx, taskID, keys)
 }
 
 // pendingChild is a delegate child whose result had not landed when its wait
@@ -1311,6 +1408,19 @@ func childRowResult(t Task) (bus.TaskResultPayload, bool) {
 	var p bus.TaskResultPayload
 	if t.ResultJSON != "" {
 		_ = json.Unmarshal([]byte(t.ResultJSON), &p)
+		if p.Stderr == "" {
+			// ForceFail and the queue's honest-failure writers store
+			// {"failed": reason} — a key TaskResultPayload has no field for,
+			// so the fold read "failed with no detail" and the parent agent
+			// guessed at the cause (it invented capability ids twice in the
+			// live run). Carry the reason into the fold.
+			var alt struct {
+				Failed string `json:"failed"`
+			}
+			if json.Unmarshal([]byte(t.ResultJSON), &alt) == nil && alt.Failed != "" {
+				p.Stderr = alt.Failed
+			}
+		}
 	}
 	if p.TaskID == "" {
 		p.TaskID = t.TaskID

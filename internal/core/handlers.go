@@ -1793,23 +1793,28 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		if sessionID != "" {
 			runCtx = commander.WithResume(execCtx, sessionID)
 		}
-		// Structured result contract: a schema-capable adapter (registry
-		// SupportsStructuredOutput) gets the protocol schema, so the result
-		// arrives parsed — status/question/delegate_requests — instead of
-		// relying on text markers alone. Marker parsing below stays as the
-		// fallback for every adapter without the flag.
-		if plan.Kind == "agent" {
-			if k, ok := agents.Lookup(plan.Agent, plan.Adapter); ok && k.Capabilities.SupportsStructuredOutput {
-				runCtx = commander.WithResultSchema(runCtx, agentResultSchema)
-			}
-		}
 		// A task stamped remote at intake carries off-node intent: commander
 		// holds its agent run to the restricted tool face unless the origin's
 		// consent grant authorized it. The persisted flag is authoritative —
 		// the chain fallback only catches rows written before the flag
 		// existed; a peer can claim chain[0]=us but cannot unset remote.
-		if task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID) {
+		remoteOrigin := task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID)
+		restricted := remoteOrigin && !task.Authorized
+		if remoteOrigin {
 			runCtx = commander.WithRemoteTask(runCtx)
+		}
+		// Structured result contract: a schema-capable adapter (registry
+		// SupportsStructuredOutput) gets the protocol schema, so the result
+		// arrives parsed — status/question/delegate_requests — instead of
+		// relying on text markers alone. Marker parsing below stays as the
+		// fallback for every adapter without the flag. The schema carries
+		// this node's declared ability ids (a hallucinated child request
+		// cannot route) and, for a read-only session, the instruction to ask
+		// the user for authorization instead of delegating for it.
+		if plan.Kind == "agent" {
+			if k, ok := agents.Lookup(plan.Agent, plan.Adapter); ok && k.Capabilities.SupportsStructuredOutput {
+				runCtx = commander.WithResultSchema(runCtx, agentResultSchemaFor(c.abilityIDs(), restricted))
+			}
 		}
 		res = router.Execute(runCtx, *plan, prompt, workDir, task.Authorized)
 		structured := parseStructuredResult(res.Structured)
@@ -1916,9 +1921,16 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 						lastChanged = c.filterHostDrift(workDir, before.Changed(after))
 					}
 				}
-				if err := c.store.PauseForAnswer(ctx, taskID, c.nodeID, map[string]any{
+				park := map[string]any{
 					"question": q, "stdout": res.Stdout, "files_changed": lastChanged,
-				}); err != nil {
+				}
+				if restricted {
+					// The question exists because the session is read-only:
+					// record it so the origin's view can say why approving
+					// (which re-runs with consent) is the fix.
+					park["restricted"] = true
+				}
+				if err := c.store.PauseForAnswer(ctx, taskID, c.nodeID, park); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 						return roundOutcome{}, ErrCancelled
 					}
@@ -3440,7 +3452,15 @@ func (c *Core) relayToParent(ctx context.Context, typ string, chain []string, pa
 	}
 	env.To = parent
 	if err := c.sendTo(parent, env); err != nil {
-		c.logger.Warn("relay", "type", typ, "to", parent, "err", err)
+		// A progress beat to an offline delegator is expected, not news: the
+		// executor keeps working while the delegator is away, and a WARN per
+		// beat (one every few seconds for a live task) is pure log noise.
+		// Terminal frames keep the warning — those have custody semantics.
+		if typ == bus.MsgTaskProgress {
+			c.logger.Debug("relay progress to offline delegator", "to", parent, "err", err)
+		} else {
+			c.logger.Warn("relay", "type", typ, "to", parent, "err", err)
+		}
 		// A terminal result must survive a disconnected parent (review P0-2):
 		// park it for redelivery on the next hello instead of dropping it.
 		if typ == bus.MsgTaskResult {
