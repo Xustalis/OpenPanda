@@ -230,6 +230,7 @@ func New(d Deps) http.Handler {
 	if d.Sessions != nil {
 		mux.HandleFunc("GET /api/sessions", h.listSessions)
 		mux.HandleFunc("POST /api/sessions", h.createSession)
+		mux.HandleFunc("POST /api/sessions/bulk-delete", h.bulkDeleteSession)
 		mux.HandleFunc("GET /api/sessions/{id}", h.getSession)
 		mux.HandleFunc("PATCH /api/sessions/{id}", h.patchSession)
 		mux.HandleFunc("DELETE /api/sessions/{id}", h.deleteSession)

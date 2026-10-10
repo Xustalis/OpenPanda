@@ -442,3 +442,105 @@ func TestCompactHistoryCAS(t *testing.T) {
 		t.Errorf("stale digest overwrote the winner: %q", loser.Summary)
 	}
 }
+
+func TestPinnedSortsFirst(t *testing.T) {
+	store := NewStore(t.TempDir())
+	old, err := store.Create("old")
+	if err != nil {
+		t.Fatalf("create old: %v", err)
+	}
+	mid, err := store.Create("mid")
+	if err != nil {
+		t.Fatalf("create mid: %v", err)
+	}
+	fresh, err := store.Create("fresh")
+	if err != nil {
+		t.Fatalf("create fresh: %v", err)
+	}
+	if err := store.SetPinned(old.ID, true); err != nil {
+		t.Fatalf("SetPinned: %v", err)
+	}
+	list, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("list len = %d, want 3", len(list))
+	}
+	// Pinned leads; the unpinned pair still sorts newest first.
+	if list[0].ID != old.ID || !list[0].Pinned {
+		t.Fatalf("list[0] = %s pinned=%v, want pinned %s", list[0].ID, list[0].Pinned, old.ID)
+	}
+	if list[1].ID != fresh.ID || list[2].ID != mid.ID {
+		t.Fatalf("unpinned order = %s,%s, want %s,%s", list[1].ID, list[2].ID, fresh.ID, mid.ID)
+	}
+
+	// Unpinning drops it back into recency order.
+	if err := store.SetPinned(old.ID, false); err != nil {
+		t.Fatalf("unpin: %v", err)
+	}
+	got, err := store.Get(old.ID)
+	if err != nil || got.Pinned {
+		t.Fatalf("after unpin pinned=%v err=%v", got.Pinned, err)
+	}
+	if err := store.SetPinned("nope", true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetPinned unknown id err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStampsTrackFileChanges(t *testing.T) {
+	store := NewStore(t.TempDir())
+	st0, err := store.Stamps()
+	if err != nil || len(st0) != 0 {
+		t.Fatalf("empty Stamps = %v err %v", st0, err)
+	}
+	sess, err := store.Create("x")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	st1, err := store.Stamps()
+	if err != nil || len(st1) != 1 || st1[0].ID != sess.ID {
+		t.Fatalf("Stamps after create = %+v err %v", st1, err)
+	}
+	if _, err := store.AppendTurn(sess.ID, Turn{Role: "user", Text: "hi"}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	st2, err := store.Stamps()
+	if err != nil || len(st2) != 1 {
+		t.Fatalf("Stamps after append = %+v err %v", st2, err)
+	}
+	if st1[0] == st2[0] {
+		t.Fatal("append did not change the stamp — SSE would miss the write")
+	}
+	if err := store.Delete(sess.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	st3, err := store.Stamps()
+	if err != nil || len(st3) != 0 {
+		t.Fatalf("Stamps after delete = %+v err %v", st3, err)
+	}
+}
+
+func TestInvalidIDsRejected(t *testing.T) {
+	store := NewStore(t.TempDir())
+	for _, id := range []string{"", "..", "../x", "a/b", `a\b`, "x/../../y"} {
+		if err := store.Delete(id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Delete(%q) err = %v, want ErrNotFound", id, err)
+		}
+		if _, err := store.Get(id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Get(%q) err = %v, want ErrNotFound", id, err)
+		}
+	}
+	// The traversal probe must never have touched the filesystem: plant a
+	// .json sibling next to the store root and confirm it survives.
+	outside := filepath.Join(filepath.Dir(store.root), "sibling.json")
+	if err := os.WriteFile(outside, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete("../sibling"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Delete(../sibling) err = %v, want ErrNotFound", err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("traversal delete removed a file outside the store root: %v", err)
+	}
+}

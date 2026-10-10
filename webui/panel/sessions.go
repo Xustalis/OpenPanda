@@ -139,9 +139,11 @@ func (h *handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 type patchSessionRequest struct {
 	Title   *string `json:"title,omitempty"`
 	Project *string `json:"project,omitempty"`
+	Pinned  *bool   `json:"pinned,omitempty"`
 }
 
-// patchSession serves PATCH /api/sessions/{id} — updates title or project association.
+// patchSession serves PATCH /api/sessions/{id} — updates title, project
+// association, or the pinned flag.
 func (h *handler) patchSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if h.sessions == nil {
@@ -170,8 +172,66 @@ func (h *handler) patchSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.Pinned != nil {
+		if err := h.sessions.SetPinned(id, *req.Pinned); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
 	sess, _ := h.sessions.Get(id)
 	writeJSON(w, sess)
+}
+
+// bulkDeleteSessionRequest is the body of POST /api/sessions/bulk-delete.
+type bulkDeleteSessionRequest struct {
+	IDs []string `json:"ids"`
+}
+
+// bulkDeleteSession serves POST /api/sessions/bulk-delete — one round trip
+// for the "select N threads, delete" rail flow. Each id is independent:
+// worktree+branch cleanup and the stored thread removal are best-effort per
+// id, and the reply reports the outcome per id so the console can keep the
+// failures selected instead of pretending they are gone.
+func (h *handler) bulkDeleteSession(w http.ResponseWriter, r *http.Request) {
+	if h.sessions == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("sessions store not configured"))
+		return
+	}
+	var req bulkDeleteSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	if len(req.IDs) == 0 || len(req.IDs) > 512 {
+		writeErr(w, http.StatusBadRequest, errors.New("ids must contain 1-512 session ids"))
+		return
+	}
+	type failure struct {
+		ID    string `json:"id"`
+		Error string `json:"error"`
+	}
+	deleted := make([]string, 0, len(req.IDs))
+	var failed []failure
+	seen := map[string]bool{}
+	for _, raw := range req.IDs {
+		id := strings.TrimSpace(raw)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if h.worktrees != nil {
+			_ = h.worktrees.Remove(r.Context(), id)
+		}
+		if err := h.sessions.Delete(id); err != nil {
+			failed = append(failed, failure{ID: id, Error: err.Error()})
+			continue
+		}
+		deleted = append(deleted, id)
+	}
+	if failed == nil {
+		failed = []failure{}
+	}
+	writeJSON(w, map[string]any{"deleted": deleted, "failed": failed})
 }
 
 // ---- Worktree diff & merge ----
