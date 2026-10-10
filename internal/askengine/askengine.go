@@ -1583,7 +1583,7 @@ rounds:
 			)
 		case entry.KindPlan:
 			cb.progress(Progress{Kind: ProgressPlan, Name: out.Plan.Goal})
-			return e.startClassifiedPlan(ctx, out.Plan, authorize)
+			return e.startClassifiedPlan(ctx, out.Plan, authorize, cb)
 		case entry.KindToolCall:
 			calls := out.ToolCalls()
 			if len(calls) == 0 {
@@ -1715,7 +1715,7 @@ rounds:
 			return &Result{Kind: "answer", Answer: i18n.Tf(effectiveLocale, "ask.loop.noConvergePlan", "n", strconv.Itoa(maxRounds), "goal", final.Plan.Goal)}, nil
 		}
 		cb.progress(Progress{Kind: ProgressPlan, Name: final.Plan.Goal})
-		return e.startClassifiedPlan(ctx, final.Plan, authorize)
+		return e.startClassifiedPlan(ctx, final.Plan, authorize, cb)
 	}
 	if lastTask != nil {
 		lastTask.Answer = final.Answer
@@ -1827,7 +1827,7 @@ func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, er
 // tier-2 consent (core.StartPlan), so an irreversible stage parks in review for
 // a person instead of inheriting a blanket approval given to the whole sentence.
 // Consent for one shell command is not consent for a three-machine pipeline.
-func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, _ bool) (*Result, error) {
+func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, _ bool, cb StreamCallbacks) (*Result, error) {
 	sched := e.sched.Load()
 	if sched == nil {
 		return nil, fmt.Errorf("plan output requires a capability card (scheduler initialization failed)")
@@ -1856,12 +1856,26 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 	// and the "plan started" receipt reads like a handoff that never happened.
 	// This engine consuming (queueTasks) counts; so do a live daemon or web
 	// console on this node.
-	if !e.queueTasks {
+	consumer := e.queueTasks
+	if !consumer {
 		e.cfgMu.RLock()
 		cfg := e.cfg
 		e.cfgMu.RUnlock()
-		if !core.QueueConsumerAlive(cfg) {
+		consumer = core.QueueConsumerAlive(cfg)
+		if !consumer {
 			res.Warning = i18n.T(e.Locale(), "cli.queue.noConsumer")
+		}
+	}
+	// "Plan started" is a receipt, not an outcome. Like a queued task the
+	// pipeline is followed until every stage settles (or one parks for a
+	// human): the round keeps streaming stage progress and closes on the real
+	// verdict instead of going quiet at dispatch. Queue-mode surfaces are
+	// async by design and keep the immediate receipt; with no consumer
+	// anywhere the wait could never move, so the warning above stands alone.
+	if !e.queueTasks && consumer {
+		if board := e.awaitPlanSettled(ctx, sched, planID, cb); len(board) > 0 {
+			res.PlanStages = board
+			e.planBoardVerdict(ctx, sched.TaskStore(), res, board)
 		}
 	}
 	// The per-stage classify_result events are traced inside core.StartPlan at

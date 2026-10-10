@@ -1146,9 +1146,10 @@ func (r *repl) askMode(text, mode string) {
 			r.outln(r.renderMd(out.Stdout))
 		}
 	case "plan":
-		// A plan does not finish inside the ask: its stages are queued and will
-		// run on other machines. Print the board and how to follow it.
-		if !out.OK {
+		// A start failure has no board (the plan never formed); a non-empty
+		// board means the engine followed the stages to their verdict and
+		// !OK is a stage's failure, not a start failure.
+		if !out.OK && len(out.PlanStages) == 0 {
 			r.errf("%s\n", "panda: "+i18n.Tf(r.loc, "cli.plan.failed", "err", out.Stderr))
 			break
 		}
@@ -1158,7 +1159,22 @@ func (r *repl) askMode(text, mode string) {
 		if out.Warning != "" {
 			r.outln(pal().Muted(out.Warning))
 		}
-		r.outln(i18n.Tf(r.loc, "cli.plan.follow", "id", out.PlanID))
+		switch planBoardState(out.PlanStages) {
+		case "done":
+			r.outln(i18n.T(r.loc, "cli.plan.done"))
+		case "failed":
+			r.outln(i18n.Tf(r.loc, "cli.plan.stageFailed", "err", out.Stderr))
+		case "awaiting":
+			// The approval card ran ahead (approveInline). A denied or
+			// non-interactive turn lands here: point at the parked stage.
+			id := out.PlanID
+			if out.Approval != nil {
+				id = out.Approval.TaskID
+			}
+			r.outln(i18n.Tf(r.loc, "cli.plan.awaiting", "id", shortID(id)))
+		default:
+			r.outln(i18n.Tf(r.loc, "cli.plan.follow", "id", out.PlanID))
+		}
 	}
 
 	// The closing line: what this turn cost (elapsed, and tokens when the

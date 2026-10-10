@@ -200,6 +200,35 @@ func printPlanStages(stages []core.Task) {
 	printPlanStagesTo(os.Stdout, stages)
 }
 
+// planBoardState folds a stage board into one verdict word for display:
+// "failed" when any stage closed badly, "awaiting" when one parks for a
+// human (the plan's next action), "running" while anything is still in
+// flight (the watch detached), "done" when the whole board finished.
+func planBoardState(stages []core.Task) string {
+	sawReview, sawBad, sawOpen := false, false, false
+	for _, st := range stages {
+		switch st.State {
+		case core.StateReview:
+			sawReview = true
+		case core.StateDone:
+		case core.StateFailed, core.StateCancelled, core.StateExpired:
+			sawBad = true
+		default:
+			sawOpen = true
+		}
+	}
+	switch {
+	case sawBad:
+		return "failed"
+	case sawReview:
+		return "awaiting"
+	case sawOpen:
+		return "running"
+	default:
+		return "done"
+	}
+}
+
 func printPlanStagesTo(out io.Writer, stages []core.Task) {
 	for _, t := range stages {
 		// "submitted" is the dependency-parked state: a stage with needs it

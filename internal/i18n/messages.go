@@ -538,9 +538,12 @@ var messages = map[Locale]map[string]string{
 
 		// A plan is asynchronous: the useful output is the stage board plus how
 		// to follow it, not a result that does not exist yet.
-		"cli.plan.failed":  "could not start the plan: {err}",
-		"cli.plan.started": "plan {id} ({n} stages): {goal}",
-		"cli.plan.follow":  "follow: panda plan show {id}",
+		"cli.plan.failed":      "could not start the plan: {err}",
+		"cli.plan.started":     "plan {id} ({n} stages): {goal}",
+		"cli.plan.follow":      "follow: panda plan show {id}",
+		"cli.plan.done":        "plan finished — all stages done",
+		"cli.plan.stageFailed": "plan failed — {err}",
+		"cli.plan.awaiting":    "a stage awaits approval — /approve {id}",
 
 		// Conversation record (the assistant side of one exchange). It is shown
 		// by /history and replayed to the model, so it follows the user's locale.
@@ -1560,9 +1563,12 @@ var messages = map[Locale]map[string]string{
 		"cli.ask.question":      "智能体提问：",
 		"cli.ask.question.hint": "用以下命令回复：panda approve {id} -m \"<答案>\"",
 
-		"cli.plan.failed":  "计划启动失败：{err}",
-		"cli.plan.started": "计划 {id}（{n} 个阶段）：{goal}",
-		"cli.plan.follow":  "跟踪：panda plan show {id}",
+		"cli.plan.failed":      "计划启动失败：{err}",
+		"cli.plan.started":     "计划 {id}（{n} 个阶段）：{goal}",
+		"cli.plan.follow":      "跟踪：panda plan show {id}",
+		"cli.plan.done":        "计划完成——所有阶段已完成",
+		"cli.plan.stageFailed": "计划失败——{err}",
+		"cli.plan.awaiting":    "有阶段等待审批——/approve {id}",
 
 		"convo.noOutput":  "（无输出）",
 		"convo.task":      "[任务 {id} {state}]",
@@ -2632,9 +2638,12 @@ var messages = map[Locale]map[string]string{
 		"cli.ask.question":      "エージェントからの質問:",
 		"cli.ask.question.hint": "回答: panda approve {id} -m \"<回答>\"",
 
-		"cli.plan.failed":  "計画の開始に失敗しました：{err}",
-		"cli.plan.started": "計画 {id}（{n} ステージ）：{goal}",
-		"cli.plan.follow":  "追跡：panda plan show {id}",
+		"cli.plan.failed":      "計画の開始に失敗しました：{err}",
+		"cli.plan.started":     "計画 {id}（{n} ステージ）：{goal}",
+		"cli.plan.follow":      "追跡：panda plan show {id}",
+		"cli.plan.done":        "計画完了——すべてのステージが完了しました",
+		"cli.plan.stageFailed": "計画失敗——{err}",
+		"cli.plan.awaiting":    "ステージが承認待ちです——/approve {id}",
 
 		"convo.noOutput":  "（出力なし）",
 		"convo.task":      "[タスク {id} {state}]",
@@ -3637,9 +3646,12 @@ var messages = map[Locale]map[string]string{
 		"cli.ask.question":      "el agente pregunta:",
 		"cli.ask.question.hint": "responde con: panda approve {id} -m \"<respuesta>\"",
 
-		"cli.plan.failed":  "no se pudo iniciar el plan: {err}",
-		"cli.plan.started": "plan {id} ({n} etapas): {goal}",
-		"cli.plan.follow":  "seguir: panda plan show {id}",
+		"cli.plan.failed":      "no se pudo iniciar el plan: {err}",
+		"cli.plan.started":     "plan {id} ({n} etapas): {goal}",
+		"cli.plan.follow":      "seguir: panda plan show {id}",
+		"cli.plan.done":        "plan terminado — todas las etapas completadas",
+		"cli.plan.stageFailed": "plan fallido — {err}",
+		"cli.plan.awaiting":    "una etapa espera aprobación — /approve {id}",
 
 		"convo.noOutput":  "(sin salida)",
 		"convo.task":      "[tarea {id} {state}]",
@@ -4642,9 +4654,12 @@ var messages = map[Locale]map[string]string{
 		"cli.ask.question":      "Agent fragt:",
 		"cli.ask.question.hint": "antworten mit: panda approve {id} -m \"<Antwort>\"",
 
-		"cli.plan.failed":  "Plan konnte nicht gestartet werden: {err}",
-		"cli.plan.started": "Plan {id} ({n} Stufen): {goal}",
-		"cli.plan.follow":  "verfolgen: panda plan show {id}",
+		"cli.plan.failed":      "Plan konnte nicht gestartet werden: {err}",
+		"cli.plan.started":     "Plan {id} ({n} Stufen): {goal}",
+		"cli.plan.follow":      "verfolgen: panda plan show {id}",
+		"cli.plan.done":        "Plan abgeschlossen — alle Stufen fertig",
+		"cli.plan.stageFailed": "Plan fehlgeschlagen — {err}",
+		"cli.plan.awaiting":    "eine Stufe wartet auf Genehmigung — /approve {id}",
 
 		"convo.noOutput":  "(keine Ausgabe)",
 		"convo.task":      "[Aufgabe {id} {state}]",

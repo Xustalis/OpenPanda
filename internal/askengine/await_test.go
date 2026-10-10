@@ -234,3 +234,151 @@ func containsStr(list []string, want string) bool {
 	}
 	return false
 }
+
+// planDriver walks a stage row through the lifecycle the scheduler would
+// give it, on the same store the watch polls — the plan-side counterpart of
+// awaitQueuedTask's settle closure.
+func planDriver(ctx context.Context, store *core.TaskStore, id, end string) {
+	_ = store.Queue(ctx, id, "test-node")
+	_ = store.Dispatch(ctx, id, "test-node", "test-node")
+	_ = store.Accept(ctx, id, "test-node")
+	switch end {
+	case "done":
+		_ = store.Complete(ctx, id, "test-node", map[string]any{"ok": true, "stdout": "shipped"})
+	case "failed":
+		_ = store.Fail(ctx, id, "test-node", "stage blew up")
+	case "review":
+		_ = store.PauseWithDisposition(ctx, id, "test-node", "tier-2 needs consent", core.ApprovalResumeExecution)
+	}
+}
+
+// seedPlan wires two stage rows under one plan id, the shape StartPlan
+// persists before the first wave is released.
+func seedPlan(t *testing.T, store *core.TaskStore, planID string) (s1, s2 core.Task) {
+	t.Helper()
+	ctx := context.Background()
+	var err error
+	if s1, err = store.Create(ctx, "", "proj", "build stage", "test-node", nil); err != nil {
+		t.Fatalf("create s1: %v", err)
+	}
+	if s2, err = store.Create(ctx, "", "proj", "show stage", "test-node", nil); err != nil {
+		t.Fatalf("create s2: %v", err)
+	}
+	if err := store.SetStage(ctx, s1.TaskID, planID, "build", nil); err != nil {
+		t.Fatalf("set s1: %v", err)
+	}
+	if err := store.SetStage(ctx, s2.TaskID, planID, "show", []string{"build"}); err != nil {
+		t.Fatalf("set s2: %v", err)
+	}
+	return s1, s2
+}
+
+// The reported defect: a plan returned at "started" and the turn went quiet
+// while the pipeline ran on. The watch must follow the stages until every
+// one settles and report the final board.
+func TestAwaitPlanFollowsStagesToVerdict(t *testing.T) {
+	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {})
+	sched := e.sched.Load()
+	if sched == nil {
+		t.Fatal("no scheduler")
+	}
+	store := core.NewTaskStore(e.db, nil)
+	ctx := context.Background()
+	s1, s2 := seedPlan(t, store, "plan-follow-1")
+
+	go func() {
+		time.Sleep(1100 * time.Millisecond) // let the first poll see submitted rows
+		planDriver(ctx, store, s1.TaskID, "done")
+		time.Sleep(1100 * time.Millisecond) // a poll must observe the stage finish
+		planDriver(ctx, store, s2.TaskID, "done")
+	}()
+
+	var waits []string
+	cb := StreamCallbacks{OnProgress: func(p Progress) {
+		if p.Kind == ProgressWait {
+			waits = append(waits, p.Name)
+		}
+	}}
+	started := time.Now()
+	board := e.awaitPlanSettled(ctx, sched, "plan-follow-1", cb)
+	if d := time.Since(started); d > 15*time.Second {
+		t.Fatalf("watch ran %s — it should end at the last stage's verdict", d)
+	}
+	if len(board) != 2 {
+		t.Fatalf("board = %d stages, want 2", len(board))
+	}
+	for _, st := range board {
+		if st.State != core.StateDone {
+			t.Fatalf("stage %s state = %s, want done", st.StageID, st.State)
+		}
+	}
+	if len(waits) == 0 {
+		t.Fatal("no stage progress reached the card")
+	}
+	res := &Result{OK: true}
+	e.planBoardVerdict(ctx, store, res, board)
+	if !res.OK || res.NeedsApproval {
+		t.Fatalf("verdict = ok:%v approval:%v, want clean done", res.OK, res.NeedsApproval)
+	}
+}
+
+// A stage parked for a human ends the watch early: the turn must free its
+// input for the approval, and the board folds into the caller's approval
+// request — not a failure.
+func TestAwaitPlanStageReviewBecomesApproval(t *testing.T) {
+	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {})
+	sched := e.sched.Load()
+	store := core.NewTaskStore(e.db, nil)
+	ctx := context.Background()
+	s1, s2 := seedPlan(t, store, "plan-follow-2")
+
+	go func() {
+		time.Sleep(1100 * time.Millisecond)
+		planDriver(ctx, store, s1.TaskID, "review")
+		_ = s2 // stays submitted behind its predecessor
+	}()
+
+	board := e.awaitPlanSettled(ctx, sched, "plan-follow-2", StreamCallbacks{})
+	if len(board) != 2 {
+		t.Fatalf("board = %d stages, want 2", len(board))
+	}
+	res := &Result{OK: true}
+	e.planBoardVerdict(ctx, store, res, board)
+	if !res.NeedsApproval || res.Approval == nil {
+		t.Fatalf("review stage did not become an approval request: %+v", res)
+	}
+	if res.Approval.TaskID != s1.TaskID {
+		t.Fatalf("approval task = %s, want parked stage %s", res.Approval.TaskID, s1.TaskID)
+	}
+	if !res.OK {
+		t.Fatal("a parked stage folded as a failure — the human gate is not a verdict")
+	}
+}
+
+// A stage's terminal failure is the plan's verdict: the watch settles once
+// the cascade closes the board, and the failure reason reaches the caller.
+func TestAwaitPlanStageFailureIsTheVerdict(t *testing.T) {
+	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {})
+	sched := e.sched.Load()
+	store := core.NewTaskStore(e.db, nil)
+	ctx := context.Background()
+	s1, s2 := seedPlan(t, store, "plan-follow-3")
+
+	go func() {
+		time.Sleep(1100 * time.Millisecond)
+		planDriver(ctx, store, s1.TaskID, "failed")
+		time.Sleep(1100 * time.Millisecond)
+		// the plan cascade cancels the dependent, as AdvancePlan would
+		_ = store.Cancel(ctx, s2.TaskID)
+	}()
+
+	board := e.awaitPlanSettled(ctx, sched, "plan-follow-3", StreamCallbacks{})
+	res := &Result{OK: true}
+	e.planBoardVerdict(ctx, store, res, board)
+	if res.OK || res.ExitCode == 0 {
+		t.Fatalf("failed stage kept ok=%v code=%d", res.OK, res.ExitCode)
+	}
+	if !strings.Contains(res.Stderr, "stage blew up") {
+		t.Fatalf("verdict lost the stage's reason: %q", res.Stderr)
+	}
+}

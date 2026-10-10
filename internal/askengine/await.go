@@ -119,6 +119,148 @@ func bridgeNewEvents(ctx context.Context, store *core.TaskStore, taskID string, 
 	}
 }
 
+// awaitPlanSettled follows a started plan until every stage settles or one
+// parks for a human — the plan-side counterpart of awaitSettled: a plan that
+// returned at "started" ended the turn's watch while the pipeline ran on
+// (the reported "stops listening" defect). The poll reads the shared store —
+// the daemon's consumer and the wire handlers write stage verdicts there —
+// and bridges each stage's timeline as progress so the card keeps moving
+// while stages run elsewhere.
+//
+// Settle rule: every stage terminal or failed ends the watch with the final
+// board; a stage parked in review ends it sooner — the human gate needs the
+// turn's input free (/approve), the same reason a task's review settles its
+// wait. ctx ending first returns the last board read: the watch detaches,
+// the pipeline keeps its place in the queue.
+func (e *Engine) awaitPlanSettled(ctx context.Context, sched *core.Core, planID string, cb StreamCallbacks) []core.Task {
+	store := sched.TaskStore()
+	if store == nil {
+		return nil
+	}
+	e.logger.Debug("askengine: plan started, following stages to the outcome", "plan", planID)
+	cursors := map[string]*int64{} // per-stage timeline cursor for the event bridge
+	seen := map[string]string{}    // last announced state per stage
+	var board []core.Task
+	tick := time.NewTicker(awaitPollInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return board
+		case <-tick.C:
+		}
+		stages, err := store.PlanStages(ctx, planID)
+		if err != nil {
+			continue // a transient read failure is not proof the plan died
+		}
+		board = stages
+		settled := true
+		for _, st := range stages {
+			if seen[st.StageID] != st.State {
+				seen[st.StageID] = st.State
+				if !settledState(st.State) {
+					cb.progress(Progress{Kind: ProgressWait, Name: st.StageID + ": " + st.State})
+				}
+			}
+			cur, ok := cursors[st.TaskID]
+			if !ok {
+				cur = new(int64)
+				// Adopt the timeline already written — the stage's own
+				// dispatch events preceded this watch and would only replay.
+				if evs, evErr := store.Events(ctx, st.TaskID); evErr == nil && len(evs) > 0 {
+					*cur = evs[len(evs)-1].ID
+				}
+				cursors[st.TaskID] = cur
+			}
+			bridgeNewEvents(ctx, store, st.TaskID, cur, cb)
+			switch {
+			case st.State == core.StateReview:
+				return stages // human gate — free the turn for the approval
+			case !settledState(st.State):
+				settled = false
+			}
+		}
+		if settled {
+			return stages
+		}
+	}
+}
+
+// planBoardVerdict folds the final stage board into the round's outcome: a
+// parked stage becomes the caller's approval card (the human gate ends the
+// watch, it is not a failure); the first terminal-but-not-done stage is the
+// plan's failure; an all-done board is the clean finish. A board still in
+// flight — the watch detached — keeps OK and reports nothing final.
+func (e *Engine) planBoardVerdict(ctx context.Context, store *core.TaskStore, res *Result, stages []core.Task) {
+	for _, st := range stages {
+		if st.State != core.StateReview {
+			continue
+		}
+		p := settledPayload(st)
+		reason := p.Stderr
+		if reason == "" {
+			reason = p.Question
+		}
+		if reason == "" {
+			reason = stageEventReason(ctx, store, st)
+		}
+		res.NeedsApproval = true
+		res.Approval = &ApprovalRequest{
+			TaskID: st.TaskID, Title: st.Title,
+			Reason: reason, Project: st.Project, Scope: "once",
+		}
+		return
+	}
+	for _, st := range stages {
+		if st.State == core.StateFailed || st.State == core.StateCancelled || st.State == core.StateExpired {
+			p := settledPayload(st)
+			res.OK, res.ExitCode = false, 1
+			res.Stderr = p.Stderr
+			if res.Stderr == "" {
+				res.Stderr = stageEventReason(ctx, store, st)
+			}
+			if res.Stderr == "" {
+				res.Stderr = "stage " + st.StageID + " " + st.State
+			}
+			return
+		}
+	}
+}
+
+// stageEventReason recovers a settled stage's reason from its audit trail —
+// locally failed rows keep the cause on the EvResult event rather than in
+// result_json (Fail writes the event, not the column), the same gap the
+// resume path's resumeOutcomeFor closes.
+func stageEventReason(ctx context.Context, store *core.TaskStore, st core.Task) string {
+	evs, err := store.Events(ctx, st.TaskID)
+	if err != nil {
+		return ""
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		if evs[i].Type != core.EvResult && evs[i].Type != core.EvReview {
+			continue
+		}
+		var d struct {
+			Failed string `json:"failed"`
+			Stderr string `json:"stderr"`
+			Reason string `json:"reason"`
+		}
+		if json.Unmarshal([]byte(evs[i].DataJSON), &d) != nil {
+			continue
+		}
+		if d.Failed != "" {
+			return d.Failed
+		}
+		if d.Stderr != "" {
+			return d.Stderr
+		}
+		if d.Reason != "" {
+			return d.Reason
+		}
+	}
+	return ""
+}
+
 // settledPayload loads the result a settled task left behind. The payload is
 // the executor's persisted result (adapter output, attribution, files
 // changed); the identity fields come from the row so a legacy result without

@@ -244,10 +244,13 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 	case "plan":
 		// A plan that failed to start has no board to follow and no stages, so
 		// its summary line would read "plan  · 0 stages" — a failure rendered
-		// as a success. Surface it as the error it is, the way the classic loop
-		// does.
-		if !out.OK {
+		// as a success. A non-empty board means the engine followed the plan
+		// to a stage's failure: surface that, not "could not start".
+		if !out.OK && len(out.PlanStages) == 0 {
 			return block{kind: blockError, body: i18n.Tf(loc, "cli.plan.failed", "err", out.Stderr)}
+		}
+		if !out.OK {
+			return block{kind: blockError, body: i18n.Tf(loc, "cli.plan.stageFailed", "err", out.Stderr)}
 		}
 		return block{kind: blockInfo, body: planSummaryLine(out)}
 	default: // answer
@@ -313,10 +316,19 @@ func resultCostMeta(out *askengine.Result) string {
 	return strings.Join(parts, " · ")
 }
 
-// planSummaryLine is the one-line commit for a started plan: a plan runs
-// asynchronously, so the transcript records that it started and how to follow it.
+// planSummaryLine is the one-line commit for a plan result: what it is, and
+// where the follow ended — all stages done, a stage parked for a human, or
+// the watch detached with work still running.
 func planSummaryLine(out *askengine.Result) string {
-	return fmt.Sprintf("plan %s · %d stages · %s", out.PlanID, len(out.PlanStages), out.PlanGoal)
+	s := fmt.Sprintf("plan %s · %d stages · %s", out.PlanID, len(out.PlanStages), out.PlanGoal)
+	switch planBoardState(out.PlanStages) {
+	case "done":
+		return s + " · done"
+	case "awaiting":
+		return s + " · awaiting approval"
+	default:
+		return s
+	}
 }
 
 // approvalScopes is the card's remember-scope axis in display order: the
