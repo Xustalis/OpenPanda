@@ -395,6 +395,157 @@ func TestResultFromRotatedAttemptLands(t *testing.T) {
 	}
 }
 
+// seedAcceptWorkPair parks the same AcceptWork review copy on both cores:
+// the executor's copy (owned by itself, chain naming the delegator) and the
+// delegator's copy (dispatch target = the executor). Returns nothing — both
+// rows are addressable by taskID on their respective stores.
+func seedAcceptWorkPair(t *testing.T, ctx context.Context, entry, worker *Core, taskID string) {
+	t.Helper()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("seed %s: %v", taskID, err)
+		}
+	}
+	_, err := worker.store.CreateWithID(ctx, taskID, "", "proj", "t", worker.nodeID,
+		[]string{entry.nodeID, worker.nodeID}, true)
+	must(err)
+	must(worker.store.Queue(ctx, taskID, worker.nodeID))
+	must(worker.store.Dispatch(ctx, taskID, worker.nodeID, worker.nodeID))
+	must(worker.store.Accept(ctx, taskID, worker.nodeID))
+	must(worker.store.PauseWithDisposition(ctx, taskID, worker.nodeID, "awaiting approval", ApprovalAcceptWork))
+
+	_, err = entry.store.CreateWithID(ctx, taskID, "", "proj", "t", entry.nodeID, nil, false)
+	must(err)
+	must(entry.store.Queue(ctx, taskID, entry.nodeID))
+	must(entry.store.Dispatch(ctx, taskID, entry.nodeID, worker.nodeID))
+	must(entry.store.Accept(ctx, taskID, entry.nodeID))
+	must(entry.store.PauseWithDisposition(ctx, taskID, entry.nodeID, "awaiting approval", ApprovalAcceptWork))
+}
+
+// TestAcceptMirrorsToSiblingCopy: approving an AcceptWork park on one node
+// must close the sibling copy parked on the other — before the mirror frame,
+// whichever side approved first left the other's copy in review forever.
+func TestAcceptMirrorsToSiblingCopy(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-accept", "127.0.0.1:17996")
+	worker := newCore(t, "worker-accept", "127.0.0.1:17997")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17996", "127.0.0.1:17997")
+
+	const taskID = "accept-task"
+	seedAcceptWorkPair(t, ctx, entry, worker, taskID)
+
+	final, _, err := entry.ResumeApproved(ctx, taskID)
+	if err != nil {
+		t.Fatalf("resume approved: %v", err)
+	}
+	if final.State != StateDone {
+		t.Fatalf("origin state = %s, want done", final.State)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		tk, err := worker.store.Get(ctx, taskID)
+		if err != nil {
+			t.Fatalf("worker get: %v", err)
+		}
+		if tk.State == StateDone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("worker state = %s, want done — the accept never mirrored", tk.State)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestAcceptMirrorsFromExecutorSide is the reverse direction: the human
+// approves on the EXECUTOR's copy, and the origin's parked copy must close.
+func TestAcceptMirrorsFromExecutorSide(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-accept2", "127.0.0.1:17990")
+	worker := newCore(t, "worker-accept2", "127.0.0.1:17991")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17990", "127.0.0.1:17991")
+
+	const taskID = "accept-task2"
+	seedAcceptWorkPair(t, ctx, entry, worker, taskID)
+
+	final, _, err := worker.ResumeApproved(ctx, taskID)
+	if err != nil {
+		t.Fatalf("resume approved: %v", err)
+	}
+	if final.State != StateDone {
+		t.Fatalf("executor state = %s, want done", final.State)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		tk, err := entry.store.Get(ctx, taskID)
+		if err != nil {
+			t.Fatalf("entry get: %v", err)
+		}
+		if tk.State == StateDone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("origin state = %s, want done — the accept never mirrored back", tk.State)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestAcceptParksForOfflineExecutor: approving while the sibling's node is
+// offline must park the accept in the resume outbox (not drop it), and the
+// executor's next hello must deliver it — its copy closes without its own
+// human having to re-approve.
+func TestAcceptParksForOfflineExecutor(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-park", "127.0.0.1:17998")
+	worker := newCore(t, "worker-park", "127.0.0.1:17999")
+
+	const taskID = "accept-parked"
+	seedAcceptWorkPair(t, ctx, entry, worker, taskID)
+
+	// No link yet: the approve succeeds locally and the mirror is parked.
+	final, _, err := entry.ResumeApproved(ctx, taskID)
+	if err != nil {
+		t.Fatalf("resume approved: %v", err)
+	}
+	if final.State != StateDone {
+		t.Fatalf("origin state = %s, want done", final.State)
+	}
+	var raw string
+	if err := entry.db.QueryRow(
+		`SELECT payload_json FROM resume_outbox WHERE task_id=?`, taskID).Scan(&raw); err != nil {
+		t.Fatalf("parked accept missing from resume_outbox: %v", err)
+	}
+	if !strings.Contains(raw, `"accept":true`) {
+		t.Fatalf("parked payload = %s, want an accept mirror", raw)
+	}
+
+	// The executor comes online: its hello flushes the parked accept and the
+	// copy closes without a second human decision.
+	startPair(t, ctx, entry, worker, "127.0.0.1:17998", "127.0.0.1:17999")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		tk, err := worker.store.Get(ctx, taskID)
+		if err != nil {
+			t.Fatalf("worker get: %v", err)
+		}
+		if tk.State == StateDone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("worker state = %s, want done — the parked accept was not flushed", tk.State)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // TestHelloRejectAuthSurfaces exercises the whole rejection verdict: a peer
 // whose secret does not match gets an explicit hello_reject before the close,
 // its MaintainPeer reports ErrAuthRejected (not a dropped-link nil), and a

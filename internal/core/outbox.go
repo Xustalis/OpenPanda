@@ -459,29 +459,35 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 		// Approvals last: a resume that raced its own cancel must never
 		// arrive after the cancel delivered (the cancel wins by ordering).
 		for _, e := range resumes {
-			if lt, lerr := c.store.Get(flushCtx, e.taskID); lerr == nil && Terminal(lt.State) {
-				// The local copy already closed (a lapsed approval window, a
-				// user cancel): the consent must not revive a dead task.
-				c.logger.Info("outbox: local task is terminal, dropping parked resume",
-					"task", e.taskID, "peer", e.peer, "state", lt.State)
+			var p bus.TaskResumePayload
+			if err := json.Unmarshal([]byte(e.raw), &p); err != nil {
+				c.logger.Warn("outbox: bad parked resume, dropping", "task", e.taskID, "peer", e.peer, "err", err)
 				c.resumeOutboxDropKey(flushCtx, e.peer, e.taskID)
 				continue
 			}
+			if !p.Accept {
+				// A re-run consent must not revive a dead task: the local copy
+				// already closed (a lapsed approval window, a user cancel).
+				// An accept is the opposite case — the local copy is done
+				// precisely because the decision was made — so it skips this
+				// guard and stays parked for the peer.
+				if lt, lerr := c.store.Get(flushCtx, e.taskID); lerr == nil && Terminal(lt.State) {
+					c.logger.Info("outbox: local task is terminal, dropping parked resume",
+						"task", e.taskID, "peer", e.peer, "state", lt.State)
+					c.resumeOutboxDropKey(flushCtx, e.peer, e.taskID)
+					continue
+				}
+			}
 			if e.ttl > 0 && time.Now().Unix() > e.ttl {
-				// The approval window (the lease at persist time) has lapsed:
-				// the executor stayed unreachable past the same bound that
-				// would have failed the live wait, so expire both copies.
+				// The approval window (the lease at persist time, a week for
+				// an accept) has lapsed: the executor stayed unreachable past
+				// its bound. MarkExpired no-ops on an already-terminal local
+				// copy, so an expired accept only drops its custody row.
 				c.logger.Info("outbox: parked resume past TTL, expiring", "task", e.taskID, "peer", e.peer)
 				c.resumeOutboxDropKey(flushCtx, e.peer, e.taskID)
 				if err := c.store.MarkExpired(flushCtx, e.taskID, "resume TTL expired"); err != nil {
 					c.logger.Warn("outbox: mark expired", "task", e.taskID, "err", err)
 				}
-				continue
-			}
-			var p bus.TaskResumePayload
-			if err := json.Unmarshal([]byte(e.raw), &p); err != nil {
-				c.logger.Warn("outbox: bad parked resume, dropping", "task", e.taskID, "peer", e.peer, "err", err)
-				c.resumeOutboxDropKey(flushCtx, e.peer, e.taskID)
 				continue
 			}
 			if !c.deliverResume(flushCtx, peer, p) {

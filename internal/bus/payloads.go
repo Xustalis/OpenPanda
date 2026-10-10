@@ -586,6 +586,15 @@ type TaskResumePayload struct {
 	// with the answer folded into the re-run's intent. Empty for the
 	// classic tier-2 consent resume — older nodes ignore the field.
 	Answer string `json:"answer,omitempty"`
+	// Accept closes the parked copy instead of re-running it: the human on
+	// one side accepted work that already ran (AcceptWork disposition), and
+	// this tells the copy parked on the other side to mirror the decision
+	// (review -> done). Without it, whichever side approved first left the
+	// other's copy in review forever. An accept carries no consent to run
+	// anything — it only ever closes a finished copy — so the receiving
+	// side refuses it for any other disposition. Older nodes ignore the
+	// field and stay parked; their own human can still approve locally.
+	Accept bool `json:"accept,omitempty"`
 }
 
 // ContextFetchPayload asks the source node for a full context snapshot.

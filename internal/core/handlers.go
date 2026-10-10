@@ -3557,6 +3557,10 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 		c.logger.Debug("resume for unknown task", "task", p.TaskID, "from", env.From)
 		return
 	}
+	if p.Accept {
+		c.handleAcceptWork(ctx, env, t)
+		return
+	}
 	parent := scheduler.Predecessor(t.Chain, c.nodeID)
 	if !scheduler.SameRuntimeIdentity(env.From, parent) {
 		c.logger.Warn("resume from non-delegator ignored", "task", p.TaskID,
@@ -3615,6 +3619,111 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 		c.replyResult(context.WithoutCancel(ctx), env, result)
 	}()
 }
+
+// handleAcceptWork processes a task_resume carrying Accept: the human on the
+// other copy of this task accepted work that already ran, and this parked copy
+// mirrors the decision (review -> done). Accept is not consent to run
+// anything — it only ever closes a finished copy — so it is refused for any
+// disposition other than AcceptWork, and for rows that already moved on.
+//
+// Authorization: the sender must be this copy's chain predecessor (the
+// delegator) or the dispatch target (the executor) — the two nodes that hold
+// the sibling copies. A task that changed attempts since the decision is still
+// closed: an accept mirrors a finished result, not consent scoped to a run,
+// so the attempt guard a re-run needs does not apply.
+func (c *Core) handleAcceptWork(ctx context.Context, env bus.Envelope, t Task) {
+	parent := scheduler.Predecessor(t.Chain, c.nodeID)
+	target, _ := c.store.DispatchTarget(ctx, t.TaskID)
+	fromParent := scheduler.SameRuntimeIdentity(env.From, parent)
+	fromTarget := target != "" && scheduler.SameRuntimeIdentity(env.From, target)
+	if !fromParent && !fromTarget {
+		c.logger.Warn("accept from unauthorized peer ignored", "task", t.TaskID,
+			"from", env.From, "parent", parent, "target", target)
+		return
+	}
+	if t.State != StateReview {
+		// Honest reply instead of silence: the sender's mirror frame is
+		// informational, but a node that raced another close (already done,
+		// cancelled, expired) says so rather than looking unresponsive.
+		c.logger.Info("accept for task not in review", "task", t.TaskID, "state", t.State)
+		c.replyResult(ctx, env, bus.TaskResultPayload{
+			TaskID: t.TaskID, AttemptID: t.AttemptID, State: t.State, OK: true, Chain: t.Chain,
+		})
+		return
+	}
+	disposition, err := c.store.ApprovalDisposition(ctx, t.TaskID)
+	if err != nil || disposition != ApprovalAcceptWork {
+		c.logger.Warn("accept for non-accept disposition ignored", "task", t.TaskID,
+			"disposition", disposition, "err", err)
+		return
+	}
+	if err := c.store.Approve(ctx, t.TaskID); err != nil {
+		c.logger.Warn("accept approve failed", "task", t.TaskID, "err", err)
+		return
+	}
+	final, err := c.store.Get(ctx, t.TaskID)
+	if err != nil {
+		c.logger.Warn("accept: read final row", "task", t.TaskID, "err", err)
+		return
+	}
+	c.logger.Info("accepted parked copy from peer", "task", t.TaskID, "from", env.From)
+	// Forward onward for multi-hop chains (the middle node closes its own
+	// copy, then mirrors the accept to the next hop), never back to the
+	// sender whose copy is the origin of this decision.
+	c.forwardAcceptDownstream(ctx, t.TaskID, env.From)
+	result := bus.TaskResultPayload{TaskID: final.TaskID, AttemptID: final.AttemptID, State: final.State, OK: true, Chain: final.Chain}
+	if final.ResultJSON != "" {
+		_ = json.Unmarshal([]byte(final.ResultJSON), &result)
+		result.TaskID, result.AttemptID, result.State, result.Chain = final.TaskID, final.AttemptID, final.State, final.Chain
+	}
+	c.replyResult(ctx, env, result)
+}
+
+// forwardAcceptDownstream mirrors an accepted decision to the sibling copies
+// of this task: from the delegator's copy the accept goes to the dispatch
+// target (the executor), from the executor's copy to the chain predecessor
+// (the delegator). Without it, whichever side approved an AcceptWork park
+// first left the other side's copy in review forever — the mirror of the
+// reject-forward bug RejectTree fixed in the other direction. Delivery rides
+// deliverResume; an unreachable peer gets the accept parked in resume_outbox
+// (flushed on its next hello or the periodic sweep). exclude names a peer
+// that must not receive the frame (the sender of an accept we are relaying).
+func (c *Core) forwardAcceptDownstream(ctx context.Context, taskID, exclude string) {
+	if c.db == nil {
+		return
+	}
+	var targets []string
+	if target, err := c.store.DispatchTarget(ctx, taskID); err == nil && target != "" {
+		targets = append(targets, target)
+	}
+	if t, err := c.store.Get(ctx, taskID); err == nil {
+		if pred := scheduler.Predecessor(t.Chain, c.nodeID); pred != "" {
+			targets = append(targets, pred)
+		}
+	}
+	seen := map[string]bool{}
+	for _, target := range targets {
+		if scheduler.SameRuntimeIdentity(target, c.nodeID) || seen[target] {
+			continue
+		}
+		if exclude != "" && scheduler.SameRuntimeIdentity(target, exclude) {
+			continue
+		}
+		seen[target] = true
+		p := bus.TaskResumePayload{TaskID: taskID, Accept: true}
+		if c.deliverResume(ctx, target, p) {
+			c.logger.Info("accept forwarded to peer copy", "task", taskID, "to", target)
+			continue
+		}
+		c.resumeOutboxPersist(ctx, target, p, time.Now().Add(acceptOutboxTTL).Unix())
+	}
+}
+
+// acceptOutboxTTL bounds how long an undelivered accept waits for its peer.
+// Generous on purpose: an accept is custody of a decision already made (no
+// run is gated on it), and the peer may be off overnight; past the bound the
+// row is dropped and the peer's own human can still approve locally.
+const acceptOutboxTTL = 7 * 24 * time.Hour
 
 // replyResult returns a task_resume outcome to the authenticated requester that
 // sent this specific request, not to the historical predecessor in the task's

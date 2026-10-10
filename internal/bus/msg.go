@@ -32,6 +32,9 @@ const (
 	// parked in review for lack of tier-2 consent: the user granted it, and
 	// the re-run belongs on the node that holds the task (its capability
 	// match, context, and worktree), not wherever the approval was given.
+	// With Payload.Accept set it is the mirror of that decision: the parked
+	// copy closes as done instead of re-running (work that already ran was
+	// accepted on the other side).
 	MsgTaskResume   = "task_resume"
 	MsgContextFetch = "context_fetch"
 	MsgContextAck   = "context_ack"

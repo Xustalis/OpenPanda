@@ -2222,6 +2222,23 @@ func (e *Engine) acceptReviewedWork(ctx context.Context, taskID string) *Result 
 	if err != nil {
 		return &Result{Kind: "task", TaskID: taskID, TaskState: core.StateReview, Stderr: err.Error(), ExitCode: 1}
 	}
+	// Prefer the scheduler core when the engine carries one: its ResumeApproved
+	// also mirrors the accept to the sibling copy parked on the other node
+	// (forwardAcceptDownstream) — a store-only approve left whichever side
+	// approved second's peer parked in review forever. A core-less engine
+	// degrades to the plain row update; the peer's own human can still
+	// approve its copy locally.
+	if sched := e.sched.Load(); sched != nil {
+		final, result, rerr := sched.ResumeApproved(ctx, taskID)
+		if rerr != nil {
+			state := core.StateReview
+			if current, getErr := store.Get(context.WithoutCancel(ctx), taskID); getErr == nil {
+				state = current.State
+			}
+			return &Result{Kind: "task", TaskID: taskID, TaskTitle: task.Title, TaskState: state, Stderr: rerr.Error(), ExitCode: 1}
+		}
+		return resultFromTask(final, result, routeFallbackPeer(ctx, store, taskID))
+	}
 	result := bus.TaskResultPayload{OK: true}
 	if task.ResultJSON != "" {
 		if err := json.Unmarshal([]byte(task.ResultJSON), &result); err != nil {

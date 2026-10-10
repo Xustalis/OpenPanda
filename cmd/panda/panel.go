@@ -945,8 +945,25 @@ func runApprove(args []string) {
 		fatal("approve", core.ErrApprovalNeedsChangedInput)
 	}
 
+	// The engine carries the approval through the scheduler core: for an
+	// AcceptWork park its ResumeApproved also mirrors the decision to the
+	// sibling copy parked on the other node (forwardAcceptDownstream), which
+	// a store-only approve cannot do. Only an AcceptWork approve whose engine
+	// cannot be built degrades to the local row update — the peer's own human
+	// can still approve its copy.
+	engine, eerr := askengine.New(context.Background(), cfg, askengine.Options{
+		CardPath:   defaultCardPath(),
+		ConfigPath: *configPath,
+	})
+	if eerr != nil && disposition != core.ApprovalAcceptWork {
+		fatal("ask engine", eerr)
+	}
 	var out *askengine.Result
-	if disposition == core.ApprovalAcceptWork {
+	switch {
+	case eerr == nil:
+		defer engine.Close()
+		out = engine.ResumeApproved(context.Background(), id, "", askengine.StreamCallbacks{}, *answer)
+	default:
 		if err := store.Approve(context.Background(), id); err != nil {
 			fatal("approve", err)
 		}
@@ -972,16 +989,6 @@ func runApprove(args []string) {
 			Injected:  result.Injected,
 			Executor:  result.Executor,
 		}
-	} else {
-		engine, err := askengine.New(context.Background(), cfg, askengine.Options{
-			CardPath:   defaultCardPath(),
-			ConfigPath: *configPath,
-		})
-		if err != nil {
-			fatal("ask engine", err)
-		}
-		defer engine.Close()
-		out = engine.ResumeApproved(context.Background(), id, "", askengine.StreamCallbacks{}, *answer)
 	}
 	// A successful AcceptWork approve is a success whatever the stored result
 	// says: the result describes why the task parked (drift text, a notify

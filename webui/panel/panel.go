@@ -922,6 +922,20 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if disposition == core.ApprovalAcceptWork {
+		// Prefer the engine when one is configured: its ResumeApproved also
+		// mirrors the accept to the sibling copy parked on the other node
+		// (the same path cancelTask takes for its forward); the engine-less
+		// panel degrades to the local row update, and the peer's own human
+		// can still approve locally.
+		if eng := h.currentEngine(); eng != nil {
+			out := eng.ResumeApproved(r.Context(), id, "", askengine.StreamCallbacks{})
+			if out == nil || out.TaskState != core.StateDone {
+				writeErr(w, http.StatusInternalServerError, errors.New("approve failed"))
+				return
+			}
+			writeJSON(w, map[string]string{"id": id, "status": out.TaskState})
+			return
+		}
 		if err := h.store.Approve(r.Context(), id); err != nil {
 			if errors.Is(err, core.ErrConflict) || errors.Is(err, core.ErrIllegal) {
 				writeErr(w, http.StatusConflict, errors.New("task is not awaiting approval"))

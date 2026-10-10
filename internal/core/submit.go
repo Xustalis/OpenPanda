@@ -557,6 +557,10 @@ func (c *Core) ResumeApproved(ctx context.Context, taskID string, answers ...str
 		result.TaskID = final.TaskID
 		result.AttemptID = final.AttemptID
 		result.State = final.State
+		// Mirror the decision to the sibling copy parked on the other node
+		// (or park it for the peer's next link): approving only the local
+		// copy left the executor's parked copy in review forever.
+		c.forwardAcceptDownstream(ctx, taskID, "")
 		return final, result, err
 	case ApprovalNeedsChangedInput:
 		return cur, bus.TaskResultPayload{TaskID: cur.TaskID, AttemptID: cur.AttemptID, State: cur.State},
