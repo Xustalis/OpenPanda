@@ -831,6 +831,12 @@ var (
 	adapterTimeoutS    = defaultAdapterTimeoutS
 	adapterHardTimeout = defaultAdapterTimeoutS*time.Second + hardTimeoutGrace
 	silenceTimeout     time.Duration
+	// silenceHeartbeat is how long the adapter may emit nothing before the
+	// watchdog posts a "still running, no output" progress note — and the
+	// repeat cadence after that. It exists even when the silence kill is
+	// disabled: a note every interval keeps a stalled run visibly alive (or
+	// visibly stalled) instead of a frozen card. Var for tests.
+	silenceHeartbeat = 45 * time.Second
 )
 
 // SetAgentTimeout retunes the agent-adapter execution budget. A deep-learning
@@ -846,7 +852,10 @@ func SetAgentTimeout(d time.Duration) {
 	adapterHardTimeout = d + hardTimeoutGrace
 }
 
-// SetSilenceTimeout retunes the progress silence limit. 0 means disabled.
+// SetSilenceTimeout retunes the progress silence limit. 0 means disabled —
+// the config layer maps an explicit silence_s: -1 to that; an unset key now
+// arrives as DefaultSilenceS instead, since a wedged adapter emitting nothing
+// for minutes is a corpse worth killing, not a worker worth waiting on.
 func SetSilenceTimeout(d time.Duration) {
 	if d < 0 {
 		d = 0
@@ -1016,14 +1025,27 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		actMu.Unlock()
 	}
 
-	if silenceLimit > 0 {
+	// The progress sink is resolved before the watchdog starts so the
+	// goroutine can publish silence heartbeats into the same channel the
+	// adapter's own notes use.
+	progressSink, _ := ctx.Value(progressKey{}).(ProgressFunc)
+
+	// The watchdog runs even with no silence limit configured: the kill is
+	// opt-in, but the heartbeat notes are not — a hung adapter produces zero
+	// output for minutes, and without these notes the task card reads as dead
+	// while the run is actually still alive (or silently broken).
+	{
 		stopWatchdog := make(chan struct{})
 		defer close(stopWatchdog)
 		go func() {
-			tick := silenceLimit / 4
+			tick := silenceHeartbeat / 4
+			if silenceLimit > 0 && silenceLimit/4 < tick {
+				tick = silenceLimit / 4
+			}
 			if tick < 50*time.Millisecond {
 				tick = 50 * time.Millisecond
 			}
+			nextNote := silenceHeartbeat
 			t := time.NewTicker(tick)
 			defer t.Stop()
 			for {
@@ -1034,14 +1056,18 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 					return
 				case <-t.C:
 					actMu.Lock()
-					silent := time.Since(lastActivity) >= silenceLimit
+					silentFor := time.Since(lastActivity)
 					actMu.Unlock()
-					if silent {
+					if silenceLimit > 0 && silentFor >= silenceLimit {
 						actMu.Lock()
 						stalled = true
 						actMu.Unlock()
 						cancel()
 						return
+					}
+					if progressSink != nil && silentFor >= nextNote {
+						nextNote += silenceHeartbeat
+						progressSink(fmt.Sprintf("no output for %s — agent still running", silentFor.Truncate(time.Second)), "")
 					}
 				}
 			}
@@ -1066,9 +1092,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	stdout.onActivity = touch
 	var stderr progressWriter
 	stderr.onActivity = touch
-	if sink, ok := ctx.Value(progressKey{}).(ProgressFunc); ok {
-		stderr.sink = sink
-	}
+	stderr.sink = progressSink
 	stderr.evSink = AgentEvents(ctx)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -1412,20 +1436,24 @@ func startAgentSession(spawnCtx, turnCtx context.Context, name string, req Adapt
 	}()
 	// Silence watchdog: a session produces event/progress traffic while it
 	// works; a wedge (CLI alive, nothing flowing) is indistinguishable from
-	// a long quiet think without it.
-	if silenceTimeout > 0 {
-		go s.watchSilence(sessCtx)
-	}
+	// a long quiet think without it. The goroutine runs even with no kill
+	// limit configured so the heartbeat notes keep a silent session visible.
+	go s.watchSilence(sessCtx)
 	return s, nil
 }
 
 // watchSilence kills the session when no stderr activity is observed for the
-// configured silence limit.
+// configured silence limit, and posts heartbeat progress notes while the
+// session stays silent — a stalled run must look stalled, not dead.
 func (s *agentSession) watchSilence(ctx context.Context) {
-	tick := silenceTimeout / 4
+	tick := silenceHeartbeat / 4
+	if silenceTimeout > 0 && silenceTimeout/4 < tick {
+		tick = silenceTimeout / 4
+	}
 	if tick < 50*time.Millisecond {
 		tick = 50 * time.Millisecond
 	}
+	nextNote := silenceHeartbeat
 	t := time.NewTicker(tick)
 	defer t.Stop()
 	for {
@@ -1434,11 +1462,17 @@ func (s *agentSession) watchSilence(ctx context.Context) {
 			return
 		case <-t.C:
 			last := time.Unix(0, s.lastAct.Load())
-			if silent := time.Since(last) >= silenceTimeout; silent || s.isDead() {
-				if silent {
-					s.kill()
-				}
+			silentFor := time.Since(last)
+			if s.isDead() {
 				return
+			}
+			if silenceTimeout > 0 && silentFor >= silenceTimeout {
+				s.kill()
+				return
+			}
+			if s.stderr.sink != nil && silentFor >= nextNote {
+				nextNote += silenceHeartbeat
+				s.stderr.sink(fmt.Sprintf("no output for %s — agent still running", silentFor.Truncate(time.Second)), "")
 			}
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -299,6 +300,88 @@ func TestAdapterHardTimeout(t *testing.T) {
 	}
 	if elapsed > 5*time.Second {
 		t.Fatalf("hard timeout not enforced promptly: %v", elapsed)
+	}
+}
+
+// TestAdapterSilenceHeartbeatNotes verifies the always-on watchdog posts
+// "still running, no output" progress notes while an adapter sits silent —
+// even with the silence kill disabled — so a stalled run looks alive-but-
+// quiet on the task card instead of frozen.
+func TestAdapterSilenceHeartbeatNotes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "slow.py"), []byte(slowAdapter), 0o755); err != nil {
+		t.Fatalf("write adapter: %v", err)
+	}
+	oldDir := adapterDir
+	adapterDir = dir
+	defer func() { adapterDir = oldDir }()
+	oldHB := silenceHeartbeat
+	silenceHeartbeat = 100 * time.Millisecond
+	defer func() { silenceHeartbeat = oldHB }()
+	// End the run via the hard timeout shortly after the first heartbeat —
+	// the kill is not what this test measures.
+	oldTimeout := adapterHardTimeout
+	adapterHardTimeout = 600 * time.Millisecond
+	defer func() { adapterHardTimeout = oldTimeout }()
+	oldAdvertised := adapterTimeoutS
+	adapterTimeoutS = 0
+	defer func() { adapterTimeoutS = oldAdvertised }()
+	oldGrace := hardTimeoutGrace
+	hardTimeoutGrace = 50 * time.Millisecond
+	defer func() { hardTimeoutGrace = oldGrace }()
+
+	var mu sync.Mutex
+	var notes []string
+	ctx := WithProgress(context.Background(), func(note, kind string) {
+		mu.Lock()
+		notes = append(notes, note)
+		mu.Unlock()
+	})
+	res := runAdapterProcess(ctx, "slow.py", "x", "", nil)
+	if res.OK {
+		t.Fatalf("sleeping adapter reported success")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var heartbeats int
+	for _, n := range notes {
+		if strings.Contains(n, "no output for") {
+			heartbeats++
+		}
+	}
+	if heartbeats == 0 {
+		t.Fatalf("no silence heartbeat notes in %v", notes)
+	}
+}
+
+// TestAdapterSilenceKill verifies the watchdog aborts an adapter that emits
+// nothing past the configured silence limit — a wedged run dies early and
+// reports itself stalled instead of burning the full agent budget.
+func TestAdapterSilenceKill(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "slow.py"), []byte(slowAdapter), 0o755); err != nil {
+		t.Fatalf("write adapter: %v", err)
+	}
+	oldDir := adapterDir
+	adapterDir = dir
+	defer func() { adapterDir = oldDir }()
+	oldSilence := silenceTimeout
+	silenceTimeout = 200 * time.Millisecond
+	defer func() { silenceTimeout = oldSilence }()
+	oldHB := silenceHeartbeat
+	silenceHeartbeat = 100 * time.Millisecond
+	defer func() { silenceHeartbeat = oldHB }()
+
+	start := time.Now()
+	res := runAdapterProcess(context.Background(), "slow.py", "x", "", nil)
+	if res.OK {
+		t.Fatalf("silent adapter reported success")
+	}
+	if res.ExitCode != 124 || !strings.Contains(res.Result, "stalled") {
+		t.Fatalf("res = %+v, want stalled exit-124", res)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("silence kill not enforced promptly: %v", time.Since(start))
 	}
 }
 

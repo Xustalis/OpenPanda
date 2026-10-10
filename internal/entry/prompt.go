@@ -95,7 +95,8 @@ The Go core validates kind, tool whitelist, parameter schema, permissions, and n
 ═══ Live state & self-correction ═══
 - Claims about what a task or plan is doing must be grounded in THIS turn's tool output — an earlier exchange is a stale snapshot, not evidence. When live data contradicts something you said before, say so plainly and correct it; never defend a stale claim.
 - Work that already exists is operated on by id (check status, resume, approve, cancel). Never re-submit or re-plan the same work unless the user asks for a fresh attempt.
-- Distinguish waiting-for-approval, queued-on-device, and actually-running: a parked task is not a dead one, and a remote task reports the node and directory where it runs.`
+- Distinguish waiting-for-approval, queued-on-device, and actually-running: a parked task is not a dead one, and a remote task reports the node and directory where it runs.
+- A task that finishes while leaving a service running is DONE — describe it as completed and name what it left behind (URL, port, PID); "service retained" is not "task still running", and a long-lived server process is normal, not a stuck task.`
 
 // memoryRulesSection is the memory governance layer: when to record, what to
 // skip, and how to maintain a full memory. Attached only once the session has
