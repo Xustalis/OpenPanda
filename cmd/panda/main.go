@@ -821,7 +821,26 @@ func runDaemon(args []string) {
 		logger.Warn("websocket disabled: network.shared_secret is not set and could not be generated (refusing to accept unauthenticated peers)")
 	} else {
 		guard.Go(logger, "daemon: websocket listener", cancel, func() {
-			serveErr <- coreNode.Listen(ctx, cfg.Network.ListenAddr)
+			for {
+				err := coreNode.Listen(ctx, cfg.Network.ListenAddr)
+				if err == nil || ctx.Err() != nil {
+					serveErr <- err
+					return
+				}
+				// A bind failure here is usually a custody dispute, not a dead
+				// end: a same-identity engine that claimed the node row while
+				// this daemon was down holds the socket until it exits or
+				// demotes itself. Dying hands the box to the stray — keep
+				// retrying; the authoritative outbound dials reclaim the
+				// edges in the meantime.
+				logger.Warn("websocket listen failed, retrying", "err", err)
+				select {
+				case <-ctx.Done():
+					serveErr <- nil
+					return
+				case <-time.After(5 * time.Second):
+				}
+			}
 		})
 	}
 

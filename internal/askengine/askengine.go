@@ -944,6 +944,20 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	e.schedCancel = cancel
 	e.sched.Store(sched) // store last: a non-nil load implies ctx/cancel set
 
+	// ownCtx scopes the duties only a node-row owner may run — the mesh
+	// listener, discovery, outbound edge keepalives, the queue consumer and
+	// the lifecycle monitor. This engine owns the row only provisionally:
+	// it probed the lock free at init because no daemon was up, and the
+	// moment a real daemon takes the lock these duties must die with it —
+	// or the stray keeps the listen port the daemon needs to bind and
+	// churns edges it no longer owns. watchNodeRow is the demotion tripwire.
+	ownCtx := schedCtx
+	if ownsRow {
+		var ownCancel context.CancelFunc
+		ownCtx, ownCancel = context.WithCancel(schedCtx)
+		go e.watchNodeRow(ownCtx, sched, ownCancel, card)
+	}
+
 	// The embedded core owns the LAN-discovery listener in a process that
 	// never runs `panda daemon` (the interactive REPL/TUI seat): without it
 	// the seat sees only fleet rows it already paired, never the pending
@@ -957,7 +971,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		// long-lived owner behaves like the daemon. An interactive seat is
 		// short-lived, so edges it opens would flap for peers on every exit —
 		// the seat listens for pending hints only.
-		go sched.RunDiscovery(schedCtx, e.cfg.Network.DiscoveryAddrOrDefault(), e.cfg.Network.ListenAddr, e.meshNode)
+		go sched.RunDiscovery(ownCtx, e.cfg.Network.DiscoveryAddrOrDefault(), e.cfg.Network.ListenAddr, e.meshNode)
 	}
 	// A mesh-owning engine also serves inbound peers and holds the outbound
 	// keepalives — the transport ownership a web-only node was missing when
@@ -965,12 +979,12 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	if ownsRow && e.meshNode {
 		if e.cfg.Network.SharedSecret != "" {
 			go func() {
-				if err := sched.Listen(schedCtx, e.cfg.Network.ListenAddr); err != nil {
+				if err := sched.Listen(ownCtx, e.cfg.Network.ListenAddr); err != nil {
 					e.logger.Warn("websocket listener failed", "addr", e.cfg.Network.ListenAddr, "err", err)
 				}
 			}()
 		}
-		sched.SyncPeers(schedCtx, e.cfg.Network.Peers)
+		sched.SyncPeers(ownCtx, e.cfg.Network.Peers)
 	}
 	e.setCardPath(cardPath)
 	// Re-arm the review hook on the new core's store: the notification that a
@@ -998,12 +1012,12 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// ask/REPL engines submit inline and must not unexpectedly drain
 	// persisted work either way.
 	if e.queueTasks && ownsRow {
-		sched.StartQueueScheduler(schedCtx)
+		sched.StartQueueScheduler(ownCtx)
 		// A queue engine executes tasks off the shared store, so it also owns
 		// the task-lifecycle sweeps: without them a waiting_context park never
 		// times out, an orphaned forward is never rescued, and an expired
 		// lease is never enforced — the task would stall with nobody told.
-		go sched.RunTaskMonitor(schedCtx)
+		go sched.RunTaskMonitor(ownCtx)
 	}
 	// Every engine reconciles its own executions against the store: a task
 	// cancelled or failed by another process must stop here too, not run on
@@ -1051,6 +1065,39 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		}
 	}
 	return nil
+}
+
+// watchNodeRow demotes a provisional row owner back to borrowed status.
+// Every engine-side owner is provisional by construction: the real daemon is
+// a separate process, and an engine only probed the lock free because no
+// daemon was up at init. Once a daemon takes the node-identity lock, this
+// engine must shed the owner's duties — the mesh listener (which holds the
+// port the daemon needs to bind), LAN discovery, outbound edge keepalives,
+// the queue consumer and the lifecycle monitor — or it becomes the stray
+// that wedges the real node out. The probe is a cheap flock attempt; on
+// ErrAlreadyRunning the duties' ownCtx dies and the core stops claiming the
+// row, so its remaining conns arbitrate as ordinary siblings.
+func (e *Engine) watchNodeRow(ctx context.Context, sched *core.Core, demote context.CancelFunc, card ledger.Card) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		held, err := nodeidentity.Held(e.cfg.Node.Kind, card.NodeIdentity)
+		if err != nil {
+			continue // a transient lock failure is not proof of a new owner
+		}
+		if !held {
+			continue // still the only claimant — stay owner
+		}
+		e.logger.Warn("node row claimed by the daemon — demoting borrowed mesh duties")
+		sched.SetOwnsNodeRow(false)
+		demote()
+		return
+	}
 }
 
 // StreamCallbacks receives live progress while an ask converges. OnDelta

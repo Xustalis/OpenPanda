@@ -34,8 +34,13 @@ func (c *Capture) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// String returns the captured output.
-func (c *Capture) String() string { return c.buf.String() }
+// String returns the captured output as text for result payloads. On Windows
+// the bytes may be the console codepage rather than UTF-8 (PowerShell, cmd
+// and Python on zh-CN write GBK to a redirected pipe); normalizeConsoleText
+// transcodes those, because Go's JSON encoder would otherwise replace every
+// non-ASCII byte with U+FFFD and the delegator would read mojibake for text
+// that was fine on the executor.
+func (c *Capture) String() string { return normalizeConsoleText(c.buf.Bytes()) }
 
 // Bytes returns the captured output.
 func (c *Capture) Bytes() []byte { return c.buf.Bytes() }
