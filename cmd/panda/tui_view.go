@@ -42,6 +42,21 @@ func (m tuiModel) View() string {
 		if m.exec != nil {
 			output = ansi.Strip(latestFrame(m.exec.text()))
 		}
+		// Clip the stream to the window: a command that has already produced
+		// more lines than fit would otherwise scroll the running header off
+		// the top — leaving a full-screen wall of output with no visible
+		// "running" affordance at all (the exact frozen-screen complaint this
+		// frame exists to fix). The tail is what a reader watches; the header
+		// and the cancel hint are chrome and must survive any stream length.
+		lines := strings.Split(output, "\n")
+		budget := m.height - 8 // chrome + input box; min height falls back below
+		if budget < 3 {
+			budget = 3
+		}
+		if len(lines) > budget {
+			lines = lines[len(lines)-budget:]
+		}
+		output = strings.Join(lines, "\n")
 		if strings.TrimSpace(output) != "" {
 			live.WriteString("\n")
 			live.WriteString(output)
