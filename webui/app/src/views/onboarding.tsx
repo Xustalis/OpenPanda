@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useMemo, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   api,
   type OnboardingPatch,
@@ -10,6 +10,7 @@ import {
 import { useLocaleRerender } from '../hooks'
 import { locale, localeNames, locales, setLocale, t, type Locale } from '../i18n'
 import { toast } from '../components/toast'
+import { useModalFocus } from '../components/modal-focus'
 
 // First-run onboarding: `panda web` boots zero-config — the panel is fully
 // reachable but chat cannot answer until a model is set up, and the TUI
@@ -111,6 +112,8 @@ function OnboardingWizard(props: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const step = steps[stepIdx]
+  const box = useRef<HTMLDivElement>(null)
+  useModalFocus(box, true)
 
   async function save(patch: OnboardingPatch): Promise<boolean> {
     setBusy(true)
@@ -159,7 +162,7 @@ function OnboardingWizard(props: {
         if (e.target === e.currentTarget) props.onClose()
       }}
     >
-      <div class="modal onboarding-modal wizard" role="dialog" aria-modal="true"
+      <div ref={box} class="modal onboarding-modal wizard" role="dialog" aria-modal="true"
         aria-label={t('onboarding.title')}>
         <div class="wizard-progress" aria-hidden="true">
           {steps.map((s, i) => (

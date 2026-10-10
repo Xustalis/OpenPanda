@@ -154,6 +154,97 @@
   background: var(--danger-soft);
   color: var(--semantic-danger);
 }
+.thread-pin {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.thread-item:hover .thread-pin,
+.thread-pin:focus-visible,
+.thread-pin.on {
+  opacity: 1;
+}
+.thread-pin.on {
+  color: var(--accent);
+}
+.thread-pin:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.thread-pinned-mark {
+  display: inline-flex;
+  margin-right: 5px;
+  color: var(--accent);
+  vertical-align: -1px;
+}
+
+/* Rail batch-select chrome */
+.thread-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 0 2px;
+  min-height: 24px;
+}
+.thread-manage {
+  margin-left: auto;
+  border: none;
+  background: none;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.thread-manage:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.thread-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.thread-check {
+  flex: none;
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+}
+.thread-select-all input {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+}
+.thread-item.selected {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.thread-item.selected .thread-title {
+  color: var(--text);
+}
+.thread-bulk-bar {
+  display: flex;
+  padding-top: 8px;
+  margin-top: 2px;
+  border-top: 1px solid var(--border-soft);
+}
+.thread-bulk-delete {
+  width: 100%;
+  justify-content: center;
+  gap: 6px;
+}
 
 .rail-toggle {
   display: none;

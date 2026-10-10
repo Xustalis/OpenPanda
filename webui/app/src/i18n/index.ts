@@ -38,6 +38,12 @@ const STORAGE_KEY = 'openpanda.locale'
 const listeners = new Set<() => void>()
 let current: Locale = detectLocale()
 
+// The detected locale applies to the document from the start — not only
+// after an explicit switch — so <html lang> is right on first paint.
+if (typeof document !== 'undefined') {
+  document.documentElement.lang = current
+}
+
 function detectLocale(): Locale {
   try {
     const saved = localStorage.getItem(STORAGE_KEY) as Locale | null

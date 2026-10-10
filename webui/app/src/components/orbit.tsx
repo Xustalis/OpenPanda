@@ -9,6 +9,7 @@ import {
   TraceEvent,
 } from '../api/client'
 import { orbitPhaseFromTraces, useTraceForTask } from '../hooks'
+import { navigate } from '../nav'
 import { Icon } from './icons'
 
 // —---------------------------------------------------------------------------
@@ -302,7 +303,7 @@ function OrbitStep(props: {
   return (
     <div class={'orbit-step' + (loading ? ' flash' : '')} aria-busy={loading}>
       <div class="orbit-step-head">
-        <span class="orbit-step-no">Step {props.no}</span>
+        <span class="orbit-step-no">{t('orbit.stepNo', { n: props.no })}</span>
         <span class="orbit-step-title">:</span>
         <span class="orbit-step-title">{props.title}</span>
         {loading && <span class="orbit-step-skel">▫</span>}
@@ -478,17 +479,22 @@ function ActionRail(props: {
 }) {
   const { task, onOpenQueue, onOpenPlan, onOpenTrail } = props
   const isPlan = Boolean(task?.plan_meta?.plan_id)
+  // Deep links default to hash navigation so the rail stays functional in
+  // every host (chat bubble, detail page); embedders can still override.
+  const openQueue = onOpenQueue ?? (() => navigate({ view: 'queue' }))
+  const openPlan = onOpenPlan ?? (() => navigate({ view: 'plans' }))
+  const openTrail = onOpenTrail ?? ((id?: string) => { if (id) navigate({ view: 'detail', id }) })
   return (
     <div class="orbit-action-rail" role="toolbar" aria-label={t('orbit.actions')}>
-      <button type="button" class="orbit-action-btn" onClick={() => onOpenQueue?.()}>
+      <button type="button" class="orbit-action-btn" onClick={openQueue}>
         {t('orbit.actions.openQueue')} →
       </button>
       {isPlan && (
-        <button type="button" class="orbit-action-btn" onClick={() => onOpenPlan?.(task.plan_meta?.plan_id)}>
+        <button type="button" class="orbit-action-btn" onClick={() => openPlan(task.plan_meta?.plan_id)}>
           {t('orbit.actions.openPlan')} →
         </button>
       )}
-      <button type="button" class="orbit-action-btn" onClick={() => onOpenTrail?.(task.id)}>
+      <button type="button" class="orbit-action-btn" onClick={() => openTrail(task.id)}>
         {t('orbit.actions.openTrail')} →
       </button>
     </div>

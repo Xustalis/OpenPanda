@@ -436,7 +436,11 @@ function KanbanColumn({
           <span class="kanban-expand-caret" aria-hidden="true" />
         </button>
       )}
-      {drag && <div class="kanban-dropzone" onClick={() => void drop()}>{t('queue.dropHere')}</div>}
+      {drag && (
+        <button type="button" class="kanban-dropzone" onClick={() => void drop()}>
+          {t('queue.dropHere')}
+        </button>
+      )}
     </div>
   )
 }

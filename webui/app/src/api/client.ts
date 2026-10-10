@@ -990,8 +990,15 @@ export const api = {
     return request('POST', `/api/sessions/${encodeURIComponent(id)}/merge`, message ? { message } : {})
   },
 
-  patchSession(id: string, body: { title?: string; project?: string }): Promise<Session> {
+  patchSession(id: string, body: { title?: string; project?: string; pinned?: boolean }): Promise<Session> {
     return request('PATCH', `/api/sessions/${encodeURIComponent(id)}`, body)
+  },
+
+  /** Batch delete — one round trip for the rail's select-N flow. The reply
+   *  splits ids into deleted vs failed so the caller can keep the failed
+   *  rows selected rather than pretending they are gone. */
+  deleteSessions(ids: string[]): Promise<SessionBulkDeleteResult> {
+    return request('POST', '/api/sessions/bulk-delete', { ids })
   },
 
   cancelSession(id: string, operationID: string): Promise<{ id: string; operation_id: string; cancelled: boolean }> {
@@ -1531,6 +1538,12 @@ export interface Session {
   project?: string
   turns: SessionTurn[]
   operation?: SessionOperation
+  pinned?: boolean
+}
+
+export interface SessionBulkDeleteResult {
+  deleted: string[]
+  failed: { id: string; error: string }[]
 }
 
 // ---- SSE transport ---------------------------------------------------------
@@ -1703,14 +1716,15 @@ export function isAbort(err: unknown): boolean {
 // ---- SSE live subscriptions -----------------------------------------------
 
 /** Change payload delivered on `event: change` — the "what changed" portion of
- *  the SSE line: `tasks/nodes/reminders [fp/tasks /fp/nodes /fp/reminders]`.
- *  Old servers that only send `init` or a single task fingerprint still
- *  deserialize safely (unknown keys are empty strings). */
+ *  the SSE line: `kinds fp/tasks/fp/nodes/fp/reminders/fp/sessions`. Old
+ *  servers that only send `init` or a single task fingerprint still
+ *  deserialize safely (missing slots read as undefined). */
 export interface ChangeEvent {
   kinds: string[]
   taskFP?: string
   nodeFP?: string
   reminderFP?: string
+  sessionFP?: string
   raw: string
 }
 
@@ -1782,6 +1796,7 @@ export function subscribeEvents(opts: SubscribeEventsOptions): Promise<void> {
           taskFP: fps[0],
           nodeFP: fps[1],
           reminderFP: fps[2],
+          sessionFP: fps[3],
           raw: data,
         })
       } else if (event === 'trace') {

@@ -9,6 +9,7 @@ import {
   exportMarkdown,
   exportFilename,
 } from './attach.ts'
+import { setLocale } from '../i18n/index.ts'
 
 test('atQuery finds the @token under the caret', () => {
   assert.deepEqual(atQuery('explain @main.go', 16), { start: 8, token: 'main.go' })
@@ -68,6 +69,9 @@ test('expandFileRefs marks truncated reads', async () => {
 })
 
 test('exportMarkdown renders roles and thought details', () => {
+  // Role names come from the i18n dictionary — pin English so the export
+  // does not depend on the machine locale the test happens to run under.
+  setLocale('en')
   const md = exportMarkdown(
     [
       { role: 'user', text: 'hi' },

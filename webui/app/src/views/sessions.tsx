@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   api,
+  ApiError,
   askSessionStream,
   isAbort,
   isTaskStalled,
@@ -18,17 +19,18 @@ import {
 } from '../api/client'
 import { PandaAscii, PandaMark } from '../brand/panda'
 import { Icon } from '../components/icons'
-import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
+import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval, busSubscribeChange } from '../hooks'
 import { t } from '../i18n'
 import { navigateView } from '../nav'
 import { Markdown } from '../md/render'
-import { toastError } from '../components/toast'
+import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 import { buildCommands, type Command } from '../components/palette'
 import { rank } from '../components/fuzzy'
 import { patchStreaming, slashQuery } from '../components/chatstate'
 import { atQuery, expandFileRefs, exportMarkdown, exportFilename } from '../components/attach'
 import { isLiveSession } from '../components/session-guard'
+import { pruneSelection, sortSessions, turnsChanged } from '../components/session-list'
 import DecisionOrbit from '../components/orbit'
 import { ScopeSelect } from '../components/scope-select'
 import FleetTopologyCard from '../components/fleet'
@@ -172,19 +174,99 @@ export function SessionsView({
   const [isPinned, setIsPinned] = useState(true)
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [titleInput, setTitleInput] = useState('')
+  // Rail batch ops: selection mode + the checked ids + a running bulk delete.
+  const [selectMode, setSelectMode] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkBusy, setBulkBusy] = useState(false)
+  // Mirrors of state the SSE listener touches — the subscription outlives
+  // any single render, so it must read through refs, not stale closures.
+  const activeProjectRef = useRef(activeProject)
+  const sessionRef = useRef<Session | null>(null)
+  // onOpenSession is a fresh closure per render (it captures route.project);
+  // the once-subscribed SSE listener must not hold the stale one.
+  const onOpenSessionRef = useRef(onOpenSession)
+  // The rail renders the sorted projection; `sessions` state stays in
+  // server order so every update path (optimistic, refetch, SSE) goes
+  // through one sort at render instead of re-sorting each mutation.
+  const ordered = sortSessions(sessions)
 
   useEffect(() => {
     if (session) setTitleInput(session.title || '')
     setIsEditingTitle(false)
   }, [session?.id])
 
+  useEffect(() => {
+    sessionRef.current = session
+  }, [session])
+
+  useEffect(() => {
+    onOpenSessionRef.current = onOpenSession
+  }, [onOpenSession])
+
+  useEffect(() => {
+    activeProjectRef.current = activeProject
+    // Leaving the project scope also leaves the scope's selection — a
+    // checkbox checked against a thread that is no longer listed is a
+    // ghost row waiting to confuse the bulk bar.
+    setSelected(new Set())
+  }, [activeProject])
+
   // Session list (refresh when the active thread changes — its title may, or when project changes).
   useEffect(() => {
     api
       .sessions(activeProject || undefined)
-      .then(setSessions)
+      .then((ls) => {
+        setSessions(ls)
+        setSelected((sel) => pruneSelection(sel, ls))
+      })
       .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)))
   }, [activeId, activeProject])
+
+  // Live rail: the panel pushes a 'sessions' fingerprint slot on the change
+  // feed, so a thread created/pinned/deleted on another tab, device, or the
+  // CLI lands here without a manual refresh. The fingerprint comparison is
+  // what keeps task-churn frames (which arrive constantly while work runs)
+  // from refetching the list every second. On a reconnect we reconcile
+  // unconditionally — the gap may hide any number of mutations.
+  useEffect(() => {
+    let lastFP: string | undefined
+    return busSubscribeChange((ev) => {
+      const reconnect = ev.kinds.includes('reconnect')
+      if (!reconnect && ev.sessionFP === lastFP) return
+      lastFP = ev.sessionFP
+      api
+        .sessions(activeProjectRef.current || undefined)
+        .then((ls) => {
+          setSessions(ls)
+          setSelected((sel) => pruneSelection(sel, ls))
+        })
+        .catch(() => {})
+      // The open thread: pull the persisted transcript when it moved and
+      // no local ask is streaming into it — a reply arriving on another
+      // device (or a TUI turn) then paints itself. A 404 means another
+      // surface deleted the thread out from under the pane: leave it
+      // rather than keep showing a ghost.
+      const sid = activeIdRef.current
+      if (!sid) return
+      api
+        .session(sid)
+        .then((s) => {
+          if (!isLiveSession(sid, activeIdRef.current)) return
+          if (inflight.current && inflightSid.current === sid) return
+          const prev = sessionRef.current
+          setSession(s)
+          if (!prev || prev.id !== s.id || turnsChanged(prev.turns, s.turns)) {
+            setMsgs((s.turns ?? []).map((turn, i) => ({ ...turn, k: `srv-${i}` })))
+          }
+        })
+        .catch((e: unknown) => {
+          if (e instanceof ApiError && e.status === 404 && isLiveSession(sid, activeIdRef.current)) {
+            toast(t('sessions.deletedElsewhere'), 'info')
+            onOpenSessionRef.current('')
+          }
+        })
+    })
+  }, [])
 
   // Load projects for the folder/project picker
   useEffect(() => {
@@ -411,6 +493,65 @@ export function SessionsView({
     }
     setSessions((ls) => ls.filter((s) => s.id !== id))
     if (id === activeId) onOpenSession('')
+  }
+
+  async function togglePin(s: Session) {
+    try {
+      const updated = await api.patchSession(s.id, { pinned: !s.pinned })
+      setSessions((ls) => ls.map((x) => (x.id === s.id ? updated : x)))
+      if (session?.id === s.id) setSession(updated)
+    } catch (e) {
+      toastError(e)
+    }
+  }
+
+  function toggleSelect(id: string, on: boolean) {
+    setSelected((sel) => {
+      const next = new Set(sel)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
+  function toggleSelectAll(on: boolean) {
+    setSelected(on ? new Set(ordered.map((s) => s.id)) : new Set())
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false)
+    setSelected(new Set())
+  }
+
+  async function removeSelected() {
+    const ids = [...selected]
+    if (ids.length === 0 || bulkBusy) return
+    const ok = await confirmDialog({
+      title: t('sessions.bulkDeleteTitle', { n: ids.length }),
+      message: t('sessions.bulkDeleteMsg'),
+      confirmLabel: t('sessions.deleteConfirm'),
+    })
+    if (!ok) return
+    setBulkBusy(true)
+    try {
+      const res = await api.deleteSessions(ids)
+      const gone = new Set(res.deleted)
+      setSessions((ls) => ls.filter((s) => !gone.has(s.id)))
+      // Whatever the server refused stays checked — the user can retry or
+      // uncheck it, but nothing silently "deletes" a row that survived.
+      setSelected(new Set(res.failed.map((f) => f.id)))
+      if (activeId && gone.has(activeId)) onOpenSession('')
+      if (res.failed.length > 0) {
+        toast(t('sessions.deletePartial', { n: res.failed.length }), 'error')
+      } else {
+        toast(t('sessions.deletedChats', { n: res.deleted.length }), 'success')
+        setSelectMode(false)
+      }
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBulkBusy(false)
+    }
   }
 
   /** Abort local rendering and cancel only the exact active server operation. */
@@ -733,7 +874,12 @@ export function SessionsView({
 
   return (
     <section class={`chat${railOpen ? ' rail-open' : ''}`}>
-      <aside class="thread-rail">
+      <aside
+        class="thread-rail"
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && selectMode) exitSelectMode()
+        }}
+      >
         <div class="thread-rail-project-picker">
           <select
             class="input thread-project-select"
@@ -779,31 +925,97 @@ export function SessionsView({
           <span aria-hidden="true">+</span> {t('sessions.new')}
         </button>
 
+        <div class="thread-tools">
+          {selectMode ? (
+            <label class="thread-select-all">
+              <input
+                type="checkbox"
+                checked={ordered.length > 0 && selected.size === ordered.length}
+                ref={(el) => {
+                  // Half-checked while a subset is selected — DOM has no
+                  // JSX attribute for this, so it lands via the ref.
+                  if (el) el.indeterminate = selected.size > 0 && selected.size < ordered.length
+                }}
+                onChange={(e) => toggleSelectAll((e.target as HTMLInputElement).checked)}
+              />
+              <span>
+                {selected.size > 0
+                  ? t('sessions.selected', { n: selected.size })
+                  : t('sessions.selectAll')}
+              </span>
+            </label>
+          ) : (
+            <span />
+          )}
+          <button
+            type="button"
+            class="thread-manage"
+            onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+          >
+            {selectMode ? t('sessions.manageDone') : t('sessions.manage')}
+          </button>
+        </div>
+
         <div class="thread-list">
-          {sessions.length === 0 && <p class="thread-empty">{t('sessions.railEmpty')}</p>}
-          {sessions.map((s) => (
+          {ordered.length === 0 && <p class="thread-empty">{t('sessions.railEmpty')}</p>}
+          {ordered.map((s) => (
             <div
               key={s.id}
-              class={`thread-item${s.id === activeId ? ' active' : ''}`}
+              class={`thread-item${s.id === activeId ? ' active' : ''}${selectMode && selected.has(s.id) ? ' selected' : ''}`}
               role="button"
               tabIndex={0}
               aria-current={s.id === activeId}
-              onClick={() => onOpenSession(s.id)}
+              aria-pressed={selectMode ? selected.has(s.id) : undefined}
+              onClick={() =>
+                selectMode ? toggleSelect(s.id, !selected.has(s.id)) : onOpenSession(s.id)
+              }
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
-                  onOpenSession(s.id)
+                  if (selectMode) toggleSelect(s.id, !selected.has(s.id))
+                  else onOpenSession(s.id)
                 }
               }}
             >
+              {selectMode && (
+                <input
+                  type="checkbox"
+                  class="thread-check"
+                  checked={selected.has(s.id)}
+                  tabIndex={-1}
+                  aria-label={t('sessions.selectItem')}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => toggleSelect(s.id, (e.target as HTMLInputElement).checked)}
+                />
+              )}
               <div class="thread-item-main">
-                <span class="thread-title">{s.title || t('sessions.untitled')}</span>
+                <span class="thread-title">
+                  {s.pinned && (
+                    <span class="thread-pinned-mark" title={t('sessions.pinned')}>
+                      <Icon name="pin" size={11} />
+                    </span>
+                  )}
+                  {s.title || t('sessions.untitled')}
+                </span>
                 {s.project && !activeProject && (
                   <span class="thread-project-pill"><Icon name="folder" size={11} /> {s.project}</span>
                 )}
               </div>
               <button
+                class={`thread-pin${s.pinned ? ' on' : ''}`}
+                type="button"
+                title={s.pinned ? t('sessions.unpin') : t('sessions.pin')}
+                aria-pressed={s.pinned}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void togglePin(s)
+                }}
+              >
+                <Icon name={s.pinned ? 'pin-off' : 'pin'} size={13} />
+              </button>
+              <button
                 class="thread-del"
+                type="button"
                 title={t('sessions.delete')}
                 onClick={(e) => {
                   e.stopPropagation()
@@ -815,6 +1027,19 @@ export function SessionsView({
             </div>
           ))}
         </div>
+
+        {selectMode && (
+          <div class="thread-bulk-bar">
+            <button
+              type="button"
+              class="btn danger thread-bulk-delete"
+              disabled={selected.size === 0 || bulkBusy}
+              onClick={() => void removeSelected()}
+            >
+              <Icon name="trash" size={13} /> {t('sessions.deleteSelected', { n: selected.size })}
+            </button>
+          </div>
+        )}
       </aside>
 
       {/* Scrim behind the drawer: laid out always, painted only in the narrow
@@ -1016,7 +1241,7 @@ export function SessionsView({
             underneath it — the focus ring belongs to the whole thing. */}
         <form class="composer" onSubmit={send}>
           <div class="composer-toolbar">
-            <div class="composer-project-pill dim" title={session?.project || activeProject ? `项目: ${session?.project || activeProject}` : t('sessions.noProject')}>
+            <div class="composer-project-pill dim" title={session?.project || activeProject ? t('sessions.projectLabel', { name: session?.project || activeProject || '' }) : t('sessions.noProject')}>
               <span><Icon name="folder" size={12} /> {session?.project || activeProject || t('sessions.noProject')}</span>
             </div>
             {/* Environment pick: which node executes this turn's task. "Auto"
@@ -1063,7 +1288,7 @@ export function SessionsView({
               ref={composer}
               class="composer-input"
               rows={2}
-              placeholder={busy ? (t('sessions.placeholderRunning') || 'Agent 正在执行... 可点击停止或调整指令') : t('sessions.placeholder')}
+              placeholder={busy ? t('sessions.placeholderRunning') : t('sessions.placeholder')}
               value={input}
               onInput={(e) => {
                 const el = e.target as HTMLTextAreaElement
@@ -1246,7 +1471,7 @@ function ChatBubble(props: {
     // Markdown would hide the exact text the model received.
     return (
       <div class="msg user">
-        <div class="msg-avatar you">You</div>
+        <div class="msg-avatar you">{t('sessions.you')}</div>
         <div class="msg-body bubble role-user">
           <div class="bubble-slot-row slot-title" />
           <div class="bubble-slot-row slot-chat">
@@ -1552,6 +1777,9 @@ function ThoughtBlock({ text, live }: { text: string; live: boolean }) {
         role="button"
         tabIndex={0}
         aria-expanded={isOpen}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') toggle(e)
+        }}
       >
         <span class="thought-badge">
           {live ? <span class="spinner spinner-inline" aria-hidden="true" /> : <span class="thought-sparkle">✻</span>}

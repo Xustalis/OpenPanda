@@ -205,6 +205,18 @@ export function MemoryGraphView({
               onMouseEnter={() => setHover(n.id)}
               onMouseLeave={() => setHover((v) => (v === n.id ? null : v))}
               onClick={() => setSelected(n.id === selected ? null : n.id)}
+              role="button"
+              tabIndex={0}
+              aria-label={`${t(`memory.graph.${n.kind}`, n.kind)} ${n.label}`}
+              aria-pressed={selected === n.id}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setSelected(n.id === selected ? null : n.id)
+                } else if (e.key === 'Escape') {
+                  setSelected(null)
+                }
+              }}
             >
               <circle r={nodeRadius(n)} />
               <text y={nodeRadius(n) + 14} text-anchor="middle">
@@ -237,7 +249,7 @@ export function MemoryGraphView({
             </span>
             <strong class="mono">{sel.label}</strong>
             {sel.status && <span class="badge yellow">{sel.status}</span>}
-            <button class="icon-btn" onClick={() => setSelected(null)} aria-label="×">×</button>
+            <button type="button" class="icon-btn" onClick={() => setSelected(null)} aria-label={t('common.close')}>×</button>
           </div>
           {selEdges.length > 0 ? (
             <ul class="mg-detail-edges">

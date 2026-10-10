@@ -172,7 +172,19 @@ function ThoughtCard({
 
   return (
     <div class={`thought-card ${open ? 'is-open' : 'is-collapsed'}`}>
-      <div class="thought-card-header" onClick={() => setOpen(!open)}>
+      <div
+        class="thought-card-header"
+        onClick={() => setOpen(!open)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setOpen(!open)
+          }
+        }}
+      >
         <Icon name="lightbulb" class="thought-card-icon" />
         <span class="thought-card-title">{t('sessions.thoughtTitle')}</span>
         <span class="dim thought-preview">{!open && preview}</span>
@@ -207,7 +219,7 @@ function RawJsonToggle({ raw }: { raw: string }) {
         class="raw-json-btn"
         onClick={() => setOpen(!open)}
       >
-        <Icon name={open ? 'chevron-down' : 'chevron-right'} size={13} /> {open ? '隐藏原始数据' : '原始 JSON'}
+        <Icon name={open ? 'chevron-down' : 'chevron-right'} size={13} /> {open ? t('events.hideRaw') : t('events.rawJson')}
       </button>
       {open && (
         <pre class="raw-json-block">

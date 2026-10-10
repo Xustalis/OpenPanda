@@ -55,6 +55,7 @@ export function App() {
           setAuthed(true)
         }}
         onRejected={() => setGateError(t('token.invalid'))}
+        onUnreachable={() => setGateError(t('token.unreachable'))}
       />
     )
   }
@@ -80,7 +81,7 @@ export function App() {
           <kbd>{modKeyLabel()}K</kbd>
         </button>
 
-        <nav class="primary-nav" aria-label="Primary Navigation">
+        <nav class="primary-nav" aria-label={t('nav.aria')}>
           {primaryNavGroups.map((g) => (
             <div class="nav-group" key={g.key}>
               <div class="nav-group-head">{t(g.key)}</div>
@@ -95,6 +96,8 @@ export function App() {
                     <span
                       class="nav-badge"
                       title={t('queue.col.review')}
+                      role="button"
+                      tabIndex={0}
                       onClick={(e) => {
                         // Nested anchors are invalid HTML, so the badge is a
                         // span that hijacks the click: preventDefault kills the
@@ -103,6 +106,13 @@ export function App() {
                         e.preventDefault()
                         e.stopPropagation()
                         navigate({ view: 'queue', review: true })
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          navigate({ view: 'queue', review: true })
+                        }
                       }}
                     >
                       {reviewCount}
@@ -281,21 +291,42 @@ function modKeyLabel(): string {
 }
 
 /** First-run screen: ask for the panel token, validate it against /api/tasks. */
-function TokenGate(props: { error: string; onConnected(): void; onRejected(): void }) {
+function TokenGate(props: {
+  error: string
+  onConnected(): void
+  onRejected(): void
+  onUnreachable(): void
+}) {
   const [token, setTokenInput] = useState('')
   const [busy, setBusy] = useState(false)
 
   async function submit(e: Event) {
     e.preventDefault()
-    if (!token.trim() || busy) return
+    const candidate = token.trim()
+    if (!candidate || busy) return
     setBusy(true)
     try {
-      setToken(token.trim())
+      // The candidate is validated against a cheap authenticated endpoint
+      // BEFORE setToken persists it — a rejected or unreachable token must
+      // never land in storage, or the next reload briefly boots "authed"
+      // into a storm of 401s.
       const res = await fetch('/api/tasks', {
-        headers: { Authorization: `Bearer ${token.trim()}` },
+        headers: { Authorization: `Bearer ${candidate}` },
       })
-      if (res.ok) props.onConnected()
-      else props.onRejected()
+      if (res.ok) {
+        setToken(candidate)
+        props.onConnected()
+      } else if (res.status === 401 || res.status === 403) {
+        props.onRejected()
+      } else {
+        // 5xx or an unexpected status: the panel answered but the token's
+        // validity is undecided — call it unreachable, not invalid.
+        props.onUnreachable()
+      }
+    } catch {
+      // Network failure: same undecided state, and the fetch rejection is
+      // handled here rather than escaping the submit handler.
+      props.onUnreachable()
     } finally {
       setBusy(false)
     }

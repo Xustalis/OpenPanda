@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useMemo, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ModelEntry, type ModelsResponse, type ProviderInfo } from '../api/client'
 import { useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
+import { useModalFocus } from '../components/modal-focus'
 
 /** The multi-model registry — web parity with the TUI's `/model` verb table:
  *  list, switch, add (provider catalogue wizard), remove, fetch remote model
@@ -240,6 +241,8 @@ function AddModelWizard(props: {
   const [remoteModels, setRemoteModels] = useState<string[] | null>(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
+  const box = useRef<HTMLDivElement>(null)
+  useModalFocus(box, true)
 
   const regions = useMemo(() => {
     const groups: Record<string, ProviderInfo[]> = { global: [], cn: [] }
@@ -305,7 +308,19 @@ function AddModelWizard(props: {
 
   return (
     <div class="modal-backdrop" onClick={(e) => e.target === e.currentTarget && props.onClose()}>
-      <div class="modal wizard-modal" role="dialog" aria-label={t('models.add')}>
+      <div
+        ref={box}
+        class="modal wizard-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('models.add')}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.stopPropagation()
+            props.onClose()
+          }
+        }}
+      >
         <h3 class="modal-title">{t('models.addTitle')}</h3>
 
         {!provider && (

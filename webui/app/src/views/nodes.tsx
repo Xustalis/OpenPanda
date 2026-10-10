@@ -12,6 +12,7 @@ import {
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { ErrorState, PageHeader } from '../components/page'
+import { confirmDialog } from '../components/confirm'
 import { AddDeviceCard, CardEditor } from '../components/card-editor'
 
 /** Devices & nodes (C3): which device this console runs on (/api/self),
@@ -286,7 +287,12 @@ function NodeCard({
 
   async function remove() {
     if (removing) return
-    if (!window.confirm(t('nodes.removeConfirm', { name: displayName }))) return
+    const ok = await confirmDialog({
+      title: t('nodes.removeTitle'),
+      message: t('nodes.removeConfirm', { name: displayName }),
+      confirmLabel: t('nodes.remove'),
+    })
+    if (!ok) return
     setRemoving(true)
     setRemoveErr('')
     try {

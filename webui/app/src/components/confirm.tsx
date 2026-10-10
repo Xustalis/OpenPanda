@@ -21,9 +21,11 @@ export interface ConfirmOptions {
 
 let ask: ((opts: ConfirmOptions) => Promise<boolean>) | null = null
 
-/** Ask the user to confirm. Resolves false when dismissed or cancelled. */
+/** Ask the user to confirm. Resolves false when dismissed or cancelled —
+ *  and also when no host is mounted: a destructive action must default to
+ *  "no" rather than silently proceeding. */
 export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
-  return ask ? ask(opts) : Promise.resolve(true)
+  return ask ? ask(opts) : Promise.resolve(false)
 }
 
 /** Mount once in the app shell. */
@@ -69,7 +71,19 @@ export function ConfirmHost() {
         if (e.target === e.currentTarget) done(false)
       }}
     >
-      <div ref={box} class="modal" role="alertdialog" aria-modal="true" aria-label={opts.title}>
+      <div
+        ref={box}
+        class="modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={opts.title}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.stopPropagation()
+            done(false)
+          }
+        }}
+      >
         <h2 class="modal-title">{opts.title}</h2>
         <p class="modal-msg">{opts.message}</p>
         <div class="modal-actions">
