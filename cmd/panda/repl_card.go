@@ -477,6 +477,7 @@ func (r *repl) cmdNodesAdd(addr string) {
 	}
 	var haveSecret bool
 	r.readConfig(func(c *config.Config) { haveSecret = c.Network.SharedSecret != "" })
+	generatedSecret := ""
 	if !haveSecret {
 		secret, err := generateSharedSecret()
 		if err != nil {
@@ -484,6 +485,7 @@ func (r *repl) cmdNodesAdd(addr string) {
 			return
 		}
 		r.mutateConfig(func(c *config.Config) { c.Network.SharedSecret = secret })
+		generatedSecret = secret
 		r.outln(i18n.T(r.loc, "cli.nodes.secret.gen"))
 	}
 	// Exists-check, append, and persist ride one critical section — the
@@ -495,9 +497,11 @@ func (r *repl) cmdNodesAdd(addr string) {
 			return nil
 		}
 		c.Network.Peers = append(c.Network.Peers, addr)
+		// Only a secret minted here belongs on disk — an env-injected one
+		// (OPENPANDA_SHARED_SECRET) must stay out of config.yaml.
 		return config.UpdateNetworkSection(configWritePath(r.configPath), config.NetworkConfig{
 			ListenAddr:   c.Network.ListenAddr,
-			SharedSecret: c.Network.SharedSecret,
+			SharedSecret: generatedSecret,
 			Peers:        slices.Clone(c.Network.Peers),
 		})
 	})

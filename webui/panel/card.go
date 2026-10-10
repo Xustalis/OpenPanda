@@ -425,9 +425,15 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 			peers = append(peers, req.Addr)
 		}
 		if h.configPath != "" {
+			// Only a secret this call generated belongs on disk — one
+			// injected via OPENPANDA_SHARED_SECRET must stay env-provided.
+			persistSecret := ""
+			if generated {
+				persistSecret = secret
+			}
 			if err := config.UpdateNetworkSection(h.configPath, config.NetworkConfig{
 				ListenAddr:   c.Network.ListenAddr,
-				SharedSecret: secret,
+				SharedSecret: persistSecret,
 				Peers:        peers,
 			}); err != nil {
 				return err

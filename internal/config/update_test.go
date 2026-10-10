@@ -111,6 +111,52 @@ func TestUpdateSectionList(t *testing.T) {
 	}
 }
 
+// TestUpdateNetworkEmptySecretKeepsFile locks the env-secret guard: writing
+// peers with an empty SharedSecret must leave network.shared_secret exactly
+// as the file had it — an env-injected secret must never be materialized
+// into config.yaml, and an empty field must stay absent rather than be
+// rewritten to "".
+func TestUpdateNetworkEmptySecretKeepsFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	original := "node:\n  name: n\nnetwork:\n  shared_secret: \"\"\n  peers:\n    - 10.0.0.1:7836\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateNetworkSection(path, NetworkConfig{Peers: []string{"10.0.0.1:7836", "10.0.0.2:7836"}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Network.SharedSecret != "" {
+		t.Errorf("secret materialized: %q", cfg.Network.SharedSecret)
+	}
+	if len(cfg.Network.Peers) != 2 {
+		t.Errorf("peers = %v", cfg.Network.Peers)
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), `shared_secret: "env-`) {
+		t.Errorf("env secret leaked to disk:\n%s", data)
+	}
+}
+
+// TestMarshalYAMLIndent matches the repo's hand-written 2-space convention —
+// a programmatic write that re-indents the whole file buries the real diff.
+func TestMarshalYAMLIndent(t *testing.T) {
+	out, err := marshalYAML(map[string]any{"network": map[string]any{"peers": []string{"a", "b"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "    peers:") {
+		t.Errorf("4-space indent leaked:\n%s", out)
+	}
+	if !strings.Contains(string(out), "  peers:") {
+		t.Errorf("missing 2-space section indent:\n%s", out)
+	}
+}
+
 // TestUpdateSectionFieldMissingFile verifies a missing config file is created
 // from defaults and then updated.
 func TestUpdateSectionFieldMissingFile(t *testing.T) {

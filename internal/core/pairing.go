@@ -537,6 +537,179 @@ func PairCode(initX, respX, initPub, respPub, initNonce, respNonce, dh []byte) s
 	return pairSAS(initX, respX, initPub, respPub, initNonce, respNonce, dh)
 }
 
+// PairRejected reports a pair_reject frame as an error — the typed
+// Reason token ("rejected", "expired", "busy", "already_joined", …) lets
+// callers render the cause without parsing prose.
+type PairRejected struct{ Reason string }
+
+func (e *PairRejected) Error() string { return "pairing refused: " + e.Reason }
+
+// PairClient is the initiator half of the pairing ceremony, shared by
+// `panda pair <target>` and the web console: DialPair performs the
+// key exchange and leaves the session waiting on the responder's human;
+// WaitSecret blocks until the sealed secret arrives or the answer is no.
+type PairClient struct {
+	conn      *bus.Conn
+	Session   string // initiator-minted session id
+	Code      string // SAS both screens must show
+	dh        []byte
+	nonce     []byte
+	respNonce []byte
+}
+
+// DialPair dials dialAddr (bare host:port or ws(s):// URL), sends
+// pair_hello, and reads the responder's pair_ready. pub is this node's
+// Ed25519 identity (an ephemeral one is fine — it only binds the SAS).
+// selfID/name/listenAddr are the display fields the responder's operator
+// sees next to the confirm prompt.
+func DialPair(ctx context.Context, dialAddr, selfID, name, listenAddr string, pub ed25519.PublicKey) (*PairClient, error) {
+	dialAddr = normalizeDialableAddr(dialAddr)
+	initKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	session, err := newUUID()
+	if err != nil {
+		return nil, err
+	}
+
+	client := bus.NewClient("ws://"+dialAddr+"/ws", nil)
+	conn, err := client.Dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	msgID, _ := newUUID()
+	hello, err := bus.NewEnvelope(bus.MsgPairHello, selfID, msgID, bus.PairHelloPayload{
+		Session: session,
+		X:       hex.EncodeToString(initKey.PublicKey().Bytes()),
+		Pub:     hex.EncodeToString(pub),
+		Nonce:   hex.EncodeToString(nonce),
+		Addr:    listenAddr,
+		Name:    name,
+		NodeID:  selfID,
+	})
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if err := conn.Send(hello); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	var env bus.Envelope
+	if err := conn.ReadJSON(&env); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if env.Type == bus.MsgPairReject {
+		var rj bus.PairRejectPayload
+		_ = env.PayloadInto(&rj)
+		conn.Close()
+		return nil, &PairRejected{Reason: rj.Reason}
+	}
+	if env.Type != bus.MsgPairReady {
+		conn.Close()
+		return nil, fmt.Errorf("unexpected reply %s", env.Type)
+	}
+	var ready bus.PairReadyPayload
+	if err := env.PayloadInto(&ready); err != nil || ready.Session != session {
+		conn.Close()
+		return nil, errors.New("pair_ready: malformed")
+	}
+	respX, err := hex.DecodeString(ready.X)
+	if err != nil || len(respX) != 32 {
+		conn.Close()
+		return nil, errors.New("pair_ready: bad key")
+	}
+	respPub, err := hex.DecodeString(ready.Pub)
+	if err != nil || len(respPub) != ed25519.PublicKeySize {
+		conn.Close()
+		return nil, errors.New("pair_ready: bad pub")
+	}
+	respNonce, err := hex.DecodeString(ready.Nonce)
+	if err != nil || len(respNonce) < 8 {
+		conn.Close()
+		return nil, errors.New("pair_ready: bad nonce")
+	}
+	respXKey, err := ecdh.X25519().NewPublicKey(respX)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	dh, err := initKey.ECDH(respXKey)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return &PairClient{
+		conn:      conn,
+		Session:   session,
+		Code:      pairSAS(initKey.PublicKey().Bytes(), respX, pub, respPub, nonce, respNonce, dh),
+		dh:        dh,
+		nonce:     nonce,
+		respNonce: respNonce,
+	}, nil
+}
+
+// WaitSecret blocks on the responder's human answer: pair_secret returns
+// the mesh secret in plaintext bytes; pair_reject returns *PairRejected;
+// ctx cancellation or a dropped conn returns the underlying error. The
+// responder's session TTL bounds the wait on its side, so the caller's
+// ctx only needs a margin past it.
+func (c *PairClient) WaitSecret(ctx context.Context) (string, error) {
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			c.conn.Close()
+		case <-done:
+		}
+	}()
+	for {
+		var env bus.Envelope
+		if err := c.conn.ReadJSON(&env); err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return "", err
+		}
+		switch env.Type {
+		case bus.MsgPairReject:
+			var rj bus.PairRejectPayload
+			_ = env.PayloadInto(&rj)
+			return "", &PairRejected{Reason: rj.Reason}
+		case bus.MsgPairSecret:
+			var ps bus.PairSecretPayload
+			if err := env.PayloadInto(&ps); err != nil || ps.Session != c.Session {
+				continue
+			}
+			key, err := pairBoxKey(c.dh, c.nonce, c.respNonce)
+			if err != nil {
+				return "", err
+			}
+			box, err := base64.StdEncoding.DecodeString(ps.Box)
+			if err != nil {
+				return "", err
+			}
+			plain, err := PairOpen(key, box)
+			if err != nil {
+				return "", errors.New("pair box integrity check failed")
+			}
+			return string(plain), nil
+		}
+	}
+}
+
+// Close drops the pairing conn — the responder treats it as an abandoned
+// session and expires the row.
+func (c *PairClient) Close() { c.conn.Close() }
+
 // PairSessionRow is the operator-facing view of an inbound pairing request.
 type PairSessionRow struct {
 	ID        string

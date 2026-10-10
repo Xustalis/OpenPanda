@@ -435,14 +435,19 @@ type TaskResultPayload struct {
 	// ApprovalDisposition tells the delegator what approving a review means.
 	// It is optional for wire compatibility; receivers classify legacy review
 	// results conservatively from explicit authorization-refusal evidence only.
-	ApprovalDisposition string  `json:"approval_disposition,omitempty"`
-	OK                  bool    `json:"ok"`
-	ExitCode            int     `json:"exit_code"`
-	Stdout              string  `json:"stdout,omitempty"`
-	Stderr              string  `json:"stderr,omitempty"`
-	Artifacts           string  `json:"artifacts,omitempty"`
-	Tokens              int     `json:"tokens,omitempty"`
-	Cost                float64 `json:"cost,omitempty"`
+	ApprovalDisposition string `json:"approval_disposition,omitempty"`
+	// Deferred marks a result that reports custody, not execution: the
+	// caller's request (a resume approval) was accepted and parked in an
+	// outbox for delivery when the executor's link returns. Surfaces must
+	// render it as "queued for delivery" — not as a failed exit code.
+	Deferred  bool    `json:"deferred,omitempty"`
+	OK        bool    `json:"ok"`
+	ExitCode  int     `json:"exit_code"`
+	Stdout    string  `json:"stdout,omitempty"`
+	Stderr    string  `json:"stderr,omitempty"`
+	Artifacts string  `json:"artifacts,omitempty"`
+	Tokens    int     `json:"tokens,omitempty"`
+	Cost      float64 `json:"cost,omitempty"`
 	// OutputArtifact is the hash of the tree this stage produced, packed into the
 	// executor's artifact pool. The node orchestrating the plan records it and
 	// hands it to the successor stages as their input; the executor stays the

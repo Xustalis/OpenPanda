@@ -149,6 +149,11 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/nodes", h.listNodes)
 	mux.HandleFunc("POST /api/nodes/add", h.addNode)
 	mux.HandleFunc("DELETE /api/nodes/{id}", h.removeNode)
+	// Bluetooth-style pairing — the web twin of `panda pair` /
+	// `panda pair <device>` / `panda pair confirm` (see pair.go).
+	mux.HandleFunc("GET /api/pair", h.listPair)
+	mux.HandleFunc("POST /api/pair/initiate", h.initiatePair)
+	mux.HandleFunc("POST /api/pair/answer", h.answerPair)
 	mux.HandleFunc("GET /api/self", h.getSelf)
 	mux.HandleFunc("GET /api/events", h.events)
 	mux.HandleFunc("GET /api/settings/model", h.getModelSettings)
@@ -444,6 +449,11 @@ type handler struct {
 	approvalMu         sync.Mutex
 	approvalOperations map[string]approvalOperation
 	serviceCtx         context.Context
+
+	// pair tracks console-initiated pairing sessions — the live conn and
+	// the state the polling UI reads. Inbound requests need no field: the
+	// pair_sessions table is the shared surface (see pair.go).
+	pair pairTracker
 }
 
 // taskJSON is the wire form of a task row, with stable snake_case names so the

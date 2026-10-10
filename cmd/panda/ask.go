@@ -36,9 +36,13 @@ type askJSON struct {
 	TaskID    string `json:"task_id,omitempty"`
 	TaskState string `json:"task_state,omitempty"`
 	OK        bool   `json:"ok,omitempty"`
-	Stdout    string `json:"stdout,omitempty"`
-	Stderr    string `json:"stderr,omitempty"`
-	ExitCode  int    `json:"exit_code,omitempty"`
+	// Deferred marks an approval parked for delivery — the task didn't fail,
+	// it's waiting for the executor's link. Lets scripts tell custody from
+	// failure without parsing task_state.
+	Deferred bool   `json:"deferred,omitempty"`
+	Stdout   string `json:"stdout,omitempty"`
+	Stderr   string `json:"stderr,omitempty"`
+	ExitCode int    `json:"exit_code,omitempty"`
 	// Execution attribution: which agent harness ran the task, on which node,
 	// with which model (and whether that model was injected by panda), plus
 	// the entry model that served the ask's own classify/answer calls.
@@ -61,7 +65,7 @@ type askJSON struct {
 func resultToJSON(out *askengine.Result) askJSON {
 	j := askJSON{
 		Kind: out.Kind, Answer: out.Answer, TaskID: out.TaskID, TaskState: out.TaskState,
-		OK: out.OK, Stdout: out.Stdout, Stderr: out.Stderr, ExitCode: out.ExitCode,
+		OK: out.OK, Deferred: out.Deferred, Stdout: out.Stdout, Stderr: out.Stderr, ExitCode: out.ExitCode,
 		Agent: out.Agent, Model: out.Model, Injected: out.Injected,
 		Executor: out.Executor, RouteFallback: out.RouteFallback, EntryModel: out.EntryModel,
 		PlanID: out.PlanID, PlanGoal: out.PlanGoal,

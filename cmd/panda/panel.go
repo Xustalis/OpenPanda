@@ -958,7 +958,7 @@ func runApprove(args []string) {
 	}
 	if jsonOutput {
 		emitJSON(resultToJSON(out))
-		if !out.OK {
+		if !out.OK && !out.Deferred {
 			os.Exit(1)
 		}
 		return
@@ -984,6 +984,14 @@ func runApprove(args []string) {
 		reportNote += " · " + i18n.Tf(i18n.Detect(), "cli.task.route_fallback", "peer", out.RouteFallback)
 	}
 	fmt.Println(pal().Muted(reportNote))
+	if out.Deferred {
+		// Approval parked for the executor's next link — a custody receipt,
+		// not a failure. Print what it is and exit clean.
+		if s := strings.TrimSpace(out.Stdout); s != "" {
+			fmt.Println(pal().Muted(s))
+		}
+		return
+	}
 	if !out.OK {
 		fmt.Fprintf(os.Stderr, "exit %d: %s\n", out.ExitCode, out.Stderr)
 		os.Exit(1)

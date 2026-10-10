@@ -30,7 +30,10 @@ testdata/run/
 # Loopback test-node state (node-a.yaml / node-b.yaml fixtures)
 testdata/node-a/
 testdata/node-b/
+testdata/node-c/
 testdata/sessions/
+testdata/daemon.pid
+testdata/artifacts/
 
 # Live personal data (real memory/diary/skills captured from this machine —
 # test fixtures for local runs only, never for the repo)

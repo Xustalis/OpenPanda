@@ -683,6 +683,7 @@ func (c *Core) resumeRemote(ctx context.Context, cur Task, target, answer string
 				TaskID:    final.TaskID,
 				AttemptID: final.AttemptID,
 				State:     final.State,
+				Deferred:  true,
 				Stdout:    i18n.T(cur.GetUserLocale(), "task.resume.parked"),
 			}, nil
 		}

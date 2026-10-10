@@ -541,6 +541,50 @@ export interface NodesAddResult {
   install_command: string
 }
 
+/** GET /api/pair — the Bluetooth-style pairing surface: inbound requests
+ *  awaiting this operator's answer, devices the LAN heard recently, and
+ *  the console's own outgoing sessions (the pair dialog polls these). */
+export interface PairView {
+  requests: PairRequest[]
+  discovered: DiscoveredDevice[]
+  outgoing: OutgoingPair[]
+}
+
+/** One inbound pairing request (a row in pair_sessions on the daemon). */
+export interface PairRequest {
+  id: string
+  peer_name: string
+  peer_addr: string
+  code: string
+  state: string
+  expires_at: string
+}
+
+/** One LAN-discovered device the pair button can target. */
+export interface DiscoveredDevice {
+  id: string
+  addr: string
+  verified: boolean
+}
+
+/** One console-initiated pairing session, polled until done/rejected. */
+export interface OutgoingPair {
+  session: string
+  target: string
+  addr: string
+  code: string
+  state: string // waiting | done | rejected | expired | error
+  err?: string
+}
+
+/** POST /api/pair/initiate — the session + code to show while waiting. */
+export interface PairInitiated {
+  session: string
+  code: string
+  target: string
+  state: string
+}
+
 /** GET/POST /api/onboarding — the first-run wizard's persisted state. */
 export interface OnboardingState {
   locale: string
@@ -788,6 +832,24 @@ export const api = {
    *  guide for the other machine. */
   addNode(addr: string): Promise<NodesAddResult> {
     return request('POST', '/api/nodes/add', { addr })
+  },
+
+  // ---- Bluetooth-style pairing (`panda pair`'s web twin) ----
+
+  pair(): Promise<PairView> {
+    return request('GET', '/api/pair')
+  },
+
+  /** Start pairing with a discovered device id/name or a literal
+   *  host:port — returns the code to compare on the other screen. */
+  pairInitiate(target: string): Promise<PairInitiated> {
+    return request('POST', '/api/pair/initiate', { target })
+  },
+
+  /** Answer an inbound request: confirm admits the device and the daemon
+   *  hands over the mesh secret; reject ends the session. */
+  pairAnswer(id: string, confirm: boolean): Promise<{ state: string }> {
+    return request('POST', '/api/pair/answer', { id, confirm })
   },
 
   // ---- Capability card (structured editor + raw YAML editor) ----

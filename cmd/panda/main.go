@@ -755,9 +755,13 @@ func runDaemon(args []string) {
 		if !slices.Contains(peers, peerAddr) {
 			peers = append(peers, peerAddr)
 		}
+		// Secret deliberately omitted: when it arrives via
+		// OPENPANDA_SHARED_SECRET, Load() injects it into the struct — and
+		// writing the struct back to disk would leak the env-provided
+		// material into config.yaml. The hook only needs to persist the
+		// peer edge; the secret lives in memory for ApplyNetworkConfig.
 		if err := config.UpdateNetworkSection(configWritePath(*configPath), config.NetworkConfig{
-			SharedSecret: fresh.Network.SharedSecret,
-			Peers:        peers,
+			Peers: peers,
 		}); err != nil {
 			return err
 		}

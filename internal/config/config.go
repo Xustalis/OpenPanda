@@ -1511,7 +1511,7 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 	setMapFieldAnyMap(model, "params", mc.Params)
 	setMapFieldStringMap(model, "headers", mc.Headers)
 
-	out, err := yaml.Marshal(&root)
+	out, err := marshalYAML(&root)
 	if err != nil {
 		return err
 	}
@@ -1575,7 +1575,7 @@ func UpdateModelsSection(path string, models []ModelConfig) error {
 		)
 	}
 
-	out, err := yaml.Marshal(&root)
+	out, err := marshalYAML(&root)
 	if err != nil {
 		return err
 	}
@@ -1653,7 +1653,7 @@ func UpdateMCPSection(path string, command string) error {
 	}
 	setMapField(mcp, "command", command)
 
-	out, err := yaml.Marshal(&root)
+	out, err := marshalYAML(&root)
 	if err != nil {
 		return err
 	}
@@ -1688,7 +1688,7 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 	case os.IsNotExist(err):
 		doc := Default()
 		doc.Network = nc
-		out, err := yaml.Marshal(doc)
+		out, err := marshalYAML(doc)
 		if err != nil {
 			return err
 		}
@@ -1715,7 +1715,7 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 		setMapFieldSeq(network, "allow_cleartext_for", nc.AllowCleartextFor)
 	}
 
-	out, err := yaml.Marshal(&root)
+	out, err := marshalYAML(&root)
 	if err != nil {
 		return err
 	}
@@ -1937,4 +1937,18 @@ func hardenSecretPerms(path string, data []byte) {
 		return
 	}
 	slog.Warn("tightened config file permissions to 0600 (contains secrets)", "path", path)
+}
+
+// marshalYAML emits YAML at the 2-space indent every hand-written config
+// in this repo uses — yaml.Marshal's 4-space default used to reformat the
+// whole file on the first programmatic write and drown the real change in
+// whitespace noise.
+func marshalYAML(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), enc.Close()
 }

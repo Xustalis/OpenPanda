@@ -499,9 +499,14 @@ type Result struct {
 	Stdout    string
 	Stderr    string
 	ExitCode  int
-	Agent     string
-	Model     string
-	Injected  bool
+	// Deferred marks a parked-for-delivery outcome: the approval was
+	// accepted into an outbox because the executor's link is down, so the
+	// correct rendering is "queued for delivery" with exit 0 — not a
+	// failure. Mirrors TaskResultPayload.Deferred.
+	Deferred bool
+	Agent    string
+	Model    string
+	Injected bool
 	// Executor is the node that actually ran the task — this node's id for a
 	// local run, the peer's id for a delegated one. Empty when the result
 	// never reached an executor (route miss, early failure).
@@ -2164,6 +2169,7 @@ func resultFromTask(task core.Task, result bus.TaskResultPayload, routeFallback 
 		Stdout:        result.Stdout,
 		Stderr:        result.Stderr,
 		ExitCode:      result.ExitCode,
+		Deferred:      result.Deferred,
 		Agent:         result.Agent,
 		Model:         result.Model,
 		Injected:      result.Injected,

@@ -22,12 +22,11 @@ package main
 
 import (
 	"context"
-	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -38,13 +37,11 @@ import (
 
 	"time"
 
-	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
-	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // generateSharedSecret mints the HMAC material node hellos sign with. Random
@@ -110,9 +107,17 @@ func admitPeerAddr(configPath string, cfg *config.Config, addr string) {
 		return
 	}
 	peers = append(peers, addr)
+	// Persist the secret only when we just generated it. A secret that
+	// Load() injected from OPENPANDA_SHARED_SECRET must stay env-provided —
+	// materializing it into config.yaml leaks what the operator chose to
+	// keep out of the file.
+	persistSecret := ""
+	if generated {
+		persistSecret = secret
+	}
 	if err := config.UpdateNetworkSection(configWritePath(configPath), config.NetworkConfig{
 		ListenAddr:   cfg.Network.ListenAddr,
-		SharedSecret: secret,
+		SharedSecret: persistSecret,
 		Peers:        peers,
 	}); err != nil {
 		fatal("write config", err)
@@ -614,118 +619,44 @@ func pairInitiate(w io.Writer, configPath, target string) {
 		pub, priv, _ = ed25519.GenerateKey(rand.Reader)
 	}
 	_ = priv
-	initKey, err := ecdh.X25519().GenerateKey(rand.Reader)
-	if err != nil {
-		fatal("keygen", err)
-	}
-	nonce := make([]byte, 16)
-	_, _ = rand.Read(nonce)
-	session, err := util.UUIDv7()
-	if err != nil {
-		fatal("session id", err)
-	}
 	selfID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity())
 
 	dialAddr := normalizeDialable(addr)
 	fmt.Fprintln(w, i18n.Tf(loc, "cli.pair.start", "name", displayName, "addr", dialAddr))
-	client := bus.NewClient("ws://"+dialAddr+"/ws", nil)
-	conn, err := client.Dial(context.Background())
+	pc, err := core.DialPair(context.Background(), dialAddr, selfID, cfg.Node.Name, cfg.Network.ListenAddr, pub)
 	if err != nil {
+		var rj *core.PairRejected
+		if errors.As(err, &rj) {
+			fatal("pair", fmt.Errorf("%s", i18n.Tf(loc, "cli.pair.rejected", "reason", rj.Reason)))
+		}
 		fatal("dial", fmt.Errorf("%s — %s", dialAddr, i18n.T(loc, "cli.pair.unreachable")))
 	}
-	defer conn.Close()
-
-	msgID, _ := util.UUIDv7()
-	hello, err := bus.NewEnvelope(bus.MsgPairHello, selfID, msgID, bus.PairHelloPayload{
-		Session: session,
-		X:       hex.EncodeToString(initKey.PublicKey().Bytes()),
-		Pub:     hex.EncodeToString(pub),
-		Nonce:   hex.EncodeToString(nonce),
-		Addr:    cfg.Network.ListenAddr,
-		Name:    cfg.Node.Name,
-		NodeID:  selfID,
-	})
-	if err != nil {
-		fatal("build pair_hello", err)
-	}
-	if err := conn.Send(hello); err != nil {
-		fatal("send pair_hello", err)
-	}
-
-	var env bus.Envelope
-	if err := conn.ReadJSON(&env); err != nil {
-		fatal("read pair_ready", err)
-	}
-	if env.Type == bus.MsgPairReject {
-		var rj bus.PairRejectPayload
-		_ = env.PayloadInto(&rj)
-		fatal("pair", fmt.Errorf("%s", i18n.Tf(loc, "cli.pair.rejected", "reason", rj.Reason)))
-	}
-	if env.Type != bus.MsgPairReady {
-		fatal("pair", fmt.Errorf("unexpected reply %s", env.Type))
-	}
-	var ready bus.PairReadyPayload
-	if err := env.PayloadInto(&ready); err != nil || ready.Session != session {
-		fatal("pair_ready", err)
-	}
-	respX, _ := hex.DecodeString(ready.X)
-	respPub, _ := hex.DecodeString(ready.Pub)
-	respNonce, _ := hex.DecodeString(ready.Nonce)
-	respXKey, err := ecdh.X25519().NewPublicKey(respX)
-	if err != nil {
-		fatal("peer key", err)
-	}
-	dh, err := initKey.ECDH(respXKey)
-	if err != nil {
-		fatal("dh", err)
-	}
-	code := core.PairCode(initKey.PublicKey().Bytes(), respX, pub, respPub, nonce, respNonce, dh)
+	defer pc.Close()
 
 	p := pal()
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "  "+p.Accent(i18n.Tf(loc, "cli.pair.code", "code", code)))
+	fmt.Fprintln(w, "  "+p.Accent(i18n.Tf(loc, "cli.pair.code", "code", pc.Code)))
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, i18n.Tf(loc, "cli.pair.confirm_hint", "name", displayName))
 	fmt.Fprintln(w, i18n.T(loc, "cli.pair.waiting"))
 
 	// Wait out the human on the other side: the responder's session TTL is
-	// 4 minutes, so read until pair_secret/pair_reject or give up slightly
-	// past it.
-	deadline := time.Now().Add(4*time.Minute + 30*time.Second)
-	for {
-		var env2 bus.Envelope
-		if err := conn.ReadJSON(&env2); err != nil {
+	// 4 minutes, so give up slightly past it.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute+30*time.Second)
+	defer cancel()
+	secret, err := pc.WaitSecret(ctx)
+	if err != nil {
+		var rj *core.PairRejected
+		switch {
+		case errors.As(err, &rj):
+			fatal("pair", fmt.Errorf("%s", i18n.Tf(loc, "cli.pair.rejected", "reason", rj.Reason)))
+		case errors.Is(err, context.DeadlineExceeded):
+			fatal("pair", fmt.Errorf("%s", i18n.T(loc, "cli.pair.timeout")))
+		default:
 			fatal("waiting", fmt.Errorf("%s — %s", err, i18n.T(loc, "cli.pair.daemonhint")))
 		}
-		switch env2.Type {
-		case bus.MsgPairReject:
-			var rj bus.PairRejectPayload
-			_ = env2.PayloadInto(&rj)
-			fatal("pair", fmt.Errorf("%s", i18n.Tf(loc, "cli.pair.rejected", "reason", rj.Reason)))
-		case bus.MsgPairSecret:
-			var ps bus.PairSecretPayload
-			if err := env2.PayloadInto(&ps); err != nil || ps.Session != session {
-				continue
-			}
-			key, err := core.PairDeriveKey(dh, nonce, respNonce)
-			if err != nil {
-				fatal("derive key", err)
-			}
-			box, err := base64.StdEncoding.DecodeString(ps.Box)
-			if err != nil {
-				fatal("decode box", err)
-			}
-			plain, err := core.PairOpen(key, box)
-			if err != nil {
-				fatal("open secret", fmt.Errorf("pair box integrity check failed"))
-			}
-			adoptPairedSecret(w, loc, configPath, cfg, string(plain), dialAddr)
-			return
-		}
-		if time.Now().After(deadline) {
-			fatal("pair", fmt.Errorf("%s", i18n.T(loc, "cli.pair.timeout")))
-		}
 	}
+	adoptPairedSecret(w, loc, configPath, cfg, secret, dialAddr)
 }
 
 // adoptPairedSecret lands the join on the initiator: persist the delivered
