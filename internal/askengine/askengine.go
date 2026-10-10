@@ -1406,11 +1406,24 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// successfully-executed queue operations).
 	var toolDigest []string
 	digestOrErr := func(err error) (*Result, error) {
-		if digest := toolResultsDigest(toolDigest, effectiveLocale); digest != "" {
-			if lastTask != nil {
-				lastTask.Answer = digest
-				return finalizeLastTask(lastTask), nil
+		if lastTask != nil {
+			// A task ran: its outcome IS the answer. Dumping the raw tool
+			// results beside it buries the outcome in logs the user never
+			// asked for (the live Windows report showed a ten-line task-list
+			// dump after a successful browser-open task); a compact
+			// interruption note keeps the honesty without the noise, and the
+			// transcript stays one `task show` away.
+			if len(toolDigest) > 0 {
+				note := interruptionNote(len(toolDigest), lastTask.TaskID, effectiveLocale)
+				if strings.TrimSpace(lastTask.Answer) == "" {
+					lastTask.Answer = note
+				} else if !strings.Contains(lastTask.Answer, note) {
+					lastTask.Answer = strings.TrimRight(lastTask.Answer, "\n") + "\n\n" + note
+				}
 			}
+			return finalizeLastTask(lastTask), nil
+		}
+		if digest := toolResultsDigest(toolDigest, effectiveLocale); digest != "" {
 			return &Result{Kind: "answer", Answer: digest}, nil
 		}
 		return nil, err

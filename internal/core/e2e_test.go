@@ -617,6 +617,133 @@ func TestExecWorkDirPersistedAndReported(t *testing.T) {
 	}
 }
 
+// TestResumeRaceAlreadyRunningDoesNotFailOrigin is the double-approval race:
+// the human approved on BOTH copies, and the delegator's task_resume arrives
+// while the executor's copy is already running. The old synthesized
+// "resume: task state is running" FAILURE landed on the delegator as a
+// task_result, killed its copy, and cascaded its plan. The reply must echo
+// the real state instead: in-flight is informational — the delegator keeps
+// waiting for the executor's eventual result.
+func TestResumeRaceAlreadyRunningDoesNotFailOrigin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-race", "127.0.0.1:17970")
+	worker := newCore(t, "worker-race", "127.0.0.1:17971")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17970", "127.0.0.1:17971")
+
+	const taskID = "race-task"
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	// Executor copy: already RUNNING (its local approval won the race).
+	_, err := worker.store.CreateWithID(ctx, taskID, "", "proj", "t", worker.nodeID,
+		[]string{entry.nodeID, worker.nodeID}, true)
+	must(err)
+	must(worker.store.Queue(ctx, taskID, worker.nodeID))
+	must(worker.store.Dispatch(ctx, taskID, worker.nodeID, worker.nodeID))
+	must(worker.store.Accept(ctx, taskID, worker.nodeID))
+
+	// Delegator copy: dispatched to the executor (its approval claimed it).
+	// The attempt must match the executor's — the delegation's AdoptAttempt
+	// does this in the real flow, and a mismatched attempt is (correctly)
+	// dropped as stale before any of this logic runs.
+	wt, err := worker.store.Get(ctx, taskID)
+	must(err)
+	_, err = entry.store.CreateWithID(ctx, taskID, "", "proj", "t", entry.nodeID, nil, false)
+	must(err)
+	must(entry.store.AdoptAttempt(ctx, taskID, wt.AttemptID))
+	must(entry.store.Queue(ctx, taskID, entry.nodeID))
+	must(entry.store.Dispatch(ctx, taskID, entry.nodeID, worker.nodeID))
+
+	// The late resume crosses the wire; the executor is already running it.
+	env, _ := bus.NewEnvelope(bus.MsgTaskResume, entry.nodeID, "m-race",
+		bus.TaskResumePayload{TaskID: taskID, AttemptID: wt.AttemptID})
+	worker.handleResume(ctx, env)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		tk, err := entry.store.Get(ctx, taskID)
+		if err != nil {
+			t.Fatalf("entry get: %v", err)
+		}
+		if tk.State == StateFailed {
+			t.Fatalf("delegator copy failed on the benign double approval (result %s)", tk.ResultJSON)
+		}
+		if taskEventsContain(entry, ctx, taskID, "executor reports task running") {
+			break // informational report recorded; the wait continues
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no informational report reached the delegator; state=%s", tk.State)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if tk, _ := entry.store.Get(ctx, taskID); tk.State != StateDispatched {
+		t.Fatalf("delegator state = %s, want dispatched (still waiting for the executor's result)", tk.State)
+	}
+}
+
+// TestResumeRaceTerminalEchoesVerdict: when the executor's copy already
+// CLOSED (failed here), the resume reply must carry that row's real verdict —
+// the delegator converges on the same reason instead of a synthesized
+// "resume: task state is failed" string.
+func TestResumeRaceTerminalEchoesVerdict(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCore(t, "entry-echo", "127.0.0.1:17972")
+	worker := newCore(t, "worker-echo", "127.0.0.1:17973")
+	startPair(t, ctx, entry, worker, "127.0.0.1:17972", "127.0.0.1:17973")
+
+	const taskID = "echo-task"
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	_, err := worker.store.CreateWithID(ctx, taskID, "", "proj", "t", worker.nodeID,
+		[]string{entry.nodeID, worker.nodeID}, true)
+	must(err)
+	must(worker.store.Queue(ctx, taskID, worker.nodeID))
+	must(worker.store.Dispatch(ctx, taskID, worker.nodeID, worker.nodeID))
+	must(worker.store.Accept(ctx, taskID, worker.nodeID))
+	must(worker.store.Fail(ctx, taskID, worker.nodeID, "disk full"))
+	wt, err := worker.store.Get(ctx, taskID)
+	must(err)
+
+	_, err = entry.store.CreateWithID(ctx, taskID, "", "proj", "t", entry.nodeID, nil, false)
+	must(err)
+	must(entry.store.AdoptAttempt(ctx, taskID, wt.AttemptID))
+	must(entry.store.Queue(ctx, taskID, entry.nodeID))
+	must(entry.store.Dispatch(ctx, taskID, entry.nodeID, worker.nodeID))
+
+	env, _ := bus.NewEnvelope(bus.MsgTaskResume, entry.nodeID, "m-echo",
+		bus.TaskResumePayload{TaskID: taskID, AttemptID: wt.AttemptID})
+	worker.handleResume(ctx, env)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		tk, err := entry.store.Get(ctx, taskID)
+		if err != nil {
+			t.Fatalf("entry get: %v", err)
+		}
+		if tk.State == StateFailed {
+			if !strings.Contains(tk.ResultJSON, "disk full") {
+				t.Fatalf("delegator verdict = %s, want the executor's real reason (disk full)", tk.ResultJSON)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("delegator state = %s, want failed with the executor's verdict", tk.State)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // TestHelloRejectAuthSurfaces exercises the whole rejection verdict: a peer
 // whose secret does not match gets an explicit hello_reject before the close,
 // its MaintainPeer reports ErrAuthRejected (not a dropped-link nil), and a

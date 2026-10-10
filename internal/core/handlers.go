@@ -3380,6 +3380,31 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			c.logger.Warn("cancel from result", "task", p.TaskID, "err", err)
 			transitionOK = false
 		}
+	case StateExpired:
+		// An executor copy that expired reports it so both sides land on the
+		// same verdict instead of one side waiting on a dead run.
+		reason := p.Stderr
+		if reason == "" {
+			reason = "executor task expired"
+		}
+		if err := c.store.FailFromRemote(ctx, p.TaskID, c.nodeID, reason); err != nil {
+			c.logger.Warn("expire from result", "task", p.TaskID, "err", err)
+			transitionOK = false
+		}
+	case StateRunning, StateQueued, StateDispatched, StateWaitingCtx, StateSubmitted:
+		// Informational: the executor's copy is in flight — most commonly a
+		// task_resume whose consent raced the task's own progress (the human
+		// approved on both copies). No transition: this node keeps waiting
+		// (its lease is renewed by the executor's beats), and the eventual
+		// terminal result converges both copies. Recording it keeps the
+		// timeline honest about why the wait continues.
+		c.logger.Info("in-flight executor report", "task", p.TaskID, "state", state, "from", env.From)
+		if rerr := c.store.RecordEvent(ctx, p.TaskID, EvProgress, map[string]any{
+			"note": "executor reports task " + state, "from": env.From,
+		}); rerr != nil {
+			c.logger.Debug("record in-flight report", "task", p.TaskID, "err", rerr)
+		}
+		return
 	default:
 		c.logger.Warn("unknown task_result state ignored", "task", p.TaskID, "state", state)
 		return
@@ -3643,17 +3668,17 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	if t.State != StateReview {
-		// Answer honestly instead of leaving the delegator waiting on its
-		// lease timeout: a task that moved on (timed out, cancelled, already
-		// re-run) cannot take the consent, and a failed result is the one
-		// state every delegator path already renders.
-		c.logger.Warn("resume for task not in review", "task", p.TaskID, "state", t.State)
-		result := bus.TaskResultPayload{
-			TaskID: t.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,
-			Stderr: "resume: task state is " + t.State,
-			Chain:  t.Chain,
-		}
-		c.replyResult(ctx, env, result)
+		// The consent raced the task's own progress — most commonly the
+		// human approved on BOTH copies and this one is already running.
+		// Echo the row's REAL state instead of a synthesized failure: the
+		// old "resume: task state is running" failure reply landed on the
+		// delegator as a task_result and killed its copy (and cascaded its
+		// plan) over a benign double approval. In-flight states are
+		// informational (the delegator keeps waiting; the executor's
+		// eventual result converges both copies); terminal states carry the
+		// row's stored result so the delegator lands on the same verdict.
+		c.logger.Info("resume raced task progress", "task", p.TaskID, "state", t.State)
+		c.replyResult(ctx, env, c.resumeOutcomeFor(ctx, t))
 		return
 	}
 	// Re-run asynchronously so the message loop stays responsive to
@@ -3675,19 +3700,87 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 		}
 		// ResumeApproved can return without a wire-shaped outcome when a
 		// local queue scheduler raced the just-approved task (its dispatch
-		// lost the CAS): report the row's state so the delegator's wait ends
-		// with the truth instead of an empty result it must guess at.
+		// lost the CAS): echo the row's real state so the delegator's wait
+		// continues (in-flight) or converges (terminal) instead of dying on
+		// a synthesized failure.
 		switch result.State {
-		case StateDone, StateReview, StateFailed, StateCancelled:
+		case StateDone, StateReview, StateFailed, StateCancelled, StateExpired:
 		default:
-			result = bus.TaskResultPayload{
-				TaskID: p.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,
-				Stderr: "resume: task claimed by " + final.State + " before re-run",
-				Chain:  t.Chain,
-			}
+			result = c.resumeOutcomeFor(ctx, final)
 		}
 		c.replyResult(context.WithoutCancel(ctx), env, result)
 	}()
+}
+
+// resumeOutcomeFor builds the reply a resume gets when the consent raced the
+// task's own progress on this node. The payload echoes the row's REAL state
+// and stored result: an in-flight state (running/queued/dispatched/waiting)
+// is informational — OK stays true so no delegator path renders it as a
+// failure, and handleResult keeps the delegator's copy waiting for the
+// eventual terminal result; a terminal state carries the row's verdict so
+// both copies converge on the same outcome.
+func (c *Core) resumeOutcomeFor(ctx context.Context, t Task) bus.TaskResultPayload {
+	result := bus.TaskResultPayload{
+		TaskID: t.TaskID, AttemptID: t.AttemptID, State: t.State, Chain: t.Chain,
+	}
+	if t.ResultJSON != "" {
+		_ = json.Unmarshal([]byte(t.ResultJSON), &result)
+		if result.Stderr == "" {
+			// ForceFail-style rows store {"failed": reason} — carry it.
+			var alt struct {
+				Failed string `json:"failed"`
+			}
+			if json.Unmarshal([]byte(t.ResultJSON), &alt) == nil && alt.Failed != "" {
+				result.Stderr = alt.Failed
+			}
+		}
+		result.TaskID, result.AttemptID, result.State, result.Chain =
+			t.TaskID, t.AttemptID, t.State, t.Chain
+	}
+	if result.Stderr == "" && (t.State == StateFailed || t.State == StateExpired) {
+		// A locally-failed row keeps its reason on the audit trail (Fail
+		// writes the EvResult event, not the result column); carry it so
+		// the delegator converges on the real cause.
+		if evs, err := c.store.Events(ctx, t.TaskID); err == nil {
+			for i := len(evs) - 1; i >= 0; i-- {
+				if evs[i].Type != EvResult {
+					continue
+				}
+				var d struct {
+					Failed string `json:"failed"`
+					Stderr string `json:"stderr"`
+				}
+				if json.Unmarshal([]byte(evs[i].DataJSON), &d) != nil {
+					continue
+				}
+				if d.Failed != "" {
+					result.Stderr = d.Failed
+					break
+				}
+				if d.Stderr != "" {
+					result.Stderr = d.Stderr
+					break
+				}
+			}
+		}
+	}
+	switch t.State {
+	case StateDone:
+		result.OK = true
+	case StateFailed, StateCancelled, StateExpired:
+		result.OK = false
+		if result.Stderr == "" {
+			result.Stderr = "task is " + t.State
+		}
+	default:
+		// In flight: not a verdict, just the truth about where the task is.
+		result.OK = true
+		result.ExitCode = 0
+		if result.Stderr == "" {
+			result.Stderr = "resume: task already " + t.State + " (consent raced an earlier approval)"
+		}
+	}
+	return result
 }
 
 // handleAcceptWork processes a task_resume carrying Accept: the human on the
