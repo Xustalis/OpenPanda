@@ -18,6 +18,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"gopkg.in/yaml.v3"
 )
 
 // newOpsTestRepl builds a repl backed by a real in-memory store: enough for
@@ -335,6 +336,9 @@ func TestReplMemorySetRm(t *testing.T) {
 // row pins, the stable k: identity, show form, and refusal paths.
 func TestReplNodesTrust(t *testing.T) {
 	r, _ := newOpsTestRepl(t)
+	// Redirect config writes into a temp file: the verb mirrors pins into
+	// network.peers, and an unset path would resolve to a real user config.
+	r.configPath = filepath.Join(t.TempDir(), "config.yaml")
 	if err := ledger.Register(r.db, ledger.Card{Device: "peer"}, "peer-x", 1); err != nil {
 		t.Fatal(err)
 	}
@@ -404,5 +408,51 @@ func TestReplNodesAddTrust(t *testing.T) {
 	}
 	if data, _ = os.ReadFile(r.configPath); strings.Contains(string(data), "192.168.9.10") {
 		t.Fatal("a refused tier still wrote the peer")
+	}
+}
+
+// TestReplNodesTrustKeySyncsConfig: a k: pin mirrors the tier into
+// network.peers. The k: form used to skip the file write, so a stale stricter
+// hint would re-assert on the next reload and silently defeat a raise — the
+// success message named a tier the fleet never actually applied.
+func TestReplNodesTrustKeySyncsConfig(t *testing.T) {
+	r, _ := newOpsTestRepl(t)
+	r.configPath = filepath.Join(t.TempDir(), "config.yaml")
+	// The live cfg carries the stale stricter hint, and the file mirrors it.
+	r.cfg.Network.Peers = []config.PeerEntry{{Addr: "10.7.7.7:7836", Trust: "open"}}
+	data, err := yaml.Marshal(r.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.configPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ledger.Register(r.db, ledger.Card{Device: "vps"}, "vps-row", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.db.Exec(`UPDATE employee_cache SET pub_key='dd11' WHERE id='vps-row'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.db.Exec(`INSERT INTO peer_addrs (node_id, addr, last_seen) VALUES ('vps-row','10.7.7.7:7836',1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	out := dispatchCapture(t, r, "/nodes trust k:dd11 mesh")
+	if !strings.Contains(out, "mesh") {
+		t.Fatalf("output = %q", out)
+	}
+	if lv, _ := ledger.PeerTrust(r.db, "vps-row"); lv != "" {
+		t.Fatalf("row pin = %q, want \"\" (mesh stored as absence)", lv)
+	}
+	if r.cfg.Network.Peers[0].Trust != "" {
+		t.Fatalf("live hint = %q, want cleared", r.cfg.Network.Peers[0].Trust)
+	}
+	raw, err := os.ReadFile(r.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "trust: open") {
+		t.Fatalf("stale hint survived in config:\n%s", raw)
 	}
 }

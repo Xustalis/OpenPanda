@@ -272,6 +272,13 @@ input[type='checkbox'].check,
   outline: 1px solid var(--border);
   outline-offset: 2px;
 }
+/* The select's native arrow is stripped with appearance:none, so the caret
+ * is explicit markup — keeps the control readable as a dropdown. */
+.trust-caret {
+  font-size: 0.85em;
+  opacity: 0.65;
+  pointer-events: none;
+}
 .badge.blue,
 .badge.state-running,
 .badge.state-queued {

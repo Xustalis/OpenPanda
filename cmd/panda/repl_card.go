@@ -479,7 +479,7 @@ func (r *repl) cmdNodesAdd(addr string) {
 					r.outln(err.Error())
 					return
 				}
-				trustLevel = string(lv)
+				trustLevel = trust.StoredLevel(lv)
 				i++
 				continue
 			}
@@ -489,7 +489,7 @@ func (r *repl) cmdNodesAdd(addr string) {
 					r.outln(err.Error())
 					return
 				}
-				trustLevel = string(lv)
+				trustLevel = trust.StoredLevel(lv)
 				continue
 			}
 			rest = append(rest, fields[i])

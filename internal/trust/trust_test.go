@@ -223,3 +223,18 @@ func TestApplyIsMonotone(t *testing.T) {
 		t.Fatal("clamping never restores stripped data")
 	}
 }
+
+// TestStoredLevel: mesh is the absence of a zone, so every write path stores
+// it as "" — an explicit "mesh" would leave needless tier mappings in configs
+// that never opted into trust zones (and break the scalar YAML form).
+func TestStoredLevel(t *testing.T) {
+	if got := StoredLevel(Mesh); got != "" {
+		t.Fatalf("StoredLevel(mesh) = %q, want \"\"", got)
+	}
+	if got := StoredLevel(Guarded); got != "guarded" {
+		t.Fatalf("StoredLevel(guarded) = %q", got)
+	}
+	if got := StoredLevel(Open); got != "open" {
+		t.Fatalf("StoredLevel(open) = %q", got)
+	}
+}

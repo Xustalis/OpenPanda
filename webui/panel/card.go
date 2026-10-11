@@ -394,10 +394,14 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("addr must be host:port, punch:<node-id>, or a ws(s):// URL"))
 		return
 	}
-	if _, err := trust.ParseLevel(req.Trust); err != nil {
+	lv, err := trust.ParseLevel(req.Trust)
+	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	// Mesh is the absence of a zone: an entry added without a tier (or with
+	// an explicit "mesh") keeps the pre-feature scalar form in the file.
+	storedTrust := trust.StoredLevel(lv)
 	if h.cfg == nil {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("config not loaded"))
 		return
@@ -411,7 +415,7 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 	var generated, allowCleartext bool
 	var allowFor []string
 	added := true
-	err := h.mutateCfgErr(func(c *config.Config) error {
+	err = h.mutateCfgErr(func(c *config.Config) error {
 		listenAddr = c.Network.ListenAddr
 		secret = c.Network.SharedSecret
 		allowCleartext = c.Network.AllowCleartext
@@ -428,7 +432,7 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 		if slices.ContainsFunc(peers, func(e config.PeerEntry) bool { return e.Addr == req.Addr }) {
 			added = false
 		} else {
-			peers = append(peers, config.PeerEntry{Addr: req.Addr, Trust: req.Trust})
+			peers = append(peers, config.PeerEntry{Addr: req.Addr, Trust: storedTrust})
 		}
 		if h.configPath != "" {
 			// Only a secret this call generated belongs on disk — one
@@ -516,13 +520,32 @@ func (h *handler) setNodeTrust(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	// Mesh is the absence of a zone: store "" so a row (and the config entry
+	// synced below) that names mesh keeps the pre-feature scalar form.
+	stored := trust.StoredLevel(lv)
 	if h.db == nil {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("store not available"))
 		return
 	}
+	// The local row is not a peer: admission skips self, so a pin on it is
+	// meaningless at best and a directory footgun at worst. Reject it — also
+	// in the k: form when the self row carries that key.
+	if self := localNodeID(h.cfg); self != "" {
+		isSelf := id == self
+		if !isSelf && strings.HasPrefix(id, "k:") {
+			var n int
+			_ = h.db.QueryRow(`SELECT COUNT(*) FROM employee_cache WHERE pub_key=? AND id=?`,
+				strings.TrimPrefix(id, "k:"), self).Scan(&n)
+			isSelf = n > 0
+		}
+		if isSelf {
+			writeErr(w, http.StatusBadRequest, errors.New("cannot pin a trust tier on the local node"))
+			return
+		}
+	}
 
 	if strings.HasPrefix(id, "k:") {
-		n, serr := ledger.SetPeerTrustByKey(h.db, strings.TrimPrefix(id, "k:"), string(lv))
+		n, serr := ledger.SetPeerTrustByKey(h.db, strings.TrimPrefix(id, "k:"), stored)
 		if serr != nil {
 			writeErr(w, http.StatusInternalServerError, serr)
 			return
@@ -531,7 +554,7 @@ func (h *handler) setNodeTrust(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, errors.New("no directory rows carry that key"))
 			return
 		}
-	} else if err := ledger.SetPeerTrust(h.db, id, string(lv)); err != nil {
+	} else if err := ledger.SetPeerTrust(h.db, id, stored); err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
@@ -560,8 +583,8 @@ func (h *handler) setNodeTrust(w http.ResponseWriter, r *http.Request) {
 			_ = h.mutateCfgErr(func(c *config.Config) error {
 				peers := slices.Clone(c.Network.Peers)
 				for i, e := range peers {
-					if core.NormalizeDialAddr(e.Addr) == addr && e.Trust != string(lv) {
-						peers[i].Trust = string(lv)
+					if core.NormalizeDialAddr(e.Addr) == addr && e.Trust != stored {
+						peers[i].Trust = stored
 					}
 				}
 				c.Network.Peers = peers
@@ -569,7 +592,7 @@ func (h *handler) setNodeTrust(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	writeJSON(w, map[string]string{"id": id, "trust": string(lv)})
+	writeJSON(w, map[string]string{"id": id, "trust": stored})
 }
 
 // generatePanelSecret mints the HMAC material node hellos sign with — the

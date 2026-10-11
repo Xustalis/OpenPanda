@@ -57,6 +57,17 @@ func ParseLevel(s string) (Level, error) {
 	}
 }
 
+// StoredLevel renders a level for persistence. Mesh is the absence of a
+// zone, not a zone: storing "mesh" would leave explicit tier mappings in
+// configs (and rows) that never opted into trust zones, so every write path
+// normalizes it to "" — the same value an untouched fleet already has.
+func StoredLevel(l Level) string {
+	if l == Mesh {
+		return ""
+	}
+	return string(l)
+}
+
 // rank orders the tiers for min/max comparisons; lower is more trusted.
 func (l Level) rank() int {
 	switch l {

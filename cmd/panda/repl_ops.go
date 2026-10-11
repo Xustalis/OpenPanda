@@ -681,20 +681,21 @@ func (r *repl) cmdNodesTrust(arg string) {
 		return
 	}
 	id := fields[0]
-	level := ""
+	level, haveLevel := "", false
 	if len(fields) == 2 {
 		lv, err := trust.ParseLevel(fields[1])
 		if err != nil {
 			r.outln(err.Error())
 			return
 		}
-		level = string(lv)
+		level = trust.StoredLevel(lv) // mesh stores as "" (the absence of a zone)
+		haveLevel = true
 	}
 	// A "k:"-prefixed id is the stable Ed25519 identity: pin (or report the
 	// merged pin of) every sibling row holding that key.
 	if strings.HasPrefix(id, "k:") {
 		pub := strings.TrimPrefix(id, "k:")
-		if level == "" {
+		if !haveLevel {
 			cur := ledger.PeerTrustByKey(r.db, pub)
 			if cur == "" {
 				cur = string(trust.Mesh)
@@ -711,6 +712,12 @@ func (r *repl) cmdNodesTrust(arg string) {
 			r.outln(i18n.Tf(r.loc, "cli.nodes.none", "id", id))
 			return
 		}
+		// Same config sync the id-form below does: a bound peer_addrs address
+		// that appears in network.peers carries the tier into the file, so a
+		// reload cannot re-assert a stale stricter hint over the raise.
+		_ = r.mutateConfigErr(func(c *config.Config) error {
+			return syncPeerTrustConfig(r.db, c, configWritePath(r.configPath), peerKeyRowIDs(r.db, pub), level)
+		})
 		r.outln(i18n.Tf(r.loc, "cli.nodes.trust.done", "id", id, "level", level))
 		return
 	}
@@ -730,7 +737,7 @@ func (r *repl) cmdNodesTrust(arg string) {
 		r.outln(i18n.Tf(r.loc, "cli.nodes.none", "id", id))
 		return
 	}
-	if level == "" {
+	if !haveLevel {
 		cur, _ := ledger.PeerTrust(r.db, found)
 		if cur == "" {
 			cur = string(trust.Mesh)
@@ -745,28 +752,9 @@ func (r *repl) cmdNodesTrust(arg string) {
 	// Same config sync the CLI verb does: a bound peer_addrs address that
 	// appears in network.peers carries the tier into the file, so SIGHUP
 	// reload resurrects nothing stale.
-	if bindings, berr := ledger.PeerAddrBindings(r.db); berr == nil {
-		for addr, boundID := range bindings {
-			if boundID != found {
-				continue
-			}
-			_ = r.mutateConfigErr(func(c *config.Config) error {
-				changed := false
-				for i, e := range c.Network.Peers {
-					if core.NormalizeDialAddr(e.Addr) == addr && e.Trust != level {
-						c.Network.Peers[i].Trust = level
-						changed = true
-					}
-				}
-				if !changed {
-					return nil
-				}
-				return config.UpdateNetworkSection(configWritePath(r.configPath), config.NetworkConfig{
-					Peers: c.Network.Peers,
-				})
-			})
-		}
-	}
+	_ = r.mutateConfigErr(func(c *config.Config) error {
+		return syncPeerTrustConfig(r.db, c, configWritePath(r.configPath), map[string]bool{found: true}, level)
+	})
 	r.outln(i18n.Tf(r.loc, "cli.nodes.trust.done", "id", found, "level", level))
 }
 

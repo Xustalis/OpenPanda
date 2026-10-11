@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"gopkg.in/yaml.v3"
 )
@@ -352,6 +353,19 @@ func TestNodesAddTrustField(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("bad trust status = %d, want 400", code)
 	}
+
+	// An explicit "mesh" is the absence of a zone: the entry keeps the
+	// pre-feature scalar form (no trust key).
+	code, out = doJSON(t, h, jsonReq(http.MethodPost, "/api/nodes/add",
+		`{"addr":"192.168.1.32:7836","trust":"mesh"}`))
+	if code != http.StatusOK || out["added"] != true {
+		t.Fatalf("mesh add status = %d body %v", code, out)
+	}
+	if data, err = os.ReadFile(configPath); err != nil {
+		t.Fatal(err)
+	} else if strings.Contains(string(data), "trust: mesh") {
+		t.Fatalf("mesh add wrote an explicit tier:\n%s", data)
+	}
 }
 
 // TestSetNodeTrustAPI: POST /api/nodes/{id}/trust is the console twin of
@@ -425,5 +439,40 @@ func TestSetNodeTrustAPI(t *testing.T) {
 	}
 	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/nodes/peer-a/trust", `{"trust":"besties"}`)); code != http.StatusBadRequest {
 		t.Fatalf("bad level status = %d, want 400", code)
+	}
+
+	// "mesh" is the absence of a zone: it stores as "" — the row and the
+	// config entry both drop the explicit tier, keeping the scalar form.
+	code, out = doJSON(t, h, jsonReq(http.MethodPost, "/api/nodes/peer-a/trust", `{"trust":"mesh"}`))
+	if code != http.StatusOK || out["trust"] != "" {
+		t.Fatalf("mesh normalize status = %d body %v", code, out)
+	}
+	if lv, _ := ledger.PeerTrust(db, "peer-a"); lv != "" {
+		t.Fatalf("mesh stored as %q, want \"\"", lv)
+	}
+	if data, err = os.ReadFile(configPath); err != nil {
+		t.Fatal(err)
+	} else if strings.Contains(string(data), "trust: mesh") {
+		t.Fatalf("mesh left an explicit tier in config:\n%s", data)
+	}
+
+	// The local row is not a peer: pinning it — directly or through its key
+	// — is a 400, not a silent write.
+	cfg.Node = config.NodeConfig{Name: "self-node", Kind: "desktop"}
+	selfID := core.RuntimeNodeID("self-node", "desktop", cfg.Node.EffectiveIdentity())
+	if err := ledger.Register(db, ledger.Card{Device: "self"}, selfID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE employee_cache SET pub_key='ee22' WHERE id=?`, selfID); err != nil {
+		t.Fatal(err)
+	}
+	if code, out = doJSON(t, h, jsonReq(http.MethodPost, "/api/nodes/"+selfID+"/trust", `{"trust":"guarded"}`)); code != http.StatusBadRequest {
+		t.Fatalf("self pin status = %d body %v, want 400", code, out)
+	}
+	if code, _ = doJSON(t, h, jsonReq(http.MethodPost, "/api/nodes/k:ee22/trust", `{"trust":"guarded"}`)); code != http.StatusBadRequest {
+		t.Fatalf("self k: pin status = %d, want 400", code)
+	}
+	if lv, _ := ledger.PeerTrust(db, selfID); lv != "" {
+		t.Fatalf("self row was pinned anyway: %q", lv)
 	}
 }

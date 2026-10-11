@@ -193,17 +193,20 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 			c.audit(ctx, t.TaskID, "consent:forged", "", "rejected",
 				"invalid Ed25519 consent grant on delegate")
 		case c.acceptPolicyFor(c.admissionTier(ctx, chain, env.From)).ForeignConsent == trust.ConsentStrip:
-			// A non-mesh origin's consent is genuine but foreign: their user
+			// A sub-mesh path's consent is genuine but foreign: their user
 			// approving the intent cannot silently stand in for THIS node's
-			// operator approving an irreversible step on this machine. Drop
-			// the grant so the task lands under the restricted tool face and
-			// any tier-2 step parks for local approval — "their yes ≠ our
-			// yes". Set accept.<tier>.foreign_consent: honor for the
-			// same-owner case (an own VPS on an untrusted segment).
+			// operator approving an irreversible step on this machine. The
+			// tier here is the least-trusting hop of the whole delegation
+			// chain, not just the origin — a guarded relay in the path is
+			// enough to strip. Drop the grant so the task lands under the
+			// restricted tool face and any tier-2 step parks for local
+			// approval — "their yes ≠ our yes". Set
+			// accept.<tier>.foreign_consent: honor for the same-owner case
+			// (an own VPS on an untrusted segment).
 			c.logger.Info("foreign consent grant stripped by trust policy",
 				"task", t.TaskID, "from", env.From)
 			c.audit(ctx, t.TaskID, "consent:stripped", env.From, "applied",
-				"origin tier's accept policy strips foreign tier-2 consent")
+				"delegation path's least-trusting tier strips foreign tier-2 consent")
 		default:
 			if err := c.store.SetAuthorizedGrant(ctx, t.TaskID, p.AuthSig, p.AuthPub, p.AuthTs); err != nil {
 				// Recorded, not fatal. The task row already exists, so returning

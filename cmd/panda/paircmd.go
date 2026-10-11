@@ -95,6 +95,9 @@ func runNodesAdd(args []string) {
 // "linked" or "unreachable" — not "restart and hope". trustLevel is the
 // optional trust-zone tier to pin on the new peer entry ("" = mesh).
 func admitPeerAddr(configPath string, cfg *config.Config, addr, trustLevel string) {
+	if lv, err := trust.ParseLevel(trustLevel); err == nil {
+		trustLevel = trust.StoredLevel(lv) // mesh stores as "" (scalar form)
+	}
 	secret := cfg.Network.SharedSecret
 	generated := false
 	if secret == "" {
@@ -381,8 +384,12 @@ func runPair(args []string) {
 	trustLevel := fs.String("trust", "", "trust level pinned on the joined peer (mesh|guarded|open; default mesh)")
 	fs.Parse(reorderFlags(args, commonValueFlags))
 	rest := fs.Args()
-	if _, err := trust.ParseLevel(*trustLevel); err != nil {
+	if lv, err := trust.ParseLevel(*trustLevel); err != nil {
 		fatal("bad trust level", err)
+	} else {
+		// Mesh stores as "" (the absence of a zone), so `--trust mesh` leaves
+		// the config entry in its pre-feature scalar form.
+		*trustLevel = trust.StoredLevel(lv)
 	}
 
 	// Legacy manual path stays: --secret/--peer is still the way to join a
@@ -490,6 +497,60 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// peerKeyRowIDs returns the directory row ids carrying a proven Ed25519 key —
+// the sibling set a "k:" trust pin applies to.
+func peerKeyRowIDs(db *sql.DB, pubKeyHex string) map[string]bool {
+	ids := map[string]bool{}
+	if db == nil || pubKeyHex == "" {
+		return ids
+	}
+	rows, err := db.Query(`SELECT id FROM employee_cache WHERE pub_key=?`, pubKeyHex)
+	if err != nil {
+		return ids
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sid string
+		if rows.Scan(&sid) == nil {
+			ids[sid] = true
+		}
+	}
+	return ids
+}
+
+// syncPeerTrustConfig mirrors a trust pin into network.peers: every
+// configured entry whose dial address is bound (peer_addrs) to one of the
+// given directory rows gets the tier written. The addr hint and the row pin
+// are two writes of the same assertion — without the file write, a SIGHUP
+// reload re-asserts the stale hint and the least-trusting merge silently
+// defeats a raise. The web console's setNodeTrust performs the same
+// synchronization.
+func syncPeerTrustConfig(db *sql.DB, cfg *config.Config, configPath string, ids map[string]bool, level string) error {
+	if cfg == nil || len(ids) == 0 {
+		return nil
+	}
+	bindings, err := ledger.PeerAddrBindings(db)
+	if err != nil {
+		return nil // no bindings recorded: nothing to mirror
+	}
+	changed := false
+	for addr, id := range bindings {
+		if !ids[id] {
+			continue
+		}
+		for i, e := range cfg.Network.Peers {
+			if core.NormalizeDialAddr(e.Addr) == addr && e.Trust != level {
+				cfg.Network.Peers[i].Trust = level
+				changed = true
+			}
+		}
+	}
+	if !changed || configPath == "" {
+		return nil
+	}
+	return config.UpdateNetworkSection(configPath, config.NetworkConfig{Peers: cfg.Network.Peers})
+}
+
 // runNodesTrust implements `panda nodes trust <id> [level]` — the operator's
 // hand on the trust-zone dial (experimental). With no level it reports the
 // row's pinned tier (empty = mesh). With one it pins it: the store write is
@@ -515,7 +576,7 @@ func runNodesTrust(args []string) {
 		if err != nil {
 			fatal("bad trust level", err)
 		}
-		level = string(lv)
+		level = trust.StoredLevel(lv)
 	}
 
 	cfg, err := config.Load(*configPath)
@@ -548,6 +609,13 @@ func runNodesTrust(args []string) {
 		}
 		if n == 0 {
 			fatal("trust node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.none", "id", id)))
+		}
+		// Mirror the pin into network.peers for every sibling row's bound
+		// address — same synchronization the id-form below (and the web
+		// console) performs. Without it a stale stricter hint re-asserts on
+		// the next SIGHUP and silently defeats a raise.
+		if uerr := syncPeerTrustConfig(db, cfg, configWritePath(*configPath), peerKeyRowIDs(db, pub), level); uerr != nil {
+			fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.nodes.trust.cfgfail", "err", uerr.Error()))
 		}
 		fmt.Println(i18n.Tf(loc, "cli.nodes.trust.done", "id", id, "level", level))
 		notifyDaemonMeshTo(os.Stdout)
@@ -586,27 +654,8 @@ func runNodesTrust(args []string) {
 	// address the config already knows: the addr hint and the row pin are
 	// two writes of the same assertion, and a stale hint would resurrect a
 	// cleared tier on the next ApplyNetworkConfig.
-	if bindings, berr := ledger.PeerAddrBindings(db); berr == nil {
-		for addr, boundID := range bindings {
-			if boundID != found {
-				continue
-			}
-			changed := false
-			peers := slices.Clone(cfg.Network.Peers)
-			for i, e := range peers {
-				if core.NormalizeDialAddr(e.Addr) == addr && e.Trust != level {
-					peers[i].Trust = level
-					changed = true
-				}
-			}
-			if changed {
-				if uerr := config.UpdateNetworkSection(configWritePath(*configPath), config.NetworkConfig{
-					Peers: peers,
-				}); uerr != nil {
-					fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.nodes.trust.cfgfail", "err", uerr.Error()))
-				}
-			}
-		}
+	if uerr := syncPeerTrustConfig(db, cfg, configWritePath(*configPath), map[string]bool{found: true}, level); uerr != nil {
+		fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.nodes.trust.cfgfail", "err", uerr.Error()))
 	}
 	fmt.Println(i18n.Tf(loc, "cli.nodes.trust.done", "id", found, "level", level))
 	notifyDaemonMeshTo(os.Stdout)

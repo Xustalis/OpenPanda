@@ -351,6 +351,7 @@ function NodeCard({
               <option value="guarded">guarded</option>
               <option value="open">open</option>
             </select>
+            <span class="trust-caret" aria-hidden="true">▾</span>
           </label>
         )}
       </div>

@@ -497,6 +497,7 @@ function CardRawSection({
  *  never the shared secret itself (only the file it lives in). */
 export function AddDeviceCard({ onAdded }: { onAdded(): void }) {
   const [addr, setAddr] = useState('')
+  const [trust, setTrust] = useState('mesh')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<NodesAddResult | null>(null)
 
@@ -507,7 +508,7 @@ export function AddDeviceCard({ onAdded }: { onAdded(): void }) {
     if (!a) return
     setBusy(true)
     try {
-      setResult(await api.addNode(a))
+      setResult(await api.addNode(a, trust))
       setAddr('')
       onAdded()
     } catch (err) {
@@ -528,6 +529,19 @@ export function AddDeviceCard({ onAdded }: { onAdded(): void }) {
           value={addr}
           onInput={(e) => setAddr((e.target as HTMLInputElement).value)}
         />
+        <label class="badge" title={t('nodes.trust')}>
+          {t('nodes.trust')}:&nbsp;
+          <select
+            class={trust === 'open' ? 'trust-sel open' : 'trust-sel'}
+            value={trust}
+            onChange={(e) => setTrust((e.target as HTMLSelectElement).value)}
+          >
+            <option value="mesh">mesh</option>
+            <option value="guarded">guarded</option>
+            <option value="open">open</option>
+          </select>
+          <span class="trust-caret" aria-hidden="true">▾</span>
+        </label>
         <button class="btn" type="submit" disabled={busy || !addr.trim()}>
           {busy ? t('common.loading') : t('nodes.addDevice.submit')}
         </button>
