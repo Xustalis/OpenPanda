@@ -109,7 +109,13 @@ network:
   # and admits work it originates under the accept policy below; open never
   # receives a delegate and its pushes are refused until the offer/bid
   # market exists. `panda nodes trust <id> <level>` pins a tier on a known
-  # node; a peer key change demotes an asserted mesh back to guarded.
+  # node (`k:<pubkey>` pins the stable identity across id churn); a peer
+  # key change demotes an asserted mesh back to guarded. Other entry
+  # points: `panda nodes add/admit --trust`, `panda pair --trust`,
+  # `/nodes ...` in the REPL, and the trust selector on the console's
+  # nodes page. An addr-level hint binds once this node's OWN dial hello
+  # records the address→identity mapping — a configured peer that only
+  # ever dials IN never binds its hint, so pin such rows via `nodes trust`.
   # trust:
   #   send:
   #     guarded:                 # outbound ceiling toward guarded peers
@@ -131,6 +137,15 @@ network:
   #       policy_llm: "off"        # off | shadow | enforce — optional
   #                                # zero-tool classifier; safety stays
   #                                # deterministic whatever it says
+  #       foreign_consent: "strip" # strip | honor — whether a NON-mesh
+  #                                # origin's tier-2 consent may substitute
+  #                                # for THIS node's approval. strip
+  #                                # (default) drops it: the task runs on
+  #                                # the restricted tool face and its
+  #                                # irreversibles land in the local review
+  #                                # queue — their yes is not our yes.
+  #                                # honor for the same-owner case (your
+  #                                # own VPS on an untrusted segment).
 
   # ── DTN contact plan: scheduled transmission windows ─────────────────────
   # For links that are predictably up only at times — a nightly batch host, a

@@ -148,6 +148,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("PUT /api/projects/{name}/memory", h.putProjectMemory)
 	mux.HandleFunc("GET /api/nodes", h.listNodes)
 	mux.HandleFunc("POST /api/nodes/add", h.addNode)
+	mux.HandleFunc("POST /api/nodes/{id}/trust", h.setNodeTrust)
 	mux.HandleFunc("DELETE /api/nodes/{id}", h.removeNode)
 	// Bluetooth-style pairing — the web twin of `panda pair` /
 	// `panda pair <device>` / `panda pair confirm` (see pair.go).

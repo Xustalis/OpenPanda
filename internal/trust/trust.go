@@ -115,9 +115,18 @@ type AcceptPolicy struct {
 	// classifier only ever judges a productivity question (is this work we
 	// want); safety stays with the deterministic tier gates.
 	PolicyLLM string
+	// ForeignConsent decides whether the ORIGIN's tier-2 consent grant may
+	// substitute for this node's own approval: "honor" adopts a verified
+	// grant as today, "strip" discards it so the work lands under the
+	// restricted tool face and any irreversible step parks for THIS node's
+	// operator. Stripping is the default for non-mesh tiers — a semi-trusted
+	// peer's user saying yes must not silently equal this node's user saying
+	// yes — while "honor" exists for the same-owner case (an own VPS on an
+	// untrusted segment, where the consent is the same human's anyway).
+	ForeignConsent string
 }
 
-// Accept modes and the policy-LLM settings.
+// Accept modes, the policy-LLM settings, and the foreign-consent handling.
 const (
 	AcceptAuto   = "auto"
 	AcceptReview = "review"
@@ -126,6 +135,9 @@ const (
 	LLMOff     = "off"
 	LLMShadow  = "shadow"
 	LLMEnforce = "enforce"
+
+	ConsentHonor = "honor"
+	ConsentStrip = "strip"
 )
 
 // contextRank orders the exposure levels of context_level.
@@ -172,11 +184,11 @@ func DefaultSend(l Level) SendPolicy {
 func DefaultAccept(l Level) AcceptPolicy {
 	switch l {
 	case Guarded:
-		return AcceptPolicy{DelegateOrigin: true, Mode: AcceptAuto, PolicyLLM: LLMOff}
+		return AcceptPolicy{DelegateOrigin: true, Mode: AcceptAuto, PolicyLLM: LLMOff, ForeignConsent: ConsentStrip}
 	case Open:
-		return AcceptPolicy{DelegateOrigin: false, Mode: AcceptRefuse, PolicyLLM: LLMOff}
+		return AcceptPolicy{DelegateOrigin: false, Mode: AcceptRefuse, PolicyLLM: LLMOff, ForeignConsent: ConsentStrip}
 	default:
-		return AcceptPolicy{DelegateOrigin: true, Mode: AcceptAuto, PolicyLLM: LLMOff}
+		return AcceptPolicy{DelegateOrigin: true, Mode: AcceptAuto, PolicyLLM: LLMOff, ForeignConsent: ConsentHonor}
 	}
 }
 
@@ -199,8 +211,13 @@ type Needs struct {
 // originating TaskInput is still in scope.
 func NeedsOf(p bus.TaskDelegatePayload) Needs {
 	return Needs{
-		Pack:        p.Project != "" || len(p.ProjectPack) > 0,
-		Inputs:      len(p.Inputs) > 0 || len(p.BundledArtifacts) > 0,
+		Pack: p.Project != "" || len(p.ProjectPack) > 0,
+		// A "file" task whose tree has not (yet) been packed into Inputs still
+		// needs inputs rights — its content rides the context channel, and the
+		// store-side derivations (needsForTask/needsForInput) already treat
+		// context_type=file as an input need. Counting it here keeps the
+		// dispatch path and the re-route path on the same verdict.
+		Inputs:      len(p.Inputs) > 0 || len(p.BundledArtifacts) > 0 || p.ContextType == "file",
 		FullContext: contextRank(p.ContextLevel) >= 2,
 		Consent:     p.Authorized,
 	}
@@ -232,6 +249,16 @@ func (p SendPolicy) ExecutorOK(n Needs) bool {
 // only on this authenticated, authorized request); it bounds nothing and
 // never claimed to.
 func (p SendPolicy) MayHoldContext() bool { return contextRank(p.MaxContext) > 0 }
+
+// MayHoldInputs is the pull-side counterpart of Inputs: a peer whose ceiling
+// would strip artifact references from the delegate must not fetch the same
+// bytes through artifact_fetch either — participation in the task is what
+// the pull authorization checks, so without this gate the Inputs ceiling is
+// an audit note rather than a bound. It is only consulted on the
+// input-direction pull (executor or a downstream hop fetching work material);
+// an upstream peer pulling the task's own outputs back is reading its own
+// work product and is governed by participation alone.
+func (p SendPolicy) MayHoldInputs() bool { return p.Inputs }
 
 // ClampApplied notes what Apply actually removed, for the audit trail.
 type ClampApplied struct {

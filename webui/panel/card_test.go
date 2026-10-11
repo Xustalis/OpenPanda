@@ -327,3 +327,103 @@ func authedReqWriter(t *testing.T, h http.Handler, req *http.Request) *httptest.
 	h.ServeHTTP(rr, req)
 	return rr
 }
+
+// TestNodesAddTrustField: the console's add form can pin a tier at write
+// time (experimental trust zones), mirroring `panda nodes add --trust`.
+func TestNodesAddTrustField(t *testing.T) {
+	h, _, configPath, _ := newCardPanel(t)
+
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/nodes/add",
+		`{"addr":"192.168.1.30:7836","trust":"guarded"}`))
+	if code != http.StatusOK || out["added"] != true {
+		t.Fatalf("trusted add status = %d body %v", code, out)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "trust: guarded") {
+		t.Fatalf("tier not written to config:\n%s", data)
+	}
+
+	// A bogus tier is a 400 — never a silent mesh.
+	code, _ = doJSON(t, h, jsonReq(http.MethodPost, "/api/nodes/add",
+		`{"addr":"192.168.1.31:7836","trust":"besties"}`))
+	if code != http.StatusBadRequest {
+		t.Fatalf("bad trust status = %d, want 400", code)
+	}
+}
+
+// TestSetNodeTrustAPI: POST /api/nodes/{id}/trust is the console twin of
+// `panda nodes trust` — row pin live, configured peer entry kept in step,
+// k: identity pins all sibling rows.
+func TestSetNodeTrustAPI(t *testing.T) {
+	db := newTestDB(t)
+	if err := ledger.Register(db, ledger.Card{Device: "a"}, "peer-a", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Register(db, ledger.Card{Device: "b"}, "peer-b", 1); err != nil {
+		t.Fatal(err)
+	}
+	// peer-b shares peer-a's proven key: a k: pin must stamp both rows.
+	if _, err := db.Exec(`UPDATE employee_cache SET pub_key='aa11' WHERE id IN ('peer-a','peer-b')`); err != nil {
+		t.Fatal(err)
+	}
+
+	tmp := t.TempDir()
+	cfg := config.Default()
+	cfg.Storage.DBPath = filepath.Join(tmp, "p.db")
+	cfg.Network.Peers = []config.PeerEntry{{Addr: "192.168.1.40:7836"}}
+	configPath := filepath.Join(tmp, "config.yaml")
+	if data, err := yaml.Marshal(cfg); err != nil {
+		t.Fatal(err)
+	} else if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// peer-a's configured address is already bound to its identity the way
+	// a signed hello binds it in production.
+	if _, err := db.Exec(`INSERT INTO peer_addrs (node_id, addr, last_seen) VALUES ('peer-a','192.168.1.40:7836',1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	h := New(Deps{Store: newTestStore(t), DB: db, Cfg: cfg,
+		ConfigPath: configPath, StaticDir: t.TempDir(), Token: testToken})
+
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/nodes/peer-a/trust", `{"trust":"guarded"}`))
+	if code != http.StatusOK || out["trust"] != "guarded" {
+		t.Fatalf("set trust status = %d body %v", code, out)
+	}
+	if lv, _ := ledger.PeerTrust(db, "peer-a"); lv != "guarded" {
+		t.Fatalf("row pin = %q, want guarded", lv)
+	}
+	// The configured peer entry moved in step — a reload cannot resurrect mesh.
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "trust: guarded") {
+		t.Fatalf("config peer entry not synced:\n%s", data)
+	}
+
+	// k:-identity pins every row sharing the key.
+	code, _ = doJSON(t, h, jsonReq(http.MethodPost, "/api/nodes/k:aa11/trust", `{"trust":"open"}`))
+	if code != http.StatusOK {
+		t.Fatalf("k: pin status = %d", code)
+	}
+	for _, id := range []string{"peer-a", "peer-b"} {
+		if lv, _ := ledger.PeerTrust(db, id); lv != "open" {
+			t.Fatalf("%s pin = %q, want open", id, lv)
+		}
+	}
+
+	// Unknown id → 404; unknown key → 404; garbage level → 400.
+	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/nodes/ghost/trust", `{"trust":"open"}`)); code != http.StatusNotFound {
+		t.Fatalf("ghost status = %d, want 404", code)
+	}
+	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/nodes/k:ffff/trust", `{"trust":"open"}`)); code != http.StatusNotFound {
+		t.Fatalf("ghost key status = %d, want 404", code)
+	}
+	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/nodes/peer-a/trust", `{"trust":"besties"}`)); code != http.StatusBadRequest {
+		t.Fatalf("bad level status = %d, want 400", code)
+	}
+}

@@ -109,6 +109,14 @@ func TestNeedsOf(t *testing.T) {
 	if n.Pack || n.Inputs || n.FullContext || n.Consent {
 		t.Fatalf("bare pointer delegate needs = %+v, want all false", n)
 	}
+	// A file-context task needs its worktree even when Inputs was never
+	// populated on this path — the store- and submit-side derivations
+	// (needsForTask/needsForInput) already say so, and NeedsOf must agree
+	// or one gate passes what another refuses.
+	n = NeedsOf(bus.TaskDelegatePayload{ContextType: "file"})
+	if !n.Inputs {
+		t.Fatalf("file-context delegate needs = %+v, want Inputs true", n)
+	}
 }
 
 func TestExecutorOK(t *testing.T) {

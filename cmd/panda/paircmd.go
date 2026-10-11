@@ -378,14 +378,18 @@ func runPair(args []string) {
 	peer := fs.String("peer", "", "the inviting node's host:port to dial")
 	listen := fs.String("listen", "", "this node's listen address (default: keep current)")
 	yes := fs.Bool("yes", false, "skip the interactive code-compare prompt (confirm only)")
+	trustLevel := fs.String("trust", "", "trust level pinned on the joined peer (mesh|guarded|open; default mesh)")
 	fs.Parse(reorderFlags(args, commonValueFlags))
 	rest := fs.Args()
+	if _, err := trust.ParseLevel(*trustLevel); err != nil {
+		fatal("bad trust level", err)
+	}
 
 	// Legacy manual path stays: --secret/--peer is still the way to join a
 	// machine you can only reach over SSH, where no screen exists to
 	// compare a code against.
 	if *secret != "" && *peer != "" {
-		runPairLegacy(*configPath, *secret, *peer, *listen)
+		runPairLegacy(*configPath, *secret, *peer, *listen, *trustLevel)
 		return
 	}
 	if *secret != "" || *peer != "" || *listen != "" {
@@ -403,14 +407,14 @@ func runPair(args []string) {
 	case "reject":
 		pairAnswer(os.Stdout, *configPath, rest[1:], core.PairStateRejected, true)
 	default:
-		pairInitiate(os.Stdout, *configPath, rest[0])
+		pairInitiate(os.Stdout, *configPath, rest[0], *trustLevel)
 	}
 }
 
 // runPairLegacy is the pre-discovery join: adopt a hand-copied secret +
 // peer address. Kept verbatim — nothing about it becomes wrong just
 // because a better front door now exists.
-func runPairLegacy(configPath, secret, peer, listen string) {
+func runPairLegacy(configPath, secret, peer, listen, trustLevel string) {
 	if err := config.ValidatePeerAddr(peer); err != nil {
 		fatal("bad address", fmt.Errorf("%s", i18n.Tf(i18n.Detect(), "cli.nodes.badaddr", "addr", peer)))
 	}
@@ -420,7 +424,7 @@ func runPairLegacy(configPath, secret, peer, listen string) {
 	}
 	peers := slices.Clone(cfg.Network.Peers)
 	if !slices.ContainsFunc(peers, func(p config.PeerEntry) bool { return p.Addr == peer }) {
-		peers = append(peers, config.PeerEntry{Addr: peer})
+		peers = append(peers, config.PeerEntry{Addr: peer, Trust: trustLevel})
 	}
 	if err := config.UpdateNetworkSection(configWritePath(configPath), config.NetworkConfig{
 		ListenAddr:   listen,
@@ -723,7 +727,7 @@ func pairList(w io.Writer, configPath string) {
 // display the code, and wait out the responder's confirmation. On success
 // the delivered secret + peer address land in config and the local daemon
 // is nudged to dial — by the time the command exits, the join is real.
-func pairInitiate(w io.Writer, configPath, target string) {
+func pairInitiate(w io.Writer, configPath, target, trustLevel string) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		fatal("load config", err)
@@ -785,16 +789,16 @@ func pairInitiate(w io.Writer, configPath, target string) {
 			fatal("waiting", fmt.Errorf("%s — %s", err, i18n.T(loc, "cli.pair.daemonhint")))
 		}
 	}
-	adoptPairedSecret(w, loc, configPath, cfg, secret, dialAddr)
+	adoptPairedSecret(w, loc, configPath, cfg, secret, dialAddr, trustLevel)
 }
 
 // adoptPairedSecret lands the join on the initiator: persist the delivered
-// secret + responder address, nudge the daemon, and run the same link
-// self-check the manual path does.
-func adoptPairedSecret(w io.Writer, loc i18n.Locale, configPath string, cfg *config.Config, secret, peerAddr string) {
+// secret + responder address (with the --trust pin, when given), nudge the
+// daemon, and run the same link self-check the manual path does.
+func adoptPairedSecret(w io.Writer, loc i18n.Locale, configPath string, cfg *config.Config, secret, peerAddr, trustLevel string) {
 	peers := slices.Clone(cfg.Network.Peers)
 	if !slices.ContainsFunc(peers, func(e config.PeerEntry) bool { return e.Addr == peerAddr }) {
-		peers = append(peers, config.PeerEntry{Addr: peerAddr})
+		peers = append(peers, config.PeerEntry{Addr: peerAddr, Trust: trustLevel})
 	}
 	if err := config.UpdateNetworkSection(configWritePath(configPath), config.NetworkConfig{
 		SharedSecret: secret,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -276,5 +277,62 @@ func TestAdmissionReviewIgnoresWireResume(t *testing.T) {
 	}
 	if final.State != StateDone || !res.OK {
 		t.Fatalf("approved task finished as %s (ok=%v), want done", final.State, res.OK)
+	}
+}
+
+// TestForeignConsentStripE2E: a guarded origin's valid tier-2 consent grant
+// does not buy the executor's unrestricted tool face — the accept policy's
+// foreign_consent decides. Default (strip) drops the grant so the row stays
+// unauthorized (restricted face, irreversibles park locally); honor adopts
+// it for the same-owner deployment the knob exists for.
+func TestForeignConsentStripE2E(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	entry := newCoreWithNative(t, "entry-fc", "127.0.0.1:18813",
+		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"entry"}})
+	worker := newCoreWithNative(t, "worker-fc", "127.0.0.1:18814",
+		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"worker"}})
+	startPair(t, ctx, entry, worker, "127.0.0.1:18813", "127.0.0.1:18814")
+
+	if err := ledger.SetPeerTrust(worker.db, "entry-fc", "guarded"); err != nil {
+		t.Fatalf("pin guarded: %v", err)
+	}
+	// accept.auto admits the work itself; foreign_consent is unset, which
+	// resolves to the built-in strip.
+	worker.SetTrustConfig(testTrustConfig("auto", "off"))
+
+	push := func(taskID string) {
+		t.Helper()
+		p := bus.TaskDelegatePayload{
+			TaskID: taskID, Title: "t", Intent: "x",
+			Requires: []string{"sys:info"}, Authorized: true,
+			Chain: []string{"entry-fc"},
+		}
+		entry.signConsentGrant(&p) // a REAL origin-signed grant — valid, but foreign
+		env, err := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-fc", "m-"+taskID, p)
+		if err != nil {
+			t.Fatalf("envelope: %v", err)
+		}
+		if err := entry.sendTo("worker-fc", env); err != nil {
+			t.Fatalf("send: %v", err)
+		}
+	}
+
+	push("fc-strip")
+	tk := waitTaskState(t, worker, "fc-strip", StateDone)
+	if tk.Authorized {
+		t.Fatal("a stripped foreign grant left the row authorized")
+	}
+
+	// Same origin, honor policy: the grant is adopted and the row runs
+	// authorized — the knob for "their user IS our user".
+	worker.SetTrustConfig(config.TrustConfig{Accept: config.TrustAcceptConfig{
+		Guarded: config.TrustAcceptPolicy{Mode: "auto", ForeignConsent: "honor"},
+	}})
+	push("fc-honor")
+	tk = waitTaskState(t, worker, "fc-honor", StateDone)
+	if !tk.Authorized {
+		t.Fatal("an honored foreign grant was not adopted")
 	}
 }

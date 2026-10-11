@@ -18,6 +18,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/trust"
 )
 
 // The card API — the web console's read/edit path for this node's
@@ -349,7 +350,8 @@ func (h *handler) cardPath() string {
 
 // nodesAddRequest is the body of POST /api/nodes/add.
 type nodesAddRequest struct {
-	Addr string `json:"addr"`
+	Addr  string `json:"addr"`
+	Trust string `json:"trust,omitempty"`
 }
 
 // nodesAddResult reports what `panda nodes add` prints at the CLI: whether
@@ -392,6 +394,10 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("addr must be host:port, punch:<node-id>, or a ws(s):// URL"))
 		return
 	}
+	if _, err := trust.ParseLevel(req.Trust); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
 	if h.cfg == nil {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("config not loaded"))
 		return
@@ -422,7 +428,7 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 		if slices.ContainsFunc(peers, func(e config.PeerEntry) bool { return e.Addr == req.Addr }) {
 			added = false
 		} else {
-			peers = append(peers, config.PeerEntry{Addr: req.Addr})
+			peers = append(peers, config.PeerEntry{Addr: req.Addr, Trust: req.Trust})
 		}
 		if h.configPath != "" {
 			// Only a secret this call generated belongs on disk — one
@@ -485,6 +491,85 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 			"on the other machine: panda pair --secret <secret> --peer " + listen,
 		},
 	})
+}
+
+// nodeTrustRequest is the body of POST /api/nodes/{id}/trust.
+type nodeTrustRequest struct {
+	Trust string `json:"trust"`
+}
+
+// setNodeTrust serves POST /api/nodes/{id}/trust — the console twin of
+// `panda nodes trust <id> <level>`: pin the tier on the directory row (live
+// — the daemon reads it on every admission/exposure decision) and keep the
+// configured peer entry in step so a config reload cannot resurrect a
+// cleared tier. A "k:"-prefixed id pins every sibling row sharing that
+// Ed25519 identity, mirroring the CLI's stable-identity form.
+func (h *handler) setNodeTrust(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req nodeTrustRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	lv, err := trust.ParseLevel(req.Trust)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if h.db == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("store not available"))
+		return
+	}
+
+	if strings.HasPrefix(id, "k:") {
+		n, serr := ledger.SetPeerTrustByKey(h.db, strings.TrimPrefix(id, "k:"), string(lv))
+		if serr != nil {
+			writeErr(w, http.StatusInternalServerError, serr)
+			return
+		}
+		if n == 0 {
+			writeErr(w, http.StatusNotFound, errors.New("no directory rows carry that key"))
+			return
+		}
+	} else if err := ledger.SetPeerTrust(h.db, id, string(lv)); err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+
+	// Keep the configured peer entry in step when the pinned identity maps
+	// to a dial address the config already knows: the addr hint and the row
+	// pin are two writes of the same assertion, and a stale hint would
+	// resurrect the tier on the next ApplyNetworkConfig.
+	if bindings, berr := ledger.PeerAddrBindings(h.db); berr == nil && h.configPath != "" {
+		wanted := map[string]bool{id: true}
+		if strings.HasPrefix(id, "k:") {
+			if rows, qerr := h.db.Query(`SELECT id FROM employee_cache WHERE pub_key=?`, strings.TrimPrefix(id, "k:")); qerr == nil {
+				for rows.Next() {
+					var sid string
+					if rows.Scan(&sid) == nil {
+						wanted[sid] = true
+					}
+				}
+				rows.Close()
+			}
+		}
+		for addr, boundID := range bindings {
+			if !wanted[boundID] {
+				continue
+			}
+			_ = h.mutateCfgErr(func(c *config.Config) error {
+				peers := slices.Clone(c.Network.Peers)
+				for i, e := range peers {
+					if core.NormalizeDialAddr(e.Addr) == addr && e.Trust != string(lv) {
+						peers[i].Trust = string(lv)
+					}
+				}
+				c.Network.Peers = peers
+				return config.UpdateNetworkSection(h.configPath, config.NetworkConfig{Peers: peers})
+			})
+		}
+	}
+	writeJSON(w, map[string]string{"id": id, "trust": string(lv)})
 }
 
 // generatePanelSecret mints the HMAC material node hellos sign with — the

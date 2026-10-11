@@ -281,9 +281,25 @@ function NodeCard({
   const [open, setOpen] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [removeErr, setRemoveErr] = useState('')
+  const [trustBusy, setTrustBusy] = useState(false)
+  const [trustErr, setTrustErr] = useState('')
   const agentNames = node.agents ? Object.keys(node.agents) : []
   const displayName = (node.name && node.name !== node.id) ? node.name : node.id
   const canRemove = !isSelf && node.status !== 'online'
+
+  async function onTrustChange(e: Event) {
+    const level = (e.target as HTMLSelectElement).value
+    setTrustBusy(true)
+    setTrustErr('')
+    try {
+      await api.setNodeTrust(node.id, level)
+      onRemoved()
+    } catch (err) {
+      setTrustErr(err instanceof Error ? err.message : String(err))
+    } finally {
+      setTrustBusy(false)
+    }
+  }
 
   async function remove() {
     if (removing) return
@@ -322,12 +338,23 @@ function NodeCard({
         <span class="badge">{node.node_kind}</span>
         <span class={`badge ${node.running ? 'green' : 'red'}`}>{node.running ? 'running' : 'stopped'}</span>
         {isSelf && <span class="badge green">{t('nodes.self')}</span>}
-        {!isSelf && node.trust && node.trust !== 'mesh' && (
-          <span class={`badge ${node.trust === 'open' ? 'red' : ''}`}>
-            {t('nodes.trust')}: {node.trust}
-          </span>
+        {!isSelf && (
+          <label class="badge" title={t('nodes.trust')}>
+            {t('nodes.trust')}:&nbsp;
+            <select
+              class={node.trust === 'open' ? 'trust-sel open' : 'trust-sel'}
+              value={node.trust || 'mesh'}
+              disabled={trustBusy}
+              onChange={onTrustChange}
+            >
+              <option value="mesh">mesh</option>
+              <option value="guarded">guarded</option>
+              <option value="open">open</option>
+            </select>
+          </label>
         )}
       </div>
+      {trustErr && <p class="dim">{trustErr}</p>}
       {node.chip && <p class="dim">{node.chip}</p>}
       <p class="dim">
         {t('nodes.lastSeen')}:{' '}

@@ -322,3 +322,44 @@ func TestAdmissionTierSkipsSelf(t *testing.T) {
 		t.Fatalf("self-pin folded admission to %q, want mesh", got)
 	}
 }
+
+// TestArtifactPullTrustGate: the inputs ceiling binds the pull channel by
+// direction. A guarded puller downstream of this node may not fetch input
+// material even with a hash learned out of band; an upstream peer reading
+// its own task's outputs is unaffected (that read is an output, not an
+// input); and a missing task row cannot prove "upstream", so grant-path
+// pulls fail the same gate instead of routing around it.
+func TestArtifactPullTrustGate(t *testing.T) {
+	ctx := context.Background()
+	c := pinCore(t, "self", "marker")
+	participantTask(t, c, "t-gate", "origin", []string{"origin", "self"})
+
+	if _, err := c.db.Exec(
+		`INSERT INTO employee_cache (id, trust) VALUES ('downstream', 'guarded'), ('origin', 'guarded')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Downstream/non-upstream puller under inputs:false — denied.
+	if c.artifactPullTrustOK(ctx, "t-gate", "downstream") {
+		t.Fatal("guarded downstream puller was served input material")
+	}
+	// The same puller unpinned (mesh) is unaffected — the ceiling binds
+	// only what the operator actually declared.
+	if !c.artifactPullTrustOK(ctx, "t-gate", "mesh-puller") {
+		t.Fatal("mesh puller was refused by a guarded peer's ceiling")
+	}
+	// Upstream delegator reading its own outputs — allowed regardless of
+	// its pin: nothing upstream of us is ever "input material" to it.
+	if !c.artifactPullTrustOK(ctx, "t-gate", "origin") {
+		t.Fatal("upstream delegator was barred from its own task outputs")
+	}
+	// No task row (grant-path pull): direction cannot be proven, so the
+	// pull is treated as a downstream read — gated for sub-mesh, open for
+	// mesh.
+	if c.artifactPullTrustOK(ctx, "t-missing", "downstream") {
+		t.Fatal("guarded puller bypassed the ceiling via an unknown task id")
+	}
+	if !c.artifactPullTrustOK(ctx, "t-missing", "mesh-puller") {
+		t.Fatal("mesh puller was gated on an unknown task id")
+	}
+}

@@ -517,6 +517,16 @@ func (c *Core) handleArtifactFetch(ctx context.Context, env bus.Envelope) {
 		deny("not a participant in this task")
 		return
 	}
+	// Trust ceiling on the pull channel (experimental): participation grants
+	// the read, but an "inputs:false" send ceiling must still bind it — a
+	// peer that learns a hash out-of-band must not pull bytes its ceiling
+	// never granted.
+	if !c.artifactPullTrustOK(ctx, p.TaskID, env.From) {
+		c.logger.Warn("artifact_fetch refused by trust ceiling", "task", p.TaskID,
+			"hash", p.Hash, "from", env.From)
+		deny("peer trust ceiling bars input pulls")
+		return
+	}
 	size, ok := c.artifacts.Has(p.Hash)
 	if !ok {
 		deny("artifact not held")
@@ -659,6 +669,28 @@ func (c *Core) artifactPeerAuthorized(ctx context.Context, taskID, hash, from st
 		}
 	}
 	return participant && c.artifactBoundToTask(ctx, t, hash)
+}
+
+// artifactPullTrustOK applies the requester's send ceiling to the pull
+// channel (experimental trust zones). Direction decides which ceiling
+// applies: input material flows DOWNSTREAM (origin → executor), outputs
+// flow back upstream — only a puller that is NOT strictly upstream of this
+// node in the task's chain is fetching input material, so an upstream peer
+// reading its own task's outputs is never bound by the inputs ceiling. A
+// missing task row cannot prove the puller upstream, so it is treated as a
+// downstream read and gated the same way — mesh pullers are unaffected,
+// but a sub-mesh peer cannot route around the ceiling via the grant path.
+func (c *Core) artifactPullTrustOK(ctx context.Context, taskID, from string) bool {
+	upstream := false
+	if t, err := c.store.Get(ctx, taskID); err == nil {
+		if i := slices.Index(t.Chain, c.nodeID); i > 0 {
+			upstream = slices.Contains(t.Chain[:i], from)
+		}
+	}
+	if upstream {
+		return true
+	}
+	return c.sendPolicyFor(c.peerTrustOf(ctx, from)).MayHoldInputs()
 }
 
 // artifactGrantAuthorized serves a fetch the participant check could not

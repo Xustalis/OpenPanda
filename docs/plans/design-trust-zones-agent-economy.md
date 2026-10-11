@@ -12,8 +12,10 @@
 > 不再租约超期成重复重路由；准入 park 用独立 `admission_review`
 > disposition——线上 `task_resume` 对它一律拒绝，只有本机
 > `panda approve` 能放行（委派方正是被审对象）。`nodes trust`
-> 另支持 `k:<pubkey>` 稳定身份钉档；CLI 与 REPL/TUI 入口对齐，
-> Web 目前仅有 tier 徽标展示（无设置入口）。offer/bid 市场与信用
+> 另支持 `k:<pubkey>` 稳定身份钉档。入口点：CLI `nodes add/
+> admit/trust` 与 `pair --trust`、REPL `/nodes add|admit|trust`、
+> Web 节点卡片的档位选择器（`POST /api/nodes/{id}/trust`，
+> 支持 `k:` 身份并回写 peers 配置）。offer/bid 市场与信用
 > 账本/结算**未实现**——open 档因此只能存在于目录中，在钉了它的
 > 节点上既不能作委派目标也不能发起委派（信任是局部主观断言，
 > 未钉它的节点仍视其为 mesh）。全部功能默认关闭：未配置任何
@@ -94,8 +96,12 @@
 
 - `network.peers` 从 `[]string` 升级为结构化条目（地址 + `trust`），
   默认值保持 `mesh`——配置向后兼容，无信任字段 = 现状。
-- 配对时定级：`panda pair` / `nodes admit` 流程挂信任级别，写入
-  `employee_cache`（新列，走 storage migration）。
+- 配对/纳管时定级：`panda pair --trust`（现代握手与 legacy
+  `--secret --peer` 两条路径均支持）、`panda nodes add|admit
+  --trust`、`panda nodes trust <id|k:pubkey>`；REPL `/nodes`
+  同参；Web 节点卡片档位选择器（`POST /api/nodes/{id}/trust`）。
+  钉档落在 `employee_cache.trust` 列（storage migration v43）与
+  `network.peers` 结构化条目两处，least-trusting 合并后生效。
 - 换钥 = 重定级：`recordPeerPubKey` 已会在换钥时清 `key_verified`
   （roadmap Track 1），信任级别随行——重装的机器不继承旧信任。
 
@@ -244,6 +250,15 @@ escrow+签收+信誉的社会方案解决——认知劳动产出不可加密验
   `context_fetch` 拉走的是**全量**快照——认证、授权、审计都在，
   但字节照样移动。它是传输分级+审计点，**不是**保密边界；保密
   用 `summary`（引用整体剥除，拉取通道在 summary 上限下拒绝）；
+- `inputs: false` 在拉取侧同样成立：`artifact_fetch` 区分方向——
+  下游请求方在任务链中位于本地节点**之后**时按其 ceiling 拒绝
+  （`peer trust ceiling bars input pulls`）；上游 delegator 回拉
+  自己任务的 outputs 不受 inputs 上限约束（那本来就不是输入）；
+- 入站 consent 有独立策略位：`accept.<tier>.foreign_consent`
+  （`strip` 默认 / `honor`）。非 mesh 来源携带的 `authorized=true`
+  在 strip 下剥除——任务落受限工具面、不可逆操作进本机 review
+  队列；**对端用户的"批准"不能替代本机用户的批准**。honor 留给
+  "同一主人的不可信网段机器"场景（此时两端的用户是同一人）；
 - `policy_llm: enforce` 的 verdict 输入是来源方可控的 intent
   文本——确定性安全门不受影响，但 admit/decline 这个裁量本身
   可以被构造文本引导，enforce 档应视为"生产力裁量外包"而非

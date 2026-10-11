@@ -144,6 +144,11 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	// remote=true: the intent text came off the wire. Persisted because the
 	// chain is peer-supplied — a delegate may write chain=[self, sender] and
 	// claim we authored it, so executor policy cannot re-derive provenance.
+	// The row is created BEFORE admission runs (handleLocalDelegate): a
+	// refused or parked delegate still needs an audit record, and
+	// terminalizeDeclined/the review park both write onto this row. The cost
+	// is that a persistently refused peer adds one cancelled row per push —
+	// deliberate audit bookkeeping, not an ordering mistake.
 	t, err := c.store.CreateWithID(ctx, p.TaskID, p.ParentID, p.Project, p.TitleOrDefault(), c.nodeID, chain, true)
 	if err != nil {
 		c.logger.Error("create task from delegate", "err", err)
@@ -181,17 +186,32 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	// the P2-8 hole the grant exists to close, so an unverifiable signature
 	// drops the consent rather than laundering it.
 	if p.Authorized {
-		if !c.consentGrantValid(p, env.From) {
+		switch {
+		case !c.consentGrantValid(p, env.From):
 			c.logger.Warn("delegate consent grant failed verification; dropping authorized flag",
 				"task", t.TaskID, "from", env.From)
 			c.audit(ctx, t.TaskID, "consent:forged", "", "rejected",
 				"invalid Ed25519 consent grant on delegate")
-		} else if err := c.store.SetAuthorizedGrant(ctx, t.TaskID, p.AuthSig, p.AuthPub, p.AuthTs); err != nil {
-			// Recorded, not fatal. The task row already exists, so returning
-			// here would strand it: nothing would ever answer the delegator.
-			// An unstamped row is the safe failure — it fails closed at the
-			// executor's defense gate rather than running unauthorized.
-			c.logger.Error("adopt authorization failed", "task", t.TaskID, "err", err)
+		case c.acceptPolicyFor(c.admissionTier(ctx, chain, env.From)).ForeignConsent == trust.ConsentStrip:
+			// A non-mesh origin's consent is genuine but foreign: their user
+			// approving the intent cannot silently stand in for THIS node's
+			// operator approving an irreversible step on this machine. Drop
+			// the grant so the task lands under the restricted tool face and
+			// any tier-2 step parks for local approval — "their yes ≠ our
+			// yes". Set accept.<tier>.foreign_consent: honor for the
+			// same-owner case (an own VPS on an untrusted segment).
+			c.logger.Info("foreign consent grant stripped by trust policy",
+				"task", t.TaskID, "from", env.From)
+			c.audit(ctx, t.TaskID, "consent:stripped", env.From, "applied",
+				"origin tier's accept policy strips foreign tier-2 consent")
+		default:
+			if err := c.store.SetAuthorizedGrant(ctx, t.TaskID, p.AuthSig, p.AuthPub, p.AuthTs); err != nil {
+				// Recorded, not fatal. The task row already exists, so returning
+				// here would strand it: nothing would ever answer the delegator.
+				// An unstamped row is the safe failure — it fails closed at the
+				// executor's defense gate rather than running unauthorized.
+				c.logger.Error("adopt authorization failed", "task", t.TaskID, "err", err)
+			}
 		}
 	}
 	// Persist the entry-model detail carried on the wire so the local queue

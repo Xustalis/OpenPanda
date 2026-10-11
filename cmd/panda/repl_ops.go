@@ -775,9 +775,13 @@ func (r *repl) cmdNodesTrust(arg string) {
 // add-and-dial path `/nodes add` uses (live dial when the engine is up), then
 // forget the pending row.
 func (r *repl) cmdNodesAdmit(arg string) {
-	id := strings.TrimSpace(arg)
+	fields := strings.Fields(arg)
+	id, rest := "", fields
+	if len(fields) > 0 {
+		id, rest = fields[0], fields[1:]
+	}
 	if id == "" {
-		r.outln("usage: /nodes admit <id>")
+		r.outln("usage: /nodes admit <id> [--trust level]")
 		return
 	}
 	pending, err := ledger.ListPending(r.db, 90*time.Second)
@@ -789,7 +793,10 @@ func (r *repl) cmdNodesAdmit(arg string) {
 		if p.ID != id {
 			continue
 		}
-		r.cmdNodesAdd(p.Addr)
+		// Forward any trailing `--trust <level>` (experimental trust zones):
+		// cmdNodesAdd parses it off the argument and pins the tier on the
+		// appended entry, same as `panda nodes admit --trust`.
+		r.cmdNodesAdd(strings.TrimSpace(p.Addr + " " + strings.Join(rest, " ")))
 		_ = ledger.ForgetPending(r.db, id)
 		if !p.Verified {
 			r.outln(i18n.Tf(r.loc, "cli.nodes.admit.unverified", "id", id))

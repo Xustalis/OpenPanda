@@ -290,10 +290,14 @@ type TrustSendPolicy struct {
 // TrustAcceptPolicy is the inbound admission rule for delegates whose origin
 // is guarded (network.trust.accept.guarded). mode: auto|review|refuse;
 // policy_llm: off|shadow|enforce — the optional zero-tool classifier that
-// judges the task's desirability before the mode runs.
+// judges the task's desirability before the mode runs; foreign_consent:
+// strip|honor — whether the origin's own tier-2 consent may substitute for
+// this node's approval (strip = restricted tool face + local irreversible
+// review; honor for the same-owner guarded case like an own VPS).
 type TrustAcceptPolicy struct {
-	Mode      string `yaml:"mode"`
-	PolicyLLM string `yaml:"policy_llm"`
+	Mode           string `yaml:"mode"`
+	PolicyLLM      string `yaml:"policy_llm"`
+	ForeignConsent string `yaml:"foreign_consent"`
 }
 
 // TrustConfig carries the per-tier trust-zone tables. Only guarded is
@@ -332,6 +336,11 @@ func (t TrustConfig) Validate() error {
 	case "", "off", "shadow", "enforce":
 	default:
 		return fmt.Errorf("config: network.trust.accept.guarded.policy_llm %q is invalid (want off, shadow, or enforce)", t.Accept.Guarded.PolicyLLM)
+	}
+	switch t.Accept.Guarded.ForeignConsent {
+	case "", "strip", "honor":
+	default:
+		return fmt.Errorf("config: network.trust.accept.guarded.foreign_consent %q is invalid (want strip or honor)", t.Accept.Guarded.ForeignConsent)
 	}
 	return nil
 }
@@ -373,6 +382,9 @@ func (t TrustConfig) AcceptPolicyFor(l trust.Level) trust.AcceptPolicy {
 	}
 	if g.PolicyLLM != "" {
 		p.PolicyLLM = g.PolicyLLM
+	}
+	if g.ForeignConsent != "" {
+		p.ForeignConsent = g.ForeignConsent
 	}
 	return p
 }

@@ -330,3 +330,79 @@ func TestReplMemorySetRm(t *testing.T) {
 		t.Fatal("the removed topic still reads back")
 	}
 }
+
+// TestReplNodesTrust: the REPL's tier dial mirrors `panda nodes trust` —
+// row pins, the stable k: identity, show form, and refusal paths.
+func TestReplNodesTrust(t *testing.T) {
+	r, _ := newOpsTestRepl(t)
+	if err := ledger.Register(r.db, ledger.Card{Device: "peer"}, "peer-x", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.db.Exec(`UPDATE employee_cache SET pub_key='cc99' WHERE id='peer-x'`); err != nil {
+		t.Fatal(err)
+	}
+
+	out := dispatchCapture(t, r, "/nodes trust peer-x guarded")
+	if !strings.Contains(out, "guarded") {
+		t.Fatalf("pin output = %q", out)
+	}
+	if lv, _ := ledger.PeerTrust(r.db, "peer-x"); lv != "guarded" {
+		t.Fatalf("row pin = %q, want guarded", lv)
+	}
+
+	// Show form reports the current pin.
+	out = dispatchCapture(t, r, "/nodes trust peer-x")
+	if !strings.Contains(out, "guarded") {
+		t.Fatalf("show output = %q", out)
+	}
+
+	// k: identity pins the sibling rows carrying the key.
+	out = dispatchCapture(t, r, "/nodes trust k:cc99 open")
+	if !strings.Contains(out, "open") {
+		t.Fatalf("k: pin output = %q", out)
+	}
+	if lv, _ := ledger.PeerTrust(r.db, "peer-x"); lv != "open" {
+		t.Fatalf("k: pin = %q, want open", lv)
+	}
+
+	// Refusal paths: bogus level, unknown id, unknown key.
+	if out = dispatchCapture(t, r, "/nodes trust peer-x sideways"); !strings.Contains(out, "trust level") {
+		t.Fatalf("bogus level output = %q", out)
+	}
+	if out = dispatchCapture(t, r, "/nodes trust ghost mesh"); !strings.Contains(out, "ghost") {
+		t.Fatalf("unknown id output = %q", out)
+	}
+	if out = dispatchCapture(t, r, "/nodes trust k:ffff mesh"); !strings.Contains(out, "k:ffff") {
+		t.Fatalf("unknown key output = %q", out)
+	}
+}
+
+// TestReplNodesAddTrust: `/nodes add <addr> --trust <level>` pins the tier
+// on the config entry it appends — the REPL twin of `panda nodes add
+// --trust`. The repl's configPath is redirected to a temp file so the write
+// never touches a real user config.
+func TestReplNodesAddTrust(t *testing.T) {
+	r, _ := newOpsTestRepl(t)
+	r.configPath = filepath.Join(t.TempDir(), "config.yaml")
+
+	out := dispatchCapture(t, r, "/nodes add 192.168.9.9:7836 --trust guarded")
+	if !strings.Contains(out, "192.168.9.9:7836") {
+		t.Fatalf("add output = %q", out)
+	}
+	data, err := os.ReadFile(r.configPath)
+	if err != nil {
+		t.Fatalf("config not written: %v", err)
+	}
+	if !strings.Contains(string(data), "trust: guarded") {
+		t.Fatalf("tier missing from config:\n%s", data)
+	}
+
+	// A bogus tier is refused before any write.
+	out = dispatchCapture(t, r, "/nodes add 192.168.9.10:7836 --trust besties")
+	if !strings.Contains(out, "trust level") {
+		t.Fatalf("bogus tier output = %q", out)
+	}
+	if data, _ = os.ReadFile(r.configPath); strings.Contains(string(data), "192.168.9.10") {
+		t.Fatal("a refused tier still wrote the peer")
+	}
+}

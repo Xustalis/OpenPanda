@@ -253,6 +253,25 @@ input[type='checkbox'].check,
   border-color: var(--semantic-warn-border);
   background: var(--semantic-warn-soft);
 }
+
+/* Trust-zone tier picker (experimental): the select rides inside a badge
+ * shell, so it strips its own chrome and only keeps the tier text. */
+.trust-sel {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.trust-sel.open {
+  color: var(--semantic-danger);
+}
+.trust-sel:focus-visible {
+  outline: 1px solid var(--border);
+  outline-offset: 2px;
+}
 .badge.blue,
 .badge.state-running,
 .badge.state-queued {

@@ -174,15 +174,20 @@ func TestTrustConfigOverrides(t *testing.T) {
 		Send: TrustSendConfig{Guarded: TrustSendPolicy{
 			ContextLevel: "summary", Consent: &yes, ProjectPack: &no,
 		}},
-		Accept: TrustAcceptConfig{Guarded: TrustAcceptPolicy{Mode: "review", PolicyLLM: "shadow"}},
+		Accept: TrustAcceptConfig{Guarded: TrustAcceptPolicy{Mode: "review", PolicyLLM: "shadow", ForeignConsent: "honor"}},
 	}
 	g := tc.SendPolicyFor(trust.Guarded)
 	if g.MaxContext != "summary" || !g.Consent || g.ProjectPack {
 		t.Fatalf("guarded override = %+v", g)
 	}
 	a := tc.AcceptPolicyFor(trust.Guarded)
-	if a.Mode != "review" || a.PolicyLLM != "shadow" {
+	if a.Mode != "review" || a.PolicyLLM != "shadow" || a.ForeignConsent != "honor" {
 		t.Fatalf("guarded accept override = %+v", a)
+	}
+	// Unset foreign_consent keeps the built-in default — strip, so a
+	// foreign grant never silently substitutes for local approval.
+	if d := (TrustConfig{}).AcceptPolicyFor(trust.Guarded).ForeignConsent; d != trust.ConsentStrip {
+		t.Fatalf("default foreign_consent = %q, want %q", d, trust.ConsentStrip)
 	}
 	if m := tc.SendPolicyFor(trust.Mesh); !m.ProjectPack || !m.Consent || m.MaxContext != "full" {
 		t.Fatalf("mesh is not tunable, got %+v", m)
@@ -192,6 +197,9 @@ func TestTrustConfigOverrides(t *testing.T) {
 	}
 	if err := (TrustConfig{Send: TrustSendConfig{Guarded: TrustSendPolicy{ContextLevel: "sideways"}}}).Validate(); err == nil {
 		t.Fatal("invalid context_level must fail validation")
+	}
+	if err := (TrustConfig{Accept: TrustAcceptConfig{Guarded: TrustAcceptPolicy{ForeignConsent: "maybe"}}}).Validate(); err == nil {
+		t.Fatal("invalid foreign_consent must fail validation")
 	}
 }
 

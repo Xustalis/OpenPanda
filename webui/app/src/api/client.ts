@@ -848,9 +848,17 @@ export const api = {
 
   /** Join a device: append the peer to config.yaml (+ shared secret when
    *  missing) and dial it live when an engine is running. Returns the join
-   *  guide for the other machine. */
-  addNode(addr: string): Promise<NodesAddResult> {
-    return request('POST', '/api/nodes/add', { addr })
+   *  guide for the other machine. trust pins the peer's trust-zone tier
+   *  (experimental): absent = mesh, the pre-feature default. */
+  addNode(addr: string, trust?: string): Promise<NodesAddResult> {
+    return request('POST', '/api/nodes/add', trust ? { addr, trust } : { addr })
+  },
+
+  /** POST /api/nodes/{id}/trust — the console twin of `panda nodes trust`:
+   *  pin a trust-zone tier on a known node row (or every sibling row of a
+   *  "k:<pubkey>" stable identity). Live on the running daemon. */
+  setNodeTrust(id: string, trust: string): Promise<{ id: string; trust: string }> {
+    return request('POST', `/api/nodes/${encodeURIComponent(id)}/trust`, { trust })
   },
 
   // ---- Bluetooth-style pairing (`panda pair`'s web twin) ----
